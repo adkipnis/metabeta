@@ -7,7 +7,6 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
 import torchmetrics
-from model import buildTransformer
 from config import getConfig, getWeightsFilePath
 from dataset import BilingualDataset, causalMask
 from datasets import load_dataset
@@ -15,10 +14,8 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.trainers import WordLevelTrainer
 from tokenizers.pre_tokenizers import Whitespace
+from model import Transformer
 
-def getAllSentences(dataset, language):
-    for example in dataset:
-        yield example['translation'][language]
 
 def getOrBuildTokenizer(config: dict, dataset, language) -> Tokenizer:
     tokenizer_path = Path(config["tokenizer_file"].format(language))
@@ -60,14 +57,6 @@ def getDataset(config: dict) -> Tuple[DataLoader, DataLoader, Tokenizer, Tokeniz
 
     return train_dl, val_dl, tokenizer_src, tokenizer_tgt
 
-def getModel(config: dict, vocab_src_len: int, vocab_tgt_len: int) -> nn.Module:
-    model = buildTransformer(
-            vocab_src_len,
-            vocab_tgt_len,
-            config['seq_len'],
-            config['seq_len'],
-            config['d_model'])
-    return model
 
 def trainModel(config):
     # definde device
@@ -77,7 +66,13 @@ def trainModel(config):
     # get dataset
     Path(config["model_folder"]).mkdir(parents=True, exist_ok=True)
     train_dl, val_dl, tokenizer_src, tokenizer_tgt = getDataset(config)
-    model = getModel(config, tokenizer_src.get_vocab_size(), tokenizer_tgt.get_vocab_size()).to(device)
+    model = Transformer(d_model=config["d_model"],
+                        d_ff=config["d_ff"],
+                        n_heads=config["n_heads"],
+                        n_blocks_e=config["n_blocks_e"],
+                        n_blocks_d=config["n_blocks_d"],
+                        vocab_size=tokenizer_tgt.get_vocab_size(),
+                        dropout=config["dropout"]).to(device)
 
     # tensorboard
     writer = SummaryWriter(config["experiment_name"])
