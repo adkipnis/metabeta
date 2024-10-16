@@ -26,25 +26,16 @@ def getDataset(config: dict) -> Tuple[DataLoader, DataLoader, FloatTokenizer]:
     # train validation split
     train_ds_size = int(0.9 * len(dataset))
     val_ds_size = len(dataset) - train_ds_size
+    print(f"Train size: {train_ds_size}, Validation size: {val_ds_size}")
     train_ds_raw, val_ds_raw = random_split(dataset, [train_ds_size, val_ds_size])
-    train_ds = BilingualDataset(train_ds_raw, tokenizer_src, tokenizer_tgt, "de", "en", config["seq_len"])
-    val_ds = BilingualDataset(val_ds_raw, tokenizer_src, tokenizer_tgt, "de", "en", config["seq_len"])
-
-    # find max length of source and target language
-    max_len_src, max_len_tgt = 0, 0
-    for item in dataset:
-        src_ids = tokenizer_src.encode(item["translation"]["de"]).ids
-        tgt_ids = tokenizer_tgt.encode(item["translation"]["en"]).ids
-        max_len_src = max(max_len_src, len(src_ids))
-        max_len_tgt = max(max_len_tgt, len(tgt_ids))
-    print(f"Max length of source language: {max_len_src}")
-    print(f"Max length of target language: {max_len_tgt}")
+    train_ds = LinearModelDataset(train_ds_raw, tokenizer, config["seq_len"])
+    val_ds = LinearModelDataset(val_ds_raw, tokenizer, config["seq_len"])
 
     # dataloaders
     train_dl = DataLoader(train_ds, batch_size=config["batch_size"], shuffle=True)
     val_dl = DataLoader(val_ds, batch_size=1, shuffle=True)
 
-    return train_dl, val_dl, tokenizer_src, tokenizer_tgt
+    return train_dl, val_dl, tokenizer
 
 
 def trainModel(config):
