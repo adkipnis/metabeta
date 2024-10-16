@@ -23,8 +23,9 @@ def getConfig() -> dict:
             "experiment_name": "runs/linear"
             }
 
+def getWeightsFilePath(config: dict, epoch: int):
     model_folder = config["model_folder"]
     model_basename = config["model_basename"]
-    model_filename = f"{model_basename}{epoch}.pt"
+    model_filename = f"{model_basename}-{epoch:02d}.pt"
     return str(Path('.') / model_folder / model_filename)
 
