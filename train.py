@@ -1,20 +1,15 @@
-import os
 from typing import Tuple, Callable
 from pathlib import Path
 from tqdm import tqdm
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
-import torchmetrics
-from config import getConfig, getWeightsFilePath
-from dataset import BilingualDataset, causalMask
-from datasets import load_dataset
-from tokenizers import Tokenizer
-from tokenizers.models import WordLevel
-from tokenizers.trainers import WordLevelTrainer
-from tokenizers.pre_tokenizers import Whitespace
+from generator import Task, LinearModel
+from dataset import LinearModelDataset, causalMask
+from tokenizer import FloatTokenizer
 from model import Transformer
+from config import getConfig, getWeightsFilePath
 
 
 def getOrBuildTokenizer(config: dict, dataset, language) -> Tokenizer:
