@@ -11,19 +11,20 @@ def causalMask(size: int) -> torch.Tensor:
 
 class LinearModelDataset(Dataset):
     def __init__(self,
-                 dataset,
+                 raw: List[Dict[str, torch.Tensor]],
                  tokenizer: Tokenizer,
                  seq_len: int) -> None:
-        self.dataset = dataset
+        self.raw = raw
         self.tokenizer = tokenizer
         self.seq_len = seq_len
 
-        self.sos_token = torch.tensor([tokenizer.token_to_id("[SOS]")], dtype=torch.int64)
-        self.eos_token = torch.tensor([tokenizer.token_to_id("[EOS]")], dtype=torch.int64)
-        self.pad_token = torch.tensor([tokenizer.token_to_id("[PAD]")], dtype=torch.int64)
+        self.sos_token = torch.tensor([tokenizer.tokenToIdx("[SOS]")], dtype=torch.int64)
+        self.sot_token = torch.tensor([tokenizer.tokenToIdx("[SOT]")], dtype=torch.int64)
+        self.eos_token = torch.tensor([tokenizer.tokenToIdx("[EOS]")], dtype=torch.int64)
+        self.pad_token = torch.tensor([tokenizer.tokenToIdx("[PAD]")], dtype=torch.int64)
 
     def __len__(self):
-        return len(self.dataset)
+        return len(self.raw)
 
     def __getitem__(self, idx):
         # get data pair
