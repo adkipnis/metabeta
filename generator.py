@@ -1,5 +1,5 @@
 import torch
-from typing import Tuple
+from typing import Dict
 
 class Task:
     def __init__(self,
@@ -35,37 +35,45 @@ class Task:
 
 class LinearModel:
     def __init__(self,
-                 task: Task):
+                 task: Task,
+                 dataDist: torch.distributions.Distribution = torch.distributions.Normal(0, 1)):
         self.task = task
-        self.n_predictors = task.n_predictors
+        self.dataDist = dataDist
         self.weights = self.task.sampleBeta()
-        self.dataDist = torch.distributions.Normal(0, 1) # this should be choosable
+        self.sigma = torch.tensor([self.task.sigma_error])
 
-    def _data(self, n_samples: int):
-        x = self.dataDist.sample((n_samples, self.n_predictors))
+    @property
+    def n_predictors(self):
+        return self.task.n_predictors
+
+    def sampleFeatures(self, n_samples: int):
+        x = self.dataDist.sample((n_samples, self.n_predictors)) # type: ignore
         intercept = torch.ones(n_samples, 1)
         return torch.cat([intercept, x], dim=1)
 
-    def _target(self, x: torch.Tensor) -> torch.Tensor:
-        # assumes x is a tensor of shape (n_samples, n_predictors + 1)
-        # with the first column being 1
-        n = x.shape[0]
-        error = self.task.noise_dist.sample((n,))
+    def predict(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (n_samples, n_predictors + 1)
+        n_samples = x.shape[0]
+        error = self.task.noise_dist.sample((n_samples,)) # type: ignore
         return x @ self.weights + error
 
-    def dataset(self, n_samples: int) -> torch.Tensor:
-        x = self._data(n_samples)
-        y = self._target(x)
-        return torch.cat([x, y.unsqueeze(1)], dim=1)
+    def sample(self, n_samples: int) -> Dict[str, torch.Tensor]:
+        x = self.sampleFeatures(n_samples)
+        y = self.predict(x).unsqueeze(1)
+        return {
+                "features": x,
+                "target": y,
+                "params": torch.cat([self.weights, self.sigma])
+                }
 
 
 def main():
     task = Task(n_predictors=2)
     print(f"Mean: {task.mean},\nCov: {task.cov}\nNoise: {task.sigma_error}")
     model = LinearModel(task)
-    print(f"Weights: {model.weights}")
-    data = model.dataset(10)
-    print(f"Data: {data}")
+    sample = model.sample(10)
+    print(f"Features: {sample['data']}")
+    print(f"Params: {sample['params']}")
     
 if __name__ == "__main__":
     main()
