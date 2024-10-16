@@ -1,6 +1,7 @@
+from typing import List, Dict
 import torch
 from torch.utils.data import Dataset
-from tokenizers import Tokenizer
+from tokenizer import FloatTokenizer as Tokenizer
 
 
 def causalMask(size: int) -> torch.Tensor:
