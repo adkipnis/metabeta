@@ -45,13 +45,13 @@ def trainModel(config):
 
     # get dataset
     Path(config["model_folder"]).mkdir(parents=True, exist_ok=True)
-    train_dl, val_dl, tokenizer_src, tokenizer_tgt = getDataset(config)
+    train_dl, val_dl, tokenizer = getDataset(config)
     model = Transformer(d_model=config["d_model"],
                         d_ff=config["d_ff"],
                         n_heads=config["n_heads"],
                         n_blocks_e=config["n_blocks_e"],
                         n_blocks_d=config["n_blocks_d"],
-                        vocab_size=tokenizer_tgt.get_vocab_size(),
+                        vocab_size=tokenizer.getVocabSize(),
                         dropout=config["dropout"]).to(device)
 
     # tensorboard
@@ -62,19 +62,20 @@ def trainModel(config):
     initial_epoch = 0
     global_step = 0
     if config["preload"]:
-        model_filename = getWeightsFilePath(config, config["preload"])
+        model_filename = getWeightsFilePath(config, epoch=config["preload"])
         print(f"Loading weights from {model_filename}")
-        state = torch.load(model_filename)
+        state = torch.load(model_filename, weights_only=False)
+        model.load_state_dict(state["model_state_dict"])
         initial_epoch = state["epoch"] + 1
         optimizer.load_state_dict(state["optimizer_state_dict"])
         global_step = state["global_step"]
 
     # loss function
-    padding_idx = tokenizer_tgt.token_to_id("[PAD]")
+    padding_idx = tokenizer.tokenToIdx("[PAD]")
     loss_fn = nn.CrossEntropyLoss(ignore_index=padding_idx,
                                   label_smoothing=0.1).to(device)
 
-    for epoch in range(initial_epoch, config['num_epochs']):
+    for epoch in range(initial_epoch, config['n_epochs']):
         batch_iterator = tqdm(train_dl, desc=f"Epoch {epoch:02d}")
         for batch in batch_iterator:
             model.train()
@@ -82,7 +83,7 @@ def trainModel(config):
             encoder_mask = batch["encoder_mask"].to(device) # (batch_size, 1, 1, seq_len)
             decoder_input = batch["decoder_input"].to(device) # (batch_size, seq_len)
             decoder_mask = batch["decoder_mask"].to(device) # (batch_size, 1, seq_len, seq_len)
-            
+
             # forward pass
             encoder_output = model.encode(encoder_input, encoder_mask) # (batch_size, seq_len, d_model)
             decoder_output = model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask) # (batch_size, seq_len, d_model)
@@ -90,23 +91,22 @@ def trainModel(config):
             label = batch["label"].to(device) # (batch_size, seq_len)
 
             # (batch_size, seq_len, vocab_tgt_len) -> (batch_size * seq_len, vocab_tgt_len)
-            loss = loss_fn(proj_output.view(-1, tokenizer_tgt.get_vocab_size()), label.view(-1))
+            loss = loss_fn(proj_output.view(-1, tokenizer.getVocabSize()), label.view(-1))
             batch_iterator.set_postfix({"loss": loss.item()})
             writer.add_scalar("train_loss", loss.item(), global_step)
             writer.flush()
-            
+
             # backward pass
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
-
             global_step += 1
 
         # validation at the end of each epoch
-        runValidation(model, val_dl, tokenizer_src, tokenizer_tgt, config["seq_len"], device, batch_iterator.write, global_step, writer)
-            
+        runValidation(model, val_dl, tokenizer, config["seq_len_out"], device, batch_iterator.write, global_step, writer)
+    
         # save model
-        model_filename = getWeightsFilePath(config, f"{epoch:02d}")
+        model_filename = getWeightsFilePath(config, epoch)
         torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
