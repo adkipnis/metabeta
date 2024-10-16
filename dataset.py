@@ -26,27 +26,34 @@ class LinearModelDataset(Dataset):
     def __len__(self):
         return len(self.raw)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         # get data pair
-        src_target_pair = self.dataset[idx]
-        src = src_target_pair['data']
-        tgt = src_target_pair['params']
+        ds = self.raw[idx]
+        src = ds['features']
+        y = ds['target']
+        tgt = ds['params']
 
         # encode text to tokens
-        enc_input_tokens = self.tokenizer.encode(src).ids
-        dec_input_tokens = self.tokenizer.encode(tgt).ids
+        enc_input_tokens_ = self.tokenizer.encode(src)
+        enc_input_tokens = [ self.tokenizer.tokenToIdx(token) for token in enc_input_tokens_ ]
+        y_tokens_ = self.tokenizer.encode(y)
+        y_tokens = [ self.tokenizer.tokenToIdx(token) for token in y_tokens_ ]
+        dec_input_tokens_ = self.tokenizer.encode(tgt)
+        dec_input_tokens = [ self.tokenizer.tokenToIdx(token) for token in dec_input_tokens_ ]
 
         # prepare padding tokens
-        enc_num_padding_tokens = self.seq_len - len(enc_input_tokens) - 2 # SOS, EOS
+        enc_num_padding_tokens = self.seq_len - len(enc_input_tokens) - len(y_tokens) - 3 # SOS, SOT, EOS
         dec_num_padding_tokens = self.seq_len - len(dec_input_tokens) - 1 # SOS
         assert enc_num_padding_tokens >= 0 and dec_num_padding_tokens >= 0,\
-                f"Sentence is too long for seq_len={self.seq_len}"
+                f"Sentence is {len(enc_input_tokens) + len(y_tokens)} long but maximal sequence length is {self.seq_len}"
 
         # get inputs and label
         encoder_input = torch.cat(
                 [
                     self.sos_token,
                     torch.tensor(enc_input_tokens, dtype=torch.int64),
+                    self.sot_token,
+                    torch.tensor(y_tokens, dtype=torch.int64),
                     self.eos_token,
                     torch.tensor([self.pad_token]*enc_num_padding_tokens, dtype=torch.int64)
                 ]
