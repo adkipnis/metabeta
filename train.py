@@ -118,24 +118,30 @@ def trainModel(config):
 def greedyDecode(model: nn.Module,
                  source: torch.Tensor,
                  source_mask: torch.Tensor,
-                 tokenizer_src: Tokenizer,
-                 tokenizer_tgt: Tokenizer,
+                 tokenizer: FloatTokenizer,
                  max_len: int,
                  device: torch.device) -> torch.Tensor:
-    sos_idx = tokenizer_tgt.token_to_id("[SOS]")
-    eos_idx = tokenizer_tgt.token_to_id("[EOS]")
+    sos_idx = tokenizer.tokenToIdx("[SOS]")
+    eos_idx = tokenizer.tokenToIdx("[EOS]")
 
     # precompute encoder output and reuse it for every token we get from the decoder
     encoder_output = model.encode(source, source_mask) # (1, seq_len, d_model)
+
     # initialize decoder input with SOS token
     decoder_input = torch.empty(1, 1).fill_(sos_idx).type_as(source).to(device)
-    while (decoder_input.size(1) < max_len) and (decoder_input[0, -1].item() != eos_idx):
+
+    # greedy decoding
+    while True:
+        if decoder_input.size(1) >= max_len:
+            break
         decoder_mask = causalMask(decoder_input.size(1)).type_as(source).to(device)
         out = model.decode(encoder_output, source_mask, decoder_input, decoder_mask)
         prob = model.projection(out[:, -1]) # give logprob for last token
         _, next_token = torch.max(prob, dim=-1)
         next_token = torch.empty(1, 1).type_as(source).fill_(next_token.item()).to(device)
         decoder_input = torch.cat([decoder_input, next_token], dim=1)
+        if next_token.item() == eos_idx:
+            break
     return decoder_input.squeeze(0)
 
 
