@@ -147,8 +147,7 @@ def greedyDecode(model: nn.Module,
 
 def runValidation(model: nn.Module,
                    validation_ds: DataLoader,
-                   tokenizer_src: Tokenizer,
-                   tokenizer_tgt: Tokenizer,
+                   tokenizer: FloatTokenizer,
                    max_len: int,
                    device: torch.device,
                    print_msg: Callable, # dont't interfere with tqdm
@@ -163,12 +162,13 @@ def runValidation(model: nn.Module,
      predicted = []
 
      # get the console window width
-     try:
-         with os.popen('stty size', 'r') as console:
-             _, console_width = console.read().split()
-             console_width = int(console_width)
-     except:
-             console_width = 80
+     # try:
+     #     with os.popen('stty size', 'r') as console:
+     #         _, console_width = console.read().split()
+     #         console_width = int(console_width)
+     # except:
+     #         console_width = 80
+     console_width = 80
 
      with torch.no_grad():
          for batch in validation_ds:
@@ -180,44 +180,31 @@ def runValidation(model: nn.Module,
              assert encoder_input.shape[0] == 1, "Batch size must be 1 for validation"
 
              # run greedy decoding
-             model_out = greedyDecode(model, encoder_input, encoder_mask, tokenizer_src, tokenizer_tgt, max_len, device)
+             model_out = greedyDecode(model, encoder_input, encoder_mask, tokenizer, max_len, device)
 
              # save text for printing
-             source_text = batch["src_text"][0]
-             target_text = batch["tgt_text"][0]
-             model_out_text = tokenizer_tgt.decode(model_out.detach().cpu().numpy())
-             source_texts += [source_text]
+             target_text = batch["tgt"][0]
+
+             # decode model output
+             decode_this = model_out.detach().cpu().tolist()
+             decode_this = [tokenizer.idxToToken(idx) for idx in decode_this]
+             try:
+                 model_out_text = tokenizer.decode(decode_this)
+             except:
+                 print_msg(f"Error decoding: {decode_this}")
+                 model_out_text = "".join(decode_this)
+
              expected += [target_text]
              predicted += [model_out_text]
 
              # print some examples
              print_msg('-' * console_width)
-             print_msg(f"Source: {source_text}")
              print_msg(f"Target: {target_text}")
              print_msg(f"Predicted: {model_out_text}")
+             print_msg(f"Predicted (tokens): {decode_this}")
 
              if count == num_examples:
                  break
-     
-     if writer:
-        # Evaluate the character error rate
-        # Compute the char error rate 
-        metric = torchmetrics.text.CharErrorRate()
-        cer = metric(predicted, expected)
-        writer.add_scalar('validation cer', cer, global_step)
-        writer.flush()
-
-        # Compute the word error rate
-        metric = torchmetrics.text.WordErrorRate()
-        wer = metric(predicted, expected)
-        writer.add_scalar('validation wer', wer, global_step)
-        writer.flush()
-
-        # Compute the BLEU metric
-        metric = torchmetrics.text.BLEUScore()
-        bleu = metric(predicted, expected)
-        writer.add_scalar('validation BLEU', bleu, global_step)
-        writer.flush()
 
 if __name__ == "__main__":
     config = getConfig()
