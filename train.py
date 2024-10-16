@@ -12,6 +12,16 @@ from model import Transformer
 from config import getConfig, getWeightsFilePath
 
 
+def getDataset(config: dict) -> Tuple[DataLoader, DataLoader, FloatTokenizer]:
+    # create dataset
+    tokenizer = FloatTokenizer(precision=config["precision"])
+    task = Task(n_predictors=config["n_predictors"])
+    lm = LinearModel(task)
+    dataset = []
+    for _ in range(config["n_draws"]):
+        task = Task(n_predictors=config["n_predictors"])
+        lm = LinearModel(task)
+        dataset += [lm.sample(config["n_samples"])]
 
     # train validation split
     train_ds_size = int(0.9 * len(dataset))
