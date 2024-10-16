@@ -63,7 +63,8 @@ class LinearModel:
         return {
                 "features": x,
                 "target": y,
-                "params": torch.cat([self.weights, self.sigma])
+                # "params": torch.cat([self.weights, self.sigma])
+                "params": self.weights
                 }
 
 
