@@ -12,6 +12,34 @@ from tokenizer import FloatTokenizer
 from model import Transformer
 from config import getConfig, getWeightsFilePath
 
+def greedyDecode(model: nn.Module,
+                    source: torch.Tensor,
+                    source_mask: torch.Tensor,
+                    tokenizer: FloatTokenizer,
+                    max_len: int,
+                    device: torch.device) -> torch.Tensor:
+        sos_idx = tokenizer.tokenToIdx("[SOS]")
+        eos_idx = tokenizer.tokenToIdx("[EOS]")
+
+        # precompute encoder output and reuse it for every token we get from the decoder
+        encoder_output = model.encode(source, source_mask) # (1, seq_len, d_model)
+
+        # initialize decoder input with SOS token
+        decoder_input = torch.empty(1, 1).fill_(sos_idx).type_as(source).to(device)
+
+        # greedy decoding
+        while True:
+            if decoder_input.size(1) >= max_len:
+                break
+            decoder_mask = causalMask(decoder_input.size(1)).type_as(source).to(device)
+            out = model.decode(encoder_output, source_mask, decoder_input, decoder_mask)
+            prob = model.projection(out[:, -1]) # give logprob for last token
+            _, next_token = torch.max(prob, dim=-1)
+            next_token = torch.empty(1, 1).type_as(source).fill_(next_token.item()).to(device)
+            decoder_input = torch.cat([decoder_input, next_token], dim=1)
+            if next_token.item() == eos_idx:
+                break
+        return decoder_input.squeeze(0)
 
 
 class Trainer:
@@ -85,6 +113,72 @@ class Trainer:
 
         return train_dl, val_dl
     
+    def runValidation(self,
+                      validation_ds: DataLoader,
+                      print_msg: Callable, # dont't interfere with tqdm
+                      num_examples: int = 2) -> torch.Tensor:
+        self.model.eval()
+        count = 0
+
+        expected = []
+        predicted = []
+        mses = []
+
+        # get the console window width
+        try:
+            with os.popen('stty size', 'r') as console:
+                _, console_width = console.read().split()
+                console_width = int(console_width)
+        except:
+                console_width = 80
+        # console_width = 80
+
+        with torch.no_grad():
+            for batch in validation_ds:
+                count += 1
+                error = False
+
+                # get data
+                encoder_input = batch["encoder_input"].to(self.device)
+                encoder_mask = batch["encoder_mask"].to(self.device)
+                assert encoder_input.shape[0] == 1, "Batch size must be 1 for validation"
+
+                # save text for printing
+                target_text = batch["tgt"][0].detach().cpu()
+                # target_tokens = [self.tokenizer.encode(num) for num in target_text]
+                target_tokens = ['[SOS]'] + self.tokenizer.encode(target_text) + ['[EOS]']
+
+                # run greedy decoding
+                model_out = greedyDecode(self.model, encoder_input, encoder_mask,
+                                         self.tokenizer, self.config["seq_len_out"], self.device)
+                model_out = model_out.detach().cpu().tolist()
+                model_out_tokens = [self.tokenizer.idxToToken(idx) for idx in model_out]
+                try:
+                    model_out_text = torch.tensor(self.tokenizer.decode(model_out_tokens))
+                    mses += [torch.mean((target_text - model_out_text) ** 2)]
+                except:
+                    # print_msg(f"Error decoding: {model_out_tokens}")
+                    error = True
+                    model_out_text = "".join(model_out_tokens)
+
+                expected += [target_text]
+                predicted += [model_out_text]
+
+                if count <= num_examples:
+                    # print some examples
+                    print_msg('-' * console_width)
+                    if error:
+                        print_msg(f"Target (tokens): {target_tokens}")
+                        print_msg(f"Predicted (tokens): {model_out_tokens}")
+                    else:
+                        print_msg(f"Target: {target_text}")
+                        print_msg(f"Predicted: {model_out_text}")
+                        print_msg(f"Differences: {target_text - model_out_text}")
+        mses = torch.tensor(mses)
+        print_msg(f"Validation MSE: {torch.mean(mses).item()}")
+        return mses
+
+
     def runBatch(self, batch: dict) -> float:
         self.model.train()
         encoder_input = batch["encoder_input"].to(self.device) # (batch_size, seq_len)
@@ -145,96 +239,6 @@ def main():
         trainer.current_seed += trainer.config["n_draws"]
         trainer.saveModel(epoch)
 
-def greedyDecode(model: nn.Module,
-                 source: torch.Tensor,
-                 source_mask: torch.Tensor,
-                 tokenizer: FloatTokenizer,
-                 max_len: int,
-                 device: torch.device) -> torch.Tensor:
-    sos_idx = tokenizer.tokenToIdx("[SOS]")
-    eos_idx = tokenizer.tokenToIdx("[EOS]")
-
-    # precompute encoder output and reuse it for every token we get from the decoder
-    encoder_output = model.encode(source, source_mask) # (1, seq_len, d_model)
-
-    # initialize decoder input with SOS token
-    decoder_input = torch.empty(1, 1).fill_(sos_idx).type_as(source).to(device)
-
-    # greedy decoding
-    while True:
-        if decoder_input.size(1) >= max_len:
-            break
-        decoder_mask = causalMask(decoder_input.size(1)).type_as(source).to(device)
-        out = model.decode(encoder_output, source_mask, decoder_input, decoder_mask)
-        prob = model.projection(out[:, -1]) # give logprob for last token
-        _, next_token = torch.max(prob, dim=-1)
-        next_token = torch.empty(1, 1).type_as(source).fill_(next_token.item()).to(device)
-        decoder_input = torch.cat([decoder_input, next_token], dim=1)
-        if next_token.item() == eos_idx:
-            break
-    return decoder_input.squeeze(0)
-
-
-def runValidation(model: nn.Module,
-                   validation_ds: DataLoader,
-                   tokenizer: FloatTokenizer,
-                   max_len: int,
-                   device: torch.device,
-                   print_msg: Callable, # dont't interfere with tqdm
-                   global_step: int,
-                   writer: SummaryWriter,
-                   num_examples: int = 2):
-     model.eval()
-     count = 0
-
-     source_texts = []
-     expected = []
-     predicted = []
-
-     # get the console window width
-     # try:
-     #     with os.popen('stty size', 'r') as console:
-     #         _, console_width = console.read().split()
-     #         console_width = int(console_width)
-     # except:
-     #         console_width = 80
-     console_width = 80
-
-     with torch.no_grad():
-         for batch in validation_ds:
-             count += 1
-
-             # get data
-             encoder_input = batch["encoder_input"].to(device)
-             encoder_mask = batch["encoder_mask"].to(device)
-             assert encoder_input.shape[0] == 1, "Batch size must be 1 for validation"
-
-             # run greedy decoding
-             model_out = greedyDecode(model, encoder_input, encoder_mask, tokenizer, max_len, device)
-
-             # save text for printing
-             target_text = batch["tgt"][0]
-
-             # decode model output
-             decode_this = model_out.detach().cpu().tolist()
-             decode_this = [tokenizer.idxToToken(idx) for idx in decode_this]
-             try:
-                 model_out_text = tokenizer.decode(decode_this)
-             except:
-                 print_msg(f"Error decoding: {decode_this}")
-                 model_out_text = "".join(decode_this)
-
-             expected += [target_text]
-             predicted += [model_out_text]
-
-             # print some examples
-             print_msg('-' * console_width)
-             print_msg(f"Target: {target_text}")
-             print_msg(f"Predicted: {model_out_text}")
-             print_msg(f"Predicted (tokens): {decode_this}")
-
-             if count == num_examples:
-                 break
 
 if __name__ == "__main__":
     config = getConfig()
