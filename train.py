@@ -113,15 +113,51 @@ class Trainer:
 
         return train_dl, val_dl
     
+    def runBatch(self, batch: dict) -> float:
+        self.model.train()
+        encoder_input = batch["encoder_input"].to(self.device) # (batch_size, seq_len)
+        encoder_mask = batch["encoder_mask"].to(self.device) # (batch_size, 1, 1, seq_len)
+        decoder_input = batch["decoder_input"].to(self.device) # (batch_size, seq_len)
+        decoder_mask = batch["decoder_mask"].to(self.device) # (batch_size, 1, seq_len, seq_len)
+
+        # forward pass
+        encoder_output = self.model.encode(encoder_input, encoder_mask) # (batch_size, seq_len, d_model)
+        decoder_output = self.model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask) # (batch_size, seq_len, d_model)
+        proj_output = self.model.projection(decoder_output) # (batch_size, seq_len, vocab_tgt_len)
+        label = batch["label"].to(self.device) # (batch_size, seq_len)
+
+        # (batch_size, seq_len, vocab_tgt_len) -> (batch_size * seq_len, vocab_tgt_len)
+        loss = self.loss_fn(proj_output.view(-1, self.tokenizer.getVocabSize()), label.view(-1))
+        self.writer.add_scalar("train_loss", loss.item(), self.global_step)
+        self.writer.flush()
+
+        # backward pass
+        loss.backward()
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        self.global_step += 1
+
+        return loss.item()
+
+    def runEpoch(self, epoch: int, seed: int, train: bool = True) -> None:
+        train_dl, val_dl = self.getDataset(config=self.config, seed=seed)
+        batch_iterator = tqdm(train_dl, desc=f"Epoch {epoch:02d}")
+        
+        # train
+        if train:
+            for batch in batch_iterator:
+                loss = self.runBatch(batch)
+                batch_iterator.set_postfix({"loss": loss})
+     
+        # validation
+        self.runValidation(val_dl, batch_iterator.write)
+
     def runValidation(self,
                       validation_ds: DataLoader,
                       print_msg: Callable, # dont't interfere with tqdm
-                      num_examples: int = 2) -> torch.Tensor:
+                      num_examples: int = 2) -> None:
         self.model.eval()
         count = 0
-
-        expected = []
-        predicted = []
         mses = []
 
         # get the console window width
@@ -145,14 +181,13 @@ class Trainer:
 
                 # save text for printing
                 target_text = batch["tgt"][0].detach().cpu()
-                # target_tokens = [self.tokenizer.encode(num) for num in target_text]
                 target_tokens = ['[SOS]'] + self.tokenizer.encode(target_text) + ['[EOS]']
 
                 # run greedy decoding
                 model_out = greedyDecode(self.model, encoder_input, encoder_mask,
                                          self.tokenizer, self.config["seq_len_out"], self.device)
-                model_out = model_out.detach().cpu().tolist()
-                model_out_tokens = [self.tokenizer.idxToToken(idx) for idx in model_out]
+                model_out_ = model_out.detach().cpu().tolist()
+                model_out_tokens = [self.tokenizer.idxToToken(idx) for idx in model_out_]
                 try:
                     model_out_text = torch.tensor(self.tokenizer.decode(model_out_tokens))
                     mses += [torch.mean((target_text - model_out_text) ** 2)]
@@ -161,9 +196,14 @@ class Trainer:
                     error = True
                     model_out_text = "".join(model_out_tokens)
 
-                expected += [target_text]
-                predicted += [model_out_text]
+                # validation loss pass
+                proj_output = self.model.projection(model_out)
+                label = batch["label"]
+                loss = self.loss_fn(proj_output.view(-1, self.tokenizer.getVocabSize()), label.view(-1))
+                self.writer.add_scalar("val_loss", loss.item(), self.global_step)
+                self.writer.flush()
 
+                # print some examples
                 if count <= num_examples:
                     # print some examples
                     print_msg('-' * console_width)
@@ -174,51 +214,9 @@ class Trainer:
                         print_msg(f"Target: {target_text}")
                         print_msg(f"Predicted: {model_out_text}")
                         print_msg(f"Differences: {target_text - model_out_text}")
-        mses = torch.tensor(mses)
-        print_msg(f"Validation MSE: {torch.mean(mses).item()}")
-        return mses
-
-
-    def runBatch(self, batch: dict) -> float:
-        self.model.train()
-        encoder_input = batch["encoder_input"].to(self.device) # (batch_size, seq_len)
-        encoder_mask = batch["encoder_mask"].to(self.device) # (batch_size, 1, 1, seq_len)
-        decoder_input = batch["decoder_input"].to(self.device) # (batch_size, seq_len)
-        decoder_mask = batch["decoder_mask"].to(self.device) # (batch_size, 1, seq_len, seq_len)
-
-        # forward pass
-        encoder_output = self.model.encode(encoder_input, encoder_mask) # (batch_size, seq_len, d_model)
-        decoder_output = self.model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask) # (batch_size, seq_len, d_model)
-        proj_output = self.model.projection(decoder_output) # (batch_size, seq_len, vocab_tgt_len)
-        label = batch["label"].to(self.device) # (batch_size, seq_len)
-
-        # (batch_size, seq_len, vocab_tgt_len) -> (batch_size * seq_len, vocab_tgt_len)
-        loss = self.loss_fn(proj_output.view(-1, self.tokenizer.getVocabSize()), label.view(-1))
-        # batch_iterator.set_postfix({"loss": loss.item()})
-        self.writer.add_scalar("train_loss", loss.item(), self.global_step)
-        self.writer.flush()
-
-        # backward pass
-        loss.backward()
-        self.optimizer.step()
-        self.optimizer.zero_grad()
-        self.global_step += 1
-
-        return loss.item()
-
-    def runEpoch(self, epoch: int, seed: int, train: bool = True) -> None:
-        train_dl, val_dl = self.getDataset(config=self.config, seed=seed)
-        batch_iterator = tqdm(train_dl, desc=f"Epoch {epoch:02d}")
-        
-        # train
-        if train:
-            for batch in batch_iterator:
-                loss = self.runBatch(batch)
-                batch_iterator.set_postfix({"loss": loss})
-            
-        # validation
-        self.runValidation(val_dl, batch_iterator.write)
-    
+                        self.writer.add_scalar("val_mse", mses[-1].item(), self.global_step)
+        print_msg(f"Validation MSE: {torch.mean(torch.tensor(mses)).item()}")
+   
     def saveModel(self, epoch: int) -> None:
         model_filename = getWeightsFilePath(self.config, epoch)
         torch.save({
@@ -229,6 +227,7 @@ class Trainer:
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
         }, model_filename)
+
 
 def main():
     config = getConfig()
