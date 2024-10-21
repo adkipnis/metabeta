@@ -4,11 +4,13 @@ from typing import Dict
 class Task:
     def __init__(self,
                  n_predictors: int,
+                 seed: int,
                  sigma_error: float = 0.1,
                  sigma_beta: float = 0.1,
                  cov_beta: float = 0.0,
                  ):
         self.n_predictors = n_predictors
+        self.seed = seed
 
         # error distribution
         self.sigma_error = sigma_error
@@ -22,6 +24,7 @@ class Task:
         self.weight_dist = torch.distributions.MultivariateNormal(self.mean, self.cov)
 
     def sampleMean(self) -> torch.Tensor:
+        torch.manual_seed(self.seed)
         return torch.randn(self.n_predictors + 1)
 
     def sampleCov(self, var: float, cov: float) -> torch.Tensor:
@@ -30,6 +33,7 @@ class Task:
         return var * main_diag + cov * off_diag
 
     def sampleBeta(self) -> torch.Tensor:
+        torch.manual_seed(self.seed)
         return self.weight_dist.sample()
 
 
