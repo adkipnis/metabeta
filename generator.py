@@ -40,7 +40,7 @@ class Task:
 class LinearModel:
     def __init__(self,
                  task: Task,
-                 dataDist: torch.distributions.Distribution = torch.distributions.Normal(0, 1)):
+                 dataDist: torch.distributions.Distribution = torch.distributions.Normal(0, 1),) -> None:
         self.task = task
         self.dataDist = dataDist
         self.weights = self.task.sampleBeta()
@@ -50,25 +50,26 @@ class LinearModel:
     def n_predictors(self):
         return self.task.n_predictors
 
-    def sampleFeatures(self, n_samples: int):
+    def sampleFeatures(self, n_samples: int, seed: int):
+        torch.manual_seed(seed)
         x = self.dataDist.sample((n_samples, self.n_predictors)) # type: ignore
         intercept = torch.ones(n_samples, 1)
         return torch.cat([intercept, x], dim=1)
 
-    def predict(self, x: torch.Tensor) -> torch.Tensor:
+    def predict(self, x: torch.Tensor, seed: int) -> torch.Tensor:
         # x: (n_samples, n_predictors + 1)
+        torch.manual_seed(seed)
         n_samples = x.shape[0]
         error = self.task.noise_dist.sample((n_samples,)) # type: ignore
         return x @ self.weights + error
 
-    def sample(self, n_samples: int) -> Dict[str, torch.Tensor]:
-        x = self.sampleFeatures(n_samples)
-        y = self.predict(x).unsqueeze(1)
+    def sample(self, n_samples: int, seed: int) -> Dict[str, torch.Tensor]:
+        x = self.sampleFeatures(n_samples, seed)
+        y = self.predict(x, seed).unsqueeze(1)
         return {
                 "features": x,
                 "target": y,
-                # "params": torch.cat([self.weights, self.sigma])
-                "params": self.weights
+                "params": self.weights # torch.cat([self.weights, self.sigma])
                 }
 
 
