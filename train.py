@@ -13,11 +13,11 @@ from model import Transformer
 from config import getConfig, getWeightsFilePath
 
 def greedyDecode(model: nn.Module,
-                    source: torch.Tensor,
-                    source_mask: torch.Tensor,
-                    tokenizer: FloatTokenizer,
-                    max_len: int,
-                    device: torch.device) -> torch.Tensor:
+                 source: torch.Tensor,
+                 source_mask: torch.Tensor,
+                 tokenizer: FloatTokenizer,
+                 max_len: int,
+                 device: torch.device) -> torch.Tensor:
         sos_idx = tokenizer.tokenToIdx("[SOS]")
         eos_idx = tokenizer.tokenToIdx("[EOS]")
 
