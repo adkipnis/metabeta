@@ -12,30 +12,6 @@ from tokenizer import FloatTokenizer
 from model import Transformer
 from config import getConfig, getWeightsFilePath
 
-def getDataset(config: dict) -> Tuple[DataLoader, DataLoader, FloatTokenizer]:
-    # create dataset
-    tokenizer = FloatTokenizer(precision=config["precision"])
-    task = Task(n_predictors=config["n_predictors"])
-    lm = LinearModel(task)
-    dataset = []
-    for _ in range(config["n_draws"]):
-        task = Task(n_predictors=config["n_predictors"])
-        lm = LinearModel(task)
-        dataset += [lm.sample(config["n_samples"])]
-
-    # train validation split
-    train_ds_size = int(0.9 * len(dataset))
-    val_ds_size = len(dataset) - train_ds_size
-    print(f"Train size: {train_ds_size}, Validation size: {val_ds_size}")
-    train_ds_raw, val_ds_raw = random_split(dataset, [train_ds_size, val_ds_size])
-    train_ds = LinearModelDataset(train_ds_raw, tokenizer, config["seq_len"])
-    val_ds = LinearModelDataset(val_ds_raw, tokenizer, config["seq_len"])
-
-    # dataloaders
-    train_dl = DataLoader(train_ds, batch_size=config["batch_size"], shuffle=True)
-    val_dl = DataLoader(val_ds, batch_size=1, shuffle=True)
-
-    return train_dl, val_dl, tokenizer
 
 
 def trainModel(config):
@@ -93,6 +69,31 @@ class Trainer:
         n = torch.randint(low, 100, (1,))
         return int(n.item())
 
+    def getDataset(self, config: dict, seed: int) -> Tuple[DataLoader, DataLoader]:
+        # create dataset
+        dataset = []
+        for _ in range(config["n_draws"]):
+            task = Task(n_predictors=self.config["n_predictors"], seed=seed)
+            lm = LinearModel(task)
+            n_samples = self.config["n_samples"]
+            # n_samples = self.getN(seed) # TODO: fix collate_fn
+            dataset += [lm.sample(n_samples, seed)]
+            seed += 1
+
+        # train validation split
+        train_ds_size = int(0.9 * len(dataset))
+        val_ds_size = len(dataset) - train_ds_size
+        print(f"Train size: {train_ds_size}, Validation size: {val_ds_size}")
+        train_ds_raw, val_ds_raw = random_split(dataset, [train_ds_size, val_ds_size])
+        train_ds = LinearModelDataset(train_ds_raw, self.tokenizer, self.config["seq_len"])
+        val_ds = LinearModelDataset(val_ds_raw, self.tokenizer, self.config["seq_len"])
+
+        # dataloaders
+        train_dl = DataLoader(train_ds, batch_size=config["batch_size"], shuffle=True)
+        val_dl = DataLoader(val_ds, batch_size=1, shuffle=True)
+
+        return train_dl, val_dl
+    
         batch_iterator = tqdm(train_dl, desc=f"Epoch {epoch:02d}")
         for batch in batch_iterator:
             model.train()
