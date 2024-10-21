@@ -125,13 +125,25 @@ class Trainer:
         # validation
         self.runValidation(val_dl, batch_iterator.write)
     
+    def saveModel(self, epoch: int) -> None:
+        model_filename = getWeightsFilePath(self.config, epoch)
         torch.save({
             'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'global_step': global_step
+            'seed': self.seed,
+            'current_seed': self.current_seed,
+            'global_step': self.global_step,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
         }, model_filename)
 
+def main():
+    config = getConfig()
+    trainer = Trainer(config)
+    epochs = range(trainer.initial_epoch, config['n_epochs'])
+    for epoch in epochs:
+        trainer.runEpoch(epoch, trainer.current_seed)
+        trainer.current_seed += trainer.config["n_draws"]
+        trainer.saveModel(epoch)
 
 def greedyDecode(model: nn.Module,
                  source: torch.Tensor,
