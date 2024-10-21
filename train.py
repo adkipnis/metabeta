@@ -64,6 +64,8 @@ class Trainer:
                                           lr=config["lr"], eps=1e-9)
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=self.tokenizer.tokenToIdx("[PAD]"),
                                            label_smoothing=0.1).to(self.device)
+        # TODO: MSE loss for training
+
         if config["preload"]:
             self.preload()
 
@@ -142,13 +144,13 @@ class Trainer:
     def runEpoch(self, epoch: int, seed: int, train: bool = True) -> None:
         train_dl, val_dl = self.getDataset(config=self.config, seed=seed)
         batch_iterator = tqdm(train_dl, desc=f"Epoch {epoch:02d}")
-        
+
         # train
         if train:
             for batch in batch_iterator:
                 loss = self.runBatch(batch)
                 batch_iterator.set_postfix({"loss": loss})
-     
+
         # validation
         self.runValidation(val_dl, batch_iterator.write)
 
@@ -196,12 +198,12 @@ class Trainer:
                     error = True
                     model_out_text = "".join(model_out_tokens)
 
-                # validation loss pass
-                proj_output = self.model.projection(model_out)
-                label = batch["label"]
-                loss = self.loss_fn(proj_output.view(-1, self.tokenizer.getVocabSize()), label.view(-1))
-                self.writer.add_scalar("val_loss", loss.item(), self.global_step)
-                self.writer.flush()
+                # # validation loss pass # TODO
+                # proj_output = self.model.projection(model_out)
+                # label = batch["label"]
+                # loss = self.loss_fn(proj_output.view(-1, self.tokenizer.getVocabSize()), label.view(-1))
+                # self.writer.add_scalar("val_loss", loss.item(), self.global_step)
+                # self.writer.flush()
 
                 # print some examples
                 if count <= num_examples:
