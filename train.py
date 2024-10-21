@@ -47,35 +47,35 @@ def trainModel(config):
     Path(config["model_folder"]).mkdir(parents=True, exist_ok=True)
     train_dl, val_dl, tokenizer = getDataset(config)
     model = Transformer(d_model=config["d_model"],
+class Trainer:
+    def __init__(self, config: dict) -> None:
+        self.config = config
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.global_step = 0
+        self.initial_epoch = 0
+        self.seed = 0
+        self.current_seed = 0
+        print(f"Device: {self.device}")
+        self.tokenizer = FloatTokenizer(precision=config["precision"])
+        self.model = Transformer(d_model=config["d_model"],
                         d_ff=config["d_ff"],
                         n_heads=config["n_heads"],
                         n_blocks_e=config["n_blocks_e"],
                         n_blocks_d=config["n_blocks_d"],
-                        vocab_size=tokenizer.getVocabSize(),
-                        dropout=config["dropout"]).to(device)
+                        vocab_size=self.tokenizer.getVocabSize(),
+                        dropout=config["dropout"]).to(self.device)
+        # optimizer and loss
+        self.optimizer = torch.optim.Adam(self.model.parameters(),
+                                          lr=config["lr"], eps=1e-9)
+        self.loss_fn = nn.CrossEntropyLoss(ignore_index=self.tokenizer.tokenToIdx("[PAD]"),
+                                           label_smoothing=0.1).to(self.device)
+        if config["preload"]:
+            self.preload()
 
-    # tensorboard
-    writer = SummaryWriter(config["experiment_name"])
+        # create model folder and tensorboard writer
+        Path(config["model_folder"]).mkdir(parents=True, exist_ok=True)
+        self.writer = SummaryWriter(config["experiment_name"])
 
-    # optimizer and potentially load weights
-    optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"], eps=1e-9)
-    initial_epoch = 0
-    global_step = 0
-    if config["preload"]:
-        model_filename = getWeightsFilePath(config, epoch=config["preload"])
-        print(f"Loading weights from {model_filename}")
-        state = torch.load(model_filename, weights_only=False)
-        model.load_state_dict(state["model_state_dict"])
-        initial_epoch = state["epoch"] + 1
-        optimizer.load_state_dict(state["optimizer_state_dict"])
-        global_step = state["global_step"]
-
-    # loss function
-    padding_idx = tokenizer.tokenToIdx("[PAD]")
-    loss_fn = nn.CrossEntropyLoss(ignore_index=padding_idx,
-                                  label_smoothing=0.1).to(device)
-
-    for epoch in range(initial_epoch, config['n_epochs']):
         batch_iterator = tqdm(train_dl, desc=f"Epoch {epoch:02d}")
         for batch in batch_iterator:
             model.train()
