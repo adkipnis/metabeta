@@ -241,7 +241,5 @@ def main():
 
 
 if __name__ == "__main__":
-    config = getConfig()
-    trainModel(config)
-
+    main()
 
