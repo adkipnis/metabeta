@@ -20,14 +20,14 @@ class Task:
         self.sigma_beta = sigma_beta
         self.cov_beta = cov_beta
         self.mean = self.sampleMean()
-        self.cov = self.sampleCov(self.sigma_beta, self.cov_beta)
+        self.cov = self.getCov(self.sigma_beta, self.cov_beta)
         self.weight_dist = torch.distributions.MultivariateNormal(self.mean, self.cov)
 
     def sampleMean(self) -> torch.Tensor:
         torch.manual_seed(self.seed)
         return torch.randn(self.n_predictors + 1)
 
-    def sampleCov(self, var: float, cov: float) -> torch.Tensor:
+    def getCov(self, var: float, cov: float) -> torch.Tensor:
         main_diag = torch.eye(self.n_predictors + 1)
         off_diag = torch.ones(self.n_predictors + 1, self.n_predictors + 1) - main_diag
         return var * main_diag + cov * off_diag
