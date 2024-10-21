@@ -14,15 +14,6 @@ from config import getConfig, getWeightsFilePath
 
 
 
-def trainModel(config):
-    # definde device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Device: {device}")
-
-    # get dataset
-    Path(config["model_folder"]).mkdir(parents=True, exist_ok=True)
-    train_dl, val_dl, tokenizer = getDataset(config)
-    model = Transformer(d_model=config["d_model"],
 class Trainer:
     def __init__(self, config: dict) -> None:
         self.config = config
@@ -94,37 +85,46 @@ class Trainer:
 
         return train_dl, val_dl
     
+    def runBatch(self, batch: dict) -> float:
+        self.model.train()
+        encoder_input = batch["encoder_input"].to(self.device) # (batch_size, seq_len)
+        encoder_mask = batch["encoder_mask"].to(self.device) # (batch_size, 1, 1, seq_len)
+        decoder_input = batch["decoder_input"].to(self.device) # (batch_size, seq_len)
+        decoder_mask = batch["decoder_mask"].to(self.device) # (batch_size, 1, seq_len, seq_len)
+
+        # forward pass
+        encoder_output = self.model.encode(encoder_input, encoder_mask) # (batch_size, seq_len, d_model)
+        decoder_output = self.model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask) # (batch_size, seq_len, d_model)
+        proj_output = self.model.projection(decoder_output) # (batch_size, seq_len, vocab_tgt_len)
+        label = batch["label"].to(self.device) # (batch_size, seq_len)
+
+        # (batch_size, seq_len, vocab_tgt_len) -> (batch_size * seq_len, vocab_tgt_len)
+        loss = self.loss_fn(proj_output.view(-1, self.tokenizer.getVocabSize()), label.view(-1))
+        # batch_iterator.set_postfix({"loss": loss.item()})
+        self.writer.add_scalar("train_loss", loss.item(), self.global_step)
+        self.writer.flush()
+
+        # backward pass
+        loss.backward()
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        self.global_step += 1
+
+        return loss.item()
+
+    def runEpoch(self, epoch: int, seed: int, train: bool = True) -> None:
+        train_dl, val_dl = self.getDataset(config=self.config, seed=seed)
         batch_iterator = tqdm(train_dl, desc=f"Epoch {epoch:02d}")
-        for batch in batch_iterator:
-            model.train()
-            encoder_input = batch["encoder_input"].to(device) # (batch_size, seq_len)
-            encoder_mask = batch["encoder_mask"].to(device) # (batch_size, 1, 1, seq_len)
-            decoder_input = batch["decoder_input"].to(device) # (batch_size, seq_len)
-            decoder_mask = batch["decoder_mask"].to(device) # (batch_size, 1, seq_len, seq_len)
-
-            # forward pass
-            encoder_output = model.encode(encoder_input, encoder_mask) # (batch_size, seq_len, d_model)
-            decoder_output = model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask) # (batch_size, seq_len, d_model)
-            proj_output = model.projection(decoder_output) # (batch_size, seq_len, vocab_tgt_len)
-            label = batch["label"].to(device) # (batch_size, seq_len)
-
-            # (batch_size, seq_len, vocab_tgt_len) -> (batch_size * seq_len, vocab_tgt_len)
-            loss = loss_fn(proj_output.view(-1, tokenizer.getVocabSize()), label.view(-1))
-            batch_iterator.set_postfix({"loss": loss.item()})
-            writer.add_scalar("train_loss", loss.item(), global_step)
-            writer.flush()
-
-            # backward pass
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-            global_step += 1
-
-        # validation at the end of each epoch
-        runValidation(model, val_dl, tokenizer, config["seq_len_out"], device, batch_iterator.write, global_step, writer)
+        
+        # train
+        if train:
+            for batch in batch_iterator:
+                loss = self.runBatch(batch)
+                batch_iterator.set_postfix({"loss": loss})
+            
+        # validation
+        self.runValidation(val_dl, batch_iterator.write)
     
-        # save model
-        model_filename = getWeightsFilePath(config, epoch)
         torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
