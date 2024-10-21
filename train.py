@@ -87,6 +87,12 @@ class Trainer:
         self.seed = state["seed"]
         self.current_seed = state["current_seed"]
 
+    def getN(self, seed: int) -> int:
+        torch.manual_seed(seed)
+        low = 10 * (self.config["n_predictors"] + 1)
+        n = torch.randint(low, 100, (1,))
+        return int(n.item())
+
         batch_iterator = tqdm(train_dl, desc=f"Epoch {epoch:02d}")
         for batch in batch_iterator:
             model.train()
