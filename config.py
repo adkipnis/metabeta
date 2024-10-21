@@ -8,11 +8,11 @@ def getConfig() -> dict:
             "batch_size": 10, # number of concurrent draws per batch
             "n_epochs": 500, # number of epochs
             "lr": 1e-3, # learning rate
-            "d_model": 128, # size of embedding layer
-            "d_ff": 256, # size of feed forward layer
-            "n_heads": 4, # number of heads
-            "n_blocks_e": 2, # number of encoder blocks
-            "n_blocks_d": 6, # number of decoder blocks
+            "d_model": 64, # size of embedding layer
+            "d_ff": 128, # size of feed forward layer
+            "n_heads": 2, # number of heads
+            "n_blocks_e": 3, # number of encoder blocks
+            "n_blocks_d": 3, # number of decoder blocks
             "dropout": 0.1, # dropout rate
             "seq_len": 2000, # max length of sequence
             "seq_len_out": 4*3 + 2, # max length of output sequence
