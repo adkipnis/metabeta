@@ -1,3 +1,4 @@
+import os
 from typing import Tuple, Callable
 from pathlib import Path
 from tqdm import tqdm
@@ -10,7 +11,6 @@ from dataset import LinearModelDataset, causalMask
 from tokenizer import FloatTokenizer
 from model import Transformer
 from config import getConfig, getWeightsFilePath
-
 
 def getDataset(config: dict) -> Tuple[DataLoader, DataLoader, FloatTokenizer]:
     # create dataset
