@@ -76,6 +76,17 @@ class Trainer:
         Path(config["model_folder"]).mkdir(parents=True, exist_ok=True)
         self.writer = SummaryWriter(config["experiment_name"])
 
+    def preload(self) -> None:
+        model_filename = getWeightsFilePath(self.config, epoch=self.config["preload"])
+        print(f"Loading weights from {model_filename}")
+        state = torch.load(model_filename, weights_only=False)
+        self.model.load_state_dict(state["model_state_dict"])
+        self.initial_epoch = state["epoch"] + 1
+        self.optimizer.load_state_dict(state["optimizer_state_dict"])
+        self.global_step = state["global_step"]
+        self.seed = state["seed"]
+        self.current_seed = state["current_seed"]
+
         batch_iterator = tqdm(train_dl, desc=f"Epoch {epoch:02d}")
         for batch in batch_iterator:
             model.train()
