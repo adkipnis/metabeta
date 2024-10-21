@@ -1,4 +1,6 @@
 from pathlib import Path
+from datetime import datetime
+timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
 def getConfig() -> dict:
     return {
@@ -20,7 +22,7 @@ def getConfig() -> dict:
             "preload": None, # None or epoch number
             "model_folder": "weights",
             "model_basename": "tmodel",
-            "experiment_name": "runs/linear"
+            "experiment_name": f"runs/linear/{timestamp}",
             }
 
 def getWeightsFilePath(config: dict, epoch: int):
