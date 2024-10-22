@@ -81,4 +81,11 @@ class FloatTokenizer:
             out.append(num)
         return out
 
+    def batchDecode(self, indices: torch.Tensor) -> List[List[float]]:
+        tokens = [[self.idxToToken(idx) for idx in row] for row in indices]
+        numbers = [self.decode(row) for row in tokens]
+        min_len = min(len(row) for row in numbers)
+        numbers = [row[:min_len] for row in numbers]
+        return numbers
+
 
