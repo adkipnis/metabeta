@@ -64,7 +64,7 @@ class Trainer:
                                           lr=config["lr"], eps=1e-9)
         self.ce_loss = nn.CrossEntropyLoss(ignore_index=self.tokenizer.tokenToIdx("[PAD]"),
                                            label_smoothing=0.1).to(self.device)
-        self.mse_loss = nn.MSELoss()
+        # self.mse_loss = nn.MSELoss(reduction="none")
 
         if config["preload"]:
             self.preload()
@@ -72,6 +72,14 @@ class Trainer:
         # create model folder and tensorboard writer
         Path(config["model_folder"]).mkdir(parents=True, exist_ok=True)
         self.writer = SummaryWriter(config["experiment_name"])
+
+    # def filteredMSE(self, pred: torch.Tensor, tgt: torch.Tensor) -> torch.Tensor:
+    #     if pred.shape != tgt.shape:
+    #         return torch.tensor(9.)
+    #     loss = self.mse_loss(pred, tgt)
+    #     mask = torch.isnan(pred)
+    #     loss[mask] = 3.
+    #     return torch.mean(loss)
 
     def preload(self) -> None:
         model_filename = getWeightsFilePath(self.config, epoch=self.config["preload"])
@@ -130,14 +138,17 @@ class Trainer:
         # CE loss
         label = batch["label"].to(self.device) # (batch_size, seq_len)
         loss = self.ce_loss(proj_output.view(-1, self.tokenizer.getVocabSize()), label.view(-1))
+        self.writer.add_scalar("train_loss", loss.item(), self.global_step)
+        self.writer.flush()
 
         # # MSE loss
         # tgt = batch["tgt"].to(self.device)
-        # tgt_pred = torch.argmax(proj_output, dim=-1)
-        # loss_mse = self.mse_loss(tgt_pred, tgt)
-
-        self.writer.add_scalar("train_loss", loss.item(), self.global_step)
-        self.writer.flush()
+        # pred_idx = torch.argmax(proj_output, dim=-1)
+        # pred = torch.tensor(self.tokenizer.batchDecode(pred_idx)).to(self.device)
+        # mse_loss = self.filteredMSE(pred, tgt)
+        # self.writer.add_scalar("train_loss_mse", mse_loss.item(), self.global_step)
+        # self.writer.flush()
+        # loss += mse_loss
 
         # backward pass
         loss.backward()
