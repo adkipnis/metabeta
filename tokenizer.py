@@ -22,6 +22,7 @@ class FloatTokenizer:
         return self.sym_to_idx.get(token, self.sym_to_idx["[UNK]"])
 
     def idxToToken(self, idx: int) -> str:
+        idx = int(idx)
         return self.idx_to_sym.get(idx, "[UNK]")
 
     def getVocabSize(self) -> int:
@@ -67,11 +68,15 @@ class FloatTokenizer:
     def decode(self, tokens: List[str]) -> List[float]:
         if tokens[0] == '[SOS]':
             tokens = tokens[1:]
-        if tokens[-1] == '[EOS]':
-            tokens = tokens[:-1]
+        eos_idx = tokens.index('[EOS]')
+        tokens = tokens[:eos_idx]
         out = []
         for i in range(0, len(tokens), 3):
-            out.append(self.decodeNumber(tokens[i:i+3]))
+            try:
+                num = self.decodeNumber(tokens[i:i+3])
+            except:
+                num = float("nan")
+            out.append(num)
         return out
 
 
