@@ -62,9 +62,9 @@ class Trainer:
         # optimizer and loss
         self.optimizer = torch.optim.Adam(self.model.parameters(),
                                           lr=config["lr"], eps=1e-9)
-        self.loss_fn = nn.CrossEntropyLoss(ignore_index=self.tokenizer.tokenToIdx("[PAD]"),
+        self.ce_loss = nn.CrossEntropyLoss(ignore_index=self.tokenizer.tokenToIdx("[PAD]"),
                                            label_smoothing=0.1).to(self.device)
-        # TODO: MSE loss for training
+        self.mse_loss = nn.MSELoss()
 
         if config["preload"]:
             self.preload()
@@ -126,10 +126,16 @@ class Trainer:
         encoder_output = self.model.encode(encoder_input, encoder_mask) # (batch_size, seq_len, d_model)
         decoder_output = self.model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask) # (batch_size, seq_len, d_model)
         proj_output = self.model.projection(decoder_output) # (batch_size, seq_len, vocab_tgt_len)
-        label = batch["label"].to(self.device) # (batch_size, seq_len)
 
-        # (batch_size, seq_len, vocab_tgt_len) -> (batch_size * seq_len, vocab_tgt_len)
-        loss = self.loss_fn(proj_output.view(-1, self.tokenizer.getVocabSize()), label.view(-1))
+        # CE loss
+        label = batch["label"].to(self.device) # (batch_size, seq_len)
+        loss = self.ce_loss(proj_output.view(-1, self.tokenizer.getVocabSize()), label.view(-1))
+
+        # # MSE loss
+        # tgt = batch["tgt"].to(self.device)
+        # tgt_pred = torch.argmax(proj_output, dim=-1)
+        # loss_mse = self.mse_loss(tgt_pred, tgt)
+
         self.writer.add_scalar("train_loss", loss.item(), self.global_step)
         self.writer.flush()
 
