@@ -68,13 +68,15 @@ class FloatTokenizer:
     def decode(self, tokens: List[str]) -> List[float]:
         if tokens[0] == '[SOS]':
             tokens = tokens[1:]
-        eos_idx = tokens.index('[EOS]')
-        tokens = tokens[:eos_idx]
+        if '[EOS]' in tokens:
+            eos_idx = tokens.index('[EOS]')
+            tokens = tokens[:eos_idx]
         out = []
         for i in range(0, len(tokens), 3):
             try:
                 num = self.decodeNumber(tokens[i:i+3])
             except:
+                # print(f"Error decoding {tokens[i:i+3]}")
                 num = float("nan")
             out.append(num)
         return out
