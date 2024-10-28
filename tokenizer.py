@@ -10,10 +10,15 @@ class FloatTokenizer:
         self.precision = precision
         self.base = 10
         self.max_exp = 6
-        self.symbols = ["[PAD]", "[SOS]", "[EOS]", "[SOT]", "[UNK]", "-", "+"]
-        self.symbols += [f"N{i:04d}" for i in range(self.base ** self.precision)]
-        self.symbols += [f"E{i}" for i in range(-self.max_exp, self.max_exp + 1)]
+        self.symbol_dict = {"special": ["[PAD]", "[SOS]", "[EOS]", "[SOT]", "[UNK]"],
+                            "sign": ["-", "+"],
+                            "mantissa": [f"N{i:04d}" for i in range(self.base ** self.precision)],
+                            "exponent": [f"E{i}" for i in range(-self.max_exp, self.max_exp + 1)]}
+        self.symbols = []
+        for key in self.symbol_dict:
+            self.symbols.extend(self.symbol_dict[key])
         self.n_symbols = len(self.symbols)
+        
         # Create a character set and mapping
         self.sym_to_idx = {symbol: idx for idx, symbol in enumerate(self.symbols)}
         self.idx_to_sym = {idx: sym for sym, idx in self.sym_to_idx.items()}
