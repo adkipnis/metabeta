@@ -151,7 +151,8 @@ class Encoder(nn.Module):
     def __init__(self, d_model: int, d_ff: int, n_heads: int, n_blocks: int, dropout: float) -> None:
         super(Encoder, self).__init__()
         n_blocks = n_blocks
-        self.layers = nn.ModuleList([EncoderBlock(d_model, d_ff, n_heads, dropout) for _ in range(n_blocks)])
+        self.layers = nn.ModuleList([EncoderBlock(d_model, d_ff, n_heads, dropout)
+                                     for _ in range(n_blocks)])
         self.norm = LayerNormalization()
 
     def forward(self,
@@ -166,7 +167,8 @@ class Decoder(nn.Module):
     def __init__(self, d_model: int, d_ff: int, n_heads: int, n_blocks: int, dropout: float) -> None:
         super(Decoder, self).__init__()
         self.n_blocks = n_blocks
-        self.layers = nn.ModuleList([DecoderBlock(d_model, d_ff, n_heads, dropout) for _ in range(n_blocks)])
+        self.layers = nn.ModuleList([DecoderBlock(d_model, d_ff, n_heads, dropout)
+                                     for _ in range(n_blocks)])
         self.norm = LayerNormalization()
 
     def forward(self,
