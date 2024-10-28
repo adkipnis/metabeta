@@ -104,8 +104,8 @@ class Trainer:
         for _ in range(config["n_draws"]):
             task = Task(n_predictors=self.config["n_predictors"], seed=seed)
             lm = LinearModel(task)
-            n_samples = self.config["n_samples"]
-            # n_samples = self.getN(seed) # TODO: fix collate_fn
+            # n_samples = self.config["n_samples"]
+            n_samples = self.getN(seed) # TODO: fix collate_fn
             dataset += [lm.sample(n_samples, seed)]
             seed += 1
 

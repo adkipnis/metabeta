@@ -85,7 +85,7 @@ class LinearModelDataset(Dataset):
         assert label.size(0) == self.seq_len, "Label size is not correct"
 
         return {
-                "src": src,
+                # "src": src,
                 "tgt": tgt,
                 "encoder_input": encoder_input,
                 "decoder_input": decoder_input,
