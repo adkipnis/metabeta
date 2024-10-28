@@ -56,6 +56,16 @@ class FloatTokenizer:
             mask[idx] = True
         return mask
 
+    def conditionalMask(self, previous: int) -> torch.Tensor:
+        assert self.idxToToken(previous) != "[UNK]", f"Unknown token {previous}"
+        category = self.idxToCategory(previous)
+        if previous == self.sym_to_idx["[SOS]"] or category == "exponent":
+            return self.masks["sign"]
+        if category == "sign":
+            return self.masks["mantissa"]
+        if category == "mantissa":
+            return self.masks["exponent"]
+        
     def getVocabSize(self) -> int:
         return self.n_symbols
 
