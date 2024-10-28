@@ -218,4 +218,9 @@ class Transformer(nn.Module):
         tgt = self.embed(tgt)
         return self.decoder(tgt, encoder_output, src_mask, tgt_mask)
 
+    def forward(self, src: torch.Tensor, tgt: torch.Tensor, src_mask: torch.Tensor, tgt_mask: torch.Tensor) -> torch.Tensor:
+        encoder_output = self.encode(src, src_mask) # (batch_size, seq_len, d_model)
+        decoder_output = self.decode(encoder_output, src_mask, tgt, tgt_mask) # (batch_size, seq_len, d_model)
+        return self.projection(decoder_output) # (batch_size, seq_len, vocab_tgt_len)
+
 
