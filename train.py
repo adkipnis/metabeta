@@ -124,9 +124,7 @@ class Trainer:
         decoder_mask = batch["decoder_mask"].to(self.device) # (batch_size, 1, seq_len, seq_len)
 
         # forward pass
-        encoder_output = self.model.encode(encoder_input, encoder_mask) # (batch_size, seq_len, d_model)
-        decoder_output = self.model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask) # (batch_size, seq_len, d_model)
-        proj_output = self.model.projection(decoder_output) # (batch_size, seq_len, vocab_tgt_len)
+        proj_output = self.model(encoder_input, decoder_input, encoder_mask, decoder_mask)
 
         # CE loss
         label = batch["label"].to(self.device) # (batch_size, seq_len)
