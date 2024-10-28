@@ -22,6 +22,12 @@ class FloatTokenizer:
         # Create a character set and mapping
         self.sym_to_idx = {symbol: idx for idx, symbol in enumerate(self.symbols)}
         self.idx_to_sym = {idx: sym for sym, idx in self.sym_to_idx.items()}
+        
+        # invert symbol_dict
+        self.cat_to_idx = {cat: [self.tokenToIdx(token) for token in self.symbol_dict[cat]]
+                           for cat in self.symbol_dict}
+        self.idx_to_cat = {idx: cat for cat in self.symbol_dict
+                           for idx in self.cat_to_idx[cat]}
 
     def tokenToIdx(self, token: str) -> int:
         return self.sym_to_idx.get(token, self.sym_to_idx["[UNK]"])
