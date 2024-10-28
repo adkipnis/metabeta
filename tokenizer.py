@@ -45,6 +45,17 @@ class FloatTokenizer:
         idx = int(idx)
         return self.idx_to_sym.get(idx, "[UNK]")
 
+    def idxToCategory(self, idx: int) -> str:
+        idx = int(idx)
+        return self.idx_to_cat.get(idx, "error")
+
+    def categoryMask(self, category: str) -> torch.Tensor:
+        # mark all symbols in category as True
+        mask = torch.zeros(self.n_symbols, dtype=torch.bool)
+        for idx in self.cat_to_idx[category]:
+            mask[idx] = True
+        return mask
+
     def getVocabSize(self) -> int:
         return self.n_symbols
 
