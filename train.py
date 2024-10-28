@@ -66,7 +66,6 @@ class Trainer:
                                           lr=config["lr"], eps=1e-9)
         self.ce_loss = nn.CrossEntropyLoss(ignore_index=self.tokenizer.tokenToIdx("[PAD]"),
                                            label_smoothing=0.1).to(self.device)
-        # self.mse_loss = nn.MSELoss(reduction="none")
 
         if config["preload"]:
             self.preload()
@@ -74,14 +73,6 @@ class Trainer:
         # create model folder and tensorboard writer
         Path(config["model_folder"]).mkdir(parents=True, exist_ok=True)
         self.writer = SummaryWriter(config["experiment_name"])
-
-    # def filteredMSE(self, pred: torch.Tensor, tgt: torch.Tensor) -> torch.Tensor:
-    #     if pred.shape != tgt.shape:
-    #         return torch.tensor(9.)
-    #     loss = self.mse_loss(pred, tgt)
-    #     mask = torch.isnan(pred)
-    #     loss[mask] = 3.
-    #     return torch.mean(loss)
 
     def preload(self) -> None:
         model_filename = getWeightsFilePath(self.config, epoch=self.config["preload"])
