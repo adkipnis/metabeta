@@ -25,9 +25,9 @@ def getConfig() -> dict:
     cfg["experiment_name"] = f"runs/linear-{cfg['n_predictors']}/{timestamp}"
     return cfg
 
-def getWeightsFilePath(config: dict, epoch: int):
-    model_folder = config["model_folder"]
-    model_basename = config["model_basename"]
+def getWeightsFilePath(cfg: dict, epoch: int):
+    model_folder = cfg["model_folder"]
+    model_basename = cfg["model_basename"]
     model_filename = f"{model_basename}-{epoch:02d}.pt"
     return str(Path('.') / model_folder / model_filename)
 
