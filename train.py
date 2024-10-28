@@ -34,6 +34,8 @@ def greedyDecode(model: nn.Module,
             decoder_mask = causalMask(decoder_input.size(1)).type_as(source).to(device)
             out = model.decode(encoder_output, source_mask, decoder_input, decoder_mask)
             prob = model.projection(out[:, -1]) # give logprob for last token
+            prob_mask = tokenizer.conditionalMask(decoder_input[:, -1].item()).to(device)
+            prob[0, ~prob_mask] = -float("inf")
             _, next_token = torch.max(prob, dim=-1)
             next_token = torch.empty(1, 1).type_as(source).fill_(next_token.item()).to(device)
             decoder_input = torch.cat([decoder_input, next_token], dim=1)
