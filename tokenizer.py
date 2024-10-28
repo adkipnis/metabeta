@@ -29,6 +29,15 @@ class FloatTokenizer:
         self.idx_to_cat = {idx: cat for cat in self.symbol_dict
                            for idx in self.cat_to_idx[cat]}
 
+        # probability masks
+        self.masks = {
+                "sign": self.categoryMask("sign"),
+                "mantissa": self.categoryMask("mantissa"),
+                "exponent": self.categoryMask("exponent"),
+        }
+        self.masks["sign"][self.sym_to_idx["[EOS]"]] = True
+
+
     def tokenToIdx(self, token: str) -> int:
         return self.sym_to_idx.get(token, self.sym_to_idx["[UNK]"])
 
