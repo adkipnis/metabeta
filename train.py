@@ -91,29 +91,40 @@ class Trainer:
     
     def runBatch(self, batch: dict) -> float:
         self.model.train()
-        encoder_input = batch["encoder_input"].to(self.device) # (batch_size, seq_len)
-        encoder_mask = batch["encoder_mask"].to(self.device) # (batch_size, 1, 1, seq_len)
-        decoder_input = batch["decoder_input"].to(self.device) # (batch_size, seq_len)
-        decoder_mask = batch["decoder_mask"].to(self.device) # (batch_size, 1, seq_len, seq_len)
-
-        # forward pass
-        proj_output = self.model(encoder_input, decoder_input, encoder_mask, decoder_mask)
-
-        # CE loss
-        label = batch["label"].to(self.device) # (batch_size, seq_len)
-        loss = self.ce_loss(proj_output.view(-1, self.tokenizer.getVocabSize()), label.view(-1))
-        self.writer.add_scalar("train_loss", loss.item(), self.global_step)
-        self.writer.flush()
         self.optimizer.train()
 
-        # # MSE loss
-        # tgt = batch["tgt"].to(self.device)
-        # pred_idx = torch.argmax(proj_output, dim=-1)
-        # pred = torch.tensor(self.tokenizer.batchDecode(pred_idx)).to(self.device)
-        # mse_loss = self.filteredMSE(pred, tgt)
-        # self.writer.add_scalar("train_loss_mse", mse_loss.item(), self.global_step)
+        # transformer forward pass
+        # encoder_input = batch["encoder_input"].to(self.device) # (batch_size, seq_len)
+        # encoder_mask = batch["encoder_mask"].to(self.device) # (batch_size, 1, 1, seq_len)
+        # decoder_input = batch["decoder_input"].to(self.device) # (batch_size, seq_len)
+        # decoder_mask = batch["decoder_mask"].to(self.device) # (batch_size, 1, seq_len, seq_len)
+        # proj_output = self.model(encoder_input, decoder_input, encoder_mask, decoder_mask)
+        
+        # numeric model forward pass
+        predictors = batch["predictors"].to(self.device)
+        y = batch["y"].to(self.device)
+        data = torch.cat([predictors, y], dim=-1).permute(0, 2, 1)
+        proj_output = self.model(data)
+
+        # # CE loss
+        # label = batch["label"].to(self.device) # (batch_size, seq_len)
+        # loss = self.ce_loss(proj_output.view(-1, self.tokenizer.getVocabSize()), label.view(-1))
+        # self.writer.add_scalar("train_loss", loss.item(), self.global_step)
         # self.writer.flush()
-        # loss += mse_loss
+
+        # # MSE loss
+        # params = batch["params"].to(self.device)
+        # proj_output = proj_output[:, :params.shape[1]]
+        # loss = self.mse_loss(proj_output, params)
+        # self.writer.add_scalar("train_loss_mse", loss.item(), self.global_step)
+        # self.writer.flush()
+        
+        # y loss
+        proj_output = proj_output.unsqueeze(2)
+        y_pred = torch.bmm(predictors, proj_output)
+        loss = self.mse_loss(y_pred, y)
+        self.writer.add_scalar("train_loss_y_mse", loss.item(), self.global_step)
+        self.writer.flush()
 
         # backward pass
         loss.backward()
