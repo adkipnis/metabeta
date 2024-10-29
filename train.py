@@ -24,13 +24,15 @@ class Trainer:
         self.current_seed = 0
         print(f"Device: {self.device}")
         self.tokenizer = FloatTokenizer(precision=config["precision"])
-        self.model = Transformer(d_model=config["d_model"],
-                        d_ff=config["d_ff"],
-                        n_heads=config["n_heads"],
-                        n_blocks_e=config["n_blocks_e"],
-                        n_blocks_d=config["n_blocks_d"],
-                        vocab_size=self.tokenizer.getVocabSize(),
-                        dropout=config["dropout"]).to(self.device)
+        # self.model = Transformer(d_model=config["d_model"],
+        #                 d_ff=config["d_ff"],
+        #                 n_heads=config["n_heads"],
+        #                 n_blocks_e=config["n_blocks_e"],
+        #                 n_blocks_d=config["n_blocks_d"],
+        #                 vocab_size=self.tokenizer.getVocabSize(),
+        #                 dropout=config["dropout"]).to(self.device)
+        self.model = NumericModel(64, 256, self.config["n_predictors"] + 1)
+
         # optimizer and loss
         self.optimizer = schedulefree.AdamWScheduleFree(self.model.parameters(),
                                                         lr=config["lr"], eps=1e-9)
