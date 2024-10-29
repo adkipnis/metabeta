@@ -193,13 +193,6 @@ class Trainer:
                     error = True
                     model_out_text = "".join(model_out_tokens)
 
-                # # validation loss pass # TODO
-                # proj_output = self.model.projection(model_out)
-                # label = batch["label"]
-                # loss = self.loss_fn(proj_output.view(-1, self.tokenizer.getVocabSize()), label.view(-1))
-                # self.writer.add_scalar("val_loss", loss.item(), self.global_step)
-                # self.writer.flush()
-
                 # print some examples
                 if count <= num_examples:
                     # print some examples
