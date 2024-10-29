@@ -271,3 +271,16 @@ class Transformer(nn.Module):
             return decoder_input.squeeze(0)
 
 
+class NumericModel(nn.Module):
+    def __init__(self, d_sample: int, d_hidden: int, d_predictors: int) -> None:
+        super(NumericModel, self).__init__()
+        self.linear_1 = nn.Linear(d_sample, d_hidden)
+        self.linear_2 = nn.Linear(d_hidden, 1)
+        self.linear_3 = nn.Linear(d_predictors + 1, d_predictors)
+        self.relu = nn.ReLU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch_size, d_predictors, d_sample) -> (batch_size, d_predictors, d_hidden) -> (batch_size, d_predictors)
+        x = self.relu(self.linear_1(x))
+        x = self.relu(self.linear_2(x).squeeze(-1))
+        return self.linear_3(x)
