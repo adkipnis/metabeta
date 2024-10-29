@@ -38,6 +38,7 @@ class Trainer:
                                                         lr=config["lr"], eps=1e-9)
         self.ce_loss = nn.CrossEntropyLoss(ignore_index=self.tokenizer.tokenToIdx("[PAD]"),
                                            label_smoothing=0.1).to(self.device)
+        self.mse_loss = nn.MSELoss()
 
         if config["preload"]:
             self.preload()
@@ -69,8 +70,8 @@ class Trainer:
         for _ in range(config["n_draws"]):
             task = Task(n_predictors=self.config["n_predictors"], seed=seed)
             lm = LinearModel(task)
-            # n_samples = self.config["n_samples"]
-            n_samples = self.getN(seed) # TODO: fix collate_fn
+            # n_samples = self.getN(seed)
+            n_samples = 64
             dataset += [lm.sample(n_samples, seed)]
             seed += 1
 
