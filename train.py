@@ -8,9 +8,9 @@ from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
 import schedulefree
 from generator import Task, LinearModel
-from dataset import LinearModelDataset, causalMask
+from dataset import LinearModelDataset
 from tokenizer import FloatTokenizer
-from model import Transformer
+from model import Transformer, NumericModel
 from config import getConfig, getWeightsFilePath
 
 
