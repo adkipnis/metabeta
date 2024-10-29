@@ -29,16 +29,16 @@ class LinearModelDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         # get data pair
         ds = self.raw[idx]
-        src = ds['features']
-        y = ds['target']
-        tgt = ds['params']
+        predictors = ds['predictors']
+        y = ds['y']
+        params = ds['params']
 
         # encode text to tokens
-        enc_input_tokens_ = self.tokenizer.encode(src)
+        enc_input_tokens_ = self.tokenizer.encode(predictors)
         enc_input_tokens = [ self.tokenizer.tokenToIdx(token) for token in enc_input_tokens_ ]
         y_tokens_ = self.tokenizer.encode(y)
         y_tokens = [ self.tokenizer.tokenToIdx(token) for token in y_tokens_ ]
-        dec_input_tokens_ = self.tokenizer.encode(tgt)
+        dec_input_tokens_ = self.tokenizer.encode(params)
         dec_input_tokens = [ self.tokenizer.tokenToIdx(token) for token in dec_input_tokens_ ]
 
         # prepare padding tokens
@@ -85,8 +85,9 @@ class LinearModelDataset(Dataset):
         assert label.size(0) == self.seq_len, "Label size is not correct"
 
         return {
-                # "src": src,
-                "tgt": tgt,
+                "predictors": predictors,
+                "y": y,
+                "params": params,
                 "encoder_input": encoder_input,
                 "decoder_input": decoder_input,
                 "encoder_mask": encoder_mask,
