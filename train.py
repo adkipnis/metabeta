@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
+import schedulefree
 from generator import Task, LinearModel
 from dataset import LinearModelDataset, causalMask
 from tokenizer import FloatTokenizer
@@ -62,8 +63,8 @@ class Trainer:
                         vocab_size=self.tokenizer.getVocabSize(),
                         dropout=config["dropout"]).to(self.device)
         # optimizer and loss
-        self.optimizer = torch.optim.Adam(self.model.parameters(),
-                                          lr=config["lr"], eps=1e-9)
+        self.optimizer = schedulefree.AdamWScheduleFree(self.model.parameters(),
+                                                        lr=config["lr"], eps=1e-9)
         self.ce_loss = nn.CrossEntropyLoss(ignore_index=self.tokenizer.tokenToIdx("[PAD]"),
                                            label_smoothing=0.1).to(self.device)
 
@@ -131,6 +132,7 @@ class Trainer:
         loss = self.ce_loss(proj_output.view(-1, self.tokenizer.getVocabSize()), label.view(-1))
         self.writer.add_scalar("train_loss", loss.item(), self.global_step)
         self.writer.flush()
+        self.optimizer.train()
 
         # # MSE loss
         # tgt = batch["tgt"].to(self.device)
@@ -167,6 +169,7 @@ class Trainer:
                       print_msg: Callable, # dont't interfere with tqdm
                       num_examples: int = 2) -> None:
         self.model.eval()
+        self.optimizer.eval()
         count = 0
         mses = []
 
