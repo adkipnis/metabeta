@@ -151,7 +151,7 @@ class Trainer:
 
         return loss.item()
 
-    def runEpoch(self, epoch: int, seed: int, train: bool = True) -> None:
+    def runEpoch(self, epoch: int, seed: int, train: bool = True, val: bool = False) -> None:
         train_dl, val_dl = self.getDataset(config=self.config, seed=seed)
         batch_iterator = tqdm(train_dl, desc=f"Epoch {epoch:02d}")
 
@@ -162,7 +162,8 @@ class Trainer:
                 batch_iterator.set_postfix({"loss": loss})
 
         # validation
-        self.runValidation(val_dl, batch_iterator.write)
+        if val:
+            self.runValidation(val_dl, batch_iterator.write)
 
     def runValidation(self,
                       validation_ds: DataLoader,
