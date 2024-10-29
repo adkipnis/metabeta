@@ -2,6 +2,7 @@ from typing import Union, Tuple
 import math
 import torch
 import torch.nn as nn
+from dataset import causalMask
 
 
 class InputEmbedding(nn.Module):
@@ -221,6 +222,37 @@ class Transformer(nn.Module):
     def forward(self, src: torch.Tensor, tgt: torch.Tensor, src_mask: torch.Tensor, tgt_mask: torch.Tensor) -> torch.Tensor:
         encoder_output = self.encode(src, src_mask) # (batch_size, seq_len, d_model)
         decoder_output = self.decode(encoder_output, src_mask, tgt, tgt_mask) # (batch_size, seq_len, d_model)
-        return self.projection(decoder_output) # (batch_size, seq_len, vocab_tgt_len)
+        return self.projection(decoder_output) # (batch_size, seq_len, vocab_size)
+
+    def greedyDecode(self,
+                     source: torch.Tensor,
+                     source_mask: torch.Tensor,
+                     tokenizer,
+                     max_len: int,
+                     device: torch.device) -> torch.Tensor:
+            sos_idx = tokenizer.tokenToIdx("[SOS]")
+            eos_idx = tokenizer.tokenToIdx("[EOS]")
+
+            # precompute encoder output and reuse it for every token we get from the decoder
+            encoder_output = self.encode(source, source_mask) # (1, seq_len, d_model)
+
+            # initialize decoder input with SOS token
+            decoder_input = torch.empty(1, 1).fill_(sos_idx).type_as(source).to(device)
+
+            # greedy decoding
+            while True:
+                if decoder_input.size(1) >= max_len:
+                    break
+                decoder_mask = causalMask(decoder_input.size(1)).type_as(source).to(device)
+                out = self.decode(encoder_output, source_mask, decoder_input, decoder_mask)
+                prob = self.projection(out[:, -1]) # give logprob for last token
+                prob_mask = tokenizer.conditionalMask(decoder_input[:, -1].item()).to(device)
+                prob[0, ~prob_mask] = -float("inf")
+                _, next_token = torch.max(prob, dim=-1)
+                next_token = torch.empty(1, 1).type_as(source).fill_(next_token.item()).to(device)
+                decoder_input = torch.cat([decoder_input, next_token], dim=1)
+                if next_token.item() == eos_idx:
+                    break
+            return decoder_input.squeeze(0)
 
 
