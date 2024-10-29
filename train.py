@@ -13,37 +13,6 @@ from tokenizer import FloatTokenizer
 from model import Transformer
 from config import getConfig, getWeightsFilePath
 
-def greedyDecode(model: nn.Module,
-                 source: torch.Tensor,
-                 source_mask: torch.Tensor,
-                 tokenizer: FloatTokenizer,
-                 max_len: int,
-                 device: torch.device) -> torch.Tensor:
-        sos_idx = tokenizer.tokenToIdx("[SOS]")
-        eos_idx = tokenizer.tokenToIdx("[EOS]")
-
-        # precompute encoder output and reuse it for every token we get from the decoder
-        encoder_output = model.encode(source, source_mask) # (1, seq_len, d_model)
-
-        # initialize decoder input with SOS token
-        decoder_input = torch.empty(1, 1).fill_(sos_idx).type_as(source).to(device)
-
-        # greedy decoding
-        while True:
-            if decoder_input.size(1) >= max_len:
-                break
-            decoder_mask = causalMask(decoder_input.size(1)).type_as(source).to(device)
-            out = model.decode(encoder_output, source_mask, decoder_input, decoder_mask)
-            prob = model.projection(out[:, -1]) # give logprob for last token
-            prob_mask = tokenizer.conditionalMask(decoder_input[:, -1].item()).to(device)
-            prob[0, ~prob_mask] = -float("inf")
-            _, next_token = torch.max(prob, dim=-1)
-            next_token = torch.empty(1, 1).type_as(source).fill_(next_token.item()).to(device)
-            decoder_input = torch.cat([decoder_input, next_token], dim=1)
-            if next_token.item() == eos_idx:
-                break
-        return decoder_input.squeeze(0)
-
 
 class Trainer:
     def __init__(self, config: dict) -> None:
@@ -181,7 +150,6 @@ class Trainer:
                 console_width = int(console_width)
         except:
                 console_width = 80
-        # console_width = 80
 
         with torch.no_grad():
             for batch in validation_ds:
@@ -198,10 +166,11 @@ class Trainer:
                 target_tokens = ['[SOS]'] + self.tokenizer.encode(target_text) + ['[EOS]']
 
                 # run greedy decoding
-                model_out = greedyDecode(self.model, encoder_input, encoder_mask,
-                                         self.tokenizer, self.config["seq_len_out"], self.device)
+                model_out = self.model.greedyDecode(encoder_input, encoder_mask,
+                                                    self.tokenizer, self.config["seq_len_out"], self.device)
                 model_out_ = model_out.detach().cpu().tolist()
                 model_out_tokens = [self.tokenizer.idxToToken(idx) for idx in model_out_]
+
                 try:
                     model_out_text = torch.tensor(self.tokenizer.decode(model_out_tokens))
                     mses += [torch.mean((target_text - model_out_text) ** 2)]
