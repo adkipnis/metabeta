@@ -67,8 +67,8 @@ class LinearModel:
         x = self.sampleFeatures(n_samples, seed)
         y = self.predict(x, seed).unsqueeze(1)
         return {
-                "features": x,
-                "target": y,
+                "predictors": x,
+                "y": y,
                 "params": self.weights # torch.cat([self.weights, self.sigma])
                 }
 
