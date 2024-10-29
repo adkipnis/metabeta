@@ -192,6 +192,20 @@ class ProjectionLayer(nn.Module):
         return torch.log_softmax(self.linear(x), dim=-1)
 
 
+# class NumericLayer(nn.Module):
+#     # alternative to projection layer
+#     def __init__(self, d_model: int, seq_len: int, d_out: int) -> None:
+#         super(NumericLayer, self).__init__()
+#         self.linear_1 = nn.Linear(d_model, 1)
+#         self.relu = nn.ReLU()
+#         self.linear_2 = nn.Linear(seq_len, d_out)
+#
+#     def forward(self, x: torch.Tensor) -> torch.Tensor:
+#         x = self.linear_1(x).squeeze(-1)
+#         x = self.relu(x)
+#         return self.linear_2(x)
+
+
 class Transformer(nn.Module):
     def __init__(self,
                  d_model: int,
@@ -207,6 +221,7 @@ class Transformer(nn.Module):
         self.encoder = Encoder(d_model, d_ff, n_heads, n_blocks_e, dropout)
         self.decoder = Decoder(d_model, d_ff, n_heads, n_blocks_d, dropout)
         self.projection = ProjectionLayer(d_model, vocab_size)
+        # self.projection = NumericLayer(d_model, 2000, 16)
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
