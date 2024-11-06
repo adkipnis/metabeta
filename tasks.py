@@ -70,6 +70,7 @@ class LinearModel:
                 "predictors": x,
                 "y": y,
                 "params": self.weights.unsqueeze(-1), # torch.cat([self.weights, self.sigma])
+                "seed": torch.tensor(seed),
                 }
 
 
