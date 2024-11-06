@@ -80,8 +80,8 @@ def dsFilename(size: int, part: int) -> Path:
 if __name__ == "__main__":
     os.makedirs('data', exist_ok=True)
     sower = Sower(0)
-    n_draws = int(1e5)
-    iterations = 10
+    n_draws = int(1e4)
+    iterations = 100
     max_samples = 200
     max_predictors = 15
     start = 1
