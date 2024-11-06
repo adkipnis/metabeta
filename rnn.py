@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Tuple
 import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence
@@ -9,8 +9,8 @@ class BaseRNN(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
-        # self.gru = nn.GRU(input_size=input_size, hidden_size=hidden_size, batch_first=True)
-        self.linear = nn.Linear(hidden_size, output_size)
+        self.means = nn.Linear(hidden_size, output_size)
+        self.logstds = nn.Linear(hidden_size, output_size)
         self.seed = seed
         self.initializeWeights()
 
@@ -22,7 +22,7 @@ class BaseRNN(nn.Module):
                 seed += 1
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, x: torch.Tensor, lengths: List[int]) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, lengths: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
         # Pack the padded sequence
         packed_input = pack_padded_sequence(x, lengths, batch_first=True, enforce_sorted=False) # type: ignore
         
@@ -32,7 +32,7 @@ class BaseRNN(nn.Module):
         # Get the last hidden state
         last_hidden = hidden[-1]  # Assuming a single-layer GRU
         
-        return self.linear(last_hidden)
+        return self.means(last_hidden), self.logstds(last_hidden)
 
 
 class GRU(BaseRNN):
