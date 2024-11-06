@@ -64,3 +64,13 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
     return RnnDataset(samples, max_samples, max_predictors)
 
 
+def parseNum(num: int) -> str:
+    # shorten number to k or m (in integers)
+    if num >= 1e6:
+        return f'{num/1e6:.0f}m'
+    elif num >= 1e3:
+        return f'{num/1e3:.0f}k'
+    else:
+        return str(num)
+
+
