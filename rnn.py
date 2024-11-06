@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 class BaseRNN(nn.Module):
-    def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int) -> None:
+    def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int, reuse: bool = True) -> None:
         super(BaseRNN, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -13,6 +13,7 @@ class BaseRNN(nn.Module):
         self.logstds = nn.Linear(hidden_size, output_size)
         self.relu = nn.ReLU()
         self.seed = seed
+        self.reuse = reuse
         self.initializeWeights()
 
     def initializeWeights(self) -> None:
@@ -32,6 +33,8 @@ class BaseRNN(nn.Module):
 
         # back to tensor
         outputs, _ = pad_packed_sequence(packed_outputs, batch_first=True)
+        if not self.reuse:
+            outputs = outputs[:, -1]
         
         # transform outputs
         means = self.means(self.relu(outputs))
@@ -41,13 +44,13 @@ class BaseRNN(nn.Module):
 
 
 class GRU(BaseRNN):
-    def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int) -> None:
-        super(GRU, self).__init__(input_size, hidden_size, output_size, seed)
+    def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int, reuse: bool = True) -> None:
+        super(GRU, self).__init__(input_size, hidden_size, output_size, seed, reuse)
         self.rnn = nn.GRU(input_size=input_size, hidden_size=hidden_size, batch_first=True)
 
 
 class LSTM(BaseRNN):
-    def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int) -> None:
-        super(LSTM, self).__init__(input_size, hidden_size, output_size, seed)
+    def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int, reuse: bool = True) -> None:
+        super(LSTM, self).__init__(input_size, hidden_size, output_size, seed, reuse)
         self.rnn = nn.LSTM(input_size=input_size, hidden_size=hidden_size, batch_first=True)
 
