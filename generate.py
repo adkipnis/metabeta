@@ -49,3 +49,18 @@ def getDataDist(seed: int) -> torch.distributions.Distribution:
         return torch.distributions.normal.Normal(0., 3.)
 
 
+def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: Sower) -> RnnDataset:
+    ''' Generate a dataset of linear model samples of varying length and width and return a DataLoader. '''
+    samples = []
+    for _ in tqdm(range(n_draws)):
+        seed = sower.throw()
+        d = getD(seed, max_predictors)
+        n = max_samples # alternatively: getN(seed, d, max_samples)
+        sigma_error = getSigmaError(seed)
+        data_dist = getDataDist(seed)
+        task = Task(d, seed, sigma_error)
+        lm = LinearModel(task, data_dist)
+        samples += [lm.sample(n, seed)]
+    return RnnDataset(samples, max_samples, max_predictors)
+
+
