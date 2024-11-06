@@ -82,6 +82,12 @@ if __name__ == "__main__":
     max_samples = 200
     max_predictors = 15
     start = 1
+
+    # reset sower if starting from a different iteration
+    if start > 1:
+        seed = (start - 1) * n_draws + 1
+        sower = Sower(seed)
+
     # generate datasets
     for i in range(1, iterations + 1):
         dataset = generateDataset(n_draws, max_samples, max_predictors, sower)
