@@ -32,12 +32,12 @@ def getN(seed:int, n_predictors: int, max_samples: int) -> int:
     return int(n.item())
 
 
-def getSigmaError(seed: int, alpha: float = 2., beta: float = 1., eps: float = 1e-6) -> float:
+def getSigmaError(seed: int, alpha: float = 2.75, beta: float = 1., clip: float = 3., eps: float = 1e-6) -> float:
     ''' Get a random error term for a linear model.'''
     torch.manual_seed(seed)
     gamma = torch.distributions.gamma.Gamma(alpha, beta).sample()
     sigma = 1. / (gamma + eps)
-    return sigma.item()
+    return min(sigma.item(), clip)
 
 
 def getDataDist(seed: int) -> torch.distributions.Distribution:
