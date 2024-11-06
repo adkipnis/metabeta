@@ -130,15 +130,7 @@ def train(model: nn.Module,
     for batch in batch_iterator:
         optimizer.zero_grad()
         loss = run(model, batch, unpad=True)
-        # optionally compute the loss coordinate-wise for each predicted variable
-        if COORDINATE_WISE:
-            for i in range(loss.size(1)):
-                coordinate_loss = loss[:, i]
-                coordinate_loss.mean().backward(retain_graph=True)
-            loss = loss.mean()
-        else:
-            loss = loss.mean()
-            loss.backward()
+        loss.backward()
         writer.add_scalar("loss_train", loss.item(), step)
         batch_iterator.set_postfix({"loss": loss.item()})
         optimizer.step()
