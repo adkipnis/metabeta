@@ -131,3 +131,21 @@ def train(model: nn.Module,
     return step
 
 
+def validate(model: nn.Module,
+             optimizer: schedulefree.AdamWScheduleFree,
+             dataloader: DataLoader,
+             writer: SummaryWriter,
+             epoch: int,
+             step: int) -> int:
+    ''' Validate the model for a single epoch. '''
+    model.eval()
+    optimizer.eval()
+    with torch.no_grad():
+        for batch in dataloader:
+            val_loss = run(model, batch, unpad=True)
+            writer.add_scalar("loss_val", val_loss.item(), step)
+            step += 1
+        if epoch % 10 == 0:
+            run(model, batch, unpad=True, num_examples=2) # type: ignore
+    return step
+
