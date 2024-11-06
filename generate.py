@@ -40,3 +40,12 @@ def getSigmaError(seed: int, alpha: float = 2., beta: float = 1., eps: float = 1
     return sigma.item()
 
 
+def getDataDist(seed: int) -> torch.distributions.Distribution:
+    ''' Get a random distribution for the data.'''
+    torch.manual_seed(seed)
+    if torch.rand(1) > 0.5:
+        return torch.distributions.uniform.Uniform(-5., 5.)
+    else:
+        return torch.distributions.normal.Normal(0., 3.)
+
+
