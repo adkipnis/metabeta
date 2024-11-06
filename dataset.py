@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import torch
 from torch.utils.data import Dataset
 from tokenizer import FloatTokenizer as Tokenizer
