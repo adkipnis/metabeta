@@ -189,7 +189,7 @@ if __name__ == "__main__":
 
     # start training loop
     for epoch in range(initial_epoch, N_EPOCHS+1):
-        fname = dsFilename(N_DRAWS, epoch)
+        fname = dsFilename(N_DRAWS, epoch, "fixed-sigma")
         dataloader_train, dataloader_val = getDataLoaders(fname, BATCH_SIZE)
         global_step = train(model, optimizer, dataloader_train, writer, epoch, global_step)
         validation_step = validate(model, optimizer, dataloader_val, writer, epoch, validation_step)
