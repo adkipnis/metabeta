@@ -93,8 +93,8 @@ def load(model: nn.Module,
 
 def run(model: nn.Module,
         batch: dict,
-        unpad: bool = False,
-        num_examples: int = 0) -> torch.Tensor:
+        num_examples: int = 0,
+        unpad: bool = True) -> torch.Tensor:
     ''' Run a batch through the model and return the loss. '''
     X_batch = batch["predictors"]
     y_batch = batch["y"]
@@ -102,12 +102,13 @@ def run(model: nn.Module,
     lengths = batch["n"]
     depths = batch["d"]
     X_y_combined = torch.cat([X_batch, y_batch], dim=-1)
-    outputs = model(X_y_combined, lengths)
-    loss_fn = criterionUnpadded if unpad else CRITERION
-    loss = loss_fn(outputs, b_batch.float())
+    means, logstds = model(X_y_combined, lengths)
+    losses = LOSS_FN(means, logstds, b_batch)
+    loss = maskLoss(losses, b_batch) if unpad else losses.mean()
+
     for i in range(num_examples):
         d = depths[i].item()
-        outputs_i = outputs[i, :d].detach().numpy()
+        outputs_i = means[i, :d].detach().numpy()
         b_batch_i = b_batch[i, :d].detach().numpy()
         print(f"\n{CONSOLE_WIDTH * '-'}\nExample")
         print(f"Predicted : {outputs_i}")
