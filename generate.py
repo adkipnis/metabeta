@@ -66,14 +66,15 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
     return RnnDataset(samples, max_samples, max_predictors)
 
 
-def parseNum(num: int) -> str:
-    # shorten number to k or m (in integers)
-    if num >= 1e6:
-        return f'{num/1e6:.0f}m'
-    elif num >= 1e3:
-        return f'{num/1e3:.0f}k'
+def dsFilename(size: int, part: int) -> Path:
+    if size >= 1e6:
+        n = f'{n_draws/1e6:.0f}m'
+    elif n_draws >= 1e3:
+        n = f'{n_draws/1e3:.0f}k'
     else:
-        return str(num)
+        n = str(n_draws)
+    p = f'{part:02d}'
+    return Path('data', f'dataset-{n}-{p}.pt')
 
 
 if __name__ == "__main__":
@@ -91,9 +92,9 @@ if __name__ == "__main__":
         sower = Sower(seed)
 
     # generate datasets
-    for i in range(1, iterations + 1):
+    for part in range(1, iterations + 1):
         dataset = generateDataset(n_draws, max_samples, max_predictors, sower)
-        filename = Path('data', f'dataset-{parseNum(n_draws)}-{i}.pt')
+        filename = dsFilename(n_draws, part)
         torch.save(dataset, filename)
         print(f'Saved dataset to {filename}')
 
