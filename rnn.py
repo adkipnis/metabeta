@@ -11,6 +11,7 @@ class BaseRNN(nn.Module):
         self.output_size = output_size
         self.means = nn.Linear(hidden_size, output_size)
         self.logstds = nn.Linear(hidden_size, output_size)
+        self.relu = nn.ReLU()
         self.seed = seed
         self.initializeWeights()
 
