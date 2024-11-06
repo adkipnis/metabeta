@@ -48,3 +48,32 @@ def getWeightsFilePath(epoch: int):
     return str(Path('.') / MODEL_FOLDER / model_filename)
 
 
+def save(model: nn.Module,
+         optimizer: schedulefree.AdamWScheduleFree,
+         current_epoch: int,
+         current_global_step: int) -> None:
+    """ Save the model and optimizer state. """
+    model_filename = getWeightsFilePath(current_epoch)
+    torch.save({
+        'epoch': current_epoch,
+        'global_step': current_global_step,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+    }, model_filename)
+
+
+def load(model: nn.Module,
+         optimizer: schedulefree.AdamWScheduleFree,
+         initial_epoch: int) -> Tuple[int, int]:
+    """ Load the model and optimizer state from a previous run,
+    returning the initial epoch and seed. """
+    model_filename = getWeightsFilePath(initial_epoch)
+    print(f"Loading weights from {model_filename}")
+    state = torch.load(model_filename, weights_only=False)
+    model.load_state_dict(state["model_state_dict"])
+    initial_epoch = state["epoch"] + 1
+    optimizer.load_state_dict(state["optimizer_state_dict"])
+    global_step = state["global_step"]
+    return initial_epoch, global_step
+
+
