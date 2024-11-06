@@ -69,7 +69,7 @@ class LinearModel:
         return {
                 "predictors": x,
                 "y": y,
-                "params": self.weights # torch.cat([self.weights, self.sigma])
+                "params": self.weights.unsqueeze(-1), # torch.cat([self.weights, self.sigma])
                 }
 
 
