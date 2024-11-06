@@ -58,7 +58,7 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
         seed = sower.throw()
         d = getD(seed, max_predictors)
         n = max_samples # alternatively: getN(seed, d, max_samples)
-        sigma_error = getSigmaError(seed)
+        sigma_error = 0.1 # alternatively: getSigmaError(seed)
         data_dist = getDataDist(seed)
         task = Task(d, seed, sigma_error)
         lm = LinearModel(task, data_dist)
@@ -66,15 +66,17 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
     return RnnDataset(samples, max_samples, max_predictors)
 
 
-def dsFilename(size: int, part: int) -> Path:
+def dsFilename(size: int, part: int, suffix: str = '') -> Path:
     if size >= 1e6:
         n = f'{size/1e6:.0f}m'
     elif size >= 1e3:
         n = f'{size/1e3:.0f}k'
     else:
         n = str(size)
-    p = f'{part:02d}'
-    return Path('data', f'dataset-{n}-{p}.pt')
+    p = f'{part:03d}'
+    if suffix:
+        suffix = '-' + suffix
+    return Path('data', f'dataset-{n}-{p}{suffix}.pt')
 
 
 if __name__ == "__main__":
@@ -94,7 +96,7 @@ if __name__ == "__main__":
     # generate datasets
     for part in range(1, iterations + 1):
         dataset = generateDataset(n_draws, max_samples, max_predictors, sower)
-        filename = dsFilename(n_draws, part)
+        filename = dsFilename(n_draws, part, "fixed-sigma")
         torch.save(dataset, filename)
         print(f'Saved dataset to {filename}')
 
