@@ -74,15 +74,3 @@ class LinearModel:
                 }
 
 
-def main():
-    seed = 0
-    task = Task(n_predictors=1, seed=seed)
-    print(f"Mean: {task.mean},\nCov: {task.cov}\nNoise: {task.sigma_error}")
-    model = LinearModel(task)
-    sample = model.sample(10, seed=seed)
-    print(f"Features: {sample['features']}")
-    print(f"Target: {sample['target']}")
-    print(f"Params: {sample['params']}")
-    
-if __name__ == "__main__":
-    main()
