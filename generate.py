@@ -17,3 +17,10 @@ class Sower:
         return out
 
 
+def getD(seed: int, max_predictors: int) -> int:
+    ''' Get a random number of predictors to draw from a linear model.'''
+    torch.manual_seed(seed)
+    d = torch.randint(0, max_predictors, (1,))
+    return int(d.item())
+
+
