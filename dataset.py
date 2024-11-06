@@ -96,3 +96,10 @@ class TransformerDataset(Dataset):
                 }
 
 
+def padTensor(tensor: torch.Tensor, shape: Tuple[int, int], pad_val: int = 0) -> torch.Tensor:
+    ''' Pad a tensor with a constant value. '''
+    padded = torch.full(shape, pad_val, dtype=torch.float32)
+    padded[:tensor.shape[0], :tensor.shape[1]] = tensor
+    return padded
+
+
