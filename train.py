@@ -24,3 +24,12 @@ def getConsoleWidth() -> int:
     return console_width
 
 
+def getDataLoaders(filename: Path, batch_size: int, train_ratio: float = 0.9) -> Tuple[DataLoader, DataLoader]:
+    ''' Load a dataset from a file, split into train and validation set and return a DataLoader. '''
+    ds = torch.load(filename, weights_only=False)
+    ds_train, ds_val = ds.randomSplit(train_ratio, shuffle=False)
+    dl_train = DataLoader(ds_train, batch_size=batch_size, shuffle=False)
+    dl_val = DataLoader(ds_val, batch_size=batch_size, shuffle=False)
+    return dl_train, dl_val
+
+
