@@ -271,16 +271,16 @@ class Transformer(nn.Module):
             return decoder_input.squeeze(0)
 
 
-class NumericModel(nn.Module):
-    def __init__(self, d_sample: int, d_hidden: int, d_predictors: int) -> None:
-        super(NumericModel, self).__init__()
-        self.linear_1 = nn.Linear(d_sample, d_hidden)
-        self.linear_2 = nn.Linear(d_hidden, 1)
-        self.linear_3 = nn.Linear(d_predictors + 1, d_predictors)
-        self.relu = nn.ReLU()
+class GRU(nn.Module):
+    # input_size, hidden_size, num_layers=1, bias=True, batch_first=False, dropout=0.0, bidirectional=False, device=None, dtype=None
+    def __init__(self, d_input: int, d_hidden: int, d_output: int, n_layers: int, dropout: float) -> None:
+        super(GRU, self).__init__()
+        self.gru = nn.GRU(d_input, d_hidden, n_layers, dropout=dropout, batch_first=True)
+        self.linear = nn.Linear(d_hidden, d_output)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (batch_size, d_predictors, d_sample) -> (batch_size, d_predictors, d_hidden) -> (batch_size, d_predictors)
-        x = self.relu(self.linear_1(x))
-        x = self.relu(self.linear_2(x).squeeze(-1))
-        return self.linear_3(x)
+        # x (batch_size, seq_len, d_input)
+        out, _ = self.gru(x) # (batch_size, seq_len, d_hidden)
+        out = out[:, -1, :] # (batch_size, d_hidden)
+        return self.linear(out) # (batch_size, d_output)
+
