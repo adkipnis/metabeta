@@ -33,3 +33,13 @@ def getDataLoaders(filename: Path, batch_size: int, train_ratio: float = 0.9) ->
     return dl_train, dl_val
 
 
+def criterionUnpadded(y_pred: torch.Tensor,
+                      y_true: torch.Tensor,
+                      pad_val: int = 0) -> torch.Tensor:
+    ''' Compute the mean squared error between y_pred and y_true, ignoring padding values.'''
+    mask = (y_true != pad_val).float()
+    loss = CRITERION(y_pred, y_true)  # Shape: (batch_size, num_outputs)
+    masked_loss = loss * mask
+    return masked_loss.sum() / mask.sum()  # Avoid dividing by zero if no valid entries
+
+
