@@ -9,7 +9,7 @@ def causalMask(size: int) -> torch.Tensor:
     return mask == 0
 
 
-class LinearModelDataset(Dataset):
+class TransformerDataset(Dataset):
     def __init__(self,
                  raw: List[Dict[str, torch.Tensor]],
                  tokenizer: Tokenizer,
@@ -94,4 +94,5 @@ class LinearModelDataset(Dataset):
                 "decoder_mask": decoder_mask,
                 "label": label,
                 }
+
 
