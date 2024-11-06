@@ -40,7 +40,7 @@ class Task:
 class LinearModel:
     def __init__(self,
                  task: Task,
-                 dataDist: torch.distributions.Distribution = torch.distributions.Normal(0, 1),) -> None:
+                 dataDist: torch.distributions.Distribution) -> None:
         self.task = task
         self.dataDist = dataDist
         self.weights = self.task.sampleBeta()
