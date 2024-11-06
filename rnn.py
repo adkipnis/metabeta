@@ -26,3 +26,12 @@ class BaseRNN(nn.Module):
         # Pack the padded sequence
         packed_input = pack_padded_sequence(x, lengths, batch_first=True, enforce_sorted=False) # type: ignore
         
+        # Forward pass through GRU
+        _, hidden = self.rnn(packed_input)
+
+        # Get the last hidden state
+        last_hidden = hidden[-1]  # Assuming a single-layer GRU
+        
+        return self.linear(last_hidden)
+
+
