@@ -117,23 +117,23 @@ def run(model: nn.Module,
         num_examples: int = 0,
         unpad: bool = True) -> torch.Tensor:
     ''' Run a batch through the model and return the loss. '''
-    X_batch = batch["predictors"]
-    y_batch = batch["y"]
-    b_batch = batch["params"].squeeze(-1)
+    X = batch["predictors"]
+    y = batch["y"]
+    targets = batch["params"].squeeze(-1)
     lengths = batch["n"]
     depths = batch["d"]
-    X_y_combined = torch.cat([X_batch, y_batch], dim=-1)
-    means, logstds = model(X_y_combined, lengths)
-    losses = LOSS_FN(means, logstds, b_batch)
-    loss = maskLoss(losses, b_batch) if unpad else losses.mean()
+    inputs = torch.cat([X, y], dim=-1)
+    means, logstds = model(inputs, lengths)
+    losses = lossWrapper(means, logstds, targets, depths)
+    loss = maskLoss(losses, targets) if unpad else losses.mean()
 
     for i in range(num_examples):
         d = depths[i].item()
         outputs_i = means[i, :d].detach().numpy()
-        b_batch_i = b_batch[i, :d].detach().numpy()
+        targets_i = targets[i, :d].detach().numpy()
         print(f"\n{CONSOLE_WIDTH * '-'}\nExample")
         print(f"Predicted : {outputs_i}")
-        print(f"True      : {b_batch_i}")
+        print(f"True      : {targets_i}")
         print(f"{CONSOLE_WIDTH * '-'}\n")
     return loss
 
