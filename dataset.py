@@ -103,3 +103,29 @@ def padTensor(tensor: torch.Tensor, shape: Tuple[int, int], pad_val: int = 0) ->
     return padded
 
 
+class RnnDataset(Dataset):
+    def __init__(self, data: List[dict], max_samples: int, max_predictors: int) -> None:
+        self.data = data
+        self.max_samples = max_samples
+        self.max_predictors = max_predictors
+        self.seeds = torch.tensor([item['seed'] for item in data])
+
+    def __len__(self) -> int:
+       return len(self.data)
+
+    def preprocess(self, item: dict) -> dict:
+        predictors = item['predictors']
+        y = item['y']
+        params = item['params']
+        return {
+            'predictors': padTensor(predictors, (self.max_samples, self.max_predictors + 1)),
+            'y': padTensor(y, (self.max_samples, 1)),
+            'params': padTensor(params, (self.max_predictors + 1, 1)),
+            'n': predictors.shape[0],
+            'd': predictors.shape[1],
+        }
+
+    def __getitem__(self, idx) -> dict:
+        data = self.data[idx]
+        return self.preprocess(data)
+
