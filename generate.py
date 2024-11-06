@@ -68,9 +68,9 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
 
 def dsFilename(size: int, part: int) -> Path:
     if size >= 1e6:
-        n = f'{n_draws/1e6:.0f}m'
+        n = f'{size/1e6:.0f}m'
     elif size >= 1e3:
-        n = f'{n_draws/1e3:.0f}k'
+        n = f'{size/1e3:.0f}k'
     else:
         n = str(size)
     p = f'{part:02d}'
