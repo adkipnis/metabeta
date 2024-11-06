@@ -1,7 +1,7 @@
 from typing import List, Tuple
 import torch
 import torch.nn as nn
-from torch.nn.utils.rnn import pack_padded_sequence
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 class BaseRNN(nn.Module):
     def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int) -> None:
@@ -27,12 +27,16 @@ class BaseRNN(nn.Module):
         packed_input = pack_padded_sequence(x, lengths, batch_first=True, enforce_sorted=False) # type: ignore
         
         # Forward pass through GRU
-        _, hidden = self.rnn(packed_input)
+        packed_outputs, _ = self.rnn(packed_input)
 
-        # Get the last hidden state
-        last_hidden = hidden[-1]  # Assuming a single-layer GRU
+        # back to tensor
+        outputs, _ = pad_packed_sequence(packed_outputs, batch_first=True)
         
-        return self.means(last_hidden), self.logstds(last_hidden)
+        # transform outputs
+        means = self.means(self.relu(outputs))
+        logstds = self.logstds(self.relu(outputs))
+        
+        return means, logstds
 
 
 class GRU(BaseRNN):
