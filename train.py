@@ -43,3 +43,8 @@ def criterionUnpadded(y_pred: torch.Tensor,
     return masked_loss.sum() / mask.sum()  # Avoid dividing by zero if no valid entries
 
 
+def getWeightsFilePath(epoch: int):
+    model_filename = f"{MODEL_BASENAME}-{epoch:02d}.pt"
+    return str(Path('.') / MODEL_FOLDER / model_filename)
+
+
