@@ -169,7 +169,8 @@ if __name__ == "__main__":
     MODEL_BASENAME = f"rnn-linear-{HIDDEN_DIM}"
     PRELOAD_EPOCH = 0
     COORDINATE_WISE = False
-    CRITERION = nn.MSELoss(reduction='none')
+    LOSS_FN = logNormalLoss #mseLoss
+
     TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
     CONSOLE_WIDTH = getConsoleWidth()
 
