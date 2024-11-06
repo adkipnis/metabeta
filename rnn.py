@@ -35,3 +35,14 @@ class BaseRNN(nn.Module):
         return self.linear(last_hidden)
 
 
+class GRU(BaseRNN):
+    def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int) -> None:
+        super(GRU, self).__init__(input_size, hidden_size, output_size, seed)
+        self.rnn = nn.GRU(input_size=input_size, hidden_size=hidden_size, batch_first=True)
+
+
+class LSTM(BaseRNN):
+    def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int) -> None:
+        super(LSTM, self).__init__(input_size, hidden_size, output_size, seed)
+        self.rnn = nn.LSTM(input_size=input_size, hidden_size=hidden_size, batch_first=True)
+
