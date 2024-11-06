@@ -199,7 +199,8 @@ if __name__ == "__main__":
     model = GRU(input_size=MAX_PREDICTORS+2,
                 hidden_size=HIDDEN_DIM,
                 output_size=MAX_PREDICTORS+1,
-                seed=SEED)
+                seed=SEED,
+                reuse=True)
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=LR, eps=1e-9)
     writer = SummaryWriter(f"runs/{MODEL_BASENAME}/{TIMESTAMP}")
 
