@@ -42,6 +42,21 @@ def maskLoss(losses: torch.Tensor,
     return masked_loss.sum() / mask.sum() # Average over non-padded values
 
 
+def mseLoss(means: torch.Tensor,
+            logstds: torch.Tensor,
+            y_true: torch.Tensor) -> torch.Tensor:
+    ''' Wrapper for the mean squared error loss. '''
+    return nn.functional.mse_loss(means, y_true, reduction='none')
+
+
+def logNormalLoss(means: torch.Tensor,
+                  logstds: torch.Tensor,
+                  y_true: torch.Tensor) -> torch.Tensor:
+    ''' Compute the negative log probability of y_true under the distribution with means and logstds. '''
+    dist = torch.distributions.Normal(means, logstds.exp())
+    return -dist.log_prob(y_true)
+
+
 def getWeightsFilePath(epoch: int):
     model_filename = f"{MODEL_BASENAME}-{epoch:02d}.pt"
     return str(Path('.') / MODEL_FOLDER / model_filename)
