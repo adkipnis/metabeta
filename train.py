@@ -42,6 +42,27 @@ def maskLoss(losses: torch.Tensor,
     return masked_loss.sum() / mask.sum() # Average over non-padded values
 
 
+def lossWrapper(means: torch.Tensor,
+                logstds: torch.Tensor,
+                y_true: torch.Tensor,
+                d: torch.Tensor) -> torch.Tensor:
+    ''' Wrapper for the loss function.
+    Handles the case of 2D and 3D tensors (where the second dimension is the number of subjects).
+    For 3D tensors, drop the losses for datasets that have fewer than n < 3 * number of features.'''
+    n_dims = means.dim()
+    if n_dims == 3:
+        y_true = y_true.unsqueeze(1).expand_as(means)
+    losses = LOSS_FN(means, logstds, y_true)
+    if n_dims == 3:
+        b, n, _ = means.shape
+        exclude = 3 * d.unsqueeze(1)
+        denominator = n - exclude
+        mask = torch.arange(n).expand(b, n) < exclude
+        losses[mask] = 0.
+        losses = losses.sum(dim=1) / denominator
+    return losses # (batch, n_features)
+
+
 def mseLoss(means: torch.Tensor,
             logstds: torch.Tensor,
             y_true: torch.Tensor) -> torch.Tensor:
