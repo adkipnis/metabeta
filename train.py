@@ -149,3 +149,41 @@ def validate(model: nn.Module,
             run(model, batch, unpad=True, num_examples=2) # type: ignore
     return step
 
+if __name__ == "__main__":
+    # Global variables
+    SEED = 0
+    N_DRAWS = int(1e4)
+    N_EPOCHS = 100
+    BATCH_SIZE = 64
+    MAX_PREDICTORS = 15
+    HIDDEN_DIM = 128
+    LR = 1e-2
+    MODEL_FOLDER = "weights"
+    MODEL_BASENAME = f"rnn-linear-{HIDDEN_DIM}"
+    PRELOAD_EPOCH = 0
+    COORDINATE_WISE = False
+    CRITERION = nn.MSELoss(reduction='none')
+    TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
+    CONSOLE_WIDTH = getConsoleWidth()
+
+    # Initialize model, optimizer, and tensorboard writer
+    model = GRU(input_size=MAX_PREDICTORS+2,
+                hidden_size=HIDDEN_DIM,
+                output_size=MAX_PREDICTORS+1,
+                seed=SEED)
+    optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=LR, eps=1e-9)
+    writer = SummaryWriter(f"runs/{MODEL_BASENAME}/{TIMESTAMP}")
+
+    # optionally preload a model
+    initial_epoch, global_step, validation_step = 1, 0, 0
+    if PRELOAD_EPOCH:
+        initial_epoch, global_step = load(model, optimizer, PRELOAD_EPOCH)
+
+    # start training loop
+    for epoch in range(initial_epoch, N_EPOCHS+1):
+        fname = dsFilename(N_DRAWS, epoch)
+        dataloader_train, dataloader_val = getDataLoaders(fname, BATCH_SIZE)
+        global_step = train(model, optimizer, dataloader_train, writer, epoch, global_step)
+        validation_step = validate(model, optimizer, dataloader_val, writer, epoch, validation_step)
+        save(model, optimizer, epoch, global_step)
+    
