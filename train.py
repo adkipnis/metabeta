@@ -102,3 +102,32 @@ def run(model: nn.Module,
     return loss
 
 
+def train(model: nn.Module,
+          optimizer: schedulefree.AdamWScheduleFree,
+          dataloader: DataLoader,
+          writer: SummaryWriter,
+          epoch: int,
+          step: int) -> int:
+    ''' Train the model for a single epoch. '''
+    model.train()
+    optimizer.train()
+    batch_iterator = tqdm(dataloader, desc=f"Epoch {epoch:02d}")
+    for batch in batch_iterator:
+        optimizer.zero_grad()
+        loss = run(model, batch, unpad=True)
+        # optionally compute the loss coordinate-wise for each predicted variable
+        if COORDINATE_WISE:
+            for i in range(loss.size(1)):
+                coordinate_loss = loss[:, i]
+                coordinate_loss.mean().backward(retain_graph=True)
+            loss = loss.mean()
+        else:
+            loss = loss.mean()
+            loss.backward()
+        writer.add_scalar("loss_train", loss.item(), step)
+        batch_iterator.set_postfix({"loss": loss.item()})
+        optimizer.step()
+        step += 1
+    return step
+
+
