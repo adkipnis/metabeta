@@ -74,3 +74,18 @@ def parseNum(num: int) -> str:
         return str(num)
 
 
+if __name__ == "__main__":
+    os.makedirs('data', exist_ok=True)
+    sower = Sower(0)
+    n_draws = int(1e5)
+    iterations = 10
+    max_samples = 200
+    max_predictors = 15
+    start = 1
+    # generate datasets
+    for i in range(1, iterations + 1):
+        dataset = generateDataset(n_draws, max_samples, max_predictors, sower)
+        filename = Path('data', f'dataset-{parseNum(n_draws)}-{i}.pt')
+        torch.save(dataset, filename)
+        print(f'Saved dataset to {filename}')
+
