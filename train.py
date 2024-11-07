@@ -209,12 +209,13 @@ if __name__ == "__main__":
     #             output_size=MAX_PREDICTORS+1,
     #             seed=SEED,
     #             reuse=True).to(DEVICE)
+
     model = TransformerDecoder(input_size=MAX_PREDICTORS+2,
-                               hidden_size=HIDDEN_DIM,
-                               ff_size=2*HIDDEN_DIM,
-                               output_size=MAX_PREDICTORS+1,
-                               seed=SEED,
-                               reuse=True).to(DEVICE)
+                                 embed_size=HIDDEN_DIM,
+                                 hidden_size=2*HIDDEN_DIM,
+                                 output_size=MAX_PREDICTORS+1,
+                                 seed=SEED,
+                                 reuse=True).to(DEVICE)
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=LR, eps=1e-9)
     writer = SummaryWriter(f"runs/{MODEL_BASENAME}/{TIMESTAMP}")
 
