@@ -79,9 +79,10 @@ def logNormalLoss(means: torch.Tensor,
     return -dist.log_prob(y_true)
 
 
-def getWeightsFilePath(epoch: int):
+def getWeightsFilePath(epoch: int) -> Path:
+    ''' Get the filename for the model weights. '''
     model_filename = f"{MODEL_BASENAME}-{epoch:02d}.pt"
-    return str(Path('.') / MODEL_FOLDER / model_filename)
+    return Path(MODEL_FOLDER, model_filename)
 
 
 def save(model: nn.Module,
