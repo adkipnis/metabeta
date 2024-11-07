@@ -196,26 +196,18 @@ if __name__ == "__main__":
     MODEL_BASENAME = f"tf-linear-{HIDDEN_DIM}"
     PRELOAD_EPOCH = 0
     COORDINATE_WISE = False
-    LOSS_FN = mseLoss
-    # LOSS_FN = logNormalLoss
+    # LOSS_FN = mseLoss
+    LOSS_FN = logNormalLoss
 
     TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
     CONSOLE_WIDTH = getConsoleWidth()
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    # Initialize model, optimizer, and tensorboard writer
-    # model = GRU(input_size=MAX_PREDICTORS+2,
-    #             hidden_size=HIDDEN_DIM,
-    #             output_size=MAX_PREDICTORS+1,
-    #             seed=SEED,
-    #             reuse=True).to(DEVICE)
-
     model = TransformerDecoder(input_size=MAX_PREDICTORS+2,
-                                 embed_size=HIDDEN_DIM,
-                                 hidden_size=2*HIDDEN_DIM,
-                                 output_size=MAX_PREDICTORS+1,
-                                 seed=SEED,
-                                 reuse=True).to(DEVICE)
+                               hidden_size=HIDDEN_DIM,
+                               ff_size=2*HIDDEN_DIM,
+                               output_size=MAX_PREDICTORS+1,
+                               seed=SEED,
+                               reuse=True).to(DEVICE)
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=LR, eps=1e-9)
     writer = SummaryWriter(f"runs/{MODEL_BASENAME}/{TIMESTAMP}")
 
