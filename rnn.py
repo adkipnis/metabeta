@@ -57,7 +57,7 @@ class LSTM(BaseRNN):
 
 
 class TransformerDecoder(BaseRNN):
-    def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int, reuse: bool = True, nhead: int = 4, num_layers: int = 1) -> None:
+    def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int, reuse: bool = True, nhead: int = 1, num_layers: int = 1) -> None:
         super(TransformerDecoder, self).__init__(input_size, hidden_size, output_size, seed, reuse)
         decoder_layer = TransformerDecoderLayer(d_model=input_size, nhead=nhead, dim_feedforward=hidden_size, batch_first=True)
         self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)

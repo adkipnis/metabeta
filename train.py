@@ -193,10 +193,11 @@ if __name__ == "__main__":
     HIDDEN_DIM = 128
     LR = 1e-2
     MODEL_FOLDER = "weights"
-    MODEL_BASENAME = f"rnn-linear-{HIDDEN_DIM}"
+    MODEL_BASENAME = f"tf-linear-{HIDDEN_DIM}"
     PRELOAD_EPOCH = 0
     COORDINATE_WISE = False
-    LOSS_FN = logNormalLoss #mseLoss
+    LOSS_FN = mseLoss
+    # LOSS_FN = logNormalLoss
 
     TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
     CONSOLE_WIDTH = getConsoleWidth()
