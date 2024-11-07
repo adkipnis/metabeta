@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Tuple
+from typing import Tuple, Callable
 from tqdm import tqdm
 import torch
 import torch.nn as nn
@@ -151,13 +151,13 @@ def train(model: nn.Module,
     ''' Train the model for a single epoch. '''
     model.train()
     optimizer.train()
-    batch_iterator = tqdm(dataloader, desc=f"Epoch {epoch:02d}")
-    for batch in batch_iterator:
+    iterator = tqdm(dataloader, desc=f"Epoch {epoch:02d} [T]")
+    for batch in iterator:
         optimizer.zero_grad()
         loss = run(model, batch, unpad=True)
         loss.backward()
         writer.add_scalar("loss_train", loss.item(), step)
-        batch_iterator.set_postfix({"loss": loss.item()})
+        iterator.set_postfix({"loss": loss.item()})
         optimizer.step()
         step += 1
     return step
@@ -172,10 +172,12 @@ def validate(model: nn.Module,
     ''' Validate the model for a single epoch. '''
     model.eval()
     optimizer.eval()
+    iterator = tqdm(dataloader, desc=f"Epoch {epoch:02d} [V]")
     with torch.no_grad():
-        for batch in dataloader:
-            val_loss = run(model, batch, unpad=True)
+        for batch in iterator:
+            val_loss = run(model, batch, unpad=True, printer=iterator.write)
             writer.add_scalar("loss_val", val_loss.item(), step)
+            iterator.set_postfix({"loss": val_loss.item()})
             step += 1
         if epoch % 10 == 0:
             run(model, batch, unpad=True, num_examples=2) # type: ignore
