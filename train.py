@@ -8,7 +8,7 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter # type: ignore
 from torch.utils.data import DataLoader
 import schedulefree
-from rnn import GRU
+from rnn import GRU, LSTM, TransformerDecoder
 from generate import dsFilename
 
 
@@ -203,11 +203,16 @@ if __name__ == "__main__":
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Initialize model, optimizer, and tensorboard writer
-    model = GRU(input_size=MAX_PREDICTORS+2,
-                hidden_size=HIDDEN_DIM,
-                output_size=MAX_PREDICTORS+1,
-                seed=SEED,
-                reuse=True).to(DEVICE)
+    # model = GRU(input_size=MAX_PREDICTORS+2,
+    #             hidden_size=HIDDEN_DIM,
+    #             output_size=MAX_PREDICTORS+1,
+    #             seed=SEED,
+    #             reuse=True).to(DEVICE)
+    model = TransformerDecoder(input_size=MAX_PREDICTORS+2,
+                               hidden_size=HIDDEN_DIM,
+                               output_size=MAX_PREDICTORS+1,
+                               seed=SEED,
+                               reuse=True).to(DEVICE)
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=LR, eps=1e-9)
     writer = SummaryWriter(f"runs/{MODEL_BASENAME}/{TIMESTAMP}")
 
