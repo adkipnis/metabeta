@@ -8,7 +8,7 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter # type: ignore
 from torch.utils.data import DataLoader
 import schedulefree
-from models import GRU, TransformerDecoder
+from models import GRU, LSTM, TransformerDecoder
 from generate import dsFilename
 
 
@@ -124,7 +124,7 @@ def run(model: nn.Module,
     X = batch["predictors"].to(DEVICE)
     y = batch["y"].to(DEVICE)
     targets = batch["params"].squeeze(-1).to(DEVICE)
-    lengths = batch["n"].to(DEVICE)
+    # lengths = batch["n"].to(DEVICE)
     depths = batch["d"].to(DEVICE)
     inputs = torch.cat([X, y], dim=-1)
     means, logstds = model(inputs)
@@ -199,8 +199,8 @@ if __name__ == "__main__":
     MODEL_BASENAME = f"tf-linear-{HIDDEN_DIM}"
     PRELOAD_EPOCH = 0
     REUSE = True
-    LOSS_FN = mseLoss
-    # LOSS_FN = logNormalLoss
+    # LOSS_FN = mseLoss
+    LOSS_FN = logNormalLoss
 
     TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
     CONSOLE_WIDTH = getConsoleWidth()
