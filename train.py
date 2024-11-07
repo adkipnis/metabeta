@@ -121,11 +121,11 @@ def run(model: nn.Module,
         unpad: bool = True,
         printer: Callable = print) -> torch.Tensor:
     ''' Run a batch through the model and return the loss. '''
-    X = batch["predictors"]
-    y = batch["y"]
-    targets = batch["params"].squeeze(-1)
-    lengths = batch["n"]
-    depths = batch["d"]
+    X = batch["predictors"].to(DEVICE)
+    y = batch["y"].to(DEVICE)
+    targets = batch["params"].squeeze(-1).to(DEVICE)
+    lengths = batch["n"].to(DEVICE)
+    depths = batch["d"].to(DEVICE)
     inputs = torch.cat([X, y], dim=-1)
     means, logstds = model(inputs, lengths)
     losses = lossWrapper(means, logstds, targets, depths)
@@ -198,13 +198,14 @@ if __name__ == "__main__":
 
     TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
     CONSOLE_WIDTH = getConsoleWidth()
+    DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Initialize model, optimizer, and tensorboard writer
     model = GRU(input_size=MAX_PREDICTORS+2,
                 hidden_size=HIDDEN_DIM,
                 output_size=MAX_PREDICTORS+1,
                 seed=SEED,
-                reuse=True)
+                reuse=True).to(DEVICE)
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=LR, eps=1e-9)
     writer = SummaryWriter(f"runs/{MODEL_BASENAME}/{TIMESTAMP}")
 
