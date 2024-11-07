@@ -133,9 +133,12 @@ def run(model: nn.Module,
 
     for i in range(num_examples):
         d = depths[i].item()
-        outputs_i = means[i, :d].detach().numpy()
         targets_i = targets[i, :d].detach().numpy()
-        printer(f"\n{CONSOLE_WIDTH * '-'}\nExample")
+        if REUSE:
+            outputs_i = means[i, -1, :d].detach().numpy()
+        else:
+            outputs_i = means[i, :d].detach().numpy()
+        printer(f"\n{CONSOLE_WIDTH * '-'}")
         printer(f"Predicted : {outputs_i}")
         printer(f"True      : {targets_i}")
         printer(f"{CONSOLE_WIDTH * '-'}\n")
@@ -179,7 +182,7 @@ def validate(model: nn.Module,
             writer.add_scalar("loss_val", val_loss.item(), step)
             iterator.set_postfix({"loss": val_loss.item()})
             step += 1
-        if epoch % 10 == 0:
+        if epoch % 5 == 0:
             run(model, batch, unpad=True, num_examples=2) # type: ignore
     return step
 
@@ -195,9 +198,9 @@ if __name__ == "__main__":
     MODEL_FOLDER = "weights"
     MODEL_BASENAME = f"tf-linear-{HIDDEN_DIM}"
     PRELOAD_EPOCH = 0
-    COORDINATE_WISE = False
-    # LOSS_FN = mseLoss
-    LOSS_FN = logNormalLoss
+    REUSE = True
+    LOSS_FN = mseLoss
+    # LOSS_FN = logNormalLoss
 
     TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
     CONSOLE_WIDTH = getConsoleWidth()
@@ -207,7 +210,7 @@ if __name__ == "__main__":
                                ff_size=2*HIDDEN_DIM,
                                output_size=MAX_PREDICTORS+1,
                                seed=SEED,
-                               reuse=True).to(DEVICE)
+                               reuse=REUSE).to(DEVICE)
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=LR, eps=1e-9)
     writer = SummaryWriter(f"runs/{MODEL_BASENAME}/{TIMESTAMP}")
 
