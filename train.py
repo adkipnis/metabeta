@@ -118,7 +118,8 @@ def load(model: nn.Module,
 def run(model: nn.Module,
         batch: dict,
         num_examples: int = 0,
-        unpad: bool = True) -> torch.Tensor:
+        unpad: bool = True,
+        printer: Callable = print) -> torch.Tensor:
     ''' Run a batch through the model and return the loss. '''
     X = batch["predictors"]
     y = batch["y"]
@@ -134,10 +135,10 @@ def run(model: nn.Module,
         d = depths[i].item()
         outputs_i = means[i, :d].detach().numpy()
         targets_i = targets[i, :d].detach().numpy()
-        print(f"\n{CONSOLE_WIDTH * '-'}\nExample")
-        print(f"Predicted : {outputs_i}")
-        print(f"True      : {targets_i}")
-        print(f"{CONSOLE_WIDTH * '-'}\n")
+        printer(f"\n{CONSOLE_WIDTH * '-'}\nExample")
+        printer(f"Predicted : {outputs_i}")
+        printer(f"True      : {targets_i}")
+        printer(f"{CONSOLE_WIDTH * '-'}\n")
     return loss
 
 
