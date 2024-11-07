@@ -91,6 +91,7 @@ def save(model: nn.Module,
          current_global_step: int) -> None:
     """ Save the model and optimizer state. """
     model_filename = getWeightsFilePath(current_epoch)
+    os.makedirs(MODEL_FOLDER, exist_ok=True)
     torch.save({
         'epoch': current_epoch,
         'global_step': current_global_step,
