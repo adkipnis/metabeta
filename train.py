@@ -8,7 +8,7 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter # type: ignore
 from torch.utils.data import DataLoader
 import schedulefree
-from rnn import GRU, LSTM, TransformerDecoder
+from models import GRU, TransformerDecoder
 from generate import dsFilename
 
 
@@ -127,7 +127,7 @@ def run(model: nn.Module,
     lengths = batch["n"].to(DEVICE)
     depths = batch["d"].to(DEVICE)
     inputs = torch.cat([X, y], dim=-1)
-    means, logstds = model(inputs, lengths)
+    means, logstds = model(inputs)
     losses = lossWrapper(means, logstds, targets, depths)
     loss = maskLoss(losses, targets) if unpad else losses.mean()
 
@@ -211,6 +211,7 @@ if __name__ == "__main__":
     #             reuse=True).to(DEVICE)
     model = TransformerDecoder(input_size=MAX_PREDICTORS+2,
                                hidden_size=HIDDEN_DIM,
+                               ff_size=2*HIDDEN_DIM,
                                output_size=MAX_PREDICTORS+1,
                                seed=SEED,
                                reuse=True).to(DEVICE)
