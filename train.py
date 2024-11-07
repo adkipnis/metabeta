@@ -26,6 +26,7 @@ def getConsoleWidth() -> int:
 
 def getDataLoaders(filename: Path, batch_size: int, train_ratio: float = 0.9) -> Tuple[DataLoader, DataLoader]:
     ''' Load a dataset from a file, split into train and validation set and return a DataLoader. '''
+    assert filename.exists(), f"File {filename} does not exist, you must generate it first using generate.py"
     ds = torch.load(filename, weights_only=False)
     ds_train, ds_val = ds.randomSplit(train_ratio, shuffle=False)
     dl_train = DataLoader(ds_train, batch_size=batch_size, shuffle=False)
