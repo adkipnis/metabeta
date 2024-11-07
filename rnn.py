@@ -61,11 +61,12 @@ class LSTM(Base):
 
 
 class TransformerDecoder(Base):
-    def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int, reuse: bool = True, nhead: int = 4, num_layers: int = 1) -> None:
+    def __init__(self, input_size: int, hidden_size: int, ff_size: int, output_size: int, seed: int, reuse: bool = True, nhead: int = 4, num_layers: int = 1) -> None:
         super(TransformerDecoder, self).__init__(input_size, hidden_size, output_size, seed, reuse)
-        decoder_layer = TransformerDecoderLayer(d_model=input_size, nhead=nhead, dim_feedforward=hidden_size, batch_first=True)
+        self.embedding = nn.Embedding(input_size, hidden_size)
+        decoder_layer = TransformerDecoderLayer(d_model=hidden_size, nhead=nhead, dim_feedforward=ff_size, batch_first=True)
         self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
-        self.output_linear = nn.Linear(input_size, hidden_size)
+        self.output_linear = nn.Linear(hidden_size, output_size)
 
     def forward(self, x: torch.Tensor, lengths: Union[None, List[int]] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         # Optionally mask the padded sequence and forward pass through TransformerDecoder
