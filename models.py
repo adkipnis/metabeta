@@ -16,10 +16,10 @@ class Base(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
-        self.output_size_sigma = output_size * (output_size + 1) // 2 # triangular matrix
         self.embedding = nn.Linear(input_size, hidden_size)
-        self.means = nn.Linear(hidden_size, self.output_size)
-        self.logstds = nn.Linear(hidden_size, self.output_size_sigma)
+        self.means = nn.Linear(hidden_size, output_size)
+        # self.logstds = nn.Linear(hidden_size, output_size * (output_size + 1) // 2)
+        self.logstds = nn.Linear(hidden_size, output_size)
         self.relu = nn.ReLU()
         self.seed = seed
         self.reuse = reuse # reuse intermediate outputs
