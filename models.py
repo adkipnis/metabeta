@@ -26,6 +26,7 @@ class Base(nn.Module):
         self.initializeWeights()
 
     def initializeWeights(self) -> None:
+        ''' Initialize weights using Xavier initialization '''
         seed = self.seed
         for p in self.parameters():
             if p.dim() > 1:
