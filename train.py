@@ -44,16 +44,16 @@ def maskLoss(losses: torch.Tensor,
 
 
 def lossWrapper(means: torch.Tensor,
-                logstds: torch.Tensor,
-                y_true: torch.Tensor,
+                sigma: torch.Tensor,
+                target: torch.Tensor,
                 d: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the loss function.
     Handles the case of 2D and 3D tensors (where the second dimension is the number of subjects).
     For 3D tensors, drop the losses for datasets that have fewer than n < 3 * number of features.'''
     n_dims = means.dim()
     if n_dims == 3:
-        y_true = y_true.unsqueeze(1).expand_as(means)
-    losses = LOSS_FN(means, logstds, y_true)
+        target = target.unsqueeze(1).expand_as(means)
+    losses = LOSS_FN(means, sigma, target)
     if n_dims == 3:
         b, n, _ = means.shape
         exclude = 3 * d.unsqueeze(1)
@@ -65,10 +65,10 @@ def lossWrapper(means: torch.Tensor,
 
 
 def mseLoss(means: torch.Tensor,
-            logstds: torch.Tensor,
-            y_true: torch.Tensor) -> torch.Tensor:
+            sigma: torch.Tensor,
+            target: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the mean squared error loss. '''
-    return nn.functional.mse_loss(means, y_true, reduction='none')
+    return nn.functional.mse_loss(means, target, reduction='none')
 
 
 def logNormalLoss(means: torch.Tensor,
