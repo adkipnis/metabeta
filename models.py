@@ -58,6 +58,7 @@ class Base(nn.Module):
         return cov_matrix
         
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
         # x (batch_size, seq_size, input_size)
         x = self.embedding(x) # (batch_size, seq_size, hidden_size)
         outputs = self.internal(x) # (batch_size, seq_size, hidden_size)
