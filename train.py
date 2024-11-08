@@ -72,11 +72,17 @@ def mseLoss(means: torch.Tensor,
 
 
 def logNormalLoss(means: torch.Tensor,
-                  logstds: torch.Tensor,
-                  y_true: torch.Tensor) -> torch.Tensor:
-    ''' Compute the negative log probability of y_true under the distribution with means and logstds. '''
-    dist = torch.distributions.Normal(means, logstds.exp())
-    return -dist.log_prob(y_true)
+                  sigma: torch.Tensor,
+                  target: torch.Tensor) -> torch.Tensor:
+    ''' Compute the negative log probability of target under the proposal distribution. '''
+    # means (batch, n_features)
+    # sigma (batch, n_features) or (batch, n_features, n_features)
+    # target (batch, n_features)
+    if means.shape == sigma.shape:
+        dist = torch.distributions.Normal(means, sigma)
+    else:
+        dist = torch.distributions.MultivariateNormal(means, covariance_matrix=sigma)
+    return -dist.log_prob(target) # (batch, n_features)
 
 
 def getWeightsFilePath(epoch: int) -> Path:
