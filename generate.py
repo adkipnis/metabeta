@@ -3,7 +3,7 @@ from tqdm import tqdm
 from pathlib import Path
 import torch
 from tasks import Task, LinearModel
-from dataset import RnnDataset
+from dataset import LMDataset
 
 
 class Sower:
@@ -49,7 +49,7 @@ def getDataDist(seed: int) -> torch.distributions.Distribution:
         return torch.distributions.normal.Normal(0., 3.)
 
 
-def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: Sower) -> RnnDataset:
+def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: Sower) -> LMDataset:
     ''' Generate a dataset of linear model samples of varying length and width and return a DataLoader. '''
     samples = []
     iterator = tqdm(range(n_draws))
@@ -63,7 +63,7 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
         task = Task(d, seed, sigma_error)
         lm = LinearModel(task, data_dist)
         samples += [lm.sample(n, seed)]
-    return RnnDataset(samples, max_samples, max_predictors)
+    return LMDataset(samples, max_samples, max_predictors)
 
 
 def dsFilename(size: int, part: int, suffix: str = '') -> Path:

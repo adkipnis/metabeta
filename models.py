@@ -1,8 +1,7 @@
-from typing import List, Tuple, Union
+from typing import Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch.nn import TransformerDecoderLayer
 
 class Base(nn.Module):
