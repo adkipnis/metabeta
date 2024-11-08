@@ -34,14 +34,29 @@ class Base(nn.Module):
                 seed += 1
                 nn.init.xavier_uniform_(p)
 
-    def createSigma(self, rootstds: torch.Tensor) -> torch.Tensor:
-        # rootstds (batch_size, output_size_sigma)
-        # construct triangular matrix from rootstds and multiply by its transpose
-        triangular = torch.zeros(rootstds.size(0), self.output_size, self.output_size, device=rootstds.device)
-        idx = torch.tril_indices(self.output_size, self.output_size)
-        triangular[:, idx[0], idx[1]] = rootstds
-        return torch.bmm(triangular, triangular.transpose(1, 2))
-
+    def toCovariance(self, logstds: torch.Tensor) -> torch.Tensor:
+        ''' construct triangular matrix from logstds, apply softplus to diagonal and multiply with its transpose '''
+        # logstds (b, output_size_sigma) or (b, n, output_size_sigma)
+        d = self.output_size # number of predictors
+        b = logstds.size(0) # batch size
+        tril_ids = torch.tril_indices(d, d, offset=0)
+        diag_ids = torch.arange(d)
+        if logstds.dim() == 2:
+            chol_matrix = torch.zeros(b, d, d, device=logstds.device)
+            chol_matrix[:, tril_ids[0], tril_ids[1]] = logstds
+            chol_matrix[:, diag_ids, diag_ids] = F.softplus(chol_matrix[:, diag_ids, diag_ids])
+        else:
+            n = logstds.size(1) # number of samples
+            chol_matrix = torch.zeros(b, n, d, d, device=logstds.device)
+            chol_matrix[:, :, tril_ids[0], tril_ids[1]] = logstds
+            chol_matrix[:, :, diag_ids, diag_ids] = F.softplus(chol_matrix[:, :, diag_ids, diag_ids])
+        cov_matrix = chol_matrix @ chol_matrix.transpose(-1, -2)
+        if logstds.dim() == 2:
+            cov_matrix[:, diag_ids, diag_ids] += 1e-6 # add small value to diagonal
+        else:
+            cov_matrix[:, :, diag_ids, diag_ids] += 1e-6
+        return cov_matrix
+        
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # x (batch_size, seq_size, input_size)
         x = self.embedding(x) # (batch_size, seq_size, hidden_size)
