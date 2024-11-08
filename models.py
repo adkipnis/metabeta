@@ -69,9 +69,9 @@ class Base(nn.Module):
         
         # Transform outputs
         means = self.means(self.relu(outputs)) # (batch_size, output_size) or (batch_size, seq_size, output_size)
-        rootstds = self.logstds(self.relu(outputs))
-        sigmas = self.createSigma(rootstds) # (batch_size, output_size, output_size) or (batch_size, seq_size, output_size, output_size)
-        return means, sigmas
+        logstds = self.logstds(self.relu(outputs))
+        # sigmas = self.toCovariance(logstds) # (batch_size, output_size, output_size) or (batch_size, seq_size, output_size, output_size)
+        return means, logstds.exp()
 
 
 class RNN(Base):
