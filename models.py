@@ -15,9 +15,10 @@ class Base(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
+        self.output_size_sigma = output_size * (output_size + 1) // 2 # triangular matrix
         self.embedding = nn.Linear(input_size, hidden_size)
-        self.means = nn.Linear(hidden_size, output_size)
-        self.logstds = nn.Linear(hidden_size, output_size)
+        self.means = nn.Linear(hidden_size, self.output_size)
+        self.logstds = nn.Linear(hidden_size, self.output_size_sigma)
         self.relu = nn.ReLU()
         self.seed = seed
         self.reuse = reuse # reuse intermediate outputs
@@ -31,6 +32,14 @@ class Base(nn.Module):
                 seed += 1
                 nn.init.xavier_uniform_(p)
 
+    def createSigma(self, rootstds: torch.Tensor) -> torch.Tensor:
+        # rootstds (batch_size, output_size_sigma)
+        # construct triangular matrix from rootstds and multiply by its transpose
+        triangular = torch.zeros(rootstds.size(0), self.output_size, self.output_size, device=rootstds.device)
+        idx = torch.tril_indices(self.output_size, self.output_size)
+        triangular[:, idx[0], idx[1]] = rootstds
+        return torch.bmm(triangular, triangular.transpose(1, 2))
+
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # x (batch_size, seq_size, input_size)
         x = self.embedding(x) # (batch_size, seq_size, hidden_size)
@@ -41,9 +50,10 @@ class Base(nn.Module):
             outputs = outputs[:, -1] # (batch_size, hidden_size)
         
         # Transform outputs
-        means = self.means(self.relu(outputs))
-        logstds = self.logstds(self.relu(outputs))
-        return means, logstds # (batch_size, output_size) or (batch_size, seq_size, output_size)
+        means = self.means(self.relu(outputs)) # (batch_size, output_size) or (batch_size, seq_size, output_size)
+        rootstds = self.logstds(self.relu(outputs))
+        sigmas = self.createSigma(rootstds) # (batch_size, output_size, output_size) or (batch_size, seq_size, output_size, output_size)
+        return means, sigmas
 
 
 class RNN(Base):
