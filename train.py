@@ -240,6 +240,35 @@ if __name__ == "__main__":
     else:
         device = torch.device("cpu")
 
+    # model
+    if cfg.model in ["gru", "lstm"]:
+        if cfg.n_layers == 1:
+            cfg.dropout = 0
+            print('Setting dropout to 0 for RNN with 1 layer')
+        Model = eval(cfg.model.upper())
+        model = Model(num_predictors=cfg.d,
+                      hidden_size=cfg.hidden_dim,
+                      n_layers=cfg.n_layers,
+                      dropout=cfg.dropout,
+                      seed=cfg.seed,
+                      last=cfg.last).to(device)
+        print(f"Model: {cfg.model.upper()} with {cfg.hidden_dim} hidden units, {cfg.n_layers} layer(s), {cfg.dropout} dropout")
+    elif cfg.model == "transformer":
+        model = TransformerDecoder(
+                num_predictors=cfg.d,
+                hidden_size=cfg.hidden_dim,
+                ff_size=cfg.ff_dim,
+                n_heads=cfg.n_heads,
+                n_layers=cfg.n_layers,
+                dropout=cfg.dropout,
+                seed=cfg.seed,
+                last=cfg.last).to(device)
+        print(f"Model: Transformer with {cfg.hidden_dim} hidden units, " + \
+                f"{cfg.ff_dim} feedforward units, {cfg.n_heads} heads, {cfg.n_layers} layer(s), " + \
+                f"{cfg.dropout} dropout")
+    else:
+        raise ValueError(f"Model {cfg.model} not recognized.")
+    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     # optionally preload a model
     initial_epoch, global_step, validation_step = 1, 0, 0
     if PRELOAD_EPOCH:
