@@ -230,32 +230,8 @@ def setup() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
-    # Global variables
-    SEED = 0
-    N_DRAWS = int(1e4)
-    N_EPOCHS = 100
-    BATCH_SIZE = 64
-    MAX_PREDICTORS = 15
-    HIDDEN_DIM = 128
-    LR = 1e-2
-    MODEL_FOLDER = "weights"
-    MODEL_BASENAME = f"tf-linear-{HIDDEN_DIM}"
-    PRELOAD_EPOCH = 0
-    REUSE = True
-    # LOSS_FN = mseLoss
-    LOSS_FN = logNormalLoss
+    cfg = setup()
 
-    TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
-    CONSOLE_WIDTH = getConsoleWidth()
-    DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = TransformerDecoder(input_size=MAX_PREDICTORS+2,
-                               hidden_size=HIDDEN_DIM,
-                               ff_size=2*HIDDEN_DIM,
-                               output_size=MAX_PREDICTORS+1,
-                               seed=SEED,
-                               reuse=REUSE).to(DEVICE)
-    optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=LR, eps=1e-9)
-    writer = SummaryWriter(f"runs/{MODEL_BASENAME}/{TIMESTAMP}")
 
     # optionally preload a model
     initial_epoch, global_step, validation_step = 1, 0, 0
