@@ -86,13 +86,16 @@ def logNormalLoss(means: torch.Tensor,
     return -dist.log_prob(target) # (batch, n_features)
 
 
-def getWeightsFilePath(epoch: int) -> Path:
-    ''' Get the filename for the model weights. '''
-    model_filename = f"{MODEL_BASENAME}-{epoch:02d}.pt"
-    return Path(MODEL_FOLDER, model_filename)
 def modelID(cfg: argparse.Namespace) -> str:
     ''' Return a string that identifies the model. '''
     return f"{cfg.model}-{cfg.hidden_dim}-{cfg.n_layers}-{cfg.seed}"
+
+
+def getCheckpointPath(epoch: int) -> Path:
+    ''' Get the filename for the model checkpoints. '''
+    model_id = modelID(cfg)
+    model_filename = f"{model_id}-{epoch:02d}.pt"
+    return Path(cfg.model_folder, model_filename)
 
 
 def save(model: nn.Module,
