@@ -90,6 +90,9 @@ def getWeightsFilePath(epoch: int) -> Path:
     ''' Get the filename for the model weights. '''
     model_filename = f"{MODEL_BASENAME}-{epoch:02d}.pt"
     return Path(MODEL_FOLDER, model_filename)
+def modelID(cfg: argparse.Namespace) -> str:
+    ''' Return a string that identifies the model. '''
+    return f"{cfg.model}-{cfg.hidden_dim}-{cfg.n_layers}-{cfg.seed}"
 
 
 def save(model: nn.Module,
@@ -222,6 +225,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--loss", type=str, default="lognormal", help="Loss function (mse, lognormal)")
 
     return parser.parse_args()
+
 
 if __name__ == "__main__":
     # Global variables
