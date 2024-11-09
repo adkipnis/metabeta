@@ -283,8 +283,11 @@ if __name__ == "__main__":
 
     # optionally preload a model
     initial_epoch, global_step, validation_step = 1, 0, 0
-    if PRELOAD_EPOCH:
-        initial_epoch, global_step = load(model, optimizer, PRELOAD_EPOCH)
+    if cfg.preload:
+        initial_epoch, global_step = load(model, optimizer, cfg.preload)
+        print(f"Preloaded model from epoch {cfg.preload}, starting at epoch {initial_epoch}.")
+    else:
+        print("No preloaded model found, starting from scratch.")
 
     # start training loop
     for epoch in range(initial_epoch, N_EPOCHS+1):
