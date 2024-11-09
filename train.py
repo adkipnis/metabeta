@@ -209,6 +209,18 @@ def setup() -> argparse.Namespace:
     parser.add_argument("-e", "--epochs", type=int, default=100, help="Number of epochs to train")
     parser.add_argument("-b", "--batch-size", type=int, default=64, help="Batch size")
     parser.add_argument("--last", dest="last", action="store_true", help="Use only last output for loss")
+
+    # model and loss
+    parser.add_argument("-m", "--model", type=str, default="transformer", help="Model type (gru, lstm, transformer)")
+    parser.add_argument("--hidden-dim", type=int, default=64, help="Hidden dimension")
+    parser.add_argument("--ff-dim", type=int, default=128, help="Feedforward dimension")
+    parser.add_argument("--n-heads", type=int, default=4, help="Number of heads in transformer")
+    parser.add_argument("--n-layers", type=int, default=1, help="Number of layers in transformer")
+    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate")
+    parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate")
+    parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon for Adam")
+    parser.add_argument("--loss", type=str, default="lognormal", help="Loss function (mse, lognormal)")
+
     return parser.parse_args()
 
 if __name__ == "__main__":
