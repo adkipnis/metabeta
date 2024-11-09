@@ -196,6 +196,12 @@ def validate(model: nn.Module,
 def setup() -> argparse.Namespace:
     ''' Parse command line arguments. '''
     parser = argparse.ArgumentParser()
+
+    # misc
+    parser.add_argument("-s", "--seed", type=int, default=0, help="Model seed")
+    parser.add_argument("--device", type=str, default="cuda", help="Device to use (cuda or cpu)")
+    parser.add_argument("-p", "--preload", type=int, default=0, help="Preload model from epoch")
+    parser.add_argument("--model-folder", type=str, default="checkpoints", help="Model folder")
     return parser.parse_args()
 
 if __name__ == "__main__":
