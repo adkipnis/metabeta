@@ -232,6 +232,13 @@ def setup() -> argparse.Namespace:
 if __name__ == "__main__":
     cfg = setup()
 
+    # global variables
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    console_width = getConsoleWidth()
+    if cfg.device == "cuda":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device("cpu")
 
     # optionally preload a model
     initial_epoch, global_step, validation_step = 1, 0, 0
