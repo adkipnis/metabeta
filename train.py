@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Tuple, Callable
 from tqdm import tqdm
+import argparse
 import torch
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter # type: ignore
@@ -191,6 +192,11 @@ def validate(model: nn.Module,
         if epoch % 5 == 0:
             run(model, batch, unpad=True, num_examples=2) # type: ignore
     return step
+
+def setup() -> argparse.Namespace:
+    ''' Parse command line arguments. '''
+    parser = argparse.ArgumentParser()
+    return parser.parse_args()
 
 if __name__ == "__main__":
     # Global variables
