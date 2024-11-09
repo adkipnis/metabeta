@@ -107,14 +107,17 @@ class TransformerDecoder(Base):
                  n_layers: int,
                  dropout: float,
                  seed: int,
-                 nhead: int = 4,
-                 num_layers: int = 1,
                  last: bool = False,
+                 n_heads: int = 4,
                  ) -> None:
 
-        super(TransformerDecoder, self).__init__(input_size, hidden_size, output_size, seed, reuse)
-        decoder_layer = TransformerDecoderLayer(d_model=hidden_size, nhead=nhead, dim_feedforward=ff_size, batch_first=True)
-        self.model= nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
+        super(TransformerDecoder, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, last)
+        decoder_layer = TransformerDecoderLayer(d_model=hidden_size,
+                                                nhead=n_heads,
+                                                dim_feedforward=ff_size,
+                                                dropout=dropout,
+                                                batch_first=True)
+        self.model= nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
 
     def internal(self, x: torch.Tensor) -> torch.Tensor:
         # x (batch_size, seq_size, hidden_size)
