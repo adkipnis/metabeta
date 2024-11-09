@@ -269,6 +269,18 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Model {cfg.model} not recognized.")
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    # loss, optimizer, writer
+    if cfg.loss == "mse":
+        lf = mseLoss
+    elif cfg.loss == "lognormal":
+        lf = logNormalLoss
+    else:
+        raise ValueError(f"Loss {cfg.loss} not recognized.")
+    optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr, eps=cfg.eps)
+    writer = SummaryWriter(Path("runs", modelID(cfg), timestamp))
+    print(f"Number of parameters: {num_params}, Loss: {cfg.loss}, Learning rate: {cfg.lr}, Epsilon: {cfg.eps}, Seed: {cfg.seed}, Device: {device}")
+
     # optionally preload a model
     initial_epoch, global_step, validation_step = 1, 0, 0
     if PRELOAD_EPOCH:
