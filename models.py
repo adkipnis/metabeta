@@ -6,19 +6,18 @@ from torch.nn import TransformerDecoderLayer
 
 class Base(nn.Module):
     def __init__(self,
-                 input_size: int,
+                 num_predictors: int,
                  hidden_size: int,
-                 output_size: int,
                  seed: int,
                  reuse: bool = True) -> None:
         super(Base, self).__init__()
-        self.input_size = input_size
+        self.input_size = num_predictors + 1
         self.hidden_size = hidden_size
-        self.output_size = output_size
-        self.embedding = nn.Linear(input_size, hidden_size)
-        self.means = nn.Linear(hidden_size, output_size)
+        self.output_size = num_predictors
+        self.embedding = nn.Linear(self.input_size, hidden_size)
+        self.means = nn.Linear(hidden_size, self.output_size)
         # self.logstds = nn.Linear(hidden_size, output_size * (output_size + 1) // 2)
-        self.logstds = nn.Linear(hidden_size, output_size)
+        self.logstds = nn.Linear(hidden_size, self.output_size)
         self.relu = nn.ReLU()
         self.seed = seed
         self.reuse = reuse # reuse intermediate outputs
