@@ -134,11 +134,10 @@ def run(model: nn.Module,
         unpad: bool = True,
         printer: Callable = print) -> torch.Tensor:
     ''' Run a batch through the model and return the loss. '''
-    X = batch["predictors"].to(DEVICE)
-    y = batch["y"].to(DEVICE)
-    targets = batch["params"].squeeze(-1).to(DEVICE)
-    # lengths = batch["n"].to(DEVICE)
-    depths = batch["d"].to(DEVICE)
+    X = batch["predictors"].to(device)
+    y = batch["y"].to(device)
+    targets = batch["params"].squeeze(-1).to(device)
+    depths = batch["d"].to(device)
     inputs = torch.cat([X, y], dim=-1)
     means, logstds = model(inputs)
     losses = lossWrapper(means, logstds, targets, depths)
