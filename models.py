@@ -77,9 +77,9 @@ class Base(nn.Module):
 
 
 class RNN(Base):
-    def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int, reuse: bool = True) -> None:
-        super(RNN, self).__init__(input_size, hidden_size, output_size, seed, reuse)
-        self.model = nn.RNN(input_size=hidden_size, hidden_size=hidden_size, batch_first=True)
+    def __init__(self, num_predictors: int, hidden_size: int, n_layers: int, dropout: float, seed: int, last: bool = False) -> None:
+        super(RNN, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, last)
+        self.model = nn.RNN(input_size=hidden_size, hidden_size=hidden_size, num_layers=n_layers, dropout=dropout, batch_first=True)
 
     def internal(self, x: torch.Tensor) -> torch.Tensor:
         # x (batch_size, seq_size, hidden_size)
@@ -88,15 +88,15 @@ class RNN(Base):
 
 
 class GRU(RNN):
-    def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int, reuse: bool = True) -> None:
-        super(GRU, self).__init__(input_size, hidden_size, output_size, seed, reuse)
-        self.model = nn.GRU(input_size=hidden_size, hidden_size=hidden_size, batch_first=True)
+    def __init__(self, num_predictors: int, hidden_size: int, n_layers: int, dropout: float, seed: int, last: bool = False) -> None:
+        super(GRU, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, last)
+        self.model = nn.GRU(input_size=hidden_size, hidden_size=hidden_size, num_layers=n_layers, dropout=dropout, batch_first=True)
 
 
 class LSTM(RNN):
-    def __init__(self, input_size: int, hidden_size: int, output_size: int, seed: int, reuse: bool = True) -> None:
-        super(LSTM, self).__init__(input_size, hidden_size, output_size, seed, reuse)
-        self.model = nn.LSTM(input_size=hidden_size, hidden_size=hidden_size, batch_first=True)
+    def __init__(self, num_predictors: int, hidden_size: int, n_layers: int, dropout: float, seed: int, last: bool = False) -> None:
+        super(LSTM, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, last)
+        self.model = nn.LSTM(input_size=hidden_size, hidden_size=hidden_size, dropout=dropout, batch_first=True)
 
 
 class TransformerDecoder(Base):
