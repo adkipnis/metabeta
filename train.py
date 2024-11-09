@@ -54,7 +54,7 @@ def lossWrapper(means: torch.Tensor,
     n_dims = means.dim()
     if n_dims == 3:
         target = target.unsqueeze(1).expand_as(means)
-    losses = LOSS_FN(means, sigma, target)
+    losses = lf(means, sigma, target)
     if n_dims == 3:
         b, n, _ = means.shape
         exclude = 3 * d.unsqueeze(1)
@@ -290,9 +290,10 @@ if __name__ == "__main__":
         print("No preloaded model found, starting from scratch.")
 
     # start training loop
-    for epoch in range(initial_epoch, N_EPOCHS+1):
-        fname = dsFilename(N_DRAWS, epoch, "fixed-sigma")
-        dataloader_train, dataloader_val = getDataLoaders(fname, BATCH_SIZE)
+    print(f"Training for {cfg.epochs + 1 - initial_epoch} epochs with {cfg.n_draws} datasets per epoch...")
+    for epoch in range(initial_epoch, cfg.epochs + 1):
+        fname = dsFilename(cfg.n_draws, epoch, "fixed-sigma")
+        dataloader_train, dataloader_val = getDataLoaders(fname, cfg.batch_size)
         global_step = train(model, optimizer, dataloader_train, writer, epoch, global_step)
         validation_step = validate(model, optimizer, dataloader_val, writer, epoch, validation_step)
         save(model, optimizer, epoch, global_step)
