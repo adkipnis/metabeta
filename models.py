@@ -101,14 +101,15 @@ class LSTM(RNN):
 
 class TransformerDecoder(Base):
     def __init__(self,
-                 input_size: int,
+                 num_predictors: int,
                  hidden_size: int,
                  ff_size: int,
-                 output_size: int,
+                 n_layers: int,
+                 dropout: float,
                  seed: int,
-                 reuse: bool = True,
                  nhead: int = 4,
                  num_layers: int = 1,
+                 last: bool = False,
                  ) -> None:
 
         super(TransformerDecoder, self).__init__(input_size, hidden_size, output_size, seed, reuse)
