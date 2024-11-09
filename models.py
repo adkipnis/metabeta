@@ -11,7 +11,7 @@ class Base(nn.Module):
                  n_layers: int,
                  dropout: float,
                  seed: int,
-                 reuse: bool = True) -> None:
+                 last: bool = False) -> None:
         super(Base, self).__init__()
         self.input_size = num_predictors + 1
         self.hidden_size = hidden_size
@@ -24,7 +24,7 @@ class Base(nn.Module):
         self.logstds = nn.Linear(hidden_size, self.output_size)
         self.relu = nn.ReLU()
         self.seed = seed
-        self.reuse = reuse # reuse intermediate outputs
+        self.last = last
         self.initializeWeights()
 
     def initializeWeights(self) -> None:
@@ -66,7 +66,7 @@ class Base(nn.Module):
         outputs = self.internal(x) # (batch_size, seq_size, hidden_size)
 
         # Forward pass through TransformerDecoder
-        if not self.reuse:
+        if self.last:
             outputs = outputs[:, -1] # (batch_size, hidden_size)
         
         # Transform outputs
