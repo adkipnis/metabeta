@@ -9,6 +9,7 @@ class Base(nn.Module):
                  num_predictors: int,
                  hidden_size: int,
                  n_layers: int,
+                 dropout: float,
                  seed: int,
                  reuse: bool = True) -> None:
         super(Base, self).__init__()
@@ -16,6 +17,7 @@ class Base(nn.Module):
         self.hidden_size = hidden_size
         self.output_size = num_predictors
         self.n_layers = n_layers
+        self.dropout = dropout
         self.embedding = nn.Linear(self.input_size, hidden_size)
         self.means = nn.Linear(hidden_size, self.output_size)
         # self.logstds = nn.Linear(hidden_size, output_size * (output_size + 1) // 2)
