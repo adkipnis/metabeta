@@ -8,12 +8,14 @@ class Base(nn.Module):
     def __init__(self,
                  num_predictors: int,
                  hidden_size: int,
+                 n_layers: int,
                  seed: int,
                  reuse: bool = True) -> None:
         super(Base, self).__init__()
         self.input_size = num_predictors + 1
         self.hidden_size = hidden_size
         self.output_size = num_predictors
+        self.n_layers = n_layers
         self.embedding = nn.Linear(self.input_size, hidden_size)
         self.means = nn.Linear(hidden_size, self.output_size)
         # self.logstds = nn.Linear(hidden_size, output_size * (output_size + 1) // 2)
