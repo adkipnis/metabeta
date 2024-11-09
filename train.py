@@ -202,6 +202,13 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="cuda", help="Device to use (cuda or cpu)")
     parser.add_argument("-p", "--preload", type=int, default=0, help="Preload model from epoch")
     parser.add_argument("--model-folder", type=str, default="checkpoints", help="Model folder")
+
+    # data
+    parser.add_argument("--n-draws", type=int, default=int(1e4), help="Number of datasets per epoch")
+    parser.add_argument("--d", type=int, default=16, help="Number of predictors")
+    parser.add_argument("-e", "--epochs", type=int, default=100, help="Number of epochs to train")
+    parser.add_argument("-b", "--batch-size", type=int, default=64, help="Batch size")
+    parser.add_argument("--last", dest="last", action="store_true", help="Use only last output for loss")
     return parser.parse_args()
 
 if __name__ == "__main__":
