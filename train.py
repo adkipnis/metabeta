@@ -146,14 +146,14 @@ def run(model: nn.Module,
     for i in range(num_examples):
         d = depths[i].item()
         targets_i = targets[i, :d].detach().numpy()
-        if REUSE:
-            outputs_i = means[i, -1, :d].detach().numpy()
-        else:
+        if model.last:
             outputs_i = means[i, :d].detach().numpy()
-        printer(f"\n{CONSOLE_WIDTH * '-'}")
+        else:
+            outputs_i = means[i, -1, :d].detach().numpy()
+        printer(f"\n{console_width * '-'}")
         printer(f"Predicted : {outputs_i}")
         printer(f"True      : {targets_i}")
-        printer(f"{CONSOLE_WIDTH * '-'}\n")
+        printer(f"{console_width * '-'}\n")
     return loss
 
 
