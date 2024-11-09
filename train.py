@@ -103,8 +103,8 @@ def save(model: nn.Module,
          current_epoch: int,
          current_global_step: int) -> None:
     """ Save the model and optimizer state. """
-    model_filename = getWeightsFilePath(current_epoch)
-    os.makedirs(MODEL_FOLDER, exist_ok=True)
+    model_filename = getCheckpointPath(current_epoch)
+    os.makedirs(cfg.model_folder, exist_ok=True)
     torch.save({
         'epoch': current_epoch,
         'global_step': current_global_step,
@@ -118,7 +118,7 @@ def load(model: nn.Module,
          initial_epoch: int) -> Tuple[int, int]:
     """ Load the model and optimizer state from a previous run,
     returning the initial epoch and seed. """
-    model_filename = getWeightsFilePath(initial_epoch)
+    model_filename = getCheckpointPath(initial_epoch)
     print(f"Loading weights from {model_filename}")
     state = torch.load(model_filename, weights_only=False)
     model.load_state_dict(state["model_state_dict"])
