@@ -74,7 +74,7 @@ if __name__ == "__main__":
     os.makedirs('data', exist_ok=True)
     sower = Sower(0)
     n_draws = int(1e4)
-    iterations = 100
+    iterations = 500
     max_samples = 200
     max_predictors = 18
     start = 1
@@ -85,7 +85,7 @@ if __name__ == "__main__":
         sower = Sower(seed)
 
     # generate datasets
-    for part in range(1, iterations + 1):
+    for part in range(start, iterations + 1):
         dataset = generateDataset(n_draws, max_samples, max_predictors, sower)
         filename = dsFilename(n_draws, part, "fixed-sigma")
         torch.save(dataset, filename)
