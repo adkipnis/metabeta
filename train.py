@@ -119,7 +119,7 @@ def load(model: nn.Module,
     """ Load the model and optimizer state from a previous run,
     returning the initial epoch and seed. """
     model_filename = getCheckpointPath(initial_epoch)
-    print(f"Loading weights from {model_filename}")
+    print(f"Loading checkpoint from {model_filename}")
     state = torch.load(model_filename, weights_only=False)
     model.load_state_dict(state["model_state_dict"])
     initial_epoch = state["epoch"] + 1
@@ -143,6 +143,7 @@ def run(model: nn.Module,
     losses = lossWrapper(means, logstds, targets, depths)
     loss = maskLoss(losses, targets) if unpad else losses.mean()
 
+    # optionally print some examples
     for i in range(num_examples):
         d = depths[i].item()
         targets_i = targets[i, :d].detach().numpy()
