@@ -24,14 +24,6 @@ def getD(seed: int, max_predictors: int) -> int:
     return int(d.item())
 
 
-def getN(seed:int, n_predictors: int, max_samples: int) -> int:
-    ''' Get a random number of samples to draw from a linear model, depending on the number of predictors.'''
-    torch.manual_seed(seed)
-    low = 5 * (n_predictors + 1)
-    n = torch.randint(low, max_samples, (1,))
-    return int(n.item())
-
-
 def getSigmaError(seed: int, alpha: float = 2.75, beta: float = 1., clip: float = 3., eps: float = 1e-6) -> float:
     ''' Get a random error term for a linear model.'''
     torch.manual_seed(seed)
@@ -57,12 +49,11 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
     for _ in iterator:
         seed = sower.throw()
         d = getD(seed, max_predictors)
-        n = max_samples # alternatively: getN(seed, d, max_samples)
         sigma_error = 0.1 # alternatively: getSigmaError(seed)
         data_dist = getDataDist(seed)
         task = Task(d, seed, sigma_error)
         lm = LinearModel(task, data_dist)
-        samples += [lm.sample(n, seed)]
+        samples += [lm.sample(max_samples, seed)]
     return LMDataset(samples, max_samples, max_predictors)
 
 
