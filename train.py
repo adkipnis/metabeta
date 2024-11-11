@@ -229,10 +229,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--last", dest="last", action="store_true", help="Use only last model output for loss")
 
     # model and loss
-    parser.add_argument("--hidden-dim", type=int, default=64, help="Hidden dimension")
-    parser.add_argument("--ff-dim", type=int, default=128, help="Feedforward dimension")
     parser.add_argument("-m", "--model", type=str, default="transformer", help="Model type [gru, lstm, transformer]")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate")
+    parser.add_argument("--hidden-dim", type=int, default=128, help="Hidden dimension")
+    parser.add_argument("--ff-dim", type=int, default=256, help="Feedforward dimension (transformer)")
     parser.add_argument("--n-heads", type=int, default=4, help="Number of heads (transformer)")
     parser.add_argument("--n-layers", type=int, default=1, help="Number of layers (transformer)")
     parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate (Adam)")
