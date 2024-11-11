@@ -157,11 +157,12 @@ def run(model: nn.Module,
     # optionally print some examples
     for i in range(num_examples):
         d = depths[i].item()
+        n = lengths[i].item()
         targets_i = targets[i, :d].detach().numpy()
         if model.last:
             outputs_i = means[i, :d].detach().numpy()
         else:
-            outputs_i = means[i, -1, :d].detach().numpy()
+            outputs_i = means[i, n-1, :d].detach().numpy()
         printer(f"\n{console_width * '-'}")
         printer(f"Predicted : {outputs_i}")
         printer(f"True      : {targets_i}")
