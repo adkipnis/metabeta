@@ -294,7 +294,8 @@ if __name__ == "__main__":
         print("No preloaded model found, starting from scratch.")
 
     # start training loop
-    print(f"Training for {cfg.epochs + 1 - initial_epoch} epochs with {cfg.n_draws} datasets per epoch...")
+    sfx = "(using only last model output for loss)" if cfg.last else ""
+    print(f"Training for {cfg.epochs + 1 - initial_epoch} epochs with {cfg.n_draws} datasets per epoch... {sfx}")
     for epoch in range(initial_epoch, cfg.epochs + 1):
         fname = dsFilename(cfg.n_draws, epoch, "fixed-sigma")
         dataloader_train, dataloader_val = getDataLoaders(fname, cfg.batch_size)
