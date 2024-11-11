@@ -137,7 +137,8 @@ def run(model: nn.Module,
         batch: dict,
         num_examples: int = 0,
         unpad: bool = True,
-        printer: Callable = print) -> torch.Tensor:
+        printer: Callable = print,
+        last: bool = False) -> torch.Tensor:
     ''' Run a batch through the model and return the loss. '''
     X = batch["predictors"].to(device)
     y = batch["y"].to(device)
@@ -146,7 +147,11 @@ def run(model: nn.Module,
     depths = batch["d"].to(device)
     inputs = torch.cat([X, y], dim=-1)
     means, logstds = model(inputs, lengths)
-    losses = lossWrapper(means, logstds, targets, depths)
+
+    # compute loss per batch and predictor (optionally over multiple model outputs per batch)
+    losses = lossWrapper(means, logstds, targets, depths, lengths, last) # (batch, d)
+
+    # compute mean loss over all batches and predictors (optionally ignoring padded predictors)
     loss = maskLoss(losses, targets) if unpad else losses.mean()
 
     # optionally print some examples
