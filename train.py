@@ -93,7 +93,7 @@ def logNormalLoss(means: torch.Tensor,
 
 def modelID(cfg: argparse.Namespace) -> str:
     ''' Return a string that identifies the model. '''
-    return f"{cfg.model}-{cfg.hidden_dim}-{cfg.n_layers}-{cfg.seed}"
+    return f"{cfg.model}-{cfg.hidden_dim}-{cfg.n_layers}-{cfg.seed}-last={cfg.last}"
 
 
 def getCheckpointPath(epoch: int) -> Path:
