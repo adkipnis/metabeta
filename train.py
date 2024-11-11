@@ -47,9 +47,11 @@ def maskLoss(losses: torch.Tensor,
 def lossWrapper(means: torch.Tensor,
                 sigma: torch.Tensor,
                 target: torch.Tensor,
-                d: torch.Tensor) -> torch.Tensor:
+                d: torch.Tensor,
+                lengths: torch.Tensor,
+                last: bool = False) -> torch.Tensor:
     ''' Wrapper for the loss function.
-    Handles the case of 2D and 3D tensors (where the second dimension is the number of subjects).
+    Handles the case of 2D and 3D tensors (where the second dimension is the number of subjects = seq_size).
     For 3D tensors, drop the losses for datasets that have fewer than n < 3 * number of features.'''
     n_dims = means.dim()
     if n_dims == 3:
@@ -57,13 +59,14 @@ def lossWrapper(means: torch.Tensor,
     losses = lf(means, sigma, target)
     if n_dims == 3:
         b, n, _ = means.shape
-        exclude = 3 * d.unsqueeze(1)
-        # ns = torch.ones_like(exclude) * (n-1)
-        # exclude = torch.min(exclude, ns)
-        denominator = n - exclude
-        mask = torch.arange(n).expand(b, n) < exclude
-        losses[mask] = 0.
-        losses = losses.sum(dim=1) / denominator
+        if last: # only return loss for last legal output
+            losses = losses[torch.arange(b), lengths-1]
+        else:
+            n_min = 3 * d.unsqueeze(1)
+            denominators = n - n_min
+            mask = torch.arange(n).expand(b, n) < n_min
+            losses[mask] = 0.
+            losses = losses.sum(dim=1) / denominators
     return losses # (batch, n_features)
 
 
