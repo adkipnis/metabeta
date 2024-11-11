@@ -19,7 +19,6 @@ class Base(nn.Module):
         self.output_size = num_predictors
         self.n_layers = n_layers
         self.dropout = dropout
-        self.embedding = nn.Linear(self.input_size, hidden_size)
         self.means = nn.Linear(hidden_size, self.output_size)
         # self.logstds = nn.Linear(hidden_size, output_size * (output_size + 1) // 2)
         self.logstds = nn.Linear(hidden_size, self.output_size)
@@ -59,16 +58,21 @@ class Base(nn.Module):
         else:
             cov_matrix[:, :, diag_ids, diag_ids] += 1e-6
         return cov_matrix
+
+    def internal(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError
         
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, lengths: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
         # x (batch_size, seq_size, input_size)
-        x = self.embedding(x) # (batch_size, seq_size, hidden_size)
-        outputs = self.internal(x) # (batch_size, seq_size, hidden_size)
-
-        # Forward pass through TransformerDecoder
+        
+        # run through main layers
+        outputs = self.internal(x, lengths) # (batch_size, seq_size, hidden_size) if no masking
+    
+        # optionally take last output
         if self.last:
-            outputs = outputs[:, -1] # (batch_size, hidden_size)
+            batch_size = lengths.size(0)
+            outputs = outputs[torch.arange(batch_size), lengths-1] # (batch_size, hidden_size)
         
         # Transform outputs
         means = self.means(self.relu(outputs)) # (batch_size, output_size) or (batch_size, seq_size, output_size)
