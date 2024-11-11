@@ -139,9 +139,10 @@ def run(model: nn.Module,
     X = batch["predictors"].to(device)
     y = batch["y"].to(device)
     targets = batch["params"].squeeze(-1).to(device)
+    lengths = batch["n"].to(device)
     depths = batch["d"].to(device)
     inputs = torch.cat([X, y], dim=-1)
-    means, logstds = model(inputs)
+    means, logstds = model(inputs, lengths)
     losses = lossWrapper(means, logstds, targets, depths)
     loss = maskLoss(losses, targets) if unpad else losses.mean()
 
