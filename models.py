@@ -90,8 +90,24 @@ class RNN(Base):
 
     def functional(self):
         return nn.RNN
+
+    def mask(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.nn.utils.rnn.PackedSequence:
+        ''' mask the output of the RNN '''
+        # x (batch_size, seq_size, input_size)
+        return pack_padded_sequence(x, lengths, batch_first=True, enforce_sorted=False)
+         
+    def unmask(self, x: torch.nn.utils.rnn.PackedSequence) -> torch.Tensor:
+        ''' unmask the output of the RNN '''
+        output, _ = pad_packed_sequence(x, batch_first=True)
+        return output
+
+    def internal(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
         # x (batch_size, seq_size, hidden_size)
+        if self.last:
+            x = self.mask(x, lengths) # type: ignore
         outputs, _ = self.model(x)
+        if self.last:
+            outputs = self.unmask(outputs) # (batch_size, max(lengths), hidden_size)
         return outputs
 
 
