@@ -147,9 +147,23 @@ class TransformerDecoder(Base):
                                                 batch_first=True)
         self.model= nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
         self.map2hidden = nn.Linear(self.input_size, hidden_size)
+    def targetMask(self, x: torch.Tensor) -> torch.Tensor:
+        seq_len = x.size(1)
+        return torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
 
-    def internal(self, x: torch.Tensor) -> torch.Tensor:
+    def paddingMask(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+        # mask[i, j] = True if j >= lengths[i] else False
+        batch_size, seq_size, _ = x.size()
+        mask = torch.arange(seq_size).expand(batch_size, seq_size) >= lengths.unsqueeze(1)
+        return mask.bool()
+
+    def internal(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
         # x (batch_size, seq_size, hidden_size)
-        return self.model(x, x)
+        tgt_mask = self.targetMask(x)
+        tgt_key_padding_mask = None
+        if self.last:
+            tgt_key_padding_mask = self.paddingMask(x, lengths)
+        outputs = self.model(tgt=x, memory=x, tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask)
+        return self.map2hidden(outputs)
 
 
