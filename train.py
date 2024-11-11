@@ -217,8 +217,8 @@ def setup() -> argparse.Namespace:
 
     # misc
     parser.add_argument("-s", "--seed", type=int, default=0, help="Model seed")
-    parser.add_argument("--device", type=str, default="cuda", help="Device to use (cuda or cpu)")
-    parser.add_argument("-p", "--preload", type=int, default=0, help="Preload model from epoch")
+    parser.add_argument("--device", type=str, default="cuda", help="Device to use [cuda, cpu]")
+    parser.add_argument("-p", "--preload", type=int, default=0, help="Preload model from epoch #p")
     parser.add_argument("--model-folder", type=str, default="checkpoints", help="Model folder")
 
     # data
@@ -226,18 +226,18 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--d", type=int, default=19, help="Number of predictors")
     parser.add_argument("-e", "--epochs", type=int, default=500, help="Number of epochs to train")
     parser.add_argument("-b", "--batch-size", type=int, default=256, help="Batch size")
-    parser.add_argument("--last", dest="last", action="store_true", help="Use only last output for loss")
+    parser.add_argument("--last", dest="last", action="store_true", help="Use only last model output for loss")
 
     # model and loss
-    parser.add_argument("-m", "--model", type=str, default="transformer", help="Model type (gru, lstm, transformer)")
     parser.add_argument("--hidden-dim", type=int, default=64, help="Hidden dimension")
     parser.add_argument("--ff-dim", type=int, default=128, help="Feedforward dimension")
-    parser.add_argument("--n-heads", type=int, default=4, help="Number of heads in transformer")
-    parser.add_argument("--n-layers", type=int, default=1, help="Number of layers in transformer")
+    parser.add_argument("-m", "--model", type=str, default="transformer", help="Model type [gru, lstm, transformer]")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate")
-    parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate")
-    parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon for Adam")
-    parser.add_argument("--loss", type=str, default="lognormal", help="Loss function (mse, lognormal)")
+    parser.add_argument("--n-heads", type=int, default=4, help="Number of heads (transformer)")
+    parser.add_argument("--n-layers", type=int, default=1, help="Number of layers (transformer)")
+    parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate (Adam)")
+    parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon (Adam)")
+    parser.add_argument("--loss", type=str, default="lognormal", help="Loss function [mse, lognormal]")
 
     return parser.parse_args()
 
