@@ -182,7 +182,7 @@ def train(model: nn.Module,
     iterator = tqdm(dataloader, desc=f"Epoch {epoch:02d} [T]")
     for batch in iterator:
         optimizer.zero_grad()
-        loss = run(model, batch, unpad=True)
+        loss = run(model, batch, unpad=True, last=False)
         loss.backward()
         writer.add_scalar("loss_train", loss.item(), step)
         iterator.set_postfix({"loss": loss.item()})
@@ -203,7 +203,7 @@ def validate(model: nn.Module,
     iterator = tqdm(dataloader, desc=f"Epoch {epoch:02d} [V]")
     with torch.no_grad():
         for batch in iterator:
-            val_loss = run(model, batch, unpad=True, printer=iterator.write)
+            val_loss = run(model, batch, unpad=True, printer=iterator.write, last=True)
             writer.add_scalar("loss_val", val_loss.item(), step)
             iterator.set_postfix({"loss": val_loss.item()})
             step += 1
