@@ -76,7 +76,7 @@ if __name__ == "__main__":
     n_draws = int(1e4)
     iterations = 100
     max_samples = 200
-    max_predictors = 15
+    max_predictors = 18
     start = 1
 
     # reset sower if starting from a different iteration
