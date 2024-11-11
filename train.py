@@ -58,6 +58,8 @@ def lossWrapper(means: torch.Tensor,
     if n_dims == 3:
         b, n, _ = means.shape
         exclude = 3 * d.unsqueeze(1)
+        # ns = torch.ones_like(exclude) * (n-1)
+        # exclude = torch.min(exclude, ns)
         denominator = n - exclude
         mask = torch.arange(n).expand(b, n) < exclude
         losses[mask] = 0.
