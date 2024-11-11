@@ -214,7 +214,7 @@ def setup() -> argparse.Namespace:
 
     # data
     parser.add_argument("--n-draws", type=int, default=int(1e4), help="Number of datasets per epoch")
-    parser.add_argument("--d", type=int, default=16, help="Number of predictors")
+    parser.add_argument("--d", type=int, default=19, help="Number of predictors")
     parser.add_argument("-e", "--epochs", type=int, default=100, help="Number of epochs to train")
     parser.add_argument("-b", "--batch-size", type=int, default=64, help="Batch size")
     parser.add_argument("--last", dest="last", action="store_true", help="Use only last output for loss")
@@ -301,4 +301,4 @@ if __name__ == "__main__":
         global_step = train(model, optimizer, dataloader_train, writer, epoch, global_step)
         validation_step = validate(model, optimizer, dataloader_val, writer, epoch, validation_step)
         save(model, optimizer, epoch, global_step)
-    
+ 
