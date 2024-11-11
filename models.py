@@ -140,12 +140,13 @@ class TransformerDecoder(Base):
                  ) -> None:
 
         super(TransformerDecoder, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, last)
-        decoder_layer = TransformerDecoderLayer(d_model=hidden_size,
+        decoder_layer = TransformerDecoderLayer(d_model=self.input_size,
                                                 nhead=n_heads,
                                                 dim_feedforward=ff_size,
                                                 dropout=dropout,
                                                 batch_first=True)
         self.model= nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
+        self.map2hidden = nn.Linear(self.input_size, hidden_size)
 
     def internal(self, x: torch.Tensor) -> torch.Tensor:
         # x (batch_size, seq_size, hidden_size)
