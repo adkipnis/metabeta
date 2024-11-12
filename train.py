@@ -143,10 +143,10 @@ def run(model: nn.Module,
     lengths = batch["n"]
     depths = batch["d"]
     inputs = torch.cat([X, y], dim=-1)
-    means, logstds = model(inputs, lengths)
+    means, stds = model(inputs, lengths)
 
     # compute loss per batch and predictor (optionally over multiple model outputs per batch)
-    losses = lossWrapper(means, logstds, targets, depths, lengths, last) # (batch, d)
+    losses = lossWrapper(means, stds, targets, depths, lengths, last) # (batch, n_predictors)
 
     # compute mean loss over all batches and predictors (optionally ignoring padded predictors)
     loss = maskLoss(losses, targets) if unpad else losses.mean()
