@@ -1,6 +1,7 @@
 import os
 from tqdm import tqdm
 from pathlib import Path
+import argparse
 import torch
 from tasks import Task, LinearModel
 from dataset import LMDataset
@@ -87,15 +88,28 @@ def dsFilename(size: int, part: int, suffix: str = '') -> Path:
     return Path('data', f'dataset-{n}-{p}{suffix}.pt')
 
 
+def setup() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='Generate datasets for linear model task.')
+    parser.add_argument('-s', '--seed', type=int, default=0, help='Seed for random number generator.')
+    parser.add_argument('-n', '--n_draws', type=int, default=int(1e4), help='Number of samples to draw per dataset.')
+    parser.add_argument('--n_draws_val', type=int, default=500, help='Number of samples to draw for validation dataset.')
+    parser.add_argument('-i', '--iterations', type=int, default=500, help='Number of dataset partitions to generate.')
+    parser.add_argument('--max_samples', type=int, default=200, help='Maximum number of samples to draw per linear model.')
+    parser.add_argument('-d', '--max_predictors', type=int, default=14, help='Maximum number of predictors to draw per linear model.')
+    parser.add_argument('--start', type=int, default=1, help='Starting iteration number.')
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
     os.makedirs('data', exist_ok=True)
-    sower = Sower(0)
-    n_draws = int(1e4)
-    n_draws_val = 500
-    iterations = 500
-    max_samples = 200
-    max_predictors = 14
-    start = 1
+    cfg = setup()
+    sower = Sower(cfg.seed)
+    n_draws = cfg.n_draws
+    n_draws_val = cfg.n_draws_val
+    iterations = cfg.iterations
+    max_samples = cfg.max_samples
+    max_predictors = cfg.max_predictors
+    start = cfg.start
 
     if start == 1:
         # generate validation dataset
