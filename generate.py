@@ -97,16 +97,17 @@ if __name__ == "__main__":
     max_predictors = 14
     start = 1
 
-    # reset sower if starting from a different iteration
-    if start > 1:
+    if start == 1:
+        # generate validation dataset
+        print(f'Generating validation dataset of {n_draws_val * (max_predictors + 1)} samples')
+        dataset = generateBalancedDataset(n_draws_val, max_samples, max_predictors, sower)
+        filename = Path('data', 'dataset-val-fixed-sigma.pt')
+        torch.save(dataset, filename)
+    else:
+        # reset sower if starting from a different iteration
         seed = (start - 1) * n_draws + 1
+        seed += n_draws_val * (max_predictors + 1)
         sower = Sower(seed)
-
-    # generate validation dataset
-    print(f'Generating validation dataset of {n_draws_val * (max_predictors + 1)} samples')
-    dataset = generateBalancedDataset(n_draws_val, max_samples, max_predictors, sower)
-    filename = Path('data', 'dataset-val-fixed-sigma.pt')
-    torch.save(dataset, filename)
 
     # generate training datasets
     print(f'Generating {iterations} training datasets of {n_draws} samples each')
