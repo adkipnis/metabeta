@@ -139,9 +139,9 @@ def run(model: nn.Module,
     ''' Run a batch through the model and return the loss. '''
     X = batch["predictors"].to(device)
     y = batch["y"].to(device)
-    targets = batch["params"].squeeze(-1).to(device)
-    lengths = batch["n"].to(device)
-    depths = batch["d"].to(device)
+    targets = batch["params"].squeeze(-1).float()
+    lengths = batch["n"]
+    depths = batch["d"]
     inputs = torch.cat([X, y], dim=-1)
     means, logstds = model(inputs, lengths)
 
