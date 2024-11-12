@@ -60,8 +60,8 @@ class Base(nn.Module):
         raise NotImplementedError
 
     def forward(self, x: torch.Tensor, lengths: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
-        # x (batch_size, seq_size, input_size)
+        ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior
+        x: (batch_size, seq_size, input_size)'''
 
         # run through main layers
         outputs = self.internal(x, lengths) # (batch_size, seq_size, hidden_size) if no masking
@@ -97,9 +97,10 @@ class RNNBase(Base):
         # x (batch_size, seq_size, hidden_size)
         if self.last:
             x = self.mask(x, lengths) # type: ignore
-        outputs, _ = self.model(x)
+        outputs, hidden = self.model(x)
         if self.last:
-            outputs = self.unmask(outputs) # (batch_size, max(lengths), hidden_size)
+            # outputs = self.unmask(outputs) # (batch_size, max(lengths), hidden_size)
+            return hidden[-1]
         return outputs
 
 
