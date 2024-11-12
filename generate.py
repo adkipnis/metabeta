@@ -21,7 +21,7 @@ class Sower:
 def getD(seed: int, max_predictors: int) -> int:
     ''' Get a random number of predictors to draw from a linear model.'''
     torch.manual_seed(seed)
-    d = torch.randint(0, max_predictors, (1,))
+    d = torch.randint(0, max_predictors + 1, (1,))
     return int(d.item())
 
 
@@ -95,7 +95,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--n_draws_val', type=int, default=500, help='Number of samples to draw for validation dataset.')
     parser.add_argument('-i', '--iterations', type=int, default=500, help='Number of dataset partitions to generate.')
     parser.add_argument('--max_samples', type=int, default=200, help='Maximum number of samples to draw per linear model.')
-    parser.add_argument('-d', '--max_predictors', type=int, default=14, help='Maximum number of predictors to draw per linear model.')
+    parser.add_argument('-d', '--max_predictors', type=int, default=14, help='Maximum number of predictors (without intercept) to draw per linear model.')
     parser.add_argument('--start', type=int, default=1, help='Starting iteration number.')
     return parser.parse_args()
 
