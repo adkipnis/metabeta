@@ -50,7 +50,7 @@ class Base(nn.Module):
 class RNNBase(Base):
     def __init__(self, num_predictors: int, hidden_size: int, n_layers: int, dropout: float, seed: int, last: bool = False) -> None:
         super(RNNBase, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed)
-        self.kwargs = {'input_size': self.input_size, 'hidden_size': hidden_size, 'num_layers': n_layers, 'dropout': dropout, 'batch_first': True}
+        self.kwargs = {'input_size': hidden_size, 'hidden_size': hidden_size, 'num_layers': n_layers, 'dropout': dropout, 'batch_first': True}
 
     def internal(self, x: torch.Tensor) -> torch.Tensor:
         outputs, _ = self.model(x)
