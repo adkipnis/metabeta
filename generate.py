@@ -57,6 +57,23 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
     return LMDataset(samples, max_samples, max_predictors)
 
 
+def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: int, sower: Sower) -> LMDataset:
+    ''' generateDataset but with balanced number of predictors for validation '''
+    samples = []
+    d = 0
+    iterator = tqdm(range(max_predictors + 1))
+    iterator.set_description(f'{d:02d}/{max_predictors:02d}')
+    for d in iterator:
+        for _ in range(n_draws_per):
+            seed = sower.throw()
+            sigma_error = 0.1 # alternatively: getSigmaError(seed)
+            data_dist = getDataDist(seed)
+            task = Task(d, seed, sigma_error)
+            lm = LinearModel(task, data_dist)
+            samples += [lm.sample(max_samples, seed)]
+    return LMDataset(samples, max_samples, max_predictors)
+
+
 def dsFilename(size: int, part: int, suffix: str = '') -> Path:
     if size >= 1e6:
         n = f'{size/1e6:.0f}m'
