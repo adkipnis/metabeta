@@ -128,10 +128,9 @@ def run(model: nn.Module,
     X = batch["predictors"].to(device)
     y = batch["y"].to(device)
     targets = batch["params"].squeeze(-1).float()
-    lengths = batch["n"]
     depths = batch["d"]
     inputs = torch.cat([X, y], dim=-1)
-    means, stds = model(inputs, lengths)
+    means, stds = model(inputs)
 
     # compute loss per batch and predictor (optionally over multiple model outputs per batch)
     losses = lossWrapper(means, stds, targets, depths) # (batch, n_predictors)
