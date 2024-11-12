@@ -16,6 +16,7 @@ class Base(nn.Module):
         self.output_size = num_predictors
         self.n_layers = n_layers
         self.dropout = dropout
+        self.embed = nn.Linear(self.input_size, hidden_size)
         self.means = nn.Linear(hidden_size, self.output_size)
         self.logstds = nn.Linear(hidden_size, self.output_size)
         self.seed = seed
@@ -33,6 +34,9 @@ class Base(nn.Module):
     def forward(self, x: torch.Tensor # (batch_size, seq_size, input_size)
                 ) -> Tuple[torch.Tensor, torch.Tensor]:
         ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
+        
+        # embed inputs
+        x = self.embed(x) # (batch_size, seq_size, hidden_size)
 
         # run through main layers
         outputs = self.internal(x) # (batch_size, seq_size, hidden_size)
@@ -78,10 +82,10 @@ class TransformerDecoder(Base):
                  n_heads: int = 4,
                  ) -> None:
 
-        super(TransformerDecoder, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, last)
-        decoder_layer = TransformerDecoderLayer(d_model=self.input_size,
-                                                nhead=n_heads,
+        super(TransformerDecoder, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed)
+        decoder_layer = TransformerDecoderLayer(d_model=hidden_size,
                                                 dim_feedforward=ff_size,
+                                                nhead=n_heads,
                                                 dropout=dropout,
                                                 batch_first=True)
         self.model= nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
