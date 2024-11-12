@@ -206,7 +206,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--n-draws", type=int, default=int(1e4), help="Number of datasets per epoch")
     parser.add_argument("--d", type=int, default=15, help="Number of predictors (+ bias)")
     parser.add_argument("-e", "--epochs", type=int, default=500, help="Number of epochs to train")
-    parser.add_argument("-b", "--batch-size", type=int, default=256, help="Batch size")
+    parser.add_argument("-b", "--batch-size", type=int, default=128, help="Batch size")
 
     # model and loss
     parser.add_argument("-l", "--loss", type=str, default="lognormal", help="Loss function [mse, lognormal]")
@@ -216,7 +216,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--ff-dim", type=int, default=256, help="Feedforward dimension (transformer)")
     parser.add_argument("--n-heads", type=int, default=4, help="Number of heads (transformer)")
     parser.add_argument("--n-layers", type=int, default=1, help="Number of layers (transformer)")
-    parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate (Adam)")
+    parser.add_argument("--lr", type=float, default=5e-3, help="Learning rate (Adam)")
     parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon (Adam)")
 
     return parser.parse_args()
