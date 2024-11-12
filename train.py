@@ -302,9 +302,11 @@ if __name__ == "__main__":
     # start training loop
     sfx = "(using only last model output for loss)" if cfg.last else ""
     print(f"Training for {cfg.epochs + 1 - initial_epoch} epochs with {cfg.n_draws} datasets per epoch... {sfx}")
+    fname = Path('data', 'dataset-val-fixed-sigma.pt')
+    dataloader_val = getDataLoader(fname, cfg.batch_size)
     for epoch in range(initial_epoch, cfg.epochs + 1):
         fname = dsFilename(cfg.n_draws, epoch, "fixed-sigma")
-        dataloader_train, dataloader_val = getDataLoaders(fname, cfg.batch_size)
+        dataloader_train = getDataLoader(fname, cfg.batch_size)
         global_step = train(model, optimizer, dataloader_train, writer, epoch, global_step)
         validation_step = validate(model, optimizer, dataloader_val, writer, epoch, validation_step)
         save(model, optimizer, epoch, global_step)
