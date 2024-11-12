@@ -25,7 +25,6 @@ class Base(nn.Module):
         self.relu = nn.ReLU()
         self.seed = seed
         self.last = last
-        self.initializeWeights()
 
     def initializeWeights(self) -> None:
         ''' Initialize weights using Xavier initialization '''
@@ -81,15 +80,10 @@ class Base(nn.Module):
         return means, logstds.exp()
 
 
-class RNN(Base):
+class RNNBase(Base):
     def __init__(self, num_predictors: int, hidden_size: int, n_layers: int, dropout: float, seed: int, last: bool = False) -> None:
-        super(RNN, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, last)
-        kwargs = {'input_size': self.input_size, 'hidden_size': hidden_size, 'num_layers': n_layers, 'dropout': dropout, 'batch_first': True}
-        self.model = self.functional()(**kwargs)
-        self.embed = False
-
-    def functional(self):
-        return nn.RNN
+        super(RNNBase, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, last)
+        self.kwargs = {'input_size': self.input_size, 'hidden_size': hidden_size, 'num_layers': n_layers, 'dropout': dropout, 'batch_first': True}
 
     def mask(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.nn.utils.rnn.PackedSequence:
         ''' mask the output of the RNN '''
@@ -111,20 +105,18 @@ class RNN(Base):
         return outputs
 
 
-class GRU(RNN):
+class GRU(RNNBase):
     def __init__(self, num_predictors: int, hidden_size: int, n_layers: int, dropout: float, seed: int, last: bool = False) -> None:
         super(GRU, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, last)
+        self.model = nn.GRU(**self.kwargs)
+        self.initializeWeights()
 
-    def functional(self): # type: ignore
-        return nn.GRU
 
-
-class LSTM(RNN):
+class LSTM(RNNBase):
     def __init__(self, num_predictors: int, hidden_size: int, n_layers: int, dropout: float, seed: int, last: bool = False) -> None:
         super(LSTM, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, last)
-
-    def functional(self): # type: ignore
-        return nn.LSTM
+        self.model = nn.LSTM(**self.kwargs)
+        self.initializeWeights()
 
 
 class TransformerDecoder(Base):
@@ -147,6 +139,8 @@ class TransformerDecoder(Base):
                                                 batch_first=True)
         self.model= nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
         self.map2hidden = nn.Linear(self.input_size, hidden_size)
+        self.initializeWeights()
+
     def targetMask(self, x: torch.Tensor) -> torch.Tensor:
         seq_len = x.size(1)
         return torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
