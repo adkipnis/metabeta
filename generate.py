@@ -91,6 +91,7 @@ if __name__ == "__main__":
     os.makedirs('data', exist_ok=True)
     sower = Sower(0)
     n_draws = int(1e4)
+    n_draws_val = 500
     iterations = 500
     max_samples = 200
     max_predictors = 18
@@ -101,7 +102,14 @@ if __name__ == "__main__":
         seed = (start - 1) * n_draws + 1
         sower = Sower(seed)
 
-    # generate datasets
+    # generate validation dataset
+    print(f'Generating validation dataset of {n_draws_val * (max_predictors + 1)} samples')
+    dataset = generateBalancedDataset(n_draws_val, max_samples, max_predictors, sower)
+    filename = Path('data', 'dataset-val-fixed-sigma.pt')
+    torch.save(dataset, filename)
+
+    # generate training datasets
+    print(f'Generating {iterations} training datasets of {n_draws} samples each')
     for part in range(start, iterations + 1):
         dataset = generateDataset(n_draws, max_samples, max_predictors, sower)
         filename = dsFilename(n_draws, part, "fixed-sigma")
