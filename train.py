@@ -220,7 +220,7 @@ def setup() -> argparse.Namespace:
 
     # data
     parser.add_argument("--n-draws", type=int, default=int(1e4), help="Number of datasets per epoch")
-    parser.add_argument("--d", type=int, default=19, help="Number of predictors")
+    parser.add_argument("--d", type=int, default=15, help="Number of predictors (+ bias)")
     parser.add_argument("-e", "--epochs", type=int, default=500, help="Number of epochs to train")
     parser.add_argument("-b", "--batch-size", type=int, default=256, help="Batch size")
     parser.add_argument("--last", dest="last", action="store_true", help="Use only last model output for loss")
