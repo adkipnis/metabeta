@@ -28,11 +28,9 @@ class Base(nn.Module):
 
     def initializeWeights(self) -> None:
         ''' Initialize weights using Xavier initialization '''
-        seed = self.seed
+        torch.manual_seed(self.seed)
         for p in self.parameters():
             if p.dim() > 1:
-                torch.manual_seed(seed)
-                seed += 1
                 nn.init.xavier_uniform_(p)
 
     def toCovariance(self, logstds: torch.Tensor) -> torch.Tensor:
