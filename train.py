@@ -233,7 +233,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--ff-dim", type=int, default=256, help="Feedforward dimension (transformer)")
     parser.add_argument("--n-heads", type=int, default=4, help="Number of heads (transformer)")
     parser.add_argument("--n-layers", type=int, default=1, help="Number of layers (transformer)")
-    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate (Adam)")
+    parser.add_argument("--lr", type=float, default=1e-2, help="Learning rate (Adam)")
     parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon (Adam)")
 
     return parser.parse_args()
