@@ -3,7 +3,7 @@ from typing import Dict
 
 class Task:
     def __init__(self,
-                 n_predictors: int,
+                 n_predictors: int, # without intercept
                  seed: int,
                  sigma_error: float = 0.1,
                  sigma_beta: float = 0.1,
