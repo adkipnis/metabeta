@@ -34,7 +34,7 @@ def getDataLoader(filename: Path, batch_size: int) -> DataLoader:
 
 def maskLoss(losses: torch.Tensor,
              y_true: torch.Tensor,
-             pad_val: int = 0) -> torch.Tensor:
+             pad_val: float = 0.) -> torch.Tensor:
     ''' Compute the mean squared error between y_pred and y_true, ignoring padding values.'''
     mask = (y_true != pad_val).float()
     masked_loss = losses * mask
@@ -67,11 +67,11 @@ def lossWrapper(means: torch.Tensor,
     return losses # (batch, n_features)
 
 
-def mseLoss(means: torch.Tensor,
-            sigma: torch.Tensor,
-            target: torch.Tensor) -> torch.Tensor:
-    ''' Wrapper for the mean squared error loss. '''
-    return nn.functional.mse_loss(means, target, reduction='none')
+def mseWrapper(means: torch.Tensor,
+               sigma: torch.Tensor,
+               target: torch.Tensor) -> torch.Tensor:
+    ''' Wrapper for the mean squared error loss with reduction=None. '''
+    return mse(means, target) # (batch, n_features)
 
 
 def logNormalLoss(means: torch.Tensor,
@@ -181,10 +181,10 @@ def train(model: nn.Module,
         optimizer.zero_grad()
         loss = run(model, batch, unpad=True, last=False)
         loss.backward()
-        writer.add_scalar("loss_train", loss.item(), step)
-        iterator.set_postfix({"loss": loss.item()})
         optimizer.step()
         step += 1
+        writer.add_scalar("loss_train", loss.item(), step)
+        iterator.set_postfix({"loss": loss.item()})
     return step
 
 
@@ -282,7 +282,8 @@ if __name__ == "__main__":
 
     # loss, optimizer, writer
     if cfg.loss == "mse":
-        lf = mseLoss
+        mse = nn.MSELoss(reduction='none')
+        lf = mseWrapper
     elif cfg.loss == "lognormal":
         lf = logNormalLoss
     else:
