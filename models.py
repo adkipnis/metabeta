@@ -60,11 +60,11 @@ class Base(nn.Module):
 
     def internal(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
-        
+
     def forward(self, x: torch.Tensor, lengths: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
         # x (batch_size, seq_size, input_size)
-        
+
         # run through main layers
         outputs = self.internal(x, lengths) # (batch_size, seq_size, hidden_size) if no masking
     
@@ -72,10 +72,10 @@ class Base(nn.Module):
         if self.last:
             batch_size = lengths.size(0)
             outputs = outputs[torch.arange(batch_size), lengths-1] # (batch_size, hidden_size)
-        
+
         # Transform outputs
-        means = self.means(self.relu(outputs)) # (batch_size, output_size) or (batch_size, seq_size, output_size)
-        logstds = self.logstds(self.relu(outputs))
+        means = self.means(outputs) # (batch_size, output_size) or (batch_size, seq_size, output_size)
+        logstds = self.logstds(outputs)
         # sigmas = self.toCovariance(logstds) # (batch_size, output_size, output_size) or (batch_size, seq_size, output_size, output_size)
         return means, logstds.exp()
 
