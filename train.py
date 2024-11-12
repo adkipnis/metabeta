@@ -44,26 +44,18 @@ def maskLoss(losses: torch.Tensor,
 def lossWrapper(means: torch.Tensor,
                 sigma: torch.Tensor,
                 target: torch.Tensor,
-                d: torch.Tensor,
-                lengths: torch.Tensor,
-                last: bool = False) -> torch.Tensor:
+                d: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the loss function.
-    Handles the case of 2D and 3D tensors (where the second dimension is the number of subjects = seq_size).
-    For 3D tensors, drop the losses for datasets that have fewer than n < 3 * number of features.'''
-    n_dims = means.dim()
-    if n_dims == 3:
-        target = target.unsqueeze(1).expand_as(means)
+    Handles the case 3D tensors (where the second dimension is the number of subjects = seq_size).
+    Drop the losses for datasets that have fewer than n = 2 * number of features.'''
+    target = target.unsqueeze(1).expand_as(means)
     losses = lf(means, sigma, target)
-    if n_dims == 3:
-        b, n, _ = means.shape
-        if last: # only return loss for last legal output
-            losses = losses[torch.arange(b), lengths-1]
-        else:
-            n_min = 2 * d.unsqueeze(1)
-            denominators = n - n_min
-            mask = torch.arange(n).expand(b, n) < n_min
-            losses[mask] = 0.
-            losses = losses.sum(dim=1) / denominators
+    b, n, _ = means.shape
+    n_min = 2 * d.unsqueeze(1)
+    denominators = n - n_min
+    mask = torch.arange(n).expand(b, n) < n_min
+    losses[mask] = 0.
+    losses = losses.sum(dim=1) / denominators
     return losses # (batch, n_features)
 
 
@@ -79,18 +71,15 @@ def logNormalLoss(means: torch.Tensor,
                   target: torch.Tensor) -> torch.Tensor:
     ''' Compute the negative log probability of target under the proposal distribution. '''
     # means (batch, n_features)
-    # sigma (batch, n_features) or (batch, n_features, n_features)
+    # sigma (batch, n_features)
     # target (batch, n_features)
-    if means.shape == sigma.shape:
-        dist = torch.distributions.Normal(means, sigma)
-    else:
-        dist = torch.distributions.MultivariateNormal(means, covariance_matrix=sigma)
+    dist = torch.distributions.Normal(means, sigma)
     return -dist.log_prob(target) # (batch, n_features)
 
 
 def modelID(cfg: argparse.Namespace) -> str:
     ''' Return a string that identifies the model. '''
-    return f"{cfg.model}-{cfg.hidden_dim}-{cfg.n_layers}-seed={cfg.seed}-loss={cfg.loss}-last={cfg.last}"
+    return f"{cfg.model}-{cfg.hidden_dim}-{cfg.n_layers}-seed={cfg.seed}-loss={cfg.loss}"
 
 
 def getCheckpointPath(epoch: int) -> Path:
@@ -134,8 +123,7 @@ def run(model: nn.Module,
         batch: dict,
         num_examples: int = 0,
         unpad: bool = True,
-        printer: Callable = print,
-        last: bool = False) -> torch.Tensor:
+        printer: Callable = print) -> torch.Tensor:
     ''' Run a batch through the model and return the loss. '''
     X = batch["predictors"].to(device)
     y = batch["y"].to(device)
@@ -146,7 +134,7 @@ def run(model: nn.Module,
     means, stds = model(inputs, lengths)
 
     # compute loss per batch and predictor (optionally over multiple model outputs per batch)
-    losses = lossWrapper(means, stds, targets, depths, lengths, last) # (batch, n_predictors)
+    losses = lossWrapper(means, stds, targets, depths) # (batch, n_predictors)
 
     # compute mean loss over all batches and predictors (optionally ignoring padded predictors)
     loss = maskLoss(losses, targets) if unpad else losses.mean()
@@ -154,12 +142,8 @@ def run(model: nn.Module,
     # optionally print some examples
     for i in range(num_examples):
         d = depths[i].item()
-        n = lengths[i].item()
         targets_i = targets[i, :d].detach().numpy()
-        if model.last:
-            outputs_i = means[i, :d].detach().numpy()
-        else:
-            outputs_i = means[i, n-1, :d].detach().numpy()
+        outputs_i = means[i, -1, :d].detach().numpy()
         printer(f"\n{console_width * '-'}")
         printer(f"Predicted : {outputs_i}")
         printer(f"True      : {targets_i}")
@@ -179,7 +163,7 @@ def train(model: nn.Module,
     iterator = tqdm(dataloader, desc=f"Epoch {epoch:02d} [T]")
     for batch in iterator:
         optimizer.zero_grad()
-        loss = run(model, batch, unpad=True, last=False)
+        loss = run(model, batch, unpad=True)
         loss.backward()
         optimizer.step()
         step += 1
@@ -200,7 +184,7 @@ def validate(model: nn.Module,
     iterator = tqdm(dataloader, desc=f"Epoch {epoch:02d} [V]")
     with torch.no_grad():
         for batch in iterator:
-            val_loss = run(model, batch, unpad=True, printer=iterator.write, last=True)
+            val_loss = run(model, batch, unpad=True, printer=iterator.write)
             writer.add_scalar("loss_val", val_loss.item(), step)
             iterator.set_postfix({"loss": val_loss.item()})
             step += 1
@@ -223,7 +207,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--d", type=int, default=15, help="Number of predictors (+ bias)")
     parser.add_argument("-e", "--epochs", type=int, default=500, help="Number of epochs to train")
     parser.add_argument("-b", "--batch-size", type=int, default=256, help="Batch size")
-    parser.add_argument("--last", dest="last", action="store_true", help="Use only last model output for loss")
 
     # model and loss
     parser.add_argument("-l", "--loss", type=str, default="lognormal", help="Loss function [mse, lognormal]")
@@ -260,8 +243,7 @@ if __name__ == "__main__":
                       hidden_size=cfg.hidden_dim,
                       n_layers=cfg.n_layers,
                       dropout=cfg.dropout,
-                      seed=cfg.seed,
-                      last=cfg.last).to(device)
+                      seed=cfg.seed).to(device)
         print(f"Model: {cfg.model.upper()} with {cfg.hidden_dim} hidden units, {cfg.n_layers} layer(s), {cfg.dropout} dropout")
     elif cfg.model == "transformer":
         model = TransformerDecoder(
@@ -271,8 +253,7 @@ if __name__ == "__main__":
                 n_heads=cfg.n_heads,
                 n_layers=cfg.n_layers,
                 dropout=cfg.dropout,
-                seed=cfg.seed,
-                last=cfg.last).to(device)
+                seed=cfg.seed).to(device)
         print(f"Model: Transformer with {cfg.hidden_dim} hidden units, " + \
                 f"{cfg.ff_dim} feedforward units, {cfg.n_heads} heads, {cfg.n_layers} layer(s), " + \
                 f"{cfg.dropout} dropout")
@@ -300,9 +281,8 @@ if __name__ == "__main__":
     else:
         print("No preloaded model found, starting from scratch.")
 
-    # start training loop
-    sfx = "(using only last model output for loss)" if cfg.last else ""
-    print(f"Training for {cfg.epochs + 1 - initial_epoch} epochs with {cfg.n_draws} datasets per epoch... {sfx}")
+    # training loop
+    print(f"Training for {cfg.epochs + 1 - initial_epoch} epochs with {cfg.n_draws} datasets per epoch...")
     fname = Path('data', 'dataset-val-fixed-sigma.pt')
     dataloader_val = getDataLoader(fname, cfg.batch_size)
     for epoch in range(initial_epoch, cfg.epochs + 1):
