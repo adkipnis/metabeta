@@ -59,7 +59,7 @@ def lossWrapper(means: torch.Tensor,
         if last: # only return loss for last legal output
             losses = losses[torch.arange(b), lengths-1]
         else:
-            n_min = 3 * d.unsqueeze(1)
+            n_min = 2 * d.unsqueeze(1)
             denominators = n - n_min
             mask = torch.arange(n).expand(b, n) < n_min
             losses[mask] = 0.
