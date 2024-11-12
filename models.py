@@ -93,10 +93,10 @@ class TransformerDecoder(Base):
 
     def causalMask(self, seq_len: int) -> torch.Tensor:
         ''' Create a mask, such that model bases outputs for X[b, i] on X[b, j] for j <= i '''
-        return torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool().to(self.device)
+        return torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
 
     def internal(self, x: torch.Tensor) -> torch.Tensor:
-        causal_mask = self.causalMask(x.size(1))
+        causal_mask = self.causalMask(x.size(1)).to(x.device)
         outputs = self.model(tgt=x, memory=x, tgt_mask=causal_mask) # (batch_size, seq_size, hidden_size)
         return outputs
 
