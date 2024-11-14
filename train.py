@@ -34,11 +34,18 @@ def getDataLoader(filename: Path, batch_size: int) -> DataLoader:
 
 def maskLoss(losses: torch.Tensor,
              y_true: torch.Tensor,
-             pad_val: float = 0.) -> torch.Tensor:
+             pad_val: float = 0.,
+             minimax: bool = False) -> torch.Tensor:
     ''' Compute the mean squared error between y_pred and y_true, ignoring padding values.'''
+    # losses (batch, n_features)
     mask = (y_true != pad_val).float()
-    masked_loss = losses * mask
-    return masked_loss.sum() / mask.sum() # Average over non-padded values
+    masked_losses = losses * mask
+    if minimax:
+        max_losses, _ = torch.max(masked_losses, dim=1)
+        loss = max_losses.mean()
+    else:
+        loss = masked_losses.sum() / mask.sum()
+    return loss # (,)
 
 
 def lossWrapper(means: torch.Tensor,
