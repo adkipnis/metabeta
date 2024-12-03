@@ -3,7 +3,7 @@ from tqdm import tqdm
 from pathlib import Path
 import argparse
 import torch
-from tasks import Task, LinearModel
+from tasks import FixedEffects
 from dataset import LMDataset
 
 
@@ -50,10 +50,9 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
     for _ in iterator:
         seed = sower.throw()
         d = getD(seed, max_predictors)
-        sigma_error = 0.1 # alternatively: getSigmaError(seed)
+        sigma = 0.1 # getSigmaError(seed)
         data_dist = getDataDist(seed)
-        task = Task(d, seed, sigma_error)
-        lm = LinearModel(task, data_dist)
+        lm = FixedEffects(d, sigma, data_dist)
         samples += [lm.sample(max_samples, seed)]
     return LMDataset(samples, max_samples, max_predictors)
 
@@ -67,10 +66,9 @@ def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: 
     for d in iterator:
         for _ in range(n_draws_per):
             seed = sower.throw()
-            sigma_error = 0.1 # alternatively: getSigmaError(seed)
+            sigma = 0.1
             data_dist = getDataDist(seed)
-            task = Task(d, seed, sigma_error)
-            lm = LinearModel(task, data_dist)
+            lm = FixedEffects(d, sigma, data_dist)
             samples += [lm.sample(max_samples, seed)]
     return LMDataset(samples, max_samples, max_predictors)
 
