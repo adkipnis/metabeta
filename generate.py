@@ -37,9 +37,9 @@ def getDataDist(seed: int) -> torch.distributions.Distribution:
     ''' Get a random distribution for the data.'''
     torch.manual_seed(seed)
     if torch.rand(1) > 0.5:
-        return torch.distributions.uniform.Uniform(-5., 5.)
+        return torch.distributions.uniform.Uniform(-10., 10.)
     else:
-        return torch.distributions.normal.Normal(0., 3.)
+        return torch.distributions.normal.Normal(0., 5.)
 
 
 def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: Sower) -> LMDataset:
