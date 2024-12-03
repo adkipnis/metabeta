@@ -37,14 +37,20 @@ class Task:
         raise NotImplementedError
 
 
+class FixedEffects(Task):
+    def __init__(self, n_predictors: int, sigma_error: float, data_dist: torch.distributions.Distribution):
+        super().__init__(n_predictors, sigma_error, data_dist)
+
     def sample(self, n_samples: int, seed: int) -> Dict[str, torch.Tensor]:
         x = self.sampleFeatures(n_samples, seed)
-        y = self.predict(x, seed).unsqueeze(1)
+        betas = self.sampleBetas(seed)
+        eps = self.sampleNoise(n_samples, seed)
+        y = x @ betas + eps
         return {
                 "predictors": x,
-                "y": y,
-                "params": self.weights.unsqueeze(-1), # torch.cat([self.weights, self.sigma])
+                "y": y.unsqueeze(-1),
+                "params": betas.unsqueeze(-1),
                 "seed": torch.tensor(seed),
                 }
-
+    
 
