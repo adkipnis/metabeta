@@ -89,22 +89,22 @@ def modelID(cfg: argparse.Namespace) -> str:
     return f"{cfg.model}-{cfg.hidden_dim}-{cfg.n_layers}-seed={cfg.seed}-loss={cfg.loss}"
 
 
-def getCheckpointPath(epoch: int) -> Path:
+def getCheckpointPath(iteration: int) -> Path:
     ''' Get the filename for the model checkpoints. '''
     model_id = modelID(cfg)
-    model_filename = f"{model_id}-{epoch:02d}.pt"
+    model_filename = f"{model_id}-{iteration:02d}.pt"
     return Path(cfg.model_folder, model_filename)
 
 
 def save(model: nn.Module,
          optimizer: schedulefree.AdamWScheduleFree,
-         current_epoch: int,
+         current_iteration: int,
          current_global_step: int) -> None:
     """ Save the model and optimizer state. """
-    model_filename = getCheckpointPath(current_epoch)
+    model_filename = getCheckpointPath(current_iteration)
     os.makedirs(cfg.model_folder, exist_ok=True)
     torch.save({
-        'epoch': current_epoch,
+        'iteration': current_iteration,
         'global_step': current_global_step,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
@@ -113,17 +113,17 @@ def save(model: nn.Module,
 
 def load(model: nn.Module,
          optimizer: schedulefree.AdamWScheduleFree,
-         initial_epoch: int) -> Tuple[int, int]:
+         initial_iteration: int) -> Tuple[int, int]:
     """ Load the model and optimizer state from a previous run,
-    returning the initial epoch and seed. """
-    model_filename = getCheckpointPath(initial_epoch)
+    returning the initial iteration and seed. """
+    model_filename = getCheckpointPath(initial_iteration)
     print(f"Loading checkpoint from {model_filename}")
     state = torch.load(model_filename, weights_only=False)
     model.load_state_dict(state["model_state_dict"])
-    initial_epoch = state["epoch"] + 1
+    initial_iteration = state["iteration"] + 1
     optimizer.load_state_dict(state["optimizer_state_dict"])
     global_step = state["global_step"]
-    return initial_epoch, global_step
+    return initial_iteration, global_step
 
 
 def run(model: nn.Module,
@@ -161,12 +161,12 @@ def train(model: nn.Module,
           optimizer: schedulefree.AdamWScheduleFree,
           dataloader: DataLoader,
           writer: SummaryWriter,
-          epoch: int,
+          iteration: int,
           step: int) -> int:
-    ''' Train the model for a single epoch. '''
+    ''' Train the model for a single iteration. '''
     model.train()
     optimizer.train()
-    iterator = tqdm(dataloader, desc=f"Epoch {epoch:02d} [T]")
+    iterator = tqdm(dataloader, desc=f"iteration {iteration:02d} [T]")
     for batch in iterator:
         optimizer.zero_grad()
         loss = run(model, batch, unpad=True)
@@ -182,19 +182,19 @@ def validate(model: nn.Module,
              optimizer: schedulefree.AdamWScheduleFree,
              dataloader: DataLoader,
              writer: SummaryWriter,
-             epoch: int,
+             iteration: int,
              step: int) -> int:
-    ''' Validate the model for a single epoch. '''
+    ''' Validate the model for a single iteration. '''
     model.eval()
     optimizer.eval()
-    iterator = tqdm(dataloader, desc=f"Epoch {epoch:02d} [V]")
+    iterator = tqdm(dataloader, desc=f"iteration {iteration:02d} [V]")
     with torch.no_grad():
         for batch in iterator:
             val_loss = run(model, batch, unpad=True, printer=iterator.write)
             writer.add_scalar("loss_val", val_loss.item(), step)
             iterator.set_postfix({"loss": val_loss.item()})
             step += 1
-        if epoch % 5 == 0:
+        if iteration % 5 == 0:
             run(model, batch, unpad=True, num_examples=2) # type: ignore
     return step
 
@@ -205,13 +205,13 @@ def setup() -> argparse.Namespace:
     # misc
     parser.add_argument("-s", "--seed", type=int, default=0, help="Model seed")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use [cuda, cpu]")
-    parser.add_argument("-p", "--preload", type=int, default=0, help="Preload model from epoch #p")
+    parser.add_argument("-p", "--preload", type=int, default=0, help="Preload model from iteration #p")
     parser.add_argument("--model-folder", type=str, default="checkpoints", help="Model folder")
 
     # data
-    parser.add_argument("--n-draws", type=int, default=int(1e4), help="Number of datasets per epoch")
+    parser.add_argument("--n-draws", type=int, default=int(1e4), help="Number of datasets per iteration")
     parser.add_argument("--d", type=int, default=15, help="Number of predictors (+ bias)")
-    parser.add_argument("-e", "--epochs", type=int, default=500, help="Number of epochs to train")
+    parser.add_argument("-e", "--iterations", type=int, default=500, help="Number of iterations to train")
     parser.add_argument("-b", "--batch-size", type=int, default=128, help="Batch size")
 
     # model and loss
@@ -280,21 +280,21 @@ if __name__ == "__main__":
     print(f"Number of parameters: {num_params}, Loss: {cfg.loss}, Learning rate: {cfg.lr}, Epsilon: {cfg.eps}, Seed: {cfg.seed}, Device: {device}")
 
     # optionally preload a model
-    initial_epoch, global_step, validation_step = 1, 0, 0
+    initial_iteration, global_step, validation_step = 1, 0, 0
     if cfg.preload:
-        initial_epoch, global_step = load(model, optimizer, cfg.preload)
-        print(f"Preloaded model from epoch {cfg.preload}, starting at epoch {initial_epoch}.")
+        initial_iteration, global_step = load(model, optimizer, cfg.preload)
+        print(f"Preloaded model from iteration {cfg.preload}, starting at iteration {initial_iteration}.")
     else:
         print("No preloaded model found, starting from scratch.")
 
     # training loop
-    print(f"Training for {cfg.epochs + 1 - initial_epoch} epochs with {cfg.n_draws} datasets per epoch...")
+    print(f"Training for {cfg.iterations + 1 - initial_iteration} iterations with {cfg.n_draws} datasets per iteration...")
     fname = Path('data', 'dataset-val-fixed-sigma.pt')
     dataloader_val = getDataLoader(fname, cfg.batch_size)
-    for epoch in range(initial_epoch, cfg.epochs + 1):
-        fname = dsFilename(cfg.n_draws, epoch, "fixed-sigma")
+    for iteration in range(initial_iteration, cfg.iterations + 1):
+        fname = dsFilename(cfg.n_draws, iteration, "fixed-sigma")
         dataloader_train = getDataLoader(fname, cfg.batch_size)
-        global_step = train(model, optimizer, dataloader_train, writer, epoch, global_step)
-        validation_step = validate(model, optimizer, dataloader_val, writer, epoch, validation_step)
-        save(model, optimizer, epoch, global_step)
+        global_step = train(model, optimizer, dataloader_train, writer, iteration, global_step)
+        validation_step = validate(model, optimizer, dataloader_val, writer, iteration, validation_step)
+        save(model, optimizer, iteration, global_step)
  
