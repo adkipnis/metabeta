@@ -10,20 +10,12 @@ def padTensor(tensor: torch.Tensor, shape: Tuple[int, int], pad_val: int = 0) ->
     return padded
 
 
-def getN(n_predictors: int, max_samples: int) -> int:
-    ''' Get a random number of samples to draw from a linear model, depending on the number of predictors.'''
-    low = 3 * (n_predictors + 1)
-    n = torch.randint(low, max_samples, (1,))
-    return int(n.item())
-
-
 class LMDataset(Dataset):
     def __init__(self, data: List[dict], max_samples: int, max_predictors: int) -> None:
         self.data = data
         self.max_samples = max_samples
         self.max_predictors = max_predictors
         self.seeds = torch.tensor([item['seed'] for item in data])
-        self.n = torch.tensor([self.assignN(item) for item in data])
 
     def __len__(self) -> int:
        return len(self.data)
@@ -39,16 +31,9 @@ class LMDataset(Dataset):
             'd': predictors.shape[1],
         }
 
-    def assignN(self, item: dict) -> int:
-        d = item['predictors'].shape[1]
-        return getN(d, self.max_samples)
-
     def __getitem__(self, idx) -> dict:
         data = self.data[idx]
-        out = self.preprocess(data)
-        n = self.n[idx]
-        out.update({'n': n})
-        return out
+        return self.preprocess(data)
 
     def randomSplit(self, split: float = 0.9, shuffle: bool = False) -> Tuple['LMDataset', 'LMDataset']:
         ''' Split the dataset into two parts, randomly. '''
