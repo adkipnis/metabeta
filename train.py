@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import csv
 from datetime import datetime
 from typing import Tuple, Callable
 from tqdm import tqdm
@@ -11,6 +12,27 @@ from torch.utils.data import DataLoader
 import schedulefree
 from models import GRU, LSTM, TransformerDecoder
 from generate import dsFilename
+
+
+class Logger:
+    def __init__(self, path: Path) -> None:
+        self.trunk = path
+        self.trunk.mkdir(parents=True, exist_ok=True)
+        self.init("loss_train")
+        self.init("loss_val")
+
+    def init(self, losstype: str) -> None:
+        fname = Path(self.trunk, f"{losstype}.csv")
+        if not os.path.exists(fname):
+            with open(fname, 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['iteration', 'step', 'loss'])
+
+    def write(self, iteration: int, step: int, loss: float, losstype: str) -> None:
+        fname = Path(self.trunk, f"{losstype}.csv")
+        with open(fname, 'a', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow([iteration, step, loss])
 
 
 def getConsoleWidth() -> int:
