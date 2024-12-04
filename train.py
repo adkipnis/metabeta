@@ -319,9 +319,9 @@ if __name__ == "__main__":
     fname = Path('data', 'dataset-val.pt')
     dataloader_val = getDataLoader(fname, 100)
     for iteration in range(initial_iteration, cfg.iterations + 1):
-        fname = dsFilename(cfg.n_draws, iteration, "fixed-sigma")
+        fname = dsFilename(cfg.n_draws, iteration)
         dataloader_train = getDataLoader(fname, cfg.batch_size)
-        global_step = train(model, optimizer, dataloader_train, writer, iteration, global_step)
-        validation_step = validate(model, optimizer, dataloader_val, writer, iteration, validation_step)
+        global_step = train(model, optimizer, dataloader_train, writer, logger, iteration, global_step)
+        validation_step = validate(model, optimizer, dataloader_val, writer, logger, iteration, validation_step)
         save(model, optimizer, iteration, global_step)
  
