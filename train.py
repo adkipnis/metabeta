@@ -315,9 +315,9 @@ if __name__ == "__main__":
         print("No preloaded model found, starting from scratch.")
 
     # training loop
-    print(f"Training for {cfg.iterations + 1 - initial_iteration} iterations with {cfg.n_draws} datasets per iteration...")
-    fname = Path('data', 'dataset-val-fixed-sigma.pt')
-    dataloader_val = getDataLoader(fname, cfg.batch_size)
+    print(f"Training for {cfg.iterations + 1 - initial_iteration} iterations with {cfg.n_draws} datasets per iteration and a batch size of {cfg.batch_size}...")
+    fname = Path('data', 'dataset-val.pt')
+    dataloader_val = getDataLoader(fname, 100)
     for iteration in range(initial_iteration, cfg.iterations + 1):
         fname = dsFilename(cfg.n_draws, iteration, "fixed-sigma")
         dataloader_train = getDataLoader(fname, cfg.batch_size)
