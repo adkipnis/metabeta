@@ -113,7 +113,7 @@ if __name__ == "__main__":
         # generate validation dataset
         print(f'Generating validation dataset of {n_draws_val * (max_predictors + 1)} samples')
         dataset = generateBalancedDataset(n_draws_val, max_samples, max_predictors, sower)
-        filename = Path('data', 'dataset-val-fixed-sigma.pt')
+        filename = Path('data', 'dataset-val.pt')
         torch.save(dataset, filename)
     else:
         # reset sower if starting from a different iteration
@@ -125,7 +125,7 @@ if __name__ == "__main__":
     print(f'Generating {iterations} training datasets of {n_draws} samples each')
     for part in range(start, iterations + 1):
         dataset = generateDataset(n_draws, max_samples, max_predictors, sower)
-        filename = dsFilename(n_draws, part, "fixed-sigma")
+        filename = dsFilename(n_draws, part)
         torch.save(dataset, filename)
         print(f'Saved dataset to {filename}')
 
