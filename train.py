@@ -108,7 +108,7 @@ def logNormalLoss(means: torch.Tensor,
 
 def modelID(cfg: argparse.Namespace) -> str:
     ''' Return a string that identifies the model. '''
-    return f"{cfg.model}-{cfg.hidden_dim}-{cfg.n_layers}-seed={cfg.seed}-loss={cfg.loss}"
+    return f"{cfg.model}-{cfg.hidden_dim}-{cfg.ff_dim}-{cfg.n_layers}-seed={cfg.seed}-loss={cfg.loss}"
 
 
 def getCheckpointPath(iteration: int) -> Path:
