@@ -183,6 +183,7 @@ def train(model: nn.Module,
           optimizer: schedulefree.AdamWScheduleFree,
           dataloader: DataLoader,
           writer: SummaryWriter,
+          logger: Logger,
           iteration: int,
           step: int) -> int:
     ''' Train the model for a single iteration. '''
@@ -194,9 +195,10 @@ def train(model: nn.Module,
         loss = run(model, batch, unpad=True)
         loss.backward()
         optimizer.step()
-        step += 1
         writer.add_scalar("loss_train", loss.item(), step)
         iterator.set_postfix({"loss": loss.item()})
+        logger.write(iteration, step, loss.item(), "loss_train")
+        step += 1
     return step
 
 
@@ -204,6 +206,7 @@ def validate(model: nn.Module,
              optimizer: schedulefree.AdamWScheduleFree,
              dataloader: DataLoader,
              writer: SummaryWriter,
+             logger: Logger,
              iteration: int,
              step: int) -> int:
     ''' Validate the model for a single iteration. '''
@@ -215,6 +218,7 @@ def validate(model: nn.Module,
             val_loss = run(model, batch, unpad=True, printer=iterator.write)
             writer.add_scalar("loss_val", val_loss.item(), step)
             iterator.set_postfix({"loss": val_loss.item()})
+            logger.write(iteration, step, val_loss.item(), "loss_val")
             step += 1
         if iteration % 5 == 0:
             run(model, batch, unpad=True, num_examples=2) # type: ignore
