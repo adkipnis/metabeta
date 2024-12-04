@@ -19,7 +19,12 @@ class Task:
 
         # error distribution
         self.sigma_error = sigma_error
-        self.noise_dist = torch.distributions.Normal(0, self.sigma_error)
+        self.noise_dist = torch.distributions.Normal(0., self.sigma_error)
+        
+    def standardize(self, x: torch.Tensor) -> torch.Tensor:
+        mean = torch.mean(x, dim=0)
+        sd = torch.std(x, dim=0)
+        return (x-mean)/(sd + 1e-8)
 
     def sampleBetas(self, seed: int) -> torch.Tensor:
         torch.manual_seed(seed)
@@ -28,6 +33,7 @@ class Task:
     def sampleFeatures(self, n_samples: int, seed: int) -> torch.Tensor:
         torch.manual_seed(seed)
         x = self.data_dist.sample((n_samples, self.n_predictors)) # type: ignore
+        x = self.standardize(x)
         intercept = torch.ones(n_samples, 1)
         return torch.cat([intercept, x], dim=1)
 
