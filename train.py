@@ -303,6 +303,7 @@ if __name__ == "__main__":
         raise ValueError(f"Loss {cfg.loss} not recognized.")
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr, eps=cfg.eps)
     writer = SummaryWriter(Path("runs", modelID(cfg), timestamp))
+    logger = Logger(Path("losses", modelID(cfg), timestamp))
     print(f"Number of parameters: {num_params}, Loss: {cfg.loss}, Learning rate: {cfg.lr}, Epsilon: {cfg.eps}, Seed: {cfg.seed}, Device: {device}")
 
     # optionally preload a model
