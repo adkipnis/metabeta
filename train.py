@@ -238,7 +238,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--n-draws", type=int, default=int(1e4), help="Number of datasets per iteration")
     parser.add_argument("--d", type=int, default=15, help="Number of predictors (+ bias)")
     parser.add_argument("-e", "--iterations", type=int, default=500, help="Number of iterations to train")
-    parser.add_argument("-b", "--batch-size", type=int, default=128, help="Batch size")
+    parser.add_argument("-b", "--batch-size", type=int, default=100, help="Batch size")
 
     # model and loss
     parser.add_argument("-l", "--loss", type=str, default="lognormal", help="Loss function [mse, lognormal]")
