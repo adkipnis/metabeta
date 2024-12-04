@@ -1,3 +1,4 @@
+import math
 import torch
 from typing import Dict
 
@@ -13,7 +14,8 @@ class Task:
         self.data_dist = data_dist
 
         # beta distribution
-        self.beta_dist = torch.distributions.Normal(0, 5)
+        
+        self.beta_dist = torch.distributions.Normal(0., math.sqrt(5))
 
         # error distribution
         self.sigma_error = sigma_error
