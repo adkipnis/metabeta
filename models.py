@@ -18,6 +18,7 @@ class Base(nn.Module):
         self.dropout = dropout
         self.means = nn.Linear(hidden_size, self.output_size)
         self.logstds = nn.Linear(hidden_size, self.output_size)
+        self.lognoise = nn.Linear(hidden_size, 2)
         self.seed = seed
 
     def initializeWeights(self) -> None:
@@ -31,12 +32,13 @@ class Base(nn.Module):
         raise NotImplementedError
 
     def forward(self, x: torch.Tensor # (batch_size, seq_size, input_size)
-                ) -> Tuple[torch.Tensor, torch.Tensor]:
+                ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
         outputs = self.internal(x) # (batch_size, seq_size, hidden_size)
         means = self.means(outputs) # (batch_size, seq_size, output_size)
         logstds = self.logstds(outputs) # (batch_size, seq_size, output_size)
-        return means, logstds.exp()
+        log_alpha_beta = self.lognoise(outputs) # (batch_size, seq_size, 2)
+        return means, logstds.exp(), log_alpha_beta.exp()
 
 
 class RNNBase(Base):
