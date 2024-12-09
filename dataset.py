@@ -28,6 +28,7 @@ class LMDataset(Dataset):
             'predictors': padTensor(predictors, (self.max_samples, self.max_predictors + 1)),
             'y': padTensor(y, (self.max_samples, 1)),
             'params': padTensor(params, (self.max_predictors + 1, 1)),
+            'sigma_error': item['sigma_error'],
             'd': predictors.shape[1],
         }
 
