@@ -174,13 +174,20 @@ def run(model: nn.Module,
     ''' Run a batch through the model and return the loss. '''
     X = batch["predictors"].to(device)
     y = batch["y"].to(device)
-    targets = batch["params"].squeeze(-1).float()
+    beta = batch["params"].squeeze(-1).float()
+    noise_std = batch["sigma_error"].unsqueeze(-1).float()
     depths = batch["d"]
     inputs = torch.cat([X, y], dim=-1)
-    means, stds = model(inputs)
+    means, stds, alpha_beta = model(inputs)
 
-    # compute loss per batch and predictor (optionally over multiple model outputs per batch)
-    losses = lossWrapper(means, stds, targets, depths) # (batch, n_predictors)
+    # compute beta parameter loss per batch and predictor (optionally over multiple model outputs per batch)
+    losses = betaLossWrapper(means, stds, beta, depths) # (batch, n_predictors)
+    targets = beta
+
+    # compute noise parameter loss per batch
+    losses_noise = noiseLossWrapper(alpha_beta, noise_std, depths) # (batch, 1)
+    losses = torch.cat([losses, losses_noise], dim=-1)
+    targets = torch.cat([targets, noise_std], dim=-1)
 
     # compute mean loss over all batches and predictors (optionally ignoring padded predictors)
     loss = maskLoss(losses, targets) if unpad else losses.mean()
@@ -188,7 +195,7 @@ def run(model: nn.Module,
     # optionally print some examples
     for i in range(num_examples):
         d = depths[i].item()
-        targets_i = targets[i, :d].detach().numpy()
+        targets_i = beta[i, :d].detach().numpy()
         outputs_i = means[i, -1, :d].detach().numpy()
         printer(f"\n{console_width * '-'}")
         printer(f"Predicted : {outputs_i}")
