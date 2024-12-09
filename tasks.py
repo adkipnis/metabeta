@@ -5,7 +5,7 @@ from typing import Dict
 class Task:
     def __init__(self,
                  n_predictors: int, # without intercept
-                 sigma_error: float,
+                 sigma_error: float, # standard deviation of the additive noise
                  data_dist: torch.distributions.Distribution,
                  ):
 
@@ -57,6 +57,7 @@ class FixedEffects(Task):
                 "predictors": x,
                 "y": y,
                 "params": betas,
+                "sigma_error": torch.tensor(self.sigma_error),
                 "seed": torch.tensor(seed),
                 }
     
