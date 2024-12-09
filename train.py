@@ -104,14 +104,24 @@ def noiseLossWrapper(alpha_betas: torch.Tensor,
 
 
 def logNormalLoss(means: torch.Tensor,
-                  sigma: torch.Tensor,
+                  stds: torch.Tensor,
                   target: torch.Tensor) -> torch.Tensor:
-    ''' Compute the negative log probability of target under the proposal distribution. '''
+    ''' Compute the negative log density of betas (target) under the proposed normal distribution. '''
     # means (batch, n_features)
     # sigma (batch, n_features)
     # target (batch, n_features)
-    dist = torch.distributions.Normal(means, sigma)
-    return -dist.log_prob(target) # (batch, n_features)
+    proposal = torch.distributions.Normal(means, stds)
+    return -proposal.log_prob(target) # (batch, n, d)
+
+
+def logInvGammaLoss(alpha_betas: torch.Tensor,
+                    target: torch.Tensor) -> torch.Tensor:
+    ''' Compute the negative log density of the noise std (target) under the proposed inverse gamma distribution. '''
+    # alpha_betas (batch, n, 2)
+    # target (batch, n, 1)
+    alpha, beta = alpha_betas[:,:,0], alpha_betas[:,:,1]
+    proposal = torch.distributions.inverse_gamma.InverseGamma(alpha, beta)
+    return -proposal.log_prob(target) # (batch, n)
 
 
 def modelID(cfg: argparse.Namespace) -> str:
