@@ -2,6 +2,7 @@ import os
 from tqdm import tqdm
 from pathlib import Path
 import argparse
+import math
 import torch
 from tasks import FixedEffects
 from dataset import LMDataset
@@ -25,12 +26,12 @@ def getD(seed: int, max_predictors: int) -> int:
     return int(d.item())
 
 
-def getSigmaError(seed: int, alpha: float = 2.75, beta: float = 1., clip: float = 3., eps: float = 1e-6) -> float:
-    ''' Get a random error term for a linear model.'''
+def getSigmaError(seed: int, alpha: float = 2.75, beta: float = 1., clip: float = 3.) -> float:
+    ''' Get the noise standard deviation '''
     torch.manual_seed(seed)
-    gamma = torch.distributions.gamma.Gamma(alpha, beta).sample()
-    sigma = 1. / (gamma + eps)
-    return min(sigma.item(), clip)
+    sigma_squared = torch.distributions.inverse_gamma.InverseGamma(alpha, beta).sample()
+    sigma = math.sqrt(sigma_squared.item()) # type: ignore
+    return min(sigma, clip) 
 
 
 def getDataDist(seed: int) -> torch.distributions.Distribution:
