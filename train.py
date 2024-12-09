@@ -55,12 +55,12 @@ def getDataLoader(filename: Path, batch_size: int) -> DataLoader:
 
 
 def maskLoss(losses: torch.Tensor,
-             y_true: torch.Tensor,
+             targets: torch.Tensor,
              pad_val: float = 0.,
              minimax: bool = False) -> torch.Tensor:
-    ''' Compute the mean squared error between y_pred and y_true, ignoring padding values.'''
-    # losses (batch, n_features)
-    mask = (y_true != pad_val).float()
+    ''' Ignore padding values before aggregating the losses over batches and dims'''
+    # losses (batch, d)
+    mask = (targets != pad_val).float()
     masked_losses = losses * mask
     if minimax:
         max_losses, _ = torch.max(masked_losses, dim=1)
@@ -70,22 +70,21 @@ def maskLoss(losses: torch.Tensor,
     return loss # (,)
 
 
-def lossWrapper(means: torch.Tensor,
-                sigma: torch.Tensor,
-                target: torch.Tensor,
-                d: torch.Tensor) -> torch.Tensor:
-    ''' Wrapper for the loss function.
+def betaLossWrapper(means: torch.Tensor,
+                    sigma: torch.Tensor,
+                    target: torch.Tensor,
+                    d: torch.Tensor) -> torch.Tensor:
+    ''' Wrapper for the beta loss function.
     Handles the case 3D tensors (where the second dimension is the number of subjects = seq_size).
     Drop the losses for datasets that have fewer than n = 2 * number of features.'''
-    target = target.unsqueeze(1).expand_as(means)
-    losses = lf(means, sigma, target)
     b, n, _ = means.shape
-    n_min = 2 * d.unsqueeze(1)
-    denominators = n - n_min
-    mask = torch.arange(n).expand(b, n) < n_min
+    target = target.unsqueeze(1).expand_as(means)
+    losses = lf(means, sigma, target) # (b, n, d)
+    n_min = 2 * d.unsqueeze(1) # (b, 1)
+    denominators = n - n_min # (b, 1)
+    mask = torch.arange(n).expand(b, n) < n_min # (b, n)
     losses[mask] = 0.
     losses = losses.sum(dim=1) / denominators
-    return losses # (batch, n_features)
 
 
 def mseWrapper(means: torch.Tensor,
