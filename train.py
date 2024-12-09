@@ -321,9 +321,10 @@ if __name__ == "__main__":
     # loss, optimizer, writer
     if cfg.loss == "mse":
         mse = nn.MSELoss(reduction='none')
-        lf = mseWrapper
+        lf = lambda means, stds, targets: mse(means, targets)
     elif cfg.loss == "lognormal":
         lf = logNormalLoss
+        lf_noise = logInvGammaLoss
     else:
         raise ValueError(f"Loss {cfg.loss} not recognized.")
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr, eps=cfg.eps)
