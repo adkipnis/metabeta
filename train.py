@@ -85,13 +85,22 @@ def betaLossWrapper(means: torch.Tensor,
     mask = torch.arange(n).expand(b, n) < n_min # (b, n)
     losses[mask] = 0.
     losses = losses.sum(dim=1) / denominators
+    return losses # (batch, d)
 
 
-def mseWrapper(means: torch.Tensor,
-               sigma: torch.Tensor,
-               target: torch.Tensor) -> torch.Tensor:
-    ''' Wrapper for the mean squared error loss with reduction=None. '''
-    return mse(means, target) # (batch, n_features)
+def noiseLossWrapper(alpha_betas: torch.Tensor,
+                     target: torch.Tensor,
+                     d: torch.Tensor) -> torch.Tensor:
+    ''' Wrapper for the noise loss function. ''' 
+    b, n, _ = alpha_betas.shape
+    target = target.expand((b,n))
+    losses = lf_noise(alpha_betas, target).unsqueeze(-1)
+    n_min = 2 * d.unsqueeze(-1)
+    denominators = n - n_min
+    mask = torch.arange(n) < n_min
+    losses[mask] = 0.
+    losses = losses.sum(dim=1) / denominators
+    return losses # (batch, 1)
 
 
 def logNormalLoss(means: torch.Tensor,
