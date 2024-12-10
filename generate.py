@@ -54,7 +54,7 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
         sigma = getSigmaError(seed)
         data_dist = getDataDist(seed)
         lm = FixedEffects(d, sigma, data_dist)
-        samples += [lm.sample(max_samples, seed)]
+        samples += [lm.sample(max_samples, seed, include_posterior=False)]
     return LMDataset(samples, max_samples, max_predictors)
 
 
@@ -70,7 +70,7 @@ def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: 
             sigma = getSigmaError(seed)
             data_dist = getDataDist(seed)
             lm = FixedEffects(d, sigma, data_dist)
-            samples += [lm.sample(max_samples, seed)]
+            samples += [lm.sample(max_samples, seed, include_posterior=True)]
     return LMDataset(samples, max_samples, max_predictors)
 
 
