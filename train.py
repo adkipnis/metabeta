@@ -72,13 +72,13 @@ def maskLoss(losses: torch.Tensor,
 
 def betaLossWrapper(means: torch.Tensor,
                     sigma: torch.Tensor,
-                    target: torch.Tensor,
+                    betas: torch.Tensor,
                     d: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the beta loss function.
     Handles the case 3D tensors (where the second dimension is the number of subjects = seq_size).
     Drop the losses for datasets that have fewer than n = 2 * number of features.'''
     b, n, _ = means.shape
-    target = target.unsqueeze(1).expand_as(means)
+    target = betas.unsqueeze(1).expand_as(means)
     losses = lf(means, sigma, target) # (b, n, d)
     n_min = 2 * d.unsqueeze(1) # (b, 1)
     denominators = n - n_min # (b, 1)
