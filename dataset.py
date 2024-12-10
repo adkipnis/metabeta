@@ -3,10 +3,15 @@ import torch
 from torch.utils.data import Dataset
 
 
-def padTensor(tensor: torch.Tensor, shape: Tuple[int, int], pad_val: int = 0) -> torch.Tensor:
+def padTensor(tensor: torch.Tensor, shape: tuple, pad_val: int = 0) -> torch.Tensor:
     ''' Pad a tensor with a constant value. '''
     padded = torch.full(shape, pad_val, dtype=torch.float32)
-    padded[:tensor.shape[0], :tensor.shape[1]] = tensor
+    if len(shape) == 2:
+        padded[:tensor.shape[0], :tensor.shape[1]] = tensor
+    elif len(shape) == 3:
+        padded[:tensor.shape[0], :tensor.shape[1], :tensor.shape[2]] = tensor
+    else:
+        raise Exception("tensor must be 2d or 3d") 
     return padded
 
 
