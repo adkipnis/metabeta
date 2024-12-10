@@ -181,9 +181,9 @@ def run(model: nn.Module,
         unpad: bool = True,
         printer: Callable = print) -> torch.Tensor:
     ''' Run a batch through the model and return the loss. '''
-    X = batch["predictors"].to(device)
+    X = batch["X"].to(device)
     y = batch["y"].to(device)
-    beta = batch["params"].squeeze(-1).float()
+    beta = batch["beta"].squeeze(-1).float()
     noise_std = batch["sigma_error"].unsqueeze(-1).float()
     depths = batch["d"]
     inputs = torch.cat([X, y], dim=-1)
