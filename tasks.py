@@ -57,6 +57,11 @@ class Task:
         lower = torch.linalg.cholesky(L_n)
         S_n = torch.cholesky_inverse(lower)
         return S_n
+
+    def _posteriorMean(self, x: torch.Tensor, y: torch.Tensor, S_n: torch.Tensor) -> torch.Tensor:
+        mu = S_n @ (x.T @ y)
+        return mu.squeeze(-1)
+
 class FixedEffects(Task):
     def __init__(self, n_predictors: int, sigma_error: float, data_dist: torch.distributions.Distribution):
         super().__init__(n_predictors, sigma_error, data_dist)
