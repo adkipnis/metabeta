@@ -26,16 +26,26 @@ class LMDataset(Dataset):
        return len(self.data)
 
     def preprocess(self, item: dict) -> dict:
-        predictors = item['predictors']
+        d = self.max_predictors + 1
+        n = self.max_samples
+        X = item['X']
         y = item['y']
-        params = item['params']
-        return {
-            'predictors': padTensor(predictors, (self.max_samples, self.max_predictors + 1)),
-            'y': padTensor(y, (self.max_samples, 1)),
-            'params': padTensor(params, (self.max_predictors + 1, 1)),
-            'sigma_error': item['sigma_error'],
-            'd': predictors.shape[1],
-        }
+        beta = item['beta']
+        out = {'X': padTensor(X, (n, d)),
+               'y': padTensor(y, (n, 1)),
+               'beta': padTensor(beta, (d, 1)),
+               'sigma_error': item['sigma_error'],
+               'd': X.shape[1],}
+
+        # optionally include analytical posterior
+        if 'mu_n' in item:
+            mu_n = item['mu_n']
+            Sigma_n = item['Sigma_n']
+            out.update({
+                'mu_n': padTensor(mu_n, (n, d)),
+                'Sigma_n': padTensor(Sigma_n, (n, d, d)),})
+
+        return out
 
     def __getitem__(self, idx) -> dict:
         data = self.data[idx]
