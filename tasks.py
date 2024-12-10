@@ -98,3 +98,22 @@ class FixedEffects(Task):
         return out
 
 
+def main():
+    seed = 0
+    n_predictors = 2
+    n_obs = 20
+    noise_std = 0.1
+    datadist = torch.distributions.Normal(0., 3.)
+    fe = FixedEffects(n_predictors, noise_std, datadist)
+    ds = fe.sample(n_obs, seed)
+    X, y = ds["X"], ds["y"]
+    # mu_n, Sigma_n = fe.posteriorParams(X, y)
+    # print(f"true:\n{ds['params']}")
+    # print(f"post. mean:\n{mu_n}")
+    # print(f"post. cov:\n{Sigma_n}")
+    mus, sigmas = fe.allPosteriorParams(X, y)
+    print(mus)
+
+if __name__ == "__main__":
+    main()
+
