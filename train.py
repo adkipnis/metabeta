@@ -89,11 +89,12 @@ def betaLossWrapper(means: torch.Tensor,
 
 
 def noiseLossWrapper(alpha_betas: torch.Tensor,
-                     target: torch.Tensor,
+                     noise_std: torch.Tensor,
                      d: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the noise loss function. ''' 
     b, n, _ = alpha_betas.shape
-    target = target.expand((b,n))
+    noise_var = torch.square(noise_std)
+    target = noise_var.expand((b,n))
     losses = lf_noise(alpha_betas, target).unsqueeze(-1)
     n_min = 2 * d.unsqueeze(-1)
     denominators = n - n_min
