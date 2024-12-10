@@ -20,6 +20,7 @@ class Logger:
         self.trunk.mkdir(parents=True, exist_ok=True)
         self.init("loss_train")
         self.init("loss_val")
+        self.init("loss_kl")
 
     def init(self, losstype: str) -> None:
         fname = Path(self.trunk, f"{losstype}.csv")
