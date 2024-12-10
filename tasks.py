@@ -52,6 +52,11 @@ class Task:
         S = x.T @ x
         return L_0 + S
 
+    def _posteriorCovariance(self, x: torch.Tensor) -> torch.Tensor:
+        L_n = self._posteriorPrecision(x)
+        lower = torch.linalg.cholesky(L_n)
+        S_n = torch.cholesky_inverse(lower)
+        return S_n
 class FixedEffects(Task):
     def __init__(self, n_predictors: int, sigma_error: float, data_dist: torch.distributions.Distribution):
         super().__init__(n_predictors, sigma_error, data_dist)
