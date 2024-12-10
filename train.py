@@ -284,14 +284,18 @@ def validate(model: nn.Module,
     iterator = tqdm(dataloader, desc=f"iteration {iteration:02d} [V]")
     with torch.no_grad():
         for batch in iterator:
-            val_loss = run(model, batch, unpad=True, printer=iterator.write)
-            writer.add_scalar("loss_val", val_loss.item(), step)
-            iterator.set_postfix({"loss": val_loss.item()})
-            logger.write(iteration, step, val_loss.item(), "loss_val")
+            loss_val = run(model, batch, unpad=True, printer=iterator.write)
+            loss_kl = compare(model, batch)
+            iterator.set_postfix({"loss": loss_val.item()})
+            writer.add_scalar("loss_val", loss_val.item(), step)
+            writer.add_scalar("loss_kl", loss_kl.item(), step)
+            logger.write(iteration, step, loss_val.item(), "loss_val")
+            logger.write(iteration, step, loss_kl.item(), "loss_kl")
             step += 1
         if iteration % 5 == 0:
             run(model, batch, unpad=True, num_examples=2) # type: ignore
     return step
+
 
 def setup() -> argparse.Namespace:
     ''' Parse command line arguments. '''
