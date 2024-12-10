@@ -26,9 +26,10 @@ class Task:
         sd = torch.std(x, dim=0)
         return (x-mean)/(sd + 1e-8)
 
-    def _sampleBetas(self, seed: int) -> torch.Tensor:
+    def _sampleBeta(self, seed: int) -> torch.Tensor:
         torch.manual_seed(seed)
-        return self.beta_dist.sample((self.n_predictors+1, 1)) # type: ignore
+        d = self.n_predictors + 1
+        return self.beta_dist.sample((d, 1)) # type: ignore
 
     def _sampleFeatures(self, n_samples: int, seed: int) -> torch.Tensor:
         torch.manual_seed(seed)
