@@ -62,6 +62,11 @@ class Task:
         mu = S_n @ (x.T @ y)
         return mu.squeeze(-1)
 
+    def posteriorParams(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        sigma_2 = self.sigma_error ** 2
+        S_n = self._posteriorCovariance(x)
+        mu_n = self._posteriorMean(x, y, S_n)
+        return mu_n, sigma_2 * S_n
 class FixedEffects(Task):
     def __init__(self, n_predictors: int, sigma_error: float, data_dist: torch.distributions.Distribution):
         super().__init__(n_predictors, sigma_error, data_dist)
