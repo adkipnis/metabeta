@@ -81,17 +81,20 @@ class FixedEffects(Task):
     def __init__(self, n_predictors: int, sigma_error: float, data_dist: torch.distributions.Distribution):
         super().__init__(n_predictors, sigma_error, data_dist)
 
-    def sample(self, n_samples: int, seed: int) -> Dict[str, torch.Tensor]:
-        x = self._sampleFeatures(n_samples, seed)
-        betas = self._sampleBetas(seed)
+    def sample(self, n_samples: int, seed: int, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
+        X = self._sampleFeatures(n_samples, seed)
+        beta = self._sampleBeta(seed)
         eps = self._sampleNoise(n_samples, seed)
-        y = x @ betas + eps
-        return {
-                "predictors": x,
-                "y": y,
-                "params": betas,
-                "sigma_error": torch.tensor(self.sigma_error),
-                "seed": torch.tensor(seed),
-                }
-    
+        y = X @ beta + eps
+        out = {"X": X,
+               "y": y,
+               "beta": beta,
+               "sigma_error": torch.tensor(self.sigma_error),
+               "seed": torch.tensor(seed),}
+        if include_posterior:
+            mu_n, Sigma_n = self.allPosteriorParams(X, y)
+            out.update({"mu_n": mu_n,
+                        "Sigma_n": Sigma_n,})
+        return out
+
 
