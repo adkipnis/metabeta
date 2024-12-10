@@ -213,6 +213,41 @@ def run(model: nn.Module,
     return loss
 
 
+def compare(model: nn.Module, batch: dict) -> torch.Tensor:
+    ''' Compate analytical posterior with proposed posterior using KL divergence '''
+    X = batch["X"].to(device)
+    y = batch["y"].to(device)
+    depths = batch["d"]
+    b, n, _ = X.shape
+    inputs = torch.cat([X, y], dim=-1)
+
+    # get analytical posterior
+    mu_n = batch["mu_n"].float().squeeze(-1)
+    Sigma_n = batch["Sigma_n"].float()
+    Sigma_n = torch.diagonal(Sigma_n, dim1=-2, dim2=-1)
+    
+    # get proposed posterior
+    means, stds, alpha_beta = model(inputs)
+    noise_var_hat = invGammaMAP(alpha_beta)
+    stds_updated = stds * noise_var_hat.unsqueeze(-1)
+    
+    # Compute KL divergence only for non-padded elements
+    losses = torch.zeros(b, n, device=device)
+    for i in range(b):
+        d = depths[i]
+        p_a = torch.distributions.Normal(mu_n[i, :, :d], Sigma_n[i, :, :d])
+        p_p = torch.distributions.Normal(means[i, :, :d], stds_updated[i, :, :d])
+        losses[i] = torch.distributions.kl.kl_divergence(p_a, p_p).mean(dim=-1) # average across marginal KL divergences
+   
+    # average appropriately
+    n_min = 2 * depths
+    denominators = n - n_min
+    mask = torch.arange(n).expand(b, n) < n_min.unsqueeze(-1)
+    losses[mask] = 0.
+    losses = losses.sum(dim=1) / denominators
+    return losses.mean()
+
+
 def train(model: nn.Module,
           optimizer: schedulefree.AdamWScheduleFree,
           dataloader: DataLoader,
