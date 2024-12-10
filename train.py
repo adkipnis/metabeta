@@ -125,6 +125,14 @@ def logInvGammaLoss(alpha_betas: torch.Tensor,
     return -proposal.log_prob(noise_vars) # (batch, n)
 
 
+def invGammaMAP(alpha_betas: torch.Tensor) -> torch.Tensor:
+    ''' Compute the MAP noise variance '''
+    # alpha_betas (batch, n, 2)
+    alpha, beta = alpha_betas[:,:,0], alpha_betas[:,:,1]
+    proposal = torch.distributions.inverse_gamma.InverseGamma(alpha, beta)
+    return proposal.mode # beta / (alpha + 1)
+
+
 def modelID(cfg: argparse.Namespace) -> str:
     ''' Return a string that identifies the model. '''
     return f"{cfg.model}-{cfg.hidden_dim}-{cfg.ff_dim}-{cfg.n_layers}-seed={cfg.seed}-loss={cfg.loss}"
