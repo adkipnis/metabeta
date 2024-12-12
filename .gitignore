@@ -8,3 +8,4 @@ weights
 checkpoints
 runs-hpc
 losses
+predictions
