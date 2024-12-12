@@ -78,11 +78,11 @@ def betaLossWrapper(means: torch.Tensor,
                     d: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the beta loss function.
     Handles the case 3D tensors (where the second dimension is the number of subjects = seq_size).
-    Drop the losses for datasets that have fewer than n = 2 * number of features.'''
+    Drop the losses for datasets that have fewer than n = noise_tol * number of features.'''
     b, n, _ = means.shape
     target = betas.unsqueeze(1).expand_as(means)
     losses = lf(means, sigma, target) # (b, n, d)
-    n_min = 2 * d.unsqueeze(1) # (b, 1)
+    n_min = noise_tol * d.unsqueeze(1) # (b, 1)
     denominators = n - n_min # (b, 1)
     mask = torch.arange(n).expand(b, n) < n_min # (b, n)
     losses[mask] = 0.
@@ -98,7 +98,7 @@ def noiseLossWrapper(alpha_betas: torch.Tensor,
     noise_var = torch.square(noise_std)
     target = noise_var.expand((b,n))
     losses = lf_noise(alpha_betas, target).unsqueeze(-1)
-    n_min = 2 * d.unsqueeze(-1)
+    n_min = noise_tol * d.unsqueeze(-1)
     denominators = n - n_min
     mask = torch.arange(n) < n_min
     losses[mask] = 0.
@@ -253,7 +253,7 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
         # losses[i] = D.kl.kl_divergence(p_a, p_p).sum(dim=-1)
    
     # average appropriately
-    n_min = 2 * depths
+    n_min = noise_tol * depths
     denominators = n - n_min
     mask = torch.arange(n).expand(b, n) < n_min.unsqueeze(-1)
     losses[mask] = 0.
@@ -366,6 +366,7 @@ if __name__ == "__main__":
     # global variables
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     console_width = getConsoleWidth()
+    noise_tol = 0 # minimum n for evaluation: noise_tol * d, ignore all loss values below
     if cfg.device == "cuda":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
