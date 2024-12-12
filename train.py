@@ -310,7 +310,7 @@ def validate(model: nn.Module,
     optimizer.eval()
     iterator = tqdm(dataloader, desc=f"iteration {iteration:02d} [V]")
     with torch.no_grad():
-        for batch in iterator:
+        for j, batch in enumerate(iterator):
             loss_val = run(model, batch, unpad=True, printer=iterator.write)
             loss_kl = compare(model, batch)
             iterator.set_postfix({"loss": loss_val.item()})
@@ -319,8 +319,14 @@ def validate(model: nn.Module,
             logger.write(iteration, step, loss_val.item(), "loss_val")
             logger.write(iteration, step, loss_kl.item(), "loss_kl")
             step += 1
-        if iteration % 5 == 0:
-            run(model, batch, unpad=True, num_examples=2) # type: ignore
+
+            # optionally save predictions
+            if iteration % 5 == 0:
+                savePredictions(model, batch, iteration, j)
+
+            # optionally print predictions
+            if iteration % 5 == 0 and j % 15 == 0:
+                run(model, batch, unpad=True, printer=iterator.write, num_examples=1) # type: ignore
     return step
 
 
@@ -405,6 +411,8 @@ if __name__ == "__main__":
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr, eps=cfg.eps)
     writer = SummaryWriter(Path("runs", modelID(cfg), timestamp))
     logger = Logger(Path("losses", modelID(cfg), timestamp))
+    pred_path = Path("predictions", modelID(cfg), timestamp)
+    pred_path .mkdir(parents=True, exist_ok=True)
     print(f"Number of parameters: {num_params}, Loss: {cfg.loss}, Learning rate: {cfg.lr}, Epsilon: {cfg.eps}, Seed: {cfg.seed}, Device: {device}")
 
     # optionally preload a model
