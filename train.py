@@ -261,6 +261,20 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     return losses.mean()
 
 
+def savePredictions(model: nn.Module, batch: dict, iteration_index: int, batch_index: int) -> None:
+    ''' save model outputs '''
+    X = batch["X"].to(device)
+    y = batch["y"].to(device)
+    inputs = torch.cat([X, y], dim=-1)
+    means, stds, _ = model(inputs)
+    fname = Path(pred_path, f"predictions_i={iteration_index}_b={batch_index}.pt")
+    out = {
+        "means": means,
+        "stds": stds,
+    }
+    torch.save(out, fname)
+
+
 def train(model: nn.Module,
           optimizer: schedulefree.AdamWScheduleFree,
           dataloader: DataLoader,
