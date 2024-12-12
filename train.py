@@ -221,7 +221,6 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     ''' Compate analytical posterior with proposed posterior using KL divergence '''
     X = batch["X"].to(device)
     y = batch["y"].to(device)
-    noise_var = batch["sigma_error"]
     depths = batch["d"]
     b, n, _ = X.shape
     inputs = torch.cat([X, y], dim=-1)
@@ -233,6 +232,7 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     
     # get proposed posterior
     means, stds, alpha_beta = model(inputs)
+    # noise_var = batch["sigma_error"]
     # noise_var_hat = invGammaMAP(alpha_beta)
     # stds *= noise_var_hat.unsqueeze(-1)
     
@@ -247,11 +247,7 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
         p_a = D.multivariate_normal.MultivariateNormal(m_anaytical, S_analytical)
         p_p = D.multivariate_normal.MultivariateNormal(m_proposal, S_proposal)
         losses[i] = D.kl.kl_divergence(p_a, p_p)
-        
-        # p_a = D.Normal(mu_n[i, :, :d], Sigma_n[i, :, :d])
-        # p_p = D.Normal(means[i, :, :d], stds[i, :, :d])
-        # losses[i] = D.kl.kl_divergence(p_a, p_p).sum(dim=-1)
-   
+    
     # average appropriately
     n_min = noise_tol * depths
     denominators = n - n_min
