@@ -7,6 +7,7 @@ from tqdm import tqdm
 import argparse
 import torch
 import torch.nn as nn
+from torch import distributions as D
 from torch.utils.tensorboard import SummaryWriter # type: ignore
 from torch.utils.data import DataLoader
 import schedulefree
@@ -112,7 +113,7 @@ def logNormalLoss(means: torch.Tensor,
     # means (batch, n_features)
     # sigma (batch, n_features)
     # betas (batch, n_features)
-    proposal = torch.distributions.Normal(means, stds)
+    proposal = D.Normal(means, stds)
     return -proposal.log_prob(betas) # (batch, n, d)
 
 
@@ -122,7 +123,7 @@ def logInvGammaLoss(alpha_betas: torch.Tensor,
     # alpha_betas (batch, n, 2)
     # noise_vars (batch, n, 1)
     alpha, beta = alpha_betas[:,:,0], alpha_betas[:,:,1]
-    proposal = torch.distributions.inverse_gamma.InverseGamma(alpha, beta)
+    proposal = D.inverse_gamma.InverseGamma(alpha, beta)
     return -proposal.log_prob(noise_vars) # (batch, n)
 
 
@@ -130,7 +131,7 @@ def invGammaMAP(alpha_betas: torch.Tensor) -> torch.Tensor:
     ''' Compute the MAP noise variance '''
     # alpha_betas (batch, n, 2)
     alpha, beta = alpha_betas[:,:,0], alpha_betas[:,:,1]
-    proposal = torch.distributions.inverse_gamma.InverseGamma(alpha, beta)
+    proposal = D.inverse_gamma.InverseGamma(alpha, beta)
     return proposal.mode # beta / (alpha + 1)
 
 
