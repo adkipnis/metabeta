@@ -14,11 +14,11 @@ class Task:
         self.data_dist = data_dist
 
         # beta distribution
-        self.beta_error = math.sqrt(5)
+        self.beta_error = math.sqrt(5.)
         self.beta_dist = torch.distributions.Normal(0., self.beta_error)
 
         # error distribution
-        self.sigma_error = sigma_error
+        self.sigma_error = math.sqrt(n_predictors + 1) * sigma_error
         self.noise_dist = torch.distributions.Normal(0., self.sigma_error)
         
     def _standardize(self, x: torch.Tensor) -> torch.Tensor:
