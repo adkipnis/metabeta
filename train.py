@@ -207,10 +207,12 @@ def run(model: nn.Module,
     for i in range(num_examples):
         d = depths[i].item()
         targets_i = beta[i, :d].detach().numpy()
+        mu_i = batch["mu_n"][i, -1, :d].detach().numpy()
         outputs_i = means[i, -1, :d].detach().numpy()
         printer(f"\n{console_width * '-'}")
-        printer(f"Predicted : {outputs_i}")
-        printer(f"True      : {targets_i}")
+        printer(f"True       : {targets_i}")
+        printer(f"Analytical : {mu_i}")
+        printer(f"Predicted  : {outputs_i}")
         printer(f"{console_width * '-'}\n")
     return loss
 
