@@ -64,10 +64,11 @@ def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: 
     d = 0 # for iterator description
     iterator = tqdm(range(max_predictors + 1))
     iterator.set_description(f'{d:02d}/{max_predictors:02d}')
+    sigmas = sorted([getSigmaError(i) for i in range(n_draws_per)])
+
     for d in iterator:
-        for _ in range(n_draws_per):
-            seed = sower.throw()
-            sigma = getSigmaError(seed)
+        for seed in range(n_draws_per):
+            sigma = float(sigmas[seed])
             data_dist = getDataDist(seed)
             lm = FixedEffects(d, sigma, data_dist)
             samples += [lm.sample(max_samples, seed, include_posterior=True)]
