@@ -64,6 +64,10 @@ def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: 
     d = 0 # for iterator description
     iterator = tqdm(range(max_predictors + 1))
     iterator.set_description(f'{d:02d}/{max_predictors:02d}')
+
+    # generate sigmas in a balanced way
+    # x = torch.arange(0., 3., step=3./n_draws_per)
+    # sigmas = 3. * torch.exp(x - 3.)
     sigmas = sorted([getSigmaError(i) for i in range(n_draws_per)])
 
     for d in iterator:
