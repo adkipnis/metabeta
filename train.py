@@ -221,6 +221,7 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     ''' Compate analytical posterior with proposed posterior using KL divergence '''
     X = batch["X"].to(device)
     y = batch["y"].to(device)
+    noise_var = batch["sigma_error"]
     depths = batch["d"]
     b, n, _ = X.shape
     inputs = torch.cat([X, y], dim=-1)
@@ -228,20 +229,28 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     # get analytical posterior
     mu_n = batch["mu_n"].float().squeeze(-1)
     Sigma_n = batch["Sigma_n"].float()
-    Sigma_n = torch.diagonal(Sigma_n, dim1=-2, dim2=-1)
+    Sigma_n = torch.diagonal(Sigma_n, dim1=-2, dim2=-1) # take diagonal for comparability
     
     # get proposed posterior
     means, stds, alpha_beta = model(inputs)
-    noise_var_hat = invGammaMAP(alpha_beta)
-    stds_updated = stds * noise_var_hat.unsqueeze(-1)
+    # noise_var_hat = invGammaMAP(alpha_beta)
+    # stds *= noise_var_hat.unsqueeze(-1)
     
     # Compute KL divergence only for non-padded elements
     losses = torch.zeros(b, n, device=device)
     for i in range(b):
         d = depths[i]
-        p_a = torch.distributions.Normal(mu_n[i, :, :d], Sigma_n[i, :, :d])
-        p_p = torch.distributions.Normal(means[i, :, :d], stds_updated[i, :, :d])
-        losses[i] = torch.distributions.kl.kl_divergence(p_a, p_p).mean(dim=-1) # average across marginal KL divergences
+        m_anaytical = mu_n[i, :, :d]
+        m_proposal = means[i, :, :d]
+        S_analytical = torch.diag_embed(Sigma_n[i, :, :d].square())
+        S_proposal = torch.diag_embed(stds[i, :, :d].square())
+        p_a = D.multivariate_normal.MultivariateNormal(m_anaytical, S_analytical)
+        p_p = D.multivariate_normal.MultivariateNormal(m_proposal, S_proposal)
+        losses[i] = D.kl.kl_divergence(p_a, p_p)
+        
+        # p_a = D.Normal(mu_n[i, :, :d], Sigma_n[i, :, :d])
+        # p_p = D.Normal(means[i, :, :d], stds[i, :, :d])
+        # losses[i] = D.kl.kl_divergence(p_a, p_p).sum(dim=-1)
    
     # average appropriately
     n_min = 2 * depths
