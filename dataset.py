@@ -22,6 +22,7 @@ class LMDataset(Dataset):
         self.max_predictors = max_predictors
         self.seeds = torch.tensor([item['seed'] for item in data])
         self.permute = permute
+        self.data_p = [self.preprocess(item) for item in data]
 
     def __len__(self) -> int:
        return len(self.data)
@@ -58,8 +59,7 @@ class LMDataset(Dataset):
         return out
 
     def __getitem__(self, idx) -> dict:
-        data = self.data[idx]
-        return self.preprocess(data)
+        return self.data_p[idx]
 
     def randomSplit(self, split: float = 0.9, shuffle: bool = False) -> Tuple['LMDataset', 'LMDataset']:
         ''' Split the dataset into two parts, randomly. '''
