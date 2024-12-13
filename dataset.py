@@ -16,11 +16,12 @@ def padTensor(tensor: torch.Tensor, shape: tuple, pad_val: int = 0) -> torch.Ten
 
 
 class LMDataset(Dataset):
-    def __init__(self, data: List[dict], max_samples: int, max_predictors: int) -> None:
+    def __init__(self, data: List[dict], max_samples: int, max_predictors: int, permute: bool = True) -> None:
         self.data = data
         self.max_samples = max_samples
         self.max_predictors = max_predictors
         self.seeds = torch.tensor([item['seed'] for item in data])
+        self.permute = permute
 
     def __len__(self) -> int:
        return len(self.data)
