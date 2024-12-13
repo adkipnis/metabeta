@@ -230,12 +230,12 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     inputs = torch.cat([X, y], dim=-1)
 
     # get analytical posterior
-    mu_n = batch["mu_n"].float().squeeze(-1)
-    Sigma_n = batch["Sigma_n"].float()
-    Sigma_n = torch.diagonal(Sigma_n, dim1=-2, dim2=-1) # take diagonal for comparability
+    mu_a = batch["mu_n"].float().squeeze(-1)
+    sigma_a = batch["Sigma_n"].float()
+    sigma_a = torch.diagonal(sigma_a, dim1=-2, dim2=-1) # take diagonal for comparability
     
     # get proposed posterior
-    means, stds, alpha_beta = model(inputs)
+    mu_p, sigma_p, ab = model(inputs)
     # noise_var = batch["sigma_error"]
     # noise_var_hat = invGammaMAP(alpha_beta)
     # stds *= noise_var_hat.unsqueeze(-1)
