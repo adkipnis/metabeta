@@ -93,7 +93,8 @@ class TransformerDecoder(Base):
     def internal(self, x: torch.Tensor) -> torch.Tensor:
         x = self.embed(x) # (batch_size, seq_size, hidden_size)
         causal_mask = self.causalMask(x.size(1)).to(x.device)
-        outputs = self.model(tgt=x, memory=x, tgt_mask=causal_mask) # (batch_size, seq_size, hidden_size)
-        return outputs
+        memory = torch.zeros_like(x)
+        outputs = self.model(tgt=x, memory=memory, tgt_mask=causal_mask, tgt_is_causal=True)
+        return outputs # (batch_size, seq_size, hidden_size)
 
 
