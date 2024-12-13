@@ -16,9 +16,9 @@ class Base(nn.Module):
         self.output_size = num_predictors
         self.n_layers = n_layers
         self.dropout = dropout
-        self.means = nn.Linear(hidden_size, self.output_size)
-        self.logstds = nn.Linear(hidden_size, self.output_size)
-        self.lognoise = nn.Linear(hidden_size, 2)
+        self.mu = nn.Linear(hidden_size, self.output_size)
+        self.logSigma = nn.Linear(hidden_size, self.output_size)
+        self.logAB = nn.Linear(hidden_size, 2)
         self.seed = seed
 
     def initializeWeights(self) -> None:
@@ -35,10 +35,10 @@ class Base(nn.Module):
                 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
         outputs = self.internal(x) # (batch_size, seq_size, hidden_size)
-        means = self.means(outputs) # (batch_size, seq_size, output_size)
-        logstds = self.logstds(outputs) # (batch_size, seq_size, output_size)
-        log_alpha_beta = self.lognoise(outputs) # (batch_size, seq_size, 2)
-        return means, logstds.exp(), log_alpha_beta.exp()
+        mu = self.mu(outputs) # (batch_size, seq_size, output_size)
+        log_sigma = self.logSigma(outputs) # (batch_size, seq_size, output_size)
+        log_ab = self.logAB(outputs) # (batch_size, seq_size, 2)
+        return mu, log_sigma.exp(), log_ab.exp()
 
 
 class RNNBase(Base):
