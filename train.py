@@ -278,8 +278,8 @@ def savePredictions(model: nn.Module, batch: dict, iteration_index: int, batch_i
 def train(model: nn.Module,
           optimizer: schedulefree.AdamWScheduleFree,
           dataloader: DataLoader,
-          writer: SummaryWriter,
-          logger: Logger,
+          writer: Union[SummaryWriter, None],
+          logger: Union[Logger, None],
           iteration: int,
           step: int) -> int:
     ''' Train the model for a single iteration. '''
@@ -291,9 +291,11 @@ def train(model: nn.Module,
         loss = run(model, batch, unpad=True)
         loss.backward()
         optimizer.step()
-        writer.add_scalar("loss_train", loss.item(), step)
         iterator.set_postfix({"loss": loss.item()})
-        logger.write(iteration, step, loss.item(), "loss_train")
+        if writer is not None:
+            writer.add_scalar("loss_train", loss.item(), step)
+        if logger is not None:
+            logger.write(iteration, step, loss.item(), "loss_train")
         step += 1
     return step
 
@@ -301,8 +303,8 @@ def train(model: nn.Module,
 def validate(model: nn.Module,
              optimizer: schedulefree.AdamWScheduleFree,
              dataloader: DataLoader,
-             writer: SummaryWriter,
-             logger: Logger,
+             writer: Union[SummaryWriter, None],
+             logger: Union[Logger, None],
              iteration: int,
              step: int) -> int:
     ''' Validate the model for a single iteration. '''
@@ -313,24 +315,26 @@ def validate(model: nn.Module,
         for j, batch in enumerate(iterator):
             # preset validation loss
             loss_val = run(model, batch, unpad=True, printer=iterator.write)
-            writer.add_scalar("loss_val", loss_val.item(), step)
-            logger.write(iteration, step, loss_val.item(), "loss_val")
             iterator.set_postfix({"loss": loss_val.item()})
+            if writer is not None:
+                writer.add_scalar("loss_val", loss_val.item(), step)
+            if logger is not None:
+                logger.write(iteration, step, loss_val.item(), "loss_val")
 
             # # KL loss
             # loss_kl = compare(model, batch)
             # writer.add_scalar("loss_kl", loss_kl.item(), step)
             # logger.write(iteration, step, loss_kl.item(), "loss_kl")
-            
-            step += 1
 
             # optionally save predictions
-            if iteration % 5 == 0:
+            if iteration % 5 == 0 and not cfg.proto:
                 savePredictions(model, batch, iteration, j)
 
             # optionally print predictions
             if iteration % 5 == 0 and j % 15 == 0:
                 run(model, batch, unpad=True, printer=iterator.write, num_examples=1) # type: ignore
+                
+            step += 1
     return step
 
 
@@ -343,6 +347,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="cuda", help="Device to use [cuda, cpu]")
     parser.add_argument("-p", "--preload", type=int, default=0, help="Preload model from iteration #p")
     parser.add_argument("--model-folder", type=str, default="checkpoints", help="Model folder")
+    parser.add_argument("--proto", action="store_true", help="prototyping: don't log anything during")
 
     # data
     parser.add_argument("--d", type=int, default=15, help="Number of predictors (+ bias)")
@@ -413,8 +418,11 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Loss {cfg.loss} not recognized.")
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr, eps=cfg.eps)
-    writer = SummaryWriter(Path("runs", modelID(cfg), timestamp))
-    logger = Logger(Path("losses", modelID(cfg), timestamp))
+    if cfg.proto:
+        writer, logger = None, None
+    else:
+        writer = SummaryWriter(Path("runs", modelID(cfg), timestamp))
+        logger = Logger(Path("losses", modelID(cfg), timestamp))
     pred_path = Path("predictions", modelID(cfg), timestamp)
     pred_path .mkdir(parents=True, exist_ok=True)
     print(f"Number of parameters: {num_params}, Loss: {cfg.loss}, Learning rate: {cfg.lr}, Epsilon: {cfg.eps}, Seed: {cfg.seed}, Device: {device}")
