@@ -26,21 +26,12 @@ def getD(seed: int, max_predictors: int) -> int:
     return int(d.item())
 
 
-def getSigmaError(seed: int, nu: float = 3., clip: float = 2.) -> float:
-    ''' Sample the noise standard deviation from the inverse Chi-Squared distribution '''
+def getSigmaError(seed: int, alpha: float = 3., beta: float = 1., clip: float = 2.) -> float:
+    ''' Get the noise standard deviation '''
     torch.manual_seed(seed)
-    sigma_squared_inv = torch.distributions.chi2.Chi2(nu).sample()
-    sigma_squared = 1. / (sigma_squared_inv + 1e-6)
+    sigma_squared = torch.distributions.inverse_gamma.InverseGamma(alpha, beta).sample()
     sigma = math.sqrt(sigma_squared.item()) # type: ignore
     return min(sigma, clip) 
-
-
-# def getSigmaError(seed: int, alpha: float = 3., beta: float = 1., clip: float = 2.) -> float:
-#     ''' Get the noise standard deviation '''
-#     torch.manual_seed(seed)
-#     sigma_squared = torch.distributions.inverse_gamma.InverseGamma(alpha, beta).sample()
-#     sigma = math.sqrt(sigma_squared.item()) # type: ignore
-#     return min(sigma, clip) 
 
 
 def getDataDist(seed: int) -> torch.distributions.Distribution:
