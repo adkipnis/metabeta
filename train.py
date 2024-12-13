@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 import csv
 from datetime import datetime
-from typing import Tuple, Callable
+from typing import Tuple, Callable, Union
 from tqdm import tqdm
 import argparse
 import torch
@@ -11,6 +11,7 @@ from torch import distributions as D
 from torch.utils.tensorboard import SummaryWriter # type: ignore
 from torch.utils.data import DataLoader
 import schedulefree
+from dataset import LMDataset
 from models import GRU, LSTM, TransformerDecoder
 from generate import dsFilename
 
@@ -52,7 +53,8 @@ def getConsoleWidth() -> int:
 def getDataLoader(filename: Path, batch_size: int) -> DataLoader:
     ''' Load a dataset from a file, split into train and validation set and return a DataLoader. '''
     assert filename.exists(), f"File {filename} does not exist, you must generate it first using generate.py"
-    ds = torch.load(filename, weights_only=False)
+    ds_raw = torch.load(filename, weights_only=False)
+    ds = LMDataset(**ds_raw)
     return DataLoader(ds, batch_size=batch_size, shuffle=False)
 
 
