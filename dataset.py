@@ -35,11 +35,24 @@ class LMDataset(Dataset):
         y = padTensor(item['y'], (n, 1))
         beta = padTensor(item['beta'], (d_max, 1))
         
+        if self.permute:
+            seed = item['seed']
+            torch.manual_seed(seed)
+            indices = torch.zeros(d_max, dtype=torch.long)
+            indices[1:] = torch.randperm(d_max - 1) + 1
+            X = X[:, indices]
+            beta = beta[indices]
+
         out = {'d': d, 'X': X, 'y': y, 'beta': beta, 'sigma_error': item['sigma_error']}
+
         # optionally include analytical posterior
         if 'mu_n' in item:
             mu_n = padTensor(item['mu_n'], (n, d_max))
             Sigma_n = padTensor(item['Sigma_n'], (n, d_max, d_max))
+            if self.permute:
+                mu_n = mu_n[:, indices]
+                Sigma_n = Sigma_n[:, indices] # permute rows
+                Sigma_n = Sigma_n[:, :, indices] # permute cols
             out.update({'mu_n': mu_n, 'Sigma_n': Sigma_n})
 
         return out
