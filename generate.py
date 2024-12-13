@@ -5,7 +5,6 @@ import argparse
 import math
 import torch
 from tasks import FixedEffects
-from dataset import LMDataset
 
 
 class Sower:
@@ -43,9 +42,9 @@ def getDataDist(seed: int) -> torch.distributions.Distribution:
         return torch.distributions.normal.Normal(0., 3.)
 
 
-def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: Sower) -> LMDataset:
+def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: Sower) -> dict:
     ''' Generate a dataset of linear model samples of varying length and width and return a DataLoader. '''
-    samples = []
+    data = []
     iterator = tqdm(range(n_draws))
     iterator.set_description(f'{part:02d}/{iterations:02d}')
     for _ in iterator:
@@ -54,13 +53,13 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
         sigma = math.sqrt(d + 1) * getSigmaError(seed)
         data_dist = getDataDist(seed)
         lm = FixedEffects(d, sigma, data_dist)
-        samples += [lm.sample(max_samples, seed, include_posterior=False)]
-    return LMDataset(samples, max_samples, max_predictors)
+        data += [lm.sample(max_samples, seed, include_posterior=False)]
+    return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
 
 
-def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: int) -> LMDataset:
+def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: int) -> dict:
     ''' generateDataset but with balanced number of predictors for validation '''
-    samples = []
+    data = []
     d = 0 # for iterator description
     iterator = tqdm(range(max_predictors + 1))
     iterator.set_description(f'{d:02d}/{max_predictors:02d}')
@@ -71,8 +70,8 @@ def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: 
             sigma = math.sqrt(d + 1) * float(sigmas[seed])
             data_dist = getDataDist(seed)
             lm = FixedEffects(d, sigma, data_dist)
-            samples += [lm.sample(max_samples, seed, include_posterior=True)]
-    return LMDataset(samples, max_samples, max_predictors)
+            data += [lm.sample(max_samples, seed, include_posterior=True)]
+    return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
 
 
 def dsFilename(size: int, part: int, suffix: str = '') -> Path:
