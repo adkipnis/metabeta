@@ -187,20 +187,20 @@ def run(model: nn.Module,
         unpad: bool = True,
         printer: Callable = print) -> torch.Tensor:
     ''' Run a batch through the model and return the loss. '''
-    X = batch["X"].to(device)
-    y = batch["y"].to(device)
-    beta = batch["beta"].squeeze(-1).float()
-    noise_std = batch["sigma_error"].unsqueeze(-1).float()
     depths = batch["d"]
+    y = batch["y"].to(device)
+    X = batch["X"].to(device)
+    beta = batch["beta"].squeeze(-1).float()
     inputs = torch.cat([X, y], dim=-1)
-    means, stds, alpha_beta = model(inputs)
+    mu, sigma, ab = model(inputs)
 
     # compute beta parameter loss per batch and predictor (optionally over multiple model outputs per batch)
-    losses = betaLossWrapper(means, stds, beta, depths) # (batch, n_predictors)
+    losses = betaLossWrapper(mu, sigma, beta, depths) # (batch, n_predictors)
     targets = beta
 
     # # compute noise parameter loss per batch
-    # losses_noise = noiseLossWrapper(alpha_beta, noise_std, depths) # (batch, 1)
+    # noise_std = batch["sigma_error"].unsqueeze(-1).float()
+    # losses_noise = noiseLossWrapper(ab, noise_std, depths) # (batch, 1)
     # losses = torch.cat([losses, losses_noise], dim=-1)
     # targets = torch.cat([targets, noise_std], dim=-1)
     
