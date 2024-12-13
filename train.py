@@ -81,9 +81,12 @@ def betaLossWrapper(means: torch.Tensor,
     ''' Wrapper for the beta loss function.
     Handles the case 3D tensors (where the second dimension is the number of subjects = seq_size).
     Drop the losses for datasets that have fewer than n = noise_tol * number of features.'''
+    # calculate losses for all dataset sizes and each beta
     b, n, _ = means.shape
     target = betas.unsqueeze(1).expand_as(means)
     losses = lf(means, sigma, target) # (b, n, d)
+
+    # mask out first n_min losses per batch, then average over subject
     n_min = noise_tol * d.unsqueeze(1) # (b, 1)
     denominators = n - n_min # (b, 1)
     mask = torch.arange(n).expand(b, n) < n_min # (b, n)
