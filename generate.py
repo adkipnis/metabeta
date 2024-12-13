@@ -67,16 +67,12 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
     return LMDataset(samples, max_samples, max_predictors)
 
 
-def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: int, sower: Sower) -> LMDataset:
+def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: int) -> LMDataset:
     ''' generateDataset but with balanced number of predictors for validation '''
     samples = []
     d = 0 # for iterator description
     iterator = tqdm(range(max_predictors + 1))
     iterator.set_description(f'{d:02d}/{max_predictors:02d}')
-
-    # generate sigmas in a balanced way
-    # x = torch.arange(0., 3., step=3./n_draws_per)
-    # sigmas = 3. * torch.exp(x - 3.)
     sigmas = sorted([getSigmaError(i) for i in range(n_draws_per)])
 
     for d in iterator:
@@ -127,7 +123,7 @@ if __name__ == "__main__":
     if start == 1:
         # generate validation dataset
         print(f'Generating validation dataset of {n_draws_val * (max_predictors + 1)} samples')
-        dataset = generateBalancedDataset(n_draws_val, max_samples, max_predictors, sower)
+        dataset = generateBalancedDataset(n_draws_val, max_samples, max_predictors)
         filename = Path('data', 'dataset-val.pt')
         torch.save(dataset, filename)
     else:
