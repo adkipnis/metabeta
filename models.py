@@ -98,3 +98,11 @@ class TransformerDecoder(Base):
         return outputs # (batch_size, seq_size, hidden_size)
 
 
+def main():
+    model = TransformerDecoder(3, 256, 512, 1, 0.1, 0)
+    mask = model.causalMask(10)
+    print(mask)
+
+if __name__ == '__main__':
+    main()
+
