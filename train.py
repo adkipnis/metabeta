@@ -307,13 +307,17 @@ def validate(model: nn.Module,
     iterator = tqdm(dataloader, desc=f"iteration {iteration:02d} [V]")
     with torch.no_grad():
         for j, batch in enumerate(iterator):
+            # preset validation loss
             loss_val = run(model, batch, unpad=True, printer=iterator.write)
-            loss_kl = compare(model, batch)
-            iterator.set_postfix({"loss": loss_val.item()})
             writer.add_scalar("loss_val", loss_val.item(), step)
-            writer.add_scalar("loss_kl", loss_kl.item(), step)
             logger.write(iteration, step, loss_val.item(), "loss_val")
-            logger.write(iteration, step, loss_kl.item(), "loss_kl")
+            iterator.set_postfix({"loss": loss_val.item()})
+
+            # # KL loss
+            # loss_kl = compare(model, batch)
+            # writer.add_scalar("loss_kl", loss_kl.item(), step)
+            # logger.write(iteration, step, loss_kl.item(), "loss_kl")
+            
             step += 1
 
             # optionally save predictions
