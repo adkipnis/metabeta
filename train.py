@@ -244,13 +244,13 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     losses = torch.zeros(b, n, device=device)
     for i in range(b):
         d = depths[i]
-        m_anaytical = mu_n[i, :, :d]
-        m_proposal = means[i, :, :d]
-        S_analytical = torch.diag_embed(Sigma_n[i, :, :d].square())
-        S_proposal = torch.diag_embed(stds[i, :, :d].square())
-        p_a = D.multivariate_normal.MultivariateNormal(m_anaytical, S_analytical)
-        p_p = D.multivariate_normal.MultivariateNormal(m_proposal, S_proposal)
-        losses[i] = D.kl.kl_divergence(p_a, p_p)
+        mu_ai = mu_a[i, :, :d]
+        mu_pi = mu_p[i, :, :d]
+        sigma_ai = torch.diag_embed(sigma_a[i, :, :d].square())
+        sigma_pi = torch.diag_embed(sigma_p[i, :, :d].square())
+        post_a = D.multivariate_normal.MultivariateNormal(mu_ai, sigma_ai)
+        post_p = D.multivariate_normal.MultivariateNormal(mu_pi, sigma_pi)
+        losses[i] = D.kl.kl_divergence(post_a, post_p)
     
     # average appropriately
     n_min = noise_tol * depths
