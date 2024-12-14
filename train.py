@@ -141,7 +141,8 @@ def invGammaMAP(alpha_betas: torch.Tensor) -> torch.Tensor:
 
 def modelID(cfg: argparse.Namespace) -> str:
     ''' Return a string that identifies the model. '''
-    return f"{cfg.model}-{cfg.hidden_dim}-{cfg.ff_dim}-{cfg.n_layers}-seed={cfg.seed}-loss={cfg.loss}"
+    noise = "variable" if cfg.fixed == 0 else cfg.fixed
+    return f"{cfg.model}-{cfg.hidden_dim}-{cfg.ff_dim}-{cfg.n_layers}-noise={noise}-seed={cfg.seed}-loss={cfg.loss}"
 
 
 def getCheckpointPath(iteration: int) -> Path:
@@ -350,7 +351,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--proto", action="store_true", help="prototyping: don't log anything during")
 
     # data
-    parser.add_argument("--d", type=int, default=15, help="Number of predictors (+ bias)")
+    parser.add_argument("-d", type=int, default=15, help="Number of predictors (+ bias)")
+    parser.add_argument("-f", "--fixed", type=float, default=0., help='Fixed noise variance (default = 0. -> not fixed)')
     parser.add_argument("-i", "--iterations", type=int, default=500, help="Number of iterations to train")
     parser.add_argument("-b", "--batch-size", type=int, default=50, help="Batch size")
 
@@ -375,6 +377,8 @@ if __name__ == "__main__":
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     console_width = getConsoleWidth()
     noise_tol = 0 # minimum n for evaluation: noise_tol * d, ignore all loss values below
+    noise = "variable" if cfg.fixed == 0 else cfg.fixed
+    suffix = f"-noise={noise}"
     if cfg.device == "cuda":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
@@ -437,10 +441,10 @@ if __name__ == "__main__":
 
     # training loop
     print(f"Training for {cfg.iterations + 1 - initial_iteration} iterations with 10k datasets per iteration and a batch size of {cfg.batch_size}...")
-    fname = Path('data', 'dataset-val.pt')
+    fname = Path('data', f'dataset-val{suffix}.pt')
     dataloader_val = getDataLoader(fname, 100)
     for iteration in range(initial_iteration, cfg.iterations + 1):
-        fname = dsFilename(int(1e4), iteration)
+        fname = dsFilename(int(1e4), iteration, suffix)
         dataloader_train = getDataLoader(fname, cfg.batch_size)
         global_step = train(model, optimizer, dataloader_train, writer, logger, iteration, global_step)
         validation_step = validate(model, optimizer, dataloader_val, writer, logger, iteration, validation_step)
