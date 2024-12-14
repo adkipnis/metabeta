@@ -31,8 +31,8 @@ class LMDataset(Dataset):
         d_max = self.max_predictors + 1
 
         X = padTensor(item['X'], (n, d_max))
-        y = padTensor(item['y'], (n, 1))
-        beta = padTensor(item['beta'], (d_max, 1))
+        y = padTensor(item['y'], (n,))
+        beta = padTensor(item['beta'], (d_max,))
 
         if self.permute:
             seed = item['seed']
