@@ -66,12 +66,10 @@ class FixedEffects(Task):
         return S_n
 
     def _posteriorMean(self, x: torch.Tensor, y: torch.Tensor, S_n: torch.Tensor) -> torch.Tensor:
-        mu = S_n @ (x.T @ y)
-        return mu.squeeze(-1)
+        # simplified form under zero prior mean
+        mu_n = S_n @ (x.T @ y)
+        return mu_n
 
-    def posteriorParams(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        sigma_2 = self.sigma_error ** 2
-        S_n = self._posteriorCovariance(x)
         mu_n = self._posteriorMean(x, y, S_n)
         return mu_n, sigma_2 * S_n
 
