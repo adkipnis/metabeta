@@ -25,7 +25,7 @@ def getD(seed: int, max_predictors: int) -> int:
     return int(d.item())
 
 
-def getSigmaError(seed: int, alpha: float = 3., beta: float = 1., clip: float = 2.) -> float:
+def getSigmaError(seed: int, alpha: float = 3., beta: float = 1., clip: float = 1.5) -> float:
     ''' Get the noise standard deviation '''
     torch.manual_seed(seed)
     sigma_squared = torch.distributions.inverse_gamma.InverseGamma(alpha, beta).sample()
