@@ -16,6 +16,7 @@ from models import GRU, LSTM, TransformerDecoder
 from generate import dsFilename
 
 
+# -------- miscellaneous
 class Logger:
     def __init__(self, path: Path) -> None:
         self.trunk = path
@@ -56,87 +57,6 @@ def getDataLoader(filename: Path, batch_size: int) -> DataLoader:
     ds_raw = torch.load(filename, weights_only=False)
     ds = LMDataset(**ds_raw)
     return DataLoader(ds, batch_size=batch_size, shuffle=False)
-
-
-def maskLoss(losses: torch.Tensor,
-             targets: torch.Tensor,
-             pad_val: float = 0.,
-             minimax: bool = False) -> torch.Tensor:
-    ''' Ignore padding values before aggregating the losses over batches and dims'''
-    # losses (batch, d)
-    mask = (targets != pad_val).float()
-    masked_losses = losses * mask
-    if minimax:
-        max_losses, _ = torch.max(masked_losses, dim=1)
-        loss = max_losses.mean()
-    else:
-        loss = masked_losses.sum() / mask.sum()
-    return loss # (,)
-
-
-def betaLossWrapper(means: torch.Tensor,
-                    sigma: torch.Tensor,
-                    betas: torch.Tensor,
-                    d: torch.Tensor) -> torch.Tensor:
-    ''' Wrapper for the beta loss function.
-    Handles the case 3D tensors (where the second dimension is the number of subjects = seq_size).
-    Drop the losses for datasets that have fewer than n = noise_tol * number of features.'''
-    # calculate losses for all dataset sizes and each beta
-    b, n, _ = means.shape
-    target = betas.unsqueeze(1).expand_as(means)
-    losses = lf(means, sigma, target) # (b, n, d)
-
-    # mask out first n_min losses per batch, then average over subject
-    n_min = noise_tol * d.unsqueeze(1) # (b, 1)
-    denominators = n - n_min # (b, 1)
-    mask = torch.arange(n).expand(b, n) < n_min # (b, n)
-    losses[mask] = 0.
-    losses = losses.sum(dim=1) / denominators
-    return losses # (batch, d)
-
-
-def noiseLossWrapper(alpha_betas: torch.Tensor,
-                     noise_std: torch.Tensor,
-                     d: torch.Tensor) -> torch.Tensor:
-    ''' Wrapper for the noise loss function. ''' 
-    b, n, _ = alpha_betas.shape
-    noise_var = torch.square(noise_std)
-    target = noise_var.expand((b,n))
-    losses = lf_noise(alpha_betas, target).unsqueeze(-1)
-    n_min = noise_tol * d.unsqueeze(-1)
-    denominators = n - n_min
-    mask = torch.arange(n) < n_min
-    losses[mask] = 0.
-    losses = losses.sum(dim=1) / denominators
-    return losses # (batch, 1)
-
-
-def logNormalLoss(means: torch.Tensor,
-                  stds: torch.Tensor,
-                  betas: torch.Tensor) -> torch.Tensor:
-    ''' Compute the negative log density of betas (target) under the proposed normal distribution. '''
-    # means (batch, n_features)
-    # sigma (batch, n_features)
-    # betas (batch, n_features)
-    proposal = D.Normal(means, stds)
-    return -proposal.log_prob(betas) # (batch, n, d)
-
-
-def logInvGammaLoss(ab: torch.Tensor,
-                    sigma_error: torch.Tensor) -> torch.Tensor:
-    ''' Compute the negative log density of the noise std (target) under the proposed inverse gamma distribution. '''
-    # ab (batch, n, 2)
-    # sigma_error (batch, n, 1)
-    proposal = D.inverse_gamma.InverseGamma(ab[:,:,0], ab[:,:,1])
-    return -proposal.log_prob(sigma_error) # (batch, n)
-
-
-def invGammaMAP(alpha_betas: torch.Tensor) -> torch.Tensor:
-    ''' Compute the MAP noise variance '''
-    # alpha_betas (batch, n, 2)
-    alpha, beta = alpha_betas[:,:,0], alpha_betas[:,:,1]
-    proposal = D.inverse_gamma.InverseGamma(alpha, beta)
-    return proposal.mode # beta / (alpha + 1)
 
 
 def modelID(cfg: argparse.Namespace) -> str:
@@ -182,6 +102,123 @@ def load(model: nn.Module,
     return initial_iteration, global_step
 
 
+def setup() -> argparse.Namespace:
+    ''' Parse command line arguments. '''
+    parser = argparse.ArgumentParser()
+
+    # misc
+    parser.add_argument("-s", "--seed", type=int, default=0, help="Model seed")
+    parser.add_argument("--device", type=str, default="cuda", help="Device to use [cuda, cpu]")
+    parser.add_argument("-p", "--preload", type=int, default=0, help="Preload model from iteration #p")
+    parser.add_argument("--model-folder", type=str, default="checkpoints", help="Model folder")
+    parser.add_argument("--proto", action="store_true", help="prototyping: don't log anything during")
+
+    # data
+    parser.add_argument("-d", type=int, default=15, help="Number of predictors (+ bias)")
+    parser.add_argument("-f", "--fixed", type=float, default=0., help='Fixed noise variance (default = 0. -> not fixed)')
+    parser.add_argument("-i", "--iterations", type=int, default=500, help="Number of iterations to train")
+    parser.add_argument("-b", "--batch-size", type=int, default=50, help="Batch size")
+
+    # model and loss
+    parser.add_argument("-l", "--loss", type=str, default="lognormal", help="Loss function [mse, lognormal]")
+    parser.add_argument("-m", "--model", type=str, default="transformer", help="Model type [gru, lstm, transformer]")
+    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate")
+    parser.add_argument("--hidden-dim", type=int, default=128, help="Hidden dimension")
+    parser.add_argument("--ff-dim", type=int, default=256, help="Feedforward dimension (transformer)")
+    parser.add_argument("--n-heads", type=int, default=4, help="Number of heads (transformer)")
+    parser.add_argument("--n-layers", type=int, default=1, help="Number of layers (transformer)")
+    parser.add_argument("--lr", type=float, default=5e-3, help="Learning rate (Adam)")
+    parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon (Adam)")
+    
+    return parser.parse_args()
+
+
+# -------- loss calculation
+def logNormalLoss(means: torch.Tensor,
+                  stds: torch.Tensor,
+                  betas: torch.Tensor) -> torch.Tensor:
+    ''' Compute the negative log density of betas (target) under the proposed normal distribution. '''
+    # means (batch, n_features)
+    # sigma (batch, n_features)
+    # betas (batch, n_features)
+    proposal = D.Normal(means, stds)
+    return -proposal.log_prob(betas) # (batch, n, d)
+
+
+def logInvGammaLoss(ab: torch.Tensor,
+                    sigma_error: torch.Tensor) -> torch.Tensor:
+    ''' Compute the negative log density of the noise std (target) under the proposed inverse gamma distribution. '''
+    # ab (batch, n, 2)
+    # sigma_error (batch, n, 1)
+    proposal = D.inverse_gamma.InverseGamma(ab[:,:,0], ab[:,:,1])
+    return -proposal.log_prob(sigma_error) # (batch, n)
+
+
+def invGammaMAP(alpha_betas: torch.Tensor) -> torch.Tensor:
+    ''' Compute the MAP noise variance '''
+    # alpha_betas (batch, n, 2)
+    alpha, beta = alpha_betas[:,:,0], alpha_betas[:,:,1]
+    proposal = D.inverse_gamma.InverseGamma(alpha, beta)
+    return proposal.mode # beta / (alpha + 1)
+
+
+def betaLossWrapper(means: torch.Tensor,
+                    sigma: torch.Tensor,
+                    betas: torch.Tensor,
+                    d: torch.Tensor) -> torch.Tensor:
+    ''' Wrapper for the beta loss function.
+    Handles the case 3D tensors (where the second dimension is the number of subjects = seq_size).
+    Drop the losses for datasets that have fewer than n = noise_tol * number of features.'''
+    # calculate losses for all dataset sizes and each beta
+    b, n, _ = means.shape
+    target = betas.unsqueeze(1).expand_as(means)
+    losses = lf(means, sigma, target) # (b, n, d)
+
+    # mask out first n_min losses per batch, then average over subject
+    n_min = noise_tol * d.unsqueeze(1) # (b, 1)
+    denominators = n - n_min # (b, 1)
+    mask = torch.arange(n).expand(b, n) < n_min # (b, n)
+    losses[mask] = 0.
+    losses = losses.sum(dim=1) / denominators
+    return losses # (batch, d)
+
+
+def noiseLossWrapper(alpha_betas: torch.Tensor,
+                     noise_std: torch.Tensor,
+                     d: torch.Tensor) -> torch.Tensor:
+    ''' Wrapper for the noise loss function. ''' 
+    # calculate losses for all dataset sizes and each beta
+    b, n, _ = alpha_betas.shape
+    noise_var = torch.square(noise_std)
+    target = noise_var.expand((b,n))
+    losses = lf_noise(alpha_betas, target).unsqueeze(-1)
+    
+    # mask out first n_min losses per batch, then average over subject
+    n_min = noise_tol * d.unsqueeze(-1)
+    denominators = n - n_min
+    mask = torch.arange(n) < n_min
+    losses[mask] = 0.
+    losses = losses.sum(dim=1) / denominators
+    return losses # (batch, 1)
+
+
+def maskLoss(losses: torch.Tensor,
+             targets: torch.Tensor,
+             pad_val: float = 0.,
+             minimax: bool = False) -> torch.Tensor:
+    ''' Ignore padding values before aggregating the losses over batches and dims'''
+    # losses (batch, d)
+    mask = (targets != pad_val).float()
+    masked_losses = losses * mask
+    if minimax:
+        max_losses, _ = torch.max(masked_losses, dim=1)
+        loss = max_losses.mean()
+    else:
+        loss = masked_losses.sum() / mask.sum()
+    return loss # (,)
+
+
+# -------- training and testing methods
 def run(model: nn.Module,
         batch: dict,
         num_examples: int = 0,
@@ -339,36 +376,7 @@ def validate(model: nn.Module,
     return step
 
 
-def setup() -> argparse.Namespace:
-    ''' Parse command line arguments. '''
-    parser = argparse.ArgumentParser()
-
-    # misc
-    parser.add_argument("-s", "--seed", type=int, default=0, help="Model seed")
-    parser.add_argument("--device", type=str, default="cuda", help="Device to use [cuda, cpu]")
-    parser.add_argument("-p", "--preload", type=int, default=0, help="Preload model from iteration #p")
-    parser.add_argument("--model-folder", type=str, default="checkpoints", help="Model folder")
-    parser.add_argument("--proto", action="store_true", help="prototyping: don't log anything during")
-
-    # data
-    parser.add_argument("-d", type=int, default=15, help="Number of predictors (+ bias)")
-    parser.add_argument("-f", "--fixed", type=float, default=0., help='Fixed noise variance (default = 0. -> not fixed)')
-    parser.add_argument("-i", "--iterations", type=int, default=500, help="Number of iterations to train")
-    parser.add_argument("-b", "--batch-size", type=int, default=50, help="Batch size")
-
-    # model and loss
-    parser.add_argument("-l", "--loss", type=str, default="lognormal", help="Loss function [mse, lognormal]")
-    parser.add_argument("-m", "--model", type=str, default="transformer", help="Model type [gru, lstm, transformer]")
-    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate")
-    parser.add_argument("--hidden-dim", type=int, default=128, help="Hidden dimension")
-    parser.add_argument("--ff-dim", type=int, default=256, help="Feedforward dimension (transformer)")
-    parser.add_argument("--n-heads", type=int, default=4, help="Number of heads (transformer)")
-    parser.add_argument("--n-layers", type=int, default=1, help="Number of layers (transformer)")
-    parser.add_argument("--lr", type=float, default=5e-3, help="Learning rate (Adam)")
-    parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon (Adam)")
-
-    return parser.parse_args()
-
+###############################################################################
 
 if __name__ == "__main__":
     cfg = setup()
