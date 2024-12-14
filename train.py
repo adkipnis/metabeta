@@ -448,9 +448,10 @@ if __name__ == "__main__":
         print("No preloaded model found, starting from scratch.")
 
     # training loop
-    print(f"Training for {cfg.iterations + 1 - initial_iteration} iterations with 10k datasets per iteration and a batch size of {cfg.batch_size}...")
+    print("Preparing validation dataset...")
     fname = Path('data', f'dataset-val{suffix}.pt')
     dataloader_val = getDataLoader(fname, 100)
+    print(f"Training for {cfg.iterations + 1 - initial_iteration} iterations with 10k datasets per iteration and a batch size of {cfg.batch_size}...")
     for iteration in range(initial_iteration, cfg.iterations + 1):
         fname = dsFilename(int(1e4), iteration, suffix)
         dataloader_train = getDataLoader(fname, cfg.batch_size)
