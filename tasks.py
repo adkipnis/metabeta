@@ -171,3 +171,33 @@ def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> No
     plotParams(df, beta)
 
 
+if __name__ == "__main__":
+    seed = 0
+    n_predictors = 1
+    n_obs = 100
+    a_0, b_0 = 3., 1.
+    # noise_var = torch.distributions.inverse_gamma.InverseGamma(a_0, b_0).sample().item()
+    noise_var = 2. ** 2
+    datadist = torch.distributions.uniform.Uniform(-5., 5.)
+    fe = FixedEffects(n_predictors, math.sqrt(noise_var), datadist)
+    ds = fe.sample(n_obs, seed)
+    X, y, beta = ds["X"], ds["y"], ds["beta"]
+    eps = y - X @ beta
+    noise_var_ml = 1/(n_obs - n_predictors - 1) * torch.dot(eps, eps)
+    snr = torch.var(y)/noise_var
+    mu, sigma, a, b = fe.allPosteriorParams(X, y)
+    dist = torch.distributions.inverse_gamma.InverseGamma(a[-1], b[-1])
+    print(f"true beta: {beta}")
+    print(f"posterior mu:\n{mu}")
+    print(f"posterior (margial) sigma^2:\n{torch.diagonal(sigma, dim1=-1, dim2=-2)}")
+    print(f"posterior a:\n{a}")
+    print(f"posterior b:\n{b}")
+    print(f"true error variance: {noise_var:.3f}")
+    print(f"ML estimate: {noise_var_ml:.3f}")
+    print(f"EAP estimate: {dist.mean:.3f}")
+    print(f"SNR: {snr:.3f}")
+    plotExample(beta, mu, sigma)
+    
+    
+    
+    
