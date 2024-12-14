@@ -124,22 +124,50 @@ class FixedEffects(Task):
         return out
 
 
-def main():
-    seed = 0
-    n_predictors = 2
-    n_obs = 20
-    noise_std = 0.1
-    datadist = torch.distributions.Normal(0., 3.)
-    fe = FixedEffects(n_predictors, noise_std, datadist)
-    ds = fe.sample(n_obs, seed)
-    X, y = ds["X"], ds["y"]
-    # mu_n, Sigma_n = fe.posteriorParams(X, y)
-    # print(f"true:\n{ds['params']}")
-    # print(f"post. mean:\n{mu_n}")
-    # print(f"post. cov:\n{Sigma_n}")
-    mus, sigmas = fe.allPosteriorParams(X, y)
-    print(mus)
+def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> None:
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as colors
+    import pandas as pd
+    import numpy as np
 
-if __name__ == "__main__":
-    main()
+    def paramDataFrame(means, stds) -> pd.DataFrame:
+        values_m = means.flatten()
+        values_s = stds.flatten()
+        row_indices = np.repeat(np.arange(means.shape[0]), means.shape[1]) + 1
+        column_indices = np.tile(np.arange(means.shape[1]), means.shape[0])
+        return pd.DataFrame({
+            'n' : row_indices,
+            'mean' : values_m,
+            'std' : values_s,
+            'd': column_indices
+        })
+    
+    def plotParams(df, targets):
+        cmap = colors.LinearSegmentedColormap.from_list("custom_blues", ["#add8e6", "#000080"])
+        unique_d = df['d'].unique()
+        norm = colors.Normalize(vmin=unique_d.min(), vmax=unique_d.max())
+        
+        # Create the plot
+        fig, ax = plt.subplots(figsize=(10, 6))
+        for d_value, group in df.groupby('d'):
+            target = targets[d_value].item()
+            color = cmap(norm(d_value))
+            ax.plot(group['n'], group['mean'], label=f'd={d_value}', color=color)
+            ax.fill_between(group['n'], 
+                            group['mean'] - group['std'], 
+                            group['mean'] + group['std'], 
+                            color=color, alpha=0.1)  # Shade ± SD
+            ax.axhline(y=target, color=color, linestyle=':', linewidth=1.5)
+            
+        # Adding labels and title
+        plt.xlabel('n')  # X-axis label
+        plt.ylabel(f'analytical posterior')      # Y-axis label
+        plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+        plt.ylim(-6, 6)
+        plt.grid(True)           # Show grid
+        plt.show()               # Display the plot
+        
+    df = paramDataFrame(mu, torch.diagonal(sigma, dim1=-1, dim2=-2))
+    plotParams(df, beta)
+
 
