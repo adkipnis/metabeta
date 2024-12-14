@@ -2,6 +2,7 @@ import math
 import torch
 from typing import Dict, Tuple
 
+
 class Task:
     def __init__(self,
                  n_predictors: int, # without intercept
@@ -26,21 +27,17 @@ class Task:
         sd = torch.std(x, dim=0)
         return (x-mean)/(sd + 1e-8)
 
-    def _sampleBeta(self, seed: int) -> torch.Tensor:
-        torch.manual_seed(seed)
+    def _sampleBeta(self) -> torch.Tensor:
         d = self.n_predictors + 1
         return self.beta_dist.sample((d, 1)) # type: ignore
 
-    def _sampleFeatures(self, n_samples: int, seed: int) -> torch.Tensor:
-        torch.manual_seed(seed)
+    def _sampleFeatures(self, n_samples: int) -> torch.Tensor:
         x = self.data_dist.sample((n_samples, self.n_predictors)) # type: ignore
         x = self._standardize(x)
         intercept = torch.ones(n_samples, 1)
         return torch.cat([intercept, x], dim=1)
 
-    def _sampleNoise(self, n_samples: int, seed: int) -> torch.Tensor:
-        torch.manual_seed(seed)
-        return self.noise_dist.sample((n_samples, 1)) # type: ignore
+    def _sampleNoise(self, n_samples: int) -> torch.Tensor:
 
     def sample(self, n_samples: int, seed: int) -> Dict[str, torch.Tensor]:
         raise NotImplementedError
