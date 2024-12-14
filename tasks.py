@@ -29,7 +29,7 @@ class Task:
 
     def _sampleBeta(self) -> torch.Tensor:
         d = self.n_predictors + 1
-        return self.beta_dist.sample((d, 1)) # type: ignore
+        return self.beta_dist.sample((d,)) # type: ignore
 
     def _sampleFeatures(self, n_samples: int) -> torch.Tensor:
         x = self.data_dist.sample((n_samples, self.n_predictors)) # type: ignore
@@ -38,6 +38,7 @@ class Task:
         return torch.cat([intercept, x], dim=1)
 
     def _sampleNoise(self, n_samples: int) -> torch.Tensor:
+        return self.noise_dist.sample((n_samples,)) # type: ignore
 
     def sample(self, n_samples: int, seed: int) -> Dict[str, torch.Tensor]:
         raise NotImplementedError
@@ -84,9 +85,9 @@ class FixedEffects(Task):
         beta = self._sampleBeta()
         eps = self._sampleNoise(n_samples)
         y = X @ beta + eps
-        out = {"X": X,
-               "y": y,
-               "beta": beta,
+        out = {"X": X, # (n, d)
+               "y": y, # (n,)
+               "beta": beta, # (d,)
                "sigma_error": torch.tensor(self.sigma_error),
                "seed": torch.tensor(seed),}
         if include_posterior:
