@@ -45,6 +45,11 @@ class Task:
     def sample(self, n_samples: int, seed: int) -> Dict[str, torch.Tensor]:
         raise NotImplementedError
 
+    
+class FixedEffects(Task):
+    def __init__(self, n_predictors: int, sigma_error: float, data_dist: torch.distributions.Distribution):
+        super().__init__(n_predictors, sigma_error, data_dist)
+
     def _posteriorPrecision(self, x: torch.Tensor) -> torch.Tensor:
         d = self.n_predictors + 1
         precision = torch.tensor(1. / self.beta_error).square().repeat(d)
@@ -75,11 +80,6 @@ class Task:
         for i in range(n):
             mus[i], sigmas[i] = self.posteriorParams(x[:i+1], y[:i+1])
         return mus, sigmas
-
-
-class FixedEffects(Task):
-    def __init__(self, n_predictors: int, sigma_error: float, data_dist: torch.distributions.Distribution):
-        super().__init__(n_predictors, sigma_error, data_dist)
 
     def sample(self, n_samples: int, seed: int, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
         X = self._sampleFeatures(n_samples, seed)
