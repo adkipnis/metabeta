@@ -91,13 +91,21 @@ class FixedEffects(Task):
         b_n = self._posteriorB(y, mu_n, L_n)
         return mu_n, S_n, a_n, b_n
 
-    def allPosteriorParams(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def allPosteriorParams(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        # x (n, d), y (n, 1)
         n, d = x.shape
+
+        # weights posterior
         mus = torch.zeros(n, d)
         sigmas = torch.zeros(n, d, d)
+
+        # noise variance posterior
+        alphas = torch.zeros(n)
+        betas = torch.zeros(n)
+
         for i in range(n):
-            mus[i], sigmas[i] = self.posteriorParams(x[:i+1], y[:i+1])
-        return mus, sigmas
+            mus[i], sigmas[i], alphas[i], betas[i] = self.posteriorParams(x[:i+1], y[:i+1])
+        return mus, sigmas, alphas, betas
 
     def sample(self, n_samples: int, seed: int, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
         torch.manual_seed(seed)
@@ -111,9 +119,8 @@ class FixedEffects(Task):
                "sigma_error": torch.tensor(self.sigma_error),
                "seed": torch.tensor(seed),}
         if include_posterior:
-            mu_n, Sigma_n = self.allPosteriorParams(X, y)
-            out.update({"mu_n": mu_n,
-                        "Sigma_n": Sigma_n,})
+            mu_n, Sigma_n, a_n, b_n = self.allPosteriorParams(X, y)
+            out.update({"mu_n": mu_n, "Sigma_n": Sigma_n, "a_n": a_n, "b_n": b_n})
         return out
 
 
