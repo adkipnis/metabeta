@@ -35,7 +35,7 @@ class LMDataset(Dataset):
         X = padTensor(item['X'], (n, d_max))
         y = padTensor(item['y'], (n, 1))
         beta = padTensor(item['beta'], (d_max, 1))
-        
+
         if self.permute:
             seed = item['seed']
             torch.manual_seed(seed)
@@ -51,9 +51,9 @@ class LMDataset(Dataset):
             mu_n = padTensor(item['mu_n'], (n, d_max))
             Sigma_n = padTensor(item['Sigma_n'], (n, d_max, d_max))
             if self.permute:
-                mu_n = mu_n[:, indices]
-                Sigma_n = Sigma_n[:, indices] # permute rows
-                Sigma_n = Sigma_n[:, :, indices] # permute cols
+                mu_n = mu_n[:, indices] # type: ignore
+                Sigma_n = Sigma_n[:, indices] # type: ignore
+                Sigma_n = Sigma_n[:, :, indices] # type: ignore
             out.update({'mu_n': mu_n, 'Sigma_n': Sigma_n})
 
         return out
@@ -77,6 +77,5 @@ class LMDataset(Dataset):
         train_dataset = LMDataset(train_data, self.max_samples, self.max_predictors)
         test_dataset = LMDataset(test_data, self.max_samples, self.max_predictors)
         return train_dataset, test_dataset
-
 
 
