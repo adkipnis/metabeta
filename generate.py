@@ -50,7 +50,7 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
     for _ in iterator:
         seed = sower.throw()
         d = getD(seed, max_predictors)
-        sigma = math.sqrt(d + 1) * getSigmaError(seed)
+        sigma = math.sqrt(d + 1) * getSigmaError(seed) if not cfg.fixed else cfg.fixed
         data_dist = getDataDist(seed)
         lm = FixedEffects(d, sigma, data_dist)
         data += [lm.sample(max_samples, seed, include_posterior=False)]
@@ -67,7 +67,7 @@ def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: 
     for d in iterator:
         iterator.set_description(f'{d:02d}/{max_predictors:02d}')
         for seed in range(n_draws_per):
-            sigma = math.sqrt(d + 1) * float(sigmas[seed])
+            sigma = math.sqrt(d + 1) * float(sigmas[seed]) if not cfg.fixed else cfg.fixed
             data_dist = getDataDist(seed)
             lm = FixedEffects(d, sigma, data_dist)
             data += [lm.sample(max_samples, seed, include_posterior=True)]
@@ -82,8 +82,6 @@ def dsFilename(size: int, part: int, suffix: str = '') -> Path:
     else:
         n = str(size)
     p = f'{part:03d}'
-    if suffix:
-        suffix = '-' + suffix
     return Path('data', f'dataset-{n}-{p}{suffix}.pt')
 
 
@@ -96,6 +94,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--max_samples', type=int, default=200, help='Maximum number of samples to draw per linear model (default = 200).')
     parser.add_argument('-d', '--max_predictors', type=int, default=14, help='Maximum number of predictors (without intercept) to draw per linear model (default = 14).')
     parser.add_argument('--start', type=int, default=1, help='Starting iteration number (default = 1).')
+    parser.add_argument('-f', '--fixed', type=float, default=0., help='Fixed noise variance (default = 0. -> not fixed)')
     return parser.parse_args()
 
 
@@ -109,12 +108,14 @@ if __name__ == "__main__":
     max_samples = cfg.max_samples
     max_predictors = cfg.max_predictors
     start = cfg.start
+    noise = "variable" if cfg.fixed == 0 else cfg.fixed
+    suffix = f"-noise={noise}"
 
     if start == 1:
         # generate validation dataset
         print(f'Generating validation dataset of {n_draws_val * (max_predictors + 1)} samples')
         dataset = generateBalancedDataset(n_draws_val, max_samples, max_predictors)
-        filename = Path('data', 'dataset-val.pt')
+        filename = Path('data', f'dataset-val{suffix}.pt')
         torch.save(dataset, filename)
     else:
         # reset sower if starting from a different iteration
@@ -126,7 +127,7 @@ if __name__ == "__main__":
     print(f'Generating {iterations} training datasets of {n_draws} samples each')
     for part in range(start, iterations + 1):
         dataset = generateDataset(n_draws, max_samples, max_predictors, sower)
-        filename = dsFilename(n_draws, part)
+        filename = dsFilename(n_draws, part, suffix)
         torch.save(dataset, filename)
         print(f'Saved dataset to {filename}')
 
