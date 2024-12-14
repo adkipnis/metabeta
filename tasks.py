@@ -48,15 +48,19 @@ class FixedEffects(Task):
     def __init__(self, n_predictors: int, sigma_error: float, data_dist: torch.distributions.Distribution):
         super().__init__(n_predictors, sigma_error, data_dist)
 
-    def _posteriorPrecision(self, x: torch.Tensor) -> torch.Tensor:
+    def _priorPrecision(self) -> torch.Tensor:
         d = self.n_predictors + 1
         precision = torch.tensor(1. / self.beta_error).square().repeat(d)
         L_0 = torch.diag(precision)
-        S = x.T @ x
-        return L_0 + S
+        return L_0
 
-    def _posteriorCovariance(self, x: torch.Tensor) -> torch.Tensor:
-        L_n = self._posteriorPrecision(x)
+    def _posteriorPrecision(self, x: torch.Tensor) -> torch.Tensor:
+        L_0 = self._priorPrecision()
+        S = x.T @ x
+        L_n = L_0 + S
+        return L_n
+
+    def _posteriorCovariance(self, L_n: torch.Tensor) -> torch.Tensor:
         lower = torch.linalg.cholesky(L_n)
         S_n = torch.cholesky_inverse(lower)
         return S_n
