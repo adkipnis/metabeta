@@ -236,11 +236,11 @@ def run(model: nn.Module,
     losses = betaLossWrapper(mu, sigma, beta, depths) # (batch, n_predictors)
     targets = beta
 
-    # # compute noise parameter loss per batch
-    # noise_std = batch["sigma_error"].unsqueeze(-1).float()
-    # losses_noise = noiseLossWrapper(ab, noise_std, depths) # (batch, 1)
-    # losses = torch.cat([losses, losses_noise], dim=-1)
-    # targets = torch.cat([targets, noise_std], dim=-1)
+    # compute noise parameter loss per batch
+    noise_std = batch["sigma_error"].unsqueeze(-1).float()
+    losses_noise = noiseLossWrapper(ab, noise_std, depths) # (batch, 1)
+    losses = torch.cat([losses, losses_noise], dim=-1)
+    targets = torch.cat([targets, noise_std], dim=-1)
     
     # compute mean loss over all batches and predictors (optionally ignoring padded predictors)
     loss = maskLoss(losses, targets) if unpad else losses.mean()
