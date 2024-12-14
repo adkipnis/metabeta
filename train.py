@@ -247,12 +247,12 @@ def run(model: nn.Module,
 
     # optionally print some examples
     for i in range(num_examples):
-        mask = (targets[i] != 0.)
-        targets_i = beta[i, mask].detach().numpy()        
+        mask = (beta[i] != 0.)
+        beta_i = beta[i, mask].detach().numpy()        
         mu_i = batch["mu_n"][i, -1, mask].detach().numpy()
         outputs_i = mu[i, -1, mask].detach().numpy()
         printer(f"\n{console_width * '-'}")
-        printer(f"True       : {targets_i}")
+        printer(f"True       : {beta_i}")
         printer(f"Analytical : {mu_i}")
         printer(f"Predicted  : {outputs_i}")
         printer(f"{console_width * '-'}\n")
