@@ -62,7 +62,7 @@ def getDataLoader(filename: Path, batch_size: int) -> DataLoader:
 def modelID(cfg: argparse.Namespace) -> str:
     ''' Return a string that identifies the model. '''
     noise = "variable" if cfg.fixed == 0 else cfg.fixed
-    return f"{cfg.model}-{cfg.hidden_dim}-{cfg.ff_dim}-{cfg.n_heads}-{cfg.n_layers}-noise={noise}-seed={cfg.seed}-loss={cfg.loss}"
+    return f"{cfg.model}-{cfg.hidden}-{cfg.ff}-{cfg.heads}-{cfg.layers}-noise={noise}-seed={cfg.seed}-loss={cfg.loss}"
 
 
 def getCheckpointPath(iteration: int) -> Path:
@@ -123,10 +123,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument("-l", "--loss", type=str, default="lognormal", help="Loss function [mse, lognormal]")
     parser.add_argument("-m", "--model", type=str, default="transformer", help="Model type [gru, lstm, transformer]")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate")
-    parser.add_argument("--hidden-dim", type=int, default=128, help="Hidden dimension")
-    parser.add_argument("--ff-dim", type=int, default=256, help="Feedforward dimension (transformer)")
-    parser.add_argument("--n-heads", type=int, default=8, help="Number of heads (transformer)")
-    parser.add_argument("--n-layers", type=int, default=1, help="Number of layers (transformer)")
+    parser.add_argument("--hidden", type=int, default=128, help="Hidden dimension")
+    parser.add_argument("--ff", type=int, default=256, help="Feedforward dimension (transformer)")
+    parser.add_argument("--heads", type=int, default=8, help="Number of heads (transformer)")
+    parser.add_argument("--layers", type=int, default=1, help="Number of layers (transformer)")
     parser.add_argument("--lr", type=float, default=5e-3, help="Learning rate (Adam)")
     parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon (Adam)")
     
@@ -394,27 +394,27 @@ if __name__ == "__main__":
 
     # model
     if cfg.model in ["gru", "lstm"]:
-        if cfg.n_layers == 1:
+        if cfg.layers == 1:
             cfg.dropout = 0
             print('Setting dropout to 0 for RNN with 1 layer')
         Model = eval(cfg.model.upper())
         model = Model(num_predictors=cfg.d,
-                      hidden_size=cfg.hidden_dim,
-                      n_layers=cfg.n_layers,
+                      hidden_size=cfg.hidden,
+                      n_layers=cfg.layers,
                       dropout=cfg.dropout,
                       seed=cfg.seed).to(device)
-        print(f"Model: {cfg.model.upper()} with {cfg.hidden_dim} hidden units, {cfg.n_layers} layer(s), {cfg.dropout} dropout")
+        print(f"Model: {cfg.model.upper()} with {cfg.hidden} hidden units, {cfg.layers} layer(s), {cfg.dropout} dropout")
     elif cfg.model == "transformer":
         model = TransformerDecoder(
                 num_predictors=cfg.d,
-                hidden_size=cfg.hidden_dim,
-                ff_size=cfg.ff_dim,
-                n_heads=cfg.n_heads,
-                n_layers=cfg.n_layers,
+                hidden_size=cfg.hidden,
+                ff_size=cfg.ff,
+                n_heads=cfg.heads,
+                n_layers=cfg.layers,
                 dropout=cfg.dropout,
                 seed=cfg.seed).to(device)
-        print(f"Model: Transformer with {cfg.hidden_dim} hidden units, " + \
-                f"{cfg.ff_dim} feedforward units, {cfg.n_heads} heads, {cfg.n_layers} layer(s), " + \
+        print(f"Model: Transformer with {cfg.hidden} hidden units, " + \
+                f"{cfg.ff} feedforward units, {cfg.heads} heads, {cfg.layers} layer(s), " + \
                 f"{cfg.dropout} dropout")
     else:
         raise ValueError(f"Model {cfg.model} not recognized.")
