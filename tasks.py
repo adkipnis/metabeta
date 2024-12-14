@@ -83,8 +83,13 @@ class FixedEffects(Task):
         b_n = b_0 + (y_inner - mu_n_inner_scaled) / 2.
         return b_n
 
+    def posteriorParams(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        L_n = self._posteriorPrecision(x)
+        S_n = self._posteriorCovariance(L_n)
         mu_n = self._posteriorMean(x, y, S_n)
-        return mu_n, sigma_2 * S_n
+        a_n = self._posteriorA(x)
+        b_n = self._posteriorB(y, mu_n, L_n)
+        return mu_n, S_n, a_n, b_n
 
     def allPosteriorParams(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         n, d = x.shape
