@@ -1,18 +1,16 @@
 from typing import List, Tuple
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
-
-def padTensor(tensor: torch.Tensor, shape: tuple, pad_val: int = 0) -> torch.Tensor:
-    ''' Pad a tensor with a constant value. '''
-    padded = torch.full(shape, pad_val, dtype=torch.float32)
-    if len(shape) == 2:
-        padded[:tensor.shape[0], :tensor.shape[1]] = tensor
-    elif len(shape) == 3:
-        padded[:tensor.shape[0], :tensor.shape[1], :tensor.shape[2]] = tensor
-    else:
-        raise Exception("tensor must be 2d or 3d") 
-    return padded
+def padTensor(tensor: torch.Tensor, shape: tuple) -> torch.Tensor:
+    assert len(tensor.shape) == len(shape),\
+        "Input tensor and target shape must have the same number of dimensions"
+    pad_size = [max(s - t, 0) for s, t in zip(reversed(shape), reversed(tensor.shape))]
+    padding = []
+    for p in pad_size:
+        padding.extend([0, p])  # Pad at the end of each dimension
+    return F.pad(tensor, padding)
 
 
 class LMDataset(Dataset):
