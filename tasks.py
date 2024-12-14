@@ -79,9 +79,10 @@ class FixedEffects(Task):
         return mus, sigmas
 
     def sample(self, n_samples: int, seed: int, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
-        X = self._sampleFeatures(n_samples, seed)
-        beta = self._sampleBeta(seed)
-        eps = self._sampleNoise(n_samples, seed)
+        torch.manual_seed(seed)
+        X = self._sampleFeatures(n_samples)
+        beta = self._sampleBeta()
+        eps = self._sampleNoise(n_samples)
         y = X @ beta + eps
         out = {"X": X,
                "y": y,
