@@ -70,6 +70,19 @@ class FixedEffects(Task):
         mu_n = S_n @ (x.T @ y)
         return mu_n
 
+    def _posteriorA(self, x: torch.Tensor) -> torch.Tensor:
+        a_0 = 3.
+        n = x.shape[0]
+        a_n = torch.tensor(a_0 + n / 2.)
+        return a_n
+
+    def _posteriorB(self, y: torch.Tensor, mu_n: torch.Tensor, L_n: torch.Tensor) -> torch.Tensor:
+        b_0 = 1.
+        y_inner = torch.dot(y, y)
+        mu_n_inner_scaled = torch.linalg.multi_dot([mu_n, L_n, mu_n])
+        b_n = b_0 + (y_inner - mu_n_inner_scaled) / 2.
+        return b_n
+
         mu_n = self._posteriorMean(x, y, S_n)
         return mu_n, sigma_2 * S_n
 
