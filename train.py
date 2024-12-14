@@ -228,8 +228,8 @@ def run(model: nn.Module,
     depths = batch["d"]
     y = batch["y"].to(device)
     X = batch["X"].to(device)
-    beta = batch["beta"].squeeze(-1).float()
-    inputs = torch.cat([X, y], dim=-1)
+    beta = batch["beta"].float()
+    inputs = torch.cat([X, y.unsqueeze(-1)], dim=-1)
     mu, sigma, ab = model(inputs)
 
     # compute beta parameter loss per batch and predictor (optionally over multiple model outputs per batch)
@@ -265,7 +265,7 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     y = batch["y"].to(device)
     depths = batch["d"]
     b, n, _ = X.shape
-    inputs = torch.cat([X, y], dim=-1)
+    inputs = torch.cat([X, y.unsqueeze(-1)], dim=-1)
 
     # get analytical posterior
     mu_a = batch["mu_n"].float().squeeze(-1)
@@ -303,7 +303,7 @@ def savePredictions(model: nn.Module, batch: dict, iteration_index: int, batch_i
     ''' save model outputs '''
     X = batch["X"].to(device)
     y = batch["y"].to(device)
-    inputs = torch.cat([X, y], dim=-1)
+    inputs = torch.cat([X, y.unsqueeze(-1)], dim=-1)
     mu, sigma, _ = model(inputs)
     fname = Path(pred_path, f"predictions_i={iteration_index}_b={batch_index}.pt")
     out = {
