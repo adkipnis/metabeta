@@ -432,7 +432,8 @@ if __name__ == "__main__":
     if cfg.loss == "mse":
         mse = nn.MSELoss(reduction='none')
         lf = lambda means, stds, targets: mse(means, targets)
-    elif cfg.loss == "lognormal":
+        lf_noise = lambda stds, targets: mse(stds[..., 0], targets)
+    elif cfg.loss == "logprob":
         lf = logNormalLoss
         lf_noise = logInvGammaLoss
     else:
