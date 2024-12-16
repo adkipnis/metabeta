@@ -362,7 +362,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="cuda", help="Device to use [cuda, cpu]")
     parser.add_argument("-p", "--preload", type=int, default=0, help="Preload model from iteration #p")
     parser.add_argument("--model-folder", type=str, default="checkpoints", help="Model folder")
-    parser.add_argument("--proto", action="store_true", help="prototyping: don't log anything during")
+    parser.add_argument("--proto", action="store_true", help="prototyping: don't log anything during (default = False)")
 
     # data
     parser.add_argument("-d", type=int, default=15, help="Number of predictors (+ bias)")
@@ -380,6 +380,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--layers", type=int, default=1, help="Number of layers (transformer, default = 1)")
     parser.add_argument("--lr", type=float, default=5e-3, help="Learning rate (Adam, default = 5e-3)")
     parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon (Adam, default = 1e-8)")
+    parser.add_argument("--kl", action="store_true", help="additionally report KL Divergence for validation set (default = False)")
     
     return parser.parse_args()
 
