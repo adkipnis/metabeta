@@ -48,11 +48,13 @@ class LMDataset(Dataset):
         if 'mu_n' in item:
             mu_n = padTensor(item['mu_n'], (n, d_max))
             Sigma_n = padTensor(item['Sigma_n'], (n, d_max, d_max))
+            a_n = item['a_n']
+            b_n = item['b_n']
             if self.permute:
                 mu_n = mu_n[:, indices] # type: ignore
                 Sigma_n = Sigma_n[:, indices] # type: ignore
                 Sigma_n = Sigma_n[:, :, indices] # type: ignore
-            out.update({'mu_n': mu_n, 'Sigma_n': Sigma_n})
+            out.update({'mu_n': mu_n, 'Sigma_n': Sigma_n, 'a_n': a_n, 'b_n': b_n})
 
         return out
 
