@@ -334,10 +334,13 @@ def validate(model: nn.Module,
             if logger is not None:
                 logger.write(iteration, step, loss_val.item(), "loss_val")
 
-            # # KL loss
-            # loss_kl = compare(model, batch)
-            # writer.add_scalar("loss_kl", loss_kl.item(), step)
-            # logger.write(iteration, step, loss_kl.item(), "loss_kl")
+            # optionally calculate KL loss
+            if cfg.kl:
+                loss_kl = compare(model, batch)
+                if writer is not None:
+                    writer.add_scalar("loss_kl", loss_kl.item(), step)
+                if logger is not None:
+                    logger.write(iteration, step, loss_kl.item(), "loss_kl")
 
             # optionally save predictions
             if iteration % 5 == 0 and not cfg.proto:
