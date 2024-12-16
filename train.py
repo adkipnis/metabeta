@@ -281,11 +281,12 @@ def savePredictions(model: nn.Module, batch: dict, iteration_index: int, batch_i
     X = batch["X"].to(device)
     y = batch["y"].to(device)
     inputs = torch.cat([X, y.unsqueeze(-1)], dim=-1)
-    mu, sigma, _ = model(inputs)
+    mu, sigma, noise_params = model(inputs)
     fname = Path(pred_path, f"predictions_i={iteration_index}_b={batch_index}.pt")
     out = {
         "means": mu,
         "stds": sigma,
+        "abs": noise_params,
     }
     torch.save(out, fname)
 
