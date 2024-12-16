@@ -250,10 +250,7 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     sigma_a = torch.diagonal(sigma_a, dim1=-2, dim2=-1) # take diagonal for comparability
     
     # get proposed posterior
-    mu_p, sigma_p, ab = model(inputs)
-    # noise_var = batch["sigma_error"]
-    # noise_var_hat = invGammaMAP(alpha_beta)
-    # stds *= noise_var_hat.unsqueeze(-1)
+    mu_p, sigma_p, _ = model(inputs)
     
     # Compute KL divergence only for non-padded elements
     losses = torch.zeros(b, n, device=device)
