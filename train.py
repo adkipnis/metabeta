@@ -374,7 +374,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("-b", "--batch-size", type=int, default=100, help="Batch size (default = 100)")
 
     # model and loss
-    parser.add_argument("-l", "--loss", type=str, default="mse", help="Loss function [mse, logprob] (default = mse)")
+    parser.add_argument("-l", "--loss", type=str, default="logprob", help="Loss function [mse, logprob] (default = mse)")
     parser.add_argument("-m", "--model", type=str, default="transformer", help="Model type [gru, lstm, transformer] (default = transformer)")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate (default = 0.1)")
     parser.add_argument("--hidden", type=int, default=64, help="Hidden dimension (default = 64)")
