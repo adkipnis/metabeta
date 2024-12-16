@@ -145,15 +145,14 @@ def betaLossWrapper(means: torch.Tensor,
     return losses # (batch, d)
 
 
-def noiseLossWrapper(alpha_betas: torch.Tensor,
+def noiseLossWrapper(noise_params: torch.Tensor,
                      noise_std: torch.Tensor,
                      d: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the noise loss function. ''' 
     # calculate losses for all dataset sizes and each beta
-    b, n, _ = alpha_betas.shape
-    noise_var = torch.square(noise_std)
-    target = noise_var.expand((b,n))
-    losses = lf_noise(alpha_betas, target).unsqueeze(-1)
+    b, n, _ = noise_params.shape
+    target = noise_std.expand((b,n))
+    losses = lf_noise(noise_params, target).unsqueeze(-1)
     
     # mask out first n_min losses per batch, then average over subject
     n_min = noise_tol * d.unsqueeze(-1)
