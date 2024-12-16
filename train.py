@@ -179,6 +179,22 @@ def maskLoss(losses: torch.Tensor,
     return loss # (,)
 
 
+# def noiseMLE(y: torch.Tensor, X: torch.Tensor, mu: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+#     # y (b,d), X (b,n,d), mu (b,n,d)
+#     b, n, _ = X.shape
+#     mask = (targets != 0.).unsqueeze(1) # (b, 1, d)
+#     X = X * mask
+#     mu = mu * mask
+#     noise_var = torch.zeros((b, n))
+#     for i in range(b):
+#         d = mask[i].sum()
+#         for j  in range(d+1, n):
+#             eps = y[i, :j] - X[i, :j] @ mu[i, j]
+#             factor = 1 / (j - d)
+#             noise_var[i, j] = factor * torch.dot(eps, eps)
+#     return noise_var.sqrt()
+
+
 # -------- training and testing methods
 def run(model: nn.Module,
         batch: dict,
