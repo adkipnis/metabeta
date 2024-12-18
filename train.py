@@ -75,13 +75,17 @@ def getCheckpointPath(iteration: int) -> Path:
 def save(model: nn.Module,
          optimizer: schedulefree.AdamWScheduleFree,
          current_iteration: int,
-         current_global_step: int) -> None:
+         current_global_step: int,
+         current_validation_step: int,
+         timestamp: str) -> None:
     """ Save the model and optimizer state. """
     model_filename = getCheckpointPath(current_iteration)
     os.makedirs(cfg.model_folder, exist_ok=True)
     torch.save({
         'iteration': current_iteration,
         'global_step': current_global_step,
+        'validation_step': current_validation_step,
+        'timestamp': timestamp,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
     }, model_filename)
