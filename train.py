@@ -213,11 +213,11 @@ def run(model: nn.Module,
     X = batch["X"].to(device)
     beta = batch["beta"].float()
     inputs = torch.cat([X, y.unsqueeze(-1)], dim=-1)
-    mu, sigma, noise_params = model(inputs)
+    mu_beta, sigma_beta, noise_params = model(inputs)
 
     # compute beta parameter loss per batch and predictor (optionally over multiple model outputs per batch)
-    losses = betaLossWrapper(mu, sigma, beta, depths) # (batch, n_predictors)
     targets = beta
+    losses = betaLossWrapper(mu_beta, sigma_beta, beta, depths) # (batch, n_predictors)
     
     # # compute noise parameter loss per batch
     # noise_std = batch["sigma_error"].unsqueeze(-1).float()
@@ -233,7 +233,7 @@ def run(model: nn.Module,
         mask = (beta[i] != 0.)
         beta_i = beta[i, mask].detach().numpy()        
         mu_i = batch["mu_n"][i, -1, mask].detach().numpy()
-        outputs_i = mu[i, -1, mask].detach().numpy()
+        outputs_i = mu_beta[i, -1, mask].detach().numpy()
         printer(f"\n{console_width * '-'}")
         printer(f"True       : {beta_i}")
         printer(f"Analytical : {mu_i}")
