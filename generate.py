@@ -90,7 +90,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('-i', '--iterations', type=int, default=100, help='Number of dataset partitions to generate (default = 100, 0 only generates validation dataset).')
     parser.add_argument('--max_samples', type=int, default=200, help='Maximum number of samples to draw per linear model (default = 200).')
     parser.add_argument('-d', '--max_predictors', type=int, default=14, help='Maximum number of predictors (without intercept) to draw per linear model (default = 14).')
-    parser.add_argument('--start', type=int, default=1, help='Starting iteration number (default = 1).')
+    parser.add_argument('-b', '--begin', type=int, default=0, help='Begin with iteration number #b (default = 0).')
     parser.add_argument('-f', '--fixed', type=float, default=0., help='Fixed noise variance (default = 0. -> not fixed)')
     return parser.parse_args()
 
