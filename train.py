@@ -130,6 +130,20 @@ def logInvGammaLoss(ab: torch.Tensor,
     return -proposal.log_prob(noise_var) # (batch, n)
 
 
+def averageOverN(losses: torch.Tensor, n: int, b: int, depths: torch.Tensor) -> torch.Tensor:
+    ''' mask out first n_min losses per batch, then calculate weighted average over n with higher emphasis on later n'''
+    # losses (b, n, d)
+    n_min = noise_tol * depths.unsqueeze(1) # (b, 1)
+    denominators = n - n_min # (b, 1)
+    mask = torch.arange(n).expand(b, n) < n_min # (b, n)
+    losses[mask] = 0.
+    weights = torch.arange(0, 1, 1/n) + 1/n
+    weights = weights.sqrt().unsqueeze(0).unsqueeze(-1)
+    losses = losses * weights
+    losses = losses.sum(dim=1) / denominators
+    return losses # (batch, d)
+
+
 def betaLossWrapper(means: torch.Tensor,
                     sigma: torch.Tensor,
                     betas: torch.Tensor,
@@ -141,14 +155,7 @@ def betaLossWrapper(means: torch.Tensor,
     b, n, _ = means.shape
     target = betas.unsqueeze(1).expand_as(means)
     losses = lf(means, sigma, target) # (b, n, d)
-
-    # mask out first n_min losses per batch, then average over subject
-    n_min = noise_tol * d.unsqueeze(1) # (b, 1)
-    denominators = n - n_min # (b, 1)
-    mask = torch.arange(n).expand(b, n) < n_min # (b, n)
-    losses[mask] = 0.
-    losses = losses.sum(dim=1) / denominators
-    return losses # (batch, d)
+    return averageOverN(losses, n, b, d)
 
 
 def noiseLossWrapper(noise_params: torch.Tensor,
@@ -159,16 +166,9 @@ def noiseLossWrapper(noise_params: torch.Tensor,
     b, n, _ = noise_params.shape
     target = noise_std.expand((b,n))
     losses = lf_noise(noise_params, target).unsqueeze(-1)
+    return averageOverN(losses, n, b, d)
     
-    # mask out first n_min losses per batch, then average over subject
-    n_min = noise_tol * d.unsqueeze(-1)
-    denominators = n - n_min
-    mask = torch.arange(n) < n_min
-    losses[mask] = 0.
-    losses = losses.sum(dim=1) / denominators
-    return losses # (batch, 1)
-
-
+   
 def maskLoss(losses: torch.Tensor,
              targets: torch.Tensor,
              pad_val: float = 0.,
