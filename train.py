@@ -133,6 +133,8 @@ def logInvGammaLoss(ab: torch.Tensor,
 def averageOverN(losses: torch.Tensor, n: int, b: int, depths: torch.Tensor) -> torch.Tensor:
     ''' mask out first n_min losses per batch, then calculate weighted average over n with higher emphasis on later n'''
     # losses (b, n, d)
+    if noise_tol == 0:
+        return losses.mean(dim=1)
     n_min = noise_tol * depths.unsqueeze(1) # (b, 1)
     denominators = n - n_min # (b, 1)
     mask = torch.arange(n).expand(b, n) < n_min # (b, n)
