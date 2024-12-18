@@ -408,7 +408,7 @@ if __name__ == "__main__":
     else:
         device = torch.device("cpu")
 
-    # model
+    # set up model
     if cfg.model in ["gru", "lstm"]:
         if cfg.layers == 1:
             cfg.dropout = 0
@@ -435,6 +435,8 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Model {cfg.model} not recognized.")
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr, eps=cfg.eps)
+    
     # optionally preload a model
     initial_iteration, global_step, validation_step = 1, 0, 0
     if cfg.preload:
@@ -443,7 +445,7 @@ if __name__ == "__main__":
     else:
         print("No preloaded model found, starting from scratch.")
 
-    # loss, optimizer, writer
+    # loss functions
     if cfg.loss == "mse":
         mse = nn.MSELoss(reduction='none')
         lf = lambda means, stds, targets: mse(means, targets)
@@ -453,16 +455,18 @@ if __name__ == "__main__":
         lf_noise = logInvGammaLoss
     else:
         raise ValueError(f"Loss {cfg.loss} not recognized.")
-    optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr, eps=cfg.eps)
+
+    # logging
     if cfg.proto:
         writer, logger = None, None
     else:
         writer = SummaryWriter(Path("runs", modelID(cfg), timestamp))
         logger = Logger(Path("losses", modelID(cfg), timestamp))
     pred_path = Path("predictions", modelID(cfg), timestamp)
-    pred_path .mkdir(parents=True, exist_ok=True)
+    pred_path.mkdir(parents=True, exist_ok=True)
     print(f"Number of parameters: {num_params}, Loss: {cfg.loss}, Learning rate: {cfg.lr}, Epsilon: {cfg.eps}, Seed: {cfg.seed}, Device: {device}")
 
+    # ------------------------------------------------------------------------------------------------------------------------------------------------- 
     # training loop
     print("Preparing validation dataset...")
     fname = Path('data', f'dataset-val{suffix}.pt')
