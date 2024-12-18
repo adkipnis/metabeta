@@ -139,9 +139,9 @@ def averageOverN(losses: torch.Tensor, n: int, b: int, depths: torch.Tensor) -> 
     denominators = n - n_min # (b, 1)
     mask = torch.arange(n).expand(b, n) < n_min # (b, n)
     losses[mask] = 0.
-    weights = torch.arange(0, 1, 1/n) + 1/n
-    weights = weights.sqrt().unsqueeze(0).unsqueeze(-1)
-    losses = losses * weights
+    # weights = torch.arange(0, 1, 1/n) + 1/n
+    # weights = weights.sqrt().unsqueeze(0).unsqueeze(-1)
+    # losses = losses * weights
     losses = losses.sum(dim=1) / denominators
     return losses # (batch, d)
 
