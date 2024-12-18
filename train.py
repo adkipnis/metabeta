@@ -264,38 +264,22 @@ def run(model: nn.Module,
 
 def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     ''' Compate analytical posterior with proposed posterior using KL divergence '''
-    X = batch["X"].to(device)
-    y = batch["y"].to(device)
     depths = batch["d"]
-    b, n, _ = X.shape
+    y = batch["y"].to(device)
+    X = batch["X"].to(device)
+    beta = batch["beta"].float()
     inputs = torch.cat([X, y.unsqueeze(-1)], dim=-1)
+    mu_proposed, sigma_proposed, _ = model(inputs)
 
     # get analytical posterior
-    mu_a = batch["mu_n"].float().squeeze(-1)
-    sigma_a = batch["Sigma_n"].float()
-    sigma_a = torch.diagonal(sigma_a, dim1=-2, dim2=-1) # take diagonal for comparability
-    
-    # get proposed posterior
-    mu_p, sigma_p, _ = model(inputs)
+    mu_analytical = batch["mu_n"].float().squeeze(-1)
+    sigma_analytical = batch["Sigma_n"].float()
+    sigma_analytical = torch.diagonal(sigma_analytical, dim1=-2, dim2=-1)
     
     # Compute KL divergence only for non-padded elements
-    losses = torch.zeros(b, n, device=device)
-    for i in range(b):
-        d = depths[i]
-        mu_ai = mu_a[i, :, :d]
-        mu_pi = mu_p[i, :, :d]
-        sigma_ai = torch.diag_embed(sigma_a[i, :, :d].square())
-        sigma_pi = torch.diag_embed(sigma_p[i, :, :d].square())
-        post_a = D.multivariate_normal.MultivariateNormal(mu_ai, sigma_ai)
-        post_p = D.multivariate_normal.MultivariateNormal(mu_pi, sigma_pi)
-        losses[i] = D.kl.kl_divergence(post_a, post_p)
-    
-    # average appropriately
-    n_min = noise_tol * depths
-    denominators = n - n_min
-    mask = torch.arange(n).expand(b, n) < n_min.unsqueeze(-1)
-    losses[mask] = 0.
-    losses = losses.sum(dim=1) / denominators
+    losses = klLossWrapper(mu_analytical, sigma_analytical,
+                           mu_proposed, sigma_proposed,
+                           beta, depths)
     return losses.mean()
 
 
