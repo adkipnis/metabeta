@@ -104,11 +104,11 @@ if __name__ == "__main__":
     iterations = cfg.iterations
     max_samples = cfg.max_samples
     max_predictors = cfg.max_predictors
-    start = cfg.start
+    start = cfg.begin
     noise = "variable" if cfg.fixed == 0 else cfg.fixed
     suffix = f"-noise={noise}"
 
-    if start == 1:
+    if start == 0:
         # generate validation dataset
         print(f'Generating validation dataset of {n_draws_val * (max_predictors + 1)} samples')
         dataset = generateBalancedDataset(n_draws_val, max_samples, max_predictors)
