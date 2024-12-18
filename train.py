@@ -93,7 +93,7 @@ def save(model: nn.Module,
 
 def load(model: nn.Module,
          optimizer: schedulefree.AdamWScheduleFree,
-         initial_iteration: int) -> Tuple[int, int]:
+         initial_iteration: int) -> Tuple[int, int, int, str]:
     """ Load the model and optimizer state from a previous run,
     returning the initial iteration and seed. """
     model_filename = getCheckpointPath(initial_iteration)
@@ -103,7 +103,9 @@ def load(model: nn.Module,
     initial_iteration = state["iteration"] + 1
     optimizer.load_state_dict(state["optimizer_state_dict"])
     global_step = state["global_step"]
-    return initial_iteration, global_step
+    validation_step = state["validation_step"]
+    timestamp = state["timestamp"]
+    return initial_iteration, global_step, validation_step, timestamp
 
 
 # -------- loss calculation
