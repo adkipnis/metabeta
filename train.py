@@ -149,7 +149,7 @@ def averageOverN(losses: torch.Tensor, n: int, b: int, depths: torch.Tensor) -> 
 def betaLossWrapper(means: torch.Tensor,
                     sigma: torch.Tensor,
                     betas: torch.Tensor,
-                    d: torch.Tensor) -> torch.Tensor:
+                    depths: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the beta loss function.
     Handles the case 3D tensors (where the second dimension is the number of subjects = seq_size).
     Drop the losses for datasets that have fewer than n = noise_tol * number of features.'''
@@ -157,18 +157,18 @@ def betaLossWrapper(means: torch.Tensor,
     b, n, _ = means.shape
     target = betas.unsqueeze(1).expand_as(means)
     losses = lf(means, sigma, target) # (b, n, d)
-    return averageOverN(losses, n, b, d)
+    return averageOverN(losses, n, b, depths)
 
 
 def noiseLossWrapper(noise_params: torch.Tensor,
                      noise_std: torch.Tensor,
-                     d: torch.Tensor) -> torch.Tensor:
+                     depths: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the noise loss function. ''' 
     # calculate losses for all dataset sizes and each beta
     b, n, _ = noise_params.shape
     target = noise_std.expand((b,n))
     losses = lf_noise(noise_params, target).unsqueeze(-1)
-    return averageOverN(losses, n, b, d)
+    return averageOverN(losses, n, b, depths)
     
    
 def maskLoss(losses: torch.Tensor,
