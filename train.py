@@ -403,6 +403,7 @@ if __name__ == "__main__":
     # global variables
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     console_width = getConsoleWidth()
+    torch.set_printoptions(linewidth=120)
     noise_tol = cfg.tol
     noise = "variable" if cfg.fixed == 0 else cfg.fixed
     suffix = f"-noise={noise}"
