@@ -304,7 +304,7 @@ def train(model: nn.Module,
     ''' Train the model for a single iteration. '''
     model.train()
     optimizer.train()
-    iterator = tqdm(dataloader, desc=f"iteration {iteration:02d} [T]")
+    iterator = tqdm(dataloader, desc=f"iteration {iteration:02d}/{cfg.iterations:02d} [T]")
     for batch in iterator:
         optimizer.zero_grad()
         loss = run(model, batch, unpad=True)
@@ -329,7 +329,7 @@ def validate(model: nn.Module,
     ''' Validate the model for a single iteration. '''
     model.eval()
     optimizer.eval()
-    iterator = tqdm(dataloader, desc=f"iteration {iteration:02d} [V]")
+    iterator = tqdm(dataloader, desc=f"iteration {iteration:02d}/{cfg.iterations:02d} [V]")
     with torch.no_grad():
         for j, batch in enumerate(iterator):
             # preset validation loss
