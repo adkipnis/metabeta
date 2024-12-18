@@ -390,6 +390,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=5e-3, help="Learning rate (Adam, default = 5e-3)")
     parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon (Adam, default = 1e-8)")
     parser.add_argument("--kl", action="store_true", help="additionally report KL Divergence for validation set (default = False)")
+    parser.add_argument("--tol", type=int, default=1, help="Noise tolerance: ignore all losses for n < noise_tol * d (default = 1)")
     
     return parser.parse_args()
 
@@ -400,7 +401,7 @@ if __name__ == "__main__":
     # global variables
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     console_width = getConsoleWidth()
-    noise_tol = 0 # minimum n for evaluation: noise_tol * d, ignore all loss values below
+    noise_tol = cfg.tol
     noise = "variable" if cfg.fixed == 0 else cfg.fixed
     suffix = f"-noise={noise}"
     if cfg.device == "cuda":
