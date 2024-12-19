@@ -171,20 +171,20 @@ def noiseLossWrapper(noise_params: torch.Tensor,
     return averageOverN(losses, n, b, depths)
 
 
-def klLossWrapper(mu_a: torch.Tensor, sigma_a: torch.Tensor,
-                  mu_p: torch.Tensor, sigma_p: torch.Tensor,
+def klLossWrapper(mean_a: torch.Tensor, var_a: torch.Tensor,
+                  mean_p: torch.Tensor, var_p: torch.Tensor,
                   beta: torch.Tensor,
                   depths: torch.Tensor):
-    b, n, _ = mu_p.shape
+    b, n, _ = mean_p.shape
     losses = torch.zeros(b, n, device=device)
     for i in range(b):
         mask = (beta[i] != 0.)
-        mu_ai = mu_a[i, :, mask]
-        mu_pi = mu_p[i, :, mask]
-        sigma_ai = torch.diag_embed(sigma_a[i, :, mask].square())
-        sigma_pi = torch.diag_embed(sigma_p[i, :, mask].square())
-        post_a = D.multivariate_normal.MultivariateNormal(mu_ai, sigma_ai)
-        post_p = D.multivariate_normal.MultivariateNormal(mu_pi, sigma_pi)
+        mu_ai = mean_a[i, :, mask]
+        mu_pi = mean_p[i, :, mask]
+        Sigma_ai = torch.diag_embed(var_a[i, :, mask])
+        Sigma_pi = torch.diag_embed(var_p[i, :, mask])
+        post_a = D.multivariate_normal.MultivariateNormal(mu_ai, Sigma_ai)
+        post_p = D.multivariate_normal.MultivariateNormal(mu_pi, Sigma_pi)
         losses[i] = D.kl.kl_divergence(post_a, post_p)
     return averageOverN(losses, n, b, depths)
     
