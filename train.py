@@ -269,16 +269,17 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     X = batch["X"].to(device)
     beta = batch["beta"].float()
     inputs = torch.cat([X, y.unsqueeze(-1)], dim=-1)
-    mu_proposed, sigma_proposed, _ = model(inputs)
+    mean_proposed, std_proposed, _ = model(inputs)
+    var_proposed = std_proposed.square()
 
-    # get analytical posterior
-    mu_analytical = batch["mu_n"].float().squeeze(-1)
-    sigma_analytical = batch["Sigma_n"].float()
-    sigma_analytical = torch.diagonal(sigma_analytical, dim1=-2, dim2=-1)
+    # get analytical posterior (posterior mean vector and covariance matrix)
+    mean_analytical = batch["mu_n"].float().squeeze(-1)
+    Sigma_analytical = batch["Sigma_n"].float()
+    var_analytical = torch.diagonal(Sigma_analytical, dim1=-2, dim2=-1)
     
     # Compute KL divergence only for non-padded elements
-    losses = klLossWrapper(mu_analytical, sigma_analytical,
-                           mu_proposed, sigma_proposed,
+    losses = klLossWrapper(mean_analytical, var_analytical,
+                           mean_proposed, var_proposed,
                            beta, depths)
     return losses.mean()
 
