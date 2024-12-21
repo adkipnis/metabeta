@@ -18,19 +18,18 @@ class Sower:
         return out
 
 
-def getD(seed: int, max_predictors: int) -> int:
+def getD(max_predictors: int) -> int:
     ''' Get a random number of predictors to draw from a linear model.'''
-    torch.manual_seed(seed)
-    d = torch.randint(0, max_predictors + 1, (1,))
+    shape = (1,)
+    d = torch.randint(0, max_predictors + 1, shape)
     return int(d.item())
 
 
-def getSigmaError(seed: int, alpha: float = 3., beta: float = 1., clip: float = 1.5) -> float:
+def getSigmaError(alpha: float = 3., beta: float = 1., clip: float = 1.5) -> float:
     ''' Get the noise standard deviation '''
-    torch.manual_seed(seed)
     sigma_squared = torch.distributions.inverse_gamma.InverseGamma(alpha, beta).sample()
     sigma = math.sqrt(sigma_squared.item()) # type: ignore
-    return min(sigma, clip) 
+    return min(sigma, clip)
 
 def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: Sower) -> dict:
     ''' Generate a dataset of linear model samples of varying length and width and return a DataLoader. '''
@@ -41,8 +40,9 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
 
     for _ in iterator:
         seed = sower.throw()
-        d = getD(seed, max_predictors)
-        sigma = math.sqrt(d + 1) * getSigmaError(seed) if not cfg.fixed else cfg.fixed
+        torch.manual_seed(seed)
+        d = getD(max_predictors)
+        sigma = math.sqrt(d + 1) * getSigmaError() if not cfg.fixed else cfg.fixed
         lm = FixedEffects(d, sigma, data_dist)
         data += [lm.sample(max_samples, seed, include_posterior=False)]
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
@@ -59,6 +59,7 @@ def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: 
 
     for d in iterator:
         for seed in range(n_draws_per):
+            torch.manual_seed(seed)
             sigma = math.sqrt(d + 1) * float(sigmas[seed]) if not cfg.fixed else cfg.fixed
             lm = FixedEffects(d, sigma, data_dist)
             data += [lm.sample(max_samples, seed, include_posterior=True)]
