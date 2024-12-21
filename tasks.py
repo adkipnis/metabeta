@@ -170,12 +170,12 @@ def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> No
         plt.grid(True)           # Show grid
         plt.show()               # Display the plot
         
-    df = paramDataFrame(mu, torch.diagonal(sigma, dim1=-1, dim2=-2))
+    df = paramDataFrame(mu, torch.diagonal(sigma, dim1=-1, dim2=-2).sqrt())
     plotParams(df, beta)
 
 
 if __name__ == "__main__":
-    seed = 0
+    seed = 42
     n_predictors = 1
     n_obs = 100
     a_0, b_0 = 3., 1.
