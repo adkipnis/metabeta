@@ -272,11 +272,11 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     Sigma_analytical = batch["Sigma_n"].float()
     var_analytical = torch.diagonal(Sigma_analytical, dim1=-2, dim2=-1)
     
-    # Compute KL divergence only for non-padded elements
+    # Compute KL divergences 
     losses = klLossWrapper(mean_analytical, var_analytical,
                            mean_proposed, var_proposed,
                            beta, depths)
-    return losses.mean()
+    return losses.mean() # average over batch
 
 
 def savePredictions(model: nn.Module, batch: dict, iteration_index: int, batch_index: int) -> None:
