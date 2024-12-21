@@ -32,23 +32,17 @@ def getSigmaError(seed: int, alpha: float = 3., beta: float = 1., clip: float = 
     sigma = math.sqrt(sigma_squared.item()) # type: ignore
     return min(sigma, clip) 
 
-
-def getDataDist(seed: int) -> torch.distributions.Distribution:
-    ''' Get a random distribution for the data (currently fixed to uniform).'''
-    torch.manual_seed(seed)
-    return torch.distributions.uniform.Uniform(-5., 5.)
-
-
 def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: Sower) -> dict:
     ''' Generate a dataset of linear model samples of varying length and width and return a DataLoader. '''
     data = []
     iterator = tqdm(range(n_draws))
     iterator.set_description(f'{part:02d}/{iterations:02d}')
+    data_dist = torch.distributions.uniform.Uniform(0., 1.)
+
     for _ in iterator:
         seed = sower.throw()
         d = getD(seed, max_predictors)
         sigma = math.sqrt(d + 1) * getSigmaError(seed) if not cfg.fixed else cfg.fixed
-        data_dist = getDataDist(seed)
         lm = FixedEffects(d, sigma, data_dist)
         data += [lm.sample(max_samples, seed, include_posterior=False)]
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
@@ -61,11 +55,11 @@ def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: 
     iterator = tqdm(range(max_predictors + 1))
     sigmas = sorted([getSigmaError(i) for i in range(n_draws_per)])
     iterator.set_description('Validation Set')
+    data_dist = torch.distributions.uniform.Uniform(0., 1.)
 
     for d in iterator:
         for seed in range(n_draws_per):
             sigma = math.sqrt(d + 1) * float(sigmas[seed]) if not cfg.fixed else cfg.fixed
-            data_dist = getDataDist(seed)
             lm = FixedEffects(d, sigma, data_dist)
             data += [lm.sample(max_samples, seed, include_posterior=True)]
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
