@@ -32,10 +32,13 @@ class Task:
         return self.beta_dist.sample((d,)) # type: ignore
 
     def _sampleFeatures(self, n_samples: int) -> torch.Tensor:
-        x = self.data_dist.sample((n_samples, self.n_predictors)) # type: ignore
-        x = self._standardize(x)
         intercept = torch.ones(n_samples, 1)
-        return torch.cat([intercept, x], dim=1)
+        if self.n_predictors > 0:
+            x = self.data_dist.sample((n_samples, self.n_predictors)) # type: ignore
+            x = self._standardize(x)
+            return torch.cat([intercept, x], dim=1)
+        else:
+            return intercept
 
     def _sampleNoise(self, n_samples: int) -> torch.Tensor:
         return self.noise_dist.sample((n_samples,)) # type: ignore
