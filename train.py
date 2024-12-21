@@ -191,17 +191,12 @@ def klLossWrapper(mean_a: torch.Tensor, var_a: torch.Tensor,
    
 def maskLoss(losses: torch.Tensor,
              targets: torch.Tensor,
-             pad_val: float = 0.,
-             minimax: bool = False) -> torch.Tensor:
+             pad_val: float = 0.) -> torch.Tensor:
     ''' Ignore padding values before aggregating the losses over batches and dims'''
     # losses (batch, d)
     mask = (targets != pad_val).float()
     masked_losses = losses * mask
-    if minimax:
-        max_losses, _ = torch.max(masked_losses, dim=1)
-        loss = max_losses.mean()
-    else:
-        loss = masked_losses.sum() / mask.sum()
+    loss = masked_losses.sum() / mask.sum()
     return loss # (,)
 
 
