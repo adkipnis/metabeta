@@ -25,6 +25,13 @@ class LMDataset(Dataset):
     def __len__(self) -> int:
        return len(self.data)
 
+    def filter(self, d: int) -> None:
+        data = self.data
+        data_filtered = [ds for ds in data
+            if ds['X'].shape[-1] == d + 1]
+        self.data = data_filtered
+        self.max_predictors = d
+
     def preprocess(self, item: dict) -> dict:
         n = self.max_samples
         d = item['X'].shape[1]
