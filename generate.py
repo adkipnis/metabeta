@@ -53,7 +53,7 @@ def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: 
     data = []
     d = 0 # for iterator description
     iterator = tqdm(range(max_predictors + 1))
-    sigmas = sorted([getSigmaError(i) for i in range(n_draws_per)])
+    sigmas = sorted([getSigmaError() for _ in range(n_draws_per)])
     iterator.set_description('Validation Set')
     data_dist = torch.distributions.uniform.Uniform(0., 1.)
 
