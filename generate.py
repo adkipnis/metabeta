@@ -31,6 +31,7 @@ def getSigmaError(alpha: float = 3., beta: float = 1., clip: float = 1.5) -> flo
     sigma = math.sqrt(sigma_squared.item()) # type: ignore
     return min(sigma, clip)
 
+
 def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: Sower) -> dict:
     ''' Generate a dataset of linear model samples of varying length and width and return a DataLoader. '''
     data = []
@@ -109,6 +110,7 @@ if __name__ == "__main__":
         dataset = generateBalancedDataset(n_draws_val, max_samples, max_predictors)
         filename = Path('data', f'dataset-val{suffix}.pt')
         torch.save(dataset, filename)
+        start += 1
     else:
         # reset sower if starting from a different iteration
         seed = (start - 1) * n_draws + 1
