@@ -30,7 +30,6 @@ class LMDataset(Dataset):
         data_filtered = [ds for ds in data
             if ds['X'].shape[-1] == d + 1]
         self.data = data_filtered
-        self.max_predictors = d
 
     def preprocess(self, item: dict) -> dict:
         n = self.max_samples
