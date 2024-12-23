@@ -272,6 +272,10 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     Sigma_analytical = batch["Sigma_n"].float()
     var_analytical = torch.diagonal(Sigma_analytical, dim1=-2, dim2=-1)
     
+    # correct for noise variance
+    sigma_error = batch["sigma_error"].float()
+    var_analytical = sigma_error.square().unsqueeze(-1).unsqueeze(-1) * var_analytical
+    
     # Compute KL divergences 
     losses = klLossWrapper(mean_analytical, var_analytical,
                            mean_proposed, var_proposed,
