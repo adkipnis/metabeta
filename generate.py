@@ -115,6 +115,9 @@ if __name__ == "__main__":
         seed += n_draws_val * (max_predictors + 1)
         sower = Sower(seed)
 
+    if iterations == 0:
+        exit()
+
     # generate training datasets
     print(f'Generating {iterations} training datasets of {n_draws} samples each')
     for part in range(start, iterations + 1):
