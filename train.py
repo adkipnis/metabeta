@@ -62,7 +62,7 @@ def getDataLoader(filename: Path, batch_size: int) -> DataLoader:
 def modelID(cfg: argparse.Namespace) -> str:
     ''' Return a string that identifies the model. '''
     noise = "variable" if cfg.fixed == 0 else cfg.fixed
-    return f"{cfg.model}-{cfg.hidden}-{cfg.ff}-{cfg.heads}-{cfg.layers}-noise={noise}-seed={cfg.seed}-loss={cfg.loss}"
+    return f"{cfg.model}-{cfg.hidden}-{cfg.ff}-{cfg.heads}-{cfg.layers}-dropout={cfg.dropout}-noise={noise}-seed={cfg.seed}-loss={cfg.loss}"
 
 
 def getCheckpointPath(iteration: int) -> Path:
