@@ -43,8 +43,7 @@ class LMDataset(Dataset):
         if self.permute:
             seed = item['seed']
             torch.manual_seed(seed)
-            indices = torch.zeros(d_max, dtype=torch.long)
-            indices[1:] = torch.randperm(d_max - 1) + 1
+            indices = torch.randperm(d_max)
             X = X[:, indices]
             beta = beta[indices]
 
