@@ -176,12 +176,12 @@ def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> No
 
 if __name__ == "__main__":
     seed = 42
-    n_predictors = 1
+    n_predictors = 2
     n_obs = 100
     a_0, b_0 = 3., 1.
     # noise_var = torch.distributions.inverse_gamma.InverseGamma(a_0, b_0).sample().item()
     noise_var = 2. ** 2
-    datadist = torch.distributions.uniform.Uniform(-5., 5.)
+    datadist = torch.distributions.uniform.Uniform(0., 1.)
     fe = FixedEffects(n_predictors, math.sqrt(noise_var), datadist)
     ds = fe.sample(n_obs, seed)
     X, y, beta = ds["X"], ds["y"], ds["beta"]
