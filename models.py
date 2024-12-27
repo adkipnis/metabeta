@@ -18,7 +18,7 @@ class Base(nn.Module):
         self.dropout = dropout
         self.mu = nn.Linear(hidden_size, self.output_size)
         self.logSigma = nn.Linear(hidden_size, self.output_size)
-        self.logAB = nn.Linear(hidden_size, 2)
+        self.logEta = nn.Linear(hidden_size, 1)
         self.seed = seed
 
     def initializeWeights(self) -> None:
@@ -37,8 +37,8 @@ class Base(nn.Module):
         outputs = self.internal(x) # (batch_size, seq_size, hidden_size)
         mu = self.mu(outputs) # (batch_size, seq_size, output_size)
         log_sigma = self.logSigma(outputs) # (batch_size, seq_size, output_size)
-        log_ab = self.logAB(outputs) # (batch_size, seq_size, 2)
-        return mu, log_sigma.exp(), log_ab.exp()
+        log_eta = self.logEta(outputs) # (batch_size, seq_size, 1)
+        return mu, log_sigma.exp(), log_eta.exp()
 
 
 class RNNBase(Base):
