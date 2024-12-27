@@ -164,14 +164,14 @@ def betaLossWrapper(means: torch.Tensor,
     return averageOverN(losses, n, b, depths)
 
 
-def noiseLossWrapper(noise_params: torch.Tensor,
+def noiseLossWrapper(noise_param: torch.Tensor,
                      noise_std: torch.Tensor,
                      depths: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the noise loss function. ''' 
     # calculate losses for all dataset sizes and each beta
-    b, n, _ = noise_params.shape
+    b, n, _ = noise_param.shape
     target = noise_std.expand((b,n))
-    losses = lf_noise(noise_params, target).unsqueeze(-1)
+    losses = lf_noise(noise_param, target).unsqueeze(-1)
     return averageOverN(losses, n, b, depths)
 
 
@@ -232,7 +232,7 @@ def run(model: nn.Module,
     X = batch["X"].to(device)
     beta = batch["beta"].float()
     inputs = torch.cat([X, y.unsqueeze(-1)], dim=-1)
-    mu_beta, sigma_beta, noise_params = model(inputs)
+    mu_beta, sigma_beta, noise_param = model(inputs)
 
     # compute beta parameter loss per batch and predictor (optionally over multiple model outputs per batch)
     targets = beta
