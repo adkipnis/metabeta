@@ -125,10 +125,10 @@ def logInvGammaLoss(beta: torch.Tensor,
     ''' Compute the negative log density of the noise std (target) under the proposed inverse gamma distribution. '''
     # beta (batch, n)
     # noise_std (batch, n)
-    b, n, _ = beta.shape
+    b, n  = noise_std.shape
     ns = torch.stack([torch.arange(n)] * b)
     noise_var = noise_std.square()
-    alpha = 1 + ns / 2
+    alpha = 1. + ns / 2.
     beta = beta.squeeze(-1)
     proposal = D.inverse_gamma.InverseGamma(alpha, beta)
     return -proposal.log_prob(noise_var) # (batch, n)
