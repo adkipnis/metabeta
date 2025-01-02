@@ -80,3 +80,8 @@ class LMDataset(Dataset):
         return train_dataset, test_dataset
 
 
+if __name__ == '__main__':
+    from pathlib import Path
+    fname = Path('data', 'dataset-val-noise=variable.pt')
+    ds_raw = torch.load(fname, weights_only=False)
+    ds = LMDataset(**ds_raw)
