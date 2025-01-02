@@ -383,7 +383,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--proto", action="store_true", help="prototyping: don't log anything during (default = False)")
 
     # data
-    parser.add_argument("-d", type=int, default=8, help="Number of predictors (without bias)")
+    parser.add_argument("-d", type=int, default=9, help="Number of predictors (with bias)")
     parser.add_argument("-f", "--fixed", type=float, default=0., help='Fixed noise variance (default = 0. -> not fixed)')
     parser.add_argument("-i", "--iterations", type=int, default=10, help="Number of iterations to train (default = 10)")
     parser.add_argument("-b", "--batch-size", type=int, default=100, help="Batch size (default = 100)")
