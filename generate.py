@@ -92,7 +92,6 @@ def setup() -> argparse.Namespace:
 if __name__ == "__main__":
     os.makedirs('data', exist_ok=True)
     cfg = setup()
-    sower = Sower(cfg.seed)
     n_draws = cfg.n_draws
     n_draws_val = cfg.n_draws_val
     iterations = cfg.iterations
@@ -101,6 +100,7 @@ if __name__ == "__main__":
     start = cfg.begin
     noise = "variable" if cfg.fixed == 0 else cfg.fixed
     suffix = f"-noise={noise}"
+    seed = n_draws_val + 1
     data_dist = torch.distributions.uniform.Uniform(0., 1.)
 
     if start == 0:
@@ -111,16 +111,14 @@ if __name__ == "__main__":
         torch.save(dataset, filename)
         start += 1
     else:
-        # reset sower if starting from a different iteration
-        seed = (start - 1) * n_draws + 1
-        seed += n_draws_val * (max_predictors + 1)
-        sower = Sower(seed)
+        seed += (start - 1) * n_draws
 
     if iterations == 0:
         exit()
 
     # generate training datasets
     print(f'Generating {iterations} training datasets of {n_draws} samples each')
+    sower = Sower(seed)
     for part in range(start, iterations + 1):
         dataset = generateDataset(n_draws, max_samples, max_predictors, sower)
         filename = dsFilename(n_draws, part, suffix)
