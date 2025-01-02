@@ -5,7 +5,7 @@ from typing import Dict, Tuple
 
 class Task:
     def __init__(self,
-                 n_predictors: int, # without intercept
+                 n_predictors: int, # without bias
                  sigma_error: float, # standard deviation of the additive noise
                  data_dist: torch.distributions.Distribution,
                  ):
@@ -33,12 +33,11 @@ class Task:
 
     def _sampleFeatures(self, n_samples: int) -> torch.Tensor:
         intercept = torch.ones(n_samples, 1)
-        if self.n_predictors > 0:
-            x = self.data_dist.sample((n_samples, self.n_predictors)) # type: ignore
-            x = self._standardize(x)
-            return torch.cat([intercept, x], dim=1)
-        else:
+        if self.n_predictors == 0:
             return intercept
+        x = self.data_dist.sample((n_samples, self.n_predictors)) # type: ignore
+        x = self._standardize(x)
+        return torch.cat([intercept, x], dim=1)
 
     def _sampleNoise(self, n_samples: int) -> torch.Tensor:
         return self.noise_dist.sample((n_samples,)) # type: ignore
@@ -46,7 +45,7 @@ class Task:
     def sample(self, n_samples: int, seed: int) -> Dict[str, torch.Tensor]:
         raise NotImplementedError
 
-    
+ 
 class FixedEffects(Task):
     def __init__(self, n_predictors: int, sigma_error: float, data_dist: torch.distributions.Distribution):
         super().__init__(n_predictors, sigma_error, data_dist)
