@@ -52,10 +52,9 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
 def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: int) -> dict:
     ''' generateDataset but with balanced number of predictors for validation '''
     data = []
-    d = 0 # for iterator description
     iterator = tqdm(range(max_predictors + 1))
-    sigmas = sorted([getSigmaError() for _ in range(n_draws_per)])
     iterator.set_description('Validation Set')
+    sigmas = sorted([getSigmaError() for _ in range(n_draws_per)])
 
     for d in iterator:
         for seed in range(n_draws_per):
