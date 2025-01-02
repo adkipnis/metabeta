@@ -28,9 +28,9 @@ class LMDataset(Dataset):
     def preprocess(self, item: dict) -> dict:
         n = self.max_samples
         d = item['X'].shape[1]
-        d_max = self.max_predictors + 1
+        d_max = self.max_predictors
 
-        X = padTensor(item['X'], (n, d_max))
+        X = padTensor(item['X'][:, 1:], (n, d_max))
         y = padTensor(item['y'], (n,))
         beta = padTensor(item['beta'], (d_max,))
 
