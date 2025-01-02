@@ -42,7 +42,8 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
         seed = sower.throw()
         torch.manual_seed(seed)
         d = getD(max_predictors)
-        sigma = math.sqrt(d + 1) * getSigmaError() if cfg.fixed == 0. else cfg.fixed
+        # sigma = math.sqrt(d + 1) * getSigmaError() if cfg.fixed == 0. else cfg.fixed
+        sigma = getSigmaError() if cfg.fixed == 0. else cfg.fixed
         lm = FixedEffects(d, sigma, data_dist)
         data += [lm.sample(max_samples, seed, include_posterior=False)]
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
@@ -59,7 +60,8 @@ def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: 
     for d in iterator:
         for seed in range(n_draws_per):
             torch.manual_seed(seed)
-            sigma = math.sqrt(d + 1) * float(sigmas[seed]) if cfg.fixed == 0. else cfg.fixed
+            # sigma = math.sqrt(d + 1) * float(sigmas[seed]) if cfg.fixed == 0. else cfg.fixed
+            sigma = float(sigmas[seed]) if cfg.fixed == 0. else cfg.fixed
             lm = FixedEffects(d, sigma, data_dist)
             data += [lm.sample(max_samples, seed, include_posterior=True)]
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
