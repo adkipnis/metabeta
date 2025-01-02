@@ -118,8 +118,8 @@ class FixedEffects(Task):
         out = {"X": X, # (n, d)
                "y": y, # (n,)
                "beta": beta, # (d,)
-               "sigma_error": torch.tensor(self.sigma_error),
-               "seed": torch.tensor(seed),}
+               "sigma_error": torch.tensor(self.sigma_error), # (n,)
+               "seed": torch.tensor(seed)}
         if include_posterior:
             mu_n, Sigma_n, a_n, b_n = self.allPosteriorParams(X, y)
             out.update({"mu_n": mu_n, "Sigma_n": Sigma_n, "a_n": a_n, "b_n": b_n})
