@@ -37,7 +37,6 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
     data = []
     iterator = tqdm(range(n_draws))
     iterator.set_description(f'{part:02d}/{iterations:02d}')
-    data_dist = torch.distributions.uniform.Uniform(0., 1.)
 
     for _ in iterator:
         seed = sower.throw()
@@ -56,7 +55,6 @@ def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: 
     iterator = tqdm(range(max_predictors + 1))
     sigmas = sorted([getSigmaError() for _ in range(n_draws_per)])
     iterator.set_description('Validation Set')
-    data_dist = torch.distributions.uniform.Uniform(0., 1.)
 
     for d in iterator:
         for seed in range(n_draws_per):
@@ -103,6 +101,7 @@ if __name__ == "__main__":
     start = cfg.begin
     noise = "variable" if cfg.fixed == 0 else cfg.fixed
     suffix = f"-noise={noise}"
+    data_dist = torch.distributions.uniform.Uniform(0., 1.)
 
     if start == 0:
         # generate validation dataset
