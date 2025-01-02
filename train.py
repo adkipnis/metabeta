@@ -232,7 +232,7 @@ def run(model: nn.Module,
     y = batch["y"].to(device)
     X = batch["X"].to(device)
     beta = batch["beta"].float()
-    inputs = torch.cat([X, y.unsqueeze(-1)], dim=-1)
+    inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
     mu_beta, sigma_beta, noise_param = model(inputs)
 
     # compute beta parameter loss per batch and predictor (optionally over multiple model outputs per batch)
@@ -268,7 +268,7 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     y = batch["y"].to(device)
     X = batch["X"].to(device)
     beta = batch["beta"].float()
-    inputs = torch.cat([X, y.unsqueeze(-1)], dim=-1)
+    inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
     mean_proposed, std_proposed, _ = model(inputs)
     var_proposed = std_proposed.square()
 
@@ -292,7 +292,7 @@ def savePredictions(model: nn.Module, batch: dict, iteration_index: int, batch_i
     ''' save model outputs '''
     X = batch["X"].to(device)
     y = batch["y"].to(device)
-    inputs = torch.cat([X, y.unsqueeze(-1)], dim=-1)
+    inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
     mu, sigma, noise_params = model(inputs)
     fname = Path(pred_path, f"predictions_i={iteration_index}_b={batch_index}.pt")
     out = {
