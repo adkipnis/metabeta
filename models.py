@@ -11,7 +11,7 @@ class Base(nn.Module):
                  dropout: float,
                  seed: int) -> None:
         super(Base, self).__init__()
-        self.input_size = num_predictors + 1
+        self.input_size = 1 + num_predictors # inputs are [y, X]
         self.hidden_size = hidden_size
         self.output_size = num_predictors
         self.n_layers = n_layers
