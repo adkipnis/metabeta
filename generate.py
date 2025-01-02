@@ -79,7 +79,6 @@ def dsFilename(size: int, part: int, suffix: str = '') -> Path:
 
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate datasets for linear model task.')
-    parser.add_argument('-s', '--seed', type=int, default=0, help='Seed for random number generator (default = 0).')
     parser.add_argument('-n', '--n_draws', type=int, default=int(1e4), help='Number of samples to draw per dataset (default = 10,000).')
     parser.add_argument('--n_draws_val', type=int, default=500, help='Number of samples (per d) to draw for validation dataset (default = 500).')
     parser.add_argument('-i', '--iterations', type=int, default=100, help='Number of dataset partitions to generate (default = 100, 0 only generates validation dataset).')
