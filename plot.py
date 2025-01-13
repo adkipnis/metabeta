@@ -169,3 +169,17 @@ def plotMvnParams(df, betas, est_type: str, ax):
     
     
 
+# plot ig params
+def plotIgParams(df, est_type: str, ax):
+    # Create the plot
+    # ax.plot(df['n'], df['alpha'], label='alpha', color='green')
+    ax.plot(df['n'], df['beta'], label='beta', color='red')
+    
+    # Adding labels and title
+    ax.set_xlabel('n')  # X-axis label
+    ax.set_ylabel(f'{est_type}')
+    # ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    ax.set_ylim(1, 10)
+    ax.grid(True)           # Show grid
+     
+
