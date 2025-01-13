@@ -408,10 +408,9 @@ if __name__ == "__main__":
     cfg = setup()
 
     # seeding
-    torch.cuda.manual_seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
     torch.cuda.manual_seed_all(cfg.seed)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
     # global variables
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -481,7 +480,7 @@ if __name__ == "__main__":
     pred_path = Path("predictions", modelID(cfg), timestamp)
     pred_path.mkdir(parents=True, exist_ok=True)
     print(f"Number of parameters: {num_params}, Loss: {cfg.loss}, Learning rate: {cfg.lr}, Epsilon: {cfg.eps}, Seed: {cfg.seed}, Device: {device}")
-
+    
     # ------------------------------------------------------------------------------------------------------------------------------------------------- 
     # training loop
     print("Preparing validation dataset...")
