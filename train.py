@@ -239,11 +239,11 @@ def run(model: nn.Module,
     targets = beta
     losses = betaLossWrapper(mu_beta, sigma_beta, beta, depths) # (batch, n_predictors)
  
-    # # compute noise parameter loss per batch
-    # noise_std = batch["sigma_error"].unsqueeze(-1).float()
-    # losses_noise = noiseLossWrapper(noise_param, noise_std, depths) # (batch, 1)
-    # losses = torch.cat([losses, losses_noise], dim=-1)
-    # targets = torch.cat([beta, noise_std], dim=-1)
+    # compute noise parameter loss per batch
+    noise_std = batch["sigma_error"].unsqueeze(-1).float()
+    losses_noise = noiseLossWrapper(noise_param, noise_std, depths) # (batch, 1)
+    losses = torch.cat([losses, losses_noise], dim=-1)
+    targets = torch.cat([beta, noise_std], dim=-1)
 
     # compute mean loss over all batches and predictors (optionally ignoring padded predictors)
     loss = maskLoss(losses, targets) if unpad else losses.mean()
@@ -400,7 +400,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon (Adam, default = 1e-8)")
     parser.add_argument("--kl", action="store_false", help="additionally report KL Divergence for validation set (default = True)")
     parser.add_argument("--tol", type=int, default=0, help="Noise tolerance: ignore all losses for n < noise_tol * d (default = 0)")
-    
+
     return parser.parse_args()
 
 
