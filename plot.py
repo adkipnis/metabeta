@@ -74,3 +74,33 @@ def plotVal(date: str, model_id: str, suffix: str = "val"):
     plt.show()
 
 
+def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches: int = 75) -> Dict[str, torch.Tensor]:
+    # gather predicted means and stds
+    paths = [Path('predictions', model_id, date,
+                f'predictions_i={iteration}_b={batch}.pt') for batch in range(n_batches)]
+    predictions = [torch.load(paths[batch], weights_only=False) for batch in range(n_batches)]
+    means_p = torch.cat([x["means"] for x in predictions]).numpy()
+    stds_p = torch.cat([x["stds"] for x in predictions]).numpy()
+    abs_p = torch.cat([x["abs"] for x in predictions]).numpy()
+    
+    # gather analytical means and stds
+    path = Path('data', 'dataset-val-noise=0.1.pt')
+    ds_val_raw = torch.load(path, weights_only=False)
+    ds_val = LMDataset(**ds_val_raw)
+    targets = torch.stack([x["beta"] for x in ds_val], dim = 0).numpy()
+    means_a = torch.stack([x["mu_n"] for x in ds_val], dim = 0).numpy()
+    stds_a = [torch.diagonal(x["Sigma_n"], dim1=-2, dim2=-1).sqrt() for x in ds_val]
+    stds_a = torch.stack(stds_a, dim=0).numpy()
+    # TODO: correct for noise variance
+    as_a = torch.stack([x["a_n"] for x in ds_val], dim = 0).unsqueeze(-1)
+    bs_a = torch.stack([x["b_n"] for x in ds_val], dim = 0).unsqueeze(-1)
+    abs_a = torch.cat([as_a, bs_a], dim=-1).numpy()
+    assert means_a.shape[0] == means_p.shape[0], \
+        "Different number of observations for analytical and trained solutions."
+    return {"targets": targets,
+            "means_p": means_p, "means_a": means_a,
+            "stds_p": stds_p, "stds_a": stds_a,
+            "abs_p": abs_p, "abs_a": abs_a,}
+            
+
+
