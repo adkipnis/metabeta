@@ -183,3 +183,30 @@ def plotIgParams(df, est_type: str, ax):
     ax.grid(True)           # Show grid
      
 
+def plotParamsWrapper(data: dict, batch_id: int, iteration: int):
+    # unpack
+    targets = data["targets"]
+    means_a = data["means_a"]
+    means_p = data["means_p"]
+    stds_a = data["stds_a"]
+    stds_p = data["stds_p"]
+    abs_a = data["abs_a"]
+    abs_p = data["abs_p"]
+    
+    # plot MVN parameters
+    df_a, betas = mvnDataFrame(targets, means_a, stds_a, batch_id)
+    df_p, _ = mvnDataFrame(targets, means_p, stds_p, batch_id)
+    fig, axs = plt.subplots(2, sharex=True, figsize=(8, 6))
+    fig.suptitle(f'iter={iteration}')
+    plotMvnParams(df_a, betas, "analytical", axs[0])
+    plotMvnParams(df_p, betas, "proposed", axs[1])
+    
+    # plot IG parameters
+    
+    df_ig_a = igDataFrame(abs_a, batch_id)
+    df_ig_p = igDataFrame(abs_p, batch_id)
+    fig, axs = plt.subplots(2, sharex=True, figsize=(8, 6))
+    plotIgParams(df_ig_a, "analytical", axs[0])
+    plotIgParams(df_ig_p, "proposed", axs[1])
+    
+
