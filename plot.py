@@ -143,3 +143,29 @@ def igDataFrame(abs_matrix, batch_id: int) -> dict:
     })
 
 
+# plot mvn params
+def plotMvnParams(df, betas, est_type: str, ax):
+    unique_d = df['d'].unique()
+    norm = colors.Normalize(vmin=unique_d.min(), vmax=unique_d.max())
+    
+    # Create the plot
+    for d_value, group in df.groupby('d'):
+        beta = betas[d_value].item()
+        color = cmap(norm(d_value))
+        ax.plot(group['n'], group['mean'], label=f'd={d_value}', color=color)
+        ax.fill_between(group['n'], 
+                        group['mean'] - group['std'], 
+                        group['mean'] + group['std'], 
+                        color=color, alpha=0.1)  # Shade ± SD
+        ax.axhline(y=beta, color=color, linestyle=':', linewidth=1.5)
+    
+    # Adding labels and title
+    ax.set_xlabel('n')  # X-axis label
+    ax.set_ylabel(f'{est_type}')
+    if est_type == "analytical": 
+        ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    ax.set_ylim(-7, 7)
+    ax.grid(True)           # Show grid
+    
+    
+
