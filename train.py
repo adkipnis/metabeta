@@ -242,6 +242,7 @@ def run(model: nn.Module,
     # compute noise parameter loss per batch
     noise_std = batch["sigma_error"].unsqueeze(-1).float()
     losses_noise = noiseLossWrapper(noise_param, noise_std, depths) # (batch, 1)
+    losses_noise = losses_noise * 0.1 # reduce influence on total loss
     losses = torch.cat([losses, losses_noise], dim=-1)
     targets = torch.cat([beta, noise_std], dim=-1)
 
