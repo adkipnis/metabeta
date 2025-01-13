@@ -120,3 +120,26 @@ def mvnDataFrame(targets, means_matrix, stds_matrix, batch_id: int) -> tuple:
         'd': column_indices
     }), betas
  
+def analytical_alpha(n: int):
+    ns = np.arange(n) + 1
+    alpha = 3. + ns / 2.
+    return alpha
+
+def igDataFrame(abs_matrix, batch_id: int) -> dict:
+    _, n, d = abs_matrix.shape
+    if d == 2:
+        data_a = abs_matrix[batch_id, :, 0]
+        data_b = abs_matrix[batch_id, :, 1]
+    else:
+        data_a = analytical_alpha(n)
+        data_b = abs_matrix[batch_id, :, 0]
+    values_a = data_a.flatten()
+    values_b = data_b.flatten()
+    row_indices = np.arange(data_a.shape[0]) + 1
+    return pd.DataFrame({
+        'n' : row_indices,
+        'alpha' : values_a,
+        'beta' : values_b,
+    })
+
+
