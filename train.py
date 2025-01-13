@@ -407,6 +407,12 @@ def setup() -> argparse.Namespace:
 if __name__ == "__main__":
     cfg = setup()
 
+    # seeding
+    torch.cuda.manual_seed(cfg.seed)
+    torch.cuda.manual_seed_all(cfg.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
     # global variables
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     console_width = getConsoleWidth()
