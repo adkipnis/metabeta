@@ -104,3 +104,19 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
             
 
 
+def mvnDataFrame(targets, means_matrix, stds_matrix, batch_id: int) -> tuple:
+    mask = (targets[batch_id] != 0.)
+    betas = targets[batch_id, mask]
+    data_m = means_matrix[batch_id, :, mask].transpose(1,0)
+    data_s = stds_matrix[batch_id, :, mask].transpose(1,0)
+    values_m = data_m.flatten()
+    values_s = data_s.flatten()
+    row_indices = np.repeat(np.arange(data_m.shape[0]), data_m.shape[1]) + 1
+    column_indices = np.tile(np.arange(data_m.shape[1]), data_m.shape[0])
+    return pd.DataFrame({
+        'n' : row_indices,
+        'mean' : values_m,
+        'std' : values_s,
+        'd': column_indices
+    }), betas
+ 
