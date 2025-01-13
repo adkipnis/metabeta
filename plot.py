@@ -210,3 +210,21 @@ def plotParamsWrapper(data: dict, batch_id: int, iteration: int):
     plotIgParams(df_ig_p, "proposed", axs[1])
     
 
+if __name__ == "__main__":
+    # model_id = 'transformer-256-512-8-4-dropout=0.01-noise=0.1-seed=0-loss=logprob' # server
+    model_id = 'transformer-128-256-8-1-dropout=0-noise=variable-seed=0-loss=logprob' # macbook
+    date = '20250113-161345'
+    
+    # train and val loss
+    plotTrain(date, model_id)
+    plotVal(date, model_id)
+    plotVal(date, model_id, suffix="kl")
+    
+    # proposal distribution
+    iteration = 20
+    data = preloadPredictions(date, model_id, iteration=iteration, n_batches=45)
+    max_d = 1
+    for i in range (1):
+        plotParamsWrapper(data, 500 * max_d + i, iteration)
+    
+    
