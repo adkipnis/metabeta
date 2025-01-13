@@ -453,7 +453,7 @@ if __name__ == "__main__":
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr, eps=cfg.eps)
     
     # optionally preload a model
-    initial_iteration, global_step, validation_step = 1, 0, 0
+    initial_iteration, global_step, validation_step = 1, 1, 1
     if cfg.preload:
         initial_iteration, global_step, validation_step, timestamp = load(model, optimizer, cfg.preload)
         print(f"Preloaded model from iteration {cfg.preload}, starting at iteration {initial_iteration}.")
