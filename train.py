@@ -126,9 +126,9 @@ def logInvGammaLoss(beta: torch.Tensor,
     # beta (batch, n)
     # noise_std (batch, n)
     b, n  = noise_std.shape
-    ns = torch.stack([torch.arange(n)] * b)
+    ns = torch.stack([torch.arange(n)] * b) + 1
     noise_var = noise_std.square()
-    alpha = 1. + ns / 2.
+    alpha = 3. + ns / 2.
     beta = beta.squeeze(-1)
     proposal = D.inverse_gamma.InverseGamma(alpha, beta)
     return -proposal.log_prob(noise_var) # (batch, n)
