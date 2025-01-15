@@ -261,14 +261,14 @@ def run(models: tuple,
     return loss, loss_noise
 
 
-def compare(model: nn.Module, batch: dict) -> torch.Tensor:
+def compare(models: nn.Module, batch: dict) -> torch.Tensor:
     ''' Compate analytical posterior with proposed posterior using KL divergence '''
     depths = batch["d"]
     y = batch["y"].to(device)
     X = batch["X"].to(device)
     beta = batch["beta"].float()
     inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
-    mean_proposed, std_proposed, _ = model(inputs)
+    mean_proposed, std_proposed = model(inputs)
     var_proposed = std_proposed.square()
 
     # get analytical posterior (posterior mean vector and covariance matrix)
@@ -287,12 +287,15 @@ def compare(model: nn.Module, batch: dict) -> torch.Tensor:
     return losses.mean() # average over batch
 
 
-def savePredictions(model: nn.Module, batch: dict, iteration_index: int, batch_index: int) -> None:
+def savePredictions(models: Tuple[nn.Module, nn.Module], batch: dict, iteration_index: int, batch_index: int) -> None:
     ''' save model outputs '''
     X = batch["X"].to(device)
     y = batch["y"].to(device)
     inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
-    mu, sigma, noise_params = model(inputs)
+    mu, sigma = models[0](inputs)
+    noise_inputs = torch.cat([inputs, mu.detach()], dim=-1)
+    noise_params = models[1](noise_inputs, True)
+
     fname = Path(pred_path, f"predictions_i={iteration_index}_b={batch_index}.pt")
     out = {
         "means": mu,
