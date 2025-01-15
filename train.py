@@ -22,7 +22,9 @@ class Logger:
         self.trunk = path
         self.trunk.mkdir(parents=True, exist_ok=True)
         self.init("loss_train")
+        self.init("loss_train_noise")
         self.init("loss_val")
+        self.init("loss_val_noise")
         self.init("loss_kl")
 
     def init(self, losstype: str) -> None:
