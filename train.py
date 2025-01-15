@@ -222,32 +222,30 @@ def maskLoss(losses: torch.Tensor,
 
 
 # -------- training and testing methods
-def run(model: nn.Module,
+def run(models: tuple,
         batch: dict,
         num_examples: int = 0,
         unpad: bool = True,
-        printer: Callable = print) -> torch.Tensor:
+        printer: Callable = print) -> Tuple[torch.Tensor, torch.Tensor]:
     ''' Run a batch through the model and return the loss. '''
     depths = batch["d"]
     y = batch["y"].to(device)
     X = batch["X"].to(device)
     beta = batch["beta"].float()
     inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
-    mu_beta, sigma_beta, noise_param = model(inputs)
+    mu_beta, sigma_beta = models[0](inputs)
+    noise_inputs = torch.cat([inputs, mu_beta.detach()], dim=-1)
+    noise_param = models[1](noise_inputs, True)
 
     # compute beta parameter loss per batch and predictor (optionally over multiple model outputs per batch)
-    targets = beta
     losses = betaLossWrapper(mu_beta, sigma_beta, beta, depths) # (batch, n_predictors)
- 
+    # compute mean loss over all batches and predictors (optionally ignoring padded predictors)
+    loss = maskLoss(losses, beta) if unpad else losses.mean()
+    
     # compute noise parameter loss per batch
     noise_std = batch["sigma_error"].unsqueeze(-1).float()
     losses_noise = noiseLossWrapper(noise_param, noise_std, depths) # (batch, 1)
-    losses_noise = losses_noise * 0.1 # reduce influence on total loss
-    losses = torch.cat([losses, losses_noise], dim=-1)
-    targets = torch.cat([beta, noise_std], dim=-1)
-
-    # compute mean loss over all batches and predictors (optionally ignoring padded predictors)
-    loss = maskLoss(losses, targets) if unpad else losses.mean()
+    loss_noise = losses_noise.mean()
 
     # optionally print some examples
     for i in range(num_examples):
@@ -260,7 +258,7 @@ def run(model: nn.Module,
         printer(f"Analytical : {mu_i}")
         printer(f"Predicted  : {outputs_i}")
         printer(f"{console_width * '-'}\n")
-    return loss
+    return loss, loss_noise
 
 
 def compare(model: nn.Module, batch: dict) -> torch.Tensor:
