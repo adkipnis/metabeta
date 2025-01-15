@@ -450,13 +450,22 @@ if __name__ == "__main__":
         print(f"Model: {cfg.model.upper()} with {cfg.hidden} hidden units, {cfg.layers} layer(s), {cfg.dropout} dropout")
     elif cfg.model == "transformer":
         model = TransformerDecoder(
-                num_predictors=cfg.d,
-                hidden_size=cfg.hidden,
-                ff_size=cfg.ff,
-                n_heads=cfg.heads,
-                n_layers=cfg.layers,
-                dropout=cfg.dropout,
-                seed=cfg.seed).to(device)
+                    num_predictors=cfg.d,
+                    hidden_size=cfg.hidden,
+                    ff_size=cfg.ff,
+                    n_heads=cfg.heads,
+                    n_layers=cfg.layers,
+                    dropout=cfg.dropout,
+                    seed=cfg.seed).to(device)
+        model_noise = TransformerDecoder(
+                    num_predictors= 2 * cfg.d,
+                    hidden_size=cfg.hidden,
+                    ff_size=cfg.ff,
+                    n_heads=cfg.heads,
+                    n_layers=cfg.layers,
+                    dropout=cfg.dropout,
+                    seed=cfg.seed).to(device)
+        models = (model, model_noise)
         print(f"Model: Transformer with {cfg.hidden} hidden units, " + \
                 f"{cfg.ff} feedforward units, {cfg.heads} heads, {cfg.layers} layer(s), " + \
                 f"{cfg.dropout} dropout")
@@ -464,6 +473,8 @@ if __name__ == "__main__":
         raise ValueError(f"Model {cfg.model} not recognized.")
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr, eps=cfg.eps)
+    optimizer_noise = schedulefree.AdamWScheduleFree(model_noise.parameters(), lr=cfg.lr, eps=cfg.eps)
+    optimizers = (optimizer, optimizer_noise)
     
     # optionally preload a model
     initial_iteration, global_step, validation_step = 1, 1, 1
@@ -503,7 +514,7 @@ if __name__ == "__main__":
     for iteration in range(initial_iteration, cfg.iterations + 1):
         fname = dsFilename(int(1e4), iteration, suffix)
         dataloader_train = getDataLoader(fname, cfg.batch_size)
-        global_step = train(model, optimizer, dataloader_train, writer, logger, iteration, global_step)
-        validation_step = validate(model, optimizer, dataloader_val, writer, logger, iteration, validation_step)
+        global_step = train(models, optimizers, dataloader_train, writer, logger, iteration, global_step)
+        validation_step = validate(models, optimizers, dataloader_val, writer, logger, iteration, validation_step)
         save(model, optimizer, iteration, global_step, validation_step, timestamp)
  
