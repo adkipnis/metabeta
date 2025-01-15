@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from torch.nn import TransformerDecoderLayer
 
+
 class Base(nn.Module):
     def __init__(self,
                  num_predictors: int,
@@ -16,10 +17,11 @@ class Base(nn.Module):
         self.output_size = num_predictors
         self.n_layers = n_layers
         self.dropout = dropout
+        self.seed = seed
         self.mu = nn.Linear(hidden_size, self.output_size)
         self.logSigma = nn.Linear(hidden_size, self.output_size)
-        self.logEta = nn.Linear(hidden_size, 1)
-        self.seed = seed
+        self.logEta = nn.Linear(hidden_size, 1) 
+
 
     def initializeWeights(self) -> None:
         ''' Initialize weights using Xavier initialization '''
@@ -31,14 +33,21 @@ class Base(nn.Module):
     def internal(self, x: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
-    def forward(self, x: torch.Tensor # (batch_size, seq_size, input_size)
-                ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def internalNoise(self, x: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError
+
+    def forward(self,
+                x: torch.Tensor, # (batch_size, seq_size, input_size)
+                noise: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
         outputs = self.internal(x) # (batch_size, seq_size, hidden_size)
-        mu = self.mu(outputs) # (batch_size, seq_size, output_size)
-        log_sigma = self.logSigma(outputs) # (batch_size, seq_size, output_size)
-        log_eta = self.logEta(outputs) # (batch_size, seq_size, 1)
-        return mu, log_sigma.exp(), log_eta.exp()
+        if noise:
+            log_eta = self.logEta(outputs)
+            return log_eta.exp()
+        else:
+            mu = self.mu(outputs) # (batch_size, seq_size, output_size)
+            log_sigma = self.logSigma(outputs) # (batch_size, seq_size, output_size)
+            return mu, log_sigma.exp()
 
 
 class RNNBase(Base):
