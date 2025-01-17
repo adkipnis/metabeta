@@ -212,6 +212,7 @@ def plotParamsWrapper(data: dict, batch_id: int, iteration: int):
     stds_p = data["stds_p"]
     abs_a = data["abs_a"]
     abs_p = data["abs_p"]
+    sigma_errors = data["sigma_errors"]
     
     # plot MVN parameters
     df_a, betas = mvnDataFrame(targets, means_a, stds_a, batch_id)
@@ -222,10 +223,15 @@ def plotParamsWrapper(data: dict, batch_id: int, iteration: int):
     plotMvnParams(df_p, betas, "proposed", axs[1])
     
     # plot IG parameters
-    df_ig_a = igDataFrame(abs_a, batch_id)
-    df_ig_p = igDataFrame(abs_p, batch_id)
+    # df_ig_a = igDataFrame(abs_a, batch_id)
+    # df_ig_p = igDataFrame(abs_p, batch_id)
+    # fig, ax = plt.subplots(figsize=(8, 6))
+    # plotIGParams(df_ig_a, df_ig_p, ax)
+    
+    df_noise = noiseDataFrame(abs_p, batch_id)
     fig, ax = plt.subplots(figsize=(8, 6))
-    plotIgParams(df_ig_a, df_ig_p, ax)
+    plotNoise(df_noise, sigma_errors[batch_id], ax)
+    
     
 
 if __name__ == "__main__":
