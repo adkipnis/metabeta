@@ -74,8 +74,8 @@ def getCheckpointPath(iteration: int) -> Path:
     return Path(cfg.model_folder, model_filename)
 
 
-def save(model: nn.Module,
-         optimizer: schedulefree.AdamWScheduleFree,
+def save(models: Tuple[nn.Module, nn.Module],
+         optimizers: Tuple[schedulefree.AdamWScheduleFree, schedulefree.AdamWScheduleFree],
          current_iteration: int,
          current_global_step: int,
          current_validation_step: int,
@@ -88,8 +88,10 @@ def save(model: nn.Module,
         'global_step': current_global_step,
         'validation_step': current_validation_step,
         'timestamp': timestamp,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
+        'model_state_dict': models[0].state_dict(),
+        'model_state_dict_noise': models[1].state_dict(),
+        'optimizer_state_dict': optimizers[0].state_dict(),
+        'optimizer_state_dict_noise': optimizers[1].state_dict(),
     }, model_filename)
 
 
