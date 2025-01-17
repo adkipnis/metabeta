@@ -95,17 +95,19 @@ def save(models: Tuple[nn.Module, nn.Module],
     }, model_filename)
 
 
-def load(model: nn.Module,
-         optimizer: schedulefree.AdamWScheduleFree,
+def load(models: Tuple[nn.Module, nn.Module],
+         optimizers: Tuple[schedulefree.AdamWScheduleFree, schedulefree.AdamWScheduleFree],
          initial_iteration: int) -> Tuple[int, int, int, str]:
     """ Load the model and optimizer state from a previous run,
     returning the initial iteration and seed. """
     model_filename = getCheckpointPath(initial_iteration)
     print(f"Loading checkpoint from {model_filename}")
     state = torch.load(model_filename, weights_only=False)
-    model.load_state_dict(state["model_state_dict"])
+    models[0].load_state_dict(state["model_state_dict"])
+    models[1].load_state_dict(state["model_state_dict_noise"])
     initial_iteration = state["iteration"] + 1
-    optimizer.load_state_dict(state["optimizer_state_dict"])
+    optimizers[0].load_state_dict(state["optimizer_state_dict"])
+    optimizers[1].load_state_dict(state["optimizer_state_dict_noise"])
     global_step = state["global_step"]
     validation_step = state["validation_step"]
     timestamp = state["timestamp"]
@@ -407,7 +409,6 @@ def setup() -> argparse.Namespace:
 
     # model and loss
     parser.add_argument("-l", "--loss", type=str, default="logprob", help="Loss function [mse, logprob] (default = mse)")
-    parser.add_argument("-m", "--model", type=str, default="transformer", help="Model type [gru, lstm, transformer] (default = transformer)")
     parser.add_argument("--dropout", type=float, default=0, help="Dropout rate (default = 0)")
     parser.add_argument("--hidden", type=int, default=128, help="Hidden dimension (default = 128)")
     parser.add_argument("--ff", type=int, default=256, help="Feedforward dimension (transformer, default = 256)")
