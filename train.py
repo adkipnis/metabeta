@@ -493,12 +493,11 @@ if __name__ == "__main__":
 
     # loss functions
     if cfg.loss == "mse":
-        mse = nn.MSELoss(reduction='none')
-        lf = lambda means, stds, targets: mse(means, targets)
-        lf_noise = lambda stds, targets: mse(stds[..., 0], targets)
+        lf = betaMSE
+        lf_noise = noiseMSE
     elif cfg.loss == "logprob":
-        lf = logNormalLoss
-        lf_noise = logInvGammaLoss
+        lf = betaLogProb
+        lf_noise = noiseLogProb
     else:
         raise ValueError(f"Loss {cfg.loss} not recognized.")
 
