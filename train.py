@@ -442,40 +442,26 @@ if __name__ == "__main__":
         device = torch.device("cpu")
 
     # set up model
-    if cfg.model in ["gru", "lstm"]:
-        if cfg.layers == 1:
-            cfg.dropout = 0
-            print('Setting dropout to 0 for RNN with 1 layer')
-        Model = eval(cfg.model.upper())
-        model = Model(num_predictors=cfg.d,
-                      hidden_size=cfg.hidden,
-                      n_layers=cfg.layers,
-                      dropout=cfg.dropout,
-                      seed=cfg.seed).to(device)
-        print(f"Model: {cfg.model.upper()} with {cfg.hidden} hidden units, {cfg.layers} layer(s), {cfg.dropout} dropout")
-    elif cfg.model == "transformer":
-        model = TransformerDecoder(
-                    num_predictors=cfg.d,
-                    hidden_size=cfg.hidden,
-                    ff_size=cfg.ff,
-                    n_heads=cfg.heads,
-                    n_layers=cfg.layers,
-                    dropout=cfg.dropout,
-                    seed=cfg.seed).to(device)
-        model_noise = TransformerDecoder(
-                    num_predictors= 2 * cfg.d,
-                    hidden_size=cfg.hidden,
-                    ff_size=cfg.ff,
-                    n_heads=cfg.heads,
-                    n_layers=cfg.layers,
-                    dropout=cfg.dropout,
-                    seed=cfg.seed).to(device)
-        models = (model, model_noise)
-        print(f"Model: Transformer with {cfg.hidden} hidden units, " + \
-                f"{cfg.ff} feedforward units, {cfg.heads} heads, {cfg.layers} layer(s), " + \
-                f"{cfg.dropout} dropout")
-    else:
-        raise ValueError(f"Model {cfg.model} not recognized.")
+    model = TransformerDecoder(
+                num_predictors=cfg.d,
+                hidden_size=cfg.hidden,
+                ff_size=cfg.ff,
+                n_heads=cfg.heads,
+                n_layers=cfg.layers,
+                dropout=cfg.dropout,
+                seed=cfg.seed).to(device)
+    model_noise = TransformerDecoder(
+                num_predictors= 2 * cfg.d,
+                hidden_size=cfg.hidden,
+                ff_size=cfg.ff,
+                n_heads=cfg.heads,
+                n_layers=cfg.layers,
+                dropout=cfg.dropout,
+                seed=cfg.seed).to(device)
+    models = (model, model_noise)
+    print(f"Model: Transformer with {cfg.hidden} hidden units, " + \
+            f"{cfg.ff} feedforward units, {cfg.heads} heads, {cfg.layers} layer(s), " + \
+            f"{cfg.dropout} dropout")
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr, eps=cfg.eps)
     optimizer_noise = schedulefree.AdamWScheduleFree(model_noise.parameters(), lr=cfg.lr, eps=cfg.eps)
