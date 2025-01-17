@@ -143,6 +143,15 @@ def igDataFrame(abs_matrix, batch_id: int) -> dict:
         'beta' : values_b,
     })
 
+def noiseDataFrame(noise_matrix, batch_id: int) -> dict: 
+    data = noise_matrix[batch_id, :, 0]
+    values = data.flatten()
+    row_indices = np.arange(data.shape[0]) + 1
+    return pd.DataFrame({
+        'n' : row_indices,
+        'error_p' : values,
+    })
+
 
 # plot mvn params
 def plotMvnParams(df, betas, est_type: str, ax):
@@ -171,7 +180,7 @@ def plotMvnParams(df, betas, est_type: str, ax):
     
 
 # plot ig params
-def plotIgParams(df_a, df_p, ax):
+def plotIGParams(df_a, df_p, ax):
     # Create the plot
     # ax.plot(df['n'], df['alpha'], label='alpha', color='green')
     ax.plot(df_a['n'], df_a['beta'], label='analytical', color='green')
@@ -183,6 +192,15 @@ def plotIgParams(df_a, df_p, ax):
     ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
     ax.set_ylim(0, 10)
     ax.grid(True)           # Show grid
+    
+
+def plotNoise(df, sigma_error, ax):
+    ax.plot(df['n'], df['error_p'], label='proposed', color='orange')
+    ax.axhline(y=sigma_error, color='orange', linestyle=':', linewidth=1.5)
+    ax.set_xlabel('n')  # X-axis label
+    ax.set_ylabel('noise SD')
+    ax.set_ylim(0, 4)
+    ax.grid(True)
      
 
 def plotParamsWrapper(data: dict, batch_id: int, iteration: int):
