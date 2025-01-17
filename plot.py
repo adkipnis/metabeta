@@ -170,15 +170,16 @@ def plotMvnParams(df, betas, est_type: str, ax):
     
 
 # plot ig params
-def plotIgParams(df, est_type: str, ax):
+def plotIgParams(df_a, df_p, ax):
     # Create the plot
     # ax.plot(df['n'], df['alpha'], label='alpha', color='green')
-    ax.plot(df['n'], df['beta'], label='beta', color='red')
+    ax.plot(df_a['n'], df_a['beta'], label='analytical', color='green')
+    ax.plot(df_p['n'], df_p['beta'], label='proposed', color='red')
     
     # Adding labels and title
     ax.set_xlabel('n')  # X-axis label
-    ax.set_ylabel(f'{est_type}')
-    # ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    ax.set_ylabel(f'noise parameter')
+    ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
     ax.set_ylim(0, 10)
     ax.grid(True)           # Show grid
      
@@ -202,12 +203,10 @@ def plotParamsWrapper(data: dict, batch_id: int, iteration: int):
     plotMvnParams(df_p, betas, "proposed", axs[1])
     
     # plot IG parameters
-    
     df_ig_a = igDataFrame(abs_a, batch_id)
     df_ig_p = igDataFrame(abs_p, batch_id)
-    fig, axs = plt.subplots(2, sharex=True, figsize=(8, 6))
-    plotIgParams(df_ig_a, "analytical", axs[0])
-    plotIgParams(df_ig_p, "proposed", axs[1])
+    fig, ax = plt.subplots(figsize=(8, 6))
+    plotIgParams(df_ig_a, df_ig_p, ax)
     
 
 if __name__ == "__main__":
