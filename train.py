@@ -240,7 +240,7 @@ def run(models: tuple,
     beta = batch["beta"].float()
     inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
     mu_beta, sigma_beta = models[0](inputs)
-    noise_inputs = torch.cat([inputs, mu_beta.detach()], dim=-1)
+    noise_inputs = torch.cat([y.unsqueeze(-1), mu_beta.detach(), sigma_beta.detach()], dim=-1)
     noise_param = models[1](noise_inputs, True)
 
     # compute beta parameter loss per batch and predictor (optionally over multiple model outputs per batch)
@@ -299,7 +299,7 @@ def savePredictions(models: Tuple[nn.Module, nn.Module], batch: dict, iteration_
     y = batch["y"].to(device)
     inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
     mu, sigma = models[0](inputs)
-    noise_inputs = torch.cat([inputs, mu.detach()], dim=-1)
+    noise_inputs = torch.cat([y.unsqueeze(-1), mu.detach(), sigma.detach()], dim=-1)
     noise_params = models[1](noise_inputs, True)
 
     fname = Path(pred_path, f"predictions_i={iteration_index}_b={batch_index}.pt")
