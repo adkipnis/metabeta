@@ -470,7 +470,7 @@ if __name__ == "__main__":
     # optionally preload a model
     initial_iteration, global_step, validation_step = 1, 1, 1
     if cfg.preload:
-        initial_iteration, global_step, validation_step, timestamp = load(model, optimizer, cfg.preload)
+        initial_iteration, global_step, validation_step, timestamp = load(models, optimizers, cfg.preload)
         print(f"Preloaded model from iteration {cfg.preload}, starting at iteration {initial_iteration}.")
     else:
         print("No preloaded model found, starting from scratch.")
@@ -507,5 +507,5 @@ if __name__ == "__main__":
         dataloader_train = getDataLoader(fname, cfg.batch_size)
         global_step = train(models, optimizers, dataloader_train, writer, logger, iteration, global_step)
         validation_step = validate(models, optimizers, dataloader_val, writer, logger, iteration, validation_step)
-        save(model, optimizer, iteration, global_step, validation_step, timestamp)
+        save(models, optimizers, iteration, global_step, validation_step, timestamp)
  
