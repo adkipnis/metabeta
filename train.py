@@ -57,7 +57,7 @@ def getDataLoader(filename: Path, batch_size: int) -> DataLoader:
     ''' Load a dataset from a file, split into train and validation set and return a DataLoader. '''
     assert filename.exists(), f"File {filename} does not exist, you must generate it first using generate.py"
     ds_raw = torch.load(filename, weights_only=False)
-    ds = LMDataset(**ds_raw)
+    ds = LMDataset(**ds_raw, permute=False)
     return DataLoader(ds, batch_size=batch_size, shuffle=False)
 
 
