@@ -115,7 +115,22 @@ def load(models: Tuple[nn.Module, nn.Module],
 
 
 # -------- loss calculation
-def logNormalLoss(means: torch.Tensor,
+
+mse = nn.MSELoss(reduction='none')
+
+def betaMSE(means: torch.Tensor,
+            stds: torch.Tensor,
+            betas: torch.Tensor) -> torch.Tensor:
+    return mse(means, betas)
+
+
+def noiseMSE(noise_param: torch.Tensor,
+                noise_std: torch.Tensor) -> torch.Tensor:
+    log_proposed = noise_param.squeeze(-1).log()
+    log_true = noise_std.log()
+    return mse(log_proposed, log_true)
+
+
                   stds: torch.Tensor,
                   betas: torch.Tensor) -> torch.Tensor:
     ''' Compute the negative log density of betas (target) under the proposed normal distribution. '''
