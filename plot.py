@@ -6,7 +6,7 @@ import numpy as np
 from pathlib import Path
 from typing import Dict
 from dataset import LMDataset
-
+from torch import distributions as D
 
 # Create a color map from light blue to dark blue
 cmap = colors.LinearSegmentedColormap.from_list("custom_blues", ["#add8e6", "#000080"])
@@ -93,6 +93,7 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
     means_a = torch.stack([x["mu_n"] for x in ds_val], dim = 0).numpy()
     stds_a = [torch.diagonal(x["Sigma_n"], dim1=-2, dim2=-1).sqrt() for x in ds_val]
     stds_a = torch.stack(stds_a, dim=0).numpy()
+    
     # TODO: correct for noise variance
     as_a = torch.stack([x["a_n"] for x in ds_val], dim = 0).unsqueeze(-1)
     bs_a = torch.stack([x["b_n"] for x in ds_val], dim = 0).unsqueeze(-1)
@@ -122,10 +123,12 @@ def mvnDataFrame(targets, means_matrix, stds_matrix, batch_id: int) -> tuple:
         'd': column_indices
     }), betas
  
+    
 def analytical_alpha(n: int):
     ns = np.arange(n) + 1
     alpha = 3. + ns / 2.
     return alpha
+
 
 def igDataFrame(abs_matrix, batch_id: int) -> dict:
     _, n, d = abs_matrix.shape
@@ -143,6 +146,7 @@ def igDataFrame(abs_matrix, batch_id: int) -> dict:
         'alpha' : values_a,
         'beta' : values_b,
     })
+
 
 def noiseDataFrame(noise_matrix, batch_id: int) -> dict: 
     data = noise_matrix[batch_id, :, 0]
@@ -179,7 +183,6 @@ def plotMvnParams(df, betas, est_type: str, ax):
     ax.grid(True)           # Show grid
     
     
-
 # plot ig params
 def plotIGParams(df_a, df_p, ax):
     # Create the plot
