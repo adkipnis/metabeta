@@ -278,9 +278,34 @@ def loss2df(data, source = "proposed"):
     batch_losses = [batchLoss(losses, targets, i) for i in range(b)]
     return pd.concat(batch_losses) 
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    plotNoise(df_noise, sigma_errors[batch_id], ax)
+# plot validation loss
+def plotVal2(df, iteration, source, focus: int = -1):
+    unique_d = df['d'].unique().shape[0]
+    df_agg = df.groupby(['d', 'n'])['loss'].agg(['mean', 'std', 'max', 'min']).reset_index()
+    if focus >= 0:
+        df_agg = df_agg[df_agg['d'] == focus]
+    norm = colors.Normalize(vmin=0, vmax=unique_d)
     
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    for d_value, group in df_agg.groupby('d'):
+        color = cmap(norm(d_value))
+        ax.plot(group['n'], group['mean'], label=f'd={d_value}', color=color)
+        ax.fill_between(group['n'], 
+                        group['mean'] - group['std'], 
+                        group['mean'] + group['std'], 
+                        color=color, alpha=0.2)  # Shade ± SD
+    plt.ylim(-2, 6)
+    plt.xlabel('n')
+    plt.ylabel('-log p(target)')
+    plt.legend()
+    plt.grid(True) 
+    title = source
+    if source == "proposed":
+        title += f' (iteration {iteration})'
+    plt.title(title)
+    plt.show()
     
 
 if __name__ == "__main__":
