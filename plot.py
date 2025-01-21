@@ -75,7 +75,7 @@ def plotVal(date: str, model_id: str, suffix: str = "val", focus: int = -1):
     plt.show()
 
 
-def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches: int = 75, noise: str = "variable") -> Dict[str, torch.Tensor]:
+def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches: int = 45, noise: str = "variable") -> Dict[str, torch.Tensor]:
     # gather predicted means and stds
     paths = [Path('predictions', model_id, date,
                 f'predictions_i={iteration}_b={batch}.pt') for batch in range(n_batches)]
@@ -87,7 +87,7 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
     # gather analytical means and stds
     path = Path('data', f'dataset-val-noise={noise}.pt')
     ds_val_raw = torch.load(path, weights_only=False)
-    ds_val = LMDataset(**ds_val_raw)
+    ds_val = LMDataset(**ds_val_raw, permute=False)
     targets = torch.stack([x["beta"] for x in ds_val], dim = 0).numpy()
     sigma_errors = torch.stack([x["sigma_error"] for x in ds_val], dim = 0).numpy()
     means_a = torch.stack([x["mu_n"] for x in ds_val], dim = 0).numpy()
