@@ -257,6 +257,20 @@ def lossFromPredictions(data, targets, source = "proposed"):
     proposal = D.Normal(means, stds)
     return -proposal.log_prob(betas) # (batch, n, d)
     
+def batchLoss(losses, targets, batch):
+    losses_batch = losses[batch]
+    n = losses_batch.shape[0]
+    betas = targets.unsqueeze(1).expand_as(losses)[batch]
+    mask = (betas != 0.).float()
+    d = int(mask[0].sum())
+    masked_losses = losses_batch * mask
+    average_losses = masked_losses.sum(dim=1) / d
+    out = {"loss": average_losses.numpy(),
+           "n": np.arange(n) + 1,
+           "d": d - 1,
+           "batch": batch + 1}
+    return pd.DataFrame(out)
+
     fig, ax = plt.subplots(figsize=(8, 6))
     plotNoise(df_noise, sigma_errors[batch_id], ax)
     
