@@ -141,6 +141,9 @@ class MixedEffects(Task):
         self.m = torch.zeros((q,))
         self.S = torch.diag_embed(dist.sample((q,))) # type: ignore
         self.b_dist = torch.distributions.multivariate_normal.MultivariateNormal(self.m, covariance_matrix=self.S)
+
+    def _sampleRandomEffects(self, n_samples: int) -> torch.Tensor:
+        return self.b_dist.sample((n_samples,)) # type: ignore
 def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> None:
     import matplotlib.pyplot as plt
     import matplotlib.colors as colors
