@@ -309,9 +309,14 @@ def plotVal2(df, iteration, source, focus: int = -1):
     
 
 if __name__ == "__main__":
-    # model_id = 'transformer-256-512-8-4-dropout=0.01-noise=0.1-seed=0-loss=logprob' # server
-    model_id = 'transformer-128-256-8-1-dropout=0-noise=variable-seed=0-loss=logprob' # macbook
-    date = '20250113-161345'
+    noise_type = "variable"
+    # nice result
+    # model_id = f'transformer-256-512-8-4-dropout=0-noise={noise_type}-seed=0-loss=logprob' # server
+    # date = '20250120-090048'
+    
+    model_id = f'transformer-128-256-8-3-dropout=0-noise={noise_type}-seed=0-loss=logprob' # macbook
+    date = '20250120-170752'
+    
     
     # train and val loss
     plotTrain(date, model_id)
@@ -319,10 +324,40 @@ if __name__ == "__main__":
     plotVal(date, model_id, suffix="kl")
     
     # proposal distribution
-    iteration = 20
-    data = preloadPredictions(date, model_id, iteration=iteration, n_batches=45)
-    max_d = 1
-    for i in range (1):
+    iteration = 100
+    data = preloadPredictions(date,
+                              model_id,
+                              iteration=iteration,
+                              n_batches=45,
+                              noise=noise_type)
+    max_d = 7
+    for i in range (5):
         plotParamsWrapper(data, 500 * max_d + i, iteration)
+    
+    for i in range (5):
+        plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype = "ig")
+        
+    
+    # plot validation loss over n
+    df_p = loss2df(data, source = "proposed")
+    df_a = loss2df(data, source = "analytical")
+    plotVal2(df_p, iteration, source = "proposed")
+    plotVal2(df_a, iteration, source = "analytical")
+    
+    # # misc
+    # alpha, beta = 3, 8
+    # dist = torch.distributions.inverse_gamma.InverseGamma(alpha, beta)
+    # x = torch.arange(0.1, 4., step=(4.-.1)/500)
+    # probs = dist.log_prob(x).detach().exp()
+    # plt.plot(x, probs)
+    # print(dist.mean)
+    # print(dist.mode)
+    
+    # betas = torch.tensor([1, 2, 3])
+    # means = torch.tensor([1.1, 2, 3])
+    # stds = torch.tensor([0.1, 1, 1])
+    # proposal = torch.distributions.normal.Normal(means, stds)
+    # loss = -proposal.log_prob(betas)
+    # print(loss)
     
     
