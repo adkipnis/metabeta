@@ -125,15 +125,15 @@ def betaMSE(means: torch.Tensor,
 
 
 def noiseMSE(noise_param: torch.Tensor,
-                noise_std: torch.Tensor) -> torch.Tensor:
+             noise_std: torch.Tensor) -> torch.Tensor:
     log_proposed = noise_param.squeeze(-1).log()
     log_true = noise_std.log()
     return mse(log_proposed, log_true)
 
 
 def betaLogProb(means: torch.Tensor,
-                  stds: torch.Tensor,
-                  betas: torch.Tensor) -> torch.Tensor:
+                stds: torch.Tensor,
+                betas: torch.Tensor) -> torch.Tensor:
     ''' Compute the negative log density of betas (target) under the proposed normal distribution. '''
     # means (batch, n_features)
     # sigma (batch, n_features)
@@ -143,7 +143,7 @@ def betaLogProb(means: torch.Tensor,
 
 
 def noiseLogProb(noise_param: torch.Tensor,
-                    noise_std: torch.Tensor) -> torch.Tensor:
+                 noise_std: torch.Tensor) -> torch.Tensor:
     ''' Compute the negative log density of the noise std (target) under the proposed inverse gamma distribution. '''
     # noise_param (batch, n)
     # noise_std (batch, n)
