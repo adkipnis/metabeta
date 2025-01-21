@@ -438,13 +438,13 @@ def setup() -> argparse.Namespace:
     parser.add_argument("-b", "--batch-size", type=int, default=50, help="Batch size (default = 50)")
 
     # model and loss
-    parser.add_argument("-l", "--loss", type=str, default="logprob", help="Loss function [mse, logprob] (default = mse)")
+    parser.add_argument("-l", "--loss", type=str, default="logprob", help="Loss function [mse, logprob] (default = logprob)")
     parser.add_argument("--dropout", type=float, default=0, help="Dropout rate (default = 0)")
     parser.add_argument("--hidden", type=int, default=128, help="Hidden dimension (default = 128)")
     parser.add_argument("--ff", type=int, default=256, help="Feedforward dimension (transformer, default = 256)")
     parser.add_argument("--heads", type=int, default=8, help="Number of heads (transformer, default = 8)")
-    parser.add_argument("--layers", type=int, default=1, help="Number of layers (transformer, default = 1)")
-    parser.add_argument("--lr", type=float, default=5e-3, help="Learning rate (Adam, default = 5e-3)")
+    parser.add_argument("--layers", type=int, default=3, help="Number of layers (transformer, default = 3)")
+    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate (Adam, default = 1e-3)")
     parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon (Adam, default = 1e-8)")
     parser.add_argument("--kl", action="store_false", help="additionally report KL Divergence for validation set (default = True)")
     parser.add_argument("--tol", type=int, default=0, help="Noise tolerance: ignore all losses for n < noise_tol * d (default = 0)")
