@@ -486,7 +486,7 @@ if __name__ == "__main__":
                 hidden_size=cfg.hidden,
                 ff_size=cfg.ff,
                 n_heads=cfg.heads,
-                n_layers=cfg.layers,
+                n_layers=1,
                 dropout=cfg.dropout,
                 seed=cfg.seed).to(device)
     models = (model, model_noise)
