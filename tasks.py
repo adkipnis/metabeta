@@ -1,6 +1,7 @@
 import math
 import torch
 from typing import Dict, Tuple
+from utils import symmetricMatrix2Vector, symmetricMatrixFromVector
 
 
 class Task:
@@ -126,6 +127,20 @@ class FixedEffects(Task):
         return out
 
 
+class MixedEffects(Task):
+    def __init__(self, n_predictors: int, sigma_error: float, data_dist: torch.distributions.Distribution,
+                 n_random_effects: int):
+        super().__init__(n_predictors, sigma_error, data_dist)
+        self.n_random_effects = n_random_effects
+        self._initRfxStructure()
+
+    def _initRfxStructure(self, a: float = 3., b: float = 3.) -> None:
+        ''' given n_random_effects, draw diagonal elements of S (covariance matrix of random effects) '''
+        dist = torch.distributions.inverse_gamma.InverseGamma(a,b)
+        q = self.n_random_effects
+        self.m = torch.zeros((q,))
+        self.S = torch.diag_embed(dist.sample((q,))) # type: ignore
+        self.b_dist = torch.distributions.multivariate_normal.MultivariateNormal(self.m, covariance_matrix=self.S)
 def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> None:
     import matplotlib.pyplot as plt
     import matplotlib.colors as colors
