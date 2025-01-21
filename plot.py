@@ -241,6 +241,22 @@ def plotParamsWrapper(data: dict, batch_id: int, iteration: int, paramtype = "be
         plotNoise(df_noise, sigma_errors[batch_id], ax)
   
 
+# plot validation loss from predictions
+def lossFromPredictions(data, targets, source = "proposed"):
+    if source == "proposed":
+        means = torch.tensor(data["means_p"])
+        stds = torch.tensor(data["stds_p"])
+    elif source == "analytical":
+        means = torch.tensor(data["means_a"])
+        stds = torch.tensor(data["stds_a"])
+        mask = (stds == 0.).float()
+        stds = stds + mask
+    else:
+        raise ValueError
+    betas = targets.unsqueeze(1).expand_as(means)
+    proposal = D.Normal(means, stds)
+    return -proposal.log_prob(betas) # (batch, n, d)
+    
     fig, ax = plt.subplots(figsize=(8, 6))
     plotNoise(df_noise, sigma_errors[batch_id], ax)
     
