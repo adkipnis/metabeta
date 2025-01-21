@@ -158,6 +158,18 @@ def noiseLogProb(noise_param: torch.Tensor,
     return -proposal.log_prob(noise_var) # (batch, n)
 
 
+def noiseIgExp(noise_param: torch.Tensor,
+               noise_std: torch.Tensor) -> torch.Tensor:
+    ''' Compute the MSE of the true noise std and its expected value under the noise parameters '''
+    # noise_param (batch, n)
+    # noise_std (batch, n)
+    alpha = getAlpha(noise_std)
+    beta = noise_param.squeeze(-1)
+    proposal = D.inverse_gamma.InverseGamma(alpha, beta)
+    expected_value = proposal.mean
+    return mse(noise_std.log(), expected_value.log()) # (batch, n)
+
+
 def averageOverN(losses: torch.Tensor, n: int, b: int, depths: torch.Tensor, weigh: bool = False) -> torch.Tensor:
     ''' mask out first n_min losses per batch, then calculate weighted average over n with higher emphasis on later n'''
     # losses (b, n, d)
