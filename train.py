@@ -141,16 +141,18 @@ def betaLogProb(means: torch.Tensor,
     proposal = D.Normal(means, stds)
     return -proposal.log_prob(betas) # (batch, n, d)
 
+def getAlpha(noise_std: torch.Tensor) -> torch.Tensor:
+    b, n  = noise_std.shape
+    ns = torch.stack([torch.arange(n)] * b)
+    return 2. + ns / 2.
 
 def noiseLogProb(noise_param: torch.Tensor,
                  noise_std: torch.Tensor) -> torch.Tensor:
     ''' Compute the negative log density of the noise std (target) under the proposed inverse gamma distribution. '''
     # noise_param (batch, n)
     # noise_std (batch, n)
-    b, n  = noise_std.shape
-    ns = torch.stack([torch.arange(n)] * b)
     noise_var = noise_std.square()
-    alpha = 2. + ns / 2.
+    alpha = getAlpha(noise_std)
     beta = noise_param.squeeze(-1)
     proposal = D.inverse_gamma.InverseGamma(alpha, beta)
     return -proposal.log_prob(noise_var) # (batch, n)
