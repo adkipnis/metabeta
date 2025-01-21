@@ -37,7 +37,7 @@ def plotTrain(date: str, model_id: str):
 
 
 # plot validation loss
-def plotVal(date: str, model_id: str, suffix: str = "val"):
+def plotVal(date: str, model_id: str, suffix: str = "val", focus: int = -1):
     path = Path('losses', model_id, date, f'loss_{suffix}.csv')
     if suffix == "val":
         ylabel = '-log p(target)' 
@@ -52,7 +52,8 @@ def plotVal(date: str, model_id: str, suffix: str = "val"):
     d_values = np.repeat(np.arange(unique_d), 5)
     df['d'] = np.tile(d_values, i)
     df_agg = df.groupby(['d', 'iteration'])['loss'].agg(['mean', 'std', 'min', 'max']).reset_index()
-    # df_agg = df_agg[df_agg['d'] == 0]
+    if focus >= 0:
+        df_agg = df_agg[df_agg['d'] == focus]
     norm = colors.Normalize(vmin=0, vmax=unique_d)
     
     # Create the plot
