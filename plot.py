@@ -271,6 +271,13 @@ def batchLoss(losses, targets, batch):
            "batch": batch + 1}
     return pd.DataFrame(out)
 
+def loss2df(data, source = "proposed"):
+    targets = torch.tensor(data["targets"])
+    losses = lossFromPredictions(data, targets, source)
+    b = losses.shape[0]
+    batch_losses = [batchLoss(losses, targets, i) for i in range(b)]
+    return pd.concat(batch_losses) 
+
     fig, ax = plt.subplots(figsize=(8, 6))
     plotNoise(df_noise, sigma_errors[batch_id], ax)
     
