@@ -144,6 +144,26 @@ class MixedEffects(Task):
 
     def _sampleRandomEffects(self, n_samples: int) -> torch.Tensor:
         return self.b_dist.sample((n_samples,)) # type: ignore
+
+    def sample(self, n_samples: int, seed: int) -> Dict[str, torch.Tensor]:
+        torch.manual_seed(seed)
+        X = self._sampleFeatures(n_samples)
+        beta = self._sampleBeta()
+        q = self.n_random_effects
+        rfx = self._sampleRandomEffects(n_samples)
+        Z = X[:,:q]
+        eta = torch.bmm(Z.unsqueeze(1), rfx.unsqueeze(2)).flatten() # eta_i = z_i^T b_i
+        eps = self._sampleNoise(n_samples)
+        y = X @ beta + eta + eps
+        out = {"X": X, # (n, d)
+               "y": y, # (n,)
+               "beta": beta, # (d,)
+               "S": symmetricMatrix2Vector(self.S), # (q, q)
+               "sigma_error": torch.tensor(self.sigma_error), # (n,)
+               "seed": torch.tensor(seed)}
+        return out
+
+
 def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> None:
     import matplotlib.pyplot as plt
     import matplotlib.colors as colors
