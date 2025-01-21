@@ -207,7 +207,7 @@ def plotNoise(df, sigma_error, ax):
     ax.grid(True)
      
 
-def plotParamsWrapper(data: dict, batch_id: int, iteration: int):
+def plotParamsWrapper(data: dict, batch_id: int, iteration: int, paramtype = "beta"):
     # unpack
     targets = data["targets"]
     means_a = data["means_a"]
@@ -219,20 +219,28 @@ def plotParamsWrapper(data: dict, batch_id: int, iteration: int):
     sigma_errors = data["sigma_errors"]
     
     # plot MVN parameters
-    df_a, betas = mvnDataFrame(targets, means_a, stds_a, batch_id)
-    df_p, _ = mvnDataFrame(targets, means_p, stds_p, batch_id)
-    fig, axs = plt.subplots(2, sharex=True, figsize=(8, 6))
-    fig.suptitle(f'iter={iteration}')
-    plotMvnParams(df_a, betas, "analytical", axs[0])
-    plotMvnParams(df_p, betas, "proposed", axs[1])
+    if paramtype == "beta":
+        df_a, betas = mvnDataFrame(targets, means_a, stds_a, batch_id)
+        df_p, _ = mvnDataFrame(targets, means_p, stds_p, batch_id)
+        fig, axs = plt.subplots(2, sharex=True, figsize=(8, 6))
+        fig.suptitle(f'iter={iteration}')
+        plotMvnParams(df_a, betas, "analytical", axs[0])
+        plotMvnParams(df_p, betas, "proposed", axs[1])
     
     # plot IG parameters
-    # df_ig_a = igDataFrame(abs_a, batch_id)
-    # df_ig_p = igDataFrame(abs_p, batch_id)
-    # fig, ax = plt.subplots(figsize=(8, 6))
-    # plotIGParams(df_ig_a, df_ig_p, ax)
+    if paramtype == "ig":
+        df_ig_a = igDataFrame(abs_a, batch_id)
+        df_ig_p = igDataFrame(abs_p, batch_id)
+        fig, ax = plt.subplots(figsize=(8, 6))
+        plotIGParams(df_ig_a, df_ig_p, ax)
     
-    df_noise = noiseDataFrame(abs_p, batch_id)
+    # plot noise std
+    if paramtype == "sigma":
+        df_noise = noiseDataFrame(abs_p, batch_id)
+        fig, ax = plt.subplots(figsize=(8, 6))
+        plotNoise(df_noise, sigma_errors[batch_id], ax)
+  
+
     fig, ax = plt.subplots(figsize=(8, 6))
     plotNoise(df_noise, sigma_errors[batch_id], ax)
     
