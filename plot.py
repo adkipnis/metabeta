@@ -194,7 +194,7 @@ def plotIGParams(df_a, df_p, ax):
     ax.set_xlabel('n')  # X-axis label
     ax.set_ylabel(f'noise parameter')
     ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
-    ax.set_ylim(0, 10)
+    # ax.set_ylim(0, 10)
     ax.grid(True)           # Show grid
     
 
