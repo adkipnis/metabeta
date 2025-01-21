@@ -439,6 +439,7 @@ def setup() -> argparse.Namespace:
 
     # model and loss
     parser.add_argument("-l", "--loss", type=str, default="logprob", help="Loss function [mse, logprob] (default = logprob)")
+    parser.add_argument("--loss_noise", type=str, default="logprob", help="Loss function for noise [mse, logprob, ig_exp] (default = logprob)")
     parser.add_argument("--dropout", type=float, default=0, help="Dropout rate (default = 0)")
     parser.add_argument("--hidden", type=int, default=128, help="Hidden dimension (default = 128)")
     parser.add_argument("--ff", type=int, default=256, help="Feedforward dimension (transformer, default = 256)")
@@ -508,10 +509,17 @@ if __name__ == "__main__":
     # loss functions
     if cfg.loss == "mse":
         lf = betaMSE
-        lf_noise = noiseMSE
     elif cfg.loss == "logprob":
         lf = betaLogProb
+    else:
+        raise ValueError(f"Loss {cfg.loss} not recognized.")
+
+    if cfg.loss_noise == "mse":
+        lf_noise = noiseMSE
+    elif cfg.loss_noise == "logprob":
         lf_noise = noiseLogProb
+    elif cfg.loss_noise == "ig_exp":
+        lf_noise = noiseIgExp
     else:
         raise ValueError(f"Loss {cfg.loss} not recognized.")
 
