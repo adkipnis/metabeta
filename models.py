@@ -48,30 +48,6 @@ class Base(nn.Module):
         else:
             mu = self.mu(outputs) # (batch_size, seq_size, output_size)
             log_sigma = self.logSigma(outputs) # (batch_size, seq_size, output_size)
-
-
-class RNNBase(Base):
-    def __init__(self, num_predictors: int, hidden_size: int, n_layers: int, dropout: float, seed: int, last: bool = False) -> None:
-        super(RNNBase, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed)
-        self.kwargs = {'input_size': self.input_size, 'hidden_size': hidden_size, 'num_layers': n_layers, 'dropout': dropout, 'batch_first': True}
-
-    def internal(self, x: torch.Tensor) -> torch.Tensor:
-        outputs, _ = self.model(x)
-        return outputs
-
-
-class GRU(RNNBase):
-    def __init__(self, num_predictors: int, hidden_size: int, n_layers: int, dropout: float, seed: int, last: bool = False) -> None:
-        super(GRU, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, last)
-        self.model = nn.GRU(**self.kwargs)
-        self.initializeWeights()
-
-
-class LSTM(RNNBase):
-    def __init__(self, num_predictors: int, hidden_size: int, n_layers: int, dropout: float, seed: int, last: bool = False) -> None:
-        super(LSTM, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, last)
-        self.model = nn.LSTM(**self.kwargs)
-        self.initializeWeights()
             log_s = self.logS(outputs)
             return mu, log_sigma.exp(), log_s.exp()
 
