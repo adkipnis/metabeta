@@ -214,6 +214,15 @@ def betaLossWrapper(means: torch.Tensor,
     return averageOverN(losses, n, b, depths)
 
 
+def rfxLossWrapper(stds_proposed: torch.Tensor,
+                   stds_target: torch.Tensor,
+                   rfx: torch.Tensor,
+                   depths: torch.Tensor) -> torch.Tensor:
+    b, n, _ = stds_proposed.shape
+    losses = lf_rfx(stds_proposed, stds_target, rfx) # (b, n, d)
+    return averageOverN(losses, n, b, depths)
+
+
 def noiseLossWrapper(noise_param: torch.Tensor,
                      noise_std: torch.Tensor,
                      depths: torch.Tensor) -> torch.Tensor:
