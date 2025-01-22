@@ -145,7 +145,9 @@ class MixedEffects(Task):
     def _sampleRandomEffects(self, n_samples: int) -> torch.Tensor:
         return self.b_dist.sample((n_samples,)) # type: ignore
 
-    def sample(self, n_samples: int, seed: int) -> Dict[str, torch.Tensor]:
+    def sample(self, n_samples: int, seed: int, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
+        if include_posterior:
+            print("Warning: Mixed effects models do not have an analytical posterior, but parameter is set to True...")
         torch.manual_seed(seed)
         X = self._sampleFeatures(n_samples)
         beta = self._sampleBeta()
