@@ -144,6 +144,15 @@ def rfxMSE(stds_proposed: torch.Tensor,
     return mse(stds_proposed.log(), stds_target.log())
 
 
+def rfxLogProb(stds_proposed: torch.Tensor,
+               stds_target: torch.Tensor,
+               rfx: torch.Tensor) -> torch.Tensor:
+    means = torch.zeros_like(stds_proposed)
+    proposal = D.Normal(means, stds_proposed)
+    # optional TODO: correct for log_prob under stds_target
+    return -proposal.log_prob(rfx)
+
+
 def noiseMSE(std_proposed: torch.Tensor,
              std_true: torch.Tensor) -> torch.Tensor:
     std_proposed = std_proposed.squeeze(-1)
