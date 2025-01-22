@@ -32,11 +32,12 @@ def getSigmaError(alpha: float = 3., beta: float = 1., clip: float = 1.5) -> flo
     return min(sigma, clip)
 
 
-def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: Sower) -> dict:
+def generateDataset(ds_type: str, n_draws: int, max_samples: int, max_predictors: int, sower: Sower) -> dict:
     ''' Generate a dataset of linear model samples of varying length and width and return a DataLoader. '''
     data = []
     iterator = tqdm(range(n_draws))
     iterator.set_description(f'{part:02d}/{iterations:02d}')
+    LinearModel = FixedEffects if ds_type == "ffx" else MixedEffects
 
     for _ in iterator:
         seed = sower.throw()
@@ -44,25 +45,27 @@ def generateDataset(n_draws: int, max_samples: int, max_predictors: int, sower: 
         d = getD(max_predictors)
         # sigma = math.sqrt(d + 1) * getSigmaError() if cfg.fixed == 0. else cfg.fixed
         sigma = getSigmaError() if cfg.fixed == 0. else cfg.fixed
-        lm = FixedEffects(d, sigma, data_dist)
+        lm = LinearModel(d, sigma, data_dist)
         data += [lm.sample(max_samples, seed, include_posterior=False)]
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
 
 
-def generateBalancedDataset(n_draws_per: int, max_samples: int, max_predictors: int) -> dict:
+def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, max_predictors: int) -> dict:
     ''' generateDataset but with balanced number of predictors for validation '''
     data = []
     iterator = tqdm(range(max_predictors + 1))
     iterator.set_description('Validation Set')
     sigmas = sorted([getSigmaError() for _ in range(n_draws_per)])
+    LinearModel = FixedEffects if ds_type == "ffx" else MixedEffects
+    include_posterior = ds_type == "ffx"
 
     for d in iterator:
         for seed in range(n_draws_per):
             torch.manual_seed(seed)
             # sigma = math.sqrt(d + 1) * float(sigmas[seed]) if cfg.fixed == 0. else cfg.fixed
             sigma = float(sigmas[seed]) if cfg.fixed == 0. else cfg.fixed
-            lm = FixedEffects(d, sigma, data_dist)
-            data += [lm.sample(max_samples, seed, include_posterior=True)]
+            lm = LinearModel(d, sigma, data_dist)
+            data += [lm.sample(max_samples, seed, include_posterior=include_posterior)]
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
 
 
