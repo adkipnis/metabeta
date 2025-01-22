@@ -129,7 +129,7 @@ class FixedEffects(Task):
 
 class MixedEffects(Task):
     def __init__(self, n_predictors: int, sigma_error: float, data_dist: torch.distributions.Distribution,
-                 n_random_effects: int):
+                 n_random_effects: int = 1):
         super().__init__(n_predictors, sigma_error, data_dist)
         self.n_random_effects = n_random_effects
         self._initRfxStructure()
