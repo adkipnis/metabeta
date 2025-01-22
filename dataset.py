@@ -14,7 +14,7 @@ def padTensor(tensor: torch.Tensor, shape: tuple) -> torch.Tensor:
 
 
 class LMDataset(Dataset):
-    def __init__(self, data: List[dict], max_samples: int, max_predictors: int, permute: bool = True) -> None:
+    def __init__(self, data: List[dict], max_samples: int, max_predictors: int, permute: bool = False) -> None:
         self.data = data
         self.max_samples = max_samples
         self.max_predictors = max_predictors
