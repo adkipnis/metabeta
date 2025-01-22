@@ -160,7 +160,8 @@ class MixedEffects(Task):
         out = {"X": X, # (n, d)
                "y": y, # (n,)
                "beta": beta, # (d,)
-               "S": symmetricMatrix2Vector(self.S), # (q, q)
+               "rfx": rfx, # (n, q)
+               "S": torch.diag(self.S), # once we allow correlation: symmetricMatrix2Vector(self.S),
                "sigma_error": torch.tensor(self.sigma_error), # (n,)
                "seed": torch.tensor(seed)}
         return out
