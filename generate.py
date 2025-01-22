@@ -71,6 +71,7 @@ def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, ma
 
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate datasets for linear model task.')
+    parser.add_argument("-t", "--type", type=str, default="mfx", help="Type of dataset [ffx, mfx] (default = mfx)")
     parser.add_argument('-n', '--n_draws', type=int, default=int(1e4), help='Number of samples to draw per dataset (default = 10,000).')
     parser.add_argument('--n_draws_val', type=int, default=500, help='Number of samples (per d) to draw for validation dataset (default = 500).')
     parser.add_argument('-i', '--iterations', type=int, default=100, help='Number of dataset partitions to generate (default = 100, 0 only generates validation dataset).')
@@ -84,22 +85,22 @@ def setup() -> argparse.Namespace:
 if __name__ == "__main__":
     os.makedirs('data', exist_ok=True)
     cfg = setup()
+    ds_type = cfg.type
     n_draws = cfg.n_draws
     n_draws_val = cfg.n_draws_val
     iterations = cfg.iterations
     max_samples = cfg.max_samples
     max_predictors = cfg.max_predictors
+    fixed = cfg.fixed
     start = cfg.begin
-    noise = "variable" if cfg.fixed == 0 else cfg.fixed
-    suffix = f"-noise={noise}"
     seed = n_draws_val + 1
     data_dist = torch.distributions.uniform.Uniform(0., 1.)
 
     if start == 0:
         # generate validation dataset
-        print(f'Generating validation dataset of {n_draws_val * (max_predictors + 1)} samples')
-        dataset = generateBalancedDataset(n_draws_val, max_samples, max_predictors)
-        filename = Path('data', f'dataset-val{suffix}.pt')
+        print(f'Generating {ds_type} validation dataset of {n_draws_val * (max_predictors + 1)} samples')
+        dataset = generateBalancedDataset(ds_type, n_draws_val, max_samples, max_predictors)
+        filename = dsFilenameVal(ds_type, max_predictors, max_samples, fixed)
         torch.save(dataset, filename)
         start += 1
     else:
@@ -112,8 +113,8 @@ if __name__ == "__main__":
     print(f'Generating {iterations} training datasets of {n_draws} samples each')
     sower = Sower(seed)
     for part in range(start, iterations + 1):
-        dataset = generateDataset(n_draws, max_samples, max_predictors, sower)
-        filename = dsFilename(n_draws, part, suffix)
+        dataset = generateDataset(ds_type, n_draws, max_samples, max_predictors, sower)
+        filename = dsFilename(ds_type, max_predictors, max_samples, fixed, n_draws, part)
         torch.save(dataset, filename)
         print(f'Saved dataset to {filename}')
 
