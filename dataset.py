@@ -90,7 +90,9 @@ class LMDataset(Dataset):
 
 
 if __name__ == '__main__':
-    from pathlib import Path
-    fname = Path('data', 'dataset-val-noise=variable.pt')
-    ds_raw = torch.load(fname, weights_only=False)
+    from utils import dsFilenameVal
+    filename = dsFilenameVal("mfx", 8, 50, 0)
+    ds_raw = torch.load(filename, weights_only=False)
     ds = LMDataset(**ds_raw)
+
+
