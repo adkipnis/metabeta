@@ -138,9 +138,9 @@ class MixedEffects(Task):
         ''' given n_random_effects, draw diagonal elements of S (covariance matrix of random effects) '''
         dist = torch.distributions.inverse_gamma.InverseGamma(a,b)
         q = self.n_random_effects
-        self.m = torch.zeros((q,))
+        m = torch.zeros((q,))
         self.S = torch.diag_embed(dist.sample((q,))) # type: ignore
-        self.b_dist = torch.distributions.multivariate_normal.MultivariateNormal(self.m, covariance_matrix=self.S)
+        self.b_dist = torch.distributions.multivariate_normal.MultivariateNormal(m, covariance_matrix=self.S)
 
     def _sampleRandomEffects(self, n_samples: int) -> torch.Tensor:
         return self.b_dist.sample((n_samples,)) # type: ignore
