@@ -129,7 +129,7 @@ def betaLogProb(means: torch.Tensor,
                 betas: torch.Tensor) -> torch.Tensor:
     ''' Compute the negative log density of betas (target) under the proposed normal distribution. '''
     # means (batch, n_features)
-    # sigma (batch, n_features)
+    # stds (batch, n_features)
     # betas (batch, n_features)
     proposal = D.Normal(means, stds)
     return -proposal.log_prob(betas) # (batch, n, d)
@@ -183,7 +183,7 @@ def averageOverN(losses: torch.Tensor, n: int, b: int, depths: torch.Tensor, wei
 
 
 def betaLossWrapper(means: torch.Tensor,
-                    sigma: torch.Tensor,
+                    stds: torch.Tensor,
                     betas: torch.Tensor,
                     depths: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the beta loss function.
