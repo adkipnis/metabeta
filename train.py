@@ -320,11 +320,12 @@ def run(models: tuple,
     for i in range(num_examples):
         mask = (beta[i] != 0.)
         beta_i = beta[i, mask].detach().numpy()        
-        mu_i = batch["mu_n"][i, -1, mask].detach().numpy()
-        outputs_i = mu_beta[i, -1, mask].detach().numpy()
         printer(f"\n{console_width * '-'}")
         printer(f"True       : {beta_i}")
-        printer(f"Analytical : {mu_i}")
+        if cfg.type == "ffx":
+            mu_i = batch["mu_n"][i, -1, mask].detach().numpy()
+            printer(f"Analytical : {mu_i}")
+        outputs_i = mu_beta[i, -1, mask].detach().numpy()
         printer(f"Predicted  : {outputs_i}")
         printer(f"{console_width * '-'}\n")
     return loss, loss_noise
