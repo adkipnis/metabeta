@@ -476,6 +476,7 @@ def setup() -> argparse.Namespace:
 
     # model and loss
     parser.add_argument("-l", "--loss", type=str, default="logprob", help="Loss function [mse, logprob] (default = logprob)")
+    parser.add_argument("--loss_rfx", type=str, default="mse", help="Loss function for rfx [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_noise", type=str, default="logprob", help="Loss function for noise [mse, logprob, ig_exp] (default = logprob)")
     parser.add_argument("--dropout", type=float, default=0, help="Dropout rate (default = 0)")
     parser.add_argument("--hidden", type=int, default=128, help="Hidden dimension (default = 128)")
@@ -543,7 +544,15 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Loss {cfg.loss} not recognized.")
 
-    # 2. noise
+    # 2. rfx
+    if cfg.loss_rfx == "mse":
+        lf_rfx = rfxMSE
+    elif cfg.loss_rfx == "logprob":
+        lf_rfx = rfxLogProb
+    else:
+        raise ValueError(f"Loss {cfg.loss_rfx} not recognized.")
+
+    # 3. noise
     if cfg.loss_noise == "mse":
         lf_noise = noiseMSE
     elif cfg.loss_noise == "logprob":
@@ -551,7 +560,7 @@ if __name__ == "__main__":
     elif cfg.loss_noise == "ig_exp":
         lf_noise = noiseIgExp
     else:
-        raise ValueError(f"Loss {cfg.loss} not recognized.")
+        raise ValueError(f"Loss {cfg.loss_noise} not recognized.")
 
     # --- logging
     if cfg.proto:
