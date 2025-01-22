@@ -269,7 +269,7 @@ def run(models: tuple,
     X = batch["X"].to(device)
     beta = batch["beta"].float()
     inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
-    mu_beta, sigma_beta = models[0](inputs)
+    mu_beta, sigma_beta, s_beta = models[0](inputs)
     noise_inputs = torch.cat([y.unsqueeze(-1), mu_beta.detach(), sigma_beta.detach()], dim=-1)
     noise_param = models[1](noise_inputs, True)
 
@@ -277,6 +277,14 @@ def run(models: tuple,
     losses = betaLossWrapper(mu_beta, sigma_beta, beta, depths) # (batch, n_predictors)
     # compute mean loss over all batches and predictors (optionally ignoring padded predictors)
     loss = maskLoss(losses, beta) if unpad else losses.mean()
+
+    # optionally compute loss for random effects structure
+    if "rfx" in batch:
+        depths_rfx = batch["q"]
+        rfx = batch["rfx"].to(device)
+        S = batch["S"].to(device)
+        losses_rfx = rfxLossWrapper(s_beta, rfx, S, depths_rfx)
+        # TODO: integrate into loss
     
     # compute noise parameter loss per batch
     noise_std = batch["sigma_error"].unsqueeze(-1).float()
