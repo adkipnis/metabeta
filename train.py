@@ -124,13 +124,6 @@ def betaMSE(means: torch.Tensor,
     return mse(means, betas)
 
 
-def noiseMSE(noise_param: torch.Tensor,
-             noise_std: torch.Tensor) -> torch.Tensor:
-    log_proposed = noise_param.squeeze(-1).log()
-    log_true = noise_std.log()
-    return mse(log_proposed, log_true)
-
-
 def betaLogProb(means: torch.Tensor,
                 stds: torch.Tensor,
                 betas: torch.Tensor) -> torch.Tensor:
@@ -141,10 +134,12 @@ def betaLogProb(means: torch.Tensor,
     proposal = D.Normal(means, stds)
     return -proposal.log_prob(betas) # (batch, n, d)
 
-def getAlpha(noise_std: torch.Tensor) -> torch.Tensor:
-    b, n  = noise_std.shape
-    ns = torch.stack([torch.arange(n)] * b)
-    return 2. + ns / 2.
+
+def noiseMSE(std_proposed: torch.Tensor,
+             std_true: torch.Tensor) -> torch.Tensor:
+    std_proposed = std_proposed.squeeze(-1)
+    return mse(std_proposed.log(), std_true.log())
+
 
 def noiseLogProb(noise_param: torch.Tensor,
                  noise_std: torch.Tensor) -> torch.Tensor:
