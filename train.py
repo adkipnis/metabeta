@@ -456,24 +456,17 @@ def setup() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
+    # ------------------------------------------------------------------------------------------------------------------------------------------------
+    # --- setup config
     cfg = setup()
-
-    # seeding
     torch.manual_seed(cfg.seed)
     torch.cuda.manual_seed_all(cfg.seed)
     torch.backends.cudnn.deterministic = True
-
-    # global variables
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     console_width = getConsoleWidth()
-    noise = "variable" if cfg.fixed == 0 else cfg.fixed
-    suffix = f"-noise={noise}"
-    if cfg.device == "cuda":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() and cfg.device == "cuda" else "cpu")
 
-    # set up model
+    # --- set up models
     model = TransformerDecoder(
                 num_predictors=cfg.d,
                 hidden_size=cfg.hidden,
@@ -494,20 +487,20 @@ if __name__ == "__main__":
     print(f"Model: Transformer with {cfg.hidden} hidden units, " + \
             f"{cfg.ff} feedforward units, {cfg.heads} heads, {cfg.layers} layer(s), " + \
             f"{cfg.dropout} dropout")
-    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    # --- set up optimizers
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr, eps=cfg.eps)
     optimizer_noise = schedulefree.AdamWScheduleFree(model_noise.parameters(), lr=cfg.lr, eps=cfg.eps)
     optimizers = (optimizer, optimizer_noise)
-    
-    # optionally preload a model
+
+    # --- optionally preload a model
     initial_iteration, global_step, validation_step = 1, 1, 1
     if cfg.preload:
         initial_iteration, global_step, validation_step, timestamp = load(models, optimizers, cfg.preload)
         print(f"Preloaded model from iteration {cfg.preload}, starting at iteration {initial_iteration}.")
-    else:
-        print("No preloaded model found, starting from scratch.")
 
-    # loss functions
+    # --- loss functions
+    # 1. parameters
     if cfg.loss == "mse":
         lf = betaMSE
     elif cfg.loss == "logprob":
@@ -515,6 +508,7 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Loss {cfg.loss} not recognized.")
 
+    # 2. noise
     if cfg.loss_noise == "mse":
         lf_noise = noiseMSE
     elif cfg.loss_noise == "logprob":
@@ -524,7 +518,7 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Loss {cfg.loss} not recognized.")
 
-    # logging
+    # --- logging
     if cfg.proto:
         writer, logger = None, None
     else:
@@ -532,9 +526,10 @@ if __name__ == "__main__":
         logger = Logger(Path("losses", modelID(cfg), timestamp))
     pred_path = Path("predictions", modelID(cfg), timestamp)
     pred_path.mkdir(parents=True, exist_ok=True)
+    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Number of parameters: {num_params}, Loss: {cfg.loss}, Learning rate: {cfg.lr}, Epsilon: {cfg.eps}, Seed: {cfg.seed}, Device: {device}")
     
-    # ------------------------------------------------------------------------------------------------------------------------------------------------- 
+    # -------------------------------------------------------------------------------------------------------------------------------------------------
     # training loop
     print("Preparing validation dataset...")
     fname = Path('data', f'dataset-val{suffix}.pt')
