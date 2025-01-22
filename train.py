@@ -135,6 +135,15 @@ def betaLogProb(means: torch.Tensor,
     return -proposal.log_prob(betas) # (batch, n, d)
 
 
+def rfxMSE(stds_proposed: torch.Tensor,
+           stds_target: torch.Tensor,
+           rfx: torch.Tensor) -> torch.Tensor:
+    mask = (stds_target == 0.).float()
+    stds_target += mask
+    stds_target = stds_target.unsqueeze(1).expand_as(stds_proposed)
+    return mse(stds_proposed.log(), stds_target.log())
+
+
 def noiseMSE(std_proposed: torch.Tensor,
              std_true: torch.Tensor) -> torch.Tensor:
     std_proposed = std_proposed.squeeze(-1)
