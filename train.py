@@ -11,9 +11,9 @@ from torch import distributions as D
 from torch.utils.tensorboard import SummaryWriter # type: ignore
 from torch.utils.data import DataLoader
 import schedulefree
+from utils import dsFilename, dsFilenameVal
 from dataset import LMDataset
-from models import GRU, LSTM, TransformerDecoder
-from generate import dsFilename
+from models import TransformerDecoder
 
 
 # -------- miscellaneous
