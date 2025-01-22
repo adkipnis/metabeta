@@ -21,6 +21,7 @@ class Base(nn.Module):
         self.mu = nn.Linear(hidden_size, self.output_size)
         self.logSigma = nn.Linear(hidden_size, self.output_size)
         self.logEta = nn.Linear(hidden_size, 1) 
+        self.logS = nn.Linear(hidden_size, self.output_size)
 
 
     def initializeWeights(self) -> None:
@@ -38,7 +39,7 @@ class Base(nn.Module):
 
     def forward(self,
                 x: torch.Tensor, # (batch_size, seq_size, input_size)
-                noise: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
+                noise: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
         outputs = self.internal(x) # (batch_size, seq_size, hidden_size)
         if noise:
@@ -47,7 +48,6 @@ class Base(nn.Module):
         else:
             mu = self.mu(outputs) # (batch_size, seq_size, output_size)
             log_sigma = self.logSigma(outputs) # (batch_size, seq_size, output_size)
-            return mu, log_sigma.exp()
 
 
 class RNNBase(Base):
@@ -72,6 +72,8 @@ class LSTM(RNNBase):
         super(LSTM, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, last)
         self.model = nn.LSTM(**self.kwargs)
         self.initializeWeights()
+            log_s = self.logS(outputs)
+            return mu, log_sigma.exp(), log_s.exp()
 
 
 class TransformerDecoder(Base):
