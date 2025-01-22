@@ -434,7 +434,7 @@ def validate(models: Tuple[nn.Module, nn.Module],
                 logger.write(iteration, step, loss_val_noise.item(), "loss_val_noise")
 
             # optionally calculate KL loss
-            if cfg.kl:
+            if cfg.kl and cfg.type == "ffx":
                 loss_kl = compare(models[0], batch)
                 if writer is not None:
                     writer.add_scalar("loss_kl", loss_kl.item(), step)
