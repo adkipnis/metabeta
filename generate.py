@@ -69,17 +69,6 @@ def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, ma
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
 
 
-def dsFilename(size: int, part: int, suffix: str = '') -> Path:
-    if size >= 1e6:
-        n = f'{size/1e6:.0f}m'
-    elif size >= 1e3:
-        n = f'{size/1e3:.0f}k'
-    else:
-        n = str(size)
-    p = f'{part:03d}'
-    return Path('data', f'dataset-{n}-{p}{suffix}.pt')
-
-
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate datasets for linear model task.')
     parser.add_argument('-n', '--n_draws', type=int, default=int(1e4), help='Number of samples to draw per dataset (default = 10,000).')
