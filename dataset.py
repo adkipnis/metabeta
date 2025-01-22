@@ -69,8 +69,6 @@ class LMDataset(Dataset):
         return out
 
     def __getitem__(self, idx) -> dict:
-        # item = self.data[idx]
-        # return self.preprocess(item)
         return self.data_p[idx]
 
     def randomSplit(self, split: float = 0.9, shuffle: bool = False) -> Tuple['LMDataset', 'LMDataset']:
