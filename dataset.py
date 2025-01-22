@@ -43,6 +43,14 @@ class LMDataset(Dataset):
 
         out = {'d': d, 'X': X, 'y': y, 'beta': beta, 'sigma_error': item['sigma_error']}
 
+        # optionally include random effects
+        if "rfx" in item:
+            q = item['rfx'].shape[1]
+            rfx = padTensor(item['rfx'], (n, d_max))
+            S = padTensor(item['S'], (d_max,))
+            # unique = int(d_max * (d_max + 1) / 2)
+            # S = padTensor(item['S'], (unique,))
+            out.update({'q': q, 'rfx': rfx, 'S': S})
         # optionally include analytical posterior
         if 'mu_n' in item:
             mu_n = padTensor(item['mu_n'], (n, d_max))
