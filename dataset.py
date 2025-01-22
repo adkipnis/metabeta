@@ -51,6 +51,9 @@ class LMDataset(Dataset):
             # unique = int(d_max * (d_max + 1) / 2)
             # S = padTensor(item['S'], (unique,))
             out.update({'q': q, 'rfx': rfx, 'S': S})
+            if self.permute:
+                raise ValueError('Permutation not implemented for rfx datasets')
+
         # optionally include analytical posterior
         if 'mu_n' in item:
             mu_n = padTensor(item['mu_n'], (n, d_max))
