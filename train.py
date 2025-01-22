@@ -532,13 +532,14 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------------------------------------------------------------------------------
     # training loop
     print("Preparing validation dataset...")
-    fname = Path('data', f'dataset-val{suffix}.pt')
-    dataloader_val = getDataLoader(fname, 100)
+    fname = dsFilenameVal(cfg.type, cfg.d - 1, cfg.m, cfg.fixed)
+    dataloader_val = getDataLoader(fname, batch_size=100)
     print(f"Training for {cfg.iterations + 1 - initial_iteration} iterations with 10k datasets per iteration and a batch size of {cfg.batch_size}...")
     for iteration in range(initial_iteration, cfg.iterations + 1):
-        fname = dsFilename(int(1e4), iteration, suffix)
+        fname = dsFilename(cfg.type, cfg.d - 1, cfg.m, cfg.fixed, int(1e4), iteration)
         dataloader_train = getDataLoader(fname, cfg.batch_size)
         global_step = train(models, optimizers, dataloader_train, writer, logger, iteration, global_step)
         validation_step = validate(models, optimizers, dataloader_val, writer, logger, iteration, validation_step)
         save(models, optimizers, iteration, global_step, validation_step, timestamp)
  
+
