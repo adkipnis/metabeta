@@ -210,7 +210,7 @@ def betaLossWrapper(means: torch.Tensor,
     # calculate losses for all dataset sizes and each beta
     b, n, _ = means.shape
     target = betas.unsqueeze(1).expand_as(means)
-    losses = lf(means, sigma, target) # (b, n, d)
+    losses = lf(means, stds, target) # (b, n, d)
     return averageOverN(losses, n, b, depths)
 
 
