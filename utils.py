@@ -2,6 +2,12 @@ from pathlib import Path
 import torch
 
 
+def getAlpha(noise_std: torch.Tensor) -> torch.Tensor:
+    b, n  = noise_std.shape
+    ns = torch.stack([torch.arange(n)] * b)
+    return 2. + ns / 2.
+
+
 def symmetricMatrix2Vector(matrix: torch.Tensor) -> torch.Tensor:
     r, c = matrix.shape
     indices = torch.tril_indices(row=r, col=c, offset=0)
