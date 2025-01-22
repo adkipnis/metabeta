@@ -216,7 +216,7 @@ def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> No
 
 if __name__ == "__main__":
     seed = 1
-    n_predictors = 3
+    n_predictors = 5
     n_obs = 20
     noise_var = 0.5 ** 2
     datadist = torch.distributions.uniform.Uniform(0., 1.)
@@ -246,13 +246,12 @@ if __name__ == "__main__":
     # print(f"SNR: {snr:.3f}")
 
     # mixed effects
-    n_random_effects = 3
+    n_random_effects = 2
     me = MixedEffects(n_predictors, math.sqrt(noise_var), datadist, n_random_effects)
     ds = me.sample(n_obs, seed)
-    y, S = ds["y"], symmetricMatrixFromVector(ds["S"], n_random_effects)
-
-    print(f"random effects covariance:\n{S}")
-    print(f"targets:\n{y}")
+    S, rfx = ds["S"], ds["rfx"]
+    print(f"random effects variances:\n{S}")
+    print(f"random effects:\n{rfx}")
 
 
 
