@@ -338,7 +338,7 @@ def compare(models: nn.Module, batch: dict) -> torch.Tensor:
     X = batch["X"].to(device)
     beta = batch["beta"].float()
     inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
-    mean_proposed, std_proposed = model(inputs)
+    mean_proposed, std_proposed, _ = model(inputs)
     var_proposed = std_proposed.square()
 
     # get analytical posterior (posterior mean vector and covariance matrix)
@@ -362,7 +362,7 @@ def savePredictions(models: Tuple[nn.Module, nn.Module], batch: dict, iteration_
     X = batch["X"].to(device)
     y = batch["y"].to(device)
     inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
-    mu, sigma = models[0](inputs)
+    mu, sigma, s = models[0](inputs)
     noise_inputs = torch.cat([y.unsqueeze(-1), mu.detach(), sigma.detach()], dim=-1)
     noise_params = models[1](noise_inputs, True)
 
@@ -370,6 +370,7 @@ def savePredictions(models: Tuple[nn.Module, nn.Module], batch: dict, iteration_
     out = {
         "means": mu,
         "stds": sigma,
+        "s": s,
         "abs": noise_params,
     }
     torch.save(out, fname)
