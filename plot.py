@@ -151,7 +151,7 @@ def analytical_alpha(n: int):
     return alpha
 
 
-def igDataFrame(abs_matrix, batch_id: int) -> dict:
+def igDataFrame(abs_matrix, batch_id: int) -> pd.DataFrame:
     _, n, d = abs_matrix.shape
     if d == 2:
         data_a = abs_matrix[batch_id, :, 0]
@@ -169,7 +169,7 @@ def igDataFrame(abs_matrix, batch_id: int) -> dict:
     })
 
 
-def noiseDataFrame(noise_matrix, batch_id: int) -> dict: 
+def noiseDataFrame(noise_matrix, batch_id: int) -> pd.DataFrame: 
     data = noise_matrix[batch_id, :, 0]
     values = data.flatten()
     row_indices = np.arange(data.shape[0]) + 1
