@@ -250,18 +250,13 @@ def plotNoise(df, sigma_error, ax):
      
 
 def plotParamsWrapper(data: dict, batch_id: int, iteration: int, paramtype = "beta"):
-    # unpack
-    targets = data["targets"]
-    means_a = data["means_a"]
-    means_p = data["means_p"]
-    stds_a = data["stds_a"]
-    stds_p = data["stds_p"]
-    abs_a = data["abs_a"]
-    abs_p = data["abs_p"]
-    sigma_errors = data["sigma_errors"]
-    
     # plot MVN parameters
     if paramtype == "beta":
+        targets = data["targets"]
+        means_a = data["means_a"]
+        means_p = data["means_p"]
+        stds_a = data["stds_a"]
+        stds_p = data["stds_p"]
         df_a, betas = mvnDataFrame(targets, means_a, stds_a, batch_id)
         df_p, _ = mvnDataFrame(targets, means_p, stds_p, batch_id)
         fig, axs = plt.subplots(2, sharex=True, figsize=(8, 6))
@@ -269,8 +264,18 @@ def plotParamsWrapper(data: dict, batch_id: int, iteration: int, paramtype = "be
         plotMvnParams(df_a, betas, "analytical", axs[0])
         plotMvnParams(df_p, betas, "proposed", axs[1])
     
+    # plot RFX parameters
+    if paramtype == "rfx":
+        targets = data["s"]
+        stds_p = data["s_p"]
+        df_s, s = sDataFrame(targets, stds_p, batch_id)
+        fig, ax = plt.subplots(figsize=(8, 6))
+        plotRfxParams(df_s, s, ax)
+    
     # plot IG parameters
     if paramtype == "ig":
+        abs_a = data["abs_a"]
+        abs_p = data["abs_p"]
         df_ig_a = igDataFrame(abs_a, batch_id)
         df_ig_p = igDataFrame(abs_p, batch_id)
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -278,6 +283,8 @@ def plotParamsWrapper(data: dict, batch_id: int, iteration: int, paramtype = "be
     
     # plot noise std
     if paramtype == "sigma":
+        abs_p = data["abs_p"]
+        sigma_errors = data["sigma_errors"]
         df_noise = noiseDataFrame(abs_p, batch_id)
         fig, ax = plt.subplots(figsize=(8, 6))
         plotNoise(df_noise, sigma_errors[batch_id], ax)
