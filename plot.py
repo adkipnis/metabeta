@@ -84,29 +84,34 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
     predictions = [torch.load(paths[batch], weights_only=False) for batch in range(n_batches)]
     means_p = torch.cat([x["means"] for x in predictions]).numpy()
     stds_p = torch.cat([x["stds"] for x in predictions]).numpy()
+    s_p = torch.cat([x["s"] for x in predictions]).numpy()
     abs_p = torch.cat([x["abs"] for x in predictions]).numpy()
     
-    # gather analytical means and stds
-    path = Path('data', f'dataset-val-noise={noise}.pt')
-    ds_val_raw = torch.load(path, weights_only=False)
+    # gather validation data
+    filename = dsFilenameVal(ds_type, 8, 50, fixed)
+    ds_val_raw = torch.load(filename, weights_only=False)
     ds_val = LMDataset(**ds_val_raw, permute=False)
-    targets = torch.stack([x["beta"] for x in ds_val], dim = 0).numpy()
-    sigma_errors = torch.stack([x["sigma_error"] for x in ds_val], dim = 0).numpy()
-    means_a = torch.stack([x["mu_n"] for x in ds_val], dim = 0).numpy()
-    stds_a = [torch.diagonal(x["Sigma_n"], dim1=-2, dim2=-1).sqrt() for x in ds_val]
-    stds_a = torch.stack(stds_a, dim=0).numpy()
-    
-    # TODO: correct for noise variance
-    as_a = torch.stack([x["a_n"] for x in ds_val], dim = 0).unsqueeze(-1)
-    bs_a = torch.stack([x["b_n"] for x in ds_val], dim = 0).unsqueeze(-1)
-    abs_a = torch.cat([as_a, bs_a], dim=-1).numpy()
-    assert means_a.shape[0] == means_p.shape[0], \
-        "Different number of observations for analytical and trained solutions."
-    return {"targets": targets, "sigma_errors": sigma_errors,
-            "means_p": means_p, "means_a": means_a,
-            "stds_p": stds_p, "stds_a": stds_a,
-            "abs_p": abs_p, "abs_a": abs_a,}
-            
+    targets = torch.stack([x["beta"] for x in ds_val], dim=0).numpy()
+    sigma_errors = torch.stack([x["sigma_error"] for x in ds_val], dim=0).numpy()
+    out = {"targets": targets, "sigma_errors": sigma_errors,
+           "means_p": means_p, 
+           "stds_p": stds_p,
+           "s_p": s_p,
+           "abs_p": abs_p,}
+    if ds_type == "ffx":
+        means_a = torch.stack([x["mu_n"] for x in ds_val], dim=0).numpy()
+        stds_a = [torch.diagonal(x["Sigma_n"], dim1=-2, dim2=-1).sqrt() for x in ds_val]
+        stds_a = torch.stack(stds_a, dim=0).numpy()
+        as_a = torch.stack([x["a_n"] for x in ds_val], dim=0).unsqueeze(-1)
+        bs_a = torch.stack([x["b_n"] for x in ds_val], dim=0).unsqueeze(-1)
+        abs_a = torch.cat([as_a, bs_a], dim=-1).numpy()
+        assert means_a.shape[0] == means_p.shape[0], \
+            "Different number of observations for analytical and trained solutions."
+        out.update({"means_a": means_a, "stds_a": stds_a, "abs_a": abs_a,})
+    elif ds_type == "mfx":
+        s = torch.stack([x["S"].sqrt() for x in ds_val], dim=0).numpy()
+        out.update({"s": s})
+    return out
 
 
 def mvnDataFrame(targets, means_matrix, stds_matrix, batch_id: int) -> tuple:
