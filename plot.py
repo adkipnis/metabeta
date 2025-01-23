@@ -203,7 +203,27 @@ def plotMvnParams(df, betas, est_type: str, ax):
     ax.set_ylim(-7, 7)
     ax.grid(True)           # Show grid
 
+# plot rfx structure
+def plotRfxParams(df, targets, ax):
+    unique_d = df['d'].unique()
+    norm = colors.Normalize(vmin=unique_d.min(), vmax=unique_d.max())
     
+    # Create the plot
+    for d_value, group in df.groupby('d'):
+        target = targets[d_value].item()
+        color = cmap(norm(d_value))
+        ax.plot(group['n'], group['std'], label=f'd={d_value}', color=color)
+        # ax.fill_between(group['n'], 
+        #                 group['mean'] - group['std'], 
+        #                 group['mean'] + group['std'], 
+        #                 color=color, alpha=0.1)  # Shade ± SD
+        ax.axhline(y=target, color=color, linestyle=':', linewidth=1.5)
+    
+    # Adding labels and title
+    ax.set_xlabel('n')  # X-axis label
+    ax.set_ylabel('SD(b)')
+    ax.set_ylim(-7, 7)
+    ax.grid(True)           # Show grid
     
 # plot ig params
 def plotIGParams(df_a, df_p, ax):
