@@ -6,7 +6,9 @@ import numpy as np
 from pathlib import Path
 from typing import Dict
 from dataset import LMDataset
+from utils import dsFilenameVal
 from torch import distributions as D
+
 
 # Create a color map from light blue to dark blue
 cmap = colors.LinearSegmentedColormap.from_list("custom_blues", ["#add8e6", "#000080"])
@@ -75,10 +77,10 @@ def plotVal(date: str, model_id: str, suffix: str = "val", focus: int = -1):
     plt.show()
 
 
-def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches: int = 45, noise: str = "variable") -> Dict[str, torch.Tensor]:
+def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches: int = 45, fixed: float = 0, ds_type: str = "ffx") -> Dict[str, np.ndarray]:
     # gather predicted means and stds
-    paths = [Path('predictions', model_id, date,
-                f'predictions_i={iteration}_b={batch}.pt') for batch in range(n_batches)]
+    paths = [Path('predictions', model_id, date, f'predictions_i={iteration}_b={batch}.pt')
+             for batch in range(n_batches)]
     predictions = [torch.load(paths[batch], weights_only=False) for batch in range(n_batches)]
     means_p = torch.cat([x["means"] for x in predictions]).numpy()
     stds_p = torch.cat([x["stds"] for x in predictions]).numpy()
