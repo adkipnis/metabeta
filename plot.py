@@ -129,6 +129,20 @@ def mvnDataFrame(targets, means_matrix, stds_matrix, batch_id: int) -> tuple:
         'std' : values_s,
         'd': column_indices
     }), betas
+
+
+def sDataFrame(targets, stds_matrix, batch_id: int) -> tuple:
+    mask = (targets[batch_id] != 0.)
+    target = targets[batch_id, mask]
+    data_s = stds_matrix[batch_id, :, mask].transpose(1,0)
+    values_s = data_s.flatten()
+    row_indices = np.repeat(np.arange(data_s.shape[0]), data_s.shape[1]) + 1
+    column_indices = np.tile(np.arange(data_s.shape[1]), data_s.shape[0])
+    return pd.DataFrame({
+        'n' : row_indices,
+        'std' : values_s,
+        'd': column_indices
+    }), target
  
     
 def analytical_alpha(n: int):
@@ -188,6 +202,7 @@ def plotMvnParams(df, betas, est_type: str, ax):
         ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
     ax.set_ylim(-7, 7)
     ax.grid(True)           # Show grid
+
     
     
 # plot ig params
