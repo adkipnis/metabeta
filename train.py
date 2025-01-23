@@ -138,7 +138,6 @@ def betaLogProb(means: torch.Tensor,
 def rfxMSE(stds_proposed: torch.Tensor,
            stds_target: torch.Tensor,
            rfx: torch.Tensor) -> torch.Tensor:
-    stds_target = stds_target.unsqueeze(1).expand_as(stds_proposed)
     return mse(stds_proposed.log(), stds_target.log())
 
 
@@ -218,6 +217,7 @@ def rfxLossWrapper(stds_proposed: torch.Tensor,
                    depths: torch.Tensor) -> torch.Tensor:
     b, n, _ = stds_proposed.shape
     stds_target += (stds_target == 0.).float() # set entries with std = 0 to 1
+    stds_target = stds_target.unsqueeze(1).expand_as(stds_proposed)
     losses = lf_rfx(stds_proposed, stds_target, rfx) # (b, n, d)
     return averageOverN(losses, n, b, depths)
 
