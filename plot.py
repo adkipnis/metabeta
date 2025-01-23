@@ -359,32 +359,38 @@ def plotVal2(df, iteration, source, focus: int = -1):
 
 if __name__ == "__main__":
     noise_type = "variable"
+    fixed = 0. # equivalent to noise_type
+    ds_type = "mfx"
     # nice result
     # model_id = f'transformer-256-512-8-4-dropout=0-noise={noise_type}-seed=0-loss=logprob' # server
-    # date = '20250120-090048'
+    # date = '20250120-090048' # nice
     
     model_id = f'transformer-128-256-8-3-dropout=0-noise={noise_type}-seed=0-loss=logprob' # macbook
-    date = '20250120-170752'
-    
-    
+    date = '20250123-182354'
+        
     # train and val loss
     plotTrain(date, model_id)
     plotVal(date, model_id)
-    plotVal(date, model_id, suffix="kl")
+    if ds_type == "ffx":
+        plotVal(date, model_id, suffix="kl")
     
     # proposal distribution
-    iteration = 100
+    iteration = 10
     data = preloadPredictions(date,
                               model_id,
                               iteration=iteration,
                               n_batches=45,
-                              noise=noise_type)
-    max_d = 7
-    for i in range (5):
-        plotParamsWrapper(data, 500 * max_d + i, iteration)
+                              fixed=fixed,
+                              ds_type=ds_type)
+    max_d = 0
+    # for i in range (5):
+    #     plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype="beta")
+    
+    for i in range (20):
+        plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype="rfx")
     
     for i in range (5):
-        plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype = "ig")
+        plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype="ig")
         
     
     # plot validation loss over n
