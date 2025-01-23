@@ -144,10 +144,16 @@ def rfxMSE(stds_proposed: torch.Tensor,
 def rfxLogProb(stds_proposed: torch.Tensor,
                stds_target: torch.Tensor,
                rfx: torch.Tensor) -> torch.Tensor:
-    means = torch.zeros_like(stds_proposed)
-    proposal = D.Normal(means, stds_proposed)
-    # optional TODO: correct for log_prob under stds_target
-    return -proposal.log_prob(rfx)
+    ''' for each n in the proposal distribution, get the mean log_prob over all n true rfx 
+    and correct for log_prob under stds_target'''
+    rfx_ = rfx.unsqueeze(1)
+    means_p = torch.zeros_like(stds_proposed)
+    dist_p = D.Normal(means_p, stds_proposed)
+    losses_p = -dist_p.log_prob(rfx_).mean(2)
+    means_t = torch.zeros_like(stds_target)
+    dist_t = D.Normal(means_t, stds_target)
+    losses_t = -dist_t.log_prob(rfx_).mean(2)
+    return losses_p - losses_t
 
 
 def noiseMSE(std_proposed: torch.Tensor,
@@ -475,7 +481,7 @@ def setup() -> argparse.Namespace:
 
     # model and loss
     parser.add_argument("-l", "--loss", type=str, default="logprob", help="Loss function [mse, logprob] (default = logprob)")
-    parser.add_argument("--loss_rfx", type=str, default="mse", help="Loss function for rfx [mse, logprob] (default = logprob)")
+    parser.add_argument("--loss_rfx", type=str, default="logprob", help="Loss function for rfx [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_noise", type=str, default="logprob", help="Loss function for noise [mse, logprob, ig_exp] (default = logprob)")
     parser.add_argument("--dropout", type=float, default=0, help="Dropout rate (default = 0)")
     parser.add_argument("--hidden", type=int, default=128, help="Hidden dimension (default = 128)")
