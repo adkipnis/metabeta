@@ -110,7 +110,8 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
         out.update({"means_a": means_a, "stds_a": stds_a, "abs_a": abs_a,})
     elif ds_type == "mfx":
         s = torch.stack([x["S"].sqrt() for x in ds_val], dim=0).numpy()
-        out.update({"s": s})
+        s_emp = torch.stack([x["S_emp"].sqrt() for x in ds_val], dim=0).numpy()
+        out.update({"s": s, "s_emp": s_emp})
     return out
 
 
