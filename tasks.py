@@ -146,6 +146,22 @@ class MixedEffects(Task):
     def _sampleRandomEffects(self, n_samples: int) -> torch.Tensor:
         return self.b_dist.sample((n_samples,)) # type: ignore
 
+    def _covaryRandomEffects(self, rfx: torch.Tensor, correction: int = 1) -> torch.Tensor:
+        ''' Calculate sample variance for each subset of rfx (as n increases) '''
+        # rfx (n, q)
+        n = rfx.shape[0]
+        k = torch.arange(1, n+1).unsqueeze(1)
+        means = torch.cumsum(rfx, dim=0) / k
+        outer = means * means
+        inner = torch.cumsum(rfx**2, dim=0) / k
+        bessel = k / (k - correction) # unbiased variance estimate
+        bessel[0] = 1. # prevent NaN generation due to division by inf
+        variances = bessel * (inner - outer)
+        # test:
+        # i = 9
+        # torch.isclose(variances[i], torch.var(rfx[:i+1], dim=0, correction = correction))
+        return torch.max(torch.tensor(0), variances) # guarantee non-negative values
+
     def sample(self, n_samples: int, seed: int, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
         if include_posterior:
             print("Warning: Mixed effects models do not have an analytical posterior, but parameter is set to True...")
