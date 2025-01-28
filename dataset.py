@@ -50,7 +50,8 @@ class LMDataset(Dataset):
             S = padTensor(item['S'], (d_max,))
             # unique = int(d_max * (d_max + 1) / 2)
             # S = padTensor(item['S'], (unique,))
-            out.update({'q': q, 'rfx': rfx, 'S': S})
+            S_emp = padTensor(item['S_emp'], (n, d_max))
+            out.update({'q': q, 'rfx': rfx, 'S': S, 'S_emp': S_emp})
             if self.permute:
                 raise ValueError('Permutation not implemented for rfx datasets')
 
