@@ -277,8 +277,9 @@ def plotParamsWrapper(data: dict, batch_id: int, iteration: int, paramtype = "be
     # plot RFX parameters
     if paramtype == "rfx":
         targets = data["s"]
-        stds_p = data["s_p"]
-        df_s, s = sDataFrame(targets, stds_p, batch_id)
+        stds_prop = data["s_p"]
+        stds_emp = data["s_emp"]
+        df_s, s = sDataFrame(targets, stds_prop, stds_emp, batch_id)
         fig, ax = plt.subplots(figsize=(8, 6))
         plotRfxParams(df_s, s, ax)
     
