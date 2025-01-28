@@ -345,7 +345,7 @@ def compare(models: nn.Module, batch: dict) -> torch.Tensor:
     y = batch["y"].to(device)
     X = batch["X"].to(device)
     beta = batch["beta"].float()
-    inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
+    inputs = torch.cat([y.unsqueeze(-1), X], dim=-1) # <eos> token?
     mean_proposed, std_proposed, _ = model(inputs)
     var_proposed = std_proposed.square()
 
@@ -484,7 +484,7 @@ def setup() -> argparse.Namespace:
 
     # model and loss
     parser.add_argument("-l", "--loss", type=str, default="logprob", help="Loss function [mse, logprob] (default = logprob)")
-    parser.add_argument("--loss_rfx", type=str, default="logprob", help="Loss function for rfx [mse, logprob] (default = logprob)")
+    parser.add_argument("--loss_rfx", type=str, default="mse", help="Loss function for rfx [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_noise", type=str, default="logprob", help="Loss function for noise [mse, logprob, ig_exp] (default = logprob)")
     parser.add_argument("--dropout", type=float, default=0, help="Dropout rate (default = 0)")
     parser.add_argument("--hidden", type=int, default=128, help="Hidden dimension (default = 128)")
