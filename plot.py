@@ -216,11 +216,8 @@ def plotRfxParams(df, targets, ax):
     for d_value, group in df.groupby('d'):
         target = targets[d_value].item()
         color = cmap(norm(d_value))
-        ax.plot(group['n'], group['std'], label=f'd={d_value}', color=color)
-        # ax.fill_between(group['n'], 
-        #                 group['mean'] - group['std'], 
-        #                 group['mean'] + group['std'], 
-        #                 color=color, alpha=0.1)  # Shade ± SD
+        ax.plot(group['n'], group['std_p'], label=f'd={d_value}', color=color)
+        ax.plot(group['n'], group['std_e'], label=f'd={d_value}', color=color, linestyle='--')
         ax.axhline(y=target, color=color, linestyle=':', linewidth=1.5)
     
     # Adding labels and title
