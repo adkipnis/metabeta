@@ -172,7 +172,7 @@ class MixedEffects(Task):
         rfx = self._sampleRandomEffects(n_samples)
         S_emp = self._covaryRandomEffects(rfx)
         Z = X[:,:q]
-        eta = torch.bmm(Z.unsqueeze(1), rfx.unsqueeze(2)).flatten() # eta_i = z_i^T b_i
+        eta = torch.bmm(Z.unsqueeze(1), rfx.unsqueeze(2)).flatten() # eta_i = z_i.T @ b_i
         eps = self._sampleNoise(n_samples)
         y = X @ beta + eta + eps
         out = {"X": X, # (n, d)
