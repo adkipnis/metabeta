@@ -226,7 +226,7 @@ def rfxLossWrapper(stds_proposed: torch.Tensor,
                    depths: torch.Tensor) -> torch.Tensor:
     b, n, _ = stds_proposed.shape
     stds_target += (stds_target == 0.).float() # set entries with std = 0 to 1
-    stds_target = stds_target.unsqueeze(1).expand_as(stds_proposed)
+    # stds_target = stds_target.unsqueeze(1).expand_as(stds_proposed)
     losses = lf_rfx(stds_proposed, stds_target, rfx) # (b, n, d)
     return averageOverN(losses, n, b, depths)
 
@@ -312,7 +312,7 @@ def run(models: tuple,
         # compute losses for random effects structure
         depths_rfx = batch["q"]
         rfx = batch["rfx"].to(device)
-        stds_b_true = batch["S"].to(device).sqrt()
+        stds_b_true = batch["S_emp"].to(device).sqrt()
         losses_rfx = rfxLossWrapper(stds_b, stds_b_true, rfx, depths_rfx) # (batch, n_predictors)
         # join losses
         losses_joint = torch.cat([losses, losses_rfx], dim=1)
