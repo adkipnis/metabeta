@@ -132,16 +132,19 @@ def mvnDataFrame(targets, means_matrix, stds_matrix, batch_id: int) -> tuple:
     }), betas
 
 
-def sDataFrame(targets, stds_matrix, batch_id: int) -> tuple:
+def sDataFrame(targets, stds_prop_matrix, stds_emp_matrix, batch_id: int) -> tuple:
     mask = (targets[batch_id] != 0.)
     target = targets[batch_id, mask]
-    data_s = stds_matrix[batch_id, :, mask].transpose(1,0)
-    values_s = data_s.flatten()
-    row_indices = np.repeat(np.arange(data_s.shape[0]), data_s.shape[1]) + 1
-    column_indices = np.tile(np.arange(data_s.shape[1]), data_s.shape[0])
+    data_p = stds_prop_matrix[batch_id, :, mask].transpose(1,0)
+    data_e = stds_emp_matrix[batch_id, :, mask].transpose(1,0)
+    values_p = data_p.flatten()
+    values_e = data_e.flatten()
+    row_indices = np.repeat(np.arange(data_p.shape[0]), data_p.shape[1]) + 1
+    column_indices = np.tile(np.arange(data_p.shape[1]), data_p.shape[0])
     return pd.DataFrame({
         'n' : row_indices,
-        'std' : values_s,
+        'std_p' : values_p,
+        'std_e' : values_e,
         'd': column_indices
     }), target
  
