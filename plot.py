@@ -377,7 +377,7 @@ if __name__ == "__main__":
     # date = '20250120-090048' # nice
     
     model_id = f'transformer-128-256-8-3-dropout=0-noise={noise_type}-seed=0-loss=logprob' # macbook
-    date = '20250123-182354'
+    date = '20250128-141519'
         
     # train and val loss
     plotTrain(date, model_id)
@@ -386,16 +386,16 @@ if __name__ == "__main__":
         plotVal(date, model_id, suffix="kl")
     
     # proposal distribution
-    iteration = 10
+    iteration = 30
     data = preloadPredictions(date,
                               model_id,
                               iteration=iteration,
                               n_batches=45,
                               fixed=fixed,
                               ds_type=ds_type)
-    max_d = 0
-    # for i in range (5):
-    #     plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype="beta")
+    max_d = 1
+    for i in range (5):
+        plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype="beta")
     
     for i in range (20):
         plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype="rfx")
