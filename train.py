@@ -143,17 +143,20 @@ def rfxMSE(stds_proposed: torch.Tensor,
 
 def rfxLogProb(stds_proposed: torch.Tensor,
                stds_target: torch.Tensor,
-               rfx: torch.Tensor) -> torch.Tensor:
+               rfx: torch.Tensor,
+               correct: bool = False) -> torch.Tensor:
     ''' for each n in the proposal distribution, get the mean log_prob over all n true rfx 
     and correct for log_prob under stds_target'''
     rfx_ = rfx.unsqueeze(1)
     means_p = torch.zeros_like(stds_proposed)
     dist_p = D.Normal(means_p, stds_proposed)
     losses_p = -dist_p.log_prob(rfx_).mean(2)
-    means_t = torch.zeros_like(stds_target)
-    dist_t = D.Normal(means_t, stds_target)
-    losses_t = -dist_t.log_prob(rfx_).mean(2)
-    return losses_p - losses_t
+    if correct:
+        means_t = torch.zeros_like(stds_target)
+        dist_t = D.Normal(means_t, stds_target)
+        losses_t = -dist_t.log_prob(rfx_).mean(2)
+        losses_p -= losses_t
+    return losses_p
 
 
 def noiseMSE(std_proposed: torch.Tensor,
