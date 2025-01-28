@@ -134,9 +134,10 @@ class MixedEffects(Task):
         self.n_random_effects = n_random_effects
         self._initRfxStructure()
 
-    def _initRfxStructure(self, a: float = 3., b: float = 3.) -> None:
+    def _initRfxStructure(self) -> None:
         ''' given n_random_effects, draw diagonal elements of S (covariance matrix of random effects) '''
-        dist = torch.distributions.inverse_gamma.InverseGamma(a,b)
+        # dist = torch.distributions.inverse_gamma.InverseGamma(3., 3.)
+        dist = torch.distributions.uniform.Uniform(0.01, 5.)
         q = self.n_random_effects
         m = torch.zeros((q,))
         self.S = torch.diag_embed(dist.sample((q,))) # type: ignore
