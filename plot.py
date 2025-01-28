@@ -253,17 +253,26 @@ def plotNoise(df, sigma_error, ax):
 def plotParamsWrapper(data: dict, batch_id: int, iteration: int, paramtype = "beta"):
     # plot MVN parameters
     if paramtype == "beta":
+        
+        # proposed posterior
         targets = data["targets"]
-        means_a = data["means_a"]
         means_p = data["means_p"]
-        stds_a = data["stds_a"]
         stds_p = data["stds_p"]
-        df_a, betas = mvnDataFrame(targets, means_a, stds_a, batch_id)
-        df_p, _ = mvnDataFrame(targets, means_p, stds_p, batch_id)
-        fig, axs = plt.subplots(2, sharex=True, figsize=(8, 6))
+        df_p, betas = mvnDataFrame(targets, means_p, stds_p, batch_id)
+        
+        # analytical posterior
+        if "means_a" in data:
+            fig, axs = plt.subplots(2, sharex=True, figsize=(8, 6))
+            means_a = data["means_a"]
+            stds_a = data["stds_a"]
+            df_a, _ = mvnDataFrame(targets, means_a, stds_a, batch_id)
+            plotMvnParams(df_a, betas, "analytical", axs[0])
+            plotMvnParams(df_p, betas, "proposed", axs[1])
+        else:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            plotMvnParams(df_p, betas, "proposed", ax)
         fig.suptitle(f'iter={iteration}')
-        plotMvnParams(df_a, betas, "analytical", axs[0])
-        plotMvnParams(df_p, betas, "proposed", axs[1])
+        
     
     # plot RFX parameters
     if paramtype == "rfx":
