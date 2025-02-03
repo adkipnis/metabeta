@@ -217,15 +217,47 @@ def rfxLossWrapper(rfx_params: torch.Tensor,
     return averageOverN(losses, n, b, depths, n_min=1)
 
 
+# -------- noise parameter loss
+def noiseMSE(scale: torch.Tensor,
+             noise_scale: torch.Tensor) -> torch.Tensor:
+    scale = scale.squeeze(-1)
+    return mse(scale.log(), noise_scale.log())
+
+
+def noiseLogProb(beta: torch.Tensor,
+                 noise_scale: torch.Tensor) -> torch.Tensor:
+    ''' Compute the negative log density of the noise std (target) under the proposed inverse gamma distribution. '''
+    # beta, noise_scale (batch, n)
+    beta = beta.squeeze(-1)
+    alpha = getAlpha(beta)
+    proposal = D.inverse_gamma.InverseGamma(alpha, beta)
+    return -proposal.log_prob(noise_scale.square()) # (batch, n)
+
+
+# def noiseIgExp(noise_param: torch.Tensor,
+#                noise_std: torch.Tensor) -> torch.Tensor:
+#     ''' Compute the MSE of the true noise std and its expected value under the noise parameters '''
+#     # noise_param (batch, n)
+#     # noise_std (batch, n)
+#     alpha = getAlpha(noise_std)
+#     beta = noise_param.squeeze(-1)
+#     proposal = D.inverse_gamma.InverseGamma(alpha, beta)
+#     expected_value = proposal.mean
+#     return mse(noise_std.log(), expected_value.log()) # (batch, n)
+
+
+def noiseLossWrapper(proposed: torch.Tensor,
+                     noise_scale: torch.Tensor,
                      depths: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the noise loss function. ''' 
     # calculate losses for all dataset sizes and each beta
-    b, n, _ = noise_param.shape
-    target = noise_std.expand((b,n))
-    losses = lf_noise(noise_param, target).unsqueeze(-1)
+    b, n, _ = proposed.shape
+    target = noise_scale.expand((b,n))
+    losses = lf_noise(proposed, target).unsqueeze(-1)
     return averageOverN(losses, n, b, depths)
 
 
+# -------- Kullback-Leibler Divergence
 def klLossWrapper(mean_a: torch.Tensor, var_a: torch.Tensor,
                   mean_p: torch.Tensor, var_p: torch.Tensor,
                   beta: torch.Tensor,
@@ -242,17 +274,7 @@ def klLossWrapper(mean_a: torch.Tensor, var_a: torch.Tensor,
         post_p = D.multivariate_normal.MultivariateNormal(mu_pi, Sigma_pi)
         losses[i] = D.kl.kl_divergence(post_a, post_p)
     return averageOverN(losses, n, b, depths)
-    
-   
-def maskLoss(losses: torch.Tensor,
-             targets: torch.Tensor,
-             pad_val: float = 0.) -> torch.Tensor:
-    ''' Ignore padding values before aggregating the losses over batches and dims'''
-    # losses (batch, d)
-    mask = (targets != pad_val).float()
-    masked_losses = losses * mask
-    loss = masked_losses.sum() / mask.sum()
-    return loss # (,)
+ 
 
 
 # def noiseMLE(y: torch.Tensor, X: torch.Tensor, mu: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
