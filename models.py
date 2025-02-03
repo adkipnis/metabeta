@@ -18,15 +18,14 @@ def discretePosterior(hidden_size: int, n_bins: int, d: int) -> nn.ModuleList:
 
 class Base(nn.Module):
     def __init__(self,
-                 num_predictors: int,
+                 num_predictors: int, # including bias term
                  hidden_size: int,
                  n_layers: int,
                  dropout: float,
                  seed: int) -> None:
         super(Base, self).__init__()
-        self.input_size = 1 + num_predictors # inputs are [y, X]
+        self.num_predictors = num_predictors
         self.hidden_size = hidden_size
-        self.output_size = num_predictors
         self.n_layers = n_layers
         self.dropout = dropout
         self.seed = seed
