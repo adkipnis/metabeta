@@ -456,16 +456,17 @@ def savePredictions(models: Tuple[nn.Module, nn.Module], batch: dict, iteration_
     X = batch["X"].to(device)
     y = batch["y"].to(device)
     inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
-    mu, sigma, s = models[0](inputs)
-    noise_inputs = torch.cat([y.unsqueeze(-1), mu.detach(), sigma.detach()], dim=-1)
-    noise_params = models[1](noise_inputs, True)
-
+    outputs = models[0](inputs)
+    ffx_loc, ffx_scale = outputs[..., 0], outputs[..., 1].exp()
+    rfx_params = torch.cat([outputs[..., i].exp().unsqueeze(-1) for i in (2,3)], dim=-1)
+    noise_inputs = torch.cat([y.unsqueeze(-1), ffx_loc.detach(), ffx_scale.detach()], dim=-1)
+    noise_params = models[1](noise_inputs, noise=True).exp().squeeze(-1)
     fname = Path(pred_path, f"predictions_i={iteration_index}_b={batch_index}.pt")
     out = {
-        "means": mu,
-        "stds": sigma,
-        "s": s,
-        "abs": noise_params,
+        "mu_beta": ffx_loc,
+        "stds_beta": ffx_scale,
+        "rfx_params": rfx_params,
+        "noise_params": noise_params,
     }
     torch.save(out, fname)
 
