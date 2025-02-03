@@ -165,11 +165,9 @@ def ffxLogProb(loc: torch.Tensor,
                scale: torch.Tensor,
                ffx: torch.Tensor) -> torch.Tensor:
     ''' Compute the negative log density of betas (target) under the proposed normal distribution. '''
-    # loc (batch, n_features)
-    # scale (batch, n_features)
-    # ffx (batch, n_features)
+    # loc, scale, ffx (b, n, d)
     proposal = D.Normal(loc, scale)
-    return -proposal.log_prob(ffx) # (batch, n, d)
+    return -proposal.log_prob(ffx)
 
 
 def ffxLossWrapper(loc: torch.Tensor,
@@ -189,14 +187,14 @@ def ffxLossWrapper(loc: torch.Tensor,
 # -------- random effects loss
 def rfxMSE(loc: torch.Tensor,
            scale: torch.Tensor,
-           rfx_scale: torch.Tensor,
+           true_scale: torch.Tensor,
            rfx: torch.Tensor) -> torch.Tensor:
-    return mse(scale.log(), rfx_scale.log())
+    return mse(scale.log(), true_scale.log())
 
 
 def rfxLogProb(loc: torch.Tensor,
                scale: torch.Tensor,
-               rfx_scale: torch.Tensor,
+               true_scale: torch.Tensor,
                rfx: torch.Tensor) -> torch.Tensor:
     # define a q-dimensional IG-distribution based on rfx_params
     alpha, beta = loc, scale # alternatively, but even less stable: moments2ig(loc, scale)
@@ -204,16 +202,16 @@ def rfxLogProb(loc: torch.Tensor,
     return -proposal.log_prob(rfx_scale.square()) # (batch, n)
 
 
-def rfxLossWrapper(rfx_params: torch.Tensor,
-                   rfx_scale: torch.Tensor,
+def rfxLossWrapper(loc: torch.Tensor,
+                   scale: torch.Tensor,
+                   true_scale: torch.Tensor,
                    rfx: torch.Tensor,
                    depths: torch.Tensor) -> torch.Tensor:
-    b, n, _, _ = rfx_params.shape
-    loc, scale = rfx_params[...,0], rfx_params[...,1]
-    rfx_scale += (rfx_scale == 0.).float() # set entries with std = 0 to 1
+    b, n, _ = loc.shape
+    true_scale += (true_scale == 0.).float() # set entries with std = 0 to 1
     # if stds_target.shape != rfx_params.shape:
         # stds_target = stds_target.unsqueeze(1).expand_as(rfx_params[..., 0])
-    losses = lf_rfx(loc, scale, rfx_scale, rfx) # (b, n, d)
+    losses = lf_rfx(loc, scale, true_scale, rfx) # (b, n, d)
     return averageOverN(losses, n, b, depths, n_min=1)
 
 
