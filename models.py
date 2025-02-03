@@ -29,11 +29,10 @@ class Base(nn.Module):
         self.n_layers = n_layers
         self.dropout = dropout
         self.seed = seed
-        self.mu = nn.Linear(hidden_size, self.output_size)
-        self.logSigma = nn.Linear(hidden_size, self.output_size)
-        self.logEta = nn.Linear(hidden_size, 1) 
-        self.logS = nn.Linear(hidden_size, self.output_size)
-
+        self.finalLayers = parametricPosterior(hidden_size, num_predictors)
+        self.noiseLayers = getLinearLayers(hidden_size, 1, 1)
+        self.softmax = nn.Softmax(dim=-1)
+        self.identity = nn.Identity()
 
     def initializeWeights(self) -> None:
         ''' Initialize weights using Xavier initialization '''
