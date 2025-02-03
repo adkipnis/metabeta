@@ -197,9 +197,10 @@ def rfxLogProb(loc: torch.Tensor,
                true_scale: torch.Tensor,
                rfx: torch.Tensor) -> torch.Tensor:
     # define a q-dimensional IG-distribution based on rfx_params
-    alpha, beta = loc, scale # alternatively, but even less stable: moments2ig(loc, scale)
-    proposal = D.inverse_gamma.InverseGamma(alpha, beta)
-    return -proposal.log_prob(rfx_scale.square()) # (batch, n)
+    # alpha, beta = loc, scale # alternatively, but even less stable: moments2ig(loc, scale)
+    # proposal = D.InverseGamma(alpha, beta)
+    proposal = D.LogNormal(loc, scale)
+    return -proposal.log_prob(true_scale.square()) # (batch, n)
 
 
 def rfxLossWrapper(loc: torch.Tensor,
