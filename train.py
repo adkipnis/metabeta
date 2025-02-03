@@ -347,49 +347,53 @@ def run(models: tuple,
     depths = batch["d"]
     y = batch["y"].to(device)
     X = batch["X"].to(device)
-    beta = batch["beta"].float()
     inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
-    mu_beta, stds_beta, stds_b = models[0](inputs)
-    noise_inputs = torch.cat([y.unsqueeze(-1), mu_beta.detach(), stds_beta.detach()], dim=-1)
-    noise_param = models[1](noise_inputs, True)
+    ffx = batch["beta"].float()
+    outputs = models[0](inputs)
+    ffx_loc, ffx_scale = outputs[..., 0], outputs[..., 1].exp()
+    rfx_params = torch.cat([outputs[..., i].exp().unsqueeze(-1) for i in (2,3)], dim=-1)
 
     # compute beta parameter loss per batch and predictor (optionally over multiple model outputs per batch)
-    losses = betaLossWrapper(mu_beta, stds_beta, beta, depths) # (batch, n_predictors)
+    losses = ffxLossWrapper(ffx_loc, ffx_scale, ffx, depths) # (batch, n_predictors)
     if "rfx" not in batch:
         # compute mean loss over all batches and predictors (optionally ignoring padded predictors)
-        loss = maskLoss(losses, beta) if unpad else losses.mean()
+        loss = maskLoss(losses, ffx) if unpad else losses.mean()
     else:
         # compute losses for random effects structure
         depths_rfx = batch["q"]
         rfx = batch["rfx"].to(device)
         stds_b_true = batch["S_emp"].to(device).sqrt()
-        losses_rfx = rfxLossWrapper(stds_b, stds_b_true, rfx, depths_rfx) # (batch, n_predictors)
+        losses_rfx = rfxLossWrapper(rfx_params, stds_b_true, rfx, depths_rfx) # (batch, n_predictors)
+
         # join losses
         losses_joint = torch.cat([losses, losses_rfx], dim=1)
-        targets = torch.cat([beta, rfx[:,0]], dim=1)
+        targets = torch.cat([ffx, rfx[:,0]], dim=1)
         loss = maskLoss(losses_joint, targets) if unpad else losses.mean()
-        
+
+    # pass through second model
+    noise_inputs = torch.cat([y.unsqueeze(-1), ffx_loc.detach(), ffx_scale.detach()], dim=-1)
+    noise_params = models[1](noise_inputs, noise=True).exp().squeeze(-1)
+
     # compute noise parameter loss per batch
     noise_std = batch["sigma_error"].unsqueeze(-1).float()
-    losses_noise = noiseLossWrapper(noise_param, noise_std, depths) # (batch, 1)
+    losses_noise = noiseLossWrapper(noise_params, noise_std, depths) # (batch, 1)
     loss_noise = losses_noise.mean()
 
     # optionally print some examples
     for i in range(num_examples):
-        mask = (beta[i] != 0.)
-        beta_i = beta[i, mask].detach().numpy()        
+        mask = (ffx[i] != 0.)
+        beta_i = ffx[i, mask].detach().numpy()        
         printer(f"\n{console_width * '-'}")
         printer(f"True       : {beta_i}")
         if cfg.type == "ffx":
             mu_i = batch["mu_n"][i, -1, mask].detach().numpy()
             printer(f"Analytical : {mu_i}")
-        outputs_i = mu_beta[i, -1, mask].detach().numpy()
+        outputs_i = ffx_loc[i, -1, mask].detach().numpy()
         printer(f"Predicted  : {outputs_i}")
         printer(f"{console_width * '-'}\n")
     return loss, loss_noise
 
 
-def compare(models: nn.Module, batch: dict) -> torch.Tensor:
     ''' Compate analytical posterior with proposed posterior using KL divergence '''
     depths = batch["d"]
     y = batch["y"].to(device)
