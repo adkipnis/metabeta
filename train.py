@@ -338,6 +338,23 @@ def histLossWrapper(probs: torch.Tensor,
 
 
 # -------- training and testing methods
+def parseOutputs(outputs: torch.Tensor, type: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if type == "parametric":
+        ffx_loc, ffx_scale = outputs[..., 0], outputs[..., 1].exp()
+        rfx_params = torch.cat([outputs[..., i].exp().unsqueeze(-1) for i in (2,3)], dim=-1)
+        return ffx_loc, ffx_scale, rfx_params
+    else:
+        raise ValueError("unknown output type")
+
+
+def assembleInputs(y: torch.Tensor,  X: torch.Tensor) -> torch.Tensor:
+    return torch.cat([y.unsqueeze(-1), X], dim=-1)
+
+
+def assembleNoiseInputs(y: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    return torch.cat([y.unsqueeze(-1), loc.detach(), scale.detach()], dim=-1)
+
+
 def run(models: tuple,
         batch: dict,
         num_examples: int = 0,
@@ -347,11 +364,9 @@ def run(models: tuple,
     depths = batch["d"]
     y = batch["y"].to(device)
     X = batch["X"].to(device)
-    inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
     ffx = batch["beta"].float()
-    outputs = models[0](inputs)
-    ffx_loc, ffx_scale = outputs[..., 0], outputs[..., 1].exp()
-    rfx_params = torch.cat([outputs[..., i].exp().unsqueeze(-1) for i in (2,3)], dim=-1)
+    outputs = models[0](assembleInputs(y, X))
+    ffx_loc, ffx_scale, rfx_params = parseOutputs(outputs, type="parametric")
 
     # compute beta parameter loss per batch and predictor (optionally over multiple model outputs per batch)
     losses = ffxLossWrapper(ffx_loc, ffx_scale, ffx, depths) # (batch, n_predictors)
@@ -371,8 +386,7 @@ def run(models: tuple,
         loss = maskLoss(losses_joint, targets) if unpad else losses.mean()
 
     # pass through second model
-    noise_inputs = torch.cat([y.unsqueeze(-1), ffx_loc.detach(), ffx_scale.detach()], dim=-1)
-    noise_params = models[1](noise_inputs, noise=True).exp().squeeze(-1)
+    noise_params = models[1](assembleNoiseInputs(y, ffx_loc, ffx_scale), noise=True).exp().squeeze(-1)
 
     # compute noise parameter loss per batch
     noise_std = batch["sigma_error"].unsqueeze(-1).float()
@@ -403,10 +417,9 @@ def runHist(models: tuple,
     y = batch["y"].to(device)
     X = batch["X"].to(device)
     beta = batch["beta"].float()
-    inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
 
     # generalized posterior
-    outputs = models[0](inputs)
+    outputs = models[0](assembleInputs(y, X))
     losses = histLossWrapper(outputs, beta, depths)
     loss = maskLoss(losses, beta)
 
@@ -431,9 +444,9 @@ def compare(models: tuple, batch: dict) -> torch.Tensor:
     y = batch["y"].to(device)
     X = batch["X"].to(device)
     beta = batch["beta"].float()
-    inputs = torch.cat([y.unsqueeze(-1), X], dim=-1) # <eos> token?
-    outputs = models[0](inputs)
-    mean_proposed, var_proposed = outputs[..., 0], outputs[..., 1].exp().square()
+    outputs = models[0](assembleInputs(y, X))
+    mean_proposed, std_proposed, _ = parseOutputs(outputs, type="parametric")
+    var_proposed = std_proposed.square()
 
     # get analytical posterior (posterior mean vector and covariance matrix)
     mean_analytical = batch["mu_n"].float().squeeze(-1)
@@ -455,12 +468,9 @@ def savePredictions(models: Tuple[nn.Module, nn.Module], batch: dict, iteration_
     ''' save model outputs '''
     X = batch["X"].to(device)
     y = batch["y"].to(device)
-    inputs = torch.cat([y.unsqueeze(-1), X], dim=-1)
-    outputs = models[0](inputs)
-    ffx_loc, ffx_scale = outputs[..., 0], outputs[..., 1].exp()
-    rfx_params = torch.cat([outputs[..., i].exp().unsqueeze(-1) for i in (2,3)], dim=-1)
-    noise_inputs = torch.cat([y.unsqueeze(-1), ffx_loc.detach(), ffx_scale.detach()], dim=-1)
-    noise_params = models[1](noise_inputs, noise=True).exp().squeeze(-1)
+    outputs = models[0](assembleInputs(y, X))
+    ffx_loc, ffx_scale, rfx_params = parseOutputs(outputs, type="parametric")
+    noise_params = models[1](assembleNoiseInputs(y, ffx_loc, ffx_scale), noise=True).exp().squeeze(-1)
     fname = Path(pred_path, f"predictions_i={iteration_index}_b={batch_index}.pt")
     out = {
         "mu_beta": ffx_loc,
