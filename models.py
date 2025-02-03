@@ -22,15 +22,22 @@ class Base(nn.Module):
                  hidden_size: int,
                  n_layers: int,
                  dropout: float,
-                 seed: int) -> None:
+                 seed: int,
+                 model_type: str) -> None:
         super(Base, self).__init__()
         self.num_predictors = num_predictors
         self.hidden_size = hidden_size
         self.n_layers = n_layers
         self.dropout = dropout
         self.seed = seed
-        self.finalLayers = parametricPosterior(hidden_size, num_predictors)
-        self.noiseLayers = getLinearLayers(hidden_size, 1, 1)
+        self.model_type = model_type
+        if model_type == "parametric":
+            self.final_layers = parametricPosterior(hidden_size, num_predictors)
+        elif model_type == "mixture":
+            self.m = 3 # number of mixture components
+            self.final_layers = generalizedPosterior(hidden_size, num_predictors, 4 * self.m)
+        elif model_type == "noise":
+            self.final_layers = getLinearLayers(hidden_size, 2, 1)
         self.softmax = nn.Softmax(dim=-1)
         self.identity = nn.Identity()
 
@@ -49,13 +56,11 @@ class Base(nn.Module):
 
     def forward(self,
                 x: torch.Tensor, # (batch_size, seq_size, input_size)
-                noise: bool = False,
                 softmax: bool = False) -> torch.Tensor:
         ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
         outputs = self.internal(x) # (batch_size, seq_size, hidden_size)
-        final_layers = self.noiseLayers if noise else self.finalLayers
         link = self.softmax if softmax else self.identity
-        finals = [link(layer(outputs)).unsqueeze(-1) for layer in final_layers]
+        finals = [link(layer(outputs)).unsqueeze(-1) for layer in self.final_layers]
         return torch.cat(finals, dim=-1)
 
 
@@ -68,9 +73,10 @@ class TransformerDecoder(Base):
                  dropout: float,
                  seed: int,
                  n_heads: int = 4,
+                 model_type: str = "parametric",
                  ) -> None:
 
-        super(TransformerDecoder, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed)
+        super(TransformerDecoder, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, model_type)
         self.embed = nn.Linear(num_predictors+1, hidden_size)
         decoder_layer = TransformerDecoderLayer(d_model=hidden_size,
                                                 dim_feedforward=ff_size,
