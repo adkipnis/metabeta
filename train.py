@@ -152,13 +152,37 @@ def moments2ig(loc: torch.Tensor, scale: torch.Tensor) -> Tuple[torch.Tensor, to
     return alpha, beta
 
 
+# -------- fixed effects loss
+mse = nn.MSELoss(reduction='none')
+
+def ffxMSE(loc: torch.Tensor,
+           scale: torch.Tensor,
+           ffx: torch.Tensor) -> torch.Tensor:
+    return mse(loc, ffx)
+
+
+def ffxLogProb(loc: torch.Tensor,
+               scale: torch.Tensor,
+               ffx: torch.Tensor) -> torch.Tensor:
+    ''' Compute the negative log density of betas (target) under the proposed normal distribution. '''
+    # loc (batch, n_features)
+    # scale (batch, n_features)
+    # ffx (batch, n_features)
+    proposal = D.Normal(loc, scale)
+    return -proposal.log_prob(ffx) # (batch, n, d)
+
+
+def ffxLossWrapper(loc: torch.Tensor,
+                   scale: torch.Tensor,
+                   ffx: torch.Tensor,
+                   depths: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the beta loss function.
     Handles the case 3D tensors (where the second dimension is the number of subjects = seq_size).
     Drop the losses for datasets that have fewer than n = noise_tol * number of features.'''
     # calculate losses for all dataset sizes and each beta
-    b, n, _ = means.shape
-    target = betas.unsqueeze(1).expand_as(means)
-    losses = lf(means, stds, target) # (b, n, d)
+    b, n, _ = loc.shape
+    target = ffx.unsqueeze(1).expand_as(loc)
+    losses = lf_ffx(loc, scale, target) # (b, n, d)
     return averageOverN(losses, n, b, depths)
 
 
