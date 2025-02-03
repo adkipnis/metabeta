@@ -12,8 +12,8 @@ def parametricPosterior(hidden_size: int, d: int) -> nn.ModuleList:
     rfx_layers = getLinearLayers(hidden_size, d, 2)
     return nn.ModuleList(list(ffx_layers) + list(rfx_layers))
 
-def discretePosterior(hidden_size: int, n_bins: int, d: int) -> nn.ModuleList:
-    return getLinearLayers(hidden_size, n_bins, d)
+def generalizedPosterior(hidden_size: int, d: int, m: int) -> nn.ModuleList:
+    return getLinearLayers(hidden_size, d, m)
 
 
 class Base(nn.Module):
