@@ -49,17 +49,14 @@ class Base(nn.Module):
 
     def forward(self,
                 x: torch.Tensor, # (batch_size, seq_size, input_size)
-                noise: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                noise: bool = False,
+                softmax: bool = False) -> torch.Tensor:
         ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
         outputs = self.internal(x) # (batch_size, seq_size, hidden_size)
-        if noise:
-            log_eta = self.logEta(outputs)
-            return log_eta.exp()
-        else:
-            mu = self.mu(outputs) # (batch_size, seq_size, output_size)
-            log_sigma = self.logSigma(outputs) # (batch_size, seq_size, output_size)
-            log_s = self.logS(outputs)
-            return mu, log_sigma.exp(), log_s.exp()
+        final_layers = self.noiseLayers if noise else self.finalLayers
+        link = self.softmax if softmax else self.identity
+        finals = [link(layer(outputs)).unsqueeze(-1) for layer in final_layers]
+        return torch.cat(finals, dim=-1)
 
 
 class TransformerDecoder(Base):
