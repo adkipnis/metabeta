@@ -133,10 +133,25 @@ def averageOverN(losses: torch.Tensor, n: int, b: int, depths: torch.Tensor, n_m
     return losses # (batch, d)
 
 
-def betaLossWrapper(means: torch.Tensor,
-                    stds: torch.Tensor,
-                    betas: torch.Tensor,
-                    depths: torch.Tensor) -> torch.Tensor:
+def maskLoss(losses: torch.Tensor,
+             targets: torch.Tensor,
+             pad_val: float = 0.) -> torch.Tensor:
+    ''' Ignore padding values before aggregating the losses over batches and dims'''
+    # losses (batch, d)
+    mask = (targets != pad_val).float()
+    masked_losses = losses * mask
+    loss = masked_losses.sum() / mask.sum()
+    return loss # (,)
+
+
+def moments2ig(loc: torch.Tensor, scale: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    ''' reparameterize IG-distribution (from loc and scale to alpha and beta) '''
+    eps = torch.finfo(loc.dtype).eps
+    alpha = 2. + torch.div(loc.square(), scale.square().clamp(min=eps))
+    beta = torch.mul(loc, alpha - 1.)
+    return alpha, beta
+
+
     ''' Wrapper for the beta loss function.
     Handles the case 3D tensors (where the second dimension is the number of subjects = seq_size).
     Drop the losses for datasets that have fewer than n = noise_tol * number of features.'''
