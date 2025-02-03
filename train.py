@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 import csv
 from datetime import datetime
-from typing import Tuple, Callable, Union
+from typing import Tuple, Callable, Union, Dict
 from tqdm import tqdm
 import argparse
 import torch
