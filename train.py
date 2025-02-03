@@ -276,21 +276,65 @@ def klLossWrapper(mean_a: torch.Tensor, var_a: torch.Tensor,
     return averageOverN(losses, n, b, depths)
  
 
+# -------- histogram methods
+grid = torch.linspace(-10, 10, steps=128)
 
-# def noiseMLE(y: torch.Tensor, X: torch.Tensor, mu: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-#     # y (b,d), X (b,n,d), mu (b,n,d)
-#     b, n, _ = X.shape
-#     mask = (targets != 0.).unsqueeze(1) # (b, 1, d)
-#     X = X * mask
-#     mu = mu * mask
-#     noise_var = torch.zeros((b, n))
-#     for i in range(b):
-#         d = mask[i].sum()
-#         for j  in range(d+1, n):
-#             eps = y[i, :j] - X[i, :j] @ mu[i, j]
-#             factor = 1 / (j - d)
-#             noise_var[i, j] = factor * torch.dot(eps, eps)
-#     return noise_var.sqrt()
+def histMode(dist: torch.Tensor) -> torch.Tensor:
+    # dist (b, n, 128, d)
+    b, n, _, d = dist.shape
+    grid_expanded = grid.unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(b, n, d, -1)
+    index = dist.argmax(dim=-2).unsqueeze(-1) # (b, n, d, 1)
+    return torch.gather(grid_expanded, dim=-1, index=index).squeeze(-1) # (b, n, d)
+
+
+def histMean(dist: torch.Tensor) -> torch.Tensor:
+    # dist (b, n, 128, d)
+    return torch.matmul(dist.permute(0, 1, 3, 2), grid)
+
+
+def histVariance(dist: torch.Tensor,
+                 mean: torch.Tensor):
+    # dist (b, n, 128, d)
+    # mean (b, n, d)
+    grid_expanded = grid.view(1, 1, -1, 1)
+    mean_expanded = mean.unsqueeze(2)
+    squared_diff = (grid_expanded - mean_expanded) ** 2
+    weighted_squared_diff = squared_diff * dist
+    return torch.sum(weighted_squared_diff, dim=2)
+ 
+
+def histMSE(means: torch.Tensor,
+            targets: torch.Tensor) -> torch.Tensor:
+    # means (b, n, d)
+    # targets (b, d)
+    betas = targets.unsqueeze(1).expand_as(means)
+    return mse(means, betas)
+
+
+def histLogProb(dist: torch.Tensor,
+                targets: torch.Tensor) -> torch.Tensor:
+    # dist (b, n, 128, d)
+    # targets (b, d)
+    grid_expanded = grid.view(1, 1, -1)
+    index = (grid_expanded - targets.unsqueeze(-1)).abs().argmin(dim=-1) # (b, d)
+    index_expanded = index.unsqueeze(1).unsqueeze(1).expand(-1, dist.shape[1], -1, -1) # (b, n, 1, d)
+    probs = torch.gather(dist, dim=2, index=index_expanded).squeeze(2) # (b, n, d)
+    return -probs.log()
+
+
+def histLossWrapper(probs: torch.Tensor,
+                    targets: torch.Tensor,
+                    depths: torch.Tensor) -> torch.Tensor:
+    ''' Wrapper for the beta loss function.
+    Handles the case 3D tensors (where the second dimension is the number of subjects = seq_size).
+    Drop the losses for datasets that have fewer than n = noise_tol * number of features.'''
+    # calculate losses for all dataset sizes and each beta
+    b, n, _, _ = probs.shape
+    # losses = lf_hist(probs, targets) # (b, n, d)
+    means = histMean(probs)
+    variances = histVariance(probs, means)
+    losses = histMSE(means, targets) + 0.01 * variances
+    return averageOverN(losses, n, b, depths)
 
 
 # -------- training and testing methods
