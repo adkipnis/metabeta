@@ -487,7 +487,7 @@ def train(models: Tuple[nn.Module, nn.Module],
     for batch in iterator:
         for optimizer in optimizers:
             optimizer.zero_grad()
-        loss, loss_noise = run(models, batch, unpad=True)
+        loss, loss_noise = run(models, batch)
         loss.backward()
         loss_noise.backward()
         for optimizer in optimizers:
@@ -519,7 +519,7 @@ def validate(models: Tuple[nn.Module, nn.Module],
     with torch.no_grad():
         for j, batch in enumerate(iterator):
             # preset validation loss
-            loss_val, loss_val_noise = run(models, batch, unpad=True, printer=iterator.write)
+            loss_val, loss_val_noise = run(models, batch, printer=iterator.write)
             iterator.set_postfix({"loss": loss_val.item()})
             if writer is not None:
                 writer.add_scalar("loss_val", loss_val.item(), step)
@@ -530,7 +530,7 @@ def validate(models: Tuple[nn.Module, nn.Module],
 
             # optionally calculate KL loss
             if cfg.kl and cfg.type == "ffx":
-                loss_kl = compare(models[0], batch)
+                loss_kl = compare(models, batch)
                 if writer is not None:
                     writer.add_scalar("loss_kl", loss_kl.item(), step)
                 if logger is not None:
@@ -543,7 +543,7 @@ def validate(models: Tuple[nn.Module, nn.Module],
             # optionally print predictions
             if iteration % 5 == 0 and j % 15 == 0:
                 run(models, batch, unpad=True, printer=iterator.write, num_examples=1) # type: ignore
-                
+
             step += 1
     return step
 
