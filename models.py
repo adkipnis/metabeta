@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import List
 import torch
 import torch.nn as nn
 from torch.nn import TransformerDecoderLayer
@@ -71,7 +71,7 @@ class TransformerDecoder(Base):
                  ) -> None:
 
         super(TransformerDecoder, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed)
-        self.embed = nn.Linear(self.input_size, hidden_size)
+        self.embed = nn.Linear(num_predictors+1, hidden_size)
         decoder_layer = TransformerDecoderLayer(d_model=hidden_size,
                                                 dim_feedforward=ff_size,
                                                 nhead=n_heads,
