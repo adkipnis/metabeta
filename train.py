@@ -114,11 +114,14 @@ def load(models: Tuple[nn.Module, nn.Module],
     return initial_iteration, global_step, validation_step, timestamp
 
 
+# -------- loss helpers
+def averageOverN(losses: torch.Tensor, n: int, b: int, depths: torch.Tensor, n_min: int = 0, weigh: bool = False) -> torch.Tensor:
     ''' mask out first n_min losses per batch, then calculate weighted average over n with higher emphasis on later n'''
     # losses (b, n, d)
     if cfg.tol == 0:
         return losses.mean(dim=1)
-    n_min = cfg.tol * depths.unsqueeze(1) # (b, 1)
+    if n_min == 0:
+        n_min = cfg.tol * depths.unsqueeze(1) # (b, 1)
     denominators = n - n_min # (b, 1)
     mask = torch.arange(n).expand(b, n) < n_min # (b, n)
     losses[mask] = 0.
