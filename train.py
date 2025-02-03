@@ -425,24 +425,25 @@ def runHist(models: tuple,
     return loss
 
 
+def compare(models: tuple, batch: dict) -> torch.Tensor:
     ''' Compate analytical posterior with proposed posterior using KL divergence '''
     depths = batch["d"]
     y = batch["y"].to(device)
     X = batch["X"].to(device)
     beta = batch["beta"].float()
     inputs = torch.cat([y.unsqueeze(-1), X], dim=-1) # <eos> token?
-    mean_proposed, std_proposed, _ = model(inputs)
-    var_proposed = std_proposed.square()
+    outputs = models[0](inputs)
+    mean_proposed, var_proposed = outputs[..., 0], outputs[..., 1].exp().square()
 
     # get analytical posterior (posterior mean vector and covariance matrix)
     mean_analytical = batch["mu_n"].float().squeeze(-1)
     Sigma_analytical = batch["Sigma_n"].float()
     var_analytical = torch.diagonal(Sigma_analytical, dim1=-2, dim2=-1)
-    
+ 
     # correct for noise variance
     sigma_error = batch["sigma_error"].float()
     var_analytical = sigma_error.square().unsqueeze(-1).unsqueeze(-1) * var_analytical
-    
+ 
     # Compute KL divergences 
     losses = klLossWrapper(mean_analytical, var_analytical,
                            mean_proposed, var_proposed,
