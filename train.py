@@ -633,9 +633,9 @@ if __name__ == "__main__":
     # --- loss functions
     # 1. parameters
     if cfg.loss == "mse":
-        lf = betaMSE
+        lf_ffx = ffxMSE
     elif cfg.loss == "logprob":
-        lf = betaLogProb
+        lf_ffx = ffxLogProb
     else:
         raise ValueError(f"Loss {cfg.loss} not recognized.")
 
@@ -652,8 +652,8 @@ if __name__ == "__main__":
         lf_noise = noiseMSE
     elif cfg.loss_noise == "logprob":
         lf_noise = noiseLogProb
-    elif cfg.loss_noise == "ig_exp":
-        lf_noise = noiseIgExp
+    # elif cfg.loss_noise == "ig_exp":
+    #     lf_noise = noiseIgExp
     else:
         raise ValueError(f"Loss {cfg.loss_noise} not recognized.")
 
