@@ -599,7 +599,7 @@ if __name__ == "__main__":
 
     # --- set up models
     model = TransformerDecoder(
-                num_predictors=cfg.d,
+                num_predictors=cfg.d+1,
                 hidden_size=cfg.hidden,
                 ff_size=cfg.ff,
                 n_heads=cfg.heads,
@@ -607,7 +607,7 @@ if __name__ == "__main__":
                 dropout=cfg.dropout,
                 seed=cfg.seed).to(device)
     model_noise = TransformerDecoder(
-                num_predictors= 2 * cfg.d,
+                num_predictors= 2 * (cfg.d+1),
                 hidden_size=cfg.hidden,
                 ff_size=cfg.ff,
                 n_heads=cfg.heads,
