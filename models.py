@@ -3,6 +3,18 @@ import torch
 import torch.nn as nn
 from torch.nn import TransformerDecoderLayer
 
+def getLinearLayers(d_in: int, d_out: int, n_rep: int) -> nn.ModuleList:
+    layers = [nn.Linear(d_in, d_out) for _ in range(n_rep)]
+    return nn.ModuleList(layers)
+
+def parametricPosterior(hidden_size: int, d: int) -> nn.ModuleList:
+    ffx_layers = getLinearLayers(hidden_size, d, 2)
+    rfx_layers = getLinearLayers(hidden_size, d, 2)
+    return nn.ModuleList(list(ffx_layers) + list(rfx_layers))
+
+def discretePosterior(hidden_size: int, n_bins: int, d: int) -> nn.ModuleList:
+    return getLinearLayers(hidden_size, n_bins, d)
+
 
 class Base(nn.Module):
     def __init__(self,
