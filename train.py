@@ -186,19 +186,37 @@ def ffxLossWrapper(loc: torch.Tensor,
     return averageOverN(losses, n, b, depths)
 
 
-def rfxLossWrapper(stds_proposed: torch.Tensor,
-                   stds_target: torch.Tensor,
+# -------- random effects loss
+def rfxMSE(loc: torch.Tensor,
+           scale: torch.Tensor,
+           rfx_scale: torch.Tensor,
+           rfx: torch.Tensor) -> torch.Tensor:
+    return mse(scale.log(), rfx_scale.log())
+
+
+def rfxLogProb(loc: torch.Tensor,
+               scale: torch.Tensor,
+               rfx_scale: torch.Tensor,
+               rfx: torch.Tensor) -> torch.Tensor:
+    # define a q-dimensional IG-distribution based on rfx_params
+    alpha, beta = loc, scale # alternatively, but even less stable: moments2ig(loc, scale)
+    proposal = D.inverse_gamma.InverseGamma(alpha, beta)
+    return -proposal.log_prob(rfx_scale.square()) # (batch, n)
+
+
+def rfxLossWrapper(rfx_params: torch.Tensor,
+                   rfx_scale: torch.Tensor,
                    rfx: torch.Tensor,
                    depths: torch.Tensor) -> torch.Tensor:
-    b, n, _ = stds_proposed.shape
-    stds_target += (stds_target == 0.).float() # set entries with std = 0 to 1
-    # stds_target = stds_target.unsqueeze(1).expand_as(stds_proposed)
-    losses = lf_rfx(stds_proposed, stds_target, rfx) # (b, n, d)
-    return averageOverN(losses, n, b, depths)
+    b, n, _, _ = rfx_params.shape
+    loc, scale = rfx_params[...,0], rfx_params[...,1]
+    rfx_scale += (rfx_scale == 0.).float() # set entries with std = 0 to 1
+    # if stds_target.shape != rfx_params.shape:
+        # stds_target = stds_target.unsqueeze(1).expand_as(rfx_params[..., 0])
+    losses = lf_rfx(loc, scale, rfx_scale, rfx) # (b, n, d)
+    return averageOverN(losses, n, b, depths, n_min=1)
 
 
-def noiseLossWrapper(noise_param: torch.Tensor,
-                     noise_std: torch.Tensor,
                      depths: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the noise loss function. ''' 
     # calculate losses for all dataset sizes and each beta
