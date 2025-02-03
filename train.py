@@ -217,10 +217,11 @@ def rfxLossWrapper(loc: torch.Tensor,
 
 
 # -------- noise parameter loss
-def noiseMSE(scale: torch.Tensor,
-             noise_scale: torch.Tensor) -> torch.Tensor:
+def noiseMSE(loc: torch.Tensor,
+             scale: torch.Tensor,
+             true_scale: torch.Tensor) -> torch.Tensor:
     scale = scale.squeeze(-1)
-    return mse(scale.log(), noise_scale.log())
+    return mse(scale.log(), true_scale.log())
 
 
 def noiseLogProb(beta: torch.Tensor,
