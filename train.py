@@ -244,12 +244,15 @@ def noiseLogProb(loc: torch.Tensor,
     return -proposal.log_prob(true_scale.square())
 
 
+def noiseLossWrapper(loc: torch.Tensor,
+                     scale: torch.Tensor,
+                     true_scale: torch.Tensor,
                      depths: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the noise loss function. ''' 
     # calculate losses for all dataset sizes and each beta
-    b, n, _ = proposed.shape
-    target = noise_scale.expand((b,n))
-    losses = lf_noise(proposed, target).unsqueeze(-1)
+    b, n = loc.shape
+    target = true_scale.expand((b,n))
+    losses = lf_noise(loc, scale, target).unsqueeze(-1)
     return averageOverN(losses, n, b, depths)
 
 
@@ -266,8 +269,8 @@ def klLossWrapper(mean_a: torch.Tensor, var_a: torch.Tensor,
         mu_pi = mean_p[i, :, mask]
         Sigma_ai = torch.diag_embed(var_a[i, :, mask])
         Sigma_pi = torch.diag_embed(var_p[i, :, mask])
-        post_a = D.multivariate_normal.MultivariateNormal(mu_ai, Sigma_ai)
-        post_p = D.multivariate_normal.MultivariateNormal(mu_pi, Sigma_pi)
+        post_a = D.MultivariateNormal(mu_ai, Sigma_ai)
+        post_p = D.MultivariateNormal(mu_pi, Sigma_pi)
         losses[i] = D.kl.kl_divergence(post_a, post_p)
     return averageOverN(losses, n, b, depths)
  
