@@ -324,9 +324,6 @@ def histLogProb(dist: torch.Tensor,
 def histLossWrapper(probs: torch.Tensor,
                     targets: torch.Tensor,
                     depths: torch.Tensor) -> torch.Tensor:
-    ''' Wrapper for the beta loss function.
-    Handles the case 3D tensors (where the second dimension is the number of subjects = seq_size).
-    Drop the losses for datasets that have fewer than n = noise_tol * number of features.'''
     # calculate losses for all dataset sizes and each beta
     b, n, _, _ = probs.shape
     # losses = lf_hist(probs, targets) # (b, n, d)
@@ -336,14 +333,35 @@ def histLossWrapper(probs: torch.Tensor,
     return averageOverN(losses, n, b, depths)
 
 
-# -------- training and testing methods
-def parseOutputs(outputs: torch.Tensor, type: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    if type == "parametric":
-        ffx_loc, ffx_scale = outputs[..., 0], outputs[..., 1].exp()
-        rfx_params = torch.cat([outputs[..., i].exp().unsqueeze(-1) for i in (2,3)], dim=-1)
-        return ffx_loc, ffx_scale, rfx_params
-    else:
-        raise ValueError("unknown output type")
+def runHist(models: tuple,
+            batch: dict,
+            num_examples: int = 0,
+            printer: Callable = print) -> torch.Tensor:
+    ''' Run a batch through the model and return the loss. '''
+    depths = batch["d"]
+    y = batch["y"].to(device)
+    X = batch["X"].to(device)
+    beta = batch["beta"].float()
+
+    # generalized posterior
+    outputs = models[0](assembleInputs(y, X))
+    losses = histLossWrapper(outputs, beta, depths)
+    loss = maskLoss(losses, beta)
+
+    # optionally print some examples
+    for i in range(num_examples):
+        mask = (beta[i] != 0.)
+        beta_i = beta[i, mask].detach().numpy()        
+        dist_masked = outputs[..., mask]
+        mode_i = histMode(dist_masked)[i, -1].detach().numpy()
+        mean_i = histMean(dist_masked)[i, -1].detach().numpy()
+        printer(f"\n{console_width * '-'}")
+        printer(f"True : {beta_i}")
+        printer(f"EAP  : {mean_i}")
+        printer(f"MAP  : {mode_i}")
+        printer(f"{console_width * '-'}\n")
+    return loss
+
 
 
 def assembleInputs(y: torch.Tensor,  X: torch.Tensor) -> torch.Tensor:
