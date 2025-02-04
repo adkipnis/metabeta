@@ -567,6 +567,7 @@ def savePredictions(models: Tuple[nn.Module, nn.Module], batch: dict, iteration_
     torch.save(out, fname)
 
 
+# -------- outer loops
 def train(models: Tuple[nn.Module, nn.Module],
           optimizers: Tuple[schedulefree.AdamWScheduleFree, schedulefree.AdamWScheduleFree],
           dataloader: DataLoader,
@@ -661,7 +662,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--proto", action="store_true", help="prototyping: don't log anything during (default = False)")
 
     # data
-    parser.add_argument("-t", "--type", type=str, default="ffx", help="Type of dataset [ffx, mfx] (default = mfx)")
+    parser.add_argument("-t", "--type", type=str, default="mfx", help="Type of dataset [ffx, mfx] (default = mfx)")
     parser.add_argument("-d", type=int, default=8, help="Number of predictors (without bias, default = 8)")
     parser.add_argument("-n", type=int, default=50, help="Maximum number of samples to draw per linear model (default = 50).")
     parser.add_argument("-f", "--fixed", type=float, default=0., help="Fixed noise variance (default = 0. -> not fixed)")
@@ -671,7 +672,7 @@ def setup() -> argparse.Namespace:
     # model and loss
     parser.add_argument("-l", "--loss", type=str, default="logprob", help="Loss function [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_rfx", type=str, default="logprob", help="Loss function for rfx [mse, logprob] (default = logprob)")
-    parser.add_argument("--loss_noise", type=str, default="logprob", help="Loss function for noise [mse, logprob, ig_exp] (default = logprob)")
+    parser.add_argument("--loss_noise", type=str, default="logprob", help="Loss function for noise [mse, logprob] (default = logprob)")
     parser.add_argument("--dropout", type=float, default=0, help="Dropout rate (default = 0)")
     parser.add_argument("--hidden", type=int, default=128, help="Hidden dimension (default = 128)")
     parser.add_argument("--ff", type=int, default=256, help="Feedforward dimension (transformer, default = 256)")
