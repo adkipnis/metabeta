@@ -480,7 +480,7 @@ def run(models: tuple,
     X = batch["X"].to(device)
     ffx = batch["beta"].float()
     outputs = models[0](assembleInputs(y, X))
-    ffx_loc, ffx_scale, rfx_params = parseOutputs(outputs, type="parametric")
+    ffx_loc, ffx_scale, rfx_loc, rfx_scale = parseOutputs(outputs, type="parametric")
 
     # compute beta parameter loss per batch and predictor (optionally over multiple model outputs per batch)
     losses = ffxLossWrapper(ffx_loc, ffx_scale, ffx, depths) # (batch, n_predictors)
@@ -489,10 +489,10 @@ def run(models: tuple,
         loss = maskLoss(losses, ffx) if unpad else losses.mean()
     else:
         # compute losses for random effects structure
-        depths_rfx = batch["q"]
+        rfx_depths = batch["q"]
         rfx = batch["rfx"].to(device)
         stds_b_true = batch["S_emp"].to(device).sqrt()
-        losses_rfx = rfxLossWrapper(rfx_params, stds_b_true, rfx, depths_rfx) # (batch, n_predictors)
+        losses_rfx = rfxLossWrapper(rfx_loc, rfx_scale, stds_b_true, rfx, rfx_depths) # (batch, n_predictors)
 
         # join losses
         losses_joint = torch.cat([losses, losses_rfx], dim=1)
@@ -500,11 +500,12 @@ def run(models: tuple,
         loss = maskLoss(losses_joint, targets) if unpad else losses.mean()
 
     # pass through second model
-    noise_params = models[1](assembleNoiseInputs(y, ffx_loc, ffx_scale), noise=True).exp().squeeze(-1)
+    noise_outputs = models[1](assembleNoiseInputs(y, ffx_loc, ffx_scale)).exp().squeeze(-1)
+    noise_loc, noise_scale = parseNoiseOutputs(noise_outputs)
 
     # compute noise parameter loss per batch
     noise_std = batch["sigma_error"].unsqueeze(-1).float()
-    losses_noise = noiseLossWrapper(noise_params, noise_std, depths) # (batch, 1)
+    losses_noise = noiseLossWrapper(noise_loc, noise_scale, noise_std, depths) # (batch, 1)
     loss_noise = losses_noise.mean()
 
     # optionally print some examples
