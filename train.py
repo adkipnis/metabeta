@@ -397,6 +397,17 @@ def mixLogProb(locs: torch.Tensor,
     return -proposal.log_prob(target)
 
 
+def mixLossWrapper(locs: torch.Tensor,
+                   scales: torch.Tensor,
+                   target: torch.Tensor,
+                   depths: torch.Tensor,
+                   type: str) -> torch.Tensor:
+    # calculate losses for all dataset sizes and each beta
+    b, n, _, _ = locs.shape
+    losses = mixLogProb(locs, scales, target, type) # (b, n, d)
+    return averageOverN(losses, n, b, depths)
+
+
 def assembleInputs(y: torch.Tensor,  X: torch.Tensor) -> torch.Tensor:
     return torch.cat([y.unsqueeze(-1), X], dim=-1)
 
