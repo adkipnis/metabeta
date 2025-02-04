@@ -556,7 +556,7 @@ def savePredictions(models: Tuple[nn.Module, nn.Module], batch: dict, iteration_
     y = batch["y"].to(device)
     outputs = models[0](assembleInputs(y, X))
     ffx_loc, ffx_scale, rfx_params = parseOutputs(outputs, type="parametric")
-    noise_params = models[1](assembleNoiseInputs(y, ffx_loc, ffx_scale), noise=True).exp().squeeze(-1)
+    noise_params = models[1](assembleNoiseInputs(y, ffx_loc, ffx_scale)).exp().squeeze(-1)
     fname = Path(pred_path, f"predictions_i={iteration_index}_b={batch_index}.pt")
     out = {
         "mu_beta": ffx_loc,
@@ -583,18 +583,19 @@ def train(models: Tuple[nn.Module, nn.Module],
     for batch in iterator:
         for optimizer in optimizers:
             optimizer.zero_grad()
-        loss, loss_noise = run(models, batch)
+        # loss, loss_noise = run(models, batch)
+        loss = runMix(models, batch)
         loss.backward()
-        loss_noise.backward()
+        # loss_noise.backward()
         for optimizer in optimizers:
             optimizer.step()
         iterator.set_postfix({"loss": loss.item()})
         if writer is not None:
             writer.add_scalar("loss_train", loss.item(), step)
-            writer.add_scalar("loss_train_noise", loss_noise.item(), step)
+            # writer.add_scalar("loss_train_noise", loss_noise.item(), step)
         if logger is not None:
             logger.write(iteration, step, loss.item(), "loss_train")
-            logger.write(iteration, step, loss_noise.item(), "loss_train_noise")
+            # logger.write(iteration, step, loss_noise.item(), "loss_train_noise")
         step += 1
     return step
 
@@ -615,30 +616,32 @@ def validate(models: Tuple[nn.Module, nn.Module],
     with torch.no_grad():
         for j, batch in enumerate(iterator):
             # preset validation loss
-            loss_val, loss_val_noise = run(models, batch, printer=iterator.write)
+            # loss_val, loss_val_noise = run(models, batch, printer=iterator.write)
+            loss_val = runMix(models, batch, printer=iterator.write)
             iterator.set_postfix({"loss": loss_val.item()})
             if writer is not None:
                 writer.add_scalar("loss_val", loss_val.item(), step)
-                writer.add_scalar("loss_val_noise", loss_val_noise.item(), step)
+                # writer.add_scalar("loss_val_noise", loss_val_noise.item(), step)
             if logger is not None:
                 logger.write(iteration, step, loss_val.item(), "loss_val")
-                logger.write(iteration, step, loss_val_noise.item(), "loss_val_noise")
+                # logger.write(iteration, step, loss_val_noise.item(), "loss_val_noise")
 
-            # optionally calculate KL loss
-            if cfg.kl and cfg.type == "ffx":
-                loss_kl = compare(models, batch)
-                if writer is not None:
-                    writer.add_scalar("loss_kl", loss_kl.item(), step)
-                if logger is not None:
-                    logger.write(iteration, step, loss_kl.item(), "loss_kl")
-
+            # # optionally calculate KL loss
+            # if cfg.kl and cfg.type == "ffx":
+            #     loss_kl = compare(models, batch)
+            #     if writer is not None:
+            #         writer.add_scalar("loss_kl", loss_kl.item(), step)
+            #     if logger is not None:
+            #         logger.write(iteration, step, loss_kl.item(), "loss_kl")
+            #
             # optionally save predictions
-            if iteration % 5 == 0 and not cfg.proto:
-                savePredictions(models, batch, iteration, j)
-
+            # if iteration % 5 == 0 and not cfg.proto:
+            #     savePredictions(models, batch, iteration, j)
+            
             # optionally print predictions
             if iteration % 5 == 0 and j % 15 == 0:
-                run(models, batch, unpad=True, printer=iterator.write, num_examples=1) # type: ignore
+                # run(models, batch, unpad=True, printer=iterator.write, num_examples=1) # type: ignore
+                runMix(models, batch, printer=iterator.write, num_examples=1)
 
             step += 1
     return step
