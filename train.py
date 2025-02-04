@@ -224,14 +224,13 @@ def noiseMSE(loc: torch.Tensor,
     return mse(scale.log(), true_scale.log())
 
 
-def noiseLogProb(beta: torch.Tensor,
-                 noise_scale: torch.Tensor) -> torch.Tensor:
-    ''' Compute the negative log density of the noise std (target) under the proposed inverse gamma distribution. '''
-    # beta, noise_scale (batch, n)
-    beta = beta.squeeze(-1)
-    alpha = getAlpha(beta)
-    proposal = D.inverse_gamma.InverseGamma(alpha, beta)
-    return -proposal.log_prob(noise_scale.square()) # (batch, n)
+# def noiseLogProb(loc: torch.Tensor,
+#                  scale: torch.Tensor,
+#                  noise_scale: torch.Tensor) -> torch.Tensor:
+#     ''' Compute the negative log density of the noise std (target) under the proposed log-normal distribution. '''
+#     # loc, scale, noise_scale (b, n)
+#     proposal = D.LogNormal(loc, scale)
+#     return -proposal.log_prob(noise_scale.square())
 
 
 # def noiseIgExp(noise_param: torch.Tensor,
@@ -244,10 +243,17 @@ def noiseLogProb(beta: torch.Tensor,
 #     proposal = D.inverse_gamma.InverseGamma(alpha, beta)
 #     expected_value = proposal.mean
 #     return mse(noise_std.log(), expected_value.log()) # (batch, n)
+def noiseLogProb(loc: torch.Tensor,
+                 scale: torch.Tensor,
+                 true_scale: torch.Tensor) -> torch.Tensor:
+    ''' Compute the negative log density of the noise std (target) under the proposed distribution. '''
+    # loc, scale, noise_scale (b, n)
+    beta = scale.squeeze(-1)
+    alpha = getAlpha(beta)
+    proposal = D.InverseGamma(alpha, beta)
+    return -proposal.log_prob(true_scale.square())
 
 
-def noiseLossWrapper(proposed: torch.Tensor,
-                     noise_scale: torch.Tensor,
                      depths: torch.Tensor) -> torch.Tensor:
     ''' Wrapper for the noise loss function. ''' 
     # calculate losses for all dataset sizes and each beta
