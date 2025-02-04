@@ -523,35 +523,6 @@ def run(models: tuple,
     return loss, loss_noise
 
 
-def runHist(models: tuple,
-            batch: dict,
-            num_examples: int = 0,
-            printer: Callable = print) -> torch.Tensor:
-    ''' Run a batch through the model and return the loss. '''
-    depths = batch["d"]
-    y = batch["y"].to(device)
-    X = batch["X"].to(device)
-    beta = batch["beta"].float()
-
-    # generalized posterior
-    outputs = models[0](assembleInputs(y, X))
-    losses = histLossWrapper(outputs, beta, depths)
-    loss = maskLoss(losses, beta)
-
-    # optionally print some examples
-    for i in range(num_examples):
-        mask = (beta[i] != 0.)
-        beta_i = beta[i, mask].detach().numpy()        
-        dist_masked = outputs[..., mask]
-        mode_i = histMode(dist_masked)[i, -1].detach().numpy()
-        mean_i = histMean(dist_masked)[i, -1].detach().numpy()
-        printer(f"\n{console_width * '-'}")
-        printer(f"True : {beta_i}")
-        printer(f"EAP  : {mean_i}")
-        printer(f"MAP  : {mode_i}")
-        printer(f"{console_width * '-'}\n")
-    return loss
-
 
 def compare(models: tuple, batch: dict) -> torch.Tensor:
     ''' Compate analytical posterior with proposed posterior using KL divergence '''
