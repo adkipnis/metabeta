@@ -444,12 +444,29 @@ def runMix(models: tuple,
     return loss
 
 
+# -------- training and testing methods
 def assembleInputs(y: torch.Tensor,  X: torch.Tensor) -> torch.Tensor:
     return torch.cat([y.unsqueeze(-1), X], dim=-1)
 
 
 def assembleNoiseInputs(y: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
     return torch.cat([y.unsqueeze(-1), loc.detach(), scale.detach()], dim=-1)
+
+
+def parseOutputs(outputs: torch.Tensor, type: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    assert type in ["parametric", "mixture"], "output type unknown"
+    if type == "parametric":
+        ffx_loc, ffx_scale = outputs[..., 0], outputs[..., 1].exp()
+        rfx_loc, rfx_scale = outputs[..., 2], outputs[..., 3].exp()
+    elif type == "mixture":
+        m = outputs.shape[-1] // 4
+        ffx_loc, ffx_scale = outputs[..., :m],      outputs[..., m:2*m].exp()
+        rfx_loc, rfx_scale = outputs[..., 2*m:3*m], outputs[..., 3*m:4*m].exp()
+    return ffx_loc, ffx_scale, rfx_loc, rfx_scale # type: ignore
+
+def parseNoiseOutputs(outputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    noise_loc, noise_scale = outputs[..., 0], outputs[..., 1].exp()
+    return noise_loc, noise_scale
 
 
 def run(models: tuple,
