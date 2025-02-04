@@ -705,7 +705,8 @@ if __name__ == "__main__":
                 n_heads=cfg.heads,
                 n_layers=cfg.layers,
                 dropout=cfg.dropout,
-                seed=cfg.seed).to(device)
+                seed=cfg.seed,
+                model_type="mixture").to(device)
     model_noise = TransformerDecoder(
                 num_predictors= 2 * (cfg.d+1),
                 hidden_size=cfg.hidden,
@@ -713,7 +714,8 @@ if __name__ == "__main__":
                 n_heads=cfg.heads,
                 n_layers=1,
                 dropout=cfg.dropout,
-                seed=cfg.seed).to(device)
+                seed=cfg.seed,
+                model_type="noise").to(device)
     models = (model, model_noise)
     print(f"Model: Transformer with {cfg.hidden} hidden units, " + \
             f"{cfg.ff} feedforward units, {cfg.heads} heads, {cfg.layers} layer(s), " + \
@@ -752,8 +754,6 @@ if __name__ == "__main__":
         lf_noise = noiseMSE
     elif cfg.loss_noise == "logprob":
         lf_noise = noiseLogProb
-    # elif cfg.loss_noise == "ig_exp":
-    #     lf_noise = noiseIgExp
     else:
         raise ValueError(f"Loss {cfg.loss_noise} not recognized.")
 
