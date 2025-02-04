@@ -233,16 +233,6 @@ def noiseMSE(loc: torch.Tensor,
 #     return -proposal.log_prob(noise_scale.square())
 
 
-# def noiseIgExp(noise_param: torch.Tensor,
-#                noise_std: torch.Tensor) -> torch.Tensor:
-#     ''' Compute the MSE of the true noise std and its expected value under the noise parameters '''
-#     # noise_param (batch, n)
-#     # noise_std (batch, n)
-#     alpha = getAlpha(noise_std)
-#     beta = noise_param.squeeze(-1)
-#     proposal = D.inverse_gamma.InverseGamma(alpha, beta)
-#     expected_value = proposal.mean
-#     return mse(noise_std.log(), expected_value.log()) # (batch, n)
 def noiseLogProb(loc: torch.Tensor,
                  scale: torch.Tensor,
                  true_scale: torch.Tensor) -> torch.Tensor:
