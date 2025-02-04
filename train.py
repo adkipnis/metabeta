@@ -363,6 +363,17 @@ def runHist(models: tuple,
     return loss
 
 
+# -------- mixture methods
+def mixMSE(locs: torch.Tensor,
+           scales: torch.Tensor,
+           target: torch.Tensor,
+           type: str) -> torch.Tensor:
+    # locs (b, n, d, m)
+    # target (b, d)
+    loc = torch.mean(locs, dim=-1)
+    target_expanded = target.unsqueeze(1).expand_as(loc)
+    return mse(loc, target_expanded)
+
 
 def assembleInputs(y: torch.Tensor,  X: torch.Tensor) -> torch.Tensor:
     return torch.cat([y.unsqueeze(-1), X], dim=-1)
