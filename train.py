@@ -375,6 +375,28 @@ def mixMSE(locs: torch.Tensor,
     return mse(loc, target_expanded)
 
 
+def mixLogProb(locs: torch.Tensor,
+               scales: torch.Tensor,
+               target: torch.Tensor,
+               type: str) -> torch.Tensor:
+    # locs (b, n, d, m)
+    # scales (b, n, d, m)
+    # target (b, d)
+    
+    b, n, d, _ = locs.shape
+    if type == "ffx":
+        target = target.unsqueeze(1).expand((b, n, d))
+        base = D.Normal
+    elif type == "rfx":
+        target += (target == 0.).float() # set entries with std = 0 to 1
+        base = D.LogNormal 
+    mixing_weights = torch.ones_like(locs) # this can be a parameter too
+    mix = D.Categorical(mixing_weights)
+    comp = base(locs, scales)
+    proposal = D.MixtureSameFamily(mix, comp)
+    return -proposal.log_prob(target)
+
+
 def assembleInputs(y: torch.Tensor,  X: torch.Tensor) -> torch.Tensor:
     return torch.cat([y.unsqueeze(-1), X], dim=-1)
 
