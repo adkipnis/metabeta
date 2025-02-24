@@ -23,14 +23,19 @@ class Base(nn.Module):
                  n_layers: int,
                  dropout: float,
                  seed: int,
-                 model_type: str) -> None:
+                 fx_type: str,
+                 model_type: str,
+                 n_components: int = 1) -> None:
         super(Base, self).__init__()
         self.n_predictors = n_predictors
         self.hidden_size = hidden_size
         self.n_layers = n_layers
         self.dropout = dropout
         self.seed = seed
+        self.fx_type = fx_type
         self.model_type = model_type
+        self.n_components = n_components # number of mixture components
+        n_fx = 1 if fx_type == "ffx" else 2
         if model_type == "parametric":
             self.final_layers = parametricPosterior(hidden_size, num_predictors)
         elif model_type == "mixture":
@@ -73,10 +78,11 @@ class TransformerDecoder(Base):
                  dropout: float,
                  seed: int,
                  n_heads: int = 4,
+                 fx_type: str = "ffx",
                  model_type: str = "parametric",
+                 n_components: int = 1,
                  ) -> None:
 
-        super(TransformerDecoder, self).__init__(num_predictors, hidden_size, n_layers, dropout, seed, model_type)
         self.embed = nn.Linear(num_predictors+1, hidden_size)
         decoder_layer = TransformerDecoderLayer(d_model=hidden_size,
                                                 dim_feedforward=ff_size,
