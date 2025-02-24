@@ -144,28 +144,28 @@ def maskLoss(losses: torch.Tensor,
     return loss # (,)
 
 
-def histMode(dist: torch.Tensor) -> torch.Tensor:
+# -------- discrete methods (for discrete posterior)
+def discreteMode(dist: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
     # dist (b, n, 128, d)
-    b, n, _, d = dist.shape
+    b, n, d, _ = dist.shape
     grid_expanded = grid.unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(b, n, d, -1)
-    index = dist.argmax(dim=-2).unsqueeze(-1) # (b, n, d, 1)
-    return torch.gather(grid_expanded, dim=-1, index=index).squeeze(-1) # (b, n, d)
+    index = dist.argmax(dim=-1) # (b, n, d)
+    return torch.gather(grid_expanded, dim=-1, index=index.unsqueeze(-1)).squeeze(-1) # (b, n, d)
 
 
-def histMean(dist: torch.Tensor) -> torch.Tensor:
+def discreteMean(dist: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
     # dist (b, n, 128, d)
-    return torch.matmul(dist.permute(0, 1, 3, 2), grid)
+    return torch.matmul(dist, grid)
 
 
-def histVariance(dist: torch.Tensor,
-                 mean: torch.Tensor):
-    # dist (b, n, 128, d)
+def discreteVariance(dist: torch.Tensor,
+                 mean: torch.Tensor,
+                 grid: torch.Tensor):
+    # dist (b, n, d, 128)
     # mean (b, n, d)
-    grid_expanded = grid.view(1, 1, -1, 1)
-    mean_expanded = mean.unsqueeze(2)
-    squared_diff = (grid_expanded - mean_expanded) ** 2
+    squared_diff = (grid.view(1, 1, 1, -1) - mean.unsqueeze(-1)).square()
     weighted_squared_diff = squared_diff * dist
-    return torch.sum(weighted_squared_diff, dim=2)
+    return torch.sum(weighted_squared_diff, dim=-1)
  
 
 def histMSE(means: torch.Tensor,
