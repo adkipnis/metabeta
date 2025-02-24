@@ -86,7 +86,8 @@ class TransformerDecoder(Base):
                  n_components: int = 1,
                  ) -> None:
 
-        self.embed = nn.Linear(num_predictors+1, hidden_size)
+        super(TransformerDecoder, self).__init__(n_predictors, hidden_size, n_layers, dropout, seed, fx_type, model_type, n_components)
+        self.embed = nn.Linear(n_predictors+1, hidden_size)
         decoder_layer = TransformerDecoderLayer(d_model=hidden_size,
                                                 dim_feedforward=ff_size,
                                                 nhead=n_heads,
