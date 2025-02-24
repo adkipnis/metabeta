@@ -168,7 +168,7 @@ def discreteVariance(dist: torch.Tensor,
     return torch.sum(weighted_squared_diff, dim=-1)
  
 
-def histMSE(means: torch.Tensor,
+def discreteMSE(means: torch.Tensor,
             targets: torch.Tensor) -> torch.Tensor:
     # means (b, n, d)
     # targets (b, d)
@@ -176,26 +176,30 @@ def histMSE(means: torch.Tensor,
     return mse(means, betas)
 
 
-def histLogProb(dist: torch.Tensor,
-                targets: torch.Tensor) -> torch.Tensor:
-    # dist (b, n, 128, d)
-    # targets (b, d)
-    grid_expanded = grid.view(1, 1, -1)
-    index = (grid_expanded - targets.unsqueeze(-1)).abs().argmin(dim=-1) # (b, d)
-    index_expanded = index.unsqueeze(1).unsqueeze(1).expand(-1, dist.shape[1], -1, -1) # (b, n, 1, d)
-    probs = torch.gather(dist, dim=2, index=index_expanded).squeeze(2) # (b, n, d)
+def discreteLogProb(dist: torch.Tensor,
+                targets: torch.Tensor,
+                grid: torch.Tensor) -> torch.Tensor:
+    # dist (b, n, d, n_bins)
+    # targets (b, n, d) or 
+    # grid (n_bins)
+    grid_expanded = grid.view(1, 1, 1, -1)
+    index = (grid_expanded - targets.unsqueeze(-1)).abs().argmin(dim=-1).squeeze(0) # (b, n, d)
+    probs = torch.gather(dist, dim=-1, index=index.unsqueeze(-1)).squeeze(-1) # (b, n, d)
     return -probs.log()
 
 
-def histLossWrapper(probs: torch.Tensor,
+def discreteLossWrapper(outputs: Dict[str, torch.Tensor],
                     targets: torch.Tensor,
-                    depths: torch.Tensor) -> torch.Tensor:
+                    depths: torch.Tensor,
+                    type: str) -> torch.Tensor:
     # calculate losses for all dataset sizes and each beta
-    b, n, _, _ = probs.shape
-    # losses = lf_hist(probs, targets) # (b, n, d)
-    means = histMean(probs)
-    variances = histVariance(probs, means)
-    losses = histMSE(means, targets) + 0.01 * variances
+    probs = outputs[f"{type}_probs"]
+    b, n, d, _ = probs.shape
+    grid = rfx_grid
+    if type == "ffx":
+        grid = ffx_grid
+        targets = targets.unsqueeze(1).expand(b, n, d)
+    losses = discreteLogProb(probs, targets, grid)
     return averageOverN(losses, n, b, depths)
 
 
