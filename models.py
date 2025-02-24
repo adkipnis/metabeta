@@ -65,11 +65,10 @@ class Base(nn.Module):
 
     def forward(self,
                 x: torch.Tensor, # (batch_size, seq_size, input_size)
-                softmax: bool = False) -> torch.Tensor:
+                ) -> torch.Tensor:
         ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
         outputs = self.internal(x) # (batch_size, seq_size, hidden_size)
-        link = self.softmax if softmax else self.identity
-        finals = [link(layer(outputs)).unsqueeze(-1) for layer in self.final_layers]
+        finals = [layer(outputs).unsqueeze(-1) for layer in self.final_layers]
         return torch.cat(finals, dim=-1)
 
 
