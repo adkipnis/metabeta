@@ -573,7 +573,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--proto", action="store_true", help="prototyping: don't log anything during (default = False)")
 
     # data
-    parser.add_argument("-t", "--type", type=str, default="mfx", help="Type of dataset [ffx, mfx] (default = mfx)")
+    parser.add_argument("-t", "--fx_type", type=str, default="mfx", help="Type of dataset [ffx, mfx] (default = mfx)")
     parser.add_argument("-d", type=int, default=8, help="Number of predictors (without bias, default = 8)")
     parser.add_argument("-n", type=int, default=50, help="Maximum number of samples to draw per linear model (default = 50).")
     parser.add_argument("-f", "--fixed", type=float, default=0., help="Fixed noise variance (default = 0. -> not fixed)")
@@ -581,7 +581,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument("-b", "--batch-size", type=int, default=50, help="Batch size (default = 50)")
 
     # model and loss
-    parser.add_argument("-l", "--loss", type=str, default="logprob", help="Loss function [mse, logprob] (default = logprob)")
+    parser.add_argument("--model_type", type=str, default="mixture", help="Posterior architecture [discrete, mixture] (default = mixture)")
+    parser.add_argument("-c", type=int, default=8, help="Number of mixture components resp. grid bins (default = 8)")
+    parser.add_argument("--loss_ffx", type=str, default="logprob", help="Loss function [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_rfx", type=str, default="logprob", help="Loss function for rfx [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_noise", type=str, default="logprob", help="Loss function for noise [mse, logprob] (default = logprob)")
     parser.add_argument("--dropout", type=float, default=0, help="Dropout rate (default = 0)")
@@ -610,23 +612,26 @@ if __name__ == "__main__":
 
     # --- set up models
     model = TransformerDecoder(
-                num_predictors=cfg.d+1,
+                n_predictors=cfg.d+1,
                 hidden_size=cfg.hidden,
                 ff_size=cfg.ff,
                 n_heads=cfg.heads,
                 n_layers=cfg.layers,
                 dropout=cfg.dropout,
                 seed=cfg.seed,
-                model_type="mixture").to(device)
+                fx_type=cfg.fx_type,
+                model_type=cfg.model_type,
+                n_components=cfg.c).to(device)
     model_noise = TransformerDecoder(
-                num_predictors= 2 * (cfg.d+1),
+                n_predictors= 2 * (cfg.d+1),
                 hidden_size=cfg.hidden,
                 ff_size=cfg.ff,
                 n_heads=cfg.heads,
                 n_layers=1,
                 dropout=cfg.dropout,
                 seed=cfg.seed,
-                model_type="noise").to(device)
+                model_type=f"{cfg.model_type}_noise",
+                n_components=cfg.c).to(device)
     models = (model, model_noise)
     print(f"Model: Transformer with {cfg.hidden} hidden units, " + \
             f"{cfg.ff} feedforward units, {cfg.heads} heads, {cfg.layers} layer(s), " + \
