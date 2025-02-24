@@ -37,14 +37,21 @@ class Base(nn.Module):
         self.n_components = n_components # number of mixture components
         n_fx = 1 if fx_type == "ffx" else 2
         if model_type == "parametric":
-            self.final_layers = parametricPosterior(hidden_size, num_predictors)
+            self.final_layers = parametricPosterior(hidden_size, n_predictors)
+        elif model_type == "discrete":
+            self.final_layers = generalizedPosterior(hidden_size, n_predictors, n_fx * self.n_components) # (ffx, rfx) * (bin)
         elif model_type == "mixture":
-            self.m = 3 # number of mixture components
-            self.final_layers = generalizedPosterior(hidden_size, num_predictors, 4 * self.m)
-        elif model_type == "noise":
+            self.final_layers = generalizedPosterior(hidden_size, n_predictors, 3 * n_fx * self.n_components) # (loc, scale, weight) * (ffx, rfx) * (mixture component)
+        elif model_type == "parametric_noise":
             self.final_layers = getLinearLayers(hidden_size, 2, 1)
-        self.softmax = nn.Softmax(dim=-1)
-        self.identity = nn.Identity()
+        elif model_type == "discrete_noise":
+            self.final_layers = generalizedPosterior(hidden_size, 1, self.n_components)
+        elif model_type == "mixture_noise":
+            self.final_layers = generalizedPosterior(hidden_size, 1, 3 * self.n_components)
+        else:
+            raise ValueError(f"model type: {model_type} not supported")
+
+
 
     def initializeWeights(self) -> None:
         ''' Initialize weights using Xavier initialization '''
