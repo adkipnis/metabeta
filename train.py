@@ -498,19 +498,18 @@ def train(models: Tuple[nn.Module, nn.Module],
     for batch in iterator:
         for optimizer in optimizers:
             optimizer.zero_grad()
-        # loss, loss_noise = run(models, batch)
-        loss = runMix(models, batch)
+        loss, loss_noise = run(models, batch, cfg.model_type, printer=iterator.write)
         loss.backward()
-        # loss_noise.backward()
+        loss_noise.backward()
         for optimizer in optimizers:
             optimizer.step()
         iterator.set_postfix({"loss": loss.item()})
         if writer is not None:
             writer.add_scalar("loss_train", loss.item(), step)
-            # writer.add_scalar("loss_train_noise", loss_noise.item(), step)
+            writer.add_scalar("loss_train_noise", loss_noise.item(), step)
         if logger is not None:
             logger.write(iteration, step, loss.item(), "loss_train")
-            # logger.write(iteration, step, loss_noise.item(), "loss_train_noise")
+            logger.write(iteration, step, loss_noise.item(), "loss_train_noise")
         step += 1
     return step
 
@@ -531,18 +530,17 @@ def validate(models: Tuple[nn.Module, nn.Module],
     with torch.no_grad():
         for j, batch in enumerate(iterator):
             # preset validation loss
-            # loss_val, loss_val_noise = run(models, batch, printer=iterator.write)
-            loss_val = runMix(models, batch, printer=iterator.write)
-            iterator.set_postfix({"loss": loss_val.item()})
+            loss, loss_noise = run(models, batch, cfg.model_type, printer=iterator.write)
+            iterator.set_postfix({"loss": loss.item()})
             if writer is not None:
-                writer.add_scalar("loss_val", loss_val.item(), step)
-                # writer.add_scalar("loss_val_noise", loss_val_noise.item(), step)
+                writer.add_scalar("loss_val", loss.item(), step)
+                writer.add_scalar("loss_val_noise", loss_noise.item(), step)
             if logger is not None:
-                logger.write(iteration, step, loss_val.item(), "loss_val")
-                # logger.write(iteration, step, loss_val_noise.item(), "loss_val_noise")
+                logger.write(iteration, step, loss.item(), "loss_val")
+                logger.write(iteration, step, loss_noise.item(), "loss_val_noise")
 
             # # optionally calculate KL loss
-            # if cfg.kl and cfg.type == "ffx":
+            # if cfg.kl and cfg.fx_type == "ffx":
             #     loss_kl = compare(models, batch)
             #     if writer is not None:
             #         writer.add_scalar("loss_kl", loss_kl.item(), step)
@@ -555,8 +553,7 @@ def validate(models: Tuple[nn.Module, nn.Module],
             
             # optionally print predictions
             if iteration % 5 == 0 and j % 15 == 0:
-                # run(models, batch, unpad=True, printer=iterator.write, num_examples=1) # type: ignore
-                runMix(models, batch, printer=iterator.write, num_examples=1)
+                run(models, batch, cfg.model_type, printer=iterator.write, num_examples=1)
 
             step += 1
     return step
