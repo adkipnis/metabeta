@@ -371,57 +371,51 @@ def parseNoiseOutputs(outputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor
 
 def run(models: tuple,
         batch: dict,
+        model_type: str,
         num_examples: int = 0,
-        unpad: bool = True,
-        printer: Callable = print) -> Tuple[torch.Tensor, torch.Tensor]:
+        printer: Callable = print,
+        ) -> Tuple[torch.Tensor, torch.Tensor]:
     ''' Run a batch through the model and return the loss. '''
-    depths = batch["d"]
+    lossWrapper, examples = mixLossWrapper, mixExamples
+    if model_type == "discrete":
+        lossWrapper, examples = discreteLossWrapper, discreteExamples
+
+    # unpack data
+    ffx_depths = batch["d"]
     y = batch["y"].to(device)
     X = batch["X"].to(device)
-    ffx = batch["beta"].float()
-    outputs = models[0](assembleInputs(y, X))
-    ffx_loc, ffx_scale, rfx_loc, rfx_scale = parseOutputs(outputs, type="parametric")
+    ffx = batch["beta"].to(device)
 
-    # compute beta parameter loss per batch and predictor (optionally over multiple model outputs per batch)
-    losses = ffxLossWrapper(ffx_loc, ffx_scale, ffx, depths) # (batch, n_predictors)
-    if "rfx" not in batch:
-        # compute mean loss over all batches and predictors (optionally ignoring padded predictors)
-        loss = maskLoss(losses, ffx) if unpad else losses.mean()
-    else:
-        # compute losses for random effects structure
+    # estimate ffx
+    outputs = models[0](assembleInputs(y, X))
+    output_dict = parseOutputs(outputs, type=model_type, c=cfg.c)
+    losses_ffx = lossWrapper(output_dict, ffx, ffx_depths, type="ffx")
+
+    # optionally estimate rfx structure
+    if cfg.fx_type == "mfx":
         rfx_depths = batch["q"]
         rfx = batch["rfx"].to(device)
-        stds_b_true = batch["S_emp"].to(device).sqrt()
-        losses_rfx = rfxLossWrapper(rfx_loc, rfx_scale, stds_b_true, rfx, rfx_depths) # (batch, n_predictors)
-
-        # join losses
-        losses_joint = torch.cat([losses, losses_rfx], dim=1)
+        rfx_scale_true = batch["S_emp"].to(device).sqrt()
+        losses_rfx = lossWrapper(output_dict, rfx_scale_true, rfx_depths, type="rfx") 
+        losses_joint = torch.cat([losses_ffx, losses_rfx], dim=1)
         targets = torch.cat([ffx, rfx[:,0]], dim=1)
-        loss = maskLoss(losses_joint, targets) if unpad else losses.mean()
-
-    # pass through second model
-    noise_outputs = models[1](assembleNoiseInputs(y, ffx_loc, ffx_scale)).exp().squeeze(-1)
-    noise_loc, noise_scale = parseNoiseOutputs(noise_outputs)
+        loss = maskLoss(losses_joint, targets)
+    else:
+        loss = maskLoss(losses_ffx, ffx)
 
     # compute noise parameter loss per batch
+    noise_outputs = models[1](assembleNoiseInputs(y, output_dict, type=model_type))
+    noise_output_dict = parseOutputs(noise_outputs, type=model_type, c=cfg.c)
+    noise_output_dict = {f"noise_{k[4:]}": v for k, v in noise_output_dict.items()} # replace prefix
+    
+    # compute noise loss
     noise_std = batch["sigma_error"].unsqueeze(-1).float()
-    losses_noise = noiseLossWrapper(noise_loc, noise_scale, noise_std, depths) # (batch, 1)
+    losses_noise = lossWrapper(noise_output_dict, noise_std, ffx_depths, type="noise") # (batch, 1)
     loss_noise = losses_noise.mean()
 
     # optionally print some examples
-    for i in range(num_examples):
-        mask = (ffx[i] != 0.)
-        beta_i = ffx[i, mask].detach().numpy()        
-        printer(f"\n{console_width * '-'}")
-        printer(f"True       : {beta_i}")
-        if cfg.type == "ffx":
-            mu_i = batch["mu_n"][i, -1, mask].detach().numpy()
-            printer(f"Analytical : {mu_i}")
-        outputs_i = ffx_loc[i, -1, mask].detach().numpy()
-        printer(f"Predicted  : {outputs_i}")
-        printer(f"{console_width * '-'}\n")
+    examples(num_examples, ffx, output_dict, printer)
     return loss, loss_noise
-
 
 
 def compare(models: tuple, batch: dict) -> torch.Tensor:
