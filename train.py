@@ -633,7 +633,7 @@ if __name__ == "__main__":
                 model_type=f"{cfg.model_type}_noise",
                 n_components=cfg.c).to(device)
     models = (model, model_noise)
-    print(f"Model: Transformer with {cfg.hidden} hidden units, " + \
+    print(f"Model: {cfg.c}-{cfg.model_type} Transformer with {cfg.hidden} hidden units, " + \
             f"{cfg.ff} feedforward units, {cfg.heads} heads, {cfg.layers} layer(s), " + \
             f"{cfg.dropout} dropout")
 
