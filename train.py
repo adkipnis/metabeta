@@ -280,14 +280,27 @@ def mixLogProb(locs: torch.Tensor,
     return -proposal.log_prob(target)
 
 
-def mixLossWrapper(locs: torch.Tensor,
-                   scales: torch.Tensor,
+def chooseLossFn(output_type: str):
+    loss_type = eval(f'cfg.loss_{output_type}')
+    if loss_type == "mse":
+        return mixMSE
+    elif loss_type == "logprob":
+        return mixLogProb
+    else:
+        raise ValueError(f'loss type: "{loss_type}" not found.')
+ 
+
+def mixLossWrapper(outputs: Dict[str, torch.Tensor], 
                    target: torch.Tensor,
                    depths: torch.Tensor,
                    type: str) -> torch.Tensor:
     # calculate losses for all dataset sizes and each beta
+    locs = outputs[f"{type}_loc"]
+    scales = outputs[f"{type}_scale"]
+    weights = outputs[f"{type}_weight"]
     b, n, _, _ = locs.shape
-    losses = mixLogProb(locs, scales, target, type) # (b, n, d)
+    loss_fn = chooseLossFn(type)
+    losses = loss_fn(locs, scales, weights, target, type) # (b, n, d)
     return averageOverN(losses, n, b, depths)
 
 
