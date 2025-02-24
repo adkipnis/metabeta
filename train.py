@@ -222,6 +222,11 @@ def discreteExamples(num_examples: int, ffx: torch.Tensor, outputs: Dict[str, to
 
 
 # -------- mixture methods
+def mixMean(locs: torch.Tensor,
+            weights: torch.Tensor) -> torch.Tensor:
+    return (locs * weights).sum(dim=-1)
+
+
 def mixMSE(locs: torch.Tensor,
            scales: torch.Tensor,
            target: torch.Tensor,
