@@ -63,9 +63,6 @@ class Base(nn.Module):
     def internal(self, x: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
-    def internalNoise(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
-
     def forward(self,
                 x: torch.Tensor, # (batch_size, seq_size, input_size)
                 softmax: bool = False) -> torch.Tensor:
