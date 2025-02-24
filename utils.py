@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Tuple
 import torch
 
 
@@ -6,6 +7,14 @@ def getAlpha(noise_std: torch.Tensor) -> torch.Tensor:
     b, n  = noise_std.shape
     ns = torch.stack([torch.arange(n)] * b)
     return 2. + ns / 2.
+
+def moments2ig(loc: torch.Tensor, scale: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    ''' reparameterize IG-distribution (from loc and scale to alpha and beta) '''
+    eps = torch.finfo(loc.dtype).eps
+    alpha = 2. + torch.div(loc.square(), scale.square().clamp(min=eps))
+    beta = torch.mul(loc, alpha - 1.)
+    return alpha, beta
+
 
 
 def symmetricMatrix2Vector(matrix: torch.Tensor) -> torch.Tensor:
