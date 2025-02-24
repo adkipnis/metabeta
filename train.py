@@ -203,18 +203,22 @@ def discreteLossWrapper(outputs: Dict[str, torch.Tensor],
     return averageOverN(losses, n, b, depths)
 
 
+def discreteExamples(num_examples: int, ffx: torch.Tensor, outputs: Dict[str, torch.Tensor], printer: Callable) -> None:
     for i in range(num_examples):
-        mask = (beta[i] != 0.)
-        beta_i = beta[i, mask].detach().numpy()        
-        dist_masked = outputs[..., mask]
-        mode_i = histMode(dist_masked)[i, -1].detach().numpy()
-        mean_i = histMean(dist_masked)[i, -1].detach().numpy()
+        mask = (ffx[i] != 0.)
+        beta_i = ffx[i, mask].detach().numpy()        
+        probs_masked = outputs["ffx_probs"][..., mask, :]
+        # mode_i = discreteMode(probs_masked, ffx_grid)[i, -1].detach().numpy()
+        mean = discreteMean(probs_masked, ffx_grid)
+        var = discreteVariance(probs_masked, mean, ffx_grid)
+        mean_i = mean[i, -1].detach().numpy()
+        sd_i = var[i, -1].sqrt().detach().numpy()
         printer(f"\n{console_width * '-'}")
         printer(f"True : {beta_i}")
-        printer(f"EAP  : {mean_i}")
-        printer(f"MAP  : {mode_i}")
+        # printer(f"MAP  : {mode_i}")
+        printer(f"Mean : {mean_i}")
+        printer(f"SD   : {sd_i}")
         printer(f"{console_width * '-'}\n")
-    return loss
 
 
 # -------- mixture methods
