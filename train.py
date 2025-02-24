@@ -337,11 +337,32 @@ def assembleNoiseInputs(y: torch.Tensor, outputs: Dict[str, torch.Tensor], type:
     return torch.cat([y.unsqueeze(-1), loc.detach(), scale.detach()], dim=-1)
 
 
+def locScaleWeights(outputs: torch.Tensor, prefix: str) -> Dict[str, torch.Tensor]:
+    loc = outputs[..., 0]
+    scale = outputs[..., 1].exp()
+    weights = nn.functional.softmax(outputs[..., 2], dim=-1)
+    return {f"{prefix}loc": loc, f"{prefix}scale": scale, f"{prefix}weight": weights}
+
+
+def parseOutputs(outputs: torch.Tensor, type: str, c: int) -> Dict[str, torch.Tensor]:
+    if type == "discrete":
+        b, n, d, _ = outputs.shape
+        outputs = outputs.reshape(b, n, d, -1, 2)
+        ffx_probs = nn.functional.softmax(outputs[..., 0], dim=-1)
+        rfx_probs = nn.functional.softmax(outputs[..., 1], dim=-1)
+        return {"ffx_probs": ffx_probs, "rfx_probs": rfx_probs}
     elif type == "mixture":
-        m = outputs.shape[-1] // 4
-        ffx_loc, ffx_scale = outputs[..., :m],      outputs[..., m:2*m].exp()
-        rfx_loc, rfx_scale = outputs[..., 2*m:3*m], outputs[..., 3*m:4*m].exp()
-    return ffx_loc, ffx_scale, rfx_loc, rfx_scale # type: ignore
+        b, n, d, _ = outputs.shape
+        outputs = outputs.reshape(b, n, d, c, -1)
+        ffx_dict = locScaleWeights(outputs[..., :3], "ffx_")
+        if outputs.shape[-1] == 3:
+            return ffx_dict
+        else:
+            rfx_dict = locScaleWeights(outputs[..., 3:], "rfx_")
+            return {**ffx_dict, **rfx_dict}
+    else:
+        raise ValueError(f'output type "{type}" not supported.')
+
 
 def parseNoiseOutputs(outputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     noise_loc, noise_scale = outputs[..., 0], outputs[..., 1].exp()
