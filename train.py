@@ -304,15 +304,21 @@ def mixLossWrapper(outputs: Dict[str, torch.Tensor],
     return averageOverN(losses, n, b, depths)
 
 
+def mixExamples(num_examples: int, ffx: torch.Tensor, outputs: Dict[str, torch.Tensor], printer: Callable) -> None:
+    if num_examples == 0:
+        return
+    means = mixMean(outputs["ffx_loc"], outputs["ffx_weight"])
+    stds = mixVariance(outputs["ffx_loc"], outputs["ffx_scale"], outputs["ffx_weight"], means).sqrt()
     for i in range(num_examples):
-        mask = (ffx[i] != 0.)
-        beta_i = ffx[i, mask].detach().numpy()
-        mean_i = ffx_locs[i, -1, mask].mean(dim=-1).detach().numpy()
-        printer(f"\n{console_width * '-'}")
-        printer(f"True       : {beta_i}")
-        printer(f"Predicted  : {mean_i}")
-        printer(f"{console_width * '-'}\n")
-    return loss
+         mask = (ffx[i] != 0.)
+         beta_i = ffx[i, mask].detach().numpy()
+         mean_i = means[i, -1, mask].detach().numpy()
+         std_i = stds[i, -1, mask].detach().numpy()
+         printer(f"\n{console_width * '-'}")
+         printer(f"True  : {beta_i}")
+         printer(f"Mean  : {mean_i}")
+         printer(f"SD    : {std_i}")
+         printer(f"{console_width * '-'}\n")
 
 
 # -------- training and testing methods
