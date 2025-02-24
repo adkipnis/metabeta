@@ -14,7 +14,7 @@ import schedulefree
 from utils import dsFilename, dsFilenameVal, getAlpha
 from dataset import LMDataset
 from models import TransformerDecoder
-
+mse = nn.MSELoss(reduction='none')
 
 # -------- miscellaneous
 class Logger:
