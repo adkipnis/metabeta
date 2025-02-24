@@ -651,31 +651,6 @@ if __name__ == "__main__":
         initial_iteration, global_step, validation_step, timestamp = load(models, optimizers, cfg.preload)
         print(f"Preloaded model from iteration {cfg.preload}, starting at iteration {initial_iteration}.")
 
-    # --- loss functions
-    # 1. parameters
-    if cfg.loss == "mse":
-        lf_ffx = ffxMSE
-    elif cfg.loss == "logprob":
-        lf_ffx = ffxLogProb
-    else:
-        raise ValueError(f"Loss {cfg.loss} not recognized.")
-
-    # 2. rfx
-    if cfg.loss_rfx == "mse":
-        lf_rfx = rfxMSE
-    elif cfg.loss_rfx == "logprob":
-        lf_rfx = rfxLogProb
-    else:
-        raise ValueError(f"Loss {cfg.loss_rfx} not recognized.")
-
-    # 3. noise
-    if cfg.loss_noise == "mse":
-        lf_noise = noiseMSE
-    elif cfg.loss_noise == "logprob":
-        lf_noise = noiseLogProb
-    else:
-        raise ValueError(f"Loss {cfg.loss_noise} not recognized.")
-
     # --- logging
     if cfg.proto:
         writer, logger = None, None
