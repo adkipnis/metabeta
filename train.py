@@ -304,31 +304,6 @@ def mixLossWrapper(outputs: Dict[str, torch.Tensor],
     return averageOverN(losses, n, b, depths)
 
 
-def runMix(models: tuple,
-           batch: dict,
-           num_examples: int = 0,
-           printer: Callable = print) -> torch.Tensor:
-    ''' Run a batch through the model and return the loss. '''
-    ffx_depths = batch["d"]
-    rfx_depths = batch["q"]
-    y = batch["y"].to(device)
-    X = batch["X"].to(device)
-    ffx = batch["beta"].float()
-    rfx = batch["rfx"].float()
-    rfx_scale_true = batch["S_emp"].to(device).sqrt()
-    outputs = models[0](assembleInputs(y, X))
-    ffx_locs, ffx_scales, rfx_locs, rfx_scales = parseOutputs(outputs, type="mixture")
-    
-    # calculcate losses
-    losses_ffx = mixLossWrapper(ffx_locs, ffx_scales, ffx, ffx_depths, type="ffx")
-    losses_rfx = mixLossWrapper(rfx_locs, rfx_scales, rfx_scale_true, rfx_depths, type="rfx") 
-    
-    # join losses
-    losses_joint = torch.cat([losses_ffx, losses_rfx], dim=1)
-    targets = torch.cat([ffx, rfx[:,0]], dim=1)
-    loss = maskLoss(losses_joint, targets)
-    
-    # optionally print some examples
     for i in range(num_examples):
         mask = (ffx[i] != 0.)
         beta_i = ffx[i, mask].detach().numpy()
