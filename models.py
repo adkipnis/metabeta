@@ -18,14 +18,14 @@ def generalizedPosterior(hidden_size: int, d: int, m: int) -> nn.ModuleList:
 
 class Base(nn.Module):
     def __init__(self,
-                 num_predictors: int, # including bias term
+                 n_predictors: int, # including bias term
                  hidden_size: int,
                  n_layers: int,
                  dropout: float,
                  seed: int,
                  model_type: str) -> None:
         super(Base, self).__init__()
-        self.num_predictors = num_predictors
+        self.n_predictors = n_predictors
         self.hidden_size = hidden_size
         self.n_layers = n_layers
         self.dropout = dropout
@@ -66,7 +66,7 @@ class Base(nn.Module):
 
 class TransformerDecoder(Base):
     def __init__(self,
-                 num_predictors: int,
+                 n_predictors: int,
                  hidden_size: int,
                  ff_size: int,
                  n_layers: int,
