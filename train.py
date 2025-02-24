@@ -227,6 +227,14 @@ def mixMean(locs: torch.Tensor,
     return (locs * weights).sum(dim=-1)
 
 
+def mixVariance(locs: torch.Tensor,
+                scales: torch.Tensor,
+                weights: torch.Tensor,
+                mean: torch.Tensor) -> torch.Tensor:
+    second_moments = locs.square() + scales.square()
+    return (second_moments * weights).sum(dim=-1) - mean.square()
+
+
 def mixMSE(locs: torch.Tensor,
            scales: torch.Tensor,
            target: torch.Tensor,
