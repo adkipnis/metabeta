@@ -326,15 +326,17 @@ def assembleInputs(y: torch.Tensor,  X: torch.Tensor) -> torch.Tensor:
     return torch.cat([y.unsqueeze(-1), X], dim=-1)
 
 
-def assembleNoiseInputs(y: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+def assembleNoiseInputs(y: torch.Tensor, outputs: Dict[str, torch.Tensor], type: str) -> torch.Tensor:
+    if type == "mixture":
+        locs, scales, weights = outputs["ffx_loc"], outputs["ffx_scale"], outputs["ffx_weight"]
+        loc = mixMean(locs, weights)
+        scale = mixVariance(locs, scales, weights, loc).sqrt()
+    else:
+        loc = discreteMean(outputs["ffx_probs"], ffx_grid)
+        scale = discreteVariance(outputs["ffx_probs"], loc, ffx_grid).sqrt()
     return torch.cat([y.unsqueeze(-1), loc.detach(), scale.detach()], dim=-1)
 
 
-def parseOutputs(outputs: torch.Tensor, type: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    assert type in ["parametric", "mixture"], "output type unknown"
-    if type == "parametric":
-        ffx_loc, ffx_scale = outputs[..., 0], outputs[..., 1].exp()
-        rfx_loc, rfx_scale = outputs[..., 2], outputs[..., 3].exp()
     elif type == "mixture":
         m = outputs.shape[-1] // 4
         ffx_loc, ffx_scale = outputs[..., :m],      outputs[..., m:2*m].exp()
