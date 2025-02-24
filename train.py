@@ -237,13 +237,23 @@ def mixVariance(locs: torch.Tensor,
 
 def mixMSE(locs: torch.Tensor,
            scales: torch.Tensor,
+           weights: torch.Tensor,
            target: torch.Tensor,
            type: str) -> torch.Tensor:
     # locs (b, n, d, m)
     # target (b, d)
-    loc = torch.mean(locs, dim=-1)
+    if type in ["rfx", "noise"]:
+        locs = scales
+    m = locs.shape[-1]
+    if m > 1:
+        loc = mixMean(locs, weights)
+    else:
+        loc = locs.squeeze(-1)
     target_expanded = target.unsqueeze(1).expand_as(loc)
-    return mse(loc, target_expanded)
+    if type in ["rfx", "noise"]:
+        return mse(loc.log(), target_expanded.log())
+    else:
+        return mse(loc, target_expanded)
 
 
 def mixLogProb(locs: torch.Tensor,
