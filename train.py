@@ -377,19 +377,24 @@ def locScaleWeights(outputs: torch.Tensor,
             f"{prefix}_weight": weights}
 
 
-def parseOutputs(outputs: torch.Tensor, posterior_type: str, c: int) -> Dict[str, torch.Tensor]:
+def parseOutputs(outputs: torch.Tensor,
+                 posterior_type: str,
+                 c: int,
+                 target_type: str) -> Dict[str, torch.Tensor]:
     b, n, d, _ = outputs.shape
     outputs = outputs.reshape(b, n, d, c, -1)
     if posterior_type == "discrete":
-        ffx_dict = {"ffx_probs": nn.functional.softmax(outputs[..., 0], dim=-1)}
+        ffx_dict = {"{target_type}_probs":
+                    nn.functional.softmax(outputs[..., 0], dim=-1)}
         if outputs.shape[-1] == 1:
             return ffx_dict
-        rfx_dict = {"rfx_probs": nn.functional.softmax(outputs[..., 1], dim=-1)}
+        rfx_dict = {"rfx_probs":
+                    nn.functional.softmax(outputs[..., 1], dim=-1)}
     elif posterior_type == "mixture":
-        ffx_dict = locScaleWeights(outputs[..., :3], "ffx_")
+        ffx_dict = locScaleWeights(outputs[..., :3], target_type)
         if outputs.shape[-1] == 3:
             return ffx_dict
-        rfx_dict = locScaleWeights(outputs[..., 3:], "rfx_")
+        rfx_dict = locScaleWeights(outputs[..., 3:], "rfx")
     else:
         raise ValueError(f'posterior type "{posterior_type}" not supported.')
     return {**ffx_dict, **rfx_dict}
@@ -436,8 +441,7 @@ def run(models: tuple,
 
     # compute noise parameter loss per batch
     noise_outputs = models[1](assembleNoiseInputs(y, output_dict, posterior_type))
-    noise_output_dict = parseOutputs(noise_outputs, posterior_type, c=cfg.c)
-    noise_output_dict = {f"noise_{k[4:]}": v for k, v in noise_output_dict.items()} # replace prefix
+    noise_output_dict = parseOutputs(noise_outputs, posterior_type, cfg.c, "noise")
     
     # compute noise loss
     noise_std = batch["sigma_error"].unsqueeze(-1).float()
