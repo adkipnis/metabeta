@@ -386,15 +386,15 @@ def run(models: tuple,
 
     # estimate ffx
     outputs = models[0](assembleInputs(y, X))
-    losses_ffx = lossWrapper(output_dict, ffx, ffx_depths, type="ffx")
     output_dict = parseOutputs(outputs, posterior_type, c=cfg.c)
+    losses_ffx = lossWrapper(output_dict, ffx, ffx_depths, "ffx")
 
     # optionally estimate rfx structure
     if cfg.fx_type == "mfx":
         rfx_depths = batch["q"]
         rfx = batch["rfx"].to(device)
         rfx_scale_true = batch["S_emp"].to(device).sqrt()
-        losses_rfx = lossWrapper(output_dict, rfx_scale_true, rfx_depths, type="rfx") 
+        losses_rfx = lossWrapper(output_dict, rfx_scale_true, rfx_depths, "rfx") 
         losses_joint = torch.cat([losses_ffx, losses_rfx], dim=1)
         targets = torch.cat([ffx, rfx[:,0]], dim=1)
         loss = maskLoss(losses_joint, targets)
@@ -408,7 +408,7 @@ def run(models: tuple,
     
     # compute noise loss
     noise_std = batch["sigma_error"].unsqueeze(-1).float()
-    losses_noise = lossWrapper(noise_output_dict, noise_std, ffx_depths, type="noise") # (batch, 1)
+    losses_noise = lossWrapper(noise_output_dict, noise_std, ffx_depths, "noise") # (batch, 1)
     loss_noise = losses_noise.mean()
 
     # optionally print some examples
