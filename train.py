@@ -435,7 +435,8 @@ def run(models: tuple,
         loss = maskLoss(losses_ffx, ffx)
 
     # compute noise parameter loss per batch
-    noise_outputs = models[1](assembleNoiseInputs(y, output_dict, posterior_type))
+    noise_inputs = assembleNoiseInputs(y, output_dict, posterior_type)
+    noise_outputs = models[1](noise_inputs)
     noise_output_dict = parseOutputs(noise_outputs, posterior_type, cfg.c, "noise")
     
     # compute noise loss
@@ -700,7 +701,8 @@ if __name__ == "__main__":
     pred_path = Path("predictions", modelID(cfg), timestamp)
     pred_path.mkdir(parents=True, exist_ok=True)
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Number of parameters: {num_params}, Loss: {cfg.loss_ffx}, Learning rate: {cfg.lr}, Epsilon: {cfg.eps}, Seed: {cfg.seed}, Device: {device}")
+    num_params_noise = sum(p.numel() for p in model_noise.parameters() if p.requires_grad)
+    print(f"Total number of parameters: {num_params + num_params_noise}, FFX Loss: {cfg.loss_ffx}, RFX Loss: {cfg.loss_rfx}, Noise Loss: {cfg.loss_noise}, Learning rate: {cfg.lr}, Epsilon: {cfg.eps}, Device: {device}")
     
     # -------------------------------------------------------------------------------------------------------------------------------------------------
     # training loop
