@@ -191,15 +191,15 @@ def discreteLogProb(dist: torch.Tensor,
 def discreteLossWrapper(outputs: Dict[str, torch.Tensor],
                     targets: torch.Tensor,
                     depths: torch.Tensor,
-                    type: str) -> torch.Tensor:
+                    target_type: str) -> torch.Tensor:
     # calculate losses for all dataset sizes and each beta
-    probs = outputs[f"{type}_probs"]
+    probs = outputs[f"{target_type}_probs"]
     b, n, d, _ = probs.shape
-    grid = rfx_grid
-    if type == "ffx":
-        grid = ffx_grid
+    grid = ffx_grid if target_type == "ffx" else rfx_grid
+    if target_type in ["ffx", "noise"]:
         targets = targets.unsqueeze(1).expand(b, n, d)
-    losses = discreteLogProb(probs, targets, grid)
+    loss_fn = chooseLossFn(target_type=target_type, posterior_type="discrete")
+    losses = loss_fn(probs, targets, grid)
     return averageOverN(losses, n, b, depths)
 
 
