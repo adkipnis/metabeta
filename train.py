@@ -400,11 +400,6 @@ def parseOutputs(outputs: torch.Tensor,
     return {**ffx_dict, **rfx_dict}
 
 
-def parseNoiseOutputs(outputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-    noise_loc, noise_scale = outputs[..., 0], outputs[..., 1].exp()
-    return noise_loc, noise_scale
-
-
 def run(models: tuple,
         batch: dict,
         posterior_type: str,
