@@ -371,13 +371,13 @@ def parseNoiseOutputs(outputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor
 
 def run(models: tuple,
         batch: dict,
-        model_type: str,
+        posterior_type: str,
         num_examples: int = 0,
         printer: Callable = print,
         ) -> Tuple[torch.Tensor, torch.Tensor]:
     ''' Run a batch through the model and return the loss. '''
     lossWrapper, examples = mixLossWrapper, mixExamples
-    if model_type == "discrete":
+    if posterior_type == "discrete":
         lossWrapper, examples = discreteLossWrapper, discreteExamples
 
     # unpack data
@@ -388,8 +388,8 @@ def run(models: tuple,
 
     # estimate ffx
     outputs = models[0](assembleInputs(y, X))
-    output_dict = parseOutputs(outputs, type=model_type, c=cfg.c)
     losses_ffx = lossWrapper(output_dict, ffx, ffx_depths, type="ffx")
+    output_dict = parseOutputs(outputs, posterior_type, c=cfg.c)
 
     # optionally estimate rfx structure
     if cfg.fx_type == "mfx":
@@ -404,8 +404,8 @@ def run(models: tuple,
         loss = maskLoss(losses_ffx, ffx)
 
     # compute noise parameter loss per batch
-    noise_outputs = models[1](assembleNoiseInputs(y, output_dict, type=model_type))
-    noise_output_dict = parseOutputs(noise_outputs, type=model_type, c=cfg.c)
+    noise_outputs = models[1](assembleNoiseInputs(y, output_dict, posterior_type))
+    noise_output_dict = parseOutputs(noise_outputs, posterior_type, c=cfg.c)
     noise_output_dict = {f"noise_{k[4:]}": v for k, v in noise_output_dict.items()} # replace prefix
     
     # compute noise loss
@@ -498,7 +498,7 @@ def train(models: Tuple[nn.Module, nn.Module],
     for batch in iterator:
         for optimizer in optimizers:
             optimizer.zero_grad()
-        loss, loss_noise = run(models, batch, cfg.model_type, printer=iterator.write)
+        loss, loss_noise = run(models, batch, cfg.posterior_type, printer=iterator.write)
         loss.backward()
         loss_noise.backward()
         for optimizer in optimizers:
@@ -530,7 +530,7 @@ def validate(models: Tuple[nn.Module, nn.Module],
     with torch.no_grad():
         for j, batch in enumerate(iterator):
             # preset validation loss
-            loss, loss_noise = run(models, batch, cfg.model_type, printer=iterator.write)
+            loss, loss_noise = run(models, batch, cfg.posterior_type, printer=iterator.write)
             iterator.set_postfix({"loss": loss.item()})
             if writer is not None:
                 writer.add_scalar("loss_val", loss.item(), step)
@@ -553,7 +553,7 @@ def validate(models: Tuple[nn.Module, nn.Module],
             
             # optionally print predictions
             if iteration % 5 == 0 and j % 15 == 0:
-                run(models, batch, cfg.model_type, printer=iterator.write, num_examples=1)
+                run(models, batch, cfg.posterior_type, printer=iterator.write, num_examples=1)
 
             step += 1
     return step
@@ -581,8 +581,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument("-b", "--batch-size", type=int, default=50, help="Batch size (default = 50)")
 
     # model and loss
-    parser.add_argument("--model_type", type=str, default="mixture", help="Posterior architecture [discrete, mixture] (default = mixture)")
     parser.add_argument("-c", type=int, default=8, help="Number of mixture components resp. grid bins (default = 8)")
+    parser.add_argument("--posterior_type", type=str, default="discrete", help="Posterior architecture [discrete, mixture] (default = mixture)")
     parser.add_argument("--loss_ffx", type=str, default="logprob", help="Loss function [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_rfx", type=str, default="logprob", help="Loss function for rfx [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_noise", type=str, default="logprob", help="Loss function for noise [mse, logprob] (default = logprob)")
@@ -620,7 +620,7 @@ if __name__ == "__main__":
                 dropout=cfg.dropout,
                 seed=cfg.seed,
                 fx_type=cfg.fx_type,
-                model_type=cfg.model_type,
+                posterior_type=cfg.posterior_type,
                 n_components=cfg.c).to(device)
     model_noise = TransformerDecoder(
                 n_predictors= 2 * (cfg.d+1),
@@ -630,13 +630,14 @@ if __name__ == "__main__":
                 n_layers=1,
                 dropout=cfg.dropout,
                 seed=cfg.seed,
-                model_type=f"{cfg.model_type}_noise",
+                posterior_type=f"{cfg.posterior_type}_noise",
                 n_components=cfg.c).to(device)
     models = (model, model_noise)
     print(f"Model: {cfg.c}-{cfg.model_type} Transformer with {cfg.hidden} hidden units, " + \
             f"{cfg.ff} feedforward units, {cfg.heads} heads, {cfg.layers} layer(s), " + \
             f"{cfg.dropout} dropout")
     if cfg.model_type == "discrete": 
+    if cfg.posterior_type == "discrete": 
         ffx_grid = torch.linspace(-10, 10, steps=cfg.c)
         rfx_grid = torch.linspace(0, 10, steps=cfg.c)
 

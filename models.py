@@ -24,7 +24,7 @@ class Base(nn.Module):
                  dropout: float,
                  seed: int,
                  fx_type: str,
-                 model_type: str,
+                 posterior_type: str,
                  n_components: int = 1) -> None:
         super(Base, self).__init__()
         self.n_predictors = n_predictors
@@ -33,23 +33,23 @@ class Base(nn.Module):
         self.dropout = dropout
         self.seed = seed
         self.fx_type = fx_type
-        self.model_type = model_type
+        self.posterior_type = posterior_type
         self.n_components = n_components # number of mixture components
         n_fx = 1 if fx_type == "ffx" else 2
-        if model_type == "parametric":
+        if posterior_type == "parametric":
             self.final_layers = parametricPosterior(hidden_size, n_predictors)
-        elif model_type == "discrete":
+        elif posterior_type == "discrete":
             self.final_layers = generalizedPosterior(hidden_size, n_predictors, n_fx * self.n_components) # (ffx, rfx) * (bin)
-        elif model_type == "mixture":
+        elif posterior_type == "mixture":
             self.final_layers = generalizedPosterior(hidden_size, n_predictors, 3 * n_fx * self.n_components) # (loc, scale, weight) * (ffx, rfx) * (mixture component)
-        elif model_type == "parametric_noise":
+        elif posterior_type == "parametric_noise":
             self.final_layers = getLinearLayers(hidden_size, 2, 1)
-        elif model_type == "discrete_noise":
+        elif posterior_type == "discrete_noise":
             self.final_layers = generalizedPosterior(hidden_size, 1, self.n_components)
-        elif model_type == "mixture_noise":
+        elif posterior_type == "mixture_noise":
             self.final_layers = generalizedPosterior(hidden_size, 1, 3 * self.n_components)
         else:
-            raise ValueError(f"model type: {model_type} not supported")
+            raise ValueError(f"model type: {posterior_type} not supported")
 
 
 
@@ -82,11 +82,11 @@ class TransformerDecoder(Base):
                  seed: int,
                  n_heads: int = 4,
                  fx_type: str = "ffx",
-                 model_type: str = "parametric",
+                 posterior_type: str = "mixture",
                  n_components: int = 1,
                  ) -> None:
 
-        super(TransformerDecoder, self).__init__(n_predictors, hidden_size, n_layers, dropout, seed, fx_type, model_type, n_components)
+        super(TransformerDecoder, self).__init__(n_predictors, hidden_size, n_layers, dropout, seed, fx_type, posterior_type, n_components)
         self.embed = nn.Linear(n_predictors+1, hidden_size)
         decoder_layer = TransformerDecoderLayer(d_model=hidden_size,
                                                 dim_feedforward=ff_size,
