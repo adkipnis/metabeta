@@ -280,12 +280,12 @@ def mixLogProb(locs: torch.Tensor,
     return -proposal.log_prob(target)
 
 
-def chooseLossFn(output_type: str):
-    loss_type = eval(f'cfg.loss_{output_type}')
+def chooseLossFn(target_type: str, posterior_type: str):
+    loss_type = eval(f"cfg.loss_{target_type}")
     if loss_type == "mse":
-        return mixMSE
+        return eval(f"{posterior_type}MSE")
     elif loss_type == "logprob":
-        return mixLogProb
+        return eval(f"{posterior_type}LogProb")
     else:
         raise ValueError(f'loss type: "{loss_type}" not found.')
  
