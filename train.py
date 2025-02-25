@@ -449,21 +449,21 @@ def run(models: tuple,
     return loss, loss_noise
 
 
-# def savePredictions(models: Tuple[nn.Module, nn.Module], batch: dict, iteration_index: int, batch_index: int) -> None:
-#     ''' save model outputs '''
-#     X = batch["X"].to(device)
-#     y = batch["y"].to(device)
-#     outputs = models[0](assembleInputs(y, X))
-#     ffx_loc, ffx_scale, rfx_params = parseOutputs(outputs, type="parametric")
-#     noise_params = models[1](assembleNoiseInputs(y, ffx_loc, ffx_scale)).exp().squeeze(-1)
-#     fname = Path(pred_path, f"predictions_i={iteration_index}_b={batch_index}.pt")
-#     out = {
-#         "mu_beta": ffx_loc,
-#         "stds_beta": ffx_scale,
-#         "rfx_params": rfx_params,
-#         "noise_params": noise_params,
-#     }
-#     torch.save(out, fname)
+def savePredictions(models: Tuple[nn.Module, nn.Module],
+                    batch: dict,
+                    posterior_type: str, 
+                    iteration_index: int,
+                    batch_index: int) -> None:
+    y = batch["y"].to(device)
+    X = batch["X"].to(device)
+    outputs = models[0](assembleInputs(y, X))
+    output_dict = parseOutputs(outputs, posterior_type, cfg.c, "ffx")
+    noise_inputs = assembleNoiseInputs(y, output_dict, posterior_type)
+    noise_outputs = models[1](noise_inputs)
+    noise_output_dict = parseOutputs(noise_outputs, posterior_type, cfg.c, "noise")
+    fname = Path(pred_path, f"predictions_i={iteration_index}_b={batch_index}.pt")
+    out = {**output_dict, **noise_output_dict}
+    torch.save(out, fname)
 
 
 # -------- Kullback-Leibler Divergence
