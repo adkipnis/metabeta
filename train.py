@@ -582,12 +582,12 @@ def validate(models: Tuple[nn.Module, nn.Module],
             #     if writer is not None:
             #         writer.add_scalar("loss_kl", loss_kl.item(), step)
             #     if logger is not None:
-            #         logger.write(iteration, step, loss_kl.item(), "loss_kl")
-            #
+            #         logger.write(iteration, step, loss_kl.item(), "loss_kl 
+
             # optionally save predictions
-            # if iteration % 5 == 0 and not cfg.proto:
-            #     savePredictions(models, batch, iteration, j)
-            
+            if iteration % 5 == 0 and not cfg.proto:
+                savePredictions(models, batch, cfg.posterior_type, iteration, j)
+
             # optionally print predictions
             if iteration % 5 == 0 and j % 15 == 0:
                 run(models, batch, cfg.posterior_type,
