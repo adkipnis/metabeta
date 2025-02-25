@@ -631,10 +631,7 @@ if __name__ == "__main__":
                 posterior_type=f"{cfg.posterior_type}_noise",
                 n_components=cfg.c).to(device)
     models = (model, model_noise)
-    print(f"Model: {cfg.c}-{cfg.model_type} Transformer with {cfg.hidden} hidden units, " + \
-            f"{cfg.ff} feedforward units, {cfg.heads} heads, {cfg.layers} layer(s), " + \
-            f"{cfg.dropout} dropout")
-    if cfg.model_type == "discrete": 
+    print(f"Model: {modelID(cfg)}")
     if cfg.posterior_type == "discrete": 
         ffx_grid = torch.linspace(-10, 10, steps=cfg.c)
         rfx_grid = torch.linspace(0, 10, steps=cfg.c)
