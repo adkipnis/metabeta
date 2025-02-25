@@ -293,14 +293,14 @@ def chooseLossFn(target_type: str, posterior_type: str):
 def mixLossWrapper(outputs: Dict[str, torch.Tensor], 
                    target: torch.Tensor,
                    depths: torch.Tensor,
-                   type: str) -> torch.Tensor:
+                   target_type: str) -> torch.Tensor:
     # calculate losses for all dataset sizes and each beta
-    locs = outputs[f"{type}_loc"]
-    scales = outputs[f"{type}_scale"]
-    weights = outputs[f"{type}_weight"]
+    locs = outputs[f"{target_type}_loc"]
+    scales = outputs[f"{target_type}_scale"]
+    weights = outputs[f"{target_type}_weight"]
     b, n, _, _ = locs.shape
-    loss_fn = chooseLossFn(type)
-    losses = loss_fn(locs, scales, weights, target, type) # (b, n, d)
+    loss_fn = chooseLossFn(target_type=target_type, posterior_type="mix")
+    losses = loss_fn(locs, scales, weights, target, target_type) # (b, n, d)
     return averageOverN(losses, n, b, depths)
 
 
