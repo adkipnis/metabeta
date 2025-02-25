@@ -417,12 +417,12 @@ def run(models: tuple,
     X = batch["X"].to(device)
     ffx = batch["beta"].to(device)
 
-    # estimate ffx
+    # estimate parameters and compute ffx loss
     outputs = models[0](assembleInputs(y, X))
     output_dict = parseOutputs(outputs, posterior_type, cfg.c, "ffx")
     losses_ffx = lossWrapper(output_dict, ffx, ffx_depths, "ffx")
 
-    # optionally estimate rfx structure
+    # optionally compute rfx loss
     if cfg.fx_type == "mfx":
         rfx_depths = batch["q"]
         rfx = batch["rfx"].to(device)
