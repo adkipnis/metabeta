@@ -575,12 +575,12 @@ def setup() -> argparse.Namespace:
     parser.add_argument("-d", type=int, default=8, help="Number of predictors (without bias, default = 8)")
     parser.add_argument("-n", type=int, default=50, help="Maximum number of samples to draw per linear model (default = 50).")
     parser.add_argument("-f", "--fixed", type=float, default=0., help="Fixed noise variance (default = 0. -> not fixed)")
-    parser.add_argument("-i", "--iterations", type=int, default=100, help="Number of iterations to train (default = 100)")
+    parser.add_argument("-i", "--iterations", type=int, default=10, help="Number of iterations to train (default = 10)")
     parser.add_argument("-b", "--batch-size", type=int, default=50, help="Batch size (default = 50)")
 
     # model and loss
-    parser.add_argument("-c", type=int, default=8, help="Number of mixture components resp. grid bins (default = 8)")
     parser.add_argument("--posterior_type", type=str, default="discrete", help="Posterior architecture [discrete, mixture] (default = mixture)")
+    parser.add_argument("-c", type=int, default=64, help="Number of mixture components resp. grid bins (default = 8)")
     parser.add_argument("--loss_ffx", type=str, default="logprob", help="Loss function [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_rfx", type=str, default="logprob", help="Loss function for rfx [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_noise", type=str, default="logprob", help="Loss function for noise [mse, logprob] (default = logprob)")
