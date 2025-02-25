@@ -344,24 +344,22 @@ def locScaleWeights(outputs: torch.Tensor, prefix: str) -> Dict[str, torch.Tenso
     return {f"{prefix}loc": loc, f"{prefix}scale": scale, f"{prefix}weight": weights}
 
 
-def parseOutputs(outputs: torch.Tensor, type: str, c: int) -> Dict[str, torch.Tensor]:
-    if type == "discrete":
-        b, n, d, _ = outputs.shape
-        outputs = outputs.reshape(b, n, d, -1, 2)
-        ffx_probs = nn.functional.softmax(outputs[..., 0], dim=-1)
-        rfx_probs = nn.functional.softmax(outputs[..., 1], dim=-1)
-        return {"ffx_probs": ffx_probs, "rfx_probs": rfx_probs}
-    elif type == "mixture":
-        b, n, d, _ = outputs.shape
-        outputs = outputs.reshape(b, n, d, c, -1)
+def parseOutputs(outputs: torch.Tensor, posterior_type: str, c: int) -> Dict[str, torch.Tensor]:
+    b, n, d, _ = outputs.shape
+    outputs = outputs.reshape(b, n, d, c, -1)
+    if posterior_type == "discrete":
+        ffx_dict = {"ffx_probs": nn.functional.softmax(outputs[..., 0], dim=-1)}
+        if outputs.shape[-1] == 1:
+            return ffx_dict
+        rfx_dict = {"rfx_probs": nn.functional.softmax(outputs[..., 1], dim=-1)}
+    elif posterior_type == "mixture":
         ffx_dict = locScaleWeights(outputs[..., :3], "ffx_")
         if outputs.shape[-1] == 3:
             return ffx_dict
-        else:
-            rfx_dict = locScaleWeights(outputs[..., 3:], "rfx_")
-            return {**ffx_dict, **rfx_dict}
+        rfx_dict = locScaleWeights(outputs[..., 3:], "rfx_")
     else:
-        raise ValueError(f'output type "{type}" not supported.')
+        raise ValueError(f'posterior type "{posterior_type}" not supported.')
+    return {**ffx_dict, **rfx_dict}
 
 
 def parseNoiseOutputs(outputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
