@@ -34,7 +34,10 @@ class Logger:
                 writer = csv.writer(csvfile)
                 writer.writerow(['iteration', 'step', 'loss'])
 
-    def write(self, iteration: int, step: int, loss: float, losstype: str) -> None:
+    def write(self, iteration: int,
+              step: int,
+              loss: float,
+              losstype: str) -> None:
         fname = Path(self.trunk, f"{losstype}.csv")
         with open(fname, 'a', newline='') as csvfile:
             writer = csv.writer(csvfile)
@@ -54,7 +57,8 @@ def getConsoleWidth() -> int:
 
 
 def getDataLoader(filename: Path, batch_size: int) -> DataLoader:
-    ''' Load a dataset from a file, split into train and validation set and return a DataLoader. '''
+    ''' Load a dataset from a file,
+    split into train and validation set and return a DataLoader. '''
     assert filename.exists(), f"File {filename} does not exist, you must generate it first using generate.py"
     ds_raw = torch.load(filename, weights_only=False)
     ds = LMDataset(**ds_raw, permute=False)
@@ -65,7 +69,7 @@ def modelID(cfg: argparse.Namespace) -> str:
     ''' Return a string that identifies the model. '''
     noise = "variable" if cfg.fixed == 0 else cfg.fixed
     return f"{cfg.posterior_type}-{cfg.c}-transformer-{cfg.hidden}-{cfg.ff}-{cfg.heads}-{cfg.layers}-dropout={cfg.dropout}-loss={cfg.loss_ffx}-seed={cfg.seed}-fx={cfg.fx_type}-noise={noise}"
-
+    
 
 def getCheckpointPath(iteration: int) -> Path:
     ''' Get the filename for the model checkpoints. '''
@@ -75,7 +79,8 @@ def getCheckpointPath(iteration: int) -> Path:
 
 
 def save(models: Tuple[nn.Module, nn.Module],
-         optimizers: Tuple[schedulefree.AdamWScheduleFree, schedulefree.AdamWScheduleFree],
+         optimizers: Tuple[schedulefree.AdamWScheduleFree,
+                           schedulefree.AdamWScheduleFree],
          current_iteration: int,
          current_global_step: int,
          current_validation_step: int,
@@ -96,7 +101,8 @@ def save(models: Tuple[nn.Module, nn.Module],
 
 
 def load(models: Tuple[nn.Module, nn.Module],
-         optimizers: Tuple[schedulefree.AdamWScheduleFree, schedulefree.AdamWScheduleFree],
+         optimizers: Tuple[schedulefree.AdamWScheduleFree,
+                           schedulefree.AdamWScheduleFree],
          initial_iteration: int) -> Tuple[int, int, int, str]:
     """ Load the model and optimizer state from a previous run,
     returning the initial iteration and seed. """
@@ -115,8 +121,24 @@ def load(models: Tuple[nn.Module, nn.Module],
 
 
 # -------- loss helpers
-def averageOverN(losses: torch.Tensor, n: int, b: int, depths: torch.Tensor, n_min: int = 0, weigh: bool = False) -> torch.Tensor:
-    ''' mask out first n_min losses per batch, then calculate weighted average over n with higher emphasis on later n'''
+def chooseLossFn(target_type: str, posterior_type: str):
+    loss_type = eval(f"cfg.loss_{target_type}")
+    if loss_type == "mse":
+        return eval(f"{posterior_type}MSE")
+    elif loss_type == "logprob":
+        return eval(f"{posterior_type}LogProb")
+    else:
+        raise ValueError(f'loss type: "{loss_type}" not found.')
+
+
+def averageOverN(losses: torch.Tensor,
+                 n: int,
+                 b: int,
+                 depths: torch.Tensor,
+                 n_min: int = 0,
+                 weigh: bool = False) -> torch.Tensor:
+    ''' mask out first n_min losses per batch,
+    then calculate weighted average over n with higher emphasis on later n'''
     # losses (b, n, d)
     if cfg.tol == 0:
         return losses.mean(dim=1)
@@ -136,7 +158,8 @@ def averageOverN(losses: torch.Tensor, n: int, b: int, depths: torch.Tensor, n_m
 def maskLoss(losses: torch.Tensor,
              targets: torch.Tensor,
              pad_val: float = 0.) -> torch.Tensor:
-    ''' Ignore padding values before aggregating the losses over batches and dims'''
+    ''' Ignore padding values before aggregating the losses
+        over batches and dims'''
     # losses (batch, d)
     mask = (targets != pad_val).float()
     masked_losses = losses * mask
@@ -144,13 +167,14 @@ def maskLoss(losses: torch.Tensor,
     return loss # (,)
 
 
-# -------- discrete methods (for discrete posterior)
+# -------- methods for discrete posterior
 def discreteMode(dist: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
     # dist (b, n, 128, d)
+    # return: mode (b, n, d)
     b, n, d, _ = dist.shape
-    grid_expanded = grid.unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(b, n, d, -1)
-    index = dist.argmax(dim=-1) # (b, n, d)
-    return torch.gather(grid_expanded, dim=-1, index=index.unsqueeze(-1)).squeeze(-1) # (b, n, d)
+    grid_expanded = grid.unsqueeze((0,0,0)).expand(b, n, d, -1)
+    index = dist.argmax(dim=-1).unsqueeze(-1) # (b, n, d, 1)
+    return torch.gather(grid_expanded, dim=-1, index=index).squeeze(-1) 
 
 
 def discreteMean(dist: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
@@ -183,8 +207,9 @@ def discreteLogProb(dist: torch.Tensor,
     # targets (b, n, d) or 
     # grid (n_bins)
     grid_expanded = grid.view(1, 1, 1, -1)
-    index = (grid_expanded - targets.unsqueeze(-1)).abs().argmin(dim=-1).squeeze(0) # (b, n, d)
-    probs = torch.gather(dist, dim=-1, index=index.unsqueeze(-1)).squeeze(-1) # (b, n, d)
+    index = (grid_expanded - targets.unsqueeze(-1)).abs().argmin(dim=-1) 
+    index = index.squeeze(0).unsqueeze(-1) # (b, n, d, 1)
+    probs = torch.gather(dist, dim=-1, index=index).squeeze(-1) # (b, n, d)
     return -probs.log()
 
 
@@ -203,7 +228,10 @@ def discreteLossWrapper(outputs: Dict[str, torch.Tensor],
     return averageOverN(losses, n, b, depths)
 
 
-def discreteExamples(num_examples: int, ffx: torch.Tensor, outputs: Dict[str, torch.Tensor], printer: Callable) -> None:
+def discreteExamples(num_examples: int,
+                     ffx: torch.Tensor,
+                     outputs: Dict[str, torch.Tensor],
+                     printer: Callable) -> None:
     for i in range(num_examples):
         mask = (ffx[i] != 0.)
         beta_i = ffx[i, mask].detach().numpy()        
@@ -221,7 +249,7 @@ def discreteExamples(num_examples: int, ffx: torch.Tensor, outputs: Dict[str, to
         printer(f"{console_width * '-'}\n")
 
 
-# -------- mixture methods
+# -------- methods for mixture posterior
 def mixMean(locs: torch.Tensor,
             weights: torch.Tensor) -> torch.Tensor:
     return (locs * weights).sum(dim=-1)
@@ -269,7 +297,7 @@ def mixLogProb(locs: torch.Tensor,
     if type in ["ffx", "noise"]:
         target = target.unsqueeze(1).expand((b, n, d))
     if type in ["rfx", "noise"]:
-        target = target + (target == 0.).float() # set entries with std = 0 to 1
+        target = target + (target == 0.).float() # set entries with sd=0 to 1
         base = D.LogNormal
     if m > 1:
         mix = D.Categorical(weights)
@@ -279,16 +307,6 @@ def mixLogProb(locs: torch.Tensor,
         proposal = base(locs.squeeze(-1), scales.squeeze(-1))
     return -proposal.log_prob(target)
 
-
-def chooseLossFn(target_type: str, posterior_type: str):
-    loss_type = eval(f"cfg.loss_{target_type}")
-    if loss_type == "mse":
-        return eval(f"{posterior_type}MSE")
-    elif loss_type == "logprob":
-        return eval(f"{posterior_type}LogProb")
-    else:
-        raise ValueError(f'loss type: "{loss_type}" not found.')
- 
 
 def mixLossWrapper(outputs: Dict[str, torch.Tensor], 
                    target: torch.Tensor,
@@ -304,11 +322,17 @@ def mixLossWrapper(outputs: Dict[str, torch.Tensor],
     return averageOverN(losses, n, b, depths)
 
 
-def mixExamples(num_examples: int, ffx: torch.Tensor, outputs: Dict[str, torch.Tensor], printer: Callable) -> None:
+def mixExamples(num_examples: int,
+                ffx: torch.Tensor,
+                outputs: Dict[str, torch.Tensor],
+                printer: Callable) -> None:
     if num_examples == 0:
         return
     means = mixMean(outputs["ffx_loc"], outputs["ffx_weight"])
-    stds = mixVariance(outputs["ffx_loc"], outputs["ffx_scale"], outputs["ffx_weight"], means).sqrt()
+    stds = mixVariance(outputs["ffx_loc"],
+                       outputs["ffx_scale"],
+                       outputs["ffx_weight"],
+                       means).sqrt()
     for i in range(num_examples):
          mask = (ffx[i] != 0.)
          beta_i = ffx[i, mask].detach().numpy()
@@ -326,22 +350,31 @@ def assembleInputs(y: torch.Tensor,  X: torch.Tensor) -> torch.Tensor:
     return torch.cat([y.unsqueeze(-1), X], dim=-1)
 
 
-def assembleNoiseInputs(y: torch.Tensor, outputs: Dict[str, torch.Tensor], type: str) -> torch.Tensor:
-    if type == "mixture":
-        locs, scales, weights = outputs["ffx_loc"], outputs["ffx_scale"], outputs["ffx_weight"]
+def assembleNoiseInputs(y: torch.Tensor,
+                        outputs: Dict[str, torch.Tensor],
+                        posterior_type: str) -> torch.Tensor:
+    if posterior_type == "discrete":
+        loc = discreteMean(outputs["ffx_probs"], ffx_grid)
+        scale = discreteVariance(outputs["ffx_probs"], loc, ffx_grid).sqrt()
+    elif posterior_type == "mixture":
+        locs = outputs["ffx_loc"] 
+        scales = outputs["ffx_scale"]
+        weights = outputs["ffx_weight"]
         loc = mixMean(locs, weights)
         scale = mixVariance(locs, scales, weights, loc).sqrt()
     else:
-        loc = discreteMean(outputs["ffx_probs"], ffx_grid)
-        scale = discreteVariance(outputs["ffx_probs"], loc, ffx_grid).sqrt()
+        raise ValueError(f"posterior type {posterior_type} not supported.")
     return torch.cat([y.unsqueeze(-1), loc.detach(), scale.detach()], dim=-1)
 
 
-def locScaleWeights(outputs: torch.Tensor, prefix: str) -> Dict[str, torch.Tensor]:
+def locScaleWeights(outputs: torch.Tensor,
+                    prefix: str) -> Dict[str, torch.Tensor]:
     loc = outputs[..., 0]
     scale = outputs[..., 1].exp()
     weights = nn.functional.softmax(outputs[..., 2], dim=-1)
-    return {f"{prefix}loc": loc, f"{prefix}scale": scale, f"{prefix}weight": weights}
+    return {f"{prefix}_loc": loc,
+            f"{prefix}_scale": scale,
+            f"{prefix}_weight": weights}
 
 
 def parseOutputs(outputs: torch.Tensor, posterior_type: str, c: int) -> Dict[str, torch.Tensor]:
@@ -386,7 +419,7 @@ def run(models: tuple,
 
     # estimate ffx
     outputs = models[0](assembleInputs(y, X))
-    output_dict = parseOutputs(outputs, posterior_type, c=cfg.c)
+    output_dict = parseOutputs(outputs, posterior_type, cfg.c, "ffx")
     losses_ffx = lossWrapper(output_dict, ffx, ffx_depths, "ffx")
 
     # optionally estimate rfx structure
@@ -408,7 +441,7 @@ def run(models: tuple,
     
     # compute noise loss
     noise_std = batch["sigma_error"].unsqueeze(-1).float()
-    losses_noise = lossWrapper(noise_output_dict, noise_std, ffx_depths, "noise") # (batch, 1)
+    losses_noise = lossWrapper(noise_output_dict, noise_std, ffx_depths, "noise")
     loss_noise = losses_noise.mean()
 
     # optionally print some examples
@@ -481,7 +514,8 @@ def run(models: tuple,
 
 # -------- outer loops
 def train(models: Tuple[nn.Module, nn.Module],
-          optimizers: Tuple[schedulefree.AdamWScheduleFree, schedulefree.AdamWScheduleFree],
+          optimizers: Tuple[schedulefree.AdamWScheduleFree,
+                            schedulefree.AdamWScheduleFree],
           dataloader: DataLoader,
           writer: Union[SummaryWriter, None],
           logger: Union[Logger, None],
@@ -492,11 +526,13 @@ def train(models: Tuple[nn.Module, nn.Module],
         model.train()
     for optimizer in optimizers:
         optimizer.train()
-    iterator = tqdm(dataloader, desc=f"iteration {iteration:02d}/{cfg.iterations:02d} [T]")
+    iterator = tqdm(dataloader,
+                    desc=f"iteration {iteration:02d}/{cfg.iterations:02d} [T]")
     for batch in iterator:
         for optimizer in optimizers:
             optimizer.zero_grad()
-        loss, loss_noise = run(models, batch, cfg.posterior_type, printer=iterator.write)
+        loss, loss_noise = run(models, batch, cfg.posterior_type,
+                               printer=iterator.write)
         loss.backward()
         loss_noise.backward()
         for optimizer in optimizers:
@@ -513,7 +549,8 @@ def train(models: Tuple[nn.Module, nn.Module],
 
 
 def validate(models: Tuple[nn.Module, nn.Module],
-             optimizers: Tuple[schedulefree.AdamWScheduleFree, schedulefree.AdamWScheduleFree],
+             optimizers: Tuple[schedulefree.AdamWScheduleFree,
+                               schedulefree.AdamWScheduleFree],
              dataloader: DataLoader,
              writer: Union[SummaryWriter, None],
              logger: Union[Logger, None],
@@ -524,11 +561,13 @@ def validate(models: Tuple[nn.Module, nn.Module],
         model.eval()
     for optimizer in optimizers:
         optimizer.eval()
-    iterator = tqdm(dataloader, desc=f"iteration {iteration:02d}/{cfg.iterations:02d} [V]")
+    iterator = tqdm(dataloader,
+                    desc=f"iteration {iteration:02d}/{cfg.iterations:02d} [V]")
     with torch.no_grad():
         for j, batch in enumerate(iterator):
             # preset validation loss
-            loss, loss_noise = run(models, batch, cfg.posterior_type, printer=iterator.write)
+            loss, loss_noise = run(models, batch, cfg.posterior_type,
+                                   printer=iterator.write)
             iterator.set_postfix({"loss": loss.item()})
             if writer is not None:
                 writer.add_scalar("loss_val", loss.item(), step)
@@ -551,7 +590,8 @@ def validate(models: Tuple[nn.Module, nn.Module],
             
             # optionally print predictions
             if iteration % 5 == 0 and j % 15 == 0:
-                run(models, batch, cfg.posterior_type, printer=iterator.write, num_examples=1)
+                run(models, batch, cfg.posterior_type,
+                    printer=iterator.write, num_examples=1)
 
             step += 1
     return step
@@ -564,14 +604,14 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     # misc
-    parser.add_argument("-s", "--seed", type=int, default=0, help="Model seed")
+    parser.add_argument("-s", "--seed", type=int, default=0,help="Model seed")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use [cuda, cpu]")
     parser.add_argument("-p", "--preload", type=int, default=0, help="Preload model from iteration #p")
     parser.add_argument("--model-folder", type=str, default="checkpoints", help="Model folder")
     parser.add_argument("--proto", action="store_true", help="prototyping: don't log anything during (default = False)")
 
     # data
-    parser.add_argument("-t", "--fx_type", type=str, default="mfx", help="Type of dataset [ffx, mfx] (default = mfx)")
+    parser.add_argument("-t", "--fx_type", type=str, default="ffx", help="Type of dataset [ffx, mfx] (default = mfx)")
     parser.add_argument("-d", type=int, default=8, help="Number of predictors (without bias, default = 8)")
     parser.add_argument("-n", type=int, default=50, help="Maximum number of samples to draw per linear model (default = 50).")
     parser.add_argument("-f", "--fixed", type=float, default=0., help="Fixed noise variance (default = 0. -> not fixed)")
@@ -579,8 +619,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument("-b", "--batch-size", type=int, default=50, help="Batch size (default = 50)")
 
     # model and loss
-    parser.add_argument("--posterior_type", type=str, default="discrete", help="Posterior architecture [discrete, mixture] (default = mixture)")
-    parser.add_argument("-c", type=int, default=64, help="Number of mixture components resp. grid bins (default = 8)")
+    parser.add_argument("--posterior_type", type=str, default="mixture", help="Posterior architecture [discrete, mixture] (default = mixture)")
+    parser.add_argument("-c", type=int, default=1, help="Number of mixture components resp. grid bins (default = 8)")
     parser.add_argument("--loss_ffx", type=str, default="logprob", help="Loss function [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_rfx", type=str, default="logprob", help="Loss function for rfx [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_noise", type=str, default="logprob", help="Loss function for noise [mse, logprob] (default = logprob)")
@@ -606,7 +646,9 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = True
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     console_width = getConsoleWidth()
-    device = torch.device("cuda" if torch.cuda.is_available() and cfg.device == "cuda" else "cpu")
+    device = torch.device("cuda"
+                          if torch.cuda.is_available() and cfg.device == "cuda"
+                          else "cpu")
 
     # --- set up models
     model = TransformerDecoder(
@@ -637,14 +679,17 @@ if __name__ == "__main__":
         rfx_grid = torch.linspace(0, 10, steps=cfg.c)
 
     # --- set up optimizers
-    optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr, eps=cfg.eps)
-    optimizer_noise = schedulefree.AdamWScheduleFree(model_noise.parameters(), lr=cfg.lr, eps=cfg.eps)
+    optimizer = schedulefree.AdamWScheduleFree(model.parameters(),
+                                               lr=cfg.lr, eps=cfg.eps)
+    optimizer_noise = schedulefree.AdamWScheduleFree(model_noise.parameters(),
+                                                     lr=cfg.lr, eps=cfg.eps)
     optimizers = (optimizer, optimizer_noise)
 
     # --- optionally preload a model
     initial_iteration, global_step, validation_step = 1, 1, 1
     if cfg.preload:
-        initial_iteration, global_step, validation_step, timestamp = load(models, optimizers, cfg.preload)
+        initial_iteration, global_step, validation_step, timestamp = \
+            load(models, optimizers, cfg.preload)
         print(f"Preloaded model from iteration {cfg.preload}, starting at iteration {initial_iteration}.")
 
     # --- logging
@@ -667,8 +712,10 @@ if __name__ == "__main__":
     for iteration in range(initial_iteration, cfg.iterations + 1):
         fname = dsFilename(cfg.fx_type, cfg.d, cfg.n, cfg.fixed, int(1e4), iteration)
         dataloader_train = getDataLoader(fname, cfg.batch_size)
-        global_step = train(models, optimizers, dataloader_train, writer, logger, iteration, global_step)
-        validation_step = validate(models, optimizers, dataloader_val, writer, logger, iteration, validation_step)
+        global_step = train(models, optimizers, dataloader_train, writer,
+                            logger, iteration, global_step)
+        validation_step = validate(models, optimizers, dataloader_val, writer,
+                                   logger, iteration, validation_step)
         save(models, optimizers, iteration, global_step, validation_step, timestamp)
  
 
