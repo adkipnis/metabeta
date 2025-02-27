@@ -7,14 +7,14 @@ from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 from dataset import LMDataset
 from utils import dsFilenameVal
-from train import mixMean, mixVariance
-from torch import distributions as D
+from train import mixMean, mixVariance, mixLogProb
+from torch import Value, distributions as D
+
+cmap = colors.LinearSegmentedColormap.from_list("custom_blues", ["#add8e6", "#000080"])
 
 # -----------------------------------------------------------------------------------------
 # basic plots
 
-# Create a color map from light blue to dark blue
-cmap = colors.LinearSegmentedColormap.from_list("custom_blues", ["#add8e6", "#000080"])
 
 # plot training loss
 def plotTrain(date: str, model_id: str):
