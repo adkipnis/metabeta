@@ -322,6 +322,58 @@ def noiseWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[flo
     
 
 
+# def plotParamsWrapper(data: dict, batch_id: int, iteration: int, paramtype = "beta"):
+#
+#     # plot ffx posterior
+#     if paramtype == "ffx":
+#
+#         # proposed posterior
+#         targets = data["targets"]
+#         means_p = data["means_p"]
+#         stds_p = data["stds_p"]
+#         df_p, betas = mvnDataFrame(targets, means_p, stds_p, batch_id)
+#
+#         # analytical posterior
+#         if "means_a" in data:
+#             fig, axs = plt.subplots(2, sharex=True, figsize=(8, 6))
+#             means_a = data["means_a"]
+#             stds_a = data["stds_a"]
+#             df_a, _ = mvnDataFrame(targets, means_a, stds_a, batch_id)
+#             plotMvnParams(df_a, betas, "analytical", axs[0])
+#             plotMvnParams(df_p, betas, "proposed", axs[1])
+#         else:
+#             fig, ax = plt.subplots(figsize=(8, 6))
+#             plotMvnParams(df_p, betas, "proposed", ax)
+#         fig.suptitle(f'iter={iteration}')
+#
+#
+#     # plot rfx posterior
+#     if paramtype == "rfx":
+#         targets = data["s"]
+#         stds_prop = data["s_p"]
+#         stds_emp = data["s_emp"]
+#         df_s, s = sDataFrame(targets, stds_prop, stds_emp, batch_id)
+#         fig, ax = plt.subplots(figsize=(8, 6))
+#         plotRfxParams(df_s, s, ax)
+#
+#     # plot noise posterior
+#     if paramtype == "noise":
+#         abs_a = data["abs_a"]
+#         abs_p = data["abs_p"]
+#         df_ig_a = igDataFrame(abs_a, batch_id)
+#         df_ig_p = igDataFrame(abs_p, batch_id)
+#         fig, ax = plt.subplots(figsize=(8, 6))
+#         plotIGParams(df_ig_a, df_ig_p, ax)
+#
+#     # # plot noise std
+#     # if paramtype == "sigma":
+#     #     abs_p = data["abs_p"]
+#     #     sigma_errors = data["sigma_errors"]
+#     #     df_noise = noiseDataFrame(abs_p, batch_id)
+#     #     fig, ax = plt.subplots(figsize=(8, 6))
+#     #     plotNoise(df_noise, sigma_errors[batch_id], ax)
+#
+#
 # plot validation loss
 def plotVal2(df, iteration, source, focus: int = -1):
     unique_d = df['d'].unique().shape[0]
