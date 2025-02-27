@@ -291,6 +291,37 @@ def findQuantiles(base_dist: Callable,
     return torch.stack(values, dim=-1)
   
 
+def plotWrapper(data: dict, prefix: str, batch_id: int, iteration: int,
+                base_dist: Callable,
+                quantiles: Tuple[float, float, float],
+                ylims: Tuple[float, float]):
+    # prepare data
+    mask = (data[f'{prefix}_target'][batch_id] != 0)
+    target = data[f'{prefix}_target'][batch_id, mask]
+    loc = data[f'{prefix}_loc'][batch_id, :, mask]
+    scale = data[f'{prefix}_scale'][batch_id, :, mask]
+    weight = data[f'{prefix}_weight'][batch_id, :, mask]
+    
+    # find mean, (numerical) quantiles and construct df
+    mean = mixMean(loc, weight)
+    quantile_roots = findQuantiles(base_dist, quantiles, loc, scale, weight)
+    df = multivariateDataFrame(mean, quantile_roots)
+    
+    # plot
+    fig, ax = plt.subplots(figsize=(8, 6))
+    plotMultivariateParams(df, target, quantiles, ylims, 'proposed', ax)
+    fig.suptitle(f'{prefix} (iter={iteration})')
+    
+    
+def ffxWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return plotWrapper(data, 'ffx', batch_id, iteration, D.Normal, quantiles, (-6., 6.))
+
+
+def noiseWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return plotWrapper(data, 'noise', batch_id, iteration, D.LogNormal, quantiles, (0., 3.))
+    
+
+
 # plot validation loss
 def plotVal2(df, iteration, source, focus: int = -1):
     unique_d = df['d'].unique().shape[0]
