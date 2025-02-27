@@ -273,6 +273,24 @@ def mixtureCDF(x, loc, scale, weight, base_dist) -> torch.Tensor:
     return torch.sum(weight.unsqueeze(-2) * cdfs, dim=-1)
 
 
+def findQuantiles(base_dist: Callable,
+                  quantiles: Tuple[float, float, float],
+                  loc: torch.Tensor, scale: torch.Tensor, weight: torch.Tensor,
+                  num_points=1000) -> torch.Tensor:
+    n, d, _ = loc.shape
+    if base_dist == D.Normal:
+        x_range = torch.linspace(-10, 10, num_points)
+    else:
+        x_range = torch.linspace(0, 3, num_points)
+    x_range = x_range.view(1, 1, -1).expand(n, d, num_points)
+    cdf = mixtureCDF(x_range, loc, scale, weight, base_dist)
+    values = []
+    for q in quantiles:
+        indices = torch.argmin(torch.abs(cdf-q), dim=-1).unsqueeze(-1)
+        values += [x_range.gather(dim=-1, index=indices).squeeze(-1)]
+    return torch.stack(values, dim=-1)
+  
+
 # plot validation loss
 def plotVal2(df, iteration, source, focus: int = -1):
     unique_d = df['d'].unique().shape[0]
