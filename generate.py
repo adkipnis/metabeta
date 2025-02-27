@@ -57,7 +57,7 @@ def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, ma
     data = []
     iterator = tqdm(range(max_predictors + 1))
     iterator.set_description('Validation Set')
-    sigmas = sorted([getSigmaError() for _ in range(n_draws_per)])
+    sigmas = [getSigmaError() for _ in range(n_draws_per)]
     LinearModel = FixedEffects if ds_type == "ffx" else MixedEffects
     include_posterior = ds_type == "ffx"
 
