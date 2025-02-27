@@ -4,9 +4,10 @@ import matplotlib.colors as colors
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from typing import Dict
+from typing import Callable, Dict, List, Tuple
 from dataset import LMDataset
 from utils import dsFilenameVal
+from train import mixMean, mixVariance
 from torch import distributions as D
 
 
