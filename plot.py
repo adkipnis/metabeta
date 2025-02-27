@@ -265,6 +265,14 @@ def plotMixtureDensity(target, loc, scale, weight, i):
     ax.axvline(x = target[i], color = 'b')
 
 
+def mixtureCDF(x, loc, scale, weight, base_dist) -> torch.Tensor:
+    # x (n, d, 1000)
+    # loc, scale, weight (n, d, c)
+    # base_dist: D.Normal or D.LogNormal
+    cdfs = base_dist(loc.unsqueeze(-2), scale.unsqueeze(-2)).cdf(x.unsqueeze(-1))
+    return torch.sum(weight.unsqueeze(-2) * cdfs, dim=-1)
+
+
 # plot validation loss
 def plotVal2(df, iteration, source, focus: int = -1):
     unique_d = df['d'].unique().shape[0]
