@@ -80,30 +80,6 @@ def multivariateDataFrame(loc: torch.Tensor, quants: torch.Tensor) -> pd.DataFra
     return pd.DataFrame(out)
 
 
-# def sDataFrame(targets, rfx_param_matrix, std_matrix, batch_id: int) -> tuple:
-#     mask = (targets[batch_id] != 0.)
-#     target = targets[batch_id, mask]
-#     data_alpha = rfx_param_matrix[batch_id, :, mask, 0].transpose(1,0)
-#     data_beta = rfx_param_matrix[batch_id, :, mask, 1].transpose(1,0)
-#     data_std = std_matrix[batch_id, :, mask].transpose(1,0)
-#     n, d = data_std.shape
-#     values_alpha = data_alpha.flatten() + 1.
-#     values_beta = data_beta.flatten()
-#     values_mean = values_beta/(values_alpha - 1.)
-#     values_mode = values_beta/(values_alpha + 1.)
-#     values_std = data_std.flatten()
-#     row_indices = np.repeat(np.arange(n), d) + 1
-#     column_indices = np.tile(np.arange(d), n)
-#     return pd.DataFrame({
-#         'n' : row_indices,
-#         'alpha' : values_alpha,
-#         'beta' : values_beta,
-#         'std_prop' : np.sqrt(values_alpha),
-#         'mean' : np.sqrt(values_mean), # as we compare with std but the loss function optimizes for variance
-#         'mode' : np.sqrt(values_mode),
-#         'std' : values_std,
-#         'd': column_indices
-#     }), target
 
 
 # plot validation loss from predictions
