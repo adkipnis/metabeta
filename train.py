@@ -685,11 +685,11 @@ if __name__ == "__main__":
                 posterior_type=cfg.posterior_type,
                 n_components=cfg.c).to(device)
     model_noise = TransformerDecoder(
-                n_predictors= 2 * (cfg.d+1),
+                n_predictors=cfg.d+1,
                 hidden_size=cfg.hidden,
                 ff_size=cfg.ff,
                 n_heads=cfg.heads,
-                n_layers=1,
+                n_layers=cfg.layers,
                 dropout=cfg.dropout,
                 seed=cfg.seed,
                 posterior_type=f"{cfg.posterior_type}_noise",
