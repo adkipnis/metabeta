@@ -642,7 +642,7 @@ def setup() -> argparse.Namespace:
 
     # model and loss
     parser.add_argument("--posterior_type", type=str, default="mixture", help="Posterior architecture [discrete, mixture] (default = mixture)")
-    parser.add_argument("-c", type=int, default=1, help="Number of mixture components resp. grid bins (default = 8)")
+    parser.add_argument("-c", type=int, default=8, help="Number of mixture components resp. grid bins (default = 8)")
     parser.add_argument("--loss_ffx", type=str, default="logprob", help="Loss function [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_rfx", type=str, default="logprob", help="Loss function for rfx [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_noise", type=str, default="logprob", help="Loss function for noise [mse, logprob] (default = logprob)")
