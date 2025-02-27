@@ -370,20 +370,23 @@ def getResiduals(y: torch.Tensor, X: torch.Tensor, outputs: Dict[str, torch.Tens
     return y - y_pred
     
 def assembleNoiseInputs(y: torch.Tensor,
+                        X: torch.Tensor,
                         outputs: Dict[str, torch.Tensor],
                         posterior_type: str) -> torch.Tensor:
     if posterior_type == "discrete":
-        loc = discreteMean(outputs["ffx_probs"], ffx_grid)
-        scale = discreteVariance(outputs["ffx_probs"], loc, ffx_grid).sqrt()
+        loc = discreteMean(outputs["ffx_probs"], ffx_grid).detach()
+        scale = discreteVariance(outputs["ffx_probs"], loc, ffx_grid).sqrt().detach()
     elif posterior_type == "mixture":
         locs = outputs["ffx_loc"] 
         scales = outputs["ffx_scale"]
         weights = outputs["ffx_weight"]
-        loc = mixMean(locs, weights)
-        scale = mixVariance(locs, scales, weights, loc).sqrt()
+        loc = mixMean(locs, weights).detach()
+        scale = mixVariance(locs, scales, weights, loc).sqrt().detach()
     else:
         raise ValueError(f"posterior type {posterior_type} not supported.")
-    return torch.cat([y.unsqueeze(-1), loc.detach(), scale.detach()], dim=-1)
+    y_pred = torch.sum(X * loc, dim=-1)
+    error = y - y_pred
+    return torch.cat([error.unsqueeze(-1), scale], dim=-1)
 
 
 def locScaleWeights(outputs: torch.Tensor,
