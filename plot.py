@@ -80,18 +80,6 @@ def multivariateDataFrame(loc: torch.Tensor, quants: torch.Tensor) -> pd.DataFra
     return pd.DataFrame(out)
 
 
-
-
-# plot validation loss from predictions
-def lossFromPredictions(data, targets, source = "proposed"):
-    if source == "proposed":
-        means = torch.tensor(data["means_p"])
-        stds = torch.tensor(data["stds_p"])
-    elif source == "analytical":
-        means = torch.tensor(data["means_a"])
-        stds = torch.tensor(data["stds_a"])
-        mask = (stds == 0.).float()
-        stds = stds + mask
     else:
         raise ValueError
     betas = targets.unsqueeze(1).expand_as(means)
