@@ -126,24 +126,33 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
     #     out.update({"s": s, "s_emp": s_emp})
     return {k: v for d in out for k, v in d.items()}
 
-def mvnDataFrame(targets, means_matrix, stds_matrix, batch_id: int) -> tuple:
-    mask = (targets[batch_id] != 0.)
-    betas = targets[batch_id, mask]
-    data_m = means_matrix[batch_id, :, mask].transpose(1,0)
-    data_s = stds_matrix[batch_id, :, mask].transpose(1,0)
-    values_m = data_m.flatten()
-    values_s = data_s.flatten()
-    row_indices = np.repeat(np.arange(data_m.shape[0]), data_m.shape[1]) + 1
-    column_indices = np.tile(np.arange(data_m.shape[1]), data_m.shape[0])
-    return pd.DataFrame({
-        'n' : row_indices,
-        'mean' : values_m,
-        'std' : values_s,
-        'd': column_indices
-    }), betas
+
+# def mixMean(locs: np.ndarray,
+#             weights: np.ndarray) -> np.ndarray:
+#     return np.sum(locs * weights, axis=-1)
 
 
-def sDataFrame(targets, stds_prop_matrix, stds_emp_matrix, batch_id: int) -> tuple:
+# def mixVariance(locs: np.ndarray,
+#                 scales: np.ndarray,
+#                 weights: np.ndarray,
+#                 mean: np.ndarray) -> np.ndarray:
+#     second_moments = np.square(locs) + np.square(scales)
+#     return np.sum(second_moments * weights, axis=-1) - np.square(mean)
+
+
+def multivariateDataFrame(loc: torch.Tensor, quants: torch.Tensor) -> pd.DataFrame:
+    n, d = loc.shape
+    values_l = loc.numpy().transpose(1,0).flatten()
+    values_q1 = quants[...,0].numpy().transpose(1,0).flatten()
+    values_q2 = quants[...,1].numpy().transpose(1,0).flatten()
+    values_q3 = quants[...,2].numpy().transpose(1,0).flatten()
+    values_d = np.repeat(np.arange(d), n)
+    values_n = np.tile(np.arange(n), d) + 1
+    out = {'n': values_n, 'd': values_d, 'loc': values_l,
+           'q1': values_q1, 'q2': values_q2, 'q3': values_q3}
+    return pd.DataFrame(out)
+
+
     mask = (targets[batch_id] != 0.)
     target = targets[batch_id, mask]
     data_p = stds_prop_matrix[batch_id, :, mask].transpose(1,0)
