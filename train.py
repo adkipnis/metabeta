@@ -308,6 +308,18 @@ def mixLogProb(locs: torch.Tensor,
     return -proposal.log_prob(target)
 
 
+def plotDensities(target, proposal):
+    import matplotlib.pyplot as plt
+    n_values = 1000  # Number of values to evaluate
+    x = torch.linspace(0.01, 10, n_values)  # Adjust the range as needed
+    x_expanded = x.view(1, 1, -1).expand(50, 50, -1)
+    log_probs = proposal.log_prob(x_expanded)
+    densities = torch.exp(log_probs).detach().numpy()
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(x, densities[0, -1])
+    ax.axvline(x = target[0, -1], color = 'b')
+
+
 def mixLossWrapper(outputs: Dict[str, torch.Tensor], 
                    target: torch.Tensor,
                    depths: torch.Tensor,
