@@ -248,6 +248,23 @@ def plotMultivariateParams(df, targets, quantiles, ylims, est_type: str, ax):
     ax.grid(True)
      
 
+# -----------------------------------------------------------------------------------------
+# plot wrappers
+
+def plotMixtureDensity(target, loc, scale, weight, i):
+    comp = D.LogNormal(loc, scale)
+    mix = D.Categorical(weight)
+    proposal = D.MixtureSameFamily(mix, comp)
+    n_values = 1000  # Number of values to evaluate
+    x = torch.linspace(0.01, 3, n_values)  # Adjust the range as needed
+    x_expanded = x.view(1, -1).expand(50, -1)
+    log_probs = proposal.log_prob(x_expanded)
+    densities = torch.exp(log_probs).detach().numpy()
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(x, densities[i])
+    ax.axvline(x = target[i], color = 'b')
+
+
 # plot validation loss
 def plotVal2(df, iteration, source, focus: int = -1):
     unique_d = df['d'].unique().shape[0]
