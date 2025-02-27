@@ -10,6 +10,8 @@ from utils import dsFilenameVal
 from train import mixMean, mixVariance
 from torch import distributions as D
 
+# -----------------------------------------------------------------------------------------
+# basic plots
 
 # Create a color map from light blue to dark blue
 cmap = colors.LinearSegmentedColormap.from_list("custom_blues", ["#add8e6", "#000080"])
@@ -78,43 +80,51 @@ def plotVal(date: str, model_id: str, suffix: str = "val", focus: int = -1):
     plt.show()
 
 
-def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches: int = 45, fixed: float = 0, ds_type: str = "ffx") -> Dict[str, np.ndarray]:
-    # gather predicted means and stds
-    paths = [Path('predictions', model_id, date, f'predictions_i={iteration}_b={batch}.pt')
+# -----------------------------------------------------------------------------------------
+# data wrangling
+
+def locScaleWeight(prefix: str, predictions: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+    keys = [f'{prefix}{suffix}' for suffix in ['_loc', '_scale', '_weight']]
+    out = [torch.cat([x[key] for x in predictions]) for key in keys]
+    return dict(zip(keys, out))
+
+
+def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches: int = 45, fixed: float = 0, ds_type: str = "ffx") -> Dict[str, torch.Tensor]:
+    # gather predicted posteriors
+    paths = [Path('predictions', model_id, date,
+                  f'predictions_i={iteration}_b={batch}.pt')
              for batch in range(n_batches)]
-    predictions = [torch.load(paths[batch], weights_only=False) for batch in range(n_batches)]
-    means_p = torch.cat([x["means"] for x in predictions]).numpy()
-    stds_p = torch.cat([x["stds"] for x in predictions]).numpy()
-    s_p = torch.cat([x["s"] for x in predictions]).numpy()
-    abs_p = torch.cat([x["abs"] for x in predictions]).numpy()
-    
+    predictions = [torch.load(paths[batch], weights_only=False)
+                   for batch in range(n_batches)]
+    out = []
+    out.append(locScaleWeight('ffx', predictions))
+    if "rfx_loc" in predictions[0]:
+        out.append(locScaleWeight('rfx', predictions))
+    out.append(locScaleWeight('noise', predictions))
+
     # gather validation data
     filename = dsFilenameVal(ds_type, 8, 50, fixed)
     ds_val_raw = torch.load(filename, weights_only=False)
     ds_val = LMDataset(**ds_val_raw, permute=False)
-    targets = torch.stack([x["beta"] for x in ds_val], dim=0).numpy()
-    sigma_errors = torch.stack([x["sigma_error"] for x in ds_val], dim=0).numpy()
-    out = {"targets": targets, "sigma_errors": sigma_errors,
-           "means_p": means_p, 
-           "stds_p": stds_p,
-           "s_p": s_p,
-           "abs_p": abs_p,}
-    if ds_type == "ffx":
-        means_a = torch.stack([x["mu_n"] for x in ds_val], dim=0).numpy()
-        stds_a = [torch.diagonal(x["Sigma_n"], dim1=-2, dim2=-1).sqrt() for x in ds_val]
-        stds_a = torch.stack(stds_a, dim=0).numpy()
-        as_a = torch.stack([x["a_n"] for x in ds_val], dim=0).unsqueeze(-1)
-        bs_a = torch.stack([x["b_n"] for x in ds_val], dim=0).unsqueeze(-1)
-        abs_a = torch.cat([as_a, bs_a], dim=-1).numpy()
-        assert means_a.shape[0] == means_p.shape[0], \
-            "Different number of observations for analytical and trained solutions."
-        out.update({"means_a": means_a, "stds_a": stds_a, "abs_a": abs_a,})
-    elif ds_type == "mfx":
-        s = torch.stack([x["S"].sqrt() for x in ds_val], dim=0).numpy()
-        s_emp = torch.stack([x["S_emp"].sqrt() for x in ds_val], dim=0).numpy()
-        out.update({"s": s, "s_emp": s_emp})
-    return out
+    ffx_target = torch.stack([x["beta"] for x in ds_val], dim=0)
+    noise_target = torch.stack([x["sigma_error"] for x in ds_val], dim=0).unsqueeze(-1)
+    out.append({"ffx_target": ffx_target, "noise_target": noise_target})
 
+    # if ds_type == "ffx":
+    #     means_a = torch.stack([x["mu_n"] for x in ds_val], dim=0).numpy()
+    #     stds_a = [torch.diagonal(x["Sigma_n"], dim1=-2, dim2=-1).sqrt() for x in ds_val]
+    #     stds_a = torch.stack(stds_a, dim=0).numpy()
+    #     as_a = torch.stack([x["a_n"] for x in ds_val], dim=0).unsqueeze(-1)
+    #     bs_a = torch.stack([x["b_n"] for x in ds_val], dim=0).unsqueeze(-1)
+    #     abs_a = torch.cat([as_a, bs_a], dim=-1).numpy()
+    #     assert means_a.shape[0] == means_p.shape[0], \
+    #         "Different number of observations for analytical and trained solutions."
+    #     out.update({"means_a": means_a, "stds_a": stds_a, "abs_a": abs_a,})
+    # elif ds_type == "mfx":
+    #     s = torch.stack([x["S"].sqrt() for x in ds_val], dim=0).numpy()
+    #     s_emp = torch.stack([x["S_emp"].sqrt() for x in ds_val], dim=0).numpy()
+    #     out.update({"s": s, "s_emp": s_emp})
+    return {k: v for d in out for k, v in d.items()}
 
 def mvnDataFrame(targets, means_matrix, stds_matrix, batch_id: int) -> tuple:
     mask = (targets[batch_id] != 0.)
