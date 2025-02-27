@@ -327,7 +327,7 @@ if __name__ == "__main__":
     #     plotVal(date, model_id, suffix="kl")
     
     # proposal distribution
-    iteration = 5
+    iteration = 10
     data = preloadPredictions(date,
                               model_id,
                               iteration=iteration,
@@ -338,13 +338,14 @@ if __name__ == "__main__":
     quantiles = (0.025, 0.5, 0.975)
     for i in range (5):
         ffxWrapper(data, 500 * max_d + i, iteration, quantiles)
+    # for i in range (5):
+    #     rfxWrapper(data, 500 * max_d + i, iteration, quantiles)
     for i in range (5):
         noiseWrapper(data, 500 * max_d + i, iteration, quantiles)
-        # plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype="rfx")
-        # plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype="noise")
     
-    # # plot validation loss over n
-    # df_p = loss2df(data, source = "proposed")
+    
+    # plot validation loss over n for given iteration
+    df_p = loss2df(data, source = "proposed")
+    plotValN(df_p, iteration, source = "proposed")
     # df_a = loss2df(data, source = "analytical")
-    # plotVal2(df_p, iteration, source = "proposed")
-    # plotVal2(df_a, iteration, source = "analytical")
+    # plotValN(df_a, iteration, source = "analytical")
