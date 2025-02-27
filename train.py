@@ -457,7 +457,7 @@ def run(models: tuple,
         loss = maskLoss(losses_ffx, ffx)
 
     # compute noise parameter loss per batch
-    noise_inputs = assembleNoiseInputs(y, output_dict, posterior_type)
+    noise_inputs = assembleNoiseInputs(y, X, output_dict, posterior_type)
     noise_outputs = models[1](noise_inputs)
     noise_output_dict = parseOutputs(noise_outputs, posterior_type, cfg.c, "noise")
     
@@ -480,7 +480,7 @@ def savePredictions(models: Tuple[nn.Module, nn.Module],
     X = batch["X"].to(device)
     outputs = models[0](assembleInputs(y, X))
     output_dict = parseOutputs(outputs, posterior_type, cfg.c, "ffx")
-    noise_inputs = assembleNoiseInputs(y, output_dict, posterior_type)
+    noise_inputs = assembleNoiseInputs(y, X, output_dict, posterior_type)
     noise_outputs = models[1](noise_inputs)
     noise_output_dict = parseOutputs(noise_outputs, posterior_type, cfg.c, "noise")
     fname = Path(pred_path, f"predictions_i={iteration_index}_b={batch_index}.pt")
