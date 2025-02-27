@@ -122,7 +122,67 @@ def loss2df(data, source = 'proposed'):
 # -----------------------------------------------------------------------------------------
 # subplots
 
-# plot multivariate params
+# training loss over iterations
+def plotTrain(date: str, model_id: str):
+    path = Path('losses', model_id, date, 'loss_train.csv')
+    df = pd.read_csv(path)
+    df = df.groupby(['iteration'])['loss'].agg(['mean', 'std', 'max', 'min']).reset_index()
+    df = df[df['iteration'] != 1]
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(df['iteration'], df['mean'], label='Mean Loss', color='blue')
+    
+    # Shade min-max area
+    ax.fill_between(df['iteration'],
+                    # df['mean'] - df['std'], 
+                    # df['mean'] + df['std'], 
+                    df['min'], 
+                    df['max'], 
+                    color='blue', alpha=0.3)
+    
+    plt.xlabel('Iteration')
+    plt.ylabel('-log p(target)')
+    # plt.ylim(-1, 3)
+    plt.grid(True) 
+    plt.show()
+
+
+# validation loss over iterations
+def plotVal(date: str, model_id: str, suffix: str = "val", focus: int = -1):
+    path = Path('losses', model_id, date, f'loss_{suffix}.csv')
+    if suffix == "val":
+        ylabel = '-log p(target)' 
+    elif suffix == "kl":
+        ylabel = 'KL Divergence'
+    else:
+        raise ValueError
+    df = pd.read_csv(path)
+    unique_partitions = sum(df['iteration'] == 1)
+    i = df.shape[0] // unique_partitions
+    unique_d = unique_partitions // 5
+    d_values = np.repeat(np.arange(unique_d), 5)
+    df['d'] = np.tile(d_values, i)
+    df_agg = df.groupby(['d', 'iteration'])['loss'].agg(['mean', 'std', 'min', 'max']).reset_index()
+    if focus >= 0:
+        df_agg = df_agg[df_agg['d'] == focus]
+    norm = colors.Normalize(vmin=0, vmax=unique_d)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for d_value, group in df_agg.groupby('d'):
+        color = cmap(norm(d_value))
+        ax.plot(group['iteration'], group['mean'], label=f'd={d_value}', color=color)
+        ax.fill_between(group['iteration'], 
+                        # group['mean'] - group['std'], 
+                        # group['mean'] + group['std'], 
+                        group['min'],
+                        group['max'],
+                        color=color, alpha=0.3)  # Shade ± SD
+    plt.xlabel('Iteration')
+    plt.ylabel(ylabel)
+    plt.legend()
+    plt.grid(True) 
+    plt.show()
+
+
+# proposed posterior
 def plotMultivariateParams(df, targets, quantiles, ylims, est_type: str, ax):
     ''' plot first quartile, median, and third quartile '''
     unique_d = df['d'].unique()
@@ -148,7 +208,37 @@ def plotMultivariateParams(df, targets, quantiles, ylims, est_type: str, ax):
     ax.grid(True)
      
 
-# -----------------------------------------------------------------------------------------
+# validation loss over n
+def plotValN(df, iteration, source, focus: int = -1):
+    unique_d = df['d'].unique().shape[0]
+    df_agg = df.groupby(['d', 'n'])['loss'].agg(['mean', 'std', 'max', 'min']).reset_index()
+    if focus >= 0:
+        df_agg = df_agg[df_agg['d'] == focus]
+    norm = colors.Normalize(vmin=0, vmax=unique_d)
+    
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    for d_value, group in df_agg.groupby('d'):
+        color = cmap(norm(d_value))
+        ax.plot(group['n'], group['mean'], label=f'd={d_value}', color=color)
+        ax.fill_between(group['n'], 
+                        group['mean'] - group['std'], 
+                        group['mean'] + group['std'], 
+                        color=color, alpha=0.2)  # Shade ± SD
+    plt.ylim(-2, 6)
+    plt.xlabel('n')
+    plt.ylabel('-log p(target)')
+    plt.legend()
+    plt.grid(True) 
+    title = source
+    if source == "proposed":
+        title += f' (iteration {iteration})'
+    plt.title(title)
+    plt.show()
+    
+    
+# -----------------------------------------------------------------------------
 # plot wrappers
 
 def plotMixtureDensity(target, loc, scale, weight, i):
@@ -220,88 +310,6 @@ def ffxWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float
 def noiseWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
     return plotWrapper(data, 'noise', batch_id, iteration, D.LogNormal, quantiles, (0., 3.))
     
-
-
-# def plotParamsWrapper(data: dict, batch_id: int, iteration: int, paramtype = "beta"):
-#
-#     # plot ffx posterior
-#     if paramtype == "ffx":
-#
-#         # proposed posterior
-#         targets = data["targets"]
-#         means_p = data["means_p"]
-#         stds_p = data["stds_p"]
-#         df_p, betas = mvnDataFrame(targets, means_p, stds_p, batch_id)
-#
-#         # analytical posterior
-#         if "means_a" in data:
-#             fig, axs = plt.subplots(2, sharex=True, figsize=(8, 6))
-#             means_a = data["means_a"]
-#             stds_a = data["stds_a"]
-#             df_a, _ = mvnDataFrame(targets, means_a, stds_a, batch_id)
-#             plotMvnParams(df_a, betas, "analytical", axs[0])
-#             plotMvnParams(df_p, betas, "proposed", axs[1])
-#         else:
-#             fig, ax = plt.subplots(figsize=(8, 6))
-#             plotMvnParams(df_p, betas, "proposed", ax)
-#         fig.suptitle(f'iter={iteration}')
-#
-#
-#     # plot rfx posterior
-#     if paramtype == "rfx":
-#         targets = data["s"]
-#         stds_prop = data["s_p"]
-#         stds_emp = data["s_emp"]
-#         df_s, s = sDataFrame(targets, stds_prop, stds_emp, batch_id)
-#         fig, ax = plt.subplots(figsize=(8, 6))
-#         plotRfxParams(df_s, s, ax)
-#
-#     # plot noise posterior
-#     if paramtype == "noise":
-#         abs_a = data["abs_a"]
-#         abs_p = data["abs_p"]
-#         df_ig_a = igDataFrame(abs_a, batch_id)
-#         df_ig_p = igDataFrame(abs_p, batch_id)
-#         fig, ax = plt.subplots(figsize=(8, 6))
-#         plotIGParams(df_ig_a, df_ig_p, ax)
-#
-#     # # plot noise std
-#     # if paramtype == "sigma":
-#     #     abs_p = data["abs_p"]
-#     #     sigma_errors = data["sigma_errors"]
-#     #     df_noise = noiseDataFrame(abs_p, batch_id)
-#     #     fig, ax = plt.subplots(figsize=(8, 6))
-#     #     plotNoise(df_noise, sigma_errors[batch_id], ax)
-#
-#
-# plot validation loss
-def plotVal2(df, iteration, source, focus: int = -1):
-    unique_d = df['d'].unique().shape[0]
-    df_agg = df.groupby(['d', 'n'])['loss'].agg(['mean', 'std', 'max', 'min']).reset_index()
-    if focus >= 0:
-        df_agg = df_agg[df_agg['d'] == focus]
-    norm = colors.Normalize(vmin=0, vmax=unique_d)
-    
-    # Create the plot
-    fig, ax = plt.subplots(figsize=(8, 6))
-    
-    for d_value, group in df_agg.groupby('d'):
-        color = cmap(norm(d_value))
-        ax.plot(group['n'], group['mean'], label=f'd={d_value}', color=color)
-        ax.fill_between(group['n'], 
-                        group['mean'] - group['std'], 
-                        group['mean'] + group['std'], 
-                        color=color, alpha=0.2)  # Shade ± SD
-    plt.ylim(-2, 6)
-    plt.xlabel('n')
-    plt.ylabel('-log p(target)')
-    plt.legend()
-    plt.grid(True) 
-    title = source
-    if source == "proposed":
-        title += f' (iteration {iteration})'
-    plt.title(title)
-    plt.show()
     
 # =============================================================================
 
