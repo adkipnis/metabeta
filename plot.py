@@ -351,26 +351,23 @@ def plotVal2(df, iteration, source, focus: int = -1):
     plt.title(title)
     plt.show()
     
+# =============================================================================
 
 if __name__ == "__main__":
-    noise_type = "variable"
-    fixed = 0. # equivalent to noise_type
-    ds_type = "mfx"
-    # nice result
-    # model_id = f'transformer-256-512-8-4-dropout=0-noise={noise_type}-seed=0-loss=logprob' # server
-    # date = '20250120-090048' # nice
-    
-    model_id = f'transformer-128-256-8-3-dropout=0-noise={noise_type}-seed=0-loss=logprob' # macbook
-    date = '20250128-141519'
+    fixed = 0.
+    noise = 'variable' if fixed == 0. else fixed
+    ds_type = 'ffx'
+    model_id = f'mixture-8-transformer-128-256-8-3-dropout=0-loss=logprob-seed=0-fx={ds_type}-noise={noise}'
+    date = '20250227-164027'
         
     # train and val loss
     plotTrain(date, model_id)
     plotVal(date, model_id)
-    if ds_type == "ffx":
-        plotVal(date, model_id, suffix="kl")
+    # if ds_type == "ffx":
+    #     plotVal(date, model_id, suffix="kl")
     
     # proposal distribution
-    iteration = 30
+    iteration = 5
     data = preloadPredictions(date,
                               model_id,
                               iteration=iteration,
@@ -378,36 +375,16 @@ if __name__ == "__main__":
                               fixed=fixed,
                               ds_type=ds_type)
     max_d = 1
+    quantiles = (0.025, 0.5, 0.975)
     for i in range (5):
-        plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype="beta")
-    
-    for i in range (20):
-        plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype="rfx")
-    
+        ffxWrapper(data, 500 * max_d + i, iteration, quantiles)
     for i in range (5):
-        plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype="ig")
-        
+        noiseWrapper(data, 500 * max_d + i, iteration, quantiles)
+        # plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype="rfx")
+        # plotParamsWrapper(data, 500 * max_d + i, iteration, paramtype="noise")
     
-    # plot validation loss over n
-    df_p = loss2df(data, source = "proposed")
-    df_a = loss2df(data, source = "analytical")
-    plotVal2(df_p, iteration, source = "proposed")
-    plotVal2(df_a, iteration, source = "analytical")
-    
-    # # misc
-    # alpha, beta = 3, 8
-    # dist = torch.distributions.inverse_gamma.InverseGamma(alpha, beta)
-    # x = torch.arange(0.1, 4., step=(4.-.1)/500)
-    # probs = dist.log_prob(x).detach().exp()
-    # plt.plot(x, probs)
-    # print(dist.mean)
-    # print(dist.mode)
-    
-    # betas = torch.tensor([1, 2, 3])
-    # means = torch.tensor([1.1, 2, 3])
-    # stds = torch.tensor([0.1, 1, 1])
-    # proposal = torch.distributions.normal.Normal(means, stds)
-    # loss = -proposal.log_prob(betas)
-    # print(loss)
-    
-    
+    # # plot validation loss over n
+    # df_p = loss2df(data, source = "proposed")
+    # df_a = loss2df(data, source = "analytical")
+    # plotVal2(df_p, iteration, source = "proposed")
+    # plotVal2(df_a, iteration, source = "analytical")
