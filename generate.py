@@ -1,8 +1,8 @@
 import os
 from tqdm import tqdm
 import argparse
-import math
 import torch
+from torch import distributions as D
 from tasks import FixedEffects, MixedEffects
 from utils import dsFilename, dsFilenameVal
 
@@ -27,9 +27,11 @@ def getD(max_predictors: int) -> int:
 
 def getSigmaError(alpha: float = 3., beta: float = 1., clip: float = 1.5) -> float:
     ''' Get the noise standard deviation '''
-    sigma_squared = torch.distributions.inverse_gamma.InverseGamma(alpha, beta).sample()
-    sigma = math.sqrt(sigma_squared.item()) # type: ignore
-    return min(sigma, clip)
+    # sigma_squared = D.InverseGamma(alpha, beta).sample()
+    # sigma = math.sqrt(sigma_squared.item()) # type: ignore
+    # sigma = min(sigma, clip)
+    sigma = D.Uniform(0., clip).sample()
+    return sigma.item()
 
 
 def generateDataset(ds_type: str, n_draws: int, max_samples: int, max_predictors: int, sower: Sower) -> dict:
