@@ -195,6 +195,7 @@ def lossFromPredictions(data, targets, source = "proposed"):
     proposal = D.Normal(means, stds)
     return -proposal.log_prob(betas) # (batch, n, d)
     
+
 def batchLoss(losses, targets, batch):
     losses_batch = losses[batch]
     n = losses_batch.shape[0]
@@ -209,12 +210,43 @@ def batchLoss(losses, targets, batch):
            "batch": batch + 1}
     return pd.DataFrame(out)
 
+
 def loss2df(data, source = "proposed"):
     targets = torch.tensor(data["targets"])
     losses = lossFromPredictions(data, targets, source)
     b = losses.shape[0]
     batch_losses = [batchLoss(losses, targets, i) for i in range(b)]
     return pd.concat(batch_losses) 
+   
+    
+# -----------------------------------------------------------------------------------------
+# subplots
+
+# plot multivariate params
+def plotMultivariateParams(df, targets, quantiles, ylims, est_type: str, ax):
+    ''' plot first quartile, median, and third quartile '''
+    unique_d = df['d'].unique()
+    norm = colors.Normalize(vmin=unique_d.min(), vmax=unique_d.max())
+ 
+    # Create the plot
+    for d_value, group in df.groupby('d'):
+        target = targets[d_value].item()
+        color = cmap(norm(d_value))
+        ax.plot(group['n'], group['q2'], label=f'd={d_value}', color=color)
+        ax.fill_between(group['n'], 
+                        group['q1'],
+                        group['q3'],
+                        color=color, alpha=0.1)  # Shade ± SD
+        ax.axhline(y=target, color=color, linestyle=':', linewidth=1.5)
+    
+    # Adding labels and title
+    ax.set_xlabel('n')  # X-axis label
+    ax.set_ylabel(f'{est_type}')
+    if est_type == "analytical": 
+        ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    ax.set_ylim(ylims)
+    ax.grid(True)
+     
 
 # plot validation loss
 def plotVal2(df, iteration, source, focus: int = -1):
