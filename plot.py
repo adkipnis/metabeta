@@ -153,173 +153,31 @@ def multivariateDataFrame(loc: torch.Tensor, quants: torch.Tensor) -> pd.DataFra
     return pd.DataFrame(out)
 
 
-    mask = (targets[batch_id] != 0.)
-    target = targets[batch_id, mask]
-    data_p = stds_prop_matrix[batch_id, :, mask].transpose(1,0)
-    data_e = stds_emp_matrix[batch_id, :, mask].transpose(1,0)
-    values_p = data_p.flatten()
-    values_e = data_e.flatten()
-    row_indices = np.repeat(np.arange(data_p.shape[0]), data_p.shape[1]) + 1
-    column_indices = np.tile(np.arange(data_p.shape[1]), data_p.shape[0])
-    return pd.DataFrame({
-        'n' : row_indices,
-        'std_p' : values_p,
-        'std_e' : values_e,
-        'd': column_indices
-    }), target
- 
-    
-def analytical_alpha(n: int):
-    ns = np.arange(n) + 1
-    alpha = 3. + ns / 2.
-    return alpha
+# def sDataFrame(targets, rfx_param_matrix, std_matrix, batch_id: int) -> tuple:
+#     mask = (targets[batch_id] != 0.)
+#     target = targets[batch_id, mask]
+#     data_alpha = rfx_param_matrix[batch_id, :, mask, 0].transpose(1,0)
+#     data_beta = rfx_param_matrix[batch_id, :, mask, 1].transpose(1,0)
+#     data_std = std_matrix[batch_id, :, mask].transpose(1,0)
+#     n, d = data_std.shape
+#     values_alpha = data_alpha.flatten() + 1.
+#     values_beta = data_beta.flatten()
+#     values_mean = values_beta/(values_alpha - 1.)
+#     values_mode = values_beta/(values_alpha + 1.)
+#     values_std = data_std.flatten()
+#     row_indices = np.repeat(np.arange(n), d) + 1
+#     column_indices = np.tile(np.arange(d), n)
+#     return pd.DataFrame({
+#         'n' : row_indices,
+#         'alpha' : values_alpha,
+#         'beta' : values_beta,
+#         'std_prop' : np.sqrt(values_alpha),
+#         'mean' : np.sqrt(values_mean), # as we compare with std but the loss function optimizes for variance
+#         'mode' : np.sqrt(values_mode),
+#         'std' : values_std,
+#         'd': column_indices
+#     }), target
 
-
-def igDataFrame(abs_matrix, batch_id: int) -> pd.DataFrame:
-    _, n, d = abs_matrix.shape
-    if d == 2:
-        data_a = abs_matrix[batch_id, :, 0]
-        data_b = abs_matrix[batch_id, :, 1]
-    else:
-        data_a = analytical_alpha(n)
-        data_b = abs_matrix[batch_id, :, 0]
-    values_a = data_a.flatten()
-    values_b = data_b.flatten()
-    row_indices = np.arange(data_a.shape[0]) + 1
-    return pd.DataFrame({
-        'n' : row_indices,
-        'alpha' : values_a,
-        'beta' : values_b,
-    })
-
-
-def noiseDataFrame(noise_matrix, batch_id: int) -> pd.DataFrame: 
-    data = noise_matrix[batch_id, :, 0]
-    values = data.flatten()
-    row_indices = np.arange(data.shape[0]) + 1
-    return pd.DataFrame({
-        'n' : row_indices,
-        'error_p' : values,
-    })
-
-
-# plot mvn params
-def plotMvnParams(df, betas, est_type: str, ax):
-    unique_d = df['d'].unique()
-    norm = colors.Normalize(vmin=unique_d.min(), vmax=unique_d.max())
-    
-    # Create the plot
-    for d_value, group in df.groupby('d'):
-        beta = betas[d_value].item()
-        color = cmap(norm(d_value))
-        ax.plot(group['n'], group['mean'], label=f'd={d_value}', color=color)
-        ax.fill_between(group['n'], 
-                        group['mean'] - group['std'], 
-                        group['mean'] + group['std'], 
-                        color=color, alpha=0.1)  # Shade ± SD
-        ax.axhline(y=beta, color=color, linestyle=':', linewidth=1.5)
-    
-    # Adding labels and title
-    ax.set_xlabel('n')  # X-axis label
-    ax.set_ylabel(f'{est_type}')
-    if est_type == "analytical": 
-        ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
-    ax.set_ylim(-7, 7)
-    ax.grid(True)           # Show grid
-
-# plot rfx structure
-def plotRfxParams(df, targets, ax):
-    unique_d = df['d'].unique()
-    norm = colors.Normalize(vmin=unique_d.min(), vmax=unique_d.max())
-    
-    # Create the plot
-    for d_value, group in df.groupby('d'):
-        target = targets[d_value].item()
-        color = cmap(norm(d_value))
-        ax.plot(group['n'], group['std_p'], label=f'd={d_value}', color=color)
-        ax.plot(group['n'], group['std_e'], label=f'd={d_value}', color=color, linestyle='--')
-        ax.axhline(y=target, color=color, linestyle=':', linewidth=1.5)
-    
-    # Adding labels and title
-    ax.set_xlabel('n')  # X-axis label
-    ax.set_ylabel('SD(b)')
-    ax.set_ylim(-7, 7)
-    ax.grid(True)           # Show grid
-    
-# plot ig params
-def plotIGParams(df_a, df_p, ax):
-    # Create the plot
-    # ax.plot(df['n'], df['alpha'], label='alpha', color='green')
-    ax.plot(df_a['n'], df_a['beta'], label='analytical', color='green')
-    ax.plot(df_p['n'], df_p['beta'], label='proposed', color='red')
-    
-    # Adding labels and title
-    ax.set_xlabel('n')  # X-axis label
-    ax.set_ylabel(f'noise parameter')
-    ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
-    # ax.set_ylim(0, 10)
-    ax.grid(True)           # Show grid
-    
-
-def plotNoise(df, sigma_error, ax):
-    ax.plot(df['n'], df['error_p'], label='proposed', color='orange')
-    ax.axhline(y=sigma_error, color='orange', linestyle=':', linewidth=1.5)
-    ax.set_xlabel('n')  # X-axis label
-    ax.set_ylabel('noise SD')
-    ax.set_ylim(0, 4)
-    ax.grid(True)
-     
-
-def plotParamsWrapper(data: dict, batch_id: int, iteration: int, paramtype = "beta"):
-    # plot MVN parameters
-    if paramtype == "beta":
-        
-        # proposed posterior
-        targets = data["targets"]
-        means_p = data["means_p"]
-        stds_p = data["stds_p"]
-        df_p, betas = mvnDataFrame(targets, means_p, stds_p, batch_id)
-        
-        # analytical posterior
-        if "means_a" in data:
-            fig, axs = plt.subplots(2, sharex=True, figsize=(8, 6))
-            means_a = data["means_a"]
-            stds_a = data["stds_a"]
-            df_a, _ = mvnDataFrame(targets, means_a, stds_a, batch_id)
-            plotMvnParams(df_a, betas, "analytical", axs[0])
-            plotMvnParams(df_p, betas, "proposed", axs[1])
-        else:
-            fig, ax = plt.subplots(figsize=(8, 6))
-            plotMvnParams(df_p, betas, "proposed", ax)
-        fig.suptitle(f'iter={iteration}')
-        
-    
-    # plot RFX parameters
-    if paramtype == "rfx":
-        targets = data["s"]
-        stds_prop = data["s_p"]
-        stds_emp = data["s_emp"]
-        df_s, s = sDataFrame(targets, stds_prop, stds_emp, batch_id)
-        fig, ax = plt.subplots(figsize=(8, 6))
-        plotRfxParams(df_s, s, ax)
-    
-    # plot IG parameters
-    if paramtype == "ig":
-        abs_a = data["abs_a"]
-        abs_p = data["abs_p"]
-        df_ig_a = igDataFrame(abs_a, batch_id)
-        df_ig_p = igDataFrame(abs_p, batch_id)
-        fig, ax = plt.subplots(figsize=(8, 6))
-        plotIGParams(df_ig_a, df_ig_p, ax)
-    
-    # plot noise std
-    if paramtype == "sigma":
-        abs_p = data["abs_p"]
-        sigma_errors = data["sigma_errors"]
-        df_noise = noiseDataFrame(abs_p, batch_id)
-        fig, ax = plt.subplots(figsize=(8, 6))
-        plotNoise(df_noise, sigma_errors[batch_id], ax)
-  
 
 # plot validation loss from predictions
 def lossFromPredictions(data, targets, source = "proposed"):
