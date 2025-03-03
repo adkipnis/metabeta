@@ -43,7 +43,7 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
     out.append({"ffx_target": ffx_target, "noise_target": noise_target})
 
     # - optionally get analytical solutions for ffx
-    if ds_type == "ffx" and num_components == 1:
+    if ds_type == "ffx":
         ffx_loc_a = torch.stack([x["mu_n"] for x in ds_val], dim=0)
         ffx_scale_a = [torch.diagonal(x["Sigma_n"], dim1=-2, dim2=-1).sqrt() for x in ds_val]
         ffx_scale_a = torch.stack(ffx_scale_a, dim=0)
@@ -162,8 +162,8 @@ def plotVal(date: str, model_id: str, suffix: str = "val", focus: int = -1):
         color = cmap(norm(d_value))
         ax.plot(group['iteration'], group['mean'], label=f'd={d_value}', color=color)
         ax.fill_between(group['iteration'], 
-                        df['mean'] - 1.96 * df['std'], 
-                        df['mean'] + 1.96 * df['std'], 
+                        group['mean'] - 1.96 * group['std'], 
+                        group['mean'] + 1.96 * group['std'], 
                         color=color, alpha=0.3)  # Shade ± SD
     plt.xlabel('Iteration')
     plt.ylabel(ylabel)
