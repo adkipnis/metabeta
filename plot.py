@@ -134,7 +134,6 @@ def plotTrain(date: str, model_id: str):
     
     plt.xlabel('Iteration')
     plt.ylabel('-log p(target)')
-    # plt.ylim(-1, 3)
     plt.grid(True) 
     plt.show()
 
@@ -163,10 +162,8 @@ def plotVal(date: str, model_id: str, suffix: str = "val", focus: int = -1):
         color = cmap(norm(d_value))
         ax.plot(group['iteration'], group['mean'], label=f'd={d_value}', color=color)
         ax.fill_between(group['iteration'], 
-                        # group['mean'] - group['std'], 
-                        # group['mean'] + group['std'], 
-                        group['min'],
-                        group['max'],
+                        df['mean'] - 1.96 * df['std'], 
+                        df['mean'] + 1.96 * df['std'], 
                         color=color, alpha=0.3)  # Shade ± SD
     plt.xlabel('Iteration')
     plt.ylabel(ylabel)
