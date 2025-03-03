@@ -276,7 +276,7 @@ def findQuantiles(base_dist: Callable,
     return torch.stack(values, dim=-1)
   
 
-def plotWrapper(data: dict, prefix: str, batch_id: int, iteration: int,
+def mixtureWrapper(data: dict, prefix: str, batch_id: int, iteration: int,
                 base_dist: Callable,
                 quantiles: Tuple[float, float, float],
                 ylims: Tuple[float, float]):
@@ -298,14 +298,14 @@ def plotWrapper(data: dict, prefix: str, batch_id: int, iteration: int,
     fig.suptitle(f'{prefix} (iter={iteration})')
 
 
-def ffxWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
-    return plotWrapper(data, 'ffx', batch_id, iteration, D.Normal, quantiles, (-6., 6.))
+def ffxMixWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return mixtureWrapper(data, 'ffx', batch_id, iteration, D.Normal, quantiles, (-6., 6.))
 
-def rfxWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
-    return plotWrapper(data, 'rfx', batch_id, iteration, D.LogNormal, quantiles, (0., 6.))
+def rfxMixWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return mixtureWrapper(data, 'rfx', batch_id, iteration, D.LogNormal, quantiles, (0., 6.))
 
-def noiseWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
-    return plotWrapper(data, 'noise', batch_id, iteration, D.LogNormal, quantiles, (0., 2.))
+def noiseMixWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return mixtureWrapper(data, 'noise', batch_id, iteration, D.LogNormal, quantiles, (0., 2.))
 
 
 # =============================================================================
@@ -313,10 +313,10 @@ def noiseWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[flo
 if __name__ == "__main__":
     fixed = 0.
     noise = 'variable' if fixed == 0. else fixed
-    ds_type = 'mfx'
+    ds_type = 'ffx'
     num_components = 8
     model_id = f'mixture-{num_components}-transformer-128-256-8-3-dropout=0-loss=logprob-seed=0-fx={ds_type}-noise={noise}'
-    date = '20250303-141958'
+    date = '20250303-151342'
         
     # train and val loss
     plotTrain(date, model_id)
@@ -325,7 +325,7 @@ if __name__ == "__main__":
         plotVal(date, model_id, suffix="kl")
     
     # proposal distribution
-    iteration = 10
+    iteration = 20
     data = preloadPredictions(date,
                               model_id,
                               iteration=iteration,
@@ -336,11 +336,12 @@ if __name__ == "__main__":
     max_d = 1
     quantiles = (0.025, 0.5, 0.975)
     for i in range (5):
-        ffxWrapper(data, 500 * max_d + i, iteration, quantiles)
+        ffxMixWrapper(data, 500 * max_d + i, iteration, quantiles)
     for i in range (5):
-        rfxWrapper(data, 500 * max_d + i, iteration, quantiles)
-    for i in range (5):
-        noiseWrapper(data, 500 * max_d + i, iteration, quantiles)
+        noiseMixWrapper(data, 500 * max_d + i, iteration, quantiles)
+    if ds_type == "mfx":
+        for i in range (5):
+            rfxMixWrapper(data, 500 * max_d + i, iteration, quantiles)
     
     
     # plot validation loss over n for given iteration
