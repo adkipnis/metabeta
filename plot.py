@@ -347,5 +347,6 @@ if __name__ == "__main__":
     quantiles = (0.16, 0.5, 0.84)
     df_p = loss2df(data, 'ffx', 'proposed')
     plotValN(df_p, quantiles, iteration, source = 'proposed')
-    df_a = loss2df(data, 'ffx', 'analytical')
-    plotValN(df_a, quantiles, iteration, source = 'analytical')
+    if ds_type == 'ffx':
+        df_a = loss2df(data, 'ffx', 'analytical')
+        plotValN(df_a, quantiles, iteration, source = 'analytical')
