@@ -81,7 +81,7 @@ def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, ma
 
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate datasets for linear model task.')
-    parser.add_argument('-t', '--type', type=str, default='ffx', help='Type of dataset [ffx, mfx] (default = mfx)')
+    parser.add_argument('-t', '--type', type=str, default='mfx', help='Type of dataset [ffx, mfx] (default = mfx)')
     parser.add_argument('--n_draws', type=int, default=int(1e4), help='Number of samples to draw per dataset (default = 10,000).')
     parser.add_argument('--n_draws_val', type=int, default=500, help='Number of samples (per d) to draw for validation dataset (default = 500).')
     parser.add_argument('-i', '--iterations', type=int, default=10, help='Number of dataset partitions to generate (default = 10, 0 only generates validation dataset).')
