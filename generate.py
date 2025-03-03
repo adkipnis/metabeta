@@ -51,8 +51,9 @@ def generateDataset(ds_type: str, n_draws: int, max_samples: int, max_predictors
         seed = sower.throw()
         torch.manual_seed(seed)
         d = getD(max_predictors)
-        # sigma = math.sqrt(d + 1) * getSigmaError() if cfg.fixed == 0. else cfg.fixed
-        sigma = getSigmaError() if cfg.fixed == 0. else cfg.fixed
+        sigma = ufNoise() if cfg.fixed == 0. else cfg.fixed
+        if cfg.scale_noise:
+            sigma = sigma * sqrt(d + 1)
         lm = LinearModel(d, sigma, data_dist)
         data += [lm.sample(max_samples, seed, include_posterior=False)]
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
@@ -63,7 +64,7 @@ def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, ma
     data = []
     iterator = tqdm(range(max_predictors + 1))
     iterator.set_description('Validation Set')
-    sigmas = [getSigmaError() for _ in range(n_draws_per)]
+    sigmas = [ufNoise() for _ in range(n_draws_per)]
     LinearModel = FixedEffects if ds_type == "ffx" else MixedEffects
     include_posterior = ds_type == "ffx"
 
@@ -71,6 +72,8 @@ def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, ma
         for i in range(n_draws_per):
             torch.manual_seed(i)
             sigma = sigmas[i] if cfg.fixed == 0. else cfg.fixed
+            if cfg.scale_noise:
+                sigma = sigma * sqrt(d + 1)
             lm = LinearModel(d, sigma, data_dist)
             data += [lm.sample(max_samples, i, include_posterior=include_posterior)]
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
@@ -86,6 +89,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('-d', '--max_predictors', type=int, default=8, help='Maximum number of predictors (without intercept) to draw per linear model (default = 8).')
     parser.add_argument('-b', '--begin', type=int, default=0, help='Begin with iteration number #b (default = 0).')
     parser.add_argument('-f', '--fixed', type=float, default=0., help='Fixed noise variance (default = 0. -> not fixed)')
+    parser.add_argument('-s', '--scale_noise', action='store_false', help='scale noise with number of predictors')
     return parser.parse_args()
 
 
