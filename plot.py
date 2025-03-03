@@ -316,14 +316,15 @@ if __name__ == "__main__":
     fixed = 0.
     noise = 'variable' if fixed == 0. else fixed
     ds_type = 'ffx'
-    model_id = f'mixture-8-transformer-128-256-8-3-dropout=0-loss=logprob-seed=0-fx={ds_type}-noise={noise}'
-    date = '20250227-164027'
+    num_components = 1
+    model_id = f'mixture-{num_components}-transformer-128-256-8-3-dropout=0-loss=logprob-seed=0-fx={ds_type}-noise={noise}'
+    date = '20250303-105441'
         
     # train and val loss
     plotTrain(date, model_id)
     plotVal(date, model_id)
-    # if ds_type == "ffx":
-    #     plotVal(date, model_id, suffix="kl")
+    if ds_type == "ffx" and num_components == 1:
+        plotVal(date, model_id, suffix="kl")
     
     # proposal distribution
     iteration = 10
@@ -332,7 +333,8 @@ if __name__ == "__main__":
                               iteration=iteration,
                               n_batches=45,
                               fixed=fixed,
-                              ds_type=ds_type)
+                              ds_type=ds_type,
+                              num_components=num_components)
     max_d = 1
     quantiles = (0.025, 0.5, 0.975)
     for i in range (5):
@@ -344,7 +346,8 @@ if __name__ == "__main__":
     
     
     # plot validation loss over n for given iteration
-    df_p = loss2df(data, source = "proposed")
-    plotValN(df_p, iteration, source = "proposed")
-    # df_a = loss2df(data, source = "analytical")
-    # plotValN(df_a, iteration, source = "analytical")
+    quantiles = (0.16, 0.5, 0.84)
+    df_p = loss2df(data, 'ffx', 'proposed')
+    plotValN(df_p, quantiles, iteration, source = 'proposed')
+    df_a = loss2df(data, 'ffx', 'analytical')
+    plotValN(df_a, quantiles, iteration, source = 'analytical')
