@@ -1,6 +1,7 @@
 import os
 from tqdm import tqdm
 import argparse
+from math import sqrt
 import torch
 from torch import distributions as D
 from tasks import FixedEffects, MixedEffects
@@ -25,12 +26,17 @@ def getD(max_predictors: int) -> int:
     return int(d.item())
 
 
-def getSigmaError(alpha: float = 3., beta: float = 1., clip: float = 1.5) -> float:
+def ufNoise(min_val: float = 0.05, max_val: float = 1.5) -> float:
     ''' Get the noise standard deviation '''
-    # sigma_squared = D.InverseGamma(alpha, beta).sample()
-    # sigma = math.sqrt(sigma_squared.item()) # type: ignore
-    # sigma = min(sigma, clip)
-    sigma = D.Uniform(0., clip).sample()
+    sigma = D.Uniform(min_val, max_val).sample()
+    return sigma.item()
+
+
+def igNoise(alpha: float = 3., beta: float = 1., max_val: float = 1.5) -> float:
+    ''' Get the noise standard deviation '''
+    sigma_squared = D.InverseGamma(alpha, beta).sample()
+    sigma = sigma_squared.sqrt()
+    sigma = sigma.clamp(max=max_val)
     return sigma.item()
 
 
