@@ -417,7 +417,7 @@ def parseOutputs(outputs: torch.Tensor,
     b, n, d, _ = outputs.shape
     outputs = outputs.reshape(b, n, d, c, -1)
     if posterior_type == "discrete":
-        ffx_dict = {"{target_type}_probs":
+        ffx_dict = {f"{target_type}_probs":
                     nn.functional.softmax(outputs[..., 0], dim=-1)}
         if outputs.shape[-1] == 1:
             return ffx_dict
