@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 from dataset import LMDataset
 from utils import dsFilenameVal
-from train import mixMean, mixVariance, mixLogProb
+from train import mixMean, mixVariance, mixLogProb, discreteLogProb
 from torch import Value, distributions as D
 cmap = colors.LinearSegmentedColormap.from_list("custom_blues", ["#add8e6", "#000080"])
 
