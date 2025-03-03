@@ -9,15 +9,7 @@ from dataset import LMDataset
 from utils import dsFilenameVal
 from train import mixMean, mixVariance, mixLogProb
 from torch import Value, distributions as D
-
 cmap = colors.LinearSegmentedColormap.from_list("custom_blues", ["#add8e6", "#000080"])
-
-# -----------------------------------------------------------------------------------------
-# basic plots
-
-
-
-
 
 
 # -----------------------------------------------------------------------------------------
@@ -29,7 +21,7 @@ def locScaleWeight(prefix: str, predictions: List[Dict[str, torch.Tensor]]) -> D
     return dict(zip(keys, out))
 
 
-def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches: int = 45, fixed: float = 0, ds_type: str = "ffx") -> Dict[str, torch.Tensor]:
+def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches: int = 45, fixed: float = 0, ds_type: str = "ffx", num_components: int = 1) -> Dict[str, torch.Tensor]:
     # gather predicted posteriors
     paths = [Path('predictions', model_id, date,
                   f'predictions_i={iteration}_b={batch}.pt')
@@ -50,20 +42,21 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
     noise_target = torch.stack([x["sigma_error"] for x in ds_val], dim=0).unsqueeze(-1)
     out.append({"ffx_target": ffx_target, "noise_target": noise_target})
 
-    # if ds_type == "ffx":
-    #     means_a = torch.stack([x["mu_n"] for x in ds_val], dim=0).numpy()
-    #     stds_a = [torch.diagonal(x["Sigma_n"], dim1=-2, dim2=-1).sqrt() for x in ds_val]
-    #     stds_a = torch.stack(stds_a, dim=0).numpy()
-    #     as_a = torch.stack([x["a_n"] for x in ds_val], dim=0).unsqueeze(-1)
-    #     bs_a = torch.stack([x["b_n"] for x in ds_val], dim=0).unsqueeze(-1)
-    #     abs_a = torch.cat([as_a, bs_a], dim=-1).numpy()
-    #     assert means_a.shape[0] == means_p.shape[0], \
-    #         "Different number of observations for analytical and trained solutions."
-    #     out.update({"means_a": means_a, "stds_a": stds_a, "abs_a": abs_a,})
-    # elif ds_type == "mfx":
-    #     s = torch.stack([x["S"].sqrt() for x in ds_val], dim=0).numpy()
-    #     s_emp = torch.stack([x["S_emp"].sqrt() for x in ds_val], dim=0).numpy()
-    #     out.update({"s": s, "s_emp": s_emp})
+    # optionally get analytical solutions for ffx
+    if ds_type == "ffx" and num_components == 1:
+        ffx_loc_a = torch.stack([x["mu_n"] for x in ds_val], dim=0)
+        ffx_scale_a = [torch.diagonal(x["Sigma_n"], dim1=-2, dim2=-1).sqrt() for x in ds_val]
+        ffx_scale_a = torch.stack(ffx_scale_a, dim=0)
+        # as_a = torch.stack([x["a_n"] for x in ds_val], dim=0).unsqueeze(-1)
+        # bs_a = torch.stack([x["b_n"] for x in ds_val], dim=0).unsqueeze(-1)
+        # abs_a = torch.cat([as_a, bs_a], dim=-1)
+        out.append({"ffx_loc_a": ffx_loc_a, "ffx_scale_a": ffx_scale_a})
+
+    # optionally get rfx structure
+    if ds_type == "mfx":
+        S = torch.stack([x["S"].sqrt() for x in ds_val], dim=0)
+        S_emp = torch.stack([x["S_emp"].sqrt() for x in ds_val], dim=0)
+        out.append({"S": S, "S_emp": S_emp})
     return {k: v for d in out for k, v in d.items()}
 
 
