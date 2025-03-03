@@ -77,21 +77,35 @@ def multivariateDataFrame(loc: torch.Tensor, quants: torch.Tensor) -> pd.DataFra
 
 def lossFromPredictions(data: Dict[str, torch.Tensor],
                         target_type: str,
-                        source = "proposed") -> torch.Tensor:
+                        source = "proposed",
+                        posterior_type = "mixture") -> torch.Tensor:
     target = data[f'{target_type}_target']
-    if source == 'proposed':
-        loc = data[f'{target_type}_loc']
-        scale = data[f'{target_type}_scale']
-        weight = data[f'{target_type}_weight']
-        return mixLogProb(loc, scale, weight, target, target_type)
-    elif source == 'analytical' and target_type == 'ffx':
-        loc = data[f'{target_type}_loc_a'].unsqueeze(-1)
-        scale = data[f'{target_type}_scale_a'].unsqueeze(-1)
-        scale = scale + (scale == 0.).float()
-        weight = torch.ones_like(loc)
-        return mixLogProb(loc, scale, weight, target, target_type)
+    if posterior_type == "mixture":
+        if source == 'proposed':
+            loc = data[f'{target_type}_loc']
+            scale = data[f'{target_type}_scale']
+            weight = data[f'{target_type}_weight']
+            return mixLogProb(loc, scale, weight, target, target_type)
+        elif source == 'analytical' and target_type == 'ffx':
+            loc = data[f'{target_type}_loc_a'].unsqueeze(-1)
+            scale = data[f'{target_type}_scale_a'].unsqueeze(-1)
+            scale = scale + (scale == 0.).float()
+            weight = torch.ones_like(loc)
+            return mixLogProb(loc, scale, weight, target, target_type)
+        else:
+            raise ValueError(f'source {source} unknown.')
+    elif posterior_type == "discrete":
+        grid = ffx_grid if target_type == "ffx" else rfx_grid
+        if source == 'proposed':
+            probs = data[f'{target_type}_probs']
+            b, n, d, _ = probs.shape
+            targets = target.unsqueeze(1).expand(b, n, d)
+            return discreteLogProb(probs, targets, grid)
+        else:
+            raise ValueError(f'source {source} unknown.')
     else:
-        raise ValueError(f'source {source} unknown.')
+        raise ValueError(f'posterior type {posterior_type} unknown.')
+        
 
 
 def batchLoss(losses, targets, batch):
