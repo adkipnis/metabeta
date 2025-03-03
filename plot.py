@@ -303,6 +303,9 @@ def noiseDiscWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple
 
 
 
+# -----------------------------------------------------------------------------
+# mixture wrappers
+
 def plotMixtureDensity(target, loc, scale, weight, i):
     comp = D.LogNormal(loc, scale)
     mix = D.Categorical(weight)
@@ -325,7 +328,7 @@ def mixtureCDF(x, loc, scale, weight, base_dist) -> torch.Tensor:
     return torch.sum(weight.unsqueeze(-2) * cdfs, dim=-1)
 
 
-def findQuantiles(base_dist: Callable,
+def mixtureQuantiles(base_dist: Callable,
                   quantiles: Tuple[float, float, float],
                   loc: torch.Tensor, scale: torch.Tensor, weight: torch.Tensor,
                   num_points=1000) -> torch.Tensor:
@@ -356,9 +359,9 @@ def mixtureWrapper(data: dict, prefix: str, batch_id: int, iteration: int,
     
     # find mean, (numerical) quantiles and construct df
     mean = mixMean(loc, weight)
-    quantile_roots = findQuantiles(base_dist, quantiles, loc, scale, weight)
+    quantile_roots = mixtureQuantiles(base_dist, quantiles, loc, scale, weight)
     df = multivariateDataFrame(mean, quantile_roots)
-    
+
     # plot
     fig, ax = plt.subplots(figsize=(8, 6))
     plotMultivariateParams(df, target, quantiles, ylims, 'proposed', ax)
