@@ -307,9 +307,9 @@ def ffxWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float
 
 
 def noiseWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
-    return plotWrapper(data, 'noise', batch_id, iteration, D.LogNormal, quantiles, (0., 3.))
-    
-    
+    return plotWrapper(data, 'noise', batch_id, iteration, D.LogNormal, quantiles, (0., 2.))
+
+
 # =============================================================================
 
 if __name__ == "__main__":
