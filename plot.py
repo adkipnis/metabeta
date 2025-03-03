@@ -272,6 +272,37 @@ def discreteQuantiles(probs: torch.Tensor, quantiles: Tuple[float, float, float]
     return torch.stack(values, dim=-1)
 
 
+def discreteWrapper(data: dict, prefix: str, batch_id: int, iteration: int,
+                    quantiles: Tuple[float, float, float],
+                    ylims: Tuple[float, float]):
+    # prepare data
+    mask = (data[f'{prefix}_target'][batch_id] != 0)
+    target = data[f'{prefix}_target'][batch_id, mask]
+    probs = data[f'{prefix}_probs'][batch_id, :, mask]
+    grid = ffx_grid if prefix == "ffx" else rfx_grid
+     
+    # find mean, (numerical) quantiles and construct df
+    mean = torch.matmul(probs, grid)
+    quantile_roots = discreteQuantiles(probs, quantiles,fx_type=prefix)        
+    df = multivariateDataFrame(mean, quantile_roots)
+
+    # plot
+    fig, ax = plt.subplots(figsize=(8, 6))
+    plotMultivariateParams(df, target, quantiles, ylims, 'proposed', ax)
+    fig.suptitle(f'{prefix} (iter={iteration})')
+
+
+def ffxDiscWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return discreteWrapper(data, 'ffx', batch_id, iteration, quantiles, (-6., 6.))
+
+def rfxDiscWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return discreteWrapper(data, 'rfx', batch_id, iteration, quantiles, (0., 6.))
+
+def noiseDiscWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return discreteWrapper(data, 'noise', batch_id, iteration, quantiles, (0., 2.))
+
+
+
 def plotMixtureDensity(target, loc, scale, weight, i):
     comp = D.LogNormal(loc, scale)
     mix = D.Categorical(weight)
