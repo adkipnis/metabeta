@@ -252,13 +252,15 @@ def discreteExamples(num_examples: int,
 # -------- methods for mixture posterior
 def mixMean(locs: torch.Tensor,
             weights: torch.Tensor) -> torch.Tensor:
+    ''' mean of normal mixture '''
     return (locs * weights).sum(dim=-1)
-
+    
 
 def mixVariance(locs: torch.Tensor,
                 scales: torch.Tensor,
                 weights: torch.Tensor,
                 mean: torch.Tensor) -> torch.Tensor:
+    ''' variance of normal mixture '''
     second_moments = locs.square() + scales.square()
     return (second_moments * weights).sum(dim=-1) - mean.square()
 
