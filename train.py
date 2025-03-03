@@ -365,9 +365,10 @@ def assembleInputs(y: torch.Tensor,  X: torch.Tensor) -> torch.Tensor:
 
 def getResiduals(y: torch.Tensor, X: torch.Tensor, outputs: Dict[str, torch.Tensor]) -> torch.Tensor:
     locs = outputs["ffx_loc"] 
+    scales = outputs["ffx_scale"]
     weights = outputs["ffx_weight"]
-    loc = mixMean(locs, weights)
-    y_pred = torch.sum(X * loc, dim=-1)
+    expected_beta = mixMean(locs, weights)
+    y_pred = torch.sum(X * expected_beta, dim=-1)
     return y - y_pred
     
 def assembleNoiseInputs(y: torch.Tensor,
