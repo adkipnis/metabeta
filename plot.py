@@ -127,12 +127,10 @@ def plotTrain(date: str, model_id: str):
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(df['iteration'], df['mean'], label='Mean Loss', color='blue')
     
-    # Shade min-max area
+    # Shade 95% CI area
     ax.fill_between(df['iteration'],
-                    # df['mean'] - df['std'], 
-                    # df['mean'] + df['std'], 
-                    df['min'], 
-                    df['max'], 
+                    df['mean'] - 1.96 * df['std'], 
+                    df['mean'] + 1.96 * df['std'], 
                     color='blue', alpha=0.3)
     
     plt.xlabel('Iteration')
