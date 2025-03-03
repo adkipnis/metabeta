@@ -301,6 +301,8 @@ def plotWrapper(data: dict, prefix: str, batch_id: int, iteration: int,
 def ffxWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
     return plotWrapper(data, 'ffx', batch_id, iteration, D.Normal, quantiles, (-6., 6.))
 
+def rfxWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return plotWrapper(data, 'rfx', batch_id, iteration, D.LogNormal, quantiles, (0., 6.))
 
 def noiseWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
     return plotWrapper(data, 'noise', batch_id, iteration, D.LogNormal, quantiles, (0., 2.))
@@ -311,10 +313,10 @@ def noiseWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[flo
 if __name__ == "__main__":
     fixed = 0.
     noise = 'variable' if fixed == 0. else fixed
-    ds_type = 'ffx'
-    num_components = 1
+    ds_type = 'mfx'
+    num_components = 8
     model_id = f'mixture-{num_components}-transformer-128-256-8-3-dropout=0-loss=logprob-seed=0-fx={ds_type}-noise={noise}'
-    date = '20250303-105441'
+    date = '20250303-141958'
         
     # train and val loss
     plotTrain(date, model_id)
@@ -335,8 +337,8 @@ if __name__ == "__main__":
     quantiles = (0.025, 0.5, 0.975)
     for i in range (5):
         ffxWrapper(data, 500 * max_d + i, iteration, quantiles)
-    # for i in range (5):
-    #     rfxWrapper(data, 500 * max_d + i, iteration, quantiles)
+    for i in range (5):
+        rfxWrapper(data, 500 * max_d + i, iteration, quantiles)
     for i in range (5):
         noiseWrapper(data, 500 * max_d + i, iteration, quantiles)
     
