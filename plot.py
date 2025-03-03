@@ -38,7 +38,7 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
     out.append(gatherPosterior('noise', predictions))
 
     # 2. gather validation data
-    filename = dsFilenameVal(ds_type, 8, 50, fixed)
+    filename = dsFilenameVal(fx_type, 8, 50, fixed)
     ds_val_raw = torch.load(filename, weights_only=False)
     ds_val = LMDataset(**ds_val_raw, permute=False)
     ffx_target = torch.stack([x["beta"] for x in ds_val], dim=0)
@@ -46,7 +46,7 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
     out.append({"ffx_target": ffx_target, "noise_target": noise_target})
 
     # - optionally get analytical solutions for ffx
-    if ds_type == "ffx":
+    if fx_type == "ffx":
         ffx_loc_a = torch.stack([x["mu_n"] for x in ds_val], dim=0)
         ffx_scale_a = [torch.diagonal(x["Sigma_n"], dim1=-2, dim2=-1).sqrt() for x in ds_val]
         ffx_scale_a = torch.stack(ffx_scale_a, dim=0)
@@ -56,7 +56,7 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
         out.append({"ffx_loc_a": ffx_loc_a, "ffx_scale_a": ffx_scale_a})
 
     # - optionally get rfx structure
-    if ds_type == "mfx":
+    if fx_type == "mfx":
         rfx_target = torch.stack([x["S"].sqrt() for x in ds_val], dim=0)
         out.append({"rfx_target": rfx_target})
     return {k: v for d in out for k, v in d.items()}
