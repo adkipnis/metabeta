@@ -597,13 +597,13 @@ def validate(models: Tuple[nn.Module, nn.Module],
                 logger.write(iteration, step, loss.item(), "loss_val")
                 logger.write(iteration, step, loss_noise.item(), "loss_val_noise")
 
-            # # optionally calculate KL loss
-            # if cfg.kl and cfg.fx_type == "ffx":
-            #     loss_kl = compare(models, batch)
-            #     if writer is not None:
-            #         writer.add_scalar("loss_kl", loss_kl.item(), step)
-            #     if logger is not None:
-            #         logger.write(iteration, step, loss_kl.item(), "loss_kl 
+            # optionally calculate KL loss
+            if cfg.kl and cfg.fx_type == "ffx" and cfg.c == 1 and cfg.posterior_type == "mixture":
+                loss_kl = compare(models, batch)
+                if writer is not None:
+                    writer.add_scalar("loss_kl", loss_kl.item(), step)
+                if logger is not None:
+                    logger.write(iteration, step, loss_kl.item(), "loss_kl")
 
             # optionally save predictions
             if iteration % 5 == 0 and not cfg.proto:
