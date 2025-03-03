@@ -296,8 +296,7 @@ def mixLogProb(locs: torch.Tensor,
     # target (b, d)
     b, n, d, m = locs.shape
     base = D.Normal
-    if type in ["ffx", "noise"]:
-        target = target.unsqueeze(1).expand((b, n, d))
+    target = target.unsqueeze(1).expand((b, n, d))
     if type in ["rfx", "noise"]:
         target = target + (target == 0.).float() # set entries with sd=0 to 1
         base = D.LogNormal
@@ -450,8 +449,9 @@ def run(models: tuple,
     if cfg.fx_type == "mfx":
         rfx_depths = batch["q"]
         rfx = batch["rfx"].to(device)
-        rfx_scale_true = batch["S_emp"].to(device).sqrt()
-        losses_rfx = lossWrapper(output_dict, rfx_scale_true, rfx_depths, "rfx") 
+        rfx_scale = batch["S"].to(device).sqrt()
+        # rfx_scale_true = batch["S_emp"].to(device).sqrt()
+        losses_rfx = lossWrapper(output_dict, rfx_scale, rfx_depths, "rfx") 
         losses_joint = torch.cat([losses_ffx, losses_rfx], dim=1)
         targets = torch.cat([ffx, rfx[:,0]], dim=1)
         loss = maskLoss(losses_joint, targets)
