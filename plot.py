@@ -250,7 +250,27 @@ def plotValN(df, quantiles, iteration, source, focus: int = -1):
     plt.show()
 
 # -----------------------------------------------------------------------------
-# plot wrappers
+# discrete wrappers
+
+def plotPmf(target, probs, i, fx_type: str):
+    grid = ffx_grid if fx_type == "ffx" else rfx_grid
+    probs = probs.detach().numpy()
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.bar(grid, probs[i])
+    ax.axvline(x = target[i], color = 'b')
+
+
+def discreteQuantiles(probs: torch.Tensor, quantiles: Tuple[float, float, float], fx_type: str):
+    n, d, _ = probs.shape
+    grid = ffx_grid if fx_type == "ffx" else rfx_grid
+    grid_expanded = grid.unsqueeze(0).unsqueeze(0).expand(n, d, -1)
+    cdf = probs.cumsum(dim=-1)
+    values = []
+    for q in quantiles:
+        indices = torch.argmin(torch.abs(cdf-q), dim=-1).unsqueeze(-1)
+        values += [grid_expanded.gather(dim=-1, index=indices).squeeze(-1)]
+    return torch.stack(values, dim=-1)
+
 
 def plotMixtureDensity(target, loc, scale, weight, i):
     comp = D.LogNormal(loc, scale)
