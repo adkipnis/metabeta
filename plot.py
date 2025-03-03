@@ -10,18 +10,21 @@ from utils import dsFilenameVal
 from train import mixMean, mixVariance, mixLogProb, discreteLogProb
 from torch import Value, distributions as D
 cmap = colors.LinearSegmentedColormap.from_list("custom_blues", ["#add8e6", "#000080"])
-
-
 # -----------------------------------------------------------------------------------------
 # data wrangling
 
-def locScaleWeight(prefix: str, predictions: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
-    keys = [f'{prefix}{suffix}' for suffix in ['_loc', '_scale', '_weight']]
-    out = [torch.cat([x[key] for x in predictions]) for key in keys]
-    return dict(zip(keys, out))
+def gatherPosterior(prefix: str, predictions: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+    if f'{prefix}_loc' in predictions[0]:
+        keys = [f'{prefix}{suffix}' for suffix in ['_loc', '_scale', '_weight']]
+        out = [torch.cat([x[key] for x in predictions]) for key in keys]
+        return dict(zip(keys, out))
+    else:
+        key = f'{prefix}_probs'
+        out = torch.cat([x[key] for x in predictions])
+        return {key: out}
+    
 
-
-def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches: int = 45, fixed: float = 0, ds_type: str = "ffx", num_components: int = 1) -> Dict[str, torch.Tensor]:
+def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches: int = 45, fixed: float = 0, fx_type: str = "ffx", num_components: int = 1) -> Dict[str, torch.Tensor]:
     # 1. gather predicted posteriors
     paths = [Path('predictions', model_id, date,
                   f'predictions_i={iteration}_b={batch}.pt')
@@ -29,10 +32,10 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
     predictions = [torch.load(paths[batch], weights_only=False)
                    for batch in range(n_batches)]
     out = []
-    out.append(locScaleWeight('ffx', predictions))
+    out.append(gatherPosterior('ffx', predictions))
     if "rfx_loc" in predictions[0]:
-        out.append(locScaleWeight('rfx', predictions))
-    out.append(locScaleWeight('noise', predictions))
+        out.append(gatherPosterior('rfx', predictions))
+    out.append(gatherPosterior('noise', predictions))
 
     # 2. gather validation data
     filename = dsFilenameVal(ds_type, 8, 50, fixed)
