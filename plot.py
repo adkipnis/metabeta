@@ -107,9 +107,9 @@ def batchLoss(losses, targets, batch):
     return pd.DataFrame(out)
 
 
-def loss2df(data, source = 'proposed'):
-    targets = data['ffx_target']
-    losses = lossFromPredictions(data, 'ffx', source)
+def loss2df(data, target_type: str, source = 'proposed'):
+    targets = data[f'{target_type}_target']
+    losses = lossFromPredictions(data, target_type, source)
     b = losses.shape[0]
     batch_losses = [batchLoss(losses, targets, i) for i in range(b)]
     return pd.concat(batch_losses) 
