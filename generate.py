@@ -89,7 +89,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('-d', '--max_predictors', type=int, default=8, help='Maximum number of predictors (without intercept) to draw per linear model (default = 8).')
     parser.add_argument('-b', '--begin', type=int, default=0, help='Begin with iteration number #b (default = 0).')
     parser.add_argument('-f', '--fixed', type=float, default=0., help='Fixed noise variance (default = 0. -> not fixed)')
-    parser.add_argument('-s', '--scale_noise', action='store_false', help='scale noise with number of predictors')
+    parser.add_argument('-s', '--scale_noise', action='store_true', help='scale noise with number of predictors (default = false)')
     return parser.parse_args()
 
 
