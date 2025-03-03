@@ -22,7 +22,7 @@ def locScaleWeight(prefix: str, predictions: List[Dict[str, torch.Tensor]]) -> D
 
 
 def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches: int = 45, fixed: float = 0, ds_type: str = "ffx", num_components: int = 1) -> Dict[str, torch.Tensor]:
-    # gather predicted posteriors
+    # 1. gather predicted posteriors
     paths = [Path('predictions', model_id, date,
                   f'predictions_i={iteration}_b={batch}.pt')
              for batch in range(n_batches)]
@@ -34,7 +34,7 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
         out.append(locScaleWeight('rfx', predictions))
     out.append(locScaleWeight('noise', predictions))
 
-    # gather validation data
+    # 2. gather validation data
     filename = dsFilenameVal(ds_type, 8, 50, fixed)
     ds_val_raw = torch.load(filename, weights_only=False)
     ds_val = LMDataset(**ds_val_raw, permute=False)
@@ -42,7 +42,7 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
     noise_target = torch.stack([x["sigma_error"] for x in ds_val], dim=0).unsqueeze(-1)
     out.append({"ffx_target": ffx_target, "noise_target": noise_target})
 
-    # optionally get analytical solutions for ffx
+    # - optionally get analytical solutions for ffx
     if ds_type == "ffx" and num_components == 1:
         ffx_loc_a = torch.stack([x["mu_n"] for x in ds_val], dim=0)
         ffx_scale_a = [torch.diagonal(x["Sigma_n"], dim1=-2, dim2=-1).sqrt() for x in ds_val]
@@ -52,11 +52,10 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
         # abs_a = torch.cat([as_a, bs_a], dim=-1)
         out.append({"ffx_loc_a": ffx_loc_a, "ffx_scale_a": ffx_scale_a})
 
-    # optionally get rfx structure
+    # - optionally get rfx structure
     if ds_type == "mfx":
-        S = torch.stack([x["S"].sqrt() for x in ds_val], dim=0)
-        S_emp = torch.stack([x["S_emp"].sqrt() for x in ds_val], dim=0)
-        out.append({"S": S, "S_emp": S_emp})
+        rfx_target = torch.stack([x["S"].sqrt() for x in ds_val], dim=0)
+        out.append({"rfx_target": rfx_target})
     return {k: v for d in out for k, v in d.items()}
 
 
