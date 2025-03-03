@@ -123,9 +123,9 @@ def batchLoss(losses, targets, batch):
     return pd.DataFrame(out)
 
 
-def loss2df(data, target_type: str, source = 'proposed'):
+def loss2df(data, target_type: str, source = 'proposed', posterior_type = 'mixture'):
     targets = data[f'{target_type}_target']
-    losses = lossFromPredictions(data, target_type, source)
+    losses = lossFromPredictions(data, target_type, source, posterior_type)
     b = losses.shape[0]
     batch_losses = [batchLoss(losses, targets, i) for i in range(b)]
     return pd.concat(batch_losses) 
@@ -248,8 +248,7 @@ def plotValN(df, quantiles, iteration, source, focus: int = -1):
         title += f' (iteration {iteration})'
     plt.title(title)
     plt.show()
-    
-    
+
 # -----------------------------------------------------------------------------
 # plot wrappers
 
