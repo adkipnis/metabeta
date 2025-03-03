@@ -203,9 +203,14 @@ def plotMultivariateParams(df, targets, quantiles, ylims, est_type: str, ax):
      
 
 # validation loss over n
-def plotValN(df, iteration, source, focus: int = -1):
+def plotValN(df, quantiles, iteration, source, focus: int = -1):
     unique_d = df['d'].unique().shape[0]
-    df_agg = df.groupby(['d', 'n'])['loss'].agg(['mean', 'std', 'max', 'min']).reset_index()
+    q1 = lambda x: x.quantile(quantiles[0])
+    q2 = lambda x: x.quantile(quantiles[1])
+    q3 = lambda x: x.quantile(quantiles[2])
+    df_agg = df.groupby(['d', 'n'])['loss'].agg([('q1', q1), 
+                                                 ('q2', q2),
+                                                 ('q3', q3)]).reset_index()
     if focus >= 0:
         df_agg = df_agg[df_agg['d'] == focus]
     norm = colors.Normalize(vmin=0, vmax=unique_d)
@@ -215,10 +220,10 @@ def plotValN(df, iteration, source, focus: int = -1):
     
     for d_value, group in df_agg.groupby('d'):
         color = cmap(norm(d_value))
-        ax.plot(group['n'], group['mean'], label=f'd={d_value}', color=color)
+        ax.plot(group['n'], group['q2'], label=f'd={d_value}', color=color)
         ax.fill_between(group['n'], 
-                        group['mean'] - group['std'], 
-                        group['mean'] + group['std'], 
+                        group['q1'], 
+                        group['q3'], 
                         color=color, alpha=0.2)  # Shade ± SD
     plt.ylim(-2, 6)
     plt.xlabel('n')
@@ -295,8 +300,8 @@ def plotWrapper(data: dict, prefix: str, batch_id: int, iteration: int,
     fig, ax = plt.subplots(figsize=(8, 6))
     plotMultivariateParams(df, target, quantiles, ylims, 'proposed', ax)
     fig.suptitle(f'{prefix} (iter={iteration})')
-    
-    
+
+
 def ffxWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
     return plotWrapper(data, 'ffx', batch_id, iteration, D.Normal, quantiles, (-6., 6.))
 
