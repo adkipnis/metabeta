@@ -201,10 +201,10 @@ def discreteMSE(means: torch.Tensor,
 
 
 def discreteLogProb(dist: torch.Tensor,
-                targets: torch.Tensor,
-                grid: torch.Tensor) -> torch.Tensor:
+                    targets: torch.Tensor,
+                    grid: torch.Tensor) -> torch.Tensor:
     # dist (b, n, d, n_bins)
-    # targets (b, n, d) or 
+    # targets (b, n, d)
     # grid (n_bins)
     grid_expanded = grid.view(1, 1, 1, -1)
     index = (grid_expanded - targets.unsqueeze(-1)).abs().argmin(dim=-1) 
