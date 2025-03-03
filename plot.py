@@ -76,15 +76,18 @@ def multivariateDataFrame(loc: torch.Tensor, quants: torch.Tensor) -> pd.DataFra
 def lossFromPredictions(data: Dict[str, torch.Tensor],
                         target_type: str,
                         source = "proposed") -> torch.Tensor:
-
+    target = data[f'{target_type}_target']
     if source == 'proposed':
         loc = data[f'{target_type}_loc']
         scale = data[f'{target_type}_scale']
         weight = data[f'{target_type}_weight']
-        target = data[f'{target_type}_target']
         return mixLogProb(loc, scale, weight, target, target_type)
-    elif source == 'analytical':
-        raise NotImplementedError
+    elif source == 'analytical' and target_type == 'ffx':
+        loc = data[f'{target_type}_loc_a'].unsqueeze(-1)
+        scale = data[f'{target_type}_scale_a'].unsqueeze(-1)
+        scale = scale + (scale == 0.).float()
+        weight = torch.ones_like(loc)
+        return mixLogProb(loc, scale, weight, target, target_type)
     else:
         raise ValueError(f'source {source} unknown.')
 
