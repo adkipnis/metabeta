@@ -75,7 +75,7 @@ def getCheckpointPath(iteration: int) -> Path:
     ''' Get the filename for the model checkpoints. '''
     model_id = modelID(cfg)
     model_filename = f"{model_id}-{iteration:02d}.pt"
-    return Path(cfg.model_folder, model_filename)
+    return Path("outputs", cfg.model_folder, model_filename)
 
 
 def save(models: Tuple[nn.Module, nn.Module],
@@ -644,7 +644,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--proto", action="store_true", help="prototyping: don't log anything during (default = False)")
 
     # data
-    parser.add_argument("-t", "--fx_type", type=str, default="mfx", help="Type of dataset [ffx, mfx] (default = mfx)")
+    parser.add_argument("-t", "--fx_type", type=str, default="ffx", help="Type of dataset [ffx, mfx] (default = ffx)")
     parser.add_argument("-d", type=int, default=8, help="Number of predictors (without bias, default = 8)")
     parser.add_argument("-n", type=int, default=50, help="Maximum number of samples to draw per linear model (default = 50).")
     parser.add_argument("-f", "--fixed", type=float, default=0., help="Fixed noise variance (default = 0. -> not fixed)")
@@ -729,9 +729,9 @@ if __name__ == "__main__":
     if cfg.proto:
         writer, logger = None, None
     else:
-        writer = SummaryWriter(Path("runs", modelID(cfg), timestamp))
-        logger = Logger(Path("losses", modelID(cfg), timestamp))
-    pred_path = Path("predictions", modelID(cfg), timestamp)
+        writer = SummaryWriter(Path("outputs", "runs", modelID(cfg), timestamp))
+        logger = Logger(Path("outputs", "losses", modelID(cfg), timestamp))
+    pred_path = Path("outputs", "predictions", modelID(cfg), timestamp)
     pred_path.mkdir(parents=True, exist_ok=True)
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     num_params_noise = sum(p.numel() for p in model_noise.parameters() if p.requires_grad)
