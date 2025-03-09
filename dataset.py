@@ -41,7 +41,9 @@ class LMDataset(Dataset):
             X = X[:, indices]
             beta = beta[indices]
 
-        out = {'d': d, 'X': X, 'y': y, 'beta': beta, 'sigma_error': item['sigma_error']}
+        out = {'d': d, 'X': X, 'y': y, 'beta': beta,
+               'sigma_error': item['sigma_error'],
+               'sigma_error_emp': item['sigma_error_emp']}
 
         # optionally include random effects
         if "rfx" in item:
