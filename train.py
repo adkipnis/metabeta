@@ -366,34 +366,25 @@ def assembleInputs(y: torch.Tensor,  X: torch.Tensor) -> torch.Tensor:
 
 def getResiduals(y: torch.Tensor, X: torch.Tensor, outputs: Dict[str, torch.Tensor]) -> torch.Tensor:
     locs = outputs["ffx_loc"] 
-    scales = outputs["ffx_scale"]
     weights = outputs["ffx_weight"]
     expected_beta = mixMean(locs, weights)
     y_pred = torch.sum(X * expected_beta, dim=-1)
     return y - y_pred
     
-def assembleNoiseInputs(y: torch.Tensor,
-                        X: torch.Tensor,
+def assembleNoiseInputs(inputs: torch.Tensor,
                         outputs: Dict[str, torch.Tensor],
                         posterior_type: str) -> torch.Tensor:
-    rfx_loc = torch.zeros_like(X)
+    y = inputs[..., 0]
+    X = inputs[..., 1:]
     if posterior_type == "discrete":
         loc = discreteMean(outputs["ffx_probs"], ffx_grid).detach()
         scale = discreteVariance(outputs["ffx_probs"], loc, ffx_grid).sqrt().detach()
-        if "rfx_probs" in outputs:
-            S_mean = discreteMean(outputs["rfx_probs"], ffx_grid).detach()
-            scale = scale + S_mean
     elif posterior_type == "mixture":
         locs = outputs["ffx_loc"]
         scales = outputs["ffx_scale"]
         weights = outputs["ffx_weight"]
         loc = mixMean(locs, weights).detach()
         scale = mixVariance(locs, scales, weights, loc).sqrt().detach()
-        if "rfx_loc" in outputs:
-            rfx_locs = outputs["rfx_loc"]
-            rfx_weights = outputs["rfx_weight"]
-            S_median = (rfx_weights * rfx_locs.exp()).sum(dim=-1).detach() # median of lognormal mixture
-            scale = scale + S_median
     else:
         raise ValueError(f"posterior type {posterior_type} not supported.")
     y_pred = torch.sum(X * loc, dim=-1)
