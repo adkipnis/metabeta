@@ -126,6 +126,7 @@ class TransformerDecoder(Base):
                  fx_type: str = "ffx",
                  posterior_type: str = "mixture",
                  n_components: int = 1,
+                 activation: str ='gelu',
                  ) -> None:
 
         super(TransformerDecoder, self).__init__(n_predictors, hidden_size, n_layers, dropout, seed, fx_type, posterior_type, n_components)
@@ -134,7 +135,8 @@ class TransformerDecoder(Base):
                                                 dim_feedforward=ff_size,
                                                 nhead=n_heads,
                                                 dropout=dropout,
-                                                batch_first=True)
+                                                batch_first=True,
+                                                activation=activation)
         self.model= nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
         self.initializeWeights()
 
@@ -146,9 +148,11 @@ class TransformerDecoder(Base):
         return outputs # (batch_size, seq_size, hidden_size)
 
 
+
 def main():
-    model = TransformerDecoder(3, 256, 512, 1, 0.1, 0)
-    mask = model.causalMask(10)
+    emod = TransformerEncoder(3, 256, 512, 1, 0.1, 0)
+    dmod = TransformerEncoder(3, 256, 512, 1, 0.1, 0)
+    mask = causalMask(10)
     print(mask)
 
 if __name__ == '__main__':
