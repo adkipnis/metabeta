@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 import schedulefree
 from utils import dsFilename, dsFilenameVal
 from dataset import LMDataset
-from models import TransformerDecoder
+from models import TransformerEncoder, TransformerDecoder
 mse = nn.MSELoss(reduction='none')
 
 # -------- miscellaneous
