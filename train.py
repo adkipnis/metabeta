@@ -87,7 +87,8 @@ def save(models: Tuple[nn.Module, nn.Module],
          timestamp: str) -> None:
     """ Save the model and optimizer state. """
     model_filename = getCheckpointPath(current_iteration)
-    os.makedirs(cfg.model_folder, exist_ok=True)
+    checkpoints_path = Path("outputs", cfg.model_folder)
+    os.makedirs(checkpoints_path, exist_ok=True)
     torch.save({
         'iteration': current_iteration,
         'global_step': current_global_step,
