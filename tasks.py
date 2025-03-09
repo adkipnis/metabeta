@@ -46,7 +46,23 @@ class Task:
     def sample(self, n_samples: int, seed: int) -> Dict[str, torch.Tensor]:
         raise NotImplementedError
 
+    def _covarySeries(self, series: torch.Tensor, correction: int = 1) -> torch.Tensor:
+        ''' Calculate sample variance for each subset of series (as n increases) '''
+        # series (n, q)
+        n = series.shape[0]
+        k = torch.arange(1, n+1).unsqueeze(1)
+        means = torch.cumsum(series, dim=0) / k
+        outer = means * means
+        inner = torch.cumsum(series**2, dim=0) / k
+        bessel = k / (k - correction) # unbiased variance estimate
+        bessel[0] = 1. # prevent NaN generation due to division by inf
+        variances = bessel * (inner - outer)
+        # test:
+        # i = 9
+        # torch.isclose(variances[i], torch.var(series[:i+1], dim=0, correction = correction))
+        return torch.max(torch.tensor(0), variances) # guarantee non-negative values
  
+
 class FixedEffects(Task):
     def __init__(self, n_predictors: int, sigma_error: float, data_dist: torch.distributions.Distribution):
         super().__init__(n_predictors, sigma_error, data_dist)
@@ -115,11 +131,14 @@ class FixedEffects(Task):
         X = self._sampleFeatures(n_samples)
         beta = self._sampleBeta()
         eps = self._sampleNoise(n_samples)
+        # sigma_error_emp = torch.std(eps)
+        sigma_error_emp = self._covarySeries(eps.unsqueeze(-1)).sqrt()
         y = X @ beta + eps
         out = {"X": X, # (n, d)
                "y": y, # (n,)
                "beta": beta, # (d,)
-               "sigma_error": torch.tensor(self.sigma_error), # (n,)
+               "sigma_error": torch.tensor(self.sigma_error), # (1,)
+               "sigma_error_emp": sigma_error_emp, # (n,)
                "seed": torch.tensor(seed)}
         if include_posterior:
             mu_n, Sigma_n, a_n, b_n = self.allPosteriorParams(X, y)
@@ -146,21 +165,6 @@ class MixedEffects(Task):
     def _sampleRandomEffects(self, n_samples: int) -> torch.Tensor:
         return self.b_dist.sample((n_samples,)) # type: ignore
 
-    def _covaryRandomEffects(self, rfx: torch.Tensor, correction: int = 1) -> torch.Tensor:
-        ''' Calculate sample variance for each subset of rfx (as n increases) '''
-        # rfx (n, q)
-        n = rfx.shape[0]
-        k = torch.arange(1, n+1).unsqueeze(1)
-        means = torch.cumsum(rfx, dim=0) / k
-        outer = means * means
-        inner = torch.cumsum(rfx**2, dim=0) / k
-        bessel = k / (k - correction) # unbiased variance estimate
-        bessel[0] = 1. # prevent NaN generation due to division by inf
-        variances = bessel * (inner - outer)
-        # test:
-        # i = 9
-        # torch.isclose(variances[i], torch.var(rfx[:i+1], dim=0, correction = correction))
-        return torch.max(torch.tensor(0), variances) # guarantee non-negative values
 
     def sample(self, n_samples: int, seed: int, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
         if include_posterior:
@@ -170,10 +174,11 @@ class MixedEffects(Task):
         beta = self._sampleBeta()
         q = self.n_random_effects
         rfx = self._sampleRandomEffects(n_samples)
-        S_emp = self._covaryRandomEffects(rfx)
+        S_emp = self._covarySeries(rfx)
         Z = X[:,:q]
         eta = torch.bmm(Z.unsqueeze(1), rfx.unsqueeze(2)).flatten() # eta_i = z_i.T @ b_i
         eps = self._sampleNoise(n_samples)
+        # todo: empirical sigma error
         y = X @ beta + eta + eps
         out = {"X": X, # (n, d)
                "y": y, # (n,)
@@ -181,7 +186,7 @@ class MixedEffects(Task):
                "rfx": rfx, # (n, q)
                "S": torch.diag(self.S), # once we allow correlation: symmetricMatrix2Vector(self.S),
                "S_emp": S_emp, # for now only marginal variances
-               "sigma_error": torch.tensor(self.sigma_error), # (n,)
+               "sigma_error": torch.tensor(self.sigma_error), # (1,)
                "seed": torch.tensor(seed)}
         return out
 
@@ -236,15 +241,17 @@ def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> No
 if __name__ == "__main__":
     seed = 1
     n_predictors = 5
-    n_obs = 20
+    n_obs = 50
     noise_var = 0.5 ** 2
     datadist = torch.distributions.uniform.Uniform(0., 1.)
 
-    # # fixed effects
-    # fe = FixedEffects(n_predictors, math.sqrt(noise_var), datadist)
-    # ds = fe.sample(n_obs, seed)
-    # X, y, beta = ds["X"], ds["y"], ds["beta"]
-    # print(f"true beta: {beta}")
+    # fixed effects
+    fe = FixedEffects(n_predictors, math.sqrt(noise_var), datadist)
+    ds = fe.sample(n_obs, seed)
+    X, y, beta, noise_var_emp = ds["X"], ds["y"], ds["beta"], ds["sigma_error_emp"].square()
+    print(f"true beta: {beta}")
+    print(f"true noise variance: {noise_var}")
+    print(f"empirical noise variance: {noise_var_emp}")
 
     # # analytical posterior
     # mu, sigma, a, b = fe.allPosteriorParams(X, y)
@@ -264,14 +271,14 @@ if __name__ == "__main__":
     # snr = torch.var(y)/noise_var
     # print(f"SNR: {snr:.3f}")
 
-    # mixed effects
-    n_random_effects = 2
-    me = MixedEffects(n_predictors, math.sqrt(noise_var), datadist, n_random_effects)
-    ds = me.sample(n_obs, seed)
-    S, S_emp, rfx = ds["S"], ds["S_emp"], ds["rfx"]
-    print(f"random effects variances:\n{S}")
-    print(f"random effects variances (empirical):\n{S_emp}")
-    print(f"random effects:\n{rfx}")
+    # # mixed effects
+    # n_random_effects = 2
+    # me = MixedEffects(n_predictors, math.sqrt(noise_var), datadist, n_random_effects)
+    # ds = me.sample(n_obs, seed)
+    # S, S_emp, rfx = ds["S"], ds["S_emp"], ds["rfx"]
+    # print(f"random effects variances:\n{S}")
+    # print(f"random effects variances (empirical):\n{S_emp}")
+    # print(f"random effects:\n{rfx}")
 
 
 
