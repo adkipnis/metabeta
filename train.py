@@ -680,7 +680,7 @@ if __name__ == "__main__":
                           else "cpu")
 
     # --- set up models
-    model = TransformerDecoder(
+    model = TransformerEncoder(
                 n_predictors=1+cfg.d, # y, X
                 hidden_size=cfg.hidden,
                 ff_size=cfg.ff,
@@ -691,8 +691,7 @@ if __name__ == "__main__":
                 fx_type=cfg.fx_type,
                 posterior_type=cfg.posterior_type,
                 n_components=cfg.c).to(device)
-    model_noise = TransformerDecoder(
-                n_predictors=1+cfg.d, # eps, scale (todo: use Z for scale updating)
+    model_noise = TransformerEncoder(
                 hidden_size=cfg.hidden,
                 ff_size=cfg.ff,
                 n_heads=cfg.heads,
