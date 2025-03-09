@@ -745,6 +745,6 @@ if __name__ == "__main__":
                             logger, iteration, global_step)
         validation_step = validate(models, optimizers, dataloader_val, writer,
                                    logger, iteration, validation_step)
-        save(models, optimizers, iteration, global_step, validation_step, timestamp)
+        if iteration % 5 == 0:
+            save(models, optimizers, iteration, global_step, validation_step, timestamp)
  
-
