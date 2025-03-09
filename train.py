@@ -562,6 +562,8 @@ def train(models: Tuple[nn.Module, nn.Module],
                                printer=iterator.write)
         loss.backward()
         loss_noise.backward()
+        # for model in models:
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
         for optimizer in optimizers:
             optimizer.step()
         iterator.set_postfix({"loss": loss.item()})
