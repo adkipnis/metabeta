@@ -81,6 +81,39 @@ class Base(nn.Module):
         return torch.cat(finals, dim=-1)
 
 
+class TransformerEncoder(Base):
+    def __init__(self,
+                 n_predictors: int,
+                 hidden_size: int,
+                 ff_size: int,
+                 n_layers: int,
+                 dropout: float,
+                 seed: int,
+                 n_heads: int = 4,
+                 fx_type: str = "ffx",
+                 posterior_type: str = "mixture",
+                 n_components: int = 1,
+                 activation: str = 'gelu',
+                 ) -> None:
+
+        super(TransformerEncoder, self).__init__(n_predictors, hidden_size, n_layers, dropout, seed, fx_type, posterior_type, n_components)
+        self.embed = nn.Linear(n_predictors+1, hidden_size)
+        encoder_layer = TransformerEncoderLayer(d_model=hidden_size,
+                                                dim_feedforward=ff_size,
+                                                nhead=n_heads,
+                                                dropout=dropout,
+                                                batch_first=True,
+                                                activation=activation)
+        self.model= nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        self.initializeWeights()
+
+    def internal(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.embed(x) # (batch_size, seq_size, hidden_size)
+        mask = causalMask(x.size(1)).to(x.device)
+        outputs = self.model(x, mask)
+        return outputs # (batch_size, seq_size, hidden_size)
+
+
 class TransformerDecoder(Base):
     def __init__(self,
                  n_predictors: int,
