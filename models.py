@@ -1,7 +1,7 @@
 from typing import List
 import torch
 import torch.nn as nn
-from torch.nn import TransformerDecoderLayer
+from torch.nn import TransformerEncoderLayer, TransformerDecoderLayer
 
 def getLinearLayers(d_in: int, d_out: int, n_rep: int) -> nn.ModuleList:
     layers = [nn.Linear(d_in, d_out) for _ in range(n_rep)]
@@ -14,6 +14,15 @@ def parametricPosterior(hidden_size: int, d: int) -> nn.ModuleList:
 
 def generalizedPosterior(hidden_size: int, d: int, m: int) -> nn.ModuleList:
     return getLinearLayers(hidden_size, d, m)
+
+# def causalMask(seq_len: int) -> torch.Tensor:
+#     ''' Create a mask, such that model bases outputs for X[b, i] on X[b, j] for j <= i '''
+#     return torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
+
+def causalMask(seq_len: int) -> torch.Tensor:
+    mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1)
+    return mask.masked_fill(mask == 1, float('-inf'))
+
 
 
 class Base(nn.Module):
@@ -96,13 +105,9 @@ class TransformerDecoder(Base):
         self.model= nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
         self.initializeWeights()
 
-    def causalMask(self, seq_len: int) -> torch.Tensor:
-        ''' Create a mask, such that model bases outputs for X[b, i] on X[b, j] for j <= i '''
-        return torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
-
     def internal(self, x: torch.Tensor) -> torch.Tensor:
         x = self.embed(x) # (batch_size, seq_size, hidden_size)
-        causal_mask = self.causalMask(x.size(1)).to(x.device)
+        causal_mask = causalMask(x.size(1)).to(x.device)
         memory = torch.zeros_like(x)
         outputs = self.model(tgt=x, memory=memory, tgt_mask=causal_mask, tgt_is_causal=True)
         return outputs # (batch_size, seq_size, hidden_size)
