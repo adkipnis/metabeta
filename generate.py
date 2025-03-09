@@ -64,7 +64,7 @@ def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, ma
     data = []
     iterator = tqdm(range(max_predictors + 1))
     iterator.set_description('Validation Set')
-    sigmas = [ufNoise() for _ in range(n_draws_per)]
+    sigmas = torch.linspace(0.05, 1.5, steps=n_draws_per)
     LinearModel = FixedEffects if ds_type == "ffx" else MixedEffects
     include_posterior = ds_type == "ffx"
 
@@ -74,7 +74,7 @@ def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, ma
             sigma = sigmas[i] if cfg.fixed == 0. else cfg.fixed
             if cfg.scale_noise:
                 sigma = sigma * sqrt(d + 1)
-            lm = LinearModel(d, sigma, data_dist)
+            lm = LinearModel(d, sigma.item(), data_dist)
             data += [lm.sample(max_samples, i, include_posterior=include_posterior)]
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
 
