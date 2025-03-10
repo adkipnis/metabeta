@@ -425,10 +425,11 @@ def run(models: tuple,
     ffx_depths = batch["d"]
     y = batch["y"].to(device)
     X = batch["X"].to(device)
+    Z = batch["Z"].to(device)
     ffx = batch["beta"].to(device)
 
     # estimate parameters and compute ffx loss
-    inputs = assembleInputs(y, X)
+    inputs = assembleInputs(y, X, Z)
     outputs = models[0](inputs)
     output_dict = parseOutputs(outputs, posterior_type, cfg.c, "ffx")
     losses_ffx = lossWrapper(output_dict, ffx, ffx_depths, "ffx")
@@ -468,7 +469,8 @@ def savePredictions(models: Tuple[nn.Module, nn.Module],
                     batch_index: int) -> None:
     y = batch["y"].to(device)
     X = batch["X"].to(device)
-    inputs = assembleInputs(y, X)
+    Z = batch["Z"].to(device)
+    inputs = assembleInputs(y, X, Z)
     outputs = models[0](inputs)
     output_dict = parseOutputs(outputs, posterior_type, cfg.c, "ffx")
     noise_inputs = assembleNoiseInputs(inputs, output_dict, posterior_type)
@@ -503,8 +505,9 @@ def compare(models: tuple, batch: dict) -> torch.Tensor:
     depths = batch["d"]
     y = batch["y"].to(device)
     X = batch["X"].to(device)
+    Z = batch["Z"].to(device)
     beta = batch["beta"].float()
-    outputs = models[0](assembleInputs(y, X))
+    outputs = models[0](assembleInputs(y, X, Z))
     output_dict = parseOutputs(outputs, "mixture", 1, "ffx")
     mean_proposed, var_proposed = output_dict["ffx_loc"].squeeze(-1), output_dict["ffx_scale"].squeeze(-1).square()
 
