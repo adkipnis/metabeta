@@ -344,8 +344,8 @@ def mixExamples(num_examples: int,
 
 
 # -------- training and testing methods
-def assembleInputs(y: torch.Tensor,  X: torch.Tensor) -> torch.Tensor:
-    return torch.cat([y.unsqueeze(-1), X], dim=-1)
+def assembleInputs(y: torch.Tensor,  X: torch.Tensor, Z: torch.Tensor) -> torch.Tensor:
+    return torch.cat([y.unsqueeze(-1), X, Z], dim=-1)
 
 
 def getResiduals(y: torch.Tensor, X: torch.Tensor, outputs: Dict[str, torch.Tensor]) -> torch.Tensor:
