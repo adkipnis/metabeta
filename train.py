@@ -670,7 +670,8 @@ if __name__ == "__main__":
 
     # --- set up models
     model = TransformerEncoder(
-                n_predictors=1+cfg.d, # y, X
+                n_inputs=1+2*(1+cfg.d), # y, X, Z
+                n_predictors=1+cfg.d,
                 hidden_size=cfg.hidden,
                 ff_size=cfg.ff,
                 n_heads=cfg.heads,
@@ -681,6 +682,8 @@ if __name__ == "__main__":
                 posterior_type=cfg.posterior_type,
                 n_components=cfg.c).to(device)
     model_noise = TransformerEncoder(
+                n_inputs=1+(1+cfg.d), # residuals, scale
+                n_predictors=1+cfg.d,
                 hidden_size=cfg.hidden,
                 ff_size=cfg.ff,
                 n_heads=cfg.heads,
