@@ -345,7 +345,10 @@ def mixExamples(num_examples: int,
 
 # -------- training and testing methods
 def assembleInputs(y: torch.Tensor,  X: torch.Tensor, Z: torch.Tensor) -> torch.Tensor:
-    return torch.cat([y.unsqueeze(-1), X, Z], dim=-1)
+    if cfg.fx_type == "ffx":
+        return torch.cat([y.unsqueeze(-1), X], dim=-1)
+    else:
+        return torch.cat([y.unsqueeze(-1), X, Z], dim=-1)
 
 
 def getResiduals(y: torch.Tensor, X: torch.Tensor, outputs: Dict[str, torch.Tensor]) -> torch.Tensor:
@@ -355,12 +358,10 @@ def getResiduals(y: torch.Tensor, X: torch.Tensor, outputs: Dict[str, torch.Tens
     y_pred = torch.sum(X * expected_beta, dim=-1)
     return y - y_pred
     
-def assembleNoiseInputs(inputs: torch.Tensor,
+def assembleNoiseInputs(y: torch.Tensor,
+                        X: torch.Tensor,
                         outputs: Dict[str, torch.Tensor],
                         posterior_type: str) -> torch.Tensor:
-    d = (inputs.shape[-1] - 1)//2
-    y = inputs[..., 0]
-    X = inputs[..., 1:d+1]
     if posterior_type == "discrete":
         loc = discreteMean(outputs["ffx_probs"], ffx_grid).detach()
         scale = discreteVariance(outputs["ffx_probs"], loc, ffx_grid).sqrt().detach()
@@ -449,7 +450,7 @@ def run(models: tuple,
         loss = maskLoss(losses_ffx, ffx)
 
     # compute noise parameter loss per batch
-    noise_inputs = assembleNoiseInputs(inputs, output_dict, posterior_type)
+    noise_inputs = assembleNoiseInputs(y, X, output_dict, posterior_type)
     noise_outputs = models[1](noise_inputs)
     noise_output_dict = parseOutputs(noise_outputs, posterior_type, cfg.c, "noise")
     
@@ -474,7 +475,7 @@ def savePredictions(models: Tuple[nn.Module, nn.Module],
     inputs = assembleInputs(y, X, Z)
     outputs = models[0](inputs)
     output_dict = parseOutputs(outputs, posterior_type, cfg.c, "ffx")
-    noise_inputs = assembleNoiseInputs(inputs, output_dict, posterior_type)
+    noise_inputs = assembleNoiseInputs(y, X, output_dict, posterior_type)
     noise_outputs = models[1](noise_inputs)
     noise_output_dict = parseOutputs(noise_outputs, posterior_type, cfg.c, "noise")
     fname = Path(pred_path, f"predictions_i={iteration_index}_b={batch_index}.pt")
@@ -670,7 +671,7 @@ if __name__ == "__main__":
 
     # --- set up models
     model = TransformerEncoder(
-                n_inputs=1+2*(1+cfg.d), # y, X, Z
+                n_inputs=1+2*(1+cfg.d) if cfg.fx_type == "mfx" else 2+cfg.d, # y, X, Z
                 n_predictors=1+cfg.d,
                 hidden_size=cfg.hidden,
                 ff_size=cfg.ff,
@@ -682,7 +683,7 @@ if __name__ == "__main__":
                 posterior_type=cfg.posterior_type,
                 n_components=cfg.c).to(device)
     model_noise = TransformerEncoder(
-                n_inputs=1+(1+cfg.d), # residuals, scale
+                n_inputs=2+cfg.d, # residuals, scale
                 n_predictors=1+cfg.d,
                 hidden_size=cfg.hidden,
                 ff_size=cfg.ff,
