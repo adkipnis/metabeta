@@ -175,12 +175,12 @@ class MixedEffects(Task):
         torch.manual_seed(seed)
         X = self._sampleFeatures(n_samples)
         beta = self._sampleBeta()
-        q = self.n_random_effects
         rfx = self._sampleRandomEffects(n_samples)
         S_emp = self._covarySeries(rfx)
-        Z = X[:,:q]
         eta = torch.bmm(Z.unsqueeze(1), rfx.unsqueeze(2)).flatten() # eta_i = z_i.T @ b_i
+        Z = X[:,:self.q]
         eps = self._sampleNoise(n_samples)
+        sigma_error_emp = self._covarySeries(eps.unsqueeze(-1)).sqrt()
         # todo: empirical sigma error
         y = X @ beta + eta + eps
         out = {"X": X, # (n, d)
@@ -190,6 +190,7 @@ class MixedEffects(Task):
                "S": torch.diag(self.S), # once we allow correlation: symmetricMatrix2Vector(self.S),
                "S_emp": S_emp, # for now only marginal variances
                "sigma_error": torch.tensor(self.sigma_error), # (1,)
+               "sigma_error_emp": sigma_error_emp, # (n,)
                "seed": torch.tensor(seed)}
         return out
 
