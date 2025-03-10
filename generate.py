@@ -28,7 +28,7 @@ def getD(min_predictors: int, max_predictors: int) -> int:
     return int(d.item())
 
 
-def ufNoise(min_val: float = 0.05, max_val: float = 1.5) -> float:
+def ufNoise(min_val: float = 0.01, max_val: float = 1.5) -> float:
     ''' Get the noise standard deviation '''
     sigma = D.Uniform(min_val, max_val).sample()
     return sigma.item()
