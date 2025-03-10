@@ -26,6 +26,7 @@ def causalMask(seq_len: int) -> torch.Tensor:
 
 class Base(nn.Module):
     def __init__(self,
+                 n_inputs: int,
                  n_predictors: int, # including bias term
                  hidden_size: int,
                  n_layers: int,
@@ -35,6 +36,7 @@ class Base(nn.Module):
                  posterior_type: str,
                  n_components: int = 1) -> None:
         super(Base, self).__init__()
+        self.n_inputs = n_inputs
         self.n_predictors = n_predictors
         self.hidden_size = hidden_size
         self.n_layers = n_layers
@@ -82,6 +84,7 @@ class Base(nn.Module):
 
 class TransformerEncoder(Base):
     def __init__(self,
+                 n_inputs: int,
                  n_predictors: int,
                  hidden_size: int,
                  ff_size: int,
@@ -95,8 +98,8 @@ class TransformerEncoder(Base):
                  activation: str = 'gelu',
                  ) -> None:
 
-        super(TransformerEncoder, self).__init__(n_predictors, hidden_size, n_layers, dropout, seed, fx_type, posterior_type, n_components)
-        self.embed = nn.Linear(n_predictors+1, hidden_size)
+        super(TransformerEncoder, self).__init__(n_inputs, n_predictors, hidden_size, n_layers, dropout, seed, fx_type, posterior_type, n_components)
+        self.embed = nn.Linear(n_inputs, hidden_size)
         encoder_layer = TransformerEncoderLayer(d_model=hidden_size,
                                                 dim_feedforward=ff_size,
                                                 nhead=n_heads,
@@ -115,6 +118,7 @@ class TransformerEncoder(Base):
 
 class TransformerDecoder(Base):
     def __init__(self,
+                 n_inputs: int,
                  n_predictors: int,
                  hidden_size: int,
                  ff_size: int,
@@ -128,8 +132,8 @@ class TransformerDecoder(Base):
                  activation: str ='gelu',
                  ) -> None:
 
-        super(TransformerDecoder, self).__init__(n_predictors, hidden_size, n_layers, dropout, seed, fx_type, posterior_type, n_components)
-        self.embed = nn.Linear(n_predictors+1, hidden_size)
+        super(TransformerDecoder, self).__init__(n_inputs, n_predictors, hidden_size, n_layers, dropout, seed, fx_type, posterior_type, n_components)
+        self.embed = nn.Linear(n_inputs, hidden_size)
         decoder_layer = TransformerDecoderLayer(d_model=hidden_size,
                                                 dim_feedforward=ff_size,
                                                 nhead=n_heads,
@@ -149,8 +153,8 @@ class TransformerDecoder(Base):
 
 
 def main():
-    emod = TransformerEncoder(3, 256, 512, 1, 0.1, 0)
-    dmod = TransformerEncoder(3, 256, 512, 1, 0.1, 0)
+    emod = TransformerEncoder(6, 3, 256, 512, 1, 0.1, 0)
+    dmod = TransformerEncoder(6, 3, 256, 512, 1, 0.1, 0)
     mask = causalMask(10)
     print(mask)
 
