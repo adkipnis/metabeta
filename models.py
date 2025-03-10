@@ -46,14 +46,10 @@ class Base(nn.Module):
         self.posterior_type = posterior_type
         self.n_components = n_components # number of mixture components
         n_fx = 1 if fx_type == "ffx" else 2
-        if posterior_type == "parametric":
-            self.final_layers = parametricPosterior(hidden_size, n_predictors)
-        elif posterior_type == "discrete":
+        if posterior_type == "discrete":
             self.final_layers = generalizedPosterior(hidden_size, n_predictors, n_fx * self.n_components) # (ffx, rfx) * (bin)
         elif posterior_type == "mixture":
             self.final_layers = generalizedPosterior(hidden_size, n_predictors, 3 * n_fx * self.n_components) # (loc, scale, weight) * (ffx, rfx) * (mixture component)
-        elif posterior_type == "parametric_noise":
-            self.final_layers = getLinearLayers(hidden_size, 2, 1)
         elif posterior_type == "discrete_noise":
             self.final_layers = generalizedPosterior(hidden_size, 1, self.n_components)
         elif posterior_type == "mixture_noise":
