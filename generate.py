@@ -72,7 +72,8 @@ def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, ma
     include_posterior = ds_type == "ffx"
 
     for d in iterator:
-        for q in range(d//2):
+        q_range = range(d//2) if ds_type == "mfx" else range(1)
+        for q in q_range:
             for i in range(n_draws_per):
                 torch.manual_seed(i)
                 sigma = sigmas[i] if cfg.fixed == 0. else cfg.fixed
