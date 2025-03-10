@@ -358,8 +358,9 @@ def getResiduals(y: torch.Tensor, X: torch.Tensor, outputs: Dict[str, torch.Tens
 def assembleNoiseInputs(inputs: torch.Tensor,
                         outputs: Dict[str, torch.Tensor],
                         posterior_type: str) -> torch.Tensor:
+    d = (inputs.shape[-1] - 1)//2
     y = inputs[..., 0]
-    X = inputs[..., 1:]
+    X = inputs[..., 1:d+1]
     if posterior_type == "discrete":
         loc = discreteMean(outputs["ffx_probs"], ffx_grid).detach()
         scale = discreteVariance(outputs["ffx_probs"], loc, ffx_grid).sqrt().detach()
