@@ -607,7 +607,7 @@ def validate(models: Tuple[nn.Module, nn.Module],
                 savePredictions(models, batch, cfg.posterior_type, iteration, j)
 
             # optionally print predictions
-            if iteration % 5 == 0 and j % 15 == 0:
+            if iteration % 5 == 0 and j % 30 == 0:
                 run(models, batch, cfg.posterior_type,
                     printer=iterator.write, num_examples=1)
 
@@ -629,7 +629,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--proto", action="store_true", help="prototyping: don't log anything during (default = False)")
 
     # data
-    parser.add_argument("-t", "--fx_type", type=str, default="ffx", help="Type of dataset [ffx, mfx] (default = ffx)")
+    parser.add_argument("-t", "--fx_type", type=str, default="mfx", help="Type of dataset [ffx, mfx] (default = ffx)")
     parser.add_argument("-d", type=int, default=8, help="Number of predictors (without bias, default = 8)")
     parser.add_argument("-n", type=int, default=50, help="Maximum number of samples to draw per linear model (default = 50).")
     parser.add_argument("-f", "--fixed", type=float, default=0., help="Fixed noise variance (default = 0. -> not fixed)")
@@ -643,9 +643,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--loss_rfx", type=str, default="logprob", help="Loss function for rfx [mse, logprob] (default = logprob)")
     parser.add_argument("--loss_noise", type=str, default="logprob", help="Loss function for noise [mse, logprob] (default = logprob)")
     parser.add_argument("--dropout", type=float, default=0, help="Dropout rate (default = 0)")
-    parser.add_argument("--hidden", type=int, default=256, help="Hidden dimension (default = 256)")
-    parser.add_argument("--ff", type=int, default=512, help="Feedforward dimension (transformer, default = 512)")
-    parser.add_argument("--heads", type=int, default=4, help="Number of heads (transformer, default = 4)")
+    parser.add_argument("--hidden", type=int, default=128, help="Hidden dimension (default = 256)")
+    parser.add_argument("--ff", type=int, default=256, help="Feedforward dimension (transformer, default = 512)")
+    parser.add_argument("--heads", type=int, default=8, help="Number of heads (transformer, default = 4)")
     parser.add_argument("--layers", type=int, default=6, help="Number of layers (transformer, default = 6)")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate (Adam, default = 1e-3)")
     parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon (Adam, default = 1e-8)")
