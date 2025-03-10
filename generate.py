@@ -113,8 +113,9 @@ if __name__ == "__main__":
 
     if start == 0:
         # generate validation dataset
-        print(f'Generating {ds_type} validation dataset of {n_draws_val * (max_predictors + 1)} samples')
+        print(f'Generating {ds_type} validation dataset...')
         dataset = generateBalancedDataset(ds_type, n_draws_val, max_samples, max_predictors)
+        print(f'Number of samples: {len(dataset["data"])}')
         filename = dsFilenameVal(ds_type, max_predictors, max_samples, fixed)
         torch.save(dataset, filename)
         start += 1
