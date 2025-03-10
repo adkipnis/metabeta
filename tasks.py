@@ -276,8 +276,8 @@ if __name__ == "__main__":
     # print(f"SNR: {snr:.3f}")
 
     # # mixed effects
-    # n_random_effects = 2
-    # me = MixedEffects(n_predictors, math.sqrt(noise_var), datadist, n_random_effects)
+    # q = 2
+    # me = MixedEffects(n_predictors, math.sqrt(noise_var), datadist, q)
     # ds = me.sample(n_obs, seed)
     # S, S_emp, rfx = ds["S"], ds["S_emp"], ds["rfx"]
     # print(f"random effects variances:\n{S}")
