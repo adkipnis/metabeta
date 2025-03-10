@@ -64,7 +64,11 @@ class Task:
  
 
 class FixedEffects(Task):
-    def __init__(self, n_predictors: int, sigma_error: float, data_dist: torch.distributions.Distribution):
+    def __init__(self,
+                 n_predictors: int,
+                 sigma_error: float,
+                 data_dist: torch.distributions.Distribution,
+                 q: int = 0):
         super().__init__(n_predictors, sigma_error, data_dist)
 
     def _priorPrecision(self) -> torch.Tensor:
@@ -131,7 +135,6 @@ class FixedEffects(Task):
         X = self._sampleFeatures(n_samples)
         beta = self._sampleBeta()
         eps = self._sampleNoise(n_samples)
-        # sigma_error_emp = torch.std(eps)
         sigma_error_emp = self._covarySeries(eps.unsqueeze(-1)).sqrt()
         y = X @ beta + eps
         out = {"X": X, # (n, d)
