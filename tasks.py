@@ -174,11 +174,11 @@ class MixedEffects(Task):
             print("Warning: Mixed effects models do not have an analytical posterior, but parameter is set to True...")
         torch.manual_seed(seed)
         X = self._sampleFeatures(n_samples)
+        Z = X[:,:self.q]
         beta = self._sampleBeta()
         rfx = self._sampleRandomEffects(n_samples)
         S_emp = self._covarySeries(rfx)
         eta = torch.bmm(Z.unsqueeze(1), rfx.unsqueeze(2)).flatten() # eta_i = z_i.T @ b_i
-        Z = X[:,:self.q]
         eps = self._sampleNoise(n_samples)
         sigma_error_emp = self._covarySeries(eps.unsqueeze(-1)).sqrt()
         # todo: empirical sigma error
