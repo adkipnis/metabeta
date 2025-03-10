@@ -48,14 +48,17 @@ class LMDataset(Dataset):
         # optionally include random effects
         if "rfx" in item:
             q = item['rfx'].shape[1]
+            Z = padTensor(X[:, :q], (n, d_max))
             rfx = padTensor(item['rfx'], (n, d_max))
             S = padTensor(item['S'], (d_max,))
             # unique = int(d_max * (d_max + 1) / 2)
             # S = padTensor(item['S'], (unique,))
             S_emp = padTensor(item['S_emp'], (n, d_max))
-            out.update({'q': q, 'rfx': rfx, 'S': S, 'S_emp': S_emp})
+            out.update({'q': q, 'Z': Z, 'rfx': rfx, 'S': S, 'S_emp': S_emp})
             if self.permute:
                 raise ValueError('Permutation not implemented for rfx datasets')
+        else:
+            out.update({'q': 0, 'Z': torch.zeros_like(X)})
 
         # optionally include analytical posterior
         if 'mu_n' in item:
