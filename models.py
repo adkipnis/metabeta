@@ -3,26 +3,25 @@ import torch
 import torch.nn as nn
 from torch.nn import TransformerEncoderLayer, TransformerDecoderLayer
 
+
 def getLinearLayers(d_in: int, d_out: int, n_rep: int) -> nn.ModuleList:
     layers = [nn.Linear(d_in, d_out) for _ in range(n_rep)]
     return nn.ModuleList(layers)
+
 
 def parametricPosterior(hidden_size: int, d: int) -> nn.ModuleList:
     ffx_layers = getLinearLayers(hidden_size, d, 2)
     rfx_layers = getLinearLayers(hidden_size, d, 2)
     return nn.ModuleList(list(ffx_layers) + list(rfx_layers))
 
+
 def generalizedPosterior(hidden_size: int, d: int, m: int) -> nn.ModuleList:
     return getLinearLayers(hidden_size, d, m)
 
-# def causalMask(seq_len: int) -> torch.Tensor:
-#     ''' Create a mask, such that model bases outputs for X[b, i] on X[b, j] for j <= i '''
-#     return torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
 
 def causalMask(seq_len: int) -> torch.Tensor:
     mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1)
     return mask.masked_fill(mask == 1, float('-inf'))
-
 
 
 class Base(nn.Module):
