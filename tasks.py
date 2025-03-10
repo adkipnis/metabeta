@@ -150,24 +150,24 @@ class FixedEffects(Task):
 
 
 class MixedEffects(Task):
-    def __init__(self, n_predictors: int, sigma_error: float, data_dist: torch.distributions.Distribution,
-                 n_random_effects: int = 1):
+    def __init__(self,
+                 n_predictors: int,
+                 sigma_error: float,
+                 data_dist: torch.distributions.Distribution,
+                 q: int = 0):
         super().__init__(n_predictors, sigma_error, data_dist)
-        self.n_random_effects = n_random_effects
+        self.q = q # number of random effects
         self._initRfxStructure()
 
     def _initRfxStructure(self) -> None:
-        ''' given n_random_effects, draw diagonal elements of S (covariance matrix of random effects) '''
-        # dist = torch.distributions.inverse_gamma.InverseGamma(3., 3.)
-        dist = torch.distributions.uniform.Uniform(0.01, 5.)
-        q = self.n_random_effects
-        m = torch.zeros((q,))
-        self.S = torch.diag_embed(dist.sample((q,))) # type: ignore
+        ''' given q, draw diagonal elements of S (covariance matrix of random effects) '''
+        dist = torch.distributions.uniform.Uniform(0.01, 1.5)
+        m = torch.zeros((self.q,))
+        self.S = torch.diag_embed(dist.sample((self.q,))) # type: ignore
         self.b_dist = torch.distributions.multivariate_normal.MultivariateNormal(m, covariance_matrix=self.S)
 
     def _sampleRandomEffects(self, n_samples: int) -> torch.Tensor:
         return self.b_dist.sample((n_samples,)) # type: ignore
-
 
     def sample(self, n_samples: int, seed: int, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
         if include_posterior:
