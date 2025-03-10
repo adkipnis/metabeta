@@ -439,8 +439,9 @@ def run(models: tuple,
         rfx_depths = batch["q"]
         rfx = batch["rfx"].to(device)
         rfx_scale = batch["S"].to(device).sqrt()
-        # rfx_scale_true = batch["S_emp"].to(device).sqrt()
-        losses_rfx = lossWrapper(output_dict, rfx_scale, rfx_depths, "rfx") 
+        mask = (rfx_scale == 0.).float()
+        log_rfx_scale = (rfx_scale + mask).log()
+        losses_rfx = lossWrapper(output_dict, log_rfx_scale, rfx_depths, "rfx") 
         losses_joint = torch.cat([losses_ffx, losses_rfx], dim=1)
         targets = torch.cat([ffx, rfx[:,0]], dim=1)
         loss = maskLoss(losses_joint, targets)
@@ -453,8 +454,8 @@ def run(models: tuple,
     noise_output_dict = parseOutputs(noise_outputs, posterior_type, cfg.c, "noise")
     
     # compute noise loss
-    noise_std = batch["sigma_error"].unsqueeze(-1).float()
-    losses_noise = lossWrapper(noise_output_dict, noise_std, ffx_depths, "noise")
+    log_noise_std = batch["sigma_error"].to(device).log().unsqueeze(-1).float()
+    losses_noise = lossWrapper(noise_output_dict, log_noise_std, ffx_depths, "noise")
     loss_noise = losses_noise.mean()
 
     # optionally print some examples
