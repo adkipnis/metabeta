@@ -19,10 +19,12 @@ class Sower:
         return out
 
 
-def getD(max_predictors: int) -> int:
+def getD(min_predictors: int, max_predictors: int) -> int:
     ''' Get a random number of predictors to draw from a linear model.'''
+    if min_predictors >= max_predictors:
+        return max_predictors
     shape = (1,)
-    d = torch.randint(0, max_predictors + 1, shape)
+    d = torch.randint(min_predictors, max_predictors + 1, shape)
     return int(d.item())
 
 
@@ -50,11 +52,12 @@ def generateDataset(ds_type: str, n_draws: int, max_samples: int, max_predictors
     for _ in iterator:
         seed = sower.throw()
         torch.manual_seed(seed)
-        d = getD(max_predictors)
+        d = getD(0, max_predictors)
+        q = getD(0, d//2) if ds_type == "mfx" else 0
         sigma = ufNoise() if cfg.fixed == 0. else cfg.fixed
         if cfg.scale_noise:
             sigma = sigma * sqrt(d + 1)
-        lm = LinearModel(d, sigma, data_dist)
+        lm = LinearModel(d, sigma, data_dist, q)
         data += [lm.sample(max_samples, seed, include_posterior=False)]
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
 
@@ -69,13 +72,14 @@ def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, ma
     include_posterior = ds_type == "ffx"
 
     for d in iterator:
-        for i in range(n_draws_per):
-            torch.manual_seed(i)
-            sigma = sigmas[i] if cfg.fixed == 0. else cfg.fixed
-            if cfg.scale_noise:
-                sigma = sigma * sqrt(d + 1)
-            lm = LinearModel(d, sigma.item(), data_dist)
-            data += [lm.sample(max_samples, i, include_posterior=include_posterior)]
+        for q in range(d//2):
+            for i in range(n_draws_per):
+                torch.manual_seed(i)
+                sigma = sigmas[i] if cfg.fixed == 0. else cfg.fixed
+                if cfg.scale_noise:
+                    sigma = sigma * sqrt(d + 1)
+                lm = LinearModel(d, sigma.item(), data_dist, q)
+                data += [lm.sample(max_samples, i, include_posterior=include_posterior)]
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
 
 
