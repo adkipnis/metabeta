@@ -185,9 +185,12 @@ class MixedEffects(Task):
                  n_predictors: int,
                  sigma_error: float,
                  data_dist: torch.distributions.Distribution,
-                 q: int = 0):
+                 q: int, # number of random effects
+                 m: int, # number of groups
+                 ):
         super().__init__(n_predictors, sigma_error, data_dist)
-        self.q = q # number of random effects
+        self.q = q
+        self.m = m
         self._initRfxStructure()
 
     def _initRfxStructure(self) -> None:
