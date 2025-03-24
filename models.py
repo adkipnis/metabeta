@@ -114,10 +114,11 @@ class TransformerEncoder(Base):
         self.model= nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
         self.initializeWeights()
 
-    def internal(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.embed(x) # (batch_size, seq_size, hidden_size)
-        mask = causalMask(x.size(1)).to(x.device)
-        outputs = self.model(x, mask)
+    def internal(self, y: torch.Tensor, X: torch.Tensor,
+                 Z: torch.Tensor, groups: torch.Tensor) -> torch.Tensor:
+        o = self.embed(y, X, Z, groups) # (batch_size, seq_size, hidden_size)
+        mask = causalMask(o.size(1)).to(o.device)
+        outputs = self.model(o, mask)
         return outputs # (batch_size, seq_size, hidden_size)
 
 
@@ -148,13 +149,13 @@ class TransformerDecoder(Base):
         self.model= nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
         self.initializeWeights()
 
-    def internal(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.embed(x) # (batch_size, seq_size, hidden_size)
-        causal_mask = causalMask(x.size(1)).to(x.device)
-        memory = torch.zeros_like(x)
-        outputs = self.model(tgt=x, memory=memory, tgt_mask=causal_mask, tgt_is_causal=True)
+    def internal(self, y: torch.Tensor, X: torch.Tensor,
+                 Z: torch.Tensor, groups: torch.Tensor) -> torch.Tensor:
+        o = self.embed(y, X, Z, groups) # (batch_size, seq_size, hidden_size)
+        causal_mask = causalMask(o.size(1)).to(o.device)
+        memory = torch.zeros_like(o)
+        outputs = self.model(tgt=o, memory=memory, tgt_mask=causal_mask, tgt_is_causal=True)
         return outputs # (batch_size, seq_size, hidden_size)
-
 
 
 def main():
