@@ -1,5 +1,9 @@
 import math
+import numpy as np
 import torch
+from torch import distributions as D
+import pymc as pm
+import pytensor.tensor as pt
 from typing import Dict, Tuple
 from utils import symmetricMatrix2Vector, symmetricMatrixFromVector
 
@@ -8,7 +12,7 @@ class Task:
     def __init__(self,
                  n_predictors: int, # without bias
                  sigma_error: float, # standard deviation of the additive noise
-                 data_dist: torch.distributions.Distribution,
+                 data_dist: D.Distribution,
                  ):
 
         # data distribution
@@ -17,11 +21,11 @@ class Task:
 
         # beta distribution
         self.beta_error = math.sqrt(5.)
-        self.beta_dist = torch.distributions.Normal(0., self.beta_error)
+        self.beta_dist = D.Normal(0., self.beta_error)
 
         # error distribution
         self.sigma_error = sigma_error
-        self.noise_dist = torch.distributions.Normal(0., self.sigma_error)
+        self.noise_dist = D.Normal(0., self.sigma_error)
         
     def _standardize(self, x: torch.Tensor) -> torch.Tensor:
         mean = torch.mean(x, dim=0)
@@ -61,6 +65,8 @@ class Task:
         # i = 9
         # torch.isclose(variances[i], torch.var(series[:i+1], dim=0, correction = correction))
         return torch.max(torch.tensor(0), variances) # guarantee non-negative values
+    
+    
  
 
 class FixedEffects(Task):
