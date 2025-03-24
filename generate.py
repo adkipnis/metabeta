@@ -54,10 +54,11 @@ def generateDataset(ds_type: str, n_draws: int, max_samples: int, max_predictors
         torch.manual_seed(seed)
         d = getD(0, max_predictors)
         q = getD(0, d//2) if ds_type == "mfx" else 0
+        m = 5 if ds_type == "mfx" else 1 # todo: vary number of groups
         sigma = ufNoise() if cfg.fixed == 0. else cfg.fixed
         if cfg.scale_noise:
             sigma = sigma * sqrt(d + 1)
-        lm = LinearModel(d, sigma, data_dist, q)
+        lm = LinearModel(d, sigma, data_dist, q, m)
         data += [lm.sample(max_samples, seed, include_posterior=False)]
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
 
@@ -69,7 +70,6 @@ def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, ma
     iterator.set_description('Validation Set')
     sigmas = torch.linspace(0.05, 1.5, steps=n_draws_per)
     LinearModel = FixedEffects if ds_type == "ffx" else MixedEffects
-    include_posterior = ds_type == "ffx"
 
     for d in iterator:
         q_range = range(d//2) if ds_type == "mfx" else range(1)
@@ -77,10 +77,11 @@ def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, ma
             for i in range(n_draws_per):
                 torch.manual_seed(i)
                 sigma = sigmas[i] if cfg.fixed == 0. else cfg.fixed
+                m = 5 if ds_type == "mfx" else 1 # todo: vary number of groups
                 if cfg.scale_noise:
                     sigma = sigma * sqrt(d + 1)
-                lm = LinearModel(d, sigma.item(), data_dist, q)
-                data += [lm.sample(max_samples, i, include_posterior=include_posterior)]
+                lm = LinearModel(d, sigma.item(), data_dist, q, m)
+                data += [lm.sample(max_samples, i, include_posterior=False)]
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
 
 
