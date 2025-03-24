@@ -257,6 +257,21 @@ class MixedEffects(Task):
             approx = pm.fit(method="advi", n=10000) 
         return approx
     
+    # def allVariationalPosteriors(self, y: torch.Tensor, X: torch.tensor,
+    #                              groups: torch.Tensor) -> Dict[str, torch.Tensor]:
+    #     n, d = X.shape
+    #     ffx_quantiles   = torch.zeros(n, d, 3)
+    #     rfx_quantiles   = torch.zeros(n, self.q, 3)
+    #     noise_quantiles = torch.zeros(n, 3)
+        
+    #     for i in range(n):
+    #         approx = me.fitVI(y[:i+1], X[:i+1], groups[:i+1])
+    #         ffx_quantiles[i]   = me.evalVI(approx, "beta")["ci95"].T
+    #         rfx_quantiles[i]   = me.evalVI(approx, "sigma_b")["ci95"].T
+    #         noise_quantiles[i] = me.evalVI(approx, "sigma_e")["ci95"]
+    #     return {"ffx_vp":   ffx_quantiles,
+    #             "rfx_vp":   rfx_quantiles,
+    #             "noise_vp": noise_quantiles}
 
 
 def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> None:
