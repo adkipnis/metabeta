@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Dict
 import torch
 import torch.nn as nn
 from torch.nn import TransformerEncoderLayer, TransformerDecoderLayer
@@ -45,6 +45,14 @@ class Base(nn.Module):
         self.fx_type = fx_type
         self.posterior_type = posterior_type
         self.n_components = n_components # number of mixture components
+
+        # embeddings
+        self.embed_y = nn.Linear(1, hidden_size)
+        self.embed_x = nn.Linear(n_predictors, hidden_size)
+        self.embed_z = nn.Linear(n_predictors, hidden_size)
+        self.embed_g = nn.Embedding(5, hidden_size) # todo: more groups
+
+        # posterior
         n_fx = 1 if fx_type == "ffx" else 2
         if posterior_type == "discrete":
             self.final_layers = generalizedPosterior(hidden_size, n_predictors, n_fx * self.n_components) # (ffx, rfx) * (bin)
@@ -57,8 +65,6 @@ class Base(nn.Module):
         else:
             raise ValueError(f"model type: {posterior_type} not supported")
 
-
-
     def initializeWeights(self) -> None:
         ''' Initialize weights using Xavier initialization '''
         torch.manual_seed(self.seed)
@@ -66,12 +72,13 @@ class Base(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def internal(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
-
-    def forward(self,
-                x: torch.Tensor, # (batch_size, seq_size, input_size)
-                ) -> torch.Tensor:
+    def embed(self, y: torch.Tensor, X: torch.Tensor,
+              Z: torch.Tensor, groups: torch.Tensor) -> torch.Tensor:
+        y_emb = self.embed_y(y)
+        X_emb = self.embed_x(X)
+        Z_emb = self.embed_z(Z)
+        g_emb = self.embed_g(groups)
+        return y_emb + X_emb + Z_emb + g_emb
         ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
         outputs = self.internal(x) # (batch_size, seq_size, hidden_size)
         finals = [layer(outputs).unsqueeze(-1) for layer in self.final_layers]
