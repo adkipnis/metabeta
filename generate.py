@@ -114,7 +114,7 @@ if __name__ == "__main__":
     fixed = cfg.fixed
     start = cfg.begin
     seed = n_draws_val + 1
-    data_dist = torch.distributions.uniform.Uniform(0., 1.)
+    data_dist = D.Uniform(0., 1.)
 
     if start == 0:
         # generate validation dataset
