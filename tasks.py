@@ -200,13 +200,13 @@ class MixedEffects(Task):
         self.S = torch.diag_embed(dist.sample((self.q,))) # type: ignore
         self.b_dist = D.MultivariateNormal(mu, covariance_matrix=self.S)
 
-    def _sampleRandomEffects(self, n_samples: int) -> torch.Tensor:
-        return self.b_dist.sample((n_samples,)) # type: ignore
+    def _sampleRandomEffects(self) -> torch.Tensor:
+        return self.b_dist.sample((self.m,)) # type: ignore
 
     def sample(self, n_samples: int, seed: int, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
-        if include_posterior:
-            print("Warning: Mixed effects models do not have an analytical posterior, but parameter is set to True...")
         torch.manual_seed(seed)
+        assert n_samples % self.m == 0, f"number of samples {n_samples} must be divisible by number of groups {self.m}"
+
         X = self._sampleFeatures(n_samples)
         Z = X[:,:self.q]
         beta = self._sampleBeta()
