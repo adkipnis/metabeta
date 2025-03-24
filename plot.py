@@ -172,8 +172,8 @@ def plotTrain(ax, date: str, model_id: str):
 
 
 # validation loss over iterations
-def plotVal(date: str, model_id: str, suffix: str = "val", focus: int = -1):
-    path = Path('losses', model_id, date, f'loss_{suffix}.csv')
+def plotVal(ax, date: str, model_id: str, suffix: str = "val", focus: int = -1, batch_size: int = 100):
+    path = Path('outputs', 'losses', model_id, date, f'loss_{suffix}.csv')
     if suffix == "val":
         ylabel = '-log p(target)' 
     elif suffix == "kl":
@@ -183,26 +183,28 @@ def plotVal(date: str, model_id: str, suffix: str = "val", focus: int = -1):
     df = pd.read_csv(path)
     unique_partitions = sum(df['iteration'] == 1)
     i = df.shape[0] // unique_partitions
-    unique_d = unique_partitions // 5
-    d_values = np.repeat(np.arange(unique_d), 5)
+    indices = range(0, info['d'].size, batch_size)
+    d_values = info['d'][indices].to_numpy()
+    q_values = info['q'][indices].to_numpy()
     df['d'] = np.tile(d_values, i)
+    df['q'] = np.tile(q_values, i)
+
     df_agg = df.groupby(['d', 'iteration'])['loss'].agg(['mean', 'std', 'min', 'max']).reset_index()
     if focus >= 0:
         df_agg = df_agg[df_agg['d'] == focus]
-    norm = colors.Normalize(vmin=0, vmax=unique_d)
-    fig, ax = plt.subplots(figsize=(10, 6))
+    norm = colors.Normalize(vmin=0, vmax=info['d'].unique().size)
+    # fig, ax = plt.subplots(figsize=(10, 6))
     for d_value, group in df_agg.groupby('d'):
         color = cmap(norm(d_value))
         ax.plot(group['iteration'], group['mean'], label=f'd={d_value}', color=color)
         ax.fill_between(group['iteration'], 
-                        group['mean'] - 1.96 * group['std'], 
-                        group['mean'] + 1.96 * group['std'], 
-                        color=color, alpha=0.3)  # Shade ± SD
-    plt.xlabel('Iteration')
-    plt.ylabel(ylabel)
-    plt.legend()
-    plt.grid(True) 
-    plt.show()
+                        group['mean'] - 1. * group['std'], 
+                        group['mean'] + 1. * group['std'], 
+                        color=color, alpha=0.1)  # Shade ± SD
+    ax.set_xlabel('datasets [10k]')
+    ax.set_ylabel(ylabel)
+    ax.legend()
+    ax.grid(True)
 
 
 # proposed posterior
