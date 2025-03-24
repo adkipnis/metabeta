@@ -84,7 +84,7 @@ class FixedEffects(Task):
     def __init__(self,
                  n_predictors: int,
                  sigma_error: float,
-                 data_dist: torch.distributions.Distribution,
+                 data_dist: D.Distribution,
                  q: int = 0,
                  m: int = 1,
                  ):
@@ -195,10 +195,10 @@ class MixedEffects(Task):
 
     def _initRfxStructure(self) -> None:
         ''' given q, draw diagonal elements of S (covariance matrix of random effects) '''
-        dist = torch.distributions.uniform.Uniform(0.01, 1.5)
-        m = torch.zeros((self.q,))
+        dist = D.Uniform(0.01, 1.5)
+        mu = torch.zeros((self.q,))
         self.S = torch.diag_embed(dist.sample((self.q,))) # type: ignore
-        self.b_dist = torch.distributions.multivariate_normal.MultivariateNormal(m, covariance_matrix=self.S)
+        self.b_dist = D.MultivariateNormal(mu, covariance_matrix=self.S)
 
     def _sampleRandomEffects(self, n_samples: int) -> torch.Tensor:
         return self.b_dist.sample((n_samples,)) # type: ignore
