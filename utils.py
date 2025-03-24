@@ -56,8 +56,8 @@ def dsFilename(ds_type: str, d: int, n: int, fixed: float, size: int, part: int)
     return Path('data', f'{ds_type}-train-d={d}-n={n}-noise={noise}-{s}-{p}.pt')
 
 
-def dsFilenameVal(ds_type: str, d: int, n: int, fixed: float) -> Path:
+def dsFilenameVal(ds_type: str, d: int, n: int, fixed: float, suffix: str = '') -> Path:
     noise = parseVariance(fixed)
-    return Path('data', f'{ds_type}-val-d={d}-n={n}-noise={noise}.pt')
+    return Path('data', f'{ds_type}-val-d={d}-n={n}-noise={noise}{suffix}.pt')
 
 
