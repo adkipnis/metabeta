@@ -119,10 +119,12 @@ if __name__ == "__main__":
     if start == 0:
         # generate validation dataset
         print(f'Generating {ds_type} validation dataset...')
-        dataset = generateBalancedDataset(ds_type, n_draws_val, max_samples, max_predictors)
+        dataset, info = generateBalancedDataset(ds_type, n_draws_val, max_samples, max_predictors)
         print(f'Number of samples: {len(dataset["data"])}')
         filename = dsFilenameVal(ds_type, max_predictors, max_samples, fixed)
+        filename_info = dsFilenameVal(ds_type, max_predictors, max_samples, fixed, '_info')
         torch.save(dataset, filename)
+        torch.save(info, filename_info)
         start += 1
     else:
         seed += (start - 1) * n_draws
