@@ -234,7 +234,29 @@ class MixedEffects(Task):
                "sigma_error": torch.tensor(self.sigma_error), # (1,)
                "sigma_error_emp": sigma_error_emp, # (n,)
                "seed": torch.tensor(seed)}
+        if include_posterior:
+            approx = self.fitVI(y, X, groups)
+            ffx_vp = self.evalVI(approx, "beta") # fixed effects variational posterior
+            rfx_vp = self.evalVI(approx, "sigma_b")
+            noise_vp = self.evalVI(approx, "sigma_e")
+            out.update({"ffx_vp": ffx_vp, "rfx_vp": rfx_vp, "noise_vp": noise_vp})
         return out
+    
+    def fitVI(self, y: torch.Tensor, X: torch.Tensor, groups: torch.Tensor) -> pm.variational.approximations.MeanField:
+        ''' perform variational inference with automatic diffenentiation '''
+        d = X.shape[1]
+        Z = X[:,:self.q]
+        with pm.Model() as model:
+            beta = pm.Normal("beta", mu=0., sigma=5., shape=d) # priors
+            sigma_b = pm.HalfNormal("sigma_b", sigma=1., shape=self.q) # rfx SD
+            b = pm.Normal("b", mu=0., sigma=sigma_b, shape=(self.m, self.q)) # rfx
+            B = b[groups.numpy()]
+            mu = pt.dot(X.numpy(), beta) + pt.sum(Z.numpy() * B, axis=1) # linear predictor
+            sigma_e = pm.HalfNormal("sigma_e", sigma=1.)  # noise SD
+            y_obs = pm.Normal("y_obs", mu=mu, sigma=sigma_e, observed=y.numpy())
+            approx = pm.fit(method="advi", n=10000) 
+        return approx
+    
 
 
 def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> None:
