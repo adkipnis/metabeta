@@ -213,7 +213,7 @@ class MixedEffects(Task):
         eps = self._sampleNoise(n_samples)
         
         # random effects and target
-        groups = torch.arange(0, self.m).repeat(n_samples) # (n,)
+        groups = torch.arange(0, self.m).repeat(n_samples//self.m) # (n,)
         b = self._sampleRandomEffects() # (m, q)
         B = b[groups] # (n, q)
         Z = X[:,:self.q]
