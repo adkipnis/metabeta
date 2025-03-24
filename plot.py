@@ -149,24 +149,26 @@ def loss2df(data, target_type: str, source = 'proposed', posterior_type = 'mixtu
 # subplots
 
 # training loss over iterations
-def plotTrain(date: str, model_id: str):
-    path = Path('losses', model_id, date, 'loss_train.csv')
+def plotTrain(ax, date: str, model_id: str):
+    path = Path('outputs', 'losses', model_id, date, 'loss_train.csv')
     df = pd.read_csv(path)
     df = df.groupby(['iteration'])['loss'].agg(['mean', 'std', 'max', 'min']).reset_index()
     df = df[df['iteration'] != 1]
-    fig, ax = plt.subplots(figsize=(10, 6))
+    # fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(df['iteration'], df['mean'], label='Mean Loss', color='blue')
     
     # Shade 95% CI area
     ax.fill_between(df['iteration'],
-                    df['mean'] - 1.96 * df['std'], 
-                    df['mean'] + 1.96 * df['std'], 
+                    # df['min'],
+                    # df['max'],
+                    df['mean'] - 1. * df['std'], 
+                    df['mean'] + 1. * df['std'], 
                     color='blue', alpha=0.3)
     
-    plt.xlabel('Iteration')
-    plt.ylabel('-log p(target)')
-    plt.grid(True) 
-    plt.show()
+    ax.set_xlabel('datasets [10k]')
+    ax.set_ylabel('-log p(target)')
+    # ax.set_ylim([0., 3.])
+    ax.grid(True) 
 
 
 # validation loss over iterations
