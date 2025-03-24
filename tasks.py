@@ -67,6 +67,17 @@ class Task:
         return torch.max(torch.tensor(0), variances) # guarantee non-negative values
     
     
+    def evalVI(self, approx: pm.variational.approximations.MeanField,
+               param_name: str, n_samples: int = 1000) -> Dict[str, torch.Tensor]:
+        posterior_samples = approx.sample(n_samples).posterior[param_name][0]
+        means = posterior_samples.mean(dim='draw').to_numpy()
+        # medians = posterior_samples.median(dim='draw').to_numpy()
+        stds = posterior_samples.std(dim='draw').to_numpy()
+        ci95 = np.percentile(posterior_samples.to_numpy(), [2.5, 50., 97.5], axis=0)
+        return {'means': torch.tensor(means),
+                # 'medians': torch.tensor(medians),
+                'stds': torch.tensor(stds),
+                'ci95': torch.tensor(ci95),}
  
 
 class FixedEffects(Task):
@@ -74,7 +85,9 @@ class FixedEffects(Task):
                  n_predictors: int,
                  sigma_error: float,
                  data_dist: torch.distributions.Distribution,
-                 q: int = 0):
+                 q: int = 0,
+                 m: int = 1,
+                 ):
         super().__init__(n_predictors, sigma_error, data_dist)
 
     def _priorPrecision(self) -> torch.Tensor:
@@ -153,6 +166,18 @@ class FixedEffects(Task):
             mu_n, Sigma_n, a_n, b_n = self.allPosteriorParams(X, y)
             out.update({"mu_n": mu_n, "Sigma_n": Sigma_n, "a_n": a_n, "b_n": b_n})
         return out
+    
+    def fitVI(self, y: torch.Tensor, X: torch.Tensor) -> pm.variational.approximations.MeanField:
+        ''' perform variational inference with automatic diffenentiation '''
+        d = X.shape[1]
+        with pm.Model() as model:
+            beta = pm.Normal("beta", mu=0., sigma=5., shape=d) # priors
+            mu = pt.dot(X.numpy(), beta)
+            sigma = pm.HalfNormal("sigma", sigma=1.)  # Noise standard deviation
+            y_obs = pm.Normal("y_obs", mu=mu, sigma=sigma, observed=y.numpy())
+            approx = pm.fit(method="advi", n=10000)  # Use ADVI with 10,000 iterations  
+        return approx
+    
 
 
 class MixedEffects(Task):
