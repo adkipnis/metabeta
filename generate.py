@@ -1,6 +1,7 @@
 import os
 from tqdm import tqdm
 import argparse
+from typing import Tuple
 from math import sqrt
 import torch
 from torch import distributions as D
@@ -63,13 +64,14 @@ def generateDataset(ds_type: str, n_draws: int, max_samples: int, max_predictors
     return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
 
 
-def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, max_predictors: int) -> dict:
+def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, max_predictors: int) -> Tuple[dict, list]:
     ''' generateDataset but with balanced number of predictors for validation '''
     data = []
     iterator = tqdm(range(max_predictors + 1))
     iterator.set_description('Validation Set')
     sigmas = torch.linspace(0.05, 1.5, steps=n_draws_per)
     LinearModel = FixedEffects if ds_type == "ffx" else MixedEffects
+    info = []
 
     for d in iterator:
         q_range = range(d//2) if ds_type == "mfx" else range(1)
@@ -82,7 +84,8 @@ def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, ma
                     sigma = sigma * sqrt(d + 1)
                 lm = LinearModel(d, sigma.item(), data_dist, q, m)
                 data += [lm.sample(max_samples, i, include_posterior=False)]
-    return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
+                info += [{'d': d, 'q': q, 'sigma': sigma.item()}]
+    return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}, info
 
 
 def setup() -> argparse.Namespace:
