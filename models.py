@@ -79,8 +79,11 @@ class Base(nn.Module):
         Z_emb = self.embed_z(Z)
         g_emb = self.embed_g(groups)
         return y_emb + X_emb + Z_emb + g_emb
+
+    def forward(self, y: torch.Tensor, X: torch.Tensor,
+                Z: torch.Tensor, groups: torch.Tensor) -> torch.Tensor:
         ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
-        outputs = self.internal(x) # (batch_size, seq_size, hidden_size)
+        outputs = self.internal(y, X, Z, groups)
         finals = [layer(outputs).unsqueeze(-1) for layer in self.final_layers]
         return torch.cat(finals, dim=-1)
 
@@ -102,7 +105,6 @@ class TransformerEncoder(Base):
                  ) -> None:
 
         super(TransformerEncoder, self).__init__(n_inputs, n_predictors, hidden_size, n_layers, dropout, seed, fx_type, posterior_type, n_components)
-        self.embed = nn.Linear(n_inputs, hidden_size)
         encoder_layer = TransformerEncoderLayer(d_model=hidden_size,
                                                 dim_feedforward=ff_size,
                                                 nhead=n_heads,
