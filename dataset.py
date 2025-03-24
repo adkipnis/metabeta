@@ -31,34 +31,35 @@ class LMDataset(Dataset):
         d_max = self.max_predictors + 1
 
         X = padTensor(item['X'], (n, d_max))
-        y = padTensor(item['y'], (n,))
-        beta = padTensor(item['beta'], (d_max,))
+        y = padTensor(item['y'], (n,)).unsqueeze(-1)
+        ffx = padTensor(item['ffx'], (d_max,))
 
         if self.permute:
             seed = item['seed']
             torch.manual_seed(seed)
             indices = torch.randperm(d_max)
             X = X[:, indices]
-            beta = beta[indices]
+            ffx = ffx[indices]
 
-        out = {'d': d, 'X': X, 'y': y, 'beta': beta,
+        out = {'d': d, 'X': X, 'y': y, 'ffx': ffx,
                'sigma_error': item['sigma_error'],
                'sigma_error_emp': item['sigma_error_emp']}
 
         # optionally include random effects
         if "rfx" in item:
             q = item['rfx'].shape[1]
+            groups = item['groups']
             Z = padTensor(X[:, :q], (n, d_max))
             rfx = padTensor(item['rfx'], (n, d_max))
             S = padTensor(item['S'], (d_max,))
             # unique = int(d_max * (d_max + 1) / 2)
             # S = padTensor(item['S'], (unique,))
             S_emp = padTensor(item['S_emp'], (n, d_max))
-            out.update({'q': q, 'Z': Z, 'rfx': rfx, 'S': S, 'S_emp': S_emp})
+            out.update({'q': q, 'groups': groups, 'Z': Z, 'rfx': rfx, 'S': S, 'S_emp': S_emp})
             if self.permute:
                 raise ValueError('Permutation not implemented for rfx datasets')
         else:
-            out.update({'q': 0, 'Z': torch.zeros_like(X)})
+            out.update({'q': 0, 'groups': torch.zeros_like(y), 'Z': torch.zeros_like(X)})
 
         # optionally include analytical posterior
         if 'mu_n' in item:
