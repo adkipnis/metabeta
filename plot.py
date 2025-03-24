@@ -208,7 +208,7 @@ def plotVal(ax, date: str, model_id: str, suffix: str = "val", focus: int = -1, 
 
 
 # proposed posterior
-def plotMultivariateParams(df, targets, quantiles, ylims, est_type: str, ax):
+def plotMultivariateParams(df, targets, quantiles, ylims, source: str, ax):
     ''' plot first quartile, median, and third quartile '''
     unique_d = df['d'].unique()
     norm = colors.Normalize(vmin=unique_d.min(), vmax=unique_d.max())
@@ -217,6 +217,8 @@ def plotMultivariateParams(df, targets, quantiles, ylims, est_type: str, ax):
     for d_value, group in df.groupby('d'):
         target = targets[d_value].item()
         color = cmap(norm(d_value))
+        if 'ref' in group:
+            ax.plot(group['n'], group['ref'], color=color, linestyle='--')
         ax.plot(group['n'], group['q2'], label=f'd={d_value}', color=color)
         ax.fill_between(group['n'], 
                         group['q1'],
@@ -226,9 +228,7 @@ def plotMultivariateParams(df, targets, quantiles, ylims, est_type: str, ax):
     
     # Adding labels and title
     ax.set_xlabel('n')  # X-axis label
-    ax.set_ylabel(f'{est_type}')
-    if est_type == "analytical": 
-        ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    # ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
     ax.set_ylim(ylims)
     ax.grid(True)
      
@@ -290,7 +290,7 @@ def discreteQuantiles(probs: torch.Tensor, quantiles: Tuple[float, float, float]
     return torch.stack(values, dim=-1)
 
 
-def discreteWrapper(data: dict, prefix: str, batch_id: int, iteration: int,
+def discreteWrapper(ax, data: dict, prefix: str, batch_id: int, iteration: int,
                     quantiles: Tuple[float, float, float],
                     ylims: Tuple[float, float]):
     # prepare data
@@ -305,19 +305,19 @@ def discreteWrapper(data: dict, prefix: str, batch_id: int, iteration: int,
     df = multivariateDataFrame(mean, quantile_roots)
 
     # plot
-    fig, ax = plt.subplots(figsize=(8, 6))
+    # fig, ax = plt.subplots(figsize=(8, 6))
     plotMultivariateParams(df, target, quantiles, ylims, 'proposed', ax)
     fig.suptitle(f'{prefix} (iter={iteration})')
 
 
-def ffxDiscWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
-    return discreteWrapper(data, 'ffx', batch_id, iteration, quantiles, (-6., 6.))
+def ffxDiscWrapper(ax, data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return discreteWrapper(ax, data, 'ffx', batch_id, iteration, quantiles, (-6., 6.))
 
-def rfxDiscWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
-    return discreteWrapper(data, 'rfx', batch_id, iteration, quantiles, (0., 6.))
+def rfxDiscWrapper(ax, data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return discreteWrapper(ax, data, 'rfx', batch_id, iteration, quantiles, (0., 6.))
 
-def noiseDiscWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
-    return discreteWrapper(data, 'noise', batch_id, iteration, quantiles, (0., 2.))
+def noiseDiscWrapper(ax, data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return discreteWrapper(ax, data, 'noise', batch_id, iteration, quantiles, (0., 2.))
 
 
 
@@ -364,36 +364,55 @@ def mixtureQuantiles(base_dist: Callable,
     return torch.stack(values, dim=-1)
   
 
-def mixtureWrapper(data: dict, prefix: str, batch_id: int, iteration: int,
-                base_dist: Callable,
-                quantiles: Tuple[float, float, float],
-                ylims: Tuple[float, float]):
+def mixtureWrapper(ax, data: dict, prefix: str, batch_id: int, iteration: int,
+                   base_dist: Callable,
+                   quantiles: Tuple[float, float, float],
+                   ylims: Tuple[float, float],
+                   source = 'proposed'):
     # prepare data
     mask = (data[f'{prefix}_target'][batch_id] != 0)
     target = data[f'{prefix}_target'][batch_id, mask]
-    loc = data[f'{prefix}_loc'][batch_id, :, mask]
-    scale = data[f'{prefix}_scale'][batch_id, :, mask]
-    weight = data[f'{prefix}_weight'][batch_id, :, mask]
+    if source == 'proposed':
+        loc = data[f'{prefix}_loc'][batch_id, :, mask]
+        scale = data[f'{prefix}_scale'][batch_id, :, mask]
+        weight = data[f'{prefix}_weight'][batch_id, :, mask]
+    elif source == 'analytical':
+        loc = data[f'{prefix}_loc_a'][batch_id, :, mask].unsqueeze(-1)
+        scale = data[f'{prefix}_scale_a'][batch_id, :, mask] .unsqueeze(-1)    
+        weight = torch.ones_like(loc)
     
     # find mean, (numerical) quantiles and construct df
     mean = mixMean(loc, weight)
     quantile_roots = mixtureQuantiles(base_dist, quantiles, loc, scale, weight)
     df = multivariateDataFrame(mean, quantile_roots)
+    
+    # # add reference
+    # if prefix in ['noise']:
+    #     ref = data[f'{prefix}_reference'][batch_id]
+    #     df['ref'] = ref.numpy()
 
     # plot
-    fig, ax = plt.subplots(figsize=(8, 6))
-    plotMultivariateParams(df, target, quantiles, ylims, 'proposed', ax)
-    fig.suptitle(f'{prefix} (iter={iteration})')
+    plotMultivariateParams(df, target, quantiles, ylims, source, ax)
+    title = source
+    if source == 'proposed':
+        title += f' (iter={iteration})'
+    ax.set_title(title)
+    if prefix in ['rfx', 'noise']:
+        prefix = f'log {prefix} SD'
+    ax.set_ylabel(prefix)
 
 
-def ffxMixWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
-    return mixtureWrapper(data, 'ffx', batch_id, iteration, D.Normal, quantiles, (-6., 6.))
+def ffxMixWrapper(ax, data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return mixtureWrapper(ax, data, 'ffx', batch_id, iteration, D.Normal, quantiles, (-6., 6.))
 
-def rfxMixWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
-    return mixtureWrapper(data, 'rfx', batch_id, iteration, D.LogNormal, quantiles, (0., 6.))
+def ffxAWrapper(ax, data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return mixtureWrapper(ax, data, 'ffx', batch_id, iteration, D.Normal, quantiles, (-6., 6.), 'analytical')
 
-def noiseMixWrapper(data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
-    return mixtureWrapper(data, 'noise', batch_id, iteration, D.LogNormal, quantiles, (0., 2.))
+def rfxMixWrapper(ax, data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return mixtureWrapper(ax, data, 'rfx', batch_id, iteration, D.Normal, quantiles, (-3., 3.))
+
+def noiseMixWrapper(ax, data: dict, batch_id: int, iteration: int, quantiles: Tuple[float, float, float]):
+    return mixtureWrapper(ax, data, 'noise', batch_id, iteration, D.Normal, quantiles, (-3., 3.))
 
 
 # =============================================================================
