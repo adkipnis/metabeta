@@ -418,14 +418,18 @@ def noiseMixWrapper(ax, data: dict, batch_id: int, iteration: int, quantiles: Tu
 # =============================================================================
 
 if __name__ == "__main__":
+    d_max = 8
+    n_max = 50
     fixed = 0.
     noise = 'variable' if fixed == 0. else fixed
-    fx_type = 'ffx'
-    posterior_type = 'discrete'
-    num_components = 64
-    model_id = f'{posterior_type}-{num_components}-transformer-128-256-8-3-dropout=0-loss=logprob-seed=0-fx={fx_type}-noise={noise}'
-    # date = '20250303-151342'
-    date = '20250303-161609'
+    fx_type = 'mfx'
+    
+    posterior_type = 'mixture'
+    num_components = 8
+    date = '20250324-134343' #disc
+    
+    model_id = f'{posterior_type}-{num_components}-transformer-128-256-8-6-dropout=0-loss=logprob-seed=0-fx={fx_type}-noise={noise}'
+    # model_id = f'{posterior_type}-{num_components}-transformer-256-512-8-6-dropout=0-loss=logprob-seed=0-fx={fx_type}-noise={noise}'
     
     # parse posterior
     if posterior_type == "mixture":
@@ -439,30 +443,23 @@ if __name__ == "__main__":
 
        
     # train and val loss
-    plotTrain(date, model_id)
-    plotVal(date, model_id)
+    info = getValidationInfo(fx_type, d_max, n_max, fixed)
+    fig, axs = plt.subplots(ncols=1, nrows=2, figsize=(7, 6), dpi=600, layout="constrained")
+    plotTrain(axs[0], date, model_id)
+    plotVal(axs[1], date, model_id)
     if fx_type == "ffx" and num_components == 1:
-        plotVal(date, model_id, suffix="kl")
+        fig, ax = plt.subplots(figsize=(7, 5))
+        plotVal(ax, date, model_id, suffix="kl")
     
-    # proposal distribution
+    # load predictions
     iteration = 10
     data = preloadPredictions(date,
                               model_id,
                               iteration=iteration,
-                              n_batches=45,
+                              n_batches=45 if fx_type == "ffx" else 125,
                               fixed=fixed,
                               fx_type=fx_type,
                               num_components=num_components)
-    max_d = 1
-    quantiles = (0.025, 0.5, 0.975)
-    for i in range (5):
-        ffxWrapper(data, 500 * max_d + i, iteration, quantiles)
-    for i in range (5):
-        noiseWrapper(data, 500 * max_d + i, iteration, quantiles)
-    if fx_type == 'mfx':
-        for i in range (5):
-            rfxWrapper(data, 500 * max_d + i, iteration, quantiles)
-    
     
     # plot validation loss over n for given iteration
     quantiles = (0.16, 0.5, 0.84)
@@ -471,4 +468,26 @@ if __name__ == "__main__":
     if fx_type == 'ffx':
         df_a = loss2df(data, 'ffx', 'analytical')
         plotValN(df_a, quantiles, iteration, source = 'analytical')
+    
+    # plot posteriors
+    quantiles = (0.025, 0.5, 0.975)
+    r = 5  
+    
+    for i in range (r):
+        if fx_type == 'ffx':
+            fig, axs = plt.subplots(ncols=1, nrows=2, figsize=(7, 6), dpi=600, layout="constrained")
+            ffxAWrapper(axs[0], data, 500 * d_max + i * 500//r, iteration, quantiles)
+            ffxWrapper(axs[1], data, 500 * d_max + i * 500//r, iteration, quantiles)
+            fig, ax = plt.subplots(figsize=(7, 5))
+            noiseWrapper(ax, data, 500 * d_max + i * 500//r, iteration, quantiles)
+        else:
+            fig, ax = plt.subplots(figsize=(7, 5))
+            ffxWrapper(ax, data, 500 * d_max + i * 500//r, iteration, quantiles)
+            fig, axs = plt.subplots(ncols=1, nrows=2, figsize=(7, 6), dpi=600, layout="constrained")
+            noiseWrapper(axs[0], data, 500 * d_max + i * 500//r, iteration, quantiles)
+            rfxWrapper(axs[1], data, 500 * d_max + i * 500//r, iteration, quantiles)
+            
+    
+    
+    
 
