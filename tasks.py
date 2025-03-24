@@ -326,23 +326,30 @@ if __name__ == "__main__":
     n_predictors = 5
     n_obs = 50
     noise_var = 0.5 ** 2
-    datadist = torch.distributions.uniform.Uniform(0., 1.)
+    datadist = D.Uniform(0., 1.)
 
-    # fixed effects
-    fe = FixedEffects(n_predictors, math.sqrt(noise_var), datadist)
-    ds = fe.sample(n_obs, seed)
-    X, y, beta, noise_var_emp = ds["X"], ds["y"], ds["beta"], ds["sigma_error_emp"].square()
-    print(f"true beta: {beta}")
-    print(f"true noise variance: {noise_var}")
-    print(f"empirical noise variance: {noise_var_emp}")
-
+    # # --- fixed effects
+    # fe = FixedEffects(n_predictors, math.sqrt(noise_var), datadist)
+    # ds = fe.sample(n_obs, seed)
+    # X, y, beta, noise_var_emp = ds["X"], ds["y"], ds["beta"], ds["sigma_error_emp"].square()
+    # print(f"true beta: {beta}")
+    # print(f"true noise variance: {noise_var}")
+    # print(f"empirical noise variance: {noise_var_emp}")
+    
     # # analytical posterior
-    # mu, sigma, a, b = fe.allPosteriorParams(X, y)
-    # print(f"posterior mu:\n{mu}")
-    # print(f"posterior (margial) sigma^2:\n{torch.diagonal(sigma, dim1=-1, dim2=-2)}")
-    # print(f"posterior a:\n{a}")
-    # print(f"posterior b:\n{b}")
+    # mu, sigma, a, b = fe.allPosteriorParams(y, X)
+    # print(f"posterior mu: {mu[-1]}")
+    # print(f"posterior (margial) sigma^2: {torch.diagonal(sigma, dim1=-1, dim2=-2)[-1]}")
+    # # print(f"posterior a:\n{a}")
+    # # print(f"posterior b:\n{b}")
     # plotExample(beta, mu, sigma)
+    
+    # # VI posterior
+    # approx = fe.fitVI(y, X)
+    # vi_stats = fe.evalVI(approx, "beta")
+    # mu_vi, sigma_vi = vi_stats["means"], vi_stats["stds"]
+    # print(f"VI posterior mu: {mu_vi}")
+    # print(f"VI posterior sigma^2: {sigma_vi.square()}")
 
     # # noise variance
     # eps = y - X @ beta
@@ -354,11 +361,28 @@ if __name__ == "__main__":
     # snr = torch.var(y)/noise_var
     # print(f"SNR: {snr:.3f}")
 
-    # # mixed effects
-    # q = 2
-    # me = MixedEffects(n_predictors, math.sqrt(noise_var), datadist, q)
-    # ds = me.sample(n_obs, seed)
-    # S, S_emp, rfx = ds["S"], ds["S_emp"], ds["rfx"]
+    # --- mixed effects
+    n_obs = 50
+    n_rfx = 2
+    n_groups = 5
+    me = MixedEffects(n_predictors, math.sqrt(noise_var), datadist, n_rfx, n_groups)
+    ds = me.sample(n_obs, seed, include_posterior=True)
+    X, y, groups, beta = ds["X"], ds["y"], ds["groups"], ds["beta"]
+    S, S_emp, rfx = ds["S"], ds["S_emp"], ds["rfx"]
+    print(f"true beta: {beta}")
+    print(f"random effects variances:\n{S}")
+    
+    # # VI Posterior
+    # approx = me.fitVI(y, X, groups)
+    # vi_stats_beta = me.evalVI(approx, "beta")
+    # print(f"VI beta posterior mu: {vi_stats_beta['means']}")
+    # print(f"VI beta posterior sigma^2: {vi_stats_beta['stds'].square()}")
+    
+    # vi_stats_rfx = me.evalVI(approx, "sigma_b")
+    # print(f"VI beta posterior mu: {vi_stats_rfx['means']}")
+    # print(f"VI beta posterior sigma^2: {vi_stats_rfx['stds'].square()}")
+    
+    # # rfx
     # print(f"random effects variances:\n{S}")
     # print(f"random effects variances (empirical):\n{S_emp}")
     # print(f"random effects:\n{rfx}")
