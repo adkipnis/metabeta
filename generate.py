@@ -74,7 +74,7 @@ def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, ma
     info = []
 
     for d in iterator:
-        q_range = range(d//2) if ds_type == "mfx" else range(1)
+        q_range = range(d//2 + 1) if ds_type == "mfx" else range(1)
         for q in q_range:
             for i in range(n_draws_per):
                 torch.manual_seed(i)
