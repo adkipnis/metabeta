@@ -344,24 +344,9 @@ def mixExamples(num_examples: int,
 
 
 # -------- training and testing methods
-def assembleInputs(y: torch.Tensor,  X: torch.Tensor, Z: torch.Tensor) -> torch.Tensor:
-    if cfg.fx_type == "ffx":
-        return torch.cat([y.unsqueeze(-1), X], dim=-1)
-    else:
-        return torch.cat([y.unsqueeze(-1), X, Z], dim=-1)
-
-
-def getResiduals(y: torch.Tensor, X: torch.Tensor, outputs: Dict[str, torch.Tensor]) -> torch.Tensor:
-    locs = outputs["ffx_loc"] 
-    weights = outputs["ffx_weight"]
-    expected_beta = mixMean(locs, weights)
-    y_pred = torch.sum(X * expected_beta, dim=-1)
-    return y - y_pred
-    
-def assembleNoiseInputs(y: torch.Tensor,
-                        X: torch.Tensor,
+def assembleNoiseInputs(y: torch.Tensor, X: torch.Tensor,
                         outputs: Dict[str, torch.Tensor],
-                        posterior_type: str) -> torch.Tensor:
+                        posterior_type: str) -> Tuple[torch.Tensor, torch.Tensor]:
     if posterior_type == "discrete":
         loc = discreteMean(outputs["ffx_probs"], ffx_grid).detach()
         scale = discreteVariance(outputs["ffx_probs"], loc, ffx_grid).sqrt().detach()
@@ -373,9 +358,9 @@ def assembleNoiseInputs(y: torch.Tensor,
         scale = mixVariance(locs, scales, weights, loc).sqrt().detach()
     else:
         raise ValueError(f"posterior type {posterior_type} not supported.")
-    y_pred = torch.sum(X * loc, dim=-1)
-    error = y - y_pred
-    return torch.cat([error.unsqueeze(-1), scale], dim=-1)
+    y_pred = torch.sum(X * loc, dim=-1).unsqueeze(-1)
+    res = y - y_pred
+    return res, scale
 
 
 def locScaleWeights(outputs: torch.Tensor,
