@@ -22,11 +22,17 @@ def gatherPosterior(prefix: str, predictions: List[Dict[str, torch.Tensor]]) -> 
         key = f'{prefix}_probs'
         out = torch.cat([x[key] for x in predictions])
         return {key: out}
+
     
+def getValidationInfo(fx_type: str, d_max: int, n_max: int, fixed: float):
+    filename = dsFilenameVal(fx_type, d_max, n_max, fixed, '_info')
+    info = torch.load(filename, weights_only=False)
+    return pd.DataFrame(info)
+
 
 def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches: int = 45, fixed: float = 0, fx_type: str = "ffx", num_components: int = 1) -> Dict[str, torch.Tensor]:
     # 1. gather predicted posteriors
-    paths = [Path('predictions', model_id, date,
+    paths = [Path('outputs', 'predictions', model_id, date,
                   f'predictions_i={iteration}_b={batch}.pt')
              for batch in range(n_batches)]
     predictions = [torch.load(paths[batch], weights_only=False)
@@ -38,12 +44,17 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
     out.append(gatherPosterior('noise', predictions))
 
     # 2. gather validation data
-    filename = dsFilenameVal(fx_type, 8, 50, fixed)
+    filename = dsFilenameVal(fx_type, d_max, n_max, fixed)
     ds_val_raw = torch.load(filename, weights_only=False)
     ds_val = LMDataset(**ds_val_raw, permute=False)
-    ffx_target = torch.stack([x["beta"] for x in ds_val], dim=0)
-    noise_target = torch.stack([x["sigma_error"] for x in ds_val], dim=0).unsqueeze(-1)
-    out.append({"ffx_target": ffx_target, "noise_target": noise_target})
+    ffx_dim = torch.stack([torch.tensor(x["d"]) for x in ds_val], dim=0)
+    ffx_target = torch.stack([x["ffx"] for x in ds_val], dim=0)
+    noise_target = torch.stack([x["sigma_error"].log() for x in ds_val], dim=0).unsqueeze(-1)
+    noise_target_emp = torch.stack([x["sigma_error_emp"].log() for x in ds_val], dim=0)
+    out.append({"ffx_target": ffx_target,
+                "ffx_dim": ffx_dim,
+                "noise_target": noise_target,
+                "noise_reference": noise_target_emp})
 
     # - optionally get analytical solutions for ffx
     if fx_type == "ffx":
@@ -57,8 +68,11 @@ def preloadPredictions(date: str, model_id: str, iteration: int = 100, n_batches
 
     # - optionally get rfx structure
     if fx_type == "mfx":
-        rfx_target = torch.stack([x["S"].sqrt() for x in ds_val], dim=0)
-        out.append({"rfx_target": rfx_target})
+        rfx_dim = torch.stack([torch.tensor(x["q"]) for x in ds_val], dim=0)
+        rfx_scale = torch.stack([x["S"].sqrt() for x in ds_val], dim=0)
+        mask = (rfx_scale == 0.).float()
+        log_rfx_scale = (rfx_scale + mask).log()
+        out.append({"rfx_target": log_rfx_scale, "rfx_dim": rfx_dim})
     return {k: v for d in out for k, v in d.items()}
 
 
