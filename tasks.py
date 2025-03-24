@@ -207,20 +207,28 @@ class MixedEffects(Task):
         torch.manual_seed(seed)
         assert n_samples % self.m == 0, f"number of samples {n_samples} must be divisible by number of groups {self.m}"
 
+        # fixed effects and noise
+        beta = self._sampleBeta() # (d,)
         X = self._sampleFeatures(n_samples)
-        Z = X[:,:self.q]
-        beta = self._sampleBeta()
-        rfx = self._sampleRandomEffects(n_samples)
-        S_emp = self._covarySeries(rfx)
-        eta = torch.bmm(Z.unsqueeze(1), rfx.unsqueeze(2)).flatten() # eta_i = z_i.T @ b_i
         eps = self._sampleNoise(n_samples)
+        
+        # random effects and target
+        groups = torch.arange(0, self.m).repeat(n_samples) # (n,)
+        b = self._sampleRandomEffects() # (m, q)
+        B = b[groups] # (n, q)
+        Z = X[:,:self.q]
+        y = X @ beta + (Z * B).sum(dim=-1) + eps
+
+        # empricial covariance
+        S_emp = self._covarySeries(B)
         sigma_error_emp = self._covarySeries(eps.unsqueeze(-1)).sqrt()
-        # todo: empirical sigma error
-        y = X @ beta + eta + eps
+
+        # outputs
         out = {"X": X, # (n, d)
                "y": y, # (n,)
-               "beta": beta, # (d,)
-               "rfx": rfx, # (n, q)
+               "groups": groups, # (n,)
+               "ffx": beta, # (d,)
+               "rfx": B, # (n, q)
                "S": torch.diag(self.S), # once we allow correlation: symmetricMatrix2Vector(self.S),
                "S_emp": S_emp, # for now only marginal variances
                "sigma_error": torch.tensor(self.sigma_error), # (1,)
