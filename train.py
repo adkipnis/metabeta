@@ -123,15 +123,15 @@ def load(models: Tuple[nn.Module, nn.Module],
 
 
 # -------- loss helpers
-def chooseLossFn(target_type: str, posterior_type: str):
-    loss_type = eval(f"cfg.loss_{target_type}")
-    if loss_type == "mse":
-        return eval(f"{posterior_type}MSE")
-    elif loss_type == "logprob":
-        return eval(f"{posterior_type}LogProb")
-    else:
-        raise ValueError(f'loss type: "{loss_type}" not found.')
-
+# def chooseLossFn(target_type: str, posterior_type: str):
+#     loss_type = eval(f"cfg.loss_{target_type}")
+#     if loss_type == "mse":
+#         return eval(f"{posterior_type}MSE")
+#     elif loss_type == "logprob":
+#         return eval(f"{posterior_type}LogProb")
+#     else:
+#         raise ValueError(f'loss type: "{loss_type}" not found.')
+#
 
 def averageOverN(losses: torch.Tensor,
                  n: int,
