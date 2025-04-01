@@ -4,19 +4,10 @@ import torch.nn as nn
 from torch.nn import TransformerEncoderLayer, TransformerDecoderLayer
 
 
-def getLinearLayers(d_in: int, d_out: int, n_rep: int) -> nn.ModuleList:
-    layers = [nn.Linear(d_in, d_out) for _ in range(n_rep)]
-    return nn.ModuleList(layers)
-
-
-def parametricPosterior(hidden_size: int, d: int) -> nn.ModuleList:
-    ffx_layers = getLinearLayers(hidden_size, d, 2)
-    rfx_layers = getLinearLayers(hidden_size, d, 2)
-    return nn.ModuleList(list(ffx_layers) + list(rfx_layers))
-
-
 def generalizedPosterior(hidden_size: int, d: int, m: int) -> nn.ModuleList:
-    return getLinearLayers(hidden_size, d, m)
+    # get m linear layers from hidden_size to d
+    layers = [nn.Linear(hidden_size, d) for _ in range(m)]
+    return nn.ModuleList(layers)
 
 
 def causalMask(seq_len: int) -> torch.Tensor:
@@ -44,7 +35,7 @@ class Base(nn.Module):
         self.seed = seed
         self.fx_type = fx_type
         self.posterior_type = posterior_type
-        self.n_components = n_components # number of mixture components
+        self.n_components = n_components # number of mixture components resp. bins
 
         # embeddings
         self.embed_y = nn.Linear(1, hidden_size)
@@ -57,7 +48,7 @@ class Base(nn.Module):
         if posterior_type == "discrete":
             self.final_layers = generalizedPosterior(hidden_size, n_predictors, n_fx * self.n_components) # (ffx, rfx) * (bin)
         elif posterior_type == "mixture":
-            self.final_layers = generalizedPosterior(hidden_size, n_predictors, 3 * n_fx * self.n_components) # (loc, scale, weight) * (ffx, rfx) * (mixture component)
+            self.final_layers = generalizedPosterior(hidden_size, n_predictors, 3 * n_fx * self.n_components) # (loc, scale, weight) * (ffx, rfx) * (component)
         elif posterior_type == "discrete_noise":
             self.final_layers = generalizedPosterior(hidden_size, 1, self.n_components)
         elif posterior_type == "mixture_noise":
