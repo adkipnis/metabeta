@@ -134,3 +134,16 @@ class MixtureProposal(nn.Module):
             raise ValueError(f"loss type {loss_type} unknown")
 
 
+if __name__ == '__main__':
+    m = 32
+    # bins = equidistantBins(-5., 5., m+1)
+    bins = normalBins(3., m+1)
+    # bins = halfNormalBins(2., m+1)
+    print(bins)
+    
+    prop = DiscreteProposal(bins)
+    targets = torch.tensor([0., 3., 7.]).unsqueeze(0)
+    logits = D.Normal(0,1).sample((3,m)).unsqueeze(0)
+    mean = prop.mean(logits)
+    variance = prop.variance(logits, mean)
+
