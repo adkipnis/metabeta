@@ -14,6 +14,7 @@ import schedulefree
 from utils import dsFilename, dsFilenameVal
 from dataset import LMDataset
 from models import TransformerEncoder, TransformerDecoder
+from proposal import DiscreteProposal, MixtureProposal, normalBins, halfNormalBins
 mse = nn.MSELoss(reduction='none')
 
 # -------- miscellaneous
