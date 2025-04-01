@@ -71,3 +71,66 @@ class DiscreteProposal(nn.Module):
             raise ValueError(f"loss type {loss_type} unknown")
 
 
+# --------------------------------------------------------------------------
+# mixture posterior
+
+class MixtureProposal(nn.Module):
+    def __init__(self, comp_dist = D.Normal):
+        super().__init__()
+        self.comp_dist = comp_dist
+    
+    def construct(self, locs: torch.Tensor, scales: torch.Tensor, weights: torch.Tensor) -> D.Distribution:
+        m = locs.shape[-1]
+        if m > 1:
+            mix = D.Categorical(weights)
+            comp = self.comp_dist(locs, scales)
+            proposal = D.MixtureSameFamily(mix, comp)
+        else:
+            proposal = self.comp_dist(locs.squeeze(-1), scales.squeeze(-1))
+        return proposal
+
+    def mean(self, locs: torch.Tensor, scales: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+        if self.comp_dist == D.Normal:
+            return (locs * weights).sum(dim=-1)
+        else:
+            proposal = self.construct(locs, scales, weights)
+            return proposal.mean
+
+    def variance(self, locs: torch.Tensor, scales: torch.Tensor,
+                 weights: torch.Tensor, mean: torch.Tensor) -> torch.Tensor:
+        if self.comp_dist == D.Normal:
+            second_moments = locs.square() + scales.square()
+            return (second_moments * weights).sum(dim=-1) - mean.square()
+        else:
+            proposal = self.construct(locs, scales, weights)
+            return proposal.variance
+
+    def mseLoss(self, locs: torch.Tensor, scales: torch.Tensor, weights: torch.Tensor,
+                target: torch.Tensor, target_type: str) -> torch.Tensor:
+        m = locs.shape[-1]
+        if m > 1:
+            loc = self.mean(locs, scales, weights)
+        else:
+            loc = locs.squeeze(-1)
+        target_expanded = target.unsqueeze(1).expand_as(loc)
+        if target_type in ["rfx", "noise"]:
+            return mse(loc.log(), target_expanded.log())
+        else:
+            return mse(loc, target_expanded)
+
+    def nllLoss(self, locs: torch.Tensor, scales: torch.Tensor, weights: torch.Tensor,
+                target: torch.Tensor, target_type: str) -> torch.Tensor:
+        b, n, d, _ = locs.shape
+        target = target.unsqueeze(1).expand((b, n, d))
+        proposal = self.construct(locs, scales, weights)
+        return -proposal.log_prob(target)
+
+    def loss(self, loss_type: str, locs, scales, weights, target, target_type):
+        if loss_type == "mse":
+            return self.mseLoss(locs, scales, weights, target, target_type)
+        elif loss_type == "nll":
+            return self.nllLoss(locs, scales, weights, target, target_type)
+        else:
+            raise ValueError(f"loss type {loss_type} unknown")
+
+
