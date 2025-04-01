@@ -20,8 +20,8 @@ class Task:
         self.data_dist = data_dist
 
         # beta distribution
-        self.beta_error = math.sqrt(5.)
-        self.beta_dist = D.Normal(0., self.beta_error)
+        self.sigma_beta = math.sqrt(5.)
+        self.beta_dist = D.Normal(0., self.sigma_beta)
 
         # error distribution
         self.sigma_error = sigma_error
@@ -92,7 +92,7 @@ class FixedEffects(Task):
 
     def _priorPrecision(self) -> torch.Tensor:
         d = self.n_predictors + 1
-        precision = torch.tensor(1. / self.beta_error).square().repeat(d)
+        precision = torch.tensor(1. / self.sigma_beta).square().repeat(d)
         L_0 = torch.diag(precision)
         return L_0
 
