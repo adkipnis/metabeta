@@ -169,142 +169,19 @@ def maskLoss(losses: torch.Tensor,
     return loss # (,)
 
 
-# -------- methods for discrete posterior
-def discreteMode(dist: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
-    # dist (b, n, 128, d)
-    # return: mode (b, n, d)
-    b, n, d, _ = dist.shape
-    grid_expanded = grid.unsqueeze((0,0,0)).expand(b, n, d, -1)
-    index = dist.argmax(dim=-1).unsqueeze(-1) # (b, n, d, 1)
-    return torch.gather(grid_expanded, dim=-1, index=index).squeeze(-1) 
-
-
-def discreteMean(dist: torch.Tensor, grid: torch.Tensor) -> torch.Tensor:
-    # dist (b, n, 128, d)
-    return torch.matmul(dist, grid)
-
-
-def discreteVariance(dist: torch.Tensor,
-                 mean: torch.Tensor,
-                 grid: torch.Tensor):
-    # dist (b, n, d, 128)
-    # mean (b, n, d)
-    squared_diff = (grid.view(1, 1, 1, -1) - mean.unsqueeze(-1)).square()
-    weighted_squared_diff = squared_diff * dist
-    return torch.sum(weighted_squared_diff, dim=-1)
- 
-
-def discreteMSE(means: torch.Tensor,
-            targets: torch.Tensor) -> torch.Tensor:
-    # means (b, n, d)
-    # targets (b, d)
-    betas = targets.unsqueeze(1).expand_as(means)
-    return mse(means, betas)
-
-
-def discreteLogProb(dist: torch.Tensor,
-                    targets: torch.Tensor,
-                    grid: torch.Tensor) -> torch.Tensor:
-    # dist (b, n, d, n_bins)
-    # targets (b, n, d)
-    # grid (n_bins)
-    grid_expanded = grid.view(1, 1, 1, -1)
-    index = (grid_expanded - targets.unsqueeze(-1)).abs().argmin(dim=-1) 
-    index = index.squeeze(0).unsqueeze(-1) # (b, n, d, 1)
-    probs = torch.gather(dist, dim=-1, index=index).squeeze(-1) # (b, n, d)
-    return -probs.log()
-
-
+# -------- methods for posteriors
 def discreteLossWrapper(outputs: Dict[str, torch.Tensor],
-                    targets: torch.Tensor,
-                    depths: torch.Tensor,
-                    target_type: str) -> torch.Tensor:
+                        targets: torch.Tensor,
+                        depths: torch.Tensor,
+                        target_type: str) -> torch.Tensor:
     # calculate losses for all dataset sizes and each beta
-    probs = outputs[f"{target_type}_probs"]
-    b, n, d, _ = probs.shape
-    grid = ffx_grid if target_type == "ffx" else rfx_grid
-    if target_type in ["ffx", "noise"]:
-        targets = targets.unsqueeze(1).expand(b, n, d)
-    loss_fn = chooseLossFn(target_type=target_type, posterior_type="discrete")
-    losses = loss_fn(probs, targets, grid)
+    logits = outputs[f"{target_type}_logits"]
+    b, n, d, _ = logits.shape
+    targets_exp = targets.unsqueeze(1).expand(b, n, d)
+    loss_type = eval(f"cfg.loss_{target_type}")
+    prop = dprop_normal if target_type == "ffx" else dprop_half_normal
+    losses = prop.loss(loss_type, targets_exp, logits)
     return averageOverN(losses, n, b, depths)
-
-
-def discreteExamples(num_examples: int,
-                     ffx: torch.Tensor,
-                     outputs: Dict[str, torch.Tensor],
-                     printer: Callable) -> None:
-    for i in range(num_examples):
-        mask = (ffx[i] != 0.)
-        beta_i = ffx[i, mask].detach().numpy()        
-        probs_masked = outputs["ffx_probs"][..., mask, :]
-        # mode_i = discreteMode(probs_masked, ffx_grid)[i, -1].detach().numpy()
-        mean = discreteMean(probs_masked, ffx_grid)
-        var = discreteVariance(probs_masked, mean, ffx_grid)
-        mean_i = mean[i, -1].detach().numpy()
-        sd_i = var[i, -1].sqrt().detach().numpy()
-        printer(f"\n{console_width * '-'}")
-        printer(f"True : {beta_i}")
-        # printer(f"MAP  : {mode_i}")
-        printer(f"Mean : {mean_i}")
-        printer(f"SD   : {sd_i}")
-        printer(f"{console_width * '-'}\n")
-
-
-# -------- methods for mixture posterior
-def mixMean(locs: torch.Tensor,
-            weights: torch.Tensor) -> torch.Tensor:
-    ''' mean of normal mixture '''
-    return (locs * weights).sum(dim=-1)
-    
-
-def mixVariance(locs: torch.Tensor,
-                scales: torch.Tensor,
-                weights: torch.Tensor,
-                mean: torch.Tensor) -> torch.Tensor:
-    ''' variance of normal mixture '''
-    second_moments = locs.square() + scales.square()
-    return (second_moments * weights).sum(dim=-1) - mean.square()
-
-
-def mixMSE(locs: torch.Tensor,
-           scales: torch.Tensor,
-           weights: torch.Tensor,
-           target: torch.Tensor,
-           type: str) -> torch.Tensor:
-    # locs (b, n, d, m)
-    # target (b, d)
-    if type in ["rfx", "noise"]:
-        locs = scales
-    m = locs.shape[-1]
-    if m > 1:
-        loc = mixMean(locs, weights)
-    else:
-        loc = locs.squeeze(-1)
-    target_expanded = target.unsqueeze(1).expand_as(loc)
-    if type in ["rfx", "noise"]:
-        return mse(loc.log(), target_expanded.log())
-    else:
-        return mse(loc, target_expanded)
-
-
-def mixLogProb(locs: torch.Tensor,
-               scales: torch.Tensor,
-               weights: torch.Tensor,
-               target: torch.Tensor,
-               type: str) -> torch.Tensor:
-    # locs (b, n, d, m)
-    # scales (b, n, d, m)
-    # target (b, d)
-    b, n, d, m = locs.shape
-    target = target.unsqueeze(1).expand((b, n, d))
-    if m > 1:
-        mix = D.Categorical(weights)
-        comp = D.Normal(locs, scales)
-        proposal = D.MixtureSameFamily(mix, comp)
-    else:
-        proposal = D.Normal(locs.squeeze(-1), scales.squeeze(-1))
-    return -proposal.log_prob(target)
 
 
 def mixLossWrapper(outputs: Dict[str, torch.Tensor], 
@@ -316,9 +193,33 @@ def mixLossWrapper(outputs: Dict[str, torch.Tensor],
     scales = outputs[f"{target_type}_scale"]
     weights = outputs[f"{target_type}_weight"]
     b, n, _, _ = locs.shape
-    loss_fn = chooseLossFn(target_type=target_type, posterior_type="mix")
-    losses = loss_fn(locs, scales, weights, target, target_type) # (b, n, d)
+    if target_type == "rfx":
+        mask = (target == 0.).float()
+        target = (target + mask).log()
+    elif target_type == "noise":
+        target = target.log()
+    loss_type = eval(f"cfg.loss_{target_type}")
+    losses = mprop.loss(loss_type, locs, scales, weights, target, target_type)
     return averageOverN(losses, n, b, depths)
+
+
+def discreteExamples(num_examples: int,
+                     ffx: torch.Tensor,
+                     outputs: Dict[str, torch.Tensor],
+                     printer: Callable) -> None:
+    for i in range(num_examples):
+        mask = (ffx[i] != 0.)
+        beta_i = ffx[i, mask].detach().numpy()        
+        logits_masked = outputs["ffx_logits"][..., mask, :]
+        mean = dprop_normal.mean(logits_masked)
+        var = dprop_normal.variance(logits_masked, mean)
+        mean_i = mean[i, -1].detach().numpy()
+        sd_i = var[i, -1].sqrt().detach().numpy()
+        printer(f"\n{console_width * '-'}")
+        printer(f"True : {beta_i}")
+        printer(f"Mean : {mean_i}")
+        printer(f"SD   : {sd_i}")
+        printer(f"{console_width * '-'}\n")
 
 
 def mixExamples(num_examples: int,
@@ -327,16 +228,14 @@ def mixExamples(num_examples: int,
                 printer: Callable) -> None:
     if num_examples == 0:
         return
-    means = mixMean(outputs["ffx_loc"], outputs["ffx_weight"])
-    stds = mixVariance(outputs["ffx_loc"],
-                       outputs["ffx_scale"],
-                       outputs["ffx_weight"],
-                       means).sqrt()
+    locs, scales, weights = outputs["ffx_loc"], outputs["ffx_scale"], outputs["ffx_weight"]
+    loc = mprop.mean(locs, scales, weights)
+    scale = mprop.variance(locs, scales, weights, loc).sqrt()
     for i in range(num_examples):
          mask = (ffx[i] != 0.)
          beta_i = ffx[i, mask].detach().numpy()
-         mean_i = means[i, -1, mask].detach().numpy()
-         std_i = stds[i, -1, mask].detach().numpy()
+         mean_i = loc[i, -1, mask].detach().numpy()
+         std_i = scale[i, -1, mask].detach().numpy()
          printer(f"\n{console_width * '-'}")
          printer(f"True  : {beta_i}")
          printer(f"Mean  : {mean_i}")
@@ -349,14 +248,15 @@ def assembleNoiseInputs(y: torch.Tensor, X: torch.Tensor,
                         outputs: Dict[str, torch.Tensor],
                         posterior_type: str) -> Tuple[torch.Tensor, torch.Tensor]:
     if posterior_type == "discrete":
-        loc = discreteMean(outputs["ffx_probs"], ffx_grid).detach()
-        scale = discreteVariance(outputs["ffx_probs"], loc, ffx_grid).sqrt().detach()
+        logits = outputs["ffx_logits"]
+        loc = dprop_normal.mean(logits).detach()
+        scale = dprop_normal.variance(logits, loc).detach().sqrt()
     elif posterior_type == "mixture":
         locs = outputs["ffx_loc"]
         scales = outputs["ffx_scale"]
         weights = outputs["ffx_weight"]
-        loc = mixMean(locs, weights).detach()
-        scale = mixVariance(locs, scales, weights, loc).sqrt().detach()
+        loc = mprop.mean(locs, scales, weights).detach()
+        scale = mprop.variance(locs, scales, weights, loc).sqrt().detach()
     else:
         raise ValueError(f"posterior type {posterior_type} not supported.")
     y_pred = torch.sum(X * loc, dim=-1).unsqueeze(-1)
@@ -381,12 +281,10 @@ def parseOutputs(outputs: torch.Tensor,
     b, n, d, _ = outputs.shape
     outputs = outputs.reshape(b, n, d, c, -1)
     if posterior_type == "discrete":
-        ffx_dict = {f"{target_type}_probs":
-                    nn.functional.softmax(outputs[..., 0], dim=-1)}
+        ffx_dict = {f"{target_type}_logits": outputs[..., 0]}
         if outputs.shape[-1] == 1:
             return ffx_dict
-        rfx_dict = {"rfx_probs":
-                    nn.functional.softmax(outputs[..., 1], dim=-1)}
+        rfx_dict = {"rfx_logits": outputs[..., 1]}
     elif posterior_type == "mixture":
         ffx_dict = locScaleWeights(outputs[..., :3], target_type)
         if outputs.shape[-1] == 3:
@@ -420,18 +318,17 @@ def run(models: tuple,
     outputs = models[0](y, X, Z, groups)
     output_dict = parseOutputs(outputs, posterior_type, cfg.c, "ffx")
     losses_ffx = lossWrapper(output_dict, ffx, ffx_depths, "ffx")
+    
 
     # optionally compute rfx loss
     if cfg.fx_type == "mfx":
         rfx_depths = batch["q"]
         rfx = batch["rfx"].to(device)
         rfx_scale = batch["S"].to(device).sqrt()
-        mask = (rfx_scale == 0.).float()
-        log_rfx_scale = (rfx_scale + mask).log()
-        losses_rfx = lossWrapper(output_dict, log_rfx_scale, rfx_depths, "rfx") 
+        losses_rfx = lossWrapper(output_dict, rfx_scale, rfx_depths, "rfx") 
         losses_joint = torch.cat([losses_ffx, losses_rfx], dim=1)
-        targets = torch.cat([ffx, rfx[:,0]], dim=1)
-        loss = maskLoss(losses_joint, targets)
+        target_blueprint = torch.cat([ffx, rfx[:,0]], dim=1)
+        loss = maskLoss(losses_joint, target_blueprint)
     else:
         loss = maskLoss(losses_ffx, ffx)
 
@@ -439,10 +336,10 @@ def run(models: tuple,
     res, scale = assembleNoiseInputs(y, X, output_dict, posterior_type)
     noise_outputs = models[1](res, scale, Z, groups)
     noise_output_dict = parseOutputs(noise_outputs, posterior_type, cfg.c, "noise")
-    
+
     # compute noise loss
-    log_noise_std = batch["sigma_error"].to(device).log().unsqueeze(-1).float()
-    losses_noise = lossWrapper(noise_output_dict, log_noise_std, ffx_depths, "noise")
+    noise_std = batch["sigma_error"].to(device).unsqueeze(-1).float()
+    losses_noise = lossWrapper(noise_output_dict, noise_std, ffx_depths, "noise")
     loss_noise = losses_noise.mean()
 
     # optionally print some examples
@@ -682,9 +579,15 @@ if __name__ == "__main__":
                 n_components=cfg.c).to(device)
     models = (model, model_noise)
     print(f"Model: {modelID(cfg)}")
-    if cfg.posterior_type == "discrete": 
-        ffx_grid = torch.linspace(-10, 10, steps=cfg.c)
-        rfx_grid = torch.linspace(0, 10, steps=cfg.c)
+
+    # --- set up proposal distributions
+    if cfg.posterior_type == "discrete":
+        normal_bins = normalBins(3., cfg.c+1)
+        half_normal_bins = halfNormalBins(3., cfg.c+1)
+        dprop_normal = DiscreteProposal(normal_bins)
+        dprop_half_normal = DiscreteProposal(half_normal_bins)
+    else:
+        mprop = MixtureProposal()
 
     # --- set up optimizers
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(),
