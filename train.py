@@ -523,10 +523,10 @@ def setup() -> argparse.Namespace:
 
     # model and loss
     parser.add_argument("--posterior_type", type=str, default="mixture", help="Posterior architecture [discrete, mixture] (default = mixture)")
-    parser.add_argument("-c", type=int, default=8, help="Number of mixture components resp. grid bins (default = 8)")
-    parser.add_argument("--loss_ffx", type=str, default="logprob", help="Loss function [mse, logprob] (default = logprob)")
-    parser.add_argument("--loss_rfx", type=str, default="logprob", help="Loss function for rfx [mse, logprob] (default = logprob)")
-    parser.add_argument("--loss_noise", type=str, default="logprob", help="Loss function for noise [mse, logprob] (default = logprob)")
+    parser.add_argument("-c", type=int, default=5, help="Number of mixture components resp. grid bins (default = 5)")
+    parser.add_argument("--loss_ffx", type=str, default="nll", help="Loss function [mse, nll] (default = nll)")
+    parser.add_argument("--loss_rfx", type=str, default="nll", help="Loss function for rfx [mse, nll] (default = nll)")
+    parser.add_argument("--loss_noise", type=str, default="nll", help="Loss function for noise [mse, nll] (default = nll)")
     parser.add_argument("--dropout", type=float, default=0, help="Dropout rate (default = 0)")
     parser.add_argument("--hidden", type=int, default=128, help="Hidden dimension (default = 256)")
     parser.add_argument("--ff", type=int, default=256, help="Feedforward dimension (transformer, default = 512)")
