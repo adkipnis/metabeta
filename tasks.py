@@ -231,36 +231,13 @@ class MixedEffects(Task):
             optimal = {"ffx": ffx_stats, "rfx": rfx_stats, "noise": noise_stats}
             out.update({"optimal": optimal})
         return out
-    def fitVI(self, y: torch.Tensor, X: torch.Tensor, groups: torch.Tensor) -> pm.variational.approximations.MeanField:
-        ''' perform variational inference with automatic diffenentiation '''
-        d = X.shape[1]
-        Z = X[:,:self.q]
-        with pm.Model() as model:
-            beta = pm.Normal("beta", mu=0., sigma=5., shape=d) # priors
-            sigma_b = pm.HalfNormal("sigma_b", sigma=1., shape=self.q) # rfx SD
-            b = pm.Normal("b", mu=0., sigma=sigma_b, shape=(self.m, self.q)) # rfx
-            B = b[groups.numpy()]
-            mu = pt.dot(X.numpy(), beta) + pt.sum(Z.numpy() * B, axis=1) # linear predictor
-            sigma_e = pm.HalfNormal("sigma_e", sigma=1.)  # noise SD
-            y_obs = pm.Normal("y_obs", mu=mu, sigma=sigma_e, observed=y.numpy())
-            approx = pm.fit(method="advi", n=10000) 
-        return approx
-    
-    # def allVariationalPosteriors(self, y: torch.Tensor, X: torch.tensor,
-    #                              groups: torch.Tensor) -> Dict[str, torch.Tensor]:
-    #     n, d = X.shape
-    #     ffx_quantiles   = torch.zeros(n, d, 3)
-    #     rfx_quantiles   = torch.zeros(n, self.q, 3)
-    #     noise_quantiles = torch.zeros(n, 3)
-        
-    #     for i in range(n):
-    #         approx = me.fitVI(y[:i+1], X[:i+1], groups[:i+1])
-    #         ffx_quantiles[i]   = me.evalVI(approx, "beta")["ci95"].T
-    #         rfx_quantiles[i]   = me.evalVI(approx, "sigma_b")["ci95"].T
-    #         noise_quantiles[i] = me.evalVI(approx, "sigma_e")["ci95"]
-    #     return {"ffx_vp":   ffx_quantiles,
-    #             "rfx_vp":   rfx_quantiles,
-    #             "noise_vp": noise_quantiles}
+ 
+    def posteriorParams(self, y: torch.Tensor, X: torch.Tensor, groups: torch.Tensor, n_rfx: int, n_groups: int):
+        approx = fitMfxVI(y, X, groups, n_rfx, n_groups)
+        ffx_stats   = evalVI(approx, "beta")
+        rfx_stats   = evalVI(approx, "sigma_b")
+        noise_stats = evalVI(approx, "sigma_e")
+        return ffx_stats, rfx_stats, noise_stats
 
 
 def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> None:
