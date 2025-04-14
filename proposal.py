@@ -182,15 +182,33 @@ class MixtureProposal(nn.Module):
         locs, scales, logits = self.locScaleLogit(outputs)
         return self.nllLoss(locs, scales, logits, target)
     
+    def examples(self, indices: list, batch: dict, outputs: torch.Tensor, printer: Callable, console_width: int) -> None:
+        if len(indices) == 0:
+            return
+        loc, scale = self.getLocScale(outputs)
+        ffx = batch['ffx']
+        ffx_a = batch['optimal']['ffx']['mu'] if 'optimal' in batch else None
+        for i in indices:
+            n_i, sigma_i = batch['n'][i], batch['sigma_error'][i]
+            mask = (ffx[i] != 0.)
+            beta_i = ffx[i, mask].detach().numpy()
+            mean_i = loc[i, mask].detach().numpy()
+            std_i = scale[i, mask].detach().numpy()
+            printer(f"\n{console_width * '-'}")
+            printer(f"n={n_i}, sigma={sigma_i:.2f}")
+            printer(f"True    : {beta_i}")
+            if ffx_a is not None:
+                printer(f"Optimal : {ffx_a[i, mask].detach().numpy()}")
+            printer(f"Mean    : {mean_i}")
+            printer(f"SD      : {std_i}")
+            printer(f"{console_width * '-'}\n")
+
 
 
 if __name__ == '__main__':
     m = 32
     # bins = equidistantBins(-5., 5., m+1)
     bins = normalBins(3., m+1)
-    # bins = halfNormalBins(2., m+1)
-    print(bins)
-    
     prop = DiscreteProposal(bins)
     targets = torch.tensor([0., 3., 7.]).unsqueeze(0)
     logits = D.Normal(0,1).sample((3,m)).unsqueeze(0)
