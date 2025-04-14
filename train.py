@@ -334,67 +334,30 @@ if __name__ == "__main__":
                           else "cpu")
 
     # --- set up models
-    model = TransformerEncoder(
-                n_inputs=1+2*(1+cfg.d) if cfg.fx_type == "mfx" else 2+cfg.d, # y, X, Z
-                n_predictors=1+cfg.d,
-                hidden_size=cfg.hidden,
-                ff_size=cfg.ff,
-                n_heads=cfg.heads,
-                n_layers=cfg.layers,
-                dropout=cfg.dropout,
-                seed=cfg.seed,
-                fx_type=cfg.fx_type,
-                posterior_type=cfg.posterior_type,
-                n_components=cfg.c).to(device)
-    model_noise = TransformerEncoder(
-                n_inputs=2+cfg.d, # residuals, scale
-                n_predictors=1+cfg.d,
-                hidden_size=cfg.hidden,
-                ff_size=cfg.ff,
-                n_heads=cfg.heads,
-                n_layers=cfg.layers,
-                dropout=cfg.dropout,
-                seed=cfg.seed,
-                posterior_type=f"{cfg.posterior_type}_noise",
-                n_components=cfg.c).to(device)
-    models = (model, model_noise)
+    model = build(cfg.d, cfg.hidden, cfg.ff, max_n=cfg.n, 
+                  emb_type=cfg.emb_type, post_type=cfg.post_type,
+                  n_components=cfg.c, fx_type=cfg.fx_type).to(device)
     print(f"Model: {modelID(cfg)}")
 
-    # --- set up proposal distributions
-    if cfg.posterior_type == "discrete":
-        normal_bins = normalBins(3., cfg.c+1)
-        half_normal_bins = halfNormalBins(3., cfg.c+1)
-        dprop_normal = DiscreteProposal(normal_bins)
-        dprop_half_normal = DiscreteProposal(half_normal_bins)
-    else:
-        mprop = MixtureProposal()
-
     # --- set up optimizers
-    optimizer = schedulefree.AdamWScheduleFree(model.parameters(),
-                                               lr=cfg.lr, eps=cfg.eps)
-    optimizer_noise = schedulefree.AdamWScheduleFree(model_noise.parameters(),
-                                                     lr=cfg.lr, eps=cfg.eps)
-    optimizers = (optimizer, optimizer_noise)
-
+    optimizer = schedulefree.AdamWScheduleFree(
+        model.parameters(), lr=cfg.lr, eps=cfg.eps)
+    
     # --- optionally preload a model
     initial_iteration, global_step, validation_step = 1, 1, 1
     if cfg.preload:
         initial_iteration, global_step, validation_step, timestamp = \
-            load(models, optimizers, cfg.preload)
+            load(model, optimizer, cfg.preload)
         print(f"Preloaded model from iteration {cfg.preload}, starting at iteration {initial_iteration}.")
 
     # --- logging
-    if cfg.proto:
-        writer, logger = None, None
-    else:
-        writer = SummaryWriter(Path("outputs", "runs", modelID(cfg), timestamp))
-        logger = Logger(Path("outputs", "losses", modelID(cfg), timestamp))
+    writer = SummaryWriter(Path("outputs", "runs", modelID(cfg), timestamp))
+    logger = Logger(Path("outputs", "losses", modelID(cfg), timestamp))
     pred_path = Path("outputs", "predictions", modelID(cfg), timestamp)
     pred_path.mkdir(parents=True, exist_ok=True)
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    num_params_noise = sum(p.numel() for p in model_noise.parameters() if p.requires_grad)
-    print(f"Total number of parameters: {num_params + num_params_noise}, FFX Loss: {cfg.loss_ffx}, RFX Loss: {cfg.loss_rfx}, Noise Loss: {cfg.loss_noise}, Learning rate: {cfg.lr}, Epsilon: {cfg.eps}, Device: {device}")
-    
+    print(f"Total number of parameters: {num_params}, FFX Loss: {cfg.loss_ffx}, RFX Loss: {cfg.loss_rfx}, Learning rate: {cfg.lr}, Device: {device}")
+
     # -------------------------------------------------------------------------------------------------------------------------------------------------
     # training loop
     print("Preparing validation dataset...")
