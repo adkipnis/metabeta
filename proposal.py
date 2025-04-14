@@ -79,6 +79,30 @@ class DiscreteProposal(nn.Module):
     def forward(self, outputs: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         return self.nllLoss(outputs, target)
 
+    def examples(self, indices: list, batch: dict, outputs: torch.Tensor, printer: Callable, console_width: int) -> None:
+        if len(indices) == 0:
+            return
+        ffx = batch['ffx']
+        ffx_a = batch['optimal']['ffx']['mu'] if 'optimal' in batch else None
+        for i in indices:
+            n_i, sigma_i = batch['n'][i], batch['sigma_error'][i]
+            mask = (ffx[i] != 0.)
+            beta_i = ffx[i, mask].detach().numpy()
+            logits_i = outputs[i, mask]
+            mean_i = self.mean(logits_i)
+            sd_i = self.variance(logits_i, mean_i).sqrt().detach().numpy()
+            mean_i = mean_i.detach().numpy()
+            printer(f"\n{console_width * '-'}")
+            printer(f"n={n_i}, sigma={sigma_i:.2f}")
+            printer(f"True    : {beta_i}")
+            if ffx_a is not None:
+                printer(f"Optimal : {ffx_a[i, mask].detach().numpy()}")
+            printer(f"Mean    : {mean_i}")
+            printer(f"SD      : {sd_i}")
+            printer(f"{console_width * '-'}\n")
+
+
+
 # --------------------------------------------------------------------------
 # mixture posterior
 
