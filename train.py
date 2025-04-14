@@ -230,61 +230,6 @@ def run(model: nn.Module,
     return results
 
 
-# -------- Kullback-Leibler Divergence
-def klLossWrapper(mean_a: torch.Tensor, var_a: torch.Tensor,
-                  mean_p: torch.Tensor, var_p: torch.Tensor,
-                  beta: torch.Tensor,
-                  depths: torch.Tensor):
-    b, n, _ = mean_p.shape
-    losses = torch.zeros(b, n, device=device)
-    for i in range(b):
-        mask = (beta[i] != 0.)
-        mu_ai = mean_a[i, :, mask]
-        mu_pi = mean_p[i, :, mask]
-        Sigma_ai = torch.diag_embed(var_a[i, :, mask])
-        Sigma_pi = torch.diag_embed(var_p[i, :, mask])
-        post_a = D.MultivariateNormal(mu_ai, Sigma_ai)
-        post_p = D.MultivariateNormal(mu_pi, Sigma_pi)
-        losses[i] = D.kl.kl_divergence(post_a, post_p)
-    return averageOverN(losses, n, b, depths)
-
-
-def compare(models: tuple, batch: dict) -> torch.Tensor:
-    ''' Compate analytical posterior with proposed posterior using KL divergence '''
-    depths = batch["d"]
-    y = batch["y"].to(device)
-    X = batch["X"].to(device)
-    Z = batch["Z"].to(device)
-    groups = batch["groups"].to(device)
-    beta = batch["ffx"].float()
-    outputs = models[0](y, X, Z, groups)
-    output_dict = parseOutputs(outputs, "mixture", 1, "ffx")
-    mean_proposed, var_proposed = output_dict["ffx_loc"].squeeze(-1), output_dict["ffx_scale"].squeeze(-1).square()
-
-    # get analytical posterior (posterior mean vector and covariance matrix)
-    mean_analytical = batch["mu_n"].float().squeeze(-1)
-    Sigma_analytical = batch["Sigma_n"].float()
-    var_analytical = torch.diagonal(Sigma_analytical, dim1=-2, dim2=-1)
-
-    # correct for noise variance
-    sigma_error = batch["sigma_error"].float()
-    var_analytical = sigma_error.square().unsqueeze(-1).unsqueeze(-1) * var_analytical
-
-    # Compute KL divergences 
-    losses = klLossWrapper(mean_analytical, var_analytical,
-                           mean_proposed, var_proposed,
-                           beta, depths)
-    return losses.mean() # average over batch
-
-
-# -------- outer loops
-def train(models: Tuple[nn.Module, nn.Module],
-          optimizers: Tuple[schedulefree.AdamWScheduleFree,
-                            schedulefree.AdamWScheduleFree],
-          dataloader: DataLoader,
-          writer: Union[SummaryWriter, None],
-          logger: Union[Logger, None],
-          iteration: int,
           step: int) -> int:
     ''' Train the model for a single iteration. '''
     for model in models:
