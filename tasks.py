@@ -81,6 +81,30 @@ class FixedEffects(Task):
                  ):
         super().__init__(sigma_error, n_ffx)
 
+    def sample(self, n_samples: int, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
+        X = self._sampleFeatures(n_samples)
+        ffx = self._sampleFfx()
+        eps = self._sampleError(n_samples)
+        sigma_error_emp = covarySeries(eps.unsqueeze(-1)).sqrt().squeeze()
+        eta = X @ ffx
+        y = eta + eps
+        snr = self.signalToNoiseRatio(y, eta)
+        out = {"X": X, # (n, d)
+               "y": y, # (n,)
+               "ffx": ffx, # (d,)
+               "sigma_error": self.sigma_error, # (1,)
+               "sigma_error_emp": sigma_error_emp, # (n,)
+               "snr": snr, # (1,)
+               "n": torch.tensor(n_samples), # (1,)
+               "d": torch.tensor(self.d), # (1,)
+               }
+        if include_posterior:
+            mu, Sigma, alpha, beta = self.posteriorParams(X, y)
+            ffx_stats = {"mu": mu, "Sigma": Sigma}
+            noise_stats = {"alpha": alpha, "beta": beta}
+            out.update({"optimal": {"ffx": ffx_stats, "noise": noise_stats}})
+        return out
+
     def _priorPrecision(self) -> torch.Tensor:
         d = self.n_predictors + 1
         precision = torch.tensor(1. / self.sigma_beta).square().repeat(d)
