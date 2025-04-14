@@ -158,16 +158,8 @@ class LMDataset(Dataset):
         out = self.data[idx]
         return out
 
-    def randomSplit(self, split: float = 0.9, shuffle: bool = False) -> Tuple['LMDataset', 'LMDataset']:
-        ''' Split the dataset into two parts, randomly. '''
-        num_samples = len(self)
-        split_idx = int(num_samples * split)
-        if shuffle:
-            indices = torch.randperm(num_samples)
-            train_indices = indices[:split_idx]
-            test_indices = indices[split_idx:]
-            train_data = [self.data[i] for i in train_indices]
-            test_data = [self.data[i] for i in test_indices]
+
+
         else:
             train_data = self.data[:split_idx]
             test_data = self.data[split_idx:]
