@@ -167,35 +167,6 @@ class FixedEffects(Task):
             mus[i], sigmas[i], alphas[i], betas[i] = self.posteriorParams(x[:i+1], y[:i+1])
         return mus, sigmas, alphas, betas
 
-    def sample(self, n_samples: int, seed: int, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
-        torch.manual_seed(seed)
-        X = self._sampleFeatures(n_samples)
-        beta = self._sampleBeta()
-        eps = self._sampleNoise(n_samples)
-        sigma_error_emp = self._covarySeries(eps.unsqueeze(-1)).sqrt()
-        y = X @ beta + eps
-        out = {"X": X, # (n, d)
-               "y": y, # (n,)
-               "beta": beta, # (d,)
-               "sigma_error": torch.tensor(self.sigma_error), # (1,)
-               "sigma_error_emp": sigma_error_emp, # (n,)
-               "seed": torch.tensor(seed)}
-        if include_posterior:
-            mu_n, Sigma_n, a_n, b_n = self.allPosteriorParams(X, y)
-            out.update({"mu_n": mu_n, "Sigma_n": Sigma_n, "a_n": a_n, "b_n": b_n})
-        return out
-    
-    def fitVI(self, y: torch.Tensor, X: torch.Tensor) -> pm.variational.approximations.MeanField:
-        ''' perform variational inference with automatic diffenentiation '''
-        d = X.shape[1]
-        with pm.Model() as model:
-            beta = pm.Normal("beta", mu=0., sigma=5., shape=d) # priors
-            mu = pt.dot(X.numpy(), beta)
-            sigma = pm.HalfNormal("sigma", sigma=1.)  # Noise standard deviation
-            y_obs = pm.Normal("y_obs", mu=mu, sigma=sigma, observed=y.numpy())
-            approx = pm.fit(method="advi", n=10000)  # Use ADVI with 10,000 iterations  
-        return approx
-    
 
 
 class MixedEffects(Task):
