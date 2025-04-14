@@ -80,6 +80,36 @@ def genFfxValSet(repeats: int, seed: int, include_posterior: bool = False) -> di
             'seed': seed}
     return {'data': data, 'info': info}
 
+def genMfxTrainSet(batch_size: int, seed: int, include_posterior: bool = False) -> dict:
+    ''' Generate a [batch_size] mixed effects model datasets with varying n, m, d, q. '''
+    # init
+    torch.manual_seed(seed)
+    data = []
+    iterator = tqdm(range(batch_size))
+    iterator.set_description(f'{part:02d}/{cfg.iterations:02d}')
+
+    # presample hyperparams
+    sigma = sampleHN((batch_size, cfg.max_d//2 + 1), 1., cfg.max_sigma)
+    d = sampleInt(batch_size, 0, cfg.max_d)
+    n = sampleInt(batch_size, cfg.max_d, cfg.max_n)
+    q = sampleInt(batch_size, 0, cfg.max_d//2)
+    m = sampleInt(batch_size, 2, cfg.max_n//10)
+    
+    # apply constraints
+    d, q = constrain(d, q, 0.5, min_val=0)
+    n, m = constrain(n, m, 0.1, min_val=2)
+    m[q==0] = 1
+    d, q, n, m = d.tolist(), q.tolist(), n.tolist(), m.tolist()
+    
+    # sample datasets
+    for i in iterator:
+        lm = MixedEffects(sigma[i,0], sigma[i,1:], d[i], q[i], m[i])
+        data += [lm.sample(n[i], include_posterior=include_posterior)]
+    info = {'d': d, 'q': q, 'n': n, 'm': m, 'sigma': sigma,
+            'max_d': cfg.max_d, 'max_n': cfg.max_n, 'max_sigma': cfg.max_sigma,
+            'seed': seed}
+    return {'data': data, 'info': info}
+
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate datasets for linear model task.')
     parser.add_argument('-t', '--type', type=str, default='mfx', help='Type of dataset [ffx, mfx] (default = mfx)')
