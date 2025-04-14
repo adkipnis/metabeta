@@ -22,77 +22,48 @@ def covarySeries(series: torch.Tensor, correction: int = 1) -> torch.Tensor:
     # torch.isclose(variances[i], torch.var(series[:i+1], dim=0, correction = correction))
     return torch.max(torch.tensor(0), variances) # guarantee non-negative values
 
+
 class Task:
     def __init__(self,
-                 n_predictors: int, # without bias
-                 sigma_error: float, # standard deviation of the additive noise
-                 data_dist: D.Distribution,
+                 sigma_error: Union[float, torch.Tensor], # standard deviation of the additive noise
+                 n_ffx: int, # without bias
                  ):
 
         # data distribution
-        self.n_predictors = n_predictors
-        self.data_dist = data_dist
+        self.d = n_ffx
+        self.dist_data = D.Uniform(0., 1.)
 
-        # beta distribution
-        self.sigma_beta = math.sqrt(5.)
-        self.beta_dist = D.Normal(0., self.sigma_beta)
+        # ffx distribution
+        self.sigma_ffx = 3.
+        self.dist_ffx = D.Normal(0., self.sigma_ffx)
 
-        # error distribution
+        # noise distribution
         self.sigma_error = sigma_error
-        self.noise_dist = D.Normal(0., self.sigma_error)
-        
+        self.dist_error = D.Normal(0., sigma_error)
+ 
     def _standardize(self, x: torch.Tensor) -> torch.Tensor:
         mean = torch.mean(x, dim=0)
         sd = torch.std(x, dim=0)
         return (x-mean)/(sd + 1e-8)
 
-    def _sampleBeta(self) -> torch.Tensor:
-        d = self.n_predictors + 1
-        return self.beta_dist.sample((d,)) # type: ignore
+    def _sampleFfx(self) -> torch.Tensor:
+        d = self.d + 1
+        return self.dist_ffx.sample((d,)) # type: ignore
 
     def _sampleFeatures(self, n_samples: int) -> torch.Tensor:
         intercept = torch.ones(n_samples, 1)
-        if self.n_predictors == 0:
+        if self.d == 0:
             return intercept
-        x = self.data_dist.sample((n_samples, self.n_predictors)) # type: ignore
+        x = self.dist_data.sample((n_samples, self.d)) # type: ignore
         x = self._standardize(x)
         return torch.cat([intercept, x], dim=1)
 
-    def _sampleNoise(self, n_samples: int) -> torch.Tensor:
-        return self.noise_dist.sample((n_samples,)) # type: ignore
+    def _sampleError(self, n_samples: int) -> torch.Tensor:
+        return self.dist_error.sample((n_samples,)) # type: ignore
 
-    def sample(self, n_samples: int, seed: int) -> Dict[str, torch.Tensor]:
+    def sample(self, n_samples: int) -> Dict[str, torch.Tensor]:
         raise NotImplementedError
-
-    def _covarySeries(self, series: torch.Tensor, correction: int = 1) -> torch.Tensor:
-        ''' Calculate sample variance for each subset of series (as n increases) '''
-        # series (n, q)
-        n = series.shape[0]
-        k = torch.arange(1, n+1).unsqueeze(1)
-        means = torch.cumsum(series, dim=0) / k
-        outer = means * means
-        inner = torch.cumsum(series**2, dim=0) / k
-        bessel = k / (k - correction) # unbiased variance estimate
-        bessel[0] = 1. # prevent NaN generation due to division by inf
-        variances = bessel * (inner - outer)
-        # test:
-        # i = 9
-        # torch.isclose(variances[i], torch.var(series[:i+1], dim=0, correction = correction))
-        return torch.max(torch.tensor(0), variances) # guarantee non-negative values
     
-    
-    def evalVI(self, approx: pm.variational.approximations.MeanField,
-               param_name: str, n_samples: int = 1000) -> Dict[str, torch.Tensor]:
-        posterior_samples = approx.sample(n_samples).posterior[param_name][0]
-        means = posterior_samples.mean(dim='draw').to_numpy()
-        # medians = posterior_samples.median(dim='draw').to_numpy()
-        stds = posterior_samples.std(dim='draw').to_numpy()
-        ci95 = np.percentile(posterior_samples.to_numpy(), [2.5, 50., 97.5], axis=0)
-        return {'means': torch.tensor(means),
-                # 'medians': torch.tensor(medians),
-                'stds': torch.tensor(stds),
-                'ci95': torch.tensor(ci95),}
- 
 
 class FixedEffects(Task):
     def __init__(self,
