@@ -427,3 +427,56 @@ def build(d_data: int, d_model: int, d_ff: int,
     return build_fn(d_data, d_model, d_ff, n_heads, n_blocks, max_n, dropout, act_fn, emb_type, tf_type, post_type, n_components)
 
 
+# ------------------------------------------------------------------------
+if __name__ == "__main__":
+    from utils import dsFilename
+    from proposal import MixtureProposal, DiscreteProposal, normalBins
+    from dataset import LMDataset, FlatDataset
+    from torch.utils.data import DataLoader
+ 
+    batch_size = 16
+    d_data = 8
+    max_n = 50
+    d_model = 64
+    emb_type = 'joint'
+    post_type = 'mixture'
+    n_components = 5
+    Dataset = FlatDataset if emb_type == 'sequence' else LMDataset
+
+    # test ffx
+    fx_type = 'ffx'
+    fn = dsFilename(fx_type, 'train', d_data, max_n, 10000, 1)
+    ds_raw = torch.load(fn, weights_only=False)
+    ds = Dataset(**ds_raw)
+    dl = DataLoader(ds, batch_size=batch_size, shuffle=False)
+    
+    model = buildFixed(d_data, d_model, 2 * d_model, max_n=max_n, 
+                       emb_type=emb_type, post_type=post_type,
+                       n_components=n_components)
+    
+    for batch in dl:
+        outputs, losses = model(batch)
+        loc, scale, logit = model.interpreter.locScaleLogit(outputs)
+        break
+    
+
+    # test mfx
+    fx_type = 'mfx'
+    fn = dsFilename(fx_type, 'train', d_data, max_n, 10000, 1)
+    ds_raw = torch.load(fn, weights_only=False)
+    ds = Dataset(**ds_raw)
+    dl = DataLoader(ds, batch_size=batch_size, shuffle=False)
+    
+    model = buildMixed(d_data, d_model, 2 * d_model, max_n=max_n, 
+                       emb_type=emb_type, post_type=post_type,
+                       n_components=n_components)
+    
+    for batch in dl:
+        outputs_ffx, outputs_rfx, losses_ffx, losses_rfx = model(batch)
+        loc, scale, logit = model.interpreter_ffx.locScaleLogit(outputs_ffx)
+        break
+
+
+
+
+
