@@ -290,35 +290,32 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     # misc
-    parser.add_argument("-s", "--seed", type=int, default=0,help="Model seed")
+    parser.add_argument("-s", "--seed", type=int, default=42, help="Model seed")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use [cuda, cpu]")
     parser.add_argument("-p", "--preload", type=int, default=0, help="Preload model from iteration #p")
     parser.add_argument("--model-folder", type=str, default="checkpoints", help="Model folder")
-    parser.add_argument("--proto", action="store_true", help="prototyping: don't log anything during (default = False)")
 
     # data
-    parser.add_argument("-t", "--fx_type", type=str, default="mfx", help="Type of dataset [ffx, mfx] (default = ffx)")
+    parser.add_argument("-t", "--fx_type", type=str, default="ffx", help="Type of dataset [ffx, mfx] (default = ffx)")
     parser.add_argument("-d", type=int, default=8, help="Number of predictors (without bias, default = 8)")
     parser.add_argument("-n", type=int, default=50, help="Maximum number of samples to draw per linear model (default = 50).")
-    parser.add_argument("-f", "--fixed", type=float, default=0., help="Fixed noise variance (default = 0. -> not fixed)")
     parser.add_argument("-i", "--iterations", type=int, default=10, help="Number of iterations to train (default = 10)")
-    parser.add_argument("-b", "--batch-size", type=int, default=50, help="Batch size (default = 50)")
+    parser.add_argument("-b", "--batch-size", type=int, default=10, help="Batch size (default = 10)")
 
     # model and loss
-    parser.add_argument("--posterior_type", type=str, default="mixture", help="Posterior architecture [discrete, mixture] (default = mixture)")
-    parser.add_argument("-c", type=int, default=5, help="Number of mixture components resp. grid bins (default = 5)")
+    parser.add_argument("--emb_type", type=str, default="joint", help="Embedding architecture [joint, separate, sequence] (default = joint)")
+    parser.add_argument("--post_type", type=str, default="mixture", help="Posterior architecture [discrete, mixture] (default = mixture)")
+    parser.add_argument("-c", type=int, default=3, help="Number of mixture components resp. grid bins (default = 3)")
     parser.add_argument("--loss_ffx", type=str, default="nll", help="Loss function [mse, nll] (default = nll)")
     parser.add_argument("--loss_rfx", type=str, default="nll", help="Loss function for rfx [mse, nll] (default = nll)")
-    parser.add_argument("--loss_noise", type=str, default="nll", help="Loss function for noise [mse, nll] (default = nll)")
-    parser.add_argument("--dropout", type=float, default=0, help="Dropout rate (default = 0)")
-    parser.add_argument("--hidden", type=int, default=128, help="Hidden dimension (default = 256)")
-    parser.add_argument("--ff", type=int, default=256, help="Feedforward dimension (transformer, default = 512)")
-    parser.add_argument("--heads", type=int, default=8, help="Number of heads (transformer, default = 4)")
-    parser.add_argument("--layers", type=int, default=6, help="Number of layers (transformer, default = 6)")
+    parser.add_argument("--dropout", type=float, default=0., help="Dropout rate (default = 0)")
+    parser.add_argument("--hidden", type=int, default=128, help="Hidden dimension (default = 128)")
+    parser.add_argument("--ff", type=int, default=256, help="Feedforward dimension (transformer, default = 256)")
+    parser.add_argument("--heads", type=int, default=8, help="Number of heads (transformer, default = 8)")
+    parser.add_argument("--layers", type=int, default=3, help="Number of layers (transformer, default = 3)")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate (Adam, default = 1e-3)")
     parser.add_argument("--eps", type=float, default=1e-8, help="Epsilon (Adam, default = 1e-8)")
     parser.add_argument("--kl", action="store_false", help="additionally report KL Divergence for validation set (default = True)")
-    parser.add_argument("--tol", type=int, default=0, help="Noise tolerance: ignore all losses for n < noise_tol * d (default = 0)")
 
     return parser.parse_args()
 
