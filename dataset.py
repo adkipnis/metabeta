@@ -39,13 +39,13 @@ class LMDataset(Dataset):
         return idx
    
     def preprocess(self, item: dict) -> dict:
-        n = self.max_samples
-        d = item['X'].shape[1]
-        d_max = self.max_predictors + 1
-
-        X = padTensor(item['X'], (n, d_max))
-        y = padTensor(item['y'], (n,)).unsqueeze(-1)
-        ffx = padTensor(item['ffx'], (d_max,))
+       if self.fx_type == 'ffx':
+           return self.preprocessFfx(item)
+       elif self.fx_type == 'mfx':
+           return self.preprocessMfx(item)
+       else:
+           raise ValueError(f'Unsupported fx type {self.fx_type} for preprocessing')
+    
 
         if self.permute:
             seed = item['seed']
