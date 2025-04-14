@@ -49,27 +49,35 @@ class DiscreteProposal(nn.Module):
         p = torch.softmax(logits, -1)
         squared_diff = (self.centers.view(1, -1) - mean.unsqueeze(-1)).square()
         return torch.sum(squared_diff * p, dim=-1)
+    
+    def getLocScale(self, outputs: torch.Tensor):
+        loc = self.mean(outputs)
+        scale = self.variance(outputs, loc).sqrt()
+        return loc, scale
+    
     def mseLoss(self, targets: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
         means = self.mean(logits)
         return mse(targets, means)
  
     def nllLoss(self,
-                targets: torch.Tensor, # (batch, n, d)
                 logits: torch.Tensor, # (batch, n, d, n_bins)
+                target: torch.Tensor, # (batch, n, d)
                 ) -> torch.Tensor:
-        indices = self.getBindex(targets)
+        indices = self.getBindex(target)
         bin_log_probs = torch.log_softmax(logits, -1)
         scaled_bucket_log_probs = bin_log_probs - torch.log(self.widths)
         return -scaled_bucket_log_probs.gather(-1, indices.unsqueeze(-1)).squeeze(-1)
 
-    def loss(self, loss_type: str, targets, logits):
-        if loss_type == "mse":
-            return self.mseLoss(targets, logits)
-        elif loss_type == "nll":
-            return self.nllLoss(targets, logits)
-        else:
-            raise ValueError(f"loss type {loss_type} unknown")
+    # def loss(self, loss_type: str, targets, logits):
+    #     if loss_type == "mse":
+    #         return self.mseLoss(targets, logits)
+    #     elif loss_type == "nll":
+    #         return self.nllLoss(targets, logits)
+    #     else:
+    #         raise ValueError(f"loss type {loss_type} unknown")
 
+    def forward(self, outputs: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return self.nllLoss(outputs, target)
 
 # --------------------------------------------------------------------------
 # mixture posterior
