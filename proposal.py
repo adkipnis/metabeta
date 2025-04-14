@@ -111,15 +111,22 @@ class MixtureProposal(nn.Module):
         super().__init__()
         self.comp_dist = comp_dist
     
-    def construct(self, locs: torch.Tensor, scales: torch.Tensor, weights: torch.Tensor) -> D.Distribution:
+    def construct(self, locs: torch.Tensor, scales: torch.Tensor, logits: torch.Tensor) -> D.Distribution:
         m = locs.shape[-1]
         if m > 1:
-            mix = D.Categorical(weights)
+            mix = D.Categorical(logits=logits)
             comp = self.comp_dist(locs, scales)
             proposal = D.MixtureSameFamily(mix, comp)
         else:
             proposal = self.comp_dist(locs.squeeze(-1), scales.squeeze(-1))
         return proposal
+    
+    @staticmethod
+    def locScaleLogit(outputs: torch.Tensor):
+        loc = outputs[..., 0]
+        scale = outputs[..., 1].exp()
+        logit = outputs[..., 2]
+        return loc, scale, logit
 
     def mean(self, locs: torch.Tensor, scales: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
         if self.comp_dist == D.Normal:
