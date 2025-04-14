@@ -6,6 +6,22 @@ from utils import symmetricMatrix2Vector, symmetricMatrixFromVector
 from alternatives import evalVI, fitFfxVI, fitMfxVI
 
 
+def covarySeries(series: torch.Tensor, correction: int = 1) -> torch.Tensor:
+    ''' Calculate sample variance for each subset of series (as n increases) '''
+    # series (n, q)
+    n = series.shape[0]
+    k = torch.arange(1, n+1).unsqueeze(1)
+    means = torch.cumsum(series, dim=0) / k
+    outer = means * means
+    inner = torch.cumsum(series**2, dim=0) / k
+    bessel = k / (k - correction) # unbiased variance estimate
+    bessel[0] = 1. # prevent NaN generation due to division by inf
+    variances = bessel * (inner - outer)
+    # test:
+    # i = 9
+    # torch.isclose(variances[i], torch.var(series[:i+1], dim=0, correction = correction))
+    return torch.max(torch.tensor(0), variances) # guarantee non-negative values
+
 class Task:
     def __init__(self,
                  n_predictors: int, # without bias
