@@ -128,27 +128,29 @@ class MixtureProposal(nn.Module):
         logit = outputs[..., 2]
         return loc, scale, logit
 
-    def mean(self, locs: torch.Tensor, scales: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+    def mean(self, locs: torch.Tensor, scales: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
         if self.comp_dist == D.Normal:
+            weights = torch.softmax(logits, -1)
             return (locs * weights).sum(dim=-1)
         else:
-            proposal = self.construct(locs, scales, weights)
+            proposal = self.construct(locs, scales, logits)
             return proposal.mean
 
     def variance(self, locs: torch.Tensor, scales: torch.Tensor,
-                 weights: torch.Tensor, mean: torch.Tensor) -> torch.Tensor:
+                 logits: torch.Tensor, mean: torch.Tensor) -> torch.Tensor:
         if self.comp_dist == D.Normal:
             second_moments = locs.square() + scales.square()
+            weights = torch.softmax(logits, -1)
             return (second_moments * weights).sum(dim=-1) - mean.square()
         else:
-            proposal = self.construct(locs, scales, weights)
+            proposal = self.construct(locs, scales, logits)
             return proposal.variance
-
-    def mseLoss(self, locs: torch.Tensor, scales: torch.Tensor, weights: torch.Tensor,
+        
+    def mseLoss(self, locs: torch.Tensor, scales: torch.Tensor, logits: torch.Tensor,
                 target: torch.Tensor, target_type: str) -> torch.Tensor:
         m = locs.shape[-1]
         if m > 1:
-            loc = self.mean(locs, scales, weights)
+            loc = self.mean(locs, scales, logits)
         else:
             loc = locs.squeeze(-1)
         target_expanded = target.unsqueeze(1).expand_as(loc)
@@ -157,20 +159,23 @@ class MixtureProposal(nn.Module):
         else:
             return mse(loc, target_expanded)
 
-    def nllLoss(self, locs: torch.Tensor, scales: torch.Tensor, weights: torch.Tensor,
-                target: torch.Tensor, target_type: str) -> torch.Tensor:
-        b, n, d, _ = locs.shape
-        target = target.unsqueeze(1).expand((b, n, d))
-        proposal = self.construct(locs, scales, weights)
+    def nllLoss(self, locs: torch.Tensor, scales: torch.Tensor, logits: torch.Tensor,
+                target: torch.Tensor) -> torch.Tensor:
+        proposal = self.construct(locs, scales, logits)
         return -proposal.log_prob(target)
 
-    def loss(self, loss_type: str, locs, scales, weights, target, target_type):
-        if loss_type == "mse":
-            return self.mseLoss(locs, scales, weights, target, target_type)
-        elif loss_type == "nll":
-            return self.nllLoss(locs, scales, weights, target, target_type)
-        else:
-            raise ValueError(f"loss type {loss_type} unknown")
+    # def loss(self, loss_type: str, locs, scales, weights, target, target_type):
+    #     if loss_type == "mse":
+    #         return self.mseLoss(locs, scales, weights, target, target_type)
+    #     elif loss_type == "nll":
+    #         return self.nllLoss(locs, scales, weights, target, target_type)
+    #     else:
+    #         raise ValueError(f"loss type {loss_type} unknown")
+    
+    def forward(self, outputs: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        locs, scales, logits = self.locScaleLogit(outputs)
+        return self.nllLoss(locs, scales, logits, target)
+    
 
 
 if __name__ == '__main__':
