@@ -232,3 +232,32 @@ class PoolingLayer(nn.Module):
         return out
 
 
+# ------------------------------------------------------------------------
+# proposers
+
+class PointPosterior(nn.Module):
+    def __init__(self, d_model: int, d_output: int, *args):
+        super(PointPosterior, self).__init__()
+        self.prop = nn.Linear(d_model, d_output)
+
+    def forward(self, x: torch.Tensor):
+        return self.prop(x)
+
+class GeneralizedPosterior(nn.Module):
+    # get m linear layers from hidden_size to d_output
+    def __init__(self, d_model: int, d_output: int, c: int, m: int = 1):
+        super(GeneralizedPosterior, self).__init__()
+        self.d_output = d_output
+        self.m = m # multiplier
+        self.c = c # number of bins / components
+        layers = [nn.Linear(d_model, d_output) for _ in range(c * m)]
+        self.layers = nn.ModuleList(layers)
+
+    def forward(self, x: torch.Tensor):
+        out = [layer(x).unsqueeze(-1) for layer in self.layers]
+        out = torch.cat(out, dim=-1)
+        b, d, _ = out.shape
+        out = out.reshape(b, d, self.c, -1) # type: ignore
+        return out
+
+
