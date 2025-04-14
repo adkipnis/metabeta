@@ -192,9 +192,9 @@ class FlatDataset(LMDataset):
 
 
 if __name__ == '__main__':
-    from utils import dsFilenameVal
-    filename = dsFilenameVal("mfx", 8, 50, 0)
-    ds_raw = torch.load(filename, weights_only=False)
+    from utils import dsFilename
+    fn = dsFilename('mfx', 'val', 8, 50, 500, 0)
+    ds_raw = torch.load(fn, weights_only=False)
     ds = LMDataset(**ds_raw)
-
+    item = ds[0]
 
