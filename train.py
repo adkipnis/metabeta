@@ -148,6 +148,18 @@ def kldFull(mean_a: torch.Tensor, Sigma_a: torch.Tensor,
     return losses
 
 
+def kldMarginal(mean_a: torch.Tensor, var_a: torch.Tensor,
+                mean_p: torch.Tensor, var_p: torch.Tensor,
+                eps: float = 1e-8):
+    ''' vectorized version for the case of marginal variances '''
+    mask = (var_a != 0).float()
+    var_a = var_a + eps
+    var_p = var_p + eps
+    term1 = (mean_a - mean_p).pow(2) / var_p
+    term2 = var_a / var_p
+    term3 = -torch.log(var_a) + torch.log(var_p)
+    kl_elements = 0.5 * (term1 + term2 + term3 - 1.) * mask
+    return kl_elements.sum(dim=-1)
 
 
 
