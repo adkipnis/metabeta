@@ -261,3 +261,76 @@ class GeneralizedPosterior(nn.Module):
         return out
 
 
+# ------------------------------------------------------------------------
+# fixed effects
+
+class ModelFixed(nn.Module):
+    def __init__(self,
+                 embedder: nn.Module,
+                 transformer: nn.Module,
+                 pooler: nn.Module,
+                 proposer: nn.Module,
+                 interpreter: nn.Module,
+                 ):
+        super(ModelFixed, self).__init__()
+        self.emb = embedder
+        self.tf = transformer
+        self.pool = pooler
+        self.prop = proposer
+        self.interpreter_ffx = interpreter
+
+    def forward(self, data: dict):
+        h = self.emb(**data) # (batch, n, d_model)
+        h = self.tf(h, data['mask']) # (batch, n, d_model)
+        h = self.pool(h) # (batch, d_model)
+        out = self.prop(h) # (batch, d_out, **)
+        losses = self.interpreter_ffx(out, data['ffx']) # (batch, d_out)
+        return out, losses
+
+
+def buildFixed(d_data: int, d_model: int, d_ff: int,
+               n_heads: int = 4, n_blocks: int = 1,
+               max_n: int = 50,
+               dropout: float = 0.0, act_fn: str = 'gelu',
+               emb_type: str = 'separate',
+               tf_type: str = 'encoder',
+               post_type: str = 'mixture', n_components: int = 1):
+    
+    # 1. embedder
+    if emb_type == 'joint':
+        embedder = JointEmbedder(d_data, d_model, 'ffx')
+    elif emb_type == 'separate':
+        embedder = SeparateEmbedder(d_data, d_model, 'ffx')
+    elif emb_type == 'sequence':
+        embedder = SequenceEmbedder(d_data, d_model, max_n, 'ffx')
+    else:
+        raise ValueError(f'embedding type {emb_type} unknown')
+    
+    # 2. transformer
+    if tf_type == 'encoder':
+        Transformer = TFE
+    elif tf_type == 'decoder':
+        Transformer = TFD
+    else:
+        raise ValueError(f'transformer type {tf_type} unknown')
+    transformer = Transformer(d_model, d_ff, n_heads, n_blocks, dropout, act_fn)
+
+    # 3. pooler
+    pooler = PoolingLayer(d_model, d_ff, n_heads, dropout, act_fn)
+
+    # 4. proposer
+    if post_type == 'point':
+        proposer = PointPosterior(d_model, d_data+1)
+        interpreter = nn.MSELoss(reduction='none')
+    elif post_type == 'discrete':
+        proposer = GeneralizedPosterior(d_model, d_data+1, n_components)
+        interpreter = DiscreteProposal(normalBins(3., n_components+1))
+    elif post_type == 'mixture':
+        proposer = GeneralizedPosterior(d_model, d_data+1, n_components, 3)
+        interpreter = MixtureProposal(torch.distributions.Normal)
+    else:
+        raise ValueError(f'posterior type {post_type} unknown')
+
+    return ModelFixed(embedder, transformer, pooler, proposer, interpreter)
+
+
