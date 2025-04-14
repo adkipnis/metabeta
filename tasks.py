@@ -75,13 +75,11 @@ class Task:
 
 class FixedEffects(Task):
     def __init__(self,
-                 n_predictors: int,
-                 sigma_error: float,
-                 data_dist: D.Distribution,
-                 q: int = 0,
-                 m: int = 1,
+                 sigma_error: Union[float, torch.Tensor],
+                 n_ffx: int,
+                 **kwargs
                  ):
-        super().__init__(n_predictors, sigma_error, data_dist)
+        super().__init__(sigma_error, n_ffx)
 
     def _priorPrecision(self) -> torch.Tensor:
         d = self.n_predictors + 1
