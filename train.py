@@ -193,57 +193,35 @@ def compareWithAnalytical(batch: dict, outputs: torch.Tensor,
     return losses
 
 
-def run(models: tuple,
+# -------- outer loops
+
+def run(model: nn.Module,
         batch: dict,
-        posterior_type: str,
-        num_examples: int = 0,
+        example_indices = [],
         printer: Callable = print,
-        ) -> Tuple[torch.Tensor, torch.Tensor]:
+        save: bool = False,
+        ) -> Dict[str, torch.Tensor]:
     ''' Run a batch through the model and return the loss. '''
-    lossWrapper, examples = mixLossWrapper, mixExamples
-    if posterior_type == "discrete":
-        lossWrapper, examples = discreteLossWrapper, discreteExamples
-
-    # unpack data
-    ffx_depths = batch["d"]
-    ffx = batch["ffx"].to(device)
-    y = batch["y"].to(device)
-    X = batch["X"].to(device)
-    Z = batch["Z"].to(device)
-    groups = batch["groups"].to(device)
-
-    # estimate parameters and compute ffx loss
-    outputs = models[0](y, X, Z, groups)
-    output_dict = parseOutputs(outputs, posterior_type, cfg.c, "ffx")
-    losses_ffx = lossWrapper(output_dict, ffx, ffx_depths, "ffx")
     
+    # optionally cast batch to device
+    if device.type != 'cpu':
+        batch = {key: tensor.to(device) for key, tensor in batch.items()}
+    ffx = batch['ffx']
 
-    # optionally compute rfx loss
-    if cfg.fx_type == "mfx":
-        rfx_depths = batch["q"]
-        rfx = batch["rfx"].to(device)
-        rfx_scale = batch["S"].to(device).sqrt()
-        losses_rfx = lossWrapper(output_dict, rfx_scale, rfx_depths, "rfx") 
-        losses_joint = torch.cat([losses_ffx, losses_rfx], dim=1)
-        target_blueprint = torch.cat([ffx, rfx[:,0]], dim=1)
-        loss = maskLoss(losses_joint, target_blueprint)
-    else:
+    if cfg.fx_type == 'ffx':
+        outputs_ffx, losses_ffx = model(batch)
         loss = maskLoss(losses_ffx, ffx)
-
-    # compute noise parameter loss per batch
-    res, scale = assembleNoiseInputs(y, X, output_dict, posterior_type)
-    noise_outputs = models[1](res, scale, Z, groups)
-    noise_output_dict = parseOutputs(noise_outputs, posterior_type, cfg.c, "noise")
-
-    # compute noise loss
-    noise_std = batch["sigma_error"].to(device).unsqueeze(-1).float()
-    losses_noise = lossWrapper(noise_output_dict, noise_std, ffx_depths, "noise")
-    loss_noise = losses_noise.mean()
+        results = {'loss': loss, 'losses_ffx': losses_ffx, 'outputs_ffx': outputs_ffx}
+    else:
+        outputs_ffx, outputs_rfx, losses_ffx, losses_rfx = model(batch)
+        losses_joint = torch.cat([losses_ffx, losses_rfx], dim=1)
+        target_blueprint = torch.cat([ffx, batch['rfx'][:,0]], dim=1)
+        loss = maskLoss(losses_joint, target_blueprint)
+        results = {'loss': loss, 'losses_ffx': losses_ffx, 'losses_rfx': losses_rfx,
+                    'outputs_ffx': outputs_ffx, 'outputs_rfx': outputs_rfx}
 
     # optionally print some examples
-    examples(num_examples, ffx, output_dict, printer)
-    return loss, loss_noise
-
+    model.interpreter_ffx.examples(example_indices, batch, outputs_ffx, printer, console_width) # type: ignore
 
 def savePredictions(models: Tuple[nn.Module, nn.Module],
                     batch: dict,
