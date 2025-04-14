@@ -361,16 +361,14 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------------------------------------------------------------------------------
     # training loop
     print("Preparing validation dataset...")
-    fname = dsFilenameVal(cfg.fx_type, cfg.d, cfg.n, cfg.fixed)
-    dataloader_val = getDataLoader(fname, batch_size=100)
+    fn = dsFilename(cfg.fx_type, 'val', cfg.d, cfg.n, 600, 0)
+    dataloader_val = getDataLoader(fn, 600, cfg.emb_type)
     print(f"Training for {cfg.iterations + 1 - initial_iteration} iterations with 10k datasets per iteration and a batch size of {cfg.batch_size}...")
     for iteration in range(initial_iteration, cfg.iterations + 1):
-        fname = dsFilename(cfg.fx_type, cfg.d, cfg.n, cfg.fixed, int(1e4), iteration)
-        dataloader_train = getDataLoader(fname, cfg.batch_size)
-        global_step = train(models, optimizers, dataloader_train, writer,
-                            logger, iteration, global_step)
-        validation_step = validate(models, optimizers, dataloader_val, writer,
-                                   logger, iteration, validation_step)
-        if iteration % 5 == 0:
-            save(models, optimizers, iteration, global_step, validation_step, timestamp)
+        fn = dsFilename(cfg.fx_type, 'train', cfg.d, cfg.n, int(1e4), iteration)
+        dataloader_train = getDataLoader(fn, cfg.batch_size, cfg.emb_type)
+        global_step = train(model, optimizer, dataloader_train, global_step)
+        validation_step = validate(model, optimizer, dataloader_val, validation_step)
+        if iteration % 10 == 0:
+            save(model, optimizer, iteration, global_step, validation_step, timestamp)
  
