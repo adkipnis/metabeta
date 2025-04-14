@@ -31,6 +31,13 @@ class LMDataset(Dataset):
     def __len__(self) -> int:
        return len(self.data)
    
+    def getPermutation(self, d: int):
+        # idx = torch.randperm(d)
+        idx = torch.randperm(d-1) + 1
+        zero = torch.zeros((1,), dtype=idx.dtype)
+        idx = torch.cat([zero, idx])
+        return idx
+   
     def preprocess(self, item: dict) -> dict:
         n = self.max_samples
         d = item['X'].shape[1]
