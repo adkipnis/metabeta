@@ -58,20 +58,19 @@ def getConsoleWidth() -> int:
     return console_width
 
 
-def getDataLoader(filename: Path, batch_size: int) -> DataLoader:
-    ''' Load a dataset from a file,
-    split into train and validation set and return a DataLoader. '''
+def getDataLoader(filename: Path, batch_size: int, emb_type: str, permute: bool = False) -> DataLoader:
+    ''' Load a dataset from a file, optionally flatten data to sequence, optionally permute features, return dataloader'''
     assert filename.exists(), f"File {filename} does not exist, you must generate it first using generate.py"
     ds_raw = torch.load(filename, weights_only=False)
-    ds = LMDataset(**ds_raw, permute=False)
+    Dataset = FlatDataset if emb_type == 'sequence' else LMDataset
+    ds = Dataset(**ds_raw, permute=permute)
     return DataLoader(ds, batch_size=batch_size, shuffle=False)
 
 
 def modelID(cfg: argparse.Namespace) -> str:
     ''' Return a string that identifies the model. '''
-    noise = "variable" if cfg.fixed == 0 else cfg.fixed
-    return f"{cfg.posterior_type}-{cfg.c}-transformer-{cfg.hidden}-{cfg.ff}-{cfg.heads}-{cfg.layers}-dropout={cfg.dropout}-loss={cfg.loss_ffx}-seed={cfg.seed}-fx={cfg.fx_type}-noise={noise}"
-    
+    return f"{cfg.post_type}-{cfg.c}-transformer-{cfg.hidden}-{cfg.ff}-{cfg.heads}-{cfg.layers}-dropout={cfg.dropout}-emb={cfg.emb_type}-loss={cfg.loss_ffx}-seed={cfg.seed}-fx={cfg.fx_type}"
+
 
 def getCheckpointPath(iteration: int) -> Path:
     ''' Get the filename for the model checkpoints. '''
