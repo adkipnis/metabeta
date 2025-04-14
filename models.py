@@ -135,80 +135,63 @@ class SequenceEmbedder(nn.Module):
         return val_emb + obs_emb + feat_emb
 
 
-    def __init__(self,
-                 n_inputs: int,
-                 n_predictors: int,
-                 hidden_size: int,
-                 ff_size: int,
-                 n_layers: int,
-                 dropout: float,
-                 seed: int,
-                 n_heads: int = 4,
-                 fx_type: str = "ffx",
-                 posterior_type: str = "mixture",
-                 n_components: int = 1,
-                 activation: str = 'gelu',
-                 ) -> None:
+# ------------------------------------------------------------------------
+# transformers
 
-        super(TransformerEncoder, self).__init__(n_inputs, n_predictors, hidden_size, n_layers, dropout, seed, fx_type, posterior_type, n_components)
-        encoder_layer = TransformerEncoderLayer(d_model=hidden_size,
-                                                dim_feedforward=ff_size,
+class TFE(nn.Module):
+    # TransformerEncoder
+    def __init__(self,
+                 d_model: int,
+                 d_ff: int,
+                 n_heads: int = 4,
+                 n_blocks: int = 1,
+                 dropout: float = 0.0,
+                 act_fn: str = 'gelu',
+                 ):
+        super(TFE, self).__init__()
+        encoder_layer = TransformerEncoderLayer(d_model=d_model,
+                                                dim_feedforward=d_ff,
                                                 nhead=n_heads,
                                                 dropout=dropout,
                                                 batch_first=True,
-                                                activation=activation)
-        self.model= nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
-        self.initializeWeights()
+                                                activation=act_fn)
+        self.net = nn.TransformerEncoder(encoder_layer, num_layers=n_blocks)
 
-    def internal(self, y: torch.Tensor, X: torch.Tensor,
-                 Z: torch.Tensor, groups: torch.Tensor) -> torch.Tensor:
-        o = self.embed(y, X, Z, groups) # (batch_size, seq_size, hidden_size)
-        mask = causalMask(o.size(1)).to(o.device)
-        outputs = self.model(o, mask)
-        return outputs # (batch_size, seq_size, hidden_size)
+    def forward(self, x: torch.Tensor, padding_mask: torch.Tensor):
+        if len(x.shape) == 4: # alternatively loop over m
+            b, m, n, d_emb = x.shape
+            x = x.reshape(-1, n, d_emb)
+            padding_mask = padding_mask.reshape(-1, n)
+            out = self.net(x, src_key_padding_mask=padding_mask)
+            out = out.reshape(b, m, n, d_emb)
+        else:
+            out = self.net(x, src_key_padding_mask=padding_mask)
+        return out
 
 
-class TransformerDecoder(Base):
+class TFD(nn.Module):
+    # TransformerDecoder
     def __init__(self,
-                 n_inputs: int,
-                 n_predictors: int,
-                 hidden_size: int,
-                 ff_size: int,
-                 n_layers: int,
-                 dropout: float,
-                 seed: int,
+                 d_model: int,
+                 d_ff: int,
                  n_heads: int = 4,
-                 fx_type: str = "ffx",
-                 posterior_type: str = "mixture",
-                 n_components: int = 1,
-                 activation: str ='gelu',
-                 ) -> None:
-
-        super(TransformerDecoder, self).__init__(n_inputs, n_predictors, hidden_size, n_layers, dropout, seed, fx_type, posterior_type, n_components)
-        self.embed = nn.Linear(n_inputs, hidden_size)
-        decoder_layer = TransformerDecoderLayer(d_model=hidden_size,
-                                                dim_feedforward=ff_size,
+                 n_blocks: int = 1,
+                 dropout: float = 0.0,
+                 act_fn: str = 'gelu',
+                 ):
+        super(TFD, self).__init__()
+        decoder_layer = TransformerDecoderLayer(d_model=d_model,
+                                                dim_feedforward=d_ff,
                                                 nhead=n_heads,
                                                 dropout=dropout,
                                                 batch_first=True,
-                                                activation=activation)
-        self.model= nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
-        self.initializeWeights()
+                                                activation=act_fn)
+        self.net = nn.TransformerDecoder(decoder_layer, num_layers=n_blocks)
 
-    def internal(self, y: torch.Tensor, X: torch.Tensor,
-                 Z: torch.Tensor, groups: torch.Tensor) -> torch.Tensor:
-        o = self.embed(y, X, Z, groups) # (batch_size, seq_size, hidden_size)
-        causal_mask = causalMask(o.size(1)).to(o.device)
-        memory = torch.zeros_like(o)
-        outputs = self.model(tgt=o, memory=memory, tgt_mask=causal_mask, tgt_is_causal=True)
-        return outputs # (batch_size, seq_size, hidden_size)
+    def forward(self, x: torch.Tensor, padding_mask: torch.Tensor):
+        return self.net(x, x, src_key_padding_mask=padding_mask)
 
 
-def main():
-    emod = TransformerEncoder(6, 3, 256, 512, 1, 0.1, 0)
-    dmod = TransformerEncoder(6, 3, 256, 512, 1, 0.1, 0)
-    mask = causalMask(10)
-    print(mask)
 
 if __name__ == '__main__':
     main()
