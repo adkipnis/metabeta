@@ -191,41 +191,46 @@ class MixedEffects(Task):
     def _sampleRfx(self) -> torch.Tensor:
         return self.dist_rfx.sample((self.m,)) # type: ignore
 
+    def sample(self, n_samples: int, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
         # fixed effects and noise
-        beta = self._sampleBeta() # (d,)
         X = self._sampleFeatures(n_samples)
-        eps = self._sampleNoise(n_samples)
+        ffx = self._sampleFfx()
+        eps = self._sampleError(n_samples)
+        sigma_error_emp = covarySeries(eps.unsqueeze(-1)).sqrt().squeeze()
         
         # random effects and target
-        groups = torch.arange(0, self.m).repeat(n_samples//self.m) # (n,)
-        b = self._sampleRandomEffects() # (m, q)
+        # groups = torch.arange(0, self.m).repeat(n_samples//self.m) # ordered
+        groups = torch.randint(0, self.m, size=(n_samples,))
+        b = self._sampleRfx() # (m, q)
         B = b[groups] # (n, q)
+        S_emp = covarySeries(B)
         Z = X[:,:self.q]
-        y = X @ beta + (Z * B).sum(dim=-1) + eps
-
-        # empricial covariance
-        S_emp = self._covarySeries(B)
-        sigma_error_emp = self._covarySeries(eps.unsqueeze(-1)).sqrt()
+        eta = X @ ffx 
+        y = eta + (Z * B).sum(dim=-1) + eps
+        snr = self.signalToNoiseRatio(y, eta)
 
         # outputs
         out = {"X": X, # (n, d)
                "y": y, # (n,)
                "groups": groups, # (n,)
-               "ffx": beta, # (d,)
+               "ffx": ffx, # (d,)
                "rfx": B, # (n, q)
-               "S": torch.diag(self.S), # once we allow correlation: symmetricMatrix2Vector(self.S),
-               "S_emp": S_emp, # for now only marginal variances
-               "sigma_error": torch.tensor(self.sigma_error), # (1,)
+               "S": torch.diag(self.S), # (q,) once we allow correlation: symmetricMatrix2Vector(self.S),
+               "S_emp": S_emp, # (n, q), for now only marginal variances
+               "sigma_error": self.sigma_error, # (1,)
                "sigma_error_emp": sigma_error_emp, # (n,)
-               "seed": torch.tensor(seed)}
+               "snr": snr,
+               "n": torch.tensor(n_samples), # (1,)
+               "m": torch.tensor(self.m), # (1,)
+               "d": torch.tensor(self.d), # (1,)
+               "q": torch.tensor(self.q), # (1,)
+               }
+
         if include_posterior:
-            approx = self.fitVI(y, X, groups)
-            ffx_vp = self.evalVI(approx, "beta") # fixed effects variational posterior
-            rfx_vp = self.evalVI(approx, "sigma_b")
-            noise_vp = self.evalVI(approx, "sigma_e")
-            out.update({"ffx_vp": ffx_vp, "rfx_vp": rfx_vp, "noise_vp": noise_vp})
+            ffx_stats, rfx_stats, noise_stats = self.posteriorParams(y, X, groups, self.q, self.m)
+            optimal = {"ffx": ffx_stats, "rfx": rfx_stats, "noise": noise_stats}
+            out.update({"optimal": optimal})
         return out
-    
     def fitVI(self, y: torch.Tensor, X: torch.Tensor, groups: torch.Tensor) -> pm.variational.approximations.MeanField:
         ''' perform variational inference with automatic diffenentiation '''
         d = X.shape[1]
