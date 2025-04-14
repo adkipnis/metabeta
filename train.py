@@ -79,9 +79,8 @@ def getCheckpointPath(iteration: int) -> Path:
     return Path("outputs", cfg.model_folder, model_filename)
 
 
-def save(models: Tuple[nn.Module, nn.Module],
-         optimizers: Tuple[schedulefree.AdamWScheduleFree,
-                           schedulefree.AdamWScheduleFree],
+def save(model: nn.Module,
+         optimizer: schedulefree.AdamWScheduleFree,
          current_iteration: int,
          current_global_step: int,
          current_validation_step: int,
@@ -95,27 +94,22 @@ def save(models: Tuple[nn.Module, nn.Module],
         'global_step': current_global_step,
         'validation_step': current_validation_step,
         'timestamp': timestamp,
-        'model_state_dict': models[0].state_dict(),
-        'model_state_dict_noise': models[1].state_dict(),
-        'optimizer_state_dict': optimizers[0].state_dict(),
-        'optimizer_state_dict_noise': optimizers[1].state_dict(),
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
     }, model_filename)
 
 
-def load(models: Tuple[nn.Module, nn.Module],
-         optimizers: Tuple[schedulefree.AdamWScheduleFree,
-                           schedulefree.AdamWScheduleFree],
+def load(model: nn.Module,
+         optimizer: schedulefree.AdamWScheduleFree,
          initial_iteration: int) -> Tuple[int, int, int, str]:
     """ Load the model and optimizer state from a previous run,
     returning the initial iteration and seed. """
     model_filename = getCheckpointPath(initial_iteration)
     print(f"Loading checkpoint from {model_filename}")
     state = torch.load(model_filename, weights_only=False)
-    models[0].load_state_dict(state["model_state_dict"])
-    models[1].load_state_dict(state["model_state_dict_noise"])
+    model.load_state_dict(state["model_state_dict"])
     initial_iteration = state["iteration"] + 1
-    optimizers[0].load_state_dict(state["optimizer_state_dict"])
-    optimizers[1].load_state_dict(state["optimizer_state_dict_noise"])
+    optimizer.load_state_dict(state["optimizer_state_dict"])
     global_step = state["global_step"]
     validation_step = state["validation_step"]
     timestamp = state["timestamp"]
