@@ -1,21 +1,66 @@
-from typing import List, Dict
+from typing import Union
 import torch
 import torch.nn as nn
-from torch.nn import TransformerEncoderLayer, TransformerDecoderLayer
+from torch.nn import MultiheadAttention, TransformerEncoderLayer, TransformerDecoderLayer
+from torch import distributions as D
+from proposal import DiscreteProposal, MixtureProposal, normalBins, halfNormalBins
+from utils import dInput
+
+# ------------------------------------------------------------------------
+# Building Blocks
+
+class MLP(nn.Module):
+    # multi-layer perceptron
+    def __init__(self,
+                 d_input: int,
+                 d_hidden: int,
+                 d_output: int,
+                 act_fn: str):
+        super(MLP, self).__init__()
+        if act_fn == 'relu':
+            act = nn.ReLU()
+        elif act_fn == 'gelu':
+            act = nn.GELU()
+        else:
+            raise ValueError("only relu or gelu supported")
+            
+        self.net = nn.Sequential(
+            nn.Linear(d_input, d_hidden),
+            act,
+            nn.Linear(d_hidden, d_output)
+        )
+
+    def forward(self, x: torch.Tensor):
+        return self.net(x)
 
 
-def generalizedPosterior(hidden_size: int, d: int, m: int) -> nn.ModuleList:
-    # get m linear layers from hidden_size to d
-    layers = [nn.Linear(hidden_size, d) for _ in range(m)]
-    return nn.ModuleList(layers)
+class MAB(nn.Module):
+    # Multihead Attention Block
+    def __init__(self, 
+                 d_model: int,
+                 d_ff: int,
+                 n_heads: int,
+                 dropout: float = 0.0,
+                 act_fn: str = 'gelu',
+                 ):
+        super(MAB, self).__init__()
+        self.lin = nn.Linear(d_model, d_model)
+        self.mlp = MLP(d_model, d_ff, d_model, act_fn)
+        self.mha = MultiheadAttention(
+            d_model, n_heads, dropout=dropout, batch_first=True)
+        self.ln0 = nn.LayerNorm(d_model)
+        self.ln1 = nn.LayerNorm(d_model)
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor, z=None):
+        if z is None:
+            h, _ = self.mha(x, y, y)
+        else:
+            h, _ = self.mha(x, y, z)
+        h = self.ln0(self.lin(x) + h)
+        out = self.ln1(h + self.mlp(h))
+        return out
 
 
-def causalMask(seq_len: int) -> torch.Tensor:
-    mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1)
-    return mask.masked_fill(mask == 1, float('-inf'))
-
-
-class Base(nn.Module):
     def __init__(self,
                  n_inputs: int,
                  n_predictors: int, # including bias term
