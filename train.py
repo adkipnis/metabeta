@@ -230,83 +230,57 @@ def run(model: nn.Module,
     return results
 
 
+def train(model: nn.Module,
+          optimizer: schedulefree.AdamWScheduleFree,
+          dl: DataLoader,
           step: int) -> int:
-    ''' Train the model for a single iteration. '''
-    for model in models:
-        model.train()
-    for optimizer in optimizers:
-        optimizer.train()
-    iterator = tqdm(dataloader,
-                    desc=f"iteration {iteration:02d}/{cfg.iterations:02d} [T]")
+    iterator = tqdm(dl, desc=f"iteration {iteration:02d}/{cfg.iterations:02d} [T]")
     for batch in iterator:
-        for optimizer in optimizers:
-            optimizer.zero_grad()
-        loss, loss_noise = run(models, batch, cfg.posterior_type,
-                               printer=iterator.write)
+        model.train()
+        optimizer.train()
+        optimizer.zero_grad()
+        results = run(model, batch)
+        loss = results['loss']
         loss.backward()
-        loss_noise.backward()
-        # for model in models:
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
-        for optimizer in optimizers:
-            optimizer.step()
-        iterator.set_postfix({"loss": loss.item()})
-        if writer is not None:
-            writer.add_scalar("loss_train", loss.item(), step)
-            writer.add_scalar("loss_train_noise", loss_noise.item(), step)
-        if logger is not None:
-            logger.write(iteration, step, loss.item(), "loss_train")
-            logger.write(iteration, step, loss_noise.item(), "loss_train_noise")
+        optimizer.step()
+        loss_train = loss.item()
+        iterator.set_postfix_str(f"loss: {loss_train:.3f}")
+        writer.add_scalar("loss_train", loss_train, step)
+        logger.write(iteration, step, loss_train, "loss_train")
         step += 1
     return step
 
-
-def validate(models: Tuple[nn.Module, nn.Module],
-             optimizers: Tuple[schedulefree.AdamWScheduleFree,
-                               schedulefree.AdamWScheduleFree],
-             dataloader: DataLoader,
-             writer: Union[SummaryWriter, None],
-             logger: Union[Logger, None],
-             iteration: int,
+def validate(model: nn.Module,
+             optimizer: schedulefree.AdamWScheduleFree,
+             dl: DataLoader,
              step: int) -> int:
-    ''' Validate the model for a single iteration. '''
-    for model in models:
-        model.eval()
-    for optimizer in optimizers:
-        optimizer.eval()
-    iterator = tqdm(dataloader,
-                    desc=f"iteration {iteration:02d}/{cfg.iterations:02d} [V]")
+    iterator = tqdm(dl, desc=f"iteration {iteration:02d}/{cfg.iterations:02d} [V]")
+    if step % 5 == 0:
+        example_indices = [12, 29, 42]
+        printer = iterator.write
+        save = True
+    else:
+        example_indices = []
+        printer = print
+        save = False
+        
     with torch.no_grad():
-        for j, batch in enumerate(iterator):
-            # preset validation loss
-            loss, loss_noise = run(models, batch, cfg.posterior_type,
-                                   printer=iterator.write)
-            iterator.set_postfix({"loss": loss.item()})
-            if writer is not None:
-                writer.add_scalar("loss_val", loss.item(), step)
-                writer.add_scalar("loss_val_noise", loss_noise.item(), step)
-            if logger is not None:
-                logger.write(iteration, step, loss.item(), "loss_val")
-                logger.write(iteration, step, loss_noise.item(), "loss_val_noise")
-
-            # optionally calculate KL loss
-            if cfg.kl and cfg.fx_type == "ffx" and cfg.c == 1 and cfg.posterior_type == "mixture":
-                loss_kl = compare(models, batch)
-                if writer is not None:
-                    writer.add_scalar("loss_kl", loss_kl.item(), step)
-                if logger is not None:
-                    logger.write(iteration, step, loss_kl.item(), "loss_kl")
-
-            # optionally save predictions
-            if iteration % 5 == 0 and not cfg.proto:
-                savePredictions(models, batch, cfg.posterior_type, iteration, j)
-
-            # optionally print predictions
-            if iteration % 5 == 0 and j % 30 == 0:
-                run(models, batch, cfg.posterior_type,
-                    printer=iterator.write, num_examples=1)
-
+        model.eval()
+        optimizer.eval()
+        for batch in iterator:
+            results = run(model, batch, example_indices, printer, save)
+            loss_val = results['loss'].item()
+            iterator.set_postfix_str(f"loss: {loss_val:.3f}")
+            writer.add_scalar("loss_val", loss_val, step)
+            logger.write(iteration, step, loss_val, "loss_val")
+            if cfg.kl and cfg.fx_type == 'ffx' and cfg.post_type == 'mixture' and cfg.c == 1:
+                losses_kl = compareWithAnalytical(batch, results['outputs_ffx'])
+                loss_kl = losses_kl.mean().item()
+                writer.add_scalar("loss_kl", loss_kl, step)
+                logger.write(iteration, step, loss_kl, "loss_kl")
             step += 1
     return step
+            
 
 
 ###############################################################################
