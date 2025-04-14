@@ -46,45 +46,37 @@ class LMDataset(Dataset):
        else:
            raise ValueError(f'Unsupported fx type {self.fx_type} for preprocessing')
     
+    def preprocessFfx(self, item: dict) -> dict:
+        length = self.n_max
+        width = self.d_max + 1 # add bias term
+
+        X = padTensor(item['X'], (length, width))
+        y = padTensor(item['y'], (length,)).unsqueeze(-1)
+        ffx = padTensor(item['ffx'], (width,))
+        sigma_error_emp = padTensor(item['sigma_error_emp'], (length,)).unsqueeze(-1)
+        mask = (y == 0.).squeeze()
 
         if self.permute:
-            seed = item['seed']
-            torch.manual_seed(seed)
-            indices = torch.randperm(d_max)
-            X = X[:, indices]
-            ffx = ffx[indices]
+            idx = self.getPermutation(X.shape[-1])
+            X = X[..., idx]
+            ffx = ffx[..., idx]
 
-        out = {'d': d, 'X': X, 'y': y, 'ffx': ffx,
+        out = {'n': item['n'], 'd': item['d'],
+               'X': X, 'y': y, 'ffx': ffx,
                'sigma_error': item['sigma_error'],
-               'sigma_error_emp': item['sigma_error_emp']}
-
-        # optionally include random effects
-        if "rfx" in item:
-            q = item['rfx'].shape[1]
-            groups = item['groups']
-            Z = padTensor(X[:, :q], (n, d_max))
-            rfx = padTensor(item['rfx'], (n, d_max))
-            S = padTensor(item['S'], (d_max,))
-            # unique = int(d_max * (d_max + 1) / 2)
-            # S = padTensor(item['S'], (unique,))
-            S_emp = padTensor(item['S_emp'], (n, d_max))
-            out.update({'q': q, 'groups': groups, 'Z': Z, 'rfx': rfx, 'S': S, 'S_emp': S_emp})
-            if self.permute:
-                raise ValueError('Permutation not implemented for rfx datasets')
-        else:
-            out.update({'q': 0, 'groups': torch.zeros_like(y), 'Z': torch.zeros_like(X)})
-
+               'sigma_error_emp': sigma_error_emp,
+               'mask': mask,
+               }
+        
         # optionally include analytical posterior
-        if 'mu_n' in item:
-            mu_n = padTensor(item['mu_n'], (n, d_max))
-            Sigma_n = padTensor(item['Sigma_n'], (n, d_max, d_max))
-            a_n = item['a_n']
-            b_n = item['b_n']
-            if self.permute:
-                mu_n = mu_n[:, indices] # type: ignore
-                Sigma_n = Sigma_n[:, indices] # type: ignore
-                Sigma_n = Sigma_n[:, :, indices] # type: ignore
-            out.update({'mu_n': mu_n, 'Sigma_n': Sigma_n, 'a_n': a_n, 'b_n': b_n})
+        if 'optimal' in item:
+            optimal = item['optimal']
+            ffx = optimal['ffx']
+            mu = padTensor(ffx['mu'], (width,))
+            Sigma = padTensor(ffx['Sigma'], (width, width))
+            ffx.update({'mu': mu, 'Sigma': Sigma})
+            out.update({'optimal': optimal})
+        return out
 
         return out
 
