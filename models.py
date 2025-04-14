@@ -334,3 +334,96 @@ def buildFixed(d_data: int, d_model: int, d_ff: int,
     return ModelFixed(embedder, transformer, pooler, proposer, interpreter)
 
 
+# ------------------------------------------------------------------------
+# mixed effects
+class ModelMixed(nn.Module):
+    def __init__(self,
+                 embedder: nn.Module,
+                 transformer: nn.Module,
+                 pooler: nn.Module,
+                 proposer_ffx: nn.Module,
+                 proposer_rfx: nn.Module,
+                 interpreter_ffx: nn.Module,
+                 interpreter_rfx: nn.Module,
+                 ):
+        super(ModelMixed, self).__init__()
+        self.emb = embedder
+        self.tf = transformer
+        self.pool = pooler
+        self.prop_ffx = proposer_ffx
+        self.prop_rfx = proposer_rfx
+        self.interpreter_ffx = interpreter_ffx
+        self.interpreter_rfx = interpreter_rfx
+
+    def forward(self, data: dict):
+        h = self.emb(**data) # (batch, n, d_model)
+        h = self.tf(h, data['mask']) # (batch, n, d_model)
+        h = self.pool(h) # (batch, d_model)
+        out_ffx = self.prop_ffx(h) # (batch, d_out, **)
+        out_rfx = self.prop_rfx(h) # (batch, d_out, **)
+        losses_ffx = self.interpreter_ffx(out_ffx, data['ffx']) # (batch, d_out)
+        losses_rfx = self.interpreter_rfx(out_rfx, data['S'].sqrt()) # (batch, d_out)
+        return out_ffx, out_rfx, losses_ffx, losses_rfx
+
+def buildMixed(d_data: int, d_model: int, d_ff: int,
+               n_heads: int = 4, n_blocks: int = 1,
+               max_n: int = 50,
+               dropout: float = 0.0, act_fn: str = 'gelu',
+               emb_type: str = 'separate',
+               tf_type: str = 'encoder',
+               post_type: str = 'mixture', n_components: int = 1):
+    
+    # 1. embedder
+    if emb_type == 'joint':
+        embedder = JointEmbedder(d_data, d_model, 'mfx')
+    elif emb_type == 'separate':
+        embedder = SeparateEmbedder(d_data, d_model, 'mfx')
+    elif emb_type == 'sequence':
+        embedder = SequenceEmbedder(d_data, d_model, max_n, 'mfx')
+    else:
+        raise ValueError(f'embedding type {emb_type} unknown')
+    
+    # 2. transformer
+    if tf_type == 'encoder':
+        Transformer = TFE
+    elif tf_type == 'decoder':
+        Transformer = TFD
+    else:
+        raise ValueError(f'transformer type {tf_type} unknown')
+    transformer = Transformer(d_model, d_ff, n_heads, n_blocks, dropout, act_fn)
+
+    # 3. pooler
+    pooler = PoolingLayer(d_model, d_ff, n_heads, dropout, act_fn)
+
+    # 4. proposer
+    if post_type == 'discrete':
+        proposer_ffx = GeneralizedPosterior(d_model, d_data+1, n_components)
+        interpreter_ffx = DiscreteProposal(normalBins(3., n_components+1))
+        proposer_rfx = GeneralizedPosterior(d_model, d_data+1, n_components)
+        interpreter_rfx = DiscreteProposal(halfNormalBins(3., n_components+1))
+    elif post_type == 'mixture':
+        proposer_ffx = GeneralizedPosterior(d_model, d_data+1, n_components, 3)
+        interpreter_ffx = MixtureProposal(D.Normal)
+        proposer_rfx = GeneralizedPosterior(d_model, d_data+1, n_components, 3)
+        interpreter_rfx = MixtureProposal(D.Normal)
+    else:
+        raise ValueError(f'posterior type {post_type} unknown')
+
+    return ModelMixed(embedder, transformer, pooler, proposer_ffx, proposer_rfx, interpreter_ffx, interpreter_rfx)
+
+
+def build(d_data: int, d_model: int, d_ff: int,
+          n_heads: int = 4, n_blocks: int = 1,
+          max_n: int = 50,
+          dropout: float = 0.0, act_fn: str = 'gelu',
+          emb_type: str = 'separate',
+          tf_type: str = 'encoder',
+          post_type: str = 'mixture', n_components: int = 1,
+          fx_type: str = 'ffx'):
+    if fx_type == 'ffx':
+        build_fn = buildFixed
+    else: 
+        build_fn = buildMixed
+    return build_fn(d_data, d_model, d_ff, n_heads, n_blocks, max_n, dropout, act_fn, emb_type, tf_type, post_type, n_components)
+
+
