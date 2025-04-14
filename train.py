@@ -129,6 +129,23 @@ def maskLoss(losses: torch.Tensor,
     return loss
 
 
+def kldFull(mean_a: torch.Tensor, Sigma_a: torch.Tensor,
+            mean_p: torch.Tensor, Sigma_p: torch.Tensor):
+    ''' get Kullback Leibler divergence between analytical and proposed
+        loc/scale of the posterior for each element in the batch '''
+    b = mean_p.shape[0]
+    losses = torch.zeros(b, device=device)
+    mask = (mean_a != 0.)
+    for i in range(b):
+        mask_i = mask[i] 
+        mu_ai = mean_a[i, mask_i]
+        mu_pi = mean_p[i, mask_i]
+        Sigma_ai = Sigma_a[i, mask_i][..., mask_i]
+        Sigma_pi = Sigma_p[i, mask_i][..., mask_i]
+        post_a = D.MultivariateNormal(mu_ai, Sigma_ai)
+        post_p = D.MultivariateNormal(mu_pi, Sigma_pi)
+        losses[i] = D.kl.kl_divergence(post_a, post_p)
+    return losses
 
 
 
