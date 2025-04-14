@@ -1,4 +1,4 @@
-from math import sqrt
+from typing import Callable
 import torch
 from torch import nn
 from torch import distributions as D
@@ -20,11 +20,12 @@ def halfNormalBins(scale: float, n_bins: int) -> torch.Tensor:
     return D.HalfNormal(scale).icdf(quantiles)
 
 class DiscreteProposal(nn.Module):
-    def __init__(self, bins: torch.Tensor, # (m,)
+    def __init__(self,
+                 bins: torch.Tensor, # (m,)
                  ):
         super().__init__()
-        self.register_buffer('bins', bins)
-        self.register_buffer('widths', bins[1:] - bins[:-1])
+        self.bins = bins
+        self.widths = bins[1:] - bins[:-1]
         self.centers = self.bins[:-1] + self.widths/2
         self.n_bins = len(bins) - 1
 
@@ -46,9 +47,8 @@ class DiscreteProposal(nn.Module):
     def variance(self, logits: torch.Tensor, mean: torch.Tensor, # (batch, seq_len)
                  ) -> torch.Tensor:
         p = torch.softmax(logits, -1)
-        squared_diff = (self.centers.view(1, 1, -1) - mean.unsqueeze(-1)).square()
+        squared_diff = (self.centers.view(1, -1) - mean.unsqueeze(-1)).square()
         return torch.sum(squared_diff * p, dim=-1)
- 
     def mseLoss(self, targets: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
         means = self.mean(logits)
         return mse(targets, means)
