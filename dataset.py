@@ -160,12 +160,35 @@ class LMDataset(Dataset):
 
 
 
+class FlatDataset(LMDataset):
+    def __init__(self, data: List[dict], info: dict, permute: bool = True) -> None:
+        super().__init__(data, info, permute)
+        self.prepare()
+        self.data = [self.flatten(item) for item in self.data]
+
+    def prepare(self):
+        # prepare dataset for tokenized input of shape [obs_idx, feature_idx, val]
+        length = self.info['max_n']
+        width = dInput(self.info['max_d'], self.fx_type)
+        self.obs_idx = torch.arange(length).unsqueeze(1).repeat(1, width).view(-1)
+        self.feat_idx = torch.arange(width).unsqueeze(0).repeat(length, 1).view(-1)
+
+    def flatten(self, item: dict) -> dict:
+        if self.fx_type == 'mfx':
+            val = torch.cat([item['y'], item['X'], item['Z']], dim=-1)
         else:
-            train_data = self.data[:split_idx]
-            test_data = self.data[split_idx:]
-        train_dataset = LMDataset(train_data, self.max_samples, self.max_predictors)
-        test_dataset = LMDataset(test_data, self.max_samples, self.max_predictors)
-        return train_dataset, test_dataset
+            val = torch.cat([item['y'], item['X']], dim=-1)
+        val = val.view(-1, 1)
+        mask = (val == 0.).squeeze()
+        item.update({'val': val, 'mask': mask})
+        return item
+
+    def __getitem__(self, idx) -> dict:
+        out = self.data[idx]
+        out.update({'obs_idx': self.obs_idx, 'feat_idx': self.feat_idx})
+        return out
+
+
 
 
 if __name__ == '__main__':
