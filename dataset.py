@@ -124,9 +124,39 @@ class LMDataset(Dataset):
                }
         return out
     
+    # def preprocessMfx(self, item: dict) -> dict:
+    #     if self.permute:
+    #         raise NotImplementedError()
 
+    #     length = self.n_max
+    #     width = self.d_max + 1 # add bias term
+    #     depth = self.n_max // 10
+        
+    #     # get padded subsets
+    #     y, X, Z, mask = self.deepen(item, depth, length, width)
+
+    #     # pad flat entries
+    #     ffx = padTensor(item['ffx'], (width,))
+    #     rfx = padTensor(item['rfx'], (length, width))
+    #     groups = padTensor(item['groups'], (length,))
+    #     S = padTensor(item['S'], (width,))
+    #     S_emp = padTensor(item['S_emp'], (length, width))
+    #     sigma_error_emp = padTensor(item['sigma_error_emp'], (length,)).unsqueeze(-1)
+            
+    #     out = {'n': item['n'], 'd': item['d'],
+    #            'm': item['m'], 'q': item['q'],
+    #            'y': y, 'X': X, 'Z': Z,
+    #            'ffx': ffx, 'rfx': rfx,
+    #            'groups': groups, 'mask': mask,
+    #            'S': S, 'S_emp': S_emp,
+    #            'sigma_error': item['sigma_error'],
+    #            'sigma_error_emp': sigma_error_emp,
+    #            }
+    #     return out
+    
     def __getitem__(self, idx) -> dict:
-        return self.data_p[idx]
+        out = self.data[idx]
+        return out
 
     def randomSplit(self, split: float = 0.9, shuffle: bool = False) -> Tuple['LMDataset', 'LMDataset']:
         ''' Split the dataset into two parts, randomly. '''
