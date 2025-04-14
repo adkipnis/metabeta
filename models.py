@@ -114,8 +114,27 @@ class SeparateEmbedder(nn.Module):
         return torch.cat(out, dim=-1)
     
 
+class SequenceEmbedder(nn.Module):
+    def __init__(self,
+                 d_data: int,
+                 d_model: int,
+                 max_n: int,
+                 fx_type: str,
+                 ):
+        super(SequenceEmbedder, self).__init__()
+        d_input = dInput(d_data, fx_type)
+        self.emb_val = nn.Linear(1, d_model)
+        self.emb_obs = nn.Embedding(max_n, d_model)
+        self.emb_feat = nn.Embedding(d_input, d_model)
 
-class TransformerEncoder(Base):
+    def forward(self, val: torch.Tensor, obs_idx: torch.Tensor,
+                feat_idx: torch.Tensor, **kwargs):
+        val_emb = self.emb_val(val)
+        obs_emb = self.emb_obs(obs_idx)
+        feat_emb = self.emb_feat(feat_idx)
+        return val_emb + obs_emb + feat_emb
+
+
     def __init__(self,
                  n_inputs: int,
                  n_predictors: int,
