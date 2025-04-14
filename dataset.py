@@ -91,7 +91,39 @@ class LMDataset(Dataset):
         masks = padTensor(torch.cat([m.unsqueeze(0) for m in masks]), (depth, length))
         return y, X, Z, masks
 
+    def preprocessMfx(self, item: dict) -> dict:
+        if self.permute:
+            raise NotImplementedError()
+    
+        length = self.n_max
+        width = self.d_max + 1 # add bias term
+        
+        # pad inputs entries
+        y = padTensor(item['y'], (length,)).unsqueeze(-1)
+        X = padTensor(item['X'], (length, width))
+        Z = torch.clone(X)
+        Z[..., item['q']:] = 0.
+        mask = (y == 0.).squeeze()
+        
+        # pad flat entries
+        ffx = padTensor(item['ffx'], (width,))
+        rfx = padTensor(item['rfx'], (length, width))
+        groups = padTensor(item['groups'], (length,))
+        S = padTensor(item['S'], (width,))
+        S_emp = padTensor(item['S_emp'], (length, width))
+        sigma_error_emp = padTensor(item['sigma_error_emp'], (length,)).unsqueeze(-1)
+            
+        out = {'n': item['n'], 'd': item['d'],
+               'm': item['m'], 'q': item['q'],
+               'y': y, 'X': X, 'Z': Z,
+               'ffx': ffx, 'rfx': rfx,
+               'groups': groups, 'mask': mask,
+               'S': S, 'S_emp': S_emp,
+               'sigma_error': item['sigma_error'],
+               'sigma_error_emp': sigma_error_emp,
+               }
         return out
+    
 
     def __getitem__(self, idx) -> dict:
         return self.data_p[idx]
