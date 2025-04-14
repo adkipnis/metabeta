@@ -61,43 +61,31 @@ class MAB(nn.Module):
         return out
 
 
+# ------------------------------------------------------------------------
+# Embedders
+
+class JointEmbedder(nn.Module):
     def __init__(self,
-                 n_inputs: int,
-                 n_predictors: int, # including bias term
-                 hidden_size: int,
-                 n_layers: int,
-                 dropout: float,
-                 seed: int,
-                 fx_type: str,
-                 posterior_type: str,
-                 n_components: int = 1) -> None:
-        super(Base, self).__init__()
-        self.n_inputs = n_inputs
-        self.n_predictors = n_predictors
-        self.hidden_size = hidden_size
-        self.n_layers = n_layers
-        self.dropout = dropout
-        self.seed = seed
-        self.fx_type = fx_type
-        self.posterior_type = posterior_type
-        self.n_components = n_components # number of mixture components resp. bins
+                 d_data: int,
+                 d_model: int,
+                 fx_type: str):
+        super(JointEmbedder, self).__init__()
+        self.include_z = fx_type == 'mfx'
+        self.d_input = dInput(d_data, fx_type)
+        self.emb = nn.Linear(self.d_input, d_model)
 
-        # embeddings
-        self.embed_y = nn.Linear(1, hidden_size)
-        self.embed_x = nn.Linear(n_predictors, hidden_size)
-        self.embed_z = nn.Linear(n_predictors, hidden_size)
-        self.embed_g = nn.Embedding(5, hidden_size) # todo: more groups
+    def forward(self, y: torch.Tensor, X: torch.Tensor,
+                Z: Union[None, torch.Tensor] = None, **kwargs):
+        # assumes y [b, n, 1], x [b, n, d], z [b, n, d]
+        if self.include_z:
+            inputs = [y, X, Z]
+        else:
+            inputs = [y, X]
+        inputs = torch.cat(inputs, dim=-1)
+        out = self.emb(inputs)
+        return out
 
-        # posterior
-        n_fx = 1 if fx_type == "ffx" else 2
-        if posterior_type == "discrete":
-            self.final_layers = generalizedPosterior(hidden_size, n_predictors, n_fx * self.n_components) # (ffx, rfx) * (bin)
-        elif posterior_type == "mixture":
-            self.final_layers = generalizedPosterior(hidden_size, n_predictors, 3 * n_fx * self.n_components) # (loc, scale, weight) * (ffx, rfx) * (component)
-        elif posterior_type == "discrete_noise":
-            self.final_layers = generalizedPosterior(hidden_size, 1, self.n_components)
-        elif posterior_type == "mixture_noise":
-            self.final_layers = generalizedPosterior(hidden_size, 1, 3 * self.n_components)
+
         else:
             raise ValueError(f"model type: {posterior_type} not supported")
 
