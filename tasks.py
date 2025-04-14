@@ -64,6 +64,14 @@ class Task:
     def sample(self, n_samples: int) -> Dict[str, torch.Tensor]:
         raise NotImplementedError
     
+    def signalToNoiseRatio(self, y: torch.Tensor, eta: torch.Tensor):
+        eps = y - eta
+        ess = torch.sum((eta - torch.mean(eta)).square())
+        rss = torch.sum(eps.square())
+        snr = ess / rss
+        return snr
+
+
 
 class FixedEffects(Task):
     def __init__(self,
