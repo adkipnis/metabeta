@@ -171,30 +171,25 @@ class FixedEffects(Task):
 
 class MixedEffects(Task):
     def __init__(self,
-                 n_predictors: int,
-                 sigma_error: float,
-                 data_dist: torch.distributions.Distribution,
-                 q: int, # number of random effects
-                 m: int, # number of groups
+                 sigma_error: Union[float, torch.Tensor],
+                 sigmas_rfx: torch.Tensor,
+                 n_ffx: int,
+                 n_rfx: int,
+                 n_groups: int,
                  ):
-        super().__init__(n_predictors, sigma_error, data_dist)
-        self.q = q
-        self.m = m
+        super().__init__(sigma_error, n_ffx)
+        self.q = n_rfx 
+        self.m = n_groups 
+        self.S = torch.diag_embed(sigmas_rfx[:self.q]).square() # type: ignore
         self._initRfxStructure()
 
     def _initRfxStructure(self) -> None:
         ''' given q, draw diagonal elements of S (covariance matrix of random effects) '''
-        dist = D.Uniform(0.01, 1.5)
-        mu = torch.zeros((self.q,))
-        self.S = torch.diag_embed(dist.sample((self.q,))) # type: ignore
-        self.b_dist = D.MultivariateNormal(mu, covariance_matrix=self.S)
+        loc = torch.zeros((self.q,))
+        self.dist_rfx = D.MultivariateNormal(loc, covariance_matrix=self.S)
 
-    def _sampleRandomEffects(self) -> torch.Tensor:
-        return self.b_dist.sample((self.m,)) # type: ignore
-
-    def sample(self, n_samples: int, seed: int, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
-        torch.manual_seed(seed)
-        assert n_samples % self.m == 0, f"number of samples {n_samples} must be divisible by number of groups {self.m}"
+    def _sampleRfx(self) -> torch.Tensor:
+        return self.dist_rfx.sample((self.m,)) # type: ignore
 
         # fixed effects and noise
         beta = self._sampleBeta() # (d,)
