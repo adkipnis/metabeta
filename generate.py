@@ -27,6 +27,14 @@ def sampleIG(shape: tuple, alpha: float, beta: float, max_val: float = float('in
     return val # type: ignore
 
 
+def constrain(a: torch.Tensor, b: torch.Tensor, max_ratio: float, min_val: int):
+    ''' constrain b such that a * max_ratio >= b (element-wise) '''
+    bounds = a * max_ratio
+    indices = bounds < b
+    b[indices] = bounds[indices].floor().to(b.dtype).clamp(min=min_val)
+    return a, b
+
+
     data = []
     iterator = tqdm(range(n_draws))
     iterator.set_description(f'{part:02d}/{iterations:02d}')
