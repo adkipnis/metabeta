@@ -35,24 +35,27 @@ def constrain(a: torch.Tensor, b: torch.Tensor, max_ratio: float, min_val: int):
     return a, b
 
 
+def genFfxTrainSet(batch_size: int, seed: int, include_posterior: bool = False) -> dict:
+    ''' Generate a [batch_size] fixed effects model datasets with varying n and d. '''
+    # init
+    torch.manual_seed(seed)
     data = []
-    iterator = tqdm(range(n_draws))
-    iterator.set_description(f'{part:02d}/{iterations:02d}')
-    LinearModel = FixedEffects if ds_type == "ffx" else MixedEffects
+    iterator = tqdm(range(batch_size))
+    iterator.set_description(f'{part:02d}/{cfg.iterations:02d}')
 
-    for _ in iterator:
-        seed = sower.throw()
-        torch.manual_seed(seed)
-        d = getD(0, max_predictors)
-        q = getD(0, d//2) if ds_type == "mfx" else 0
-        m = 5 if ds_type == "mfx" else 1 # todo: vary number of groups
-        sigma = ufNoise() if cfg.fixed == 0. else cfg.fixed
-        if cfg.scale_noise:
-            sigma = sigma * sqrt(d + 1)
-        lm = LinearModel(d, sigma, data_dist, q, m)
-        data += [lm.sample(max_samples, seed, include_posterior=False)]
-    return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}
+    # presample hyperparams
+    sigma = sampleHN((batch_size,), 1., cfg.max_sigma)
+    d = sampleInt(batch_size, 0, cfg.max_d).tolist()
+    n = sampleInt(batch_size, cfg.max_d, cfg.max_n).tolist()
 
+    # sample datasets
+    for i in iterator:
+        lm = FixedEffects(sigma[i], d[i])
+        data += [lm.sample(n[i], include_posterior=include_posterior)]
+    info = {'d': d, 'n': n, 'sigma': sigma,
+            'max_d': cfg.max_d, 'max_n': cfg.max_n, 'max_sigma': cfg.max_sigma,
+            'seed': seed}
+    return {'data': data, 'info': info}
 
 def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, max_predictors: int) -> Tuple[dict, list]:
     ''' generateDataset but with balanced number of predictors for validation '''
