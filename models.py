@@ -192,7 +192,43 @@ class TFD(nn.Module):
         return self.net(x, x, src_key_padding_mask=padding_mask)
 
 
+# ------------------------------------------------------------------------
+# poolers
 
-if __name__ == '__main__':
-    main()
+class PMA(nn.Module):
+    # Pooling by Multihead Attention
+    def __init__(self, 
+                 d_model: int,
+                 d_ff: int,
+                 n_heads: int,
+                 n_seeds: int = 1,
+                 dropout: float = 0.0,
+                 act_fn: str = 'gelu',
+                 ):
+        super(PMA, self).__init__()
+        self.mab = MAB(d_model, d_ff, n_heads, dropout, act_fn)
+        self.seeds = nn.Parameter(torch.Tensor(1, n_seeds, d_model))
+        nn.init.xavier_uniform_(self.seeds)
+
+    def forward(self, x: torch.Tensor):
+        batch_size = x.size(0)
+        seeds_tiled = self.seeds.repeat(batch_size, 1, 1)
+        return self.mab(seeds_tiled, x)
+
+
+class PoolingLayer(nn.Module):
+    def __init__(self, d_model, d_ff, n_heads, dropout, act_fn):
+        super(PoolingLayer, self).__init__()
+        self.pma = PMA(d_model, d_ff, n_heads, 1, dropout, act_fn=act_fn)
+
+    def forward(self, x: torch.Tensor):
+        if len(x.shape) == 4: # alternatively loop over m
+            b, m, n, d_emb = x.shape
+            x = x.reshape(-1, n, d_emb)
+            out = self.pma(x).squeeze(-2)
+            out = out.reshape(b, m, -1)            
+        else:
+            out = self.pma(x).squeeze(-2)
+        return out
+
 
