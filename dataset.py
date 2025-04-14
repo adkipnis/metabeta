@@ -2,6 +2,8 @@ from typing import List, Tuple
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
+from utils import dInput
+
 
 def padTensor(tensor: torch.Tensor, shape: tuple) -> torch.Tensor:
     assert len(tensor.shape) == len(shape),\
@@ -14,17 +16,21 @@ def padTensor(tensor: torch.Tensor, shape: tuple) -> torch.Tensor:
 
 
 class LMDataset(Dataset):
-    def __init__(self, data: List[dict], max_samples: int, max_predictors: int, permute: bool = False) -> None:
-        self.data = data
-        self.max_samples = max_samples
-        self.max_predictors = max_predictors
-        self.seeds = torch.tensor([item['seed'] for item in data])
+    def __init__(self,
+                 data: List[dict],
+                 info: dict,
+                 permute: bool = False,
+                 ) -> None:
+        self.info = info
         self.permute = permute
-        self.data_p = [self.preprocess(item) for item in data]
+        self.n_max = self.info['max_n']
+        self.d_max = self.info['max_d']
+        self.fx_type = 'mfx' if 'rfx' in data[0] else 'ffx'
+        self.data = [self.preprocess(item) for item in data]
 
     def __len__(self) -> int:
        return len(self.data)
-
+   
     def preprocess(self, item: dict) -> dict:
         n = self.max_samples
         d = item['X'].shape[1]
