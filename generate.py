@@ -1,50 +1,32 @@
 import os
+import itertools
 from tqdm import tqdm
 import argparse
-from typing import Tuple
-from math import sqrt
 import torch
 from torch import distributions as D
 from tasks import FixedEffects, MixedEffects
-from utils import dsFilename, dsFilenameVal
+from utils import dsFilename
 
 
-class Sower:
-    ''' Seed generator for reproducibility. '''
-    def __init__(self, seed: int = 0) -> None:
-        self.seed = seed
+def sampleInt(batch_size: int, min_val: int, max_val: int) -> torch.Tensor:
+    ''' sample batch from discrete uniform (include the max_val as possible value) '''
+    return torch.randint(min_val, max_val+1, (batch_size,))
 
-    def throw(self) -> int:
-        out = self.seed
-        self.seed += 1
-        return out
+def sampleHN(shape: tuple, scale: float, max_val: float = float('inf'),) -> torch.Tensor:
+    ''' sample batch from halfnormal, optionally clamp '''
+    val = D.HalfNormal(scale).sample(shape)
+    if max_val < float('inf'):
+        val = val.clamp(max=max_val) # type: ignore
+    return val # type: ignore
 
-
-def getD(min_predictors: int, max_predictors: int) -> int:
-    ''' Get a random number of predictors to draw from a linear model.'''
-    if min_predictors >= max_predictors:
-        return max_predictors
-    shape = (1,)
-    d = torch.randint(min_predictors, max_predictors + 1, shape)
-    return int(d.item())
-
-
-def ufNoise(min_val: float = 0.01, max_val: float = 1.5) -> float:
-    ''' Get the noise standard deviation '''
-    sigma = D.Uniform(min_val, max_val).sample()
-    return sigma.item()
+def sampleIG(shape: tuple, alpha: float, beta: float, max_val: float = float('inf')) -> torch.Tensor:
+    ''' sample batch from inverse gamma (and apply sqrt), optionally clamp '''
+    val = D.InverseGamma(alpha, beta).sample(shape).sqrt() # type: ignore
+    if max_val < float('inf'):
+        val = val.clamp(max=max_val) # type: ignore
+    return val # type: ignore
 
 
-def igNoise(alpha: float = 3., beta: float = 1., max_val: float = 1.5) -> float:
-    ''' Get the noise standard deviation '''
-    sigma_squared = D.InverseGamma(alpha, beta).sample()
-    sigma = sigma_squared.sqrt()
-    sigma = sigma.clamp(max=max_val)
-    return sigma.item()
-
-
-def generateDataset(ds_type: str, n_draws: int, max_samples: int, max_predictors: int, sower: Sower) -> dict:
-    ''' Generate a dataset of linear model samples of varying length and width and return a DataLoader. '''
     data = []
     iterator = tqdm(range(n_draws))
     iterator.set_description(f'{part:02d}/{iterations:02d}')
