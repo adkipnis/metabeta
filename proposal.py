@@ -146,6 +146,12 @@ class MixtureProposal(nn.Module):
             proposal = self.construct(locs, scales, logits)
             return proposal.variance
         
+    def getLocScale(self, outputs: torch.Tensor):
+        locs, scales, logits = self.locScaleLogit(outputs)
+        loc = self.mean(locs, scales, logits)
+        scale = self.variance(locs, scales, logits, loc).sqrt()
+        return loc, scale
+        
     def mseLoss(self, locs: torch.Tensor, scales: torch.Tensor, logits: torch.Tensor,
                 target: torch.Tensor, target_type: str) -> torch.Tensor:
         m = locs.shape[-1]
