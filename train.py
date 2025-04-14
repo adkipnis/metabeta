@@ -223,23 +223,11 @@ def run(model: nn.Module,
     # optionally print some examples
     model.interpreter_ffx.examples(example_indices, batch, outputs_ffx, printer, console_width) # type: ignore
 
-def savePredictions(models: Tuple[nn.Module, nn.Module],
-                    batch: dict,
-                    posterior_type: str, 
-                    iteration_index: int,
-                    batch_index: int) -> None:
-    y = batch["y"].to(device)
-    X = batch["X"].to(device)
-    Z = batch["Z"].to(device)
-    groups = batch["groups"].to(device)
-    outputs = models[0](y, X, Z, groups)
-    output_dict = parseOutputs(outputs, posterior_type, cfg.c, "ffx")
-    res, scale = assembleNoiseInputs(y, X, output_dict, posterior_type)
-    noise_outputs = models[1](res, scale, Z, groups)
-    noise_output_dict = parseOutputs(noise_outputs, posterior_type, cfg.c, "noise")
-    fname = Path(pred_path, f"predictions_i={iteration_index}_b={batch_index}.pt")
-    out = {**output_dict, **noise_output_dict}
-    torch.save(out, fname)
+    # optionally save outputs
+    if save:
+        fname = Path(pred_path, f"predictions_i={iteration}.pt")
+        torch.save(outputs_ffx, fname) # todo: include rfx
+    return results
 
 
 # -------- Kullback-Leibler Divergence
