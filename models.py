@@ -86,30 +86,33 @@ class JointEmbedder(nn.Module):
         return out
 
 
+class SeparateEmbedder(nn.Module):
+    def __init__(self,
+                 d_data: int,
+                 d_model: int,
+                 fx_type: str):
+        super(SeparateEmbedder, self).__init__()
+        self.include_z = fx_type == 'mfx'
+        if self.include_z:
+            d_out = d_model // 3
         else:
-            raise ValueError(f"model type: {posterior_type} not supported")
-
-    def initializeWeights(self) -> None:
-        ''' Initialize weights using Xavier initialization '''
-        torch.manual_seed(self.seed)
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
-
-    def embed(self, y: torch.Tensor, X: torch.Tensor,
-              Z: torch.Tensor, groups: torch.Tensor) -> torch.Tensor:
-        y_emb = self.embed_y(y)
-        X_emb = self.embed_x(X)
-        Z_emb = self.embed_z(Z)
-        g_emb = self.embed_g(groups)
-        return y_emb + X_emb + Z_emb + g_emb
+            d_out = d_model // 2
+        self.emb_y = nn.Linear(1, d_out)
+        self.emb_x = nn.Linear(d_data+1, d_out+1)
+        if self.include_z:
+            self.emb_z = nn.Linear(d_data+1, d_out)
 
     def forward(self, y: torch.Tensor, X: torch.Tensor,
-                Z: torch.Tensor, groups: torch.Tensor) -> torch.Tensor:
-        ''' forward pass, get all intermediate outputs and map them to the parameters of the proposal posterior '''
-        outputs = self.internal(y, X, Z, groups)
-        finals = [layer(outputs).unsqueeze(-1) for layer in self.final_layers]
-        return torch.cat(finals, dim=-1)
+                Z: Union[None, torch.Tensor] = None, **kwargs):
+        y_emb = self.emb_y(y)
+        x_emb = self.emb_x(X)
+        if self.include_z:
+            z_emb = self.emb_z(Z)
+            out = [y_emb, x_emb, z_emb]
+        else:
+            out = [y_emb, x_emb]
+        return torch.cat(out, dim=-1)
+    
 
 
 class TransformerEncoder(Base):
