@@ -78,6 +78,19 @@ class LMDataset(Dataset):
             out.update({'optimal': optimal})
         return out
 
+    def deepen(self, item: dict, depth: int, length: int, width: int):
+        masks = [item['groups'] == i for i in range(item['m'])]
+        y_subsets = [padTensor(item['y'][mask], (length,)).unsqueeze(0)
+                   for mask in masks]
+        y = padTensor(torch.cat(y_subsets), (depth, length)).unsqueeze(-1)
+        X_subsets = [padTensor(item['X'][mask], (length, width)).unsqueeze(0)
+                   for mask in masks]
+        X = padTensor(torch.cat(X_subsets), (depth, length, width))
+        Z = torch.clone(X)
+        Z[..., item['q']:] = 0.
+        masks = padTensor(torch.cat([m.unsqueeze(0) for m in masks]), (depth, length))
+        return y, X, Z, masks
+
         return out
 
     def __getitem__(self, idx) -> dict:
