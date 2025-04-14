@@ -105,9 +105,12 @@ class FixedEffects(Task):
             out.update({"optimal": {"ffx": ffx_stats, "noise": noise_stats}})
         return out
 
+    # ----------------------------------------------------------------
+    # analytical solution assuming Normal-IG-prior
+
     def _priorPrecision(self) -> torch.Tensor:
-        d = self.n_predictors + 1
-        precision = torch.tensor(1. / self.sigma_beta).square().repeat(d)
+        d = self.d + 1
+        precision = torch.tensor(1. / self.sigma_ffx).square().repeat(d)
         L_0 = torch.diag(precision)
         return L_0
 
@@ -141,12 +144,12 @@ class FixedEffects(Task):
         return b_n
 
     def posteriorParams(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        L_n = self._posteriorPrecision(x)
-        S_n = self._posteriorCovariance(L_n)
-        mu_n = self._posteriorMean(x, y, S_n)
-        a_n = self._posteriorA(x)
-        b_n = self._posteriorB(y, mu_n, L_n)
-        return mu_n, S_n, a_n, b_n
+        L_i = self._posteriorPrecision(x)
+        S_i = self._posteriorCovariance(L_i)
+        mu_i = self._posteriorMean(x, y, S_i)
+        a_i = self._posteriorA(x)
+        b_i = self._posteriorB(y, mu_i, L_i)
+        return mu_i, S_i, a_i, b_i
 
     def allPosteriorParams(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         # x (n, d), y (n, 1)
