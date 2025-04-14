@@ -240,6 +240,7 @@ class MixedEffects(Task):
         return ffx_stats, rfx_stats, noise_stats
 
 
+
 def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> None:
     import matplotlib.pyplot as plt
     import matplotlib.colors as colors
@@ -277,9 +278,9 @@ def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> No
             
         # Adding labels and title
         plt.xlabel('n')  # X-axis label
-        plt.ylabel(f'analytical posterior')      # Y-axis label
+        plt.ylabel('analytical posterior')      # Y-axis label
         plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
-        plt.ylim(-6, 6)
+        plt.ylim(-5, 5)
         plt.grid(True)           # Show grid
         plt.show()               # Display the plot
         
@@ -288,70 +289,68 @@ def plotExample(beta: torch.Tensor, mu: torch.Tensor, sigma: torch.Tensor) -> No
 
 
 if __name__ == "__main__":
-    seed = 1
-    n_predictors = 5
+    seed = 0
+    torch.manual_seed(seed)
+    noise_var = 1.5 # D.HalfNormal(1.).sample((1,)).square().item()
+    n_ffx = 2
     n_obs = 50
-    noise_var = 0.5 ** 2
-    datadist = D.Uniform(0., 1.)
-
-    # # --- fixed effects
-    # fe = FixedEffects(n_predictors, math.sqrt(noise_var), datadist)
-    # ds = fe.sample(n_obs, seed)
-    # X, y, beta, noise_var_emp = ds["X"], ds["y"], ds["beta"], ds["sigma_error_emp"].square()
-    # print(f"true beta: {beta}")
-    # print(f"true noise variance: {noise_var}")
-    # print(f"empirical noise variance: {noise_var_emp}")
     
-    # # analytical posterior
-    # mu, sigma, a, b = fe.allPosteriorParams(y, X)
-    # print(f"posterior mu: {mu[-1]}")
-    # print(f"posterior (margial) sigma^2: {torch.diagonal(sigma, dim1=-1, dim2=-2)[-1]}")
-    # # print(f"posterior a:\n{a}")
-    # # print(f"posterior b:\n{b}")
-    # plotExample(beta, mu, sigma)
+    # -------------------------------------------------------------------------
+    # fixed effects
+    print("fixed effects example\n----------------------------")
+    fe = FixedEffects(sigma_error=math.sqrt(noise_var), n_ffx=n_ffx)
+    ds = fe.sample(n_obs)
+    print(f"true ffx: {ds['ffx']}")
+    print(f"true noise variance: {noise_var:.3f}")
+    print(f"empirical noise variance: {ds['sigma_error_emp'][-1].square().squeeze():.3f}")
+    print(f"signal to noise ratio: {ds['snr']:.2f}")
+    
+    
+    # analytical posterior
+    mu, sigma, a, b = fe.posteriorParams(ds['X'], ds['y'])
+    print(f"posterior mean: {mu}")
+    print(f"posterior (margial) variance: {torch.diagonal(sigma, dim1=-1, dim2=-2)}")
+    print(f"posterior a:{a:.1f}")
+    print(f"posterior b:{b:.3f}")
+    # plotExample(ds['ffx'], mu, sigma)
     
     # # VI posterior
-    # approx = fe.fitVI(y, X)
-    # vi_stats = fe.evalVI(approx, "beta")
+    # approx = fitFfxVI(ds['y'], ds['X'])
+    # vi_stats = evalVI(approx, "beta")
     # mu_vi, sigma_vi = vi_stats["means"], vi_stats["stds"]
-    # print(f"VI posterior mu: {mu_vi}")
-    # print(f"VI posterior sigma^2: {sigma_vi.square()}")
+    # print(f"VI posterior mean: {mu_vi}")
+    # print(f"VI posterior variance: {sigma_vi.square()}")
 
-    # # noise variance
+    # noise variance
     # eps = y - X @ beta
     # noise_var_ml = 1/(n_obs - n_predictors - 1) * torch.dot(eps, eps)
     # expected_noise_var = torch.distributions.inverse_gamma.InverseGamma(a[-1], b[-1]).mean
     # print(f"true error variance: {noise_var:.3f}")
     # print(f"ML estimate: {noise_var_ml:.3f}")
     # print(f"EAP estimate: {expected_noise_var:.3f}")
-    # snr = torch.var(y)/noise_var
     # print(f"SNR: {snr:.3f}")
 
-    # --- mixed effects
+
+    # -------------------------------------------------------------------------
+    # mixed effects
+    print("\nmixed effects example\n----------------------------")
+    
     n_obs = 50
+    sigmas_rfx = torch.tensor([1.0, 0.5, 0.])
     n_rfx = 2
-    n_groups = 5
-    me = MixedEffects(n_predictors, math.sqrt(noise_var), datadist, n_rfx, n_groups)
-    ds = me.sample(n_obs, seed, include_posterior=True)
-    X, y, groups, beta = ds["X"], ds["y"], ds["groups"], ds["beta"]
-    S, S_emp, rfx = ds["S"], ds["S_emp"], ds["rfx"]
-    print(f"true beta: {beta}")
-    print(f"random effects variances:\n{S}")
+    n_groups = 3
+    me = MixedEffects(math.sqrt(noise_var), sigmas_rfx, n_ffx, n_rfx, n_groups)
+    ds = me.sample(n_obs)
     
-    # # VI Posterior
-    # approx = me.fitVI(y, X, groups)
-    # vi_stats_beta = me.evalVI(approx, "beta")
-    # print(f"VI beta posterior mu: {vi_stats_beta['means']}")
-    # print(f"VI beta posterior sigma^2: {vi_stats_beta['stds'].square()}")
+    print(f"true ffx: {ds['ffx']}")
+    print(f"true noise variance: {noise_var:.3f}")
+    print(f"empirical noise variance: {ds['sigma_error_emp'][-1].square().squeeze():.3f}")
+    print(f"signal to noise ratio: {ds['snr']:.2f}")
+    print(f"random effects variances:\n{ds['S']}")
     
-    # vi_stats_rfx = me.evalVI(approx, "sigma_b")
-    # print(f"VI beta posterior mu: {vi_stats_rfx['means']}")
-    # print(f"VI beta posterior sigma^2: {vi_stats_rfx['stds'].square()}")
+    # VI Posterior
+    ffx_stats, rfx_stats, noise_stats = me.posteriorParams(ds['y'], ds['X'], ds['groups'], n_rfx, n_groups)
+    print(f"VI beta posterior mean: {ffx_stats['loc'].numpy()}")
+    print(f"VI beta posterior variance: {ffx_stats['scale'].square().numpy()}")
     
-    # # rfx
-    # print(f"random effects variances:\n{S}")
-    # print(f"random effects variances (empirical):\n{S_emp}")
-    # print(f"random effects:\n{rfx}")
-
-
 
