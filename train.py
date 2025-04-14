@@ -116,41 +116,7 @@ def load(model: nn.Module,
     return initial_iteration, global_step, validation_step, timestamp
 
 
-# -------- loss helpers
-# def chooseLossFn(target_type: str, posterior_type: str):
-#     loss_type = eval(f"cfg.loss_{target_type}")
-#     if loss_type == "mse":
-#         return eval(f"{posterior_type}MSE")
-#     elif loss_type == "logprob":
-#         return eval(f"{posterior_type}LogProb")
-#     else:
-#         raise ValueError(f'loss type: "{loss_type}" not found.')
-#
-
-def averageOverN(losses: torch.Tensor,
-                 n: int,
-                 b: int,
-                 depths: torch.Tensor,
-                 n_min: int = 0,
-                 weigh: bool = False) -> torch.Tensor:
-    ''' mask out first n_min losses per batch,
-    then calculate weighted average over n with higher emphasis on later n'''
-    # losses (b, n, d)
-    if cfg.tol == 0:
-        return losses.mean(dim=1)
-    if n_min == 0:
-        n_min = cfg.tol * depths.unsqueeze(1) # (b, 1)
-    denominators = n - n_min # (b, 1)
-    mask = torch.arange(n).expand(b, n) < n_min # (b, n)
-    losses[mask] = 0.
-    if weigh:
-        weights = torch.arange(0, 1, 1/n) + 1/n
-        weights = weights.sqrt().unsqueeze(0).unsqueeze(-1)
-        losses = losses * weights
-    losses = losses.sum(dim=1) / denominators
-    return losses # (batch, d)
-
-
+# -------- training and testing methods
 def maskLoss(losses: torch.Tensor,
              targets: torch.Tensor,
              pad_val: float = 0.) -> torch.Tensor:
@@ -160,133 +126,17 @@ def maskLoss(losses: torch.Tensor,
     mask = (targets != pad_val).float()
     masked_losses = losses * mask
     loss = masked_losses.sum() / mask.sum()
-    return loss # (,)
+    return loss
 
 
-# -------- methods for posteriors
-def discreteLossWrapper(outputs: Dict[str, torch.Tensor],
-                        targets: torch.Tensor,
-                        depths: torch.Tensor,
-                        target_type: str) -> torch.Tensor:
-    # calculate losses for all dataset sizes and each beta
-    logits = outputs[f"{target_type}_logits"]
-    b, n, d, _ = logits.shape
-    targets_exp = targets.unsqueeze(1).expand(b, n, d)
-    loss_type = eval(f"cfg.loss_{target_type}")
-    prop = dprop_normal if target_type == "ffx" else dprop_half_normal
-    losses = prop.loss(loss_type, targets_exp, logits)
-    return averageOverN(losses, n, b, depths)
 
 
-def mixLossWrapper(outputs: Dict[str, torch.Tensor], 
-                   target: torch.Tensor,
-                   depths: torch.Tensor,
-                   target_type: str) -> torch.Tensor:
-    # calculate losses for all dataset sizes and each beta
-    locs = outputs[f"{target_type}_loc"]
-    scales = outputs[f"{target_type}_scale"]
-    weights = outputs[f"{target_type}_weight"]
-    b, n, _, _ = locs.shape
-    if target_type == "rfx":
-        mask = (target == 0.).float()
-        target = (target + mask).log()
-    elif target_type == "noise":
-        target = target.log()
-    loss_type = eval(f"cfg.loss_{target_type}")
-    losses = mprop.loss(loss_type, locs, scales, weights, target, target_type)
-    return averageOverN(losses, n, b, depths)
 
 
-def discreteExamples(num_examples: int,
-                     ffx: torch.Tensor,
-                     outputs: Dict[str, torch.Tensor],
-                     printer: Callable) -> None:
-    for i in range(num_examples):
-        mask = (ffx[i] != 0.)
-        beta_i = ffx[i, mask].detach().numpy()        
-        logits_masked = outputs["ffx_logits"][..., mask, :]
-        mean = dprop_normal.mean(logits_masked)
-        var = dprop_normal.variance(logits_masked, mean)
-        mean_i = mean[i, -1].detach().numpy()
-        sd_i = var[i, -1].sqrt().detach().numpy()
-        printer(f"\n{console_width * '-'}")
-        printer(f"True : {beta_i}")
-        printer(f"Mean : {mean_i}")
-        printer(f"SD   : {sd_i}")
-        printer(f"{console_width * '-'}\n")
 
 
-def mixExamples(num_examples: int,
-                ffx: torch.Tensor,
-                outputs: Dict[str, torch.Tensor],
-                printer: Callable) -> None:
-    if num_examples == 0:
-        return
-    locs, scales, weights = outputs["ffx_loc"], outputs["ffx_scale"], outputs["ffx_weight"]
-    loc = mprop.mean(locs, scales, weights)
-    scale = mprop.variance(locs, scales, weights, loc).sqrt()
-    for i in range(num_examples):
-         mask = (ffx[i] != 0.)
-         beta_i = ffx[i, mask].detach().numpy()
-         mean_i = loc[i, -1, mask].detach().numpy()
-         std_i = scale[i, -1, mask].detach().numpy()
-         printer(f"\n{console_width * '-'}")
-         printer(f"True  : {beta_i}")
-         printer(f"Mean  : {mean_i}")
-         printer(f"SD    : {std_i}")
-         printer(f"{console_width * '-'}\n")
 
-
-# -------- training and testing methods
-def assembleNoiseInputs(y: torch.Tensor, X: torch.Tensor,
-                        outputs: Dict[str, torch.Tensor],
-                        posterior_type: str) -> Tuple[torch.Tensor, torch.Tensor]:
-    if posterior_type == "discrete":
-        logits = outputs["ffx_logits"]
-        loc = dprop_normal.mean(logits).detach()
-        scale = dprop_normal.variance(logits, loc).detach().sqrt()
-    elif posterior_type == "mixture":
-        locs = outputs["ffx_loc"]
-        scales = outputs["ffx_scale"]
-        weights = outputs["ffx_weight"]
-        loc = mprop.mean(locs, scales, weights).detach()
-        scale = mprop.variance(locs, scales, weights, loc).sqrt().detach()
     else:
-        raise ValueError(f"posterior type {posterior_type} not supported.")
-    y_pred = torch.sum(X * loc, dim=-1).unsqueeze(-1)
-    res = y - y_pred
-    return res, scale
-
-
-def locScaleWeights(outputs: torch.Tensor,
-                    prefix: str) -> Dict[str, torch.Tensor]:
-    loc = outputs[..., 0]
-    scale = outputs[..., 1].exp()
-    weights = nn.functional.softmax(outputs[..., 2], dim=-1)
-    return {f"{prefix}_loc": loc,
-            f"{prefix}_scale": scale,
-            f"{prefix}_weight": weights}
-
-
-def parseOutputs(outputs: torch.Tensor,
-                 posterior_type: str,
-                 c: int,
-                 target_type: str) -> Dict[str, torch.Tensor]:
-    b, n, d, _ = outputs.shape
-    outputs = outputs.reshape(b, n, d, c, -1)
-    if posterior_type == "discrete":
-        ffx_dict = {f"{target_type}_logits": outputs[..., 0]}
-        if outputs.shape[-1] == 1:
-            return ffx_dict
-        rfx_dict = {"rfx_logits": outputs[..., 1]}
-    elif posterior_type == "mixture":
-        ffx_dict = locScaleWeights(outputs[..., :3], target_type)
-        if outputs.shape[-1] == 3:
-            return ffx_dict
-        rfx_dict = locScaleWeights(outputs[..., 3:], "rfx")
-    else:
-        raise ValueError(f'posterior type "{posterior_type}" not supported.')
-    return {**ffx_dict, **rfx_dict}
 
 
 def run(models: tuple,
