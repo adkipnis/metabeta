@@ -1,11 +1,9 @@
 import math
-import numpy as np
 import torch
 from torch import distributions as D
-import pymc as pm
-import pytensor.tensor as pt
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Union
 from utils import symmetricMatrix2Vector, symmetricMatrixFromVector
+from alternatives import evalVI, fitFfxVI, fitMfxVI
 
 
 class Task:
