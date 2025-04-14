@@ -57,29 +57,28 @@ def genFfxTrainSet(batch_size: int, seed: int, include_posterior: bool = False) 
             'seed': seed}
     return {'data': data, 'info': info}
 
-def generateBalancedDataset(ds_type: str, n_draws_per: int, max_samples: int, max_predictors: int) -> Tuple[dict, list]:
-    ''' generateDataset but with balanced number of predictors for validation '''
+def genFfxValSet(repeats: int, seed: int, include_posterior: bool = False) -> dict:
+    ''' Generate a [batch_size] fixed effects model datasets with varying n and d. '''
+    # init
+    torch.manual_seed(seed)
     data = []
-    iterator = tqdm(range(max_predictors + 1))
-    iterator.set_description('Validation Set')
-    sigmas = torch.linspace(0.05, 1.5, steps=n_draws_per)
-    LinearModel = FixedEffects if ds_type == "ffx" else MixedEffects
-    info = []
 
-    for d in iterator:
-        q_range = range(d//2 + 1) if ds_type == "mfx" else range(1)
-        for q in q_range:
-            for i in range(n_draws_per):
-                torch.manual_seed(i)
-                sigma = sigmas[i] if cfg.fixed == 0. else cfg.fixed
-                m = 5 if ds_type == "mfx" else 1 # todo: vary number of groups
-                if cfg.scale_noise:
-                    sigma = sigma * sqrt(d + 1)
-                lm = LinearModel(d, sigma.item(), data_dist, q, m)
-                data += [lm.sample(max_samples, i, include_posterior=False)]
-                info += [{'d': d, 'q': q, 'sigma': sigma.item()}]
-    return {'data': data, 'max_samples': max_samples, 'max_predictors': max_predictors}, info
+    # presample hyperparams
+    d_full = [0, 1, 2, 4, 8]
+    n_full = [50, 30, 15]
+    sigma_full = D.HalfNormal(1.).icdf(torch.tensor([0.01, 0.25, 0.5, 0.75])).tolist()
+    combinations = list(itertools.product(d_full, n_full, sigma_full)) * repeats
+    d, n, sigma = zip(*combinations)
 
+    # sample datasets
+    for i in range(len(combinations)):
+        d_, n_, s_ = combinations[i]
+        lm = FixedEffects(s_, d_)
+        data += [lm.sample(n_, include_posterior=include_posterior)]
+    info = {'d': list(d), 'n': list(n), 'sigma': torch.tensor(sigma),
+            'max_d': cfg.max_d, 'max_n': cfg.max_n, 'max_sigma': cfg.max_sigma,
+            'seed': seed}
+    return {'data': data, 'info': info}
 
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate datasets for linear model task.')
