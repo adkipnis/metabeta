@@ -127,39 +127,28 @@ def setup() -> argparse.Namespace:
 if __name__ == "__main__":
     os.makedirs('data', exist_ok=True)
     cfg = setup()
-    ds_type = cfg.type
-    n_draws = cfg.n_draws
-    n_draws_val = cfg.n_draws_val
-    iterations = cfg.iterations
-    max_samples = cfg.max_samples
-    max_predictors = cfg.max_predictors
-    fixed = cfg.fixed
-    start = cfg.begin
-    seed = n_draws_val + 1
-    data_dist = D.Uniform(0., 1.)
+    genTrainSet = genMfxTrainSet if cfg.type == 'mfx' else genFfxTrainSet
+    genValSet = genMfxValSet if cfg.type == 'mfx' else genFfxValSet
+    part = 0
+    
+    # generate validation dataset
+    if cfg.begin == 0:
+        print(f'Generating validation set...')
+        ds_val = genValSet(10, 0, include_posterior = cfg.type=='ffx')
+        fn = dsFilename(cfg.type, 'val', cfg.max_d, cfg.max_n, len(ds_val['data']), 0)
+        torch.save(ds_val, fn)
+        print(f'Saved validation dataset to {fn}')
+        cfg.begin += 1
 
-    if start == 0:
-        # generate validation dataset
-        print(f'Generating {ds_type} validation dataset...')
-        dataset, info = generateBalancedDataset(ds_type, n_draws_val, max_samples, max_predictors)
-        print(f'Number of samples: {len(dataset["data"])}')
-        filename = dsFilenameVal(ds_type, max_predictors, max_samples, fixed)
-        filename_info = dsFilenameVal(ds_type, max_predictors, max_samples, fixed, '_info')
-        torch.save(dataset, filename)
-        torch.save(info, filename_info)
-        start += 1
-    else:
-        seed += (start - 1) * n_draws
-
-    if iterations == 0:
+    # potentially stop after that
+    if cfg.iterations == 0:
         exit()
-
+    
     # generate training datasets
-    print(f'Generating {iterations} training datasets of {n_draws} samples each')
-    sower = Sower(seed)
-    for part in range(start, iterations + 1):
-        dataset = generateDataset(ds_type, n_draws, max_samples, max_predictors, sower)
-        filename = dsFilename(ds_type, max_predictors, max_samples, fixed, n_draws, part)
-        torch.save(dataset, filename)
-        print(f'Saved dataset to {filename}')
+    print(f'Generating {cfg.iterations} training partitions of {cfg.bs_train} datasets each')
+    for part in range(cfg.begin, cfg.iterations + 1):
+        ds_train = genTrainSet(cfg.bs_train, part)
+        fn = dsFilename(cfg.type, 'train', cfg.max_d, cfg.max_n, cfg.bs_train, part)
+        torch.save(ds_train, fn)
+        print(f'Saved dataset to {fn}')
 
