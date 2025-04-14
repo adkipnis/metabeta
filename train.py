@@ -162,10 +162,35 @@ def kldMarginal(mean_a: torch.Tensor, var_a: torch.Tensor,
     return kl_elements.sum(dim=-1)
 
 
+def compareWithAnalytical(batch: dict, outputs: torch.Tensor,
+                          marginal: bool = True, save: bool = True) -> torch.Tensor:
+    loc_proposed, scale_proposed = model.interpreter.getLocScale(outputs)
+    var_proposed = scale_proposed.square()   
 
+    # get analytical posterior (posterior mean vector and covariance matrix)
+    ffx = batch['optimal']['ffx']
+    loc_analytical = ffx['mu'].float().squeeze(-1)
+    Sigma_analytical = ffx["Sigma"].float()
 
+    # correct for noise
+    sigma_error = batch["sigma_error"].float()
+    Sigma_analytical = sigma_error.square().unsqueeze(-1).unsqueeze(-1) * Sigma_analytical
 
+    # get KL divergences
+    if marginal:
+        var_analytical = torch.diagonal(Sigma_analytical, dim1=-2, dim2=-1)
+        losses = kldMarginal(loc_analytical, var_analytical,
+                             loc_proposed, var_proposed)
     else:
+        Sigma_proposed = torch.diag_embed(var_proposed)
+        losses = kldFull(loc_analytical, Sigma_analytical,
+                             loc_proposed, Sigma_proposed)
+        
+    # optionally save outputs
+    if save:
+        fname = Path(pred_path, f"kld_i={iteration}.pt")
+        torch.save(losses, fname)
+    return losses
 
 
 def run(models: tuple,
