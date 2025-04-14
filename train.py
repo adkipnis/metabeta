@@ -2,20 +2,21 @@ import os
 from pathlib import Path
 import csv
 from datetime import datetime
-from typing import Tuple, Callable, Union, Dict
+from typing import Tuple, Callable, Dict
 from tqdm import tqdm
 import argparse
+
 import torch
 import torch.nn as nn
 from torch import distributions as D
 from torch.utils.tensorboard import SummaryWriter # type: ignore
 from torch.utils.data import DataLoader
 import schedulefree
-from utils import dsFilename, dsFilenameVal
-from dataset import LMDataset
-from models import TransformerEncoder, TransformerDecoder
-from proposal import DiscreteProposal, MixtureProposal, normalBins, halfNormalBins
-mse = nn.MSELoss(reduction='none')
+
+from utils import dsFilename
+from dataset import LMDataset, FlatDataset
+from models import build
+
 
 # -------- miscellaneous
 class Logger:
