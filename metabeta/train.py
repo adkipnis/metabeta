@@ -105,3 +105,22 @@ def load(model: nn.Module,
 
 
 # -----------------------------------------------------------------------------
+# the bread and butter
+def run(model: Approximator,
+        batch: dict,
+        example_indices = [],
+        printer: Callable = print,
+        sample: bool = False,
+        device: str = 'cpu',
+        ) -> Dict[str, torch.Tensor]:
+    ''' Run a batch through the model and return the loss. '''
+    # optionally cast batch to device
+    if device != 'cpu':
+        batch = {key: tensor.to(device) for key, tensor in batch.items()}
+    # forward pass
+    loss, proposed, summary = model(batch, sample=sample, local=cfg.local)
+    # optionally print some examples
+    model.examples(example_indices, batch, proposed, printer, console_width)
+    return {'loss': loss, 'proposed': proposed, 'summary': summary}
+
+
