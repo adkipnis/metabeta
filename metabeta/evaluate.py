@@ -442,3 +442,13 @@ def unfold(model: Approximator, full: dict, batch_idx: int) -> None:
         plotOverN(quantiles, *model.targets(batch))
 
 
+# -----------------------------------------------------------------------------
+# main functions
+
+def load(model: Approximator, iteration: int) -> None:
+    model_path = Path('outputs', 'checkpoints', modelID(cfg))
+    fname = Path(model_path, f"checkpoint_i={iteration}.pt")
+    state = torch.load(fname, weights_only=False)
+    model.load_state_dict(state["model_state_dict"])
+
+
