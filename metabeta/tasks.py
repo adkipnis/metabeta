@@ -191,3 +191,55 @@ class MixedEffects(Task):
         return out
  
 
+# =============================================================================
+if __name__ == "__main__":
+    seed = 1
+    torch.manual_seed(seed)
+    noise_var = D.HalfNormal(1.).sample((1,)).square().item()
+    n_ffx = 2
+    n_obs = 50
+    
+    # -------------------------------------------------------------------------
+    # fixed effects
+    print("fixed effects example\n----------------------------")
+    fe = FixedEffects(sigma_error=sqrt(noise_var), n_ffx=n_ffx)
+    ds = fe.sample(n_obs, include_posterior=True)
+    print(f"true ffx: {ds['ffx']}")
+    print(f"true noise variance: {noise_var:.3f}")
+    print(f"signal to noise ratio: {ds['snr']:.2f}")
+    
+    
+    # analytical posterior
+    post = ds['analytical']
+    print(f"posterior mean: {post['ffx']['mu']}")
+    print(f"posterior (margial) variance: {torch.diagonal(post['ffx']['Sigma'], dim1=-1, dim2=-2)}")
+    print(f"posterior a: {post['noise']['alpha']:.1f}")
+    print(f"posterior b: {post['noise']['beta']:.3f}")
+    
+
+    # noise variance
+    eps = ds['y'] - ds['X'] @ ds['ffx']
+    noise_var_ml = 1/(n_obs - n_ffx - 1) * torch.dot(eps, eps)
+    expected_noise_var = torch.distributions.inverse_gamma.InverseGamma(post['noise']['alpha'], post['noise']['beta']).mean
+    print(f"true error variance: {noise_var:.3f}")
+    print(f"ML estimate: {noise_var_ml:.3f}")
+    print(f"EAP estimate: {expected_noise_var:.3f}")
+
+
+    # -------------------------------------------------------------------------
+    # mixed effects
+    print("\nmixed effects example\n----------------------------")
+
+    n_obs = [50, 40, 30]
+    sigmas_rfx = torch.tensor([1.0, 0.5])
+    n_rfx = 2
+    n_groups = 3
+    me = MixedEffects(sigma_error=sqrt(noise_var), sigmas_rfx=sigmas_rfx,
+                      n_ffx=n_ffx, n_rfx=n_rfx, n_groups=n_groups, n_obs=n_obs)
+    ds = me.sample()
+
+    print(f"true ffx: {ds['ffx']}")
+    print(f"true noise variance: {noise_var:.3f}")
+    print(f"signal to noise ratio: {ds['snr']:.2f}")
+    print(f"random effects variances:\n{ds['sigmas_rfx']}")
+
