@@ -173,3 +173,27 @@ def boundECDF(n_ranks: int, n_sim: int = 1000, alpha: float = 0.05):
     upper = binom.ppf(1 - alpha / 2, n_sim, p) / n_sim - p
     return p, lower, upper
 
+def plotECDF(ranks: torch.Tensor, names: list, color='darkgreen') -> None:
+    eps = 0.02
+    n = len(names)
+    w = int(torch.tensor(n).sqrt().ceil())
+    xx_theo, lower, upper = boundECDF(len(ranks))
+    _, axs = plt.subplots(figsize=(8 * w, 6 * w), ncols=w, nrows=w)
+    axs = axs.flatten()
+    for i, name in enumerate(names):              
+        ax = axs[i]
+        ax.set_axisbelow(True)
+        ax.grid(True)
+        xx = ranks[:, i].sort()[0].numpy()
+        xx = np.pad(xx, (1, 1), constant_values=(0, 1))
+        yy = np.linspace(0, 1, num=xx.shape[-1]) - xx
+        ax.plot(xx, yy, color=color, label='sample')
+        ax.fill_between(xx_theo, lower, upper, color=color, alpha=0.1, label='theoretical')
+        ax.set_xlim(0-eps,1+eps)
+        ax.set_xlabel('U', fontsize=20)
+        ax.set_ylabel(r'$\Delta$ ECDF')
+        # ax.tick_params(axis='y', labelcolor='w')
+        ax.set_title(names[i])
+        ax.legend()
+    for i in range(n, w*w):
+        axs[i].set_visible(False)
