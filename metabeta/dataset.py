@@ -53,3 +53,56 @@ class LMDataset(Dataset):
            raise ValueError(f'Unsupported fx type {self.fx_type} for preprocessing')
 
 
+    def preprocessFfx(self, item: dict) -> dict:
+        length = self.n_max
+        width = self.d_max + 1 # add bias term
+
+        # pad inputs
+        y = padTensor(item['y'], (length,)).unsqueeze(-1)
+        X = padTensor(item['X'], (length, width))
+
+        # pad targets
+        ffx = padTensor(item['ffx'], (width,))
+        sigma_error = item['sigma_error']
+
+        # optinally permute
+        if self.permute:
+            idx = self.getPermutation(width)
+            X = X[..., idx]
+            ffx = ffx[idx]
+
+        # masks
+        mask_n = (y != 0.).squeeze()
+        mask_d = (ffx != 0.).squeeze()
+
+        # outputs
+        out = {'n': item['n'], 'd': item['d'],
+               'y': y, 'X': X,
+               'ffx': ffx,
+               'sigma_error': sigma_error,
+               'mask_n': mask_n, 'mask_d': mask_d,
+               }
+
+        # optionally include analytical posterior
+        if 'analytical' in item:
+            _analytical = item['analytical']
+            _ffx = _analytical['ffx']
+            mu = padTensor(_ffx['mu'], (width,))
+            Sigma = padTensor(_ffx['Sigma'], (width, width))
+            if self.permute:
+                mu = mu[idx] # type: ignore
+                Sigma = Sigma[idx][..., idx] # type: ignore
+            _ffx.update({'mu': mu, 'Sigma': Sigma})
+            out.update({'analytical': _analytical})
+        
+        # optionally include mcmc posterior
+        if 'mcmc' in item:
+            _mcmc = item['mcmc']
+            _ffx = padTensor(_mcmc['ffx'], (width, 4000))
+            _sigma_error = _mcmc['sigma_error']
+            if self.permute:
+                _ffx = _ffx[idx]
+            out['mcmc'] = {'global': torch.cat([_ffx, _sigma_error])}
+        return out
+
+
