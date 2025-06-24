@@ -124,3 +124,51 @@ def run(model: Approximator,
     return {'loss': loss, 'proposed': proposed, 'summary': summary}
 
 
+def train(model: Approximator,
+          optimizer: torch.optim.Optimizer | schedulefree.AdamWScheduleFree,
+          dl: DataLoader,
+          step: int) -> int:
+    iterator = tqdm(dl, desc=f'iteration {iteration:02d}/{cfg.iterations:02d} [T]')
+    running_sum = 0.
+    model.train()
+    optimizer.train()
+    for i, batch in enumerate(iterator):
+        optimizer.zero_grad()
+        results = run(model, batch, sample=False, device=device.type)
+        loss = results['loss'].mean()
+        loss.backward()
+        clip_grad_norm_(model.parameters(), max_norm=1.5)
+        optimizer.step()
+        running_sum += loss.item()
+        loss_train = running_sum / (i+1)
+        iterator.set_postfix_str(f'loss: {loss_train:.3f}')
+        logger.write(iteration, step, loss_train, 'loss_train')
+        step += 1
+    model.eval()
+    optimizer.eval()
+    return step
+
+
+def validate(model: Approximator, dl: DataLoader, step: int) -> int:
+    iterator = tqdm(dl, desc=f'iteration {iteration:02d}/{cfg.iterations:02d} [V]')
+    if step % 10 == 0:
+        example_indices = range(3)
+        printer = iterator.write
+        sample = True
+    else:
+        example_indices = []
+        printer = print
+        sample = False
+    with torch.no_grad():
+        model = model.to('cpu')
+        for batch in iterator:
+            results = run(model, batch, example_indices, printer, sample=sample, device='cpu')
+            loss_val = results['loss'].mean().item()
+            iterator.set_postfix_str(f'loss: {loss_val:.3f}')
+            logger.write(iteration, step, loss_val, 'loss_val')
+            stopper.update(loss_val)
+            step += 1
+        model = model.to(device)
+    return step
+
+
