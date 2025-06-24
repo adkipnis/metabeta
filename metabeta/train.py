@@ -172,3 +172,45 @@ def validate(model: Approximator, dl: DataLoader, step: int) -> int:
     return step
 
 
+###############################################################################
+
+def setup() -> argparse.Namespace:
+    ''' Parse command line arguments. '''
+    parser = argparse.ArgumentParser()
+
+    # misc
+    parser.add_argument("-s", "--seed", type=int, default=42, help="Model seed")
+    parser.add_argument("--device", type=str, default="mps", help="Device to use [cpu, cuda, mps]")
+    parser.add_argument("--cores", type=int, default=4, help="Nubmer of processor cores to use (default = 4)")
+    parser.add_argument("-p", "--preload", type=int, default=0, help="Preload model from iteration #p")
+
+    # data & training
+    parser.add_argument("-t", "--fx_type", type=str, default="ffx", help="Type of dataset [ffx, mfx] (default = ffx)")
+    parser.add_argument("-d", type=int, default=1, help="Number of fixed effects (without bias, default = 1)")
+    parser.add_argument("-m", type=int, default=0, help="Maximum number of groups (default = 0).")
+    parser.add_argument("-n", type=int, default=50, help="Maximum number of samples per group (default = 50).")
+    parser.add_argument("-i", "--iterations", type=int, default=10, help="Maximum number of iterations to train (default = 50)")
+    parser.add_argument("--permute", action='store_false', help="Permute slope variables for uniform learning across heads (default = True)")
+    parser.add_argument("--patience", type=int, default=5, help="Maximum number of iterations without improvement before Early Stopping (default = 5)")
+    parser.add_argument("--local", action='store_false', help="Infer local variables (default = True)")
+    parser.add_argument("-b", "--batch-size", type=int, default=50, help="Batch size (default = 50)")
+    parser.add_argument("--lr", type=float, default=5e-4, help="Learning rate (Adam, default = 5e-4)")
+
+    # model
+    parser.add_argument("--emb_type", type=str, default="joint", help="Embedding architecture [joint, separate, sequence] (default = joint)")
+    parser.add_argument("--sum_type", type=str, default="poolformer", help="Summarizer architecture [deepset, poolformer] (default = deepset)")
+    parser.add_argument("--post_type", type=str, default="flow-affine", help="Posterior architecture [point, discrete, mixture, flow-affine, flow-spline, flow-matching] (default = flow)")
+    parser.add_argument("--bins", type=int, default=500, help="Number of bins in discrete posterior (default = 500)")
+    parser.add_argument("--components", type=int, default=3, help="Number of mixture components (default = 3)")
+    parser.add_argument("--flows", type=int, default=3, help="Number of normalizing flow blocks (default = 3)")
+    parser.add_argument("--dropout", type=float, default=0.01, help="Dropout rate (default = 0.01)")
+    parser.add_argument("--act", type=str, default="Mish", help="Activation funtction [anything implemented in torch.nn] (default = GELU)")
+    parser.add_argument("--hidden", type=int, default=64, help="Hidden dimension (default = 64)")
+    parser.add_argument("--ff", type=int, default=128, help="Feedforward dimension (default = 128)")
+    parser.add_argument("--out", type=int, default=32, help="Summary dimension (default = 32)")
+    parser.add_argument("--blocks", type=int, default=3, help="Number of blocks in summarizer (default = 3)")
+    parser.add_argument("--heads", type=int, default=8, help="Number of heads (poolformer, default = 8)")
+    
+    return parser.parse_args()
+
+
