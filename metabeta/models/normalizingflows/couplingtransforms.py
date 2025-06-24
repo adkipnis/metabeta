@@ -85,3 +85,54 @@ class Affine(CouplingTransform):
 
 
 
+class RationalQuadratic(CouplingTransform):
+    # rewrite of code in https://github.com/bayesiains/nflows
+    def __init__(
+        self,
+        # paramap 
+        split_dims: List[int] | Tuple[int, int],
+        d_context: int = 0,
+        net_kwargs: dict = {},
+        num_bins: int = 10,
+        tail_bound: float = 10.0,
+        min_val: float = 1e-3,
+        net_type: str = 'residual' # ['mlp', 'residual']
+    ):
+        super().__init__()
+        self.d_out = split_dims[1]
+
+        # MLP Paramap
+        if net_type == 'mlp':
+            kwargs = net_kwargs.copy()
+            kwargs.update({
+                'd_input': split_dims[0] + d_context,
+                'd_output': split_dims[1] * (3 * num_bins - 1),
+                'd_hidden': (net_kwargs['d_hidden'],) * net_kwargs['n_blocks'],
+            })
+            self.paramap = MLP(**kwargs)
+            self.d_ff = kwargs['d_hidden'][-1]
+        # Residual Paramap
+        elif net_type == 'residual':
+            net_kwargs.update({
+                'd_input': split_dims[0],
+                'd_output': split_dims[1] * (3 * num_bins - 1),
+                'd_context': d_context,
+            })
+            self.paramap = ResidualNet(**net_kwargs)
+            self.d_ff = net_kwargs['d_hidden']
+        else:
+            raise NotImplementedError(f'{net_type} must be either mlp or residual')
+
+        # spline args
+        if min_val * num_bins > 1.0:
+            raise ValueError("Minimal bin width too large for the number of bins")
+        if min_val * num_bins > 1.0:
+            raise ValueError("Minimal bin height too large for the number of bins")
+        self.num_bins = num_bins
+        self.tail_bound = tail_bound
+        self.min_bin_width = min_val
+        self.min_bin_height = min_val
+        self.min_derivative = min_val
+        self.tail_constant = np.log(np.exp(1 - self.min_derivative) - 1)
+
+
