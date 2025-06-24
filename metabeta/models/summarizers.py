@@ -194,3 +194,64 @@ class TFE(nn.Module):
         return self.net(x, src_key_padding_mask=padding_mask)
 
 
+class PoolFormer(Summarizer):
+    def __init__(self,
+                 d_model: int,
+                 d_ff: int,
+                 d_output: int,
+                 depth: int = 2,
+                 n_heads: int = 4,
+                 n_blocks: int = 2,
+                 dropout: float = 0.01,
+                 activation: str = 'GELU',
+                 ):
+        super().__init__()
+        self.d_output = d_output
+        self.enc = TFE(d_model, d_ff, n_heads, n_blocks,
+                       dropout=dropout, activation=activation)
+        self.pma = PMA(d_model, (d_ff,)*depth, n_heads,
+                       dropout=dropout, activation=activation)
+        self.out = nn.Linear(d_model, d_output)
+        
+    def prepareMask(self, mask: torch.Tensor):
+        mask = ~mask.bool()
+        if mask.dim() > 2:
+            b, m, n = mask.shape
+            mask = mask.view(b*m, n)
+        non_empty = ~mask.all(dim=1)
+        idx = non_empty.nonzero(as_tuple=True)[0]
+        mask = mask[idx]
+        return mask, idx
+    
+    def prepareX(self, x: torch.Tensor, idx: torch.Tensor | None = None):
+        if x.dim() > 3:
+            b, m, n, d = x.shape
+            x = x.view(b*m, n, d)
+        if idx is not None:
+            x = x[idx]
+        return x
+    
+    def postProcess(self, h, x, idx: torch.Tensor | None = None):
+        if x.dim() == 3:
+            return h
+        b, m, _, _ = x.shape
+        if idx is not None:
+            h_ = torch.zeros((b*m, self.d_output), device=x.device)
+            h_[idx] = h
+        else:
+            h_ = h
+        out = h_.view(b, m, -1)
+        return out
+    
+    def forward(self, x, mask=None):
+        mask_, idx = None, None
+        if mask is not None:
+            mask_, idx = self.prepareMask(mask)
+        x_ = self.prepareX(x, idx)
+        h = self.enc(x_, mask_)
+        h = self.pma(h, mask_).squeeze(-2)
+        h = self.out(h)
+        out = self.postProcess(h, x, idx)
+        return out
+
+
