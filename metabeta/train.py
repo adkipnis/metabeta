@@ -17,3 +17,31 @@ from metabeta.models.approximators import Approximator, ApproximatorFFX#, Approx
 from metabeta.utils import setDevice, dsFilename, getConsoleWidth, modelID, getDataLoader
 
 
+# -----------------------------------------------------------------------------
+# logging
+class Logger:
+    def __init__(self, path: Path) -> None:
+        self.trunk = path
+        self.trunk.mkdir(parents=True, exist_ok=True)
+        self.init('loss_train')
+        self.init('loss_val')
+        self.tb = SummaryWriter(log_path)
+
+    def init(self, losstype: str) -> None:
+        fname = Path(self.trunk, f'{losstype}.csv')
+        if not os.path.exists(fname):
+            with open(fname, 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['iteration', 'step', 'loss'])
+
+    def write(self, iteration: int,
+              step: int,
+              loss: float,
+              losstype: str) -> None:
+        self.tb.add_scalar(losstype, loss, step)
+        fname = Path(self.trunk, f'{losstype}.csv')
+        with open(fname, 'a', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow([iteration, step, loss])
+
+
