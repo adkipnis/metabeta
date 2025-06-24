@@ -63,3 +63,20 @@ class FlowMatching(nn.Module):
         t = torch.rand(batch_size)
         return t.pow(1. / (1. + self.alpha))
 
+    def loss(self, theta_1: torch.Tensor, context: torch.Tensor|None = None, mask=None) -> torch.Tensor:
+        # sample time and theta_0
+        b = len(theta_1)
+        t = self.sampleTime(b).to(theta_1.device).unsqueeze(-1)
+        theta_0 = torch.randn(b, self.d_theta, device=theta_1.device)
+        if mask is not None:
+            theta_0 = theta_0 * mask
+
+        # get theta as convex combination
+        theta = t * theta_1 + (1 - t) * theta_0
+
+        # predict true vector field and calculate MSE loss
+        field_true = theta_1 - theta_0
+        field_pred = self.forward(t, theta, context, mask)
+        loss = mse(field_true, field_pred)
+        return loss
+
