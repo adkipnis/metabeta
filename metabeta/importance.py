@@ -62,3 +62,33 @@ def importanceSample(batch: dict, proposed: dict) -> Dict[str, torch.Tensor]:
             'sample_efficiency': sample_efficiency}
 
 
+# =============================================================================
+if __name__ == "__main__":
+    from torch.utils.data import DataLoader
+    from metabeta.utils import dsFilename
+    from metabeta.dataset import LMDataset
+    import numpy as np
+    np.set_printoptions(suppress=True)
+
+    # load data
+    b = 250
+    d = 1
+    fn = dsFilename('ffx', 'test', d, 0, 50, b, -1)
+    ds_raw = torch.load(fn, weights_only=False)
+    ds = LMDataset(**ds_raw)
+    dl = DataLoader(ds, batch_size=b, shuffle=False)
+    batch = first_batch = next(iter(dl))
+ 
+    # IS
+    s = 10
+    beta_ = batch['ffx'].unsqueeze(-1)
+    sample_noise = D.Normal(0, 0.1).sample((b, d+1, s))
+    beta = beta_ + sample_noise
+    sigma = batch['sigma_error'].unsqueeze(-1).unsqueeze(-1).expand((b, 1, s))
+    
+    ll = logLikelihood(beta, sigma, batch)
+    lp = logPrior(beta, sigma, batch['mask_d'])
+    log_q = D.Normal(beta_, 0.1).log_prob(beta).sum(1, keepdim=True)
+    
+    w = getImportanceWeights(ll, lp, log_q)
+
