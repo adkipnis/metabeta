@@ -130,3 +130,44 @@ def setup() -> argparse.Namespace:
     return parser.parse_args()
 
 
+if __name__ == "__main__":
+    os.makedirs('data', exist_ok=True)
+    cfg = setup()
+    generate = genMFX if cfg.type == 'mfx' else genFFX
+    part = 0
+    
+    # generate test dataset
+    if cfg.begin == -1:
+        print('Generating test set...')
+        ds_test = generate(250, -42, mcmc=True)
+        fn = dsFilename(
+            cfg.type, 'test', ds_test['info']['max_d'], ds_test['info']['max_m'],
+            ds_test['info']['max_n'], 250, -1)
+        torch.save(ds_test, fn)
+        print(f'\nSaved test dataset to {fn}')
+        exit()
+    
+    # generate validation dataset
+    if cfg.begin == 0:
+        print('Generating validation set...')
+        ds_val = generate(500, 0, mcmc=False)
+        fn = dsFilename(
+            cfg.type, 'val', ds_val['info']['max_d'], ds_val['info']['max_m'],
+            ds_val['info']['max_n'], len(ds_val['data']), 0)
+        torch.save(ds_val, fn)
+        print(f'\nSaved validation dataset to {fn}')
+        cfg.begin += 1
+
+    # potentially stop after that
+    if cfg.iterations == 0:
+        exit()
+    
+    # generate training datasets
+    print(f'Generating {cfg.iterations} training partitions of {cfg.bs_train} datasets each')
+    for part in range(cfg.begin, cfg.iterations + 1):
+        ds_train = generate(cfg.bs_train, part, analytical=False)
+        fn = dsFilename(cfg.type, 'train', ds_train['info']['max_d'], ds_train['info']['max_m'], ds_train['info']['max_n'], cfg.bs_train, part)
+        torch.save(ds_train, fn)
+        print(f'Saved dataset to {fn}')
+
+
