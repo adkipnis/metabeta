@@ -128,3 +128,66 @@ class FixedEffects(Task):
         b_i = self._posteriorB(y, mu_i, L_i)
         return mu_i, S_i, a_i, b_i
 
+# -----------------------------------------------------------------------------
+# MFX
+class MixedEffects(Task):
+    def __init__(self,
+                 sigma_error: Union[float, torch.Tensor],
+                 sigmas_rfx: torch.Tensor,
+                 n_ffx: int,
+                 n_rfx: int,
+                 n_groups: int,
+                 n_obs: List[int],
+                 ):
+        super().__init__(sigma_error, n_ffx)
+        self.q = n_rfx
+        self.m = n_groups 
+        self.n_i = torch.tensor(n_obs) # per group
+        assert sigmas_rfx.shape[0] == n_rfx, "mismatch between rfx and provided variances"
+        assert len(self.n_i) == self.m, "mismatch between number of groups and individual observations"
+        self.sigmas_rfx = sigmas_rfx
+
+    def _sampleRfx(self) -> torch.Tensor:
+        b = torch.randn((self.m, self.q))
+        b = b / torch.std(b, dim=0)
+        sigmas = self.sigmas_rfx.unsqueeze(0)
+        return b * sigmas
+
+    def sample(self, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
+        if include_posterior:
+            raise NotImplementedError('posterior inference not implemented for MFX')
+        n_samples = self.n_i.sum()
+        
+        # fixed effects and noise
+        X = self._sampleFeatures(n_samples)
+        X = self._addIntercept(X)
+        ffx = self._sampleFfx()
+        eps = self._sampleError(n_samples)
+
+        # random effects and target
+        groups = torch.repeat_interleave(torch.arange(self.m), self.n_i)
+        b = self._sampleRfx() # (m, q)
+        B = b[groups] # (n, q)
+        Z = X[:,:self.q]
+        eta = X @ ffx 
+        y = eta + (Z * B).sum(dim=-1) + eps
+        snr = self.signalToNoiseRatio(y, eta)
+
+        # outputs
+        out = {"X": X, # (n, d)
+               "y": y, # (n,)
+               "groups": groups, # (n,)
+               "ffx": ffx, # (d,)
+               "rfx": b, # (m, q)
+               "sigmas_rfx": self.sigmas_rfx, # (q,)
+               "sigma_error": self.sigma_error, # (1,)
+               "snr": snr,
+               "n": n_samples, # (1,)
+               "n_i": self.n_i, # (m,)
+               "m": torch.tensor(self.m), # (1,)
+               "d": torch.tensor(self.d), # (1,)
+               "q": torch.tensor(self.q), # (1,)
+               }
+        return out
+ 
+
