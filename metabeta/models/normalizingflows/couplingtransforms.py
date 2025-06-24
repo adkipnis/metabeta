@@ -146,3 +146,16 @@ class RationalQuadratic(CouplingTransform):
         return idx 
 
 
+    def propose(self, x1, condition=None):
+        # get parameters
+        parameters = self.paramap(x1, condition)
+        parameters = parameters.reshape(*x1.shape[:-1], self.d_out, -1)
+
+        # partition parameters
+        k = self.num_bins
+        raw_widths = parameters[..., :k] / np.sqrt(self.d_ff)
+        raw_heights = parameters[..., k:2*k] / np.sqrt(self.d_ff)
+        raw_derivs = parameters[..., 2*k:]
+        return dict(raw_widths=raw_widths, raw_heights=raw_heights, raw_derivs=raw_derivs)
+
+
