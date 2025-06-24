@@ -335,3 +335,22 @@ def compareWithAnalytical(batch: dict,
     return kld
 
 
+def plotOverT(time: torch.Tensor, losses: torch.Tensor,
+              q: list = [.025, .500, .975], kl: bool = False):
+    # time: (n_iter) losses: (n_iter, batch)
+    # center = losses.mean(-1)
+    # std = losses.std(-1)
+    # lower, upper = center - std, center + std
+    lower = torch.quantile(losses, q[0], dim=-1)
+    center = torch.quantile(losses, q[1], dim=-1)
+    upper = torch.quantile(losses, q[2], dim=-1)
+    _, ax = plt.subplots(figsize=(8, 6))
+    ax.plot(time, center, color='darkgreen')
+    ax.fill_between(time, lower, upper, color='darkgreen', alpha=0.3)
+    # ax.set_xticks(time)
+    ax.set_xlabel('datasets [10k]')
+    ylabel = 'D(Optimal | Model)' if kl else '-log p(theta)'
+    ax.set_ylabel(ylabel)
+    ax.grid(True) 
+
+
