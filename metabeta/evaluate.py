@@ -401,3 +401,44 @@ def subsetMFX(batch: dict, batch_idx: int = 0) -> dict:
     return ds
 
 
+def plotOverN(quantiles: torch.Tensor, targets: torch.Tensor, names) -> None:
+    # prepare targets and quantiles
+    if quantiles.shape[1] == targets.shape[1] + 1:
+        quantiles = quantiles[:, :-1]
+    target = targets[0]
+    mask = (target != 0.)
+    target_ = target[mask]
+    quantiles_ = quantiles[:, mask]
+    names_ = names[mask.numpy()]
+
+    # prepare colors and x axiscolors = [cmap(i) for i in range(cmap.N)]
+    d = int(mask.sum())
+    ns = torch.arange(1, quantiles.shape[0]+1)
+    min_val = float(torch.tensor([quantiles.min(), quantiles.min()]).min())
+    max_val = float(torch.tensor([quantiles.max(), quantiles.max()]).max())
+
+    _, ax = plt.subplots(figsize=(8, 6))
+    for i in range(d):
+        color = colors[i]
+        quantiles_i = quantiles_[:, i]
+        ax.plot(ns, quantiles_i[..., 1], label=names_[i], color=color)
+        ax.fill_between(ns, quantiles_i[..., 0], quantiles_i[..., 2],
+                        color=color, alpha=0.15)
+        ax.axhline(y=target_[i], color=color, linestyle=':', linewidth=1.5) # type: ignore
+
+    # Adding labels and title
+    ax.set_xlabel('n')  # X-axis label
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.set_ylim(max(-7.5, min_val), min(7.5, max_val))
+    ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    ax.grid(True)
+
+
+def unfold(model: Approximator, full: dict, batch_idx: int) -> None:
+        subset = subsetMFX if cfg.fx_type == 'mfx' else subsetFFX
+        batch = subset(full, batch_idx)
+        _, proposed, _ = model(batch, sample=True)
+        quantiles = model.quantiles(proposed['global'], [.025, .500, .975])
+        plotOverN(quantiles, *model.targets(batch))
+
+
