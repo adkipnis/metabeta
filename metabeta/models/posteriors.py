@@ -569,3 +569,25 @@ class CouplingPosterior(FlowPosterior):
             return self.cf.sample(n, context=summary, mask=mask, log_prob=log_prob)
 
 
+class MatchingPosterior(FlowPosterior):
+    def __init__(self,
+                 d_model: int,
+                 d_data: int,
+                 net_kwargs: dict = {},
+                 fx_type: str = 'mfx'
+                 ):
+        super().__init__(d_data, fx_type)
+        self.cf = FlowMatching(d_data, d_context=d_model, **net_kwargs)
+        self.int_method = 'dopri5'
+        self.n_steps = 100
+
+    def loss(self, summary, targets, mask=None):
+        losses = self.cf.loss(targets, context=summary, mask=mask)
+        return maskLoss(losses, targets)
+ 
+    def sample(self, summary: torch.Tensor, mask=None, n: int = 100, log_prob=False):
+        with torch.no_grad():
+            return self.cf.sample(n, context=summary, mask=mask,
+                                  method=self.int_method, n_steps=self.n_steps)
+
+
