@@ -301,3 +301,17 @@ def kldFull(mean_lin: torch.Tensor, Sigma_lin: torch.Tensor,
     return losses
 
 
+def kldMarginal(mean_lin: torch.Tensor, var_lin: torch.Tensor,
+                mean_prop: torch.Tensor, var_prop: torch.Tensor,
+                eps: float = 1e-8) -> torch.Tensor:
+    ''' vectorized version for KLD between two MVNs with diagonal variance '''
+    mask = (mean_lin != 0).float()
+    var_prop = var_prop + eps
+    var_lin = var_lin + eps
+    term1 = (mean_lin - mean_prop).square() / var_prop
+    term2 = var_lin / var_prop
+    term3 = var_prop.log() - var_lin.log()
+    kl = 0.5 * (term1 + term2 + term3 - 1.) * mask
+    return kl.sum(dim=-1)
+
+
