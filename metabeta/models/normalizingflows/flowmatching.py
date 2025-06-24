@@ -80,3 +80,49 @@ class FlowMatching(nn.Module):
         loss = mse(field_true, field_pred)
         return loss
 
+    def _evalVF(self, t: float, theta_t: torch.Tensor, context: torch.Tensor|None = None, mask=None):
+        t_ = t * torch.ones(*theta_t.shape[:-1], device=theta_t.device).unsqueeze(-1)
+        return self.forward(t_, theta_t, context, mask)
+
+    def sample(self,
+               n: int = 100,
+               context: torch.Tensor|None = None,
+               mask: torch.Tensor|None = None,
+               method: str = 'euler',
+               n_steps: int = 100,
+               log_prob: bool = False):
+        assert method in ['euler', 'rk4', 'dopri5'], 'ode integration method not supported'
+        b = 1
+        if context is not None:
+            b = context.shape[0]
+            context = context.unsqueeze(-2).expand(b, n, self.d_context)
+        theta_0 = torch.randn(b, n, self.d_theta)
+        if mask is not None:
+            mask = mask.unsqueeze(-2).expand(b, n, self.d_theta)
+            theta_0 = theta_0 * mask
+        
+        # log_prob
+        log_q = None
+        
+        # integrate over ODE
+        if method in ['dopri5']: # adaptive step size, slower and memory intensive
+            t_ = torch.tensor([0., 1.]) # integration range
+        elif method in ['euler', 'rk4']:
+            t_ = torch.linspace(0., 1., n_steps+1) # integration steps
+        else:
+            raise ValueError
+        trace = odeint(
+            lambda t, theta_t: self._evalVF(t, theta_t, context, mask),
+            theta_0,
+            t_, 
+            atol=1e-5,
+            rtol=1e-5,
+            method=method, 
+        )
+        theta_1 = trace[-1]
+        return theta_1, log_q
+
+    def logProb(self, theta: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError
+
+
