@@ -297,3 +297,10 @@ class RationalQuadratic(CouplingTransform):
         return x2, -log_det
 
 
+    def forward(self, x2, params, mask2=None):
+        return self(x2, params, mask2=mask2, inverse=False)
+
+
+    def inverse(self, z2, params, mask2=None):
+        return self(z2, params, mask2=mask2, inverse=True)
+
