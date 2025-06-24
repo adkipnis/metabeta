@@ -452,3 +452,72 @@ def load(model: Approximator, iteration: int) -> None:
     model.load_state_dict(state["model_state_dict"])
 
 
+def validate(model: Approximator, batch: dict, 
+             kld=True, plot=True, importance=False):
+    with torch.no_grad():
+        targets, names = model.targets(batch)
+        losses_nll, proposed, _ = model(batch, sample=True, n=1000, log_prob=True)
+        mcmc = {'samples': batch['mcmc']['global']} if 'mcmc' in batch else None
+
+        # get kl divergence
+        if kld and cfg.fx_type == 'ffx':
+            loc, scale = model.moments(proposed['global'])
+            losses_kl = compareWithAnalytical(batch, loc, scale, marginal=True)
+            print(f"KL Divergence (to analytical): {losses_kl.mean().item():.3f}")
+            
+        # importance sampling
+        if 'flow' in cfg.post_type and importance:
+            is_results = importanceSample(batch, proposed['global'])
+            proposed['global'].update(**is_results)
+            
+        # plots
+        if plot:
+            # collapse samples for flow models
+            if 'flow' in cfg.post_type and cfg.fx_type == 'mfx':
+                proposed['global'] = torch.cat([
+                    proposed['global']['ffx'][:, :-1],
+                    proposed['global']['sigmas'][:, :-1]
+                    ], dim=1)
+ 
+            # parameter recovery plot
+            model.plotRecovery(
+                batch, proposed['global'], show_error=False, color='darkgreen', alpha=0.3)
+            if mcmc is not None:
+                model.plotRecovery(
+                    batch, mcmc, show_error=False, color='darkorange', alpha=0.3)
+            if cfg.fx_type == 'mfx':
+                model.plotRecoveryRFX(batch, proposed['local'], show_error=False)
+                
+            # SBC plot
+            ranks = getRanks(targets, proposed['global'], absolute=False)
+            plotSBC(ranks, names, color='darkgreen')
+            # wd = getWasserstein(ranks)
+            if mcmc is not None:
+                ranks_ = getRanks(targets, mcmc)
+                plotSBC(ranks_, names, color='darkorange')
+                wd_ = getWasserstein(ranks_)
+                print(f"Wasserstein Distance (SBC): {wd_:.3f}")
+            
+            # ECDF diff plot
+            ranks = getRanks(targets, proposed['global'], absolute=True)
+            plotECDF(ranks, names, color='darkgreen')
+            if mcmc is not None:
+                ranks_ = getRanks(targets, mcmc, absolute=True)
+                plotECDF(ranks_, names, color='darkorange')                
+            
+            # CI calibration plot
+            covered = getCoverage(model, proposed['global'], targets)
+            plotCalibration(covered, names, source='(MB)')
+            if mcmc is not None:
+                covered_ = getCoverage(model, mcmc, targets)
+                plotCalibration(covered_, names, source='(HMC)')
+            coverage_error = coverageError(covered)
+            print(f"Empirical coverage errors: {coverage_error.numpy()}")
+            
+
+            # plot posterior interval palette
+            plotAllIntervals(model, proposed['global'], mcmc, targets, names)
+
+
+        return {'proposed': proposed}
+
