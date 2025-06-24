@@ -574,3 +574,47 @@ def setup() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# =============================================================================
+if __name__ == "__main__":
+    # --- setup 
+    cfg = setup()
+    console_width = getConsoleWidth()
+    torch.manual_seed(cfg.seed)
+    torch.set_num_threads(cfg.cores)
+    Approx = ApproximatorMFX if cfg.fx_type == "mfx" else ApproximatorFFX
+    
+    # --- load model
+    model = Approx.build(cfg.d, cfg.hidden, cfg.ff, cfg.out,
+                               cfg.dropout, cfg.act,
+                               cfg.heads, cfg.blocks,
+                               cfg.emb_type, cfg.sum_type, cfg.post_type,
+                               bins=cfg.bins, components=cfg.components, flows=cfg.flows,
+                               max_m=cfg.m,
+                               )
+    model.eval()
+    print(f'{"-"*console_width}\nmodel: {modelID(cfg)}')
+
+    # --- load model and data
+    load(model, cfg.iteration)
+    b = 250
+    fn = dsFilename(cfg.fx_type, 'test', cfg.d, cfg.m, cfg.n, b, -1)
+    batch = next(iter(getDataLoader(fn, b)))
+    print(f'preloaded model from iteration {cfg.iteration} and test set of size {b}...\n{"-"*console_width}')
+    
+    # --- run full validation for desired snapshot
+    results = validate(model, batch, importance=cfg.importance)
+    inspect(model, batch, results['proposed'], batch_indices=range(3))
+
+    # # --- run base validation over snapshot history
+    # iters = range(5, cfg.iteration + 1, 5)
+    # nll = torch.zeros((len(iters), cfg.b))
+    # kld = torch.zeros_like(nll)
+    # for i, iteration in enumerate(tqdm(iters)):
+    #     load(model, iteration)
+    #     results = validate(model, batch, kld=True)
+    #     nll[i] = results['nll']
+    #     kld[i] = results['kld']
+    # plotOverT(iters, nll)
+    # plotOverT(iters, kld, kl=True, q=[.16, .50, .84])
+    # outname = Path('outputs', 'losses', modelID(cfg), 'losses.pt')
+    # torch.save({'nll': nll, 'kld': kld}, outname)
