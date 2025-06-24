@@ -113,3 +113,20 @@ def genMFX(batch_size: int, seed: int, mcmc: bool = False, analytical: bool = Fa
 
 
 
+# =============================================================================
+def setup() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='Generate datasets for linear model task.')
+    parser.add_argument('-t', '--type', type=str, default='ffx', help='Type of dataset [ffx, mfx] (default = mfx)')
+    parser.add_argument('--bs_train', type=int, default=int(10e3), help='batch size per training partition (default = 50,000).')
+    parser.add_argument('-i', '--iterations', type=int, default=100, help='Number of dataset partitions to generate (default = 50, 0 only generates validation dataset).')
+    parser.add_argument('--max_m', type=int, default=30, help='MFX: Maximum number of groups (default = 30).')
+    parser.add_argument('--min_m', type=int, default=5, help='MFX: Minimum number of groups (default = 5).')
+    parser.add_argument('--max_n', type=int, default=50, help='Maximum number of samples per group (default = 20).')
+    parser.add_argument('--min_n', type=int, default=30, help='Minimum number of samples per group (default = 5).')
+    parser.add_argument('--min_d', type=int, default=1, help='Minimum number of predictors (without intercept) to draw per linear model (default = 0).')
+    parser.add_argument('--max_d', type=int, default=1, help='Maximum number of predictors (without intercept) to draw per linear model (default = 3).')
+    parser.add_argument('--max_sigma', type=float, default=float('inf'), help='Maximum value for a sampled standard deviation')
+    parser.add_argument('-b', '--begin', type=int, default=51, help='Begin with iteration number #b (default = 0).')
+    return parser.parse_args()
+
+
