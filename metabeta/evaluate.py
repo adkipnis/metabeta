@@ -167,3 +167,9 @@ def getDistanceRanks(targets: torch.Tensor, proposed: dict):
     ranks = (dist_post < dist_prior).float().mean(-1)
     return ranks
 
+def boundECDF(n_ranks: int, n_sim: int = 1000, alpha: float = 0.05):
+    p = np.linspace(0, 1, n_ranks)
+    lower = binom.ppf(alpha / 2, n_sim, p) / n_sim - p
+    upper = binom.ppf(1 - alpha / 2, n_sim, p) / n_sim - p
+    return p, lower, upper
+
