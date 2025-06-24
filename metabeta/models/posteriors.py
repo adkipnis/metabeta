@@ -530,3 +530,42 @@ class FlowPosterior(nn.Module):
             axs[i].set_visible(False)
 
 
+class CouplingPosterior(FlowPosterior):
+    def __init__(self,
+                 d_model: int,
+                 d_data: int,
+                 n_flows: int = 6,
+                 permute_mode: str | None = 'shuffle',
+                 use_actnorm: bool = True,
+                 base_dist: str = 'gaussian',
+                 transform: str = 'affine',
+                 net_kwargs: dict = {},
+                 fx_type: str = 'mfx'
+                 ):
+        super().__init__(d_data, fx_type)
+        if transform in ['affine', 'rq']:
+            self.cf = CouplingFlow(
+                d_target=d_data,
+                d_context=d_model,
+                n_flows=n_flows,
+                permute_mode=permute_mode,
+                use_actnorm=use_actnorm,
+                use_linear=(transform=='rq'),
+                base_dist=base_dist,
+                transform=transform,
+                net_kwargs=net_kwargs
+                )
+        else:
+            raise NotImplementedError()
+
+    def logProb(self, summary, values, mask=None):
+        return self.cf.log_prob(values, condition=summary, mask=mask)
+
+    def loss(self, summary, targets, mask=None):
+        return -self.logProb(summary, targets, mask=mask)
+ 
+    def sample(self, summary: torch.Tensor, mask=None, n: int = 100, log_prob=False):
+        with torch.no_grad():
+            return self.cf.sample(n, context=summary, mask=mask, log_prob=log_prob)
+
+
