@@ -257,3 +257,43 @@ class RationalQuadratic(CouplingTransform):
         return z2, log_det
 
 
+    def _inverse(self, z2, raw_widths, raw_heights, raw_derivatives):
+        if torch.min(z2) < -self.tail_bound or torch.max(z2) > self.tail_bound:
+            raise ValueError('z2 outside of domain')
+
+        # constrain parameters
+        widths, cumwidths, heights, cumheights, derivatives = self._constrain(
+            raw_widths, raw_heights, raw_derivatives)
+
+        # get bin indices
+        bin_idx = self._searchSorted(cumheights, z2)[..., None]
+
+        # for each knot k, get the rq parts
+        x_k_delta = widths.gather(-1, bin_idx)[..., 0]
+        x_k = cumwidths.gather(-1, bin_idx)[..., 0]
+        y_k_delta = heights.gather(-1, bin_idx)[..., 0]
+        y_k = cumheights.gather(-1, bin_idx)[..., 0]
+        delta = heights / widths
+        s_k = delta.gather(-1, bin_idx)[..., 0]
+        d_k = derivatives.gather(-1, bin_idx)[..., 0]
+        d_k_plus_one = derivatives[..., 1:].gather(-1, bin_idx)[..., 0]
+
+        # get analytical inverse of rq
+        a = y_k_delta * (s_k - d_k) + (z2 - y_k) * (d_k_plus_one + d_k - 2 * s_k)
+        b = y_k_delta * d_k - (z2 - y_k) * (d_k_plus_one + d_k - 2 * s_k)
+        c = -s_k * (z2 - y_k)
+        discriminant = b.pow(2) - 4 * a * c
+        assert (discriminant >= 0).all()
+        xi = (2 * c) / (-b - torch.sqrt(discriminant))
+        x2 = xi * x_k_delta + x_k
+
+        # get log determinant
+        xi_1_minus_xi = xi * (1 - xi)
+        beta_k = s_k + ((d_k_plus_one + d_k - 2 * s_k) * xi_1_minus_xi)
+        derivative_numerator = s_k.pow(2) * (
+            d_k_plus_one * xi.pow(2) + 2 * s_k * xi_1_minus_xi + d_k * (1 - xi).pow(2)
+        )
+        log_det = derivative_numerator.log() - 2 * beta_k.log()
+        return x2, -log_det
+
+
