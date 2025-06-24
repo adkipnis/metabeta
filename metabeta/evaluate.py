@@ -521,3 +521,20 @@ def validate(model: Approximator, batch: dict,
 
         return {'proposed': proposed}
 
+
+def inspect(model: Approximator, batch: dict,
+            proposed, batch_indices: list,
+            over_n: bool = False):
+    targets, names = model.targets(batch)
+    mcmc = {'samples': batch['mcmc']['global']} if 'mcmc' in batch else None
+    
+    # visualize some posteriors
+    for b in batch_indices:
+        model.posterior.plot(proposed['global'], targets, names, b, mcmc=mcmc)
+
+    # visualize model performance over n
+    if over_n:
+        for b in batch_indices:
+            unfold(model, batch, b)
+            
+
