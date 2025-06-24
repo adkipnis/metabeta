@@ -256,3 +256,19 @@ if __name__ == "__main__":
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f'parameters: {num_params}\nLearning rate: {cfg.lr}\nDevice: {device}')
 
+    # -------------------------------------------------------------------------------------------------------------------------------------------------
+    # training loop
+    print(f'features (max): {cfg.d}\nobservations (max): {cfg.n}')
+    fn = dsFilename(cfg.fx_type, 'val', cfg.d, cfg.m, cfg.n, 500, 0)
+    dl_val = getDataLoader(fn, 500, permute=cfg.permute)
+
+    print(f'iterations: {cfg.iterations + 1 - initial_iteration}\npatience: {cfg.patience}\nbatches per iteration: 200\ndatasets per batch: {cfg.batch_size}\n{"-"*console_width}')
+    for iteration in range(initial_iteration, cfg.iterations + 1):
+        fn = dsFilename(cfg.fx_type, 'train', cfg.d, cfg.m, cfg.n, int(1e4), iteration)
+        dl_train = getDataLoader(fn, cfg.batch_size, permute=cfg.permute)
+        global_step = train(model, optimizer, dl_train, global_step)
+        validation_step = validate(model, dl_val, validation_step)
+        if iteration % 5 == 0 or stopper.stop:
+            save(model, optimizer, iteration, global_step, validation_step, timestamp)
+        if stopper.stop:
+            break
