@@ -50,3 +50,81 @@ class Task:
         return snr
 
 
+# -----------------------------------------------------------------------------
+# FFX
+class FixedEffects(Task):
+    def __init__(self,
+                 sigma_error: Union[float, torch.Tensor],
+                 n_ffx: int,
+                 **kwargs
+                 ):
+        super().__init__(sigma_error, n_ffx)
+
+    def sample(self, n_samples: int, include_posterior: bool = False) -> Dict[str, torch.Tensor]:
+        X = self._sampleFeatures(n_samples)
+        X = self._addIntercept(X)
+        ffx = self._sampleFfx()
+        eps = self._sampleError(n_samples)
+        eta = X @ ffx
+        y = eta + eps
+        snr = self.signalToNoiseRatio(y, eta)
+        out = {"X": X, # (n, d)
+               "y": y, # (n,)
+               "ffx": ffx, # (d+1,)
+               "sigma_error": self.sigma_error, # (1,)
+               "snr": snr, # (1,)
+               "n": torch.tensor(n_samples), # (1,)
+               "d": torch.tensor(self.d), # (1,)
+               }
+        if include_posterior:
+            mu, Sigma, alpha, beta = self.posteriorParams(X, y)
+            ffx_stats = {"mu": mu, "Sigma": Sigma}
+            noise_stats = {"alpha": alpha, "beta": beta}
+            out['analytical'] = {"ffx": ffx_stats, "noise": noise_stats}
+        return out
+
+    # ----------------------------------------------------------------
+    # analytical solution assuming Normal-IG-prior
+    def _priorPrecision(self) -> torch.Tensor:
+        d = self.d + 1
+        precision = torch.tensor(1. / self.sigma_ffx).square().repeat(d)
+        L_0 = torch.diag(precision)
+        return L_0
+
+    def _posteriorPrecision(self, x: torch.Tensor) -> torch.Tensor:
+        L_0 = self._priorPrecision()
+        S = x.T @ x
+        L_n = L_0 + S
+        return L_n
+
+    def _posteriorCovariance(self, L_n: torch.Tensor) -> torch.Tensor:
+        lower = torch.linalg.cholesky(L_n)
+        S_n = torch.cholesky_inverse(lower)
+        return S_n
+
+    def _posteriorMean(self, x: torch.Tensor, y: torch.Tensor, S_n: torch.Tensor) -> torch.Tensor:
+        # simplified form under zero prior mean
+        mu_n = S_n @ (x.T @ y)
+        return mu_n
+
+    def _posteriorA(self, x: torch.Tensor) -> torch.Tensor:
+        a_0 = 3.
+        n = x.shape[0]
+        a_n = torch.tensor(a_0 + n / 2.)
+        return a_n
+
+    def _posteriorB(self, y: torch.Tensor, mu_n: torch.Tensor, L_n: torch.Tensor) -> torch.Tensor:
+        b_0 = 1.
+        y_inner = torch.dot(y, y)
+        mu_n_inner_scaled = torch.linalg.multi_dot([mu_n, L_n, mu_n])
+        b_n = b_0 + (y_inner - mu_n_inner_scaled) / 2.
+        return b_n
+
+    def posteriorParams(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        L_i = self._posteriorPrecision(x)
+        S_i = self._posteriorCovariance(L_i)
+        mu_i = self._posteriorMean(x, y, S_i)
+        a_i = self._posteriorA(x)
+        b_i = self._posteriorB(y, mu_i, L_i)
+        return mu_i, S_i, a_i, b_i
+
