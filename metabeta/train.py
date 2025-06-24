@@ -214,3 +214,45 @@ def setup() -> argparse.Namespace:
     return parser.parse_args()
 
 
+if __name__ == "__main__":
+    # ------------------------------------------------------------------------------------------------------------------------------------------------
+    # --- setup config
+    cfg = setup()
+    torch.manual_seed(cfg.seed)
+    torch.cuda.manual_seed_all(cfg.seed)
+    torch.backends.cudnn.deterministic = True
+    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    console_width = getConsoleWidth()
+    device = setDevice(cfg.device)
+    torch.set_num_threads(cfg.cores)
+
+    # --- set up model
+    Approx = ApproximatorMFX if cfg.fx_type == "mfx" else ApproximatorFFX
+    model = Approx.build(cfg.d, cfg.hidden, cfg.ff, cfg.out,
+                         cfg.dropout, cfg.act,
+                         cfg.heads, cfg.blocks,
+                         cfg.emb_type, cfg.sum_type, cfg.post_type,
+                         bins=cfg.bins, components=cfg.components, flows=cfg.flows,
+                         max_m=cfg.m,
+                         ).to(device)
+    print(f'{"-"*console_width}\nmodel: {modelID(cfg)}')
+
+    # --- set up optimizer
+    optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr)
+
+    # --- optionally preload a model
+    model_path = Path('outputs', 'checkpoints', modelID(cfg))
+    model_path.mkdir(parents=True, exist_ok=True)
+    initial_iteration, global_step, validation_step = 1, 1, 1
+    if cfg.preload:
+        initial_iteration, global_step, validation_step, timestamp = \
+            load(model, optimizer, cfg.preload)
+        print(f'preloaded model from iteration {cfg.preload}, starting at iteration {initial_iteration}...')
+
+    # --- logging and stopping
+    log_path = Path('outputs', 'losses', modelID(cfg), timestamp)
+    logger = Logger(log_path)
+    stopper = EarlyStopping(patience=cfg.patience)
+    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f'parameters: {num_params}\nLearning rate: {cfg.lr}\nDevice: {device}')
+
