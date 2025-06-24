@@ -81,3 +81,31 @@ class EquivariantBlock(nn.Module):
         return h
 
 
+class DeepSet(Summarizer):
+    def __init__(self,
+                 d_model: int,
+                 d_ff: int,
+                 d_output: int,
+                 n_blocks: int = 2,
+                 dropout: float = 0.05,
+                 activation: str = 'Mish',
+                 ):
+        super().__init__()
+
+        blocks = []
+        for _ in range(n_blocks):
+            eb = EquivariantBlock(d_model, d_ff, dropout, activation)
+            blocks.append(eb)
+        self.blocks = nn.ModuleList(blocks)
+        self.ib = InvariantBlock(d_model, d_ff, dropout, activation)
+        self.out = nn.Linear(d_model, d_output)
+
+    def forward(self, x, mask=None):
+        h = x
+        for eb in self.blocks:
+            h = eb(h, mask)
+        h = self.ib(h, mask)
+        h = self.out(h)
+        return h
+
+
