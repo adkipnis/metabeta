@@ -1,8 +1,10 @@
 # implementation adapted from dingo https://github.com/dingo-gw/dingo
 import torch
 from torch import nn
+from torch import vmap
 from torchdiffeq import odeint
 from metabeta.models.feedforward import MLP, ResidualNet
+from tqdm import tqdm
 mse = nn.MSELoss(reduction='none')
 
 class FlowMatching(nn.Module):
@@ -80,7 +82,7 @@ class FlowMatching(nn.Module):
         loss = mse(field_true, field_pred)
         return loss
 
-    def _evalVF(self, t: float, theta_t: torch.Tensor, context: torch.Tensor|None = None, mask=None):
+    def _evalField(self, t: float, theta_t: torch.Tensor, context: torch.Tensor|None = None, mask=None):
         t_ = t * torch.ones(*theta_t.shape[:-1], device=theta_t.device).unsqueeze(-1)
         return self.forward(t_, theta_t, context, mask)
 
@@ -112,7 +114,7 @@ class FlowMatching(nn.Module):
         else:
             raise ValueError
         trace = odeint(
-            lambda t, theta_t: self._evalVF(t, theta_t, context, mask),
+            lambda t, theta_t: self._evalField(t, theta_t, context, mask),
             theta_0,
             t_, 
             atol=1e-5,
