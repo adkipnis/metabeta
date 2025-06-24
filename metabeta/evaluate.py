@@ -281,3 +281,23 @@ def plotAllIntervals(model: Approximator,
     for i in range(n, w*w):
         axs[i].set_visible(False)
     
+# -----------------------------------------------------------------------------
+# comparison with analytical posterior
+def kldFull(mean_lin: torch.Tensor, Sigma_lin: torch.Tensor,
+            mean_prop: torch.Tensor, Sigma_prop: torch.Tensor) -> torch.Tensor:
+    ''' looped version for KLD between two MVNs with non-diagonal variance '''
+    mask = (mean_lin != 0.)
+    b = mean_prop.shape[0]
+    losses = torch.zeros(b)
+    for i in range(b):
+        mask_i = mask[i] 
+        mean_lin_i = mean_lin[i, mask_i]
+        mean_i = mean_prop[i, mask_i]
+        Sigma_lin_i = Sigma_lin[i, mask_i][..., mask_i]
+        Sigma_i = Sigma_prop[i, mask_i][..., mask_i]
+        post_lin = D.MultivariateNormal(mean_lin_i, Sigma_lin_i)
+        post_prop = D.MultivariateNormal(mean_i, Sigma_i)
+        losses[i] = D.kl.kl_divergence(post_lin, post_prop)
+    return losses
+
+
