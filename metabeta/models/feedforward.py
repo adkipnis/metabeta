@@ -55,3 +55,42 @@ class SLP(nn.Module):
         return h
 
 
+class MLP(nn.Module):
+    def __init__(self,
+                 d_input: int,
+                 d_hidden: int | Iterable,
+                 d_output: int,
+                 activation: str = 'Mish',
+                 dropout: float = 0.01,
+                 norm: str | None = None,
+                 act_on_last: bool = False,
+                 skip: bool = False,
+                 **kwargs
+                 ):
+        super().__init__()
+        if isinstance(d_hidden, int):
+            d_hidden = [d_hidden]
+        layers = []
+        d_prev = d_input
+        for d_next in d_hidden:
+            layers += [SLP(d_prev, d_next, activation, dropout, norm, skip)]
+            d_prev = d_next
+        layers += [nn.Linear(d_prev, d_output)]
+        if act_on_last:
+            layers += [eval(f'nn.{activation}()')]
+        self.net = nn.Sequential(*layers)
+        # optional skip connection
+        self.skip = skip
+        if self.skip:
+            self.shortcut = nn.Linear(d_input, d_output)
+        self.apply(initializer('kaiming', 'uniform'))
+
+    def forward(self, x: torch.Tensor, context=None):
+        if context is not None:
+            x = torch.cat([x, context], dim=-1)
+        h = self.net(x)
+        if self.skip:
+            h += self.shortcut(x)
+        return h
+
+
