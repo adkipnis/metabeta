@@ -47,3 +47,15 @@ colors = [cmap(i) for i in range(cmap.N)]
 # 1. visualize training and testing NLLL [✓]
 # 2. evaluate [✓] and visualize KLD [✓]
 
+# -----------------------------------------------------------------------------
+# coverage
+
+def empiricalCoverage(quantiles: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    #  how often are the targets actually inside a given credibility interval?
+    mask = (targets != 0.)
+    above = targets > quantiles[..., 0]
+    below = targets < quantiles[..., -1]
+    inside = above * below * mask
+    coverage = inside.float().sum(0)/(mask.sum(0) + 1e-12)
+    return coverage # (d,)
+
