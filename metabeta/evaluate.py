@@ -74,3 +74,11 @@ def getCoverage(model: Approximator,
     c95 = empiricalCoverage(quantiles95, targets)
     return {'50': c50, '68': c68, '80': c80, '90': c90, '95': c95}
 
+def coverageError(coverage: dict):
+    concatenated = torch.cat([v.unsqueeze(0) for _, v in coverage.items()])
+    mask = (concatenated != 0.)
+    nominal = torch.tensor([int(k) for k in coverage.keys()]).unsqueeze(1) / 100
+    errors = (concatenated - nominal) * mask
+    mean_error = errors.sum(0) / (mask.sum(0) + 1e-12)
+    return mean_error
+
