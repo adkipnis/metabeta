@@ -198,3 +198,35 @@ class LMDataset(Dataset):
         return torch.cat(subsets + pads, dim=0)
          
     
+# =============================================================================
+if __name__ == '__main__':
+    import time
+    import sys   
+    from torch.utils.data import DataLoader
+    from metabeta.utils import dsFilename
+
+    def measure(fn, args=(), kwargs={}):
+        start = time.time()
+        out = fn(*args, **kwargs)
+        end = time.time()
+        print(f"{end-start:.2f}s")
+        return out
+
+    fn = dsFilename('ffx', 'val', 1, 0, 50, 500, 0)
+    ds_raw = torch.load(fn, weights_only=False)
+    ds = LMDataset(**ds_raw)
+    item = ds[0]
+    dl = DataLoader(ds, batch_size=500, shuffle=False)
+    for batch in dl:
+        pass
+
+    print('Loading raw Training set:')
+    fn = dsFilename('ffx', 'train', 1, 0, 50, int(1e4), 1)
+    ds_raw = measure(torch.load, (fn,), dict(weights_only=False, mmap=True))
+    print('Transforming Training set')
+    ds = measure(LMDataset, kwargs=dict(**ds_raw))
+    print('Finished')
+    print(sys.getsizeof(ds_raw))
+
+
+
