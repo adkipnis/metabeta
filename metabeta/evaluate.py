@@ -354,3 +354,28 @@ def plotOverT(time: torch.Tensor, losses: torch.Tensor,
     ax.grid(True) 
 
 
+# -----------------------------------------------------------------------------
+# plot over n
+def subsetFFX(batch: dict, batch_idx: int = 0) -> dict:
+    ''' for dataset {batch_idx} in batch,
+        generate a new batch out of progressive subsamples '''
+    # extract batch_idx
+    ds = {k: v[batch_idx:batch_idx+1].clone() for k, v in batch.items()
+          if isinstance(v, torch.Tensor)}
+
+    # repeat all tensors n times
+    n = int(ds['n'])
+    ds = {k: v.repeat(n, *[1]*(v.ndim-1)) for k, v in ds.items()}
+
+    # dynamically subset
+    ns, mask_n =  ds['n'], ds['mask_n']
+    X, y = ds['X'], ds['y']
+    for i in range(n):
+        ns[i] = i + 1
+        mask_n[i, i+1:n] = False
+        X[i, i+1:n] = torch.zeros_like(X[i, i+1:n])
+        y[i, i+1:n] = torch.zeros_like(y[i, i+1:n])
+    ds.update(dict(n=ns, mask_n=mask_n, X=X, y=y))
+    return ds
+        
+        
