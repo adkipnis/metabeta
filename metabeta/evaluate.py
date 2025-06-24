@@ -59,3 +59,18 @@ def empiricalCoverage(quantiles: torch.Tensor, targets: torch.Tensor) -> torch.T
     coverage = inside.float().sum(0)/(mask.sum(0) + 1e-12)
     return coverage # (d,)
 
+def getCoverage(model: Approximator,
+                proposed: Dict[str, torch.Tensor],
+                targets: torch.Tensor) -> Dict[str, torch.Tensor]:
+    quantiles50 = model.quantiles(proposed, [.25, .75])
+    quantiles68 = model.quantiles(proposed, [.16, .84])
+    quantiles80 = model.quantiles(proposed, [.10, .90])
+    quantiles90 = model.quantiles(proposed, [.05, .95])
+    quantiles95 = model.quantiles(proposed, [.025, .975])
+    c50 = empiricalCoverage(quantiles50, targets)
+    c68 = empiricalCoverage(quantiles68, targets)
+    c80 = empiricalCoverage(quantiles80, targets)
+    c90 = empiricalCoverage(quantiles90, targets)
+    c95 = empiricalCoverage(quantiles95, targets)
+    return {'50': c50, '68': c68, '80': c80, '90': c90, '95': c95}
+
