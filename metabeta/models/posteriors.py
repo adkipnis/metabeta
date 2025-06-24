@@ -374,3 +374,159 @@ class DiscretePosterior(Posterior):
         for i in range(d, w*w):
             axs[i].set_visible(False)
 
+# -----------------------------------------------------------------------------
+# flow posterior
+class FlowPosterior(nn.Module):
+    def __init__(self, d_data: int, fx_type: str):
+        super().__init__()
+        self.d_data = d_data
+        self.fx_type = fx_type
+
+    def mean(self,
+             samples: torch.Tensor,
+             weights: torch.Tensor | None = None):
+        if weights is not None:
+            s = samples.shape[-1]
+            weighted_mean = (samples * weights.unsqueeze(1)).sum(-1) / s
+            return weighted_mean
+        else:
+            return samples.mean(-1)
+
+    def std(self,
+            samples: torch.Tensor,
+            mean: torch.Tensor,
+            weights: torch.Tensor | None = None,
+            n_eff: torch.Tensor | None = None):
+        if weights is not None:
+            s = samples.shape[-1]
+            denom = (s - s / n_eff).unsqueeze(-1)
+            d_sq = (samples - mean.unsqueeze(-1)).square()
+            weighted_d_sq = d_sq * weights.unsqueeze(1)
+            weighted_var = weighted_d_sq.sum(-1) / (denom + 1e-6)
+            return weighted_var.sqrt()
+        else:
+            return samples.std(-1)
+
+    def getLocScale(self, h): 
+        return self._moments(h)
+
+    def _moments(self, proposed: Dict[str, torch.Tensor] | torch.Tensor):
+        if isinstance(proposed, torch.Tensor):
+            proposed = {'samples': proposed}
+        samples = proposed['samples']
+        weights = proposed.get('weights', None)
+        n_eff = proposed.get('n_eff', None)
+        loc = self.mean(samples, weights)
+        scale = self.std(samples, loc, weights, n_eff)
+        return loc, scale
+
+    def getCDF(self, proposed: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        samples = proposed['samples']
+        x, idx = samples.sort(dim=-1, descending=False)
+        if 'weights' in proposed:
+            s = samples.shape[-1]
+            weights = proposed['weights'].unsqueeze(1).expand(*samples.shape)
+            w_sorted =  torch.gather(weights, -1, idx)
+            cdf = torch.cumsum(w_sorted, -1) / s
+        else:
+            cdf = torch.linspace(0, 1, x.shape[-1])
+            cdf = cdf.view(1,1,-1).expand_as(x)
+        return x, cdf
+    
+    def getQuantiles(self, h: Dict[str, torch.Tensor], roots: list = [.05, .50, .95]) -> torch.Tensor:
+        x, cdf = self.getCDF(h)
+        cdf = cdf.contiguous()
+        b, d, s, r = *cdf.shape, len(roots)
+        roots_ = torch.tensor(roots).view(1, 1, -1).expand((b, d, r)).contiguous()
+        indices = torch.searchsorted(cdf, roots_).clamp(max=s-1)
+        quantiles = x.gather(dim=-1, index=indices)
+        return quantiles
+
+    def logProb(self, summary: torch.Tensor, values: torch.Tensor, mask=None):
+        raise NotImplementedError
+
+    def loss(self, summary: torch.Tensor, targets: torch.Tensor, mask=None):
+        raise NotImplementedError
+
+    def sample(self, summary: torch.Tensor, mask=None, n: int = 1000, log_prob=False):
+        raise NotImplementedError
+
+    def processTargets(self, targets: torch.Tensor):
+        d_real = (self.d_data - 1)
+        if self.fx_type == 'mfx':
+            d_real //= 2 
+        subtargets = targets[:, d_real:]
+        real = inverseSoftplus(subtargets)
+        targets[:, d_real:] = real
+        return targets
+
+    def processSamples(self, samples):
+        d_real = (self.d_data - 1)
+        if self.fx_type == 'mfx':
+            d_real //= 2
+        subsamples = samples[:, d_real:]
+        positive = F.softplus(subsamples)
+        samples[:, d_real:] = positive
+        return samples
+
+    def forward(self, summary: torch.Tensor, targets: torch.Tensor,
+                sample=True, n: int = 100, log_prob=False, constrain=True, **kwargs):
+        mask = (targets != 0.).float()
+        targets = self.processTargets(targets.clone()) if constrain else targets
+        loss = self.loss(summary, targets, mask=mask)
+        proposed = dict()
+        if sample:
+            samples, log_q = self.sample(summary, mask, n, log_prob)
+            if samples.dim() == 3:
+                samples = samples.permute(0, 2, 1) # (b, d, s)
+            elif samples.dim() == 4:
+                samples = samples.permute(0, 1, 3, 2) # (b, m, d, s)
+            samples = self.processSamples(samples.clone()) if constrain else samples
+            proposed = {'samples': samples, 'log_prob': log_q}
+        return loss, proposed
+
+    def plot(self,
+             proposed: dict[str, torch.Tensor],
+             target: torch.Tensor,
+             names: List[str],
+             batch_idx: int = 0,
+             mcmc: torch.Tensor | None = None,
+             **kwargs):
+        # apply target mask
+        mask = (target[batch_idx] != 0.)
+        target_ = target[batch_idx][mask]
+        samples = proposed['samples']
+        samples_ = samples[batch_idx][mask]
+        if 'weights' in proposed:
+            weights = proposed['weights'].unsqueeze(1).expand_as(samples)
+            weights_ = weights[batch_idx][mask]
+        else:
+            weights_ = None
+        mc_samples = mcmc['samples'][batch_idx][mask] if mcmc is not None else None
+        names_ = names[mask.numpy()]
+        d = int(mask.sum())
+        w = int(torch.tensor(d).sqrt().ceil())
+        _, axs = plt.subplots(figsize=(8 * w, 6 * w), ncols=w, nrows=w)
+        axs = axs.flatten()
+        for i in range(d):
+            ax = axs[i]
+            ax.set_axisbelow(True)
+            ax.grid(True)
+            weights_i = weights_[i] if weights_ is not None else None
+            sns.histplot(x=samples_[i], weights=weights_i,
+                         kde=True, ax=ax, bins=30,
+                         color='darkgreen', alpha=0.5, stat="density")
+            if mc_samples is not None:
+                sns.histplot(mc_samples[i],
+                             kde=True, ax=ax, bins=30,
+                             color='darkorange', alpha=0.5, stat="density")
+            
+            ax.axvline(x=target_[i], linestyle='--', 
+                       linewidth=2.5, color='black')
+            ax.set_xlabel(names_[i], fontsize=20)
+            ax.set_ylabel('')
+            ax.tick_params(axis='y', labelcolor='w')
+        for i in range(d, w*w):
+            axs[i].set_visible(False)
+
+
