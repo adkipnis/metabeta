@@ -197,3 +197,71 @@ def plotECDF(ranks: torch.Tensor, names: list, color='darkgreen') -> None:
         ax.legend()
     for i in range(n, w*w):
         axs[i].set_visible(False)
+
+# -----------------------------------------------------------------------------
+# compare posterior intervals with mcmc
+def plotIntervals(ax,
+                  quantiles1: torch.Tensor,
+                  quantiles2: torch.Tensor,
+                  target: torch.Tensor,
+                  name: str, n: int = 16):
+    # calculate overlap
+    width1 = quantiles1[:, 3] - quantiles1[:, 1]
+    width2 = quantiles2[:, 3] - quantiles2[:, 1]
+    d_50 = (width1 - width2).mean()
+    width1 = quantiles1[:, 4] - quantiles1[:, 0]
+    width2 = quantiles2[:, 4] - quantiles2[:, 0]
+    d_95 = (width1 - width2).mean()
+    
+    # sort targets
+    target, idx = torch.sort(target)
+    
+    # get evenly spaced subset of targets
+    u = torch.linspace(0.05, 0.95, n)
+    idx_ = torch.round(u * (len(target) - 1)).long()
+    
+    # subset the posterior quantiles
+    q1 = quantiles1[idx][idx_]
+    q2 = quantiles2[idx][idx_]
+    
+    # prepare axes
+    x = np.arange(n)
+    bar_gap = 0.05
+    x1 = x - (0.20 + bar_gap/2)
+    x2 = x + (0.20 + bar_gap/2)
+    
+    # plot 
+    ax.bar(x1, bottom=q1[:, 0], height=q1[:, 4]-q1[:, 0],
+           width=0.35, color='darkgreen', alpha=0.4)
+    ax.bar(x1, bottom=q1[:, 1], height=q1[:, 3]-q1[:, 1],
+           width=0.40, color='darkgreen', alpha=0.9, label='MB')
+    ax.bar(x2, bottom=q2[:, 0], height=q2[:, 4]-q2[:, 0],
+           width=0.35, color='darkorange', alpha=0.4)
+    ax.bar(x2, bottom=q2[:, 1], height=q2[:, 3]-q2[:, 1],
+           width=0.40, color='darkorange', alpha=0.9, label='HMC')
+    for i in range(n):
+        plt.hlines(y=q1[i, 2], xmin=x1[i]-0.2, xmax=x1[i]+0.2,
+                   color='white', linewidth=1.5)
+        plt.hlines(y=q2[i, 2], xmin=x2[i]-0.2, xmax=x2[i]+0.2,
+                   color='white', linewidth=1.5)
+    
+    ax.text(
+        0.75, 0.1,
+        fr'$d_{{50}} = {d_50.item():.3f}$' + '\n' + fr'$d_{{95}} = {d_95.item():.3f}$',
+        transform=ax.transAxes,
+        ha='center', va='bottom',
+        fontsize=16,
+        bbox=dict(boxstyle='round',
+                  facecolor=(1, 1, 1, 0.7),
+                  edgecolor=(0, 0, 0, 0.2),
+                  ),
+    )
+    
+    ax.set_title(name)
+    ax.set_ylabel('credibility intervals')
+    ax.set_xticks([])
+    # ax.spines['top'].set_visible(False)
+    # ax.spines['right'].set_visible(False)
+    ax.legend()
+    
+    
