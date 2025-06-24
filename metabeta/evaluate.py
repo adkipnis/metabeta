@@ -100,3 +100,23 @@ def plotCalibration(coverage: Dict[str, torch.Tensor], names, source: str = '') 
     ax.grid(True)
     plt.title(f'coverage {source}')
 
+# -----------------------------------------------------------------------------
+# simulation based calibration
+
+def getRanks(targets: torch.Tensor, proposed: dict, absolute=False) -> torch.Tensor:
+    # targets (b, d), samples (b, s, d)
+    samples = proposed['samples']
+    weights = proposed.get('weights', None)
+    targets_ = targets.unsqueeze(-1)
+    if absolute:
+        samples = samples.abs()
+        targets_ = targets_.abs()        
+    smaller = (samples < targets_).float()
+    if weights is not None:
+        s = samples.shape[-1]
+        ranks = (smaller * weights.unsqueeze(1)).sum(-1) / s
+    else:
+        ranks = smaller.mean(-1)
+    return ranks
+
+
