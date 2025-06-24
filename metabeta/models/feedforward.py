@@ -132,3 +132,40 @@ class ResidualBlock(nn.Module):
         return h
 
 
+class ResidualNet(nn.Module):
+    def __init__(self,
+                 d_input: int,
+                 d_output: int,
+                 d_context: int = 0,
+                 d_hidden: int = 64,
+                 n_blocks: int = 2,
+                 activation: str = 'Mish',
+                 dropout: float = 0.01,
+                 norm: str | None = None,
+                 use_glu: bool = False,
+                 zero_init: bool = True,
+                 ):
+        super().__init__()
+        self.proj_in = nn.Linear(d_input + d_context, d_hidden)
+        blocks = [
+            ResidualBlock(d_data=d_hidden, d_context=d_context, use_glu=use_glu,
+                          activation=activation, dropout=dropout, norm=norm, )
+            for _ in range(n_blocks)
+        ]
+        self.blocks = nn.ModuleList(blocks)
+        self.proj_out = nn.Linear(d_hidden, d_output)
+        self.apply(initializer('kaiming', 'uniform'))
+        if zero_init:
+            nn.init.uniform_(self.proj_out.weight, -1e-3, 1e-3)
+            nn.init.uniform_(self.proj_out.bias, -1e-3, 1e-3)
+
+    def forward(self, x, context=None):
+        if context is not None:
+            x = torch.cat([x, context], dim=-1)
+        h = self.proj_in(x)
+        for block in self.blocks:
+            h = block(h, context)
+        h = self.proj_out(h)
+        return h
+
+
