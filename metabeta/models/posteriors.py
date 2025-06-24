@@ -254,3 +254,123 @@ class MixturePosterior(Posterior):
             axs[i].set_visible(False)
 
 
+# -----------------------------------------------------------------------------
+# discrete posterior
+def equidistantBins(low: float, high: float, steps: int) -> torch.Tensor:
+    return torch.linspace(low, high, steps=steps)
+
+def normalBins(scale: float, steps: int, eps: float = 1e-5) -> torch.Tensor:
+    quantiles = torch.linspace(0. + eps, 1. - eps, steps)
+    return D.Normal(0, scale).icdf(quantiles)
+
+def halfNormalBins(scale: float, steps: int, eps: float = 1e-5) -> torch.Tensor:
+    quantiles = torch.linspace(0. + eps, 1. - eps, steps)
+    return D.HalfNormal(scale).icdf(quantiles)
+
+class DiscretePosterior(Posterior):
+    def __init__(self,
+                 d_model: int,
+                 d_data: int,
+                 bins: torch.Tensor, # (m,)
+                 lamb: float = 0.1
+                 ):
+        super().__init__()
+        self.register_buffer('bins', bins)
+        self.register_buffer('widths', bins[1:] - bins[:-1])
+        self.register_buffer('centers', self.bins[:-1] + self.widths/2)
+        self.n_bins = len(bins) - 1
+        self.prop = GeneralizedProposer(d_model, d_data, self.n_bins)
+        self.lamb = lamb # entropy regularizer
+
+    def getBindex(self, vals: torch.Tensor) -> torch.Tensor:
+        vals = vals.contiguous()
+        indices = torch.searchsorted(self.bins, vals) - 1
+        indices[vals <= self.bins[0]] = 0
+        indices[vals >= self.bins[-1]] = self.n_bins - 1
+        return indices
+
+    def propose(self, s: torch.Tensor):
+        logits = self.prop(s)[..., 0]
+        log_p = torch.log_softmax(logits, -1)
+        log_p = log_p - torch.log(self.widths) # adjust for (variable) widths
+        log_p = log_p - torch.logsumexp(log_p, dim=-1, keepdim=True)
+        return log_p
+
+    def mean(self, h: torch.Tensor):
+        p = h.exp()
+        return p @ self.centers
+
+    def mode(self, h: torch.Tensor) -> torch.Tensor:
+        p = h.exp()
+        idx = p.argmax(-1)
+        return self.centers[idx]
+
+    def variance(self, h: torch.Tensor, mean: torch.Tensor):
+        p = h.exp()
+        squared_diff = (self.centers.view(1, -1) - mean.unsqueeze(-1)).square()
+        return torch.sum(squared_diff * p, dim=-1)
+
+    def getCDF(self, h: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        p = h.exp()
+        cdf = p.cumsum(dim=-1)
+        x = self.centers.view(1,1,-1).expand_as(cdf)
+        return x, cdf
+
+    def _logProb(self, h: torch.Tensor, values: torch.Tensor, **kwargs):
+        indices = self.getBindex(values)
+        return h.gather(-1, indices.unsqueeze(-1)).squeeze(-1)
+
+    def loss(self, h: torch.Tensor, targets: torch.Tensor, **kwargs):
+        log_p_ = h # (batch, d, n_bins)
+        diffs = log_p_[..., 1:] - log_p_[..., :-1] # (batch, d)
+        spikiness = diffs.square().mean(-1) / log_p_.abs().mean(-1)
+        log_p = self._logProb(log_p_, targets)
+        losses = -log_p + self.lamb * spikiness
+        return maskLoss(losses, targets)
+
+    def plot(self, h: torch.Tensor | dict, target: torch.Tensor, names: List[str],
+             batch_idx: int = 0, mcmc: torch.Tensor | None = None, **kwargs):
+        if isinstance(h, dict):
+            h = torch.cat([h['ffx'], h['sigmas']], dim=1)
+        # apply target mask
+        mask = target[batch_idx] != 0.
+        d = int(mask.sum())
+        target_ = target[batch_idx][mask]
+        log_p_ = h[batch_idx][mask]
+        names_ = names[mask.numpy()]
+        mc_samples = mcmc[batch_idx][mask] if mcmc is not None else None
+
+        w = int(torch.tensor(d).sqrt().ceil())
+        _, axs = plt.subplots(figsize=(8 * w, 6 * w), ncols=w, nrows=w)
+        axs = axs.flatten()
+        for i in range(d):
+            ax = axs[i]
+            ax.set_axisbelow(True)
+            ax.grid(True)
+
+            # get probabilities and find support
+            p_i = log_p_[i].exp()
+            indices = (p_i > 1e-3).nonzero(as_tuple=True)[0]
+            first, last = indices[0], indices[-1]
+            p_i_ = p_i[first:last+1]
+
+            # get x_values and limit to support
+            lefts = self.bins[:-1] if names_[i][2] == 'b' else self.other.bins[:-1] # type: ignore
+            widths = self.widths if names_[i][2] == 'b' else self.other.widths # type: ignore
+            lefts_ = lefts[first:last+1]
+            widths_ = widths[first:last+1]
+
+            # subplot
+            ax.bar(lefts_, p_i_, width=widths_, align='edge',
+                   color='darkgreen',edgecolor='black', alpha=0.8)
+            if mc_samples is not None:
+                sns.histplot(mc_samples[i], kde=True, ax=ax, # type: ignore
+                             color='darkorange', alpha=0.5, stat="density")
+            ax.axvline(x=target_[i], linestyle='--',
+                       linewidth=2.5, color='black')
+            ax.set_xlabel(names_[i], fontsize=20)
+            ax.set_ylabel('')
+            ax.tick_params(axis='y', labelcolor='w')
+        for i in range(d, w*w):
+            axs[i].set_visible(False)
+
