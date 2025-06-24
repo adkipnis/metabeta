@@ -219,3 +219,41 @@ class RationalQuadratic(CouplingTransform):
         return output2, log_det.sum(-1)
 
 
+    def _forward(self, x2, raw_widths, raw_heights, raw_derivatives):
+        ''' procedure based on [Durkan et al., 2019] '''
+
+        if torch.min(x2) < -self.tail_bound or torch.max(x2) > self.tail_bound:
+            raise ValueError('x2 outside of domain')
+
+        # constrain parameters
+        widths, cumwidths, heights, cumheights, derivatives = self._constrain(
+            raw_widths, raw_heights, raw_derivatives)
+
+        # get bin indices
+        bin_idx = self._searchSorted(cumwidths, x2)[..., None]
+
+        # for each knot k, get the rq parts
+        x_k_delta = widths.gather(-1, bin_idx)[..., 0]
+        x_k = cumwidths.gather(-1, bin_idx)[..., 0]
+        y_k_delta = heights.gather(-1, bin_idx)[..., 0]
+        y_k = cumheights.gather(-1, bin_idx)[..., 0]
+        delta = heights / widths
+        s_k = delta.gather(-1, bin_idx)[..., 0]
+        d_k = derivatives.gather(-1, bin_idx)[..., 0]
+        d_k_plus_one = derivatives[..., 1:].gather(-1, bin_idx)[..., 0]
+        xi = (x2 - x_k) / x_k_delta
+        xi_1_minus_xi = xi * (1 - xi)
+
+        # construct rq splines
+        alpha_k = y_k_delta * (s_k * xi.pow(2) + d_k * xi_1_minus_xi)
+        beta_k = s_k + ((d_k_plus_one + d_k - 2 * s_k) * xi_1_minus_xi)
+        z2 = y_k + alpha_k / beta_k
+
+        # get log determinant
+        derivative_numerator = s_k.pow(2) * (
+            d_k_plus_one * xi.pow(2) + 2 * s_k * xi_1_minus_xi + d_k * (1 - xi).pow(2)
+        )
+        log_det = derivative_numerator.log() - 2 * beta_k.log()
+        return z2, log_det
+
+
