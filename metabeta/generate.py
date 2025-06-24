@@ -69,3 +69,47 @@ def genFFX(batch_size: int, seed: int, mcmc: bool = False, analytical: bool = Tr
     return {'data': data, 'info': info}
 
 
+# -----------------------------------------------------------------------------
+# MFX
+
+def genMFX(batch_size: int, seed: int, mcmc: bool = False, analytical: bool = False) -> dict:
+    ''' Generate a [batch_size] mixed effects model datasets with varying n, m, d, q. '''
+    # init
+    torch.manual_seed(seed)
+    data = []
+    iterator = tqdm(range(batch_size))
+    iterator.set_description(f'{part:02d}/{cfg.iterations:02d}')
+
+    # presample hyperparams
+    min_q = max_q = 1
+    sigma = sampleHN((batch_size, max_q + 1), 1., cfg.max_sigma)
+    d_ = sampleInt(batch_size, cfg.max_d, cfg.max_d) + 1
+    m = sampleInt(batch_size, cfg.min_m, cfg.max_m)
+    n = sampleInt((batch_size, cfg.max_m), cfg.min_n, cfg.max_n)
+    q = sampleInt(batch_size, min_q, max_q)
+    
+    # apply constraints
+    m, d_ = constrain(m, d_, 0.5, min_val=1) # at least two subjects per covariate
+    d_, q = constrain(d_, q, 0.5, min_val=min_q) # at least two fixed effects per random effect
+    d = d_ - 1
+    
+    d, m, n, q = d.tolist(), m.tolist(), n.tolist(), q.tolist()
+    
+    # sample datasets
+    for i in iterator:
+        sigma_e = sigma[i,0]
+        sigmas_rfx = sigma[i,1:][:q[i]]
+        lm = MixedEffects(sigma_e, sigmas_rfx, d[i], q[i], m[i], n[i][:m[i]])
+        ds = lm.sample()
+        if mcmc:
+            ds['mcmc'] = fitMFX(**ds)
+        data += [ds]
+    info = {'d': d, 'q': q, 'n': n, 'm': m, 'sigma': sigma,
+            'max_d': cfg.max_d, 'max_n': cfg.max_n,
+            'max_q': max(q), 'max_m': cfg.max_m,
+            'max_sigma': cfg.max_sigma,
+            'seed': seed}
+    return {'data': data, 'info': info}
+
+
+
