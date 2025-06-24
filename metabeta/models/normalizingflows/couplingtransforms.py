@@ -159,3 +159,27 @@ class RationalQuadratic(CouplingTransform):
         return dict(raw_widths=raw_widths, raw_heights=raw_heights, raw_derivs=raw_derivs)
 
 
+    def _constrain(self, raw_widths, raw_heights, raw_derivatives):
+        # process widths
+        left, right = -self.tail_bound, self.tail_bound # [-B, B]
+        widths = F.softmax(raw_widths, dim=-1)
+        widths = self.min_bin_width + (1 - self.min_bin_width * self.num_bins) * widths # ensure min
+        cumwidths = torch.cumsum(widths, dim=-1)
+        cumwidths = F.pad(cumwidths, pad=(1, 0), mode="constant", value=0.0) # leftpad
+        cumwidths = left + cumwidths * (right - left) # stretch cumulative widths to [-B, B]
+        widths = cumwidths[..., 1:] - cumwidths[..., :-1] # adjust widths
+
+        # process heights
+        bottom, top = -self.tail_bound, self.tail_bound
+        heights = F.softmax(raw_heights, dim=-1)
+        heights = self.min_bin_height + (1 - self.min_bin_height * self.num_bins) * heights
+        cumheights = torch.cumsum(heights, dim=-1)
+        cumheights = F.pad(cumheights, pad=(1, 0), mode="constant", value=0.0)
+        cumheights = bottom + cumheights * (top - bottom)
+        heights = cumheights[..., 1:] - cumheights[..., :-1]
+
+        # process derivatives
+        derivatives = self.min_derivative + F.softplus(raw_derivatives)
+        return widths, cumwidths, heights, cumheights, derivatives
+
+
