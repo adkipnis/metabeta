@@ -265,3 +265,19 @@ def plotIntervals(ax,
     ax.legend()
     
     
+def plotAllIntervals(model: Approximator,
+                     proposed: torch.Tensor,
+                     mcmc: torch.Tensor,
+                     targets: torch.Tensor,
+                     names: list):
+    q1 = model.quantiles(proposed, [.025, .25, .50, .75, .975])
+    q2 = model.quantiles(mcmc, [.025, .25, .50, .75, .975])
+    n = len(names)
+    w = int(torch.tensor(n).sqrt().ceil())
+    _, axs = plt.subplots(figsize=(6 * w, 4 * w), ncols=w, nrows=w)
+    axs = axs.flatten()
+    for i, name in enumerate(names):
+        plotIntervals(axs[i], q1[:, i], q2[:, i], targets[:, i], name)
+    for i in range(n, w*w):
+        axs[i].set_visible(False)
+    
