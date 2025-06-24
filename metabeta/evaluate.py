@@ -141,3 +141,22 @@ def plotSBC(ranks: torch.Tensor, names: list, color='darkgreen') -> None:
     for i in range(n, w*w):
         axs[i].set_visible(False)
     
+def getWasserstein(sbc: torch.Tensor, n_points=1000):
+    b, d = sbc.shape
+    
+    # support
+    x = np.linspace(0, 1, n_points)
+    dx = x[1] - x[0]
+    
+    # distributions
+    p = [gaussian_kde(sbc[:,i], bw_method='scott')(x) for i in range(d)]
+    q = np.ones_like(x)
+
+    # cdfs
+    ecdf = [np.cumsum(p_i) * dx for p_i in p] 
+    ucdf = np.cumsum(q) * dx
+    
+    wd = [wasserstein_distance(ecdf_i, ucdf) for ecdf_i in ecdf]
+    return float(sum(wd)/d)
+
+
