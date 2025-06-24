@@ -379,3 +379,25 @@ def subsetFFX(batch: dict, batch_idx: int = 0) -> dict:
     return ds
         
         
+def subsetMFX(batch: dict, batch_idx: int = 0) -> dict:
+    # extract batch_idx
+    ds = {k: v[batch_idx:batch_idx+1].clone() for k, v in batch.items()
+          if isinstance(v, torch.Tensor)}
+
+    # repeat all tensors n times
+    n = ds['X'].shape[-2]
+    ds = {k: v.repeat(n, *[1]*(v.ndim-1)) for k, v in ds.items()}
+
+    # dynamically subset
+    ns, mask_n =  ds['n_i'], ds['mask_n']
+    X, y = ds['X'], ds['y']
+    for i in range(n):
+        i_ = i + 1 + torch.zeros_like(ns[i])
+        ns[i] = torch.min(i_, ns[i])
+        mask_n[i,:, i+1:n] = False
+        X[i, :, i+1:n] = torch.zeros_like(X[i, :, i+1:n])
+        y[i, :, i+1:n] = torch.zeros_like(y[i, :, i+1:n])        
+    ds.update(dict(n=ns, mask_n=mask_n, X=X, y=y))
+    return ds
+
+
