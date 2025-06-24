@@ -36,3 +36,46 @@ class Coupling(nn.Module):
         return (x1, x2), log_det
 
 
+class DualCoupling(Transform):
+    def __init__(self,
+                 d_data: int,
+                 d_context: int = 0,
+                 transform: str = 'affine',
+                 net_kwargs: dict = {},
+                 ):
+        super().__init__()
+        self.pivot = d_data//2
+        split_dims = [self.pivot, d_data - self.pivot] 
+        self.coupling1 = Coupling(
+            split_dims=split_dims, d_context=d_context, net_kwargs=net_kwargs, transform=transform)
+        self.coupling2 = Coupling(
+            split_dims=split_dims[::-1], d_context=d_context, net_kwargs=net_kwargs, transform=transform)
+
+    def forwardMask(self, mask: torch.Tensor):
+        return mask
+
+    def forward(self, x, condition=None, mask=None):
+        x1, x2 = x[..., :self.pivot], x[..., self.pivot:]
+        if mask is not None:
+            mask1, mask2 = mask[..., :self.pivot], mask[..., self.pivot:]
+        else:
+            mask1, mask2 = None, None
+        (z1, z2), log_det1 = self.coupling1(x1, x2, condition, mask2)
+        (z2, z1), log_det2 = self.coupling2(z2, z1, condition, mask1)
+        z = torch.cat([z1, z2], dim=-1)
+        log_det = log_det1 + log_det2
+        return z, log_det, mask
+
+    def inverse(self, z, condition=None, mask=None):
+        z1, z2 = z[..., :self.pivot], z[..., self.pivot:]
+        if mask is not None:
+            mask1, mask2 = mask[..., :self.pivot], mask[..., self.pivot:]
+        else:
+            mask1, mask2 = None, None
+        (z2, z1), log_det2 = self.coupling2.inverse(z2, z1, condition, mask1)
+        (x1, x2), log_det1 = self.coupling1.inverse(z1, z2, condition, mask2)
+        x = torch.cat([x1, x2], dim=-1)
+        log_det = log_det1 + log_det2
+        return x, log_det, mask
+
+
