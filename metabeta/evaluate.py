@@ -160,3 +160,10 @@ def getWasserstein(sbc: torch.Tensor, n_points=1000):
     return float(sum(wd)/d)
 
 
+def getDistanceRanks(targets: torch.Tensor, proposed: dict):
+    samples = proposed['samples']
+    dist_prior = targets.unsqueeze(-1).abs()
+    dist_post = samples.abs()
+    ranks = (dist_post < dist_prior).float().mean(-1)
+    return ranks
+
