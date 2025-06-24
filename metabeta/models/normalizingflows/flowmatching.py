@@ -58,3 +58,8 @@ class FlowMatching(nn.Module):
             field = field * mask
         return field
 
+    def sampleTime(self, batch_size: int) -> torch.Tensor:
+        # sample t from a power-law distribution over [0, 1] (alpha=0 -> uniform)
+        t = torch.rand(batch_size)
+        return t.pow(1. / (1. + self.alpha))
+
