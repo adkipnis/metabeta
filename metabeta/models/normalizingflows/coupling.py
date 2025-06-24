@@ -79,3 +79,108 @@ class DualCoupling(Transform):
         return x, log_det, mask
 
 
+class CouplingFlow(nn.Module):
+    '''
+    learns an invertible conditional mapping from a target distribution to a standard normal
+    mask indicates padding along the target dim (e.g. regression weights) and is dynamically propagated
+    '''
+    def __init__(
+        self,
+        d_target: int,
+        d_context: int = 0,
+        n_flows: int = 6,
+        permute_mode: str | None = 'shuffle',
+        use_actnorm: bool = True,
+        use_linear: bool = False,
+        base_dist: str = 'gaussian', # ['gaussian', 'student', 'uniform']
+        transform: str = 'affine', # ['affine', 'rq']
+        net_kwargs: dict = {},
+    ):
+        super().__init__()
+        self.d_target = d_target
+        dists = {'gaussian': DiagGaussian, 'student': DiagStudent, 'uniform': DiagUniform}
+        self.base = dists[base_dist]()
+        flows = []
+        for _ in range(n_flows):
+            if use_actnorm:
+                flows.append(ActNorm(d_target))
+            if permute_mode is not None:
+                flows.append(Permute(d_target, permute_mode))
+            if use_linear:
+                flows.append(LU(d_target, identity_init=True))
+            flows.append(DualCoupling(d_data=d_target, d_context=d_context,
+                                      transform=transform, net_kwargs=net_kwargs))
+        self.flows = nn.ModuleList(flows)
+ 
+    def forward(self, x, condition=None, mask=None):
+        z = x
+        log_det = torch.zeros(x.shape[:-1], device=x.device)
+        for flow in self.flows:
+            z_, ld, mask = flow.forward(z, condition, mask)
+            if z_.isnan().sum() > 0:
+                print("nans in flow")
+            log_det += ld
+            z = z_
+        return z, log_det, mask
+    
+    def forwardMask(self, mask: torch.Tensor):
+        for flow in self.flows:
+            mask = flow.forwardMask(mask) # type: ignore
+        return mask
+
+    def inverse(self, z, condition=None, mask=None):
+        x = z
+        log_det = torch.zeros(z.shape[:-1])
+        for flow in reversed(self.flows):
+            x, ld, mask = flow.inverse(x, condition, mask) # type: ignore
+            log_det += ld
+        return x, log_det, mask
+    
+    def _log_prob(self, z: torch.Tensor, log_det: torch.Tensor, mask=None):
+        log_p = self.base.log_prob(z)
+        if mask is not None:
+            log_p = log_p * mask
+        return log_p.sum(dim=-1) + log_det
+
+    def log_prob(self, x: torch.Tensor, condition=None, mask=None):
+        z, log_det, mask = self.forward(x, condition, mask)
+        return self._log_prob(z, log_det, mask)
+
+    def sample(self,
+               n: int = 100,
+               context: torch.Tensor|None = None,
+               mask: torch.Tensor|None = None,
+               log_prob: bool = False,
+               ) -> torch.Tensor:
+        # determine shape
+        b = 1
+        if context is not None:
+            b = context.shape[0]
+        elif mask is not None:
+            b = mask.shape[0]
+        sampling_shape = (b, n, self.d_target)
+
+        # prepare context and mask
+        if context is not None and context.dim() > 1:
+            context = context.unsqueeze(-2).expand(b, n, -1)
+        if mask is not None:
+            if mask.dim() < len(sampling_shape):
+                mask = mask.unsqueeze(-2).expand(*sampling_shape)
+            mask_z = self.forwardMask(mask)
+        else:
+            mask_z = None
+
+        # sample from base and optionally apply mask in base space
+        z = self.base.sample(sampling_shape)
+        if mask_z is not None:
+            z = z * mask_z
+
+        # project z back to x space
+        x, log_det, _ = self.inverse(z, context, mask_z)
+        
+        # optionally get probability
+        log_q = None
+        if log_prob:
+            log_q = self._log_prob(z, log_det, mask_z)
+        return x, log_q
+
