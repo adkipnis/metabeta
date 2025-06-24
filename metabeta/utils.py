@@ -77,3 +77,14 @@ def dInput(d_data: int, fx_type: str) -> int:
 def nParams(model: nn.Module) -> None:
     print(sum(p.numel() for p in model.parameters() if p.requires_grad))
 
+# -----------------------------------------------------------------------------
+# mask utils
+def maskLoss(losses: torch.Tensor, targets: torch.Tensor,
+             average: bool = False) -> torch.Tensor:
+    # losses (batch, d)
+    mask = (targets != 0).float()
+    masked_losses = losses * mask
+    loss = masked_losses.sum(dim=-1)
+    if average: 
+        loss = loss / mask.sum(dim=-1)
+    return loss # (batch)
