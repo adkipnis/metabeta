@@ -46,3 +46,15 @@ class FlowMatching(nn.Module):
             
         
 
+    def forward(self, t: torch.Tensor, theta: torch.Tensor, context: torch.Tensor|None = None, mask=None) -> torch.Tensor:
+        # separately embed timed theta and optionally context
+        # pass both through continuous flow 
+        t_theta = torch.cat([t, theta], dim=-1)
+        if self.d_context > 0: # case: context model
+            field = self.flow(context, context=t_theta)
+        else: # case: context-less model
+            field = self.flow(t_theta)
+        if mask is not None:
+            field = field * mask
+        return field
+
