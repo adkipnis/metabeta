@@ -109,3 +109,88 @@ class DeepSet(Summarizer):
         return h
 
 
+# -----------------------------------------------------------------------------
+# PoolFormer
+class MAB(nn.Module):
+    # Multihead Attention Block
+    def __init__(self,
+                 d_model: int,
+                 d_hidden: int | Iterable,
+                 n_heads: int = 4,
+                 activation: str = 'GELU',
+                 dropout: float = 0.01,
+                 ):
+        super(MAB, self).__init__()
+        
+        # projection
+        self.mlp = MLP(
+            d_input=d_model, d_hidden=d_hidden, d_output=d_model,
+            activation=activation, dropout=dropout)
+        
+        # attention
+        self.mha = MultiheadAttention(
+            d_model, n_heads, dropout=dropout, batch_first=True, add_bias_kv=True)
+        
+        # layer norms
+        self.ln0 = nn.LayerNorm(d_model)
+        self.ln1 = nn.LayerNorm(d_model)
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor,
+                mask: torch.Tensor | None = None):
+        h, _ = self.mha(x, y, y, key_padding_mask=mask)
+        h = self.ln0(h + x)
+        out = self.ln1(h + self.mlp(h))
+        return out
+
+
+class PMA(nn.Module):
+    # Pooling by Multihead Attention
+    def __init__(self, 
+                 d_model: int,
+                 d_hidden: int | Iterable,
+                 n_heads: int = 4,
+                 dropout: float = 0.01,
+                 activation: str = 'GELU',
+                 n_seeds: int = 1,
+                 ):
+        super(PMA, self).__init__()
+        
+        self.enc = MLP(
+            d_input=d_model, d_hidden=d_hidden, d_output=d_model,
+            activation=activation, dropout=dropout)
+        self.mab = MAB(
+            d_model=d_model, d_hidden=d_hidden, n_heads=n_heads,
+            activation=activation, dropout=dropout)
+        self.s = nn.Parameter(torch.Tensor(1, n_seeds, d_model))
+        nn.init.xavier_uniform_(self.s)
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None):
+        h = self.enc(x)
+        seeds_tiled = self.s.repeat(x.size(0), 1, 1)
+        out = self.mab(seeds_tiled, h, mask=mask)
+        return out
+
+
+class TFE(nn.Module):
+    # TransformerEncoder
+    def __init__(self,
+                 d_model: int,
+                 d_ff: int,
+                 n_heads: int = 4,
+                 n_blocks: int = 1,
+                 dropout: float = 0.01,
+                 activation: str = 'GELU',
+                 ):
+        super(TFE, self).__init__()
+        encoder_layer = TransformerEncoderLayer(d_model=d_model,
+                                                dim_feedforward=d_ff,
+                                                nhead=n_heads,
+                                                dropout=dropout,
+                                                batch_first=True,
+                                                activation=activation.lower())
+        self.net = nn.TransformerEncoder(encoder_layer, num_layers=n_blocks)
+
+    def forward(self, x: torch.Tensor, padding_mask: torch.Tensor | None = None):
+        return self.net(x, src_key_padding_mask=padding_mask)
+
+
