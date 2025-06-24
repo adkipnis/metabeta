@@ -255,3 +255,55 @@ class PoolFormer(Summarizer):
         return out
 
 
+# =============================================================================
+if __name__ == "__main__":
+    from metabeta.models.embedders import JointEmbedder
+    
+    # prepare data
+    n = 10
+    d = 3
+    x_ = torch.randn(100, n, d)
+    y = torch.randn(100, n, 1)
+    mask = torch.ones((100, n)).bool()
+    mask[..., -1] = False
+    x_[~mask] = 0.
+    emb = nn.Linear(d, 64)
+    x = emb(x_)
+
+    # deepset
+    model = DeepSet(d_model=64, d_ff=64, d_output=16, n_blocks=2)
+    output = model(x, mask)
+
+    # multihead attentio block
+    model = MAB(d_model=64, d_hidden=128, n_heads=4)
+    output = model(x, x, mask=mask)
+
+    # pooling by multihead attention
+    model = PMA(d_model=64, d_hidden=128, n_heads=4)
+    output = model(x, mask=mask)
+    num_params = sum(p.numel() for p in model.enc.parameters() if p.requires_grad)
+    print(num_params)
+
+    # transformer encoder
+    model = TFE(d_model=64, d_ff=128, n_heads=4, n_blocks=1)
+    output = model(x, mask)
+
+    # poolformer
+    model = PoolFormer(64, 128, 16, n_blocks=2, n_heads=4)
+    output = model(x, mask)
+    num_params = sum(p.numel() for p in model.enc.parameters() if p.requires_grad)
+    print(num_params)
+    
+    # Invariance (poolformer)
+    model.eval()
+    perm = torch.randperm(n)
+    embedder = JointEmbedder(2, 64, 'ffx')
+    x1 = embedder(x_, y)
+    out1 = model(x1, mask)
+    x2 = embedder(x_[:, perm], y[:, perm])
+    out2 = model(x2, mask[:, perm])
+    assert torch.allclose(out1, out2, atol=1e-5), "poolformer not permutation invariant"
+
+    
+    
+    
