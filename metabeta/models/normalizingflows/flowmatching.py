@@ -126,3 +126,29 @@ class FlowMatching(nn.Module):
         raise NotImplementedError
 
 
+# =============================================================================
+if __name__ == '__main__':
+    b, d, c = 50, 8, 15
+    theta = torch.randn((b, d))
+    context = torch.randn((b, c))
+    
+    # context-free model
+    model = FlowMatching(d)
+    loss = model.loss(theta)
+    
+    # context model
+    model = FlowMatching(d, c)
+    model.loss(theta, context).mean()
+
+    # sample
+    model.eval()
+    samples = model.sample(n=100, context=context, method='dopri5')
+    
+    # mask
+    theta[0,0] = 0.
+    mask = (theta != 0.).float()
+    loss = model.loss(theta, context, mask).sum() / mask.sum()
+    samples = model.sample(n=100, context=context, mask=mask, method='dopri5')
+    
+    
+    
