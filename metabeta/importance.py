@@ -17,3 +17,23 @@ def logPrior(beta: torch.Tensor, sigma: torch.Tensor, mask: torch.Tensor):
     return lp_beta + lp_sigma
 
 
+def logLikelihood(beta: torch.Tensor, sigma: torch.Tensor, batch: dict):
+    # y: (b, n)
+    # X: (b, n, d)
+    # beta: (b, d, s)
+    # sigma: (b, 1) or (b, s)
+    y, X, ns = batch['y'], batch['X'], batch['n'].unsqueeze(-1)
+
+    # compute sum of squared residuals
+    mu = torch.einsum('bnd,bds->bns', X, beta) # (b, n, s)
+    ssr = (y - mu).square().sum(dim=1) # (b, s)
+
+    # Compute log likelihood per batch
+    ll = (
+        - 0.5 * ns * torch.tensor(2 * torch.pi).log() 
+        - ns * sigma.log()
+        - 0.5 * ssr / sigma.square()
+    )
+    return ll # (b, s)
+
+
