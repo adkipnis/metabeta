@@ -183,3 +183,39 @@ class RationalQuadratic(CouplingTransform):
         return widths, cumwidths, heights, cumheights, derivatives
 
 
+    def __call__(self, input2, params, mask2=None, inverse=False):
+        # extract params
+        raw_widths, raw_heights, raw_derivs = params['raw_widths'], params['raw_heights'], params['raw_derivs']
+        # masks
+        inside_interval_mask = (input2 >= -self.tail_bound) & (input2 <= self.tail_bound)
+        outside_interval_mask = ~inside_interval_mask
+
+        # init outputs
+        output2 = torch.zeros_like(input2)
+        output2[outside_interval_mask] = input2[outside_interval_mask]
+        log_det = torch.zeros_like(input2)
+
+        # add linear tails
+        raw_derivatives = F.pad(raw_derivs, pad=(1, 1))
+        raw_derivatives[..., 0] = self.tail_constant
+        raw_derivatives[..., -1] = self.tail_constant
+
+        # apply spline inside of interval mask
+        if torch.any(inside_interval_mask):
+            f = self._inverse if inverse else self._forward
+            output2_, log_det_ = f(
+                input2[inside_interval_mask],
+                raw_widths[inside_interval_mask, :],
+                raw_heights[inside_interval_mask, :],
+                raw_derivatives[inside_interval_mask, :]
+                )
+            output2[inside_interval_mask] = output2_
+            log_det[inside_interval_mask] = log_det_
+
+        # optionally mask outputs and logdet
+        if mask2 is not None:
+            output2 = output2 * mask2
+            log_det = log_det * mask2
+        return output2, log_det.sum(-1)
+
+
