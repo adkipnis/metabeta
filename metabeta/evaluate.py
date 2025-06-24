@@ -315,3 +315,23 @@ def kldMarginal(mean_lin: torch.Tensor, var_lin: torch.Tensor,
     return kl.sum(dim=-1)
 
 
+def compareWithAnalytical(batch: dict,
+                          loc: torch.Tensor, scale: torch.Tensor,
+                          marginal: bool = True) -> torch.Tensor:
+    # prepare proposed posterior
+    mean_prop, var_prop = loc[..., :-1], scale[..., :-1].square()
+    # prepare analytical solution
+    params = batch['analytical']['ffx']
+    mean_lin, Sigma_lin = params['mu'], params['Sigma']
+    sigma_error = batch['sigma_error'].square()
+    # calculate KL Divergence
+    if marginal:
+        var_lin = torch.diagonal(Sigma_lin, dim1=-2, dim2=-1) * sigma_error.view(-1,1)
+        kld = kldMarginal(mean_lin, var_lin, mean_prop, var_prop)
+    else:
+        Sigma_prop = torch.diag_embed(var_prop)
+        Sigma_lin = Sigma_lin * sigma_error.view(-1,1,1)
+        kld = kldFull(mean_lin, Sigma_lin, mean_prop, Sigma_prop)
+    return kld
+
+
