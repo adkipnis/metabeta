@@ -37,3 +37,28 @@ def logLikelihood(beta: torch.Tensor, sigma: torch.Tensor, batch: dict):
     return ll # (b, s)
 
 
+def getImportanceWeights(log_likelihood: torch.Tensor,
+                         log_prior: torch.Tensor,
+                         log_q: torch.Tensor) -> torch.Tensor:
+    log_w = log_likelihood + log_prior - log_q
+    log_w_min, log_w_max = torch.quantile(
+        log_w, torch.tensor([0.0, 0.975]), dim=-1).unsqueeze(-1)
+    log_w = log_w.clamp(min=log_w_min, max=log_w_max)
+    w = (log_w - log_w_max).exp()
+    w = w / w.mean(dim=-1, keepdim=True)
+    return w
+
+
+def importanceSample(batch: dict, proposed: dict) -> Dict[str, torch.Tensor]:
+    samples = proposed['samples']
+    beta, sigma = samples[:, :-1], samples[:, -1] + 1e-9
+    log_prior = logPrior(beta, sigma, batch['mask_d'])
+    log_likelihood = logLikelihood(beta, sigma, batch)
+    w = getImportanceWeights(log_likelihood, log_prior, proposed['log_prob'])
+    n_eff = w.sum(-1).square() / (w.square().sum(-1) + 1e-5)
+    sample_efficiency = n_eff / samples.shape[-1]
+    return {'weights': w,
+            'n_eff': n_eff,
+            'sample_efficiency': sample_efficiency}
+
+
