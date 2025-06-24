@@ -136,3 +136,13 @@ class RationalQuadratic(CouplingTransform):
         self.tail_constant = np.log(np.exp(1 - self.min_derivative) - 1)
 
 
+    def _searchSorted(self, bin_locations, inputs, eps=1e-6):
+        bin_locations = bin_locations.detach().clone()
+        bin_locations[..., -1] += eps
+        idx = (torch.searchsorted(
+            bin_locations, inputs[..., None],
+            side="right",
+        ) - 1).squeeze(-1)
+        return idx 
+
+
