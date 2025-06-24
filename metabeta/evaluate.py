@@ -82,3 +82,21 @@ def coverageError(coverage: dict):
     mean_error = errors.sum(0) / (mask.sum(0) + 1e-12)
     return mean_error
 
+def plotCalibration(coverage: Dict[str, torch.Tensor], names, source: str = '') -> None:
+    nominal = [int(k) for k in coverage.keys()]
+    matrix = torch.cat([t.unsqueeze(-1) for _,t in coverage.items()], dim=-1)
+    _, ax = plt.subplots(figsize=(8, 6))
+    for i, name in enumerate(names):
+        color = colors[i]
+        coverage_i = matrix[i] * 100.
+        ax.plot(nominal, coverage_i, color=color, label=name)
+    ax.plot([50, 95], [50, 95], '--', lw=2, zorder=1,
+            color='grey', label='identity')
+    ax.set_xticks(nominal)
+    ax.set_yticks(nominal)
+    ax.set_xlabel('nominal CI')
+    ax.set_ylabel('empirical CI')
+    ax.legend()
+    ax.grid(True)
+    plt.title(f'coverage {source}')
+
