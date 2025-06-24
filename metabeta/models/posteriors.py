@@ -591,3 +591,30 @@ class MatchingPosterior(FlowPosterior):
                                   method=self.int_method, n_steps=self.n_steps)
 
 
+# =============================================================================
+if __name__ == '__main__':
+    d_model = 32
+    d_target = 4
+    summary = torch.randn(100, d_model)
+    targets = torch.randn(100, d_target)
+    targets[..., -1] = targets[..., -1].exp() # last target is noise variance
+    
+    
+    # point posterior
+    model = PointPosterior(d_model, d_target)
+    loss, proposed = model(summary, targets)
+
+    # mixture posterior
+    model = MixturePosterior(d_model, d_target, n_components=5, comp_dist=D.Normal)
+    loss, proposed = model(summary, targets)
+
+    # discrete posterior
+    borders = normalBins(3., steps=d_model+1)
+    model = DiscretePosterior(d_model, d_target, borders)
+    loss, proposed = model(summary, targets)
+
+    # flow posterior
+    model = CouplingPosterior(d_model, d_target, fx_type='ffx')
+    loss, samples = model(summary, targets)
+        
+    
