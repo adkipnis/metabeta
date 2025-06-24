@@ -39,3 +39,33 @@ def constrain(a: torch.Tensor, b: torch.Tensor, max_ratio: float, min_val: int):
     return a, b
 
 
+# -----------------------------------------------------------------------------
+# FFX
+def genFFX(batch_size: int, seed: int, mcmc: bool = False, analytical: bool = True) -> dict:
+    ''' Generate a [batch_size] fixed effects model datasets with varying n and d. '''
+    # init
+    torch.manual_seed(seed)
+    data = []
+    iterator = tqdm(range(batch_size))
+    iterator.set_description(f'{part:02d}/{cfg.iterations:02d}')
+
+    # presample hyperparams
+    sigma = sampleHN((batch_size,), 1., cfg.max_sigma)
+    d = sampleInt(batch_size, cfg.min_d, cfg.max_d).tolist()
+    n = sampleInt(batch_size, cfg.min_n, cfg.max_n).tolist()
+
+    # sample datasets
+    for i in iterator:
+        lm = FixedEffects(sigma[i], d[i])
+        ds = lm.sample(n[i], include_posterior=analytical)
+        if mcmc:
+            ds['mcmc'] = fitFFX(**ds)
+        data += [ds]
+    info = {'d': d, 'n': n, 'sigma': sigma,
+            'max_d': cfg.max_d, 'max_n': cfg.max_n,
+            'max_q': 0, 'max_m': 0,
+            'max_sigma': cfg.max_sigma,
+            'seed': seed}
+    return {'data': data, 'info': info}
+
+
