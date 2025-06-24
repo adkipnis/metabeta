@@ -94,3 +94,41 @@ class MLP(nn.Module):
         return h
 
 
+class ResidualBlock(nn.Module):
+    def __init__(self,
+                 d_data: int,
+                 d_context: int = 0,
+                 activation: str = 'Mish',
+                 dropout: float = 0.01,
+                 norm: str | None = None,
+                 use_glu: bool = False,
+                 ):
+        super().__init__()
+        self.use_glue = use_glu
+        act = eval(f'nn.{activation}')
+        layers = [nn.Linear(d_data, d_data)]
+        if norm == 'batch':
+            layers += [nn.BatchNorm1d(d_data, eps=1e-3)]
+        elif norm == 'layer':
+            layers += [nn.LayerNorm(d_data, eps=1e-3)]
+        layers += [act()]
+        layers += [nn.Linear(d_data, d_data)]
+        if norm == 'batch':
+            layers += [nn.BatchNorm1d(d_data, eps=1e-3)]
+        elif norm == 'layer':
+            layers += [nn.LayerNorm(d_data, eps=1e-3)]
+        layers += [nn.Dropout(dropout)]
+        self.net = nn.Sequential(*layers)
+        if d_context > 0 and use_glu:
+            self.proj = nn.Linear(d_context, d_data)
+        self.act = act()
+
+    def forward(self, x: torch.Tensor, context=None):
+        h = self.net(x)
+        if context is not None and self.use_glue:
+            cat = torch.cat([h, self.proj(context)], dim=-1)
+            h = F.glu(cat, dim=-1)
+        h = self.act(h + x)
+        return h
+
+
