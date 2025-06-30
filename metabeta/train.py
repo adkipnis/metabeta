@@ -196,6 +196,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--local", action='store_false', help="Infer local variables (default = True)")
     parser.add_argument("-b", "--batch-size", type=int, default=50, help="Batch size (default = 50)")
     parser.add_argument("--lr", type=float, default=5e-4, help="Learning rate (Adam, default = 5e-4)")
+    parser.add_argument("--standardize", action='store_false', help="Standardize inputs (default = True)")
 
     # model
     parser.add_argument("--emb_type", type=str, default="joint", help="Embedding architecture [joint, separate, sequence] (default = joint)")
@@ -234,7 +235,7 @@ if __name__ == "__main__":
                          cfg.heads, cfg.blocks,
                          cfg.emb_type, cfg.sum_type, cfg.post_type,
                          bins=cfg.bins, components=cfg.components, flows=cfg.flows,
-                         max_m=cfg.m,
+                         max_m=cfg.m, standardize=cfg.standardize,
                          ).to(device)
     print(f'{"-"*console_width}\nmodel: {modelID(cfg)}')
 
