@@ -139,7 +139,6 @@ class Approximator(nn.Module):
                 min_val = -0.5
                 max_val = 4.5
 
-    
             # plot
             ax.set_axisbelow(True)
             ax.grid(True)
@@ -237,8 +236,11 @@ class ApproximatorFFX(Approximator):
                  embedder: nn.Module,
                  summarizer: Summarizer,
                  posterior: Posterior,
+                 constrain: bool = True, # constrains sigma
+                 standardize: bool = False, # standardizes inputs
                  ):
-        super().__init__(embedder, summarizer, posterior)
+        super().__init__(embedder, summarizer, posterior, constrain, standardize)
+        
 
     @classmethod
     def build(cls,
