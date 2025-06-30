@@ -4,14 +4,14 @@ import numpy as np
 import torch
 from torch import nn
 from torch import distributions as D
-from metabeta.models.embedders import JointEmbedder, SeparateEmbedder
+from metabeta.models.embedders import Embedder, JointEmbedder, SeparateEmbedder
 from metabeta.models.summarizers import Summarizer, DeepSet, PoolFormer
 from metabeta.models.posteriors import Posterior, PointPosterior, MixturePosterior, DiscretePosterior, CouplingPosterior, MatchingPosterior, normalBins, halfNormalBins
 mse = nn.MSELoss()
 
 class Approximator(nn.Module):
     def __init__(self,
-                 embedder: nn.Module,
+                 embedder: Embedder,
                  summarizer: Summarizer,
                  posterior: Posterior,
                  ):
