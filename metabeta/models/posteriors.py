@@ -451,28 +451,9 @@ class FlowPosterior(nn.Module):
     def sample(self, summary: torch.Tensor, mask=None, n: int = 1000, log_prob=False):
         raise NotImplementedError
 
-    def processTargets(self, targets: torch.Tensor):
-        d_real = (self.d_data - 1)
-        if self.fx_type == 'mfx':
-            d_real //= 2 
-        subtargets = targets[:, d_real:]
-        real = inverseSoftplus(subtargets)
-        targets[:, d_real:] = real
-        return targets
-
-    def processSamples(self, samples):
-        d_real = (self.d_data - 1)
-        if self.fx_type == 'mfx':
-            d_real //= 2
-        subsamples = samples[:, d_real:]
-        positive = F.softplus(subsamples)
-        samples[:, d_real:] = positive
-        return samples
-
     def forward(self, summary: torch.Tensor, targets: torch.Tensor,
-                sample=True, n: int = 100, log_prob=False, constrain=True, **kwargs):
+                sample=True, n: int = 100, log_prob=False, **kwargs):
         mask = (targets != 0.).float()
-        targets = self.processTargets(targets.clone()) if constrain else targets
         loss = self.loss(summary, targets, mask=mask)
         proposed = dict()
         if sample:
@@ -481,7 +462,6 @@ class FlowPosterior(nn.Module):
                 samples = samples.permute(0, 2, 1) # (b, d, s)
             elif samples.dim() == 4:
                 samples = samples.permute(0, 1, 3, 2) # (b, m, d, s)
-            samples = self.processSamples(samples.clone()) if constrain else samples
             proposed = {'samples': samples, 'log_prob': log_q}
         return loss, proposed
 
