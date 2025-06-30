@@ -106,3 +106,9 @@ def inverseSoftplus(y: torch.Tensor) -> torch.Tensor:
         )
     )
 
+def maskedMean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    dim = x.dim()-2
+    sums = x.sum(dim, keepdim=True)
+    count = mask.sum(dim, keepdim=True)
+    return sums / (count + 1e-12)
+
