@@ -187,11 +187,11 @@ def setup() -> argparse.Namespace:
 
     # data & training
     parser.add_argument("-t", "--fx_type", type=str, default="ffx", help="Type of dataset [ffx, mfx] (default = ffx)")
-    parser.add_argument("-d", type=int, default=1, help="Number of fixed effects (without bias, default = 1)")
+    parser.add_argument("-d", type=int, default=2, help="Number of fixed effects (without bias, default = 1)")
     parser.add_argument("-m", type=int, default=0, help="Maximum number of groups (default = 0).")
-    parser.add_argument("-n", type=int, default=50, help="Maximum number of samples per group (default = 50).")
-    parser.add_argument("-i", "--iterations", type=int, default=10, help="Maximum number of iterations to train (default = 50)")
-    parser.add_argument("--permute", action='store_false', help="Permute slope variables for uniform learning across heads (default = True)")
+    parser.add_argument("-n", type=int, default=30, help="Maximum number of samples per group (default = 50).")
+    parser.add_argument("-i", "--iterations", type=int, default=50, help="Maximum number of iterations to train (default = 50)")
+    parser.add_argument("--no_permute", action='store_false', help="Permute slope variables for uniform learning across heads (default = True)")
     parser.add_argument("--patience", type=int, default=5, help="Maximum number of iterations without improvement before Early Stopping (default = 5)")
     parser.add_argument("--local", action='store_false', help="Infer local variables (default = True)")
     parser.add_argument("-b", "--batch-size", type=int, default=50, help="Batch size (default = 50)")
@@ -210,7 +210,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--hidden", type=int, default=64, help="Hidden dimension (default = 64)")
     parser.add_argument("--ff", type=int, default=128, help="Feedforward dimension (default = 128)")
     parser.add_argument("--out", type=int, default=32, help="Summary dimension (default = 32)")
-    parser.add_argument("--blocks", type=int, default=3, help="Number of blocks in summarizer (default = 3)")
+    parser.add_argument("--blocks", type=int, default=2, help="Number of blocks in summarizer (default = 3)")
     parser.add_argument("--heads", type=int, default=8, help="Number of heads (poolformer, default = 8)")
     
     return parser.parse_args()
@@ -262,12 +262,12 @@ if __name__ == "__main__":
     # training loop
     print(f'features (max): {cfg.d}\nobservations (max): {cfg.n}')
     fn = dsFilename(cfg.fx_type, 'val', cfg.d, cfg.m, cfg.n, 500, 0)
-    dl_val = getDataLoader(fn, 500, permute=cfg.permute)
+    dl_val = getDataLoader(fn, 500, permute=not cfg.no_permute)
 
     print(f'iterations: {cfg.iterations + 1 - initial_iteration}\npatience: {cfg.patience}\nbatches per iteration: 200\ndatasets per batch: {cfg.batch_size}\n{"-"*console_width}')
     for iteration in range(initial_iteration, cfg.iterations + 1):
         fn = dsFilename(cfg.fx_type, 'train', cfg.d, cfg.m, cfg.n, int(1e4), iteration)
-        dl_train = getDataLoader(fn, cfg.batch_size, permute=cfg.permute)
+        dl_train = getDataLoader(fn, cfg.batch_size, permute=not cfg.no_permute)
         global_step = train(model, optimizer, dl_train, global_step)
         validation_step = validate(model, dl_val, validation_step)
         if iteration % 5 == 0 or stopper.stop:
