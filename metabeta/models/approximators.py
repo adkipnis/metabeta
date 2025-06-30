@@ -280,6 +280,7 @@ class ApproximatorFFX(Approximator):
 
         # 3. posteriors
         d_ffx = d_data + 1 # slopes + bias
+        d_out += 1 # add dataset size as additional summary variable
         if post_type == 'point':
             posterior = PointPosterior(d_out, d_ffx + 1)
         elif post_type == 'mixture':
