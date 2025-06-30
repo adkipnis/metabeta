@@ -14,18 +14,22 @@ class Approximator(nn.Module):
                  embedder: Embedder,
                  summarizer: Summarizer,
                  posterior: Posterior,
+                 constrain: bool = True,
+                 standardize: bool = False,
                  ):
         super().__init__()
         self.embedder = embedder
         self.summarizer = summarizer
         self.posterior = posterior
-
+        self.constrain = constrain
+        self.standardize = standardize
+        self.embedder.standardize = standardize
+    
     def targets(self, data: dict):
         raise NotImplementedError
 
     def forward(self, data: dict, sample: bool = False):
         raise NotImplementedError
-
     def moments(self, proposal: torch.Tensor | Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.posterior.other is not None:
             loc, scale = self.posterior.getLocScale(proposal['ffx'])
