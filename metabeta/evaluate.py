@@ -555,14 +555,16 @@ def setup() -> argparse.Namespace:
     # misc
     parser.add_argument("-s", "--seed", type=int, default=42, help="Model seed")
     parser.add_argument("--cores", type=int, default=4, help="Nubmer of processor cores to use (default = 4)")
-    parser.add_argument("-i", "--iteration", type=int, default=10, help="Preload model from iteration #i")
-    parser.add_argument("--importance", action='store_false', help="Do importance sampling (default = True)")
+    parser.add_argument("-i", "--iteration", type=int, default=50, help="Preload model from iteration #i")
+    parser.add_argument("--importance", action="store_false", help="Do importance sampling (default = True)")
+    parser.add_argument("--tag", type=str, default="std", help="Suffix for model ID (default = '')")
 
     # data & training
     parser.add_argument("-t", "--fx_type", type=str, default="ffx", help="Type of dataset [ffx, mfx] (default = ffx)")
-    parser.add_argument("-d", type=int, default=1, help="Number of fixed effects (without bias, default = 3)")
+    parser.add_argument("-d", type=int, default=2, help="Number of fixed effects (without bias, default = 3)")
     parser.add_argument("-m", type=int, default=0, help="Maximum number of groups (default = 30).")
-    parser.add_argument("-n", type=int, default=50, help="Maximum number of samples per group (default = 20).")
+    parser.add_argument("-n", type=int, default=30, help="Maximum number of samples per group (default = 20).")
+    parser.add_argument("--standardize", action='store_false', help="Infer local variables (default = True)")
 
     # model
     parser.add_argument("--emb_type", type=str, default="joint", help="Embedding architecture [joint, separate, sequence] (default = joint)")
@@ -576,7 +578,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--hidden", type=int, default=64, help="Hidden dimension (default = 64)")
     parser.add_argument("--ff", type=int, default=128, help="Feedforward dimension (default = 128)")
     parser.add_argument("--out", type=int, default=32, help="Summary dimension (default = 32)")
-    parser.add_argument("--blocks", type=int, default=3, help="Number of blocks in summarizer (default = 3)")
+    parser.add_argument("--blocks", type=int, default=2, help="Number of blocks in summarizer (default = 3)")
     parser.add_argument("--heads", type=int, default=8, help="Number of heads (poolformer, default = 8)")
     
     return parser.parse_args()
@@ -597,7 +599,7 @@ if __name__ == "__main__":
                                cfg.heads, cfg.blocks,
                                cfg.emb_type, cfg.sum_type, cfg.post_type,
                                bins=cfg.bins, components=cfg.components, flows=cfg.flows,
-                               max_m=cfg.m,
+                               max_m=cfg.m, standardize=cfg.standardize,
                                )
     model.eval()
     print(f'{"-"*console_width}\nmodel: {modelID(cfg)}')
