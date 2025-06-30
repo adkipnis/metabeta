@@ -320,6 +320,28 @@ class ApproximatorFFX(Approximator):
         out = torch.cat([data['ffx'], data['sigma_error'].unsqueeze(-1)], dim=-1)
         names = [rf'$\beta_{i}$' for i in range(data['ffx'].shape[1])] + [r'$\sigma_e$'] 
         return out, np.array(names)
+    
+    def _standardize(self, targets: torch.Tensor):
+        mu_y = self.embedder.mu_y.squeeze()
+        sigma_y = self.embedder.sigma_y.squeeze()
+        mu_X = self.embedder.mu_X.squeeze(1)
+        sigma_X = self.embedder.sigma_X.squeeze(1) + 1e-12
+        
+        # sigma
+        log_sigma = targets[:, -1]
+        targets[:, -1] = log_sigma - sigma_y.log()
+        
+        # slopes
+        beta = targets[:, 1:-1]
+        beta_std = beta * sigma_X / sigma_y.unsqueeze(-1)
+        targets[:, 1:-1] = beta_std
+            
+        # intercept
+        beta0 = targets[:, 0]
+        sum_term = (beta_std * mu_X / sigma_X).sum(1)
+        targets[:, 0] = (beta0 - mu_y) / sigma_y - sum_term
+        return targets
+    
 
     def forward(self, data, sample=False, log_prob=False, **kwargs):
         h = self.embedder(**data) # (b, n, d_hidden)
