@@ -30,6 +30,12 @@ class JointEmbedder(Embedder):
         self.emb = nn.Linear(self.d_input, d_model)
         
         
+    def preprocess(self, x: torch.Tensor) -> torch.Tensor:
+        mask = (x != 0.)
+        mean = maskedMean(x, mask)
+        std = maskedStd(x, mask, mean)
+        x = (x - mean) * mask / (std + 1e-12)
+        return x, mean, std
 
     def forward(self, y: torch.Tensor, X: torch.Tensor,
                 Z: None | torch.Tensor = None,
