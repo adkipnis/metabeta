@@ -120,7 +120,7 @@ def getRanks(targets: torch.Tensor, proposed: dict, absolute=False) -> torch.Ten
     return ranks
 
 
-def plotSBC(ranks: torch.Tensor, names: list, color='darkgreen') -> None:
+def plotSBC(ranks: torch.Tensor, mask: torch.Tensor, names: list, color='darkgreen') -> None:
     eps = 0.02
     n = len(names)
     w = int(torch.tensor(n).sqrt().ceil())
@@ -130,7 +130,11 @@ def plotSBC(ranks: torch.Tensor, names: list, color='darkgreen') -> None:
         ax = axs[i]
         ax.set_axisbelow(True)
         ax.grid(True)
-        xx = ranks[:, i]
+        if i < mask.shape[1]:
+            mask_i = mask[:, i]
+            xx = ranks[mask_i, i]
+        else:
+            xx = ranks[:, i]
         sns.histplot(xx, kde=True, ax=ax, binwidth=0.05, binrange=(0,1),
                      color=color, alpha=0.5, stat="density", label=names[i])
         ax.set_xlim(0-eps,1+eps)
