@@ -55,7 +55,11 @@ def modelID(cfg: argparse.Namespace) -> str:
         c = cfg.components
     elif cfg.post_type in ["flow-affine", "flow-spline", "flow-matching"]:
         c = cfg.flows
-    return f"{cfg.fx_type}-{cfg.emb_type}-{cfg.sum_type}-{cfg.blocks}-{cfg.hidden}-{cfg.ff}-{cfg.out}-{cfg.post_type}-{c}-{cfg.act}-dropout={cfg.dropout}-seed={cfg.seed}"
+    if cfg.tag:
+        suffix = '-' + cfg.tag
+    else:
+        suffix = ''
+    return f"{cfg.fx_type}-{cfg.emb_type}-{cfg.sum_type}-{cfg.blocks}-{cfg.hidden}-{cfg.ff}-{cfg.out}-{cfg.post_type}-{c}-{cfg.act}-dropout={cfg.dropout}-seed={cfg.seed}{suffix}"
 
 def getDataSet(filename: Path, permute: bool = True) -> LMDataset:
     ''' Load a dataset from a file, optionally flatten data to sequence, optionally permute features, return dataloader'''
