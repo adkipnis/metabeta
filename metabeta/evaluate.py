@@ -498,20 +498,20 @@ def validate(model: Approximator, batch: dict,
                 
             # SBC plot
             ranks = getRanks(targets, proposed['global'], absolute=False)
-            plotSBC(ranks, names, color='darkgreen')
+            plotSBC(ranks, batch['mask_d'], names, color='darkgreen')
             # wd = getWasserstein(ranks)
             if mcmc is not None:
                 ranks_ = getRanks(targets, mcmc)
-                plotSBC(ranks_, names, color='darkorange')
+                plotSBC(ranks_, batch['mask_d'], names, color='darkorange')
                 wd_ = getWasserstein(ranks_)
                 print(f"Wasserstein Distance (SBC): {wd_:.3f}")
             
             # ECDF diff plot
             ranks = getRanks(targets, proposed['global'], absolute=True)
-            plotECDF(ranks, names, color='darkgreen')
+            plotECDF(ranks, batch['mask_d'], names, color='darkgreen')
             if mcmc is not None:
                 ranks_ = getRanks(targets, mcmc, absolute=True)
-                plotECDF(ranks_, names, color='darkorange')                
+                plotECDF(ranks_, batch['mask_d'], names, color='darkorange')                
             
             # CI calibration plot
             covered = getCoverage(model, proposed['global'], targets)
