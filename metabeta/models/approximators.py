@@ -30,6 +30,10 @@ class Approximator(nn.Module):
 
     def forward(self, data: dict, sample: bool = False):
         raise NotImplementedError
+        
+    def addIntercept(self, summary: torch.Tensor, data: dict) -> torch.Tensor:
+        return torch.cat([data['n'].unsqueeze(-1).sqrt(), summary], dim=-1)
+    
     def moments(self, proposal: torch.Tensor | Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.posterior.other is not None:
             loc, scale = self.posterior.getLocScale(proposal['ffx'])
