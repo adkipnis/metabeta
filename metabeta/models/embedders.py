@@ -62,23 +62,28 @@ class SeparateEmbedder(Embedder):
     def __init__(self,
                  d_data: int,
                  d_model: int,
-                 fx_type: str):
-        super().__init__(d_data, d_model, fx_type)
+                 fx_type: str,
+                 standardize: bool = False):
+        super().__init__(d_data, d_model, fx_type, standardize)
         if self.is_mfx:
             d_out = d_model // 3
         else:
             d_out = d_model // 2
         self.emb_y = nn.Linear(1, d_out)
-        self.emb_x = nn.Linear(d_data+1, d_out)
+        self.emb_x = nn.Linear(d_data, d_out)
         if self.is_mfx:
-            self.emb_z = nn.Linear(d_data+1, d_out)
+            self.emb_z = nn.Linear(d_data, d_out)
+        if self.standardize:
+            raise NotImplementedError()
             
     def forward(self, y: torch.Tensor, X: torch.Tensor,
                 Z: None | torch.Tensor = None,
                 **kwargs) -> torch.Tensor:
+        X = self.removeIntercept(X)
         y_emb = self.emb_y(y)
         x_emb = self.emb_x(X)
         if self.is_mfx:
+            Z = self.removeIntercept(Z)
             z_emb = self.emb_z(Z)
             out = [y_emb, x_emb, z_emb]
         else:
