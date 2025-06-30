@@ -41,7 +41,14 @@ class JointEmbedder(Embedder):
                 Z: None | torch.Tensor = None,
                 **kwargs) -> torch.Tensor:
         # assumes y [b, n, 1], x [b, n, d], z [b, n, d]
+        X = self.removeIntercept(X)
+        if self.standardize:
+            X, self.mu_X, self.sigma_X = self.preprocess(X)
+            y, self.mu_y, self.sigma_y = self.preprocess(y)
         if self.is_mfx:
+            Z = self.removeIntercept(Z)
+            if self.standardize:
+                Z, self.mean_Z, self.std_Z = self.preprocess(Z)
             inputs = [y, X, Z]
         else:
             inputs = [y, X]
