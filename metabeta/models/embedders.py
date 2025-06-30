@@ -1,17 +1,20 @@
 import torch
 import torch.nn as nn
-from metabeta.utils import dInput
+from metabeta.utils import dInput, maskedMean, maskedStd
 
 class Embedder(nn.Module):
     def __init__(self,
                  d_data: int,
                  d_model: int,
-                 fx_type: str):
+                 fx_type: str,
+                 standardize: bool = False):
         super().__init__()
         self.d_data = d_data
         self.d_model = d_model
         self.d_input = dInput(d_data, fx_type)
         self.is_mfx = (fx_type == 'mfx')
+        self.standardize = standardize
+    
 
 
 class JointEmbedder(Embedder):
