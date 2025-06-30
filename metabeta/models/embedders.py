@@ -15,6 +15,8 @@ class Embedder(nn.Module):
         self.is_mfx = (fx_type == 'mfx')
         self.standardize = standardize
     
+    def removeIntercept(self, x: torch.Tensor) -> torch.Tensor:
+        return x[..., 1:]
 
 
 class JointEmbedder(Embedder):
