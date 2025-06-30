@@ -112,3 +112,10 @@ def maskedMean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     count = mask.sum(dim, keepdim=True)
     return sums / (count + 1e-12)
 
+def maskedStd(x: torch.Tensor, mask: torch.Tensor, mean: torch.Tensor) -> torch.Tensor:
+    dim = x.dim()-2
+    diff_squared = ((x - mean) * mask) ** 2
+    count = mask.sum(dim, keepdim=True) - 1
+    count = torch.where(count < 1., 1., count)
+    return (diff_squared.sum(dim, keepdim=True) / count).sqrt()
+    
