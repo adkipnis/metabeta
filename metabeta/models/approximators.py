@@ -34,6 +34,13 @@ class Approximator(nn.Module):
     def addIntercept(self, summary: torch.Tensor, data: dict) -> torch.Tensor:
         return torch.cat([data['n'].unsqueeze(-1).sqrt(), summary], dim=-1)
     
+    def addDataStats(self, summary: torch.Tensor) -> torch.Tensor:
+        mu_y = self.embedder.mu_y.squeeze(1)
+        sigma_y = self.embedder.sigma_y.squeeze(1)
+        mu_X = self.embedder.mu_X.squeeze(1)
+        sigma_X = self.embedder.sigma_X.squeeze(1)
+        return torch.cat([mu_y, sigma_y, mu_X, sigma_X, summary], dim=-1)
+    
     def moments(self, proposal: torch.Tensor | Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.posterior.other is not None:
             loc, scale = self.posterior.getLocScale(proposal['ffx'])
