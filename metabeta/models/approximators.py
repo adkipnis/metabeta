@@ -314,7 +314,7 @@ class ApproximatorFFX(Approximator):
             posterior.other = None
         else:
             raise ValueError(f'posterior type {post_type} unknown')
-        return cls(embedder, summarizer, posterior)
+        return cls(embedder, summarizer, posterior, standardize=standardize)
     
     def targets(self, data):
         out = torch.cat([data['ffx'], data['sigma_error'].unsqueeze(-1)], dim=-1)
