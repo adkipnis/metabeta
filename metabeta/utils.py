@@ -92,3 +92,17 @@ def maskLoss(losses: torch.Tensor, targets: torch.Tensor,
     if average: 
         loss = loss / mask.sum(dim=-1)
     return loss # (batch)
+
+# -----------------------------------------------------------------------------
+# preprocessing
+def inverseSoftplus(y: torch.Tensor) -> torch.Tensor:
+    return torch.where(
+        y == 0.,
+        torch.zeros_like(y),
+        torch.where(
+            y > 20.,
+            y,
+            torch.log(torch.expm1(y))
+        )
+    )
+
