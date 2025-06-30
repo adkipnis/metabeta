@@ -42,7 +42,7 @@ def getImportanceWeights(log_likelihood: torch.Tensor,
                          log_q: torch.Tensor) -> torch.Tensor:
     log_w = log_likelihood + log_prior - log_q
     log_w_min, log_w_max = torch.quantile(
-        log_w, torch.tensor([0.0, 0.975]), dim=-1).unsqueeze(-1)
+        log_w, torch.tensor([0.0, 0.98]), dim=-1).unsqueeze(-1)
     log_w = log_w.clamp(min=log_w_min, max=log_w_max)
     w = (log_w - log_w_max).exp()
     w = w / w.mean(dim=-1, keepdim=True)
