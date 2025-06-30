@@ -386,20 +386,25 @@ class ApproximatorFFX(Approximator):
                 samples[:, -1] = log_sigma.exp()
             proposed['samples'] = samples
         return proposed
+
     def forward(self, data, sample=False, log_prob=False, **kwargs):
         h = self.embedder(**data) # (b, n, d_hidden)
         summary = self.summarizer(h, data['mask_n']) # (b, d_out)
-        if self.posterior.other is None:
-            targets, _ = self.targets(data)
-            loss, proposed = self.posterior(
-                summary, targets, sample=sample, log_prob=log_prob, constrain=True, **kwargs)
-        else:
-            targets1 = data['ffx'] 
-            targets2 = data['sigma_error'].unsqueeze(-1)
-            loss, proposed = self.posterior(summary, targets1, sample=sample)
-            loss_, proposed_ = self.posterior.other(summary, targets2, sample=sample, **kwargs) # type: ignore
-            loss = loss + loss_
-            proposed = {'ffx': proposed, 'sigmas': proposed_}
+        summary = self.addIntercept(summary, data)
+        if self.standardize:
+            summary = self.addDataStats(summary)
+        targets, _ = self.targets(data)
+        targets = self.preprocess(targets, data['mask_d'])
+        loss, proposed = self.posterior(
+            summary, targets, sample=sample, log_prob=log_prob, **kwargs)
+        proposed = self.postprocess(proposed, data['mask_d'])
+        # else:
+        #     targets1 = data['ffx'] 
+        #     targets2 = data['sigma_error'].unsqueeze(-1)
+        #     loss, proposed = self.posterior(summary, targets1, sample=sample)
+        #     loss_, proposed_ = self.posterior.other(summary, targets2, sample=sample, **kwargs) # type: ignore
+        #     loss = loss + loss_
+        #     proposed = {'ffx': proposed, 'sigmas': proposed_}
         return loss, {'global': proposed}, summary
 
 
