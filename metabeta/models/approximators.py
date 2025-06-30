@@ -244,7 +244,10 @@ class ApproximatorFFX(Approximator):
 
     @classmethod
     def build(cls,
-              d_data: int, d_hidden: int, d_ff: int, d_out: int,
+              d_data: int, # input dimension
+              d_hidden: int, # projection dimension
+              d_ff: int, # feedforward dimension (transformer and mlps)
+              d_out: int, # summary dimension
               dropout: float = 0.01,
               activation: str = 'ReLU',
               n_heads: int = 4, n_blocks: int = 1,
@@ -252,7 +255,8 @@ class ApproximatorFFX(Approximator):
               sum_type: str = 'deepset',
               post_type: str = 'mixture',
               bins: int = 100, components: int = 1, flows: int = 3,
-              max_m: int = 30):
+              max_m: int = 30,
+              standardize: bool = True):
 
         # 1. embedder
         if emb_type == 'joint':
