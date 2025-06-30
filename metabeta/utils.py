@@ -76,7 +76,7 @@ def getDataLoader(filename: Path, batch_size: int, permute: bool = True) -> Data
 # size utils
 def dInput(d_data: int, fx_type: str) -> int:
     n_fx = 2 if fx_type == 'mfx' else 1
-    return 1 + n_fx * (1 + d_data)
+    return 1 + n_fx * d_data
 
 def nParams(model: nn.Module) -> None:
     print(sum(p.numel() for p in model.parameters() if p.requires_grad))
