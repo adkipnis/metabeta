@@ -24,9 +24,12 @@ class JointEmbedder(Embedder):
     def __init__(self,
                  d_data: int,
                  d_model: int,
-                 fx_type: str):
-        super().__init__(d_data, d_model, fx_type)
+                 fx_type: str,
+                 standardize: bool = True):
+        super().__init__(d_data, d_model, fx_type, standardize)
         self.emb = nn.Linear(self.d_input, d_model)
+        
+        
 
     def forward(self, y: torch.Tensor, X: torch.Tensor,
                 Z: None | torch.Tensor = None,
