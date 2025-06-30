@@ -363,6 +363,16 @@ class ApproximatorFFX(Approximator):
         return samples
         
     
+    def preprocess(self, targets: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        # unconstrain sigma
+        if self.constrain:
+            sigma = targets[:, -1]
+            targets[:, -1] = sigma.log()
+        # standardize
+        # if self.standardize:
+        #     targets = self._standardize(targets)
+        return targets
+    
     def forward(self, data, sample=False, log_prob=False, **kwargs):
         h = self.embedder(**data) # (b, n, d_hidden)
         summary = self.summarizer(h, data['mask_n']) # (b, d_out)
