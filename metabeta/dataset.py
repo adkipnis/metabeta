@@ -11,7 +11,8 @@ def padTensor(tensor: torch.Tensor, shape: tuple, value=0) -> torch.Tensor:
     padding = []
     for p in pad_size:
         padding.extend([0, p])  # Pad at the end of each dimension
-    return F.pad(tensor, padding, value=value)
+    out = F.pad(tensor, padding, value=value)
+    return out
 
 
 class LMDataset(Dataset):
