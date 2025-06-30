@@ -177,7 +177,7 @@ def boundECDF(n_ranks: int, n_sim: int = 1000, alpha: float = 0.05):
     upper = binom.ppf(1 - alpha / 2, n_sim, p) / n_sim - p
     return p, lower, upper
 
-def plotECDF(ranks: torch.Tensor, names: list, color='darkgreen') -> None:
+def plotECDF(ranks: torch.Tensor, mask: torch.Tensor, names: list, color='darkgreen') -> None:
     eps = 0.02
     n = len(names)
     w = int(torch.tensor(n).sqrt().ceil())
@@ -188,7 +188,11 @@ def plotECDF(ranks: torch.Tensor, names: list, color='darkgreen') -> None:
         ax = axs[i]
         ax.set_axisbelow(True)
         ax.grid(True)
-        xx = ranks[:, i].sort()[0].numpy()
+        if i < mask.shape[1]:
+            mask_i = mask[:, i]
+            xx = ranks[mask_i, i].sort()[0].numpy()
+        else:
+            xx = ranks[:, i].sort()[0].numpy()
         xx = np.pad(xx, (1, 1), constant_values=(0, 1))
         yy = np.linspace(0, 1, num=xx.shape[-1]) - xx
         ax.plot(xx, yy, color=color, label='sample')
