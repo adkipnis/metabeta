@@ -183,6 +183,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="mps", help="Device to use [cpu, cuda, mps]")
     parser.add_argument("--cores", type=int, default=4, help="Nubmer of processor cores to use (default = 4)")
     parser.add_argument("-p", "--preload", type=int, default=0, help="Preload model from iteration #p")
+    parser.add_argument("--tag", type=str, default="", help="Suffix for model ID (default = '')")
 
     # data & training
     parser.add_argument("-t", "--fx_type", type=str, default="ffx", help="Type of dataset [ffx, mfx] (default = ffx)")
