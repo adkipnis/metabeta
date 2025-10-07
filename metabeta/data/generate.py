@@ -102,3 +102,41 @@ def sampleHN(shape: tuple, scale: float, max_val: float = float("inf")) -> torch
 
 
 # -----------------------------------------------------------------------------
+# aggregation
+
+def maxShapes(data: list[dict[str, torch.Tensor]]) -> dict[str, tuple[int, ...]]:
+    ''' get the maximal shapes over the whole list for per key '''
+    max_shapes = {}
+    for entry in data:
+        for key, tensor in entry.items():
+            if not isinstance(tensor, torch.Tensor):
+                raise ValueError("expected all entries to be tensors")
+            shape = tuple(tensor.shape)
+            if key not in max_shapes:
+                max_shapes[key] = shape
+            else:
+                # Expand max_shapes[key] tuple elementwise to max dimension
+                max_shapes[key] = tuple(
+                    max(old_dim, new_dim)
+                    for old_dim, new_dim in zip(max_shapes[key], shape)
+                )
+    return max_shapes
+
+
+def aggregate(data: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+    ''' finds out maximal dimensions for each key in list of tensor-dicts
+        collates all tensor-dicts to single tensor-dicts with padded tensors '''
+    max_shapes = maxShapes(data)
+    batch_size = len(data)
+    ds = {
+        k: torch.empty(batch_size, *shape, dtype=data[0][k].dtype)
+        for k, shape in max_shapes.items()
+    }
+    for i, item in enumerate(data):
+        for k in ds.keys():
+            shape = max_shapes[k]
+            ds[k][i] = padTensor(item[k], shape)
+    return ds
+
+
+# -----------------------------------------------------------------------------
