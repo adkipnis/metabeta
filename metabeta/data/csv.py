@@ -266,3 +266,36 @@ class RealDataset:
 
 
 # -----------------------------------------------------------------------------
+if __name__ == "__main__":
+    raw = preprocess(
+            ds_name = 'math',
+            target_name = 'MathAch',
+            group_name = 'School',
+            save = True
+            )
+
+    raw = preprocess(
+            ds_name = 'exam',
+            target_name = 'normexam',
+            group_name = 'school',
+            save = True
+            )
+
+    raw = preprocess(
+            ds_name = 'gcsemv',
+            target_name = 'written',
+            group_name = 'school',
+            save = True
+            )
+
+    raw = preprocess(
+            ds_name = 'sleepstudy',
+            target_name = 'Reaction',
+            group_name = 'Subject',
+            save = True
+            )
+
+    rds = RealDataset(raw, d=5, q=3)
+    ds_long = rds.data_long
+    ds = rds.batch()
+
