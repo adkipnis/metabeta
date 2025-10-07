@@ -219,3 +219,82 @@ def generate(
 
 
 def generateSemi(
+    ds_pre: dict[str, torch.Tensor],
+    batch_size: int,
+    seed: int,
+    mcmc: bool = False,
+    bs_load: int = 1,
+) -> list[dict[str, torch.Tensor]]:
+    """Generate a [batch_size] list of mixed effects datasets
+    with varying n, m, d, q."""
+    # init
+    torch.manual_seed(seed)
+    data = []
+    features = ds_pre["X"]
+    groups = ds_pre["groups"]
+    this_ni = groups.unique(return_counts=True)[1]
+    this_m = len(this_ni)
+    this_n = max(this_ni)
+    iterator = tqdm(range(batch_size))
+    if not mcmc:
+        iterator.set_description(f"{part:02d}/{cfg.iterations:02d}")
+
+    # unpack
+    if cfg.varied:
+        d = sampleInt(batch_size, 1, cfg.max_d)
+        q = sampleIntBatched(0, d.clamp(max=cfg.max_q))
+    else:
+        d = sampleInt(batch_size, cfg.max_d, cfg.max_d)
+        q = sampleInt(batch_size, cfg.max_q, cfg.max_q)
+    max_m = min(cfg.max_m, this_m)
+    max_n = min(cfg.max_n, this_n)
+    min_n = min(cfg.min_n, this_n)
+    m = sampleInt(batch_size // bs_load, cfg.min_m, max_m).repeat_interleave(bs_load)
+    n = sampleInt((batch_size, cfg.max_m), min_n, max_n)
+
+    # presample priors
+    nu_ffx = D.Uniform(-20, 20).sample((batch_size, cfg.max_d))
+    tau_ffx0 = D.Uniform(0.1, 30).sample((batch_size, 1))
+    tau_ffx1 = D.Uniform(0.1, 20).sample((batch_size, cfg.max_d - 1))
+    tau_ffx = torch.cat([tau_ffx0, tau_ffx1], dim=-1)
+    tau_rfx = D.Uniform(0.1, 10).sample((batch_size, cfg.max_d))
+    tau_eps = D.Uniform(1e-3, 10).sample((batch_size,))
+
+    d, m, n, q = d.tolist(), m.tolist(), n.tolist(), q.tolist()
+
+    # use features
+    use = sampleInt(batch_size, 0, 1).bool()
+
+    # sample datasets
+    for i in iterator:
+        ds = None
+        attempts = 0
+        okay = False
+        use_i = use[i] if part > 0 else True
+        features_i = features if use_i else None
+        groups_i = groups if use_i else None
+        while not okay:
+            d_i, q_i, m_i, n_i = d[i], q[i], m[i], n[i][: m[i]]
+            ds = MixedEffects(
+                nu_ffx[i, :d_i],
+                tau_ffx[i, :d_i],
+                tau_eps[i],
+                tau_rfx[i, :q_i],
+                d_i, q_i, m_i, n_i,
+                features=features_i,
+                groups=groups_i,
+            ).sample()
+            okay = ds["okay"]
+            if not okay:
+                attempts += 1
+                if attempts > 20:
+                    okay = True
+                    print(f"\nWarning: outlier ds with sd(y)={ds['y'].std(0):.2f}")
+        if mcmc and ds is not None:
+            mcmc_results = fitMFX(ds)
+            ds.update(mcmc_results)
+        data += [ds]
+    return data
+
+
+# =============================================================================
