@@ -131,3 +131,35 @@ def coverageError(coverage: dict[str, torch.Tensor]) -> torch.Tensor:
 
 
 def plotCalibration(
+    ax,
+    coverage: dict[str, torch.Tensor],
+    names,
+    linestyle: str = "-",
+    lw=2,
+    upper: bool = False,
+) -> None:
+    nominal = [int(k) for k in coverage.keys()]
+    matrix = torch.cat([t.unsqueeze(-1) for _, t in coverage.items()], dim=-1)
+    for i, name in enumerate(names):
+        # color = colors[i]
+        coverage_i = matrix[i] * 100.0
+        if coverage_i.sum() == 0:
+            continue
+        ax.plot(
+            nominal, coverage_i, label=name, linestyle=linestyle, lw=lw
+        )  # color=color
+    ax.plot([50, 95], [50, 95], ":", zorder=1, color="grey", label="identity")
+    ax.set_xticks(nominal)
+    ax.set_yticks(nominal)
+
+    ax.set_ylabel("empirical CI", fontsize=26, labelpad=10)
+    ax.grid(True)
+    # ax.set_title(f'Coverage {source}', fontsize=26, pad=15)
+    if upper:
+        ax.set_title("Coverage", fontsize=30, pad=15)
+        ax.legend(fontsize=18, loc="lower right")
+        ax.set_xlabel("")
+        ax.tick_params(axis="x", labelcolor="w", size=1)
+    else:
+        ax.set_xlabel("nominal CI", fontsize=26, labelpad=10)
+
