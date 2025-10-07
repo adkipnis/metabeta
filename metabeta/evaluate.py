@@ -82,3 +82,35 @@ def setup() -> argparse.Namespace:
 
 
 # -----------------------------------------------------------------------------
+# helpers
+
+def load(model: ApproximatorMFX, model_path, iteration: int) -> None:
+    model_path = Path(model_path, model.id)
+    fname = Path(model_path, f"checkpoint_i={iteration}.pt")
+    print(f"Loading checkpoint from {fname}")
+    state = torch.load(fname, weights_only=False)
+    model.load_state_dict(state["model_state_dict"])
+    model.stats = state["stats"]
+
+
+def inspect(
+    results: dict,
+    batch_indices: Iterable[int],
+) -> None:
+    targets = results["targets"]
+    names = results["names"]
+    proposed = results["proposed"]
+    mcmc = results["mcmc"]
+
+    # visualize some posteriors
+    for b in batch_indices:
+        plot.posterior(
+            target=targets,
+            proposed=proposed["global"],
+            mcmc=mcmc["global"],
+            names=names,
+            batch_idx=b,
+        )
+
+
+# -----------------------------------------------------------------------------
