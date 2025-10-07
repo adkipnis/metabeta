@@ -93,3 +93,27 @@ class Normal(DistWithPrior):
 
 
 class StudentT(DistWithPrior):
+    @property
+    def base(self):
+        return D.StudentT
+
+    def defaultParams(self):
+        df = torch.tensor(3.0)
+        loc = torch.tensor(0.0)
+        scale = torch.tensor(1.0)
+        return dict(df=df, loc=loc, scale=scale)
+
+    def samplePrior(self, n=1):
+        scale = D.Uniform(0.5, 25.0).sample((n,))
+        if self.center:
+            loc = torch.zeros_like(scale)
+        else:
+            loc = D.Uniform(-25.0, 25.0).sample((n,))
+        df = torch.randint(3, 100, (n,), dtype=loc.dtype)
+        return dict(df=df, loc=loc, scale=scale)
+
+    def check(self, params):
+        return self.checkSample(params)
+
+
+class Uniform(DistWithPrior):
