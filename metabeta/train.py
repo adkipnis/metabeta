@@ -269,3 +269,124 @@ def validate(model: ApproximatorMFX, dl: DataLoader, step: int) -> int:
 
 
 ###############################################################################
+
+if __name__ == "__main__":
+    # -------------------------------------------------------------------------
+    # --- setup config
+    cfg = setup()
+    torch.manual_seed(cfg.seed)
+    torch.cuda.manual_seed_all(cfg.seed)
+    torch.backends.cudnn.deterministic = True
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    console_width = getConsoleWidth()
+    device = setDevice(cfg.device)
+    torch.set_num_threads(cfg.cores)
+    type_suffix = "-semi" if cfg.semi else ""
+
+    # --- set up model
+    summary_dict = {
+        "type": cfg.sum_type,
+        "d_model": cfg.sum_d,
+        "n_blocks": cfg.sum_blocks,
+        "d_ff": cfg.sum_ff,
+        "depth": cfg.sum_depth,
+        "d_output": cfg.sum_out,
+        "n_heads": cfg.sum_heads,
+        "dropout": cfg.sum_dropout,
+        "activation": cfg.sum_act,
+    }
+    posterior_dict = {
+        "type": cfg.post_type,
+        "flows": cfg.flows,
+        "d_ff": cfg.post_ff,
+        "depth": cfg.post_depth,
+        "dropout": cfg.post_dropout,
+        "activation": cfg.post_act,
+        "net_type": "mlp",
+    }
+    model_dict = {
+        "type": cfg.fx_type,
+        "seed": cfg.seed,
+        "tag": cfg.m_tag,
+        "d": cfg.d,
+        "q": cfg.q,
+    }
+    model = ApproximatorMFX.build(
+        s_dict=summary_dict,
+        p_dict=posterior_dict,
+        m_dict=model_dict,
+        use_standardization=cfg.standardize,
+    ).to(device)
+    print(f"{'-' * console_width}\nmodel: {model.id}\nLearning rate: {cfg.lr}\nDevice: {device}")
+
+    # --- set up optimizer
+    optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr)
+
+    # --- optionally preload a model
+    model_path = Path("outputs", "checkpoints", model.id)
+    model_path.mkdir(parents=True, exist_ok=True)
+    initial_iteration, global_step, validation_step = 1, 1, 1
+    if cfg.preload:
+        initial_iteration, global_step, validation_step, timestamp = load(
+            model, optimizer, cfg.preload
+        )
+        print(f"preloaded model from iteration {cfg.preload}, starting at iteration {initial_iteration}...")
+
+    # --- logging and stopping
+    log_path = Path("outputs", "losses", model.id, timestamp)
+    logger = Logger(log_path)
+    stopper = EarlyStopping(patience=cfg.patience)
+    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"total parameters: {num_params}, summarizer: {model.num_sum}, posterior: {model.num_inf}")
+
+    # -------------------------------------------------------------------------
+    # training loop
+    print(f"fixed effects: {cfg.d}\nrandom effects: {cfg.q}\nobservations (max): {cfg.n}")
+    fn = dsFilename(
+        cfg.fx_type,
+        f"val{type_suffix}",
+        1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_val,
+        varied=cfg.varied,
+        tag=cfg.d_tag,
+    )
+    dl_val = getDataLoader(
+        fn,
+        cfg.bs_val,
+        max_d=cfg.d,
+        max_q=cfg.q,
+        permute=False,
+        autopad=True,
+        device="cpu",
+    )
+
+    if cfg.preload > 0:
+        iteration = cfg.preload
+        validate(model, dl_val, cfg.preload)
+
+    print(f"iterations: {cfg.iterations + 1 - initial_iteration}\npatience: {cfg.patience}\nbatches per iteration: 200\ndatasets per batch: {cfg.bs_mini}\n{'-' * console_width}")
+    for iteration in range(initial_iteration, cfg.iterations + 1):
+        fn = dsFilename(
+            cfg.fx_type,
+            f"train{type_suffix}",
+            cfg.bs_mini, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_train,
+            part=iteration,
+            varied=cfg.varied,
+            tag=cfg.d_tag,
+        )
+        dl_train = getDataLoader(
+            fn,
+            cfg.bs_mini // 2,
+            max_d=cfg.d,
+            max_q=cfg.q,
+            permute=cfg.permute,
+            autopad=False,
+            device=device,
+        )
+        global_step = train(model, optimizer, dl_train, global_step)
+        validation_step = validate(model, dl_val, validation_step)
+        if iteration % 5 == 0 or stopper.stop:
+            save(model, optimizer, iteration, global_step, validation_step, timestamp)
+        if stopper.stop:
+            break
+
+
