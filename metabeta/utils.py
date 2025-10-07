@@ -166,3 +166,19 @@ def squish(x: torch.Tensor) -> torch.Tensor:
     return x.sign() * (x.abs() + 1).log()
 
 
+# -----------------------------------------------------------------------------
+# permutation
+
+
+def getPermutation(d: int):
+    p = torch.randperm(d - 1) + 1
+    zero = torch.zeros((1,), dtype=p.dtype)
+    p = torch.cat([zero, p])
+    return p
+
+def inversePermutation(p: torch.Tensor):
+    q = torch.empty_like(p)
+    q[p] = torch.arange(p.size(0), dtype=p.dtype)
+    return q
+
+
