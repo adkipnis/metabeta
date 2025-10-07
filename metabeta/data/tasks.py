@@ -11,3 +11,15 @@ from metabeta.data.distributions import (
 )
 from metabeta.utils import fullCovary
 
+# -----------------------------------------------------------------------------
+probs = torch.tensor([0.10, 0.40, 0.05, 0.25, 0.10, 0.10])
+dists = [
+    Normal,
+    StudentT,
+    Uniform,
+    Bernoulli,
+    NegativeBinomial,
+    ScaledBeta,
+]
+
+
