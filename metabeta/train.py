@@ -193,3 +193,28 @@ def run(
 
 
 def train(
+    model: Approximator,
+    optimizer: schedulefree.AdamWScheduleFree,
+    dl: DataLoader,
+    step: int,
+) -> int:
+    iterator = tqdm(dl, desc=f"iteration {iteration:02d}/{cfg.iterations:02d} [T]")
+    running_sum = 0.0
+    model.train()
+    optimizer.train()
+    for i, batch in enumerate(iterator):
+        optimizer.zero_grad()
+        results = model(batch, sample=False)
+        loss = results["loss"].mean()
+        loss.backward()
+        clip_grad_norm_(model.parameters(), max_norm=1.5)
+        optimizer.step()
+        running_sum += loss.item()
+        loss_train = running_sum / (i + 1)
+        iterator.set_postfix_str(f"loss: {loss_train:.3f}")
+        logger.write(iteration, step, loss_train, "loss_train")
+        step += 1
+    return step
+
+
+def validate(model: ApproximatorMFX, dl: DataLoader, step: int) -> int:
