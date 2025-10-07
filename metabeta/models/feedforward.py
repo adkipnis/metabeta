@@ -205,3 +205,60 @@ class ResidualNet(nn.Module):
 
 
 # =============================================================================
+if __name__ == "__main__":
+    # sizes
+    b = 50
+    d_input = 2
+    d_output = 3
+    d_hidden = 64
+    d_context = 32
+    inputs = torch.randn((b, d_input))
+    context = torch.randn((b, d_context))
+
+    # -------------------------------------------------------------------------
+    # SLP with skip connection
+    model = SLP(d_input=d_input, d_output=d_output, skip=True)
+    outputs = model(inputs)
+
+    # MLP with skip connections
+    model = MLP(d_input=d_input, d_hidden=d_hidden, d_output=d_output, skip=True)
+    outputs = model(inputs)
+
+    # MLP with batch norm
+    model = MLP(d_input=d_input, d_hidden=d_hidden, d_output=d_output, norm="batch")
+    outputs = model(inputs)
+
+    # MLP with context
+    model = MLP(d_input=d_input + d_context, d_hidden=d_hidden, d_output=d_output)
+    outputs = model(inputs, context=context)
+
+    # MLP with more layers
+    model = MLP(d_input=d_input, d_hidden=(d_hidden,) * 3, d_output=d_output, skip=True)
+    outputs = model(inputs)
+
+    # -------------------------------------------------------------------------
+    # Residual Block
+    h = torch.randn((b, d_hidden))
+    model = ResidualBlock(d_data=d_hidden, norm="layer")
+    outputs = model(h)
+
+    # Residual Block with context
+    h = torch.randn((b, d_hidden))
+    model = ResidualBlock(d_data=d_hidden, d_context=d_context, norm="layer")
+    outputs = model(h, context=context)
+
+    # Residual Net
+    model = ResidualNet(
+        d_input=d_input, d_output=d_output, d_hidden=d_hidden, n_blocks=2, norm="layer"
+    )
+    outputs = model(inputs)
+
+    # Residual Net with context
+    model = ResidualNet(
+        d_input=d_input,
+        d_output=d_output,
+        d_hidden=d_hidden,
+        n_blocks=2,
+        d_context=d_context,
+    )
+    outputs = model(inputs, context=context)
