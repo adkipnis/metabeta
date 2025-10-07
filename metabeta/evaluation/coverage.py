@@ -91,3 +91,43 @@ class Calibrator:
 
 
 def empiricalCoverage(quantiles: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    #  how often are the targets actually inside a given credibility interval?
+    mask = targets != 0.0
+    above = targets >= quantiles[..., 0] - 1e-6  # above lower quantile
+    below = targets <= quantiles[..., -1] + 1e-6  # belowe upper quantile
+    inside = above * below * mask
+    coverage = inside.float().sum(0) / (mask.sum(0) + 1e-12)
+    return coverage  # (d,)
+
+
+def getCoverage(
+    model,
+    proposed: dict[str, torch.Tensor],
+    targets: torch.Tensor,
+    intervals: list[int],
+    calibrate: bool = False,
+    local: bool = False,
+) -> dict[str, torch.Tensor]:
+    out = {}
+    for i in intervals:
+        alpha = (100 - i) / 100
+        quantiles = model.quantiles(
+            proposed, [alpha / 2, 1 - alpha / 2], calibrate=calibrate, local=local
+        )
+        ce = empiricalCoverage(quantiles, targets)
+        if local:
+            ce = ce.mean(0)
+        out[str(i)] = ce
+    return out
+
+
+def coverageError(coverage: dict[str, torch.Tensor]) -> torch.Tensor:
+    concatenated = torch.cat([v.unsqueeze(0) for _, v in coverage.items()])
+    mask = concatenated != 0.0
+    nominal = torch.tensor([int(k) for k in coverage.keys()]).unsqueeze(1) / 100
+    errors = (concatenated - nominal) * mask
+    mean_error = errors.sum(0) / (mask.sum(0) + 1e-12)
+    return mean_error
+
+
+def plotCalibration(
