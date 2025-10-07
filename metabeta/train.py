@@ -165,3 +165,31 @@ def load(
 
 
 # -----------------------------------------------------------------------------
+# the bread and butter
+
+
+def run(
+    model: ApproximatorMFX,
+    batch: dict[str, torch.Tensor],
+    sample: bool = False,
+) -> dict:
+    targets, names, moments = {}, {}, {}
+    results = model(batch, sample=sample, s=100)
+    targets["global"] = model.targets(batch, local=False)
+    targets["local"] = model.targets(batch, local=True)
+    names["global"] = model.names(batch, local=False)
+    names["local"] = model.names(batch, local=True)
+    if sample:
+        moments["global"] = model.moments(results["proposed"]["global"])
+        moments["local"] = model.moments(results["proposed"]["local"])
+    out = {
+        "loss": results["loss"],
+        "proposed": results["proposed"],
+        "targets": targets,
+        "names": names,
+        "moments": moments,
+    }
+    return out
+
+
+def train(
