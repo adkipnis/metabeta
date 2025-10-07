@@ -119,3 +119,49 @@ class EarlyStopping:
 
 
 # -----------------------------------------------------------------------------
+# loading and saving
+def save(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer | schedulefree.AdamWScheduleFree,
+    current_iteration: int,
+    current_global_step: int,
+    current_validation_step: int,
+    timestamp: str,
+) -> None:
+    """Save the model and optimizer state."""
+    fname = Path(model_path, f"checkpoint_i={current_iteration}.pt")
+    torch.save(
+        {
+            "iteration": current_iteration,
+            "global_step": current_global_step,
+            "validation_step": current_validation_step,
+            "timestamp": timestamp,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "stats": model.stats,
+        },
+        fname,
+    )
+
+
+def load(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer | schedulefree.AdamWScheduleFree,
+    initial_iteration: int,
+) -> tuple[int, int, int, str]:
+    """Load the model and optimizer state from a previous run,
+    returning the initial iteration and seed."""
+    fname = Path(model_path, f"checkpoint_i={initial_iteration}.pt")
+    print(f"Loading checkpoint from {fname}")
+    state = torch.load(fname, weights_only=False)
+    model.load_state_dict(state["model_state_dict"])
+    model.stats = state["stats"]
+    initial_iteration = state["iteration"] + 1
+    optimizer.load_state_dict(state["optimizer_state_dict"])
+    global_step = state["global_step"]
+    validation_step = state["validation_step"]
+    timestamp = state["timestamp"]
+    return initial_iteration, global_step, validation_step, timestamp
+
+
+# -----------------------------------------------------------------------------
