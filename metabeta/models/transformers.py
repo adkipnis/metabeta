@@ -474,3 +474,55 @@ class DualTransformer(BaseSetTransformer):
 
 
 class SparseDualTransformer(BaseSetTransformer):
+    # joint embedding and splitting, alternating attention along features and samples
+    def __init__(
+        self,
+        d_model: int,
+        d_ff: int,
+        d_output: int,
+        d_input: int,
+        depth: int = 2,
+        n_heads: int = 4,
+        n_blocks: int = 2,
+        dropout: float = 0.01,
+        activation: str = "GELU",
+        use_bias: bool = True,
+        eps: float = 1e-3,
+        factor: int = 8,
+        **kwargs,
+    ):
+        super().__init__(d_model//factor, d_ff//2, d_output, d_input,
+                         depth, n_heads, n_blocks,
+                         dropout, activation, use_bias, eps,
+                         MAB=DualAttentionBlock)
+        # projections
+        self.factor = factor
+        self.emb = nn.Linear(d_input, d_model, bias=use_bias)
+        self.pos = torch.randn(1, 1, d_model)
+        self.out = nn.Linear(d_model, d_output, bias=use_bias)
+
+        # pooling
+        self.pool = pool4d
+
+    def embed(self, x):
+        # per feature embedding + fixed positional embedding
+        x = self.emb(x)
+        x += self.pos.to(x.device)
+        b, n, d = x.shape
+        x = x.reshape(b, n, self.factor, d // self.factor)
+        return x
+
+    def getMasks(self, mask=None, shape=None):
+        # assumes mask (b, n) and no padding for d
+        mask0 = mask1 = None
+        if mask is not None:
+            assert isinstance(shape, torch.Size)
+            b, n, _ = shape
+            mask0 = mask.reshape(b * n)
+            mask1 = (
+                mask.unsqueeze(1).expand(b, self.factor, n).reshape(b * self.factor, n)
+            )
+        return dict(mask0=mask0, mask1=mask1)
+
+
+class SequentialDualTransformer(BaseSetTransformer):
