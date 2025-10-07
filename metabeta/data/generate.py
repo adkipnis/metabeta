@@ -140,3 +140,82 @@ def aggregate(data: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
 
 
 # -----------------------------------------------------------------------------
+# generators
+
+def generate(
+    batch_size: int,
+    seed: int,
+    mcmc: bool = False,
+    bs_load: int = 1,
+) -> list[dict[str, torch.Tensor]]:
+    """Generate a [batch_size] list of mixed effects datasets
+    with varying n, m, d, q."""
+    # init
+    torch.manual_seed(seed)
+    data = []
+    iterator = tqdm(range(batch_size))
+    if not mcmc:
+        iterator.set_description(f"{part:02d}/{cfg.iterations:02d}")
+
+    # presample hyperparams
+    if cfg.varied:
+        d = sampleInt(batch_size, 1, cfg.max_d)
+        q = sampleIntBatched(0, d.clamp(max=cfg.max_q))
+    else:
+        d = sampleInt(batch_size, cfg.max_d, cfg.max_d)
+        q = sampleInt(batch_size, cfg.max_q, cfg.max_q)
+    m = sampleInt(batch_size // bs_load, cfg.min_m, cfg.max_m).repeat_interleave(
+        bs_load
+    )
+    n = sampleInt((batch_size, cfg.max_m), cfg.min_n, cfg.max_n)
+    d, m, n, q = d.tolist(), m.tolist(), n.tolist(), q.tolist()
+    nu_ffx = D.Uniform(-20, 20).sample((batch_size, cfg.max_d))
+    tau_ffx0 = D.Uniform(0.1, 30).sample((batch_size, 1))
+    tau_ffx1 = D.Uniform(0.1, 20).sample((batch_size, cfg.max_d - 1))
+    tau_ffx = torch.cat([tau_ffx0, tau_ffx1], dim=-1)
+    tau_rfx = D.Uniform(0.1, 10).sample((batch_size, cfg.max_d))
+    tau_eps = D.Uniform(1e-3, 10).sample((batch_size,))
+    if cfg.toy:  # smaller ranges
+        nu_ffx = sampleInt((batch_size, cfg.max_d), 0, 0).float()
+        tau_ffx0 = D.Uniform(0.1, 5).sample((batch_size, 1))
+        tau_ffx1 = D.Uniform(0.1, 5).sample((batch_size, cfg.max_d - 1))
+        tau_ffx = torch.cat([tau_ffx0, tau_ffx1], dim=-1)
+        tau_rfx = D.Uniform(0.1, 1).sample((batch_size, cfg.max_d))
+        tau_eps = D.Uniform(1e-3, 1).sample((batch_size,))
+        if cfg.mono:  # make each dim the same
+            tau_ffx += tau_ffx.mean(-1, keepdim=True) - tau_ffx
+            tau_rfx += tau_rfx.mean(-1, keepdim=True) - tau_rfx
+
+    # sample datasets
+    for i in iterator:
+        ds = None
+        attempts = 0
+        okay = False
+        d_i, q_i, m_i, n_i = d[i], q[i], m[i], n[i][: m[i]]
+        while not okay:
+            ds = MixedEffects(
+                nu_ffx[i, :d_i],
+                tau_ffx[i, :d_i],
+                tau_eps[i],
+                tau_rfx[i, :q_i],
+                d_i, q_i, m_i, n_i,
+                use_default=cfg.toy,
+            ).sample()
+            okay = ds["okay"]
+            if not okay:
+                attempts += 1
+                if attempts > 20:
+                    okay = True
+                    print(f"\nWarning: outlier ds with sd(y)={ds['y'].std(0):.2f}")
+        if mcmc and ds is not None:
+            start = time.time()
+            mcmc_results = fitMFX(ds, mono=cfg.mono)
+            end = time.time()
+            mcmc_results["mcmc_duration"] = torch.tensor(end - start)
+            ds.update(mcmc_results)
+            print(f"MCMC took {end - start:.2f}s")
+        data += [ds]
+    return data
+
+
+def generateSemi(
