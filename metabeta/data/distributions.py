@@ -141,3 +141,27 @@ class Uniform(DistWithPrior):
 
 
 class Bernoulli(DistWithPrior):
+    @property
+    def base(self):
+        return D.Bernoulli
+
+    def defaultParams(self):
+        p = torch.tensor(0.5)
+        return dict(probs=p)
+
+    def samplePrior(self, n=1):
+        p = D.Uniform(0.1, 0.9).sample((1,))
+        return dict(probs=p)
+
+    def findParams(self) -> dict[str, torch.Tensor]:
+        return self.samplePrior()
+
+    def sample(self, dims) -> torch.Tensor:
+        same = True
+        while same:  # make sure not all 0s or all 1s
+            out = self.dist.sample(dims)[..., 0]
+            same = torch.all(out == out[0])
+        return out # type: ignore
+
+
+class NegativeBinomial(DistWithPrior):
