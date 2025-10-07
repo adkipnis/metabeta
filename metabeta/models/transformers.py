@@ -248,3 +248,98 @@ class ElongatedAttentionBlock(BaseBlock):
 
 
 # -----------------------------------------------------------------------------
+# Set Transformers
+
+
+class BaseSetTransformer(nn.Module):
+    # base class for set transformers with mean pooling along samples
+    def __init__(
+        self,
+        d_model: int,
+        d_ff: int,
+        d_output: int,
+        d_input: int,
+        depth: int = 2,
+        n_heads: int = 4,
+        n_blocks: int = 2,
+        dropout: float = 0.01,
+        activation: str = "GELU",
+        use_bias: bool = True,
+        eps: float = 1e-3,
+        MAB: type[BaseBlock] = MultiheadAttentionBlock,
+        **kwargs,
+    ):
+        super().__init__()
+
+        # attention blocks
+        blocks = []
+        for _ in range(n_blocks):
+            mab = MAB(
+                d_model=d_model,
+                d_hidden=(d_ff,) * depth,
+                n_heads=n_heads,
+                activation=activation,
+                dropout=dropout,
+                use_bias=use_bias,
+                eps=eps,
+            )
+            blocks += [mab]
+        self.blocks = nn.ModuleList(blocks)
+        self.out = nn.Identity()
+
+    def embed(self, x: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError
+
+    def getMasks(
+        self,
+        mask: torch.Tensor | None = None,
+        shape: torch.Size | None = None,
+    ) -> dict[str, torch.Tensor | None]:
+        raise NotImplementedError
+
+    def pool(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        raise NotImplementedError
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        # reshape inputs
+        x, shape = make3d(x)
+        new_shape = x.shape
+        if mask is not None:
+            mask = mask.reshape(new_shape[:-1])
+
+        # optional embedding
+        x = self.embed(x)
+
+        # prepare masks
+        masks = self.getMasks(mask, new_shape)
+
+        # attend
+        for block in self.blocks:
+            x = block(x, masks=masks)
+
+        # overwrite mask-related nans
+        x[x.isnan()] = 0.0
+
+        # optionally unwind nd to n,d
+        if new_shape[1] != x.shape[1]:
+            x = x.reshape((*new_shape, -1))
+
+        # pool across samples
+        x = self.pool(x, mask)
+
+        # reshape along features and project out
+        x = x.reshape(*shape[:-2], -1)
+        x = self.out(x)
+
+        return x
+
+
+class SetTransformer(BaseSetTransformer):
