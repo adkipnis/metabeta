@@ -43,3 +43,41 @@ def initializer(method: str, distribution: str):
     return initialize
 
 
+class SLP(nn.Module):
+    def __init__(
+        self,
+        d_input: int,
+        d_output: int,
+        activation: str = "Mish",
+        dropout: float = 0.01,
+        norm: str | None = None,
+        skip: bool = False,
+        use_bias: bool = True,
+        eps: float = 1e-3,
+        **kwargs,
+    ):
+        super().__init__()
+
+        layers = [nn.Linear(d_input, d_output, bias=use_bias)]
+        if norm == "batch":
+            layers += [nn.BatchNorm1d(d_output, eps=eps)]
+        elif norm == "layer":
+            layers += [nn.LayerNorm(d_output, eps=eps, bias=use_bias)]
+        layers += [eval(f"nn.{activation}()")]
+        if dropout > 0:
+            layers += [nn.Dropout(dropout)]
+        self.layers = nn.Sequential(*layers)
+
+        # optional skip connection
+        self.skip = skip
+        if self.skip:
+            self.shortcut = nn.Linear(d_input, d_output)
+
+    def forward(self, x):
+        h = self.layers(x)
+        if self.skip:
+            h = h + self.shortcut(x)
+        return h
+
+
+class MLP(nn.Module):
