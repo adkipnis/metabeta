@@ -454,3 +454,163 @@ def quickEval(
 
 
 # =============================================================================
+if __name__ == "__main__":
+    # --- setup
+    cfg = setup()
+    path = Path("outputs", "checkpoints")
+    console_width = getConsoleWidth()
+    torch.manual_seed(cfg.seed)
+    torch.set_num_threads(cfg.cores)
+    type_suffix = "-semi" if cfg.semi else ""
+
+    # --- set up model
+    summary_dict = {
+        "type": cfg.sum_type,
+        "d_model": cfg.sum_d,
+        "n_blocks": cfg.sum_blocks,
+        "d_ff": cfg.sum_ff,
+        "depth": cfg.sum_depth,
+        "d_output": cfg.sum_out,
+        "n_heads": cfg.sum_heads,
+        "dropout": cfg.sum_dropout,
+        "activation": cfg.sum_act,
+        "sparse": cfg.sum_sparse,
+    }
+    posterior_dict = {
+        "type": cfg.post_type,
+        "flows": cfg.flows,
+        "d_ff": cfg.post_ff,
+        "depth": cfg.post_depth,
+        "dropout": cfg.post_dropout,
+        "activation": cfg.post_act,
+    }
+    model_dict = {
+        "fx_type": cfg.fx_type,
+        "seed": cfg.seed,
+        "tag": cfg.m_tag,
+        "d": cfg.d,
+        "q": cfg.q,
+    }
+    model = ApproximatorMFX.build(
+        s_dict=summary_dict,
+        p_dict=posterior_dict,
+        m_dict=model_dict,
+        use_standardization=cfg.standardize,
+    )
+    model.eval()
+    print(f"{'-' * console_width}\nmodel: {model.id}")
+
+    # --- load model and data
+    load(model, path, cfg.iteration)
+    fn = dsFilename(cfg.fx_type, f"val{type_suffix}",
+                    1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_val,
+                    varied=cfg.varied,
+                    tag=cfg.d_tag,
+                    )
+    dl_val = getDataLoader(fn, cfg.bs_val, max_d=cfg.d, max_q=cfg.q,
+                           permute=False, autopad=True, device="cpu",
+                           )
+    ds_val = next(iter(dl_val))
+    print(f"preloaded model from iteration {cfg.iteration} and test set...\n{'-' * console_width}")
+
+    # --- calibrate on calibration set
+    if cfg.calibrate:
+        print("\nRunning full sampling from calibration set...")
+        results_cal = run(model, ds_val)
+        evaluate(model, results_cal, importance=False, calibrate=False, extensive=0)
+        evaluate(model, results_cal, importance=cfg.importance, calibrate=False, extensive=1)
+        print("Calibrating with conformal prediction...")
+        model.calibrator.calibrate(
+            model,
+            proposed=results_cal["proposed"]["global"], # type: ignore
+            targets=results_cal["targets"], # type: ignore
+        )
+        model.calibrator.save(model.id, cfg.iteration)
+        model.calibrator_l.calibrate(
+            model,
+            proposed=results_cal["proposed"]["local"], # type: ignore
+            targets=results_cal["targets_l"], # type: ignore
+            local=True,
+        )
+        model.calibrator_l.save(model.id, cfg.iteration, local=True)
+
+    # --- run on test set
+    fn_test = dsFilename(cfg.fx_type, f"test{type_suffix}",
+        1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_test,
+        varied=cfg.varied, tag=cfg.d_tag,
+    )
+    dl_test = getDataLoader(
+        fn_test, cfg.bs_test, max_d=cfg.d, permute=False, autopad=True, device="cpu"
+    )
+    ds_test = next(iter(dl_test))
+
+    print("\nRunning and evaluating test set...")
+    results_test = run(model, ds_test)
+    proposed = evaluate(model, results_test,
+                        importance=cfg.importance,
+                        calibrate=cfg.calibrate,
+                        iters=3,
+                        extensive=2,
+                        )
+    quickEval(model, results_test,
+              importance=cfg.importance,
+              calibrate=cfg.calibrate,
+              iters=3,
+              table=1,
+              )
+
+    # inspect(results_test, batch_indices=range(10))
+
+    # --- run on varying subsets, separate splits
+    ns = ds_test["n"]
+    rnv = ds_test["rnv"]
+    b = len(ns)
+
+    # set 1: high n
+    top_n, idx_size_high = ns.topk(b // 2)
+    ds_test_1 = {k: v[idx_size_high] for k, v in ds_test.items()}
+    results_test_1 = run(model, ds_test_1)
+
+    # set 2: low n
+    idx_size_low = np.setdiff1d(np.arange(b), idx_size_high.numpy())
+    ds_test_2 = {k: v[idx_size_low] for k, v in ds_test.items()}
+    results_test_2 = run(model, ds_test_2)
+
+    # set 3: high SNR
+    bottom_noise, idx_noise_low = (-rnv).topk(b // 2)
+    ds_test_3 = {k: v[idx_noise_low] for k, v in ds_test.items()}
+    results_test_3 = run(model, ds_test_3)
+
+    # set 4: low SNR
+    idx_noise_high = np.setdiff1d(np.arange(b), idx_noise_low.numpy())
+    ds_test_4 = {k: v[idx_noise_high] for k, v in ds_test.items()}
+    results_test_4 = run(model, ds_test_4)
+
+    quickEval(
+        model,
+        results_test_1,
+        importance=cfg.importance,
+        calibrate=cfg.calibrate,
+        iters=10,
+    )
+    quickEval(
+        model,
+        results_test_2,
+        importance=cfg.importance,
+        calibrate=cfg.calibrate,
+        iters=10,
+    )
+    quickEval(
+        model,
+        results_test_3,
+        importance=cfg.importance,
+        calibrate=cfg.calibrate,
+        iters=10,
+    )
+    quickEval(
+        model,
+        results_test_4,
+        importance=cfg.importance,
+        calibrate=cfg.calibrate,
+        iters=10,
+    )
