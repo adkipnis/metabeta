@@ -176,3 +176,47 @@ class SampleAttentionBlock(BaseBlock):
 
 
 class DualAttentionBlock(BaseBlock):
+    # alternating attention to samples and features
+    def __init__(
+        self,
+        d_model: int,
+        d_hidden: int | Iterable[int],
+        n_heads: int = 4,
+        activation: str = "GELU",
+        dropout: float = 0.01,
+        use_bias: bool = True,
+        eps: float = 1e-3,
+    ):
+        super().__init__(d_model, d_hidden, n_heads, activation, dropout, use_bias, eps)
+
+        # additional modules
+        self.att_feat = MultiheadAttention(d_model, n_heads, dropout, use_bias)
+        self.norm2 = nn.LayerNorm(d_model, eps=eps, bias=use_bias)
+
+    def forward(self, h, masks=None):
+        mask0 = mask1 = None
+        if masks is not None:
+            mask0, mask1 = masks.values()
+
+        # attentend features
+        h, shape = make3d(h)
+        if mask0 is not None:
+            h[mask0] = h[mask0] + self.att_feat(h[mask0])
+        else:
+            h = h + self.att_feat(h)
+        h = self.norm0(h)
+        h = h.reshape(*shape).transpose(1, 2)
+
+        # attend samples
+        h, shape = make3d(h)
+        h = h + self.att_samp(h, mask=mask1)
+        h = self.norm1(h)
+        h = h.reshape(*shape).transpose(1, 2)
+
+        # project
+        h = h + self.mlp(h)
+        h = self.norm2(h)
+        return h
+
+
+class ElongatedAttentionBlock(BaseBlock):
