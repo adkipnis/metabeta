@@ -304,3 +304,37 @@ class LMDataset(Dataset):
 
 
 # =============================================================================
+if __name__ == "__main__":
+    import time
+    from metabeta.utils import dsFilename
+
+    def measure(fn, args=(), kwargs={}):
+        start = time.time()
+        out = fn(*args, **kwargs)
+        end = time.time()
+        print(f"{end - start:.2f}s")
+        return out
+
+    # mixed effects example
+    fn_t = dsFilename('mfx', 'train', b=32, m=30, n=70, d=3, q=1,
+                      size=int(4e3), part=1, tag='r', outside=True)
+    ds_t = measure(LMDataset, (fn_t,))
+    item = ds_t[0]
+    dl_t = DataLoader(ds_t, batch_size=32, shuffle=False)
+    batch = next(iter(dl_t))
+
+    # check dl test
+    fn_t = dsFilename('mfx', 'test', b=1, m=30, n=70, d=3, q=1,
+                    size=128, part=-1, tag='r', outside=True)
+    ds_t = LMDataset(fn_t, permute=True)
+    dl_t = DataLoader(ds_t, batch_size=256, shuffle=False,
+                      collate_fn=getCollater(autopad=True))
+    batch = next(iter(dl_t))
+
+    # check semi-synthetic
+    fn_s = dsFilename('mfx', 'val-semi', b=1, m=30, n=70, d=5, q=2, size=500,
+                      part=0, outside=True)
+    ds_s = LMDataset(fn_s, permute=True)
+    dl_s = DataLoader(ds_s, batch_size=500, shuffle=False)
+    batch = next(iter(ds_s))
+
