@@ -114,3 +114,53 @@ def inspect(
 
 
 # -----------------------------------------------------------------------------
+# runner
+
+
+def run(
+    model: ApproximatorMFX,
+    batch: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
+    # model outputs
+    with torch.no_grad():
+        start = time.time()
+        results = model(batch, sample=True, n=(500, 300))
+        end = time.time()
+    print(f"forward pass took {end - start:.2f}s")
+    losses = results["loss"]
+    proposed = results["proposed"]
+    print(f"Mean loss: {losses.mean().item():.4f}")
+
+    # reconstruct varied intercepts for d = 1 and q = 0 from noise estimate
+    samples = proposed["global"]["samples"]
+    mask = batch["d"] == 1
+    means = samples[mask, 0]
+    stds = samples[mask, -1]
+    intercepts = D.Normal(means, stds).sample((1,)).squeeze(0)
+    proposed["global"]["samples"][mask, 0] = intercepts
+
+    # references
+    mcmc = None
+    if "mcmc_global" in batch:
+        mcmc = {}
+        mcmc["global"] = {"samples": batch["mcmc_global"]}
+        if "mcmc_local" in batch:
+            mcmc["local"] = {"samples": batch["mcmc_local"]}
+
+    # outputs
+    out = {
+        "batch": batch,
+        "losses": losses,
+        "proposed": proposed,
+        "perm": batch["perm"],  # used column permutation
+        "unperm": batch["unperm"],  # corresponding unpermutation
+        "names": model.names(batch),
+        "names_l": model.names(batch, local=True),
+        "targets": model.targets(batch),
+        "targets_l": model.targets(batch, local=True),
+        "mcmc": mcmc,
+    }
+    return out
+
+
+# -----------------------------------------------------------------------------
