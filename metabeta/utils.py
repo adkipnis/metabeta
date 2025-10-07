@@ -81,3 +81,14 @@ def dsFilename(
     )
 
 
+# -----------------------------------------------------------------------------
+# size utils
+def dInput(d_data: int, fx_type: str) -> int:
+    n_fx = 2 if fx_type == "mfx" else 1
+    return 1 + n_fx * (d_data - 1)
+
+
+def nParams(model: nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
