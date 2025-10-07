@@ -343,3 +343,43 @@ class BaseSetTransformer(nn.Module):
 
 
 class SetTransformer(BaseSetTransformer):
+    # joint embedding, attention along samples
+    def __init__(
+        self,
+        d_model: int,
+        d_ff: int,
+        d_output: int,
+        d_input: int,
+        depth: int = 2,
+        n_heads: int = 4,
+        n_blocks: int = 2,
+        dropout: float = 0.01,
+        activation: str = "GELU",
+        use_bias: bool = True,
+        eps: float = 1e-3,
+        **kwargs,
+    ):
+        super().__init__(d_model, d_ff, d_output, d_input,
+                         depth, n_heads, n_blocks,
+                         dropout, activation, use_bias, eps,
+                         MAB=MultiheadAttentionBlock)
+
+        # embedder
+        self.emb = nn.Linear(d_input, d_model, bias=use_bias)
+
+        # output projection
+        if d_model != d_output:
+            self.out = nn.Linear(d_model, d_output, bias=use_bias)
+
+        # pooling
+        self.pool = pool3d
+
+    def embed(self, x):
+        x = self.emb(x)
+        return x
+
+    def getMasks(self, mask=None, shape=None):
+        return {"mask": mask}
+
+
+class SampleTransformer(BaseSetTransformer):
