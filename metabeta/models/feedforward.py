@@ -81,3 +81,39 @@ class SLP(nn.Module):
 
 
 class MLP(nn.Module):
+    def __init__(
+        self,
+        d_input: int,
+        d_hidden: int | Iterable[int],
+        d_output: int | None = None,
+        activation: str = "Mish",
+        dropout: float = 0.01,
+        norm: str | None = None,
+        skip: bool = True,
+        weight_init: tuple[str, str] | None = ("lecun", "normal"),
+        use_bias: bool = True,
+        **kwargs,
+    ):
+        super().__init__()
+        if isinstance(d_hidden, int):
+            d_hidden = [d_hidden]
+        layers = []
+        d_prev = d_input
+        for d_next in d_hidden:
+            slp = SLP(d_prev, d_next, activation, dropout, norm, skip, use_bias)
+            layers += [slp]
+            d_prev = d_next
+        if d_output:
+            layers += [nn.Linear(d_prev, d_output, bias=use_bias), nn.Dropout(dropout)]
+        self.layers = nn.Sequential(*layers)
+        if weight_init is not None:
+            self.apply(initializer(*weight_init))
+
+    def forward(self, x: torch.Tensor, context=None):
+        if context is not None:
+            x = torch.cat([x, context], dim=-1)
+        h = self.layers(x)
+        return h
+
+
+class ResidualBlock(nn.Module):
