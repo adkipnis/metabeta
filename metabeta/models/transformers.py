@@ -142,3 +142,37 @@ class MultiheadAttentionBlock(BaseBlock):
 
 
 class SampleAttentionBlock(BaseBlock):
+    # attention to samples after separate embedding features
+    def __init__(
+        self,
+        d_model: int,
+        d_hidden: int | Iterable[int],
+        n_heads: int = 4,
+        activation: str = "GELU",
+        dropout: float = 0.01,
+        use_bias: bool = True,
+        eps: float = 1e-3,
+    ):
+        super().__init__(d_model, d_hidden, n_heads, activation, dropout, use_bias, eps)
+
+    def forward(self, h, masks=None):
+        # h (b, n, d, emb)
+        mask1 = None
+        if masks is not None:
+            mask1 = masks["mask1"]
+
+        # attend samples
+        h = h.transpose(-2, -3)  # make samples second-last dim
+        h, shape = make3d(h)
+        h = h + self.att_samp(h, mask=mask1)
+        h = self.norm0(h)
+        h = h.reshape(*shape)
+        h = h.transpose(-2, -3)
+
+        # project
+        h = h + self.mlp(h)
+        h = self.norm1(h)
+        return h
+
+
+class DualAttentionBlock(BaseBlock):
