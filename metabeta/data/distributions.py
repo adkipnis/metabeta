@@ -117,3 +117,27 @@ class StudentT(DistWithPrior):
 
 
 class Uniform(DistWithPrior):
+    @property
+    def base(self):
+        return D.Uniform
+
+    def defaultParams(self):
+        a = torch.tensor(12.0).sqrt()
+        return dict(low=-a, high=a)
+
+    def samplePrior(self, n: int = 1):
+        if self.center:
+            b = D.Uniform(0.5, 100.0).sample((n,))
+            a = -b
+        else:
+            ab = D.Uniform(0.5, 100.0).sample((2, n))
+            a = ab.min(0)[0] - 0.5
+            b = ab.max(0)[0] + 0.5
+
+        return dict(low=a, high=b)
+
+    def check(self, params):
+        return self.checkICDF(params)
+
+
+class Bernoulli(DistWithPrior):
