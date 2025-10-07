@@ -71,3 +71,25 @@ class DistWithPrior:
 
 
 class Normal(DistWithPrior):
+    @property
+    def base(self):
+        return D.Normal
+
+    def defaultParams(self):
+        loc = torch.tensor(0.0)
+        scale = torch.tensor(1.0)
+        return dict(loc=loc, scale=scale)
+
+    def samplePrior(self, n=1):
+        scale = D.Uniform(0.5, 25.0).sample((n,))
+        if self.center:
+            loc = torch.zeros_like(scale)
+        else:
+            loc = D.Uniform(-25.0, 25.0).sample((n,))
+        return dict(loc=loc, scale=scale)
+
+    def check(self, params):
+        return self.checkICDF(params)
+
+
+class StudentT(DistWithPrior):
