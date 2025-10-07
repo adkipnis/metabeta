@@ -210,3 +210,16 @@ class ScaledBeta(DistWithPrior):
 
 
 ###############################################################################
+if __name__ == "__main__":
+    from matplotlib import pyplot as plt
+
+    Normal(weight=100)
+    StudentT(weight=100)
+    Uniform(weight=100)
+    NegativeBinomial(weight=100)
+
+    dist = ScaledBeta(weight=100)
+    sample = dist.sample((100,))
+
+    plt.hist(sample, bins=30)
+
