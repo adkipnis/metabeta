@@ -220,3 +220,31 @@ class DualAttentionBlock(BaseBlock):
 
 
 class ElongatedAttentionBlock(BaseBlock):
+    # simulatneous attention to samples and features
+    def __init__(
+        self,
+        d_model: int,
+        d_hidden: int | Iterable[int],
+        n_heads: int = 4,
+        activation: str = "GELU",
+        dropout: float = 0.01,
+        use_bias: bool = True,
+        eps: float = 1e-3,
+    ):
+        super().__init__(d_model, d_hidden, n_heads, activation, dropout, use_bias, eps)
+
+    def forward(self, h, masks=None):
+        mask0 = None
+        if masks is not None:
+            mask0 = masks["mask0"]
+
+        h = h + self.att_samp(h, mask=mask0)
+        h = self.norm0(h)
+
+        # project
+        h = h + self.mlp(h)
+        h = self.norm1(h)
+        return h
+
+
+# -----------------------------------------------------------------------------
