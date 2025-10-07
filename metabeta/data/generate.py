@@ -42,3 +42,63 @@ def setup() -> argparse.Namespace:
 
 
 # -----------------------------------------------------------------------------
+# helpers
+def getFileName(ds_type: str, part: int) -> Path:
+    if "train" in ds_type:
+        size = cfg.bs_train
+        b = cfg.bs_load
+    elif "val" in ds_type:
+        size = cfg.bs_val
+        b = 1
+    elif "test" in ds_type:
+        size = cfg.bs_test
+        b = 1
+    else:
+        raise ValueError
+
+    fn = dsFilename(
+        fx_type=cfg.type,
+        ds_type=ds_type,
+        b=b,
+        m=cfg.max_m if cfg.type == "mfx" else 0,
+        n=cfg.max_n,
+        d=cfg.max_d,
+        q=cfg.max_q if cfg.type == "mfx" else 0,
+        size=size,
+        part=part,
+        varied=cfg.varied,
+        tag=cfg.d_tag,
+        outside=True,
+    )
+    return fn
+
+
+def sampleInt(batch_size: int | tuple, min_val: int, max_val: int) -> torch.Tensor:
+    """sample batch from discrete uniform
+    (include the max_val as possible value)"""
+    shape = (batch_size,) if isinstance(batch_size, int) else batch_size
+    return torch.randint(min_val, max_val + 1, shape)
+
+
+def sampleIntBatched(
+    min_val: int | torch.Tensor, max_val: int | torch.Tensor
+) -> torch.Tensor:
+    """batched version of the above with varying bounds"""
+    if isinstance(min_val, int):
+        min_val = torch.tensor([min_val])
+    if isinstance(max_val, int):
+        max_val = torch.tensor([max_val])
+    n = max(len(min_val), len(max_val))
+    samples = min_val + torch.floor((max_val + 1 - min_val) * torch.rand(n)).long()
+    return samples
+
+
+def sampleHN(shape: tuple, scale: float, max_val: float = float("inf")) -> torch.Tensor:
+    """sample batch from halfnormal, optionally clamp"""
+    val = D.HalfNormal(scale).sample(shape)
+    if max_val < float("inf"):
+        val = val.clamp(max=max_val) # type: ignore
+    return val # type: ignore
+
+
+# -----------------------------------------------------------------------------
