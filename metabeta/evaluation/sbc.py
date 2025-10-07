@@ -74,3 +74,47 @@ def plotSBC(
 
 
 def plotSBCsingle(
+    ax, ranks: torch.Tensor, n: int, upper: bool = True, color: str = "darkgreen"
+) -> None:
+    eps = 0.02
+    endpoints = binom.interval(0.95, n, 1 / 20)
+    mean = n / 20
+    ax.axhspan(endpoints[0], endpoints[1], facecolor="gray", alpha=0.1)
+    ax.axhline(
+        mean,
+        color="gray",
+        zorder=0,
+        alpha=0.9,
+        label="theoretical",
+        lw=2,
+        linestyle="--",
+    )
+    ax.set_axisbelow(True)
+    ax.grid(True)
+    mask = ranks >= 0
+    xx = ranks[mask].numpy()
+    sns.histplot(
+        xx,
+        kde=True,
+        ax=ax,
+        binwidth=0.05,
+        binrange=(0, 1),
+        lw=2,
+        color=color,
+        alpha=0.5,
+        stat="density",
+        label="estimated",
+    )
+    ax.set_xlim(0 - eps, 1 + eps)
+    ax.set_ylabel("")
+
+    ax.tick_params(axis="y", labelcolor="w")
+    if upper:
+        ax.set_title("Calibration", fontsize=30, pad=15)
+        ax.legend(fontsize=16, loc="upper right")
+        ax.set_xlabel("")
+    else:
+        ax.set_xlabel("U", labelpad=10, size=26)
+
+
+def getWasserstein(ranks: torch.Tensor, mask: torch.Tensor, n_points=1000):
