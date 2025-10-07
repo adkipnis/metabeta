@@ -184,3 +184,29 @@ class NegativeBinomial(DistWithPrior):
 
 
 class ScaledBeta(DistWithPrior):
+    @property
+    def base(self):
+        return D.Beta
+
+    def defaultParams(self):
+        alpha = torch.tensor(2.0)
+        beta = torch.tensor(2.0)
+        return dict(concentration1=alpha, concentration0=beta)
+
+    def samplePrior(self, n: int = 1):
+        ab = D.Uniform(1e-3, 100).sample((2, n))
+        alpha = ab[0]
+        beta = ab[1]
+        return dict(concentration1=alpha, concentration0=beta)
+
+    def sample(self, dims) -> torch.Tensor:
+        out = self.dist.sample(dims) * 100
+        if self.center:
+            out -= out.mean()
+        return out
+
+    def check(self, params):
+        return self.checkSample(params)
+
+
+###############################################################################
