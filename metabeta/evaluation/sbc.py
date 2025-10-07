@@ -28,3 +28,49 @@ def getRanks(
 
 
 def plotSBC(
+    ranks: torch.Tensor, mask: torch.Tensor | None, names: list, color: str = "darkgreen"
+) -> None:
+    eps = 0.02
+    n = len(names)
+    w = int(torch.tensor(n).sqrt().ceil())
+    _, axs = plt.subplots(figsize=(8 * w, 6 * w), ncols=w, nrows=w)
+    axs = axs.flatten()
+    endpoints = binom.interval(0.95, n, 1 / 20)
+    mean = n / 20
+
+    for i in range(n):
+        ax = axs[i]
+        ax.set_axisbelow(True)
+        ax.grid(True)
+        mask_0 = ranks[:, i] >= 0
+        if mask is not None:
+            mask_i = mask[:, i] * mask_0
+        else:
+            mask_i = mask_0
+        xx = ranks[mask_i, i].numpy()
+        if mask_i.sum() == 0:
+            axs[i].set_visible(False)
+            continue
+        ax.axhspan(endpoints[0], endpoints[1], facecolor="gray", alpha=0.1)
+        ax.axhline(mean, color="gray", zorder=0, alpha=0.9, linestyle="--")
+        sns.histplot(
+            xx,
+            kde=True,
+            ax=ax,
+            binwidth=0.05,
+            binrange=(0, 1),
+            color=color,
+            alpha=0.5,
+            stat="density",
+            label=names[i],
+        )
+        ax.set_xlim(0 - eps, 1 + eps)
+        ax.set_xlabel("U", fontsize=20)
+        ax.set_ylabel("")
+        ax.tick_params(axis="y", labelcolor="w")
+        ax.legend()
+    for i in range(n, w * w):
+        axs[i].set_visible(False)
+
+
+def plotSBCsingle(
