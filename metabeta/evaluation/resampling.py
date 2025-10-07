@@ -65,3 +65,60 @@ def powersample(
 
 
 def boxcoxLogDet(y: torch.Tensor, lambdas: torch.Tensor) -> torch.Tensor:
+    # log |dy/dx| = -log |dx/dy|
+    log_det = torch.zeros_like(y)
+
+    # masks
+    nonzero = lambdas != 0
+    idx = nonzero.expand(*y.shape)
+
+    # lambda != 0: dx/dy = y**(lambdas-1)
+    ld = -(lambdas - 1) * y.log()
+    log_det[idx] = ld[idx]
+
+    # lambda == 0: dx/dy = 1 / y
+    if (~nonzero).sum() > 0:
+        ld = y.log()
+        log_det[~idx] = ld[~idx]
+
+    return log_det
+
+
+def yeojohnsonLogDet(y: torch.Tensor, lambdas: torch.Tensor) -> torch.Tensor:
+    # log |dy/dx| = -log |dx/dy|
+    log_det = torch.zeros_like(y)
+
+    # masks
+    pos = y >= 0
+    nonzero = lambdas != 0
+    nontwo = lambdas != 2
+
+    # y >=0
+    if (pos).sum() > 0:
+        # lambda != 0: dx/dy = (y+1)**(lambdas-1)
+        idx = pos * nonzero
+        ld = -(lambdas - 1) * (y + 1).log()
+        log_det[idx] = ld[idx]
+
+        # lambda == 0: dx/dy = 1 / (y+1)
+        if (~nonzero).sum() > 0:
+            idx = pos * ~nonzero
+            ld = (y + 1).log()
+            log_det[idx] = ld[idx]
+
+    # y < 0
+    if (~pos).sum() > 0:
+        # lambda != 2: dx/dy = (-y+1)**(1-lambdas)
+        idx = ~pos * nontwo
+        ld = -(1 - lambdas) * (-y + 1).log()
+        log_det[idx] = ld[idx]
+
+        # lambda == 2: dx/dy = 1 / (-y+1)
+        if (~nontwo).sum() > 0:
+            idx = ~pos * ~nontwo
+            ld = -(-y + 1).log()
+            log_det[idx] = ld[idx]
+
+    return log_det
+
+
