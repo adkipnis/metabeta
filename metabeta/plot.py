@@ -156,3 +156,128 @@ def recovery(
 
 
 def _recoveryGrouped(
+    ax: Axes,
+    targets: torch.Tensor,
+    names: list[str],
+    means: torch.Tensor,
+    stds: torch.Tensor | None = None,
+    title: str = "",
+    marker: str = "o",
+    colors: list[np.ndarray] | None = None,
+    alpha: float = 0.2,
+    show_y: bool = True,
+) -> None | tuple[float, float]:
+    """plot true targets against posterior means for entire batch"""
+    # get sizes
+    assert means.shape[-1] == len(names), "shape mismatch"
+    if colors is not None:
+        assert len(colors) >= len(names), "not enough colors provided"
+    D = len(names)
+    if targets.dim() == 3:
+        targets = targets.view(-1, D)
+        means = means.view(-1, D)
+        stds = stds.view(-1, D) if stds is not None else None
+    mask = targets != 0.0
+
+    # init figure
+    ax.set_title(title, fontsize=30, pad=15)
+    ax.set_axisbelow(True)
+    ax.grid(True)
+    min_val = float(min(means.min(), targets.min()).floor())
+    max_val = float(max(means.max(), targets.max()).ceil())
+    addon = 4 if min_val < 0 else 1
+    limits = (min_val - addon, max_val + addon)
+    ax.set_xlim(limits, auto=False)
+    ax.set_ylim(limits, auto=False)
+    ax.plot(
+        [min_val, max_val], [min_val, max_val], "--", lw=2, zorder=1, color="grey"
+    )  # diagline
+
+    # init stats
+    RMSE = torch.tensor(0.0)
+    R = torch.tensor(0.0)
+    Bias = torch.tensor(0.0)
+    denom = D
+
+    # overlay plots
+    for i in range(D):
+        mask_i = mask[..., i]
+        targets_i = targets[mask_i, i]
+        mean_i = means[mask_i, i].detach()
+        # skip empty target
+        if mask_i.sum() == 0:
+            denom -= 1
+            continue
+
+        # compute stats
+        r = float(pearsonr(targets_i, mean_i)[0])  # type: ignore
+        R += r
+        bias = (targets_i - mean_i).mean()
+        Bias += bias
+        rmse = mse(targets_i, mean_i).sqrt()
+        RMSE += rmse
+
+        # subplot
+        if colors is not None:
+            ax.scatter(
+                targets_i,
+                mean_i,
+                marker=marker,
+                alpha=alpha,
+                color=colors[i],
+                label=names[i],
+            )
+        else:
+            ax.scatter(targets_i, mean_i, marker=marker, alpha=alpha, label=names[i])
+    # add stats
+    rmse = RMSE / denom
+    bias = Bias / denom
+    r = R / denom
+    ax.text(
+        0.7,
+        0.1,
+        f"r = {r.item():.3f}\nBias = {bias.item():.3f}\nRMSE = {rmse.item():.3f}",
+        transform=ax.transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=22,
+        bbox=dict(
+            boxstyle="round",
+            facecolor=(1, 1, 1, 0.7),
+            edgecolor=(0, 0, 0, alpha),
+        ),
+    )
+    ax.set_xlabel("true", fontsize=26, labelpad=10)
+    if show_y:
+        ax.set_ylabel("estimated", fontsize=26, labelpad=10)
+    ax.legend(fontsize=22, markerscale=2.5, loc="upper left")
+
+
+def recoveryGrouped(
+    targets: list[torch.Tensor],
+    names: list[list[str]],
+    means: list[torch.Tensor],
+    titles: list[str] = [],
+    marker: str = "o",
+    alpha: float = 0.2,
+) -> None | tuple[float, float]:
+    N = len(names)
+    assert N > 0, "no names provided"
+    fig, axs = plt.subplots(figsize=(7 * N, 7), ncols=N, nrows=1, dpi=300)
+    i = 0
+    for _targets, _names, _means, title, ax in zip(targets, names, means, titles, axs):
+        _recoveryGrouped(
+            ax,
+            _targets,
+            _names,
+            _means,
+            title=title,
+            marker=marker,
+            alpha=alpha,
+            show_y=(i == 0),
+        )
+        i += 1
+    fig.tight_layout()
+
+
+# compare posterior intervals with mcmc
