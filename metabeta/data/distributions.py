@@ -165,3 +165,22 @@ class Bernoulli(DistWithPrior):
 
 
 class NegativeBinomial(DistWithPrior):
+    @property
+    def base(self):
+        return D.NegativeBinomial
+
+    def defaultParams(self):
+        total_count = torch.tensor(1.0)
+        probs = torch.tensor(0.2)
+        return dict(total_count=total_count, probs=probs)
+
+    def samplePrior(self, n=1):
+        p = D.Uniform(0.1, 0.9).sample((n,))
+        n = torch.randint(1, 100, (n,), dtype=p.dtype) # type: ignore
+        return dict(total_count=n, probs=p)
+
+    def check(self, params):
+        return self.checkSample(params)
+
+
+class ScaledBeta(DistWithPrior):
