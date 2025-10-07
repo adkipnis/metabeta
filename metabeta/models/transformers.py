@@ -383,3 +383,47 @@ class SetTransformer(BaseSetTransformer):
 
 
 class SampleTransformer(BaseSetTransformer):
+    # separate embedding, attention along samples
+    def __init__(
+        self,
+        d_model: int,
+        d_ff: int,
+        d_output: int,
+        d_input: int,
+        depth: int = 2,
+        n_heads: int = 4,
+        n_blocks: int = 2,
+        dropout: float = 0.01,
+        activation: str = "GELU",
+        use_bias: bool = True,
+        eps: float = 1e-3,
+        **kwargs,
+    ):
+        super().__init__(d_model, d_ff, d_output, d_input,
+                         depth, n_heads, n_blocks,
+                         dropout, activation, use_bias, eps,
+                         MAB=SampleAttentionBlock)
+
+        # projections
+        self.emb = nn.Linear(1, d_model, bias=use_bias)
+        self.out = nn.Linear(d_input * d_model, d_output, bias=use_bias)
+
+        # pooling
+        self.pool = pool4d
+
+    def embed(self, x):
+        # per feature embedding
+        x = self.emb(x.unsqueeze(-1))
+        return x
+
+    def getMasks(self, mask=None, shape=None):
+        # assumes mask (b, n) and no padding for d
+        mask0 = mask1 = None
+        if mask is not None:
+            assert isinstance(shape, torch.Size)
+            b, n, d = shape
+            mask1 = mask.unsqueeze(1).expand(b, d, n).reshape(b * d, n)
+        return dict(mask0=mask0, mask1=mask1)
+
+
+class DualTransformer(BaseSetTransformer):
