@@ -182,3 +182,72 @@ def inversePermutation(p: torch.Tensor):
     return q
 
 
+# -----------------------------------------------------------------------------
+# batch handling
+
+
+def _copy(this):
+    if isinstance(this, torch.Tensor):
+        out = this.clone()
+    elif isinstance(this, dict):
+        out = this.copy()
+    else:
+        out = this
+    return out
+
+
+def catDict(big: dict, small: dict) -> dict:
+    for k in small:
+        entry = _copy(small[k])
+        if k not in big:
+            big[k] = entry
+        elif isinstance(entry, torch.Tensor):
+            assert isinstance(big[k], torch.Tensor), (
+                "expected target point to be a list"
+            )
+            big[k] = torch.cat([big[k], entry])
+        elif isinstance(entry, dict):
+            assert isinstance(big[k], dict), "expected target point to be a dict"
+            big[k] = catDict(big[k], entry)
+        elif isinstance(entry, np.ndarray):
+            assert all(big[k] == entry), "np arrays differ"
+        elif entry is None:
+            assert big[k] is None, f"{k} is not None but new entry is"
+        else:
+            raise ValueError("entry is neither a tensor nor a dict")
+    return big
+
+
+def padTensor(tensor: torch.Tensor, shape: tuple, value=0) -> torch.Tensor:
+    assert len(tensor.shape) == len(shape), (
+        "Input tensor and target shape must have the same number of dimensions"
+    )
+    shapes = zip(reversed(shape), reversed(tensor.shape))
+    pad_size = [max(s - t, 0) for s, t in shapes]
+    padding = []
+    for p in pad_size:
+        padding.extend([0, p])  # Pad at the end of each dimension
+    out = F.pad(tensor, padding, value=value)
+    return out
+
+
+def fullCovary(data: torch.Tensor) -> torch.Tensor:
+    # data (n, q)
+    n = data.shape[0]
+    mean = data.mean(0, keepdim=True)
+    centered = data - mean
+    cov = (centered.transpose(0, 1) @ centered) / (n - 1)
+    return cov
+
+
+def batchCovary(data: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    # data (b, m, q), mask (b, m)
+    m = mask.sum(1)
+    denom = (m - 1).clamp(min=1).view(-1, 1, 1)
+    mean = maskedMean(data, 1, mask.unsqueeze(-1))  # data.mean(1, keepdim=True)
+    centered = data - mean
+    cov = (centered.transpose(1, 2) @ centered) / denom
+    return cov
+
+
+# -----------------------------------------------------------------------------
