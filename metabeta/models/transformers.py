@@ -111,3 +111,34 @@ class BaseBlock(nn.Module):
 
 
 class MultiheadAttentionBlock(BaseBlock):
+    # attention to samples after jointly embedding features
+    def __init__(
+        self,
+        d_model: int,
+        d_hidden: int | Iterable[int],
+        n_heads: int = 4,
+        activation: str = "GELU",
+        dropout: float = 0.01,
+        use_bias: bool = True,
+        eps: float = 1e-3,
+    ):
+        super().__init__(d_model, d_hidden, n_heads, activation, dropout, use_bias, eps)
+
+    def forward(self, h, masks=None):
+        # x (b, n, emb)
+        mask = None
+        if masks is not None:
+            mask = masks["mask"]
+
+        # attend
+        h = h + self.att_samp(h, mask=mask)
+        h = self.norm0(h)
+
+        # project out
+        h = h + self.mlp(h)
+        h = self.norm1(h)
+
+        return h
+
+
+class SampleAttentionBlock(BaseBlock):
