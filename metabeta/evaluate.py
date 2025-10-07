@@ -331,3 +331,126 @@ def evaluate(
 
 
 def quickEval(
+    model: ApproximatorMFX,
+    results: dict,
+    importance: bool = False,
+    calibrate: bool = False,
+    iters: int = 3,
+    table: int = 1,
+) -> None:
+    # unpack
+    batch = results["batch"]
+    proposed = copy.deepcopy(results["proposed"])
+    targets = results["targets"]
+    targets_l = results["targets_l"]
+    mcmc = results["mcmc"]
+
+    # importance sampling
+    if importance:
+        for _ in range(iters):
+            proposed = ImportanceLocal(batch)(proposed)
+            proposed = ImportanceGlobal(batch)(proposed)
+
+    # recovery MB
+    mean, _ = model.moments(proposed["global"])
+    rs = np.array(
+        [pearsonr(targets[..., i], mean[..., i])[0] for i in range(mean.shape[-1])]
+    )
+    r_ffx = rs[: model.d].mean()
+    r_sigmas = rs[model.d :].mean()
+
+    rmses = (targets - mean).square().mean(0).sqrt()
+    rmse_ffx = rmses[: model.d].mean()
+    rmse_sigmas = rmses[model.d :].mean()
+
+    mean_l, _ = model.moments(proposed["local"])
+    mask_l = targets_l != 0.0
+    r_rfx = []
+    rmse_rfx = []
+    for i in range(mean_l.shape[-1]):
+        mask_i = mask_l[..., i]
+        targets_i = targets_l[..., i][mask_i]
+        means_i = mean_l[..., i][mask_i]
+        r_rfx += [pearsonr(targets_i, means_i)[0]]
+        rmse_rfx += [(targets_i - means_i).square().mean(0).sqrt()]
+    r_rfx = np.mean(r_rfx)
+    rmse_rfx = np.mean(rmse_rfx)
+
+    r = (r_ffx + r_sigmas + r_rfx) / 3
+    rmse = (rmse_ffx + rmse_sigmas + rmse_rfx) / 3
+
+    # recovery MCMC
+    m_mean, _ = model.moments(mcmc["global"])
+    m_rs = np.array(
+        [pearsonr(targets[..., i], m_mean[..., i])[0] for i in range(m_mean.shape[-1])]
+    )
+    m_r_ffx = m_rs[: model.d].mean()
+    m_r_sigmas = m_rs[model.d :].mean()
+
+    m_rmses = (targets - m_mean).square().mean(0).sqrt()
+    m_rmse_ffx = m_rmses[: model.d].mean()
+    m_rmse_sigmas = m_rmses[model.d :].mean()
+
+    m_mean_l, _ = model.moments(mcmc["local"])
+    mask_l = targets_l != 0.0
+    m_r_rfx = []
+    m_rmse_rfx = []
+    for i in range(mean_l.shape[-1]):
+        mask_i = mask_l[..., i]
+        targets_i = targets_l[..., i][mask_i]
+        m_means_i = m_mean_l[..., i][mask_i]
+        m_r_rfx += [pearsonr(targets_i, m_means_i)[0]]
+        m_rmse_rfx += [(targets_i - m_means_i).square().mean(0).sqrt()]
+    m_r_rfx = np.mean(m_r_rfx)
+    m_rmse_rfx = np.mean(m_rmse_rfx)
+
+    m_r = (m_r_ffx + m_r_sigmas + m_r_ffx) / 3
+    m_rmse = (m_rmse_ffx + m_rmse_sigmas + m_rmse_rfx) / 3
+
+    # coverage MB
+    coverage_g = getCoverage(
+        model, proposed["global"], targets, intervals=CI, calibrate=calibrate
+    )
+    coverage_l = getCoverage(
+        model,
+        proposed["local"],
+        targets_l,
+        intervals=CI,
+        calibrate=calibrate,
+        local=True,
+    )
+    ce_g = coverageError(coverage_g)
+    ce_ffx = ce_g[: model.d].mean()
+    ce_sigmas = ce_g[model.d :].mean()
+    ce_rfx = coverageError(coverage_l).mean()
+    ce = (ce_ffx + ce_sigmas + ce_rfx) / 3
+
+    # coverage MCMC
+    m_coverage_g = getCoverage(
+        model, mcmc["global"], targets, intervals=CI, calibrate=False
+    )
+    m_coverage_l = getCoverage(
+        model, mcmc["local"], targets_l, intervals=CI, calibrate=False, local=True
+    )
+    m_ce_g = coverageError(m_coverage_g)
+    m_ce_ffx = m_ce_g[: model.d].mean()
+    m_ce_sigmas = m_ce_g[model.d :].mean()
+    m_ce_rfx = coverageError(m_coverage_l).mean()
+    m_ce = (m_ce_ffx + m_ce_sigmas + m_ce_rfx) / 3
+
+    # overleaf: Table 1
+    if table == 1:
+        overleaf = rf"& {r:.3f} & {rmse:.3f} & {ce:.3f} & {m_r:.3f} & {m_rmse:.3f} & {m_ce.mean():.3f} \\"
+        print(overleaf)
+
+    elif table == 2:
+        # overleaf: Table 2
+        overleaf_ffx = rf"& $\boldsymbol{{\beta}}$ & {r_ffx:.3f} & {rmse_ffx:.3f} & {ce_ffx:.3f} & {m_r_ffx:.3f} & {m_rmse_ffx:.3f} & {m_ce_ffx:.3f} \\"
+        overleaf_sig = rf"& $\boldsymbol{{\sigma}}$ & {r_sigmas:.3f} & {rmse_sigmas:.3f} & {ce_sigmas:.3f} & {m_r_sigmas:.3f} & {m_rmse_sigmas:.3f} & {m_ce_sigmas:.3f} \\"
+        overleaf_rfx = rf"& $\boldsymbol{{\alpha}}$ & {r_rfx:.3f} & {rmse_rfx:.3f} & {ce_rfx:.3f} & {m_r_rfx:.3f} & {m_rmse_rfx:.3f} & {m_ce_rfx:.3f} \\"
+        print(overleaf_ffx)
+        print(overleaf_sig)
+        print(overleaf_rfx)
+
+
+# =============================================================================
