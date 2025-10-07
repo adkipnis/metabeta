@@ -43,3 +43,16 @@ class DiagDist(nn.Module):
 
 
 class DiagGaussian(DiagDist):
+    def __init__(self, dim):
+        super().__init__(D.Normal, dim)
+
+    def getParams(self):
+        if self.trainable:
+            return {"loc": self.loc, "scale": self.scale}
+        return {"loc": 0, "scale": 1}
+
+    def initParams(self):
+        self.loc = nn.Parameter(torch.ones(self.dim) * 0)
+        self.scale = nn.Parameter(torch.ones(self.dim) * 1)
+
+
