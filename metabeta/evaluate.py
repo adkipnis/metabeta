@@ -164,3 +164,170 @@ def run(
 
 
 # -----------------------------------------------------------------------------
+# evaluator
+
+
+def evaluate(
+    model: ApproximatorMFX,
+    results: dict,
+    importance: bool = False,
+    calibrate: bool = False,
+    extensive: int = 0,
+    iters: int = 10,
+) -> dict:
+    # unpack
+    batch = results["batch"]
+    proposed = copy.deepcopy(results["proposed"])
+    names = results["names"]
+    names_l = results["names_l"]
+    targets = results["targets"]
+    targets_l = results["targets_l"]
+
+    # importance sampling
+    if "flow" in cfg.post_type and importance:
+        print("Importance Sampling...")
+        start = time.time()
+        for _ in range(iters):
+            proposed = ImportanceLocal(batch)(proposed)
+            proposed = ImportanceGlobal(batch)(proposed)
+        end = time.time()
+        print(f"IS took {end - start:.2f}s")
+        sample_efficiency = proposed["global"].get("sample_efficiency")
+        if sample_efficiency is not None:
+            print(f"Mean IS sample efficiency: {sample_efficiency.mean().item():.2f}")
+
+    # ------------------------------------------------------------------------------
+    # recovery MB
+    mean, std = model.moments(proposed["global"])
+    mean_l, std_l = model.moments(proposed["local"])
+    plot.recoveryGrouped(
+        targets=[targets[:, : model.d], targets_l, targets[:, model.d :]],
+        means=[mean[:, : model.d], mean_l, mean[:, model.d :]],
+        names=[names[: model.d], names_l, names[model.d :]],
+        titles=["Fixed Effects", "Random Effects", "Variance Parameters"],
+    )
+
+    # recovery HMC
+    mcmc = results.get("mcmc", None)
+    if mcmc is not None:
+        m_mean, m_std = model.moments(mcmc["global"])
+        m_mean_l, m_std_l = model.moments(mcmc["local"])
+        plot.recoveryGrouped(
+            targets=[targets[:, : model.d], targets_l, targets[:, model.d :]],
+            means=[m_mean[:, : model.d], m_mean_l, m_mean[:, model.d :]],
+            names=[names[: model.d], names_l, names[model.d :]],
+            titles=["Fixed Effects", "Random Effects", "Variance Parameters"],
+            marker="s",
+        )
+
+    # ------------------------------------------------------------------------------
+    # coverage MB
+    coverage = coverage_m = None
+    coverage = getCoverage(
+        model, proposed["global"], targets, intervals=CI, calibrate=calibrate
+    )
+    if mcmc is not None:
+        coverage_m = getCoverage(
+            model, mcmc["global"], targets, intervals=CI, calibrate=False
+        )
+
+        fig, axs = plt.subplots(figsize=(7, 7 * 2), ncols=1, nrows=2, dpi=300)
+        plotCalibration(axs[0], coverage, names, lw=3, upper=True)
+        plotCalibration(axs[1], coverage_m, names, lw=3, upper=False)
+        fig.tight_layout()
+
+    # ------------------------------------------------------------------------------
+    # SBC histogram MB
+    mask_d = targets != 0.0
+    ranks = getRanks(targets, proposed["global"], absolute=False, mask_0=True)
+    # wd = getWasserstein(ranks, mask_d)
+    # print(f"SBC Wasserstein Distance (MB): {wd:.3f}")
+    if extensive == 1:
+        plotSBC(ranks, mask_d, names, color="darkgreen")
+
+    # SBC histogram MCMC
+    if mcmc is not None:
+        ranks_m = getRanks(targets, mcmc["global"])
+        # wd_m = getWasserstein(ranks_m, mask_d)
+        # print(f"SBC Wasserstein Distance (HMC): {wd_m:.3f}")
+        if extensive == 1:
+            plotSBC(ranks_m, mask_d, names, color="tan")
+
+    # ------------------------------------------------------------------------------
+    # ECDF diff MB
+    ranks_abs = getRanks(targets, proposed["global"], absolute=True, mask_0=True)
+    if extensive == 1:
+        plotECDF(
+            ranks_abs,
+            mask_d,
+            names,
+            s=proposed["global"]["samples"].shape[-1],
+            color="darkgreen",
+        )
+
+    # ECDF diff HMC
+    if mcmc is not None:
+        ranks_abs_m = getRanks(targets, mcmc["global"], absolute=True)
+        if extensive == 1:
+            plotECDF(
+                ranks_abs_m,
+                mask_d,
+                names,
+                s=mcmc["global"]["samples"].shape[-1],
+                color="darkgoldenrod",
+            )
+
+    # ------------------------------------------------------------------------------
+    # posterior predictive plots
+    if extensive == 1 and mcmc is not None:
+        subset_idx = torch.randperm(1000)[
+            :500
+        ]  # we need to subsample due to memory demands
+        mcmc_sub = {"global": {}, "local": {}}
+        mcmc_sub["global"] = {"samples": mcmc["global"]["samples"][..., subset_idx]}
+        mcmc_sub["local"] = {"samples": mcmc["local"]["samples"][..., subset_idx]}
+        y_rep_mcmc = posteriorPredictiveSample(batch, mcmc_sub)
+        y_rep = posteriorPredictiveSample(batch, proposed)
+        is_mask = weightSubset(proposed["global"]["weights"][:, 0])
+
+        fig, axs = plt.subplots(figsize=(6 * 2, 5 * 2), ncols=2, nrows=2, dpi=300)
+        plotPosteriorPredictive(
+            axs[0, 0],
+            batch["y"],
+            y_rep,
+            is_mask,
+            batch_idx=0,
+            color="green",
+            upper=True,
+        )
+        plotPosteriorPredictive(
+            axs[1, 0],
+            batch["y"],
+            y_rep_mcmc,
+            batch_idx=0,
+            color="darkgoldenrod",
+            upper=False,
+        )
+        plotPosteriorPredictive(
+            axs[0, 1],
+            batch["y"],
+            y_rep,
+            is_mask,
+            batch_idx=11,
+            color="green",
+            upper=True,
+            show_legend=True,
+        )
+        plotPosteriorPredictive(
+            axs[1, 1],
+            batch["y"],
+            y_rep_mcmc,
+            batch_idx=11,
+            color="darkgoldenrod",
+            upper=False,
+        )
+
+    return proposed
+
+
+def quickEval(
