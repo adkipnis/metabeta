@@ -274,3 +274,36 @@ class MixedEffects(Task):
 
 
 # =============================================================================
+if __name__ == "__main__":
+    # seed = 1
+    # torch.manual_seed(seed)
+    n_ffx = 3
+    nu = torch.tensor([0.0, 1.0, 1.0])
+    tau_beta = torch.tensor([50.0, 50.0, 50.0])
+    tau_eps = torch.tensor(50.0)
+    n_obs = 50
+
+    # -------------------------------------------------------------------------
+    # mixed effects
+    print("\nmixed effects example\n----------------------------")
+
+    n_obs = [50, 40, 30]
+    n_rfx = 2
+    n_groups = 3
+    tau_rfx = torch.tensor([10.0, 20.0])
+    me = MixedEffects(
+        nu,
+        tau_beta,
+        tau_eps,
+        tau_rfx,
+        n_ffx=n_ffx,
+        n_rfx=n_rfx,
+        n_groups=n_groups,
+        n_obs=n_obs,
+    )
+    ds = me.sample()
+
+    print(f"true ffx: {ds['ffx']}")
+    print(f"true noise variance: {ds['sigma_eps'] ** 2:.3f}")
+    print(f"relative noise variance: {ds['rnv']:.2f}")
+    print(f"random effects variances:\n{ds['sigmas_rfx']}")
