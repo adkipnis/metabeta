@@ -574,3 +574,77 @@ class SequentialDualTransformer(BaseSetTransformer):
 
 
 # =============================================================================
+if __name__ == "__main__":
+
+    def test_invariance(model, x, mask):
+        # invariance
+        model.eval()
+        perm = torch.randperm(n)
+        out1 = model(x, mask)
+        out2 = model(x[:, :, perm], mask[:, :, perm])
+        assert torch.allclose(out1, out2, atol=1e-5), (
+            "set transformer not permutation invariant"
+        )
+
+    # prepare data
+    b, m, n, d = 8, 30, 50, 3
+    d_model = 64
+    d_ff = 128
+    d_output = 32
+    n_heads = 4
+    dropout = 0.05
+    x = torch.randn(b, m, n, d)
+    mask = torch.randint(0, 2, (b, m, n)).bool()
+    x[~mask] = 0.0
+
+    # -------------------------------------------------------------------------
+    # MAB
+    # generic
+    h = torch.randn(b * m, n, d_model)
+    mab = MultiheadAttentionBlock(d_model, d_hidden=d_model)
+    output = mab(h)
+
+    # per-feature single
+    h = torch.randn(b * m, n, d, d_model)
+    mab = SampleAttentionBlock(d_model, d_hidden=d_model)
+    output = mab(h)
+
+    # per-feature dual
+    mab = DualAttentionBlock(d_model, d_hidden=d_model)
+    output = mab(h)
+
+    # -------------------------------------------------------------------------
+    # basic set transformer
+    model = SetTransformer(d_model=d_model, d_ff=d_model, d_input=d, d_output=d_output)
+    output = model(x, mask)
+    test_invariance(model, x, mask)
+
+    # -------------------------------------------------------------------------
+    # per feature set transformer attending over samples
+    model = SampleTransformer(
+        d_model=d_model, d_ff=d_model, d_input=d, d_output=d_output
+    )
+    output = model(x, mask)
+    test_invariance(model, x, mask)
+
+    # -------------------------------------------------------------------------
+    # per feature set transformer attending over samples and features
+    model = DualTransformer(d_model=d_model, d_ff=d_model, d_input=d, d_output=d_output)
+    output = model(x, mask)
+    test_invariance(model, x, mask)
+
+    # -------------------------------------------------------------------------
+    # per feature set transformer attending over samples and features
+    model = SparseDualTransformer(
+        d_model=d_model, d_ff=d_model, d_input=d, d_output=d_output
+    )
+    output = model(x, mask)
+    test_invariance(model, x, mask)
+
+    # -------------------------------------------------------------------------
+    # per feature set transformer attending over samples and features
+    model = SequentialDualTransformer(
+        d_model=d_model, d_ff=d_model, d_input=d, d_output=d_output
+    )
+    output = model(x, mask)
+    test_invariance(model, x, mask)
