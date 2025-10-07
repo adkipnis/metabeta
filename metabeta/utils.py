@@ -137,3 +137,32 @@ def weightedStd(x: torch.Tensor, weights: torch.Tensor | None = None, n_eff: tor
     return weighted_var.sqrt()
 
 
+# -----------------------------------------------------------------------------
+# regularization utils
+shift = 1e-3
+
+
+def maskedLog(x: torch.Tensor) -> torch.Tensor:
+    return torch.where(x != 0, x.log(), 0)
+
+
+def inverseSoftPlus(x: torch.Tensor) -> torch.Tensor:
+    return torch.where(x > 20, x, torch.log(torch.exp(x) - 1))
+
+
+def maskedSoftplus(x: torch.Tensor, eps: float = shift) -> torch.Tensor:
+    return torch.where(x != 0, F.softplus(x + eps), 0)
+
+
+def maskedInverseSoftplus(x: torch.Tensor, eps: float = shift) -> torch.Tensor:
+    return torch.where(x != 0, inverseSoftPlus(x) - eps, 0)
+
+
+def dampen(x: torch.Tensor, p: float = 0.5) -> torch.Tensor:
+    return x.sign() * x.abs().pow(p)
+
+
+def squish(x: torch.Tensor) -> torch.Tensor:
+    return x.sign() * (x.abs() + 1).log()
+
+
