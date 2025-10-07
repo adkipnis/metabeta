@@ -189,3 +189,39 @@ class Posterior(nn.Module):
 
 
 class CouplingPosterior(Posterior):
+    def __init__(
+        self,
+        d_target: int,
+        d_context: int,
+        n_flows: int = 6,
+        permute_mode: str | None = "shuffle",
+        use_actnorm: bool = True,
+        transform: str = "affine",
+        base_type: str = "gaussian",
+        net_kwargs: dict = {},
+    ):
+        super().__init__(d_target)
+        assert transform in ["affine", "spline"], 'transform must be "affine" or "spline"'
+        self.flow = CouplingFlow(
+            d_target=d_target + self.append,
+            d_context=d_context,
+            n_flows=n_flows,
+            permute_mode=permute_mode,
+            use_actnorm=use_actnorm,
+            use_linear=(transform == "spline"),
+            transform=transform,
+            base_type=base_type,
+            net_kwargs=net_kwargs,
+        )
+
+    def logProb(self, summary, values, mask=None):
+        return self.flow.log_prob(values, condition=summary, mask=mask)
+
+    def loss(self, summary, targets, mask=None):
+        return -self.logProb(summary, targets, mask)
+
+    def sample(self, summary: torch.Tensor, mask=None, n: int = 100):
+        with torch.no_grad():
+            return self.flow.sample(n, context=summary, mask=mask)
+
+
