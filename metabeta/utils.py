@@ -251,3 +251,39 @@ def batchCovary(data: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 
 
 # -----------------------------------------------------------------------------
+# profiling
+def check(x: torch.Tensor) -> None:
+    if x.isnan().any():
+        idx = torch.where(x.isnan())
+        print("nans at", idx)
+    if x.abs().isinf().any():
+        idx = torch.where(x.abs().isinf())
+        print("infs at", idx)
+
+
+def profile(fn, inputs):
+    import torch.profiler
+
+    with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CPU],
+        with_stack=True,
+        record_shapes=True,
+    ) as prof:
+        fn(*inputs)
+    print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+
+
+def printRAM():
+    import gc
+
+    print("\nLargest tensors by size (bytes):")
+    tensors = [
+        (obj.element_size() * obj.nelement(), obj.shape)
+        for obj in gc.get_objects()
+        if torch.is_tensor(obj)
+    ]
+    tensors.sort(key=lambda x: x)
+    for size, shape in tensors[-1:-20:-1]:
+        print(f"Shape: {shape}, Size: {size / 1_048_576:.2f} mb")
+
+
