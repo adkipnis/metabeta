@@ -118,3 +118,32 @@ def plotSBCsingle(
 
 
 def getWasserstein(ranks: torch.Tensor, mask: torch.Tensor, n_points=1000):
+    b, d = ranks.shape
+
+    # support
+    x = np.linspace(0, 1, n_points)
+    dx = x[1] - x[0]
+
+    # get KDE approximation of ranks distribution
+    # get probabilities of x under this distribution
+    q = np.ones_like(x)
+    p = []
+    for i in range(d):
+        mask_0 = ranks[:, i] >= 0
+        mask_i = mask[:, i] * mask_0
+        if mask_i.sum() == 0:
+            continue
+        ranks_i = ranks[mask_i, i]
+        p += [gaussian_kde(ranks_i, bw_method="scott")(x)]
+
+    # cdfs
+    ecdf = [np.cumsum(p_i) * dx for p_i in p]
+    ucdf = np.cumsum(q) * dx
+
+    # get wasserstein distances
+    wds = [wasserstein_distance(ecdf_i, ucdf) for ecdf_i in ecdf]
+    wd = float(np.sum(wds) / len(wds))
+    return wd
+
+
+def boundECDF(n_ranks: int, n_sim: int = 1000, alpha: float = 0.01):
