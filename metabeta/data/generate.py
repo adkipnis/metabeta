@@ -298,3 +298,69 @@ def generateSemi(
 
 
 # =============================================================================
+
+if __name__ == "__main__":
+    os.makedirs(Path("..", "outputs", "data"), exist_ok=True)
+    cfg = setup()
+    assert cfg.type == "mfx", f"{cfg.type} not implemented"
+    assert cfg.bs_train % cfg.bs_load == 0, (
+        "storage batch size must be divisible by loading batch size"
+    )
+    part = cfg.begin
+    raw = None
+    if cfg.semi:
+        assert cfg.d_tag, "must provide data tag for semi-synthetic data"
+        path = Path("real", f"{cfg.d_tag}.npz")
+        raw = RealDataset(path=path).raw()
+
+    # generate test dataset
+    if cfg.begin == -1:
+        if cfg.semi and raw is not None:
+            print("Generating semi-synthetic test set...")
+            ds_test = generateSemi(raw, cfg.bs_test, part, mcmc=True)
+            ds_test = aggregate(ds_test)
+            fn = getFileName("test-semi", -1)
+            np.savez_compressed(fn, **ds_test, allow_pickle=True)
+            print(f"\nSaved semi-synthetic test set to {fn}")
+        else:
+            print("Generating test set...")
+            ds_test = generate(cfg.bs_test, part, mcmc=True)
+            ds_test = aggregate(ds_test)
+            fn = getFileName("test", -1)
+            np.savez_compressed(fn, **ds_test, allow_pickle=True)
+            print(f"\nSaved test set to {fn}")
+        exit()
+
+    # generate validation dataset
+    if cfg.begin == 0:
+        if cfg.semi and raw is not None:
+            print("Generating semi-synthetic validation set...")
+            ds_val = generateSemi(raw, cfg.bs_val, part, mcmc=False)
+            ds_val = aggregate(ds_val)
+            fn = getFileName("val-semi", 0)
+            np.savez_compressed(fn, **ds_val, allow_pickle=True)
+            print(f"\nSaved semi-synthetic validation set to {fn}")
+        else:
+            print("Generating validation set...")
+            ds_val = generate(cfg.bs_val, part, mcmc=False)
+            ds_val = aggregate(ds_val)
+            fn = getFileName("val", 0)
+            np.savez_compressed(fn, **ds_val, allow_pickle=True)
+            print(f"\nSaved validation set to {fn}")
+        cfg.begin += 1
+
+    # potentially stop after that
+    if cfg.iterations == 0:
+        exit()
+
+    # generate training datasets
+    if not cfg.semi:
+        print(f"Generating {cfg.iterations} training partitions of {cfg.bs_train} datasets each...")
+        for part in range(cfg.begin, cfg.iterations + 1):
+            ds_train = generate(cfg.bs_train, part, bs_load=cfg.bs_load)
+            ds_train = aggregate(ds_train)
+            fn = getFileName("train", part)
+            np.savez_compressed(fn, **ds_train, allow_pickle=True)
+            print(f"Saved training set to {fn}")
+
+
