@@ -218,3 +218,54 @@ def train(
 
 
 def validate(model: ApproximatorMFX, dl: DataLoader, step: int) -> int:
+    results = None
+    iterator = tqdm(dl, desc=f"iteration {iteration:02d}/{cfg.iterations:02d} [V]")
+    loss_val = 0
+    sample = False
+    if step % 5 == 0:
+        sample = True
+
+    # run validation steps
+    with torch.no_grad():
+        model = model.to("cpu")
+        model.eval()
+        optimizer.eval()
+        for i, batch in enumerate(iterator):
+            results = run(model, batch, sample=sample)
+            loss = results["loss"].mean().item()  # type: ignore
+            loss_val += loss if isinstance(loss, float) else 0
+            iterator.set_postfix_str(f"loss: {loss_val / (i + 1):.3f}")
+        loss_val /= len(iterator)
+        step += 1
+        logger.write(iteration, step, loss_val, "loss_val")
+        stopper.update(loss_val)
+
+        # evaluate samples
+        if sample:
+            assert results is not None
+            # global results
+            rmse, r = plot.recovery(  # type: ignore
+                targets=results["targets"]["global"],
+                names=results["names"]["global"],
+                means=results["moments"]["global"][0],
+                return_stats=True,
+            )
+            logger.write(iteration, step, rmse, "rmse")
+            logger.write(iteration, step, r, "r")
+            iterator.write(f"Global - RMSE: {rmse:.3f}, R: {r:.3f}")
+
+            # local results
+            if "local" in results["names"]:
+                rmse, r = plot.recovery(  # type: ignore
+                    targets=results["targets"]["local"],
+                    names=results["names"]["local"],
+                    means=results["moments"]["local"][0],
+                    return_stats=True,
+                )
+                iterator.write(f"Local - RMSE: {rmse:.3f}, R: {r:.3f}")
+
+        model = model.to(device)
+    return step
+
+
+###############################################################################
