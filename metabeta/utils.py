@@ -92,3 +92,48 @@ def nParams(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
+# -----------------------------------------------------------------------------
+# moment utils
+def maskedMean(x: torch.Tensor, dim: tuple | int, mask: torch.Tensor) -> torch.Tensor:
+    sums = x.sum(dim, keepdim=True)
+    count = mask.sum(dim, keepdim=True)
+    return sums / (count + 1e-12)
+
+
+def maskedStd(
+    x: torch.Tensor, dim: tuple, mask: torch.Tensor, mean: torch.Tensor | None = None
+) -> torch.Tensor:
+    if mean is None:
+        mean = maskedMean(x, dim, mask)
+    diff_squared_sum = ((x - mean) * mask).square().sum(dim, keepdim=True)
+    count = mask.sum(dim, keepdim=True) - 1
+    count = torch.where(count < 1, 1, count)
+    return (diff_squared_sum / count).sqrt()
+
+
+def weightedMean(x: torch.Tensor, weights: torch.Tensor | None = None) -> torch.Tensor:
+    s = x.shape[-1]
+    if weights is None:
+        return x.mean(-1)
+    return (x * weights).sum(-1) / s
+    # non_negative = (samples >= 0).all(-1)
+    # samples_log = torch.zeros_like(samples)
+    # samples_log[non_negative] = (samples[non_negative] + 1e-12).log()
+    # log_mean = (samples_log * weights).sum(-1) / samples.shape[-1]
+    # weighted_mean[non_negative] = log_mean[non_negative].exp()
+
+
+def weightedStd(x: torch.Tensor, weights: torch.Tensor | None = None, n_eff: torch.Tensor | None = None) -> torch.Tensor:
+    s = x.shape[-1]
+    if weights is None:
+        return x.std(-1)
+    denom = s
+    if n_eff is not None:
+        denom = (s - s / n_eff).unsqueeze(-1)
+    mean = weightedMean(x, weights)
+    d_sq = (x - mean.unsqueeze(-1)).square()
+    weighted_d_sq = d_sq * weights
+    weighted_var = weighted_d_sq.sum(-1) / (denom + 1e-6)
+    return weighted_var.sqrt()
+
+
