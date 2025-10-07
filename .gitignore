@@ -2,11 +2,5 @@ __pycache__
 .ipynb_checkpoints
 .DS_Store
 archive
-data
-runs
-weights
-checkpoints
-runs-hpc
-losses
-predictions
+outputs
 metabeta.egg-info
