@@ -35,3 +35,19 @@ def posteriorPredictiveSample(
 
 
 def weightSubset(
+    weights: torch.Tensor,  #  (b, s)
+    alpha: float = 0.01,
+) -> torch.Tensor:
+    # get a mask of shape (b, s) that subsets the 1-alpha most likely samples
+    b, s = weights.shape
+    root = torch.tensor(alpha).expand(b, 1)
+    w_sorted, w_idx = weights.sort(dim=-1, descending=False)
+    w_inv = torch.argsort(w_idx, -1)
+    cdf = torch.cumsum(w_sorted, -1) / s
+    cdf = cdf.contiguous()
+    r_idx = torch.searchsorted(cdf, root).clamp(max=s - 1)
+    mask = torch.arange(s).unsqueeze(0) >= r_idx
+    mask = mask.gather(-1, w_inv)
+    return mask
+
+
