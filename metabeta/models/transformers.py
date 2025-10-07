@@ -35,3 +35,37 @@ def pool4d(x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
 
 
 # -----------------------------------------------------------------------------
+# Multi-Head Attention
+class MultiheadAttention(nn.Module):
+    # wrapper for torch's mha
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int = 4,
+        dropout: float = 0.01,
+        use_bias: bool = False,
+    ):
+        super().__init__()
+        self.mha = nn.MultiheadAttention(d_model, n_heads, dropout, batch_first=True)
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        # prepare mask
+        key_padding_mask = None
+        if mask is not None:
+            key_padding_mask = ~mask
+
+        # set key if not provided
+        if key is None:
+            key = query
+
+        # forward pass
+        h, _ = self.mha(query, key, key, key_padding_mask=key_padding_mask)
+        return h
+
+
+# -----------------------------------------------------------------------------
