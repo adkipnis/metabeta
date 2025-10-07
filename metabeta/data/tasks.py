@@ -134,3 +134,143 @@ class Task:
 
 
 # -----------------------------------------------------------------------------
+# MFX
+class MixedEffects(Task):
+    def __init__(
+        self,
+        nu_ffx: torch.Tensor,  # ffx prior means
+        tau_ffx: torch.Tensor,  # ffx prior stds
+        tau_eps: torch.Tensor,  # noise prior std
+        tau_rfx: torch.Tensor,  # rfx prior stds
+        n_ffx: int,  # d
+        n_rfx: int,  # q
+        n_groups: int,  # m
+        n_obs: list[int],  # n
+        features: torch.Tensor | None = None,
+        groups: torch.Tensor | None = None,
+        use_default: bool = False,
+    ):
+        super().__init__(
+            nu_ffx, tau_ffx, tau_eps, n_ffx, features=features, use_default=use_default
+        )
+        assert len(n_obs) == n_groups, (
+            "mismatch between number of groups and individual observations"
+        )
+        assert len(tau_rfx) == n_rfx, (
+            "mismatch between number of random effects and their prior stds"
+        )
+        self.q = n_rfx
+        self.m = n_groups
+        self.n_i = torch.tensor(n_obs)  # per group
+        self.groups = groups
+
+        # rfx distribution
+        self.tau_rfx = tau_rfx
+        if (tau_rfx == 0).any():
+            self.sigmas_rfx = torch.zeros_like(tau_rfx)
+        else:
+            self.sigmas_rfx = D.HalfNormal(self.tau_rfx).sample()
+
+    def sampleRfx(self) -> torch.Tensor:
+        if self.q == 0:
+            return torch.zeros((self.m, self.q))
+        b = torch.randn((self.m, self.q))
+        b = (b - b.mean(0, keepdim=True)) / b.std(0, keepdim=True)
+        b = torch.where(b.isnan(), 0, b)
+        b *= self.sigmas_rfx.unsqueeze(0)  # type: ignore
+        return b
+
+    def sample(self, include_posterior: bool = False) -> dict[str, torch.Tensor]:
+        if include_posterior:
+            raise NotImplementedError("posterior inference not implemented for MFX")
+        okay = True
+    
+        # fixed effects and noise
+        ffx = self.sampleFfx()
+        if self.features is None:
+            n_samples = int(self.n_i.sum())
+            X = self.sampleFeatures(n_samples, ffx)
+            X = self.induceCorrelation(X)
+            X = self.addIntercept(X)
+        else:
+            # use predetermined features
+            X = self.features
+            n_i = torch.unique(self.groups, return_counts=True)[1]
+            subjects = torch.randperm(len(n_i))[: self.m]
+            self.n_i = n_i[subjects]
+            n_samples = int(self.n_i.sum())
+            subjects_mask = (self.groups.unsqueeze(-1) == subjects.unsqueeze(0)).any(-1)  # type: ignore
+            X = X[subjects_mask]
+
+            # subsample features
+            d = min(self.d, X.size(1))
+            features = (torch.randperm(X.size(1) - 1)[: d - 1] + 1).tolist()
+            features = [0] + features
+            X = X[:, features]
+
+            # optionally add more
+            if d < self.d:
+                X_ = self.sampleFeatures(n_samples, ffx[d - 1 :])
+                X = torch.cat([X, X_], dim=1)
+
+        eps = self.sampleError(n_samples)
+        eta = X @ ffx
+        
+        # check which variables are categorial
+        is_binary = (X == 0) | (X == 1)
+        categorial = is_binary.all(dim=0)[1:]
+        
+        # random effects and target
+        groups = torch.repeat_interleave(torch.arange(self.m), self.n_i)  # (n,)
+        rfx = self.sampleRfx()  # (m, q)
+        B = rfx[groups]  # (n, q)
+        Z = X[:, : self.q]
+        y_hat = eta + (Z * B).sum(dim=-1)
+        y = y_hat + eps
+        snr = self.signalToNoiseRatio(y, eta)
+        rnv = self.relativeNoiseVariance(y, y_hat)
+
+        # check if dataset is within limits
+        if eta.std() > self.original_limit:
+            okay = False
+
+        # Cov(mean Z, rfx), needed for standardization
+        if self.q:
+            weighted_rfx = Z.mean(0, keepdim=True) * rfx
+            cov = fullCovary(weighted_rfx)
+            cov_sum = cov.sum() - cov[0, 0]
+        else:
+            cov_sum = torch.tensor(0.0)
+
+        # outputs
+        out = {
+            # data
+            "X": X,  # (n, d-1)
+            "y": y,  # (n,)
+            "groups": groups,  # (n,)
+            # params
+            "ffx": ffx,  # (d,)
+            "rfx": rfx,  # (m, q)
+            "sigmas_rfx": self.sigmas_rfx,  # (q,)
+            "sigma_eps": self.sigma_eps,  # (1,)
+            # priors
+            "nu_ffx": self.nu_ffx,  # (d,)
+            "tau_ffx": self.tau_ffx,  # (d,)
+            "tau_rfx": self.tau_rfx,  # (q,)
+            "tau_eps": self.tau_eps,  # (1,)
+            # misc
+            "m": torch.tensor(self.m),  # (1,)
+            "n": torch.tensor(n_samples),  # (1,)
+            "n_i": self.n_i,  # (m,)
+            "d": torch.tensor(self.d),  # (1,)
+            "q": torch.tensor(self.q),  # (1,)
+            "cov_sum": cov_sum,  # (1,)
+            "snr": snr,  # (1,)
+            "rnv": rnv,  # (1,)
+            "categorial": categorial, # (d-1,)
+            "okay": torch.tensor(okay),
+        }
+        return out
+
+
+# =============================================================================
