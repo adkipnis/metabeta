@@ -122,3 +122,13 @@ def yeojohnsonLogDet(y: torch.Tensor, lambdas: torch.Tensor) -> torch.Tensor:
     return log_det
 
 
+def replace(samples: torch.Tensor, weights: torch.Tensor, t: int = 100) -> torch.Tensor:
+    # resample t times with replacement proportionally to weights
+    shape, s = weights.shape[:-1], weights.shape[-1]
+    probs = weights / weights.sum(-1, keepdim=True)
+    probs_2d = probs.reshape(-1, s)
+    idx_2d = probs_2d.multinomial(num_samples=t, replacement=True)
+    idx = idx_2d.reshape((*shape, t))
+    resamples = samples.gather(-1, index=idx)
+    return resamples
+
