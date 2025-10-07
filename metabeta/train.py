@@ -97,3 +97,25 @@ class Logger:
 
 
 # -----------------------------------------------------------------------------
+# early stopper
+class EarlyStopping:
+    def __init__(self, patience: int = 3, delta: float = 1e-3) -> None:
+        self.patience = patience
+        self.delta = delta
+        self.best = float("inf")
+        self.counter = 0
+        self.stop = False
+
+    def update(self, loss: float) -> None:
+        diff = self.best - loss
+        if diff > self.delta:
+            self.best = loss
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.counter == self.patience:
+                self.stop = True
+                print("Stopping due to impatience.")
+
+
+# -----------------------------------------------------------------------------
