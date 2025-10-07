@@ -69,3 +69,45 @@ class MultiheadAttention(nn.Module):
 
 
 # -----------------------------------------------------------------------------
+# Multi-Head Attention Blocks
+class BaseBlock(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        d_hidden: int | Iterable[int],
+        n_heads: int = 4,
+        activation: str = "GELU",
+        dropout: float = 0.01,
+        use_bias: bool = True,
+        eps: float = 1e-3,
+    ):
+        super().__init__()
+
+        # Multihead Attention
+        self.att_samp = MultiheadAttention(d_model, n_heads, dropout, use_bias)
+
+        # MLP
+        self.mlp = MLP(
+            d_input=d_model,
+            d_hidden=d_hidden,
+            d_output=d_model,
+            activation=activation,
+            dropout=dropout,
+            use_bias=use_bias,
+            weight_init=None,
+            skip=False,
+        )
+
+        # Layer Norms
+        self.norm0 = nn.LayerNorm(d_model, eps=eps, bias=use_bias)
+        self.norm1 = nn.LayerNorm(d_model, eps=eps, bias=use_bias)
+
+    def forward(
+        self,
+        h: torch.Tensor,
+        masks: dict[str, torch.Tensor] | None = None,
+    ) -> torch.Tensor:
+        raise NotImplementedError
+
+
+class MultiheadAttentionBlock(BaseBlock):
