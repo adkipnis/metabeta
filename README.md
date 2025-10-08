@@ -9,7 +9,7 @@ This repo contains the source code for [data simulation](metabeta/data), [model 
 For details, please read our [preprint](TODO). Our model is built in [PyTorch](https://pytorch.org/).
 
 ## Overview
-<img src="https://github.com/adkipnis/metabeta/blob/main/figures/overview.png" width="750" />
+<img src="https://github.com/adkipnis/metabeta/blob/main/figures/overview.pdf" width="750" />
 
 - _Dataset Simulation_: Sample priors, regression parameters, dependent predictors, and noise, and perform a forward pass.
 - _Neural Model_: Hierarchical datasets are summarized locally (per group) and globally (across groups). During training, a normalizing flow learns the forward mapping (true parameters -> base distribution).
