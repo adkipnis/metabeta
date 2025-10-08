@@ -12,6 +12,7 @@ For details, please read our [preprint](TODO). Our model is built in [PyTorch](h
 <img src="https://github.com/adkipnis/metabeta/blob/main/figures/overview.png" width="750" />
 A. _Dataset Simulation_: Sample priors, regression parameters, dependent predictors, and noise, and perform a forward pass.
 
+
 B. _Neural Model_: Hierarchical datasets are summarized locally (per group) and globally (across groups). During training, the posterior networks learn the forward mapping
 from the true regression parameters to a multivariate base distribution. During inference, we draw k samples from the base distribution, and apply the implicitly
 learned backward mapping to them.
