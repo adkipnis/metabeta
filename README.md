@@ -3,7 +3,7 @@
 📈 approximates Bayesian posterior computation for hierarchical regression models\
 ⛓️‍💥 allows prior specification for each regression parameter\
 🧮 trained on simulated hierarchical datasets with realistic structure\
-🚀 runs orders of magnitude faster than HCMC
+🚀 runs orders of magnitude faster than HCMC\
 🔥 fully implemented in [PyTorch](https://pytorch.org/)
 
 This repo contains the source code for [data simulation](metabeta/data), [model training](metabeta/models), and [evaluation](metabeta/evaluation).\
