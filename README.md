@@ -1,6 +1,6 @@
 # metabeta
 ## A fast neural model for Bayesian mixed-effects regression
-📈 approximates Bayesian posterior computation for hierarchical regression models\
+📈 approximates posterior estimation for hierarchical regression models\
 ⛓️‍💥 allows prior specification for each regression parameter\
 🧮 trained on simulated hierarchical datasets with realistic structure\
 🚀 runs orders of magnitude faster than HCMC\
