@@ -22,8 +22,7 @@ During inference, samples are drawn from the base distribution, and are passed b
 - conda activate mb
 - pip install -e .
 
-## Citing the Project
-To cite metabeta in publications:
+## Citing the project
 
 ```bibtex
 @article{metabench,
