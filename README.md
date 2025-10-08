@@ -11,13 +11,10 @@ For details, please read our [preprint](TODO). Our model is built in [PyTorch](h
 ## pipeline
 <img src="https://github.com/adkipnis/metabeta/blob/main/figures/overview.png" width="750" />
 A. Dataset Simulation: Sample priors, regression parameters, dependent predictors, and noise, and perform a forward pass.
-
 B. Neural Model: Hierarchical datasets are summarized locally (per group) and globally (across groups). During training, the posterior networks learn the forward mapping
 from the true regression parameters to a multivariate base distribution. During inference, we draw k samples from the base distribution, and apply the implicitly
 learned backward mapping to them.
-
 C. Example Posteriors: Kernel density estimates from the posterior samples of metabeta (MB) and Hamiltonian Monte Carlo (HMC) on a toy dataset.
-
 D. Compute Time: For the test set, our model takes several orders of magnitude less time to compute in comparison to HMC (on a Macbook M2).
 
 ## Setup with anaconda
