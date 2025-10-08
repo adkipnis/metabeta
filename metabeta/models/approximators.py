@@ -597,7 +597,7 @@ class ApproximatorMFX(Approximator):
 
         # postprocessing
         proposed = self.postprocess(proposed, data)
-        loss += loss_l.sum(-1) / data["m"]
+        loss += loss_l.sum(-1) # / data["m"]
         return {"loss": loss, "proposed": proposed}
 
     def estimate(self, data: dict[str, torch.Tensor], n=(300, 200)):
