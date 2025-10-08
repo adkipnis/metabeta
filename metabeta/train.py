@@ -23,7 +23,7 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     # misc
-    parser.add_argument('--m_tag', type=str, default='r', help='Suffix for model ID (default = '')')
+    parser.add_argument('--m_tag', type=str, default='sum', help='Suffix for model ID (default = '')')
     parser.add_argument('-s', '--seed', type=int, default=42, help='Model seed')
     parser.add_argument('--device', type=str, default='mps', help='Device to use [cpu, cuda, mps]')
     parser.add_argument('--cores', type=int, default=8, help='Nubmer of processor cores to use (default = 8)')
@@ -33,8 +33,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--varied', action='store_true', help='Use data with variable d/q (default = False)')
     parser.add_argument('--semi', action='store_true', help='Use semi-synthetic data (default = True)')
     parser.add_argument('-t', '--fx_type', type=str, default='mfx', help='Type of dataset [ffx, mfx] (default = ffx)')
-    parser.add_argument('-d', type=int, default=3, help='Number of fixed effects (with bias, default = 5)')
-    parser.add_argument('-q', type=int, default=1, help='Number of random effects (with bias, default = 1)')
+    parser.add_argument('-d', type=int, default=5, help='Number of fixed effects (with bias, default = 5)')
+    parser.add_argument('-q', type=int, default=2, help='Number of random effects (with bias, default = 1)')
     parser.add_argument('-m', type=int, default=30, help='Maximum number of groups (default = 30).')
     parser.add_argument('-n', type=int, default=70, help='Maximum number of samples per group (default = 70).')
     parser.add_argument('--permute', action='store_true', help='Permute slope variables for uniform learning across heads (default = True)')

@@ -549,13 +549,11 @@ if __name__ == "__main__":
     proposed = evaluate(model, results_test,
                         importance=cfg.importance,
                         calibrate=cfg.calibrate,
-                        iters=3,
                         extensive=2,
                         )
     quickEval(model, results_test,
               importance=cfg.importance,
               calibrate=cfg.calibrate,
-              iters=3,
               table=1,
               )
 
@@ -591,26 +589,22 @@ if __name__ == "__main__":
         results_test_1,
         importance=cfg.importance,
         calibrate=cfg.calibrate,
-        iters=10,
     )
     quickEval(
         model,
         results_test_2,
         importance=cfg.importance,
         calibrate=cfg.calibrate,
-        iters=10,
     )
     quickEval(
         model,
         results_test_3,
         importance=cfg.importance,
         calibrate=cfg.calibrate,
-        iters=10,
     )
     quickEval(
         model,
         results_test_4,
         importance=cfg.importance,
         calibrate=cfg.calibrate,
-        iters=10,
     )
