@@ -6,7 +6,7 @@
 🚀 runs orders of magnitude faster than HCMC
 
 This repo contains the source code for [data simulation](metabeta/data), [model training](metabeta/models), and [evaluation](metabeta/evaluation).\
-For details, please read our [preprint](TODO). Everythin is based on [PyTorch](https://pytorch.org/).
+For details, please read our [preprint](TODO). Our model is built in [PyTorch](https://pytorch.org/).
 
 ## pipeline
 <img src="https://github.com/adkipnis/metabeta/blob/main/figures/overview.png" width="750" />
