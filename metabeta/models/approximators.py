@@ -538,10 +538,6 @@ class ApproximatorMFX(Approximator):
             # sigmas_rfx[:, 0] = sigma_0.clamp(max=ub)
             sigmas_rfx[:, 0] = sigma_0
 
-            # alternative: simplified sigma intercept
-            # mean_Zsigma = (mean_Z.view(b,d-1,1).abs() * sigmas_rfx[:, 1:]).sum(-1)
-            # sigmas_rfx[:, 0] -= mean_Zsigma
-
             # patch samples
             ffx_ = ffx.to("cpu")
             sigmas_rfx_ = sigmas_rfx.to("cpu")
