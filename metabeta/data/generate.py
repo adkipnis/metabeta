@@ -208,9 +208,9 @@ def generate(
                     okay = True
                     print(f"\nWarning: outlier ds with sd(y)={ds['y'].std(0):.2f}")
         if mcmc and ds is not None:
-            start = time.time()
+            start = time.perf_counter()
             mcmc_results = fitMFX(ds, mono=cfg.mono)
-            end = time.time()
+            end = time.perf_counter()
             mcmc_results["mcmc_duration"] = torch.tensor(end - start)
             ds.update(mcmc_results)
             print(f"MCMC took {end - start:.2f}s")

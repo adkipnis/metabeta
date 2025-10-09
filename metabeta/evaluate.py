@@ -123,9 +123,9 @@ def run(
 ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
     # model outputs
     with torch.no_grad():
-        start = time.time()
+        start = time.perf_counter()
         results = model(batch, sample=True, n=(500, 300))
-        end = time.time()
+        end = time.perf_counter()
     print(f"forward pass took {end - start:.2f}s")
     losses = results["loss"]
     proposed = results["proposed"]
@@ -186,11 +186,11 @@ def evaluate(
     # importance sampling
     if "flow" in cfg.post_type and importance:
         print("Importance Sampling...")
-        start = time.time()
+        start = time.perf_counter()
         for _ in range(iters):
             proposed = ImportanceLocal(batch)(proposed)
             proposed = ImportanceGlobal(batch)(proposed)
-        end = time.time()
+        end = time.perf_counter()
         print(f"IS took {end - start:.2f}s")
         sample_efficiency = proposed["global"].get("sample_efficiency")
         if sample_efficiency is not None:

@@ -309,9 +309,9 @@ if __name__ == "__main__":
     from metabeta.utils import dsFilename
 
     def measure(fn, args=(), kwargs={}):
-        start = time.time()
+        start = time.perf_counter()
         out = fn(*args, **kwargs)
-        end = time.time()
+        end = time.perf_counter()
         print(f"{end - start:.2f}s")
         return out
 
