@@ -1,10 +1,57 @@
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
-from scipy.stats import pearsonr, gaussian_kde
+import seaborn as sns
 import numpy as np
+from scipy.stats import pearsonr, gaussian_kde
+import pandas as pd
 import torch
 
 mse = torch.nn.MSELoss()
+
+
+def dataset(x_: np.ndarray, color: str = 'green', alpha: float = 0.9):
+    # adapted from https://github.com/bayesflow-org/bayesflow
+    x = pd.DataFrame(x_)
+    d = x.shape[1]
+ 
+    # init pairgrid 
+    g = sns.PairGrid(x, height=2.5)
+
+    # histograms along main diagonal
+    g.map_diag(
+        _histplot, color=color, alpha=alpha,
+        fill=True, kde=True, stat="density", common_norm=False)
+
+    # scatter plots along upper trinagular
+    g.map_upper(
+        sns.scatterplot, color=color,
+        alpha=0.6, s=40, edgecolor="k", lw=0)
+
+    # KDEs along lower triangular
+    g.map_lower(
+        sns.kdeplot, color=color, alpha=alpha,
+        fill=True)
+
+    # finalize
+    for i in range(d):
+        g.axes[i, 0].set_ylabel(rf'$x_{i+1}$', fontsize=16)
+        g.axes[d - 1, i].set_xlabel(rf'$x_{i+1}$', fontsize=16)
+        for j in range(d):
+            g.axes[i, j].grid(alpha=0.5)
+            g.axes[i, j].set_axisbelow(True)
+    g.tight_layout()
+    return g
+
+
+def _histplot(x, **kwargs):
+    ax2 = plt.gca().twinx()
+    sns.histplot(x, **kwargs, ax=ax2)
+    plt.gca().spines["right"].set_visible(False)
+    plt.gca().spines["top"].set_visible(False)
+    ax2.set_ylabel("")
+    ax2.set_yticks([])
+    ax2.set_yticklabels([])
+
 
 def posterior(
     target: torch.Tensor,
