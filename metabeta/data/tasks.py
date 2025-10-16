@@ -10,6 +10,7 @@ from metabeta.data.distributions import (
     ScaledBeta,
 )
 from metabeta.utils import fullCovary
+from metabeta import plot
 
 # -----------------------------------------------------------------------------
 probs = torch.tensor([0.10, 0.40, 0.05, 0.25, 0.10, 0.10])
@@ -212,7 +213,7 @@ class MixedEffects(Task):
             if d < self.d:
                 X_ = self.sampleFeatures(n_samples, ffx[d - 1 :])
                 X = torch.cat([X, X_], dim=1)
-
+        # plot.dataset(X[:, 1:])
         eps = self.sampleError(n_samples)
         eta = X @ ffx
         
