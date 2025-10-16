@@ -76,7 +76,7 @@ def prepareMFX(ds: dict[str, torch.Tensor], mono=False):
     return model
 
 
-def fitMFX(ds: dict[str, torch.Tensor], tune=1000, draws=1000, mono=False):
+def fitMFX(ds: dict[str, torch.Tensor], tune=1000, draws=1000, cores=4, mono=False):
     with prepareMFX(ds, mono=mono):
         step = pm.HamiltonianMC()
         trace = pm.sample(
@@ -85,13 +85,13 @@ def fitMFX(ds: dict[str, torch.Tensor], tune=1000, draws=1000, mono=False):
         divergent_count = torch.tensor(trace.sample_stats["diverging"].values.sum(-1))
         posterior = trace.posterior
         ffx = extract(posterior, "beta")
-        sigma_eps = extract(posterior, "sigma_e").unsqueeze(0)
+        sigma_eps = extract(posterior, "sigma_eps").unsqueeze(0)
         if int(ds["q"]) > 0:
-            sigmas_rfx = extract(posterior, "sigma_b")
-            rfx = extract(posterior, "b").movedim(0, 1)
+            sigmas_rfx = extract(posterior, "sigma_alpha")
+            rfx = extract(posterior, "alpha").movedim(0, 1)
         else:
-            sigmas_rfx = torch.zeros((1, 4000))
-            rfx = torch.zeros((1, 1, 4000))
+            sigmas_rfx = torch.zeros((1, draws * cores))
+            rfx = torch.zeros((1, 1, draws * cores))
     out = {
         "mcmc_ffx": ffx,
         "mcmc_sigma_eps": sigma_eps,
