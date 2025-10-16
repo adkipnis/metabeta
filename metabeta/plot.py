@@ -9,13 +9,17 @@ import torch
 mse = torch.nn.MSELoss()
 
 
-def dataset(x_: np.ndarray, color: str = 'green', alpha: float = 0.9):
+def dataset(x: np.ndarray,
+            names: list[str] | None = None,
+            color: str = 'green',
+            alpha: float = 0.8,
+            title: str = ''):
     # adapted from https://github.com/bayesflow-org/bayesflow
-    x = pd.DataFrame(x_)
+    
     d = x.shape[1]
- 
-    # init pairgrid 
-    g = sns.PairGrid(x, height=2.5)
+    if names is None:
+        names = [rf'$x_{i+1}$' for i in range(d)]
+    g = sns.PairGrid(pd.DataFrame(x), height=2.5)
 
     # histograms along main diagonal
     g.map_diag(
@@ -34,16 +38,19 @@ def dataset(x_: np.ndarray, color: str = 'green', alpha: float = 0.9):
 
     # finalize
     for i in range(d):
-        g.axes[i, 0].set_ylabel(rf'$x_{i+1}$', fontsize=16)
-        g.axes[d - 1, i].set_xlabel(rf'$x_{i+1}$', fontsize=16)
+        g.axes[i, 0].set_ylabel(names[i], fontsize=16)
+        g.axes[d - 1, i].set_xlabel(names[i], fontsize=16)
         for j in range(d):
             g.axes[i, j].grid(alpha=0.5)
             g.axes[i, j].set_axisbelow(True)
+    if title:
+        g.fig.suptitle(title, fontsize=20, y=1.001)
     g.tight_layout()
     return g
 
 
 def _histplot(x, **kwargs):
+    # sns histplot but with detached axes
     ax2 = plt.gca().twinx()
     sns.histplot(x, **kwargs, ax=ax2)
     plt.gca().spines["right"].set_visible(False)
