@@ -64,12 +64,14 @@ def prepareMFX(ds: dict[str, torch.Tensor], mono=False):
         groups_shared = pm.Data("groups", groups.numpy())
 
         beta = pm.Normal("beta", mu=nu_ffx, sigma=tau_ffx, shape=d)  # priors
-        sigma_b = pm.HalfNormal("sigma_b", sigma=tau_rfx, shape=q)  # rfx SD
-        b = pm.Normal("b", mu=0.0, sigma=sigma_b, shape=(m, q))  # rfx
-        B = b[groups_shared]
+        sigma_a = pm.HalfNormal("sigma_alpha", sigma=tau_rfx, shape=q)  # rfx SD
+        # alpha = pm.Normal("alpha", mu=0.0, sigma=sigma_a, shape=(m, q))  # rfx
+        z = pm.Normal("z", mu=0.0, sigma=1.0, shape=(m, q)) # non-central parameterization
+        alpha = pm.Deterministic("alpha", z * sigma_a) # rfx
+        A = alpha[groups_shared]
 
-        mu = pt.dot(X_shared, beta) + pt.sum(Z_shared * B, axis=1)  # linear predictor
-        sigma_e = pm.HalfNormal("sigma_e", sigma=tau_eps)  # noise SD
+        mu = pt.dot(X_shared, beta) + pt.sum(Z_shared * A, axis=1)  # linear predictor
+        sigma_e = pm.HalfNormal("sigma_eps", sigma=tau_eps)  # noise SD
         y_obs = pm.Normal("y_obs", mu=mu, sigma=sigma_e, observed=y_shared)
     return model
 
