@@ -51,28 +51,42 @@ def prepare(ds: dict[str, torch.Tensor], mono=False):
     return model
 
 
-def fitMFX(ds: dict[str, torch.Tensor], tune=1000, draws=1000, cores=4, mono=False):
-    with prepareMFX(ds, mono=mono):
-        step = pm.HamiltonianMC()
-        trace = pm.sample(
-            tune=tune, draws=draws, cores=4, return_inferencedata=True, step=step
-        )
-        divergent_count = torch.tensor(trace.sample_stats["diverging"].values.sum(-1))
-        posterior = trace.posterior
-        ffx = extract(posterior, "beta")
-        sigma_eps = extract(posterior, "sigma_eps").unsqueeze(0)
-        if int(ds["q"]) > 0:
-            sigmas_rfx = extract(posterior, "sigma_alpha")
-            rfx = extract(posterior, "alpha").movedim(0, 1)
-        else:
-            sigmas_rfx = torch.zeros((1, draws * cores))
-            rfx = torch.zeros((1, 1, draws * cores))
+def fitMCMC(ds: dict[str, torch.Tensor], 
+            tune=1000,
+            draws=1000,
+            cores=4,
+            mono=False,
+            sampler: str = 'nuts',
+            seed=0) -> dict[str, torch.Tensor]:
+    assert sampler in ['hmc', 'nuts'], f'unknown sampler: {sampler}'
+
+    # run mcmc
+    t0 = time.perf_counter()
+    with prepare(ds, mono=mono):
+        step = pm.HamiltonianMC() if sampler == 'hmc' else None
+        trace = pm.sample(tune=tune, draws=draws, cores=cores,
+                          random_seed=seed, step=step)
+    t1 = time.perf_counter()
+
+    # extract samples
+    ffx = extract(trace, 'beta')
+    sigma_eps = extract(trace, 'sigma_eps').unsqueeze(0)
+    sigmas_rfx = extract(trace, 'sigma_alpha')
+    rfx = extract(trace, 'alpha').movedim(0, 1)
+
+    # extract fit info
+    divergent_count = torch.tensor(trace.sample_stats['diverging'].values.sum(-1)) # type: ignore
+    summary = torch.tensor(az.summary(trace).to_numpy())
+
+    # finalize
     out = {
-        "mcmc_ffx": ffx,
-        "mcmc_sigma_eps": sigma_eps,
-        "mcmc_sigmas_rfx": sigmas_rfx,
-        "mcmc_rfx": rfx,
-        "mcmc_divergences": divergent_count,
+        'mcmc_ffx': ffx,
+        'mcmc_sigma_eps': sigma_eps,
+        'mcmc_sigmas_rfx': sigmas_rfx,
+        'mcmc_rfx': rfx,
+        'mcmc_divergences': divergent_count,
+        'mcmc_summary': summary,
+        'mcmc_duration': torch.tensor(t1 - t0)
     }
     return out
 
