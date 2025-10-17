@@ -32,14 +32,14 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     # misc
-    parser.add_argument('--m_tag', type=str, default='r', help='Suffix for model ID (default = '')')
+    parser.add_argument('--m_tag', type=str, default='', help='Suffix for model ID (default = '')')
     parser.add_argument('-s', '--seed', type=int, default=42, help='Model seed')
     parser.add_argument('--cores', type=int, default=8, help='Nubmer of processor cores to use (default = 8)')
 
     # data
-    parser.add_argument('--d_tag', type=str, default='r', help='Suffix for data ID (default = '')')
+    parser.add_argument('--d_tag', type=str, default='gcsemv', help='Suffix for data ID (default = '')')
     parser.add_argument('--varied', action='store_true', help='Use data with variable d/q (default = False)')
-    parser.add_argument('--semi', action='store_true', help='Use semi-synthetic data (default = True)')
+    parser.add_argument('--semi', action='store_false', help='Use semi-synthetic data (default = True)')
     parser.add_argument('-t', '--fx_type', type=str, default='mfx', help='Type of dataset [ffx, mfx] (default = ffx)')
     parser.add_argument('-d', type=int, default=3, help='Number of fixed effects (with bias, default = 8)')
     parser.add_argument('-q', type=int, default=1, help='Number of random effects (with bias, default = 3)')
@@ -59,7 +59,7 @@ def setup() -> argparse.Namespace:
 
     # summary network
     parser.add_argument('--sum_type', type=str, default='set-transformer', help='Summarizer architecture [set-transformer, dual-transformer] (default = set-transformer)')
-    parser.add_argument('--sum_blocks', type=int, default=3, help='Number of blocks in summarizer (default = 4)')
+    parser.add_argument('--sum_blocks', type=int, default=6, help='Number of blocks in summarizer (default = 4)')
     parser.add_argument('--sum_d', type=int, default=128, help='Model dimension (default = 128)')
     parser.add_argument('--sum_ff', type=int, default=128, help='Feedforward dimension (default = 128)')
     parser.add_argument('--sum_depth', type=int, default=1, help='Feedforward layers (default = 1)')
@@ -558,52 +558,52 @@ if __name__ == "__main__":
 
     # inspect(results_test, batch_indices=range(10))
 
-    # --- run on varying subsets, separate splits
-    ns = ds_test["n"]
-    rnv = ds_test["rnv"]
-    b = len(ns)
+    # # --- run on varying subsets, separate splits
+    # ns = ds_test["n"]
+    # rnv = ds_test["rnv"]
+    # b = len(ns)
 
-    # set 1: high n
-    top_n, idx_size_high = ns.topk(b // 2)
-    ds_test_1 = {k: v[idx_size_high] for k, v in ds_test.items()}
-    results_test_1 = run(model, ds_test_1)
+    # # set 1: high n
+    # top_n, idx_size_high = ns.topk(b // 2)
+    # ds_test_1 = {k: v[idx_size_high] for k, v in ds_test.items()}
+    # results_test_1 = run(model, ds_test_1)
 
-    # set 2: low n
-    idx_size_low = np.setdiff1d(np.arange(b), idx_size_high.numpy())
-    ds_test_2 = {k: v[idx_size_low] for k, v in ds_test.items()}
-    results_test_2 = run(model, ds_test_2)
+    # # set 2: low n
+    # idx_size_low = np.setdiff1d(np.arange(b), idx_size_high.numpy())
+    # ds_test_2 = {k: v[idx_size_low] for k, v in ds_test.items()}
+    # results_test_2 = run(model, ds_test_2)
 
-    # set 3: high SNR
-    bottom_noise, idx_noise_low = (-rnv).topk(b // 2)
-    ds_test_3 = {k: v[idx_noise_low] for k, v in ds_test.items()}
-    results_test_3 = run(model, ds_test_3)
+    # # set 3: high SNR
+    # bottom_noise, idx_noise_low = (-rnv).topk(b // 2)
+    # ds_test_3 = {k: v[idx_noise_low] for k, v in ds_test.items()}
+    # results_test_3 = run(model, ds_test_3)
 
-    # set 4: low SNR
-    idx_noise_high = np.setdiff1d(np.arange(b), idx_noise_low.numpy())
-    ds_test_4 = {k: v[idx_noise_high] for k, v in ds_test.items()}
-    results_test_4 = run(model, ds_test_4)
+    # # set 4: low SNR
+    # idx_noise_high = np.setdiff1d(np.arange(b), idx_noise_low.numpy())
+    # ds_test_4 = {k: v[idx_noise_high] for k, v in ds_test.items()}
+    # results_test_4 = run(model, ds_test_4)
 
-    quickEval(
-        model,
-        results_test_1,
-        importance=cfg.importance,
-        calibrate=cfg.calibrate,
-    )
-    quickEval(
-        model,
-        results_test_2,
-        importance=cfg.importance,
-        calibrate=cfg.calibrate,
-    )
-    quickEval(
-        model,
-        results_test_3,
-        importance=cfg.importance,
-        calibrate=cfg.calibrate,
-    )
-    quickEval(
-        model,
-        results_test_4,
-        importance=cfg.importance,
-        calibrate=cfg.calibrate,
-    )
+    # quickEval(
+    #     model,
+    #     results_test_1,
+    #     importance=cfg.importance,
+    #     calibrate=cfg.calibrate,
+    # )
+    # quickEval(
+    #     model,
+    #     results_test_2,
+    #     importance=cfg.importance,
+    #     calibrate=cfg.calibrate,
+    # )
+    # quickEval(
+    #     model,
+    #     results_test_3,
+    #     importance=cfg.importance,
+    #     calibrate=cfg.calibrate,
+    # )
+    # quickEval(
+    #     model,
+    #     results_test_4,
+    #     importance=cfg.importance,
+    #     calibrate=cfg.calibrate,
+    # )
