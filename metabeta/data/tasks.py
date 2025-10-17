@@ -1,6 +1,6 @@
+import random
 import torch
 from torch import distributions as D
-import random
 from metabeta.data.distributions import (
     Normal,
     StudentT,
@@ -185,7 +185,7 @@ class MixedEffects(Task):
         if include_posterior:
             raise NotImplementedError("posterior inference not implemented for MFX")
         okay = True
-    
+
         # fixed effects and noise
         ffx = self.sampleFfx()
         if self.features is None:
@@ -216,11 +216,11 @@ class MixedEffects(Task):
         # plot.dataset(X[:, 1:])
         eps = self.sampleError(n_samples)
         eta = X @ ffx
-        
+
         # check which variables are categorial
         is_binary = (X == 0) | (X == 1)
         categorial = is_binary.all(dim=0)[1:]
-        
+
         # random effects and target
         groups = torch.repeat_interleave(torch.arange(self.m), self.n_i)  # (n,)
         rfx = self.sampleRfx()  # (m, q)
