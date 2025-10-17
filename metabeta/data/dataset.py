@@ -85,40 +85,10 @@ def getDataLoader(
     return DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
 
-def madOutliers(tensor: torch.Tensor, threshold: float = 3.0) -> int:
-    """get number of median absolute distande (MAD) outliers"""
-    median = tensor.median(-1)[0].unsqueeze(-1)
-    abs_dev = (tensor - median).abs()
-    mad = abs_dev.median(-1)[0].unsqueeze(-1)
-    modified_z_scores = 0.6745 * abs_dev / mad
-    out = (modified_z_scores > threshold).sum()
-    return int(out)
-
-
-def fewestOutliers(mc_samples: torch.Tensor, n_chains: int = 4) -> torch.Tensor:
-    """get index of markov chain with fewest outliers"""
-    tensors = mc_samples.chunk(n_chains, dim=-1)
-    n_samples = tensors[0].shape[-1]
-    num_outliers = torch.tensor([madOutliers(st.squeeze()) for st in tensors])
-    no_variance = torch.tensor([st.squeeze().var(-1).sum() < 1e-6 for st in tensors])
-    num_outliers[no_variance] = n_samples
-    fewest_outliers_idx = num_outliers.min(0)[1]
-    return fewest_outliers_idx
-
-
-# def findBestChain(tensor_list: list[torch.Tensor], n_chains: int = 4) -> list[torch.Tensor]:
-#     indices = torch.stack([fewestOutliers(t, n_chains=n_chains)
-#                            for t in tensor_list])
-#     idx_best = indices.mode()[0]
-#     new_tensors = [t.chunk(n_chains, dim=-1)[idx_best] for t in tensor_list]
-#     return new_tensors
-
-
-def findBestChain(
-    tensor_list: list[torch.Tensor], n_chains: int = 4
-) -> list[torch.Tensor]:
-    indices = torch.stack([fewestOutliers(t, n_chains=n_chains) for t in tensor_list])
-    new_tensors = [t.chunk(n_chains, dim=-1)[i] for i, t in zip(indices, tensor_list)]
+def findBestChain(tensor_list: list[torch.Tensor], div_count: torch.Tensor) -> list[torch.Tensor]:
+    n_chains = len(div_count)
+    idx = div_count.min(-1)[1]
+    new_tensors = [t.chunk(n_chains, dim=-1)[idx] for t in tensor_list]
     return new_tensors
 
 
@@ -265,10 +235,11 @@ class LMDataset(Dataset):
             m_sigma_eps = data["mcmc_sigma_eps"][i]
             m_sigmas_rfx = data["mcmc_sigmas_rfx"][i]
             m_rfx = data["mcmc_rfx"][i].permute(1, 0, 2)
+            div_count = data["mcmc_divergences"][i]
 
             # take the chain with the fewest outliers
             m_tensors = [m_ffx, m_sigma_eps, m_sigmas_rfx, m_rfx]
-            m_tensors = findBestChain(m_tensors)
+            m_tensors = findBestChain(m_tensors, div_count)
             m_ffx, m_sigma_eps, m_sigmas_rfx, m_rfx = m_tensors
 
             if self.permute:
