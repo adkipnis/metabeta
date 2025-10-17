@@ -1,10 +1,13 @@
 import torch
 import pymc as pm
 import pytensor.tensor as pt
+import arviz as az
+import time
 
 
-def extract(posterior, name: str) -> torch.Tensor:
-    return torch.tensor(posterior[name].to_numpy()).flatten(0, 1).movedim(0, -1)
+def extract(trace, name: str) -> torch.Tensor:
+    x = trace.posterior[name].to_numpy()
+    return torch.tensor(x).flatten(0, 1).movedim(0, -1)
 
 
 # MCMC for FFX models (for comparison)
