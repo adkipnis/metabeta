@@ -1,7 +1,6 @@
 import os
 from sys import exit
 from pathlib import Path
-import time
 from tqdm import tqdm
 import argparse
 import numpy as np
@@ -10,7 +9,7 @@ from torch import distributions as D
 
 from metabeta.utils import dsFilename, padTensor
 from metabeta.data.tasks import MixedEffects
-from metabeta.data.markov import fitMFX
+from metabeta.data.markov import fitMCMC
 from metabeta.data.csv import RealDataset
 
 
@@ -207,14 +206,14 @@ def generate(
                 if attempts > 20:
                     okay = True
                     print(f"\nWarning: outlier ds with sd(y)={ds['y'].std(0):.2f}")
-        if mcmc and ds is not None:
-            start = time.perf_counter()
-            mcmc_results = fitMFX(ds, mono=cfg.mono)
-            end = time.perf_counter()
-            mcmc_results["mcmc_duration"] = torch.tensor(end - start)
-            ds.update(mcmc_results)
-            print(f"MCMC took {end - start:.2f}s")
         data += [ds]
+    
+    # optionally fit mcmc
+    if mcmc:
+        print('Starting MCMC sampling...')
+        for i, ds in enumerate(tqdm(data)):
+            mcmc_results = fitMCMC(ds, seed=i)
+            ds.update(mcmc_results)
     return data
 
 
@@ -290,10 +289,14 @@ def generateSemi(
                 if attempts > 20:
                     okay = True
                     print(f"\nWarning: outlier ds with sd(y)={ds['y'].std(0):.2f}")
-        if mcmc and ds is not None:
-            mcmc_results = fitMFX(ds)
-            ds.update(mcmc_results)
         data += [ds]
+        
+    # optionally fit mcmc
+    if mcmc:
+        print('Starting MCMC sampling...')
+        for i, ds in enumerate(tqdm(data)):
+            mcmc_results = fitMCMC(ds, seed=i)
+            ds.update(mcmc_results)
     return data
 
 
