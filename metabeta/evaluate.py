@@ -48,7 +48,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--permute', action='store_false', help='Permute slope variables for uniform learning across heads (default = True)')
 
     # evaluation
-    parser.add_argument('--bs-train', type=int, default=8192, help='macro batch size per training partition (default = 8,192).')
     parser.add_argument('--bs-val', type=int, default=256, help='macro batch size for validation partition (default = 256).')
     parser.add_argument('--bs-test', type=int, default=128, help='macro batch size for test partition (default = 128).')
     parser.add_argument('--bs-mini', type=int, default=32, help='mini batch size (default = 32)')
