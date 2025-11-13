@@ -13,14 +13,15 @@ from metabeta.utils import fullCovary
 from metabeta import plot
 
 # -----------------------------------------------------------------------------
-probs = torch.tensor([0.10, 0.40, 0.05, 0.25, 0.10, 0.10])
+
+probs = torch.tensor([0.15, 0.25, 0.05, 0.25, 0.20, 0.10])
 dists = [
     Normal,
     StudentT,
     Uniform,
     Bernoulli,
-    NegativeBinomial,
     ScaledBeta,
+    NegativeBinomial,
 ]
 
 
@@ -34,7 +35,7 @@ class Task:
         tau_eps: torch.Tensor,  # noise prior std
         n_ffx: int,  # with bias
         features: torch.Tensor | None = None,
-        limit: float = 300,  # try to sd(y) below this
+        limit: float = 1000,  # try to sd(y) below this
         use_default: bool = False,  # use default prior parameters for predictors
         correlate: bool = True,  # correlate numerical predictors
     ):
@@ -76,7 +77,7 @@ class Task:
                 self.cidx.append(i)
             self.dist_data += [dist]
             x = dist.sample((n_samples, 1))
-            self.limit -= (x * weight).abs().max()
+            # self.limit -= (x * weight).abs().max()
             features += [x]
         out = torch.cat(features, dim=-1)
         return out
@@ -91,9 +92,9 @@ class Task:
 
         # correlate continuous
         x_cor = (x_ @ L.T) * std + mean
-        x_cor[:, self.cidx] = x[:, self.cidx]  # preserve categorial
+        x_cor[:, self.cidx] = x[:, self.cidx]  # preserve categorical
 
-        # correlate categorial
+        # correlate categorical
         R = L @ L.T
         for i in self.cidx:
             nidx = list(range(self.d - 1))
@@ -103,7 +104,7 @@ class Task:
         return x_cor
 
     def correlateBinary(self, v: torch.Tensor, r: float | torch.Tensor):
-        """generate a categorial variable whose correlation with variable v is r"""
+        """generate a categorical variable whose correlation with variable v is r"""
         v = (v - v.mean()) / v.std()
         z = torch.randn_like(v)
         z = r * v + (1 - r**2) ** 0.5 * z
@@ -213,13 +214,14 @@ class MixedEffects(Task):
             if d < self.d:
                 X_ = self.sampleFeatures(n_samples, ffx[d - 1 :])
                 X = torch.cat([X, X_], dim=1)
-        # plot.dataset(X[:, 1:])
+        
+        # noise
         eps = self.sampleError(n_samples)
         eta = X @ ffx
 
-        # check which variables are categorial
+        # check which variables are categorical
         is_binary = (X == 0) | (X == 1)
-        categorial = is_binary.all(dim=0)[1:]
+        categorical = is_binary.all(dim=0)[1:]
 
         # random effects and target
         groups = torch.repeat_interleave(torch.arange(self.m), self.n_i)  # (n,)
@@ -242,6 +244,11 @@ class MixedEffects(Task):
             cov_sum = cov.sum() - cov[0, 0]
         else:
             cov_sum = torch.tensor(0.0)
+
+        # plot.dataset(
+        #     torch.cat([y.unsqueeze(-1), X[:, 1:]], dim=-1),
+        #     names=['y'] + [f'x{j}' for j in range(1, self.d)]
+        #     )
 
         # outputs
         out = {
@@ -268,7 +275,7 @@ class MixedEffects(Task):
             "cov_sum": cov_sum,  # (1,)
             "snr": snr,  # (1,)
             "rnv": rnv,  # (1,)
-            "categorial": categorial, # (d-1,)
+            "categorical": categorical, # (d-1,)
             "okay": torch.tensor(okay),
         }
         return out
