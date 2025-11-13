@@ -48,3 +48,14 @@ class Prior:
 
 
 # -----------------------------------------------------------------------------
+@dataclass
+class Design:
+    correlate: bool = False
+    
+    def sample(self, n: int, d: int) -> torch.Tensor:
+        x = torch.zeros(n, d)
+        x[:, 0] = 1
+        x[:, 1:] = torch.randn(n, d-1)
+        return x
+ 
+        
