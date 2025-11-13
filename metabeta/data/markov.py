@@ -94,8 +94,10 @@ def fitMCMC(ds: dict[str, torch.Tensor],
     rfx = extract(trace, 'rfx').movedim(0,1)
 
     # extract fit info
-    divergent_count = torch.tensor(trace.sample_stats['diverging'].values.sum(-1)) # type: ignore
-    summary = torch.tensor(az.summary(trace).to_numpy())
+    divergent_count = torch.tensor(trace.sample_stats['diverging'].values.sum(-1))
+    summary = az.summary(trace)
+    ess = summary['ess_bulk'].to_numpy()
+    rhat = summary['r_hat'].to_numpy()
 
     # finalize
     out = {
@@ -104,7 +106,8 @@ def fitMCMC(ds: dict[str, torch.Tensor],
         'mcmc_sigmas_rfx': sigmas_rfx,
         'mcmc_rfx': rfx,
         'mcmc_divergences': divergent_count,
-        'mcmc_summary': summary,
+        'mcmc_ress': torch.tensor(ess),
+        'mcmc_rhat': torch.tensor(rhat),
         'mcmc_duration': torch.tensor(t1 - t0)
     }
     return out
