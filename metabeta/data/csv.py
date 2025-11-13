@@ -13,7 +13,7 @@ def removeString(this: list, string: str):
     return np.array(out)
 
 
-def categorial(df: pd.DataFrame):
+def categorical(df: pd.DataFrame):
     cat_cols = df.select_dtypes(include=["object", "category"]).columns
     return cat_cols
 
@@ -63,7 +63,7 @@ def preprocess(ds_name: str, target_name: str, group_name: str, save: bool = Fal
         df = demean(df, n)
 
     # dummy-code categorical variables
-    col_names_cat = categorial(df)
+    col_names_cat = categorical(df)
     for c in col_names_cat:
         df = dummify(df, c)
 
