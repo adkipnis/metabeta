@@ -7,3 +7,5 @@ metabeta.egg-info
 *.csv
 *.npz
 metabeta/data/real/.Rhistory
+metabeta/scraping/pmlbcache
+metabeta/scraping/raw
