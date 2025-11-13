@@ -11,7 +11,7 @@ class DistWithPrior:
     def __init__(
         self,
         weight: float,
-        limit: float = 1e3,
+        limit: float = 1000,
         center: bool = True,
         use_default: bool = False,
     ):
@@ -23,6 +23,7 @@ class DistWithPrior:
             self.params = self.defaultParams()
         else:
             self.params = self.findParams()
+        self.borders = self.initBorders()
         self.dist = self.base(**self.params)
 
     def __repr__(self):
@@ -31,6 +32,9 @@ class DistWithPrior:
     @property
     def base(self):
         raise NotImplementedError
+        
+    def initBorders(self):
+        return None
 
     def defaultParams(self) -> dict[str, torch.Tensor]:
         raise NotImplementedError
@@ -67,14 +71,35 @@ class DistWithPrior:
         return xb < self.limit
 
     def sample(self, dims: Iterable[int]) -> torch.Tensor:
-        return self.dist.sample(dims)
+        if self.borders is not None:
+            # print('using borders')
+            out = []
+            n_ = 0
+            n = dims[0]
+            dims_new = (n * 4,)
+            a, b = self.borders
+            counter = 0
+            
+            while n_ < n:
+                if counter > 10:
+                    # print('failed to use borders')
+                    return self.dist.sample(dims)
+                x = self.dist.sample(dims_new)
+                inlier = (a < x) * (x < b)
+                out.append(x[inlier])
+                n_ += inlier.sum()
+                counter += 1
+            out = torch.cat(out, dim=0)[:n].unsqueeze(-1)
+            return out
+        else:
+            return self.dist.sample(dims)
 
 
 class Normal(DistWithPrior):
     @property
     def base(self):
         return D.Normal
-
+    
     def defaultParams(self):
         loc = torch.tensor(0.0)
         scale = torch.tensor(1.0)
@@ -88,6 +113,22 @@ class Normal(DistWithPrior):
             loc = D.Uniform(-25.0, 25.0).sample((n,))
         return dict(loc=loc, scale=scale)
 
+    def initBorders(self):
+        p = torch.rand(2)
+        use = p < 0.25
+        if use.any():
+            lower, upper = -torch.inf, torch.inf
+            p = torch.rand(2)
+            dist = self.base(**self.params)
+            if use.all():
+                lower = dist.icdf(p.min())
+                upper = dist.icdf(p.max())
+            elif use[0]:
+                lower = dist.icdf(p.min())
+            else:
+                upper = dist.icdf(p.max())
+            return lower, upper
+        
     def check(self, params):
         return self.checkICDF(params)
 
@@ -114,6 +155,24 @@ class StudentT(DistWithPrior):
 
     def check(self, params):
         return self.checkSample(params)
+    
+    def initBorders(self):
+        p = torch.rand(2)
+        use = p < 0.25
+        if use.any():
+            lower, upper = -torch.inf, torch.inf
+            dist = self.base(**self.params)
+            sample = dist.sample((500,))
+            p = torch.rand(2).sort()[0]
+            i, j = int(p[0] * 500), int(p[1] * 500)
+            if use.all():
+                lower = sample[i]
+                upper = sample[j]
+            elif use[0]:
+                lower = sample[i]
+            else:
+                upper = sample[j]
+            return lower, upper
 
 
 class Uniform(DistWithPrior):
@@ -217,9 +276,10 @@ if __name__ == "__main__":
     StudentT(weight=100)
     Uniform(weight=100)
     NegativeBinomial(weight=100)
+    ScaledBeta(weight=100)
 
-    dist = ScaledBeta(weight=100)
-    sample = dist.sample((100,))
+    dist = Normal(weight=100)
+    sample = dist.sample((200,))
 
     plt.hist(sample, bins=30)
 
