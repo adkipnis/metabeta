@@ -59,3 +59,11 @@ def priorize(ds: dict[str, torch.Tensor]) -> dict[str, Prior]:
 
 
 def bambify(ds: dict[str, torch.Tensor]) -> bmb.Model:
+    data = pandify(ds)
+    form = formulate(ds)
+    priors = priorize(ds)
+    model = bmb.Model(form, data, categorical='i', priors=priors)
+    model.build()
+    return model
+
+
