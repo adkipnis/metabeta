@@ -87,10 +87,11 @@ def fitMCMC(ds: dict[str, torch.Tensor],
     t1 = time.perf_counter()
 
     # extract samples
-    ffx = extract(trace, 'beta')
+    ffx = extract(trace, 'ffx')
+    # ffx = torch.cat([extract(trace, 'beta'), extract(trace, 'ffx')]) # hierarchical
     sigma_eps = extract(trace, 'sigma_eps').unsqueeze(0)
-    sigmas_rfx = extract(trace, 'sigma_alpha')
-    rfx = extract(trace, 'alpha').movedim(0, 1)
+    sigmas_rfx = extract(trace, 'sigmas_rfx')
+    rfx = extract(trace, 'rfx').movedim(0,1)
 
     # extract fit info
     divergent_count = torch.tensor(trace.sample_stats['diverging'].values.sum(-1)) # type: ignore
