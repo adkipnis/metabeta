@@ -47,6 +47,33 @@ def prepare(ds: dict[str, torch.Tensor], parameterization: str = 'default'):
         return model
 
     elif parameterization == 'hierarchical':
+        # hierarchical parameterization
+        with pm.Model() as model:
+            # data
+            y = pm.Data("y", ds['y'].numpy())
+            X = pm.Data("X", ds['X'][:, q:].numpy())
+            Z = pm.Data("Z", ds['X'][:, :q].numpy())
+            groups = pm.Data("groups", ds['groups'].numpy())
+
+            # truly fixed effects
+            ffx = pm.Normal("ffx", mu=nu_ffx[q:], sigma=tau_ffx[q:])
+
+            # separate mixed effects
+            beta = pm.Normal("beta", mu=nu_ffx[:q], sigma=tau_ffx[:q])
+            sigmas_rfx = pm.HalfNormal("sigmas_rfx", sigma=tau_rfx)
+            rfx_norm = pm.Normal("rfx_norm", mu=0, sigma=1, shape=(m,q))
+            rfx = pm.Deterministic("rfx", rfx_norm * sigmas_rfx)
+            mfx = beta + rfx
+
+            # outcome
+            mu = pt.dot(X, ffx) + pt.sum(Z * mfx[groups], axis=1)
+            sigma_eps = pm.HalfNormal('sigma_eps', sigma=tau_eps)
+            y_obs = pm.Normal("y_obs", mu=mu, sigma=sigma_eps, observed=y, shape=n)
+        return model
+    else:
+        raise ValueError
+
+
             draws=1000,
             cores=4,
             mono=False,
