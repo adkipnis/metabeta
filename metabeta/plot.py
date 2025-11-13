@@ -9,22 +9,29 @@ import torch
 mse = torch.nn.MSELoss()
 
 
-def dataset(x: np.ndarray,
+def dataset(x: np.ndarray | pd.DataFrame,
             names: list[str] | None = None,
             color: str = 'green',
             alpha: float = 0.8,
-            title: str = ''):
+            title: str = '',
+            kde: bool = True):
     # adapted from https://github.com/bayesflow-org/bayesflow
     
-    d = x.shape[1]
     if names is None:
-        names = [rf'$x_{i+1}$' for i in range(d)]
+        if isinstance(x, pd.DataFrame):
+            x = x.select_dtypes(include=['number'])
+            names = x.columns.to_list()
+        else:
+            mask = ~np.isnan(x).any(axis=0)
+            x = x[:, mask]
+            names = [rf'$x_{i+1}$' for i in range(x.shape[1])]
+    d = len(names)
     g = sns.PairGrid(pd.DataFrame(x), height=2.5)
 
     # histograms along main diagonal
     g.map_diag(
         _histplot, color=color, alpha=alpha,
-        fill=True, kde=True, stat="density", common_norm=False)
+        fill=True, kde=kde, stat="density", common_norm=False)
 
     # scatter plots along upper trinagular
     g.map_upper(
@@ -32,9 +39,10 @@ def dataset(x: np.ndarray,
         alpha=0.6, s=40, edgecolor="k", lw=0)
 
     # KDEs along lower triangular
-    g.map_lower(
-        sns.kdeplot, color=color, alpha=alpha,
-        fill=True)
+    if kde:
+        g.map_lower(
+            sns.kdeplot, color=color, alpha=alpha,
+            fill=True)
 
     # finalize
     for i in range(d):
