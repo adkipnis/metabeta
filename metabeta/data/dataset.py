@@ -205,7 +205,7 @@ class LMDataset(Dataset):
         mask_q = torch.ones(self.max_d, dtype=torch.bool)
         mask_q[q:] = False
         mask_q = mask_q[rfx_mask]
-        mask_c = data["categorial"][i]
+        mask_c = data["categorical"][i]
 
         # outputs
         out = {
