@@ -67,3 +67,9 @@ def bambify(ds: dict[str, torch.Tensor]) -> bmb.Model:
     return model
 
 
+def extract(trace, name: str) -> torch.Tensor:
+    x = trace.posterior[name].to_numpy()
+    shape = (x.shape[0] * x.shape[1],) + x.shape[2:]
+    return torch.tensor(x.reshape(shape)).unsqueeze(0)
+
+
