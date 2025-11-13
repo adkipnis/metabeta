@@ -10,49 +10,43 @@ def extract(trace, name: str) -> torch.Tensor:
     return torch.tensor(x).flatten(0, 1).movedim(0, -1)
 
 
-def prepare(ds: dict[str, torch.Tensor], mono=False):
-    # inpack
+def prepare(ds: dict[str, torch.Tensor], parameterization: str = 'default'):
+    assert parameterization in ['default', 'hierarchical'], 'unknown parameterization selected'
+
+    # unpack
+    n = ds['n'].item()
     m = ds['m'].item()
     d = ds['d'].item()
     q = ds['q'].item()
-
-    y = ds['y']  # (n, )
-    X = ds['X']  # (n, d)
-    Z = X[..., :q]  # (n, q)
-    groups = ds['groups']  # (n, )
-
     tau_eps = ds['tau_eps'].numpy()
     nu_ffx = ds['nu_ffx'][:d].numpy()
     tau_ffx = ds['tau_ffx'][:d].numpy()
     tau_rfx = ds['tau_rfx'][:q].numpy()
+ 
+    # same parameterization as during generation
+    if parameterization == 'default':
+        with pm.Model() as model:
+            # data
+            y = pm.Data('y', ds['y'].numpy())
+            X = pm.Data('X', ds['X'].numpy())
+            Z = pm.Data('Z', ds['X'][:, :q].numpy())
+            groups = pm.Data('groups', ds['groups'].numpy())
 
-    # optionally use one-dimensional priors
-    if mono:  
-        nu_ffx = nu_ffx[0]
-        tau_ffx = tau_ffx[0]
-        tau_rfx = tau_rfx[0]
+            # fixed effects
+            ffx = pm.Normal('ffx', mu=nu_ffx, sigma=tau_ffx, shape=d)
 
-    # specify model
-    with pm.Model() as model:
-        y_shared = pm.Data('y', y.numpy())
-        X_shared = pm.Data('X', X.numpy())
-        Z_shared = pm.Data('Z', Z.numpy())
-        groups_shared = pm.Data('groups', groups.numpy())
+            # additional random effects
+            sigmas_rfx = pm.HalfNormal('sigmas_rfx', sigma=tau_rfx, shape=q)
+            rfx_norm = pm.Normal('rfx_norm', mu=0.0, sigma=1.0, shape=(m,q))
+            rfx = pm.Deterministic('rfx', rfx_norm * sigmas_rfx)
 
-        beta = pm.Normal('beta', mu=nu_ffx, sigma=tau_ffx, shape=d)
-        sigma_a = pm.HalfNormal('sigma_alpha', sigma=tau_rfx, shape=q)
-        z = pm.Normal('z', mu=0.0, sigma=1.0, shape=(m, q))
-        alpha = pm.Deterministic('alpha', z * sigma_a)
-        A = alpha[groups_shared]
+            # outcome
+            mu = pt.dot(X, ffx) + pt.sum(Z * rfx[groups], axis=1)
+            sigma_eps = pm.HalfNormal('sigma_eps', sigma=tau_eps)
+            y_obs = pm.Normal('y_obs', mu=mu, sigma=sigma_eps, observed=y, shape=n)
+        return model
 
-        mu = pt.dot(X_shared, beta) + pt.sum(Z_shared * A, axis=1)  # linear predictor
-        sigma_e = pm.HalfNormal('sigma_eps', sigma=tau_eps)  # noise SD
-        y_obs = pm.Normal('y_obs', mu=mu, sigma=sigma_e, observed=y_shared)
-    return model
-
-
-def fitMCMC(ds: dict[str, torch.Tensor], 
-            tune=1000,
+    elif parameterization == 'hierarchical':
             draws=1000,
             cores=4,
             mono=False,
