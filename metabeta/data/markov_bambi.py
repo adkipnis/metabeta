@@ -73,3 +73,51 @@ def extract(trace, name: str) -> torch.Tensor:
     return torch.tensor(x.reshape(shape)).unsqueeze(0)
 
 
+def fitMCMC(ds: dict[str, torch.Tensor],
+            tune: int = 2000,
+            draws: int = 1000,
+            chains: int = 4,
+            seed: int = 0,
+            **kwargs) -> dict[str, torch.Tensor]:
+    d, q = int(ds['d']), int(ds['q'])
+    t0 = time.perf_counter()
+    model = bambify(ds)
+    trace = model.fit(draws=draws, tune=tune, chains=chains,
+                      random_seed=seed, **kwargs)
+    t1 = time.perf_counter()
+
+    # extract samples
+    ffx = torch.cat(
+        [extract(trace, 'Intercept')] +
+        [extract(trace, f'x{j}') for j in range(1, d)],
+    )
+    sigmas_rfx = torch.cat(
+        [extract(trace, '1|i_sigma')] +
+        [extract(trace, f'x{j}|i_sigma') for j in range(1, q)],
+    )
+    sigma_eps = extract(trace, 'y_sigma')
+    rfx = torch.cat(
+        [extract(trace, '1|i')] +
+        [extract(trace, f'x{j}|i') for j in range(1, q)],
+    ).movedim(2, 1)
+ 
+    # extract fit info
+    divergent_count = torch.tensor(trace.sample_stats['diverging'].values.sum(-1)) # type: ignore
+    summary = az.summary(trace)
+    ess = summary['ess_bulk'].to_numpy()
+    rhat = summary['r_hat'].to_numpy()
+
+    # finalize
+    out = {
+        'mcmc_ffx': ffx,
+        'mcmc_sigma_eps': sigma_eps,
+        'mcmc_sigmas_rfx': sigmas_rfx,
+        'mcmc_rfx': rfx,
+        'mcmc_divergences': divergent_count,
+        'mcmc_ess': torch.tensor(ess),
+        'mcmc_rhat': torch.tensor(rhat),
+        'mcmc_duration': torch.tensor(t1 - t0)
+    }
+    return out
+
+
