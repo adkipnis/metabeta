@@ -15,3 +15,36 @@ def standardnormal(*size):
     x = torch.randn(size)
     return standardize(x)
 
+# -----------------------------------------------------------------------------
+@dataclass
+class Prior:
+    nu_ffx: torch.Tensor
+    tau_ffx: torch.Tensor
+    tau_eps: torch.Tensor
+    tau_rfx: torch.Tensor
+    
+    def __post_init__(self):
+        self.d = len(self.tau_ffx)
+        self.q = len(self.tau_rfx)
+        self.sigmas_rfx = None
+        self.sigma_eps = None
+    
+    def sampleFfx(self) -> torch.Tensor:
+        ffx = D.Normal(self.nu_ffx, self.tau_ffx).sample()
+        return ffx
+    
+    def sampleRfx(self, m: int) -> torch.Tensor:
+        sigmas_rfx = D.HalfNormal(self.tau_rfx).sample()
+        rfx = standardnormal(m, self.q)
+        # rfx = torch.where(rfx.isnan(), 0, rfx)
+        rfx *= sigmas_rfx.unsqueeze(0)
+        return rfx
+    
+    def sampleEps(self, n: int) -> torch.Tensor:
+        sigma_eps = D.HalfNormal(self.tau_eps).sample()
+        eps = standardnormal(n)
+        eps *= sigma_eps
+        return eps
+
+
+# -----------------------------------------------------------------------------
