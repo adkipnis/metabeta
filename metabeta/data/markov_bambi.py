@@ -121,3 +121,111 @@ def fitMCMC(ds: dict[str, torch.Tensor],
     return out
 
 
+# ----- simulation 
+def parameters(ds: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
+
+    # fixed effects
+    ffx = torch.randn(d)
+    ffx = (ffx - ffx.mean())/ffx.std()
+    ffx = ffx * ds['tau_ffx'] + ds['nu_ffx']
+
+    # variances
+    sigmas_rfx = D.HalfNormal(ds['tau_rfx']).sample((1,))
+    sigma_eps = D.HalfNormal(ds['tau_eps']).sample()
+
+    # random effects
+    rfx = torch.randn(m, q)
+    rfx = (rfx - rfx.mean(0, keepdim=True)) / rfx.std(0, keepdim=True) * sigmas_rfx # type: ignore
+
+    out = dict(ffx=ffx, sigmas_rfx=sigmas_rfx, sigma_eps=sigma_eps, rfx=rfx)
+    ds.update(out)
+    return ds
+
+
+def outcome(ds: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    n, q = int(ds['n']), int(ds['q'])
+    X = ds['X']
+    Z = X[:, :q]
+    groups = ds['groups']
+    ffx = ds['ffx']
+    rfx = ds['rfx']
+    sigma_eps = ds['sigma_eps']
+    eps = torch.randn(n)
+    eps = (eps - eps.mean()) / eps.std() * sigma_eps
+    mu = X @ ffx + (Z * rfx[groups]).sum(-1)
+    ds['y'] = mu + eps
+    return ds
+
+
+def plot_data(data: pd.DataFrame):
+    m = len(df['i'].unique())
+    fig, axes = plt.subplots(
+        2, m//2, figsize=(m * 2.5, 10), dpi=300,
+        sharey=True, sharex=True, constrained_layout=False)
+    fig.subplots_adjust(
+        left=0.075, right=0.975, bottom=0.075, top=0.925, wspace=0.03)
+    axes_flat = axes.ravel()
+
+    for i, subject in enumerate(data["i"].unique()):
+        ax = axes_flat[i]
+        idx = data.index[data["i"] == subject].tolist()
+        x1 = data.loc[idx, "x1"].values
+        y = data.loc[idx, "y"].values
+
+        # Plot observed data points
+        ax.scatter(x1, y, color="C0", ec="black", alpha=0.7)
+
+        # Add a title
+        ax.set_title(f"Subject: {i}", fontsize=14)
+
+        # Add a grid
+        ax.grid(True, linestyle='--', linewidth=0.5)
+
+        # Add lines at x=0 and y=0
+        ax.axhline(0, color='black', linestyle=':', linewidth=1)
+        ax.axvline(0, color='black', linestyle=':', linewidth=1)
+
+    ax.xaxis.set_ticks([0, 2, 4, 6, 8]) # type: ignore
+    fig.text(0.5, 0.02, "x1", fontsize=14)
+    fig.text(0.03, 0.5, "y", rotation=90, fontsize=14, va="center")
+
+    return axes
+
+if __name__ == '__main__':
+    seed = 1
+    torch.manual_seed(seed)
+    n = 100
+    m = 10
+    d = 2
+    q = 2
+    ds = {
+        'n': torch.tensor(n), 'm': torch.tensor(m),
+        'd': torch.tensor(d), 'q': torch.tensor(q),
+        'X': torch.cat([torch.ones(n, 1), torch.randn(n, d-1)], dim=-1),
+        'groups': torch.randint(low=0, high=m, size=(n,)),
+        'nu_ffx': torch.zeros(d),
+        'tau_ffx': D.HalfNormal(1).sample((d,)),
+        'tau_rfx': D.HalfNormal(1).sample((q,)),
+        'tau_eps': D.HalfNormal(1).sample((1,)),
+        }
+    ds = parameters(ds)
+    ds = outcome(ds)
+    df = pandify(ds)
+    form = formulate(ds)
+    priors = priorize(ds)
+    model = bambify(ds)
+    plot_data(df)
+    results = fitMCMC(ds, tune=100, draws=100, seed=seed)
+
+    # ffx
+    print(ds['ffx'].numpy(), results['mcmc_ffx'].mean(-1).numpy())
+
+    # sigmas
+    print(ds['sigmas_rfx'].numpy(), results['mcmc_sigmas_rfx'].mean(-1).numpy())
+    print(ds['sigma_eps'].numpy(), results['mcmc_sigma_eps'].mean(-1).numpy())
+
+    # rfx
+    print(ds['rfx'].numpy())
+    print(results['mcmc_rfx'].mean(-1).movedim(1,0).numpy())
+
