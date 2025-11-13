@@ -74,19 +74,16 @@ def prepare(ds: dict[str, torch.Tensor], parameterization: str = 'default'):
         raise ValueError
 
 
+def fitMCMC(ds: dict[str, torch.Tensor],
+            tune=2000,
             draws=1000,
             cores=4,
-            mono=False,
-            sampler: str = 'nuts',
             seed=0) -> dict[str, torch.Tensor]:
-    assert sampler in ['hmc', 'nuts'], f'unknown sampler: {sampler}'
 
     # run mcmc
     t0 = time.perf_counter()
-    with prepare(ds, mono=mono):
-        step = pm.HamiltonianMC() if sampler == 'hmc' else None
-        trace = pm.sample(tune=tune, draws=draws, cores=cores,
-                          random_seed=seed, step=step)
+    with prepare(ds):
+        trace = pm.sample(tune=tune, draws=draws, cores=cores, random_seed=seed)
     t1 = time.perf_counter()
 
     # extract samples
