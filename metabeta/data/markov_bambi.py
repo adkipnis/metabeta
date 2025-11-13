@@ -28,3 +28,34 @@ def formulate(ds: dict[str, torch.Tensor]) -> str:
     return out
 
 
+def priorize(ds: dict[str, torch.Tensor]) -> dict[str, Prior]:
+    # unpack
+    d, q = int(ds['d']), int(ds['q'])
+    nu_ffx = ds['nu_ffx'][:d].numpy()
+    tau_ffx = ds['tau_ffx'][:d].numpy()
+    tau_rfx = ds['tau_rfx'][:q].numpy()
+    tau_eps = ds['tau_eps'].numpy()
+ 
+    # setup priors
+    priors = {
+        'Intercept': Prior('Normal', mu=nu_ffx[0], sigma=tau_ffx[0]),
+        '1|i': Prior('Normal', mu=0, sigma=Prior('HalfNormal', sigma=tau_rfx[0])),
+        'sigma': Prior('HalfNormal', sigma=tau_eps)
+    }
+
+    # fixed slopes
+    priors.update(
+        {f'x{j}': Prior('Normal', mu=nu_ffx[j], sigma=tau_ffx[j])
+         for j in range(1, d)}
+    )
+
+    # random slopes
+    priors.update(
+        {f'x{j}|i': Prior('Normal', mu=0, sigma=Prior('HalfNormal', sigma=tau_rfx[j]))
+         for j in range(1, q)}
+    )
+ 
+    return priors
+
+
+def bambify(ds: dict[str, torch.Tensor]) -> bmb.Model:
