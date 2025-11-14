@@ -26,6 +26,10 @@ def standardnormal(*size):
     x = torch.randn(size)
     return standardize(x)
 
+def checkContinuous(x: torch.Tensor, tol: float = 1e-12) -> torch.Tensor:
+    diffs = (x - x.round()).abs()
+    return (diffs > tol).all(dim=0)
+
 # -----------------------------------------------------------------------------
 @dataclass
 class Prior:
