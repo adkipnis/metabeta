@@ -63,6 +63,19 @@ class Prior:
 
 
 # -----------------------------------------------------------------------------
+dist_dict = {
+    Normal: 0.05,
+    StudentT: 0.25,
+    LogNormal: 0.05,
+    Uniform: 0.05,
+    ScaledBeta: 0.15,
+    Bernoulli: 0.20,
+    NegativeBinomial: 0.15,
+}
+
+probs = torch.tensor(list(dist_dict.values()))
+dists = list(dist_dict.keys())
+
 @dataclass
 class Design:
     correlate: bool = False
