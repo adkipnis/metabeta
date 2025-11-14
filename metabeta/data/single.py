@@ -85,7 +85,12 @@ class Design:
     def __post_init__(self):
         self.dists = list()
 
-    def sample(self, n: int, d: int) -> torch.Tensor:
+    def column(self, n: int, parameter: float) -> torch.Tensor:
+        idx = D.Categorical(probs).sample()
+        dist = dists[idx](parameter, use_default=self.use_default)
+        self.dists.append(dist)
+        x = dist.sample((n,))
+        return x
         x = torch.zeros(n, d)
         x[:, 0] = 1
         x[:, 1:] = torch.randn(n, d-1)
