@@ -105,23 +105,23 @@ def fit(ds: dict[str, torch.Tensor],
     sigma_eps = extract(trace, 'sigma_eps').unsqueeze(0)
     sigmas_rfx = extract(trace, 'sigmas_rfx')
     rfx = extract(trace, 'rfx').movedim(0,1)
+    out = {
+        f'{method}_ffx': ffx,
+        f'{method}_sigma_eps': sigma_eps,
+        f'{method}_sigmas_rfx': sigmas_rfx,
+        f'{method}_rfx': rfx,
+        f'{method}_duration': torch.tensor(t1 - t0),
+        }
 
     # extract fit info
-    divergent_count = torch.tensor(trace.sample_stats['diverging'].values.sum(-1))
-    summary = az.summary(trace)
-    ess = summary['ess_bulk'].to_numpy()
-    rhat = summary['r_hat'].to_numpy()
-
-    # finalize
-    out = {
-        'mcmc_ffx': ffx,
-        'mcmc_sigma_eps': sigma_eps,
-        'mcmc_sigmas_rfx': sigmas_rfx,
-        'mcmc_rfx': rfx,
-        'mcmc_divergences': divergent_count,
-        'mcmc_ress': torch.tensor(ess),
-        'mcmc_rhat': torch.tensor(rhat),
-        'mcmc_duration': torch.tensor(t1 - t0)
-    }
+    summary = az.summary(trace, kind='diagnostics')
+    out[f'{method}_ess'] = torch.tensor(summary['ess_bulk'].to_numpy())
+    if method == 'nuts':
+        divergent_count = torch.tensor(trace.sample_stats['diverging'].values.sum(-1))
+        rhat = torch.tensor(summary['r_hat'].to_numpy())
+        out.update({
+            f'{method}_divergences': divergent_count,
+            f'{method}_rhat': rhat,
+            })
     return out
 
