@@ -163,8 +163,7 @@ class Generator:
     def sample(self) -> dict[str, torch.Tensor]:
         # globals
         ffx = self.prior.sampleFfx() # (d,)
-        X = self.design.sample(self.n, self.d) # (n, d)
-        eps = self.prior.sampleEps(self.n) # (n,)
+        X = self.design.sample(self.n, self.d, ffx) # (n, d)
 
         # locals
         rfx = self.prior.sampleRfx(self.m) # (m, q)
@@ -172,10 +171,20 @@ class Generator:
         rfx_ext = rfx[groups]  # (n, q)
         Z = X[:, : self.q]
 
-        # outcomes
+        # outcome
         y_hat = X @ ffx + (Z * rfx_ext).sum(dim=-1) # (n,)
+        signal = y_hat.var()
+
+        # calibrate noise
+        okay = torch.tensor(False)
+        attempts = 0
+        while not okay:
+            eps = self.prior.sampleEps(self.n) # (n,)
+            noise = self.prior.sigma_eps.square()
+            rnv = noise / (signal + noise)
+            attempts += 1
+            okay = (0.1 <= rnv <= 0.9) or torch.tensor(attempts > 25)
         y = y_hat + eps
-        rnv = eps.var() / y.var()
 
         # Cov(mean Z, rfx), needed for standardization
         weighted_rfx = Z.mean(0, keepdim=True) * rfx
@@ -191,8 +200,8 @@ class Generator:
             # params
             "ffx": ffx,  # (d,)
             "rfx": rfx,  # (m, q)
-            "sigmas_rfx": rfx.std(0),  # (q,)
-            "sigma_eps": eps.std(0),  # (1,)
+            "sigmas_rfx": self.prior.sigmas_rfx,  # (q,)
+            "sigma_eps": self.prior.sigma_eps,  # (1,)
             # priors
             "nu_ffx": self.prior.nu_ffx,  # (d,)
             "tau_ffx": self.prior.tau_ffx,  # (d,)
@@ -206,7 +215,7 @@ class Generator:
             "q": torch.tensor(self.q),  # (1,)
             "cov_sum": cov_sum,  # (1,)
             "rnv": rnv,  # (1,)
-            "okay": torch.tensor(True),
+            "okay": okay,
         }
         return out
 
