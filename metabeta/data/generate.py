@@ -191,7 +191,7 @@ def generate(
             okay = ds["okay"]
             if not okay:
                 attempts += 1
-                if attempts > 20:
+                if attempts > 5:
                     okay = True
                     # print(f"\nWarning: outlier ds with sd(y)={ds['y'].std(0):.2f} and rnv={ds['rnv']:.2f}")
         data += [ds]
