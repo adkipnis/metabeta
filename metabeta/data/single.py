@@ -117,6 +117,14 @@ class Design:
                 x_cor[:, i] = x[:, i]
         return x_cor
     
+    def correlateBinary(self, v: torch.Tensor, r: float | torch.Tensor):
+        """generate a categorical variable whose correlation with variable v is r"""
+        v = (v - v.mean()) / v.std()
+        z = torch.randn_like(v)
+        z = r * v + (1 - r**2) ** 0.5 * z
+        probs = torch.sigmoid(z)
+        z = torch.bernoulli(probs)
+        return z
         x = torch.zeros(n, d)
         x[:, 0] = 1
         x[:, 1:] = torch.randn(n, d-1)
