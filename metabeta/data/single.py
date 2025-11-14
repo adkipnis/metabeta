@@ -1,8 +1,19 @@
 # generate a single hierarchical dataset
 from dataclasses import dataclass
+from random import choice
 import torch
 from torch import distributions as D
 from metabeta.utils import fullCovary
+from metabeta.data.distributions import (
+    Normal,
+    StudentT,
+    LogNormal,
+    Uniform,
+    ScaledBeta,
+    Bernoulli,
+    NegativeBinomial,
+)
+from metabeta import plot
 
 
 # -----------------------------------------------------------------------------
