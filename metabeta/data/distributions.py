@@ -177,6 +177,34 @@ class StudentT(DistWithPrior):
             return lower, upper
 
 
+class LogNormal(DistWithPrior):
+    @property
+    def base(self):
+        return D.LogNormal
+
+    def defaultParams(self):
+        loc = torch.tensor(0.0)
+        scale = torch.tensor(1.0)
+        return dict(loc=loc, scale=scale)
+
+    def samplePrior(self, n=1):
+        scale = D.Uniform(0.5, 10.0).sample((n,))
+        loc = D.Uniform(-5.0, 5.0).sample((n,))
+        return dict(loc=loc, scale=scale)
+
+    def check(self, params):
+        return self.checkICDF(params)
+
+    def sample(self, dims):
+        x = self.dist.sample(dims)
+        upper = x.quantile(0.99)
+        outliers = (x > self.limit) + (x > upper)
+        while outliers.any():
+            x[outliers] = self.dist.sample(x[outliers].shape)
+            outliers = (x > self.limit) + (x > upper)
+        return x
+
+
 class Uniform(DistWithPrior):
     @property
     def base(self):
