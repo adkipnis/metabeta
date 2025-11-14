@@ -91,6 +91,32 @@ class Design:
         self.dists.append(dist)
         x = dist.sample((n,))
         return x
+
+    def induceCorrelation(self, x: torch.Tensor) -> torch.Tensor:
+        """sample a correlation matrix and apply it to the continuous design matrix columns"""
+        d = x.shape[1]
+        if d < 2:
+            return x
+        mean, std = x.mean(dim=0), x.std(dim=0)
+        x_ = (x - mean) / std
+        L = D.LKJCholesky(d, 10.0).sample()
+        R = L @ L.T
+ 
+        # correlate continuous
+        x_cor = (x_ @ L.T) * std + mean
+ 
+        # correlate categorical
+        continuous = checkContinuous(x)
+        idx_cont = torch.where(continuous)[0]
+        idx_cat = torch.where(~continuous)[0]
+        for i in idx_cat:
+            if torch.rand(1) > 0.5 and len(idx_cont):
+                j = choice(idx_cont)
+                x_cor[:, i] = self.correlateBinary(x_cor[:, j], R[i, j])
+            else:
+                x_cor[:, i] = x[:, i]
+        return x_cor
+    
         x = torch.zeros(n, d)
         x[:, 0] = 1
         x[:, 1:] = torch.randn(n, d-1)
