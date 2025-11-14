@@ -11,7 +11,6 @@ def extract(trace, name: str) -> torch.Tensor:
 
 
 def prepare(ds: dict[str, torch.Tensor], parameterization: str = 'default'):
-
     # unpack
     n = ds['n'].item()
     m = ds['m'].item()
@@ -79,12 +78,23 @@ def fit(ds: dict[str, torch.Tensor],
         cores=4,
         seed=0,
         parameterization='default',
+        method='advi') -> dict[str, torch.Tensor]:
+    assert method in ['nuts', 'advi'], 'unknown method selected'
     assert parameterization in ['default', 'hierarchical'], 'unknown parameterization selected'
  
     # run pymc
     t0 = time.perf_counter()
-        trace = pm.sample(tune=tune, draws=draws, cores=cores, random_seed=seed)
     with prepare(ds, parameterization):
+        if method == 'advi':
+            mean_field = pm.fit(n=100_000, method='advi',
+                                obj_optimizer=pm.adam(learning_rate=5e-3))
+            trace = mean_field.sample(draws=draws*cores, random_seed=seed,
+                                      return_inferencedata=True)
+        elif method == 'nuts':
+            trace = pm.sample(tune=tune, draws=draws, cores=cores,
+                              random_seed=seed, return_inferencedata=True)
+        else:
+            raise ValueError
     t1 = time.perf_counter()
 
     # extract samples
