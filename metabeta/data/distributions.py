@@ -3,7 +3,7 @@ import torch
 from torch import distributions as D
 
 
-# ==============================================================================
+# =============================================================================
 # for data simulation
 class DistWithPrior:
     """Base class for 1-d distributions with automated prior used for sampling dataset features"""
@@ -11,7 +11,7 @@ class DistWithPrior:
     def __init__(
         self,
         weight: float,
-        limit: float = 1000,
+        limit: float = 500,
         center: bool = True,
         use_default: bool = False,
     ):
@@ -32,7 +32,7 @@ class DistWithPrior:
     @property
     def base(self):
         raise NotImplementedError
-        
+
     def initBorders(self):
         return None
 
@@ -79,7 +79,7 @@ class DistWithPrior:
             dims_new = (n * 4,)
             a, b = self.borders
             counter = 0
-            
+
             while n_ < n:
                 if counter > 10:
                     # print('failed to use borders')
@@ -89,17 +89,19 @@ class DistWithPrior:
                 out.append(x[inlier])
                 n_ += inlier.sum()
                 counter += 1
-            out = torch.cat(out, dim=0)[:n].unsqueeze(-1)
+            out = torch.cat(out, dim=0)[:n]
             return out
         else:
             return self.dist.sample(dims)
 
+# -----------------------------------------------------------------------------
+# continuous
 
 class Normal(DistWithPrior):
     @property
     def base(self):
         return D.Normal
-    
+
     def defaultParams(self):
         loc = torch.tensor(0.0)
         scale = torch.tensor(1.0)
@@ -128,7 +130,7 @@ class Normal(DistWithPrior):
             else:
                 upper = dist.icdf(p.max())
             return lower, upper
-        
+
     def check(self, params):
         return self.checkICDF(params)
 
@@ -155,7 +157,7 @@ class StudentT(DistWithPrior):
 
     def check(self, params):
         return self.checkSample(params)
-    
+
     def initBorders(self):
         p = torch.rand(2)
         use = p < 0.25
@@ -199,6 +201,8 @@ class Uniform(DistWithPrior):
         return self.checkICDF(params)
 
 
+# -----------------------------------------------------------------------------
+# non-continuous
 class Bernoulli(DistWithPrior):
     @property
     def base(self):
