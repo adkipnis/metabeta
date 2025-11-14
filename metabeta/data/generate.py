@@ -193,7 +193,7 @@ def generate(
                 attempts += 1
                 if attempts > 20:
                     okay = True
-                    print(f"\nWarning: outlier ds with sd(y)={ds['y'].std(0):.2f}")
+                    # print(f"\nWarning: outlier ds with sd(y)={ds['y'].std(0):.2f} and rnv={ds['rnv']:.2f}")
         data += [ds]
     
     # optionally fit mcmc
@@ -225,7 +225,7 @@ if __name__ == "__main__":
     # generate test dataset
     if cfg.begin == -1:
         print("Generating test set...")
-        ds_test = generate(cfg.bs_test, part, mcmc=True)
+        ds_test = generate(cfg.bs_test, part, fit=True)
         ds_test = aggregate(ds_test)
         fn = getFileName("test", -1)
         np.savez_compressed(fn, **ds_test, allow_pickle=True)
@@ -235,7 +235,7 @@ if __name__ == "__main__":
     # generate validation dataset
     if cfg.begin == 0:
         print("Generating validation set...")
-        ds_val = generate(cfg.bs_val, part, mcmc=False)
+        ds_val = generate(cfg.bs_val, part)
         ds_val = aggregate(ds_val)
         fn = getFileName("val", 0)
         np.savez_compressed(fn, **ds_val, allow_pickle=True)
