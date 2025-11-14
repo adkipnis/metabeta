@@ -11,7 +11,6 @@ def extract(trace, name: str) -> torch.Tensor:
 
 
 def prepare(ds: dict[str, torch.Tensor], parameterization: str = 'default'):
-    assert parameterization in ['default', 'hierarchical'], 'unknown parameterization selected'
 
     # unpack
     n = ds['n'].item()
@@ -74,21 +73,25 @@ def prepare(ds: dict[str, torch.Tensor], parameterization: str = 'default'):
         raise ValueError
 
 
-def fitMCMC(ds: dict[str, torch.Tensor],
-            tune=2000,
-            draws=1000,
-            cores=4,
-            seed=0) -> dict[str, torch.Tensor]:
-
-    # run mcmc
+def fit(ds: dict[str, torch.Tensor],
+        tune=2000,
+        draws=1000,
+        cores=4,
+        seed=0,
+        parameterization='default',
+    assert parameterization in ['default', 'hierarchical'], 'unknown parameterization selected'
+ 
+    # run pymc
     t0 = time.perf_counter()
-    with prepare(ds):
         trace = pm.sample(tune=tune, draws=draws, cores=cores, random_seed=seed)
+    with prepare(ds, parameterization):
     t1 = time.perf_counter()
 
     # extract samples
-    ffx = extract(trace, 'ffx')
-    # ffx = torch.cat([extract(trace, 'beta'), extract(trace, 'ffx')]) # hierarchical
+    if parameterization == 'default':
+        ffx = extract(trace, 'ffx')
+    elif parameterization == 'hierarchical':
+        ffx = torch.cat([extract(trace, 'beta'), extract(trace, 'ffx')])
     sigma_eps = extract(trace, 'sigma_eps').unsqueeze(0)
     sigmas_rfx = extract(trace, 'sigmas_rfx')
     rfx = extract(trace, 'rfx').movedim(0,1)
