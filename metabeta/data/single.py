@@ -116,7 +116,7 @@ class Design:
             else:
                 x_cor[:, i] = x[:, i]
         return x_cor
-    
+
     def correlateBinary(self, v: torch.Tensor, r: float | torch.Tensor):
         """generate a categorical variable whose correlation with variable v is r"""
         v = (v - v.mean()) / v.std()
@@ -190,6 +190,12 @@ class Generator:
         weighted_rfx = Z.mean(0, keepdim=True) * rfx
         cov = fullCovary(weighted_rfx)
         cov_sum = cov.sum() - cov[0, 0]
+
+        # visualize
+        # plot.dataset(
+        #     torch.cat([y.unsqueeze(-1), X[:, 1:]], dim=-1),
+        #     names=['y'] + [f'x{j}' for j in range(1, self.d)]
+        # )
 
         # outputs
         out = {
