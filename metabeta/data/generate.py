@@ -9,7 +9,7 @@ from torch import distributions as D
 
 from metabeta.utils import dsFilename, padTensor
 from metabeta.data.single import Prior, Design, Generator
-from metabeta.data.markov import fitMCMC
+from metabeta.data.markov import fitPyMC
 # from metabeta.data.csv import RealDataset
 
 
@@ -28,7 +28,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument("--max_d", type=int, default=2, help="Maximum number of fixed effects (intercept + slopes) to draw per linear model (default = 12).")
     parser.add_argument("--max_q", type=int, default=1, help="Maximum number of random effects (intercept + slopes) to draw per linear model (default = 4).")
     parser.add_argument("--d_tag", type=str, default="hierarchical", help='Suffix for model ID (default = "")')
-    parser.add_argument("--toy", action="store_false", help="Generate toy data (default = False)")
+    parser.add_argument("--toy", action="store_true", help="Generate toy data (default = False)")
     parser.add_argument("--semi", action="store_true", help="Generate semi-synthetic data (default = False)")
     # parser.add_argument("--varied", action="store_true", help="variable d and q (default = False)")
     parser.add_argument("-b", "--begin", type=int, default=-1, help="Begin with iteration number #b (default = 0).")
@@ -138,7 +138,7 @@ def aggregate(data: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
 def generate(
     batch_size: int,
     seed: int,
-    mcmc: bool = False,
+    fit: bool = False,
     bs_load: int = 1,
 ) -> list[dict[str, torch.Tensor]]:
     """Generate a [batch_size] list of mixed effects datasets
@@ -148,7 +148,7 @@ def generate(
     torch.manual_seed(seed)
     data = []
     iterator = tqdm(range(batch_size))
-    if not mcmc:
+    if not fit:
         iterator.set_description(f"{part:02d}/{cfg.iterations:02d}")
 
     # presample sizes
@@ -185,7 +185,7 @@ def generate(
                       tau_ffx[i, :d_i],
                       tau_eps[i],
                       tau_rfx[i, :q_i])
-        design = Design()
+        design = Design(toy=cfg.toy)
         while not okay:
             ds = Generator(prior, design, n_i).sample()
             okay = ds["okay"]
@@ -197,11 +197,13 @@ def generate(
         data += [ds]
     
     # optionally fit mcmc
-    if mcmc:
-        print('Starting MCMC sampling...')
+    if fit:
+        print('Starting pymc sampling...')
         for i, ds in enumerate(tqdm(data)):
-            mcmc_results = fitMCMC(ds, seed=i)
-            ds.update(mcmc_results)
+            nuts_results = fitPyMC(ds, seed=i, method='nuts')
+            ds.update(nuts_results)
+            advi_results = fitPyMC(ds, seed=i, method='advi')
+            ds.update(advi_results)
     return data
 
 
