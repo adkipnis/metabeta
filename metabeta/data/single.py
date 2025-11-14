@@ -78,7 +78,12 @@ dists = list(dist_dict.keys())
 
 @dataclass
 class Design:
-    correlate: bool = False
+    toy: bool = False
+    use_default: bool = False
+    correlate: bool = True
+ 
+    def __post_init__(self):
+        self.dists = list()
 
     def sample(self, n: int, d: int) -> torch.Tensor:
         x = torch.zeros(n, d)
