@@ -34,13 +34,13 @@ def prepare(ds: dict[str, torch.Tensor], parameterization: str = 'default'):
             ffx = pm.Normal('ffx', mu=nu_ffx, sigma=tau_ffx, shape=d)
 
             # additional random effects
-            sigmas_rfx = pm.HalfNormal('sigmas_rfx', sigma=tau_rfx, shape=q)
+            sigmas_rfx = pm.HalfCauchy('sigmas_rfx', beta=tau_rfx, shape=q)
             rfx_norm = pm.Normal('rfx_norm', mu=0.0, sigma=1.0, shape=(m,q))
             rfx = pm.Deterministic('rfx', rfx_norm * sigmas_rfx)
 
             # outcome
             mu = pt.dot(X, ffx) + pt.sum(Z * rfx[groups], axis=1)
-            sigma_eps = pm.HalfNormal('sigma_eps', sigma=tau_eps)
+            sigma_eps = pm.HalfCauchy('sigma_eps', beta=tau_eps)
             y_obs = pm.Normal('y_obs', mu=mu, sigma=sigma_eps, observed=y, shape=n)
         return model
 
@@ -58,14 +58,14 @@ def prepare(ds: dict[str, torch.Tensor], parameterization: str = 'default'):
 
             # separate mixed effects
             beta = pm.Normal("beta", mu=nu_ffx[:q], sigma=tau_ffx[:q])
-            sigmas_rfx = pm.HalfNormal("sigmas_rfx", sigma=tau_rfx)
+            sigmas_rfx = pm.HalfCauchy("sigmas_rfx", beta=tau_rfx)
             rfx_norm = pm.Normal("rfx_norm", mu=0, sigma=1, shape=(m,q))
             rfx = pm.Deterministic("rfx", rfx_norm * sigmas_rfx)
             mfx = beta + rfx
 
             # outcome
             mu = pt.dot(X, ffx) + pt.sum(Z * mfx[groups], axis=1)
-            sigma_eps = pm.HalfNormal('sigma_eps', sigma=tau_eps)
+            sigma_eps = pm.HalfCauchy('sigma_eps', beta=tau_eps)
             y_obs = pm.Normal("y_obs", mu=mu, sigma=sigma_eps, observed=y, shape=n)
         return model
     else:
