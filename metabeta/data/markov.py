@@ -72,7 +72,7 @@ def prepare(ds: dict[str, torch.Tensor], parameterization: str = 'default'):
         raise ValueError
 
 
-def fit(ds: dict[str, torch.Tensor],
+def fitPyMC(ds: dict[str, torch.Tensor],
         tune=2000,
         draws=1000,
         cores=4,
