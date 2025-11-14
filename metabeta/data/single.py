@@ -125,9 +125,23 @@ class Design:
         probs = torch.sigmoid(z)
         z = torch.bernoulli(probs)
         return z
+
+    def sample(self, n: int, d: int, parameters: torch.Tensor) -> torch.Tensor:
+        # init design matrix
         x = torch.zeros(n, d)
-        x[:, 0] = 1
-        x[:, 1:] = torch.randn(n, d-1)
+        x[:, 0] = 1.
+
+        # fill remaining columns
+        if self.toy:
+            x[:, 1:] = torch.randn(n, d-1)
+            return x
+        else:
+            for i in range(1, d):
+                x[:, i] = self.column(n, parameters[i].item())
+
+        # correlate
+        if self.correlate:
+            x[:, 1:] = self.induceCorrelation(x[:, 1:])
         return x
 
 
