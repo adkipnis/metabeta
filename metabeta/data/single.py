@@ -93,12 +93,11 @@ probs = torch.tensor(list(dist_dict.values()))
 dists = list(dist_dict.keys())
 
 @dataclass
-class Design:
+class Synthesizer:
+    ''' sample a design matrix and groups using synthetic distributions '''
     toy: bool = False
     use_default: bool = False
     correlate: bool = True
- 
-    def __post_init__(self):
 
     def column(self, n: int, parameter: float) -> torch.Tensor:
         idx = D.Categorical(probs).sample()
@@ -126,12 +125,13 @@ class Design:
         for i in idx_cat:
             if torch.rand(1) > 0.5 and len(idx_cont):
                 j = choice(idx_cont)
-                x_cor[:, i] = self.correlateBinary(x_cor[:, j], R[i, j])
+                x_cor[:, i] = correlateBinary(x_cor[:, j], R[i, j])
             else:
                 x_cor[:, i] = x[:, i]
         return x_cor
-
-    def sample(self, n: int, d: int, parameters: torch.Tensor) -> torch.Tensor:
+ 
+    def sampleX(self, n: int, d: int, parameters: torch.Tensor) -> torch.Tensor:
+        ''' sample design matrix from synthetic distributions '''
         # init design matrix
         x = torch.zeros(n, d)
         x[:, 0] = 1.
@@ -144,10 +144,17 @@ class Design:
             for i in range(1, d):
                 x[:, i] = self.column(n, parameters[i].item())
 
-        # correlate
+        # correlate columns
         if self.correlate:
             x[:, 1:] = self.induceCorrelation(x[:, 1:])
         return x
+
+    def sample(self, d: int, n_i: torch.Tensor, parameters: torch.Tensor,
+               ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        x = self.sampleX(n=int(n_i.sum()), d=d, parameters=parameters)
+        groups = counts2groups(n_i)
+        return x, groups, n_i
+
 
 
 # -----------------------------------------------------------------------------
