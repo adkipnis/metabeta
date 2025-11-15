@@ -1,4 +1,5 @@
 # generate a single hierarchical dataset
+from pathlib import Path
 from dataclasses import dataclass
 from random import choice
 import torch
@@ -13,8 +14,8 @@ from metabeta.data.distributions import (
     Bernoulli,
     NegativeBinomial,
 )
+from metabeta.data.interface import RealDataset
 from metabeta import plot
-
 
 # -----------------------------------------------------------------------------
 def standardize(x: torch.Tensor, dim: int = 0) -> torch.Tensor:
@@ -155,6 +156,16 @@ class Synthesizer:
         groups = counts2groups(n_i)
         return x, groups, n_i
 
+
+@dataclass
+class Emulator:
+    ''' subsample a design matrix and groups from source '''
+    source: str 
+    
+    def __post_init__(self):
+        path = Path("real", f"{self.source}.npz")
+        self.ds = RealDataset(source=path).data
+        # TODO: case: source == 'all'
 
 
 # -----------------------------------------------------------------------------
