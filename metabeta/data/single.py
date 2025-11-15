@@ -213,37 +213,36 @@ class Emulator:
 @dataclass
 class Generator:
     prior: Prior
-    design: Design
-    n_i: list[int] | torch.Tensor # number of observations per group
+    design: Synthesizer | Emulator
+    n_i: torch.Tensor # number of observations per group
 
     def __post_init__(self):
         self.d = self.prior.d # number of ffx
         self.q = self.prior.q # number of rfx
+        if isinstance(self.n_i, list):
+            self.n_i = torch.tensor(self.n_i)
         self.m = len(self.n_i) # number of groups
-        self.n_i = torch.tensor(self.n_i) # number of observations per group
-        self.n = int(self.n_i.sum()) # total number of observations
  
 
     def sample(self) -> dict[str, torch.Tensor]:
-        # globals
+        # parameters
         ffx = self.prior.sampleFfx() # (d,)
-        X = self.design.sample(self.n, self.d, ffx) # (n, d)
-
-        # locals
         rfx = self.prior.sampleRfx(self.m) # (m, q)
-        groups = torch.repeat_interleave(torch.arange(self.m), self.n_i)  # type: ignore
-        rfx_ext = rfx[groups]  # (n, q)
+
+        # data
+        X, groups, n_i = self.design.sample(d=self.d, n_i=self.n_i, parameters=ffx)
         Z = X[:, : self.q]
+        n = len(X) # total number of observations
 
         # outcome
-        y_hat = X @ ffx + (Z * rfx_ext).sum(dim=-1) # (n,)
-        signal = y_hat.var()
+        y_hat = X @ ffx + (Z * rfx[groups]).sum(dim=-1) # (n,)
 
         # calibrate noise
-        okay = torch.tensor(False)
         attempts = 0
+        signal = y_hat.var()
+        okay = torch.tensor(False)
         while not okay:
-            eps = self.prior.sampleEps(self.n) # (n,)
+            eps = self.prior.sampleEps(n) # (n,)
             noise = self.prior.sigma_eps.square()
             rnv = noise / (signal + noise)
             attempts += 1
@@ -279,8 +278,8 @@ class Generator:
             "tau_eps": self.prior.tau_eps,  # (1,)
             # misc
             "m": torch.tensor(self.m),  # (1,)
-            "n": torch.tensor(self.n),  # (1,)
-            "n_i": self.n_i,  # (m,)
+            "n": torch.tensor(n),  # (1,)
+            "n_i": n_i,  # (m,)
             "d": torch.tensor(self.d),  # (1,)
             "q": torch.tensor(self.q),  # (1,)
             "cov_sum": cov_sum,  # (1,)
