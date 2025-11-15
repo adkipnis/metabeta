@@ -42,6 +42,12 @@ def correlateBinary(v: torch.Tensor, r: float | torch.Tensor):
     probs = torch.sigmoid(z)
     z = torch.bernoulli(probs)
     return z
+
+def counts2groups(n_i: torch.Tensor) -> torch.Tensor:
+    unique = torch.arange(len(n_i))
+    groups = torch.repeat_interleave(unique, n_i)
+    return groups
+
 # -----------------------------------------------------------------------------
 @dataclass
 class Prior:
@@ -83,7 +89,6 @@ dist_dict = {
     Bernoulli: 0.20,
     NegativeBinomial: 0.15,
 }
-
 probs = torch.tensor(list(dist_dict.values()))
 dists = list(dist_dict.keys())
 
