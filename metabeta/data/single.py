@@ -167,6 +167,47 @@ class Emulator:
         self.ds = RealDataset(source=path).data
         # TODO: case: source == 'all'
 
+    def sample(self, d: int, n_i: torch.Tensor, **kwargs,
+               ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        n = int(n_i.sum())
+        m = len(n_i)
+        source_is_grouped = self.ds['m'] is not None
+
+        # check if source is large enough
+        assert n <= self.ds['n'], 'not enough rows in source'
+        assert d-1 <= self.ds['d'], 'not enough columns in source'
+        if source_is_grouped:
+            assert m <= self.ds['m'], 'not enough groups in source'
+
+        # unpack
+        ds = self.ds
+        x = ds['X'].clone().float()
+
+        # subsample observations
+        if source_is_grouped:
+            # subsample m groups, get corresponding n_i
+            members = torch.randperm(ds['m'])[:m]
+            n_i = ds['n_i'][members]
+            n = int(n_i.sum())
+            member_mask = (ds['groups'].unsqueeze(-1) == members.unsqueeze(0)).any(-1)  # type: ignore
+            x = x[member_mask]
+        else:
+            idx_obs = torch.randperm(len(x))[:n]
+            x = x[idx_obs]
+
+        # generate groups
+        groups = counts2groups(n_i)
+
+        # subsample features
+        idx_feat = torch.randperm(x.shape[1])[:d-1]
+        x = x[:, idx_feat]
+
+        # add intercept
+        ones = torch.ones_like(x[:, 0:1])
+        x = torch.cat([ones, x], dim=-1)
+        return x, groups, n_i
+
+
 
 # -----------------------------------------------------------------------------
 @dataclass
