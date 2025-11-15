@@ -55,7 +55,6 @@ class Prior:
     def sampleRfx(self, m: int) -> torch.Tensor:
         self.sigmas_rfx = D.HalfCauchy(self.tau_rfx).sample()
         rfx = standardnormal(m, self.q)
-        # rfx = torch.where(rfx.isnan(), 0, rfx)
         rfx *= self.sigmas_rfx.unsqueeze(0) # type: ignore
         return rfx
 
@@ -87,12 +86,10 @@ class Design:
     correlate: bool = True
  
     def __post_init__(self):
-        self.dists = list()
 
     def column(self, n: int, parameter: float) -> torch.Tensor:
         idx = D.Categorical(probs).sample()
         dist = dists[idx](parameter, use_default=self.use_default)
-        self.dists.append(dist)
         x = dist.sample((n,))
         return x
 
