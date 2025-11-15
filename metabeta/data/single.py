@@ -292,29 +292,23 @@ class Generator:
 
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
-    # standardnormal
-    x = standardnormal(10, 2)
 
-    # prior params
+    # prior
     d = 3
     q = 2
     nu_ffx = torch.randn(d)
     tau_ffx = torch.randn(d).abs()
     tau_eps = torch.randn(1).abs()
     tau_rfx = torch.randn(q).abs()
-
-    # prior
+    prior = Prior(nu_ffx, tau_ffx, tau_eps, tau_rfx)
+    
+    # design
+    design = Synthesizer()
+    design = Emulator('math')
+    
+    # generator
     m = 4
     N = 100
-    prior = Prior(nu_ffx, tau_ffx, tau_eps, tau_rfx)
-    beta = prior.sampleFfx()
-    alpha = prior.sampleRfx(m)
-    noise = prior.sampleEps(N)
-
-    # design matrix
-    design = Design()
-
-    # generator
     n_i = [N//m for _ in range(m)]
     gen = Generator(prior, design, n_i)
     ds = gen.sample()
