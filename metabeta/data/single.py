@@ -34,6 +34,14 @@ def checkBinary(x: torch.Tensor) -> torch.Tensor:
     is_binary = (x == 0) | (x == 1)
     return is_binary.all(dim=0)
 
+def correlateBinary(v: torch.Tensor, r: float | torch.Tensor):
+    """generate a categorical variable whose correlation with variable v is r"""
+    v = (v - v.mean()) / v.std()
+    z = torch.randn_like(v)
+    z = r * v + (1 - r**2) ** 0.5 * z
+    probs = torch.sigmoid(z)
+    z = torch.bernoulli(probs)
+    return z
 # -----------------------------------------------------------------------------
 @dataclass
 class Prior:
@@ -117,15 +125,6 @@ class Design:
             else:
                 x_cor[:, i] = x[:, i]
         return x_cor
-
-    def correlateBinary(self, v: torch.Tensor, r: float | torch.Tensor):
-        """generate a categorical variable whose correlation with variable v is r"""
-        v = (v - v.mean()) / v.std()
-        z = torch.randn_like(v)
-        z = r * v + (1 - r**2) ** 0.5 * z
-        probs = torch.sigmoid(z)
-        z = torch.bernoulli(probs)
-        return z
 
     def sample(self, n: int, d: int, parameters: torch.Tensor) -> torch.Tensor:
         # init design matrix
