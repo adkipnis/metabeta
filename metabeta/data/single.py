@@ -262,18 +262,20 @@ class Generator:
         self.q = self.prior.q # number of rfx
         if isinstance(self.n_i, list):
             self.n_i = torch.tensor(self.n_i)
-        self.m = len(self.n_i) # number of groups
  
 
     def sample(self) -> dict[str, torch.Tensor]:
-        # parameters
+        # fixed effects
         ffx = self.prior.sampleFfx() # (d,)
-        rfx = self.prior.sampleRfx(self.m) # (m, q)
-
-        # data
+ 
+        # data (may depend on ffx)
         X, groups, n_i = self.design.sample(d=self.d, n_i=self.n_i, parameters=ffx)
         Z = X[:, : self.q]
         n = len(X) # total number of observations
+        m = len(n_i) # number of groups
+
+        # random effects
+        rfx = self.prior.sampleRfx(m) # (m, q)
 
         # outcome
         y_hat = X @ ffx + (Z * rfx[groups]).sum(dim=-1) # (n,)
