@@ -133,34 +133,13 @@ def preprocess(ds_name: str,
 
     return out
 
-# -----------------------------------------------------------------------------
-if __name__ == "__main__":
-    raw = preprocess(
-            ds_name = 'math',
-            target_name = 'MathAch',
-            group_name = 'School',
-            save = True
-            )
 
-    raw = preprocess(
-            ds_name = 'exam',
-            target_name = 'normexam',
-            group_name = 'school',
-            save = True
-            )
+def batchprocess(root: str, group_name: str = ''):
+    paths = Path(root).glob("*.csv")
+    names = sorted([p.stem for p in paths])
+    print(f'\nProcessing {len(names)} csv files from {root}...')
+    for name in names:
+        preprocess(name, root, group_name)
 
-    raw = preprocess(
-            ds_name = 'gcsemv',
-            target_name = 'written',
-            group_name = 'school',
-            save = True
-            )
-
-    raw = preprocess(
-            ds_name = 'sleepstudy',
-            target_name = 'Reaction',
-            group_name = 'Subject',
-            save = True
-            )
 
 
