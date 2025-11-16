@@ -142,4 +142,16 @@ def batchprocess(root: str, group_name: str = ''):
         preprocess(name, root, group_name)
 
 
+# -----------------------------------------------------------------------------
+if __name__ == '__main__':
+    # init preprocessed directory
+    Path('preprocessed').mkdir(parents=True, exist_ok=True)
+    
+    # r-package datasets
+    batchprocess('from-r', group_name='group')
+    
+    # srm datasets
+    batchprocess('srm')
+    
+    
 
