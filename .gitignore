@@ -5,7 +5,6 @@ archive
 outputs
 metabeta.egg-info
 *.csv
+*.rdata
 *.npz
-metabeta/data/real/.Rhistory
-metabeta/scraping/pmlbcache
-metabeta/scraping/raw
+*.Rhistory
