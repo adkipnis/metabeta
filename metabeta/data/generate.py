@@ -204,10 +204,10 @@ def generate(
     # optionally fit mcmc
     if fit:
         print('Starting pymc sampling...')
-        for i, ds in enumerate(tqdm(data)):
-            nuts_results = fitPyMC(ds, seed=i, method='nuts')
+        for ds in tqdm(data):
+            nuts_results = fitPyMC(ds, seed=cfg.seed, method='nuts')
+            advi_results = fitPyMC(ds, seed=cfg.seed, method='advi')
             ds.update(nuts_results)
-            advi_results = fitPyMC(ds, seed=i, method='advi')
             ds.update(advi_results)
     return data
 
