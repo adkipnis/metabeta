@@ -222,6 +222,9 @@ if __name__ == '__main__':
     assert cfg.bs_train % cfg.bs_load == 0, (
         'storage batch size must be divisible by loading batch size'
     )
+    if cfg.semi:
+        assert not cfg.toy, 'toy dataset is purely synthetic'
+        assert cfg.d_tag, 'must specify dataset name in d_tag flag'
     part = cfg.begin
     raw = None
 
