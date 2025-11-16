@@ -10,7 +10,7 @@ def removeString(this: list, string: str):
 
 
 def categorical(df: pd.DataFrame):
-    cat_cols = df.select_dtypes(include=["object", "category"]).columns
+    cat_cols = df.select_dtypes(include=['object', 'category']).columns
     return cat_cols
 
 
@@ -22,7 +22,7 @@ def numerical(df: pd.DataFrame):
 def dummify(df: pd.DataFrame, colname: str):
     ref_category = df[colname].mode()[0]
     dummies = pd.get_dummies(df[colname], prefix=colname).astype(int)
-    dummies = dummies.drop(f"{colname}_{ref_category}", axis=1)
+    dummies = dummies.drop(f'{colname}_{ref_category}', axis=1)
     df = pd.concat([df, dummies], axis=1)
     df = df.drop(colname, axis=1)
     return df
@@ -39,10 +39,8 @@ def preprocess(ds_name: str,
                group_name: str = '',
                save: bool = False):
     # import data
-    fn = Path(f"{ds_name}.csv")
-    assert fn.exists(), (
-        f'File {fn} does not exist.'
-    )
+    fn = Path(root, f'{ds_name}.csv')
+    assert fn.exists(), f'File {fn} does not exist.'
     df_orig = pd.read_csv(fn)
 
     # remove missing values
@@ -82,27 +80,27 @@ def preprocess(ds_name: str,
     R = torch.corrcoef(torch.tensor(X).permute(1, 0))
     out = {
         # data
-        "X": X,
-        "y": y,
-        "groups": groups,
-        "cor": R,
+        'X': X,
+        'y': y,
+        'groups': groups,
+        'cor': R,
         # names
-        "y_name": target_name,
-        "X_names": col_names_final,
-        "numeric_names": col_names_num,
-        "original_means": means,
+        'y_name': target_name,
+        'X_names': col_names_final,
+        'numeric_names': col_names_num,
+        'original_means': means,
         # dims
-        "d": d,
-        "n": n,
-        "n_i": n_i,
-        "m": m,
+        'd': d,
+        'n': n,
+        'n_i': n_i,
+        'm': m,
     }
 
     # save
     if save:
-        fn = Path(f"{ds_name}.npz")
+        fn = Path('preprocessed', f'{ds_name}.npz')
         np.savez_compressed(fn, **out)
-        print(f"Saved preprocessed dataset to {fn}.")
+        print(f'Saved preprocessed dataset to {fn}')
 
     return out
 
