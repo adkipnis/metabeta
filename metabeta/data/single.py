@@ -197,15 +197,23 @@ class Emulator:
         
     def sample(self, d: int, n_i: torch.Tensor, **kwargs,
                ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # pull source
+        self.pull(d)
+        source_is_grouped = 'm' in self.ds
+
+        # check source dims
         n = int(n_i.sum())
         m = len(n_i)
-        source_is_grouped = self.ds['m'] is not None
-
-        # check if source is large enough
-        assert n <= self.ds['n'], 'not enough rows in source'
-        assert d-1 <= self.ds['d'], 'not enough columns in source'
-        if source_is_grouped:
-            assert m <= self.ds['m'], 'not enough groups in source'
+        assert d <= self.ds['d'] + 1, 'not enough columns in source.'
+        if source_is_grouped and m > self.ds['m']:
+            m = self.ds['m']
+            # print(f'Warning: not enough groups in source, setting m={m}')
+        if n > self.ds['n']:
+            n = self.ds['n']
+            while n / m < 5:
+                m -= 1
+            n_i = resampleCounts(n, m)
+            # print(f'Warning: not enough rows in source, setting n={n} and m={m}')
 
         # unpack
         ds = self.ds
