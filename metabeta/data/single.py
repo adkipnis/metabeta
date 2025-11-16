@@ -15,6 +15,7 @@ from metabeta.data.distributions import (
     NegativeBinomial,
 )
 from metabeta.data.interface import RealDataset
+from metabeta.data.sgld import SGLD
 from metabeta import plot
 
 # -----------------------------------------------------------------------------
@@ -63,6 +64,7 @@ def counts2groups(n_i: torch.Tensor) -> torch.Tensor:
     unique = torch.arange(len(n_i))
     groups = torch.repeat_interleave(unique, n_i)
     return groups
+
 
 # -----------------------------------------------------------------------------
 @dataclass
