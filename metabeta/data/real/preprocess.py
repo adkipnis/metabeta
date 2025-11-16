@@ -53,9 +53,10 @@ def demean(df: pd.DataFrame, colname: str):
 
 
 def preprocess(ds_name: str,
-               target_name: str,
+               root: str,
                group_name: str = '',
-               save: bool = False):
+               target_name: str = 'y',
+               save: bool = True):
     # import data
     fn = Path(root, f'{ds_name}.csv')
     assert fn.exists(), f'File {fn} does not exist.'
