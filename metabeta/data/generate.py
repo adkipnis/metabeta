@@ -194,16 +194,13 @@ def generate(
         else:
             design = Synthesizer(toy=cfg.toy)
  
+        # generation loop
         while not okay:
+            attempts += 1
             ds = Generator(prior, design, n_i).sample()
-            okay = ds["okay"]
-            if not okay:
-                attempts += 1
-                if attempts > 5:
-                    okay = True
-                    # print(f"\nWarning: outlier ds with sd(y)={ds['y'].std(0):.2f} and rnv={ds['rnv']:.2f}")
+            okay = ds['okay'] or attempts >= 5
         data += [ds]
-    
+
     # optionally fit mcmc
     if fit:
         print('Starting pymc sampling...')
