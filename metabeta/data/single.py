@@ -36,7 +36,7 @@ def checkBinary(x: torch.Tensor) -> torch.Tensor:
     return is_binary.all(dim=0)
 
 def correlateBinary(v: torch.Tensor, r: float | torch.Tensor):
-    """generate a categorical variable whose correlation with variable v is r"""
+    '''generate a categorical variable whose correlation with variable v is r'''
     v = (v - v.mean()) / v.std()
     z = torch.randn_like(v)
     z = r * v + (1 - r**2) ** 0.5 * z
@@ -107,7 +107,7 @@ class Synthesizer:
         return x
 
     def induceCorrelation(self, x: torch.Tensor) -> torch.Tensor:
-        """sample a correlation matrix and apply it to the continuous design matrix columns"""
+        '''sample a correlation matrix and apply it to the continuous design matrix columns'''
         d = x.shape[1]
         if d < 2:
             return x
@@ -263,29 +263,29 @@ class Generator:
         # outputs
         out = {
             # data
-            "X": X,  # (n, d-1)
-            "y": y,  # (n,)
-            "groups": groups,  # (n,)
+            'X': X,  # (n, d-1)
+            'y': y,  # (n,)
+            'groups': groups,  # (n,)
             # params
-            "ffx": ffx,  # (d,)
-            "rfx": rfx,  # (m, q)
-            "sigmas_rfx": self.prior.sigmas_rfx,  # (q,)
-            "sigma_eps": self.prior.sigma_eps,  # (1,)
+            'ffx': ffx,  # (d,)
+            'rfx': rfx,  # (m, q)
+            'sigmas_rfx': self.prior.sigmas_rfx,  # (q,)
+            'sigma_eps': self.prior.sigma_eps,  # (1,)
             # priors
-            "nu_ffx": self.prior.nu_ffx,  # (d,)
-            "tau_ffx": self.prior.tau_ffx,  # (d,)
-            "tau_rfx": self.prior.tau_rfx,  # (q,)
-            "tau_eps": self.prior.tau_eps,  # (1,)
+            'nu_ffx': self.prior.nu_ffx,  # (d,)
+            'tau_ffx': self.prior.tau_ffx,  # (d,)
+            'tau_rfx': self.prior.tau_rfx,  # (q,)
+            'tau_eps': self.prior.tau_eps,  # (1,)
             # misc
-            "m": torch.tensor(self.m),  # (1,)
-            "n": torch.tensor(n),  # (1,)
-            "n_i": n_i,  # (m,)
-            "d": torch.tensor(self.d),  # (1,)
-            "q": torch.tensor(self.q),  # (1,)
-            "cov_sum": cov_sum,  # (1,)
-            "categorical": checkBinary(X[:, 1:]), # (d-1,)
-            "rnv": rnv,  # (1,)
-            "okay": okay,
+            'm': torch.tensor(m),  # (1,)
+            'n': torch.tensor(n),  # (1,)
+            'n_i': n_i,  # (m,)
+            'd': torch.tensor(self.d),  # (1,)
+            'q': torch.tensor(self.q),  # (1,)
+            'cov_sum': cov_sum,  # (1,)
+            'categorical': checkBinary(X[:, 1:]), # (d-1,)
+            'rnv': rnv,  # (1,)
+            'okay': okay,
         }
         return out
 
@@ -301,11 +301,11 @@ if __name__ == '__main__':
     tau_eps = torch.randn(1).abs()
     tau_rfx = torch.randn(q).abs()
     prior = Prior(nu_ffx, tau_ffx, tau_eps, tau_rfx)
-    
+
     # design
     design = Synthesizer()
     design = Emulator('math')
-    
+
     # generator
     m = 4
     N = 100
