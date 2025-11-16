@@ -186,6 +186,15 @@ class Emulator:
     use_sgld: bool = True
     sgld = SGLD()
 
+    def pull(self, d: int):
+        if self.source == 'all':
+            subset = [ds for ds in datasets if d <= ds['d'] + 1]
+            self.ds = choice(subset)
+        else:
+            path = Path('real', 'preprocessed', f'{self.source}.npz')
+            idx = paths.index(path)
+            self.ds = datasets[idx]
+        
     def sample(self, d: int, n_i: torch.Tensor, **kwargs,
                ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         n = int(n_i.sum())
