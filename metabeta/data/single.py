@@ -235,12 +235,12 @@ class Emulator:
             idx_obs = torch.randperm(len(x))[:n]
             x = x[idx_obs]
 
+        # emulate dataset using SGLD
+        if self.use_sgld:
+            x = self.sgld(x)
+
         # generate groups
         groups = counts2groups(n_i)
-
-        # subsample features
-        idx_feat = torch.randperm(x.shape[1])[:d-1]
-        x = x[:, idx_feat]
 
         # add intercept
         ones = torch.ones_like(x[:, 0:1])
