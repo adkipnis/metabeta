@@ -29,6 +29,14 @@ def rescale(df: pd.DataFrame, colname: str):
     return df
     
 
+def findOutliers(df: pd.DataFrame, threshold: float = 4.):
+    mean = df.mean()
+    std = df.std()
+    z = (df - mean) / std
+    outliers = (z.abs() > threshold).any(axis=1)
+    return outliers
+
+
 def dummify(df: pd.DataFrame, colname: str):
     ref_category = df[colname].mode()[0]
     dummies = pd.get_dummies(df[colname], prefix=colname).astype(int)
