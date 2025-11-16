@@ -67,28 +67,37 @@ def preprocess(ds_name: str,
     df = df_orig.dropna()
 
     # sort and isolate grouping variable
+    groups = n_i = m = None
     if group_name:
         df.sort_values(by=group_name)
         groups = df.pop(group_name)
         groups, _ = pd.factorize(groups)
-        _, n_i = np.unique(groups, return_counts=True)
-        m = n_i.shape[0]
-    else:
-        groups = None
-        n_i = None
-        m = None
-
+        
     # isolate target
     y = df.pop(target_name).to_numpy()
-
-    # mean-center numeric variables
+    
+    # analyze column types
     col_names_num = numerical(df)
+    col_names_cat = categorical(df)
+    
+    # remove outliers
+    outliers = findOutliers(df[col_names_num])
+    df = df[~outliers]
+    if groups is not None:
+        groups = groups[~outliers]
+        _, n_i = np.unique(groups, return_counts=True)
+        m = n_i.shape[0]
+    
+    # scale down
+    for n in col_names_num:
+        df = rescale(df, n)
+    
+    # demean
     means = df[col_names_num].mean().to_numpy()  # type: ignore
     for n in col_names_num:
         df = demean(df, n)
 
     # dummy-code categorical variables
-    col_names_cat = categorical(df)
     for c in col_names_cat:
         df = dummify(df, c)
 
@@ -97,6 +106,7 @@ def preprocess(ds_name: str,
     X = df.to_numpy()
     n, d = X.shape
     R = torch.corrcoef(torch.tensor(X).permute(1, 0))
+    
     out = {
         # data
         'X': X,
