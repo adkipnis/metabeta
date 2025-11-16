@@ -145,7 +145,7 @@ class Synthesizer:
         idx_cat = torch.where(~continuous)[0]
         for i in idx_cat:
             if torch.rand(1) > 0.5 and len(idx_cont):
-                j = choice(idx_cont)
+                j = choice(idx_cont).item()
                 x_cor[:, i] = correlateBinary(x_cor[:, j], R[i, j])
             else:
                 x_cor[:, i] = x[:, i]
