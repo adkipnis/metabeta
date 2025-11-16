@@ -8,10 +8,8 @@ import torch
 from torch import distributions as D
 
 from metabeta.utils import dsFilename, padTensor
-from metabeta.data.single import Prior, Design, Generator
+from metabeta.data.single import Prior, Synthesizer, Emulator, Generator
 from metabeta.data.markov import fitPyMC
-# from metabeta.data.csv import RealDataset
-
 
 # -----------------------------------------------------------------------------
 # config
