@@ -255,6 +255,7 @@ class Generator:
     prior: Prior
     design: Synthesizer | Emulator
     n_i: torch.Tensor # number of observations per group
+    plot: bool = False
 
     def __post_init__(self):
         self.d = self.prior.d # number of ffx
@@ -295,10 +296,11 @@ class Generator:
         cov_sum = cov.sum() - cov[0, 0]
 
         # visualize
-        # plot.dataset(
-        #     torch.cat([y.unsqueeze(-1), X[:, 1:]], dim=-1),
-        #     names=['y'] + [f'x{j}' for j in range(1, self.d)]
-        # )
+        if self.plot:
+            plot.dataset(
+                torch.cat([y.unsqueeze(-1), X[:, 1:]], dim=-1),
+                names=['y'] + [f'x{j}' for j in range(1, self.d)]
+            )
 
         # outputs
         out = {
