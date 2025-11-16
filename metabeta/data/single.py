@@ -44,6 +44,21 @@ def correlateBinary(v: torch.Tensor, r: float | torch.Tensor):
     z = torch.bernoulli(probs)
     return z
 
+def resampleCounts(n: int, m: int, alpha: float = 25.) -> torch.Tensor:
+    p = D.Dirichlet(torch.ones(m) * alpha).sample()
+    n_i = torch.round(p * n).long()
+    diff = n - n_i.sum()
+    if diff > 0:
+        idx = n_i.min(0)[1]
+        n_i[idx] += diff
+    elif diff < 0:
+        idx = n_i.max(0)[1]
+        n_i[idx] += diff
+    if (n_i < 1).any():
+        print('non-positive counts found')
+        return resampleCounts(n, m, alpha)
+    return n_i
+
 def counts2groups(n_i: torch.Tensor) -> torch.Tensor:
     unique = torch.arange(len(n_i))
     groups = torch.repeat_interleave(unique, n_i)
