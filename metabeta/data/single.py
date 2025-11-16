@@ -1,7 +1,6 @@
 # generate a single hierarchical dataset
 from pathlib import Path
 from dataclasses import dataclass
-from random import choice
 import torch
 from torch import distributions as D
 from metabeta.utils import fullCovary
@@ -19,6 +18,10 @@ from metabeta.data.sgld import SGLD
 from metabeta import plot
 
 # -----------------------------------------------------------------------------
+def choice(x: list):
+    idx = torch.randint(len(x), (1,))
+    return x[idx]
+
 def standardize(x: torch.Tensor, dim: int = 0) -> torch.Tensor:
     x = x - x.mean(dim, keepdim=True)
     x = x / x.std(dim, keepdim=True)
