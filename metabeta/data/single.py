@@ -182,12 +182,9 @@ datasets = [RealDataset(source=path).data for path in paths]
 @dataclass
 class Emulator:
     ''' subsample a design matrix and groups from source '''
-    source: str 
-    
-    def __post_init__(self):
-        path = Path("real", f"{self.source}.npz")
-        self.ds = RealDataset(source=path).data
-        # TODO: case: source == 'all'
+    source: str
+    use_sgld: bool = True
+    sgld = SGLD()
 
     def sample(self, d: int, n_i: torch.Tensor, **kwargs,
                ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
