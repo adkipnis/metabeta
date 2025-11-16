@@ -176,6 +176,8 @@ class Synthesizer:
         groups = counts2groups(n_i)
         return x, groups, n_i
 
+paths = list(Path('real', 'preprocessed').glob('*.npz'))
+datasets = [RealDataset(source=path).data for path in paths]
 
 @dataclass
 class Emulator:
