@@ -219,6 +219,10 @@ class Emulator:
         ds = self.ds
         x = ds['X'].clone().float()
 
+        # subsample features
+        idx_feat = torch.randperm(x.shape[1])[:d-1]
+        x = x[:, idx_feat]
+
         # subsample observations
         if source_is_grouped:
             # subsample m groups, get corresponding n_i
