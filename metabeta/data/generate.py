@@ -187,7 +187,13 @@ def generate(
                       tau_ffx[i, :d_i],
                       tau_eps[i],
                       tau_rfx[i, :q_i])
-        design = Design(toy=cfg.toy)
+
+        # setup design matrix sampler
+        if cfg.semi and (seed <= 0 or torch.rand(1) < 0.5):
+            design = Emulator(source=cfg.d_tag, use_sgld=cfg.sgld)
+        else:
+            design = Synthesizer(toy=cfg.toy)
+ 
         while not okay:
             ds = Generator(prior, design, n_i).sample()
             okay = ds["okay"]
