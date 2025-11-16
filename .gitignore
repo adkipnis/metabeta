@@ -5,6 +5,6 @@ archive
 outputs
 metabeta.egg-info
 *.csv
-*.rdata
 *.npz
+*.rdata
 *.Rhistory
