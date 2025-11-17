@@ -149,6 +149,9 @@ def preprocess(ds_name: str,
     
     # remove rows with missing values
     df = dropPatchyRows(df)
+    
+    # isolate target
+    y = df.pop(target_name).to_numpy()
 
     # sort and isolate grouping variable
     groups = n_i = m = None
