@@ -44,6 +44,29 @@ def dropPatchyRows(df: pd.DataFrame):
     return df
 
 
+def potentialGroups(df: pd.DataFrame,
+                    threshold: float = 0.2, minimum: int = 5):
+    # detect columns that may contain a grouping variable
+    assert 0. < threshold < 1., 'threshold must be in (0,1)'
+    # get non-continuous columns
+    cols = df.select_dtypes(exclude=['float']).columns
+    
+    # exclude blacklisted columns
+    blacklisted = cols.str.contains('|'.join(BLACKLIST))
+    cols = cols[~blacklisted]
+    
+    # quick escape
+    if len(cols) == 0:
+        return cols
+    
+    # check if a group has enough but not too many unique values
+    counts = df[cols].nunique()
+    enough = (counts > minimum)
+    too_many = (counts > threshold * len(df))
+    mask = (enough * ~too_many)
+    return cols[mask]
+
+
 def categorical(df: pd.DataFrame):
     cat_cols = df.select_dtypes(include=['object', 'category']).columns
     return cat_cols
