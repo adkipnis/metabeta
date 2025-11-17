@@ -136,6 +136,11 @@ def preprocess(ds_name: str,
     if len(df_orig) > 500_000:
         print('--- Fatal: Dataset has more than 500k rows, skipping.')
         return
+    
+    # put column names to lower case
+    df_orig.columns = df_orig.columns.str.lower()
+    df = df_orig
+    
 
     # remove missing values
     # TODO: check for offending columns and optionally remove them first
