@@ -34,6 +34,16 @@ def dropPatchyColumns(df: pd.DataFrame, threshold: float = 0.25):
     return df
 
 
+def dropPatchyRows(df: pd.DataFrame):
+    # drop rows with missing values
+    df = df.replace(-999, None)
+    missing = df.drop(columns='y').isnull().any(axis=1)
+    if missing.mean() > 0.1:
+        print(f'--- Warning: {missing.mean() * 100:.2f}% patchy rows.')
+    df = df[~missing]
+    return df
+
+
 def categorical(df: pd.DataFrame):
     cat_cols = df.select_dtypes(include=['object', 'category']).columns
     return cat_cols
