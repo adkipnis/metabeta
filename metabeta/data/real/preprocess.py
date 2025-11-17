@@ -88,7 +88,6 @@ def rescale(col: pd.Series):
     return x / scale_factor
     
 
-def findOutliers(df: pd.DataFrame, threshold: float = 4.):
 def conditionalCenter(col: pd.Series, threshold: float = 0.25):
     # center column if less than {threshold} of its entries are zero
     zero_count = (col == 0).sum()
@@ -97,10 +96,14 @@ def conditionalCenter(col: pd.Series, threshold: float = 0.25):
     return col
 
 
+def findOutliers(df: pd.DataFrame, threshold: float = 4.0):
+    # detect values that are more than {threshold} SDs away from the mean
     mean = df.mean()
     std = df.std()
     z = (df - mean) / std
     outliers = (z.abs() > threshold).any(axis=1)
+    if outliers.sum() / len(df) > 0.1:
+        print(f'--- Warning: Removing {outliers.sum()} outliers.')
     return outliers
 
 
