@@ -215,7 +215,7 @@ def generate(
 # =============================================================================
 if __name__ == '__main__':
     # init outout directory
-    os.makedirs(Path('..', 'outputs', 'data'), exist_ok=True)
+    Path('..', 'outputs', 'data').mkdir(parents=True, exist_ok=True)
 
     # setup config
     cfg = setup()
