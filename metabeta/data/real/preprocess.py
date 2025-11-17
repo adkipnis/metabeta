@@ -131,6 +131,11 @@ def preprocess(ds_name: str,
     fn = Path(root, 'parquet', f'{ds_name}.parquet')
     assert fn.exists(), f'File {fn} does not exist.'
     df_orig = pd.read_parquet(fn)
+    
+    # discard gigantic datasets
+    if len(df_orig) > 500_000:
+        print('--- Fatal: Dataset has more than 500k rows, skipping.')
+        return
 
     # remove missing values
     # TODO: check for offending columns and optionally remove them first
