@@ -76,15 +76,16 @@ def numerical(df: pd.DataFrame):
     num_cols = df.select_dtypes(include=[np.number]).columns
     return num_cols
 
-def rescale(df: pd.DataFrame, colname: str):
-    x = df[colname].values.astype(float)
+
+def rescale(col: pd.Series):
+    # scale down columns with very large values
+    x = col.values.astype(float)
     max_abs = np.max(np.abs(x))
     scale_factor = 1    
     if max_abs > 1000:
         order = int(np.floor(np.log10(max_abs))) - 2
         scale_factor = 10 ** order
-    df[colname] = x / scale_factor
-    return df
+    return x / scale_factor
     
 
 def findOutliers(df: pd.DataFrame, threshold: float = 4.):
