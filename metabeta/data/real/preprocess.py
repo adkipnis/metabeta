@@ -89,6 +89,14 @@ def rescale(col: pd.Series):
     
 
 def findOutliers(df: pd.DataFrame, threshold: float = 4.):
+def conditionalCenter(col: pd.Series, threshold: float = 0.25):
+    # center column if less than {threshold} of its entries are zero
+    zero_count = (col == 0).sum()
+    if zero_count < len(col) * threshold:
+        col = col - col.mean()
+    return col
+
+
     mean = df.mean()
     std = df.std()
     z = (df - mean) / std
@@ -102,12 +110,6 @@ def dummify(df: pd.DataFrame, colname: str):
     dummies = dummies.drop(f'{colname}_{ref_category}', axis=1)
     df = pd.concat([df, dummies], axis=1)
     df = df.drop(colname, axis=1)
-    return df
-
-
-def demean(df: pd.DataFrame, colname: str):
-    df = df.copy()
-    df[colname] -= df[colname].mean()
     return df
 
 
