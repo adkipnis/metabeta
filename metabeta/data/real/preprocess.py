@@ -23,6 +23,17 @@ def dropConstantColumns(df: pd.DataFrame, threshold: float = 0.98) -> pd.DataFra
     return df.drop(columns=bad)
 
 
+def dropPatchyColumns(df: pd.DataFrame, threshold: float = 0.25):
+    # drop columns with at least {threshold} missing values
+    missing = df.drop(columns='y').isnull().mean()
+    offenders = missing[missing > threshold].index
+    if len(offenders):
+        for offender in offenders:
+            print(f'--- Warning: Removing "{offender}" due to missing {missing[offender]*100:.2f}% entries.')
+        df = df.drop(columns=offenders)
+    return df
+
+
 def categorical(df: pd.DataFrame):
     cat_cols = df.select_dtypes(include=['object', 'category']).columns
     return cat_cols
