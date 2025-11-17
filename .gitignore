@@ -4,6 +4,7 @@ __pycache__
 archive
 outputs
 metabeta.egg-info
+raw
 *.csv
 *.npz
 *.rdata
