@@ -1,4 +1,6 @@
 library(rstudioapi)
+library(fs)
+library(arrow)
 
 # helpers
 load.df <- function(fname){
@@ -17,11 +19,11 @@ rename <- function(df, old,  new){
 # get cwd
 script_path <- dirname(getActiveDocumentContext()$path)
 setwd(script_path)
-dir.create("csv", showWarnings = F)
+dir.create("parquet", showWarnings = F)
 
 # list all .rdata files
 fnames <- list.files(
-  path = paste0(script_dir, '/raw'),
+  path = path(script_path, 'raw'),
   pattern = "\\.rdata$",
   full.names = T,
   ignore.case = T
@@ -35,9 +37,9 @@ for (fname in fnames){
   df <- load.df(fname)
   if(nrow(df) < 50) next
   df <- rename(df, colnames(df)[1], 'y')
-  outname <- sub("\\.rdata$", ".csv", fname, ignore.case = T)
-  outname <- sub("raw", "csv", outname)
-  write.csv(df, outname, row.names = F)
+  outname <- sub("\\.rdata$", ".parquet", fname, ignore.case = T)
+  outname <- sub("raw", "parquet", outname)
+  write_parquet(df, outname)
   print(paste('Saved to', outname))
 }
 
