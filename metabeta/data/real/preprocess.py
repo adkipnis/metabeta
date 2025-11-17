@@ -125,11 +125,12 @@ def preprocess(ds_name: str,
                root: str,
                group_name: str = '',
                target_name: str = 'y',
+               partition: str = 'train',
                save: bool = True):
     # import data
-    fn = Path(root, f'{ds_name}.csv')
+    fn = Path(root, 'parquet', f'{ds_name}.parquet')
     assert fn.exists(), f'File {fn} does not exist.'
-    df_orig = pd.read_csv(fn)
+    df_orig = pd.read_parquet(fn)
 
     # remove missing values
     # TODO: check for offending columns and optionally remove them first
@@ -196,31 +197,34 @@ def preprocess(ds_name: str,
 
     # save
     if save:
-        fn = Path('preprocessed', f'{ds_name}.npz')
+        fn = Path('preprocessed', partition, f'{ds_name}.npz')
         np.savez_compressed(fn, **out)
-        print(f'Saved preprocessed dataset to {fn}')
+        print(f'Saved to {fn}')
 
     return out
 
 
-def batchprocess(root: str, group_name: str = ''):
-    paths = Path(root).glob("*.csv")
+def batchprocess(root: str, group_name: str = '', partition: str = 'train'):
+    paths = Path(root, 'parquet').glob("*.parquet")
     names = sorted([p.stem for p in paths])
-    print(f'\nProcessing {len(names)} csv files from {root}...')
+    print(f'\nProcessing {len(names)} datasets from {root}...')
     for name in names:
-        preprocess(name, root, group_name)
+        preprocess(name, root, group_name=group_name, partition=partition)
 
 
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
     # init preprocessed directory
-    Path('preprocessed').mkdir(parents=True, exist_ok=True)
+    Path('preprocessed', 'train').mkdir(parents=True, exist_ok=True)
+    Path('preprocessed', 'test').mkdir(parents=True, exist_ok=True)
     
     # r-package datasets
-    batchprocess('from-r', group_name='group')
+    batchprocess('from-r', partition='test', group_name='group')
     
     # srm datasets
-    batchprocess('srm')
+    batchprocess('srm', partition='train')
     
+    # pmlb datasets
+    batchprocess('pmlb', partition='train')
     
 
