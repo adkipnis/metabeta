@@ -3,6 +3,9 @@ import pandas as pd
 import numpy as np
 import torch
 
+BLACKLIST = 'year age height size n_ num_ number max min attempts begin end name'.split(' ')
+GREENLIST = 'country state school education class industry occupation race sport brand genre color weekday date'.split(' ')
+
 
 def removeString(this: list, string: str):
     out = list(filter(lambda x: x != string, this))
