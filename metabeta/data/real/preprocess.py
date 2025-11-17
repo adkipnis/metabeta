@@ -179,6 +179,9 @@ def preprocess(ds_name: str,
     # remove outliers
     outliers = findOutliers(df[col_names_num])
     df = df[~outliers]
+    y = y[~outliers]
+    
+    # optionally update group objects
     if groups is not None:
         groups = groups[~outliers]
         _, n_i = np.unique(groups, return_counts=True)
