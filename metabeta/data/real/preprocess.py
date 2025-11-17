@@ -195,15 +195,19 @@ def preprocess(ds_name: str,
     df[col_names_num] = df[col_names_num].apply(conditionalCenter)
 
     # dummy-code categorical variables
-    for c in col_names_cat:
-        df = dummify(df, c)
+    for col in col_names_cat:
+        df = dummify(df, col)
+        
+    # discard datasets that are wider than long
+    if df.shape[0] < df.shape[1]:
+        print('--- Fatal: Dataset has more columns than rows, skipping.')
+        return
 
     # finalize
     col_names_final = df.columns
     X = df.to_numpy()
     n, d = X.shape
     R = torch.corrcoef(torch.tensor(X).permute(1, 0))
-    
     out = {
         # data
         'X': X,
