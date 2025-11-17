@@ -153,16 +153,25 @@ def preprocess(ds_name: str,
     # isolate target
     y = df.pop(target_name).to_numpy()
 
+    # detect potential grouping variables
+    if not group_name:
+        potential = potentialGroups(df)
+        potential = [p for p in potential if p in GREENLIST]
+        if len(potential):
+            group_name = potential[0]
+            print(f'--- Note: Detected grouping variable "{group_name}".')
+            if len(potential) > 1:
+                print(f'--- Warning: Removing other grouping variables {potential[1:]}.')
+                for p in potential[1:]:
+                    df.pop(p)
+        
     # sort and isolate grouping variable
     groups = n_i = m = None
     if group_name:
         df.sort_values(by=group_name)
         groups = df.pop(group_name)
         groups, _ = pd.factorize(groups)
-        
-    # isolate target
-    y = df.pop(target_name).to_numpy()
-    
+            
     # analyze column types
     col_names_num = numerical(df)
     col_names_cat = categorical(df)
