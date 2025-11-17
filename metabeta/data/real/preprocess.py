@@ -188,13 +188,11 @@ def preprocess(ds_name: str,
         m = n_i.shape[0]
     
     # scale down
-    for n in col_names_num:
-        df = rescale(df, n)
+    df[col_names_num] = df[col_names_num].apply(rescale)
     
     # demean
     means = df[col_names_num].mean().to_numpy()  # type: ignore
-    for n in col_names_num:
-        df = demean(df, n)
+    df[col_names_num] = df[col_names_num].apply(conditionalCenter)
 
     # dummy-code categorical variables
     for c in col_names_cat:
