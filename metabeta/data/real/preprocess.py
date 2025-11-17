@@ -107,7 +107,12 @@ def findOutliers(df: pd.DataFrame, threshold: float = 4.0):
     return outliers
 
 
-def dummify(df: pd.DataFrame, colname: str):
+def dummify(df: pd.DataFrame, colname: str, max_columns: int = 10):
+    # make dummy variables out of categorical columns
+    unique = df[colname].nunique()
+    if unique > max_columns:
+        print(f'--- Warning: Removing category {colname} due to {unique} factors.')
+        return df.drop(colname, axis=1)
     ref_category = df[colname].mode()[0]
     dummies = pd.get_dummies(df[colname], prefix=colname).astype(int)
     dummies = dummies.drop(f'{colname}_{ref_category}', axis=1)
