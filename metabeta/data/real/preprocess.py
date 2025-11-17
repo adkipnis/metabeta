@@ -215,10 +215,9 @@ def preprocess(ds_name: str,
         'groups': groups,
         'cor': R,
         # names
-        'y_name': target_name,
-        'X_names': col_names_final,
-        'numeric_names': col_names_num,
-        'original_means': means,
+        'columns': col_names_final,
+        'numeric': col_names_num,
+        'means': means,
         # dims
         'd': d,
         'n': n,
@@ -258,4 +257,3 @@ if __name__ == '__main__':
     # pmlb datasets
     batchprocess('pmlb', partition='train')
     
-
