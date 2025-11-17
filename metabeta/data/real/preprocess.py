@@ -141,10 +141,14 @@ def preprocess(ds_name: str,
     df_orig.columns = df_orig.columns.str.lower()
     df = df_orig
     
+    # remove columns with more than 98% constant values
+    df = dropConstantColumns(df)
 
-    # remove missing values
-    # TODO: check for offending columns and optionally remove them first
-    df = df_orig.dropna()
+    # remove columns with more than 25% missing values
+    df = dropPatchyColumns(df)
+    
+    # remove rows with missing values
+    df = dropPatchyRows(df)
 
     # sort and isolate grouping variable
     groups = n_i = m = None
