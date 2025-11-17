@@ -1,3 +1,5 @@
+library(rstudioapi)
+
 # helpers
 load.df <- function(fname){
   tmp <- new.env()
@@ -13,16 +15,20 @@ rename <- function(df, old,  new){
 
 # ------------------------------------------------------------------------------
 # get cwd
-script_path <- normalizePath(sys.frame(1)$ofile)
-script_dir <- dirname(script_path)
+script_path <- dirname(getActiveDocumentContext()$path)
+setwd(script_path)
+dir.create("csv", showWarnings = F)
 
 # list all .rdata files
 fnames <- list.files(
-  path = script_dir,
+  path = paste0(script_dir, '/raw'),
   pattern = "\\.rdata$",
   full.names = T,
   ignore.case = T
 )
+if (length(fnames) == 0){
+  print('Warning: No rdata files found!')
+}
 
 # load each, rename target and save as csv
 for (fname in fnames){
@@ -30,7 +36,8 @@ for (fname in fnames){
   if(nrow(df) < 50) next
   df <- rename(df, colnames(df)[1], 'y')
   outname <- sub("\\.rdata$", ".csv", fname, ignore.case = T)
+  outname <- sub("raw", "csv", outname)
   write.csv(df, outname, row.names = F)
-  print(paste('Saved df to', outname))
+  print(paste('Saved to', outname))
 }
 
