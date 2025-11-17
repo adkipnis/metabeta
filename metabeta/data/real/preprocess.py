@@ -12,6 +12,17 @@ def removeString(this: list, string: str):
     return np.array(out)
 
 
+def dropConstantColumns(df: pd.DataFrame, threshold: float = 0.98) -> pd.DataFrame:
+    # drop columns with at least {threshold} constant values
+    bad = []
+    for col in df.columns.drop('y'):
+        counts = df[col].value_counts(normalize=True)
+        if counts.max() > threshold:
+            bad.append(col)
+            print(f'--- Warning: Removing "{col}" due to mostly constant entries.')
+    return df.drop(columns=bad)
+
+
 def categorical(df: pd.DataFrame):
     cat_cols = df.select_dtypes(include=['object', 'category']).columns
     return cat_cols
