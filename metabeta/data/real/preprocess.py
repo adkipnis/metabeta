@@ -48,22 +48,23 @@ def potentialGroups(df: pd.DataFrame,
                     threshold: float = 0.2, minimum: int = 5):
     # detect columns that may contain a grouping variable
     assert 0. < threshold < 1., 'threshold must be in (0,1)'
+
     # get non-continuous columns
     cols = df.select_dtypes(exclude=['float']).columns
-    
+
     # exclude blacklisted columns
     blacklisted = cols.str.contains('|'.join(BLACKLIST))
     cols = cols[~blacklisted]
-    
+
     # quick escape
     if len(cols) == 0:
         return cols
-    
+
     # check if a group has enough but not too many unique values
     counts = df[cols].nunique()
     enough = (counts > minimum)
-    too_many = (counts > threshold * len(df))
-    mask = (enough * ~too_many)
+    not_too_many = (counts <= threshold * len(df))
+    mask = (enough * not_too_many)
     return cols[mask]
 
 
@@ -81,12 +82,12 @@ def rescale(col: pd.Series):
     # scale down columns with very large values
     x = col.values.astype(float)
     max_abs = np.max(np.abs(x))
-    scale_factor = 1    
+    scale_factor = 1.
     if max_abs > 1000:
         order = int(np.floor(np.log10(max_abs))) - 2
-        scale_factor = 10 ** order
+        scale_factor = 10. ** order
     return x / scale_factor
-    
+
 
 def conditionalCenter(col: pd.Series, threshold: float = 0.25):
     # center column if less than {threshold} of its entries are zero
@@ -131,25 +132,25 @@ def preprocess(ds_name: str,
     fn = Path(root, 'parquet', f'{ds_name}.parquet')
     assert fn.exists(), f'File {fn} does not exist.'
     df_orig = pd.read_parquet(fn)
-    
+
     # discard gigantic datasets
     if len(df_orig) > 500_000:
         print('--- Fatal: Dataset has more than 500k rows, skipping.')
         return
-    
+
     # put column names to lower case
     df_orig.columns = df_orig.columns.str.lower()
     df = df_orig
-    
+
     # remove columns with more than 98% constant values
     df = dropConstantColumns(df)
 
     # remove columns with more than 25% missing values
     df = dropPatchyColumns(df)
-    
+
     # remove rows with missing values
     df = dropPatchyRows(df)
-    
+
     # isolate target
     y = df.pop(target_name).to_numpy()
 
@@ -164,32 +165,32 @@ def preprocess(ds_name: str,
                 print(f'--- Warning: Removing other grouping variables {potential[1:]}.')
                 for p in potential[1:]:
                     df.pop(p)
-        
+
     # sort and isolate grouping variable
     groups = n_i = m = None
     if group_name:
         df.sort_values(by=group_name)
         groups = df.pop(group_name)
         groups, _ = pd.factorize(groups)
-            
+
     # analyze column types
     col_names_num = numerical(df)
     col_names_cat = categorical(df)
-    
+
     # remove outliers
     outliers = findOutliers(df[col_names_num])
     df = df[~outliers]
     y = y[~outliers]
-    
+
     # optionally update group objects
     if groups is not None:
         groups = groups[~outliers]
         _, n_i = np.unique(groups, return_counts=True)
         m = n_i.shape[0]
-    
+
     # scale down
     df[col_names_num] = df[col_names_num].apply(rescale)
-    
+
     # demean
     means = df[col_names_num].mean().to_numpy()  # type: ignore
     df[col_names_num] = df[col_names_num].apply(conditionalCenter)
@@ -197,7 +198,7 @@ def preprocess(ds_name: str,
     # dummy-code categorical variables
     for col in col_names_cat:
         df = dummify(df, col)
-        
+
     # discard datasets that are wider than long
     if df.shape[0] < df.shape[1]:
         print('--- Fatal: Dataset has more columns than rows, skipping.')
@@ -247,13 +248,16 @@ if __name__ == '__main__':
     # init preprocessed directory
     Path('preprocessed', 'train').mkdir(parents=True, exist_ok=True)
     Path('preprocessed', 'test').mkdir(parents=True, exist_ok=True)
-    
+
     # r-package datasets
     batchprocess('from-r', partition='test', group_name='group')
-    
+
     # srm datasets
     batchprocess('srm', partition='train')
-    
+
     # pmlb datasets
     batchprocess('pmlb', partition='train')
-    
+
+    # # automl datasets (skipped, too many issues)
+    # batchprocess('automl', partition='train')
+
