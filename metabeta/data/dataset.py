@@ -13,8 +13,8 @@ def split(
     shape: list[int],
     max_num: int | None = None,
 ) -> torch.Tensor:
-    """splits the observations dimension of long into
-    groups and padded observations per group"""
+    '''splits the observations dimension of long into
+    groups and padded observations per group'''
     max_num = shape[1]
     if shape[-1] != long.shape[-1]:
         new_shape = (*long.shape[:-1], shape[-1])
@@ -26,8 +26,8 @@ def split(
     return out
 
 
-def autoPad(batch: list[dict[str, torch.Tensor]], key: str, device: str | torch.device = "cpu"):
-    """automatically pad a tensor with zeros depending on its dim"""
+def autoPad(batch: list[dict[str, torch.Tensor]], key: str, device: str | torch.device = 'cpu'):
+    '''automatically pad a tensor with zeros depending on its dim'''
     get_shape = None
     out = []
     dim = batch[0][key].dim()
@@ -55,13 +55,13 @@ def autoPad(batch: list[dict[str, torch.Tensor]], key: str, device: str | torch.
     return torch.stack(out).to(device)
 
 
-def getCollater(autopad: bool = False, device: str | torch.device = "cpu"):
+def getCollater(autopad: bool = False, device: str | torch.device = 'cpu'):
     if autopad:
 
         def collate_fn(batch: list[dict[str, torch.Tensor]]):  # type: ignore
             keys = batch[0].keys()
             return {k: autoPad(batch, k, device) for k in keys}
-    elif device != "cpu":
+    elif device != 'cpu':
 
         def collate_fn(batch: list[dict[str, torch.Tensor]]):
             batch_dict = default_collate(batch)
@@ -78,7 +78,7 @@ def getDataLoader(
     max_d: int = 0,
     max_q: int = 0,
     autopad: bool = False,
-    device: str | torch.device = "cpu",
+    device: str | torch.device = 'cpu',
 ) -> DataLoader:
     collate_fn = getCollater(autopad, device)
     ds = LMDataset(filename, max_d=max_d, max_q=max_q, permute=permute)
@@ -98,15 +98,15 @@ class LMDataset(Dataset):
     ):
         # load and store as tensors
         assert path.exists(), (
-            f"File {path} does not exist, you must generate it first using generate.py"
+            f'File {path} does not exist, you must generate it first using generate.py'
         )
         data = np.load(path)
         data = {key: torch.from_numpy(data[key]) for key in data.files}
 
         # save properties
-        self.len = data["y"].shape[0]
-        self.max_n = int(data["n"].max())
-        self.max_d = int(max(data["d"].max(), torch.tensor(max_d)))
+        self.len = data['y'].shape[0]
+        self.max_n = int(data['n'].max())
+        self.max_d = int(max(data['d'].max(), torch.tensor(max_d)))
         self.max_r = int((self.max_d - 1) * (self.max_d - 2) / 2)
 
         # precompute permutations
@@ -114,21 +114,21 @@ class LMDataset(Dataset):
         if permute:
             perm = [getPermutation(self.max_d) for _ in range(self.len)]
             unperm = [inversePermutation(p) for p in perm]
-            data["perm"] = torch.stack(perm)
-            data["unperm"] = torch.stack(unperm)
+            data['perm'] = torch.stack(perm)
+            data['unperm'] = torch.stack(unperm)
         else:
-            data["perm"] = torch.arange(0, self.max_d).unsqueeze(0).expand(self.len, -1)
-            data["unperm"] = data["perm"]
+            data['perm'] = torch.arange(0, self.max_d).unsqueeze(0).expand(self.len, -1)
+            data['unperm'] = data['perm']
 
         # mfx extras
-        self.is_mfx = "rfx" in data
+        self.is_mfx = 'rfx' in data
         if self.is_mfx:
-            self.max_n_i = int(data["n_i"].max())
-            self.max_m = int(data["m"].max())
-            self.max_q = int(max(data["q"].max(), torch.tensor(max_q)))
-            data["rfx"] = padTensor(data["rfx"], (self.len, self.max_m, self.max_d))
-            data["sigmas_rfx"] = padTensor(data["sigmas_rfx"], (self.len, self.max_d))
-            data["tau_rfx"] = padTensor(data["tau_rfx"], (self.len, self.max_d))
+            self.max_n_i = int(data['n_i'].max())
+            self.max_m = int(data['m'].max())
+            self.max_q = int(max(data['q'].max(), torch.tensor(max_q)))
+            data['rfx'] = padTensor(data['rfx'], (self.len, self.max_m, self.max_d))
+            data['sigmas_rfx'] = padTensor(data['sigmas_rfx'], (self.len, self.max_d))
+            data['tau_rfx'] = padTensor(data['tau_rfx'], (self.len, self.max_d))
 
         # preprocess for faster access
         self.data = [self.preprocess(data, i) for i in range(len(self))]
@@ -143,36 +143,36 @@ class LMDataset(Dataset):
         self, data: dict[str, torch.Tensor], i: int
     ) -> dict[str, torch.Tensor]:
         # sizes
-        d = data["d"][i]
-        q = data["q"][i]
-        n = data["n"][i]
-        m = data["m"][i]
-        n_i = data["n_i"][i, :m]
+        d = data['d'][i]
+        q = data['q'][i]
+        n = data['n'][i]
+        m = data['m'][i]
+        n_i = data['n_i'][i, :m]
 
         # inputs
-        y = data["y"][i, :n]
-        X = data["X"][i, :n]
+        y = data['y'][i, :n]
+        X = data['X'][i, :n]
         Z = X.clone()
         Z[:, q:] = 0
         non_empty = torch.ones(self.max_d, dtype=torch.bool)
         non_empty[self.max_q :] = False
 
         # parameters
-        ffx = data["ffx"][i]
-        sigma_eps = data["sigma_eps"][i]
-        sigmas_rfx = data["sigmas_rfx"][i]
-        rfx = data["rfx"][i, :m]
-        cov_sum = data["cov_sum"][i]
+        ffx = data['ffx'][i]
+        sigma_eps = data['sigma_eps'][i]
+        sigmas_rfx = data['sigmas_rfx'][i]
+        rfx = data['rfx'][i, :m]
+        cov_sum = data['cov_sum'][i]
 
         # priors
-        nu_ffx = data["nu_ffx"][i]
-        tau_ffx = data["tau_ffx"][i]
-        tau_eps = data["tau_eps"][i]
-        tau_rfx = data["tau_rfx"][i]
+        nu_ffx = data['nu_ffx'][i]
+        tau_ffx = data['tau_ffx'][i]
+        tau_eps = data['tau_eps'][i]
+        tau_rfx = data['tau_rfx'][i]
 
         # optinally permute
-        perm = data["perm"][i]
-        unperm = data["unperm"][i]
+        perm = data['perm'][i]
+        unperm = data['unperm'][i]
         if self.permute:
             X = X[..., perm]
             Z = Z[..., perm]
@@ -205,7 +205,7 @@ class LMDataset(Dataset):
         mask_q = torch.ones(self.max_d, dtype=torch.bool)
         mask_q[q:] = False
         mask_q = mask_q[rfx_mask]
-        mask_c = data["categorical"][i]
+        mask_c = data['categorical'][i]
 
         # outputs
         out = {
@@ -230,17 +230,12 @@ class LMDataset(Dataset):
             }
 
         # optionally include mcmc posterior
-        if "mcmc_ffx" in data:
-            m_ffx = data["mcmc_ffx"][i]
-            m_sigma_eps = data["mcmc_sigma_eps"][i]
-            m_sigmas_rfx = data["mcmc_sigmas_rfx"][i]
-            m_rfx = data["mcmc_rfx"][i].permute(1, 0, 2)
-            div_count = data["mcmc_divergences"][i]
-
-            # take the chain with the fewest outliers
-            m_tensors = [m_ffx, m_sigma_eps, m_sigmas_rfx, m_rfx]
-            m_tensors = findBestChain(m_tensors, div_count)
-            m_ffx, m_sigma_eps, m_sigmas_rfx, m_rfx = m_tensors
+        if 'nuts_ffx' in data:
+            m_ffx = data['nuts_ffx'][i]
+            m_sigma_eps = data['nuts_sigma_eps'][i]
+            m_sigmas_rfx = data['nuts_sigmas_rfx'][i]
+            m_rfx = data['nuts_rfx'][i].permute(1, 0, 2)
+            div_count = data['nuts_divergences'][i]
 
             if self.permute:
                 mc_samples = m_ffx.shape[-1]
@@ -249,33 +244,51 @@ class LMDataset(Dataset):
                 m_sigmas_rfx = m_sigmas_rfx[perm][rfx_mask]
                 m_rfx = padTensor(m_rfx, (self.max_m, self.max_d, mc_samples))
                 m_rfx = m_rfx[perm][:, rfx_mask]
-            out["mcmc_global"] = torch.cat([m_ffx, m_sigmas_rfx, m_sigma_eps])
-            out["mcmc_local"] = m_rfx
+            out['nuts_global'] = torch.cat([m_ffx, m_sigmas_rfx, m_sigma_eps])
+            out['nuts_local'] = m_rfx
+            out['nuts_div_count'] = div_count
+            
+        # optionally include advi posterior
+        if 'advi_ffx' in data:
+            a_ffx = data['advi_ffx'][i]
+            a_sigma_eps = data['advi_sigma_eps'][i]
+            a_sigmas_rfx = data['advi_sigmas_rfx'][i]
+            a_rfx = data['advi_rfx'][i].permute(1, 0, 2)
+
+            if self.permute:
+                advi_samples = a_ffx.shape[-1]
+                a_ffx = a_ffx[perm]
+                a_sigmas_rfx = padTensor(a_sigmas_rfx, (self.max_d, advi_samples))
+                a_sigmas_rfx = a_sigmas_rfx[perm][rfx_mask]
+                a_rfx = padTensor(a_rfx, (self.max_m, self.max_d, advi_samples))
+                a_rfx = a_rfx[perm][:, rfx_mask]
+            out['advi_global'] = torch.cat([a_ffx, a_sigmas_rfx, a_sigma_eps])
+            out['advi_local'] = a_rfx
 
         # unfold to 4d and
         out = self.unfold(out)
-        out["Z"] = out["Z"][..., rfx_mask]
+        out['Z'] = out['Z'][..., rfx_mask]
         return out
 
     def unfold(self, item: dict[str, torch.Tensor]):
-        """split dimension for n (observations)
-        into m (groups) and n_i (obs. per group)"""
-        m = int(item["m"])
+        '''split dimension for n (observations)
+        into m (groups) and n_i (obs. per group)'''
+        m = int(item['m'])
         n = self.max_n_i
         d = self.max_d
-        counts = item["n_i"]
+        counts = item['n_i']
 
         # stacked arrays
-        y = split(item["y"], counts, shape=[m, n])
-        X = split(item["X"], counts, shape=[m, n, d])
-        Z = split(item["Z"], counts, shape=[m, n, d])
+        y = split(item['y'], counts, shape=[m, n])
+        X = split(item['X'], counts, shape=[m, n, d])
+        Z = split(item['Z'], counts, shape=[m, n, d])
         mask_n = y != 0.0
-        item.update({"y": y, "X": X, "Z": Z, "mask_n": mask_n})
+        item.update({'y': y, 'X': X, 'Z': Z, 'mask_n': mask_n})
         return item
 
 
 # =============================================================================
-if __name__ == "__main__":
+if __name__ == '__main__':
     import time
     from metabeta.utils import dsFilename
 
@@ -283,7 +296,7 @@ if __name__ == "__main__":
         start = time.perf_counter()
         out = fn(*args, **kwargs)
         end = time.perf_counter()
-        print(f"{end - start:.2f}s")
+        print(f'{end - start:.2f}s')
         return out
 
     # mixed effects example
