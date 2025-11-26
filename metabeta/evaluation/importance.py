@@ -21,7 +21,7 @@ def getImportanceWeights(
     n_eff = w.sum(-1).square() / (w.square().sum(-1) + 1e-12)
     sample_efficiency = n_eff / w.shape[-1]
 
-    return {"weights": w, "n_eff": n_eff, "sample_efficiency": sample_efficiency}
+    return {'weights': w, 'n_eff': n_eff, 'sample_efficiency': sample_efficiency}
 
 
 # =============================================================================
@@ -29,20 +29,20 @@ def getImportanceWeights(
 # -----------------------------------------------------------------------------
 class ImportanceLocal:
     def __init__(self, data: dict[str, torch.Tensor]):
-        self.nu_ffx = data["nu_ffx"]
-        self.tau_ffx = data["tau_ffx"]
-        self.tau_rfx = data["tau_rfx"]
-        self.tau_eps = data["tau_eps"]
-        self.mask_d = data["mask_d"]
-        self.mask_n = data["mask_n"]
-        self.mask_m = data["mask_m"]
-        self.y = data["y"].unsqueeze(-1)
-        self.X = data["X"]
-        self.Z = data["Z"]
-        self.n = data["n"].unsqueeze(-1)
-        self.n_i = data["n_i"].unsqueeze(-1)
-        self.q = data["q"].unsqueeze(1)
-        self.max_d = data["d"].max()
+        self.nu_ffx = data['nu_ffx']
+        self.tau_ffx = data['tau_ffx']
+        self.tau_rfx = data['tau_rfx']
+        self.tau_eps = data['tau_eps']
+        self.mask_d = data['mask_d']
+        self.mask_n = data['mask_n']
+        self.mask_m = data['mask_m']
+        self.y = data['y'].unsqueeze(-1)
+        self.X = data['X']
+        self.Z = data['Z']
+        self.n = data['n'].unsqueeze(-1)
+        self.n_i = data['n_i'].unsqueeze(-1)
+        self.q = data['q'].unsqueeze(1)
+        self.max_d = data['d'].max()
 
     def logPriorBeta(self, beta: torch.Tensor) -> torch.Tensor:
         # beta: (b, d)
@@ -71,8 +71,8 @@ class ImportanceLocal:
         rfx: torch.Tensor,  # (b, m, q, s)
     ) -> torch.Tensor:
         # conditional likelihood for rfx IS
-        mu_g = torch.einsum("bmnd,bd->bmn", self.X, ffx).unsqueeze(-1)
-        mu_l = torch.einsum("bmnd,bmds->bmns", self.Z, rfx)
+        mu_g = torch.einsum('bmnd,bd->bmn', self.X, ffx).unsqueeze(-1)
+        mu_l = torch.einsum('bmnd,bmds->bmns', self.Z, rfx)
         eps = self.y - mu_g - mu_l  # (b, m, n, s)
         ssr = eps.square().sum(dim=2)  # (b, m, s)
         sigma_ = sigma.view(-1, 1, 1)
@@ -101,10 +101,10 @@ class ImportanceLocal:
         upsample: bool = False,
     ) -> dict[str, dict[str, torch.Tensor]]:
         # unpack
-        log_q = proposed["local"]["log_prob"].clone()
-        rfx = proposed["local"]["samples"].clone()
-        samples_g = proposed["global"]["samples"].clone()
-        weights_g = proposed["global"].get("weights", None)
+        log_q = proposed['local']['log_prob'].clone()
+        rfx = proposed['local']['samples'].clone()
+        samples_g = proposed['global']['samples'].clone()
+        weights_g = proposed['global'].get('weights', None)
         mean_g = weightedMean(samples_g, weights_g)
         ffx = mean_g[:, : self.max_d]
         sigmas_rfx = mean_g[:, self.max_d : -1]
@@ -122,48 +122,47 @@ class ImportanceLocal:
         log_likelihood = log_likelihood_cond + log_likelihood_rfx
 
         # importance sampling
-        factor = 5.0
         out = getImportanceWeights(
-            log_likelihood, log_prior.view(-1, 1, 1), factor * log_q
+            log_likelihood, log_prior.view(-1, 1, 1), log_q
         )
-        out["weights"] = out["weights"].unsqueeze(-2).expand(*rfx.shape).clone()
+        out['weights'] = out['weights'].unsqueeze(-2).expand(*rfx.shape).clone()
 
         # resampling
         if resample or upsample:
             resamples = rfx.clone()
             if resample:
-                resamples = replace(resamples, out["weights"], t=200)
-                out.pop("weights", None)
+                resamples = replace(resamples, out['weights'], t=200)
+                out.pop('weights', None)
             if upsample:
                 b, m, d, s = resamples.shape
                 resamples = resamples.reshape(b, m * d, s)
-                resamples, _ = powersample(resamples, t=1000, method="yeo-johnson")
+                resamples, _ = powersample(resamples, t=1000, method='yeo-johnson')
                 resamples = resamples.reshape(b, m, d, 1000)
-                out.pop("weights", None)
-            out["samples"] = resamples
+                out.pop('weights', None)
+            out['samples'] = resamples
 
         # finalize
-        proposed["local"].update(**out)
+        proposed['local'].update(**out)
         return proposed
 
 
 # -----------------------------------------------------------------------------
 class ImportanceGlobal:
     def __init__(self, data: dict[str, torch.Tensor]):
-        self.nu_ffx = data["nu_ffx"].unsqueeze(-1)
-        self.tau_ffx = data["tau_ffx"].unsqueeze(-1)
-        self.tau_rfx = data["tau_rfx"]
-        self.tau_eps = data["tau_eps"].unsqueeze(-1)
-        self.mask_d = data["mask_d"].unsqueeze(-1)
-        self.mask_n = data["mask_n"]
-        self.mask_m = data["mask_m"]
-        self.y = data["y"].unsqueeze(-1)
-        self.X = data["X"]
-        self.Z = data["Z"]
-        self.n = data["n"].unsqueeze(-1)
-        self.n_i = data["n_i"].unsqueeze(-1)
-        self.q = data["q"]
-        self.max_d = data["d"].max()
+        self.nu_ffx = data['nu_ffx'].unsqueeze(-1)
+        self.tau_ffx = data['tau_ffx'].unsqueeze(-1)
+        self.tau_rfx = data['tau_rfx']
+        self.tau_eps = data['tau_eps'].unsqueeze(-1)
+        self.mask_d = data['mask_d'].unsqueeze(-1)
+        self.mask_n = data['mask_n']
+        self.mask_m = data['mask_m']
+        self.y = data['y'].unsqueeze(-1)
+        self.X = data['X']
+        self.Z = data['Z']
+        self.n = data['n'].unsqueeze(-1)
+        self.n_i = data['n_i'].unsqueeze(-1)
+        self.q = data['q']
+        self.max_d = data['d'].max()
 
     def logPriorBeta(self, beta: torch.Tensor) -> torch.Tensor:
         # beta: (b, d, s)
@@ -192,8 +191,8 @@ class ImportanceGlobal:
         sigma: torch.Tensor,  # (b, s)
         rfx: torch.Tensor,  # (b, m, q)
     ) -> torch.Tensor:
-        mu_g = torch.einsum("bmnd,bds->bmns", self.X, ffx)
-        mu_l = torch.einsum("bmnq,bmq->bmn", self.Z, rfx).unsqueeze(-1)
+        mu_g = torch.einsum('bmnd,bds->bmns', self.X, ffx)
+        mu_l = torch.einsum('bmnq,bmq->bmn', self.Z, rfx).unsqueeze(-1)
         eps = self.y - mu_g - mu_l  # (b, m, n, s)
         ssr = eps.square().sum((1, 2))  # (b, s)
         ll = (
@@ -223,18 +222,18 @@ class ImportanceGlobal:
     ) -> dict[str, dict[str, torch.Tensor]]:
         # unpack
         out = {}
-        log_q = proposed["global"]["log_prob"].clone()
-        samples_g = proposed["global"]["samples"].clone()
+        log_q = proposed['global']['log_prob'].clone()
+        samples_g = proposed['global']['samples'].clone()
         ffx = samples_g[:, : self.max_d]
         sigmas_rfx = samples_g[:, self.max_d : -1] + 1e-12
         sigma_eps = samples_g[:, -1] + 1e-12
-        samples_l = proposed["local"]["samples"].clone()
-        weights_l = proposed["local"].get("weights", None)
+        samples_l = proposed['local']['samples'].clone()
+        weights_l = proposed['local'].get('weights', None)
         rfx = weightedMean(samples_l, weights_l)
 
         # pseudo importance sampling for sigma_eps
-        mu_g = torch.einsum("bmnd,bds->bmns", self.X, ffx)
-        mu_l = torch.einsum("bmnq,bmq->bmn", self.Z, rfx)
+        mu_g = torch.einsum('bmnd,bds->bmns', self.X, ffx)
+        mu_l = torch.einsum('bmnq,bmq->bmn', self.Z, rfx)
         eps = self.y - mu_g - mu_l.unsqueeze(-1)  # (b,m,n,s)
         sigma_eps_ = maskedStd(eps, (1, 2), self.mask_n.unsqueeze(-1)).squeeze()
         nu_s = sigma_eps_.min(-1, keepdim=True)[0]
@@ -252,43 +251,41 @@ class ImportanceGlobal:
         log_likelihood_rfx = self.logLikelihoodRfx(rfx, sigmas_rfx)
 
         # importance sampling (ffx)
-        factor = 3.0
-        is_results = getImportanceWeights(log_likelihood, log_prior, factor * log_q)
+        is_results = getImportanceWeights(log_likelihood, log_prior, 3*log_q)
         out.update(**is_results)
-        out["weights"] = out["weights"].unsqueeze(-2).expand(*samples_g.shape).clone()
-        out["weights"][:, -1] = weights_s
+        out['weights'] = out['weights'].unsqueeze(-2).expand(*samples_g.shape).clone()
+        out['weights'][:, -1] = weights_s
 
         # importance sampling (sigmas_rfx)
-        factor = 0.1
         out_ = getImportanceWeights(
             log_likelihood=log_likelihood_rfx,
-            log_prior=(factor * log_prior_sigmas_rfx),
-            log_q=(factor * log_q)
+            log_prior=log_prior_sigmas_rfx,
+            log_q=log_q,
         )
-        out_["weights"] = (
-            out_["weights"].unsqueeze(-2).expand(*sigmas_rfx.shape).clone()
+        out_['weights'] = (
+            out_['weights'].unsqueeze(-2).expand(*sigmas_rfx.shape).clone()
         )
-        out["weights"][:, self.max_d : -1] = out_["weights"]
+        out['weights'][:, self.max_d : -1] = out_['weights']
 
         # optional resampling
         if resample or upsample:
             resamples = samples_g.clone()
             if resample:
-                resamples = replace(resamples, out["weights"], t=200)
-                out.pop("weights", None)
+                resamples = replace(resamples, out['weights'], t=200)
+                out.pop('weights', None)
             if upsample:
                 ffx, sigmas = (
                     resamples[:, : self.max_d],
                     resamples[:, self.max_d :] + 1e-12,
                 )
-                ffx, _ = powersample(ffx, t=1000, method="yeo-johnson")
-                sigmas, _ = powersample(sigmas, t=1000, method="box-cox")
+                ffx, _ = powersample(ffx, t=1000, method='yeo-johnson')
+                sigmas, _ = powersample(sigmas, t=1000, method='box-cox')
                 resamples = torch.cat([ffx, sigmas], dim=1)
-                out.pop("weights", None)
-            out["samples"] = resamples
+                out.pop('weights', None)
+            out['samples'] = resamples
 
         # finalize
-        proposed["global"].update(**out)
+        proposed['global'].update(**out)
         return proposed
 
 
