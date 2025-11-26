@@ -22,13 +22,13 @@ from metabeta.evaluation.pp import (
 from metabeta import plot
 
 CI = [50, 68, 80, 90, 95]
-plt.rcParams["figure.dpi"] = 300
+plt.rcParams['figure.dpi'] = 300
 
 ###############################################################################
 
 
 def setup() -> argparse.Namespace:
-    """Parse command line arguments."""
+    '''Parse command line arguments.'''
     parser = argparse.ArgumentParser()
 
     # misc
@@ -37,11 +37,11 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--cores', type=int, default=8, help='Nubmer of processor cores to use (default = 8)')
 
     # data
-    parser.add_argument('--d_tag', type=str, default='math', help='Suffix for data ID (default = '')')
-    parser.add_argument('--varied', action='store_true', help='Use data with variable d/q (default = False)')
-    parser.add_argument('--semi', action='store_false', help='Use semi-synthetic data (default = True)')
+    parser.add_argument('--d_tag', type=str, default='', help='Suffix for data ID (default = '')')
+    # parser.add_argument('--varied', action='store_true', help='Use data with variable d/q (default = False)')
+    parser.add_argument('--semi', action='store_true', help='Use semi-synthetic data (default = True)')
     parser.add_argument('-t', '--fx_type', type=str, default='mfx', help='Type of dataset [ffx, mfx] (default = ffx)')
-    parser.add_argument('-d', type=int, default=5, help='Number of fixed effects (with bias, default = 8)')
+    parser.add_argument('-d', type=int, default=3, help='Number of fixed effects (with bias, default = 8)')
     parser.add_argument('-q', type=int, default=1, help='Number of random effects (with bias, default = 3)')
     parser.add_argument('-m', type=int, default=30, help='Maximum number of groups (default = 30).')
     parser.add_argument('-n', type=int, default=70, help='Maximum number of samples per group (default = 70).')
@@ -53,15 +53,15 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--bs-mini', type=int, default=32, help='mini batch size (default = 32)')
     parser.add_argument('--lr', type=float, default=5e-4, help='Learning rate (Adam, default = 5e-4)')
     parser.add_argument('--standardize', action='store_false', help='Standardize inputs (default = True)')
-    parser.add_argument('--importance', action='store_false', help="Do importance sampling (default = True)")
-    parser.add_argument('--calibrate', action='store_false', help="Calibrate posterior (default = True)")
+    parser.add_argument('--importance', action='store_false', help='Do importance sampling (default = True)')
+    parser.add_argument('--calibrate', action='store_false', help='Calibrate posterior (default = True)')
     parser.add_argument('--iteration', type=int, default=10, help='Preload model from iteration #p')
 
     # summary network
     parser.add_argument('--sum_type', type=str, default='set-transformer', help='Summarizer architecture [set-transformer, dual-transformer] (default = set-transformer)')
-    parser.add_argument('--sum_blocks', type=int, default=6, help='Number of blocks in summarizer (default = 4)')
+    parser.add_argument('--sum_blocks', type=int, default=4, help='Number of blocks in summarizer (default = 4)')
     parser.add_argument('--sum_d', type=int, default=128, help='Model dimension (default = 128)')
-    parser.add_argument('--sum_ff', type=int, default=128, help='Feedforward dimension (default = 128)')
+    parser.add_argument('--sum_ff', type=int, default=256, help='Feedforward dimension (default = 128)')
     parser.add_argument('--sum_depth', type=int, default=1, help='Feedforward layers (default = 1)')
     parser.add_argument('--sum_out', type=int, default=64, help='Summary dimension (default = 64)')
     parser.add_argument('--sum_heads', type=int, default=8, help='Number of heads (poolformer, default = 8)')    
@@ -85,28 +85,28 @@ def setup() -> argparse.Namespace:
 
 def load(model: ApproximatorMFX, model_path, iteration: int) -> None:
     model_path = Path(model_path, model.id)
-    fname = Path(model_path, f"checkpoint_i={iteration}.pt")
-    print(f"Loading checkpoint from {fname}")
+    fname = Path(model_path, f'checkpoint_i={iteration}.pt')
+    print(f'Loading checkpoint from {fname}')
     state = torch.load(fname, weights_only=False)
-    model.load_state_dict(state["model_state_dict"])
-    model.stats = state["stats"]
+    model.load_state_dict(state['model_state_dict'])
+    model.stats = state['stats']
 
 
 def inspect(
     results: dict,
     batch_indices: Iterable[int],
 ) -> None:
-    targets = results["targets"]
-    names = results["names"]
-    proposed = results["proposed"]
-    mcmc = results["mcmc"]
+    targets = results['targets']
+    names = results['names']
+    proposed = results['proposed']
+    mcmc = results['mcmc']
 
     # visualize some posteriors
     for b in batch_indices:
         plot.posterior(
             target=targets,
-            proposed=proposed["global"],
-            mcmc=mcmc["global"],
+            proposed=proposed['global'],
+            mcmc=mcmc['global'],
             names=names,
             batch_idx=b,
         )
@@ -125,39 +125,39 @@ def run(
         start = time.perf_counter()
         results = model(batch, sample=True, n=(500, 300))
         end = time.perf_counter()
-    print(f"forward pass took {end - start:.2f}s")
-    losses = results["loss"]
-    proposed = results["proposed"]
-    print(f"Mean loss: {losses.mean().item():.4f}")
+    print(f'forward pass took {end - start:.2f}s')
+    losses = results['loss']
+    proposed = results['proposed']
+    print(f'Mean loss: {losses.mean().item():.4f}')
 
     # reconstruct varied intercepts for d = 1 and q = 0 from noise estimate
-    samples = proposed["global"]["samples"]
-    mask = batch["d"] == 1
+    samples = proposed['global']['samples']
+    mask = batch['d'] == 1
     means = samples[mask, 0]
     stds = samples[mask, -1]
     intercepts = D.Normal(means, stds).sample((1,)).squeeze(0)
-    proposed["global"]["samples"][mask, 0] = intercepts
+    proposed['global']['samples'][mask, 0] = intercepts
 
     # references
     mcmc = None
-    if "mcmc_global" in batch:
+    if 'mcmc_global' in batch:
         mcmc = {}
-        mcmc["global"] = {"samples": batch["mcmc_global"]}
-        if "mcmc_local" in batch:
-            mcmc["local"] = {"samples": batch["mcmc_local"]}
+        mcmc['global'] = {'samples': batch['mcmc_global']}
+        if 'mcmc_local' in batch:
+            mcmc['local'] = {'samples': batch['mcmc_local']}
 
     # outputs
     out = {
-        "batch": batch,
-        "losses": losses,
-        "proposed": proposed,
-        "perm": batch["perm"],  # used column permutation
-        "unperm": batch["unperm"],  # corresponding unpermutation
-        "names": model.names(batch),
-        "names_l": model.names(batch, local=True),
-        "targets": model.targets(batch),
-        "targets_l": model.targets(batch, local=True),
-        "mcmc": mcmc,
+        'batch': batch,
+        'losses': losses,
+        'proposed': proposed,
+        'perm': batch['perm'],  # used column permutation
+        'unperm': batch['unperm'],  # corresponding unpermutation
+        'names': model.names(batch),
+        'names_l': model.names(batch, local=True),
+        'targets': model.targets(batch),
+        'targets_l': model.targets(batch, local=True),
+        'mcmc': mcmc,
     }
     return out
 
@@ -172,62 +172,62 @@ def evaluate(
     importance: bool = False,
     calibrate: bool = False,
     extensive: int = 0,
-    iters: int = 10,
+    iters: int = 2,
 ) -> dict:
     # unpack
-    batch = results["batch"]
-    proposed = copy.deepcopy(results["proposed"])
-    names = results["names"]
-    names_l = results["names_l"]
-    targets = results["targets"]
-    targets_l = results["targets_l"]
+    batch = results['batch']
+    proposed = copy.deepcopy(results['proposed'])
+    names = results['names']
+    names_l = results['names_l']
+    targets = results['targets']
+    targets_l = results['targets_l']
 
     # importance sampling
-    if "flow" in cfg.post_type and importance:
-        print("Importance Sampling...")
+    if importance:
+        print('Importance Sampling...')
         start = time.perf_counter()
         for _ in range(iters):
             proposed = ImportanceLocal(batch)(proposed)
             proposed = ImportanceGlobal(batch)(proposed)
         end = time.perf_counter()
-        print(f"IS took {end - start:.2f}s")
-        sample_efficiency = proposed["global"].get("sample_efficiency")
+        print(f'IS took {end - start:.2f}s')
+        sample_efficiency = proposed['global'].get('sample_efficiency')
         if sample_efficiency is not None:
-            print(f"Mean IS sample efficiency: {sample_efficiency.mean().item():.2f}")
+            print(f'Mean IS sample efficiency: {sample_efficiency.mean().item():.2f}')
 
     # ------------------------------------------------------------------------------
     # recovery MB
-    mean, std = model.moments(proposed["global"])
-    mean_l, std_l = model.moments(proposed["local"])
+    mean, std = model.moments(proposed['global'])
+    mean_l, std_l = model.moments(proposed['local'])
     plot.recoveryGrouped(
         targets=[targets[:, : model.d], targets_l, targets[:, model.d :]],
         means=[mean[:, : model.d], mean_l, mean[:, model.d :]],
         names=[names[: model.d], names_l, names[model.d :]],
-        titles=["Fixed Effects", "Random Effects", "Variance Parameters"],
+        titles=['Fixed Effects', 'Random Effects', 'Variance Parameters'],
     )
 
     # recovery HMC
-    mcmc = results.get("mcmc", None)
+    mcmc = results.get('mcmc', None)
     if mcmc is not None:
-        m_mean, m_std = model.moments(mcmc["global"])
-        m_mean_l, m_std_l = model.moments(mcmc["local"])
+        m_mean, m_std = model.moments(mcmc['global'])
+        m_mean_l, m_std_l = model.moments(mcmc['local'])
         plot.recoveryGrouped(
             targets=[targets[:, : model.d], targets_l, targets[:, model.d :]],
             means=[m_mean[:, : model.d], m_mean_l, m_mean[:, model.d :]],
             names=[names[: model.d], names_l, names[model.d :]],
-            titles=["Fixed Effects", "Random Effects", "Variance Parameters"],
-            marker="s",
+            titles=['Fixed Effects', 'Random Effects', 'Variance Parameters'],
+            marker='s',
         )
 
     # ------------------------------------------------------------------------------
     # coverage MB
     coverage = coverage_m = None
     coverage = getCoverage(
-        model, proposed["global"], targets, intervals=CI, calibrate=calibrate
+        model, proposed['global'], targets, intervals=CI, calibrate=calibrate
     )
     if mcmc is not None:
         coverage_m = getCoverage(
-            model, mcmc["global"], targets, intervals=CI, calibrate=False
+            model, mcmc['global'], targets, intervals=CI, calibrate=False
         )
 
         fig, axs = plt.subplots(figsize=(7, 7 * 2), ncols=1, nrows=2, dpi=300)
@@ -238,42 +238,42 @@ def evaluate(
     # ------------------------------------------------------------------------------
     # SBC histogram MB
     mask_d = targets != 0.0
-    ranks = getRanks(targets, proposed["global"], absolute=False, mask_0=True)
+    ranks = getRanks(targets, proposed['global'], absolute=False, mask_0=True)
     # wd = getWasserstein(ranks, mask_d)
-    # print(f"SBC Wasserstein Distance (MB): {wd:.3f}")
+    # print(f'SBC Wasserstein Distance (MB): {wd:.3f}')
     if extensive == 1:
-        plotSBC(ranks, mask_d, names, color="darkgreen")
+        plotSBC(ranks, mask_d, names, color='darkgreen')
 
     # SBC histogram MCMC
     if mcmc is not None:
-        ranks_m = getRanks(targets, mcmc["global"])
+        ranks_m = getRanks(targets, mcmc['global'])
         # wd_m = getWasserstein(ranks_m, mask_d)
-        # print(f"SBC Wasserstein Distance (HMC): {wd_m:.3f}")
+        # print(f'SBC Wasserstein Distance (HMC): {wd_m:.3f}')
         if extensive == 1:
-            plotSBC(ranks_m, mask_d, names, color="tan")
+            plotSBC(ranks_m, mask_d, names, color='tan')
 
     # ------------------------------------------------------------------------------
     # ECDF diff MB
-    ranks_abs = getRanks(targets, proposed["global"], absolute=True, mask_0=True)
+    ranks_abs = getRanks(targets, proposed['global'], absolute=True, mask_0=True)
     if extensive == 1:
         plotECDF(
             ranks_abs,
             mask_d,
             names,
-            s=proposed["global"]["samples"].shape[-1],
-            color="darkgreen",
+            s=proposed['global']['samples'].shape[-1],
+            color='darkgreen',
         )
 
     # ECDF diff HMC
     if mcmc is not None:
-        ranks_abs_m = getRanks(targets, mcmc["global"], absolute=True)
+        ranks_abs_m = getRanks(targets, mcmc['global'], absolute=True)
         if extensive == 1:
             plotECDF(
                 ranks_abs_m,
                 mask_d,
                 names,
-                s=mcmc["global"]["samples"].shape[-1],
-                color="darkgoldenrod",
+                s=mcmc['global']['samples'].shape[-1],
+                color='darkgoldenrod',
             )
 
     # ------------------------------------------------------------------------------
@@ -282,47 +282,47 @@ def evaluate(
         subset_idx = torch.randperm(1000)[
             :500
         ]  # we need to subsample due to memory demands
-        mcmc_sub = {"global": {}, "local": {}}
-        mcmc_sub["global"] = {"samples": mcmc["global"]["samples"][..., subset_idx]}
-        mcmc_sub["local"] = {"samples": mcmc["local"]["samples"][..., subset_idx]}
+        mcmc_sub = {'global': {}, 'local': {}}
+        mcmc_sub['global'] = {'samples': mcmc['global']['samples'][..., subset_idx]}
+        mcmc_sub['local'] = {'samples': mcmc['local']['samples'][..., subset_idx]}
         y_rep_mcmc = posteriorPredictiveSample(batch, mcmc_sub)
         y_rep = posteriorPredictiveSample(batch, proposed)
-        is_mask = weightSubset(proposed["global"]["weights"][:, 0])
+        is_mask = weightSubset(proposed['global']['weights'][:, 0])
 
         fig, axs = plt.subplots(figsize=(6 * 2, 5 * 2), ncols=2, nrows=2, dpi=300)
         plotPosteriorPredictive(
             axs[0, 0],
-            batch["y"],
+            batch['y'],
             y_rep,
             is_mask,
             batch_idx=0,
-            color="green",
+            color='green',
             upper=True,
         )
         plotPosteriorPredictive(
             axs[1, 0],
-            batch["y"],
+            batch['y'],
             y_rep_mcmc,
             batch_idx=0,
-            color="darkgoldenrod",
+            color='darkgoldenrod',
             upper=False,
         )
         plotPosteriorPredictive(
             axs[0, 1],
-            batch["y"],
+            batch['y'],
             y_rep,
             is_mask,
             batch_idx=11,
-            color="green",
+            color='green',
             upper=True,
             show_legend=True,
         )
         plotPosteriorPredictive(
             axs[1, 1],
-            batch["y"],
+            batch['y'],
             y_rep_mcmc,
             batch_idx=11,
-            color="darkgoldenrod",
+            color='darkgoldenrod',
             upper=False,
         )
 
@@ -334,15 +334,15 @@ def quickEval(
     results: dict,
     importance: bool = False,
     calibrate: bool = False,
-    iters: int = 3,
+    iters: int = 2,
     table: int = 1,
 ) -> None:
     # unpack
-    batch = results["batch"]
-    proposed = copy.deepcopy(results["proposed"])
-    targets = results["targets"]
-    targets_l = results["targets_l"]
-    mcmc = results["mcmc"]
+    batch = results['batch']
+    proposed = copy.deepcopy(results['proposed'])
+    targets = results['targets']
+    targets_l = results['targets_l']
+    mcmc = results['mcmc']
 
     # importance sampling
     if importance:
@@ -351,7 +351,7 @@ def quickEval(
             proposed = ImportanceGlobal(batch)(proposed)
 
     # recovery MB
-    mean, _ = model.moments(proposed["global"])
+    mean, _ = model.moments(proposed['global'])
     rs = np.array(
         [pearsonr(targets[..., i], mean[..., i])[0] for i in range(mean.shape[-1])]
     )
@@ -362,7 +362,7 @@ def quickEval(
     rmse_ffx = rmses[: model.d].mean()
     rmse_sigmas = rmses[model.d :].mean()
 
-    mean_l, _ = model.moments(proposed["local"])
+    mean_l, _ = model.moments(proposed['local'])
     mask_l = targets_l != 0.0
     r_rfx = []
     rmse_rfx = []
@@ -379,7 +379,7 @@ def quickEval(
     rmse = (rmse_ffx + rmse_sigmas + rmse_rfx) / 3
 
     # recovery MCMC
-    m_mean, _ = model.moments(mcmc["global"])
+    m_mean, _ = model.moments(mcmc['global'])
     m_rs = np.array(
         [pearsonr(targets[..., i], m_mean[..., i])[0] for i in range(m_mean.shape[-1])]
     )
@@ -390,7 +390,7 @@ def quickEval(
     m_rmse_ffx = m_rmses[: model.d].mean()
     m_rmse_sigmas = m_rmses[model.d :].mean()
 
-    m_mean_l, _ = model.moments(mcmc["local"])
+    m_mean_l, _ = model.moments(mcmc['local'])
     mask_l = targets_l != 0.0
     m_r_rfx = []
     m_rmse_rfx = []
@@ -408,11 +408,11 @@ def quickEval(
 
     # coverage MB
     coverage_g = getCoverage(
-        model, proposed["global"], targets, intervals=CI, calibrate=calibrate
+        model, proposed['global'], targets, intervals=CI, calibrate=calibrate
     )
     coverage_l = getCoverage(
         model,
-        proposed["local"],
+        proposed['local'],
         targets_l,
         intervals=CI,
         calibrate=calibrate,
@@ -426,10 +426,10 @@ def quickEval(
 
     # coverage MCMC
     m_coverage_g = getCoverage(
-        model, mcmc["global"], targets, intervals=CI, calibrate=False
+        model, mcmc['global'], targets, intervals=CI, calibrate=False
     )
     m_coverage_l = getCoverage(
-        model, mcmc["local"], targets_l, intervals=CI, calibrate=False, local=True
+        model, mcmc['local'], targets_l, intervals=CI, calibrate=False, local=True
     )
     m_ce_g = coverageError(m_coverage_g)
     m_ce_ffx = m_ce_g[: model.d].mean()
@@ -439,56 +439,56 @@ def quickEval(
 
     # overleaf: Table 1
     if table == 1:
-        overleaf = rf"& {r:.3f} & {rmse:.3f} & {ce:.3f} & {m_r:.3f} & {m_rmse:.3f} & {m_ce.mean():.3f} \\"
+        overleaf = rf'& {r:.3f} & {rmse:.3f} & {ce:.3f} & {m_r:.3f} & {m_rmse:.3f} & {m_ce.mean():.3f} \\'
         print(overleaf)
 
     elif table == 2:
         # overleaf: Table 2
-        overleaf_ffx = rf"& $\boldsymbol{{\beta}}$ & {r_ffx:.3f} & {rmse_ffx:.3f} & {ce_ffx:.3f} & {m_r_ffx:.3f} & {m_rmse_ffx:.3f} & {m_ce_ffx:.3f} \\"
-        overleaf_sig = rf"& $\boldsymbol{{\sigma}}$ & {r_sigmas:.3f} & {rmse_sigmas:.3f} & {ce_sigmas:.3f} & {m_r_sigmas:.3f} & {m_rmse_sigmas:.3f} & {m_ce_sigmas:.3f} \\"
-        overleaf_rfx = rf"& $\boldsymbol{{\alpha}}$ & {r_rfx:.3f} & {rmse_rfx:.3f} & {ce_rfx:.3f} & {m_r_rfx:.3f} & {m_rmse_rfx:.3f} & {m_ce_rfx:.3f} \\"
+        overleaf_ffx = rf'& $\boldsymbol{{\beta}}$ & {r_ffx:.3f} & {rmse_ffx:.3f} & {ce_ffx:.3f} & {m_r_ffx:.3f} & {m_rmse_ffx:.3f} & {m_ce_ffx:.3f} \\'
+        overleaf_sig = rf'& $\boldsymbol{{\sigma}}$ & {r_sigmas:.3f} & {rmse_sigmas:.3f} & {ce_sigmas:.3f} & {m_r_sigmas:.3f} & {m_rmse_sigmas:.3f} & {m_ce_sigmas:.3f} \\'
+        overleaf_rfx = rf'& $\boldsymbol{{\alpha}}$ & {r_rfx:.3f} & {rmse_rfx:.3f} & {ce_rfx:.3f} & {m_r_rfx:.3f} & {m_rmse_rfx:.3f} & {m_ce_rfx:.3f} \\'
         print(overleaf_ffx)
         print(overleaf_sig)
         print(overleaf_rfx)
 
 
 # =============================================================================
-if __name__ == "__main__":
+if __name__ == '__main__':
     # --- setup
     cfg = setup()
-    path = Path("outputs", "checkpoints")
+    path = Path('outputs', 'checkpoints')
     console_width = getConsoleWidth()
     torch.manual_seed(cfg.seed)
     torch.set_num_threads(cfg.cores)
-    type_suffix = "-semi" if cfg.semi else ""
+    type_suffix = '-semi' if cfg.semi else ''
 
     # --- set up model
     summary_dict = {
-        "type": cfg.sum_type,
-        "d_model": cfg.sum_d,
-        "n_blocks": cfg.sum_blocks,
-        "d_ff": cfg.sum_ff,
-        "depth": cfg.sum_depth,
-        "d_output": cfg.sum_out,
-        "n_heads": cfg.sum_heads,
-        "dropout": cfg.sum_dropout,
-        "activation": cfg.sum_act,
-        "sparse": cfg.sum_sparse,
+        'type': cfg.sum_type,
+        'd_model': cfg.sum_d,
+        'n_blocks': cfg.sum_blocks,
+        'd_ff': cfg.sum_ff,
+        'depth': cfg.sum_depth,
+        'd_output': cfg.sum_out,
+        'n_heads': cfg.sum_heads,
+        'dropout': cfg.sum_dropout,
+        'activation': cfg.sum_act,
+        'sparse': cfg.sum_sparse,
     }
     posterior_dict = {
-        "type": cfg.post_type,
-        "flows": cfg.flows,
-        "d_ff": cfg.post_ff,
-        "depth": cfg.post_depth,
-        "dropout": cfg.post_dropout,
-        "activation": cfg.post_act,
+        'type': cfg.post_type,
+        'flows': cfg.flows,
+        'd_ff': cfg.post_ff,
+        'depth': cfg.post_depth,
+        'dropout': cfg.post_dropout,
+        'activation': cfg.post_act,
     }
     model_dict = {
-        "fx_type": cfg.fx_type,
-        "seed": cfg.seed,
-        "tag": cfg.m_tag,
-        "d": cfg.d,
-        "q": cfg.q,
+        'fx_type': cfg.fx_type,
+        'seed': cfg.seed,
+        'tag': cfg.m_tag,
+        'd': cfg.d,
+        'q': cfg.q,
     }
     model = ApproximatorMFX.build(
         s_dict=summary_dict,
@@ -497,70 +497,69 @@ if __name__ == "__main__":
         use_standardization=cfg.standardize,
     )
     model.eval()
-    print(f"{'-' * console_width}\nmodel: {model.id}")
+    print(f'{'-' * console_width}\nmodel: {model.id}')
 
     # --- load model and data
     load(model, path, cfg.iteration)
-    fn = dsFilename(cfg.fx_type, f"val{type_suffix}",
+    fn = dsFilename(cfg.fx_type, f'val{type_suffix}',
                     1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_val,
-                    varied=cfg.varied,
+                    # varied=cfg.varied,
                     tag=cfg.d_tag,
                     )
     dl_val = getDataLoader(fn, cfg.bs_val, max_d=cfg.d, max_q=cfg.q,
-                           permute=False, autopad=True, device="cpu",
+                           permute=False, autopad=True, device='cpu',
                            )
     ds_val = next(iter(dl_val))
-    print(f"preloaded model from iteration {cfg.iteration} and test set...\n{'-' * console_width}")
+    print(f'preloaded model from iteration {cfg.iteration} and test set...\n{'-' * console_width}')
 
     # --- calibrate on calibration set
     if cfg.calibrate:
-        print("\nRunning full sampling from calibration set...")
+        print('\nRunning full sampling from calibration set...')
         results_cal = run(model, ds_val)
-        evaluate(model, results_cal, importance=False, calibrate=False, extensive=0)
-        evaluate(model, results_cal, importance=cfg.importance, calibrate=False, extensive=1)
-        print("Calibrating with conformal prediction...")
+        evaluate(model, results_cal, importance=cfg.importance, calibrate=False, extensive=0)
+        print('Calibrating with conformal prediction...')
         model.calibrator.calibrate(
             model,
-            proposed=results_cal["proposed"]["global"], # type: ignore
-            targets=results_cal["targets"], # type: ignore
+            proposed=results_cal['proposed']['global'], # type: ignore
+            targets=results_cal['targets'], # type: ignore
         )
         model.calibrator.save(model.id, cfg.iteration)
         model.calibrator_l.calibrate(
             model,
-            proposed=results_cal["proposed"]["local"], # type: ignore
-            targets=results_cal["targets_l"], # type: ignore
+            proposed=results_cal['proposed']['local'], # type: ignore
+            targets=results_cal['targets_l'], # type: ignore
             local=True,
         )
         model.calibrator_l.save(model.id, cfg.iteration, local=True)
 
-    # --- run on test set
-    fn_test = dsFilename(cfg.fx_type, f"test{type_suffix}",
-        1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_test,
-        varied=cfg.varied, tag=cfg.d_tag,
-    )
-    dl_test = getDataLoader(
-        fn_test, cfg.bs_test, max_d=cfg.d, permute=False, autopad=True, device="cpu"
-    )
-    ds_test = next(iter(dl_test))
+    # # --- run on test set
+    # fn_test = dsFilename(cfg.fx_type, f'test{type_suffix}',
+    #     1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_test,
+    #     varied=cfg.varied, tag=cfg.d_tag,
+    # )
+    # dl_test = getDataLoader(
+    #     fn_test, cfg.bs_test, max_d=cfg.d, permute=False, autopad=True, device='cpu'
+    # )
+    # ds_test = next(iter(dl_test))
 
-    print("\nRunning and evaluating test set...")
-    results_test = run(model, ds_test)
-    proposed = evaluate(model, results_test,
-                        importance=cfg.importance,
-                        calibrate=cfg.calibrate,
-                        extensive=2,
-                        )
-    quickEval(model, results_test,
-              importance=cfg.importance,
-              calibrate=cfg.calibrate,
-              table=1,
-              )
+    # print('\nRunning and evaluating test set...')
+    # results_test = run(model, ds_test)
+    # proposed = evaluate(model, results_test,
+    #                     importance=cfg.importance,
+    #                     calibrate=cfg.calibrate,
+    #                     extensive=2,
+    #                     )
+    # quickEval(model, results_test,
+    #           importance=cfg.importance,
+    #           calibrate=cfg.calibrate,
+    #           table=1,
+    #           )
 
     # inspect(results_test, batch_indices=range(10))
 
     # # --- run on varying subsets, separate splits
-    # ns = ds_test["n"]
-    # rnv = ds_test["rnv"]
+    # ns = ds_test['n']
+    # rnv = ds_test['rnv']
     # b = len(ns)
 
     # # set 1: high n
