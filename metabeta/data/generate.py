@@ -1,4 +1,3 @@
-import os
 from sys import exit
 from pathlib import Path
 from tqdm import tqdm
@@ -9,7 +8,7 @@ from torch import distributions as D
 
 from metabeta.utils import dsFilename, padTensor
 from metabeta.data.single import Prior, Synthesizer, Emulator, Generator
-from metabeta.data.markov import fitPyMC
+from metabeta.data.fit import fitPyMC, fitBambi
 
 # -----------------------------------------------------------------------------
 # config
@@ -17,7 +16,7 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate hierarchical datasets.')
     parser.add_argument('--bs_train', type=int, default=4096, help='batch size per training partition (default = 4,096).')
     parser.add_argument('--bs_val', type=int, default=256, help='batch size for validation partition (default = 256).')
-    parser.add_argument('--bs_test', type=int, default=128, help='batch size per testing partition (default = 128).')
+    parser.add_argument('--bs_test', type=int, default=32, help='batch size per testing partition (default = 128).')
     parser.add_argument('--bs_load', type=int, default=32, help='Batch size when loading (for grouping n, default = 32)')
     parser.add_argument('--min_m', type=int, default=5, help='Minimum number of groups (default = 5).')
     parser.add_argument('--max_m', type=int, default=30, help='Maximum number of groups (default = 30).')
@@ -25,13 +24,14 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--max_n', type=int, default=70, help='Maximum number of samples per group (default = 70).')
     parser.add_argument('--max_d', type=int, default=3, help='Maximum number of fixed effects (intercept + slopes) to draw per linear model (default = 12).')
     parser.add_argument('--max_q', type=int, default=1, help='Maximum number of random effects (intercept + slopes) to draw per linear model (default = 4).')
-    parser.add_argument('--d_tag', type=str, default='all', help='Suffix for model ID (default = '')')
-    parser.add_argument('--semi', action='store_false', help='Generate semi-synthetic data (default = False)')
+    parser.add_argument('--d_tag', type=str, default='toy', help='Suffix for model ID (default = '')')
+    parser.add_argument('--api', type=str, default='pymc', help='API to use for competetive fit (default = "pymc")')
+    parser.add_argument('--toy', action='store_false', help='Generate toy data (default = False)')
+    parser.add_argument('--semi', action='store_true', help='Generate semi-synthetic data (default = False)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD for semi-synthetic data (default = False)')
-    parser.add_argument('--toy', action='store_true', help='Generate toy data (default = False)')
     # parser.add_argument('--varied', action='store_true', help='variable d and q (default = False)')
     parser.add_argument('-s', '--seed', type=int, default=42, help='Seed for PyMC fit (default = 42)')
-    parser.add_argument('-b', '--begin', type=int, default=1, help='Begin with iteration number #b (default = 0).')
+    parser.add_argument('-b', '--begin', type=int, default=-1, help='Begin with iteration number #b (default = 0).')
     parser.add_argument('-i', '--iterations', type=int, default=10, help='Number of dataset partitions to generate (default = 100, 0 only generates validation dataset).')
     return parser.parse_args()
 
@@ -169,9 +169,7 @@ def generate(
     tau_eps = D.Uniform(1, 20).sample((batch_size,))
     if cfg.toy:  # smaller ranges
         nu_ffx = sampleInt((batch_size, cfg.max_d), 0, 0).float()
-        tau_ffx0 = D.Uniform(1, 10).sample((batch_size, 1))
-        tau_ffx1 = D.Uniform(1, 5).sample((batch_size, cfg.max_d - 1))
-        tau_ffx = torch.cat([tau_ffx0, tau_ffx1], dim=-1)
+        tau_ffx = D.Uniform(1, 5).sample((batch_size, cfg.max_d))
         tau_rfx = D.Uniform(1, 5).sample((batch_size, cfg.max_d))
         tau_eps = D.Uniform(1, 5).sample((batch_size,))
 
@@ -205,9 +203,16 @@ def generate(
     if fit:
         print('Starting pymc sampling...')
         for ds in tqdm(data):
-            nuts_results = fitPyMC(ds, seed=cfg.seed, method='nuts')
-            advi_results = fitPyMC(ds, seed=cfg.seed, method='advi')
+            fitter = {'pymc': fitPyMC, 'bambi': fitBambi}[cfg.api]
+            
+            # MCMC
+            print(f'Fitting NUTS using {cfg.api.upper()}')
+            nuts_results = fitter(ds, seed=cfg.seed, method='nuts')
             ds.update(nuts_results)
+            
+            # VI
+            print(f'Fitting ADVI using {cfg.api.upper()}')
+            advi_results = fitter(ds, seed=cfg.seed, method='advi')
             ds.update(advi_results)
     return data
 
