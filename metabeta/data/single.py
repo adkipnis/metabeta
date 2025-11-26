@@ -176,7 +176,7 @@ class Synthesizer:
         groups = counts2groups(n_i)
         return x, groups, n_i
 
-paths = list(Path('real', 'preprocessed').glob('*.npz'))
+paths = list(Path('real', 'preprocessed', 'test').glob('*.npz'))
 datasets = [RealDataset(source=path).data for path in paths]
 
 @dataclass
@@ -191,7 +191,7 @@ class Emulator:
             subset = [ds for ds in datasets if d <= ds['d'] + 1]
             self.ds = choice(subset)
         else:
-            path = Path('real', 'preprocessed', f'{self.source}.npz')
+            path = Path('real', 'preprocessed', 'test', f'{self.source}.npz')
             idx = paths.index(path)
             self.ds = datasets[idx]
         
