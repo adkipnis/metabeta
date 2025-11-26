@@ -49,7 +49,7 @@ def setup() -> argparse.Namespace:
 
     # evaluation
     parser.add_argument('--bs-val', type=int, default=256, help='macro batch size for validation partition (default = 256).')
-    parser.add_argument('--bs-test', type=int, default=128, help='macro batch size for test partition (default = 128).')
+    parser.add_argument('--bs-test', type=int, default=32, help='macro batch size for test partition (default = 128).')
     parser.add_argument('--bs-mini', type=int, default=32, help='mini batch size (default = 32)')
     parser.add_argument('--lr', type=float, default=5e-4, help='Learning rate (Adam, default = 5e-4)')
     parser.add_argument('--standardize', action='store_false', help='Standardize inputs (default = True)')
@@ -99,14 +99,14 @@ def inspect(
     targets = results['targets']
     names = results['names']
     proposed = results['proposed']
-    mcmc = results['mcmc']
+    nuts = results['nuts']
 
     # visualize some posteriors
     for b in batch_indices:
         plot.posterior(
             target=targets,
             proposed=proposed['global'],
-            mcmc=mcmc['global'],
+            other=nuts['global'],
             names=names,
             batch_idx=b,
         )
@@ -139,12 +139,12 @@ def run(
     proposed['global']['samples'][mask, 0] = intercepts
 
     # references
-    mcmc = None
-    if 'mcmc_global' in batch:
-        mcmc = {}
-        mcmc['global'] = {'samples': batch['mcmc_global']}
-        if 'mcmc_local' in batch:
-            mcmc['local'] = {'samples': batch['mcmc_local']}
+    nuts = None
+    if 'nuts_global' in batch:
+        nuts = {}
+        nuts['global'] = {'samples': batch['nuts_global']}
+        if 'nuts_local' in batch:
+            nuts['local'] = {'samples': batch['nuts_local']}
 
     # outputs
     out = {
@@ -157,7 +157,7 @@ def run(
         'names_l': model.names(batch, local=True),
         'targets': model.targets(batch),
         'targets_l': model.targets(batch, local=True),
-        'mcmc': mcmc,
+        'nuts': nuts,
     }
     return out
 
@@ -206,11 +206,11 @@ def evaluate(
         titles=['Fixed Effects', 'Random Effects', 'Variance Parameters'],
     )
 
-    # recovery HMC
-    mcmc = results.get('mcmc', None)
-    if mcmc is not None:
-        m_mean, m_std = model.moments(mcmc['global'])
-        m_mean_l, m_std_l = model.moments(mcmc['local'])
+    # recovery NUTS
+    nuts = results.get('nuts', None)
+    if nuts is not None:
+        m_mean, m_std = model.moments(nuts['global'])
+        m_mean_l, m_std_l = model.moments(nuts['local'])
         plot.recoveryGrouped(
             targets=[targets[:, : model.d], targets_l, targets[:, model.d :]],
             means=[m_mean[:, : model.d], m_mean_l, m_mean[:, model.d :]],
@@ -225,9 +225,9 @@ def evaluate(
     coverage = getCoverage(
         model, proposed['global'], targets, intervals=CI, calibrate=calibrate
     )
-    if mcmc is not None:
+    if nuts is not None:
         coverage_m = getCoverage(
-            model, mcmc['global'], targets, intervals=CI, calibrate=False
+            model, nuts['global'], targets, intervals=CI, calibrate=False
         )
 
         fig, axs = plt.subplots(figsize=(7, 7 * 2), ncols=1, nrows=2, dpi=300)
@@ -244,9 +244,9 @@ def evaluate(
     if extensive == 1:
         plotSBC(ranks, mask_d, names, color='darkgreen')
 
-    # SBC histogram MCMC
-    if mcmc is not None:
-        ranks_m = getRanks(targets, mcmc['global'])
+    # SBC histogram nuts
+    if nuts is not None:
+        ranks_m = getRanks(targets, nuts['global'])
         # wd_m = getWasserstein(ranks_m, mask_d)
         # print(f'SBC Wasserstein Distance (HMC): {wd_m:.3f}')
         if extensive == 1:
@@ -265,27 +265,27 @@ def evaluate(
         )
 
     # ECDF diff HMC
-    if mcmc is not None:
-        ranks_abs_m = getRanks(targets, mcmc['global'], absolute=True)
+    if nuts is not None:
+        ranks_abs_m = getRanks(targets, nuts['global'], absolute=True)
         if extensive == 1:
             plotECDF(
                 ranks_abs_m,
                 mask_d,
                 names,
-                s=mcmc['global']['samples'].shape[-1],
+                s=nuts['global']['samples'].shape[-1],
                 color='darkgoldenrod',
             )
 
     # ------------------------------------------------------------------------------
     # posterior predictive plots
-    if extensive == 1 and mcmc is not None:
+    if extensive == 1 and nuts is not None:
         subset_idx = torch.randperm(1000)[
             :500
         ]  # we need to subsample due to memory demands
-        mcmc_sub = {'global': {}, 'local': {}}
-        mcmc_sub['global'] = {'samples': mcmc['global']['samples'][..., subset_idx]}
-        mcmc_sub['local'] = {'samples': mcmc['local']['samples'][..., subset_idx]}
-        y_rep_mcmc = posteriorPredictiveSample(batch, mcmc_sub)
+        nuts_sub = {'global': {}, 'local': {}}
+        nuts_sub['global'] = {'samples': nuts['global']['samples'][..., subset_idx]}
+        nuts_sub['local'] = {'samples': nuts['local']['samples'][..., subset_idx]}
+        y_rep_nuts = posteriorPredictiveSample(batch, nuts_sub)
         y_rep = posteriorPredictiveSample(batch, proposed)
         is_mask = weightSubset(proposed['global']['weights'][:, 0])
 
@@ -302,7 +302,7 @@ def evaluate(
         plotPosteriorPredictive(
             axs[1, 0],
             batch['y'],
-            y_rep_mcmc,
+            y_rep_nuts,
             batch_idx=0,
             color='darkgoldenrod',
             upper=False,
@@ -320,7 +320,7 @@ def evaluate(
         plotPosteriorPredictive(
             axs[1, 1],
             batch['y'],
-            y_rep_mcmc,
+            y_rep_nuts,
             batch_idx=11,
             color='darkgoldenrod',
             upper=False,
@@ -342,7 +342,7 @@ def quickEval(
     proposed = copy.deepcopy(results['proposed'])
     targets = results['targets']
     targets_l = results['targets_l']
-    mcmc = results['mcmc']
+    nuts = results['nuts']
 
     # importance sampling
     if importance:
@@ -378,8 +378,8 @@ def quickEval(
     r = (r_ffx + r_sigmas + r_rfx) / 3
     rmse = (rmse_ffx + rmse_sigmas + rmse_rfx) / 3
 
-    # recovery MCMC
-    m_mean, _ = model.moments(mcmc['global'])
+    # recovery nuts
+    m_mean, _ = model.moments(nuts['global'])
     m_rs = np.array(
         [pearsonr(targets[..., i], m_mean[..., i])[0] for i in range(m_mean.shape[-1])]
     )
@@ -390,7 +390,7 @@ def quickEval(
     m_rmse_ffx = m_rmses[: model.d].mean()
     m_rmse_sigmas = m_rmses[model.d :].mean()
 
-    m_mean_l, _ = model.moments(mcmc['local'])
+    m_mean_l, _ = model.moments(nuts['local'])
     mask_l = targets_l != 0.0
     m_r_rfx = []
     m_rmse_rfx = []
@@ -424,12 +424,12 @@ def quickEval(
     ce_rfx = coverageError(coverage_l).mean()
     ce = (ce_ffx + ce_sigmas + ce_rfx) / 3
 
-    # coverage MCMC
+    # coverage nuts
     m_coverage_g = getCoverage(
-        model, mcmc['global'], targets, intervals=CI, calibrate=False
+        model, nuts['global'], targets, intervals=CI, calibrate=False
     )
     m_coverage_l = getCoverage(
-        model, mcmc['local'], targets_l, intervals=CI, calibrate=False, local=True
+        model, nuts['local'], targets_l, intervals=CI, calibrate=False, local=True
     )
     m_ce_g = coverageError(m_coverage_g)
     m_ce_ffx = m_ce_g[: model.d].mean()
@@ -532,28 +532,29 @@ if __name__ == '__main__':
         )
         model.calibrator_l.save(model.id, cfg.iteration, local=True)
 
-    # # --- run on test set
-    # fn_test = dsFilename(cfg.fx_type, f'test{type_suffix}',
-    #     1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_test,
-    #     varied=cfg.varied, tag=cfg.d_tag,
-    # )
-    # dl_test = getDataLoader(
-    #     fn_test, cfg.bs_test, max_d=cfg.d, permute=False, autopad=True, device='cpu'
-    # )
-    # ds_test = next(iter(dl_test))
+    # --- run on test set
+    fn_test = dsFilename(cfg.fx_type, f'test{type_suffix}',
+        1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_test,
+        # varied=cfg.varied,
+        tag=cfg.d_tag,
+    )
+    dl_test = getDataLoader(
+        fn_test, cfg.bs_test, max_d=cfg.d, permute=False, autopad=True, device='cpu'
+    )
+    ds_test = next(iter(dl_test))
 
-    # print('\nRunning and evaluating test set...')
-    # results_test = run(model, ds_test)
-    # proposed = evaluate(model, results_test,
-    #                     importance=cfg.importance,
-    #                     calibrate=cfg.calibrate,
-    #                     extensive=2,
-    #                     )
-    # quickEval(model, results_test,
-    #           importance=cfg.importance,
-    #           calibrate=cfg.calibrate,
-    #           table=1,
-    #           )
+    print('\nRunning and evaluating test set...')
+    results_test = run(model, ds_test)
+    proposed = evaluate(model, results_test,
+                        importance=cfg.importance,
+                        calibrate=cfg.calibrate,
+                        extensive=2,
+                        )
+    quickEval(model, results_test,
+              importance=cfg.importance,
+              calibrate=cfg.calibrate,
+              table=1,
+              )
 
     # inspect(results_test, batch_indices=range(10))
 
