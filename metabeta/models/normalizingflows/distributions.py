@@ -48,12 +48,13 @@ class DiagGaussian(DiagDist):
 
     def getParams(self):
         if self.trainable:
-            return {"loc": self.loc, "scale": self.scale}
+            scale = nn.functional.softplus(self.log_scale + 1e-3)
+            return {"loc": self.loc, "scale": scale}
         return {"loc": 0, "scale": 1}
 
     def initParams(self):
         self.loc = nn.Parameter(torch.ones(self.dim) * 0)
-        self.scale = nn.Parameter(torch.ones(self.dim) * 1)
+        self.log_scale = nn.Parameter(torch.log(torch.exp(torch.ones(self.dim) * 1) - 1)) 
 
 
 class DiagStudent(DiagDist):
@@ -62,14 +63,15 @@ class DiagStudent(DiagDist):
 
     def getParams(self):
         if self.trainable:
-            df = nn.functional.softplus(self.log_df + 1e-6)
-            scale = self.scale
+            df = nn.functional.softplus(self.log_df + 1e-3)
+            scale = nn.functional.softplus(self.log_scale + 1e-3)
             return {"df": df, "loc": self.loc, "scale": scale}
         return {"df": 5, "loc": 0, "scale": 1}
 
     def initParams(self):
         self.log_df = nn.Parameter(torch.log(torch.exp(torch.ones(self.dim) * 5) - 1))
         self.loc = nn.Parameter(torch.ones(self.dim) * 0)
-        self.scale = nn.Parameter(torch.ones(self.dim) * 1)
+        self.log_scale = nn.Parameter(torch.log(torch.exp(torch.ones(self.dim) * 1) - 1)) 
+        #nn.Parameter(torch.ones(self.dim) * 1)
 
 
