@@ -15,6 +15,7 @@ from metabeta.evaluation.importance import ImportanceLocal, ImportanceGlobal
 from metabeta.evaluation.coverage import getCoverage, plotCalibration, coverageError
 from metabeta.evaluation.sbc import getRanks, plotSBC, plotECDF, getWasserstein
 from metabeta.evaluation.pp import (
+    posteriorPredictiveMean,
     posteriorPredictiveSample,
     plotPosteriorPredictive,
     weightSubset,
@@ -49,13 +50,13 @@ def setup() -> argparse.Namespace:
 
     # evaluation
     parser.add_argument('--bs-val', type=int, default=256, help='macro batch size for validation partition (default = 256).')
-    parser.add_argument('--bs-test', type=int, default=32, help='macro batch size for test partition (default = 128).')
+    parser.add_argument('--bs-test', type=int, default=256, help='macro batch size for test partition (default = 256).')
     parser.add_argument('--bs-mini', type=int, default=32, help='mini batch size (default = 32)')
     parser.add_argument('--lr', type=float, default=5e-4, help='Learning rate (Adam, default = 5e-4)')
     parser.add_argument('--standardize', action='store_false', help='Standardize inputs (default = True)')
     parser.add_argument('--importance', action='store_false', help='Do importance sampling (default = True)')
     parser.add_argument('--calibrate', action='store_false', help='Calibrate posterior (default = True)')
-    parser.add_argument('--iteration', type=int, default=10, help='Preload model from iteration #p')
+    parser.add_argument('--iteration', type=int, default=50, help='Preload model from iteration #p')
 
     # summary network
     parser.add_argument('--sum_type', type=str, default='set-transformer', help='Summarizer architecture [set-transformer, dual-transformer] (default = set-transformer)')
@@ -181,6 +182,7 @@ def evaluate(
     names_l = results['names_l']
     targets = results['targets']
     targets_l = results['targets_l']
+    b = len(targets)
 
     # importance sampling
     if importance:
@@ -194,8 +196,9 @@ def evaluate(
         sample_efficiency = proposed['global'].get('sample_efficiency')
         if sample_efficiency is not None:
             print(f'Mean IS sample efficiency: {sample_efficiency.mean().item():.2f}')
-
-    # ------------------------------------------------------------------------------
+            
+    
+    # -------------------------------------------------------------------------
     # recovery MB
     mean, std = model.moments(proposed['global'])
     mean_l, std_l = model.moments(proposed['local'])
@@ -219,7 +222,7 @@ def evaluate(
             marker='s',
         )
 
-    # ------------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # coverage MB
     coverage = coverage_m = None
     coverage = getCoverage(
@@ -234,7 +237,24 @@ def evaluate(
         plotCalibration(axs[0], coverage, names, lw=3, upper=True)
         plotCalibration(axs[1], coverage_m, names, lw=3, upper=False)
         fig.tight_layout()
+        
+        
+    # -------------------------------------------------------------------------
+    # in-sample posterior predictive accuracy MB
+    y_rep_mean = posteriorPredictiveMean(batch, proposed).mean(-1)
+    pp_se = (batch['y'] - y_rep_mean).square().view(b, -1)
+    pp_rmse = (pp_se.sum(-1) / batch['mask_n'].view(b, -1).sum(-1)).sqrt()
+    print(pp_rmse.mean())
+    
+    # in-sample posterior predictive accuracy NUTS
+    if nuts is not None:
+        y_rep_mean_m = posteriorPredictiveMean(batch, nuts).mean(-1)
+        pp_se_m = (batch['y'] - y_rep_mean_m).square().view(b, -1)
+        pp_rmse_m = (pp_se_m.sum(-1) / batch['mask_n'].view(b, -1).sum(-1)).sqrt()
+        plt.plot(pp_rmse, pp_rmse_m, 'o')
+        print(pp_rmse_m.mean())
 
+    
     # ------------------------------------------------------------------------------
     # SBC histogram MB
     mask_d = targets != 0.0
@@ -279,9 +299,7 @@ def evaluate(
     # ------------------------------------------------------------------------------
     # posterior predictive plots
     if extensive == 1 and nuts is not None:
-        subset_idx = torch.randperm(1000)[
-            :500
-        ]  # we need to subsample due to memory demands
+        subset_idx = torch.randperm(1000)[:500] # we need to subsample due to memory demands
         nuts_sub = {'global': {}, 'local': {}}
         nuts_sub['global'] = {'samples': nuts['global']['samples'][..., subset_idx]}
         nuts_sub['local'] = {'samples': nuts['local']['samples'][..., subset_idx]}
