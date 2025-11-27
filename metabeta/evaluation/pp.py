@@ -39,6 +39,17 @@ def posteriorPredictiveMean(
     return pp_mean
 
 
+def posteriorPredictiveDensity(
+    ds: dict[str, torch.Tensor],
+    proposed: dict[str, dict[str, torch.Tensor]],
+) -> torch.Tensor:
+    mu_g, mu_l, sigma_eps, mask = prepare(ds, proposed).values()
+    posterior_predictive = D.Normal(mu_g + mu_l, sigma_eps)
+    log_prob = posterior_predictive.log_prob(ds['y'].unsqueeze(-1))
+    log_prob *= mask
+    return log_prob
+
+
 
 def posteriorPredictiveSample(
     ds: dict[str, torch.Tensor],
