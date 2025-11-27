@@ -1,3 +1,4 @@
+from copy import deepcopy
 import numpy as np
 import torch
 from torch import nn
@@ -253,13 +254,17 @@ class ApproximatorMFX(Approximator):
             base_type="student",
             net_kwargs=p_dict,
         )
+        p_dict_l = deepcopy(p_dict)
+        # p_dict_l["flows"] //= 2
+        # p_dict_l["d_ff"] //= 2
+        # p_dict_l["depth"] = int(1.5 * p_dict["depth"])
         posterior_l = CouplingPosterior(
             d_target=d_rfx,
             d_context=d_context_l,
-            n_flows=p_dict["flows"],
+            n_flows=p_dict_l["flows"],
             transform=post_type,
             base_type="student",
-            net_kwargs=p_dict,
+            net_kwargs=p_dict_l,
         )
 
         return cls(
