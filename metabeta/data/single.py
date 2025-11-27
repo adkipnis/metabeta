@@ -176,7 +176,9 @@ class Synthesizer:
         groups = counts2groups(n_i)
         return x, groups, n_i
 
-paths = list(Path('real', 'preprocessed', 'test').glob('*.npz'))
+train_paths = list(Path('real', 'preprocessed', 'test').glob('*.npz'))
+test_paths = list(Path('real', 'preprocessed', 'test').glob('*.npz'))
+paths = train_paths + test_paths
 datasets = [RealDataset(source=path).data for path in paths]
 
 @dataclass
@@ -191,8 +193,14 @@ class Emulator:
             subset = [ds for ds in datasets if d <= ds['d'] + 1]
             self.ds = choice(subset)
         else:
-            path = Path('real', 'preprocessed', 'test', f'{self.source}.npz')
-            idx = paths.index(path)
+            path0 = Path('real', 'preprocessed', 'test', f'{self.source}.npz')
+            path1 = Path('real', 'preprocessed', 'train', f'{self.source}.npz')
+            if path0 in paths:
+                idx = paths.index(path0)
+            elif path1 in paths:
+                idx = paths.index(path1)
+            else:
+                raise ValueError(f'{self.source} not in known paths.')
             self.ds = datasets[idx]
         
     def sample(self, d: int, n_i: torch.Tensor, **kwargs,
