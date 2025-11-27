@@ -311,6 +311,22 @@ class Generator:
                 torch.cat([y.unsqueeze(-1), X[:, 1:]], dim=-1),
                 names=['y'] + [f'x{j}' for j in range(1, self.d)]
             )
+            
+        # # analytical posterior for rfx
+        # for i in range(m):
+        #     count = n_i[i]
+        #     mask = (groups == i)
+        #     Z_i = X[mask, :q]
+            
+        #     G_inv = torch.diag(1/self.prior.sigmas_rfx)
+        #     R_inv = torch.eye(count) * 1/self.prior.sigma_eps
+        #     alpha_prec = G_inv + Z_i.T @ R_inv @ Z_i
+        #     alpha_cov = torch.cholesky_inverse(torch.linalg.cholesky(alpha_prec))
+            
+        #     eps = y[mask] - X[mask] @ ffx
+        #     alpha_mean = alpha_cov @ Z_i.T @ R_inv @ eps
+        #     print(f'{alpha_mean} vs. {rfx[i]}')
+            
 
         # outputs
         out = {
