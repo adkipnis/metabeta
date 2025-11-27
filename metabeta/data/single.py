@@ -188,9 +188,10 @@ class Emulator:
     use_sgld: bool = True
     sgld = SGLD()
 
-    def pull(self, d: int):
+    def pull(self, d: int, m: int):
         if self.source == 'all':
             subset = [ds for ds in datasets if d <= ds['d'] + 1]
+            subset = [ds for ds in subset if m <= ds.get('m', float('inf'))]
             self.ds = choice(subset)
         else:
             path0 = Path('real', 'preprocessed', 'test', f'{self.source}.npz')
@@ -205,10 +206,14 @@ class Emulator:
         
     def sample(self, d: int, n_i: torch.Tensor, **kwargs,
                ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # dims
+        m = len(n_i)
+        n = int(n_i.sum())
+        
         # pull source
-        self.pull(d)
+        self.pull(d, m)
         source_is_grouped = 'm' in self.ds
-
+        
         # check source dims
         n = int(n_i.sum())
         m = len(n_i)
