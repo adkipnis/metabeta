@@ -269,8 +269,8 @@ if __name__ == '__main__':
     # srm datasets
     batchprocess('srm')
 
-    # pmlb datasets
-    batchprocess('pmlb')
+    # # pmlb datasets
+    # batchprocess('pmlb')
 
     # # automl datasets (skipped, too many issues)
     # batchprocess('automl', partition='train')
