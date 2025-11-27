@@ -215,19 +215,19 @@ class Emulator:
         source_is_grouped = 'm' in self.ds
         
         # check source dims
-        n = int(n_i.sum())
-        m = len(n_i)
         assert d <= self.ds['d'] + 1, 'not enough columns in source.'
-        if source_is_grouped and m > self.ds['m']:
-            m = self.ds['m']
-            # print(f'Warning: not enough groups in source, setting m={m}')
-        if n > self.ds['n']:
-            n = self.ds['n']
-            while n / m < 5:
-                m -= 1
+        if source_is_grouped:
+            if m > self.ds['m']:
+                m = self.ds['m']
+                print(f'Warning: not enough groups in source, setting m={m}')
+            if n > self.ds['n']:
+                n = self.ds['n']
+                while n / m < 5:
+                    m -= 1
+        
             n_i = resampleCounts(n, m)
-            # print(f'Warning: not enough rows in source, setting n={n} and m={m}')
-
+            n = int(n_i.sum())
+            
         # unpack
         ds = self.ds
         x = ds['X'].clone().float()
@@ -240,10 +240,21 @@ class Emulator:
         if source_is_grouped:
             # subsample m groups, get corresponding n_i
             members = torch.randperm(ds['m'])[:m]
-            n_i = ds['n_i'][members]
+            n_i = torch.min(ds['n_i'][members], n_i)
             n = int(n_i.sum())
-            member_mask = (ds['groups'].unsqueeze(-1) == members.unsqueeze(0)).any(-1)  # type: ignore
+            member_mask = torch.zeros(len(x)).bool()
+            for i, member in enumerate(members):
+                idx = torch.where(ds['groups'] == member)[0]
+                chosen = idx[torch.randperm(len(idx))][:n_i[i]]
+                member_mask[chosen] = True
             x = x[member_mask]
+            
+            # alternatively with original n_i:
+            # n_i = ds['n_i'][members]
+            # n = int(n_i.sum())
+            # member_mask = (ds['groups'].unsqueeze(-1) == members.unsqueeze(0)).any(-1)  # type: ignore
+            # x = x[member_mask]
+            
         else:
             idx_obs = torch.randperm(len(x))[:n]
             x = x[idx_obs]
