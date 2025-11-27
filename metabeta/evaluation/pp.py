@@ -1,14 +1,13 @@
 import torch
 from torch import distributions as D
 import seaborn as sns
+from metabeta.utils import weightedMean
 
 
-def posteriorPredictiveSample(
-    ds: dict[str, torch.Tensor],
-    proposed: dict[str, dict[str, torch.Tensor]],
-) -> torch.Tensor:
-    from metabeta.utils import weightedMean
-
+def prepare( 
+        ds: dict[str, torch.Tensor],
+        proposed: dict[str, dict[str, torch.Tensor]],
+    ) -> dict[str, torch.Tensor]:
     # prepare observed
     X, Z, y = ds["X"], ds["Z"], ds["y"]
     d = X.shape[-1]
@@ -23,9 +22,30 @@ def posteriorPredictiveSample(
     b = len(ffx)
     sigma_eps = samples_g[:, -1].view(b, 1, 1, -1)
 
-    # construct posterior predictive
+    # construct posterior predictive distribution
     mu_g = torch.einsum("bmnd,bds->bmns", X, ffx)
     mu_l = torch.einsum("bmnq,bmq->bmn", Z, rfx).unsqueeze(-1)
+
+    return dict(mu_g=mu_g, mu_l=mu_l, sigma_eps=sigma_eps, mask=mask)
+    
+        
+def posteriorPredictiveMean(
+    ds: dict[str, torch.Tensor],
+    proposed: dict[str, dict[str, torch.Tensor]],
+) -> torch.Tensor:
+    mu_g, mu_l, _, mask = prepare(ds, proposed).values()
+    pp_mean = mu_g + mu_l
+    pp_mean *= mask
+    return pp_mean
+
+
+
+def posteriorPredictiveSample(
+    ds: dict[str, torch.Tensor],
+    proposed: dict[str, dict[str, torch.Tensor]],
+) -> torch.Tensor:
+    
+    mu_g, mu_l, sigma_eps, mask = prepare(ds, proposed).values()
     posterior_predictive = D.Normal(mu_g + mu_l, sigma_eps)
 
     # sample from posterior predictive
