@@ -138,6 +138,7 @@ def preprocess(ds_name: str,
                group_name: str = '',
                target_name: str = 'y',
                partition: str = 'train',
+               move_to_test: bool = True,
                save: bool = True):
     # import data
     fn = Path(root, 'parquet', f'{ds_name}.parquet')
@@ -176,6 +177,8 @@ def preprocess(ds_name: str,
                 print(f'--- Warning: Removing other grouping variables {potential[1:]}.')
                 for p in potential[1:]:
                     df.pop(p)
+            if move_to_test:
+                partition = 'test'
 
     # sort and isolate grouping variable
     groups = n_i = m = None
@@ -264,10 +267,10 @@ if __name__ == '__main__':
     batchprocess('from-r', partition='test', group_name='group')
 
     # srm datasets
-    batchprocess('srm', partition='train')
+    batchprocess('srm')
 
     # pmlb datasets
-    batchprocess('pmlb', partition='train')
+    batchprocess('pmlb')
 
     # # automl datasets (skipped, too many issues)
     # batchprocess('automl', partition='train')
