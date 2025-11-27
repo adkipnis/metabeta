@@ -50,9 +50,9 @@ def setup() -> argparse.Namespace:
 
     # summary network
     parser.add_argument('--sum_type', type=str, default='set-transformer', help='Summarizer architecture [set-transformer, dual-transformer] (default = set-transformer)')
-    parser.add_argument('--sum_blocks', type=int, default=4, help='Number of blocks in summarizer (default = 4)')
+    parser.add_argument('--sum_blocks', type=int, default=3, help='Number of blocks in summarizer (default = 3)')
     parser.add_argument('--sum_d', type=int, default=128, help='Model dimension (default = 128)')
-    parser.add_argument('--sum_ff', type=int, default=256, help='Feedforward dimension (default = 256)')
+    parser.add_argument('--sum_ff', type=int, default=128, help='Feedforward dimension (default = 128)')
     parser.add_argument('--sum_depth', type=int, default=1, help='Feedforward layers (default = 1)')
     parser.add_argument('--sum_out', type=int, default=64, help='Summary dimension (default = 64)')
     parser.add_argument('--sum_heads', type=int, default=8, help='Number of heads (poolformer, default = 8)')    
@@ -61,11 +61,11 @@ def setup() -> argparse.Namespace:
 
     # posterior network
     parser.add_argument('--post_type', type=str, default='affine', help='Normalizing flow architecture [affine, spline] (default = affine)')
-    parser.add_argument('--flows', type=int, default=3, help='Number of normalizing flow blocks (default = 3)')
-    parser.add_argument('--post_ff', type=int, default=128, help='Feedforward dimension (default = 128)')
+    parser.add_argument('--flows', type=int, default=8, help='Number of normalizing flow blocks (default = 8)')
+    parser.add_argument('--post_ff', type=int, default=256, help='Feedforward dimension (default = 256)')
     parser.add_argument('--post_depth', type=int, default=3, help='Feedforward layers (default = 3)')
     parser.add_argument('--post_dropout', type=float, default=0.01, help='Dropout rate (default = 0.01)')
-    parser.add_argument('--post_act', type=str, default='ReLU', help='Activation funtction [anything implemented in torch.nn] (default = GELU)')
+    parser.add_argument('--post_act', type=str, default='ReLU', help='Activation funtction [anything implemented in torch.nn] (default = ReLU)')
 
     return parser.parse_args()
 
@@ -116,6 +116,17 @@ class EarlyStopping:
                 self.stop = True
                 print('Stopping due to impatience.')
 
+
+def totalNorm(model: nn.Module):
+    total_norm = torch.norm(
+        torch.stack([
+            p.grad.norm(p=2)
+            for p in model.parameters()
+            if p.grad is not None
+        ]),
+        p=2,
+    )
+    return total_norm
 
 # -----------------------------------------------------------------------------
 # loading and saving
@@ -202,12 +213,19 @@ def train(
     model.train()
     optimizer.train()
     for i, batch in enumerate(iterator):
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         results = model(batch, sample=False)
         loss = results['loss'].mean()
         loss.backward()
-        # clip_grad_norm_(model.parameters(), max_norm=1.5)
-        optimizer.step()
+        
+        # safe gradient handling
+        if torch.isfinite(totalNorm(model)):
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+        else:
+            print("Warning: NaN/Inf gradients detected, skipping step.")
+            continue
+        
         running_sum += loss.item()
         loss_train = running_sum / (i + 1)
         iterator.set_postfix_str(f'loss: {loss_train:.3f}')
