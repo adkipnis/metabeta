@@ -65,7 +65,18 @@ def potentialGroups(df: pd.DataFrame,
     enough = (counts > minimum)
     not_too_many = (counts <= threshold * len(df))
     mask = (enough * not_too_many)
-    return cols[mask]
+    cols = cols[mask]
+    if len(cols) == 0:
+        return cols
+    
+    # check if group sizes are somewhat balanced
+    ratios = np.zeros(len(cols))
+    for i, col in enumerate(cols):
+        group_counts = df[col].value_counts()
+        ratios[i] = group_counts.max() / group_counts.min() 
+    mask = pd.Series(ratios < 10)
+    cols = cols[mask]
+    return cols
 
 
 def categorical(df: pd.DataFrame):
