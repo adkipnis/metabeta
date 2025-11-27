@@ -15,7 +15,8 @@ from metabeta.evaluation.importance import ImportanceLocal, ImportanceGlobal
 from metabeta.evaluation.coverage import getCoverage, plotCalibration, coverageError
 from metabeta.evaluation.sbc import getRanks, plotSBC, plotECDF, getWasserstein
 from metabeta.evaluation.pp import (
-    posteriorPredictiveMean,
+    # posteriorPredictiveMean,
+    posteriorPredictiveDensity,
     posteriorPredictiveSample,
     plotPosteriorPredictive,
     weightSubset,
@@ -240,19 +241,11 @@ def evaluate(
         
         
     # -------------------------------------------------------------------------
-    # in-sample posterior predictive accuracy MB
-    y_rep_mean = posteriorPredictiveMean(batch, proposed).mean(-1)
-    pp_se = (batch['y'] - y_rep_mean).square().view(b, -1)
-    pp_rmse = (pp_se.sum(-1) / batch['mask_n'].view(b, -1).sum(-1)).sqrt()
-    print(pp_rmse.mean())
     
-    # in-sample posterior predictive accuracy NUTS
-    if nuts is not None:
-        y_rep_mean_m = posteriorPredictiveMean(batch, nuts).mean(-1)
-        pp_se_m = (batch['y'] - y_rep_mean_m).square().view(b, -1)
-        pp_rmse_m = (pp_se_m.sum(-1) / batch['mask_n'].view(b, -1).sum(-1)).sqrt()
-        plt.plot(pp_rmse, pp_rmse_m, 'o')
-        print(pp_rmse_m.mean())
+    
+    
+    
+    
 
     
     # ------------------------------------------------------------------------------
@@ -297,52 +290,81 @@ def evaluate(
             )
 
     # ------------------------------------------------------------------------------
-    # posterior predictive plots
-    if extensive == 1 and nuts is not None:
-        subset_idx = torch.randperm(1000)[:500] # we need to subsample due to memory demands
+    # posterior predictive
+    
+    # Comparison of mean posterior y
+    # y_rep_mean = posteriorPredictiveMean(batch, proposed).mean(-1)
+    # pp_se = (batch['y'] - y_rep_mean).square().view(b, -1)
+    # pp_rmse = (pp_se.sum(-1) / batch['mask_n'].view(b, -1).sum(-1)).sqrt()
+    # print(pp_rmse.mean())
+    # if nuts is not None:
+    #     y_rep_mean_m = posteriorPredictiveMean(batch, nuts).mean(-1)
+    #     pp_se_m = (batch['y'] - y_rep_mean_m).square().view(b, -1)
+    #     pp_rmse_m = (pp_se_m.sum(-1) / batch['mask_n'].view(b, -1).sum(-1)).sqrt()
+    #     plt.plot(pp_rmse, pp_rmse_m, 'o')
+    #     print(pp_rmse_m.mean())
+    
+    
+    if nuts is not None:
+        s = nuts['global']['samples'].shape[-1]
+        subset_idx = torch.randperm(s)[:1000] # we need to subsample due to memory demands
         nuts_sub = {'global': {}, 'local': {}}
         nuts_sub['global'] = {'samples': nuts['global']['samples'][..., subset_idx]}
         nuts_sub['local'] = {'samples': nuts['local']['samples'][..., subset_idx]}
-        y_rep_nuts = posteriorPredictiveSample(batch, nuts_sub)
-        y_rep = posteriorPredictiveSample(batch, proposed)
-        is_mask = weightSubset(proposed['global']['weights'][:, 0])
+        
+        # in-sample posterior predictive log prob
+        y_log_prob = posteriorPredictiveDensity(batch, proposed)
+        pp_nll = -y_log_prob.sum(dim=(1,2)).mean(-1)
+        mask_mb = (pp_nll < 1e4)
+        y_log_prob_m = posteriorPredictiveDensity(batch, nuts_sub)
+        pp_nll_m = -y_log_prob_m.sum(dim=(1,2)).mean(-1)
+        mask_mcmc = (pp_nll_m < 1e4)
+        mask_pp = mask_mcmc * mask_mb
+        plt.plot(pp_nll[mask_pp], pp_nll_m[mask_pp], 'o')
+        r = float(pearsonr(pp_nll[mask_pp], pp_nll_m[mask_pp])[0])
+        print(f'Cor of pp log likelihoods {r:.3f}')
+        
+        # # samples        
+        # y_rep_nuts = posteriorPredictiveSample(batch, nuts_sub)
+        # y_rep = posteriorPredictiveSample(batch, proposed)
+        # is_mask = weightSubset(proposed['global']['weights'][:, 0])
 
-        fig, axs = plt.subplots(figsize=(6 * 2, 5 * 2), ncols=2, nrows=2, dpi=300)
-        plotPosteriorPredictive(
-            axs[0, 0],
-            batch['y'],
-            y_rep,
-            is_mask,
-            batch_idx=0,
-            color='green',
-            upper=True,
-        )
-        plotPosteriorPredictive(
-            axs[1, 0],
-            batch['y'],
-            y_rep_nuts,
-            batch_idx=0,
-            color='darkgoldenrod',
-            upper=False,
-        )
-        plotPosteriorPredictive(
-            axs[0, 1],
-            batch['y'],
-            y_rep,
-            is_mask,
-            batch_idx=11,
-            color='green',
-            upper=True,
-            show_legend=True,
-        )
-        plotPosteriorPredictive(
-            axs[1, 1],
-            batch['y'],
-            y_rep_nuts,
-            batch_idx=11,
-            color='darkgoldenrod',
-            upper=False,
-        )
+        # fig, axs = plt.subplots(figsize=(6 * 2, 5 * 2), ncols=2, nrows=2, dpi=300)
+        # plotPosteriorPredictive(
+        #     axs[0, 0],
+        #     batch['y'],
+        #     y_rep,
+        #     is_mask,
+        #     batch_idx=0,
+        #     color='green',
+        #     upper=True,
+        # )
+        # plotPosteriorPredictive(
+        #     axs[1, 0],
+        #     batch['y'],
+        #     y_rep_nuts,
+        #     batch_idx=0,
+        #     color='darkgoldenrod',
+        #     upper=False,
+        # )
+        # plotPosteriorPredictive(
+        #     axs[0, 1],
+        #     batch['y'],
+        #     y_rep,
+        #     is_mask,
+        #     batch_idx=11,
+        #     color='green',
+        #     upper=True,
+        #     show_legend=True,
+        # )
+        # plotPosteriorPredictive(
+        #     axs[1, 1],
+        #     batch['y'],
+        #     y_rep_nuts,
+        #     batch_idx=11,
+        #     color='darkgoldenrod',
+        #     upper=False,
+        # )
 
     return proposed
 
