@@ -205,10 +205,6 @@ def preprocess(ds_name: str,
     # scale down
     df[col_names_num] = df[col_names_num].apply(rescale)
 
-    # demean
-    means = df[col_names_num].mean().to_numpy()  # type: ignore
-    df[col_names_num] = df[col_names_num].apply(conditionalCenter)
-
     # dummy-code categorical variables
     for col in col_names_cat:
         df = dummify(df, col)
@@ -232,7 +228,7 @@ def preprocess(ds_name: str,
         # names
         'columns': col_names_final,
         'numeric': col_names_num,
-        'means': means,
+        # 'means': means,
         # dims
         'd': d,
         'n': n,
