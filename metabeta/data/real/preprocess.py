@@ -158,8 +158,8 @@ def preprocess(ds_name: str,
     df_orig = pd.read_parquet(fn)
 
     # discard gigantic datasets
-    if len(df_orig) > 500_000:
-        print('--- Fatal: Dataset has more than 500k rows, skipping.')
+    if len(df_orig) > 100_000:
+        print('--- Fatal: Dataset has more than 100k rows, skipping.')
         return
 
     # put column names to lower case
