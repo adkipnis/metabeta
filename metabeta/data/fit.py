@@ -127,7 +127,7 @@ def fitPyMC(ds: dict[str, torch.Tensor],
         chains=4,
         seed=0,
         method='nuts',
-        respecify_ffx: bool = False,
+        respecify_ffx: bool = True,
         parameterization='matched',
         ) -> dict[str, torch.Tensor]:
     assert method in ['nuts', 'advi'], 'unknown method selected'
@@ -275,7 +275,7 @@ def fitBambi(ds: dict[str, torch.Tensor],
              chains: int = 4,
              seed: int = 0,
              method='nuts',
-             respecify_ffx: bool = False,
+             respecify_ffx: bool = True,
              specify_priors: bool = True,
              ) -> dict[str, torch.Tensor]:
     assert method in ['nuts', 'advi'], 'unknown method selected'
@@ -285,7 +285,7 @@ def fitBambi(ds: dict[str, torch.Tensor],
     t0 = time.perf_counter()
     if method == 'nuts':
         trace = model.fit(draws=draws, tune=tune, chains=chains,
-                          inference_method='mcmc',
+                          inference_method='pymc',
                           random_seed=seed,
                           return_inferencedata=True)
     elif method == 'advi':
@@ -308,7 +308,7 @@ def fitBambi(ds: dict[str, torch.Tensor],
         [extractBambi(trace, '1|i_sigma')] +
         [extractBambi(trace, f'x{j}|i_sigma') for j in range(1, q)],
     )
-    sigma_eps = extractBambi(trace, 'y_sigma')
+    sigma_eps = extractBambi(trace, 'sigma')
     rfx = torch.cat(
         [extractBambi(trace, '1|i')] +
         [extractBambi(trace, f'x{j}|i') for j in range(1, q)],
