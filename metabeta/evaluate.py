@@ -349,6 +349,7 @@ if __name__ == '__main__':
     console_width = getConsoleWidth()
     torch.manual_seed(cfg.seed)
     torch.set_num_threads(cfg.cores)
+    device = setDevice(cfg.device)
 
 
     # --- setup and load model
@@ -356,13 +357,16 @@ if __name__ == '__main__':
         model_cfg = yaml.safe_load(f)
         model_cfg['general']['seed'] = cfg.seed
         model_cfg['general']['tag'] = cfg.m_tag
-    model = ApproximatorMFX.build(model_cfg)
+    model = ApproximatorMFX.build(model_cfg).to(device)
     model.eval()
     load(model, path, cfg.load)
     print(f'{'-' * console_width}\nmodel: {model.id}')
 
 
-    # --- load validation set
+    # -------------------------------------------------------------------------
+    # validation set
+    
+    # --- load data
     fn_val = dsFilename('mfx', 'val', 1,
                         model_cfg['general']['m'], model_cfg['general']['n'],
                         model_cfg['general']['d'], model_cfg['general']['q'], 
@@ -370,131 +374,77 @@ if __name__ == '__main__':
     dl_val = getDataLoader(fn_val, cfg.bs_val,
                            max_d=model_cfg['general']['d'],
                            max_q=model_cfg['general']['q'],
-                           permute=False, autopad=True, device='cpu')
+                           permute=False, autopad=True, device=device)
     ds_val = next(iter(dl_val))
     
-    
-    # # --- load test set
-    # fn_test = dsFilename('mfx', 'test', 1,
-    #                      model_cfg['general']['m'], model_cfg['general']['n'],
-    #                      model_cfg['general']['d'], model_cfg['general']['q'], 
-    #                      size=cfg.bs_test, tag=cfg.d_tag)
-    # dl_test = getDataLoader(fn_test, cfg.bs_test,
-    #                         max_d=model_cfg['general']['d'],
-    #                         max_q=model_cfg['general']['q'],
-    #                         permute=False, autopad=True, device='cpu')
-    # ds_test = next(iter(dl_test))
-
-    # --- calibrate on calibration set
+    # --- run and refine model
+    print('\nInference on validation set...')
+    results_val = run(model, ds_val)
+    if cfg.importance:
+        importanceSampling(results_val)
     if cfg.calibrate:
-        print('\nRunning full sampling from calibration set...')
-        results_cal = run(model, ds_val)
-        evaluate(model, results_cal, importance=cfg.importance, calibrate=False, extensive=0)
-        print('Calibrating with conformal prediction...')
-        model.calibrator.calibrate(
-            model,
-            proposed=results_cal['proposed']['global'], # type: ignore
-            targets=results_cal['targets'], # type: ignore
-        )
-        model.calibrator.save(model.id, cfg.load)
-        model.calibrator_l.calibrate(
-            model,
-            proposed=results_cal['proposed']['local'], # type: ignore
-            targets=results_cal['targets_l'], # type: ignore
-            local=True,
-        )
-        model.calibrator_l.save(model.id, cfg.load, local=True)
-
-    # # --- run on semi-synthetic test set
-    # fn_test = dsFilename(cfg.fx_type, 'test',
-    #     1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_test,
-    #     # varied=cfg.varied,
-    #     tag=cfg.d_tag,
-    # )
-    # dl_test = getDataLoader(
-    #     fn_test, cfg.bs_test, max_d=cfg.d, permute=False, autopad=True, device='cpu'
-    # )
-    # ds_test = next(iter(dl_test))
-
-    # print('\nRunning and evaluating test set...')
-    # results_test = run(model, ds_test)
-    # proposed = evaluate(model, results_test,
-    #                     importance=False,#cfg.importance,
-    #                     calibrate=cfg.calibrate,
-    #                     extensive=2,
-    #                     )
+        calibrate(model, results_val)
+        
+    # --- evaluate performance
+    recovery(model, results_val)
+    inSampleLikelihood(results_val)
+    posteriorPredictive(results_val)
+    coverage(model, results_val, use_calibrated=cfg.calibrate)
+    sbc(results_val)
     
-    # quickEval(model, results_test,
-    #           importance=cfg.importance,
-    #           calibrate=cfg.calibrate,
-    #           table=1,
-    #           )
-
-    # inspect(results_test, batch_indices=range(10))
-
-    # # --- run on varying subsets, separate splits
-    # ns = ds_test['n']
-    # rnv = ds_test['rnv']
-    # b = len(ns)
-
-    # # set 1: high n
-    # top_n, idx_size_high = ns.topk(b // 2)
-    # ds_test_1 = {k: v[idx_size_high] for k, v in ds_test.items()}
-    # results_test_1 = run(model, ds_test_1)
-
-    # # set 2: low n
-    # idx_size_low = np.setdiff1d(np.arange(b), idx_size_high.numpy())
-    # ds_test_2 = {k: v[idx_size_low] for k, v in ds_test.items()}
-    # results_test_2 = run(model, ds_test_2)
-
-    # # set 3: high SNR
-    # bottom_noise, idx_noise_low = (-rnv).topk(b // 2)
-    # ds_test_3 = {k: v[idx_noise_low] for k, v in ds_test.items()}
-    # results_test_3 = run(model, ds_test_3)
-
-    # # set 4: low SNR
-    # idx_noise_high = np.setdiff1d(np.arange(b), idx_noise_low.numpy())
-    # ds_test_4 = {k: v[idx_noise_high] for k, v in ds_test.items()}
-    # results_test_4 = run(model, ds_test_4)
-
-    # quickEval(
-    #     model,
-    #     results_test_1,
-    #     importance=cfg.importance,
-    #     calibrate=cfg.calibrate,
-    # )
-    # quickEval(
-    #     model,
-    #     results_test_2,
-    #     importance=cfg.importance,
-    #     calibrate=cfg.calibrate,
-    # )
-    # quickEval(
-    #     model,
-    #     results_test_3,
-    #     importance=cfg.importance,
-    #     calibrate=cfg.calibrate,
-    # )
-    # quickEval(
-    #     model,
-    #     results_test_4,
-    #     importance=cfg.importance,
-    #     calibrate=cfg.calibrate,
-    # )
     
-    # # --- run on sub-sampled test set
-    # cfg.bs_test = 32
-    # fn_sub = dsFilename(cfg.fx_type, 'test-sub',
-    #     1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_test,
-    #     tag=cfg.d_tag,
-    # )
-    # dl_sub = getDataLoader(
-    #     fn_sub, cfg.bs_test, max_d=cfg.d, max_q=cfg.q, permute=False, autopad=True, device='cpu'
-    # )
-    # ds_sub = next(iter(dl_sub))
+    # -------------------------------------------------------------------------
+    # test set (with MCMC estimates)
+        
+    # --- load data
+    fn_test = dsFilename('mfx', 'test', 1,
+                         model_cfg['general']['m'], model_cfg['general']['n'],
+                         model_cfg['general']['d'], model_cfg['general']['q'], 
+                         size=cfg.bs_test, tag=cfg.d_tag)
+    dl_test = getDataLoader(fn_test, cfg.bs_test,
+                            max_d=model_cfg['general']['d'],
+                            max_q=model_cfg['general']['q'],
+                            permute=False, autopad=True, device=device)
+    ds_test = next(iter(dl_test))
+
     
-    # results_sub = estimate(model, ds_sub)
+    # --- run and refine model
+    print('\nInference on test set...')
+    results_test = run(model, ds_test)
+    if cfg.importance:
+        importanceSampling(results_val)
     
+    # --- evaluate performance
+    recovery(model, results_test)
+    inSampleLikelihood(results_test)
+    posteriorPredictive(results_test)
+    coverage(model, results_test, use_calibrated=cfg.calibrate)
+    sbc(results_test)
+    
+
+    # -------------------------------------------------------------------------
+    # sub-sampled real data (with MCMC estimates)
+    
+    # --- load data
+    fn_sub = dsFilename('mfx', 'test-sub', 1,
+                        model_cfg['general']['m'], model_cfg['general']['n'],
+                        model_cfg['general']['d'], model_cfg['general']['q'], 
+                        size=cfg.bs_test, tag=cfg.d_tag)
+    dl_sub = getDataLoader(fn_sub, cfg.bs_test,
+                           max_d=model_cfg['general']['d'],
+                           max_q=model_cfg['general']['q'],
+                           permute=False, autopad=True, device=device)
+    ds_sub = next(iter(dl_sub))
+    
+    # --- run and refine model
+    print('\nInference on sub-sampled real data...')
+    results_sub = run(model, ds_sub)
+    if cfg.importance:
+        importanceSampling(results_sub)
+        
+    # --- evaluate performance
+    inSampleLikelihood(results_test)
     # mean_ffx = results_sub['proposed']['global']['samples'][:, : model.d].mean(-1)
     # mean_ffx_m = results_sub['nuts']['global']['samples'][:, : model.d].mean(-1)
     # plt.plot(mean_ffx[:, 2], mean_ffx_m[:, 2], 'o')
+
