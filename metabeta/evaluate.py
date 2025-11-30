@@ -153,6 +153,32 @@ def run(
     }
     return out
 
+def estimate(model: ApproximatorMFX,
+    batch: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
+    # model outputs
+    with torch.no_grad():
+        start = time.perf_counter()
+        proposed = model.estimate(batch, n=(500, 300))
+        end = time.perf_counter()
+    print(f'forward pass took {end - start:.2f}s')
+
+    # references
+    nuts = None
+    if 'nuts_global' in batch:
+        nuts = {}
+        nuts['global'] = {'samples': batch['nuts_global']}
+        if 'nuts_local' in batch:
+            nuts['local'] = {'samples': batch['nuts_local']}
+
+    # outputs
+    out = {
+        'batch': batch,
+        'proposed': proposed,
+        'nuts': nuts,
+    }
+    return out
+
 
 # -----------------------------------------------------------------------------
 # evaluator
