@@ -173,6 +173,57 @@ class LMDataset(Dataset):
             # masks
             'mask_m': mask_m, 'mask_d': mask_d, 'mask_q': mask_q,
             }
+        
+        if 'ffx' in data:
+            # priors
+            nu_ffx = data['nu_ffx'][i]
+            tau_ffx = data['tau_ffx'][i]
+            tau_eps = data['tau_eps'][i]
+            tau_rfx = data['tau_rfx'][i]
+            
+            # parameters
+            ffx = data['ffx'][i]
+            sigma_eps = data['sigma_eps'][i]
+            sigmas_rfx = data['sigmas_rfx'][i]
+            rfx = data['rfx'][i, :m]
+            cov_sum = data['cov_sum'][i]
+    
+            # optinally permute
+            perm = data['perm'][i]
+            unperm = data['unperm'][i]
+            if self.permute:
+                X = X[..., perm]
+                Z = Z[..., perm]
+                ffx = ffx[perm]
+                rfx = rfx[..., perm]
+                sigmas_rfx = sigmas_rfx[perm]
+                nu_ffx = nu_ffx[perm]
+                tau_ffx = tau_ffx[perm]
+                tau_rfx = tau_rfx[perm]
+
+            # remove empty dims for rfx-related tensors
+            rfx_mask = perm[non_empty] if self.permute else non_empty
+            rfx = rfx[:, rfx_mask]
+            sigmas_rfx = sigmas_rfx[rfx_mask]
+            tau_rfx = tau_rfx[rfx_mask]
+            # mask_q = mask_q[rfx_mask]
+
+            # outputs
+            out.update({
+                # global params
+                'ffx': ffx, 'sigmas_rfx': sigmas_rfx, 'sigma_eps': sigma_eps, 
+                # local params
+                'rfx': rfx, 'cov_sum': cov_sum,
+                # priors
+                'nu_ffx': nu_ffx, 'tau_ffx': tau_ffx,
+                'tau_eps': tau_eps, 'tau_rfx': tau_rfx, 
+                # masks
+                'mask_q': mask_q,
+                # permutations
+                'perm': perm, 'unperm': unperm,
+                # snr
+                'r_squared': data['r_squared'][i],
+                })
 
         # optionally include mcmc posterior
         if 'nuts_ffx' in data:
