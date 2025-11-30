@@ -130,14 +130,6 @@ def run(
     proposed = results['proposed']
     print(f'Mean loss: {losses.mean().item():.4f}')
 
-    # reconstruct varied intercepts for d = 1 and q = 0 from noise estimate
-    samples = proposed['global']['samples']
-    mask = batch['d'] == 1
-    means = samples[mask, 0]
-    stds = samples[mask, -1]
-    intercepts = D.Normal(means, stds).sample((1,)).squeeze(0)
-    proposed['global']['samples'][mask, 0] = intercepts
-
     # references
     nuts = None
     if 'nuts_global' in batch:
