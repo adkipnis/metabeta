@@ -177,18 +177,12 @@ class ApproximatorMFX(Approximator):
         self.id = model_id
 
     @classmethod
-    def build(
-        cls,
-        s_dict: dict = summary_defaults,
-        p_dict: dict = posterior_defaults,
-        m_dict: dict = model_defaults,
-        use_standardization: bool = True,
-    ):
-        s_dict = summary_defaults | s_dict
-        p_dict = posterior_defaults | p_dict
-        m_dict = model_defaults | m_dict
-        d_ffx = m_dict["d"]
-        d_rfx = m_dict["q"]
+    def build(cls, cfg: dict):
+        s_dict = cfg['summarizer']
+        p_dict = cfg['posterior']
+        m_dict = cfg['general']
+        d_ffx = m_dict['d']
+        d_rfx = m_dict['q']
         model_id = cls.modelID(s_dict, p_dict, m_dict)
         cls.d = d_ffx
         cls.q = d_rfx
@@ -239,9 +233,9 @@ class ApproximatorMFX(Approximator):
         posterior_l = CouplingPosterior(
             d_target=d_rfx,
             d_context=d_context_l,
-            n_flows=p_dict_l["flows"],
+            n_flows=p_dict_l['n_blocks'],
             transform=post_type,
-            base_type="student",
+            base_type=p_dict_l['base'],
             net_kwargs=p_dict_l,
         )
 
@@ -251,7 +245,8 @@ class ApproximatorMFX(Approximator):
             posterior_g,
             posterior_l,
             model_id=model_id,
-            use_standardization=use_standardization,
+            constrain=m_dict['constrain'],
+            use_standardization=m_dict['standardize'],
         )
 
     @property
