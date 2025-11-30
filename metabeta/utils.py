@@ -94,21 +94,27 @@ def nParams(model: nn.Module) -> int:
 
 # -----------------------------------------------------------------------------
 # moment utils
-def maskedMean(x: torch.Tensor, dim: tuple | int, mask: torch.Tensor) -> torch.Tensor:
-    sums = x.sum(dim, keepdim=True)
-    count = mask.sum(dim, keepdim=True)
-    return sums / (count + 1e-12)
+def maskedMean(x: torch.Tensor, dim: tuple | int, mask: torch.Tensor | None) -> torch.Tensor:
+    if mask is not None:
+        sums = x.sum(dim, keepdim=True)
+        count = mask.sum(dim, keepdim=True)
+        return sums / (count + 1e-12)
+    else:
+        return x.mean(dim, keepdim=True)
 
 
 def maskedStd(
-    x: torch.Tensor, dim: tuple, mask: torch.Tensor, mean: torch.Tensor | None = None
+    x: torch.Tensor, dim: tuple, mask: torch.Tensor | None, mean: torch.Tensor | None = None
 ) -> torch.Tensor:
     if mean is None:
         mean = maskedMean(x, dim, mask)
-    diff_squared_sum = ((x - mean) * mask).square().sum(dim, keepdim=True)
-    count = mask.sum(dim, keepdim=True) - 1
-    count = torch.where(count < 1, 1, count)
-    return (diff_squared_sum / count).sqrt()
+    if mask is not None:
+        diff_squared_sum = ((x - mean) * mask).square().sum(dim, keepdim=True)
+        count = mask.sum(dim, keepdim=True) - 1
+        count = torch.where(count < 1, 1, count)
+        return (diff_squared_sum / count).sqrt()
+    else:
+        return x.std(dim, keepdim=True)
 
 
 def weightedMean(x: torch.Tensor, weights: torch.Tensor | None = None) -> torch.Tensor:
