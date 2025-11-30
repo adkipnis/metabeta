@@ -1,7 +1,7 @@
 from pathlib import Path
 import pandas as pd
 import numpy as np
-import torch
+
 
 BLACKLIST = 'year age height size n_ num_ number max min attempts begin end name'.split(' ')
 GREENLIST = 'country state school education class industry occupation race sport brand genre color weekday date'.split(' ')
@@ -222,13 +222,13 @@ def preprocess(ds_name: str,
     col_names_final = df.columns
     X = df.to_numpy()
     n, d = X.shape
-    R = torch.corrcoef(torch.tensor(X).permute(1, 0))
+    cor = np.corrcoef(X, rowvar=False)
     out = {
         # data
         'X': X,
         'y': y,
         'groups': groups,
-        'cor': R,
+        'cor': cor,
         # names
         'columns': col_names_final,
         'numeric': col_names_num,
