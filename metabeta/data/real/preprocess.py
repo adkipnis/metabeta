@@ -210,10 +210,6 @@ def preprocess(ds_name: str,
         groups = groups[~outliers]
         _, n_i = np.unique(groups, return_counts=True)
         m = n_i.shape[0]
-
-    # scale down
-    df[col_names_num] = df[col_names_num].apply(rescale)
-
         
     # remove columns with more than 95% constant values
     df = dropConstantColumns(df)
