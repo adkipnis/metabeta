@@ -173,7 +173,7 @@ def preprocess(ds_name: str,
     df = dropPatchyRows(df)
 
     # isolate target
-    y = df.pop(target_name).to_numpy()
+    y = df.pop(target_name)
 
     # detect potential grouping variables
     if not group_name:
