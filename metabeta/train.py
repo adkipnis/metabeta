@@ -280,15 +280,15 @@ if __name__ == '__main__':
     # --- set up optimizer
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=cfg.lr)
 
-    # --- optionally preload a model
+    # --- optionally load a model
     model_path = Path('outputs', 'checkpoints', model.id)
     model_path.mkdir(parents=True, exist_ok=True)
     initial_iteration, global_step, validation_step = 1, 1, 1
-    if cfg.preload:
+    if cfg.load:
         initial_iteration, global_step, validation_step, timestamp = load(
-            model, optimizer, cfg.preload
+            model, optimizer, cfg.load
         )
-        print(f'preloaded model from iteration {cfg.preload}, starting at iteration {initial_iteration}...')
+        print(f'loaded model from iteration {cfg.load}, starting at iteration {initial_iteration}...')
 
     # --- logging and stopping
     log_path = Path('outputs', 'losses', model.id, timestamp)
@@ -299,47 +299,31 @@ if __name__ == '__main__':
 
     # -------------------------------------------------------------------------
     # training loop
-    print(f'fixed effects: {cfg.d}\nrandom effects: {cfg.q}\nobservations (max): {cfg.n}')
-    fn = dsFilename(
-        cfg.fx_type,
-        'val',
-        1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_val,
-        # varied=cfg.varied,
-        tag=cfg.d_tag,
-    )
-    dl_val = getDataLoader(
-        fn,
-        cfg.bs_val,
-        max_d=cfg.d,
-        max_q=cfg.q,
-        permute=False,
-        autopad=True,
-        device='cpu',
-    )
+    print(f'fixed effects: {model_cfg["general"]["d"]}\nrandom effects: {model_cfg["general"]["q"]}\nobservations (max): {model_cfg["general"]["n"]}')
+    fn = dsFilename('mfx', 'val', 1,
+                    model_cfg['general']['m'], model_cfg['general']['n'],
+                    model_cfg['general']['d'], model_cfg['general']['q'], 
+                    size=cfg.bs_val, tag=cfg.d_tag)
+    dl_val = getDataLoader(fn, cfg.bs_val,
+                           max_d=model_cfg['general']['d'],
+                           max_q=model_cfg['general']['q'],
+                           permute=False, autopad=True, device='cpu')
 
-    if cfg.preload > 0:
-        iteration = cfg.preload
-        validate(model, dl_val, cfg.preload)
+    if cfg.load > 0:
+        iteration = cfg.load
+        validate(model, dl_val, cfg.load)
 
     print(f'iterations: {cfg.iterations + 1 - initial_iteration}\npatience: {cfg.patience}\nbatches per iteration: 200\ndatasets per batch: {cfg.bs_mini}\n{'-' * console_width}')
     for iteration in range(initial_iteration, cfg.iterations + 1):
-        fn = dsFilename(
-            cfg.fx_type,
-            'train',
-            cfg.bs_mini, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_train,
-            part=iteration,
-            # varied=cfg.varied,
-            tag=cfg.d_tag,
-        )
-        dl_train = getDataLoader(
-            fn,
-            cfg.bs_mini // 2,
-            max_d=cfg.d,
-            max_q=cfg.q,
-            permute=cfg.permute,
-            autopad=False,
-            device=device,
-        )
+        fn = dsFilename('mfx', 'train', cfg.bs_mini, 
+                        model_cfg['general']['m'], model_cfg['general']['n'],
+                        model_cfg['general']['d'], model_cfg['general']['q'],
+                        size=cfg.bs_train, tag=cfg.d_tag, part=iteration)
+        dl_train = getDataLoader(fn, cfg.bs_mini, 
+                                 max_d=model_cfg['general']['d'],
+                                 max_q=model_cfg['general']['q'],
+                                 permute=model_cfg['general']['permute'],
+                                 autopad=False, device=device)
         global_step = train(model, optimizer, dl_train, global_step)
         validation_step = validate(model, dl_val, validation_step, plot=cfg.plot)
         if iteration % 5 == 0 or stopper.stop:
