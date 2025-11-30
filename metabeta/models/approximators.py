@@ -90,21 +90,21 @@ class Approximator(nn.Module):
                     x: torch.Tensor,
                     name: str,
                     mask: torch.Tensor | None = None,
-                    categorial: torch.Tensor | None = None,
                     ) -> torch.Tensor:
         """z-standardization specific for each dataset"""
         dim = tuple(range(1, x.dim() - 1))
-        if mask is not None:
-            mean = maskedMean(x, dim, mask=mask)
-            std = maskedStd(x, dim, mask=mask, mean=mean) + 1e-12
-        else:
-            mean = x.mean(dim, keepdim=True)
-            std = x.std(dim, keepdim=True) + 1e-12
-        if categorial is not None:
-            categorial = categorial.unsqueeze(1).unsqueeze(1)
-            mean[categorial] = 0.
-            std[categorial] = 1.
+        mean = maskedMean(x, dim, mask=mask)
+        std = maskedStd(x, dim, mask=mask, mean=mean) + 1e-12
+            
+        # exclude categorical columns for standardization
+        categorical = ((x == 0) | (x == 1)).all([1,2], keepdim=True)
+        mean[categorical] = 0
+        std[categorical] = 1
+        
+        # save moments
         self.stats[name] = {"mean": mean, "std": std}
+        
+        # final step
         out = (x - mean) / std
         if mask is not None:
             out *= mask
