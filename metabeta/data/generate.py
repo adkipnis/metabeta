@@ -161,18 +161,17 @@ def generate(
     n = sampleInt((batch_size, cfg.max_m), cfg.min_n, cfg.max_n)
     d, m, n, q = d.tolist(), m.tolist(), n.tolist(), q.tolist()
  
-    # presample priors
-    nu_ffx = D.Uniform(-20, 20).sample((batch_size, cfg.max_d))
-    tau_ffx0 = D.Uniform(1, 30).sample((batch_size, 1))
-    tau_ffx1 = D.Uniform(1, 20).sample((batch_size, cfg.max_d - 1))
-    tau_ffx = torch.cat([tau_ffx0, tau_ffx1], dim=-1)
-    tau_rfx = D.Uniform(1, 20).sample((batch_size, cfg.max_d))
-    tau_eps = D.Uniform(1, 20).sample((batch_size,))
-    if cfg.toy:  # smaller ranges
-        nu_ffx = sampleInt((batch_size, cfg.max_d), 0, 0).float()
-        tau_ffx = D.Uniform(1, 5).sample((batch_size, cfg.max_d))
-        tau_rfx = D.Uniform(1, 5).sample((batch_size, cfg.max_d))
-        tau_eps = D.Uniform(1, 5).sample((batch_size,))
+    # presample normalized priors
+    nu_ffx = D.Uniform(-3, 3).sample((batch_size, cfg.max_d))
+    tau_ffx = D.Uniform(0.01, 3).sample((batch_size, cfg.max_d))
+    tau_rfx = D.Uniform(0.01, 3).sample((batch_size, cfg.max_d))
+    tau_eps = D.Uniform(0.01, 2).sample((batch_size,))
+    
+    # if cfg.toy:  # smaller ranges
+    #     nu_ffx = sampleInt((batch_size, cfg.max_d), 0, 0).float()
+    #     tau_ffx = D.Uniform(1, 3).sample((batch_size, cfg.max_d))
+    #     tau_rfx = D.Uniform(1, 3).sample((batch_size, cfg.max_d))
+    #     tau_eps = D.Uniform(1, 3).sample((batch_size,))
 
     # sample datasets
     for i in iterator:
