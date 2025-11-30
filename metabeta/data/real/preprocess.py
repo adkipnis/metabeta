@@ -12,14 +12,15 @@ def removeString(this: list, string: str):
     return np.array(out)
 
 
-def dropConstantColumns(df: pd.DataFrame, threshold: float = 0.98) -> pd.DataFrame:
+def dropConstantColumns(df: pd.DataFrame, threshold: float = 0.95) -> pd.DataFrame:
     # drop columns with at least {threshold} constant values
     bad = []
-    for col in df.columns.drop('y'):
+    for col in df.columns:
         counts = df[col].value_counts(normalize=True)
         if counts.max() > threshold:
             bad.append(col)
-            print(f'--- Warning: Removing "{col}" due to mostly constant entries.')
+    if len(bad):
+        print(f'--- Warning: Removing {bad} due to mostly constant entries.')
     return df.drop(columns=bad)
 
 
