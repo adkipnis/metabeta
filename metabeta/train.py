@@ -217,7 +217,6 @@ def validate(model: ApproximatorMFX, dl: DataLoader, step: int) -> int:
 
     # run validation steps
     with torch.no_grad():
-        model = model.to('cpu')
         model.eval()
         optimizer.eval()
         for i, batch in enumerate(iterator):
@@ -234,7 +233,7 @@ def validate(model: ApproximatorMFX, dl: DataLoader, step: int) -> int:
         if sample and cfg.plot:
             # global results
             rmse, r = plot.recovery(  # type: ignore
-                targets=results['targets']['global'],
+                targets=results['targets']['global'].cpu(),
                 names=results['names']['global'],
                 means=results['moments']['global'][0],
                 return_stats=True,
@@ -246,14 +245,12 @@ def validate(model: ApproximatorMFX, dl: DataLoader, step: int) -> int:
             # local results
             if 'local' in results['names']:
                 rmse, r = plot.recovery(  # type: ignore
-                    targets=results['targets']['local'],
+                    targets=results['targets']['local'].cpu(),
                     names=results['names']['local'],
                     means=results['moments']['local'][0],
                     return_stats=True,
                 )
                 iterator.write(f'Local - RMSE: {rmse:.3f}, R: {r:.3f}')
-
-        model = model.to(device)
     return step
 
 
