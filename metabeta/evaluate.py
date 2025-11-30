@@ -1,19 +1,16 @@
 import argparse
 import yaml
 from pathlib import Path
-import copy
 import matplotlib.pyplot as plt
 import time
-from collections.abc import Iterable
 import torch
-import numpy as np
 from scipy.stats import pearsonr
 from metabeta.data.dataset import getDataLoader
-from metabeta.utils import dsFilename, getConsoleWidth
+from metabeta.utils import setDevice, dsFilename, getConsoleWidth
 from metabeta.models.approximators import ApproximatorMFX
 from metabeta.evaluation.importance import ImportanceLocal, ImportanceGlobal
-from metabeta.evaluation.coverage import getCoverage, plotCalibration, coverageError
-from metabeta.evaluation.sbc import getRanks, plotSBC, plotECDF, getWasserstein
+from metabeta.evaluation.coverage import getCoverage, plotCalibration
+from metabeta.evaluation.sbc import getRanks, plotSBC, plotECDF
 from metabeta.evaluation.pp import (
     posteriorPredictiveDensity,
     posteriorPredictiveSample,
@@ -22,7 +19,6 @@ from metabeta.evaluation.pp import (
 )
 from metabeta import plot
 
-CI = [50, 68, 80, 90, 95]
 plt.rcParams['figure.dpi'] = 300
 
 ###############################################################################
@@ -33,7 +29,7 @@ def setup() -> argparse.Namespace:
     
     # misc
     parser.add_argument('-s', '--seed', type=int, default=42, help='model seed (default = 42)')
-    parser.add_argument('--device', type=str, default='mps', help='device to use [cpu, cuda, mps]')
+    parser.add_argument('--device', type=str, default='mps', help='device to use [cpu, cuda, mps], (default = mps)')
     parser.add_argument('--cores', type=int, default=8, help='nubmer of processor cores to use (default = 8)')
     
     # loading
@@ -63,29 +59,6 @@ def load(model: ApproximatorMFX, model_path, iteration: int) -> None:
     model.load_state_dict(state['model_state_dict'])
     model.stats = state['stats']
 
-
-def inspect(
-    results: dict,
-    batch_indices: Iterable[int],
-) -> None:
-    targets = results['targets']
-    names = results['names']
-    proposed = results['proposed']
-    nuts = results['nuts']
-
-    # visualize some posteriors
-    for b in batch_indices:
-        plot.posterior(
-            target=targets,
-            proposed=proposed['global'],
-            other=nuts['global'],
-            names=names,
-            batch_idx=b,
-        )
-
-
-# -----------------------------------------------------------------------------
-# runner
 
 def run(
     model: ApproximatorMFX,
@@ -124,6 +97,7 @@ def run(
     }
     return out
 
+
 def estimate(model: ApproximatorMFX,
     batch: dict[str, torch.Tensor],
 ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
@@ -152,41 +126,49 @@ def estimate(model: ApproximatorMFX,
 
 
 # -----------------------------------------------------------------------------
-# evaluator
+# refinements
 
-
-def evaluate(
-    model: ApproximatorMFX,
-    results: dict,
-    importance: bool = False,
-    calibrate: bool = False,
-    extensive: int = 0,
-    iters: int = 2,
-) -> dict:
-    # unpack
+def importanceSampling(results: dict, iters: int = 2) -> None:
     batch = results['batch']
-    proposed = copy.deepcopy(results['proposed'])
-    names = results['names']
-    names_l = results['names_l']
+    proposed = results['proposed']
+    start = time.perf_counter()
+    for _ in range(iters):
+        proposed = ImportanceLocal(batch)(proposed)
+        proposed = ImportanceGlobal(batch)(proposed)
+    end = time.perf_counter()
+    print(f'IS took {end - start:.2f}s')
+    sample_efficiency = proposed['global'].get('sample_efficiency')
+    if sample_efficiency is not None:
+        print(f'Mean IS sample efficiency: {sample_efficiency.mean().item():.2f}')
+    
+    
+def calibrate(model: ApproximatorMFX, results: dict) -> None:
+    model.calibrator.calibrate(model,
+        proposed=results['proposed']['global'], # type: ignore
+        targets=results['targets'], # type: ignore
+    )
+    model.calibrator.save(model.id, cfg.load)
+    model.calibrator_l.calibrate(
+        model,
+        proposed=results['proposed']['local'], # type: ignore
+        targets=results['targets_l'], # type: ignore
+        local=True,
+    )
+    model.calibrator_l.save(model.id, cfg.load, local=True)
+
+
+# -----------------------------------------------------------------------------
+# evaluators
+
+def recovery(model: ApproximatorMFX, results: dict) -> None:
+    proposed = results['proposed']
     targets = results['targets']
     targets_l = results['targets_l']
-
-    # importance sampling
-    if importance:
-        print('Importance Sampling...')
-        start = time.perf_counter()
-        for _ in range(iters):
-            proposed = ImportanceLocal(batch)(proposed)
-            proposed = ImportanceGlobal(batch)(proposed)
-        end = time.perf_counter()
-        print(f'IS took {end - start:.2f}s')
-        sample_efficiency = proposed['global'].get('sample_efficiency')
-        if sample_efficiency is not None:
-            print(f'Mean IS sample efficiency: {sample_efficiency.mean().item():.2f}')
-            
+    names = results['names']
+    names_l = results['names_l']
+    nuts = results.get('nuts')
     
-    # -------------------------------------------------------------------------
-    # recovery MB
+    # metabeta
     mean, std = model.moments(proposed['global'])
     mean_l, std_l = model.moments(proposed['local'])
     plot.recoveryGrouped(
@@ -196,8 +178,7 @@ def evaluate(
         titles=['Fixed Effects', 'Random Effects', 'Variance Parameters'],
     )
 
-    # recovery NUTS
-    nuts = results.get('nuts', None)
+    # NUTS
     if nuts is not None:
         m_mean, m_std = model.moments(nuts['global'])
         m_mean_l, m_std_l = model.moments(nuts['local'])
@@ -209,93 +190,33 @@ def evaluate(
             marker='s',
         )
 
-    # -------------------------------------------------------------------------
-    # coverage MB
-    coverage = coverage_m = None
-    coverage = getCoverage(
-        model, proposed['global'], targets, intervals=CI, calibrate=calibrate
-    )
-    if nuts is not None:
-        coverage_m = getCoverage(
-            model, nuts['global'], targets, intervals=CI, calibrate=False
-        )
 
-        fig, axs = plt.subplots(figsize=(7, 7 * 2), ncols=1, nrows=2, dpi=300)
-        plotCalibration(axs[0], coverage, names, lw=3, upper=True)
-        plotCalibration(axs[1], coverage_m, names, lw=3, upper=False)
-        fig.tight_layout()
-
+def inSampleLikelihood(results: dict):
+    # in-sample posterior predictive likelihood
+    batch = results['batch']
+    proposed = results['proposed']
+    nuts = results.get('nuts')
     
-    # ------------------------------------------------------------------------------
-    # SBC histogram MB
-    mask_d = targets != 0.0
-    ranks = getRanks(targets, proposed['global'], absolute=False, mask_0=True)
-    # wd = getWasserstein(ranks, mask_d)
-    # print(f'SBC Wasserstein Distance (MB): {wd:.3f}')
-    if extensive == 1:
-        plotSBC(ranks, mask_d, names, color='darkgreen')
-
-    # SBC histogram nuts
-    if nuts is not None:
-        ranks_m = getRanks(targets, nuts['global'])
-        # wd_m = getWasserstein(ranks_m, mask_d)
-        # print(f'SBC Wasserstein Distance (HMC): {wd_m:.3f}')
-        if extensive == 1:
-            plotSBC(ranks_m, mask_d, names, color='tan')
-
-    # ------------------------------------------------------------------------------
-    # ECDF diff MB
-    ranks_abs = getRanks(targets, proposed['global'], absolute=True, mask_0=True)
-    if extensive == 1:
-        plotECDF(
-            ranks_abs,
-            mask_d,
-            names,
-            s=proposed['global']['samples'].shape[-1],
-            color='darkgreen',
-        )
-
-    # ECDF diff HMC
-    if nuts is not None:
-        ranks_abs_m = getRanks(targets, nuts['global'], absolute=True)
-        if extensive == 1:
-            plotECDF(
-                ranks_abs_m,
-                mask_d,
-                names,
-                s=nuts['global']['samples'].shape[-1],
-                color='darkgoldenrod',
-            )
-
-    # ------------------------------------------------------------------------------
-    # posterior predictive
-    
-    # Comparison of mean posterior y
-    # y_rep_mean = posteriorPredictiveMean(batch, proposed).mean(-1)
-    # pp_se = (batch['y'] - y_rep_mean).square().view(b, -1)
-    # pp_rmse = (pp_se.sum(-1) / batch['mask_n'].view(b, -1).sum(-1)).sqrt()
-    # print(pp_rmse.mean())
-    # if nuts is not None:
-    #     y_rep_mean_m = posteriorPredictiveMean(batch, nuts).mean(-1)
-    #     pp_se_m = (batch['y'] - y_rep_mean_m).square().view(b, -1)
-    #     pp_rmse_m = (pp_se_m.sum(-1) / batch['mask_n'].view(b, -1).sum(-1)).sqrt()
-    #     plt.plot(pp_rmse, pp_rmse_m, 'o')
-    #     print(pp_rmse_m.mean())
-    
+    # metabeta
+    y_log_prob = posteriorPredictiveDensity(batch, proposed)
+    pp_nll = -y_log_prob.sum(dim=(1,2)).mean(-1)
+    results['pp_nnl'] = {'mb': pp_nll}
     
     if nuts is not None:
+        # sub-sample due to memory constraints
         s = nuts['global']['samples'].shape[-1]
         subset_idx = torch.randperm(s)[:1000] # we need to subsample due to memory demands
         nuts_sub = {'global': {}, 'local': {}}
         nuts_sub['global'] = {'samples': nuts['global']['samples'][..., subset_idx]}
         nuts_sub['local'] = {'samples': nuts['local']['samples'][..., subset_idx]}
         
-        # in-sample posterior predictive log prob
-        y_log_prob = posteriorPredictiveDensity(batch, proposed)
-        pp_nll = -y_log_prob.sum(dim=(1,2)).mean(-1)
-        mask_mb = (pp_nll < 1e4)
+        # evaluate
         y_log_prob_m = posteriorPredictiveDensity(batch, nuts_sub)
         pp_nll_m = -y_log_prob_m.sum(dim=(1,2)).mean(-1)
+        results['pp_nnl'] = {'nuts': pp_nll_m}
+        
+        # plot
+        mask_mb = (pp_nll < 1e4)
         mask_mcmc = (pp_nll_m < 1e4)
         mask_pp = mask_mcmc * mask_mb
         fig, ax = plt.subplots(figsize=(8, 8))
@@ -303,172 +224,121 @@ def evaluate(
         r = float(pearsonr(pp_nll[mask_pp], pp_nll_m[mask_pp])[0])
         print(f'Cor of pp log likelihoods {r:.3f}')
         
-        # # samples        
-        # y_rep_nuts = posteriorPredictiveSample(batch, nuts_sub)
-        # y_rep = posteriorPredictiveSample(batch, proposed)
-        # is_mask = weightSubset(proposed['global']['weights'][:, 0])
-
-        # fig, axs = plt.subplots(figsize=(6 * 2, 5 * 2), ncols=2, nrows=2, dpi=300)
-        # plotPosteriorPredictive(
-        #     axs[0, 0],
-        #     batch['y'],
-        #     y_rep,
-        #     is_mask,
-        #     batch_idx=0,
-        #     color='green',
-        #     upper=True,
-        # )
-        # plotPosteriorPredictive(
-        #     axs[1, 0],
-        #     batch['y'],
-        #     y_rep_nuts,
-        #     batch_idx=0,
-        #     color='darkgoldenrod',
-        #     upper=False,
-        # )
-        # plotPosteriorPredictive(
-        #     axs[0, 1],
-        #     batch['y'],
-        #     y_rep,
-        #     is_mask,
-        #     batch_idx=11,
-        #     color='green',
-        #     upper=True,
-        #     show_legend=True,
-        # )
-        # plotPosteriorPredictive(
-        #     axs[1, 1],
-        #     batch['y'],
-        #     y_rep_nuts,
-        #     batch_idx=11,
-        #     color='darkgoldenrod',
-        #     upper=False,
-        # )
-
-    return proposed
+            
+# # Comparison of mean posterior y
+# y_rep_mean = posteriorPredictiveMean(batch, proposed).mean(-1)
+# pp_se = (batch['y'] - y_rep_mean).square().view(b, -1)
+# pp_rmse = (pp_se.sum(-1) / batch['mask_n'].view(b, -1).sum(-1)).sqrt()
+# print(pp_rmse.mean())
+# if nuts is not None:
+#     y_rep_mean_m = posteriorPredictiveMean(batch, nuts).mean(-1)
+#     pp_se_m = (batch['y'] - y_rep_mean_m).square().view(b, -1)
+#     pp_rmse_m = (pp_se_m.sum(-1) / batch['mask_n'].view(b, -1).sum(-1)).sqrt()
+#     plt.plot(pp_rmse, pp_rmse_m, 'o')
+#     print(pp_rmse_m.mean())
 
 
-def quickEval(
-    model: ApproximatorMFX,
-    results: dict,
-    importance: bool = False,
-    calibrate: bool = False,
-    iters: int = 2,
-    table: int = 1,
-) -> None:
-    # unpack
+def posteriorPredictive(results: dict, index: int = 0):
     batch = results['batch']
-    proposed = copy.deepcopy(results['proposed'])
+    proposed = results['proposed']
+    nuts = results.get('nuts')
+    n_plots = 2 if nuts is not None else 1
+    fig, axs = plt.subplots(figsize=(6, 5 * n_plots), ncols=1, nrows=n_plots, dpi=300)
+    if n_plots == 1:
+        axs = [axs]
+    
+    # metabeta
+    y_rep = posteriorPredictiveSample(batch, proposed)
+    is_mask = weightSubset(proposed['global']['weights'][:, 0])
+    plotPosteriorPredictive(
+        axs[0],
+        batch['y'],
+        y_rep,
+        is_mask,
+        batch_idx=0,
+        color='green',
+        upper=True,
+    )
+    
+    # NUTS
+    if nuts is not None:
+        # sub-sample due to memory constraints
+        s = nuts['global']['samples'].shape[-1]
+        subset_idx = torch.randperm(s)[:1000] # we need to subsample due to memory demands
+        nuts_sub = {'global': {}, 'local': {}}
+        nuts_sub['global'] = {'samples': nuts['global']['samples'][..., subset_idx]}
+        nuts_sub['local'] = {'samples': nuts['local']['samples'][..., subset_idx]}
+        
+        # sample
+        y_rep_nuts = posteriorPredictiveSample(batch, nuts_sub)
+        plotPosteriorPredictive(
+            axs[1, 0],
+            batch['y'],
+            y_rep_nuts,
+            batch_idx=0,
+            color='darkgoldenrod',
+            upper=False,
+        )
+
+
+def coverage(model: ApproximatorMFX, results: dict, use_calibrated: bool = True) -> None:
+    proposed = results['proposed']
     targets = results['targets']
-    targets_l = results['targets_l']
-    nuts = results['nuts']
-
-    # importance sampling
-    if importance:
-        for _ in range(iters):
-            proposed = ImportanceLocal(batch)(proposed)
-            proposed = ImportanceGlobal(batch)(proposed)
-
-    # recovery MB
-    mean, _ = model.moments(proposed['global'])
-    rs = np.array(
-        [pearsonr(targets[..., i], mean[..., i])[0] for i in range(mean.shape[-1])]
+    names = results['names']
+    nuts = results.get('nuts')
+    n_plots = 2 if nuts is not None else 1
+    fig, axs = plt.subplots(figsize=(7, 7 * n_plots), ncols=1, nrows=n_plots, dpi=300)
+    if n_plots == 1:
+        axs = [axs]
+    
+    # metabeta
+    coverage = getCoverage(
+        model, proposed['global'], targets, calibrate=use_calibrated
     )
-    r_ffx = rs[: model.d].mean()
-    r_sigmas = rs[model.d :].mean()
+    plotCalibration(axs[0], coverage, names, lw=3, upper=True)
+    
+    # NUTS
+    if nuts is not None:
+        coverage_m = getCoverage(
+            model, nuts['global'], targets, calibrate=False
+        )
+        plotCalibration(axs[1], coverage_m, names, lw=3, upper=False)
+    fig.tight_layout()
 
-    rmses = (targets - mean).square().mean(0).sqrt()
-    rmse_ffx = rmses[: model.d].mean()
-    rmse_sigmas = rmses[model.d :].mean()
 
-    mean_l, _ = model.moments(proposed['local'])
-    mask_l = targets_l != 0.0
-    r_rfx = []
-    rmse_rfx = []
-    for i in range(mean_l.shape[-1]):
-        mask_i = mask_l[..., i]
-        targets_i = targets_l[..., i][mask_i]
-        means_i = mean_l[..., i][mask_i]
-        r_rfx += [pearsonr(targets_i, means_i)[0]]
-        rmse_rfx += [(targets_i - means_i).square().mean(0).sqrt()]
-    r_rfx = np.mean(r_rfx)
-    rmse_rfx = np.mean(rmse_rfx)
+def sbc(results: dict):
+    proposed = results['proposed']
+    targets = results['targets']
+    mask_d = (targets != 0)
+    names = results['names']
+    nuts = results.get('nuts')
+    
+    # --- SBC histogram 
+    # metabeta
+    ranks = getRanks(targets, proposed['global'], absolute=False, mask_0=True)
+    plotSBC(ranks, mask_d, names, color='darkgreen')
+    # wd = getWasserstein(ranks, mask_d)
 
-    r = (r_ffx + r_sigmas + r_rfx) / 3
-    rmse = (rmse_ffx + rmse_sigmas + rmse_rfx) / 3
+    # NUTS
+    if nuts is not None:
+        ranks_m = getRanks(targets, nuts['global'])
+        plotSBC(ranks_m, mask_d, names, color='tan')
+        # wd_m = getWasserstein(ranks_m, mask_d)
 
-    # recovery nuts
-    m_mean, _ = model.moments(nuts['global'])
-    m_rs = np.array(
-        [pearsonr(targets[..., i], m_mean[..., i])[0] for i in range(m_mean.shape[-1])]
-    )
-    m_r_ffx = m_rs[: model.d].mean()
-    m_r_sigmas = m_rs[model.d :].mean()
+    # --- SBC ECDF
+    # metabeta
+    ranks_abs = getRanks(targets, proposed['global'], absolute=True, mask_0=True)
+    plotECDF(ranks_abs, mask_d, names,
+             s=proposed['global']['samples'].shape[-1],
+             color='darkgreen')
 
-    m_rmses = (targets - m_mean).square().mean(0).sqrt()
-    m_rmse_ffx = m_rmses[: model.d].mean()
-    m_rmse_sigmas = m_rmses[model.d :].mean()
+    # NUTS
+    if nuts is not None:
+        ranks_abs_m = getRanks(targets, nuts['global'], absolute=True)
+        plotECDF(ranks_abs_m, mask_d, names, 
+                 s=nuts['global']['samples'].shape[-1],
+                 color='darkgoldenrod')
 
-    m_mean_l, _ = model.moments(nuts['local'])
-    mask_l = targets_l != 0.0
-    m_r_rfx = []
-    m_rmse_rfx = []
-    for i in range(mean_l.shape[-1]):
-        mask_i = mask_l[..., i]
-        targets_i = targets_l[..., i][mask_i]
-        m_means_i = m_mean_l[..., i][mask_i]
-        m_r_rfx += [pearsonr(targets_i, m_means_i)[0]]
-        m_rmse_rfx += [(targets_i - m_means_i).square().mean(0).sqrt()]
-    m_r_rfx = np.mean(m_r_rfx)
-    m_rmse_rfx = np.mean(m_rmse_rfx)
-
-    m_r = (m_r_ffx + m_r_sigmas + m_r_ffx) / 3
-    m_rmse = (m_rmse_ffx + m_rmse_sigmas + m_rmse_rfx) / 3
-
-    # coverage MB
-    coverage_g = getCoverage(
-        model, proposed['global'], targets, intervals=CI, calibrate=calibrate
-    )
-    coverage_l = getCoverage(
-        model,
-        proposed['local'],
-        targets_l,
-        intervals=CI,
-        calibrate=calibrate,
-        local=True,
-    )
-    ce_g = coverageError(coverage_g)
-    ce_ffx = ce_g[: model.d].mean()
-    ce_sigmas = ce_g[model.d :].mean()
-    ce_rfx = coverageError(coverage_l).mean()
-    ce = (ce_ffx + ce_sigmas + ce_rfx) / 3
-
-    # coverage nuts
-    m_coverage_g = getCoverage(
-        model, nuts['global'], targets, intervals=CI, calibrate=False
-    )
-    m_coverage_l = getCoverage(
-        model, nuts['local'], targets_l, intervals=CI, calibrate=False, local=True
-    )
-    m_ce_g = coverageError(m_coverage_g)
-    m_ce_ffx = m_ce_g[: model.d].mean()
-    m_ce_sigmas = m_ce_g[model.d :].mean()
-    m_ce_rfx = coverageError(m_coverage_l).mean()
-    m_ce = (m_ce_ffx + m_ce_sigmas + m_ce_rfx) / 3
-
-    # overleaf: Table 1
-    if table == 1:
-        overleaf = rf'& {r:.3f} & {rmse:.3f} & {ce:.3f} & {m_r:.3f} & {m_rmse:.3f} & {m_ce.mean():.3f} \\'
-        print(overleaf)
-
-    elif table == 2:
-        # overleaf: Table 2
-        overleaf_ffx = rf'& $\boldsymbol{{\beta}}$ & {r_ffx:.3f} & {rmse_ffx:.3f} & {ce_ffx:.3f} & {m_r_ffx:.3f} & {m_rmse_ffx:.3f} & {m_ce_ffx:.3f} \\'
-        overleaf_sig = rf'& $\boldsymbol{{\sigma}}$ & {r_sigmas:.3f} & {rmse_sigmas:.3f} & {ce_sigmas:.3f} & {m_r_sigmas:.3f} & {m_rmse_sigmas:.3f} & {m_ce_sigmas:.3f} \\'
-        overleaf_rfx = rf'& $\boldsymbol{{\alpha}}$ & {r_rfx:.3f} & {rmse_rfx:.3f} & {ce_rfx:.3f} & {m_r_rfx:.3f} & {m_rmse_rfx:.3f} & {m_ce_rfx:.3f} \\'
-        print(overleaf_ffx)
-        print(overleaf_sig)
-        print(overleaf_rfx)
 
 
 # =============================================================================
