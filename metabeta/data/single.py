@@ -403,15 +403,25 @@ class Generator:
             'y': y,  # (n,)
             'groups': groups,  # (n,)
             # params
-            'ffx': ffx,  # (d,)
-            'rfx': rfx,  # (m, q)
-            'sigmas_rfx': self.prior.sigmas_rfx,  # (q,)
-            'sigma_eps': self.prior.sigma_eps,  # (1,)
-            # priors
-            'nu_ffx': self.prior.nu_ffx,  # (d,)
-            'tau_ffx': self.prior.tau_ffx,  # (d,)
-            'tau_rfx': self.prior.tau_rfx,  # (q,)
-            'tau_eps': self.prior.tau_eps,  # (1,)
+            'ffx': ffx_,  # (d,)
+            'rfx': rfx_,  # (m, q)
+            'sigmas_rfx': sigmas_rfx,  # (q,)
+            'sigma_eps': sigma_eps,  # (1,)
+            # unnormalized params
+            'ffx_u': ffx,  # (d,)
+            'rfx_u': rfx,  # (m, q)
+            'sigmas_rfx_u': self.prior.sigmas_rfx,  # (q,)
+            'sigma_eps_u': self.prior.sigma_eps,  # (1,)
+            # # unnormalized priors
+            'nu_ffx': nu_ffx,  # (d,)
+            'tau_ffx': tau_ffx,  # (d,)
+            'tau_rfx': tau_rfx,  # (q,)
+            'tau_eps': tau_eps,  # (1,)
+            # unnormalized priors
+            'nu_ffx_u': self.prior.nu_ffx,  # (d,)
+            'tau_ffx_u': self.prior.tau_ffx,  # (d,)
+            'tau_rfx_u': self.prior.tau_rfx,  # (q,)
+            'tau_eps_u': self.prior.tau_eps,  # (1,)
             # misc
             'm': torch.tensor(m),  # (1,)
             'n': torch.tensor(n),  # (1,)
@@ -419,7 +429,7 @@ class Generator:
             'd': torch.tensor(self.d),  # (1,)
             'q': torch.tensor(self.q),  # (1,)
             'cov_sum': cov_sum,  # (1,)
-            'rnv': rnv,  # (1,)
+            'r_squared': r_squared,  # (1,)
             'okay': okay,
         }
         return out
