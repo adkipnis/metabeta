@@ -5,7 +5,7 @@ from torch.nn.functional import pad
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.dataloader import default_collate
 from metabeta.utils import padTensor, getPermutation, inversePermutation
-
+from metabeta.data.fit import autoScalePriors
 
 def split(
     long: torch.Tensor,
@@ -111,6 +111,8 @@ class LMDataset(Dataset):
 
         # precompute permutations
         self.permute = permute
+        if self.permute:
+            assert 'ffx' in data, 'permutation currently not available for datasets without known parameters'
         if permute:
             perm = [getPermutation(self.max_d) for _ in range(self.len)]
             unperm = [inversePermutation(p) for p in perm]
@@ -121,11 +123,10 @@ class LMDataset(Dataset):
             data['unperm'] = data['perm']
 
         # mfx extras
-        self.is_mfx = 'rfx' in data
-        if self.is_mfx:
-            self.max_n_i = int(data['n_i'].max())
-            self.max_m = int(data['m'].max())
-            self.max_q = int(max(data['q'].max(), torch.tensor(max_q)))
+        self.max_n_i = int(data['n_i'].max())
+        self.max_m = int(data['m'].max())
+        self.max_q = int(max(data['q'].max(), torch.tensor(max_q)))
+        if 'ffx' in data:
             data['rfx'] = padTensor(data['rfx'], (self.len, self.max_m, self.max_d))
             data['sigmas_rfx'] = padTensor(data['sigmas_rfx'], (self.len, self.max_d))
             data['tau_rfx'] = padTensor(data['tau_rfx'], (self.len, self.max_d))
@@ -156,48 +157,7 @@ class LMDataset(Dataset):
         Z[:, q:] = 0
         non_empty = torch.ones(self.max_d, dtype=torch.bool)
         non_empty[self.max_q :] = False
-
-        # parameters
-        ffx = data['ffx'][i]
-        sigma_eps = data['sigma_eps'][i]
-        sigmas_rfx = data['sigmas_rfx'][i]
-        rfx = data['rfx'][i, :m]
-        cov_sum = data['cov_sum'][i]
-
-        # priors
-        nu_ffx = data['nu_ffx'][i]
-        tau_ffx = data['tau_ffx'][i]
-        tau_eps = data['tau_eps'][i]
-        tau_rfx = data['tau_rfx'][i]
-
-        # optinally permute
-        perm = data['perm'][i]
-        unperm = data['unperm'][i]
-        if self.permute:
-            X = X[..., perm]
-            Z = Z[..., perm]
-            ffx = ffx[perm]
-            rfx = rfx[..., perm]
-            sigmas_rfx = sigmas_rfx[perm]
-            nu_ffx = nu_ffx[perm]
-            tau_ffx = tau_ffx[perm]
-            tau_rfx = tau_rfx[perm]
-
-        # correlation
-        R = torch.zeros(self.max_r)
-        if d > 2:
-            r = torch.corrcoef(X[:, 1:].permute(1, 0))
-            row_idx, col_idx = torch.triu_indices(
-                self.max_d - 1, self.max_d - 1, offset=1
-            )
-            R = r[row_idx, col_idx].nan_to_num()
-
-        # remove empty dims for rfx-related tensors
-        rfx_mask = perm[non_empty] if self.permute else non_empty
-        rfx = rfx[:, rfx_mask]
-        sigmas_rfx = sigmas_rfx[rfx_mask]
-        tau_rfx = tau_rfx[rfx_mask]
-
+        
         # masks
         mask_m = torch.zeros(self.max_m, dtype=torch.bool)
         mask_m[:m] = True
