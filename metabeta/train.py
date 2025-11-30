@@ -23,15 +23,15 @@ def setup() -> argparse.Namespace:
     
     # misc
     parser.add_argument('-s', '--seed', type=int, default=42, help='model seed (default = 42)')
-    parser.add_argument('--device', type=str, default='mps', help='device to use [cpu, cuda, mps]')
+    parser.add_argument('--device', type=str, default='mps', help='device to use [cpu, cuda, mps], (default = mps)')
     parser.add_argument('--cores', type=int, default=8, help='nubmer of processor cores to use (default = 8)')
     parser.add_argument('--plot', action='store_false', help='plot sampling results (default = True)')
     
     # loading
     parser.add_argument('--d_tag', type=str, default='all', help='suffix for data ID (default = '')')
     parser.add_argument('--m_tag', type=str, default='all', help='suffix for model ID (default = '')')
-    parser.add_argument('--c_tag', type=str, default='config', help='name of model config file (default = "config")')
-    parser.add_argument('-l', '--load', type=int, default=0, help='load model from iteration #p')
+    parser.add_argument('--c_tag', type=str, default='config', help='name of model config file (default = config)')
+    parser.add_argument('-l', '--load', type=int, default=10, help='load model from iteration #p')
     
     # training
     parser.add_argument('-i', '--iterations', type=int, default=10, help='maximum number of iterations to train (default = 10)')
