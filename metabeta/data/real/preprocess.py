@@ -196,11 +196,8 @@ def preprocess(ds_name: str,
         groups = df.pop(group_name)
         groups, _ = pd.factorize(groups)
 
-    # analyze column types
-    col_names_num = numerical(df)
-    col_names_cat = categorical(df)
-
     # remove outliers
+    col_names_num = numerical(df)
     outliers = findOutliers(df[col_names_num])
     df = df[~outliers]
     y = y[~outliers]
@@ -213,6 +210,14 @@ def preprocess(ds_name: str,
         
     # remove columns with more than 95% constant values
     df = dropConstantColumns(df)
+    
+    # (re-)analyze column types
+    col_names_num = numerical(df)
+    col_names_cat = categorical(df)
+    
+    # z-standardize
+    df[col_names_num] = df[col_names_num].apply(standardize)
+    y = standardize(y)
         
     # dummy-code categorical variables
     for col in col_names_cat:
