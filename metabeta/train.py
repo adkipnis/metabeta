@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 import argparse
 import yaml
@@ -56,7 +55,7 @@ class Logger:
 
     def init(self, losstype: str) -> None:
         fname = Path(self.trunk, f'{losstype}.csv')
-        if not os.path.exists(fname):
+        if not fname.exists():
             with open(fname, 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow(['iteration', 'step', 'loss'])
