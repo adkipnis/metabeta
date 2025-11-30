@@ -101,6 +101,16 @@ def rescale(col: pd.Series):
     return x / scale_factor
 
 
+def standardize(col: pd.Series):
+    x = col.values.astype(float)
+    mean = np.nanmean(x)
+    std = np.nanstd(x)
+    out = (x-mean)/std
+    if np.isnan(out).any():
+        return x
+    return out
+    
+
 def conditionalCenter(col: pd.Series, threshold: float = 0.25):
     # center column if less than {threshold} of its entries are zero
     zero_count = (col == 0).sum()
