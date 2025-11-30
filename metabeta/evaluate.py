@@ -491,38 +491,49 @@ if __name__ == '__main__':
     load(model, path, cfg.load)
     print(f'{'-' * console_width}\nmodel: {model.id}')
 
-    # --- load model and data
-    load(model, path, cfg.iteration)
-    fn = dsFilename(cfg.fx_type, 'val',
-                    1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_val,
-                    # varied=cfg.varied,
-                    tag=cfg.d_tag,
-                    )
-    dl_val = getDataLoader(fn, cfg.bs_val, max_d=cfg.d, max_q=cfg.q,
-                           permute=False, autopad=True, device='cpu',
-                           )
-    ds_val = next(iter(dl_val))
-    print(f'preloaded model from iteration {cfg.iteration} and test set...\n{'-' * console_width}')
 
-    # # --- calibrate on calibration set
-    # if cfg.calibrate:
-    #     print('\nRunning full sampling from calibration set...')
-    #     results_cal = run(model, ds_val)
-    #     evaluate(model, results_cal, importance=cfg.importance, calibrate=False, extensive=0)
-    #     print('Calibrating with conformal prediction...')
-    #     model.calibrator.calibrate(
-    #         model,
-    #         proposed=results_cal['proposed']['global'], # type: ignore
-    #         targets=results_cal['targets'], # type: ignore
-    #     )
-    #     model.calibrator.save(model.id, cfg.iteration)
-    #     model.calibrator_l.calibrate(
-    #         model,
-    #         proposed=results_cal['proposed']['local'], # type: ignore
-    #         targets=results_cal['targets_l'], # type: ignore
-    #         local=True,
-    #     )
-    #     model.calibrator_l.save(model.id, cfg.iteration, local=True)
+    # --- load validation set
+    fn_val = dsFilename('mfx', 'val', 1,
+                        model_cfg['general']['m'], model_cfg['general']['n'],
+                        model_cfg['general']['d'], model_cfg['general']['q'], 
+                        size=cfg.bs_val, tag=cfg.d_tag)
+    dl_val = getDataLoader(fn_val, cfg.bs_val,
+                           max_d=model_cfg['general']['d'],
+                           max_q=model_cfg['general']['q'],
+                           permute=False, autopad=True, device='cpu')
+    ds_val = next(iter(dl_val))
+    
+    
+    # # --- load test set
+    # fn_test = dsFilename('mfx', 'test', 1,
+    #                      model_cfg['general']['m'], model_cfg['general']['n'],
+    #                      model_cfg['general']['d'], model_cfg['general']['q'], 
+    #                      size=cfg.bs_test, tag=cfg.d_tag)
+    # dl_test = getDataLoader(fn_test, cfg.bs_test,
+    #                         max_d=model_cfg['general']['d'],
+    #                         max_q=model_cfg['general']['q'],
+    #                         permute=False, autopad=True, device='cpu')
+    # ds_test = next(iter(dl_test))
+
+    # --- calibrate on calibration set
+    if cfg.calibrate:
+        print('\nRunning full sampling from calibration set...')
+        results_cal = run(model, ds_val)
+        evaluate(model, results_cal, importance=cfg.importance, calibrate=False, extensive=0)
+        print('Calibrating with conformal prediction...')
+        model.calibrator.calibrate(
+            model,
+            proposed=results_cal['proposed']['global'], # type: ignore
+            targets=results_cal['targets'], # type: ignore
+        )
+        model.calibrator.save(model.id, cfg.load)
+        model.calibrator_l.calibrate(
+            model,
+            proposed=results_cal['proposed']['local'], # type: ignore
+            targets=results_cal['targets_l'], # type: ignore
+            local=True,
+        )
+        model.calibrator_l.save(model.id, cfg.load, local=True)
 
     # # --- run on semi-synthetic test set
     # fn_test = dsFilename(cfg.fx_type, 'test',
@@ -601,19 +612,19 @@ if __name__ == '__main__':
     #     calibrate=cfg.calibrate,
     # )
     
-    # --- run on sub-sampled test set
-    cfg.bs_test = 32
-    fn_sub = dsFilename(cfg.fx_type, 'test-sub',
-        1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_test,
-        tag=cfg.d_tag,
-    )
-    dl_sub = getDataLoader(
-        fn_sub, cfg.bs_test, max_d=cfg.d, max_q=cfg.q, permute=False, autopad=True, device='cpu'
-    )
-    ds_sub = next(iter(dl_sub))
+    # # --- run on sub-sampled test set
+    # cfg.bs_test = 32
+    # fn_sub = dsFilename(cfg.fx_type, 'test-sub',
+    #     1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_test,
+    #     tag=cfg.d_tag,
+    # )
+    # dl_sub = getDataLoader(
+    #     fn_sub, cfg.bs_test, max_d=cfg.d, max_q=cfg.q, permute=False, autopad=True, device='cpu'
+    # )
+    # ds_sub = next(iter(dl_sub))
     
-    results_sub = estimate(model, ds_sub)
+    # results_sub = estimate(model, ds_sub)
     
-    mean_ffx = results_sub['proposed']['global']['samples'][:, : model.d].mean(-1)
-    mean_ffx_m = results_sub['nuts']['global']['samples'][:, : model.d].mean(-1)
-    plt.plot(mean_ffx[:, 2], mean_ffx_m[:, 2], 'o')
+    # mean_ffx = results_sub['proposed']['global']['samples'][:, : model.d].mean(-1)
+    # mean_ffx_m = results_sub['nuts']['global']['samples'][:, : model.d].mean(-1)
+    # plt.plot(mean_ffx[:, 2], mean_ffx_m[:, 2], 'o')
