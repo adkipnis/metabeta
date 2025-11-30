@@ -367,7 +367,6 @@ class ApproximatorMFX(Approximator):
             out += [
                 data["m"].unsqueeze(-1).sqrt() / 10,
                 data["n"].unsqueeze(-1).sqrt() / 10,
-                # data['R'], # correlations
             ]
 
             # prior params
@@ -441,9 +440,7 @@ class ApproximatorMFX(Approximator):
                 ffx_ = ffx / std_y.view(b, 1)
                 ffx_[:, 1:] *= std_X.view(b, d - 1)
                 mean_Xb = (mean_X.view(b, d - 1) * ffx[:, 1:]).sum(1)
-                ffx_[:, 0] = (ffx[:, 0] + mean_Xb - mean_y.view(b)) / std_y.view(
-                    b
-                )  # this might be too small with std_y
+                ffx_[:, 0] = (ffx[:, 0] + mean_Xb - mean_y.view(b)) / std_y.view(b)  # this might be too small with std_y
 
                 # standardize sigmas
                 sigma_eps /= std_y.view(b, 1)
@@ -451,9 +448,7 @@ class ApproximatorMFX(Approximator):
                 sigmas_rfx_[:, 1:] *= std_Z.view(b, q - 1)  # random slopes
 
                 # sigma intercept with covsum
-                cov_sum = data[
-                    "cov_sum"
-                ]  # sum of the mean covariance between Z and rfx
+                cov_sum = data["cov_sum"]  # sum of the mean covariance between Z and rfx
                 sigmas_rfx_[:, 0] = (
                     sigmas_rfx[:, 0].square() + cov_sum
                 ).sqrt() / std_y.view(b)
