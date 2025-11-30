@@ -85,13 +85,14 @@ class Prior:
         return ffx
 
     def sampleRfx(self, m: int) -> torch.Tensor:
-        self.sigmas_rfx = D.HalfCauchy(self.tau_rfx).sample()
+        self.sigmas_rfx = D.HalfNormal(self.tau_rfx).sample()
         rfx = standardnormal(m, self.q)
         rfx *= self.sigmas_rfx.unsqueeze(0) # type: ignore
         return rfx
 
     def sampleEps(self, n: int) -> torch.Tensor:
-        self.sigma_eps = D.HalfCauchy(self.tau_eps).sample()
+        # self.sigma_eps = D.HalfNormal(self.tau_eps).sample()
+        self.sigma_eps = D.StudentT(df=4, scale=self.tau_eps).sample().abs()
         eps = standardnormal(n)
         eps *= self.sigma_eps # type: ignore
         return eps
