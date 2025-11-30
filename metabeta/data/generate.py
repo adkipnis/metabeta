@@ -10,7 +10,7 @@ from metabeta.utils import dsFilename, padTensor
 from metabeta.data.single import Prior, Synthesizer, Emulator, Generator
 from metabeta.data.fit import fitPyMC, fitBambi
 
-# import matplotlib.pyplot as plt
+
 # -----------------------------------------------------------------------------
 # config
 def setup() -> argparse.Namespace:
@@ -18,23 +18,22 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--bs_train', type=int, default=4096, help='batch size per training partition (default = 4,096).')
     parser.add_argument('--bs_val', type=int, default=256, help='batch size for validation partition (default = 256).')
     parser.add_argument('--bs_test', type=int, default=32, help='batch size per testing partition (default = 256).')
-    parser.add_argument('--bs_load', type=int, default=32, help='Batch size when loading (for grouping n, default = 32)')
+    parser.add_argument('--bs_load', type=int, default=16, help='Batch size when loading (for grouping n, default = 16)')
     parser.add_argument('--min_m', type=int, default=5, help='Minimum number of groups (default = 5).')
-    parser.add_argument('--max_m', type=int, default=30, help='Maximum number of groups (default = 50).')
+    parser.add_argument('--max_m', type=int, default=30, help='Maximum number of groups (default = 30).')
     parser.add_argument('--min_n', type=int, default=10, help='Minimum number of samples per group (default = 10).')
-    parser.add_argument('--max_n', type=int, default=70, help='Maximum number of samples per group (default = 100).')
-    parser.add_argument('--max_d', type=int, default=3, help='Maximum number of fixed effects (intercept + slopes) to draw per linear model (default = 12).')
-    parser.add_argument('--max_q', type=int, default=2, help='Maximum number of random effects (intercept + slopes) to draw per linear model (default = 4).')
+    parser.add_argument('--max_n', type=int, default=70, help='Maximum number of samples per group (default = 70).')
+    parser.add_argument('--max_d', type=int, default=3, help='Maximum number of fixed effects (intercept + slopes) to draw per linear model.')
+    parser.add_argument('--max_q', type=int, default=1, help='Maximum number of random effects (intercept + slopes) to draw per linear model.')
     parser.add_argument('--d_tag', type=str, default='all', help='Suffix for model ID (default = '')')
     parser.add_argument('--api', type=str, default='bambi', help='API to use for competetive fit (default = "bambi")')
     parser.add_argument('--toy', action='store_true', help='Generate toy data (default = False)')
-    parser.add_argument('--semi', action='store_true', help='Generate semi-synthetic data (default = False)')
-    parser.add_argument('--sub', action='store_false', help='Generate sub-sampled real data (default = False)')
+    parser.add_argument('--semi', action='store_false', help='Generate semi-synthetic data (default = False)')
+    parser.add_argument('--sub', action='store_true', help='Generate sub-sampled real data (default = False)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD for semi-synthetic data (default = False)')
-    # parser.add_argument('--varied', action='store_true', help='variable d and q (default = False)')
     parser.add_argument('-s', '--seed', type=int, default=42, help='Seed for PyMC fit (default = 42)')
-    parser.add_argument('-b', '--begin', type=int, default=-1, help='Begin with iteration number #b (default = 0).')
-    parser.add_argument('-i', '--iterations', type=int, default=50, help='Number of dataset partitions to generate (default = 100, 0 only generates validation dataset).')
+    parser.add_argument('-b', '--begin', type=int, default=0, help='Begin with iteration number #b.')
+    parser.add_argument('-i', '--iterations', type=int, default=10, help='Number of dataset partitions to generate.')
     return parser.parse_args()
 
 # -----------------------------------------------------------------------------
@@ -61,7 +60,6 @@ def getFileName(ds_type: str, part: int) -> Path:
         q=cfg.max_q,
         size=size,
         part=part,
-        # varied=cfg.varied,
         tag=cfg.d_tag,
         outside=True,
     )
@@ -167,12 +165,6 @@ def generate(
     tau_ffx = D.Uniform(0.01, 3).sample((batch_size, cfg.max_d))
     tau_rfx = D.Uniform(0.01, 3).sample((batch_size, cfg.max_d))
     tau_eps = D.Uniform(0.01, 2).sample((batch_size,))
-    
-    # if cfg.toy:  # smaller ranges
-    #     nu_ffx = sampleInt((batch_size, cfg.max_d), 0, 0).float()
-    #     tau_ffx = D.Uniform(1, 3).sample((batch_size, cfg.max_d))
-    #     tau_rfx = D.Uniform(1, 3).sample((batch_size, cfg.max_d))
-    #     tau_eps = D.Uniform(1, 3).sample((batch_size,))
 
     # sample datasets
     for i in iterator:
@@ -211,11 +203,11 @@ def generate(
                                   specify_priors=(not cfg.sub))
             ds.update(nuts_results)
             
-            # # VI
-            # print(f'Fitting ADVI using {cfg.api.upper()}')
-            # advi_results = fitter(ds, method='advi', seed=cfg.seed, 
-            #                       specify_priors=(not cfg.sub))
-            # ds.update(advi_results)
+            # VI
+            print(f'Fitting ADVI using {cfg.api.upper()}')
+            advi_results = fitter(ds, method='advi', seed=cfg.seed, 
+                                  specify_priors=(not cfg.sub))
+            ds.update(advi_results)
     return data
 
 
@@ -271,7 +263,6 @@ if __name__ == '__main__':
     for part in range(cfg.begin, cfg.iterations + 1):
         ds_train = generate(cfg.bs_train, part, bs_load=cfg.bs_load)
         ds_train = aggregate(ds_train)
-        # plt.hist(ds_train['rnv'])
         fn = getFileName('train', part)
         np.savez_compressed(fn, **ds_train, allow_pickle=True)
         print(f'Saved training set to {fn}')
