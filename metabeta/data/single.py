@@ -290,6 +290,7 @@ class Generator:
     prior: Prior
     design: Synthesizer | Emulator
     n_i: torch.Tensor # number of observations per group
+    sub: bool = False
     plot: bool = False
 
     def __post_init__(self):
@@ -304,10 +305,32 @@ class Generator:
         ffx = self.prior.sampleFfx() # (d,)
  
         # data (may depend on ffx)
-        X, groups, n_i = self.design.sample(d=self.d, n_i=self.n_i, parameters=ffx)
+        X, groups, n_i, y = self.design.sample(d=self.d, n_i=self.n_i)
         Z = X[:, : self.q]
         n = len(X) # total number of observations
         m = len(n_i) # number of groups
+        
+        # sub-sampled real data does not receive parameters and new y
+        if self.sub:
+            mask = ~ y.isnan()
+            groups = groups[mask]
+            n_i = groups.unique(return_counts=True)[1]
+            X = X[mask]
+            y = y[mask]
+            y = (y - y.mean()) / y.std()
+            return {
+                # data
+                'X': X,  # (n, d-1)
+                'y': y,  # (n,)
+                'groups': groups,  # (n,)
+                # misc
+                'm': torch.tensor(m),  # (1,)
+                'n': n_i.sum(),  # (1,)
+                'n_i': n_i,  # (m,)
+                'd': torch.tensor(self.d),  # (1,)
+                'q': torch.tensor(self.q),  # (1,)
+                'okay': torch.tensor(True),
+            }
 
         # random effects
         rfx = self.prior.sampleRfx(m) # (m, q)
