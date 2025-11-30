@@ -87,7 +87,8 @@ def prepare(ds: dict[str, torch.Tensor],
 
             # outcome
             mu = pt.dot(X, ffx) + pt.sum(Z * rfx[groups], axis=1)
-            sigma_eps = pm.HalfNormal('sigma_eps', sigma=tau_eps)
+            # sigma_eps = pm.HalfNormal('sigma_eps', sigma=tau_eps)
+            sigma_eps = pm.HalfStudentT('sigma_eps', nu=4, sigma=tau_eps)
             y_obs = pm.Normal('y_obs', mu=mu, sigma=sigma_eps, observed=y, shape=n)
         return model
     
@@ -112,7 +113,8 @@ def prepare(ds: dict[str, torch.Tensor],
 
             # outcome
             mu = pt.dot(X, ffx) + pt.sum(Z * mfx[groups], axis=1)
-            sigma_eps = pm.HalfNormal('sigma_eps', sigma=tau_eps)
+            # sigma_eps = pm.HalfNormal('sigma_eps', sigma=tau_eps)
+            sigma_eps = pm.HalfStudentT('sigma_eps', nu=4, sigma=tau_eps)
             y_obs = pm.Normal("y_obs", mu=mu, sigma=sigma_eps, observed=y, shape=n)
         return model
     else:
@@ -238,7 +240,8 @@ def priorize(ds: dict[str, torch.Tensor], respecify_ffx: bool = False) -> dict[s
     
     #  noise variance and random intercept variance
     priors.update({
-        'sigma': bmb.Prior('HalfNormal', sigma=tau_eps),
+        # 'sigma': bmb.Prior('HalfNormal', sigma=tau_eps),
+        'sigma': bmb.Prior('HalfStudentT', nu=4, sigma=tau_eps),
         '1|i': bmb.Prior('Normal', mu=0, sigma=bmb.Prior('HalfNormal', sigma=tau_rfx[0])),
         })
 
