@@ -10,8 +10,8 @@ class DistWithPrior:
 
     def __init__(
         self,
-        weight: float,
-        limit: float = 500,
+        weight: float = 0.,
+        limit: float = float('inf'),
         center: bool = True,
         use_default: bool = False,
     ):
