@@ -14,6 +14,7 @@ import schedulefree
 from metabeta.utils import setDevice, dsFilename, getConsoleWidth
 from metabeta.data.dataset import getDataLoader
 from metabeta.models.approximators import Approximator, ApproximatorMFX
+from metabeta import plot
 
 
 def setup() -> argparse.Namespace:
@@ -206,7 +207,7 @@ def train(
     return step
 
 
-def validate(model: ApproximatorMFX, dl: DataLoader, step: int, plot: bool = False) -> int:
+def validate(model: ApproximatorMFX, dl: DataLoader, step: int) -> int:
     results = None
     iterator = tqdm(dl, desc=f'iteration {iteration:02d}/{cfg.iterations:02d} [V]')
     loss_val = 0
@@ -230,7 +231,7 @@ def validate(model: ApproximatorMFX, dl: DataLoader, step: int, plot: bool = Fal
         stopper.update(loss_val)
 
         # evaluate samples
-        if sample and plot:
+        if sample and cfg.plot:
             # global results
             rmse, r = plot.recovery(  # type: ignore
                 targets=results['targets']['global'],
