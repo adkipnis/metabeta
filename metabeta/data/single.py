@@ -301,9 +301,6 @@ class Generator:
  
 
     def sample(self) -> dict[str, torch.Tensor]:
-        # fixed effects
-        ffx = self.prior.sampleFfx() # (d,)
- 
         # data (may depend on ffx)
         X, groups, n_i, y = self.design.sample(d=self.d, n_i=self.n_i)
         Z = X[:, : self.q]
@@ -331,25 +328,42 @@ class Generator:
                 'q': torch.tensor(self.q),  # (1,)
                 'okay': torch.tensor(True),
             }
+            
+        # fixed effects
+        ffx = self.prior.sampleFfx() # (d, )
 
         # random effects
         rfx = self.prior.sampleRfx(m) # (m, q)
+        sigmas_rfx = self.prior.sigmas_rfx
+        
+        # noise
+        eps = self.prior.sampleEps(n) # (n, )
+        sigma_eps = self.prior.sigma_eps
+        
+        # standard deviations
+        dummy_columns = ((X == 0) | (X == 1)).all(0)
+        std_X = X.std(0)
+        std_X[dummy_columns] = 1
+        std_Z = std_X[: self.q]
 
-        # outcome
-        y_hat = X @ ffx + (Z * rfx[groups]).sum(dim=-1) # (n,)
-
-        # calibrate noise
-        attempts = 0
-        signal = y_hat.var()
-        okay = torch.tensor(False)
-        while not okay:
-            eps = self.prior.sampleEps(n) # (n,)
-            noise = self.prior.sigma_eps.square()
-            rnv = noise / (signal + noise)
-            attempts += 1
-            okay = (0.1 <= rnv <= 0.9) or torch.tensor(attempts > 25)
-        y = y_hat + eps
-
+        # standardized outcome
+        y_ = X @ (ffx / std_X) + (Z * rfx[groups] / std_Z).sum(dim=-1) + eps # (n, )
+        
+        # rescale to meet SD(y) target
+        ratio = 1 / y_.std()
+        ffx_ = ffx / std_X * ratio
+        sigmas_rfx = sigmas_rfx / std_Z * ratio
+        rfx_ = rfx / std_Z * ratio
+        sigma_eps = sigma_eps * ratio
+        eps = eps * ratio
+        y = X @ ffx_ + (Z * rfx_[groups]).sum(dim=-1) + eps # (n, )
+        
+        # adapt priors
+        nu_ffx = self.prior.nu_ffx / std_X * ratio
+        tau_ffx = self.prior.tau_ffx / std_X * ratio
+        tau_rfx = self.prior.tau_rfx / std_Z * ratio
+        tau_eps = self.prior.tau_eps * ratio
+        
         # Cov(mean Z, rfx), needed for standardization
         weighted_rfx = Z.mean(0, keepdim=True) * rfx
         cov = fullCovary(weighted_rfx)
