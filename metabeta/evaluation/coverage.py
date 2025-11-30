@@ -3,6 +3,8 @@ import torch
 from pathlib import Path
 
 
+CI = [50, 68, 80, 90, 95]
+
 class Calibrator:
     def __init__(self, d: int, intervals: Iterable[int] = range(1, 100)):
         self.d = d  # dimensionality of target
@@ -30,7 +32,7 @@ class Calibrator:
         for i in self.intervals:
             alpha = (100 - i) / 100
             quantiles = model.quantiles(
-                proposed, [alpha / 2, 1 - alpha / 2], local=local
+                proposed, [alpha / 2, 1 - alpha / 2], local=local, use_weights=False,
             )
             self.calibrateSingle(quantiles, targets, i)
 
@@ -104,7 +106,7 @@ def getCoverage(
     model,
     proposed: dict[str, torch.Tensor],
     targets: torch.Tensor,
-    intervals: list[int],
+    intervals: list[int] = CI,
     calibrate: bool = False,
     local: bool = False,
 ) -> dict[str, torch.Tensor]:
