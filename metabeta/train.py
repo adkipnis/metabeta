@@ -254,17 +254,17 @@ def validate(model: ApproximatorMFX, dl: DataLoader, step: int) -> int:
     return step
 
 
-###############################################################################
+# =============================================================================
 if __name__ == '__main__':
     # --- setup training config
     cfg = setup()
     torch.manual_seed(cfg.seed)
     torch.cuda.manual_seed_all(cfg.seed)
     torch.backends.cudnn.deterministic = True
+    torch.set_num_threads(cfg.cores)
     timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     console_width = getConsoleWidth()
     device = setDevice(cfg.device)
-    torch.set_num_threads(cfg.cores)
     
     # --- setup model
     with open(Path('models', f'{cfg.c_tag}.yaml'), 'r') as f:
@@ -287,16 +287,14 @@ if __name__ == '__main__':
         )
         print(f'loaded model from iteration {cfg.load}, starting at iteration {initial_iteration}...')
 
-    # --- logging and stopping
+    # --- logging and early stopping
     log_path = Path('outputs', 'losses', model.id, timestamp)
     logger = Logger(log_path)
     stopper = EarlyStopping(patience=cfg.patience)
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f'total parameters: {num_params}, summarizer: {model.num_sum}, posterior: {model.num_inf}')
 
-    # -------------------------------------------------------------------------
-    # training loop
-    print(f'fixed effects: {model_cfg["general"]["d"]}\nrandom effects: {model_cfg["general"]["q"]}\nobservations (max): {model_cfg["general"]["n"]}')
+    # --- load validation set
     fn = dsFilename('mfx', 'val', 1,
                     model_cfg['general']['m'], model_cfg['general']['n'],
                     model_cfg['general']['d'], model_cfg['general']['q'], 
@@ -304,12 +302,15 @@ if __name__ == '__main__':
     dl_val = getDataLoader(fn, cfg.bs_val,
                            max_d=model_cfg['general']['d'],
                            max_q=model_cfg['general']['q'],
-                           permute=False, autopad=True, device='cpu')
-
+                           permute=False, autopad=True, device=device)
+    
+    # --- validate loaded model
     if cfg.load > 0:
         iteration = cfg.load
         validate(model, dl_val, cfg.load)
 
+    # -------------------------------------------------------------------------
+    # training loop
     print(f'iterations: {cfg.iterations + 1 - initial_iteration}\npatience: {cfg.patience}\nbatches per iteration: 200\ndatasets per batch: {cfg.bs_mini}\n{'-' * console_width}')
     for iteration in range(initial_iteration, cfg.iterations + 1):
         fn = dsFilename('mfx', 'train', cfg.bs_mini, 
@@ -322,7 +323,7 @@ if __name__ == '__main__':
                                  permute=model_cfg['general']['permute'],
                                  autopad=False, device=device)
         global_step = train(model, optimizer, dl_train, global_step)
-        validation_step = validate(model, dl_val, validation_step, plot=cfg.plot)
+        validation_step = validate(model, dl_val, validation_step)
         if iteration % 5 == 0 or stopper.stop:
             save(model, optimizer, iteration, global_step, validation_step, timestamp)
         if stopper.stop:
