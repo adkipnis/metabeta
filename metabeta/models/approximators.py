@@ -276,11 +276,12 @@ class ApproximatorMFX(Approximator):
         roots: list = [0.025, 0.975],
         calibrate: bool = False,
         local: bool = False,
+        use_weights: bool = True,
     ) -> torch.Tensor | None:
         '''wrapper for desired quantiles of the posterior'''
         if 'samples' in proposed:
             samples = proposed['samples'].clone()
-            weights = proposed.get('weights', None)
+            weights = proposed.get('weights') if use_weights else None
             if local:
                 p = self.posterior_l
                 m = samples.shape[1]
