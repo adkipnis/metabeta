@@ -16,7 +16,8 @@ def dataset(x: np.ndarray | pd.DataFrame,
             title: str = '',
             kde: bool = True):
     # adapted from https://github.com/bayesflow-org/bayesflow
-    
+    if isinstance(x, torch.Tensor):
+        x = x.numpy()
     if names is None:
         if isinstance(x, pd.DataFrame):
             x = x.select_dtypes(include=['number'])
@@ -246,7 +247,7 @@ def _recoveryGrouped(
     ax.grid(True)
     min_val = float(min(means.min(), targets.min()).floor())
     max_val = float(max(means.max(), targets.max()).ceil())
-    addon = 4 if min_val < 0 else 1
+    addon = 0.5
     limits = (min_val - addon, max_val + addon)
     ax.set_xlim(limits, auto=False)
     ax.set_ylim(limits, auto=False)
