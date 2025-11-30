@@ -118,9 +118,9 @@ class Synthesizer:
     use_default: bool = False
     correlate: bool = True
 
-    def column(self, n: int, parameter: float) -> torch.Tensor:
+    def column(self, n: int) -> torch.Tensor:
         idx = D.Categorical(probs).sample()
-        dist = dists[idx](parameter, use_default=self.use_default)
+        dist = dists[idx](use_default=self.use_default)
         x = dist.sample((n,))
         return x
 
@@ -168,11 +168,12 @@ class Synthesizer:
             x[:, 1:] = self.induceCorrelation(x[:, 1:])
         return x
 
-    def sample(self, d: int, n_i: torch.Tensor, parameters: torch.Tensor,
-               ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        x = self.sampleX(n=int(n_i.sum()), d=d, parameters=parameters)
+    def sample(self, d: int, n_i: torch.Tensor,
+               ) -> tuple:
+        n = int(n_i.sum())
+        x = self._sample(n=n, d=d)
         groups = counts2groups(n_i)
-        return x, groups, n_i
+        return x, groups, n_i, None
 
 train_paths = list(Path('real', 'preprocessed', 'test').glob('*.npz'))
 test_paths = list(Path('real', 'preprocessed', 'test').glob('*.npz'))
