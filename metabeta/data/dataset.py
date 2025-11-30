@@ -161,32 +161,17 @@ class LMDataset(Dataset):
         # masks
         mask_m = torch.zeros(self.max_m, dtype=torch.bool)
         mask_m[:m] = True
-        mask_d = (ffx != 0.0).squeeze()
-        mask_q = torch.ones(self.max_d, dtype=torch.bool)
-        mask_q[q:] = False
-        mask_q = mask_q[rfx_mask]
-        mask_c = data['categorical'][i]
-
-        # outputs
+        mask_d = torch.ones(self.max_d, dtype=torch.bool) # legacy from variable sized models
+        mask_q = torch.ones(self.max_q, dtype=torch.bool) # legacy from variable sized models
+        
+        # intermediate outputs
         out = {
             # sizes
-            'm': m, 'n': n, 'n_i': n_i, 'd': d, 'q': q,  
+            'm': m, 'n': n, 'n_i': n_i, 'd': d, 'q': q,
             # inputs
-            # 'y_long': y, 'X_long': X, 'Z_long': Z,
-            'y': y, 'X': X, 'Z': Z, 'R': R,
-            # global params
-            'ffx': ffx, 'sigmas_rfx': sigmas_rfx, 'sigma_eps': sigma_eps, 
-            # local params
-            'rfx': rfx, 'cov_sum': cov_sum,
-            # priors
-            'nu_ffx': nu_ffx, 'tau_ffx': tau_ffx,
-            'tau_eps': tau_eps, 'tau_rfx': tau_rfx, 
+            'y': y, 'X': X, 'Z': Z,
             # masks
-            'mask_m': mask_m, 'mask_d': mask_d, 'mask_q': mask_q, 'mask_c': mask_c,
-            # permutations
-            'perm': perm, 'unperm': unperm,
-            # snr
-            'rnv': data['rnv'][i],
+            'mask_m': mask_m, 'mask_d': mask_d, 'mask_q': mask_q,
             }
 
         # optionally include mcmc posterior
