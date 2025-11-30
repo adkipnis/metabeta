@@ -41,7 +41,6 @@ def setup() -> argparse.Namespace:
     # data
     parser.add_argument('--d_tag', type=str, default='', help='Suffix for data ID (default = '')')
     # parser.add_argument('--varied', action='store_true', help='Use data with variable d/q (default = False)')
-    parser.add_argument('--semi', action='store_true', help='Use semi-synthetic data (default = True)')
     parser.add_argument('-t', '--fx_type', type=str, default='mfx', help='Type of dataset [ffx, mfx] (default = ffx)')
     parser.add_argument('-d', type=int, default=3, help='Number of fixed effects (with bias, default = 8)')
     parser.add_argument('-q', type=int, default=1, help='Number of random effects (with bias, default = 3)')
@@ -69,7 +68,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--sum_heads', type=int, default=8, help='Number of heads (poolformer, default = 8)')    
     parser.add_argument('--sum_dropout', type=float, default=0.01, help='Dropout rate (default = 0.01)')
     parser.add_argument('--sum_act', type=str, default='GELU', help='Activation funtction [anything implemented in torch.nn] (default = GELU)')
-    parser.add_argument('--sum_sparse', action='store_false', help='Use sparse implementation (poolformer, default = False)')
 
     # posterior network
     parser.add_argument('--post_type', type=str, default='affine', help='Posterior architecture [affine, spline] (default = affine)')
@@ -500,7 +498,6 @@ if __name__ == '__main__':
     console_width = getConsoleWidth()
     torch.manual_seed(cfg.seed)
     torch.set_num_threads(cfg.cores)
-    type_suffix = '-semi' if cfg.semi else ''
 
     # --- set up model
     summary_dict = {
@@ -513,7 +510,6 @@ if __name__ == '__main__':
         'n_heads': cfg.sum_heads,
         'dropout': cfg.sum_dropout,
         'activation': cfg.sum_act,
-        'sparse': cfg.sum_sparse,
     }
     posterior_dict = {
         'type': cfg.post_type,
@@ -541,7 +537,7 @@ if __name__ == '__main__':
 
     # --- load model and data
     load(model, path, cfg.iteration)
-    fn = dsFilename(cfg.fx_type, f'val{type_suffix}',
+    fn = dsFilename(cfg.fx_type, 'val',
                     1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_val,
                     # varied=cfg.varied,
                     tag=cfg.d_tag,
