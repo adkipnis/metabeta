@@ -247,7 +247,7 @@ if __name__ == '__main__':
         print('Generating test set...')
         ds_test = generate(cfg.bs_test, part, fit=True)
         ds_test = aggregate(ds_test)
-        fn = getFileName('test', -1)
+        fn = getFileName(f'test{"-sub" if cfg.sub else ""}', -1)
         np.savez_compressed(fn, **ds_test, allow_pickle=True)
         print(f'\nSaved test set to {fn}')
         exit()
