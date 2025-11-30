@@ -41,13 +41,13 @@ class Approximator(nn.Module):
 
     @staticmethod
     def modelID(s_dict: dict, p_dict: dict, m_dict: dict) -> str:
-        prefix = ""
-        suffix = ""
-        if m_dict["tag"]:
-            suffix = "-" + m_dict["tag"]
-        summary = f"{prefix}{s_dict['type']}-{s_dict['n_blocks']}-{s_dict['d_model']}-{s_dict['d_ff']}*{s_dict['depth']}-{s_dict['d_output']}-{s_dict['n_heads']}-{s_dict['activation']}-{s_dict['dropout']}"
-        posterior = f"{p_dict['type']}-{p_dict['flows']}-{p_dict['d_ff']}*{p_dict['depth']}-{p_dict['activation']}-{p_dict['dropout']}"
-        return f"{m_dict['type']}-d={m_dict['d']}-q={m_dict['q']}-{summary}-+-{posterior}-seed={m_dict['seed']}{suffix}"
+        prefix = ''
+        suffix = ''
+        if m_dict['tag']:
+            suffix = '-' + m_dict['tag']
+        summary = f'{prefix}{s_dict['type']}-{s_dict['n_blocks']}-{s_dict['d_model']}-{s_dict['d_ff']}*{s_dict['depth']}-{s_dict['d_output']}-{s_dict['n_heads']}-{s_dict['activation']}-{s_dict['dropout']}'
+        posterior = f'{p_dict['type']}-{p_dict['n_blocks']}-{p_dict['d_ff']}*{p_dict['depth']}-{p_dict['activation']}-{p_dict['dropout']}'
+        return f'mfx-d={m_dict['d']}-q={m_dict['q']}-{summary}-+-{posterior}-seed={m_dict['seed']}{suffix}'
 
     @property
     def device(self):
