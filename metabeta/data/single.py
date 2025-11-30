@@ -35,9 +35,6 @@ def checkContinuous(x: torch.Tensor, tol: float = 1e-12) -> torch.Tensor:
     diffs = (x - x.round()).abs()
     return (diffs > tol).all(dim=0)
 
-def checkBinary(x: torch.Tensor) -> torch.Tensor:
-    is_binary = (x == 0) | (x == 1)
-    return is_binary.all(dim=0)
 
 def correlateBinary(v: torch.Tensor, r: float | torch.Tensor):
     '''generate a categorical variable whose correlation with variable v is r'''
@@ -367,7 +364,6 @@ class Generator:
             'd': torch.tensor(self.d),  # (1,)
             'q': torch.tensor(self.q),  # (1,)
             'cov_sum': cov_sum,  # (1,)
-            'categorical': checkBinary(X[:, 1:]), # (d-1,)
             'rnv': rnv,  # (1,)
             'okay': okay,
         }
