@@ -271,9 +271,10 @@ class LMDataset(Dataset):
             out['advi_global'] = torch.cat([a_ffx, a_sigmas_rfx, a_sigma_eps])
             out['advi_local'] = a_rfx
 
-        # unfold to 4d and
+        # unfold to 4d
         out = self.unfold(out)
-        out['Z'] = out['Z'][..., rfx_mask]
+        if 'ffx' in out:
+            out['Z'] = out['Z'][..., rfx_mask]
         return out
 
     def unfold(self, item: dict[str, torch.Tensor]):
@@ -288,7 +289,7 @@ class LMDataset(Dataset):
         y = split(item['y'], counts, shape=[m, n])
         X = split(item['X'], counts, shape=[m, n, d])
         Z = split(item['Z'], counts, shape=[m, n, d])
-        mask_n = y != 0.0
+        mask_n = (y != 0.0)
         item.update({'y': y, 'X': X, 'Z': Z, 'mask_n': mask_n})
         return item
 
