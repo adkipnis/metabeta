@@ -559,49 +559,50 @@ if __name__ == '__main__':
     ds_val = next(iter(dl_val))
     print(f'preloaded model from iteration {cfg.iteration} and test set...\n{'-' * console_width}')
 
-    # --- calibrate on calibration set
-    if cfg.calibrate:
-        print('\nRunning full sampling from calibration set...')
-        results_cal = run(model, ds_val)
-        evaluate(model, results_cal, importance=cfg.importance, calibrate=False, extensive=0)
-        print('Calibrating with conformal prediction...')
-        model.calibrator.calibrate(
-            model,
-            proposed=results_cal['proposed']['global'], # type: ignore
-            targets=results_cal['targets'], # type: ignore
-        )
-        model.calibrator.save(model.id, cfg.iteration)
-        model.calibrator_l.calibrate(
-            model,
-            proposed=results_cal['proposed']['local'], # type: ignore
-            targets=results_cal['targets_l'], # type: ignore
-            local=True,
-        )
-        model.calibrator_l.save(model.id, cfg.iteration, local=True)
+    # # --- calibrate on calibration set
+    # if cfg.calibrate:
+    #     print('\nRunning full sampling from calibration set...')
+    #     results_cal = run(model, ds_val)
+    #     evaluate(model, results_cal, importance=cfg.importance, calibrate=False, extensive=0)
+    #     print('Calibrating with conformal prediction...')
+    #     model.calibrator.calibrate(
+    #         model,
+    #         proposed=results_cal['proposed']['global'], # type: ignore
+    #         targets=results_cal['targets'], # type: ignore
+    #     )
+    #     model.calibrator.save(model.id, cfg.iteration)
+    #     model.calibrator_l.calibrate(
+    #         model,
+    #         proposed=results_cal['proposed']['local'], # type: ignore
+    #         targets=results_cal['targets_l'], # type: ignore
+    #         local=True,
+    #     )
+    #     model.calibrator_l.save(model.id, cfg.iteration, local=True)
 
-    # --- run on test set
-    fn_test = dsFilename(cfg.fx_type, f'test{type_suffix}',
-        1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_test,
-        # varied=cfg.varied,
-        tag=cfg.d_tag,
-    )
-    dl_test = getDataLoader(
-        fn_test, cfg.bs_test, max_d=cfg.d, permute=False, autopad=True, device='cpu'
-    )
-    ds_test = next(iter(dl_test))
+    # # --- run on semi-synthetic test set
+    # fn_test = dsFilename(cfg.fx_type, 'test',
+    #     1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_test,
+    #     # varied=cfg.varied,
+    #     tag=cfg.d_tag,
+    # )
+    # dl_test = getDataLoader(
+    #     fn_test, cfg.bs_test, max_d=cfg.d, permute=False, autopad=True, device='cpu'
+    # )
+    # ds_test = next(iter(dl_test))
 
-    print('\nRunning and evaluating test set...')
-    results_test = run(model, ds_test)
-    proposed = evaluate(model, results_test,
-                        importance=cfg.importance,
-                        calibrate=cfg.calibrate,
-                        extensive=2,
-                        )
-    quickEval(model, results_test,
-              importance=cfg.importance,
-              calibrate=cfg.calibrate,
-              table=1,
-              )
+    # print('\nRunning and evaluating test set...')
+    # results_test = run(model, ds_test)
+    # proposed = evaluate(model, results_test,
+    #                     importance=False,#cfg.importance,
+    #                     calibrate=cfg.calibrate,
+    #                     extensive=2,
+    #                     )
+    
+    # quickEval(model, results_test,
+    #           importance=cfg.importance,
+    #           calibrate=cfg.calibrate,
+    #           table=1,
+    #           )
 
     # inspect(results_test, batch_indices=range(10))
 
@@ -654,3 +655,20 @@ if __name__ == '__main__':
     #     importance=cfg.importance,
     #     calibrate=cfg.calibrate,
     # )
+    
+    # --- run on sub-sampled test set
+    cfg.bs_test = 32
+    fn_sub = dsFilename(cfg.fx_type, 'test-sub',
+        1, cfg.m, cfg.n, cfg.d, cfg.q, cfg.bs_test,
+        tag=cfg.d_tag,
+    )
+    dl_sub = getDataLoader(
+        fn_sub, cfg.bs_test, max_d=cfg.d, max_q=cfg.q, permute=False, autopad=True, device='cpu'
+    )
+    ds_sub = next(iter(dl_sub))
+    
+    results_sub = estimate(model, ds_sub)
+    
+    mean_ffx = results_sub['proposed']['global']['samples'][:, : model.d].mean(-1)
+    mean_ffx_m = results_sub['nuts']['global']['samples'][:, : model.d].mean(-1)
+    plt.plot(mean_ffx[:, 2], mean_ffx_m[:, 2], 'o')
