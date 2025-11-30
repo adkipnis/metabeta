@@ -1,7 +1,10 @@
+import numpy as np
+from scipy.stats import norm, t
 import torch
 from torch import nn
 from torch import distributions as D
 
+# TODO introduce seeding to scipy
 
 class DiagDist(nn.Module):
     def __init__(self, base: D.Distribution, dim: int, trainable: bool = True):
@@ -34,17 +37,27 @@ class DiagDist(nn.Module):
         log_prob = dist.log_prob(z)
         return log_prob
 
-    def sample(self, shape: tuple):
-        dist = self.dist()
-        if self.trainable:
-            shape = shape[:-1]
-        sample = dist.sample(shape)
-        return sample
+    # def sample(self, shape: tuple):
+    #     dist = self.sampleDist()
+    #     if self.trainable:
+    #         shape = shape[:-1]
+    #     sample = dist.sample(shape)
+    #     return sample
+    
+    def sample(self, shape: tuple) -> torch.Tensor:
+        with torch.no_grad():
+            params = self.getParams()
+            device = params['loc'].device
+            params = {k: v.cpu().numpy() for k,v in params.items()}
+        x = self.sample_dist(**params, size=shape).astype(np.float32)
+        x = torch.from_numpy(x).to(device)
+        return x
 
 
 class DiagGaussian(DiagDist):
     def __init__(self, dim):
         super().__init__(D.Normal, dim)
+        self.sample_dist = norm.rvs
 
     def getParams(self):
         if self.trainable:
@@ -54,12 +67,14 @@ class DiagGaussian(DiagDist):
 
     def initParams(self):
         self.loc = nn.Parameter(torch.ones(self.dim) * 0)
-        self.log_scale = nn.Parameter(torch.log(torch.exp(torch.ones(self.dim) * 1) - 1)) 
+        self.log_scale = nn.Parameter(torch.log(torch.exp(torch.ones(self.dim) * 1) - 1))
+    
 
 
 class DiagStudent(DiagDist):
     def __init__(self, dim):
         super().__init__(D.StudentT, dim)
+        self.sample_dist = t.rvs
 
     def getParams(self):
         if self.trainable:
@@ -71,7 +86,5 @@ class DiagStudent(DiagDist):
     def initParams(self):
         self.log_df = nn.Parameter(torch.log(torch.exp(torch.ones(self.dim) * 5) - 1))
         self.loc = nn.Parameter(torch.ones(self.dim) * 0)
-        self.log_scale = nn.Parameter(torch.log(torch.exp(torch.ones(self.dim) * 1) - 1)) 
-        #nn.Parameter(torch.ones(self.dim) * 1)
-
-
+        self.log_scale = nn.Parameter(torch.log(torch.exp(torch.ones(self.dim) * 1) - 1))
+    
