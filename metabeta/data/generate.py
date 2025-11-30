@@ -10,6 +10,7 @@ from metabeta.utils import dsFilename, padTensor
 from metabeta.data.single import Prior, Synthesizer, Emulator, Generator
 from metabeta.data.fit import fitPyMC, fitBambi
 
+# import matplotlib.pyplot as plt
 # -----------------------------------------------------------------------------
 # config
 def setup() -> argparse.Namespace:
@@ -201,24 +202,27 @@ def generate(
 
     # optionally fit mcmc
     if fit:
-        print('Starting pymc sampling...')
         for ds in tqdm(data):
             fitter = {'pymc': fitPyMC, 'bambi': fitBambi}[cfg.api]
             
             # MCMC
             print(f'Fitting NUTS using {cfg.api.upper()}')
-            nuts_results = fitter(ds, seed=cfg.seed, method='nuts')
+            nuts_results = fitter(ds, method='nuts', seed=cfg.seed,
+                                  specify_priors=(not cfg.sub))
             ds.update(nuts_results)
             
-            # VI
-            print(f'Fitting ADVI using {cfg.api.upper()}')
-            advi_results = fitter(ds, seed=cfg.seed, method='advi')
-            ds.update(advi_results)
+            # # VI
+            # print(f'Fitting ADVI using {cfg.api.upper()}')
+            # advi_results = fitter(ds, method='advi', seed=cfg.seed, 
+            #                       specify_priors=(not cfg.sub))
+            # ds.update(advi_results)
     return data
 
 
 # =============================================================================
 if __name__ == '__main__':
+    
+    
     # init outout directory
     Path('..', 'outputs', 'data').mkdir(parents=True, exist_ok=True)
 
@@ -262,7 +266,6 @@ if __name__ == '__main__':
     for part in range(cfg.begin, cfg.iterations + 1):
         ds_train = generate(cfg.bs_train, part, bs_load=cfg.bs_load)
         ds_train = aggregate(ds_train)
-        # import matplotlib.pyplot as plt
         # plt.hist(ds_train['rnv'])
         fn = getFileName('train', part)
         np.savez_compressed(fn, **ds_train, allow_pickle=True)
