@@ -325,10 +325,9 @@ class ApproximatorMFX(Approximator):
         Z = data["Z"][..., 1 : self.q]
         if self.use_standardization:
             mask = data["mask_n"].unsqueeze(-1)
-            # categorial = data["mask_c"]
             y = self.standardize(y, "y", mask)
-            X = self.standardize(X, "X", mask)# categorial)
-            Z = self.standardize(Z, "Z", mask)#, categorial[:, : self.q-1])
+            X = self.standardize(X, "X", mask)
+            Z = self.standardize(Z, "Z", mask)
         out = torch.cat([y, X, Z], dim=-1)
         return out
 
