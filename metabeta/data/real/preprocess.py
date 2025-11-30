@@ -166,9 +166,6 @@ def preprocess(ds_name: str,
     df_orig.columns = df_orig.columns.str.lower()
     df = df_orig
 
-    # remove columns with more than 98% constant values
-    df = dropConstantColumns(df)
-
     # remove columns with more than 25% missing values
     df = dropPatchyColumns(df)
 
@@ -217,6 +214,10 @@ def preprocess(ds_name: str,
     # scale down
     df[col_names_num] = df[col_names_num].apply(rescale)
 
+        
+    # remove columns with more than 95% constant values
+    df = dropConstantColumns(df)
+        
     # dummy-code categorical variables
     for col in col_names_cat:
         df = dummify(df, col)
