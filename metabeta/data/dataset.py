@@ -224,6 +224,16 @@ class LMDataset(Dataset):
                 # snr
                 'r_squared': data['r_squared'][i],
                 })
+        else:
+            # auto-set priors like Bambi
+            nu_ffx, tau_ffx, tau_rfx, tau_eps = autoScalePriors(X.numpy(), y.numpy())
+            tau_rfx = tau_rfx[: q]
+            out.update({
+                'nu_ffx': torch.tensor(nu_ffx),
+                'tau_ffx': torch.tensor(tau_ffx),
+                'tau_rfx': torch.tensor(tau_rfx), 
+                'tau_eps': torch.tensor(tau_eps),
+                })
 
         # optionally include mcmc posterior
         if 'nuts_ffx' in data:
