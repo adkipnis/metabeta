@@ -150,7 +150,6 @@ def load(
 # -----------------------------------------------------------------------------
 # the bread and butter
 
-
 def run(
     model: ApproximatorMFX,
     batch: dict[str, torch.Tensor],
@@ -207,7 +206,7 @@ def train(
     return step
 
 
-def validate(model: ApproximatorMFX, dl: DataLoader, step: int) -> int:
+def validate(model: ApproximatorMFX, dl: DataLoader, step: int, plot: bool = False) -> int:
     results = None
     iterator = tqdm(dl, desc=f'iteration {iteration:02d}/{cfg.iterations:02d} [V]')
     loss_val = 0
@@ -231,8 +230,7 @@ def validate(model: ApproximatorMFX, dl: DataLoader, step: int) -> int:
         stopper.update(loss_val)
 
         # evaluate samples
-        if sample:
-            assert results is not None
+        if sample and plot:
             # global results
             rmse, r = plot.recovery(  # type: ignore
                 targets=results['targets']['global'],
@@ -342,7 +340,7 @@ if __name__ == '__main__':
             device=device,
         )
         global_step = train(model, optimizer, dl_train, global_step)
-        validation_step = validate(model, dl_val, validation_step)
+        validation_step = validate(model, dl_val, validation_step, plot=cfg.plot)
         if iteration % 5 == 0 or stopper.stop:
             save(model, optimizer, iteration, global_step, validation_step, timestamp)
         if stopper.stop:
