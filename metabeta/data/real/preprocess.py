@@ -178,7 +178,7 @@ def preprocess(ds_name: str,
     # detect potential grouping variables
     if not group_name:
         potential = potentialGroups(df)
-        potential = [p for p in potential if p in GREENLIST]
+        # potential = [p for p in potential if p not in GREENLIST]
         if len(potential):
             group_name = potential[0]
             print(f'--- Note: Detected grouping variable "{group_name}".')
