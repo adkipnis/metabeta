@@ -364,6 +364,10 @@ class Generator:
         tau_rfx = self.prior.tau_rfx / std_Z * ratio
         tau_eps = self.prior.tau_eps * ratio
         
+        # R^2
+        r_squared = 1 - (eps.var() / y.var())
+        okay = (torch.rand(1).item() >= r_squared) # flatten R^2 distribution
+        
         # Cov(mean Z, rfx), needed for standardization
         weighted_rfx = Z.mean(0, keepdim=True) * rfx
         cov = fullCovary(weighted_rfx)
