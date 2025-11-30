@@ -34,8 +34,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('-t', '--fx_type', type=str, default='mfx', help='Type of dataset [ffx, mfx] (default = ffx)')
     parser.add_argument('-d', type=int, default=3, help='Number of fixed effects (with bias, default = 5)')
     parser.add_argument('-q', type=int, default=1, help='Number of random effects (with bias, default = 1)')
-    parser.add_argument('-m', type=int, default=50, help='Maximum number of groups (default = 50).')
-    parser.add_argument('-n', type=int, default=100, help='Maximum number of samples per group (default = 100).')
+    parser.add_argument('-m', type=int, default=30, help='Maximum number of groups (default = 50).')
+    parser.add_argument('-n', type=int, default=70, help='Maximum number of samples per group (default = 100).')
     parser.add_argument('--permute', action='store_true', help='Permute slope variables for uniform learning across heads (default = True)')
 
     # training
@@ -46,7 +46,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--lr', type=float, default=5e-4, help='Learning rate (Adam, default = 5e-4)')
     parser.add_argument('--standardize', action='store_false', help='Standardize inputs (default = True)')
     parser.add_argument('-p', '--preload', type=int, default=0, help='Preload model from iteration #p')
-    parser.add_argument('-i', '--iterations', type=int, default=10, help='Maximum number of iterations to train (default = 10)')
+    parser.add_argument('-i', '--iterations', type=int, default=50, help='Maximum number of iterations to train (default = 10)')
 
     # summary network
     parser.add_argument('--sum_type', type=str, default='set-transformer', help='Summarizer architecture [set-transformer, dual-transformer] (default = set-transformer)')
@@ -223,7 +223,7 @@ def train(
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
         else:
-            print("Warning: NaN/Inf gradients detected, skipping step.")
+            iterator.set_postfix_str('loss: skipped step due to NaNs')
             continue
         
         running_sum += loss.item()
