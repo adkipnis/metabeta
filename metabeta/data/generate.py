@@ -233,7 +233,12 @@ if __name__ == '__main__':
     )
     if cfg.semi:
         assert not cfg.toy, 'toy dataset is purely synthetic'
+        assert not cfg.sub, 'sub-sampled dataset has no simulated parameters'
         assert cfg.d_tag, 'must specify dataset name in d_tag flag'
+    elif cfg.sub:
+        assert cfg.d_tag, 'must specify dataset name in d_tag flag'
+        assert cfg.begin == -1, 'sub-sampled real data is only valid for test set'
+        
     part = cfg.begin
     raw = None
 
