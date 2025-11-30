@@ -17,12 +17,14 @@ def extractPymc(trace, name: str) -> torch.Tensor:
     return torch.tensor(x).flatten(0, 1).movedim(0, -1)
 
 
-def respecifyFfxPriors(X: np.ndarray, y: np.ndarray, multiplier: float = 2.5):
-    # custom FFX priors based on Bambi's procedure
+def autoScalePriors(X: np.ndarray, y: np.ndarray, multiplier: float = 2.5):
+    # automatic priors based on Bambi's procedure
     
     # init
     nu_ffx = np.zeros_like(X[0])
     tau_ffx = np.zeros_like(X[0])
+    tau_rfx = np.zeros_like(X[0]) # mask out d-q later
+    tau_eps = 0.
     
     # moments
     y_mean = np.mean(y)
@@ -37,8 +39,11 @@ def respecifyFfxPriors(X: np.ndarray, y: np.ndarray, multiplier: float = 2.5):
     nu_ffx[0] = y_mean
     tau_ffx[0] = ( (multiplier * y_std)**2 + np.dot(tau_ffx[1:]**2, X_mean**2) )**0.5
     
-    return nu_ffx, tau_ffx
+    # variance components
+    tau_eps = y_std
+    tau_rfx = tau_ffx
     
+    return nu_ffx, tau_ffx, tau_rfx, tau_eps
     
 
 
@@ -59,7 +64,7 @@ def prepare(ds: dict[str, torch.Tensor],
     
     # bambi-like ffx priors
     if respecify_ffx:
-        nu_ffx, tau_ffx = respecifyFfxPriors(X, y)
+        nu_ffx, tau_ffx, _, _ = autoScalePriors(X, y)
     
  
     # same parameterization as during generation
