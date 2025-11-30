@@ -34,12 +34,12 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     # misc
-    parser.add_argument('--m_tag', type=str, default='', help='Suffix for model ID (default = '')')
+    parser.add_argument('--m_tag', type=str, default='all', help='Suffix for model ID (default = '')')
     parser.add_argument('-s', '--seed', type=int, default=42, help='Model seed')
     parser.add_argument('--cores', type=int, default=8, help='Nubmer of processor cores to use (default = 8)')
 
     # data
-    parser.add_argument('--d_tag', type=str, default='', help='Suffix for data ID (default = '')')
+    parser.add_argument('--d_tag', type=str, default='all', help='Suffix for data ID (default = '')')
     # parser.add_argument('--varied', action='store_true', help='Use data with variable d/q (default = False)')
     parser.add_argument('-t', '--fx_type', type=str, default='mfx', help='Type of dataset [ffx, mfx] (default = ffx)')
     parser.add_argument('-d', type=int, default=3, help='Number of fixed effects (with bias, default = 8)')
@@ -60,9 +60,9 @@ def setup() -> argparse.Namespace:
 
     # summary network
     parser.add_argument('--sum_type', type=str, default='set-transformer', help='Summarizer architecture [set-transformer, dual-transformer] (default = set-transformer)')
-    parser.add_argument('--sum_blocks', type=int, default=4, help='Number of blocks in summarizer (default = 4)')
+    parser.add_argument('--sum_blocks', type=int, default=3, help='Number of blocks in summarizer (default = 4)')
     parser.add_argument('--sum_d', type=int, default=128, help='Model dimension (default = 128)')
-    parser.add_argument('--sum_ff', type=int, default=256, help='Feedforward dimension (default = 128)')
+    parser.add_argument('--sum_ff', type=int, default=128, help='Feedforward dimension (default = 128)')
     parser.add_argument('--sum_depth', type=int, default=1, help='Feedforward layers (default = 1)')
     parser.add_argument('--sum_out', type=int, default=64, help='Summary dimension (default = 64)')
     parser.add_argument('--sum_heads', type=int, default=8, help='Number of heads (poolformer, default = 8)')    
@@ -71,8 +71,8 @@ def setup() -> argparse.Namespace:
 
     # posterior network
     parser.add_argument('--post_type', type=str, default='affine', help='Posterior architecture [affine, spline] (default = affine)')
-    parser.add_argument('--flows', type=int, default=3, help='Number of normalizing flow blocks (default = 4)')
-    parser.add_argument('--post_ff', type=int, default=128, help='Feedforward dimension (default = 128)')
+    parser.add_argument('--flows', type=int, default=8, help='Number of normalizing flow blocks (default = 4)')
+    parser.add_argument('--post_ff', type=int, default=256, help='Feedforward dimension (default = 128)')
     parser.add_argument('--post_depth', type=int, default=3, help='Feedforward layers (default = 3)')
     parser.add_argument('--post_dropout', type=float, default=0.01, help='Dropout rate (default = 0.01)')
     parser.add_argument('--post_act', type=str, default='ReLU', help='Activation funtction [anything implemented in torch.nn] (default = ReLU)')
