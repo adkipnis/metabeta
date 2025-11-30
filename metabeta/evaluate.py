@@ -254,14 +254,6 @@ def evaluate(
         plotCalibration(axs[0], coverage, names, lw=3, upper=True)
         plotCalibration(axs[1], coverage_m, names, lw=3, upper=False)
         fig.tight_layout()
-        
-        
-    # -------------------------------------------------------------------------
-    
-    
-    
-    
-    
 
     
     # ------------------------------------------------------------------------------
@@ -336,7 +328,8 @@ def evaluate(
         pp_nll_m = -y_log_prob_m.sum(dim=(1,2)).mean(-1)
         mask_mcmc = (pp_nll_m < 1e4)
         mask_pp = mask_mcmc * mask_mb
-        plt.plot(pp_nll[mask_pp], pp_nll_m[mask_pp], 'o')
+        fig, ax = plt.subplots(figsize=(8, 8))
+        ax.plot(pp_nll[mask_pp], pp_nll_m[mask_pp], 'o')
         r = float(pearsonr(pp_nll[mask_pp], pp_nll_m[mask_pp])[0])
         print(f'Cor of pp log likelihoods {r:.3f}')
         
