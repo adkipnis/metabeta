@@ -144,6 +144,7 @@ def preprocess(ds_name: str,
     # import data
     fn = Path(root, 'parquet', f'{ds_name}.parquet')
     assert fn.exists(), f'File {fn} does not exist.'
+    print(f'\nProcessing {ds_name}...')
     df_orig = pd.read_parquet(fn)
 
     # discard gigantic datasets
