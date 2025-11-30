@@ -149,7 +149,7 @@ class Synthesizer:
                 x_cor[:, i] = x[:, i]
         return x_cor
  
-    def sampleX(self, n: int, d: int, parameters: torch.Tensor) -> torch.Tensor:
+    def _sample(self, n: int, d: int) -> torch.Tensor:
         ''' sample design matrix from synthetic distributions '''
         # init design matrix
         x = torch.zeros(n, d)
@@ -161,7 +161,7 @@ class Synthesizer:
             return x
         else:
             for i in range(1, d):
-                x[:, i] = self.column(n, parameters[i].item())
+                x[:, i] = self.column(n)
 
         # correlate columns
         if self.correlate:
@@ -223,40 +223,52 @@ class Emulator:
                 n = self.ds['n']
                 while n / m < 5:
                     m -= 1
-        
-            n_i = resampleCounts(n, m)
-            n = int(n_i.sum())
-            
+                    
         # unpack
         ds = self.ds
         x = ds['X'].clone().float()
-
-        # subsample features
-        idx_feat = torch.randperm(x.shape[1])[:d-1]
-        x = x[:, idx_feat]
+        y = ds['y'].clone().float()
 
         # subsample observations
         if source_is_grouped:
-            # subsample m groups, get corresponding n_i
-            members = torch.randperm(ds['m'])[:m]
-            n_i = torch.min(ds['n_i'][members], n_i)
-            n = int(n_i.sum())
-            member_mask = torch.zeros(len(x)).bool()
-            for i, member in enumerate(members):
-                idx = torch.where(ds['groups'] == member)[0]
-                chosen = idx[torch.randperm(len(idx))][:n_i[i]]
-                member_mask[chosen] = True
-            x = x[member_mask]
+            okay = False
+            while not okay:
+                # subsample features
+                idx_feat = torch.randperm(x.shape[1])[:d-1]
+                x_ = x[:, idx_feat]
+                # subsample m groups, get corresponding n_i
+                members = torch.randperm(ds['m'])[:m]
+                n_i = resampleCounts(n, m)
+                n_i = torch.min(ds['n_i'][members], n_i)
+                member_mask = torch.zeros(len(x)).bool()
+                for i, member in enumerate(members):
+                    idx = torch.where(ds['groups'] == member)[0]
+                    chosen = idx[torch.randperm(len(idx))][:n_i[i]]
+                    member_mask[chosen] = True
+                x_ = x_[member_mask]
+                y_ = y[member_mask]
+                has_constant_columns = (x_[0, :] == x_).all(0)
+                okay = not has_constant_columns.any()
+            x = x_
+            y = y_
+            n = len(x)
             
-            # alternatively with original n_i:
+            # # alternatively with original n_i:
             # n_i = ds['n_i'][members]
             # n = int(n_i.sum())
             # member_mask = (ds['groups'].unsqueeze(-1) == members.unsqueeze(0)).any(-1)  # type: ignore
             # x = x[member_mask]
             
         else:
+            # subsample features
+            idx_feat = torch.randperm(x.shape[1])[:d-1]
+            x = x[:, idx_feat]
+            # subsample observations
+            n_i = resampleCounts(n, m)
+            n = int(n_i.sum())
             idx_obs = torch.randperm(len(x))[:n]
             x = x[idx_obs]
+            y = y[idx_obs]
 
         # emulate dataset using SGLD
         if self.use_sgld:
@@ -268,7 +280,7 @@ class Emulator:
         # add intercept
         ones = torch.ones_like(x[:, 0:1])
         x = torch.cat([ones, x], dim=-1)
-        return x, groups, n_i
+        return x, groups, n_i, y
 
 
 
