@@ -4,14 +4,12 @@
 #SBATCH --output=logs/gen-test/%j.out
 #SBATCH --error=logs/gen-test/%j.err
 
-#SBATCH --partition gpu_p
-#SBATCH --qos gpu_normal
+#SBATCH --partition cpu_p
+#SBATCH --qos cpu_normal
 
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
 #SBATCH --time=6:00:00
-#SBATCH --nice=1000
 
 source $HOME/.bashrc
 conda activate mb
