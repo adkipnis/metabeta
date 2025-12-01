@@ -16,5 +16,5 @@
 source $HOME/.bashrc
 conda activate mb
 cd ../metabeta
-python evaluate.py -d 3 -q 1 -l 0 -i 50 --c_tag default
+python evaluate.py -d 3 -q 1 -l 50 --c_tag default
 
