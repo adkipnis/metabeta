@@ -136,9 +136,13 @@ def estimate(model: ApproximatorMFX,
 # -----------------------------------------------------------------------------
 # refinements
 
-def importanceSampling(results: dict, iters: int = 2) -> None:
+def importanceSampling(results: dict, iters: int = 2, constrain: bool = True) -> None:
     batch = results['batch']
     proposed = results['proposed']
+    if 'weights' in proposed['global']:
+        del proposed['global']['weights']
+    if 'weights' in proposed['local']:
+        del proposed['local']['weights']
     start = time.perf_counter()
     for _ in range(iters):
         proposed = ImportanceLocal(batch)(proposed)
