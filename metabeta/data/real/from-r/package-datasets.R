@@ -1,12 +1,15 @@
-library(rstudioapi)
-library(fs)
-library(arrow)
-library(lme4)
-library(nlme)
-library(mlmRev)
-library(MEMSS)
-library(dplyr)
+# install missing packages
+packages <- c(
+  "rstudioapi", "fs", "arrow", "lme4", "nlme",
+  "mlmRev", "MEMSS", "dplyr"
+)
+missing <- packages[!packages %in% installed.packages()[,"Package"]]
+if (length(missing) > 0) {
+  install.packages(missing, dependencies = T)
+}
+lapply(packages, library, character.only = T)
 
+# helpers
 rename <- function(df, old,  new){
   colnames(df)[colnames(df) == old] <- new
   return(df)

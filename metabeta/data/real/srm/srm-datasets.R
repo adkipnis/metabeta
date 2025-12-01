@@ -1,6 +1,10 @@
-library(rstudioapi)
-library(fs)
-library(arrow)
+# install missing packages
+packages <- c("rstudioapi", "fs", "arrow")
+missing <- packages[!packages %in% installed.packages()[,"Package"]]
+if (length(missing) > 0) {
+  install.packages(missing, dependencies = T)
+}
+lapply(packages, library, character.only = T)
 
 # helpers
 load.df <- function(fname){
