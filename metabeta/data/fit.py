@@ -18,32 +18,32 @@ def extractPymc(trace, name: str) -> torch.Tensor:
 
 def autoScalePriors(X: np.ndarray, y: np.ndarray, multiplier: float = 2.5):
     # automatic priors based on Bambi's procedure
-    
+
     # init
     nu_ffx = np.zeros_like(X[0])
     tau_ffx = np.zeros_like(X[0])
     tau_rfx = np.zeros_like(X[0]) # mask out d-q later
     tau_eps = 0.
-    
+
     # moments
     y_mean = np.mean(y)
     y_std = np.std(y)
     X_mean = np.mean(X[:, 1:], axis=0)
     X_std = np.std(X[:, 1:], axis=0)
-    
+
     # slopes
     tau_ffx[1:] = multiplier * y_std / X_std
-    
+
     # intercept
     nu_ffx[0] = y_mean
     tau_ffx[0] = ( (multiplier * y_std)**2 + np.dot(tau_ffx[1:]**2, X_mean**2) )**0.5
-    
+
     # variance components
     tau_eps = y_std
     tau_rfx = tau_ffx
-    
+
     return nu_ffx, tau_ffx, tau_rfx, tau_eps
-    
+
 
 
 def prepare(ds: dict[str, torch.Tensor],
@@ -60,11 +60,10 @@ def prepare(ds: dict[str, torch.Tensor],
     y = ds['y'].numpy()
     X = ds['X'].numpy()
     groups = ds['groups'].numpy()
-    
+
     # bambi-like ffx priors
     if respecify_ffx:
         nu_ffx, tau_ffx, _, _ = autoScalePriors(X, y)
-    
  
     # same parameterization as during generation
     if parameterization == 'matched':
@@ -73,7 +72,7 @@ def prepare(ds: dict[str, torch.Tensor],
             y = pm.Data('y', y) # (n, )
             Z = pm.Data('Z', X[:, :q]) # (n, q)
             X = pm.Data('X', X) # (n, d)
-            
+
             groups = pm.Data('groups', groups) # (n, )
 
             # fixed effects
@@ -90,7 +89,7 @@ def prepare(ds: dict[str, torch.Tensor],
             sigma_eps = pm.HalfStudentT('sigma_eps', nu=4, sigma=tau_eps)
             y_obs = pm.Normal('y_obs', mu=mu, sigma=sigma_eps, observed=y, shape=n)
         return model
-    
+
     # hierarchical parameterization like in pymc example for simpsons paradoxon
     elif parameterization == 'hierarchical':
         with pm.Model() as model:
@@ -127,7 +126,8 @@ def fitPyMC(ds: dict[str, torch.Tensor],
         seed=0,
         method='nuts',
         respecify_ffx: bool = True,
-        parameterization='matched',
+        parameterization: str = 'matched',
+        use_multiprocessing: bool = True,
         ) -> dict[str, torch.Tensor]:
     assert method in ['nuts', 'advi'], 'unknown method selected'
     assert parameterization in ['matched', 'hierarchical'], 'unknown parameterization selected'
@@ -137,6 +137,7 @@ def fitPyMC(ds: dict[str, torch.Tensor],
     with prepare(ds, parameterization, respecify_ffx) as model:
         if method == 'nuts':
             trace = pm.sample(tune=tune, draws=draws, chains=chains,
+                              cores=(chains if use_multiprocessing else 1),
                               random_seed=seed,
                               return_inferencedata=True)
         elif method == 'advi':
@@ -147,7 +148,7 @@ def fitPyMC(ds: dict[str, torch.Tensor],
             trace = mean_field.sample(draws=draws*chains, 
                                       random_seed=seed,
                                       return_inferencedata=True)  
-    t1 = time.perf_counter()      
+    t1 = time.perf_counter()
 
     # extract samples
     if parameterization == 'matched':
@@ -276,6 +277,7 @@ def fitBambi(ds: dict[str, torch.Tensor],
              method='nuts',
              respecify_ffx: bool = True,
              specify_priors: bool = True,
+             use_multiprocessing: bool = True,
              ) -> dict[str, torch.Tensor]:
     assert method in ['nuts', 'advi'], 'unknown method selected'
     d, q = int(ds['d']), int(ds['q'])
@@ -284,6 +286,7 @@ def fitBambi(ds: dict[str, torch.Tensor],
     t0 = time.perf_counter()
     if method == 'nuts':
         trace = model.fit(draws=draws, tune=tune, chains=chains,
+                          cores=(chains if use_multiprocessing else 1),
                           inference_method='pymc',
                           random_seed=seed,
                           return_inferencedata=True)
