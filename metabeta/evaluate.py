@@ -144,9 +144,11 @@ def importanceSampling(results: dict, iters: int = 2, constrain: bool = True) ->
     if 'weights' in proposed['local']:
         del proposed['local']['weights']
     start = time.perf_counter()
+    IL = ImportanceLocal(batch, constrain=constrain)
+    IG = ImportanceGlobal(batch, constrain=constrain)
     for _ in range(iters):
-        proposed = ImportanceLocal(batch)(proposed)
-        proposed = ImportanceGlobal(batch)(proposed)
+        proposed = IL(proposed)
+        proposed = IG(proposed)
     end = time.perf_counter()
     print(f'IS took {end - start:.2f}s')
     sample_efficiency = proposed['global'].get('sample_efficiency')
