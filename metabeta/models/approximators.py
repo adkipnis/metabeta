@@ -530,20 +530,20 @@ class ApproximatorMFX(Approximator):
         n=(300, 200),
         log_prob=False,
         **kwargs,
-    ) -> dict[str, torch.Tensor | dict]:
+    ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
         # prepare
         proposed = {}
         inputs = self.inputs(data)
         b, m, _, _ = inputs.shape
 
         # local summaries
-        summaries = self.summarizer_l(inputs, data['mask_n'])
-        summaries = self.addMetadata(summaries, data, local=True)
+        summary_l = self.summarizer_l(inputs, data['mask_n'])
+        summary_l = self.addMetadata(summary_l, data, local=True)
 
         # global summary
         mask_m = None if self.training else data['mask_m']
-        summary = self.summarizer_g(summaries, mask_m)
-        context_g = self.addMetadata(summary, data, local=False)
+        summary_g = self.summarizer_g(summary_l, mask_m)
+        context_g = self.addMetadata(summary_g, data, local=False)
 
         # global inference
         targets_g = self.targets(data, local=False)
@@ -556,11 +556,11 @@ class ApproximatorMFX(Approximator):
         targets_l = self.targets(data, local=True)
         targets_l = self.preprocess(targets_l, data, local=True)
         if sample:
-            global_params = proposed['global']['samples'].mean(-1).to(summaries.device)
+            global_params = proposed['global']['samples'].mean(-1).to(summary_l.device)
         else:
             global_params = targets_g
         global_params = global_params.view(b, 1, -1).expand(b, m, -1)
-        context_l = torch.cat([summaries, global_params], dim=-1)
+        context_l = torch.cat([summary_l, global_params], dim=-1)
         loss_l, proposed['local'] = self.posterior_l(
             context_l, targets_l, sample=sample, n=n[1]
         )
@@ -568,7 +568,7 @@ class ApproximatorMFX(Approximator):
         # postprocessing
         proposed = self.postprocess(proposed, data)
         loss += loss_l.sum(-1) / data['m']
-        return {'loss': loss, 'proposed': proposed}
+        return {'loss': loss, 'proposed': proposed, 'summary': {'global': summary_g, 'local': summary_l}}
 
     def estimate(self, data: dict[str, torch.Tensor], n=(300, 200)):
         with torch.no_grad():
