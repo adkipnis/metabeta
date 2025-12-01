@@ -2,10 +2,23 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
+# from pymer4.models import lmer, lm
+# import polars as pl
+
+def extractPymer(model, mixed=True):
+    out = {}
+    out['ffx'] = pd.DataFrame(model.params).to_numpy()[:, 1]
+    if mixed:
+        out['rfx'] = pd.DataFrame(model.ranef).to_numpy()[:, 1:]
+        df = pd.DataFrame(model.ranef_var)
+        sigmas = df[df[1].str.startswith('sd')][2].to_numpy()
+        out['sigmas_rfx'] = sigmas[:-1]
+        out['sigma_eps'] = sigmas[-1]
+    return out
 
 BLACKLIST = 'year age height size n_ num_ number max min attempts begin end name'.split(' ')
 GREENLIST = 'country state school education class industry occupation race sport brand genre color weekday date'.split(' ')
-
+PARAMS = []
 
 def removeString(this: list, string: str):
     out = list(filter(lambda x: x != string, this))
@@ -233,6 +246,26 @@ def preprocess(ds_name: str,
     X = df.to_numpy()
     n, d = X.shape
     cor = np.corrcoef(X, rowvar=False)
+    
+    # # fit pymer
+    # df = pd.DataFrame(X)
+    # names = [f'x_{i}' for i in range(d)]
+    # df.columns = names
+    # df['y'] = y
+    # if groups is not None:
+    #     df['i'] = groups
+    #     formula = f'y ~ {" + ".join(names)} + ( 1 | i )'
+    #     model = lmer(formula, data=pl.from_pandas(df))
+    #     model.fit()
+    #     parameters = extractPymer(model)
+    #     PARAMS.append(parameters)
+    # else:
+    #     formula = f'y ~ {" + ".join(names)}'
+    #     model = lm(formula, data=pl.from_pandas(df))
+    #     model.fit()
+    #     parameters = extractPymer(model, mixed=False)
+    #     PARAMS.append(parameters)
+    
     out = {
         # data
         'X': X,
@@ -284,4 +317,4 @@ if __name__ == '__main__':
 
     # # automl datasets (skipped, too many issues)
     # batchprocess('automl', partition='train')
-
+    
