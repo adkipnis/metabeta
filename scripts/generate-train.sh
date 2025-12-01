@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=generate-train-3-1
-#SBATCH --output=logs/&j/generate-train.out
-#SBATCH --error=logs/&j/generate-train.err
+#SBATCH --output=logs/generate-train/%j.out
+#SBATCH --error=logs/generate-train/%j.err
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
