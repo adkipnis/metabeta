@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=generate-train-3-1
-#SBATCH --output=logs/generate-train/%j.out
-#SBATCH --error=logs/generate-train/%j.err
+#SBATCH --job-name=gen-train-3-1
+#SBATCH --output=logs/gen-train/%j.out
+#SBATCH --error=logs/gen-train/%j.err
 
 #SBATCH --partition gpu_p
 #SBATCH --qos gpu_normal

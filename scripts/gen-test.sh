@@ -1,11 +1,11 @@
 #!/bin/bash
 
-#SBATCH --job-name=generate-test-3-1
-#SBATCH --output=logs/generate-test/%j.out
-#SBATCH --error=logs/generate-test/%j.err
+#SBATCH --job-name=gen-test-3-1
+#SBATCH --output=logs/gen-test/%j.out
+#SBATCH --error=logs/gen-test/%j.err
 
-#SBATCH --partition cpu_p
-#SBATCH --qos cpu_normal
+#SBATCH --partition gpu_p
+#SBATCH --qos gpu_normal
 
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4

@@ -1,11 +1,11 @@
 #!/bin/bash
 
-#SBATCH --job-name=generate-sub-3-1
-#SBATCH --output=logs/generate-sub/%j.out
-#SBATCH --error=logs/generate-sub/%j.err
+#SBATCH --job-name=gen-sub-3-1
+#SBATCH --output=logs/gen-sub/%j.out
+#SBATCH --error=logs/gen-sub/%j.err
 
-#SBATCH --partition cpu_p
-#SBATCH --qos cpu_normal
+#SBATCH --partition gpu_p
+#SBATCH --qos gpu_normal
 
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4
