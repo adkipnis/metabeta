@@ -4,13 +4,13 @@
 #SBATCH --output=logs/train/%j.out
 #SBATCH --error=logs/train/%j.err
 
+#SBATCH --gres=gpu:1
 #SBATCH --partition gpu_p
 #SBATCH --qos gpu_priority
 
 #SBATCH --nodes=1
 #SBATCH --mem=80G
 #SBATCH --time=6:00:00
-#SBATCH --nice=1000
 
 source $HOME/.bashrc
 conda activate mb
