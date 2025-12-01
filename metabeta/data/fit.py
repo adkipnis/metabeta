@@ -158,7 +158,7 @@ def fitPyMC(ds: dict[str, torch.Tensor],
     sigma_eps = extractPymc(trace, 'sigma_eps').unsqueeze(0)
     sigmas_rfx = extractPymc(trace, 'sigmas_rfx')
     rfx = extractPymc(trace, 'rfx').movedim(0,1)
-    
+
     out = {
         f'{method}_ffx': ffx,
         f'{method}_sigma_eps': sigma_eps,
@@ -177,7 +177,7 @@ def fitPyMC(ds: dict[str, torch.Tensor],
             f'{method}_divergences': divergent_count,
             f'{method}_rhat': rhat,
             })
-        
+
     # # unnormalized log posterior
     # if 'ffx' in ds:
     #     logp_fn = model.compile_logp(sum=False)
@@ -227,7 +227,7 @@ def priorize(ds: dict[str, torch.Tensor], respecify_ffx: bool = False) -> dict[s
     tau_eps = ds['tau_eps'].numpy()
     include_ffx = not respecify_ffx
     priors = {}
-    
+
     # fixed effects
     if include_ffx:
         priors.update({
@@ -237,7 +237,7 @@ def priorize(ds: dict[str, torch.Tensor], respecify_ffx: bool = False) -> dict[s
             f'x{j}': bmb.Prior('Normal', mu=nu_ffx[j], sigma=tau_ffx[j])
             for j in range(1, d)
             })
-    
+
     #  noise variance and random intercept variance
     priors.update({
         # 'sigma': bmb.Prior('HalfNormal', sigma=tau_eps),
@@ -282,7 +282,7 @@ def fitBambi(ds: dict[str, torch.Tensor],
     assert method in ['nuts', 'advi'], 'unknown method selected'
     d, q = int(ds['d']), int(ds['q'])
     model = bambify(ds, specify_priors=specify_priors, respecify_ffx=respecify_ffx)
-    
+ 
     t0 = time.perf_counter()
     if method == 'nuts':
         trace = model.fit(draws=draws, tune=tune, chains=chains,
@@ -295,12 +295,12 @@ def fitBambi(ds: dict[str, torch.Tensor],
                                n=100_000, 
                                obj_optimizer=pm.adam(learning_rate=5e-3),
                                )
-        
+
         trace = mean_field.sample(draws=draws*chains, 
                                   random_seed=seed,
                                   return_inferencedata=True)
     t1 = time.perf_counter()
-    
+
     # extract samples
     ffx = torch.cat(
         [extractBambi(trace, 'Intercept')] +
@@ -324,7 +324,7 @@ def fitBambi(ds: dict[str, torch.Tensor],
         f'{method}_rfx': rfx,
         f'{method}_duration': torch.tensor(t1 - t0),
     }
-    
+
     # extract fit info
     summary = az.summary(trace, kind='diagnostics')
     out[f'{method}_ess'] = torch.tensor(summary['ess_bulk'].to_numpy())
