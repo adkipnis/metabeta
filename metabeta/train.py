@@ -27,8 +27,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--device', type=str, default='cuda', help='device to use [cpu, cuda, mps], (default = mps)')
     parser.add_argument('--cores', type=int, default=8, help='nubmer of processor cores to use (default = 8)')
     parser.add_argument('--plot', action='store_true', help='plot sampling results (default = True)')
-
-    # loading
+    
+    # model
+    parser.add_argument('-d', type=int, default=3, help='Maximum number of fixed effects (intercept + slopes)')
+    parser.add_argument('-q', type=int, default=1, help='Maximum number of random effects (intercept + slopes)')
     parser.add_argument('--d_tag', type=str, default='all', help='suffix for data ID (default = '')')
     parser.add_argument('--m_tag', type=str, default='all', help='suffix for model ID (default = '')')
     parser.add_argument('--c_tag', type=str, default='default', help='name of model config file')
@@ -311,6 +313,8 @@ if __name__ == '__main__':
         model_cfg = yaml.safe_load(f)
         model_cfg['general']['seed'] = cfg.seed
         model_cfg['general']['tag'] = cfg.m_tag
+        model_cfg['general']['d'] = cfg.d
+        model_cfg['general']['q'] = cfg.q
     model = ApproximatorMFX.build(model_cfg).to(device)
     print(f'{'-' * console_width}\nmodel: {model.id}\nLearning rate: {cfg.lr}\nDevice: {device}')
 
@@ -337,11 +341,11 @@ if __name__ == '__main__':
     # --- load validation set
     fn = dsFilename('mfx', 'val', 1,
                     model_cfg['general']['m'], model_cfg['general']['n'],
-                    model_cfg['general']['d'], model_cfg['general']['q'], 
+                    cfg.d, cfg.q, 
                     size=cfg.bs_val, tag=cfg.d_tag)
     dl_val = getDataLoader(fn, cfg.bs_val,
-                           max_d=model_cfg['general']['d'],
-                           max_q=model_cfg['general']['q'],
+                           max_d=cfg.d,
+                           max_q=cfg.q,
                            permute=False, autopad=True, device=device)
 
     # --- validate loaded model
@@ -355,11 +359,11 @@ if __name__ == '__main__':
     for iteration in range(initial_iteration, cfg.iterations + 1):
         fn = dsFilename('mfx', 'train', cfg.bs_mini, 
                         model_cfg['general']['m'], model_cfg['general']['n'],
-                        model_cfg['general']['d'], model_cfg['general']['q'],
+                        cfg.d, cfg.q,
                         size=cfg.bs_train, tag=cfg.d_tag, part=iteration)
         dl_train = getDataLoader(fn, cfg.bs_mini, 
-                                 max_d=model_cfg['general']['d'],
-                                 max_q=model_cfg['general']['q'],
+                                 max_d=cfg.d,
+                                 max_q=cfg.q,
                                  permute=model_cfg['general']['permute'],
                                  autopad=False, device=device)
         global_step = train(model, optimizer, dl_train, global_step)

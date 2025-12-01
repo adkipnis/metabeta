@@ -18,7 +18,6 @@ from metabeta.evaluation.pp import (
     weightSubset,
 )
 from metabeta import plot
-from sys import exit
 
 ###############################################################################
 
@@ -31,7 +30,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--device', type=str, default='mps', help='device to use [cpu, cuda, mps], (default = mps)')
     parser.add_argument('--cores', type=int, default=8, help='nubmer of processor cores to use (default = 8)')
     
-    # loading
+    # model
+    parser.add_argument('-d', type=int, default=3, help='Maximum number of fixed effects (intercept + slopes)')
+    parser.add_argument('-q', type=int, default=1, help='Maximum number of random effects (intercept + slopes)')
     parser.add_argument('--d_tag', type=str, default='all', help='suffix for data ID (default = '')')
     parser.add_argument('--m_tag', type=str, default='all', help='suffix for model ID (default = '')')
     parser.add_argument('--c_tag', type=str, default='default', help='name of model config file')
@@ -372,6 +373,8 @@ if __name__ == '__main__':
         model_cfg = yaml.safe_load(f)
         model_cfg['general']['seed'] = cfg.seed
         model_cfg['general']['tag'] = cfg.m_tag
+        model_cfg['general']['d'] = cfg.d
+        model_cfg['general']['q'] = cfg.q
     model = ApproximatorMFX.build(model_cfg).to(device)
     model.eval()
     load(model, path, cfg.load)
@@ -384,11 +387,11 @@ if __name__ == '__main__':
     # --- load data
     fn_val = dsFilename('mfx', 'val', 1,
                         model_cfg['general']['m'], model_cfg['general']['n'],
-                        model_cfg['general']['d'], model_cfg['general']['q'], 
+                        cfg.d, cfg.q, 
                         size=cfg.bs_val, tag=cfg.d_tag)
     dl_val = getDataLoader(fn_val, cfg.bs_val,
-                           max_d=model_cfg['general']['d'],
-                           max_q=model_cfg['general']['q'],
+                           max_d=cfg.d,
+                           max_q=cfg.q,
                            permute=False, autopad=True, device=device)
     ds_val = next(iter(dl_val))
     
@@ -414,11 +417,11 @@ if __name__ == '__main__':
     # --- load data
     fn_test = dsFilename('mfx', 'test', 1,
                          model_cfg['general']['m'], model_cfg['general']['n'],
-                         model_cfg['general']['d'], model_cfg['general']['q'], 
+                         cfg.d, cfg.q, 
                          size=cfg.bs_test, tag=cfg.d_tag)
     dl_test = getDataLoader(fn_test, cfg.bs_test,
-                            max_d=model_cfg['general']['d'],
-                            max_q=model_cfg['general']['q'],
+                            max_d=cfg.d,
+                            max_q=cfg.q,
                             permute=False, autopad=True, device=device)
     ds_test = next(iter(dl_test))
 
@@ -443,11 +446,11 @@ if __name__ == '__main__':
     # --- load data
     fn_sub = dsFilename('mfx', 'test-sub', 1,
                         model_cfg['general']['m'], model_cfg['general']['n'],
-                        model_cfg['general']['d'], model_cfg['general']['q'], 
+                        cfg.d, cfg.q, 
                         size=cfg.bs_test, tag=cfg.d_tag)
     dl_sub = getDataLoader(fn_sub, cfg.bs_test,
-                           max_d=model_cfg['general']['d'],
-                           max_q=model_cfg['general']['q'],
+                           max_d=cfg.d,
+                           max_q=cfg.q,
                            permute=False, autopad=True, device=device)
     ds_sub = next(iter(dl_sub))
     
