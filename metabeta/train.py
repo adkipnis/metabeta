@@ -68,6 +68,39 @@ class Logger:
             writer = csv.writer(csvfile)
             writer.writerow([iteration, step, loss])
 
+def quickRecovery(targets: torch.Tensor, means: torch.Tensor) -> tuple[float, float]:
+    # quick evaluation of parameter recovery
+    mse = torch.nn.MSELoss()
+    D = means.shape[-1]
+    if targets.dim() == 3:
+        targets = targets.view(-1, D)
+        means = means.view(-1, D)
+    mask = targets != 0.0
+
+    # init stats
+    RMSE = 0.0
+    R = 0.0
+    denom = D
+
+    # make subplots
+    for i in range(D):
+        mask_i = mask[..., i]
+        targets_i = targets[mask_i, i]
+        mean_i = means[mask_i, i].detach()
+
+        # skip empty target
+        if mask_i.sum() == 0:
+            denom -= 1
+            continue
+
+        # compute stats
+        r = float(pearsonr(targets_i, mean_i)[0])  # type: ignore
+        R += r
+        rmse = mse(targets_i, mean_i).sqrt()
+        RMSE += rmse
+
+    return RMSE / denom, R / denom
+
 
 # -----------------------------------------------------------------------------
 # early stopper
@@ -230,27 +263,33 @@ def validate(model: ApproximatorMFX, dl: DataLoader, step: int) -> int:
         stopper.update(loss_val)
 
         # evaluate samples
-        if sample and cfg.plot:
-            # global results
-            rmse, r = plot.recovery(  # type: ignore
-                targets=results['targets']['global'].cpu(),
-                names=results['names']['global'],
-                means=results['moments']['global'][0],
-                return_stats=True,
-            )
-            logger.write(iteration, step, rmse, 'rmse')
-            logger.write(iteration, step, r, 'r')
-            iterator.write(f'Global - RMSE: {rmse:.3f}, R: {r:.3f}')
-
-            # local results
-            if 'local' in results['names']:
-                rmse, r = plot.recovery(  # type: ignore
+        if sample:
+            if cfg.plot:
+                rmse_g, r_g = plot.recovery(  # type: ignore
+                    targets=results['targets']['global'].cpu(),
+                    names=results['names']['global'],
+                    means=results['moments']['global'][0],
+                    return_stats=True,
+                )
+                rmse_l, r_l = plot.recovery(  # type: ignore
                     targets=results['targets']['local'].cpu(),
                     names=results['names']['local'],
                     means=results['moments']['local'][0],
                     return_stats=True,
                 )
-                iterator.write(f'Local - RMSE: {rmse:.3f}, R: {r:.3f}')
+            else:
+                rmse_g, r_g = quickRecovery(
+                    targets=results['targets']['global'].cpu(),
+                    means=results['moments']['global'][0],
+                )
+                rmse_l, r_l = quickRecovery(  # type: ignore
+                    targets=results['targets']['local'].cpu(),
+                    means=results['moments']['local'][0],
+                )
+            logger.write(iteration, step, rmse_g, 'rmse')
+            logger.write(iteration, step, r_g, 'r')
+            iterator.write(f'Global - RMSE: {rmse_g:.3f}, R: {r_g:.3f}')
+            iterator.write(f'Local - RMSE: {rmse_l:.3f}, R: {r_l:.3f}')
     return step
 
 
