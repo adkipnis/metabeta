@@ -446,7 +446,7 @@ class ApproximatorMFX(Approximator):
         data: dict[str, torch.Tensor],
     ):
         '''reverse steps used in preprocessing for samples'''
-        if 'samples' not in proposed['global']:
+        if 'samples' not in proposed['local']:
             return proposed
 
         if self.use_standardization:
@@ -469,56 +469,57 @@ class ApproximatorMFX(Approximator):
         proposed['local']['samples'] = rfx_
 
         # global postprocessing
-        samples = proposed['global']['samples'].clone()
-        b, _, s = samples.shape
-        d, q = self.d, self.q
-        ffx_, sigmas_rfx_, sigma_eps_ = (
-            samples[:, :d],
-            samples[:, d:-1],
-            samples[:, -1:],
-        )
-
-        # constrain stds to be positive
-        if self.constrain:
-            sigmas_rfx_ = maskedSoftplus(sigmas_rfx_)
-            sigma_eps_ = maskedSoftplus(sigma_eps_)
-
-        # analytical unstandardization
-        if self.use_standardization:
-            # unstandardize ffx
-            onesies = data['d'] == 1
-            ffx_[onesies, 0] = (
-                0  # in pure intercept models the standardized intercept is 0
+        if 'global' in proposed:
+            samples = proposed['global']['samples'].clone()
+            b, _, s = samples.shape
+            d, q = self.d, self.q
+            ffx_, sigmas_rfx_, sigma_eps_ = (
+                samples[:, :d],
+                samples[:, d:-1],
+                samples[:, -1:],
             )
-            ffx = ffx_ * std_y.view(b, 1, 1)
-            ffx[:, 1:] /= std_X.view(b, d - 1, 1)
-            mean_Xb = (mean_X.view(b, d - 1, 1) * ffx[:, 1:]).sum(1)
-            ffx[:, 0] = ffx_[:, 0] * std_y.view(b, 1) - mean_Xb + mean_y.view(b, 1)
+    
+            # constrain stds to be positive
+            if self.constrain:
+                sigmas_rfx_ = maskedSoftplus(sigmas_rfx_)
+                sigma_eps_ = maskedSoftplus(sigma_eps_)
+    
+            # analytical unstandardization
+            if self.use_standardization:
+                # unstandardize ffx
+                onesies = data['d'] == 1
+                ffx_[onesies, 0] = (
+                    0  # in pure intercept models the standardized intercept is 0
+                )
+                ffx = ffx_ * std_y.view(b, 1, 1)
+                ffx[:, 1:] /= std_X.view(b, d - 1, 1)
+                mean_Xb = (mean_X.view(b, d - 1, 1) * ffx[:, 1:]).sum(1)
+                ffx[:, 0] = ffx_[:, 0] * std_y.view(b, 1) - mean_Xb + mean_y.view(b, 1)
+    
+                # unstandardize sigmas
+                sigma_eps_ *= std_y.view(b, 1, 1)
+                sigmas_rfx = sigmas_rfx_ * std_y.view(b, 1, 1)
+                sigmas_rfx[:, 1:] /= std_Z.view(b, q - 1, 1)  # random slopes
+    
+                # sigma intercept with cov_sum
+                ones = torch.ones_like(mean_X[..., 0:1])
+                mean_Z1 = torch.cat([ones, mean_Z], dim=-1)
+                weighted = rfx_.mean(-1) * mean_Z1.view(b, 1, q)
+                cov = batchCovary(weighted, data['mask_m'])
+                cov_sum = (cov.sum((-1, -2)) - cov[:, 0, 0]).unsqueeze(-1)
+                sigma_0 = (sigmas_rfx[:, 0].square() - cov_sum).clamp(min=1e-12).sqrt()
+                # ub = sigma_0.mean(-1).view(-1).topk(3)[0][-1]
+                # sigmas_rfx[:, 0] = sigma_0.clamp(max=ub)
+                sigmas_rfx[:, 0] = sigma_0
+    
+                # patch samples
+                ffx_ = ffx.to('cpu')
+                sigmas_rfx_ = sigmas_rfx.to('cpu')
+                sigma_eps_ = sigma_eps_.to('cpu')
 
-            # unstandardize sigmas
-            sigma_eps_ *= std_y.view(b, 1, 1)
-            sigmas_rfx = sigmas_rfx_ * std_y.view(b, 1, 1)
-            sigmas_rfx[:, 1:] /= std_Z.view(b, q - 1, 1)  # random slopes
-
-            # sigma intercept with cov_sum
-            ones = torch.ones_like(mean_X[..., 0:1])
-            mean_Z1 = torch.cat([ones, mean_Z], dim=-1)
-            weighted = rfx_.mean(-1) * mean_Z1.view(b, 1, q)
-            cov = batchCovary(weighted, data['mask_m'])
-            cov_sum = (cov.sum((-1, -2)) - cov[:, 0, 0]).unsqueeze(-1)
-            sigma_0 = (sigmas_rfx[:, 0].square() - cov_sum).clamp(min=1e-12).sqrt()
-            # ub = sigma_0.mean(-1).view(-1).topk(3)[0][-1]
-            # sigmas_rfx[:, 0] = sigma_0.clamp(max=ub)
-            sigmas_rfx[:, 0] = sigma_0
-
-            # patch samples
-            ffx_ = ffx.to('cpu')
-            sigmas_rfx_ = sigmas_rfx.to('cpu')
-            sigma_eps_ = sigma_eps_.to('cpu')
-
-        proposed['global']['samples'] = torch.cat(
-            [ffx_, sigmas_rfx_, sigma_eps_], dim=1
-        )
+            proposed['global']['samples'] = torch.cat(
+                [ffx_, sigmas_rfx_, sigma_eps_], dim=1
+            )
         proposed['local']['samples'] = proposed['local']['samples'].to('cpu')
         return proposed
 
