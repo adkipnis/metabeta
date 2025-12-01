@@ -570,7 +570,8 @@ class ApproximatorMFX(Approximator):
         loss += loss_l.sum(-1) / data['m']
         return {'loss': loss, 'proposed': proposed, 'summary': {'global': summary_g, 'local': summary_l}}
 
-    def estimate(self, data: dict[str, torch.Tensor], n=(300, 200)):
+    def estimate(self, data: dict[str, torch.Tensor], n=(300, 200),
+                 ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
         with torch.no_grad():
             proposed = {}
             inputs = self.inputs(data)
@@ -579,29 +580,29 @@ class ApproximatorMFX(Approximator):
                 [
                     data['mask_d'],  # ffx
                     data['mask_q'],  # sigmas rfx
-                    torch.ones(b, 1),  # sigma eps
+                    torch.ones(b, 1, device=inputs.device),  # sigma eps
                 ],
                 dim=-1,
             ).float()
             mask_l = data['mask_q'].unsqueeze(1).expand(b, m, -1).float()
-
+            
             # summaries
-            summaries = self.summarizer_l(inputs, data['mask_n'])
-            summaries = self.addMetadata(summaries, data, local=True)
-            summary = self.summarizer_g(summaries, data['mask_m'])
-
+            summary_l = self.summarizer_l(inputs, data['mask_n'])
+            summary_l = self.addMetadata(summary_l, data, local=True)
+            summary_g = self.summarizer_g(summary_l, data['mask_m'])
+        
             # global inference
-            context_g = self.addMetadata(summary, data, local=False)
+            context_g = self.addMetadata(summary_g, data, local=False)
             proposed['global'] = self.posterior_g.estimate(context_g, mask_g, n[0])
-
+            
             # local inference
             global_params = proposed['global']['samples'].mean(-1)
             global_params = global_params.view(b, 1, -1).expand(b, m, -1)
-            context_l = torch.cat([summaries, global_params], dim=-1)
+            context_l = torch.cat([summary_l, global_params], dim=-1)
             proposed['local'] = self.posterior_l.estimate(context_l, mask_l, n[1])
 
             # postprocessing
             proposed = self.postprocess(proposed, data)
-        return proposed
+        return {'proposed': proposed, 'summary': {'global': summary_g, 'local': summary_l}}
 
 
