@@ -204,8 +204,17 @@ def recovery(model: ApproximatorMFX, results: dict) -> None:
             marker='s',
         )
 
+def subsample(nuts: dict, n: int = 1000) -> dict:
+    # sub-sample due to memory constraints
+    s = nuts['global']['samples'].shape[-1]
+    subset_idx = torch.randperm(s)[:n] # we need to subsample due to memory demands
+    nuts_sub = {'global': {}, 'local': {}}
+    nuts_sub['global'] = {'samples': nuts['global']['samples'][..., subset_idx]}
+    nuts_sub['local'] = {'samples': nuts['local']['samples'][..., subset_idx]}
+    return nuts_sub
+    
 
-def inSampleLikelihood(results: dict):
+def inSampleLikelihood(results: dict, limit: float = 2000.):
     # in-sample posterior predictive likelihood
     batch = results['batch']
     proposed = results['proposed']
@@ -218,11 +227,7 @@ def inSampleLikelihood(results: dict):
     
     if nuts is not None:
         # sub-sample due to memory constraints
-        s = nuts['global']['samples'].shape[-1]
-        subset_idx = torch.randperm(s)[:1000] # we need to subsample due to memory demands
-        nuts_sub = {'global': {}, 'local': {}}
-        nuts_sub['global'] = {'samples': nuts['global']['samples'][..., subset_idx]}
-        nuts_sub['local'] = {'samples': nuts['local']['samples'][..., subset_idx]}
+        nuts_sub = subsample(nuts)
         
         # evaluate
         y_log_prob_m = posteriorPredictiveDensity(batch, nuts_sub)
@@ -230,8 +235,8 @@ def inSampleLikelihood(results: dict):
         results['pp_nnl'] = {'nuts': pp_nll_m}
         
         # plot
-        mask_mb = (pp_nll < 1e4)
-        mask_mcmc = (pp_nll_m < 1e4)
+        mask_mb = (pp_nll < limit)
+        mask_mcmc = (pp_nll_m < limit)
         mask_pp = mask_mcmc * mask_mb
         fig, ax = plt.subplots(figsize=(8, 8))
         ax.plot(pp_nll[mask_pp], pp_nll_m[mask_pp], 'o')
@@ -277,16 +282,12 @@ def posteriorPredictive(results: dict, index: int = 0):
     # NUTS
     if nuts is not None:
         # sub-sample due to memory constraints
-        s = nuts['global']['samples'].shape[-1]
-        subset_idx = torch.randperm(s)[:1000] # we need to subsample due to memory demands
-        nuts_sub = {'global': {}, 'local': {}}
-        nuts_sub['global'] = {'samples': nuts['global']['samples'][..., subset_idx]}
-        nuts_sub['local'] = {'samples': nuts['local']['samples'][..., subset_idx]}
+        nuts_sub = subsample(nuts)
         
         # sample
         y_rep_nuts = posteriorPredictiveSample(batch, nuts_sub)
         plotPosteriorPredictive(
-            axs[1, 0],
+            axs[1],
             batch['y'],
             y_rep_nuts,
             batch_idx=0,
