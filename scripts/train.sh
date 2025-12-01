@@ -5,11 +5,10 @@
 #SBATCH --error=logs/train/%j.err
 
 #SBATCH --partition gpu_p
-#SBATCH --qos gpu_normal
+#SBATCH --qos gpu_priority
 
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=64G
+#SBATCH --mem=80G
 #SBATCH --time=6:00:00
 #SBATCH --nice=1000
 
