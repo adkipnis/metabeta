@@ -16,5 +16,5 @@
 source $HOME/.bashrc
 conda activate mb
 cd ../metabeta
-python train.py -d 3 -q 1 -l 0 -i 10 --c_tag default
+python train.py -d 3 -q 1 -l 0 -i 50 --c_tag default
 
