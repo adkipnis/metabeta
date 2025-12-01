@@ -27,8 +27,8 @@ def setup() -> argparse.Namespace:
     
     # misc
     parser.add_argument('-s', '--seed', type=int, default=42, help='model seed (default = 42)')
-    parser.add_argument('--device', type=str, default='mps', help='device to use [cpu, cuda, mps], (default = mps)')
-    parser.add_argument('--cores', type=int, default=8, help='nubmer of processor cores to use (default = 8)')
+    parser.add_argument('--device', type=str, default='cuda', help='device to use [cpu, cuda, mps], (default = mps)')
+    parser.add_argument('--cores', type=int, default=8, help='number of processor cores to use (default = 8)')
     
     # model
     parser.add_argument('-d', type=int, default=3, help='Maximum number of fixed effects (intercept + slopes)')
