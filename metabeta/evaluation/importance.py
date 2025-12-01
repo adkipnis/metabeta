@@ -102,7 +102,7 @@ class ImportanceLocal:
         upsample: bool = False,
     ) -> dict[str, dict[str, torch.Tensor]]:
         # unpack
-        log_q = proposed['local']['log_prob'].clone()
+        log_q = proposed['local']['log_prob'].clone().cpu()
         rfx = proposed['local']['samples'].clone()
         samples_g = proposed['global']['samples'].clone()
         weights_g = proposed['global'].get('weights', None)
@@ -225,7 +225,7 @@ class ImportanceGlobal:
     ) -> dict[str, dict[str, torch.Tensor]]:
         # unpack
         out = {}
-        log_q = proposed['global']['log_prob'].clone()
+        log_q = proposed['global']['log_prob'].clone().cpu()
         samples_g = proposed['global']['samples'].clone()
         ffx = samples_g[:, : self.max_d]
         sigmas_rfx = samples_g[:, self.max_d : -1] + 1e-12
