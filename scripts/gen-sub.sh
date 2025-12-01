@@ -1,11 +1,8 @@
 #!/bin/bash
 
-DVAL=$1
-QVAL=$2
-
-#SBATCH --job-name=gen-sub-${DVAL}-${QVAL}
-#SBATCH --output=logs/gen-sub-${DVAL}-${QVAL}/%j.out
-#SBATCH --error=logs/gen-sub-${DVAL}-${QVAL}/%j.err
+#SBATCH --job-name=gen-sub-3-1
+#SBATCH --output=logs/gen-sub/%j.out
+#SBATCH --error=logs/gen-sub/%j.err
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
@@ -18,5 +15,5 @@ QVAL=$2
 source $HOME/.bashrc
 conda activate mb
 cd ../metabeta/data
+python generate.py -d 3 -q 1 -b -1 --sub --slurm
 
-python generate.py -d ${DVAL} -q ${QVAL} -b -1 --sub --slurm
