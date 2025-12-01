@@ -17,7 +17,7 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate hierarchical datasets.')
     parser.add_argument('--bs_train', type=int, default=4096, help='batch size per training partition (default = 4,096).')
     parser.add_argument('--bs_val', type=int, default=256, help='batch size for validation partition (default = 256).')
-    parser.add_argument('--bs_test', type=int, default=32, help='batch size per testing partition (default = 256).')
+    parser.add_argument('--bs_test', type=int, default=256, help='batch size per testing partition (default = 256).')
     parser.add_argument('--bs_load', type=int, default=16, help='Batch size when loading (for grouping n, default = 16)')
     parser.add_argument('--min_m', type=int, default=5, help='Minimum number of groups (default = 5).')
     parser.add_argument('--max_m', type=int, default=30, help='Maximum number of groups (default = 30).')
