@@ -18,8 +18,7 @@ from metabeta.evaluation.pp import (
     weightSubset,
 )
 from metabeta import plot
-
-plt.rcParams['figure.dpi'] = 300
+from sys import exit
 
 ###############################################################################
 
@@ -72,26 +71,29 @@ def run(
     print(f'forward pass took {end - start:.2f}s')
     losses = results['loss']
     proposed = results['proposed']
+    summary = results['summary']
     print(f'Mean loss: {losses.mean().item():.4f}')
 
     # references
     nuts = None
     if 'nuts_global' in batch:
         nuts = {}
-        nuts['global'] = {'samples': batch['nuts_global']}
+        nuts['global'] = {'samples': batch['nuts_global'].cpu()}
         if 'nuts_local' in batch:
-            nuts['local'] = {'samples': batch['nuts_local']}
-
+            nuts['local'] = {'samples': batch['nuts_local'].cpu()}
+    
+    # put batch to cpu
+    batch = {k: v.cpu() for k,v in batch.items()}
+    
     # outputs
     out = {
         'batch': batch,
         'losses': losses,
         'proposed': proposed,
-        'perm': batch['perm'],  # used column permutation
-        'unperm': batch['unperm'],  # corresponding unpermutation
+        'summary': summary,
         'names': model.names(batch),
         'names_l': model.names(batch, local=True),
-        'targets': model.targets(batch),
+        'targets': model.targets(batch).cpu(),
         'targets_l': model.targets(batch, local=True),
         'nuts': nuts,
     }
@@ -104,22 +106,28 @@ def estimate(model: ApproximatorMFX,
     # model outputs
     with torch.no_grad():
         start = time.perf_counter()
-        proposed = model.estimate(batch, n=(500, 300))
+        results = model.estimate(batch, n=(500, 300))
         end = time.perf_counter()
     print(f'forward pass took {end - start:.2f}s')
+    proposed = results['proposed']
+    summary = results['summary']
 
     # references
     nuts = None
     if 'nuts_global' in batch:
         nuts = {}
-        nuts['global'] = {'samples': batch['nuts_global']}
+        nuts['global'] = {'samples': batch['nuts_global'].cpu()}
         if 'nuts_local' in batch:
-            nuts['local'] = {'samples': batch['nuts_local']}
-
+            nuts['local'] = {'samples': batch['nuts_local'].cpu()}
+    
+    # put batch to cpu
+    batch = {k: v.cpu() for k,v in batch.items()}
+    
     # outputs
     out = {
         'batch': batch,
         'proposed': proposed,
+        'summary': summary,
         'nuts': nuts,
     }
     return out
