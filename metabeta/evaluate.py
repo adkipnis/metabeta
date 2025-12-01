@@ -427,7 +427,7 @@ if __name__ == '__main__':
     print('\nInference on test set...')
     results_test = run(model, ds_test)
     if cfg.importance:
-        importanceSampling(results_val)
+        importanceSampling(results_test)
     
     # --- evaluate performance
     recovery(model, results_test)
@@ -453,7 +453,7 @@ if __name__ == '__main__':
     
     # --- run and refine model
     print('\nInference on sub-sampled real data...')
-    results_sub = run(model, ds_sub)
+    results_sub = estimate(model, ds_sub)
     if cfg.importance:
         importanceSampling(results_sub)
         
