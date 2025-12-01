@@ -20,7 +20,7 @@ def prepare(
     rfx = weightedMean(samples_l, weights_l).to(X.dtype)
     ffx = samples_g[:, :d].to(X.dtype)
     b = len(ffx)
-    sigma_eps = samples_g[:, -1].view(b, 1, 1, -1)
+    sigma_eps = samples_g[:, -1].view(b, 1, 1, -1) + 1e-12
 
     # construct posterior predictive distribution
     mu_g = torch.einsum("bmnd,bds->bmns", X, ffx)
@@ -76,6 +76,7 @@ def weightSubset(
     w_inv = torch.argsort(w_idx, -1)
     cdf = torch.cumsum(w_sorted, -1) / s
     cdf = cdf.contiguous()
+    root = root.contiguous()
     r_idx = torch.searchsorted(cdf, root).clamp(max=s - 1)
     mask = torch.arange(s).unsqueeze(0) >= r_idx
     mask = mask.gather(-1, w_inv)
