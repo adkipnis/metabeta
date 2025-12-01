@@ -20,19 +20,19 @@ from metabeta import plot
 def setup() -> argparse.Namespace:
     ''' Parse command line arguments. '''
     parser = argparse.ArgumentParser()
-    
+ 
     # misc
     parser.add_argument('-s', '--seed', type=int, default=42, help='model seed (default = 42)')
-    parser.add_argument('--device', type=str, default='mps', help='device to use [cpu, cuda, mps], (default = mps)')
+    parser.add_argument('--device', type=str, default='cuda', help='device to use [cpu, cuda, mps], (default = mps)')
     parser.add_argument('--cores', type=int, default=8, help='nubmer of processor cores to use (default = 8)')
-    parser.add_argument('--plot', action='store_false', help='plot sampling results (default = True)')
-    
+    parser.add_argument('--plot', action='store_true', help='plot sampling results (default = True)')
+
     # loading
     parser.add_argument('--d_tag', type=str, default='all', help='suffix for data ID (default = '')')
     parser.add_argument('--m_tag', type=str, default='all', help='suffix for model ID (default = '')')
     parser.add_argument('--c_tag', type=str, default='default', help='name of model config file')
     parser.add_argument('-l', '--load', type=int, default=0, help='load model from iteration #p')
-    
+
     # training
     parser.add_argument('-i', '--iterations', type=int, default=10, help='maximum number of iterations to train (default = 10)')
     parser.add_argument('--patience', type=int, default=20, help='early stopping criterium (default = 20)')
@@ -190,7 +190,7 @@ def train(
         results = model(batch, sample=False)
         loss = results['loss'].mean()
         loss.backward()
-        
+
         # safe gradient handling
         if torch.isfinite(totalNorm(model)):
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -198,7 +198,7 @@ def train(
         else:
             iterator.set_postfix_str('loss: skipped step due to NaNs')
             continue
-        
+
         running_sum += loss.item()
         loss_train = running_sum / (i + 1)
         iterator.set_postfix_str(f'loss: {loss_train:.3f}')
@@ -265,7 +265,7 @@ if __name__ == '__main__':
     timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     console_width = getConsoleWidth()
     device = setDevice(cfg.device)
-    
+
     # --- setup model
     with open(Path('models', 'configs', f'{cfg.c_tag}.yaml'), 'r') as f:
         model_cfg = yaml.safe_load(f)
@@ -303,7 +303,7 @@ if __name__ == '__main__':
                            max_d=model_cfg['general']['d'],
                            max_q=model_cfg['general']['q'],
                            permute=False, autopad=True, device=device)
-    
+
     # --- validate loaded model
     if cfg.load > 0:
         iteration = cfg.load
