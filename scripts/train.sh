@@ -9,7 +9,8 @@
 #SBATCH --qos gpu_priority
 
 #SBATCH --nodes=1
-#SBATCH --mem=80G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=64G
 #SBATCH --time=6:00:00
 
 source $HOME/.bashrc

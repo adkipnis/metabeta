@@ -4,6 +4,7 @@
 #SBATCH --output=logs/full/%j.out
 #SBATCH --error=logs/full/%j.err
 
+#SBATCH --gres=gpu:1
 #SBATCH --partition gpu_p
 #SBATCH --qos gpu_normal
 
@@ -11,7 +12,6 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
 #SBATCH --time=12:00:00
-#SBATCH --nice=1000
 
 # ---------------------------
 # Define variables
@@ -33,4 +33,3 @@ cd ../metabeta/data
 python generate.py -d $D -q $Q -b 0 -i $I --semi
 cd ..
 python train.py -d $D -q $Q -l 0 -i $I
-python evaluate.py -d $D -q $Q -l $I
