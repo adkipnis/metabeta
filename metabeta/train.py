@@ -27,7 +27,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--device', type=str, default='cuda', help='device to use [cpu, cuda, mps], (default = mps)')
     parser.add_argument('--cores', type=int, default=8, help='number of processor cores to use (default = 8)')
     parser.add_argument('--plot', action='store_true', help='plot sampling results (default = True)')
-    
+    parser.add_argument('--save', type=int, default=10, help='save model every #p iterations (default = 10)')
+
     # model
     parser.add_argument('-d', type=int, default=3, help='Maximum number of fixed effects (intercept + slopes)')
     parser.add_argument('-q', type=int, default=1, help='Maximum number of random effects (intercept + slopes)')
@@ -43,7 +44,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--bs_val', type=int, default=256, help='number of regression datasets in validation set (default = 256)')
     parser.add_argument('--bs_mini', type=int, default=16, help='umber of regression datasets per minibatch (default = 16)')
     parser.add_argument('--lr', type=float, default=5e-4, help='optimizer learning rate (default = 5e-4)')
-    
+
     return parser.parse_args()
 
 
@@ -368,7 +369,7 @@ if __name__ == '__main__':
                                  autopad=False, device=device)
         global_step = train(model, optimizer, dl_train, global_step)
         validation_step = validate(model, dl_val, validation_step)
-        if iteration % 5 == 0 or stopper.stop:
+        if iteration % cfg.save == 0 or stopper.stop or iteration == cfg.iterations:
             save(model, optimizer, iteration, global_step, validation_step, timestamp)
         if stopper.stop:
             break
