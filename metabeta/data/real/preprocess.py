@@ -273,14 +273,14 @@ if __name__ == '__main__':
     Path('preprocessed', 'train').mkdir(parents=True, exist_ok=True)
     Path('preprocessed', 'test').mkdir(parents=True, exist_ok=True)
 
-    # r-package datasets
+    # # r-package datasets
     batchprocess('from-r', partition='test', group_name='group')
 
-    # srm datasets
+    # # srm datasets
     batchprocess('srm')
-
-    # # pmlb datasets
-    # batchprocess('pmlb')
+    
+    # pmlb datasets
+    batchprocess('pmlb')
 
     # # automl datasets (skipped, too many issues)
     # batchprocess('automl', partition='train')
