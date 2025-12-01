@@ -25,6 +25,17 @@ def split(
     out[idx] = long[:j]
     return out
 
+def thirtytwo(x: torch.Tensor) -> torch.Tensor:
+    """Convert any tensor to the closest 32-bit dtype."""
+    dtype = x.dtype
+
+    if dtype.is_floating_point:
+        return x.to(torch.float32)
+    elif dtype in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8):
+        return x.to(torch.int32)
+    else:
+        return x
+
 
 def autoPad(batch: list[dict[str, torch.Tensor]], key: str, device: str | torch.device = 'cpu'):
     '''automatically pad a tensor with zeros depending on its dim'''
@@ -52,7 +63,7 @@ def autoPad(batch: list[dict[str, torch.Tensor]], key: str, device: str | torch.
                                   0, M - item[key].shape[0])
     if get_shape is not None:
         out = [pad(item[key], get_shape(item), value=0) for item in batch]
-    return torch.stack(out).to(device)
+    return thirtytwo(torch.stack(out)).to(device)
 
 
 def getCollater(autopad: bool = False, device: str | torch.device = 'cpu'):
