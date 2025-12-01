@@ -28,7 +28,7 @@ def getImportanceWeights(
 # Mixed Effects
 # -----------------------------------------------------------------------------
 class ImportanceLocal:
-    def __init__(self, data: dict[str, torch.Tensor]):
+    def __init__(self, data: dict[str, torch.Tensor], constrain: bool = True):
         self.nu_ffx = data['nu_ffx']
         self.tau_ffx = data['tau_ffx']
         self.tau_rfx = data['tau_rfx']
@@ -43,6 +43,7 @@ class ImportanceLocal:
         self.n_i = data['n_i'].unsqueeze(-1)
         self.q = data['q'].unsqueeze(1)
         self.max_d = data['d'].max()
+        self.constrain = constrain
 
     def logPriorBeta(self, beta: torch.Tensor) -> torch.Tensor:
         # beta: (b, d)
@@ -123,7 +124,8 @@ class ImportanceLocal:
 
         # importance sampling
         out = getImportanceWeights(
-            log_likelihood, log_prior.view(-1, 1, 1), log_q
+            log_likelihood, log_prior.view(-1, 1, 1), log_q,
+            constrain=self.constrain
         )
         out['weights'] = out['weights'].unsqueeze(-2).expand(*rfx.shape).clone()
 
@@ -148,7 +150,7 @@ class ImportanceLocal:
 
 # -----------------------------------------------------------------------------
 class ImportanceGlobal:
-    def __init__(self, data: dict[str, torch.Tensor]):
+    def __init__(self, data: dict[str, torch.Tensor], constrain: bool = True):
         self.nu_ffx = data['nu_ffx'].unsqueeze(-1)
         self.tau_ffx = data['tau_ffx'].unsqueeze(-1)
         self.tau_rfx = data['tau_rfx']
@@ -163,6 +165,7 @@ class ImportanceGlobal:
         self.n_i = data['n_i'].unsqueeze(-1)
         self.q = data['q']
         self.max_d = data['d'].max()
+        self.constrain = constrain
 
     def logPriorBeta(self, beta: torch.Tensor) -> torch.Tensor:
         # beta: (b, d, s)
@@ -251,7 +254,8 @@ class ImportanceGlobal:
         log_likelihood_rfx = self.logLikelihoodRfx(rfx, sigmas_rfx)
 
         # importance sampling (ffx)
-        is_results = getImportanceWeights(log_likelihood, log_prior, 3*log_q)
+        is_results = getImportanceWeights(log_likelihood, log_prior, 3*log_q,
+                                          constrain=self.constrain,)
         out.update(**is_results)
         out['weights'] = out['weights'].unsqueeze(-2).expand(*samples_g.shape).clone()
         out['weights'][:, -1] = weights_s
@@ -261,6 +265,7 @@ class ImportanceGlobal:
             log_likelihood=log_likelihood_rfx,
             log_prior=log_prior_sigmas_rfx,
             log_q=log_q,
+            constrain=self.constrain,
         )
         out_['weights'] = (
             out_['weights'].unsqueeze(-2).expand(*sigmas_rfx.shape).clone()
