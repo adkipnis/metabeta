@@ -178,6 +178,7 @@ class ImportanceGlobal:
         # sigma: (b, s)
         tau = self.tau_eps
         lp = D.HalfNormal(tau).log_prob(sigma)
+        # lp = D.StudentT(df=4, loc=0, scale=tau).log_prob(sigma) + torch.tensor(2.0).log()
         return lp  # (b, s)
 
     def logPriorSigmasRfx(self, sigmas_rfx: torch.Tensor) -> torch.Tensor:
