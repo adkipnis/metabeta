@@ -27,7 +27,7 @@ python train.py -d {d} -q {q} -l 0 -i {i} --c_tag default'''
     return out
 
 if __name__ == '__main__':
-    pairs = [(3,1), (5,2), (8,3), (12, 4)]
+    pairs = [(2,2), (3,1), (4,1), (5,2), (8,3), (12, 4)]
     for d,q in pairs:
         write(f'train-{d}-{q}.sh', train(d,q))
 
