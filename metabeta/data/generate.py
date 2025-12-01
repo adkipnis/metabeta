@@ -31,6 +31,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--semi', action='store_true', help='Generate semi-synthetic data (default = False)')
     parser.add_argument('--sub', action='store_true', help='Generate sub-sampled real data (default = False)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD for semi-synthetic data (default = False)')
+    parser.add_argument('--slurm', action='store_true', help='Turn off multiprocessing for slurm (default = False)')
     parser.add_argument('-s', '--seed', type=int, default=42, help='Seed for PyMC fit (default = 42)')
     parser.add_argument('-b', '--begin', type=int, default=0, help='Begin with iteration number #b.')
     parser.add_argument('-i', '--iterations', type=int, default=10, help='Number of dataset partitions to generate.')
@@ -200,7 +201,9 @@ def generate(
             # MCMC
             print(f'Fitting NUTS using {cfg.api.upper()}')
             nuts_results = fitter(ds, method='nuts', seed=cfg.seed,
-                                  specify_priors=(not cfg.sub))
+                                  specify_priors=(not cfg.sub),
+                                  use_multiprocessing=(not cfg.slurm),
+                                  )
             ds.update(nuts_results)
             
             # VI
