@@ -30,8 +30,8 @@ def setup() -> argparse.Namespace:
     # loading
     parser.add_argument('--d_tag', type=str, default='all', help='suffix for data ID (default = '')')
     parser.add_argument('--m_tag', type=str, default='all', help='suffix for model ID (default = '')')
-    parser.add_argument('--c_tag', type=str, default='config', help='name of model config file (default = config)')
     parser.add_argument('-l', '--load', type=int, default=10, help='load model from iteration #p')
+    parser.add_argument('--c_tag', type=str, default='default', help='name of model config file')
     
     # training
     parser.add_argument('-i', '--iterations', type=int, default=10, help='maximum number of iterations to train (default = 10)')
@@ -267,7 +267,7 @@ if __name__ == '__main__':
     device = setDevice(cfg.device)
     
     # --- setup model
-    with open(Path('models', f'{cfg.c_tag}.yaml'), 'r') as f:
+    with open(Path('models', 'configs', f'{cfg.c_tag}.yaml'), 'r') as f:
         model_cfg = yaml.safe_load(f)
         model_cfg['general']['seed'] = cfg.seed
         model_cfg['general']['tag'] = cfg.m_tag
