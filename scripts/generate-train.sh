@@ -15,5 +15,6 @@
 
 source $HOME/.bashrc
 conda activate mb
-python ../metabeta/data/generate.py -d 3 -q 1 -i 10
+cd ../metabeta/data
+python generate.py -d 3 -q 1 -i 10
 
