@@ -30,7 +30,7 @@ conda activate mb
 # Run scripts with variables
 # ---------------------------
 cd ../metabeta/data
-python generate.py -d $D -q $Q -b 0 -i $I
+python generate.py -d $D -q $Q -b 0 -i $I --semi
 cd ..
 python train.py -d $D -q $Q -l 0 -i $I
 python evaluate.py -d $D -q $Q -l 0 -i $I

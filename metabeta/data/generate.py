@@ -28,7 +28,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--d_tag', type=str, default='all', help='Suffix for model ID (default = '')')
     parser.add_argument('--api', type=str, default='bambi', help='API to use for competetive fit (default = "bambi")')
     parser.add_argument('--toy', action='store_true', help='Generate toy data (default = False)')
-    parser.add_argument('--semi', action='store_false', help='Generate semi-synthetic data (default = True)')
+    parser.add_argument('--semi', action='store_true', help='Generate semi-synthetic data (default = False)')
     parser.add_argument('--sub', action='store_true', help='Generate sub-sampled real data (default = False)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD for semi-synthetic data (default = False)')
     parser.add_argument('-s', '--seed', type=int, default=42, help='Seed for PyMC fit (default = 42)')
