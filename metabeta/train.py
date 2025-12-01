@@ -30,8 +30,8 @@ def setup() -> argparse.Namespace:
     # loading
     parser.add_argument('--d_tag', type=str, default='all', help='suffix for data ID (default = '')')
     parser.add_argument('--m_tag', type=str, default='all', help='suffix for model ID (default = '')')
-    parser.add_argument('-l', '--load', type=int, default=10, help='load model from iteration #p')
     parser.add_argument('--c_tag', type=str, default='default', help='name of model config file')
+    parser.add_argument('-l', '--load', type=int, default=0, help='load model from iteration #p')
     
     # training
     parser.add_argument('-i', '--iterations', type=int, default=10, help='maximum number of iterations to train (default = 10)')

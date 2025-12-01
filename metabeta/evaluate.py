@@ -35,8 +35,8 @@ def setup() -> argparse.Namespace:
     # loading
     parser.add_argument('--d_tag', type=str, default='all', help='suffix for data ID (default = '')')
     parser.add_argument('--m_tag', type=str, default='all', help='suffix for model ID (default = '')')
-    parser.add_argument('-l', '--load', type=int, default=10, help='load model from iteration #l')
     parser.add_argument('--c_tag', type=str, default='default', help='name of model config file')
+    parser.add_argument('-l', '--load', type=int, default=50, help='load model from iteration #l')
     
     # evaluation
     parser.add_argument('--bs_val', type=int, default=256, help='number of regression datasets in validation set (default = 256)')
