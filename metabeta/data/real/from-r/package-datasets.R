@@ -1,4 +1,5 @@
 # install missing packages
+options(repos = c(CRAN = "https://cloud.r-project.org"))
 packages <- c(
   "rstudioapi", "fs", "arrow", "lme4", "nlme",
   "mlmRev", "MEMSS", "dplyr"
