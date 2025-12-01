@@ -604,5 +604,27 @@ class ApproximatorMFX(Approximator):
             # postprocessing
             proposed = self.postprocess(proposed, data)
         return {'proposed': proposed, 'summary': {'global': summary_g, 'local': summary_l}}
+    
+    def resample(self,
+                 data: dict[str, torch.Tensor],
+                 summary: dict[str, torch.Tensor],
+                 global_params: torch.Tensor,
+                 n: int = 200) -> dict[str, torch.Tensor]:
+        with torch.no_grad():     
+            proposed = {}
+            summary_g, summary_l = summary.values()
+            b, m, _ = summary_l.shape
+            mask_l = data['mask_q'].unsqueeze(1).expand(b, m, -1).float()
+    
+            # local inference
+            global_params_ = self.preprocess(global_params, data)
+            global_params_ = global_params_.view(b, 1, -1).expand(b, m, -1)
+            context_l = torch.cat([summary_l, global_params_], dim=-1)
+            proposed['local'] = self.posterior_l.estimate(context_l, mask_l, n)
+
+            # postprocessing
+            proposed = self.postprocess(proposed, data)
+        return proposed['local']
+        
 
 
