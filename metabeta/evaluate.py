@@ -594,9 +594,10 @@ if __name__ == '__main__':
     
     # -------------------------------------------------------------------------
     # test set (with MCMC estimates)
+    data_type = 'test'
         
     # --- load data
-    fn_test = dsFilename('mfx', 'test', 1,
+    fn_test = dsFilename('mfx', data_type, 1,
                          model_cfg['general']['m'], model_cfg['general']['n'],
                          cfg.d, cfg.q, 
                          size=cfg.bs_test, tag=cfg.d_tag)
@@ -613,14 +614,24 @@ if __name__ == '__main__':
     if cfg.importance:
         importanceSampling(results_test)
     
-    # --- evaluate performance
+    # --- performance plots
     recovery(model, results_test)
-    inSampleLikelihood(results_test)
     posteriorPredictive(results_test)
     coverage(model, results_test, use_calibrated=cfg.calibrate)
-    sbc(results_test)
+    ecdf(results_test)
     
-
+    # --- performance measures
+    outputs = []
+    outputs += [quickRecovery(model, results_test)]
+    outputs += [quickCoverage(model, results_test)]
+    outputs += [inSampleLikelihood(results_test)]
+    outputs += [runtimes(results_test)]
+    outputs += [diagnostics(results_test)]
+    out = reduce(deepMerge, outputs, {})
+    with open(Path(results_path, data_type+'.yaml'), 'w') as f:
+        yaml.dump(out, f, sort_keys=False)
+    
+    
     # -------------------------------------------------------------------------
     # sub-sampled real data (with MCMC estimates)
     
