@@ -563,9 +563,10 @@ if __name__ == '__main__':
 
     # -------------------------------------------------------------------------
     # validation set
+    data_type = 'val'
     
     # --- load data
-    fn_val = dsFilename('mfx', 'val', 1,
+    fn_val = dsFilename('mfx', data_type, 1,
                         model_cfg['general']['m'], model_cfg['general']['n'],
                         cfg.d, cfg.q, 
                         size=cfg.bs_val, tag=cfg.d_tag)
@@ -575,6 +576,7 @@ if __name__ == '__main__':
                            permute=False, autopad=True, device=device)
     ds_val = next(iter(dl_val))
     
+    
     # --- run and refine model
     print('\nInference on validation set...')
     results_val = run(model, ds_val)
@@ -583,12 +585,11 @@ if __name__ == '__main__':
     if cfg.calibrate:
         calibrate(model, results_val)
         
-    # --- evaluate performance
-    recovery(model, results_val)
-    inSampleLikelihood(results_val)
-    posteriorPredictive(results_val)
-    coverage(model, results_val, use_calibrated=cfg.calibrate)
-    sbc(results_val)
+    # # --- performance plots
+    # recovery(model, results_val)
+    # posteriorPredictive(results_val)
+    # coverage(model, results_val, use_calibrated=cfg.calibrate)
+    # ecdf(results_val)
     
     
     # -------------------------------------------------------------------------
