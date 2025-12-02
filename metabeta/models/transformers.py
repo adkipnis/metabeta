@@ -286,6 +286,9 @@ class BaseSetTransformer(nn.Module):
             blocks += [mab]
         self.blocks = nn.ModuleList(blocks)
         self.out = nn.Identity()
+        
+        # # CLS token
+        # self.cls_token = torch.nn.Parameter(torch.randn(d_model) * 0.02)
 
     def embed(self, x: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
@@ -317,7 +320,16 @@ class BaseSetTransformer(nn.Module):
 
         # optional embedding
         x = self.embed(x)
-
+        
+        # # prepend CLS token
+        # cls_token = self.cls_token[None, None, :]
+        # cls_token = cls_token.repeat(len(x), 1, 1)
+        # x = torch.cat([cls_token, x], dim=-2)
+        # new_shape = torch.Size((new_shape[0], new_shape[1]+1, new_shape[2]))
+        # if mask is not None:
+        #     cls_mask = torch.ones_like(mask[:, 0:1])
+        #     mask = torch.cat([cls_mask, mask], dim=-1)
+            
         # prepare masks
         masks = self.getMasks(mask, new_shape)
 
@@ -334,6 +346,7 @@ class BaseSetTransformer(nn.Module):
 
         # pool across samples
         x = self.pool(x, mask)
+        # x = x[:, 0] # extract CLS token
 
         # reshape along features and project out
         x = x.reshape(*shape[:-2], -1)
