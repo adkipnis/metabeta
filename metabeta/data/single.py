@@ -369,7 +369,7 @@ class Generator:
         okay = (torch.rand(1).item() >= r_squared) # flatten R^2 distribution
         
         # Cov(mean Z, rfx), needed for standardization
-        weighted_rfx = Z.mean(0, keepdim=True) * rfx
+        weighted_rfx = Z.mean(0, keepdim=True) * rfx_
         cov = fullCovary(weighted_rfx)
         cov_sum = cov.sum() - cov[0, 0]
 
