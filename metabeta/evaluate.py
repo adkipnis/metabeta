@@ -239,48 +239,10 @@ def recovery(model: ApproximatorMFX, results: dict) -> None:
             y_name='Estimate',#'HMC',
             upper=False,
         )
-def inSampleLikelihood(results: dict, limit: float = 2000.):
-    # in-sample posterior predictive likelihood
-    batch = results['batch']
-    proposed = results['proposed']
-    nuts = results.get('nuts')
+        
+    fig.tight_layout()
+    fig.savefig(Path(results_path, f'recovery_{data_type}.png'), dpi=300, bbox_inches='tight')
     
-    # metabeta
-    y_log_prob = posteriorPredictiveDensity(batch, proposed)
-    pp_nll = -y_log_prob.sum(dim=(1,2)).mean(-1)
-    results['pp_nnl'] = {'mb': pp_nll}
-    
-    if nuts is not None:
-        # sub-sample due to memory constraints
-        nuts_sub = subsample(nuts)
-        
-        # evaluate
-        y_log_prob_m = posteriorPredictiveDensity(batch, nuts_sub)
-        pp_nll_m = -y_log_prob_m.sum(dim=(1,2)).mean(-1)
-        results['pp_nnl'] = {'nuts': pp_nll_m}
-        
-        # plot
-        mask_mb = (pp_nll < limit)
-        mask_mcmc = (pp_nll_m < limit)
-        mask_pp = mask_mcmc * mask_mb
-        fig, ax = plt.subplots(figsize=(8, 8))
-        ax.plot(pp_nll[mask_pp], pp_nll_m[mask_pp], 'o')
-        r = float(pearsonr(pp_nll[mask_pp], pp_nll_m[mask_pp])[0])
-        print(f'Cor of pp log likelihoods {r:.3f}')
-        
-            
-# # Comparison of mean posterior y
-# y_rep_mean = posteriorPredictiveMean(batch, proposed).mean(-1)
-# pp_se = (batch['y'] - y_rep_mean).square().view(b, -1)
-# pp_rmse = (pp_se.sum(-1) / batch['mask_n'].view(b, -1).sum(-1)).sqrt()
-# print(pp_rmse.mean())
-# if nuts is not None:
-#     y_rep_mean_m = posteriorPredictiveMean(batch, nuts).mean(-1)
-#     pp_se_m = (batch['y'] - y_rep_mean_m).square().view(b, -1)
-#     pp_rmse_m = (pp_se_m.sum(-1) / batch['mask_n'].view(b, -1).sum(-1)).sqrt()
-#     plt.plot(pp_rmse, pp_rmse_m, 'o')
-#     print(pp_rmse_m.mean())
-
 
 def posteriorPredictive(results: dict, index: int = 0):
     batch = results['batch']
@@ -293,15 +255,19 @@ def posteriorPredictive(results: dict, index: int = 0):
     
     # metabeta
     y_rep = posteriorPredictiveSample(batch, proposed)
-    is_mask = weightSubset(proposed['global']['weights'][:, 0])
+    if 'weights' in proposed['global']:
+        is_mask = weightSubset(proposed['global']['weights'][:, 0])
+    else:
+        is_mask = None
     plotPosteriorPredictive(
         axs[0],
         batch['y'],
         y_rep,
-        is_mask,
+        is_mask=is_mask,
         batch_idx=0,
         color='green',
         upper=True,
+        show_legend=True,
     )
     
     # NUTS
@@ -318,7 +284,10 @@ def posteriorPredictive(results: dict, index: int = 0):
             batch_idx=0,
             color='darkgoldenrod',
             upper=False,
+            show_legend=False,
         )
+    fig.tight_layout()
+    fig.savefig(Path(results_path, f'pp_{data_type}.png'), dpi=300, bbox_inches='tight')
 
 
 def coverage(model: ApproximatorMFX, results: dict, use_calibrated: bool = True) -> None:
