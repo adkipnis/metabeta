@@ -195,19 +195,19 @@ def generate(
 
     # optionally fit mcmc
     if fit:
+        fitter = {'pymc': fitPyMC, 'bambi': fitBambi}[cfg.api]
+        
+        # HMC/NUTS
+        print(f'Fitting NUTS using {cfg.api.upper()}')
         for ds in tqdm(data):
-            fitter = {'pymc': fitPyMC, 'bambi': fitBambi}[cfg.api]
-            
-            # MCMC
-            print(f'Fitting NUTS using {cfg.api.upper()}')
             nuts_results = fitter(ds, method='nuts', seed=cfg.seed,
                                   specify_priors=(not cfg.sub),
-                                  use_multiprocessing=(not cfg.slurm),
-                                  )
+                                  use_multiprocessing=(not cfg.slurm))
             ds.update(nuts_results)
-            
-            # VI
-            print(f'Fitting ADVI using {cfg.api.upper()}')
+        
+        # ADVI
+        print(f'Fitting ADVI using {cfg.api.upper()}')
+        for ds in tqdm(data):
             advi_results = fitter(ds, method='advi', seed=cfg.seed, 
                                   specify_priors=(not cfg.sub))
             ds.update(advi_results)
