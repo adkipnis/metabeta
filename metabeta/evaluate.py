@@ -196,7 +196,7 @@ def calibrate(model: ApproximatorMFX, results: dict) -> None:
 
 
 # -----------------------------------------------------------------------------
-# evaluators
+# visual evaluators
 
 def recovery(model: ApproximatorMFX, results: dict) -> None:
     proposed = results['proposed']
@@ -205,27 +205,39 @@ def recovery(model: ApproximatorMFX, results: dict) -> None:
     names = results['names']
     names_l = results['names_l']
     nuts = results.get('nuts')
-    
+    n_plots = 2 if nuts is not None else 1
+    fig, axs = plt.subplots(figsize=(6.1 * 3, 6.1 * n_plots), ncols=3, nrows=n_plots, dpi=300)
+    if n_plots == 1:
+        axs = [axs]
+        
     # metabeta
     mean, std = model.moments(proposed['global'])
     mean_l, std_l = model.moments(proposed['local'])
     plot.recoveryGrouped(
-        targets=[targets[:, : model.d], targets_l, targets[:, model.d :]],
-        means=[mean[:, : model.d], mean_l, mean[:, model.d :]],
-        names=[names[: model.d], names_l, names[model.d :]],
-        titles=['Fixed Effects', 'Random Effects', 'Variance Parameters'],
+        axs[0],
+        targets=[targets[:, : model.d], targets[:, model.d :], targets_l],
+        means=[mean[:, : model.d], mean[:, model.d :], mean_l],
+        names=[names[: model.d], names[model.d :], names_l],
+        limits=[(-3.2,3.2), (-0.05, 1.35), (-3.2,3.2)],
+        titles=['Fixed Effects', 'Variance Parameters', 'Random Effects'],
+        y_name='Estimate', #'metabeta',
+        upper=True,
     )
-
+    
     # NUTS
     if nuts is not None:
         m_mean, m_std = model.moments(nuts['global'])
         m_mean_l, m_std_l = model.moments(nuts['local'])
         plot.recoveryGrouped(
-            targets=[targets[:, : model.d], targets_l, targets[:, model.d :]],
-            means=[m_mean[:, : model.d], m_mean_l, m_mean[:, model.d :]],
-            names=[names[: model.d], names_l, names[model.d :]],
-            titles=['Fixed Effects', 'Random Effects', 'Variance Parameters'],
+            axs[1],
+            targets=[targets[:, : model.d], targets[:, model.d :], targets_l],
+            means=[m_mean[:, : model.d], m_mean[:, model.d :], m_mean_l],
+            names=[names[: model.d], names[model.d :], names_l],
+            limits=[(-3.2,3.2), (-0.05, 1.35), (-3.2,3.2)],
+            titles=['Fixed Effects', 'Variance Parameters', 'Random Effects'],
             marker='s',
+            y_name='Estimate',#'HMC',
+            upper=False,
         )
 def inSampleLikelihood(results: dict, limit: float = 2000.):
     # in-sample posterior predictive likelihood
