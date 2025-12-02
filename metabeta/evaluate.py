@@ -413,7 +413,35 @@ def quickRecovery(model: ApproximatorMFX, results: dict) -> dict:
     return out
 
 
+def _separateCoverage(targets_g: torch.Tensor, targets_l: torch.Tensor,
+                      proposed: dict[str, torch.Tensor],
+                      pivot: int, use_calibrated: bool = True) -> dict[str, float]:
+    out = {'ffx':{}, 'sigmas':{}, 'rfx':{}}
+    coverage_g = getCoverage(model, proposed['global'], targets_g,
+                             calibrate=use_calibrated, local=False)
+    coverage_l = getCoverage(model, proposed['local'], targets_l,
+                             calibrate=use_calibrated, local=True)
+    ce_g = coverageError(coverage_g)
+    ce_l = coverageError(coverage_l)    
+    out['ffx']['ce'] = float(ce_g[:pivot].mean())
+    out['sigmas']['ce'] = float(ce_g[pivot:].mean())
+    out['rfx']['ce'] = float(ce_l.mean())
+    return out 
 
+
+def quickCoverage(model: ApproximatorMFX, results: dict, use_calibrated: bool = True) -> dict:
+    proposed = results['proposed']
+    targets_g = results['targets']
+    targets_l = results['targets_l']
+    nuts = results.get('nuts')
+    advi = results.get('advi')
+    out = {} 
+    
+    out['metabeta'] = _separateCoverage(targets_g, targets_l, proposed, model.d)
+    out['nuts'] = _separateCoverage(targets_g, targets_l, nuts, model.d)
+    out['advi'] = _separateCoverage(targets_g, targets_l, advi, model.d)
+    return out
+    
 
 
 # =============================================================================
