@@ -22,7 +22,7 @@ def train(d: int, q: int, i: int = 100) -> str:
     out += f'''
 source $HOME/.bashrc
 conda activate mb
-cd %HOME/metabeta/metabeta
+cd $HOME/metabeta/metabeta
 python train.py -d {d} -q {q} -l 0 -i {i} --c_tag default'''
     return out
 
