@@ -82,10 +82,11 @@ def run(
 ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
     # model outputs
     with torch.no_grad():
-        start = time.perf_counter()
+        t0 = time.perf_counter()
         results = model(batch, sample=True, n=(500, 300))
-        end = time.perf_counter()
-    print(f'forward pass took {end - start:.2f}s')
+        t1 = time.perf_counter()
+    duration = t1 - t0
+    print(f'forward pass took {duration:.2f}s')
     losses = results['loss']
     proposed = results['proposed']
     summary = results['summary']
@@ -102,6 +103,7 @@ def run(
     out = {
         'batch': batch,
         'losses': losses,
+        'duration': duration,
         'proposed': proposed,
         'summary': summary,
         'names': model.names(batch),
@@ -119,10 +121,11 @@ def estimate(model: ApproximatorMFX,
 ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
     # model outputs
     with torch.no_grad():
-        start = time.perf_counter()
+        t0 = time.perf_counter()
         results = model.estimate(batch, n=(500, 300))
-        end = time.perf_counter()
-    print(f'forward pass took {end - start:.2f}s')
+        t1 = time.perf_counter()
+    duration = t1 - t0
+    print(f'forward pass took {duration:.2f}s')
     proposed = results['proposed']
     summary = results['summary']
 
@@ -136,6 +139,7 @@ def estimate(model: ApproximatorMFX,
     # outputs
     out = {
         'batch': batch,
+        'duration': duration,
         'proposed': proposed,
         'summary': summary,
         'nuts': nuts,
