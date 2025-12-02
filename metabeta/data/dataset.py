@@ -252,7 +252,6 @@ class LMDataset(Dataset):
             m_sigma_eps = data['nuts_sigma_eps'][i]
             m_sigmas_rfx = data['nuts_sigmas_rfx'][i]
             m_rfx = data['nuts_rfx'][i].permute(1, 0, 2)
-            div_count = data['nuts_divergences'][i]
 
             if self.permute:
                 mc_samples = m_ffx.shape[-1]
@@ -263,7 +262,10 @@ class LMDataset(Dataset):
                 m_rfx = m_rfx[perm][:, rfx_mask]
             out['nuts_global'] = torch.cat([m_ffx, m_sigmas_rfx, m_sigma_eps])
             out['nuts_local'] = m_rfx
-            out['nuts_div_count'] = div_count
+            out['nuts_divergences'] = data['nuts_divergences'][i]
+            out['nuts_rhat'] = data['nuts_rhat'][i]
+            out['nuts_ess'] = data['nuts_ess'][i]
+            out['nuts_duration'] = data['nuts_duration'][i]
             
         # optionally include advi posterior
         if 'advi_ffx' in data:
@@ -281,6 +283,8 @@ class LMDataset(Dataset):
                 a_rfx = a_rfx[perm][:, rfx_mask]
             out['advi_global'] = torch.cat([a_ffx, a_sigmas_rfx, a_sigma_eps])
             out['advi_local'] = a_rfx
+            out['advi_ess'] = data['advi_ess'][i]
+            out['advi_duration'] = data['advi_duration'][i]
 
         # unfold to 4d
         out = self.unfold(out)
