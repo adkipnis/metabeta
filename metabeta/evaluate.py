@@ -62,6 +62,20 @@ def load(model: ApproximatorMFX, model_path, iteration: int) -> None:
     model.stats = state['stats']
 
 
+def extract(batch: dict[str, torch.Tensor], name: str) -> dict[str, torch.Tensor] | None:
+    out = None
+    if f'{name}_global' in batch:
+        out =  {'duration': batch[f'{name}_duration'],
+                'ess': batch[f'{name}_ess']}
+        out['global'] = {'samples': batch[f'{name}_global'].cpu()}
+        if f'{name}_local' in batch:
+            out['local'] = {'samples': batch[f'{name}_local'].cpu()}
+        if f'{name}_divergences' in batch:
+            out['divergences'] = batch[f'{name}_divergences']
+            out['rhat'] = batch[f'{name}_rhat']
+    return out
+
+
 def run(
     model: ApproximatorMFX,
     batch: dict[str, torch.Tensor],
@@ -78,12 +92,8 @@ def run(
     print(f'Mean loss: {losses.mean().item():.4f}')
 
     # references
-    nuts = None
-    if 'nuts_global' in batch:
-        nuts = {}
-        nuts['global'] = {'samples': batch['nuts_global'].cpu()}
-        if 'nuts_local' in batch:
-            nuts['local'] = {'samples': batch['nuts_local'].cpu()}
+    nuts = extract(batch, 'nuts')
+    advi = extract(batch, 'advi')
     
     # put batch to cpu
     batch = {k: v.cpu() for k,v in batch.items()}
@@ -99,6 +109,7 @@ def run(
         'targets': model.targets(batch).cpu(),
         'targets_l': model.targets(batch, local=True),
         'nuts': nuts,
+        'advi': advi,
     }
     return out
 
@@ -116,12 +127,8 @@ def estimate(model: ApproximatorMFX,
     summary = results['summary']
 
     # references
-    nuts = None
-    if 'nuts_global' in batch:
-        nuts = {}
-        nuts['global'] = {'samples': batch['nuts_global'].cpu()}
-        if 'nuts_local' in batch:
-            nuts['local'] = {'samples': batch['nuts_local'].cpu()}
+    nuts = extract(batch, 'nuts')
+    advi = extract(batch, 'advi')
     
     # put batch to cpu
     batch = {k: v.cpu() for k,v in batch.items()}
@@ -132,6 +139,7 @@ def estimate(model: ApproximatorMFX,
         'proposed': proposed,
         'summary': summary,
         'nuts': nuts,
+        'advi': advi,
     }
     return out
 
