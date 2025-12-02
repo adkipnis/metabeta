@@ -110,30 +110,31 @@ def plotPosteriorPredictive(
 
     # plot samples with highest IS efficiency
     label = None
-    sns.kdeplot(y_flat, color="black", lw=5, label="observed", ax=ax)
+    sns.kdeplot(y_flat, color="dimgray", lw=5, label="observed", ax=ax)
     for i in range(n_lines):
         j = idx[i] if idx is not None else i
         y_rep_j = y_rep_flat[..., j]
         if i == n_lines - 1:
             label = "p.p."
         sns.kdeplot(y_rep_j, color=color, alpha=0.15, lw=1.5, label=label, ax=ax)
-    sns.kdeplot(
-        y_rep_flat.mean(-1),
-        linestyle="--",
-        color="lightgray",
-        lw=3,
-        label="p.p. mean",
-        ax=ax,
-    )
+    # sns.kdeplot(
+    #     y_rep_flat.mean(-1),
+    #     linestyle="--",
+    #     color="lightgray",
+    #     lw=3,
+    #     label="p.p. mean",
+    #     ax=ax,
+    # )
     sns.despine()
     ax.set_yticks(ticks=[])
-    ax.set_ylabel("")
-
+    ax.set_ylabel(r'$p(y)$', labelpad=10, size=26)
+    ax.tick_params(axis='both', labelsize=18)
+    
     if show_legend:
-        ax.legend(fontsize=16, loc="upper right")
+        ax.legend(fontsize=18, loc="upper right")
     if upper:
         ax.set_xlabel("")
         ax.set_xticks([])
     else:
-        ax.set_xlabel("y", labelpad=10, size=26)
+        ax.set_xlabel(r'$y$', labelpad=10, size=26)
 
