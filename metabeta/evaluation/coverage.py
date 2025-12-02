@@ -1,5 +1,6 @@
 from collections.abc import Iterable
 import torch
+from metabeta.utils import palette
 from pathlib import Path
 
 
@@ -132,36 +133,36 @@ def coverageError(coverage: dict[str, torch.Tensor]) -> torch.Tensor:
     return mean_error
 
 
-def plotCalibration(
+def plotCoverage(
     ax,
     coverage: dict[str, torch.Tensor],
     names,
     linestyle: str = "-",
     lw=2,
+    y_name: str = '',
     upper: bool = False,
 ) -> None:
     nominal = [int(k) for k in coverage.keys()]
     matrix = torch.cat([t.unsqueeze(-1) for _, t in coverage.items()], dim=-1)
     for i, name in enumerate(names):
-        # color = colors[i]
+        color = palette[i]
         coverage_i = matrix[i] * 100.0
         if coverage_i.sum() == 0:
             continue
         ax.plot(
-            nominal, coverage_i, label=name, linestyle=linestyle, lw=lw
-        )  # color=color
+            nominal, coverage_i, label=name, linestyle=linestyle, lw=lw, color=color,
+        )
     ax.plot([50, 95], [50, 95], ":", zorder=1, color="grey", label="identity")
     ax.set_xticks(nominal)
     ax.set_yticks(nominal)
+    ax.tick_params(axis='both', labelsize=18)
 
-    ax.set_ylabel("empirical CI", fontsize=26, labelpad=10)
+    ax.set_ylabel(y_name, fontsize=26, labelpad=10)
     ax.grid(True)
-    # ax.set_title(f'Coverage {source}', fontsize=26, pad=15)
     if upper:
-        ax.set_title("Coverage", fontsize=30, pad=15)
-        ax.legend(fontsize=18, loc="lower right")
+        ax.legend(fontsize=22, loc="lower right")
         ax.set_xlabel("")
         ax.tick_params(axis="x", labelcolor="w", size=1)
     else:
-        ax.set_xlabel("nominal CI", fontsize=26, labelpad=10)
+        ax.set_xlabel("Nominal CI", fontsize=26, labelpad=10)
 
