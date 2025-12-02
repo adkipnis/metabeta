@@ -535,6 +535,7 @@ def diagnostics(results: dict) -> dict:
 
 # =============================================================================
 if __name__ == '__main__':
+    
     # --- setup config
     cfg = setup()
     path = Path('outputs', 'checkpoints')
@@ -542,7 +543,6 @@ if __name__ == '__main__':
     torch.manual_seed(cfg.seed)
     torch.set_num_threads(cfg.cores)
     device = setDevice(cfg.device)
-
 
     # --- setup and load model
     with open(Path('models', 'configs', f'{cfg.c_tag}.yaml'), 'r') as f:
@@ -555,6 +555,10 @@ if __name__ == '__main__':
     model.eval()
     load(model, path, cfg.load)
     print(f'{'-' * console_width}\nmodel: {model.id}')
+    
+    # --- results path
+    results_path = Path('outputs', 'results', model.id)
+    results_path.mkdir(parents=True, exist_ok=True)
 
 
     # -------------------------------------------------------------------------
