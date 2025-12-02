@@ -634,9 +634,10 @@ if __name__ == '__main__':
     
     # -------------------------------------------------------------------------
     # sub-sampled real data (with MCMC estimates)
+    data_type = 'test-sub'
     
     # --- load data
-    fn_sub = dsFilename('mfx', 'test-sub', 1,
+    fn_sub = dsFilename('mfx', data_type, 1,
                         model_cfg['general']['m'], model_cfg['general']['n'],
                         cfg.d, cfg.q, 
                         size=cfg.bs_test, tag=cfg.d_tag)
@@ -652,9 +653,12 @@ if __name__ == '__main__':
     if cfg.importance:
         importanceSampling(results_sub)
         
-    # --- evaluate performance
-    inSampleLikelihood(results_test)
-    # mean_ffx = results_sub['proposed']['global']['samples'][:, : model.d].mean(-1)
-    # mean_ffx_m = results_sub['nuts']['global']['samples'][:, : model.d].mean(-1)
-    # plt.plot(mean_ffx[:, 2], mean_ffx_m[:, 2], 'o')
-
+    # --- performance measures
+    outputs = []
+    outputs += [inSampleLikelihood(results_sub)]
+    outputs += [runtimes(results_sub)]
+    outputs += [diagnostics(results_sub)]
+    out = reduce(deepMerge, outputs, {})
+    with open(Path(results_path, data_type+'.yaml'), 'w') as f:
+        yaml.dump(out, f, sort_keys=False)
+    
