@@ -63,7 +63,15 @@ class Approximator(nn.Module):
 
     def forward(self, data: dict[str, torch.Tensor], sample: bool = False):
         raise NotImplementedError
-
+        
+        
+    def _dataMean(self, x: torch.Tensor, mask: torch.Tensor | None = None,
+                 ) -> torch.Tensor:
+        dim = tuple(range(1, x.dim() - 1))
+        mean = maskedMean(x, dim, mask=mask)
+        return mean
+    
+    
     def standardize(self,
                     x: torch.Tensor,
                     name: str,
@@ -380,7 +388,7 @@ class ApproximatorMFX(Approximator):
 
         # prepare moments
         if self.use_standardization:
-            mean_y, mean_X, mean_Z = self.unpackMean(['y', 'X', 'Z']).values()
+            mean_y, mean_X, _ = self.unpackMean(['y', 'X', 'Z']).values()
             std_y, std_X, std_Z = self.unpackStd(['y', 'X', 'Z']).values()
 
         # local parameters
@@ -388,6 +396,11 @@ class ApproximatorMFX(Approximator):
             rfx = targets
             if self.use_standardization:
                 b, q = len(rfx), self.q
+                
+                # recompute mean Z
+                mask = data['mask_n'].unsqueeze(-1)
+                Z = data['X'][..., 1:self.q]
+                mean_Z = self._dataMean(Z, mask)
 
                 # standardize rfx
                 rfx_ = rfx / std_y.view(b, 1, 1)
@@ -423,9 +436,7 @@ class ApproximatorMFX(Approximator):
 
                 # sigma intercept with covsum
                 cov_sum = data['cov_sum']  # sum of the mean covariance between Z and rfx
-                sigmas_rfx_[:, 0] = (
-                    sigmas_rfx[:, 0].square() + cov_sum
-                ).sqrt() / std_y.view(b)
+                sigmas_rfx_[:, 0] = (sigmas_rfx[:, 0].square() + cov_sum).sqrt() / std_y.view(b)
 
                 # patch targets
                 ffx = ffx_
@@ -450,14 +461,19 @@ class ApproximatorMFX(Approximator):
             return proposed
 
         if self.use_standardization:
-            mean_y, mean_X, mean_Z = self.unpackMean(['y', 'X', 'Z']).values()
+            mean_y, mean_X, _ = self.unpackMean(['y', 'X', 'Z']).values()
             std_y, std_X, std_Z = self.unpackStd(['y', 'X', 'Z']).values()
 
         # local postprocessing
         rfx_ = proposed['local']['samples'].clone()
         if self.use_standardization:
             b, m, q, s = rfx_.shape
-
+            
+            # recompute mean Z
+            mask = data['mask_n'].unsqueeze(-1)
+            Z = data['X'][..., 1:self.q]
+            mean_Z = self._dataMean(Z, mask)
+            
             # standardize rfx
             rfx = rfx_ * std_y.view(b, 1, 1, 1)
             rfx[..., 1:, :] /= std_Z.view(b, 1, q - 1, 1)
