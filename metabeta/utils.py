@@ -3,6 +3,7 @@ from pathlib import Path
 from matplotlib import pyplot as plt
 import matplotlib.colors as mcolors
 import numpy as np
+from scipy.stats import pearsonr
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -10,6 +11,7 @@ from torch.nn import functional as F
 
 # ----------------------------------------------------------------------------
 # name utils
+
 def getConsoleWidth() -> int:
     """Determine the width of the console for formatting purposes."""
     try:
@@ -34,7 +36,6 @@ def parseSize(size: int) -> str:
 
 # -----------------------------------------------------------------------------
 # loading utils
-
 
 def setDevice(device: str):
     if device == "cuda" and torch.cuda.is_available():
@@ -85,6 +86,7 @@ def dsFilename(
 
 # -----------------------------------------------------------------------------
 # size utils
+
 def dInput(d_data: int, fx_type: str) -> int:
     n_fx = 2 if fx_type == "mfx" else 1
     return 1 + n_fx * (d_data - 1)
@@ -96,6 +98,7 @@ def nParams(model: nn.Module) -> int:
 
 # -----------------------------------------------------------------------------
 # moment utils
+
 def maskedMean(x: torch.Tensor, dim: tuple | int, mask: torch.Tensor | None) -> torch.Tensor:
     if mask is not None:
         sums = x.sum(dim, keepdim=True)
@@ -147,8 +150,8 @@ def weightedStd(x: torch.Tensor, weights: torch.Tensor | None = None, n_eff: tor
 
 # -----------------------------------------------------------------------------
 # regularization utils
-shift = 1e-3
 
+shift = 1e-3
 
 def maskedLog(x: torch.Tensor) -> torch.Tensor:
     return torch.where(x != 0, x.log(), 0)
@@ -177,7 +180,6 @@ def squish(x: torch.Tensor) -> torch.Tensor:
 # -----------------------------------------------------------------------------
 # permutation
 
-
 def getPermutation(d: int):
     p = torch.randperm(d - 1) + 1
     zero = torch.zeros((1,), dtype=p.dtype)
@@ -192,7 +194,6 @@ def inversePermutation(p: torch.Tensor):
 
 # -----------------------------------------------------------------------------
 # batch handling
-
 
 def _copy(this):
     if isinstance(this, torch.Tensor):
@@ -259,7 +260,41 @@ def batchCovary(data: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 
 
 # -----------------------------------------------------------------------------
-# plotting utils
+# evaluation utils
+
+def quickRecovery(targets: torch.Tensor, means: torch.Tensor) -> dict[str, float]:
+    # quick evaluation of parameter recovery
+    mse = torch.nn.MSELoss()
+    D = means.shape[-1]
+    if targets.dim() == 3:
+        targets = targets.view(-1, D)
+        means = means.view(-1, D)
+    mask = targets != 0.0
+
+    # init stats
+    RMSE = 0.0
+    R = 0.0
+    denom = D
+
+    # make subplots
+    for i in range(D):
+        mask_i = mask[..., i]
+        targets_i = targets[mask_i, i]
+        mean_i = means[mask_i, i].detach()
+
+        # skip empty target
+        if mask_i.sum() == 0:
+            denom -= 1
+            continue
+
+        # compute stats
+        r = float(pearsonr(targets_i, mean_i)[0])  # type: ignore
+        R += r
+        rmse = float(mse(targets_i, mean_i).sqrt())
+        RMSE += rmse
+    return {'rmse': RMSE / denom, 'r': R / denom}
+
+
 cmap = plt.get_cmap("tab20")
 palette = [mcolors.to_hex(cmap(i)) for i in range(0, cmap.N, 2)]
 palette += [mcolors.to_hex(cmap(i)) for i in range(1, cmap.N, 2)]
