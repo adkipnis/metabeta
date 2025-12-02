@@ -497,6 +497,21 @@ def inSampleLikelihood(results: dict, limit: float = 2000.) -> dict:
     return out
 
 
+def runtimes(results: dict) -> dict:
+    out = {'metabeta':{}, 'nuts':{}, 'advi':{}}
+    b = len(results_test['batch']['X'])
+    out['metabeta']['duration'] = {
+        'single': results['duration'] / b,
+        'batch': results['duration']}
+    out['nuts']['duration'] = {
+        'single': float(results['nuts']['duration'].median()),
+        'batch': float(results['nuts']['duration'].sum())}
+    out['advi']['duration'] = {
+        'single': float(results['advi']['duration'].median()),
+        'batch': float(results['advi']['duration'].sum())}
+    return out
+      
+      
 
 # =============================================================================
 if __name__ == '__main__':
