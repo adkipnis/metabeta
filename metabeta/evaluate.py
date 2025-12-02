@@ -512,6 +512,26 @@ def runtimes(results: dict) -> dict:
     return out
       
       
+def diagnostics(results: dict) -> dict:
+    out = {'metabeta':{}, 'nuts':{}, 'advi':{}}
+    
+    # importance sampling
+    out['metabeta']['is_duration'] = results['is_duration']
+    out['metabeta']['is_sample_eff_g'] = results['is_sample_eff_g']
+    out['metabeta']['is_sample_eff_l'] = results['is_sample_eff_l']
+    
+    # nuts
+    out['nuts']['divergences'] = results['nuts']['divergences'].float().mean().item()
+    rhats = results['nuts']['rhat']
+    out['nuts']['rhat'] = float(rhats.sum() / (rhats != 0).sum())
+    ess = results['nuts']['ess']
+    out['nuts']['ess'] = float(ess.sum() / (ess != 0).sum())
+    
+    # advi
+    ess = results['advi']['ess']
+    out['advi']['ess'] = float(ess.sum() / (ess != 0).sum())
+    return out
+
 
 # =============================================================================
 if __name__ == '__main__':
