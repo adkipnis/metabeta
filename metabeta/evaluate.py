@@ -371,6 +371,48 @@ def ecdf(results: dict):
     fig.savefig(Path(results_path, f'sbc_{data_type}.png'), dpi=300, bbox_inches='tight')
 
 
+# -----------------------------------------------------------------------------
+# numeric evaluators
+
+def _separateRecovery(targets_g: torch.Tensor, targets_l: torch.Tensor,
+                      means_g: torch.Tensor, means_l: torch.Tensor,
+                      pivot: int) -> dict[str, float]:
+    out = {}
+    out['ffx'] = _quickRecovery(targets_g[:, :pivot], means_g[:, :pivot])
+    out['sigmas'] = _quickRecovery(targets_g[:, pivot:], means_g[:, pivot:])
+    out['rfx'] = _quickRecovery(targets=targets_l, means=means_l)
+    return out    
+    
+
+def quickRecovery(model: ApproximatorMFX, results: dict) -> dict:
+    proposed = results['proposed']
+    targets_g = results['targets']
+    targets_l = results['targets_l']
+    nuts = results.get('nuts')
+    advi = results.get('advi')
+    out = {}    
+    
+    # metabeta
+    means_g_mb, _ = model.moments(proposed['global'])
+    means_l_mb, _ = model.moments(proposed['local'])
+    out['metabeta'] = _separateRecovery(targets_g, targets_l, means_g_mb, means_l_mb, model.d)
+    
+    # nuts
+    means_g_nuts, _ = model.moments(nuts['global'])
+    means_l_nuts, _ = model.moments(nuts['local'])
+    out['nuts'] = _separateRecovery(targets_g, targets_l, means_g_nuts, means_l_nuts, model.d)
+    
+    # advi
+    means_g_advi, _ = model.moments(advi['global'])
+    means_l_advi, _ = model.moments(advi['local'])
+    out['advi'] = _separateRecovery(targets_g, targets_l, means_g_advi, means_l_advi, model.d)
+    
+    # agreement
+    # rmse, r = _quickRecovery(means_g_mb, means_g_nuts)
+    
+    return out
+
+
 
 
 
