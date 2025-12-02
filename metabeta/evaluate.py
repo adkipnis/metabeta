@@ -4,12 +4,14 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import time
 import torch
+from functools import reduce
 from scipy.stats import pearsonr
 from metabeta.data.dataset import getDataLoader
-from metabeta.utils import setDevice, dsFilename, getConsoleWidth
+from metabeta.utils import setDevice, dsFilename, getConsoleWidth, deepMerge
+from metabeta.utils import quickRecovery as _quickRecovery
 from metabeta.models.approximators import ApproximatorMFX
 from metabeta.evaluation.importance import ImportanceLocal, ImportanceGlobal
-from metabeta.evaluation.coverage import getCoverage, plotCalibration
+from metabeta.evaluation.coverage import getCoverage, plotCoverage, coverageError
 from metabeta.evaluation.sbc import getRanks, plotSBC, plotECDF
 from metabeta.evaluation.pp import (
     posteriorPredictiveDensity,
