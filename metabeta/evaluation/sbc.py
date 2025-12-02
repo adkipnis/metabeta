@@ -1,5 +1,6 @@
 import torch
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 import seaborn as sns
 import numpy as np
 from scipy.stats import wasserstein_distance, gaussian_kde, binom
@@ -154,60 +155,36 @@ def boundECDF(n_ranks: int, n_sim: int = 1000, alpha: float = 0.01):
 
 
 def plotECDF(
-    ranks: torch.Tensor, mask: torch.Tensor, names: list, s: int, color="darkgreen"
+        ax: Axes,
+        ranks: torch.Tensor,
+        mask: torch.Tensor,
+        names: list[str],
+        s: int,
+        color: str = "darkgreen",
+        upper: bool = True,
 ) -> None:
     eps = 0.02
-    xx_theo, lower, upper = boundECDF(n_ranks=len(ranks), n_sim=s)
-
+    xx_theo, limit_low, limit_high = boundECDF(n_ranks=len(ranks), n_sim=s)
     n = len(names)
-    w = int(torch.tensor(n).sqrt().ceil())
-    fig, axs = plt.subplots(figsize=(8 * w, 6 * w), ncols=w, nrows=w)
-    axs = axs.flatten()
-
     for i in range(n):
-        ax = axs[i]
         ax.set_axisbelow(True)
         ax.grid(True)
         mask_0 = ranks[:, i] >= 0
         mask_i = mask[:, i] * mask_0
-        if mask_i.sum() == 0:
-            axs[i].set_visible(False)
-            continue
         xx = ranks[mask_i, i].sort()[0].numpy()
         xx = np.pad(xx, (1, 1), constant_values=(0, 1))
         yy = np.linspace(0, 1, num=xx.shape[-1]) - xx
-
-        ax.plot(xx, yy, color=color, label="sample")
-        ax.fill_between(
-            xx_theo, lower, upper, color=color, alpha=0.1, label="theoretical"
-        )
-        ax.set_xlim(0 - eps, 1 + eps)
-        ax.set_xlabel("U", fontsize=20)
-        ax.set_ylabel(r"$\Delta$ ECDF")
-        ax.legend()
-
-    for i in range(n, w * w):
-        axs[i].set_visible(False)
-    fig.tight_layout()
-
-
-def plotECDFsingle(
-    ax, ranks: torch.Tensor, mask: torch.Tensor, names: list, s: int, color="darkgreen"
-) -> None:
-    eps = 0.02
-    xx_theo, lower, upper = boundECDF(n_ranks=len(ranks), n_sim=s)
-    ax.fill_between(xx_theo, lower, upper, color=color, alpha=0.1, label="theoretical")
-    ax.set_axisbelow(True)
-    ax.grid(True)
+        ax.plot(xx, yy, color=color, label='sample' if i == 0 else '')
+    ax.fill_between(
+        xx_theo, limit_low, limit_high, color=color, alpha=0.1, label="theoretical"
+    )
     ax.set_xlim(0 - eps, 1 + eps)
-    ax.set_xlabel("U", fontsize=20)
-    ax.set_ylabel(r"$\Delta$ ECDF")
-    for i, name in enumerate(names):
-        mask_0 = ranks[:, i] >= 0
-        mask_i = mask[:, i] * mask_0
-        xx = ranks[mask_i, i].sort()[0].numpy()
-        xx = np.pad(xx, (1, 1), constant_values=(0, 1))
-        yy = np.linspace(0, 1, num=xx.shape[-1]) - xx
-        ax.plot(xx, yy, color=color, label="sample" if name == names[-1] else None)
-    ax.legend()
+    if upper:
+        ax.legend(fontsize=22, markerscale=2.5, loc="upper left")
+        ax.set_xlabel("")
+        ax.tick_params(axis="x", labelcolor="w", size=1)
+    else:
+        ax.set_xlabel("U", fontsize=20)
+    ax.set_ylabel(r"$\Delta$ ECDF", fontsize=20)
+    ax.tick_params(axis='both', labelsize=18)
 
