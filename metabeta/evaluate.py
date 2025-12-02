@@ -148,6 +148,16 @@ def estimate(model: ApproximatorMFX,
     return out
 
 
+def subsample(nuts: dict, n: int = 1000) -> dict:
+    # sub-sample due to memory constraints
+    s = nuts['global']['samples'].shape[-1]
+    subset_idx = torch.randperm(s)[:n] # we need to subsample due to memory demands
+    nuts_sub = {'global': {}, 'local': {}}
+    nuts_sub['global'] = {'samples': nuts['global']['samples'][..., subset_idx]}
+    nuts_sub['local'] = {'samples': nuts['local']['samples'][..., subset_idx]}
+    return nuts_sub
+
+
 # -----------------------------------------------------------------------------
 # refinements
 
@@ -218,17 +228,6 @@ def recovery(model: ApproximatorMFX, results: dict) -> None:
             titles=['Fixed Effects', 'Random Effects', 'Variance Parameters'],
             marker='s',
         )
-
-def subsample(nuts: dict, n: int = 1000) -> dict:
-    # sub-sample due to memory constraints
-    s = nuts['global']['samples'].shape[-1]
-    subset_idx = torch.randperm(s)[:n] # we need to subsample due to memory demands
-    nuts_sub = {'global': {}, 'local': {}}
-    nuts_sub['global'] = {'samples': nuts['global']['samples'][..., subset_idx]}
-    nuts_sub['local'] = {'samples': nuts['local']['samples'][..., subset_idx]}
-    return nuts_sub
-    
-
 def inSampleLikelihood(results: dict, limit: float = 2000.):
     # in-sample posterior predictive likelihood
     batch = results['batch']
