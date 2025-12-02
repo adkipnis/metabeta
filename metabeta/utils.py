@@ -295,12 +295,24 @@ def quickRecovery(targets: torch.Tensor, means: torch.Tensor) -> dict[str, float
     return {'rmse': RMSE / denom, 'r': R / denom}
 
 
+def deepMerge(a: dict, b: dict) -> dict:
+    result = dict(a)
+    for k, v in b.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = deepMerge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+
 cmap = plt.get_cmap("tab20")
 palette = [mcolors.to_hex(cmap(i)) for i in range(0, cmap.N, 2)]
 palette += [mcolors.to_hex(cmap(i)) for i in range(1, cmap.N, 2)]
 
+
 # -----------------------------------------------------------------------------
 # profiling
+
 def check(x: torch.Tensor) -> None:
     if x.isnan().any():
         idx = torch.where(x.isnan())
