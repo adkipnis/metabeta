@@ -168,17 +168,16 @@ def importanceSampling(results: dict, iters: int = 2, constrain: bool = True) ->
         del proposed['global']['weights']
     if 'weights' in proposed['local']:
         del proposed['local']['weights']
-    start = time.perf_counter()
+    t0 = time.perf_counter()
     IL = ImportanceLocal(batch, constrain=constrain)
     IG = ImportanceGlobal(batch, constrain=constrain)
     for _ in range(iters):
         proposed = IL(proposed)
         proposed = IG(proposed)
-    end = time.perf_counter()
-    print(f'IS took {end - start:.2f}s')
-    sample_efficiency = proposed['global'].get('sample_efficiency')
-    if sample_efficiency is not None:
-        print(f'Mean IS sample efficiency: {sample_efficiency.mean().item():.2f}')
+    t1 = time.perf_counter()
+    results['is_duration'] = float(t1-t0)
+    results['is_sample_eff_g'] = float(proposed['global']['sample_efficiency'].median())
+    results['is_sample_eff_l'] = float(proposed['local']['sample_efficiency'].median())
     
     
 def calibrate(model: ApproximatorMFX, results: dict) -> None:
