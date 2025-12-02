@@ -296,7 +296,7 @@ def coverage(model: ApproximatorMFX, results: dict, use_calibrated: bool = True)
     names = results['names']
     nuts = results.get('nuts')
     n_plots = 2 if nuts is not None else 1
-    fig, axs = plt.subplots(figsize=(7, 7 * n_plots), ncols=1, nrows=n_plots, dpi=300)
+    fig, axs = plt.subplots(figsize=(6.5, 6 * n_plots), ncols=1, nrows=n_plots, dpi=300)
     if n_plots == 1:
         axs = [axs]
     
@@ -304,15 +304,20 @@ def coverage(model: ApproximatorMFX, results: dict, use_calibrated: bool = True)
     coverage = getCoverage(
         model, proposed['global'], targets, calibrate=use_calibrated
     )
-    plotCalibration(axs[0], coverage, names, lw=3, upper=True)
+    plotCoverage(axs[0], coverage, names, lw=3,
+                 y_name='Empirical CI',#'metabeta',
+                 upper=True)
     
     # NUTS
     if nuts is not None:
         coverage_m = getCoverage(
             model, nuts['global'], targets, calibrate=False
         )
-        plotCalibration(axs[1], coverage_m, names, lw=3, upper=False)
+        plotCoverage(axs[1], coverage_m, names, lw=3,
+                     y_name='Empirical CI',#'HMC',
+                     upper=False)
     fig.tight_layout()
+    fig.savefig(Path(results_path, f'coverage_{data_type}.png'), dpi=300, bbox_inches='tight')
 
 
 def sbc(results: dict):
