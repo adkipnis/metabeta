@@ -1,5 +1,7 @@
 import os
 from pathlib import Path
+from matplotlib import pyplot as plt
+import matplotlib.colors as mcolors
 import numpy as np
 import torch
 from torch import nn
@@ -255,6 +257,12 @@ def batchCovary(data: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     cov = (centered.transpose(1, 2) @ centered) / denom
     return cov
 
+
+# -----------------------------------------------------------------------------
+# plotting utils
+cmap = plt.get_cmap("tab20")
+palette = [mcolors.to_hex(cmap(i)) for i in range(0, cmap.N, 2)]
+palette += [mcolors.to_hex(cmap(i)) for i in range(1, cmap.N, 2)]
 
 # -----------------------------------------------------------------------------
 # profiling
