@@ -5,6 +5,7 @@ import numpy as np
 from scipy.stats import pearsonr, gaussian_kde
 import pandas as pd
 import torch
+from metabeta.utils import palette
 
 mse = torch.nn.MSELoss()
 
@@ -227,14 +228,16 @@ def _recoveryGrouped(
     marker: str = "o",
     colors: list[np.ndarray] | None = None,
     alpha: float = 0.2,
-    show_y: bool = True,
+    y_name: str = '',
+    upper: bool = True,
+    limits: tuple[float, float] | None = None,
 ) -> None | tuple[float, float]:
     """plot true targets against posterior means for entire batch"""
     # get sizes
-    assert means.shape[-1] == len(names), "shape mismatch"
-    if colors is not None:
-        assert len(colors) >= len(names), "not enough colors provided"
     D = len(names)
+    assert means.shape[-1] == D, "shape mismatch"
+    if colors is not None:
+        assert len(colors) >= D, "not enough colors provided"
     if targets.dim() == 3:
         targets = targets.view(-1, D)
         means = means.view(-1, D)
@@ -242,18 +245,16 @@ def _recoveryGrouped(
     mask = targets != 0.0
 
     # init figure
-    ax.set_title(title, fontsize=30, pad=15)
     ax.set_axisbelow(True)
     ax.grid(True)
     min_val = float(min(means.min(), targets.min()).floor())
     max_val = float(max(means.max(), targets.max()).ceil())
-    addon = 0.5
-    limits = (min_val - addon, max_val + addon)
+    if limits is None:
+        factor = 1.05
+        limits = (min_val * factor, max_val * factor)
     ax.set_xlim(limits, auto=False)
     ax.set_ylim(limits, auto=False)
-    ax.plot(
-        [min_val, max_val], [min_val, max_val], "--", lw=2, zorder=1, color="grey"
-    )  # diagline
+    ax.plot(limits, limits, "--", lw=2, zorder=1, color="grey")  # diagline
 
     # init stats
     RMSE = torch.tensor(0.0)
@@ -309,25 +310,36 @@ def _recoveryGrouped(
             edgecolor=(0, 0, 0, alpha),
         ),
     )
-    ax.set_xlabel("true", fontsize=26, labelpad=10)
-    if show_y:
-        ax.set_ylabel("estimated", fontsize=26, labelpad=10)
     ax.legend(fontsize=22, markerscale=2.5, loc="upper left")
+    ax.tick_params(axis='both', labelsize=18)
+    if upper:
+        ax.set_title(title, fontsize=30, pad=15)
+        ax.set_xlabel("")
+        ax.tick_params(axis="x", labelcolor="w", size=1)
+    else:
+        ax.set_xlabel("True", fontsize=26, labelpad=10)
+    if y_name:
+        ax.set_ylabel(y_name, fontsize=26, labelpad=10)
+    
 
 
 def recoveryGrouped(
+    axs: Axes,
     targets: list[torch.Tensor],
     names: list[list[str]],
     means: list[torch.Tensor],
     titles: list[str] = [],
+    limits: list[tuple[float, float]] = [],
     marker: str = "o",
     alpha: float = 0.2,
+    y_name: str = '',
+    upper: bool = True,
 ) -> None | tuple[float, float]:
     N = len(names)
     assert N > 0, "no names provided"
-    fig, axs = plt.subplots(figsize=(7 * N, 7), ncols=N, nrows=1, dpi=300)
     i = 0
-    for _targets, _names, _means, title, ax in zip(targets, names, means, titles, axs):
+    for _targets, _names, _means, _limits, title, ax in zip(targets, names, means, limits, titles, axs):
+        colors = palette[i:i+len(_names)]
         _recoveryGrouped(
             ax,
             _targets,
@@ -336,10 +348,12 @@ def recoveryGrouped(
             title=title,
             marker=marker,
             alpha=alpha,
-            show_y=(i == 0),
+            limits=_limits,
+            colors=colors,
+            y_name=(y_name if i==0 else ''),
+            upper=upper,
         )
-        i += 1
-    fig.tight_layout()
+        i += len(_names)
 
 
 # compare posterior intervals with mcmc
