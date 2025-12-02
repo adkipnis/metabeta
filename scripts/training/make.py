@@ -1,7 +1,7 @@
 gpu_boilerplate = '''
 #SBATCH --gres=gpu:1
 #SBATCH --partition gpu_p
-#SBATCH --qos gpu_priority
+#SBATCH --qos gpu_normal
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
