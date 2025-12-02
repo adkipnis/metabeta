@@ -443,6 +443,60 @@ def quickCoverage(model: ApproximatorMFX, results: dict, use_calibrated: bool = 
     return out
     
 
+# # Comparison of mean posterior y
+# y_rep_mean = posteriorPredictiveMean(batch, proposed).mean(-1)
+# pp_se = (batch['y'] - y_rep_mean).square().view(b, -1)
+# pp_rmse = (pp_se.sum(-1) / batch['mask_n'].view(b, -1).sum(-1)).sqrt()
+# print(pp_rmse.mean())
+# if nuts is not None:
+#     y_rep_mean_m = posteriorPredictiveMean(batch, nuts).mean(-1)
+#     pp_se_m = (batch['y'] - y_rep_mean_m).square().view(b, -1)
+#     pp_rmse_m = (pp_se_m.sum(-1) / batch['mask_n'].view(b, -1).sum(-1)).sqrt()
+#     plt.plot(pp_rmse, pp_rmse_m, 'o')
+#     print(pp_rmse_m.mean())
+
+def inSampleLikelihood(results: dict, limit: float = 2000.) -> dict:
+    # in-sample posterior predictive likelihood
+    batch = results['batch']
+    proposed = results['proposed']
+    nuts = results.get('nuts')
+    advi = results.get('advi')
+    out = {'metabeta':{}, 'nuts':{}, 'advi':{}}
+    
+    # metabeta
+    y_log_prob = posteriorPredictiveDensity(batch, proposed)
+    nll_mb = -y_log_prob.sum(dim=(1,2)).mean(-1)
+    mask_mb = (nll_mb < limit)
+
+    # nuts
+    nuts_sub = subsample(nuts) # due to memory constraints
+    y_log_prob = posteriorPredictiveDensity(batch, nuts_sub)
+    nll_nuts = -y_log_prob.sum(dim=(1,2)).mean(-1)
+    mask_nuts = (nll_nuts < limit)
+    
+    # advi
+    advi_sub = subsample(advi)
+    y_log_prob = posteriorPredictiveDensity(batch, advi_sub)
+    nll_advi = -y_log_prob.sum(dim=(1,2)).mean(-1)
+    mask_advi = (nll_advi < limit)
+    
+    # joint
+    mask = mask_mb * mask_nuts * mask_advi
+    nll_mb = nll_mb[mask]
+    nll_nuts = nll_nuts[mask]
+    nll_advi = nll_advi[mask]
+    r_mn = float(pearsonr(nll_mb, nll_nuts)[0])
+    r_ma = float(pearsonr(nll_mb, nll_advi)[0])
+    r_na = float(pearsonr(nll_nuts, nll_advi)[0])
+    print(f'NLL Correlation: NUTS={r_mn:.2f}, ADVI={r_ma:.3f}, N/A={r_na:.3f}')
+    
+    # medians
+    out['metabeta']['nll'] = float(nll_mb.median())
+    out['nuts']['nll'] = float(nll_nuts.median())
+    out['advi']['nll'] = float(nll_advi.median())
+    return out
+
+
 
 # =============================================================================
 if __name__ == '__main__':
