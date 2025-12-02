@@ -320,14 +320,17 @@ def coverage(model: ApproximatorMFX, results: dict, use_calibrated: bool = True)
     fig.savefig(Path(results_path, f'coverage_{data_type}.png'), dpi=300, bbox_inches='tight')
 
 
-def sbc(results: dict):
+def hist(results: dict):
     proposed = results['proposed']
     targets = results['targets']
     mask_d = (targets != 0)
     names = results['names']
     nuts = results.get('nuts')
+    n_plots = 2 if nuts is not None else 1
+    fig, axs = plt.subplots(figsize=(6.5, 6 * n_plots), ncols=1, nrows=n_plots, dpi=300)
+    if n_plots == 1:
+        axs = [axs]
     
-    # --- SBC histogram 
     # metabeta
     ranks = getRanks(targets, proposed['global'], absolute=False, mask_0=True)
     plotSBC(ranks, mask_d, names, color='darkgreen')
@@ -337,21 +340,37 @@ def sbc(results: dict):
     if nuts is not None:
         ranks_m = getRanks(targets, nuts['global'])
         plotSBC(ranks_m, mask_d, names, color='tan')
-        # wd_m = getWasserstein(ranks_m, mask_d)
+        # wd_m = getWasserstein(ranks_m, mask_d)    
 
-    # --- SBC ECDF
+
+def ecdf(results: dict):
+    proposed = results['proposed']
+    targets = results['targets']
+    mask_d = (targets != 0)
+    names = results['names']
+    nuts = results.get('nuts')
+    n_plots = 2 if nuts is not None else 1
+    fig, axs = plt.subplots(figsize=(6.5, 6 * n_plots), ncols=1, nrows=n_plots, dpi=300)
+    if n_plots == 1:
+        axs = [axs]
+    
     # metabeta
     ranks_abs = getRanks(targets, proposed['global'], absolute=True, mask_0=True)
-    plotECDF(ranks_abs, mask_d, names,
+    plotECDF(axs[0], ranks_abs, mask_d, names,
              s=proposed['global']['samples'].shape[-1],
-             color='darkgreen')
+             color='darkgreen', upper=True)
 
     # NUTS
     if nuts is not None:
         ranks_abs_m = getRanks(targets, nuts['global'], absolute=True)
-        plotECDF(ranks_abs_m, mask_d, names, 
+        plotECDF(axs[1], ranks_abs_m, mask_d, names, 
                  s=nuts['global']['samples'].shape[-1],
-                 color='darkgoldenrod')
+                 color='darkgoldenrod', upper=False)
+        
+    fig.tight_layout()
+    fig.savefig(Path(results_path, f'sbc_{data_type}.png'), dpi=300, bbox_inches='tight')
+
+
 
 
 
