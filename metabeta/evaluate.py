@@ -39,13 +39,13 @@ def setup() -> argparse.Namespace:
     parser.add_argument('-d', type=int, default=3, help='Maximum number of fixed effects (intercept + slopes)')
     parser.add_argument('-q', type=int, default=1, help='Maximum number of random effects (intercept + slopes)')
     parser.add_argument('--d_tag', type=str, default='all', help='suffix for data ID (default = '')')
-    parser.add_argument('--m_tag', type=str, default='all', help='suffix for model ID (default = '')')
+    parser.add_argument('--m_tag', type=str, default='default', help='suffix for model ID (default = '')')
     parser.add_argument('--c_tag', type=str, default='default', help='name of model config file')
-    parser.add_argument('-l', '--load', type=int, default=50, help='load model from iteration #l')
+    parser.add_argument('-l', '--load', type=int, default=100, help='load model from iteration #l')
     
     # evaluation
     parser.add_argument('--bs_val', type=int, default=256, help='number of regression datasets in validation set (default = 256)')
-    parser.add_argument('--bs-test', type=int, default=256, help='number of regression datasets in test set  (default = 256).')
+    parser.add_argument('--bs-test', type=int, default=128, help='number of regression datasets in test set (default = 128).')
     parser.add_argument('--bs_mini', type=int, default=16, help='umber of regression datasets per minibatch (default = 16)')
     parser.add_argument('--importance', action='store_false', help='do importance sampling (default = True)')
     parser.add_argument('--calibrate', action='store_false', help='calibrate posterior (default = True)')
@@ -648,7 +648,7 @@ if __name__ == '__main__':
                              model_cfg['general']['m'], model_cfg['general']['n'],
                              cfg.d, cfg.q, 
                              size=cfg.bs_test, tag=cfg.d_tag)
-        dl_test = getDataLoader(fn_test, 50, #cfg.bs_test,
+        dl_test = getDataLoader(fn_test, cfg.bs_test,
                                 max_d=cfg.d,
                                 max_q=cfg.q,
                                 permute=False, autopad=True, device=device)
