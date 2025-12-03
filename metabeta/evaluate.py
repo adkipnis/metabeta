@@ -554,7 +554,7 @@ def inSampleLikelihood(results: dict, limit: float = 2000.) -> dict:
 
 def runtimes(results: dict) -> dict:
     out = {'metabeta':{}, 'nuts':{}, 'advi':{}}
-    b = len(results_test['batch']['X'])
+    b = len(results['batch']['X'])
     out['metabeta']['duration'] = {
         'single': results['duration'] / b,
         'batch': results['duration']}
