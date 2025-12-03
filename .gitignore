@@ -6,6 +6,7 @@ outputs
 metabeta.egg-info
 parquet
 raw
+*.sh
 *.csv
 *.npz
 *.rdata
