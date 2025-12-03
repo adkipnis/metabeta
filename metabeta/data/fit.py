@@ -142,7 +142,7 @@ def fitPyMC(ds: dict[str, torch.Tensor],
                               return_inferencedata=True)
         elif method == 'advi':
             mean_field = pm.fit(method='advi', 
-                                n=100_000, 
+                                n=50_000, 
                                 obj_optimizer=pm.adam(learning_rate=5e-3)
                                 )
             trace = mean_field.sample(draws=draws*chains, 
@@ -292,7 +292,7 @@ def fitBambi(ds: dict[str, torch.Tensor],
                           return_inferencedata=True)
     elif method == 'advi':
         mean_field = model.fit(inference_method='vi',
-                               n=100_000, 
+                               n=50_000, 
                                obj_optimizer=pm.adam(learning_rate=5e-3),
                                )
 
