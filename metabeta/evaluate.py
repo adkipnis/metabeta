@@ -1,11 +1,14 @@
 import argparse
 import yaml
-from pathlib import Path
-import matplotlib.pyplot as plt
 import time
-import torch
+from pathlib import Path
 from functools import reduce
+
+import matplotlib.pyplot as plt
 from scipy.stats import pearsonr
+import torch
+
+from metabeta import plot
 from metabeta.data.dataset import getDataLoader
 from metabeta.utils import setDevice, dsFilename, getConsoleWidth, deepMerge
 from metabeta.utils import quickRecovery as _quickRecovery
@@ -19,7 +22,7 @@ from metabeta.evaluation.pp import (
     plotPosteriorPredictive,
     weightSubset,
 )
-from metabeta import plot
+
 
 ###############################################################################
 
