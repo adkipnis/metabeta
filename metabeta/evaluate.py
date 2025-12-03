@@ -57,7 +57,7 @@ def load(model: ApproximatorMFX, model_path, iteration: int) -> None:
     model_path = Path(model_path, model.id)
     fname = Path(model_path, f'checkpoint_i={iteration}.pt')
     print(f'Loading checkpoint from {fname}')
-    state = torch.load(fname, weights_only=False)
+    state = torch.load(fname, weights_only=False, map_location=torch.device(cfg.device))
     model.load_state_dict(state['model_state_dict'])
     model.stats = state['stats']
 
