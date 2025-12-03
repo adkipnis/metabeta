@@ -59,6 +59,7 @@ def dsFilename(
     ftype: str = "npz",
     varied: bool = False,
     tag: str = "",
+    suffix: str = "",
     outside: bool = False,
 ) -> Path:
     """example: ffx-train-d=8-m=1-n=50-50k-001.npz"""
@@ -68,6 +69,8 @@ def dsFilename(
     p = f"{part:03d}"
     if tag:
         tag = "-" + tag
+    if suffix:
+        suffix = "-" + suffix
     if varied:
         varied_ = "-varied"
     else:
@@ -80,7 +83,7 @@ def dsFilename(
         first,
         "outputs",
         "data",
-        f"{fx_type}-{ds_type}-b={b}-m={m}-n={n}-d={d}-q={q}-{s}-{p}{varied_}{tag}.{ftype}",
+        f"{fx_type}-{ds_type}-b={b}-m={m}-n={n}-d={d}-q={q}-{s}-{p}{varied_}{tag}{suffix}.{ftype}",
     )
 
 
