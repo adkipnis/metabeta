@@ -7,6 +7,17 @@ cpu_boilerplate = '''
 #SBATCH --time=24:00:00
 '''
 
+setup_boilerplate = '''
+# setup tmp for job to avoid pytensor collision
+JOB_TMPDIR="$HOME/tmp/pytensor_$SLURM_JOB_ID"
+mkdir -p "$JOB_TMPDIR"
+export PYTENSOR_FLAGS="base_compiledir=$JOB_TMPDIR"
+
+source $HOME/.bashrc
+conda activate mb
+cd $HOME/metabeta/metabeta/data
+'''
+
 
 def write(path: str, content: str):
     with open(path, 'w') as f:
@@ -19,10 +30,8 @@ def gen_train(d: int, q: int, i: int = 100) -> str:
 #SBATCH --output=logs/gen-train-{d}-{q}/%j.out
 #SBATCH --error=logs/gen-train-{d}-{q}/%j.err'''
     out += cpu_boilerplate
+    out += setup_boilerplate
     out += f'''
-source $HOME/.bashrc
-conda activate mb
-cd $HOME/metabeta/metabeta/data
 python generate.py -d {d} -q {q} -b 0 -i {i} --semi'''
     return out
 
@@ -34,10 +43,8 @@ def gen_test(d: int, q: int) -> str:
 #SBATCH --output=logs/gen-test-{d}-{q}/%j.out
 #SBATCH --error=logs/gen-test-{d}-{q}/%j.err'''
     out += cpu_boilerplate
+    out += setup_boilerplate
     out += f'''
-source $HOME/.bashrc
-conda activate mb
-cd $HOME/metabeta/metabeta/data
 python generate.py -d {d} -q {q} -b -1 --semi --slurm'''
     return out
 
@@ -49,10 +56,8 @@ def gen_sub(d: int, q: int) -> str:
 #SBATCH --output=logs/gen-sub-{d}-{q}/%j.out
 #SBATCH --error=logs/gen-sub-{d}-{q}/%j.err'''
     out += cpu_boilerplate
+    out += setup_boilerplate
     out += f'''
-source $HOME/.bashrc
-conda activate mb
-cd $HOME/metabeta/metabeta/data
 python generate.py -d {d} -q {q} -b -1 --sub --slurm'''
     return out
 
