@@ -60,7 +60,7 @@ python generate.py -d {d} -q {q} -b -1 --sub --slurm'''
 if __name__ == '__main__':
     pairs = [(2,2), (3,1), (4,1), (5,2), (8,3), (12, 4)]
     for d,q in pairs:
-        write(f'gen-train-{d}-{q}.sh', gen_train(d,q))
+        # write(f'gen-train-{d}-{q}.sh', gen_train(d,q))
         write(f'gen-test-{d}-{q}.sh', gen_test(d,q))
-        write(f'gen-sub-{d}-{q}.sh', gen_sub(d,q))
+        # write(f'gen-sub-{d}-{q}.sh', gen_sub(d,q))
 
