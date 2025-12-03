@@ -47,8 +47,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--bs_val', type=int, default=256, help='number of regression datasets in validation set (default = 256)')
     parser.add_argument('--bs-test', type=int, default=256, help='number of regression datasets in test set  (default = 256).')
     parser.add_argument('--bs_mini', type=int, default=16, help='umber of regression datasets per minibatch (default = 16)')
-    parser.add_argument('--importance', action='store_false', help='Do importance sampling (default = True)')
-    parser.add_argument('--calibrate', action='store_false', help='Calibrate posterior (default = True)')
+    parser.add_argument('--importance', action='store_false', help='do importance sampling (default = True)')
+    parser.add_argument('--calibrate', action='store_false', help='calibrate posterior (default = True)')
+    parser.add_argument('--sub', action='store_true', help='evaluate sub-sampled real data (default = False)')
     
     return parser.parse_args()
 
