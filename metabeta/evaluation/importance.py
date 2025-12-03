@@ -264,8 +264,8 @@ class ImportanceGlobal:
 
         # importance sampling (sigmas_rfx)
         out_ = getImportanceWeights(
-            log_likelihood=log_likelihood_rfx,
-            log_prior=log_prior_sigmas_rfx,
+            log_likelihood=0.3*log_likelihood_rfx,
+            log_prior=0.3*log_prior_sigmas_rfx,
             log_q=log_q,
             constrain=self.constrain,
         )
