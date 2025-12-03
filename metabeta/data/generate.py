@@ -198,28 +198,40 @@ def generate(
     # optionally fit mcmc
     if fit:
         fitter = {'pymc': fitPyMC, 'bambi': fitBambi}[cfg.api]
-        
-        # HMC/NUTS
-        print(f'Fitting NUTS using {cfg.api.upper()}')
-        for ds in tqdm(data):
-            nuts_results = fitter(ds, method='nuts', seed=cfg.seed,
-                                  specify_priors=(not cfg.sub),
-                                  use_multiprocessing=(not cfg.slurm))
-            ds.update(nuts_results)
-        
-        # ADVI
-        print(f'Fitting ADVI using {cfg.api.upper()}')
-        for ds in tqdm(data):
-            advi_results = fitter(ds, method='advi', seed=cfg.seed, 
-                                  specify_priors=(not cfg.sub))
-            ds.update(advi_results)
+        data_fitted = []
+        for i in iterator:
+            ds = data[i]
+            try:
+                # NUTS
+                print(f'Fitting NUTS using {cfg.api.upper()}')
+                nuts_results = fitter(ds, method='nuts', seed=cfg.seed,
+                                      specify_priors=(not cfg.sub),
+                                      use_multiprocessing=(not cfg.slurm))
+                ds.update(nuts_results)
+
+                # ADVI
+                print(f'Fitting ADVI using {cfg.api.upper()}')
+                advi_results = fitter(ds, method='advi', seed=cfg.seed, 
+                                      specify_priors=(not cfg.sub))
+                ds.update(advi_results)
+
+                # store and optionally cache
+                data_fitted.append(ds)
+                if cfg.cache:
+                    fn = getFileName(f'test{"-sub" if cfg.sub else ""}', -1, suffix=str(i))
+                    np.savez_compressed(fn, **ds, allow_pickle=True)
+
+            except Exception as e:
+                print(f'Error fitting data: {e}.\nSkipping to next.')
+
+        return data_fitted
     return data
 
 
 # =============================================================================
 if __name__ == '__main__':
-    
-    
+
+
     # init outout directory
     Path('..', 'outputs', 'data').mkdir(parents=True, exist_ok=True)
 
@@ -235,7 +247,7 @@ if __name__ == '__main__':
     elif cfg.sub:
         assert cfg.d_tag, 'must specify dataset name in d_tag flag'
         assert cfg.begin == -1, 'sub-sampled real data is only valid for test set'
-        
+ 
     part = cfg.begin
     raw = None
 
