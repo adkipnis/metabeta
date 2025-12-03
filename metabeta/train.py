@@ -250,11 +250,11 @@ def validate(model: ApproximatorMFX, dl: DataLoader, step: int) -> int:
             else:
                 rmse_g, r_g = quickRecovery(
                     targets=results['targets']['global'].cpu(),
-                    means=results['moments']['global'][0],
+                    means=results['moments']['global'][0].cpu(),
                 ).values()
                 rmse_l, r_l = quickRecovery(  # type: ignore
                     targets=results['targets']['local'].cpu(),
-                    means=results['moments']['local'][0],
+                    means=results['moments']['local'][0].cpu(),
                 ).values()
             logger.write(iteration, step, rmse_g, 'rmse')
             logger.write(iteration, step, r_g, 'r')
