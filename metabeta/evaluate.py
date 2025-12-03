@@ -162,6 +162,13 @@ def subsample(nuts: dict, n: int = 1000) -> dict:
     return nuts_sub
 
 
+def removeDivs(ds: dict[str, torch.Tensor], limit: int = 20) -> dict[str, torch.Tensor]:
+    # remove data with poor convergence
+    few_divs = ds['nuts_divergences'].sum(-1) < limit
+    ds = {k: v[few_divs] for k, v in ds.items()}
+    return ds
+
+
 # -----------------------------------------------------------------------------
 # refinements
 
