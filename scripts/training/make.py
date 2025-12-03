@@ -12,22 +12,23 @@ def write(path: str, content: str):
     with open(path, 'w') as f:
         f.write(content)
 
-def train(d: int, q: int, i: int = 100) -> str:
+def train(d: int, q: int, i: int = 100, tag: str = 'default') -> str:
     out = '#!/bin/bash'
     out += f'''
 #SBATCH --job-name=train-{d}-{q}
-#SBATCH --output=logs/train-{d}-{q}/%j.out
-#SBATCH --error=logs/train-{d}-{q}/%j.err'''
+#SBATCH --output=logs/train-{d}-{q}-{tag}/%j.out
+#SBATCH --error=logs/train-{d}-{q}-{tag}/%j.err'''
     out += gpu_boilerplate
     out += f'''
 source $HOME/.bashrc
 conda activate mb
 cd $HOME/metabeta/metabeta
-python train.py -d {d} -q {q} -l 0 -i {i} --c_tag default'''
+python train.py -d {d} -q {q} -l 0 -i {i} --c_tag {tag}'''
     return out
 
 if __name__ == '__main__':
     pairs = [(2,2), (3,1), (4,1), (5,2), (8,3), (12, 4)]
     for d,q in pairs:
-        write(f'train-{d}-{q}.sh', train(d,q))
+        write(f'train-{d}-{q}.sh', train(d,q,tag='default'))
+        write(f'train-{d}-{q}-un.sh', train(d,q,tag='unstandardized'))
 
