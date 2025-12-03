@@ -5,6 +5,7 @@ import argparse
 import numpy as np
 import torch
 from torch import distributions as D
+import pytensor
 
 from metabeta.utils import dsFilename, padTensor
 from metabeta.data.single import Prior, Synthesizer, Emulator, Generator
@@ -197,6 +198,7 @@ def generate(
 
     # optionally fit mcmc
     if fit:
+        print(f'PyTensor tmp directory: {pytensor.config.base_compiledir}')
         fitter = {'pymc': fitPyMC, 'bambi': fitBambi}[cfg.api]
         data_fitted = []
         for i in tqdm(range(batch_size)):
