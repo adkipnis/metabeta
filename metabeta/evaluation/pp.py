@@ -89,7 +89,7 @@ def plotPosteriorPredictive(
     y_rep: torch.Tensor,  # (b,m,n,s)
     is_mask: torch.Tensor | None = None,  # (b,s)
     batch_idx: int = 0,
-    n_lines: int = 50,
+    n_lines: int = 30,
     title: str = "",
     color: str = "green",
     upper: bool = True,
