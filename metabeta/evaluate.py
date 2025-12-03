@@ -200,7 +200,8 @@ def subrow(out: dict, name: str):
     rmse = sum(out[name][fx]['rmse'] for fx in fx_types) / len(fx_types)
     ce = sum(out[name][fx]['ce'] for fx in fx_types) / len(fx_types)
     t = out[name]['duration']['single']
-    return f'{nll:.1f} & {r:.3f} & {rmse:.3f} & {ce:.3f} & {t:.1f}'
+    t /= 4 if name in ['nuts', 'advi'] else t # single core four chains
+    return f'{nll:.1f} & {r:.3f} & {rmse:.3f} & {ce:.3f} & {t:.2f} \\'
 
 def tablerow(out: dict) -> str:
     mb = subrow(out, 'metabeta')
