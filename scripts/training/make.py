@@ -23,7 +23,7 @@ def train(d: int, q: int, i: int = 100, tag: str = 'default') -> str:
 source $HOME/.bashrc
 conda activate mb
 cd $HOME/metabeta/metabeta
-python train.py -d {d} -q {q} -l 0 -i {i} --c_tag {tag}'''
+python train.py -d {d} -q {q} -l 0 -i {i} --c_tag {tag} --m_tag {tag}'''
     return out
 
 if __name__ == '__main__':
