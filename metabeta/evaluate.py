@@ -193,6 +193,25 @@ def quarter(ds: dict[str, torch.Tensor]):
     return ds_N, ds_n, ds_R, ds_r
 
 
+def subrow(out: dict, name: str):
+    fx_types = ['ffx', 'rfx', 'sigmas']
+    nll = out[name]['nll']
+    r = sum(out[name][fx]['r'] for fx in fx_types) / len(fx_types)
+    rmse = sum(out[name][fx]['rmse'] for fx in fx_types) / len(fx_types)
+    ce = sum(out[name][fx]['ce'] for fx in fx_types) / len(fx_types)
+    t = out[name]['duration']['single']
+    return f'{nll:.1f} & {r:.3f} & {rmse:.3f} & {ce:.3f} & {t:.1f}'
+
+def tablerow(out: dict) -> str:
+    mb = subrow(out, 'metabeta')
+    nuts = subrow(out, 'nuts')
+    advi = subrow(out, 'advi')
+    mb_name = '\\texttt{metabeta}'
+    nuts_name = '\\texttt{HMC}'
+    advi_name = '\\texttt{VI}'
+    return f'{cfg.d} & {cfg.q} & {mb_name} & {mb}\n  &   & {nuts_name} & {nuts}\n  &   & {advi_name} & {advi}'
+    
+
 # -----------------------------------------------------------------------------
 # refinements
 
