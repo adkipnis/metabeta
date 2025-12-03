@@ -181,7 +181,7 @@ def generate(
                       tau_ffx[i, :d_i],
                       tau_eps[i],
                       tau_rfx[i, :q_i])
-        
+
         # setup design matrix sampler
         if (cfg.semi or cfg.sub) and (seed <= 0 or torch.rand(1) < 0.5):
             design = Emulator(source=cfg.d_tag, use_sgld=cfg.sgld)
@@ -191,7 +191,7 @@ def generate(
         # generation loop
         while not okay:
             attempts += 1
-            ds = Generator(prior, design, n_i, sub=cfg.sub).sample()
+            ds = Generator(prior, design, n_i, sub=cfg.sub, tag=i).sample()
             okay = ds['okay'] or attempts >= 20
         data += [ds]
 
