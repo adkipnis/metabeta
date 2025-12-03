@@ -199,7 +199,7 @@ def generate(
     if fit:
         fitter = {'pymc': fitPyMC, 'bambi': fitBambi}[cfg.api]
         data_fitted = []
-        for i in iterator:
+        for i in tqdm(range(batch_size)):
             ds = data[i]
             try:
                 # NUTS
