@@ -640,71 +640,76 @@ if __name__ == '__main__':
     
     # -------------------------------------------------------------------------
     # test set (with MCMC estimates)
-    data_type = 'test'
+    if not cfg.sub:
+        data_type = 'test'
+            
+        # --- load data
+        fn_test = dsFilename('mfx', data_type, 1,
+                             model_cfg['general']['m'], model_cfg['general']['n'],
+                             cfg.d, cfg.q, 
+                             size=cfg.bs_test, tag=cfg.d_tag)
+        dl_test = getDataLoader(fn_test, 50, #cfg.bs_test,
+                                max_d=cfg.d,
+                                max_q=cfg.q,
+                                permute=False, autopad=True, device=device)
+        ds_test = next(iter(dl_test))
+        ds_test = removeDivs(ds_test)
+    
         
-    # --- load data
-    fn_test = dsFilename('mfx', data_type, 1,
-                         model_cfg['general']['m'], model_cfg['general']['n'],
-                         cfg.d, cfg.q, 
-                         size=cfg.bs_test, tag=cfg.d_tag)
-    dl_test = getDataLoader(fn_test, cfg.bs_test,
-                            max_d=cfg.d,
-                            max_q=cfg.q,
-                            permute=False, autopad=True, device=device)
-    ds_test = next(iter(dl_test))
-
-    
-    # --- run and refine model
-    print('\nInference on test set...')
-    results_test = run(model, ds_test)
-    if cfg.importance:
-        importanceSampling(results_test)
-    
-    # --- performance plots
-    recovery(model, results_test)
-    posteriorPredictive(results_test)
-    coverage(model, results_test, use_calibrated=cfg.calibrate)
-    ecdf(results_test)
-    
-    # --- performance measures
-    outputs = []
-    outputs += [quickRecovery(model, results_test)]
-    outputs += [quickCoverage(model, results_test)]
-    outputs += [inSampleLikelihood(results_test)]
-    outputs += [runtimes(results_test)]
-    outputs += [diagnostics(results_test)]
-    out = reduce(deepMerge, outputs, {})
-    with open(Path(results_path, data_type+'.yaml'), 'w') as f:
-        yaml.dump(out, f, sort_keys=False)
-    
+        # --- run and refine model
+        print('\nInference on test set...')
+        results_test = run(model, ds_test)
+        if cfg.importance:
+            importanceSampling(results_test)
+        
+        # --- performance plots
+        recovery(model, results_test)
+        posteriorPredictive(results_test)
+        coverage(model, results_test, use_calibrated=cfg.calibrate)
+        ecdf(results_test)
+        
+        # --- performance measures
+        outputs = []
+        outputs += [quickRecovery(model, results_test)]
+        outputs += [quickCoverage(model, results_test)]
+        outputs += [inSampleLikelihood(results_test)]
+        outputs += [runtimes(results_test)]
+        outputs += [diagnostics(results_test)]
+        out = reduce(deepMerge, outputs, {})
+        with open(Path(results_path, data_type+'.yaml'), 'w') as f:
+            yaml.dump(out, f, sort_keys=False)
+        
+        print(tablerow(out))
     
     # -------------------------------------------------------------------------
     # sub-sampled real data (with MCMC estimates)
-    data_type = 'test-sub'
-    
-    # --- load data
-    fn_sub = dsFilename('mfx', data_type, 1,
-                        model_cfg['general']['m'], model_cfg['general']['n'],
-                        cfg.d, cfg.q, 
-                        size=cfg.bs_test, tag=cfg.d_tag)
-    dl_sub = getDataLoader(fn_sub, cfg.bs_test,
-                           max_d=cfg.d,
-                           max_q=cfg.q,
-                           permute=False, autopad=True, device=device)
-    ds_sub = next(iter(dl_sub))
-    
-    # --- run and refine model
-    print('\nInference on sub-sampled real data...')
-    results_sub = estimate(model, ds_sub)
-    if cfg.importance:
-        importanceSampling(results_sub)
+    if cfg.sub:
+        data_type = 'test-sub'
         
-    # --- performance measures
-    outputs = []
-    outputs += [inSampleLikelihood(results_sub)]
-    outputs += [runtimes(results_sub)]
-    outputs += [diagnostics(results_sub)]
-    out = reduce(deepMerge, outputs, {})
-    with open(Path(results_path, data_type+'.yaml'), 'w') as f:
-        yaml.dump(out, f, sort_keys=False)
-    
+        # --- load data
+        fn_sub = dsFilename('mfx', data_type, 1,
+                            model_cfg['general']['m'], model_cfg['general']['n'],
+                            cfg.d, cfg.q, 
+                            size=cfg.bs_test, tag=cfg.d_tag)
+        dl_sub = getDataLoader(fn_sub, cfg.bs_test,
+                               max_d=cfg.d,
+                               max_q=cfg.q,
+                               permute=False, autopad=True, device=device)
+        ds_sub = next(iter(dl_sub))
+        ds_sub = removeDivs(ds_sub)
+        
+        # --- run and refine model
+        print('\nInference on sub-sampled real data...')
+        results_sub = estimate(model, ds_sub)
+        if cfg.importance:
+            importanceSampling(results_sub)
+            
+        # --- performance measures
+        outputs = []
+        outputs += [inSampleLikelihood(results_sub)]
+        outputs += [runtimes(results_sub)]
+        outputs += [diagnostics(results_sub)]
+        out = reduce(deepMerge, outputs, {})
+        with open(Path(results_path, data_type+'.yaml'), 'w') as f:
+            yaml.dump(out, f, sort_keys=False)
+        
