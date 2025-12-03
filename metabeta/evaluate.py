@@ -169,6 +169,30 @@ def removeDivs(ds: dict[str, torch.Tensor], limit: int = 20) -> dict[str, torch.
     return ds
 
 
+def quarter(ds: dict[str, torch.Tensor]):
+    ns = ds['n']
+    rsq = ds['r_squared']
+    b = len(ns)
+
+    # ---- high vs. low n ----
+    _, idx_size_high = ns.topk(b // 2)
+    mask_size_low = ~torch.isin(torch.arange(b, device=ns.device), idx_size_high)
+    idx_size_low = mask_size_low.nonzero(as_tuple=True)[0]
+
+    ds_N = {k: v[idx_size_high] for k, v in ds.items()}
+    ds_n = {k: v[idx_size_low]  for k, v in ds.items()}
+
+    # ---- high vs. low snr ----
+    _, idx_noise_low = rsq.topk(b // 2)
+    mask_noise_high = ~torch.isin(torch.arange(b, device=rsq.device), idx_noise_low)
+    idx_noise_high = mask_noise_high.nonzero(as_tuple=True)[0]
+
+    ds_R = {k: v[idx_noise_low]  for k, v in ds.items()}
+    ds_r = {k: v[idx_noise_high] for k, v in ds.items()}
+
+    return ds_N, ds_n, ds_R, ds_r
+
+
 # -----------------------------------------------------------------------------
 # refinements
 
