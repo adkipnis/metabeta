@@ -44,7 +44,7 @@ def gen_specific(name: str, d: int, q: int) -> str:
     out += cpu_boilerplate
     out += setup_boilerplate
     out += f'''
-python generate.py -d {d} -q {q} -b -1 --d_tag {name} --semi --slurm'''
+python generate.py -d {d} -q {q} -b -1 --d_tag {name} --sub --slurm'''
     return out
 
 
