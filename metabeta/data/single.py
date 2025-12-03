@@ -252,13 +252,13 @@ class Emulator:
             x = x_
             y = y_
             n = len(x)
-            
+
             # # alternatively with original n_i:
             # n_i = ds['n_i'][members]
             # n = int(n_i.sum())
             # member_mask = (ds['groups'].unsqueeze(-1) == members.unsqueeze(0)).any(-1)  # type: ignore
             # x = x[member_mask]
-            
+
         else:
             # subsample features
             idx_feat = torch.randperm(x.shape[1])[:d-1]
@@ -290,6 +290,7 @@ class Generator:
     prior: Prior
     design: Synthesizer | Emulator
     n_i: torch.Tensor # number of observations per group
+    tag: int # dataset tag
     sub: bool = False
     plot: bool = False
 
@@ -306,7 +307,7 @@ class Generator:
         Z = X[:, : self.q]
         n = len(X) # total number of observations
         m = len(n_i) # number of groups
-        
+
         # sub-sampled real data does not receive parameters and new y
         if self.sub:
             mask = ~ y.isnan()
@@ -327,6 +328,7 @@ class Generator:
                 'd': torch.tensor(self.d),  # (1,)
                 'q': torch.tensor(self.q),  # (1,)
                 'okay': torch.tensor(True),
+                'tag': torch.tensor(self.tag),
             }
             
         # fixed effects
@@ -431,6 +433,7 @@ class Generator:
             'cov_sum': cov_sum,  # (1,)
             'r_squared': r_squared,  # (1,)
             'okay': okay,
+            'tag': torch.tensor(self.tag),
         }
         return out
 
