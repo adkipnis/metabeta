@@ -40,7 +40,7 @@ def setup() -> argparse.Namespace:
 
 # -----------------------------------------------------------------------------
 # helpers
-def getFileName(ds_type: str, part: int) -> Path:
+def getFileName(ds_type: str, part: int, suffix: str = '') -> Path:
     if 'train' in ds_type:
         size = cfg.bs_train
         b = cfg.bs_load
@@ -63,6 +63,7 @@ def getFileName(ds_type: str, part: int) -> Path:
         size=size,
         part=part,
         tag=cfg.d_tag,
+        suffix=suffix,
         outside=True,
     )
     return fn
