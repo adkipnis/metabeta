@@ -616,7 +616,7 @@ if __name__ == '__main__':
 
 
     # -------------------------------------------------------------------------
-    # validation set
+    # validation set for calibration
     data_type = 'val'
     
     # --- load data
@@ -632,18 +632,10 @@ if __name__ == '__main__':
     
     
     # --- run and refine model
-    print('\nInference on validation set...')
-    results_val = run(model, ds_val)
-    if cfg.importance:
-        importanceSampling(results_val)
     if cfg.calibrate:
+        print('\nInference on validation set...')
+        results_val = run(model, ds_val)
         calibrate(model, results_val)
-        
-    # # --- performance plots
-    # recovery(model, results_val)
-    # posteriorPredictive(results_val)
-    # coverage(model, results_val, use_calibrated=cfg.calibrate)
-    # ecdf(results_val)
     
     
     # -------------------------------------------------------------------------
