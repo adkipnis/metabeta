@@ -220,7 +220,7 @@ def generate(
                 # store and optionally cache
                 data_fitted.append(ds)
                 if cfg.cache:
-                    fn = getFileName(f'test{"-sub" if cfg.sub else ""}', -1, suffix=str(i))
+                    fn = getFileName(f'test{"-sub" if cfg.sub else ""}', -1, suffix=f'{i}-cache')
                     np.savez_compressed(fn, **ds, allow_pickle=True)
 
             except Exception as e:
