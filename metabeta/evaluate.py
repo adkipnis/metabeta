@@ -533,10 +533,14 @@ def inSampleLikelihood(results: dict, limit: float = 2000.) -> dict:
     nuts = results.get('nuts')
     advi = results.get('advi')
     out = {'metabeta':{}, 'nuts':{}, 'advi':{}}
+    is_weights = proposed['global'].get('weights')
     
     # metabeta
     y_log_prob = posteriorPredictiveDensity(batch, proposed)
-    nll_mb = -y_log_prob.sum(dim=(1,2)).mean(-1)
+    nll_mb = -y_log_prob.sum(dim=(1,2))
+    if is_weights is not None:
+        nll_mb = (nll_mb * is_weights.mean(1))
+    nll_mb = nll_mb.mean(-1)
     mask_mb = (nll_mb < limit)
 
     # nuts
