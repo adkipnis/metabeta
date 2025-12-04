@@ -53,7 +53,7 @@ if __name__ == '__main__':
     for d,q in synth_pairs:
         write(f'gen-synth-{d}-{q}.sh', gen_synth(d,q))
 
-    semi_pairs = [('sleep',2,2), ('gcse',3,1), ('london',4,1), ('math',5,2), ('collins',3,1),
+    semi_pairs = [('sleep',2,2), ('gcse',3,1), ('collins',3,1), ('london',4,1), ('math',5,2),
                   ('titanic',8,3), ('schooling',8,3), ('churn',12,4), ('news',12,4),]
     for name, d,q in semi_pairs:
         write(f'gen-{name}-{d}-{q}.sh', gen_specific(name,d,q))
