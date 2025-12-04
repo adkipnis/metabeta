@@ -9,8 +9,10 @@ def prepare(
         proposed: dict[str, dict[str, torch.Tensor]],
     ) -> dict[str, torch.Tensor]:
     # prepare observed
-    X, Z, y = ds["X"], ds["Z"], ds["y"]
-    d = X.shape[-1]
+    d = ds['d'][0]
+    q = ds['q'][0]
+    X, Z, y = ds["X"][..., :d], ds["Z"][..., :q], ds["y"]
+    
     mask = (y != 0).unsqueeze(-1)
 
     # prepare samples

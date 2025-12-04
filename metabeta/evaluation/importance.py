@@ -37,8 +37,8 @@ class ImportanceLocal:
         self.mask_n = data['mask_n']
         self.mask_m = data['mask_m']
         self.y = data['y'].unsqueeze(-1)
-        self.X = data['X']
-        self.Z = data['Z']
+        self.X = data['X'][..., :data['d'][0]]
+        self.Z = data['Z'][..., :data['q'][0]]
         self.n = data['n'].unsqueeze(-1)
         self.n_i = data['n_i'].unsqueeze(-1)
         self.q = data['q'].unsqueeze(1)
@@ -160,8 +160,8 @@ class ImportanceGlobal:
         self.mask_n = data['mask_n']
         self.mask_m = data['mask_m']
         self.y = data['y'].unsqueeze(-1)
-        self.X = data['X']
-        self.Z = data['Z']
+        self.X = data['X'][..., :data['d'][0]]
+        self.Z = data['Z'][..., :data['q'][0]]
         self.n = data['n'].unsqueeze(-1)
         self.n_i = data['n_i'].unsqueeze(-1)
         self.q = data['q']
