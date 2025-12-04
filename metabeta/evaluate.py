@@ -193,17 +193,18 @@ def quarter(ds: dict[str, torch.Tensor]):
     return ds_N, ds_n, ds_R, ds_r
 
 
-def subrow(out: dict, name: str):
-    fx_types = ['ffx', 'rfx', 'sigmas']
-    nll = out[name]['nll']
-    r = sum(out[name][fx]['r'] for fx in fx_types) / len(fx_types)
-    rmse = sum(out[name][fx]['rmse'] for fx in fx_types) / len(fx_types)
-    ce = sum(out[name][fx]['ce'] for fx in fx_types) / len(fx_types)
-    t = out[name]['duration']['single']
-    t /= 4 if name in ['nuts', 'advi'] else t # single core four chains
-    return f'{nll:.1f} & {r:.3f} & {rmse:.3f} & {ce:.3f} & {t:.2f} \\\\'
-
-def tablerow(out: dict) -> str:
+# -----------------------------------------------------------------------------
+# table 1
+def tablerow1(out: dict) -> str:
+    def subrow(out: dict, name: str):
+        fx_types = ['ffx', 'rfx', 'sigmas']
+        nll = out[name]['nll']
+        r = sum(out[name][fx]['r'] for fx in fx_types) / len(fx_types)
+        rmse = sum(out[name][fx]['rmse'] for fx in fx_types) / len(fx_types)
+        ce = sum(out[name][fx]['ce'] for fx in fx_types) / len(fx_types)
+        t = out[name]['duration']['single']
+        t /= 4 if name in ['nuts', 'advi'] else t # single core four chains
+        return f'{nll:.1f} & {r:.3f} & {rmse:.3f} & {ce:.3f} & {t:.2f} \\\\'
     mb = subrow(out, 'metabeta')
     nuts = subrow(out, 'nuts')
     advi = subrow(out, 'advi')
@@ -211,7 +212,22 @@ def tablerow(out: dict) -> str:
     nuts_name = '\\texttt{HMC}'
     advi_name = '\\texttt{VI}'
     return f'{cfg.d} & {cfg.q} & {mb_name} & {mb}\n  &   & {nuts_name} & {nuts}\n  &   & {advi_name} & {advi}'
-    
+
+# table 2
+def tablerow2(out: dict) -> str:
+    def subrow(out: dict, name: str):
+        nll = out[name]['nll']
+        t = out[name]['duration']['single']
+        t /= 4 if name in ['nuts', 'advi'] else t # single core four chains
+        return f'{nll:.1f} & {t:.2f} \\\\'
+    mb = subrow(out, 'metabeta')
+    nuts = subrow(out, 'nuts')
+    advi = subrow(out, 'advi')
+    mb_name = '\\texttt{metabeta}'
+    nuts_name = '\\texttt{HMC}'
+    advi_name = '\\texttt{VI}'
+    return f'{cfg.d} & {cfg.q} & {mb_name} & {mb}\n  &   & {nuts_name} & {nuts}\n  &   & {advi_name} & {advi}'
+
 
 # -----------------------------------------------------------------------------
 # refinements
@@ -680,7 +696,7 @@ if __name__ == '__main__':
         with open(Path(results_path, data_type+'.yaml'), 'w') as f:
             yaml.dump(out, f, sort_keys=False)
         
-        print(tablerow(out))
+        print(tablerow1(out))
     
     # -------------------------------------------------------------------------
     # sub-sampled real data (with MCMC estimates)
@@ -713,4 +729,5 @@ if __name__ == '__main__':
         out = reduce(deepMerge, outputs, {})
         with open(Path(results_path, data_type+'.yaml'), 'w') as f:
             yaml.dump(out, f, sort_keys=False)
+        print(f'{out['metabeta']['nll']:.1f}, {out['nuts']['nll']:.1f}, {out['advi']['nll']:.1f})')
         
