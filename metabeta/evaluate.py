@@ -634,25 +634,26 @@ if __name__ == '__main__':
 
     # -------------------------------------------------------------------------
     # validation set for calibration
-    data_type = 'val'
-    
-    # --- load data
-    fn_val = dsFilename('mfx', data_type, 1,
-                        model_cfg['general']['m'], model_cfg['general']['n'],
-                        cfg.d, cfg.q, 
-                        size=cfg.bs_val, tag=cfg.d_tag)
-    dl_val = getDataLoader(fn_val, cfg.bs_val,
-                           max_d=cfg.d,
-                           max_q=cfg.q,
-                           permute=False, autopad=True, device=device)
-    ds_val = next(iter(dl_val))
-    
-    
-    # --- run and refine model
-    if cfg.calibrate:
-        print('\nInference on validation set...')
-        results_val = run(model, ds_val)
-        calibrate(model, results_val)
+    if not cfg.sub:
+        data_type = 'val'
+        
+        # --- load data
+        fn_val = dsFilename('mfx', data_type, 1,
+                            model_cfg['general']['m'], model_cfg['general']['n'],
+                            cfg.d, cfg.q, 
+                            size=cfg.bs_val, tag=cfg.d_tag)
+        dl_val = getDataLoader(fn_val, cfg.bs_val,
+                               max_d=cfg.d,
+                               max_q=cfg.q,
+                               permute=False, autopad=True, device=device)
+        ds_val = next(iter(dl_val))
+        
+        
+        # --- run and refine model
+        if cfg.calibrate:
+            print('\nInference on validation set...')
+            results_val = run(model, ds_val)
+            calibrate(model, results_val)
     
     
     # -------------------------------------------------------------------------
