@@ -23,16 +23,16 @@ def setup() -> argparse.Namespace:
  
     # misc
     parser.add_argument('-s', '--seed', type=int, default=42, help='model seed (default = 42)')
-    parser.add_argument('--device', type=str, default='cuda', help='device to use [cpu, cuda, mps], (default = mps)')
+    parser.add_argument('--device', type=str, default='mps', help='device to use [cpu, cuda, mps], (default = mps)')
     parser.add_argument('--cores', type=int, default=8, help='number of processor cores to use (default = 8)')
     parser.add_argument('--plot', action='store_true', help='plot sampling results (default = True)')
     parser.add_argument('--save', type=int, default=10, help='save model every #p iterations (default = 10)')
 
     # model
-    parser.add_argument('-d', type=int, default=3, help='Maximum number of fixed effects (intercept + slopes)')
+    parser.add_argument('-d', type=int, default=2, help='Maximum number of fixed effects (intercept + slopes)')
     parser.add_argument('-q', type=int, default=1, help='Maximum number of random effects (intercept + slopes)')
-    parser.add_argument('--d_tag', type=str, default='all', help='suffix for data ID (default = '')')
-    parser.add_argument('--m_tag', type=str, default='all', help='suffix for model ID (default = '')')
+    parser.add_argument('--d_tag', type=str, default='toy', help='suffix for data ID (default = '')')
+    parser.add_argument('--m_tag', type=str, default='toy', help='suffix for model ID (default = '')')
     parser.add_argument('--c_tag', type=str, default='default', help='name of model config file')
     parser.add_argument('-l', '--load', type=int, default=0, help='load model from iteration #p')
 

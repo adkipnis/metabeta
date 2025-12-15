@@ -32,11 +32,11 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--semi', action='store_true', help='Generate semi-synthetic data (default = False)')
     parser.add_argument('--sub', action='store_true', help='Generate sub-sampled real data (default = False)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD for semi-synthetic data (default = False)')
-    parser.add_argument('--cache', action='store_false', help='Save each fitted dataset separately to cache (default = True)')
+    parser.add_argument('--cache', action='store_true', help='Save each fitted dataset separately to cache (default = False)')
     parser.add_argument('--slurm', action='store_true', help='Turn off multiprocessing for slurm (default = False)')
     parser.add_argument('-s', '--seed', type=int, default=42, help='Seed for PyMC fit (default = 42)')
     parser.add_argument('-b', '--begin', type=int, default=0, help='Begin with iteration number #b.')
-    parser.add_argument('-i', '--iterations', type=int, default=10, help='Number of dataset partitions to generate.')
+    parser.add_argument('-i', '--iterations', type=int, default=0, help='Number of dataset partitions to generate.')
     return parser.parse_args()
 
 # -----------------------------------------------------------------------------

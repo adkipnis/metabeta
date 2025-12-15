@@ -17,7 +17,7 @@ from metabeta.data.interface import RealDataset
 from metabeta.data.sgld import SGLD
 from metabeta import plot
 
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
 def choice(x: list):
     idx = torch.randint(len(x), (1,))
     return x[idx]
