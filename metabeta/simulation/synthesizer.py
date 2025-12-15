@@ -1,0 +1,121 @@
+import numpy as np
+from dataclasses import dataclass
+from torch.distributions import LKJCholesky
+from metabeta.simulation.utils import checkBinary, counts2groups
+from metabeta.simulation.distributions import (
+    Normal, Student, LogNormal, Uniform,
+    ScaledBeta, Bernoulli, NegativeBinomial,
+)
+
+dist_dict = {
+    Normal: 0.05,
+    Student: 0.25,
+    LogNormal: 0.05,
+    Uniform: 0.05,
+    ScaledBeta: 0.15,
+    Bernoulli: 0.20,
+    NegativeBinomial: 0.15,
+}
+probs = np.array(list(dist_dict.values()))
+dists = np.array(list(dist_dict.keys()))
+
+@dataclass
+class Synthesizer:
+    ''' sample a design matrix and groups using synthetic distributions '''
+    rng: np.random.Generator | np.random.SeedSequence
+    toy: bool = False
+    correlate: bool = True
+
+    def _induceCorrelation(self, x: np.ndarray) -> np.ndarray:
+        # x (n, d), L (d, d)
+
+        # get continuous columns
+        cont_cols = ~checkBinary(x)
+        d_ = cont_cols.sum()
+        if d_ < 2:
+            return x
+        x_ = x[:, cont_cols]
+
+        # get lower triangular of corr matrix (not batchable due to changing d_)
+        L = LKJCholesky(d_, concentration=5.).sample().numpy().astype(np.float64)
+
+        # normalize
+        mean = np.mean(x_, axis=1, keepdims=True)
+        std = np.std(x_, axis=1, keepdims=True)
+        x_ = (x_-mean)/std
+
+        # correlate continuous
+        x_cor = (x_ @ L.T) * std + mean
+        x[:, cont_cols] = x_cor
+
+        return x
+
+
+    def _sample(self, n: int, d: int) -> np.ndarray:
+        # init design matrix
+        x = np.zeros((n, d))
+        x[..., 0] = 1.
+
+        # toy samples
+        if self.toy:
+            x[..., 1:] = np.random.normal(size=(n, d-1))
+            return x
+
+        # choose distributions
+        dist_idx = np.random.randint(0, len(dists), size=(d-1,))
+        sample_dists = dists[dist_idx]
+
+        # sample covariates from chosen distributions
+        samples = [D(self.rng).sample(n) for D in sample_dists]
+        samples = np.column_stack(samples)
+        if self.correlate:
+            samples = self._induceCorrelation(samples)
+        x[..., 1:] = samples
+        return x
+
+
+    def sample(self, d: int, ns: np.ndarray) -> dict[str, np.ndarray]:
+        n = int(ns.sum())
+        x = self._sample(n, d)
+        groups = counts2groups(ns)
+        return {'X': x, 'groups': groups}
+
+
+# -----------------------------------------------------------------------------
+if __name__ == '__main__':
+    import time
+    from tqdm import tqdm
+    from joblib import Parallel, delayed
+
+    b = 4096
+    n = 1000
+    d = 12
+    seed = 0
+
+    _ = np.random.seed(seed)
+    main_seed = np.random.SeedSequence(seed)
+    seeds = main_seed.spawn(b)
+
+    # --- sequential
+    t0 = time.perf_counter()
+    for rng in tqdm(seeds):
+        Synthesizer(rng)._sample(n, d)
+    t1 = time.perf_counter()
+    print(f'\n{t1-t0:.2f}s used for sequential sampling.')
+
+    # --- parallel
+    def sample_batch(rng):
+        return Synthesizer(rng)._sample(n, d)
+    t0 = time.perf_counter()
+    results = Parallel(n_jobs=-1)(
+        delayed(sample_batch)(rng) for rng in tqdm(seeds)
+        )
+    t1 = time.perf_counter()
+    print(f'\n{t1-t0:.2f}s used for parallel sampling.')
+
+    # --- outer wrapper
+    from metabeta.simulation.utils import sampleCounts
+    ns = sampleCounts(n, 10)
+    rng = np.random.default_rng(seed)
+    Synthesizer(rng).sample(d, ns)
+
