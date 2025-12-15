@@ -24,23 +24,26 @@ class Prior:
         self.q = len(self.tau_rfx) # number of random effects
 
     def _sampleFfx(self) -> np.ndarray:
-        ffx = norm(self.nu_ffx, self.tau_ffx).rvs(random_state=self.rng)
+        ffx = norm(self.nu_ffx, self.tau_ffx).rvs(size=self.nu_ffx.shape,
+                                                  random_state=self.rng)
         return ffx
 
     def _sampleSigmaRfx(self) -> np.ndarray:
-        sigma_rfx = norm(0, self.tau_rfx).rvs(random_state=self.rng)
+        sigma_rfx = norm(0, self.tau_rfx).rvs(size=self.tau_rfx.shape,
+                                              random_state=self.rng)
         return np.abs(sigma_rfx)
 
     def _sampleSigmaEps(self) -> np.ndarray:
-        sigma_eps = t(4, 0, self.tau_eps).rvs(random_state=self.rng)
+        sigma_eps = t(4, 0, self.tau_eps).rvs(size=self.tau_eps.shape,
+                                              random_state=self.rng)
         return np.abs(sigma_eps)
 
     def _sampleRfx(self, m: int, sigma_rfx: np.ndarray) -> np.ndarray:
         # m: number of groups
-        b, q = sigma_rfx.shape
-        size = (b, m, q)
+        q = len(sigma_rfx)
+        size = (m, q)
         rfx = norm(0, 1).rvs(size, random_state=self.rng)
-        rfx = standardize(rfx, axis=1) * sigma_rfx[:, None]
+        rfx = standardize(rfx, axis=0) * sigma_rfx[None, :]
         return rfx
  
     def sample(self, m: int) -> dict[str, np.ndarray]:
@@ -56,15 +59,10 @@ if __name__ == '__main__':
     _ = np.random.seed(seed)
     rng = np.random.default_rng(seed)
  
-    b = 32
     d, q = 3, 1
     m = 10
 
-    nu_ffx = np.random.uniform(-3, 3, (b,d))
-    tau_ffx = np.random.uniform(0, 3, (b,d))
-    tau_rfx = np.random.uniform(0, 3, (b,q))
-    tau_eps = np.random.uniform(0, 3, (b,))
-
-    prior = Prior(nu_ffx, tau_ffx, tau_rfx, tau_eps, rng=rng)
+    hyperparams = hypersample(d, q)
+    prior = Prior(*hyperparams, rng=rng)
     params = prior.sample(m)
 
