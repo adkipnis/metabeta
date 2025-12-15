@@ -1,1 +1,0 @@
-from setuptools import setup, find_packagessetup(    name='metabeta',    version='0.0.1',    description='Amortized Bayesian Mixed-Effects Regression',    author='Alex Kipnis',    packages=find_packages(),)
