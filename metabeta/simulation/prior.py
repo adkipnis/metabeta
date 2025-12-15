@@ -3,6 +3,14 @@ import numpy as np
 from scipy.stats import norm, t
 from metabeta.simulation.utils import standardize
 
+def hypersample(d: int, q: int, b: int = 1):
+    # sample hyperparameters needed for prior
+    nu_ffx = np.random.uniform(-3, 3, (d,))
+    tau_ffx = np.random.uniform(0, 3, (d,))
+    tau_rfx = np.random.uniform(0, 3, (q,))
+    tau_eps = np.random.uniform(0, 3, (1,))
+    return nu_ffx, tau_ffx, tau_rfx, tau_eps
+
 @dataclass
 class Prior:
     nu_ffx: np.ndarray
