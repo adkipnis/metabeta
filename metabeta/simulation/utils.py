@@ -2,13 +2,19 @@ from dataclasses import dataclass
 import numpy as np
 
 # --- standardization
-def moments(x: np.ndarray, axis: int) -> tuple[np.ndarray, np.ndarray]:
+def moments(x: np.ndarray, axis: int,
+            exclude: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     mean = x.mean(axis, keepdims=True)
     std = x.std(axis, keepdims=True)
+    if exclude is not None:
+        exclude = exclude.reshape(mean.shape)
+        mean[exclude] = 0
+        std[exclude] = 1
     return mean, std
 
-def standardize(x: np.ndarray, axis: int) -> np.ndarray:
-    mean, std = moments(x, axis)
+def standardize(x: np.ndarray, axis: int, exclude_binary: bool = True) -> np.ndarray:
+    exclude = checkBinary(x, axis=axis) if exclude_binary else None
+    mean, std = moments(x, axis, exclude=exclude)
     return (x - mean) / std
 
 @dataclass
