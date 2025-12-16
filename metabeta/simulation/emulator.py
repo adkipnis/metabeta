@@ -1,8 +1,8 @@
 from pathlib import Path
 import numpy as np
 from dataclasses import dataclass
-from metabeta.simulation.utils import checkConstant, sampleCounts, counts2groups
 from metabeta.simulation.sgld import SGLD
+from metabeta.simulation.utils import checkConstant, sampleCounts, counts2groups
 
 
 def loadDataset(source: Path) -> dict:
