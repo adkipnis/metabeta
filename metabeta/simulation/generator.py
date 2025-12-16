@@ -58,3 +58,47 @@ class Generator:
         cov_sum = cov.sum() - cov[0,0]
         return cov_sum
 
+    def sample(self) -> dict[str, np.ndarray]:
+        # sample parameters
+        params = self.prior.sample(self.m)
+
+        # sample and standardize observations
+        obs = self.design.sample(self.d, self.ns)
+        obs['X'] = standardize(obs['X'], axis=0, exclude_binary=True)
+
+        # sample outcomes and normalize to unit SD
+        y = sampleOutcomes(params, obs)
+        sd = y.std(0)
+        y /= sd
+
+        # normalize parameters
+        params = {k: v/sd for k,v in params.items()}
+
+        # normalize hyperparameters (our priors are scale families)
+        hyperparams = {k: v/sd for k,v in self.prior.params.items()}
+
+        # bundle
+        out = {
+            # parameters
+            **params,
+            **hyperparams,
+
+            # observations
+            **obs,
+            'y': y,
+
+            # dimensions
+            'm': self.m,
+            'n': len(y),
+            'ns': self.ns,
+            'd': self.d,
+            'q': self.q,
+
+            # miscellanious
+            'r_squared': 1 - params['sigma_eps']**2,
+            'cov_sum': self._covsum(params, obs),
+        }
+
+        return out
+
+
