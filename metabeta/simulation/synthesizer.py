@@ -21,7 +21,7 @@ dists = np.array(list(dist_dict.keys()))
 
 @dataclass
 class Synthesizer:
-    ''' sample a design matrix and groups using synthetic distributions '''
+    ''' class for sampling a design matrix and groups using synthetic distributions '''
     rng: np.random.Generator | np.random.SeedSequence
     toy: bool = False
     correlate: bool = True
