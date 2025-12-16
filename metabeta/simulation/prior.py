@@ -3,8 +3,8 @@ import numpy as np
 from scipy.stats import norm, t
 from metabeta.simulation.utils import standardize
 
-def hypersample(d: int, q: int, b: int = 1):
-    # sample hyperparameters needed for prior
+def hypersample(d: int, q: int):
+    ''' sample hyperparameters to instantiate prior '''
     nu_ffx = np.random.uniform(-3, 3, (d,))
     tau_ffx = np.random.uniform(0, 3, (d,))
     tau_rfx = np.random.uniform(0, 3, (q,))
@@ -13,6 +13,7 @@ def hypersample(d: int, q: int, b: int = 1):
 
 @dataclass
 class Prior:
+    ''' class for drawing parameters from prior '''
     nu_ffx: np.ndarray
     tau_ffx: np.ndarray
     tau_rfx: np.ndarray
@@ -24,18 +25,21 @@ class Prior:
         self.q = len(self.tau_rfx) # number of random effects
 
     def _sampleFfx(self) -> np.ndarray:
-        ffx = norm(self.nu_ffx, self.tau_ffx).rvs(size=self.nu_ffx.shape,
-                                                  random_state=self.rng)
+        dist = norm(self.nu_ffx, self.tau_ffx)
+        ffx = dist.rvs(size=self.nu_ffx.shape,
+                       random_state=self.rng)
         return ffx
 
     def _sampleSigmaRfx(self) -> np.ndarray:
-        sigma_rfx = norm(0, self.tau_rfx).rvs(size=self.tau_rfx.shape,
-                                              random_state=self.rng)
+        dist = norm(0, self.tau_rfx)
+        sigma_rfx = dist.rvs(size=self.tau_rfx.shape,
+                             random_state=self.rng)
         return np.abs(sigma_rfx)
 
     def _sampleSigmaEps(self) -> np.ndarray:
-        sigma_eps = t(4, 0, self.tau_eps).rvs(size=self.tau_eps.shape,
-                                              random_state=self.rng)
+        dist = t(4, 0, self.tau_eps)
+        sigma_eps = dist.rvs(size=self.tau_eps.shape,
+                             random_state=self.rng)
         return np.abs(sigma_eps)
 
     def _sampleRfx(self, m: int, sigma_rfx: np.ndarray) -> np.ndarray:
