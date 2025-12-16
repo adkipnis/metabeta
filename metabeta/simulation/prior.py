@@ -3,26 +3,25 @@ import numpy as np
 from scipy.stats import norm, t
 from metabeta.simulation.utils import standardize
 
-def hypersample(d: int, q: int):
+def hypersample(d: int, q: int) -> dict[str, np.ndarray]:
     ''' sample hyperparameters to instantiate prior '''
-    nu_ffx = np.random.uniform(-3, 3, (d,))
-    tau_ffx = np.random.uniform(0, 3, (d,))
-    tau_rfx = np.random.uniform(0, 3, (q,))
-    tau_eps = np.random.uniform(0, 3, (1,))
-    return nu_ffx, tau_ffx, tau_rfx, tau_eps
+    out = {}
+    out['nu_ffx'] = np.random.uniform(-3, 3, (d,))
+    out['tau_ffx'] = np.random.uniform(0, 3, (d,))
+    out['tau_rfx'] = np.random.uniform(0, 3, (q,))
+    out['tau_eps'] = np.random.uniform(0, 3)
+    return out
+
 
 @dataclass
 class Prior:
     ''' class for drawing parameters from prior '''
-    nu_ffx: np.ndarray
-    tau_ffx: np.ndarray
-    tau_rfx: np.ndarray
-    tau_eps: np.ndarray
+    params: dict[str, np.ndarray]
     rng: np.random.Generator
 
     def __post_init__(self):
-        self.d = len(self.tau_ffx) # number of fixed effects
-        self.q = len(self.tau_rfx) # number of random effects
+        self.d = len(self.params['tau_ffx']) # number of fixed effects
+        self.q = len(self.params['tau_rfx']) # number of random effects
 
     def _sampleFfx(self) -> np.ndarray:
         dist = norm(self.nu_ffx, self.tau_ffx)
