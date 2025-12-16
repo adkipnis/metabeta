@@ -4,7 +4,7 @@ from metabeta.simulation.utils import standardize
 from metabeta.simulation import Prior, Synthesizer, Emulator
 
 
-def sampleOutcomes(
+def simulate(
     parameters: dict[str, np.ndarray],
     observations: dict[str, np.ndarray],
     ) -> np.ndarray:
@@ -32,7 +32,7 @@ def sampleOutcomes(
 
 
 @dataclass
-class Generator:
+class Simulator:
     prior: Prior
     design: Synthesizer | Emulator
     ns: np.ndarray # number of observations per group
@@ -67,7 +67,7 @@ class Generator:
         obs['X'] = standardize(obs['X'], axis=0, exclude_binary=True)
 
         # sample outcomes and normalize to unit SD
-        y = sampleOutcomes(params, obs)
+        y = simulate(params, obs)
         sd = y.std(0)
         y /= sd
 
@@ -76,6 +76,12 @@ class Generator:
 
         # normalize hyperparameters (our priors are scale families)
         hyperparams = {k: v/sd for k,v in self.prior.params.items()}
+
+        # optional plot
+        if self.plot:
+            data = np.concat([y[:, None], obs['X'][:, 1:]], axis=-1)
+            names = ['y'] + [f'x{j}' for j in range(1, self.d)]
+            # plot.dataset(data, names)
 
         # bundle
         out = {
@@ -128,9 +134,9 @@ if __name__ == '__main__':
     params = prior.sample(m)
 
     # forward pass
-    y = sampleOutcomes(params, obs)
+    y = simulate(params, obs)
 
-    # generator object
-    generator = Generator(prior, synthesizer, ns, plot=False)
-    dataset = generator.sample()
+    # simulator object
+    simulator = Simulator(prior, synthesizer, ns, plot=False)
+    dataset = simulator.sample()
 
