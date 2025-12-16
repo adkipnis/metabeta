@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import numpy as np
 from metabeta.simulation.utils import standardize
 from metabeta.simulation import Prior, Synthesizer, Emulator
+from metabeta import plot
 
 
 def simulate(
@@ -81,7 +82,7 @@ class Simulator:
         if self.plot:
             data = np.concat([y[:, None], obs['X'][:, 1:]], axis=-1)
             names = ['y'] + [f'x{j}' for j in range(1, self.d)]
-            # plot.dataset(data, names)
+            plot.dataset(data, names)
 
         # bundle
         out = {
@@ -137,6 +138,6 @@ if __name__ == '__main__':
     y = simulate(params, obs)
 
     # simulator object
-    simulator = Simulator(prior, synthesizer, ns, plot=False)
+    simulator = Simulator(prior, synthesizer, ns, plot=True)
     dataset = simulator.sample()
 
