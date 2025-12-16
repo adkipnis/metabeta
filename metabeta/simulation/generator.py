@@ -102,3 +102,35 @@ class Generator:
         return out
 
 
+# -----------------------------------------------------------------------------
+if __name__ == '__main__':
+    from metabeta.simulation.utils import sampleCounts
+    from metabeta.simulation import hypersample
+
+    # set seed
+    seed = 0
+    _ = np.random.seed(seed)
+    rng = np.random.default_rng(seed)
+
+    # dims
+    n = 100
+    m = 5
+    d = 3
+    q = 2
+    ns = sampleCounts(n, m)
+
+    # sample observations
+    synthesizer = Synthesizer(rng)
+    obs = synthesizer.sample(d, ns)
+
+    # sample parameters
+    prior = Prior(hypersample(d, q), rng=rng)
+    params = prior.sample(m)
+
+    # forward pass
+    y = sampleOutcomes(params, obs)
+
+    # generator object
+    generator = Generator(prior, synthesizer, ns, plot=False)
+    dataset = generator.sample()
+
