@@ -2,8 +2,10 @@ from dataclasses import dataclass
 import numpy as np
 
 # --- standardization
-def moments(x: np.ndarray, axis: int,
-            exclude: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+def moments(x: np.ndarray,
+            axis: int,
+            exclude: np.ndarray | None = None,
+            ) -> tuple[np.ndarray, np.ndarray]:
     mean = x.mean(axis, keepdims=True)
     std = x.std(axis, keepdims=True)
     if exclude is not None:
@@ -12,17 +14,24 @@ def moments(x: np.ndarray, axis: int,
         std[exclude] = 1
     return mean, std
 
-def standardize(x: np.ndarray, axis: int, exclude_binary: bool = True) -> np.ndarray:
+
+def standardize(x: np.ndarray,
+                axis: int,
+                exclude_binary: bool = True,
+                ) -> np.ndarray:
     exclude = checkBinary(x, axis=axis) if exclude_binary else None
     mean, std = moments(x, axis, exclude=exclude)
     return (x - mean) / std
 
+
 @dataclass
 class Standardizer:
     axis: int
+    exclude_binary: bool = True
 
     def forward(self, x: np.ndarray) -> np.ndarray:
-        self.mean, self.std = moments(x, self.axis)
+        exclude = checkBinary(x, axis=self.axis) if self.exclude_binary else None
+        self.mean, self.std = moments(x, self.axis, exclude=exclude)
         return (x - self.mean) / self.std
 
     def backward(self, x: np.ndarray) -> np.ndarray:
