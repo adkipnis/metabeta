@@ -30,3 +30,18 @@ def sampleOutcomes(
     y = X @ ffx + (Z * rfx[groups]).sum(-1) + eps
     return y
 
+
+@dataclass
+class Generator:
+    prior: Prior
+    design: Synthesizer | Emulator
+    ns: np.ndarray # number of observations per group
+    plot: bool = False
+
+    def __post_init__(self):
+        self.d = self.prior.d # number of ffx
+        self.q = self.prior.q # number of rfx
+        self.m = len(self.ns)
+        if isinstance(self.ns, list):
+            self.ns = np.array(self.ns)
+
