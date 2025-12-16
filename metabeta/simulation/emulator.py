@@ -6,6 +6,7 @@ from metabeta.simulation.sgld import SGLD
 
 
 def loadDataset(source: Path) -> dict:
+    ''' wrapper for loading preprocessed npz dataset '''
     restore = lambda v: v.item() if v.shape == () else v
 
     # load preprocessed dataset
@@ -33,7 +34,7 @@ DATABASE = [loadDataset(source=path) for path in PATHS]
 
 @dataclass
 class Emulator:
-    ''' subsample a design matrix and groups from source '''
+    ''' class for sampling a design matrix and groups from source dataset '''
     source: str
     use_sgld: bool = True
     sgld = SGLD()
@@ -147,7 +148,7 @@ if __name__ == '__main__':
     import time
     from tqdm import tqdm
     from joblib import Parallel, delayed
-    
+
     seed = 1
     _ = np.random.seed(seed)
     b = 128
@@ -159,14 +160,14 @@ if __name__ == '__main__':
     groups = counts2groups(ns)
     emulator = Emulator(source='math')
     out = emulator.sample(d, ns)
-    
+
     # --- sequential
     t0 = time.perf_counter()
     for _ in tqdm(range(b)):
         Emulator(source='math').sample(d, ns)
     t1 = time.perf_counter()
     print(f'\n{t1-t0:.2f}s used for sequential sampling.')
-    
+
     # --- parallel
     t0 = time.perf_counter()
     results = Parallel(n_jobs=-1)(
