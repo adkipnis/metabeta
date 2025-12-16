@@ -45,3 +45,16 @@ class Generator:
         if isinstance(self.ns, list):
             self.ns = np.array(self.ns)
 
+    def _covsum(self,
+                parameters: dict[str, np.ndarray],
+                observations: dict[str, np.ndarray],
+                ) -> float:
+        ''' get sum of covariance matrix (minus the first element) '''
+        rfx = parameters['rfx']
+        q = rfx.shape[1]
+        Z = observations['X'][:, :q]
+        weighted_rfx = Z.mean(0, keepdims=True) * rfx
+        cov = np.cov(weighted_rfx, rowvar=False)
+        cov_sum = cov.sum() - cov[0,0]
+        return cov_sum
+
