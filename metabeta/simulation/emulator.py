@@ -36,7 +36,7 @@ DATABASE = [loadDataset(source=path) for path in PATHS]
 class Emulator:
     ''' class for sampling a design matrix and groups from source dataset '''
     source: str
-    use_sgld: bool = True
+    use_sgld: bool = False
     sgld = SGLD()
 
 

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import numpy as np
 from metabeta.simulation.utils import standardize
-from metabeta.simulation import Prior, Synthesizer, Emulator
+from metabeta.simulation import Prior, Synthesizer, Emulator, emulator
 from metabeta import plot
 
 
@@ -115,7 +115,7 @@ if __name__ == '__main__':
     from metabeta.simulation import hypersample
 
     # set seed
-    seed = 0
+    seed = 1
     _ = np.random.seed(seed)
     rng = np.random.default_rng(seed)
 
@@ -126,18 +126,25 @@ if __name__ == '__main__':
     q = 2
     ns = sampleCounts(n, m)
 
-    # sample observations
-    synthesizer = Synthesizer(rng)
-    obs = synthesizer.sample(d, ns)
-
+    # --- test: simulate
     # sample parameters
     prior = Prior(hypersample(d, q), rng=rng)
     params = prior.sample(m)
+ 
+    # sample observations
+    design = Synthesizer(rng)
+    obs = design.sample(d, ns)
 
     # forward pass
     y = simulate(params, obs)
 
-    # simulator object
-    simulator = Simulator(prior, synthesizer, ns, plot=True)
-    dataset = simulator.sample()
+    # --- test: simulator
+    # simulator 1
+    simulator1 = Simulator(prior, design, ns, plot=True)
+    dataset1 = simulator1.sample()
+
+    # simulator 2
+    design = Emulator('math')
+    simulator2 = Simulator(prior, design, ns, plot=True)
+    dataset2 = simulator2.sample()
 
