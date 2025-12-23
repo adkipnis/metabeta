@@ -11,3 +11,4 @@ raw
 *.npz
 *.rdata
 *.Rhistory
+*.pdf
