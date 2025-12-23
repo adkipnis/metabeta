@@ -114,6 +114,15 @@ class Categorical(Stochastic):
         x = F.one_hot(x, num_classes=self.n_out + 1)[..., 1:]
         return x
 
+
+class Poisson(Stochastic):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.preprocess(x)[..., 0]
+        lam = x.exp()
+        x = torch.poisson(lam)
+        return x
+
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return D.Gamma(2, x.exp()).sample().sqrt()
 
