@@ -77,10 +77,12 @@ class QuantileBins(Base):
         return x
 
 
-class Geometric(nn.Module):
+class Rank(Base):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        p = torch.sigmoid(x) + 1e-9
-        return D.Geometric(probs=p).sample().sqrt()
+        k = min(self.n_out, x.shape[-1])
+        x = torch.topk(x, k).indices
+        return x
+
 
 class Gamma(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
