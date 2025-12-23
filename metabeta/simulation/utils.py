@@ -3,7 +3,7 @@ import numpy as np
 
 # --- standardization
 def moments(x: np.ndarray,
-            axis: int,
+            axis: int = 0,
             exclude: np.ndarray | None = None,
             ) -> tuple[np.ndarray, np.ndarray]:
     mean = x.mean(axis, keepdims=True)
@@ -16,7 +16,7 @@ def moments(x: np.ndarray,
 
 
 def standardize(x: np.ndarray,
-                axis: int,
+                axis: int = 0,
                 exclude_binary: bool = True,
                 ) -> np.ndarray:
     exclude = checkBinary(x, axis=axis) if exclude_binary else None
@@ -26,7 +26,7 @@ def standardize(x: np.ndarray,
 
 @dataclass
 class Standardizer:
-    axis: int
+    axis: int = 0
     exclude_binary: bool = True
 
     def forward(self, x: np.ndarray) -> np.ndarray:
