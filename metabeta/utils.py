@@ -16,3 +16,25 @@ def setSeed(s: int) -> np.random.Generator:
     rng = np.random.default_rng(s)
     return rng
 
+# --- name utils
+def dataname(
+    d: int, # max number of fixed effects
+    q: int, # max number of random effects
+    m: int, # max number of groups
+    n: int, # max number of observations per group
+    b: int, # batch size
+    p: int = 0, # partition number for trainin set
+    fx_type: str = 'mfx',
+    p_type: str = 'train', # [train, val, test]
+    tag: str = '',
+) -> str:
+    if tag:
+        tag += '-'
+    if p:
+        assert p_type == 'train'
+        part = f'-part={p}'
+    else:
+        part = ''
+    return f'{fx_type}-{p_type}-{tag}d={d}-q={q}-m={m}-n={n}-b={b}{part}.npz'
+
+# --- sampling
