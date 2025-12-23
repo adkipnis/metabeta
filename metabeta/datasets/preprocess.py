@@ -220,8 +220,9 @@ def wrapper(ds_name: str,
             target_name: str = 'y',
             group_name: str = '',
             partition: str = 'auto',
-            save: bool = True):
-    assert partition in ['train', 'test', 'auto']
+            save: bool = True,
+            plot_ds: bool = True):
+    assert partition in ['validation', 'test', 'auto']
 
     # import data
     fn = Path(root, 'parquet', f'{ds_name}.parquet')
@@ -244,7 +245,7 @@ def wrapper(ds_name: str,
 
     # determine partition
     if partition == 'auto':
-        partition = 'train' if data['groups'] is None else 'test'
+        partition = 'validation' if data['groups'] is None else 'test'
 
     # save
     if save:
@@ -271,7 +272,7 @@ def batchprocess(root: str, group_name: str = '', partition: str = 'auto'):
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
     # init preprocessed directory
-    Path('preprocessed', 'train').mkdir(parents=True, exist_ok=True)
+    Path('preprocessed', 'validation').mkdir(parents=True, exist_ok=True)
     Path('preprocessed', 'test').mkdir(parents=True, exist_ok=True)
 
     # r-package datasets
