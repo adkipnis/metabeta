@@ -223,3 +223,44 @@ class GP(nn.Module):
         return phi @ self.weight
 
 simple_activations = [
+    nn.Identity,
+    nn.ReLU,
+    nn.ReLU6,
+    nn.LeakyReLU,
+    nn.SELU,
+    nn.SiLU,
+    nn.ELU,
+    nn.Sigmoid,
+    nn.Tanh,
+    nn.Hardtanh,
+    nn.Softplus,
+    Abs,
+    Square,
+    SqrtAbs,
+    Exp,
+    LogAbs,
+    SE,
+    Sine,
+    Cos,
+    Mod,
+    Sign,
+    Step,
+    UnitInterval,
+    # Bernoulli,
+    # Poisson,
+    # Geometric,
+    # Gamma,
+    # Beta,
+]
+
+def getActivations():
+    activations = simple_activations.copy()
+    activations += [GP] * 12
+    activations = [RandomScaleFactory(act) for act in activations]
+    ks = [2 ** logUniform(0.1, 4, round=True)
+          for _ in range(len(activations))]
+    out = [RandomChoiceFactory(activations, k) for k in ks]
+    return out
+
+
+if __name__ == '__main__':
