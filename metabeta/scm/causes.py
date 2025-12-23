@@ -24,3 +24,37 @@ class CauseSampler(nn.Module):
             self.sigma = (torch.randn(n_causes) * self.mu).abs()
 
     def _normal(self, shape: Iterable) -> torch.Tensor:
+        x = torch.randn(*shape)
+        if not self.fixed:
+            mu, sigma = self.mu.unsqueeze(0), self.sigma.unsqueeze(0)
+            x = mu + x * sigma
+        return x
+
+    def _uniform(self, shape: Iterable) -> torch.Tensor:
+        x = torch.rand(*shape)
+        if not self.fixed:
+            mu, sigma = self.mu.unsqueeze(0), self.sigma.unsqueeze(0)
+            x = mu + (x-0.5) * sigma * np.sqrt(12)
+        return x
+
+    def _multinomial(self, shape: Iterable) -> torch.Tensor:
+        n, d = shape
+        n_categories = np.random.randint(2, 20)
+        probs = torch.rand((d, n_categories))
+        x = torch.multinomial(probs, n, replacement=True).permute(1,0).float()
+        x = (x - x.mean(0)) / x.std(0)
+        if not self.fixed:
+            mu, sigma = self.mu.unsqueeze(0), self.sigma.unsqueeze(0)
+            x = mu + x * sigma
+        return x
+
+    def _zipf(self, shape: Iterable) -> torch.Tensor:
+        a = 2 * np.random.rand() + 2
+        x = np.random.zipf(a, shape) # type: ignore
+        x = torch.tensor(x).clamp(max=10).float()
+        x = (x - x.mean(0)) / x.std(0)
+        if not self.fixed:
+            mu, sigma = self.mu.unsqueeze(0), self.sigma.unsqueeze(0)
+            x = mu + x * sigma
+        return x
+
