@@ -92,3 +92,37 @@ class SCM(nn.Module):
         return nn.Sequential(affine_layer, noise_layer, self.activation())
 
 
+    def _initLayers(self):
+        # init linear weights either with regular droput or blockwise dropout
+        for i, (_, param) in enumerate(self.layers.named_parameters()):
+            if param.dim() == 2: # skip biases
+                if self.blockwise:
+                    self._initLayerBlockDropout(param)
+                else:
+                    self._initLayer(param, i>0)
+
+
+    def _initLayer(self, param, use_dropout: bool = True) -> None:
+        p = self.p_dropout if use_dropout else 0.
+        p = min(p, 0.99)
+        sigma_w = self.sigma_w / ((1 - p) ** 0.5)
+        nn.init.normal_(param, std=sigma_w)
+        param *= torch.bernoulli(torch.full_like(param, 1 - p))
+
+
+    def _initLayerBlockDropout(self, param) -> None:
+        # blockwise weight dropout for higher dependency between features
+        nn.init.zeros_(param)
+        max_blocks = np.ceil(np.sqrt(min(param.shape)))
+        n_blocks = np.random.randint(1, max_blocks)
+        block_size = [dim // n_blocks for dim in param.shape]
+        units_per_block = block_size[0] * block_size[1]
+        keep_prob = (n_blocks * units_per_block) / param.numel()
+        sigma_w = self.sigma_w / (keep_prob**0.5)
+        for block in range(n_blocks):
+            block_slice = tuple(slice(dim * block, dim * (block + 1))
+                                for dim in block_size)
+            nn.init.normal_(param[block_slice], std=sigma_w)
+
+
+    def sample(self) -> torch.Tensor:
