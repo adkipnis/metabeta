@@ -1,6 +1,8 @@
 from pathlib import Path
 import pandas as pd
 import numpy as np
+from metabeta.plot import plot
+from matplotlib import pyplot as plt
 
 BLACKLIST = 'year age height size n_ num_ number max min attempts begin end name'.split(' ')
 GREENLIST = 'country state school education class industry occupation race sport brand genre color weekday date'.split(' ')
@@ -250,6 +252,11 @@ def wrapper(ds_name: str,
         np.savez_compressed(fn, **data)
         print(f'Saved to {fn}')
 
+    # plot
+    if plot_ds and np.prod(df.shape) < 1e6:
+        dat = np.concat([data['y'][:, None], data['X']], axis=-1)
+        names = ['y'] + data['columns'].tolist()
+        fig = plot.dataset(dat, names, kde=len(dat) < 10_000)
     return data
 
 
