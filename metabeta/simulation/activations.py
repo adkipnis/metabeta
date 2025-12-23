@@ -37,3 +37,40 @@ class RandomScaleFactory:
 
 
 # --- random choice layers
+class RandomChoice(nn.Module):
+    ''' pass data through one of {n_choice} activations '''
+    def __init__(self, acts: list[nn.Module], n_choice: int = 1):
+        super().__init__()
+        assert len(acts), 'provided empty list of activations'
+        assert n_choice > 0, 'number of choices must be positive'
+        self.acts = acts
+        self.n = len(acts)
+        self.k = min(n_choice, self.n)
+        
+    def __repr__(self) -> str:
+        return f'Random-{self.k}'
+
+    def mask(self, x: torch.Tensor) -> torch.Tensor:
+        n = x.shape[-1]
+        u = torch.arange(0, n) % self.k
+        mask = F.one_hot(u, num_classes=self.k).float()
+        perm = torch.randperm(n)
+        return mask[perm]
+ 
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        indices = torch.randint(0, self.n, (self.k,))
+        acts = [self.acts[idx]() for idx in indices]
+        out = torch.stack([act(x) for act in acts], dim=-1)
+        mask = self.mask(x)
+        return (out * mask).sum(-1)
+
+class RandomChoiceFactory:
+    def __init__(self, acts: list[nn.Module], n_choice: int = 1):
+        self.acts = acts
+        self.n_choice = n_choice
+
+    def __call__(self) -> nn.Module:
+        return RandomChoice(self.acts, self.n_choice)
+
+
+# --- simple activations
