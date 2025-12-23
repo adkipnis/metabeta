@@ -84,7 +84,21 @@ class Rank(Base):
         return x
 
 
-class Gamma(nn.Module):
+# --- stochastic post-hoc layers
+class Stochastic(Base):
+    def __init__(self,
+                 n_in: int,
+                 n_out: int,
+                 standardize: bool = False,
+                 sigma: float = 0.01,
+                 ):
+        super().__init__(n_in, n_out, standardize)
+        self.sigma = sigma # noise standard deviation
+
+    def preprocess(self, x: torch.Tensor) -> torch.Tensor:
+        x = super().preprocess(x)
+        x = x + torch.randn_like(x) * self.sigma
+        return x
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return D.Gamma(2, x.exp()).sample().sqrt()
 
