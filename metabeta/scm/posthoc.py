@@ -123,8 +123,12 @@ class Poisson(Stochastic):
         return x
 
 
+class Geometric(Stochastic):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return D.Gamma(2, x.exp()).sample().sqrt()
+        x = self.preprocess(x)[..., 0]
+        x = D.Geometric(logits=x).sample()
+        return x
+
 
 class Beta(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
