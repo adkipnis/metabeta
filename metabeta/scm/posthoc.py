@@ -142,5 +142,57 @@ class NegativeBinomial(Stochastic):
         return x
 
 
+if __name__ == '__main__':
+    from metabeta.utils import setSeed
+    import numpy as np
+    from scipy.stats import spearmanr
 
+    setSeed(1)
 
+    def test(model, x, statistic='pearson'):
+        y = torch.cat([model(x), model(x)], dim=-1)
+        R = 0
+        for i in range(len(y)):
+            if statistic == 'pearson':
+                corr = np.corrcoef(y[i], rowvar=False)
+            elif statistic == 'spearman':
+                corr = spearmanr(y[i], axis=0)[0]
+            else:
+                raise ValueError('unknown statistic')
+            R += corr
+        R /= len(y)
+        unique = R[np.triu_indices_from(R, k=1)]
+        print(unique)
+
+    # init
+    batch, n, d = 64, 100, 8
+    x = torch.randn((batch, n, d)) * 3
+
+    # --- deterministic tests
+    model = Threshold(d, 2)
+    y = model(x)
+
+    model = MultiThreshold(d, 1, levels=3)
+    y = model(x)
+
+    model = QuantileBins(d, 2, levels=2)
+    y = model(x)
+
+    model = Rank(d, 5)
+    y = model(x)
+
+    # --- stochastic tests
+    model = Categorical(d, 1)
+    test(model, x)
+
+    model = Categorical(d, 2)
+    test(model, x)
+
+    model = Poisson(d, 1)
+    test(model, x)
+
+    model = Geometric(d, 1)
+    test(model, x)
+
+    model = NegativeBinomial(d, 1)
+    test(model, x)
