@@ -99,6 +99,21 @@ class Stochastic(Base):
         x = super().preprocess(x)
         x = x + torch.randn_like(x) * self.sigma
         return x
+
+class Categorical(Stochastic):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.preprocess(x)[..., 0]
+
+        # include reference category and get probs
+        zeros = torch.zeros_like(x[..., 0:1])
+        x = torch.cat([x, zeros], dim=-1)
+        probs = F.softmax(x, dim=-1)
+
+        # dummy code categories
+        x = probs.argmax(-1)
+        x = F.one_hot(x, num_classes=self.n_out + 1)[..., 1:]
+        return x
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return D.Gamma(2, x.exp()).sample().sqrt()
 
