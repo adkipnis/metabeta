@@ -96,3 +96,33 @@ class CauseSampler(nn.Module):
 
 
 if __name__ == '__main__':
+    # test 1
+    config = {
+        'n_samples': 100,
+        'n_causes': 8,
+        'dist': 'normal',
+        'fixed': True,
+    }
+    cs = CauseSampler(**config)
+    x = cs.sample()
+
+    # test 2
+    config.update({'fixed': False})
+    cs = CauseSampler(**config)
+    x = cs.sample()
+
+    # test 3
+    config.update({'dist': 'uniform'})
+    cs = CauseSampler(**config)
+    x = cs.sample()
+ 
+    # test 4
+    config.update({'dist': 'mixed', 'fixed': True})
+    cs = CauseSampler(**config)
+    x = cs.sample()
+
+    # test 5
+    config.update({'dist': 'mixed', 'fixed': False})
+    cs = CauseSampler(**config)
+    x = cs.sample()
+
