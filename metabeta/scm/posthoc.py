@@ -59,10 +59,23 @@ class MultiThreshold(Base):
 
 
 class QuantileBins(Base):
+    def __init__(self,
+                 n_in: int,
+                 n_out: int,
+                 standardize: bool = False,
+                 levels: int = 2
+                 ):
+        super().__init__(n_in, n_out, standardize)
+        self.levels = levels # number of quantiles
+        quantiles = np.sort(np.random.random(size=levels-1))
+        self.quantiles = torch.tensor(quantiles).float()
 
-class Poisson(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.poisson(torch.where(x > 0, x**2, 0))
+        x = self.preprocess(x)[..., 0]
+        thresholds = torch.quantile(x.flatten(), self.quantiles)
+        x = torch.bucketize(x, thresholds)
+        return x
+
 
 class Geometric(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
