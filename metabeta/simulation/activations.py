@@ -152,3 +152,38 @@ class Beta(nn.Module):
         return D.Beta(alpha, beta).sample()
 
 # --- GP based activations
+class MaternKernel:
+    def __init__(self) -> None:
+        self.df = np.random.choice([1,3,5]) / 2
+
+    def __repr__(self) -> str:
+        return f'Matern-{self.df}'
+
+    def __call__(self, k: int, ell: float):
+        scale = self.df ** 0.5 / ell
+        freqs = D.StudentT(df=self.df).sample((k,)) * scale
+        factor = (2 / k) ** 0.5
+        return freqs, factor
+
+class SEKernel: # squared exponential / RBF
+    def __repr__(self) -> str:
+        return 'SE'
+
+    def __call__(self, k: int, ell: float):
+        freqs = torch.randn(k) / ell
+        factor = (2 / k) ** 0.5
+        return freqs, factor
+
+class FractKernel: # scale-free fractional kernel
+    def __repr__(self) -> str:
+        return 'Fractional'
+
+    def __call__(self, k: int, ell: float):
+        freqs = k * torch.rand(k)
+        decay_exponent = -logUniform(0.7, 3.0)
+        factor = freqs ** decay_exponent
+        factor = factor / (factor ** 2).sum().sqrt()
+        return freqs, factor
+
+
+class GP(nn.Module):
