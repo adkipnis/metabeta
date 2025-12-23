@@ -58,3 +58,41 @@ class CauseSampler(nn.Module):
             x = mu + x * sigma
         return x
 
+    def _mixed(self, shape: Iterable) -> torch.Tensor:
+        out = []
+        dists = [self._normal, self._uniform, self._multinomial, self._zipf]
+        n, d = shape
+ 
+        # draw distributions
+        probs = np.random.dirichlet(alpha=np.ones((4,)), size=(d,))
+        ids = np.sort(probs.argmax(-1))
+        ids, counts = np.unique_counts(ids)
+
+        # partition moments accordingly
+        if not self.fixed:
+            mu, sigma = self.mu, self.sigma
+            parts = np.cumsum(np.pad(counts, (1,0)))
+            mus = [mu[parts[i]:parts[i+1]] for i in range(len(parts) - 1)]
+            sigmas = [sigma[parts[i]:parts[i+1]] for i in range(len(parts) - 1)]
+
+        # draw from each distribution
+        for idx, d_ in zip(ids, counts):
+            if not self.fixed:
+                self.mu = mus[idx]
+                self.sigma = sigmas[idx]
+            dist = dists[idx]
+            x = dist((n, d_))
+            out.append(x)
+
+        # gather and permute positions
+        x = torch.cat(out, dim=-1)
+        x = x[:, torch.randperm(d)]
+        return x
+
+
+    def sample(self) -> torch.Tensor:
+        shape = (self.n_samples, self.n_causes)
+        return self.dist(shape)
+
+
+if __name__ == '__main__':
