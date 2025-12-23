@@ -258,6 +258,10 @@ def wrapper(ds_name: str,
         dat = np.concat([data['y'][:, None], data['X']], axis=-1)
         names = ['y'] + data['columns'].tolist()
         fig = plot.dataset(dat, names, kde=len(dat) < 10_000)
+        if save:
+            fn = Path('preprocessed', 'plots', f'{ds_name}.pdf')
+            fig.savefig(fn, dpi=300)
+            plt.close()
     return data
 
 
@@ -274,6 +278,7 @@ if __name__ == '__main__':
     # init preprocessed directory
     Path('preprocessed', 'validation').mkdir(parents=True, exist_ok=True)
     Path('preprocessed', 'test').mkdir(parents=True, exist_ok=True)
+    Path('preprocessed', 'plots').mkdir(parents=True, exist_ok=True)
 
     # r-package datasets
     batchprocess('from-r', partition='test', group_name='group')
