@@ -126,3 +126,24 @@ class SCM(nn.Module):
 
 
     def sample(self) -> torch.Tensor:
+        causes = self.cs.sample()  # (seq_len, num_causes)
+
+        # pass through each mlp layer
+        outputs = [causes]
+        for layer in self.layers:
+            outputs.append(layer(outputs[-1]))
+        outputs = outputs[1:]  # remove causes
+
+        # extract features
+        outputs = torch.cat(outputs, dim=-1) # (n, units)
+        n_units = outputs.shape[-1]
+        if self.contiguous:
+            start = np.random.randint(0, n_units - self.n_features)
+            perm = start + torch.randperm(self.n_features)
+        else:
+            perm = torch.randperm(n_units-1)
+        indices = perm[:self.n_features]
+        x = outputs[:, indices]
+        return x
+
+# -----------------------------------------------
