@@ -78,8 +78,8 @@ class CauseSampler(nn.Module):
         # draw from each distribution
         for idx, d_ in zip(ids, counts):
             if not self.fixed:
-                self.mu = mus[idx]
-                self.sigma = sigmas[idx]
+                self.mu = mus[idx - min(ids)]
+                self.sigma = sigmas[idx - min(ids)]
             dist = dists[idx]
             x = dist((n, d_))
             out.append(x)
