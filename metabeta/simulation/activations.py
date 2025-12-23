@@ -187,3 +187,39 @@ class FractKernel: # scale-free fractional kernel
 
 
 class GP(nn.Module):
+    # sample from a GP with a random kernel [SE, Matern, Fractal]
+    def __init__(self, k: int = 512, gp_type: str = ''):
+        super().__init__()
+        self.standardizer = Standardizer()
+        self.kernels = {
+            'Matern': MaternKernel,
+            'SE': SEKernel,
+            'Fract': FractKernel,
+        }
+
+        # choose kernel
+        if gp_type:
+            assert gp_type in self.kernels, f'Kernel not found in {self.kernels.keys()}'
+        else:
+            gp_type = np.random.choice(
+                list(self.kernels.keys()),
+                p=[0.5, 0.2, 0.3]
+                # p=[0.0, 1.0, 0.0]
+            )
+        self.kernel = self.kernels[gp_type]()
+
+        # setup parameters
+        ell = logUniform(0.1, 16.0)
+        self.freqs, factor = self.kernel(k, ell)
+        self.bias = 2 * torch.pi * torch.rand(k)
+        self.weight = factor * torch.randn(k)
+
+    def __repr__(self) -> str:
+        return f'GP-{self.kernel}'
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.standardizer(x)
+        phi = torch.cos(self.freqs * x.unsqueeze(-1) + self.bias)
+        return phi @ self.weight
+
+simple_activations = [
