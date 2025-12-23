@@ -147,3 +147,34 @@ class SCM(nn.Module):
         return x
 
 # -----------------------------------------------
+if __name__ == '__main__':
+    from tqdm import tqdm
+    from metabeta.simulation.utils import standardize
+    from metabeta.scm import getActivations
+    from metabeta.utils import logUniform, setSeed
+    from metabeta.plot import plot
+    setSeed(0)
+    batches = 8
+
+    # activation = RandomScaleFactory(GP)
+    # activation = RandomChoiceFactory([GP] * 8)
+    activations = getActivations()
+    for _ in tqdm(range(batches)):
+        config = {
+            'n_samples': 512,
+            'n_features': 5, #np.random.randint(3, 8),
+            'n_causes': logUniform(2, 12, round=True),
+            'cause_dist': np.random.choice(['uniform', 'normal', 'mixed']),
+            'fixed': np.random.choice([True, False]),
+            'n_hidden': logUniform(5, 30, round=True, add=4),
+            'n_layers': np.random.randint(8, 32),
+            'activation': np.random.choice(activations),
+            'contiguous': np.random.choice([True, False]),
+            'blockwise': np.random.choice([True, False]),
+        }
+        scm = SCM(**config)
+        x = scm.sample().detach().numpy()
+        x = standardize(x, axis=0)
+
+        # plot.correlation(x)
+        plot.dataset(x, kde=True)
