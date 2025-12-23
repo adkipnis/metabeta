@@ -129,12 +129,18 @@ class Geometric(Stochastic):
         x = D.Geometric(logits=x).sample()
         return x
 
+class NegativeBinomial(Stochastic):
+    @property
+    def n_param(self) -> int:
+        return 2
 
-class Beta(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        m = torch.sigmoid(x + 1e-9)
-        alpha = m * 10
-        beta = (1-m) * 10
-        return D.Beta(alpha, beta).sample()
+        p, r = self.preprocess(x).split(1, dim=-1)
+        p = p.squeeze(-1)
+        r = F.softplus(r.squeeze(-1))
+        x = D.NegativeBinomial(total_count=r, logits=p).sample()
+        return x
+
+
 
 
