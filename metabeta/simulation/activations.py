@@ -264,3 +264,41 @@ def getActivations():
 
 
 if __name__ == '__main__':
+    import matplotlib.pyplot as plt
+    from metabeta.utils import setSeed
+    setSeed(42)
+    x = torch.arange(start=-10, end=10, step=20/256)
+    
+    def gridplot(activations: list[nn.Module], 
+                 nrow: int, ncol: int, figsize: tuple[int, int],
+                 act_kwargs: dict = {}):
+
+        # simple activations
+        fig, axes = plt.subplots(nrow, ncol, figsize=figsize)
+        axes = axes.flat
+        for i,act in enumerate(activations):
+            act = act(**act_kwargs)
+            y = act(x)
+            try:
+                axes[i].plot(x,y)
+                axes[i].set_title(str(act).split('(')[0], size=10)
+            except:
+                ...
+        fig.tight_layout()
+        
+    # simple activations
+    gridplot(simple_activations, 7, 4, (7,10))
+    
+    # GP-SE activations
+    gridplot([GP] * 25, 5, 5, (8,8), dict(gp_type='SE'))
+    
+    # GP-Matern activations
+    gridplot([GP] * 25, 5, 5, (8,8), dict(gp_type='Matern'))
+    
+    # GP-Fract activations
+    gridplot([GP] * 25, 5, 5, (8,8), dict(gp_type='Fract'))
+    
+    # Random choice activations
+    activations = getActivations()
+    gridplot(activations[:25], 5, 5, (8,8))
+    
