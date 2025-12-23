@@ -32,8 +32,33 @@ class Base(nn.Module):
         return x
 
 
+class Threshold(Base):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.bernoulli(torch.sigmoid(x))
+        x = self.preprocess(x)[..., 0]
+        x = (x > 0).float()
+        return x
+
+
+class MultiThreshold(Base):
+    def __init__(self,
+                 n_in: int,
+                 n_out: int,
+                 standardize: bool = False,
+                 levels: int = 2
+                 ):
+        super().__init__(n_in, n_out, standardize)
+        self.levels = levels # number of thresholds
+        self.tau = np.sort(np.random.normal(size=levels-1))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.preprocess(x)[..., 0]
+        y = torch.zeros_like(x)
+        for t in self.tau:
+            y = y + (x > t)
+        return y
+
+
+class QuantileBins(Base):
 
 class Poisson(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
