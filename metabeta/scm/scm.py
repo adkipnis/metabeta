@@ -81,3 +81,14 @@ class SCM(nn.Module):
 
 
     def _buildLayer(self, input_dim: int = 0) -> nn.Module:
+        # Affine() ->  AdditiveNoise() -> Activation()
+        if input_dim == 0:
+            input_dim = self.n_hidden
+        affine_layer = nn.Linear(input_dim, self.n_hidden)
+        sigma_e = self.sigma_e
+        if self.vary_sigma_e:
+            sigma_e = (torch.randn((self.n_hidden,)) * self.sigma_e).abs()
+        noise_layer = NoiseLayer(sigma_e)
+        return nn.Sequential(affine_layer, noise_layer, self.activation())
+
+
