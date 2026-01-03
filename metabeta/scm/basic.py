@@ -47,9 +47,17 @@ class Sign(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return torch.where(x >= 0, 1., -1.)
 
-class Step(nn.Module):
+class Ceil(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x.ceil()
+    
+class Floor(nn.Module):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x.floor()
+    
+class Round(nn.Module):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x.round()
 
 class UnitInterval(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -77,7 +85,9 @@ basic_activations = [
     Cos,
     Mod,
     Sign,
-    Step,
+    Ceil,
+    Floor, 
+    Round,
     UnitInterval,
 ]
 
