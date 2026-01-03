@@ -3,8 +3,10 @@ from typing import Callable
 import numpy as np
 import torch
 from torch import nn
-from metabeta.scm import CauseSampler
+from metabeta.scm import CauseSampler, getPosthocLayers
+from metabeta.simulation.utils import standardize, checkConstant
 
+phl = getPosthocLayers()
 
 class NoiseLayer(nn.Module):
     def __init__(self, sigma: float | torch.Tensor):
@@ -14,7 +16,11 @@ class NoiseLayer(nn.Module):
     def forward(self, x: torch.Tensor):
         noise = torch.randn_like(x) * self.sigma
         return x + noise
-
+    
+    
+def sanityCheck(x: torch.Tensor) -> bool:
+    okay = not checkConstant(x.detach().numpy()).any()
+    return okay
 
 @dataclass
 class SCM(nn.Module):
@@ -44,7 +50,7 @@ class SCM(nn.Module):
                  # Gaussian noise
                  sigma_e: float = 0.01, # for additive noise
                  vary_sigma_e: bool = True, # allow noise to vary per units
-                 ):
+                 **kwargs):
         super().__init__()
         self.n_samples = n_samples
         self.n_features = n_features
@@ -124,37 +130,79 @@ class SCM(nn.Module):
                                 for dim in block_size)
             nn.init.normal_(param[block_slice], std=sigma_w)
 
-
     def sample(self) -> torch.Tensor:
-        causes = self.cs.sample()  # (seq_len, num_causes)
+        while True:
+            causes = self.cs.sample()  # (seq_len, num_causes)
 
-        # pass through each mlp layer
-        outputs = [causes]
-        for layer in self.layers:
-            outputs.append(layer(outputs[-1]))
-        outputs = outputs[1:]  # remove causes
+            # pass through each mlp layer
+            outputs = [causes]
+            for layer in self.layers:
+                h = layer(outputs[-1])
+                h = torch.where(h.isnan() | h.abs().isinf(), 0, h)
+                outputs.append(h)
+            outputs = outputs[1:]  # remove causes
 
-        # extract features
-        outputs = torch.cat(outputs, dim=-1) # (n, units)
-        n_units = outputs.shape[-1]
-        if self.contiguous:
-            start = np.random.randint(0, n_units - self.n_features)
-            perm = start + torch.randperm(self.n_features)
-        else:
-            perm = torch.randperm(n_units-1)
-        indices = perm[:self.n_features]
-        x = outputs[:, indices]
+            # extract features
+            outputs = torch.cat(outputs, dim=-1) # (n, units)
+            n_units = outputs.shape[-1]
+            if self.contiguous:
+                start = np.random.randint(0, n_units - self.n_features)
+                perm = start + torch.randperm(self.n_features)
+            else:
+                perm = torch.randperm(n_units-1)
+            indices = perm[:self.n_features]
+            x = outputs[:, indices]
+            if sanityCheck(x):
+                return x
+
+
+class Posthoc(nn.Module):
+    def __init__(self,
+                 n_features: int,
+                 p_posthoc: float = 0.2, # probability of posthoc transformation
+                 **kwargs):
+        super().__init__()
+
+        # posthoc transformations
+        self.n_features = n_features
+        self.n_posthoc = np.random.binomial(n_features, p_posthoc)
+        layers = []
+        for _ in range(self.n_posthoc):
+            cfg = {
+                'n_in': n_features,
+                'n_out': np.random.randint(1, 3),
+                'standardize': True,
+                # TODO levels, sigma
+                }
+            layer = np.random.choice(phl, replace=True)
+
+            layers.append(layer(**cfg))
+        self.transformations = nn.ModuleList(layers)
+
+    def __call__(self, x: torch.Tensor) -> np.ndarray:
+        if self.n_posthoc > 0:
+            out = []
+            for t in self.transformations:
+                h = t(x)
+                if sanityCheck(h):
+                    out.append(h)
+            z = torch.cat(out, dim=-1)
+            x = torch.cat([x,z], dim=-1)
+            idx = torch.randperm(x.shape[-1])[:self.n_features]
+            x = x[..., idx]
+        x = x.detach().numpy()
+        x = standardize(x, axis=0)
         return x
+
 
 # -----------------------------------------------
 if __name__ == '__main__':
     from tqdm import tqdm
-    from metabeta.simulation.utils import standardize
     from metabeta.scm import getActivations
     from metabeta.utils import logUniform, setSeed
     from metabeta.plot import plot
     setSeed(0)
-    batches = 8
+    batches = 32
 
     # activation = RandomScaleFactory(GP)
     # activation = RandomChoiceFactory([GP] * 8)
@@ -173,8 +221,9 @@ if __name__ == '__main__':
             'blockwise': np.random.choice([True, False]),
         }
         scm = SCM(**config)
-        x = scm.sample().detach().numpy()
-        x = standardize(x, axis=0)
+        ph = Posthoc(**config)
+        x = scm.sample()
+        x = ph(x)
 
         # plot.correlation(x)
-        plot.dataset(x, kde=True)
+        plot.dataset(x, kde=False)
