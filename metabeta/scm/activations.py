@@ -1,4 +1,3 @@
-from metabeta.utils import logUniform
 from metabeta.scm.basic import basic_activations
 from metabeta.scm.gp import GP
 from metabeta.scm.meta import RandomScaleFactory, RandomChoiceFactory
@@ -7,10 +6,11 @@ def getActivations():
     activations = basic_activations.copy()
     activations += [GP] * 12
     activations = [RandomScaleFactory(act) for act in activations]
-    ks = [2 ** logUniform(0.1, 4, round=True)
-          for _ in range(len(activations))]
-    out = [RandomChoiceFactory(activations, int(k)) for k in ks]
-    return out
+    # ks = [2 ** logUniform(0.1, 4, round=True)
+    #       for _ in range(len(activations))]
+    # out = [RandomChoiceFactory(activations, int(k)) for k in ks]
+    activations += [RandomChoiceFactory(activations)] * 12
+    return activations
 
 if __name__ == '__main__':
     import torch
