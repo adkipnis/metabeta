@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch import distributions as D
+import numpy as np
 from metabeta.scm.meta import Standardizer
 
 
@@ -28,7 +29,7 @@ class Base(nn.Module):
     def preprocess(self, x: torch.Tensor) -> torch.Tensor:
         if self.standardize:
             x = self.standardizer(x)
-        x = torch.einsum('bnd,dap->bnap', x, self.w)
+        x = torch.einsum('...nd,dap->...nap', x, self.w)
         return x
 
 
@@ -44,7 +45,7 @@ class MultiThreshold(Base):
                  n_in: int,
                  n_out: int,
                  standardize: bool = False,
-                 levels: int = 2
+                 levels: int = 3
                  ):
         super().__init__(n_in, n_out, standardize)
         self.levels = levels # number of thresholds
@@ -63,7 +64,7 @@ class QuantileBins(Base):
                  n_in: int,
                  n_out: int,
                  standardize: bool = False,
-                 levels: int = 2
+                 levels: int = 3
                  ):
         super().__init__(n_in, n_out, standardize)
         self.levels = levels # number of quantiles
@@ -142,6 +143,12 @@ class NegativeBinomial(Stochastic):
         return x
 
 
+def getPosthocLayers() -> list[nn.Module]:
+    deterministic = [Threshold, MultiThreshold, QuantileBins, Rank]
+    stochastic = [Categorical, Poisson, Geometric, NegativeBinomial]
+    return deterministic + stochastic
+
+
 if __name__ == '__main__':
     from metabeta.utils import setSeed
     import numpy as np
@@ -196,3 +203,4 @@ if __name__ == '__main__':
 
     model = NegativeBinomial(d, 1)
     test(model, x)
+
