@@ -212,7 +212,9 @@ class FlowMLP(nn.Module):
             zero_init=True,
         )
 
-    def forward(self, x):
+    def forward(self, x, context: torch.Tensor | None = None):
+        if context is not None:
+            x = torch.cat([x, context], dim=-1)
         return self.net(x)
 
 
