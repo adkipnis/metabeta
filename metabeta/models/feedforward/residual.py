@@ -83,3 +83,44 @@ class ResidualNet(nn.Module):
     ):
         super().__init__()
 
+        # input and output projection
+        self.proj_in = nn.Sequential(
+            nn.Linear(d_input + d_context, d_hidden, bias=use_bias),
+            nn.Dropout(dropout))
+        self.proj_out = nn.Sequential(
+            nn.Linear(d_hidden, d_output, bias=use_bias),
+            nn.Dropout(dropout))
+
+        # main blocks
+        blocks = [
+            ResidualBlock(
+                d_hidden=d_hidden,
+                d_context=d_context,
+                use_bias=use_bias,
+                layer_norm=layer_norm,
+                pre_norm=pre_norm,
+                activation=activation,
+                dropout=dropout,
+                use_glu=use_glu,
+            )
+            for _ in range(n_blocks)
+        ]
+        self.blocks = nn.ModuleList(blocks)
+
+        # optionally initialize weights
+        if weight_init is not None:
+            initializer = getInitializer(*weight_init)
+            self.apply(initializer)
+
+        # optionally zero-init final layer
+        if zero_init:
+            zeroInitializer(self.proj_out[0])
+            for block in self.blocks:
+                lastZeroInitializer(block.layers) # type: ignore
+
+        # optionally apply weight norm to linear layers
+        if weight_norm:
+            self.apply(weightNormInitializer)
+
+
+    def forward(self, x: torch.Tensor,
