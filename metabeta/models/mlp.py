@@ -87,3 +87,20 @@ class Feedforward(nn.Module):
         residual_scale: float = 0.1, # λ
     ):
         super().__init__()
+        self.residual = residual if d_input == d_output else False
+        self.residual_scale = residual_scale
+        if activation == 'GeGLU':
+            d_output *= 2
+
+        # construct
+        layers = []
+        if pre_norm and layer_norm:
+            layers += [nn.LayerNorm(d_input, eps=eps, elementwise_affine=True)]
+        layers += [nn.Linear(d_input, d_output, bias=use_bias)]
+        if not pre_norm and layer_norm:
+            layers += [nn.LayerNorm(d_output, eps=eps, elementwise_affine=True)]
+        layers += [getActivation(activation)]
+        if dropout > 0:
+            layers += [nn.Dropout(dropout)]
+        self.layers = nn.Sequential(*layers)
+
