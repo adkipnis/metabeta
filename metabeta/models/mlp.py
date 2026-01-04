@@ -170,3 +170,9 @@ class MLP(nn.Module):
             initializer = getInitializer(*weight_init)
             self.apply(initializer)
 
+        # optionally zero-init final layer
+        if zero_init:
+            zeroInitializer(self.layers[-2])
+            if self.shortcut is not None:
+                zeroInitializer(self.shortcut[0])
+
