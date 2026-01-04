@@ -69,3 +69,21 @@ def getActivation(name: str) -> nn.Module:
 
 
 # --- multi-layer perceptron
+class Feedforward(nn.Module):
+    ''' Feedforward Layer:
+        Linear -> Norm -> Activation -> Dropout (-> Residual)
+    '''
+    def __init__(
+        self,
+        d_input: int,
+        d_output: int,
+        use_bias: bool = True,
+        layer_norm: bool = False,
+        pre_norm: bool = False, # layer norm before linear layer
+        eps: float = 1e-3, # numerical stability in layer norm denominator
+        activation: str = 'ReLU',
+        dropout: float = 0.0,
+        residual: bool = False, # if true: x + λ * self.layers(x)
+        residual_scale: float = 0.1, # λ
+    ):
+        super().__init__()
