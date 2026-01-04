@@ -249,3 +249,52 @@ class TransformerFFN(nn.Module):
 
 
 # --------------------------------------------------------
+if __name__ == '__main__':
+
+    def run(cls):
+        model = cls(**cfg)
+        # model = torch.compile(model)
+        return model(x)
+
+    # initializer
+    intializer = getInitializer('xavier', 'normal')
+    intializer = getInitializer('lecun', 'uniform')
+    intializer = getInitializer('lecun', 'normal')
+
+    # dims
+    b = 64
+    d_input = 32
+    d_hidden = [16, 8]
+    d_output = 4
+    x = torch.randn(b, d_input)
+
+    # ff
+    cfg = {'d_input': d_input,
+           'd_output': d_output,
+           'activation': 'ReLU'}
+    run(Feedforward)
+
+    cfg.update({'layer_norm': True, 'activation': 'GELU'})
+    run(Feedforward)
+
+    cfg.update({'pre_norm': True, 'residual': False})
+    run(Feedforward)
+
+    # mlp
+    cfg.update({'d_hidden': d_hidden, 'weight_init': None})
+    run(MLP)
+
+    cfg.update({'d_hidden': d_hidden[0],
+                'shortcut': True,
+                'weight_init': ('xavier', 'normal'),
+                'zero_init': True})
+    run(MLP)
+
+    # FlowMLP
+    cfg = {'d_input': d_input, 'd_hidden': d_hidden, 'd_output': d_output}
+    run(FlowMLP)
+
+    # TransformerFFN
+    cfg = {'d_input': d_input, 'd_hidden': d_hidden[0], 'd_output': d_output}
+    run(TransformerFFN)
+
