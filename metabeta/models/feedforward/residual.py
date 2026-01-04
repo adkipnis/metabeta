@@ -60,3 +60,26 @@ class ResidualBlock(nn.Module):
         return h
 
 
+class ResidualNet(nn.Module):
+    ''' Residual Feedforward Network:
+        Linear -> Dropout -> [RB] * n_blocks -> Linear -> Dropout
+    '''
+    def __init__(
+        self,
+        d_input: int,
+        d_hidden: int,
+        d_output: int,
+        n_blocks: int,
+        d_context: int = 0,
+        use_bias: bool = True,
+        layer_norm: bool = False,
+        pre_norm: bool = False,
+        activation: str = 'ReLU',
+        dropout: float = 0.01,
+        use_glu: bool = False,
+        weight_init: tuple[str, str] | None = None,
+        zero_init: bool = False,
+        weight_norm: bool = False,
+    ):
+        super().__init__()
+
