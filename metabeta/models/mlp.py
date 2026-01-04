@@ -157,3 +157,11 @@ class MLP(nn.Module):
                    nn.Dropout(dropout)]
         self.layers = nn.Sequential(*layers)
 
+        # optionally add skip_connection
+        self.shortcut = None
+        if shortcut:
+            self.shortcut = nn.Sequential(
+                nn.Linear(d_input, d_output, bias=use_bias),
+                nn.Dropout(dropout),
+            )
+
