@@ -225,19 +225,21 @@ class TransformerFFN(nn.Module):
         d_hidden: int,
         d_output: int,
         use_bias: bool = True,
+        activation: str = 'GeGLU',
         shortcut: bool = True,
     ):
         super().__init__()
+        assert activation in ['GELU', 'GeGLU'], 'invalid activation'
         self.net = MLP(
             d_input=d_input,
             d_hidden=d_hidden,
             d_output=d_output,
             use_bias=use_bias,
+            activation=activation,
             shortcut=shortcut,
             # defaults:
             layer_norm=True,
             pre_norm=True,
-            activation='GeGLU', # or GELU
             dropout=0.01,
             residual=True,
             residual_scale=0.1,
@@ -247,7 +249,6 @@ class TransformerFFN(nn.Module):
 
     def forward(self, x):
         return self.net(x)
-
 
 
 # --------------------------------------------------------
@@ -300,5 +301,7 @@ if __name__ == '__main__':
 
     # TransformerFFN
     cfg = {'d_input': d_input, 'd_hidden': d_hidden[0], 'd_output': d_output}
+    run(TransformerFFN)
+    cfg.update({'activation': 'GeGLU'})
     run(TransformerFFN)
 
