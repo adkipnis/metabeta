@@ -165,3 +165,8 @@ class MLP(nn.Module):
                 nn.Dropout(dropout),
             )
 
+        # optionally initialize weights
+        if weight_init is not None:
+            initializer = getInitializer(*weight_init)
+            self.apply(initializer)
+
