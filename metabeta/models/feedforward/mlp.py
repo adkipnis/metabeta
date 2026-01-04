@@ -1,6 +1,7 @@
 from typing import Sequence
 import torch
 from torch import nn
+from torch.nn import functional as F
 from metabeta.models.feedforward.utils import (
     getActivation, getInitializer, zeroInitializer, weightNormInitializer)
 
@@ -20,11 +21,11 @@ class Feedforward(nn.Module):
         activation: str = 'ReLU',
         dropout: float = 0.0,
         residual: bool = False, # if true: x + λ * self.layers(x)
-        residual_scale: float = 0.1, # λ
+        rscale: float = 0.1, # λ
     ):
         super().__init__()
         self.residual = residual if d_input == d_output else False
-        self.residual_scale = residual_scale
+        self._rscale = nn.Parameter(torch.tensor(rscale))
         if activation == 'GeGLU':
             d_output *= 2
 
@@ -39,10 +40,14 @@ class Feedforward(nn.Module):
         if dropout > 0:
             layers += [nn.Dropout(dropout)]
         self.layers = nn.Sequential(*layers)
-
+    
+    @property
+    def rscale(self) -> torch.Tensor:
+        return F.softplus(self._rscale).clamp(max=1)
+    
     def forward(self, x):
         if self.residual:
-            return x + self.residual_scale * self.layers(x)
+            return x + self.rscale() * self.layers(x)
         return self.layers(x)
 
 
