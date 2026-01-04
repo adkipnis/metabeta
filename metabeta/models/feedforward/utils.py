@@ -44,6 +44,12 @@ def zeroInitializer(layer: nn.Module, limit: float = 1e-3) -> None:
         if layer.bias is not None:
             nn.init.zeros_(layer.bias)
 
+def lastZeroInitializer(layers: nn.ModuleList) -> None:
+    for m in reversed(layers):
+        if isinstance(m, nn.Linear):
+            zeroInitializer(m)
+            break
+
 def weightNormInitializer(layer: nn.Module) -> None:
     if isinstance(layer, nn.Linear):
         nn.utils.parametrizations.weight_norm(layer)
