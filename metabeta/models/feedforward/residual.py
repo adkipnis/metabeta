@@ -46,3 +46,17 @@ class ResidualBlock(nn.Module):
             self.proj = nn.Linear(d_context, d_hidden, bias=use_bias)
 
     @property
+    def rscale(self) -> torch.Tensor:
+        return F.softplus(self._rscale).clamp(max=1)
+    
+    def forward(self, x: torch.Tensor,
+                context: torch.Tensor | None = None) -> torch.Tensor:
+        h = self.layers(x)
+        if context is not None and self.proj is not None:
+            ctx = self.cscale * self.proj(context)
+            h = torch.cat([h, ctx], dim=-1)
+            h = F.glu(h, dim=-1)
+        h = x + self.rscale * h
+        return h
+
+
