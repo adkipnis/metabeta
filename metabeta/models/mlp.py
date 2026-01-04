@@ -183,3 +183,37 @@ class MLP(nn.Module):
         return h
 
 
+# --- special cases
+
+class FlowMLP(nn.Module):
+    def __init__(
+        self,
+        d_input: int,
+        d_hidden: int | Sequence[int],
+        d_output: int,
+        use_bias: bool = True,
+        shortcut: bool = True,
+    ):
+        super().__init__()
+        self.net = MLP(
+            d_input=d_input,
+            d_hidden=d_hidden,
+            d_output=d_output,
+            use_bias=use_bias,
+            shortcut=shortcut,
+            # defaults:
+            layer_norm=False,
+            pre_norm=False,
+            activation='ELU',
+            dropout=0.0,
+            residual=True,
+            residual_scale=0.1,
+            weight_init=('lecun', 'normal'),
+            zero_init=True,
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class TransformerFFN(nn.Module):
