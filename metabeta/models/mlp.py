@@ -192,7 +192,7 @@ class TransformerFFN(nn.Module):
         d_hidden: int,
         d_output: int,
         use_bias: bool = True,
-        activation: str = 'GeGLU',
+        activation: str = 'GELU',
         shortcut: bool = True,
     ):
         super().__init__()
@@ -273,7 +273,7 @@ if __name__ == '__main__':
     d_output = 4
     x = torch.randn(b, d_input)
 
-    # ff
+    # Base Feedforward Layer
     cfg = {'d_input': d_input,
            'd_output': d_output,
            'activation': 'ReLU'}
@@ -285,7 +285,7 @@ if __name__ == '__main__':
     cfg.update({'pre_norm': True, 'residual': False})
     run(Feedforward)
 
-    # mlp
+    # Base MLP
     cfg.update({'d_hidden': d_hidden, 'weight_init': None})
     run(MLP)
 
@@ -295,13 +295,19 @@ if __name__ == '__main__':
                 'zero_init': True})
     run(MLP)
 
+    # TransformerFFN
+    cfg = {'d_input': d_input, 'd_hidden': d_hidden[0], 'd_output': d_output}
+    run(TransformerFFN)
+
+    cfg.update({'activation': 'GeGLU'})
+    run(TransformerFFN)
+
     # FlowMLP
     cfg = {'d_input': d_input, 'd_hidden': d_hidden, 'd_output': d_output}
     run(FlowMLP)
 
-    # TransformerFFN
-    cfg = {'d_input': d_input, 'd_hidden': d_hidden[0], 'd_output': d_output}
-    run(TransformerFFN)
-    cfg.update({'activation': 'GeGLU'})
-    run(TransformerFFN)
+    x, context = x.chunk(2, dim=-1)
+    model = FlowMLP(**cfg)
+    torch.compile(model)
+    y = model(x, context)
 
