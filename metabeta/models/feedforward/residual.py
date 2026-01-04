@@ -24,3 +24,25 @@ class ResidualBlock(nn.Module):
         cscale: float = 0.1, # context scale
     ):
         super().__init__()
+        self._rscale = nn.Parameter(torch.tensor(rscale))
+        self.cscale = cscale
+
+        # main layers
+        layers = []
+        if layer_norm and pre_norm:
+            layers += [nn.LayerNorm(d_hidden, eps=eps, elementwise_affine=True)]
+        layers += [nn.Linear(d_hidden, d_hidden, bias=use_bias)]
+        if layer_norm and not pre_norm:
+            layers += [nn.LayerNorm(d_hidden, eps=eps, elementwise_affine=True)]
+        layers += [getActivation(activation)]
+        if dropout:
+            layers += [nn.Dropout(dropout)]
+        layers += [nn.Linear(d_hidden, d_hidden, bias=use_bias)]
+        self.layers = nn.Sequential(*layers)
+
+        # projection layer for GLU
+        self.proj = None
+        if d_context and use_glu:
+            self.proj = nn.Linear(d_context, d_hidden, bias=use_bias)
+
+    @property
