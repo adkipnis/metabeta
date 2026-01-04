@@ -37,7 +37,7 @@ class Feedforward(nn.Module):
         if not pre_norm and layer_norm:
             layers += [nn.LayerNorm(d_output, eps=eps, elementwise_affine=True)]
         layers += [getActivation(activation)]
-        if dropout > 0:
+        if dropout:
             layers += [nn.Dropout(dropout)]
         self.layers = nn.Sequential(*layers)
     
@@ -53,7 +53,7 @@ class Feedforward(nn.Module):
 
 class MLP(nn.Module):
     ''' Multi-Layer Perceptron with optional skip-connection:
-        [SLP] * len(d_hidden) -> Linear -> Dropout
+        [FF] * len(d_hidden) -> Linear -> Dropout
     '''
     def __init__(
         self,
@@ -66,11 +66,10 @@ class MLP(nn.Module):
         activation: str = 'ReLU',
         dropout: float = 0.0,
         residual: bool = False,
-        residual_scale: float = 0.1,
         shortcut: bool = False, # additional linear layer from input to output
         weight_init: tuple[str, str] | None = None,
-        weight_norm: bool = False, # apply weight norm to linear layers
         zero_init: bool = False,
+        weight_norm: bool = False,
     ):
         super().__init__()
         if isinstance(d_hidden, int):
@@ -89,7 +88,6 @@ class MLP(nn.Module):
                 activation=activation,
                 dropout=dropout,
                 residual=residual,
-                residual_scale=residual_scale,
             )
             layers += [ff]
             d_in = d_out
@@ -131,7 +129,6 @@ class MLP(nn.Module):
 
 
 # --- special cases
-
 class TransformerFFN(nn.Module):
     def __init__(
         self,
@@ -156,7 +153,6 @@ class TransformerFFN(nn.Module):
             pre_norm=True,
             dropout=0.01,
             residual=True,
-            residual_scale=0.1,
             weight_init=('xavier', 'normal'),
             weight_norm=False,
             zero_init=False,
@@ -188,19 +184,19 @@ class FlowMLP(nn.Module):
             activation='ELU',
             dropout=0.0,
             residual=True,
-            residual_scale=0.1,
             weight_init=('lecun', 'normal'),
             weight_norm=True,
             zero_init=True,
         )
 
-    def forward(self, x, context: torch.Tensor | None = None):
+    def forward(self, x: torch.Tensor,
+                context: torch.Tensor | None = None) -> torch.Tensor:
         if context is not None:
             x = torch.cat([x, context], dim=-1)
         return self.net(x)
 
 
-# --------------------------------------------------------
+# -----------------------------------------------------------------------------
 if __name__ == '__main__':
 
     def run(cls):
