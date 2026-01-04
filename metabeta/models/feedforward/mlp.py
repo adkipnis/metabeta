@@ -310,7 +310,7 @@ if __name__ == '__main__':
     cfg = {'d_input': d_input, 'd_hidden': d_hidden[0], 'd_output': d_output}
     run(TransformerFFN)
 
-    cfg.update({'activation': 'GeGLU'})
+    cfg.update({'activation': 'GeGLU'}) # type: ignore
     run(TransformerFFN)
 
     # FlowMLP
