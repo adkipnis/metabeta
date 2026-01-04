@@ -124,3 +124,13 @@ class ResidualNet(nn.Module):
 
 
     def forward(self, x: torch.Tensor,
+                context: torch.Tensor | None = None) -> torch.Tensor:
+        if context is not None:
+            x = torch.cat([x, context], dim=-1)
+        h = self.proj_in(x)
+        for block in self.blocks:
+            h = block(h, context)
+        h = self.proj_out(h)
+        return h
+
+
