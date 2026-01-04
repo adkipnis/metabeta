@@ -176,3 +176,10 @@ class MLP(nn.Module):
             if self.shortcut is not None:
                 zeroInitializer(self.shortcut[0])
 
+    def forward(self, x):
+        h = self.layers(x)
+        if self.shortcut is not None:
+            h = h + self.shortcut(x)
+        return h
+
+
