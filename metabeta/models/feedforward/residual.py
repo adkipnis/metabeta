@@ -134,3 +134,39 @@ class ResidualNet(nn.Module):
         return h
 
 
+class FlowResidualNet(nn.Module):
+    def __init__(
+        self,
+        d_input: int,
+        d_hidden: int,
+        d_output: int,
+        n_blocks: int,
+        d_context: int = 0,
+        use_bias: bool = True,
+        use_glu: bool = True,
+    ):
+        super().__init__()
+        self.net = ResidualNet(
+            d_input=d_input,
+            d_hidden=d_hidden,
+            d_output=d_output,
+            n_blocks=n_blocks,
+            d_context=d_context,
+            use_bias=use_bias,
+            use_glu=use_glu,
+            # defaults:
+            layer_norm=True,
+            pre_norm=True,
+            activation='ELU',
+            dropout=0.0,
+            weight_init=('lecun', 'normal'),
+            weight_norm=True,
+            zero_init=True,
+        )
+
+    def forward(self, x: torch.Tensor,
+                context: torch.Tensor | None = None) -> torch.Tensor:
+        return self.net(x, context)
+
+
+# -----------------------------------------------------------------------------
