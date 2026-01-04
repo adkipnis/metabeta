@@ -217,3 +217,35 @@ class FlowMLP(nn.Module):
 
 
 class TransformerFFN(nn.Module):
+    def __init__(
+        self,
+        d_input: int,
+        d_hidden: int,
+        d_output: int,
+        use_bias: bool = True,
+        shortcut: bool = True,
+    ):
+        super().__init__()
+        self.net = MLP(
+            d_input=d_input,
+            d_hidden=d_hidden,
+            d_output=d_output,
+            use_bias=use_bias,
+            shortcut=shortcut,
+            # defaults:
+            layer_norm=True,
+            pre_norm=True,
+            activation='GeGLU', # or GELU
+            dropout=0.01,
+            residual=True,
+            residual_scale=0.1,
+            weight_init=('xavier', 'normal'),
+            zero_init=False,
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+
+# --------------------------------------------------------
