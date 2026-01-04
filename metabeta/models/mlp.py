@@ -110,3 +110,25 @@ class Feedforward(nn.Module):
         return self.layers(x)
 
 
+class MLP(nn.Module):
+    ''' Multi-Layer Perceptron with optional skip-connection:
+        [SLP] * len(d_hidden) -> Linear -> Dropout
+    '''
+    def __init__(
+        self,
+        d_input: int,
+        d_hidden: int | Sequence[int],
+        d_output: int,
+        use_bias: bool = True,
+        layer_norm: bool = False,
+        pre_norm: bool = False,
+        activation: str = 'ReLU',
+        dropout: float = 0.0,
+        residual: bool = False,
+        residual_scale: float = 0.1,
+        shortcut: bool = False, # additional linear layer from input to output
+        weight_init: tuple[str, str] | None = None,
+        zero_init: bool = False,
+    ):
+        super().__init__()
+        if isinstance(d_hidden, int):
