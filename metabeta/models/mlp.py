@@ -153,3 +153,7 @@ class MLP(nn.Module):
             d_in = d_out
 
         # add final layer
+        layers += [nn.Linear(d_in, d_output, bias=use_bias),
+                   nn.Dropout(dropout)]
+        self.layers = nn.Sequential(*layers)
+
