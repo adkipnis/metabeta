@@ -104,3 +104,9 @@ class Feedforward(nn.Module):
             layers += [nn.Dropout(dropout)]
         self.layers = nn.Sequential(*layers)
 
+    def forward(self, x):
+        if self.residual:
+            return x + self.residual_scale * self.layers(x)
+        return self.layers(x)
+
+
