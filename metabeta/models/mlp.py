@@ -132,3 +132,24 @@ class MLP(nn.Module):
     ):
         super().__init__()
         if isinstance(d_hidden, int):
+            d_hidden = [d_hidden]
+
+        # build layers
+        layers = []
+        d_in = d_input
+        for d_out in d_hidden:
+            ff = Feedforward(
+                d_input=d_in,
+                d_output=d_out,
+                use_bias=use_bias,
+                layer_norm=layer_norm,
+                pre_norm=pre_norm,
+                activation=activation,
+                dropout=dropout,
+                residual=residual,
+                residual_scale=residual_scale,
+            )
+            layers += [ff]
+            d_in = d_out
+
+        # add final layer
