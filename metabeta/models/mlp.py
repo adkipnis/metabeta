@@ -2,7 +2,6 @@ from typing import Callable, Sequence
 import torch
 from torch import nn
 
-
 # --- initializers
 Initializer = Callable[[nn.Module], None]
 METHODS = ['kaiming', 'xavier', 'lecun']
@@ -44,6 +43,10 @@ def zeroInitializer(layer: nn.Module, limit: float = 1e-3) -> None:
         nn.init.uniform_(layer.weight, -limit, limit)
         if layer.bias is not None:
             nn.init.zeros_(layer.bias)
+
+def weightNormInitializer(layer: nn.Module) -> None:
+    if isinstance(layer, nn.Linear):
+        nn.utils.parametrizations.weight_norm(layer)
 
 
 # --- activations
@@ -128,6 +131,7 @@ class MLP(nn.Module):
         residual_scale: float = 0.1,
         shortcut: bool = False, # additional linear layer from input to output
         weight_init: tuple[str, str] | None = None,
+        weight_norm: bool = False, # apply weight norm to linear layers
         zero_init: bool = False,
     ):
         super().__init__()
@@ -176,6 +180,11 @@ class MLP(nn.Module):
             if self.shortcut is not None:
                 zeroInitializer(self.shortcut[0])
 
+        # optionally apply weight norm to linear layers
+        if weight_norm:
+            self.apply(weightNormInitializer)
+
+
     def forward(self, x):
         h = self.layers(x)
         if self.shortcut is not None:
@@ -211,6 +220,7 @@ class TransformerFFN(nn.Module):
             residual=True,
             residual_scale=0.1,
             weight_init=('xavier', 'normal'),
+            weight_norm=False,
             zero_init=False,
         )
 
@@ -242,6 +252,7 @@ class FlowMLP(nn.Module):
             residual=True,
             residual_scale=0.1,
             weight_init=('lecun', 'normal'),
+            weight_norm=True,
             zero_init=True,
         )
 
