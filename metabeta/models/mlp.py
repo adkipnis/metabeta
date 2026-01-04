@@ -253,8 +253,10 @@ if __name__ == '__main__':
 
     def run(cls):
         model = cls(**cfg)
-        # model = torch.compile(model)
-        return model(x)
+        out = model(x)
+        model = torch.compile(model)
+        model(x)
+        return out
 
     # initializer
     intializer = getInitializer('xavier', 'normal')
