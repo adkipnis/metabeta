@@ -20,3 +20,38 @@ class SetTransformer(nn.Module):
     ):
         super().__init__()
 
+        # input projector
+        self.proj_in = nn.Sequential(
+                nn.Linear(d_input, d_model),
+                nn.Dropout(dropout),
+        )
+
+        # pool token
+        self.pool_token = torch.nn.Parameter(torch.randn(d_model) * 0.02)
+ 
+        # attention blocks
+        blocks = []
+        for _ in range(n_blocks):
+            mab = MAB(
+                d_model=d_model,
+                d_ff=d_ff,
+                n_heads=n_heads,
+                use_bias=use_bias,
+                pre_norm=pre_norm,
+                activation=activation,
+                dropout=dropout,
+            )
+            blocks += [mab]
+        self.blocks = nn.ModuleList(blocks)
+
+        # optional output projector
+        if d_output is not None:
+            self.proj_out = nn.Sequential(
+                nn.Linear(d_model, d_output),
+                nn.Dropout(dropout),
+            )
+        else:
+            self.proj_out = nn.Identity()
+
+
+    def _reshape(
