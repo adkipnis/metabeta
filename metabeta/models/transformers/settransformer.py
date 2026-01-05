@@ -111,3 +111,31 @@ class SetTransformer(nn.Module):
 
 
 # --------------------------------------------------------
+if __name__ == '__main__':
+
+    # sizes
+    d_model = 16
+    d_ff = 64
+    b, m, n, d = 8, 5, 10, 3
+
+    # MHA
+    model = SetTransformer(d, d_model, d_ff)
+    # model = torch.compile(model)
+    model.eval()
+ 
+    # 3d case
+    x = torch.randn(b, n, d)
+    y = model(x)
+
+    # 4d case
+    x = torch.randn(b, m, n, d)
+    y = model(x)
+
+    # mask
+    mask = torch.ones((b, m, n)).bool()
+    mask[..., -1] = False
+    y1 = model(x, mask=mask)
+    x[~mask] = 99
+    y2 = model(x, mask=mask)
+    assert torch.allclose(y1, y2, atol=1e-5)
+
