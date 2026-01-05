@@ -50,3 +50,20 @@ class MAB(nn.Module):
         return x
 
 
+# --------------------------------------------------------
+if __name__ == '__main__':
+
+    # sizes
+    d_model = 16
+    d_ff = 64
+    b, m, n = 8, 5, 10
+
+    # MHA
+    model = MAB(d_model, d_ff, pre_norm=False)
+    torch.compile(model)
+    model.eval()
+    
+    x = torch.randn(b, m, n, d_model)
+    y = model(x)
+    
+
