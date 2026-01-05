@@ -63,7 +63,12 @@ class MAB(nn.Module):
         assert d_model % n_heads == 0, 'd_model must be divisible by n_heads'
 
         # Multihead Attention
-        self.mha = MHA(d_model, n_heads, dropout, use_bias)
+        self.mha = MHA(
+            d_model=d_model,
+            n_heads=n_heads,
+            dropout=dropout,
+            use_bias=use_bias,
+        )
 
         # MLP
         self.mlp = TransformerFFN(
@@ -124,15 +129,13 @@ if __name__ == '__main__':
     # test mask with different values
     mask[..., 0] = False # don't attend the first entry in sequence
     y1 = model(x, mask=mask)
-    x[~mask] = -99 # this entry won't be attended and thus should not matter
+    x[~mask] = -99. # this entry won't be attended and thus should not matter
     y2 = model(x, mask=mask)
     assert torch.allclose(y1[mask], y2[mask], atol=1e-5)
 
     # MAB
     model = MAB(d_model, d_ff, pre_norm=False)
     torch.compile(model)
-    model.eval()
- 
     x = torch.randn(b, n, d_model)
     y = model(x)
 
