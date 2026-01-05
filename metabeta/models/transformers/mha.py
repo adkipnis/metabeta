@@ -51,3 +51,42 @@ class MHA(nn.Module):
             h = h.view(shape)
         return h
 
+
+# --------------------------------------------------------
+if __name__ == '__main__':
+
+    # sizes
+    d_model = 16
+    b, m, n = 8, 5, 10
+
+    # MHA
+    model = MHA(d_model)
+    torch.compile(model)
+    model.eval()
+
+    # test 3d
+    x = torch.randn(b, n, d_model)
+    y = model(x)
+    assert x.shape == y.shape
+
+    # test qkv
+    z = model(x, y)
+    _ = model(x, y, z)
+
+    # test 4d
+    x = torch.randn(b, m, n, d_model)
+    y = model(x)
+    assert x.shape == y.shape
+
+    # test mask
+    mask = torch.ones(size=(b, m, n)).bool() # attend all entries
+    y_ = model(x, mask=mask)
+    assert torch.allclose(y, y_)
+
+    # test mask with different values
+    mask[..., 0] = False # don't attend the first entry in sequence
+    y1 = model(x, mask=mask)
+    x[~mask] = -99 # this entry won't be attended and thus should not matter
+    y2 = model(x, mask=mask)
+    assert torch.allclose(y1[mask], y2[mask], atol=1e-5)
+
