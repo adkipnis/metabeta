@@ -1,4 +1,4 @@
-from .mha import MHA
-from .mab import MAB
+from .attention import MHA, MAB
+from .settransformer import SetTransformer
 
-__all__ = ['MHA', 'MAB']
+__all__ = ['MHA', 'MAB', 'SetTransformer']
