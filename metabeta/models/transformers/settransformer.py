@@ -80,3 +80,34 @@ class SetTransformer(nn.Module):
         return x, mask
 
     def forward(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+
+        # optionally reshape inputs
+        old_shape = x.shape
+        x, mask = self._reshape(x, mask)
+
+        # linear embedding
+        x = self.proj_in(x)
+
+        # insert token
+        x, mask = self._insertToken(x, mask)
+
+        # attend
+        for block in self.blocks:
+            x = block(x, mask=mask)
+
+        # pool by extracting token
+        x = x[:, 0]
+
+        # project out
+        x = self.proj_out(x)
+
+        # get back original shape
+        x = x.reshape(*old_shape[:-2], -1)
+        return x
+
+
+# --------------------------------------------------------
