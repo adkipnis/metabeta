@@ -20,3 +20,21 @@ class MAB(nn.Module):
         super().__init__()
 
         # Multihead Attention
+        self.mha = MHA(d_model, n_heads, dropout, use_bias)
+
+        # MLP
+        self.mlp = TransformerFFN(
+            d_input=d_model,
+            d_hidden=d_ff,
+            d_output=d_model,
+            activation=activation,
+            dropout=dropout,
+            use_bias=use_bias,
+        )
+
+        # Layer Norms
+        self.pre_norm = pre_norm
+        self.norm0 = nn.LayerNorm(d_model, eps=eps)
+        self.norm1 = nn.LayerNorm(d_model, eps=eps)
+
+
