@@ -38,24 +38,10 @@ class MHA(nn.Module):
         if value is None:
             value = key
 
-        # deal with left-over dimensions
-        shape = None
-        if len(query.shape) > 3:
-            shape = query.shape
-            query = query.reshape(-1, *query.shape[-2:])
-            key = key.reshape(-1, *key.shape[-2:])
-            value = value.reshape(-1, *value.shape[-2:])
-            if kpd is not None:
-                kpd = kpd.reshape(-1, *kpd.shape[-1:])
-
         # forward pass
         h, _ = self.mha(query, key, value,
                         key_padding_mask=kpd)
- 
-        # optionally reshape outputs
-        if shape is not None:
-            h = h.view(shape)
-        return h
+        return self.dropout(h)
 
 
 # --------------------------------------------------------
@@ -63,14 +49,14 @@ if __name__ == '__main__':
 
     # sizes
     d_model = 16
-    b, m, n = 8, 5, 10
+    b, n = 8, 10
 
     # MHA
     model = MHA(d_model)
     torch.compile(model)
     model.eval()
 
-    # test 3d
+    # test
     x = torch.randn(b, n, d_model)
     y = model(x)
     assert x.shape == y.shape
@@ -79,13 +65,8 @@ if __name__ == '__main__':
     z = model(x, y)
     _ = model(x, y, z)
 
-    # test 4d
-    x = torch.randn(b, m, n, d_model)
-    y = model(x)
-    assert x.shape == y.shape
-
     # test mask
-    mask = torch.ones(size=(b, m, n)).bool() # attend all entries
+    mask = torch.ones(size=(b, n)).bool() # attend all entries
     y_ = model(x, mask=mask)
     assert torch.allclose(y, y_)
 
