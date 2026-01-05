@@ -19,6 +19,7 @@ class SetTransformer(nn.Module):
         activation: str = 'GELU',
         dropout: float = 0.01,
         weight_init: tuple[str, str] | None = ('xavier', 'normal'),
+        eps: float = 1e-3,
     ):
         super().__init__()
 
@@ -42,9 +43,13 @@ class SetTransformer(nn.Module):
                 pre_norm=pre_norm,
                 activation=activation,
                 dropout=dropout,
+                eps=eps,
             )
             blocks += [mab]
         self.blocks = nn.ModuleList(blocks)
+
+        # posthoc norm
+        self.norm = nn.LayerNorm(d_model, eps=eps)
 
         # optional output projector
         self.proj_out = None
@@ -105,10 +110,11 @@ class SetTransformer(nn.Module):
         # attend
         for block in self.blocks:
             x = block(x, mask=mask)
+        x = self.norm(x)
 
         # pool by extracting token
         x = x[:, 0]
-
+ 
         # project out
         if self.proj_out is not None:
             x = self.proj_out(x)
