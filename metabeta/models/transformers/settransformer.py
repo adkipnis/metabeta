@@ -13,18 +13,19 @@ class SetTransformer(nn.Module):
         d_model: int,
         d_ff: int,
         d_output: int | None = None,
-        n_points: int = 32, # for ISAB
+        n_inducing: int = 32, # for ISAB blocks
         n_heads: int = 4,
-        n_blocks: int = 2,
+        n_blocks: int = 4,
+        n_isab: int = 2, # first n blocks are ISAB blocks instead of MAB
         use_bias: bool = True,
         pre_norm: bool = True,
         activation: str = 'GELU',
         dropout: float = 0.01,
-        use_isab: bool = True,
         weight_init: tuple[str, str] | None = ('xavier', 'normal'),
         eps: float = 1e-3,
     ):
         super().__init__()
+        assert n_blocks >= n_isab, 'n_isab must not be larger than n_blocks'
 
         # input projector
         self.proj_in = nn.Sequential(
@@ -46,15 +47,13 @@ class SetTransformer(nn.Module):
             dropout=dropout,
             eps=eps,
         )
-        cls = MAB
-        if use_isab:
-            cls = ISAB
-            cfg.update({'n_points': n_points})
 
         # build attention blocks
         blocks = []
-        for _ in range(n_blocks):
-            blocks += [cls(**cfg)] # type: ignore
+        for _ in range(n_isab):
+            blocks += [ISAB(**cfg, n_inducing=n_inducing)] # type: ignore
+        for _ in range(n_blocks-n_isab):
+            blocks += [MAB(**cfg)] # type: ignore
         self.blocks = nn.ModuleList(blocks)
 
         # posthoc norm
@@ -141,9 +140,9 @@ if __name__ == '__main__':
     d_ff = 64
     b, m, n, d = 8, 5, 10, 3
 
-    # MHA
-    model = SetTransformer(d, d_model, d_ff)
-    # model = torch.compile(model)
+    # ISAB/MAB set transformer
+    model = SetTransformer(d, d_model, d_ff, n_blocks=4, n_isab=2)
+    torch.compile(model)
     model.eval()
  
     # 3d case
@@ -161,4 +160,3 @@ if __name__ == '__main__':
     x[~mask] = 99
     y2 = model(x, mask=mask)
     assert torch.allclose(y1, y2, atol=1e-5)
-
