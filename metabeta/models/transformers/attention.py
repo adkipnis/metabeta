@@ -105,6 +105,22 @@ class MAB(nn.Module):
         return x
 
 
+class ISAB(nn.Module):
+    ''' Induced Self-Attention Block:
+        MAB(I,X) -> MAB(X,H)'''
+    def __init__(
+        self,
+        d_model: int,
+        d_ff: int,
+        n_points: int, # number of induction points
+        n_heads: int = 4,
+        use_bias: bool = True,
+        pre_norm: bool = True,
+        activation: str = 'GELU',
+        dropout: float = 0.01,
+        eps: float = 1e-3,
+    ):
+        super().__init__()
 
 # --------------------------------------------------------
 if __name__ == '__main__':
