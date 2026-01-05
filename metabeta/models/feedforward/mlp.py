@@ -2,7 +2,7 @@ from typing import Sequence
 import torch
 from torch import nn
 from torch.nn import functional as F
-from metabeta.models.feedforward.utils import (
+from metabeta.models.utils import (
     getActivation, getInitializer, zeroInitializer, weightNormInitializer)
 
 # --- multi-layer perceptron
@@ -111,7 +111,7 @@ class MLP(nn.Module):
             self.apply(initializer)
 
         # optionally zero-init final layer
-        if zero_init:
+        if zero_init: # this should only be used for residual setups
             zeroInitializer(self.layers[-2])
             if self.shortcut is not None:
                 zeroInitializer(self.shortcut[0])
@@ -153,10 +153,10 @@ class TransformerFFN(nn.Module):
             # defaults:
             layer_norm=True,
             pre_norm=True,
-            residual=True,
+            residual=False,
             weight_init=('xavier', 'normal'),
             weight_norm=False,
-            zero_init=False,
+            zero_init=True,
         )
 
     def forward(self, x):
