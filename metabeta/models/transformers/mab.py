@@ -5,7 +5,8 @@ from metabeta.models.feedforward import TransformerFFN
 
 
 class MAB(nn.Module):
-    ''' Multihead-Attention Block '''
+    ''' Multihead-Attention Block:
+        Norm -> MHA -> Residual -> Norm -> FF -> Residual '''
     def __init__(
         self,
         d_model: int,
@@ -18,6 +19,7 @@ class MAB(nn.Module):
         eps: float = 1e-3,
     ):
         super().__init__()
+        assert d_model % n_heads == 0, 'd_model must be divisible by n_heads'
 
         # Multihead Attention
         self.mha = MHA(d_model, n_heads, dropout, use_bias)
@@ -56,14 +58,14 @@ if __name__ == '__main__':
     # sizes
     d_model = 16
     d_ff = 64
-    b, m, n = 8, 5, 10
+    b, n = 8, 10
 
     # MHA
     model = MAB(d_model, d_ff, pre_norm=False)
     torch.compile(model)
     model.eval()
-    
-    x = torch.randn(b, m, n, d_model)
+ 
+    x = torch.randn(b, n, d_model)
     y = model(x)
-    
+
 
