@@ -1,20 +1,24 @@
 import torch
 from torch import nn
+from metabeta.models.utils import zeroInitializer
 
 
 class MHA(nn.Module):
-    ''' Multi-Head Attention wrapper
-        automatically deals with inputs that are > 3D '''
+    ''' Multi-Head Attention wrapper '''
     def __init__(
         self,
         d_model: int,
         n_heads: int = 4,
         dropout: float = 0.01,
         use_bias: bool = True,
+        zero_init: bool = True,
     ) -> None:
         super().__init__()
         self.mha = nn.MultiheadAttention(
             d_model, n_heads, dropout, bias=use_bias, batch_first=True)
+        self.dropout = nn.Dropout(dropout)
+        if zero_init:
+            zeroInitializer(self.mha.out_proj)
 
     def forward(
         self,
