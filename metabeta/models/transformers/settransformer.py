@@ -55,3 +55,28 @@ class SetTransformer(nn.Module):
 
 
     def _reshape(
+        self, x: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        # deal with sequences longer than 3d
+        if x.dim() > 3:
+            x = x.reshape(-1, *x.shape[-2:])
+            if mask is not None:
+                mask = mask.reshape(-1, *mask.shape[-1:])
+        return x, mask
+
+    def _insertToken(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor|None]:
+        # prepend pool token along sequence dim and include in mask
+        token = self.pool_token.unsqueeze(0).unsqueeze(0)
+        token = token.expand(x.size(0), 1, -1)
+        x = torch.cat([token, x], dim=-2)
+        if mask is not None:
+            token_mask = torch.ones_like(mask[:, 0:1])
+            mask = torch.cat([token_mask, mask], dim=-1)
+        return x, mask
+
+    def forward(
