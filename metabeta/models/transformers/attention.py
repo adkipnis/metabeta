@@ -86,14 +86,21 @@ class MAB(nn.Module):
         self.norm1 = nn.LayerNorm(d_model, eps=eps)
 
 
-    def forward(self,
-                x: torch.Tensor, # (batch, seq_len, d_model)
-                mask: torch.Tensor | None = None):
+    def forward(
+        self,
+        x: torch.Tensor, # (batch, seq_len, d_model)
+        z: torch.Tensor | None = None, # (batch, seq_len, d_model)
+        mask: torch.Tensor | None = None, # (batch, seq_len)
+    ) -> torch.Tensor:
         if self.pre_norm:
-            x = x + self.mha(self.norm0(x), mask=mask)
+            h = self.mha(self.norm0(x),
+                         self.norm0(z) if z is not None else None,
+                         mask=mask)
+            x = x + h
             x = x + self.mlp(self.norm1(x))
         else:
-            x = self.norm0(x + self.mha(x, mask=mask))
+            h = self.mha(x, z, mask=mask)
+            x = self.norm0(x + h)
             x = self.norm1(x + self.mlp(x))
         return x
 
