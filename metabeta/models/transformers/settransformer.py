@@ -1,9 +1,9 @@
 import torch
 from torch import nn
-from metabeta.models.transformers import MAB
+from metabeta.models.transformers import MAB, ISAB
 from metabeta.models.utils import getInitializer
 
-class SetTransformer(nn.Module):
+class SetEncoder(nn.Module):
     ''' O(n²) Set Transformer:
         Linear -> Dropout -> [MAB] * n_blocks -> Pool (-> Linear -> Dropout)'''
     def __init__(
@@ -133,7 +133,7 @@ if __name__ == '__main__':
     b, m, n, d = 8, 5, 10, 3
 
     # MHA
-    model = SetTransformer(d, d_model, d_ff)
+    model = SetEncoder(d, d_model, d_ff)
     # model = torch.compile(model)
     model.eval()
  
