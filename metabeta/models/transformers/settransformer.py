@@ -13,12 +13,14 @@ class SetTransformer(nn.Module):
         d_model: int,
         d_ff: int,
         d_output: int | None = None,
+        n_points: int = 32, # for ISAB
         n_heads: int = 4,
         n_blocks: int = 2,
         use_bias: bool = True,
         pre_norm: bool = True,
         activation: str = 'GELU',
         dropout: float = 0.01,
+        use_isab: bool = True,
         weight_init: tuple[str, str] | None = ('xavier', 'normal'),
         eps: float = 1e-3,
     ):
@@ -33,20 +35,26 @@ class SetTransformer(nn.Module):
         # pool token
         self.pool_token = torch.nn.Parameter(torch.randn(d_model) * 0.02)
  
-        # attention blocks
+        # configure blocks
+        cfg = dict(
+            d_model=d_model,
+            d_ff=d_ff,
+            n_heads=n_heads,
+            use_bias=use_bias,
+            pre_norm=pre_norm,
+            activation=activation,
+            dropout=dropout,
+            eps=eps,
+        )
+        cls = MAB
+        if use_isab:
+            cls = ISAB
+            cfg.update({'n_points': n_points})
+
+        # build attention blocks
         blocks = []
         for _ in range(n_blocks):
-            mab = MAB(
-                d_model=d_model,
-                d_ff=d_ff,
-                n_heads=n_heads,
-                use_bias=use_bias,
-                pre_norm=pre_norm,
-                activation=activation,
-                dropout=dropout,
-                eps=eps,
-            )
-            blocks += [mab]
+            blocks += [cls(**cfg)] # type: ignore
         self.blocks = nn.ModuleList(blocks)
 
         # posthoc norm
