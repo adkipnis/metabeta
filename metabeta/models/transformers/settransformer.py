@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 from metabeta.models.transformers import MAB
+from metabeta.models.utils import getInitializer
 
 class SetTransformer(nn.Module):
     ''' O(n²) Set Transformer:
@@ -17,6 +18,7 @@ class SetTransformer(nn.Module):
         pre_norm: bool = True,
         activation: str = 'GELU',
         dropout: float = 0.01,
+        weight_init: tuple[str, str] | None = ('xavier', 'normal'),
     ):
         super().__init__()
 
@@ -45,14 +47,19 @@ class SetTransformer(nn.Module):
         self.blocks = nn.ModuleList(blocks)
 
         # optional output projector
+        self.proj_out = None
         if d_output is not None:
             self.proj_out = nn.Sequential(
                 nn.Linear(d_model, d_output),
                 nn.Dropout(dropout),
             )
-        else:
-            self.proj_out = nn.Identity()
 
+        # optional weight initialization for the projectors
+        if weight_init is not None:
+            initializer = getInitializer(*weight_init)
+            initializer(self.proj_in[0])
+            if self.proj_out is not None:
+                initializer(self.proj_out[0])
 
     def _reshape(
         self, x: torch.Tensor,
@@ -103,7 +110,8 @@ class SetTransformer(nn.Module):
         x = x[:, 0]
 
         # project out
-        x = self.proj_out(x)
+        if self.proj_out is not None:
+            x = self.proj_out(x)
 
         # get back original shape
         x = x.reshape(*old_shape[:-2], -1)
