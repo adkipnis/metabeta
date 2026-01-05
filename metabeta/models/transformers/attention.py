@@ -135,7 +135,7 @@ class ISAB(nn.Module):
         self.mab1 = MAB(**mab_dict) # type: ignore
         self._I = nn.Parameter(torch.empty(n_inducing, d_model))
         nn.init.normal_(self._I, 0.0, 0.02)
-        
+ 
     def I(self, x: torch.Tensor) -> torch.Tensor:
         shape = x.shape[:-2]
         I = self._I
@@ -193,7 +193,7 @@ if __name__ == '__main__':
     y = model(x)
 
     # ISAB
-    model = ISAB(d_model, d_ff, n_points=32)
+    model = ISAB(d_model, d_ff, n_inducing=32)
     torch.compile(model)
     model.eval()
     y1 = model(x, mask=mask)
