@@ -112,7 +112,7 @@ class ISAB(nn.Module):
         self,
         d_model: int,
         d_ff: int,
-        n_points: int, # number of induction points
+        n_inducing: int, # number of induction points
         n_heads: int = 4,
         use_bias: bool = True,
         pre_norm: bool = True,
@@ -121,7 +121,7 @@ class ISAB(nn.Module):
         eps: float = 1e-3,
     ):
         super().__init__()
-        assert n_points > 0, 'ISAB requires at least one inducing point'
+        assert n_inducing > 0, 'ISAB requires at least one inducing point'
         mab_dict = dict(
             d_model=d_model,
             d_ff=d_ff,
@@ -133,7 +133,7 @@ class ISAB(nn.Module):
             eps=eps)
         self.mab0 = MAB(**mab_dict) # type: ignore
         self.mab1 = MAB(**mab_dict) # type: ignore
-        self._I = nn.Parameter(torch.empty(n_points, d_model))
+        self._I = nn.Parameter(torch.empty(n_inducing, d_model))
         nn.init.normal_(self._I, 0.0, 0.02)
         
     def I(self, x: torch.Tensor) -> torch.Tensor:
