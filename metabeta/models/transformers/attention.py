@@ -136,7 +136,6 @@ class ISAB(nn.Module):
         self._I = nn.Parameter(torch.empty(n_points, d_model))
         nn.init.normal_(self._I, 0.0, 0.02)
         
-
     def I(self, x: torch.Tensor) -> torch.Tensor:
         shape = x.shape[:-2]
         I = self._I

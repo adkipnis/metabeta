@@ -3,9 +3,10 @@ from torch import nn
 from metabeta.models.transformers import MAB, ISAB
 from metabeta.models.utils import getInitializer
 
-class SetEncoder(nn.Module):
-    ''' O(n²) Set Transformer:
-        Linear -> Dropout -> [MAB] * n_blocks -> Pool (-> Linear -> Dropout)'''
+class SetTransformer(nn.Module):
+    ''' Set Transformer:
+        Linear -> Dropout -> [MAB] * n_blocks -> Pool (-> Linear -> Dropout)
+        Optionally use ISAB instead of MAB to go from O(n²) to O(n) '''
     def __init__(
         self,
         d_input: int,
@@ -133,7 +134,7 @@ if __name__ == '__main__':
     b, m, n, d = 8, 5, 10, 3
 
     # MHA
-    model = SetEncoder(d, d_model, d_ff)
+    model = SetTransformer(d, d_model, d_ff)
     # model = torch.compile(model)
     model.eval()
  
