@@ -193,3 +193,12 @@ if __name__ == '__main__':
     x = torch.randn(b, n, d_model)
     y = model(x)
 
+    # ISAB
+    model = ISAB(d_model, d_ff, n_points=32)
+    torch.compile(model)
+    model.eval()
+    y1 = model(x, mask=mask)
+    x[~mask] = 0.
+    y2 = model(x, mask=mask)
+    assert torch.allclose(y1[mask], y2[mask], atol=1e-5)
+
