@@ -38,9 +38,9 @@ def getInitializer(method: str, distribution: str) -> Initializer:
 
     return initializer
 
-def zeroInitializer(layer: nn.Module, limit: float = 1e-3) -> None:
+def zeroInitializer(layer: nn.Module) -> None:
     if isinstance(layer, nn.Linear):
-        nn.init.uniform_(layer.weight, -limit, limit)
+        nn.init.zeros_(layer.weight)
         if layer.bias is not None:
             nn.init.zeros_(layer.bias)
 
