@@ -40,14 +40,14 @@ class Feedforward(nn.Module):
         if dropout:
             layers += [nn.Dropout(dropout)]
         self.layers = nn.Sequential(*layers)
-    
+ 
     @property
     def rscale(self) -> torch.Tensor:
         return F.softplus(self._rscale).clamp(max=1)
-    
+
     def forward(self, x):
         if self.residual:
-            return x + self.rscale() * self.layers(x)
+            return x + self.rscale * self.layers(x)
         return self.layers(x)
 
 
@@ -137,6 +137,7 @@ class TransformerFFN(nn.Module):
         d_output: int,
         use_bias: bool = True,
         activation: str = 'GELU',
+        dropout: float = 0.01,
         shortcut: bool = True,
     ):
         super().__init__()
@@ -147,11 +148,11 @@ class TransformerFFN(nn.Module):
             d_output=d_output,
             use_bias=use_bias,
             activation=activation,
+            dropout=dropout,
             shortcut=shortcut,
             # defaults:
             layer_norm=True,
             pre_norm=True,
-            dropout=0.01,
             residual=True,
             weight_init=('xavier', 'normal'),
             weight_norm=False,
