@@ -171,6 +171,7 @@ class FlowMLP(nn.Module):
         d_output: int,
         use_bias: bool = True,
         shortcut: bool = True,
+        **kwargs
     ):
         super().__init__()
         self.net = MLP(
@@ -205,6 +206,7 @@ if __name__ == '__main__':
         out = model(x)
         model = torch.compile(model)
         model(x)
+        assert not out.isnan().any()
         return out
 
     # dims
