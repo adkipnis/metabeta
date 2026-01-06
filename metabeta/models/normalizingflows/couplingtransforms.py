@@ -85,3 +85,21 @@ class Affine(CouplingTransform):
             self.conditioner = FlowResidualNet(**net_kwargs)
 
     def propose(self, x1, condition=None):
+        parameters = self.conditioner(x1, condition)
+        log_s, t = parameters.chunk(2, dim=-1)
+        log_s = self.alpha * torch.tanh(log_s / self.alpha)  # softclamping
+        return log_s, t
+
+    def __call__(self, x2, params, mask2=None, inverse=False):
+        log_s, t = params
+        if mask2 is not None:
+            log_s = log_s * mask2
+            t = t * mask2
+        if inverse:
+            x2 = (x2 - t) * (-log_s).exp()
+        else:
+            x2 = log_s.exp() * x2 + t
+        log_det = log_s.sum(-1)
+        return x2, log_det
+
+
