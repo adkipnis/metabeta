@@ -52,3 +52,13 @@ class CouplingTransform(nn.Module):
 
 
 class Affine(CouplingTransform):
+    def __init__(
+        self,
+        split_dims: tuple[int, int],
+        d_context: int = 0,
+        net_kwargs: dict = {},
+        alpha: float = 1.0, # softclamping denominator
+    ):
+        super().__init__(split_dims, d_context, net_kwargs)
+        self.alpha = alpha
+
