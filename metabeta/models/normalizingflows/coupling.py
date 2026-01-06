@@ -4,12 +4,17 @@ from metabeta.models.normalizingflows import Affine
 
 
 class Coupling(nn.Module):
+    ''' Single Coupling Step:
+        1. Condition parameters on x1
+        2. Parameterically transform x2
+        3. return both with log determinant of Jacobian
+    '''
     def __init__(
         self,
         split_dims: tuple[int, int],
         d_context: int = 0,
-        transform: str = 'affine',
         net_kwargs: dict = {},
+        transform: str = 'affine',
     ):
         super().__init__()
         if transform == 'affine':
