@@ -1,11 +1,11 @@
 import torch
 from metabeta.models.normalizingflows.coupling import (
-    Coupling,
+    Coupling, DualCoupling
 )
 
 ATOL = 1e-5
 NET_KWARGS = {
-    'net_type': 'residual',
+    'net_type': 'mlp',
     'd_ff': 128,
     'depth': 3,
     'activation': 'ReLU',
@@ -53,10 +53,35 @@ def test_single_coupling():
         torch.allclose(x2, z2, atol=ATOL)
     ), 'conditional model is not invertible'
 
-    print("Single Coupling passed all tests!")
+    print('Single Coupling passed all tests!')
+
+
+def test_dual_coupling():
+    x = torch.randn((8, 3))
+    condition = torch.randn((8, 5))
+    model = DualCoupling(3, d_context=5, net_kwargs=NET_KWARGS)
+    model.eval()
+    z, log_det, _ = model.forward(x, condition)
+    z, _, _ = model.inverse(z, condition)
+    assert torch.allclose(x, z, atol=1e-5), 'model is not invertible'
+
+    x.requires_grad_(True)
+    z_numerical, _, _ = model.forward(x, condition)
+    jacobian = []
+    for i in range(z_numerical.shape[-1]):
+        grad_z_i = torch.autograd.grad(z_numerical[:, i].sum(), x, retain_graph=True)[0]
+        jacobian.append(grad_z_i)
+    jacobian = torch.stack(jacobian, dim=-1)
+    numerical_log_det = torch.log(torch.abs(torch.det(jacobian)))
+    assert torch.allclose(log_det, numerical_log_det, atol=1e-5), (
+        f'Log determinant mismatch! Computed: {log_det}, Numerical: {numerical_log_det}'
+    )
+
+    print('Dual Coupling passed all tests!')
 
 
 if __name__ == '__main__':
     torch.manual_seed(0)
     test_single_coupling()
+    test_dual_coupling()
 
