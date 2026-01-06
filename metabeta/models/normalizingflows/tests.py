@@ -4,7 +4,7 @@ from metabeta.models.normalizingflows.coupling import (
 )
 
 ATOL = 1e-5
-net_kwargs = {
+NET_KWARGS = {
     'net_type': 'residual',
     'd_ff': 128,
     'depth': 3,
@@ -15,8 +15,8 @@ def test_single_coupling():
     inputs = torch.randn((8, 3))
     x1, x2 = inputs.chunk(2, dim=-1)
     split_dims = (x1.shape[-1], x2.shape[-1])
-    model1 = Coupling(split_dims, net_kwargs=net_kwargs)
-    model2 = Coupling((split_dims[1], split_dims[0]), net_kwargs=net_kwargs)
+    model1 = Coupling(split_dims, net_kwargs=NET_KWARGS)
+    model2 = Coupling((split_dims[1], split_dims[0]), net_kwargs=NET_KWARGS)
 
     model1.eval()
     model2.eval()
@@ -44,7 +44,7 @@ def test_single_coupling():
     ), 'serial model is not invertible'
 
     condition = torch.randn((8, 5))
-    model3 = Coupling(split_dims, d_context=5, net_kwargs=net_kwargs)
+    model3 = Coupling(split_dims, d_context=5, net_kwargs=NET_KWARGS)
     model3.eval()
     (z1, z2), _ = model3.forward(x1, x2, condition)
     (z1, z2), _ = model3.inverse(z1, z2, condition)
