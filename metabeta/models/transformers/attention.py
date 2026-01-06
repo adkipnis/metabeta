@@ -136,7 +136,7 @@ class ISAB(nn.Module):
         self._I = nn.Parameter(torch.empty(n_inducing, d_model))
         nn.init.normal_(self._I, 0.0, 0.02)
  
-    def I(self, x: torch.Tensor) -> torch.Tensor:
+    def _getI(self, x: torch.Tensor) -> torch.Tensor:
         shape = x.shape[:-2]
         I = self._I
         return I.expand(*shape, *I.shape)
@@ -146,7 +146,7 @@ class ISAB(nn.Module):
         x: torch.Tensor, # (batch, seq_len, d_model)
         mask: torch.Tensor | None = None, # (batch, seq_len)
     ) -> torch.Tensor:
-        i = self.I(x)
+        i = self._getI(x)
         h = self.mab0(i, x, mask=mask)
         h = self.mab1(x, h)
         return h
