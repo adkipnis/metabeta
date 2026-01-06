@@ -66,3 +66,24 @@ class DualCoupling(nn.Module):
         )
 
     def __call__(self, x: torch.Tensor,
+                 condition: torch.Tensor | None = None,
+                 mask: torch.Tensor | None = None,
+                 inverse: bool = False):
+        z = torch.empty_like(x)
+        x1, x2 = x[..., :self.pivot], x[..., self.pivot:]
+        mask1, mask2 = None, None
+        if mask is not None:
+            mask1, mask2 = mask[..., :self.pivot], mask[..., self.pivot:]
+        (x1, x2), log_det1 = self.coupling1(x1, x2, condition, mask2, inverse=inverse)
+        (x2, x1), log_det2 = self.coupling2(x2, x1, condition, mask1, inverse=inverse)
+        z[..., :self.pivot], z[..., self.pivot:] = x1, x2
+        log_det = log_det1 + log_det2
+        return z, log_det, mask
+
+    def forward(self, x, condition=None, mask=None):
+        return self(x, condition, mask, inverse=False)
+
+    def inverse(self, x, condition=None, mask=None):
+        return self(x, condition, mask, inverse=True)
+
+
