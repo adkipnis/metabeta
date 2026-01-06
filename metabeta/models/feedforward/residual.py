@@ -48,7 +48,7 @@ class ResidualBlock(nn.Module):
     @property
     def rscale(self) -> torch.Tensor:
         return F.softplus(self._rscale).clamp(max=1)
-    
+ 
     def forward(self, x: torch.Tensor,
                 context: torch.Tensor | None = None) -> torch.Tensor:
         h = self.layers(x)
@@ -62,14 +62,14 @@ class ResidualBlock(nn.Module):
 
 class ResidualNet(nn.Module):
     ''' Residual Feedforward Network:
-        Linear -> Dropout -> [RB] * n_blocks -> Linear -> Dropout
+        Linear -> Dropout -> [RB] * depth -> Linear -> Dropout
     '''
     def __init__(
         self,
         d_input: int,
         d_hidden: int,
         d_output: int,
-        n_blocks: int,
+        depth: int,
         d_context: int = 0,
         use_bias: bool = True,
         layer_norm: bool = False,
@@ -103,7 +103,7 @@ class ResidualNet(nn.Module):
                 dropout=dropout,
                 use_glu=use_glu,
             )
-            for _ in range(n_blocks)
+            for _ in range(depth)
         ]
         self.blocks = nn.ModuleList(blocks)
 
@@ -140,17 +140,18 @@ class FlowResidualNet(nn.Module):
         d_input: int,
         d_hidden: int,
         d_output: int,
-        n_blocks: int,
+        depth: int,
         d_context: int = 0,
         use_bias: bool = True,
         use_glu: bool = True,
+        **kwargs
     ):
         super().__init__()
         self.net = ResidualNet(
             d_input=d_input,
             d_hidden=d_hidden,
             d_output=d_output,
-            n_blocks=n_blocks,
+            depth=depth,
             d_context=d_context,
             use_bias=use_bias,
             use_glu=use_glu,
@@ -183,7 +184,7 @@ if __name__ == '__main__':
     d_input = 16
     d_hidden = 32
     d_output = 8
-    n_blocks = 3
+    depth = 3
     x = torch.randn(b, d_hidden)
     context = None
 
@@ -206,7 +207,7 @@ if __name__ == '__main__':
     cfg.update({
         'd_input': d_input,
         'd_output': d_output,
-        'n_blocks': n_blocks,
+        'depth': depth,
     })
     x = torch.randn(b, d_input)
     run(ResidualNet)
@@ -216,7 +217,7 @@ if __name__ == '__main__':
         'd_input': d_input,
         'd_hidden': d_hidden,
         'd_output': d_output,
-        'n_blocks': n_blocks,
+        'depth': depth,
         'd_context': d_context,
     }
     run(FlowResidualNet)
