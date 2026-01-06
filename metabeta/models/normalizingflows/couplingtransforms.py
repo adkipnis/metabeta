@@ -22,10 +22,10 @@ class CouplingTransform(nn.Module):
 
         # setup conditioner
         assert net_kwargs['net_type'] in ['mlp', 'residual']
-        self.buildConditioner(net_kwargs.copy())
+        self._build(net_kwargs.copy())
 
     @abstractmethod
-    def buildConditioner(self, net_kwargs: dict) -> None:
+    def _build(self, net_kwargs: dict) -> None:
         ...
 
     @abstractmethod
@@ -62,3 +62,26 @@ class Affine(CouplingTransform):
         super().__init__(split_dims, d_context, net_kwargs)
         self.alpha = alpha
 
+    def _build(self, net_kwargs):
+        net_type = net_kwargs['net_type']
+
+        # MLP Conditioner
+        if net_type == 'mlp':
+            net_kwargs.update({
+                'd_input': self.split_dims[0] + self.d_context,
+                'd_hidden': (net_kwargs['d_ff'],) * net_kwargs['depth'],
+                'd_output': 2 * self.split_dims[1],
+            })
+            self.conditioner = FlowMLP(**net_kwargs)
+
+        # Residual Conditioner
+        elif net_type == 'residual':
+            net_kwargs.update({
+                'd_input': self.split_dims[0],
+                'd_context': self.d_context,
+                'd_hidden': net_kwargs['d_ff'],
+                'd_output': 2 * self.split_dims[1],
+            })
+            self.conditioner = FlowResidualNet(**net_kwargs)
+
+    def propose(self, x1, condition=None):
