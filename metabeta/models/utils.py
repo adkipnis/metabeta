@@ -52,7 +52,8 @@ def lastZeroInitializer(layers: nn.ModuleList) -> None:
 
 def weightNormInitializer(layer: nn.Module) -> None:
     if isinstance(layer, nn.Linear):
-        nn.utils.parametrizations.weight_norm(layer)
+        if not torch.all(layer.weight == 0):    
+            nn.utils.parametrizations.weight_norm(layer)
 
 
 # --- activations
