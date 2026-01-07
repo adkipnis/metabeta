@@ -14,7 +14,6 @@ class StaticDist(nn.Module):
         self.family = family
         self._sampling_dist = self._dist['scipy'](**self._default_params)
         self._training_dist = self._dist['torch'](**self._default_params)
-        self.device = self._training_dist.mean.device
 
     def __repr__(self) -> str:
         params = ''
@@ -42,7 +41,7 @@ class StaticDist(nn.Module):
 
     def sample(self, shape: tuple[int, ...]) -> torch.Tensor:
         x = self._sampling_dist.rvs(size=shape).astype(np.float32)
-        return torch.from_numpy(x).to(self.device)
+        return torch.from_numpy(x)
 
     def logProb(self, x: torch.Tensor) -> torch.Tensor:
         return self._training_dist.log_prob(x)
@@ -54,14 +53,13 @@ class TrainableDist(nn.Module):
         self.d_data = d_data
         self.family = family
         self._initParams()
-        self.device = self._params['loc'].device
 
     def __repr__(self) -> str:
         params = ''
         for k,v in self._params.items():
             params += f'\n    {k}: {v.cpu().detach().numpy()}, '
         return f'Trainable {self.family.title()} ({params[:-2]})'
- 
+
     def _initParams(self) -> None:
         if self.family == 'student':
             self._log_df = nn.Parameter(torch.log(torch.exp(5 * torch.ones(self.d_data)) - 1))
@@ -91,7 +89,7 @@ class TrainableDist(nn.Module):
         with torch.no_grad():
             sampling_dist = self._dist['scipy'](**self._params)
             x = sampling_dist.rvs(size=shape).astype(np.float32)
-            return torch.from_numpy(x).to(self.device)
+            return torch.from_numpy(x)
 
     def logProb(self, x: torch.Tensor) -> torch.Tensor:
         training_dist = self._dist['torch'](**self._params)
@@ -103,7 +101,7 @@ class BaseDist(nn.Module):
         - supports Normal and StudentT distribution family
         - allows trainable distribution parameters
         - log_prob evaluation via pytorch
-        - sampling via scipy (better support for MPS and GPU)
+        - CPU sampling via scipy (circumvents issues with model.eval())
     '''
     def __init__(self, d_data: int, family: str, trainable: bool = True) -> None:
         super().__init__()
@@ -135,4 +133,3 @@ if __name__ == '__main__':
             assert x.shape == (b,d)
             assert log_prob.shape == (b,d)
             print(dist)
-
