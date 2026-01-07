@@ -128,5 +128,29 @@ class CouplingFlow(nn.Module):
             ]
         self.flows = nn.ModuleList(flows)
 
+    def __call__(
+            self,
+            x: torch.Tensor,
+            condition: torch.Tensor | None = None,
+            mask: torch.Tensor | None = None,
+            inverse: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        log_det = torch.zeros(x.shape[:-1], device=x.device)
+        flows = reversed(self.flows) if inverse else self.flows
+        for flow in flows:
+            x, ld, mask = flow(x, condition=condition, mask=mask, inverse=inverse)
+            log_det = log_det + ld
+        return x, log_det, mask
+
+    def forward(self, x, condition=None, mask=None):
+        return self(x, condition, mask, inverse=False)
+
+    def inverse(self, x, condition=None, mask=None):
+        return self(x, condition, mask, inverse=True)
+
+    def _forwardMask(self, mask: torch.Tensor) -> torch.Tensor:
+        for flow in self.flows:
+            mask = flow._forwardMask(mask) # type: ignore
+        return mask
 
 
