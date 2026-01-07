@@ -24,7 +24,7 @@ class Coupling(nn.Module):
         else:
             raise NotImplementedError()
 
-    def _main(self, x1: torch.Tensor, x2: torch.Tensor,
+    def forward(self, x1: torch.Tensor, x2: torch.Tensor,
                  condition: torch.Tensor | None = None,
                  mask2: torch.Tensor | None = None,
                  inverse: bool = False):
@@ -32,11 +32,8 @@ class Coupling(nn.Module):
             x1, x2, condition=condition, mask2=mask2, inverse=inverse)
         return (x1, x2), log_det
 
-    def forward(self, x1, x2, condition=None, mask2=None):
-        return self._main(x1, x2, condition, mask2, inverse=False)
-
     def inverse(self, x1, x2, condition=None, mask2=None):
-        return self._main(x1, x2, condition, mask2, inverse=True)
+        return self(x1, x2, condition, mask2, inverse=True)
 
 
 class DualCoupling(Transform):
@@ -72,7 +69,7 @@ class DualCoupling(Transform):
     def _split(self, x: torch.Tensor):
         return x[..., :self.pivot], x[..., self.pivot:]
 
-    def _main(self, x, condition=None, mask=None, inverse=False):
+    def forward(self, x, condition=None, mask=None, inverse=False):
         x1, x2 = self._split(x)
         mask1, mask2 = None, None
         if mask is not None:
@@ -129,7 +126,7 @@ class CouplingFlow(nn.Module):
                 )
             ]
         self.flows = nn.ModuleList(flows)
-        
+
     @property
     def device(self):
         return next(self.parameters()).device

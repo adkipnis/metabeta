@@ -35,7 +35,7 @@ class CouplingTransform(nn.Module):
         ...
 
     @abstractmethod
-    def _main(
+    def forward(
         self,
         x1: torch.Tensor,
         x2: torch.Tensor,
@@ -45,11 +45,8 @@ class CouplingTransform(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         ...
 
-    def forward(self, x1, x2, condition=None, mask2=None):
-        return self._main(x1, x2, condition, mask2, inverse=False)
-
     def inverse(self, x1, x2, condition=None, mask2=None):
-        return self._main(x1, x2, condition, mask2, inverse=True)
+        return self(x1, x2, condition, mask2, inverse=True)
 
 
 class Affine(CouplingTransform):
@@ -91,7 +88,7 @@ class Affine(CouplingTransform):
         log_s = self.alpha * torch.tanh(log_s / self.alpha)  # softclamping
         return log_s, t
 
-    def _main(self, x1, x2, condition=None, mask2=None, inverse=False):
+    def forward(self, x1, x2, condition=None, mask2=None, inverse=False):
         log_s, t = self._propose(x1, condition)
         if mask2 is not None:
             log_s = log_s * mask2
