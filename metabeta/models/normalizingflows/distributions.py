@@ -87,7 +87,8 @@ class TrainableDist(nn.Module):
     def sample(self, shape: tuple[int, ...]) -> torch.Tensor:
         assert shape[-1] == len(self._params['loc']), 'shape mismatch'
         with torch.no_grad():
-            sampling_dist = self._dist['scipy'](**self._params)
+            params = {k: v.cpu() for k,v in self._params.items()}
+            sampling_dist = self._dist['scipy'](**params)
             x = sampling_dist.rvs(size=shape).astype(np.float32)
             return torch.from_numpy(x)
 
