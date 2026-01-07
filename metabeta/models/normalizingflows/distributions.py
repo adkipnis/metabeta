@@ -56,3 +56,34 @@ class TrainableDist(nn.Module):
         self._initParams()
         self.device = self._params['loc'].device
 
+    def __repr__(self) -> str:
+        params = ''
+        for k,v in self._params.items():
+            params += f'\n    {k}: {v.cpu().detach().numpy()}, '
+        return f'Trainable {self.family.title()} ({params[:-2]})'
+ 
+    def _initParams(self) -> None:
+        if self.family == 'student':
+            self._log_df = nn.Parameter(torch.log(torch.exp(5 * torch.ones(self.d_data)) - 1))
+        self._loc = nn.Parameter(torch.zeros(self.d_data))
+        self._log_scale = nn.Parameter(torch.log(torch.exp(torch.ones(self.d_data)) - 1))
+
+    @property
+    def _params(self) -> dict[str, torch.Tensor]:
+        out = {}
+        if self.family == 'student':
+            out['df'] = F.softplus(self._log_df + 1e-6)
+        out['loc'] = self._loc * 1.
+        out['scale'] = F.softplus(self._log_scale + 1e-6)
+        return out
+
+    @property
+    def _dist(self) -> dict:
+        if self.family == 'normal':
+            return {'torch': D.Normal, 'scipy': scipy.stats.norm} 
+        elif self.family == 'student':
+            return {'torch': D.StudentT, 'scipy': scipy.stats.t}
+        else:
+            raise ValueError
+
+    def sample(self, shape: tuple[int, ...]) -> torch.Tensor:
