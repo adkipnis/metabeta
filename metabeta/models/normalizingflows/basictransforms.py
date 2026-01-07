@@ -25,7 +25,6 @@ class Transform(nn.Module):
         return mask
 
 
-
 class ActNorm(Transform):
     def __init__(self, d_target: int):
         super().__init__()
