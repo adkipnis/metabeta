@@ -185,6 +185,9 @@ def test_masking():
         use_permute=False,
         net_kwargs=NET_KWARGS,
     )
+    # model = model.to('mps')
+    # x = x.to('mps')
+    # mask = mask.to('mps')
     model.eval()
     z, log_det, mask_ = model(x, mask=mask)
     assert z[0, -1] == 0.0, 'mask not properly applied to z'
