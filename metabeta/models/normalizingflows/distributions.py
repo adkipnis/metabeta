@@ -62,7 +62,7 @@ class TrainableDist(nn.Module):
 
     def _initParams(self) -> None:
         if self.family == 'student':
-            self._log_df = nn.Parameter(torch.log(torch.exp(5 * torch.ones(self.d_data)) - 1))
+            self._log_df = nn.Parameter(torch.log(torch.exp(3 * torch.ones(self.d_data)) - 1))
         self._loc = nn.Parameter(torch.zeros(self.d_data))
         self._log_scale = nn.Parameter(torch.log(torch.exp(torch.ones(self.d_data)) - 1))
 
@@ -70,7 +70,7 @@ class TrainableDist(nn.Module):
     def _params(self) -> dict[str, torch.Tensor]:
         out = {}
         if self.family == 'student':
-            out['df'] = F.softplus(self._log_df + 1e-6)
+            out['df'] = F.softplus(self._log_df + 1e-6) + 2.0 # clamps df at min=2
         out['loc'] = self._loc * 1.
         out['scale'] = F.softplus(self._log_scale + 1e-6)
         return out
