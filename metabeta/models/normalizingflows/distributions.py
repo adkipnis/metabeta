@@ -48,3 +48,11 @@ class StaticDist(nn.Module):
         return self._training_dist.log_prob(x)
 
 
+class TrainableDist(nn.Module):
+    def __init__(self, d_data: int, family: str) -> None:
+        super().__init__()
+        self.d_data = d_data
+        self.family = family
+        self._initParams()
+        self.device = self._params['loc'].device
+
