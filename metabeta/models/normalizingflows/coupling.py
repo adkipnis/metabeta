@@ -86,5 +86,26 @@ class DualCoupling(Transform):
         return z, log_det, mask
 
 
+class CouplingFlow(nn.Module):
+    ''' Normalizing Flow based on Coupling:
+        ActNorm -> (LU) -> Permute -> DualCoupling 
+        - forward: Conditionally map X to Z in base distribution
+        - inverse: Conditionally map Z to X in target distribution
+        - logProb: cheaply evaluate the density of X using the chain rule
+        - sample: cheaply sample from X by sampling from Z + inverse pass
+        '''
+    def __init__(
+        self,
+        d_target: int,
+        d_context: int = 0,
+        n_blocks: int = 6,
+        use_actnorm: bool = True,
+        use_permute: bool = True,
+        use_lu: bool = False,
+        transform: str = 'affine', # type of coupling transform
+        family: str = 'student', # family of base distribution
+        trainable: bool = True, # train parameters of base distribution
+        net_kwargs: dict = {},
+    ):
 
 
