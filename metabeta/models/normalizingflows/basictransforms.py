@@ -8,25 +8,25 @@ from torch.nn import functional as F
 class Transform(nn.Module):
     ''' Base template for transforms used in normalizing flows '''
     @abstractmethod
-    def __call__(self, x: torch.Tensor,
-                 condition: torch.Tensor | None = None,
-                 mask: torch.Tensor | None = None,
-                 inverse: bool = False,
-                 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    def _main(self, x: torch.Tensor,
+              condition: torch.Tensor | None = None,
+              mask: torch.Tensor | None = None,
+              inverse: bool = False,
+              ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         ...
 
     def forward(self, x, condition=None, mask=None):
-        return self(x, condition, mask, inverse=False)
+        return self._main(x, condition, mask, inverse=False)
 
     def inverse(self, x, condition=None, mask=None):
-        return self(x, condition, mask, inverse=True)
+        return self._main(x, condition, mask, inverse=True)
 
     def _forwardMask(self, mask: torch.Tensor):
         return mask
 
 
 class ActNorm(Transform):
-    def __init__(self, d_target: int):
+    def __init__(self, d_target: int, eps: float = 1e-6):
         super().__init__()
         self.scale = nn.Parameter(torch.ones((d_target,)))
         self.bias = nn.Parameter(torch.zeros((d_target,)))
@@ -56,8 +56,8 @@ class Permute(Transform):
         self.perm = torch.randperm(d_target)
         self.inv_perm = self.perm.argsort()
 
-    def __call__(self, x, condition=None, mask=None, inverse=False):
-        perm = self.inv_perm if inverse else self.perm
+    def _main(self, x, condition=None, mask=None, inverse=False):
+        perm: torch.Tensor = self.inv_perm if inverse else self.perm # type: ignore
         x = x[..., perm]
         if mask is not None:
             mask = mask[..., perm]
@@ -132,7 +132,7 @@ class LU(Transform):
             bias = bias * mask
         return lower, upper, bias
 
-    def __call__(self, x, condition=None, mask=None, inverse=False):
+    def _main(self, x, condition=None, mask=None, inverse=False):
         # handle 3D inputs
         b, *_, d = x.shape
         if x.dim() == 3:

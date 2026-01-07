@@ -24,19 +24,19 @@ class Coupling(nn.Module):
         else:
             raise NotImplementedError()
 
-    def __call__(self, x1: torch.Tensor, x2: torch.Tensor,
+    def _main(self, x1: torch.Tensor, x2: torch.Tensor,
                  condition: torch.Tensor | None = None,
                  mask2: torch.Tensor | None = None,
                  inverse: bool = False):
-        parameters = self.transform.propose(x1, condition)
-        x2, log_det = self.transform(x2, parameters, mask2=mask2, inverse=inverse)
+        x2, log_det = self.transform(
+            x1, x2, condition=condition, mask2=mask2, inverse=inverse)
         return (x1, x2), log_det
 
     def forward(self, x1, x2, condition=None, mask2=None):
-        return self(x1, x2, condition, mask2, inverse=False)
+        return self._main(x1, x2, condition, mask2, inverse=False)
 
     def inverse(self, x1, x2, condition=None, mask2=None):
-        return self(x1, x2, condition, mask2, inverse=True)
+        return self._main(x1, x2, condition, mask2, inverse=True)
 
 
 class DualCoupling(Transform):
@@ -128,25 +128,20 @@ class CouplingFlow(nn.Module):
             ]
         self.flows = nn.ModuleList(flows)
 
-    def __call__(
-            self,
-            x: torch.Tensor,
-            condition: torch.Tensor | None = None,
-            mask: torch.Tensor | None = None,
-            inverse: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+
+    def forward(self, x, condition=None, mask=None):
         log_det = torch.zeros(x.shape[:-1], device=x.device)
-        flows = reversed(self.flows) if inverse else self.flows
-        for flow in flows:
-            x, ld, mask = flow(x, condition=condition, mask=mask, inverse=inverse)
+        for flow in self.flows:
+            x, ld, mask = flow.forward(x, condition=condition, mask=mask)
             log_det = log_det + ld
         return x, log_det, mask
 
-    def forward(self, x, condition=None, mask=None):
-        return self(x, condition, mask, inverse=False)
-
     def inverse(self, x, condition=None, mask=None):
-        return self(x, condition, mask, inverse=True)
+        log_det = torch.zeros(x.shape[:-1], device=x.device)
+        for flow in reversed(self.flows):
+            x, ld, mask = flow.inverse(x, condition=condition, mask=mask) # type: ignore
+            log_det = log_det + ld
+        return x, log_det, mask
 
     def _forwardMask(self, mask: torch.Tensor) -> torch.Tensor:
         for flow in self.flows:
