@@ -98,3 +98,30 @@ class TrainableDist(nn.Module):
         return training_dist.log_prob(x)
 
 
+class BaseDist(nn.Module):
+    ''' Wrapper for Normalizing Flow base distribution
+        - supports Normal and StudentT distribution family
+        - allows trainable distribution parameters
+        - log_prob evaluation via pytorch
+        - sampling via scipy (better support for MPS and GPU)
+    '''
+    def __init__(self, d_data: int, family: str, trainable: bool = True) -> None:
+        super().__init__()
+        self.trainable = trainable
+        if trainable:
+            self.base = TrainableDist(d_data, family)
+        else:
+            self.base = StaticDist(d_data, family)
+
+    def __repr__(self) -> str:
+        return self.base.__repr__()
+
+    def sample(self, shape: tuple[int, ...]) -> torch.Tensor:
+        return self.base.sample(shape)
+
+    def logProb(self, x: torch.Tensor) -> torch.Tensor:
+        return self.base.logProb(x)
+
+
+
+if __name__ == '__main__':
