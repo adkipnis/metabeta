@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from metabeta.models.normalizingflows import Affine
+from metabeta.models.normalizingflows import Transform, Affine, BaseDist
 
 
 class Coupling(nn.Module):
@@ -19,6 +19,8 @@ class Coupling(nn.Module):
         super().__init__()
         if transform == 'affine':
             self.transform = Affine(split_dims, d_context, net_kwargs)
+        else:
+            raise NotImplementedError()
 
     def __call__(self, x1: torch.Tensor, x2: torch.Tensor,
                  condition: torch.Tensor | None = None,
@@ -35,7 +37,7 @@ class Coupling(nn.Module):
         return self(x1, x2, condition, mask2, inverse=True)
 
 
-class DualCoupling(nn.Module):
+class DualCoupling(Transform):
     ''' Dual Coupling Step:
         1. Split inputs along pivot
         2. Apply first coupling step to split
@@ -65,10 +67,7 @@ class DualCoupling(nn.Module):
             transform=transform,
         )
 
-    def __call__(self, x: torch.Tensor,
-                 condition: torch.Tensor | None = None,
-                 mask: torch.Tensor | None = None,
-                 inverse: bool = False):
+    def __call__(self, x, condition=None, mask=None, inverse=False):
         z = torch.empty_like(x)
         x1, x2 = x[..., :self.pivot], x[..., self.pivot:]
         mask1, mask2 = None, None
@@ -80,10 +79,6 @@ class DualCoupling(nn.Module):
         log_det = log_det1 + log_det2
         return z, log_det, mask
 
-    def forward(self, x, condition=None, mask=None):
-        return self(x, condition, mask, inverse=False)
 
-    def inverse(self, x, condition=None, mask=None):
-        return self(x, condition, mask, inverse=True)
 
 
