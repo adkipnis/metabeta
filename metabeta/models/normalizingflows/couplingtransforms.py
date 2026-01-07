@@ -22,14 +22,14 @@ class CouplingTransform(nn.Module):
 
         # setup conditioner
         assert net_kwargs['net_type'] in ['mlp', 'residual']
-        self._build(net_kwargs.copy())
+        self._build(dict(net_kwargs))
 
     @abstractmethod
     def _build(self, net_kwargs: dict) -> None:
         ...
 
     @abstractmethod
-    def propose(
+    def _propose(
         self, x1: torch.Tensor, condition: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, ...]:
         ...
@@ -37,8 +37,9 @@ class CouplingTransform(nn.Module):
     @abstractmethod
     def _main(
         self,
+        x1: torch.Tensor,
         x2: torch.Tensor,
-        params: tuple[torch.Tensor, ...],
+        condition: torch.Tensor | None = None,
         mask2: torch.Tensor | None = None,
         inverse: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -84,7 +85,7 @@ class Affine(CouplingTransform):
             })
             self.conditioner = FlowResidualNet(**net_kwargs)
 
-    def propose(self, x1, condition=None):
+    def _propose(self, x1, condition=None):
         parameters = self.conditioner(x1, condition)
         log_s, t = parameters.chunk(2, dim=-1)
         log_s = self.alpha * torch.tanh(log_s / self.alpha)  # softclamping
