@@ -28,10 +28,33 @@ class Transform(nn.Module):
 class ActNorm(Transform):
     def __init__(self, d_target: int, eps: float = 1e-6):
         super().__init__()
-        self.scale = nn.Parameter(torch.ones((d_target,)))
+        self.eps = eps
         self.bias = nn.Parameter(torch.zeros((d_target,)))
+        self.scale = nn.Parameter(torch.ones((d_target,)))
+        self.register_buffer('initialized', torch.tensor(False))
 
-    def __call__(self, x, condition=None, mask=None, inverse=False):
+
+    def _initialize(self, x: torch.Tensor, mask: torch.Tensor | None = None):
+        dims = tuple(range(x.dim() - 1))
+
+        # get batch's moments
+        if mask is not None:
+            n = mask.sum(dims).clamp_min(1.0)
+            mean = (x * mask).sum(dims) / n
+            var = ((x - mean).square() * mask).sum(dims) / n
+        else:
+            mean = x.mean(dims)
+            var = x.var(dims, unbiased=False)
+        std = torch.sqrt(var + self.eps)
+
+        # update params
+        self.bias.data = -mean
+        self.scale.data = 1.0 / std
+        self.initialized.fill_(True) # type: ignore
+
+    def _main(self, x, condition=None, mask=None, inverse=False):
+        if not self.initialized and not inverse:
+            self._initialize(x, mask)
         scale, bias = self.scale.expand_as(x), self.bias.expand_as(x)
         if mask is not None:
             bias = bias * mask
