@@ -87,3 +87,14 @@ class TrainableDist(nn.Module):
             raise ValueError
 
     def sample(self, shape: tuple[int, ...]) -> torch.Tensor:
+        assert shape[-1] == len(self._params['loc']), 'shape mismatch'
+        with torch.no_grad():
+            sampling_dist = self._dist['scipy'](**self._params)
+            x = sampling_dist.rvs(size=shape).astype(np.float32)
+            return torch.from_numpy(x).to(self.device)
+
+    def logProb(self, x: torch.Tensor) -> torch.Tensor:
+        training_dist = self._dist['torch'](**self._params)
+        return training_dist.log_prob(x)
+
+
