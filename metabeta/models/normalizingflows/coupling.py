@@ -69,21 +69,23 @@ class DualCoupling(Transform):
             transform=transform,
         )
 
-    def __call__(self, x, condition=None, mask=None, inverse=False):
-        z = torch.empty_like(x)
-        x1, x2 = x[..., :self.pivot], x[..., self.pivot:]
+    def _split(self, x: torch.Tensor):
+        return x[..., :self.pivot], x[..., self.pivot:]
+
+    def _main(self, x, condition=None, mask=None, inverse=False):
+        x1, x2 = self._split(x)
         mask1, mask2 = None, None
         if mask is not None:
-            mask1, mask2 = mask[..., :self.pivot], mask[..., self.pivot:]
+            mask1, mask2 = self._split(mask)
         if inverse:
             (x2, x1), log_det2 = self.coupling2.inverse(x2, x1, condition, mask1)
             (x1, x2), log_det1 = self.coupling1.inverse(x1, x2, condition, mask2)
         else:
             (x1, x2), log_det1 = self.coupling1.forward(x1, x2, condition, mask2)
             (x2, x1), log_det2 = self.coupling2.forward(x2, x1, condition, mask1)
-        z[..., :self.pivot], z[..., self.pivot:] = x1, x2
+        x = torch.cat([x1, x2], dim=-1)
         log_det = log_det1 + log_det2
-        return z, log_det, mask
+        return x, log_det, mask
 
 
 class CouplingFlow(nn.Module):
