@@ -169,9 +169,41 @@ def test_masking():
     assert x2[0, 0] == z2[0, 0] == 0.0, 'mask not properly applied to z'
     assert log_det[0] == 0.0, 'log_det not properly masked'
 
+    model = DualCoupling(3, net_kwargs=NET_KWARGS)
+    model.eval()
+    z, log_det, _ = model(x, mask=mask)
+    assert z[0, -1] == 0.0, 'mask not properly applied to z'
+    if not NET_KWARGS['zero_init']:
+        assert log_det[0] != 0.0, 'log_det should not be zero'
+        z, log_det_, _ = model(x)
+        assert log_det[0] != log_det_[0], 'log_det should differ at first index'
+
+    model = CouplingFlow(
+        3,
+        n_blocks=1,
+        use_actnorm=True,
+        use_permute=False,
+        net_kwargs=NET_KWARGS,
+    )
+    model.eval()
+    z, log_det, mask_ = model(x, mask=mask)
+    assert z[0, -1] == 0.0, 'mask not properly applied to z'
+    z, log_det_, mask_ = model.inverse(z, mask=mask_)
+    assert mask_ is not None, 'mask_ should be a tensor'
+    assert torch.allclose(mask, mask_, atol=ATOL), 'mask is not recovered properly'
+    assert torch.allclose(x, z, atol=ATOL), 'x is not recovered properly'
+
+    x_, log_q = model.sample(100, mask=mask)
+    assert (x_[0, :, -1] == 0.0).all(), 'mask not properly applied during sampling'
+
+    print('Masked Coupling Flow passed all masking tests!')
+
+
 if __name__ == '__main__':
     torch.manual_seed(0)
     test_lu()
     test_single_coupling()
     test_dual_coupling()
+    test_coupling_flow()
+    test_masking()
 
