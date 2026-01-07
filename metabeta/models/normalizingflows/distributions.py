@@ -125,3 +125,14 @@ class BaseDist(nn.Module):
 
 
 if __name__ == '__main__':
+    b, d = 8, 3
+
+    for trainable in [False, True]:
+        for family in ['normal', 'student']:
+            dist = BaseDist(d, family=family, trainable=trainable)
+            x = dist.sample((b,d))
+            log_prob = dist.logProb(x)
+            assert x.shape == (b,d)
+            assert log_prob.shape == (b,d)
+            print(dist)
+
