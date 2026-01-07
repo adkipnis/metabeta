@@ -135,6 +135,23 @@ def test_coupling_flow():
     print('Coupling Flow passed all tests!')
 
 
+def test_masking():
+    x = torch.randn((8, 3))
+    x[0, -1] = 0.0
+    mask = (x != 0.0).float()
+
+    model = Permute(3)
+    _, _, mask_ = model(x, mask=mask)
+    _, _, mask_ = model.inverse(x, mask=mask_)
+    assert mask_ is not None, 'mask should be a tensor'
+    assert torch.allclose(mask, mask_, atol=ATOL), 'mask is not recovered properly'
+
+    model = LU(3, identity_init=False)
+    z, log_det, mask_ = model(x, mask=mask)
+    assert z[0, -1] == 0., 'mask not properly applied to z'
+    z, log_det_, mask_ = model.inverse(z, mask=mask_)
+    assert torch.allclose(x, z, atol=ATOL), 'x is not recovered properly'
+
 if __name__ == '__main__':
     torch.manual_seed(0)
     test_lu()
