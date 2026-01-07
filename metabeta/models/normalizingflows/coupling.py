@@ -1,6 +1,8 @@
 import torch
 from torch import nn
-from metabeta.models.normalizingflows import Transform, Affine, BaseDist
+from metabeta.models.normalizingflows import (
+    Transform, ActNorm, Permute, LU, Affine, BaseDist
+)
 
 
 class Coupling(nn.Module):
