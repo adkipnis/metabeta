@@ -1,4 +1,5 @@
 import torch
+from metabeta.models.normalizingflows import LU
 from metabeta.models.normalizingflows.coupling import (
     Coupling, DualCoupling
 )
@@ -10,6 +11,31 @@ NET_KWARGS = {
     'depth': 3,
     'activation': 'ReLU',
 }
+
+def test_lu():
+    x = torch.randn((8, 3))
+    x[0, -1] = 0.0
+    mask = (x != 0.0).float()
+
+    model = LU(3, identity_init=False)
+    model.eval()
+    z, log_det, _ = model.forward(x, mask=mask)
+    z_, _, _ = model.inverse(z, mask=mask)
+    assert torch.allclose(x, z_, atol=ATOL), "LU is not invertible"
+
+    x.requires_grad_(True)
+    z_numerical, _, _ = model.forward(x, mask=mask)
+    jacobian = []
+    for i in range(z_numerical.shape[-1]):
+        grad_z_i = torch.autograd.grad(z_numerical[:, i].sum(), x, retain_graph=True)[0]
+        jacobian.append(grad_z_i)
+    jacobian = torch.stack(jacobian, dim=-1)
+    numerical_log_det = torch.log(torch.abs(torch.det(jacobian)))
+    assert torch.allclose(log_det, numerical_log_det, atol=ATOL), (
+        f'Log determinant mismatch! Computed: {log_det}, Numerical: {numerical_log_det}'
+    )
+    print('LU Transform passed all tests!')
+
 
 def test_single_coupling():
     inputs = torch.randn((8, 3))
@@ -82,6 +108,7 @@ def test_dual_coupling():
 
 if __name__ == '__main__':
     torch.manual_seed(0)
+    test_lu()
     test_single_coupling()
     test_dual_coupling()
 
