@@ -107,5 +107,26 @@ class CouplingFlow(nn.Module):
         trainable: bool = True, # train parameters of base distribution
         net_kwargs: dict = {},
     ):
+        super().__init__()
+        self.d_target = d_target
+        self.base_dist = BaseDist(d_target, family=family, trainable=trainable)
+        flows = []
+        for _ in range(n_blocks):
+            if use_actnorm:
+                flows += [ActNorm(d_target)]
+            if use_lu:
+                flows += [LU(d_target, identity_init=True)]
+            if use_permute:
+                flows += [Permute(d_target)]
+            flows += [
+                DualCoupling(
+                    d_target=d_target,
+                    d_context=d_context,
+                    transform=transform,
+                    net_kwargs=net_kwargs,
+                )
+            ]
+        self.flows = nn.ModuleList(flows)
+
 
 
