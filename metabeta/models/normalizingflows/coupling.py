@@ -172,4 +172,42 @@ class CouplingFlow(nn.Module):
         z, log_det, mask = self.forward(x, condition, mask)
         return -self.logProb(z, log_det, mask)
 
+    def sample(
+        self,
+        n_samples: int,
+        context: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+
+        # determine shape
+        base_shape = (1,)
+        if context is not None:
+            base_shape = context.shape[:-1]
+        elif mask is not None:
+            base_shape = mask.shape[:-1]
+        shape = (*base_shape, n_samples, self.d_target)
+
+        # prepare context
+        if context is not None:
+            context = context.unsqueeze(-2).expand(*base_shape, n_samples, -1)
+
+        # prepare mask
+        if mask is not None:
+            if mask.dim() < len(shape):
+                mask = mask.unsqueeze(-2).expand(*shape)
+            mask_z = self._forwardMask(mask)
+        else:
+            mask_z = None
+
+        # sample from base and apply mask in base space
+        z = self.base_dist.sample(shape)
+        if mask_z is not None:
+            z = z * mask_z
+
+        # project z back to x space
+        x, log_det, _ = self.inverse(z, context, mask_z)
+
+        # get probability in x-space
+        log_q = self.logProb(z, log_det, mask_z)
+        return x, log_q
 
