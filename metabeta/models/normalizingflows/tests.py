@@ -1,7 +1,7 @@
 import torch
-from metabeta.models.normalizingflows import LU
+from metabeta.models.normalizingflows import LU, Permute
 from metabeta.models.normalizingflows.coupling import (
-    Coupling, DualCoupling
+    Coupling, DualCoupling, CouplingFlow
 )
 
 ATOL = 1e-5
@@ -10,6 +10,7 @@ NET_KWARGS = {
     'd_ff': 128,
     'depth': 3,
     'activation': 'ReLU',
+    'zero_init': False, # if True, the initial flows are identity maps
 }
 
 def test_lu():
@@ -89,7 +90,7 @@ def test_dual_coupling():
     model.eval()
     z, log_det, _ = model.forward(x, condition)
     z, _, _ = model.inverse(z, condition)
-    assert torch.allclose(x, z, atol=1e-5), 'model is not invertible'
+    assert torch.allclose(x, z, atol=ATOL), 'model is not invertible'
 
     x.requires_grad_(True)
     z_numerical, _, _ = model.forward(x, condition)
@@ -99,7 +100,7 @@ def test_dual_coupling():
         jacobian.append(grad_z_i)
     jacobian = torch.stack(jacobian, dim=-1)
     numerical_log_det = torch.log(torch.abs(torch.det(jacobian)))
-    assert torch.allclose(log_det, numerical_log_det, atol=1e-5), (
+    assert torch.allclose(log_det, numerical_log_det, atol=ATOL), (
         f'Log determinant mismatch! Computed: {log_det}, Numerical: {numerical_log_det}'
     )
 
