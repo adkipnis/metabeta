@@ -44,14 +44,14 @@ class DualCoupling(nn.Module):
     '''
     def __init__(
         self,
-        d_data: int,
+        d_target: int,
         d_context: int = 0,
         net_kwargs: dict = {},
         transform: str = 'affine',
     ):
         super().__init__()
-        self.pivot = d_data // 2
-        split_dims = (self.pivot, d_data - self.pivot)
+        self.pivot = d_target // 2
+        split_dims = (self.pivot, d_target - self.pivot)
         self.coupling1 = Coupling(
             split_dims=split_dims,
             d_context=d_context,
