@@ -76,8 +76,8 @@ class Permute(Transform):
         self.d_target = d_target
         self.pivot = d_target // 2
         self.inv_pivot = d_target - self.pivot
-        self.perm = torch.randperm(d_target)
-        self.inv_perm = self.perm.argsort()
+        self.register_buffer('perm', torch.randperm(d_target))
+        self.register_buffer('inv_perm', self.perm.argsort()) # type: ignore
 
     def _main(self, x, condition=None, mask=None, inverse=False):
         perm: torch.Tensor = self.inv_perm if inverse else self.perm # type: ignore
@@ -177,7 +177,7 @@ class LU(Transform):
             x = torch.einsum("bij,bj->bi", upper, x)
             x = torch.einsum("bij,bj->bi", lower, x) + bias
 
-        # reshape back if 
+        # reshape back if 3D
         if len(x) != b:
             x = x.reshape(b, -1, d)
             log_det = log_det.reshape(b, -1)
