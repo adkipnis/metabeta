@@ -41,3 +41,10 @@ class StaticDist(nn.Module):
             raise ValueError
 
     def sample(self, shape: tuple[int, ...]) -> torch.Tensor:
+        x = self._sampling_dist.rvs(size=shape).astype(np.float32)
+        return torch.from_numpy(x).to(self.device)
+
+    def logProb(self, x: torch.Tensor) -> torch.Tensor:
+        return self._training_dist.log_prob(x)
+
+
