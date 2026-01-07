@@ -91,7 +91,7 @@ class TrainableDist(nn.Module):
             sampling_dist = self._dist['scipy'](**params)
             x = sampling_dist.rvs(size=shape).astype(np.float32)
             return torch.from_numpy(x)
-
+            
     def logProb(self, x: torch.Tensor) -> torch.Tensor:
         training_dist = self._dist['torch'](**self._params)
         return training_dist.log_prob(x)
@@ -102,7 +102,8 @@ class BaseDist(nn.Module):
         - supports Normal and StudentT distribution family
         - allows trainable distribution parameters
         - log_prob evaluation via pytorch
-        - CPU sampling via scipy (circumvents issues with model.eval())
+        - CPU sampling via scipy
+          (circumvents issues with torch sampling in model.eval() when not on CPU)
     '''
     def __init__(self, d_data: int, family: str, trainable: bool = True) -> None:
         super().__init__()
