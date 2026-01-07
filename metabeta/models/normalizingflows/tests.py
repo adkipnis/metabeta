@@ -152,6 +152,23 @@ def test_masking():
     z, log_det_, mask_ = model.inverse(z, mask=mask_)
     assert torch.allclose(x, z, atol=ATOL), 'x is not recovered properly'
 
+    model = Coupling((2, 1), net_kwargs=NET_KWARGS)
+    model.eval()
+    x1, x2 = x.chunk(2, dim=-1)
+    _, mask2 = mask.chunk(2, dim=-1)
+    (z1, z2), log_det = model(x1, x2)
+    if not NET_KWARGS['zero_init']:
+        assert z2[0, 0] != 0.0, 'z should not be 0'
+        assert log_det[0] != 0.0, 'log_det should not be zero'
+
+    (z1, z2), log_det = model(x1, x2, mask2=mask2)
+    assert x2[0, 0] == z2[0, 0] == 0.0, 'mask not properly applied to z'
+    assert log_det[0] == 0.0, 'log_det not properly masked'
+
+    (z1, z2), log_det = model.inverse(z1, z2, mask2=mask2)
+    assert x2[0, 0] == z2[0, 0] == 0.0, 'mask not properly applied to z'
+    assert log_det[0] == 0.0, 'log_det not properly masked'
+
 if __name__ == '__main__':
     torch.manual_seed(0)
     test_lu()
