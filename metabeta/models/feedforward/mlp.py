@@ -171,6 +171,7 @@ class FlowMLP(nn.Module):
         d_output: int,
         use_bias: bool = True,
         shortcut: bool = True,
+        zero_init: bool = True,
         **kwargs
     ):
         super().__init__()
@@ -180,6 +181,7 @@ class FlowMLP(nn.Module):
             d_output=d_output,
             use_bias=use_bias,
             shortcut=shortcut,
+            zero_init=zero_init,
             # defaults:
             layer_norm=False,
             pre_norm=False,
@@ -188,7 +190,6 @@ class FlowMLP(nn.Module):
             residual=True,
             weight_init=('lecun', 'normal'),
             weight_norm=True,
-            zero_init=True,
         )
 
     def forward(self, x: torch.Tensor,
