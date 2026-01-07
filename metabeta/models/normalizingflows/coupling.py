@@ -153,4 +153,23 @@ class CouplingFlow(nn.Module):
             mask = flow._forwardMask(mask) # type: ignore
         return mask
 
+    def logProb(
+        self, z: torch.Tensor, log_det: torch.Tensor, mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        ''' joint log density of normalized target '''
+        log_prob = self.base_dist.logProb(z)
+        if mask is not None:
+            log_prob *= mask
+        return log_prob.sum(dim=-1) + log_det
+
+    def loss(
+            self,
+            x: torch.Tensor,
+            condition: torch.Tensor | None = None,
+            mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        ''' forward KL Loss (aka NLL) '''
+        z, log_det, mask = self.forward(x, condition, mask)
+        return -self.logProb(z, log_det, mask)
+
 
