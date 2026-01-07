@@ -75,8 +75,12 @@ class DualCoupling(Transform):
         mask1, mask2 = None, None
         if mask is not None:
             mask1, mask2 = mask[..., :self.pivot], mask[..., self.pivot:]
-        (x1, x2), log_det1 = self.coupling1(x1, x2, condition, mask2, inverse=inverse)
-        (x2, x1), log_det2 = self.coupling2(x2, x1, condition, mask1, inverse=inverse)
+        if inverse:
+            (x2, x1), log_det2 = self.coupling2.inverse(x2, x1, condition, mask1)
+            (x1, x2), log_det1 = self.coupling1.inverse(x1, x2, condition, mask2)
+        else:
+            (x1, x2), log_det1 = self.coupling1.forward(x1, x2, condition, mask2)
+            (x2, x1), log_det2 = self.coupling2.forward(x2, x1, condition, mask1)
         z[..., :self.pivot], z[..., self.pivot:] = x1, x2
         log_det = log_det1 + log_det2
         return z, log_det, mask
