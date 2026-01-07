@@ -107,6 +107,34 @@ def test_dual_coupling():
     print('Dual Coupling passed all tests!')
 
 
+def test_coupling_flow():
+    x = torch.randn((8, 3))
+    condition = torch.randn((8, 5))
+    model = CouplingFlow(3, d_context=5, n_blocks=3,
+                         use_actnorm=True, net_kwargs=NET_KWARGS)
+    model.eval()
+    z, log_det, _ = model.forward(x, condition)
+    z, _, _ = model.inverse(z, condition)
+    assert torch.allclose(x, z, atol=ATOL), 'model is not invertible'
+
+    x.requires_grad_(True)
+    z_numerical, _, _ = model.forward(x, condition)
+    jacobian = []
+    for i in range(z_numerical.shape[-1]):
+        grad_z_i = torch.autograd.grad(z_numerical[:, i].sum(), x, retain_graph=True)[0]
+        jacobian.append(grad_z_i)
+    jacobian = torch.stack(jacobian, dim=-1)
+    numerical_log_det = torch.log(torch.abs(torch.det(jacobian)))
+    assert torch.allclose(log_det, numerical_log_det, atol=1e-5), (
+        f'Log determinant mismatch! Computed: {log_det}, Numerical: {numerical_log_det}'
+    )
+
+    x_, log_q = model.sample(100, condition)
+    assert x_.shape == (8, 100, 3), 'sample shape is off'
+
+    print('Coupling Flow passed all tests!')
+
+
 if __name__ == '__main__':
     torch.manual_seed(0)
     test_lu()
