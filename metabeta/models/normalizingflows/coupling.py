@@ -129,7 +129,10 @@ class CouplingFlow(nn.Module):
                 )
             ]
         self.flows = nn.ModuleList(flows)
-
+        
+    @property
+    def device(self):
+        return next(self.parameters()).device
 
     def forward(self, x, condition=None, mask=None):
         log_det = torch.zeros(x.shape[:-1], device=x.device)
@@ -197,7 +200,7 @@ class CouplingFlow(nn.Module):
             mask_z = None
 
         # sample from base and apply mask in base space
-        z = self.base_dist.sample(shape)
+        z = self.base_dist.sample(shape).to(self.device)
         if mask_z is not None:
             z = z * mask_z
 
