@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from metabeta.models.normalizingflows import (
-    Transform, ActNorm, Permute, LU, Affine, BaseDist
+    Transform, ActNorm, Permute, LU, Affine, RationalQuadratic, BaseDist
 )
 
 
@@ -21,8 +21,11 @@ class Coupling(nn.Module):
         super().__init__()
         if transform == 'affine':
             self.transform = Affine(split_dims, d_context, net_kwargs)
+        elif transform == 'spline':
+            self.transform = RationalQuadratic(split_dims, d_context, net_kwargs)
         else:
-            raise NotImplementedError()
+            raise NotImplementedError(
+                'only affine and spline transforms are supported')
 
     def forward(self, x1: torch.Tensor, x2: torch.Tensor,
                  condition: torch.Tensor | None = None,
