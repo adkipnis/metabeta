@@ -163,7 +163,7 @@ class LU(Transform):
             raise NotImplementedError
 
         # multiply x with invertible matrix
-        lower, upper, bias = self._getLU(mask, b, d)
+        lower, upper, bias = self._getLU(mask, *x.shape)
         log_det = upper.diagonal(dim1=-2, dim2=-1).log().sum(-1)
         if inverse:
             x = (x - bias).unsqueeze(-1)
