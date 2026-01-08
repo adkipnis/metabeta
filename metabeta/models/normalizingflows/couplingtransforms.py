@@ -195,11 +195,13 @@ class RationalQuadratic(CouplingTransform):
         # boundary masks
         inside = (x2 >= -self.tail_bound) & (x2 <= self.tail_bound)
         outside = ~inside
+        if mask2 is not None:
+            inside = inside & mask2.bool()
+            outside = outside & mask2.bool()
 
         # init outputs
         log_det = torch.zeros_like(x2)
-        z2 = torch.zeros_like(x2)
-        z2[outside] = x2[outside]
+        z2 = x2.clone()
 
         # apply spline transform inside interval
         if torch.any(inside):
