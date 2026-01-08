@@ -103,7 +103,6 @@ class CouplingFlow(nn.Module):
         n_blocks: int = 6,
         use_actnorm: bool = True,
         use_permute: bool = True,
-        use_lu: bool = False,
         transform: str = 'affine', # type of coupling transform
         family: str = 'student', # family of base distribution
         trainable: bool = True, # train parameters of base distribution
@@ -116,7 +115,7 @@ class CouplingFlow(nn.Module):
         for _ in range(n_blocks):
             if use_actnorm:
                 flows += [ActNorm(d_target)]
-            if use_lu:
+            if transform == 'spline':
                 flows += [LU(d_target, identity_init=True)]
             if use_permute:
                 flows += [Permute(d_target)]
