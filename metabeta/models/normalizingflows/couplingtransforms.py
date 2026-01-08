@@ -208,10 +208,11 @@ class RationalQuadratic(CouplingTransform):
             z2[inside], log_det[inside] = self._spline(
                 x2, params, inside, inverse=inverse)
 
-        # optionally mask outputs
-        if mask2 is not None:
-            z2 = z2 * mask2
-            log_det = log_det * mask2
+        # apply affine transform outside interval
+        if torch.any(outside):
+            z2[outside], log_det[outside] = self._affine(
+                x2[outside], params[-1][outside], inverse=inverse)
+
         return z2, log_det.sum(-1)
 
     def _spline(
