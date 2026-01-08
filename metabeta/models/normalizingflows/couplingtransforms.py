@@ -12,9 +12,6 @@ class CouplingTransform(nn.Module):
         - propose transform parameters
         - directionally apply transform parameters to inputs
     '''
-    split_dims: tuple[int, int]
-    d_context: int = 0
-    net_kwargs: dict = {}
 
     @abstractmethod
     def _build(self, net_kwargs: dict) -> None:
@@ -23,7 +20,7 @@ class CouplingTransform(nn.Module):
     @abstractmethod
     def _propose(
         self, x1: torch.Tensor, condition: torch.Tensor | None = None
-    ) -> dict[str, torch.Tensor]:
+    ) -> tuple[torch.Tensor, ...]:
         ...
 
     @abstractmethod
@@ -83,11 +80,10 @@ class Affine(CouplingTransform):
         parameters = self.conditioner(x1, condition)
         log_s, t = parameters.chunk(2, dim=-1)
         log_s = self.alpha * torch.tanh(log_s / self.alpha)  # softclamping
-        return dict(log_s=log_s, t=t)
+        return log_s, t
 
     def forward(self, x1, x2, condition=None, mask2=None, inverse=False):
-        params = self._propose(x1, condition)
-        log_s, t = params['log_s'], params['t']
+        log_s, t = self._propose(x1, condition)
         if mask2 is not None:
             log_s = log_s * mask2
             t = t * mask2
