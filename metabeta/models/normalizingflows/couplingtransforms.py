@@ -213,3 +213,64 @@ class RationalQuadratic(CouplingTransform):
             log_det = log_det * mask2
         return z2, log_det.sum(-1)
 
+    def _spline(
+            self,
+            x2: torch.Tensor,
+            params: dict[str, torch.Tensor],
+            inside: torch.Tensor,
+            inverse: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # constrain spline parameters
+        x2 = x2[inside]
+        params = {k: v[inside, :] for k,v in params.items()}
+        widths, cumwidths, heights, cumheights, derivatives = self._constrain(params)
+
+        # map each x to a bin between two knots
+        if inverse:
+            idx = self._searchSorted(cumheights, x2)
+        else:
+            idx = self._searchSorted(cumwidths, x2)
+ 
+        # for each knot k, get the RQ parts
+        x_k_delta = widths.gather(-1, idx)[..., 0]
+        x_k = cumwidths.gather(-1, idx)[..., 0]
+        y_k_delta = heights.gather(-1, idx)[..., 0]
+        y_k = cumheights.gather(-1, idx)[..., 0]
+        delta = heights / widths
+        s_k = delta.gather(-1, idx)[..., 0]
+        d_k_0 = derivatives.gather(-1, idx)[..., 0]
+        d_k_1 = derivatives[..., 1:].gather(-1, idx)[..., 0]
+
+        # apply RQ spline
+        if inverse:
+            # get analytical inverse of rq
+            a = y_k_delta * (s_k - d_k_0) + (x2 - y_k) * (d_k_1 + d_k_0 - 2 * s_k)
+            b = y_k_delta * d_k_0 - (x2 - y_k) * (d_k_1 + d_k_0 - 2 * s_k)
+            c = -s_k * (x2 - y_k)
+            discriminant = b.pow(2) - 4 * a * c
+            xi = (2 * c) / (-b - torch.sqrt(discriminant))
+            z2 = xi * x_k_delta + x_k
+
+            # log_det variables
+            xi_1_minus_xi = xi * (1 - xi)
+            beta_k = s_k + ((d_k_1 + d_k_0 - 2 * s_k) * xi_1_minus_xi)
+            ld_factor = -1
+        else:
+            # helper variables
+            xi = (x2 - x_k) / x_k_delta
+            xi_1_minus_xi = xi * (1 - xi)
+            ld_factor = 1
+
+            # construct RQ splines
+            alpha_k = y_k_delta * (s_k * xi.pow(2) + d_k_0 * xi_1_minus_xi)
+            beta_k = s_k + ((d_k_1 + d_k_0 - 2 * s_k) * xi_1_minus_xi)
+            z2 = y_k + alpha_k / beta_k
+
+        # get log determinant
+        derivative_numerator = s_k.pow(2) * (
+            d_k_1 * xi.pow(2) + 2 * s_k * xi_1_minus_xi + d_k_0 * (1 - xi).pow(2)
+        )
+        log_det = derivative_numerator.log() - 2 * beta_k.log()
+        return z2, ld_factor * log_det
+
+    def _searchSorted(
