@@ -166,7 +166,7 @@ class RationalQuadratic(CouplingTransform):
         total_height = 2 * self.tail_bound
 
         # normalize widths to sum to 1
-        widths = F.softmax(params['widths'], dim=-1)
+        widths = F.softmax(widths, dim=-1)
 
         # shift by min_val but keep unit sum
         widths = self.min_val + (1 - self.n_bins * self.min_val) * widths
@@ -178,7 +178,7 @@ class RationalQuadratic(CouplingTransform):
         widths = cumwidths[..., 1:] - cumwidths[..., :-1]
 
         # do the same with heights
-        heights = F.softmax(params['heights'], dim=-1)
+        heights = F.softmax(heights, dim=-1)
         heights = self.min_val + (1 - self.n_bins * self.min_val) * heights
         cumheights = heights.cumsum(-1)
         cumheights = F.pad(cumheights, (1,0))
@@ -186,7 +186,7 @@ class RationalQuadratic(CouplingTransform):
         heights = cumheights[..., 1:] - cumheights[..., :-1]
 
         # process derivatives
-        derivatives = self.min_val + F.softplus(params['derivatives'])
+        derivatives = self.min_val + F.softplus(derivatives)
         return widths, cumwidths, heights, cumheights, derivatives
 
     def forward(self, x1, x2, condition=None, mask2=None, inverse=False):
