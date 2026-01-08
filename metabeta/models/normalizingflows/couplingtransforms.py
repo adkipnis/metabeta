@@ -282,3 +282,25 @@ class RationalQuadratic(CouplingTransform):
         return idx
 
 
+if __name__ == '__main__':
+    b = 1
+    split_dims = (3,2)
+    d_context = 8
+
+    NET_KWARGS = {
+        'net_type': 'mlp',
+        'd_ff': 128,
+        'depth': 3,
+        'activation': 'ReLU',
+        'zero_init': False, # if True, the initial flows are identity maps
+    }
+    rq = RationalQuadratic(split_dims, d_context, NET_KWARGS, n_bins=4)
+
+    # test raw params
+    x1 = torch.randn(b, split_dims[0])
+    x2 = torch.randn(b, split_dims[1])
+    condition = torch.randn(b, d_context)
+    params = rq._propose(x1, condition)
+    rq._constrain(params)
+    rq.forward(x1, x2, condition)
+    
