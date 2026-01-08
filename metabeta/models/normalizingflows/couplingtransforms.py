@@ -191,3 +191,25 @@ class RationalQuadratic(CouplingTransform):
         return widths, cumwidths, heights, cumheights, derivatives
 
     def forward(self, x1, x2, condition=None, mask2=None, inverse=False):
+        params = self._propose(x1, condition)
+
+        # boundary masks
+        inside = (x2 >= -self.tail_bound) & (x2 <= self.tail_bound)
+        outside = ~inside
+
+        # init outputs
+        log_det = torch.zeros_like(x2)
+        z2 = torch.zeros_like(x2)
+        z2[outside] = x2[outside]
+
+        # apply spline transform inside interval
+        if torch.any(inside):
+            z2[inside], log_det[inside] = self._spline(
+                x2, params, inside, inverse=inverse)
+
+        # optionally mask outputs
+        if mask2 is not None:
+            z2 = z2 * mask2
+            log_det = log_det * mask2
+        return z2, log_det.sum(-1)
+
