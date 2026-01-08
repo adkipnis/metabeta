@@ -284,6 +284,7 @@ class RationalQuadratic(CouplingTransform):
             b = y_k_delta * d_k_0 - (x2 - y_k) * (d_k_1 + d_k_0 - 2 * s_k)
             c = -s_k * (x2 - y_k)
             discriminant = b.pow(2) - 4 * a * c
+            discriminant = torch.clamp(discriminant, min=1e-12)
             xi = (2 * c) / (-b - torch.sqrt(discriminant))
             z2 = xi * x_k_delta + x_k
 
