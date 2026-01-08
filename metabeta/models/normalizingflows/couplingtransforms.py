@@ -123,3 +123,25 @@ class RationalQuadratic(CouplingTransform):
         # setup conditioner
         self._build(dict(net_kwargs))
 
+    def _build(self, net_kwargs: dict):
+        net_type = net_kwargs['net_type']
+        assert net_type in ['mlp', 'residual']
+        net_kwargs['d_output'] = (3 * self.n_bins - 1) * self.split_dims[1]
+
+        # MLP Conditioner
+        if net_type == 'mlp':
+            net_kwargs.update({
+                'd_input': self.split_dims[0] + self.d_context,
+                'd_hidden': (net_kwargs['d_ff'],) * net_kwargs['depth'],
+            })
+            self.conditioner = FlowMLP(**net_kwargs)
+
+        # Residual Conditioner
+        elif net_type == 'residual':
+            net_kwargs.update({
+                'd_input': self.split_dims[0],
+                'd_context': self.d_context,
+                'd_hidden': net_kwargs['d_ff'],
+            })
+            self.conditioner = FlowResidualNet(**net_kwargs)
+
