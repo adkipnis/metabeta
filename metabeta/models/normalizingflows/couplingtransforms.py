@@ -104,6 +104,7 @@ class RationalQuadratic(CouplingTransform):
         n_bins: int = 16,
         tail_bound: float = 3.0,
         min_val: float = 1e-3,
+        eps: float = 1e-6, # for clamping xi
     ):
         super().__init__()
         self.split_dims = split_dims
@@ -111,10 +112,10 @@ class RationalQuadratic(CouplingTransform):
         self.n_bins = n_bins
         self.tail_bound = tail_bound
         self.min_val = min_val # bin width, height, derivative
-        self.min_total = n_bins * min_val # width, height
-        self.d_ff = net_kwargs['d_ff']
+        # self.d_ff = net_kwargs['d_ff'] # instead: zero init last layer of conditioner
+        self.eps = eps
         self.tail_constant = np.log(np.exp(1 - self.min_val) - 1)
-        assert self.min_total < 1.0, 'either lower min_val or number of bins'
+        assert n_bins * min_val < 1.0, 'either lower min_val or number of bins'
 
         # setup conditioner
         self._build(dict(net_kwargs))
