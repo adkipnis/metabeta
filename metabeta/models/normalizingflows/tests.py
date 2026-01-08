@@ -203,7 +203,8 @@ def test_masking():
 
 
 def test_rq():
-    x = torch.randn((8, 3))
+    NET_KWARGS['zero_init'] = True
+    x = torch.randn((8, 3)) * 3
     x[0, -1] = 0.0
     mask = (x != 0.0).float()
 
