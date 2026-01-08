@@ -155,8 +155,10 @@ class RationalQuadratic(CouplingTransform):
         return widths, heights, derivatives
 
     def _constrain(
-            self, params: dict[str, torch.Tensor],
+            self, params: tuple[torch.Tensor, ...],
             ) -> tuple[torch.Tensor, ...]:
+        widths, heights, derivatives = params
+
         # setup bounds [-B, B]
         left = -self.tail_bound
         total_width = 2 * self.tail_bound
