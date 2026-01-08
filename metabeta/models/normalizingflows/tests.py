@@ -199,7 +199,64 @@ def test_masking():
     x_, log_q = model.sample(100, mask=mask)
     assert (x_[0, :, -1] == 0.0).all(), 'mask not properly applied during sampling'
 
-    print('Masked Coupling Flow passed all masking tests!')
+    print('Masked Coupling Flow passed all tests!')
+
+
+def test_rq():
+    x = torch.randn((8, 3))
+    x[0, -1] = 0.0
+    mask = (x != 0.0).float()
+
+    model = Coupling((2, 1), net_kwargs=NET_KWARGS, transform='spline')
+    model.eval()
+    x1, x2 = x.chunk(2, dim=-1)
+    _, mask2 = mask.chunk(2, dim=-1)
+    (z1, z2), log_det = model(x1, x2)
+    if not NET_KWARGS['zero_init']:
+        assert z2[0, 0] != 0.0, 'z should not be 0'
+        assert log_det[0] != 0.0, 'log_det should not be zero'
+
+    (z1, z2), log_det = model(x1, x2, mask2=mask2)
+    assert x2[0, 0] == z2[0, 0] == 0.0, 'mask not properly applied to z'
+    assert log_det[0] == 0.0, 'log_det not properly masked'
+
+    (z1, z2), log_det = model.inverse(z1, z2, mask2=mask2)
+    assert x2[0, 0] == z2[0, 0] == 0.0, 'mask not properly applied to z'
+    assert log_det[0] == 0.0, 'log_det not properly masked'
+
+    model = DualCoupling(3, net_kwargs=NET_KWARGS, transform='spline')
+    model.eval()
+    z, log_det, _ = model(x, mask=mask)
+    assert z[0, -1] == 0.0, 'mask not properly applied to z'
+    if not NET_KWARGS['zero_init']:
+        assert log_det[0] != 0.0, 'log_det should not be zero'
+        z, log_det_, _ = model(x)
+        assert log_det[0] != log_det_[0], 'log_det should differ at first index'
+
+    model = CouplingFlow(
+        3,
+        n_blocks=1,
+        use_actnorm=True,
+        use_permute=False,
+        net_kwargs=NET_KWARGS,
+        transform='spline',
+    )
+    # model = model.to('mps')
+    # x = x.to('mps')
+    # mask = mask.to('mps')
+    model.eval()
+    z, log_det, mask_ = model(x, mask=mask)
+    assert z[0, -1] == 0.0, 'mask not properly applied to z'
+    z, log_det_, mask_ = model.inverse(z, mask=mask_)
+    assert mask_ is not None, 'mask_ should be a tensor'
+    assert torch.allclose(mask, mask_, atol=ATOL), 'mask is not recovered properly'
+    assert torch.allclose(x, z, atol=ATOL), 'x is not recovered properly'
+
+    x_, log_q = model.sample(100, mask=mask)
+    assert (x_[0, :, -1] == 0.0).all(), 'mask not properly applied during sampling'
+
+    print('Masked Neural Spline Flow passed all tests!')
+
 
 
 if __name__ == '__main__':
@@ -209,4 +266,5 @@ if __name__ == '__main__':
     test_dual_coupling()
     test_coupling_flow()
     test_masking()
+    test_rq()
 
