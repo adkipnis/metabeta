@@ -252,13 +252,13 @@ class RationalQuadratic(CouplingTransform):
     def _spline(
             self,
             x2: torch.Tensor,
-            params: dict[str, torch.Tensor],
+            params: tuple[torch.Tensor, ...],
             inside: torch.Tensor,
             inverse: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # constrain spline parameters
         x2 = x2[inside]
-        params = {k: v[inside, :] for k,v in params.items()}
+        params = tuple(p[inside] for p in params)
         widths, cumwidths, heights, cumheights, derivatives = self._constrain(params)
 
         # map each x to a bin between two knots
@@ -268,14 +268,14 @@ class RationalQuadratic(CouplingTransform):
             idx = self._searchSorted(cumwidths, x2)
  
         # for each knot k, get the RQ parts
-        x_k_delta = widths.gather(-1, idx)[..., 0]
-        x_k = cumwidths.gather(-1, idx)[..., 0]
-        y_k_delta = heights.gather(-1, idx)[..., 0]
-        y_k = cumheights.gather(-1, idx)[..., 0]
+        x_k_delta = widths.gather(-1, idx).squeeze(-1)
+        x_k = cumwidths.gather(-1, idx).squeeze(-1)
+        y_k_delta = heights.gather(-1, idx).squeeze(-1)
+        y_k = cumheights.gather(-1, idx).squeeze(-1)
         delta = heights / widths
-        s_k = delta.gather(-1, idx)[..., 0]
-        d_k_0 = derivatives.gather(-1, idx)[..., 0]
-        d_k_1 = derivatives[..., 1:].gather(-1, idx)[..., 0]
+        s_k = delta.gather(-1, idx).squeeze(-1)
+        d_k_0 = derivatives.gather(-1, idx).squeeze(-1)
+        d_k_1 = derivatives[..., 1:].gather(-1, idx).squeeze(-1)
 
         # apply RQ spline
         if inverse:
