@@ -321,10 +321,14 @@ class RationalQuadratic(CouplingTransform):
         return idx
 
 
+
 if __name__ == '__main__':
+    import matplotlib.pyplot as plt
+
     b = 1
-    split_dims = (3,2)
+    split_dims = (50,64)
     d_context = 8
+    n_bins = 4
 
     NET_KWARGS = {
         'net_type': 'mlp',
@@ -333,13 +337,47 @@ if __name__ == '__main__':
         'activation': 'ReLU',
         'zero_init': False, # if True, the initial flows are identity maps
     }
-    rq = RationalQuadratic(split_dims, d_context, NET_KWARGS, n_bins=4)
+    rq = RationalQuadratic(split_dims, d_context, NET_KWARGS, n_bins=n_bins)
 
     # test raw params
     x1 = torch.randn(b, split_dims[0])
-    x2 = torch.randn(b, split_dims[1])
+    x2 = torch.randn(b, split_dims[1]) * 3
     condition = torch.randn(b, d_context)
     params = rq._propose(x1, condition)
     rq._constrain(params)
     rq.forward(x1, x2, condition)
-    
+
+    # plot single spline
+    with torch.no_grad():
+        n_points = 512
+        x = torch.linspace(-6, 6, n_points)
+
+        # One global spline
+        widths = torch.randn(1, n_bins)
+        heights = torch.randn(1, n_bins)
+        derivatives = torch.randn(1, n_bins + 1)
+
+        # Evaluate it everywhere
+        widths = widths.expand(n_points, -1)
+        heights = heights.expand(n_points, -1)
+        derivatives = derivatives.expand(n_points, -1)
+
+
+        # Apply spline
+        inside = (x.abs() < 3.0)
+        outside = ~inside
+        y = x.clone()
+        y[inside], _ = rq._spline(x, (widths, heights, derivatives), inside, inverse=False)
+        y[outside], _ = rq._affine(x[outside], derivatives[outside], inverse=False)
+ 
+
+        # Plot
+        plt.figure(figsize=(6, 6))
+        plt.plot(x.numpy(), y.detach().numpy(), label="RQ spline")
+        plt.plot(x.numpy(), x.numpy(), "--", alpha=0.5, label="identity")
+        plt.xlabel("x")
+        plt.ylabel("f(x)")
+        plt.title("Rational Quadratic Spline (nflows)")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
