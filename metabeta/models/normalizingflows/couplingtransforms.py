@@ -146,8 +146,8 @@ class RationalQuadratic(CouplingTransform):
         params = self.conditioner(x1, condition)
         params = params.reshape(*x1.shape[:-1], self.split_dims[1], -1)
         k = self.n_bins
-        widths = params[..., :k] / np.sqrt(self.d_ff)
-        heights = params[..., k:2*k] / np.sqrt(self.d_ff)
+        widths = params[..., :k] #/ np.sqrt(self.d_ff)
+        heights = params[..., k:2*k] #/ np.sqrt(self.d_ff)
         derivatives = params[..., 2*k:]
         # derivatives = F.pad(derivatives, (1,1))
         # derivatives[..., 0] = self.tail_constant
