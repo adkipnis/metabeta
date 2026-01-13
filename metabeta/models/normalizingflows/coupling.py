@@ -28,15 +28,15 @@ class Coupling(nn.Module):
                 'only affine and spline transforms are supported')
 
     def forward(self, x1: torch.Tensor, x2: torch.Tensor,
-                 condition: torch.Tensor | None = None,
+                 context: torch.Tensor | None = None,
                  mask2: torch.Tensor | None = None,
                  inverse: bool = False):
         x2, log_det = self.transform(
-            x1, x2, condition=condition, mask2=mask2, inverse=inverse)
+            x1, x2, context=context, mask2=mask2, inverse=inverse)
         return (x1, x2), log_det
 
-    def inverse(self, x1, x2, condition=None, mask2=None):
-        return self(x1, x2, condition, mask2, inverse=True)
+    def inverse(self, x1, x2, context=None, mask2=None):
+        return self(x1, x2, context, mask2, inverse=True)
 
 
 class DualCoupling(Transform):
