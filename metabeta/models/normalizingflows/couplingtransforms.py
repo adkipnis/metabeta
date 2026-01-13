@@ -317,6 +317,29 @@ class RationalQuadratic(CouplingTransform):
         log_det = derivative_numerator.log() - 2 * beta_k.log()
         return z2, ld_factor * log_det
 
+    def _affine(
+            self,
+            x2: torch.Tensor,
+            params: dict[str, torch.Tensor],
+            outside: torch.Tensor,
+            inverse: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # unpack and apply mask
+        x2 = x2[outside]
+        weight = params['weight'][outside]
+        bias = params['bias'][outside]
+        log_det = weight.log()
+
+        # apply affine transform
+        if inverse:
+            ld_factor = -1
+            z2 = (x2 - bias) / weight
+        else:
+            ld_factor = 1
+            z2 = weight * x2 + bias
+        return z2, ld_factor * log_det
+
+
     def _searchSorted(
             self, reference: torch.Tensor, target: torch.Tensor, eps: float = 1e-6,
     ) -> torch.Tensor:
