@@ -5,6 +5,11 @@ from torch import nn
 from torch.nn import functional as F
 from metabeta.models.feedforward import FlowMLP, FlowResidualNet
 
+NET_KWARGS = {
+    'net_type': 'mlp',
+    'd_ff': 128,
+    'depth': 3,
+}
 
 class CouplingTransform(nn.Module):
     ''' Base class for coupling transforms:
@@ -55,6 +60,7 @@ class Affine(CouplingTransform):
         self._build(dict(net_kwargs))
 
     def _build(self, net_kwargs: dict):
+        net_kwargs = NET_KWARGS | net_kwargs
         net_type = net_kwargs['net_type']
         assert net_type in ['mlp', 'residual']
         net_kwargs['d_output'] = 2 * self.split_dims[1]
@@ -126,6 +132,7 @@ class RationalQuadratic(CouplingTransform):
         self._build(dict(net_kwargs))
 
     def _build(self, net_kwargs: dict):
+        net_kwargs = NET_KWARGS | net_kwargs
         net_type = net_kwargs['net_type']
         assert net_type in ['mlp', 'residual']
         net_kwargs['d_output'] = self.n_params_per_dim * self.split_dims[1]
