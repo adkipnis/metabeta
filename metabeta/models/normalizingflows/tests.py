@@ -7,9 +7,6 @@ from metabeta.models.normalizingflows.coupling import (
 ATOL = 1e-5
 NET_KWARGS = {
     'net_type': 'mlp',
-    'd_ff': 128,
-    'depth': 3,
-    'activation': 'ReLU',
     'zero_init': False, # if True, the initial flows are identity maps
 }
 
