@@ -254,14 +254,17 @@ class RationalQuadratic(CouplingTransform):
     def _spline(
             self,
             x2: torch.Tensor,
-            params: tuple[torch.Tensor, ...],
+            params: dict[str, torch.Tensor],
             inside: torch.Tensor,
             inverse: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # constrain spline parameters
+        # unpack and apply mask
         x2 = x2[inside]
-        params = tuple(p[inside] for p in params)
-        widths, cumwidths, heights, cumheights, derivatives = self._constrain(params)
+        widths = params['widths'][inside]
+        cumwidths = params['cumwidths'][inside]
+        heights = params['heights'][inside]
+        cumheights = params['cumheights'][inside]
+        derivatives = params['derivatives'][inside]
 
         # map each x to a bin between two knots
         if inverse:
