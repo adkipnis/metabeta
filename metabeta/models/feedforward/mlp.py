@@ -1,3 +1,4 @@
+import logging
 from typing import Sequence
 import torch
 from torch import nn
@@ -6,6 +7,7 @@ from metabeta.utils.activations import getActivation
 from metabeta.utils.initializers import (
     getInitializer, zeroInitializer, weightNormInitializer)
 
+logger = logging.getLogger(__name__)
 
 # --- multi-layer perceptron
 class Feedforward(nn.Module):
@@ -177,6 +179,8 @@ class FlowMLP(nn.Module):
         **kwargs
     ):
         super().__init__()
+        if len(kwargs):
+            logger.debug(f'Unused kwargs: {kwargs}')
         self.net = MLP(
             d_input=d_input,
             d_hidden=d_hidden,

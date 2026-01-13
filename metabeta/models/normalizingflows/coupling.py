@@ -1,9 +1,11 @@
+import logging
 import torch
 from torch import nn
 from metabeta.models.normalizingflows import (
     Transform, ActNorm, Permute, LU, Affine, RationalQuadratic, BaseDist
 )
 
+logger = logging.getLogger(__name__)
 
 class Coupling(nn.Module):
     ''' Single Coupling Step:
@@ -107,8 +109,11 @@ class CouplingFlow(nn.Module):
         family: str = 'student', # family of base distribution
         trainable: bool = True, # train parameters of base distribution
         net_kwargs: dict = {},
+        **kwargs
     ):
         super().__init__()
+        if len(kwargs):
+            logger.debug(f'Unused kwargs: {kwargs}')
         self.d_target = d_target
         self.base_dist = BaseDist(d_target, family=family, trainable=trainable)
         flows = []

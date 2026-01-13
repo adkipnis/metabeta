@@ -1,7 +1,10 @@
+import logging
 import torch
 from torch import nn
 from metabeta.models.transformers import MAB, ISAB
 from metabeta.utils.initializers import getInitializer
+
+logger = logging.getLogger(__name__)
 
 class SetTransformer(nn.Module):
     ''' Set Transformer:
@@ -23,8 +26,11 @@ class SetTransformer(nn.Module):
         dropout: float = 0.01,
         weight_init: tuple[str, str] | None = ('xavier', 'normal'),
         eps: float = 1e-3,
+        **kwargs
     ):
         super().__init__()
+        if len(kwargs):
+            logger.debug(f'Unused kwargs: {kwargs}')
         assert n_blocks >= n_isab, 'n_isab must not be larger than n_blocks'
 
         # input projector
