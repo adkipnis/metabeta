@@ -220,8 +220,8 @@ class RationalQuadratic(CouplingTransform):
         )
 
     def forward(self, x1, x2, context=None, mask2=None, inverse=False):
-        params = self._propose(x1, context)
-        params = self._constrain(params)
+        raw = self._propose(x1, context)
+        params = self._constrain(raw)
 
         # construct boundary masks
         bounds = params['bounds'].chunk(4, -1)
