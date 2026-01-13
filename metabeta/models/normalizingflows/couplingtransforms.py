@@ -218,30 +218,37 @@ class RationalQuadratic(CouplingTransform):
             derivatives=derivatives,
         )
 
-    def forward(self, x1, x2, condition=None, mask2=None, inverse=False):
-        params = self._propose(x1, condition)
+    def forward(self, x1, x2, context=None, mask2=None, inverse=False):
+        params = self._propose(x1, context)
+        params = self._constrain(params)
 
-        # boundary masks
-        inside = (x2 >= -self.tail_bound) & (x2 <= self.tail_bound)
+        # construct boundary masks
+        bounds = params['bounds'].chunk(4, -1)
+        left, total_width, bottom, total_height = (t.squeeze(-1) for t in bounds)
+        if inverse:
+            top = bottom + total_height
+            inside = (bottom <= x2) & (x2 <= top)
+        else:
+            right = left + total_width
+            inside = (left <= x2) & (x2 <= right)
         outside = ~inside
+
+        # incorporate mask
         if mask2 is not None:
             inside = inside & mask2.bool()
             outside = outside & mask2.bool()
 
         # init outputs
         log_det = torch.zeros_like(x2)
-        z2 = x2.clone()
+        z2 = torch.zeros_like(x2)
 
-        # apply spline transform inside interval
-        if torch.any(inside):
-            z2[inside], log_det[inside] = self._spline(
-                x2, params, inside, inverse=inverse)
+        # apply spline transform
+        z2[inside], log_det[inside] = self._spline(
+            x2, params, inside, inverse=inverse)
 
-        # apply affine transform outside interval
-        if torch.any(outside):
-            z2[outside], log_det[outside] = self._affine(
-                x2[outside], params[-1][outside], inverse=inverse)
-
+        # apply affine transform
+        z2[outside], log_det[outside] = self._affine(
+            x2, params, outside, inverse=inverse)
         return z2, log_det.sum(-1)
 
     def _affine(
