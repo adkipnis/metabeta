@@ -37,3 +37,16 @@ class Approximator(nn.Module):
         self.posterior_g = Posterior(d_ffx+d_var, d_context_g, **p_cfg)
         self.posterior_l = Posterior(d_rfx, d_context_l, **p_cfg)
 
+    @property
+    def device(self):
+        return next(self.parameters()).device
+
+    def _inputs(self, data: dict[str, torch.Tensor]) -> torch.Tensor:
+        '''prepare input tensor for the summary network'''
+        ...
+
+    def _targets(self, data: dict[str, torch.Tensor]):
+        '''prepare target tensor for the posterior network'''
+        ...
+
+
