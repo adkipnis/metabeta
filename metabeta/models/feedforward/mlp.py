@@ -2,8 +2,10 @@ from typing import Sequence
 import torch
 from torch import nn
 from torch.nn import functional as F
-from metabeta.models.utils import (
-    getActivation, getInitializer, zeroInitializer, weightNormInitializer)
+from metabeta.utils.activations import getActivation
+from metabeta.utils.initializers import (
+    getInitializer, zeroInitializer, weightNormInitializer)
+
 
 # --- multi-layer perceptron
 class Feedforward(nn.Module):

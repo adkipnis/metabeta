@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from metabeta.models.transformers import MAB, ISAB
-from metabeta.models.utils import getInitializer
+from metabeta.utils.initializers import getInitializer
 
 class SetTransformer(nn.Module):
     ''' Set Transformer:

@@ -1,9 +1,9 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from metabeta.models.utils import (
-    getActivation, getInitializer,
-    zeroInitializer, lastZeroInitializer, weightNormInitializer)
+from metabeta.utils.activations import getActivation
+from metabeta.utils.initializers import (
+    getInitializer, zeroInitializer, lastZeroInitializer, weightNormInitializer)
 
 class ResidualBlock(nn.Module):
     ''' Residual Block with optional GLU:
