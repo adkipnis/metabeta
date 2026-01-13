@@ -352,7 +352,7 @@ class RationalQuadratic(CouplingTransform):
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
-    # torch.manual_seed(3)
+    torch.manual_seed(0)
 
     b = 1
     split_dims = (5,3)
@@ -393,7 +393,7 @@ if __name__ == '__main__':
         plt.plot(x2.numpy(), x2.numpy(), "--", alpha=0.5, label="identity")
         plt.xlabel("x")
         plt.ylabel("f(x)")
-        plt.title("Rational Quadratic Spline (nflows)")
+        plt.title("Rational Quadratic Spline")
         plt.legend()
         plt.grid(True)
         plt.show()
