@@ -111,6 +111,7 @@ class RationalQuadratic(CouplingTransform):
         self.split_dims = split_dims
         self.d_context = d_context
         self.n_bins = n_bins
+        self.n_params_per_dim = (3 * self.n_bins + 3)
         self.default_left = -default_domain
         self.default_bottom = -default_domain
         self.default_width = 2 * default_domain
@@ -127,7 +128,7 @@ class RationalQuadratic(CouplingTransform):
     def _build(self, net_kwargs: dict):
         net_type = net_kwargs['net_type']
         assert net_type in ['mlp', 'residual']
-        net_kwargs['d_output'] = (3 * self.n_bins + 3) * self.split_dims[1]
+        net_kwargs['d_output'] = self.n_params_per_dim * self.split_dims[1]
 
         # MLP Conditioner
         if net_type == 'mlp':
@@ -149,12 +150,12 @@ class RationalQuadratic(CouplingTransform):
     def _propose(self, x1, context=None):
         params = self.conditioner(x1, context)
         params = params.reshape(*x1.shape[:-1], self.split_dims[1], -1)
+        assert self.n_params_per_dim == params.shape[-1], 'param shape mismatch'
         k = self.n_bins
         widths = params[..., :k]
         heights = params[..., k:2*k]
         derivatives = params[..., 2*k:-4]
         bounds = params[..., -4:]
-        # bounds = torch.zeros(*widths.shape[:-1], 4)
         return bounds, widths, heights, derivatives
 
     def _constrain(
