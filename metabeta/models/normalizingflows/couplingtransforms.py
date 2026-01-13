@@ -292,7 +292,7 @@ class RationalQuadratic(CouplingTransform):
             discriminant = b.pow(2) - 4 * a * c
             discriminant = torch.clamp(discriminant, min=1e-12)
             xi = (2 * c) / (-b - torch.sqrt(discriminant))
-            xi = xi.clamp(min=self.eps, max=1 - self.eps)
+            xi = xi * (1 - 2 * self.eps) + self.eps
             z2 = xi * x_k_delta + x_k
 
             # log_det variables
@@ -302,7 +302,7 @@ class RationalQuadratic(CouplingTransform):
         else:
             # helper variables
             xi = (x2 - x_k) / x_k_delta
-            xi = xi.clamp(min=self.eps, max=1 - self.eps)
+            xi = xi * (1 - 2 * self.eps) + self.eps
             xi_1_minus_xi = xi * (1 - xi)
             ld_factor = 1
 
