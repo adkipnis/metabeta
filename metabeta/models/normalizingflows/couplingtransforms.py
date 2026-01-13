@@ -127,7 +127,7 @@ class RationalQuadratic(CouplingTransform):
     def _build(self, net_kwargs: dict):
         net_type = net_kwargs['net_type']
         assert net_type in ['mlp', 'residual']
-        net_kwargs['d_output'] = (3 * self.n_bins + 1) * self.split_dims[1]
+        net_kwargs['d_output'] = (3 * self.n_bins + 3) * self.split_dims[1]
 
         # MLP Conditioner
         if net_type == 'mlp':
@@ -146,17 +146,16 @@ class RationalQuadratic(CouplingTransform):
             })
             self.conditioner = FlowResidualNet(**net_kwargs)
 
-    def _propose(self, x1, condition=None):
-        params = self.conditioner(x1, condition)
+    def _propose(self, x1, context=None):
+        params = self.conditioner(x1, context)
         params = params.reshape(*x1.shape[:-1], self.split_dims[1], -1)
         k = self.n_bins
-        widths = params[..., :k] #/ np.sqrt(self.d_ff)
-        heights = params[..., k:2*k] #/ np.sqrt(self.d_ff)
-        derivatives = params[..., 2*k:]
-        # derivatives = F.pad(derivatives, (1,1))
-        # derivatives[..., 0] = self.tail_constant
-        # derivatives[..., -1] = self.tail_constant
-        return widths, heights, derivatives
+        widths = params[..., :k]
+        heights = params[..., k:2*k]
+        derivatives = params[..., 2*k:-4]
+        bounds = params[..., -4:]
+        # bounds = torch.zeros(*widths.shape[:-1], 4)
+        return bounds, widths, heights, derivatives
 
     def _constrain(
             self, params: tuple[torch.Tensor, ...],
