@@ -8,7 +8,7 @@ from metabeta.models.feedforward import FlowMLP, FlowResidualNet
 
 class CouplingTransform(nn.Module):
     ''' Base class for coupling transforms:
-        - build conditioner network
+        - build contexter network
         - propose transform parameters
         - directionally apply transform parameters to inputs
     '''
@@ -19,7 +19,7 @@ class CouplingTransform(nn.Module):
 
     @abstractmethod
     def _propose(
-        self, x1: torch.Tensor, condition: torch.Tensor | None = None
+        self, x1: torch.Tensor, context: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, ...]:
         ...
 
@@ -28,14 +28,14 @@ class CouplingTransform(nn.Module):
         self,
         x1: torch.Tensor,
         x2: torch.Tensor,
-        condition: torch.Tensor | None = None,
+        context: torch.Tensor | None = None,
         mask2: torch.Tensor | None = None,
         inverse: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         ...
 
-    def inverse(self, x1, x2, condition=None, mask2=None):
-        return self(x1, x2, condition, mask2, inverse=True)
+    def inverse(self, x1, x2, context=None, mask2=None):
+        return self(x1, x2, context, mask2, inverse=True)
 
 
 class Affine(CouplingTransform):
@@ -76,14 +76,14 @@ class Affine(CouplingTransform):
             })
             self.conditioner = FlowResidualNet(**net_kwargs)
 
-    def _propose(self, x1, condition=None):
-        parameters = self.conditioner(x1, condition)
+    def _propose(self, x1, context=None):
+        parameters = self.conditioner(x1, context)
         log_s, t = parameters.chunk(2, dim=-1)
         log_s = self.alpha * torch.tanh(log_s / self.alpha)  # softclamping
         return log_s, t
 
-    def forward(self, x1, x2, condition=None, mask2=None, inverse=False):
-        log_s, t = self._propose(x1, condition)
+    def forward(self, x1, x2, context=None, mask2=None, inverse=False):
+        log_s, t = self._propose(x1, context)
         if mask2 is not None:
             log_s = log_s * mask2
             t = t * mask2
