@@ -251,40 +251,6 @@ class RationalQuadratic(CouplingTransform):
             x2, params, outside, inverse=inverse)
         return z2, log_det.sum(-1)
 
-    def _affine(
-            self,
-            x2: torch.Tensor,
-            derivatives: torch.Tensor,
-            inverse: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        z2 = torch.empty_like(x2)
-        log_det = torch.zeros_like(x2)
-        derivatives = self.min_val + F.softplus(derivatives)
-
-        # masks
-        outside_left = (x2 < -self.tail_bound)
-        outside_right = (self.tail_bound < x2)
-
-        # slopes and logdets
-        b = self.tail_bound
-        a_left = derivatives[outside_left, 0]
-        a_right = derivatives[outside_right, -1]
-        log_det[outside_left] = a_left.log()
-        log_det[outside_right] = a_right.log()
-
-        # transforms
-        if inverse:
-            # y = a * (x + b) - b <=> x = (y + b) / a - b
-            ld_factor = -1
-            z2[outside_left] = 1/a_left * (x2[outside_left] + b) - b
-            z2[outside_right] = 1/a_right * (x2[outside_right] - b) + b
-
-        else:
-            ld_factor = 1
-            z2[outside_left] = a_left * (x2[outside_left] + b) - b
-            z2[outside_right] = a_right * (x2[outside_right] - b) + b
-        return z2, ld_factor * log_det
-
     def _spline(
             self,
             x2: torch.Tensor,
