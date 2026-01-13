@@ -159,38 +159,64 @@ class RationalQuadratic(CouplingTransform):
 
     def _constrain(
             self, params: tuple[torch.Tensor, ...],
-            ) -> tuple[torch.Tensor, ...]:
-        widths, heights, derivatives = params
+            ) -> dict[str, torch.Tensor]:
+        bounds, widths, heights, derivatives = params
+        left, total_width, bottom, total_height = bounds.chunk(4, -1)
 
-        # setup bounds [-B, B]
-        left = -self.tail_bound
-        total_width = 2 * self.tail_bound
-        bottom = -self.tail_bound
-        total_height = 2 * self.tail_bound
+        # --- bounds
+        # lower bounds
+        left = left + self.default_left
+        bottom = bottom + self.default_bottom
 
+        # upper bounds (individually scale default total width resp. height)
+        relative_width = torch.asinh(F.softplus(total_width + self._sin_shift))
+        total_width = self.min_total + (self.default_width - self.min_total) * relative_width
+        relative_height = torch.asinh(F.softplus(total_height + self._sin_shift))
+        total_height = self.min_total + (self.default_height - self.min_total) * relative_height
+
+        bounds = torch.cat([left, total_width, bottom, total_height], dim=-1)
+
+        # --- bins
         # normalize widths to sum to 1
         widths = F.softmax(widths, dim=-1)
 
-        # shift by min_val but keep unit sum
-        widths = self.min_val + (1 - self.n_bins * self.min_val) * widths
+        # shift by min_val and ensure total_width sum
+        widths = self.min_bin + (total_width - self.n_bins * self.min_bin) * widths
 
-        # stretch to [-B, B]
+        # stretch to [left, left + total_width]
         cumwidths = widths.cumsum(-1)
-        cumwidths = F.pad(cumwidths, (1,0))
-        cumwidths = left + total_width * cumwidths
+        cumwidths = left + F.pad(cumwidths, (1,0))
         widths = cumwidths[..., 1:] - cumwidths[..., :-1]
 
         # do the same with heights
         heights = F.softmax(heights, dim=-1)
-        heights = self.min_val + (1 - self.n_bins * self.min_val) * heights
+        heights = self.min_bin + (total_height - self.n_bins * self.min_bin) * heights
         cumheights = heights.cumsum(-1)
-        cumheights = F.pad(cumheights, (1,0))
-        cumheights = bottom + total_height * cumheights
+        cumheights = bottom + F.pad(cumheights, (1,0))
         heights = cumheights[..., 1:] - cumheights[..., :-1]
 
-        # process derivatives
-        derivatives = self.min_val + F.softplus(derivatives)
-        return widths, cumwidths, heights, cumheights, derivatives
+        # --- affine params
+        weight = total_height / total_width
+        bias = bottom - weight * left
+        weight = weight.squeeze(-1)
+        bias = bias.squeeze(-1)
+
+        # --- derivatives
+        derivatives = 1e-3 + F.softplus(derivatives)
+        derivatives = F.pad(derivatives, (1,1))
+        derivatives[..., 0] = derivatives[..., -1] = weight
+        # print(derivatives.max())
+
+        return dict(
+            bounds=bounds,
+            widths=widths,
+            cumwidths=cumwidths,
+            heights=heights,
+            cumheights=cumheights,
+            weight=weight,
+            bias=bias,
+            derivatives=derivatives,
+        )
 
     def forward(self, x1, x2, condition=None, mask2=None, inverse=False):
         params = self._propose(x1, condition)
