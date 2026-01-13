@@ -70,11 +70,11 @@ def test_single_coupling():
         torch.allclose(x2, z2, atol=ATOL)
     ), 'serial model is not invertible'
 
-    condition = torch.randn((8, 5))
+    context  = torch.randn((8, 5))
     model3 = Coupling(split_dims, d_context=5, net_kwargs=NET_KWARGS)
     model3.eval()
-    (z1, z2), _ = model3.forward(x1, x2, condition)
-    (z1, z2), _ = model3.inverse(z1, z2, condition)
+    (z1, z2), _ = model3.forward(x1, x2, context)
+    (z1, z2), _ = model3.inverse(z1, z2, context)
     assert (
         torch.allclose(x1, z1, atol=ATOL) and
         torch.allclose(x2, z2, atol=ATOL)
@@ -85,15 +85,15 @@ def test_single_coupling():
 
 def test_dual_coupling():
     x = torch.randn((8, 3))
-    condition = torch.randn((8, 5))
+    context = torch.randn((8, 5))
     model = DualCoupling(3, d_context=5, net_kwargs=NET_KWARGS)
     model.eval()
-    z, log_det, _ = model.forward(x, condition)
-    z, _, _ = model.inverse(z, condition)
+    z, log_det, _ = model.forward(x, context)
+    z, _, _ = model.inverse(z, context)
     assert torch.allclose(x, z, atol=ATOL), 'model is not invertible'
 
     x.requires_grad_(True)
-    z_numerical, _, _ = model.forward(x, condition)
+    z_numerical, _, _ = model.forward(x, context)
     jacobian = []
     for i in range(z_numerical.shape[-1]):
         grad_z_i = torch.autograd.grad(z_numerical[:, i].sum(), x, retain_graph=True)[0]
@@ -109,16 +109,16 @@ def test_dual_coupling():
 
 def test_coupling_flow():
     x = torch.randn((8, 3))
-    condition = torch.randn((8, 5))
+    context = torch.randn((8, 5))
     model = CouplingFlow(3, d_context=5, n_blocks=3,
                          use_actnorm=True, net_kwargs=NET_KWARGS)
     model.eval()
-    z, log_det, _ = model.forward(x, condition)
-    z, _, _ = model.inverse(z, condition)
+    z, log_det, _ = model.forward(x, context)
+    z, _, _ = model.inverse(z, context)
     assert torch.allclose(x, z, atol=ATOL), 'model is not invertible'
 
     x.requires_grad_(True)
-    z_numerical, _, _ = model.forward(x, condition)
+    z_numerical, _, _ = model.forward(x, context)
     jacobian = []
     for i in range(z_numerical.shape[-1]):
         grad_z_i = torch.autograd.grad(z_numerical[:, i].sum(), x, retain_graph=True)[0]
@@ -129,7 +129,7 @@ def test_coupling_flow():
         f'Log determinant mismatch! Computed: {log_det}, Numerical: {numerical_log_det}'
     )
 
-    x_, log_q = model.sample(100, condition)
+    x_, log_q = model.sample(100, context)
     assert x_.shape == (8, 100, 3), 'sample shape is off'
 
     print('Coupling Flow passed all tests!')
