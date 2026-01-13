@@ -50,3 +50,30 @@ class Approximator(nn.Module):
         ...
 
 
+if __name__ == '__main__':
+    from metabeta.utils.logger import setupLogging
+    setupLogging(1)
+
+    cfg = {'d': 3, 'q': 1}
+    cfg['summarizer'] = {
+        'type': 'set-transformer',
+        'd_model': 64,
+        'd_ff': 128,
+        'd_output': 64,
+        'n_blocks': 4,
+        'n_isab': 0,
+        'activation': 'GeGLU',
+        'dropout': 0.01,
+    }
+    cfg['posterior'] = {
+        'type': 'flow',
+        'n_blocks': 4,
+        'transform': 'spline',
+        'net_kwargs': {
+            'activation': 'ReLU',
+            },
+    }
+
+    model = Approximator(cfg)
+
+
