@@ -27,7 +27,8 @@ class Feedforward(nn.Module):
     ):
         super().__init__()
         self.residual = residual if d_input == d_output else False
-        self._rscale = nn.Parameter(torch.tensor(rscale))
+        if self.residual:
+            self._rscale = nn.Parameter(torch.tensor(rscale))
         if activation == 'GeGLU':
             d_output *= 2
 
