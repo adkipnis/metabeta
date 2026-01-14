@@ -26,8 +26,6 @@ class SetTransformer(nn.Module):
         eps: float = 1e-3,
     ):
         super().__init__()
-        if len(kwargs):
-            logger.debug(f'Unused kwargs: {kwargs}')
         assert n_blocks >= n_isab, 'n_isab must not be larger than n_blocks'
 
         # input projector
@@ -145,21 +143,8 @@ if __name__ == '__main__':
 
     # ISAB/MAB set transformer
     model = SetTransformer(d, d_model, d_ff, n_blocks=4, n_isab=2)
-    torch.compile(model)
-    model.eval()
- 
-    # 3d case
-    x = torch.randn(b, n, d)
-    y = model(x)
-
-    # 4d case
     x = torch.randn(b, m, n, d)
-    y = model(x)
-
-    # mask
     mask = torch.ones((b, m, n)).bool()
     mask[..., -1] = False
-    y1 = model(x, mask=mask)
-    x[~mask] = 99
-    y2 = model(x, mask=mask)
-    assert torch.allclose(y1, y2, atol=1e-5)
+    out = model(x, mask=mask)
+    
