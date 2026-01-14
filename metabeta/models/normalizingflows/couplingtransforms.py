@@ -176,7 +176,9 @@ class RationalQuadratic(CouplingTransform):
     def _propose(self, x1, context=None):
         params = self.conditioner(x1, context)
         params = params.reshape(*x1.shape[:-1], self.split_dims[1], -1)
-        assert self.n_params_per_dim == params.shape[-1], 'param shape mismatch'
+        if self.n_params_per_dim != params.shape[-1]:
+            raise ValueError(
+                f'last params dim should be {self.n_params_per_dim} but found {params.shape[-1]}')
         k = self.n_bins
         widths = params[..., :k]
         heights = params[..., k:2*k]
