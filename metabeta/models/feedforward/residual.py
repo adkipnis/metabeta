@@ -1,4 +1,3 @@
-import logging
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -6,7 +5,6 @@ from metabeta.utils.activations import getActivation
 from metabeta.utils.initializers import (
     getInitializer, zeroInitializer, lastZeroInitializer, weightNormInitializer)
 
-logger = logging.getLogger(__name__)
 
 class ResidualBlock(nn.Module):
     ''' Residual Block with optional GLU:
@@ -147,11 +145,8 @@ class FlowResidualNet(nn.Module):
         d_context: int = 0,
         use_bias: bool = True,
         use_glu: bool = True,
-        **kwargs
     ):
         super().__init__()
-        if len(kwargs):
-            logger.debug(f'Unused kwargs: {kwargs}')
         self.net = ResidualNet(
             d_input=d_input,
             d_hidden=d_hidden,
