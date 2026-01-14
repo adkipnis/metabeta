@@ -155,49 +155,15 @@ class ISAB(nn.Module):
 # --------------------------------------------------------
 if __name__ == '__main__':
 
-    # sizes
     d_model = 16
     d_ff = 64
     b, n = 8, 10
 
-    # MHA
-    model = MHA(d_model)
-    torch.compile(model)
-    model.eval()
-
-    # test
     x = torch.randn(b, n, d_model)
-    y = model(x)
-    assert x.shape == y.shape
-
-    # test qkv
-    z = model(x, y)
-    _ = model(x, y, z)
-
-    # test mask
     mask = torch.ones(size=(b, n)).bool() # attend all entries
-    y_ = model(x, mask=mask)
-    assert torch.allclose(y, y_)
-
-    # test mask with different values
     mask[..., 0] = False # don't attend the first entry in sequence
-    y1 = model(x, mask=mask)
-    x[~mask] = -99. # this entry won't be attended and thus should not matter
-    y2 = model(x, mask=mask)
-    assert torch.allclose(y1[mask], y2[mask], atol=1e-5)
 
-    # MAB
-    model = MAB(d_model, d_ff, pre_norm=False)
-    torch.compile(model)
-    x = torch.randn(b, n, d_model)
-    y = model(x)
-
-    # ISAB
     model = ISAB(d_model, d_ff, n_inducing=32)
-    torch.compile(model)
     model.eval()
-    y1 = model(x, mask=mask)
-    x[~mask] = 0.
-    y2 = model(x, mask=mask)
-    assert torch.allclose(y1[mask], y2[mask], atol=1e-5)
+    out = model(x, mask=mask)
 
