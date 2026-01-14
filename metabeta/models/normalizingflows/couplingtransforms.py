@@ -5,11 +5,6 @@ from torch import nn
 from torch.nn import functional as F
 from metabeta.models.feedforward import FlowMLP, FlowResidualNet
 
-NET_KWARGS = {
-    'net_type': 'mlp',
-    'd_ff': 128,
-    'depth': 3,
-}
 
 class CouplingTransform(nn.Module):
     ''' Base class for coupling transforms:
@@ -17,6 +12,12 @@ class CouplingTransform(nn.Module):
         - propose transform parameters
         - directionally apply transform parameters to inputs
     '''
+
+    SUBNET_KWARGS = {
+        'net_type': 'mlp',
+        'd_ff': 128,
+        'depth': 3,
+    }
 
     @abstractmethod
     def _build(self, net_kwargs: dict) -> None:
