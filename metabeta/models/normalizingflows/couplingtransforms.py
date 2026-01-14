@@ -117,8 +117,8 @@ class RationalQuadratic(CouplingTransform):
     def __init__(
         self,
         split_dims: tuple[int, int],
-        d_context: int = 0,
-        net_kwargs: dict = {},
+        d_context: int,
+        subnet_kwargs: dict | None = None,
         n_bins: int = 8,
         default_domain: float = 3.0,
         min_total: float = 2.0,
@@ -140,8 +140,13 @@ class RationalQuadratic(CouplingTransform):
         self._shift = np.log(np.e - 1)
         self._sin_shift = np.sinh(1) * np.log(np.e - 1)
 
+        # safely handle subnet_cfg
+        if subnet_kwargs is None:
+            subnet_kwargs = {}
+        subnet_kwargs = self.SUBNET_KWARGS | subnet_kwargs
+
         # setup conditioner
-        self._build(dict(net_kwargs))
+        self._build(subnet_kwargs)
 
     def _build(self, net_kwargs: dict):
         net_kwargs = NET_KWARGS | net_kwargs
