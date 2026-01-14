@@ -95,7 +95,9 @@ class Affine(CouplingTransform):
     def _propose(self, x1, context=None):
         parameters = self.conditioner(x1, context)
         log_s, t = parameters.chunk(2, dim=-1)
-        log_s = self.alpha * torch.tanh(log_s / self.alpha)  # softclamping
+        # softclamp
+        t = self.beta * torch.tanh(t / self.beta)
+        log_s = self.alpha * torch.tanh(log_s / self.alpha)
         return log_s, t
 
     def forward(self, x1, x2, context=None, mask2=None, inverse=False):
