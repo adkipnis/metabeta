@@ -1,4 +1,4 @@
-from .mlp import MLP, FlowMLP, TransformerFFN
-from .residual import ResidualNet, FlowResidualNet
+from .mlp import TransformerFFN, FlowMLP
+from .residual import FlowResidualNet
 
-__all__ = ['MLP', 'FlowMLP', 'TransformerFFN', 'ResidualNet', 'FlowResidualNet']
+__all__ = ['TransformerFFN', 'FlowMLP', 'FlowResidualNet',]
