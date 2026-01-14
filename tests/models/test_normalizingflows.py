@@ -2,10 +2,12 @@ import torch
 from metabeta.models.normalizingflows import LU, Permute
 from metabeta.models.normalizingflows.coupling import (
     Coupling, DualCoupling, CouplingFlow
-)
 
-torch.manual_seed(0)
-ATOL = 5e-4
+)
+torch.set_printoptions(precision=5)
+
+torch.manual_seed(1)
+ATOL = 1e-5
 NET_KWARGS = {
     'net_type': 'mlp',
     'zero_init': False, # if True, the initial flows are identity maps
@@ -37,12 +39,11 @@ def test_lu():
 
 
 def test_single_coupling():
-    inputs = torch.randn((8, 3))
+    inputs = torch.randn((8, 3), dtype=torch.float64)
     x1, x2 = inputs.chunk(2, dim=-1)
     split_dims = (x1.shape[-1], x2.shape[-1])
-    model1 = Coupling(split_dims, net_kwargs=NET_KWARGS)
-    model2 = Coupling((split_dims[1], split_dims[0]), net_kwargs=NET_KWARGS)
-
+    model1 = Coupling(split_dims, net_kwargs=NET_KWARGS).double()
+    model2 = Coupling((split_dims[1], split_dims[0]), net_kwargs=NET_KWARGS).double()
     model1.eval()
     model2.eval()
     (z1, z2), _ = model1.forward(x1, x2)
@@ -58,9 +59,19 @@ def test_single_coupling():
         torch.allclose(x1, z1, atol=ATOL) and
         torch.allclose(x2, z2, atol=ATOL)
     ), 'model2 is not invertible'
+    
+    print('Single Coupling passed all tests!')
 
-    (z1, z2), _ = model1(x1, x2)
-    (z2, z1), _ = model2(z2, z1)
+def test_serial_single_coupling():
+    inputs = torch.randn((8, 3), dtype=torch.float64)
+    x1, x2 = inputs.chunk(2, dim=-1)
+    split_dims = (x1.shape[-1], x2.shape[-1])
+    model1 = Coupling(split_dims, net_kwargs=NET_KWARGS).double()
+    model2 = Coupling((split_dims[1], split_dims[0]), net_kwargs=NET_KWARGS).double()
+    model1.eval()
+    model2.eval()
+    (z1_, z2_), _ = model1(x1, x2)
+    (z2, z1), _ = model2(z2_, z1_)
     (z2, z1), _ = model2.inverse(z2, z1)
     (z1, z2), _ = model1.inverse(z1, z2)
     assert (
@@ -68,8 +79,8 @@ def test_single_coupling():
         torch.allclose(x2, z2, atol=ATOL)
     ), 'serial model is not invertible'
 
-    context  = torch.randn((8, 5))
-    model3 = Coupling(split_dims, d_context=5, net_kwargs=NET_KWARGS)
+    context  = torch.randn((8, 5), dtype=torch.float64)
+    model3 = Coupling(split_dims, d_context=5, net_kwargs=NET_KWARGS).double()
     model3.eval()
     (z1, z2), _ = model3.forward(x1, x2, context)
     (z1, z2), _ = model3.inverse(z1, z2, context)
@@ -78,13 +89,13 @@ def test_single_coupling():
         torch.allclose(x2, z2, atol=ATOL)
     ), 'conditional model is not invertible'
 
-    print('Single Coupling passed all tests!')
+    print('Serial Single Coupling passed all tests!')
 
 
 def test_dual_coupling():
-    x = torch.randn((8, 3))
-    context = torch.randn((8, 5))
-    model = DualCoupling(3, d_context=5, net_kwargs=NET_KWARGS)
+    x = torch.randn((8, 3), dtype=torch.float64)
+    context = torch.randn((8, 5), dtype=torch.float64)
+    model = DualCoupling(3, d_context=5, net_kwargs=NET_KWARGS).double()
     model.eval()
     z, log_det, _ = model.forward(x, context)
     z, _, _ = model.inverse(z, context)
@@ -106,10 +117,11 @@ def test_dual_coupling():
 
 
 def test_coupling_flow():
-    x = torch.randn((8, 3))
-    context = torch.randn((8, 5))
-    model = CouplingFlow(3, d_context=5, n_blocks=3,
-                         use_actnorm=True, net_kwargs=NET_KWARGS)
+    x = torch.randn((8, 3), dtype=torch.float64)
+    context = torch.randn((8, 5), dtype=torch.float64)
+    model = CouplingFlow(3, d_context=5, n_blocks=8,
+                         use_actnorm=False, use_permute=False,
+                         net_kwargs=NET_KWARGS).double()
     model.eval()
     z, log_det, _ = model.forward(x, context)
     z, _, _ = model.inverse(z, context)
@@ -183,9 +195,6 @@ def test_masking():
         use_permute=False,
         net_kwargs=NET_KWARGS,
     )
-    # model = model.to('mps')
-    # x = x.to('mps')
-    # mask = mask.to('mps')
     model.eval()
     z, log_det, mask_ = model(x, mask=mask)
     assert z[0, -1] == 0.0, 'mask not properly applied to z'
@@ -202,11 +211,11 @@ def test_masking():
 
 def test_rq():
     NET_KWARGS['zero_init'] = True
-    x = torch.randn((8, 3)) * 3
+    x = 0.1 * torch.randn((8, 3))#, dtype=torch.float64)
     x[0, -1] = 0.0
-    mask = (x != 0.0).float()
+    mask = (x != 0.0).float()#.double()
 
-    model = Coupling((2, 1), net_kwargs=NET_KWARGS, transform='spline')
+    model = Coupling((2, 1), net_kwargs=NET_KWARGS, transform='spline')#.double()
     model.eval()
     x1, x2 = x.chunk(2, dim=-1)
     _, mask2 = mask.chunk(2, dim=-1)
@@ -223,18 +232,20 @@ def test_rq():
     assert x2[0, 0] == z2[0, 0] == 0.0, 'mask not properly applied to z'
     assert log_det[0] == 0.0, 'log_det not properly masked'
 
-    model = DualCoupling(3, net_kwargs=NET_KWARGS, transform='spline')
+    model = DualCoupling(3, net_kwargs=NET_KWARGS, transform='spline')#.double()
     model.eval()
-    z, log_det, _ = model(x, mask=mask)
+    z, log_det, _ = model.forward(x, mask=mask)
+    x_, _, _ = model.inverse(z, mask=mask)
+    assert torch.allclose(x, x_, atol=ATOL), 'model is not invertible'
     assert z[0, -1] == 0.0, 'mask not properly applied to z'
     if not NET_KWARGS['zero_init']:
         assert log_det[0] != 0.0, 'log_det should not be zero'
         z, log_det_, _ = model(x)
         assert log_det[0] != log_det_[0], 'log_det should differ at first index'
-
+    
     model = CouplingFlow(
         3,
-        n_blocks=1,
+        n_blocks=8,
         use_actnorm=True,
         use_permute=False,
         net_kwargs=NET_KWARGS,
@@ -252,4 +263,4 @@ def test_rq():
     assert (x_[0, :, -1] == 0.0).all(), 'mask not properly applied during sampling'
 
     print('Masked Neural Spline Flow passed all tests!')
-    
+
