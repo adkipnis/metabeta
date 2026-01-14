@@ -185,32 +185,10 @@ if __name__ == '__main__':
     d_hidden = 32
     d_output = 8
     depth = 3
-    x = torch.randn(b, d_hidden)
-    context = None
-
-    # --- Residual Block
-    # basic
-    cfg = {'d_hidden': d_hidden}
-    run(ResidualBlock)
-
-    # with context, dropout and layer norm
     d_context = 5
+    
     context = torch.randn(b, d_context)
-    cfg.update({'d_context': d_context, 'layer_norm': True, 'dropout': 0.01}) # type: ignore
-    run(ResidualBlock)
-
-    # with GLU
-    cfg.update({'use_glu': True})
-    run(ResidualBlock)
-
-    # --- Residual Net
-    cfg.update({
-        'd_input': d_input,
-        'd_output': d_output,
-        'depth': depth,
-    })
     x = torch.randn(b, d_input)
-    run(ResidualNet)
 
     # --- Flow Residual Net
     cfg = {
@@ -220,6 +198,7 @@ if __name__ == '__main__':
         'depth': depth,
         'd_context': d_context,
     }
-    run(FlowResidualNet)
+    model = FlowResidualNet(**cfg)
+    out = model(x, context)
 
 
