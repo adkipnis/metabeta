@@ -20,7 +20,7 @@ class CouplingTransform(nn.Module):
     }
 
     @abstractmethod
-    def _build(self, net_kwargs: dict) -> None:
+    def _build(self, subnet_kwargs: dict) -> None:
         ...
 
     @abstractmethod
@@ -56,9 +56,13 @@ class Affine(CouplingTransform):
         self.split_dims = split_dims
         self.d_context = d_context
         self.alpha = alpha
+        # safely handle subnet_cfg
+        if subnet_kwargs is None:
+            subnet_kwargs = {}
+        subnet_kwargs = self.SUBNET_KWARGS | subnet_kwargs
 
         # setup conditioner
-        self._build(dict(net_kwargs))
+        self._build(subnet_kwargs)
 
     def _build(self, net_kwargs: dict):
         net_kwargs = NET_KWARGS | net_kwargs
