@@ -148,28 +148,30 @@ class RationalQuadratic(CouplingTransform):
         # setup conditioner
         self._build(subnet_kwargs)
 
-    def _build(self, net_kwargs: dict):
-        net_kwargs = NET_KWARGS | net_kwargs
-        net_type = net_kwargs['net_type']
+    def _build(self, subnet_kwargs):
+        net_type = subnet_kwargs.pop('net_type')
         assert net_type in ['mlp', 'residual']
-        net_kwargs['d_output'] = self.n_params_per_dim * self.split_dims[1]
+        subnet_kwargs['d_output'] = self.n_params_per_dim * self.split_dims[1]
 
         # MLP Conditioner
         if net_type == 'mlp':
-            net_kwargs.update({
+            subnet_kwargs.update({
                 'd_input': self.split_dims[0] + self.d_context,
-                'd_hidden': (net_kwargs['d_ff'],) * net_kwargs['depth'],
+                'd_hidden': (subnet_kwargs['d_ff'],) * subnet_kwargs['depth'],
             })
-            self.conditioner = FlowMLP(**net_kwargs)
+            subnet_kwargs.pop('d_ff')
+            subnet_kwargs.pop('depth')
+            self.conditioner = FlowMLP(**subnet_kwargs)
 
         # Residual Conditioner
         elif net_type == 'residual':
-            net_kwargs.update({
+            subnet_kwargs.update({
                 'd_input': self.split_dims[0],
                 'd_context': self.d_context,
-                'd_hidden': net_kwargs['d_ff'],
+                'd_hidden': subnet_kwargs['d_ff'],
             })
-            self.conditioner = FlowResidualNet(**net_kwargs)
+            subnet_kwargs.pop('d_ff')
+            self.conditioner = FlowResidualNet(**subnet_kwargs)
 
     def _propose(self, x1, context=None):
         params = self.conditioner(x1, context)
