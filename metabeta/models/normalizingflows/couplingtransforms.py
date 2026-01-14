@@ -105,10 +105,11 @@ class Affine(CouplingTransform):
         if mask2 is not None:
             log_s = log_s * mask2
             t = t * mask2
+        s = log_s.exp()
         if inverse:
-            x2 = (x2 - t) * (-log_s).exp()
+            x2 = (x2 - t) / s
         else:
-            x2 = log_s.exp() * x2 + t
+            x2 = s * x2 + t
         log_det = log_s.sum(-1)
         return x2, log_det
 
