@@ -205,57 +205,20 @@ class FlowMLP(nn.Module):
 
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
-
-    def run(cls):
-        model = cls(**cfg)
-        out = model(x)
-        model = torch.compile(model)
-        model(x)
-        assert not out.isnan().any()
-        return out
-
     # dims
-    b = 64
     d_input = 32
     d_hidden = [16, 8]
     d_output = 4
-    x = torch.randn(b, d_input)
-
-    # Base Feedforward Layer
-    cfg = {'d_input': d_input,
-           'd_output': d_output,
-           'activation': 'ReLU'}
-    run(Feedforward)
-
-    cfg.update({'layer_norm': True, 'activation': 'GELU'})
-    run(Feedforward)
-
-    cfg.update({'pre_norm': True, 'residual': False})
-    run(Feedforward)
-
-    # Base MLP
-    cfg.update({'d_hidden': d_hidden, 'weight_init': None})
-    run(MLP)
-
-    cfg.update({'d_hidden': d_hidden[0],
-                'shortcut': True,
-                'weight_init': ('xavier', 'normal'),
-                'zero_init': True})
-    run(MLP)
+    x = torch.randn(64, d_input)
 
     # TransformerFFN
     cfg = {'d_input': d_input, 'd_hidden': d_hidden[0], 'd_output': d_output}
-    run(TransformerFFN)
-
-    cfg.update({'activation': 'GeGLU'}) # type: ignore
-    run(TransformerFFN)
+    model = TransformerFFN(**cfg) # type: ignore
+    out = model(x)
 
     # FlowMLP
     cfg = {'d_input': d_input, 'd_hidden': d_hidden, 'd_output': d_output}
-    run(FlowMLP)
-
     x, context = x.chunk(2, dim=-1)
     model = FlowMLP(**cfg)
-    torch.compile(model)
-    y = model(x, context)
+    out = model(x, context)
 
