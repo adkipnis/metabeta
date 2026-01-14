@@ -48,14 +48,17 @@ class Affine(CouplingTransform):
     def __init__(
         self,
         split_dims: tuple[int, int],
-        d_context: int = 0,
-        net_kwargs: dict = {},
-        alpha: float = 1.0, # softclamping denominator
+        d_context: int,
+        subnet_kwargs: dict | None = None,
+        alpha: float = 1.0, # softclamping scale
+        beta: float = 6.0, # softclamping bias
     ):
         super().__init__()
         self.split_dims = split_dims
         self.d_context = d_context
         self.alpha = alpha
+        self.beta = beta
+
         # safely handle subnet_cfg
         if subnet_kwargs is None:
             subnet_kwargs = {}
