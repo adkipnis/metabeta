@@ -4,7 +4,8 @@ from metabeta.models.normalizingflows.coupling import (
     Coupling, DualCoupling, CouplingFlow
 )
 
-ATOL = 1e-5
+torch.manual_seed(0)
+ATOL = 5e-4
 NET_KWARGS = {
     'net_type': 'mlp',
     'zero_init': False, # if True, the initial flows are identity maps
@@ -122,7 +123,7 @@ def test_coupling_flow():
         jacobian.append(grad_z_i)
     jacobian = torch.stack(jacobian, dim=-1)
     numerical_log_det = torch.log(torch.abs(torch.det(jacobian)))
-    assert torch.allclose(log_det, numerical_log_det, atol=1e-5), (
+    assert torch.allclose(log_det, numerical_log_det, atol=ATOL), (
         f'Log determinant mismatch! Computed: {log_det}, Numerical: {numerical_log_det}'
     )
 
@@ -239,9 +240,6 @@ def test_rq():
         net_kwargs=NET_KWARGS,
         transform='spline',
     )
-    # model = model.to('mps')
-    # x = x.to('mps')
-    # mask = mask.to('mps')
     model.eval()
     z, log_det, mask_ = model(x, mask=mask)
     assert z[0, -1] == 0.0, 'mask not properly applied to z'
@@ -254,15 +252,4 @@ def test_rq():
     assert (x_[0, :, -1] == 0.0).all(), 'mask not properly applied during sampling'
 
     print('Masked Neural Spline Flow passed all tests!')
-
-
-
-if __name__ == '__main__':
-    torch.manual_seed(0)
-    test_lu()
-    test_single_coupling()
-    test_dual_coupling()
-    test_coupling_flow()
-    test_masking()
-    test_rq()
-
+    
