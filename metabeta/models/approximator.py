@@ -1,7 +1,45 @@
+from dataclasses import dataclass, asdict
 import torch
 from torch import nn
 from metabeta.models.transformers import SetTransformer
 from metabeta.models.normalizingflows import CouplingFlow
+from metabeta.utils.regularization import maskedInverseSoftplus, maskedSoftplus, dampen
+
+@dataclass(frozen=True)
+class SummarizerConfig:
+    d_model: int
+    d_ff: int
+    d_output: int
+    n_blocks: int
+    n_isab: int = 0
+    activation: str = 'GELU'
+    dropout: float = 0.01
+    type: str = 'set-transformer'
+
+    def to_dict(self) -> dict:
+        out = asdict(self)
+        out.pop('type')
+        return out
+
+@dataclass(frozen=True)
+class PosteriorConfig:
+    n_blocks: int
+    subnet_kwargs: dict | None = None
+    type: str = 'flow'
+    transform: str = 'spline'
+
+    def to_dict(self) -> dict:
+        out = asdict(self)
+        out.pop('type')
+        return out
+
+@dataclass(frozen=True)
+class Config:
+    d_ffx: int
+    d_rfx: int
+    summarizer: SummarizerConfig
+    posterior: PosteriorConfig
+
 
 class Approximator(nn.Module):
     def __init__(self, cfg: dict):
