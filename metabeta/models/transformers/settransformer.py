@@ -16,8 +16,8 @@ class SetTransformer(nn.Module):
         d_output: int | None = None,
         n_inducing: int = 32, # for ISAB blocks
         n_heads: int = 4,
-        n_blocks: int = 4,
-        n_isab: int = 2, # first n blocks are ISAB blocks instead of MAB
+        n_blocks: int = 2,
+        n_isab: int = 0, # first n blocks are ISAB blocks instead of MAB
         use_bias: bool = True,
         pre_norm: bool = True,
         activation: str = 'GELU',
