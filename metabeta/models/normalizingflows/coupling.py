@@ -15,14 +15,14 @@ class Coupling(nn.Module):
         self,
         split_dims: tuple[int, int],
         d_context: int = 0,
-        net_kwargs: dict | None = None,
+        subnet_kwargs: dict | None = None,
         transform: str = 'affine',
     ):
         super().__init__()
         if transform == 'affine':
-            self.transform = Affine(split_dims, d_context, net_kwargs)
+            self.transform = Affine(split_dims, d_context, subnet_kwargs)
         elif transform == 'spline':
-            self.transform = RationalQuadratic(split_dims, d_context, net_kwargs)
+            self.transform = RationalQuadratic(split_dims, d_context, subnet_kwargs)
         else:
             raise NotImplementedError(
                 'only affine and spline transforms are supported')
@@ -50,7 +50,7 @@ class DualCoupling(Transform):
         self,
         d_target: int,
         d_context: int = 0,
-        net_kwargs: dict | None = None,
+        subnet_kwargs: dict | None = None,
         transform: str = 'affine',
     ):
         super().__init__()
@@ -59,30 +59,30 @@ class DualCoupling(Transform):
         self.coupling1 = Coupling(
             split_dims=split_dims,
             d_context=d_context,
-            net_kwargs=net_kwargs,
+            subnet_kwargs=subnet_kwargs,
             transform=transform,
         )
         self.coupling2 = Coupling(
             split_dims=(split_dims[1], split_dims[0]),
             d_context=d_context,
-            net_kwargs=net_kwargs,
+            subnet_kwargs=subnet_kwargs,
             transform=transform,
         )
 
     def _split(self, x: torch.Tensor):
         return x[..., :self.pivot], x[..., self.pivot:]
 
-    def forward(self, x, condition=None, mask=None, inverse=False):
+    def forward(self, x, context=None, mask=None, inverse=False):
         x1, x2 = self._split(x)
         mask1, mask2 = None, None
         if mask is not None:
             mask1, mask2 = self._split(mask)
         if inverse:
-            (x2, x1), log_det2 = self.coupling2.inverse(x2, x1, condition, mask1)
-            (x1, x2), log_det1 = self.coupling1.inverse(x1, x2, condition, mask2)
+            (x2, x1), log_det2 = self.coupling2.inverse(x2, x1, context, mask1)
+            (x1, x2), log_det1 = self.coupling1.inverse(x1, x2, context, mask2)
         else:
-            (x1, x2), log_det1 = self.coupling1.forward(x1, x2, condition, mask2)
-            (x2, x1), log_det2 = self.coupling2.forward(x2, x1, condition, mask1)
+            (x1, x2), log_det1 = self.coupling1.forward(x1, x2, context, mask2)
+            (x2, x1), log_det2 = self.coupling2.forward(x2, x1, context, mask1)
         x = torch.cat([x1, x2], dim=-1)
         log_det = log_det1 + log_det2
         return x, log_det, mask
@@ -106,7 +106,7 @@ class CouplingFlow(nn.Module):
         transform: str = 'affine', # type of coupling transform
         family: str = 'student', # family of base distribution
         trainable: bool = True, # train parameters of base distribution
-        net_kwargs: dict | None = None
+        subnet_kwargs: dict | None = None
     ):
         super().__init__()
         self.d_target = d_target
@@ -124,7 +124,7 @@ class CouplingFlow(nn.Module):
                     d_target=d_target,
                     d_context=d_context,
                     transform=transform,
-                    net_kwargs=net_kwargs,
+                    subnet_kwargs=subnet_kwargs,
                 )
             ]
         self.flows = nn.ModuleList(flows)
@@ -133,17 +133,17 @@ class CouplingFlow(nn.Module):
     def device(self):
         return next(self.parameters()).device
 
-    def forward(self, x, condition=None, mask=None):
+    def forward(self, x, context=None, mask=None):
         log_det = torch.zeros(x.shape[:-1], device=x.device)
         for flow in self.flows:
-            x, ld, mask = flow.forward(x, condition=condition, mask=mask)
+            x, ld, mask = flow.forward(x, context=context, mask=mask)
             log_det = log_det + ld
         return x, log_det, mask
 
-    def inverse(self, x, condition=None, mask=None):
+    def inverse(self, x, context=None, mask=None):
         log_det = torch.zeros(x.shape[:-1], device=x.device)
         for flow in reversed(self.flows):
-            x, ld, mask = flow.inverse(x, condition=condition, mask=mask) # type: ignore
+            x, ld, mask = flow.inverse(x, context=context, mask=mask) # type: ignore
             log_det = log_det + ld
         return x, log_det, mask
 
@@ -164,11 +164,11 @@ class CouplingFlow(nn.Module):
     def loss(
             self,
             x: torch.Tensor,
-            condition: torch.Tensor | None = None,
+            context: torch.Tensor | None = None,
             mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         ''' forward KL Loss (aka NLL) '''
-        z, log_det, mask = self.forward(x, condition, mask)
+        z, log_det, mask = self.forward(x, context, mask)
         return -self.logProb(z, log_det, mask)
 
     def sample(
