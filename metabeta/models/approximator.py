@@ -125,8 +125,38 @@ class Approximator(nn.Module):
         return torch.cat(out, dim=-1)
 
     def _preprocess(self, targets: torch.Tensor, local: bool = False) -> torch.Tensor:
+        ''' constrain target parameters '''
+        if local:
+            return targets
+        targets = targets.clone()
+        d = self.d_ffx
+
+        # project from R+ to R
+        sigmas = targets[:, d:]
+        sigmas = maskedInverseSoftplus(sigmas)
+        targets[:, d:] = sigmas
+        return targets
+
+    def _postprocess(self, proposed: dict[str, dict[str, torch.Tensor]]):
+        ''' reverse _preprocess for samples '''
+        if 'samples' not in proposed['local']:
+            return proposed
+        d = self.d_ffx
+
+        # local postprocessing
         ...
 
+        # global postprocessing
+        if 'global' in proposed:
+            samples = proposed['global']['samples'].clone()
+            sigmas = samples[:, d:]
+            sigmas = maskedSoftplus(sigmas)
+            samples[:, d:] = sigmas
+            proposed['global']['samples'] = samples
+
+        return proposed
+
+    def forward(
 
 if __name__ == '__main__':
     from metabeta.utils.logger import setupLogging
