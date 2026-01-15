@@ -1,6 +1,6 @@
 # metabeta
 ---
-🚧 I'm currently refactoring this repo. For legacy code, switch to branch V1. 🚧
+🚧 I'm currently refactoring this repo. For legacy code, switch to v1. 🚧
 ---
 ## A fast neural model for Bayesian mixed-effects regression
 📈 approximates posterior estimation for hierarchical regression models\
