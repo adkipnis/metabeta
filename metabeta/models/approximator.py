@@ -87,7 +87,20 @@ class Approximator(nn.Module):
         return sum(param_counts)
 
     def _inputs(self, data: dict[str, torch.Tensor]) -> torch.Tensor:
-        '''prepare input tensor for the summary network'''
+        ''' get summarizer inputs '''
+        d, q = self.d_ffx, self.d_rfx # TODO: adapt to batchwise max
+        y = data['y'].unsqueeze(-1)
+        X = data['X'][..., 1:d]
+        Z = data['Z'][..., 1:q]
+        return torch.cat([y, X, Z], dim=-1)
+
+    def _targets(self, data: dict[str, torch.Tensor], local: bool = False) -> torch.Tensor:
+        ''' get posterior targets '''
+        if local:
+            return data['rfx']
+        out = [data['ffx'], data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)]
+        return torch.cat(out, dim=-1)
+
         ...
 
     def _targets(self, data: dict[str, torch.Tensor]):
