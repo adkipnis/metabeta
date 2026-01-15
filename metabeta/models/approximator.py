@@ -101,10 +101,30 @@ class Approximator(nn.Module):
         out = [data['ffx'], data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)]
         return torch.cat(out, dim=-1)
 
-        ...
+    def _addMetadata(
+        self,
+        summary: torch.Tensor,
+        data: dict[str, torch.Tensor],
+        local: bool = False,
+        numerator: int = 10, # for normalizing counts
+    ) -> torch.Tensor:
+        ''' append summary with selected metadata '''
+        out = [summary]
+        if local:
+            n_obs = data['n_i'].unsqueeze(-1).sqrt() / numerator
+            out += [n_obs]
+        else:
+            n_total = data['n'].unsqueeze(-1).sqrt() / numerator
+            n_groups = data['m'].unsqueeze(-1).sqrt() / numerator
+            nu_ffx = data['nu_ffx'].clone()
+            tau_ffx = data['tau_ffx'].clone()
+            tau_rfx = data['tau_rfx'].clone()
+            tau_eps = data['tau_eps'].clone().unsqueeze(-1)
+            # TODO: optionally dampen prior params
+            out += [n_total, n_groups, nu_ffx, tau_ffx, tau_rfx, tau_eps]
+        return torch.cat(out, dim=-1)
 
-    def _targets(self, data: dict[str, torch.Tensor]):
-        '''prepare target tensor for the posterior network'''
+    def _preprocess(self, targets: torch.Tensor, local: bool = False) -> torch.Tensor:
         ...
 
 
