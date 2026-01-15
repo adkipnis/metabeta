@@ -190,29 +190,25 @@ class Approximator(nn.Module):
 
 
 if __name__ == '__main__':
-    from metabeta.utils.logger import setupLogging
-    setupLogging(1)
-
-    cfg = {'d': 3, 'q': 1}
-    cfg['summarizer'] = {
-        'type': 'set-transformer',
-        'd_model': 64,
-        'd_ff': 128,
-        'd_output': 64,
-        'n_blocks': 4,
-        'n_isab': 0,
-        'activation': 'GeGLU',
-        'dropout': 0.01,
-    }
-    cfg['posterior'] = {
-        'type': 'flow',
-        'n_blocks': 4,
-        'transform': 'spline',
-        'net_kwargs': {
-            'activation': 'ReLU',
-            },
-    }
+    s_cfg = SummarizerConfig(
+        d_model=128,
+        d_ff=256,
+        d_output=64,
+        n_blocks=2,
+    )
+    p_cfg = PosteriorConfig(
+        transform='spline',
+        subnet_kwargs={'activation': 'GeGLU'},
+        n_blocks=6,
+    )
+    cfg = Config(
+        d_ffx=3,
+        d_rfx=1,
+        summarizer=s_cfg,
+        posterior=p_cfg,
+    )
 
     model = Approximator(cfg)
-
+    model.device
+    model.n_params
 
