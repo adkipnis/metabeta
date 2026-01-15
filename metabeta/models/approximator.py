@@ -157,6 +157,37 @@ class Approximator(nn.Module):
         return proposed
 
     def forward(
+            self, data: dict[str, torch.Tensor], n_samples: int = 0,
+    ) -> dict[str, dict[str, torch.Tensor]]:
+        # prepare
+        proposed = {}
+        inputs = self._inputs(data)
+
+        # local summaries
+        summary_l = self.summarizer_l(inputs, mask=data['mask_n'])
+        summary_l = self._addMetadata(summary_l, data, local=True)
+
+        # global summary
+        summary_g = self.summarizer_g(summary_l, mask=data['mask_m'])
+        summary_g = self._addMetadata(summary_g, data, local=False)
+
+        # global posterior
+        targets_g = self._targets(data, local=False)
+        targets_g = self._preprocess(targets_g, local=False)
+        loss_g = self.posterior_g.loss(
+            targets_g, summary_g, mask=data['mask_d'])
+        if n_samples > 0:
+            proposed['global'] = self.posterior_g.sample(
+                n_samples, summary_g, mask=data['mask_d'])
+
+        # local posterior
+        targets_l = self._targets(data, local=True)
+        targets_l = self._preprocess(targets_l, local=True)
+
+
+
+
+
 
 if __name__ == '__main__':
     from metabeta.utils.logger import setupLogging
