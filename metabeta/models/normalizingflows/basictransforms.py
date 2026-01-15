@@ -9,14 +9,14 @@ class Transform(nn.Module):
     ''' Base template for transforms used in normalizing flows '''
     @abstractmethod
     def forward(self, x: torch.Tensor,
-              condition: torch.Tensor | None = None,
+              context: torch.Tensor | None = None,
               mask: torch.Tensor | None = None,
               inverse: bool = False,
               ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         ...
 
-    def inverse(self, x, condition=None, mask=None):
-        return self(x, condition, mask, inverse=True)
+    def inverse(self, x, context=None, mask=None):
+        return self(x, context, mask, inverse=True)
 
     def _forwardMask(self, mask: torch.Tensor):
         return mask
@@ -49,7 +49,7 @@ class ActNorm(Transform):
         self.scale.data = 1.0 / std
         self.initialized.fill_(True) # type: ignore
 
-    def forward(self, x, condition=None, mask=None, inverse=False):
+    def forward(self, x, context=None, mask=None, inverse=False):
         if not self.initialized and not inverse:
             self._initialize(x, mask)
         scale, bias = self.scale.expand_as(x), self.bias.expand_as(x)
@@ -76,7 +76,7 @@ class Permute(Transform):
         self.register_buffer('perm', torch.randperm(d_target))
         self.register_buffer('inv_perm', self.perm.argsort()) # type: ignore
 
-    def forward(self, x, condition=None, mask=None, inverse=False):
+    def forward(self, x, context=None, mask=None, inverse=False):
         perm: torch.Tensor = self.inv_perm if inverse else self.perm # type: ignore
         x = x[..., perm]
         if mask is not None:
@@ -152,7 +152,7 @@ class LU(Transform):
             bias = bias * mask
         return lower, upper, bias
 
-    def forward(self, x, condition=None, mask=None, inverse=False):
+    def forward(self, x, context=None, mask=None, inverse=False):
         # handle 3D inputs
         b, *_, d = x.shape
         if x.dim() == 3:
