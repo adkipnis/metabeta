@@ -10,8 +10,6 @@ This repo contains the source code for [data simulation](metabeta/data), [model 
 For details, please read our [preprint](https://doi.org/10.48550/arXiv.2510.07473).
 
 ## Overview
-<img src="https://github.com/adkipnis/metabeta/blob/main/figures/overview.png" width="750" />
-
 - (A) _Dataset Simulation_: Sample priors, regression parameters, dependent predictors, noise, and perform a forward pass.
 - (B) _Neural Model_:
   - (1) Hierarchical datasets are summarized locally (per group) and globally (across groups).
