@@ -47,8 +47,7 @@ class ParametricDistribution:
 
     def sample(self, n: int) -> np.ndarray:
         # untruncated sampling
-        infinite_borders = (np.isfinite(self.borders) == False).all()
-        if not self.truncate or infinite_borders:
+        if not self.truncate or self.infinite_borders:
             return self.dist.rvs(size=(n,1), random_state=self.rng)
 
         # truncated sampling
