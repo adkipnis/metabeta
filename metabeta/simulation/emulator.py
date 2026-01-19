@@ -5,6 +5,20 @@ from metabeta.simulation.sgld import SGLD
 from metabeta.utils.preprocessing import checkConstant
 from metabeta.utils.sampling import sampleCounts, counts2groups
 
+# cached database
+DATA_PATH = (Path(__file__).resolve().parent / '..' / 'datasets' / 'preprocessed').resolve()
+# DATA_PATH = Path('..', 'datasets', 'preprocessed')
+VAL_PATHS = list(Path(DATA_PATH, 'validation').glob('*.npz'))
+TEST_PATHS = list(Path(DATA_PATH, 'test').glob('*.npz'))
+PATHS = VAL_PATHS + TEST_PATHS
+DATABASE: list[dict] | None = None
+
+def getDatabase() -> list[dict]:
+    # lazyload database on first use
+    global DATABASE
+    if DATABASE is None:
+        DATABASE = [loadDataset(p) for p in PATHS]
+    return DATABASE
 
 def loadDataset(source: Path) -> dict:
     ''' wrapper for loading preprocessed npz dataset '''
@@ -27,12 +41,6 @@ def loadDataset(source: Path) -> dict:
 
     return data
 
-data_path = Path('..', 'datasets', 'preprocessed')
-train_paths = list(Path(data_path, 'train').glob('*.npz'))
-test_paths = list(Path(data_path, 'test').glob('*.npz'))
-PATHS = train_paths + test_paths
-DATABASE = [loadDataset(source=path) for path in PATHS]
-
 @dataclass
 class Emulator:
     ''' class for sampling a design matrix and groups from source dataset '''
@@ -43,24 +51,26 @@ class Emulator:
 
     def _pull(self, d: int, m: int):
         # get dataset from database with matching dims
+        database = getDatabase()
         if self.source == 'all':
             subset = [
-                ds for ds in DATABASE
-                if d <= ds['d']+1 and m <= ds.get('m', float('inf'))
+                ds for ds in database
+                if d <= ds['d'] and m <= ds.get('m', float('inf'))
             ]
-            idx = int(np.random.randint(0, len(subset)))
+            n_ds = len(subset)
+            idx = self.rng.integers(0, n_ds)
             self.ds = subset[idx]
         else:
-            path0 = Path(data_path, 'test', f'{self.source}.npz')
-            path1 = Path(data_path, 'train', f'{self.source}.npz')
+            path0 = Path(DATA_PATH, 'test', f'{self.source}.npz')
+            path1 = Path(DATA_PATH, 'validation', f'{self.source}.npz')
             if path0 in PATHS:
                 idx = PATHS.index(path0)
             elif path1 in PATHS:
                 idx = PATHS.index(path1)
             else:
                 raise ValueError(f'{self.source} not in known paths.')
-            self.ds = DATABASE[idx]
-            assert d <= self.ds['d']+1 and m <= self.ds.get('m', float('inf')), 'dimension mismatch'
+            self.ds = database[idx]
+            assert d <= self.ds['d'] and m <= self.ds.get('m', float('inf')), 'dimension mismatch'
 
 
     def _subset(self, ds: dict, d: int, m: int, n: int,
