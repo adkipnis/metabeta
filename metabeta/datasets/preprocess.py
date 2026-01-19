@@ -98,9 +98,9 @@ def standardize(col: pd.Series):
     x = col.values.astype(float)
     mean = np.nanmean(x)
     std = np.nanstd(x)
-    out = (x-mean)/std
-    if np.isnan(out).any():
-        return x
+    if std < 1e-12:
+        return np.zeros_like(x)
+    out = (x - mean) / std
     return out
 
 
