@@ -1,6 +1,7 @@
 import numpy as np
 from scipy import stats
 
+
 class ParametricDistribution:
     def __init__(self, rng: np.random.Generator, truncate: bool = True):
         self.rng = rng
@@ -36,14 +37,17 @@ class ParametricDistribution:
         use = (p_use < 0.25)
         if use.any():
             eps = 1e-6
-            p = self.rng.uniform(eps, 1-eps, size=2)
-            if use.all():
-                lower = self.dist.ppf(p.min())
-                upper = self.dist.ppf(p.max())
-            elif use[0]:
-                lower = self.dist.ppf(p.min())
-            else:
-                upper = self.dist.ppf(p.max())
+            min_diff = 0.1
+            p0, p1 = self.rng.uniform(eps, 1-eps, size=2)
+            if p0 > p1:
+                p1, p0 = p0, p1
+            if p1 - p0 < min_diff:
+                p0 = max(eps, p0-min_diff/2)
+                p1 = min(1-eps, p1+min_diff/2)
+            if use[0]:
+                lower = self.dist.ppf(p0)
+            if use[1]:
+                upper = self.dist.ppf(p1)
         return lower, upper
 
     def sample(self, n: int) -> np.ndarray:
