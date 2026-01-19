@@ -17,15 +17,15 @@ class ParametricDistribution:
     def __repr__(self) -> str:
         raise NotImplementedError
 
-    def initParams(self) -> dict[str, float]:
+    def initParams(self) -> dict[str, float|int]:
         raise NotImplementedError
 
     def initBorders(self) -> tuple[float, float]:
         lower, upper = -np.inf, np.inf
-        p_use = np.random.uniform(size=(2,))
+        p_use = self.rng.uniform(size=2)
         use = (p_use < 0.25)
         if use.any():
-            p = np.random.uniform(size=(2,))
+            p = self.rng.uniform(size=2)
             if use.all():
                 lower = self.dist.ppf(p.min())
                 upper = self.dist.ppf(p.max())
@@ -63,8 +63,8 @@ class Normal(ParametricDistribution):
         return f'Normal(loc={loc:.3f}, scale={scale:.3f})'
 
     def initParams(self):
-        loc = np.random.uniform(-100, 100)
-        scale = np.random.uniform(0.1, 100)
+        loc = self.rng.uniform(-100, 100)
+        scale = self.rng.uniform(0.1, 100)
         return dict(loc=loc, scale=scale)
 
 
@@ -78,9 +78,9 @@ class Student(ParametricDistribution):
         return f't(df={df}, loc={loc:.3f}, scale={scale:.3f})'
  
     def initParams(self):
-        df = np.random.randint(1, 50)
-        loc = np.random.uniform(-100, 100)
-        scale = np.random.uniform(0.1, 100)
+        df = int(self.rng.integers(1, 50))
+        loc = self.rng.uniform(-100, 100)
+        scale = self.rng.uniform(0.1, 100)
         return dict(df=df, loc=loc, scale=scale)
 
 
@@ -94,8 +94,8 @@ class LogNormal(ParametricDistribution):
         return f'LogNormal(s={s:.3f}, scale={scale:.3f})'
 
     def initParams(self):
-        s = np.random.uniform(0.1, 5)
-        scale = np.random.uniform(1, 100)
+        s = self.rng.uniform(0.1, 5)
+        scale = self.rng.uniform(1, 100)
         return dict(s=s, scale=scale)
 
 
@@ -109,7 +109,7 @@ class Uniform(ParametricDistribution):
         return f'U(lb={lb:.3f}, ub={ub:.3f})'
 
     def initParams(self):
-        ab = np.random.uniform(-100, 100, size=(2,))
+        ab = self.rng.uniform(-100, 100, size=(2,))
         a = ab.min() - 0.5
         b = ab.max() + 0.5
         scale = np.abs(b-a)
@@ -126,8 +126,8 @@ class ScaledBeta(ParametricDistribution):
         return f'Beta(a={a:.3f}, b={b:.3f}, scale:{scale:.3f})'
 
     def initParams(self):
-        ab = np.random.uniform(1e-3, 10, size=(2,))
-        scale = np.random.uniform(0.5, 100)
+        ab = self.rng.uniform(1e-3, 10, size=(2,))
+        scale = self.rng.uniform(0.5, 100)
         return dict(a=ab[0], b=ab[1], scale=scale)
 
 
@@ -142,7 +142,7 @@ class Bernoulli(ParametricDistribution):
         return f'Bernoulli(p={p:.3f})'
 
     def initParams(self) -> dict[str, float]:
-        p = np.random.uniform(0.05, 0.95)
+        p = self.rng.uniform(0.05, 0.95)
         return dict(p=p)
 
 class NegativeBinomial(ParametricDistribution):
@@ -154,16 +154,15 @@ class NegativeBinomial(ParametricDistribution):
         n, p = self.params.values()
         return f'Bernoulli(n={n}, p={p:.3f})'
 
-    def initParams(self) -> dict[str, float]:
-        n = np.random.randint(1, 100)
-        p = np.random.uniform(0.05, 0.95)
+    def initParams(self):
+        n = int(self.rng.integers(1, 100))
+        p = self.rng.uniform(0.05, 0.95)
         return dict(n=n, p=p)
 
 
 
 if __name__ == '__main__':
     seed = 0
-    _ = np.random.seed(seed)
     rng = np.random.default_rng(seed)
 
     n = 1000

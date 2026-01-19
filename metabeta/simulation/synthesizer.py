@@ -1,13 +1,14 @@
 import numpy as np
 from dataclasses import dataclass
 from torch.distributions import LKJCholesky
-from metabeta.simulation.utils import checkBinary, counts2groups
+from metabeta.utils.preprocessing import checkBinary
+from metabeta.utils.sampling import counts2groups
 from metabeta.simulation.distributions import (
     Normal, Student, LogNormal, Uniform,
     ScaledBeta, Bernoulli, NegativeBinomial,
 )
 
-dist_dict = {
+DISTS = {
     Normal: 0.05,
     Student: 0.25,
     LogNormal: 0.05,
@@ -16,8 +17,8 @@ dist_dict = {
     Bernoulli: 0.20,
     NegativeBinomial: 0.15,
 }
-probs = np.array(list(dist_dict.values()))
-dists = np.array(list(dist_dict.keys()))
+probs = np.array(list(DISTS.values()))
+dists = np.array(list(DISTS.keys()))
 
 @dataclass
 class Synthesizer:
@@ -114,7 +115,7 @@ if __name__ == '__main__':
     print(f'\n{t1-t0:.2f}s used for parallel sampling.')
 
     # --- outer wrapper
-    from metabeta.simulation.utils import sampleCounts
+    from metabeta.utils.sampling import sampleCounts
     ns = sampleCounts(n, 10)
     rng = np.random.default_rng(seed)
     Synthesizer(rng).sample(d, ns)
