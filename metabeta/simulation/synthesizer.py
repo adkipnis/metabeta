@@ -34,25 +34,35 @@ class Synthesizer:
         # x (n, d), L (d, d)
 
         # get continuous columns
-        cont_cols = ~checkBinary(x)
+        cont_cols = checkContinuous(x)
         d_ = cont_cols.sum()
         if d_ < 2:
             return x
-        x_ = x[:, cont_cols]
 
-        # get lower triangular of corr matrix (not batchable due to changing d_)
-        L = LKJCholesky(d_, concentration=5.).sample().numpy().astype(np.float64)
+        out = x.copy()
+        x_ = out[:, cont_cols]
 
-        # normalize
-        mean = np.mean(x_, axis=1, keepdims=True)
-        std = np.std(x_, axis=1, keepdims=True)
-        x_ = (x_-mean)/std
+        # get lower triangular of corr matrix
+        C = wishartCorrelation(self.rng, d_, nu=d_+9)
+        L = np.linalg.cholesky(C)
 
-        # correlate continuous
-        x_cor = (x_ @ L.T) * std + mean
-        x[:, cont_cols] = x_cor
+        # standardize
+        mean = np.mean(x_, axis=0, keepdims=True)
+        std = np.std(x_, axis=0, keepdims=True)
+        std = np.where(std < 1e-12, 1.0, std)
+        x_ = (x_ - mean) / std
 
-        return x
+        # correlate continuous and enforce unit std
+        x_cor = (x_ @ L.T)
+        std_cor = np.std(x_cor, axis=0, keepdims=True)
+        std_cor = np.where(std_cor < 1e-12, 1.0, std_cor)
+        x_cor = x_cor / std_cor
+
+        # unstandardize and insert
+        x_cor = x_cor * std + mean
+        out[:, cont_cols] = x_cor
+
+        return out
 
 
     def _sample(self, n: int, d: int) -> np.ndarray:
