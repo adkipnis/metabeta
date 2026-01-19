@@ -1,24 +1,23 @@
 import numpy as np
 from dataclasses import dataclass
-from torch.distributions import LKJCholesky
-from metabeta.utils.preprocessing import checkBinary
-from metabeta.utils.sampling import counts2groups
+from metabeta.utils.preprocessing import checkContinuous
+from metabeta.utils.sampling import counts2groups, wishartCorrelation
 from metabeta.simulation.distributions import (
     Normal, Student, LogNormal, Uniform,
     ScaledBeta, Bernoulli, NegativeBinomial,
 )
 
-DISTS = {
+DISTDICT = {
     Normal: 0.05,
     Student: 0.25,
-    LogNormal: 0.05,
-    Uniform: 0.05,
+    LogNormal: 0.10,
+    Uniform: 0.10,
     ScaledBeta: 0.15,
     Bernoulli: 0.20,
     NegativeBinomial: 0.15,
 }
-probs = np.array(list(DISTS.values()))
-dists = np.array(list(DISTS.keys()))
+PROBS = np.array(list(DISTDICT.values()))
+DISTS = np.array(list(DISTDICT.keys()))
 
 @dataclass
 class Synthesizer:
