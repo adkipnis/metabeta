@@ -3,7 +3,11 @@ import numpy as np
 from scipy.stats import norm, t
 
 
-def hypersample(d: int, q: int, rng: np.random.Generator) -> dict[str, np.ndarray]:
+def hypersample(
+    rng: np.random.Generator,
+    d: int,
+    q: int,
+) -> dict[str, np.ndarray]:
     ''' sample hyperparameters to instantiate prior '''
     out = {}
     out['nu_ffx'] = rng.uniform(-3, 3, size=d)
@@ -68,7 +72,7 @@ if __name__ == '__main__':
     d, q = 3, 1
     m = 10
 
-    hyperparams = hypersample(d, q, rng)
+    hyperparams = hypersample(rng, d, q)
     prior = Prior(hyperparams, rng=rng)
     params = prior.sample(m)
 
