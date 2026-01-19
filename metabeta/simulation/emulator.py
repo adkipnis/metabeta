@@ -122,10 +122,14 @@ class Emulator:
         return x_, y_, ns
 
 
-    def sample(self, d: int, ns: np.ndarray) -> dict[str, np.ndarray]:
+    def sample(
+            self,
+            d: int, # number of predictors
+            ns: np.ndarray, # n_obs per group (only used as a starting point)
+    ) -> dict[str, np.ndarray]:
         # dims
-        m = len(ns)
-        n = int(ns.sum())
+        m = len(ns) # number of groups
+        n = int(ns.sum()) # total number of observations
 
         # pull source
         self._pull(d, m)
@@ -142,21 +146,21 @@ class Emulator:
 
         # subsample observations
         subset_fn = self._subsetGrouped if source_is_grouped else self._subset
-        x, y, ns = subset_fn(self.ds, d, m, n)
+        x, _, ns = subset_fn(self.ds, d, m, n)
         while checkConstant(x).any():
-            x, y, ns = subset_fn(self.ds, d, m, n)
+            x, _, ns = subset_fn(self.ds, d, m, n)
 
-        # emulate dataset using SGLD
+        # emulate predictors using SGLD
         if self.use_sgld:
-            x = self.sgld(x)
+            x = self.sgld(x, rng=self.rng)
  
         # get groups from counts
         groups = counts2groups(ns)
  
         # add intercept
         ones = np.ones_like(x[:, 0:1])
-        x = np.concat([ones, x], axis=-1)
-        return {'X': x, 'y': y, 'ns': ns, 'groups': groups}
+        x = np.concatenate([ones, x], axis=-1)
+        return {'X': x, 'ns': ns, 'groups': groups}
 
 
 # -----------------------------------------------------------------------------
