@@ -125,7 +125,7 @@ class LogNormal(ParametricDistribution):
         return f'LogNormal(s={s:.3f}, scale={scale:.3f})'
 
     def initParams(self):
-        s = self.rng.uniform(0.1, 5)
+        s = self.rng.uniform(0.1, 3)
         scale = self.rng.uniform(1, 100)
         return dict(s=s, scale=scale)
 
@@ -140,7 +140,7 @@ class Uniform(ParametricDistribution):
         return f'U(lb={lb:.3f}, ub={ub:.3f})'
 
     def initParams(self):
-        ab = self.rng.uniform(-100, 100, size=(2,))
+        ab = self.rng.uniform(-100, 100, size=2)
         a = ab.min() - 0.5
         b = ab.max() + 0.5
         scale = np.abs(b-a)
@@ -159,7 +159,7 @@ class ScaledBeta(ParametricDistribution):
         return f'Beta(a={a:.3f}, b={b:.3f}, scale={scale:.3f})'
 
     def initParams(self):
-        ab = self.rng.uniform(1e-3, 10, size=(2,))
+        ab = self.rng.uniform(1e-3, 10, size=2)
         scale = self.rng.uniform(0.5, 100)
         return dict(a=ab[0], b=ab[1], scale=scale)
 
