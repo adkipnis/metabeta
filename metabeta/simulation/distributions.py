@@ -63,7 +63,8 @@ class ParametricDistribution:
 
             inliers = (left < z) & (z < right)
             if np.any(inliers):
-                out += [z[inliers].reshape(-1,1)]
+                z = z[inliers].reshape(-1,1)
+                out.append(z)
                 reached += int(inliers.sum())
                 if reached >= n:
                     break
