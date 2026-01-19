@@ -84,13 +84,13 @@ class Emulator:
         y = ds['y'].copy()
 
         # subset features
-        idx_feat = np.random.permutation(x.shape[1])[:d-1]
+        idx_feat = self.rng.permutation(x.shape[1])[:d-1]
         x = x[:, idx_feat]
 
         # subset observations
-        ns = sampleCounts(n, m)
+        ns = sampleCounts(self.rng, n, m)
         n = int(ns.sum())
-        idx_obs = np.random.permutation(len(x))[:n]
+        idx_obs = self.rng.permutation(len(x))[:n]
         x = x[idx_obs]
         y = y[idx_obs]
         return x, y, ns
@@ -102,12 +102,12 @@ class Emulator:
         y = ds['y'].copy()
 
         # subset features
-        idx_feat = np.random.permutation(x.shape[1])[:d-1]
+        idx_feat = self.rng.permutation(x.shape[1])[:d-1]
         x_ = x[:, idx_feat]
 
         # hierarchically subset members / observations per member
-        members = np.random.permutation(ds['m'])[:m]
-        ns = sampleCounts(n, m)
+        members = self.rng.permutation(ds['m'])[:m]
+        ns = sampleCounts(self.rng, n, m)
         ns = np.minimum(ds['ns'][members], ns) # avoid oversampling
 
         # subset observations per member
@@ -115,7 +115,7 @@ class Emulator:
         for i, member in enumerate(members):
             idx_member = np.where(ds['groups'] == member)[0]
             n_i = len(idx_member)
-            idx_obs = np.random.permutation(n_i)[:ns[i]]
+            idx_obs = self.rng.permutation(n_i)[:ns[i]]
             member_mask[idx_member[idx_obs]] = True
         x_ = x_[member_mask]
         y_ = y[member_mask]
