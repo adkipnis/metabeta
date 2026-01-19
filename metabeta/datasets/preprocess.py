@@ -238,7 +238,7 @@ def wrapper(ds_name: str,
             group_name: str = '',
             partition: str = 'auto',
             save: bool = True,
-            plot_ds: bool = True):
+            plot_ds: bool = False):
     assert partition in ['validation', 'test', 'auto']
 
     # import data
