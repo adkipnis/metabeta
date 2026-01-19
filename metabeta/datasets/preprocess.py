@@ -217,7 +217,7 @@ def preprocess(df: pd.DataFrame,
 
     # finalize
     X = df.to_numpy()
-    n, d = X.shape
+    n, d_ = X.shape
     out = {
         # data
         'X': X,
@@ -226,7 +226,7 @@ def preprocess(df: pd.DataFrame,
         # names
         'columns': df.columns.to_numpy().astype(str),
         # dims
-        'd': d,
+        'd': d_+1, # as X has no intercept
         'n': n,
         'ns': ns,
         'm': m,
