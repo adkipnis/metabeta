@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.stats import wishart
 
 
 def sampleCounts(n: int, m: int, alpha: float = 10.) -> np.ndarray:
@@ -16,6 +17,7 @@ def sampleCounts(n: int, m: int, alpha: float = 10.) -> np.ndarray:
         print('non-positive counts found')
         return sampleCounts(n, m, alpha)
     return ns
+
 
 def counts2groups(ns: np.ndarray) -> np.ndarray:
     ''' convert array of counts to group index array '''
@@ -38,4 +40,25 @@ def logUniform(a: float,
         return int(np.round(out))
     return float(out)
 
+
+def wishartCorrelation(
+    rng: np.random.Generator,
+    d: int,
+    nu: int | None = None,
+) -> np.ndarray:
+    ''' sample a correlation matrix from the Wishart distribution '''
+    if nu is None:
+        nu = d + 1  # minimal df for SPD
+
+    # sample covariance matrix
+    S = wishart(df=nu, scale=np.eye(d)).rvs(random_state=rng)
+
+    # convert to correlation matrix
+    std = np.sqrt(np.diag(S))
+    C = S / np.outer(std, std)
+
+    # ensure numerical safety
+    C = (C + C.T) / 2
+    np.fill_diagonal(C, 1.)
+    return C
 
