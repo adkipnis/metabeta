@@ -116,6 +116,22 @@ def findOutliers(df: pd.DataFrame, threshold: float = 4.0, min_std: float = 1e-1
         print(f'--- Warning: Removing {frac * 100:.2f}% outlier rows.')
     return outliers
 
+# def findOutliersMAD(
+#     df: pd.DataFrame,
+#     threshold: float = 12.0,
+#     min_std: float = 1e-12,
+# ):
+#     # MAD version of the above
+#     x = df.to_numpy(dtype=float)
+#     median = np.nanmedian(x, axis=0)
+#     mad = np.nanmedian(np.abs(x - median), axis=0)
+#     mad = np.maximum(mad, min_std)
+#     z = 0.6745 * (x - median) / mad
+#     outliers = (np.abs(z) > threshold).any(axis=1)
+#     frac = outliers.mean()
+#     if frac > 0.1:
+#         print(f'--- Warning: Removing {frac * 100:.2f}% outlier rows.')
+#     return outliers
 
 def dummify(df: pd.DataFrame, colname: str, max_columns: int = 10):
     # make dummy variables out of categorical columns
