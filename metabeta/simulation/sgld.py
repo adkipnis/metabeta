@@ -38,12 +38,12 @@ class SGLD:
             x_synth = x_synth[indices]
 
         # SGLD iterations with adaptive step size
-        adaptive_step_size = self.step_size
+        self.adaptive_step_size = float(self.step_size)
         iterator = range(self.n_steps)
         for step in iterator:
             x_synth = self._step(x_synth, x_train)
             if step % 100 == 0:
-                adaptive_step_size *= 0.9
+                self.adaptive_step_size *= 0.9
 
         # unstandardize
         X_synth = x_synth.detach().cpu().numpy()
@@ -77,8 +77,9 @@ class SGLD:
             grad = torch.zeros_like(x_synth)
 
         # update step
-        noise = torch.randn_like(x_synth) * np.sqrt(2 * self.step_size)
-        x_synth = x_synth - self.step_size * grad + self.noise_scale * noise
+        eps = self.adaptive_step_size
+        noise = torch.randn_like(x_synth) * np.sqrt(2.0 * eps)
+        x_synth = x_synth - eps * grad + self.noise_scale * noise
         return x_synth
 
 
