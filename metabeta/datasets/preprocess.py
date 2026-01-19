@@ -183,7 +183,7 @@ def preprocess(df: pd.DataFrame,
     # sort and isolate grouping variable
     groups = ns = m = None
     if group_name:
-        df.sort_values(by=group_name)
+        df = df.sort_values(by=group_name)
         groups = df.pop(group_name)
         groups, _ = pd.factorize(groups)
 
