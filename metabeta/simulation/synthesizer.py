@@ -105,14 +105,13 @@ if __name__ == '__main__':
     d = 12
     seed = 0
 
-    _ = np.random.seed(seed)
     main_seed = np.random.SeedSequence(seed)
     seeds = main_seed.spawn(b)
 
     # --- sequential
     t0 = time.perf_counter()
     for rng in tqdm(seeds):
-        Synthesizer(rng)._sample(n, d)
+        Synthesizer(rng)._sample(n, d) # type: ignore
     t1 = time.perf_counter()
     print(f'\n{t1-t0:.2f}s used for sequential sampling.')
 
@@ -128,7 +127,8 @@ if __name__ == '__main__':
 
     # --- outer wrapper
     from metabeta.utils.sampling import sampleCounts
-    ns = sampleCounts(n, 10)
+    rng = np.random.default_rng(0)
+    ns = sampleCounts(rng, n, 10)
     rng = np.random.default_rng(seed)
     Synthesizer(rng).sample(d, ns)
 
