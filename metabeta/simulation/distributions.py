@@ -72,7 +72,7 @@ class ParametricDistribution:
 
         if reached < n:
             raise RuntimeError(
-                f'runcated sampling failed: {reached}/{n}, borders={self.borders}, dist={self}')
+                f'truncated sampling failed: {reached}/{n}, borders={self.borders}, dist={self}')
 
         return np.concatenate(out, axis=0)[:n]
 
@@ -86,7 +86,8 @@ class Normal(ParametricDistribution):
         return stats.norm
 
     def __repr__(self):
-        loc, scale = self.params.values()
+        loc = self.params['loc']
+        scale = self.params['scale']
         return f'Normal(loc={loc:.3f}, scale={scale:.3f})'
 
     def initParams(self):
@@ -101,7 +102,9 @@ class Student(ParametricDistribution):
         return stats.t
 
     def __repr__(self):
-        df, loc, scale = self.params.values()
+        df = self.params['df']
+        loc = self.params['loc']
+        scale = self.params['scale']
         return f't(df={df}, loc={loc:.3f}, scale={scale:.3f})'
  
     def initParams(self):
@@ -117,7 +120,8 @@ class LogNormal(ParametricDistribution):
         return stats.lognorm
 
     def __repr__(self):
-        s, scale = self.params.values()
+        s = self.params['s']
+        scale = self.params['scale']
         return f'LogNormal(s={s:.3f}, scale={scale:.3f})'
 
     def initParams(self):
@@ -149,8 +153,10 @@ class ScaledBeta(ParametricDistribution):
         return stats.beta
 
     def __repr__(self):
-        a, b, scale = self.params.values()
-        return f'Beta(a={a:.3f}, b={b:.3f}, scale:{scale:.3f})'
+        a = self.params['a']
+        b = self.params['b']
+        scale = self.params['scale']
+        return f'Beta(a={a:.3f}, b={b:.3f}, scale={scale:.3f})'
 
     def initParams(self):
         ab = self.rng.uniform(1e-3, 10, size=(2,))
@@ -186,7 +192,8 @@ class NegativeBinomial(ParametricDistribution):
         return False
 
     def __repr__(self):
-        n, p = self.params.values()
+        n = self.params['n']
+        p = self.params['p']
         return f'NegBinom(n={n}, p={p:.3f})'
 
     def initParams(self):
