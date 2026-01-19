@@ -63,13 +63,12 @@ class Prior:
 
 if __name__ == '__main__':
     seed = 0
-    _ = np.random.seed(seed)
     rng = np.random.default_rng(seed)
  
     d, q = 3, 1
     m = 10
 
-    hyperparams = hypersample(d, q)
+    hyperparams = hypersample(d, q, rng)
     prior = Prior(hyperparams, rng=rng)
     params = prior.sample(m)
 
