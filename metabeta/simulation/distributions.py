@@ -138,7 +138,7 @@ class Bernoulli(ParametricDistribution):
         return stats.bernoulli
 
     def __repr__(self):
-        p = self.params.values()
+        p = self.params['p']
         return f'Bernoulli(p={p:.3f})'
 
     def initParams(self) -> dict[str, float]:
@@ -152,7 +152,7 @@ class NegativeBinomial(ParametricDistribution):
 
     def __repr__(self):
         n, p = self.params.values()
-        return f'Bernoulli(n={n}, p={p:.3f})'
+        return f'NegBinom(n={n}, p={p:.3f})'
 
     def initParams(self):
         n = int(self.rng.integers(1, 100))
