@@ -148,7 +148,6 @@ def dummify(df: pd.DataFrame, colname: str, max_columns: int = 10):
 
 
 def preprocess(df: pd.DataFrame,
-               target_name: str = 'y',
                group_name: str = '',
                remove_missing: bool = True,
                patchy_threshold: float = 0.25,
@@ -167,7 +166,8 @@ def preprocess(df: pd.DataFrame,
         df = dropPatchyRows(df)
 
     # isolate target
-    y = df.pop(target_name)
+    assert 'y' in df.columns, 'target column y not present'
+    y = df.pop('y')
 
     # detect potential grouping variables
     if not group_name:
@@ -235,7 +235,6 @@ def preprocess(df: pd.DataFrame,
 
 def wrapper(ds_name: str,
             root: str,
-            target_name: str = 'y',
             group_name: str = '',
             partition: str = 'auto',
             save: bool = True,
@@ -254,7 +253,7 @@ def wrapper(ds_name: str,
         return
 
     # preprocess dataset
-    data = preprocess(df, target_name=target_name, group_name=group_name)
+    data = preprocess(df, group_name=group_name)
 
     # discard datasets that are wider than long
     if data['X'].shape[0] < data['X'].shape[1]:
@@ -273,7 +272,7 @@ def wrapper(ds_name: str,
 
     # plot
     if plot_ds and np.prod(df.shape) < 1e6:
-        dat = np.concat([data['y'][:, None], data['X']], axis=-1)
+        dat = np.concatenate([data['y'][:, None], data['X']], axis=-1)
         names = ['y'] + data['columns'].tolist()
         fig = plot.dataset(dat, names, kde=len(dat) < 10_000)
         if save:
