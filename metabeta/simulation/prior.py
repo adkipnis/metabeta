@@ -2,13 +2,14 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.stats import norm, t
 
-def hypersample(d: int, q: int) -> dict[str, np.ndarray]:
+
+def hypersample(d: int, q: int, rng: np.random.Generator) -> dict[str, np.ndarray]:
     ''' sample hyperparameters to instantiate prior '''
     out = {}
-    out['nu_ffx'] = np.random.uniform(-3, 3, (d,))
-    out['tau_ffx'] = np.random.uniform(0, 3, (d,))
-    out['tau_rfx'] = np.random.uniform(0, 3, (q,))
-    out['tau_eps'] = np.random.uniform(0, 3)
+    out['nu_ffx'] = rng.uniform(-3, 3, size=d)
+    out['tau_ffx'] = rng.uniform(0.01, 3, size=d)
+    out['tau_rfx'] = rng.uniform(0.01, 3, size=q)
+    out['tau_eps'] = float(rng.uniform(0.01, 3))
     return out
 
 
