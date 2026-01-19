@@ -1,15 +1,17 @@
+from dataclasses import dataclass, field
 import numpy as np
 import torch
 from metabeta.utils.preprocessing import Standardizer, checkContinuous
 
-
+@dataclass
 class SGLD:
     ''' Stochastig gradient Langevin dynamics generator for X
         simplified version of https://github.com/sebhaan/TabPFGen '''
     n_steps: int = 500
     step_size: float = 0.01
     noise_scale: float = 0.01
-    standardizer = Standardizer(axis=0)
+    standardizer: Standardizer = field(
+        default_factory=lambda: Standardizer(axis=0))
     device: str = 'cpu'
 
     def __call__(
