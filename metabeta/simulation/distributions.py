@@ -112,7 +112,7 @@ class Student(ParametricDistribution):
         return f't(df={df}, loc={loc:.3f}, scale={scale:.3f})'
  
     def initParams(self):
-        df = int(self.rng.integers(1, 50))
+        df = int(self.rng.integers(3, 50))
         loc = self.rng.uniform(-100, 100)
         scale = self.rng.uniform(0.1, 100)
         return dict(df=df, loc=loc, scale=scale)
