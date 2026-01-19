@@ -72,12 +72,11 @@ class Synthesizer:
 
         # toy samples
         if self.toy:
-            x[..., 1:] = np.random.normal(size=(n, d-1))
+            x[..., 1:] = self.rng.normal(size=(n, d-1))
             return x
 
         # choose distributions
-        dist_idx = np.random.randint(0, len(dists), size=(d-1,))
-        sample_dists = dists[dist_idx]
+        sample_dists = self.rng.choice(DISTS, size=d-1, replace=True, p=PROBS)
 
         # sample covariates from chosen distributions
         samples = [D(self.rng).sample(n) for D in sample_dists]
