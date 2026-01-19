@@ -22,9 +22,13 @@ DISTS = np.array(list(DISTDICT.keys()))
 @dataclass
 class Synthesizer:
     ''' class for sampling a design matrix and groups using synthetic distributions '''
-    rng: np.random.Generator | np.random.SeedSequence
+    rng: np.random.Generator
     toy: bool = False
     correlate: bool = True
+
+    def __post_init__(self):
+        if isinstance(self.rng, np.random.SeedSequence):
+            self.rng = np.random.default_rng(self.rng)
 
     def _induceCorrelation(self, x: np.ndarray) -> np.ndarray:
         # x (n, d), L (d, d)
