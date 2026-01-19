@@ -86,13 +86,12 @@ class SGLD:
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
     seed = 1
-    _ = np.random.seed(seed)
+    rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
-
     sgld = SGLD()
 
     n = 200
     d = 3
     x = np.random.normal(size=(n,d))
-    x_sim = sgld(x)
+    x_sim = sgld(x, rng=rng)
 
