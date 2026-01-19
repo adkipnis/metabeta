@@ -17,6 +17,7 @@ class SGLD:
     def __call__(
         self,
         X_train: np.ndarray, # (n, d)
+        rng: np.random.Generator,
         n_samples: int = 0,
     ) -> np.ndarray:
         assert n_samples <= len(X_train), 'n_samples must be smaller than n'
@@ -27,13 +28,13 @@ class SGLD:
 
         # init synthetic set
         x_std = np.std(X_scaled, axis=0)
-        noise = np.random.normal(0, x_std * 0.1, X_scaled.shape)
+        noise = rng.normal(0, x_std * 0.1, X_scaled.shape)
         x_synth = X_scaled + noise
         x_synth = torch.tensor(x_synth, device=self.device, dtype=torch.float32)
 
         # optionally subsample
         if n_samples:
-            indices = np.random.permutation(len(x_synth))[:n_samples]
+            indices = rng.permutation(len(x_synth))[:n_samples]
             x_synth = x_synth[indices]
 
         # SGLD iterations with adaptive step size
