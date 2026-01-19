@@ -35,7 +35,8 @@ class ParametricDistribution:
         p_use = self.rng.uniform(size=2)
         use = (p_use < 0.25)
         if use.any():
-            p = self.rng.uniform(size=2)
+            eps = 1e-6
+            p = self.rng.uniform(eps, 1-eps, size=2)
             if use.all():
                 lower = self.dist.ppf(p.min())
                 upper = self.dist.ppf(p.max())
