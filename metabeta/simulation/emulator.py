@@ -169,29 +169,35 @@ if __name__ == '__main__':
     from tqdm import tqdm
     from joblib import Parallel, delayed
 
-    seed = 1
-    _ = np.random.seed(seed)
     b = 128
     n = 200
     m = 10
     d = 3
+    seed = 0
+    
+    getDatabase() # instantiate
 
-    ns = sampleCounts(n, m)
+    rng = np.random.default_rng(seed)
+    main_seed = np.random.SeedSequence(seed)
+    seeds = main_seed.spawn(b)
+
+    ns = sampleCounts(rng, n, m)
     groups = counts2groups(ns)
-    emulator = Emulator(source='math')
+    emulator = Emulator(source='math', rng=rng)
     out = emulator.sample(d, ns)
 
     # --- sequential
     t0 = time.perf_counter()
-    for _ in tqdm(range(b)):
-        Emulator(source='math').sample(d, ns)
+    for rng in tqdm(seeds):
+        Emulator(source='math', rng=rng).sample(d, ns) # type: ignore
     t1 = time.perf_counter()
     print(f'\n{t1-t0:.2f}s used for sequential sampling.')
 
-    # --- parallel
+    # --- parallel (only useful when using SGLD)
     t0 = time.perf_counter()
     results = Parallel(n_jobs=-1)(
-        delayed(Emulator(source='math').sample)(d, ns) for _ in tqdm(range(b))
+        delayed(Emulator(source='math', rng=rng).sample)(d, ns) # type: ignore
+        for rng in tqdm(seeds)
         )
     t1 = time.perf_counter()
     print(f'\n{t1-t0:.2f}s used for parallel sampling.')
