@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import numpy as np
-from metabeta.simulation.utils import standardize
-from metabeta.simulation import Prior, Synthesizer, Emulator, emulator
+from metabeta.utils.preprocessing import standardize
+from metabeta.simulation import Prior, Synthesizer, Emulator
 from metabeta import plot
 
 
