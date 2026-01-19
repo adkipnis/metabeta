@@ -6,13 +6,23 @@ class ParametricDistribution:
         self.rng = rng
         self.params = self.initParams()
         self.dist = self.base(**self.params)
-        self.truncate = truncate and isinstance(self.dist, stats.rv_continuous)
+        self.truncate = truncate and self.is_continuous
         if self.truncate:
             self.borders = self.initBorders()
 
     @property
     def base(self):
         raise NotImplementedError
+
+    @property
+    def is_continuous(self) -> bool:
+        return True
+
+    @property
+    def infinite_borders(self) -> bool:
+        if not self.truncate:
+            return True
+        return (np.isfinite(self.borders) == False).all()
 
     def __repr__(self) -> str:
         raise NotImplementedError
@@ -153,6 +163,10 @@ class Bernoulli(ParametricDistribution):
     def base(self):
         return stats.bernoulli
 
+    @property
+    def is_continuous(self) -> bool:
+        return False
+
     def __repr__(self):
         p = self.params['p']
         return f'Bernoulli(p={p:.3f})'
@@ -165,6 +179,10 @@ class NegativeBinomial(ParametricDistribution):
     @property
     def base(self):
         return stats.nbinom
+
+    @property
+    def is_continuous(self) -> bool:
+        return False
 
     def __repr__(self):
         n, p = self.params.values()
