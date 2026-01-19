@@ -33,19 +33,20 @@ class Prior:
 
     def _sampleSigmaRfx(self) -> np.ndarray:
         tau = self.params['tau_rfx']
-        dist = norm(0, tau)
+        dist = norm(loc=0, scale=tau)
         sigma_rfx = dist.rvs(size=tau.shape,
                              random_state=self.rng)
         return np.abs(sigma_rfx)
 
     def _sampleSigmaEps(self) -> np.ndarray:
         tau = self.params['tau_eps']
-        dist = t(4, 0, tau)
+        dist = t(df=4, loc=0, scale=tau)
         sigma_eps = dist.rvs(random_state=self.rng)
         return np.abs(sigma_eps)
 
-    def _sampleRfx(self, m: int, sigma_rfx: np.ndarray) -> np.ndarray:
-        # m: number of groups
+    def _sampleRfx(self,
+                   m: int, # number of groups
+                   sigma_rfx: np.ndarray) -> np.ndarray:
         size = (m, self.q)
         dist = norm(loc=0, scale=sigma_rfx)
         rfx = dist.rvs(size, random_state=self.rng)
