@@ -2,9 +2,10 @@ import numpy as np
 from scipy.stats import wishart
 
 
-def sampleCounts(n: int, m: int, alpha: float = 10.) -> np.ndarray:
+def sampleCounts(rng: np.random.Generator,
+                 n: int, m: int, alpha: float = 10.) -> np.ndarray:
     ''' draw ns (= counts) for m groups, such that the sum is n '''
-    p = np.random.dirichlet(np.ones(m) * alpha)
+    p = rng.dirichlet(np.ones(m) * alpha)
     ns = np.round(p * n).astype(int)
     diff = n - ns.sum()
     if diff > 0:
@@ -15,7 +16,7 @@ def sampleCounts(n: int, m: int, alpha: float = 10.) -> np.ndarray:
         ns[idx] += diff
     if (ns < 1).any(): # try again
         print('non-positive counts found')
-        return sampleCounts(n, m, alpha)
+        return sampleCounts(rng, n, m, alpha)
     return ns
 
 
