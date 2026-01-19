@@ -1,7 +1,7 @@
 import numpy as np
 import torch
-from metabeta.simulation.utils import Standardizer, checkContinuous
-# TODO: batched variant
+from metabeta.utils.preprocessing import Standardizer, checkContinuous
+
 
 class SGLD:
     ''' Stochastig gradient Langevin dynamics generator for X
@@ -84,10 +84,11 @@ if __name__ == '__main__':
     seed = 1
     _ = np.random.seed(seed)
     torch.manual_seed(seed)
-    
+
     sgld = SGLD()
-    
+
     n = 200
     d = 3
     x = np.random.normal(size=(n,d))
     x_sim = sgld(x)
+
