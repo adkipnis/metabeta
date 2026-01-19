@@ -45,9 +45,14 @@ def loadDataset(source: Path) -> dict:
 class Emulator:
     ''' class for sampling a design matrix and groups from source dataset '''
     source: str
-    use_sgld: bool = False
-    sgld = SGLD()
+    rng: np.random.Generator
+    use_sgld: bool = True
 
+    def __post_init__(self):
+        if isinstance(self.rng, np.random.SeedSequence):
+            self.rng = np.random.default_rng(self.rng)
+        if self.use_sgld:
+            self.sgld = SGLD()
 
     def _pull(self, d: int, m: int):
         # get dataset from database with matching dims
