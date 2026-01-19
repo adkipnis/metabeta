@@ -103,15 +103,17 @@ def standardize(col: pd.Series):
     out = (x - mean) / std
     return out
 
-
-def findOutliers(df: pd.DataFrame, threshold: float = 4.0):
+def findOutliers(df: pd.DataFrame, threshold: float = 4.0, min_std: float = 1e-12):
     # detect values that are more than {threshold} SDs away from the mean
-    mean = df.mean()
-    std = df.std()
-    z = (df - mean) / std
-    outliers = (z.abs() > threshold).any(axis=1)
-    if outliers.sum() / len(df) > 0.1:
-        print(f'--- Warning: Removing {outliers.sum()} outliers.')
+    x = df.to_numpy(dtype=float)
+    mean = np.nanmean(x, axis=0)
+    std = np.nanstd(x, axis=0)
+    std = np.maximum(std, min_std)
+    z = (x - mean) / std
+    outliers = (np.abs(z) > threshold).any(axis=1)
+    frac = outliers.mean()
+    if frac > 0.1:
+        print(f'--- Warning: Removing {frac * 100:.2f}% outlier rows.')
     return outliers
 
 
