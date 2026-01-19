@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 import numpy as np
 from scipy.stats import norm, t
-from metabeta.simulation.utils import standardize
 
 def hypersample(d: int, q: int) -> dict[str, np.ndarray]:
     ''' sample hyperparameters to instantiate prior '''
@@ -47,8 +46,8 @@ class Prior:
     def _sampleRfx(self, m: int, sigma_rfx: np.ndarray) -> np.ndarray:
         # m: number of groups
         size = (m, self.q)
-        rfx = norm(0, 1).rvs(size, random_state=self.rng)
-        rfx = standardize(rfx, axis=0) * sigma_rfx[None, :]
+        dist = norm(loc=0, scale=sigma_rfx)
+        rfx = dist.rvs(size, random_state=self.rng)
         return rfx
  
     def sample(self, m: int) -> dict[str, np.ndarray]:
