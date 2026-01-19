@@ -36,19 +36,35 @@ class ParametricDistribution:
         return lower, upper
 
     def sample(self, n: int) -> np.ndarray:
-        if self.truncate:
-            left, right = self.borders
-            out = []
-            reached = 0
-            while reached < n:
-                z = self.dist.rvs(n, 1)
-                inliers = (left < z) * (z < right)
-                out.append(z[inliers])
-                reached += inliers.sum()
-            x = np.concat(out)[:n, None]
-        else:
-            x = self.dist.rvs((n,1))
-        return x
+        # untruncated sampling
+        infinite_borders = (np.isfinite(self.borders) == False).all()
+        if not self.truncate or infinite_borders:
+            return self.dist.rvs(size=(n,1), random_state=self.rng)
+
+        # truncated sampling
+        left, right = self.borders
+        out = []
+        reached = 0
+        max_iters = 10_000
+
+        for _ in range(max_iters):
+            remaining = n - reached
+            batch = max(256, remaining)
+            z = self.dist.rvs(size=(batch,1), random_state=self.rng)
+
+            inliers = (left < z) & (z < right)
+            if np.any(inliers):
+                out += [z[inliers].reshape(-1,1)]
+                reached += int(inliers.sum())
+                if reached >= n:
+                    break
+
+        if reached < n:
+            raise RuntimeError(
+                f'runcated sampling failed: {reached}/{n}, borders={self.borders}, dist={self}')
+
+        return np.concatenate(out, axis=0)[:n]
+
 
 
 # --- continuous
