@@ -196,8 +196,9 @@ def preprocess(df: pd.DataFrame,
     # optionally update group objects
     if groups is not None:
         groups = groups[~outliers]
+        groups, _ = pd.factorize(groups)
         _, ns = np.unique(groups, return_counts=True)
-        m = ns.shape[0]
+        m = len(ns)
 
     # remove columns with more than 95% constant values
     df = dropConstantColumns(df, threshold=constant_threshold)
