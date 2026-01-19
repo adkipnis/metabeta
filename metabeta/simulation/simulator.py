@@ -111,12 +111,11 @@ class Simulator:
 
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
-    from metabeta.simulation.utils import sampleCounts
+    from metabeta.utils.sampling import sampleCounts
     from metabeta.simulation import hypersample
 
     # set seed
     seed = 1
-    _ = np.random.seed(seed)
     rng = np.random.default_rng(seed)
 
     # dims
@@ -124,15 +123,16 @@ if __name__ == '__main__':
     m = 5
     d = 3
     q = 2
-    ns = sampleCounts(n, m)
+    ns = sampleCounts(rng, n, m)
 
     # --- test: simulate
     # sample parameters
-    prior = Prior(hypersample(d, q), rng=rng)
+    hyperparams = hypersample(rng, d, q)
+    prior = Prior(hyperparams, rng=rng)
     params = prior.sample(m)
  
     # sample observations
-    design = Synthesizer(rng)
+    design = Synthesizer(rng=rng)
     obs = design.sample(d, ns)
 
     # forward pass
@@ -144,7 +144,7 @@ if __name__ == '__main__':
     dataset1 = simulator1.sample()
 
     # simulator 2
-    design = Emulator('math')
+    design = Emulator('math', rng=rng)
     simulator2 = Simulator(prior, design, ns, plot=True)
     dataset2 = simulator2.sample()
 
