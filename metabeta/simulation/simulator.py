@@ -65,7 +65,7 @@ class Simulator:
         cov_sum = cov.sum() - cov[0,0]
         return cov_sum
 
-    def sample(self) -> dict[str, int | float | np.ndarray]:
+    def sample(self) -> dict[str, np.ndarray]:
         # sample and standardize observations
         obs = self.design.sample(self.d, self.ns)
         obs['X'] = standardize(obs['X'], axis=0, exclude_binary=True)
@@ -118,6 +118,10 @@ class Simulator:
             'cov_sum': self._covsum(params, obs), # helper for standardization
         }
 
+        # package scalars as numpy arrays
+        for k,v in out.items():
+            if not isinstance(v, np.ndarray):
+                out[k] = np.array(v)
         return out
 
 
