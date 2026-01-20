@@ -55,6 +55,8 @@ class Simulator:
                 observations: dict[str, np.ndarray],
                 ) -> float:
         ''' get sum of covariance matrix (minus the first element) '''
+        if self.m < 2 or self.q < 2:
+            return 0.0
         rfx = parameters['rfx']
         q = rfx.shape[1]
         Z = observations['X'][:, :q]
