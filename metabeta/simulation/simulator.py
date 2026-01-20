@@ -137,21 +137,13 @@ if __name__ == '__main__':
     q = 2
     ns = sampleCounts(rng, n, m)
 
-    # --- test: simulate
     # sample parameters
     hyperparams = hypersample(rng, d, q)
     prior = Prior(rng, hyperparams)
-    params = prior.sample(m)
- 
-    # sample observations
-    design = Synthesizer(rng)
-    obs = design.sample(d, ns)
-
-    # forward pass
-    y = simulate(rng, params, obs)
 
     # --- test: simulator
     # simulator 1
+    design = Synthesizer(rng)
     simulator1 = Simulator(rng, prior, design, ns, plot=True)
     dataset1 = simulator1.sample()
 
