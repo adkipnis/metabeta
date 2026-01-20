@@ -21,29 +21,29 @@ def hypersample(
 class Prior:
     ''' class for drawing parameters from prior '''
     rng: np.random.Generator
-    params: dict[str, np.ndarray]
+    hyperparams: dict[str, np.ndarray]
 
     def __post_init__(self):
-        self.d = len(self.params['tau_ffx']) # number of fixed effects
-        self.q = len(self.params['tau_rfx']) # number of random effects
+        self.d = len(self.hyperparams['tau_ffx']) # number of fixed effects
+        self.q = len(self.hyperparams['tau_rfx']) # number of random effects
 
     def _sampleFfx(self) -> np.ndarray:
-        nu = self.params['nu_ffx']
-        tau = self.params['tau_ffx']
+        nu = self.hyperparams['nu_ffx']
+        tau = self.hyperparams['tau_ffx']
         dist = norm(nu, tau)
         ffx = dist.rvs(size=nu.shape,
                        random_state=self.rng)
         return ffx
 
     def _sampleSigmaRfx(self) -> np.ndarray:
-        tau = self.params['tau_rfx']
+        tau = self.hyperparams['tau_rfx']
         dist = norm(loc=0, scale=tau)
         sigma_rfx = dist.rvs(size=tau.shape,
                              random_state=self.rng)
         return np.abs(sigma_rfx)
 
     def _sampleSigmaEps(self) -> np.ndarray:
-        tau = self.params['tau_eps']
+        tau = self.hyperparams['tau_eps']
         dist = t(df=4, loc=0, scale=tau)
         sigma_eps = dist.rvs(random_state=self.rng)
         return np.abs(sigma_eps)

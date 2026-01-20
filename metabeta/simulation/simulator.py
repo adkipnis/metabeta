@@ -88,7 +88,7 @@ class Simulator:
         params = {k: v/sd for k,v in params.items()}
 
         # normalize hyperparameters (our priors are all scale families)
-        hyperparams = {k: v/sd for k,v in self.prior.params.items()}
+        hyperparams = {k: v/sd for k,v in self.prior.hyperparams.items()}
 
         # optional plot
         if self.plot:
