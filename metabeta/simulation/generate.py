@@ -29,7 +29,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--partition', type=str, default='val', help='Type of partition in [train, val, test], (default = train)')
     parser.add_argument('-b', '--begin', type=int, default=1, help='Begin generating training epoch number #b.')
     parser.add_argument('-e', '--epochs', type=int, default=10, help='Total number of training epochs to generate.')
-    parser.add_argument('--type', type=str, default='toy', help='Type of predictors [toy, flat, scm, sampled], (default = toy)')
+    parser.add_argument('--type', type=str, default='sampled', help='Type of predictors [toy, flat, scm, sampled], (default = toy)')
     parser.add_argument('--source', type=str, default='all', help='Source dataset if type==sampled (default = all)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD if type==sampled (default = False)')
     return parser.parse_args()
@@ -116,7 +116,8 @@ class Generator:
 
         # --- init
         iterator = tqdm(range(n_datasets))
-        iterator.set_description(f'{epoch:02d}/{self.cfg.epochs:02d}')
+        if self.cfg.partition == 'test':
+            iterator.set_description(f'{epoch:02d}/{self.cfg.epochs:02d}')
         seed = {'train': epoch, 'val': 10_000, 'test': 20_000}[self.cfg.partition]
         rng = np.random.default_rng(seed)
         datasets = []
