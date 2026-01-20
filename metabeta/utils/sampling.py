@@ -35,6 +35,7 @@ def truncLogUni(rng: np.random.Generator,
                 add: float = 0.0,
                 round: bool = False,
                 ) -> np.ndarray:
+    ''' sample from log uniform in [low, high) + {add} and optionally floor to integer '''
     assert 0 < low, 'lower bound must be positive'
     assert low <= high, 'lower bound smaller than upper bound'
     log_low = np.log(low)
