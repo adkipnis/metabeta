@@ -32,9 +32,12 @@ def moments(x: np.ndarray,
 def standardize(x: np.ndarray,
                 axis: int = 0,
                 exclude_binary: bool = True,
+                eps: float = 1e-6
                 ) -> np.ndarray:
     exclude = checkBinary(x, axis=axis) if exclude_binary else None
     mean, std = moments(x, axis, exclude=exclude)
+    bad = (~np.isfinite(std)) | (std < eps)
+    std = np.where(bad, 1.0, std)
     return (x - mean) / std
 
 
