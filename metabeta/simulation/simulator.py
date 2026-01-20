@@ -43,9 +43,12 @@ class Simulator:
     def __post_init__(self):
         self.d = self.prior.d # number of ffx
         self.q = self.prior.q # number of rfx
-        self.m = len(self.ns)
         if isinstance(self.ns, list):
             self.ns = np.array(self.ns)
+
+    @property
+    def m(self) -> int:
+        return len(self.ns)
 
     def _covsum(self,
                 parameters: dict[str, np.ndarray],
