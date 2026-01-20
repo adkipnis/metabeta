@@ -44,10 +44,10 @@ def _basic_dataset_assertions(dataset: dict, d: int, q: int):
     groups = dataset["groups"]
     ns = dataset["ns"]
 
-    assert isinstance(dataset["m"], (int, np.integer))
-    assert isinstance(dataset["n"], (int, np.integer))
-    assert isinstance(dataset["d"], (int, np.integer))
-    assert isinstance(dataset["q"], (int, np.integer))
+    assert isinstance(dataset["m"], np.ndarray)
+    assert isinstance(dataset["n"], np.ndarray)
+    assert isinstance(dataset["d"], np.ndarray)
+    assert isinstance(dataset["q"], np.ndarray)
 
     m = int(dataset["m"])
     n = int(dataset["n"])
