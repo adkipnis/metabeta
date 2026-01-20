@@ -31,7 +31,7 @@ def test_prior_post_init_sets_dimensions():
     d, q = 3, 4
     h = hypersample(d=d, q=q, rng=rng)
 
-    prior = Prior(h, rng=rng)
+    prior = Prior(rng, h)
     assert prior.d == d
     assert prior.q == q
 
@@ -40,7 +40,7 @@ def test_prior_post_init_sets_dimensions():
 def test_prior_sample_shapes_and_validity(d, q, m):
     rng = np.random.default_rng(999)
     h = hypersample(d=d, q=q, rng=rng)
-    prior = Prior(h, rng=rng)
+    prior = Prior(rng, h)
 
     params = prior.sample(m=m)
 
@@ -69,12 +69,12 @@ def test_reproducibility_same_seed_same_outputs():
 
     rng1 = np.random.default_rng(seed)
     h1 = hypersample(d=d, q=q, rng=rng1)
-    prior1 = Prior(h1, rng=rng1)
+    prior1 = Prior(rng1, h1)
     p1 = prior1.sample(m=m)
 
     rng2 = np.random.default_rng(seed)
     h2 = hypersample(d=d, q=q, rng=rng2)
-    prior2 = Prior(h2, rng=rng2)
+    prior2 = Prior(rng2, h2)
     p2 = prior2.sample(m=m)
 
     # Hyperparameters should match exactly given same RNG seed
@@ -96,11 +96,11 @@ def test_different_seed_usually_changes_outputs():
 
     rng1 = np.random.default_rng(1)
     h1 = hypersample(d=d, q=q, rng=rng1)
-    p1 = Prior(h1, rng=rng1).sample(m=m)
+    p1 = Prior(rng1, h1).sample(m=m)
 
     rng2 = np.random.default_rng(2)
     h2 = hypersample(d=d, q=q, rng=rng2)
-    p2 = Prior(h2, rng=rng2).sample(m=m)
+    p2 = Prior(rng2, h2).sample(m=m)
 
     # At least one array should differ
     changed = (
@@ -118,5 +118,5 @@ def test_missing_required_hyperparams_raises_keyerror():
     h.pop("tau_rfx")  # remove required key
 
     with pytest.raises(KeyError):
-        _ = Prior(h, rng=rng)
+        _ = Prior(rng, h)
 
