@@ -28,18 +28,22 @@ def counts2groups(ns: np.ndarray) -> np.ndarray:
     return groups
 
 
-def logUniform(a: float,
-               b: float,
-               add: float = 0.0,
-               round: bool = False) -> float|int:
-    ''' truncated log-uniform with optional rounding '''
-    assert a > 0, 'lower bound must be positive'
-    assert b > a, 'upper bound must be larger than lower bound'
-    out = np.exp(np.random.uniform(np.log(a), np.log(b)))
-    out += add
+def truncLogUni(rng: np.random.Generator,
+                low: float,
+                high: float,
+                size: int | tuple[int, ...],
+                add: float = 0.0,
+                round: bool = False,
+                ) -> np.ndarray:
+    assert 0 < low, 'lower bound must be positive'
+    assert low <= high, 'lower bound smaller than upper bound'
+    log_low = np.log(low)
+    log_high = np.log(high)
+    out = rng.uniform(log_low, log_high, size)
+    out = np.exp(out) + add
     if round:
-        return int(np.round(out))
-    return float(out)
+        out = np.floor(out).astype(int)
+    return out
 
 
 def wishartCorrelation(
