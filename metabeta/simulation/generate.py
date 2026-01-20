@@ -87,3 +87,23 @@ class Generator:
         return out
 
 
+    def _genDataset(
+        self, rng: np.random.Generator, d: int, q: int, ns: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        # sample prior
+        hyperparams = hypersample(rng, d, q)
+        prior = Prior(rng, hyperparams)
+
+        # instantiate design
+        if self.cfg.type in ['toy', 'flat']:
+            design = Synthesizer(rng, toy=(self.cfg.type == 'toy'))
+        elif self.cfg.type in ['sampled']:
+            design = Emulator(rng, source=self.cfg.source, use_sgld=self.cfg.sgld)
+        else:
+            raise NotImplementedError(f'design sampler type {self.cfg.type} is not implemented')
+
+        # instantiate simulator
+        sim = Simulator(rng, prior, design, ns)
+        return sim.sample()
+
+
