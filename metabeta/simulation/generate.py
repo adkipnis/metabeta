@@ -66,3 +66,24 @@ class Generator:
         return out
 
 
+    def _aggregate(self, batch: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
+        ''' collate list of datasets to single batched dataset
+            note: assumes consistency in keys and dtypes in batch '''
+        out = {}
+        max_shapes = self._maxShapes(batch)
+        batch_size = len(batch)
+
+        # init with zeros
+        for key, shape in max_shapes.items():
+            dtype = batch[0][key].dtype
+            out[key] = np.zeros((batch_size, *shape), dtype=dtype)
+
+        # fill with slicing
+        for i, dataset in enumerate(batch):
+            for key, dest in out.items():
+                src = dataset[key]
+                slc = (i, *tuple(slice(0, s) for s in src.shape))
+                dest[slc] = src
+        return out
+
+
