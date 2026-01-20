@@ -15,10 +15,15 @@ def setSeed(s: int) -> np.random.Generator:
     rng = np.random.default_rng(s)
     return rng
 
-def datasetFilename(args: Namespace, epoch: int) -> str:
-    parts = [
-        args.partition,
-        f'ep{epoch:04d}',
+def datasetFilename(args: Namespace, epoch: int = 0) -> str:
+ 
+    # partition type and optionally epoch
+    parts = [args.partition]
+    if args.partition == 'train':
+        parts.append(f'ep{epoch:04d}')
+
+    # sizes
+    parts += [
         f'd{args.max_d}',
         f'q{args.max_q}',
         f'm{args.min_m}-{args.max_m}',
@@ -26,7 +31,7 @@ def datasetFilename(args: Namespace, epoch: int) -> str:
         args.type,
     ]
 
-    # only append source if relevant
+    # source of sampled data
     if args.type == 'sampled':
         parts.append(args.source)
 
