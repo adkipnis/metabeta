@@ -1,6 +1,8 @@
+import logging
 import numpy as np
 from scipy.stats import wishart
 
+logger = logging.getLogger(__name__)
 
 def sampleCounts(rng: np.random.Generator,
                  n: int, m: int, alpha: float = 10.) -> np.ndarray:
@@ -15,7 +17,7 @@ def sampleCounts(rng: np.random.Generator,
         idx = ns.argmax(0)
         ns[idx] += diff
     if (ns < 1).any(): # try again
-        print('non-positive counts found')
+        logger.info('non-positive counts found')
         return sampleCounts(rng, n, m, alpha)
     return ns
 
