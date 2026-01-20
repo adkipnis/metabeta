@@ -117,7 +117,7 @@ class Generator:
         # --- init
         iterator = tqdm(range(n_datasets))
         iterator.set_description(f'{epoch:02d}/{self.cfg.epochs:02d}')
-        seed = {'train': epoch, 'val': -100, 'test': -200}[self.cfg.partition]
+        seed = {'train': epoch, 'val': 10_000, 'test': 20_000}[self.cfg.partition]
         rng = np.random.default_rng(seed)
         datasets = []
 
@@ -150,6 +150,7 @@ class Generator:
     def genTrain(self):
         assert self.cfg.begin > 0, 'starting training partition must be a positive integer'
         assert self.cfg.begin <= self.cfg.epochs, 'starting epoch larger than goal epoch'
+        assert self.cfg.epochs < 10_000, 'maximum number of epochs exceeded'
         assert self.cfg.type != 'sampled', 'training data must be synthetic'
         print(f'Generating {self.cfg.epochs} training partitions of {self.cfg.bs_train} datasets each...')
         for epoch in range(self.cfg.begin, self.cfg.epochs + 1):
