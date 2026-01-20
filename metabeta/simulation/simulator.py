@@ -65,13 +65,19 @@ class Simulator:
         cov_sum = cov.sum() - cov[0,0]
         return cov_sum
 
-    def sample(self) -> dict[str, np.ndarray]:
-        # sample parameters
-        params = self.prior.sample(self.m)
-
+    def sample(self) -> dict[str, int | float | np.ndarray]:
         # sample and standardize observations
         obs = self.design.sample(self.d, self.ns)
         obs['X'] = standardize(obs['X'], axis=0, exclude_binary=True)
+        if 'ns' in obs: # in case of update through Emulator
+            self.ns = obs['ns']
+
+        # sanity check for group indices
+        groups = obs['groups']
+        assert groups.min() >= 0 and groups.max() < self.m
+
+        # sample parameters
+        params = self.prior.sample(self.m)
 
         # sample outcomes and normalize to unit SD
         y = simulate(self.rng, params, obs)
