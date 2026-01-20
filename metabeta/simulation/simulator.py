@@ -87,12 +87,12 @@ class Simulator:
         # normalize parameters
         params = {k: v/sd for k,v in params.items()}
 
-        # normalize hyperparameters (our priors are scale families)
+        # normalize hyperparameters (our priors are all scale families)
         hyperparams = {k: v/sd for k,v in self.prior.params.items()}
 
         # optional plot
         if self.plot:
-            data = np.concat([y[:, None], obs['X'][:, 1:]], axis=-1)
+            data = np.concatenate([y[:, None], obs['X'][:, 1:]], axis=-1)
             names = ['y'] + [f'x{j}' for j in range(1, self.d)]
             Plot.dataset(data, names)
 
@@ -114,8 +114,8 @@ class Simulator:
             'q': self.q,
 
             # miscellanious
-            'r_squared': 1 - params['sigma_eps']**2,
-            'cov_sum': self._covsum(params, obs),
+            'r_squared': 1 - params['sigma_eps']**2, # population R^2
+            'cov_sum': self._covsum(params, obs), # helper for standardization
         }
 
         return out
