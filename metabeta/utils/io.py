@@ -1,3 +1,4 @@
+from argparse import Namespace
 import numpy as np
 import torch
 
@@ -14,24 +15,19 @@ def setSeed(s: int) -> np.random.Generator:
     rng = np.random.default_rng(s)
     return rng
 
-def dataname(
-    d: int, # max number of fixed effects
-    q: int, # max number of random effects
-    m: int, # max number of groups
-    n: int, # max number of observations per group
-    b: int, # batch size
-    p: int = 0, # partition number for trainin set
-    fx_type: str = 'mfx',
-    p_type: str = 'train', # [train, val, test]
-    tag: str = '',
-) -> str:
-    if tag:
-        tag += '-'
-    if p:
-        assert p_type == 'train'
-        part = f'-part={p}'
-    else:
-        part = ''
-    return f'{fx_type}-{p_type}-{tag}d={d}-q={q}-m={m}-n={n}-b={b}{part}.npz'
+def datasetFilename(args: Namespace, epoch: int) -> str:
+    parts = [
+        args.partition,
+        f'ep{epoch:04d}',
+        f'd{args.max_d}',
+        f'q{args.max_q}',
+        f'm{args.min_m}-{args.max_m}',
+        f'n{args.min_n}-{args.max_n}',
+        args.type,
+    ]
 
+    # only append source if relevant
+    if args.type == 'sampled':
+        parts.append(args.source)
 
+    return '_'.join(parts) + '.npz'
