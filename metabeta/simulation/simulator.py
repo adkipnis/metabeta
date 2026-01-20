@@ -6,10 +6,11 @@ from metabeta.plot import Plot
 
 
 def simulate(
+    rng: np.random.Generator,
     parameters: dict[str, np.ndarray],
     observations: dict[str, np.ndarray],
     ) -> np.ndarray:
-    ''' draw y given X and theta '''
+    ''' draw y given X and theta for a single dataset '''
     # unpack parameters
     ffx = parameters['ffx']
     rfx = parameters['rfx']
@@ -24,7 +25,7 @@ def simulate(
     n = len(X)
 
     # generate noise
-    eps = np.random.normal(size=(n,))
+    eps = rng.normal(size=(n,))
     eps = standardize(eps, axis=0) * sigma_eps
 
     # outcome
@@ -34,6 +35,7 @@ def simulate(
 
 @dataclass
 class Simulator:
+    rng: np.random.Generator
     prior: Prior
     design: Synthesizer | Emulator
     ns: np.ndarray # number of observations per group
@@ -68,7 +70,7 @@ class Simulator:
         obs['X'] = standardize(obs['X'], axis=0, exclude_binary=True)
 
         # sample outcomes and normalize to unit SD
-        y = simulate(params, obs)
+        y = simulate(self.rng, params, obs)
         sd = y.std(0)
         y /= sd
 
@@ -132,19 +134,19 @@ if __name__ == '__main__':
     params = prior.sample(m)
  
     # sample observations
-    design = Synthesizer(rng=rng)
+    design = Synthesizer(rng)
     obs = design.sample(d, ns)
 
     # forward pass
-    y = simulate(params, obs)
+    y = simulate(rng, params, obs)
 
     # --- test: simulator
     # simulator 1
-    simulator1 = Simulator(prior, design, ns, plot=True)
+    simulator1 = Simulator(rng, prior, design, ns, plot=True)
     dataset1 = simulator1.sample()
 
     # simulator 2
-    design = Emulator('math', rng=rng)
-    simulator2 = Simulator(prior, design, ns, plot=True)
+    design = Emulator(rng, 'math')
+    simulator2 = Simulator(rng, prior, design, ns, plot=True)
     dataset2 = simulator2.sample()
 
