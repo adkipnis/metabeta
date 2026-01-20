@@ -107,3 +107,44 @@ class Generator:
         return sim.sample()
 
 
+    def _genBatch(
+        self, n_datasets: int, mini_batch_size: int, epoch: int = 0,
+    ) -> list[dict[str, np.ndarray]]:
+        ''' generate list of {n_datasets} keep m, d, q constant per minibatch '''
+        assert n_datasets % mini_batch_size == 0, 'number of datasets must be divisible by mini batch size'
+        n_mini_batches = n_datasets // mini_batch_size
+
+        # --- init
+        iterator = tqdm(range(n_datasets))
+        iterator.set_description(f'{epoch:02d}/{self.cfg.epochs:02d}')
+        seed = {'train': epoch, 'val': -100, 'test': -200}[self.cfg.partition]
+        rng = np.random.default_rng(seed)
+        datasets = []
+
+        # --- presample sizes
+        # number of fixed effects
+        d = rng.integers(low=2, high=self.cfg.max_d+1, size=n_mini_batches)
+        d = np.repeat(d, mini_batch_size)
+
+        # number of random effects
+        q = truncLogUni(rng, low=1, high=self.cfg.max_q+1, size=n_mini_batches, round=True)
+        q = np.repeat(q, mini_batch_size)
+        q = np.minimum(d, q) # q <= d
+
+        # number of groups
+        m = truncLogUni(rng, low=self.cfg.min_m, high=self.cfg.max_m+1, size=n_mini_batches, round=True)
+        m = np.repeat(m, mini_batch_size)
+
+        # number of observations per group
+        ns = truncLogUni(rng, low=self.cfg.min_n, high=self.cfg.max_n+1, size=(n_datasets, self.cfg.max_m), round=True)
+
+        # --- loop over single datasets
+        for i in iterator:
+            d_i, q_i, m_i = d[i], q[i], m[i]
+            ns_i = ns[i][:m_i]
+            dataset = self._genDataset(rng, d_i, q_i, ns_i)
+            datasets.append(dataset)
+        return datasets
+
+
+    def genTrain(self):
