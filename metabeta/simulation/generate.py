@@ -35,3 +35,13 @@ def setup() -> argparse.Namespace:
     return parser.parse_args()
 
 # -----------------------------------------------------------------------------
+# Generator class
+
+@dataclass
+class Generator:
+    cfg: argparse.Namespace
+    outdir: Path
+
+    def __post_init__(self):
+        self.outdir.mkdir(parents=True, exist_ok=True)
+
