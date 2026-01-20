@@ -20,7 +20,7 @@ def datasetFilename(args: Namespace, epoch: int = 0) -> str:
     # partition type and optionally epoch
     parts = [args.partition]
     if args.partition == 'train':
-        parts.append(f'ep{epoch:03d}')
+        parts.append(f'ep{epoch:04d}')
 
     # sizes
     parts += [
