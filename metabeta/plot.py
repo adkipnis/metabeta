@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
-# from matplotlib.axes import Axes
 import seaborn as sns
 
 class Plot:
@@ -93,11 +92,11 @@ class Plot:
         # init fig
         fig = plt.figure(figsize=(8,8))
         ax = fig.add_subplot(111)
-        
+
         # plot correlation matrix
         corr = np.corrcoef(x, rowvar=False)
         cax = ax.matshow(corr, vmin=-1, vmax=1, cmap='RdBu')
-        
+
         # plot colorbar
         cbar = fig.colorbar(
             cax,
@@ -107,7 +106,7 @@ class Plot:
         )
         cbar.set_ticks(np.linspace(-1, 1, 5))
         cbar.ax.tick_params(labelsize=16)
-        
+
         # ticks and labels
         ax.tick_params(axis='x', bottom=False, top=True)
         d = len(corr)
@@ -118,7 +117,6 @@ class Plot:
             names = [rf'$x_{i+1}$' for i in range(d)]
         ax.set_xticklabels(names, fontsize=20)
         ax.set_yticklabels(names, fontsize=20)
-        
+
         plt.show()
 
-plot = Plot()

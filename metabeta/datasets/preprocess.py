@@ -1,7 +1,7 @@
 from pathlib import Path
 import pandas as pd
 import numpy as np
-from metabeta.plot import plot
+from metabeta.plot import Plot
 from matplotlib import pyplot as plt
 
 BLACKLIST = 'year age height size n_ num_ number max min attempts begin end name'.split(' ')
@@ -239,7 +239,7 @@ def wrapper(ds_name: str,
             group_name: str = '',
             partition: str = 'auto',
             save: bool = True,
-            plot_ds: bool = False):
+            plot: bool = False):
     assert partition in ['validation', 'test', 'auto']
 
     # import data
@@ -272,10 +272,10 @@ def wrapper(ds_name: str,
         print(f'Saved to {fn}')
 
     # plot
-    if plot_ds and np.prod(df.shape) < 1e6:
+    if plot and np.prod(df.shape) < 1e6:
         dat = np.concatenate([data['y'][:, None], data['X']], axis=-1)
         names = ['y'] + data['columns'].tolist()
-        fig = plot.dataset(dat, names, kde=len(dat) < 10_000)
+        fig = Plot.dataset(dat, names, kde=len(dat) < 10_000)
         if save:
             fn = Path('preprocessed', 'plots', f'{ds_name}.pdf')
             fig.savefig(fn, dpi=300)
