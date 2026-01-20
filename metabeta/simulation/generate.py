@@ -148,3 +148,42 @@ class Generator:
 
 
     def genTrain(self):
+        assert self.cfg.begin > 0, 'starting training partition must be a positive integer'
+        assert self.cfg.begin <= self.cfg.epochs, 'starting epoch larger than goal epoch'
+        assert self.cfg.type != 'sampled', 'training data must be synthetic'
+        print(f'Generating {self.cfg.epochs} training partitions of {self.cfg.bs_train} datasets each...')
+        for epoch in range(self.cfg.begin, self.cfg.epochs + 1):
+            ds_train = self._genBatch(n_datasets=self.cfg.bs_train, mini_batch_size=self.cfg.bs_load, epoch=epoch)
+            ds_train = self._aggregate(ds_train)
+            fn = Path(self.outdir, datasetFilename(self.cfg, epoch))
+            np.savez_compressed(fn, **ds_train, allow_pickle=True)
+            print(f'Saved training set to {fn}')
+
+    def genVal(self):
+        print('Generating validation set...')
+        ds_val = self._genBatch(n_datasets=self.cfg.bs_val, mini_batch_size=1)
+        ds_val = self._aggregate(ds_val)
+        fn = Path(self.outdir, datasetFilename(self.cfg))
+        np.savez_compressed(fn, **ds_val, allow_pickle=True)
+        print(f'Saved validation set to {fn}')
+
+    def genTest(self):
+        print('Generating test set...')
+        ds_test = self._genBatch(n_datasets=self.cfg.bs_test, mini_batch_size=1)
+        ds_test = self._aggregate(ds_test)
+        fn = Path(self.outdir, datasetFilename(self.cfg))
+        np.savez_compressed(fn, **ds_test, allow_pickle=True)
+        print(f'Saved test set to {fn}')
+
+    def go(self):
+        if self.cfg.partition == 'train':
+            self.genTrain()
+        elif self.cfg.partition == 'val':
+            self.genVal()
+        elif self.cfg.partition == 'test':
+            self.genTest()
+        else:
+            raise NotImplementedError(
+                f'the partition type must be in [train, val, test], but is {self.cfg.partition}')
+
+
