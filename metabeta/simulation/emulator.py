@@ -44,8 +44,8 @@ def loadDataset(source: Path) -> dict:
 @dataclass
 class Emulator:
     ''' class for sampling a design matrix and groups from source dataset '''
-    source: str
     rng: np.random.Generator
+    source: str
     use_sgld: bool = True
 
     def __post_init__(self):
@@ -174,6 +174,7 @@ if __name__ == '__main__':
     m = 10
     d = 3
     seed = 0
+    source = 'math'
     
     getDatabase() # instantiate
 
@@ -183,20 +184,20 @@ if __name__ == '__main__':
 
     ns = sampleCounts(rng, n, m)
     groups = counts2groups(ns)
-    emulator = Emulator(source='math', rng=rng)
+    emulator = Emulator(rng, source)
     out = emulator.sample(d, ns)
 
     # --- sequential
     t0 = time.perf_counter()
     for rng in tqdm(seeds):
-        Emulator(source='math', rng=rng).sample(d, ns) # type: ignore
+        Emulator(rng, source).sample(d, ns) # type: ignore
     t1 = time.perf_counter()
     print(f'\n{t1-t0:.2f}s used for sequential sampling.')
 
     # --- parallel (only useful when using SGLD)
     t0 = time.perf_counter()
     results = Parallel(n_jobs=-1)(
-        delayed(Emulator(source='math', rng=rng).sample)(d, ns) # type: ignore
+        delayed(Emulator(rng, source).sample)(d, ns) # type: ignore
         for rng in tqdm(seeds)
         )
     t1 = time.perf_counter()
