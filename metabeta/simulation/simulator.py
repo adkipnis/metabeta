@@ -81,7 +81,7 @@ class Simulator:
 
         # sample outcomes and normalize to unit SD
         y = simulate(self.rng, params, obs)
-        sd = y.std(0)
+        sd = max(y.std(0), 1e-6)
         y /= sd
 
         # normalize parameters
