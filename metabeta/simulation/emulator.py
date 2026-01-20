@@ -175,7 +175,7 @@ if __name__ == '__main__':
     d = 3
     seed = 0
     source = 'math'
-    
+
     getDatabase() # instantiate
 
     rng = np.random.default_rng(seed)

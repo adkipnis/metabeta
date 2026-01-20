@@ -20,8 +20,8 @@ def hypersample(
 @dataclass
 class Prior:
     ''' class for drawing parameters from prior '''
-    params: dict[str, np.ndarray]
     rng: np.random.Generator
+    params: dict[str, np.ndarray]
 
     def __post_init__(self):
         self.d = len(self.params['tau_ffx']) # number of fixed effects
@@ -73,6 +73,6 @@ if __name__ == '__main__':
     m = 10
 
     hyperparams = hypersample(rng, d, q)
-    prior = Prior(hyperparams, rng=rng)
+    prior = Prior(rng, hyperparams)
     params = prior.sample(m)
 

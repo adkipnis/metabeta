@@ -130,7 +130,7 @@ if __name__ == '__main__':
     # --- test: simulate
     # sample parameters
     hyperparams = hypersample(rng, d, q)
-    prior = Prior(hyperparams, rng=rng)
+    prior = Prior(rng, hyperparams)
     params = prior.sample(m)
  
     # sample observations
