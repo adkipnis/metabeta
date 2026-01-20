@@ -1,11 +1,14 @@
+import logging
 from pathlib import Path
-import numpy as np
 from dataclasses import dataclass
+import numpy as np
+
 from metabeta.simulation.sgld import SGLD
 from metabeta.utils.preprocessing import checkConstant
 from metabeta.utils.sampling import sampleCounts, counts2groups
 
 # cached database
+logger = logging.getLogger(__name__)
 DATA_PATH = (Path(__file__).resolve().parent / '..' / 'datasets' / 'preprocessed').resolve()
 # DATA_PATH = Path('..', 'datasets', 'preprocessed')
 VAL_PATHS = list(Path(DATA_PATH, 'validation').glob('*.npz'))
@@ -136,14 +139,14 @@ class Emulator:
         source_is_grouped = 'm' in self.ds
 
         # check source dims
+        if n > self.ds['n']:
+            n = self.ds['n']
+            logger.info(f'not enough observations in source, setting n={n}')
         if source_is_grouped:
             if m > self.ds['m']:
                 m = self.ds['m']
-                print(f'Warning: not enough groups in source, setting m={m}')
-            if n > self.ds['n']:
-                n = self.ds['n']
-                print(f'Warning: not enough observations in source, setting n={n}')
-
+                logger.info(f'not enough groups in source, setting m={m}')
+        
         # subsample observations
         subset_fn = self._subsetGrouped if source_is_grouped else self._subset
         x, _, ns = subset_fn(self.ds, d, m, n)
