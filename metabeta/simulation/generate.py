@@ -187,3 +187,10 @@ class Generator:
                 f'the partition type must be in [train, val, test], but is {self.cfg.partition}')
 
 
+# -----------------------------------------------------------------------------
+if __name__ == '__main__':
+    cfg = setup()
+    outdir = Path('..', 'outputs', 'data')
+    generator = Generator(cfg, outdir)
+    generator.go()
+
