@@ -12,11 +12,10 @@ def simulate(
     ) -> np.ndarray:
     ''' draw y given X and theta for a single dataset '''
     # unpack parameters
-    ffx = parameters['ffx']
-    rfx = parameters['rfx']
-    sigma_rfx = parameters['sigma_rfx']
+    ffx = parameters['ffx'] # (d,)
+    rfx = parameters['rfx'] # (m, q)
     sigma_eps = parameters['sigma_eps']
-    q = len(sigma_rfx)
+    q = rfx.shape[1]
 
     # unpack observations
     X = observations['X'] # assumed to be standardized
