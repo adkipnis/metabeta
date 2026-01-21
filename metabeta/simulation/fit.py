@@ -23,7 +23,16 @@ def setup() -> argparse.Namespace:
     # partitions and sources
     parser.add_argument('--type', type=str, default='toy', help='Type of predictors [toy, flat, scm, sampled], (default = toy)')
     parser.add_argument('--source', type=str, default='all', help='Source dataset if type==sampled (default = all)')
-    # parser.add_argument('--loop', action='store_true', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
+    # bambi
+    parser.add_argument('--respecify_ffx', action='store_true', help='Use automatic fixed effects priors by bambi instead of known (default = False)')
+    parser.add_argument('--method', type=str, default='advi', help='Inference method for bambi [nuts, advi], (default = nuts)')
+    parser.add_argument('--seed', type=int, default=42, help='Seed for bambi (default = 42)')
+    parser.add_argument('--tune', type=int, default=2000, help='Number of tuning steps (burnin) for MCMC (default = 2000)')
+    parser.add_argument('--draws', type=int, default=1000, help='Number of posterior samples (default = 1000)')
+    parser.add_argument('--chains', type=int, default=4, help='Number of posterior sampling chains (default = 4)')
+    parser.add_argument('--loop', action='store_true', help='Loop chain sampling instead of parallelizing it (default = False)')
+    parser.add_argument('--viter', type=int, default=50_000, help='Number of ADVI steps (default = 50_000)')
+    parser.add_argument('--lr', type=float, default=5e-3, help='Adam learning rate for ADVI (default = 5e-3)')
     return parser.parse_args()
 
 
