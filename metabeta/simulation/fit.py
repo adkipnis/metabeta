@@ -70,3 +70,12 @@ class Fitter:
         return ds
 
     def _pandify(self, ds: dict[str, np.ndarray]) -> pd.DataFrame:
+        ''' get observations as dataframe '''
+        n, d = ds['n'], ds['d']
+        df = pd.DataFrame(index=range(n))
+        df['i'] = ds['groups']
+        df['y'] = ds['y'][:, None]
+        for j in range(1, d):
+            df[f'x{j}'] = ds['X'][..., j]
+        return df
+
