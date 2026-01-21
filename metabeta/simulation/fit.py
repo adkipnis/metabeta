@@ -309,5 +309,8 @@ class Fitter:
 if __name__ == '__main__':
     cfg = setup()
     fitter = Fitter(cfg)
-    results = fitter.go(0)
+    if cfg.reintegrate:
+        fitter.reintegrate()
+    else:
+        fitter.go()
 
