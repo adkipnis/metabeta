@@ -44,3 +44,29 @@ class Fitter:
     def __len__(self):
         return len(self.batch['X'])
 
+    def _get(self, idx: int) -> dict[str, np.ndarray]:
+        ''' extract a single dataset from batch and remove padding '''
+        assert 0 <= idx < len(self), 'idx out of bounds'
+        ds = {k: v[idx] for k,v in self.batch.items()}
+
+        # --- unpad
+        d, q, m, n = ds['d'], ds['q'], ds['m'], ds['n']
+
+        # observations
+        ds['y'] = ds['y'][:n]
+        ds['X'] = ds['X'][:n, :d]
+        ds['groups'] = ds['groups'][:n]
+        ds['ns'] = ds['ns'][:m]
+
+        # hyperparams
+        ds['nu_ffx'] = ds['nu_ffx'][:d]
+        ds['tau_ffx'] = ds['tau_ffx'][:d]
+        ds['tau_rfx'] = ds['tau_rfx'][:q]
+
+        # params
+        ds['ffx'] = ds['ffx'][:d]
+        ds['sigma_rfx'] = ds['sigma_rfx'][:q]
+        ds['rfx'] = ds['rfx'][:m, :q]
+        return ds
+
+    def _pandify(self, ds: dict[str, np.ndarray]) -> pd.DataFrame:
