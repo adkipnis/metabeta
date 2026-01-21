@@ -270,6 +270,13 @@ class Fitter:
         np.savez_compressed(self.outpath, **results, allow_pickle=True)
         print(f'Saved results to {self.outpath}')
 
+    def reintegrate(self) -> None:
+        # check if all fits (of the specified method) exist
+        n_datasets = len(self)
+        paths = [Path(self.outdir, self._outname(i)) for i in range(n_datasets)]
+        for p in paths:
+            assert p.exists(), f'cannot reintegrate: the fit file {p} does not exist, yet.'
+
 
 
 # -----------------------------------------------------------------------------
