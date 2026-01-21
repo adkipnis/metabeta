@@ -184,6 +184,34 @@ class Fitter:
         }
 
     def _fitNuts(
+            self, cfg: argparse.Namespace, ds: dict[str, np.ndarray],
+    ) -> dict[str, np.ndarray]:
+        ''' fit NUTS-based MCMC model and return samples and diagnostics '''
+        model = self.bambify(ds)
+        t0 = time.perf_counter()
+        trace = model.fit(
+            tune=cfg.tune,
+            draws=cfg.draws,
+            chains=cfg.chains,
+            cores=(1 if cfg.loop else cfg.chains),
+            inference_method='pymc',
+            random_seed=cfg.seed,
+            return_inferencedata=True,
+        )
+        t1 = time.perf_counter()
+
+        # --- extract samples
+        d, q = int(ds['d']), int(ds['q'])
+        out = self._extractAll(trace, d, q, 'nuts')
+
+        # --- extract diagnostics
+        summary = az.summary(trace, kind='diagnostics')
+        out['nuts_ess'] = summary['ess_bulk'].to_numpy()
+        out['nuts_rhat'] = summary['r_hat'].to_numpy()
+        out['nuts_divergences'] = trace.sample_stats['diverging'].values.sum(-1)
+        out['nuts_duration'] = np.array(t1 - t0)
+        return out
+
 
 
 # -----------------------------------------------------------------------------
