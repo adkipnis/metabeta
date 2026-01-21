@@ -1,9 +1,12 @@
 from dataclasses import dataclass
 import argparse
 from pathlib import Path
+import time
 import numpy as np
 import pandas as pd
+from pymc import adam
 import bambi as bmb
+import arviz as az
 
 from metabeta.utils.io import datasetFilename
 
