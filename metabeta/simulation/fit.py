@@ -285,6 +285,19 @@ class Fitter:
         fits = aggregate(fits)
         self.batch.update(fits)
 
+        # --- atomically save updated batch
+        tmp_suffix = '.tmp' + self.batch_path.suffix
+        tmp = self.batch_path.with_suffix(tmp_suffix)
+        np.savez_compressed(tmp, **self.batch, allow_pickle=True)
+
+        # lightweight verification
+        with np.load(tmp, allow_pickle=True) as check:
+            for k in fits.keys():
+                assert k in check.files, f'missing reintegrated key {k}'
+
+        tmp.replace(self.batch_path)
+        print(f'Reintegrated {self.cfg.method.upper()} fits into {self.batch_path}')
+
 
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
