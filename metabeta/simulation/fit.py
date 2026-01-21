@@ -40,3 +40,7 @@ class Fitter:
         with np.load(path, allow_pickle=True) as batch:
             batch = dict(batch)
         self.batch = batch
+
+    def __len__(self):
+        return len(self.batch['X'])
+
