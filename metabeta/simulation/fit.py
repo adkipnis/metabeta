@@ -241,13 +241,18 @@ class Fitter:
         return out
 
     def go(self, idx: int) -> dict[str, np.ndarray]:
+        ''' wrapper for fitting a single dataset with index {idx} '''
+        ds = self._get(idx)
+        if self.cfg.method == 'advi':
+            return self._fitAdvi(self.cfg, ds)
+        return self._fitNuts(self.cfg, ds)
+
+
 
 
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
     cfg = setup()
     fitter = Fitter(cfg)
-
-    ds = fitter._get(0)
-    model = fitter.bambify(ds)
+    results = fitter.go(0)
 
