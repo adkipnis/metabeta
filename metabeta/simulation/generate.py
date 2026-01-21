@@ -9,6 +9,7 @@ import numpy as np
 from metabeta.simulation import hypersample, Prior, Synthesizer, Emulator, Simulator
 from metabeta.utils.io import datasetFilename
 from metabeta.utils.sampling import truncLogUni
+from metabeta.utils.padding import aggregate
 
 
 # -----------------------------------------------------------------------------
@@ -47,48 +48,6 @@ class Generator:
 
     def __post_init__(self):
         self.outdir.mkdir(parents=True, exist_ok=True)
-
-    @staticmethod
-    def _maxShapes(batch: list[dict[str, np.ndarray]]) -> dict[str, tuple[int, ...]]:
-        ''' for each array in dataset, get the maximal shape over the whole batch '''
-        out = {}
-        for dataset in batch:
-            for key, array in dataset.items():
-                if not isinstance(array, np.ndarray):
-                    raise ValueError('expected all entries to be arrays')
-                shape = tuple(array.shape)
-                if key not in out:
-                    out[key] = shape
-                    continue
-                assert len(shape) == len(out[key]), 'ndim mismatch'
-                # Expand max_shapes[key] tuple elementwise to max dimension
-                out[key] = tuple(
-                    max(old_dim, new_dim)
-                    for old_dim, new_dim in zip(out[key], shape)
-                )
-        return out
-
-
-    def _aggregate(self, batch: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
-        ''' collate list of datasets to single batched dataset
-            note: assumes consistency in keys and dtypes in batch '''
-        out = {}
-        max_shapes = self._maxShapes(batch)
-        batch_size = len(batch)
-
-        # init with zeros
-        for key, shape in max_shapes.items():
-            dtype = batch[0][key].dtype
-            out[key] = np.zeros((batch_size, *shape), dtype=dtype)
-
-        # fill with slicing
-        for i, dataset in enumerate(batch):
-            for key, dest in out.items():
-                src = dataset[key]
-                slc = (i, *tuple(slice(0, s) for s in src.shape))
-                dest[slc] = src
-        return out
-
 
     def _genSizes(
         self,
@@ -190,7 +149,7 @@ class Generator:
         print(f'Generating {self.cfg.epochs} training partitions of {self.cfg.bs_train} datasets each...')
         for epoch in range(self.cfg.begin, self.cfg.epochs + 1):
             ds_train = self._genBatch(n_datasets=self.cfg.bs_train, mini_batch_size=self.cfg.bs_load, epoch=epoch)
-            ds_train = self._aggregate(ds_train)
+            ds_train = aggregate(ds_train)
             fn = Path(self.outdir, datasetFilename(self.cfg, epoch))
             np.savez_compressed(fn, **ds_train, allow_pickle=True)
             print(f'Saved training set to {fn}')
@@ -198,7 +157,7 @@ class Generator:
     def genVal(self):
         print('Generating validation set...')
         ds_val = self._genBatch(n_datasets=self.cfg.bs_val, mini_batch_size=1)
-        ds_val = self._aggregate(ds_val)
+        ds_val = aggregate(ds_val)
         fn = Path(self.outdir, datasetFilename(self.cfg))
         np.savez_compressed(fn, **ds_val, allow_pickle=True)
         print(f'Saved validation set to {fn}')
@@ -206,7 +165,7 @@ class Generator:
     def genTest(self):
         print('Generating test set...')
         ds_test = self._genBatch(n_datasets=self.cfg.bs_test, mini_batch_size=1)
-        ds_test = self._aggregate(ds_test)
+        ds_test = aggregate(ds_test)
         fn = Path(self.outdir, datasetFilename(self.cfg))
         np.savez_compressed(fn, **ds_test, allow_pickle=True)
         print(f'Saved test set to {fn}')
