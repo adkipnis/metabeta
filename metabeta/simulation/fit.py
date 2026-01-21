@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 import argparse
 from pathlib import Path
 import time
@@ -36,23 +35,25 @@ def setup() -> argparse.Namespace:
     return parser.parse_args()
 
 
-@dataclass
 class Fitter:
-    cfg: argparse.Namespace
-    outdir: Path = Path('..', 'outputs', 'data')
-
-    def __post_init__(self):
+    def __init__(
+        self,
+        cfg: argparse.Namespace,
+        outdir: Path = Path('..', 'outputs', 'data'),
+    ) -> None:
         assert cfg.method in ['nuts', 'advi'], 'fit method must be in [nuts, advi]'
+        self.cfg = cfg
+        self.outdir = outdir
+
+        # determine path to data
         self.cfg.partition = 'test'
         filename = datasetFilename(self.cfg)
         path = Path(self.outdir, filename)
-        self.load(path)
-
-    def load(self, path: Path) -> None:
         assert path.exists(), f'{path} does not exist'
+
+        # load batch
         with np.load(path, allow_pickle=True) as batch:
-            batch = dict(batch)
-        self.batch = batch
+            self.batch = dict(batch)
 
     def __len__(self):
         return len(self.batch['X'])
