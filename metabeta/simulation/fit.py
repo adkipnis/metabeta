@@ -140,6 +140,50 @@ class Fitter:
         model.build()
         return model
 
+    def _extract(self, trace: az.InferenceData, name: str) -> np.ndarray:
+        ''' extract {name} samples from posterior '''
+        x = trace.posterior[name].to_numpy() # type: ignore
+        shape = (x.shape[0] * x.shape[1], ) + x.shape[2:]
+        x = x.reshape(shape)
+        return x[None, ...]
+
+    def _extractAll(self, trace: az.InferenceData,
+                    d: int, q: int, prefix: str) -> dict[str, np.ndarray]:
+        ''' extract all posterior samples '''
+        # fixed effects
+        ffx = []
+        for j in range(d):
+            key = 'Intercept' if j == 0 else f'x{j}'
+            val = self._extract(trace, key)
+            ffx.append(val)
+        ffx = np.concatenate(ffx, axis=0)
+
+        # variances
+        sigma_eps = self._extract(trace, 'sigma')
+        sigma_rfx = []
+        for j in range(q):
+            key = '1|i_sigma' if j == 0 else f'x{j}|i_sigma'
+            val = self._extract(trace, key)
+            sigma_rfx.append(val)
+        sigma_rfx = np.concatenate(sigma_rfx, axis=0)
+
+        # random effects
+        rfx = []
+        for j in range(q):
+            key = '1|i' if j == 0 else f'x{j}|i'
+            val = self._extract(trace, key)
+            rfx.append(val)
+        rfx = np.concatenate(rfx, axis=0).swapaxes(2, 1)
+
+        # package
+        return {
+            f'{prefix}_ffx': ffx,
+            f'{prefix}_sigma_eps': sigma_eps,
+            f'{prefix}_sigma_rfx': sigma_rfx,
+            f'{prefix}_rfx': rfx,
+        }
+
+    def _fitNuts(
 
 
 # -----------------------------------------------------------------------------
