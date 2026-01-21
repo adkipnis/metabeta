@@ -1,7 +1,9 @@
 import argparse
+from typing import cast
 from dataclasses import dataclass
 from pathlib import Path
 from tqdm import tqdm
+from joblib import Parallel, delayed
 import numpy as np
 
 from metabeta.simulation import hypersample, Prior, Synthesizer, Emulator, Simulator
@@ -29,7 +31,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--partition', type=str, default='val', help='Type of partition in [train, val, test], (default = train)')
     parser.add_argument('-b', '--begin', type=int, default=1, help='Begin generating training epoch number #b.')
     parser.add_argument('-e', '--epochs', type=int, default=10, help='Total number of training epochs to generate.')
-    parser.add_argument('--type', type=str, default='sampled', help='Type of predictors [toy, flat, scm, sampled], (default = toy)')
+    parser.add_argument('--type', type=str, default='flat', help='Type of predictors [toy, flat, scm, sampled], (default = toy)')
     parser.add_argument('--source', type=str, default='all', help='Source dataset if type==sampled (default = all)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD if type==sampled (default = False)')
     parser.add_argument('--loop', action='store_true', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
@@ -88,10 +90,6 @@ class Generator:
         return out
 
 
-    def _genBatch(
-        self, n_datasets: int, mini_batch_size: int, epoch: int = 0,
-    ) -> list[dict[str, np.ndarray]]:
-        ''' generate list of {n_datasets} keep m, d, q constant per minibatch '''
     def _genSizes(
         self,
         rng: np.random.Generator,
@@ -101,14 +99,6 @@ class Generator:
         ''' batch generate size arrays for dataset sampling '''
         assert n_datasets % mini_batch_size == 0, 'number of datasets must be divisible by mini batch size'
         n_mini_batches = n_datasets // mini_batch_size
-
-        # --- init
-        iterator = tqdm(range(n_datasets))
-        if self.cfg.partition == 'test':
-            iterator.set_description(f'{epoch:02d}/{self.cfg.epochs:02d}')
-        seed = {'train': epoch, 'val': 10_000, 'test': 20_000}[self.cfg.partition]
-        rng = np.random.default_rng(seed)
-        datasets = []
 
         # --- presample sizes
         # number of fixed effects
@@ -151,12 +141,44 @@ class Generator:
         sim = Simulator(rng, prior, design, ns)
         return sim.sample()
 
-        # --- loop over single datasets
-        for i in iterator:
-            d_i, q_i, m_i = d[i], q[i], m[i]
-            ns_i = ns[i][:m_i]
-            dataset = self._genDataset(rng, d_i, q_i, ns_i)
-            datasets.append(dataset)
+
+    def _genBatch(
+        self, n_datasets: int, mini_batch_size: int, epoch: int = 0,
+    ) -> list[dict[str, np.ndarray]]:
+        ''' generate list of {n_datasets} and keep m, d, q constant per minibatch '''
+        # --- init seeding
+        main_seed = {'train': epoch, 'val': 10_000, 'test': 20_000}[self.cfg.partition]
+        rng = np.random.default_rng(main_seed)
+        seedseqs = np.random.SeedSequence(main_seed).spawn(n_datasets)
+        desc = f'{epoch:02d}/{self.cfg.epochs:02d}' if self.cfg.partition == 'train' else ''
+
+        # --- presample sizes
+        d, q, m, ns = self._genSizes(rng, n_datasets, mini_batch_size)
+
+        # --- sample batch of single datasets
+        if self.cfg.loop: # Option A: loop
+            datasets = []
+            for i in tqdm(range(n_datasets), desc=desc):
+                dataset = self._genDataset(
+                    self.cfg,
+                    seedseqs[i],
+                    d[i],
+                    q[i],
+                    ns[i][: m[i]],
+                )
+                datasets.append(dataset)
+        else: # Option B: parallelize
+            datasets = Parallel(n_jobs=-1, backend='loky', batch_size='auto')(
+                delayed(Generator._genDataset)(
+                    self.cfg,
+                    seedseqs[i],
+                    d[i],
+                    q[i],
+                    ns[i][: m[i]],
+                )
+                for i in tqdm(range(n_datasets), desc=desc)
+            )
+            datasets = cast(list[dict[str, np.ndarray]], datasets) # joblib returns list[Any]
         return datasets
 
 
