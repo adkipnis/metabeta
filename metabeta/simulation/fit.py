@@ -212,6 +212,35 @@ class Fitter:
         out['nuts_duration'] = np.array(t1 - t0)
         return out
 
+    def _fitAdvi(
+            self, cfg: argparse.Namespace, ds: dict[str, np.ndarray],
+    ) -> dict[str, np.ndarray]:
+        ''' fit ADVI model (using ADAM) and return samples and diagnostics'''
+        model = self.bambify(ds)
+        t0 = time.perf_counter()
+        mean_field = model.fit(
+            inference_method='vi',
+            n=cfg.viter,
+            obj_optimizer=adam(learning_rate=cfg.lr),
+        )
+        trace = mean_field.sample(
+            draws=(cfg.draws * cfg.chains),
+            random_seed=cfg.seed,
+            return_inferencedata=True,
+        )
+        t1 = time.perf_counter()
+
+        # --- extract samples
+        d, q = int(ds['d']), int(ds['q'])
+        out = self._extractAll(trace, d, q, 'advi')
+
+        # --- extract diagnostics
+        summary = az.summary(trace, kind='diagnostics')
+        out['advi_ess'] = summary['ess_bulk'].to_numpy()
+        out['advi_duration'] = np.array(t1 - t0)
+        return out
+
+    def go(self, idx: int) -> dict[str, np.ndarray]:
 
 
 # -----------------------------------------------------------------------------
