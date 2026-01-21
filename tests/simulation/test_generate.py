@@ -1,4 +1,3 @@
-# tests/test_generate.py
 from __future__ import annotations
 
 import argparse
@@ -9,6 +8,7 @@ import numpy as np
 import pytest
 
 from metabeta.simulation import Generator
+
 
 def make_cfg(**overrides: Any) -> argparse.Namespace:
     """
@@ -34,6 +34,7 @@ def make_cfg(**overrides: Any) -> argparse.Namespace:
         type="toy",
         source="all",
         sgld=False,
+        loop=True,  # default to loop in tests for speed/determinism
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -63,6 +64,10 @@ def test_max_shapes_simple(tmp_path: Path):
 
 
 def test_max_shapes_ndim_mismatch_raises(tmp_path: Path):
+    """
+    Current Generator._maxShapes asserts ndim consistency per key.
+    If you later adopt the "align dims with ones" robust version, remove this test.
+    """
     cfg = make_cfg()
     g = Generator(cfg, tmp_path)
 
@@ -101,33 +106,66 @@ def test_aggregate_zero_padding(tmp_path: Path):
     assert np.array_equal(out["y"][1], np.array([9, 0]))
 
 
-def test_genbatch_constraints_and_shapes(monkeypatch, tmp_path: Path):
+def test_gen_sizes_shapes_and_constraints(tmp_path: Path):
     """
-    Verify that _genBatch:
-    - produces the requested number of datasets
-    - enforces q <= d
-    - slices ns to m groups
-    - respects min/max bounds for m and n (assuming truncLogUni uses floor logic)
+    Verify that _genSizes returns arrays of correct shape and respects
+    q <= d and min/max bounds for m and n (assuming truncLogUni round=True returns ints).
     """
     cfg = make_cfg(partition="train", max_d=6, max_q=10, min_m=2, max_m=7, min_n=3, max_n=11)
     g = Generator(cfg, tmp_path)
 
+    main_seed = 2
+    rng = np.random.default_rng(main_seed)
+    n_datasets = 16
+    mini_bs = 4
+
+    d, q, m, ns = g._genSizes(rng, n_datasets=n_datasets, mini_batch_size=mini_bs)
+
+    assert d.shape == (n_datasets,)
+    assert q.shape == (n_datasets,)
+    assert m.shape == (n_datasets,)
+    assert ns.shape == (n_datasets, cfg.max_m)
+
+    assert np.all(d >= 2) and np.all(d <= cfg.max_d)
+    assert np.all(q >= 1)
+    assert np.all(q <= d)
+    assert np.all(m >= cfg.min_m) and np.all(m <= cfg.max_m)
+    assert np.all(ns >= cfg.min_n) and np.all(ns <= cfg.max_n)
+
+
+def test_genbatch_calls_genDataset_with_correct_args(monkeypatch, tmp_path: Path):
+    """
+    Verify that _genBatch:
+    - produces the requested number of datasets
+    - slices ns to m groups
+    - enforces q <= d (via the args passed to _genDataset)
+    This uses the real _genSizes and monkeypatches only _genDataset.
+    """
+    cfg = make_cfg(partition="train", max_d=6, max_q=10, min_m=2, max_m=7, min_n=3, max_n=11, loop=True)
+    g = Generator(cfg, tmp_path)
+
     seen: list[dict[str, Any]] = []
 
-    def fake_gen_dataset(rng: np.random.Generator, d: int, q: int, ns: np.ndarray) -> dict[str, np.ndarray]:
-        # record inputs without consuming randomness
-        rec = dict(d=int(d), q=int(q), m=int(len(ns)), ns=ns.astype(int).copy())
-        seen.append(rec)
-
-        # return variable-shaped arrays so that aggregation is meaningfully exercised elsewhere
-        n_total = int(np.sum(ns))
+    def fake_gen_dataset(cfg_arg, seedseq, d, q, ns_i):
+        # record inputs
+        seen.append(
+            dict(
+                d=int(d),
+                q=int(q),
+                m=int(len(ns_i)),
+                ns=ns_i.astype(int).copy(),
+                seedseq=seedseq,
+            )
+        )
+        # variable shaped return
+        n_total = int(np.sum(ns_i))
         return {
-            "X": np.zeros((n_total, d), dtype=np.float32),
-            "groups": np.repeat(np.arange(len(ns), dtype=np.int64), ns),
-            "theta": np.zeros((d + q + 1,), dtype=np.float32),
+            "X": np.zeros((n_total, int(d)), dtype=np.float32),
+            "groups": np.repeat(np.arange(len(ns_i), dtype=np.int64), ns_i),
+            "theta": np.zeros((int(d) + int(q) + 1,), dtype=np.float32),
         }
 
-    monkeypatch.setattr(g, "_genDataset", fake_gen_dataset)
+    monkeypatch.setattr(Generator, "_genDataset", staticmethod(fake_gen_dataset))
 
     n_datasets = 16
     mini_bs = 4
@@ -141,34 +179,32 @@ def test_genbatch_constraints_and_shapes(monkeypatch, tmp_path: Path):
         d = rec["d"]
         q = rec["q"]
         m = rec["m"]
-        ns = rec["ns"]
+        ns_i = rec["ns"]
 
-        assert d >= 2 and d <= cfg.max_d
-        assert q >= 1
-        assert q <= d  # enforced in code
-        assert m >= cfg.min_m and m <= cfg.max_m
-        assert ns.shape == (m,)
-        assert np.all(ns >= cfg.min_n)
-        assert np.all(ns <= cfg.max_n)
+        assert 2 <= d <= cfg.max_d
+        assert 1 <= q <= d
+        assert cfg.min_m <= m <= cfg.max_m
+        assert ns_i.shape == (m,)
+        assert np.all(ns_i >= cfg.min_n)
+        assert np.all(ns_i <= cfg.max_n)
 
 
 def test_genbatch_deterministic_given_partition_and_epoch(monkeypatch, tmp_path: Path):
     """
-    With _genDataset patched to not consume rng randomness, the presampled
-    (d, q, m, ns) should be deterministic for a given (partition, epoch).
+    With _genDataset patched to not depend on anything except its inputs,
+    _genBatch should be deterministic for a given (partition, epoch).
     """
-    cfg = make_cfg(partition="train", max_d=6, max_q=4, min_m=2, max_m=6, min_n=3, max_n=9)
+    cfg = make_cfg(partition="train", max_d=6, max_q=4, min_m=2, max_m=6, min_n=3, max_n=9, loop=True)
     g = Generator(cfg, tmp_path)
 
     def run_once() -> list[tuple[int, int, int, tuple[int, ...]]]:
         seen: list[tuple[int, int, int, tuple[int, ...]]] = []
 
-        def fake_gen_dataset(rng: np.random.Generator, d: int, q: int, ns: np.ndarray) -> dict[str, np.ndarray]:
-            seen.append((int(d), int(q), int(len(ns)), tuple(int(x) for x in ns)))
-            # minimal payload
+        def fake_gen_dataset(cfg_arg, seedseq, d, q, ns_i):
+            seen.append((int(d), int(q), int(len(ns_i)), tuple(int(x) for x in ns_i)))
             return {"dummy": np.zeros((1,), dtype=np.float32)}
 
-        monkeypatch.setattr(g, "_genDataset", fake_gen_dataset)
+        monkeypatch.setattr(Generator, "_genDataset", staticmethod(fake_gen_dataset))
         _ = g._genBatch(n_datasets=12, mini_batch_size=3, epoch=1)
         return seen
 
@@ -177,41 +213,94 @@ def test_genbatch_deterministic_given_partition_and_epoch(monkeypatch, tmp_path:
     assert seen1 == seen2
 
 
-@pytest.mark.parametrize("partition,seed_expected", [("train", 3), ("val", 10_000), ("test", 20_000)])
-def test_seed_mapping_affects_presampling(monkeypatch, tmp_path: Path, partition: str, seed_expected: int):
+@pytest.mark.parametrize("partition", ["train", "val", "test"])
+def test_seed_mapping_deterministic_within_partition(monkeypatch, tmp_path: Path, partition: str):
     """
-    Checks the seed mapping dictionary by verifying the RNG seed is effectively
-    partition-dependent (via deterministic presampling outcomes).
+    Confirms determinism within a partition for a fixed epoch argument.
     """
-    cfg = make_cfg(partition=partition, max_d=10, max_q=5, min_m=2, max_m=8, min_n=3, max_n=12, epochs=10)
+    cfg = make_cfg(partition=partition, max_d=10, max_q=5, min_m=2, max_m=8, min_n=3, max_n=12, epochs=10, loop=True)
     g = Generator(cfg, tmp_path)
 
-    seen: list[int] = []
+    def run(epoch: int) -> list[int]:
+        seen: list[int] = []
 
-    def fake_gen_dataset(rng: np.random.Generator, d: int, q: int, ns: np.ndarray) -> dict[str, np.ndarray]:
-        # record just d to keep it simple
-        seen.append(int(d))
-        return {"dummy": np.zeros((1,), dtype=np.float32)}
+        def fake_gen_dataset(cfg_arg, seedseq, d, q, ns_i):
+            seen.append(int(d))
+            return {"dummy": np.zeros((1,), dtype=np.float32)}
 
-    monkeypatch.setattr(g, "_genDataset", fake_gen_dataset)
+        monkeypatch.setattr(Generator, "_genDataset", staticmethod(fake_gen_dataset))
+        _ = g._genBatch(n_datasets=9, mini_batch_size=3, epoch=epoch)
+        return seen
 
-    # Use epoch=3 for all partitions; train seed should depend on epoch,
-    # val/test should ignore epoch via fixed seeds (-100/-200)
-    _ = g._genBatch(n_datasets=9, mini_batch_size=3, epoch=3)
+    a = run(epoch=3)
+    b = run(epoch=3)
+    assert a == b
 
-    # Re-run and confirm determinism within partition
-    seen2: list[int] = []
 
-    def fake_gen_dataset2(rng: np.random.Generator, d: int, q: int, ns: np.ndarray) -> dict[str, np.ndarray]:
-        seen2.append(int(d))
-        return {"dummy": np.zeros((1,), dtype=np.float32)}
+def test_train_varies_with_epoch_but_val_test_fixed(monkeypatch, tmp_path: Path):
+    """
+    By design:
+    - train uses main_seed=epoch -> different epoch => different presampling
+    - val/test use fixed seeds -> different epoch => same presampling
+    """
+    def run(cfg: argparse.Namespace, epoch: int) -> list[int]:
+        g = Generator(cfg, tmp_path)
+        seen: list[int] = []
 
-    monkeypatch.setattr(g, "_genDataset", fake_gen_dataset2)
-    _ = g._genBatch(n_datasets=9, mini_batch_size=3, epoch=3)
+        def fake_gen_dataset(cfg_arg, seedseq, d, q, ns_i):
+            seen.append(int(d))
+            return {"dummy": np.zeros((1,), dtype=np.float32)}
 
-    assert seen == seen2
+        monkeypatch.setattr(Generator, "_genDataset", staticmethod(fake_gen_dataset))
+        _ = g._genBatch(n_datasets=12, mini_batch_size=3, epoch=epoch)
+        return seen
 
-    # This doesn't directly expose the seed value (NumPy RNG doesn't provide it),
-    # but ensures the mapping creates consistent partition-specific sequences.
-    # If you change the mapping dict, this test will typically fail due to changed sequences.
-    assert isinstance(seed_expected, int)
+    # train differs
+    cfg_train = make_cfg(partition="train", max_d=10, max_q=5, min_m=2, max_m=8, min_n=3, max_n=12, epochs=10, loop=True)
+    assert run(cfg_train, 1) != run(cfg_train, 2)
+
+    # val fixed
+    cfg_val = make_cfg(partition="val", max_d=10, max_q=5, min_m=2, max_m=8, min_n=3, max_n=12, epochs=10, loop=True)
+    assert run(cfg_val, 1) == run(cfg_val, 2)
+
+    # test fixed
+    cfg_test = make_cfg(partition="test", max_d=10, max_q=5, min_m=2, max_m=8, min_n=3, max_n=12, epochs=10, loop=True)
+    assert run(cfg_test, 1) == run(cfg_test, 2)
+
+
+def test_parallel_and_loop_produce_same_inputs(monkeypatch, tmp_path: Path):
+    """
+    Ensures the presampling + seedseq plumbing is consistent between loop and joblib paths.
+
+    We don't compare full sampled datasets (heavy + stochastic); instead we patch _genDataset
+    to return a signature derived only from inputs. Then loop vs parallel must match exactly.
+    """
+    base_cfg = make_cfg(partition="train", max_d=7, max_q=5, min_m=2, max_m=7, min_n=3, max_n=10, epochs=10)
+    n_datasets = 24
+    mini_bs = 4
+    epoch = 3
+
+    def fake_gen_dataset(cfg_arg, seedseq, d, q, ns_i):
+        # signature purely from inputs
+        return {
+            "sig": np.array(
+                [int(d), int(q), int(len(ns_i)), int(np.sum(ns_i))],
+                dtype=np.int64,
+            )
+        }
+
+    monkeypatch.setattr(Generator, "_genDataset", staticmethod(fake_gen_dataset))
+
+    # loop
+    cfg_loop = argparse.Namespace(**{**vars(base_cfg), "loop": True})
+    g_loop = Generator(cfg_loop, tmp_path / "loop")
+    loop_batch = g_loop._genBatch(n_datasets=n_datasets, mini_batch_size=mini_bs, epoch=epoch)
+    loop_sigs = np.stack([ds["sig"] for ds in loop_batch], axis=0)
+
+    # parallel
+    cfg_par = argparse.Namespace(**{**vars(base_cfg), "loop": False})
+    g_par = Generator(cfg_par, tmp_path / "par")
+    par_batch = g_par._genBatch(n_datasets=n_datasets, mini_batch_size=mini_bs, epoch=epoch)
+    par_sigs = np.stack([ds["sig"] for ds in par_batch], axis=0)
+
+    assert np.array_equal(loop_sigs, par_sigs)

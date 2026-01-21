@@ -7,6 +7,7 @@ from metabeta.simulation.sgld import SGLD
 from metabeta.utils.preprocessing import checkConstant
 from metabeta.utils.sampling import sampleCounts, counts2groups
 
+
 # cached database
 logger = logging.getLogger(__name__)
 DATA_PATH = (Path(__file__).resolve().parent / '..' / 'datasets' / 'preprocessed').resolve()
