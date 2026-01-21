@@ -89,3 +89,30 @@ class Fitter:
         out = f'y ~ 1 + {fixed} + ({random} | i)'
         return out
 
+    def _priorize(
+            self, ds: dict[str, np.ndarray], include_ffx: bool = True,
+    ) -> dict[str, bmb.Prior]:
+        ''' setup bambi priors based on true priors '''
+        d, q = ds['d'], ds['q']
+        nu_ffx = ds['nu_ffx']
+        tau_ffx = ds['tau_ffx']
+        tau_rfx = ds['tau_rfx']
+        tau_eps = ds['tau_eps']
+        priors = {}
+
+        # fixed effects
+        if include_ffx:
+            for j in range(d):
+                key = 'Intercept' if j == 0 else f'x{j}'
+                priors[key] = bmb.Prior('Normal', mu=nu_ffx[j], sigma=tau_ffx[j])
+
+        # random effects variance
+        for j in range(q):
+            key = '1|i' if j == 0 else f'x{j}|i'
+            sigma = bmb.Prior('HalfNormal', sigma=tau_rfx[j])
+            priors[key] = bmb.Prior('Normal', mu=0, sigma=sigma)
+
+        # noise variance
+        priors['sigma'] = bmb.Prior('HalfStudentT', nu=4, sigma=tau_eps)
+        return priors
+
