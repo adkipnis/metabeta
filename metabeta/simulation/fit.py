@@ -88,7 +88,7 @@ class Fitter:
         n, d = ds['n'], ds['d']
         df = pd.DataFrame(index=range(n))
         df['i'] = ds['groups']
-        df['y'] = ds['y'][:, None]
+        df['y'] = ds['y']
         for j in range(1, d):
             df[f'x{j}'] = ds['X'][..., j]
         return df
@@ -100,8 +100,9 @@ class Fitter:
         random = ' + '.join(f'x{j}' for j in range(1, q))
         if not random: # no random slopes
             random = '1'
-        out = f'y ~ 1 + {fixed} + ({random} | i)'
-        return out
+        if fixed:
+            return f'y ~ 1 + {fixed} + ({random} | i)'
+        return f'y ~ 1 + ({random} | i)'
 
     def _priorize(self, ds: dict[str, np.ndarray]) -> dict[str, bmb.Prior]:
         ''' setup bambi priors based on true priors '''
@@ -208,7 +209,6 @@ class Fitter:
         # --- extract diagnostics
         summary = az.summary(trace, kind='diagnostics')
         out['nuts_ess'] = summary['ess_bulk'].to_numpy()
-        out['nuts_rhat'] = summary['r_hat'].to_numpy()
         out['nuts_divergences'] = trace.sample_stats['diverging'].values.sum(-1)
         out['nuts_duration'] = np.array(t1 - t0)
         return out
@@ -247,8 +247,6 @@ class Fitter:
         if self.cfg.method == 'advi':
             return self._fitAdvi(self.cfg, ds)
         return self._fitNuts(self.cfg, ds)
-
-
 
 
 # -----------------------------------------------------------------------------
