@@ -63,13 +63,20 @@ class Fitter:
         assert 0 <= self.cfg.idx < len(self), 'idx out of bounds'
         self.ds = self._get(self.batch)
 
-    def __len__(self):
-        return len(self.batch['X'])
+        # setup outpath
+        outname = self._outname(cfg.idx)
+        self.outpath = Path(self.outdir, outname)
 
-    def _get(self, idx: int) -> dict[str, np.ndarray]:
+    def __len__(self) -> int:
+        return len(self.batch['y'])
+
+    def _outname(self, idx: int) -> str:
+        stem = self.batch_path.stem
+        return f'{stem}_{self.cfg.method}_{idx:03d}.npz'
+
+    def _get(self, batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         ''' extract a single dataset from batch and remove padding '''
-        assert 0 <= idx < len(self), 'idx out of bounds'
-        ds = {k: v[idx] for k,v in self.batch.items()}
+        ds = {k: v[self.cfg.idx] for k,v in batch.items()}
 
         # --- unpad
         d, q, m, n = ds['d'], ds['q'], ds['m'], ds['n']
