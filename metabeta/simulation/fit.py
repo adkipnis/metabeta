@@ -114,7 +114,7 @@ class Fitter:
         priors = {}
 
         # fixed effects
-        if not cfg.respecify_ffx: # otherwise bambi will infer them from data
+        if not self.cfg.respecify_ffx: # otherwise bambi will infer them from data
             for j in range(d):
                 key = 'Intercept' if j == 0 else f'x{j}'
                 priors[key] = bmb.Prior('Normal', mu=nu_ffx[j], sigma=tau_ffx[j])
