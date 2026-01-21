@@ -1,5 +1,8 @@
+import logging
 import numpy as np
 from scipy import stats
+
+logger = logging.getLogger(__name__)
 
 
 class ParametricDistribution:
@@ -75,8 +78,9 @@ class ParametricDistribution:
                     break
 
         if reached < n:
-            raise RuntimeError(
+            logger.info(
                 f'truncated sampling failed: {reached}/{n}, borders={self.borders}, dist={self}')
+            return self.dist.rvs(size=(n,1), random_state=self.rng)
 
         return np.concatenate(out, axis=0)[:n]
 

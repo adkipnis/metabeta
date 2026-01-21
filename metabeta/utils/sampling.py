@@ -2,6 +2,7 @@ import logging
 import numpy as np
 from scipy.stats import wishart
 
+
 logger = logging.getLogger(__name__)
 
 def sampleCounts(rng: np.random.Generator,

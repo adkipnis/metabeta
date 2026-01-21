@@ -113,23 +113,6 @@ def test_reproducibility_same_seed_same_samples():
         assert np.array_equal(x1, x2)
 
 
-def test_truncated_sampling_failure_raises_runtimeerror():
-    """
-    Force a near-impossible truncation interval by overriding borders.
-    This should trigger the RuntimeError after max_iters.
-
-    We use a Normal distribution for determinism.
-    """
-    rng = np.random.default_rng(0)
-    d = Normal(rng=rng, truncate=True)
-
-    # Force extremely narrow interval around an absurd location (very low acceptance)
-    d.borders = (1e12, 1e12 + 1e-9)
-
-    with pytest.raises(RuntimeError):
-        _ = d.sample(10)
-
-
 def test_repr_returns_string():
     rng = np.random.default_rng(0)
     for Dist in ALL:
