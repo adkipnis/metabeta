@@ -223,6 +223,7 @@ class Fitter:
 
         # --- extract diagnostics
         summary = az.summary(trace, kind='diagnostics')
+        out['nuts_names'] = summary.index.to_numpy(dtype=str)
         out['nuts_ess'] = summary['ess_bulk'].to_numpy()
         out['nuts_divergences'] = trace.sample_stats['diverging'].values.sum(-1)
         out['nuts_duration'] = np.array(t1 - t0)
@@ -252,6 +253,7 @@ class Fitter:
 
         # --- extract diagnostics
         summary = az.summary(trace, kind='diagnostics')
+        out['advi_names'] = summary.index.to_numpy(dtype=str)
         out['advi_ess'] = summary['ess_bulk'].to_numpy()
         out['advi_duration'] = np.array(t1 - t0)
         return out
