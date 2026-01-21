@@ -131,3 +131,11 @@ class Fitter:
 
 
 
+# -----------------------------------------------------------------------------
+if __name__ == '__main__':
+    cfg = setup()
+    fitter = Fitter(cfg)
+
+    ds = fitter._get(0)
+    model = fitter.bambify(ds)
+
