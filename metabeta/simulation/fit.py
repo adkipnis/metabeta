@@ -42,6 +42,7 @@ class Fitter:
     outdir: Path = Path('..', 'outputs', 'data')
 
     def __post_init__(self):
+        assert cfg.method in ['nuts', 'advi'], 'fit method must be in [nuts, advi]'
         self.cfg.partition = 'test'
         filename = datasetFilename(self.cfg)
         path = Path(self.outdir, filename)
