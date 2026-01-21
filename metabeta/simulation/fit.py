@@ -79,3 +79,13 @@ class Fitter:
             df[f'x{j}'] = ds['X'][..., j]
         return df
 
+    def _formulate(self, ds: dict[str, np.ndarray]) -> str:
+        ''' setup bambi model formula based on ds '''
+        d, q = ds['d'], ds['q']
+        fixed = ' + '.join(f'x{j}' for j in range(1, d))
+        random = ' + '.join(f'x{j}' for j in range(1, q))
+        if not random: # no random slopes
+            random = '1'
+        out = f'y ~ 1 + {fixed} + ({random} | i)'
+        return out
+
