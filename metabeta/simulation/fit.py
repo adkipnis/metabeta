@@ -127,14 +127,14 @@ class Fitter:
         priors['sigma'] = bmb.Prior('HalfStudentT', nu=4, sigma=tau_eps)
         return priors
 
-    def bambify(self, ds: dict[str, np.ndarray], respecify_ffx: bool = False) -> bmb.Model:
+    def bambify(self, ds: dict[str, np.ndarray]) -> bmb.Model:
         ''' setup bambi model from dataset dict
             optionally allow bambi to setup its own priors for the fixed effects'''
         df = self._pandify(ds)
         form = self._formulate(ds)
         priors = None
         if 'nu_ffx' in ds:
-            priors = self._priorize(ds, include_ffx=(not respecify_ffx))
+            priors = self._priorize(ds)
 
         model = bmb.Model(formula=form, data=df, categorical='i', priors=priors)
         model.build()
