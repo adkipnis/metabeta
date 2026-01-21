@@ -298,6 +298,12 @@ class Fitter:
         tmp.replace(self.batch_path)
         print(f'Reintegrated {self.cfg.method.upper()} fits into {self.batch_path}')
 
+        # --- optional cleanup
+        if self.cfg.cleanup:
+            for p in paths:
+                p.unlink()
+            print(f'Deleted {len(paths)} fit files from {self.outdir}')
+
 
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
