@@ -277,6 +277,13 @@ class Fitter:
         for p in paths:
             assert p.exists(), f'cannot reintegrate: the fit file {p} does not exist, yet.'
 
+        # --- load all fits, aggregate and integrate into original
+        fits = []
+        for p in paths:
+            with np.load(p, allow_pickle=True) as f:
+                fits.append(dict(f))
+        fits = aggregate(fits)
+        self.batch.update(fits)
 
 
 # -----------------------------------------------------------------------------
