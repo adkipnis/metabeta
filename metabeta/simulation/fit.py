@@ -102,9 +102,7 @@ class Fitter:
         out = f'y ~ 1 + {fixed} + ({random} | i)'
         return out
 
-    def _priorize(
-            self, ds: dict[str, np.ndarray], include_ffx: bool = True,
-    ) -> dict[str, bmb.Prior]:
+    def _priorize(self, ds: dict[str, np.ndarray]) -> dict[str, bmb.Prior]:
         ''' setup bambi priors based on true priors '''
         d, q = ds['d'], ds['q']
         nu_ffx = ds['nu_ffx']
@@ -114,7 +112,7 @@ class Fitter:
         priors = {}
 
         # fixed effects
-        if include_ffx:
+        if not cfg.respecify_ffx: # otherwise bambi will infer them from data
             for j in range(d):
                 key = 'Intercept' if j == 0 else f'x{j}'
                 priors[key] = bmb.Prior('Normal', mu=nu_ffx[j], sigma=tau_ffx[j])
