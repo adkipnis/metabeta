@@ -258,12 +258,18 @@ class Fitter:
         out['advi_duration'] = np.array(t1 - t0)
         return out
 
-    def go(self, idx: int) -> dict[str, np.ndarray]:
+    def go(self) -> None:
         ''' wrapper for fitting a single dataset with index {idx} '''
-        ds = self._get(idx)
-        if self.cfg.method == 'advi':
-            return self._fitAdvi(self.cfg, ds)
-        return self._fitNuts(self.cfg, ds)
+        print(f'Fitting dataset {self.cfg.idx} with {self.cfg.method.upper()}...')
+        if self.cfg.method == 'nuts':
+            results = self._fitNuts(self.cfg, self.ds)
+        elif self.cfg.method == 'advi':
+            results = self._fitAdvi(self.cfg, self.ds)
+        else:
+            raise NotImplementedError
+        np.savez_compressed(self.outpath, **results, allow_pickle=True)
+        print(f'Saved results to {self.outpath}')
+
 
 
 # -----------------------------------------------------------------------------
