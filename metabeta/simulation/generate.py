@@ -32,6 +32,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--type', type=str, default='sampled', help='Type of predictors [toy, flat, scm, sampled], (default = toy)')
     parser.add_argument('--source', type=str, default='all', help='Source dataset if type==sampled (default = all)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD if type==sampled (default = False)')
+    parser.add_argument('--loop', action='store_true', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
     return parser.parse_args()
 
 # -----------------------------------------------------------------------------
