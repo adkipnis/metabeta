@@ -88,26 +88,6 @@ class Generator:
         return out
 
 
-    def _genDataset(
-        self, rng: np.random.Generator, d: int, q: int, ns: np.ndarray,
-    ) -> dict[str, np.ndarray]:
-        # sample prior
-        hyperparams = hypersample(rng, d, q)
-        prior = Prior(rng, hyperparams)
-
-        # instantiate design
-        if self.cfg.type in ['toy', 'flat']:
-            design = Synthesizer(rng, toy=(self.cfg.type == 'toy'))
-        elif self.cfg.type in ['sampled']:
-            design = Emulator(rng, source=self.cfg.source, use_sgld=self.cfg.sgld)
-        else:
-            raise NotImplementedError(f'design sampler type {self.cfg.type} is not implemented')
-
-        # instantiate simulator
-        sim = Simulator(rng, prior, design, ns)
-        return sim.sample()
-
-
     def _genBatch(
         self, n_datasets: int, mini_batch_size: int, epoch: int = 0,
     ) -> list[dict[str, np.ndarray]]:
@@ -139,6 +119,27 @@ class Generator:
 
         # number of observations per group
         ns = truncLogUni(rng, low=self.cfg.min_n, high=self.cfg.max_n+1, size=(n_datasets, self.cfg.max_m), round=True)
+    @staticmethod
+    def _genDataset(
+        cfg: argparse.Namespace, seedseq: np.random.SeedSequence, d: int, q: int, ns: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        rng = np.random.default_rng(seedseq)
+
+        # sample prior
+        hyperparams = hypersample(rng, d, q)
+        prior = Prior(rng, hyperparams)
+
+        # instantiate design
+        if cfg.type in ['toy', 'flat']:
+            design = Synthesizer(rng, toy=(cfg.type == 'toy'))
+        elif cfg.type == 'sampled':
+            design = Emulator(rng, source=cfg.source, use_sgld=cfg.sgld)
+        else:
+            raise NotImplementedError(f'design sampler type {cfg.type} is not implemented')
+
+        # sample from simulator
+        sim = Simulator(rng, prior, design, ns)
+        return sim.sample()
 
         # --- loop over single datasets
         for i in iterator:
