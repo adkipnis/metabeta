@@ -92,6 +92,13 @@ class Generator:
         self, n_datasets: int, mini_batch_size: int, epoch: int = 0,
     ) -> list[dict[str, np.ndarray]]:
         ''' generate list of {n_datasets} keep m, d, q constant per minibatch '''
+    def _genSizes(
+        self,
+        rng: np.random.Generator,
+        n_datasets: int,
+        mini_batch_size: int,
+    ) -> tuple[np.ndarray, ...]:
+        ''' batch generate size arrays for dataset sampling '''
         assert n_datasets % mini_batch_size == 0, 'number of datasets must be divisible by mini batch size'
         n_mini_batches = n_datasets // mini_batch_size
 
@@ -119,6 +126,9 @@ class Generator:
 
         # number of observations per group
         ns = truncLogUni(rng, low=self.cfg.min_n, high=self.cfg.max_n+1, size=(n_datasets, self.cfg.max_m), round=True)
+        return d, q, m, ns
+
+
     @staticmethod
     def _genDataset(
         cfg: argparse.Namespace, seedseq: np.random.SeedSequence, d: int, q: int, ns: np.ndarray,
