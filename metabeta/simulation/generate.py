@@ -28,10 +28,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--min_n', type=int, default=10, help='Minimum number of samples per group (default = 10).')
     parser.add_argument('--max_n', type=int, default=70, help='Maximum number of samples per group (default = 70).')
     # partitions and sources
-    parser.add_argument('--partition', type=str, default='val', help='Type of partition in [train, val, test], (default = train)')
+    parser.add_argument('--partition', type=str, default='test', help='Type of partition in [train, val, test], (default = train)')
     parser.add_argument('-b', '--begin', type=int, default=1, help='Begin generating training epoch number #b.')
     parser.add_argument('-e', '--epochs', type=int, default=10, help='Total number of training epochs to generate.')
-    parser.add_argument('--type', type=str, default='flat', help='Type of predictors [toy, flat, scm, sampled], (default = toy)')
+    parser.add_argument('--type', type=str, default='toy', help='Type of predictors [toy, flat, scm, sampled], (default = toy)')
     parser.add_argument('--source', type=str, default='all', help='Source dataset if type==sampled (default = all)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD if type==sampled (default = False)')
     parser.add_argument('--loop', action='store_true', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
@@ -43,7 +43,7 @@ def setup() -> argparse.Namespace:
 @dataclass
 class Generator:
     cfg: argparse.Namespace
-    outdir: Path
+    outdir: Path = Path('..', 'outputs', 'data')
 
     def __post_init__(self):
         self.outdir.mkdir(parents=True, exist_ok=True)
@@ -226,7 +226,6 @@ class Generator:
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
     cfg = setup()
-    outdir = Path('..', 'outputs', 'data')
-    generator = Generator(cfg, outdir)
+    generator = Generator(cfg)
     generator.go()
 
