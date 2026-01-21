@@ -24,3 +24,19 @@ def setup() -> argparse.Namespace:
     return parser.parse_args()
 
 
+@dataclass
+class Fitter:
+    cfg: argparse.Namespace
+    outdir: Path = Path('..', 'outputs', 'data')
+
+    def __post_init__(self):
+        self.cfg.partition = 'test'
+        filename = datasetFilename(self.cfg)
+        path = Path(self.outdir, filename)
+        self.load(path)
+
+    def load(self, path: Path) -> None:
+        assert path.exists(), f'{path} does not exist'
+        with np.load(path, allow_pickle=True) as batch:
+            batch = dict(batch)
+        self.batch = batch
