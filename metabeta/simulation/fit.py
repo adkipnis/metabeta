@@ -43,21 +43,25 @@ class Fitter:
     def __init__(
         self,
         cfg: argparse.Namespace,
-        outdir: Path = Path('..', 'outputs', 'data'),
+        srcdir: Path = Path('..', 'outputs', 'data'),
     ) -> None:
         assert cfg.method in ['nuts', 'advi'], 'fit method must be in [nuts, advi]'
         self.cfg = cfg
-        self.outdir = outdir
+        self.srcdir = srcdir
+        self.outdir = Path(srcdir, 'fits')
+        self.outdir.mkdir(parents=True, exist_ok=True)
 
         # determine path to data
         self.cfg.partition = 'test'
-        filename = datasetFilename(self.cfg)
-        path = Path(self.outdir, filename)
-        assert path.exists(), f'{path} does not exist'
+        self.fname = datasetFilename(self.cfg)
+        self.batch_path = Path(self.srcdir, self.fname)
+        assert self.batch_path.exists(), f'{self.batch_path} does not exist'
 
         # load batch
-        with np.load(path, allow_pickle=True) as batch:
+        with np.load(self.batch_path, allow_pickle=True) as batch:
             self.batch = dict(batch)
+        assert 0 <= self.cfg.idx < len(self), 'idx out of bounds'
+        self.ds = self._get(self.batch)
 
     def __len__(self):
         return len(self.batch['X'])
