@@ -130,11 +130,6 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
     out.update({'X': X, 'Z': Z, 'y': y, 'ns': ns,
                 'mask_d': mask_d, 'mask_q': mask_q, 'mask_n': mask_n})
 
-    # cast integer arrays to int tensors
-    for key in ('ns', 'dperm', 'qperm'):
-        if key in batch[0]:
-            out[key] = quickCollate(batch, key, torch.int64)
-
     # cast params to float tensors
     for key in ('ffx', 'sigma_rfx', 'sigma_eps',
                 'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps'):
@@ -149,7 +144,9 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
  
     # remaining mask handling
     out['mask_m'] = (out['ns'] != 0)
-    if 'dperm' in out:
+    if 'dperm' in batch[0]:
+        out['dperm'] = quickCollate(batch, 'dperm', torch.int64)
+        out['qperm'] = quickCollate(batch, 'qperm', torch.int64)
         out['mask_d'] = torch.gather(out['mask_d'], dim=1, index=out['dperm'])
         out['mask_q'] = torch.gather(out['mask_q'], dim=1, index=out['qperm'])
     return out
