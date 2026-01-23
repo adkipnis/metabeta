@@ -8,7 +8,7 @@ import bambi as bmb
 import arviz as az
 
 from metabeta.utils.io import datasetFilename
-from metabeta.utils.padding import aggregate
+from metabeta.utils.padding import aggregate, unpad
 
 
 def setup() -> argparse.Namespace:
@@ -38,7 +38,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--lr', type=float, default=5e-3, help='Adam learning rate for ADVI (default = 5e-3)')
     return parser.parse_args()
 
-
 class Fitter:
     def __init__(
         self,
@@ -61,11 +60,17 @@ class Fitter:
         with np.load(self.batch_path, allow_pickle=True) as batch:
             self.batch = dict(batch)
         assert 0 <= self.cfg.idx < len(self), 'idx out of bounds'
-        self.ds = self._get(self.batch)
+        self.ds = self._getSingle(self.batch, self.cfg.idx)
 
         # setup outpath
         outname = self._outname(cfg.idx)
         self.outpath = Path(self.outdir, outname)
+
+    def _getSingle(self, batch: dict[str, np.ndarray], idx: int) -> dict[str, np.ndarray]:
+        ''' extract single dataset at index {idx} and unpad'''
+        ds = {k: v[idx] for k,v in batch.items()}
+        sizes = {k: ds[k] for k in list('dqmn')}
+        return unpad(ds, sizes)
 
     def __len__(self) -> int:
         return len(self.batch['y'])
@@ -73,30 +78,6 @@ class Fitter:
     def _outname(self, idx: int) -> str:
         stem = self.batch_path.stem
         return f'{stem}_{self.cfg.method}_{idx:03d}.npz'
-
-    def _get(self, batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        ''' extract a single dataset from batch and remove padding '''
-        ds = {k: v[self.cfg.idx] for k,v in batch.items()}
-
-        # --- unpad
-        d, q, m, n = ds['d'], ds['q'], ds['m'], ds['n']
-
-        # observations
-        ds['y'] = ds['y'][:n]
-        ds['X'] = ds['X'][:n, :d]
-        ds['groups'] = ds['groups'][:n]
-        ds['ns'] = ds['ns'][:m]
-
-        # hyperparams
-        ds['nu_ffx'] = ds['nu_ffx'][:d]
-        ds['tau_ffx'] = ds['tau_ffx'][:d]
-        ds['tau_rfx'] = ds['tau_rfx'][:q]
-
-        # params
-        ds['ffx'] = ds['ffx'][:d]
-        ds['sigma_rfx'] = ds['sigma_rfx'][:q]
-        ds['rfx'] = ds['rfx'][:m, :q]
-        return ds
 
     def _pandify(self, ds: dict[str, np.ndarray]) -> pd.DataFrame:
         ''' get observations as dataframe '''
