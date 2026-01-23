@@ -63,7 +63,7 @@ class Collection(Dataset):
         # get dataset (without fit statistics)
         ds = {k: v[idx] for k,v in self.raw.items()
                         if not (k.startswith('nuts') or k.startswith('advi'))}
-        ns = ds['ns'] # backup padded counts for use in collator
+        # ns = ds['ns'] # backup padded counts for use in collator
  
         # unpad m/n but keep d/q maximal
         sizes = {k: ds[k] for k in ('m', 'n')}
@@ -73,7 +73,7 @@ class Collection(Dataset):
 
         # init rfx design matrix and re-insert max-padded ns
         ds['Z'] = ds['X'][..., : self.q].copy()
-        ds['ns'] = ns
+        # ds['ns'] = ns
 
         # optionally permute
         if self.permute:
@@ -109,7 +109,7 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
     d_ = np.arange(d)
     q_ = np.arange(q)
     n_i_ = torch.arange(n_i).unsqueeze(0)
-    
+
     # deepen (batch, obs, feat) -> (batch, group, group_obs, feat)
     y = torch.zeros((B, m, n_i), dtype=dtype)
     X = torch.zeros((B, m, n_i, d), dtype=dtype)
@@ -121,7 +121,7 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
     for b, ds in enumerate(batch):
         mask_d[b] = torch.as_tensor(d_ < ds['d'])
         mask_q[b] = torch.as_tensor(q_ < ds['q'])
-        ns[b] = torch.as_tensor(ds['ns'][:m])
+        ns[b, :ds['m']] = torch.as_tensor(ds['ns'])
         idx = torch.as_tensor(n_i_ < ns[b].unsqueeze(-1))
         y[b, idx] = torch.as_tensor(ds['y'], dtype=dtype)
         X[b, idx] = torch.as_tensor(ds['X'], dtype=dtype)
