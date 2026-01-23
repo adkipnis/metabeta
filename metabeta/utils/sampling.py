@@ -71,3 +71,13 @@ def wishartCorrelation(
     np.fill_diagonal(C, 1.)
     return C
 
+
+def samplePermutation(
+    rng: np.random.Generator,
+    d: int,
+):
+    perm = rng.permutation(d-1)+1
+    zero = np.zeros((1,), dtype=int)
+    perm = np.concatenate([zero, perm])
+    return perm
+
