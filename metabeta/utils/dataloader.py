@@ -138,3 +138,10 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
                 'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps'):
         out[key] = quickCollate(batch, key, dtype)
 
+    # extra treatment for rfx due to m dimension
+    rfx = torch.zeros((B, m, q), dtype=dtype)
+    for b, ds in enumerate(batch):
+        idx = torch.as_tensor(np.arange(m) < ds['m'])
+        rfx[b, idx] = torch.as_tensor(ds['rfx'], dtype=dtype)
+    out['rfx'] = rfx
+ 
