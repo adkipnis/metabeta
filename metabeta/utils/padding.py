@@ -41,3 +41,32 @@ def aggregate(batch: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
             dest[slc] = src
     return out
 
+
+def unpad(ds: dict[str, np.ndarray], sizes: dict[str, int]) -> dict[str, np.ndarray]:
+    d, q, m, n = sizes['d'], sizes['q'], sizes['m'], sizes['n']
+
+    # observations
+    ds['y'] = ds['y'][:n]
+    ds['X'] = ds['X'][:n, :d]
+    ds['groups'] = ds['groups'][:n]
+    ds['ns'] = ds['ns'][:m]
+
+    # hyperparams
+    ds['nu_ffx'] = ds['nu_ffx'][:d]
+    ds['tau_ffx'] = ds['tau_ffx'][:d]
+    ds['tau_rfx'] = ds['tau_rfx'][:q]
+
+    # params
+    ds['ffx'] = ds['ffx'][:d]
+    ds['sigma_rfx'] = ds['sigma_rfx'][:q]
+    ds['rfx'] = ds['rfx'][:m, :q]
+    return ds
+
+# def extractSingle(
+#     batch: dict[str, np.ndarray],
+#     idx: int,
+# ) -> dict[str, np.ndarray]:
+#     ''' extract a single dataset from batch and remove padding '''
+#     ds = {k: v[idx] for k,v in batch.items()}
+#     d, q, m, n = ds['d'], ds['q'], ds['m'], ds['n']
+
