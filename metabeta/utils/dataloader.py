@@ -128,3 +128,13 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
     out.update({'X': X, 'Z': Z, 'y': y,
                 'mask_d': mask_d, 'mask_q': mask_q, 'mask_n': mask_n})
 
+    # cast integer arrays to int tensors
+    for key in ('ns', 'dperm', 'qperm'):
+        if key in batch[0]:
+            out[key] = quickCollate(batch, key, torch.int32)
+
+    # cast params to float tensors
+    for key in ('ffx', 'sigma_rfx', 'sigma_eps',
+                'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps'):
+        out[key] = quickCollate(batch, key, dtype)
+
