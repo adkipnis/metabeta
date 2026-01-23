@@ -97,3 +97,16 @@ def quickCollate(batch: list[dict[str, np.ndarray]], key: str, dtype=torch.float
     return torch.stack(tensors, dim=0)
 
 
+def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> dict[str, torch.Tensor]:
+    out: dict[str, torch.Tensor] = {}
+    B = len(batch)
+    m = int(max(ds['m'] for ds in batch))
+    n_i = int(max(max(ds['ns'][: ds['m']]) for ds in batch))
+    d = int(batch[0]['X'].shape[-1]) # X is max-padded in last dim
+    q = int(batch[0]['Z'].shape[-1]) # same for Z
+
+    # helpers for deepening
+    n_i_ = np.arange(n_i)[None, :]
+    d_ = np.arange(d)
+    q_ = np.arange(q)
+
