@@ -15,3 +15,31 @@ class Collection(Dataset):
     ):
         super().__init__()
 
+        # load data
+        assert path.exists(), f'{path} does not exist'
+        with np.load(path, allow_pickle=True) as raw:
+            self.raw = dict(raw)
+        self.has_params = 'ffx' in self.raw
+
+        # quickly assert that group indices are ascending from 0 to m-1
+        self._groupCheck(len(self))
+    def __len__(self) -> int:
+        return len(self.raw['y'])
+ 
+    def _groupCheck(self, n_datasets: int = 8):
+        ''' quick sanity check that group indices are contiguous '''
+        n_datasets = min(n_datasets, len(self))
+        checks = np.zeros((n_datasets,), dtype=bool)
+        for i in range(n_datasets):
+            m = self.raw['m'][i]
+            n = self.raw['n'][i]
+            ns = self.raw['ns'][i].astype(int, copy=False)
+            g = self.raw['groups'][i, :n].astype(int, copy=False)
+            diffs = np.diff(g)
+            ascending = (0 <= diffs).all() and (diffs <= 1).all()
+            correct_borders = (g[0] == 0 and g[-1] == m - 1)
+            sums_to_n = (ns.sum() == n)
+            ns_padded = (ns[m:] == 0).all()
+            checks[i] = (ascending and correct_borders and sums_to_n and ns_padded)
+        assert checks.all(), 'group indices are not structured correctly'
+
