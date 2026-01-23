@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from metabeta.simulation import Generator
+from metabeta.utils.padding import maxShapes, aggregate
 
 
 def make_cfg(**overrides: Any) -> argparse.Namespace:
@@ -58,14 +59,14 @@ def test_max_shapes_simple(tmp_path: Path):
         {"a": np.zeros((4, 1)), "b": np.zeros((2,))},
         {"a": np.zeros((1, 7)), "b": np.zeros((9,))},
     ]
-    shapes = g._maxShapes(batch)
+    shapes = maxShapes(batch)
     assert shapes["a"] == (4, 7)
     assert shapes["b"] == (9,)
 
 
 def test_max_shapes_ndim_mismatch_raises(tmp_path: Path):
     """
-    Current Generator._maxShapes asserts ndim consistency per key.
+    Current maxShapes asserts ndim consistency per key.
     If you later adopt the "align dims with ones" robust version, remove this test.
     """
     cfg = make_cfg()
@@ -76,7 +77,7 @@ def test_max_shapes_ndim_mismatch_raises(tmp_path: Path):
         {"a": np.zeros((3, 2, 1))},  # ndim mismatch
     ]
     with pytest.raises(AssertionError, match="ndim mismatch"):
-        _ = g._maxShapes(batch)
+        _ = maxShapes(batch)
 
 
 def test_aggregate_zero_padding(tmp_path: Path):
@@ -87,7 +88,7 @@ def test_aggregate_zero_padding(tmp_path: Path):
         {"x": np.ones((2, 3), dtype=np.float32), "y": np.array([1, 2], dtype=np.int64)},
         {"x": np.ones((1, 5), dtype=np.float32) * 2.0, "y": np.array([9], dtype=np.int64)},
     ]
-    out = g._aggregate(batch)
+    out = aggregate(batch)
 
     # shapes: x -> (bs, 2, 5), y -> (bs, 2)
     assert out["x"].shape == (2, 2, 5)
