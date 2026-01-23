@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+
 from metabeta.models.transformers import MAB, ISAB
 from metabeta.utils.initializers import getInitializer
 

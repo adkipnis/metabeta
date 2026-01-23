@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
+
 from metabeta.utils.activations import getActivation
 from metabeta.utils.initializers import (
     getInitializer, zeroInitializer, lastZeroInitializer, weightNormInitializer)

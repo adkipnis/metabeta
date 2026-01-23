@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+
 from metabeta.utils.initializers import zeroInitializer
 from metabeta.models.feedforward import TransformerFFN
 
