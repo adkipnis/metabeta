@@ -145,3 +145,11 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
         rfx[b, idx] = torch.as_tensor(ds['rfx'], dtype=dtype)
     out['rfx'] = rfx
  
+    # remaining mask handling
+    out['mask_m'] = (out['ns'] != 0)
+    if 'dperm' in out:
+        out['mask_d'] = torch.gather(out['mask_d'], dim=1, index=out['dperm'])
+        out['mask_q'] = torch.gather(out['mask_q'], dim=1, index=out['qperm'])
+    return out
+
+
