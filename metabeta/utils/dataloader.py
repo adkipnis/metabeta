@@ -91,3 +91,9 @@ class Collection(Dataset):
 
         return ds
 
+
+def quickCollate(batch: list[dict[str, np.ndarray]], key: str, dtype=torch.float32) -> torch.Tensor:
+    tensors = [torch.as_tensor(ds[key], dtype=dtype) for ds in batch]
+    return torch.stack(tensors, dim=0)
+
+
