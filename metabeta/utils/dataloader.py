@@ -23,6 +23,19 @@ class Collection(Dataset):
 
         # quickly assert that group indices are ascending from 0 to m-1
         self._groupCheck(len(self))
+
+        # shapes
+        self.d = int(self.raw['d'].max()) # fixed effects
+        self.q = int(self.raw['q'].max()) # random effects
+
+        # feature permutations
+        self.permute = permute and self.has_params
+        if self.permute:
+            rng = np.random.default_rng(0)
+            self.dperm = [samplePermutation(rng, self.d) for _ in range(len(self))]
+            self.qperm = [samplePermutation(rng, self.q) for _ in range(len(self))]
+
+
     def __len__(self) -> int:
         return len(self.raw['y'])
  
