@@ -155,9 +155,12 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
 class Dataloader(DataLoader):
     ''' Wrapper for torch dataloader '''
     def __init__(self, path: Path, batch_size: int | None = 1,):
+        col = Collection(path)
         not_mps = (torch.accelerator.current_accelerator().type != 'mps') # type: ignore
+        if batch_size is not None:
+            batch_size = min(batch_size, len(col))
         super().__init__(
-            dataset=Collection(path),
+            dataset=col,
             batch_size=batch_size,
             shuffle=False,
             pin_memory=not_mps,
@@ -174,8 +177,9 @@ if __name__ == '__main__':
     path = Path('..', 'outputs', 'data', fname)
     col = Collection(path)
     print(col)
-    dl = Dataloader(path, batch_size=256)
+    dl = Dataloader(path, batch_size=500)
     minibatch = next(iter(dl))
     for k,v in minibatch.items():
         print(f'{k}: {v.numpy().shape}')
     print(dl)
+    
