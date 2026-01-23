@@ -56,3 +56,6 @@ class Collection(Dataset):
             checks[i] = (ascending and correct_borders and sums_to_n and ns_padded)
         assert checks.all(), 'group indices are not structured correctly'
 
+    def __repr__(self) -> str:
+        return f'Collection({len(self)} datasets, max(fixed)={self.d}, max(random)={self.q})'
+
