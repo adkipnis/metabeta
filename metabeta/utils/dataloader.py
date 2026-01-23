@@ -59,3 +59,35 @@ class Collection(Dataset):
     def __repr__(self) -> str:
         return f'Collection({len(self)} datasets, max(fixed)={self.d}, max(random)={self.q})'
 
+    def __getitem__(self, idx: int) -> dict[str, np.ndarray]:
+        # get dataset (without fit statistics)
+        ds = {k: v[idx] for k,v in self.raw.items()
+                        if not (k.startswith('nuts') or k.startswith('advi'))}
+        ns = ds['ns'] # backup padded counts for use in collator
+ 
+        # unpad m/n but keep d/q maximal
+        sizes = {k: ds[k] for k in ('m', 'n')}
+        sizes['d'] = self.d
+        sizes['q'] = self.q
+        ds = unpad(ds, sizes)
+
+        # init rfx design matrix and re-insert max-padded ns
+        ds['Z'] = ds['X'][..., : self.q].copy()
+        ds['ns'] = ns
+
+        # optionally permute
+        if self.permute:
+            # fixed effects and related
+            dperm = self.dperm[idx]
+            for key in ('X', 'ffx', 'nu_ffx', 'tau_ffx'):
+                ds[key] = ds[key][..., dperm]
+            ds['dperm'] = dperm
+
+            # random effects and related
+            qperm = self.qperm[idx]
+            for key in ('Z', 'rfx', 'sigma_rfx', 'tau_rfx'):
+                ds[key] = ds[key][..., qperm]
+            ds['qperm'] = qperm
+
+        return ds
+
