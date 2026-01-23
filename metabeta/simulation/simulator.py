@@ -103,8 +103,9 @@ class Simulator:
             **hyperparams,
 
             # observations
-            **obs,
             'y': y,
+            'X': obs['X'],
+            'groups': obs['groups'],
 
             # dimensions
             'm': self.m,
