@@ -106,10 +106,10 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
     q = int(batch[0]['Z'].shape[-1]) # same for Z
 
     # helpers for deepening
-    n_i_ = np.arange(n_i)[None, :]
     d_ = np.arange(d)
     q_ = np.arange(q)
-
+    n_i_ = torch.arange(n_i).unsqueeze(0)
+    
     # deepen (batch, obs, feat) -> (batch, group, group_obs, feat)
     y = torch.zeros((B, m, n_i), dtype=dtype)
     X = torch.zeros((B, m, n_i, d), dtype=dtype)
@@ -117,15 +117,17 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
     mask_n = torch.zeros((B, m, n_i), dtype=torch.bool)
     mask_d = torch.zeros((B, d), dtype=torch.bool)
     mask_q = torch.zeros((B, q), dtype=torch.bool)
+    ns = torch.zeros((B, m), dtype=torch.int64)
     for b, ds in enumerate(batch):
         mask_d[b] = torch.as_tensor(d_ < ds['d'])
         mask_q[b] = torch.as_tensor(q_ < ds['q'])
-        idx = torch.as_tensor(n_i_ < ds['ns'][:, None])
+        ns[b] = torch.as_tensor(ds['ns'][:m])
+        idx = torch.as_tensor(n_i_ < ns[b].unsqueeze(-1))
         y[b, idx] = torch.as_tensor(ds['y'], dtype=dtype)
         X[b, idx] = torch.as_tensor(ds['X'], dtype=dtype)
         Z[b, idx] = torch.as_tensor(ds['Z'], dtype=dtype)
         mask_n[b] = idx
-    out.update({'X': X, 'Z': Z, 'y': y,
+    out.update({'X': X, 'Z': Z, 'y': y, 'ns': ns,
                 'mask_d': mask_d, 'mask_q': mask_q, 'mask_n': mask_n})
 
     # cast integer arrays to int tensors
