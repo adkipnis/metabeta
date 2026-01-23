@@ -28,11 +28,6 @@ class MHA(nn.Module):
         value: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        # prepare mask
-        kpd = None
-        if mask is not None:
-            kpd = ~mask
-
         # prepare inputs
         if key is None:
             key = query
@@ -41,7 +36,7 @@ class MHA(nn.Module):
 
         # forward pass
         h, _ = self.mha(query, key, value,
-                        key_padding_mask=kpd)
+                        key_padding_mask=mask)
         return self.dropout(h)
 
 
@@ -165,5 +160,5 @@ if __name__ == '__main__':
 
     model = ISAB(d_model, d_ff, n_inducing=32)
     model.eval()
-    out = model(x, mask=mask)
+    out = model(x, mask=~mask)
 

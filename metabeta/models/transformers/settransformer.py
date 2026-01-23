@@ -109,12 +109,16 @@ class SetTransformer(nn.Module):
         # optionally reshape inputs
         old_shape = x.shape
         x, mask = self._reshape(x, mask)
-
+        
         # linear embedding
         x = self.proj_in(x)
 
         # insert token
         x, mask = self._insertToken(x, mask)
+
+        # invert mask to signal True -> skip
+        if mask is not None:
+            mask = ~mask
 
         # attend
         for block in self.blocks:
