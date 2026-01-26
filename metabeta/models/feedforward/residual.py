@@ -166,8 +166,16 @@ class FlowResidualNet(nn.Module):
             zero_init=True,
         )
 
-    def forward(self, x: torch.Tensor,
-                context: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self, 
+        x: torch.Tensor,
+        context: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+        if mask is not None and context is not None:
+            context = torch.cat([mask, context], dim=-1)
+        elif mask is not None:
+            context = mask
         return self.net(x, context)
 
 

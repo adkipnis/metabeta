@@ -197,9 +197,17 @@ class FlowMLP(nn.Module):
             weight_norm=True,
         )
 
-    def forward(self, x: torch.Tensor,
-                context: torch.Tensor | None = None) -> torch.Tensor:
-        if context is not None:
+    def forward(
+        self,
+        x: torch.Tensor,
+        context: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
+        ) -> torch.Tensor:
+        if (mask is not None) and (context is not None):
+            x = torch.cat([x, mask, context], dim=-1)
+        elif mask is not None:
+            x = torch.cat([x, mask], dim=-1)
+        elif context is not None:
             x = torch.cat([x, context], dim=-1)
         return self.net(x)
 
