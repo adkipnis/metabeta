@@ -382,10 +382,10 @@ class RationalQuadratic(CouplingTransform):
 
 
     def _searchSorted(
-            self, reference: torch.Tensor, target: torch.Tensor, eps: float = 1e-6,
+            self, reference: torch.Tensor, target: torch.Tensor
     ) -> torch.Tensor:
-        reference = reference.detach() # bin-assignment is not differentiable
-        reference[..., -1] += eps
+        reference = reference.detach().clone()
+        reference[..., -1] = reference[..., -1] + self.eps
         idx = torch.searchsorted(reference, target.unsqueeze(-1), right=True) - 1
         return idx
 
