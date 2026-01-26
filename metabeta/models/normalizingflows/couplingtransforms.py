@@ -259,8 +259,8 @@ class RationalQuadratic(CouplingTransform):
             derivatives=derivatives,
         )
 
-    def forward(self, x1, x2, context=None, mask2=None, inverse=False):
-        raw = self._propose(x1, context)
+    def forward(self, x1, x2, context=None, mask1=None, mask2=None, inverse=False):
+        raw = self._propose(x1, context, mask1)
         params = self._constrain(raw)
 
         # construct boundary masks
@@ -268,10 +268,10 @@ class RationalQuadratic(CouplingTransform):
         left, total_width, bottom, total_height = (t.squeeze(-1) for t in bounds)
         if inverse:
             top = bottom + total_height
-            inside = (bottom <= x2) & (x2 <= top)
+            inside = (bottom <= x2) & (x2 < top)
         else:
             right = left + total_width
-            inside = (left <= x2) & (x2 <= right)
+            inside = (left <= x2) & (x2 < right)
         outside = ~inside
 
         # incorporate mask
@@ -281,15 +281,17 @@ class RationalQuadratic(CouplingTransform):
 
         # init outputs
         log_det = torch.zeros_like(x2)
-        z2 = torch.zeros_like(x2)
+        z2 = x2.clone()
 
         # apply spline transform
-        z2[inside], log_det[inside] = self._spline(
-            x2, params, inside, inverse=inverse)
+        if inside.any():
+            z2[inside], log_det[inside] = self._spline(
+                x2, params, inside, inverse=inverse)
 
         # apply affine transform
-        z2[outside], log_det[outside] = self._affine(
-            x2, params, outside, inverse=inverse)
+        if outside.any():
+            z2[outside], log_det[outside] = self._affine(
+                x2, params, outside, inverse=inverse)
         return z2, log_det.sum(-1)
 
     def _spline(
