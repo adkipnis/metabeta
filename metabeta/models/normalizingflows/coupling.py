@@ -29,14 +29,15 @@ class Coupling(nn.Module):
 
     def forward(self, x1: torch.Tensor, x2: torch.Tensor,
                  context: torch.Tensor | None = None,
+                 mask1: torch.Tensor | None = None,
                  mask2: torch.Tensor | None = None,
                  inverse: bool = False):
         x2, log_det = self.transform(
-            x1, x2, context=context, mask2=mask2, inverse=inverse)
+            x1, x2, context=context, mask1=mask1, mask2=mask2, inverse=inverse)
         return (x1, x2), log_det
 
-    def inverse(self, x1, x2, context=None, mask2=None):
-        return self(x1, x2, context, mask2, inverse=True)
+    def inverse(self, x1, x2, context=None, mask1=None, mask2=None):
+        return self(x1, x2, context, mask1, mask2, inverse=True)
 
 
 class DualCoupling(Transform):
@@ -78,11 +79,11 @@ class DualCoupling(Transform):
         if mask is not None:
             mask1, mask2 = self._split(mask)
         if inverse:
-            (x2, x1), log_det2 = self.coupling2.inverse(x2, x1, context, mask1)
-            (x1, x2), log_det1 = self.coupling1.inverse(x1, x2, context, mask2)
+            (x2, x1), log_det2 = self.coupling2.inverse(x2, x1, context, mask2, mask1)
+            (x1, x2), log_det1 = self.coupling1.inverse(x1, x2, context, mask1, mask2)
         else:
-            (x1, x2), log_det1 = self.coupling1.forward(x1, x2, context, mask2)
-            (x2, x1), log_det2 = self.coupling2.forward(x2, x1, context, mask1)
+            (x1, x2), log_det1 = self.coupling1.forward(x1, x2, context, mask1, mask2)
+            (x2, x1), log_det2 = self.coupling2.forward(x2, x1, context, mask2, mask1)
         x = torch.cat([x1, x2], dim=-1)
         log_det = log_det1 + log_det2
         return x, log_det, mask
