@@ -128,25 +128,28 @@ class RationalQuadratic(CouplingTransform):
         d_context: int,
         subnet_kwargs: dict | None = None,
         n_bins: int = 8,
-        default_domain: float = 3.0,
-        min_total: float = 2.0,
+        default_size: float = 2.0,
+        min_total: float = 0.5,
+        min_rel: float = 0.5,
+        max_rel: float = 1.0,
         min_bin: float = 0.1,
-        eps: float = 1e-6, # for clamping xi
+        eps: float = 1e-6, # for clamping
     ):
         super().__init__()
         self.split_dims = split_dims
         self.d_context = d_context
         self.n_bins = n_bins
         self.n_params_per_dim = (3 * self.n_bins + 3)
-        self.default_left = -default_domain
-        self.default_bottom = -default_domain
-        self.default_width = 2 * default_domain
-        self.default_height = 2 * default_domain
+        self.default_left = -default_size
+        self.default_bottom = -default_size
+        self.default_width = 2 * default_size
+        self.default_height = 2 * default_size
         self.min_total = min_total
+        self.min_rel = min_rel
+        self.max_rel = max_rel
         self.min_bin = min_bin
         self.eps = eps
         self._shift = np.log(np.e - 1)
-        self._sin_shift = np.sinh(1) * np.log(np.e - 1)
 
         # safely handle subnet_cfg
         if subnet_kwargs is None:
@@ -164,7 +167,7 @@ class RationalQuadratic(CouplingTransform):
         # MLP Conditioner
         if net_type == 'mlp':
             subnet_kwargs.update({
-                'd_input': self.split_dims[0] + self.d_context,
+                'd_input': 2 * self.split_dims[0] + self.d_context,
                 'd_hidden': (subnet_kwargs['d_ff'],) * subnet_kwargs['depth'],
             })
             subnet_kwargs.pop('d_ff')
@@ -175,7 +178,7 @@ class RationalQuadratic(CouplingTransform):
         elif net_type == 'residual':
             subnet_kwargs.update({
                 'd_input': self.split_dims[0],
-                'd_context': self.d_context,
+                'd_context': self.split_dims[0] + self.d_context,
                 'd_hidden': subnet_kwargs['d_ff'],
             })
             subnet_kwargs.pop('d_ff')
