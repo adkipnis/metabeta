@@ -393,7 +393,7 @@ class RationalQuadratic(CouplingTransform):
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
-    torch.manual_seed(0)
+    # torch.manual_seed(3)
 
     b = 1
     split_dims = (5,3)
@@ -419,7 +419,7 @@ if __name__ == '__main__':
 
     # plot single spline
     with torch.no_grad():
-        n_bins=16
+        n_bins = 16
         b = 512
         split_dims = (5,1)
         rq = RationalQuadratic(split_dims, d_context, NET_KWARGS, n_bins=n_bins)
