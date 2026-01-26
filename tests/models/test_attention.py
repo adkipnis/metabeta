@@ -46,10 +46,10 @@ def test_mha_forward_with_key_value(batch, context):
 
 def test_mha_forward_with_mask(batch, mask):
     model = MHA(d_model=16)
-    out1 = model(batch, mask=~mask)
+    out1 = model(batch, key_padding_mask=~mask)
     mask_clone = mask.clone()
     mask_clone[..., 0] = False  # mask first element
-    out2 = model(batch, mask=~mask_clone)
+    out2 = model(batch, key_padding_mask=~mask_clone)
     # outputs where mask is True should be similar if inputs unchanged
     assert torch.isfinite(out1).all()
     assert torch.isfinite(out2).all()
@@ -70,11 +70,11 @@ def test_mha_backward(batch):
 def test_mha_mask_behavior(batch):
     model = MHA(d_model=16)
     mask = torch.ones((batch.shape[0], batch.shape[1]), dtype=torch.bool)
-    out_full = model(batch, mask=~mask)
+    out_full = model(batch, key_padding_mask=~mask)
     mask[..., 0] = False
     batch_mod = batch.clone()
     batch_mod[..., 0] = -99.  # entry should not affect output
-    out_masked = model(batch_mod, mask=~mask)
+    out_masked = model(batch_mod, key_padding_mask=~mask)
     # masked entries should not affect attended outputs
     assert torch.allclose(out_full[mask], out_masked[mask], atol=1e-5)
 
@@ -121,7 +121,7 @@ def test_isab_forward_shape(batch, mask):
     model = ISAB(d_model=16, d_ff=64, n_inducing=32)
     out = model(batch)
     assert out.shape == batch.shape
-    out_masked = model(batch, mask=~mask)
+    out_masked = model(batch, key_padding_mask=~mask)
     assert out_masked.shape == batch.shape
     assert torch.isfinite(out_masked).all()
 
