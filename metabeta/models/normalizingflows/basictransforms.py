@@ -129,14 +129,15 @@ class LU(Transform):
 
     def _getLU(self, mask: torch.Tensor | None, b: int, d: int):
         device = self.bias.device
+        dtype = self.bias.dtype
 
         # construct
-        lower = torch.zeros(self.d_target, self.d_target, device=device)
+        lower = torch.zeros(self.d_target, self.d_target, device=device, dtype=dtype)
         lower[self.lower_indices[0], self.lower_indices[1]] = self.lower_entries
         lower[self.diag_indices[0], self.diag_indices[1]] = (
             1.0  # WLOG because the diagonal of U is can absorb the diagonal of L
         )
-        upper = torch.zeros(self.d_target, self.d_target, device=device)
+        upper = torch.zeros(self.d_target, self.d_target, device=device, dtype=dtype)
         upper[self.upper_indices[0], self.upper_indices[1]] = self.upper_entries
         upper[self.diag_indices[0], self.diag_indices[1]] = self.upper_diag
 
