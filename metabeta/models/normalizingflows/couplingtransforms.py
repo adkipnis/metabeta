@@ -321,6 +321,7 @@ class RationalQuadratic(CouplingTransform):
         y_k_delta = heights.gather(-1, idx).squeeze(-1)
         y_k = cumheights.gather(-1, idx).squeeze(-1)
         delta = heights / widths
+        delta = torch.clamp(delta, min=1.0)
         s_k = delta.gather(-1, idx).squeeze(-1)
         d_k_0 = derivatives.gather(-1, idx).squeeze(-1)
         d_k_1 = derivatives[..., 1:].gather(-1, idx).squeeze(-1)
@@ -393,7 +394,7 @@ class RationalQuadratic(CouplingTransform):
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
-    # torch.manual_seed(3)
+    torch.manual_seed(1)
 
     b = 1
     split_dims = (5,3)
