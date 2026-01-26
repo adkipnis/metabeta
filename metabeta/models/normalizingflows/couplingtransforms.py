@@ -211,9 +211,9 @@ class RationalQuadratic(CouplingTransform):
         bottom = bottom + self.default_bottom
 
         # upper bounds (individually scale default total width resp. height)
-        relative_width = torch.asinh(F.softplus(total_width + self._sin_shift))
+        relative_width = self.min_rel + (self.max_rel - self.min_rel) * torch.sigmoid(total_width / self.max_rel)
         total_width = self.min_total + (self.default_width - self.min_total) * relative_width
-        relative_height = torch.asinh(F.softplus(total_height + self._sin_shift))
+        relative_height = self.min_rel + (self.max_rel - self.min_rel) * torch.sigmoid(total_height / self.max_rel)
         total_height = self.min_total + (self.default_height - self.min_total) * relative_height
 
         bounds = torch.cat([left, total_width, bottom, total_height], dim=-1)
@@ -244,7 +244,7 @@ class RationalQuadratic(CouplingTransform):
         bias = bias.squeeze(-1)
 
         # --- derivatives
-        derivatives = 1e-3 + F.softplus(derivatives)
+        derivatives = 1e-3 + F.softplus(derivatives + self._shift)
         derivatives = F.pad(derivatives, (1,1))
         derivatives[..., 0] = derivatives[..., -1] = weight
 
