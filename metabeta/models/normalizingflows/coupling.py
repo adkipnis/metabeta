@@ -110,6 +110,7 @@ class CouplingFlow(nn.Module):
         subnet_kwargs: dict | None = None
     ):
         super().__init__()
+        assert d_target >= 2, 'Coupling Flow requires at least 2-dim target'
         self.d_target = d_target
         self.base_dist = BaseDist(d_target, family=family, trainable=trainable)
         flows = []
@@ -208,6 +209,6 @@ class CouplingFlow(nn.Module):
         x, log_det, _ = self.inverse(z, context, mask_z)
 
         # get probability in x-space
-        log_q = self.logProb(z, log_det, mask_z)
-        return x, log_q
+        log_prob = self.logProb(z, log_det, mask_z)
+        return x, log_prob
 
