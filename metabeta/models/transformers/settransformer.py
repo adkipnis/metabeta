@@ -110,7 +110,7 @@ class SetTransformer(nn.Module):
         # optionally reshape inputs
         old_shape = x.shape
         x, mask = self._reshape(x, mask)
-        
+ 
         # linear embedding
         x = self.proj_in(x)
 
@@ -123,7 +123,7 @@ class SetTransformer(nn.Module):
 
         # attend
         for block in self.blocks:
-            x = block(x, mask=mask)
+            x = block(x, key_padding_mask=mask)
         x = self.norm(x)
 
         # pool by extracting token

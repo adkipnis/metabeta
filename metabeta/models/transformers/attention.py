@@ -27,7 +27,7 @@ class MHA(nn.Module):
         query: torch.Tensor,
         key: torch.Tensor | None = None,
         value: torch.Tensor | None = None,
-        mask: torch.Tensor | None = None,
+        key_padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # prepare inputs
         if key is None:
@@ -37,7 +37,7 @@ class MHA(nn.Module):
 
         # forward pass
         h, _ = self.mha(query, key, value,
-                        key_padding_mask=mask)
+                        key_padding_mask=key_padding_mask)
         return self.dropout(h)
 
 
@@ -86,16 +86,16 @@ class MAB(nn.Module):
         self,
         x: torch.Tensor, # (batch, seq_len, d_model)
         z: torch.Tensor | None = None, # (batch, seq_len, d_model)
-        mask: torch.Tensor | None = None, # (batch, seq_len)
+        key_padding_mask: torch.Tensor | None = None, # (batch, seq_len)
     ) -> torch.Tensor:
         if self.pre_norm:
             h = self.mha(self.norm0(x),
                          self.norm0(z) if z is not None else None,
-                         mask=mask)
+                         key_padding_mask=key_padding_mask)
             x = x + h
             x = x + self.mlp(self.norm1(x))
         else:
-            h = self.mha(x, z, mask=mask)
+            h = self.mha(x, z, key_padding_mask=key_padding_mask)
             x = self.norm0(x + h)
             x = self.norm1(x + self.mlp(x))
         return x
@@ -140,10 +140,10 @@ class ISAB(nn.Module):
     def forward(
         self,
         x: torch.Tensor, # (batch, seq_len, d_model)
-        mask: torch.Tensor | None = None, # (batch, seq_len)
+        key_padding_mask: torch.Tensor | None = None, # (batch, seq_len)
     ) -> torch.Tensor:
         i = self._getI(x)
-        h = self.mab0(i, x, mask=mask)
+        h = self.mab0(i, x, key_padding_mask=key_padding_mask)
         h = self.mab1(x, h)
         return h
 
@@ -161,5 +161,5 @@ if __name__ == '__main__':
 
     model = ISAB(d_model, d_ff, n_inducing=32)
     model.eval()
-    out = model(x, mask=~mask)
+    out = model(x, key_padding_mask=~mask)
 
