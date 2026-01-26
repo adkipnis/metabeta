@@ -184,8 +184,10 @@ class RationalQuadratic(CouplingTransform):
             subnet_kwargs.pop('d_ff')
             self.conditioner = FlowResidualNet(**subnet_kwargs)
 
-    def _propose(self, x1, context=None):
-        params = self.conditioner(x1, context)
+    def _propose(self, x1, context=None, mask1=None):
+        if mask1 is None:
+            mask1 = torch.ones_like(x1)
+        params = self.conditioner(x1, context=context, mask=mask1)
         params = params.reshape(*x1.shape[:-1], self.split_dims[1], -1)
         if self.n_params_per_dim != params.shape[-1]:
             raise ValueError(
