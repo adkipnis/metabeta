@@ -1,13 +1,12 @@
 from pathlib import Path
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
 
 from metabeta.utils.sampling import samplePermutation
 from metabeta.utils.padding import unpad
 
 
-class Collection(Dataset):
+class Collection(torch.utils.data.Dataset):
     def __init__(
         self,
         path: Path,
@@ -152,7 +151,7 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
     return out
 
 
-class Dataloader(DataLoader):
+class Dataloader(torch.utils.data.DataLoader):
     ''' Wrapper for torch dataloader '''
     def __init__(self, path: Path, batch_size: int | None = 1,):
         col = Collection(path)
