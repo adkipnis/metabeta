@@ -23,9 +23,13 @@ class CouplingTransform(nn.Module):
     def _build(self, subnet_kwargs: dict) -> None:
         ...
 
+
     @abstractmethod
     def _propose(
-        self, x1: torch.Tensor, context: torch.Tensor | None = None
+        self,
+        x1: torch.Tensor,
+        context: torch.Tensor | None = None,
+        mask1: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, ...]:
         ...
 
@@ -35,13 +39,14 @@ class CouplingTransform(nn.Module):
         x1: torch.Tensor,
         x2: torch.Tensor,
         context: torch.Tensor | None = None,
+        mask1: torch.Tensor | None = None,
         mask2: torch.Tensor | None = None,
         inverse: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         ...
 
-    def inverse(self, x1, x2, context=None, mask2=None):
-        return self(x1, x2, context, mask2, inverse=True)
+    def inverse(self, x1, x2, context=None, mask1=None, mask2=None):
+        return self(x1, x2, context, mask1, mask2, inverse=True)
 
 
 class Affine(CouplingTransform):
@@ -50,8 +55,8 @@ class Affine(CouplingTransform):
         split_dims: tuple[int, int],
         d_context: int,
         subnet_kwargs: dict | None = None,
-        alpha: float = 1.0, # softclamping scale
-        beta: float = 6.0, # softclamping bias
+        alpha: float = 1.5, # softclamping scale
+        beta: float = 5.0, # softclamping bias
     ):
         super().__init__()
         self.split_dims = split_dims
@@ -71,11 +76,11 @@ class Affine(CouplingTransform):
         net_type = subnet_kwargs.pop('net_type')
         assert net_type in ['mlp', 'residual']
         subnet_kwargs['d_output'] = 2 * self.split_dims[1]
-
+        
         # MLP Conditioner
         if net_type == 'mlp':
             subnet_kwargs.update({
-                'd_input': self.split_dims[0] + self.d_context,
+                'd_input': 2 * self.split_dims[0] + self.d_context,
                 'd_hidden': (subnet_kwargs['d_ff'],) * subnet_kwargs['depth'],
             })
             subnet_kwargs.pop('d_ff')
@@ -86,22 +91,24 @@ class Affine(CouplingTransform):
         elif net_type == 'residual':
             subnet_kwargs.update({
                 'd_input': self.split_dims[0],
-                'd_context': self.d_context,
+                'd_context': self.split_dims[0] + self.d_context,
                 'd_hidden': subnet_kwargs['d_ff'],
             })
             subnet_kwargs.pop('d_ff')
             self.conditioner = FlowResidualNet(**subnet_kwargs)
-
-    def _propose(self, x1, context=None):
-        parameters = self.conditioner(x1, context)
-        log_s, t = parameters.chunk(2, dim=-1)
+    
+    def _propose(self, x1, context=None, mask1=None):
+        if mask1 is None:
+            mask1 = torch.ones_like(x1)
+        params = self.conditioner(x1, context=context, mask=mask1)
+        log_s, t = params.chunk(2, dim=-1)
         # softclamp
-        t = self.beta * torch.tanh(t / self.beta)
         log_s = self.alpha * torch.tanh(log_s / self.alpha)
+        t = self.beta * torch.tanh(t / self.beta)
         return log_s, t
 
-    def forward(self, x1, x2, context=None, mask2=None, inverse=False):
-        log_s, t = self._propose(x1, context)
+    def forward(self, x1, x2, context=None, mask1=None, mask2=None, inverse=False):
+        log_s, t = self._propose(x1, context, mask1)
         if mask2 is not None:
             log_s = log_s * mask2
             t = t * mask2
