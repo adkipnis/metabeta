@@ -20,7 +20,7 @@ For details, please read our [preprint](https://doi.org/10.48550/arXiv.2510.0747
 ## Setup with [uv](https://docs.astral.sh/uv/)
 - uv install
 - source .venv/bin/activate
-- uv develop
+- uv pip install -e .
 
 ## Citing the project
 
