@@ -206,23 +206,15 @@ class RationalQuadratic(CouplingTransform):
             self, params: tuple[torch.Tensor, ...],
             ) -> dict[str, torch.Tensor]:
         bounds, widths, heights, derivatives = params
-        left, total_width, bottom, total_height = bounds.chunk(4, -1)
+        left, right, bottom, top = bounds.chunk(4, -1)
 
         # --- bounds
-        # lower bounds
-        left = left + self.default_left
-        bottom = bottom + self.default_bottom
-
-        # upper bounds (individually scale default total width resp. height)
-        relative_width = self.min_rel + (self.max_rel - self.min_rel) * torch.sigmoid(total_width / self.max_rel)
-        total_width = self.min_total + (self.default_width - self.min_total) * relative_width
-        relative_height = self.min_rel + (self.max_rel - self.min_rel) * torch.sigmoid(total_height / self.max_rel)
-        total_height = self.min_total + (self.default_height - self.min_total) * relative_height
-
-        bounds = torch.cat([left, total_width, bottom, total_height], dim=-1)
-
-        # --- bins
-        # normalize widths to sum to 1
+        left =  self.default_left - torch.asinh(F.softplus(left + self._shift))
+        right = self.default_right + torch.asinh(F.softplus(right + self._shift))
+        bottom = self.default_bottom - torch.asinh(F.softplus(bottom + self._shift))
+        top =  self.default_top + torch.asinh(F.softplus(top + self._shift))
+        bounds = torch.cat([left, right, bottom, top], dim=-1)
+        
         widths = F.softmax(widths, dim=-1)
 
         # shift by min_val and ensure total_width sum
@@ -241,7 +233,7 @@ class RationalQuadratic(CouplingTransform):
         heights = cumheights[..., 1:] - cumheights[..., :-1]
 
         # --- affine params
-        weight = total_height / total_width
+        weight = (top - bottom) / (right - left)
         bias = bottom - weight * left
         weight = weight.squeeze(-1)
         bias = bias.squeeze(-1)
