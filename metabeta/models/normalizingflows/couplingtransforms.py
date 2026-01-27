@@ -250,27 +250,24 @@ class RationalQuadratic(CouplingTransform):
 
         return dict(
             bounds=bounds,
-            widths=widths,
             cumwidths=cumwidths,
-            heights=heights,
             cumheights=cumheights,
+            derivatives=derivatives,
             weight=weight,
             bias=bias,
-            derivatives=derivatives,
         )
+    
 
     def forward(self, x1, x2, context=None, mask1=None, mask2=None, inverse=False):
         raw = self._propose(x1, context, mask1)
         params = self._constrain(raw)
-
+        
         # construct boundary masks
         bounds = params['bounds'].chunk(4, -1)
-        left, total_width, bottom, total_height = (t.squeeze(-1) for t in bounds)
+        left, right, bottom, top = (t.squeeze(-1) for t in bounds)
         if inverse:
-            top = bottom + total_height
             inside = (bottom <= x2) & (x2 < top)
         else:
-            right = left + total_width
             inside = (left <= x2) & (x2 < right)
         outside = ~inside
 
@@ -294,6 +291,7 @@ class RationalQuadratic(CouplingTransform):
                 x2, params, outside, inverse=inverse)
         return z2, log_det.sum(-1)
 
+
     def _spline(
             self,
             x2: torch.Tensor,
@@ -303,12 +301,12 @@ class RationalQuadratic(CouplingTransform):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # unpack and apply mask
         x2 = x2[inside]
-        widths = params['widths'][inside]
         cumwidths = params['cumwidths'][inside]
-        heights = params['heights'][inside]
         cumheights = params['cumheights'][inside]
+        widths = cumwidths[..., 1:] - cumwidths[..., :-1]
+        heights = cumheights[..., 1:] - cumheights[..., :-1]
         derivatives = params['derivatives'][inside]
-
+        
         # map each x to a bin between two knots
         if inverse:
             idx = self._searchSorted(cumheights, x2)
@@ -358,7 +356,8 @@ class RationalQuadratic(CouplingTransform):
         )
         log_det = derivative_numerator.log() - 2 * beta_k.log()
         return z2, ld_factor * log_det
-
+    
+    
     def _affine(
             self,
             x2: torch.Tensor,
@@ -389,8 +388,7 @@ class RationalQuadratic(CouplingTransform):
         reference[..., -1] = reference[..., -1] + self.eps
         idx = torch.searchsorted(reference, target.unsqueeze(-1), right=True) - 1
         return idx
-
-
+    
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
