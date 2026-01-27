@@ -394,10 +394,10 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
     torch.manual_seed(0)
 
-    b = 1
+    b = 64
     split_dims = (5,3)
     d_context = 12
-    n_bins = 16
+    n_bins = 8
 
     NET_KWARGS = {
         'net_type': 'mlp',
@@ -423,7 +423,7 @@ if __name__ == '__main__':
         split_dims = (5,1)
         # Plot
         plt.figure(figsize=(6, 6))
-        for i in range(6):
+        for i in range(8):
             rq = RationalQuadratic(split_dims, d_context, NET_KWARGS, n_bins=n_bins)
             x1 = torch.randn(1, split_dims[0]).expand(b, -1)
             x2 = torch.linspace(-6, 6, b).unsqueeze(-1)
