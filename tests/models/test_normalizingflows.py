@@ -242,6 +242,8 @@ def test_masking_invertibility_and_mask_roundtrip(subnet_kwargs: dict[str, objec
 def test_spline_transform_masking(subnet_kwargs: dict[str, object]):
     dtype = torch.float64
     x = 0.1 * torch.randn((8, 3)).to(dtype)
+    dtype = torch.float32
+    x = torch.randn((16, 3)).to(dtype)
     x[0, -1] = 0.0
     mask = (x != 0.0).to(dtype)
 
