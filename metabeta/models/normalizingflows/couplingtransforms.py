@@ -56,7 +56,7 @@ class Affine(CouplingTransform):
         split_dims: tuple[int, int],
         d_context: int,
         subnet_kwargs: dict | None = None,
-        alpha: float = 1.5, # softclamping scale
+        alpha: float = 1.0, # softclamping scale
         beta: float = 5.0, # softclamping bias
     ):
         super().__init__()
@@ -116,9 +116,10 @@ class Affine(CouplingTransform):
         s = log_s.exp()
         if inverse:
             x2 = (x2 - t) / s
+            log_det = -log_s.sum(-1)
         else:
             x2 = s * x2 + t
-        log_det = log_s.sum(-1)
+            log_det = log_s.sum(-1)
         return x2, log_det
 
 
