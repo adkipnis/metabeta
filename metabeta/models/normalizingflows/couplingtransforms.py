@@ -215,22 +215,26 @@ class RationalQuadratic(CouplingTransform):
         top =  self.default_top + torch.asinh(F.softplus(top + self._shift))
         bounds = torch.cat([left, right, bottom, top], dim=-1)
         
+        # --- widths
+        # 1. normalize widths to sum to 1
+        # 2. shift by min_val and ensure total_width sum to 1
+        # 3. stretch to [left, right]
         widths = F.softmax(widths, dim=-1)
-
-        # shift by min_val and ensure total_width sum
-        widths = self.min_bin + (total_width - self.n_bins * self.min_bin) * widths
-
-        # stretch to [left, left + total_width]
-        cumwidths = widths.cumsum(-1)
-        cumwidths = left + F.pad(cumwidths, (1,0))
-        widths = cumwidths[..., 1:] - cumwidths[..., :-1]
-
-        # do the same with heights
+        widths = self.min_bin + (1 - self.min_bin * self.n_bins) * widths
+        cumwidths = torch.cumsum(widths, dim=-1)
+        cumwidths = F.pad(cumwidths, (1, 0))
+        cumwidths = (right - left) * cumwidths + left        
+        cumwidths[..., 0] = left.squeeze(-1)
+        cumwidths[..., -1] = right.squeeze(-1)
+        
+        # --- heights
         heights = F.softmax(heights, dim=-1)
-        heights = self.min_bin + (total_height - self.n_bins * self.min_bin) * heights
-        cumheights = heights.cumsum(-1)
-        cumheights = bottom + F.pad(cumheights, (1,0))
-        heights = cumheights[..., 1:] - cumheights[..., :-1]
+        heights = self.min_bin + (1 - self.min_bin * self.n_bins) * heights
+        cumheights = torch.cumsum(heights, dim=-1)
+        cumheights = F.pad(cumheights, pad=(1, 0))
+        cumheights = (top - bottom) * cumheights + bottom
+        cumheights[..., 0] = bottom.squeeze(-1)
+        cumheights[..., -1] = top.squeeze(-1)
 
         # --- affine params
         weight = (top - bottom) / (right - left)
