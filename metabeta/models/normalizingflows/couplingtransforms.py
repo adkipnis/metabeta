@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
+
 from metabeta.models.feedforward import FlowMLP, FlowResidualNet
 
 
@@ -128,7 +129,7 @@ class RationalQuadratic(CouplingTransform):
         d_context: int,
         subnet_kwargs: dict | None = None,
         n_bins: int = 8,
-        default_size: float = 2.0,
+        default_size: float = 3.0,
         min_total: float = 0.5,
         min_rel: float = 0.5,
         max_rel: float = 1.0,
@@ -183,6 +184,7 @@ class RationalQuadratic(CouplingTransform):
             })
             subnet_kwargs.pop('d_ff')
             self.conditioner = FlowResidualNet(**subnet_kwargs)
+
 
     def _propose(self, x1, context=None, mask1=None):
         if mask1 is None:
@@ -394,7 +396,7 @@ class RationalQuadratic(CouplingTransform):
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
-    torch.manual_seed(1)
+    torch.manual_seed(0)
 
     b = 1
     split_dims = (5,3)
@@ -420,18 +422,18 @@ if __name__ == '__main__':
 
     # plot single spline
     with torch.no_grad():
-        n_bins = 16
+        n_bins = 8
         b = 512
         split_dims = (5,1)
-        rq = RationalQuadratic(split_dims, d_context, NET_KWARGS, n_bins=n_bins)
-        x1 = torch.randn(1, split_dims[0]).expand(b, -1)
-        x2 = torch.linspace(-6, 6, b).unsqueeze(-1)
-        context = torch.randn(1, d_context).expand(b, -1)
-        y2, _ = rq.forward(x1, x2, context)
-
         # Plot
         plt.figure(figsize=(6, 6))
-        plt.plot(x2.numpy(), y2.numpy(), label="RQ spline")
+        for i in range(6):
+            rq = RationalQuadratic(split_dims, d_context, NET_KWARGS, n_bins=n_bins)
+            x1 = torch.randn(1, split_dims[0]).expand(b, -1)
+            x2 = torch.linspace(-6, 6, b).unsqueeze(-1)
+            context = torch.randn(1, d_context).expand(b, -1)
+            y2, _ = rq.forward(x1, x2, context)
+            plt.plot(x2.numpy(), y2.numpy(), label=f"NSF {i}")
         plt.plot(x2.numpy(), x2.numpy(), "--", alpha=0.5, label="identity")
         plt.xlabel("x")
         plt.ylabel("f(x)")
