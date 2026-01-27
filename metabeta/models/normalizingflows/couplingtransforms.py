@@ -130,10 +130,8 @@ class RationalQuadratic(CouplingTransform):
         subnet_kwargs: dict | None = None,
         n_bins: int = 8,
         default_size: float = 3.0,
-        min_total: float = 0.5,
-        min_rel: float = 0.5,
-        max_rel: float = 1.0,
         min_bin: float = 0.1,
+        min_deriv: float = 1e-3,
         eps: float = 1e-6, # for clamping
     ):
         super().__init__()
@@ -142,15 +140,17 @@ class RationalQuadratic(CouplingTransform):
         self.n_bins = n_bins
         self.n_params_per_dim = (3 * self.n_bins + 3)
         self.default_left = -default_size
+        self.default_right = default_size
         self.default_bottom = -default_size
-        self.default_width = 2 * default_size
-        self.default_height = 2 * default_size
-        self.min_total = min_total
-        self.min_rel = min_rel
-        self.max_rel = max_rel
+        self.default_top = default_size
         self.min_bin = min_bin
+        self.min_deriv = min_deriv
         self.eps = eps
-        self._shift = np.log(np.e - 1)
+        self._shift = np.sinh(1) + np.log(np.e - 1)
+        
+        # check sizes
+        if min_bin * n_bins > 1.0:
+            raise ValueError("Minimal bin width too large for the number of bins")
 
         # safely handle subnet_cfg
         if subnet_kwargs is None:
@@ -200,6 +200,7 @@ class RationalQuadratic(CouplingTransform):
         derivatives = params[..., 2*k:-4]
         bounds = params[..., -4:]
         return bounds, widths, heights, derivatives
+
 
     def _constrain(
             self, params: tuple[torch.Tensor, ...],
