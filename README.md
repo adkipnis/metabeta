@@ -6,7 +6,7 @@
 🚀 orders of magnitude faster than HCMC\
 🔥 fully implemented in [PyTorch](https://pytorch.org/)
 
-This repo contains the source code for [data simulation](metabeta/data), [model training](metabeta/models), and [evaluation](metabeta/evaluation).\
+This repo contains the source code for [data simulation](metabeta/data), [model training](metabeta/models), and [evaluation](metabeta/evaluation).
 
 ## Overview
 <img src="https://github.com/adkipnis/metabeta/blob/v1/figures/overview.png" width="750" />
