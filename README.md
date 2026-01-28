@@ -9,7 +9,7 @@
 This repo contains the source code for [data simulation](metabeta/data), [model training](metabeta/models), and [evaluation](metabeta/evaluation).
 
 ## Overview
-<img src="https://github.com/adkipnis/metabeta/blob/v1/figures/overview.png" width="750" />
+<img src="https://github.com/adkipnis/metabeta/blob/v1/figures/overview_fig.png" width="750" />
 
 - (A) _Dataset Simulation_: Sample priors, regression parameters, dependent predictors, noise, and perform a forward pass.
 - (B) _Neural Model_:
