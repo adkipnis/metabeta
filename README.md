@@ -7,10 +7,9 @@
 🔥 fully implemented in [PyTorch](https://pytorch.org/)
 
 This repo contains the source code for [data simulation](metabeta/data), [model training](metabeta/models), and [evaluation](metabeta/evaluation).\
-For details, please read our [preprint](https://doi.org/10.48550/arXiv.2510.07473).
 
 ## Overview
-<img src="https://github.com/adkipnis/metabeta/blob/main/figures/overview.png" width="750" />
+<img src="https://github.com/adkipnis/metabeta/blob/v1/figures/overview.png" width="750" />
 
 - (A) _Dataset Simulation_: Sample priors, regression parameters, dependent predictors, noise, and perform a forward pass.
 - (B) _Neural Model_:
@@ -24,15 +23,4 @@ For details, please read our [preprint](https://doi.org/10.48550/arXiv.2510.0747
 - conda env create --file=env.yml
 - conda activate mb
 - pip install -e .
-
-## Citing the project
-
-```bibtex
-@article{
-  metabeta,
-  author  = {Alex Kipnis and Marcel Binz and Eric Schulz},
-  title   = {metabeta - A fast neural model for Bayesian mixed-effects regression},
-  journal = {arXiv preprint arXiv:2510.07473},
-  year    = {2025},
-}
-```
+  
