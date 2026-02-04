@@ -232,40 +232,28 @@ class Approximator(nn.Module):
     def estimate(
             self, data: dict[str, torch.Tensor], n_samples: int = 100,
     ) -> dict[str, dict[str, torch.Tensor]]:
-        ''' inference method without available ground truth '''
+        ''' inference method: sample and apply conditional backward pass '''
         assert n_samples > 0, 'n_samples must be positive integer'
-
-        # prepare
         proposed = {}
-        inputs = self._inputs(data)
+        summary_g, summary_l = self._summarize(data)
 
-        # ---------------------------------------------------------------------
-        # local summaries
-        summary_l = self.summarizer_l(inputs, mask=data['mask_n'])
-        summary_l = self._addMetadata(summary_l, data, local=True)
-
-        # global summary
-        summary_g = self.summarizer_g(summary_l, mask=data['mask_m'])
-        summary_g = self._addMetadata(summary_g, data, local=False)
-
-        # ---------------------------------------------------------------------
-        # global sampling
+        # global posterior
         mask_g = self._masks(data, local=False)
         samples_g, log_prob_g = self.posterior_g.sample(
             n_samples, context=summary_g, mask=mask_g)
         proposed['global'] = {'samples': samples_g, 'log_prob': log_prob_g}
 
-        # ---------------------------------------------------------------------
-        # local sampling
+        # local posterior
         mask_l = self._masks(data, local=True)
-        _, mask_l = self._expandLocal(None, mask_l, n_samples)
-        context_l = self._localContext(None, summary_l, proposed)
+        b, m, q = mask_l.shape
+        mask_l = mask_l.unsqueeze(-2).expand(b, m, n_samples, q)
+        context_l = self._localContext(summary_l, samples_g)
         samples_l, log_prob_l = self.posterior_l.sample(
             1, context=context_l, mask=mask_l)
         samples_l, log_prob_l = samples_l.squeeze(-2), log_prob_l.squeeze(-1)
         proposed['local'] = {'samples': samples_l, 'log_prob': log_prob_l}
 
-        # ---------------------------------------------------------------------
+        # postprocess samples
         proposed = self._postprocess(proposed)
         return proposed
 
