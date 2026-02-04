@@ -204,28 +204,27 @@ class Approximator(nn.Module):
         summary_g = self._addMetadata(summary_g, data, local=False)
         return summary_g, summary_l
 
+    def forward(self, data: dict[str, torch.Tensor]) -> torch.Tensor:
+        ''' training method: learn conditional forward pass '''
+        # summaries
+        summary_g, summary_l = self._summarize(data)
+
+        # global posterior
         targets_g = self._targets(data, local=False)
         mask_g = self._masks(data, local=False)
         targets_g = self._preprocess(targets_g, local=False)
         loss_g = self.posterior_g.loss(
             targets_g, context=summary_g, mask=mask_g)
 
-        # global sampling
-        if n_samples > 0:
-            samples_g, log_prob_g = self.posterior_g.sample(
-                n_samples, context=summary_g, mask=mask_g)
-            proposed['global'] = {'samples': samples_g, 'log_prob': log_prob_g}
-
-        # ---------------------------------------------------------------------
-        # local loss
+        # local posterior
         targets_l = self._targets(data, local=True)
         targets_l = self._preprocess(targets_l, local=True)
         mask_l = self._masks(data, local=True)
-        targets_l, mask_l = self._expandLocal(targets_l, mask_l, n_samples)
-        context_l = self._localContext(targets_g, summary_l, proposed)
+        context_l = self._localContext(summary_l, targets_g)
         loss_l = self.posterior_l.loss(
             targets_l, context=context_l, mask=mask_l
         )
+        loss_l_mean = loss_l.sum(-1) / data['m']
 
         # local sampling
         if n_samples > 0:
