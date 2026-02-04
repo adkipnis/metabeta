@@ -148,7 +148,8 @@ def test_coupling_flow_invertible_logdet_and_sample_shape(subnet_kwargs: dict[st
         n_blocks=8,
         use_actnorm=False,
         use_permute=False,
-        subnet_kwargs=subnet_kwargs,
+        transform='spline',
+        subnet_kwargs=subnet_kwargs,        
     ).double()
     model.eval()
 
@@ -287,7 +288,7 @@ def test_spline_transform_masking(subnet_kwargs: dict[str, object]):
     x_rec, _, mask_rec = model.inverse(z, mask=mask_)
     assert mask_rec is not None, 'mask_ should be a tensor'
     assert torch.allclose(mask, mask_rec, atol=ATOL), 'mask is not recovered properly'
-    assert torch.allclose(x, x_rec, atol=5e-5), 'x is not recovered properly'
+    assert torch.allclose(x, x_rec, atol=5e-5), f'x is not recovered properly, max delta: {(x-x_rec).abs().max().item():.6f}'
 
     x_samp, _ = model.sample(100, mask=mask)
     assert (x_samp[0, :, -1] == 0.0).all(), 'mask not properly applied during sampling'
@@ -297,4 +298,6 @@ def test_spline_transform_masking(subnet_kwargs: dict[str, object]):
 #     'net_type': 'mlp',
 #     'zero_init': False,
 # }
+# test_coupling_flow_invertible_logdet_and_sample_shape(subnet_kwargs)
 # test_masking_invertibility_and_mask_roundtrip(subnet_kwargs)
+# test_spline_transform_masking(subnet_kwargs)
