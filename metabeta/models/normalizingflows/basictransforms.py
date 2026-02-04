@@ -154,14 +154,12 @@ class LU(Transform):
         return lower, upper, bias
 
     def forward(self, x, context=None, mask=None, inverse=False):
-        # handle 3D inputs
-        b, *_, d = x.shape
-        if x.dim() == 3:
+        # handle 3d+ inputs
+        b, *_, d = shape = x.shape
+        if x.dim() > 2:
             x = x.reshape(-1, d)
             if mask is not None:
                 mask = mask.reshape(-1, d)
-        elif x.dim() > 3:
-            raise NotImplementedError
 
         # multiply x with invertible matrix
         lower, upper, bias = self._getLU(mask, *x.shape)
@@ -175,11 +173,11 @@ class LU(Transform):
             x = torch.einsum("bij,bj->bi", upper, x)
             x = torch.einsum("bij,bj->bi", lower, x) + bias
 
-        # reshape back if 3D
+        # optionally reshape back
         if len(x) != b:
-            x = x.reshape(b, -1, d)
-            log_det = log_det.reshape(b, -1)
+            x = x.reshape(*shape)
+            log_det = log_det.reshape(*shape[:-1])
             if mask is not None:
-                mask = mask.reshape(b, -1, d)
+                mask = mask.reshape(*shape)
         return x, log_det, mask
 
