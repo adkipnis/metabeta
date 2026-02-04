@@ -133,7 +133,7 @@ class Approximator(nn.Module):
         ''' append summary with selected metadata '''
         out = [summary]
         if local:
-            n_obs = data['n_i'].unsqueeze(-1).sqrt() / numerator
+            n_obs = data['ns'].unsqueeze(-1).sqrt() / numerator
             out += [n_obs]
         else:
             n_total = data['n'].unsqueeze(-1).sqrt() / numerator
