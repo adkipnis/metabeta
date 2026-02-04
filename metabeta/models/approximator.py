@@ -146,6 +146,24 @@ class Approximator(nn.Module):
             out += [n_total, n_groups, nu_ffx, tau_ffx, tau_rfx, tau_eps]
         return torch.cat(out, dim=-1)
 
+    def _localContext(
+        self,
+        global_targets: torch.Tensor | None,
+        local_summary: torch.Tensor,
+        proposed: dict[str, dict[str, torch.Tensor]],
+    ) -> torch.Tensor:
+        b, m, _ = local_summary.shape
+        if 'global' in proposed:
+            global_params = proposed['global']['samples']
+            s = global_params.shape[-2]
+            global_params = global_params.unsqueeze(1).expand(b, m, s, -1)
+            local_summary = local_summary.unsqueeze(2).expand(b, m, s, -1)    
+        elif global_targets is not None:
+            global_params = global_targets.unsqueeze(1).expand(b, m, -1)
+        else:
+            raise ValueError('no samples or global targets provided')
+        return torch.cat([local_summary, global_params], dim=-1)
+
     def _preprocess(self, targets: torch.Tensor, local: bool = False) -> torch.Tensor:
         ''' constrain target parameters '''
         if local:
