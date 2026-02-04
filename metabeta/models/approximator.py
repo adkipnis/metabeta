@@ -273,7 +273,7 @@ if __name__ == '__main__':
         n_isab=0,
     )
     p_cfg = PosteriorConfig(
-        transform='affine',
+        transform='spline',
         subnet_kwargs={'activation': 'GeGLU', 'zero_init': False},
         n_blocks=6,
     )
@@ -289,5 +289,4 @@ if __name__ == '__main__':
     model.n_params
 
     model.forward(batch)
-    model.forward(batch, n_samples=20)
-    model.estimate(batch, n_samples=20)
+    model.estimate(batch, n_samples=100)
