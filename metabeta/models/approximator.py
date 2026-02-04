@@ -250,6 +250,13 @@ class Approximator(nn.Module):
             targets_l, context=context_l, mask=mask_l
         )
 
+        # local sampling
+        if n_samples > 0:
+            samples_l, log_prob_l = self.posterior_l.sample(
+                1, context=context_l, mask=mask_l)
+            samples_l, log_prob_l = samples_l.squeeze(-2), log_prob_l.squeeze(-1)
+            proposed['local'] = {'samples': samples_l, 'log_prob': log_prob_l}
+            loss_l = loss_l.mean(-1) # average over samples
 
 
 
