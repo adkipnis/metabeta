@@ -107,6 +107,22 @@ class Approximator(nn.Module):
         targets = [data['ffx'], data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)]
         return torch.cat(targets, dim=-1)
 
+    def _masks(
+            self, data: dict[str, torch.Tensor], local: bool = False,
+    ) -> torch.Tensor:
+        ''' get masks for the posterior targets '''
+        if local:
+            mask_q = data['mask_q']
+            if mask_q.shape[-1] == 1: # handle 1D local params for flow
+                mask_q = F.pad(mask_q, (0,1))
+            return data['mask_m'].unsqueeze(-1) & mask_q.unsqueeze(-2)
+        masks = [
+            data['mask_d'],
+            data['mask_q'],
+            torch.ones_like(data['mask_d'][..., 0:1]),
+        ]
+        return torch.cat(masks, dim=-1)
+
     def _addMetadata(
         self,
         summary: torch.Tensor,
