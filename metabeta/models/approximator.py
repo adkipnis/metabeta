@@ -258,6 +258,10 @@ class Approximator(nn.Module):
             proposed['local'] = {'samples': samples_l, 'log_prob': log_prob_l}
             loss_l = loss_l.mean(-1) # average over samples
 
+        # ---------------------------------------------------------------------
+        proposed = self._postprocess(proposed)
+        loss = loss_g + loss_l.sum(-1) / data['m']
+        return loss, proposed
 
 
 
