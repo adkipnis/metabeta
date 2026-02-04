@@ -1,6 +1,6 @@
 # metabeta
 ---
-🚧 I'm currently refactoring this repo. For legacy code, switch to v1. 🚧
+🚧 I'm currently refactoring this repo. For legacy code, switch to branch v1. 🚧
 ---
 ## A fast neural model for Bayesian mixed-effects regression
 📈 approximates posterior estimation for hierarchical regression models\
@@ -9,8 +9,7 @@
 🚀 orders of magnitude faster than HCMC\
 🔥 fully implemented in [PyTorch](https://pytorch.org/)
 
-This repo contains the source code for [data simulation](metabeta/data), [model training](metabeta/models), and [evaluation](metabeta/evaluation).\
-For details, please read our [preprint](https://doi.org/10.48550/arXiv.2510.07473).
+This repo contains the source code for [data simulation](metabeta/simulation), [model architecture](metabeta/models), and [evaluation](metabeta/evaluation).
 
 ## Overview
 1. Hierarchical datasets are summarized locally (per group) and globally (across groups).
@@ -21,15 +20,3 @@ For details, please read our [preprint](https://doi.org/10.48550/arXiv.2510.0747
 - uv install
 - source .venv/bin/activate
 - uv pip install -e .
-
-## Citing the project
-
-```bibtex
-@article{
-  metabeta,
-  author  = {Alex Kipnis and Marcel Binz and Eric Schulz},
-  title   = {metabeta - A fast neural model for Bayesian mixed-effects regression},
-  journal = {arXiv preprint arXiv:2510.07473},
-  year    = {2025},
-}
-```
