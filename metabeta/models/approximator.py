@@ -228,9 +228,10 @@ class Approximator(nn.Module):
         # ---------------------------------------------------------------------
         # global loss
         targets_g = self._targets(data, local=False)
+        mask_g = self._masks(data, local=False)
         targets_g = self._preprocess(targets_g, local=False)
         loss_g = self.posterior_g.loss(
-            targets_g, summary_g, mask=data['mask_d'])
+            targets_g, context=summary_g, mask=mask_g)
 
         # global sampling
         if n_samples > 0:
