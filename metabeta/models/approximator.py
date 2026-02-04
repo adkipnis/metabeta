@@ -1,6 +1,7 @@
 from dataclasses import dataclass, asdict
 import torch
 from torch import nn
+from torch.nn import functional as F
 from metabeta.models.transformers import SetTransformer
 from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import maskedInverseSoftplus, maskedSoftplus, dampen
@@ -75,7 +76,7 @@ class Approximator(nn.Module):
         d_context_g = s_cfg.d_output + d_prior + 2 # global summary, prior, n_groups, n_total
         d_context_l = d_ffx + d_var + d_input_g # global params, local summaries
         self.posterior_g = Posterior(d_ffx+d_var, d_context_g, **p_cfg.to_dict())
-        self.posterior_l = Posterior(d_rfx, d_context_l, **p_cfg.to_dict())
+        self.posterior_l = Posterior(max(d_rfx, 2), d_context_l, **p_cfg.to_dict())
 
     @property
     def device(self):
