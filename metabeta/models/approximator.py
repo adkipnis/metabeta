@@ -179,12 +179,13 @@ class Approximator(nn.Module):
 
     def _postprocess(self, proposed: dict[str, dict[str, torch.Tensor]]):
         ''' reverse _preprocess for samples '''
-        if 'samples' not in proposed['local']:
+        if not proposed:
             return proposed
         d = self.d_ffx
 
         # local postprocessing
-        ...
+        if 'local' in proposed:
+            ...
 
         # global postprocessing
         if 'global' in proposed:
