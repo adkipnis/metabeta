@@ -148,20 +148,19 @@ class Approximator(nn.Module):
 
     def _localContext(
         self,
-        global_targets: torch.Tensor | None,
         local_summary: torch.Tensor,
-        proposed: dict[str, dict[str, torch.Tensor]],
+        global_params: torch.Tensor,
     ) -> torch.Tensor:
         b, m, _ = local_summary.shape
-        if 'global' in proposed:
-            global_params = proposed['global']['samples']
+        ndim = global_params.dim()
+        if ndim == 3: # samples
             s = global_params.shape[-2]
             global_params = global_params.unsqueeze(1).expand(b, m, s, -1)
-            local_summary = local_summary.unsqueeze(2).expand(b, m, s, -1)    
-        elif global_targets is not None:
-            global_params = global_targets.unsqueeze(1).expand(b, m, -1)
+            local_summary = local_summary.unsqueeze(2).expand(b, m, s, -1)
+        elif ndim == 2: # ground truth
+            global_params = global_params.unsqueeze(1).expand(b, m, -1)
         else:
-            raise ValueError('no samples or global targets provided')
+            raise ValueError(f'global_params has {ndim} dims, expected 2 or 3')
         return torch.cat([local_summary, global_params], dim=-1)
 
     def _preprocess(self, targets: torch.Tensor, local: bool = False) -> torch.Tensor:
