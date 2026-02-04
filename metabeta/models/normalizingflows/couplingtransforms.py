@@ -130,7 +130,7 @@ class RationalQuadratic(CouplingTransform):
         d_context: int,
         subnet_kwargs: dict | None = None,
         n_bins: int = 8,
-        default_size: float = 3.0,
+        default_size: float = 1.0,
         min_bin: float = 0.1,
         min_deriv: float = 1e-3,
         eps: float = 1e-6, # for clamping
