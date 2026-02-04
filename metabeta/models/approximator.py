@@ -196,18 +196,6 @@ class Approximator(nn.Module):
 
         return proposed
 
-    def _expandLocal(
-            self, targets: torch.Tensor | None, mask: torch.Tensor, s: int,
-        ) -> tuple[torch.Tensor | None, torch.Tensor]:
-        ''' when sampling, we condition the local posterior on all samples
-            of the global posterior, so we need to expand the targets/mask '''
-        if s > 0:
-            b, m, q = mask.shape
-            mask = mask.unsqueeze(-2).expand(b, m, s, q)
-            if targets is not None:
-                targets = targets.unsqueeze(-2).expand(b, m, s, q)
-        return targets, mask
-
     def forward(
             self, data: dict[str, torch.Tensor], n_samples: int = 0,
     ) -> tuple[torch.Tensor, dict[str, dict[str, torch.Tensor]]]:
