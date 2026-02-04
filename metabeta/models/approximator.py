@@ -235,8 +235,9 @@ class Approximator(nn.Module):
 
         # global sampling
         if n_samples > 0:
-            proposed['global'] = self.posterior_g.sample(
-                n_samples, summary_g, mask=data['mask_d'])
+            samples_g, log_prob_g = self.posterior_g.sample(
+                n_samples, context=summary_g, mask=mask_g)
+            proposed['global'] = {'samples': samples_g, 'log_prob': log_prob_g}
 
         # ---------------------------------------------------------------------
         # local loss
