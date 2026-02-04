@@ -182,8 +182,10 @@ class CouplingFlow(nn.Module):
 
         # determine shape
         base_shape = (1,)
+        dtype = None
         if context is not None:
             base_shape = context.shape[:-1]
+            dtype = context.dtype
         elif mask is not None:
             base_shape = mask.shape[:-1]
         shape = (*base_shape, n_samples, self.d_target)
@@ -202,6 +204,8 @@ class CouplingFlow(nn.Module):
 
         # sample from base and apply mask in base space
         z = self.base_dist.sample(shape).to(self.device)
+        if dtype is not None:
+            z = z.to(dtype)
         if mask_z is not None:
             z = z * mask_z
 
