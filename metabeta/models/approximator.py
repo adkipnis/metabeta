@@ -243,6 +243,13 @@ class Approximator(nn.Module):
         # local loss
         targets_l = self._targets(data, local=True)
         targets_l = self._preprocess(targets_l, local=True)
+        mask_l = self._masks(data, local=True)
+        targets_l, mask_l = self._expandLocal(targets_l, mask_l, n_samples)
+        context_l = self._localContext(targets_g, summary_l, proposed)
+        loss_l = self.posterior_l.loss(
+            targets_l, context=context_l, mask=mask_l
+        )
+
 
 
 
