@@ -95,12 +95,17 @@ class Approximator(nn.Module):
         Z = data['Z'][..., 1:q]
         return torch.cat([y, X, Z], dim=-1)
 
-    def _targets(self, data: dict[str, torch.Tensor], local: bool = False) -> torch.Tensor:
+    def _targets(
+            self, data: dict[str, torch.Tensor], local: bool = False,
+    ) -> torch.Tensor:
         ''' get posterior targets '''
         if local:
-            return data['rfx']
-        out = [data['ffx'], data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)]
-        return torch.cat(out, dim=-1)
+            targets = data['rfx']
+            if targets.shape[-1] == 1: # handle 1D local params for flow
+                targets = F.pad(targets, (0,1))
+            return targets
+        targets = [data['ffx'], data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)]
+        return torch.cat(targets, dim=-1)
 
     def _addMetadata(
         self,
