@@ -306,15 +306,22 @@ class Approximator(nn.Module):
 
 # =============================================================================
 if __name__ == '__main__':
+    from pathlib import Path
+    from metabeta.utils.dataloader import Dataloader
+    path = Path('..', 'outputs', 'data', 'val_d3_q1_m5-30_n10-70_toy.npz')
+    dl = Dataloader(path, batch_size=8)
+    batch = next(iter(dl))
+
     s_cfg = SummarizerConfig(
         d_model=128,
         d_ff=256,
         d_output=64,
         n_blocks=2,
+        n_isab=0,
     )
     p_cfg = PosteriorConfig(
-        transform='spline',
-        subnet_kwargs={'activation': 'GeGLU'},
+        transform='affine',
+        subnet_kwargs={'activation': 'GeGLU', 'zero_init': False},
         n_blocks=6,
     )
     cfg = Config(
@@ -328,3 +335,6 @@ if __name__ == '__main__':
     model.device
     model.n_params
 
+    model.forward(batch)
+    model.forward(batch, n_samples=20)
+    model.estimate(batch, n_samples=20)
