@@ -23,48 +23,49 @@ class Transform(nn.Module):
 
 
 class ActNorm(Transform):
-    def __init__(self, d_target: int, eps: float = 1e-6):
+    def __init__(self, d_target: int):
         super().__init__()
-        self.eps = eps
-        self.bias = nn.Parameter(torch.zeros((d_target,)))
-        self.scale = nn.Parameter(torch.ones((d_target,)))
         self.register_buffer('initialized', torch.tensor(False))
+        self.log_scale = nn.Parameter(torch.zeros(d_target))
+        self.shift = nn.Parameter(torch.zeros(d_target))
 
-
-    def _initialize(self, x: torch.Tensor, mask: torch.Tensor | None = None):
+    @torch.no_grad()
+    def _initialize(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> None:
+        ''' init params based on first batch '''
         dims = tuple(range(x.dim() - 1))
-
-        # get batch's moments
-        if mask is not None:
-            n = mask.sum(dims).clamp_min(1.0)
-            mean = (x * mask).sum(dims) / n
-            var = ((x - mean).square() * mask).sum(dims) / n
-        else:
+        if mask is None:
             mean = x.mean(dims)
-            var = x.var(dims, unbiased=False)
-        std = torch.sqrt(var + self.eps)
-
-        # update params
-        self.bias.data = -mean
-        self.scale.data = 1.0 / std
-        self.initialized.fill_(True) # type: ignore
+            std = x.std(dims)
+        else:
+            x = x * mask
+            n = mask.sum(dims).clamp_min(1.0)
+            mean = x.sum(dims) / n
+            var = (x - mean).square().sum(dims) / n
+            std = torch.sqrt(var)
+        self.shift.data = -mean/std
+        self.log_scale.data = -torch.log(std)
+        self.initialized.data = torch.tensor(True)
+ 
+    def _broadcast(self, x: torch.Tensor, d: int) -> torch.Tensor:
+        shape = ([1] * (d - 1))
+        return x.view(*shape, -1)
 
     def forward(self, x, context=None, mask=None, inverse=False):
-        if not self.initialized and not inverse:
+        if not self.initialized:
             self._initialize(x, mask)
-        scale, bias = self.scale.expand_as(x), self.bias.expand_as(x)
+        log_scale = self._broadcast(self.log_scale, x.dim())
+        shift = self._broadcast(self.shift, x.dim())
         if mask is not None:
-            bias = bias * mask
+            log_scale = log_scale * mask
+            shift = shift * mask
+        scale = torch.exp(log_scale)
         if inverse:
-            x = (x - bias) / scale
+            x = (x - shift) / scale
+            log_det = -log_scale.sum(-1)
         else:
-            x = scale * x + bias
-        log_det = scale.abs().log()
-        if inverse:
-            log_det = -log_det
-        if mask is not None:
-            log_det = log_det * mask
-        return x, log_det.sum(-1), mask
+            x = x * scale + shift
+            log_det = log_scale.sum(-1)
+        return x, log_det, mask
 
 
 class Permute(Transform):
