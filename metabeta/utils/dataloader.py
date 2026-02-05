@@ -5,6 +5,13 @@ import torch
 from metabeta.utils.sampling import samplePermutation
 from metabeta.utils.padding import unpad
 
+def toDevice(batch: dict[str, torch.Tensor], device: str
+             ) -> dict[str, torch.Tensor]:
+    device = torch.device(device)
+    for k, v in batch.items():
+        if torch.is_tensor(v):
+            batch[k] = v.to(device)
+    return batch
 
 class Collection(torch.utils.data.Dataset):
     def __init__(
