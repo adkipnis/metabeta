@@ -42,6 +42,7 @@ class ActNorm(Transform):
             mean = x.sum(dims) / n
             var = (x - mean).square().sum(dims) / n
             std = torch.sqrt(var)
+        std = torch.where(std == 0, 1, std)
         self.shift.data = -mean/std
         self.log_scale.data = -torch.log(std)
         self.initialized.data = torch.tensor(True)
