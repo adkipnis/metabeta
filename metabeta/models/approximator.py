@@ -88,7 +88,7 @@ class Approximator(nn.Module):
  
     @property
     def n_params(self) -> int:
-        param_counts = (p.numel() for p in model.parameters() if p.requires_grad)
+        param_counts = (p.numel() for p in self.parameters() if p.requires_grad)
         return sum(param_counts)
 
     def _inputs(self, data: dict[str, torch.Tensor]) -> torch.Tensor:
