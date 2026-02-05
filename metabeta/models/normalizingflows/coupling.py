@@ -19,6 +19,8 @@ class Coupling(nn.Module):
         transform: str = 'affine',
     ):
         super().__init__()
+        self.split_dims = split_dims
+        self.transform_type = transform
         if transform == 'affine':
             self.transform = Affine(split_dims, d_context, subnet_kwargs)
         elif transform == 'spline':
@@ -26,6 +28,9 @@ class Coupling(nn.Module):
         else:
             raise NotImplementedError(
                 'only affine and spline transforms are supported')
+
+    def __str__(self) -> str:
+        return f'{self.transform_type.capitalize()}Coupling(d={self.split_dims})'
 
     def forward(self, x1: torch.Tensor, x2: torch.Tensor,
                  context: torch.Tensor | None = None,
@@ -55,6 +60,8 @@ class DualCoupling(Transform):
         transform: str = 'affine',
     ):
         super().__init__()
+        self.d_target = d_target
+        self.transform_type = transform
         self.pivot = d_target // 2
         split_dims = (self.pivot, d_target - self.pivot)
         self.coupling1 = Coupling(
@@ -69,6 +76,9 @@ class DualCoupling(Transform):
             subnet_kwargs=subnet_kwargs,
             transform=transform,
         )
+
+    def __str__(self) -> str:
+        return f'{self.transform_type.capitalize()}DualCoupling(d={self.d_target})'
 
     def _split(self, x: torch.Tensor):
         return x[..., :self.pivot], x[..., self.pivot:]

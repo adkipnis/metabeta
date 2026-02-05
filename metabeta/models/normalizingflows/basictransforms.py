@@ -29,6 +29,9 @@ class ActNorm(Transform):
         self.log_scale = nn.Parameter(torch.zeros(d_target))
         self.shift = nn.Parameter(torch.zeros(d_target))
 
+    def __str__(self) -> str:
+        return 'ActNorm'
+
     @torch.no_grad()
     def _initialize(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> None:
         ''' init params based on first batch '''
@@ -78,6 +81,9 @@ class Permute(Transform):
         self.register_buffer('perm', torch.randperm(d_target))
         self.register_buffer('inv_perm', self.perm.argsort()) # type: ignore
 
+    def __str__(self) -> str:
+        return 'Permute'
+
     def forward(self, x, context=None, mask=None, inverse=False):
         perm: torch.Tensor = self.inv_perm if inverse else self.perm # type: ignore
         x = x[..., perm]
@@ -124,6 +130,9 @@ class LU(Transform):
             nn.init.uniform_(self.lower_entries, -stdv, stdv)
             nn.init.uniform_(self.upper_entries, -stdv, stdv)
             nn.init.uniform_(self.unconstrained_upper_diag, -stdv, stdv)
+
+    def __str__(self) -> str:
+        return 'LU'
 
     @property
     def upper_diag(self):
