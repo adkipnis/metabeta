@@ -240,7 +240,7 @@ class Approximator(nn.Module):
             self, data: dict[str, torch.Tensor], n_samples: int = 100,
     ) -> dict[str, dict[str, torch.Tensor]]:
         ''' inference method: sample and apply conditional backward pass '''
-        assert n_samples > 0, 'n_samples must be positive integer'
+        assert n_samples > 0, 'n_samples must be positive'
         proposed = {}
         summary_g, summary_l = self._summarize(data)
 
@@ -284,7 +284,7 @@ if __name__ == '__main__':
         n_isab=0,
     )
     p_cfg = PosteriorConfig(
-        transform='spline',
+        transform='affine',
         subnet_kwargs={'activation': 'GeGLU', 'zero_init': False},
         n_blocks=6,
     )
