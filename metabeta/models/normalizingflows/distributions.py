@@ -7,13 +7,14 @@ from torch.nn import functional as F
 
 
 class StaticDist(nn.Module):
-    def __init__(self, d_data: int, family: str) -> None:
+    def __init__(self, d_data: int, family: str, seed: int = 1) -> None:
         super().__init__()
         assert family in ['normal', 'student'], 'distribution family unknown'
         self.d_data = d_data
         self.family = family
         self._sampling_dist = self._dist['scipy'](**self._default_params)
         self._training_dist = self._dist['torch'](**self._default_params)
+        self.rng = np.random.default_rng(seed)
 
     def __repr__(self) -> str:
         params = ''
@@ -40,7 +41,7 @@ class StaticDist(nn.Module):
             raise ValueError
 
     def sample(self, shape: tuple[int, ...]) -> torch.Tensor:
-        x = self._sampling_dist.rvs(size=shape).astype(np.float32)
+        x = self._sampling_dist.rvs(size=shape, random_state=self.rng)
         return torch.from_numpy(x)
 
     def logProb(self, x: torch.Tensor) -> torch.Tensor:
@@ -48,10 +49,11 @@ class StaticDist(nn.Module):
 
 
 class TrainableDist(nn.Module):
-    def __init__(self, d_data: int, family: str) -> None:
+    def __init__(self, d_data: int, family: str, seed: int = 1) -> None:
         super().__init__()
         self.d_data = d_data
         self.family = family
+        self.rng = np.random.default_rng(seed)
         self._initParams()
 
     def __repr__(self) -> str:
@@ -91,7 +93,7 @@ class TrainableDist(nn.Module):
         with torch.no_grad():
             params = {k: v.cpu() for k,v in self._params.items()}
             sampling_dist = self._dist['scipy'](**params)
-            x = sampling_dist.rvs(size=shape).astype(np.float32)
+            x = sampling_dist.rvs(size=shape, random_state=self.rng)
             return torch.from_numpy(x)
 
     def logProb(self, x: torch.Tensor) -> torch.Tensor:
@@ -107,13 +109,15 @@ class BaseDist(nn.Module):
         - CPU sampling via scipy
           (circumvents issues with torch sampling in model.eval() when not on CPU)
     '''
-    def __init__(self, d_data: int, family: str, trainable: bool = True) -> None:
+    def __init__(
+        self, d_data: int, family: str, trainable: bool = True, seed: int = 1,
+    ) -> None:
         super().__init__()
         self.trainable = trainable
         if trainable:
-            self.base = TrainableDist(d_data, family)
+            self.base = TrainableDist(d_data, family, seed)
         else:
-            self.base = StaticDist(d_data, family)
+            self.base = StaticDist(d_data, family, seed)
 
     def __repr__(self) -> str:
         return self.base.__repr__()
