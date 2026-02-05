@@ -56,7 +56,7 @@ class ActNorm(Transform):
         return x.view(*shape, -1)
 
     def forward(self, x, context=None, mask=None, inverse=False):
-        if not self.initialized:
+        if not self.initialized and self.training:
             self._initialize(x, mask)
         log_scale = self._broadcast(self.log_scale, x.dim())
         shift = self._broadcast(self.shift, x.dim())
