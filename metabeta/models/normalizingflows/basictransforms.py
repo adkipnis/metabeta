@@ -42,8 +42,9 @@ class ActNorm(Transform):
         else:
             x = x * mask
             n = mask.sum(dims).clamp_min(1.0)
+            n_1 = (n - 1).clamp_min(1.0)
             mean = x.sum(dims) / n
-            var = (x - mean).square().sum(dims) / n
+            var = (x - mean).square().sum(dims) / n_1
             std = torch.sqrt(var)
         std = torch.where(std == 0, 1, std)
         self.shift.data = -mean/std
