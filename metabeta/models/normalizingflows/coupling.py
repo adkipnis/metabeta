@@ -135,6 +135,10 @@ class CouplingFlow(nn.Module):
     def device(self):
         return next(self.parameters()).device
 
+    @property
+    def dtype(self):
+        return next(self.parameters()).dtype
+
     def forward(self, x, context=None, mask=None):
         log_det = torch.zeros(x.shape[:-1], device=x.device)
         for flow in self.flows:
@@ -182,10 +186,8 @@ class CouplingFlow(nn.Module):
 
         # determine shape
         base_shape = (1,)
-        dtype = None
         if context is not None:
             base_shape = context.shape[:-1]
-            dtype = context.dtype
         elif mask is not None:
             base_shape = mask.shape[:-1]
         shape = (*base_shape, n_samples, self.d_target)
@@ -202,11 +204,8 @@ class CouplingFlow(nn.Module):
         else:
             mask_z = None
 
-        # sample from base and apply mask in base space
-        z = self.base_dist.sample(shape).to(self.device)
-        if dtype is not None:
-            z = z.to(dtype)
-        if mask_z is not None:
+        # sample from base
+        z = self.base_dist.sample(shape).to(device=self.device, dtype=self.dtype)
             z = z * mask_z
 
         # project z back to x space
