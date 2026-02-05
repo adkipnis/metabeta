@@ -105,7 +105,7 @@ class Approximator(nn.Module):
         ''' get posterior targets '''
         if local:
             targets = data['rfx']
-            if targets.shape[-1] == 1: # handle 1D local params for flow
+            if self.d_rfx == 1: # handle 1D local params for flow
                 targets = F.pad(targets, (0,1))
             return targets
         targets = [data['ffx'], data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)]
@@ -185,10 +185,13 @@ class Approximator(nn.Module):
         if not proposed:
             return proposed
         d = self.d_ffx
+        q = self.d_rfx
 
         # local postprocessing
         if 'local' in proposed:
-            ...
+            samples_l = proposed['local']['samples']
+            if q == 1 and samples_l.shape[-1] > 1:
+                proposed['local']['samples'] = samples_l[..., :1]
 
         # global postprocessing
         if 'global' in proposed:
