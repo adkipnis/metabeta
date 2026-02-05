@@ -175,9 +175,9 @@ class Approximator(nn.Module):
         d = self.d_ffx
 
         # project from R+ to R
-        sigmas = targets[:, d:]
+        sigmas = targets[..., d:]
         sigmas = maskedInverseSoftplus(sigmas)
-        targets[:, d:] = sigmas
+        targets[..., d:] = sigmas
         return targets
 
     def _postprocess(self, proposed: dict[str, dict[str, torch.Tensor]]):
@@ -196,9 +196,9 @@ class Approximator(nn.Module):
         # global postprocessing
         if 'global' in proposed:
             samples = proposed['global']['samples'].clone()
-            sigmas = samples[:, d:]
+            sigmas = samples[..., d:]
             sigmas = maskedSoftplus(sigmas)
-            samples[:, d:] = sigmas
+            samples[..., d:] = sigmas
             proposed['global']['samples'] = samples
 
         return proposed
