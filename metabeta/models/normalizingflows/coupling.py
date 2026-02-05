@@ -216,12 +216,27 @@ class CouplingFlow(nn.Module):
             log_prob = self.logProb(z, log_det, mask_z)
 
         # make use of mask to skip empty dims
+        else:
+            # init outputs
+            x = torch.zeros_like(z)
+            log_det = torch.zeros_like(x[..., 0])
+            log_prob = torch.zeros_like(log_det)
+
+            # flatten and mask out empty dims
+            non_empty = mask_z.any(-1)
+            z = z[non_empty]
+            mask_z = mask_z[non_empty]
             z = z * mask_z
+            if context is not None:
+                context = context[non_empty]
 
-        # project z back to x space
-        x, log_det, _ = self.inverse(z, context, mask_z)
+            # backward pass
+            x[non_empty], log_det[non_empty], _ = self.inverse(
+                z, context, mask_z)
 
-        # get probability in x-space
-        log_prob = self.logProb(z, log_det, mask_z)
+            # get probability in x-space
+            log_prob[non_empty] = self.logProb(
+                z, log_det[non_empty], mask_z)
+
         return x, log_prob
 
