@@ -47,8 +47,8 @@ class ActNorm(Transform):
             var = (x - mean).square().sum(dims) / n_1
             std = torch.sqrt(var)
         std = torch.where(std == 0, 1, std)
-        self.shift.data = -mean/std
-        self.log_scale.data = -torch.log(std)
+        self.shift.data = mean
+        self.log_scale.data = torch.log(std)
         self.initialized.data = torch.tensor(True)
  
     def _broadcast(self, x: torch.Tensor, d: int) -> torch.Tensor:
@@ -65,11 +65,11 @@ class ActNorm(Transform):
             shift = shift * mask
         scale = torch.exp(log_scale)
         if inverse:
-            x = (x - shift) / scale
-            log_det = -log_scale.sum(-1)
-        else:
             x = x * scale + shift
             log_det = log_scale.sum(-1)
+        else:
+            x = (x - shift) / scale
+            log_det = -log_scale.sum(-1)
         return x, log_det, mask
 
 
