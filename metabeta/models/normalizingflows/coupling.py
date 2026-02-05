@@ -206,6 +206,16 @@ class CouplingFlow(nn.Module):
 
         # sample from base
         z = self.base_dist.sample(shape).to(device=self.device, dtype=self.dtype)
+
+        # simple backward pass
+        if mask_z is None:
+            # project z back to x space
+            x, log_det, _ = self.inverse(z, context, mask_z)
+
+            # get probability in x-space
+            log_prob = self.logProb(z, log_det, mask_z)
+
+        # make use of mask to skip empty dims
             z = z * mask_z
 
         # project z back to x space
