@@ -266,15 +266,14 @@ class Approximator(nn.Module):
 
 # =============================================================================
 if __name__ == '__main__':
-    import timeit
     from pathlib import Path
-    from metabeta.utils.dataloader import Dataloader#, toDevice
+    from metabeta.utils.dataloader import Dataloader, toDevice
     torch.manual_seed(0)
     
     path = Path('..', 'outputs', 'data', 'val_d3_q1_m5-30_n10-70_toy.npz')
     dl = Dataloader(path, batch_size=8)
     batch = next(iter(dl))
-    # batch = toDevice(batch, 'mps')
+    batch = toDevice(batch, 'mps')
 
     s_cfg = SummarizerConfig(
         d_model=128,
@@ -295,18 +294,6 @@ if __name__ == '__main__':
         posterior=p_cfg,
     )
 
-    model = Approximator(cfg)#.to('mps')
-    model.device
-    model.n_params
-    
+    model = Approximator(cfg).to('mps')
     loss = model.forward(batch)
-    proposed = model.estimate(batch, n_samples=10)
-
-    n = 10
-    t = timeit.timeit(
-        'model.estimate(batch, n_samples=500)',
-        globals=globals(),
-        number=n)
-    print(t/n)
-    
-    
+    proposed = model.estimate(batch, n_samples=1000)
