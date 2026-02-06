@@ -12,6 +12,7 @@ dependencies = [
     "openml>=0.15.1",
     "pmlb>=1.0.1.post3",
     "pytest>=9.0.2",
+    "schedulefree>=1.4.1",
     "scipy>=1.16.3",
     "seaborn>=0.13.2",
     "spyder-kernels>=3.1.2",
