@@ -5,9 +5,21 @@ import torch
 from metabeta.utils.sampling import samplePermutation
 from metabeta.utils.padding import unpad
 
-def toDevice(batch: dict[str, torch.Tensor], device: str
+def toDevice(batch: dict[str, torch.Tensor], device: torch.device,
              ) -> dict[str, torch.Tensor]:
-    device = torch.device(device)
+    # make sure device is torch.device
+    if isinstance(device, str):
+        device = torch.device(device)
+        
+    # stop if devices already match
+    for k, v in batch.items():
+        if torch.is_tensor(v):
+            current_device = v.device
+            break
+    if current_device == device:
+        return batch
+    
+    # cast each tensor to the desired device
     for k, v in batch.items():
         if torch.is_tensor(v):
             batch[k] = v.to(device)
