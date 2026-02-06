@@ -176,10 +176,12 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
 
 class Dataloader(torch.utils.data.DataLoader):
     ''' Wrapper for torch dataloader '''
-    def __init__(self, path: Path, batch_size: int | None = 1,):
+    def __init__(self, path: Path, batch_size: int | None = None):
         col = Collection(path)
         not_mps = (torch.accelerator.current_accelerator().type != 'mps') # type: ignore
-        if batch_size is not None:
+        if batch_size is None:
+            batch_size = len(col)
+        else:
             batch_size = min(batch_size, len(col))
         super().__init__(
             dataset=col,
