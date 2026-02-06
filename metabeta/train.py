@@ -29,6 +29,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--ds_type', type=str, default='toy', help='type of predictors [toy, flat, scm, sampled], (default = toy)')
     parser.add_argument('--cfg', type=str, default='default', help='name of model config yml file')
     parser.add_argument('-l', '--load', type=int, default=0, help='load model from iteration #l')
+    parser.add_argument('--compile', action='store_true', help='compile model (default = False)')
  
     # data dimensions
     parser.add_argument('-d', '--max_d', type=int, default=3, help='maximum number of fixed effects (intercept + slopes) to draw per linear model (default = 16).')
@@ -199,6 +200,8 @@ if __name__ == '__main__':
         posterior=p_cfg,
     )
     model = Approximator(cfg).to(device)
+    if ARGS.compile and device.type != 'mps':
+        model = model.compile()
 
     # optimizer
     optimizer = schedulefree.AdamWScheduleFree(
