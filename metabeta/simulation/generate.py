@@ -18,9 +18,9 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate hierarchical datasets.')
     # batch dimensions
     parser.add_argument('--bs_train', type=int, default=4096, help='batch size per training partition (default = 4,096).')
-    parser.add_argument('--bs_val', type=int, default=256, help='batch size for validation partition (default = 256).')
+    parser.add_argument('--bs_valid', type=int, default=256, help='batch size for validation partition (default = 256).')
     parser.add_argument('--bs_test', type=int, default=128, help='batch size per testing partition (default = 128).')
-    parser.add_argument('--bs_load', type=int, default=16, help='Batch size when loading (for grouping m, q, d, default = 16)')
+    parser.add_argument('--bs_mini', type=int, default=32, help='Batch size when loading (for grouping m, q, d, default = 32)')
     # data dimensions
     parser.add_argument('-d', '--max_d', type=int, default=3, help='Maximum number of fixed effects (intercept + slopes) to draw per linear model (default = 16).')
     parser.add_argument('-q', '--max_q', type=int, default=1, help='Maximum number of random effects (intercept + slopes) to draw per linear model (default = 4).')
@@ -29,12 +29,12 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--min_n', type=int, default=10, help='Minimum number of samples per group (default = 10).')
     parser.add_argument('--max_n', type=int, default=70, help='Maximum number of samples per group (default = 70).')
     # partitions and sources
-    parser.add_argument('--partition', type=str, default='test', help='Type of partition in [train, val, test], (default = train)')
+    parser.add_argument('--partition', type=str, default='train', help='Type of partition in [train, valid, test], (default = train)')
     parser.add_argument('-b', '--begin', type=int, default=1, help='Begin generating training epoch number #b.')
     parser.add_argument('-e', '--epochs', type=int, default=10, help='Total number of training epochs to generate.')
-    parser.add_argument('--type', type=str, default='toy', help='Type of predictors [toy, flat, scm, sampled], (default = toy)')
-    parser.add_argument('--source', type=str, default='all', help='Source dataset if type==sampled (default = all)')
-    parser.add_argument('--sgld', action='store_true', help='Use SGLD if type==sampled (default = False)')
+    parser.add_argument('--ds_type', type=str, default='toy', help='Type of predictors [toy, flat, scm, sampled], (default = toy)')
+    parser.add_argument('--source', type=str, default='all', help='Source dataset if ds_type==sampled (default = all)')
+    parser.add_argument('--sgld', action='store_true', help='Use SGLD if ds_type==sampled (default = False)')
     parser.add_argument('--loop', action='store_true', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
     return parser.parse_args()
 
@@ -89,12 +89,12 @@ class Generator:
         prior = Prior(rng, hyperparams)
 
         # instantiate design
-        if cfg.type in ['toy', 'flat']:
-            design = Synthesizer(rng, toy=(cfg.type == 'toy'))
-        elif cfg.type == 'sampled':
+        if cfg.ds_type in ['toy', 'flat']:
+            design = Synthesizer(rng, toy=(cfg.ds_type == 'toy'))
+        elif cfg.ds_type == 'sampled':
             design = Emulator(rng, source=cfg.source, use_sgld=cfg.sgld)
         else:
-            raise NotImplementedError(f'design sampler type {cfg.type} is not implemented')
+            raise NotImplementedError(f'design sampler type {cfg.ds_type} is not implemented')
 
         # sample from simulator
         sim = Simulator(rng, prior, design, ns)
@@ -106,7 +106,7 @@ class Generator:
     ) -> list[dict[str, np.ndarray]]:
         ''' generate list of {n_datasets} and keep m, d, q constant per minibatch '''
         # --- init seeding
-        main_seed = {'train': epoch, 'val': 10_000, 'test': 20_000}[self.cfg.partition]
+        main_seed = {'train': epoch, 'valid': 10_000, 'test': 20_000}[self.cfg.partition]
         rng = np.random.default_rng(main_seed)
         seedseqs = np.random.SeedSequence(main_seed).spawn(n_datasets)
         desc = f'{epoch:02d}/{self.cfg.epochs:02d}' if self.cfg.partition == 'train' else ''
@@ -145,41 +145,41 @@ class Generator:
         assert self.cfg.begin > 0, 'starting training partition must be a positive integer'
         assert self.cfg.begin <= self.cfg.epochs, 'starting epoch larger than goal epoch'
         assert self.cfg.epochs < 10_000, 'maximum number of epochs exceeded'
-        assert self.cfg.type != 'sampled', 'training data must be synthetic'
+        assert self.cfg.ds_type != 'sampled', 'training data must be synthetic'
         print(f'Generating {self.cfg.epochs} training partitions of {self.cfg.bs_train} datasets each...')
         for epoch in range(self.cfg.begin, self.cfg.epochs + 1):
-            ds_train = self._genBatch(n_datasets=self.cfg.bs_train, mini_batch_size=self.cfg.bs_load, epoch=epoch)
+            ds_train = self._genBatch(n_datasets=self.cfg.bs_train, mini_batch_size=self.cfg.bs_mini, epoch=epoch)
             ds_train = aggregate(ds_train)
-            fn = Path(self.outdir, datasetFilename(self.cfg, epoch))
+            fn = Path(self.outdir, datasetFilename(self.cfg, 'train', epoch))
             np.savez_compressed(fn, **ds_train, allow_pickle=True)
             print(f'Saved training set to {fn}')
 
-    def genVal(self):
+    def genValid(self):
         print('Generating validation set...')
-        ds_val = self._genBatch(n_datasets=self.cfg.bs_val, mini_batch_size=1)
-        ds_val = aggregate(ds_val)
-        fn = Path(self.outdir, datasetFilename(self.cfg))
-        np.savez_compressed(fn, **ds_val, allow_pickle=True)
+        ds_valid = self._genBatch(n_datasets=self.cfg.bs_valid, mini_batch_size=1)
+        ds_valid = aggregate(ds_valid)
+        fn = Path(self.outdir, datasetFilename(self.cfg, 'valid'))
+        np.savez_compressed(fn, **ds_valid, allow_pickle=True)
         print(f'Saved validation set to {fn}')
 
     def genTest(self):
         print('Generating test set...')
         ds_test = self._genBatch(n_datasets=self.cfg.bs_test, mini_batch_size=1)
         ds_test = aggregate(ds_test)
-        fn = Path(self.outdir, datasetFilename(self.cfg))
+        fn = Path(self.outdir, datasetFilename(self.cfg, 'test'))
         np.savez_compressed(fn, **ds_test, allow_pickle=True)
         print(f'Saved test set to {fn}')
 
     def go(self):
         if self.cfg.partition == 'train':
             self.genTrain()
-        elif self.cfg.partition == 'val':
-            self.genVal()
+        elif self.cfg.partition == 'valid':
+            self.genValid()
         elif self.cfg.partition == 'test':
             self.genTest()
         else:
             raise NotImplementedError(
-                f'the partition type must be in [train, val, test], but is {self.cfg.partition}')
+                f'the partition type must be in [train, valid, test], but is {self.cfg.partition}')
 
 
 # -----------------------------------------------------------------------------
