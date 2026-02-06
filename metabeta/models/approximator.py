@@ -4,7 +4,7 @@ from torch import nn
 from torch.nn import functional as F
 from metabeta.models.transformers import SetTransformer
 from metabeta.models.normalizingflows import CouplingFlow
-from metabeta.utils.regularization import maskedInverseSoftplus, maskedSoftplus, dampen
+from metabeta.utils.regularization import maskedInverseSoftplus, maskedSoftplus
 
 @dataclass(frozen=True)
 class SummarizerConfig:
@@ -35,7 +35,7 @@ class PosteriorConfig:
         return out
 
 @dataclass(frozen=True)
-class Config:
+class ApproximatorConfig:
     d_ffx: int
     d_rfx: int
     summarizer: SummarizerConfig
@@ -43,7 +43,7 @@ class Config:
 
 
 class Approximator(nn.Module):
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: ApproximatorConfig):
         super().__init__()
         self.cfg = cfg
         self.d_ffx = cfg.d_ffx # number of fixed effects
@@ -81,7 +81,7 @@ class Approximator(nn.Module):
     @property
     def device(self):
         return next(self.parameters()).device
-    
+
     @property
     def dtype(self):
         return next(self.parameters()).dtype
@@ -93,7 +93,7 @@ class Approximator(nn.Module):
 
     def _inputs(self, data: dict[str, torch.Tensor]) -> torch.Tensor:
         ''' get summarizer inputs '''
-        d, q = self.d_ffx, self.d_rfx # TODO: adapt to batchwise max
+        d, q = self.d_ffx, self.d_rfx
         y = data['y'].unsqueeze(-1)
         X = data['X'][..., 1:d]
         Z = data['Z'][..., 1:q]
@@ -146,7 +146,7 @@ class Approximator(nn.Module):
             tau_ffx = data['tau_ffx'].clone()
             tau_rfx = data['tau_rfx'].clone()
             tau_eps = data['tau_eps'].clone().unsqueeze(-1)
-            # TODO: optionally dampen prior params
+            # TODO: optionally dampen prior params, depending on how large they get
             out += [n_total, n_groups, nu_ffx, tau_ffx, tau_rfx, tau_eps]
         return torch.cat(out, dim=-1)
 
@@ -203,7 +203,9 @@ class Approximator(nn.Module):
 
         return proposed
 
-    def _summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+    def _summarize(
+            self, data: dict[str, torch.Tensor],
+        ) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)
         summary_l = self.summarizer_l(inputs, mask=data['mask_n'])
         summary_l = self._addMetadata(summary_l, data, local=True)
@@ -269,8 +271,8 @@ if __name__ == '__main__':
     from pathlib import Path
     from metabeta.utils.dataloader import Dataloader, toDevice
     torch.manual_seed(0)
-    
-    path = Path('..', 'outputs', 'data', 'val_d3_q1_m5-30_n10-70_toy.npz')
+
+    path = Path('..', 'outputs', 'data', 'valid_d3_q1_m5-30_n10-70_toy.npz')
     dl = Dataloader(path, batch_size=8)
     batch = next(iter(dl))
     batch = toDevice(batch, 'mps')
@@ -287,7 +289,7 @@ if __name__ == '__main__':
         subnet_kwargs={'activation': 'GeGLU', 'zero_init': False},
         n_blocks=6,
     )
-    cfg = Config(
+    cfg = ApproximatorConfig(
         d_ffx=3,
         d_rfx=1,
         summarizer=s_cfg,
