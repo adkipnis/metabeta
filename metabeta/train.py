@@ -123,3 +123,41 @@ def train(
         iterator.set_postfix_str(f'NLL: {loss_train:.3f}')
 
 @torch.no_grad()
+def valid(
+    model: Approximator,
+    optimizer: schedulefree.AdamWScheduleFree,
+    dl: Dataloader,
+    epoch: int = 0,
+) -> None:
+    iterator = tqdm(dl, desc=f'Epoch {epoch:02d}/{ARGS.max_epochs:02d} [V]')
+    running_sum = 0.0
+    model.eval()
+    optimizer.eval()
+    for i, batch in enumerate(iterator):
+        batch = toDevice(batch, model.device)
+        loss = model.forward(batch)
+        loss = loss['total'].mean()
+        running_sum += loss.item()
+        loss_valid = running_sum / (i + 1)
+        iterator.set_postfix_str(f'NLL: {loss_valid:.3f}')
+
+@torch.no_grad()
+def test(
+    model: Approximator,
+    optimizer: schedulefree.AdamWScheduleFree,
+    dl: Dataloader,
+    epoch: int = 0,
+) -> None:
+    # expects single batch from dl
+    iterator = tqdm(dl, desc=f'Epoch {epoch:02d}/{ARGS.max_epochs:02d} [S]')
+    model.eval()
+    optimizer.eval()
+    for batch in iterator:
+        batch = toDevice(batch, model.device)
+        proposed = model.estimate(batch, n_samples=200)
+        rmses = getRmse(proposed, batch)
+        rmse_str = ', '.join([f'{k}={v:.3f}' for k,v in rmses.items()])
+        iterator.set_postfix_str(f'RMSE: {rmse_str}')
+
+
+# =============================================================================
