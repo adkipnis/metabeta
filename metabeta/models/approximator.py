@@ -77,6 +77,13 @@ class Approximator(nn.Module):
         d_context_l = d_ffx + d_var + d_input_g # global params, local summaries
         self.posterior_g = Posterior(d_ffx+d_var, d_context_g, **p_cfg.to_dict())
         self.posterior_l = Posterior(max(d_rfx, 2), d_context_l, **p_cfg.to_dict())
+        
+    def compile(self):
+        self.summarizer_l = torch.compile(self.summarizer_l)
+        self.summarizer_g = torch.compile(self.summarizer_g)
+        self.posterior_g = torch.compile(self.posterior_g)
+        self.posterior_l = torch.compile(self.posterior_l)
+        return self
 
     @property
     def device(self):
@@ -278,7 +285,7 @@ if __name__ == '__main__':
     path = Path('..', 'outputs', 'data', 'valid_d3_q1_m5-30_n10-70_toy.npz')
     dl = Dataloader(path, batch_size=8)
     batch = next(iter(dl))
-    batch = toDevice(batch, 'mps')
+    # batch = toDevice(batch, 'mps')
 
     s_cfg = SummarizerConfig(
         d_model=128,
@@ -299,6 +306,7 @@ if __name__ == '__main__':
         posterior=p_cfg,
     )
 
-    model = Approximator(cfg).to('mps')
+    model = Approximator(cfg).to('cpu').compile()
+    
     loss = model.forward(batch)
-    proposed = model.estimate(batch, n_samples=1000)
+    proposed = model.estimate(batch, n_samples=100)
