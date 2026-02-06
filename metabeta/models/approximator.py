@@ -213,8 +213,10 @@ class Approximator(nn.Module):
         summary_g = self._addMetadata(summary_g, data, local=False)
         return summary_g, summary_l
 
-    def forward(self, data: dict[str, torch.Tensor]) -> torch.Tensor:
+    def forward(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         ''' training method: learn conditional forward pass '''
+        loss = {}
+
         # summaries
         summary_g, summary_l = self._summarize(data)
 
@@ -222,7 +224,7 @@ class Approximator(nn.Module):
         targets_g = self._targets(data, local=False)
         mask_g = self._masks(data, local=False)
         targets_g = self._preprocess(targets_g, local=False)
-        loss_g = self.posterior_g.loss(
+        loss['global'] = self.posterior_g.loss(
             targets_g, context=summary_g, mask=mask_g)
 
         # local posterior
@@ -230,12 +232,13 @@ class Approximator(nn.Module):
         targets_l = self._preprocess(targets_l, local=True)
         mask_l = self._masks(data, local=True)
         context_l = self._localContext(summary_l, targets_g)
-        loss_l = self.posterior_l.loss(
+        loss['local'] = self.posterior_l.loss(
             targets_l, context=context_l, mask=mask_l
         )
-        loss_l_mean = loss_l.sum(-1) / data['m']
 
-        return loss_g + loss_l_mean
+        # total loss
+        loss['total'] = loss['global'] + loss['local'].sum(-1) / data['m']
+        return loss
 
     @torch.no_grad()
     def estimate(
