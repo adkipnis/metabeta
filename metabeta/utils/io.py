@@ -9,6 +9,17 @@ def getDevice() -> str:
         return 'mps'
     return 'cpu'
 
+def setDevice(device: str = ''):
+    if not device:
+        return torch.device(getDevice())
+    elif device == 'cuda' and torch.cuda.is_available():
+        return torch.device('cuda')
+    elif device == 'mps' and torch.backends.mps.is_available():
+        return torch.device('mps')
+    else:
+        return torch.device('cpu')
+
+
 def setSeed(s: int) -> np.random.Generator:
     torch.manual_seed(s)
     np.random.seed(s)
