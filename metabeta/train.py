@@ -161,3 +161,66 @@ def test(
 
 
 # =============================================================================
+if __name__ == '__main__':
+    # --- setup training config
+    ARGS = setup()
+    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    torch.set_num_threads(ARGS.cores)
+
+    # reproducibility
+    if ARGS.reproducible:
+        makeReproducible()
+    setSeed(ARGS.seed)
+    device = setDevice(ARGS.device)
+
+    # model
+    s_cfg = SummarizerConfig(
+        d_model=64,
+        d_ff=128,
+        d_output=32,
+        n_blocks=2,
+        n_isab=0,
+    )
+    p_cfg = PosteriorConfig(
+        transform='spline',
+        subnet_kwargs={
+            'net_type': 'mlp',
+            'd_ff': 128,
+            'depth': 3,
+            'activation': 'ELU',
+            'zero_init': True,
+        },
+        n_blocks=3,
+    )
+    cfg = ApproximatorConfig(
+        d_ffx=3,
+        d_rfx=1,
+        summarizer=s_cfg,
+        posterior=p_cfg,
+    )
+    model = Approximator(cfg).to(device)
+
+    # optimizer
+    optimizer = schedulefree.AdamWScheduleFree(
+        model.parameters(), lr=ARGS.lr)
+ 
+    # validation and test data
+    path_valid = Path('outputs', 'data', datasetFilename(ARGS, 'valid'))
+    dl_valid = Dataloader(path_valid)
+    path_test = Path('outputs', 'data', datasetFilename(ARGS, 'test'))
+    dl_test = Dataloader(path_test)
+
+    # reference run
+    print('Performance before training:')
+    valid(model, optimizer, dl_valid)
+    test(model, optimizer, dl_test)
+
+    # loop
+    print(f'\nTraining for {ARGS.max_epochs} epochs...')
+    for epoch in range(1, ARGS.max_epochs + 1):
+        path_train = Path('outputs', 'data', datasetFilename(ARGS, 'train', epoch))
+        dl_train = Dataloader(path_train, batch_size=ARGS.bs_mini)
+        train(model, optimizer, dl_train, epoch)
+        valid(model, optimizer, dl_valid, epoch)
+        if epoch % ARGS.test_interval == 0:
+            test(model, optimizer, dl_test, epoch)
