@@ -29,7 +29,7 @@ def make_cfg(**overrides: Any) -> argparse.Namespace:
         min_n=3,
         max_n=9,
         # partitions / sources
-        partition="val",
+        partition="valid",
         begin=1,
         epochs=3,
         type="toy",
@@ -42,7 +42,7 @@ def make_cfg(**overrides: Any) -> argparse.Namespace:
 
 
 def test_outdir_created(tmp_path: Path):
-    cfg = make_cfg(partition="val")
+    cfg = make_cfg(partition="valid")
     outdir = tmp_path / "outputs" / "data"
     assert not outdir.exists()
     g = Generator(cfg, outdir)
@@ -214,7 +214,7 @@ def test_genbatch_deterministic_given_partition_and_epoch(monkeypatch, tmp_path:
     assert seen1 == seen2
 
 
-@pytest.mark.parametrize("partition", ["train", "val", "test"])
+@pytest.mark.parametrize("partition", ["train", "valid", "test"])
 def test_seed_mapping_deterministic_within_partition(monkeypatch, tmp_path: Path, partition: str):
     """
     Confirms determinism within a partition for a fixed epoch argument.
@@ -261,7 +261,7 @@ def test_train_varies_with_epoch_but_val_test_fixed(monkeypatch, tmp_path: Path)
     assert run(cfg_train, 1) != run(cfg_train, 2)
 
     # val fixed
-    cfg_val = make_cfg(partition="val", max_d=10, max_q=5, min_m=2, max_m=8, min_n=3, max_n=12, epochs=10, loop=True)
+    cfg_val = make_cfg(partition="valid", max_d=10, max_q=5, min_m=2, max_m=8, min_n=3, max_n=12, epochs=10, loop=True)
     assert run(cfg_val, 1) == run(cfg_val, 2)
 
     # test fixed

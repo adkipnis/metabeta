@@ -13,7 +13,7 @@ from metabeta.models.approximator import (
 from metabeta.utils.dataloader import Dataloader
 
 ROOT = Path(__file__).resolve().parents[2]
-DATA_PATH = ROOT / 'metabeta' / 'outputs' / 'data' / 'val_d3_q1_m5-30_n10-70_toy.npz'
+DATA_PATH = ROOT / 'metabeta' / 'outputs' / 'data' / 'valid_d3_q1_m5-30_n10-70_toy.npz'
 if not DATA_PATH.exists():
     pytest.skip(
         'validation dataset val_d3_q1_m5-30_n10-70_toy.npz not found',
