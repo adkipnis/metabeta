@@ -92,3 +92,34 @@ def getRmse(proposed: dict[str, dict[str, torch.Tensor]],
 
     return rmses
 
+# -----------------------------------------------------------------------------
+def train(
+    model: Approximator,
+    optimizer: schedulefree.AdamWScheduleFree,
+    dl: Dataloader,
+    epoch: int,
+) -> None:
+    iterator = tqdm(dl, desc=f'Epoch {epoch:02d}/{ARGS.max_epochs:02d} [T]')
+    running_sum = 0.0
+    model.train()
+    optimizer.train()
+    optimizer.zero_grad(set_to_none=True)
+    for i, batch in enumerate(iterator):
+        # get loss
+        batch = toDevice(batch, model.device)
+        loss = model.forward(batch)
+        loss = loss['total'].mean()
+
+        # calculate accumulated gradient with clipped norm
+        loss.backward()
+        grad_norm = clip_grad_norm_(model.parameters(), 1.0)
+        if torch.isfinite(grad_norm):
+            optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+
+        # log loss
+        running_sum += loss.item()
+        loss_train = running_sum / (i + 1)
+        iterator.set_postfix_str(f'NLL: {loss_train:.3f}')
+
+@torch.no_grad()
