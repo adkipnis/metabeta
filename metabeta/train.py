@@ -48,3 +48,15 @@ def setup() -> argparse.Namespace:
     return parser.parse_args()
 
 # -----------------------------------------------------------------------------
+def setSeed(seed: int) -> None:
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+def makeReproducible() -> None:
+    torch.use_deterministic_algorithms(True)
+    if ARGS.device == 'mps':
+        ARGS.device = 'cpu'
+    elif ARGS.device == 'cuda':
+        torch.backends.cudnn.deterministic = True
+
