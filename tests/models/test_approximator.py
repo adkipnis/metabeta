@@ -6,7 +6,7 @@ import torch
 
 from metabeta.models.approximator import (
     Approximator,
-    Config,
+    ApproximatorConfig,
     PosteriorConfig,
     SummarizerConfig,
 )
@@ -44,7 +44,7 @@ def model() -> Approximator:
         subnet_kwargs={'activation': 'GELU', 'zero_init': True},
         n_blocks=2,
     )
-    cfg = Config(
+    cfg = ApproximatorConfig(
         d_ffx=3,
         d_rfx=1,
         summarizer=s_cfg,
