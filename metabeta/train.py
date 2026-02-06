@@ -60,3 +60,35 @@ def makeReproducible() -> None:
     elif ARGS.device == 'cuda':
         torch.backends.cudnn.deterministic = True
 
+# -----------------------------------------------------------------------------
+def getRmse(proposed: dict[str, dict[str, torch.Tensor]],
+            data: dict[str, torch.Tensor],
+            ) -> dict[str, float]:
+    d = ARGS.max_d
+
+    # targets
+    rfx = data['rfx']
+    ffx = data['ffx']
+    sigma_rfx = data['sigma_rfx']
+    sigma_eps = data['sigma_eps']
+ 
+    # means
+    means = proposed['global']['samples'].mean(-2)
+    ffx_mean = means[..., :d]
+    sigma_rfx_mean = means[..., d:-1]
+    sigma_eps_mean = means[..., -1]
+    rfx_mean = proposed['local']['samples'].mean(-2)
+
+    # rmses
+    rmses = {}
+    se_ffx = F.mse_loss(ffx, ffx_mean, reduction='none')
+    rmses['ffx'] = torch.sqrt(se_ffx.sum() / data['mask_d'].sum()).item()
+    se_sr = F.mse_loss(sigma_rfx, sigma_rfx_mean, reduction='none')
+    rmses['sigma_rfx'] = torch.sqrt(se_sr.sum() / data['mask_q'].sum()).item()
+    rmses['sigma_eps'] = torch.sqrt(F.mse_loss(sigma_eps, sigma_eps_mean)).item()
+    mask_rfx = data['mask_m'].unsqueeze(-1) * data['mask_q'].unsqueeze(-2)
+    se_rfx = F.mse_loss(rfx, rfx_mean, reduction='none')
+    rmses['rfx'] = torch.sqrt(se_rfx.sum() / mask_rfx.sum()).item()
+
+    return rmses
+
