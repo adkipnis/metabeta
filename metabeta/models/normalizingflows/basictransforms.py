@@ -94,7 +94,7 @@ class Permute(Transform):
         return x, log_det, mask
 
     def _forwardMask(self, mask):
-        mask = mask[..., self.perm]
+        mask = mask[..., self.perm] # type: ignore
         return mask
 
 
