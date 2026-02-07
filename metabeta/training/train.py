@@ -1,19 +1,18 @@
-import argparse
 import yaml
-from datetime import datetime
-from pathlib import Path
 import logging
+import argparse
 from tqdm import tqdm
+from pathlib import Path
+from datetime import datetime
+
 import torch
-from torch.nn import functional as F
-from torch.nn.utils import clip_grad_norm_
 import schedulefree
 
-from metabeta.models.approximator import Approximator
-from metabeta.utils.dataloader import Dataloader, toDevice
-from metabeta.utils.config import modelFromYaml
 from metabeta.utils.io import setDevice, datasetFilename, checkpointFilename
 from metabeta.utils.sampling import setSeed
+from metabeta.utils.config import modelFromYaml
+from metabeta.utils.dataloader import Dataloader, toDevice
+from metabeta.models.approximator import Approximator
 
 logger = logging.getLogger(__name__)
 
@@ -198,8 +197,8 @@ batch size: {self.cfg.bs}
 
             # calculate accumulated gradient with clipped norm
             loss.backward()
-            grad_norm = clip_grad_norm_(self.model.parameters(),
-                                        self.cfg.max_grad_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), self.cfg.max_grad_norm)
             if torch.isfinite(grad_norm):
                 self.optimizer.step()
             self.optimizer.zero_grad(set_to_none=True)
