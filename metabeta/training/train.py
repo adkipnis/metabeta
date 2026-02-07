@@ -34,9 +34,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--compile', action='store_true', help='compile model (default = False)')
 
     # training & testing
-    parser.add_argument('-e', '--max_epochs', type=int, default=10, help='maximum number of epochs to train (default = 10)')
     parser.add_argument('--bs_mini', type=int, default=32, help='number of regression datasets per training minibatch (default = 32)')
     parser.add_argument('--lr', type=float, default=1e-3, help='optimizer learning rate (default = 1e-3)')
+    parser.add_argument('--reference', action='store_false', help='do a reference run before training (default = False)')
+    parser.add_argument('-e', '--max_epochs', type=int, default=10, help='maximum number of epochs to train (default = 10)')
     parser.add_argument('--test_interval', type=int, default=5, help='sample posterior every #n epochs (default = 5)')
     # parser.add_argument('--patience', type=int, default=20, help='early stopping criterium (default = 20)')
 
