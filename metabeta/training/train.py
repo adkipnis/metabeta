@@ -60,6 +60,10 @@ class Trainer:
 
         # init data
         self._initData()
+
+        # model and optimizer
+        self._initModel()
+ 
     def _reproducible(self) -> None:
         torch.use_deterministic_algorithms(True)
         if self.cfg.device == 'mps':
@@ -93,6 +97,22 @@ class Trainer:
         data_fname = datasetFilename(self.data_cfg, partition, epoch)
         data_path = Path('..', 'outputs', 'data', data_fname)
         return Dataloader(data_path, batch_size)
+
+    def _initModel(self) -> None:
+        # load model config
+        model_cfg_path = Path('..', 'models', 'configs', f'{cfg.m_tag}.yaml')
+        model_cfg = modelFromYaml(model_cfg_path,
+                                  d_ffx=self.cfg.max_d,
+                                  d_rfx=self.cfg.max_q)
+
+        # init model
+        self.model = Approximator(model_cfg).to(self.device)
+        if self.cfg.compile and self.device.type != 'mps':
+            self.model.compile()
+
+        # init optimizer
+        self.optimizer = schedulefree.AdamWScheduleFree(
+            self.model.parameters(), lr=self.cfg.lr)
 
 
 
