@@ -16,7 +16,7 @@ from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.models.approximator import Approximator
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('train.py')
 
 
 def setup() -> argparse.Namespace:
@@ -27,8 +27,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--seed', type=int, default=42, help='model seed (default = 42)')
     parser.add_argument('--device', type=str, default='cpu', help='device to use [cpu, cuda, mps], (default = cpu)')
     parser.add_argument('--cores', type=int, default=8, help='number of processor cores to use (default = 8)')
-    parser.add_argument('--reproducible', action='store_false', help='use deterministic learning trajectory (default = False)')
-    parser.add_argument('--tb', action='store_false', help='enable tensorboard logging (default = False)')
+    parser.add_argument('--reproducible', action='store_false', help='use deterministic learning trajectory (default = True)')
+    parser.add_argument('--tb', action='store_true', help='enable tensorboard logging (default = False)')
     parser.add_argument('--verbosity', type=int, default=0, help='verbosity level (0: warnings, 1: infos, 2: debug, default=0)')
 
     # model & optimizer
@@ -45,12 +45,12 @@ def setup() -> argparse.Namespace:
     # steps
     parser.add_argument('--skip_ref', action='store_true', help='skip the reference run before training (default = False)')
     parser.add_argument('-e', '--max_epochs', type=int, default=10, help='maximum number of epochs to train (default = 10)')
-    # parser.add_argument('--patience', type=int, default=20, help='early stopping criterium (default = 20)')
     parser.add_argument('--test_interval', type=int, default=5, help='sample posterior every #n epochs (default = 5)')
+    parser.add_argument('--patience', type=int, default=10, help='early stopping criterion (default = 10)')
 
     # saving & loading
-    parser.add_argument('--save_latest', action='store_false', help='save latest model after each epoch (default = False)')
-    parser.add_argument('--save_best', action='store_false', help='track and save best model wrt. validation set (default = False)')
+    parser.add_argument('--save_latest', action='store_false', help='save latest model after each epoch (default = True)')
+    parser.add_argument('--save_best', action='store_true', help='track and save best model wrt. validation set (default = True)')
     parser.add_argument('--load_latest', action='store_true', help='load latest model before training (default = False)')
     parser.add_argument('--load_best', action='store_true', help='load best model wrt. validation set (overwrites load_latest, default = False)')
 
