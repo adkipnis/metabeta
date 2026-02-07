@@ -38,6 +38,16 @@ class ApproximatorConfig:
     summarizer: SummarizerConfig
     posterior: PosteriorConfig
 
+def modelFromYaml(cfg_path: Path, d_ffx: int, d_rfx: int) -> ApproximatorConfig:
+    with open(cfg_path, 'r') as f:
+        model_cfg = yaml.safe_load(f)
+    cfg_s = SummarizerConfig(**model_cfg['summarizer'])
+    cfg_p = PosteriorConfig(**model_cfg['posterior'])
+    return ApproximatorConfig(d_ffx=d_ffx,
+                              d_rfx=d_rfx,
+                              summarizer=cfg_s,
+                              posterior=cfg_p)
+
 def dataFromYaml(cfg_path: Path, partition: str,  epoch: int = 0) -> str:
     with open(cfg_path, 'r') as f:
         data_cfg = yaml.safe_load(f)
