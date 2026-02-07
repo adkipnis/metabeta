@@ -139,6 +139,20 @@ class Trainer:
             loss_train = running_sum / (i + 1)
             iterator.set_postfix_str(f'NLL: {loss_train:.3f}')
 
+    @torch.no_grad()
+    def valid(self, epoch: int = 0) -> None:
+        iterator = tqdm(self.dl_valid, desc=f'Epoch {epoch:02d}/{self.cfg.max_epochs:02d} [V]')
+        running_sum = 0.0
+        self.model.eval()
+        self.optimizer.eval()
+        for i, batch in enumerate(iterator):
+            batch = toDevice(batch, self.device)
+            loss = self.model.forward(batch)
+            loss = loss['total'].mean()
+            running_sum += loss.item()
+            loss_valid = running_sum / (i + 1)
+            iterator.set_postfix_str(f'NLL: {loss_valid:.3f}')
+
 
 
 # =============================================================================
