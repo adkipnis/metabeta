@@ -199,7 +199,8 @@ batch size: {self.cfg.bs}
 
             # calculate accumulated gradient with clipped norm
             loss.backward()
-            grad_norm = clip_grad_norm_(self.model.parameters(), 1.0)
+            grad_norm = clip_grad_norm_(self.model.parameters(),
+                                        self.cfg.max_grad_norm)
             if torch.isfinite(grad_norm):
                 self.optimizer.step()
             self.optimizer.zero_grad(set_to_none=True)
