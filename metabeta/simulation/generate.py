@@ -170,12 +170,19 @@ class Generator:
         print(f'Saved test set to {fn}')
 
     def go(self):
-        if self.cfg.partition == 'train':
-            self.genTrain()
+        if self.cfg.partition == 'test':
+            self.genTest()
         elif self.cfg.partition == 'valid':
             self.genValid()
-        elif self.cfg.partition == 'test':
+        elif self.cfg.partition == 'train':
+            self.genTrain()
+        elif self.cfg.partition == 'all':
+            self.cfg.partition = 'test'
             self.genTest()
+            self.cfg.partition = 'valid'
+            self.genValid()
+            self.cfg.partition = 'train'
+            self.genTrain()
         else:
             raise NotImplementedError(
                 f'the partition type must be in [train, valid, test], but is {self.cfg.partition}')
