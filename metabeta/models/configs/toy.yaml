@@ -1,0 +1,21 @@
+summarizer:
+    type: 'set-transformer'
+    d_model: 32
+    d_ff: 64
+    d_output: 16
+    n_blocks: 2
+    n_isab: 0
+    activation: 'GELU'
+    dropout: 0.01
+
+posterior:
+    type: 'coupling'
+    transform: 'affine'
+    n_blocks: 3
+    subnet_kwargs:
+        net_type: 'mlp'
+        activation: 'ELU'
+        d_ff: 64
+        depth: 2
+        zero_init: False
+
