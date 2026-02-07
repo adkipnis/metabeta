@@ -1,4 +1,5 @@
 import argparse
+import yaml
 from typing import cast
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,18 +23,11 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--bs_test', type=int, default=128, help='batch size per testing partition (default = 128).')
     parser.add_argument('--bs_mini', type=int, default=32, help='Batch size when loading (for grouping m, q, d, default = 32)')
     # data dimensions
-    parser.add_argument('-d', '--max_d', type=int, default=3, help='Maximum number of fixed effects (intercept + slopes) to draw per linear model (default = 16).')
-    parser.add_argument('-q', '--max_q', type=int, default=1, help='Maximum number of random effects (intercept + slopes) to draw per linear model (default = 4).')
-    parser.add_argument('--min_m', type=int, default=5, help='Minimum number of groups (default = 5).')
-    parser.add_argument('--max_m', type=int, default=30, help='Maximum number of groups (default = 30).')
-    parser.add_argument('--min_n', type=int, default=10, help='Minimum number of samples per group (default = 10).')
-    parser.add_argument('--max_n', type=int, default=70, help='Maximum number of samples per group (default = 70).')
     # partitions and sources
     parser.add_argument('--partition', type=str, default='train', help='Type of partition in [train, valid, test], (default = train)')
+    parser.add_argument('--tag', type=str, default='toy', help='name of data config file')
     parser.add_argument('-b', '--begin', type=int, default=1, help='Begin generating training epoch number #b.')
     parser.add_argument('-e', '--epochs', type=int, default=10, help='Total number of training epochs to generate.')
-    parser.add_argument('--ds_type', type=str, default='toy', help='Type of predictors [toy, flat, scm, sampled], (default = toy)')
-    parser.add_argument('--source', type=str, default='all', help='Source dataset if ds_type==sampled (default = all)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD if ds_type==sampled (default = False)')
     parser.add_argument('--loop', action='store_true', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
     return parser.parse_args()
@@ -48,6 +42,12 @@ class Generator:
 
     def __post_init__(self):
         self.outdir.mkdir(parents=True, exist_ok=True)
+        data_cfg_path = Path('configs', f'{cfg.tag}.yaml')
+        assert data_cfg_path.exists(), f'config file {data_cfg_path} does not exist'
+        with open(data_cfg_path, 'r') as f:
+            data_cfg = yaml.safe_load(f)
+            for k, v in data_cfg.items():
+                setattr(self.cfg, k, v)
 
     def _genSizes(
         self,
