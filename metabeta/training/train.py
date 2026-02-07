@@ -255,8 +255,25 @@ batch size: {self.cfg.bs}
             self.valid(start_epoch-1)
             self.test(start_epoch-1)
 
+        print(f'\nTraining for {self.cfg.max_epochs - start_epoch + 1} epochs...')
+        for epoch in range(start_epoch, self.cfg.max_epochs + 1):
+            loss_train = self.train(epoch)
+            loss_valid = self.valid(epoch)
+
+            # update best validation loss
+            if loss_valid < (self.best_valid - 1e-6):
+                self.best_valid = loss_valid
+                self.best_epoch = epoch
+                if self.cfg.save_best:
+                    self.save(epoch, 'best')
+
+            # sample on test set
             if epoch % self.cfg.test_interval == 0:
                 self.test(epoch)
+
+            # save latest ckpt
+            if self.cfg.save_latest:
+                self.save(epoch, 'latest')
 
 
 
