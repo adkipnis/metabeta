@@ -64,22 +64,29 @@ class Generator:
         d = np.repeat(d, mini_batch_size)
 
         # number of random effects
-        q = truncLogUni(rng, low=1, high=self.cfg.max_q+1, size=n_mini_batches, round=True)
+        q = truncLogUni(rng, low=1, high=self.cfg.max_q+1,
+                        size=n_mini_batches, round=True)
         q = np.repeat(q, mini_batch_size)
         q = np.minimum(d, q) # q <= d
 
         # number of groups
-        m = truncLogUni(rng, low=self.cfg.min_m, high=self.cfg.max_m+1, size=n_mini_batches, round=True)
+        m = truncLogUni(rng, low=self.cfg.min_m, high=self.cfg.max_m+1,
+                        size=n_mini_batches, round=True)
         m = np.repeat(m, mini_batch_size)
 
         # number of observations per group
-        ns = truncLogUni(rng, low=self.cfg.min_n, high=self.cfg.max_n+1, size=(n_datasets, self.cfg.max_m), round=True)
+        ns = truncLogUni(rng, low=self.cfg.min_n, high=self.cfg.max_n+1,
+                         size=(n_datasets, self.cfg.max_m), round=True)
         return d, q, m, ns
 
 
     @staticmethod
     def _genDataset(
-        cfg: argparse.Namespace, seedseq: np.random.SeedSequence, d: int, q: int, ns: np.ndarray,
+        cfg: argparse.Namespace,
+        seedseq: np.random.SeedSequence,
+        d: int,
+        q: int,
+        ns: np.ndarray,
     ) -> dict[str, np.ndarray]:
         rng = np.random.default_rng(seedseq)
 
@@ -105,10 +112,14 @@ class Generator:
     ) -> list[dict[str, np.ndarray]]:
         ''' generate list of {n_datasets} and keep m, d, q constant per minibatch '''
         # --- init seeding
-        main_seed = {'train': epoch, 'valid': 10_000, 'test': 20_000}[self.cfg.partition]
+        main_seed = {'train': epoch,
+                     'valid': 10_000,
+                     'test': 20_000}[self.cfg.partition]
         rng = np.random.default_rng(main_seed)
         seedseqs = np.random.SeedSequence(main_seed).spawn(n_datasets)
-        desc = f'{epoch:02d}/{self.cfg.epochs:02d}' if self.cfg.partition == 'train' else ''
+        desc = ''
+        if self.cfg.partition == 'train':
+            desc = f'{epoch:02d}/{self.cfg.epochs:02d}'
 
         # --- presample sizes
         d, q, m, ns = self._genSizes(rng, n_datasets, mini_batch_size)
@@ -136,7 +147,8 @@ class Generator:
                 )
                 for i in tqdm(range(n_datasets), desc=desc)
             )
-            datasets = cast(list[dict[str, np.ndarray]], datasets) # joblib returns list[Any]
+            # joblib returns list[Any], so for type safety we cast it
+            datasets = cast(list[dict[str, np.ndarray]], datasets) 
         return datasets
 
 
@@ -147,7 +159,9 @@ class Generator:
         assert self.cfg.ds_type != 'sampled', 'training data must be synthetic'
         print(f'Generating {self.cfg.epochs} training partitions of {self.cfg.bs_train} datasets each...')
         for epoch in range(self.cfg.begin, self.cfg.epochs + 1):
-            ds_train = self._genBatch(n_datasets=self.cfg.bs_train, mini_batch_size=self.cfg.bs_mini, epoch=epoch)
+            ds_train = self._genBatch(n_datasets=self.cfg.bs_train,
+                                      mini_batch_size=self.cfg.bs_mini,
+                                      epoch=epoch)
             ds_train = aggregate(ds_train)
             fn = Path(self.outdir, datasetFilename(self.cfg, 'train', epoch))
             np.savez_compressed(fn, **ds_train, allow_pickle=True)
