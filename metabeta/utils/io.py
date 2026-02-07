@@ -1,4 +1,5 @@
-from argparse import Namespace
+from pathlib import Path
+import yaml
 import numpy as np
 import torch
 
@@ -48,3 +49,9 @@ def datasetFilename(cfg: dict, partition: str,  epoch: int = 0) -> str:
         parts.append(cfg['source'])
 
     return '_'.join(parts) + '.npz'
+
+def fnameFromYaml(cfg_path: Path, partition: str,  epoch: int = 0) -> str:
+    with open(cfg_path, 'r') as f:
+        data_cfg = yaml.safe_load(f)
+    return datasetFilename(data_cfg, partition, epoch)
+        
