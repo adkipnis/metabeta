@@ -49,3 +49,11 @@ def datasetFilename(cfg: dict, partition: str,  epoch: int = 0) -> str:
     return '_'.join(parts) + '.npz'
 
 
+def checkpointFilename(cfg: dict, prefix: str = 'latest') -> str:
+    parts = [
+        prefix,
+        f'd{cfg["d_tag"]}',
+        f'm{cfg["m_tag"]}',
+        f's{cfg["seed"]}',
+        ]
+    return '_'.join(parts) + '.pt'
