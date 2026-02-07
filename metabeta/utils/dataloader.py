@@ -10,7 +10,7 @@ def toDevice(batch: dict[str, torch.Tensor], device: torch.device,
     # make sure device is torch.device
     if isinstance(device, str):
         device = torch.device(device)
-        
+
     # stop if devices already match
     for k, v in batch.items():
         if torch.is_tensor(v):
@@ -18,7 +18,7 @@ def toDevice(batch: dict[str, torch.Tensor], device: torch.device,
             break
     if current_device == device:
         return batch
-    
+
     # cast each tensor to the desired device
     for k, v in batch.items():
         if torch.is_tensor(v):
@@ -147,11 +147,11 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
         mask_n[b] = idx
     out.update({'X': X, 'Z': Z, 'y': y, 'ns': ns,
                 'mask_d': mask_d, 'mask_q': mask_q, 'mask_n': mask_n})
-    
+
     # cast integers to long tensors
     out['n'] = quickCollate(batch, 'n', torch.int64)
     out['m'] = quickCollate(batch, 'm', torch.int64)
-    
+
     # cast params to float tensors
     for key in ('ffx', 'sigma_rfx', 'sigma_eps',
                 'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps'):
@@ -197,12 +197,22 @@ class Dataloader(torch.utils.data.DataLoader):
 
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
-    fname = 'val_d3_q1_m5-30_n10-70_toy.npz'
-    path = Path('..', 'outputs', 'data', fname)
-    col = Collection(path)
+    from metabeta.utils.config import dataFromYaml
+    
+    # load toy data
+    data_cfg_path = Path('..', 'simulation', 'configs', 'toy.yaml')
+    data_fname = dataFromYaml(data_cfg_path, 'test')
+    data_path = Path('..', 'outputs', 'data', data_fname)
+    
+    # get dataset collection
+    col = Collection(data_path)
     print(col)
-    dl = Dataloader(path, batch_size=500)
+    
+    # get dataloader
+    dl = Dataloader(data_path, batch_size=8)
     minibatch = next(iter(dl))
+    
+    # print batch shapes
     for k,v in minibatch.items():
         print(f'{k}: {v.numpy().shape}')
     print(dl)
