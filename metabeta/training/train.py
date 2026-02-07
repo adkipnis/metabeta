@@ -61,7 +61,7 @@ class Trainer:
         # reproducibility
         if cfg.reproducible:
             self._reproducible()
-        self._seed()
+        setSeed(cfg.seed)
 
         # misc setup
         self.device = setDevice(self.cfg.device)
@@ -80,13 +80,6 @@ class Trainer:
             self.cfg.device = 'cpu'
         elif self.cfg.device == 'cuda':
             torch.backends.cudnn.deterministic = True
-
-    def _seed(self) -> None:
-        s = self.cfg.seed
-        np.random.seed(s)
-        torch.manual_seed(s)
-        if self.cfg.device == 'cuda':
-            torch.cuda.manual_seed_all(s)
 
     def _initData(self) -> None:
         # assimilate data config
