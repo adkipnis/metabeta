@@ -2,8 +2,8 @@ import argparse
 import yaml
 from datetime import datetime
 from pathlib import Path
+import logging
 from tqdm import tqdm
-import numpy as np
 import torch
 from torch.nn import functional as F
 from torch.nn.utils import clip_grad_norm_
@@ -12,7 +12,10 @@ import schedulefree
 from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.config import modelFromYaml
-from metabeta.utils.io import setDevice, datasetFilename
+from metabeta.utils.io import setDevice, datasetFilename, checkpointFilename
+from metabeta.utils.sampling import setSeed
+
+logger = logging.getLogger(__name__)
 
 
 def setup() -> argparse.Namespace:
