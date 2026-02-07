@@ -18,7 +18,6 @@ def setDevice(device: str = ''):
         return torch.device('cpu')
 
 def datasetFilename(cfg: dict, partition: str,  epoch: int = 0) -> str:
- 
     # partition type and optionally epoch
     parts = [partition]
     if partition == 'train':
@@ -39,12 +38,14 @@ def datasetFilename(cfg: dict, partition: str,  epoch: int = 0) -> str:
 
     return '_'.join(parts) + '.npz'
 
-
-def checkpointFilename(cfg: dict, prefix: str = 'latest') -> str:
-    parts = [
-        prefix,
+def runName(cfg: dict, prefix: str = '') -> str:
+    parts = []
+    if prefix:
+        parts.append(prefix)
+    parts += [
         f'd{cfg["d_tag"]}',
         f'm{cfg["m_tag"]}',
         f's{cfg["seed"]}',
         ]
-    return '_'.join(parts) + '.pt'
+    return '_'.join(parts)
+
