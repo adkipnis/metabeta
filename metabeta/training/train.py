@@ -90,7 +90,7 @@ class Trainer:
 
     def _initData(self) -> None:
         # assimilate data config
-        data_cfg_path = Path('..', 'simulation', 'configs', f'{cfg.d_tag}.yaml')
+        data_cfg_path = Path('..', 'simulation', 'configs', f'{self.cfg.d_tag}.yaml')
         assert data_cfg_path.exists(), f'config file {data_cfg_path} does not exist'
         with open(data_cfg_path, 'r') as f:
             self.data_cfg = yaml.safe_load(f)
@@ -110,13 +110,13 @@ class Trainer:
 
     def _initModel(self) -> None:
         # load model config
-        model_cfg_path = Path('..', 'models', 'configs', f'{cfg.m_tag}.yaml')
-        model_cfg = modelFromYaml(model_cfg_path,
+        model_cfg_path = Path('..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
+        self.model_cfg = modelFromYaml(model_cfg_path,
                                   d_ffx=self.cfg.max_d,
                                   d_rfx=self.cfg.max_q)
 
         # init model
-        self.model = Approximator(model_cfg).to(self.device)
+        self.model = Approximator(self.model_cfg).to(self.device)
         if self.cfg.compile and self.device.type != 'mps':
             self.model.compile()
 
