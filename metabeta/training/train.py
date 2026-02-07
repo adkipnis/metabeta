@@ -279,8 +279,8 @@ batch size: {self.cfg.bs}
 
 # =============================================================================
 if __name__ == '__main__':
-    # --- setup training config
     cfg = setup()
     trainer = Trainer(cfg)
+    print(trainer.info)
     trainer.go()
 
