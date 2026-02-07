@@ -73,13 +73,16 @@ class Trainer:
         self._initModel()
 
         # checkpoint dir
-        self.ckpt_dir = Path('..', 'outputs', 'checkpoints', self.cfg.m_tag)
+        self.run_name = runName(vars(self.cfg))
+        self.ckpt_dir = Path('..', 'outputs', 'checkpoints', self.run_name)
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
         self.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
 
-        # tracking
+        # tracking & logging
         self.best_valid = float('inf')
         self.best_epoch = 0
+        self.global_step = 0
+        self.writer = None
 
     def _reproducible(self) -> None:
         torch.use_deterministic_algorithms(True)
