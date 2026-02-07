@@ -257,9 +257,10 @@ if __name__ == '__main__':
 
     # init toy model
     model_cfg_path = Path('..', 'models', 'configs', 'toy.yaml')
-    model_cfg = modelFromYaml(model_cfg_path, dl.dataset.d, dl.dataset.q)
+    model_cfg = modelFromYaml(model_cfg_path, dl.dataset.d, dl.dataset.q) # type: ignore
     model = Approximator(model_cfg)
     # model.compile()
-    
+
     loss = model.forward(batch)
     proposed = model.estimate(batch, n_samples=100)
+
