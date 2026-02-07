@@ -166,6 +166,19 @@ class Trainer:
             # rmse_str = ', '.join([f'{k}={v:.3f}' for k,v in rmses.items()])
             # iterator.set_postfix_str(f'RMSE: {rmse_str}')
 
+    def go(self) -> None:
+        if self.cfg.reference:
+            print('Performance before training:')
+            self.valid()
+            self.test()
+
+        print(f'\nTraining for {self.cfg.max_epochs} epochs...')
+        for epoch in range(1, self.cfg.max_epochs + 1):
+            self.train(epoch)
+            self.valid(epoch)
+            if epoch % self.cfg.test_interval == 0:
+                self.test(epoch)
+
 
 
 # =============================================================================
