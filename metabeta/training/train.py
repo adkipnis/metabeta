@@ -204,6 +204,8 @@ class Trainer:
         self.timestamp = payload['timestamp']
         self.best_epoch = payload['best_epoch']
         self.best_valid = payload['best_valid']
+        if self.stopper is not None:
+            self.stopper.best = self.best_valid
         return int(payload.get('epoch', 0)) # last completed epoch
 
     @property
