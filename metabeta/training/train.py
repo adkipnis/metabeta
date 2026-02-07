@@ -250,6 +250,11 @@ batch size: {self.cfg.bs}
             start_epoch = last_epoch + 1
             print(f'Resumed latest checkpoint at epoch {last_epoch}.')
 
+        if not self.cfg.skip_ref:
+            print('\nPerformance before training:')
+            self.valid(start_epoch-1)
+            self.test(start_epoch-1)
+
             if epoch % self.cfg.test_interval == 0:
                 self.test(epoch)
 
