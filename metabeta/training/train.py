@@ -106,7 +106,7 @@ class Trainer:
     ) -> Dataloader:
         data_fname = datasetFilename(self.data_cfg, partition, epoch)
         data_path = Path('..', 'outputs', 'data', data_fname)
-        return Dataloader(data_path, batch_size)
+        return Dataloader(data_path, batch_size=batch_size)
 
     def _initModel(self) -> None:
         # load model config
@@ -126,6 +126,25 @@ class Trainer:
 
     def train(self, epoch: int) -> None:
         dl_train = self._getDataLoader('train', epoch, batch_size=self.cfg.bs_mini)
+    def save(self, epoch: int = 0, prefix: str = 'latest') -> None:
+        fname = checkpointFilename(vars(self.cfg), prefix=prefix)
+        path = Path(self.ckpt_dir, fname)
+        payload = {
+            'timestamp': self.timestamp,
+            'epoch': epoch,
+            'best_epoch': self.best_epoch,
+            'best_valid': self.best_valid,
+            'trainer_cfg': vars(self.cfg).copy(),
+            'data_cfg': self.data_cfg.copy(),
+            'model_cfg': self.model_cfg.to_dict(),
+            'model_state': self.model.state_dict(),
+            'optimizer_state': self.optimizer.state_dict(),
+            }
+        tmp_path = path.with_suffix(path.suffix + '.tmp')
+        torch.save(payload, tmp_path)
+        tmp_path.replace(path)
+        logger.info(f'Saved checkpoint to {path}')
+
         iterator = tqdm(dl_train, desc=f'Epoch {epoch:02d}/{self.cfg.max_epochs:02d} [T]')
         running_sum = 0.0
         self.model.train()
