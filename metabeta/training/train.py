@@ -124,8 +124,6 @@ class Trainer:
         self.optimizer = schedulefree.AdamWScheduleFree(
             self.model.parameters(), lr=self.cfg.lr)
 
-    def train(self, epoch: int) -> None:
-        dl_train = self._getDataLoader('train', epoch, batch_size=self.cfg.bs_mini)
     def save(self, epoch: int = 0, prefix: str = 'latest') -> None:
         fname = checkpointFilename(vars(self.cfg), prefix=prefix)
         path = Path(self.ckpt_dir, fname)
@@ -241,15 +239,17 @@ batch size: {self.cfg.bs}
             # iterator.set_postfix_str(f'RMSE: {rmse_str}')
 
     def go(self) -> None:
-        if self.cfg.reference:
-            print('Performance before training:')
-            self.valid()
-            self.test()
+        # optionally load previous checkpoint
+        start_epoch = 1
+        if self.cfg.load_best:
+            last_epoch = self.load('best')
+            start_epoch = last_epoch + 1
+            print(f'Resumed best checkpoint at epoch {last_epoch}.')
+        elif self.cfg.load_latest:
+            last_epoch = self.load('latest')
+            start_epoch = last_epoch + 1
+            print(f'Resumed latest checkpoint at epoch {last_epoch}.')
 
-        print(f'\nTraining for {self.cfg.max_epochs} epochs...')
-        for epoch in range(1, self.cfg.max_epochs + 1):
-            self.train(epoch)
-            self.valid(epoch)
             if epoch % self.cfg.test_interval == 0:
                 self.test(epoch)
 
