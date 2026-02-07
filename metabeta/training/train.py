@@ -57,6 +57,9 @@ class Trainer:
         self.device = setDevice(self.cfg.device)
         self.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
         torch.set_num_threads(cfg.cores)
+
+        # init data
+        self._initData()
     def _reproducible(self) -> None:
         torch.use_deterministic_algorithms(True)
         if self.cfg.device == 'mps':
@@ -70,6 +73,26 @@ class Trainer:
         torch.manual_seed(s)
         if self.cfg.device == 'cuda':
             torch.cuda.manual_seed_all(s)
+
+    def _initData(self) -> None:
+        # assimilate data config
+        data_cfg_path = Path('..', 'simulation', 'configs', f'{cfg.d_tag}.yaml')
+        assert data_cfg_path.exists(), f'config file {data_cfg_path} does not exist'
+        with open(data_cfg_path, 'r') as f:
+            self.data_cfg = yaml.safe_load(f)
+            for k, v in self.data_cfg.items():
+                setattr(self.cfg, k, v)
+
+        # load validation and test data
+        self.dl_valid = self._getDataLoader('valid')
+        self.dl_test = self._getDataLoader('test')
+
+    def _getDataLoader(
+            self, partition: str, epoch: int = 0, batch_size: int | None = None,
+    ) -> Dataloader:
+        data_fname = datasetFilename(self.data_cfg, partition, epoch)
+        data_path = Path('..', 'outputs', 'data', data_fname)
+        return Dataloader(data_path, batch_size)
 
 
 
