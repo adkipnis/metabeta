@@ -279,13 +279,14 @@ class Approximator(nn.Module):
 # =============================================================================
 if __name__ == '__main__':
     from pathlib import Path
-    from metabeta.utils.dataloader import Dataloader, toDevice
+    from metabeta.utils.dataloader import Dataloader
+    from metabeta.utils.io import fnameFromYaml
     torch.manual_seed(0)
-
-    path = Path('..', 'outputs', 'data', 'valid_d3_q1_m5-30_n10-70_toy.npz')
-    dl = Dataloader(path, batch_size=8)
+    
+    data_cfg_path = Path('..', 'simulation', 'configs', 'toy.yaml')
+    data_path = Path('..', 'outputs', 'data', fnameFromYaml(data_cfg_path, 'test'))
+    dl = Dataloader(data_path, batch_size=8)
     batch = next(iter(dl))
-    # batch = toDevice(batch, 'mps')
 
     s_cfg = SummarizerConfig(
         d_model=128,
@@ -300,13 +301,13 @@ if __name__ == '__main__':
         n_blocks=6,
     )
     cfg = ApproximatorConfig(
-        d_ffx=3,
+        d_ffx=2,
         d_rfx=1,
         summarizer=s_cfg,
         posterior=p_cfg,
     )
 
-    model = Approximator(cfg).to('cpu').compile()
+    model = Approximator(cfg).compile()
     
     loss = model.forward(batch)
     proposed = model.estimate(batch, n_samples=100)
