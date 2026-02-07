@@ -151,6 +151,21 @@ class Generator:
             datasets = cast(list[dict[str, np.ndarray]], datasets) 
         return datasets
 
+    def genTest(self):
+        print('Generating test set...')
+        ds_test = self._genBatch(n_datasets=self.cfg.bs_test, mini_batch_size=1)
+        ds_test = aggregate(ds_test)
+        fn = Path(self.outdir, datasetFilename(self.cfg.__dict__, 'test'))
+        np.savez_compressed(fn, **ds_test, allow_pickle=True)
+        print(f'Saved test set to {fn}')
+        
+    def genValid(self):
+        print('Generating validation set...')
+        ds_valid = self._genBatch(n_datasets=self.cfg.bs_valid, mini_batch_size=1)
+        ds_valid = aggregate(ds_valid)
+        fn = Path(self.outdir, datasetFilename(self.cfg.__dict__, 'valid'))
+        np.savez_compressed(fn, **ds_valid, allow_pickle=True)
+        print(f'Saved validation set to {fn}')
 
     def genTrain(self):
         assert self.cfg.begin > 0, 'starting training partition must be a positive integer'
@@ -163,25 +178,9 @@ class Generator:
                                       mini_batch_size=self.cfg.bs_mini,
                                       epoch=epoch)
             ds_train = aggregate(ds_train)
-            fn = Path(self.outdir, datasetFilename(self.cfg, 'train', epoch))
+            fn = Path(self.outdir, datasetFilename(self.cfg.__dict__, 'train', epoch))
             np.savez_compressed(fn, **ds_train, allow_pickle=True)
             print(f'Saved training set to {fn}')
-
-    def genValid(self):
-        print('Generating validation set...')
-        ds_valid = self._genBatch(n_datasets=self.cfg.bs_valid, mini_batch_size=1)
-        ds_valid = aggregate(ds_valid)
-        fn = Path(self.outdir, datasetFilename(self.cfg, 'valid'))
-        np.savez_compressed(fn, **ds_valid, allow_pickle=True)
-        print(f'Saved validation set to {fn}')
-
-    def genTest(self):
-        print('Generating test set...')
-        ds_test = self._genBatch(n_datasets=self.cfg.bs_test, mini_batch_size=1)
-        ds_test = aggregate(ds_test)
-        fn = Path(self.outdir, datasetFilename(self.cfg, 'test'))
-        np.savez_compressed(fn, **ds_test, allow_pickle=True)
-        print(f'Saved test set to {fn}')
 
     def go(self):
         if self.cfg.partition == 'test':
