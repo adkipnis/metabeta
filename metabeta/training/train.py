@@ -48,8 +48,26 @@ class Trainer:
     def __init__(self, cfg: argparse.Namespace) -> None:
         self.cfg = cfg
 
+        # reproducibility
+        if cfg.reproducible:
+            self._reproducible()
+        self._seed()
 
         # misc setup
+    def _reproducible(self) -> None:
+        torch.use_deterministic_algorithms(True)
+        if self.cfg.device == 'mps':
+            self.cfg.device = 'cpu'
+        elif self.cfg.device == 'cuda':
+            torch.backends.cudnn.deterministic = True
+
+    def _seed(self) -> None:
+        s = self.cfg.seed
+        np.random.seed(s)
+        torch.manual_seed(s)
+        if self.cfg.device == 'cuda':
+            torch.cuda.manual_seed_all(s)
+
 
 
 # =============================================================================
