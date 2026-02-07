@@ -44,6 +44,9 @@ def setup() -> argparse.Namespace:
     return parser.parse_args()
 
 # -----------------------------------------------------------------------------
+class Trainer:
+    def __init__(self, cfg: argparse.Namespace) -> None:
+        self.cfg = cfg
 
 
         # misc setup
