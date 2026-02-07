@@ -1,0 +1,9 @@
+# re-usable data configuration
+ds_type: 'toy' # type of predictors [toy, flat, scm, sampled]
+source: 'all' # source dataset (ignored, unless ds_type == 'sampled')
+max_d: 2 # maximum number of fixed effects (intercept + slopes)
+max_q: 1 # maximum number of random effects (intercept + slopes)
+min_m: 10 # minimum number of groups
+max_m: 20 # maximum number of groups
+min_n: 20 # minimum number of samples per group
+max_n: 30 # maximum number of samples per group
