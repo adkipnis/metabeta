@@ -43,13 +43,12 @@ class Approximator(nn.Module):
         d_context_l = d_ffx + d_var + d_input_g # global params, local summaries
         self.posterior_g = Posterior(d_ffx+d_var, d_context_g, **p_cfg.to_dict())
         self.posterior_l = Posterior(max(d_rfx, 2), d_context_l, **p_cfg.to_dict())
-        
-    def compile(self):
+ 
+    def compile(self) -> None:
         self.summarizer_l = torch.compile(self.summarizer_l)
         self.summarizer_g = torch.compile(self.summarizer_g)
         self.posterior_g = torch.compile(self.posterior_g)
         self.posterior_l = torch.compile(self.posterior_l)
-        return self
 
     @property
     def device(self):
