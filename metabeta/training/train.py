@@ -9,7 +9,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 import schedulefree
 
-from metabeta.utils.io import setDevice, datasetFilename, checkpointFilename
+from metabeta.utils.io import setDevice, datasetFilename, runName
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Dataloader, toDevice
@@ -49,8 +49,8 @@ def setup() -> argparse.Namespace:
     # saving & loading
     parser.add_argument('--save_latest', action='store_false', help='save latest model after each epoch (default = False)')
     parser.add_argument('--save_best', action='store_false', help='track and save best model wrt. validation set (default = False)')
-    parser.add_argument('--load_latest', action='store_false', help='load latest model before training (default = False)')
-    parser.add_argument('--load_best', action='store_false', help='load best model wrt. validation set (overwrites load_latest, default = False)')
+    parser.add_argument('--load_latest', action='store_true', help='load latest model before training (default = False)')
+    parser.add_argument('--load_best', action='store_true', help='load best model wrt. validation set (overwrites load_latest, default = False)')
 
     return parser.parse_args()
 
