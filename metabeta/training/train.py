@@ -128,6 +128,21 @@ class Trainer:
         self.optimizer = schedulefree.AdamWScheduleFree(
             self.model.parameters(), lr=self.cfg.lr)
 
+    def _initWriter(self) -> None:
+        self.tb_path = Path('..', 'outputs', 'tensorboard', self.run_name + '_' + self.timestamp)
+        self.tb_path.mkdir(parents=True, exist_ok=True)
+        self.writer = SummaryWriter(log_dir=str(self.tb_path))
+
+        # log configs once
+        self.writer.add_text('cfg/trainer', yaml.safe_dump(vars(self.cfg), sort_keys=True), 0)
+        self.writer.add_text('cfg/data', yaml.safe_dump(self.data_cfg, sort_keys=True), 0)
+        self.writer.add_text('cfg/model', yaml.safe_dump(self.model_cfg.to_dict(), sort_keys=True), 0)
+
+    def close(self) -> None:
+        if self.writer is not None:
+            self.writer.flush()
+            self.writer.close()
+
     def save(self, epoch: int = 0, prefix: str = 'latest') -> None:
         fname = checkpointFilename(vars(self.cfg), prefix=prefix)
         path = Path(self.ckpt_dir, fname)
