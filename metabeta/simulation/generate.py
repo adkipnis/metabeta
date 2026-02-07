@@ -23,7 +23,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--bs_test', type=int, default=128, help='batch size per testing partition (default = 128).')
     parser.add_argument('--bs_mini', type=int, default=32, help='training minibatch size (for grouping m, q, d - default = 32)')
     # partitions and sources
-    parser.add_argument('--tag', type=str, default='toy', help='name of data config file')
+    parser.add_argument('--d_tag', type=str, default='toy', help='name of data config file')
     parser.add_argument('--partition', type=str, default='all', help='Type of partition in [train, valid, test, all], (default = train)')
     parser.add_argument('-b', '--begin', type=int, default=1, help='Begin generating training epoch number #b.')
     parser.add_argument('-e', '--epochs', type=int, default=10, help='Total number of training epochs to generate.')
@@ -41,7 +41,7 @@ class Generator:
 
     def __post_init__(self):
         self.outdir.mkdir(parents=True, exist_ok=True)
-        data_cfg_path = Path('configs', f'{cfg.tag}.yaml')
+        data_cfg_path = Path('configs', f'{cfg.d_tag}.yaml')
         assert data_cfg_path.exists(), f'config file {data_cfg_path} does not exist'
         with open(data_cfg_path, 'r') as f:
             data_cfg = yaml.safe_load(f)
