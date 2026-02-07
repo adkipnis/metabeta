@@ -12,11 +12,12 @@ def toDevice(batch: dict[str, torch.Tensor], device: torch.device,
         device = torch.device(device)
 
     # stop if devices already match
+    current_device = None
     for k, v in batch.items():
         if torch.is_tensor(v):
             current_device = v.device
             break
-    if current_device == device:
+    if (current_device is None) or (current_device == device):
         return batch
 
     # cast each tensor to the desired device
