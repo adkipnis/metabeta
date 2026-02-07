@@ -245,34 +245,21 @@ class Approximator(nn.Module):
 if __name__ == '__main__':
     from pathlib import Path
     from metabeta.utils.dataloader import Dataloader
-    from metabeta.utils.io import fnameFromYaml
+    from metabeta.utils.config import dataFromYaml, modelFromYaml
     torch.manual_seed(0)
-    
+
+    # load toy data
     data_cfg_path = Path('..', 'simulation', 'configs', 'toy.yaml')
-    data_path = Path('..', 'outputs', 'data', fnameFromYaml(data_cfg_path, 'test'))
+    data_fname = dataFromYaml(data_cfg_path, 'test')
+    data_path = Path('..', 'outputs', 'data', data_fname)
     dl = Dataloader(data_path, batch_size=8)
     batch = next(iter(dl))
 
-    s_cfg = SummarizerConfig(
-        d_model=128,
-        d_ff=256,
-        d_output=64,
-        n_blocks=2,
-        n_isab=0,
-    )
-    p_cfg = PosteriorConfig(
-        transform='affine',
-        subnet_kwargs={'activation': 'GeGLU', 'zero_init': False},
-        n_blocks=6,
-    )
-    cfg = ApproximatorConfig(
-        d_ffx=2,
-        d_rfx=1,
-        summarizer=s_cfg,
-        posterior=p_cfg,
-    )
-
-    model = Approximator(cfg).compile()
+    # init toy model
+    model_cfg_path = Path('..', 'models', 'configs', 'toy.yaml')
+    model_cfg = modelFromYaml(model_cfg_path, dl.dataset.d, dl.dataset.q)
+    model = Approximator(model_cfg)
+    # model.compile()
     
     loss = model.forward(batch)
     proposed = model.estimate(batch, n_samples=100)
