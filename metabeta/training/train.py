@@ -330,7 +330,12 @@ batch size: {self.cfg.bs}
             if self.cfg.save_latest:
                 self.save(epoch, 'latest')
 
-
+            # optional early stopping
+            if self.stopper is not None:
+                self.stopper.update(loss_valid)
+                if self.stopper.stop:
+                    logger.info(f'early stopping at epoch {epoch} after {self.stopper.counter} rounds of no improvement.')
+                    break
 
 # =============================================================================
 if __name__ == '__main__':
