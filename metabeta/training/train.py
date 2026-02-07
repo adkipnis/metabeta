@@ -184,6 +184,7 @@ class Trainer:
 # =============================================================================
 if __name__ == '__main__':
     # --- setup training config
- 
+    cfg = setup()
+    trainer = Trainer(cfg)
+    trainer.go()
 
-    # loop
