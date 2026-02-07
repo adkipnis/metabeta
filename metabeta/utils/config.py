@@ -37,6 +37,14 @@ class ApproximatorConfig:
     d_rfx: int
     summarizer: SummarizerConfig
     posterior: PosteriorConfig
+ 
+    def to_dict(self) -> dict:
+        return {
+            'd_ffx': self.d_ffx,
+            'd_rfx': self.d_rfx,
+            'summarizer': self.summarizer.to_dict(),
+            'posterior': self.posterior.to_dict(),
+            }
 
 def modelFromYaml(cfg_path: Path, d_ffx: int, d_rfx: int) -> ApproximatorConfig:
     with open(cfg_path, 'r') as f:
