@@ -1,45 +1,11 @@
-from dataclasses import dataclass, asdict
 import torch
 from torch import nn
 from torch.nn import functional as F
+
 from metabeta.models.transformers import SetTransformer
 from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import maskedInverseSoftplus, maskedSoftplus
-
-@dataclass(frozen=True)
-class SummarizerConfig:
-    d_model: int
-    d_ff: int
-    d_output: int
-    n_blocks: int
-    n_isab: int = 0
-    activation: str = 'GELU'
-    dropout: float = 0.01
-    type: str = 'set-transformer'
-
-    def to_dict(self) -> dict:
-        out = asdict(self)
-        out.pop('type')
-        return out
-
-@dataclass(frozen=True)
-class PosteriorConfig:
-    n_blocks: int
-    subnet_kwargs: dict | None = None
-    type: str = 'flow'
-    transform: str = 'spline'
-
-    def to_dict(self) -> dict:
-        out = asdict(self)
-        out.pop('type')
-        return out
-
-@dataclass(frozen=True)
-class ApproximatorConfig:
-    d_ffx: int
-    d_rfx: int
-    summarizer: SummarizerConfig
-    posterior: PosteriorConfig
+from metabeta.utils.config import ApproximatorConfig
 
 
 class Approximator(nn.Module):
@@ -67,7 +33,7 @@ class Approximator(nn.Module):
 
         # --- posteriors
         p_cfg = self.cfg.posterior
-        if p_cfg.type == 'flow':
+        if p_cfg.type == 'coupling':
             Posterior = CouplingFlow
         else:
             raise NotImplementedError('unknown posterior type')
