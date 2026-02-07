@@ -104,6 +104,11 @@ class Trainer:
         self.best_epoch = 0
         self.global_step = 0
         self.writer = None
+        self.stopper = None
+        if self.cfg.patience > 0:
+            self.stopper = EarlyStopping(self.cfg.patience)
+            if not self.cfg.save_best:
+                logger.warning('early stopping enabled without saving best checkpoints!')
 
     def _reproducible(self) -> None:
         torch.use_deterministic_algorithms(True)
