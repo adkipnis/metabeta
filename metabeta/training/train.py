@@ -153,6 +153,19 @@ class Trainer:
             loss_valid = running_sum / (i + 1)
             iterator.set_postfix_str(f'NLL: {loss_valid:.3f}')
 
+    @torch.no_grad()
+    def test(self, epoch: int = 0) -> None:
+        # expects single batch from dl
+        iterator = tqdm(self.dl_test, desc=f'Epoch {epoch:02d}/{self.cfg.max_epochs:02d} [S]')
+        self.model.eval()
+        self.optimizer.eval()
+        for batch in iterator:
+            batch = toDevice(batch, self.device)
+            proposed = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+            # rmses = getRmse(proposed, batch)
+            # rmse_str = ', '.join([f'{k}={v:.3f}' for k,v in rmses.items()])
+            # iterator.set_postfix_str(f'RMSE: {rmse_str}')
+
 
 
 # =============================================================================
