@@ -219,12 +219,15 @@ batch size: {self.cfg.bs}
                 self.model.parameters(), self.cfg.max_grad_norm)
             if torch.isfinite(grad_norm):
                 self.optimizer.step()
+                self.global_step += 1
             self.optimizer.zero_grad(set_to_none=True)
 
             # log loss
             running_sum += loss.item()
             loss_train = running_sum / (i + 1)
             iterator.set_postfix_str(f'NLL: {loss_train:.3f}')
+            if self.writer is not None:
+                self.writer.add_scalar('train/nll_step', float(loss_train), self.global_step)
         return float(loss_train)
 
     @torch.no_grad()
@@ -264,10 +267,15 @@ batch size: {self.cfg.bs}
             start_epoch = last_epoch + 1
             print(f'Resumed latest checkpoint at epoch {last_epoch}.')
 
+        # optionally get performance before (resumed) training
         if not self.cfg.skip_ref:
             print('\nPerformance before training:')
             self.valid(start_epoch-1)
             self.test(start_epoch-1)
+
+        # optionally init tensorboard (after potential loading and reference run)
+        if self.cfg.tb:
+            self._initWriter()
 
         print(f'\nTraining for {self.cfg.max_epochs - start_epoch + 1} epochs...')
         for epoch in range(start_epoch, self.cfg.max_epochs + 1):
@@ -285,9 +293,15 @@ batch size: {self.cfg.bs}
             if epoch % self.cfg.test_interval == 0:
                 self.test(epoch)
 
+            # log epoch
+            if self.writer is not None:
+                self.writer.add_scalar('train/nll_epoch', float(loss_train), epoch)
+                self.writer.add_scalar('valid/nll_epoch', float(loss_valid), epoch)
+
             # save latest ckpt
             if self.cfg.save_latest:
                 self.save(epoch, 'latest')
+
 
 
 # =============================================================================
@@ -296,4 +310,5 @@ if __name__ == '__main__':
     trainer = Trainer(cfg)
     print(trainer.info)
     trainer.go()
+    trainer.close()
 
