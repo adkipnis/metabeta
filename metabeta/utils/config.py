@@ -1,6 +1,7 @@
 import yaml
 from pathlib import Path
 from dataclasses import dataclass, asdict
+from metabeta.utils.io import datasetFilename
 
 @dataclass(frozen=True)
 class SummarizerConfig:
@@ -36,3 +37,8 @@ class ApproximatorConfig:
     d_rfx: int
     summarizer: SummarizerConfig
     posterior: PosteriorConfig
+
+def dataFromYaml(cfg_path: Path, partition: str,  epoch: int = 0) -> str:
+    with open(cfg_path, 'r') as f:
+        data_cfg = yaml.safe_load(f)
+    return datasetFilename(data_cfg, partition, epoch)
