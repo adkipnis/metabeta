@@ -13,7 +13,7 @@ class SummarizerConfig:
     activation: str = 'GELU'
     dropout: float = 0.01
     type: str = 'set-transformer'
-    
+
     def to_dict(self) -> dict:
         out = asdict(self)
         out.pop('type')
@@ -25,7 +25,7 @@ class PosteriorConfig:
     subnet_kwargs: dict | None = None
     type: str = 'flow'
     transform: str = 'spline'
-    
+
     def to_dict(self) -> dict:
         out = asdict(self)
         out.pop('type')
