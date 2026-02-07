@@ -23,26 +23,33 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
  
     # misc
-    parser.add_argument('-s', '--seed', type=int, default=42, help='model seed (default = 42)')
-    parser.add_argument('--reproducible', action='store_false', help='use deterministic learning trajectory (default = True)')
+    parser.add_argument('--seed', type=int, default=42, help='model seed (default = 42)')
+    parser.add_argument('--device', type=str, default='cpu', help='device to use [cpu, cuda, mps], (default = cpu)')
     parser.add_argument('--cores', type=int, default=8, help='number of processor cores to use (default = 8)')
-    parser.add_argument('--device', type=str, default='cpu', help='device to use [cpu, cuda, mps], (default = mps)')
-    # parser.add_argument('--save', type=int, default=10, help='save model every #p iterations (default = 10)')
+    parser.add_argument('--reproducible', action='store_false', help='use deterministic learning trajectory (default = False)')
 
-    # model
-    parser.add_argument('--d_tag', type=str, default='toy', help='name of data config file')
+    # model & optimizer
     parser.add_argument('--m_tag', type=str, default='toy', help='name of model config file')
-    parser.add_argument('-l', '--load', type=int, default=0, help='load model from epoch #l')
     parser.add_argument('--n_samples', type=int, default=200, help='number of samples to draw from posterior on test set')
     parser.add_argument('--compile', action='store_true', help='compile model (default = False)')
-
-    # training & testing
-    parser.add_argument('--bs_mini', type=int, default=32, help='number of regression datasets per training minibatch (default = 32)')
     parser.add_argument('--lr', type=float, default=1e-3, help='optimizer learning rate (default = 1e-3)')
-    parser.add_argument('--reference', action='store_false', help='do a reference run before training (default = False)')
+    parser.add_argument('--max_grad_norm', type=float, default=1.0, help='clip grad norm to this value (default = 1.0)')
+
+    # data
+    parser.add_argument('--d_tag', type=str, default='toy', help='name of data config file')
+    parser.add_argument('--bs', type=int, default=32, help='number of regression datasets per training minibatch (default = 32)')
+
+    # steps
+    parser.add_argument('--skip_ref', action='store_true', help='skip the reference run before training (default = False)')
     parser.add_argument('-e', '--max_epochs', type=int, default=10, help='maximum number of epochs to train (default = 10)')
-    parser.add_argument('--test_interval', type=int, default=5, help='sample posterior every #n epochs (default = 5)')
     # parser.add_argument('--patience', type=int, default=20, help='early stopping criterium (default = 20)')
+    parser.add_argument('--test_interval', type=int, default=5, help='sample posterior every #n epochs (default = 5)')
+
+    # saving & loading
+    parser.add_argument('--save_latest', action='store_false', help='save latest model after each epoch (default = False)')
+    parser.add_argument('--save_best', action='store_false', help='track and save best model wrt. validation set (default = False)')
+    parser.add_argument('--load_latest', action='store_false', help='load latest model before training (default = False)')
+    parser.add_argument('--load_best', action='store_false', help='load best model wrt. validation set (overwrites load_latest, default = False)')
 
     return parser.parse_args()
 
