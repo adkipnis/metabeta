@@ -165,6 +165,26 @@ class Trainer:
         self.best_valid = payload['best_valid']
         return int(payload.get('epoch', 0)) # last completed epoch
 
+    @property
+    def info(self) -> str:
+        precision = {torch.float32: 32.0, torch.float64: 64.0}
+        if self.model.dtype in precision:
+            p = precision[self.model.dtype]
+        else:
+            raise ValueError(f'model has unknown dtype {self.model.dtype}')
+        return f'''
+====================
+data tag:   {self.cfg.d_tag}
+model tag:  {self.cfg.m_tag}
+# params:   {self.model.n_params}
+size [mb]:  {self.model.n_params * (p / 8.0) * 1e-6:.3f}
+seed:       {self.cfg.seed}
+device:     {self.cfg.device}
+compiled:   {self.cfg.compile}
+lr:         {self.cfg.lr}
+batch size: {self.cfg.bs}
+===================='''
+
         iterator = tqdm(dl_train, desc=f'Epoch {epoch:02d}/{self.cfg.max_epochs:02d} [T]')
         running_sum = 0.0
         self.model.train()
