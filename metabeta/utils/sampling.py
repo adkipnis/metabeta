@@ -1,9 +1,18 @@
 import logging
+import random
 import numpy as np
 from scipy.stats import wishart
-
+import torch
 
 logger = logging.getLogger(__name__)
+
+
+def setSeed(s: int) -> None:
+    random.seed(s)
+    np.random.seed(s)
+    torch.manual_seed(s)
+    torch.cuda.manual_seed_all(s)
+    
 
 def sampleCounts(rng: np.random.Generator,
                  n: int, m: int, alpha: float = 10.) -> np.ndarray:

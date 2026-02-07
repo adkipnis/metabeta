@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 
 def getDevice() -> str:
@@ -17,14 +16,6 @@ def setDevice(device: str = ''):
         return torch.device('mps')
     else:
         return torch.device('cpu')
-
-
-def setSeed(s: int) -> np.random.Generator:
-    torch.manual_seed(s)
-    np.random.seed(s)
-    rng = np.random.default_rng(s)
-    return rng
-
 
 def datasetFilename(cfg: dict, partition: str,  epoch: int = 0) -> str:
  
