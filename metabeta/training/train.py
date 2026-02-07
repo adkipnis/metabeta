@@ -187,7 +187,7 @@ batch size: {self.cfg.bs}
 
         dl_train = self._getDataLoader('train', epoch, batch_size=self.cfg.bs)
         iterator = tqdm(dl_train, desc=f'Epoch {epoch:02d}/{self.cfg.max_epochs:02d} [T]')
-        running_sum = 0.0
+        loss_train = running_sum = 0.0
         self.model.train()
         self.optimizer.train()
         self.optimizer.zero_grad(set_to_none=True)
