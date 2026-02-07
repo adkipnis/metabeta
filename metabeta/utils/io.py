@@ -26,7 +26,8 @@ def setSeed(s: int) -> np.random.Generator:
     rng = np.random.default_rng(s)
     return rng
 
-def datasetFilename(args: Namespace, partition: str,  epoch: int = 0) -> str:
+
+def datasetFilename(cfg: dict, partition: str,  epoch: int = 0) -> str:
  
     # partition type and optionally epoch
     parts = [partition]
@@ -35,15 +36,15 @@ def datasetFilename(args: Namespace, partition: str,  epoch: int = 0) -> str:
 
     # sizes
     parts += [
-        f'd{args.max_d}',
-        f'q{args.max_q}',
-        f'm{args.min_m}-{args.max_m}',
-        f'n{args.min_n}-{args.max_n}',
-        args.ds_type,
+        f'd{cfg["max_d"]}',
+        f'q{cfg["max_q"]}',
+        f'm{cfg["min_m"]}-{cfg["max_m"]}',
+        f'n{cfg["min_n"]}-{cfg["max_n"]}',
+        cfg['ds_type'],
     ]
 
     # source of sampled data
-    if args.ds_type == 'sampled':
-        parts.append(args.source)
+    if cfg['ds_type'] == 'sampled':
+        parts.append(cfg['source'])
 
     return '_'.join(parts) + '.npz'
