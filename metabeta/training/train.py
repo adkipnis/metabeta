@@ -65,15 +65,21 @@ class Trainer:
 
         # misc setup
         self.device = setDevice(self.cfg.device)
-        self.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
         torch.set_num_threads(cfg.cores)
 
-        # init data
+        # init data, model and optimizer
         self._initData()
-
-        # model and optimizer
         self._initModel()
- 
+
+        # checkpoint dir
+        self.ckpt_dir = Path('..', 'outputs', 'checkpoints', self.cfg.m_tag)
+        self.ckpt_dir.mkdir(parents=True, exist_ok=True)
+        self.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+
+        # tracking
+        self.best_valid = float('inf')
+        self.best_epoch = 0
+
     def _reproducible(self) -> None:
         torch.use_deterministic_algorithms(True)
         if self.cfg.device == 'mps':
