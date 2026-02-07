@@ -54,6 +54,9 @@ class Trainer:
         self._seed()
 
         # misc setup
+        self.device = setDevice(self.cfg.device)
+        self.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        torch.set_num_threads(cfg.cores)
     def _reproducible(self) -> None:
         torch.use_deterministic_algorithms(True)
         if self.cfg.device == 'mps':
