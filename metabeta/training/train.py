@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime
 
 import torch
+from torch.utils.tensorboard import SummaryWriter
 import schedulefree
 
 from metabeta.utils.io import setDevice, datasetFilename, checkpointFilename
@@ -26,6 +27,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--device', type=str, default='cpu', help='device to use [cpu, cuda, mps], (default = cpu)')
     parser.add_argument('--cores', type=int, default=8, help='number of processor cores to use (default = 8)')
     parser.add_argument('--reproducible', action='store_false', help='use deterministic learning trajectory (default = False)')
+    parser.add_argument('--tb', action='store_false', help='enable tensorboard logging (default = False)')
 
     # model & optimizer
     parser.add_argument('--m_tag', type=str, default='toy', help='name of model config file')
@@ -233,9 +235,6 @@ batch size: {self.cfg.bs}
         for batch in iterator:
             batch = toDevice(batch, self.device)
             proposed = self.model.estimate(batch, n_samples=self.cfg.n_samples)
-            # rmses = getRmse(proposed, batch)
-            # rmse_str = ', '.join([f'{k}={v:.3f}' for k,v in rmses.items()])
-            # iterator.set_postfix_str(f'RMSE: {rmse_str}')
 
     def go(self) -> None:
         # optionally load previous checkpoint
@@ -273,7 +272,6 @@ batch size: {self.cfg.bs}
             # save latest ckpt
             if self.cfg.save_latest:
                 self.save(epoch, 'latest')
-
 
 
 # =============================================================================
