@@ -1,4 +1,5 @@
 import argparse
+import yaml
 from datetime import datetime
 from pathlib import Path
 from tqdm import tqdm
@@ -8,9 +9,9 @@ from torch.nn import functional as F
 from torch.nn.utils import clip_grad_norm_
 import schedulefree
 
-from metabeta.models.approximator import (
-    Approximator, SummarizerConfig, PosteriorConfig, ApproximatorConfig)
+from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import Dataloader, toDevice
+from metabeta.utils.config import modelFromYaml
 from metabeta.utils.io import setDevice, datasetFilename
 
 
@@ -26,18 +27,11 @@ def setup() -> argparse.Namespace:
     # parser.add_argument('--save', type=int, default=10, help='save model every #p iterations (default = 10)')
 
     # model
-    parser.add_argument('--ds_type', type=str, default='toy', help='type of predictors [toy, flat, scm, sampled], (default = toy)')
-    parser.add_argument('--cfg', type=str, default='default', help='name of model config yml file')
-    parser.add_argument('-l', '--load', type=int, default=0, help='load model from iteration #l')
+    parser.add_argument('--d_tag', type=str, default='toy', help='name of data config file')
+    parser.add_argument('--m_tag', type=str, default='toy', help='name of model config file')
+    parser.add_argument('-l', '--load', type=int, default=0, help='load model from epoch #l')
+    parser.add_argument('--n_samples', type=int, default=200, help='number of samples to draw from posterior on test set')
     parser.add_argument('--compile', action='store_true', help='compile model (default = False)')
- 
-    # data dimensions
-    parser.add_argument('-d', '--max_d', type=int, default=3, help='maximum number of fixed effects (intercept + slopes) to draw per linear model (default = 16).')
-    parser.add_argument('-q', '--max_q', type=int, default=1, help='maximum number of random effects (intercept + slopes) to draw per linear model (default = 4).')
-    parser.add_argument('--min_m', type=int, default=5, help='minimum number of groups (default = 5).')
-    parser.add_argument('--max_m', type=int, default=30, help='maximum number of groups (default = 30).')
-    parser.add_argument('--min_n', type=int, default=10, help='minimum number of samples per group (default = 10).')
-    parser.add_argument('--max_n', type=int, default=70, help='maximum number of samples per group (default = 70).')
 
     # training & testing
     parser.add_argument('-e', '--max_epochs', type=int, default=10, help='maximum number of epochs to train (default = 10)')
