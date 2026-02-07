@@ -114,6 +114,31 @@ class Trainer:
         self.optimizer = schedulefree.AdamWScheduleFree(
             self.model.parameters(), lr=self.cfg.lr)
 
+    def train(self, epoch: int) -> None:
+        dl_train = self._getDataLoader('train', epoch, batch_size=self.cfg.bs_mini)
+        iterator = tqdm(dl_train, desc=f'Epoch {epoch:02d}/{self.cfg.max_epochs:02d} [T]')
+        running_sum = 0.0
+        self.model.train()
+        self.optimizer.train()
+        self.optimizer.zero_grad(set_to_none=True)
+        for i, batch in enumerate(iterator):
+            # get loss
+            batch = toDevice(batch, self.device)
+            loss = self.model.forward(batch)
+            loss = loss['total'].mean()
+
+            # calculate accumulated gradient with clipped norm
+            loss.backward()
+            grad_norm = clip_grad_norm_(self.model.parameters(), 1.0)
+            if torch.isfinite(grad_norm):
+                self.optimizer.step()
+            self.optimizer.zero_grad(set_to_none=True)
+
+            # log loss
+            running_sum += loss.item()
+            loss_train = running_sum / (i + 1)
+            iterator.set_postfix_str(f'NLL: {loss_train:.3f}')
+
 
 
 # =============================================================================
