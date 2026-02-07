@@ -145,6 +145,26 @@ class Trainer:
         tmp_path.replace(path)
         logger.info(f'Saved checkpoint to {path}')
 
+    def load(self, prefix: str = 'latest') -> int:
+        fname = checkpointFilename(vars(self.cfg), prefix=prefix)
+        path = Path(self.ckpt_dir, fname)
+        assert path.exists(), f'checkpoint not found: {path}'
+        payload = torch.load(path, map_location=self.device)
+
+        # compare configs
+        if self.data_cfg != payload['data_cfg']:
+            logger.warning('data config mismatch between current and checkpoint')
+        if self.model_cfg.to_dict() != payload['model_cfg']:
+            logger.warning('model config mismatch between current and checkpoint')
+
+        # load states
+        self.model.load_state_dict(payload['model_state'])
+        self.optimizer.load_state_dict(payload['optimizer_state'])
+        self.timestamp = payload['timestamp']
+        self.best_epoch = payload['best_epoch']
+        self.best_valid = payload['best_valid']
+        return int(payload.get('epoch', 0)) # last completed epoch
+
         iterator = tqdm(dl_train, desc=f'Epoch {epoch:02d}/{self.cfg.max_epochs:02d} [T]')
         running_sum = 0.0
         self.model.train()
