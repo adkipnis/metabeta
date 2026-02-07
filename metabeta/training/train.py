@@ -86,6 +86,7 @@ class Trainer:
             self.cfg.device = 'cpu'
         elif self.cfg.device == 'cuda':
             torch.backends.cudnn.deterministic = True
+        torch.set_deterministic_debug_mode('warn')
 
     def _initData(self) -> None:
         # assimilate data config
