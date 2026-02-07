@@ -9,6 +9,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 import schedulefree
 
+from metabeta.utils.logger import setupLogging
 from metabeta.utils.io import setDevice, datasetFilename, runName
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import modelFromYaml
@@ -28,6 +29,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--cores', type=int, default=8, help='number of processor cores to use (default = 8)')
     parser.add_argument('--reproducible', action='store_false', help='use deterministic learning trajectory (default = False)')
     parser.add_argument('--tb', action='store_false', help='enable tensorboard logging (default = False)')
+    parser.add_argument('--verbosity', type=int, default=0, help='verbosity level (0: warnings, 1: infos, 2: debug, default=0)')
 
     # model & optimizer
     parser.add_argument('--m_tag', type=str, default='toy', help='name of model config file')
@@ -307,6 +309,7 @@ batch size: {self.cfg.bs}
 # =============================================================================
 if __name__ == '__main__':
     cfg = setup()
+    setupLogging(cfg.verbosity)
     trainer = Trainer(cfg)
     print(trainer.info)
     trainer.go()
