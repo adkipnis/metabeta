@@ -144,8 +144,7 @@ class Trainer:
             self.writer.close()
 
     def save(self, epoch: int = 0, prefix: str = 'latest') -> None:
-        fname = checkpointFilename(vars(self.cfg), prefix=prefix)
-        path = Path(self.ckpt_dir, fname)
+        path = Path(self.ckpt_dir, prefix + '.pt')
         payload = {
             'timestamp': self.timestamp,
             'epoch': epoch,
@@ -163,8 +162,7 @@ class Trainer:
         logger.info(f'Saved checkpoint to {path}')
 
     def load(self, prefix: str = 'latest') -> int:
-        fname = checkpointFilename(vars(self.cfg), prefix=prefix)
-        path = Path(self.ckpt_dir, fname)
+        path = Path(self.ckpt_dir, prefix + '.pt')
         assert path.exists(), f'checkpoint not found: {path}'
         payload = torch.load(path, map_location=self.device)
 
