@@ -185,6 +185,7 @@ lr:         {self.cfg.lr}
 batch size: {self.cfg.bs}
 ===================='''
 
+    def train(self, epoch: int) -> float:
         dl_train = self._getDataLoader('train', epoch, batch_size=self.cfg.bs)
         iterator = tqdm(dl_train, desc=f'Epoch {epoch:02d}/{self.cfg.max_epochs:02d} [T]')
         loss_train = running_sum = 0.0
@@ -209,11 +210,12 @@ batch size: {self.cfg.bs}
             running_sum += loss.item()
             loss_train = running_sum / (i + 1)
             iterator.set_postfix_str(f'NLL: {loss_train:.3f}')
+        return float(loss_train)
 
     @torch.no_grad()
-    def valid(self, epoch: int = 0) -> None:
+    def valid(self, epoch: int = 0) -> float:
         iterator = tqdm(self.dl_valid, desc=f'Epoch {epoch:02d}/{self.cfg.max_epochs:02d} [V]')
-        running_sum = 0.0
+        loss_valid = running_sum = 0.0
         self.model.eval()
         self.optimizer.eval()
         for i, batch in enumerate(iterator):
@@ -223,6 +225,7 @@ batch size: {self.cfg.bs}
             running_sum += loss.item()
             loss_valid = running_sum / (i + 1)
             iterator.set_postfix_str(f'NLL: {loss_valid:.3f}')
+        return float(loss_valid)
 
     @torch.no_grad()
     def test(self, epoch: int = 0) -> None:
