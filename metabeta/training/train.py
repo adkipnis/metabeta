@@ -49,6 +49,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--patience', type=int, default=10, help='early stopping criterion (default = 10)')
 
     # saving & loading
+    parser.add_argument('--r_tag', type=str, default='', help='run tag (default="")')
     parser.add_argument('--save_latest', action='store_false', help='save latest model after each epoch (default = True)')
     parser.add_argument('--save_best', action='store_true', help='track and save best model wrt. validation set (default = True)')
     parser.add_argument('--load_latest', action='store_true', help='load latest model before training (default = False)')
@@ -110,6 +111,13 @@ class Trainer:
             if not self.cfg.save_best:
                 logger.warning('early stopping enabled without saving best checkpoints!')
 
+    @property
+    def run_name_tag(self) -> str:
+        suffix = self.timestamp
+        if self.cfg.r_tag:
+            suffix = self.cfg.r_tag
+        return '_'.join([self.run_name, suffix])
+
     def _reproducible(self) -> None:
         torch.use_deterministic_algorithms(True)
         if self.cfg.device == 'mps':
@@ -155,7 +163,7 @@ class Trainer:
             self.model.parameters(), lr=self.cfg.lr)
 
     def _initWriter(self) -> None:
-        self.tb_path = Path('..', 'outputs', 'tensorboard', self.run_name + '_' + self.timestamp)
+        self.tb_path = Path('..', 'outputs', 'tensorboard', self.run_name_tag)
         self.tb_path.mkdir(parents=True, exist_ok=True)
         self.writer = SummaryWriter(log_dir=str(self.tb_path))
 
