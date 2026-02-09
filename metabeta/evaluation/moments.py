@@ -48,3 +48,20 @@ def getMasks(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | None]:
     out['rfx'] = data['mask_m'].unsqueeze(-1) * data['mask_q'].unsqueeze(-2)
     return out
 
+def sampleRMSE(
+        data: dict[str, torch.Tensor],
+        means: dict[str, torch.Tensor],
+        ) -> dict[str, float]:
+    out = {}
+    masks = getMasks(data)
+    for key, estimated in means.items():
+        ground_truth = data[key]
+        mask = masks[key]
+        if mask is not None:
+            squared_error = F.mse_loss(ground_truth, estimated, reduction='none')
+            rmse = torch.sqrt(squared_error.sum() / mask.sum()).item()
+        else:
+            rmse = torch.sqrt(F.mse_loss(ground_truth, estimated))
+        out[key] = float(rmse)
+    return out
+
