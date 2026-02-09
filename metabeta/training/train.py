@@ -295,6 +295,17 @@ batch size: {self.cfg.bs}
         sample_mean = sampleMean(proposed)
         rmse = sampleRMSE(batch, sample_mean)
         r = sampleCorrelation(batch, sample_mean)
+        results = f'''
+              RMSE       R
+------------------------------
+FFX:         {rmse["ffx"]:.3f}   {r["ffx"]:.3f}
+Sigma(RFX):  {rmse["sigma_rfx"]:.3f}   {r["sigma_rfx"]:.3f}
+Sigma(Eps):  {rmse["sigma_eps"]:.3f}   {r["sigma_eps"]:.3f}
+RFX:         {rmse["rfx"]:.3f}   {r["rfx"]:.3f}
+'''
+        print(results)
+        
+
 
     def go(self) -> None:
         # optionally load previous checkpoint
