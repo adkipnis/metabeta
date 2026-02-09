@@ -65,3 +65,24 @@ def sampleRMSE(
         out[key] = float(rmse)
     return out
 
+def sampleCorrelation(
+        data: dict[str, torch.Tensor],
+        means: dict[str, torch.Tensor],
+        ) -> dict[str, float]:
+    out = {}
+    masks = getMasks(data)
+    for key, estimated in means.items():
+        ground_truth = data[key]
+        mask = masks[key]
+        if mask is not None:
+            D = mask.shape[-1]
+            r = np.zeros(D)
+            for i in range(D):
+                mask_i = mask[..., i]
+                ground_truth_i = ground_truth[mask_i, i]
+                estimated_i = estimated[mask_i, i]
+                r[i] = pearsonr(ground_truth_i, estimated_i)[0]
+        else:
+            r = pearsonr(ground_truth, estimated)[0]
+        out[key] = float(r.mean())
+    return out
