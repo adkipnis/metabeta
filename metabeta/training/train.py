@@ -258,12 +258,12 @@ batch size: {self.cfg.bs}
                 self.global_step += 1
             self.optimizer.zero_grad(set_to_none=True)
 
-            # log loss
+            # write loss
             running_sum += loss.item()
             loss_train = running_sum / (i + 1)
-            iterator.set_postfix_str(f'NLL: {loss_train:.3f}')
+            iterator.set_postfix_str(f'Loss: {loss_train:.3f}')
             if self.writer is not None:
-                self.writer.add_scalar('train/nll_step', float(loss_train), self.global_step)
+                self.writer.add_scalar('train/loss_step', float(loss_train), self.global_step)
         return float(loss_train)
 
     @torch.no_grad()
@@ -278,7 +278,7 @@ batch size: {self.cfg.bs}
             loss = loss['total'].mean()
             running_sum += loss.item()
             loss_valid = running_sum / (i + 1)
-            iterator.set_postfix_str(f'NLL: {loss_valid:.3f}')
+            iterator.set_postfix_str(f'Loss: {loss_valid:.3f}')
         return float(loss_valid)
 
     @torch.no_grad()
@@ -331,8 +331,8 @@ batch size: {self.cfg.bs}
 
             # log epoch
             if self.writer is not None:
-                self.writer.add_scalar('train/nll_epoch', float(loss_train), epoch)
-                self.writer.add_scalar('valid/nll_epoch', float(loss_valid), epoch)
+                self.writer.add_scalar('train/loss_epoch', float(loss_train), epoch)
+                self.writer.add_scalar('valid/loss_epoch', float(loss_valid), epoch)
 
             # save latest ckpt
             if self.cfg.save_latest:
