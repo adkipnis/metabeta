@@ -15,6 +15,7 @@ from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.models.approximator import Approximator
+from metabeta.evaluation.moments import sampleMean, sampleRMSE, sampleCorrelation
 
 logger = logging.getLogger('train.py')
 
@@ -284,12 +285,16 @@ batch size: {self.cfg.bs}
     @torch.no_grad()
     def test(self, epoch: int = 0) -> None:
         # expects single batch from dl
-        iterator = tqdm(self.dl_test, desc=f'Epoch {epoch:02d}/{self.cfg.max_epochs:02d} [S]')
         self.model.eval()
         self.optimizer.eval()
-        for batch in iterator:
-            batch = toDevice(batch, self.device)
-            proposed = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+        batch = next(iter(self.dl_test))
+        batch = toDevice(batch, self.device)
+        proposed = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+
+        # --- moment-based stats
+        sample_mean = sampleMean(proposed)
+        rmse = sampleRMSE(batch, sample_mean)
+        r = sampleCorrelation(batch, sample_mean)
 
     def go(self) -> None:
         # optionally load previous checkpoint
