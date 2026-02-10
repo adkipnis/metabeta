@@ -15,5 +15,5 @@ def getMasks(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | None]:
     out['ffx'] = data['mask_d']
     out['sigma_rfx'] = data['mask_q']
     out['sigma_eps'] = None
-    out['rfx'] = data['mask_m'].unsqueeze(-1) * data['mask_q'].unsqueeze(-2)
+    out['rfx'] = data['mask_m'].unsqueeze(-1) & data['mask_q'].unsqueeze(-2)
     return out
