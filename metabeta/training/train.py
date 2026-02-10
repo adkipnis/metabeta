@@ -299,23 +299,24 @@ batch size: {self.cfg.bs}
 
     @staticmethod
     def table(
-        rmse: dict[str, float],
         corr: dict[str, float],
+        rmse: dict[str, float],
         mce: dict[str, float],
     ) -> None:
-        rows = [
-            ['FFX', rmse['ffx'], corr['ffx']],
-            ['Sigma(RFX)', rmse['sigma_rfx'], corr['sigma_rfx']],
-            ['Sigma(Eps)', rmse['sigma_eps'], corr['sigma_eps']],
-            ['RFX', rmse['rfx'], corr['rfx']],
-        ]
-
-        print(tabulate(
+        keys = ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx')
+        names = {'ffx': 'FFX',
+                 'sigma_rfx': 'Sigma(RFX)',
+                 'sigma_eps': 'Sigma(Eps)',
+                 'rfx': 'RFX',
+                 }
+        rows = [[names[k], corr[k], rmse[k], mce[k]] for k in keys]
+        results = tabulate(
             rows,
-            headers=['', 'RMSE', 'R'],
+            headers=['', 'R', 'RMSE', 'MCE'],
             floatfmt='.3f',
             tablefmt='simple',
-        ))
+        )
+        print(f'\n{results}\n')
 
     def go(self) -> None:
         # optionally load previous checkpoint
