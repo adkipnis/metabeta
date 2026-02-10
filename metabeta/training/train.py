@@ -4,6 +4,7 @@ import argparse
 from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime
+from tabulate import tabulate
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -283,7 +284,7 @@ batch size: {self.cfg.bs}
         return float(loss_valid)
 
     @torch.no_grad()
-    def test(self, epoch: int = 0) -> None:
+    def sample(self, epoch: int = 0) -> None:
         # expects single batch from dl
         self.model.eval()
         self.optimizer.eval()
@@ -294,18 +295,27 @@ batch size: {self.cfg.bs}
         # --- moment-based stats
         sample_mean = sampleMean(proposed)
         rmse = sampleRMSE(batch, sample_mean)
-        r = sampleCorrelation(batch, sample_mean)
-        results = f'''
-              RMSE       R
-------------------------------
-FFX:         {rmse["ffx"]:.3f}   {r["ffx"]:.3f}
-Sigma(RFX):  {rmse["sigma_rfx"]:.3f}   {r["sigma_rfx"]:.3f}
-Sigma(Eps):  {rmse["sigma_eps"]:.3f}   {r["sigma_eps"]:.3f}
-RFX:         {rmse["rfx"]:.3f}   {r["rfx"]:.3f}
-'''
-        print(results)
-        
+        corr = sampleCorrelation(batch, sample_mean)
+        self.table(rmse, corr)
 
+    @staticmethod
+    def table(
+        rmse: dict[str, float],
+        corr: dict[str, float],
+    ) -> None:
+        rows = [
+            ['FFX', rmse['ffx'], corr['ffx']],
+            ['Sigma(RFX)', rmse['sigma_rfx'], corr['sigma_rfx']],
+            ['Sigma(Eps)', rmse['sigma_eps'], corr['sigma_eps']],
+            ['RFX', rmse['rfx'], corr['rfx']],
+        ]
+
+        print(tabulate(
+            rows,
+            headers=['', 'RMSE', 'R'],
+            floatfmt='.3f',
+            tablefmt='simple',
+        ))
 
     def go(self) -> None:
         # optionally load previous checkpoint
@@ -323,7 +333,7 @@ RFX:         {rmse["rfx"]:.3f}   {r["rfx"]:.3f}
         if not self.cfg.skip_ref:
             print('\nPerformance before training:')
             self.valid(start_epoch-1)
-            self.test(start_epoch-1)
+            self.sample(start_epoch-1)
 
         # optionally init tensorboard (after potential loading and reference run)
         if self.cfg.tb:
@@ -343,7 +353,7 @@ RFX:         {rmse["rfx"]:.3f}   {r["rfx"]:.3f}
 
             # sample on test set
             if epoch % self.cfg.test_interval == 0:
-                self.test(epoch)
+                self.sample(epoch)
 
             # log epoch
             if self.writer is not None:
