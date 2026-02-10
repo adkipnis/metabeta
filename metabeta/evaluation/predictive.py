@@ -38,3 +38,12 @@ def posteriorPredictiveNLL(
     return nll # (b, s)
 
 
+def posteriorPredictiveSample(
+    pp: D.Normal,
+    data: dict[str, torch.Tensor],
+) -> torch.Tensor:
+    mask = data['mask_n'].unsqueeze(-1)
+    y_rep = pp.sample((1,)).squeeze(0)
+    y_rep = y_rep * mask
+    return y_rep
+
