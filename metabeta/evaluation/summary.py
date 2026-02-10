@@ -1,0 +1,68 @@
+import torch
+from tabulate import tabulate
+
+from metabeta.utils.evaluation import Proposed
+from metabeta.evaluation.moments import (
+    sampleLoc,
+    sampleRMSE,
+    sampleCorrelation,
+)
+from metabeta.evaluation.intervals import expectedCoverageError
+from metabeta.evaluation.predictive import (
+    posteriorPredictiveNLL,
+    samplePosteriorPredictive,
+)
+
+
+def dependentSummary(
+    proposed: Proposed,
+    data: dict[str, torch.Tensor],
+) -> None:
+    # moment-based stats
+    sample_loc = sampleLoc(proposed, 'median')
+    rmse = sampleRMSE(sample_loc, data)
+    corr = sampleCorrelation(sample_loc, data)
+
+    # inteval-based stats
+    mce = expectedCoverageError(proposed, data)
+
+    # print summary
+    longTable(corr, rmse, mce)
+
+
+def longTable(
+    corr: dict[str, float],  # Pearson correlation
+    rmse: dict[str, float],  # root mean square error
+    mce: dict[str, float],  # mean coverage error
+) -> None:
+    keys = ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx')
+    names = {
+        'ffx': 'FFX',
+        'sigma_rfx': 'Sigma(RFX)',
+        'sigma_eps': 'Sigma(Eps)',
+        'rfx': 'RFX',
+    }
+    rows = [[names[k], corr[k], rmse[k], mce[k]] for k in keys]
+    results = tabulate(
+        rows,
+        headers=['', 'R', 'RMSE', 'MCE'],
+        floatfmt='.3f',
+        tablefmt='simple',
+    )
+    print(f'\n{results}\n')
+
+
+def flatSummary(
+    proposed: Proposed,
+    data: dict[str, torch.Tensor],
+    time: float,
+) -> None:
+    # posterior predictive
+    pp = samplePosteriorPredictive(proposed, data)
+    nll = posteriorPredictiveNLL(pp, data)
+    mnll = nll.mean(-1).median().item()
+
+    # flat table
+    rows = [['Median NLL', mnll], ['Time [s]', time]]
+    print(tabulate(rows, floatfmt='.3f', tablefmt='simple'))
+
