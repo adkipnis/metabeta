@@ -6,6 +6,7 @@ import numpy as np
 
 Proposed = dict[str, dict[str, torch.Tensor]]
 
+
 def numFixed(proposed: Proposed) -> int:
     q = proposed['local']['samples'].shape[-1]
     D = proposed['global']['samples'].shape[-1]
@@ -34,6 +35,7 @@ def sampleLoc(
         'rfx': rfx_loc,
     }
 
+
 # def sampleStd(proposed: Proposed) -> dict[str, torch.Tensor]:
 #     d = numFixed(proposed)
 #     global_std = proposed['global']['samples'].std(-2)
@@ -48,6 +50,7 @@ def sampleLoc(
 #         'rfx': rfx_std,
 #     }
 
+
 def getMasks(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | None]:
     out = {}
     out['ffx'] = data['mask_d']
@@ -56,42 +59,43 @@ def getMasks(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | None]:
     out['rfx'] = data['mask_m'].unsqueeze(-1) * data['mask_q'].unsqueeze(-2)
     return out
 
+
 def sampleRMSE(
-        data: dict[str, torch.Tensor],
-        means: dict[str, torch.Tensor],
-        ) -> dict[str, float]:
+    data: dict[str, torch.Tensor],
+    locs: dict[str, torch.Tensor],
+) -> dict[str, float]:
     out = {}
     masks = getMasks(data)
-    for key, estimated in means.items():
-        ground_truth = data[key]
+    for key, est in locs.items():
+        gt = data[key] # ground truth
         mask = masks[key]
         if mask is not None:
-            squared_error = F.mse_loss(ground_truth, estimated, reduction='none')
-            rmse = torch.sqrt(squared_error.sum() / mask.sum()).item()
+            se = F.mse_loss(gt, est, reduction='none')
+            rmse = torch.sqrt(se.sum() / mask.sum()).item()
         else:
-            rmse = torch.sqrt(F.mse_loss(ground_truth, estimated))
+            rmse = torch.sqrt(F.mse_loss(gt, est))
         out[key] = float(rmse)
     return out
 
+
 def sampleCorrelation(
-        data: dict[str, torch.Tensor],
-        means: dict[str, torch.Tensor],
-        ) -> dict[str, float]:
+    data: dict[str, torch.Tensor],
+    locs: dict[str, torch.Tensor],
+) -> dict[str, float]:
     out = {}
     masks = getMasks(data)
-    for key, estimated in means.items():
-        ground_truth = data[key]
+    for key, est in locs.items():
+        gt = data[key]
         mask = masks[key]
         if mask is not None:
             D = mask.shape[-1]
-            r = np.zeros(D)
+            corr = np.zeros(D)
             for i in range(D):
                 mask_i = mask[..., i]
-                ground_truth_i = ground_truth[mask_i, i]
-                estimated_i = estimated[mask_i, i]
-                r[i] = pearsonr(ground_truth_i, estimated_i)[0]
+                gt_i = gt[mask_i, i]
+                est_i = est[mask_i, i]
+                corr[i] = pearsonr(gt_i, est_i)[0]
         else:
-            r = pearsonr(ground_truth, estimated)[0]
-        out[key] = float(r.mean())
+            corr = pearsonr(gt, est)[0]
+        out[key] = float(corr.mean())
     return out
-
