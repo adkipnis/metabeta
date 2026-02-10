@@ -16,7 +16,7 @@ from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.models.approximator import Approximator
-from metabeta.evaluation.moments import sampleMean, sampleRMSE, sampleCorrelation
+from metabeta.evaluation.moments import sampleLoc, sampleRMSE, sampleCorrelation
 
 logger = logging.getLogger('train.py')
 
@@ -285,10 +285,11 @@ batch size: {self.cfg.bs}
         batch = toDevice(batch, self.device)
         proposed = self.model.estimate(batch, n_samples=self.cfg.n_samples)
 
-        # --- moment-based stats
-        sample_mean = sampleMean(proposed)
-        rmse = sampleRMSE(batch, sample_mean)
-        corr = sampleCorrelation(batch, sample_mean)
+        # moment-based stats
+        sample_loc = sampleLoc(proposed, 'median')
+        rmse = sampleRMSE(batch, sample_loc)
+        corr = sampleCorrelation(batch, sample_loc)
+
         self.table(rmse, corr)
 
     @staticmethod
