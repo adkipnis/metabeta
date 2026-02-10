@@ -1,11 +1,10 @@
 import yaml
+import time
 import logging
 import argparse
 from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime
-from tabulate import tabulate
-
 import torch
 from torch.utils.tensorboard import SummaryWriter
 import schedulefree
@@ -16,8 +15,7 @@ from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.models.approximator import Approximator
-from metabeta.evaluation.moments import sampleLoc, sampleRMSE, sampleCorrelation
-from metabeta.evaluation.intervals import expectedCoverageError
+from metabeta.evaluation.summary import flatSummary, dependentSummary
 
 logger = logging.getLogger('train.py')
 
@@ -284,39 +282,11 @@ batch size: {self.cfg.bs}
         self.optimizer.eval()
         batch = next(iter(self.dl_test))
         batch = toDevice(batch, self.device)
+        t0 = time.perf_counter()
         proposed = self.model.estimate(batch, n_samples=self.cfg.n_samples)
-
-        # moment-based stats
-        sample_loc = sampleLoc(proposed, 'median')
-        rmse = sampleRMSE(batch, sample_loc)
-        corr = sampleCorrelation(batch, sample_loc)
-
-        # inteval-based stats
-        mce = expectedCoverageError(proposed, batch)
-
-        # print summary
-        self.table(corr, rmse, mce)
-
-    @staticmethod
-    def table(
-        corr: dict[str, float],
-        rmse: dict[str, float],
-        mce: dict[str, float],
-    ) -> None:
-        keys = ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx')
-        names = {'ffx': 'FFX',
-                 'sigma_rfx': 'Sigma(RFX)',
-                 'sigma_eps': 'Sigma(Eps)',
-                 'rfx': 'RFX',
-                 }
-        rows = [[names[k], corr[k], rmse[k], mce[k]] for k in keys]
-        results = tabulate(
-            rows,
-            headers=['', 'R', 'RMSE', 'MCE'],
-            floatfmt='.3f',
-            tablefmt='simple',
-        )
-        print(f'\n{results}\n')
+        t1 = time.perf_counter()
+        print(dependentSummary(proposed, batch))
+        print(flatSummary(proposed, batch, time=t1-t0))
 
     def go(self) -> None:
         # optionally load previous checkpoint
