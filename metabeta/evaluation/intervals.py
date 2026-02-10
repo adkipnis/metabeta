@@ -31,3 +31,28 @@ def getQuantiles(
     return quantiles
 
 
+def sampleCredibleInterval(
+    proposed: Proposed,
+    alpha: float,
+) -> dict[str, torch.Tensor]:
+    proposed = sortProposed(proposed)
+    d = numFixed(proposed)
+    out = {}
+    roots = (alpha / 2, 1 - alpha / 2)
+
+    # global
+    samples_g = proposed['global']['samples']
+    weights_g = proposed['global'].get('weights')
+    ci_g = getQuantiles(roots, samples_g, weights_g)
+    out['ffx'] = ci_g[..., :d]
+    out['sigma_rfx'] = ci_g[..., d:-1]
+    out['sigma_eps'] = ci_g[..., -1]
+
+    # local
+    samples_l = proposed['local']['samples']
+    weights_l = proposed['local'].get('weights')
+    out['rfx'] = getQuantiles(roots, samples_l, weights_l)
+    return out
+
+
+def coverage(
