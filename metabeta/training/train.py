@@ -17,6 +17,7 @@ from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.models.approximator import Approximator
 from metabeta.evaluation.moments import sampleLoc, sampleRMSE, sampleCorrelation
+from metabeta.evaluation.intervals import expectedCoverageError
 
 logger = logging.getLogger('train.py')
 
@@ -290,12 +291,17 @@ batch size: {self.cfg.bs}
         rmse = sampleRMSE(batch, sample_loc)
         corr = sampleCorrelation(batch, sample_loc)
 
-        self.table(rmse, corr)
+        # inteval-based stats
+        mce = expectedCoverageError(proposed, batch)
+
+        # print summary
+        self.table(corr, rmse, mce)
 
     @staticmethod
     def table(
         rmse: dict[str, float],
         corr: dict[str, float],
+        mce: dict[str, float],
     ) -> None:
         rows = [
             ['FFX', rmse['ffx'], corr['ffx']],
