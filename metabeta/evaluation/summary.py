@@ -1,5 +1,6 @@
 import torch
 from tabulate import tabulate
+import numpy as np
 
 from metabeta.utils.evaluation import Proposed
 from metabeta.evaluation.moments import (
@@ -13,6 +14,11 @@ from metabeta.evaluation.predictive import (
     samplePosteriorPredictive,
 )
 
+
+def dictMean(data: dict[str, float]) -> float:
+    values = list(data.values())
+    return float(np.mean(values))
+    
 
 def dependentSummary(
     proposed: Proposed,
@@ -43,6 +49,7 @@ def longTable(
         'rfx': 'RFX',
     }
     rows = [[names[k], corr[k], rmse[k], mce[k]] for k in keys]
+    rows += [['Average', dictMean(corr), dictMean(rmse), dictMean(mce)]]
     results = tabulate(
         rows,
         headers=['', 'R', 'RMSE', 'MCE'],
