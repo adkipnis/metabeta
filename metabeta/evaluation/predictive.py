@@ -27,3 +27,14 @@ def samplePosteriorPredictive(
 
 
 def posteriorPredictiveNLL(
+    pp: D.Normal,
+    data: dict[str, torch.Tensor],
+) -> torch.Tensor:
+    y = data['y'] # (b, m, n)
+    nll = -pp.log_prob(y.unsqueeze(-1))
+    mask = data['mask_n'].unsqueeze(-1)
+    nll = nll * mask
+    nll = nll.sum(dim=(1,2)) / mask.sum(dim=(1,2))
+    return nll # (b, s)
+
+
