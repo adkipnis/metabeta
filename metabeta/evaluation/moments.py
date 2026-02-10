@@ -46,8 +46,8 @@ def sampleStd(proposed: Proposed) -> dict[str, torch.Tensor]:
 
 
 def sampleRMSE(
-    data: dict[str, torch.Tensor],
     locs: dict[str, torch.Tensor],
+    data: dict[str, torch.Tensor],
 ) -> dict[str, float]:
     out = {}
     masks = getMasks(data)
@@ -64,8 +64,8 @@ def sampleRMSE(
 
 
 def sampleCorrelation(
-    data: dict[str, torch.Tensor],
     locs: dict[str, torch.Tensor],
+    data: dict[str, torch.Tensor],
 ) -> dict[str, float]:
     out = {}
     masks = getMasks(data)
@@ -84,4 +84,3 @@ def sampleCorrelation(
             corr = pearsonr(gt, est)[0]
         out[key] = float(corr.mean())
     return out
-
