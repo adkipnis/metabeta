@@ -260,7 +260,7 @@ batch size: {self.cfg.bs}
                 self.writer.add_scalar('train/loss_step', float(loss_train), self.global_step)
         return float(loss_train)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def valid(self, epoch: int = 0) -> float:
         iterator = tqdm(self.dl_valid, desc=f'Epoch {epoch:02d}/{self.cfg.max_epochs:02d} [V]')
         loss_valid = running_sum = 0.0
@@ -275,7 +275,7 @@ batch size: {self.cfg.bs}
             iterator.set_postfix_str(f'Loss: {loss_valid:.3f}')
         return float(loss_valid)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def sample(self, epoch: int = 0) -> None:
         # expects single batch from dl
         self.model.eval()
