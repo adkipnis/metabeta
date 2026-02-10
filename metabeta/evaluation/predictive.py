@@ -2,7 +2,7 @@ import torch
 from torch import distributions as D
 from metabeta.utils.evaluation import Proposed, numFixed
 
-def samplePosteriorPredictive(
+def getPosteriorPredictive(
     proposed: Proposed,
     data: dict[str, torch.Tensor],
 ) -> D.Normal:
@@ -30,9 +30,9 @@ def posteriorPredictiveNLL(
     pp: D.Normal,
     data: dict[str, torch.Tensor],
 ) -> torch.Tensor:
+    mask = data['mask_n'].unsqueeze(-1)
     y = data['y'] # (b, m, n)
     nll = -pp.log_prob(y.unsqueeze(-1))
-    mask = data['mask_n'].unsqueeze(-1)
     nll = nll * mask
     nll = nll.sum(dim=(1,2)) / mask.sum(dim=(1,2))
     return nll # (b, s)

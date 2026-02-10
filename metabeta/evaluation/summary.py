@@ -10,8 +10,9 @@ from metabeta.evaluation.moments import (
 )
 from metabeta.evaluation.intervals import expectedCoverageError
 from metabeta.evaluation.predictive import (
+    getPosteriorPredictive,
     posteriorPredictiveNLL,
-    samplePosteriorPredictive,
+    posteriorPredictiveSample,
 )
 
 
@@ -86,7 +87,7 @@ def flatSummary(
     time: float,
 ) -> str:
     # posterior predictive
-    pp = samplePosteriorPredictive(proposed, data)
+    pp = getPosteriorPredictive(proposed, data)
     nll = posteriorPredictiveNLL(pp, data)
     mnll = nll.mean(-1).median().item()
 
