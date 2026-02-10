@@ -14,3 +14,20 @@ def sortProposed(proposed: Proposed) -> Proposed:
     return proposed
 
 
+def getQuantiles(
+    roots: tuple[float, float],
+    sorted_samples: torch.Tensor,
+    weights: torch.Tensor | None = None,
+) -> torch.Tensor:
+    assert len(roots) == 2
+    assert 0.0 <= roots[0] < roots[1] <= 1.0
+    s = sorted_samples.shape[-2]
+    roots_ = torch.tensor(roots)
+    if weights is None:
+        root_idx = (roots_ * s).round().int().clamp_max(s-1)
+        quantiles = sorted_samples[..., root_idx, :]
+    else:
+        raise NotImplementedError()
+    return quantiles
+
+
