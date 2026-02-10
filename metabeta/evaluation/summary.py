@@ -18,7 +18,7 @@ from metabeta.evaluation.predictive import (
 def dictMean(data: dict[str, float]) -> float:
     values = list(data.values())
     return float(np.mean(values))
-    
+
 
 def dependentSummary(
     proposed: Proposed,
@@ -65,7 +65,7 @@ def wideTable(
     mce: dict[str, float],  # mean coverage error
 ) -> str:
     keys = ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx')
-    
+
     rows = [
         ['R'] + [corr[k] for k in keys] + [dictMean(corr)],
         ['RMSE'] + [rmse[k] for k in keys] + [dictMean(rmse)],
@@ -78,6 +78,7 @@ def wideTable(
         tablefmt='simple',
     )
     return f'\n{results}'
+
 
 def flatSummary(
     proposed: Proposed,
@@ -96,4 +97,3 @@ def flatSummary(
     ]
     results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
     return f'{results}\n'
-
