@@ -92,3 +92,23 @@ def sampleCoverageError(
     return out
 
 
+def expectedCoverageError(
+    proposed: Proposed,
+    data: dict[str, torch.Tensor],
+    alphas: list[float] = [0.02, 0.05, 0.10, 0.20, .32, 0.50],
+) -> dict[str, float]:
+    # get coverage error for each alpha level
+    ce_dict = {}
+    for alpha in alphas:
+        ci = sampleCredibleInterval(proposed, alpha=alpha)
+        ce_dict[alpha] = sampleCoverageError(ci, data, nominal=1-alpha)
+
+    # average over alphas
+    keys = next(iter(ce_dict.values())).keys()
+    out = {
+        k: sum(d[k] for d in ce_dict.values()) / len(ce_dict)
+        for k in keys
+    }
+    return out
+
+
