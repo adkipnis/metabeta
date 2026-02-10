@@ -72,3 +72,23 @@ def coverage(
         return inside.float().mean(0)
 
 
+def sampleCoverageError(
+    ci_dict: dict[str, torch.Tensor],
+    data: dict[str, torch.Tensor],
+    nominal: float,
+) -> dict[str, float]:
+    out = {}
+    masks = getMasks(data)
+    for key, ci in ci_dict.items():
+        gt = data[key]
+        mask = masks[key]
+        if key == 'sigma_eps':
+            gt = gt.unsqueeze(-1)
+            ci = ci.unsqueeze(-1)
+        out[key] = coverage(ci, gt, mask) - nominal
+        if key == 'rfx': # average over groups
+            out[key] = out[key].mean(0)
+        out[key] = out[key].mean(0).item() # TODO: incorporate mask?
+    return out
+
+
