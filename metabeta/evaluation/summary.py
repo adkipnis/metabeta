@@ -12,7 +12,6 @@ from metabeta.evaluation.intervals import expectedCoverageError
 from metabeta.evaluation.predictive import (
     getPosteriorPredictive,
     posteriorPredictiveNLL,
-    posteriorPredictiveSample,
 )
 
 

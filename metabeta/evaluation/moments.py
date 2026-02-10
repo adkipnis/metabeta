@@ -56,8 +56,10 @@ def sampleRMSE(
         gt = data[key]   # ground truth
         mask = masks[key]
         if mask is not None:
-            se = F.mse_loss(gt, est, reduction='none')
-            rmse = torch.sqrt(se.sum() / mask.sum()).item()
+            se = (gt - est).pow(2)
+            se = se * mask
+            n =  mask.sum().clamp_min(1.0)
+            rmse = torch.sqrt(se.sum() / n).item()
         else:
             rmse = torch.sqrt(F.mse_loss(gt, est))
         out[key] = float(rmse)
