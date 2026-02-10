@@ -47,5 +47,7 @@ def runName(cfg: dict, prefix: str = '') -> str:
         f'm{cfg["m_tag"]}',
         f's{cfg["seed"]}',
         ]
+    if (r_tag := cfg['r_tag']):
+        parts += [f'r{r_tag}']
     return '_'.join(parts)
 

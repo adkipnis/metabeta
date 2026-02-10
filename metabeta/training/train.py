@@ -97,10 +97,10 @@ class Trainer:
         self._initModel()
 
         # checkpoint dir
+        self.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
         self.run_name = runName(vars(self.cfg))
         self.ckpt_dir = Path('..', 'outputs', 'checkpoints', self.run_name)
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
-        self.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
 
         # tracking & logging
         self.best_valid = float('inf')
@@ -112,13 +112,6 @@ class Trainer:
             self.stopper = EarlyStopping(self.cfg.patience)
             if not self.cfg.save_best:
                 logger.warning('early stopping enabled without saving best checkpoints!')
-
-    @property
-    def run_name_tag(self) -> str:
-        suffix = self.timestamp
-        if self.cfg.r_tag:
-            suffix = self.cfg.r_tag
-        return '_'.join([self.run_name, suffix])
 
     def _reproducible(self) -> None:
         torch.use_deterministic_algorithms(True)
@@ -165,7 +158,7 @@ class Trainer:
             self.model.parameters(), lr=self.cfg.lr)
 
     def _initWriter(self) -> None:
-        self.tb_path = Path('..', 'outputs', 'tensorboard', self.run_name_tag)
+        self.tb_path = Path('..', 'outputs', 'tensorboard', self.run_name + '_' + self.timestamp)
         self.tb_path.mkdir(parents=True, exist_ok=True)
         self.writer = SummaryWriter(log_dir=str(self.tb_path))
 
