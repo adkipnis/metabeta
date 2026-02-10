@@ -12,18 +12,26 @@ def numFixed(proposed: Proposed) -> int:
     d = D - q - 1
     return int(d)
 
-def sampleMean(proposed: Proposed) -> dict[str, torch.Tensor]:
+
+def sampleLoc(
+    proposed: Proposed, loc_type: str = 'mean'
+) -> dict[str, torch.Tensor]:
     d = numFixed(proposed)
-    global_mean = proposed['global']['samples'].mean(-2)
-    ffx_mean = global_mean[..., :d]
-    sigma_rfx_mean = global_mean[..., d:-1]
-    sigma_eps_mean = global_mean[..., -1]
-    rfx_mean = proposed['local']['samples'].mean(-2)
+    loc_fn = {'mean': torch.mean, 'median': torch.median}[loc_type]
+    samples_g = proposed['global']['samples']
+    samples_l = proposed['local']['samples']
+
+    rfx_loc = loc_fn(samples_l, dim=-2)
+    global_loc = loc_fn(samples_g, dim=-2)
+    ffx_loc = global_loc[..., :d]
+    sigma_rfx_loc = global_loc[..., d:-1]
+    sigma_eps_loc = global_loc[..., -1]
+
     return {
-        'ffx': ffx_mean,
-        'sigma_rfx': sigma_rfx_mean,
-        'sigma_eps': sigma_eps_mean,
-        'rfx': rfx_mean,
+        'ffx': ffx_loc,
+        'sigma_rfx': sigma_rfx_loc,
+        'sigma_eps': sigma_eps_loc,
+        'rfx': rfx_loc,
     }
 
 # def sampleStd(proposed: Proposed) -> dict[str, torch.Tensor]:
