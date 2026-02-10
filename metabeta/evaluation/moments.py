@@ -1,3 +1,4 @@
+from typing import cast
 import torch
 from torch.nn import functional as F
 from scipy.stats import pearsonr
@@ -74,13 +75,13 @@ def sampleCorrelation(
         mask = masks[key]
         if mask is not None:
             D = mask.shape[-1]
-            corr = np.zeros(D)
+            corr = np.zeros(D, dtype=np.float32)
             for i in range(D):
                 mask_i = mask[..., i]
                 gt_i = gt[mask_i, i]
                 est_i = est[mask_i, i]
-                corr[i] = pearsonr(gt_i, est_i)[0]
+                corr[i] = cast(np.float32, pearsonr(gt_i, est_i)[0])
         else:
-            corr = pearsonr(gt, est)[0]
+            corr = cast(np.float32, pearsonr(gt, est)[0])
         out[key] = float(corr.mean())
     return out
