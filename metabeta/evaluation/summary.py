@@ -90,6 +90,10 @@ def flatSummary(
     mnll = nll.mean(-1).median().item()
 
     # flat table
-    rows = [['Median NLL', mnll], ['Time [s]', time]]
-    return tabulate(rows, floatfmt='.3f', tablefmt='simple')
+    rows = [
+        ['Median NLL', mnll],
+        ['time [s]', time],
+    ]
+    results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
+    return f'{results}\n'
 
