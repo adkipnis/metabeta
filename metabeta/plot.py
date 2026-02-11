@@ -129,3 +129,41 @@ class Plot:
 
         plt.show()
 
+    @staticmethod
+    def _groupedRecovery(
+        ax: Axes,
+        targets: np.ndarray,
+        estimates: np.ndarray,
+        mask: np.ndarray,
+        stats: dict[str, float],
+
+        # strings
+        names: list[str],
+        title: str = '',
+        y_name: str = 'Estimate',
+
+        # plot details
+        marker: str = 'o',
+        alpha: float = 0.15,
+        upper: bool = True,
+        lower: bool = True,
+    ) -> None:
+        ''' scatter plot: ground truth vs. estimates '''
+        # check sizes
+        d = len(names)
+        assert targets.shape[-1] == estimates.shape[-1] == d, 'shape mismatch'
+        # if targets.dim() == 3:
+        # ...
+
+        # init figure
+        ax.set_axisbelow(True)
+        ax.grid(True)
+        min_val = min(targets.min(), estimates.min())
+        max_val = max(targets.max(), estimates.max())
+        delta = (max_val - min_val)
+        const = delta * 0.05
+        limits = (min_val - const, max_val + const)
+        ax.set_xlim(limits, auto=False)
+        ax.set_ylim(limits, auto=False)
+        ax.plot(limits, limits, '--', lw=2, zorder=1, color='grey')  # diagline
+
