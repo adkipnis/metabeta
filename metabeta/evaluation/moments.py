@@ -27,22 +27,18 @@ def sampleLoc(
     proposed: Proposed, loc_type: str = 'mean'
 ) -> dict[str, torch.Tensor]:
     d = numFixed(proposed)
-    loc_fn = {
-        'mean': lambda x: torch.mean(x, dim=-2),
-        'median': lambda x: torch.median(x, dim=-2)[0],
-    }[loc_type]
-    samples_g = proposed['global']['samples']
+    samples_g = proposed['global']['samples'].clone()
     samples_l = proposed['local']['samples']
-    rfx_loc = loc_fn(samples_l)
-    global_loc = loc_fn(samples_g)
-    ffx_loc = global_loc[..., :d]
-    sigma_rfx_loc = global_loc[..., d:-1]
-    sigma_eps_loc = global_loc[..., -1]
-
+    w = proposed.get('weights_norm')
+    
+    # get location
+    global_loc = getLocation(samples_g, w, loc_type)
+    rfx_loc = getLocation(samples_l, w, loc_type)
+    
     return {
-        'ffx': ffx_loc,
-        'sigma_rfx': sigma_rfx_loc,
-        'sigma_eps': sigma_eps_loc,
+        'ffx': global_loc[..., :d],
+        'sigma_rfx': global_loc[..., d:-1],
+        'sigma_eps': global_loc[..., -1],
         'rfx': rfx_loc,
     }
 
