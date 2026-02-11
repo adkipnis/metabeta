@@ -14,6 +14,7 @@ from metabeta.utils.io import setDevice, datasetFilename, runName
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Dataloader, toDevice
+from metabeta.utils.preprocessing import rescale
 from metabeta.models.approximator import Approximator
 from metabeta.evaluation.summary import flatSummary, dependentSummary
 
@@ -285,6 +286,10 @@ batch size: {self.cfg.bs}
         t0 = time.perf_counter()
         proposed = self.model.estimate(batch, n_samples=self.cfg.n_samples)
         t1 = time.perf_counter()
+        
+        # undo unit scale wrt y
+        rescale(proposed, batch)
+
         print(dependentSummary(proposed, batch))
         print(flatSummary(proposed, batch, time=t1-t0))
 
