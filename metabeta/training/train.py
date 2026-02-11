@@ -9,6 +9,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 import schedulefree
 
+from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.io import setDevice, datasetFilename, runName
 from metabeta.utils.sampling import setSeed
@@ -54,7 +55,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--r_tag', type=str, default='', help='run tag (default="")')
     parser.add_argument('--save_latest', action='store_false', help='save latest model after each epoch (default = True)')
     parser.add_argument('--save_best', action='store_true', help='track and save best model wrt. validation set (default = True)')
-    parser.add_argument('--load_latest', action='store_true', help='load latest model before training (default = False)')
+    parser.add_argument('--load_latest', action='store_false', help='load latest model before training (default = False)')
     parser.add_argument('--load_best', action='store_true', help='load best model wrt. validation set (overwrites load_latest, default = False)')
 
     return parser.parse_args()
@@ -293,6 +294,10 @@ batch size: {self.cfg.bs}
 
         # importance sampling
         is_eff = None
+        imp_sampler = ImportanceSampler(batch)
+        proposed.update(imp_sampler(proposed))
+        is_eff = proposed['sample_efficiency'].mean().item()
+
         print(dependentSummary(proposed, batch))
         print(flatSummary(proposed, batch, time=tpd, is_eff=is_eff))
 
