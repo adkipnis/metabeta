@@ -223,3 +223,38 @@ class Plot:
             ax.set_xlabel('Ground Truth', fontsize=26, labelpad=10)
 
 
+    def groupedRecovery(
+        self,
+        axs: Axes,
+        targets: list[torch.Tensor],
+        estimates: list[torch.Tensor],
+        masks: list[torch.Tensor],
+        metrics: list[dict[str, float]],
+ 
+        # string
+        names: list[list[str]],
+        titles: list[str] = [],
+        y_name: str = 'Estiamte',
+
+        # plot details
+        marker: str = 'o',
+        alpha: float = 0.15,
+        upper: bool = True,
+        lower: bool = True,
+    ) -> None:
+        first = True
+        for ax, tar, est, mas, met, nam, tit in zip(
+                axs, targets, estimates, masks, metrics, names, titles):
+            # colors = palette[i:i+len(_names)]
+            self._groupedRecovery(
+                ax,
+                targets=tar.numpy(),
+                estimates=est.numpy(),
+                mask=mas.numpy(),
+                stats=met,
+                names=nam, title=tit, y_name=(y_name if first else ''),
+                marker=marker, alpha=alpha, upper=upper, lower=lower,
+            )
+            first = False
+
+plot = Plot()
