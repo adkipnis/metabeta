@@ -91,7 +91,7 @@ def dependentSummary(
     data: dict[str, torch.Tensor],
 ) -> str:
     # moment-based stats
-    sample_loc = sampleLoc(proposed, 'median')
+    sample_loc = sampleLoc(proposed, 'mean')
     rmse = sampleRMSE(sample_loc, data)
     corr = sampleCorrelation(sample_loc, data)
 
