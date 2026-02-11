@@ -107,3 +107,24 @@ class ImportanceSampler:
 
         return self.getImportanceWeights(ll, lp, lq)
 
+    def getImportanceWeights(
+        self,
+        log_likelihood: torch.Tensor,
+        log_prior: torch.Tensor,
+        log_q: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        log_w = log_likelihood + log_prior - log_q
+        if self.constrain:
+            log_w = dampen(log_w, p=0.70)
+        log_w_max = torch.quantile(log_w, 0.99, dim=-1).unsqueeze(-1)
+        log_w = log_w.clamp(max=log_w_max)
+        log_w = log_w - log_w_max
+        w = log_w.exp()
+        w_norm = w / w.sum(dim=-1, keepdim=True)
+        n_eff = w.sum(-1).square() / (w.square().sum(-1) + 1e-12)
+        sample_efficiency = n_eff / w.shape[-1]
+        return {'weights': w,
+                'weights_norm': w_norm,
+                'n_eff': n_eff,
+                'sample_efficiency': sample_efficiency}
+    
