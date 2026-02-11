@@ -1,6 +1,9 @@
+import torch
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
+from matplotlib.axes import Axes
+from matplotlib.ticker import MultipleLocator
 import seaborn as sns
 
 class Plot:
@@ -11,7 +14,12 @@ class Plot:
                 alpha: float = 0.75,
                 title: str = '',
                 kde: bool = True):
-        # adapted from https://github.com/bayesflow-org/bayesflow
+        ''' pair grid for all dataset columns
+            - histograms along diagonal 
+            - scatter in the upper triangular
+            - (optional) kde plots in the lower triangular 
+            inspired by https://github.com/bayesflow-org/bayesflow
+        '''
         def _histplot(x, **kwargs):
             # sns histplot but with detached axes
             ax2 = plt.gca().twinx()
@@ -89,6 +97,7 @@ class Plot:
     def correlation(x: np.ndarray | pd.DataFrame,
                     names: list[str] | None = None,
                     ):
+        ''' plot correlation matrix over columns of x '''
         # init fig
         fig = plt.figure(figsize=(8,8))
         ax = fig.add_subplot(111)
