@@ -7,6 +7,22 @@ import numpy as np
 from metabeta.utils.evaluation import Proposed, numFixed, getMasks
 
 
+def getLocation(
+    x: torch.Tensor, w: torch.Tensor | None = None, loc_type: str = 'mean',
+) -> torch.Tensor:
+    if loc_type == 'mean':
+        if w is None:
+            return torch.mean(x, dim=-2)
+        if x.dim() == 4: # handle groups in rfx
+            w = w.unsqueeze(1)
+        return (x * w.unsqueeze(-1)).sum(-2)
+    elif loc_type == 'median':
+        if w is None:
+            return torch.median(x, dim=-2)
+        ... # TODO
+    else:
+        raise NotImplementedError(f'location type {loc_type} not implemented')
+
 def sampleLoc(
     proposed: Proposed, loc_type: str = 'mean'
 ) -> dict[str, torch.Tensor]:
