@@ -286,6 +286,7 @@ batch size: {self.cfg.bs}
         t0 = time.perf_counter()
         proposed = self.model.estimate(batch, n_samples=self.cfg.n_samples)
         t1 = time.perf_counter()
+        tpd = (t1-t0) / batch['X'].shape[0] # time per dataset
         
         # undo unit scale wrt y
         rescale(proposed, batch)
