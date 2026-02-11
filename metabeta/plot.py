@@ -195,3 +195,31 @@ class Plot:
             ),
         )
 
+        # final touches
+        if delta < 2:
+            ml = 0.5
+        elif delta < 6:
+            ml = 1.0
+        elif delta < 12:
+            ml = 2.0
+        elif delta < 24:
+            ml = 3.0
+        else:
+            ml = 5.0
+        ax.xaxis.set_major_locator(MultipleLocator(ml))
+        ax.yaxis.set_major_locator(MultipleLocator(ml))
+        ax.tick_params(axis='both', labelsize=18)
+        ax.legend(fontsize=22, markerscale=2.5, loc='upper left')
+        if y_name:
+            ax.set_ylabel(y_name, fontsize=26, labelpad=10)
+        if upper and lower:
+            ax.set_title(title, fontsize=30, pad=15)
+            ax.set_xlabel('Ground Truth', fontsize=26, labelpad=10)
+        elif upper:
+            ax.set_title(title, fontsize=30, pad=15)
+            ax.set_xlabel('')
+            ax.tick_params(axis='x', labelcolor='w', size=1)
+        elif lower:
+            ax.set_xlabel('Ground Truth', fontsize=26, labelpad=10)
+
+
