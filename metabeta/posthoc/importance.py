@@ -62,3 +62,18 @@ class ImportanceSampler:
         lp = lp.sum(-1)
         return lp # (b, s)
 
+    def logLikelihoodCond(
+        self,
+        ffx: torch.Tensor, # (b, s, d)
+        sigma_eps: torch.Tensor, # (b, s)
+        rfx: torch.Tensor, # (b, m, s, q)
+    ) -> torch.Tensor:
+        mu_g = torch.einsum('bmnd,bsd->bmns', self.X, ffx)
+        mu_l = torch.einsum('bmnq,bmsq->bmns', self.Z, rfx)
+        loc = mu_g + mu_l
+        scale = sigma_eps.unsqueeze(1).unsqueeze(1) + 1e-12
+        dist = D.Normal(loc=loc, scale=scale)
+        ll = dist.log_prob(self.y)
+        lp = (ll * self.mask_n).sum(dim=(1,2))
+        return lp # (b, s)
+
