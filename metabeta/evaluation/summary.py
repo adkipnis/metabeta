@@ -98,6 +98,9 @@ def dependentSummary(
     # inteval-based stats
     mce = expectedCoverageError(proposed, data)
 
+    # revery plot
+    recoveryPlot(sample_loc, data, stats=dict(rmse=rmse, corr=corr))
+
     # print summary
     return longTable(corr, rmse, mce)
 
