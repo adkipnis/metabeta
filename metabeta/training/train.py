@@ -291,8 +291,10 @@ batch size: {self.cfg.bs}
         # undo unit scale wrt y
         rescale(proposed, batch)
 
+        # importance sampling
+        is_eff = None
         print(dependentSummary(proposed, batch))
-        print(flatSummary(proposed, batch, time=t1-t0))
+        print(flatSummary(proposed, batch, time=tpd, is_eff=is_eff))
 
     def go(self) -> None:
         # optionally load previous checkpoint
