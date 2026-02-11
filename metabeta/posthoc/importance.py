@@ -33,3 +33,24 @@ class ImportanceSampler:
         self.mask_mq = mask_mq.unsqueeze(-2) # (b, m, 1, q)
         self.mask_m = data['mask_m'].unsqueeze(-1) # (b, m, 1)
         self.mask_n = data['mask_n'].unsqueeze(-1) # (b, m, n, 1)
+
+    def logPriorFfx(self, ffx: torch.Tensor) -> torch.Tensor:
+        # ffx (b, s, d)
+        dist = D.Normal(self.nu_ffx, self.tau_ffx)
+        lp = dist.log_prob(ffx)
+        lp = (lp * self.mask_d).sum(-1)
+        return lp # (b, s)
+
+    def logPriorSigmaRfx(self, sigma_rfx: torch.Tensor) -> torch.Tensor:
+        # sigma_rfx (b, s, q)
+        dist = D.HalfNormal(scale=self.tau_rfx)
+        lp = dist.log_prob(sigma_rfx)
+        lp = (lp * self.mask_q).sum(-1)
+        return lp # (b, s)
+
+    def logPriorSigmaEps(self, sigma_eps: torch.Tensor) -> torch.Tensor:
+        # sigma_eps (b, s)
+        dist = D.StudentT(df=4, loc=0, scale=self.tau_eps)
+        lp = dist.log_prob(sigma_eps) + math.log(2.0)
+        return lp # (b, s)
+
