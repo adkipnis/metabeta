@@ -92,7 +92,6 @@ class Collection(torch.utils.data.Dataset):
 
         # init rfx design matrix and re-insert max-padded ns
         ds['Z'] = ds['X'][..., : self.q].copy()
-        # ds['ns'] = ns
 
         # optionally permute
         if self.permute:
@@ -164,7 +163,10 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
         idx = torch.as_tensor(np.arange(m) < ds['m'])
         rfx[b, idx] = torch.as_tensor(ds['rfx'], dtype=dtype)
     out['rfx'] = rfx
- 
+    
+    # save sd(Y) for unstandardizing
+    out['sd_y'] = quickCollate(batch, 'sd_y')
+    
     # remaining mask handling
     out['mask_m'] = (out['ns'] != 0)
     if 'dperm' in batch[0]:

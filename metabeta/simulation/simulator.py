@@ -115,6 +115,7 @@ class Simulator:
             'q': self.q,
 
             # miscellanious
+            'sd_y': sd,
             'r_squared': 1 - params['sigma_eps']**2, # population R^2
             'cov_sum': self._covsum(params, obs), # helper for standardization
         }
