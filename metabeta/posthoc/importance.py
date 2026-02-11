@@ -77,3 +77,33 @@ class ImportanceSampler:
         lp = (ll * self.mask_n).sum(dim=(1,2))
         return lp # (b, s)
 
+    def __call__(self, proposed: Proposed) -> dict[str, torch.Tensor]:
+        d = numFixed(proposed)
+
+        # unpack parameters
+        samples_g = proposed['global']['samples']
+        ffx = samples_g[..., :d]
+        sigma_rfx = samples_g[..., d:-1]
+        sigma_eps = samples_g[..., -1]
+        rfx = proposed['local']['samples']
+
+        # posterior log probs
+        log_q_g = proposed['global']['log_prob'] # (b, s)
+        log_q_l = proposed['local']['log_prob'] # (b, m, s)
+        lq = log_q_g + (log_q_l * self.mask_m).sum(1)
+
+        # log priors
+        lp_ffx = self.logPriorFfx(ffx)
+        lp_sigma_eps = self.logPriorSigmaEps(sigma_eps)
+        lp = lp_ffx + lp_sigma_eps 
+        
+        # # regularize Sigma(RFX)
+        # lp_sigma_rfx = self.logPriorSigmaRfx(sigma_rfx)
+        # lp_rfx = self.logPriorRfx(rfx, sigma_rfx)
+        # lp = lp + lp_sigma_rfx + lp_rfx
+
+        # conditional log likelihood
+        ll = self.logLikelihoodCond(ffx, sigma_eps, rfx)
+
+        return self.getImportanceWeights(ll, lp, lq)
+
