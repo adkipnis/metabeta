@@ -178,3 +178,20 @@ class Plot:
             ax.scatter(targets_i, estimates_i, color=color_i, s=70,
                        marker=marker, alpha=alpha, label=names[i])
         
+        # stats info
+        txt = [f'{k} = {v:.3f}' for k,v in stats.items()]
+        ax.text(
+            0.7,
+            0.1,
+            '\n'.join(txt),
+            transform=ax.transAxes,
+            ha='center',
+            va='bottom',
+            fontsize=22,
+            bbox=dict(
+                boxstyle='round',
+                facecolor=(1, 1, 1, 0.7),
+                edgecolor=(0, 0, 0, alpha),
+            ),
+        )
+
