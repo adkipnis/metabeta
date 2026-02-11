@@ -1,3 +1,4 @@
+import torch
 import numpy as np
 from dataclasses import dataclass
 
@@ -55,3 +56,19 @@ class Standardizer:
         return x * self.std + self.mean
 
 
+# --- rescale wrt y
+def rescale(
+        proposed: dict[str, dict[str, torch.Tensor]],
+        data: dict[str, torch.Tensor],
+) -> None:
+    # posterior samples
+    for source in ('global', 'local'):
+        samples = proposed[source]['samples']
+        sd_y = data['sd_y'].view(-1, *([1] * (samples.ndim - 1)))
+        proposed[source]['samples'] *= sd_y
+
+    # params, hyperparams, y
+    for key in ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx',
+                'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps', 'y'):
+        sd_y = data['sd_y'].view(-1, *([1] * (data[key].ndim - 1)))
+        data[key] *= sd_y
