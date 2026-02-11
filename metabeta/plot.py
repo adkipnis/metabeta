@@ -167,3 +167,14 @@ class Plot:
         ax.set_ylim(limits, auto=False)
         ax.plot(limits, limits, '--', lw=2, zorder=1, color='grey')  # diagline
 
+        # overlay plots
+        for i in range(d):
+            mask_i = mask[..., i]
+            if mask_i.sum() == 0:
+                continue
+            targets_i = targets[mask_i, i]
+            estimates_i = estimates[mask_i, i]
+            color_i = 'darkviolet' if 'epsilon' in names[i] else None
+            ax.scatter(targets_i, estimates_i, color=color_i, s=70,
+                       marker=marker, alpha=alpha, label=names[i])
+        
