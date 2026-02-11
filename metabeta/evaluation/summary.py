@@ -1,4 +1,5 @@
 import torch
+from torch.nn import functional as F
 from tabulate import tabulate
 import numpy as np
 
@@ -13,11 +14,76 @@ from metabeta.evaluation.predictive import (
     getPosteriorPredictive,
     posteriorPredictiveNLL,
 )
+from metabeta.plot import plot
+from matplotlib import pyplot as plt
 
 
 def dictMean(data: dict[str, float]) -> float:
     values = list(data.values())
     return float(np.mean(values))
+
+def recoveryPlot(
+    locs: dict[str, torch.Tensor],
+    data: dict[str, torch.Tensor],
+    stats: dict[str, dict[str, float]],
+) -> None:
+    targets = []
+    estimates = []
+    masks = []
+    names = []
+    metrics = []
+
+    # fixed effects
+    d = data['ffx'].shape[-1]
+    targets.append(data['ffx'])
+    estimates.append(locs['ffx'])
+    masks.append(data['mask_d'])
+    names.append([rf'$\beta_{{{i}}}$' for i in range(d)])
+    metrics.append({
+        'r': stats['corr']['ffx'],
+        'RMSE': stats['rmse']['ffx'],
+    })
+
+    # variance parameters
+    q = data['sigma_rfx'].shape[-1]
+    sigmas = torch.cat(
+        [data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)], dim=-1)
+    targets.append(sigmas)
+    sigmas_est = torch.cat(
+        [locs['sigma_rfx'], locs['sigma_eps'].unsqueeze(-1)], dim=-1)
+    estimates.append(sigmas_est)
+    masks.append(F.pad(data['mask_q'], (0,1), value=True))
+    names.append([rf'$\sigma_{i}$' for i in range(q)] + [r'$\sigma_\epsilon$'])
+    rmse = q/(q+1) * stats['rmse']['sigma_rfx'] + 1/(q+1) * stats['rmse']['sigma_eps']
+    r = q/(q+1) * stats['corr']['sigma_rfx'] + 1/(q+1) * stats['corr']['sigma_eps']
+    metrics.append({'r': r, 'RMSE': rmse})
+
+    # random effects
+    targets.append(data['rfx'].view(-1, q))
+    estimates.append(locs['rfx'].view(-1, q))
+    mask = data['mask_m'].unsqueeze(-1) & data['mask_q'].unsqueeze(-2)
+    masks.append(mask.view(-1, q))
+    names.append([rf'$\alpha_{{{i}}}$' for i in range(q)])
+    metrics.append({
+        'r': stats['corr']['rfx'],
+        'RMSE': stats['rmse']['rfx'],
+    })
+
+    # figure
+    fig, axs = plt.subplots(figsize=(6 * 3, 6), ncols=3, dpi=300)
+    plot.groupedRecovery(
+        axs,
+        targets=targets,
+        estimates=estimates,
+        masks=masks,
+        metrics=metrics,
+        names=names,
+        titles=['Fixed Effects', 'Variances', 'Random Effects'],
+    )
+    for ax in axs.flat:
+        ax.set_box_aspect(1)
+    fig.tight_layout()
+    plt.show()
 
 
 def dependentSummary(
