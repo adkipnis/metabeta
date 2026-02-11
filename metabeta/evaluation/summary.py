@@ -36,6 +36,7 @@ def dependentSummary(
     return longTable(corr, rmse, mce)
 
 
+
 def longTable(
     corr: dict[str, float],  # Pearson correlation
     rmse: dict[str, float],  # root mean square error
@@ -84,6 +85,7 @@ def flatSummary(
     proposed: Proposed,
     data: dict[str, torch.Tensor],
     time: float,
+    is_eff: float | None = None,
 ) -> str:
     # posterior predictive
     pp = getPosteriorPredictive(proposed, data)
@@ -93,7 +95,9 @@ def flatSummary(
     # flat table
     rows = [
         ['Median NLL', mnll],
-        ['time [s]', time],
+        ['time / ds [s]', time],
     ]
+    if is_eff is not None:
+        rows += [['IS Efficency', is_eff]]
     results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
     return f'{results}\n'
