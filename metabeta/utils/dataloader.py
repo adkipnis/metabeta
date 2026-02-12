@@ -163,12 +163,13 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
         idx = torch.as_tensor(np.arange(m) < ds['m'])
         rfx[b, idx] = torch.as_tensor(ds['rfx'], dtype=dtype)
     out['rfx'] = rfx
-    
+
     # save sd(Y) for unstandardizing
     out['sd_y'] = quickCollate(batch, 'sd_y')
-    
+
     # remaining mask handling
     out['mask_m'] = (out['ns'] != 0)
+    out['mask_mq'] = out['mask_m'].unsqueeze(-1) & out['mask_q'].unsqueeze(-2)
     if 'dperm' in batch[0]:
         out['dperm'] = quickCollate(batch, 'dperm', torch.int64)
         out['qperm'] = quickCollate(batch, 'qperm', torch.int64)
@@ -201,22 +202,22 @@ class Dataloader(torch.utils.data.DataLoader):
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
     from metabeta.utils.config import dataFromYaml
-    
+
     # load toy data
     data_cfg_path = Path('..', 'simulation', 'configs', 'toy.yaml')
     data_fname = dataFromYaml(data_cfg_path, 'test')
     data_path = Path('..', 'outputs', 'data', data_fname)
-    
+
     # get dataset collection
     col = Collection(data_path)
     print(col)
-    
+
     # get dataloader
     dl = Dataloader(data_path, batch_size=8)
     minibatch = next(iter(dl))
-    
+
     # print batch shapes
     for k,v in minibatch.items():
         print(f'{k}: {v.numpy().shape}')
     print(dl)
-    
+
