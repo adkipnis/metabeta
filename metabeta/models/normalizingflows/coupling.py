@@ -1,3 +1,4 @@
+from typing import Literal
 import torch
 from torch import nn
 from metabeta.models.normalizingflows import (
@@ -114,15 +115,15 @@ class CouplingFlow(nn.Module):
         n_blocks: int = 6,
         use_actnorm: bool = True,
         use_permute: bool = True,
-        transform: str = 'affine', # type of coupling transform
-        family: str = 'student', # family of base distribution
-        trainable: bool = True, # train parameters of base distribution
+        transform: Literal['affine', 'spline'] = 'affine',
+        base_family: Literal['normal', 'student'] = 'normal', # family of base distribution
+        base_trainable: bool = True, # train parameters of base distribution
         subnet_kwargs: dict | None = None
     ):
         super().__init__()
         assert d_target >= 2, 'Coupling Flow requires at least 2-dim target'
         self.d_target = d_target
-        self.base_dist = BaseDist(d_target, family=family, trainable=trainable)
+        self.base_dist = BaseDist(d_target, family=base_family, trainable=base_trainable)
         flows = []
         for _ in range(n_blocks):
             if use_actnorm:
