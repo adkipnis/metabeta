@@ -24,7 +24,7 @@ def sampleCredibleInterval(
 ) -> dict[str, torch.Tensor]:
     out = {}
     roots = (alpha / 2, 1 - alpha / 2)
-    w = proposal.data.get('weights')
+    w = proposal.weights()
 
     # global
     samples_g = proposal.samples('global')
