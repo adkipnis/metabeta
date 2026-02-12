@@ -84,6 +84,14 @@ class Proposal:
         return self.samples_l
 
     @property
+    def parameters(self) -> tuple[torch.Tensor,...]:
+        return self.rfx, self.sigma_rfx, self.sigma_eps, self.rfx
+
+    @property
+    def log_probs(self) -> tuple[torch.Tensor, ...]:
+        return self.log_prob_g, self.log_prob_l
+
+    @property
     def weights(self) -> torch.Tensor | None:
         return self.is_results.get('weights_norm', None)
 
