@@ -1,18 +1,20 @@
 import torch
 from torch import distributions as D
-from metabeta.utils.evaluation import Proposed, numFixed
+from metabeta.utils.evaluation import Proposal
 
 def getPosteriorPredictive(
-    proposed: Proposed,
+    proposal: Proposal,
     data: dict[str, torch.Tensor],
 ) -> D.Normal:
     ''' get p(y|X, theta) '''
-    d = numFixed(proposed)
 
     # parameters
-    ffx = proposed['global']['samples'][..., :d] # (b, s, d)
-    sigma_eps = proposed['global']['samples'][..., -1] # (b, s)
-    rfx = proposed['local']['samples'] # (b, m, s, q)
+    # ffx = proposed['global']['samples'][..., :d] # (b, s, d)
+    # sigma_eps = proposed['global']['samples'][..., -1] # (b, s)
+    # rfx = proposed['local']['samples'] # (b, m, s, q)
+    ffx = proposal.ffx() # (b, s, d)
+    sigma_eps = proposal.sigma_eps() # (b, s)
+    rfx = proposal.rfx() # (b, m, s, q)
 
     # observations
     X = data['X'] # (b, m, n, d)
