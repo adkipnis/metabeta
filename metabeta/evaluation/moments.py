@@ -27,25 +27,15 @@ def getLocation(
 
 
 def sampleLoc(
-    proposed: Proposed, loc_type: str = 'mean'
+    proposal: Proposal,
+    loc_type: str = 'mean'
 ) -> dict[str, torch.Tensor]:
-    d = numFixed(proposed)
-    samples_g = proposed['global']['samples'].clone()
-    samples_l = proposed['local']['samples']
-    w = proposed.get('weights_norm')
-    
+    samples_g = proposal.samples('global').clone()
+    samples_l = proposal.samples('local')
+    w = proposal.weights()
+
     # get location
     global_loc = getLocation(samples_g, w, loc_type)
-    rfx_loc = getLocation(samples_l, w, loc_type)
-    
-    return {
-        'ffx': global_loc[..., :d],
-        'sigma_rfx': global_loc[..., d:-1],
-        'sigma_eps': global_loc[..., -1],
-        'rfx': rfx_loc,
-    }
-
-
 # def sampleStd(proposed: Proposed) -> dict[str, torch.Tensor]:
 #     d = numFixed(proposed)
 #     global_std = proposed['global']['samples'].std(-2)
