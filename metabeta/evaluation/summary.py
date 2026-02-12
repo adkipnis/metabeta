@@ -83,19 +83,21 @@ def recoveryPlot(
 
 
 def dependentSummary(
-    proposed: Proposed,
+    proposal: Proposal,
     data: dict[str, torch.Tensor],
+    plot_this: bool = False,
 ) -> str:
     # moment-based stats
-    sample_loc = sampleLoc(proposed, 'mean')
+    sample_loc = sampleLoc(proposal, 'mean')
     rmse = sampleRMSE(sample_loc, data)
     corr = sampleCorrelation(sample_loc, data)
 
     # inteval-based stats
-    mce = expectedCoverageError(proposed, data)
+    mce = expectedCoverageError(proposal, data)
 
-    # revery plot
-    recoveryPlot(sample_loc, data, stats=dict(rmse=rmse, corr=corr))
+    # recovery plot
+    if plot_this:
+        recoveryPlot(sample_loc, data, stats=dict(rmse=rmse, corr=corr))
 
     # print summary
     return longTable(corr, rmse, mce)
@@ -147,13 +149,13 @@ def wideTable(
 
 
 def flatSummary(
-    proposed: Proposed,
+    proposal: Proposal,
     data: dict[str, torch.Tensor],
     time: float,
     is_eff: float | None = None,
 ) -> str:
     # posterior predictive
-    pp = getPosteriorPredictive(proposed, data)
+    pp = getPosteriorPredictive(proposal, data)
     nll = posteriorPredictiveNLL(pp, data)
     mnll = nll.mean(-1).median().item()
 
@@ -166,3 +168,4 @@ def flatSummary(
         rows += [['IS Efficency', is_eff]]
     results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
     return f'{results}\n'
+
