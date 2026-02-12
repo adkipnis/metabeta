@@ -174,8 +174,11 @@ class Approximator(nn.Module):
         if 'global' in proposed:
             samples = proposed['global']['samples'].clone()
             sigmas = samples[..., d:]
-            sigmas = maskedSoftplus(sigmas)
-            samples[..., d:] = sigmas
+            # Jacobian for sigma dims: d softplus / dx = sigmoid(x)
+            log_det = torch.where(
+                sigmas != 0, F.logsigmoid(sigmas), torch.zeros_like(sigmas))
+            proposed['global']['log_prob'] -= log_det.sum(dim=-1)
+            samples[..., d:] = maskedSoftplus(sigmas)
             proposed['global']['samples'] = samples
         return Proposal(proposed)
 
