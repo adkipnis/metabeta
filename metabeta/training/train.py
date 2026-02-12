@@ -344,7 +344,7 @@ batch size: {self.cfg.bs}
                     self.save(epoch, 'best')
 
             # sample on test set
-            if epoch % self.cfg.test_interval == 0:
+            if epoch % self.cfg.sample_interval == 0:
                 self.sample(epoch)
 
             # log epoch
@@ -360,6 +360,7 @@ batch size: {self.cfg.bs}
             if self.stopper is not None:
                 self.stopper.update(loss_valid)
                 if self.stopper.stop:
+                    self.sample(epoch)
                     logger.info(f'early stopping at epoch {epoch} after {self.stopper.counter} rounds of no improvement.')
                     break
 
