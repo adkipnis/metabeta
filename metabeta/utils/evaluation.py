@@ -27,6 +27,7 @@ class Proposal:
         self.data = proposed
         self.d = numFixed(proposed)
         self.s = self.sigma_eps().shape[-1]
+        self.is_results = {}
 
     def __repr__(self) -> str:
         return f'ProposalPosterior(n_samples={self.s})'
@@ -59,16 +60,12 @@ class Proposal:
     def rfx(self) -> torch.Tensor:
         return self.samples('local')
 
+    def weights(self) -> torch.Tensor | None:
+        return self.is_results.get('weights_norm', None)
+
     def rescale(self, scale: torch.Tensor) -> None:
         for source in ('global', 'local'):
             samples = self.data[source]['samples']
             scale_ = scale.view(-1, *([1] * (samples.ndim - 1)))
             self.data[source]['samples'] *= scale_
-#         # # update log_probs
-#         # k = data['mask_q'].sum(-1)
-#         # if source == 'global':
-#         #     k += data['mask_d'].sum(-1) + 1
-#         #     log_det = (data['sd_y'].log() * k).unsqueeze(-1)
-#         # else:
-#         #     log_det = (data['sd_y'].log() * k).unsqueeze(-1).unsqueeze(-1)
-#         # proposed[source]['log_prob'] -= log_det
+
