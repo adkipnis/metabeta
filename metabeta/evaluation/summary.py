@@ -3,7 +3,7 @@ from torch.nn import functional as F
 from tabulate import tabulate
 import numpy as np
 
-from metabeta.utils.evaluation import Proposed
+from metabeta.utils.evaluation import Proposal, getNames, joinSigmas
 from metabeta.evaluation.moments import (
     sampleLoc,
     sampleRMSE,
@@ -38,7 +38,7 @@ def recoveryPlot(
     targets.append(data['ffx'])
     estimates.append(locs['ffx'])
     masks.append(data['mask_d'])
-    names.append([rf'$\beta_{{{i}}}$' for i in range(d)])
+    names.append(getNames('ffx', d))
     metrics.append({
         'r': stats['corr']['ffx'],
         'RMSE': stats['rmse']['ffx'],
@@ -46,14 +46,10 @@ def recoveryPlot(
 
     # variance parameters
     q = data['sigma_rfx'].shape[-1]
-    sigmas = torch.cat(
-        [data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)], dim=-1)
-    targets.append(sigmas)
-    sigmas_est = torch.cat(
-        [locs['sigma_rfx'], locs['sigma_eps'].unsqueeze(-1)], dim=-1)
-    estimates.append(sigmas_est)
+    targets.append(joinSigmas(data))
+    estimates.append(joinSigmas(locs))
     masks.append(F.pad(data['mask_q'], (0,1), value=True))
-    names.append([rf'$\sigma_{i}$' for i in range(q)] + [r'$\sigma_\epsilon$'])
+    names.append(getNames('sigmas', q))
     rmse = q/(q+1) * stats['rmse']['sigma_rfx'] + 1/(q+1) * stats['rmse']['sigma_eps']
     r = q/(q+1) * stats['corr']['sigma_rfx'] + 1/(q+1) * stats['corr']['sigma_eps']
     metrics.append({'r': r, 'RMSE': rmse})
@@ -63,7 +59,7 @@ def recoveryPlot(
     estimates.append(locs['rfx'].view(-1, q))
     mask = data['mask_mq']
     masks.append(mask.view(-1, q))
-    names.append([rf'$\alpha_{{{i}}}$' for i in range(q)])
+    names.append(getNames('rfx', q))
     metrics.append({
         'r': stats['corr']['rfx'],
         'RMSE': stats['rmse']['rfx'],
