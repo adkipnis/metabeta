@@ -61,7 +61,7 @@ def recoveryPlot(
     # random effects
     targets.append(data['rfx'].view(-1, q))
     estimates.append(locs['rfx'].view(-1, q))
-    mask = data['mask_m'].unsqueeze(-1) & data['mask_q'].unsqueeze(-2)
+    mask = data['mask_mq']
     masks.append(mask.view(-1, q))
     names.append([rf'$\alpha_{{{i}}}$' for i in range(q)])
     metrics.append({

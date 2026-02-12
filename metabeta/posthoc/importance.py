@@ -31,8 +31,7 @@ class ImportanceSampler:
         # masks
         self.mask_d = data['mask_d'].unsqueeze(-2) # (b, 1, d)
         self.mask_q = data['mask_q'].unsqueeze(-2) # (b, 1, q)
-        mask_mq = data['mask_m'].unsqueeze(-1) & data['mask_q'].unsqueeze(-2)
-        self.mask_mq = mask_mq.unsqueeze(-2) # (b, m, 1, q)
+        self.mask_mq = data['mask_mq'].unsqueeze(-2) # (b, m, 1, q)
         self.mask_m = data['mask_m'].unsqueeze(-1) # (b, m, 1)
         self.mask_n = data['mask_n'].unsqueeze(-1) # (b, m, n, 1)
 
