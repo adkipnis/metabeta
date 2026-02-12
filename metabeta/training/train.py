@@ -50,12 +50,12 @@ def setup() -> argparse.Namespace:
     parser.add_argument('-e', '--max_epochs', type=int, default=10, help='maximum number of epochs to train (default = 10)')
     parser.add_argument('--sample_interval', type=int, default=5, help='sample posterior every #n epochs (default = 5)')
     parser.add_argument('--patience', type=int, default=5, help='early stopping criterion (default = 10)')
-    
+
     # evaluation
     parser.add_argument('--rescale', action='store_false', help='use original scale of y for evaluation (default = True)')
     parser.add_argument('--importance', action='store_true', help='use importance sampling before evaluation (default = False)')
     parser.add_argument('--plot', action='store_false', help='plot evaluation results (default = True)')
-    
+
     # saving & loading
     parser.add_argument('--r_tag', type=str, default='', help='run tag (default="")')
     parser.add_argument('--save_latest', action='store_false', help='save latest model after each epoch (default = True)')
@@ -293,18 +293,18 @@ batch size: {self.cfg.bs}
         proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
         t1 = time.perf_counter()
         tpd = (t1-t0) / batch['X'].shape[0] # time per dataset
-        
+
         # undo unit scale wrt y
         if self.cfg.rescale:
             proposal.rescale(batch['sd_y'])
             rescaleData(batch)
-        
+
         # importance sampling
         is_eff = None
         if self.cfg.importance:
             imp_sampler = ImportanceSampler(batch)
-            # proposal.update(imp_sampler(proposed))
-            # is_eff = proposed['sample_efficiency'].mean().item()
+            proposal.is_results = imp_sampler(proposal)
+            is_eff = proposal.mean_efficiency()
 
         print(dependentSummary(proposal, batch, plot_this=self.cfg.plot))
         print(flatSummary(proposal, batch, time=tpd, is_eff=is_eff))
