@@ -1,4 +1,5 @@
 import yaml
+from typing import Literal
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from metabeta.utils.io import datasetFilename
@@ -12,7 +13,7 @@ class SummarizerConfig:
     n_isab: int = 0
     activation: str = 'GELU'
     dropout: float = 0.01
-    type: str = 'set-transformer'
+    type: Literal['set-transformer'] = 'set-transformer'
 
     def to_dict(self) -> dict:
         out = asdict(self)
@@ -23,8 +24,10 @@ class SummarizerConfig:
 class PosteriorConfig:
     n_blocks: int
     subnet_kwargs: dict | None = None
-    type: str = 'flow'
-    transform: str = 'spline'
+    type: Literal['coupling'] = 'coupling'
+    transform: Literal['affine', 'spline']  = 'affine'
+    base_family: Literal['normal', 'student'] = 'normal'
+    base_trainable: bool = True
 
     def to_dict(self) -> dict:
         out = asdict(self)
