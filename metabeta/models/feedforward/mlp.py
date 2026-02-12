@@ -1,4 +1,4 @@
-from typing import Sequence
+from typing import Sequence, Literal
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -140,12 +140,11 @@ class TransformerFFN(nn.Module):
         d_hidden: int,
         d_output: int,
         use_bias: bool = True,
-        activation: str = 'GELU',
+        activation: Literal['GELU', 'GeGLU'] = 'GELU',
         dropout: float = 0.01,
         shortcut: bool = True,
     ):
         super().__init__()
-        assert activation in ['GELU', 'GeGLU'], 'invalid activation'
         self.net = MLP(
             d_input=d_input,
             d_hidden=d_hidden,
