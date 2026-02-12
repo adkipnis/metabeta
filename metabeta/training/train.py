@@ -287,7 +287,7 @@ batch size: {self.cfg.bs}
         # expects single batch from dl
         self.model.eval()
         self.optimizer.eval()
-        batch = next(iter(self.dl_test))
+        batch = next(iter(self.dl_valid))
         batch = toDevice(batch, self.device)
         t0 = time.perf_counter()
         proposed = self.model.estimate(batch, n_samples=self.cfg.n_samples)
