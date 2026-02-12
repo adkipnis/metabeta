@@ -57,13 +57,11 @@ class Affine(CouplingTransform):
         d_context: int,
         subnet_kwargs: dict | None = None,
         alpha: float = 1.0, # softclamping scale
-        beta: float = 5.0, # softclamping bias
     ):
         super().__init__()
         self.split_dims = split_dims
         self.d_context = d_context
         self.alpha = alpha
-        self.beta = beta
 
         # safely handle subnet_cfg
         if subnet_kwargs is None:
@@ -103,9 +101,7 @@ class Affine(CouplingTransform):
             mask1 = torch.ones_like(x1)
         params = self.conditioner(x1, context=context, mask=mask1)
         log_s, t = params.chunk(2, dim=-1)
-        # softclamp
-        log_s = self.alpha * torch.tanh(log_s / self.alpha)
-        t = self.beta * torch.tanh(t / self.beta)
+        log_s = self.alpha * torch.tanh(log_s / self.alpha) # softclamp
         return log_s, t
 
     def forward(self, x1, x2, context=None, mask1=None, mask2=None, inverse=False):
