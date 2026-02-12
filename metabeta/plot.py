@@ -196,16 +196,7 @@ class Plot:
         )
 
         # final touches
-        if delta < 2:
-            ml = 0.5
-        elif delta < 6:
-            ml = 1.0
-        elif delta < 12:
-            ml = 2.0
-        elif delta < 24:
-            ml = 3.0
-        else:
-            ml = 5.0
+        ml = max(np.floor(delta / 4), 0.5)
         ax.xaxis.set_major_locator(MultipleLocator(ml))
         ax.yaxis.set_major_locator(MultipleLocator(ml))
         ax.tick_params(axis='both', labelsize=18)
