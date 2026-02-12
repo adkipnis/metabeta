@@ -36,19 +36,9 @@ def sampleLoc(
 
     # get location
     global_loc = getLocation(samples_g, w, loc_type)
-# def sampleStd(proposed: Proposed) -> dict[str, torch.Tensor]:
-#     d = numFixed(proposed)
-#     global_std = proposed['global']['samples'].std(-2)
-#     ffx_std = global_std[..., :d]
-#     sigma_rfx_std = global_std[..., d:-1]
-#     sigma_eps_std = global_std[..., -1]
-#     rfx_std = proposed['local']['samples'].std(-2)
-#     return {
-#         'ffx': ffx_std,
-#         'sigma_rfx': sigma_rfx_std,
-#         'sigma_eps': sigma_eps_std,
-#         'rfx': rfx_std,
-#     }
+    out = proposal.partition(global_loc)
+    out['rfx'] = getLocation(samples_l, w, loc_type)
+    return out
 
 
 def sampleRMSE(
@@ -92,3 +82,4 @@ def sampleCorrelation(
             corr = cast(np.float32, pearsonr(gt, est)[0])
         out[key] = float(corr.mean())
     return out
+
