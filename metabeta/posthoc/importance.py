@@ -58,7 +58,8 @@ class ImportanceSampler:
 
     def logPriorRfx(self, rfx: torch.Tensor, sigma_rfx: torch.Tensor) -> torch.Tensor:
         # rfx (b, m, s, q), sigma_rfx (b, s, q)
-        dist = D.Normal(loc=0, scale=sigma_rfx.unsqueeze(1) + self.eps)
+        scale = sigma_rfx.unsqueeze(1) + self.eps
+        dist = D.Normal(loc=0, scale=scale)
         lp = dist.log_prob(rfx)
         lp = (lp * self.mask_mq).sum(1)
         lp = lp.sum(-1)
