@@ -4,7 +4,7 @@ from torch.nn import functional as F
 from scipy.stats import pearsonr
 import numpy as np
 
-from metabeta.utils.evaluation import Proposed, numFixed, getMasks
+from metabeta.utils.evaluation import Proposal, getMasks
 
 
 def getLocation(
@@ -18,10 +18,13 @@ def getLocation(
         return (x * w.unsqueeze(-1)).sum(-2)
     elif loc_type == 'median':
         if w is None:
-            return torch.median(x, dim=-2)
-        ... # TODO
+            return torch.median(x, dim=-2)[0]
+        else:
+            # TODO
+            raise NotImplementedError 
     else:
         raise NotImplementedError(f'location type {loc_type} not implemented')
+
 
 def sampleLoc(
     proposed: Proposed, loc_type: str = 'mean'
