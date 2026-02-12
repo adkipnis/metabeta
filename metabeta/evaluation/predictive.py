@@ -7,11 +7,7 @@ def getPosteriorPredictive(
     data: dict[str, torch.Tensor],
 ) -> D.Normal:
     ''' get p(y|X, theta) '''
-
     # parameters
-    # ffx = proposed['global']['samples'][..., :d] # (b, s, d)
-    # sigma_eps = proposed['global']['samples'][..., -1] # (b, s)
-    # rfx = proposed['local']['samples'] # (b, m, s, q)
     ffx = proposal.ffx() # (b, s, d)
     sigma_eps = proposal.sigma_eps() # (b, s)
     rfx = proposal.rfx() # (b, m, s, q)
