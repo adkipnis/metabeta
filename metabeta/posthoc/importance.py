@@ -1,7 +1,7 @@
 import math
 import torch
 from torch import distributions as D
-from metabeta.utils.evaluation import Proposed, numFixed
+from metabeta.utils.evaluation import Proposal
 from metabeta.utils.regularization import dampen
 
 
@@ -79,28 +79,21 @@ class ImportanceSampler:
         lp = (ll * self.mask_n).sum(dim=(1,2))
         return lp # (b, s)
 
-    def __call__(self, proposed: Proposed) -> dict[str, torch.Tensor]:
-        d = numFixed(proposed)
-
+    def __call__(self, proposal: Proposal) -> dict[str, torch.Tensor]:
         # unpack parameters
-        samples_g = proposed['global']['samples']
-        ffx = samples_g[..., :d]
-        sigma_rfx = samples_g[..., d:-1]
-        sigma_eps = samples_g[..., -1]
-        rfx = proposed['local']['samples']
+        ffx, sigma_rfx, sigma_eps, rfx = proposal.parameters
 
         # posterior log probs
-        log_q_g = proposed['global']['log_prob'] # (b, s)
-        log_q_l = proposed['local']['log_prob'] # (b, m, s)
+        log_q_g, log_q_l = proposal.log_probs
         lq = log_q_g + (log_q_l * self.mask_m).sum(1)
 
         # log priors
         lp_ffx = self.logPriorFfx(ffx)
         lp_sigma_eps = self.logPriorSigmaEps(sigma_eps)
-        lp = lp_ffx + lp_sigma_eps 
-        
+        lp = lp_ffx + lp_sigma_eps
+
+        # regularize Sigma(RFX)
         if self.full:
-            # regularize Sigma(RFX)
             lp_sigma_rfx = self.logPriorSigmaRfx(sigma_rfx)
             lp_rfx = self.logPriorRfx(rfx, sigma_rfx)
             lp = lp + lp_sigma_rfx + lp_rfx
@@ -130,4 +123,4 @@ class ImportanceSampler:
                 'weights_norm': w_norm,
                 'n_eff': n_eff,
                 'sample_efficiency': sample_efficiency}
-    
+
