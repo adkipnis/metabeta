@@ -6,15 +6,22 @@ from metabeta.models.transformers import SetTransformer
 from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import maskedInverseSoftplus, maskedSoftplus
 from metabeta.utils.config import ApproximatorConfig
+from metabeta.utils.evaluation import Proposal
 
 
 class Approximator(nn.Module):
     def __init__(self, cfg: ApproximatorConfig):
         super().__init__()
         self.cfg = cfg
-        self.d_ffx = cfg.d_ffx # number of fixed effects
-        self.d_rfx = cfg.d_rfx # number of random effects
         self.build()
+
+    @property
+    def d_ffx(self) -> int:
+        return self.cfg.d_ffx
+
+    @property
+    def d_rfx(self) -> int:
+        return self.cfg.d_rfx
 
     def build(self) -> None:
         d_ffx = self.d_ffx
@@ -154,8 +161,6 @@ class Approximator(nn.Module):
 
     def _postprocess(self, proposed: dict[str, dict[str, torch.Tensor]]):
         ''' reverse _preprocess for samples '''
-        if not proposed:
-            return proposed
         d = self.d_ffx
         q = self.d_rfx
 
@@ -172,8 +177,7 @@ class Approximator(nn.Module):
             sigmas = maskedSoftplus(sigmas)
             samples[..., d:] = sigmas
             proposed['global']['samples'] = samples
-
-        return proposed
+        return Proposal(proposed)
 
     def _summarize(
             self, data: dict[str, torch.Tensor],
@@ -215,7 +219,7 @@ class Approximator(nn.Module):
     @torch.no_grad()
     def estimate(
             self, data: dict[str, torch.Tensor], n_samples: int = 100,
-    ) -> dict[str, dict[str, torch.Tensor]]:
+    ) -> Proposal:
         ''' inference method: sample and apply conditional backward pass '''
         assert n_samples > 0, 'n_samples must be positive'
         proposed = {}
@@ -238,8 +242,8 @@ class Approximator(nn.Module):
         proposed['local'] = {'samples': samples_l, 'log_prob': log_prob_l}
 
         # postprocess samples
-        proposed = self._postprocess(proposed)
-        return proposed
+        proposal = self._postprocess(proposed)
+        return proposal
 
 # =============================================================================
 if __name__ == '__main__':
@@ -262,5 +266,4 @@ if __name__ == '__main__':
     # model.compile()
 
     loss = model.forward(batch)
-    proposed = model.estimate(batch, n_samples=100)
-
+    proposal = model.estimate(batch, n_samples=100)
