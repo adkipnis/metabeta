@@ -22,6 +22,17 @@ def getMasks(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | None]:
     return out
 
 
+def getNames(source: str, num: int) -> list[str]:
+    if source == 'ffx':
+        return [rf'$\beta_{{{i}}}$' for i in range(num)]
+    elif source == 'sigmas':
+        return [rf'$\sigma_{i}$' for i in range(num)] + [r'$\sigma_\epsilon$']
+    elif source == 'rfx':
+        return [rf'$\alpha_{{{i}}}$' for i in range(num)]
+    else:
+        raise ValueError(f'source {source} unknown.')
+
+
 class Proposal:
     def __init__(self, proposed: dict[str, dict[str, torch.Tensor]]) -> None:
         self.data = proposed
