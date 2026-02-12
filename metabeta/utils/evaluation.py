@@ -95,6 +95,16 @@ class Proposal:
     def weights(self) -> torch.Tensor | None:
         return self.is_results.get('weights_norm', None)
 
+    @property
+    def efficiency(self) -> torch.Tensor | None:
+        return self.is_results.get('sample_efficiency')
+
+    @property
+    def mean_efficiency(self) -> float | None:
+        s_eff = self.efficiency
+        if s_eff is not None:
+            return s_eff.mean().item()
+
     def partition(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         out = {}
         out['ffx'] = x[..., :self.d]
