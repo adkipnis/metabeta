@@ -290,21 +290,24 @@ batch size: {self.cfg.bs}
         batch = next(iter(self.dl_valid))
         batch = toDevice(batch, self.device)
         t0 = time.perf_counter()
-        proposed = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+        proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
         t1 = time.perf_counter()
         tpd = (t1-t0) / batch['X'].shape[0] # time per dataset
         
         # undo unit scale wrt y
-        rescale(proposed, batch)
-
+        if self.cfg.rescale:
+            proposal.rescale(batch['sd_y'])
+            rescaleData(batch)
+        
         # importance sampling
         is_eff = None
-        imp_sampler = ImportanceSampler(batch)
-        proposed.update(imp_sampler(proposed))
-        is_eff = proposed['sample_efficiency'].mean().item()
+        if self.cfg.importance:
+            imp_sampler = ImportanceSampler(batch)
+            # proposal.update(imp_sampler(proposed))
+            # is_eff = proposed['sample_efficiency'].mean().item()
 
-        print(dependentSummary(proposed, batch))
-        print(flatSummary(proposed, batch, time=tpd, is_eff=is_eff))
+        print(dependentSummary(proposal, batch, plot_this=self.cfg.plot))
+        print(flatSummary(proposal, batch, time=tpd, is_eff=is_eff))
 
     def go(self) -> None:
         # optionally load previous checkpoint
