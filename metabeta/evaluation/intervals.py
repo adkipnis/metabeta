@@ -24,16 +24,10 @@ def sampleCredibleInterval(
 ) -> dict[str, torch.Tensor]:
     out = {}
     roots = (alpha / 2, 1 - alpha / 2)
-    w = proposal.weights()
-
-    # global
-    samples_g = proposal.samples('global')
-    ci_g = getQuantiles(roots, samples_g, w)
+    w = proposal.weights
+    ci_g = getQuantiles(roots, proposal.samples_g, w)
     out = proposal.partition(ci_g)
-
-    # local
-    samples_l = proposal.samples('local')
-    out['rfx'] = getQuantiles(roots, samples_l, w)
+    out['rfx'] = getQuantiles(roots, proposal.samples_l, w)
     return out
 
 
