@@ -10,9 +10,11 @@ class ImportanceSampler:
         self,
         data: dict[str, torch.Tensor],
         constrain: bool = True,
+        full: bool = True, # incorporate sigma_rfx and rfx priors
         eps: float = 1e-12,
     ) -> None:
         self.constrain = constrain
+        self.full = full
         self.eps = eps
 
         # prior
@@ -97,10 +99,11 @@ class ImportanceSampler:
         lp_sigma_eps = self.logPriorSigmaEps(sigma_eps)
         lp = lp_ffx + lp_sigma_eps 
         
-        # # regularize Sigma(RFX)
-        # lp_sigma_rfx = self.logPriorSigmaRfx(sigma_rfx)
-        # lp_rfx = self.logPriorRfx(rfx, sigma_rfx)
-        # lp = lp + lp_sigma_rfx + lp_rfx
+        if self.full:
+            # regularize Sigma(RFX)
+            lp_sigma_rfx = self.logPriorSigmaRfx(sigma_rfx)
+            lp_rfx = self.logPriorRfx(rfx, sigma_rfx)
+            lp = lp + lp_sigma_rfx + lp_rfx
 
         # conditional log likelihood
         ll = self.logLikelihoodCond(ffx, sigma_eps, rfx)
