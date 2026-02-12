@@ -41,29 +41,51 @@ class Proposal:
     def __init__(self, proposed: dict[str, dict[str, torch.Tensor]]) -> None:
         self.data = proposed
         self.d = numFixed(proposed)
-        self.s = self.sigma_eps().shape[-1]
+        self.s = self.sigma_eps.shape[-1]
         self.is_results = {}
 
     def __repr__(self) -> str:
         return f'ProposalPosterior(n_samples={self.s})'
 
-    def samples(self, source: Source) -> torch.Tensor:
-        return self.data[source]['samples']
+    @property
+    def samples_g(self) -> torch.Tensor:
+        return self.data['global']['samples']
 
-    def log_probs(self, source: Source) -> torch.Tensor:
-        return self.data[source]['log_prob']
+    @property
+    def samples_l(self) -> torch.Tensor:
+        return self.data['local']['samples']
 
+    @property
+    def log_prob_g(self) -> torch.Tensor:
+        return self.data['global']['log_prob']
+
+    @property
+    def log_prob_l(self) -> torch.Tensor:
+        return self.data['local']['log_prob']
+
+    @property
     def ffx(self) -> torch.Tensor:
-        return self.samples('global')[..., :self.d]
+        return self.samples_g[..., :self.d]
 
+    @property
     def sigma_rfx(self) -> torch.Tensor:
-        return self.samples('global')[..., self.d:-1]
+        return self.samples_g[..., self.d:-1]
 
+    @property
     def sigma_eps(self) -> torch.Tensor:
-        return self.samples('global')[..., -1]
+        return self.samples_g[..., -1]
 
+    @property
     def sigmas(self) -> torch.Tensor:
-        return self.samples('global')[..., self.d:]
+        return self.samples_g[..., self.d:]
+
+    @property
+    def rfx(self) -> torch.Tensor:
+        return self.samples_l
+
+    @property
+    def weights(self) -> torch.Tensor | None:
+        return self.is_results.get('weights_norm', None)
 
     def partition(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         out = {}
@@ -71,12 +93,6 @@ class Proposal:
         out['sigma_rfx'] = x[..., self.d:-1]
         out['sigma_eps'] = x[..., -1]
         return out
-
-    def rfx(self) -> torch.Tensor:
-        return self.samples('local')
-
-    def weights(self) -> torch.Tensor | None:
-        return self.is_results.get('weights_norm', None)
 
     def rescale(self, scale: torch.Tensor) -> None:
         for source in ('global', 'local'):
