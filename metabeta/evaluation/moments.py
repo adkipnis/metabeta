@@ -30,14 +30,10 @@ def sampleLoc(
     proposal: Proposal,
     loc_type: str = 'mean'
 ) -> dict[str, torch.Tensor]:
-    samples_g = proposal.samples('global').clone()
-    samples_l = proposal.samples('local')
-    w = proposal.weights()
-
-    # get location
-    global_loc = getLocation(samples_g, w, loc_type)
+    w = proposal.weights
+    global_loc = getLocation(proposal.samples_g, w, loc_type)
     out = proposal.partition(global_loc)
-    out['rfx'] = getLocation(samples_l, w, loc_type)
+    out['rfx'] = getLocation(proposal.samples_l, w, loc_type)
     return out
 
 
