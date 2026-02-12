@@ -200,7 +200,7 @@ class Approximator(nn.Module):
         targets_g = self._targets(data, local=False)
         mask_g = self._masks(data, local=False)
         targets_g = self._preprocess(targets_g, local=False)
-        loss['global'] = self.posterior_g.loss(
+        loss['global'] = self.posterior_g.loss(    # type: ignore
             targets_g, context=summary_g, mask=mask_g)
 
         # local posterior
@@ -208,7 +208,7 @@ class Approximator(nn.Module):
         targets_l = self._preprocess(targets_l, local=True)
         mask_l = self._masks(data, local=True)
         context_l = self._localContext(summary_l, targets_g)
-        loss['local'] = self.posterior_l.loss(
+        loss['local'] = self.posterior_l.loss(    # type: ignore
             targets_l, context=context_l, mask=mask_l
         )
 
@@ -227,7 +227,7 @@ class Approximator(nn.Module):
 
         # global posterior
         mask_g = self._masks(data, local=False)
-        samples_g, log_prob_g = self.posterior_g.sample(
+        samples_g, log_prob_g = self.posterior_g.sample(    # type: ignore
             n_samples, context=summary_g, mask=mask_g)
         proposed['global'] = {'samples': samples_g, 'log_prob': log_prob_g}
 
@@ -236,7 +236,7 @@ class Approximator(nn.Module):
         b, m, q = mask_l.shape
         mask_l = mask_l.unsqueeze(-2).expand(b, m, n_samples, q)
         context_l = self._localContext(summary_l, samples_g)
-        samples_l, log_prob_l = self.posterior_l.sample(
+        samples_l, log_prob_l = self.posterior_l.sample(    # type: ignore
             1, context=context_l, mask=mask_l)
         samples_l, log_prob_l = samples_l.squeeze(-2), log_prob_l.squeeze(-1)
         proposed['local'] = {'samples': samples_l, 'log_prob': log_prob_l}
