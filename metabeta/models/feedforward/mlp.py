@@ -172,7 +172,7 @@ class FlowMLP(nn.Module):
         d_input: int,
         d_hidden: int | Sequence[int],
         d_output: int,
-        use_bias: bool = True,
+        use_bias: bool = False,
         activation: str = 'ELU',
         dropout: float = 0.0,
         shortcut: bool = True,
