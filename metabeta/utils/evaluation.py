@@ -33,6 +33,10 @@ def getNames(source: str, num: int) -> list[str]:
         raise ValueError(f'source {source} unknown.')
 
 
+def joinSigmas(data: dict[str, torch.Tensor]) -> torch.Tensor:
+    return torch.cat([data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)], dim=-1)
+
+
 class Proposal:
     def __init__(self, proposed: dict[str, dict[str, torch.Tensor]]) -> None:
         self.data = proposed
