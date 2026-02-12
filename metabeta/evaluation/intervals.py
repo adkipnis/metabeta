@@ -1,5 +1,5 @@
 import torch
-from metabeta.utils.evaluation import Proposed, numFixed, getMasks
+from metabeta.utils.evaluation import Proposal, getMasks
 
 
 def getQuantiles(
@@ -19,25 +19,21 @@ def getQuantiles(
 
 
 def sampleCredibleInterval(
-    proposed: Proposed,
+    proposal: Proposal,
     alpha: float,
 ) -> dict[str, torch.Tensor]:
-    d = numFixed(proposed)
     out = {}
     roots = (alpha / 2, 1 - alpha / 2)
+    w = proposal.data.get('weights')
 
     # global
-    samples_g = proposed['global']['samples']
-    weights_g = proposed['global'].get('weights')
-    ci_g = getQuantiles(roots, samples_g, weights_g)
-    out['ffx'] = ci_g[..., :d]
-    out['sigma_rfx'] = ci_g[..., d:-1]
-    out['sigma_eps'] = ci_g[..., -1]
+    samples_g = proposal.samples('global')
+    ci_g = getQuantiles(roots, samples_g, w)
+    out = proposal.partition(ci_g)
 
     # local
-    samples_l = proposed['local']['samples']
-    weights_l = proposed['local'].get('weights')
-    out['rfx'] = getQuantiles(roots, samples_l, weights_l)
+    samples_l = proposal.samples('local')
+    out['rfx'] = getQuantiles(roots, samples_l, w)
     return out
 
 
@@ -79,14 +75,14 @@ def sampleCoverageError(
 
 
 def expectedCoverageError(
-    proposed: Proposed,
+    proposal: Proposal,
     data: dict[str, torch.Tensor],
     alphas: list[float] = [0.02, 0.05, 0.10, 0.20, 0.32, 0.50],
 ) -> dict[str, float]:
     # get coverage error for each alpha level
     ce_dict = {}
     for alpha in alphas:
-        ci = sampleCredibleInterval(proposed, alpha=alpha)
+        ci = sampleCredibleInterval(proposal, alpha=alpha)
         ce_dict[alpha] = sampleCoverageError(ci, data, nominal=(1 - alpha))
 
     # average over alphas
