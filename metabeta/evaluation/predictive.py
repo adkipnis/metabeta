@@ -8,9 +8,9 @@ def getPosteriorPredictive(
 ) -> D.Normal:
     ''' get p(y|X, theta) '''
     # parameters
-    ffx = proposal.ffx() # (b, s, d)
-    sigma_eps = proposal.sigma_eps() # (b, s)
-    rfx = proposal.rfx() # (b, m, s, q)
+    ffx = proposal.ffx # (b, s, d)
+    sigma_eps = proposal.sigma_eps # (b, s)
+    rfx = proposal.rfx # (b, m, s, q)
 
     # observations
     X = data['X'] # (b, m, n, d)
