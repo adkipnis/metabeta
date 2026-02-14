@@ -52,7 +52,7 @@ class Fitter:
 
         # determine path to data
         self.cfg.partition = 'test'
-        self.fname = datasetFilename(self.cfg)
+        self.fname = datasetFilename(vars(self.cfg), partition='test')
         self.batch_path = Path(self.srcdir, self.fname)
         assert self.batch_path.exists(), f'{self.batch_path} does not exist'
 
