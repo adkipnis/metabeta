@@ -6,13 +6,16 @@ from torch.nn import functional as F
 
 
 class Transform(nn.Module):
-    ''' Base template for transforms used in normalizing flows '''
+    """Base template for transforms used in normalizing flows"""
+
     @abstractmethod
-    def forward(self, x: torch.Tensor,
-              context: torch.Tensor | None = None,
-              mask: torch.Tensor | None = None,
-              inverse: bool = False,
-              ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        context: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
+        inverse: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         ...
 
     def inverse(self, x, context=None, mask=None):
@@ -34,7 +37,7 @@ class ActNorm(Transform):
 
     @torch.no_grad()
     def _initialize(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> None:
-        ''' init params based on first batch '''
+        """init params based on first batch"""
         dims = tuple(range(x.dim() - 1))
         if mask is None:
             mean = x.mean(dims)
@@ -50,9 +53,9 @@ class ActNorm(Transform):
         self.shift.data = mean
         self.log_scale.data = torch.log(std)
         self.initialized.data = torch.tensor(True)
- 
+
     def _broadcast(self, x: torch.Tensor, d: int) -> torch.Tensor:
-        shape = ([1] * (d - 1))
+        shape = [1] * (d - 1)
         return x.view(*shape, -1)
 
     def forward(self, x, context=None, mask=None, inverse=False):
@@ -80,13 +83,13 @@ class Permute(Transform):
         self.pivot = d_target // 2
         self.inv_pivot = d_target - self.pivot
         self.register_buffer('perm', torch.randperm(d_target))
-        self.register_buffer('inv_perm', self.perm.argsort()) # type: ignore
+        self.register_buffer('inv_perm', self.perm.argsort())   # type: ignore
 
     def __str__(self) -> str:
         return 'Permute'
 
     def forward(self, x, context=None, mask=None, inverse=False):
-        perm: torch.Tensor = self.inv_perm if inverse else self.perm # type: ignore
+        perm: torch.Tensor = self.inv_perm if inverse else self.perm   # type: ignore
         x = x[..., perm]
         if mask is not None:
             mask = mask[..., perm]
@@ -94,14 +97,15 @@ class Permute(Transform):
         return x, log_det, mask
 
     def _forwardMask(self, mask):
-        mask = mask[..., self.perm] # type: ignore
+        mask = mask[..., self.perm]   # type: ignore
         return mask
 
 
 class LU(Transform):
-    ''' rewrite of LU from https://github.com/bayesiains/nflows
-        implicit masking is done by setting the corresponding rows and columns of L and U to unit vectors
-    '''
+    """rewrite of LU from https://github.com/bayesiains/nflows
+    implicit masking is done by setting the corresponding rows and columns of L and U to unit vectors
+    """
+
     def __init__(self, d_target: int, identity_init: bool = True, eps: float = 1e-3):
         super().__init__()
         self.d_target = d_target
@@ -146,9 +150,9 @@ class LU(Transform):
         # construct
         lower = torch.zeros(self.d_target, self.d_target, device=device, dtype=dtype)
         lower[self.lower_indices[0], self.lower_indices[1]] = self.lower_entries
-        lower[self.diag_indices[0], self.diag_indices[1]] = (
-            1.0  # WLOG because the diagonal of U is can absorb the diagonal of L
-        )
+        lower[
+            self.diag_indices[0], self.diag_indices[1]
+        ] = 1.0  # WLOG because the diagonal of U is can absorb the diagonal of L
         upper = torch.zeros(self.d_target, self.d_target, device=device, dtype=dtype)
         upper[self.upper_indices[0], self.upper_indices[1]] = self.upper_entries
         upper[self.diag_indices[0], self.diag_indices[1]] = self.upper_diag
@@ -182,8 +186,8 @@ class LU(Transform):
             x = torch.linalg.solve_triangular(upper, x, upper=True).squeeze(-1)
             log_det = -log_det
         else:
-            x = torch.einsum("bij,bj->bi", upper, x)
-            x = torch.einsum("bij,bj->bi", lower, x) + bias
+            x = torch.einsum('bij,bj->bi', upper, x)
+            x = torch.einsum('bij,bj->bi', lower, x) + bias
 
         # optionally reshape back
         if len(x) != b:
@@ -192,4 +196,3 @@ class LU(Transform):
             if mask is not None:
                 mask = mask.reshape(*shape)
         return x, log_det, mask
-

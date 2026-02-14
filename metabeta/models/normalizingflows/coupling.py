@@ -2,16 +2,23 @@ from typing import Literal
 import torch
 from torch import nn
 from metabeta.models.normalizingflows import (
-    Transform, ActNorm, Permute, LU, Affine, RationalQuadratic, BaseDist
+    Transform,
+    ActNorm,
+    Permute,
+    LU,
+    Affine,
+    RationalQuadratic,
+    BaseDist,
 )
 
 
 class Coupling(nn.Module):
-    ''' Single Coupling Step:
-        1. Condition parameters on x1
-        2. Parameterically transform x2
-        3. return both with log determinant of Jacobian
-    '''
+    """Single Coupling Step:
+    1. Condition parameters on x1
+    2. Parameterically transform x2
+    3. return both with log determinant of Jacobian
+    """
+
     def __init__(
         self,
         split_dims: tuple[int, int],
@@ -27,19 +34,23 @@ class Coupling(nn.Module):
         elif transform == 'spline':
             self.transform = RationalQuadratic(split_dims, d_context, subnet_kwargs)
         else:
-            raise NotImplementedError(
-                'only affine and spline transforms are supported')
+            raise NotImplementedError('only affine and spline transforms are supported')
 
     def __str__(self) -> str:
         return f'{self.transform_type.capitalize()}Coupling(d={self.split_dims})'
 
-    def forward(self, x1: torch.Tensor, x2: torch.Tensor,
-                 context: torch.Tensor | None = None,
-                 mask1: torch.Tensor | None = None,
-                 mask2: torch.Tensor | None = None,
-                 inverse: bool = False):
+    def forward(
+        self,
+        x1: torch.Tensor,
+        x2: torch.Tensor,
+        context: torch.Tensor | None = None,
+        mask1: torch.Tensor | None = None,
+        mask2: torch.Tensor | None = None,
+        inverse: bool = False,
+    ):
         x2, log_det = self.transform(
-            x1, x2, context=context, mask1=mask1, mask2=mask2, inverse=inverse)
+            x1, x2, context=context, mask1=mask1, mask2=mask2, inverse=inverse
+        )
         return (x1, x2), log_det
 
     def inverse(self, x1, x2, context=None, mask1=None, mask2=None):
@@ -47,12 +58,13 @@ class Coupling(nn.Module):
 
 
 class DualCoupling(Transform):
-    ''' Dual Coupling Step:
-        1. Split inputs along pivot
-        2. Apply first coupling step to split
-        3. Apply second coupling step to swapped outputs
-        4. return joint outputs and log determinants
-    '''
+    """Dual Coupling Step:
+    1. Split inputs along pivot
+    2. Apply first coupling step to split
+    3. Apply second coupling step to swapped outputs
+    4. return joint outputs and log determinants
+    """
+
     def __init__(
         self,
         d_target: int,
@@ -82,7 +94,7 @@ class DualCoupling(Transform):
         return f'{self.transform_type.capitalize()}DualCoupling(d={self.d_target})'
 
     def _split(self, x: torch.Tensor):
-        return x[..., :self.pivot], x[..., self.pivot:]
+        return x[..., : self.pivot], x[..., self.pivot :]
 
     def forward(self, x, context=None, mask=None, inverse=False):
         x1, x2 = self._split(x)
@@ -101,13 +113,14 @@ class DualCoupling(Transform):
 
 
 class CouplingFlow(nn.Module):
-    ''' Normalizing Flow based on Coupling:
-        ActNorm -> (LU) -> Permute -> DualCoupling 
-        - forward: Conditionally map X to Z in base distribution
-        - inverse: Conditionally map Z to X in target distribution
-        - logProb: cheaply evaluate the density of X using the chain rule
-        - sample: cheaply sample from X by sampling from Z + inverse pass
-        '''
+    """Normalizing Flow based on Coupling:
+    ActNorm -> (LU) -> Permute -> DualCoupling
+    - forward: Conditionally map X to Z in base distribution
+    - inverse: Conditionally map Z to X in target distribution
+    - logProb: cheaply evaluate the density of X using the chain rule
+    - sample: cheaply sample from X by sampling from Z + inverse pass
+    """
+
     def __init__(
         self,
         d_target: int,
@@ -116,8 +129,8 @@ class CouplingFlow(nn.Module):
         use_actnorm: bool = True,
         use_permute: bool = True,
         transform: Literal['affine', 'spline'] = 'affine',
-        base_family: Literal['normal', 'student'] = 'normal', # family of base distribution
-        base_trainable: bool = True, # train parameters of base distribution
+        base_family: Literal['normal', 'student'] = 'normal',  # family of base distribution
+        base_trainable: bool = True,  # train parameters of base distribution
         subnet_kwargs: dict | None = None,
     ):
         super().__init__()
@@ -160,31 +173,34 @@ class CouplingFlow(nn.Module):
     def inverse(self, x, context=None, mask=None):
         log_det = torch.zeros(x.shape[:-1], device=x.device)
         for flow in reversed(self.flows):
-            x, ld, mask = flow.inverse(x, context=context, mask=mask) # type: ignore
+            x, ld, mask = flow.inverse(x, context=context, mask=mask)   # type: ignore
             log_det = log_det + ld
         return x, log_det, mask
 
     def _forwardMask(self, mask: torch.Tensor) -> torch.Tensor:
         for flow in self.flows:
-            mask = flow._forwardMask(mask) # type: ignore
+            mask = flow._forwardMask(mask)   # type: ignore
         return mask
 
     def logProb(
-        self, z: torch.Tensor, log_det: torch.Tensor, mask: torch.Tensor | None = None,
+        self,
+        z: torch.Tensor,
+        log_det: torch.Tensor,
+        mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        ''' joint log density of normalized target '''
+        """joint log density of normalized target"""
         log_prob = self.base_dist.logProb(z)
         if mask is not None:
             log_prob *= mask
         return log_prob.sum(dim=-1) + log_det
 
     def loss(
-            self,
-            x: torch.Tensor,
-            context: torch.Tensor | None = None,
-            mask: torch.Tensor | None = None,
+        self,
+        x: torch.Tensor,
+        context: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        ''' forward KL Loss (aka NLL) '''
+        """forward KL Loss (aka NLL)"""
         return -self.logProb(*self.forward(x, context, mask))
 
     def sample(
@@ -241,12 +257,9 @@ class CouplingFlow(nn.Module):
                 context = context[non_empty]
 
             # backward pass
-            x[non_empty], log_det[non_empty], _ = self.inverse(
-                z, context, mask_z)
+            x[non_empty], log_det[non_empty], _ = self.inverse(z, context, mask_z)
 
             # get probability in x-space
-            log_prob[non_empty] = self.logProb(
-                z, log_det[non_empty], mask_z)
+            log_prob[non_empty] = self.logProb(z, log_det[non_empty], mask_z)
 
         return x, log_prob
-
