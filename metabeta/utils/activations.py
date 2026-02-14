@@ -8,13 +8,13 @@ class GeGLU(nn.Module):
         return x * nn.functional.gelu(gate)
 
 ACTIVATIONS = {
-    'ReLU': nn.ReLU,
+    'ReLU': nn.ReLU, # default for NF
     'LeakyReLU': nn.LeakyReLU,
     'SiLU': nn.SiLU,
     'Mish': nn.Mish,
-    'ELU': nn.ELU, # default for NF
+    'ELU': nn.ELU,
     'GELU': nn.GELU, # default for Transformers
-    'GeGLU': GeGLU, # optional for Set Transformers
+    'GeGLU': GeGLU,
 }
 
 def getActivation(name: str) -> nn.Module:
