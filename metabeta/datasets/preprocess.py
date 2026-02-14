@@ -36,7 +36,8 @@ def dropPatchyColumns(df: pd.DataFrame, threshold: float = 0.25):
     offenders = missing[missing > threshold].index
     if len(offenders):
         for offender in offenders:
-            print(f'--- Warning: Removing "{offender}" due to missing {missing[offender]*100:.2f}% entries.')
+            warning = f'Removing "{offender}" due to missing {missing[offender]*100:.2f}% entries.'
+            logger.warning(warning)
         df = df.drop(columns=offenders)
     return df
 
@@ -51,12 +52,9 @@ def dropPatchyRows(df: pd.DataFrame, threshold: float = 0.1):
     return df
 
 
-def potentialGroups(
-    df: pd.DataFrame,
-    threshold: float = 0.2,
-    minimum: int = 5):
+def potentialGroups(df: pd.DataFrame, threshold: float = 0.2, minimum: int = 5):
     # detect columns that may contain a grouping variable
-    assert 0. < threshold < 1., 'threshold must be in (0,1)'
+    assert 0.0 < threshold < 1.0, 'threshold must be in (0,1)'
 
     # get non-continuous columns
     cols = df.select_dtypes(exclude=['float']).columns
@@ -71,9 +69,9 @@ def potentialGroups(
 
     # check if a group has enough but not too many unique values
     counts = df[cols].nunique()
-    enough = (counts > minimum)
-    not_too_many = (counts <= threshold * len(df))
-    mask = (enough * not_too_many)
+    enough = counts > minimum
+    not_too_many = counts <= threshold * len(df)
+    mask = enough * not_too_many
     cols = cols[mask]
     if len(cols) == 0:
         return cols
@@ -107,6 +105,7 @@ def standardize(col: pd.Series):
     out = (x - mean) / std
     return out
 
+
 def findOutliers(df: pd.DataFrame, threshold: float = 4.0, min_std: float = 1e-12):
     # detect values that are more than {threshold} SDs away from the mean
     x = df.to_numpy(dtype=float)
@@ -119,6 +118,7 @@ def findOutliers(df: pd.DataFrame, threshold: float = 4.0, min_std: float = 1e-1
     if frac > 0.1:
         logger.warning(f'Removing {frac * 100:.2f}% outlier rows.')
     return outliers
+
 
 # def findOutliersMAD(
 #     df: pd.DataFrame,
@@ -137,6 +137,7 @@ def findOutliers(df: pd.DataFrame, threshold: float = 4.0, min_std: float = 1e-1
 #         print(f'--- Warning: Removing {frac * 100:.2f}% outlier rows.')
 #     return outliers
 
+
 def dummify(df: pd.DataFrame, colname: str, max_columns: int = 10):
     # make dummy variables out of categorical columns
     unique = df[colname].nunique()
@@ -151,13 +152,14 @@ def dummify(df: pd.DataFrame, colname: str, max_columns: int = 10):
     return df
 
 
-def preprocess(df: pd.DataFrame,
-               group_name: str = '',
-               remove_missing: bool = True,
-               patchy_threshold: float = 0.25,
-               constant_threshold: float = 0.95,
-               outlier_threshold: float = 4.0,
-               ) -> dict:
+def preprocess(
+    df: pd.DataFrame,
+    group_name: str = '',
+    remove_missing: bool = True,
+    patchy_threshold: float = 0.25,
+    constant_threshold: float = 0.95,
+    outlier_threshold: float = 4.0,
+) -> dict:
     # put column names to lower case
     df.columns = df.columns.str.lower()
 
@@ -180,7 +182,7 @@ def preprocess(df: pd.DataFrame,
             group_name = potential[0]
             logger.info(f'Detected grouping variable "{group_name}".')
             if len(potential) > 1:
-                print(f'--- Warning: Removing other grouping variables {potential[1:]}.')
+                logger.warning(f'Removing other grouping variables {potential[1:]}.')
                 for p in potential[1:]:
                     df.pop(p)
 
@@ -230,7 +232,7 @@ def preprocess(df: pd.DataFrame,
         # names
         'columns': df.columns.to_numpy().astype(str),
         # dims
-        'd': d_+1, # as X has no intercept
+        'd': d_ + 1,  # as X has no intercept
         'n': n,
         'ns': ns,
         'm': m,
@@ -238,12 +240,14 @@ def preprocess(df: pd.DataFrame,
     return out
 
 
-def wrapper(ds_name: str,
-            root: str,
-            group_name: str = '',
-            partition: str = 'auto',
-            save: bool = True,
-            plot: bool = False):
+def wrapper(
+    ds_name: str,
+    root: str,
+    group_name: str = '',
+    partition: str = 'auto',
+    save: bool = True,
+    plot: bool = False,
+):
     assert partition in ['validation', 'test', 'auto']
 
     # import data
@@ -288,7 +292,7 @@ def wrapper(ds_name: str,
 
 
 def batchprocess(root: str, group_name: str = '', partition: str = 'auto'):
-    paths = Path(root, 'parquet').glob("*.parquet")
+    paths = Path(root, 'parquet').glob('*.parquet')
     names = sorted([p.stem for p in paths])
     logger.info(f'\nProcessing {len(names)} datasets from {root}...')
     for name in names:
@@ -313,4 +317,3 @@ if __name__ == '__main__':
 
     # # automl datasets (skipped, too many issues)
     # batchprocess('automl', partition='train')
-
