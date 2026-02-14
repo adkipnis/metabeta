@@ -118,7 +118,7 @@ class CouplingFlow(nn.Module):
         transform: Literal['affine', 'spline'] = 'affine',
         base_family: Literal['normal', 'student'] = 'normal', # family of base distribution
         base_trainable: bool = True, # train parameters of base distribution
-        subnet_kwargs: dict | None = None
+        subnet_kwargs: dict | None = None,
     ):
         super().__init__()
         assert d_target >= 2, 'Coupling Flow requires at least 2-dim target'
@@ -185,8 +185,7 @@ class CouplingFlow(nn.Module):
             mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         ''' forward KL Loss (aka NLL) '''
-        z, log_det, mask = self.forward(x, context, mask)
-        return -self.logProb(z, log_det, mask)
+        return -self.logProb(*self.forward(x, context, mask))
 
     def sample(
         self,
