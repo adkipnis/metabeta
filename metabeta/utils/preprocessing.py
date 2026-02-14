@@ -20,10 +20,11 @@ def checkConstant(x: np.ndarray, axis: int = 0) -> np.ndarray:
 
 
 # --- standardize
-def moments(x: np.ndarray,
-            axis: int = 0,
-            exclude: np.ndarray | None = None,
-            ) -> tuple[np.ndarray, np.ndarray]:
+def moments(
+    x: np.ndarray,
+    axis: int = 0,
+    exclude: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     mean = x.mean(axis, keepdims=True)
     std = x.std(axis, keepdims=True)
     if exclude is not None:
@@ -58,8 +59,18 @@ class Standardizer:
 
 
 def rescaleData(data: dict[str, torch.Tensor]) -> None:
-    for key in ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx', # params
-                'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps', # hyperparams
-                'y'):
+    for key in (
+        'y',
+        # params
+        'ffx',
+        'sigma_rfx',
+        'sigma_eps',
+        'rfx',
+        # hyperparams
+        'nu_ffx',
+        'tau_ffx',
+        'tau_rfx',
+        'tau_eps',
+    ):
         sd_y = data['sd_y'].view(-1, *([1] * (data[key].ndim - 1)))
         data[key] *= sd_y
