@@ -143,7 +143,7 @@ class Trainer:
         self.dl_test = self._getDataLoader('test')
 
     def _getDataLoader(
-            self, partition: str, epoch: int = 0, batch_size: int | None = None,
+        self, partition: str, epoch: int = 0, batch_size: int | None = None
     ) -> Dataloader:
         data_fname = datasetFilename(self.data_cfg, partition, epoch)
         data_path = Path('..', 'outputs', 'data', data_fname)
@@ -363,7 +363,7 @@ batch size: {self.cfg.bs}
                 self.stopper.update(loss_valid)
                 if self.stopper.stop:
                     self.sample(epoch)
-                    logger.info(f'early stopping at epoch {epoch} after {self.stopper.counter} rounds of no improvement.')
+                    logger.info(f'early stopping at epoch {epoch}.')
                     break
 
 
