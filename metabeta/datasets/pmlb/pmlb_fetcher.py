@@ -3,7 +3,7 @@ import pandas as pd
 from pmlb import dataset_names, fetch_data
 
 # summary table
-url = "https://raw.githubusercontent.com/EpistasisLab/pmlb/master/pmlb/all_summary_stats.tsv"
+url = 'https://raw.githubusercontent.com/EpistasisLab/pmlb/master/pmlb/all_summary_stats.tsv'
 stats_df = pd.read_csv(url, sep='\t')
 stats_df.to_csv('pmlb_summary.csv')
 

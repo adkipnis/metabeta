@@ -37,5 +37,5 @@ if __name__ == '__main__':
     Path('parquet').mkdir(parents=True, exist_ok=True)
 
     # download
-    pullSuite(269) # regression
-    pullSuite(218) # classification
+    pullSuite(269)   # regression
+    pullSuite(218)   # classification
