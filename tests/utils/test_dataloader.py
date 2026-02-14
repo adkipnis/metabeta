@@ -7,13 +7,15 @@ import pytest
 import torch
 
 from metabeta.utils.dataloader import Collection, Dataloader
+from metabeta.utils.config import dataFromYaml
 
 
 @pytest.fixture(scope='session')
 def dataset_path() -> Path:
     # same file as in your __main__ block
-    fname = 'valid_d3_q1_m5-30_n10-70_toy.npz'
-    path = Path('metabeta', 'outputs', 'data', fname)
+    data_cfg_path = Path('metabeta', 'simulation', 'configs', 'toy.yaml')
+    data_fname = dataFromYaml(data_cfg_path, 'test')
+    path = Path('metabeta', 'outputs', 'data', data_fname)
     assert path.exists(), f'{path} does not exist (tests expect the demo file to be present)'
     return path
 

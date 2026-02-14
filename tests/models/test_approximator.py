@@ -4,19 +4,17 @@ from pathlib import Path
 import pytest
 import torch
 
-from metabeta.models.approximator import (
-    Approximator,
-    ApproximatorConfig,
-    PosteriorConfig,
-    SummarizerConfig,
-)
+from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import Dataloader
+from metabeta.utils.config import dataFromYaml, modelFromYaml
 
-ROOT = Path(__file__).resolve().parents[2]
-DATA_PATH = ROOT / 'metabeta' / 'outputs' / 'data' / 'valid_d3_q1_m5-30_n10-70_toy.npz'
+
+data_cfg_path = Path('metabeta', 'simulation', 'configs', 'toy.yaml')
+data_fname = dataFromYaml(data_cfg_path, 'test')
+DATA_PATH = Path('metabeta', 'outputs', 'data', data_fname)
 if not DATA_PATH.exists():
     pytest.skip(
-        'validation dataset val_d3_q1_m5-30_n10-70_toy.npz not found',
+        'validation dataset not found',
         allow_module_level=True,
     )
 
@@ -30,27 +28,9 @@ def batch() -> dict[str, torch.Tensor]:
 
 @pytest.fixture(scope='module')
 def model() -> Approximator:
-    s_cfg = SummarizerConfig(
-        d_model=16,
-        d_ff=32,
-        d_output=16,
-        n_blocks=2,
-        n_isab=0,
-        activation='GELU',
-        dropout=0.0,
-    )
-    p_cfg = PosteriorConfig(
-        transform='affine',
-        subnet_kwargs={'activation': 'GELU', 'zero_init': True},
-        n_blocks=2,
-    )
-    cfg = ApproximatorConfig(
-        d_ffx=3,
-        d_rfx=1,
-        summarizer=s_cfg,
-        posterior=p_cfg,
-    )
-    return Approximator(cfg)
+    model_cfg_path = Path('metabeta', 'models', 'configs', 'toy.yaml')
+    model_cfg = modelFromYaml(model_cfg_path, 2, 1)
+    return Approximator(model_cfg)
 
 
 def test_forward_runs_and_is_finite(model: Approximator, batch: dict[str, torch.Tensor]):
@@ -73,15 +53,12 @@ def test_estimate_shapes_and_constraints(model: Approximator, batch: dict[str, t
     model.forward(batch) # warmup
     model.eval()
     n_samples = 12
-    proposed = model.estimate(batch, n_samples=n_samples)
+    proposal = model.estimate(batch, n_samples=n_samples)
 
-    assert 'global' in proposed
-    assert 'local' in proposed
-
-    samples_g = proposed['global']['samples']
-    logp_g = proposed['global']['log_prob']
-    samples_l = proposed['local']['samples']
-    logp_l = proposed['local']['log_prob']
+    samples_g = proposal.samples_g
+    logp_g = proposal.log_prob_g
+    samples_l = proposal.samples_l
+    logp_l = proposal.log_prob_l
 
     b = batch['y'].shape[0]
     m = batch['mask_m'].shape[1]

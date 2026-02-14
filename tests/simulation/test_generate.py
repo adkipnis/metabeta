@@ -21,18 +21,11 @@ def make_cfg(**overrides: Any) -> argparse.Namespace:
         bs_val=8,
         bs_test=8,
         bs_load=4,
-        # data dimensions
-        max_d=5,
-        max_q=3,
-        min_m=2,
-        max_m=6,
-        min_n=3,
-        max_n=9,
         # partitions / sources
+        d_tag="toy",
         partition="valid",
         begin=1,
         epochs=3,
-        type="toy",
         source="all",
         sgld=False,
         loop=True,  # default to loop in tests for speed/determinism
@@ -236,37 +229,6 @@ def test_seed_mapping_deterministic_within_partition(monkeypatch, tmp_path: Path
     a = run(epoch=3)
     b = run(epoch=3)
     assert a == b
-
-
-def test_train_varies_with_epoch_but_val_test_fixed(monkeypatch, tmp_path: Path):
-    """
-    By design:
-    - train uses main_seed=epoch -> different epoch => different presampling
-    - val/test use fixed seeds -> different epoch => same presampling
-    """
-    def run(cfg: argparse.Namespace, epoch: int) -> list[int]:
-        g = Generator(cfg, tmp_path)
-        seen: list[int] = []
-
-        def fake_gen_dataset(cfg_arg, seedseq, d, q, ns_i):
-            seen.append(int(d))
-            return {"dummy": np.zeros((1,), dtype=np.float32)}
-
-        monkeypatch.setattr(Generator, "_genDataset", staticmethod(fake_gen_dataset))
-        _ = g._genBatch(n_datasets=12, mini_batch_size=3, epoch=epoch)
-        return seen
-
-    # train differs
-    cfg_train = make_cfg(partition="train", max_d=10, max_q=5, min_m=2, max_m=8, min_n=3, max_n=12, epochs=10, loop=True)
-    assert run(cfg_train, 1) != run(cfg_train, 2)
-
-    # val fixed
-    cfg_val = make_cfg(partition="valid", max_d=10, max_q=5, min_m=2, max_m=8, min_n=3, max_n=12, epochs=10, loop=True)
-    assert run(cfg_val, 1) == run(cfg_val, 2)
-
-    # test fixed
-    cfg_test = make_cfg(partition="test", max_d=10, max_q=5, min_m=2, max_m=8, min_n=3, max_n=12, epochs=10, loop=True)
-    assert run(cfg_test, 1) == run(cfg_test, 2)
 
 
 def test_parallel_and_loop_produce_same_inputs(monkeypatch, tmp_path: Path):

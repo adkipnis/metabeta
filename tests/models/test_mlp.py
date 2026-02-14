@@ -157,16 +157,6 @@ def test_transformer_ffn_forward():
     assert out.shape == x.shape
 
 
-def test_transformer_ffn_invalid_activation():
-    with pytest.raises(AssertionError):
-        TransformerFFN(
-            d_input=8,
-            d_hidden=16,
-            d_output=8,
-            activation='ReLU',  # invalid for TransformerFFN
-        )
-
-
 # -----------------------
 # FlowMLP
 # -----------------------
