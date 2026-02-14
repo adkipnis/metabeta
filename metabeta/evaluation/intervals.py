@@ -24,7 +24,7 @@ def sampleCredibleInterval(
 ) -> dict[str, torch.Tensor]:
     out = {}
     roots = (alpha / 2, 1 - alpha / 2)
-    w = proposal.weights
+    w = None #proposal.weights
     ci_g = getQuantiles(roots, proposal.samples_g, w)
     out = proposal.partition(ci_g)
     out['rfx'] = getQuantiles(roots, proposal.samples_l, w)
