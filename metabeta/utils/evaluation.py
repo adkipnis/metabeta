@@ -65,11 +65,11 @@ class Proposal:
 
     @property
     def ffx(self) -> torch.Tensor:
-        return self.samples_g[..., :self.d]
+        return self.samples_g[..., : self.d]
 
     @property
     def sigma_rfx(self) -> torch.Tensor:
-        return self.samples_g[..., self.d:-1]
+        return self.samples_g[..., self.d : -1]
 
     @property
     def sigma_eps(self) -> torch.Tensor:
@@ -77,14 +77,14 @@ class Proposal:
 
     @property
     def sigmas(self) -> torch.Tensor:
-        return self.samples_g[..., self.d:]
+        return self.samples_g[..., self.d :]
 
     @property
     def rfx(self) -> torch.Tensor:
         return self.samples_l
 
     @property
-    def parameters(self) -> tuple[torch.Tensor,...]:
+    def parameters(self) -> tuple[torch.Tensor, ...]:
         return self.ffx, self.sigma_rfx, self.sigma_eps, self.rfx
 
     @property
@@ -107,8 +107,8 @@ class Proposal:
 
     def partition(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         out = {}
-        out['ffx'] = x[..., :self.d]
-        out['sigma_rfx'] = x[..., self.d:-1]
+        out['ffx'] = x[..., : self.d]
+        out['sigma_rfx'] = x[..., self.d : -1]
         out['sigma_eps'] = x[..., -1]
         return out
 
@@ -117,4 +117,3 @@ class Proposal:
             samples = self.data[source]['samples']
             scale_ = scale.view(-1, *([1] * (samples.ndim - 1)))
             self.data[source]['samples'] *= scale_
-

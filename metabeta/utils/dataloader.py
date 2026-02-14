@@ -5,8 +5,8 @@ import torch
 from metabeta.utils.sampling import samplePermutation
 from metabeta.utils.padding import unpad
 
-def toDevice(batch: dict[str, torch.Tensor], device: torch.device,
-             ) -> dict[str, torch.Tensor]:
+
+def toDevice(batch: dict[str, torch.Tensor], device: torch.device) -> dict[str, torch.Tensor]:
     # make sure device is torch.device
     if isinstance(device, str):
         device = torch.device(device)
