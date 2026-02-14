@@ -9,16 +9,16 @@ def simulate(
     rng: np.random.Generator,
     parameters: dict[str, np.ndarray],
     observations: dict[str, np.ndarray],
-    ) -> np.ndarray:
-    ''' draw y given X and theta for a single dataset '''
+) -> np.ndarray:
+    """draw y given X and theta for a single dataset"""
     # unpack parameters
-    ffx = parameters['ffx'] # (d,)
-    rfx = parameters['rfx'] # (m, q)
+    ffx = parameters['ffx']   # (d,)
+    rfx = parameters['rfx']   # (m, q)
     sigma_eps = parameters['sigma_eps']
     q = rfx.shape[1]
 
     # unpack observations
-    X = observations['X'] # assumed to be standardized
+    X = observations['X']   # assumed to be standardized
     Z = X[:, :q]
     groups = observations['groups']
     n = len(X)
@@ -37,12 +37,12 @@ class Simulator:
     rng: np.random.Generator
     prior: Prior
     design: Synthesizer | Emulator
-    ns: np.ndarray # number of observations per group
+    ns: np.ndarray   # number of observations per group
     plot: bool = False
 
     def __post_init__(self):
-        self.d = self.prior.d # number of ffx
-        self.q = self.prior.q # number of rfx
+        self.d = self.prior.d   # number of ffx
+        self.q = self.prior.q   # number of rfx
         if isinstance(self.ns, list):
             self.ns = np.array(self.ns)
 
@@ -50,11 +50,12 @@ class Simulator:
     def m(self) -> int:
         return len(self.ns)
 
-    def _covsum(self,
-                parameters: dict[str, np.ndarray],
-                observations: dict[str, np.ndarray],
-                ) -> float:
-        ''' get sum of covariance matrix (minus the first element) '''
+    def _covsum(
+        self,
+        parameters: dict[str, np.ndarray],
+        observations: dict[str, np.ndarray],
+    ) -> float:
+        """get sum of covariance matrix (minus the first element)"""
         if self.m < 2 or self.q < 2:
             return 0.0
         rfx = parameters['rfx']
@@ -62,14 +63,14 @@ class Simulator:
         Z = observations['X'][:, :q]
         weighted_rfx = Z.mean(0, keepdims=True) * rfx
         cov = np.cov(weighted_rfx, rowvar=False)
-        cov_sum = cov.sum() - cov[0,0]
+        cov_sum = cov.sum() - cov[0, 0]
         return cov_sum
 
     def sample(self) -> dict[str, np.ndarray]:
         # sample and standardize observations
         obs = self.design.sample(self.d, self.ns)
         obs['X'] = standardize(obs['X'], axis=0, exclude_binary=True)
-        if 'ns' in obs: # in case of update through Emulator
+        if 'ns' in obs:   # in case of update through Emulator
             self.ns = obs['ns']
 
         # sanity check for group indices
@@ -85,10 +86,10 @@ class Simulator:
         y /= sd
 
         # normalize parameters
-        params = {k: v/sd for k,v in params.items()}
+        params = {k: v / sd for k, v in params.items()}
 
         # normalize hyperparameters (our priors are all scale families)
-        hyperparams = {k: v/sd for k,v in self.prior.hyperparams.items()}
+        hyperparams = {k: v / sd for k, v in self.prior.hyperparams.items()}
 
         # optional plot
         if self.plot:
@@ -101,27 +102,24 @@ class Simulator:
             # parameters
             **params,
             **hyperparams,
-
             # observations
             'y': y,
             'X': obs['X'],
             'groups': obs['groups'],
-
             # dimensions
             'm': self.m,
             'n': len(y),
             'ns': self.ns,
             'd': self.d,
             'q': self.q,
-
             # miscellanious
             'sd_y': sd,
-            'r_squared': 1 - params['sigma_eps']**2, # population R^2
-            'cov_sum': self._covsum(params, obs), # helper for standardization
+            'r_squared': 1 - params['sigma_eps'] ** 2,  # population R^2
+            'cov_sum': self._covsum(params, obs),  # helper for standardization
         }
 
         # package scalars as numpy arrays
-        for k,v in out.items():
+        for k, v in out.items():
             if not isinstance(v, np.ndarray):
                 out[k] = np.array(v)
         return out
@@ -157,4 +155,3 @@ if __name__ == '__main__':
     design = Emulator(rng, 'math')
     simulator2 = Simulator(rng, prior, design, ns, plot=True)
     dataset2 = simulator2.sample()
-

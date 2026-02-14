@@ -3,20 +3,21 @@ import numpy as np
 import torch
 from metabeta.utils.preprocessing import Standardizer, checkContinuous
 
+
 @dataclass
 class SGLD:
-    ''' Stochastig gradient Langevin dynamics generator for X
-        simplified version of https://github.com/sebhaan/TabPFGen '''
+    """Stochastig gradient Langevin dynamics generator for X
+    simplified version of https://github.com/sebhaan/TabPFGen"""
+
     n_steps: int = 500
     step_size: float = 0.01
     noise_scale: float = 0.01
-    standardizer: Standardizer = field(
-        default_factory=lambda: Standardizer(axis=0))
+    standardizer: Standardizer = field(default_factory=lambda: Standardizer(axis=0))
     device: str = 'cpu'
 
     def __call__(
         self,
-        X_train: np.ndarray, # (n, d)
+        X_train: np.ndarray,  # (n, d)
         rng: np.random.Generator,
         n_samples: int = 0,
     ) -> np.ndarray:
@@ -48,13 +49,12 @@ class SGLD:
         # unstandardize
         X_synth = x_synth.detach().cpu().numpy()
         X_synth = self.standardizer.backward(X_synth)
- 
+
         # round previously discrete columns
         discrete = ~checkContinuous(X_train)
         X_synth[:, discrete] = X_synth[:, discrete].round()
 
         return X_synth
-
 
     def _step(self, x_synth: torch.Tensor, x_train: torch.Tensor) -> torch.Tensor:
         # detach gradient history
@@ -92,6 +92,5 @@ if __name__ == '__main__':
 
     n = 200
     d = 3
-    x = np.random.normal(size=(n,d))
+    x = np.random.normal(size=(n, d))
     x_sim = sgld(x, rng=rng)
-

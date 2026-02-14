@@ -3,8 +3,13 @@ from dataclasses import dataclass
 from metabeta.utils.preprocessing import checkContinuous
 from metabeta.utils.sampling import counts2groups, wishartCorrelation
 from metabeta.simulation.distributions import (
-    Normal, Student, LogNormal, Uniform,
-    ScaledBeta, Bernoulli, NegativeBinomial,
+    Normal,
+    Student,
+    LogNormal,
+    Uniform,
+    ScaledBeta,
+    Bernoulli,
+    NegativeBinomial,
 )
 
 DISTDICT = {
@@ -19,9 +24,11 @@ DISTDICT = {
 PROBS = np.array(list(DISTDICT.values()))
 DISTS = np.array(list(DISTDICT.keys()))
 
+
 @dataclass
 class Synthesizer:
-    ''' class for sampling a design matrix and groups using synthetic distributions '''
+    """class for sampling a design matrix and groups using synthetic distributions"""
+
     rng: np.random.Generator
     toy: bool = False
     correlate: bool = True
@@ -43,7 +50,7 @@ class Synthesizer:
         x_ = out[:, cont_cols]
 
         # get lower triangular of corr matrix
-        C = wishartCorrelation(self.rng, d_, nu=d_+9)
+        C = wishartCorrelation(self.rng, d_, nu=d_ + 9)
         L = np.linalg.cholesky(C)
 
         # standardize
@@ -53,7 +60,7 @@ class Synthesizer:
         x_ = (x_ - mean) / std
 
         # correlate continuous and enforce unit std
-        x_cor = (x_ @ L.T)
+        x_cor = x_ @ L.T
         std_cor = np.std(x_cor, axis=0, keepdims=True)
         std_cor = np.where(std_cor < 1e-12, 1.0, std_cor)
         x_cor = x_cor / std_cor
@@ -64,19 +71,18 @@ class Synthesizer:
 
         return out
 
-
     def _sample(self, n: int, d: int) -> np.ndarray:
         # init design matrix
         x = np.zeros((n, d))
-        x[..., 0] = 1.
+        x[..., 0] = 1.0
 
         # toy samples
         if self.toy:
-            x[..., 1:] = self.rng.normal(size=(n, d-1))
+            x[..., 1:] = self.rng.normal(size=(n, d - 1))
             return x
 
         # choose distributions
-        sample_dists = self.rng.choice(DISTS, size=d-1, replace=True, p=PROBS)
+        sample_dists = self.rng.choice(DISTS, size=d - 1, replace=True, p=PROBS)
 
         # sample covariates from chosen distributions
         samples = [D(self.rng).sample(n) for D in sample_dists]
@@ -85,7 +91,6 @@ class Synthesizer:
             samples = self._induceCorrelation(samples)
         x[..., 1:] = samples
         return x
-
 
     def sample(self, d: int, ns: np.ndarray) -> dict[str, np.ndarray]:
         n = int(ns.sum())
@@ -111,24 +116,23 @@ if __name__ == '__main__':
     # --- sequential
     t0 = time.perf_counter()
     for rng in tqdm(seeds):
-        Synthesizer(rng)._sample(n, d) # type: ignore
+        Synthesizer(rng)._sample(n, d)   # type: ignore
     t1 = time.perf_counter()
     print(f'\n{t1-t0:.2f}s used for sequential sampling.')
 
     # --- parallel
     def sample_batch(rng):
         return Synthesizer(rng)._sample(n, d)
+
     t0 = time.perf_counter()
-    results = Parallel(n_jobs=-1)(
-        delayed(sample_batch)(rng) for rng in tqdm(seeds)
-        )
+    results = Parallel(n_jobs=-1)(delayed(sample_batch)(rng) for rng in tqdm(seeds))
     t1 = time.perf_counter()
     print(f'\n{t1-t0:.2f}s used for parallel sampling.')
 
     # --- outer wrapper
     from metabeta.utils.sampling import sampleCounts
+
     rng = np.random.default_rng(0)
     ns = sampleCounts(rng, n, 10)
     rng = np.random.default_rng(seed)
     Synthesizer(rng).sample(d, ns)
-

@@ -8,7 +8,7 @@ def hypersample(
     d: int,
     q: int,
 ) -> dict[str, np.ndarray]:
-    ''' sample hyperparameters to instantiate prior '''
+    """sample hyperparameters to instantiate prior"""
     out = {}
     out['nu_ffx'] = rng.uniform(-3, 3, size=d)
     out['tau_ffx'] = rng.uniform(0.01, 3, size=d)
@@ -19,27 +19,26 @@ def hypersample(
 
 @dataclass
 class Prior:
-    ''' class for drawing parameters from prior '''
+    """class for drawing parameters from prior"""
+
     rng: np.random.Generator
     hyperparams: dict[str, np.ndarray]
 
     def __post_init__(self):
-        self.d = len(self.hyperparams['tau_ffx']) # number of fixed effects
-        self.q = len(self.hyperparams['tau_rfx']) # number of random effects
+        self.d = len(self.hyperparams['tau_ffx'])   # number of fixed effects
+        self.q = len(self.hyperparams['tau_rfx'])   # number of random effects
 
     def _sampleFfx(self) -> np.ndarray:
         nu = self.hyperparams['nu_ffx']
         tau = self.hyperparams['tau_ffx']
         dist = norm(nu, tau)
-        ffx = dist.rvs(size=nu.shape,
-                       random_state=self.rng)
+        ffx = dist.rvs(size=nu.shape, random_state=self.rng)
         return ffx
 
     def _sampleSigmaRfx(self) -> np.ndarray:
         tau = self.hyperparams['tau_rfx']
         dist = norm(loc=0, scale=tau)
-        sigma_rfx = dist.rvs(size=tau.shape,
-                             random_state=self.rng)
+        sigma_rfx = dist.rvs(size=tau.shape, random_state=self.rng)
         return np.abs(sigma_rfx)
 
     def _sampleSigmaEps(self) -> np.ndarray:
@@ -48,14 +47,12 @@ class Prior:
         sigma_eps = dist.rvs(random_state=self.rng)
         return np.abs(sigma_eps)
 
-    def _sampleRfx(self,
-                   m: int, # number of groups
-                   sigma_rfx: np.ndarray) -> np.ndarray:
+    def _sampleRfx(self, m: int, sigma_rfx: np.ndarray) -> np.ndarray:  # number of groups
         size = (m, self.q)
         dist = norm(loc=0, scale=sigma_rfx)
         rfx = dist.rvs(size, random_state=self.rng)
         return rfx
- 
+
     def sample(self, m: int) -> dict[str, np.ndarray]:
         out = {}
         out['ffx'] = self._sampleFfx()
@@ -68,11 +65,10 @@ class Prior:
 if __name__ == '__main__':
     seed = 0
     rng = np.random.default_rng(seed)
- 
+
     d, q = 3, 1
     m = 10
 
     hyperparams = hypersample(rng, d, q)
     prior = Prior(rng, hyperparams)
     params = prior.sample(m)
-
