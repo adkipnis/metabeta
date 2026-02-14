@@ -116,9 +116,7 @@ class Generator:
         sim = Simulator(rng, prior, design, ns)
         return sim.sample()
 
-    def _genBatch(
-        self, n_datasets: int, mini_batch_size: int, epoch: int = 0,
-    ) -> list[dict[str, np.ndarray]]:
+    def _genBatch(self, n_datasets: int, mini_batch_size: int, epoch: int = 0) -> list[dict[str, np.ndarray]]:
         """generate list of {n_datasets} and keep m, d, q constant per minibatch"""
         # --- init seeding
         main_seed = {'train': epoch, 'valid': 10_000, 'test': 20_000}[self.cfg.partition]
