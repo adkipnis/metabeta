@@ -8,12 +8,12 @@ from metabeta.utils.evaluation import Proposal, getMasks
 
 
 def getLocation(
-    x: torch.Tensor, w: torch.Tensor | None = None, loc_type: str = 'mean',
+    x: torch.Tensor, w: torch.Tensor | None = None, loc_type: str = 'mean'
 ) -> torch.Tensor:
     if loc_type == 'mean':
         if w is None:
             return torch.mean(x, dim=-2)
-        if x.dim() == 4: # handle groups in rfx
+        if x.dim() == 4:   # handle groups in rfx
             w = w.unsqueeze(1)
         return (x * w.unsqueeze(-1)).sum(-2)
     elif loc_type == 'median':
@@ -21,15 +21,12 @@ def getLocation(
             return torch.median(x, dim=-2)[0]
         else:
             # TODO
-            raise NotImplementedError 
+            raise NotImplementedError
     else:
         raise NotImplementedError(f'location type {loc_type} not implemented')
 
 
-def sampleLoc(
-    proposal: Proposal,
-    loc_type: str = 'mean'
-) -> dict[str, torch.Tensor]:
+def sampleLoc(proposal: Proposal, loc_type: str = 'mean') -> dict[str, torch.Tensor]:
     w = proposal.weights
     global_loc = getLocation(proposal.samples_g, w, loc_type)
     out = proposal.partition(global_loc)
@@ -49,7 +46,7 @@ def sampleRMSE(
         if mask is not None:
             se = (gt - est).pow(2)
             se = se * mask
-            n =  mask.sum().clamp_min(1.0)
+            n = mask.sum().clamp_min(1.0)
             rmse = torch.sqrt(se.sum() / n).item()
         else:
             rmse = torch.sqrt(F.mse_loss(gt, est))
@@ -78,4 +75,3 @@ def sampleCorrelation(
             corr = cast(np.float32, pearsonr(gt, est)[0])
         out[key] = float(corr.mean())
     return out
-
