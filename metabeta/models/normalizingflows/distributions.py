@@ -18,7 +18,7 @@ class StaticDist(nn.Module):
 
     def __repr__(self) -> str:
         params = ''
-        for k,v in self._default_params.items():
+        for k, v in self._default_params.items():
             params += f'{k}: {v:.1f}, '
         return f'Static {self.family.title()} ({params[:-2]})'
 
@@ -26,15 +26,15 @@ class StaticDist(nn.Module):
     def _default_params(self) -> dict[str, float]:
         out = {}
         if self.family == 'student':
-            out['df'] = 5.
-        out['loc'] = 0.
-        out['scale'] = 1.
+            out['df'] = 5.0
+        out['loc'] = 0.0
+        out['scale'] = 1.0
         return out
 
     @property
     def _dist(self) -> dict:
         if self.family == 'normal':
-            return {'torch': D.Normal, 'scipy': scipy.stats.norm} 
+            return {'torch': D.Normal, 'scipy': scipy.stats.norm}
         elif self.family == 'student':
             return {'torch': D.StudentT, 'scipy': scipy.stats.t}
         else:
@@ -58,7 +58,7 @@ class TrainableDist(nn.Module):
 
     def __repr__(self) -> str:
         params = ''
-        for k,v in self._params.items():
+        for k, v in self._params.items():
             params += f'\n    {k}: {v.cpu().detach().numpy()}, '
         return f'Trainable {self.family.title()} ({params[:-2]})'
 
@@ -72,15 +72,15 @@ class TrainableDist(nn.Module):
     def _params(self) -> dict[str, torch.Tensor]:
         out = {}
         if self.family == 'student':
-            out['df'] = F.softplus(self._log_df + 1e-6) + 3.0 # clamps df at min=3
-        out['loc'] = self._loc * 1.
+            out['df'] = F.softplus(self._log_df + 1e-6) + 3.0   # clamps df at min=3
+        out['loc'] = self._loc * 1.0
         out['scale'] = F.softplus(self._log_scale + 1e-6)
         return out
 
     @property
     def _dist(self) -> dict:
         if self.family == 'normal':
-            return {'torch': D.Normal, 'scipy': scipy.stats.norm} 
+            return {'torch': D.Normal, 'scipy': scipy.stats.norm}
         elif self.family == 'student':
             return {'torch': D.StudentT, 'scipy': scipy.stats.t}
         else:
@@ -89,9 +89,10 @@ class TrainableDist(nn.Module):
     def sample(self, shape: tuple[int, ...]) -> torch.Tensor:
         if shape[-1] != len(self._params['loc']):
             raise ValueError(
-                f'last shape dim should be {len(self._params["loc"])}, but found {shape[-1]}')
+                f'last shape dim should be {len(self._params["loc"])}, but found {shape[-1]}'
+            )
         with torch.no_grad():
-            params = {k: v.cpu() for k,v in self._params.items()}
+            params = {k: v.cpu() for k, v in self._params.items()}
             sampling_dist = self._dist['scipy'](**params)
             x = sampling_dist.rvs(size=shape, random_state=self.rng)
             return torch.from_numpy(x)
@@ -102,15 +103,20 @@ class TrainableDist(nn.Module):
 
 
 class BaseDist(nn.Module):
-    ''' Wrapper for Normalizing Flow base distribution
-        - supports Normal and StudentT distribution family
-        - allows trainable distribution parameters
-        - log_prob evaluation via pytorch
-        - CPU sampling via scipy
-          (circumvents issues with torch sampling in model.eval() when not on CPU)
-    '''
+    """Wrapper for Normalizing Flow base distribution
+    - supports Normal and StudentT distribution family
+    - allows trainable distribution parameters
+    - log_prob evaluation via pytorch
+    - CPU sampling via scipy
+      (circumvents issues with torch sampling in model.eval() when not on CPU)
+    """
+
     def __init__(
-        self, d_data: int, family: str, trainable: bool = True, seed: int = 1,
+        self,
+        d_data: int,
+        family: str,
+        trainable: bool = True,
+        seed: int = 1,
     ) -> None:
         super().__init__()
         self.trainable = trainable
@@ -129,10 +135,8 @@ class BaseDist(nn.Module):
         return self.base.logProb(x)
 
 
-
 if __name__ == '__main__':
     b, d = 8, 3
     dist = BaseDist(d, family='student', trainable=True)
-    x = dist.sample((b,d))
+    x = dist.sample((b, d))
     log_prob = dist.logProb(x)
-

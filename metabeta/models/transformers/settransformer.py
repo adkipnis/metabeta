@@ -6,19 +6,20 @@ from metabeta.utils.initializers import getInitializer
 
 
 class SetTransformer(nn.Module):
-    ''' Set Transformer:
-        Linear -> Dropout -> [MAB] * n_blocks -> Pool (-> Linear -> Dropout)
-        Optionally use ISAB instead of MAB to go from O(n²) to O(n) '''
+    """Set Transformer:
+    Linear -> Dropout -> [MAB] * n_blocks -> Pool (-> Linear -> Dropout)
+    Optionally use ISAB instead of MAB to go from O(n²) to O(n)"""
+
     def __init__(
         self,
         d_input: int,
         d_model: int,
         d_ff: int,
         d_output: int | None = None,
-        n_inducing: int = 32, # for ISAB blocks
+        n_inducing: int = 32,  # for ISAB blocks
         n_heads: int = 4,
         n_blocks: int = 2,
-        n_isab: int = 0, # first n blocks are ISAB blocks instead of MAB
+        n_isab: int = 0,  # first n blocks are ISAB blocks instead of MAB
         use_bias: bool = True,
         pre_norm: bool = True,
         activation: str = 'GELU',
@@ -31,13 +32,13 @@ class SetTransformer(nn.Module):
 
         # input projector
         self.proj_in = nn.Sequential(
-                nn.Linear(d_input, d_model),
-                nn.Dropout(dropout),
+            nn.Linear(d_input, d_model),
+            nn.Dropout(dropout),
         )
 
         # pool token
         self.pool_token = torch.nn.Parameter(torch.randn(d_model) * 0.02)
- 
+
         # configure blocks
         cfg = dict(
             d_model=d_model,
@@ -53,9 +54,9 @@ class SetTransformer(nn.Module):
         # build attention blocks
         blocks = []
         for _ in range(n_isab):
-            blocks += [ISAB(**cfg, n_inducing=n_inducing)] # type: ignore
-        for _ in range(n_blocks-n_isab):
-            blocks += [MAB(**cfg)] # type: ignore
+            blocks += [ISAB(**cfg, n_inducing=n_inducing)]   # type: ignore
+        for _ in range(n_blocks - n_isab):
+            blocks += [MAB(**cfg)]   # type: ignore
         self.blocks = nn.ModuleList(blocks)
 
         # posthoc norm
@@ -77,7 +78,8 @@ class SetTransformer(nn.Module):
                 initializer(self.proj_out[0])
 
     def _reshape(
-        self, x: torch.Tensor,
+        self,
+        x: torch.Tensor,
         mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         # deal with sequences longer than 3d
@@ -91,7 +93,7 @@ class SetTransformer(nn.Module):
         self,
         x: torch.Tensor,
         mask: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor|None]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         # prepend pool token along sequence dim and include in mask
         token = self.pool_token.unsqueeze(0).unsqueeze(0)
         token = token.expand(x.size(0), 1, -1)
@@ -110,7 +112,7 @@ class SetTransformer(nn.Module):
         # optionally reshape inputs
         old_shape = x.shape
         x, mask = self._reshape(x, mask)
- 
+
         # linear embedding
         x = self.proj_in(x)
 
@@ -128,7 +130,7 @@ class SetTransformer(nn.Module):
 
         # pool by extracting token
         x = x[:, 0]
- 
+
         # project out
         if self.proj_out is not None:
             x = self.proj_out(x)
@@ -152,4 +154,3 @@ if __name__ == '__main__':
     mask = torch.ones((b, m, n)).bool()
     mask[..., -1] = False
     out = model(x, mask=mask)
-    

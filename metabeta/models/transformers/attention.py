@@ -6,7 +6,8 @@ from metabeta.models.feedforward import TransformerFFN
 
 
 class MHA(nn.Module):
-    ''' Multi-Head Attention wrapper '''
+    """Multi-Head Attention wrapper"""
+
     def __init__(
         self,
         d_model: int,
@@ -16,8 +17,7 @@ class MHA(nn.Module):
         zero_init: bool = True,
     ) -> None:
         super().__init__()
-        self.mha = nn.MultiheadAttention(
-            d_model, n_heads, dropout, bias=use_bias, batch_first=True)
+        self.mha = nn.MultiheadAttention(d_model, n_heads, dropout, bias=use_bias, batch_first=True)
         self.dropout = nn.Dropout(dropout)
         if zero_init:
             zeroInitializer(self.mha.out_proj)
@@ -36,14 +36,14 @@ class MHA(nn.Module):
             value = key
 
         # forward pass
-        h, _ = self.mha(query, key, value,
-                        key_padding_mask=key_padding_mask)
+        h, _ = self.mha(query, key, value, key_padding_mask=key_padding_mask)
         return self.dropout(h)
 
 
 class MAB(nn.Module):
-    ''' Multihead-Attention Block:
-        Norm -> MHA -> Residual -> Norm -> FF -> Residual '''
+    """Multihead-Attention Block:
+    Norm -> MHA -> Residual -> Norm -> FF -> Residual"""
+
     def __init__(
         self,
         d_model: int,
@@ -81,17 +81,18 @@ class MAB(nn.Module):
         self.norm0 = nn.LayerNorm(d_model, eps=eps)
         self.norm1 = nn.LayerNorm(d_model, eps=eps)
 
-
     def forward(
         self,
-        x: torch.Tensor, # (batch, seq_len, d_model)
-        z: torch.Tensor | None = None, # (batch, seq_len, d_model)
-        key_padding_mask: torch.Tensor | None = None, # (batch, seq_len)
+        x: torch.Tensor,  # (batch, seq_len, d_model)
+        z: torch.Tensor | None = None,  # (batch, seq_len, d_model)
+        key_padding_mask: torch.Tensor | None = None,  # (batch, seq_len)
     ) -> torch.Tensor:
         if self.pre_norm:
-            h = self.mha(self.norm0(x),
-                         self.norm0(z) if z is not None else None,
-                         key_padding_mask=key_padding_mask)
+            h = self.mha(
+                self.norm0(x),
+                self.norm0(z) if z is not None else None,
+                key_padding_mask=key_padding_mask,
+            )
             x = x + h
             x = x + self.mlp(self.norm1(x))
         else:
@@ -102,13 +103,14 @@ class MAB(nn.Module):
 
 
 class ISAB(nn.Module):
-    ''' Induced Self-Attention Block:
-        MAB(I,X) -> MAB(X,H)'''
+    """Induced Self-Attention Block:
+    MAB(I,X) -> MAB(X,H)"""
+
     def __init__(
         self,
         d_model: int,
         d_ff: int,
-        n_inducing: int, # number of induction points
+        n_inducing: int,  # number of induction points
         n_heads: int = 4,
         use_bias: bool = True,
         pre_norm: bool = True,
@@ -126,12 +128,13 @@ class ISAB(nn.Module):
             pre_norm=pre_norm,
             activation=activation,
             dropout=dropout,
-            eps=eps)
-        self.mab0 = MAB(**mab_dict) # type: ignore
-        self.mab1 = MAB(**mab_dict) # type: ignore
+            eps=eps,
+        )
+        self.mab0 = MAB(**mab_dict)   # type: ignore
+        self.mab1 = MAB(**mab_dict)   # type: ignore
         self._I = nn.Parameter(torch.empty(n_inducing, d_model))
         nn.init.normal_(self._I, 0.0, 0.02)
- 
+
     def _getI(self, x: torch.Tensor) -> torch.Tensor:
         shape = x.shape[:-2]
         I = self._I
@@ -139,8 +142,8 @@ class ISAB(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor, # (batch, seq_len, d_model)
-        key_padding_mask: torch.Tensor | None = None, # (batch, seq_len)
+        x: torch.Tensor,  # (batch, seq_len, d_model)
+        key_padding_mask: torch.Tensor | None = None,  # (batch, seq_len)
     ) -> torch.Tensor:
         i = self._getI(x)
         h = self.mab0(i, x, key_padding_mask=key_padding_mask)
@@ -156,10 +159,9 @@ if __name__ == '__main__':
     b, n = 8, 10
 
     x = torch.randn(b, n, d_model)
-    mask = torch.ones(size=(b, n)).bool() # attend all entries
-    mask[..., 0] = False # don't attend the first entry in sequence
+    mask = torch.ones(size=(b, n)).bool()   # attend all entries
+    mask[..., 0] = False   # don't attend the first entry in sequence
 
     model = ISAB(d_model, d_ff, n_inducing=32)
     model.eval()
     out = model(x, key_padding_mask=~mask)
-
