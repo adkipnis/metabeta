@@ -78,9 +78,7 @@ class Approximator(nn.Module):
         Z = data['Z'][..., 1:q]
         return torch.cat([y, X, Z], dim=-1)
 
-    def _targets(
-            self, data: dict[str, torch.Tensor], local: bool = False,
-    ) -> torch.Tensor:
+    def _targets(self, data: dict[str, torch.Tensor], local: bool = False) -> torch.Tensor:
         """get posterior targets"""
         if local:
             targets = data['rfx']
@@ -90,9 +88,7 @@ class Approximator(nn.Module):
         targets = [data['ffx'], data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)]
         return torch.cat(targets, dim=-1)
 
-    def _masks(
-            self, data: dict[str, torch.Tensor], local: bool = False,
-    ) -> torch.Tensor:
+    def _masks(self, data: dict[str, torch.Tensor], local: bool = False) -> torch.Tensor:
         """get masks for the posterior targets"""
         if local:
             mask_q = data['mask_q']
@@ -181,9 +177,7 @@ class Approximator(nn.Module):
             proposed['global']['samples'] = samples
         return Proposal(proposed)
 
-    def _summarize(
-            self, data: dict[str, torch.Tensor],
-        ) -> tuple[torch.Tensor, torch.Tensor]:
+    def _summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)
         summary_l = self.summarizer_l(inputs, mask=data['mask_n'])
         summary_l = self._addMetadata(summary_l, data, local=True)
@@ -220,9 +214,7 @@ class Approximator(nn.Module):
         return loss
 
     @torch.no_grad()
-    def estimate(
-            self, data: dict[str, torch.Tensor], n_samples: int = 100,
-    ) -> Proposal:
+    def estimate(self, data: dict[str, torch.Tensor], n_samples: int = 100) -> Proposal:
         """inference method: sample and apply conditional backward pass"""
         assert n_samples > 0, 'n_samples must be positive'
         proposed = {}
