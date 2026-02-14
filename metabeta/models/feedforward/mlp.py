@@ -4,27 +4,27 @@ from torch import nn
 from torch.nn import functional as F
 
 from metabeta.utils.activations import getActivation
-from metabeta.utils.initializers import (
-    getInitializer, zeroInitializer, weightNormInitializer)
+from metabeta.utils.initializers import getInitializer, zeroInitializer, weightNormInitializer
 
 
 # --- multi-layer perceptron
 class Feedforward(nn.Module):
-    ''' Feedforward Layer:
-        Linear -> Norm -> Activation -> Dropout (-> Residual)
-    '''
+    """Feedforward Layer:
+    Linear -> Norm -> Activation -> Dropout (-> Residual)
+    """
+
     def __init__(
         self,
         d_input: int,
         d_output: int,
         use_bias: bool = True,
         layer_norm: bool = False,
-        pre_norm: bool = False, # layer norm before linear layer
-        eps: float = 1e-3, # numerical stability in layer norm denominator
+        pre_norm: bool = False,  # layer norm before linear layer
+        eps: float = 1e-3,  # numerical stability in layer norm denominator
         activation: str = 'ReLU',
         dropout: float = 0.0,
-        residual: bool = False, # if true: x + λ * self.layers(x)
-        rscale: float = 0.1, # λ
+        residual: bool = False,  # if true: x + λ * self.layers(x)
+        rscale: float = 0.1,  # λ
     ):
         super().__init__()
         self.residual = residual if d_input == d_output else False
@@ -44,7 +44,7 @@ class Feedforward(nn.Module):
         if dropout:
             layers += [nn.Dropout(dropout)]
         self.layers = nn.Sequential(*layers)
- 
+
     @property
     def rscale(self) -> torch.Tensor:
         return F.softplus(self._rscale).clamp(max=1)
@@ -56,9 +56,10 @@ class Feedforward(nn.Module):
 
 
 class MLP(nn.Module):
-    ''' Multi-Layer Perceptron with optional skip-connection:
-        [FF] * len(d_hidden) -> Linear -> Dropout
-    '''
+    """Multi-Layer Perceptron with optional skip-connection:
+    [FF] * len(d_hidden) -> Linear -> Dropout
+    """
+
     def __init__(
         self,
         d_input: int,
@@ -70,7 +71,7 @@ class MLP(nn.Module):
         activation: str = 'ReLU',
         dropout: float = 0.0,
         residual: bool = False,
-        shortcut: bool = False, # additional linear layer from input to output
+        shortcut: bool = False,  # additional linear layer from input to output
         weight_init: tuple[str, str] | None = None,
         zero_init: bool = False,
         weight_norm: bool = False,
@@ -97,8 +98,7 @@ class MLP(nn.Module):
             d_in = d_out
 
         # add final layer
-        layers += [nn.Linear(d_in, d_output, bias=use_bias),
-                   nn.Dropout(dropout)]
+        layers += [nn.Linear(d_in, d_output, bias=use_bias), nn.Dropout(dropout)]
         self.layers = nn.Sequential(*layers)
 
         # optionally add skip_connection
@@ -115,7 +115,7 @@ class MLP(nn.Module):
             self.apply(initializer)
 
         # optionally zero-init final layer
-        if zero_init: # this should only be used for residual setups
+        if zero_init:   # this should only be used for residual setups
             zeroInitializer(self.layers[-2])
             if self.shortcut is not None:
                 zeroInitializer(self.shortcut[0])
@@ -123,7 +123,6 @@ class MLP(nn.Module):
         # optionally apply weight norm to linear layers
         if weight_norm:
             self.apply(weightNormInitializer)
-
 
     def forward(self, x):
         h = self.layers(x)
@@ -201,7 +200,7 @@ class FlowMLP(nn.Module):
         x: torch.Tensor,
         context: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
-        ) -> torch.Tensor:
+    ) -> torch.Tensor:
         if (mask is not None) and (context is not None):
             x = torch.cat([x, mask, context], dim=-1)
         elif mask is not None:
@@ -221,7 +220,7 @@ if __name__ == '__main__':
 
     # TransformerFFN
     cfg = {'d_input': d_input, 'd_hidden': d_hidden[0], 'd_output': d_output}
-    model = TransformerFFN(**cfg) # type: ignore
+    model = TransformerFFN(**cfg)   # type: ignore
     out = model(x)
 
     # FlowMLP
@@ -229,4 +228,3 @@ if __name__ == '__main__':
     x, context = x.chunk(2, dim=-1)
     model = FlowMLP(**cfg)
     out = model(x, context)
-
