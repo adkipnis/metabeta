@@ -1,3 +1,4 @@
+import logging
 import argparse
 import yaml
 from typing import cast
@@ -12,6 +13,7 @@ from metabeta.utils.io import datasetFilename
 from metabeta.utils.sampling import truncLogUni
 from metabeta.utils.padding import aggregate
 
+logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
 # config
@@ -157,27 +159,27 @@ class Generator:
         return datasets
 
     def genTest(self):
-        print('Generating test set...')
+        logger.info('Generating test set...')
         ds_test = self._genBatch(n_datasets=self.cfg.bs_test, mini_batch_size=1)
         ds_test = aggregate(ds_test)
         fn = Path(self.outdir, datasetFilename(vars(self.cfg), 'test'))
         np.savez_compressed(fn, **ds_test, allow_pickle=True)
-        print(f'Saved test set to {fn}')
+        logger.info(f'Saved test set to {fn}')
 
     def genValid(self):
-        print('Generating validation set...')
+        logger.info('Generating validation set...')
         ds_valid = self._genBatch(n_datasets=self.cfg.bs_valid, mini_batch_size=1)
         ds_valid = aggregate(ds_valid)
         fn = Path(self.outdir, datasetFilename(vars(self.cfg), 'valid'))
         np.savez_compressed(fn, **ds_valid, allow_pickle=True)
-        print(f'Saved validation set to {fn}')
+        logger.info(f'Saved validation set to {fn}')
 
     def genTrain(self):
         assert self.cfg.begin > 0, 'starting training partition must be a positive integer'
         assert self.cfg.begin <= self.cfg.epochs, 'starting epoch larger than goal epoch'
         assert self.cfg.epochs < 10_000, 'maximum number of epochs exceeded'
         assert self.cfg.ds_type != 'sampled', 'training data must be synthetic'
-        print(f'Generating {self.cfg.epochs} training partitions of {self.cfg.bs_train} datasets each...')
+        logger.info(f'Generating {self.cfg.epochs} training partitions of {self.cfg.bs_train} datasets each...')
         for epoch in range(self.cfg.begin, self.cfg.epochs + 1):
             ds_train = self._genBatch(
                 n_datasets=self.cfg.bs_train, mini_batch_size=self.cfg.bs_mini, epoch=epoch
@@ -185,7 +187,7 @@ class Generator:
             ds_train = aggregate(ds_train)
             fn = Path(self.outdir, datasetFilename(vars(self.cfg), 'train', epoch))
             np.savez_compressed(fn, **ds_train, allow_pickle=True)
-            print(f'Saved training set to {fn}')
+            logger.info(f'Saved training set to {fn}')
 
     def go(self):
         if self.cfg.partition == 'test':
