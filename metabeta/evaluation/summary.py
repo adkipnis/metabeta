@@ -22,6 +22,7 @@ def dictMean(data: dict[str, float]) -> float:
     values = list(data.values())
     return float(np.mean(values))
 
+
 def recoveryPlot(
     locs: dict[str, torch.Tensor],
     data: dict[str, torch.Tensor],
@@ -39,19 +40,21 @@ def recoveryPlot(
     estimates.append(locs['ffx'])
     masks.append(data['mask_d'])
     names.append(getNames('ffx', d))
-    metrics.append({
-        'r': stats['corr']['ffx'],
-        'RMSE': stats['rmse']['ffx'],
-    })
+    metrics.append(
+        {
+            'r': stats['corr']['ffx'],
+            'RMSE': stats['rmse']['ffx'],
+        }
+    )
 
     # variance parameters
     q = data['sigma_rfx'].shape[-1]
     targets.append(joinSigmas(data))
     estimates.append(joinSigmas(locs))
-    masks.append(F.pad(data['mask_q'], (0,1), value=True))
+    masks.append(F.pad(data['mask_q'], (0, 1), value=True))
     names.append(getNames('sigmas', q))
-    rmse = q/(q+1) * stats['rmse']['sigma_rfx'] + 1/(q+1) * stats['rmse']['sigma_eps']
-    r = q/(q+1) * stats['corr']['sigma_rfx'] + 1/(q+1) * stats['corr']['sigma_eps']
+    rmse = q / (q + 1) * stats['rmse']['sigma_rfx'] + 1 / (q + 1) * stats['rmse']['sigma_eps']
+    r = q / (q + 1) * stats['corr']['sigma_rfx'] + 1 / (q + 1) * stats['corr']['sigma_eps']
     metrics.append({'r': r, 'RMSE': rmse})
 
     # random effects
@@ -60,10 +63,12 @@ def recoveryPlot(
     mask = data['mask_mq']
     masks.append(mask.view(-1, q))
     names.append(getNames('rfx', q))
-    metrics.append({
-        'r': stats['corr']['rfx'],
-        'RMSE': stats['rmse']['rfx'],
-    })
+    metrics.append(
+        {
+            'r': stats['corr']['rfx'],
+            'RMSE': stats['rmse']['rfx'],
+        }
+    )
 
     # figure
     fig, axs = plt.subplots(figsize=(6 * 3, 6), ncols=3, dpi=300)
@@ -101,7 +106,6 @@ def dependentSummary(
 
     # print summary
     return longTable(corr, rmse, mce)
-
 
 
 def longTable(
@@ -168,4 +172,3 @@ def flatSummary(
         rows += [['IS Efficency', is_eff]]
     results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
     return f'{results}\n'
-
