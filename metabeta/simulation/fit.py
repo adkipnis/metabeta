@@ -38,6 +38,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--lr', type=float, default=5e-3, help='Adam learning rate for ADVI (default = 5e-3)')
     return parser.parse_args()
 
+
 class Fitter:
     def __init__(
         self,
@@ -67,8 +68,8 @@ class Fitter:
         self.outpath = Path(self.outdir, outname)
 
     def _getSingle(self, batch: dict[str, np.ndarray], idx: int) -> dict[str, np.ndarray]:
-        ''' extract single dataset at index {idx} and unpad'''
-        ds = {k: v[idx] for k,v in batch.items()}
+        """extract single dataset at index {idx} and unpad"""
+        ds = {k: v[idx] for k, v in batch.items()}
         sizes = {k: ds[k] for k in list('dqmn')}
         return unpad(ds, sizes)
 
@@ -80,7 +81,7 @@ class Fitter:
         return f'{stem}_{self.cfg.method}_{idx:03d}.npz'
 
     def _pandify(self, ds: dict[str, np.ndarray]) -> pd.DataFrame:
-        ''' get observations as dataframe '''
+        """get observations as dataframe"""
         n, d = ds['n'], ds['d']
         df = pd.DataFrame(index=range(n))
         df['i'] = ds['groups']
@@ -90,18 +91,18 @@ class Fitter:
         return df
 
     def _formulate(self, ds: dict[str, np.ndarray]) -> str:
-        ''' setup bambi model formula based on ds '''
+        """setup bambi model formula based on ds"""
         d, q = ds['d'], ds['q']
         fixed = ' + '.join(f'x{j}' for j in range(1, d))
         random = ' + '.join(f'x{j}' for j in range(1, q))
-        if not random: # no random slopes
+        if not random:   # no random slopes
             random = '1'
         if fixed:
             return f'y ~ 1 + {fixed} + ({random} | i)'
         return f'y ~ 1 + ({random} | i)'
 
     def _priorize(self, ds: dict[str, np.ndarray]) -> dict[str, bmb.Prior]:
-        ''' setup bambi priors based on true priors '''
+        """setup bambi priors based on true priors"""
         d, q = ds['d'], ds['q']
         nu_ffx = ds['nu_ffx']
         tau_ffx = ds['tau_ffx']
@@ -110,7 +111,7 @@ class Fitter:
         priors = {}
 
         # fixed effects
-        if not self.cfg.respecify_ffx: # otherwise bambi will infer them from data
+        if not self.cfg.respecify_ffx:   # otherwise bambi will infer them from data
             for j in range(d):
                 key = 'Intercept' if j == 0 else f'x{j}'
                 priors[key] = bmb.Prior('Normal', mu=nu_ffx[j], sigma=tau_ffx[j])
@@ -126,8 +127,8 @@ class Fitter:
         return priors
 
     def bambify(self, ds: dict[str, np.ndarray]) -> bmb.Model:
-        ''' setup bambi model from dataset dict
-            optionally allow bambi to setup its own priors for the fixed effects'''
+        """setup bambi model from dataset dict
+        optionally allow bambi to setup its own priors for the fixed effects"""
         df = self._pandify(ds)
         form = self._formulate(ds)
         priors = None
@@ -139,9 +140,9 @@ class Fitter:
         return model
 
     def _extract(self, trace: az.InferenceData, name: str) -> np.ndarray:
-        ''' extract {name} samples from posterior '''
-        x = trace.posterior[name].to_numpy() # type: ignore
-        shape = (x.shape[0] * x.shape[1], ) + x.shape[2:]
+        """extract {name} samples from posterior"""
+        x = trace.posterior[name].to_numpy()   # type: ignore
+        shape = (x.shape[0] * x.shape[1],) + x.shape[2:]
         x = x.reshape(shape)
         return x[None, ...]
 
@@ -184,7 +185,7 @@ class Fitter:
     def _fitNuts(
             self, cfg: argparse.Namespace, ds: dict[str, np.ndarray],
     ) -> dict[str, np.ndarray]:
-        ''' fit NUTS-based MCMC model and return samples and diagnostics '''
+        """fit NUTS-based MCMC model and return samples and diagnostics"""
         model = self.bambify(ds)
         t0 = time.perf_counter()
         trace = model.fit(
@@ -213,7 +214,7 @@ class Fitter:
     def _fitAdvi(
             self, cfg: argparse.Namespace, ds: dict[str, np.ndarray],
     ) -> dict[str, np.ndarray]:
-        ''' fit ADVI model (using ADAM) and return samples and diagnostics'''
+        """fit ADVI model (using ADAM) and return samples and diagnostics"""
         model = self.bambify(ds)
         t0 = time.perf_counter()
         mean_field = model.fit(
@@ -240,7 +241,7 @@ class Fitter:
         return out
 
     def go(self) -> None:
-        ''' wrapper for fitting a single dataset with index {idx} '''
+        """wrapper for fitting a single dataset with index {idx}"""
         print(f'Fitting dataset {self.cfg.idx} with {self.cfg.method.upper()}...')
         if self.cfg.method == 'nuts':
             results = self._fitNuts(self.cfg, self.ds)
@@ -294,4 +295,3 @@ if __name__ == '__main__':
         fitter.reintegrate()
     else:
         fitter.go()
-
