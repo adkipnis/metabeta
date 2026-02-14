@@ -9,7 +9,6 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 import schedulefree
 
-from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.io import setDevice, datasetFilename, runName
 from metabeta.utils.sampling import setSeed
@@ -17,6 +16,7 @@ from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.models.approximator import Approximator
+from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.evaluation.summary import flatSummary, dependentSummary
 
 logger = logging.getLogger('train.py')
@@ -304,7 +304,7 @@ batch size: {self.cfg.bs}
         if self.cfg.importance:
             imp_sampler = ImportanceSampler(batch)
             proposal.is_results = imp_sampler(proposal)
-            is_eff = proposal.mean_efficiency()
+            is_eff = proposal.mean_efficiency
 
         print(dependentSummary(proposal, batch, plot_this=self.cfg.plot))
         print(flatSummary(proposal, batch, time=tpd, is_eff=is_eff))
