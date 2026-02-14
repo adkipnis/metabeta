@@ -4,6 +4,7 @@ from pathlib import Path
 from dataclasses import dataclass, asdict
 from metabeta.utils.io import datasetFilename
 
+
 @dataclass(frozen=True)
 class SummarizerConfig:
     d_model: int
@@ -20,12 +21,13 @@ class SummarizerConfig:
         out.pop('type')
         return out
 
+
 @dataclass(frozen=True)
 class PosteriorConfig:
     n_blocks: int
     subnet_kwargs: dict | None = None
     type: Literal['coupling'] = 'coupling'
-    transform: Literal['affine', 'spline']  = 'affine'
+    transform: Literal['affine', 'spline'] = 'affine'
     base_family: Literal['normal', 'student'] = 'normal'
     base_trainable: bool = True
 
@@ -34,32 +36,32 @@ class PosteriorConfig:
         out.pop('type')
         return out
 
+
 @dataclass(frozen=True)
 class ApproximatorConfig:
     d_ffx: int
     d_rfx: int
     summarizer: SummarizerConfig
     posterior: PosteriorConfig
- 
+
     def to_dict(self) -> dict:
         return {
             'd_ffx': self.d_ffx,
             'd_rfx': self.d_rfx,
             'summarizer': self.summarizer.to_dict(),
             'posterior': self.posterior.to_dict(),
-            }
+        }
+
 
 def modelFromYaml(cfg_path: Path, d_ffx: int, d_rfx: int) -> ApproximatorConfig:
     with open(cfg_path, 'r') as f:
         model_cfg = yaml.safe_load(f)
     cfg_s = SummarizerConfig(**model_cfg['summarizer'])
     cfg_p = PosteriorConfig(**model_cfg['posterior'])
-    return ApproximatorConfig(d_ffx=d_ffx,
-                              d_rfx=d_rfx,
-                              summarizer=cfg_s,
-                              posterior=cfg_p)
+    return ApproximatorConfig(d_ffx=d_ffx, d_rfx=d_rfx, summarizer=cfg_s, posterior=cfg_p)
 
-def dataFromYaml(cfg_path: Path, partition: str,  epoch: int = 0) -> str:
+
+def dataFromYaml(cfg_path: Path, partition: str, epoch: int = 0) -> str:
     with open(cfg_path, 'r') as f:
         data_cfg = yaml.safe_load(f)
     return datasetFilename(data_cfg, partition, epoch)
