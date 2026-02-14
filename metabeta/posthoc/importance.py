@@ -1,4 +1,5 @@
 import math
+import arviz as az
 import torch
 from torch import distributions as D
 from metabeta.utils.evaluation import Proposal
@@ -11,10 +12,12 @@ class ImportanceSampler:
         data: dict[str, torch.Tensor],
         constrain: bool = True,
         full: bool = True, # incorporate sigma_rfx and rfx priors
+        pareto: bool = False, # use Pareto smoothing (PSIS)
         eps: float = 1e-12,
     ) -> None:
         self.constrain = constrain
         self.full = full
+        self.pareto = pareto
         self.eps = eps
 
         # prior
@@ -110,17 +113,39 @@ class ImportanceSampler:
         log_q: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         log_w = log_likelihood + log_prior - log_q
-        if self.constrain:
-            log_w = dampen(log_w, p=0.70)
-        log_w_max = torch.quantile(log_w, 0.99, dim=-1).unsqueeze(-1)
-        log_w = log_w.clamp(max=log_w_max)
-        log_w = log_w - log_w_max
+        
+        # regularize
+        if self.pareto:
+            if self.constrain:
+                log_w = dampen(log_w, p=0.50)
+            log_w_, pareto_k = az.psislw(log_w)
+            log_w = log_w.new_tensor(log_w_)
+            pareto_k = log_w.new_tensor(pareto_k)
+        else:
+            if self.constrain:
+                log_w = dampen(log_w, p=0.70)
+            log_w_max = torch.quantile(log_w, 0.99, dim=-1).unsqueeze(-1)
+            log_w = log_w.clamp(max=log_w_max) - log_w_max
+            
+        # weights and number of effective samples
         w = log_w.exp()
-        w_norm = w / w.sum(dim=-1, keepdim=True)
+        w = torch.where(torch.isfinite(w), w, 0)
         n_eff = w.sum(-1).square() / (w.square().sum(-1) + 1e-12)
-        sample_efficiency = n_eff / w.shape[-1]
-        return {'weights': w,
-                'weights_norm': w_norm,
-                'n_eff': n_eff,
-                'sample_efficiency': sample_efficiency}
+        
+        # normalized weights
+        log_w_norm = log_w - torch.logsumexp(log_w, dim=-1, keepdim=True)
+        w_norm = log_w_norm.exp()
+        w_norm = torch.where(torch.isfinite(w_norm), w_norm, 0)
+        
+        # finalize
+        out = {
+            'weights': w,
+            'weights_norm': w_norm,
+            'n_eff': n_eff,
+            'sample_efficiency': n_eff / w.shape[-1],
+        }
+        if self.pareto:
+            out['pareto_k'] = pareto_k
+        return out
+        
 
