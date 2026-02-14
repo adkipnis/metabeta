@@ -89,7 +89,7 @@ class TrainableDist(nn.Module):
     def sample(self, shape: tuple[int, ...]) -> torch.Tensor:
         if shape[-1] != len(self._params['loc']):
             raise ValueError(
-                f'last shape dim should be {len(self._params['loc'])}, but found {shape[-1]}')
+                f'last shape dim should be {len(self._params["loc"])}, but found {shape[-1]}')
         with torch.no_grad():
             params = {k: v.cpu() for k,v in self._params.items()}
             sampling_dist = self._dist['scipy'](**params)
