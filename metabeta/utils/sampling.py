@@ -12,11 +12,10 @@ def setSeed(s: int) -> None:
     np.random.seed(s)
     torch.manual_seed(s)
     torch.cuda.manual_seed_all(s)
-    
 
-def sampleCounts(rng: np.random.Generator,
-                 n: int, m: int, alpha: float = 10.) -> np.ndarray:
-    ''' draw ns (= counts) for m groups, such that the sum is n '''
+
+def sampleCounts(rng: np.random.Generator, n: int, m: int, alpha: float = 10.0) -> np.ndarray:
+    """draw ns (= counts) for m groups, such that the sum is n"""
     p = rng.dirichlet(np.ones(m) * alpha)
     ns = np.round(p * n).astype(int)
     diff = n - ns.sum()
@@ -26,28 +25,29 @@ def sampleCounts(rng: np.random.Generator,
     elif diff < 0:
         idx = ns.argmax(0)
         ns[idx] += diff
-    if (ns < 1).any(): # try again
+    if (ns < 1).any():   # try again
         logger.info('non-positive counts found')
         return sampleCounts(rng, n, m, alpha)
     return ns
 
 
 def counts2groups(ns: np.ndarray) -> np.ndarray:
-    ''' convert array of counts to group index array '''
+    """convert array of counts to group index array"""
     m = len(ns)
     unique = np.arange(m)
     groups = np.repeat(unique, ns)
     return groups
 
 
-def truncLogUni(rng: np.random.Generator,
-                low: float,
-                high: float,
-                size: int | tuple[int, ...],
-                add: float = 0.0,
-                round: bool = False,
-                ) -> np.ndarray:
-    ''' sample from log uniform in [low, high) + {add} and optionally floor to integer '''
+def truncLogUni(
+    rng: np.random.Generator,
+    low: float,
+    high: float,
+    size: int | tuple[int, ...],
+    add: float = 0.0,
+    round: bool = False,
+) -> np.ndarray:
+    """sample from log uniform in [low, high) + {add} and optionally floor to integer"""
     assert 0 < low, 'lower bound must be positive'
     assert low <= high, 'lower bound smaller than upper bound'
     log_low = np.log(low)
@@ -64,7 +64,7 @@ def wishartCorrelation(
     d: int,
     nu: int | None = None,
 ) -> np.ndarray:
-    ''' sample a correlation matrix from the Wishart distribution '''
+    """sample a correlation matrix from the Wishart distribution"""
     if nu is None:
         nu = d + 1  # minimal df for SPD
 
@@ -77,7 +77,7 @@ def wishartCorrelation(
 
     # ensure numerical safety
     C = (C + C.T) / 2
-    np.fill_diagonal(C, 1.)
+    np.fill_diagonal(C, 1.0)
     return C
 
 
@@ -85,8 +85,7 @@ def samplePermutation(
     rng: np.random.Generator,
     d: int,
 ):
-    perm = rng.permutation(d-1)+1
+    perm = rng.permutation(d - 1) + 1
     zero = np.zeros((1,), dtype=int)
     perm = np.concatenate([zero, perm])
     return perm
-
