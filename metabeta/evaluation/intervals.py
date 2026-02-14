@@ -15,7 +15,7 @@ def getQuantiles(
         quantiles = quantiles.movedim(0, -2)
     else:
         raise NotImplementedError()
-    return quantiles # (b, ..., 2, d)
+    return quantiles   # (b, ..., 2, d)
 
 
 def sampleCredibleInterval(
@@ -24,7 +24,7 @@ def sampleCredibleInterval(
 ) -> dict[str, torch.Tensor]:
     out = {}
     roots = (alpha / 2, 1 - alpha / 2)
-    w = None #proposal.weights
+    w = None   # proposal.weights
     ci_g = getQuantiles(roots, proposal.samples_g, w)
     out = proposal.partition(ci_g)
     out['rfx'] = getQuantiles(roots, proposal.samples_l, w)
@@ -83,5 +83,3 @@ def expectedCoverageError(
     keys = next(iter(ce_dict.values())).keys()
     out = {k: sum(d[k] for d in ce_dict.values()) / len(ce_dict) for k in keys}
     return out
-
-
