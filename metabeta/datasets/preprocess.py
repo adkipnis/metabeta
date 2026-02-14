@@ -1,8 +1,12 @@
+import logging
 from pathlib import Path
 import pandas as pd
 import numpy as np
+
 from metabeta.plot import Plot
 from matplotlib import pyplot as plt
+
+logger = logging.getLogger(__name__)
 
 BLACKLIST = 'year age height size n_ num_ number max min attempts begin end name'.split(' ')
 GREENLIST = 'country state school education class industry occupation race sport brand genre color weekday date'.split(' ')
@@ -22,7 +26,7 @@ def dropConstantColumns(df: pd.DataFrame, threshold: float = 0.95) -> pd.DataFra
         if counts.max() > threshold:
             bad.append(col)
     if len(bad):
-        print(f'--- Warning: Removing {bad} due to mostly constant entries.')
+        logger.warning(f'Removing {bad} due to mostly constant entries.')
     return df.drop(columns=bad)
 
 
@@ -42,7 +46,7 @@ def dropPatchyRows(df: pd.DataFrame, threshold: float = 0.1):
     df = df.replace(-999, np.nan)
     missing = df.drop(columns='y').isnull().any(axis=1)
     if missing.mean() > threshold:
-        print(f'--- Warning: {missing.mean() * 100:.2f}% patchy rows.')
+        logger.warning(f'{missing.mean() * 100:.2f}% patchy rows.')
     df = df[~missing]
     return df
 
@@ -113,7 +117,7 @@ def findOutliers(df: pd.DataFrame, threshold: float = 4.0, min_std: float = 1e-1
     outliers = (np.abs(z) > threshold).any(axis=1)
     frac = outliers.mean()
     if frac > 0.1:
-        print(f'--- Warning: Removing {frac * 100:.2f}% outlier rows.')
+        logger.warning(f'Removing {frac * 100:.2f}% outlier rows.')
     return outliers
 
 # def findOutliersMAD(
@@ -137,7 +141,7 @@ def dummify(df: pd.DataFrame, colname: str, max_columns: int = 10):
     # make dummy variables out of categorical columns
     unique = df[colname].nunique()
     if unique > max_columns:
-        print(f'--- Warning: Removing category {colname} due to {unique} factors.')
+        logger.warning(f'Removing category {colname} due to {unique} factors.')
         return df.drop(colname, axis=1)
     ref_category = df[colname].mode()[0]
     dummies = pd.get_dummies(df[colname], prefix=colname).astype(int)
@@ -174,7 +178,7 @@ def preprocess(df: pd.DataFrame,
         potential = potentialGroups(df)
         if len(potential):
             group_name = potential[0]
-            print(f'--- Note: Detected grouping variable "{group_name}".')
+            logger.info(f'Detected grouping variable "{group_name}".')
             if len(potential) > 1:
                 print(f'--- Warning: Removing other grouping variables {potential[1:]}.')
                 for p in potential[1:]:
@@ -250,7 +254,7 @@ def wrapper(ds_name: str,
 
     # discard gigantic datasets
     if len(df) > 100_000:
-        print('--- Fatal: Dataset has more than 100k rows, skipping.')
+        logger.error('Dataset has more than 100k rows, skipping.')
         return
 
     # preprocess dataset
@@ -258,7 +262,7 @@ def wrapper(ds_name: str,
 
     # discard datasets that are wider than long
     if data['X'].shape[0] < data['X'].shape[1]:
-        print('--- Fatal: Dataset has more columns than rows, skipping.')
+        logger.error('Dataset has more columns than rows, skipping.')
         return
 
     # determine partition
@@ -286,7 +290,7 @@ def wrapper(ds_name: str,
 def batchprocess(root: str, group_name: str = '', partition: str = 'auto'):
     paths = Path(root, 'parquet').glob("*.parquet")
     names = sorted([p.stem for p in paths])
-    print(f'\nProcessing {len(names)} datasets from {root}...')
+    logger.info(f'\nProcessing {len(names)} datasets from {root}...')
     for name in names:
         wrapper(name, root, group_name=group_name, partition=partition)
 
