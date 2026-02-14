@@ -116,7 +116,9 @@ class Generator:
         sim = Simulator(rng, prior, design, ns)
         return sim.sample()
 
-    def _genBatch(self, n_datasets: int, mini_batch_size: int, epoch: int = 0) -> list[dict[str, np.ndarray]]:
+    def _genBatch(
+        self, n_datasets: int, mini_batch_size: int, epoch: int = 0
+    ) -> list[dict[str, np.ndarray]]:
         """generate list of {n_datasets} and keep m, d, q constant per minibatch"""
         # --- init seeding
         main_seed = {'train': epoch, 'valid': 10_000, 'test': 20_000}[self.cfg.partition]
@@ -177,7 +179,9 @@ class Generator:
         assert self.cfg.begin <= self.cfg.epochs, 'starting epoch larger than goal epoch'
         assert self.cfg.epochs < 10_000, 'maximum number of epochs exceeded'
         assert self.cfg.ds_type != 'sampled', 'training data must be synthetic'
-        logger.info(f'Generating {self.cfg.epochs} training partitions of {self.cfg.bs_train} datasets each...')
+        logger.info(
+            f'Generating {self.cfg.epochs} training partitions of {self.cfg.bs_train} datasets each...'
+        )
         for epoch in range(self.cfg.begin, self.cfg.epochs + 1):
             ds_train = self._genBatch(
                 n_datasets=self.cfg.bs_train, mini_batch_size=self.cfg.bs_mini, epoch=epoch
