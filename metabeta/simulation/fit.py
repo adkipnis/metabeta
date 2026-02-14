@@ -146,9 +146,10 @@ class Fitter:
         x = x.reshape(shape)
         return x[None, ...]
 
-    def _extractAll(self, trace: az.InferenceData,
-                    d: int, q: int, prefix: str) -> dict[str, np.ndarray]:
-        ''' extract all posterior samples '''
+    def _extractAll(
+        self, trace: az.InferenceData, d: int, q: int, prefix: str
+    ) -> dict[str, np.ndarray]:
+        """extract all posterior samples"""
         # fixed effects
         ffx = []
         for j in range(d):
@@ -182,9 +183,7 @@ class Fitter:
             f'{prefix}_rfx': rfx,
         }
 
-    def _fitNuts(
-            self, cfg: argparse.Namespace, ds: dict[str, np.ndarray],
-    ) -> dict[str, np.ndarray]:
+    def _fitNuts(self, cfg: argparse.Namespace, ds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """fit NUTS-based MCMC model and return samples and diagnostics"""
         model = self.bambify(ds)
         t0 = time.perf_counter()
@@ -211,9 +210,7 @@ class Fitter:
         out['nuts_duration'] = np.array(t1 - t0)
         return out
 
-    def _fitAdvi(
-            self, cfg: argparse.Namespace, ds: dict[str, np.ndarray],
-    ) -> dict[str, np.ndarray]:
+    def _fitAdvi(self, cfg: argparse.Namespace, ds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """fit ADVI model (using ADAM) and return samples and diagnostics"""
         model = self.bambify(ds)
         t0 = time.perf_counter()
