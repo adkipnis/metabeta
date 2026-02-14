@@ -31,22 +31,22 @@ class ParametricDistribution:
     def __repr__(self) -> str:
         raise NotImplementedError
 
-    def initParams(self) -> dict[str, float|int]:
+    def initParams(self) -> dict[str, float | int]:
         raise NotImplementedError
 
     def initBorders(self) -> tuple[float, float]:
         lower, upper = -np.inf, np.inf
         p_use = self.rng.uniform(size=2)
-        use = (p_use < 0.25)
+        use = p_use < 0.25
         if use.any():
             eps = 1e-6
             min_diff = 0.1
-            p0, p1 = self.rng.uniform(eps, 1-eps, size=2)
+            p0, p1 = self.rng.uniform(eps, 1 - eps, size=2)
             if p0 > p1:
                 p1, p0 = p0, p1
             if p1 - p0 < min_diff:
-                p0 = max(eps, p0-min_diff/2)
-                p1 = min(1-eps, p1+min_diff/2)
+                p0 = max(eps, p0 - min_diff / 2)
+                p1 = min(1 - eps, p1 + min_diff / 2)
             if use[0]:
                 lower = self.dist.ppf(p0)
             if use[1]:
@@ -56,7 +56,7 @@ class ParametricDistribution:
     def sample(self, n: int) -> np.ndarray:
         # untruncated sampling
         if not self.truncate or self.infinite_borders:
-            return self.dist.rvs(size=(n,1), random_state=self.rng)
+            return self.dist.rvs(size=(n, 1), random_state=self.rng)
 
         # truncated sampling
         left, right = self.borders
@@ -67,11 +67,11 @@ class ParametricDistribution:
         for _ in range(max_iters):
             remaining = n - reached
             batch = max(256, remaining)
-            z = self.dist.rvs(size=(batch,1), random_state=self.rng)
+            z = self.dist.rvs(size=(batch, 1), random_state=self.rng)
 
             inliers = (left < z) & (z < right)
             if np.any(inliers):
-                z = z[inliers].reshape(-1,1)
+                z = z[inliers].reshape(-1, 1)
                 out.append(z)
                 reached += int(inliers.sum())
                 if reached >= n:
@@ -79,14 +79,15 @@ class ParametricDistribution:
 
         if reached < n:
             logger.info(
-                f'truncated sampling failed: {reached}/{n}, borders={self.borders}, dist={self}')
-            return self.dist.rvs(size=(n,1), random_state=self.rng)
+                f'truncated sampling failed: {reached}/{n}, borders={self.borders}, dist={self}'
+            )
+            return self.dist.rvs(size=(n, 1), random_state=self.rng)
 
         return np.concatenate(out, axis=0)[:n]
 
 
-
 # --- continuous
+
 
 class Normal(ParametricDistribution):
     @property
@@ -114,7 +115,7 @@ class Student(ParametricDistribution):
         loc = self.params['loc']
         scale = self.params['scale']
         return f't(df={df}, loc={loc:.3f}, scale={scale:.3f})'
- 
+
     def initParams(self):
         df = int(self.rng.integers(3, 50))
         loc = self.rng.uniform(-100, 100)
@@ -151,7 +152,7 @@ class Uniform(ParametricDistribution):
         ab = self.rng.uniform(-100, 100, size=2)
         a = ab.min() - 0.5
         b = ab.max() + 0.5
-        scale = np.abs(b-a)
+        scale = np.abs(b - a)
         return dict(loc=a, scale=scale)
 
 
@@ -190,6 +191,7 @@ class Bernoulli(ParametricDistribution):
         p = self.rng.uniform(0.05, 0.95)
         return dict(p=p)
 
+
 class NegativeBinomial(ParametricDistribution):
     @property
     def base(self):
@@ -210,7 +212,6 @@ class NegativeBinomial(ParametricDistribution):
         return dict(n=n, p=p)
 
 
-
 if __name__ == '__main__':
     seed = 0
     rng = np.random.default_rng(seed)
@@ -218,5 +219,3 @@ if __name__ == '__main__':
     n = 1000
     dists = [Normal, Student, LogNormal, Uniform, ScaledBeta, Bernoulli, NegativeBinomial]
     samples = np.column_stack([dist(rng).sample(n) for dist in dists])
-
-
