@@ -12,7 +12,7 @@ posterior:
     type: 'coupling'
     transform: 'affine'
     base_family: 'normal'
-    base_trainable: False
+    base_trainable: True
     n_blocks: 3
     subnet_kwargs:
         net_type: 'mlp'
