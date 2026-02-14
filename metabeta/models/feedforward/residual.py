@@ -4,13 +4,18 @@ from torch.nn import functional as F
 
 from metabeta.utils.activations import getActivation
 from metabeta.utils.initializers import (
-    getInitializer, zeroInitializer, lastZeroInitializer, weightNormInitializer)
+    getInitializer,
+    zeroInitializer,
+    lastZeroInitializer,
+    weightNormInitializer,
+)
 
 
 class ResidualBlock(nn.Module):
-    ''' Residual Block with optional GLU:
-        Linear -> Norm -> Activation -> Dropout -> Linear -> Norm -> (GLU ->) Residual Sum
-    '''
+    """Residual Block with optional GLU:
+    Linear -> Norm -> Activation -> Dropout -> Linear -> Norm -> (GLU ->) Residual Sum
+    """
+
     def __init__(
         self,
         d_hidden: int,
@@ -18,12 +23,12 @@ class ResidualBlock(nn.Module):
         use_bias: bool = True,
         layer_norm: bool = False,
         pre_norm: bool = False,
-        eps: float = 1e-3, # numerical stability in layer norm denominator
+        eps: float = 1e-3,  # numerical stability in layer norm denominator
         activation: str = 'ReLU',
         dropout: float = 0.0,
         use_glu: bool = False,
-        rscale: float = 0.1, # residual scale
-        cscale: float = 0.1, # context scale
+        rscale: float = 0.1,  # residual scale
+        cscale: float = 0.1,  # context scale
     ):
         super().__init__()
         self._rscale = nn.Parameter(torch.tensor(rscale))
@@ -50,9 +55,8 @@ class ResidualBlock(nn.Module):
     @property
     def rscale(self) -> torch.Tensor:
         return F.softplus(self._rscale).clamp(max=1)
- 
-    def forward(self, x: torch.Tensor,
-                context: torch.Tensor | None = None) -> torch.Tensor:
+
+    def forward(self, x: torch.Tensor, context: torch.Tensor | None = None) -> torch.Tensor:
         h = self.layers(x)
         if context is not None and self.proj is not None:
             ctx = self.cscale * self.proj(context)
@@ -63,9 +67,10 @@ class ResidualBlock(nn.Module):
 
 
 class ResidualNet(nn.Module):
-    ''' Residual Feedforward Network:
-        Linear -> Dropout -> [RB] * depth -> Linear -> Dropout
-    '''
+    """Residual Feedforward Network:
+    Linear -> Dropout -> [RB] * depth -> Linear -> Dropout
+    """
+
     def __init__(
         self,
         d_input: int,
@@ -87,11 +92,11 @@ class ResidualNet(nn.Module):
 
         # input and output projection
         self.proj_in = nn.Sequential(
-            nn.Linear(d_input + d_context, d_hidden, bias=use_bias),
-            nn.Dropout(dropout))
+            nn.Linear(d_input + d_context, d_hidden, bias=use_bias), nn.Dropout(dropout)
+        )
         self.proj_out = nn.Sequential(
-            nn.Linear(d_hidden, d_output, bias=use_bias),
-            nn.Dropout(dropout))
+            nn.Linear(d_hidden, d_output, bias=use_bias), nn.Dropout(dropout)
+        )
 
         # main blocks
         blocks = [
@@ -118,15 +123,13 @@ class ResidualNet(nn.Module):
         if zero_init:
             zeroInitializer(self.proj_out[0])
             for block in self.blocks:
-                lastZeroInitializer(block.layers) # type: ignore
+                lastZeroInitializer(block.layers)   # type: ignore
 
         # optionally apply weight norm to linear layers
         if weight_norm:
             self.apply(weightNormInitializer)
 
-
-    def forward(self, x: torch.Tensor,
-                context: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, context: torch.Tensor | None = None) -> torch.Tensor:
         if context is not None:
             x = torch.cat([x, context], dim=-1)
         h = self.proj_in(x)
@@ -168,11 +171,11 @@ class FlowResidualNet(nn.Module):
         )
 
     def forward(
-        self, 
+        self,
         x: torch.Tensor,
         context: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
-        ) -> torch.Tensor:
+    ) -> torch.Tensor:
         if mask is not None and context is not None:
             context = torch.cat([mask, context], dim=-1)
         elif mask is not None:
@@ -196,7 +199,7 @@ if __name__ == '__main__':
     d_output = 8
     depth = 3
     d_context = 5
-    
+
     context = torch.randn(b, d_context)
     x = torch.randn(b, d_input)
 
@@ -210,5 +213,3 @@ if __name__ == '__main__':
     }
     model = FlowResidualNet(**cfg)
     out = model(x, context)
-
-
