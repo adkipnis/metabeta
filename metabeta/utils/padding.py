@@ -2,7 +2,7 @@ import numpy as np
 
 
 def maxShapes(batch: list[dict[str, np.ndarray]]) -> dict[str, tuple[int, ...]]:
-    ''' for each array in dataset, get the maximal shape over the whole batch '''
+    """for each array in dataset, get the maximal shape over the whole batch"""
     out = {}
     for dataset in batch:
         for key, array in dataset.items():
@@ -14,16 +14,13 @@ def maxShapes(batch: list[dict[str, np.ndarray]]) -> dict[str, tuple[int, ...]]:
                 continue
             assert len(shape) == len(out[key]), 'ndim mismatch'
             # Expand out[key] tuple elementwise to max dimension
-            out[key] = tuple(
-                max(old_dim, new_dim)
-                for old_dim, new_dim in zip(out[key], shape)
-            )
+            out[key] = tuple(max(old_dim, new_dim) for old_dim, new_dim in zip(out[key], shape))
     return out
 
 
 def aggregate(batch: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
-    ''' collate list of datasets to single batched dataset
-        note: assumes consistency in keys and dtypes in batch '''
+    """collate list of datasets to single batched dataset
+    note: assumes consistency in keys and dtypes in batch"""
     out = {}
     max_shapes = maxShapes(batch)
     batch_size = len(batch)
@@ -62,6 +59,7 @@ def unpad(ds: dict[str, np.ndarray], sizes: dict[str, int]) -> dict[str, np.ndar
     ds['rfx'] = ds['rfx'][:m, :q]
     return ds
 
+
 # def extractSingle(
 #     batch: dict[str, np.ndarray],
 #     idx: int,
@@ -69,4 +67,3 @@ def unpad(ds: dict[str, np.ndarray], sizes: dict[str, int]) -> dict[str, np.ndar
 #     ''' extract a single dataset from batch and remove padding '''
 #     ds = {k: v[idx] for k,v in batch.items()}
 #     d, q, m, n = ds['d'], ds['q'], ds['m'], ds['n']
-
