@@ -26,6 +26,7 @@ def toDevice(batch: dict[str, torch.Tensor], device: torch.device,
             batch[k] = v.to(device)
     return batch
 
+
 class Collection(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -44,8 +45,8 @@ class Collection(torch.utils.data.Dataset):
         self._groupCheck(len(self))
 
         # shapes
-        self.d = int(self.raw['d'].max()) # fixed effects
-        self.q = int(self.raw['q'].max()) # random effects
+        self.d = int(self.raw['d'].max())   # fixed effects
+        self.q = int(self.raw['q'].max())   # random effects
 
         # feature permutations
         self.permute = permute and self.has_params
@@ -54,12 +55,11 @@ class Collection(torch.utils.data.Dataset):
             self.dperm = [samplePermutation(rng, self.d) for _ in range(len(self))]
             self.qperm = [samplePermutation(rng, self.q) for _ in range(len(self))]
 
-
     def __len__(self) -> int:
         return len(self.raw['y'])
- 
+
     def _groupCheck(self, n_datasets: int = 8):
-        ''' quick sanity check that group indices are contiguous '''
+        """quick sanity check that group indices are contiguous"""
         n_datasets = min(n_datasets, len(self))
         checks = np.zeros((n_datasets,), dtype=bool)
         for i in range(n_datasets):
@@ -69,10 +69,10 @@ class Collection(torch.utils.data.Dataset):
             g = self.raw['groups'][i, :n].astype(int, copy=False)
             diffs = np.diff(g)
             ascending = (0 <= diffs).all() and (diffs <= 1).all()
-            correct_borders = (g[0] == 0 and g[-1] == m - 1)
-            sums_to_n = (ns.sum() == n)
+            correct_borders = g[0] == 0 and g[-1] == m - 1
+            sums_to_n = ns.sum() == n
             ns_padded = (ns[m:] == 0).all()
-            checks[i] = (ascending and correct_borders and sums_to_n and ns_padded)
+            checks[i] = ascending and correct_borders and sums_to_n and ns_padded
         assert checks.all(), 'group indices are not structured correctly'
 
     def __repr__(self) -> str:
@@ -80,10 +80,13 @@ class Collection(torch.utils.data.Dataset):
 
     def __getitem__(self, idx: int) -> dict[str, np.ndarray]:
         # get dataset (without fit statistics)
-        ds = {k: v[idx] for k,v in self.raw.items()
-                        if not (k.startswith('nuts') or k.startswith('advi'))}
+        ds = {
+            k: v[idx]
+            for k, v in self.raw.items()
+            if not (k.startswith('nuts') or k.startswith('advi'))
+        }
         # ns = ds['ns'] # backup padded counts for use in collator
- 
+
         # unpad m/n but keep d/q maximal
         sizes = {k: ds[k] for k in ('m', 'n')}
         sizes['d'] = self.d
@@ -115,13 +118,15 @@ def quickCollate(batch: list[dict[str, np.ndarray]], key: str, dtype=torch.float
     return torch.stack(tensors, dim=0)
 
 
-def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> dict[str, torch.Tensor]:
+def collateGrouped(
+    batch: list[dict[str, np.ndarray]], dtype=torch.float32
+) -> dict[str, torch.Tensor]:
     out: dict[str, torch.Tensor] = {}
     B = len(batch)
     m = int(max(ds['m'] for ds in batch))
     n_i = int(max(max(ds['ns'][: ds['m']]) for ds in batch))
-    d = int(batch[0]['X'].shape[-1]) # X is max-padded in last dim
-    q = int(batch[0]['Z'].shape[-1]) # same for Z
+    d = int(batch[0]['X'].shape[-1])   # X is max-padded in last dim
+    q = int(batch[0]['Z'].shape[-1])   # same for Z
 
     # helpers for deepening
     d_ = np.arange(d)
@@ -139,22 +144,22 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
     for b, ds in enumerate(batch):
         mask_d[b] = torch.as_tensor(d_ < ds['d'])
         mask_q[b] = torch.as_tensor(q_ < ds['q'])
-        ns[b, :ds['m']] = torch.as_tensor(ds['ns'])
+        ns[b, : ds['m']] = torch.as_tensor(ds['ns'])
         idx = torch.as_tensor(n_i_ < ns[b].unsqueeze(-1))
         y[b, idx] = torch.as_tensor(ds['y'], dtype=dtype)
         X[b, idx] = torch.as_tensor(ds['X'], dtype=dtype)
         Z[b, idx] = torch.as_tensor(ds['Z'], dtype=dtype)
         mask_n[b] = idx
-    out.update({'X': X, 'Z': Z, 'y': y, 'ns': ns,
-                'mask_d': mask_d, 'mask_q': mask_q, 'mask_n': mask_n})
+    out.update(
+        {'X': X, 'Z': Z, 'y': y, 'ns': ns, 'mask_d': mask_d, 'mask_q': mask_q, 'mask_n': mask_n}
+    )
 
     # cast integers to long tensors
     out['n'] = quickCollate(batch, 'n', torch.int64)
     out['m'] = quickCollate(batch, 'm', torch.int64)
 
     # cast params to float tensors
-    for key in ('ffx', 'sigma_rfx', 'sigma_eps',
-                'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps'):
+    for key in ('ffx', 'sigma_rfx', 'sigma_eps', 'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps'):
         out[key] = quickCollate(batch, key, dtype)
 
     # extra treatment for rfx due to m dimension
@@ -168,7 +173,7 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
     out['sd_y'] = quickCollate(batch, 'sd_y')
 
     # remaining mask handling
-    out['mask_m'] = (out['ns'] != 0)
+    out['mask_m'] = out['ns'] != 0
     out['mask_mq'] = out['mask_m'].unsqueeze(-1) & out['mask_q'].unsqueeze(-2)
     if 'dperm' in batch[0]:
         out['dperm'] = quickCollate(batch, 'dperm', torch.int64)
@@ -179,10 +184,11 @@ def collateGrouped(batch: list[dict[str, np.ndarray]], dtype=torch.float32) -> d
 
 
 class Dataloader(torch.utils.data.DataLoader):
-    ''' Wrapper for torch dataloader '''
+    """Wrapper for torch dataloader"""
+
     def __init__(self, path: Path, batch_size: int | None = None):
         col = Collection(path)
-        not_mps = (torch.accelerator.current_accelerator().type != 'mps') # type: ignore
+        not_mps = torch.accelerator.current_accelerator().type != 'mps'   # type: ignore
         if batch_size is None:
             batch_size = len(col)
         else:
@@ -192,7 +198,7 @@ class Dataloader(torch.utils.data.DataLoader):
             batch_size=batch_size,
             shuffle=False,
             pin_memory=not_mps,
-            collate_fn=collateGrouped
+            collate_fn=collateGrouped,
         )
 
     def __repr__(self) -> str:
@@ -217,7 +223,6 @@ if __name__ == '__main__':
     minibatch = next(iter(dl))
 
     # print batch shapes
-    for k,v in minibatch.items():
+    for k, v in minibatch.items():
         print(f'{k}: {v.numpy().shape}')
     print(dl)
-
