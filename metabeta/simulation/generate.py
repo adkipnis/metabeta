@@ -41,7 +41,7 @@ class Generator:
 
     def __post_init__(self):
         self.outdir.mkdir(parents=True, exist_ok=True)
-        data_cfg_path = Path('configs', f'{cfg.d_tag}.yaml')
+        data_cfg_path = Path(__file__).resolve().parent / 'configs' / f'{self.cfg.d_tag}.yaml'
         assert data_cfg_path.exists(), f'config file {data_cfg_path} does not exist'
         with open(data_cfg_path, 'r') as f:
             data_cfg = yaml.safe_load(f)
