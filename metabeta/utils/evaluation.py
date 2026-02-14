@@ -85,7 +85,7 @@ class Proposal:
 
     @property
     def parameters(self) -> tuple[torch.Tensor,...]:
-        return self.rfx, self.sigma_rfx, self.sigma_eps, self.rfx
+        return self.ffx, self.sigma_rfx, self.sigma_eps, self.rfx
 
     @property
     def log_probs(self) -> tuple[torch.Tensor, ...]:
