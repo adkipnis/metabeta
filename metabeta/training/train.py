@@ -65,6 +65,7 @@ def setup() -> argparse.Namespace:
 
     return parser.parse_args()
 
+
 # -----------------------------------------------------------------------------
 class EarlyStopping:
     def __init__(self, patience: int = 5, delta: float = 1e-3) -> None:
@@ -83,6 +84,7 @@ class EarlyStopping:
             self.counter += 1
             if self.counter >= self.patience:
                 self.stop = True
+
 
 # -----------------------------------------------------------------------------
 class Trainer:
@@ -150,9 +152,7 @@ class Trainer:
     def _initModel(self) -> None:
         # load model config
         model_cfg_path = Path('..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
-        self.model_cfg = modelFromYaml(model_cfg_path,
-                                  d_ffx=self.cfg.max_d,
-                                  d_rfx=self.cfg.max_q)
+        self.model_cfg = modelFromYaml(model_cfg_path, d_ffx=self.cfg.max_d, d_rfx=self.cfg.max_q)
 
         # init model
         self.model = Approximator(self.model_cfg).to(self.device)
@@ -160,8 +160,7 @@ class Trainer:
             self.model.compile()
 
         # init optimizer
-        self.optimizer = schedulefree.AdamWScheduleFree(
-            self.model.parameters(), lr=self.cfg.lr)
+        self.optimizer = schedulefree.AdamWScheduleFree(self.model.parameters(), lr=self.cfg.lr)
 
     def _initWriter(self) -> None:
         self.tb_path = Path('..', 'outputs', 'tensorboard', self.run_name + '_' + self.timestamp)
@@ -171,7 +170,9 @@ class Trainer:
         # log configs once
         self.writer.add_text('cfg/trainer', yaml.safe_dump(vars(self.cfg), sort_keys=True), 0)
         self.writer.add_text('cfg/data', yaml.safe_dump(self.data_cfg, sort_keys=True), 0)
-        self.writer.add_text('cfg/model', yaml.safe_dump(self.model_cfg.to_dict(), sort_keys=True), 0)
+        self.writer.add_text(
+            'cfg/model', yaml.safe_dump(self.model_cfg.to_dict(), sort_keys=True), 0
+        )
 
     def close(self) -> None:
         if self.writer is not None:
@@ -190,7 +191,7 @@ class Trainer:
             'model_cfg': self.model_cfg.to_dict(),
             'model_state': self.model.state_dict(),
             'optimizer_state': self.optimizer.state_dict(),
-            }
+        }
         tmp_path = path.with_suffix(path.suffix + '.tmp')
         torch.save(payload, tmp_path)
         tmp_path.replace(path)
@@ -215,7 +216,7 @@ class Trainer:
         self.best_valid = payload['best_valid']
         if self.stopper is not None:
             self.stopper.best = self.best_valid
-        return int(payload.get('epoch', 0)) # last completed epoch
+        return int(payload.get('epoch', 0))   # last completed epoch
 
     @property
     def info(self) -> str:
@@ -224,7 +225,7 @@ class Trainer:
             p = precision[self.model.dtype]
         else:
             raise ValueError(f'model has unknown dtype {self.model.dtype}')
-        return f'''
+        return f"""
 ====================
 data tag:   {self.cfg.d_tag}
 model tag:  {self.cfg.m_tag}
@@ -235,7 +236,7 @@ device:     {self.cfg.device}
 compiled:   {self.cfg.compile}
 lr:         {self.cfg.lr}
 batch size: {self.cfg.bs}
-===================='''
+===================="""
 
     def train(self, epoch: int) -> float:
         dl_train = self._getDataLoader('train', epoch, batch_size=self.cfg.bs)
@@ -253,7 +254,8 @@ batch size: {self.cfg.bs}
             # calculate accumulated gradient with clipped norm
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), self.cfg.max_grad_norm)
+                self.model.parameters(), self.cfg.max_grad_norm
+            )
             if torch.isfinite(grad_norm):
                 self.optimizer.step()
                 self.global_step += 1
@@ -292,7 +294,7 @@ batch size: {self.cfg.bs}
         t0 = time.perf_counter()
         proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
         t1 = time.perf_counter()
-        tpd = (t1-t0) / batch['X'].shape[0] # time per dataset
+        tpd = (t1 - t0) / batch['X'].shape[0]   # time per dataset
 
         # undo unit scale wrt y
         if self.cfg.rescale:
@@ -324,8 +326,8 @@ batch size: {self.cfg.bs}
         # optionally get performance before (resumed) training
         if not self.cfg.skip_ref:
             print('\nPerformance before training:')
-            self.valid(start_epoch-1)
-            self.sample(start_epoch-1)
+            self.valid(start_epoch - 1)
+            self.sample(start_epoch - 1)
 
         # optionally init tensorboard (after potential loading and reference run)
         if self.cfg.tb:
@@ -364,6 +366,7 @@ batch size: {self.cfg.bs}
                     logger.info(f'early stopping at epoch {epoch} after {self.stopper.counter} rounds of no improvement.')
                     break
 
+
 # =============================================================================
 if __name__ == '__main__':
     cfg = setup()
@@ -372,4 +375,3 @@ if __name__ == '__main__':
     print(trainer.info)
     trainer.go()
     trainer.close()
-
