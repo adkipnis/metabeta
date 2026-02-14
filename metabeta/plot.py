@@ -6,27 +6,31 @@ from matplotlib.axes import Axes
 from matplotlib.ticker import MultipleLocator
 import seaborn as sns
 
+
 class Plot:
     @staticmethod
-    def dataset(x: np.ndarray | pd.DataFrame,
-                names: list[str] | None = None,
-                color: str = 'green',
-                alpha: float = 0.75,
-                title: str = '',
-                kde: bool = True):
-        ''' pair grid for all dataset columns
-            - histograms along diagonal 
-            - scatter in the upper triangular
-            - (optional) kde plots in the lower triangular 
-            inspired by https://github.com/bayesflow-org/bayesflow
-        '''
+    def dataset(
+        x: np.ndarray | pd.DataFrame,
+        names: list[str] | None = None,
+        color: str = 'green',
+        alpha: float = 0.75,
+        title: str = '',
+        kde: bool = True,
+    ):
+        """pair grid for all dataset columns
+        - histograms along diagonal
+        - scatter in the upper triangular
+        - (optional) kde plots in the lower triangular
+        inspired by https://github.com/bayesflow-org/bayesflow
+        """
+
         def _histplot(x, **kwargs):
             # sns histplot but with detached axes
             ax2 = plt.gca().twinx()
             sns.histplot(x, **kwargs, ax=ax2)
-            plt.gca().spines["right"].set_visible(False)
-            plt.gca().spines["top"].set_visible(False)
-            ax2.set_ylabel("")
+            plt.gca().spines['right'].set_visible(False)
+            plt.gca().spines['top'].set_visible(False)
+            ax2.set_ylabel('')
             ax2.set_yticks([])
             ax2.set_yticklabels([])
 
@@ -49,28 +53,29 @@ class Plot:
 
         # histograms along main diagonal
         g.map_diag(
-            _histplot, color=color, alpha=alpha, kde=False,
-            fill=True, stat="density", common_norm=False)
+            _histplot,
+            color=color,
+            alpha=alpha,
+            kde=False,
+            fill=True,
+            stat='density',
+            common_norm=False,
+        )
 
         # scatter plots along upper trinagular
         alpha_point = 1 / np.log(n)
-        g.map_upper(
-            sns.scatterplot, color=color,
-            alpha=alpha_point, s=40, edgecolor="k", lw=0)
+        g.map_upper(sns.scatterplot, color=color, alpha=alpha_point, s=40, edgecolor='k', lw=0)
 
         # KDEs along lower triangular
         if kde:
-            g.map_lower(sns.kdeplot, color=color, alpha=alpha, fill=True,
-                        warn_singular=False)
+            g.map_lower(sns.kdeplot, color=color, alpha=alpha, fill=True, warn_singular=False)
         else:
-            g.map_lower(
-                sns.scatterplot, color=color,
-                alpha=alpha_point, s=40, edgecolor="k", lw=0)
+            g.map_lower(sns.scatterplot, color=color, alpha=alpha_point, s=40, edgecolor='k', lw=0)
 
         # set labels
         for i in range(d):
             g.axes[i, 0].set_ylabel(_names[i], fontsize=16)
-            g.axes[d-1, i].set_xlabel(_names[i], fontsize=16)
+            g.axes[d - 1, i].set_xlabel(_names[i], fontsize=16)
             for j in range(d):
                 g.axes[i, j].grid(alpha=0.5)
                 g.axes[i, j].set_axisbelow(True)
@@ -80,9 +85,13 @@ class Plot:
             xlabel = g.axes[-1, i].get_xlabel()
             # ax.set_xlabel(xlabel, fontsize=16)
             g.fig.text(
-                ax.get_position().x0 + ax.get_position().width / 2, 
-                ax.get_position().y1 + 0.03, 
-                xlabel, ha='center', va='bottom', fontsize=16) 
+                ax.get_position().x0 + ax.get_position().width / 2,
+                ax.get_position().y1 + 0.03,
+                xlabel,
+                ha='center',
+                va='bottom',
+                fontsize=16,
+            )
         for i in range(g.axes.shape[1]):
             g.axes[-1, i].set_xlabel('')
 
@@ -92,14 +101,14 @@ class Plot:
         g.tight_layout()
         return g
 
-
     @staticmethod
-    def correlation(x: np.ndarray | pd.DataFrame,
-                    names: list[str] | None = None,
-                    ):
-        ''' plot correlation matrix over columns of x '''
+    def correlation(
+        x: np.ndarray | pd.DataFrame,
+        names: list[str] | None = None,
+    ):
+        """plot correlation matrix over columns of x"""
         # init fig
-        fig = plt.figure(figsize=(8,8))
+        fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111)
 
         # plot correlation matrix
@@ -110,8 +119,8 @@ class Plot:
         cbar = fig.colorbar(
             cax,
             ax=ax,
-            fraction=0.046,   # controls height relative to axes
-            pad=0.04          # spacing from plot
+            fraction=0.046,  # controls height relative to axes
+            pad=0.04,  # spacing from plot
         )
         cbar.set_ticks(np.linspace(-1, 1, 5))
         cbar.ax.tick_params(labelsize=16)
@@ -136,19 +145,17 @@ class Plot:
         estimates: np.ndarray,
         mask: np.ndarray,
         stats: dict[str, float],
-
         # strings
         names: list[str],
         title: str = '',
         y_name: str = 'Estimate',
-
         # plot details
         marker: str = 'o',
         alpha: float = 0.15,
         upper: bool = True,
         lower: bool = True,
     ) -> None:
-        ''' scatter plot: ground truth vs. estimates '''
+        """scatter plot: ground truth vs. estimates"""
         # check sizes
         d = len(names)
         assert targets.shape[-1] == estimates.shape[-1] == d, 'shape mismatch'
@@ -160,7 +167,7 @@ class Plot:
         ax.grid(True)
         min_val = min(targets.min(), estimates.min())
         max_val = max(targets.max(), estimates.max())
-        delta = (max_val - min_val)
+        delta = max_val - min_val
         const = delta * 0.05
         limits = (min_val - const, max_val + const)
         ax.set_xlim(limits, auto=False)
@@ -175,11 +182,18 @@ class Plot:
             targets_i = targets[mask_i, i]
             estimates_i = estimates[mask_i, i]
             color_i = 'darkviolet' if 'epsilon' in names[i] else None
-            ax.scatter(targets_i, estimates_i, color=color_i, s=70,
-                       marker=marker, alpha=alpha, label=names[i])
-        
+            ax.scatter(
+                targets_i,
+                estimates_i,
+                color=color_i,
+                s=70,
+                marker=marker,
+                alpha=alpha,
+                label=names[i],
+            )
+
         # stats info
-        txt = [f'{k} = {v:.3f}' for k,v in stats.items()]
+        txt = [f'{k} = {v:.3f}' for k, v in stats.items()]
         ax.text(
             0.7,
             0.1,
@@ -213,7 +227,6 @@ class Plot:
         elif lower:
             ax.set_xlabel('Ground Truth', fontsize=26, labelpad=10)
 
-
     def groupedRecovery(
         self,
         axs: Axes,
@@ -221,12 +234,10 @@ class Plot:
         estimates: list[torch.Tensor],
         masks: list[torch.Tensor],
         metrics: list[dict[str, float]],
- 
         # string
         names: list[list[str]],
         titles: list[str] = [],
         y_name: str = 'Estiamte',
-
         # plot details
         marker: str = 'o',
         alpha: float = 0.15,
@@ -235,7 +246,8 @@ class Plot:
     ) -> None:
         first = True
         for ax, tar, est, mas, met, nam, tit in zip(
-                axs, targets, estimates, masks, metrics, names, titles):
+            axs, targets, estimates, masks, metrics, names, titles
+        ):
             # colors = palette[i:i+len(_names)]
             self._groupedRecovery(
                 ax,
@@ -243,9 +255,15 @@ class Plot:
                 estimates=est.numpy(),
                 mask=mas.numpy(),
                 stats=met,
-                names=nam, title=tit, y_name=(y_name if first else ''),
-                marker=marker, alpha=alpha, upper=upper, lower=lower,
+                names=nam,
+                title=tit,
+                y_name=(y_name if first else ''),
+                marker=marker,
+                alpha=alpha,
+                upper=upper,
+                lower=lower,
             )
             first = False
+
 
 plot = Plot()
