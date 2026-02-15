@@ -111,6 +111,12 @@ class Trainer:
         self.ckpt_dir = Path(self.dir, '..', 'outputs', 'checkpoints', self.run_name)
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
+        # plot dir
+        self.plot_dir = None
+        if self.cfg.plot:
+            self.plot_dir = Path(self.dir, '..', 'outputs', 'plots', self.run_name)
+            self.plot_dir.mkdir(parents=True, exist_ok=True)
+
         # tracking & logging
         self.best_valid = float('inf')
         self.best_epoch = 0
