@@ -249,17 +249,18 @@ if __name__ == '__main__':
     from metabeta.utils.dataloader import Dataloader
     from metabeta.utils.config import dataFromYaml, modelFromYaml
 
+    DIR = Path(__file__).resolve().parent
     torch.manual_seed(0)
 
     # load toy data
-    data_cfg_path = Path('..', 'simulation', 'configs', 'toy.yaml')
+    data_cfg_path = Path(DIR, '..', 'simulation', 'configs', 'toy.yaml')
     data_fname = dataFromYaml(data_cfg_path, 'test')
-    data_path = Path('..', 'outputs', 'data', data_fname)
+    data_path = Path(DIR, '..', 'outputs', 'data', data_fname)
     dl = Dataloader(data_path, batch_size=8)
     batch = next(iter(dl))
 
     # init toy model
-    model_cfg_path = Path('..', 'models', 'configs', 'toy.yaml')
+    model_cfg_path = Path(DIR,'..', 'models', 'configs', 'toy.yaml')
     model_cfg = modelFromYaml(model_cfg_path, dl.dataset.d, dl.dataset.q)   # type: ignore
     model = Approximator(model_cfg)
     # model.compile()
