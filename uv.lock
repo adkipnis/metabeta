@@ -1455,6 +1455,7 @@ dependencies = [
     { name = "bambi" },
     { name = "blue" },
     { name = "datasets" },
+    { name = "ipykernel" },
     { name = "joblib" },
     { name = "matplotlib" },
     { name = "openml" },
@@ -1463,7 +1464,6 @@ dependencies = [
     { name = "schedulefree" },
     { name = "scipy" },
     { name = "seaborn" },
-    { name = "spyder-kernels" },
     { name = "tabulate" },
     { name = "tensorboard" },
     { name = "torch" },
@@ -1474,6 +1474,7 @@ requires-dist = [
     { name = "bambi", specifier = ">=0.17.2" },
     { name = "blue", specifier = ">=0.9.1" },
     { name = "datasets", specifier = ">=4.4.1" },
+    { name = "ipykernel", specifier = ">=6.31.0" },
     { name = "joblib", specifier = ">=1.5.2" },
     { name = "matplotlib", specifier = ">=3.10.7" },
     { name = "openml", specifier = ">=0.15.1" },
@@ -1482,7 +1483,6 @@ requires-dist = [
     { name = "schedulefree", specifier = ">=1.4.1" },
     { name = "scipy", specifier = ">=1.16.3" },
     { name = "seaborn", specifier = ">=0.13.2" },
-    { name = "spyder-kernels", specifier = ">=3.1.2" },
     { name = "tabulate", specifier = ">=0.9.0" },
     { name = "tensorboard", specifier = ">=2.20.0" },
     { name = "torch", specifier = ">=2.9.1" },
@@ -2477,15 +2477,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pyxdg"
-version = "0.28"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b0/25/7998cd2dec731acbd438fbf91bc619603fc5188de0a9a17699a781840452/pyxdg-0.28.tar.gz", hash = "sha256:3267bb3074e934df202af2ee0868575484108581e6f3cb006af1da35395e88b4", size = 77776, upload-time = "2022-06-05T11:35:01Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e5/8d/cf41b66a8110670e3ad03dab9b759704eeed07fa96e90fdc0357b2ba70e2/pyxdg-0.28-py2.py3-none-any.whl", hash = "sha256:bdaf595999a0178ecea4052b7f4195569c1ff4d344567bccdc12dfdf02d545ab", size = 49520, upload-time = "2022-06-05T11:34:58.832Z" },
-]
-
-[[package]]
 name = "pyyaml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -2772,26 +2763,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/63/74/5c674277fc3d61bd1863d233a8e1f7ddf35cb1adeeaf9973888629e7a9b1/sparse-0.17.0.tar.gz", hash = "sha256:6b1ad51a810c5be40b6f95e28513ec810fe1c785923bd83b2e4839a751df4bf7", size = 642387, upload-time = "2025-05-20T08:17:03.256Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8d/fd/42a1720542199ae6ff0f9c37bbd55dd3033ddd7bbe00d68cde09d6824887/sparse-0.17.0-py2.py3-none-any.whl", hash = "sha256:1922d1d97f692b1061c4f03a1dd6ee21850aedc88e171aa845715f5069952f18", size = 259370, upload-time = "2025-05-20T08:17:00.874Z" },
-]
-
-[[package]]
-name = "spyder-kernels"
-version = "3.1.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cloudpickle" },
-    { name = "ipykernel" },
-    { name = "ipython" },
-    { name = "jupyter-client" },
-    { name = "packaging" },
-    { name = "pyxdg", marker = "sys_platform == 'linux'" },
-    { name = "pyzmq" },
-    { name = "traitlets" },
-    { name = "wurlitzer", marker = "sys_platform != 'win32'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/72/e2/2a12946af876efefb5d071b0c8abf35a28f28219730b2d0cab4e4a63f889/spyder_kernels-3.1.2.tar.gz", hash = "sha256:3a7ac9b6aeb1c594f869ab08376221bd449b324d1f8a4cb0ba3cc20d151dc1ac", size = 86048, upload-time = "2025-11-19T14:30:17.515Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/17/78/e15ea8e85cc5e27288bea0ac8b1d1b008f3899777a59a6ed5396bb96ea6c/spyder_kernels-3.1.2-py3-none-any.whl", hash = "sha256:3c30018732b5dc9b87de4d223195469d7699a761e87a6ed5a1321cd2b70f8c1e", size = 84388, upload-time = "2025-11-19T14:30:15.963Z" },
 ]
 
 [[package]]
@@ -3085,15 +3056,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5a/70/1469ef1d3542ae7c2c7b72bd5e3a4e6ee69d7978fa8a3af05a38eca5becf/werkzeug-3.1.5.tar.gz", hash = "sha256:6a548b0e88955dd07ccb25539d7d0cc97417ee9e179677d22c7041c8f078ce67", size = 864754, upload-time = "2026-01-08T17:49:23.247Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ad/e4/8d97cca767bcc1be76d16fb76951608305561c6e056811587f36cb1316a8/werkzeug-3.1.5-py3-none-any.whl", hash = "sha256:5111e36e91086ece91f93268bb39b4a35c1e6f1feac762c9c822ded0a4e322dc", size = 225025, upload-time = "2026-01-08T17:49:21.859Z" },
-]
-
-[[package]]
-name = "wurlitzer"
-version = "3.1.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/33/90/623f99c55c7d0727a58eb2b7dfb65cb406c561a5c2e9a95b0d6a450c473d/wurlitzer-3.1.1.tar.gz", hash = "sha256:bfb9144ab9f02487d802b9ff89dbd3fa382d08f73e12db8adc4c2fb00cd39bd9", size = 11867, upload-time = "2024-06-12T10:27:30.089Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9a/24/93ce54550a9dd3fd996ed477f00221f215bf6da3580397fbc138d6036e2e/wurlitzer-3.1.1-py3-none-any.whl", hash = "sha256:0b2749c2cde3ef640bf314a9f94b24d929fe1ca476974719a6909dfc568c3aac", size = 8590, upload-time = "2024-06-12T10:27:28.787Z" },
 ]
 
 [[package]]
