@@ -90,6 +90,7 @@ class EarlyStopping:
 class Trainer:
     def __init__(self, cfg: argparse.Namespace) -> None:
         self.cfg = cfg
+        self.dir = Path(__file__).resolve().parent
 
         # reproducibility
         if cfg.reproducible:
@@ -107,7 +108,7 @@ class Trainer:
         # checkpoint dir
         self.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
         self.run_name = runName(vars(self.cfg))
-        self.ckpt_dir = Path('..', 'outputs', 'checkpoints', self.run_name)
+        self.ckpt_dir = Path(self.dir, '..', 'outputs', 'checkpoints', self.run_name)
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
         # tracking & logging
