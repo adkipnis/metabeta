@@ -23,9 +23,9 @@ logger = logging.getLogger('train.py')
 
 
 def setup() -> argparse.Namespace:
-    ''' Parse command line arguments. '''
+    """Parse command line arguments."""
     parser = argparse.ArgumentParser()
- 
+
     # misc
     parser.add_argument('--seed', type=int, default=42, help='model seed (default = 42)')
     parser.add_argument('--device', type=str, default='cpu', help='device to use [cpu, cuda, mps], (default = cpu)')
@@ -170,7 +170,8 @@ class Trainer:
         self.optimizer = schedulefree.AdamWScheduleFree(self.model.parameters(), lr=self.cfg.lr)
 
     def _initWriter(self) -> None:
-        self.tb_path = Path('..', 'outputs', 'tensorboard', self.run_name + '_' + self.timestamp)
+        self.tb_path = Path(
+            self.dir, '..', 'outputs', 'tensorboard', self.run_name + '_' + self.timestamp)
         self.tb_path.mkdir(parents=True, exist_ok=True)
         self.writer = SummaryWriter(log_dir=str(self.tb_path))
 
@@ -223,7 +224,7 @@ class Trainer:
         self.best_valid = payload['best_valid']
         if self.stopper is not None:
             self.stopper.best = self.best_valid
-        return int(payload.get('epoch', 0))   # last completed epoch
+        return int(payload.get('epoch', 0))  # last completed epoch
 
     @property
     def info(self) -> str:
@@ -301,7 +302,7 @@ batch size: {self.cfg.bs}
         t0 = time.perf_counter()
         proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
         t1 = time.perf_counter()
-        tpd = (t1 - t0) / batch['X'].shape[0]   # time per dataset
+        tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
 
         # undo unit scale wrt y
         if self.cfg.rescale:
