@@ -1,3 +1,4 @@
+from pathlib import Path
 import torch
 from torch.nn import functional as F
 from tabulate import tabulate
@@ -27,6 +28,8 @@ def recoveryPlot(
     locs: dict[str, torch.Tensor],
     data: dict[str, torch.Tensor],
     stats: dict[str, dict[str, float]],
+    plot_dir: Path,
+    epoch: int = 0,
 ) -> None:
     targets = []
     estimates = []
@@ -84,7 +87,11 @@ def recoveryPlot(
     for ax in axs.flat:
         ax.set_box_aspect(1)
     fig.tight_layout()
-    plt.show()
+
+    # store
+    fname = plot_dir / 'parameter_recovery_latest.png'
+    plt.savefig(fname, bbox_inches='tight', pad_inches=0.15)
+    # plt.show()
 
 
 def dependentSummary(
