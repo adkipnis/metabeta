@@ -25,17 +25,22 @@ def dictMean(data: dict[str, float]) -> float:
 
 
 def recoveryPlot(
-    locs: dict[str, torch.Tensor],
+    proposal: Proposal,
     data: dict[str, torch.Tensor],
-    stats: dict[str, dict[str, float]],
     plot_dir: Path,
-    epoch: int = 0,
+    epoch: int | None = None,
 ) -> None:
     targets = []
     estimates = []
     masks = []
     names = []
     metrics = []
+
+    # prepare stats
+    stats = {}
+    locs = sampleLoc(proposal, 'mean')
+    stats['corr'] = sampleCorrelation(locs, data)
+    stats['rmse'] = sampleRMSE(locs, data)
 
     # fixed effects
     d = data['ffx'].shape[-1]
@@ -91,13 +96,15 @@ def recoveryPlot(
     # store
     fname = plot_dir / 'parameter_recovery_latest.png'
     plt.savefig(fname, bbox_inches='tight', pad_inches=0.15)
-    # plt.show()
+    if epoch is not None:
+        fname_e = plot_dir / f'parameter_recovery_e{epoch}.png'
+        plt.savefig(fname_e, bbox_inches='tight', pad_inches=0.15)
+    plt.close(fig)
 
 
 def dependentSummary(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
-    plot_this: bool = False,
 ) -> str:
     # moment-based stats
     sample_loc = sampleLoc(proposal, 'mean')
@@ -107,9 +114,9 @@ def dependentSummary(
     # inteval-based stats
     mce = expectedCoverageError(proposal, data)
 
-    # recovery plot
-    if plot_this:
-        recoveryPlot(sample_loc, data, stats=dict(rmse=rmse, corr=corr))
+    # # recovery plot
+    # if plot_this:
+    #     recoveryPlot(sample_loc, data, stats=dict(rmse=rmse, corr=corr), plot_dir)
 
     # print summary
     return longTable(corr, rmse, mce)

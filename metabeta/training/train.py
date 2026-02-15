@@ -17,7 +17,7 @@ from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
-from metabeta.evaluation.summary import flatSummary, dependentSummary
+from metabeta.evaluation.summary import flatSummary, dependentSummary, recoveryPlot
 
 logger = logging.getLogger('train.py')
 
@@ -316,8 +316,10 @@ batch size: {self.cfg.bs}
             proposal.is_results = imp_sampler(proposal)
             is_eff = proposal.mean_efficiency
 
-        print(dependentSummary(proposal, batch, plot_this=self.cfg.plot))
+        print(dependentSummary(proposal, batch))
         print(flatSummary(proposal, batch, time=tpd, is_eff=is_eff))
+        if cfg.plot:
+            recoveryPlot(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
 
     def go(self) -> None:
         # optionally load previous checkpoint
