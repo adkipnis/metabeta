@@ -30,7 +30,7 @@ class CouplingTransform(nn.Module):
         x1: torch.Tensor,
         context: torch.Tensor | None = None,
         mask1: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, ...]:
+    ) -> dict[str, torch.Tensor]:
         ...
 
     @abstractmethod
@@ -85,7 +85,7 @@ class Affine(CouplingTransform):
             )
             subnet_kwargs.pop('d_ff')
             subnet_kwargs.pop('depth')
-            self.conditioner = FlowMLP(**subnet_kwargs)
+            self.affine_conditioner = FlowMLP(**subnet_kwargs)
 
         # Residual Conditioner
         elif net_type == 'residual':
@@ -97,28 +97,29 @@ class Affine(CouplingTransform):
                 }
             )
             subnet_kwargs.pop('d_ff')
-            self.conditioner = FlowResidualNet(**subnet_kwargs)
+            self.affine_conditioner = FlowResidualNet(**subnet_kwargs)
 
     def _propose(self, x1, context=None, mask1=None):
         if mask1 is None:
             mask1 = torch.ones_like(x1)
-        params = self.conditioner(x1, context=context, mask=mask1)
-        log_s, t = params.chunk(2, dim=-1)
-        log_s = self.alpha * torch.tanh(log_s / self.alpha)   # softclamp
-        return log_s, t
+        params = self.affine_conditioner(x1, context=context, mask=mask1)
+        log_weight, bias = params.chunk(2, dim=-1)
+        log_weight = self.alpha * torch.tanh(log_weight / self.alpha)   # softclamp
+        return {'log_weight': log_weight, 'bias': bias}
 
     def forward(self, x1, x2, context=None, mask1=None, mask2=None, inverse=False):
-        log_s, t = self._propose(x1, context, mask1)
+        params = self._propose(x1, context, mask1)
+        log_weight, bias = params['log_weight'], params['bias']
         if mask2 is not None:
-            log_s = log_s * mask2
-            t = t * mask2
-        s = log_s.exp()
+            log_weight = log_weight * mask2
+            bias = bias * mask2
+        weight = log_weight.exp()
         if inverse:
-            x2 = (x2 - t) / s
-            log_det = -log_s.sum(-1)
+            x2 = (x2 - bias) / weight
+            log_det = -log_weight.sum(-1)
         else:
-            x2 = s * x2 + t
-            log_det = log_s.sum(-1)
+            x2 = weight * x2 + bias
+            log_det = log_weight.sum(-1)
         return x2, log_det
 
 
