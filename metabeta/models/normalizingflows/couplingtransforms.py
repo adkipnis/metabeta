@@ -184,7 +184,7 @@ class RationalQuadratic(CouplingTransform):
             )
             subnet_kwargs.pop('d_ff')
             subnet_kwargs.pop('depth')
-            self.conditioner = FlowMLP(**subnet_kwargs)
+            self.spline_conditioner = FlowMLP(**subnet_kwargs)
 
         # Residual Conditioner
         elif net_type == 'residual':
@@ -196,27 +196,40 @@ class RationalQuadratic(CouplingTransform):
                 }
             )
             subnet_kwargs.pop('d_ff')
-            self.conditioner = FlowResidualNet(**subnet_kwargs)
+            self.spline_conditioner = FlowResidualNet(**subnet_kwargs)
 
     def _propose(self, x1, context=None, mask1=None):
         if mask1 is None:
             mask1 = torch.ones_like(x1)
-        params = self.conditioner(x1, context=context, mask=mask1)
+        params = self.spline_conditioner(x1, context=context, mask=mask1)
         params = params.reshape(*x1.shape[:-1], self.split_dims[1], -1)
         if self.n_params_per_dim != params.shape[-1]:
             raise ValueError(
                 f'last params dim should be {self.n_params_per_dim} but found {params.shape[-1]}'
             )
+
+        # unpack spline params
         k = self.n_bins
         widths = params[..., :k]
         heights = params[..., k : 2 * k]
+        derivatives = params[..., 2 * k : 3 * k - 1]
+        log_weight = params[..., 3 * k - 1]
+        bias = params[..., 3 * k]
         if self.adaptive_domain:
-            derivatives = params[..., 2 * k : -4]
-            bounds = params[..., -4:]
+            left = params[..., -2]
+            delta_x = params[..., -1]
         else:
-            derivatives = params[..., 2 * k :]
-            bounds = torch.zeros_like(derivatives[..., :4])
-        return bounds, widths, heights, derivatives
+            left = torch.zeros_like(bias)
+            delta_x = torch.zeros_like(bias)
+        return {
+            'widths': widths,
+            'heights': heights,
+            'derivatives': derivatives,
+            'log_weight': log_weight,
+            'bias': bias,
+            'left': left.unsqueeze(-1),
+            'delta_x': delta_x.unsqueeze(-1),
+        }
 
     def _constrain(
         self,
