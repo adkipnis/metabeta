@@ -149,6 +149,8 @@ class FlowResidualNet(nn.Module):
         d_context: int = 0,
         use_bias: bool = True,
         use_glu: bool = True,
+        activation: str = 'ReLU',
+        dropout: float = 0.0,
         zero_init: bool = True,
     ):
         super().__init__()
@@ -160,12 +162,12 @@ class FlowResidualNet(nn.Module):
             d_context=d_context,
             use_bias=use_bias,
             use_glu=use_glu,
+            activation=activation,
+            dropout=dropout,
             zero_init=zero_init,
             # defaults:
-            layer_norm=True,
-            pre_norm=True,
-            activation='ELU',
-            dropout=0.0,
+            layer_norm=False,
+            pre_norm=False,
             weight_init=('lecun', 'normal'),
             weight_norm=True,
         )
