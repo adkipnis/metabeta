@@ -141,8 +141,8 @@ class CouplingFlow(nn.Module):
         for _ in range(n_blocks):
             if use_actnorm:
                 flows += [ActNorm(d_target)]
-            if transform == 'spline':
-                flows += [LU(d_target, identity_init=True)]
+            # if transform == 'spline':
+            #     flows += [LU(d_target, identity_init=True)]
             if use_permute:
                 flows += [Permute(d_target)]
             flows += [
