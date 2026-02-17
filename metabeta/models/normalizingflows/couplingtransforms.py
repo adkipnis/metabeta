@@ -415,14 +415,14 @@ class RationalQuadratic(CouplingTransform):
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
+    seed = 0
 
-    torch.manual_seed(0)
-
-    b = 64
-    split_dims = (5, 3)
+    b = 512
+    split_dims = (5, 1)
     d_context = 12
-    n_bins = 8
-
+    n_bins = 6
+    n_lines = 20
+    lim = 15.2
     NET_KWARGS = {
         'net_type': 'mlp',
         'd_ff': 128,
@@ -431,14 +431,10 @@ if __name__ == '__main__':
         'zero_init': False,  # if True, the initial flows are identity maps
     }
 
-    # --- plots
-    b = 512
-    n_lines = 32
-    split_dims = (5, 1)
     x2 = torch.linspace(-5, 5, b).unsqueeze(-1)
-    lim = 15.2
 
     # plot single affine
+    torch.manual_seed(seed)
     plt.figure(figsize=(6, 6))
     plt.xlabel('x')
     plt.ylabel('f(x)')
@@ -456,7 +452,8 @@ if __name__ == '__main__':
     plt.show()
 
     # plot single spline
-    n_bins = 1
+    torch.manual_seed(seed)
+
     plt.figure(figsize=(6, 6))
     plt.xlabel('x')
     plt.ylabel('f(x)')
