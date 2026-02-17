@@ -129,12 +129,13 @@ class RationalQuadratic(CouplingTransform):
         split_dims: tuple[int, int],
         d_context: int,
         subnet_kwargs: dict | None = None,
-        n_bins: int = 8,
+        n_bins: int = 6,
         default_size: float = 1.0,
         min_bin: float = 0.1,
         min_deriv: float = 1e-3,
-        adaptive_domain: bool = False,
-        eps: float = 1e-6,  # for clamping
+        adaptive_domain: bool = True,
+        alpha: float = 1.0,  # softclamping
+        eps: float = 1e-6,  # clamping
     ):
         super().__init__()
         self.split_dims = split_dims
@@ -142,19 +143,19 @@ class RationalQuadratic(CouplingTransform):
         self.n_bins = n_bins
         self.default_left = -default_size
         self.default_right = default_size
-        self.default_bottom = -default_size
-        self.default_top = default_size
+        self.default_delta = default_size * 2
+        self.min_delta = min_bin * n_bins
         self.min_bin = min_bin
         self.min_deriv = min_deriv
         self.adaptive_domain = adaptive_domain
+        self.alpha = alpha
         self.eps = eps
         self._shift = np.log(np.e - 1)
 
         # set number of parameters per dim
+        self.n_params_per_dim = 3 * self.n_bins + 1
         if self.adaptive_domain:
-            self.n_params_per_dim = 3 * self.n_bins + 3
-        else:
-            self.n_params_per_dim = 3 * self.n_bins - 1
+            self.n_params_per_dim += 2
 
         # check sizes
         if min_bin * n_bins > 1.0:
