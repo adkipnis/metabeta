@@ -393,18 +393,18 @@ class RationalQuadratic(CouplingTransform):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # unpack and apply mask
         x2 = x2[outside]
-        weight = params['weight'][outside]
+        log_weight = params['log_weight'][outside]
         bias = params['bias'][outside]
-        log_det = weight.log()
 
         # apply affine transform
+        weight = log_weight.exp()
         if inverse:
-            ld_factor = -1
             z2 = (x2 - bias) / weight
+            log_det = -log_weight
         else:
-            ld_factor = 1
             z2 = weight * x2 + bias
-        return z2, ld_factor * log_det
+            log_det = log_weight
+        return z2, log_det
 
     def _searchSorted(self, reference: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         reference = reference.detach().clone()
