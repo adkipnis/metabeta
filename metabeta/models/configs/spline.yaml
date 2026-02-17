@@ -10,15 +10,15 @@ summarizer:
 
 posterior:
     type: 'coupling'
-    transform: 'affine'
+    transform: 'spline'
     base_family: 'normal'
     base_trainable: True
     n_blocks: 3
     subnet_kwargs:
-        net_type: 'mlp'
+        net_type: 'residual'
         activation: 'ReLU'
-        d_ff: 64
-        depth: 2
+        d_ff: 128
+        depth: 3
         dropout: 0.0
         zero_init: True
         use_bias: False
