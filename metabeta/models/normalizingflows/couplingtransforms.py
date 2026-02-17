@@ -132,21 +132,28 @@ class RationalQuadratic(CouplingTransform):
         default_size: float = 1.0,
         min_bin: float = 0.1,
         min_deriv: float = 1e-3,
+        adaptive_domain: bool = False,
         eps: float = 1e-6,  # for clamping
     ):
         super().__init__()
         self.split_dims = split_dims
         self.d_context = d_context
         self.n_bins = n_bins
-        self.n_params_per_dim = 3 * self.n_bins + 3
         self.default_left = -default_size
         self.default_right = default_size
         self.default_bottom = -default_size
         self.default_top = default_size
         self.min_bin = min_bin
         self.min_deriv = min_deriv
+        self.adaptive_domain = adaptive_domain
         self.eps = eps
-        self._shift = np.sinh(1) + np.log(np.e - 1)
+        self._shift = np.log(np.e - 1)
+
+        # set number of parameters per dim
+        if self.adaptive_domain:
+            self.n_params_per_dim = 3 * self.n_bins + 3
+        else:
+            self.n_params_per_dim = 3 * self.n_bins - 1
 
         # check sizes
         if min_bin * n_bins > 1.0:
@@ -201,8 +208,12 @@ class RationalQuadratic(CouplingTransform):
         k = self.n_bins
         widths = params[..., :k]
         heights = params[..., k : 2 * k]
-        derivatives = params[..., 2 * k : -4]
-        bounds = params[..., -4:]
+        if self.adaptive_domain:
+            derivatives = params[..., 2 * k : -4]
+            bounds = params[..., -4:]
+        else:
+            derivatives = params[..., 2 * k :]
+            bounds = torch.zeros_like(derivatives[..., :4])
         return bounds, widths, heights, derivatives
 
     def _constrain(
