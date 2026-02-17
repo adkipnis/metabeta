@@ -133,7 +133,7 @@ class RationalQuadratic(CouplingTransform):
         default_size: float = 1.0,
         min_bin: float = 0.1,
         min_deriv: float = 1e-3,
-        adaptive_domain: bool = True,
+        adaptive_domain: bool = False,
         alpha: float = 1.0,  # softclamping
         eps: float = 1e-6,  # clamping
     ):
@@ -153,9 +153,9 @@ class RationalQuadratic(CouplingTransform):
         self._shift = np.log(np.e - 1)
 
         # set number of parameters per dim
-        self.n_params_per_dim = 3 * self.n_bins + 1
+        self.n_params_per_dim = 3 * self.n_bins - 1
         if self.adaptive_domain:
-            self.n_params_per_dim += 2
+            self.n_params_per_dim += 4
 
         # check sizes
         if min_bin * n_bins > 1.0:
@@ -213,14 +213,16 @@ class RationalQuadratic(CouplingTransform):
         widths = params[..., :k]
         heights = params[..., k : 2 * k]
         derivatives = params[..., 2 * k : 3 * k - 1]
-        log_weight = params[..., 3 * k - 1]
-        bias = params[..., 3 * k]
         if self.adaptive_domain:
+            log_weight = params[..., 3 * k - 1]
+            bias = params[..., 3 * k]
             left = params[..., -2]
             delta_x = params[..., -1]
         else:
-            left = torch.zeros_like(bias)
-            delta_x = torch.zeros_like(bias)
+            log_weight = torch.zeros_like(params[..., 0])
+            bias = torch.zeros_like(log_weight)
+            left = torch.zeros_like(log_weight)
+            delta_x = torch.zeros_like(log_weight)
         return {
             'widths': widths,
             'heights': heights,
@@ -251,8 +253,8 @@ class RationalQuadratic(CouplingTransform):
 
         # --- bounds
         left = self.default_left + params['left']
-        delta_x = F.softplus(self.default_delta + params['delta_x'])
-        right = left + self.min_delta + delta_x
+        delta_x = self.default_delta + params['delta_x']
+        right = left + delta_x.clamp_min(self.min_delta)
         bottom = weight.unsqueeze(-1) * left + bias.unsqueeze(-1)
         top = weight.unsqueeze(-1) * right + bias.unsqueeze(-1)
         bounds = torch.cat([left, right, bottom, top], dim=-1)
