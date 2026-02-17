@@ -224,10 +224,18 @@ class RationalQuadratic(CouplingTransform):
         left, right, bottom, top = bounds.chunk(4, -1)
 
         # --- bounds
-        left = self.default_left - torch.asinh(F.softplus(left + self._shift))
-        right = self.default_right + torch.asinh(F.softplus(right + self._shift))
-        bottom = self.default_bottom - torch.asinh(F.softplus(bottom + self._shift))
-        top = self.default_top + torch.asinh(F.softplus(top + self._shift))
+        func = lambda x: torch.asinh(F.softplus(x + np.sinh(1) + self._shift))
+        # func = lambda x: torch.asinh(x)
+        if self.adaptive_domain:
+           left = self.default_left - func(left)
+           right = self.default_right + func(right)
+           bottom = self.default_bottom - func(bottom)
+           top = self.default_top + func(top)
+        else:
+           left = self.default_left * torch.ones_like(widths[..., :1])
+           right = self.default_right * torch.ones_like(widths[..., :1])
+           bottom = self.default_bottom * torch.ones_like(widths[..., :1])
+           top = self.default_top * torch.ones_like(widths[..., :1])
         bounds = torch.cat([left, right, bottom, top], dim=-1)
 
         # --- widths
