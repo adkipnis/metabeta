@@ -417,38 +417,50 @@ if __name__ == '__main__':
     NET_KWARGS = {
         'net_type': 'mlp',
         'd_ff': 128,
-        'depth': 3,
+        'depth': 2,
         'activation': 'ReLU',
         'zero_init': False,  # if True, the initial flows are identity maps
     }
-    rq = RationalQuadratic(split_dims, d_context, NET_KWARGS, n_bins=n_bins)
 
-    # test raw params
-    x1 = torch.randn(b, split_dims[0])
-    x2 = torch.randn(b, split_dims[1]) * 3
-    context = torch.randn(b, d_context)
-    params = rq._propose(x1, context)
-    rq._constrain(params)
-    rq.forward(x1, x2, context)
+    # --- plots
+    b = 512
+    n_lines = 32
+    split_dims = (5, 1)
+    x2 = torch.linspace(-5, 5, b).unsqueeze(-1)
+    lim = 15.2
+
+    # plot single affine
+    plt.figure(figsize=(6, 6))
+    plt.xlabel('x')
+    plt.ylabel('f(x)')
+    plt.title('Affine')
+    plt.grid(True)
+    with torch.no_grad():
+        for i in range(n_lines):
+            transform = Affine(split_dims, d_context, NET_KWARGS)
+            x1 = torch.randn(1, split_dims[0]).expand(b, -1)
+            context = torch.randn(1, d_context).expand(b, -1)
+            y2, _ = transform.forward(x1, x2, context)
+            plt.plot(x2.numpy(), y2.numpy(), label=f'AC {i}', alpha=0.9)
+    plt.plot(x2.numpy(), x2.numpy(), '--', alpha=0.5, label='identity')
+    plt.ylim((-lim, lim))
+    plt.show()
 
     # plot single spline
+    n_bins = 1
+    plt.figure(figsize=(6, 6))
+    plt.xlabel('x')
+    plt.ylabel('f(x)')
+    plt.title('Rational Quadratic Spline')
+    plt.grid(True)
     with torch.no_grad():
-        n_bins = 8
-        b = 512
-        split_dims = (5, 1)
-        # Plot
-        plt.figure(figsize=(6, 6))
-        for i in range(32):
-            rq = RationalQuadratic(split_dims, d_context, NET_KWARGS, n_bins=n_bins)
+        for i in range(n_lines):
+            transform = RationalQuadratic(
+                split_dims, d_context, NET_KWARGS, n_bins=n_bins)
             x1 = torch.randn(1, split_dims[0]).expand(b, -1)
-            x2 = torch.linspace(-5, 5, b).unsqueeze(-1)
             context = torch.randn(1, d_context).expand(b, -1)
-            y2, _ = rq.forward(x1, x2, context)
+            y2, _ = transform.forward(x1, x2, context)
             plt.plot(x2.numpy(), y2.numpy(), label=f'NSF {i}', alpha=0.9)
-        plt.plot(x2.numpy(), x2.numpy(), '--', alpha=0.5, label='identity')
-        plt.xlabel('x')
-        plt.ylabel('f(x)')
-        plt.title('Rational Quadratic Spline')
-        # plt.legend()
-        plt.grid(True)
-        plt.show()
+    plt.plot(x2.numpy(), x2.numpy(), '--', alpha=0.5, label='identity')
+    plt.ylim((-lim, lim))
+    plt.show()
