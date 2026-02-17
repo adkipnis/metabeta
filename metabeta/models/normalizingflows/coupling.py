@@ -32,7 +32,11 @@ class Coupling(nn.Module):
         if transform == 'affine':
             self.transform = Affine(split_dims, d_context, subnet_kwargs)
         elif transform == 'spline':
-            self.transform = RationalQuadratic(split_dims, d_context, subnet_kwargs)
+            self.transform = RationalQuadratic(
+                split_dims, d_context, subnet_kwargs, adaptive_domain=False)
+        elif transform == 'spline+':
+            self.transform = RationalQuadratic(
+                split_dims, d_context, subnet_kwargs, adaptive_domain=True)
         else:
             raise NotImplementedError('only affine and spline transforms are supported')
 
@@ -128,7 +132,7 @@ class CouplingFlow(nn.Module):
         n_blocks: int = 6,
         use_actnorm: bool = True,
         use_permute: bool = True,
-        transform: Literal['affine', 'spline'] = 'affine',
+        transform: Literal['affine', 'spline', 'spline+'] = 'affine',
         base_family: Literal['normal', 'student'] = 'normal',  # family of base distribution
         base_trainable: bool = True,  # train parameters of base distribution
         subnet_kwargs: dict | None = None,
