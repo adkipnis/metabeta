@@ -266,10 +266,10 @@ class RationalQuadratic(CouplingTransform):
         bias = bias.squeeze(-1)
 
         # --- derivatives
+        derivatives = self.min_deriv + F.softplus(derivatives + self._shift)
         derivatives = F.pad(derivatives, (1, 1))
         derivatives[..., 0] = weight
         derivatives[..., -1] = weight
-        derivatives = self.min_deriv + F.softplus(derivatives)
 
         return dict(
             bounds=bounds,
