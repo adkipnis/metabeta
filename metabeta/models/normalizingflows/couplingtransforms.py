@@ -233,30 +233,35 @@ class RationalQuadratic(CouplingTransform):
 
     def _constrain(
         self,
-        params: tuple[torch.Tensor, ...],
+        params: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
-        bounds, widths, heights, derivatives = params
-        left, right, bottom, top = bounds.chunk(4, -1)
+
+        # --- affine params
+        log_weight = params['log_weight']
+        log_weight = self.alpha * torch.tanh(log_weight / self.alpha)   # softclamp
+        weight = log_weight.exp()
+        bias = params['bias']
+
+        # --- derivatives
+        derivatives = params['derivatives']
+        derivatives = self.min_deriv + F.softplus(derivatives + self._shift)
+        derivatives = F.pad(derivatives, (1, 1))
+        derivatives[..., 0] = weight
+        derivatives[..., -1] = weight
 
         # --- bounds
-        func = lambda x: torch.asinh(F.softplus(x + np.sinh(1) + self._shift))
-        # func = lambda x: torch.asinh(x)
-        if self.adaptive_domain:
-           left = self.default_left - func(left)
-           right = self.default_right + func(right)
-           bottom = self.default_bottom - func(bottom)
-           top = self.default_top + func(top)
-        else:
-           left = self.default_left * torch.ones_like(widths[..., :1])
-           right = self.default_right * torch.ones_like(widths[..., :1])
-           bottom = self.default_bottom * torch.ones_like(widths[..., :1])
-           top = self.default_top * torch.ones_like(widths[..., :1])
+        left = self.default_left + params['left']
+        delta_x = F.softplus(self.default_delta + params['delta_x'])
+        right = left + self.min_delta + delta_x
+        bottom = weight.unsqueeze(-1) * left + bias.unsqueeze(-1)
+        top = weight.unsqueeze(-1) * right + bias.unsqueeze(-1)
         bounds = torch.cat([left, right, bottom, top], dim=-1)
 
         # --- widths
         # 1. normalize widths to sum to 1
         # 2. shift by min_val and ensure total_width sum to 1
         # 3. stretch to [left, right]
+        widths = params['widths']
         widths = F.softmax(widths, dim=-1)
         widths = self.min_bin + (1 - self.min_bin * self.n_bins) * widths
         cumwidths = torch.cumsum(widths, dim=-1)
@@ -266,6 +271,7 @@ class RationalQuadratic(CouplingTransform):
         cumwidths[..., -1] = right.squeeze(-1)
 
         # --- heights
+        heights = params['heights']
         heights = F.softmax(heights, dim=-1)
         heights = self.min_bin + (1 - self.min_bin * self.n_bins) * heights
         cumheights = torch.cumsum(heights, dim=-1)
@@ -274,24 +280,12 @@ class RationalQuadratic(CouplingTransform):
         cumheights[..., 0] = bottom.squeeze(-1)
         cumheights[..., -1] = top.squeeze(-1)
 
-        # --- affine params
-        weight = (top - bottom) / (right - left)
-        bias = bottom - weight * left
-        weight = weight.squeeze(-1)
-        bias = bias.squeeze(-1)
-
-        # --- derivatives
-        derivatives = self.min_deriv + F.softplus(derivatives + self._shift)
-        derivatives = F.pad(derivatives, (1, 1))
-        derivatives[..., 0] = weight
-        derivatives[..., -1] = weight
-
         return dict(
             bounds=bounds,
             cumwidths=cumwidths,
             cumheights=cumheights,
             derivatives=derivatives,
-            weight=weight,
+            log_weight=log_weight,
             bias=bias,
         )
 
