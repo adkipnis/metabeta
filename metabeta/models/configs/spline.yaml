@@ -10,7 +10,7 @@ summarizer:
 
 posterior:
     type: 'coupling'
-    transform: 'spline'
+    transform: 'spline+'
     base_family: 'normal'
     base_trainable: True
     n_blocks: 3
