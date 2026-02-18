@@ -4,12 +4,11 @@ from torch.nn import functional as F
 from scipy.stats import pearsonr
 import numpy as np
 
-from metabeta.utils.evaluation import Proposal, getMasks
+from metabeta.utils.evaluation import Proposal, getMasks, weightedQuantile
 
 
 def getLocation(
-    x: torch.Tensor, w: torch.Tensor | None = None, loc_type: str = 'mean'
-) -> torch.Tensor:
+    x: torch.Tensor, w: torch.Tensor | None = None, loc_type: str = 'mean') -> torch.Tensor:
     if loc_type == 'mean':
         if w is None:
             return torch.mean(x, dim=-2)
@@ -20,13 +19,12 @@ def getLocation(
         if w is None:
             return torch.median(x, dim=-2)[0]
         else:
-            # TODO
-            raise NotImplementedError
+            return weightedQuantile(x, w, q=0.5)
     else:
         raise NotImplementedError(f'location type {loc_type} not implemented')
 
 
-def sampleLoc(proposal: Proposal, loc_type: str = 'mean') -> dict[str, torch.Tensor]:
+def sampleLoc(proposal: Proposal, loc_type: str) -> dict[str, torch.Tensor]:
     w = proposal.weights
     global_loc = getLocation(proposal.samples_g, w, loc_type)
     out = proposal.partition(global_loc)
