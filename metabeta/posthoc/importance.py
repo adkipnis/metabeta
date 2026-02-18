@@ -12,6 +12,7 @@ class ImportanceSampler:
         data: dict[str, torch.Tensor],
         constrain: bool = True,
         full: bool = True,  # incorporate sigma_rfx and rfx priors
+        temperature: float = 3.0, # softmax temperature
         pareto: bool = False,  # use Pareto smoothing (PSIS)
         sir: bool = False,  # use Sampling Importance Resampling (SIR)
         n_sir: int = 25,  # size of SIR re-sample
@@ -19,6 +20,7 @@ class ImportanceSampler:
     ) -> None:
         self.constrain = constrain
         self.full = full
+        self.temperature = temperature
         self.pareto = pareto
         self.sir = sir
         self.n_sir = n_sir
@@ -125,7 +127,7 @@ class ImportanceSampler:
     ) -> dict[str, torch.Tensor]:
         out = {}
         log_w = log_likelihood + log_prior - log_q
-
+    
         # regularize
         if self.pareto:
             if self.constrain:
@@ -140,7 +142,7 @@ class ImportanceSampler:
             out['log_w'] = log_w.clamp(max=log_w_max) - log_w_max
 
         # normalized weights
-        w = out['log_w'].softmax(-1)
+        w = torch.softmax(out['log_w'] / self.temperature, dim=-1)
         w = torch.where(torch.isfinite(w), w, 0)
         out['weights'] = w
 
@@ -153,6 +155,8 @@ class ImportanceSampler:
         """Use inverse method to get {n_sir} coupled draws from w. Return the indices of said draws."""
         n_sir = self.n_sir
         b, s = w.shape
+        
+        # get
         cdf = torch.cumsum(w, dim=-1)
 
         # get random offset and {n_sir} equidistant quantiles
