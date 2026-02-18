@@ -120,3 +120,26 @@ class Proposal:
             samples = self.data[source]['samples']
             scale_ = scale.view(-1, *([1] * (samples.ndim - 1)))
             self.data[source]['samples'] *= scale_
+
+    def subset(self, idx: torch.Tensor) -> None:
+        b, s = idx.shape
+        for source in ('global', 'local'):
+            # samples
+            samples = self.data[source]['samples']
+            m, d = samples.shape[1], samples.shape[-1]
+            index = idx.unsqueeze(-1).expand(b, s, d)
+            if source == 'local':
+                index = index.unsqueeze(1).expand(b, m, s, d)
+            re_samples = torch.gather(samples, dim=-2, index=index)
+            self.data[source]['samples'] = re_samples
+
+            # log probs
+            log_prob = self.data[source]['log_prob']
+            index = idx.clone()
+            if source == 'local':
+                index = index.unsqueeze(1).expand(b, m, s)
+            re_log_prob = torch.gather(log_prob, dim=-1, index=index)
+            self.data[source]['log_prob'] = re_log_prob
+
+
+def joinProposals(proposals: list[Proposal]) -> Proposal:
