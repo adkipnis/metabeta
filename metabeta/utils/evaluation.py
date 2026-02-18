@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Sequence
 import torch
 
 
@@ -153,3 +153,23 @@ def joinProposals(proposals: list[Proposal]) -> Proposal:
     }
     return Proposal(proposed)
 
+
+def weightedQuantile(x: torch.Tensor, w: torch.Tensor, q: float | Sequence[float] = 0.5) -> torch.Tensor:
+    if not isinstance(q, torch.Tensor):
+        q_t = torch.tensor(q, dtype=x.dtype, device=x.device)
+    else:
+        q_t = q
+    w = w.unsqueeze(-1)
+    if x.dim() == 4:
+        w = w.unsqueeze(1)
+    # sort samples and weights
+    x_sorted, order = torch.sort(x, dim=-2)
+    w_sorted = torch.gather(w.expand_as(x), dim=-2, index=order)
+
+    # search sorted
+    x_last = x_sorted.movedim(-2, -1)
+    cdf = torch.cumsum(w_sorted, dim=-2).movedim(-2, -1).contiguous()
+    t = q_t * torch.ones_like(cdf[..., 0:1])
+    idx = torch.searchsorted(cdf, t, right=False).clamp(max=x_last.shape[-1] - 1)
+    out = torch.gather(x_last, dim=-1, index=idx).squeeze(-1)
+    return out
