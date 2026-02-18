@@ -86,7 +86,7 @@ class ImportanceSampler:
         lp = (ll * self.mask_n).sum(dim=(1, 2))
         return lp   # (b, s)
 
-    def __call__(self, proposal: Proposal) -> dict[str, torch.Tensor]:
+    def __call__(self, proposal: Proposal) -> Proposal:
         # unpack parameters
         ffx, sigma_rfx, sigma_eps, rfx = proposal.parameters
 
@@ -108,7 +108,14 @@ class ImportanceSampler:
         # conditional log likelihood
         ll = self.logLikelihoodCond(ffx, sigma_eps, rfx)
 
-        return self.getImportanceWeights(ll, lp, lq)
+        # importance sampling
+        is_results = self.getImportanceWeights(ll, lp, lq)
+        if not self.sir:
+            proposal.is_results = is_results
+        if self.sir:
+            idx = self.getSirIndices(is_results['weights'])
+            proposal.subset(idx)
+        return proposal
 
     def getImportanceWeights(
         self,
