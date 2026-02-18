@@ -48,7 +48,7 @@ class Proposal:
         return self.sigma_eps.shape[-1]
 
     def __repr__(self) -> str:
-        return f'ProposalPosterior(n_samples={self.s})'
+        return f'ProposalPosterior(n_samples={self.n_samples})'
 
     @property
     def samples_g(self) -> torch.Tensor:
