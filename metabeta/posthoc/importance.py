@@ -13,11 +13,15 @@ class ImportanceSampler:
         constrain: bool = True,
         full: bool = True,  # incorporate sigma_rfx and rfx priors
         pareto: bool = False,  # use Pareto smoothing (PSIS)
+        sir: bool = False,  # use Sampling Importance Resampling (SIR)
+        n_sir: int = 25,  # size of SIR re-sample
         eps: float = 1e-12,
     ) -> None:
         self.constrain = constrain
         self.full = full
         self.pareto = pareto
+        self.sir = sir
+        self.n_sir = n_sir
         self.eps = eps
 
         # prior
