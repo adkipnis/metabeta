@@ -15,6 +15,7 @@ from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
+from metabeta.utils.evaluation import joinProposals
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.evaluation.summary import flatSummary, dependentSummary, recoveryPlot
@@ -35,7 +36,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--verbosity', type=int, default=0, help='verbosity level (0: warnings, 1: infos, 2: debug, default=0)')
 
     # model & optimizer
-    parser.add_argument('-m', '--m_tag', type=str, default='spline', help='name of model config file')
+    parser.add_argument('-m', '--m_tag', type=str, default='toy', help='name of model config file')
     parser.add_argument('--n_samples', type=int, default=300, help='number of samples to draw from posterior on test set')
     parser.add_argument('--compile', action='store_true', help='compile model (default = False)')
     parser.add_argument('--lr', type=float, default=1e-3, help='optimizer learning rate (default = 1e-3)')
@@ -54,6 +55,7 @@ def setup() -> argparse.Namespace:
     # evaluation
     parser.add_argument('--rescale', action='store_false', help='use original scale of y for evaluation (default = True)')
     parser.add_argument('--importance', action='store_true', help='use importance sampling before evaluation (default = False)')
+    parser.add_argument('--sir', action='store_false', help='use sampling importance resampling before evaluation (default = False)')
     parser.add_argument('--plot', action='store_false', help='plot evaluation results (default = True)')
 
     # saving & loading
