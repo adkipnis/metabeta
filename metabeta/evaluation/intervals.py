@@ -1,5 +1,5 @@
 import torch
-from metabeta.utils.evaluation import Proposal, getMasks
+from metabeta.utils.evaluation import Proposal, getMasks, weightedQuantile
 
 
 def getQuantiles(
@@ -9,12 +9,11 @@ def getQuantiles(
 ) -> torch.Tensor:
     assert len(roots) == 2
     assert 0.0 <= roots[0] < roots[1] <= 1.0
-    roots_ = torch.tensor(roots, device=samples.device)
+    roots_ = torch.tensor(roots, dtype=samples.dtype, device=samples.device)
     if weights is None:
-        quantiles = torch.quantile(samples, roots_, dim=-2)
-        quantiles = quantiles.movedim(0, -2)
+        quantiles = torch.quantile(samples, roots_, dim=-2).movedim(0, -2)
     else:
-        raise NotImplementedError()
+        quantiles = weightedQuantile(samples, weights, roots_).movedim(-1, -2)
     return quantiles   # (b, ..., 2, d)
 
 
@@ -24,7 +23,7 @@ def sampleCredibleInterval(
 ) -> dict[str, torch.Tensor]:
     out = {}
     roots = (alpha / 2, 1 - alpha / 2)
-    w = None   # proposal.weights
+    w = proposal.weights
     ci_g = getQuantiles(roots, proposal.samples_g, w)
     out = proposal.partition(ci_g)
     out['rfx'] = getQuantiles(roots, proposal.samples_l, w)
