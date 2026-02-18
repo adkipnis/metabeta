@@ -96,7 +96,7 @@ class Proposal:
 
     @property
     def weights(self) -> torch.Tensor | None:
-        return self.is_results.get('weights_norm', None)
+        return self.is_results.get('weights', None)
 
     @property
     def efficiency(self) -> torch.Tensor | None:
