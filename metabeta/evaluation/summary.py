@@ -99,6 +99,7 @@ def recoveryPlot(
     if epoch is not None:
         fname_e = plot_dir / f'parameter_recovery_e{epoch}.png'
         plt.savefig(fname_e, bbox_inches='tight', pad_inches=0.15)
+    plt.show()
     plt.close(fig)
 
 
@@ -170,7 +171,6 @@ def flatSummary(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
     tpd: float,
-    tis: float = 0.0,
     eff: float | None = None,
 ) -> str:
     # posterior predictive
@@ -183,8 +183,6 @@ def flatSummary(
         ['Median NLL', mnll],
         ['NPE time / ds [s]', tpd],
     ]
-    if tis > 0:
-        rows += [['IS time / ds [s]', tis]]
     if eff is not None:
         rows += [['IS Efficency', eff]]
     results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
