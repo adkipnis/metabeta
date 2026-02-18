@@ -19,6 +19,8 @@ from metabeta.plot import plot
 from matplotlib import pyplot as plt
 
 
+LOC_TYPE = 'mean'
+
 def dictMean(data: dict[str, float]) -> float:
     values = list(data.values())
     return float(np.mean(values))
@@ -38,7 +40,7 @@ def recoveryPlot(
 
     # prepare stats
     stats = {}
-    locs = sampleLoc(proposal, 'mean')
+    locs = sampleLoc(proposal, LOC_TYPE)
     stats['corr'] = sampleCorrelation(locs, data)
     stats['rmse'] = sampleRMSE(locs, data)
 
@@ -108,16 +110,12 @@ def dependentSummary(
     data: dict[str, torch.Tensor],
 ) -> str:
     # moment-based stats
-    sample_loc = sampleLoc(proposal, 'mean')
+    sample_loc = sampleLoc(proposal, LOC_TYPE)
     rmse = sampleRMSE(sample_loc, data)
     corr = sampleCorrelation(sample_loc, data)
 
     # inteval-based stats
     mce = expectedCoverageError(proposal, data)
-
-    # # recovery plot
-    # if plot_this:
-    #     recoveryPlot(sample_loc, data, stats=dict(rmse=rmse, corr=corr), plot_dir)
 
     # print summary
     return longTable(corr, rmse, mce)
