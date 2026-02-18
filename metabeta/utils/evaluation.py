@@ -41,8 +41,11 @@ class Proposal:
     def __init__(self, proposed: dict[str, dict[str, torch.Tensor]]) -> None:
         self.data = proposed
         self.d = numFixed(proposed)
-        self.s = self.sigma_eps.shape[-1]
         self.is_results = {}
+
+    @property
+    def n_samples(self) -> int:
+        return self.sigma_eps.shape[-1]
 
     def __repr__(self) -> str:
         return f'ProposalPosterior(n_samples={self.s})'
