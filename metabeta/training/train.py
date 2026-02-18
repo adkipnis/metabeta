@@ -15,7 +15,7 @@ from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.evaluation import joinProposals
+from metabeta.utils.evaluation import Proposal, joinProposals
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.evaluation.summary import flatSummary, dependentSummary, recoveryPlot
@@ -56,6 +56,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--rescale', action='store_false', help='use original scale of y for evaluation (default = True)')
     parser.add_argument('--importance', action='store_true', help='use importance sampling before evaluation (default = False)')
     parser.add_argument('--sir', action='store_false', help='use sampling importance resampling before evaluation (default = False)')
+    parser.add_argument('--sir_iter', type=int, default=10, help='number of SIR iterations (default = 10)')
     parser.add_argument('--plot', action='store_false', help='plot evaluation results (default = True)')
 
     # saving & loading
@@ -106,7 +107,12 @@ class Trainer:
         # init data, model and optimizer
         self._initData()
         self._initModel()
-
+        
+        # check IS sizes
+        if self.cfg.sir:
+            assert self.cfg.n_samples % self.cfg.sir_iter == 0, \
+                'number of samples must be divisible by number of SIR iterations'
+        
         # checkpoint dir
         self.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
         self.run_name = runName(vars(self.cfg))
