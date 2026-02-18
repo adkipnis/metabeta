@@ -338,6 +338,29 @@ batch size: {self.cfg.bs}
             proposal = imp_sampler(proposal)
         return proposal, batch
 
+    def _sampleMulti(
+            self, batch: dict[str, torch.Tensor]
+    ) -> tuple[Proposal, dict[str, torch.Tensor]]:
+        # separate normalized and unnormalized batch
+        eval_batch = batch
+        if self.cfg.rescale:
+            eval_batch = rescaleData(batch)
+        n_sir = self.cfg.n_samples // self.cfg.sir_iter
+        imp_sampler = ImportanceSampler(eval_batch, sir=True, n_sir=n_sir)
+        selected = []
+        n_remaining = self.cfg.n_samples
+
+        # Sampling Importance Resampling (SIR)
+        while n_remaining > 0:
+            proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+            if self.cfg.rescale:
+                proposal.rescale(batch['sd_y'])
+            proposal = imp_sampler(proposal)
+            selected.append(proposal)
+            n_remaining -= proposal.n_samples
+        proposal = joinProposals(selected)
+        return proposal, eval_batch
+
     def go(self) -> None:
         # optionally load previous checkpoint
         start_epoch = 1
