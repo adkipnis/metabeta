@@ -169,8 +169,9 @@ def wideTable(
 def flatSummary(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
-    time: float,
-    is_eff: float | None = None,
+    tpd: float,
+    tis: float = 0.0,
+    eff: float | None = None,
 ) -> str:
     # posterior predictive
     pp = getPosteriorPredictive(proposal, data)
@@ -180,9 +181,11 @@ def flatSummary(
     # flat table
     rows = [
         ['Median NLL', mnll],
-        ['time / ds [s]', time],
+        ['NPE time / ds [s]', tpd],
     ]
-    if is_eff is not None:
-        rows += [['IS Efficency', is_eff]]
+    if tis > 0:
+        rows += [['IS time / ds [s]', tis]]
+    if eff is not None:
+        rows += [['IS Efficency', eff]]
     results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
     return f'{results}\n'
