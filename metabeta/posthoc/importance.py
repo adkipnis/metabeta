@@ -149,3 +149,16 @@ class ImportanceSampler:
         out['sample_efficiency'] = out['n_eff'] / w.shape[-1]
         return out
 
+    def getSirIndices(self, w: torch.Tensor) -> torch.Tensor:
+        """Use inverse method to get {n_sir} coupled draws from w. Return the indices of said draws."""
+        n_sir = self.n_sir
+        b, s = w.shape
+        cdf = torch.cumsum(w, dim=-1)
+
+        # get random offset and {n_sir} equidistant quantiles
+        u0 = torch.rand(b, 1, device=w.device) / n_sir
+        u = u0 + torch.arange(n_sir, device=w.device).view(1, -1) / n_sir
+
+        # get indices of these quantiles, drawing proportionally from w
+        idx = torch.searchsorted(cdf, u, right=True).clamp(max=s - 1)
+        return idx
