@@ -143,3 +143,13 @@ class Proposal:
 
 
 def joinProposals(proposals: list[Proposal]) -> Proposal:
+    samples_g = torch.cat([p.samples_g for p in proposals], dim=-2)
+    samples_l = torch.cat([p.samples_l for p in proposals], dim=-2)
+    log_prob_g = torch.cat([p.log_prob_g for p in proposals], dim=-1)
+    log_prob_l = torch.cat([p.log_prob_l for p in proposals], dim=-1)
+    proposed = {
+        'global': {'samples': samples_g, 'log_prob': log_prob_g},
+        'local': {'samples': samples_l, 'log_prob': log_prob_l},
+    }
+    return Proposal(proposed)
+
