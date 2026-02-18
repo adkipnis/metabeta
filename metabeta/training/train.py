@@ -37,7 +37,7 @@ def setup() -> argparse.Namespace:
 
     # model & optimizer
     parser.add_argument('-m', '--m_tag', type=str, default='toy', help='name of model config file')
-    parser.add_argument('--n_samples', type=int, default=300, help='number of samples to draw from posterior on test set')
+    parser.add_argument('--n_samples', type=int, default=512, help='number of samples to draw from posterior on test set')
     parser.add_argument('--compile', action='store_true', help='compile model (default = False)')
     parser.add_argument('--lr', type=float, default=1e-3, help='optimizer learning rate (default = 1e-3)')
     parser.add_argument('--max_grad_norm', type=float, default=1.0, help='clip grad norm to this value (default = 1.0)')
@@ -56,7 +56,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--rescale', action='store_false', help='use original scale of y for evaluation (default = True)')
     parser.add_argument('--importance', action='store_true', help='use importance sampling before evaluation (default = False)')
     parser.add_argument('--sir', action='store_false', help='use sampling importance resampling before evaluation (default = False)')
-    parser.add_argument('--sir_iter', type=int, default=10, help='number of SIR iterations (default = 10)')
+    parser.add_argument('--sir_iter', type=int, default=8, help='number of SIR iterations (default = 10)')
     parser.add_argument('--plot', action='store_false', help='plot evaluation results (default = True)')
 
     # saving & loading
