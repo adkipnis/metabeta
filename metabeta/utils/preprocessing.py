@@ -58,7 +58,8 @@ class Standardizer:
         return x * self.std + self.mean
 
 
-def rescaleData(data: dict[str, torch.Tensor]) -> None:
+def rescaleData(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    data = {k: v.clone() for k, v in data.items()}
     for key in (
         'y',
         # params
@@ -74,3 +75,4 @@ def rescaleData(data: dict[str, torch.Tensor]) -> None:
     ):
         sd_y = data['sd_y'].view(-1, *([1] * (data[key].ndim - 1)))
         data[key] *= sd_y
+    return data
