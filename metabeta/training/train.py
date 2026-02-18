@@ -322,6 +322,22 @@ batch size: {self.cfg.bs}
         if cfg.plot:
             recoveryPlot(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
 
+    def _sampleSingle(
+            self, batch: dict[str, torch.Tensor]
+    ) -> tuple[Proposal, dict[str, torch.Tensor]]:
+        proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+
+        # unnormalize proposal and batch
+        if self.cfg.rescale:
+            proposal.rescale(batch['sd_y'])
+            batch = rescaleData(batch)
+
+        # importance weighing
+        if self.cfg.importance:
+            imp_sampler = ImportanceSampler(batch, sir=False)
+            proposal = imp_sampler(proposal)
+        return proposal, batch
+
     def go(self) -> None:
         # optionally load previous checkpoint
         start_epoch = 1
