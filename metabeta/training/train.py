@@ -310,37 +310,14 @@ batch size: {self.cfg.bs}
 
         # get proposal distribution
         t0 = time.perf_counter()
-        proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
-        tpd = (time.perf_counter() - t0) / batch['X'].shape[0]  # time per dataset
-
-        # # undo unit scale wrt y
-        # if self.cfg.rescale:
-        #     proposal.rescale(batch['sd_y'])
-        #     rescaleData(batch)
-
-        # importance sampling
-        tis = 0.0
-        if self.cfg.importance or self.cfg.sir:
-            t0 = time.perf_counter()
-            imp_sampler = ImportanceSampler(batch, sir=self.cfg.sir, n_sir=25)
-            if not self.cfg.sir:
-                proposal = imp_sampler(proposal)
-            else:
-                selected = []
-                n_remaining = self.cfg.n_samples
-                n_samples = self.cfg.n_samples
-                while n_remaining > 0:
-                    proposal = self.model.estimate(batch, n_samples=n_samples)
-                    proposal = imp_sampler(proposal)
-                    selected.append(proposal)
-                    n_remaining -= proposal.n_samples
-                proposal = joinProposals(selected)
-            tis = (time.perf_counter() - t0) / batch['X'].shape[0]
+        proposal, batch = self._sampleMulti(batch) if self.cfg.sir else self._sampleSingle(batch)
+        t1 = time.perf_counter()
+        tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
 
         # evaluation summary
         print(dependentSummary(proposal, batch))
         print(flatSummary(
-            proposal, batch, tpd=tpd, tis=tis, eff=proposal.mean_efficiency,
+            proposal, batch, tpd=tpd, eff=proposal.mean_efficiency,
         ))
         if cfg.plot:
             recoveryPlot(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
