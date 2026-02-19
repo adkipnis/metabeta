@@ -1,3 +1,4 @@
+from typing import Literal
 from pathlib import Path
 import torch
 from torch.nn import functional as F
@@ -169,18 +170,18 @@ def flatSummary(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
     tpd: float,
-    eff: float | None = None,
 ) -> str:
     # posterior predictive
     pp = getPosteriorPredictive(proposal, data)
-    nll = posteriorPredictiveNLL(pp, data)
-    mnll = nll.mean(-1).median().item()
+    nll = posteriorPredictiveNLL(pp, data, w=proposal.weights) # nll per sample
+    mnll = nll.median().item()
 
     # flat table
     rows = [
-        ['Median NLL', mnll],
+        ['Posterior Predictive NLL', mnll],
         ['NPE time / ds [s]', tpd],
     ]
+    eff = proposal.mean_efficiency
     if eff is not None:
         rows += [['IS Efficency', eff]]
     results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
