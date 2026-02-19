@@ -73,14 +73,18 @@ class ImportanceSampler:
             ffx, sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n)
         return ll, lp, lq
 
+    def __call__(self, proposal: Proposal) -> Proposal:
+        # log likelihood, log prior, log proposal posterior
+        ll, lp, lq = self.getTerms(proposal)
 
         # importance sampling
-        is_results = self.getImportanceWeights(ll, lp, lq)
-        if not self.sir:
-            proposal.is_results = is_results
+        proposal.is_results = self.getImportanceWeights(ll, lp, lq)
+
+        # take subset for SIR
         if self.sir:
-            idx = self.getSirIndices(is_results['weights'])
+            idx = self.getSirIndices(proposal.is_results['weights'])
             proposal.subset(idx)
+            proposal.is_results = {}
         return proposal
 
     def getImportanceWeights(
@@ -91,7 +95,7 @@ class ImportanceSampler:
     ) -> dict[str, torch.Tensor]:
         out = {}
         log_w = log_likelihood + log_prior - log_q
-    
+
         # regularize
         if self.pareto:
             if self.constrain:
@@ -119,7 +123,7 @@ class ImportanceSampler:
         """Use inverse method to get {n_sir} coupled draws from w. Return the indices of said draws."""
         n_sir = self.n_sir
         b, s = w.shape
-        
+
         # get
         cdf = torch.cumsum(w, dim=-1)
 
