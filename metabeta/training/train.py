@@ -41,7 +41,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--compile', action='store_true', help='compile model (default = False)')
     parser.add_argument('--lr', type=float, default=1e-3, help='optimizer learning rate (default = 1e-3)')
     parser.add_argument('--max_grad_norm', type=float, default=1.0, help='clip grad norm to this value (default = 1.0)')
-
+    parser.add_argument('--backward', action='store_false', help='use backward KL loss instead of forward KL loss (default = False)')
+    
     # data
     parser.add_argument('-d', '--d_tag', type=str, default='toy', help='name of data config file')
     parser.add_argument('--bs', type=int, default=32, help='number of regression datasets per training minibatch (default = 32)')
@@ -55,7 +56,7 @@ def setup() -> argparse.Namespace:
     # evaluation
     parser.add_argument('--rescale', action='store_false', help='use original scale of y for evaluation (default = True)')
     parser.add_argument('--importance', action='store_true', help='use importance sampling before evaluation (default = False)')
-    parser.add_argument('--sir', action='store_false', help='use sampling importance resampling before evaluation (default = False)')
+    parser.add_argument('--sir', action='store_true', help='use sampling importance resampling before evaluation (default = False)')
     parser.add_argument('--sir_iter', type=int, default=8, help='number of SIR iterations (default = 10)')
     parser.add_argument('--plot', action='store_false', help='plot evaluation results (default = True)')
 
@@ -107,12 +108,12 @@ class Trainer:
         # init data, model and optimizer
         self._initData()
         self._initModel()
-        
+
         # check IS sizes
         if self.cfg.sir:
             assert self.cfg.n_samples % self.cfg.sir_iter == 0, \
                 'number of samples must be divisible by number of SIR iterations'
-        
+
         # checkpoint dir
         self.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
         self.run_name = runName(vars(self.cfg))
@@ -250,6 +251,7 @@ size [mb]:  {self.model.n_params * (p / 8.0) * 1e-6:.3f}
 seed:       {self.cfg.seed}
 device:     {self.cfg.device}
 compiled:   {self.cfg.compile}
+KL loss:    {'backward' if self.cfg.backward else 'forward'}
 lr:         {self.cfg.lr}
 batch size: {self.cfg.bs}
 ===================="""
