@@ -274,12 +274,8 @@ batch size: {self.cfg.bs}
         self.optimizer.train()
         self.optimizer.zero_grad(set_to_none=True)
         for i, batch in enumerate(iterator):
-            # get loss
             batch = toDevice(batch, self.device)
-            loss = self.model.forward(batch)
-            loss = loss['total'].mean()
-
-            # calculate accumulated gradient with clipped norm
+            loss = self.loss(batch)
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), self.cfg.max_grad_norm
@@ -305,8 +301,7 @@ batch size: {self.cfg.bs}
         self.optimizer.eval()
         for i, batch in enumerate(iterator):
             batch = toDevice(batch, self.device)
-            loss = self.model.forward(batch)
-            loss = loss['total'].mean()
+            loss = self.loss(batch)
             running_sum += loss.item()
             loss_valid = running_sum / (i + 1)
             iterator.set_postfix_str(f'Loss: {loss_valid:.3f}')
@@ -328,9 +323,7 @@ batch size: {self.cfg.bs}
 
         # evaluation summary
         print(dependentSummary(proposal, batch))
-        print(flatSummary(
-            proposal, batch, tpd=tpd, eff=proposal.mean_efficiency,
-        ))
+        print(flatSummary(proposal, batch, tpd=tpd))
         if cfg.plot:
             recoveryPlot(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
 
