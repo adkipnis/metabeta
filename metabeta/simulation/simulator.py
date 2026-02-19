@@ -17,10 +17,10 @@ def simulate(
     sigma_eps = parameters['sigma_eps']
     q = rfx.shape[1]
 
-    # unpack observations
-    X = observations['X']   # assumed to be standardized
-    Z = X[:, :q]
-    groups = observations['groups']
+    # unpack (standardized) observations
+    X = observations['X']   # (n, d)
+    Z = X[:, :q]   # (n, q)
+    groups = observations['groups']   # (n, )
     n = len(X)
 
     # generate noise
@@ -28,7 +28,8 @@ def simulate(
     eps = standardize(eps, axis=0) * sigma_eps
 
     # outcome
-    y = X @ ffx + (Z * rfx[groups]).sum(-1) + eps
+    rfx_ext = rfx[groups]   # (n, q)
+    y = X @ ffx + (Z * rfx_ext).sum(-1) + eps   # (n, )
     return y
 
 
