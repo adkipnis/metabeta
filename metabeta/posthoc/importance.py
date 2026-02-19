@@ -1,9 +1,14 @@
-import math
 import arviz as az
 import torch
-from torch import distributions as D
 from metabeta.utils.evaluation import Proposal
 from metabeta.utils.regularization import dampen
+from metabeta.utils.probabilities import (
+    logPriorFfx,
+    logPriorSigmaRfx,
+    logPriorSigmaEps,
+    logPriorRfx,
+    logLikelihoodCond,
+)
 
 
 class ImportanceSampler:
@@ -44,51 +49,7 @@ class ImportanceSampler:
         self.mask_m = data['mask_m'].unsqueeze(-1)   # (b, m, 1)
         self.mask_n = data['mask_n'].unsqueeze(-1)   # (b, m, n, 1)
 
-    def logPriorFfx(self, ffx: torch.Tensor) -> torch.Tensor:
-        # ffx (b, s, d)
-        dist = D.Normal(self.nu_ffx, self.tau_ffx)
-        lp = dist.log_prob(ffx)
-        lp = (lp * self.mask_d).sum(-1)
-        return lp   # (b, s)
-
-    def logPriorSigmaRfx(self, sigma_rfx: torch.Tensor) -> torch.Tensor:
-        # sigma_rfx (b, s, q)
-        dist = D.HalfNormal(scale=self.tau_rfx)
-        lp = dist.log_prob(sigma_rfx)
-        lp = (lp * self.mask_q).sum(-1)
-        return lp   # (b, s)
-
-    def logPriorSigmaEps(self, sigma_eps: torch.Tensor) -> torch.Tensor:
-        # sigma_eps (b, s)
-        dist = D.StudentT(df=4, loc=0, scale=self.tau_eps)
-        lp = dist.log_prob(sigma_eps) + math.log(2.0)
-        return lp   # (b, s)
-
-    def logPriorRfx(self, rfx: torch.Tensor, sigma_rfx: torch.Tensor) -> torch.Tensor:
-        # rfx (b, m, s, q), sigma_rfx (b, s, q)
-        scale = sigma_rfx.unsqueeze(1) + self.eps
-        dist = D.Normal(loc=0, scale=scale)
-        lp = dist.log_prob(rfx)
-        lp = (lp * self.mask_mq).sum(1)
-        lp = lp.sum(-1)
-        return lp   # (b, s)
-
-    def logLikelihoodCond(
-        self,
-        ffx: torch.Tensor,  # (b, s, d)
-        sigma_eps: torch.Tensor,  # (b, s)
-        rfx: torch.Tensor,  # (b, m, s, q)
-    ) -> torch.Tensor:
-        mu_g = torch.einsum('bmnd,bsd->bmns', self.X, ffx)
-        mu_l = torch.einsum('bmnq,bmsq->bmns', self.Z, rfx)
-        loc = mu_g + mu_l
-        scale = sigma_eps.unsqueeze(1).unsqueeze(1) + 1e-12
-        dist = D.Normal(loc=loc, scale=scale)
-        ll = dist.log_prob(self.y)
-        lp = (ll * self.mask_n).sum(dim=(1, 2))
-        return lp   # (b, s)
-
-    def __call__(self, proposal: Proposal) -> Proposal:
+    def getTerms(self, proposal: Proposal) -> tuple[torch.Tensor, ...]:
         # unpack parameters
         ffx, sigma_rfx, sigma_eps, rfx = proposal.parameters
 
@@ -97,18 +58,21 @@ class ImportanceSampler:
         lq = log_q_g + (log_q_l * self.mask_m).sum(1)
 
         # log priors
-        lp_ffx = self.logPriorFfx(ffx)
-        lp_sigma_eps = self.logPriorSigmaEps(sigma_eps)
+        lp_ffx = logPriorFfx(ffx, self.nu_ffx, self.tau_ffx, self.mask_d)
+        lp_sigma_eps = logPriorSigmaEps(sigma_eps, self.tau_eps)
         lp = lp_ffx + lp_sigma_eps
 
         # regularize Sigma(RFX)
         if self.full:
-            lp_sigma_rfx = self.logPriorSigmaRfx(sigma_rfx)
-            lp_rfx = self.logPriorRfx(rfx, sigma_rfx)
+            lp_sigma_rfx = logPriorSigmaRfx(sigma_rfx, self.tau_rfx, self.mask_q)
+            lp_rfx = logPriorRfx(rfx, sigma_rfx, self.mask_mq)
             lp = lp + lp_sigma_rfx + lp_rfx
 
         # conditional log likelihood
-        ll = self.logLikelihoodCond(ffx, sigma_eps, rfx)
+        ll = logLikelihoodCond(
+            ffx, sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n)
+        return ll, lp, lq
+
 
         # importance sampling
         is_results = self.getImportanceWeights(ll, lp, lq)
