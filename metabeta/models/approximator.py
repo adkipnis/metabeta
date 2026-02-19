@@ -168,13 +168,15 @@ class Approximator(nn.Module):
 
         # global postprocessing
         if 'global' in proposed:
-            samples = proposed['global']['samples'].clone()
-            sigmas = samples[..., d:]
+            samples = proposed['global']['samples']
+            sigmas = samples[..., d:].clone()
             # Jacobian for sigma dims: d softplus / dx = sigmoid(x)
             log_det = torch.where(sigmas != 0, F.logsigmoid(sigmas), torch.zeros_like(sigmas))
-            proposed['global']['log_prob'] -= log_det.sum(dim=-1)
-            samples[..., d:] = maskedSoftplus(sigmas)
-            proposed['global']['samples'] = samples
+            log_prob_g = proposed['global']['log_prob'] - log_det.sum(dim=-1)
+            proposed['global']['log_prob'] = log_prob_g
+            sigmas_pos = maskedSoftplus(sigmas)
+            samples_out = torch.cat([samples[..., :d], sigmas_pos], dim=-1)
+            proposed['global']['samples'] = samples_out
         return Proposal(proposed)
 
     def _summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
