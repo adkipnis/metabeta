@@ -186,7 +186,7 @@ class CouplingFlow(nn.Module):
             mask = flow._forwardMask(mask)   # type: ignore
         return mask
 
-    def logProb(
+    def _logProb(
         self,
         z: torch.Tensor,
         log_det: torch.Tensor,
@@ -198,14 +198,14 @@ class CouplingFlow(nn.Module):
             log_prob *= mask
         return log_prob.sum(dim=-1) + log_det
 
-    def loss(
+    def logProb(
         self,
         x: torch.Tensor,
         context: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """forward KL Loss (aka NLL)"""
-        return -self.logProb(*self.forward(x, context, mask))
+        """used for forward KL Loss (aka NLL)"""
+        return self._logProb(*self.forward(x, context, mask))
 
     def sample(
         self,
@@ -243,7 +243,7 @@ class CouplingFlow(nn.Module):
             x, log_det, _ = self.inverse(z, context, mask_z)
 
             # get probability in x-space
-            log_prob = self.logProb(z, log_det, mask_z)
+            log_prob = self._logProb(z, log_det, mask_z)
 
         # make use of mask to skip empty dims
         else:
@@ -264,6 +264,6 @@ class CouplingFlow(nn.Module):
             x[non_empty], log_det[non_empty], _ = self.inverse(z, context, mask_z)
 
             # get probability in x-space
-            log_prob[non_empty] = self.logProb(z, log_det[non_empty], mask_z)
+            log_prob[non_empty] = self._logProb(z, log_det[non_empty], mask_z)
 
         return x, log_prob
