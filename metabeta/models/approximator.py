@@ -213,8 +213,7 @@ class Approximator(nn.Module):
         log_prob['total'] = log_prob['global'] + log_prob['local'].sum(-1) / data['m']
         return log_prob
 
-    @torch.no_grad()
-    def estimate(self, data: dict[str, torch.Tensor], n_samples: int = 100) -> Proposal:
+    def backward(self, data: dict[str, torch.Tensor], n_samples: int = 1) -> Proposal:
         """inference method: sample and apply conditional backward pass"""
         assert n_samples > 0, 'n_samples must be positive'
         proposed = {}
@@ -241,6 +240,10 @@ class Approximator(nn.Module):
         # postprocess samples
         proposal = self._postprocess(proposed)
         return proposal
+
+    @torch.inference_mode()
+    def estimate(self, data: dict[str, torch.Tensor], n_samples: int = 1) -> Proposal:
+        return self.backward(data, n_samples)
 
 
 # =============================================================================
