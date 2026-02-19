@@ -8,7 +8,6 @@ from metabeta.utils.regularization import maskedInverseSoftplus, maskedSoftplus
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.evaluation import Proposal
 
-
 class Approximator(nn.Module):
     def __init__(self, cfg: ApproximatorConfig):
         super().__init__()
@@ -189,7 +188,7 @@ class Approximator(nn.Module):
 
     def forward(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """training method: learn conditional forward pass"""
-        loss = {}
+        log_prob = {}
 
         # summaries
         summary_g, summary_l = self._summarize(data)
@@ -198,7 +197,7 @@ class Approximator(nn.Module):
         targets_g = self._targets(data, local=False)
         mask_g = self._masks(data, local=False)
         targets_g = self._preprocess(targets_g, local=False)
-        loss['global'] = self.posterior_g.loss(  # type: ignore
+        log_prob['global'] = self.posterior_g.logProb(  # type: ignore
             targets_g, context=summary_g, mask=mask_g
         )
 
@@ -207,13 +206,12 @@ class Approximator(nn.Module):
         targets_l = self._preprocess(targets_l, local=True)
         mask_l = self._masks(data, local=True)
         context_l = self._localContext(summary_l, targets_g)
-        loss['local'] = self.posterior_l.loss(  # type: ignore
+        log_prob['local'] = self.posterior_l.logProb(  # type: ignore
             targets_l, context=context_l, mask=mask_l
         )
 
-        # total loss
-        loss['total'] = loss['global'] + loss['local'].sum(-1) / data['m']
-        return loss
+        log_prob['total'] = log_prob['global'] + log_prob['local'].sum(-1) / data['m']
+        return log_prob
 
     @torch.no_grad()
     def estimate(self, data: dict[str, torch.Tensor], n_samples: int = 100) -> Proposal:
