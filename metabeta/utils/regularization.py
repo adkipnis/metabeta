@@ -1,5 +1,8 @@
 import torch
+from torch.nn import functional as F
 
+THRESHOLD = 20.0
+EPS = 1e-12
 
 # exp/log
 def maskedExp(x: torch.Tensor) -> torch.Tensor:
@@ -11,20 +14,26 @@ def maskedLog(x: torch.Tensor) -> torch.Tensor:
 
 
 # softplus
-def softplus(x: torch.Tensor, limit: float = 20.0, eps: float = 1e-6) -> torch.Tensor:
-    return torch.where(x > limit, x, torch.log(torch.exp(x + eps) + 1))
+def softplus(x: torch.Tensor) -> torch.Tensor:
+    return F.softplus(x, beta=1.0, threshold=THRESHOLD)
 
 
-def inverseSoftplus(x: torch.Tensor, limit: float = 20.0, eps: float = 1e-6) -> torch.Tensor:
-    return torch.where(x > limit, x, torch.log(torch.exp(x) - 1) - eps)
+def inverseSoftplus(x: torch.Tensor) -> torch.Tensor:
+    return torch.where(
+        x > THRESHOLD,
+        x,
+        torch.expm1(x).clamp_min(EPS).log(),
+    )
 
 
 def maskedSoftplus(x: torch.Tensor) -> torch.Tensor:
-    return torch.where(x != 0, softplus(x), 0)
+    mask = x.ne(0).to(x.dtype)
+    return softplus(x) * mask
 
 
 def maskedInverseSoftplus(x: torch.Tensor) -> torch.Tensor:
-    return torch.where(x != 0, inverseSoftplus(x), 0)
+    mask = x.ne(0).to(x.device)
+    return inverseSoftplus(x) * mask
 
 
 # crunching
