@@ -256,6 +256,16 @@ lr:         {self.cfg.lr}
 batch size: {self.cfg.bs}
 ===================="""
 
+    def loss(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        if not self.cfg.backward:
+            log_prob = self.model.forward(batch)
+            forward_kl = -log_prob['total'].mean()
+            return forward_kl
+        proposal = self.model.backward(batch, n_samples=64)
+        ll, lp, lq = ImportanceSampler(batch).getTerms(proposal)
+        backward_kl = (lq - lp - ll).mean()
+        return backward_kl
+
     def train(self, epoch: int) -> float:
         dl_train = self._getDataLoader('train', epoch, batch_size=self.cfg.bs)
         iterator = tqdm(dl_train, desc=f'Epoch {epoch:02d}/{self.cfg.max_epochs:02d} [T]')
