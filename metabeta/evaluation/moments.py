@@ -72,7 +72,7 @@ def getRMSE(
     return out
 
 
-def sampleCorrelation(
+def getCorrelation(
     locs: dict[str, torch.Tensor],
     data: dict[str, torch.Tensor],
 ) -> dict[str, float]:
