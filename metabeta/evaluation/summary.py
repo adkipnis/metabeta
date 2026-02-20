@@ -5,7 +5,7 @@ from tabulate import tabulate
 import numpy as np
 
 from metabeta.utils.evaluation import Proposal, getNames, joinSigmas
-from metabeta.evaluation.moments import (
+from metabeta.evaluation.point import (
     getPointEstimates,
     getRMSE,
     getCorrelation,
