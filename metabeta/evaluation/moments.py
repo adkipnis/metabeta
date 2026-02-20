@@ -48,20 +48,27 @@ def getPointEstimates(proposal: Proposal, loc_type: str) -> dict[str, torch.Tens
 def getRMSE(
     locs: dict[str, torch.Tensor],
     data: dict[str, torch.Tensor],
-) -> dict[str, float]:
+    normalize: bool = True,
+    to_float: bool = True,
+) -> dict[str, float | torch.Tensor]:
     out = {}
     masks = getMasks(data)
     for key, est in locs.items():
         gt = data[key]   # ground truth
         mask = masks[key]
         if mask is not None:
-            se = (gt - est).pow(2)
-            se = se * mask
-            n = mask.sum().clamp_min(1.0)
-            rmse = torch.sqrt(se.sum() / n).item()
+            se = (gt - est).square()
+            mse = maskedMean(se, mask)
+            rmse = torch.sqrt(mse)
+            if normalize:
+                rmse = rmse / maskedStd(gt, mask)
         else:
             rmse = torch.sqrt(F.mse_loss(gt, est))
-        out[key] = float(rmse)
+            if normalize:
+                rmse = rmse / gt.std(unbiased=False)
+        if to_float:
+            rmse = rmse.item()
+        out[key] = rmse
     return out
 
 
