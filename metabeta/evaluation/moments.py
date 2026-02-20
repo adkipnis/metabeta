@@ -7,7 +7,20 @@ import numpy as np
 from metabeta.utils.evaluation import Proposal, getMasks, weightedQuantile
 
 
-def getLocation(
+def maskedMean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    n = mask.sum().clamp_min(1.0)
+    return (x * mask).sum() / n
+
+
+def maskedStd(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    n = mask.sum().clamp_min(1.0)
+    mean = (x * mask).sum() / n
+    square_diff = (x - mean).square() * mask
+    var = square_diff.sum() / n
+    return torch.sqrt(var)
+
+
+def pointEstimate(
     x: torch.Tensor, w: torch.Tensor | None = None, loc_type: str = 'mean') -> torch.Tensor:
     if loc_type == 'mean':
         if w is None:
@@ -24,15 +37,15 @@ def getLocation(
         raise NotImplementedError(f'location type {loc_type} not implemented')
 
 
-def sampleLoc(proposal: Proposal, loc_type: str) -> dict[str, torch.Tensor]:
+def getPointEstimates(proposal: Proposal, loc_type: str) -> dict[str, torch.Tensor]:
     w = proposal.weights
-    global_loc = getLocation(proposal.samples_g, w, loc_type)
+    global_loc = pointEstimate(proposal.samples_g, w, loc_type)
     out = proposal.partition(global_loc)
-    out['rfx'] = getLocation(proposal.samples_l, w, loc_type)
+    out['rfx'] = pointEstimate(proposal.samples_l, w, loc_type)
     return out
 
 
-def sampleRMSE(
+def getRMSE(
     locs: dict[str, torch.Tensor],
     data: dict[str, torch.Tensor],
 ) -> dict[str, float]:
