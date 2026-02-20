@@ -9,7 +9,6 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 import schedulefree
 
-from metabeta.evaluation.intervals import expectedCoverageError
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.io import setDevice, datasetFilename, runName
 from metabeta.utils.sampling import setSeed
@@ -20,7 +19,7 @@ from metabeta.utils.evaluation import Proposal, joinProposals
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.evaluation.summary import flatSummary, dependentSummary, recoveryPlot
-
+    
 logger = logging.getLogger('train.py')
 
 
@@ -42,7 +41,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--compile', action='store_true', help='compile model (default = False)')
     parser.add_argument('--lr', type=float, default=1e-3, help='optimizer learning rate (default = 1e-3)')
     parser.add_argument('--max_grad_norm', type=float, default=1.0, help='clip grad norm to this value (default = 1.0)')
-    parser.add_argument('--loss_type', type=str, default='forward+', help='KL loss type [forward, backward, mixed] (default = mixed)')
+    parser.add_argument('--loss_type', type=str, default='forward', help='KL loss type [forward, backward, mixed] (default = mixed)')
 
     # data
     parser.add_argument('-d', '--d_tag', type=str, default='toy', help='name of data config file')
@@ -269,7 +268,7 @@ batch size: {self.cfg.bs}
         #  init group variables
         m = batch['m'] # number of groups
         mask = batch['mask_m'] # group mask
-        if mode in ['backward', 'coverage']:
+        if mode in ['backward', ]:
             m = m.unsqueeze(-1)
             mask = mask.unsqueeze(-1)
 
@@ -294,25 +293,11 @@ batch size: {self.cfg.bs}
             ll, lp = ImportanceSampler(batch).unnormalizedPosterior(proposal)
             return (lq - lp - ll).mean()
 
-        # coverage loss
-        elif mode == 'coverage':
-            proposal = self.model.backward(batch, summaries, n_samples=32)
-            ece_dict = expectedCoverageError(proposal, batch)
-            ece = 100.0 * sum(ece_dict.values()) / len(ece_dict)
-            esce = ece.square()
-            return esce
-
         # mix KL loss
         elif mode == 'mixed':
             fkl = self.loss(batch, summaries, mode='forward')
             bkl = self.loss(batch, summaries, mode='backward')
             return fkl + 0.001 * bkl
-
-        # forward KL loss + regularized
-        elif mode == 'forward+':
-            fkl = self.loss(batch, summaries, mode='forward')
-            esce = self.loss(batch, summaries, mode='coverage')
-            return fkl + 0.1 * esce
 
         else:
             raise ValueError(f'unknown loss type: {mode}')

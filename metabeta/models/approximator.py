@@ -227,7 +227,7 @@ class Approximator(nn.Module):
         """inference method: sample and apply conditional backward pass"""
         assert n_samples > 0, 'n_samples must be positive'
         proposed = {}
-        
+
         # summaries
         if summaries is None:
             summary_g, summary_l = self.summarize(data)
