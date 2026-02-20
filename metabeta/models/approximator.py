@@ -178,7 +178,7 @@ class Approximator(nn.Module):
             proposed['global']['samples'] = samples_out
         return Proposal(proposed)
 
-    def _summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+    def summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)
         summary_l = self.summarizer_l(inputs, mask=data['mask_n'])
         summary_l = self._addMetadata(summary_l, data, local=True)
@@ -186,12 +186,19 @@ class Approximator(nn.Module):
         summary_g = self._addMetadata(summary_g, data, local=False)
         return summary_g, summary_l
 
-    def forward(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def forward(
+            self,
+            data: dict[str, torch.Tensor],
+            summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
+        ) -> dict[str, torch.Tensor]:
         """training method: learn conditional forward pass"""
         log_prob = {}
 
         # summaries
-        summary_g, summary_l = self._summarize(data)
+        if summaries is None:
+            summary_g, summary_l = self.summarize(data)
+        else:
+            summary_g, summary_l = summaries
 
         # global posterior
         targets_g = self._targets(data, local=False)
@@ -212,12 +219,21 @@ class Approximator(nn.Module):
 
         log_prob['total'] = log_prob['global'] + log_prob['local'].sum(-1) / data['m']
         return log_prob
-
-    def backward(self, data: dict[str, torch.Tensor], n_samples: int = 1) -> Proposal:
+    def backward(
+            self,
+            data: dict[str, torch.Tensor],
+            summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
+            n_samples: int = 1,
+        ) -> Proposal:
         """inference method: sample and apply conditional backward pass"""
         assert n_samples > 0, 'n_samples must be positive'
         proposed = {}
-        summary_g, summary_l = self._summarize(data)
+        
+        # summaries
+        if summaries is None:
+            summary_g, summary_l = self.summarize(data)
+        else:
+            summary_g, summary_l = summaries
 
         # global posterior
         mask_g = self._masks(data, local=False)
@@ -242,8 +258,8 @@ class Approximator(nn.Module):
         return proposal
 
     @torch.inference_mode()
-    def estimate(self, data: dict[str, torch.Tensor], n_samples: int = 1) -> Proposal:
-        return self.backward(data, n_samples)
+    def estimate(self, data, summaries=None, n_samples=1) -> Proposal:
+        return self.backward(data, summaries=summaries, n_samples=n_samples)
 
 
 # =============================================================================
