@@ -21,7 +21,8 @@ def maskedStd(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 
 
 def pointEstimate(
-    x: torch.Tensor, w: torch.Tensor | None = None, method: str = 'mean') -> torch.Tensor:
+    x: torch.Tensor, w: torch.Tensor | None = None, method: str = 'mean'
+) -> torch.Tensor:
     if method == 'mean':
         if w is None:
             return torch.mean(x, dim=-2)
@@ -37,11 +38,24 @@ def pointEstimate(
         raise NotImplementedError(f'method {method} not implemented')
 
 
-    w = proposal.weights
-    global_loc = pointEstimate(proposal.samples_g, w, loc_type)
-    out = proposal.partition(global_loc)
-    out['rfx'] = pointEstimate(proposal.samples_l, w, loc_type)
+def getMAP(x: torch.Tensor, log_prob: torch.Tensor) -> torch.Tensor:
+    """sample-based maximum a-posteriori estimate"""
+    idx = log_prob.argmax(-1, keepdim=True)
+    shape = (*idx.shape, x.shape[-1])
+    idx_ext = idx.unsqueeze(-1).expand(shape)
+    return x.gather(dim=-2, index=idx_ext).squeeze(-2)
+
+
 def getPointEstimates(proposal: Proposal, method: str) -> dict[str, torch.Tensor]:
+    if method != 'map':
+        w = proposal.weights
+        global_est = pointEstimate(proposal.samples_g, w, method)
+        out = proposal.partition(global_est)
+        out['rfx'] = pointEstimate(proposal.samples_l, w, method)
+    else:
+        global_est = getMAP(proposal.samples_g, proposal.log_prob_g)
+        out = proposal.partition(global_est)
+        out['rfx'] = getMAP(proposal.samples_l, proposal.log_prob_l)
     return out
 
 
