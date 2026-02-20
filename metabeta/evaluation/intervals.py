@@ -20,10 +20,11 @@ def getQuantiles(
     return quantiles   # (b, ..., 2, d)
 
 
-def sampleCredibleInterval(
+def getCredibleIntervals(
     proposal: Proposal,
     alpha: float,
 ) -> dict[str, torch.Tensor]:
+    # get equal-tailed credible interval from proposal posterior
     out = {}
     roots = (alpha / 2, 1 - alpha / 2)
     w = proposal.weights
@@ -38,6 +39,7 @@ def coverage(
     gt: torch.Tensor,  # ground truth
     mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
+    # approximate the posterior coverage of the ground truth over batch
     above = ci[..., 0, :] - EPS <= gt
     below = gt <= ci[..., 1, :] + EPS
     inside = above & below
@@ -48,47 +50,21 @@ def coverage(
     return inside.float().mean(0)
 
 
-def softCoverage(
-    ci: torch.Tensor,  # credible interval
-    gt: torch.Tensor,  # ground truth
-    mask: torch.Tensor | None = None,
-    tau: float = 0.01, # softness parameter
-) -> torch.Tensor:
-    # differentiable version of coverage()
-    if tau <= 0:
-        raise ValueError(f'tau must be > 0, got {tau}')
-    lo = ci[..., 0, :] - EPS
-    hi = ci[..., 1, :] + EPS
-    above = torch.sigmoid((gt - lo) / tau)
-    below = torch.sigmoid((hi - gt) / tau)
-    inside = above * below
-    if mask is not None:
-        inside = inside * mask
-        n = mask.sum(0).clamp_min(1.0)
-        return inside.sum(0) / n
-    return inside.mean(0)
-
-
-def sampleCoverageError(
+def getCoverages(
     ci_dict: dict[str, torch.Tensor],
     data: dict[str, torch.Tensor],
-    nominal: float,
 ) -> dict[str, torch.Tensor]:
     out = {}
     masks = getMasks(data)
-    coverage_fn = coverage
-    if next(iter(ci_dict.values())).requires_grad:
-        coverage_fn = softCoverage
     for key, ci in ci_dict.items():
         gt = data[key]
         mask = masks[key]
         if key == 'sigma_eps':
             gt = gt.unsqueeze(-1)
             ci = ci.unsqueeze(-1)
-        out[key] = coverage_fn(ci, gt, mask) - nominal
+        out[key] = coverage(ci, gt, mask)
         if key == 'rfx':   # average over groups
             out[key] = out[key].mean(0)
-        out[key] = out[key].mean(0) # TODO: incorporate mask?
     return out
 
 
