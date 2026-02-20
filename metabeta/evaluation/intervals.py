@@ -68,18 +68,45 @@ def getCoverages(
     return out
 
 
+def coverageError(
+    coverages: dict[str, torch.Tensor],
+    nominal: torch.Tensor,
+    log_ratio: bool = True,
+) -> dict[str, torch.Tensor]:
+    """get coverage error for each parameter type"""
+    # log(actual / nominal), sensitive to scale
+    if log_ratio:
+        return {k: cvrg.log() - nominal.log() for k, cvrg in coverages.items()}
+    # plain coverage error, insensitive to scale
+    return {k: cvrg - nominal for k, cvrg in coverages.items()}
+
+
+def coverageErrors(
+    proposal: Proposal,
+    data: dict[str, torch.Tensor],
+    log_ratio: bool = True,
+    alphas: list[float] = ALPHAS,
+) -> dict[str, dict[str, torch.Tensor]]:
+    ces = {}
+    for alpha in alphas:
+        cred_ints = getCredibleIntervals(proposal, alpha=alpha)
+        coverages = getCoverages(cred_ints, data)
+        nominal = torch.tensor(1 - alpha)
+        ces[alpha] = coverageError(coverages, nominal, log_ratio=log_ratio)
+    return ces
+
+
 def expectedCoverageError(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
-    alphas: list[float] = [0.02, 0.05, 0.10, 0.20, 0.32, 0.50],
+    log_ratio: bool = True,
+    alphas: list[float] = ALPHAS,
 ) -> dict[str, torch.Tensor]:
-    # get coverage error for each alpha level
-    ce_dict = {}
-    for alpha in alphas:
-        ci = sampleCredibleInterval(proposal, alpha=alpha)
-        ce_dict[alpha] = sampleCoverageError(ci, data, nominal=(1 - alpha))
-
-    # average over alphas
-    keys = next(iter(ce_dict.values())).keys()
-    out = {k: sum(d[k] for d in ce_dict.values()) / len(ce_dict) for k in keys}
-    return out
+    """average coverage error over alpha levels"""
+    ces = coverageErrors(proposal, data, log_ratio=log_ratio, alphas=alphas)
+    ece = {}
+    param_keys = next(iter(ces.values())).keys()
+    for p in param_keys:
+        errors = torch.cat([v[p] for v in ces.values()])
+        ece[p] = errors.mean()
+    return ece
