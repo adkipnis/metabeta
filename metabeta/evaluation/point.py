@@ -49,8 +49,7 @@ def getRMSE(
     locs: dict[str, torch.Tensor],
     data: dict[str, torch.Tensor],
     normalize: bool = True,
-    to_float: bool = True,
-) -> dict[str, float | torch.Tensor]:
+) -> dict[str, float]:
     out = {}
     masks = getMasks(data)
     for key, est in locs.items():
@@ -66,9 +65,7 @@ def getRMSE(
             rmse = torch.sqrt(F.mse_loss(gt, est))
             if normalize:
                 rmse = rmse / gt.std(unbiased=False)
-        if to_float:
-            rmse = rmse.item()
-        out[key] = rmse
+        out[key] = rmse.item()
     return out
 
 

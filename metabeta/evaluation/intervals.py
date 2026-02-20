@@ -101,12 +101,12 @@ def expectedCoverageError(
     data: dict[str, torch.Tensor],
     log_ratio: bool = True,
     alphas: list[float] = ALPHAS,
-) -> dict[str, torch.Tensor]:
+) -> dict[str, float]:
     """average coverage error over alpha levels"""
     ces = coverageErrors(proposal, data, log_ratio=log_ratio, alphas=alphas)
     ece = {}
     param_keys = next(iter(ces.values())).keys()
     for p in param_keys:
         errors = torch.cat([v[p] for v in ces.values()])
-        ece[p] = errors.mean()
+        ece[p] = errors.mean().item()
     return ece
