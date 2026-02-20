@@ -37,11 +37,11 @@ def pointEstimate(
         raise NotImplementedError(f'method {method} not implemented')
 
 
-def getPointEstimates(proposal: Proposal, loc_type: str) -> dict[str, torch.Tensor]:
     w = proposal.weights
     global_loc = pointEstimate(proposal.samples_g, w, loc_type)
     out = proposal.partition(global_loc)
     out['rfx'] = pointEstimate(proposal.samples_l, w, loc_type)
+def getPointEstimates(proposal: Proposal, method: str) -> dict[str, torch.Tensor]:
     return out
 
 
