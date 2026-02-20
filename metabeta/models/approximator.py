@@ -192,7 +192,7 @@ class Approximator(nn.Module):
             summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
         ) -> dict[str, torch.Tensor]:
         """training method: learn conditional forward pass"""
-        log_prob = {}
+        log_probs = {}
 
         # summaries
         if summaries is None:
@@ -204,7 +204,7 @@ class Approximator(nn.Module):
         targets_g = self._targets(data, local=False)
         mask_g = self._masks(data, local=False)
         targets_g = self._preprocess(targets_g, local=False)
-        log_prob['global'] = self.posterior_g.logProb(  # type: ignore
+        log_probs['global'] = self.posterior_g.logProb(  # type: ignore
             targets_g, context=summary_g, mask=mask_g
         )
 
@@ -213,12 +213,11 @@ class Approximator(nn.Module):
         targets_l = self._preprocess(targets_l, local=True)
         mask_l = self._masks(data, local=True)
         context_l = self._localContext(summary_l, targets_g)
-        log_prob['local'] = self.posterior_l.logProb(  # type: ignore
+        log_probs['local'] = self.posterior_l.logProb(  # type: ignore
             targets_l, context=context_l, mask=mask_l
         )
+        return log_probs
 
-        log_prob['total'] = log_prob['global'] + log_prob['local'].sum(-1) / data['m']
-        return log_prob
     def backward(
             self,
             data: dict[str, torch.Tensor],
