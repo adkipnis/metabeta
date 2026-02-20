@@ -1,4 +1,3 @@
-from typing import Literal
 from pathlib import Path
 import torch
 from torch.nn import functional as F
@@ -7,9 +6,9 @@ import numpy as np
 
 from metabeta.utils.evaluation import Proposal, getNames, joinSigmas
 from metabeta.evaluation.moments import (
-    sampleLoc,
-    sampleRMSE,
-    sampleCorrelation,
+    getPointEstimates,
+    getRMSE,
+    getCorrelation,
 )
 from metabeta.evaluation.intervals import expectedCoverageError
 from metabeta.evaluation.predictive import (
@@ -20,7 +19,7 @@ from metabeta.plot import plot
 from matplotlib import pyplot as plt
 
 
-LOC_TYPE = 'mean'
+EST_TYPE = 'mean'
 
 def dictMean(data: dict[str, float]) -> float:
     values = list(data.values())
@@ -41,43 +40,43 @@ def recoveryPlot(
 
     # prepare stats
     stats = {}
-    locs = sampleLoc(proposal, LOC_TYPE)
-    stats['corr'] = sampleCorrelation(locs, data)
-    stats['rmse'] = sampleRMSE(locs, data)
+    est = getPointEstimates(proposal, EST_TYPE)
+    stats['corr'] = getCorrelation(est, data)
+    stats['nrmse'] = getRMSE(est, data, normalize=True)
 
     # fixed effects
     d = data['ffx'].shape[-1]
     targets.append(data['ffx'])
-    estimates.append(locs['ffx'])
+    estimates.append(est['ffx'])
     masks.append(data['mask_d'])
     names.append(getNames('ffx', d))
     metrics.append(
         {
             'r': stats['corr']['ffx'],
-            'RMSE': stats['rmse']['ffx'],
+            'NRMSE': stats['nrmse']['ffx'],
         }
     )
 
     # variance parameters
     q = data['sigma_rfx'].shape[-1]
     targets.append(joinSigmas(data))
-    estimates.append(joinSigmas(locs))
+    estimates.append(joinSigmas(est))
     masks.append(F.pad(data['mask_q'], (0, 1), value=True))
     names.append(getNames('sigmas', q))
-    rmse = q / (q + 1) * stats['rmse']['sigma_rfx'] + 1 / (q + 1) * stats['rmse']['sigma_eps']
+    nrmse = q / (q + 1) * stats['nrmse']['sigma_rfx'] + 1 / (q + 1) * stats['nrmse']['sigma_eps']
     r = q / (q + 1) * stats['corr']['sigma_rfx'] + 1 / (q + 1) * stats['corr']['sigma_eps']
-    metrics.append({'r': r, 'RMSE': rmse})
+    metrics.append({'r': r, 'NRMSE': nrmse})
 
     # random effects
     targets.append(data['rfx'].view(-1, q))
-    estimates.append(locs['rfx'].view(-1, q))
+    estimates.append(est['rfx'].view(-1, q))
     mask = data['mask_mq']
     masks.append(mask.view(-1, q))
     names.append(getNames('rfx', q))
     metrics.append(
         {
             'r': stats['corr']['rfx'],
-            'RMSE': stats['rmse']['rfx'],
+            'NRMSE': stats['nrmse']['rfx'],
         }
     )
 
@@ -110,22 +109,22 @@ def dependentSummary(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
 ) -> str:
-    # moment-based stats
-    sample_loc = sampleLoc(proposal, LOC_TYPE)
-    rmse = sampleRMSE(sample_loc, data)
-    corr = sampleCorrelation(sample_loc, data)
+    # point-based stats
+    est = getPointEstimates(proposal, EST_TYPE)
+    nrmse = getRMSE(est, data, normalize=True)
+    corr = getCorrelation(est, data)
 
     # inteval-based stats
-    mce = expectedCoverageError(proposal, data)
+    lcr = expectedCoverageError(proposal, data, log_ratio=True)
 
     # print summary
-    return longTable(corr, rmse, mce)
+    return longTable(corr, nrmse, lcr)
 
 
 def longTable(
     corr: dict[str, float],  # Pearson correlation
-    rmse: dict[str, float],  # root mean square error
-    mce: dict[str, float],  # mean coverage error
+    nrmse: dict[str, float],  # normalized root mean square error
+    lcr: dict[str, float],  # log coverage ratio
 ) -> str:
     keys = ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx')
     names = {
@@ -134,11 +133,11 @@ def longTable(
         'sigma_eps': 'Sigma(Eps)',
         'rfx': 'RFX',
     }
-    rows = [[names[k], corr[k], rmse[k], mce[k]] for k in keys]
-    rows += [['Average', dictMean(corr), dictMean(rmse), dictMean(mce)]]
+    rows = [[names[k], corr[k], nrmse[k], lcr[k]] for k in keys]
+    rows += [['Average', dictMean(corr), dictMean(nrmse), dictMean(lcr)]]
     results = tabulate(
         rows,
-        headers=['', 'R', 'RMSE', 'MCE'],
+        headers=['', 'R', 'NRMSE', 'LCR'],
         floatfmt='.3f',
         tablefmt='simple',
     )
