@@ -154,7 +154,11 @@ def joinProposals(proposals: list[Proposal]) -> Proposal:
     return Proposal(proposed)
 
 
-def weightedQuantile(x: torch.Tensor, w: torch.Tensor, q: float | Sequence[float] = 0.5) -> torch.Tensor:
+def weightedQuantile(
+        x: torch.Tensor,
+        w: torch.Tensor,
+        q: float | Sequence[float] | torch.Tensor = 0.5,
+) -> torch.Tensor:
     if not isinstance(q, torch.Tensor):
         q_t = torch.tensor(q, dtype=x.dtype, device=x.device)
     else:
