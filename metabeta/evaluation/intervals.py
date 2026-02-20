@@ -52,7 +52,7 @@ def sampleCoverageError(
     ci_dict: dict[str, torch.Tensor],
     data: dict[str, torch.Tensor],
     nominal: float,
-) -> dict[str, float]:
+) -> dict[str, torch.Tensor]:
     out = {}
     masks = getMasks(data)
     for key, ci in ci_dict.items():
@@ -64,7 +64,7 @@ def sampleCoverageError(
         out[key] = coverage(ci, gt, mask) - nominal
         if key == 'rfx':   # average over groups
             out[key] = out[key].mean(0)
-        out[key] = out[key].mean(0).item()   # TODO: incorporate mask?
+        out[key] = out[key].mean(0) # TODO: incorporate mask?
     return out
 
 
@@ -72,7 +72,7 @@ def expectedCoverageError(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
     alphas: list[float] = [0.02, 0.05, 0.10, 0.20, 0.32, 0.50],
-) -> dict[str, float]:
+) -> dict[str, torch.Tensor]:
     # get coverage error for each alpha level
     ce_dict = {}
     for alpha in alphas:
