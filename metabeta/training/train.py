@@ -368,7 +368,10 @@ batch size: {self.cfg.bs}
 
         # get proposal distribution
         t0 = time.perf_counter()
-        proposal, batch = self._sampleMulti(batch) if self.cfg.sir else self._sampleSingle(batch)
+        if not self.cfg.sir:
+            proposal, batch = self._sampleSingle(batch)
+        else:
+            proposal, batch = self._sampleMulti(batch)            
         t1 = time.perf_counter()
         tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
 
