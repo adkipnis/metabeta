@@ -21,20 +21,20 @@ def maskedStd(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 
 
 def pointEstimate(
-    x: torch.Tensor, w: torch.Tensor | None = None, loc_type: str = 'mean') -> torch.Tensor:
-    if loc_type == 'mean':
+    x: torch.Tensor, w: torch.Tensor | None = None, method: str = 'mean') -> torch.Tensor:
+    if method == 'mean':
         if w is None:
             return torch.mean(x, dim=-2)
         if x.dim() == 4:   # handle groups in rfx
             w = w.unsqueeze(1)
         return (x * w.unsqueeze(-1)).sum(-2)
-    elif loc_type == 'median':
+    elif method == 'median':
         if w is None:
             return torch.median(x, dim=-2)[0]
         else:
             return weightedQuantile(x, w, q=0.5)
     else:
-        raise NotImplementedError(f'location type {loc_type} not implemented')
+        raise NotImplementedError(f'method {method} not implemented')
 
 
 def getPointEstimates(proposal: Proposal, loc_type: str) -> dict[str, torch.Tensor]:
@@ -46,13 +46,13 @@ def getPointEstimates(proposal: Proposal, loc_type: str) -> dict[str, torch.Tens
 
 
 def getRMSE(
-    locs: dict[str, torch.Tensor],
+    ests: dict[str, torch.Tensor],
     data: dict[str, torch.Tensor],
     normalize: bool = True,
 ) -> dict[str, float]:
     out = {}
     masks = getMasks(data)
-    for key, est in locs.items():
+    for key, est in ests.items():
         gt = data[key]   # ground truth
         mask = masks[key]
         if mask is not None:
