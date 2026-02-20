@@ -49,13 +49,9 @@ class ImportanceSampler:
         self.mask_m = data['mask_m'].unsqueeze(-1)   # (b, m, 1)
         self.mask_n = data['mask_n'].unsqueeze(-1)   # (b, m, n, 1)
 
-    def getTerms(self, proposal: Proposal) -> tuple[torch.Tensor, ...]:
+    def unnormalizedPosterior(self, proposal: Proposal) -> tuple[torch.Tensor, ...]:
         # unpack parameters
         ffx, sigma_rfx, sigma_eps, rfx = proposal.parameters
-
-        # posterior log probs
-        log_q_g, log_q_l = proposal.log_probs
-        lq = log_q_g + (log_q_l * self.mask_m).sum(1)
 
         # log priors
         lp_ffx = logPriorFfx(ffx, self.nu_ffx, self.tau_ffx, self.mask_d)
@@ -71,11 +67,15 @@ class ImportanceSampler:
         # conditional log likelihood
         ll = logLikelihoodCond(
             ffx, sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n)
-        return ll, lp, lq
+        return ll, lp
 
     def __call__(self, proposal: Proposal) -> Proposal:
+        # posterior log probs
+        log_q_g, log_q_l = proposal.log_probs
+        lq = log_q_g + (log_q_l * self.mask_m).sum(1)
+        
         # log likelihood, log prior, log proposal posterior
-        ll, lp, lq = self.getTerms(proposal)
+        ll, lp = self.unnormalizedPosterior(proposal)
 
         # importance sampling
         proposal.is_results = self.getImportanceWeights(ll, lp, lq)
