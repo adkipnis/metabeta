@@ -144,27 +144,6 @@ def longTable(
     return f'\n{results}\n'
 
 
-def wideTable(
-    corr: dict[str, float],  # Pearson correlation
-    rmse: dict[str, float],  # root mean square error
-    mce: dict[str, float],  # mean coverage error
-) -> str:
-    keys = ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx')
-
-    rows = [
-        ['R'] + [corr[k] for k in keys] + [dictMean(corr)],
-        ['RMSE'] + [rmse[k] for k in keys] + [dictMean(rmse)],
-        ['MCE'] + [mce[k] for k in keys] + [dictMean(mce)],
-    ]
-    results = tabulate(
-        rows,
-        headers=['', 'FFX', 'Sigma(RFX)', 'Sigma(Eps)', 'RFX', 'All'],
-        floatfmt='.3f',
-        tablefmt='simple',
-    )
-    return f'\n{results}'
-
-
 def flatSummary(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
