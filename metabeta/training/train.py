@@ -9,6 +9,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 import schedulefree
 
+from metabeta.evaluation.intervals import expectedCoverageError
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.io import setDevice, datasetFilename, runName
 from metabeta.utils.sampling import setSeed
@@ -41,8 +42,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--compile', action='store_true', help='compile model (default = False)')
     parser.add_argument('--lr', type=float, default=1e-3, help='optimizer learning rate (default = 1e-3)')
     parser.add_argument('--max_grad_norm', type=float, default=1.0, help='clip grad norm to this value (default = 1.0)')
-    parser.add_argument('--backward', action='store_false', help='use backward KL loss instead of forward KL loss (default = False)')
-    
+    parser.add_argument('--loss_type', type=str, default='forward+', help='KL loss type [forward, backward, mixed] (default = mixed)')
+
     # data
     parser.add_argument('-d', '--d_tag', type=str, default='toy', help='name of data config file')
     parser.add_argument('--bs', type=int, default=32, help='number of regression datasets per training minibatch (default = 32)')
@@ -251,20 +252,70 @@ size [mb]:  {self.model.n_params * (p / 8.0) * 1e-6:.3f}
 seed:       {self.cfg.seed}
 device:     {self.cfg.device}
 compiled:   {self.cfg.compile}
-KL loss:    {'backward' if self.cfg.backward else 'forward'}
+loss type:  {self.cfg.loss_type}
 lr:         {self.cfg.lr}
 batch size: {self.cfg.bs}
 ===================="""
 
-    def loss(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
-        if not self.cfg.backward:
-            log_prob = self.model.forward(batch)
-            forward_kl = -log_prob['total'].mean()
-            return forward_kl
-        proposal = self.model.backward(batch, n_samples=64)
-        ll, lp, lq = ImportanceSampler(batch).getTerms(proposal)
-        backward_kl = (lq - lp - ll).mean()
-        return backward_kl
+    def loss(
+            self,
+            batch: dict[str, torch.Tensor],
+            summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
+            mode: str = '',
+    ) -> torch.Tensor:
+        if not mode:
+            mode = self.cfg.loss_type
+
+        #  init group variables
+        m = batch['m'] # number of groups
+        mask = batch['mask_m'] # group mask
+        if mode in ['backward', 'coverage']:
+            m = m.unsqueeze(-1)
+            mask = mask.unsqueeze(-1)
+
+        # precompute summaries
+        if summaries is None:
+            summaries = self.model.summarize(batch)
+
+        # forward KL loss
+        if mode == 'forward':
+            log_probs = self.model.forward(batch, summaries)
+            lq_g = log_probs['global']
+            lq_l = log_probs['local'] * mask
+            lq = lq_g + lq_l.sum(1) / m
+            return -lq.mean()
+
+        # backward KL loss
+        elif mode == 'backward':
+            proposal = self.model.backward(batch, summaries, n_samples=32)
+            lq_g, lq_l = proposal.log_probs
+            lq_l = lq_l * mask
+            lq = lq_g + lq_l.sum(1) / m
+            ll, lp = ImportanceSampler(batch).unnormalizedPosterior(proposal)
+            return (lq - lp - ll).mean()
+
+        # coverage loss
+        elif mode == 'coverage':
+            proposal = self.model.backward(batch, summaries, n_samples=32)
+            ece_dict = expectedCoverageError(proposal, batch)
+            ece = 100.0 * sum(ece_dict.values()) / len(ece_dict)
+            esce = ece.square()
+            return esce
+
+        # mix KL loss
+        elif mode == 'mixed':
+            fkl = self.loss(batch, summaries, mode='forward')
+            bkl = self.loss(batch, summaries, mode='backward')
+            return fkl + 0.001 * bkl
+
+        # forward KL loss + regularized
+        elif mode == 'forward+':
+            fkl = self.loss(batch, summaries, mode='forward')
+            esce = self.loss(batch, summaries, mode='coverage')
+            return fkl + 0.1 * esce
+
+        else:
+            raise ValueError(f'unknown loss type: {mode}')
 
     def train(self, epoch: int) -> float:
         dl_train = self._getDataLoader('train', epoch, batch_size=self.cfg.bs)
