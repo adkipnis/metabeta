@@ -1,6 +1,7 @@
 import torch
 from metabeta.utils.evaluation import Proposal, getMasks, weightedQuantile
 
+EPS = 1e-6
 
 def getQuantiles(
     roots: tuple[float, float],
@@ -34,17 +35,17 @@ def coverage(
     ci: torch.Tensor,  # credible interval
     gt: torch.Tensor,  # ground truth
     mask: torch.Tensor | None = None,
-    eps: float = 1e-6,
 ) -> torch.Tensor:
-    above = ci[..., 0, :] - eps <= gt
-    below = gt <= ci[..., 1, :] + eps
+    above = ci[..., 0, :] - EPS <= gt
+    below = gt <= ci[..., 1, :] + EPS
     inside = above & below
     if mask is not None:
         inside = inside & mask
         n = mask.sum(0).clamp_min(1.0)
         return inside.float().sum(0) / n
-    else:
-        return inside.float().mean(0)
+    return inside.float().mean(0)
+
+
 
 
 def sampleCoverageError(
