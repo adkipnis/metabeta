@@ -3,8 +3,13 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
+from matplotlib import colors as mcolors
 from matplotlib.ticker import MultipleLocator
 import seaborn as sns
+
+cmap = plt.get_cmap('tab20')
+PALETTE = [mcolors.to_hex(cmap(i)) for i in range(0, cmap.N, 2)]
+PALETTE += [mcolors.to_hex(cmap(i)) for i in range(1, cmap.N, 2)]
 
 
 class Plot:
