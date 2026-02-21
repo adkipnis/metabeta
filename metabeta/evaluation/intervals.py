@@ -82,19 +82,13 @@ def getCoverageError(
     return {k: cvrg - nominal for k, cvrg in coverages.items()}
 
 
-def coverageErrors(
-    proposal: Proposal,
-    data: dict[str, torch.Tensor],
-    log_ratio: bool = True,
-    alphas: list[float] = ALPHAS,
-) -> dict[str, dict[str, torch.Tensor]]:
-    ces = {}
-    for alpha in alphas:
-        cred_ints = getCredibleIntervals(proposal, alpha=alpha)
-        coverages = getCoverages(cred_ints, data)
-        nominal = torch.tensor(1 - alpha)
-        ces[alpha] = coverageError(coverages, nominal, log_ratio=log_ratio)
-    return ces
+def averageOverAlpha(result: dict[str, dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+    out = {}
+    param_keys = next(iter(result.values())).keys()
+    for p in param_keys:
+        values = torch.cat([v[p].unsqueeze(0) for v in result.values()])
+        out[p] = values.mean(0)
+    return out
 
 
 def expectedCoverageError(
