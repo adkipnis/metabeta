@@ -34,7 +34,7 @@ def getCredibleIntervals(
     return out
 
 
-def coverage(
+def getCoverage(
     ci: torch.Tensor,  # credible interval
     gt: torch.Tensor,  # ground truth
     mask: torch.Tensor | None = None,
@@ -50,10 +50,11 @@ def coverage(
     return inside.float().mean(0)
 
 
-def getCoverages(
+def getCoveragePerParameter(
     ci_dict: dict[str, torch.Tensor],
     data: dict[str, torch.Tensor],
 ) -> dict[str, torch.Tensor]:
+    """get coverage for each parameter type"""
     out = {}
     masks = getMasks(data)
     for key, ci in ci_dict.items():
@@ -62,13 +63,13 @@ def getCoverages(
         if key == 'sigma_eps':
             gt = gt.unsqueeze(-1)
             ci = ci.unsqueeze(-1)
-        out[key] = coverage(ci, gt, mask)
+        out[key] = getCoverage(ci, gt, mask)
         if key == 'rfx':   # average over groups
             out[key] = out[key].mean(0)
     return out
 
 
-def coverageError(
+def getCoverageError(
     coverages: dict[str, torch.Tensor],
     nominal: torch.Tensor,
     log_ratio: bool = True,
