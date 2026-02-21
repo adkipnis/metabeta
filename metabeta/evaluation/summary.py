@@ -159,10 +159,11 @@ def recoveryPlot(
     metrics = []
 
     # prepare stats
-    stats = {}
-    est = getPointEstimates(proposal, EST_TYPE)
-    stats['corr'] = getCorrelation(est, data)
-    stats['nrmse'] = getRMSE(est, data, normalize=True)
+    est: dict[str, torch.Tensor] = summary['est'] # type: ignore
+    stats = {
+        k: v for k, v in summary.items()
+        if k in ['corr', 'nrmse']
+    }
 
     # fixed effects
     d = data['ffx'].shape[-1]
