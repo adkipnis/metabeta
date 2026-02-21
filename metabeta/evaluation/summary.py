@@ -41,6 +41,7 @@ def getSummary(
 
     # point-based stats
     est = getPointEstimates(proposal, EST_TYPE)
+    out['est'] = est
     out['nrmse'] = getRMSE(est, data, normalize=True)
     out['corr'] = getCorrelation(est, data)
 
@@ -134,6 +135,13 @@ def coveragePlot(
     fig, ax = plt.subplots(figsize=(6, 6), dpi=300)
     plot.coverage(ax, cvrg, names, stats) # type: ignore
     ax.set_box_aspect(1)
+
+    # store
+    fname = plot_dir / 'coverage_latest.png'
+    plt.savefig(fname, bbox_inches='tight', pad_inches=0.15)
+    if epoch is not None:
+        fname_e = plot_dir / f'coverage_e{epoch}.png'
+        plt.savefig(fname_e, bbox_inches='tight', pad_inches=0.15)
     plt.show()
     plt.close(fig)
 
