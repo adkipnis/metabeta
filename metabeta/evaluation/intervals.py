@@ -103,9 +103,9 @@ def analyzeCoverage(
         nominal = torch.tensor(1 - alpha)
         cred_ints = getCredibleIntervals(proposal, alpha=alpha)
         observed = getCoveragePerParameter(cred_ints, data)
-        cvrg[str(alpha)] = observed
-        errors[str(alpha)] = getCoverageError(observed, nominal, log_ratio=False)
-        ratios[str(alpha)] = getCoverageError(observed, nominal, log_ratio=True)
+        cvrg[alpha] = observed
+        errors[alpha] = getCoverageError(observed, nominal, log_ratio=False)
+        ratios[alpha] = getCoverageError(observed, nominal, log_ratio=True)
     cvrg['mean'] = averageOverAlpha(cvrg)
     errors['mean'] = averageOverAlpha(errors)
     ratios['mean'] = averageOverAlpha(ratios)
