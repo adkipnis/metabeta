@@ -10,7 +10,7 @@ from metabeta.evaluation.point import (
     getRMSE,
     getCorrelation,
 )
-from metabeta.evaluation.intervals import expectedCoverageError
+from metabeta.evaluation.intervals import analyzeCoverage
 from metabeta.evaluation.predictive import (
     getPosteriorPredictive,
     posteriorPredictiveNLL,
@@ -20,6 +20,13 @@ from matplotlib import pyplot as plt
 
 
 EST_TYPE = 'mean'
+
+def tensorMean(data: dict[str, torch.Tensor]) -> dict[str, float]:
+    out = {}
+    for k, v in data.items():
+        out[k] = v.mean().item()
+    return out
+
 
 def dictMean(data: dict[str, float]) -> float:
     values = list(data.values())
@@ -115,7 +122,9 @@ def dependentSummary(
     corr = getCorrelation(est, data)
 
     # inteval-based stats
-    lcr = expectedCoverageError(proposal, data, log_ratio=True)
+    cvge_results = analyzeCoverage(proposal, data)
+    ece = tensorMean(cvge_results['error']['mean'])
+    lcr = tensorMean(cvge_results['log_ratio']['mean'])
 
     # print summary
     return longTable(corr, nrmse, lcr)
