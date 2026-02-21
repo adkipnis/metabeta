@@ -18,7 +18,7 @@ from metabeta.evaluation.predictive import (
 from metabeta.plot import plot
 from matplotlib import pyplot as plt
 
-
+Summary = dict[str, dict[str, float | torch.Tensor]]
 EST_TYPE = 'mean'
 
 def tensorMean(data: dict[str, torch.Tensor]) -> dict[str, float]:
@@ -36,7 +36,7 @@ def dictMean(data: dict[str, float]) -> float:
 def getSummary(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
-) -> dict[str, float | dict[str, float]]:
+) -> Summary:
     out = {}
 
     # point-based stats
@@ -99,7 +99,7 @@ def flatTable(
     return f'{results}\n'
 
 
-def summaryTable(summary: dict[str, float | dict[str, float]]) -> str:
+def summaryTable(summary: Summary) -> str:
     # results per parameter class
     corr = summary['corr']
     nrmse = summary['nrmse']
@@ -116,8 +116,10 @@ def summaryTable(summary: dict[str, float | dict[str, float]]) -> str:
 
 
 def coveragePlot(
-        proposal: Proposal,
-        summary: dict[str, float | dict[str, float | torch.Tensor]],
+    summary: Summary,
+    proposal: Proposal,
+    plot_dir: Path,
+    epoch: int | None = None,
 ) -> None:
     cvrg = summary['coverage']
     names = (
@@ -137,7 +139,7 @@ def coveragePlot(
 
 
 def recoveryPlot(
-    proposal: Proposal,
+    summary: Summary,
     data: dict[str, torch.Tensor],
     plot_dir: Path,
     epoch: int | None = None,
