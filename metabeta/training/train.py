@@ -18,8 +18,10 @@ from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import Proposal, joinProposals
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
-from metabeta.evaluation.summary import flatSummary, dependentSummary, recoveryPlot
-    
+from metabeta.evaluation.summary import (
+    getSummary, summaryTable, recoveryPlot, coveragePlot
+    )
+
 logger = logging.getLogger('train.py')
 
 
@@ -358,14 +360,15 @@ batch size: {self.cfg.bs}
         else:
             proposal, batch = self._sampleMulti(batch)            
         t1 = time.perf_counter()
-        tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
 
         # evaluation summary
-        print(dependentSummary(proposal, batch))
-        print(flatSummary(proposal, batch, tpd=tpd))
+        perf_summary = getSummary(proposal, batch)
+        perf_summary['tpd'] = (t1 - t0) / batch['X'].shape[0]  # time per dataset
+        print(summaryTable(perf_summary))
         if cfg.plot:
             recoveryPlot(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
-
+            coveragePlot(proposal, perf_summary)
+            
     def _sampleSingle(
             self, batch: dict[str, torch.Tensor]
     ) -> tuple[Proposal, dict[str, torch.Tensor]]:
