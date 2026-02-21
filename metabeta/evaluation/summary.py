@@ -33,6 +33,109 @@ def dictMean(data: dict[str, float]) -> float:
     return float(np.mean(values))
 
 
+def getSummary(
+    proposal: Proposal,
+    data: dict[str, torch.Tensor],
+) -> dict[str, float | dict[str, float]]:
+    out = {}
+
+    # point-based stats
+    est = getPointEstimates(proposal, EST_TYPE)
+    out['nrmse'] = getRMSE(est, data, normalize=True)
+    out['corr'] = getCorrelation(est, data)
+
+    # inteval-based stats
+    cvrg_results = analyzeCoverage(proposal, data)
+    out['coverage'] = cvrg_results['coverage']
+    out['ece'] = tensorMean(cvrg_results['error']['mean'])
+    out['lcr'] = tensorMean(cvrg_results['log_ratio']['mean'])
+
+    # posterior predictive
+    pp = getPosteriorPredictive(proposal, data)
+    nll = posteriorPredictiveNLL(pp, data, w=proposal.weights) # nll per sample
+    out['mnll'] = nll.median().item()
+    out['eff'] = proposal.mean_efficiency
+    return out
+
+
+def longTable(
+    corr: dict[str, float],  # Pearson correlation
+    nrmse: dict[str, float],  # normalized root mean square error
+    ece: dict[str, float],  # expeced coverage error
+    lcr: dict[str, float],  # log coverage ratio
+) -> str:
+    keys = ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx')
+    names = {
+        'ffx': 'FFX',
+        'sigma_rfx': 'Sigma(RFX)',
+        'sigma_eps': 'Sigma(Eps)',
+        'rfx': 'RFX',
+    }
+    rows = [[names[k], corr[k], nrmse[k], ece[k], lcr[k]] for k in keys]
+    rows += [['Average', dictMean(corr), dictMean(nrmse), dictMean(ece), dictMean(lcr)]]
+    results = tabulate(
+        rows,
+        headers=['', 'R', 'NRMSE', 'ECE', 'LCR'],
+        floatfmt='.3f',
+        tablefmt='simple',
+    )
+    return f'\n{results}\n'
+
+
+def flatTable(
+    mnll: float,
+    tpd: float,
+    eff: float | None = None,
+) -> str:
+
+    # flat table
+    rows = [
+        ['Posterior Predictive NLL', mnll],
+        ['Estimation time / ds [s]', tpd],
+    ]
+    if eff is not None:
+        rows += [['IS Efficency', eff]]
+    results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
+    return f'{results}\n'
+
+
+def summaryTable(summary: dict[str, float | dict[str, float]]) -> str:
+    # results per parameter class
+    corr = summary['corr']
+    nrmse = summary['nrmse']
+    ece = summary['ece']
+    lcr = summary['lcr']
+    long_table = longTable(corr, nrmse, ece, lcr) # type: ignore
+
+    # general results
+    mnll = summary['mnll']
+    tpd = summary['tpd']
+    eff = summary['eff']
+    flat_table = flatTable(mnll, tpd, eff) # type: ignore
+    return long_table + '\n' + flat_table
+
+
+def coveragePlot(
+        proposal: Proposal,
+        summary: dict[str, float | dict[str, float | torch.Tensor]],
+) -> None:
+    cvrg = summary['coverage']
+    names = (
+        getNames('ffx', proposal.d) +
+        getNames('sigmas', proposal.q) +
+        getNames('rfx', proposal.q)
+        )
+    stats = {
+        'ECE': 100 * dictMean(summary['ece']), # type: ignore
+        'LCR': 100 * dictMean(summary['lcr']), # type: ignore
+        }
+    fig, ax = plt.subplots(figsize=(6, 6), dpi=300)
+    plot.coverage(ax, cvrg, names, stats) # type: ignore
+    ax.set_box_aspect(1)
+    plt.show()
+    plt.close(fig)
+
+
 def recoveryPlot(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
