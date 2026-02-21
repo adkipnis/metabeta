@@ -199,8 +199,8 @@ class Plot:
         # stats info
         txt = [f'{k} = {v:.3f}' for k, v in stats.items()]
         ax.text(
-            0.7,
-            0.1,
+            0.70,
+            0.05,
             '\n'.join(txt),
             transform=ax.transAxes,
             ha='center',
@@ -244,7 +244,7 @@ class Plot:
         y_name: str = 'Estiamte',
         # plot details
         marker: str = 'o',
-        alpha: float = 0.15,
+        alpha: float = 0.25,
         upper: bool = True,
         lower: bool = True,
     ) -> None:
