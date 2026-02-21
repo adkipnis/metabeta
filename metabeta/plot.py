@@ -270,6 +270,60 @@ class Plot:
             )
             i += len(nam)
 
+    @staticmethod
+    def coverage(
+        ax: Axes,
+        cvrg: dict[float | str, dict[str, torch.Tensor]],
+        names: list[str],
+        stats: dict[str, float],
+        upper: bool = True,
+        lower: bool = True,
+    ) -> None:
+        # prepare data
+        d = sum(v.shape.numel() for v in cvrg['mean'].values())
+        assert len(names) == d, 'shape mismatch for names'
+        cols = [torch.cat(list(v.values())).unsqueeze(1) for k, v in cvrg.items() if k != 'mean']
+        matrix = torch.cat(cols, dim=1)
+        nominal = [int(100.0 * (1.0 - alpha)) for alpha in cvrg if isinstance(alpha, float)]
+
+        # plot coverage per parameter
+        for i, values in enumerate(matrix):
+            coverage_i = 100.0 * values
+            ax.plot(nominal, coverage_i, label=names[i], color=PALETTE[i], alpha=0.8, lw=3)
+
+        # stats info
+        txt = [f'{k} = {v:.2f}%' for k, v in stats.items()]
+        ax.text(
+            0.70,
+            0.05,
+            '\n'.join(txt),
+            transform=ax.transAxes,
+            ha='center',
+            va='bottom',
+            fontsize=20,
+            bbox=dict(
+                boxstyle='round',
+                facecolor=(1, 1, 1, 0.7),
+                edgecolor=(0, 0, 0, 0.15),
+            ),
+        )
+
+        # final touches
+        limits = (min(nominal), max(nominal))
+        ax.plot(limits, limits, '--', lw=2, zorder=1, color='grey')
+        ax.grid(True)
+        ax.set_xticks(nominal)
+        ax.set_yticks(nominal)
+        ax.tick_params(axis='both', labelsize=18)
+        ax.set_ylabel('Observed', fontsize=26, labelpad=10)
+        if upper:
+            ax.set_title('Coverage', fontsize=28, pad=15)
+            ax.legend(fontsize=18, loc='upper left')
+            if not lower:
+                ax.set_xlabel('')
+                ax.tick_params(axis='x', labelcolor='w', size=1)
+        if lower:
+            ax.set_xlabel('Nominal', fontsize=26, labelpad=10)
 
 
 plot = Plot()
