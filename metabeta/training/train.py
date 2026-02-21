@@ -366,8 +366,8 @@ batch size: {self.cfg.bs}
         perf_summary['tpd'] = (t1 - t0) / batch['X'].shape[0]  # time per dataset
         print(summaryTable(perf_summary))
         if cfg.plot:
-            recoveryPlot(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
-            coveragePlot(proposal, perf_summary)
+            recoveryPlot(perf_summary, batch, plot_dir=self.plot_dir, epoch=epoch)
+            coveragePlot(perf_summary, proposal, plot_dir=self.plot_dir, epoch=epoch)
             
     def _sampleSingle(
             self, batch: dict[str, torch.Tensor]
