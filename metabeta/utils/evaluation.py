@@ -41,6 +41,7 @@ class Proposal:
     def __init__(self, proposed: dict[str, dict[str, torch.Tensor]]) -> None:
         self.data = proposed
         self.d = numFixed(proposed)
+        self.q = proposed['local']['samples'].shape[-1]
         self.is_results = {}
 
     @property
