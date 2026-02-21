@@ -91,17 +91,22 @@ def averageOverAlpha(result: dict[str, dict[str, torch.Tensor]]) -> dict[str, to
     return out
 
 
-def expectedCoverageError(
+def analyzeCoverage(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
-    log_ratio: bool = True,
     alphas: list[float] = ALPHAS,
-) -> dict[str, float]:
-    """average coverage error over alpha levels"""
-    ces = coverageErrors(proposal, data, log_ratio=log_ratio, alphas=alphas)
-    ece = {}
-    param_keys = next(iter(ces.values())).keys()
-    for p in param_keys:
-        errors = torch.cat([v[p] for v in ces.values()])
-        ece[p] = errors.mean().item()
-    return ece
+) -> dict:
+    cvrg = {}   # observed coverage
+    errors = {}   # observed - nominal
+    ratios = {}   # log(observed/nominal)
+    for alpha in alphas:
+        nominal = torch.tensor(1 - alpha)
+        cred_ints = getCredibleIntervals(proposal, alpha=alpha)
+        observed = getCoveragePerParameter(cred_ints, data)
+        cvrg[str(alpha)] = observed
+        errors[str(alpha)] = getCoverageError(observed, nominal, log_ratio=False)
+        ratios[str(alpha)] = getCoverageError(observed, nominal, log_ratio=True)
+    cvrg['mean'] = averageOverAlpha(cvrg)
+    errors['mean'] = averageOverAlpha(errors)
+    ratios['mean'] = averageOverAlpha(ratios)
+    return {'coverage': cvrg, 'error': errors, 'log_ratio': ratios}
