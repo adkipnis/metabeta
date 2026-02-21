@@ -127,12 +127,13 @@ def dependentSummary(
     lcr = tensorMean(cvge_results['log_ratio']['mean'])
 
     # print summary
-    return longTable(corr, nrmse, lcr)
+    return longTable(corr, nrmse, ece, lcr)
 
 
 def longTable(
     corr: dict[str, float],  # Pearson correlation
     nrmse: dict[str, float],  # normalized root mean square error
+    ece: dict[str, float],  # expeced coverage error
     lcr: dict[str, float],  # log coverage ratio
 ) -> str:
     keys = ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx')
@@ -142,11 +143,11 @@ def longTable(
         'sigma_eps': 'Sigma(Eps)',
         'rfx': 'RFX',
     }
-    rows = [[names[k], corr[k], nrmse[k], lcr[k]] for k in keys]
-    rows += [['Average', dictMean(corr), dictMean(nrmse), dictMean(lcr)]]
+    rows = [[names[k], corr[k], nrmse[k], ece[k], lcr[k]] for k in keys]
+    rows += [['Average', dictMean(corr), dictMean(nrmse), dictMean(ece), dictMean(lcr)]]
     results = tabulate(
         rows,
-        headers=['', 'R', 'NRMSE', 'LCR'],
+        headers=['', 'R', 'NRMSE', 'ECE', 'LCR'],
         floatfmt='.3f',
         tablefmt='simple',
     )
