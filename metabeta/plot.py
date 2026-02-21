@@ -152,6 +152,7 @@ class Plot:
         stats: dict[str, float],
         # strings
         names: list[str],
+        colors: list[str],
         title: str = '',
         y_name: str = 'Estimate',
         # plot details
@@ -164,8 +165,6 @@ class Plot:
         # check sizes
         d = len(names)
         assert targets.shape[-1] == estimates.shape[-1] == d, 'shape mismatch'
-        # if targets.dim() == 3:
-        # ...
 
         # init figure
         ax.set_axisbelow(True)
@@ -186,7 +185,7 @@ class Plot:
                 continue
             targets_i = targets[mask_i, i]
             estimates_i = estimates[mask_i, i]
-            color_i = 'darkviolet' if 'epsilon' in names[i] else None
+            color_i = colors[i]
             ax.scatter(
                 targets_i,
                 estimates_i,
@@ -249,11 +248,11 @@ class Plot:
         upper: bool = True,
         lower: bool = True,
     ) -> None:
-        first = True
+        i = 0
         for ax, tar, est, mas, met, nam, tit in zip(
             axs, targets, estimates, masks, metrics, names, titles
         ):
-            # colors = palette[i:i+len(_names)]
+            col = PALETTE[i : i + len(nam)]
             self._groupedRecovery(
                 ax,
                 targets=tar.numpy(),
@@ -261,14 +260,16 @@ class Plot:
                 mask=mas.numpy(),
                 stats=met,
                 names=nam,
+                colors=col,
                 title=tit,
-                y_name=(y_name if first else ''),
+                y_name=(y_name if i == 0 else ''),
                 marker=marker,
                 alpha=alpha,
                 upper=upper,
                 lower=lower,
             )
-            first = False
+            i += len(nam)
+
 
 
 plot = Plot()
