@@ -94,6 +94,14 @@ def getSummary(
     return summary
 
 
+def dictMean(td: dict[str, torch.Tensor]) -> float:
+    values = list(td.values())
+    for i, v in enumerate(values):
+        if v.dim() == 0:
+            values[i] = v.unsqueeze(0)
+    return torch.cat(values).mean().item()
+
+
 def longTable(
     corr: dict[str, float],  # Pearson correlation
     nrmse: dict[str, float],  # normalized root mean square error
