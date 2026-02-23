@@ -206,8 +206,8 @@ def recoveryPlot(
     names.append(getNames('ffx', d))
     metrics.append(
         {
-            'r': stats['corr']['ffx'].mean(),
-            'NRMSE': stats['nrmse']['ffx'].mean(),
+            'r': stats['corr']['ffx'].mean().item(),
+            'NRMSE': stats['nrmse']['ffx'].mean().item(),
         }
     )
 
