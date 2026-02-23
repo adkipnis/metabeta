@@ -63,7 +63,7 @@ def simultaneousBands(
     K = min(n_eff, max_n)
     z = np.linspace(0.0 + eps, 1.0 - eps, K)
     u = np.random.uniform(size=(n_sim, n_eff))
-    gammas = _minimalCoverageProbs(z, u)   # (n_eff, )
+    gammas = _minimalCoverageProbs(z, u)   # (n_sim, )
     gamma = np.percentile(gammas, 100.0 * alpha)
     lower = binom(n_eff, z).ppf(gamma / 2.0) / n_eff
     upper = binom(n_eff, z).ppf(1.0 - gamma / 2.0) / n_eff
@@ -97,11 +97,12 @@ def _plotSbcEcdf(
     for i, name in enumerate(names):
         if mask is not None:
             mask_i = mask[..., i]
-            x = ranks[mask_i, i].sort()[0].numpy()
+            x = ranks[mask_i, i].sort()[0]
         else:
-            x = ranks.view(-1, ranks.shape[-1])[:, i].sort()[0].numpy()
-        x = np.pad(x, (1, 1), constant_values=(0, 1))
-        y = np.linspace(0, 1, num=x.shape[-1])
+            x = ranks.view(-1, ranks.shape[-1])[:, i].sort()[0]
+        if x.numel() == 0:
+            continue
+        x = x.detach().cpu().numpy()
         if diff:
             y = y - x
         ax.plot(x, y, label=name, lw=3)
