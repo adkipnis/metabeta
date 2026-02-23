@@ -31,3 +31,18 @@ def getFractionalRanks(
     return ranks
 
 
+def theoreticalLimits(
+    b: int,  # number of posteriors (batch size)
+    s: int = 1000,  # number of samples per posterior
+    alpha: float = 0.05,  # alpha error for bounds
+    diff: bool = False,
+) -> tuple:
+    p = np.linspace(0, 1, b)
+    lower = binom.ppf(alpha / 2, s, p) / s
+    upper = binom.ppf(1 - alpha / 2, s, p) / s
+    if diff:
+        lower -= p
+        upper -= p
+    return p, lower, upper
+
+
