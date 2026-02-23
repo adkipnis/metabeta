@@ -103,6 +103,7 @@ def _plotSbcEcdf(
         if x.numel() == 0:
             continue
         x = x.detach().cpu().numpy()
+        x = np.pad(x, (1, 1), constant_values=(0, 1))
         y = np.linspace(0, 1, num=x.shape[-1])
         if diff:
             y = y -x
