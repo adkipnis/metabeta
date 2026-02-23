@@ -1,4 +1,5 @@
 from typing import Literal, Sequence
+from dataclasses import dataclass
 import torch
 
 
@@ -150,9 +151,9 @@ def joinProposals(proposals: list[Proposal]) -> Proposal:
 
 
 def weightedQuantile(
-        x: torch.Tensor,
-        w: torch.Tensor,
-        q: float | Sequence[float] | torch.Tensor = 0.5,
+    x: torch.Tensor,
+    w: torch.Tensor,
+    q: float | Sequence[float] | torch.Tensor = 0.5,
 ) -> torch.Tensor:
     if not isinstance(q, torch.Tensor):
         q_t = torch.tensor(q, dtype=x.dtype, device=x.device)
@@ -172,3 +173,53 @@ def weightedQuantile(
     idx = torch.searchsorted(cdf, t, right=False).clamp(max=x_last.shape[-1] - 1)
     out = torch.gather(x_last, dim=-1, index=idx).squeeze(-1)
     return out
+
+
+@dataclass()
+class EvaluationSummary:
+    estimates: dict[str, torch.Tensor]
+    nrmse: dict[str, torch.Tensor]
+    corr: dict[str, torch.Tensor]
+    credible_intervals: dict[float, dict[str, torch.Tensor]]
+    coverage: dict[float, dict[str, torch.Tensor]]
+    coverage_error: dict[float, dict[str, torch.Tensor]]
+    log_coverage_ratio: dict[float, dict[str, torch.Tensor]]
+    predictive_nll: torch.Tensor
+    sample_efficiency: torch.Tensor | None
+    tpd: float | None = None   # time per dataset
+
+    def averageOverAlpha(
+        self, nested: dict[float, dict[str, torch.Tensor]]
+    ) -> dict[str, torch.Tensor]:
+        out = {}
+        alphas = list(nested.keys())
+        params = list(nested[alphas[0]].keys())
+        for param in params:
+            param_values = [nested[alpha][param].unsqueeze(0) for alpha in alphas]
+            out[param] = torch.cat(param_values).mean(0)
+        return out
+
+    @property
+    def ece(self) -> dict[str, torch.Tensor]:   # expected coverage error
+        return self.averageOverAlpha(self.coverage_error)
+
+    @property
+    def lcr(self) -> dict[str, torch.Tensor]:   # log coverage ratio
+        return self.averageOverAlpha(self.log_coverage_ratio)
+
+    @property
+    def mnll(self) -> float:   # median posterior NLL
+        return self.predictive_nll.median().item()
+
+    @property
+    def meff(self) -> None | float:   # median sample efficiency
+        if self.sample_efficiency is not None:
+            return self.sample_efficiency.median().item()
+
+
+def dictMean(td: dict[str, torch.Tensor]) -> float:
+    values = list(td.values())
+    for i, v in enumerate(values):
+        if v.dim() == 0:
+            values[i] = v.unsqueeze(0)
+    return torch.cat(values).mean().item()
