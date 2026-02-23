@@ -8,7 +8,6 @@ from metabeta.evaluation.point import (
     getCorrelation,
 )
 from metabeta.evaluation.intervals import getCoverageErrors, getCoverages, getCredibleIntervals
-from metabeta.evaluation.sbc import getFractionalRanks
 from metabeta.evaluation.predictive import (
     getPosteriorPredictive,
     posteriorPredictiveNLL,
@@ -33,10 +32,7 @@ def getSummary(
     out['coverage'] = cvrg_dicts = getCoverages(ci_dicts, data)
     out['coverage_error'] = getCoverageErrors(cvrg_dicts, log_ratio=False)
     out['log_coverage_ratio'] = getCoverageErrors(cvrg_dicts, log_ratio=True)
-
-    # simulation-based calibration checking
-    ranks = getFractionalRanks(proposal, data)
-
+    
     # posterior predictive
     pp = getPosteriorPredictive(proposal, data)
     out['predictive_nll'] = posteriorPredictiveNLL(pp, data, w=proposal.weights)
