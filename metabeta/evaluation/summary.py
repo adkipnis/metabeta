@@ -152,23 +152,20 @@ def flatTable(
 
 
 def coveragePlot(
-    summary: Summary,
+    summary: EvaluationSummary,
     proposal: Proposal,
     plot_dir: Path,
     epoch: int | None = None,
 ) -> None:
-    cvrg = summary['coverage']
     names = (
-        getNames('ffx', proposal.d) +
-        getNames('sigmas', proposal.q) +
-        getNames('rfx', proposal.q)
-        )
+        getNames('ffx', proposal.d) + getNames('sigmas', proposal.q) + getNames('rfx', proposal.q)
+    )
     stats = {
-        'ECE': 100 * dictMean(summary['ece']), # type: ignore
-        'LCR': 100 * dictMean(summary['lcr']), # type: ignore
-        }
+        'ECE': 100 * dictMean(summary.ece),
+        'LCR': 100 * dictMean(summary.lcr),
+    }
     fig, ax = plt.subplots(figsize=(6, 6), dpi=300)
-    plot.coverage(ax, cvrg, names, stats) # type: ignore
+    plot.coverage(ax, summary.coverage, names, stats)
     ax.set_box_aspect(1)
 
     # store
