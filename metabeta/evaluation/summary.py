@@ -62,6 +62,10 @@ class EvaluationSummary:
         if self.sample_efficiency is not None:
             return self.sample_efficiency.median().item()
 
+    def table(self) -> str:
+        long_table = longTable(self.corr, self.nrmse, self.ece, self.lcr)
+        flat_table = flatTable(self.mnll, self.tpd, self.meff)
+        return long_table + '\n' + flat_table
 
 
 def getSummary(
