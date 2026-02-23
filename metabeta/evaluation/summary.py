@@ -103,11 +103,18 @@ def dictMean(td: dict[str, torch.Tensor]) -> float:
 
 
 def longTable(
-    corr: dict[str, float],  # Pearson correlation
-    nrmse: dict[str, float],  # normalized root mean square error
-    ece: dict[str, float],  # expeced coverage error
-    lcr: dict[str, float],  # log coverage ratio
+    corr: dict[str, torch.Tensor],  # Pearson correlation
+    nrmse: dict[str, torch.Tensor],  # normalized root mean square error
+    ece: dict[str, torch.Tensor],  # expeced coverage error
+    lcr: dict[str, torch.Tensor],  # log coverage ratio
 ) -> str:
+    def process(row: list[str | torch.Tensor]) -> list[str | float]:
+        out = []
+        for e in row:
+            e = torch.mean(e).item() if isinstance(e, torch.Tensor) else e
+            out.append(e)
+        return out
+
     keys = ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx')
     names = {
         'ffx': 'FFX',
@@ -116,6 +123,7 @@ def longTable(
         'rfx': 'RFX',
     }
     rows = [[names[k], corr[k], nrmse[k], ece[k], lcr[k]] for k in keys]
+    rows = [process(row) for row in rows]
     rows += [['Average', dictMean(corr), dictMean(nrmse), dictMean(ece), dictMean(lcr)]]
     results = tabulate(
         rows,
