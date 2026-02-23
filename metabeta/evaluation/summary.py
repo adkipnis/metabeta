@@ -34,9 +34,17 @@ class EvaluationSummary:
     sample_efficiency: torch.Tensor | None
     tpd: float | None = None   # time per dataset
 
-def dictMean(data: dict[str, float]) -> float:
-    values = list(data.values())
-    return float(np.mean(values))
+    def averageOverAlpha(
+        self, nested: dict[float, dict[str, torch.Tensor]]
+    ) -> dict[str, torch.Tensor]:
+        out = {}
+        alphas = list(nested.keys())
+        params = list(nested[alphas[0]].keys())
+        for param in params:
+            param_values = [nested[alpha][param].unsqueeze(0) for alpha in alphas]
+            out[param] = torch.cat(param_values).mean(0)
+        return out
+
 
 
 def getSummary(
