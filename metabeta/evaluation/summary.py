@@ -71,27 +71,27 @@ class EvaluationSummary:
 def getSummary(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
-) -> Summary:
+) -> EvaluationSummary:
     out = {}
 
     # point-based stats
-    est = getPointEstimates(proposal, EST_TYPE)
-    out['est'] = est
+    out['estimates'] = est = getPointEstimates(proposal, EST_TYPE)
     out['nrmse'] = getRMSE(est, data, normalize=True)
     out['corr'] = getCorrelation(est, data)
 
     # inteval-based stats
-    cvrg_results = analyzeCoverage(proposal, data)
-    out['coverage'] = cvrg_results['coverage']
-    out['ece'] = tensorMean(cvrg_results['error']['mean'])
-    out['lcr'] = tensorMean(cvrg_results['log_ratio']['mean'])
+    out['credible_intervals'] = ci_dicts = getCredibleIntervals(proposal)
+    out['coverage'] = cvrg_dicts = getCoverages(ci_dicts, data)
+    out['coverage_error'] = getCoverageErrors(cvrg_dicts, log_ratio=False)
+    out['log_coverage_ratio'] = getCoverageErrors(cvrg_dicts, log_ratio=True)
 
     # posterior predictive
     pp = getPosteriorPredictive(proposal, data)
-    nll = posteriorPredictiveNLL(pp, data, w=proposal.weights) # nll per sample
-    out['mnll'] = nll.median().item()
-    out['eff'] = proposal.mean_efficiency
-    return out
+    out['predictive_nll'] = posteriorPredictiveNLL(pp, data, w=proposal.weights)
+    out['sample_efficiency'] = proposal.efficiency
+
+    summary = EvaluationSummary(**out)
+    return summary
 
 
 def longTable(
