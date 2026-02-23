@@ -103,9 +103,10 @@ def _plotSbcEcdf(
         if x.numel() == 0:
             continue
         x = x.detach().cpu().numpy()
+        y = np.linspace(0, 1, num=x.shape[-1])
         if diff:
-            y = y - x
-        ax.plot(x, y, label=name, lw=3)
+            y = y -x
+
     ax.set_axisbelow(True)
     ax.grid(True)
     ax.set_xlim(-0.02, 1.02)
