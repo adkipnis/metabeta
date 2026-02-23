@@ -154,7 +154,7 @@ def flatTable(
 def coveragePlot(
     summary: EvaluationSummary,
     proposal: Proposal,
-    plot_dir: Path,
+    plot_dir: Path | None = None,
     epoch: int | None = None,
 ) -> None:
     names = (
@@ -169,11 +169,12 @@ def coveragePlot(
     ax.set_box_aspect(1)
 
     # store
-    fname = plot_dir / 'coverage_latest.png'
-    plt.savefig(fname, bbox_inches='tight', pad_inches=0.15)
-    if epoch is not None:
-        fname_e = plot_dir / f'coverage_e{epoch}.png'
-        plt.savefig(fname_e, bbox_inches='tight', pad_inches=0.15)
+    if plot_dir is not None:
+        fname = plot_dir / 'coverage_latest.png'
+        plt.savefig(fname, bbox_inches='tight', pad_inches=0.15)
+        if epoch is not None:
+            fname_e = plot_dir / f'coverage_e{epoch}.png'
+            plt.savefig(fname_e, bbox_inches='tight', pad_inches=0.15)
     plt.show()
     plt.close(fig)
 
@@ -181,7 +182,7 @@ def coveragePlot(
 def recoveryPlot(
     summary: EvaluationSummary,
     data: dict[str, torch.Tensor],
-    plot_dir: Path,
+    plot_dir: Path | None = None,
     epoch: int | None = None,
 ) -> None:
     targets = []
@@ -254,10 +255,11 @@ def recoveryPlot(
     fig.tight_layout()
 
     # store
-    fname = plot_dir / 'parameter_recovery_latest.png'
-    plt.savefig(fname, bbox_inches='tight', pad_inches=0.15)
-    if epoch is not None:
-        fname_e = plot_dir / f'parameter_recovery_e{epoch}.png'
-        plt.savefig(fname_e, bbox_inches='tight', pad_inches=0.15)
+    if plot_dir is not None:
+        fname = plot_dir / 'parameter_recovery_latest.png'
+        plt.savefig(fname, bbox_inches='tight', pad_inches=0.15)
+        if epoch is not None:
+            fname_e = plot_dir / f'parameter_recovery_e{epoch}.png'
+            plt.savefig(fname_e, bbox_inches='tight', pad_inches=0.15)
     plt.show()
     plt.close(fig)
