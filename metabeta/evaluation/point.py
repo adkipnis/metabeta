@@ -7,13 +7,13 @@ from metabeta.utils.evaluation import Proposal, getMasks, weightedQuantile
 
 
 def maskedMean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    dims = tuple(range(x.dim()-1))
+    dims = tuple(range(x.dim() - 1))
     n = mask.sum(dims).clamp_min(1.0)
     return (x * mask).sum(dims) / n
 
 
 def maskedStd(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    dims = tuple(range(x.dim()-1))
+    dims = tuple(range(x.dim() - 1))
     n = mask.sum(dims).clamp_min(1.0)
     mean = (x * mask).sum(dims) / n
     square_diff = (x - mean).square() * mask
