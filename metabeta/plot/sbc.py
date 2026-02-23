@@ -100,7 +100,6 @@ def _plotSbcEcdf(
         if diff:
             y = y - x
         ax.plot(x, y, label=name, lw=3)
-
     ax.set_axisbelow(True)
     ax.grid(True)
     ax.set_xlim(-0.02, 1.02)
@@ -129,11 +128,18 @@ def plotSBC(
     names = getAllNames(proposal.d, proposal.q)
     masks = getMasks(data)
 
-    # layered plot
+    # layered plot with conservative global simultaneous bands
     fig, ax = plt.subplots(figsize=(6, 6), dpi=300)
+    n_eff_min = len(data['X'])
     for k in ('ffx', 'sigmas', 'rfx'):
         _plotSbcEcdf(ax, ranks[k], names[k], masks[k], diff=diff)
-    p, low, high = theoreticalLimits(b=len(data['X']), s=proposal.n_samples, alpha=0.01, diff=diff)
+        # update n_eff_min
+        mask_k = masks[k]
+        if mask_k is not None:
+            dims = tuple(range(mask_k.dim() - 1))
+            n_eff = int(mask_k.sum(dims).min())
+            n_eff_min = min(n_eff_min, n_eff)
+    p, low, high = simultaneousBands(n_eff=n_eff_min, diff=diff)
     ax.fill_between(p, low, high, color='grey', alpha=0.1)
     ax.set_box_aspect(1)
 
