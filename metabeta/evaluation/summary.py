@@ -45,6 +45,23 @@ class EvaluationSummary:
             out[param] = torch.cat(param_values).mean(0)
         return out
 
+    @property
+    def ece(self) -> dict[str, torch.Tensor]:   # expected coverage error
+        return self.averageOverAlpha(self.coverage_error)
+
+    @property
+    def lcr(self) -> dict[str, torch.Tensor]:   # log coverage ratio
+        return self.averageOverAlpha(self.log_coverage_ratio)
+
+    @property
+    def mnll(self) -> float:   # median posterior NLL
+        return self.predictive_nll.median().item()
+
+    @property
+    def meff(self) -> None | float:   # median sample efficiency
+        if self.sample_efficiency is not None:
+            return self.sample_efficiency.median().item()
+
 
 
 def getSummary(
