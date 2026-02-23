@@ -32,6 +32,13 @@ def getNames(source: str, num: int) -> list[str]:
         return [rf'$\alpha_{{{i}}}$' for i in range(num)]
     else:
         raise ValueError(f'source {source} unknown.')
+        
+def getAllNames(d: int, q: int) -> dict[str, list[str]]:
+    return {
+        'ffx': getNames('ffx', d),
+        'sigmas': getNames('sigmas', q),
+        'rfx': getNames('rfx', q),
+    }
 
 
 def joinSigmas(data: dict[str, torch.Tensor]) -> torch.Tensor:
