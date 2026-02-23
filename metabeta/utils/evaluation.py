@@ -19,6 +19,7 @@ def getMasks(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | None]:
     out['ffx'] = data['mask_d']
     out['sigma_rfx'] = data['mask_q']
     out['sigma_eps'] = None
+    out['sigmas'] = torch.nn.functional.pad(data['mask_q'], (0, 1), value=True)
     out['rfx'] = data['mask_mq']
     return out
 
