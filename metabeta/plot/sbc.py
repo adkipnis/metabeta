@@ -55,11 +55,15 @@ def simultaneousBands(
     n_sim: int = 2000,  # number of draws from the uniform
     eps: float = 1e-5,
 ) -> tuple[np.ndarray, ...]:
-    """Simultanous ECDF bands as proposed by Sailynoja et al. (2022)"""
+    """Simultanous ECDF bands as proposed by Sailynoja et al. (2022):
+    - sample n_sim uniform values for each posterior
+    - get minimal coverage probabilities of uniform samples
+    - use the alpha quantile of these probabilites instead of exact alpha
+    """
     K = min(n_eff, max_n)
     z = np.linspace(0.0 + eps, 1.0 - eps, K)
     u = np.random.uniform(size=(n_sim, n_eff))
-    gammas = _minimalCoverageProbs(z, u)
+    gammas = _minimalCoverageProbs(z, u)   # (n_eff, )
     gamma = np.percentile(gammas, 100.0 * alpha)
     lower = binom(n_eff, z).ppf(gamma / 2.0) / n_eff
     upper = binom(n_eff, z).ppf(1.0 - gamma / 2.0) / n_eff
