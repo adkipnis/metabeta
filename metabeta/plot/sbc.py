@@ -85,3 +85,32 @@ def _plotSbcEcdf(
 
 
 def plotSBC(
+    proposal: Proposal,
+    data: dict[str, torch.Tensor],
+    diff: bool = True,
+    plot_dir: Path | None = None,
+    epoch: int | None = None,
+) -> None:
+    ranks = getFractionalRanks(proposal, data)
+    ranks['sigmas'] = joinSigmas(ranks)
+    names = getAllNames(proposal.d, proposal.q)
+    masks = getMasks(data)
+
+    # layered plot
+    fig, ax = plt.subplots(figsize=(6, 6), dpi=300)
+    for k in ('ffx', 'sigmas', 'rfx'):
+        _plotSbcEcdf(ax, ranks[k], names[k], masks[k], diff=diff)
+    p, low, high = theoreticalLimits(b=len(data['X']), s=proposal.n_samples, alpha=0.01, diff=diff)
+    ax.fill_between(p, low, high, color='grey', alpha=0.1)
+    ax.set_box_aspect(1)
+
+    # store
+    if plot_dir is not None:
+        fname = plot_dir / 'sbc_latest.png'
+        plt.savefig(fname, bbox_inches='tight', pad_inches=0.15)
+        if epoch is not None:
+            fname_e = plot_dir / f'sbc_e{epoch}.png'
+            plt.savefig(fname_e, bbox_inches='tight', pad_inches=0.15)
+    plt.show()
+    plt.close(fig)
+
