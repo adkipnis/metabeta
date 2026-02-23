@@ -113,4 +113,3 @@ def plotSBC(
             plt.savefig(fname_e, bbox_inches='tight', pad_inches=0.15)
     plt.show()
     plt.close(fig)
-
