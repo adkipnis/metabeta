@@ -273,18 +273,17 @@ class Plot:
     @staticmethod
     def coverage(
         ax: Axes,
-        cvrg: dict[float | str, dict[str, torch.Tensor]],
+        cvrg: dict[float, dict[str, torch.Tensor]],
         names: list[str],
         stats: dict[str, float],
         upper: bool = True,
         lower: bool = True,
     ) -> None:
         # prepare data
-        d = sum(v.shape.numel() for v in cvrg['mean'].values())
-        assert len(names) == d, 'shape mismatch for names'
-        cols = [torch.cat(list(v.values())).unsqueeze(1) for k, v in cvrg.items() if k != 'mean']
+        cols = [torch.cat(list(v.values())).unsqueeze(1) for v in cvrg.values()]
         matrix = torch.cat(cols, dim=1)
-        nominal = [int(100.0 * (1.0 - alpha)) for alpha in cvrg if isinstance(alpha, float)]
+        assert len(names) == len(matrix), 'shape mismatch for names'
+        nominal = [int(100.0 * (1.0 - alpha)) for alpha in cvrg]
 
         # plot coverage per parameter
         for i, values in enumerate(matrix):
