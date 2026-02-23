@@ -19,7 +19,7 @@ from metabeta.utils.evaluation import Proposal, joinProposals
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.evaluation.summary import getSummary, summaryTable
-from metabeta.plot import plotRecovery, plotCoverage
+from metabeta.plot import plotRecovery, plotCoverage, plotSBC
 
 
 logger = logging.getLogger('train.py')
@@ -368,6 +368,7 @@ batch size: {self.cfg.bs}
         if self.cfg.plot:
             plotRecovery(perf_summary, batch, plot_dir=self.plot_dir, epoch=epoch)
             plotCoverage(perf_summary, proposal, plot_dir=self.plot_dir, epoch=epoch)
+            plotSBC(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
 
     def _sampleSingle(
             self, batch: dict[str, torch.Tensor]
