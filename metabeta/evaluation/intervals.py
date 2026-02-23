@@ -4,7 +4,7 @@ from metabeta.utils.evaluation import Proposal, getMasks, weightedQuantile
 EPS = 1e-6
 ALPHAS = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
 
-
+# --- Credible Intervals
 def getQuantiles(
     roots: tuple[float, float],
     samples: torch.Tensor,
@@ -20,7 +20,7 @@ def getQuantiles(
     return quantiles   # (b, ..., 2, d)
 
 
-def getCredibleIntervals(
+def getCredibleInterval(
     proposal: Proposal,
     alpha: float,
 ) -> dict[str, torch.Tensor]:
@@ -34,7 +34,15 @@ def getCredibleIntervals(
     return out
 
 
-def getCoverage(
+def getCredibleIntervals(
+    proposal: Proposal,
+    alphas: list[float] = ALPHAS,
+) -> dict[float, dict[str, torch.Tensor]]:
+    return {alpha: getCredibleInterval(proposal, alpha) for alpha in alphas}
+
+
+# --- Coverage
+def getAtomicCoverage(
     ci: torch.Tensor,  # credible interval
     gt: torch.Tensor,  # ground truth
     mask: torch.Tensor | None = None,
@@ -63,12 +71,23 @@ def getCoveragePerParameter(
         if key == 'sigma_eps':
             gt = gt.unsqueeze(-1)
             ci = ci.unsqueeze(-1)
-        out[key] = getCoverage(ci, gt, mask)
+        out[key] = getAtomicCoverage(ci, gt, mask)
         if key == 'rfx':   # average over groups
             out[key] = out[key].mean(0)
     return out
 
 
+def getCoverages(
+    ci_dicts: dict[float, dict[str, torch.Tensor]],
+    data: dict[str, torch.Tensor],
+) -> dict[float, dict[str, torch.Tensor]]:
+    out = {}
+    for alpha, ci_per_parameter in ci_dicts.items():
+        out[alpha] = getCoveragePerParameter(ci_per_parameter, data)
+    return out
+
+
+# --- Coverage Errors
 def getCoverageError(
     coverages: dict[str, torch.Tensor],
     nominal: torch.Tensor,
@@ -82,31 +101,12 @@ def getCoverageError(
     return {k: cvrg - nominal for k, cvrg in coverages.items()}
 
 
-def averageOverAlpha(result: dict[str, dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+def getCoverageErrors(
+    cvrg_dicts: dict[float, dict[str, torch.Tensor]],
+    log_ratio: bool = True,
+) -> dict[float, dict[str, torch.Tensor]]:
     out = {}
-    param_keys = next(iter(result.values())).keys()
-    for p in param_keys:
-        values = torch.cat([v[p].unsqueeze(0) for v in result.values()])
-        out[p] = values.mean(0)
-    return out
-
-
-def analyzeCoverage(
-    proposal: Proposal,
-    data: dict[str, torch.Tensor],
-    alphas: list[float] = ALPHAS,
-) -> dict:
-    cvrg = {}   # observed coverage
-    errors = {}   # observed - nominal
-    ratios = {}   # log(observed/nominal)
-    for alpha in alphas:
+    for alpha, observed in cvrg_dicts.items():
         nominal = torch.tensor(1 - alpha)
-        cred_ints = getCredibleIntervals(proposal, alpha=alpha)
-        observed = getCoveragePerParameter(cred_ints, data)
-        cvrg[alpha] = observed
-        errors[alpha] = getCoverageError(observed, nominal, log_ratio=False)
-        ratios[alpha] = getCoverageError(observed, nominal, log_ratio=True)
-    cvrg['mean'] = averageOverAlpha(cvrg)
-    errors['mean'] = averageOverAlpha(errors)
-    ratios['mean'] = averageOverAlpha(ratios)
-    return {'coverage': cvrg, 'error': errors, 'log_ratio': ratios}
+        out[alpha] = getCoverageError(observed, nominal, log_ratio=log_ratio)
+    return out
