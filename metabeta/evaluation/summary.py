@@ -1,8 +1,8 @@
+from dataclasses import dataclass
 from pathlib import Path
 import torch
 from torch.nn import functional as F
 from tabulate import tabulate
-import numpy as np
 
 from metabeta.utils.evaluation import Proposal, getNames, joinSigmas
 from metabeta.evaluation.point import (
@@ -10,7 +10,7 @@ from metabeta.evaluation.point import (
     getRMSE,
     getCorrelation,
 )
-from metabeta.evaluation.intervals import analyzeCoverage
+from metabeta.evaluation.intervals import getCoverageErrors, getCoverages, getCredibleIntervals
 from metabeta.evaluation.predictive import (
     getPosteriorPredictive,
     posteriorPredictiveNLL,
@@ -18,15 +18,21 @@ from metabeta.evaluation.predictive import (
 from metabeta.plot import plot
 from matplotlib import pyplot as plt
 
-Summary = dict[str, dict[str, float | torch.Tensor]]
 EST_TYPE = 'mean'
 
-def tensorMean(data: dict[str, torch.Tensor]) -> dict[str, float]:
-    out = {}
-    for k, v in data.items():
-        out[k] = v.mean().item()
-    return out
 
+@dataclass()
+class EvaluationSummary:
+    estimates: dict[str, torch.Tensor]
+    nrmse: dict[str, torch.Tensor]
+    corr: dict[str, torch.Tensor]
+    credible_intervals: dict[float, dict[str, torch.Tensor]]
+    coverage: dict[float, dict[str, torch.Tensor]]
+    coverage_error: dict[float, dict[str, torch.Tensor]]
+    log_coverage_ratio: dict[float, dict[str, torch.Tensor]]
+    predictive_nll: torch.Tensor
+    sample_efficiency: torch.Tensor | None
+    tpd: float | None = None   # time per dataset
 
 def dictMean(data: dict[str, float]) -> float:
     values = list(data.values())
