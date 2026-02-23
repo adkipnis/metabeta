@@ -136,7 +136,7 @@ def longTable(
 
 def flatTable(
     mnll: float,
-    tpd: float,
+    tpd: float | None = None,
     eff: float | None = None,
 ) -> str:
 
@@ -149,22 +149,6 @@ def flatTable(
         rows += [['IS Efficency', eff]]
     results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
     return f'{results}\n'
-
-
-def summaryTable(summary: Summary) -> str:
-    # results per parameter class
-    corr = summary['corr']
-    nrmse = summary['nrmse']
-    ece = summary['ece']
-    lcr = summary['lcr']
-    long_table = longTable(corr, nrmse, ece, lcr) # type: ignore
-
-    # general results
-    mnll = summary['mnll']
-    tpd = summary['tpd']
-    eff = summary['eff']
-    flat_table = flatTable(mnll, tpd, eff) # type: ignore
-    return long_table + '\n' + flat_table
 
 
 def coveragePlot(
