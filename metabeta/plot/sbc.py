@@ -31,19 +31,21 @@ def getFractionalRanks(
     return ranks
 
 
-def theoreticalLimits(
-    b: int,  # number of posteriors (batch size)
-    s: int = 1000,  # number of samples per posterior
+def pointwiseBands(
+    n_eff: int,  # effective number of posteriors
     alpha: float = 0.05,  # alpha error for bounds
-    diff: bool = False,
-) -> tuple:
-    p = np.linspace(0, 1, b)
-    lower = binom.ppf(alpha / 2, s, p) / s
-    upper = binom.ppf(1 - alpha / 2, s, p) / s
+    diff: bool = False,  # use ECDF delta
+) -> tuple[np.ndarray, ...]:
+    """Pointwise ECDF bands under SBC null"""
+    z = np.linspace(0.0, 1.0, n_eff)
+    lower = binom.ppf(alpha / 2, n_eff, z) / n_eff
+    upper = binom.ppf(1 - alpha / 2, n_eff, z) / n_eff
     if diff:
-        lower -= p
-        upper -= p
-    return p, lower, upper
+        lower -= z
+        upper -= z
+    return z, lower, upper
+
+
 
 
 def _plotSbcEcdf(
