@@ -35,11 +35,12 @@ def pointwiseBands(
     n_eff: int,  # effective number of posteriors
     alpha: float = 0.05,  # alpha error for bounds
     diff: bool = False,  # use ECDF delta
+    eps: float = 1e-5,
 ) -> tuple[np.ndarray, ...]:
-    """Pointwise ECDF bands under SBC null"""
-    z = np.linspace(0.0, 1.0, n_eff)
-    lower = binom.ppf(alpha / 2, n_eff, z) / n_eff
-    upper = binom.ppf(1 - alpha / 2, n_eff, z) / n_eff
+    """Pointwise ECDF bands under SBC null (too strict)"""
+    z = np.linspace(0.0 + eps, 1.0 - eps, n_eff)
+    lower = binom(n_eff, z).ppf(alpha / 2.0) / n_eff
+    upper = binom(n_eff, z).ppf(1.0 - alpha / 2.0) / n_eff
     if diff:
         lower -= z
         upper -= z
