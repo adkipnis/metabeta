@@ -5,7 +5,7 @@ from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.ticker import MultipleLocator
 
-from metabeta.utils.evaluation import EvaluationSummary, getNames, joinSigmas
+from metabeta.utils.evaluation import EvaluationSummary, getMasks, getNames, joinSigmas
 from metabeta.utils.plot import PALETTE
 
 
@@ -147,6 +147,7 @@ def plotRecovery(
     masks = []
     names = []
     metrics = []
+    allMasks = getMasks(data)
 
     # prepare stats
     est: dict[str, torch.Tensor] = summary.estimates
@@ -159,7 +160,7 @@ def plotRecovery(
     d = data['ffx'].shape[-1]
     targets.append(data['ffx'])
     estimates.append(est['ffx'])
-    masks.append(data['mask_d'])
+    masks.append(allMasks['ffx'])
     names.append(getNames('ffx', d))
     metrics.append(
         {
@@ -172,7 +173,7 @@ def plotRecovery(
     q = data['sigma_rfx'].shape[-1]
     targets.append(joinSigmas(data))
     estimates.append(joinSigmas(est))
-    masks.append(torch.nn.functional.pad(data['mask_q'], (0, 1), value=True))
+    masks.append(allMasks['sigmas'])
     names.append(getNames('sigmas', q))
     nrmse = q / (q + 1) * stats['nrmse']['sigma_rfx'] + 1 / (q + 1) * stats['nrmse']['sigma_eps']
     r = q / (q + 1) * stats['corr']['sigma_rfx'] + 1 / (q + 1) * stats['corr']['sigma_eps']
@@ -186,8 +187,7 @@ def plotRecovery(
     # random effects
     targets.append(data['rfx'].view(-1, q))
     estimates.append(est['rfx'].view(-1, q))
-    mask = data['mask_mq']
-    masks.append(mask.view(-1, q))
+    masks.append(allMasks['rfx'].view(-1, q))
     names.append(getNames('rfx', q))
     metrics.append(
         {
