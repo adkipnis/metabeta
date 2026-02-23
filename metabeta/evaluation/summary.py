@@ -179,7 +179,7 @@ def coveragePlot(
 
 
 def recoveryPlot(
-    summary: Summary,
+    summary: EvaluationSummary,
     data: dict[str, torch.Tensor],
     plot_dir: Path,
     epoch: int | None = None,
@@ -191,10 +191,10 @@ def recoveryPlot(
     metrics = []
 
     # prepare stats
-    est: dict[str, torch.Tensor] = summary['est'] # type: ignore
+    est: dict[str, torch.Tensor] = summary.estimates
     stats = {
-        k: v for k, v in summary.items()
-        if k in ['corr', 'nrmse']
+        'corr': summary.corr,
+        'nrmse': summary.nrmse,
     }
 
     # fixed effects
@@ -205,8 +205,8 @@ def recoveryPlot(
     names.append(getNames('ffx', d))
     metrics.append(
         {
-            'r': stats['corr']['ffx'],
-            'NRMSE': stats['nrmse']['ffx'],
+            'r': stats['corr']['ffx'].mean(),
+            'NRMSE': stats['nrmse']['ffx'].mean(),
         }
     )
 
@@ -218,7 +218,12 @@ def recoveryPlot(
     names.append(getNames('sigmas', q))
     nrmse = q / (q + 1) * stats['nrmse']['sigma_rfx'] + 1 / (q + 1) * stats['nrmse']['sigma_eps']
     r = q / (q + 1) * stats['corr']['sigma_rfx'] + 1 / (q + 1) * stats['corr']['sigma_eps']
-    metrics.append({'r': r, 'NRMSE': nrmse})
+    metrics.append(
+        {
+            'r': r.mean().item(),
+            'NRMSE': nrmse.mean().item(),
+        }
+    )
 
     # random effects
     targets.append(data['rfx'].view(-1, q))
@@ -228,8 +233,8 @@ def recoveryPlot(
     names.append(getNames('rfx', q))
     metrics.append(
         {
-            'r': stats['corr']['rfx'],
-            'NRMSE': stats['nrmse']['rfx'],
+            'r': stats['corr']['rfx'].mean().item(),
+            'NRMSE': stats['nrmse']['rfx'].mean().item(),
         }
     )
 
