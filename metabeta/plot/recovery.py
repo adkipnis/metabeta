@@ -6,7 +6,7 @@ from matplotlib.axes import Axes
 from matplotlib.ticker import MultipleLocator
 
 from metabeta.utils.evaluation import EvaluationSummary, getMasks, getNames, joinSigmas
-from metabeta.utils.plot import PALETTE, savePlot
+from metabeta.utils.plot import PALETTE, savePlot, niceify
 
 
 def _plotRecovery(
@@ -19,7 +19,7 @@ def _plotRecovery(
     names: list[str],
     colors: list[str],
     title: str = '',
-    y_name: str = 'Estimate',
+    ylabel: str = 'Estimate',
     # plot details
     marker: str = 'o',
     alpha: float = 0.15,
@@ -61,40 +61,20 @@ def _plotRecovery(
             label=names[i],
         )
 
-    # stats info
-    txt = [f'{k} = {v:.3f}' for k, v in stats.items()]
-    ax.text(
-        0.70,
-        0.05,
-        '\n'.join(txt),
-        transform=ax.transAxes,
-        ha='center',
-        va='bottom',
-        fontsize=22,
-        bbox=dict(
-            boxstyle='round',
-            facecolor=(1, 1, 1, 0.7),
-            edgecolor=(0, 0, 0, alpha),
-        ),
-    )
-
     # final touches
     ml = max(np.floor(delta / 4), 0.5)
     ax.xaxis.set_major_locator(MultipleLocator(ml))
     ax.yaxis.set_major_locator(MultipleLocator(ml))
-    ax.tick_params(axis='both', labelsize=18)
-    ax.legend(fontsize=22, markerscale=2.5, loc='upper left')
-    if y_name:
-        ax.set_ylabel(y_name, fontsize=26, labelpad=10)
-    if upper and lower:
-        ax.set_title(title, fontsize=30, pad=15)
-        ax.set_xlabel('Ground Truth', fontsize=26, labelpad=10)
-    elif upper:
-        ax.set_title(title, fontsize=30, pad=15)
-        ax.set_xlabel('')
-        ax.tick_params(axis='x', labelcolor='w', size=1)
-    elif lower:
-        ax.set_xlabel('Ground Truth', fontsize=26, labelpad=10)
+    info = {
+        'title': title,
+        'ylabel': ylabel,
+        'xlabel': 'Ground Truth',
+        'show_title': upper,
+        'show_legend': upper,
+        'show_x': lower,
+        'stats': stats,
+        }
+    niceify(ax, info)
 
 
 def _plotRecoveryGrouped(
@@ -106,7 +86,7 @@ def _plotRecoveryGrouped(
     # string
     names: list[list[str]],
     titles: list[str] = [],
-    y_name: str = 'Estiamte',
+    ylabel: str = 'Estiamte',
     # plot details
     marker: str = 'o',
     alpha: float = 0.25,
@@ -127,7 +107,7 @@ def _plotRecoveryGrouped(
             names=nam,
             colors=col,
             title=tit,
-            y_name=(y_name if i == 0 else ''),
+            ylabel=(ylabel if i == 0 else ''),
             marker=marker,
             alpha=alpha,
             upper=upper,
