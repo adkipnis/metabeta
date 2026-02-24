@@ -92,3 +92,20 @@ def intervalCheck(
         'outside_rate': outside.float().mean(),
         'tail_area': tail_area,
     }
+
+
+def _groupMeans(y: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    n = mask.sum(dim=2).clamp_min(1.0)   # (b, m, 1)
+    return (y * mask).sum(dim=2) / n   # (b, m, s)
+
+
+def posteriorPredictiveWithinGroupSD(
+    y_rep: torch.Tensor, data: dict[str, torch.Tensor]
+) -> torch.Tensor:
+    mask_n = data['mask_n'].unsqueeze(-1).float()   # (b, m, n, 1)
+    mask_m = data['mask_m'].unsqueeze(-1).float()   # (b, m, 1)
+    mean = _groupMeans(y_rep, mask_n)
+    n_i = data['ns'].clamp_min(1).unsqueeze(-1)   # (b, m, 1)
+    var = ((y_rep - mean.unsqueeze(2)).square() * mask_n).sum(dim=2) / n_i
+    var_within = (var * mask_m).sum(dim=1) / data['m'].unsqueeze(-1)
+    return var_within.sqrt()
