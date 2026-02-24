@@ -7,7 +7,9 @@ from matplotlib.axes import Axes
 
 from metabeta.evaluation.predictive import (
     posteriorPredictiveSample,
-    posteriorPredictiveWithinGroupSD,
+    ppcICC,
+    ppcWithinGroupSD,
+    ppcBetweenGroupSD,
     intervalCheck,
 )
 from metabeta.utils.plot import niceify, savePlot
@@ -22,6 +24,7 @@ def _PPCintervals(
     t_obs_tensor: torch.Tensor,
     res: dict[str, torch.Tensor],
     ylabel: str,
+    legend: bool = True,
 ) -> None:
     # prepare
     t_obs = detach(t_obs_tensor)
@@ -49,6 +52,7 @@ def _PPCintervals(
         'despine': True,
         'stats': stats,
         'stats_suffix': '%',
+        'show_legend': legend,
     }
     niceify(ax, info)
 
@@ -60,16 +64,27 @@ def plotPPC(
     epoch: int | None = None,
 ) -> None:
     fig, axs = plt.subplots(figsize=(6 * 3, 6), ncols=3, dpi=300)
-
     y_obs = data['y'].unsqueeze(-1)
     y_rep = posteriorPredictiveSample(pp, data)
 
     # within group SD
-    t_rep = posteriorPredictiveWithinGroupSD(y_rep, data)
-    t_obs = posteriorPredictiveWithinGroupSD(y_obs, data).squeeze(-1)
-    res = intervalCheck(t_obs, t_rep)
-    _PPCintervals(axs[0], t_obs, res, 'Within Group SD')
-    
+    sd_within_rep = ppcWithinGroupSD(y_rep, data)
+    sd_within_obs = ppcWithinGroupSD(y_obs, data).squeeze(-1)
+    sd_within_res = intervalCheck(sd_within_obs, sd_within_rep)
+    _PPCintervals(axs[0], sd_within_obs, sd_within_res, 'Within Group SD', legend=True)
+
+    # between group SD
+    sd_between_rep = ppcBetweenGroupSD(y_rep, data)
+    sd_between_obs = ppcBetweenGroupSD(y_obs, data).squeeze(-1)
+    sd_between_res = intervalCheck(sd_between_obs, sd_between_rep)
+    _PPCintervals(axs[1], sd_between_obs, sd_between_res, 'Between Group SD', legend=False)
+
+    # ICC
+    icc_rep = ppcICC(sd_between_rep, sd_within_rep)
+    icc_obs = ppcICC(sd_between_obs, sd_within_obs)
+    icc_res = intervalCheck(icc_obs, icc_rep)
+    _PPCintervals(axs[2], icc_obs, icc_res, 'Intra-Class Correlation', legend=False)
+
     # format
     for ax in axs.flat:
         ax.set_box_aspect(1)
