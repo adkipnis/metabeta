@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 
 from metabeta.utils.evaluation import EvaluationSummary, getNames, Proposal, dictMean
-from metabeta.utils.plot import PALETTE
+from metabeta.utils.plot import PALETTE, savePlot
 
 
 def _plotCoverage(
@@ -80,10 +80,6 @@ def plotCoverage(
 
     # store
     if plot_dir is not None:
-        fname = plot_dir / 'coverage_latest.png'
-        plt.savefig(fname, bbox_inches='tight', pad_inches=0.15)
-        if epoch is not None:
-            fname_e = plot_dir / f'coverage_e{epoch}.png'
-            plt.savefig(fname_e, bbox_inches='tight', pad_inches=0.15)
+        savePlot(plot_dir, 'coverage', epoch=epoch)
     plt.show()
     plt.close(fig)

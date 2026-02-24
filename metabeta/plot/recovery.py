@@ -6,7 +6,7 @@ from matplotlib.axes import Axes
 from matplotlib.ticker import MultipleLocator
 
 from metabeta.utils.evaluation import EvaluationSummary, getMasks, getNames, joinSigmas
-from metabeta.utils.plot import PALETTE
+from metabeta.utils.plot import PALETTE, savePlot
 
 
 def _plotRecovery(
@@ -213,10 +213,6 @@ def plotRecovery(
 
     # store
     if plot_dir is not None:
-        fname = plot_dir / 'parameter_recovery_latest.png'
-        plt.savefig(fname, bbox_inches='tight', pad_inches=0.15)
-        if epoch is not None:
-            fname_e = plot_dir / f'parameter_recovery_e{epoch}.png'
-            plt.savefig(fname_e, bbox_inches='tight', pad_inches=0.15)
+        savePlot(plot_dir, 'parameter_recovery', epoch=epoch)
     plt.show()
     plt.close(fig)
