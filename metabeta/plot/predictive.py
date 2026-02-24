@@ -69,6 +69,36 @@ def _ppDensity(
 
 
 def plotPPD(
+    pp: D.Normal,
+    data: dict[str, torch.Tensor],
+    plot_dir: Path | None = None,
+    epoch: int | None = None,
+    indices: Sequence[int] = [0, 1, 2],
+) -> None:
+    y_obs = data['y']
+    assert max(indices) < len(y_obs), 'dataset indices out of bounds'
+    y_rep = posteriorPredictiveSample(pp, data)
+    mask_n = data['mask_n']
+    fig, axs = plt.subplots(figsize=(6 * len(indices), 6), ncols=len(indices), dpi=300)
+    first = True
+
+    # plot posterior predictive densities for {indices} datasets
+    for i in indices:
+        _ppDensity(axs[i], y_obs[i], y_rep[i], mask_n[i], left=first)
+        first = False
+
+    # format
+    for ax in axs.flat:
+        ax.set_box_aspect(1)
+    fig.tight_layout()
+
+    # store
+    if plot_dir is not None:
+        savePlot(plot_dir, 'posterior_predictive_densities', epoch=epoch)
+    plt.show()
+    plt.close(fig)
+
+
 def _PPCintervals(
     ax: Axes,
     t_obs_tensor: torch.Tensor,  # (b, m, n)
