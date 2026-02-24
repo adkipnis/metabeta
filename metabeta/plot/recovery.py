@@ -73,7 +73,7 @@ def _plotRecovery(
         'show_legend': upper,
         'show_x': lower,
         'stats': stats,
-        }
+    }
     niceify(ax, info)
 
 
@@ -95,7 +95,7 @@ def _plotRecoveryGrouped(
 ) -> None:
     i = 0
     for ax, tar, est, mas, met, nam, tit in zip(
-        axs, targets, estimates, masks, metrics, names, titles
+        axs, targets, estimates, masks, metrics, names, titles  # type: ignore
     ):
         col = PALETTE[i : i + len(nam)]
         _plotRecovery(
@@ -167,7 +167,7 @@ def plotRecovery(
     # random effects
     targets.append(data['rfx'].view(-1, q))
     estimates.append(est['rfx'].view(-1, q))
-    masks.append(allMasks['rfx'].view(-1, q))
+    masks.append(allMasks['rfx'].view(-1, q))   # type: ignore
     names.append(getNames('rfx', q))
     metrics.append(
         {
