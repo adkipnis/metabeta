@@ -1,5 +1,7 @@
+from typing import Sequence
 from pathlib import Path
 import numpy as np
+from scipy.stats import gaussian_kde
 import torch
 from torch import distributions as D
 from matplotlib import pyplot as plt
@@ -15,7 +17,7 @@ from metabeta.evaluation.predictive import (
 from metabeta.utils.plot import niceify, savePlot
 
 
-def detach(t: torch.Tensor) -> np.ndarray:
+def toNumpy(t: torch.Tensor) -> np.ndarray:
     return t.detach().cpu().numpy()
 
 
@@ -27,10 +29,10 @@ def _PPCintervals(
     legend: bool = True,
 ) -> None:
     # prepare
-    t_obs = detach(t_obs_tensor)
-    lo = detach(res['lo'])
-    hi = detach(res['hi'])
-    outside = detach(res['outside'])
+    t_obs = toNumpy(t_obs_tensor)
+    lo = toNumpy(res['lo'])
+    hi = toNumpy(res['hi'])
+    outside = toNumpy(res['outside'])
     stats = {'Outside': res['outside_rate'].item() * 100}
 
     # plot ordered T_obs and PPI
