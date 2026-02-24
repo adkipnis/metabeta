@@ -21,6 +21,54 @@ def toNumpy(t: torch.Tensor) -> np.ndarray:
     return t.detach().cpu().numpy()
 
 
+def _ppDensity(
+    ax: Axes,
+    y_obs_tensor: torch.Tensor,  # (m, n)
+    y_rep_tensor: torch.Tensor,  # (m, n, s)
+    mask_n_tensor: torch.Tensor,  # (m, n)
+    n_use: int = 64, # number of samples to use for y_rep KDEs
+    color: str = 'darkgreen',
+    left: bool = True,
+) -> None:
+    assert n_use <= y_rep_tensor.shape[-1], 'not enough samples'
+    mask_n = toNumpy(mask_n_tensor)
+    y_obs = toNumpy(y_obs_tensor)[mask_n]
+    y_rep = toNumpy(y_rep_tensor)[mask_n]
+
+    # shared grid from observed + replicated support
+    pooled = np.concatenate([y_obs, y_rep.reshape(-1)])
+    lo, hi = np.nanmin(pooled), np.nanmax(pooled)
+    span = max(hi - lo, 1e-6)
+    pad = 0.08 * span
+    x = np.linspace(lo - pad, hi + pad, 256)
+
+    # observed KDE
+    obs_kde = gaussian_kde(y_obs)(x)
+
+    # replicated KDEs (subset)
+    s = y_rep.shape[1]
+    idx = np.linspace(0, s - 1, num=n_use, dtype=int)
+    rep_kdes = [gaussian_kde(y_rep[..., j])(x) for j in idx]
+    rep_kdes_np = np.stack(rep_kdes, axis=0)
+    q_lo, q_md, q_hi = np.quantile(rep_kdes_np, [0.025, 0.50, 0.975], axis=0)
+
+    # plot PPC density envelope + observed
+    ax.fill_between(x, q_lo, q_hi, color=color, alpha=0.20, label=r'$y_{rep}$ (95%)')
+    ax.plot(x, q_md, color=color, lw=2.0, alpha=0.95, label=r'$y_{rep}$ (median)')
+    ax.plot(x, obs_kde, color='black', lw=2.5, label=r'$y_{obs}$')
+    info = {
+        'xlabel': r'$y$',
+        'ylabel': 'KDE',
+        'despine': True,
+        'show_legend': left,
+        'legend_loc': 'best',
+        'show_y': left,
+        'ticks_ls': 0,
+    }
+    niceify(ax, info)
+
+
+def plotPPD(
 def _PPCintervals(
     ax: Axes,
     t_obs_tensor: torch.Tensor,  # (b, m, n)
