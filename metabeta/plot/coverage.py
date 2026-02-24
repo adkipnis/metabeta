@@ -28,7 +28,7 @@ def _plotCoverage(
 
     # final touches
     limits = (min(nominal), max(nominal))
-    ax.plot(limits, limits, '--', lw=2, zorder=1, color='grey')
+    ax.plot(limits, limits, '--', lw=2, zorder=1, color='grey', alpha=0.5)
     ax.grid(True)
     ax.set_xticks(nominal)
     ax.set_yticks(nominal)
