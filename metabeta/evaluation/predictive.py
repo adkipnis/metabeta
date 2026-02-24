@@ -99,13 +99,11 @@ def _groupMeans(y: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     return (y * mask).sum(dim=2) / n   # (b, m, s)
 
 
-def posteriorPredictiveWithinGroupSD(
-    y_rep: torch.Tensor, data: dict[str, torch.Tensor]
-) -> torch.Tensor:
+def ppcWithinGroupSD(y_rep: torch.Tensor, data: dict[str, torch.Tensor]) -> torch.Tensor:
     mask_n = data['mask_n'].unsqueeze(-1).float()   # (b, m, n, 1)
     mask_m = data['mask_m'].unsqueeze(-1).float()   # (b, m, 1)
-    mean = _groupMeans(y_rep, mask_n)
+    means = _groupMeans(y_rep, mask_n)   # (b, m, s)
     n_i = data['ns'].clamp_min(1).unsqueeze(-1)   # (b, m, 1)
-    var = ((y_rep - mean.unsqueeze(2)).square() * mask_n).sum(dim=2) / n_i
+    var = ((y_rep - means.unsqueeze(2)).square() * mask_n).sum(dim=2) / n_i
     var_within = (var * mask_m).sum(dim=1) / data['m'].unsqueeze(-1)
     return var_within.sqrt()
