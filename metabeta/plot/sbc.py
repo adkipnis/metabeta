@@ -14,7 +14,7 @@ def _plotSbcEcdf(
     ranks: torch.Tensor,
     names: list[str],
     mask: torch.Tensor | None,
-    diff: bool = False,
+    diff: bool,
     upper: bool = True,
     lower: bool = True,
 ) -> None:
@@ -53,7 +53,7 @@ def _plotSbcEcdf(
 def plotSBC(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
-    diff: bool = True,
+    diff: bool = False,
     plot_dir: Path | None = None,
     epoch: int | None = None,
 ) -> None:
