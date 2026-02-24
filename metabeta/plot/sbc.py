@@ -31,7 +31,7 @@ def _plotSbcEcdf(
         x = np.pad(x, (1, 1), constant_values=(0, 1))
         y = np.linspace(0, 1, num=x.shape[-1])
         if diff:
-            y = y -x
+            y = y - x
         ax.plot(x, y, label=name, lw=3)
     ax.set_axisbelow(True)
     ax.grid(True)

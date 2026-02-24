@@ -1,7 +1,9 @@
 import torch
 import numpy as np
 from scipy.stats import binom
+
 from metabeta.utils.evaluation import Proposal
+
 
 def fractionalRanks(
     samples: torch.Tensor,  # (b, ..., s, d)
@@ -76,5 +78,3 @@ def _minimalCoverageProbs(z: np.ndarray, u: np.ndarray) -> np.ndarray:
     bin2 = binom(n_eff, z).cdf(n_eff * F_m - 1)
     gamma = 2 * np.min(np.min(np.stack([bin1, 1 - bin2], axis=-1), axis=-1), axis=-1)
     return gamma
-
-
