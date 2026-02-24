@@ -6,7 +6,7 @@ from matplotlib.axes import Axes
 
 from metabeta.evaluation.sbc import getFractionalRanks, simultaneousBands
 from metabeta.utils.evaluation import getAllNames, getMasks, Proposal, joinSigmas
-from metabeta.utils.plot import savePlot
+from metabeta.utils.plot import savePlot, niceify
 
 
 def _plotSbcEcdf(
@@ -37,16 +37,17 @@ def _plotSbcEcdf(
     ax.grid(True)
     ax.set_xlim(-0.02, 1.02)
     ax.tick_params(axis='both', labelsize=18)
+    # niceify
     prefix = r'$\Delta$ ' if diff else ''
-    ax.set_ylabel(f'{prefix}ECDF', fontsize=26, labelpad=10)
-    if upper:
-        ax.set_title('SBC', fontsize=28, pad=15)
-        ax.legend(fontsize=18, markerscale=2.5, loc='upper left')
-    if lower:
-        ax.set_xlabel('fractional rank', fontsize=26, labelpad=10)
-    else:
-        ax.set_xlabel('')
-        ax.tick_params(axis='x', labelcolor='w', size=1)
+    info = {
+        'title': 'SBC Check',
+        'ylabel': f'{prefix}Uniform ECDF',
+        'xlabel': 'Fractional Rank',
+        'show_title': upper,
+        'show_legend': upper,
+        'show_x': lower,
+        }
+    niceify(ax, info)
 
 
 def plotSBC(
