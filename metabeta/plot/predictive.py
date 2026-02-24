@@ -23,7 +23,7 @@ def toNumpy(t: torch.Tensor) -> np.ndarray:
 
 def _PPCintervals(
     ax: Axes,
-    t_obs_tensor: torch.Tensor,
+    t_obs_tensor: torch.Tensor,  # (b, m, n)
     res: dict[str, torch.Tensor],
     ylabel: str,
     legend: bool = True,
@@ -65,9 +65,9 @@ def plotPPC(
     plot_dir: Path | None = None,
     epoch: int | None = None,
 ) -> None:
-    fig, axs = plt.subplots(figsize=(6 * 3, 6), ncols=3, dpi=300)
     y_obs = data['y'].unsqueeze(-1)
     y_rep = posteriorPredictiveSample(pp, data)
+    fig, axs = plt.subplots(figsize=(6 * 3, 6), ncols=3, dpi=300)
 
     # within group SD
     sd_within_rep = ppcWithinGroupSD(y_rep, data)
