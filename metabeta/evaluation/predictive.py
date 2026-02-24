@@ -107,3 +107,19 @@ def ppcWithinGroupSD(y_rep: torch.Tensor, data: dict[str, torch.Tensor]) -> torc
     var = ((y_rep - means.unsqueeze(2)).square() * mask_n).sum(dim=2) / n_i
     var_within = (var * mask_m).sum(dim=1) / data['m'].unsqueeze(-1)
     return var_within.sqrt()
+
+
+def ppcBetweenGroupSD(y_rep: torch.Tensor, data: dict[str, torch.Tensor]) -> torch.Tensor:
+    mask_n = data['mask_n'].unsqueeze(-1).float()   # (b, m, n, 1)
+    mask_m = data['mask_m'].unsqueeze(-1).float()   # (b, m, 1)
+    means = _groupMeans(y_rep, mask_n)
+    m = data['m'].unsqueeze(-1)
+    mean = (means * mask_m).sum(dim=1) / m
+    var_between = ((means - mean.unsqueeze(1)).square() * mask_m).sum(dim=1) / m
+    return var_between.sqrt()
+
+
+def ppcICC(sd_between: torch.Tensor, sd_within: torch.Tensor) -> torch.Tensor:
+    var_between = sd_between.square()
+    var_within = sd_within.square()
+    return var_between / (var_between + var_within + 1e-12)
