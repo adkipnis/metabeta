@@ -34,19 +34,19 @@ def posteriorPredictiveNLL(
     mode: Literal['expected', 'mixture'] = 'mixture',
 ) -> torch.Tensor:
     """
-        Returns per-dataset NLL with shape (b,).
-        mode='expected':
-            -E_p(theta|D)[ log p(y | theta) ]
-        mode='mixture':
-            -log E_p(theta|D)[ p(y | theta) ]
+    Returns per-dataset NLL with shape (b,).
+    mode='expected':
+        -E_p(theta|D)[ log p(y | theta) ]
+    mode='mixture':
+        -log E_p(theta|D)[ p(y | theta) ]
     """
     y = data['y'].unsqueeze(-1)   # (b, m, n, 1)
-    log_p = pp.log_prob(y) # (b, m, n, s)
-    obs_mask = data['mask_n'] # (b, m, n)
-    n_obs = obs_mask.sum(dim=(1, 2)) # (b, )
+    log_p = pp.log_prob(y)   # (b, m, n, s)
+    obs_mask = data['mask_n']   # (b, m, n)
+    n_obs = obs_mask.sum(dim=(1, 2))   # (b, )
     if mode == 'expected':
         log_p = log_p * obs_mask.unsqueeze(-1)
-        nll_s = -log_p.sum(dim=(1, 2)) / n_obs.unsqueeze(-1) # (b, s)
+        nll_s = -log_p.sum(dim=(1, 2)) / n_obs.unsqueeze(-1)   # (b, s)
         if w is None:
             return nll_s.mean(-1)
         return (nll_s * w).sum(-1)
@@ -57,9 +57,10 @@ def posteriorPredictiveNLL(
         else:
             log_w = w.log().unsqueeze(1).unsqueeze(1)
             log_mix = torch.logsumexp(log_p + log_w, dim=-1)
-        return -(log_mix * obs_mask).sum(dim=(1,2)) / n_obs
+        return -(log_mix * obs_mask).sum(dim=(1, 2)) / n_obs
     else:
         raise ValueError(f'unknown mode: {mode}')
+
 
 def posteriorPredictiveSample(
     pp: D.Normal,
