@@ -33,10 +33,13 @@ def _plotSbcEcdf(
         if diff:
             y = y - x
         ax.plot(x, y, label=name, lw=3)
+    xlim = (0, 1)
+    ylim = (0, 0) if diff else xlim
+    ax.plot(xlim, ylim, '--', lw=2, zorder=1, color='grey', alpha=0.2)
     ax.set_axisbelow(True)
     ax.grid(True)
-    ax.set_xlim(-0.02, 1.02)
-    ax.tick_params(axis='both', labelsize=18)
+    ax.set_xlim(xlim[0] - 0.02, xlim[1] + 0.02)
+
     # niceify
     prefix = r'$\Delta$ ' if diff else ''
     info = {
