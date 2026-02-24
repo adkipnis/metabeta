@@ -41,7 +41,7 @@ def _plotRecovery(
     limits = (min_val - const, max_val + const)
     ax.set_xlim(limits, auto=False)
     ax.set_ylim(limits, auto=False)
-    ax.plot(limits, limits, '--', lw=2, zorder=1, color='grey')  # diagline
+    ax.plot(limits, limits, '--', lw=2, zorder=1, color='grey', alpha=0.5)  # diagline
 
     # overlay plots
     for i in range(d):
