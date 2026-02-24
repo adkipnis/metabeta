@@ -53,3 +53,30 @@ def _PPCintervals(
     niceify(ax, info)
 
 
+def plotPPC(
+    pp: D.Normal,
+    data: dict[str, torch.Tensor],
+    plot_dir: Path | None = None,
+    epoch: int | None = None,
+) -> None:
+    fig, axs = plt.subplots(figsize=(6 * 3, 6), ncols=3, dpi=300)
+
+    y_obs = data['y'].unsqueeze(-1)
+    y_rep = posteriorPredictiveSample(pp, data)
+
+    # within group SD
+    t_rep = posteriorPredictiveWithinGroupSD(y_rep, data)
+    t_obs = posteriorPredictiveWithinGroupSD(y_obs, data).squeeze(-1)
+    res = intervalCheck(t_obs, t_rep)
+    _PPCintervals(axs[0], t_obs, res, 'Within Group SD')
+    
+    # format
+    for ax in axs.flat:
+        ax.set_box_aspect(1)
+    fig.tight_layout()
+
+    # store
+    if plot_dir is not None:
+        savePlot(plot_dir, 'posterior_predictive_checks', epoch=epoch)
+    plt.show()
+    plt.close(fig)
