@@ -18,16 +18,18 @@ INFO = {
     'show_y': True,
     'ylabel_fs': 26,
     'ylabel_pad': 10,
+    'despine': False,
     'show_legend': True,
     'legend_fs': 18,
     'legend_ms': 2.5,
     'legend_loc': 'upper left',
-    'stats': None, # dict[str, float]
+    'stats': None,  # dict[str, float]
     'stats_suffix': '',
     'stats_fs': 20,
     'stats_loc_x': 0.70,
     'stats_loc_y': 0.05,
 }
+
 
 def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
     info = INFO | info
@@ -59,6 +61,11 @@ def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
         pad = int(info['ylabel_pad'])
         ax.set_ylabel(label, fontsize=fs, labelpad=pad)
 
+    # despine
+    if info['despine']:
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+
     # legend
     if info['show_legend']:
         fs = info['legend_fs']
@@ -69,7 +76,7 @@ def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
     # stats
     if (stats := info['stats']) is not None:
         suffix = info['stats_suffix']
-        txt = [f'{k} = {v:.3f}{suffix}' for k, v in stats.items()] # type: ignore
+        txt = [f'{k} = {v:.3f}{suffix}' for k, v in stats.items()]   # type: ignore
         fs = int(info['stats_fs'])
         x_loc = float(info['stats_loc_x'])
         y_loc = float(info['stats_loc_y'])
@@ -87,8 +94,6 @@ def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
                 edgecolor=(0, 0, 0, 0.15),
             ),
         )
-
-
 
 
 def savePlot(plot_dir: Path, title: str, epoch: int | None = None, ending: str = 'png') -> None:
