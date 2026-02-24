@@ -35,7 +35,11 @@ def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
     info = INFO | info
 
     # ticks
-    ax.tick_params(axis='both', labelsize=info['ticks_ls'])
+    if (ticks_ls := info['ticks_ls']):
+        ax.tick_params(axis='both', labelsize=ticks_ls)
+    else:
+        ax.tick_params(axis='x', labelcolor='w', size=1)
+        ax.tick_params(axis='y', labelcolor='w', size=1)
 
     # title
     if info['show_title'] and info.get('title') is not None:
