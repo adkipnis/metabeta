@@ -2,6 +2,7 @@ from typing import Literal
 import math
 import torch
 from torch import distributions as D
+
 from metabeta.utils.evaluation import Proposal
 
 
@@ -40,8 +41,8 @@ def posteriorPredictiveNLL(
     mode='mixture':
         -log E_p(theta|D)[ p(y | theta) ]
     """
-    y = data['y'].unsqueeze(-1)   # (b, m, n, 1)
-    log_p = pp.log_prob(y)   # (b, m, n, s)
+    y_obs = data['y'].unsqueeze(-1)   # (b, m, n, 1)
+    log_p = pp.log_prob(y_obs)   # (b, m, n, s)
     obs_mask = data['mask_n']   # (b, m, n)
     n_obs = obs_mask.sum(dim=(1, 2))   # (b, )
     if mode == 'expected':
@@ -69,4 +70,6 @@ def posteriorPredictiveSample(
     mask = data['mask_n'].unsqueeze(-1)
     y_rep = pp.sample((1,)).squeeze(0)
     y_rep = y_rep * mask
-    return y_rep
+    return y_rep   # (b, m, n, s)
+
+
