@@ -73,3 +73,22 @@ def posteriorPredictiveSample(
     return y_rep   # (b, m, n, s)
 
 
+def intervalCheck(
+    t_obs: torch.Tensor,  # (b, )
+    t_rep: torch.Tensor,  # (b, s)
+    alpha: float = 0.05,
+) -> dict[str, torch.Tensor]:
+    # TODO: incorporate importance weights
+    lo = torch.quantile(t_rep, alpha / 2, dim=-1)
+    hi = torch.quantile(t_rep, 1 - alpha / 2, dim=-1)
+    outside = (t_obs < lo) | (hi < t_obs)
+    left = (t_rep <= t_obs.unsqueeze(-1)).float().mean(-1)
+    right = (t_rep >= t_obs.unsqueeze(-1)).float().mean(-1)
+    tail_area = 2.0 * torch.minimum(left, right)
+    return {
+        'lo': lo,
+        'hi': hi,
+        'outside': outside,
+        'outside_rate': outside.float().mean(),
+        'tail_area': tail_area,
+    }
