@@ -12,6 +12,8 @@ from metabeta.evaluation.predictive import (
     getPosteriorPredictive,
     posteriorPredictiveNLL,
 )
+# from metabeta.plot.predictive import plotPPC, plotPPD
+
 
 EST_TYPE = 'mean'
 
@@ -32,11 +34,16 @@ def getSummary(
     out['coverage'] = cvrg_dicts = getCoverages(ci_dicts, data)
     out['coverage_error'] = getCoverageErrors(cvrg_dicts, log_ratio=False)
     out['log_coverage_ratio'] = getCoverageErrors(cvrg_dicts, log_ratio=True)
-    
-    # posterior predictive
+
+    # posterior predictive fit
     pp = getPosteriorPredictive(proposal, data)
     out['predictive_nll'] = posteriorPredictiveNLL(pp, data, w=proposal.weights)
+    # plotPPC(pp, data)
+    # plotPPD(pp, data)
+
+    # importance sampling
     out['sample_efficiency'] = proposal.efficiency
+    out['pareto_k'] = proposal.pareto_k
 
     summary = EvaluationSummary(**out)
     return summary
@@ -44,7 +51,7 @@ def getSummary(
 
 def summaryTable(s: EvaluationSummary) -> str:
     long_table = longTable(s.corr, s.nrmse, s.ece, s.lcr)
-    flat_table = flatTable(s.mnll, s.tpd, s.meff)
+    flat_table = flatTable(s.tpd, s.mnll, s.meff, s.mk)
     return long_table + '\n' + flat_table
 
 
@@ -81,17 +88,21 @@ def longTable(
 
 
 def flatTable(
-    mnll: float,
     tpd: float | None = None,
-    eff: float | None = None,
+    mnll: float | None = None,
+    meff: float | None = None,
+    mk: float | None = None,
 ) -> str:
-
-    # flat table
-    rows = [
-        ['Posterior Predictive NLL', mnll],
-        ['Estimation time / ds [s]', tpd],
-    ]
-    if eff is not None:
-        rows += [['IS Efficency', eff]]
-    results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
+    rows = []
+    results = ''
+    if tpd is not None:
+        rows += [['Estimation time / ds [s]', tpd]]
+    if mnll is not None:
+        rows += [['Median ppNLL', mnll]]
+    if meff is not None:
+        rows += [['Median IS Efficency', meff]]
+    if mk is not None:
+        rows += [['Median Pareto k', mk]]
+    if rows:
+        results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
     return f'{results}\n'
