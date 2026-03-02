@@ -112,6 +112,10 @@ class Proposal:
     def efficiency(self) -> torch.Tensor | None:
         return self.is_results.get('sample_efficiency')
 
+    @property
+    def pareto_k(self) -> torch.Tensor | None:
+        return self.is_results.get('pareto_k')
+
     def partition(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         out = {}
         out['ffx'] = x[..., : self.d]
@@ -194,6 +198,7 @@ class EvaluationSummary:
     log_coverage_ratio: dict[float, dict[str, torch.Tensor]]
     predictive_nll: torch.Tensor
     sample_efficiency: torch.Tensor | None
+    pareto_k: torch.Tensor | None
     tpd: float | None = None   # time per dataset
 
     def averageOverAlpha(
@@ -220,9 +225,15 @@ class EvaluationSummary:
         return self.predictive_nll.median().item()
 
     @property
-    def meff(self) -> None | float:   # median sample efficiency
+    def meff(self) -> None | float:   # median sample efficiency for IS
         if self.sample_efficiency is not None:
             return self.sample_efficiency.median().item()
+
+    @property
+    def mk(self) -> None | float:   # median pareto k for PSIS
+        if self.pareto_k is not None:
+            return self.pareto_k.median().item()
+
 
 
 def dictMean(td: dict[str, torch.Tensor]) -> float:
