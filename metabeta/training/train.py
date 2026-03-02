@@ -50,7 +50,7 @@ def setup() -> argparse.Namespace:
 
     # load and override
     args = parser.parse_args()
-    path = Path('configs', f'{args.name}.yaml')
+    path = Path(__file__).resolve().parent / 'configs' / f'{args.name}.yaml'
     with open(path, 'r') as p:
         cfg = yaml.safe_load(p)
     cfg.update(vars(args))
