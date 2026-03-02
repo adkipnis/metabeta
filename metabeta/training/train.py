@@ -27,49 +27,34 @@ logger = logging.getLogger('train.py')
 
 def setup() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
+    parser.add_argument('--name', type=str, default='default', help='load configs/{name}.yaml')
 
-    # misc
-    parser.add_argument('--seed', type=int, default=42, help='model seed (default = 42)')
-    parser.add_argument('--device', type=str, default='cpu', help='device to use [cpu, cuda, mps], (default = cpu)')
-    parser.add_argument('--cores', type=int, default=8, help='number of processor cores to use (default = 8)')
-    parser.add_argument('--reproducible', action='store_false', help='use deterministic learning trajectory (default = True)')
-    parser.add_argument('--tb', action='store_true', help='enable tensorboard logging (default = False)')
-    parser.add_argument('--verbosity', type=int, default=0, help='verbosity level (0: warnings, 1: infos, 2: debug, default=0)')
+    # runtime
+    parser.add_argument('--device', type=str)
+    parser.add_argument('--tb', action=argparse.BooleanOptionalAction) # tensorboard
 
-    # model & optimizer
-    parser.add_argument('-m', '--m_tag', type=str, default='toy', help='name of model config file')
-    parser.add_argument('--n_samples', type=int, default=512, help='number of samples to draw from posterior on test set')
-    parser.add_argument('--compile', action='store_true', help='compile model (default = False)')
-    parser.add_argument('--lr', type=float, default=1e-3, help='optimizer learning rate (default = 1e-3)')
-    parser.add_argument('--max_grad_norm', type=float, default=1.0, help='clip grad norm to this value (default = 1.0)')
-    parser.add_argument('--loss_type', type=str, default='forward', help='KL loss type [forward, backward, mixed] (default = mixed)')
-
-    # data
-    parser.add_argument('-d', '--d_tag', type=str, default='toy', help='name of data config file')
-    parser.add_argument('--bs', type=int, default=32, help='number of regression datasets per training minibatch (default = 32)')
-
-    # steps
-    parser.add_argument('--skip_ref', action='store_true', help='skip the reference run before training (default = False)')
-    parser.add_argument('-e', '--max_epochs', type=int, default=10, help='maximum number of epochs to train (default = 10)')
-    parser.add_argument('--sample_interval', type=int, default=5, help='sample posterior every #n epochs (default = 5)')
-    parser.add_argument('--patience', type=int, default=5, help='early stopping criterion (default = 10)')
+    # training
+    parser.add_argument('-e', '--max_epochs', type=int)
+    parser.add_argument('--bs', type=int)
+    parser.add_argument('--lr', type=float)
 
     # evaluation
-    parser.add_argument('--rescale', action='store_false', help='use original scale of y for evaluation (default = True)')
-    parser.add_argument('--importance', action='store_true', help='use importance sampling before evaluation (default = False)')
-    parser.add_argument('--sir', action='store_true', help='use sampling importance resampling before evaluation (default = False)')
-    parser.add_argument('--sir_iter', type=int, default=8, help='number of SIR iterations (default = 10)')
-    parser.add_argument('--plot', action='store_false', help='plot evaluation results (default = True)')
+    parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--plot', action=argparse.BooleanOptionalAction)
 
     # saving & loading
-    parser.add_argument('--r_tag', type=str, default='', help='run tag (default="")')
-    parser.add_argument('--save_latest', action='store_false', help='save latest model after each epoch (default = True)')
-    parser.add_argument('--save_best', action='store_true', help='track and save best model wrt. validation set (default = True)')
-    parser.add_argument('--load_latest', action='store_true', help='load latest model before training (default = False)')
-    parser.add_argument('--load_best', action='store_true', help='load best model wrt. validation set (overwrites load_latest, default = False)')
+    parser.add_argument('--r_tag', type=str)
+    parser.add_argument('--load_latest', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--load_best', action=argparse.BooleanOptionalAction)
 
-    return parser.parse_args()
+    # load and override
+    args = parser.parse_args()
+    path = Path('configs', f'{args.name}.yaml')
+    with open(path, 'r') as p:
+        cfg = yaml.safe_load(p)
+    cfg.update(vars(args))
+    return argparse.Namespace(**cfg)
 
 
 # -----------------------------------------------------------------------------
