@@ -32,7 +32,7 @@ def setup() -> argparse.Namespace:
 
     # runtime
     parser.add_argument('--device', type=str)
-    parser.add_argument('--tb', action=argparse.BooleanOptionalAction) # tensorboard
+    parser.add_argument('--tb', action=argparse.BooleanOptionalAction)   # tensorboard
 
     # training
     parser.add_argument('-e', '--max_epochs', type=int)
@@ -98,8 +98,9 @@ class Trainer:
 
         # check IS sizes
         if self.cfg.sir:
-            assert self.cfg.n_samples % self.cfg.sir_iter == 0, \
-                'number of samples must be divisible by number of SIR iterations'
+            assert (
+                self.cfg.n_samples % self.cfg.sir_iter == 0
+            ), 'number of samples must be divisible by number of SIR iterations'
 
         # checkpoint dir
         self.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -167,7 +168,8 @@ class Trainer:
 
     def _initWriter(self) -> None:
         self.tb_path = Path(
-            self.dir, '..', 'outputs', 'tensorboard', self.run_name + '_' + self.timestamp)
+            self.dir, '..', 'outputs', 'tensorboard', self.run_name + '_' + self.timestamp
+        )
         self.tb_path.mkdir(parents=True, exist_ok=True)
         self.writer = SummaryWriter(log_dir=str(self.tb_path))
 
@@ -244,18 +246,20 @@ batch size: {self.cfg.bs}
 ===================="""
 
     def loss(
-            self,
-            batch: dict[str, torch.Tensor],
-            summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
-            mode: str = '',
+        self,
+        batch: dict[str, torch.Tensor],
+        summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
+        mode: str = '',
     ) -> torch.Tensor:
         if not mode:
             mode = self.cfg.loss_type
 
         #  init group variables
-        m = batch['m'] # number of groups
-        mask = batch['mask_m'] # group mask
-        if mode in ['backward', ]:
+        m = batch['m']   # number of groups
+        mask = batch['mask_m']   # group mask
+        if mode in [
+            'backward',
+        ]:
             m = m.unsqueeze(-1)
             mask = mask.unsqueeze(-1)
 
@@ -356,7 +360,7 @@ batch size: {self.cfg.bs}
             plotSBC(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
 
     def _sampleSingle(
-            self, batch: dict[str, torch.Tensor]
+        self, batch: dict[str, torch.Tensor]
     ) -> tuple[Proposal, dict[str, torch.Tensor]]:
         proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
 
@@ -372,7 +376,7 @@ batch size: {self.cfg.bs}
         return proposal, batch
 
     def _sampleMulti(
-            self, batch: dict[str, torch.Tensor]
+        self, batch: dict[str, torch.Tensor]
     ) -> tuple[Proposal, dict[str, torch.Tensor]]:
         # separate normalized and unnormalized batch
         eval_batch = batch
