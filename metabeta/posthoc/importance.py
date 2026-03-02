@@ -17,7 +17,7 @@ class ImportanceSampler:
         data: dict[str, torch.Tensor],
         constrain: bool = True,
         full: bool = True,  # incorporate sigma_rfx and rfx priors
-        temperature: float = 3.0, # softmax temperature
+        temperature: float = 1.0, # softmax temperature
         pareto: bool = False,  # use Pareto smoothing (PSIS)
         sir: bool = False,  # use Sampling Importance Resampling (SIR)
         n_sir: int = 25,  # size of SIR re-sample
