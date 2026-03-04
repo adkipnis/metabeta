@@ -201,7 +201,7 @@ class Trainer:
         tmp_path = path.with_suffix(path.suffix + '.tmp')
         torch.save(payload, tmp_path)
         tmp_path.replace(path)
-        logger.info(f'Saved checkpoint to {path}')
+        logger.debug(f'Saved checkpoint to {path}')
 
     def load(self, prefix: str = 'latest') -> int:
         path = Path(self.ckpt_dir, prefix + '.pt')
@@ -359,7 +359,7 @@ batch size: {self.cfg.bs}
         eval_summary = getSummary(proposal, batch)
         eval_summary.tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
         summary_table = summaryTable(eval_summary)
-        print(summary_table)
+        logger.info(summary_table)
         if self.cfg.wandb:
             wandb.log(
                 {
@@ -491,6 +491,6 @@ if __name__ == '__main__':
     cfg = setup()
     setupLogging(cfg.verbosity)
     trainer = Trainer(cfg)
-    print(trainer.info)
+    logger.info(trainer.info)
     trainer.go()
     trainer.close()
