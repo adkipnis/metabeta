@@ -160,7 +160,9 @@ class Trainer:
         else:
             # load model config
             model_cfg_path = Path(self.dir, '..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
-            self.model_cfg = modelFromYaml(model_cfg_path, d_ffx=self.cfg.max_d, d_rfx=self.cfg.max_q)
+            self.model_cfg = modelFromYaml(
+                model_cfg_path, d_ffx=self.cfg.max_d, d_rfx=self.cfg.max_q
+            )
 
         # init model
         self.model = Approximator(self.model_cfg).to(self.device)
@@ -171,10 +173,13 @@ class Trainer:
         self.optimizer = schedulefree.AdamWScheduleFree(self.model.parameters(), lr=self.cfg.lr)
 
     def _initWandb(self) -> None:
+        wandb_dir = Path(self.dir, '..', 'outputs', 'wandb')
+        wandb_dir.mkdir(parents=True, exist_ok=True)
         self.wandb_run = wandb.init(
             project='metabeta',
             name=self.run_name,
             config=vars(self.cfg),
+            dir=wandb_dir,
         )
         wandb.config.update({'data_cfg': self.data_cfg, 'model_cfg': self.model_cfg.to_dict()})
         wandb.define_metric('train/loss_step', step_metric='step/global')
@@ -370,12 +375,9 @@ batch size: {self.cfg.bs}
 
         # plots
         if self.cfg.plot:
-            path_r = plotRecovery(
-                eval_summary, batch, plot_dir=self.plot_dir, epoch=epoch)
-            path_c = plotCoverage(
-                eval_summary, proposal, plot_dir=self.plot_dir, epoch=epoch)
-            path_s = plotSBC(
-                proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
+            path_r = plotRecovery(eval_summary, batch, plot_dir=self.plot_dir, epoch=epoch)
+            path_c = plotCoverage(eval_summary, proposal, plot_dir=self.plot_dir, epoch=epoch)
+            path_s = plotSBC(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
             if self.cfg.wandb:
                 image_logs = {
                     'plot/recovery': wandb.Image(str(path_r)),
