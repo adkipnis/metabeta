@@ -31,3 +31,31 @@ def setup() -> argparse.Namespace:
 
 
 class HyperOptimizer:
+    def __init__(self, cfg: argparse.Namespace) -> None:
+        self.cfg = cfg
+        self.dir = Path(__file__).resolve().parent
+
+        # data config
+        data_cfg_path = Path(self.dir, '..', 'simulation', 'configs', f'{self.cfg.d_tag}.yaml')
+        assert data_cfg_path.exists(), f'config file {data_cfg_path} does not exist'
+        with open(data_cfg_path, 'r') as f:
+            data_cfg = yaml.safe_load(f)
+            d_ffx, d_rfx = data_cfg['max_d'], data_cfg['max_q']
+
+        # base model config
+        model_cfg_path = Path(self.dir, '..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
+        self.model_cfg = modelFromYaml(model_cfg_path, d_ffx=d_ffx, d_rfx=d_rfx).to_dict()
+
+        # optuna study
+        self.study = optuna.create_study(
+            study_name=self.cfg.name,
+            directions=['minimize', 'minimize'],
+            sampler=optuna.samplers.TPESampler(),
+            load_if_exists=True,
+        )
+
+        # output dir
+        self.out_dir = Path(self.dir, '..', 'outputs', 'optuna', self.cfg.name)
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+
+    def suggest(self, trial: optuna.Trial) -> ApproximatorConfig:
