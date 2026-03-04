@@ -10,7 +10,7 @@ cores: 8
 reproducible: true
 compile: false
 verbosity: 0          # warnings|infos|debug
-tb: false             # tensorboard
+wandb: true
 
 # training
 max_epochs: 10
@@ -34,5 +34,5 @@ plot: true
 r_tag: ''             # run tag
 save_latest: true
 save_best: true
-load_latest: true
+load_latest: false
 load_best: false
