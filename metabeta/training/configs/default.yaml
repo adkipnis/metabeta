@@ -10,7 +10,7 @@ cores: 8
 reproducible: true
 compile: false
 verbosity: 1          # warnings|infos|debug
-wandb: true
+wandb: false
 
 # training
 max_epochs: 10
