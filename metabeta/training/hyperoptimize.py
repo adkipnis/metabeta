@@ -50,7 +50,7 @@ class HyperOptimizer:
         self.study = optuna.create_study(
             study_name=self.cfg.name,
             directions=['minimize', 'minimize'],
-            sampler=optuna.samplers.TPESampler(),
+            sampler=optuna.samplers.TPESampler(seed=self.cfg.seed),
             load_if_exists=True,
         )
 
