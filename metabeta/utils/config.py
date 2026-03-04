@@ -15,11 +15,9 @@ class SummarizerConfig:
     activation: str = 'GELU'
     dropout: float = 0.01
     type: Literal['set-transformer'] = 'set-transformer'
-
+    
     def to_dict(self) -> dict:
-        out = asdict(self)
-        out.pop('type')
-        return out
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -32,9 +30,7 @@ class PosteriorConfig:
     base_trainable: bool = True
 
     def to_dict(self) -> dict:
-        out = asdict(self)
-        out.pop('type')
-        return out
+        return asdict(self)
 
 
 @dataclass(frozen=True)
