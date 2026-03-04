@@ -100,3 +100,40 @@ class HyperOptimizer:
 
         return objective
 
+    def saveStudy(self) -> None:
+        trials = [
+            {
+                'number': t.number,
+                'values': t.values,
+                'params': t.params,
+                'state': t.state.name,
+            }
+            for t in self.study.trials
+        ]
+        with open(self.out_dir / 'trials.yaml', 'w') as f:
+            yaml.safe_dump(trials, f, sort_keys=False)
+        with open(self.out_dir / 'pareto.yaml', 'w') as f:
+            yaml.safe_dump(
+                [
+                    {
+                        'number': t.number,
+                        'values': t.values,
+                        'params': t.params,
+                    }
+                    for t in self.study.best_trials
+                ],
+                f,
+                sort_keys=False,
+            )
+        print(f'Saved study to {self.out_dir}')
+
+    def go(self) -> None:
+        self.study.optimize(self.setObjective(), n_trials=self.cfg.n_trials)
+        self.saveStudy()
+
+
+if __name__ == '__main__':
+    cfg = setup()
+    setupLogging(cfg.verbosity)
+    hyper_optimizer = HyperOptimizer(cfg)
+    hyper_optimizer.go()
