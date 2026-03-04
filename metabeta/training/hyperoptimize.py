@@ -94,9 +94,9 @@ class HyperOptimizer:
             trainer.go()
             eval_summary = trainer.sample()
             nrmse = dictMean(eval_summary.nrmse)
-            lcr = dictMean(eval_summary.lcr)
+            alcr = dictMean(eval_summary.abs_lcr)
             trainer.close()
-            return nrmse, lcr
+            return nrmse, alcr
 
         return objective
 

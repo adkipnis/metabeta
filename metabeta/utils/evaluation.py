@@ -202,14 +202,17 @@ class EvaluationSummary:
     tpd: float | None = None   # time per dataset
 
     def averageOverAlpha(
-        self, nested: dict[float, dict[str, torch.Tensor]]
+        self, nested: dict[float, dict[str, torch.Tensor]], absolute: bool = False,
     ) -> dict[str, torch.Tensor]:
         out = {}
         alphas = list(nested.keys())
         params = list(nested[alphas[0]].keys())
         for param in params:
             param_values = [nested[alpha][param].unsqueeze(0) for alpha in alphas]
-            out[param] = torch.cat(param_values).mean(0)
+            cat = torch.cat(param_values)
+            if absolute:
+                cat = torch.abs(cat)
+            out[param] = cat.mean(0)
         return out
 
     @property
@@ -219,6 +222,9 @@ class EvaluationSummary:
     @property
     def lcr(self) -> dict[str, torch.Tensor]:   # log coverage ratio
         return self.averageOverAlpha(self.log_coverage_ratio)
+    
+    def abs_lcr(self) -> dict[str, torch.Tensor]:   # non-negative version of above for optimization
+        return self.averageOverAlpha(self.log_coverage_ratio, absolute=True)
 
     @property
     def mnll(self) -> float:   # median posterior NLL
