@@ -15,7 +15,7 @@ from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.evaluation import Proposal, joinProposals
+from metabeta.utils.evaluation import EvaluationSummary, Proposal, joinProposals
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.evaluation.summary import getSummary, summaryTable
@@ -335,7 +335,7 @@ batch size: {self.cfg.bs}
         return float(loss_valid)
 
     @torch.inference_mode()
-    def sample(self, epoch: int = 0) -> None:
+    def sample(self, epoch: int = 0) -> EvaluationSummary:
         # expects single batch from dl
         self.model.eval()
         self.optimizer.eval()
@@ -351,13 +351,14 @@ batch size: {self.cfg.bs}
         t1 = time.perf_counter()
 
         # evaluation summary
-        perf_summary = getSummary(proposal, batch)
-        perf_summary.tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
-        print(summaryTable(perf_summary))
+        eval_summary = getSummary(proposal, batch)
+        eval_summary.tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
+        print(summaryTable(eval_summary))
         if self.cfg.plot:
-            plotRecovery(perf_summary, batch, plot_dir=self.plot_dir, epoch=epoch)
-            plotCoverage(perf_summary, proposal, plot_dir=self.plot_dir, epoch=epoch)
+            plotRecovery(eval_summary, batch, plot_dir=self.plot_dir, epoch=epoch)
+            plotCoverage(eval_summary, proposal, plot_dir=self.plot_dir, epoch=epoch)
             plotSBC(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
+        return eval_summary
 
     def _sampleSingle(
         self, batch: dict[str, torch.Tensor]
