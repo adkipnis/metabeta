@@ -6,7 +6,7 @@ from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime
 import torch
-from torch.utils.tensorboard import SummaryWriter
+import wandb
 import schedulefree
 
 from metabeta.utils.logger import setupLogging
@@ -32,7 +32,7 @@ def setup() -> argparse.Namespace:
 
     # runtime
     parser.add_argument('--device', type=str)
-    parser.add_argument('--tb', action=argparse.BooleanOptionalAction)   # tensorboard
+    parser.add_argument('--wandb', action=argparse.BooleanOptionalAction)
 
     # training
     parser.add_argument('-e', '--max_epochs', type=int)
@@ -118,7 +118,7 @@ class Trainer:
         self.best_valid = float('inf')
         self.best_epoch = 0
         self.global_step = 0
-        self.writer = None
+        self.wandb_run = None
         self.stopper = None
         if self.cfg.patience > 0:
             self.stopper = EarlyStopping(self.cfg.patience)
@@ -166,24 +166,20 @@ class Trainer:
         # init optimizer
         self.optimizer = schedulefree.AdamWScheduleFree(self.model.parameters(), lr=self.cfg.lr)
 
-    def _initWriter(self) -> None:
-        self.tb_path = Path(
-            self.dir, '..', 'outputs', 'tensorboard', self.run_name + '_' + self.timestamp
+    def _initWandb(self) -> None:
+        self.wandb_run = wandb.init(
+            project='metabeta',
+            name=self.run_name,
+            config=vars(self.cfg),
         )
-        self.tb_path.mkdir(parents=True, exist_ok=True)
-        self.writer = SummaryWriter(log_dir=str(self.tb_path))
-
-        # log configs once
-        self.writer.add_text('cfg/trainer', yaml.safe_dump(vars(self.cfg), sort_keys=True), 0)
-        self.writer.add_text('cfg/data', yaml.safe_dump(self.data_cfg, sort_keys=True), 0)
-        self.writer.add_text(
-            'cfg/model', yaml.safe_dump(self.model_cfg.to_dict(), sort_keys=True), 0
-        )
+        wandb.config.update({'data_cfg': self.data_cfg, 'model_cfg': self.model_cfg.to_dict()})
+        wandb.define_metric('train/loss_step', step_metric='step/global')
+        wandb.define_metric('train/loss_epoch', step_metric='step/epoch')
+        wandb.define_metric('valid/loss_epoch', step_metric='step/epoch')
 
     def close(self) -> None:
-        if self.writer is not None:
-            self.writer.flush()
-            self.writer.close()
+        if self.wandb_run is not None:
+            wandb.finish()
 
     def save(self, epoch: int = 0, prefix: str = 'latest') -> None:
         path = Path(self.ckpt_dir, prefix + '.pt')
@@ -255,8 +251,8 @@ batch size: {self.cfg.bs}
             mode = self.cfg.loss_type
 
         #  init group variables
-        m = batch['m']   # number of groups
-        mask = batch['mask_m']   # group mask
+        m = batch['m']  # number of groups
+        mask = batch['mask_m']  # group mask
         if mode in [
             'backward',
         ]:
@@ -316,8 +312,13 @@ batch size: {self.cfg.bs}
             running_sum += loss.item()
             loss_train = running_sum / (i + 1)
             iterator.set_postfix_str(f'Loss: {loss_train:.3f}')
-            if self.writer is not None:
-                self.writer.add_scalar('train/loss_step', float(loss_train), self.global_step)
+            if self.wandb_run is not None:
+                wandb.log(
+                    {
+                        'train/loss_step': float(loss_train),
+                        'step/global': self.global_step,
+                    }
+                )
         return float(loss_train)
 
     @torch.inference_mode()
@@ -354,10 +355,22 @@ batch size: {self.cfg.bs}
         eval_summary = getSummary(proposal, batch)
         eval_summary.tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
         print(summaryTable(eval_summary))
+
+        # plots
         if self.cfg.plot:
-            plotRecovery(eval_summary, batch, plot_dir=self.plot_dir, epoch=epoch)
-            plotCoverage(eval_summary, proposal, plot_dir=self.plot_dir, epoch=epoch)
-            plotSBC(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
+            path_r = plotRecovery(
+                eval_summary, batch, plot_dir=self.plot_dir, epoch=epoch)
+            path_c = plotCoverage(
+                eval_summary, proposal, plot_dir=self.plot_dir, epoch=epoch)
+            path_s = plotSBC(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
+            if self.wandb_run is not None:
+                image_logs = {}
+                image_logs['plot/recovery'] = wandb.Image(str(path_r))
+                image_logs['plot/coverage'] = wandb.Image(str(path_c))
+                image_logs['plot/sbc'] = wandb.Image(str(path_s))
+                if image_logs:
+                    image_logs['step/epoch'] = epoch
+                    wandb.log(image_logs)
         return eval_summary
 
     def _sampleSingle(
@@ -411,15 +424,15 @@ batch size: {self.cfg.bs}
             start_epoch = last_epoch + 1
             print(f'Resumed latest checkpoint at epoch {last_epoch}.')
 
+        # optionally init wandb (after potential loading and reference run)
+        if self.cfg.wandb:
+            self._initWandb()
+
         # optionally get performance before (resumed) training
         if not self.cfg.skip_ref:
             print('\nPerformance before training:')
             self.valid(start_epoch - 1)
             self.sample(start_epoch - 1)
-
-        # optionally init tensorboard (after potential loading and reference run)
-        if self.cfg.tb:
-            self._initWriter()
 
         print(f'\nTraining for {self.cfg.max_epochs - start_epoch + 1} epochs...')
         for epoch in range(start_epoch, self.cfg.max_epochs + 1):
@@ -438,9 +451,14 @@ batch size: {self.cfg.bs}
                 self.sample(epoch)
 
             # log epoch
-            if self.writer is not None:
-                self.writer.add_scalar('train/loss_epoch', float(loss_train), epoch)
-                self.writer.add_scalar('valid/loss_epoch', float(loss_valid), epoch)
+            if self.wandb_run is not None:
+                wandb.log(
+                    {
+                        'train/loss_epoch': float(loss_train),
+                        'valid/loss_epoch': float(loss_valid),
+                        'step/epoch': epoch,
+                    },
+                )
 
             # save latest ckpt
             if self.cfg.save_latest:
