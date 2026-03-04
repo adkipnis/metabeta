@@ -22,7 +22,7 @@ logger = logging.getLogger('hyperoptimize.py')
 
 
 def setup() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
+    parser = argparse.ArgumentParser()
     parser.add_argument('--name', type=str, default='hyper', help='load configs/{name}.yaml')
     parser.add_argument('--n_trials', type=int, default=3)
     parser.add_argument('--wandb_study', action='store_false')
@@ -65,16 +65,13 @@ class HyperOptimizer:
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
         # optional wandb study tracking
-        if getattr(self.cfg, 'wandb_study', False):
+        if self.cfg.wandb_study:
             wandb_dir = Path(self.dir, '..', 'outputs', 'wandb')
             wandb_dir.mkdir(parents=True, exist_ok=True)
             self.wandb_run = wandb.init(
                 project='metabeta',
-                name=f'optuna-{self.cfg.name}',
-                config={
-                    'name': self.cfg.name,
-                    'n_trials': self.cfg.n_trials,
-                },
+                name=self.cfg.name,
+                config=vars(self.cfg),
                 dir=wandb_dir,
             )
 
