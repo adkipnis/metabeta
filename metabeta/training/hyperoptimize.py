@@ -24,7 +24,8 @@ logger = logging.getLogger('hyperoptimize.py')
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument('--name', type=str, default='hyper', help='load configs/{name}.yaml')
-    parser.add_argument('--n_trials', type=int, default=3)
+    parser.add_argument('--n_startup_trials', type=int, default=20)
+    parser.add_argument('--n_trials', type=int, default=100)
     parser.add_argument('--wandb_study', action='store_false')
 
     args = parser.parse_args()
@@ -53,10 +54,13 @@ class HyperOptimizer:
         self.model_cfg = modelFromYaml(model_cfg_path, d_ffx=d_ffx, d_rfx=d_rfx).to_dict()
 
         # optuna study
+        sampler = optuna.samplers.TPESampler(
+            seed=self.cfg.seed, n_startup_trials=self.cfg.n_startup_trials
+        )
         self.study = optuna.create_study(
             study_name=self.cfg.name,
             directions=['minimize', 'minimize'],
-            sampler=optuna.samplers.TPESampler(seed=self.cfg.seed),
+            sampler=sampler,
             load_if_exists=True,
         )
 
