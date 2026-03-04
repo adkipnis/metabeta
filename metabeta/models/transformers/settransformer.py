@@ -26,6 +26,7 @@ class SetTransformer(nn.Module):
         dropout: float = 0.01,
         weight_init: tuple[str, str] | None = ('xavier', 'normal'),
         eps: float = 1e-3,
+        **kwargs
     ):
         super().__init__()
         assert n_blocks >= n_isab, 'n_isab must not be larger than n_blocks'

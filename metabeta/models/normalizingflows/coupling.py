@@ -136,6 +136,7 @@ class CouplingFlow(nn.Module):
         base_family: Literal['normal', 'student'] = 'normal',  # family of base distribution
         base_trainable: bool = True,  # train parameters of base distribution
         subnet_kwargs: dict | None = None,
+        **kwargs
     ):
         super().__init__()
         assert d_target >= 2, 'Coupling Flow requires at least 2-dim target'
