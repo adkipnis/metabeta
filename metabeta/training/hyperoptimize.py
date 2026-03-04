@@ -5,9 +5,15 @@ import logging
 from pathlib import Path
 import copy
 import optuna
+import wandb
 
 from metabeta.training.train import Trainer
-from metabeta.utils.config import modelFromYaml, ApproximatorConfig, SummarizerConfig, PosteriorConfig
+from metabeta.utils.config import (
+    modelFromYaml,
+    ApproximatorConfig,
+    SummarizerConfig,
+    PosteriorConfig,
+)
 from metabeta.utils.evaluation import dictMean
 from metabeta.utils.logger import setupLogging
 
@@ -19,8 +25,7 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
     parser.add_argument('--name', type=str, default='hyper', help='load configs/{name}.yaml')
     parser.add_argument('--n_trials', type=int, default=3)
-    parser.add_argument('--sampler', type=str, default='tpe', choices=['tpe', 'random'])
-    parser.add_argument('--pruner', type=str, default='median', choices=['median', 'none'])
+    parser.add_argument('--wandb_study', action='store_false')
 
     args = parser.parse_args()
     path = Path(__file__).resolve().parent / 'configs' / f'{args.name}.yaml'
@@ -34,6 +39,7 @@ class HyperOptimizer:
     def __init__(self, cfg: argparse.Namespace) -> None:
         self.cfg = cfg
         self.dir = Path(__file__).resolve().parent
+        self.wandb_run = None
 
         # data config
         data_cfg_path = Path(self.dir, '..', 'simulation', 'configs', f'{self.cfg.d_tag}.yaml')
@@ -57,6 +63,20 @@ class HyperOptimizer:
         # output dir
         self.out_dir = Path(self.dir, '..', 'outputs', 'optuna', self.cfg.name)
         self.out_dir.mkdir(parents=True, exist_ok=True)
+
+        # optional wandb study tracking
+        if getattr(self.cfg, 'wandb_study', False):
+            wandb_dir = Path(self.dir, '..', 'outputs', 'wandb')
+            wandb_dir.mkdir(parents=True, exist_ok=True)
+            self.wandb_run = wandb.init(
+                project='metabeta',
+                name=f'optuna-{self.cfg.name}',
+                config={
+                    'name': self.cfg.name,
+                    'n_trials': self.cfg.n_trials,
+                },
+                dir=wandb_dir,
+            )
 
     def suggest(self, trial: optuna.Trial) -> ApproximatorConfig:
         """samples model config"""
@@ -96,6 +116,16 @@ class HyperOptimizer:
             nrmse = dictMean(eval_summary.nrmse)
             alcr = dictMean(eval_summary.abs_lcr)
             trainer.close()
+            if self.wandb_run is not None:
+                wandb.log(
+                    {
+                        'trial/number': trial.number,
+                        'trial/nrmse': nrmse,
+                        'trial/alcr': alcr,
+                        'trial/params': trial.params,
+                    },
+                    step=trial.number,
+                )
             return nrmse, alcr
 
         return objective
@@ -130,6 +160,8 @@ class HyperOptimizer:
     def go(self) -> None:
         self.study.optimize(self.setObjective(), n_trials=self.cfg.n_trials)
         self.saveStudy()
+        if self.wandb_run is not None:
+            wandb.finish()
 
 
 if __name__ == '__main__':
