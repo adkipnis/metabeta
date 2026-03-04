@@ -111,6 +111,8 @@ class HyperOptimizer:
         def objective(trial: optuna.Trial):
             trainer_cfg = copy.deepcopy(self.cfg)
             trainer_cfg.model_cfg = self.suggest(trial)
+            trainer_cfg.bs = trial.suggest_categorical('bs', [16, 32, 64, 128])
+            trainer_cfg.lr = trial.suggest_float('lr', 1e-4, 5e-3)
             trainer = Trainer(trainer_cfg)
             trainer.go()
             eval_summary = trainer.sample()
