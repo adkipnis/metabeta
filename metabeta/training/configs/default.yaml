@@ -9,7 +9,7 @@ device: 'cpu'         # cpu|cuda|mps
 cores: 8
 reproducible: true
 compile: false
-verbosity: 0          # warnings|infos|debug
+verbosity: 1          # warnings|infos|debug
 wandb: true
 
 # training
