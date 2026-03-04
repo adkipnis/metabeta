@@ -120,10 +120,9 @@ class HyperOptimizer:
             if self.wandb_run is not None:
                 wandb.log(
                     {
-                        'trial/number': trial.number,
                         'trial/nrmse': nrmse,
                         'trial/alcr': alcr,
-                        'trial/params': trial.params,
+                        'params': trial.params,
                     },
                     step=trial.number,
                 )
