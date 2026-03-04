@@ -12,3 +12,4 @@ raw
 *.rdata
 *.Rhistory
 *.pdf
+/metabeta/training/wandb
