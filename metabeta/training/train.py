@@ -354,7 +354,15 @@ batch size: {self.cfg.bs}
         # evaluation summary
         eval_summary = getSummary(proposal, batch)
         eval_summary.tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
-        print(summaryTable(eval_summary))
+        summary_table = summaryTable(eval_summary)
+        print(summary_table)
+        if self.cfg.wandb:
+            wandb.log(
+                {
+                    'summary/table': wandb.Html(f'<pre>{summary_table}</pre>'),
+                    'step/epoch': epoch,
+                }
+            )
 
         # plots
         if self.cfg.plot:
