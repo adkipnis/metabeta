@@ -35,7 +35,7 @@ def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
     info = INFO | info
 
     # ticks
-    if (ticks_ls := info['ticks_ls']):
+    if ticks_ls := info['ticks_ls']:
         ax.tick_params(axis='both', labelsize=ticks_ls)
     else:
         ax.tick_params(axis='x', labelcolor='w', size=1)
@@ -80,7 +80,7 @@ def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
     # stats
     if (stats := info['stats']) is not None:
         suffix = info['stats_suffix']
-        txt = [f'{k} = {v:.3f}{suffix}' for k, v in stats.items()]   # type: ignore
+        txt = [f'{k} = {v:.3f}{suffix}' for k, v in stats.items()]  # type: ignore
         fs = int(info['stats_fs'])
         x_loc = float(info['stats_loc_x'])
         y_loc = float(info['stats_loc_y'])
@@ -100,9 +100,11 @@ def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
         )
 
 
-def savePlot(plot_dir: Path, title: str, epoch: int | None = None, ending: str = 'png') -> None:
+def savePlot(plot_dir: Path, title: str, epoch: int | None = None, ending: str = 'png') -> Path:
     fname = plot_dir / f'{title}_latest.{ending}'
     plt.savefig(fname, bbox_inches='tight', pad_inches=0.15)
     if epoch is not None:
         fname_e = plot_dir / f'{title}_e{epoch}.{ending}'
         plt.savefig(fname_e, bbox_inches='tight', pad_inches=0.15)
+        return fname_e
+    return fname
