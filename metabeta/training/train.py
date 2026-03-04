@@ -12,7 +12,7 @@ import schedulefree
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.io import setDevice, datasetFilename, runName
 from metabeta.utils.sampling import setSeed
-from metabeta.utils.config import modelFromYaml
+from metabeta.utils.config import modelFromYaml, ApproximatorConfig
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import EvaluationSummary, Proposal, joinProposals
@@ -154,9 +154,13 @@ class Trainer:
         return Dataloader(data_path, batch_size=batch_size)
 
     def _initModel(self) -> None:
-        # load model config
-        model_cfg_path = Path(self.dir, '..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
-        self.model_cfg = modelFromYaml(model_cfg_path, d_ffx=self.cfg.max_d, d_rfx=self.cfg.max_q)
+        if hasattr(self.cfg, 'model_cfg'):
+            assert isinstance(self.cfg.model_cfg, ApproximatorConfig), 'wrong model cfg class'
+            self.model_cfg = self.cfg.model_cfg
+        else:
+            # load model config
+            model_cfg_path = Path(self.dir, '..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
+            self.model_cfg = modelFromYaml(model_cfg_path, d_ffx=self.cfg.max_d, d_rfx=self.cfg.max_q)
 
         # init model
         self.model = Approximator(self.model_cfg).to(self.device)
