@@ -223,6 +223,7 @@ class EvaluationSummary:
     def lcr(self) -> dict[str, torch.Tensor]:   # log coverage ratio
         return self.averageOverAlpha(self.log_coverage_ratio)
     
+    @property
     def abs_lcr(self) -> dict[str, torch.Tensor]:   # non-negative version of above for optimization
         return self.averageOverAlpha(self.log_coverage_ratio, absolute=True)
 
