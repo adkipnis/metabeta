@@ -87,3 +87,16 @@ class HyperOptimizer:
         return ApproximatorConfig(**model_cfg, summarizer=summarizer, posterior=posterior)
 
     def setObjective(self) -> Callable:
+        def objective(trial: optuna.Trial):
+            trainer_cfg = copy.deepcopy(self.cfg)
+            trainer_cfg.model_cfg = self.suggest(trial)
+            trainer = Trainer(trainer_cfg)
+            trainer.go()
+            eval_summary = trainer.sample()
+            nrmse = dictMean(eval_summary.nrmse)
+            lcr = dictMean(eval_summary.lcr)
+            trainer.close()
+            return nrmse, lcr
+
+        return objective
+
