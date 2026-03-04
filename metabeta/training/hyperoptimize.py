@@ -103,6 +103,7 @@ class HyperOptimizer:
         subnet['d_ff'] = trial.suggest_categorical('posterior.subnet.d_ff', [128, 196, 256])
         subnet['depth'] = trial.suggest_int('posterior.subnet.depth', 2, 4)
         subnet['dropout'] = trial.suggest_categorical('posterior.subnet.dropout', [0.0, 0.01, 0.05])
+        subnet['net_type'] = trial.suggest_categorical('posterior.subnet.type', ['mlp', 'residual'])
         posterior['subnet_kwargs'] = subnet
         posterior = PosteriorConfig(**posterior)
         return ApproximatorConfig(**model_cfg, summarizer=summarizer, posterior=posterior)
