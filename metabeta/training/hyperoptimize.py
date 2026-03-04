@@ -59,3 +59,31 @@ class HyperOptimizer:
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
     def suggest(self, trial: optuna.Trial) -> ApproximatorConfig:
+        """samples model config"""
+        model_cfg = copy.deepcopy(self.model_cfg)
+        summarizer = model_cfg.pop('summarizer')
+        posterior = model_cfg.pop('posterior')
+        subnet = posterior.get('subnet_kwargs', {})
+
+        # summarizer
+        summarizer['d_model'] = trial.suggest_categorical('summarizer.d_model', [128, 196, 256])
+        d_output = trial.suggest_categorical('summarizer.d_output', [32, 48, 64])
+        summarizer['d_output'] = min(d_output, summarizer['d_model'])
+        summarizer['d_ff'] = trial.suggest_categorical('summarizer.d_ff', [128, 196, 256])
+        summarizer['d_output'] = d_output
+        summarizer['n_blocks'] = trial.suggest_int('summarizer.n_blocks', 1, 4)
+        n_isab = trial.suggest_int('summarizer.n_isab', 0, 4)
+        summarizer['n_isab'] = min(n_isab, summarizer['n_blocks'])
+        summarizer['dropout'] = trial.suggest_float('summarizer.dropout', 0.0, 0.05)
+        summarizer = SummarizerConfig(**summarizer)
+
+        # posterior
+        posterior['n_blocks'] = trial.suggest_int('posterior.n_blocks', 2, 6)
+        subnet['d_ff'] = trial.suggest_categorical('posterior.subnet.d_ff', [128, 196, 256])
+        subnet['depth'] = trial.suggest_int('posterior.subnet.depth', 2, 4)
+        subnet['dropout'] = trial.suggest_float('posterior.subnet.dropout', 0.0, 0.05)
+        posterior['subnet_kwargs'] = subnet
+        posterior = PosteriorConfig(**posterior)
+        return ApproximatorConfig(**model_cfg, summarizer=summarizer, posterior=posterior)
+
+    def setObjective(self) -> Callable:
