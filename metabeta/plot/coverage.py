@@ -43,7 +43,7 @@ def _plotCoverage(
         'show_x': lower,
         'stats': stats,
         'stats_suffix': '%',
-        }
+    }
     niceify(ax, info)
 
 
@@ -52,7 +52,8 @@ def plotCoverage(
     proposal: Proposal,
     plot_dir: Path | None = None,
     epoch: int | None = None,
-) -> None:
+    show: bool = False,
+) -> Path | None:
     names = (
         getNames('ffx', proposal.d) + getNames('sigmas', proposal.q) + getNames('rfx', proposal.q)
     )
@@ -65,7 +66,10 @@ def plotCoverage(
     ax.set_box_aspect(1)
 
     # store
+    saved_path = None
     if plot_dir is not None:
-        savePlot(plot_dir, 'coverage', epoch=epoch)
-    plt.show()
+        saved_path = savePlot(plot_dir, 'coverage', epoch=epoch)
+    if show:
+        plt.show()
     plt.close(fig)
+    return saved_path

@@ -49,7 +49,7 @@ def _plotSbcEcdf(
         'show_title': upper,
         'show_legend': upper,
         'show_x': lower,
-        }
+    }
     niceify(ax, info)
 
 
@@ -59,7 +59,8 @@ def plotSBC(
     diff: bool = False,
     plot_dir: Path | None = None,
     epoch: int | None = None,
-) -> None:
+    show: bool = False,
+) -> Path | None:
     ranks = getFractionalRanks(proposal, data)
     ranks['sigmas'] = joinSigmas(ranks)
     names = getAllNames(proposal.d, proposal.q)
@@ -81,7 +82,10 @@ def plotSBC(
     ax.set_box_aspect(1)
 
     # store
+    saved_path = None
     if plot_dir is not None:
-        savePlot(plot_dir, 'sbc', epoch=epoch)
-    plt.show()
+        saved_path = savePlot(plot_dir, 'sbc', epoch=epoch)
+    if show:
+        plt.show()
     plt.close(fig)
+    return saved_path
