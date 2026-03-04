@@ -16,4 +16,12 @@ def setupLogging(verbosity: int) -> None:
         format='%(asctime)s | %(name)s | %(levelname)s | %(message)s',
         datefmt='%H:%M:%S',
         handlers=[logging.StreamHandler(sys.stdout)],
+        force=True,
     )
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+
+    for logger in logging.Logger.manager.loggerDict.values():
+        if isinstance(logger, logging.Logger):
+            logger.setLevel(log_level)
