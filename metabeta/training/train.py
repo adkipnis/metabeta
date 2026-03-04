@@ -370,15 +370,16 @@ batch size: {self.cfg.bs}
                 eval_summary, batch, plot_dir=self.plot_dir, epoch=epoch)
             path_c = plotCoverage(
                 eval_summary, proposal, plot_dir=self.plot_dir, epoch=epoch)
-            path_s = plotSBC(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
-            if self.wandb_run is not None:
-                image_logs = {}
-                image_logs['plot/recovery'] = wandb.Image(str(path_r))
-                image_logs['plot/coverage'] = wandb.Image(str(path_c))
-                image_logs['plot/sbc'] = wandb.Image(str(path_s))
-                if image_logs:
-                    image_logs['step/epoch'] = epoch
-                    wandb.log(image_logs)
+            path_s = plotSBC(
+                proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
+            if self.cfg.wandb:
+                image_logs = {
+                    'plot/recovery': wandb.Image(str(path_r)),
+                    'plot/coverage': wandb.Image(str(path_c)),
+                    'plot/sbc': wandb.Image(str(path_s)),
+                    'step/epoch': epoch,
+                }
+                wandb.log(image_logs)
         return eval_summary
 
     def _sampleSingle(
