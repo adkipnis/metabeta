@@ -1,6 +1,6 @@
-# import os
-# os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
-#
+import os
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':16:8'
+
 import yaml
 import time
 import logging
