@@ -316,11 +316,12 @@ class Fitter:
         return aggregate(fits)
 
     def reintegrate(self) -> None:
+        # update batch for each fit method
         for method in ['nuts', 'advi']:
             fits = self._aggregate(method)
             self.batch.update(fits)
 
-        # --- atomically save updated batch
+        # save updated batch
         fit_suffix = '.fit' + self.batch_path.suffix
         path = self.batch_path.with_suffix(fit_suffix)
         np.savez_compressed(path, **self.batch, allow_pickle=True)
