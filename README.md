@@ -3,8 +3,8 @@
 🚧 I'm currently refactoring this repo. For legacy code, switch to branch v1. 🚧
 ---
 ## A fast neural model for Bayesian mixed-effects regression
-📈 approximates posterior estimation for hierarchical regression models\
-💡 allows prior specification for each regression parameter\
+📈 posterior estimation for hierarchical regression models\
+💡 prior specification for each regression parameter\
 👨🏻‍🏫 trained on simulated hierarchical datasets with realistic structure\
 🚀 orders of magnitude faster than MCMC\
 🔥 fully implemented in [PyTorch](https://pytorch.org/)
