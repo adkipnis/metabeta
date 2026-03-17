@@ -14,4 +14,4 @@
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/trianing
-python train.py --name default --device gpu
+python train.py --name cluster --device cuda
