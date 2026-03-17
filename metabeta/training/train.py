@@ -133,20 +133,12 @@ class Trainer:
             self.cfg.device = 'cpu'
             logger.warning('setting device from mps to cpu for reproducibility - to prevent this, set --reproducible to False')
         elif self.cfg.device == 'cuda':
-            print('CUDA init?', torch.cuda.is_initialized())
-
             torch.use_deterministic_algorithms(True)
             torch.backends.cudnn.benchmark = False
             torch.backends.cudnn.deterministic = True
-            torch.backends.cuda.matmul.allow_tf32 = False
-            torch.backends.cudnn.allow_tf32 = False
+            # torch.backends.cuda.matmul.allow_tf32 = False
+            # torch.backends.cudnn.allow_tf32 = False
             torch.set_deterministic_debug_mode('warn')
-
-            # debug
-            print('deterministic algs', torch.are_deterministic_algorithms_enabled())
-            print('cudnn deterministic', torch.backends.cudnn.deterministic)
-            print('allow tf32', torch.backends.cudnn.allow_tf32)
-            print('CUDA init?', torch.cuda.is_initialized())
 
     def _initData(self) -> None:
         # assimilate data config
