@@ -6,10 +6,8 @@ outputs
 metabeta.egg-info
 parquet
 raw
-*.sh
 *.csv
 *.npz
 *.rdata
 *.Rhistory
 *.pdf
-/metabeta/training/wandb
