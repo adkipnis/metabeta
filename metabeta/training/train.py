@@ -1,6 +1,6 @@
-import os
-os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
-
+# import os
+# os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+#
 import yaml
 import time
 import logging
@@ -134,15 +134,7 @@ class Trainer:
             logger.warning('setting device from mps to cpu for reproducibility - to prevent this, set --reproducible to False')
         elif self.cfg.device == 'cuda':
             torch.use_deterministic_algorithms(True)
-            torch.backends.cudnn.benchmark = False
             torch.backends.cudnn.deterministic = True
-            torch.set_deterministic_debug_mode('warn')
-
-            # deterministic numerics
-            # torch.backends.cuda.enable_flash_sdp(False)
-            # torch.backends.cuda.enable_mem_efficient_sdp(False)
-            # torch.backends.cuda.enable_math_sdp(True)
-            torch.set_float32_matmul_precision('highest')
 
     def _initData(self) -> None:
         # assimilate data config
