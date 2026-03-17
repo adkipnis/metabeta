@@ -37,12 +37,20 @@ class ActNorm(Transform):
 
     @torch.no_grad()
     def _initialize(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> None:
-        """init params based on first batch"""
+        """init params based on first batch
+
+        Reductions are performed on CPU to ensure bit-identical initialization
+        across devices (GPU parallel reductions are non-associative and produce
+        different float32 results than CPU sequential reductions for the same input).
+        """
+        device = x.device
         dims = tuple(range(x.dim() - 1))
+        x = x.cpu()
         if mask is None:
             mean = x.mean(dims)
             std = x.std(dims)
         else:
+            mask = mask.cpu()
             x = x * mask
             n = mask.sum(dims).clamp_min(1.0)
             n_1 = (n - 1).clamp_min(1.0)
@@ -50,8 +58,8 @@ class ActNorm(Transform):
             var = (x - mean).square().sum(dims) / n_1
             std = torch.sqrt(var)
         std = torch.where(std == 0, 1, std)
-        self.shift.data = mean
-        self.log_scale.data = torch.log(std)
+        self.shift.data = mean.to(device)
+        self.log_scale.data = torch.log(std).to(device)
         self.initialized.data = torch.tensor(True)
 
     def _broadcast(self, x: torch.Tensor, d: int) -> torch.Tensor:
