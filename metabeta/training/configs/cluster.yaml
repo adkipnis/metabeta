@@ -20,7 +20,7 @@ max_grad_norm: 1.0
 loss_type: 'forward'  # forward|backward|mixed
 patience: 5           # early stopping
 sample_interval: 5
-skip_ref: False       # skip reference run before training
+skip_ref: false       # skip reference run before training
 
 # evaluation
 n_samples: 512        # posterior draws
