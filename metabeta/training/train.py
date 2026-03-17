@@ -140,6 +140,11 @@ class Trainer:
             torch.backends.cudnn.allow_tf32 = False
             torch.set_deterministic_debug_mode('warn')
 
+            # debug
+            print(torch.are_deterministic_algorithms_enabled())
+            print(torch.backends.cudnn.deterministic)
+            print(torch.backends.cudnn.allow_tf32)
+
     def _initData(self) -> None:
         # assimilate data config
         data_cfg_path = Path(self.dir, '..', 'simulation', 'configs', f'{self.cfg.d_tag}.yaml')
