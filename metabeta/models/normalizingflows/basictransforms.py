@@ -40,12 +40,10 @@ class ActNorm(Transform):
         """init params based on first batch"""
         device = x.device
         dims = tuple(range(x.dim() - 1))
-        # x = x.cpu()
         if mask is None:
             mean = x.mean(dims)
             std = x.std(dims)
         else:
-            # mask = mask.cpu()
             x = x * mask
             n = mask.sum(dims).clamp_min(1.0)
             n_1 = (n - 1).clamp_min(1.0)
