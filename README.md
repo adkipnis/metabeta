@@ -17,6 +17,9 @@ This repo contains the source code for [data simulation](metabeta/simulation), [
 3. During inference, samples are drawn from the base distribution, and are mapped backward (regression parameters ← base distribution).
 
 ## Setup with [uv](https://docs.astral.sh/uv/)
-- uv sync
-- source .venv/bin/activate
-- uv pip install -e .
+ ```
+cd metabeta
+uv sync
+source .venv/bin/activate
+uv pip install -e .
+ ``` 
