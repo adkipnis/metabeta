@@ -21,7 +21,8 @@ from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.plot import plotRecovery, plotCoverage, plotSBC
 
-
+import os
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 logger = logging.getLogger('train.py')
 
 
@@ -131,8 +132,12 @@ class Trainer:
             self.cfg.device = 'cpu'
             logger.warning('setting device from mps to cpu for reproducibility - to prevent this, set --reproducible to False')
         elif self.cfg.device == 'cuda':
+            torch.use_deterministic_algorithms(True)
+            torch.backends.cudnn.benchmark = False
             torch.backends.cudnn.deterministic = True
-        torch.set_deterministic_debug_mode('warn')
+            torch.backends.cuda.matmul.allow_tf32 = False
+            torch.backends.cudnn.allow_tf32 = False
+            torch.set_deterministic_debug_mode('warn')
 
     def _initData(self) -> None:
         # assimilate data config
