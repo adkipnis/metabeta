@@ -113,6 +113,7 @@ class HyperOptimizer:
             trainer_cfg.model_cfg = self.suggest(trial)
             trainer_cfg.bs = trial.suggest_categorical('bs', [16, 32, 64, 128])
             trainer_cfg.lr = trial.suggest_float('lr', 1e-4, 5e-3)
+            trainer_cfg.wandb = False # no wandb logging inside trial
             trainer = Trainer(trainer_cfg)
             trainer.go()
             eval_summary = trainer.sample()
