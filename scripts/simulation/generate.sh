@@ -12,5 +12,6 @@
 #SBATCH --time=24:00:00
 
 source $HOME/.bashrc
+source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/simulation
 python generate.py --d_tag toy --partition all --epochs 100
