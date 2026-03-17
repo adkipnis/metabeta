@@ -7,6 +7,7 @@ import pandas as pd
 from pymc import adam
 import bambi as bmb
 import arviz as az
+import pytensor
 
 from metabeta.utils.io import datasetFilename
 from metabeta.utils.padding import aggregate, unpad
@@ -338,8 +339,6 @@ class Fitter:
 
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
-    import pytensor
-
     print(f'PyTensor tmp directory: {pytensor.config.base_compiledir}')
     cfg = setup()
     fitter = Fitter(cfg)
