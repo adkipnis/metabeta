@@ -129,6 +129,7 @@ class Trainer:
         torch.use_deterministic_algorithms(True)
         if self.cfg.device == 'mps':
             self.cfg.device = 'cpu'
+            logger.warning('setting device from mps to cpu for reproducibility - to prevent this, set --reproducible to False')
         elif self.cfg.device == 'cuda':
             torch.backends.cudnn.deterministic = True
         torch.set_deterministic_debug_mode('warn')
