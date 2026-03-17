@@ -16,20 +16,71 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Fit hierarchical datasets with Bambi.')
     # data
     parser.add_argument('--d_tag', type=str, default='toy', help='name of data config file')
-    parser.add_argument('--idx', type=int, default=0, help='Index of dataset in batch, for which we want to fit the data (default = 0)')
-    parser.add_argument('--reintegrate', action='store_true', help='Check if fits exist for each dataset and reintegrate into batch (default = False)')
-    parser.add_argument('--cleanup', action='store_true', help='Delete the cached fit files after succesful reintegration (default = False)')
+    parser.add_argument(
+        '--idx',
+        type=int,
+        default=0,
+        help='Index of dataset in batch, for which we want to fit the data (default = 0)',
+    )
+    parser.add_argument(
+        '--reintegrate',
+        action='store_true',
+        help='Check if fits exist for each dataset and reintegrate into batch (default = False)',
+    )
+    parser.add_argument(
+        '--cleanup',
+        action='store_true',
+        help='Delete the cached fit files after succesful reintegration (default = False)',
+    )
 
     # bambi
-    parser.add_argument('--respecify_ffx', action='store_true', help='Use automatic fixed effects priors by bambi instead of true priors (default = False)')
-    parser.add_argument('--method', type=str, default='nuts', help='Inference method for bambi [nuts, advi], (default = nuts)')
+    parser.add_argument(
+        '--respecify_ffx',
+        action='store_true',
+        help='Use automatic fixed effects priors by bambi instead of true priors (default = False)',
+    )
+    parser.add_argument(
+        '--method',
+        type=str,
+        default='nuts',
+        help='Inference method for bambi [nuts, advi], (default = nuts)',
+    )
     parser.add_argument('--seed', type=int, default=42, help='Seed for bambi (default = 42)')
-    parser.add_argument('--tune', type=int, default=2000, help='Number of tuning steps (burnin) for MCMC (default = 2000)')
-    parser.add_argument('--draws', type=int, default=1000, help='Number of posterior samples (default = 1000)')
-    parser.add_argument('--chains', type=int, default=4, help='Number of posterior sampling chains (default = 4)')
-    parser.add_argument('--loop', action='store_true', help='Loop chain sampling instead of parallelizing it (default = False)')
-    parser.add_argument('--viter', type=int, default=50_000, help='Number of ADVI steps (default = 50_000)')
-    parser.add_argument('--lr', type=float, default=5e-3, help='Adam learning rate for ADVI (default = 5e-3)')
+    parser.add_argument(
+        '--tune',
+        type=int,
+        default=2000,
+        help='Number of tuning steps (burnin) for MCMC (default = 2000)',
+    )
+    parser.add_argument(
+        '--draws',
+        type=int,
+        default=1000,
+        help='Number of posterior samples (default = 1000)',
+    )
+    parser.add_argument(
+        '--chains',
+        type=int,
+        default=4,
+        help='Number of posterior sampling chains (default = 4)',
+    )
+    parser.add_argument(
+        '--loop',
+        action='store_true',
+        help='Loop chain sampling instead of parallelizing it (default = False)',
+    )
+    parser.add_argument(
+        '--viter',
+        type=int,
+        default=50_000,
+        help='Number of ADVI steps (default = 50_000)',
+    )
+    parser.add_argument(
+        '--lr',
+        type=float,
+        default=5e-3,
+        help='Adam learning rate for ADVI (default = 5e-3)',
+    )
     return parser.parse_args()
 
 
@@ -96,7 +147,7 @@ class Fitter:
         d, q = ds['d'], ds['q']
         fixed = ' + '.join(f'x{j}' for j in range(1, d))
         random = ' + '.join(f'x{j}' for j in range(1, q))
-        if not random:   # no random slopes
+        if not random:  # no random slopes
             random = '1'
         if fixed:
             return f'y ~ 1 + {fixed} + ({random} | i)'
@@ -112,7 +163,7 @@ class Fitter:
         priors = {}
 
         # fixed effects
-        if not self.cfg.respecify_ffx:   # otherwise bambi will infer them from data
+        if not self.cfg.respecify_ffx:  # otherwise bambi will infer them from data
             for j in range(d):
                 key = 'Intercept' if j == 0 else f'x{j}'
                 priors[key] = bmb.Prior('Normal', mu=nu_ffx[j], sigma=tau_ffx[j])
@@ -142,7 +193,7 @@ class Fitter:
 
     def _extract(self, trace: az.InferenceData, name: str) -> np.ndarray:
         """extract {name} samples from posterior"""
-        x = trace.posterior[name].to_numpy()   # type: ignore
+        x = trace.posterior[name].to_numpy()  # type: ignore
         shape = (x.shape[0] * x.shape[1],) + x.shape[2:]
         x = x.reshape(shape)
         return x[None, ...]
@@ -281,6 +332,7 @@ class Fitter:
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
     import pytensor
+
     print(f'PyTensor tmp directory: {pytensor.config.base_compiledir}')
     cfg = setup()
     fitter = Fitter(cfg)
