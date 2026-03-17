@@ -1,8 +1,9 @@
 #!/bin/bash
 
 #SBATCH --job-name=fit-toy
-#SBATCH --output=logs/fit-toy/%j.out
-#SBATCH --error=logs/fit-toy/%j.err
+#SBATCH --output=logs/fit-toy/%A_%a.out
+#SBATCH --error=logs/fit-toy/%A_%a.err
+#SBATCH --array=0-127
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
@@ -21,5 +22,5 @@ export PYTENSOR_FLAGS="base_compiledir=$JOB_TMPDIR"
 
 # fit NUTS and ADVI
 cd $HOME/metabeta/metabeta/simulation
-python fit.py --d_tag toy --idx 0 --method nuts --loop
-python fit.py --d_tag toy --idx 0 --method advi
+python fit.py --d_tag toy --idx ${SLURM_ARRAY_TASK_ID} --method nuts --loop
+python fit.py --d_tag toy --idx ${SLURM_ARRAY_TASK_ID} --method advi
