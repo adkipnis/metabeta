@@ -303,26 +303,27 @@ class Fitter:
         np.savez_compressed(self.outpath, **results, allow_pickle=True)
         print(f'Saved results to {self.outpath}')
 
-    def reintegrate(self) -> None:
-        methods = ['nuts', 'advi']
+    def _aggregate(self, method: str) -> dict[str, np.ndarray]:
+        """ load all fits of {method}, aggregate and update batch """
+        # get paths
+        paths = [Path(self.outdir, self._outname(i, method=method))
+                 for i in range(len(self))]
 
-        # check if all fits (for both methods) exist
-        n_datasets = len(self)
-        paths = []
-        for method in methods:
-            paths.extend(
-                [Path(self.outdir, self._outname(i, method=method)) for i in range(n_datasets)]
-            )
+        # check if all files exist
         for p in paths:
-            assert p.exists(), f'cannot reintegrate: the fit file {p} does not exist, yet.'
+            assert p.exists(), f'cannot aggregate: the fit file {p} does not exist, yet.'
 
-        # --- load all fits, aggregate and integrate into original
+        # load fits safely
         fits = []
         for p in paths:
             with np.load(p, allow_pickle=True) as f:
                 fits.append(dict(f))
-        fits = aggregate(fits)
-        self.batch.update(fits)
+        return aggregate(fits)
+
+    def reintegrate(self) -> None:
+        for method in ['nuts', 'advi']:
+            fits = self._aggregate(method)
+            self.batch.update(fits)
 
         # --- atomically save updated batch
         fit_suffix = '.fit' + self.batch_path.suffix
