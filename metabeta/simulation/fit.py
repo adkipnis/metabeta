@@ -128,9 +128,10 @@ class Fitter:
     def __len__(self) -> int:
         return len(self.batch['y'])
 
-    def _outname(self, idx: int) -> str:
+    def _outname(self, idx: int, method: str | None = None) -> str:
         stem = self.batch_path.stem
-        return f'{stem}_{self.cfg.method}_{idx:03d}.npz'
+        use_method = self.cfg.method if method is None else method
+        return f'{stem}_{use_method}_{idx:03d}.npz'
 
     def _pandify(self, ds: dict[str, np.ndarray]) -> pd.DataFrame:
         """get observations as dataframe"""
@@ -302,9 +303,15 @@ class Fitter:
         print(f'Saved results to {self.outpath}')
 
     def reintegrate(self) -> None:
-        # check if all fits (of the specified method) exist
+        methods = ['nuts', 'advi']
+
+        # check if all fits (for both methods) exist
         n_datasets = len(self)
-        paths = [Path(self.outdir, self._outname(i)) for i in range(n_datasets)]
+        paths = []
+        for method in methods:
+            paths.extend(
+                [Path(self.outdir, self._outname(i, method=method)) for i in range(n_datasets)]
+            )
         for p in paths:
             assert p.exists(), f'cannot reintegrate: the fit file {p} does not exist, yet.'
 
@@ -320,7 +327,7 @@ class Fitter:
         fit_suffix = '.fit' + self.batch_path.suffix
         path = self.batch_path.with_suffix(fit_suffix)
         np.savez_compressed(path, **self.batch, allow_pickle=True)
-        print(f'Reintegrated {self.cfg.method.upper()} fits into {path}')
+        print(f'Reintegrated NUTS and ADVI fits into {path}')
 
         # --- optional cleanup
         if self.cfg.cleanup:
