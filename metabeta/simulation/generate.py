@@ -41,7 +41,7 @@ def setup() -> argparse.Namespace:
 @dataclass
 class Generator:
     cfg: argparse.Namespace
-    outdir: Path = Path('..', 'outputs', 'data')
+    outdir: Path = Path(__file__).resolve().parent / '..' / 'outputs' / 'data'
 
     def __post_init__(self):
         self.outdir.mkdir(parents=True, exist_ok=True)
