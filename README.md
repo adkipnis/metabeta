@@ -1,5 +1,4 @@
 # metabeta
-## A fast neural model for Bayesian mixed-effects regression
 📈 posterior estimation for hierarchical regression models\
 💡 prior specification for each regression parameter\
 👨🏻‍🏫 trained on simulated hierarchical datasets with realistic structure\
