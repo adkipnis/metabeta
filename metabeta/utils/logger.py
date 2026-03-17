@@ -19,9 +19,4 @@ def setupLogging(verbosity: int) -> None:
         force=True,
     )
 
-    root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
-
-    for logger in logging.Logger.manager.loggerDict.values():
-        if isinstance(logger, logging.Logger):
-            logger.setLevel(log_level)
+    logging.getLogger('metabeta').setLevel(log_level)
