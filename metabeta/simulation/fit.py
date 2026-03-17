@@ -27,8 +27,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--cleanup', action='store_true', help='Delete the cached fit files after succesful reintegration (default = False)')
 
     # bambi
-    parser.add_argument('--respecify_ffx', action='store_true', help='Use automatic fixed effects priors by bambi instead of known (default = False)')
-    parser.add_argument('--method', type=str, default='advi', help='Inference method for bambi [nuts, advi], (default = nuts)')
+    parser.add_argument('--respecify_ffx', action='store_true', help='Use automatic fixed effects priors by bambi instead of true priors (default = False)')
+    parser.add_argument('--method', type=str, default='nuts', help='Inference method for bambi [nuts, advi], (default = nuts)')
     parser.add_argument('--seed', type=int, default=42, help='Seed for bambi (default = 42)')
     parser.add_argument('--tune', type=int, default=2000, help='Number of tuning steps (burnin) for MCMC (default = 2000)')
     parser.add_argument('--draws', type=int, default=1000, help='Number of posterior samples (default = 1000)')
@@ -238,7 +238,7 @@ class Fitter:
         return out
 
     def go(self) -> None:
-        """wrapper for fitting a single dataset with index {idx}"""
+        """wrapper for fitting a single dataset with index {idx} in cfg"""
         print(f'Fitting dataset {self.cfg.idx} with {self.cfg.method.upper()}...')
         if self.cfg.method == 'nuts':
             results = self._fitNuts(self.cfg, self.ds)
@@ -265,17 +265,10 @@ class Fitter:
         self.batch.update(fits)
 
         # --- atomically save updated batch
-        tmp_suffix = '.tmp' + self.batch_path.suffix
-        tmp = self.batch_path.with_suffix(tmp_suffix)
-        np.savez_compressed(tmp, **self.batch, allow_pickle=True)
-
-        # lightweight verification
-        with np.load(tmp, allow_pickle=True) as check:
-            for k in fits.keys():
-                assert k in check.files, f'missing reintegrated key {k}'
-
-        tmp.replace(self.batch_path)
-        print(f'Reintegrated {self.cfg.method.upper()} fits into {self.batch_path}')
+        fit_suffix = '.fit' + self.batch_path.suffix
+        path = self.batch_path.with_suffix(fit_suffix)
+        np.savez_compressed(path, **self.batch, allow_pickle=True)
+        print(f'Reintegrated {self.cfg.method.upper()} fits into {path}')
 
         # --- optional cleanup
         if self.cfg.cleanup:
