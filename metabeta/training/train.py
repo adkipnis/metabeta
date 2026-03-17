@@ -1,3 +1,6 @@
+import os
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+
 import yaml
 import time
 import logging
@@ -21,8 +24,6 @@ from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.plot import plotRecovery, plotCoverage, plotSBC
 
-import os
-os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 logger = logging.getLogger('train.py')
 
 
