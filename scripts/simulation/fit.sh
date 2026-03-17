@@ -21,5 +21,5 @@ export PYTENSOR_FLAGS="base_compiledir=$JOB_TMPDIR"
 
 # fit NUTS and ADVI
 cd $HOME/metabeta/metabeta/simulation
-python fit.py --d_tag toy --idx 0 --method nuts
+python fit.py --d_tag toy --idx 0 --method nuts --loop
 python fit.py --d_tag toy --idx 0 --method advi
