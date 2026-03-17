@@ -13,5 +13,5 @@
 
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
-cd $HOME/metabeta/metabeta/trianing
+cd $HOME/metabeta/metabeta/training
 python train.py --name cluster --device cpu
