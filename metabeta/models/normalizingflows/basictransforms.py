@@ -91,13 +91,13 @@ class Permute(Transform):
         self.pivot = d_target // 2
         self.inv_pivot = d_target - self.pivot
         self.register_buffer('perm', torch.randperm(d_target))
-        self.register_buffer('inv_perm', self.perm.argsort())   # type: ignore
+        self.register_buffer('inv_perm', self.perm.argsort())  # type: ignore
 
     def __str__(self) -> str:
         return 'Permute'
 
     def forward(self, x, context=None, mask=None, inverse=False):
-        perm: torch.Tensor = self.inv_perm if inverse else self.perm   # type: ignore
+        perm: torch.Tensor = self.inv_perm if inverse else self.perm  # type: ignore
         x = x[..., perm]
         if mask is not None:
             mask = mask[..., perm]
@@ -105,7 +105,7 @@ class Permute(Transform):
         return x, log_det, mask
 
     def _forwardMask(self, mask):
-        mask = mask[..., self.perm]   # type: ignore
+        mask = mask[..., self.perm]  # type: ignore
         return mask
 
 
