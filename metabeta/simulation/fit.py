@@ -28,11 +28,6 @@ def setup() -> argparse.Namespace:
         action='store_true',
         help='Check if fits exist for each dataset and reintegrate into batch (default = False)',
     )
-    parser.add_argument(
-        '--cleanup',
-        action='store_true',
-        help='Delete the cached fit files after succesful reintegration (default = False)',
-    )
 
     # bambi
     parser.add_argument(
@@ -330,13 +325,6 @@ class Fitter:
         path = self.batch_path.with_suffix(fit_suffix)
         np.savez_compressed(path, **self.batch, allow_pickle=True)
         print(f'Reintegrated NUTS and ADVI fits into {path}')
-
-        # --- optional cleanup
-        if self.cfg.cleanup:
-            for p in paths:
-                p.unlink()
-            print(f'Deleted {len(paths)} fit files from {self.outdir}')
-
 
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
