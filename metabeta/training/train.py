@@ -28,7 +28,7 @@ logger = logging.getLogger('train.py')
 def setup() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
-    parser.add_argument('--name', type=str, default='default', help='load configs/{name}.yaml')
+    parser.add_argument('--name', type=str, default='cluster', help='load configs/{name}.yaml')
 
     # runtime
     parser.add_argument('--device', type=str)
