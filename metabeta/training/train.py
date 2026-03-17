@@ -136,9 +136,8 @@ class Trainer:
             torch.use_deterministic_algorithms(True)
             torch.backends.cudnn.benchmark = False
             torch.backends.cudnn.deterministic = True
-            # torch.backends.cuda.matmul.allow_tf32 = False
-            # torch.backends.cudnn.allow_tf32 = False
             torch.set_deterministic_debug_mode('warn')
+            torch.set_float32_matmul_precision('highest')
 
     def _initData(self) -> None:
         # assimilate data config
