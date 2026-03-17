@@ -13,7 +13,7 @@ verbosity: 1          # warnings|infos|debug
 wandb: true
 
 # training
-max_epochs: 50
+max_epochs: 30
 bs: 32                # batch size
 lr: 1.0e-3
 max_grad_norm: 1.0

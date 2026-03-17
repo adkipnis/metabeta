@@ -25,7 +25,7 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument('--name', type=str, default='hyper', help='load configs/{name}.yaml')
     parser.add_argument('--n_startup_trials', type=int, default=20)
-    parser.add_argument('--n_trials', type=int, default=100)
+    parser.add_argument('--n_trials', type=int, default=60)
 
     args = parser.parse_args()
     path = Path(__file__).resolve().parent / 'configs' / f'{args.name}.yaml'
