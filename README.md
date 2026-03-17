@@ -1,15 +1,11 @@
 # metabeta
----
-🚧 I'm currently refactoring this repo. For legacy code, switch to branch v1. 🚧
----
-## A fast neural model for Bayesian mixed-effects regression
 📈 posterior estimation for hierarchical regression models\
 💡 prior specification for each regression parameter\
 👨🏻‍🏫 trained on simulated hierarchical datasets with realistic structure\
 🚀 orders of magnitude faster than MCMC\
 🔥 fully implemented in [PyTorch](https://pytorch.org/)
 
-This repo contains the source code for [data simulation](metabeta/simulation), [model architecture](metabeta/models), [training](metabeta/training) and [evaluation](metabeta/evaluation)
+This repo contains the source code for [data simulation](metabeta/simulation), [model architecture](metabeta/models), [training](metabeta/training) and [evaluation](metabeta/evaluation).
 
 ## Overview
 1. Hierarchical datasets are summarized locally (per group) and globally (across groups).
@@ -22,4 +18,7 @@ cd metabeta
 uv sync
 source .venv/bin/activate
 uv pip install -e .
- ``` 
+ ```
+---
+🚧 I'm currently refactoring this repo. For legacy code, switch to branch v1. 🚧
+
