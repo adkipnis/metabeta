@@ -1,7 +1,4 @@
 # metabeta
----
-🚧 I'm currently refactoring this repo. For legacy code, switch to branch v1. 🚧
----
 ## A fast neural model for Bayesian mixed-effects regression
 📈 posterior estimation for hierarchical regression models\
 💡 prior specification for each regression parameter\
@@ -22,4 +19,7 @@ cd metabeta
 uv sync
 source .venv/bin/activate
 uv pip install -e .
- ``` 
+ ```
+---
+🚧 I'm currently refactoring this repo. For legacy code, switch to branch v1. 🚧
+
