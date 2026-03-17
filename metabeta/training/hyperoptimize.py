@@ -26,7 +26,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--name', type=str, default='hyper', help='load configs/{name}.yaml')
     parser.add_argument('--n_startup_trials', type=int, default=20)
     parser.add_argument('--n_trials', type=int, default=100)
-    parser.add_argument('--wandb_study', action='store_false')
 
     args = parser.parse_args()
     path = Path(__file__).resolve().parent / 'configs' / f'{args.name}.yaml'
@@ -69,7 +68,7 @@ class HyperOptimizer:
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
         # optional wandb study tracking
-        if self.cfg.wandb_study:
+        if self.cfg.wandb:
             wandb_dir = Path(self.dir, '..', 'outputs', 'wandb')
             wandb_dir.mkdir(parents=True, exist_ok=True)
             self.wandb_run = wandb.init(
