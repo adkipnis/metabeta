@@ -5,7 +5,7 @@
 🚀 orders of magnitude faster than MCMC\
 🔥 fully implemented in [PyTorch](https://pytorch.org/)
 
-This repo contains the source code for [data simulation](metabeta/simulation), [model architecture](metabeta/models), [training](metabeta/training) and [evaluation](metabeta/evaluation)
+This repo contains the source code for [data simulation](metabeta/simulation), [model architecture](metabeta/models), [training](metabeta/training) and [evaluation](metabeta/evaluation).
 
 ## Overview
 1. Hierarchical datasets are summarized locally (per group) and globally (across groups).
