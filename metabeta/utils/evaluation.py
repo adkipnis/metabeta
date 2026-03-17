@@ -1,6 +1,7 @@
 from typing import Literal, Sequence
 from dataclasses import dataclass
 import torch
+from metabeta.utils.dataloader import toDevice
 
 
 Proposed = dict[str, dict[str, torch.Tensor]]
@@ -59,6 +60,10 @@ class Proposal:
 
     def __repr__(self) -> str:
         return f'ProposalPosterior(n_samples={self.n_samples})'
+
+    def to(self, device: str | torch.device) -> None:
+        self.data['global'] = toDevice(self.data['global'], device)
+        self.data['local'] = toDevice(self.data['local'], device)
 
     @property
     def samples_g(self) -> torch.Tensor:
