@@ -176,13 +176,13 @@ class Trainer:
         self.optimizer = schedulefree.AdamWScheduleFree(self.model.parameters(), lr=self.cfg.lr)
 
     def _initWandb(self) -> None:
-        wandb_dir = Path(self.dir, '..', 'outputs', 'wandb')
-        wandb_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = Path(self.dir, '..', 'outputs')
+        output_dir.mkdir(parents=True, exist_ok=True)
         self.wandb_run = wandb.init(
             project='metabeta',
             name=self.run_name,
             config=vars(self.cfg),
-            dir=wandb_dir,
+            dir=output_dir,
         )
         wandb.config.update({'data_cfg': self.data_cfg, 'model_cfg': self.model_cfg.to_dict()})
         wandb.define_metric('train/loss_step', step_metric='step/global')

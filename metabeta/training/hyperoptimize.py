@@ -69,13 +69,13 @@ class HyperOptimizer:
 
         # optional wandb study tracking
         if self.cfg.wandb:
-            wandb_dir = Path(self.dir, '..', 'outputs', 'wandb')
-            wandb_dir.mkdir(parents=True, exist_ok=True)
+            output_dir = Path(self.dir, '..', 'outputs')
+            output_dir.mkdir(parents=True, exist_ok=True)
             self.wandb_run = wandb.init(
                 project='metabeta',
                 name=self.cfg.name,
                 config=vars(self.cfg),
-                dir=wandb_dir,
+                dir=output_dir,
             )
 
     def suggest(self, trial: optuna.Trial) -> ApproximatorConfig:
