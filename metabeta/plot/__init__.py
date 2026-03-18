@@ -9,6 +9,7 @@ __all__ = [
     'plotCorrelation',
     'plotCoverage',
     'plotDataset',
+    'plotParameters',
     'plotRecovery',
     'plotSBC',
 ]
