@@ -87,10 +87,8 @@ class HyperOptimizer:
 
         # summarizer
         summarizer['d_model'] = trial.suggest_categorical('summarizer.d_model', [128, 196, 256])
-        d_output = trial.suggest_categorical('summarizer.d_output', [32, 48, 64])
-        summarizer['d_output'] = min(d_output, summarizer['d_model'])
         summarizer['d_ff'] = trial.suggest_categorical('summarizer.d_ff', [128, 196, 256])
-        summarizer['d_output'] = d_output
+        summarizer['d_output'] = trial.suggest_categorical('summarizer.d_output', [32, 48, 64])
         summarizer['n_blocks'] = trial.suggest_int('summarizer.n_blocks', 1, 4)
         n_isab = trial.suggest_int('summarizer.n_isab', 0, 4)
         summarizer['n_isab'] = min(n_isab, summarizer['n_blocks'])
