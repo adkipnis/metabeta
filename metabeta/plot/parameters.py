@@ -39,10 +39,12 @@ def plotParameters(
     names: list[str] | None = None,
     color: str = 'darkgreen',
     prior_color: str = 'steelblue',
+    truth_color: str = 'blueviolet',
     alpha: float = 0.75,
     title: str = '',
     kde: bool = True,
     prior: Proposal | None = None,
+    truth: np.ndarray | None = None,
 ):
     """pair grid of parameter samples for a single dataset at batch {index}
     - histograms / KDEs along diagonal
@@ -52,6 +54,8 @@ def plotParameters(
     If prior is given, overlays prior marginal KDEs on the diagonal (independent
     twin y-axis, non-intrusive) and light unfilled prior contours on the lower
     triangle.
+    If truth is given (1-D array of length d), draws a vertical line on each
+    diagonal cell and an x marker on each off-diagonal cell.
     """
 
     # init
@@ -125,6 +129,24 @@ def plotParameters(
                     alpha=0.30,
                     warn_singular=False,
                 )
+
+    # ground truth: vertical line on diagonal, x marker on off-diagonal
+    if truth is not None:
+        for i in range(d):
+            g.axes[i, i].axvline(truth[i], color=truth_color, lw=1.5, ls='--', zorder=5, alpha=0.8)
+        for i in range(d):
+            for j in range(d):
+                if i != j:
+                    g.axes[i, j].scatter(
+                        [truth[j]],
+                        [truth[i]],
+                        color=truth_color,
+                        marker='x',
+                        s=60,
+                        lw=2.0,
+                        alpha=0.8,
+                        zorder=5,
+                    )
 
     # set labels
     for i in range(d):
