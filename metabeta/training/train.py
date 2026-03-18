@@ -30,7 +30,7 @@ logger = logging.getLogger('train.py')
 def setup() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
-    parser.add_argument('--name', type=str, default='cluster', help='load configs/{name}.yaml')
+    parser.add_argument('--name', type=str, default='toy', help='load configs/{name}.yaml')
     parser.add_argument('--m_tag', type=str)
 
     # runtime
@@ -381,9 +381,9 @@ batch size: {self.cfg.bs}
 
         # plots
         if self.cfg.plot:
-            path_r = plotRecovery(eval_summary, batch, plot_dir=self.plot_dir, epoch=epoch)
-            path_c = plotCoverage(eval_summary, proposal, plot_dir=self.plot_dir, epoch=epoch)
-            path_s = plotSBC(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
+            path_r = plotRecovery(eval_summary, batch, plot_dir=self.plot_dir, epoch=epoch, show=True)
+            path_c = plotCoverage(eval_summary, proposal, plot_dir=self.plot_dir, epoch=epoch, show=True)
+            path_s = plotSBC(proposal, batch, plot_dir=self.plot_dir, epoch=epoch, show=True)
             if self.cfg.wandb:
                 image_logs = {
                     'plot/recovery': wandb.Image(str(path_r)),
