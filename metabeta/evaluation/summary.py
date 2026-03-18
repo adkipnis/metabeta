@@ -1,6 +1,7 @@
 import torch
 from tabulate import tabulate
 
+from metabeta.plot.parameters import plotParameters
 from metabeta.utils.evaluation import Proposal, EvaluationSummary, dictMean
 from metabeta.evaluation.point import (
     getPointEstimates,
@@ -49,8 +50,11 @@ def getSummary(
     pp = getPosteriorPredictive(proposal, data)
     out['posterior_nll'] = posteriorPredictiveNLL(pp, data, w=proposal.weights)
 
-    plotPPC(pp, data)
-    plotPPD(pp, data, pp_prior=pp_0)
+    # visualize single datasets
+    # gt = torch.cat([data['ffx'][0], data['sigma_rfx'][0], data['sigma_eps'][0:1]]).numpy()
+    # plotParameters(proposal, index=0, truth=gt, prior=prior_samples)
+    # plotPPC(pp, data)
+    # plotPPD(pp, data, pp_prior=pp_0)
 
     # importance sampling
     out['sample_efficiency'] = proposal.efficiency
