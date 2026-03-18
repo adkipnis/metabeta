@@ -1,0 +1,24 @@
+summarizer:
+    type: 'set-transformer'
+    d_model: 128 # [64, 128]
+    d_ff: 256 # 2x d_model
+    d_output: 64 # 0.5x d_model
+    n_blocks: 6 # [2, 4, 6]
+    n_isab: 0
+    activation: 'GELU'
+    dropout: 0.01
+
+posterior:
+    type: 'coupling'
+    transform: 'affine'
+    base_family: 'normal'
+    base_trainable: True
+    n_blocks: 5 # [3, 5]
+    subnet_kwargs:
+        net_type: 'mlp'
+        activation: 'ReLU'
+        d_ff: 196 # [128, 196, 256]
+        depth: 3 # [2, 3]
+        dropout: 0.01
+        zero_init: True
+        use_bias: False
