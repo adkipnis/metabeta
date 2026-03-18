@@ -40,6 +40,10 @@ def getSummary(
     out['coverage_error'] = getCoverageErrors(cvrg_dicts, log_ratio=False)
     out['log_coverage_ratio'] = getCoverageErrors(cvrg_dicts, log_ratio=True)
 
+    # prior predictive fit
+    pp_0 = getPriorPredictive(data, n_samples=proposal.n_samples)
+    out['prior_nll'] = posteriorPredictiveNLL(pp_0, data)
+
     # posterior predictive fit
     pp = getPosteriorPredictive(proposal, data)
     out['predictive_nll'] = posteriorPredictiveNLL(pp, data, w=proposal.weights)
