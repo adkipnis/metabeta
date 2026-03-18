@@ -38,16 +38,21 @@ def plotParameters(
     index: int = 0,
     names: list[str] | None = None,
     color: str = 'darkgreen',
+    prior_color: str = 'steelblue',
     alpha: float = 0.75,
     title: str = '',
     kde: bool = True,
+    prior: Proposal | None = None,
 ):
     """pair grid of parameter samples for a single dataset at batch {index}
-    - histograms along diagonal
+    - histograms / KDEs along diagonal
     - scatter in the upper triangular
-    - (optional) kde plots in the lower triangular
-    """
+    - KDE contours in the lower triangular
 
+    If prior is given, overlays prior marginal KDEs on the diagonal (independent
+    twin y-axis, non-intrusive) and light unfilled prior contours on the lower
+    triangle.
+    """
 
     # init
     x = proposal.samples_g[index].numpy()
@@ -63,7 +68,7 @@ def plotParameters(
         name_dict.pop('rfx')
         _names = np.concat(list(name_dict.values()))
 
-    # histograms along main diagonal
+    # marginal posterior
     if kde:
         g.map_diag(
             func=_kdeplot,
@@ -83,12 +88,43 @@ def plotParameters(
             common_norm=False,
         )
 
-    # scatter plots along upper trinagular
+    # marginal prior
+    if prior is not None:
+        x_prior = prior.samples_g[index].numpy()
+        for i in range(d):
+            _kdeplot_on(
+                g.axes[i, i],
+                x_prior[:, i],
+                color=prior_color,
+                alpha=0.50,
+                fill=False,
+                common_norm=False,
+                lw=1.5,
+            )
+
+    # 2d posterior scatter
     alpha_point = 1 / np.log(s)
     g.map_upper(sns.scatterplot, color=color, alpha=alpha_point, s=40, edgecolor='k', lw=0)
 
-    # KDEs along lower triangular
+    # 2d posterior KDE contours
     g.map_lower(sns.kdeplot, color=color, alpha=alpha, fill=True, warn_singular=False)
+
+    # 2d prior KDE contours
+    if prior is not None:
+        x_prior = prior.samples_g[index].numpy()
+        x_prior_df = pd.DataFrame(x_prior)
+        for i in range(d):
+            for j in range(i):
+                sns.kdeplot(
+                    data=x_prior_df,
+                    x=j,
+                    y=i,
+                    ax=g.axes[i, j],
+                    color=prior_color,
+                    fill=False,
+                    alpha=0.30,
+                    warn_singular=False,
+                )
 
     # set labels
     for i in range(d):
@@ -98,11 +134,10 @@ def plotParameters(
             g.axes[i, j].grid(alpha=0.5)
             g.axes[i, j].set_axisbelow(True)
 
-    # move x-label on top
+    # reposition labels
     for i, ax in enumerate(g.axes[0, :]):
         xlabel = g.axes[-1, i].get_xlabel()
-        # ax.set_xlabel(xlabel, fontsize=16)
-        g.fig.text(
+        g.figure.text(
             ax.get_position().x0 + ax.get_position().width / 2,
             ax.get_position().y1 + 0.03,
             xlabel,
