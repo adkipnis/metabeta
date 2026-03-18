@@ -80,7 +80,7 @@ def posteriorPredictiveNLL(
     """
     Returns per-dataset NLL with shape (b,).
     mode='expected':
-        -E_p(theta|D)[ log p(y | theta) ]
+        E_p(theta|D)[ -log p(y | theta) ]
     mode='mixture':
         -log E_p(theta|D)[ p(y | theta) ]
     """
