@@ -7,7 +7,7 @@
 
 #SBATCH --partition gpu_p
 #SBATCH --qos gpu_normal
-#SBATCH --nodes=1
+#SBATCH --nodes=3
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
