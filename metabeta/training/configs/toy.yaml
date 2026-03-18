@@ -33,6 +33,6 @@ plot: true
 # checkpoint
 r_tag: ''             # run tag
 save_latest: true
-save_best: true
-load_latest: false
+save_best: false
+load_latest: true
 load_best: false
