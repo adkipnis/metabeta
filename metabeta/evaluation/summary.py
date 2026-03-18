@@ -13,7 +13,7 @@ from metabeta.evaluation.intervals import (
     getCredibleIntervals,
 )
 from metabeta.evaluation.predictive import (
-    getPriorPredictive,
+    getPriorSamples,
     getPosteriorPredictive,
     posteriorPredictiveNLL,
 )
@@ -41,7 +41,8 @@ def getSummary(
     out['log_coverage_ratio'] = getCoverageErrors(cvrg_dicts, log_ratio=True)
 
     # prior predictive fit
-    pp_0 = getPriorPredictive(data, n_samples=proposal.n_samples)
+    prior_samples = getPriorSamples(data, proposal.n_samples)
+    pp_0 = getPosteriorPredictive(prior_samples, data)
     out['prior_nll'] = posteriorPredictiveNLL(pp_0, data)
 
     # posterior predictive fit
