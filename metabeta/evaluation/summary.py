@@ -46,9 +46,10 @@ def getSummary(
 
     # posterior predictive fit
     pp = getPosteriorPredictive(proposal, data)
-    out['predictive_nll'] = posteriorPredictiveNLL(pp, data, w=proposal.weights)
-    # plotPPC(pp, data)
-    # plotPPD(pp, data)
+    out['posterior_nll'] = posteriorPredictiveNLL(pp, data, w=proposal.weights)
+
+    plotPPC(pp, data)
+    plotPPD(pp, data, pp_prior=pp_0)
 
     # importance sampling
     out['sample_efficiency'] = proposal.efficiency
