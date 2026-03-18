@@ -6,30 +6,29 @@ from torch import distributions as D
 from metabeta.utils.evaluation import Proposal
 
 
-def getPriorSamples(data: dict[str, torch.Tensor], n_samples: int) -> dict[str, torch.Tensor]:
+def getPriorSamples(data: dict[str, torch.Tensor], n_samples: int) -> Proposal:
     shape = (n_samples,)
     out = {}
 
     # fixed effects
     mask = data['mask_d'].unsqueeze(-2)
     loc, scale = data['nu_ffx'], data['tau_ffx']
-    out['ffx'] = D.Normal(loc, scale).sample(shape).movedim(0, 1) * mask
+    ffx = D.Normal(loc, scale).sample(shape).movedim(0, 1) * mask
 
     # sigma rfx
     mask = data['mask_q'].unsqueeze(-2)
     scale = data['tau_rfx']
-    out['sigma_rfx'] = D.HalfNormal(scale).sample(shape).movedim(0, 1) * mask   # type: ignore
+    sigma_rfx = D.HalfNormal(scale).sample(shape).movedim(0, 1) * mask   # type: ignore
 
     # sigma eps
     scale = data['tau_eps']
-    out['sigma_eps'] = D.StudentT(df=4, scale=scale).sample(shape).movedim(0, 1).abs()
+    sigma_eps = D.StudentT(df=4, scale=scale).sample(shape).movedim(0, 1)
+    sigma_eps = sigma_eps.abs().unsqueeze(-1)
 
     # rfx
     mask = data['mask_mq'].unsqueeze(-2)
-    dist = D.Normal(loc=0, scale=out['sigma_rfx'])
     shape = (int(data['m'].max()),)
-    out['rfx'] = dist.sample(shape).movedim(0, 1) * mask
-    return out
+    rfx = D.Normal(loc=0, scale=sigma_rfx).sample(shape).movedim(0, 1) * mask
 
 
 def getPriorPredictive(data: dict[str, torch.Tensor], n_samples: int) -> D.Normal:
