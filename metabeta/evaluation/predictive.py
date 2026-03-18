@@ -31,21 +31,39 @@ def getPriorSamples(data: dict[str, torch.Tensor], n_samples: int) -> dict[str, 
     out['rfx'] = dist.sample(shape).movedim(0, 1) * mask
     return out
 
+
+def getPriorPredictive(data: dict[str, torch.Tensor], n_samples: int) -> D.Normal:
+    prior_samples = getPriorSamples(data, n_samples)
+    return getPredictive(
+        ffx=prior_samples['ffx'],
+        sigma_eps=prior_samples['sigma_eps'],
+        rfx=prior_samples['rfx'],
+        X=data['X'],
+        Z=data['Z'],
+    )
+
+
 def getPosteriorPredictive(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
 ) -> D.Normal:
     """get p(y|X, theta)"""
-    # parameters
-    ffx = proposal.ffx   # (b, s, d)
-    sigma_eps = proposal.sigma_eps   # (b, s)
-    rfx = proposal.rfx   # (b, m, s, q)
+    return getPredictive(
+        ffx=proposal.ffx,
+        sigma_eps=proposal.sigma_eps,
+        rfx=proposal.rfx,
+        X=data['X'],
+        Z=data['Z'],
+    )
 
-    # observations
-    X = data['X']   # (b, m, n, d)
-    Z = data['Z']   # (b, m, n, q)
 
-    # posterior params
+def getPredictive(
+    ffx: torch.Tensor,  # (b, s, d)
+    sigma_eps: torch.Tensor,  # (b, s)
+    rfx: torch.Tensor,  # (b, m, s, q)
+    X: torch.Tensor,  # (b, m, n, d)
+    Z: torch.Tensor,  # (b, m, n, q)
+) -> D.Normal:
     mu_g = torch.einsum('bmnd,bsd->bmns', X, ffx)
     mu_l = torch.einsum('bmnq,bmsq->bmns', Z, rfx)
     loc = mu_g + mu_l
