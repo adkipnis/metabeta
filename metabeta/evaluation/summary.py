@@ -7,12 +7,17 @@ from metabeta.evaluation.point import (
     getRMSE,
     getCorrelation,
 )
-from metabeta.evaluation.intervals import getCoverageErrors, getCoverages, getCredibleIntervals
+from metabeta.evaluation.intervals import (
+    getCoverageErrors,
+    getCoverages,
+    getCredibleIntervals,
+)
 from metabeta.evaluation.predictive import (
+    getPriorPredictive,
     getPosteriorPredictive,
     posteriorPredictiveNLL,
 )
-# from metabeta.plot.predictive import plotPPC, plotPPD
+from metabeta.plot.predictive import plotPPC, plotPPD
 
 
 EST_TYPE = 'mean'
