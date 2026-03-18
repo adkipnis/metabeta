@@ -201,7 +201,8 @@ class EvaluationSummary:
     coverage: dict[float, dict[str, torch.Tensor]]
     coverage_error: dict[float, dict[str, torch.Tensor]]
     log_coverage_ratio: dict[float, dict[str, torch.Tensor]]
-    predictive_nll: torch.Tensor
+    prior_nll: torch.Tensor
+    posterior_nll: torch.Tensor
     sample_efficiency: torch.Tensor | None
     pareto_k: torch.Tensor | None
     tpd: float | None = None   # time per dataset
@@ -227,14 +228,14 @@ class EvaluationSummary:
     @property
     def lcr(self) -> dict[str, torch.Tensor]:   # log coverage ratio
         return self.averageOverAlpha(self.log_coverage_ratio)
-    
+
     @property
     def abs_lcr(self) -> dict[str, torch.Tensor]:   # non-negative version of above for optimization
         return self.averageOverAlpha(self.log_coverage_ratio, absolute=True)
 
     @property
     def mnll(self) -> float:   # median posterior NLL
-        return self.predictive_nll.median().item()
+        return self.posterior_nll.median().item()
 
     @property
     def meff(self) -> None | float:   # median sample efficiency for IS
