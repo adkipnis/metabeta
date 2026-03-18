@@ -6,6 +6,33 @@ import seaborn as sns
 from metabeta.utils.evaluation import Proposal, getAllNames
 
 
+def _kdeplot_on(ax, x, **kwargs):
+    """KDE overlay on a given axis using a detached twin y-axis."""
+    ax2 = ax.twinx()
+    sns.kdeplot(x, **kwargs, ax=ax2)
+    ax2.spines['right'].set_visible(False)
+    ax2.spines['top'].set_visible(False)
+    ax2.set_ylabel('')
+    ax2.set_yticks([])
+    ax2.set_yticklabels([])
+
+
+def _kdeplot(x, **kwargs):
+    # sns kdeplot but with detached axes
+    _kdeplot_on(plt.gca(), x, **kwargs)
+
+
+def _histplot(x, **kwargs):
+    # sns histplot but with detached axes
+    ax2 = plt.gca().twinx()
+    sns.histplot(x, **kwargs, ax=ax2)
+    plt.gca().spines['right'].set_visible(False)
+    plt.gca().spines['top'].set_visible(False)
+    ax2.set_ylabel('')
+    ax2.set_yticks([])
+    ax2.set_yticklabels([])
+
+
 def plotParameters(
     proposal: Proposal,
     index: int = 0,
@@ -21,25 +48,6 @@ def plotParameters(
     - (optional) kde plots in the lower triangular
     """
 
-    def _kdeplot(x, **kwargs):
-        # sns histplot but with detached axes
-        ax2 = plt.gca().twinx()
-        sns.kdeplot(x, **kwargs, ax=ax2)
-        plt.gca().spines['right'].set_visible(False)
-        plt.gca().spines['top'].set_visible(False)
-        ax2.set_ylabel('')
-        ax2.set_yticks([])
-        ax2.set_yticklabels([])
-
-    def _histplot(x, **kwargs):
-        # sns histplot but with detached axes
-        ax2 = plt.gca().twinx()
-        sns.histplot(x, **kwargs, ax=ax2)
-        plt.gca().spines['right'].set_visible(False)
-        plt.gca().spines['top'].set_visible(False)
-        ax2.set_ylabel('')
-        ax2.set_yticks([])
-        ax2.set_yticklabels([])
 
     # init
     x = proposal.samples_g[index].numpy()
