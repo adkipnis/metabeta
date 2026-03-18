@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=train-toy
-#SBATCH --output=logs/train-toy/%A_%a.out
-#SBATCH --error=logs/train-toy/%A_%a.err
+#SBATCH --job-name=sweep-1
+#SBATCH --output=logs/sweep-1/%A_%a.out
+#SBATCH --error=logs/sweep-1/%A_%a.err
 #SBATCH --array=0-71
 
 #SBATCH --partition gpu_p
