@@ -12,7 +12,7 @@ def getPriorSamples(data: dict[str, torch.Tensor], n_samples: int) -> Proposal:
 
     # fixed effects
     mask = data['mask_d'].unsqueeze(-2)
-    loc, scale = data['nu_ffx'], data['tau_ffx']
+    loc, scale = data['nu_ffx'], data['tau_ffx'] + 1e-12
     ffx = D.Normal(loc, scale).sample(shape).movedim(0, 1) * mask
 
     # sigma rfx
