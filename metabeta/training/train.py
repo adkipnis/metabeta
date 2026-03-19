@@ -390,7 +390,7 @@ batch size: {self.cfg.bs}
 
         # plots
         if self.cfg.plot:
-            show = True
+            show = False
             path_r = plotRecovery(eval_summary, batch, plot_dir=self.plot_dir, epoch=epoch, show=show)
             path_c = plotCoverage(eval_summary, proposal, plot_dir=self.plot_dir, epoch=epoch, show=show)
             path_s = plotSBC(proposal, batch, plot_dir=self.plot_dir, epoch=epoch, show=show)
