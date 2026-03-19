@@ -1,0 +1,38 @@
+# experiment
+name: 'simple'
+d_tag: 'simple'          # points to metabeta/simulation/configs/toy.yaml
+m_tag: 'toy'          # points to metabeta/models/configs/toy.yaml
+seed: 42
+
+# runtime
+device: 'cpu'         # cpu|cuda|mps
+cores: 8
+reproducible: true
+compile: false
+verbosity: 1          # warnings|infos|debug
+wandb: false
+
+# training
+max_epochs: 20
+bs: 32                # batch size
+lr: 1.0e-3
+max_grad_norm: 1.0
+loss_type: 'forward'  # forward|backward|mixed
+patience: 5           # early stopping
+sample_interval: 5
+skip_ref: False       # skip reference run before training
+
+# evaluation
+n_samples: 512        # posterior draws
+rescale: true         # unstandardize y
+importance: false     # importance sampling
+sir: false            # sampling importance resampling
+sir_iter: 8
+plot: true
+
+# checkpoint
+r_tag: ''             # run tag
+save_latest: true
+save_best: false
+load_latest: true
+load_best: false
