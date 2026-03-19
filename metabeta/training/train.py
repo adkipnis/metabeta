@@ -454,6 +454,9 @@ batch size: {self.cfg.bs}
             start_epoch = last_epoch + 1
             print(f'Resumed latest checkpoint at epoch {last_epoch}.')
 
+        # check if training data is complete
+        assert self._trainingDataAvailable(start_epoch), 'training data incomplete'
+
         # optionally init wandb (after potential loading and reference run)
         if self.cfg.wandb:
             self._initWandb()
