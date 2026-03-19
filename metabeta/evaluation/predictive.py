@@ -17,7 +17,7 @@ def getPriorSamples(data: dict[str, torch.Tensor], n_samples: int) -> Proposal:
 
     # sigma rfx
     mask = data['mask_q'].unsqueeze(-2)
-    scale = data['tau_rfx']
+    scale = data['tau_rfx'] + 1e-12
     sigma_rfx = D.HalfNormal(scale).sample(shape).movedim(0, 1) * mask   # type: ignore
 
     # sigma eps
@@ -28,7 +28,7 @@ def getPriorSamples(data: dict[str, torch.Tensor], n_samples: int) -> Proposal:
     # rfx
     mask = data['mask_mq'].unsqueeze(-2)
     shape = (int(data['m'].max()),)
-    rfx = D.Normal(loc=0, scale=sigma_rfx).sample(shape).movedim(0, 1) * mask
+    rfx = D.Normal(loc=0, scale=sigma_rfx + 1e-12).sample(shape).movedim(0, 1) * mask
 
     # bundle
     out['global'] = {'samples': torch.cat([ffx, sigma_rfx, sigma_eps], dim=-1)}
