@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=train-toy
-#SBATCH --output=logs/train-toy/%j.out
-#SBATCH --error=logs/train-toy/%j.err
+#SBATCH --job-name=train-simple-affine
+#SBATCH --output=logs/train-simple-affine/%j.out
+#SBATCH --error=logs/train-simple-affine/%j.err
 
 #SBATCH --partition gpu_p
 #SBATCH --qos gpu_normal
@@ -14,4 +14,4 @@
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/training
-python train.py --name cluster --device cuda
+python train.py --name cluster --m_tag affine
