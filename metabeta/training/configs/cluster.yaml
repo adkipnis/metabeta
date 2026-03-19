@@ -1,7 +1,7 @@
 # experiment
 name: 'cluster'
-d_tag: 'toy'          # points to metabeta/simulation/configs/toy.yaml
-m_tag: 'toy'          # points to metabeta/models/configs/toy.yaml
+d_tag: 'simple'        # points to metabeta/simulation/configs/{d_tag}.yaml
+m_tag: 'affine'        # points to metabeta/models/configs/{m_tag}.yaml
 seed: 42
 
 # runtime
@@ -9,7 +9,7 @@ device: 'cuda'         # cpu|cuda|mps
 cores: 8
 reproducible: true
 compile: false
-verbosity: 1          # warnings|infos|debug
+verbosity: 1           # warnings|infos|debug
 wandb: true
 
 # training
@@ -17,7 +17,7 @@ max_epochs: 100
 bs: 32                # batch size
 lr: 1.0e-3
 max_grad_norm: 1.0
-loss_type: 'mixed'  # forward|backward|mixed
+loss_type: 'forward'  # forward|backward|mixed
 patience: 5           # early stopping
 sample_interval: 5
 skip_ref: false       # skip reference run before training
