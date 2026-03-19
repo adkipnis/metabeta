@@ -149,6 +149,15 @@ class Trainer:
         # load validation and test data
         self.dl_valid = self._getDataLoader('valid')
         self.dl_test = self._getDataLoader('test')
+        
+    def _trainingDataAvailable(self, start_epoch: int) -> bool:
+        for epoch in range(start_epoch, self.cfg.max_epochs + 1):
+            data_fname = datasetFilename(self.data_cfg, 'train', epoch)
+            data_path = Path(self.dir, '..', 'outputs', 'data', data_fname)
+            if not data_path.exists():
+                logger.warning(f'{data_path} does not exist')
+                return False
+        return True
 
     def _getDataLoader(
         self, partition: str, epoch: int = 0, batch_size: int | None = None
