@@ -189,7 +189,7 @@ class Generator:
             ds_train = aggregate(ds_train)
             fn = Path(self.outdir, datasetFilename(vars(self.cfg), 'train', epoch))
             np.savez_compressed(fn, **ds_train, allow_pickle=True)
-            logger.info(f'Saved training set to {fn}')
+            logger.debug(f'Saved training set to {fn}')
 
     def go(self):
         if self.cfg.partition == 'test':
