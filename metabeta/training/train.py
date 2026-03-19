@@ -1,4 +1,5 @@
 import os
+
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 
 import yaml
@@ -149,7 +150,7 @@ class Trainer:
         # load validation and test data
         self.dl_valid = self._getDataLoader('valid')
         self.dl_test = self._getDataLoader('test')
-        
+
     def _trainingDataAvailable(self, start_epoch: int) -> bool:
         for epoch in range(start_epoch, self.cfg.max_epochs + 1):
             data_fname = datasetFilename(self.data_cfg, 'train', epoch)
@@ -306,7 +307,8 @@ batch size: {self.cfg.bs}
         elif mode == 'mixed':
             fkl = self.loss(batch, summaries, mode='forward')
             bkl = self.loss(batch, summaries, mode='backward')
-            return fkl + 0.001 * bkl
+            alpha = (fkl.detach().abs() / (bkl.detach().abs() + 1e-8)).clamp(max=1.0)
+            return fkl + 0.05 * alpha * bkl
 
         else:
             raise ValueError(f'unknown loss type: {mode}')
