@@ -390,9 +390,10 @@ batch size: {self.cfg.bs}
 
         # plots
         if self.cfg.plot:
-            path_r = plotRecovery(eval_summary, batch, plot_dir=self.plot_dir, epoch=epoch)
-            path_c = plotCoverage(eval_summary, proposal, plot_dir=self.plot_dir, epoch=epoch)
-            path_s = plotSBC(proposal, batch, plot_dir=self.plot_dir, epoch=epoch)
+            show = True
+            path_r = plotRecovery(eval_summary, batch, plot_dir=self.plot_dir, epoch=epoch, show=show)
+            path_c = plotCoverage(eval_summary, proposal, plot_dir=self.plot_dir, epoch=epoch, show=show)
+            path_s = plotSBC(proposal, batch, plot_dir=self.plot_dir, epoch=epoch, show=show)
             if self.cfg.wandb:
                 image_logs = {
                     'plot/recovery': wandb.Image(str(path_r)),
