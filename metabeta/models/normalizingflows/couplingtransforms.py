@@ -129,12 +129,12 @@ class RationalQuadratic(CouplingTransform):
         split_dims: tuple[int, int],
         d_context: int,
         subnet_kwargs: dict | None = None,
-        n_bins: int = 6,
-        default_size: float = 1.0,
+        n_bins: int = 8,
+        default_size: float = 3.0,
         min_bin: float = 0.1,
         min_deriv: float = 1e-3,
         adaptive_domain: bool = False,
-        alpha: float = 1.0,  # softclamping
+        alpha: float = 2.0,  # softclamping
         eps: float = 1e-6,  # clamping
     ):
         super().__init__()
