@@ -1,6 +1,7 @@
+import argparse
 import yaml
-from typing import Literal
 from pathlib import Path
+from typing import Literal
 from dataclasses import dataclass, asdict
 from metabeta.utils.io import datasetFilename
 
@@ -15,7 +16,7 @@ class SummarizerConfig:
     activation: str = 'GELU'
     dropout: float = 0.01
     type: Literal['set-transformer'] = 'set-transformer'
-    
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -61,3 +62,17 @@ def dataFromYaml(cfg_path: Path, partition: str, epoch: int = 0) -> str:
     with open(cfg_path, 'r') as f:
         data_cfg = yaml.safe_load(f)
     return datasetFilename(data_cfg, partition, epoch)
+
+
+def loadDataConfig(d_tag: str) -> dict:
+    root = Path(__file__).resolve().parent
+    config_path = Path(root, '..', 'simulation', 'configs', f'{d_tag}.yaml')
+    assert config_path.exists(), f'data config not found: {config_path}'
+    with open(config_path, 'r') as f:
+        data_cfg = yaml.safe_load(f)
+    return data_cfg
+
+
+def assimilateConfig(big: argparse.Namespace, small: dict) -> None:
+    for k, v in small.items():
+        setattr(big, k, v)
