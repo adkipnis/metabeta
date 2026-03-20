@@ -377,6 +377,7 @@ batch size: {self.cfg.bs}
         t1 = time.perf_counter()
 
         # post-process
+        proposal.tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
         proposal.to('cpu')
         batch = toDevice(batch, 'cpu')
         if self.cfg.rescale:
@@ -384,7 +385,6 @@ batch size: {self.cfg.bs}
 
         # get evaluation summary
         eval_summary = getSummary(proposal, batch)
-        eval_summary.tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
         summary_table = summaryTable(eval_summary)
         logger.info(summary_table)
         if self.cfg.wandb:

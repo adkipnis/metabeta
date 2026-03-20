@@ -60,6 +60,9 @@ def getSummary(
     out['sample_efficiency'] = proposal.efficiency
     out['pareto_k'] = proposal.pareto_k
 
+    # time per dataset
+    out['tpd'] = proposal.tpd
+
     summary = EvaluationSummary(**out)
     return summary
 

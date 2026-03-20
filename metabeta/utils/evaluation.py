@@ -53,6 +53,7 @@ class Proposal:
         self.d = numFixed(proposed)
         self.q = proposed['local']['samples'].shape[-1]
         self.is_results = {}
+        self.tpd: float | None = None
 
     @property
     def n_samples(self) -> int:
