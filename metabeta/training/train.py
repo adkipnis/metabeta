@@ -14,7 +14,7 @@ import wandb
 import schedulefree
 
 from metabeta.utils.logger import setupLogging
-from metabeta.utils.io import setDevice, datasetFilename, runName
+from metabeta.utils.io import assimilateConfig, loadDataConfig, setDevice, datasetFilename, runName
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import modelFromYaml, ApproximatorConfig
 from metabeta.utils.dataloader import Dataloader, toDevice
@@ -140,12 +140,8 @@ class Trainer:
 
     def _initData(self) -> None:
         # assimilate data config
-        data_cfg_path = Path(self.dir, '..', 'simulation', 'configs', f'{self.cfg.d_tag}.yaml')
-        assert data_cfg_path.exists(), f'config file {data_cfg_path} does not exist'
-        with open(data_cfg_path, 'r') as f:
-            self.data_cfg = yaml.safe_load(f)
-            for k, v in self.data_cfg.items():
-                setattr(self.cfg, k, v)
+        self.data_cfg = loadDataConfig(self.cfg.d_tag)
+        assimilateConfig(self.cfg, self.data_cfg)
 
         # load validation and test data
         self.dl_valid = self._getDataLoader('valid')
