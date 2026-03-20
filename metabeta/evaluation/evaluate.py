@@ -46,3 +46,19 @@ def setup() -> argparse.Namespace:
 
 
 # -----------------------------------------------------------------------------
+class Evaluator:
+    def __init__(self, cfg: argparse.Namespace) -> None:
+        self.cfg = cfg
+        self.dir = Path(__file__).resolve().parent
+        setSeed(cfg.seed)
+        self.device = setDevice(cfg.device)
+
+        # checkpoint dir
+        self.run_name = runName(vars(self.cfg))
+        self.ckpt_dir = Path(self.dir, '..', 'outputs', 'checkpoints', self.run_name)
+
+        # load data and model
+        self._initData()
+        self._initModel()
+        self._load()
+
