@@ -144,23 +144,19 @@ class Evaluator:
         logger.info(summary_table)
         return eval_summary
 
+    def plot(
+        self,
+        proposal: Proposal,
+        eval_summary: EvaluationSummary,
+        batch: dict[str, torch.Tensor],
+    ) -> None:
         if self.cfg.rescale:
-            eval_batch = rescaleData(batch)
-        n_sir = self.cfg.n_samples // self.cfg.sir_iter
-        imp_sampler = ImportanceSampler(eval_batch, sir=True, n_sir=n_sir)
-        selected = []
-        n_remaining = self.cfg.n_samples
+            batch = rescaleData(batch)
+        plotRecovery(eval_summary, batch, plot_dir=self.plot_dir, show=True)
+        plotCoverage(eval_summary, proposal, plot_dir=self.plot_dir, show=True)
+        plotSBC(proposal, batch, plot_dir=self.plot_dir, show=True)
 
-        # Sampling Importance Resampling (SIR)
-        while n_remaining > 0:
-            proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
-            if self.cfg.rescale:
-                proposal.rescale(batch['sd_y'])
-            proposal = imp_sampler(proposal)
-            selected.append(proposal)
-            n_remaining -= proposal.n_samples
-        proposal = joinProposals(selected)
-        return proposal, eval_batch
+    def go(self) -> None:
 
 
 # =============================================================================
