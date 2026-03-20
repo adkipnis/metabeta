@@ -119,6 +119,7 @@ class Trainer:
             self.plot_dir.mkdir(parents=True, exist_ok=True)
 
         # tracking & logging
+        self.current_epoch = 0
         self.best_valid = float('inf')
         self.best_epoch = 0
         self.global_step = 0
@@ -200,11 +201,11 @@ class Trainer:
         if self.wandb_run is not None:
             wandb.finish()
 
-    def save(self, epoch: int = 0, prefix: str = 'latest') -> None:
+    def save(self, prefix: str = 'latest') -> None:
         path = Path(self.ckpt_dir, prefix + '.pt')
         payload = {
             'timestamp': self.timestamp,
-            'epoch': epoch,
+            'epoch': self.current_epoch,
             'best_epoch': self.best_epoch,
             'best_valid': self.best_valid,
             'trainer_cfg': vars(self.cfg).copy(),
@@ -309,9 +310,9 @@ batch size: {self.cfg.bs}
         else:
             raise ValueError(f'unknown loss type: {mode}')
 
-    def train(self, epoch: int) -> float:
-        dl_train = self._getDataLoader('train', epoch, batch_size=self.cfg.bs)
-        iterator = tqdm(dl_train, desc=f'Epoch {epoch:02d}/{self.cfg.max_epochs:02d} [T]')
+    def train(self) -> float:
+        dl_train = self._getDataLoader('train', self.current_epoch, batch_size=self.cfg.bs)
+        iterator = tqdm(dl_train, desc=f'Epoch {self.current_epoch:02d}/{self.cfg.max_epochs:02d} [T]')
         loss_train = running_sum = 0.0
         self.model.train()
         self.optimizer.train()
@@ -342,8 +343,8 @@ batch size: {self.cfg.bs}
         return float(loss_train)
 
     @torch.inference_mode()
-    def valid(self, epoch: int = 0) -> float:
-        iterator = tqdm(self.dl_valid, desc=f'Epoch {epoch:02d}/{self.cfg.max_epochs:02d} [V]')
+    def valid(self) -> float:
+        iterator = tqdm(self.dl_valid, desc=f'Epoch {self.current_epoch:02d}/{self.cfg.max_epochs:02d} [V]')
         loss_valid = running_sum = 0.0
         self.model.eval()
         self.optimizer.eval()
@@ -356,7 +357,7 @@ batch size: {self.cfg.bs}
         return float(loss_valid)
 
     @torch.inference_mode()
-    def sample(self, epoch: int = 0) -> EvaluationSummary:
+    def sample(self) -> EvaluationSummary:
         # expects single batch from dl
         self.model.eval()
         self.optimizer.eval()
@@ -390,7 +391,7 @@ batch size: {self.cfg.bs}
             wandb.log(
                 {
                     'summary/table': wandb.Html(f'<pre>{summary_table}</pre>'),
-                    'step/epoch': epoch,
+                    'step/epoch': self.current_epoch,
                 }
             )
 
@@ -451,18 +452,15 @@ batch size: {self.cfg.bs}
 
     def go(self) -> None:
         # optionally load previous checkpoint
-        start_epoch = 1
         if self.cfg.load_best:
-            last_epoch = self.load('best')
-            start_epoch = last_epoch + 1
-            print(f'Resumed best checkpoint at epoch {last_epoch}.')
+            self.current_epoch = self.load('best')
+            print(f'Resumed best checkpoint at epoch {self.current_epoch}.')
         elif self.cfg.load_latest:
-            last_epoch = self.load('latest')
-            start_epoch = last_epoch + 1
-            print(f'Resumed latest checkpoint at epoch {last_epoch}.')
+            self.current_epoch = self.load('latest')
+            print(f'Resumed latest checkpoint at epoch {self.current_epoch}.')
 
         # check if training data is complete
-        assert self._trainingDataAvailable(start_epoch), 'training data incomplete'
+        assert self._trainingDataAvailable(self.current_epoch + 1), 'training data incomplete'
 
         # optionally init wandb (after potential loading and reference run)
         if self.cfg.wandb:
@@ -471,24 +469,18 @@ batch size: {self.cfg.bs}
         # optionally get performance before (resumed) training
         if not self.cfg.skip_ref:
             print('\nPerformance before training:')
-            self.valid(start_epoch - 1)
-            self.sample(start_epoch - 1)
+            self.valid()
+            self.sample()
 
-        print(f'\nTraining for {self.cfg.max_epochs - start_epoch + 1} epochs...')
-        for epoch in range(start_epoch, self.cfg.max_epochs + 1):
-            loss_train = self.train(epoch)
-            loss_valid = self.valid(epoch)
-
-            # update best validation loss
-            if loss_valid < (self.best_valid - 1e-6):
-                self.best_valid = loss_valid
-                self.best_epoch = epoch
-                if self.cfg.save_best:
-                    self.save(epoch, 'best')
+        print(f'\nTraining for {self.cfg.max_epochs - self.current_epoch} epochs...')
+        for epoch in range(self.current_epoch + 1, self.cfg.max_epochs + 1):
+            self.current_epoch = epoch
+            loss_train = self.train()
+            loss_valid = self.valid()
 
             # sample on test set
             if epoch % self.cfg.sample_interval == 0:
-                self.sample(epoch)
+                self.sample()
 
             # log epoch
             if self.wandb_run is not None:
@@ -496,20 +488,27 @@ batch size: {self.cfg.bs}
                     {
                         'train/loss_epoch': float(loss_train),
                         'valid/loss_epoch': float(loss_valid),
-                        'step/epoch': epoch,
+                        'step/epoch': self.current_epoch,
                     },
                 )
 
             # save latest ckpt
             if self.cfg.save_latest:
-                self.save(epoch, 'latest')
+                self.save('latest')
+
+            # update best validation loss and optionally best model
+            if loss_valid < (self.best_valid - 1e-6):
+                self.best_valid = loss_valid
+                self.best_epoch = self.current_epoch
+                if self.cfg.save_best:
+                    self.save('best')
 
             # optional early stopping
             if self.stopper is not None:
                 self.stopper.update(loss_valid)
                 if self.stopper.stop:
-                    self.sample(epoch)
-                    logger.info(f'early stopping at epoch {epoch}.')
+                    self.sample()
+                    logger.info(f'early stopping at epoch {self.current_epoch}.')
                     break
 
 
