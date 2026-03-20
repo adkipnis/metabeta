@@ -78,3 +78,14 @@ class Evaluator:
         self.dl_test = Dataloader(test_path, batch_size=None)
 
     def _initModel(self) -> None:
+        """Load model architecture from config and restore checkpoint weights."""
+        if hasattr(self.cfg, 'model_cfg') and isinstance(self.cfg.model_cfg, ApproximatorConfig):
+            self.model_cfg = self.cfg.model_cfg
+        else:
+            model_cfg_path = Path(self.dir, '..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
+            self.model_cfg = modelFromYaml(
+                model_cfg_path, d_ffx=self.cfg.max_d, d_rfx=self.cfg.max_q
+            )
+        self.model = Approximator(self.model_cfg).to(self.device)
+        self.model.eval()
+
