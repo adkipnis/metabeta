@@ -148,6 +148,13 @@ class Trainer:
         self.dl_valid = self._getDataLoader('valid')
         self.dl_test = self._getDataLoader('test')
 
+    def _getDataLoader(
+        self, partition: str, epoch: int = 0, batch_size: int | None = None
+    ) -> Dataloader:
+        data_fname = datasetFilename(self.data_cfg, partition, epoch)
+        data_path = Path(self.dir, '..', 'outputs', 'data', data_fname)
+        return Dataloader(data_path, batch_size=batch_size)
+
     def _trainingDataAvailable(self, start_epoch: int) -> bool:
         for epoch in range(start_epoch, self.cfg.max_epochs + 1):
             data_fname = datasetFilename(self.data_cfg, 'train', epoch)
@@ -156,13 +163,6 @@ class Trainer:
                 logger.warning(f'{data_path} does not exist')
                 return False
         return True
-
-    def _getDataLoader(
-        self, partition: str, epoch: int = 0, batch_size: int | None = None
-    ) -> Dataloader:
-        data_fname = datasetFilename(self.data_cfg, partition, epoch)
-        data_path = Path(self.dir, '..', 'outputs', 'data', data_fname)
-        return Dataloader(data_path, batch_size=batch_size)
 
     def _initModel(self) -> None:
         if hasattr(self.cfg, 'model_cfg'):
