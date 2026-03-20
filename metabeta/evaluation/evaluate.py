@@ -62,3 +62,19 @@ class Evaluator:
         self._initModel()
         self._load()
 
+    def _initData(self) -> None:
+        # assimilate data config
+        self.data_cfg = loadDataConfig(self.cfg.d_tag)
+        assimilateConfig(self.cfg, self.data_cfg)
+
+        # resolve path to test set with fits
+        test_fname = datasetFilename(self.data_cfg, 'test')
+        data_dir = Path(self.dir, '..', 'outputs', 'data')
+        test_path = Path(data_dir, test_fname).with_suffix('.fit.npz')
+        assert test_path.exists(), (
+            f'reintegrated fit file not found: {test_path}\n'
+            'Run fit.py --reintegrate first to produce this file.'
+        )
+        self.dl_test = Dataloader(test_path, batch_size=None)
+
+    def _initModel(self) -> None:
