@@ -400,44 +400,27 @@ batch size: {self.cfg.bs}
             self.plot(proposal, eval_summary, batch)
         return eval_summary
 
-    def _sampleSingle(
-        self, batch: dict[str, torch.Tensor]
-    ) -> tuple[Proposal, dict[str, torch.Tensor]]:
-        proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
-
-        # unnormalize proposal and batch
-        if self.cfg.rescale:
-            proposal.rescale(batch['sd_y'])
-            batch = rescaleData(batch)
-
-        # importance weighing
-        if self.cfg.importance:
-            imp_sampler = ImportanceSampler(batch, sir=False)
-            proposal = imp_sampler(proposal)
-        return proposal, batch
-
-    def _sampleMulti(
-        self, batch: dict[str, torch.Tensor]
-    ) -> tuple[Proposal, dict[str, torch.Tensor]]:
-        # separate normalized and unnormalized batch
-        eval_batch = batch
-        if self.cfg.rescale:
-            eval_batch = rescaleData(batch)
-        n_sir = self.cfg.n_samples // self.cfg.sir_iter
-        imp_sampler = ImportanceSampler(eval_batch, sir=True, n_sir=n_sir)
-        selected = []
-        n_remaining = self.cfg.n_samples
-
-        # Sampling Importance Resampling (SIR)
-        while n_remaining > 0:
-            proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
-            if self.cfg.rescale:
-                proposal.rescale(batch['sd_y'])
-            proposal = imp_sampler(proposal)
-            selected.append(proposal)
-            n_remaining -= proposal.n_samples
-        proposal = joinProposals(selected)
-        return proposal, eval_batch
+    def plot(
+        self,
+        proposal: Proposal,
+        eval_summary: EvaluationSummary,
+        batch: dict[str, torch.Tensor],
+    ) -> None:
+        show = True
+        path_r = plotRecovery(eval_summary, batch,
+                              plot_dir=self.plot_dir, epoch=self.current_epoch, show=show)
+        path_c = plotCoverage(eval_summary, proposal,
+                              plot_dir=self.plot_dir, epoch=self.current_epoch, show=show)
+        path_s = plotSBC(proposal, batch,
+                         plot_dir=self.plot_dir, epoch=self.current_epoch, show=show)
+        if self.cfg.wandb:
+            image_logs = {
+                'plot/recovery': wandb.Image(str(path_r)),
+                'plot/coverage': wandb.Image(str(path_c)),
+                'plot/sbc': wandb.Image(str(path_s)),
+                'step/epoch': self.current_epoch,
+            }
+            wandb.log(image_logs)
 
     def go(self) -> None:
         # optionally load previous checkpoint
