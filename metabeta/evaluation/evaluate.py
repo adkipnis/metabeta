@@ -134,22 +134,16 @@ class Evaluator:
         proposal.tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
         return proposal
 
-        # unnormalize proposal and batch
+    def summary(self, proposal: Proposal, batch: dict[str, torch.Tensor]) -> EvaluationSummary:
+        batch = toDevice(batch, 'cpu')
         if self.cfg.rescale:
-            proposal.rescale(batch['sd_y'])
             batch = rescaleData(batch)
+        proposal.to('cpu')
+        eval_summary = getSummary(proposal, batch)
+        summary_table = summaryTable(eval_summary)
+        logger.info(summary_table)
+        return eval_summary
 
-        # importance weighing
-        if self.cfg.importance:
-            imp_sampler = ImportanceSampler(batch, sir=False)
-            proposal = imp_sampler(proposal)
-        return proposal, batch
-
-    def _sampleMulti(
-        self, batch: dict[str, torch.Tensor]
-    ) -> tuple[Proposal, dict[str, torch.Tensor]]:
-        # separate normalized and unnormalized batch
-        eval_batch = batch
         if self.cfg.rescale:
             eval_batch = rescaleData(batch)
         n_sir = self.cfg.n_samples // self.cfg.sir_iter
