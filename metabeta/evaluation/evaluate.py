@@ -89,3 +89,22 @@ class Evaluator:
         self.model = Approximator(self.model_cfg).to(self.device)
         self.model.eval()
 
+    def _load(self) -> None:
+        path = Path(self.ckpt_dir, self.cfg.prefix + '.pt')
+        assert path.exists(), f'checkpoint not found: {path}'
+        payload = torch.load(path, map_location=self.device)
+
+        # compare configs
+        if self.data_cfg != payload['data_cfg']:
+            logger.warning('data config mismatch between current and checkpoint')
+        if self.model_cfg.to_dict() != payload['model_cfg']:
+            logger.warning('model config mismatch between current and checkpoint')
+
+        # load states
+        self.model.load_state_dict(payload['model_state'])
+
+        # optionally compile
+        if self.cfg.compile and self.device.type != 'mps':
+            self.model.compile()
+
+    @torch.inference_mode()
