@@ -1,3 +1,6 @@
+import argparse
+import yaml
+from pathlib import Path
 import torch
 
 
@@ -54,3 +57,16 @@ def runName(cfg: dict, prefix: str = '') -> str:
     if r_tag := cfg['r_tag']:
         parts += [f'r{r_tag}']
     return '_'.join(parts)
+
+def loadDataConfig(d_tag: str):
+    root = Path(__file__).resolve().parent
+    config_path = Path(root, '..', 'simulation', 'configs', f'{d_tag}.yaml')
+    assert config_path.exists(), f'data config not found: {config_path}'
+    with open(config_path, 'r') as f:
+        data_cfg = yaml.safe_load(f)
+    return data_cfg
+
+def assimilateConfig(big: argparse.Namespace, small: dict) -> None:
+    for k, v in small.items():
+        setattr(big, k, v)
+
