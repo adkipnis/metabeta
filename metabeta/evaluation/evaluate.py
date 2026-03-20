@@ -190,4 +190,5 @@ if __name__ == '__main__':
     cfg = setup()
     setupLogging(cfg.verbosity)
     evaluator = Evaluator(cfg)
-    proposal, tpd = evaluator.sample()
+    evaluator.go()
+
