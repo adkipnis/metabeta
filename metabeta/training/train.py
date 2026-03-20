@@ -144,9 +144,9 @@ class Trainer:
         self.data_cfg = loadDataConfig(self.cfg.d_tag)
         assimilateConfig(self.cfg, self.data_cfg)
 
-        # load validation and test data
+        # load validation data
         self.dl_valid = self._getDataLoader('valid')
-        self.dl_test = self._getDataLoader('test')
+        # self.dl_test = self._getDataLoader('test')
 
     def _getDataLoader(
         self, partition: str, epoch: int = 0, batch_size: int | None = None
