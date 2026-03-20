@@ -136,3 +136,24 @@ class ImportanceSampler:
         # get indices of these quantiles, drawing proportionally from w
         idx = torch.searchsorted(cdf, u, right=True).clamp(max=s - 1)
         return idx
+
+
+def runIS(
+    model: Approximator,
+    data: dict[str, torch.Tensor],
+    cfg: argparse.Namespace,
+) -> Proposal:
+    # raw proposal
+    proposal = model.estimate(data, n_samples=cfg.n_samples)
+
+    # unnormalize proposal and batch
+    if cfg.rescale:
+        proposal.rescale(data['sd_y'])
+        data = rescaleData(data)
+
+    # importance weighing
+    imp_sampler = ImportanceSampler(data, sir=False)
+    proposal = imp_sampler(proposal)
+    return proposal
+
+def runSIR(
