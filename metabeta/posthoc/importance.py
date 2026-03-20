@@ -1,6 +1,8 @@
+import argparse
 import arviz as az
 import torch
-from metabeta.utils.evaluation import Proposal
+from metabeta.models.approximator import Approximator
+from metabeta.utils.evaluation import Proposal, joinProposals
 from metabeta.utils.regularization import dampen
 from metabeta.utils.probabilities import (
     logPriorFfx,
@@ -9,6 +11,7 @@ from metabeta.utils.probabilities import (
     logPriorRfx,
     logLikelihoodCond,
 )
+from metabeta.utils.preprocessing import rescaleData
 
 
 class ImportanceSampler:
@@ -17,7 +20,7 @@ class ImportanceSampler:
         data: dict[str, torch.Tensor],
         constrain: bool = True,
         full: bool = True,  # incorporate sigma_rfx and rfx priors
-        temperature: float = 1.0, # softmax temperature
+        temperature: float = 1.0,  # softmax temperature
         pareto: bool = False,  # use Pareto smoothing (PSIS)
         sir: bool = False,  # use Sampling Importance Resampling (SIR)
         n_sir: int = 25,  # size of SIR re-sample
@@ -65,15 +68,14 @@ class ImportanceSampler:
             lp = lp + lp_sigma_rfx + lp_rfx
 
         # conditional log likelihood
-        ll = logLikelihoodCond(
-            ffx, sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n)
+        ll = logLikelihoodCond(ffx, sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n)
         return ll, lp
 
     def __call__(self, proposal: Proposal) -> Proposal:
         # posterior log probs
         log_q_g, log_q_l = proposal.log_probs
         lq = log_q_g + (log_q_l * self.mask_m).sum(1)
-        
+
         # log likelihood, log prior, log proposal posterior
         ll, lp = self.unnormalizedPosterior(proposal)
 
