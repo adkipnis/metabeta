@@ -20,13 +20,13 @@ max_grad_norm: 1.0
 loss_type: 'forward'  # forward|backward|mixed
 patience: 5           # early stopping
 sample_interval: 5
-skip_ref: true       # skip reference run before training
+skip_ref: false       # skip reference run before training
 
 # evaluation
 n_samples: 512        # posterior draws
 rescale: true         # unstandardize y
-importance: false     # importance sampling
-sir: false            # sampling importance resampling
+importance: false      # use IS (importance sampling)
+sir: false            # use SIR (sampling importance resampling)
 sir_iter: 8
 plot: true
 
