@@ -156,4 +156,28 @@ def runIS(
     proposal = imp_sampler(proposal)
     return proposal
 
+
 def runSIR(
+    model: Approximator,
+    data: dict[str, torch.Tensor],
+    cfg: argparse.Namespace,
+) -> Proposal:
+    # prepare rescaling
+    if cfg.rescale:
+        data_eval = rescaleData(data)
+    else:
+        data_eval = data
+
+    # init importance sampler
+    n_sir = cfg.n_samples // cfg.sir_iter
+    imp_sampler = ImportanceSampler(data_eval, sir=True, n_sir=n_sir)
+    selected = []
+    n_remaining = cfg.n_samples
+    while n_remaining > 0:
+        proposal = model.estimate(data, n_samples=cfg.n_samples)
+        if cfg.rescale:
+            proposal.rescale(data['sd_y'])
+        proposal = imp_sampler(proposal)
+        selected.append(proposal)
+        n_remaining -= proposal.n_samples
+    return joinProposals(selected)
