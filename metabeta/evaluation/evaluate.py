@@ -73,15 +73,20 @@ class Evaluator:
         self.data_cfg = loadDataConfig(self.cfg.d_tag)
         assimilateConfig(self.cfg, self.data_cfg)
 
-        # resolve path to test set with fits
-        test_fname = datasetFilename(self.data_cfg, 'test')
-        data_dir = Path(self.dir, '..', 'outputs', 'data')
-        test_path = Path(data_dir, test_fname).with_suffix('.fit.npz')
-        assert test_path.exists(), (
-            f'reintegrated fit file not found: {test_path}\n'
+        # get dataloaders
+        # self.dl_valid = self._getDataLoader('valid')
+        self.dl_test = self._getDataLoader('test')
+
+    def _getDataLoader(self, partition: str) -> Dataloader:
+        data_fname = datasetFilename(self.data_cfg, partition)
+        data_path = Path(self.dir, '..', 'outputs', 'data', data_fname)
+        if partition == 'test':
+            data_path = data_path.with_suffix('.fit.npz')
+        assert data_path.exists(), (
+            f'reintegrated fit file not found: {data_path}\n'
             'Run fit.py --reintegrate first to produce this file.'
         )
-        self.dl_test = Dataloader(test_path, batch_size=None)
+        return Dataloader(data_path, batch_size=None)
 
     def _initModel(self) -> None:
         """Load model architecture from config and restore checkpoint weights."""
