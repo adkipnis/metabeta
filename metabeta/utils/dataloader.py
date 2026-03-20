@@ -47,8 +47,8 @@ class Collection(torch.utils.data.Dataset):
         self._groupCheck(len(self))
 
         # shapes
-        self.d = int(self.raw['d'].max())   # fixed effects
-        self.q = int(self.raw['q'].max())   # random effects
+        self.d = int(self.raw['d'].max())  # fixed effects
+        self.q = int(self.raw['q'].max())  # random effects
 
         # feature permutations
         self.permute = permute and self.has_params
@@ -85,7 +85,7 @@ class Collection(torch.utils.data.Dataset):
         ds = {
             k: v[idx]
             for k, v in self.raw.items()
-            if not (k.startswith('nuts') or k.startswith('advi'))
+            # if not (k.startswith('nuts') or k.startswith('advi'))
         }
 
         # unpad m/n but keep d/q maximal
@@ -126,8 +126,8 @@ def collateGrouped(
     B = len(batch)
     m = int(max(ds['m'] for ds in batch))
     n_i = int(max(max(ds['ns'][: ds['m']]) for ds in batch))
-    d = int(batch[0]['X'].shape[-1])   # X is max-padded in last dim
-    q = int(batch[0]['Z'].shape[-1])   # same for Z
+    d = int(batch[0]['X'].shape[-1])  # X is max-padded in last dim
+    q = int(batch[0]['Z'].shape[-1])  # same for Z
 
     # helpers for deepening
     d_ = np.arange(d)
@@ -152,7 +152,15 @@ def collateGrouped(
         Z[b, idx] = torch.as_tensor(ds['Z'], dtype=dtype)
         mask_n[b] = idx
     out.update(
-        {'X': X, 'Z': Z, 'y': y, 'ns': ns, 'mask_d': mask_d, 'mask_q': mask_q, 'mask_n': mask_n}
+        {
+            'X': X,
+            'Z': Z,
+            'y': y,
+            'ns': ns,
+            'mask_d': mask_d,
+            'mask_q': mask_q,
+            'mask_n': mask_n,
+        }
     )
 
     # cast integers to long tensors
@@ -160,7 +168,15 @@ def collateGrouped(
     out['m'] = quickCollate(batch, 'm', torch.int64)
 
     # cast params to float tensors
-    for key in ('ffx', 'sigma_rfx', 'sigma_eps', 'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps'):
+    for key in (
+        'ffx',
+        'sigma_rfx',
+        'sigma_eps',
+        'nu_ffx',
+        'tau_ffx',
+        'tau_rfx',
+        'tau_eps',
+    ):
         out[key] = quickCollate(batch, key, dtype)
 
     # extra treatment for rfx due to m dimension
@@ -189,7 +205,7 @@ class Dataloader(torch.utils.data.DataLoader):
 
     def __init__(self, path: Path, batch_size: int | None = None):
         col = Collection(path)
-        not_mps = torch.accelerator.current_accelerator().type != 'mps'   # type: ignore
+        not_mps = torch.accelerator.current_accelerator().type != 'mps'  # type: ignore
         if batch_size is None:
             batch_size = len(col)
         else:
