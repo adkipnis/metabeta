@@ -157,6 +157,24 @@ class Evaluator:
         plotSBC(proposal, batch, plot_dir=self.plot_dir, show=True)
 
     def go(self) -> None:
+        batch = next(iter(self.dl_test))
+
+        # MB proposal
+        proposal_mb = self.sample(batch)
+        summary_mb = self.summary(proposal_mb, batch)
+        self.plot(proposal_mb, summary_mb, batch)
+
+        # NUTS proposal
+        proposal_nuts = fit2proposal(batch, prefix='nuts')
+        summary_nuts = self.summary(proposal_nuts, batch)
+        self.plot(proposal_nuts, summary_nuts, batch)
+
+        # ADVI proposal
+        proposal_advi = fit2proposal(batch, prefix='advi')
+        summary_advi = self.summary(proposal_advi, batch)
+        self.plot(proposal_advi, summary_advi, batch)
+
+
 
 
 # =============================================================================
