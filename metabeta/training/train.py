@@ -363,17 +363,25 @@ batch size: {self.cfg.bs}
         batch = next(iter(self.dl_valid))
         batch = toDevice(batch, self.device)
 
-        # get proposal distribution
+        # sample from proposal distribution
         t0 = time.perf_counter()
-        if not self.cfg.sir:
-            proposal, batch = self._sampleSingle(batch)
+        if self.cfg.importance and not self.cfg.sir:
+            proposal = runIS(self.model, batch, self.cfg)
+        elif self.cfg.sir:
+            proposal = runSIR(self.model, batch, self.cfg)
         else:
-            proposal, batch = self._sampleMulti(batch)
+            proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+            if self.cfg.rescale:
+                proposal.rescale(batch['sd_y'])
         t1 = time.perf_counter()
 
-        # evaluation summary
+        # post-process
         proposal.to('cpu')
         batch = toDevice(batch, 'cpu')
+        if self.cfg.rescale:
+            batch = rescaleData(batch)
+
+        # get evaluation summary
         eval_summary = getSummary(proposal, batch)
         eval_summary.tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
         summary_table = summaryTable(eval_summary)
