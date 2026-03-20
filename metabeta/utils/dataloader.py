@@ -40,6 +40,8 @@ class Collection(torch.utils.data.Dataset):
         with np.load(path, allow_pickle=True) as raw:
             self.raw = dict(raw)
         self.has_params = 'ffx' in self.raw
+        self.has_nuts = 'nuts_ffx' in self.raw
+        self.has_advi = 'advi_ffx' in self.raw
 
         # quickly assert that group indices are ascending from 0 to m-1
         self._groupCheck(len(self))
@@ -76,7 +78,7 @@ class Collection(torch.utils.data.Dataset):
         assert checks.all(), 'group indices are not structured correctly'
 
     def __repr__(self) -> str:
-        return f'Collection({len(self)} datasets, max(fixed)={self.d}, max(random)={self.q})'
+        return f'Collection({len(self)} datasets, max(fixed)={self.d}, max(random)={self.q}, fits={self.has_nuts or self.has_advi})'
 
     def __getitem__(self, idx: int) -> dict[str, np.ndarray]:
         # get dataset (without fit statistics)
@@ -85,7 +87,6 @@ class Collection(torch.utils.data.Dataset):
             for k, v in self.raw.items()
             if not (k.startswith('nuts') or k.startswith('advi'))
         }
-        # ns = ds['ns'] # backup padded counts for use in collator
 
         # unpad m/n but keep d/q maximal
         sizes = {k: ds[k] for k in ('m', 'n')}
