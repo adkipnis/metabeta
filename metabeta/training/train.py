@@ -14,9 +14,9 @@ import wandb
 import schedulefree
 
 from metabeta.utils.logger import setupLogging
-from metabeta.utils.io import assimilateConfig, loadDataConfig, setDevice, datasetFilename, runName
+from metabeta.utils.io import  setDevice, datasetFilename, runName
 from metabeta.utils.sampling import setSeed
-from metabeta.utils.config import modelFromYaml, ApproximatorConfig
+from metabeta.utils.config import modelFromYaml, ApproximatorConfig, assimilateConfig, loadDataConfig
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import EvaluationSummary, Proposal, joinProposals
