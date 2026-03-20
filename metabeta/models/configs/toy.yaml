@@ -6,7 +6,7 @@ summarizer:
     n_blocks: 2
     n_isab: 0
     activation: 'GELU'
-    dropout: 0.01
+    dropout: 0.0
 
 posterior:
     type: 'coupling'
@@ -19,6 +19,6 @@ posterior:
         activation: 'ReLU'
         d_ff: 64
         depth: 2
-        dropout: 0.0
+        dropout: 0.01
         zero_init: True
         use_bias: False
