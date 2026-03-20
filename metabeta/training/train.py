@@ -19,9 +19,9 @@ from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import modelFromYaml, ApproximatorConfig, assimilateConfig, loadDataConfig
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.evaluation import EvaluationSummary, Proposal, joinProposals
+from metabeta.utils.evaluation import EvaluationSummary, Proposal
 from metabeta.models.approximator import Approximator
-from metabeta.posthoc.importance import ImportanceSampler
+from metabeta.posthoc.importance import ImportanceSampler, runIS, runSIR
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.plot import plotRecovery, plotCoverage, plotSBC
 
