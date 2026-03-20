@@ -62,6 +62,12 @@ class Evaluator:
         self._initModel()
         self._load()
 
+        # plot dir
+        self.plot_dir = None
+        if self.cfg.plot:
+            self.plot_dir = Path(self.dir, '..', 'outputs', 'plots', self.run_name)
+            self.plot_dir.mkdir(parents=True, exist_ok=True)
+
     def _initData(self) -> None:
         # assimilate data config
         self.data_cfg = loadDataConfig(self.cfg.d_tag)
