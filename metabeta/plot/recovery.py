@@ -122,26 +122,15 @@ def _plotRecoveryGrouped(
         i += len(nam)
 
 
-def plotRecovery(
+def _prepareRecoveryData(
     summary: EvaluationSummary,
     data: dict[str, torch.Tensor],
-    plot_dir: Path | None = None,
-    epoch: int | None = None,
-    show: bool = False,
-) -> Path | None:
-    targets = []
-    estimates = []
-    masks = []
-    names = []
-    metrics = []
+) -> tuple[list, list, list, list, list]:
     allMasks = getMasks(data)
-
-    # prepare stats
     est: dict[str, torch.Tensor] = summary.estimates
-    stats = {
-        'corr': summary.corr,
-        'nrmse': summary.nrmse,
-    }
+    stats = {'corr': summary.corr, 'nrmse': summary.nrmse}
+
+    targets, estimates, masks, names, metrics = [], [], [], [], []
 
     # fixed effects
     d = data['ffx'].shape[-1]
@@ -183,17 +172,41 @@ def plotRecovery(
         }
     )
 
-    # figure
-    fig, axs = plt.subplots(figsize=(6 * 3, 6), ncols=3, dpi=300)
-    _plotRecoveryGrouped(
-        axs,
-        targets=targets,
-        estimates=estimates,
-        masks=masks,
-        metrics=metrics,
-        names=names,
-        titles=['Fixed Effects', 'Variances', 'Random Effects'],
-    )
+    return targets, estimates, masks, names, metrics
+
+
+def plotRecovery(
+    summaries: EvaluationSummary | list[EvaluationSummary],
+    data: dict[str, torch.Tensor],
+    labels: list[str] | None = None,
+    plot_dir: Path | None = None,
+    epoch: int | None = None,
+    show: bool = False,
+) -> Path | None:
+    if not isinstance(summaries, list):
+        summaries = [summaries]
+    if labels is None:
+        labels = [None] * len(summaries)  # type: ignore[list-item]
+    nrows = len(summaries)
+    fig, axs = plt.subplots(nrows, 3, figsize=(18, 6 * nrows), dpi=300, squeeze=False)
+
+    for i, (summary, label) in enumerate(zip(summaries, labels)):
+        upper = i == 0
+        lower = i == nrows - 1
+        targets, estimates, masks, names, metrics = _prepareRecoveryData(summary, data)
+        _plotRecoveryGrouped(
+            axs[i],
+            targets=targets,
+            estimates=estimates,
+            masks=masks,
+            metrics=metrics,
+            names=names,
+            titles=['Fixed Effects', 'Variances', 'Random Effects'],
+            ylabel=label,
+            upper=upper,
+            lower=lower,
+        )
+
     for ax in axs.flat:
         ax.set_box_aspect(1)
     fig.tight_layout()
