@@ -12,8 +12,9 @@ def _plotCoverage(
     cvrg: dict[float, dict[str, torch.Tensor]],
     names: list[str],
     stats: dict[str, float],
-    upper: bool = True,
-    lower: bool = True,
+    title: str | None = 'Credible Intervals',
+    show_legend: bool = True,
+    show_x: bool = True,
 ) -> None:
     # prepare data
     cols = [torch.cat(list(v.values())).unsqueeze(1) for v in cvrg.values()]
@@ -31,16 +32,20 @@ def _plotCoverage(
     ax.plot(limits, limits, '--', lw=2, zorder=1, color='grey', alpha=0.5)
     ax.grid(True)
     ax.set_xticks(nominal)
-    ax.set_yticks(nominal)
+
+    # y-ticks: steps of 5, lower bound from data
+    y_min = float(100.0 * matrix.min())
+    y_lo = (int(y_min) // 5) * 5
+    ax.set_yticks(range(y_lo, 96, 5))
 
     # niceify
     info = {
-        'title': 'Credible Intervals',
+        'title': title,
         'ylabel': 'Observed',
-        'xlabel': 'Nominal',
-        'show_title': upper,
-        'show_legend': upper,
-        'show_x': lower,
+        'xlabel': 'Nominal CI',
+        'show_title': True,
+        'show_legend': show_legend,
+        'show_x': show_x,
         'stats': stats,
         'stats_suffix': '%',
     }
@@ -48,22 +53,45 @@ def _plotCoverage(
 
 
 def plotCoverage(
-    summary: EvaluationSummary,
-    proposal: Proposal,
+    summaries: EvaluationSummary | list[EvaluationSummary],
+    proposals: Proposal | list[Proposal],
+    labels: list[str] | None = None,
     plot_dir: Path | None = None,
     epoch: int | None = None,
     show: bool = False,
 ) -> Path | None:
-    names = (
-        getNames('ffx', proposal.d) + getNames('sigmas', proposal.q) + getNames('rfx', proposal.q)
-    )
-    stats = {
-        'ECE': 100 * dictMean(summary.ece),
-        'LCR': 100 * dictMean(summary.lcr),
-    }
-    fig, ax = plt.subplots(figsize=(6, 6), dpi=300)
-    _plotCoverage(ax, summary.coverage, names, stats)
-    ax.set_box_aspect(1)
+    if not isinstance(summaries, list):
+        summaries = [summaries]
+    if not isinstance(proposals, list):
+        proposals = [proposals]
+    if labels is None:
+        labels = [''] * len(summaries)
+    nrows = len(summaries)
+    fig, axs = plt.subplots(nrows, 1, figsize=(6, 6 * nrows), dpi=300, squeeze=False)
+    axs = axs.flatten()
+
+    for i, (summary, proposal, label) in enumerate(zip(summaries, proposals, labels)):
+        names = (
+            getNames('ffx', proposal.d)
+            + getNames('sigmas', proposal.q)
+            + getNames('rfx', proposal.q)
+        )
+        stats = {
+            'ECE': 100 * dictMean(summary.ece),
+            'LCR': 100 * dictMean(summary.lcr),
+        }
+        _plotCoverage(
+            axs[i],
+            summary.coverage,
+            names,
+            stats,
+            title=label,
+            show_legend=(i == 0),
+            show_x=(i == nrows - 1),
+        )
+        axs[i].set_box_aspect(1)
+
+    fig.tight_layout()
 
     # store
     saved_path = None
