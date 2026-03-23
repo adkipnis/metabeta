@@ -37,3 +37,67 @@ class Calibrator:
                 out[alpha][key] = q_c
         return out
 
+    def calibrate(self, proposal: Proposal, data: dict[str, torch.Tensor]) -> None:
+        ci_dicts = getCredibleIntervals(proposal, self.alphas)
+        masks = getMasks(data)
+        targets = {
+            'ffx': data['ffx'],
+            'sigma_rfx': data['sigma_rfx'],
+            'sigma_eps': data['sigma_eps'],
+            'rfx': data['rfx'],
+        }
+        for alpha, ci in ci_dicts.items():
+            self.corrections[alpha] = {}
+            for key, quantiles in ci.items():
+                self.corrections[alpha][key] = self.calibrateSingle(
+                    quantiles, targets[key], alpha, masks[key]
+                )
+
+    def calibrateSingle(
+        self,
+        quantiles: torch.Tensor,
+        targets: torch.Tensor,
+        alpha: float,
+        mask: torch.Tensor | None,
+    ) -> torch.Tensor:
+        # sigma_eps arrives as (b, 2); unsqueeze to uniform (*, 2, d) path
+        scalar = quantiles.dim() == 2
+        if scalar:
+            quantiles = quantiles.unsqueeze(-1)  # (b, 2, 1)
+            targets = targets.unsqueeze(-1)  # (b, 1)
+
+        b = targets.shape[0]
+        alpha_t = torch.tensor(alpha)
+
+        if mask is None:
+            mask = torch.ones_like(targets, dtype=torch.bool)
+        elif scalar:
+            mask = mask.unsqueeze(-1)
+
+        # transpose to (..., d, 2) for score indexing
+        q = quantiles.movedim(-2, -1)
+        scores = torch.zeros_like(q)
+
+        # non-conformity scores: positive means outside the interval
+        scores[..., 0] = q[..., 0] - targets  # lower: q_low - target
+        scores[..., 1] = targets - q[..., 1]  # upper: target - q_high
+
+        # get the score for the closer boundary (equivalent to max(q_low - y, y - q_high))
+        midx = scores.abs().min(-1)[1].unsqueeze(-1)
+        scores = torch.gather(scores, -1, midx).squeeze(-1)  # (b, ..., d)
+        scores[~mask] = float('inf')  # exclude inactive dimensions from quantile
+        B = mask.sum(0)
+
+        # sort and get the (1 - alpha) empirical quantile of scores
+        scores, _ = scores.sort(0, descending=False)
+        factor = mask.float().mean(0) * b * 1.01
+        idx = (factor * (1 - alpha_t)).ceil().clamp(max=B - 1).to(torch.int64)
+        correction = torch.gather(scores, dim=0, index=idx.unsqueeze(0)).squeeze(0)
+
+        # average over groups for rfx (quantiles: (b, m, 2, q))
+        if quantiles.dim() == 4:
+            correction = correction.mean(0)
+
+        return correction.squeeze() if scalar else correction
+
+    def insert(self, corrections: Corrections) -> None:
