@@ -20,7 +20,7 @@ from metabeta.utils.evaluation import EvaluationSummary, Proposal
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import runIS, runSIR
 from metabeta.evaluation.summary import getSummary, summaryTable
-from metabeta.plot import plotRecovery, plotCoverage, plotSBC
+from metabeta.plot import plotComparison
 
 logger = logging.getLogger('evaluate.py')
 
@@ -158,15 +158,14 @@ class Evaluator:
 
     def plot(
         self,
-        proposal: Proposal,
-        eval_summary: EvaluationSummary,
+        proposals: list[Proposal],
+        summaries: list[EvaluationSummary],
+        labels: list[str],
         batch: dict[str, torch.Tensor],
     ) -> None:
         if self.cfg.rescale:
             batch = rescaleData(batch)
-        plotRecovery(eval_summary, batch, plot_dir=self.plot_dir, show=True)
-        plotCoverage(eval_summary, proposal, plot_dir=self.plot_dir, show=True)
-        plotSBC(proposal, batch, plot_dir=self.plot_dir, show=True)
+        plotComparison(summaries, proposals, labels, batch, plot_dir=self.plot_dir, show=True)
 
     def go(self) -> None:
         batch = next(iter(self.dl_test))
@@ -174,17 +173,21 @@ class Evaluator:
         # MB proposal
         proposal_mb = self.sample(batch)
         summary_mb = self.summary(proposal_mb, batch)
-        self.plot(proposal_mb, summary_mb, batch)
 
         # NUTS proposal
         proposal_nuts = self._fit2proposal(batch, prefix='nuts')
         summary_nuts = self.summary(proposal_nuts, batch)
-        self.plot(proposal_nuts, summary_nuts, batch)
 
         # ADVI proposal
         proposal_advi = self._fit2proposal(batch, prefix='advi')
         summary_advi = self.summary(proposal_advi, batch)
-        self.plot(proposal_advi, summary_advi, batch)
+
+        self.plot(
+            [proposal_mb, proposal_nuts, proposal_advi],
+            [summary_mb, summary_nuts, summary_advi],
+            ['MB', 'NUTS', 'ADVI'],
+            batch,
+        )
 
 
 # =============================================================================
