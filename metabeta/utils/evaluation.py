@@ -49,11 +49,7 @@ def joinSigmas(data: dict[str, torch.Tensor]) -> torch.Tensor:
 
 
 def joinGlobals(data: dict[str, torch.Tensor]) -> torch.Tensor:
-    out = [
-        data['ffx'],
-        data['sigma_rfx'],
-        data['sigma_eps'].unsqueeze(-1),
-    ]
+    out = [data['ffx'], data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)]
     return torch.cat(out, dim=-1)
 
 
