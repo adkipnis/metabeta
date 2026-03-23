@@ -187,10 +187,10 @@ class Approximator(nn.Module):
         return summary_g, summary_l
 
     def forward(
-            self,
-            data: dict[str, torch.Tensor],
-            summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
-        ) -> dict[str, torch.Tensor]:
+        self,
+        data: dict[str, torch.Tensor],
+        summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> dict[str, torch.Tensor]:
         """training method: learn conditional forward pass"""
         log_probs = {}
 
@@ -219,11 +219,11 @@ class Approximator(nn.Module):
         return log_probs
 
     def backward(
-            self,
-            data: dict[str, torch.Tensor],
-            summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
-            n_samples: int = 1,
-        ) -> Proposal:
+        self,
+        data: dict[str, torch.Tensor],
+        summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
+        n_samples: int = 1,
+    ) -> Proposal:
         """inference method: sample and apply conditional backward pass"""
         assert n_samples > 0, 'n_samples must be positive'
         proposed = {}
@@ -278,7 +278,7 @@ if __name__ == '__main__':
     batch = next(iter(dl))
 
     # init toy model
-    model_cfg_path = Path(DIR,'..', 'models', 'configs', 'toy.yaml')
+    model_cfg_path = Path(DIR, '..', 'models', 'configs', 'toy.yaml')
     model_cfg = modelFromYaml(model_cfg_path, dl.dataset.d, dl.dataset.q)   # type: ignore
     model = Approximator(model_cfg)
     # model.compile()
