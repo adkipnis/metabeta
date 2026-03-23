@@ -76,7 +76,8 @@ class Evaluator:
         assimilateConfig(self.cfg, self.data_cfg)
 
         # get dataloaders
-        # self.dl_valid = self._getDataLoader('valid')
+        if self.cfg.conformal:
+            self.dl_valid = self._getDataLoader('valid')
         self.dl_test = self._getDataLoader('test')
 
     def _getDataLoader(self, partition: str) -> Dataloader:
@@ -84,10 +85,7 @@ class Evaluator:
         data_path = Path(self.dir, '..', 'outputs', 'data', data_fname)
         if partition == 'test':
             data_path = data_path.with_suffix('.fit.npz')
-        assert data_path.exists(), (
-            f'reintegrated fit file not found: {data_path}\n'
-            'Run fit.py --reintegrate first to produce this file.'
-        )
+        assert data_path.exists(), f'data file not found: {data_path}'
         return Dataloader(data_path, batch_size=None)
 
     def _initModel(self) -> None:
