@@ -111,6 +111,13 @@ class Collection(torch.utils.data.Dataset):
                 ds[key] = ds[key][..., qperm]
             ds['qperm'] = qperm
 
+            # permute fit samples consistently with ground truth
+            for method in ('nuts', 'advi'):
+                if f'{method}_ffx' in ds:
+                    ds[f'{method}_ffx'] = ds[f'{method}_ffx'][dperm]
+                    ds[f'{method}_sigma_rfx'] = ds[f'{method}_sigma_rfx'][qperm]
+                    ds[f'{method}_rfx'] = ds[f'{method}_rfx'][qperm]
+
         return ds
 
 
@@ -197,6 +204,47 @@ def collateGrouped(
         out['qperm'] = quickCollate(batch, 'qperm', torch.int64)
         out['mask_d'] = torch.gather(out['mask_d'], dim=1, index=out['dperm'])
         out['mask_q'] = torch.gather(out['mask_q'], dim=1, index=out['qperm'])
+
+    # collate fit samples if present
+    for method in ('nuts', 'advi'):
+        if f'{method}_ffx' in batch[0]:
+            out.update(collateFits(batch, method, d, q, m, dtype))
+
+    return out
+
+
+def collateFits(
+    batch: list[dict[str, np.ndarray]],
+    method: str,
+    d: int,
+    q: int,
+    m: int,
+    dtype=torch.float32,
+) -> dict[str, torch.Tensor]:
+    B = len(batch)
+    s = batch[0][f'{method}_ffx'].shape[-1]
+    out: dict[str, torch.Tensor] = {}
+
+    ffx = torch.zeros((B, s, d), dtype=dtype)
+    sigma_rfx = torch.zeros((B, s, q), dtype=dtype)
+    sigma_eps = torch.zeros((B, s), dtype=dtype)
+    rfx = torch.zeros((B, m, s, q), dtype=dtype)
+
+    for b, ds in enumerate(batch):
+        # (d, s) -> (s, d)
+        ffx[b] = torch.as_tensor(ds[f'{method}_ffx'], dtype=dtype).T
+        # (q, s) -> (s, q)
+        sigma_rfx[b] = torch.as_tensor(ds[f'{method}_sigma_rfx'], dtype=dtype).T
+        # (1, s) -> (s,)
+        sigma_eps[b] = torch.as_tensor(ds[f'{method}_sigma_eps'], dtype=dtype).squeeze(0)
+        # (q, m_i, s) -> (m_i, s, q)
+        rfx_i = torch.as_tensor(ds[f'{method}_rfx'], dtype=dtype).permute(1, 2, 0)
+        rfx[b] = rfx_i
+
+    out[f'{method}_ffx'] = ffx
+    out[f'{method}_sigma_rfx'] = sigma_rfx
+    out[f'{method}_sigma_eps'] = sigma_eps
+    out[f'{method}_rfx'] = rfx
     return out
 
 
