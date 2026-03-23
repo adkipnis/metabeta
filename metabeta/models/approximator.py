@@ -6,7 +6,8 @@ from metabeta.models.transformers import SetTransformer
 from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import maskedInverseSoftplus, maskedSoftplus
 from metabeta.utils.config import ApproximatorConfig
-from metabeta.utils.evaluation import Proposal
+from metabeta.utils.evaluation import Proposal, joinGlobals
+
 
 class Approximator(nn.Module):
     def __init__(self, cfg: ApproximatorConfig):
@@ -84,8 +85,7 @@ class Approximator(nn.Module):
             if self.d_rfx == 1:   # handle 1D local params for flow
                 targets = F.pad(targets, (0, 1))
             return targets
-        targets = [data['ffx'], data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)]
-        return torch.cat(targets, dim=-1)
+        return joinGlobals(data)
 
     def _masks(self, data: dict[str, torch.Tensor], local: bool = False) -> torch.Tensor:
         """get masks for the posterior targets"""
