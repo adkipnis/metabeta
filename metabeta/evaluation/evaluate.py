@@ -177,24 +177,14 @@ class Evaluator:
         self.plot(proposal_mb, summary_mb, batch)
 
         # NUTS proposal
-        proposal_nuts = fit2proposal(batch, prefix='nuts')
+        proposal_nuts = self._fit2proposal(batch, prefix='nuts')
         summary_nuts = self.summary(proposal_nuts, batch)
         self.plot(proposal_nuts, summary_nuts, batch)
 
         # ADVI proposal
-        proposal_advi = fit2proposal(batch, prefix='advi')
+        proposal_advi = self._fit2proposal(batch, prefix='advi')
         summary_advi = self.summary(proposal_advi, batch)
         self.plot(proposal_advi, summary_advi, batch)
-
-
-def fit2proposal(batch: dict[str, torch.Tensor], prefix: str) -> Proposal:
-    proposed = {}
-    ffx = batch[f'{prefix}_ffx']
-    sigma_rfx = batch[f'{prefix}_sigma_rfx']
-    sigma_eps = batch[f'{prefix}_sigma_eps'].unsqueeze(-1)
-    proposed['global'] = {'samples': torch.cat([ffx, sigma_rfx, sigma_eps], dim=-1)}
-    proposed['local'] = {'samples': batch[f'{prefix}_rfx']}
-    return Proposal(proposed)
 
 
 # =============================================================================
@@ -203,4 +193,3 @@ if __name__ == '__main__':
     setupLogging(cfg.verbosity)
     evaluator = Evaluator(cfg)
     evaluator.go()
-
