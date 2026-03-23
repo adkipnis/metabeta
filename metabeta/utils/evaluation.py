@@ -21,6 +21,7 @@ def getMasks(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | None]:
     out['sigma_rfx'] = data['mask_q']
     out['sigma_eps'] = None
     out['sigmas'] = torch.nn.functional.pad(data['mask_q'], (0, 1), value=True)
+    out['global'] = torch.cat([out['ffx'], out['sigmas']], dim=-1)
     out['rfx'] = data['mask_mq']
     return out
 
@@ -45,6 +46,15 @@ def getAllNames(d: int, q: int) -> dict[str, list[str]]:
 
 def joinSigmas(data: dict[str, torch.Tensor]) -> torch.Tensor:
     return torch.cat([data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)], dim=-1)
+
+
+def joinGlobals(data: dict[str, torch.Tensor]) -> torch.Tensor:
+    out = [
+        data['ffx'],
+        data['sigma_rfx'],
+        data['sigma_eps'].unsqueeze(-1),
+    ]
+    return torch.cat(out, dim=-1)
 
 
 class Proposal:
