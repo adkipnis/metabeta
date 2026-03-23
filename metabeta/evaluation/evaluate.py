@@ -118,6 +118,18 @@ class Evaluator:
         if self.cfg.compile and self.device.type != 'mps':
             self.model.compile()
 
+    def _fit2proposal(self, batch: dict[str, torch.Tensor], prefix: str) -> Proposal:
+        proposed = {}
+        ffx = batch[f'{prefix}_ffx']
+        sigma_rfx = batch[f'{prefix}_sigma_rfx']
+        sigma_eps = batch[f'{prefix}_sigma_eps'].unsqueeze(-1)
+        proposed['global'] = {'samples': torch.cat([ffx, sigma_rfx, sigma_eps], dim=-1)}
+        proposed['local'] = {'samples': batch[f'{prefix}_rfx']}
+        proposal = Proposal(proposed)
+        if self.cfg.rescale:
+            proposal.rescale(batch['sd_y'])
+        return proposal
+
     @torch.inference_mode()
     def sample(self, batch: dict[str, torch.Tensor]) -> Proposal:
         batch = toDevice(batch, self.device)
