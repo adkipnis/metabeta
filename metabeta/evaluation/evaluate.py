@@ -19,6 +19,7 @@ from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import EvaluationSummary, Proposal
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import runIS, runSIR
+from metabeta.posthoc.conformal import Calibrator
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.plot import plotComparison
 
@@ -34,6 +35,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--device', type=str)
     parser.add_argument('--n_samples', type=int)
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--conformal', action=argparse.BooleanOptionalAction)
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction)
 
     # load YAML then override with any CLI flags
