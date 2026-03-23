@@ -2,6 +2,7 @@ import torch
 from tabulate import tabulate
 
 from metabeta.plot.parameters import plotParameters
+from metabeta.posthoc.conformal import Calibrator
 from metabeta.utils.evaluation import Proposal, EvaluationSummary, dictMean
 from metabeta.evaluation.point import (
     getPointEstimates,
@@ -27,6 +28,7 @@ EST_TYPE = 'mean'
 def getSummary(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
+    calibrator: Calibrator | None = None,
 ) -> EvaluationSummary:
     out = {}
 
@@ -36,7 +38,10 @@ def getSummary(
     out['corr'] = getCorrelation(est, data)
 
     # inteval-based stats
-    out['credible_intervals'] = ci_dicts = getCredibleIntervals(proposal)
+    ci_dicts = getCredibleIntervals(proposal)
+    if calibrator is not None:
+        ci_dicts = calibrator.apply(ci_dicts)
+    out['credible_intervals'] = ci_dicts
     out['coverage'] = cvrg_dicts = getCoverages(ci_dicts, data)
     out['coverage_error'] = getCoverageErrors(cvrg_dicts, log_ratio=False)
     out['log_coverage_ratio'] = getCoverageErrors(cvrg_dicts, log_ratio=True)
