@@ -118,6 +118,22 @@ class Evaluator:
         if self.cfg.compile and self.device.type != 'mps':
             self.model.compile()
 
+    def calibrate(self) -> Calibrator:
+        calibrator = Calibrator()
+        ckpt_path = Path(self.ckpt_dir, 'calibrator.npz')
+        if ckpt_path.exists():
+            calibrator.load(self.run_name)
+        else:
+            batch = next(iter(self.dl_valid))
+            proposal = self.sample(batch)
+            batch = toDevice(batch, 'cpu')
+            if self.cfg.rescale:
+                batch = rescaleData(batch)
+            proposal.to('cpu')
+            calibrator.calibrate(proposal, batch)
+            calibrator.save(self.run_name)
+        return calibrator
+
     def _fit2proposal(self, batch: dict[str, torch.Tensor], prefix: str) -> Proposal:
         proposed = {}
         ffx = batch[f'{prefix}_ffx']
