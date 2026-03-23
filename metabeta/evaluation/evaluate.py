@@ -162,12 +162,17 @@ class Evaluator:
         proposal.tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
         return proposal
 
-    def summary(self, proposal: Proposal, batch: dict[str, torch.Tensor]) -> EvaluationSummary:
+    def summary(
+        self,
+        proposal: Proposal,
+        batch: dict[str, torch.Tensor],
+        calibrator: Calibrator | None = None,
+    ) -> EvaluationSummary:
         batch = toDevice(batch, 'cpu')
         if self.cfg.rescale:
             batch = rescaleData(batch)
         proposal.to('cpu')
-        eval_summary = getSummary(proposal, batch)
+        eval_summary = getSummary(proposal, batch, calibrator=calibrator)
         summary_table = summaryTable(eval_summary)
         logger.info(summary_table)
         return eval_summary
