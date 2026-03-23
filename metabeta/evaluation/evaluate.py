@@ -189,11 +189,12 @@ class Evaluator:
         plotComparison(summaries, proposals, labels, batch, plot_dir=self.plot_dir, show=True)
 
     def go(self) -> None:
+        calibrator = self.calibrate() if self.cfg.conformal else None
         batch = next(iter(self.dl_test))
 
         # MB proposal
         proposal_mb = self.sample(batch)
-        summary_mb = self.summary(proposal_mb, batch)
+        summary_mb = self.summary(proposal_mb, batch, calibrator=calibrator)
 
         # NUTS proposal
         proposal_nuts = self._fit2proposal(batch, prefix='nuts')
