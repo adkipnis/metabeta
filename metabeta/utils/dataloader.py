@@ -101,7 +101,7 @@ class Collection(torch.utils.data.Dataset):
         if self.permute:
             # fixed effects and related
             dperm = self.dperm[idx]
-            for key in ('X', 'ffx', 'nu_ffx', 'tau_ffx'):
+            for key in ('X', 'ffx', 'tau_ffx'):
                 ds[key] = ds[key][..., dperm]
             ds['dperm'] = dperm
 
@@ -179,7 +179,6 @@ def collateGrouped(
         'ffx',
         'sigma_rfx',
         'sigma_eps',
-        'nu_ffx',
         'tau_ffx',
         'tau_rfx',
         'tau_eps',

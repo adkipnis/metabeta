@@ -59,7 +59,7 @@ class Standardizer:
 
 
 def rescaleData(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    data = {k: v.clone() for k, v in data.items()} # avoids side effects
+    data = {k: v.clone() for k, v in data.items()}   # avoids side effects
     for key in (
         'y',
         # params
@@ -68,7 +68,6 @@ def rescaleData(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         'sigma_eps',
         'rfx',
         # hyperparams
-        'nu_ffx',
         'tau_ffx',
         'tau_rfx',
         'tau_eps',

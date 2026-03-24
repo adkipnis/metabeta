@@ -5,11 +5,10 @@ from torch import distributions as D
 
 def logPriorFfx(
     ffx: torch.Tensor,  # (b, s, d)
-    nu_ffx: torch.Tensor,  # (b, 1, d)
     tau_ffx: torch.Tensor,  # (b, 1, d)
     mask: torch.Tensor | None = None,  # (b, 1, d)
 ) -> torch.Tensor:
-    dist = D.Normal(nu_ffx, tau_ffx)
+    dist = D.Normal(0, tau_ffx)
     lp = dist.log_prob(ffx)
     if mask is not None:
         lp = lp * mask

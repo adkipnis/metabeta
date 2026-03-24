@@ -45,7 +45,7 @@ class Approximator(nn.Module):
         else:
             raise NotImplementedError('unknown posterior type')
         d_var = 1 + d_rfx   # number of variance params
-        d_prior = 2 * d_ffx + d_var   # number of prior params
+        d_prior = d_ffx + d_var   # number of prior params
         d_context_g = s_cfg.d_output + d_prior + 2   # global summary, prior, n_groups, n_total
         d_context_l = d_ffx + d_var + d_input_g   # global params, local summaries
         self.posterior_g = Posterior(d_ffx + d_var, d_context_g, **p_cfg.to_dict())
@@ -116,12 +116,11 @@ class Approximator(nn.Module):
         else:
             n_total = data['n'].unsqueeze(-1).sqrt() / numerator
             n_groups = data['m'].unsqueeze(-1).sqrt() / numerator
-            nu_ffx = data['nu_ffx'].clone()
             tau_ffx = data['tau_ffx'].clone()
             tau_rfx = data['tau_rfx'].clone()
             tau_eps = data['tau_eps'].clone().unsqueeze(-1)
             # TODO: optionally dampen prior params, depending on how large they get
-            out += [n_total, n_groups, nu_ffx, tau_ffx, tau_rfx, tau_eps]
+            out += [n_total, n_groups, tau_ffx, tau_rfx, tau_eps]
         return torch.cat(out, dim=-1)
 
     def _localContext(

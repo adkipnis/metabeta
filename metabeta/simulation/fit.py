@@ -153,7 +153,6 @@ class Fitter:
     def _priorize(self, ds: dict[str, np.ndarray]) -> dict[str, bmb.Prior]:
         """setup bambi priors based on true priors"""
         d, q = ds['d'], ds['q']
-        nu_ffx = ds['nu_ffx']
         tau_ffx = ds['tau_ffx']
         tau_rfx = ds['tau_rfx']
         tau_eps = ds['tau_eps']
@@ -163,7 +162,7 @@ class Fitter:
         if not self.cfg.respecify_ffx:  # otherwise bambi will infer them from data
             for j in range(d):
                 key = 'Intercept' if j == 0 else f'x{j}'
-                priors[key] = bmb.Prior('Normal', mu=nu_ffx[j], sigma=tau_ffx[j])
+                priors[key] = bmb.Prior('Normal', mu=0, sigma=tau_ffx[j])
 
         # random effects variance
         for j in range(q):
@@ -181,7 +180,7 @@ class Fitter:
         df = self._pandify(ds)
         form = self._formulate(ds)
         priors = None
-        if 'nu_ffx' in ds:
+        if 'tau_ffx' in ds:
             priors = self._priorize(ds)
 
         model = bmb.Model(formula=form, data=df, categorical='i', priors=priors)
@@ -299,10 +298,9 @@ class Fitter:
         print(f'Saved results to {self.outpath}')
 
     def _aggregate(self, method: str) -> dict[str, np.ndarray]:
-        """ load all fits of {method}, aggregate and update batch """
+        """load all fits of {method}, aggregate and update batch"""
         # get paths
-        paths = [Path(self.outdir, self._outname(i, method=method))
-                 for i in range(len(self))]
+        paths = [Path(self.outdir, self._outname(i, method=method)) for i in range(len(self))]
 
         # check if all files exist
         for p in paths:
@@ -326,6 +324,7 @@ class Fitter:
         path = self.batch_path.with_suffix(fit_suffix)
         np.savez_compressed(path, **self.batch, allow_pickle=True)
         print(f'Reintegrated NUTS and ADVI fits into {path}')
+
 
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':

@@ -50,7 +50,6 @@ def unpad(ds: dict[str, np.ndarray], sizes: dict[str, int]) -> dict[str, np.ndar
     ds['ns'] = ds['ns'][:m]
 
     # hyperparams
-    ds['nu_ffx'] = ds['nu_ffx'][:d]
     ds['tau_ffx'] = ds['tau_ffx'][:d]
     ds['tau_rfx'] = ds['tau_rfx'][:q]
 
