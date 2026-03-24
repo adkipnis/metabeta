@@ -1,7 +1,6 @@
 import torch
 from tabulate import tabulate
 
-from metabeta.plot.parameters import plotParameters
 from metabeta.posthoc.conformal import Calibrator
 from metabeta.utils.evaluation import Proposal, EvaluationSummary, dictMean
 from metabeta.evaluation.point import (
@@ -19,7 +18,8 @@ from metabeta.evaluation.predictive import (
     getPosteriorPredictive,
     posteriorPredictiveNLL,
 )
-from metabeta.plot.predictive import plotPPC, plotPPD
+# from metabeta.plot.predictive import plotPPC, plotPPD
+# from metabeta.plot.parameters import plotParameters
 
 
 EST_TYPE = 'mean'
