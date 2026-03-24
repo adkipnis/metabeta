@@ -1,6 +1,6 @@
 # experiment
 name: 'toy'
-d_tag: 'toy'          # points to metabeta/simulation/configs/toy.yaml
+d_tag: 'toy'        # points to metabeta/simulation/configs/small.yaml
 m_tag: 'toy'          # points to metabeta/models/configs/toy.yaml
 seed: 42
 
@@ -13,7 +13,7 @@ verbosity: 1          # warnings|infos|debug
 wandb: false
 
 # training
-max_epochs: 10
+max_epochs: 30
 bs: 32                # batch size
 lr: 1.0e-3
 max_grad_norm: 1.0

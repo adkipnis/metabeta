@@ -1,6 +1,6 @@
 # experiment
-name: 'simple'
-d_tag: 'simple'          # points to metabeta/simulation/configs/toy.yaml
+name: 'small'
+d_tag: 'small'          # points to metabeta/simulation/configs/toy.yaml
 m_tag: 'toy'          # points to metabeta/models/configs/toy.yaml
 seed: 42
 
@@ -20,7 +20,7 @@ max_grad_norm: 1.0
 loss_type: 'forward'  # forward|backward|mixed
 patience: 5           # early stopping
 sample_interval: 5
-skip_ref: False       # skip reference run before training
+skip_ref: false       # skip reference run before training
 
 # evaluation
 n_samples: 512        # posterior draws
@@ -34,5 +34,5 @@ plot: true
 r_tag: ''             # run tag
 save_latest: true
 save_best: false
-load_latest: true
+load_latest: false
 load_best: false
