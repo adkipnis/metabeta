@@ -45,7 +45,7 @@ class Approximator(nn.Module):
         else:
             raise NotImplementedError('unknown posterior type')
         d_var = 1 + d_rfx   # number of variance params
-        d_prior = d_ffx + d_var   # number of prior params
+        d_prior = d_ffx + d_var + 1   # prior params + eta_rfx
         d_context_g = s_cfg.d_output + d_prior + 2   # global summary, prior, n_groups, n_total
         d_context_l = d_ffx + d_var + d_input_g   # global params, local summaries
         self.posterior_g = Posterior(d_ffx + d_var, d_context_g, **p_cfg.to_dict())
@@ -119,8 +119,9 @@ class Approximator(nn.Module):
             tau_ffx = data['tau_ffx'].clone()
             tau_rfx = data['tau_rfx'].clone()
             tau_eps = data['tau_eps'].clone().unsqueeze(-1)
+            eta_rfx = data['eta_rfx'].clone().unsqueeze(-1)
             # TODO: optionally dampen prior params, depending on how large they get
-            out += [n_total, n_groups, tau_ffx, tau_rfx, tau_eps]
+            out += [n_total, n_groups, tau_ffx, tau_rfx, tau_eps, eta_rfx]
         return torch.cat(out, dim=-1)
 
     def _localContext(
@@ -270,7 +271,7 @@ if __name__ == '__main__':
     torch.manual_seed(0)
 
     # load toy data
-    data_cfg_path = Path(DIR, '..', 'simulation', 'configs', 'toy.yaml')
+    data_cfg_path = Path(DIR, '..', 'simulation', 'configs', 'small.yaml')
     data_fname = dataFromYaml(data_cfg_path, 'test')
     data_path = Path(DIR, '..', 'outputs', 'data', data_fname)
     dl = Dataloader(data_path, batch_size=8)
