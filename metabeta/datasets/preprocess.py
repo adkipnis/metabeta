@@ -310,10 +310,7 @@ if __name__ == '__main__':
     batchprocess('from-r', partition='test', group_name='group')
 
     # srm datasets
-    batchprocess('srm')
+    batchprocess('srm', partition='auto')
 
     # pmlb datasets
-    batchprocess('pmlb')
-
-    # # automl datasets (skipped, too many issues)
-    # batchprocess('automl', partition='train')
+    batchprocess('pmlb', partition='auto')
