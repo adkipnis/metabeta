@@ -9,21 +9,6 @@ from metabeta.plot import plotDataset
 logger = logging.getLogger(__name__)
 
 BLACKLIST = 'year age height size n_ num_ number max min attempts begin end name'.split(' ')
-def removeString(this: list, string: str) -> np.ndarray:
-    out = list(filter(lambda x: x != string, this))
-    return np.array(out)
-
-
-def dropConstantColumns(df: pd.DataFrame, threshold: float = 0.95) -> pd.DataFrame:
-    # drop columns with at least {threshold} constant values
-    bad = []
-    for col in df.columns:
-        counts = df[col].value_counts(normalize=True)
-        if counts.max() > threshold:
-            bad.append(col)
-    if len(bad):
-        logger.warning(f'Removing {bad} due to mostly constant entries.')
-    return df.drop(columns=bad)
 
 
 def dropPatchyColumns(df: pd.DataFrame, threshold: float = 0.25):
