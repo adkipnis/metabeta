@@ -45,7 +45,7 @@ class Approximator(nn.Module):
         else:
             raise NotImplementedError('unknown posterior type')
         d_var = 1 + d_rfx   # number of variance params
-        d_prior = 2 * d_ffx + d_var + 1   # prior params + eta_rfx
+        d_prior = 2 * d_ffx + d_var + 3   # prior params + eta_rfx + sigma_eps_ols + sigma_rfx_ols
         d_context_g = s_cfg.d_output + d_prior + 2   # global summary, prior, n_groups, n_total
         d_context_l = d_ffx + d_var + d_input_g   # global params, local summaries
         self.posterior_g = Posterior(d_ffx + d_var, d_context_g, **p_cfg.to_dict())
@@ -102,17 +102,45 @@ class Approximator(nn.Module):
         return torch.cat(masks, dim=-1)
 
     @staticmethod
-    def _ols(data: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Compute pooled OLS estimates from grouped data."""
+    def _dataStatistics(
+        data: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Compute sufficient statistics from grouped data.
+
+        Returns:
+            beta_ols:       (B, d)  pooled OLS fixed-effect estimates
+            sigma_eps_ols:  (B, 1)  pooled residual SD
+            sigma_rfx_ols:  (B, 1)  between-group SD of group means (random intercept proxy)
+        """
         X = data['X']                           # (B, m, n, d)
         y = data['y']                           # (B, m, n)
         mask = data['mask_n'].float()           # (B, m, n)
-        Xm = X * mask.unsqueeze(-1)            # zero out padded obs
-        ym = y * mask                           # zero out padded obs
+        mask_m = data['mask_m'].float()         # (B, m)
+        ns = data['ns'].clamp(min=1).float()    # (B, m)
+        n_total = data['n'].float()             # (B,)
+
+        # --- pooled OLS: beta = (X'X)^{-1} X'y
+        Xm = X * mask.unsqueeze(-1)
+        ym = y * mask
         XtX = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)   # (B, d, d)
         Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)      # (B, d)
-        beta_ols = torch.linalg.lstsq(XtX, Xty).solution     # (B, d)
-        return beta_ols
+        beta_ols = torch.linalg.lstsq(XtX, Xty).solution   # (B, d)
+
+        # --- residual SD
+        yhat = torch.einsum('bmnd,bd->bmn', X, beta_ols)   # (B, m, n)
+        resid = (y - yhat) * mask                         # (B, m, n)
+        ss_resid = (resid.square()).sum(dim=(1, 2))       # (B,)
+        df = (n_total - X.shape[-1]).clamp(min=1)         # (B,)
+        sigma_eps_ols = (ss_resid / df).sqrt().unsqueeze(-1)   # (B, 1)
+
+        # --- between-group SD of group means (random intercept proxy)
+        group_means = (ym).sum(dim=2) / ns                # (B, m)
+        m_valid = mask_m.sum(dim=1, keepdim=True).clamp(min=1)  # (B, 1)
+        grand_mean = (group_means * mask_m).sum(dim=1, keepdim=True) / m_valid
+        sq_dev = ((group_means - grand_mean).square() * mask_m).sum(dim=1, keepdim=True)
+        sigma_rfx_ols = (sq_dev / m_valid.clamp(min=2)).sqrt()  # (B, 1)
+
+        return beta_ols, sigma_eps_ols, sigma_rfx_ols
 
     def _addMetadata(
         self,
@@ -129,12 +157,22 @@ class Approximator(nn.Module):
         else:
             n_total = data['n'].unsqueeze(-1).sqrt() / numerator
             n_groups = data['m'].unsqueeze(-1).sqrt() / numerator
-            beta_ols = self._ols(data)
+            beta_ols, sigma_eps_ols, sigma_rfx_ols = self._dataStatistics(data)
             tau_ffx = data['tau_ffx'].clone()
             tau_rfx = data['tau_rfx'].clone()
             tau_eps = data['tau_eps'].clone().unsqueeze(-1)
             eta_rfx = data['eta_rfx'].clone().unsqueeze(-1)
-            out += [n_total, n_groups, beta_ols, tau_ffx, tau_rfx, tau_eps, eta_rfx]
+            out += [
+                n_total,
+                n_groups,
+                beta_ols,
+                sigma_eps_ols,
+                sigma_rfx_ols,
+                tau_ffx,
+                tau_rfx,
+                tau_eps,
+                eta_rfx,
+            ]
         return torch.cat(out, dim=-1)
 
     def _localContext(
