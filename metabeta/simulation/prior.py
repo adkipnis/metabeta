@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 import numpy as np
-from scipy.stats import norm, t
+from scipy.stats import norm, t, multivariate_normal
 
-from metabeta.utils.sampling import truncLogUni
+from metabeta.utils.sampling import truncLogUni, lkjCorrelation
 
 
 def hypersample(
