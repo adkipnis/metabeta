@@ -57,6 +57,8 @@ def unpad(ds: dict[str, np.ndarray], sizes: dict[str, int]) -> dict[str, np.ndar
     ds['ffx'] = ds['ffx'][:d]
     ds['sigma_rfx'] = ds['sigma_rfx'][:q]
     ds['rfx'] = ds['rfx'][:m, :q]
+    if 'corr_rfx' in ds:
+        ds['corr_rfx'] = ds['corr_rfx'][:q, :q]
     return ds
 
 
