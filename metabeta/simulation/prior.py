@@ -14,9 +14,13 @@ def hypersample(
 ) -> dict[str, np.ndarray]:
     """sample hyperparameters to instantiate prior"""
     out = {}
-    out['tau_ffx'] = truncLogUni(rng, 1.0, 12.0, size=d)
-    out['tau_rfx'] = truncLogUni(rng, 0.01, 4.0, size=q)
-    out['tau_eps'] = truncLogUni(rng, 0.01, 4.0, size=1)[0]
+    out['nu_ffx'] = rng.uniform(0, 0, size=d)
+    out['tau_ffx'] = rng.uniform(0.01, 3.0, size=d)
+    out['tau_rfx'] = rng.uniform(0.01, 3.0, size=q)
+    out['tau_eps'] = rng.uniform(0.01, 3.0, size=1)[0]
+    # out['tau_ffx'] = truncLogUni(rng, 1.0, 12.0, size=d)
+    # out['tau_rfx'] = truncLogUni(rng, 0.01, 4.0, size=q)
+    # out['tau_eps'] = truncLogUni(rng, 0.01, 4.0, size=1)[0]
     out['correlated_rfx'] = correlated_rfx
     if correlated_rfx and q > 1:
         out['eta_rfx'] = rng.uniform(1.0, 2.0)
@@ -41,9 +45,10 @@ class Prior:
 
     def _sampleFfx(self) -> np.ndarray:
         # TODO: choice between normal and t
+        nu = self.hyperparams['nu_ffx']
         tau = self.hyperparams['tau_ffx']
-        dist = norm(loc=0, scale=tau)
-        ffx = dist.rvs(size=tau.shape, random_state=self.rng)
+        dist = norm(nu, tau)
+        ffx = dist.rvs(size=nu.shape, random_state=self.rng)
         return ffx
 
     def _sampleSigmaRfx(self) -> np.ndarray:
@@ -69,6 +74,9 @@ class Prior:
     def _sampleRfx(
             self, m: int, sigma_rfx: np.ndarray, corr_mat: np.ndarray
     ) -> np.ndarray:
+        # if corr_mat == np.eye(self.q):
+        #     dist = norm(loc=0, scale=sigma_rfx)
+        #     return dist.rvs(size=(m, self.q), random_state=self.rng)
         cov = np.diag(sigma_rfx) @ corr_mat @ np.diag(sigma_rfx)
         dist = multivariate_normal(mean=np.zeros(self.q), cov=cov) # type: ignore
         rfx = dist.rvs(size=m, random_state=self.rng) # type: ignore

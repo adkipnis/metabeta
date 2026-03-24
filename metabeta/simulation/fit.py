@@ -153,6 +153,7 @@ class Fitter:
     def _priorize(self, ds: dict[str, np.ndarray]) -> dict[str, bmb.Prior]:
         """setup bambi priors based on true priors"""
         d, q = ds['d'], ds['q']
+        nu_ffx = ds['nu_ffx']
         tau_ffx = ds['tau_ffx']
         tau_rfx = ds['tau_rfx']
         tau_eps = ds['tau_eps']
@@ -162,7 +163,7 @@ class Fitter:
         if not self.cfg.respecify_ffx:  # otherwise bambi will infer them from data
             for j in range(d):
                 key = 'Intercept' if j == 0 else f'x{j}'
-                priors[key] = bmb.Prior('Normal', mu=0, sigma=tau_ffx[j])
+                priors[key] = bmb.Prior('Normal', mu=nu_ffx[j], sigma=tau_ffx[j])
 
         # random effects variance
         for j in range(q):
@@ -180,7 +181,7 @@ class Fitter:
         df = self._pandify(ds)
         form = self._formulate(ds)
         priors = None
-        if 'tau_ffx' in ds:
+        if 'nu_ffx' in ds:
             priors = self._priorize(ds)
 
         model = bmb.Model(formula=form, data=df, categorical='i', priors=priors)

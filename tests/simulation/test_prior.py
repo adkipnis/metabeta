@@ -3,7 +3,7 @@ import pytest
 from metabeta.simulation import hypersample, Prior
 
 
-REQUIRED_HYPER_KEYS = {"tau_ffx", "tau_rfx", "tau_eps", "correlated_rfx"}
+REQUIRED_HYPER_KEYS = {"nu_ffx", "tau_ffx", "tau_rfx", "tau_eps", "correlated_rfx"}
 REQUIRED_PARAM_KEYS = {"ffx", "sigma_rfx", "sigma_eps", "rfx", "corr_rfx"}
 
 
@@ -16,6 +16,7 @@ def test_hypersample_keys_and_shapes():
     assert REQUIRED_HYPER_KEYS <= set(h.keys())
     assert isinstance(h["tau_eps"], (float, np.floating))
 
+    assert h["nu_ffx"].shape == (d,)
     assert h["tau_ffx"].shape == (d,)
     assert h["tau_rfx"].shape == (q,)
 
@@ -125,6 +126,7 @@ def test_reproducibility_same_seed_same_outputs():
     p2 = prior2.sample(m=m)
 
     # Hyperparameters should match exactly given same RNG seed
+    assert np.allclose(h1["nu_ffx"], h2["nu_ffx"])
     assert np.allclose(h1["tau_ffx"], h2["tau_ffx"])
     assert np.allclose(h1["tau_rfx"], h2["tau_rfx"])
     assert h1["tau_eps"] == h2["tau_eps"]

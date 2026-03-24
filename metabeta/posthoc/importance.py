@@ -35,6 +35,7 @@ class ImportanceSampler:
         self.eps = eps
 
         # prior
+        self.nu_ffx = data['nu_ffx'].unsqueeze(-2)   # (b, 1, d)
         self.tau_ffx = data['tau_ffx'].unsqueeze(-2) + self.eps   # (b, 1, d)
         self.tau_rfx = data['tau_rfx'].unsqueeze(-2) + self.eps   # (b, 1, q)
         self.tau_eps = data['tau_eps'].unsqueeze(-1) + self.eps   # (b, 1)
@@ -56,7 +57,7 @@ class ImportanceSampler:
         ffx, sigma_rfx, sigma_eps, rfx = proposal.parameters
 
         # log priors
-        lp_ffx = logPriorFfx(ffx, self.tau_ffx, self.mask_d)
+        lp_ffx = logPriorFfx(ffx, self.nu_ffx, self.tau_ffx, self.mask_d)
         lp_sigma_eps = logPriorSigmaEps(sigma_eps, self.tau_eps)
         lp = lp_ffx + lp_sigma_eps
 

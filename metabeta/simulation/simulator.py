@@ -5,7 +5,7 @@ from metabeta.simulation import Prior, Synthesizer, Emulator
 from metabeta.plot import plotDataset
 
 SCALE_PARAMS = {'ffx', 'sigma_rfx', 'sigma_eps', 'rfx'}
-SCALE_HYPERPARAMS = {'tau_ffx', 'tau_rfx', 'tau_eps'}
+SCALE_HYPERPARAMS = {'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps'}
 
 
 def simulate(
