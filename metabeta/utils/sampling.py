@@ -90,34 +90,23 @@ def lkjCorrelation(
     d: int,
     eta: float = 1.0,
 ) -> np.ndarray:
-    """Sample a correlation matrix from LKJ(eta) using the vine method.
+    """Sample a correlation matrix from LKJ(eta) using torch LKJCholesky."""
+    if d < 1:
+        raise ValueError('d must be >= 1')
+    if eta <= 0:
+        raise ValueError('eta must be > 0')
 
-    See Lewandowski, Kurowicka, Joe (2009).
-    eta=1 is uniform over correlation matrices, eta>1 shrinks toward identity.
-    """
     if d == 1:
         return np.ones((1, 1))
 
-    # sample partial correlations via Beta distribution
-    L = np.zeros((d, d))
-    for i in range(1, d):
-        for j in range(i):
-            alpha = eta + (d - 1 - i) / 2
-            partial = 2 * rng.beta(alpha, alpha) - 1
-            L[i, j] = partial
+    # Seed torch from numpy RNG so LKJ sampling is reproducible under numpy seed control.
+    seed = int(rng.integers(0, np.iinfo(np.int64).max, dtype=np.int64))
+    concentration = torch.tensor(float(eta), dtype=torch.float64)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(seed)
+        chol = torch.distributions.LKJCholesky(d, concentration=concentration).sample()
 
-    # convert partial correlations to Cholesky factor
-    C = np.zeros((d, d))
-    C[0, 0] = 1.0
-    for i in range(1, d):
-        remaining = 1.0
-        for j in range(i):
-            C[i, j] = L[i, j] * np.sqrt(remaining)
-            remaining *= 1 - L[i, j] ** 2
-        C[i, i] = np.sqrt(remaining)
-
-    # correlation matrix = C @ C.T
-    corr = C @ C.T
+    corr = (chol @ chol.T).cpu().numpy()
     corr = (corr + corr.T) / 2
     np.fill_diagonal(corr, 1.0)
     return corr
