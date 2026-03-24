@@ -101,6 +101,19 @@ class Approximator(nn.Module):
         ]
         return torch.cat(masks, dim=-1)
 
+    @staticmethod
+    def _ols(data: dict[str, torch.Tensor]) -> torch.Tensor:
+        """Compute pooled OLS estimates from grouped data."""
+        X = data['X']                           # (B, m, n, d)
+        y = data['y']                           # (B, m, n)
+        mask = data['mask_n'].float()           # (B, m, n)
+        Xm = X * mask.unsqueeze(-1)            # zero out padded obs
+        ym = y * mask                           # zero out padded obs
+        XtX = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)   # (B, d, d)
+        Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)      # (B, d)
+        beta_ols = torch.linalg.lstsq(XtX, Xty).solution     # (B, d)
+        return beta_ols
+
     def _addMetadata(
         self,
         summary: torch.Tensor,
@@ -116,13 +129,12 @@ class Approximator(nn.Module):
         else:
             n_total = data['n'].unsqueeze(-1).sqrt() / numerator
             n_groups = data['m'].unsqueeze(-1).sqrt() / numerator
-            nu_ffx = data['nu_ffx'].clone()
+            beta_ols = self._ols(data)
             tau_ffx = data['tau_ffx'].clone()
             tau_rfx = data['tau_rfx'].clone()
             tau_eps = data['tau_eps'].clone().unsqueeze(-1)
             eta_rfx = data['eta_rfx'].clone().unsqueeze(-1)
-            # TODO: optionally dampen prior params, depending on how large they get
-            out += [n_total, n_groups, nu_ffx, tau_ffx, tau_rfx, tau_eps, eta_rfx]
+            out += [n_total, n_groups, beta_ols, tau_ffx, tau_rfx, tau_eps, eta_rfx]
         return torch.cat(out, dim=-1)
 
     def _localContext(
