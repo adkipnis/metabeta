@@ -14,10 +14,12 @@ def setSeed(s: int) -> None:
     torch.cuda.manual_seed_all(s)
 
 
-def sampleCounts(rng: np.random.Generator, n: int, m: int, alpha: float | None = None) -> np.ndarray:
+def sampleCounts(
+    rng: np.random.Generator, n: int, m: int, alpha: float | None = None
+) -> np.ndarray:
     """draw ns (= counts) for m groups, such that the sum is n"""
     if alpha is None:
-        alpha = rng.uniform(2.0, 20.0) # vary entropy across datasets
+        alpha = rng.uniform(2.0, 20.0)   # vary entropy across datasets
     p = rng.dirichlet(np.ones(m) * alpha)
     ns = np.round(p * n).astype(int)
     diff = n - ns.sum()
