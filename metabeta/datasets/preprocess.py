@@ -2,9 +2,9 @@ import logging
 from pathlib import Path
 import pandas as pd
 import numpy as np
-
-from metabeta.plot import Plot
 from matplotlib import pyplot as plt
+
+from metabeta.plot import plotDataset
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +283,7 @@ def wrapper(
     if plot and np.prod(df.shape) < 1e6:
         dat = np.concatenate([data['y'][:, None], data['X']], axis=-1)
         names = ['y'] + data['columns'].tolist()
-        fig = Plot.dataset(dat, names, kde=len(dat) < 10_000)
+        fig = plotDataset(dat, names, kde=len(dat) < 10_000)
         if save:
             fn = Path('preprocessed', 'plots', f'{ds_name}.pdf')
             fig.savefig(fn, dpi=300)
