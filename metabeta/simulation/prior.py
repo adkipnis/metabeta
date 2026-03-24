@@ -13,7 +13,6 @@ def hypersample(
 ) -> dict[str, np.ndarray]:
     """sample hyperparameters to instantiate prior"""
     out = {}
-    out['nu_ffx'] = rng.uniform(-2.0, 2.0, size=d)
     out['tau_ffx'] = truncLogUni(rng, 1.0, 12.0, size=d)
     out['tau_rfx'] = truncLogUni(rng, 0.01, 4.0, size=q)
     out['tau_eps'] = float(truncLogUni(rng, 0.01, 4.0, size=1)[0])
@@ -40,8 +39,8 @@ class Prior:
     def _sampleFfx(self) -> np.ndarray:
         # TODO: choice between normal and t
         tau = self.hyperparams['tau_ffx']
-        dist = norm(nu, tau)
-        ffx = dist.rvs(size=nu.shape, random_state=self.rng)
+        dist = norm(loc=0, scale=tau)
+        ffx = dist.rvs(size=tau.shape, random_state=self.rng)
         return ffx
 
     def _sampleSigmaRfx(self) -> np.ndarray:
