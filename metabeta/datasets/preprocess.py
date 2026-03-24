@@ -201,8 +201,13 @@ def preprocess(
         if m < m_before:
             logger.warning(f'{m_before - m} groups lost all observations after outlier removal.')
 
-    # remove columns with more than 95% constant values
-    df = dropConstantColumns(df, threshold=constant_threshold)
+    # remove numeric columns with more than 95% constant values
+    # (categorical near-constants are handled by dummify's min_prevalence)
+    num_cols = numerical(df)
+    bad = [c for c in num_cols if df[c].value_counts(normalize=True).max() > constant_threshold]
+    if bad:
+        logger.warning(f'Removing {bad} due to mostly constant entries.')
+        df = df.drop(columns=bad)
 
     # (re-)analyze column types
     col_names_num = numerical(df)
@@ -275,7 +280,7 @@ def wrapper(
         print(f'Saved to {fn}')
 
     # plot
-    if plot and np.prod(df.shape) < 1e6:
+    if plot and data['n'] * data['d'] < 1e6:
         dat = np.concatenate([data['y'][:, None], data['X']], axis=-1)
         names = ['y'] + data['columns'].tolist()
         fig = plotDataset(dat, names, kde=len(dat) < 10_000)
