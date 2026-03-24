@@ -4,6 +4,7 @@ from scipy.stats import norm, t, multivariate_normal
 
 from metabeta.utils.sampling import truncLogUni, lkjCorrelation
 
+MIN_STD = 1e-5
 
 def hypersample(
     rng: np.random.Generator,
@@ -50,14 +51,14 @@ class Prior:
         tau = self.hyperparams['tau_rfx']
         dist = norm(loc=0, scale=tau)
         sigma_rfx = dist.rvs(size=tau.shape, random_state=self.rng)
-        return np.abs(sigma_rfx)
+        return np.maximum(np.abs(sigma_rfx), MIN_STD)
 
     def _sampleSigmaEps(self) -> np.ndarray:
         # TODO: choice between halfnormal, half-t(4), exponential(1)
         tau = self.hyperparams['tau_eps']
         dist = t(df=4, loc=0, scale=tau)
         sigma_eps = dist.rvs(random_state=self.rng)
-        return np.abs(sigma_eps)
+        return np.maximum(np.abs(sigma_eps), MIN_STD)
 
     def _sampleCorrMat(self) -> np.ndarray:
         eta = float(self.hyperparams['eta_rfx'])
