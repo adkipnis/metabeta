@@ -193,10 +193,13 @@ def preprocess(
 
     # optionally update group objects
     if groups is not None:
+        m_before = len(np.unique(groups))
         groups = groups[~outliers]
         groups, _ = pd.factorize(groups)
         _, ns = np.unique(groups, return_counts=True)
         m = len(ns)
+        if m < m_before:
+            logger.warning(f'{m_before - m} groups lost all observations after outlier removal.')
 
     # remove columns with more than 95% constant values
     df = dropConstantColumns(df, threshold=constant_threshold)
