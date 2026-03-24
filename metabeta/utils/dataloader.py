@@ -109,6 +109,7 @@ class Collection(torch.utils.data.Dataset):
             qperm = self.qperm[idx]
             for key in ('Z', 'rfx', 'sigma_rfx', 'tau_rfx'):
                 ds[key] = ds[key][..., qperm]
+            ds['corr_rfx'] = ds['corr_rfx'][np.ix_(qperm, qperm)]
             ds['qperm'] = qperm
 
             # permute fit samples consistently with ground truth
@@ -192,6 +193,11 @@ def collateGrouped(
         rfx[b, idx] = torch.as_tensor(ds['rfx'], dtype=dtype)
     out['rfx'] = rfx
 
+    # correlation matrix (q, q) → (B, q, q); eta_rfx=0 means identity
+    out['corr_rfx'] = quickCollate(batch, 'corr_rfx', dtype)
+    out['eta_rfx'] = quickCollate(batch, 'eta_rfx', dtype)
+    out['correlated_rfx'] = quickCollate(batch, 'correlated_rfx', torch.bool)
+
     # save sd(Y) for unstandardizing
     out['sd_y'] = quickCollate(batch, 'sd_y')
 
@@ -274,7 +280,7 @@ if __name__ == '__main__':
     from metabeta.utils.config import dataFromYaml
 
     # load toy data
-    data_cfg_path = Path('..', 'simulation', 'configs', 'toy.yaml')
+    data_cfg_path = Path('..', 'simulation', 'configs', 'small.yaml')
     data_fname = dataFromYaml(data_cfg_path, 'test')
     data_path = Path('..', 'outputs', 'data', data_fname)
 
