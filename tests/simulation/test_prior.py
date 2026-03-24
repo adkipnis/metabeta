@@ -32,16 +32,16 @@ def test_hypersample_correlated_adds_eta():
     assert 1.0 <= h["eta_rfx"] <= 2.0
 
 
-def test_hypersample_uncorrelated_no_eta():
+def test_hypersample_uncorrelated_eta_zero():
     rng = np.random.default_rng(0)
     h = hypersample(d=3, q=2, rng=rng, correlated_rfx=False)
-    assert "eta_rfx" not in h
+    assert float(h["eta_rfx"]) == 0.0
 
 
-def test_hypersample_correlated_q1_no_eta():
+def test_hypersample_correlated_q1_eta_zero():
     rng = np.random.default_rng(0)
     h = hypersample(d=3, q=1, rng=rng, correlated_rfx=True)
-    assert "eta_rfx" not in h
+    assert float(h["eta_rfx"]) == 0.0
 
 
 def test_prior_post_init_sets_dimensions():
@@ -99,14 +99,15 @@ def test_correlated_rfx_produces_correlation_matrix():
     assert np.all(np.linalg.eigvalsh(corr) >= -1e-10)
 
 
-def test_uncorrelated_rfx_no_correlation_matrix():
+def test_uncorrelated_rfx_identity_correlation():
     rng = np.random.default_rng(42)
     d, q, m = 4, 3, 10
     h = hypersample(d=d, q=q, rng=rng, correlated_rfx=False)
     prior = Prior(rng, h)
     params = prior.sample(m=m)
 
-    assert params["corr_rfx"] is None
+    # uncorrelated uses identity correlation matrix
+    assert np.allclose(params["corr_rfx"], np.eye(q))
 
 
 def test_reproducibility_same_seed_same_outputs():

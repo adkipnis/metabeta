@@ -69,7 +69,7 @@ def test_max_shapes_ndim_mismatch_raises(tmp_path: Path):
         {"a": np.zeros((3, 2))},
         {"a": np.zeros((3, 2, 1))},  # ndim mismatch
     ]
-    with pytest.raises(AssertionError, match="ndim mismatch"):
+    with pytest.raises(ValueError, match="ndim mismatch"):
         _ = maxShapes(batch)
 
 
