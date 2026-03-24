@@ -20,6 +20,8 @@ def hypersample(
     out['correlated_rfx'] = correlated_rfx
     if correlated_rfx and q > 1:
         out['eta_rfx'] = float(rng.uniform(1.0, 2.0))
+    # TODO: sample prior families
+    # TODO: sample link function (normal, t, bernoulli, poisson)
     return out
 
 
@@ -36,18 +38,21 @@ class Prior:
         self.correlated_rfx = self.hyperparams.get('correlated_rfx', False)
 
     def _sampleFfx(self) -> np.ndarray:
+        # TODO: choice between normal and t
         tau = self.hyperparams['tau_ffx']
         dist = norm(nu, tau)
         ffx = dist.rvs(size=nu.shape, random_state=self.rng)
         return ffx
 
     def _sampleSigmaRfx(self) -> np.ndarray:
+        # TODO: choice between halfnormal, half-t(4), exponential(lambda)
         tau = self.hyperparams['tau_rfx']
         dist = norm(loc=0, scale=tau)
         sigma_rfx = dist.rvs(size=tau.shape, random_state=self.rng)
         return np.abs(sigma_rfx)
 
     def _sampleSigmaEps(self) -> np.ndarray:
+        # TODO: choice between halfnormal, half-t(4), exponential(1)
         tau = self.hyperparams['tau_eps']
         dist = t(df=4, loc=0, scale=tau)
         sigma_eps = dist.rvs(random_state=self.rng)
