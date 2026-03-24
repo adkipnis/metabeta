@@ -138,7 +138,7 @@ def findOutliers(df: pd.DataFrame, threshold: float = 4.0, min_std: float = 1e-1
 #     return outliers
 
 
-def dummify(df: pd.DataFrame, colname: str, max_columns: int = 10):
+def dummify(df: pd.DataFrame, colname: str, max_columns: int = 10, min_prevalence: float = 0.05):
     # make dummy variables out of categorical columns
     unique = df[colname].nunique()
     if unique > max_columns:
@@ -147,6 +147,13 @@ def dummify(df: pd.DataFrame, colname: str, max_columns: int = 10):
     ref_category = df[colname].mode()[0]
     dummies = pd.get_dummies(df[colname], prefix=colname).astype(int)
     dummies = dummies.drop(f'{colname}_{ref_category}', axis=1)
+
+    # drop rare dummies
+    rare = dummies.columns[dummies.mean() < min_prevalence]
+    if len(rare):
+        logger.warning(f'Removing rare dummies {list(rare)} (prevalence < {min_prevalence}).')
+        dummies = dummies.drop(columns=rare)
+
     df = pd.concat([df, dummies], axis=1)
     df = df.drop(colname, axis=1)
     return df
