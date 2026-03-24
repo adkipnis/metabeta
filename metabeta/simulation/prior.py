@@ -86,9 +86,18 @@ if __name__ == '__main__':
     seed = 0
     rng = np.random.default_rng(seed)
 
-    d, q = 3, 1
+    d, q = 3, 2
     m = 10
 
-    hyperparams = hypersample(rng, d, q)
+    # uncorrelated
+    hyperparams = hypersample(rng, d, q, correlated_rfx=False)
     prior = Prior(rng, hyperparams)
     params = prior.sample(m)
+    print('Uncorrelated rfx shape:', params['rfx'].shape)
+
+    # correlated
+    hyperparams = hypersample(rng, d, q, correlated_rfx=True)
+    prior = Prior(rng, hyperparams)
+    params = prior.sample(m)
+    print('Correlated rfx shape:', params['rfx'].shape)
+    print('Correlation matrix:\n', params['corr_rfx'])
