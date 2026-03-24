@@ -44,7 +44,8 @@ def potentialGroups(df: pd.DataFrame, threshold: float = 0.2, minimum: int = 5):
     cols = df.select_dtypes(exclude=['float']).columns
 
     # exclude blacklisted columns
-    blacklisted = cols.str.contains('|'.join(BLACKLIST))
+    pattern = '|'.join(rf'\b{word}\b' for word in BLACKLIST)
+    blacklisted = cols.str.contains(pattern)
     cols = cols[~blacklisted]
 
     # quick escape
