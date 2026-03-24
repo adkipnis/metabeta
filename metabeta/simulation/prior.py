@@ -4,7 +4,7 @@ from scipy.stats import norm, t, multivariate_normal
 
 from metabeta.utils.sampling import truncLogUni, lkjCorrelation
 
-MIN_STD = 1e-5
+MIN_STD = 1e-3
 
 def hypersample(
     rng: np.random.Generator,
