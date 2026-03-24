@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
 # config
+# fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate hierarchical datasets.')
     # batch dimensions
@@ -32,6 +33,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--sgld', action='store_true', help='Use SGLD if ds_type==sampled (default = False)')
     parser.add_argument('--loop', action='store_true', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
     return parser.parse_args()
+# fmt: on
 
 
 # -----------------------------------------------------------------------------
@@ -101,7 +103,7 @@ class Generator:
         rng = np.random.default_rng(seedseq)
 
         # sample prior
-        hyperparams = hypersample(rng, d, q)
+        hyperparams = hypersample(rng, d, q, correlated_rfx=cfg.correlated_rfx)
         prior = Prior(rng, hyperparams)
 
         # instantiate design
