@@ -9,10 +9,6 @@ from metabeta.plot import plotDataset
 logger = logging.getLogger(__name__)
 
 BLACKLIST = 'year age height size n_ num_ number max min attempts begin end name'.split(' ')
-GREENLIST = 'country state school education class industry occupation race sport brand genre color weekday date'.split(' ')
-PARAMS = []
-
-
 def removeString(this: list, string: str) -> np.ndarray:
     out = list(filter(lambda x: x != string, this))
     return np.array(out)
