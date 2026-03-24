@@ -2,6 +2,8 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.stats import norm, t
 
+from metabeta.utils.sampling import truncLogUni
+
 
 def hypersample(
     rng: np.random.Generator,
@@ -10,10 +12,10 @@ def hypersample(
 ) -> dict[str, np.ndarray]:
     """sample hyperparameters to instantiate prior"""
     out = {}
-    out['nu_ffx'] = rng.uniform(-3, 3, size=d)
-    out['tau_ffx'] = rng.uniform(0.01, 3, size=d)
-    out['tau_rfx'] = rng.uniform(0.01, 3, size=q)
-    out['tau_eps'] = float(rng.uniform(0.01, 3))
+    out['nu_ffx'] = rng.uniform(-2.0, 2.0, size=d)
+    out['tau_ffx'] = truncLogUni(rng, 1.0, 12.0, size=d)
+    out['tau_rfx'] = truncLogUni(rng, 0.01, 4.0, size=q)
+    out['tau_eps'] = float(truncLogUni(rng, 0.01, 4.0, size=1))
     return out
 
 
