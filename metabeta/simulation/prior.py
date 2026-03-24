@@ -15,10 +15,10 @@ def hypersample(
     out = {}
     out['tau_ffx'] = truncLogUni(rng, 1.0, 12.0, size=d)
     out['tau_rfx'] = truncLogUni(rng, 0.01, 4.0, size=q)
-    out['tau_eps'] = float(truncLogUni(rng, 0.01, 4.0, size=1)[0])
+    out['tau_eps'] = truncLogUni(rng, 0.01, 4.0, size=1)[0]
     out['correlated_rfx'] = correlated_rfx
     if correlated_rfx and q > 1:
-        out['eta_rfx'] = float(rng.uniform(1.0, 2.0))
+        out['eta_rfx'] = rng.uniform(1.0, 2.0)
     # TODO: sample prior families
     # TODO: sample link function (normal, t, bernoulli, poisson)
     return out
@@ -58,7 +58,7 @@ class Prior:
         return np.abs(sigma_eps)
 
     def _sampleCorrMat(self) -> np.ndarray:
-        eta = self.hyperparams['eta_rfx']
+        eta = float(self.hyperparams['eta_rfx'])
         return lkjCorrelation(self.rng, self.q, eta=eta)
 
     def _sampleRfx(
@@ -70,8 +70,8 @@ class Prior:
             return dist.rvs(size=(m, self.q), random_state=self.rng)
         # correlated: multivariate normal with LKJ correlation
         cov = np.diag(sigma_rfx) @ corr_mat @ np.diag(sigma_rfx)
-        dist = multivariate_normal(mean=np.zeros(self.q), cov=cov)
-        return dist.rvs(size=(m, self.q), random_state=self.rng)
+        dist = multivariate_normal(mean=np.zeros(self.q), cov=cov) # type: ignore
+        return dist.rvs(size=(m, self.q), random_state=self.rng) # type: ignore
 
     def sample(self, m: int) -> dict[str, np.ndarray]:
         out = {}
