@@ -9,7 +9,7 @@ def hypersample(
     rng: np.random.Generator,
     d: int,
     q: int,
-    correlated_rfx: bool = False,
+    correlated_rfx: bool = True,
 ) -> dict[str, np.ndarray]:
     """sample hyperparameters to instantiate prior"""
     out = {}
