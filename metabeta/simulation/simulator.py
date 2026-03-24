@@ -4,6 +4,9 @@ from metabeta.utils.preprocessing import standardize
 from metabeta.simulation import Prior, Synthesizer, Emulator
 from metabeta.plot import plotDataset
 
+SCALE_PARAMS = {'ffx', 'sigma_rfx', 'sigma_eps', 'rfx'}
+SCALE_HYPERPARAMS = {'tau_ffx', 'tau_rfx', 'tau_eps'}
+
 
 def simulate(
     rng: np.random.Generator,
@@ -86,11 +89,17 @@ class Simulator:
         sd = max(y.std(0), 1e-6)
         y /= sd
 
-        # normalize parameters
-        params = {k: v / sd for k, v in params.items()}
+        # normalize parameters (scale params only; skip correlation matrices etc.)
+        params = {
+            k: v / sd if k in SCALE_PARAMS else v
+            for k, v in params.items()
+        }
 
-        # normalize hyperparameters (our priors are all scale families)
-        hyperparams = {k: v / sd for k, v in self.prior.hyperparams.items()}
+        # normalize hyperparameters (scale families only; skip booleans, eta, etc.)
+        hyperparams = {
+            k: v / sd if k in SCALE_HYPERPARAMS else v
+            for k, v in self.prior.hyperparams.items()
+        }
 
         # optional plot
         if self.plot:
