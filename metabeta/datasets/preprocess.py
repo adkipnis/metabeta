@@ -23,9 +23,12 @@ def dropPatchyColumns(df: pd.DataFrame, threshold: float = 0.25):
     return df
 
 
-def dropPatchyRows(df: pd.DataFrame, threshold: float = 0.1):
+def dropPatchyRows(df: pd.DataFrame, threshold: float = 0.1, sentinels: list[float] | None = None):
     # drop rows with missing values
-    df = df.replace(-999, np.nan)
+    if sentinels is None:
+        sentinels = [-999]
+    for s in sentinels:
+        df = df.replace(s, np.nan)
     missing = df.drop(columns='y').isnull().any(axis=1)
     if missing.mean() > threshold:
         logger.warning(f'{missing.mean() * 100:.2f}% patchy rows.')
