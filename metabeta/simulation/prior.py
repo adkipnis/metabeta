@@ -71,7 +71,7 @@ class Prior:
         # correlated: multivariate normal with LKJ correlation
         cov = np.diag(sigma_rfx) @ corr_mat @ np.diag(sigma_rfx)
         dist = multivariate_normal(mean=np.zeros(self.q), cov=cov) # type: ignore
-        return dist.rvs(size=(m, self.q), random_state=self.rng) # type: ignore
+        return dist.rvs(size=m, random_state=self.rng) # type: ignore
 
     def sample(self, m: int) -> dict[str, np.ndarray]:
         out = {}
