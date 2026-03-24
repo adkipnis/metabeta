@@ -19,7 +19,7 @@ def sampleCounts(
 ) -> np.ndarray:
     """draw ns (= counts) for m groups, such that the sum is n"""
     if alpha is None:
-        alpha = rng.uniform(2.0, 20.0)   # vary entropy across datasets
+        alpha = rng.uniform(2.0, 20.0)  # vary entropy across datasets
     p = rng.dirichlet(np.ones(m) * alpha)
     ns = np.round(p * n).astype(int)
     diff = n - ns.sum()
@@ -29,7 +29,7 @@ def sampleCounts(
     elif diff < 0:
         idx = ns.argmax(0)
         ns[idx] += diff
-    if (ns < 1).any():   # try again
+    if (ns < 1).any():  # try again
         logger.info('non-positive counts found')
         return sampleCounts(rng, n, m, alpha)
     return ns
