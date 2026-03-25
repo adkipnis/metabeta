@@ -152,27 +152,50 @@ class Fitter:
 
     def _priorize(self, ds: dict[str, np.ndarray]) -> dict[str, bmb.Prior]:
         """setup bambi priors based on true priors"""
+        from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
+
         d, q = ds['d'], ds['q']
         nu_ffx = ds['nu_ffx']
         tau_ffx = ds['tau_ffx']
         tau_rfx = ds['tau_rfx']
         tau_eps = ds['tau_eps']
+        family_ffx = int(ds.get('family_ffx', 0))
+        family_sigma_rfx = int(ds.get('family_sigma_rfx', 0))
+        family_sigma_eps = int(ds.get('family_sigma_eps', 0))
         priors = {}
 
         # fixed effects
-        if not self.cfg.respecify_ffx:  # otherwise bambi will infer them from data
+        if not self.cfg.respecify_ffx:
+            ffx_name = FFX_FAMILIES[family_ffx]
             for j in range(d):
                 key = 'Intercept' if j == 0 else f'x{j}'
-                priors[key] = bmb.Prior('Normal', mu=nu_ffx[j], sigma=tau_ffx[j])
+                if ffx_name == 'normal':
+                    priors[key] = bmb.Prior('Normal', mu=nu_ffx[j], sigma=tau_ffx[j])
+                elif ffx_name == 'student':
+                    priors[key] = bmb.Prior(
+                        'StudentT', nu=STUDENT_DF, mu=nu_ffx[j], sigma=tau_ffx[j]
+                    )
 
         # random effects variance
+        sigma_name = SIGMA_FAMILIES[family_sigma_rfx]
         for j in range(q):
             key = '1|i' if j == 0 else f'x{j}|i'
-            sigma = bmb.Prior('HalfNormal', sigma=tau_rfx[j])
+            if sigma_name == 'halfnormal':
+                sigma = bmb.Prior('HalfNormal', sigma=tau_rfx[j])
+            elif sigma_name == 'halfstudent':
+                sigma = bmb.Prior('HalfStudentT', nu=STUDENT_DF, sigma=tau_rfx[j])
+            elif sigma_name == 'exponential':
+                sigma = bmb.Prior('Exponential', lam=1.0 / (tau_rfx[j] + 1e-12))
             priors[key] = bmb.Prior('Normal', mu=0, sigma=sigma)
 
         # noise variance
-        priors['sigma'] = bmb.Prior('HalfStudentT', nu=4, sigma=tau_eps)
+        eps_name = SIGMA_FAMILIES[family_sigma_eps]
+        if eps_name == 'halfnormal':
+            priors['sigma'] = bmb.Prior('HalfNormal', sigma=tau_eps)
+        elif eps_name == 'halfstudent':
+            priors['sigma'] = bmb.Prior('HalfStudentT', nu=STUDENT_DF, sigma=tau_eps)
+        elif eps_name == 'exponential':
+            priors['sigma'] = bmb.Prior('Exponential', lam=1.0 / (tau_eps + 1e-12))
         return priors
 
     def bambify(self, ds: dict[str, np.ndarray]) -> bmb.Model:
