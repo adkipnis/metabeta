@@ -3,7 +3,15 @@ import numpy as np
 from scipy.stats import multivariate_normal
 
 from metabeta.utils.sampling import lkjCorrelation, spikeAndSlab, skewedBeta
-from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES, sampleFfxNp, sampleSigmaNp
+from metabeta.utils.families import (
+    FFX_FAMILIES,
+    SIGMA_FAMILIES,
+    FFX_FAMILY_PROBS,
+    SIGMA_RFX_FAMILY_PROBS,
+    SIGMA_EPS_FAMILY_PROBS,
+    sampleFfxNp,
+    sampleSigmaNp,
+)
 
 MIN_STD = 1e-3
 
@@ -32,10 +40,10 @@ def hypersample(
         correlated = rng.random() < 0.5
     out['eta_rfx'] = rng.uniform(1.0, 2.0) if correlated else np.array(0.0)
 
-    # prior families (uniform over available families)
-    out['family_ffx'] = np.array(rng.integers(len(FFX_FAMILIES)))
-    out['family_sigma_rfx'] = np.array(rng.integers(len(SIGMA_FAMILIES)))
-    out['family_sigma_eps'] = np.array(rng.integers(len(SIGMA_FAMILIES)))
+    # prior families (weighted over available families)
+    out['family_ffx'] = np.array(rng.choice(len(FFX_FAMILIES), p=FFX_FAMILY_PROBS))
+    out['family_sigma_rfx'] = np.array(rng.choice(len(SIGMA_FAMILIES), p=SIGMA_RFX_FAMILY_PROBS))
+    out['family_sigma_eps'] = np.array(rng.choice(len(SIGMA_FAMILIES), p=SIGMA_EPS_FAMILY_PROBS))
 
     # TODO: sample link function (normal, t, bernoulli, poisson)
     return out
@@ -49,8 +57,8 @@ class Prior:
     hyperparams: dict[str, np.ndarray]
 
     def __post_init__(self):
-        self.d = len(self.hyperparams['tau_ffx'])   # number of fixed effects
-        self.q = len(self.hyperparams['tau_rfx'])   # number of random effects
+        self.d = len(self.hyperparams['tau_ffx'])  # number of fixed effects
+        self.q = len(self.hyperparams['tau_rfx'])  # number of random effects
         self.correlated_rfx = float(self.hyperparams.get('eta_rfx', 0)) > 0
 
     def _sampleFfx(self) -> np.ndarray:
@@ -82,8 +90,8 @@ class Prior:
         #     dist = norm(loc=0, scale=sigma_rfx)
         #     return dist.rvs(size=(m, self.q), random_state=self.rng)
         cov = np.diag(sigma_rfx) @ corr_mat @ np.diag(sigma_rfx)
-        dist = multivariate_normal(mean=np.zeros(self.q), cov=cov)   # type: ignore
-        rfx = dist.rvs(size=m, random_state=self.rng)   # type: ignore
+        dist = multivariate_normal(mean=np.zeros(self.q), cov=cov)  # type: ignore
+        rfx = dist.rvs(size=m, random_state=self.rng)  # type: ignore
         return rfx.reshape(m, self.q)
 
     def sample(self, m: int) -> dict[str, np.ndarray]:
