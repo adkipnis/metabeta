@@ -14,16 +14,26 @@ import wandb
 import schedulefree
 
 from metabeta.utils.logger import setupLogging
-from metabeta.utils.io import  setDevice, datasetFilename, runName
+from metabeta.utils.io import setDevice, datasetFilename, runName
 from metabeta.utils.sampling import setSeed
-from metabeta.utils.config import modelFromYaml, ApproximatorConfig, assimilateConfig, loadDataConfig
+from metabeta.utils.config import (
+    modelFromYaml,
+    ApproximatorConfig,
+    assimilateConfig,
+    loadDataConfig,
+)
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import EvaluationSummary, Proposal
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler, runIS, runSIR
 from metabeta.evaluation.summary import getSummary, summaryTable
-from metabeta.plot import plotRecovery, plotCoverage, plotSBC
+from metabeta.plot import (
+    plotRecovery,
+    plotCoverage,
+    plotSBC,
+    plotRfxCorrelationRecovery,
+)
 
 logger = logging.getLogger('train.py')
 
@@ -134,7 +144,9 @@ class Trainer:
         torch.use_deterministic_algorithms(True)
         if self.cfg.device == 'mps':
             self.cfg.device = 'cpu'
-            logger.warning('setting device from mps to cpu for reproducibility - to prevent this, set --reproducible to False')
+            logger.warning(
+                'setting device from mps to cpu for reproducibility - to prevent this, set --reproducible to False'
+            )
         elif self.cfg.device == 'cuda':
             torch.use_deterministic_algorithms(True)
             torch.backends.cudnn.deterministic = True
@@ -413,6 +425,15 @@ batch size: {self.cfg.bs}
                               plot_dir=self.plot_dir, epoch=self.current_epoch, show=show)
         path_s = plotSBC(proposal, batch,
                          plot_dir=self.plot_dir, epoch=self.current_epoch, show=show)
+        path_rc = None
+        if proposal.q >= 2:
+            path_rc = plotRfxCorrelationRecovery(
+                proposal,
+                batch,
+                plot_dir=self.plot_dir,
+                epoch=self.current_epoch,
+                show=show,
+            )
         if self.cfg.wandb:
             image_logs = {
                 'plot/recovery': wandb.Image(str(path_r)),
@@ -420,6 +441,8 @@ batch size: {self.cfg.bs}
                 'plot/sbc': wandb.Image(str(path_s)),
                 'step/epoch': self.current_epoch,
             }
+            if path_rc is not None:
+                image_logs['plot/rfx_correlation_recovery'] = wandb.Image(str(path_rc))
             wandb.log(image_logs)
 
     def go(self) -> None:
