@@ -1,3 +1,5 @@
+from typing import Literal
+import math
 import torch
 from torch.nn import functional as F
 
@@ -14,26 +16,29 @@ def maskedLog(x: torch.Tensor) -> torch.Tensor:
 
 
 # softplus
-def softplus(x: torch.Tensor) -> torch.Tensor:
-    return F.softplus(x, beta=1.0, threshold=THRESHOLD)
+def softplus(x: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+    return F.softplus(x, beta=beta, threshold=THRESHOLD)
 
 
-def inverseSoftplus(x: torch.Tensor) -> torch.Tensor:
+def inverseSoftplus(x: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+    bx = beta * x
     return torch.where(
-        x > THRESHOLD,
+        bx > THRESHOLD,
         x,
-        torch.expm1(x).clamp_min(EPS).log(),
+        torch.expm1(bx).clamp_min(EPS).log() / beta,
     )
 
 
-def maskedSoftplus(x: torch.Tensor) -> torch.Tensor:
+def maskedSoftplus(x: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
     mask = x.ne(0).to(x.dtype)
-    return softplus(x) * mask
+    return softplus(x, beta=beta) * mask
 
 
-def maskedInverseSoftplus(x: torch.Tensor) -> torch.Tensor:
+def maskedInverseSoftplus(x: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
     mask = x.ne(0).to(x.device)
-    return inverseSoftplus(x) * mask
+    return inverseSoftplus(x, beta=beta) * mask
+
+
 
 
 # crunching
