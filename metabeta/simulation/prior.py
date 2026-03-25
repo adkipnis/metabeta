@@ -72,15 +72,13 @@ class Prior:
             return lkjCorrelation(self.rng, self.q, eta=eta)
         return np.eye(self.q)
 
-    def _sampleRfx(
-            self, m: int, sigma_rfx: np.ndarray, corr_mat: np.ndarray
-    ) -> np.ndarray:
+    def _sampleRfx(self, m: int, sigma_rfx: np.ndarray, corr_mat: np.ndarray) -> np.ndarray:
         # if corr_mat == np.eye(self.q):
         #     dist = norm(loc=0, scale=sigma_rfx)
         #     return dist.rvs(size=(m, self.q), random_state=self.rng)
         cov = np.diag(sigma_rfx) @ corr_mat @ np.diag(sigma_rfx)
-        dist = multivariate_normal(mean=np.zeros(self.q), cov=cov) # type: ignore
-        rfx = dist.rvs(size=m, random_state=self.rng) # type: ignore
+        dist = multivariate_normal(mean=np.zeros(self.q), cov=cov)   # type: ignore
+        rfx = dist.rvs(size=m, random_state=self.rng)   # type: ignore
         return rfx.reshape(m, self.q)
 
     def sample(self, m: int) -> dict[str, np.ndarray]:
@@ -92,7 +90,7 @@ class Prior:
         out['rfx'] = self._sampleRfx(m, sigma_rfx=out['sigma_rfx'], corr_mat=out['corr_rfx'])
         return out
 
- 
+
 if __name__ == '__main__':
     seed = 0
     rng = np.random.default_rng(seed)
