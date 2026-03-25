@@ -158,15 +158,15 @@ def evaluateCorrelation(
 
 
 def summarizeCorrelation(
-        results: dict[str, torch.Tensor],
-        qs: torch.Tensor,
-        threshold: float = 0.90,
+    results: dict[str, torch.Tensor],
+    qs: torch.Tensor,
+    threshold: float = 0.90,
 ) -> dict[str, float]:
     """Aggregate correlation evaluation into summary metrics"""
     eta = results['eta_rfx']
     mae = results['offdiag_mae']
-    pct = results['percentile'] 
-    
+    pct = results['percentile']
+
     nontrivial = qs > 1
     correlated = eta > 0
     uncorrelated = (eta == 0) & nontrivial
