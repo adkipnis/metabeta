@@ -4,9 +4,11 @@ from torch.nn import functional as F
 
 from metabeta.models.transformers import SetTransformer
 from metabeta.models.normalizingflows import CouplingFlow
-from metabeta.utils.regularization import maskedInverseSoftplus, maskedSoftplus
+from metabeta.utils.regularization import getConstrainers
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
+
+constrainSigma, unconstrainSigma, logDetJacobian = getConstrainers(method='softplus')
 
 
 class Approximator(nn.Module):
@@ -201,8 +203,8 @@ class Approximator(nn.Module):
 
         # project from R+ to R
         sigmas = targets[..., d:]
-        sigmas = maskedInverseSoftplus(sigmas)
-        targets[..., d:] = sigmas
+        log_sigmas = unconstrainSigma(sigmas)
+        targets[..., d:] = log_sigmas
         return targets
 
     def _postprocess(self, proposed: dict[str, dict[str, torch.Tensor]]):
@@ -219,13 +221,12 @@ class Approximator(nn.Module):
         # global postprocessing
         if 'global' in proposed:
             samples = proposed['global']['samples']
-            sigmas = samples[..., d:].clone()
-            # Jacobian for sigma dims: d softplus / dx = sigmoid(x)
-            log_det = torch.where(sigmas != 0, F.logsigmoid(sigmas), torch.zeros_like(sigmas))
+            log_sigmas = samples[..., d:].clone()
+            log_det = logDetJacobian(log_sigmas)
             log_prob_g = proposed['global']['log_prob'] - log_det.sum(dim=-1)
             proposed['global']['log_prob'] = log_prob_g
-            sigmas_pos = maskedSoftplus(sigmas)
-            samples_out = torch.cat([samples[..., :d], sigmas_pos], dim=-1)
+            sigmas = constrainSigma(log_sigmas)
+            samples_out = torch.cat([samples[..., :d], sigmas], dim=-1)
             proposed['global']['samples'] = samples_out
         return Proposal(proposed)
 
