@@ -36,6 +36,7 @@ def getNames(source: str, num: int) -> list[str]:
     else:
         raise ValueError(f'source {source} unknown.')
 
+
 def getAllNames(d: int, q: int) -> dict[str, list[str]]:
     return {
         'ffx': getNames('ffx', d),
@@ -212,10 +213,13 @@ class EvaluationSummary:
     posterior_nll: torch.Tensor
     sample_efficiency: torch.Tensor | None
     pareto_k: torch.Tensor | None
+    rfx_corr: dict[str, float] | None = None
     tpd: float | None = None   # time per dataset
 
     def averageOverAlpha(
-        self, nested: dict[float, dict[str, torch.Tensor]], absolute: bool = False,
+        self,
+        nested: dict[float, dict[str, torch.Tensor]],
+        absolute: bool = False,
     ) -> dict[str, torch.Tensor]:
         out = {}
         alphas = list(nested.keys())
@@ -253,7 +257,6 @@ class EvaluationSummary:
     def mk(self) -> None | float:   # median pareto k for PSIS
         if self.pareto_k is not None:
             return self.pareto_k.median().item()
-
 
 
 def dictMean(td: dict[str, torch.Tensor]) -> float:

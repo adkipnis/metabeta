@@ -78,7 +78,7 @@ def getSummary(
 
 def summaryTable(s: EvaluationSummary) -> str:
     long_table = longTable(s.corr, s.nrmse, s.ece, s.lcr)
-    flat_table = flatTable(s.tpd, s.mnll, s.meff, s.mk)
+    flat_table = flatTable(s.tpd, s.mnll, s.meff, s.mk, s.rfx_corr)
     return long_table + '\n' + flat_table
 
 
@@ -119,6 +119,7 @@ def flatTable(
     mnll: float | None = None,
     meff: float | None = None,
     mk: float | None = None,
+    rfx_corr: dict[str, float] | None = None,
 ) -> str:
     rows = []
     results = ''
@@ -130,6 +131,12 @@ def flatTable(
         rows += [['Median IS Efficency', meff]]
     if mk is not None:
         rows += [['Median Pareto k', mk]]
+    if rfx_corr is not None:
+        rows += [['Median RFX Corr MAE', rfx_corr.get('mae_all', float('nan'))]]
+        if 'detection_rate' in rfx_corr:
+            rows += [['RFX Corr Detection Rate', rfx_corr['detection_rate']]]
+        if 'false_positive_rate' in rfx_corr:
+            rows += [['RFX Corr FP Rate', rfx_corr['false_positive_rate']]]
     if rows:
         results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
     return f'{results}\n'
