@@ -7,6 +7,7 @@ from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import getConstrainers
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
+from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES, FamilyEncoder
 
 constrainSigma, unconstrainSigma, logDetJacobian = getConstrainers(method='softplus')
 
@@ -32,12 +33,18 @@ class Approximator(nn.Module):
         d_rfx = self.d_rfx
         d_var = 1 + d_rfx   # number of variance params
 
+        # --- family encoder
+        n_families = (len(FFX_FAMILIES), len(SIGMA_FAMILIES), len(SIGMA_FAMILIES))
+        embed_dim = None # one-hot, alternatively len(n_families)
+        self.family_encoder = FamilyEncoder(n_families, embed_dim=embed_dim)
+
         # --- context
         # global context
         d_counts = 2   # n_groups, n_total
         d_prior = 2 * d_ffx + d_var + 1   # nu_ffx, tau_ffx, tau_sigma, tau_eps, eta_rfx
+        d_family = self.family_encoder.d_output
         d_stats = d_ffx + 2   # beta_ols, sigma_eps_ols, sigma_rfx0_ols
-        d_meta_g = d_counts + d_prior + d_stats
+        d_meta_g = d_counts + d_prior + d_family + d_stats
         d_context_g = s_cfg.d_output + d_meta_g   # global summary + metadata
         # local context
         d_meta_l = 2   # n_obs + eta_rfx (fed to global summarizer)
@@ -179,6 +186,11 @@ class Approximator(nn.Module):
             tau_rfx = data['tau_rfx'].clone()
             tau_eps = data['tau_eps'].clone().unsqueeze(-1)
             eta_rfx = data['eta_rfx'].clone().unsqueeze(-1)
+            family_enc = self.family_encoder([
+                data['family_ffx'],
+                data['family_sigma_rfx'],
+                data['family_sigma_eps'],
+            ])
             out += [
                 n_total,
                 n_groups,
@@ -190,6 +202,7 @@ class Approximator(nn.Module):
                 tau_rfx,
                 tau_eps,
                 eta_rfx,
+                family_enc,
             ]
         return torch.cat(out, dim=-1)
 
