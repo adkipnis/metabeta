@@ -3,8 +3,8 @@ import pytest
 from metabeta.simulation import hypersample, Prior
 
 
-REQUIRED_HYPER_KEYS = {"nu_ffx", "tau_ffx", "tau_rfx", "tau_eps", "correlated_rfx"}
-REQUIRED_PARAM_KEYS = {"ffx", "sigma_rfx", "sigma_eps", "rfx", "corr_rfx"}
+REQUIRED_HYPER_KEYS = {'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps', 'eta_rfx'}
+REQUIRED_PARAM_KEYS = {'ffx', 'sigma_rfx', 'sigma_eps', 'rfx', 'corr_rfx'}
 
 
 def test_hypersample_keys_and_shapes():
@@ -14,35 +14,39 @@ def test_hypersample_keys_and_shapes():
     h = hypersample(d=d, q=q, rng=rng)
 
     assert REQUIRED_HYPER_KEYS <= set(h.keys())
-    assert isinstance(h["tau_eps"], (float, np.floating))
+    assert 'correlated_rfx' not in h
+    assert isinstance(h['tau_eps'], (float, np.floating))
 
-    assert h["nu_ffx"].shape == (d,)
-    assert h["tau_ffx"].shape == (d,)
-    assert h["tau_rfx"].shape == (q,)
+    assert h['nu_ffx'].shape == (d,)
+    assert h['tau_ffx'].shape == (d,)
+    assert h['tau_rfx'].shape == (q,)
 
     # All taus should be strictly positive (per your sampling bounds)
-    assert np.all(h["tau_ffx"] > 0)
-    assert np.all(h["tau_rfx"] > 0)
-    assert h["tau_eps"] > 0
+    assert np.all(h['tau_ffx'] > 0)
+    assert np.all(h['tau_rfx'] > 0)
+    assert h['tau_eps'] > 0
 
 
-def test_hypersample_correlated_adds_eta():
+def test_hypersample_q1_always_uncorrelated():
     rng = np.random.default_rng(0)
-    h = hypersample(d=3, q=2, rng=rng, correlated_rfx=True)
-    assert "eta_rfx" in h
-    assert 1.0 <= h["eta_rfx"] <= 2.0
+    for _ in range(20):
+        h = hypersample(d=3, q=1, rng=rng)
+        assert float(h['eta_rfx']) == 0.0
 
 
-def test_hypersample_uncorrelated_eta_zero():
+def test_hypersample_q2_can_be_correlated():
+    rng = np.random.default_rng(42)
+    etas = [float(hypersample(d=3, q=2, rng=rng)['eta_rfx']) for _ in range(50)]
+    assert any(e > 0 for e in etas), 'q=2 should sometimes produce correlated rfx'
+    assert any(e == 0 for e in etas), 'q=2 should sometimes produce uncorrelated rfx'
+
+
+def test_hypersample_eta_range():
     rng = np.random.default_rng(0)
-    h = hypersample(d=3, q=2, rng=rng, correlated_rfx=False)
-    assert float(h["eta_rfx"]) == 0.0
-
-
-def test_hypersample_correlated_q1_eta_zero():
-    rng = np.random.default_rng(0)
-    h = hypersample(d=3, q=1, rng=rng, correlated_rfx=True)
-    assert float(h["eta_rfx"]) == 0.0
+    for _ in range(50):
+        h = hypersample(d=4, q=3, rng=rng)
+        eta = float(h['eta_rfx'])
+        assert eta == 0.0 or 1.0 <= eta <= 2.0
 
 
 def test_prior_post_init_sets_dimensions():
@@ -53,9 +57,10 @@ def test_prior_post_init_sets_dimensions():
     prior = Prior(rng, h)
     assert prior.d == d
     assert prior.q == q
+    assert prior.correlated_rfx == (float(h['eta_rfx']) > 0)
 
 
-@pytest.mark.parametrize("d,q,m", [(1, 1, 1), (3, 1, 10), (7, 5, 2)])
+@pytest.mark.parametrize('d,q,m', [(1, 1, 1), (3, 1, 10), (7, 5, 2)])
 def test_prior_sample_shapes_and_validity(d, q, m):
     rng = np.random.default_rng(999)
     h = hypersample(d=d, q=q, rng=rng)
@@ -66,49 +71,49 @@ def test_prior_sample_shapes_and_validity(d, q, m):
     assert set(params.keys()) == REQUIRED_PARAM_KEYS
 
     # Shapes
-    assert params["ffx"].shape == (d,)
-    assert params["sigma_rfx"].shape == (q,)
-    assert np.ndim(params["sigma_eps"]) == 0  # scalar
-    assert params["rfx"].shape == (m, q)
+    assert params['ffx'].shape == (d,)
+    assert params['sigma_rfx'].shape == (q,)
+    assert np.ndim(params['sigma_eps']) == 0  # scalar
+    assert params['rfx'].shape == (m, q)
 
     # Positivity of scales
-    assert np.all(params["sigma_rfx"] >= 0)
-    assert float(params["sigma_eps"]) >= 0
+    assert np.all(params['sigma_rfx'] >= 0)
+    assert float(params['sigma_eps']) >= 0
 
     # Finite values
-    assert np.all(np.isfinite(params["ffx"]))
-    assert np.all(np.isfinite(params["sigma_rfx"]))
-    assert np.isfinite(float(params["sigma_eps"]))
-    assert np.all(np.isfinite(params["rfx"]))
+    assert np.all(np.isfinite(params['ffx']))
+    assert np.all(np.isfinite(params['sigma_rfx']))
+    assert np.isfinite(float(params['sigma_eps']))
+    assert np.all(np.isfinite(params['rfx']))
 
 
-def test_correlated_rfx_produces_correlation_matrix():
+def test_corr_rfx_valid_when_correlated():
+    # force correlated by retrying until eta > 0
     rng = np.random.default_rng(42)
-    d, q, m = 4, 3, 10
-    h = hypersample(d=d, q=q, rng=rng, correlated_rfx=True)
+    q = 3
+    for _ in range(100):
+        h = hypersample(d=4, q=q, rng=rng)
+        if float(h['eta_rfx']) > 0:
+            break
     prior = Prior(rng, h)
-    params = prior.sample(m=m)
+    params = prior.sample(m=10)
 
-    corr = params["corr_rfx"]
-    assert corr is not None
+    corr = params['corr_rfx']
     assert corr.shape == (q, q)
-    # diagonal should be 1
     assert np.allclose(np.diag(corr), 1.0)
-    # symmetric
     assert np.allclose(corr, corr.T)
-    # eigenvalues positive (positive semi-definite)
     assert np.all(np.linalg.eigvalsh(corr) >= -1e-10)
 
 
-def test_uncorrelated_rfx_identity_correlation():
+def test_corr_rfx_identity_when_uncorrelated():
+    # force uncorrelated: q=1 always gives eta=0
     rng = np.random.default_rng(42)
-    d, q, m = 4, 3, 10
-    h = hypersample(d=d, q=q, rng=rng, correlated_rfx=False)
+    q = 1
+    h = hypersample(d=4, q=q, rng=rng)
+    assert float(h['eta_rfx']) == 0.0
     prior = Prior(rng, h)
-    params = prior.sample(m=m)
-
-    # uncorrelated uses identity correlation matrix
-    assert np.allclose(params["corr_rfx"], np.eye(q))
+    params = prior.sample(m=10)
+    assert np.allclose(params['corr_rfx'], np.eye(q))
 
 
 def test_reproducibility_same_seed_same_outputs():
@@ -126,16 +131,17 @@ def test_reproducibility_same_seed_same_outputs():
     p2 = prior2.sample(m=m)
 
     # Hyperparameters should match exactly given same RNG seed
-    assert np.allclose(h1["nu_ffx"], h2["nu_ffx"])
-    assert np.allclose(h1["tau_ffx"], h2["tau_ffx"])
-    assert np.allclose(h1["tau_rfx"], h2["tau_rfx"])
-    assert h1["tau_eps"] == h2["tau_eps"]
+    assert np.allclose(h1['nu_ffx'], h2['nu_ffx'])
+    assert np.allclose(h1['tau_ffx'], h2['tau_ffx'])
+    assert np.allclose(h1['tau_rfx'], h2['tau_rfx'])
+    assert h1['tau_eps'] == h2['tau_eps']
+    assert float(h1['eta_rfx']) == float(h2['eta_rfx'])
 
     # Sampled params should match exactly given same RNG seed and same hyperparams draw
-    assert np.allclose(p1["ffx"], p2["ffx"])
-    assert np.allclose(p1["sigma_rfx"], p2["sigma_rfx"])
-    assert float(p1["sigma_eps"]) == float(p2["sigma_eps"])
-    assert np.allclose(p1["rfx"], p2["rfx"])
+    assert np.allclose(p1['ffx'], p2['ffx'])
+    assert np.allclose(p1['sigma_rfx'], p2['sigma_rfx'])
+    assert float(p1['sigma_eps']) == float(p2['sigma_eps'])
+    assert np.allclose(p1['rfx'], p2['rfx'])
 
 
 def test_different_seed_usually_changes_outputs():
@@ -152,10 +158,10 @@ def test_different_seed_usually_changes_outputs():
 
     # At least one array should differ
     changed = (
-        not np.allclose(p1["ffx"], p2["ffx"])
-        or not np.allclose(p1["sigma_rfx"], p2["sigma_rfx"])
-        or not np.allclose(p1["rfx"], p2["rfx"])
-        or float(p1["sigma_eps"]) != float(p2["sigma_eps"])
+        not np.allclose(p1['ffx'], p2['ffx'])
+        or not np.allclose(p1['sigma_rfx'], p2['sigma_rfx'])
+        or not np.allclose(p1['rfx'], p2['rfx'])
+        or float(p1['sigma_eps']) != float(p2['sigma_eps'])
     )
     assert changed
 
@@ -163,7 +169,7 @@ def test_different_seed_usually_changes_outputs():
 def test_missing_required_hyperparams_raises_keyerror():
     rng = np.random.default_rng(0)
     h = hypersample(d=2, q=1, rng=rng)
-    h.pop("tau_rfx")  # remove required key
+    h.pop('tau_rfx')  # remove required key
 
     with pytest.raises(KeyError):
         _ = Prior(rng, h)
