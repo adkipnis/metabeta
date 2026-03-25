@@ -12,7 +12,11 @@ from torch import distributions as D
 FFX_FAMILIES = ('normal', 'student')
 SIGMA_FAMILIES = ('halfnormal', 'halfstudent', 'exponential')
 
-STUDENT_DF = 4
+FFX_FAMILY_PROBS = (0.80, 0.20)
+SIGMA_RFX_FAMILY_PROBS = (0.60, 0.30, 0.10)
+SIGMA_EPS_FAMILY_PROBS = (0.50, 0.40, 0.10)
+
+STUDENT_DF = 5
 
 
 # ---------------------------------------------------------------------------
