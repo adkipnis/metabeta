@@ -54,21 +54,21 @@ class Simulator:
     def m(self) -> int:
         return len(self.ns)
 
-    def _covsum(
-        self,
-        parameters: dict[str, np.ndarray],
-        observations: dict[str, np.ndarray],
-    ) -> float:
-        """get sum of covariance matrix (minus the first element)"""
-        if self.m < 2 or self.q < 2:
-            return 0.0
-        rfx = parameters['rfx']
-        q = rfx.shape[1]
-        Z = observations['X'][:, :q]
-        weighted_rfx = Z.mean(0, keepdims=True) * rfx
-        cov = np.cov(weighted_rfx, rowvar=False)
-        cov_sum = cov.sum() - cov[0, 0]
-        return cov_sum
+    # def _covsum(
+    #     self,
+    #     parameters: dict[str, np.ndarray],
+    #     observations: dict[str, np.ndarray],
+    # ) -> float:
+    #     """get sum of covariance matrix (minus the first element)"""
+    #     if self.m < 2 or self.q < 2:
+    #         return 0.0
+    #     rfx = parameters['rfx']
+    #     q = rfx.shape[1]
+    #     Z = observations['X'][:, :q]
+    #     weighted_rfx = Z.mean(0, keepdims=True) * rfx
+    #     cov = np.cov(weighted_rfx, rowvar=False)
+    #     cov_sum = cov.sum() - cov[0, 0]
+    #     return cov_sum
 
     def sample(self) -> dict[str, np.ndarray]:
         # sample and standardize observations
@@ -95,7 +95,7 @@ class Simulator:
             for k, v in params.items()
         }
 
-        # normalize hyperparameters (scale families only; skip booleans, eta, etc.)
+        # normalize hyperparameters (scale params only; skip family indices, eta, etc.)
         hyperparams = {
             k: v / sd if k in SCALE_HYPERPARAMS else v
             for k, v in self.prior.hyperparams.items()
@@ -125,7 +125,7 @@ class Simulator:
             # miscellanious
             'sd_y': sd,
             'r_squared': 1 - params['sigma_eps'] ** 2,  # population R^2
-            'cov_sum': self._covsum(params, obs),  # helper for standardization
+            # 'cov_sum': self._covsum(params, obs),  # helper for standardization
         }
 
         # package scalars as numpy arrays
