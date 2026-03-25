@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 import numpy as np
-from scipy.stats import norm, t, multivariate_normal
+from scipy.stats import multivariate_normal
 
 from metabeta.utils.sampling import lkjCorrelation, spikeAndSlab, skewedBeta
+from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES, sampleFfxNp, sampleSigmaNp
 
 MIN_STD = 1e-3
 
@@ -14,6 +15,7 @@ def hypersample(
 ) -> dict[str, np.ndarray]:
     """sample hyperparameters to instantiate prior.
     eta_rfx > 0 indicates correlated rfx (LKJ prior), eta_rfx = 0 means uncorrelated.
+    family_* are integer indices into FFX_FAMILIES / SIGMA_FAMILIES.
     """
     out = {}
     out['nu_ffx'] = spikeAndSlab(rng, size=d)
@@ -30,7 +32,11 @@ def hypersample(
         correlated = rng.random() < 0.5
     out['eta_rfx'] = rng.uniform(1.0, 2.0) if correlated else np.array(0.0)
 
-    # TODO: sample prior families
+    # prior families (uniform over available families)
+    out['family_ffx'] = np.array(rng.integers(len(FFX_FAMILIES)))
+    out['family_sigma_rfx'] = np.array(rng.integers(len(SIGMA_FAMILIES)))
+    out['family_sigma_eps'] = np.array(rng.integers(len(SIGMA_FAMILIES)))
+
     # TODO: sample link function (normal, t, bernoulli, poisson)
     return out
 
@@ -48,26 +54,22 @@ class Prior:
         self.correlated_rfx = float(self.hyperparams.get('eta_rfx', 0)) > 0
 
     def _sampleFfx(self) -> np.ndarray:
-        # TODO: choice between normal and t
         nu = self.hyperparams['nu_ffx']
         tau = self.hyperparams['tau_ffx']
-        dist = norm(nu, tau)
-        ffx = dist.rvs(size=nu.shape, random_state=self.rng)
-        return ffx
+        family = int(self.hyperparams['family_ffx'])
+        return sampleFfxNp(family, nu, tau, self.rng, size=nu.shape)
 
     def _sampleSigmaRfx(self) -> np.ndarray:
-        # TODO: choice between halfnormal, half-t(4), exponential(lambda)
         tau = self.hyperparams['tau_rfx']
-        dist = norm(loc=0, scale=tau)
-        sigma_rfx = dist.rvs(size=tau.shape, random_state=self.rng)
-        return np.maximum(np.abs(sigma_rfx), MIN_STD)
+        family = int(self.hyperparams['family_sigma_rfx'])
+        sigma_rfx = sampleSigmaNp(family, tau, self.rng, size=tau.shape)
+        return np.maximum(sigma_rfx, MIN_STD)
 
     def _sampleSigmaEps(self) -> np.ndarray:
-        # TODO: choice between halfnormal, half-t(4), exponential(1)
         tau = self.hyperparams['tau_eps']
-        dist = t(df=4, loc=0, scale=tau)
-        sigma_eps = dist.rvs(random_state=self.rng)
-        return np.maximum(np.abs(sigma_eps), MIN_STD)
+        family = int(self.hyperparams['family_sigma_eps'])
+        sigma_eps = sampleSigmaNp(family, np.atleast_1d(tau), self.rng, size=(1,))
+        return np.maximum(sigma_eps[0], MIN_STD)
 
     def _sampleCorrMat(self) -> np.ndarray:
         eta = float(self.hyperparams['eta_rfx'])
