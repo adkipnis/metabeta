@@ -18,12 +18,17 @@ from metabeta.utils.families import (
 )
 
 
+SIGMA_HALFNORMAL = SIGMA_FAMILIES.index("halfnormal")
+SIGMA_HALFSTUDENT = SIGMA_FAMILIES.index("halfstudent")
+SIGMA_EXPONENTIAL = SIGMA_FAMILIES.index("exponential")
+
+
 # ---------------------------------------------------------------------------
 # NumPy sampling
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize('family', range(len(FFX_FAMILIES)))
+@pytest.mark.parametrize("family", range(len(FFX_FAMILIES)))
 def test_sampleFfxNp_shape_and_finite(family):
     rng = np.random.default_rng(0)
     loc = np.array([0.0, 1.0, -0.5])
@@ -33,7 +38,7 @@ def test_sampleFfxNp_shape_and_finite(family):
     assert np.all(np.isfinite(x))
 
 
-@pytest.mark.parametrize('family', range(len(SIGMA_FAMILIES)))
+@pytest.mark.parametrize("family", range(len(SIGMA_FAMILIES)))
 def test_sampleSigmaNp_positive_and_finite(family):
     rng = np.random.default_rng(0)
     scale = np.array([1.0, 2.0])
@@ -50,6 +55,7 @@ def test_sampleFfxNp_normal_matches_scipy():
     scale = np.array([0.5, 1.0])
     x = sampleFfxNp(0, loc, scale, rng1, size=loc.shape)
     from scipy.stats import norm
+
     expected = norm(loc, scale).rvs(size=loc.shape, random_state=rng2)
     np.testing.assert_allclose(x, expected)
 
@@ -58,9 +64,21 @@ def test_sampleSigmaNp_halfnormal_matches_scipy():
     rng1 = np.random.default_rng(42)
     rng2 = np.random.default_rng(42)
     scale = np.array([1.0, 2.0])
-    x = sampleSigmaNp(0, scale, rng1, size=scale.shape)
+    x = sampleSigmaNp(SIGMA_HALFNORMAL, scale, rng1, size=scale.shape)
     from scipy.stats import norm
+
     expected = np.abs(norm(0, scale).rvs(size=scale.shape, random_state=rng2))
+    np.testing.assert_allclose(x, expected)
+
+
+def test_sampleSigmaNp_exponential_matches_scipy():
+    rng1 = np.random.default_rng(42)
+    rng2 = np.random.default_rng(42)
+    scale = np.array([1.0, 2.0])
+    x = sampleSigmaNp(SIGMA_EXPONENTIAL, scale, rng1, size=scale.shape)
+    from scipy.stats import expon
+
+    expected = expon(scale=scale).rvs(size=scale.shape, random_state=rng2)
     np.testing.assert_allclose(x, expected)
 
 
@@ -127,7 +145,7 @@ def test_logProbSigma_halfnormal_matches_torch():
     b, s, q = 4, 10, 2
     x = torch.rand(b, s, q) + 0.01
     scale = torch.rand(b, 1, q) + 0.1
-    family = torch.zeros(b, dtype=torch.long)
+    family = torch.full((b,), SIGMA_HALFNORMAL, dtype=torch.long)
     lp = logProbSigma(x, scale, family)
     expected = D.HalfNormal(scale=scale).log_prob(x).sum(-1)
     assert lp.shape == (b, s)
@@ -136,13 +154,25 @@ def test_logProbSigma_halfnormal_matches_torch():
 
 def test_logProbSigma_halfstudent_matches_torch():
     import math
+
     b, s, q = 4, 10, 2
     x = torch.rand(b, s, q) + 0.01
     scale = torch.rand(b, 1, q) + 0.1
-    family = torch.ones(b, dtype=torch.long)
+    family = torch.full((b,), SIGMA_HALFSTUDENT, dtype=torch.long)
     lp = logProbSigma(x, scale, family)
-    expected = (D.StudentT(df=STUDENT_DF, loc=0, scale=scale).log_prob(x) + math.log(2.0))
+    expected = D.StudentT(df=STUDENT_DF, loc=0, scale=scale).log_prob(x) + math.log(2.0)
     expected = expected.sum(-1)
+    assert lp.shape == (b, s)
+    torch.testing.assert_close(lp, expected)
+
+
+def test_logProbSigma_exponential_matches_torch():
+    b, s, q = 4, 10, 2
+    x = torch.rand(b, s, q) + 0.01
+    scale = torch.rand(b, 1, q) + 0.1
+    family = torch.full((b,), SIGMA_EXPONENTIAL, dtype=torch.long)
+    lp = logProbSigma(x, scale, family)
+    expected = D.Exponential(rate=1.0 / scale).log_prob(x).sum(-1)
     assert lp.shape == (b, s)
     torch.testing.assert_close(lp, expected)
 
@@ -152,7 +182,7 @@ def test_logProbSigma_scalar():
     b, s = 4, 10
     x = torch.rand(b, s) + 0.01
     scale = torch.rand(b, 1) + 0.1
-    family = torch.zeros(b, dtype=torch.long)
+    family = torch.full((b,), SIGMA_HALFNORMAL, dtype=torch.long)
     lp = logProbSigma(x, scale, family)
     expected = D.HalfNormal(scale=scale).log_prob(x)
     assert lp.shape == (b, s)
@@ -163,15 +193,19 @@ def test_logProbSigma_mixed_batch():
     b, s, q = 4, 5, 2
     x = torch.rand(b, s, q) + 0.01
     scale = torch.rand(b, 1, q) + 0.1
-    family = torch.tensor([0, 1, 1, 0])
+    family = torch.tensor(
+        [SIGMA_HALFNORMAL, SIGMA_HALFSTUDENT, SIGMA_HALFSTUDENT, SIGMA_HALFNORMAL]
+    )
     lp = logProbSigma(x, scale, family)
 
     lp0 = D.HalfNormal(scale=scale[0]).log_prob(x[0]).sum(-1)
     torch.testing.assert_close(lp[0], lp0)
 
     import math
-    lp1 = (D.StudentT(df=STUDENT_DF, loc=0, scale=scale[1]).log_prob(x[1])
-            + math.log(2.0)).sum(-1)
+
+    lp1 = (
+        D.StudentT(df=STUDENT_DF, loc=0, scale=scale[1]).log_prob(x[1]) + math.log(2.0)
+    ).sum(-1)
     torch.testing.assert_close(lp[1], lp1)
 
 
@@ -180,7 +214,7 @@ def test_logProbSigma_mixed_batch():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize('family_idx', range(len(FFX_FAMILIES)))
+@pytest.mark.parametrize("family_idx", range(len(FFX_FAMILIES)))
 def test_sampleFfxTorch_shape(family_idx):
     b, d, n_samples = 4, 3, 50
     loc = torch.randn(b, d)
@@ -191,7 +225,7 @@ def test_sampleFfxTorch_shape(family_idx):
     assert torch.all(torch.isfinite(x))
 
 
-@pytest.mark.parametrize('family_idx', range(len(SIGMA_FAMILIES)))
+@pytest.mark.parametrize("family_idx", range(len(SIGMA_FAMILIES)))
 def test_sampleSigmaTorch_shape_and_positive(family_idx):
     b, q, n_samples = 4, 2, 50
     scale = torch.rand(b, q) + 0.1
@@ -205,7 +239,7 @@ def test_sampleSigmaTorch_scalar():
     """sigma_eps case: scale is (b,)."""
     b, n_samples = 4, 50
     scale = torch.rand(b) + 0.1
-    family = torch.zeros(b, dtype=torch.long)
+    family = torch.full((b,), SIGMA_HALFNORMAL, dtype=torch.long)
     x = sampleSigmaTorch(scale, family, (n_samples,))
     assert x.shape == (n_samples, b)
     assert torch.all(x >= 0)
@@ -272,7 +306,16 @@ def test_roundtrip_sigma_halfnormal():
 def test_roundtrip_sigma_halfstudent():
     b, q = 8, 2
     scale = torch.rand(b, q) + 0.1
-    family = torch.ones(b, dtype=torch.long)
+    family = torch.full((b,), SIGMA_HALFSTUDENT, dtype=torch.long)
+    x = sampleSigmaTorch(scale, family, (20,)).permute(1, 0, 2)
+    lp = logProbSigma(x, scale.unsqueeze(1), family)
+    assert torch.all(torch.isfinite(lp))
+
+
+def test_roundtrip_sigma_exponential():
+    b, q = 8, 2
+    scale = torch.rand(b, q) + 0.1
+    family = torch.full((b,), SIGMA_EXPONENTIAL, dtype=torch.long)
     x = sampleSigmaTorch(scale, family, (20,)).permute(1, 0, 2)
     lp = logProbSigma(x, scale.unsqueeze(1), family)
     assert torch.all(torch.isfinite(lp))
