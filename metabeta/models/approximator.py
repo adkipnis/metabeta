@@ -173,7 +173,7 @@ class Approximator(nn.Module):
         else:
             n_total = data['n'].unsqueeze(-1).float().sqrt() / 10
             n_groups = data['m'].unsqueeze(-1).float().sqrt() / 10
-            beta_ols, sigma_eps_ols, sigma_rfx_ols = self._dataStatistics(data)
+            stats = self._dataStatistics(data)
             nu_ffx = data['nu_ffx'].clone()
             tau_ffx = data['tau_ffx'].clone()
             tau_rfx = data['tau_rfx'].clone()
@@ -182,9 +182,9 @@ class Approximator(nn.Module):
             out += [
                 n_total,
                 n_groups,
-                beta_ols,
-                sigma_eps_ols,
-                sigma_rfx_ols,
+                stats['beta_ols'],
+                stats['sigma_eps_ols'],
+                stats['sigma_rfx_ols'],
                 nu_ffx,
                 tau_ffx,
                 tau_rfx,
