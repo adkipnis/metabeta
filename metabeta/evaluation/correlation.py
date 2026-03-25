@@ -27,6 +27,21 @@ def _corrSamplingDistribution(
     return _batchCorrcoef(z)
 
 
+def _empiricalBounds(
+    m: int,
+    rhos: np.ndarray,
+    n_sim: int = 2000,
+    seed: int = 0,
+    alpha: float = 0.05,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Empirical lower and upper quantiles for r-hat over a rho grid."""
+    lowers = np.zeros_like(rhos, dtype=float)
+    uppers = np.zeros_like(rhos, dtype=float)
+    for i, rho in enumerate(rhos):
+        rs = _corrSamplingDistribution(m=m, rho=float(rho), n_sim=n_sim, seed=seed + i)
+        lowers[i] = np.quantile(rs, alpha / 2)
+        uppers[i] = np.quantile(rs, 1 - alpha / 2)
+    return lowers, uppers
 
 
 def posteriorCorrelation(
