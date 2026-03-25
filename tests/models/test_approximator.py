@@ -34,14 +34,15 @@ def model() -> Approximator:
 
 
 def test_forward_runs_and_is_finite(model: Approximator, batch: dict[str, torch.Tensor]):
-    loss = model.forward(batch)
-    loss = loss['total']
-    assert torch.isfinite(loss).all(), 'loss contains non-finite values'
+    log_probs = model.forward(batch)
+    for key in ('global', 'local'):
+        assert key in log_probs, f'missing key {key}'
+        assert torch.isfinite(log_probs[key]).all(), f'{key} contains non-finite values'
 
 
 def test_backward_produces_gradients(model: Approximator, batch: dict[str, torch.Tensor]):
-    loss = model.forward(batch)
-    loss = loss['total'].mean()
+    log_probs = model.forward(batch)
+    loss = (log_probs['global'].mean() + log_probs['local'].mean())
     loss.backward()
 
     grads = [p.grad for p in model.parameters() if p.requires_grad]

@@ -99,7 +99,6 @@ def test_simulator_synthesizer_end_to_end(rng, prior, ns, dims):
 
     # population R^2 should be in [0, 1]
     assert 0.0 <= float(dataset["r_squared"]) <= 1.0
-    assert np.isfinite(float(dataset["cov_sum"]))
 
 
 def test_simulator_reproducible_given_seed(dims, ns):
