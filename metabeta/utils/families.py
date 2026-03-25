@@ -136,3 +136,65 @@ def logProbSigma(
 
 
 # ---------------------------------------------------------------------------
+# Torch sampling (prior predictive) — select approach
+# ---------------------------------------------------------------------------
+
+def _sampleNormalTorch(
+    loc: torch.Tensor, scale: torch.Tensor, shape: tuple[int, ...]
+) -> torch.Tensor:
+    return D.Normal(loc, scale).sample(shape)
+
+
+def _sampleStudentTorch(
+    loc: torch.Tensor, scale: torch.Tensor, shape: tuple[int, ...]
+) -> torch.Tensor:
+    return D.StudentT(df=STUDENT_DF, loc=loc, scale=scale).sample(shape)
+
+
+def _sampleHalfNormalTorch(scale: torch.Tensor, shape: tuple[int, ...]) -> torch.Tensor:
+    return D.HalfNormal(scale=scale).sample(shape) # type: ignore
+
+
+def _sampleHalfStudentTorch(scale: torch.Tensor, shape: tuple[int, ...]) -> torch.Tensor:
+    return D.StudentT(df=STUDENT_DF, scale=scale).sample(shape).abs()
+
+
+_FFX_SAMPLE_TORCH = (_sampleNormalTorch, _sampleStudentTorch)
+_SIGMA_SAMPLE_TORCH = (_sampleHalfNormalTorch, _sampleHalfStudentTorch)
+
+
+def sampleFfxTorch(
+    loc: torch.Tensor,      # (b, d)
+    scale: torch.Tensor,    # (b, d)
+    family: torch.Tensor,   # (b,)
+    shape: tuple[int, ...],
+) -> torch.Tensor:
+    """Sample from ffx prior families. Returns (*shape, b, d)."""
+    out = loc.new_zeros(*shape, *loc.shape)
+    for i, fn in enumerate(_FFX_SAMPLE_TORCH):
+        sel = family == i
+        if not sel.any():
+            continue
+        out[..., sel, :] = fn(loc[sel], scale[sel], shape)
+    return out
+
+
+def sampleSigmaTorch(
+    scale: torch.Tensor,    # (b, q) or (b,)
+    family: torch.Tensor,   # (b,)
+    shape: tuple[int, ...],
+) -> torch.Tensor:
+    """Sample from sigma prior families. Returns (*shape, b, q) or (*shape, b)."""
+    out = scale.new_zeros(*shape, *scale.shape)
+    for i, fn in enumerate(_SIGMA_SAMPLE_TORCH):
+        sel = family == i
+        if not sel.any():
+            continue
+        if scale.dim() > 1:
+            out[..., sel, :] = fn(scale[sel], shape)
+        else:
+            out[..., sel] = fn(scale[sel], shape)
+    return out
+
+
+# ---------------------------------------------------------------------------
