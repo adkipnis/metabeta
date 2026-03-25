@@ -4,12 +4,11 @@ import torch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import Proposal, joinProposals
 from metabeta.utils.regularization import dampen
-from metabeta.utils.probabilities import (
-    logPriorFfx,
-    logPriorSigmaRfx,
-    logPriorSigmaEps,
-    logPriorRfx,
-    logLikelihoodCond,
+from metabeta.utils.families import (
+    logProbFfx,
+    logProbSigma,
+    logProbRfx,
+    logLikelihood,
 )
 from metabeta.utils.preprocessing import rescaleData
 
@@ -39,6 +38,9 @@ class ImportanceSampler:
         self.tau_ffx = data['tau_ffx'].unsqueeze(-2) + self.eps   # (b, 1, d)
         self.tau_rfx = data['tau_rfx'].unsqueeze(-2) + self.eps   # (b, 1, q)
         self.tau_eps = data['tau_eps'].unsqueeze(-1) + self.eps   # (b, 1)
+        self.family_ffx = data['family_ffx']   # (b,)
+        self.family_sigma_rfx = data['family_sigma_rfx']   # (b,)
+        self.family_sigma_eps = data['family_sigma_eps']   # (b,)
 
         # observations
         self.X = data['X']   # (b, m, n, d)
@@ -57,18 +59,20 @@ class ImportanceSampler:
         ffx, sigma_rfx, sigma_eps, rfx = proposal.parameters
 
         # log priors
-        lp_ffx = logPriorFfx(ffx, self.nu_ffx, self.tau_ffx, self.mask_d)
-        lp_sigma_eps = logPriorSigmaEps(sigma_eps, self.tau_eps)
+        lp_ffx = logProbFfx(ffx, self.nu_ffx, self.tau_ffx, self.family_ffx, self.mask_d)
+        lp_sigma_eps = logProbSigma(sigma_eps, self.tau_eps, self.family_sigma_eps)
         lp = lp_ffx + lp_sigma_eps
 
         # regularize Sigma(RFX)
         if self.full:
-            lp_sigma_rfx = logPriorSigmaRfx(sigma_rfx, self.tau_rfx, self.mask_q)
-            lp_rfx = logPriorRfx(rfx, sigma_rfx, self.mask_mq)
+            lp_sigma_rfx = logProbSigma(
+                sigma_rfx, self.tau_rfx, self.family_sigma_rfx, self.mask_q
+            )
+            lp_rfx = logProbRfx(rfx, sigma_rfx, self.mask_mq)
             lp = lp + lp_sigma_rfx + lp_rfx
 
         # conditional log likelihood
-        ll = logLikelihoodCond(ffx, sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n)
+        ll = logLikelihood(ffx, sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n)
         return ll, lp
 
     def __call__(self, proposal: Proposal) -> Proposal:
