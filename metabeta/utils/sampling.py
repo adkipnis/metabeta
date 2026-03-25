@@ -83,6 +83,19 @@ def skewedBeta(
     b = 1 + (concentration - 1) * (1 - t)
     return low + (high - low) * rng.beta(a, b, size=size)
 
+
+def spikeAndSlab(
+    rng: np.random.Generator,
+    size: int | tuple[int, ...],
+    p_zero: float = 0.90,
+    scale: float = 1.0,
+) -> np.ndarray:
+    """Spike-and-slab: p_zero mass on 0, rest from Laplace(0, scale)"""
+    spike = rng.random(size=size) < p_zero
+    slab = rng.laplace(loc=0, scale=scale, size=size)
+    return np.where(spike, 0.0, slab)
+
+
 def wishartCorrelation(
     rng: np.random.Generator,
     d: int,
