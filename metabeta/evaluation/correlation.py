@@ -91,8 +91,6 @@ def evaluateCorrelation(
 
     # posterior correlation
     corr_samples = posteriorCorrelation(rfx, mask_m)  # (b, s, q, q)
-    # isnull = corr_samples[..., 0, -1, -1] == 0
-    # isnullforq1 = isnull == (data['mask_q'].sum(-1) == 1)
     corr_mean = corr_samples.mean(dim=1)  # (b, q, q)
 
     # upper-triangular indices (unique pairs only)
