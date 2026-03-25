@@ -18,8 +18,7 @@ from metabeta.evaluation.predictive import (
     getPosteriorPredictive,
     posteriorPredictiveNLL,
 )
-# from metabeta.plot.predictive import plotPPC, plotPPD
-# from metabeta.plot.parameters import plotParameters
+from metabeta.evaluation.correlation import evaluateCorrelation, summarizeCorrelation
 
 
 EST_TYPE = 'mean'
@@ -32,12 +31,12 @@ def getSummary(
 ) -> EvaluationSummary:
     out = {}
 
-    # point-based stats
+    # paramter recovery
     out['estimates'] = est = getPointEstimates(proposal, EST_TYPE)
     out['nrmse'] = getRMSE(est, data, normalize=True)
     out['corr'] = getCorrelation(est, data)
 
-    # inteval-based stats
+    # coverage and calibration
     ci_dicts = getCredibleIntervals(proposal)
     if calibrator is not None:
         ci_dicts = calibrator.apply(ci_dicts)
@@ -45,6 +44,11 @@ def getSummary(
     out['coverage'] = cvrg_dicts = getCoverages(ci_dicts, data)
     out['coverage_error'] = getCoverageErrors(cvrg_dicts, log_ratio=False)
     out['log_coverage_ratio'] = getCoverageErrors(cvrg_dicts, log_ratio=True)
+
+    # rfx correlation
+    if proposal.rfx.shape[-1] >= 2:
+        corr_results = evaluateCorrelation(proposal.rfx, data)
+        out['rfx_corr'] = summarizeCorrelation(corr_results, data['mask_q'].sum(-1))
 
     # prior predictive fit
     prior_samples = getPriorSamples(data, proposal.n_samples)
