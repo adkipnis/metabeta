@@ -225,6 +225,44 @@ def sampleSigmaTorch(
 
 
 # ---------------------------------------------------------------------------
+# Fixed-family log-probs (rfx prior and likelihood)
+# ---------------------------------------------------------------------------
+
+
+def logProbRfx(
+    rfx: torch.Tensor,  # (b, m, s, q)
+    sigma_rfx: torch.Tensor,  # (b, s, q)
+    mask: torch.Tensor | None = None,  # (b, m, 1, q)
+) -> torch.Tensor:
+    """Log-prior for rfx (always Normal)."""
+    scale = sigma_rfx.unsqueeze(1) + 1e-12
+    lp = D.Normal(loc=0, scale=scale).log_prob(rfx)
+    if mask is not None:
+        lp = lp * mask
+    return lp.sum(dim=(1, -1))  # (b, s)
+
+
+def logLikelihood(
+    ffx: torch.Tensor,  # (b, s, d)
+    sigma_eps: torch.Tensor,  # (b, s)
+    rfx: torch.Tensor,  # (b, m, s, q)
+    y: torch.Tensor,  # (b, m, n, 1)
+    X: torch.Tensor,  # (b, m, n, d)
+    Z: torch.Tensor,  # (b, m, n, q)
+    mask: torch.Tensor | None = None,  # (b, m, n, 1)
+) -> torch.Tensor:
+    """Conditional log-likelihood (always Normal)."""
+    mu_g = torch.einsum('bmnd,bsd->bmns', X, ffx)
+    mu_l = torch.einsum('bmnq,bmsq->bmns', Z, rfx)
+    loc = mu_g + mu_l
+    scale = sigma_eps.unsqueeze(1).unsqueeze(1) + 1e-12
+    ll = D.Normal(loc=loc, scale=scale).log_prob(y)
+    if mask is not None:
+        ll = ll * mask
+    return ll.sum(dim=(1, 2))  # (b, s)
+
+
+# ---------------------------------------------------------------------------
 # Encoding for neural network context
 # ---------------------------------------------------------------------------
 
