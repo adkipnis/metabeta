@@ -4,6 +4,7 @@ import torch
 from torch import distributions as D
 
 from metabeta.utils.evaluation import Proposal
+from metabeta.utils.families import sampleFfxTorch, sampleSigmaTorch
 
 
 def getPriorSamples(data: dict[str, torch.Tensor], n_samples: int) -> Proposal:
@@ -13,17 +14,20 @@ def getPriorSamples(data: dict[str, torch.Tensor], n_samples: int) -> Proposal:
     # fixed effects
     mask = data['mask_d'].unsqueeze(-2)
     loc, scale = data['nu_ffx'], data['tau_ffx'] + 1e-12
-    ffx = D.Normal(loc, scale).sample(shape).movedim(0, 1) * mask
+    family_ffx = data['family_ffx']
+    ffx = sampleFfxTorch(loc, scale, family_ffx, shape).movedim(0, 1) * mask
 
     # sigma rfx
     mask = data['mask_q'].unsqueeze(-2)
     scale = data['tau_rfx'] + 1e-12
-    sigma_rfx = D.HalfNormal(scale).sample(shape).movedim(0, 1) * mask   # type: ignore
+    family_sigma_rfx = data['family_sigma_rfx']
+    sigma_rfx = sampleSigmaTorch(scale, family_sigma_rfx, shape).movedim(0, 1) * mask
 
     # sigma eps
-    scale = data['tau_eps']
-    sigma_eps = D.StudentT(df=4, scale=scale).sample(shape).movedim(0, 1)
-    sigma_eps = sigma_eps.abs().unsqueeze(-1)
+    scale = data['tau_eps'] + 1e-12
+    family_sigma_eps = data['family_sigma_eps']
+    sigma_eps = sampleSigmaTorch(scale, family_sigma_eps, shape).movedim(0, 1)
+    sigma_eps = sigma_eps.unsqueeze(-1)
 
     # rfx
     mask = data['mask_mq'].unsqueeze(-2)
