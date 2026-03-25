@@ -197,7 +197,6 @@ def collateGrouped(
     # correlation matrix (q, q) → (B, q, q); eta_rfx=0 means identity
     out['corr_rfx'] = quickCollate(batch, 'corr_rfx', dtype)
     out['eta_rfx'] = quickCollate(batch, 'eta_rfx', dtype)
-    out['correlated_rfx'] = quickCollate(batch, 'correlated_rfx', torch.bool)
 
     # save sd(Y) for unstandardizing
     out['sd_y'] = quickCollate(batch, 'sd_y')

@@ -11,19 +11,25 @@ def hypersample(
     rng: np.random.Generator,
     d: int,
     q: int,
-    correlated_rfx: bool = True,
 ) -> dict[str, np.ndarray]:
-    """sample hyperparameters to instantiate prior"""
+    """sample hyperparameters to instantiate prior.
+    eta_rfx > 0 indicates correlated rfx (LKJ prior), eta_rfx = 0 means uncorrelated.
+    """
     out = {}
     out['nu_ffx'] = spikeAndSlab(rng, size=d)
     out['tau_ffx'] = skewedBeta(rng, 0.01, 12.0, mode=1.0, concentration=6.0, size=d)
     out['tau_rfx'] = skewedBeta(rng, 0.01, 5.0, mode=1.0, concentration=5.0, size=q)
     out['tau_eps'] = skewedBeta(rng, 0.01, 5.0, mode=1.0, concentration=4.0, size=1)[0]
-    out['correlated_rfx'] = correlated_rfx
-    if correlated_rfx and q > 1:
-        out['eta_rfx'] = rng.uniform(1.0, 2.0)
+
+    # stochastic choice of rfx correlation (probability depends on q)
+    if q == 1:
+        correlated = False
+    elif q == 2:
+        correlated = rng.random() < 0.7
     else:
-        out['eta_rfx'] = np.array(0.0)
+        correlated = rng.random() < 0.4
+    out['eta_rfx'] = rng.uniform(1.0, 2.0) if correlated else np.array(0.0)
+
     # TODO: sample prior families
     # TODO: sample link function (normal, t, bernoulli, poisson)
     return out
@@ -39,7 +45,7 @@ class Prior:
     def __post_init__(self):
         self.d = len(self.hyperparams['tau_ffx'])   # number of fixed effects
         self.q = len(self.hyperparams['tau_rfx'])   # number of random effects
-        self.correlated_rfx = self.hyperparams.get('correlated_rfx', False)
+        self.correlated_rfx = float(self.hyperparams.get('eta_rfx', 0)) > 0
 
     def _sampleFfx(self) -> np.ndarray:
         # TODO: choice between normal and t
@@ -95,15 +101,10 @@ if __name__ == '__main__':
     d, q = 3, 2
     m = 10
 
-    # uncorrelated
-    hyperparams = hypersample(rng, d, q, correlated_rfx=False)
+    hyperparams = hypersample(rng, d, q)
     prior = Prior(rng, hyperparams)
     params = prior.sample(m)
-    print('Uncorrelated rfx shape:', params['rfx'].shape)
-
-    # correlated
-    hyperparams = hypersample(rng, d, q, correlated_rfx=True)
-    prior = Prior(rng, hyperparams)
-    params = prior.sample(m)
-    print('Correlated rfx shape:', params['rfx'].shape)
+    print('eta_rfx:', hyperparams['eta_rfx'])
+    print('correlated:', prior.correlated_rfx)
+    print('rfx shape:', params['rfx'].shape)
     print('Correlation matrix:\n', params['corr_rfx'])
