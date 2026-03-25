@@ -148,7 +148,7 @@ def lkjCorrelation(
 def samplePermutation(
     rng: np.random.Generator,
     d: int,
-):
+) -> np.ndarray:
     perm = rng.permutation(d - 1) + 1
     zero = np.zeros((1,), dtype=int)
     perm = np.concatenate([zero, perm])
