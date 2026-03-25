@@ -63,6 +63,26 @@ def truncLogUni(
     return out
 
 
+def skewedBeta(
+    rng: np.random.Generator,
+    low: float,
+    high: float,
+    mode: float,
+    concentration: float,
+    size: int | tuple[int, ...],
+) -> np.ndarray:
+    """Sample from Beta distribution rescaled to [low, high] with given mode.
+
+    concentration=1 gives uniform on [low, high] regardless of mode.
+    concentration>1 concentrates mass around the mode.
+    """
+    assert low < mode < high, 'mode must be strictly between low and high'
+    assert concentration >= 1, 'concentration must be >= 1'
+    t = (mode - low) / (high - low)
+    a = 1 + (concentration - 1) * t
+    b = 1 + (concentration - 1) * (1 - t)
+    return low + (high - low) * rng.beta(a, b, size=size)
+
 def wishartCorrelation(
     rng: np.random.Generator,
     d: int,
