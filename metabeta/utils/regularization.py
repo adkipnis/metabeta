@@ -94,13 +94,19 @@ def squish(x: torch.Tensor) -> torch.Tensor:
 
 if __name__ == '__main__':
     from matplotlib import pyplot as plt
+    WIDE_BETA = 0.5
 
     x = torch.randn(64, 8)
 
-    # softplus
+    # softplus (beta=1)
     y = softplus(x)
     z = inverseSoftplus(y)
     assert torch.allclose(x, z, atol=1e-6), 'softplus not invertible'
+
+    # softplus (beta=0.5)
+    y = softplus(x, beta=WIDE_BETA)
+    z = inverseSoftplus(y, beta=WIDE_BETA)
+    assert torch.allclose(x, z, atol=1e-5), 'wide softplus not invertible'
 
     # masked softplus
     mask = torch.randint(0, 2, size=(64, 8)).bool()
@@ -108,6 +114,16 @@ if __name__ == '__main__':
     y = maskedSoftplus(x)
     z = maskedInverseSoftplus(y)
     assert torch.allclose(x, z, atol=1e-6), 'masked softplus not invertible'
+
+    # masked wide softplus
+    y = maskedSoftplus(x, beta=WIDE_BETA)
+    z = maskedInverseSoftplus(y, beta=WIDE_BETA)
+    assert torch.allclose(x, z, atol=1e-5), 'masked wide softplus not invertible'
+
+    # masked sqrt softplus
+    y = maskedSqrtSoftplus(x)
+    z = maskedInverseSqrtSoftplus(y)
+    assert torch.allclose(x, z, atol=1e-5), 'masked sqrt softplus not invertible'
 
     # masked log
     y = maskedExp(x)
