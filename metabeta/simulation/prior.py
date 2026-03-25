@@ -25,9 +25,9 @@ def hypersample(
     if q == 1:
         correlated = False
     elif q == 2:
-        correlated = rng.random() < 0.7
+        correlated = rng.random() < 0.8
     else:
-        correlated = rng.random() < 0.4
+        correlated = rng.random() < 0.5
     out['eta_rfx'] = rng.uniform(1.0, 2.0) if correlated else np.array(0.0)
 
     # TODO: sample prior families
