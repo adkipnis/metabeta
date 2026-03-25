@@ -51,7 +51,6 @@ def _plotRecoveryWithBounds(
     ax: Axes,
     results: dict[str, torch.Tensor],
     show_title: bool,
-    show_legend: bool,
     show_x: bool,
     ylabel: str,
 ) -> None:
@@ -69,6 +68,8 @@ def _plotRecoveryWithBounds(
     q025 = q025[order]
     q975 = q975[order]
     eta_pairs = eta_pairs[order]
+    outside = (corr_mean < q025) | (corr_mean > q975)
+    out_pct = 100.0 * float(outside.mean())
 
     lim = 1.02
     xgrid = np.linspace(-1, 1, 401)
@@ -77,7 +78,7 @@ def _plotRecoveryWithBounds(
 
     mask_unc = eta_pairs == 0
     mask_cor = eta_pairs > 0
-    ax.fill_between(xgrid, ylow, yhigh, color='grey', alpha=0.15, label='Empirical 95% envelope')
+    ax.fill_between(xgrid, ylow, yhigh, color='grey', alpha=0.15, label='95% envelope')
     if mask_unc.any():
         ax.scatter(
             corr_true[mask_unc],
@@ -102,77 +103,46 @@ def _plotRecoveryWithBounds(
     niceify(
         ax,
         {
-            'title': 'RFX Correlation Recovery',
-            'xlabel': 'True correlation',
+            'title': 'RFX Correlation',
+            'xlabel': 'Ground Truth',
             'ylabel': ylabel,
             'show_title': show_title,
-            'show_legend': show_legend,
+            'show_legend': False,
             'show_x': show_x,
+            'stats': {'out': out_pct},
+            'stats_suffix': '%',
+            'stats_loc_x': 0.83,
+            'stats_loc_y': 0.05,
+            'stats_box': True,
         },
     )
-
-
-def _plotDetectionSeparation(
-    ax: Axes,
-    results: dict[str, torch.Tensor],
-    threshold: float,
-    show_title: bool,
-    show_legend: bool,
-    show_x: bool,
-) -> None:
-    eta = _flattenPairs(results['eta_rfx'])
-    n_pairs = results['corr_true'].shape[-1]
-    eta_pairs = np.repeat(eta, n_pairs)
-    percentile_pairs = _flattenPairs(results['percentile_pairs'])
-
-    unc = np.sort(percentile_pairs[eta_pairs == 0])
-    cor = np.sort(percentile_pairs[eta_pairs > 0])
-    if unc.size > 0:
-        y_unc = np.linspace(0, 1, unc.size)
-        ax.plot(unc, y_unc, lw=3, label='Uncorrelated')
-    if cor.size > 0:
-        y_cor = np.linspace(0, 1, cor.size)
-        ax.plot(cor, y_cor, lw=3, label='Correlated')
-
-    tpr = float((cor > threshold).mean()) if cor.size > 0 else float('nan')
-    fpr = float((unc > threshold).mean()) if unc.size > 0 else float('nan')
-
-    ax.axvline(threshold, linestyle='--', lw=2, color='grey', alpha=0.7)
-    ax.set_xlim(-0.02, 1.02)
-    ax.set_ylim(-0.02, 1.02)
-    ax.set_axisbelow(True)
-    ax.grid(True)
-    niceify(
-        ax,
-        {
-            'title': 'Detection Separation',
-            'xlabel': 'Null percentile of |r|',
-            'ylabel': 'ECDF',
-            'show_title': show_title,
-            'show_legend': show_legend,
-            'show_x': show_x,
-            'stats': {'TPR': tpr, 'FPR': fpr},
-        },
-    )
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(
+            handles,
+            labels,
+            loc='upper left',
+            fontsize=18,
+            markerscale=2.5,
+        )
 
 
 def plotRfxCorrelationRecovery(
     proposals: Proposal | list[Proposal],
     data: dict[str, torch.Tensor],
     labels: list[str] | None = None,
-    threshold: float = 0.90,
     n_sim: int = 2000,
     plot_dir: Path | None = None,
     epoch: int | None = None,
     show: bool = False,
 ) -> Path | None:
-    """Plot RFX correlation recovery and detection separation."""
+    """Plot RFX correlation recovery against empirical envelopes."""
     if not isinstance(proposals, list):
         proposals = [proposals]
     if labels is None:
         labels = [''] * len(proposals)
     nrows = len(proposals)
-    fig, axs = plt.subplots(nrows, 2, figsize=(12, 6 * nrows), dpi=300, squeeze=False)
+    fig, axs = plt.subplots(nrows, 1, figsize=(9, 6 * nrows), dpi=300, squeeze=False)
 
     for i, (proposal, label) in enumerate(zip(proposals, labels)):
         upper = i == 0
@@ -182,21 +152,10 @@ def plotRfxCorrelationRecovery(
             axs[i, 0],
             results,
             show_title=upper,
-            show_legend=upper,
             show_x=lower,
-            ylabel=(label if label else 'Posterior mean correlation'),
-        )
-        _plotDetectionSeparation(
-            axs[i, 1],
-            results,
-            threshold=threshold,
-            show_title=upper,
-            show_legend=upper,
-            show_x=lower,
+            ylabel=(label if label else 'Posterior mean'),
         )
 
-    for ax in axs.flat:
-        ax.set_box_aspect(1)
     fig.tight_layout()
 
     saved_path = None
