@@ -1,6 +1,6 @@
 # experiment
 name: 'small'
-d_tag: 'small'          # points to metabeta/simulation/configs/toy.yaml
+d_tag: 'small-c'          # points to metabeta/simulation/configs/toy.yaml
 m_tag: 'toy'          # points to metabeta/models/configs/toy.yaml
 seed: 42
 
@@ -13,7 +13,7 @@ verbosity: 1          # warnings|infos|debug
 wandb: false
 
 # training
-max_epochs: 20
+max_epochs: 50
 bs: 32                # batch size
 lr: 1.0e-3
 max_grad_norm: 1.0
@@ -31,7 +31,7 @@ sir_iter: 8
 plot: true
 
 # checkpoint
-r_tag: ''             # run tag
+r_tag: 'c'             # run tag
 save_latest: true
 save_best: false
 load_latest: false
