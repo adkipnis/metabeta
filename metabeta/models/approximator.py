@@ -159,17 +159,19 @@ class Approximator(nn.Module):
         summary: torch.Tensor,
         data: dict[str, torch.Tensor],
         local: bool = False,
-        numerator: int = 10,  # for normalizing counts
     ) -> torch.Tensor:
         """append summary with selected metadata"""
         out = [summary]
         if local:
-            n_obs = data['ns'].unsqueeze(-1).sqrt() / numerator
+            n_obs = data['ns'].unsqueeze(-1).float().sqrt() / 10
             out += [n_obs]
+            # tau_rfx = data['tau_rfx'].unsqueeze(-2).expand(-1, summary.shape[1], -1)
+            # out += [n_obs, tau_rfx]
         else:
-            n_total = data['n'].unsqueeze(-1).sqrt() / numerator
-            n_groups = data['m'].unsqueeze(-1).sqrt() / numerator
+            n_total = data['n'].unsqueeze(-1).float().sqrt() / 10
+            n_groups = data['m'].unsqueeze(-1).float().sqrt() / 10
             beta_ols, sigma_eps_ols, sigma_rfx_ols = self._dataStatistics(data)
+            nu_ffx = data['nu_ffx'].clone()
             tau_ffx = data['tau_ffx'].clone()
             tau_rfx = data['tau_rfx'].clone()
             tau_eps = data['tau_eps'].clone().unsqueeze(-1)
@@ -180,6 +182,7 @@ class Approximator(nn.Module):
                 beta_ols,
                 sigma_eps_ols,
                 sigma_rfx_ols,
+                nu_ffx,
                 tau_ffx,
                 tau_rfx,
                 tau_eps,
