@@ -69,3 +69,70 @@ def sampleSigmaNp(
 
 
 # ---------------------------------------------------------------------------
+# Torch log-prob (importance sampling)
+# ---------------------------------------------------------------------------
+
+def _logProbNormal(x: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    return D.Normal(loc, scale).log_prob(x)
+
+
+def _logProbStudent(x: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    return D.StudentT(df=STUDENT_DF, loc=loc, scale=scale).log_prob(x)
+
+
+def _logProbHalfNormal(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    return D.HalfNormal(scale=scale).log_prob(x)
+
+
+def _logProbHalfStudent(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    return D.StudentT(df=STUDENT_DF, loc=0, scale=scale).log_prob(x) + math.log(2.0)
+
+
+_FFX_LOG_PROB = (_logProbNormal, _logProbStudent)
+_SIGMA_LOG_PROB = (_logProbHalfNormal, _logProbHalfStudent)
+
+
+def logProbFfx(
+    x: torch.Tensor,       # (b, s, d)
+    loc: torch.Tensor,     # (b, 1, d)
+    scale: torch.Tensor,   # (b, 1, d)
+    family: torch.Tensor,  # (b,)
+    mask: torch.Tensor | None = None,  # (b, 1, d)
+) -> torch.Tensor:
+    """Batched log-prob for ffx families. Returns (b, s)."""
+    b, s = x.shape[:2]
+    out = x.new_zeros(b, s)
+    for i, fn in enumerate(_FFX_LOG_PROB):
+        sel = family == i
+        if not sel.any():
+            continue
+        lp = fn(x[sel], loc[sel], scale[sel])
+        if mask is not None:
+            lp = lp * mask[sel]
+        out[sel] = lp.sum(-1)
+    return out
+
+
+def logProbSigma(
+    x: torch.Tensor,       # (b, s, q) or (b, s)
+    scale: torch.Tensor,   # (b, 1, q) or (b, 1)
+    family: torch.Tensor,  # (b,)
+    mask: torch.Tensor | None = None,  # (b, 1, q) or None
+) -> torch.Tensor:
+    """Batched log-prob for sigma families. Returns (b, s)."""
+    b, s = x.shape[:2]
+    out = x.new_zeros(b, s)
+    for i, fn in enumerate(_SIGMA_LOG_PROB):
+        sel = family == i
+        if not sel.any():
+            continue
+        lp = fn(x[sel], scale[sel])
+        if mask is not None:
+            lp = lp * mask[sel]
+        if lp.dim() > 2:
+            lp = lp.sum(-1)
+        out[sel] = lp
+    return out
+
+
+# ---------------------------------------------------------------------------
