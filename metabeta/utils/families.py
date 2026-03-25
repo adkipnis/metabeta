@@ -1,7 +1,7 @@
 import math
 import numpy as np
 import torch
-from scipy.stats import norm, t
+from scipy.stats import expon, norm, t
 from torch import distributions as D
 
 
@@ -10,7 +10,7 @@ from torch import distributions as D
 # ---------------------------------------------------------------------------
 
 FFX_FAMILIES = ('normal', 'student')
-SIGMA_FAMILIES = ('halfnormal', 'halfstudent')
+SIGMA_FAMILIES = ('halfnormal', 'halfstudent', 'exponential')
 
 STUDENT_DF = 4
 
@@ -18,6 +18,7 @@ STUDENT_DF = 4
 # ---------------------------------------------------------------------------
 # NumPy sampling
 # ---------------------------------------------------------------------------
+
 
 def _sampleNormalNp(
     rng: np.random.Generator, loc: np.ndarray, scale: np.ndarray, size: tuple[int, ...]
@@ -43,8 +44,14 @@ def _sampleHalfStudentNp(
     return np.abs(t(df=STUDENT_DF, loc=0, scale=scale).rvs(size=size, random_state=rng))
 
 
+def _sampleExponentialNp(
+    rng: np.random.Generator, scale: np.ndarray, size: tuple[int, ...]
+) -> np.ndarray:
+    return expon(scale=scale).rvs(size=size, random_state=rng)
+
+
 _FFX_SAMPLE_NP = (_sampleNormalNp, _sampleStudentNp)
-_SIGMA_SAMPLE_NP = (_sampleHalfNormalNp, _sampleHalfStudentNp)
+_SIGMA_SAMPLE_NP = (_sampleHalfNormalNp, _sampleHalfStudentNp, _sampleExponentialNp)
 
 
 def sampleFfxNp(
@@ -72,6 +79,7 @@ def sampleSigmaNp(
 # Torch log-prob (importance sampling)
 # ---------------------------------------------------------------------------
 
+
 def _logProbNormal(x: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
     return D.Normal(loc, scale).log_prob(x)
 
@@ -88,14 +96,19 @@ def _logProbHalfStudent(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
     return D.StudentT(df=STUDENT_DF, loc=0, scale=scale).log_prob(x) + math.log(2.0)
 
 
+def _logProbExponential(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    rate = 1.0 / (scale + 1e-12)
+    return D.Exponential(rate=rate).log_prob(x)
+
+
 _FFX_LOG_PROB = (_logProbNormal, _logProbStudent)
-_SIGMA_LOG_PROB = (_logProbHalfNormal, _logProbHalfStudent)
+_SIGMA_LOG_PROB = (_logProbHalfNormal, _logProbHalfStudent, _logProbExponential)
 
 
 def logProbFfx(
-    x: torch.Tensor,       # (b, s, d)
-    loc: torch.Tensor,     # (b, 1, d)
-    scale: torch.Tensor,   # (b, 1, d)
+    x: torch.Tensor,  # (b, s, d)
+    loc: torch.Tensor,  # (b, 1, d)
+    scale: torch.Tensor,  # (b, 1, d)
     family: torch.Tensor,  # (b,)
     mask: torch.Tensor | None = None,  # (b, 1, d)
 ) -> torch.Tensor:
@@ -114,8 +127,8 @@ def logProbFfx(
 
 
 def logProbSigma(
-    x: torch.Tensor,       # (b, s, q) or (b, s)
-    scale: torch.Tensor,   # (b, 1, q) or (b, 1)
+    x: torch.Tensor,  # (b, s, q) or (b, s)
+    scale: torch.Tensor,  # (b, 1, q) or (b, 1)
     family: torch.Tensor,  # (b,)
     mask: torch.Tensor | None = None,  # (b, 1, q) or None
 ) -> torch.Tensor:
@@ -139,6 +152,7 @@ def logProbSigma(
 # Torch sampling (prior predictive) — select approach
 # ---------------------------------------------------------------------------
 
+
 def _sampleNormalTorch(
     loc: torch.Tensor, scale: torch.Tensor, shape: tuple[int, ...]
 ) -> torch.Tensor:
@@ -152,21 +166,30 @@ def _sampleStudentTorch(
 
 
 def _sampleHalfNormalTorch(scale: torch.Tensor, shape: tuple[int, ...]) -> torch.Tensor:
-    return D.HalfNormal(scale=scale).sample(shape) # type: ignore
+    return D.HalfNormal(scale=scale).sample(shape)  # type: ignore
 
 
 def _sampleHalfStudentTorch(scale: torch.Tensor, shape: tuple[int, ...]) -> torch.Tensor:
     return D.StudentT(df=STUDENT_DF, scale=scale).sample(shape).abs()
 
 
+def _sampleExponentialTorch(scale: torch.Tensor, shape: tuple[int, ...]) -> torch.Tensor:
+    rate = 1.0 / (scale + 1e-12)
+    return D.Exponential(rate=rate).sample(shape)
+
+
 _FFX_SAMPLE_TORCH = (_sampleNormalTorch, _sampleStudentTorch)
-_SIGMA_SAMPLE_TORCH = (_sampleHalfNormalTorch, _sampleHalfStudentTorch)
+_SIGMA_SAMPLE_TORCH = (
+    _sampleHalfNormalTorch,
+    _sampleHalfStudentTorch,
+    _sampleExponentialTorch,
+)
 
 
 def sampleFfxTorch(
-    loc: torch.Tensor,      # (b, d)
-    scale: torch.Tensor,    # (b, d)
-    family: torch.Tensor,   # (b,)
+    loc: torch.Tensor,  # (b, d)
+    scale: torch.Tensor,  # (b, d)
+    family: torch.Tensor,  # (b,)
     shape: tuple[int, ...],
 ) -> torch.Tensor:
     """Sample from ffx prior families. Returns (*shape, b, d)."""
@@ -180,8 +203,8 @@ def sampleFfxTorch(
 
 
 def sampleSigmaTorch(
-    scale: torch.Tensor,    # (b, q) or (b,)
-    family: torch.Tensor,   # (b,)
+    scale: torch.Tensor,  # (b, q) or (b,)
+    family: torch.Tensor,  # (b,)
     shape: tuple[int, ...],
 ) -> torch.Tensor:
     """Sample from sigma prior families. Returns (*shape, b, q) or (*shape, b)."""
@@ -200,6 +223,7 @@ def sampleSigmaTorch(
 # ---------------------------------------------------------------------------
 # Encoding for neural network context
 # ---------------------------------------------------------------------------
+
 
 def oneHotFamily(family: torch.Tensor, n_families: int) -> torch.Tensor:
     """One-hot encode family indices. family: (b,) -> (b, n_families)."""
@@ -223,9 +247,9 @@ class FamilyEncoder(torch.nn.Module):
         self.n_families = n_families
         self.embed_dim = embed_dim
         if embed_dim is not None:
-            self.embeddings = torch.nn.ModuleList([
-                torch.nn.Embedding(n, embed_dim) for n in n_families
-            ])
+            self.embeddings = torch.nn.ModuleList(
+                [torch.nn.Embedding(n, embed_dim) for n in n_families]
+            )
         else:
             self.embeddings = None
 
