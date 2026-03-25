@@ -38,3 +38,67 @@ def posteriorCorrelation(
 
 
 def evaluateCorrelation(
+    rfx: torch.Tensor,  # (b, m, s, q)
+    data: dict[str, torch.Tensor],
+    n_sim: int = 2000,
+) -> dict[str, torch.Tensor]:
+    """Evaluate correlation recovery from posterior rfx samples.
+
+    Uses non-parametric rank test: for each upper-triangular pair, ranks
+    |corr_mean[i,j]| against the null distribution of |r| when rho=0.
+    """
+    mask_m = data['mask_m']        # (b, m)
+    corr_true = data['corr_rfx']   # (b, q, q)
+    eta_rfx = data['eta_rfx']      # (b,)
+    b_size = rfx.shape[0]
+    q = rfx.shape[-1]
+
+    # trivial case
+    if q < 2:
+        return {
+            'corr_mean': torch.ones(b_size, 1, 1, device=rfx.device),
+            'corr_true': torch.ones(b_size, 1, 1, device=rfx.device),
+            'offdiag_mae': torch.zeros(b_size, device=rfx.device),
+            'percentile': torch.zeros(b_size, device=rfx.device),
+            'eta_rfx': eta_rfx,
+        }
+
+    # posterior correlation
+    corr_samples = posteriorCorrelation(rfx, mask_m)   # (b, s, q, q)
+    # isnull = corr_samples[..., 0, -1, -1] == 0
+    # isnullforq1 = isnull == (data['mask_q'].sum(-1) == 1)
+    corr_mean = corr_samples.mean(dim=1)               # (b, q, q)
+
+    # upper-triangular indices (unique pairs only)
+    ri, ci = torch.triu_indices(q, q, offset=1)
+
+    # upper-tri MAE
+    diff = (corr_mean - corr_true).abs()
+    offdiag_mae = diff[:, ri, ci].mean(dim=-1)   # (b,)
+    # n_off = len(ri) 
+
+    # null distributions: cache sorted null per unique m
+    ms = data['m']
+    null_cache: dict[int, np.ndarray] = {}
+    for m_val in ms.unique().tolist():
+        null_cache[int(m_val)] = _nullCorrelations(int(m_val), n_sim=n_sim)
+
+    # percentile: rank |corr_mean| against null via searchsorted
+    abs_uppertri = corr_mean[:, ri, ci].abs().cpu().numpy()   # (b, n_off)
+    percentiles = np.zeros(b_size)
+    for i in range(b_size):
+        null = null_cache[int(ms[i])]
+        ranks = np.searchsorted(null, abs_uppertri[i]) / len(null)   # (n_off,)
+        percentiles[i] = ranks.mean()
+    percentiles = torch.as_tensor(percentiles, device=rfx.device, dtype=rfx.dtype)
+
+    return {
+        'corr_mean': corr_mean[:, ri, ci],
+        'corr_true': corr_true[:, ri, ci],
+        'offdiag_mae': offdiag_mae,
+        'percentile': percentiles,
+        'eta_rfx': eta_rfx,
+    }
+
+
+def summarizeCorrelation(
