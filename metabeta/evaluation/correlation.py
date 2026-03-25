@@ -16,6 +16,7 @@ def _batchCorrcoef(
 def _nullCorrelations(m: int, n_sim: int = 2000, seed: int = 0) -> np.ndarray:
     """Empirical null distribution of |r| when rho=0, for a given m.
     Returns sorted (n_sim,) array of absolute correlation values."""
+    # TODO: expand to arbitrary rho to H1 tests for calibration
     rng = np.random.default_rng(seed)
     z = rng.standard_normal((n_sim, m, 2))
     null = np.abs(_batchCorrcoef(z))
@@ -104,7 +105,7 @@ def evaluateCorrelation(
 def summarizeCorrelation(
         results: dict[str, torch.Tensor],
         qs: torch.Tensor,
-        threshold: float = 0.50,
+        threshold: float = 0.90,
 ) -> dict[str, float]:
     """Aggregate correlation evaluation into summary metrics"""
     eta = results['eta_rfx']
