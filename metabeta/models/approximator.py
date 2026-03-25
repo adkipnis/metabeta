@@ -114,15 +114,13 @@ class Approximator(nn.Module):
         return torch.cat(masks, dim=-1)
 
     @staticmethod
-    def _dataStatistics(
-        data: dict[str, torch.Tensor],
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _dataStatistics(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Compute sufficient statistics from grouped data.
 
-        Returns:
-            beta_ols:       (B, d)  pooled OLS fixed-effect estimates
-            sigma_eps_ols:  (B, 1)  pooled residual SD
-            sigma_rfx_ols:  (B, 1)  between-group SD of group means (random intercept proxy)
+        Returns dict with:
+            beta_ols:       (B, d)    pooled OLS fixed-effect estimates
+            sigma_eps_ols:  (B, 1)    pooled residual SD
+            sigma_rfx_ols:  (B, 1)    between-group SD of group means (random intercept proxy)
         """
         X = data['X']                           # (B, m, n, d)
         y = data['y']                           # (B, m, n)
@@ -130,7 +128,8 @@ class Approximator(nn.Module):
         mask_m = data['mask_m'].float()         # (B, m)
         ns = data['ns'].clamp(min=1).float()    # (B, m)
         n_total = data['n'].float()             # (B,)
-
+        m = data['m'].float().unsqueeze(-1)     # (B, 1)
+        
         # --- pooled OLS: beta = (X'X)^{-1} X'y
         Xm = X * mask.unsqueeze(-1)
         ym = y * mask
@@ -138,21 +137,26 @@ class Approximator(nn.Module):
         Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)      # (B, d)
         beta_ols = torch.linalg.lstsq(XtX, Xty).solution   # (B, d)
 
-        # --- residual SD
+        # --- residuals from pooled model
         yhat = torch.einsum('bmnd,bd->bmn', X, beta_ols)   # (B, m, n)
         resid = (y - yhat) * mask                         # (B, m, n)
-        ss_resid = (resid.square()).sum(dim=(1, 2))       # (B,)
+
+        # --- residual SD
+        ss_resid = resid.square().sum(dim=(1, 2))         # (B,)
         df = (n_total - X.shape[-1]).clamp(min=1)         # (B,)
         sigma_eps_ols = (ss_resid / df).sqrt().unsqueeze(-1)   # (B, 1)
 
         # --- between-group SD of group means (random intercept proxy)
-        group_means = (ym).sum(dim=2) / ns                # (B, m)
-        m_valid = mask_m.sum(dim=1, keepdim=True).clamp(min=1)  # (B, 1)
-        grand_mean = (group_means * mask_m).sum(dim=1, keepdim=True) / m_valid
+        group_means = ym.sum(dim=2) / ns                  # (B, m)
+        grand_mean = (group_means * mask_m).sum(dim=1, keepdim=True) / m
         sq_dev = ((group_means - grand_mean).square() * mask_m).sum(dim=1, keepdim=True)
-        sigma_rfx_ols = (sq_dev / m_valid.clamp(min=2)).sqrt()  # (B, 1)
+        sigma_rfx_ols = (sq_dev / m.clamp(min=2)).sqrt()  # (B, 1)
 
-        return beta_ols, sigma_eps_ols, sigma_rfx_ols
+        return {
+            'beta_ols': beta_ols,
+            'sigma_eps_ols': sigma_eps_ols,
+            'sigma_rfx_ols': sigma_rfx_ols,
+        }
 
     def _addMetadata(
         self,
