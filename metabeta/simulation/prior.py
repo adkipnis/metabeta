@@ -19,7 +19,7 @@ def hypersample(
     """
     out = {}
     out['nu_ffx'] = spikeAndSlab(rng, size=d)
-    out['tau_ffx'] = skewedBeta(rng, 0.01, 12.0, mode=1.0, concentration=6.0, size=d)
+    out['tau_ffx'] = skewedBeta(rng, 0.01, 10.0, mode=1.0, concentration=6.0, size=d)
     out['tau_rfx'] = skewedBeta(rng, 0.01, 5.0, mode=1.0, concentration=5.0, size=q)
     out['tau_eps'] = skewedBeta(rng, 0.01, 5.0, mode=1.0, concentration=4.0, size=1)[0]
 
