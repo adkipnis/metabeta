@@ -102,3 +102,30 @@ def evaluateCorrelation(
 
 
 def summarizeCorrelation(
+        results: dict[str, torch.Tensor],
+        qs: torch.Tensor,
+        threshold: float = 0.50,
+) -> dict[str, float]:
+    """Aggregate correlation evaluation into summary metrics"""
+    eta = results['eta_rfx']
+    mae = results['offdiag_mae']
+    pct = results['percentile'] 
+    
+    nontrivial = qs > 1
+    correlated = eta > 0
+    uncorrelated = (eta == 0) & nontrivial
+
+    out = {
+        'mae_all': mae[nontrivial].median().item(),
+    }
+    if correlated.any():
+        out['mae_correlated'] = mae[correlated].median().item()
+        out['mperc_correlated'] = pct[correlated].median().item()
+        out['detection_rate'] = (pct[correlated] > threshold).float().mean().item()
+        # out['detection_rate'] = (results['corr_mean'][correlated] > threshold).float().mean().item()
+    if uncorrelated.any():
+        out['mae_uncorrelated'] = mae[uncorrelated].median().item()
+        out['mperc_uncorrelated'] = pct[uncorrelated].median().item()
+        out['false_positive_rate'] = (pct[uncorrelated] > threshold).float().mean().item()
+        # out['false_positive_rate'] = (results['corr_mean'][uncorrelated] > threshold).float().mean().item()
+    return out
