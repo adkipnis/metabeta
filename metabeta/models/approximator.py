@@ -26,30 +26,40 @@ class Approximator(nn.Module):
         return self.cfg.d_rfx
 
     def build(self) -> None:
+        s_cfg = self.cfg.summarizer
+        p_cfg = self.cfg.posterior
         d_ffx = self.d_ffx
         d_rfx = self.d_rfx
+        d_var = 1 + d_rfx   # number of variance params
+
+        # --- context
+        # global context
+        d_counts = 2   # n_groups, n_total
+        d_prior = 2 * d_ffx + d_var + 1   # nu_ffx, tau_ffx, tau_sigma, tau_eps, eta_rfx
+        d_stats = d_ffx + 2   # beta_ols, sigma_eps_ols, sigma_rfx0_ols
+        d_meta_g = d_counts + d_prior + d_stats
+        d_context_g = s_cfg.d_output + d_meta_g   # global summary + metadata
+        # local context
+        d_meta_l = 1 #+ d_rfx   # n_obs + tau_rfx
+        d_context_l = (
+            d_ffx + d_var + s_cfg.d_output + d_meta_l
+        )   # global samples + local summaries + metadata
 
         # --- summarizers
-        s_cfg = self.cfg.summarizer
         if s_cfg.type == 'set-transformer':
             Summarizer = SetTransformer
         else:
             raise NotImplementedError('unknown summarizer type')
         d_input_l = 1 + (d_ffx - 1) + (d_rfx - 1)
-        d_input_g = s_cfg.d_output + 1   # n_obs per group
+        d_input_g = s_cfg.d_output + d_meta_l
         self.summarizer_l = Summarizer(d_input=d_input_l, **s_cfg.to_dict())
         self.summarizer_g = Summarizer(d_input=d_input_g, **s_cfg.to_dict())
 
         # --- posteriors
-        p_cfg = self.cfg.posterior
         if p_cfg.type == 'coupling':
             Posterior = CouplingFlow
         else:
             raise NotImplementedError('unknown posterior type')
-        d_var = 1 + d_rfx   # number of variance params
-        d_prior = 2 * d_ffx + d_var + 3   # prior params + eta_rfx + sigma_eps_ols + sigma_rfx_ols
-        d_context_g = s_cfg.d_output + d_prior + 2   # global summary, prior, n_groups, n_total
-        d_context_l = d_ffx + d_var + d_input_g   # global params, local summaries
         self.posterior_g = Posterior(d_ffx + d_var, d_context_g, **p_cfg.to_dict())
         self.posterior_l = Posterior(max(d_rfx, 2), d_context_l, **p_cfg.to_dict())
 
