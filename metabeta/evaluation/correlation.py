@@ -49,13 +49,13 @@ def posteriorCorrelation(
     mask_m: torch.Tensor,  # (b, m)
 ) -> torch.Tensor:
     """compute pairwise correlation matrices from posterior rfx samples"""
-    mask = mask_m[:, :, None, None].float()   # (b, m, 1, 1)
-    n = mask.sum(dim=1, keepdim=True).clamp(min=1)   # (b, 1, 1, 1)
-    mean = (rfx * mask).sum(dim=1, keepdim=True) / n   # (b, 1, s, q)
-    centered = (rfx - mean) * mask   # (b, m, s, q)
-    cov = torch.einsum('bmsi,bmsj->bsij', centered, centered) / n.view(-1, 1, 1, 1)   # (b, s, q, q)
-    std = cov.diagonal(dim1=-2, dim2=-1).clamp(min=1e-12).sqrt()   # (b, s, q)
-    return cov / (std.unsqueeze(-1) * std.unsqueeze(-2))   # (b, s, q, q)
+    mask = mask_m[:, :, None, None].float()  # (b, m, 1, 1)
+    n = mask.sum(dim=1, keepdim=True).clamp(min=1)  # (b, 1, 1, 1)
+    mean = (rfx * mask).sum(dim=1, keepdim=True) / n  # (b, 1, s, q)
+    centered = (rfx - mean) * mask  # (b, m, s, q)
+    cov = torch.einsum('bmsi,bmsj->bsij', centered, centered) / n.view(-1, 1, 1, 1)  # (b, s, q, q)
+    std = cov.diagonal(dim1=-2, dim2=-1).clamp(min=1e-12).sqrt()  # (b, s, q)
+    return cov / (std.unsqueeze(-1) * std.unsqueeze(-2))  # (b, s, q, q)
 
 
 def evaluateCorrelation(
