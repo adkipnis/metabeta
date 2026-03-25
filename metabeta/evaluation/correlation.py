@@ -62,15 +62,17 @@ def evaluateCorrelation(
     rfx: torch.Tensor,  # (b, m, s, q)
     data: dict[str, torch.Tensor],
     n_sim: int = 2000,
+    rho_grid_step: float = 0.02,
+    alpha: float = 0.05,
 ) -> dict[str, torch.Tensor]:
     """Evaluate correlation recovery from posterior rfx samples.
 
     Uses non-parametric rank test: for each upper-triangular pair, ranks
     |corr_mean[i,j]| against the null distribution of |r| when rho=0.
     """
-    mask_m = data['mask_m']        # (b, m)
-    corr_true = data['corr_rfx']   # (b, q, q)
-    eta_rfx = data['eta_rfx']      # (b,)
+    mask_m = data['mask_m']  # (b, m)
+    corr_true = data['corr_rfx']  # (b, q, q)
+    eta_rfx = data['eta_rfx']  # (b,)
     b_size = rfx.shape[0]
     q = rfx.shape[-1]
 
@@ -79,45 +81,78 @@ def evaluateCorrelation(
         return {
             'corr_mean': torch.ones(b_size, 1, 1, device=rfx.device),
             'corr_true': torch.ones(b_size, 1, 1, device=rfx.device),
+            'corr_q025': torch.ones(b_size, 1, 1, device=rfx.device),
+            'corr_q975': torch.ones(b_size, 1, 1, device=rfx.device),
             'offdiag_mae': torch.zeros(b_size, device=rfx.device),
             'percentile': torch.zeros(b_size, device=rfx.device),
+            'percentile_pairs': torch.zeros(b_size, 1, device=rfx.device),
             'eta_rfx': eta_rfx,
         }
 
     # posterior correlation
-    corr_samples = posteriorCorrelation(rfx, mask_m)   # (b, s, q, q)
+    corr_samples = posteriorCorrelation(rfx, mask_m)  # (b, s, q, q)
     # isnull = corr_samples[..., 0, -1, -1] == 0
     # isnullforq1 = isnull == (data['mask_q'].sum(-1) == 1)
-    corr_mean = corr_samples.mean(dim=1)               # (b, q, q)
+    corr_mean = corr_samples.mean(dim=1)  # (b, q, q)
 
     # upper-triangular indices (unique pairs only)
     ri, ci = torch.triu_indices(q, q, offset=1)
 
     # upper-tri MAE
     diff = (corr_mean - corr_true).abs()
-    offdiag_mae = diff[:, ri, ci].mean(dim=-1)   # (b,)
-    # n_off = len(ri) 
+    offdiag_mae = diff[:, ri, ci].mean(dim=-1)  # (b,)
+    # n_off = len(ri)
 
-    # null distributions: cache sorted null per unique m
+    # per-m caches: null r and empirical r_hat quantile bounds
     ms = data['m']
+    rho_grid = np.arange(-0.95, 0.95 + rho_grid_step, rho_grid_step)
     null_cache: dict[int, np.ndarray] = {}
+    bounds_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     for m_val in ms.unique().tolist():
-        null_cache[int(m_val)] = _nullCorrelations(int(m_val), n_sim=n_sim)
+        m_int = int(m_val)
+        null_dist = _corrSamplingDistribution(m_int, rho=0.0, n_sim=n_sim)
+        null_dist.sort()
+        null_cache[m_int] = null_dist
+        bounds_cache[m_int] = _empiricalBounds(
+            m=m_int,
+            rhos=rho_grid,
+            n_sim=n_sim,
+            alpha=alpha,
+        )
+
+    # pair-wise empirical envelope conditioned on true rho and m
+    # use interpolation instead of individual computation for each rho
+    corr_true_pairs = corr_true[:, ri, ci].cpu().numpy()  # (b, n_off)
+    q025 = np.zeros_like(corr_true_pairs, dtype=float)
+    q975 = np.zeros_like(corr_true_pairs, dtype=float)
+    for i in range(b_size):
+        m_i = int(ms[i])
+        lowers, uppers = bounds_cache[m_i]
+        q025[i] = np.interp(corr_true_pairs[i], rho_grid, lowers)
+        q975[i] = np.interp(corr_true_pairs[i], rho_grid, uppers)
 
     # percentile: rank |corr_mean| against null via searchsorted
-    abs_uppertri = corr_mean[:, ri, ci].abs().cpu().numpy()   # (b, n_off)
+    abs_uppertri = corr_mean[:, ri, ci].abs().cpu().numpy()  # (b, n_off)
     percentiles = np.zeros(b_size)
+    percentile_pairs = np.zeros_like(abs_uppertri)
     for i in range(b_size):
         null = null_cache[int(ms[i])]
-        ranks = np.searchsorted(null, abs_uppertri[i]) / len(null)   # (n_off,)
+        ranks = np.searchsorted(null, abs_uppertri[i]) / len(null)  # (n_off,)
+        percentile_pairs[i] = ranks
         percentiles[i] = ranks.mean()
     percentiles = torch.as_tensor(percentiles, device=rfx.device, dtype=rfx.dtype)
+    percentile_pairs = torch.as_tensor(percentile_pairs, device=rfx.device, dtype=rfx.dtype)
+    corr_q025 = torch.as_tensor(q025, device=rfx.device, dtype=rfx.dtype)
+    corr_q975 = torch.as_tensor(q975, device=rfx.device, dtype=rfx.dtype)
 
     return {
         'corr_mean': corr_mean[:, ri, ci],
         'corr_true': corr_true[:, ri, ci],
+        'corr_q025': corr_q025,
+        'corr_q975': corr_q975,
         'offdiag_mae': offdiag_mae,
         'percentile': percentiles,
+        'percentile_pairs': percentile_pairs,
         'eta_rfx': eta_rfx,
     }
 
