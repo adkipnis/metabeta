@@ -198,3 +198,47 @@ def sampleSigmaTorch(
 
 
 # ---------------------------------------------------------------------------
+# Encoding for neural network context
+# ---------------------------------------------------------------------------
+
+def oneHotFamily(family: torch.Tensor, n_families: int) -> torch.Tensor:
+    """One-hot encode family indices. family: (b,) -> (b, n_families)."""
+    return torch.nn.functional.one_hot(family.long(), n_families).float()
+
+
+class FamilyEncoder(torch.nn.Module):
+    """Encode family indices as either one-hot or learned embeddings.
+
+    Args:
+        n_families: number of families for each parameter group
+        embed_dim: if None, use one-hot encoding; otherwise learned embedding of this dim
+    """
+
+    def __init__(
+        self,
+        n_families: tuple[int, ...],
+        embed_dim: int | None = None,
+    ):
+        super().__init__()
+        self.n_families = n_families
+        self.embed_dim = embed_dim
+        if embed_dim is not None:
+            self.embeddings = torch.nn.ModuleList([
+                torch.nn.Embedding(n, embed_dim) for n in n_families
+            ])
+        else:
+            self.embeddings = None
+
+    @property
+    def d_output(self) -> int:
+        if self.embed_dim is not None:
+            return self.embed_dim * len(self.n_families)
+        return sum(self.n_families)
+
+    def forward(self, families: list[torch.Tensor]) -> torch.Tensor:
+        """Encode a list of family index tensors, each (b,). Returns (b, d_output)."""
+        if self.embeddings is not None:
+            parts = [emb(f.long()) for emb, f in zip(self.embeddings, families)]
+        else:
+            parts = [oneHotFamily(f, n) for f, n in zip(families, self.n_families)]
+        return torch.cat(parts, dim=-1)
