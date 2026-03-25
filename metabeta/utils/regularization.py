@@ -15,6 +15,11 @@ def maskedLog(x: torch.Tensor) -> torch.Tensor:
     return torch.where(x > 0, torch.log(x), 0)
 
 
+def logDetExp(x: torch.Tensor) -> torch.Tensor:
+    """log |d exp(x)/dx| = x, masked for padded dims."""
+    return torch.where(x != 0, x, torch.zeros_like(x))
+
+
 # softplus
 def softplus(x: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
     return F.softplus(x, beta=beta, threshold=THRESHOLD)
@@ -37,6 +42,11 @@ def maskedSoftplus(x: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
 def maskedInverseSoftplus(x: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
     mask = x.ne(0).to(x.device)
     return inverseSoftplus(x, beta=beta) * mask
+
+
+def logDetSoftplus(x: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+    """log |d softplus(x;beta)/dx| = log sigmoid(beta*x), masked for padded dims."""
+    return torch.where(x != 0, F.logsigmoid(beta * x), torch.zeros_like(x))
 
 
 
