@@ -28,6 +28,7 @@ INFO = {
     'stats_fs': 20,
     'stats_loc_x': 0.70,
     'stats_loc_y': 0.05,
+    'stats_box': True,
 }
 
 
@@ -84,6 +85,13 @@ def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
         fs = int(info['stats_fs'])
         x_loc = float(info['stats_loc_x'])
         y_loc = float(info['stats_loc_y'])
+        bbox = None
+        if info['stats_box']:
+            bbox = dict(
+                boxstyle='round',
+                facecolor=(1, 1, 1, 0.7),
+                edgecolor=(0, 0, 0, 0.15),
+            )
         ax.text(
             x_loc,
             y_loc,
@@ -92,11 +100,7 @@ def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
             ha='center',
             va='bottom',
             fontsize=fs,
-            bbox=dict(
-                boxstyle='round',
-                facecolor=(1, 1, 1, 0.7),
-                edgecolor=(0, 0, 0, 0.15),
-            ),
+            bbox=bbox,
         )
 
 
