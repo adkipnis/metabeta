@@ -7,4 +7,3 @@ min_m: 5 # minimum number of groups
 max_m: 100 # maximum number of groups
 min_n: 10 # minimum number of samples per group
 max_n: 150 # maximum number of samples per group
-correlated_rfx: true # model correlated random effects via LKJ prior
