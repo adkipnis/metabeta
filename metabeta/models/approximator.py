@@ -40,7 +40,7 @@ class Approximator(nn.Module):
         d_meta_g = d_counts + d_prior + d_stats
         d_context_g = s_cfg.d_output + d_meta_g   # global summary + metadata
         # local context
-        d_meta_l = 1 #+ d_rfx   # n_obs + tau_rfx
+        d_meta_l = 2   # n_obs + eta_rfx (fed to global summarizer)
         d_context_l = (
             d_ffx + d_var + s_cfg.d_output + d_meta_l
         )   # global samples + local summaries + metadata
@@ -164,9 +164,8 @@ class Approximator(nn.Module):
         out = [summary]
         if local:
             n_obs = data['ns'].unsqueeze(-1).float().sqrt() / 10
-            out += [n_obs]
-            # tau_rfx = data['tau_rfx'].unsqueeze(-2).expand(-1, summary.shape[1], -1)
-            # out += [n_obs, tau_rfx]
+            eta_rfx = data['eta_rfx'].unsqueeze(-1).expand(-1, summary.shape[1])
+            out += [n_obs, eta_rfx.unsqueeze(-1)]
         else:
             n_total = data['n'].unsqueeze(-1).float().sqrt() / 10
             n_groups = data['m'].unsqueeze(-1).float().sqrt() / 10
