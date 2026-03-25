@@ -1,5 +1,5 @@
 from .comparison import plotComparison
-from .correlation import plotCorrelation
+from .correlation import plotCorrelation, plotRfxCorrelationRecovery
 from .coverage import plotCoverage
 from .dataset import plotDataset
 from .parameters import plotParameters
@@ -9,6 +9,7 @@ from .sbc import plotSBC
 __all__ = [
     'plotComparison',
     'plotCorrelation',
+    'plotRfxCorrelationRecovery',
     'plotCoverage',
     'plotDataset',
     'plotParameters',
