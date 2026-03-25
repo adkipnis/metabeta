@@ -53,6 +53,8 @@ def _plotRecoveryWithBounds(
     show_title: bool,
     show_x: bool,
     ylabel: str,
+    ms: torch.Tensor | None = None,
+    size_range: tuple[float, float] = (20.0, 140.0),
 ) -> None:
     corr_true = _flattenPairs(results['corr_true'])
     corr_mean = _flattenPairs(results['corr_mean'])
@@ -68,6 +70,28 @@ def _plotRecoveryWithBounds(
     q025 = q025[order]
     q975 = q975[order]
     eta_pairs = eta_pairs[order]
+
+    if ms is None:
+        sizes = np.full_like(corr_true, 35.0, dtype=float)
+        size_labels: list[tuple[int, float]] = []
+    else:
+        m_values = ms.detach().cpu().numpy().astype(float)
+        m_pairs = np.repeat(m_values, n_pairs)[order]
+        m_min, m_max = float(m_values.min()), float(m_values.max())
+        if m_max > m_min:
+            sizes = np.interp(m_pairs, (m_min, m_max), size_range)
+            m_levels = np.unique(np.round(np.quantile(m_values, [0.0, 0.5, 1.0])).astype(int))
+        else:
+            sizes = np.full_like(m_pairs, np.mean(size_range), dtype=float)
+            m_levels = np.array([int(m_min)], dtype=int)
+        size_labels = []
+        for m_level in m_levels:
+            if m_max > m_min:
+                s_level = float(np.interp(float(m_level), (m_min, m_max), size_range))
+            else:
+                s_level = float(np.mean(size_range))
+            size_labels.append((int(m_level), s_level))
+
     outside = (corr_mean < q025) | (corr_mean > q975)
     out_pct = 100.0 * float(outside.mean())
 
@@ -83,7 +107,7 @@ def _plotRecoveryWithBounds(
         ax.scatter(
             corr_true[mask_unc],
             corr_mean[mask_unc],
-            s=35,
+            s=sizes[mask_unc],
             alpha=0.40,
             label='Uncorrelated',
         )
@@ -91,13 +115,16 @@ def _plotRecoveryWithBounds(
         ax.scatter(
             corr_true[mask_cor],
             corr_mean[mask_cor],
-            s=35,
+            s=sizes[mask_cor],
             alpha=0.40,
             label='Correlated',
         )
     ax.plot([-1, 1], [-1, 1], '--', lw=2, color='grey', alpha=0.7)
     ax.set_xlim(-lim, lim)
     ax.set_ylim(-lim, lim)
+    ticks = np.arange(-1.0, 1.0001, 0.25)
+    ax.set_xticks(ticks)
+    ax.set_yticks(ticks)
     ax.set_axisbelow(True)
     ax.grid(True)
     niceify(
@@ -111,19 +138,33 @@ def _plotRecoveryWithBounds(
             'show_x': show_x,
             'stats': {'out': out_pct},
             'stats_suffix': '%',
-            'stats_loc_x': 0.83,
+            'stats_loc_x': 0.81,
             'stats_loc_y': 0.05,
             'stats_box': True,
         },
     )
     handles, labels = ax.get_legend_handles_labels()
     if handles:
-        ax.legend(
+        class_legend = ax.legend(
             handles,
             labels,
             loc='upper left',
             fontsize=18,
-            markerscale=2.5,
+        )
+        ax.add_artist(class_legend)
+    if size_labels:
+        size_handles = [
+            ax.scatter([], [], s=s_level, alpha=0.40, color='grey') for _, s_level in size_labels
+        ]
+        size_text = [f'{m_level}' for m_level, _ in size_labels]
+        ax.legend(
+            size_handles,
+            size_text,
+            loc='center left',
+            bbox_to_anchor=(1.02, 0.5),
+            fontsize=18,
+            title='Groups',
+            title_fontsize=18,
         )
 
 
@@ -142,7 +183,7 @@ def plotRfxCorrelationRecovery(
     if labels is None:
         labels = [''] * len(proposals)
     nrows = len(proposals)
-    fig, axs = plt.subplots(nrows, 1, figsize=(9, 6 * nrows), dpi=300, squeeze=False)
+    fig, axs = plt.subplots(nrows, 1, figsize=(11, 6 * nrows), dpi=300, squeeze=False)
 
     for i, (proposal, label) in enumerate(zip(proposals, labels)):
         upper = i == 0
@@ -154,9 +195,10 @@ def plotRfxCorrelationRecovery(
             show_title=upper,
             show_x=lower,
             ylabel=(label if label else 'Posterior mean'),
+            ms=data['m'],
         )
 
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0, 0.86, 1))
 
     saved_path = None
     if plot_dir is not None:
