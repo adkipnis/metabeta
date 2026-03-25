@@ -71,6 +71,18 @@ def logDetSqrtSoftplus(x: torch.Tensor) -> torch.Tensor:
 
 
 
+def getConstrainers(
+    method: Literal['exp', 'softplus', 'softplus-sqrt'] = 'softplus',
+):
+    if method == 'exp':  # unbounded gradient; best when sigmas span orders of magnitude
+        return maskedExp, maskedLog, logDetExp
+    elif method == 'softplus':  # safe default; poor gradient for very small sigmas
+        return maskedSoftplus, maskedInverseSoftplus, logDetSoftplus
+    elif method == 'softplus-sqrt':  # compressed upper range; good for sigmas in [0.05, 3]
+        return maskedSqrtSoftplus, maskedInverseSqrtSoftplus, logDetSqrtSoftplus
+    raise ValueError(f'unknown constrainer method: {method}')
+
+
 # crunching
 def dampen(x: torch.Tensor, p: float = 0.45) -> torch.Tensor:
     return x.sign() * x.abs().pow(p)
