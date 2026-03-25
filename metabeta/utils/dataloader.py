@@ -198,6 +198,11 @@ def collateGrouped(
     out['corr_rfx'] = quickCollate(batch, 'corr_rfx', dtype)
     out['eta_rfx'] = quickCollate(batch, 'eta_rfx', dtype)
 
+    # prior family indices
+    for key in ('family_ffx', 'family_sigma_rfx', 'family_sigma_eps'):
+        if key in batch[0]:
+            out[key] = quickCollate(batch, key, torch.long)
+
     # save sd(Y) for unstandardizing
     out['sd_y'] = quickCollate(batch, 'sd_y')
 
