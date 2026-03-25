@@ -49,6 +49,26 @@ def logDetSoftplus(x: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
     return torch.where(x != 0, F.logsigmoid(beta * x), torch.zeros_like(x))
 
 
+# constrainer
+
+
+def maskedSqrtSoftplus(x: torch.Tensor) -> torch.Tensor:
+    mask = x.ne(0).to(x.dtype)
+    return softplus(x).sqrt() * mask
+
+
+def maskedInverseSqrtSoftplus(x: torch.Tensor) -> torch.Tensor:
+    mask = x.ne(0).to(x.device)
+    return inverseSoftplus(x.square()) * mask
+
+
+def logDetSqrtSoftplus(x: torch.Tensor) -> torch.Tensor:
+    """log |d sqrt(softplus(x))/dx|, masked for padded dims."""
+    sp = softplus(x).clamp_min(EPS)
+    val = F.logsigmoid(x) - 0.5 * sp.log() - math.log(2)
+    return torch.where(x != 0, val, torch.zeros_like(x))
+
+
 
 
 # crunching
