@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.stats import norm, t, multivariate_normal
 
-from metabeta.utils.sampling import truncLogUni, lkjCorrelation, spikeAndSlab, skewedBeta
+from metabeta.utils.sampling import lkjCorrelation, spikeAndSlab, skewedBeta
 
 MIN_STD = 1e-3
 
@@ -16,9 +16,6 @@ def hypersample(
     """sample hyperparameters to instantiate prior"""
     out = {}
     out['nu_ffx'] = spikeAndSlab(rng, size=d)
-    # out['tau_ffx'] = rng.uniform(0.01, 3.0, size=d)
-    # out['tau_rfx'] = rng.uniform(0.01, 3.0, size=q)
-    # out['tau_eps'] = rng.uniform(0.01, 3.0, size=1)[0]
     out['tau_ffx'] = skewedBeta(rng, 0.01, 12.0, mode=1.0, concentration=6.0, size=d)
     out['tau_rfx'] = skewedBeta(rng, 0.01, 5.0, mode=1.0, concentration=5.0, size=q)
     out['tau_eps'] = skewedBeta(rng, 0.01, 5.0, mode=1.0, concentration=4.0, size=1)[0]
