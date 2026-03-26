@@ -5,16 +5,24 @@ from torch import distributions as D
 
 from metabeta.utils.families import (
     FFX_FAMILIES,
+    LIKELIHOOD_FAMILIES,
+    LIKELIHOOD_HAS_SIGMA_EPS,
     SIGMA_FAMILIES,
     STUDENT_DF,
     FamilyEncoder,
+    hasSigmaEps,
+    logLikelihood,
     logProbFfx,
     logProbSigma,
     oneHotFamily,
+    posteriorPredictiveDist,
     sampleFfxNp,
     sampleFfxTorch,
     sampleSigmaNp,
     sampleSigmaTorch,
+    simulateBernoulliNp,
+    simulateNormalNp,
+    simulateYNp,
 )
 
 
@@ -379,3 +387,237 @@ def test_sampleSigmaNp_invalid_family_raises():
     rng = np.random.default_rng(0)
     with pytest.raises(IndexError):
         sampleSigmaNp(99, np.array([1.0]), rng, (1,))
+
+
+# ---------------------------------------------------------------------------
+# Likelihood constants
+# ---------------------------------------------------------------------------
+
+
+def test_hasSigmaEps():
+    assert hasSigmaEps(0) is True  # normal
+    assert hasSigmaEps(1) is False  # bernoulli
+
+
+def test_likelihood_families_and_sigma_eps_aligned():
+    assert len(LIKELIHOOD_FAMILIES) == len(LIKELIHOOD_HAS_SIGMA_EPS)
+
+
+# ---------------------------------------------------------------------------
+# NumPy likelihood simulation
+# ---------------------------------------------------------------------------
+
+
+def test_simulateNormalNp_shape_and_finite():
+    rng = np.random.default_rng(0)
+    eta = np.array([0.0, 1.0, -0.5, 2.0])
+    y = simulateNormalNp(rng, eta, sigma_eps=0.5)
+    assert y.shape == eta.shape
+    assert np.all(np.isfinite(y))
+
+
+def test_simulateNormalNp_mean_close_to_eta():
+    rng = np.random.default_rng(0)
+    eta = np.full(10_000, 3.0)
+    y = simulateNormalNp(rng, eta, sigma_eps=0.1)
+    assert np.isclose(y.mean(), 3.0, atol=0.01)
+
+
+def test_simulateBernoulliNp_binary():
+    rng = np.random.default_rng(0)
+    eta = np.linspace(-3, 3, 100)
+    y = simulateBernoulliNp(rng, eta, sigma_eps=0.0)
+    assert set(np.unique(y)).issubset({0, 1})
+    assert y.shape == eta.shape
+
+
+def test_simulateBernoulliNp_high_logit_mostly_ones():
+    rng = np.random.default_rng(0)
+    eta = np.full(1000, 5.0)  # sigmoid(5) ≈ 0.993
+    y = simulateBernoulliNp(rng, eta, sigma_eps=0.0)
+    assert y.mean() > 0.95
+
+
+def test_simulateBernoulliNp_low_logit_mostly_zeros():
+    rng = np.random.default_rng(0)
+    eta = np.full(1000, -5.0)  # sigmoid(-5) ≈ 0.007
+    y = simulateBernoulliNp(rng, eta, sigma_eps=0.0)
+    assert y.mean() < 0.05
+
+
+def test_simulateYNp_dispatches_normal():
+    rng1 = np.random.default_rng(42)
+    rng2 = np.random.default_rng(42)
+    eta = np.array([1.0, 2.0, 3.0])
+    y1 = simulateYNp(rng1, eta, sigma_eps=0.5, likelihood_family=0)
+    y2 = simulateNormalNp(rng2, eta, sigma_eps=0.5)
+    np.testing.assert_allclose(y1, y2)
+
+
+def test_simulateYNp_dispatches_bernoulli():
+    rng1 = np.random.default_rng(42)
+    rng2 = np.random.default_rng(42)
+    eta = np.array([1.0, -1.0, 0.0])
+    y1 = simulateYNp(rng1, eta, sigma_eps=0.0, likelihood_family=1)
+    y2 = simulateBernoulliNp(rng2, eta, sigma_eps=0.0)
+    np.testing.assert_allclose(y1, y2)
+
+
+def test_simulateYNp_invalid_family_raises():
+    rng = np.random.default_rng(0)
+    with pytest.raises(IndexError):
+        simulateYNp(rng, np.array([0.0]), sigma_eps=1.0, likelihood_family=99)
+
+
+# ---------------------------------------------------------------------------
+# Torch log-likelihood
+# ---------------------------------------------------------------------------
+
+
+def _make_ll_tensors(b=4, m=3, n=5, s=10, d=2, q=1):
+    """Helper to create tensors for logLikelihood tests."""
+    ffx = torch.randn(b, s, d)
+    sigma_eps = torch.rand(b, s) + 0.1
+    rfx = torch.randn(b, m, s, q)
+    X = torch.randn(b, m, n, d)
+    Z = X[..., :q]
+    mask = torch.ones(b, m, n, 1)
+    return ffx, sigma_eps, rfx, X, Z, mask
+
+
+def test_logLikelihood_normal_default():
+    """Default (likelihood_family=0) should match D.Normal."""
+    ffx, sigma_eps, rfx, X, Z, mask = _make_ll_tensors()
+    ll = logLikelihood(ffx, sigma_eps, rfx, torch.randn(4, 3, 5, 1), X, Z, mask)
+    assert ll.shape == (4, 10)
+    assert torch.all(torch.isfinite(ll))
+
+
+def test_logLikelihood_normal_matches_manual():
+    b, m, n, s, d, q = 2, 2, 3, 5, 2, 1
+    torch.manual_seed(0)
+    ffx = torch.randn(b, s, d)
+    sigma_eps = torch.rand(b, s) + 0.1
+    rfx = torch.randn(b, m, s, q)
+    X = torch.randn(b, m, n, d)
+    Z = X[..., :q]
+    y = torch.randn(b, m, n, 1)
+
+    ll = logLikelihood(ffx, sigma_eps, rfx, y, X, Z, likelihood_family=0)
+
+    # manual
+    mu_g = torch.einsum('bmnd,bsd->bmns', X, ffx)
+    mu_l = torch.einsum('bmnq,bmsq->bmns', Z, rfx)
+    eta = mu_g + mu_l
+    scale = sigma_eps.unsqueeze(1).unsqueeze(1) + 1e-12
+    expected = D.Normal(loc=eta, scale=scale).log_prob(y).sum(dim=(1, 2))
+    torch.testing.assert_close(ll, expected)
+
+
+def test_logLikelihood_bernoulli_binary_y():
+    b, m, n, s, d, q = 2, 2, 3, 5, 2, 1
+    torch.manual_seed(0)
+    ffx = torch.randn(b, s, d)
+    sigma_eps = torch.rand(b, s)  # unused
+    rfx = torch.randn(b, m, s, q)
+    X = torch.randn(b, m, n, d)
+    Z = X[..., :q]
+    y = torch.randint(0, 2, (b, m, n, 1)).float()
+
+    ll = logLikelihood(ffx, sigma_eps, rfx, y, X, Z, likelihood_family=1)
+
+    # manual
+    mu_g = torch.einsum('bmnd,bsd->bmns', X, ffx)
+    mu_l = torch.einsum('bmnq,bmsq->bmns', Z, rfx)
+    eta = mu_g + mu_l
+    expected = D.Bernoulli(logits=eta).log_prob(y).sum(dim=(1, 2))
+    torch.testing.assert_close(ll, expected)
+
+
+def test_logLikelihood_bernoulli_with_mask():
+    b, m, n, s, d, q = 2, 2, 4, 5, 2, 1
+    torch.manual_seed(0)
+    ffx = torch.randn(b, s, d)
+    sigma_eps = torch.rand(b, s)
+    rfx = torch.randn(b, m, s, q)
+    X = torch.randn(b, m, n, d)
+    Z = X[..., :q]
+    y = torch.randint(0, 2, (b, m, n, 1)).float()
+    mask = torch.ones(b, m, n, 1)
+    mask[:, :, -1:, :] = 0  # mask out last observation
+
+    ll = logLikelihood(ffx, sigma_eps, rfx, y, X, Z, mask=mask, likelihood_family=1)
+
+    # manual
+    mu_g = torch.einsum('bmnd,bsd->bmns', X, ffx)
+    mu_l = torch.einsum('bmnq,bmsq->bmns', Z, rfx)
+    eta = mu_g + mu_l
+    expected = (D.Bernoulli(logits=eta).log_prob(y) * mask).sum(dim=(1, 2))
+    torch.testing.assert_close(ll, expected)
+
+
+def test_logLikelihood_bernoulli_log_prob_range():
+    """Bernoulli log-prob should be in [-log(2), 0]."""
+    ffx, sigma_eps, rfx, X, Z, mask = _make_ll_tensors(b=2, s=5)
+    y = torch.randint(0, 2, (2, 3, 5, 1)).float()
+    ll = logLikelihood(ffx, sigma_eps, rfx, y, X, Z, mask=mask, likelihood_family=1)
+    assert torch.all(torch.isfinite(ll))
+    assert torch.all(ll <= 0)
+
+
+# ---------------------------------------------------------------------------
+# Torch posterior predictive distribution
+# ---------------------------------------------------------------------------
+
+
+def test_posteriorPredictiveDist_normal():
+    b, m, n, s, d, q = 2, 3, 5, 10, 2, 1
+    ffx = torch.randn(b, s, d)
+    sigma_eps = torch.rand(b, s) + 0.1
+    rfx = torch.randn(b, m, s, q)
+    X = torch.randn(b, m, n, d)
+    Z = X[..., :q]
+    pp = posteriorPredictiveDist(ffx, sigma_eps, rfx, X, Z, likelihood_family=0)
+    assert isinstance(pp, D.Normal)
+    y = pp.sample()
+    assert y.shape == (b, m, n, s)
+    assert torch.all(torch.isfinite(y))
+
+
+def test_posteriorPredictiveDist_bernoulli():
+    b, m, n, s, d, q = 2, 3, 5, 10, 2, 1
+    ffx = torch.randn(b, s, d)
+    sigma_eps = torch.rand(b, s)
+    rfx = torch.randn(b, m, s, q)
+    X = torch.randn(b, m, n, d)
+    Z = X[..., :q]
+    pp = posteriorPredictiveDist(ffx, sigma_eps, rfx, X, Z, likelihood_family=1)
+    assert isinstance(pp, D.Bernoulli)
+    y = pp.sample()
+    assert y.shape == (b, m, n, s)
+    assert set(y.unique().tolist()).issubset({0.0, 1.0})
+
+
+def test_posteriorPredictiveDist_bernoulli_log_prob():
+    b, m, n, s, d, q = 2, 3, 5, 10, 2, 1
+    ffx = torch.randn(b, s, d)
+    sigma_eps = torch.rand(b, s)
+    rfx = torch.randn(b, m, s, q)
+    X = torch.randn(b, m, n, d)
+    Z = X[..., :q]
+    pp = posteriorPredictiveDist(ffx, sigma_eps, rfx, X, Z, likelihood_family=1)
+    y = torch.randint(0, 2, (b, m, n, s)).float()
+    lp = pp.log_prob(y)
+    assert lp.shape == (b, m, n, s)
+    assert torch.all(torch.isfinite(lp))
+    assert torch.all(lp <= 0)
+
+
+def test_posteriorPredictiveDist_invalid_family_raises():
+    ffx = torch.randn(2, 5, 2)
+    sigma_eps = torch.rand(2, 5)
+    rfx = torch.randn(2, 3, 5, 1)
+    X = torch.randn(2, 3, 4, 2)
+    Z = X[..., :1]
+    with pytest.raises(ValueError, match='unknown likelihood family'):
+        posteriorPredictiveDist(ffx, sigma_eps, rfx, X, Z, likelihood_family=99)
