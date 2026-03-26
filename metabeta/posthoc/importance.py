@@ -19,7 +19,7 @@ class ImportanceSampler:
         self,
         data: dict[str, torch.Tensor],
         constrain: bool = True,
-        full: bool = True,  # incorporate sigma_rfx and rfx priors
+        full: bool = False,  # incorporate RFX priors
         temperature: float = 1.0,  # softmax temperature
         pareto: bool = False,  # use Pareto smoothing (PSIS)
         sir: bool = False,  # use Sampling Importance Resampling (SIR)
@@ -76,11 +76,8 @@ class ImportanceSampler:
 
         # regularize Sigma(RFX)
         if self.full:
-            lp_sigma_rfx = logProbSigma(
-                sigma_rfx, self.tau_rfx, self.family_sigma_rfx, self.mask_q
-            )
-            lp_rfx = logProbRfx(rfx, sigma_rfx, self.mask_mq)
-            lp = lp + lp_sigma_rfx + lp_rfx
+            lp = lp + logProbSigma(sigma_rfx, self.tau_rfx, self.family_sigma_rfx, self.mask_q)
+            lp = lp + logProbRfx(rfx, sigma_rfx, self.mask_mq)
 
         # conditional log likelihood
         ll = logLikelihood(ffx, sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n)
@@ -89,7 +86,9 @@ class ImportanceSampler:
     def __call__(self, proposal: Proposal) -> Proposal:
         # posterior log probs
         log_q_g, log_q_l = proposal.log_probs
-        lq = log_q_g + (log_q_l * self.mask_m).sum(1)
+        lq = log_q_g 
+        if self.full:
+            lq = lq + (log_q_l * self.mask_m).sum(1)
 
         # log likelihood, log prior, log proposal posterior
         ll, lp = self.unnormalizedPosterior(proposal)
