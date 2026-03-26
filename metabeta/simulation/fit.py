@@ -212,12 +212,16 @@ class Fitter:
     def bambify(self, ds: dict[str, np.ndarray]) -> bmb.Model:
         """setup bambi model from dataset dict
         optionally allow bambi to setup its own priors for the fixed effects"""
+        likelihood_family = int(ds.get('likelihood_family', 0))
         df = self._pandify(ds)
         form = self._formulate(ds)
         priors = None
         if 'nu_ffx' in ds:
             priors = self._priorize(ds)
-        model = bmb.Model(formula=form, data=df, categorical='i', priors=priors)
+        family = bambiFamilyName(likelihood_family)
+        model = bmb.Model(
+            formula=form, data=df, family=family, categorical='i', priors=priors,
+        )
         model.build()
         return model
 
