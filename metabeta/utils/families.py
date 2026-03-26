@@ -290,6 +290,38 @@ def logProbRfx(
     return lp.sum(dim=(1, -1))  # (b, s)
 
 
+def _linearPredictor(
+    ffx: torch.Tensor,  # (b, s, d)
+    rfx: torch.Tensor,  # (b, m, s, q)
+    X: torch.Tensor,  # (b, m, n, d)
+    Z: torch.Tensor,  # (b, m, n, q)
+) -> torch.Tensor:
+    """Compute linear predictor eta = X @ ffx + Z * rfx. Returns (b, m, n, s)."""
+    mu_g = torch.einsum('bmnd,bsd->bmns', X, ffx)
+    mu_l = torch.einsum('bmnq,bmsq->bmns', Z, rfx)
+    return mu_g + mu_l
+
+
+def _llNormal(
+    eta: torch.Tensor,  # (b, m, n, s)
+    sigma_eps: torch.Tensor,  # (b, s)
+    y: torch.Tensor,  # (b, m, n, 1)
+) -> torch.Tensor:
+    scale = sigma_eps.unsqueeze(1).unsqueeze(1) + 1e-12
+    return D.Normal(loc=eta, scale=scale).log_prob(y)
+
+
+def _llBernoulli(
+    eta: torch.Tensor,  # (b, m, n, s)
+    sigma_eps: torch.Tensor,  # unused
+    y: torch.Tensor,  # (b, m, n, 1)
+) -> torch.Tensor:
+    return D.Bernoulli(logits=eta).log_prob(y)
+
+
+_LIKELIHOOD_LL = (_llNormal, _llBernoulli)
+
+
 def logLikelihood(
     ffx: torch.Tensor,  # (b, s, d)
     sigma_eps: torch.Tensor,  # (b, s)
@@ -298,18 +330,17 @@ def logLikelihood(
     X: torch.Tensor,  # (b, m, n, d)
     Z: torch.Tensor,  # (b, m, n, q)
     mask: torch.Tensor | None = None,  # (b, m, n, 1)
+    likelihood_family: int = 0,
 ) -> torch.Tensor:
-    """Conditional log-likelihood (always Normal)."""
-    mu_g = torch.einsum('bmnd,bsd->bmns', X, ffx)
-    mu_l = torch.einsum('bmnq,bmsq->bmns', Z, rfx)
-    loc = mu_g + mu_l
-    scale = sigma_eps.unsqueeze(1).unsqueeze(1) + 1e-12
-    ll = D.Normal(loc=loc, scale=scale).log_prob(y)
+    """Conditional log-likelihood dispatched by likelihood family."""
+    eta = _linearPredictor(ffx, rfx, X, Z)
+    ll = _LIKELIHOOD_LL[likelihood_family](eta, sigma_eps, y)
     if mask is not None:
         ll = ll * mask
     return ll.sum(dim=(1, 2))  # (b, s)
 
 
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Encoding for neural network context
 # ---------------------------------------------------------------------------
