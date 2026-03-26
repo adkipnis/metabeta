@@ -4,6 +4,7 @@ import torch
 from scipy.stats import expon, norm, t
 from torch import distributions as D
 
+from metabeta.utils.preprocessing import standardize
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -247,13 +248,14 @@ def simulateNormalNp(
     sigma_eps: float,
 ) -> np.ndarray:
     eps = rng.normal(size=eta.shape)
-    return eta + eps * sigma_eps
+    eps = standardize(eps, axis=0) * sigma_eps
+    return eta + eps
 
 
 def simulateBernoulliNp(
     rng: np.random.Generator,
     eta: np.ndarray,
-    sigma_eps: float,
+    sigma_eps: float = 0.0, # stand-in
 ) -> np.ndarray:
     p = _expit(eta)
     return rng.binomial(1, p).astype(eta.dtype)
