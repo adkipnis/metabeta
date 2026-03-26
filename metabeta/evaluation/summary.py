@@ -86,9 +86,11 @@ def getSummary(
     return summary
 
 
-def summaryTable(s: EvaluationSummary) -> str:
+def summaryTable(s: EvaluationSummary, likelihood_family: int = 0) -> str:
     long_table = longTable(s.corr, s.nrmse, s.ece, s.lcr)
-    flat_table = flatTable(s.tpd, s.mnll, s.meff, s.mk, s.rfx_corr)
+    fit_labels = {0: 'Median pp R²', 1: 'Median pp AUC', 2: 'Median pp Deviance'}
+    fit_label = fit_labels.get(likelihood_family, 'Median pp R²')
+    flat_table = flatTable(s.tpd, s.mnll, s.mfit, fit_label, s.meff, s.mk, s.rfx_corr)
     return long_table + '\n' + flat_table
 
 
@@ -105,7 +107,6 @@ def longTable(
             out.append(e)
         return out
 
-    keys = ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx')
     names = {
         'ffx': 'FFX',
         'sigma_rfx': 'Sigma(RFX)',
