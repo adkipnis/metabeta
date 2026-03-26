@@ -193,6 +193,8 @@ class Fitter:
                 sigma = bmb.Prior('HalfStudentT', nu=STUDENT_DF, sigma=tau_rfx[j])
             elif sigma_name == 'exponential':
                 sigma = bmb.Prior('Exponential', lam=1.0 / (tau_rfx[j] + 1e-12))
+            else:
+                raise ValueError(f'unknown sigma family: {sigma_name}')
             priors[key] = bmb.Prior('Normal', mu=0, sigma=sigma)
 
         # noise variance
@@ -213,7 +215,6 @@ class Fitter:
         priors = None
         if 'nu_ffx' in ds:
             priors = self._priorize(ds)
-
         model = bmb.Model(formula=form, data=df, categorical='i', priors=priors)
         model.build()
         return model
@@ -359,7 +360,7 @@ class Fitter:
 
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
-    print(f'PyTensor tmp directory: {pytensor.config.base_compiledir}')
+    print(f'PyTensor tmp directory: {pytensor.config.base_compiledir}') # type: ignore
     cfg = setup()
     fitter = Fitter(cfg)
     if cfg.reintegrate:
