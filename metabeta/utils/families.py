@@ -267,7 +267,16 @@ def simulateBernoulliNp(
     return rng.binomial(1, p).astype(eta.dtype)
 
 
-_LIKELIHOOD_SIMULATE_NP = (simulateNormalNp, simulateBernoulliNp)
+def simulatePoissonNp(
+    rng: np.random.Generator,
+    eta: np.ndarray,
+    sigma_eps: float = 0.0,
+) -> np.ndarray:
+    rate = np.exp(eta)
+    return rng.poisson(rate).astype(eta.dtype)
+
+
+_LIKELIHOOD_SIMULATE_NP = (simulateNormalNp, simulateBernoulliNp, simulatePoissonNp)
 
 
 def simulateYNp(
@@ -327,7 +336,16 @@ def _llBernoulli(
     return D.Bernoulli(logits=eta).log_prob(y)
 
 
-_LIKELIHOOD_LL = (_llNormal, _llBernoulli)
+def _llPoisson(
+    eta: torch.Tensor,  # (b, m, n, s)
+    sigma_eps: torch.Tensor,  # unused
+    y: torch.Tensor,  # (b, m, n, 1)
+) -> torch.Tensor:
+    rate = torch.exp(eta.clamp(max=30))
+    return D.Poisson(rate=rate).log_prob(y)
+
+
+_LIKELIHOOD_LL = (_llNormal, _llBernoulli, _llPoisson)
 
 
 def logLikelihood(
@@ -368,6 +386,9 @@ def posteriorPredictiveDist(
         return D.Normal(loc=eta, scale=scale)
     elif likelihood_family == 1:  # bernoulli
         return D.Bernoulli(logits=eta)
+    elif likelihood_family == 2:  # poisson
+        rate = torch.exp(eta.clamp(max=30))
+        return D.Poisson(rate=rate)
     raise ValueError(f'unknown likelihood family: {likelihood_family}')
 
 
