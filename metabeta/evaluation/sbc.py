@@ -25,7 +25,9 @@ def fractionalRanks(
 def getFractionalRanks(
     proposal: Proposal, data: dict[str, torch.Tensor]
 ) -> dict[str, torch.Tensor]:
-    param_names = ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx')
+    param_names = ['ffx', 'sigma_rfx', 'rfx']
+    if proposal.has_sigma_eps:
+        param_names.insert(2, 'sigma_eps')
     weights = proposal.weights
     ranks = {}
     for param in param_names:
