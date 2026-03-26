@@ -61,12 +61,18 @@ class ImportanceSampler:
 
     def unnormalizedPosterior(self, proposal: Proposal) -> tuple[torch.Tensor, ...]:
         # unpack parameters
-        ffx, sigma_rfx, sigma_eps, rfx = proposal.parameters
+        ffx = proposal.ffx
+        sigma_rfx = proposal.sigma_rfx
+        rfx = proposal.rfx
 
         # log priors
-        lp_ffx = logProbFfx(ffx, self.nu_ffx, self.tau_ffx, self.family_ffx, self.mask_d)
-        lp_sigma_eps = logProbSigma(sigma_eps, self.tau_eps, self.family_sigma_eps)
-        lp = lp_ffx + lp_sigma_eps
+        lp = logProbFfx(ffx, self.nu_ffx, self.tau_ffx, self.family_ffx, self.mask_d)
+
+        if self.has_sigma_eps:
+            sigma_eps = proposal.sigma_eps
+            lp = lp + logProbSigma(sigma_eps, self.tau_eps, self.family_sigma_eps)
+        else:
+            sigma_eps = ffx.new_zeros(ffx.shape[:2])
 
         # regularize Sigma(RFX)
         if self.full:
@@ -161,7 +167,8 @@ def runIS(
         data = rescaleData(data)
 
     # importance weighing
-    imp_sampler = ImportanceSampler(data, sir=False)
+    lf = getattr(cfg, 'likelihood_family', 0)
+    imp_sampler = ImportanceSampler(data, sir=False, likelihood_family=lf)
     proposal = imp_sampler(proposal)
     return proposal
 
@@ -178,8 +185,9 @@ def runSIR(
         data_eval = data
 
     # init importance sampler
+    lf = getattr(cfg, 'likelihood_family', 0)
     n_sir = cfg.n_samples // cfg.sir_iter
-    imp_sampler = ImportanceSampler(data_eval, sir=True, n_sir=n_sir)
+    imp_sampler = ImportanceSampler(data_eval, sir=True, n_sir=n_sir, likelihood_family=lf)
     selected = []
     n_remaining = cfg.n_samples
     while n_remaining > 0:
