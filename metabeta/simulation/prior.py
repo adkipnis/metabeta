@@ -9,6 +9,7 @@ from metabeta.utils.families import (
     FFX_FAMILY_PROBS,
     SIGMA_RFX_FAMILY_PROBS,
     SIGMA_EPS_FAMILY_PROBS,
+    hasSigmaEps,
     sampleFfxNp,
     sampleSigmaNp,
 )
@@ -20,16 +21,20 @@ def hypersample(
     rng: np.random.Generator,
     d: int,
     q: int,
+    likelihood_family: int = 0,
 ) -> dict[str, np.ndarray]:
     """sample hyperparameters to instantiate prior.
     eta_rfx > 0 indicates correlated rfx (LKJ prior), eta_rfx = 0 means uncorrelated.
     family_* are integer indices into FFX_FAMILIES / SIGMA_FAMILIES.
     """
     out = {}
+    out['likelihood_family'] = np.array(likelihood_family)
     out['nu_ffx'] = spikeAndSlab(rng, size=d)
     out['tau_ffx'] = skewedBeta(rng, 0.01, 10.0, mode=1.0, concentration=6.0, size=d)
     out['tau_rfx'] = skewedBeta(rng, 0.01, 5.0, mode=1.0, concentration=5.0, size=q)
-    out['tau_eps'] = skewedBeta(rng, 0.01, 5.0, mode=1.0, concentration=4.0, size=1)[0]
+
+    if hasSigmaEps(likelihood_family):
+        out['tau_eps'] = skewedBeta(rng, 0.01, 5.0, mode=1.0, concentration=4.0, size=1)[0]
 
     # stochastic choice of rfx correlation (probability depends on q)
     if q == 1:
@@ -43,9 +48,11 @@ def hypersample(
     # prior families (weighted over available families)
     out['family_ffx'] = np.array(rng.choice(len(FFX_FAMILIES), p=FFX_FAMILY_PROBS))
     out['family_sigma_rfx'] = np.array(rng.choice(len(SIGMA_FAMILIES), p=SIGMA_RFX_FAMILY_PROBS))
-    out['family_sigma_eps'] = np.array(rng.choice(len(SIGMA_FAMILIES), p=SIGMA_EPS_FAMILY_PROBS))
+    if hasSigmaEps(likelihood_family):
+        out['family_sigma_eps'] = np.array(
+            rng.choice(len(SIGMA_FAMILIES), p=SIGMA_EPS_FAMILY_PROBS)
+        )
 
-    # TODO: sample link function (normal, t, bernoulli, poisson)
     return out
 
 
@@ -60,6 +67,7 @@ class Prior:
         self.d = len(self.hyperparams['tau_ffx'])  # number of fixed effects
         self.q = len(self.hyperparams['tau_rfx'])  # number of random effects
         self.correlated_rfx = float(self.hyperparams.get('eta_rfx', 0)) > 0
+        self.likelihood_family = int(self.hyperparams.get('likelihood_family', 0))
 
     def _sampleFfx(self) -> np.ndarray:
         nu = self.hyperparams['nu_ffx']
@@ -98,7 +106,8 @@ class Prior:
         out = {}
         out['ffx'] = self._sampleFfx()
         out['sigma_rfx'] = self._sampleSigmaRfx()
-        out['sigma_eps'] = self._sampleSigmaEps()
+        if hasSigmaEps(self.likelihood_family):
+            out['sigma_eps'] = self._sampleSigmaEps()
         out['corr_rfx'] = self._sampleCorrMat()
         out['rfx'] = self._sampleRfx(m, sigma_rfx=out['sigma_rfx'], corr_mat=out['corr_rfx'])
         return out
