@@ -121,3 +121,46 @@ def setBatchFamily(
     return out
 
 
+# ---- Step 1: check that posterior changes when family changes ----
+
+
+def checkPosteriorChanges(
+    model: Approximator,
+    batch: dict[str, torch.Tensor],
+    n_samples: int,
+) -> None:
+    """For each parameter group, verify that swapping the family index
+    changes the posterior mean and SD."""
+    print('\n--- Step 1: Does the posterior change when the family changes? ---')
+
+    groups = [
+        ('family_ffx', FFX_FAMILIES, 'ffx'),
+        ('family_sigma_rfx', SIGMA_FAMILIES, 'sigma_rfx'),
+        ('family_sigma_eps', SIGMA_FAMILIES, 'sigma_eps'),
+    ]
+
+    for family_key, families, param_key in groups:
+        print(f'\n  [{param_key}] comparing {len(families)} families:')
+        stats_per_family = {}
+        for i, name in enumerate(families):
+            b = setBatchFamily(batch, family_key, i)
+            stats_per_family[name] = getPosteriorStats(model, b, n_samples)
+
+        # compare all pairs
+        names = list(stats_per_family.keys())
+        for j in range(len(names)):
+            for k in range(j + 1, len(names)):
+                s_j = stats_per_family[names[j]][param_key]
+                s_k = stats_per_family[names[k]][param_key]
+                mean_diff = (s_j['mean'] - s_k['mean']).abs().mean().item()
+                sd_diff = (s_j['sd'] - s_k['sd']).abs().mean().item()
+                mean_changed = not torch.allclose(s_j['mean'], s_k['mean'], atol=1e-6)
+                sd_changed = not torch.allclose(s_j['sd'], s_k['sd'], atol=1e-6)
+                status = 'PASS' if (mean_changed and sd_changed) else 'FAIL'
+                print(
+                    f'    {names[j]} vs {names[k]}: '
+                    f'mean diff={mean_diff:.6f}, sd diff={sd_diff:.6f} [{status}]'
+                )
+
+
+# ---- Step 2: check direction (heavier tails → wider posteriors) ----
