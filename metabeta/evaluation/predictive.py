@@ -190,3 +190,39 @@ def posteriorPredictiveR2(
 
 
 def posteriorPredictiveAUC(
+    pp: D.Distribution,
+    data: dict[str, torch.Tensor],
+    w: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Posterior predictive AUC for binary outcomes. Returns (b,)."""
+    y_obs = data['y']                        # (b, m, n)
+    mask = data['mask_n']                    # (b, m, n)
+
+    # posterior mean predicted probability
+    p = pp.probs                             # (b, m, n, s)
+    if w is not None:
+        w_ = w.unsqueeze(1).unsqueeze(1)
+        p_mean = (p * w_).sum(-1)
+    else:
+        p_mean = p.mean(-1)                  # (b, m, n)
+
+    # per-dataset AUC
+    b = y_obs.shape[0]
+    auc = y_obs.new_zeros(b)
+    for i in range(b):
+        m = mask[i].bool()
+        yi = y_obs[i][m]
+        pi = p_mean[i][m]
+        n_pos = yi.sum()
+        n_neg = yi.numel() - n_pos
+        if n_pos == 0 or n_neg == 0:
+            auc[i] = float('nan')
+            continue
+        # Wilcoxon-Mann-Whitney: fraction of (pos, neg) pairs correctly ranked
+        pos_scores = pi[yi == 1]
+        neg_scores = pi[yi == 0]
+        auc[i] = (pos_scores.unsqueeze(-1) > neg_scores.unsqueeze(0)).float().mean()
+    return auc
+
+
+def posteriorPredictiveDeviance(
