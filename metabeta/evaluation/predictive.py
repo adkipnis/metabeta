@@ -158,3 +158,35 @@ def ppcICC(sd_between: torch.Tensor, sd_within: torch.Tensor) -> torch.Tensor:
     var_between = sd_between.square()
     var_within = sd_within.square()
     return var_between / (var_between + var_within + 1e-12)
+
+
+def posteriorPredictiveR2(
+    pp: D.Distribution,
+    data: dict[str, torch.Tensor],
+    w: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Posterior predictive R² for continuous outcomes. Returns (b,)."""
+    y_obs = data['y']                        # (b, m, n)
+    mask = data['mask_n'].float()            # (b, m, n)
+    n = mask.sum(dim=(1, 2)).clamp(min=1)    # (b,)
+
+    # posterior mean prediction: E[y | theta] averaged over samples
+    yhat = pp.mean                           # (b, m, n, s)
+    if w is not None:
+        w_ = w.unsqueeze(1).unsqueeze(1)     # (b, 1, 1, s)
+        yhat = (yhat * w_).sum(-1)
+    else:
+        yhat = yhat.mean(-1)                 # (b, m, n)
+    yhat = yhat * mask
+
+    # residual variance
+    resid = (y_obs - yhat) * mask
+    ss_res = resid.square().sum(dim=(1, 2))
+
+    # total variance
+    y_mean = (y_obs * mask).sum(dim=(1, 2)) / n
+    ss_tot = ((y_obs - y_mean.unsqueeze(-1).unsqueeze(-1)) * mask).square().sum(dim=(1, 2))
+    return 1 - ss_res / ss_tot.clamp(min=1e-12)
+
+
+def posteriorPredictiveAUC(
