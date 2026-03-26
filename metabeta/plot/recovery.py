@@ -126,7 +126,8 @@ def _prepareRecoveryData(
     summary: EvaluationSummary,
     data: dict[str, torch.Tensor],
 ) -> tuple[list, list, list, list, list]:
-    allMasks = getMasks(data)
+    has_eps = 'sigma_eps' in data
+    allMasks = getMasks(data, has_sigma_eps=has_eps)
     est: dict[str, torch.Tensor] = summary.estimates
     stats = {'corr': summary.corr, 'nrmse': summary.nrmse}
 
@@ -150,9 +151,14 @@ def _prepareRecoveryData(
     targets.append(joinSigmas(data))
     estimates.append(joinSigmas(est))
     masks.append(allMasks['sigmas'])
-    names.append(getNames('sigmas', q))
-    nrmse = q / (q + 1) * stats['nrmse']['sigma_rfx'] + 1 / (q + 1) * stats['nrmse']['sigma_eps']
-    r = q / (q + 1) * stats['corr']['sigma_rfx'] + 1 / (q + 1) * stats['corr']['sigma_eps']
+    names.append(getNames('sigmas', q, has_sigma_eps=has_eps))
+    if has_eps:
+        w_rfx, w_eps = q / (q + 1), 1 / (q + 1)
+        nrmse = w_rfx * stats['nrmse']['sigma_rfx'] + w_eps * stats['nrmse']['sigma_eps']
+        r = w_rfx * stats['corr']['sigma_rfx'] + w_eps * stats['corr']['sigma_eps']
+    else:
+        nrmse = stats['nrmse']['sigma_rfx']
+        r = stats['corr']['sigma_rfx']
     metrics.append(
         {
             'r': r.mean().item(),

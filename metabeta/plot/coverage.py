@@ -73,7 +73,7 @@ def plotCoverage(
     for i, (summary, proposal, label) in enumerate(zip(summaries, proposals, labels)):
         names = (
             getNames('ffx', proposal.d)
-            + getNames('sigmas', proposal.q)
+            + getNames('sigmas', proposal.q, has_sigma_eps=proposal.has_sigma_eps)
             + getNames('rfx', proposal.q)
         )
         stats = {

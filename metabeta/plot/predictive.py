@@ -95,12 +95,12 @@ def _ppDensity(
 
 
 def plotPPD(
-    pp: D.Normal,
+    pp: D.Distribution,
     data: dict[str, torch.Tensor],
     plot_dir: Path | None = None,
     epoch: int | None = None,
     indices: Sequence[int] = [0, 1, 2],
-    pp_prior: D.Normal | None = None,
+    pp_prior: D.Distribution | None = None,
 ) -> None:
     y_obs = data['y']
     assert max(indices) < len(y_obs), 'dataset indices out of bounds'
@@ -175,7 +175,7 @@ def _PPCintervals(
 
 
 def plotPPC(
-    pp: D.Normal,
+    pp: D.Distribution,
     data: dict[str, torch.Tensor],
     plot_dir: Path | None = None,
     epoch: int | None = None,

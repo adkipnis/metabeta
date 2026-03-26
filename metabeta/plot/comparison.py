@@ -45,7 +45,7 @@ def plotComparison(
         # col 3: coverage
         names_cov = (
             getNames('ffx', proposal.d) +
-            getNames('sigmas', proposal.q) +
+            getNames('sigmas', proposal.q, has_sigma_eps=proposal.has_sigma_eps) +
             getNames('rfx', proposal.q)
         )
         stats_cov = {

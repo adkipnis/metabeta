@@ -65,8 +65,9 @@ def _plotSbcRow(
 ) -> None:
     ranks = getFractionalRanks(proposal, data)
     ranks['sigmas'] = joinSigmas(ranks)
-    names = getAllNames(proposal.d, proposal.q)
-    masks = getMasks(data)
+    has_eps = proposal.has_sigma_eps
+    names = getAllNames(proposal.d, proposal.q, has_sigma_eps=has_eps)
+    masks = getMasks(data, has_sigma_eps=has_eps)
 
     n_eff_min = len(data['X'])
     for k in ('ffx', 'sigmas', 'rfx'):
