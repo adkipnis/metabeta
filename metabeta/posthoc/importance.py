@@ -5,6 +5,7 @@ from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import Proposal, joinProposals
 from metabeta.utils.regularization import dampen
 from metabeta.utils.families import (
+    hasSigmaEps,
     logProbFfx,
     logProbSigma,
     logProbRfx,
@@ -23,6 +24,7 @@ class ImportanceSampler:
         pareto: bool = False,  # use Pareto smoothing (PSIS)
         sir: bool = False,  # use Sampling Importance Resampling (SIR)
         n_sir: int = 25,  # size of SIR re-sample
+        likelihood_family: int = 0,
         eps: float = 1e-12,
     ) -> None:
         self.constrain = constrain
@@ -31,16 +33,19 @@ class ImportanceSampler:
         self.pareto = pareto
         self.sir = sir
         self.n_sir = n_sir
+        self.likelihood_family = likelihood_family
+        self.has_sigma_eps = hasSigmaEps(likelihood_family)
         self.eps = eps
 
         # prior
         self.nu_ffx = data['nu_ffx'].unsqueeze(-2)   # (b, 1, d)
         self.tau_ffx = data['tau_ffx'].unsqueeze(-2) + self.eps   # (b, 1, d)
         self.tau_rfx = data['tau_rfx'].unsqueeze(-2) + self.eps   # (b, 1, q)
-        self.tau_eps = data['tau_eps'].unsqueeze(-1) + self.eps   # (b, 1)
         self.family_ffx = data['family_ffx']   # (b,)
         self.family_sigma_rfx = data['family_sigma_rfx']   # (b,)
-        self.family_sigma_eps = data['family_sigma_eps']   # (b,)
+        if self.has_sigma_eps:
+            self.tau_eps = data['tau_eps'].unsqueeze(-1) + self.eps   # (b, 1)
+            self.family_sigma_eps = data['family_sigma_eps']   # (b,)
 
         # observations
         self.X = data['X']   # (b, m, n, d)
