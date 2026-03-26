@@ -29,9 +29,16 @@ def hypersample(
     """
     out = {}
     out['likelihood_family'] = np.array(likelihood_family)
-    out['nu_ffx'] = spikeAndSlab(rng, size=d)
-    out['tau_ffx'] = skewedBeta(rng, 0.01, 10.0, mode=1.0, concentration=6.0, size=d)
-    out['tau_rfx'] = skewedBeta(rng, 0.01, 5.0, mode=1.0, concentration=5.0, size=q)
+
+    # hyperparameter ranges (tighter for log/logit-link likelihoods)
+    if likelihood_family == 2:  # poisson (log link)
+        out['nu_ffx'] = spikeAndSlab(rng, size=d, scale=0.5)
+        out['tau_ffx'] = skewedBeta(rng, 0.01, 2.0, mode=0.5, concentration=6.0, size=d)
+        out['tau_rfx'] = skewedBeta(rng, 0.01, 1.5, mode=0.3, concentration=5.0, size=q)
+    else:  # normal, bernoulli
+        out['nu_ffx'] = spikeAndSlab(rng, size=d)
+        out['tau_ffx'] = skewedBeta(rng, 0.01, 10.0, mode=1.0, concentration=6.0, size=d)
+        out['tau_rfx'] = skewedBeta(rng, 0.01, 5.0, mode=1.0, concentration=5.0, size=q)
 
     if hasSigmaEps(likelihood_family):
         out['tau_eps'] = skewedBeta(rng, 0.01, 5.0, mode=1.0, concentration=4.0, size=1)[0]
