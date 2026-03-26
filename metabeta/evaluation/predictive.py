@@ -4,12 +4,19 @@ import torch
 from torch import distributions as D
 
 from metabeta.utils.evaluation import Proposal
-from metabeta.utils.families import sampleFfxTorch, sampleSigmaTorch
+from metabeta.utils.families import (
+    hasSigmaEps,
+    posteriorPredictiveDist,
+    sampleFfxTorch,
+    sampleSigmaTorch,
+)
 
 
-def getPriorSamples(data: dict[str, torch.Tensor], n_samples: int) -> Proposal:
+def getPriorSamples(
+    data: dict[str, torch.Tensor], n_samples: int, likelihood_family: int = 0
+) -> Proposal:
+    has_eps = hasSigmaEps(likelihood_family)
     shape = (n_samples,)
-    out = {}
 
     # fixed effects
     mask = data['mask_d'].unsqueeze(-2)
@@ -24,10 +31,12 @@ def getPriorSamples(data: dict[str, torch.Tensor], n_samples: int) -> Proposal:
     sigma_rfx = sampleSigmaTorch(scale, family_sigma_rfx, shape).movedim(0, 1) * mask
 
     # sigma eps
-    scale = data['tau_eps'] + 1e-12
-    family_sigma_eps = data['family_sigma_eps']
-    sigma_eps = sampleSigmaTorch(scale, family_sigma_eps, shape).movedim(0, 1)
-    sigma_eps = sigma_eps.unsqueeze(-1)
+    global_parts = [ffx, sigma_rfx]
+    if has_eps:
+        scale = data['tau_eps'] + 1e-12
+        family_sigma_eps = data['family_sigma_eps']
+        sigma_eps = sampleSigmaTorch(scale, family_sigma_eps, shape).movedim(0, 1)
+        global_parts.append(sigma_eps.unsqueeze(-1))
 
     # rfx
     mask = data['mask_mq'].unsqueeze(-2)
@@ -35,30 +44,27 @@ def getPriorSamples(data: dict[str, torch.Tensor], n_samples: int) -> Proposal:
     rfx = D.Normal(loc=0, scale=sigma_rfx + 1e-12).sample(shape).movedim(0, 1) * mask
 
     # bundle
-    out['global'] = {'samples': torch.cat([ffx, sigma_rfx, sigma_eps], dim=-1)}
-    out['local'] = {'samples': rfx}
-    return Proposal(out)
+    out = {
+        'global': {'samples': torch.cat(global_parts, dim=-1)},
+        'local': {'samples': rfx},
+    }
+    return Proposal(out, has_sigma_eps=has_eps)
 
 
 def getPosteriorPredictive(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
-) -> D.Normal:
+    likelihood_family: int = 0,
+) -> D.Distribution:
     """get p(y|X, theta)"""
     ffx = proposal.ffx  # (b, s, d)
-    sigma_eps = proposal.sigma_eps  # (b, s)
+    sigma_eps = proposal.sigma_eps if proposal.has_sigma_eps else ffx.new_zeros(ffx.shape[:2])
     rfx = proposal.rfx  # (b, m, s, q)
-    X = data['X']  # (b, m, n, d)
-    Z = data['Z']  # (b, m, n, q)
-    mu_g = torch.einsum('bmnd,bsd->bmns', X, ffx)
-    mu_l = torch.einsum('bmnq,bmsq->bmns', Z, rfx)
-    loc = mu_g + mu_l
-    scale = sigma_eps.unsqueeze(1).unsqueeze(1) + 1e-12
-    return D.Normal(loc=loc, scale=scale)
+    return posteriorPredictiveDist(ffx, sigma_eps, rfx, data['X'], data['Z'], likelihood_family)
 
 
 def posteriorPredictiveNLL(
-    pp: D.Normal,
+    pp: D.Distribution,
     data: dict[str, torch.Tensor],
     w: torch.Tensor | None = None,
     mode: Literal['expected', 'mixture'] = 'mixture',
@@ -93,7 +99,7 @@ def posteriorPredictiveNLL(
 
 
 def posteriorPredictiveSample(
-    pp: D.Normal,
+    pp: D.Distribution,
     data: dict[str, torch.Tensor],
 ) -> torch.Tensor:
     mask = data['mask_n'].unsqueeze(-1)
