@@ -22,6 +22,7 @@ from metabeta.utils.families import (
     sampleSigmaTorch,
     simulateBernoulliNp,
     simulateNormalNp,
+    simulatePoissonNp,
     simulateYNp,
 )
 
@@ -397,6 +398,7 @@ def test_sampleSigmaNp_invalid_family_raises():
 def test_hasSigmaEps():
     assert hasSigmaEps(0) is True  # normal
     assert hasSigmaEps(1) is False  # bernoulli
+    assert hasSigmaEps(2) is False  # poisson
 
 
 def test_likelihood_families_and_sigma_eps_aligned():
@@ -621,3 +623,113 @@ def test_posteriorPredictiveDist_invalid_family_raises():
     Z = X[..., :1]
     with pytest.raises(ValueError, match='unknown likelihood family'):
         posteriorPredictiveDist(ffx, sigma_eps, rfx, X, Z, likelihood_family=99)
+
+
+# ---------------------------------------------------------------------------
+# Poisson likelihood
+# ---------------------------------------------------------------------------
+
+
+def test_simulatePoissonNp_nonnegative_integers():
+    rng = np.random.default_rng(0)
+    eta = np.array([0.0, 1.0, -1.0, 2.0])
+    y = simulatePoissonNp(rng, eta)
+    assert y.shape == eta.shape
+    assert np.all(y >= 0)
+    assert np.all(y == np.floor(y))
+
+
+def test_simulatePoissonNp_mean_close_to_rate():
+    rng = np.random.default_rng(0)
+    eta = np.full(10_000, 1.5)  # rate = exp(1.5) ≈ 4.48
+    y = simulatePoissonNp(rng, eta)
+    assert np.isclose(y.mean(), np.exp(1.5), rtol=0.05)
+
+
+def test_simulatePoissonNp_zero_eta():
+    rng = np.random.default_rng(0)
+    eta = np.full(10_000, 0.0)  # rate = 1
+    y = simulatePoissonNp(rng, eta)
+    assert np.isclose(y.mean(), 1.0, atol=0.05)
+
+
+def test_simulateYNp_dispatches_poisson():
+    rng1 = np.random.default_rng(42)
+    rng2 = np.random.default_rng(42)
+    eta = np.array([0.5, 1.0, -0.5])
+    y1 = simulateYNp(rng1, eta, sigma_eps=0.0, likelihood_family=2)
+    y2 = simulatePoissonNp(rng2, eta)
+    np.testing.assert_allclose(y1, y2)
+
+
+def test_logLikelihood_poisson_matches_manual():
+    b, m, n, s, d, q = 2, 2, 3, 5, 2, 1
+    torch.manual_seed(0)
+    ffx = torch.randn(b, s, d) * 0.3  # small coefficients
+    sigma_eps = torch.rand(b, s)  # unused
+    rfx = torch.randn(b, m, s, q) * 0.2
+    X = torch.randn(b, m, n, d)
+    Z = X[..., :q]
+    y = torch.poisson(torch.ones(b, m, n, 1) * 3)
+
+    ll = logLikelihood(ffx, sigma_eps, rfx, y, X, Z, likelihood_family=2)
+
+    # manual
+    mu_g = torch.einsum('bmnd,bsd->bmns', X, ffx)
+    mu_l = torch.einsum('bmnq,bmsq->bmns', Z, rfx)
+    eta = mu_g + mu_l
+    rate = torch.exp(eta.clamp(max=30))
+    expected = D.Poisson(rate=rate).log_prob(y).sum(dim=(1, 2))
+    torch.testing.assert_close(ll, expected)
+
+
+def test_logLikelihood_poisson_with_mask():
+    b, m, n, s, d, q = 2, 2, 4, 5, 2, 1
+    torch.manual_seed(0)
+    ffx = torch.randn(b, s, d) * 0.3
+    sigma_eps = torch.rand(b, s)
+    rfx = torch.randn(b, m, s, q) * 0.2
+    X = torch.randn(b, m, n, d)
+    Z = X[..., :q]
+    y = torch.poisson(torch.ones(b, m, n, 1) * 2)
+    mask = torch.ones(b, m, n, 1)
+    mask[:, :, -1:, :] = 0
+
+    ll = logLikelihood(ffx, sigma_eps, rfx, y, X, Z, mask=mask, likelihood_family=2)
+
+    mu_g = torch.einsum('bmnd,bsd->bmns', X, ffx)
+    mu_l = torch.einsum('bmnq,bmsq->bmns', Z, rfx)
+    eta = mu_g + mu_l
+    rate = torch.exp(eta.clamp(max=30))
+    expected = (D.Poisson(rate=rate).log_prob(y) * mask).sum(dim=(1, 2))
+    torch.testing.assert_close(ll, expected)
+
+
+def test_posteriorPredictiveDist_poisson():
+    b, m, n, s, d, q = 2, 3, 5, 10, 2, 1
+    ffx = torch.randn(b, s, d) * 0.3
+    sigma_eps = torch.rand(b, s)
+    rfx = torch.randn(b, m, s, q) * 0.2
+    X = torch.randn(b, m, n, d)
+    Z = X[..., :q]
+    pp = posteriorPredictiveDist(ffx, sigma_eps, rfx, X, Z, likelihood_family=2)
+    assert isinstance(pp, D.Poisson)
+    y = pp.sample()
+    assert y.shape == (b, m, n, s)
+    assert torch.all(y >= 0)
+    assert torch.all(y == y.floor())
+
+
+def test_posteriorPredictiveDist_poisson_log_prob():
+    b, m, n, s, d, q = 2, 3, 5, 10, 2, 1
+    ffx = torch.randn(b, s, d) * 0.3
+    sigma_eps = torch.rand(b, s)
+    rfx = torch.randn(b, m, s, q) * 0.2
+    X = torch.randn(b, m, n, d)
+    Z = X[..., :q]
+    pp = posteriorPredictiveDist(ffx, sigma_eps, rfx, X, Z, likelihood_family=2)
+    y = torch.poisson(torch.ones(b, m, n, s) * 2)
+    lp = pp.log_prob(y)
+    assert lp.shape == (b, m, n, s)
+    assert torch.all(torch.isfinite(lp))
+    assert torch.all(lp <= 0)
