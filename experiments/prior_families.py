@@ -80,8 +80,8 @@ def loadModel(cfg: argparse.Namespace, d: int, q: int) -> Approximator:
 
 def resetRng(model: Approximator) -> None:
     """Reset base distribution RNGs for reproducible sampling."""
-    model.posterior_g.base_dist.base.rng = np.random.default_rng(SEED)
-    model.posterior_l.base_dist.base.rng = np.random.default_rng(SEED)
+    model.posterior_g.base_dist.base.rng = np.random.default_rng(SEED)   # type: ignore
+    model.posterior_l.base_dist.base.rng = np.random.default_rng(SEED)   # type: ignore
 
 
 @torch.inference_mode()
