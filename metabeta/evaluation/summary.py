@@ -113,6 +113,7 @@ def longTable(
         'sigma_eps': 'Sigma(Eps)',
         'rfx': 'RFX',
     }
+    keys = [k for k in names if k in corr]
     rows = [[names[k], corr[k], nrmse[k], ece[k], lcr[k]] for k in keys]
     rows = [process(row) for row in rows]
     rows += [['Average', dictMean(corr), dictMean(nrmse), dictMean(ece), dictMean(lcr)]]
@@ -128,6 +129,8 @@ def longTable(
 def flatTable(
     tpd: float | None = None,
     mnll: float | None = None,
+    mfit: float | None = None,
+    fit_label: str = 'Median pp R²',
     meff: float | None = None,
     mk: float | None = None,
     rfx_corr: dict[str, float] | None = None,
@@ -138,6 +141,8 @@ def flatTable(
         rows += [['Estimation time / ds [s]', tpd]]
     if mnll is not None:
         rows += [['Median ppNLL', mnll]]
+    if mfit is not None:
+        rows += [[fit_label, mfit]]
     if meff is not None:
         rows += [['Median IS Efficency', meff]]
     if mk is not None:
