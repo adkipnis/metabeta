@@ -137,6 +137,7 @@ class Approximator(nn.Module):
         Normal: pooled OLS coefficients, residual SD, between-group SD of means.
         Bernoulli: pooled IRLS logistic coefficients, between-group SD of log-odds.
         """
+        out = {}
         X = data['X']                           # (B, m, n, d)
         y = data['y']                           # (B, m, n)
         mask = data['mask_n'].float()           # (B, m, n)
@@ -148,6 +149,7 @@ class Approximator(nn.Module):
 
         if self.likelihood_family == 0:
             beta, sigma_eps_ols = self._olsNormal(Xm, ym, mask, data['n'].float(), X)
+            out['sigma_eps_ols'] = sigma_eps_ols
         elif self.likelihood_family == 1:
             beta = self._irlsBernoulli(Xm, ym, mask)
         elif self.likelihood_family == 2:
@@ -241,26 +243,26 @@ class Approximator(nn.Module):
             nu_ffx = data['nu_ffx'].clone()
             tau_ffx = data['tau_ffx'].clone()
             tau_rfx = data['tau_rfx'].clone()
-            tau_eps = data['tau_eps'].clone().unsqueeze(-1)
             eta_rfx = data['eta_rfx'].clone().unsqueeze(-1)
-            family_enc = self.family_encoder([
-                data['family_ffx'],
-                data['family_sigma_rfx'],
-                data['family_sigma_eps'],
-            ])
+            families = [data['family_ffx'], data['family_sigma_rfx']]
+            if self.has_sigma_eps:
+                families.append(data['family_sigma_eps'])
+            family_enc = self.family_encoder(families)
             out += [
                 n_total,
                 n_groups,
                 stats['beta_ols'],
-                stats['sigma_eps_ols'],
                 stats['sigma_rfx_ols'],
                 nu_ffx,
                 tau_ffx,
                 tau_rfx,
-                tau_eps,
                 eta_rfx,
                 family_enc,
             ]
+            if self.has_sigma_eps:
+                tau_eps = data['tau_eps'].clone().unsqueeze(-1)
+                out.append(tau_eps)
+                out.append(stats['sigma_eps_ols'])
         return torch.cat(out, dim=-1)
 
     def _localContext(
@@ -314,7 +316,7 @@ class Approximator(nn.Module):
             sigmas = constrainSigma(log_sigmas)
             samples_out = torch.cat([samples[..., :d], sigmas], dim=-1)
             proposed['global']['samples'] = samples_out
-        return Proposal(proposed)
+        return Proposal(proposed, has_sigma_eps=self.has_sigma_eps)
 
     def summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)
