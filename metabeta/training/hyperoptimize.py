@@ -50,7 +50,10 @@ class HyperOptimizer:
 
         # base model config
         model_cfg_path = Path(self.dir, '..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
-        self.model_cfg = modelFromYaml(model_cfg_path, d_ffx=d_ffx, d_rfx=d_rfx).to_dict()
+        likelihood_family = data_cfg.get('likelihood_family', 0)
+        self.model_cfg = modelFromYaml(
+            model_cfg_path, d_ffx=d_ffx, d_rfx=d_rfx, likelihood_family=likelihood_family,
+        ).to_dict()
 
         # optuna study
         sampler = optuna.samplers.TPESampler(
