@@ -80,7 +80,10 @@ class ImportanceSampler:
             lp = lp + logProbRfx(rfx, sigma_rfx, self.mask_mq)
 
         # conditional log likelihood
-        ll = logLikelihood(ffx, sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n)
+        ll = logLikelihood(
+            ffx, sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n,
+            likelihood_family=self.likelihood_family,
+        )
         return ll, lp
 
     def __call__(self, proposal: Proposal) -> Proposal:
