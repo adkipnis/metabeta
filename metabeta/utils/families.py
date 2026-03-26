@@ -18,6 +18,14 @@ SIGMA_EPS_FAMILY_PROBS = (0.50, 0.40, 0.10)
 
 STUDENT_DF = 5
 
+LIKELIHOOD_FAMILIES = ('normal', 'bernoulli')
+LIKELIHOOD_HAS_SIGMA_EPS = (True, False)
+
+
+def hasSigmaEps(likelihood: int) -> bool:
+    """Whether the likelihood family has a residual variance parameter."""
+    return LIKELIHOOD_HAS_SIGMA_EPS[likelihood]
+
 
 # ---------------------------------------------------------------------------
 # NumPy sampling
@@ -222,6 +230,46 @@ def sampleSigmaTorch(
         else:
             out[..., sel] = fn(scale[sel], shape)
     return out
+
+
+# ---------------------------------------------------------------------------
+# NumPy likelihood simulation
+# ---------------------------------------------------------------------------
+
+
+def _expit(x: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
+
+
+def simulateNormalNp(
+    rng: np.random.Generator,
+    eta: np.ndarray,
+    sigma_eps: float,
+) -> np.ndarray:
+    eps = rng.normal(size=eta.shape)
+    return eta + eps * sigma_eps
+
+
+def simulateBernoulliNp(
+    rng: np.random.Generator,
+    eta: np.ndarray,
+    sigma_eps: float,
+) -> np.ndarray:
+    p = _expit(eta)
+    return rng.binomial(1, p).astype(eta.dtype)
+
+
+_LIKELIHOOD_SIMULATE_NP = (simulateNormalNp, simulateBernoulliNp)
+
+
+def simulateYNp(
+    rng: np.random.Generator,
+    eta: np.ndarray,
+    sigma_eps: float,
+    likelihood_family: int = 0,
+) -> np.ndarray:
+    """Sample y given linear predictor eta and likelihood family."""
+    return _LIKELIHOOD_SIMULATE_NP[likelihood_family](rng, eta, sigma_eps)
 
 
 # ---------------------------------------------------------------------------
