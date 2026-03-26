@@ -236,6 +236,8 @@ class Fitter:
         self, trace: az.InferenceData, d: int, q: int, prefix: str
     ) -> dict[str, np.ndarray]:
         """extract all posterior samples"""
+        likelihood_family = int(self.ds.get('likelihood_family', 0))
+
         # fixed effects
         ffx = []
         for j in range(d):
@@ -245,7 +247,6 @@ class Fitter:
         ffx = np.concatenate(ffx, axis=0)
 
         # variances
-        sigma_eps = self._extract(trace, 'sigma')
         sigma_rfx = []
         for j in range(q):
             key = '1|i_sigma' if j == 0 else f'x{j}|i_sigma'
@@ -262,12 +263,14 @@ class Fitter:
         rfx = np.concatenate(rfx, axis=0).swapaxes(2, 1)
 
         # package
-        return {
+        out = {
             f'{prefix}_ffx': ffx,
-            f'{prefix}_sigma_eps': sigma_eps,
             f'{prefix}_sigma_rfx': sigma_rfx,
             f'{prefix}_rfx': rfx,
         }
+        if hasSigmaEps(likelihood_family):
+            out[f'{prefix}_sigma_eps'] = self._extract(trace, 'sigma')
+        return out
 
     def _fitNuts(self, cfg: argparse.Namespace, ds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """fit NUTS-based MCMC model and return samples and diagnostics"""
