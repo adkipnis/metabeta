@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import numpy as np
 from metabeta.utils.preprocessing import standardize
+from metabeta.utils.families import hasSigmaEps, simulateYNp
 from metabeta.simulation import Prior, Synthesizer, Emulator
 from metabeta.plot import plotDataset
 
@@ -12,28 +13,25 @@ def simulate(
     rng: np.random.Generator,
     parameters: dict[str, np.ndarray],
     observations: dict[str, np.ndarray],
+    likelihood_family: int = 0,
 ) -> np.ndarray:
     """draw y given X and theta for a single dataset"""
     # unpack parameters
     ffx = parameters['ffx']   # (d,)
     rfx = parameters['rfx']   # (m, q)
-    sigma_eps = parameters['sigma_eps']
+    sigma_eps = float(parameters.get('sigma_eps', 0.0))
     q = rfx.shape[1]
 
     # unpack (standardized) observations
     X = observations['X']   # (n, d)
     Z = X[:, :q]   # (n, q)
     groups = observations['groups']   # (n, )
-    n = len(X)
 
-    # generate noise
-    eps = rng.normal(size=(n,))
-    eps = standardize(eps, axis=0) * sigma_eps
-
-    # outcome
+    # linear predictor
     rfx_ext = rfx[groups]   # (n, q)
-    y = X @ ffx + (Z * rfx_ext).sum(-1) + eps   # (n, )
-    return y
+    eta = X @ ffx + (Z * rfx_ext).sum(-1)   # (n, )
+
+    return simulateYNp(rng, eta, sigma_eps, likelihood_family)
 
 
 @dataclass
@@ -71,6 +69,8 @@ class Simulator:
     #     return cov_sum
 
     def sample(self) -> dict[str, np.ndarray]:
+        likelihood_family = int(self.prior.hyperparams.get('likelihood_family', 0))
+
         # sample and standardize observations
         obs = self.design.sample(self.d, self.ns)
         obs['X'] = standardize(obs['X'], axis=0, exclude_binary=True)
@@ -84,22 +84,24 @@ class Simulator:
         # sample parameters
         params = self.prior.sample(self.m)
 
-        # sample outcomes and normalize to unit SD
-        y = simulate(self.rng, params, obs)
-        sd = max(y.std(0), 1e-6)
-        y /= sd
+        # sample outcomes
+        y = simulate(self.rng, params, obs, likelihood_family)
 
-        # normalize parameters (scale params only; skip correlation matrices etc.)
-        params = {
-            k: v / sd if k in SCALE_PARAMS else v
-            for k, v in params.items()
-        }
-
-        # normalize hyperparameters (scale params only; skip family indices, eta, etc.)
-        hyperparams = {
-            k: v / sd if k in SCALE_HYPERPARAMS else v
-            for k, v in self.prior.hyperparams.items()
-        }
+        # normalize to unit SD (continuous likelihoods only)
+        if hasSigmaEps(likelihood_family):
+            sd = max(y.std(0), 1e-6)
+            y /= sd
+            params = {
+                k: v / sd if k in SCALE_PARAMS else v
+                for k, v in params.items()
+            }
+            hyperparams = {
+                k: v / sd if k in SCALE_HYPERPARAMS else v
+                for k, v in self.prior.hyperparams.items()
+            }
+        else:
+            sd = 1.0
+            hyperparams = dict(self.prior.hyperparams)
 
         # optional plot
         if self.plot:
@@ -124,9 +126,9 @@ class Simulator:
             'q': self.q,
             # miscellanious
             'sd_y': sd,
-            'r_squared': 1 - params['sigma_eps'] ** 2,  # population R^2
-            # 'cov_sum': self._covsum(params, obs),  # helper for standardization
         }
+        if hasSigmaEps(likelihood_family):
+            out['r_squared'] = 1 - params['sigma_eps'] ** 2
 
         # package scalars as numpy arrays
         for k, v in out.items():
