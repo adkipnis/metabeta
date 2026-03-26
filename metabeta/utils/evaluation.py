@@ -238,6 +238,7 @@ class EvaluationSummary:
     posterior_nll: torch.Tensor
     sample_efficiency: torch.Tensor | None
     pareto_k: torch.Tensor | None
+    pp_fit: torch.Tensor | None = None   # R² (normal) | AUC (bernoulli) | deviance (poisson)
     rfx_corr: dict[str, float] | None = None
     tpd: float | None = None   # time per dataset
 
@@ -282,6 +283,11 @@ class EvaluationSummary:
     def mk(self) -> None | float:   # median pareto k for PSIS
         if self.pareto_k is not None:
             return self.pareto_k.median().item()
+
+    @property
+    def mfit(self) -> None | float:   # median R² or AUC
+        if self.pp_fit is not None:
+            return self.pp_fit.nanmedian().item()
 
 
 def dictMean(td: dict[str, torch.Tensor]) -> float:
