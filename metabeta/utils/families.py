@@ -19,13 +19,19 @@ SIGMA_EPS_FAMILY_PROBS = (0.50, 0.40, 0.10)
 
 STUDENT_DF = 5
 
-LIKELIHOOD_FAMILIES = ('normal', 'bernoulli')
-LIKELIHOOD_HAS_SIGMA_EPS = (True, False)
+LIKELIHOOD_FAMILIES = ('normal', 'bernoulli', 'poisson')
+LIKELIHOOD_HAS_SIGMA_EPS = (True, False, False)
+LIKELIHOOD_BAMBI_FAMILY = ('gaussian', 'bernoulli', 'poisson')
 
 
 def hasSigmaEps(likelihood: int) -> bool:
     """Whether the likelihood family has a residual variance parameter."""
     return LIKELIHOOD_HAS_SIGMA_EPS[likelihood]
+
+
+def bambiFamilyName(likelihood: int) -> str:
+    """Bambi family string for the given likelihood index."""
+    return LIKELIHOOD_BAMBI_FAMILY[likelihood]
 
 
 # ---------------------------------------------------------------------------
