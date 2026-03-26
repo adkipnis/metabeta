@@ -7,7 +7,7 @@ from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import getConstrainers
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
-from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES, FamilyEncoder
+from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES, FamilyEncoder, hasSigmaEps
 
 constrainSigma, unconstrainSigma, logDetJacobian = getConstrainers(method='softplus')
 
@@ -26,24 +26,37 @@ class Approximator(nn.Module):
     def d_rfx(self) -> int:
         return self.cfg.d_rfx
 
+    @property
+    def likelihood_family(self) -> int:
+        return self.cfg.likelihood_family
+
+    @property
+    def has_sigma_eps(self) -> bool:
+        return hasSigmaEps(self.likelihood_family)
+
     def build(self) -> None:
         s_cfg = self.cfg.summarizer
         p_cfg = self.cfg.posterior
         d_ffx = self.d_ffx
         d_rfx = self.d_rfx
-        d_var = 1 + d_rfx   # number of variance params
+        d_sigma_eps = 1 if self.has_sigma_eps else 0
+        d_var = d_sigma_eps + d_rfx   # number of variance params
 
         # --- family encoder
-        n_families = (len(FFX_FAMILIES), len(SIGMA_FAMILIES), len(SIGMA_FAMILIES))
+        if self.has_sigma_eps:
+            n_families = (len(FFX_FAMILIES), len(SIGMA_FAMILIES), len(SIGMA_FAMILIES))
+        else:
+            n_families = (len(FFX_FAMILIES), len(SIGMA_FAMILIES))
         embed_dim = None # one-hot, alternatively len(n_families)
         self.family_encoder = FamilyEncoder(n_families, embed_dim=embed_dim)
 
         # --- context
         # global context
         d_counts = 2   # n_groups, n_total
-        d_prior = 2 * d_ffx + d_var + 1   # nu_ffx, tau_ffx, tau_sigma, tau_eps, eta_rfx
+        # nu_ffx, tau_ffx, tau_rfx, [tau_eps], eta_rfx
+        d_prior = 2 * d_ffx + d_rfx + d_sigma_eps + 1
         d_family = self.family_encoder.d_output
-        d_stats = d_ffx + 2   # beta_ols, sigma_eps_ols, sigma_rfx0_ols
+        d_stats = d_ffx + 1 + d_sigma_eps   # beta_ols, sigma_rfx0_ols, [sigma_eps_ols]
         d_meta_g = d_counts + d_prior + d_family + d_stats
         d_context_g = s_cfg.d_output + d_meta_g   # global summary + metadata
         # local context
@@ -113,11 +126,9 @@ class Approximator(nn.Module):
             if mask_q.shape[-1] == 1:   # handle 1D local params for flow
                 mask_q = F.pad(mask_q, (0, 1))
             return data['mask_m'].unsqueeze(-1) & mask_q.unsqueeze(-2)
-        masks = [
-            data['mask_d'],
-            data['mask_q'],
-            torch.ones_like(data['mask_d'][..., 0:1]),
-        ]
+        masks = [data['mask_d'], data['mask_q']]
+        if self.has_sigma_eps:
+            masks.append(torch.ones_like(data['mask_d'][..., 0:1]))
         return torch.cat(masks, dim=-1)
 
     @staticmethod
