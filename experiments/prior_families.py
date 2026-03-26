@@ -164,3 +164,63 @@ def checkPosteriorChanges(
 
 
 # ---- Step 2: check direction (heavier tails → wider posteriors) ----
+
+# tail weight ordering per group
+TAIL_ORDER = [
+    ('family_ffx', 'ffx', [('normal', 0), ('student', 1)]),
+    (
+        'family_sigma_rfx',
+        'sigma_rfx',
+        [('halfnormal', 0), ('halfstudent', 1), ('exponential', 2)],
+    ),
+    (
+        'family_sigma_eps',
+        'sigma_eps',
+        [('halfnormal', 0), ('halfstudent', 1), ('exponential', 2)],
+    ),
+]
+
+
+def collectTailStats(
+    model: Approximator,
+    batch: dict[str, torch.Tensor],
+    n_samples: int,
+) -> dict[str, dict[str, torch.Tensor]]:
+    """Collect per-dataset posterior SDs for each family and parameter group.
+
+    Returns:
+        {param_key: {family_name: (b,) or (b, d/q) tensor of SDs}}
+    """
+    results = {}
+    for family_key, param_key, ordered_families in TAIL_ORDER:
+        results[param_key] = {}
+        for name, idx in ordered_families:
+            b = setBatchFamily(batch, family_key, idx)
+            stats = getPosteriorStats(model, b, n_samples)
+            results[param_key][name] = stats[param_key]['sd']
+    return results
+
+
+def checkTailDirection(
+    tail_stats: dict[str, dict[str, torch.Tensor]],
+) -> None:
+    """Print monotonic ordering check from pre-collected stats."""
+    print('\n--- Step 2: Do heavier-tailed families widen the posterior? ---')
+
+    for _, param_key, ordered_families in TAIL_ORDER:
+        names = [n for n, _ in ordered_families]
+        print(f'\n  [{param_key}] tail ordering: {" < ".join(names)}')
+        sds = []
+        for name in names:
+            sd = tail_stats[param_key][name].mean().item()
+            sds.append((name, sd))
+            print(f'    {name}: SD={sd:.4f}')
+
+        for j in range(len(sds) - 1):
+            wider = sds[j + 1][1] > sds[j][1]
+            ratio = sds[j + 1][1] / (sds[j][1] + 1e-12)
+            status = 'PASS' if wider else 'FAIL'
+            print(f'    {sds[j][0]} -> {sds[j + 1][0]}: ratio={ratio:.3f} [{status}]')
+
+
+# ---- Visualization ----
