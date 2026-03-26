@@ -179,13 +179,14 @@ def collateGrouped(
     for key in (
         'ffx',
         'sigma_rfx',
-        'sigma_eps',
         'nu_ffx',
         'tau_ffx',
         'tau_rfx',
-        'tau_eps',
     ):
         out[key] = quickCollate(batch, key, dtype)
+    for key in ('sigma_eps', 'tau_eps'):
+        if key in batch[0]:
+            out[key] = quickCollate(batch, key, dtype)
 
     # extra treatment for rfx due to m dimension
     rfx = torch.zeros((B, m, q), dtype=dtype)
@@ -198,7 +199,9 @@ def collateGrouped(
     out['corr_rfx'] = quickCollate(batch, 'corr_rfx', dtype)
     out['eta_rfx'] = quickCollate(batch, 'eta_rfx', dtype)
 
-    # prior family indices
+    # likelihood and prior family indices
+    if 'likelihood_family' in batch[0]:
+        out['likelihood_family'] = quickCollate(batch, 'likelihood_family', torch.long)
     for key in ('family_ffx', 'family_sigma_rfx', 'family_sigma_eps'):
         if key in batch[0]:
             out[key] = quickCollate(batch, key, torch.long)
@@ -233,12 +236,14 @@ def collateFits(
 ) -> dict[str, torch.Tensor]:
     B = len(batch)
     s = batch[0][f'{method}_ffx'].shape[-1]
+    has_eps = f'{method}_sigma_eps' in batch[0]
     out: dict[str, torch.Tensor] = {}
 
     ffx = torch.zeros((B, s, d), dtype=dtype)
     sigma_rfx = torch.zeros((B, s, q), dtype=dtype)
-    sigma_eps = torch.zeros((B, s), dtype=dtype)
     rfx = torch.zeros((B, m, s, q), dtype=dtype)
+    if has_eps:
+        sigma_eps = torch.zeros((B, s), dtype=dtype)
 
     for b, ds in enumerate(batch):
         # (d, s) -> (s, d)
@@ -246,15 +251,17 @@ def collateFits(
         # (q, s) -> (s, q)
         sigma_rfx[b] = torch.as_tensor(ds[f'{method}_sigma_rfx'], dtype=dtype).T
         # (1, s) -> (s,)
-        sigma_eps[b] = torch.as_tensor(ds[f'{method}_sigma_eps'], dtype=dtype).squeeze(0)
+        if has_eps:
+            sigma_eps[b] = torch.as_tensor(ds[f'{method}_sigma_eps'], dtype=dtype).squeeze(0)
         # (q, m_i, s) -> (m_i, s, q)
         rfx_i = torch.as_tensor(ds[f'{method}_rfx'], dtype=dtype).permute(1, 2, 0)
         rfx[b] = rfx_i
 
     out[f'{method}_ffx'] = ffx
     out[f'{method}_sigma_rfx'] = sigma_rfx
-    out[f'{method}_sigma_eps'] = sigma_eps
     out[f'{method}_rfx'] = rfx
+    if has_eps:
+        out[f'{method}_sigma_eps'] = sigma_eps
     return out
 
 
