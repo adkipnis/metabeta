@@ -341,6 +341,28 @@ def logLikelihood(
 
 
 # ---------------------------------------------------------------------------
+# Torch posterior predictive distribution
+# ---------------------------------------------------------------------------
+
+
+def posteriorPredictiveDist(
+    ffx: torch.Tensor,  # (b, s, d)
+    sigma_eps: torch.Tensor,  # (b, s)
+    rfx: torch.Tensor,  # (b, m, s, q)
+    X: torch.Tensor,  # (b, m, n, d)
+    Z: torch.Tensor,  # (b, m, n, q)
+    likelihood_family: int = 0,
+) -> D.Distribution:
+    """Return posterior predictive distribution p(y | theta) for the given likelihood."""
+    eta = _linearPredictor(ffx, rfx, X, Z)  # (b, m, n, s)
+    if likelihood_family == 0:  # normal
+        scale = sigma_eps.unsqueeze(1).unsqueeze(1) + 1e-12
+        return D.Normal(loc=eta, scale=scale)
+    elif likelihood_family == 1:  # bernoulli
+        return D.Bernoulli(logits=eta)
+    raise ValueError(f'unknown likelihood family: {likelihood_family}')
+
+
 # ---------------------------------------------------------------------------
 # Encoding for neural network context
 # ---------------------------------------------------------------------------
