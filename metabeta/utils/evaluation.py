@@ -8,63 +8,79 @@ Proposed = dict[str, dict[str, torch.Tensor]]
 Source = Literal['global', 'local']
 
 
-def numFixed(proposed: Proposed) -> int:
+def numFixed(proposed: Proposed, has_sigma_eps: bool = True) -> int:
     q = proposed['local']['samples'].shape[-1]
     D = proposed['global']['samples'].shape[-1]
-    d = D - q - 1
+    d = D - q - (1 if has_sigma_eps else 0)
     return int(d)
 
 
-def getMasks(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | None]:
+def getMasks(
+    data: dict[str, torch.Tensor], has_sigma_eps: bool = True
+) -> dict[str, torch.Tensor | None]:
     out = {}
     out['ffx'] = data['mask_d']
     out['sigma_rfx'] = data['mask_q']
-    out['sigma_eps'] = None
-    out['sigmas'] = torch.nn.functional.pad(data['mask_q'], (0, 1), value=True)
-    out['global'] = torch.cat([out['ffx'], out['sigmas']], dim=-1)
     out['rfx'] = data['mask_mq']
+    if has_sigma_eps:
+        out['sigma_eps'] = None
+        out['sigmas'] = torch.nn.functional.pad(data['mask_q'], (0, 1), value=True)
+    else:
+        out['sigmas'] = data['mask_q']
+    out['global'] = torch.cat([out['ffx'], out['sigmas']], dim=-1)
     return out
 
 
-def getNames(source: str, num: int) -> list[str]:
+def getNames(source: str, num: int, has_sigma_eps: bool = True) -> list[str]:
     if source == 'ffx':
         return [rf'$\beta_{{{i}}}$' for i in range(num)]
     elif source == 'sigmas':
-        return [rf'$\sigma_{i}$' for i in range(num)] + [r'$\sigma_\epsilon$']
+        names = [rf'$\sigma_{i}$' for i in range(num)]
+        if has_sigma_eps:
+            names.append(r'$\sigma_\epsilon$')
+        return names
     elif source == 'rfx':
         return [rf'$\alpha_{{{i}}}$' for i in range(num)]
     else:
         raise ValueError(f'source {source} unknown.')
 
 
-def getAllNames(d: int, q: int) -> dict[str, list[str]]:
+def getAllNames(d: int, q: int, has_sigma_eps: bool = True) -> dict[str, list[str]]:
     return {
         'ffx': getNames('ffx', d),
-        'sigmas': getNames('sigmas', q),
+        'sigmas': getNames('sigmas', q, has_sigma_eps),
         'rfx': getNames('rfx', q),
     }
 
 
 def joinSigmas(data: dict[str, torch.Tensor]) -> torch.Tensor:
-    return torch.cat([data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)], dim=-1)
+    parts = [data['sigma_rfx']]
+    if 'sigma_eps' in data:
+        parts.append(data['sigma_eps'].unsqueeze(-1))
+    return torch.cat(parts, dim=-1)
 
 
 def joinGlobals(data: dict[str, torch.Tensor]) -> torch.Tensor:
-    out = [data['ffx'], data['sigma_rfx'], data['sigma_eps'].unsqueeze(-1)]
-    return torch.cat(out, dim=-1)
+    parts = [data['ffx'], data['sigma_rfx']]
+    if 'sigma_eps' in data:
+        parts.append(data['sigma_eps'].unsqueeze(-1))
+    return torch.cat(parts, dim=-1)
 
 
 class Proposal:
-    def __init__(self, proposed: dict[str, dict[str, torch.Tensor]]) -> None:
+    def __init__(
+        self, proposed: dict[str, dict[str, torch.Tensor]], has_sigma_eps: bool = True
+    ) -> None:
         self.data = proposed
-        self.d = numFixed(proposed)
+        self.has_sigma_eps = has_sigma_eps
+        self.d = numFixed(proposed, has_sigma_eps)
         self.q = proposed['local']['samples'].shape[-1]
         self.is_results = {}
         self.tpd: float | None = None
 
     @property
     def n_samples(self) -> int:
-        return self.sigma_eps.shape[-1]
+        return self.samples_g.shape[-2]
 
     def __repr__(self) -> str:
         return f'ProposalPosterior(n_samples={self.n_samples})'
@@ -95,10 +111,14 @@ class Proposal:
 
     @property
     def sigma_rfx(self) -> torch.Tensor:
-        return self.samples_g[..., self.d : -1]
+        if self.has_sigma_eps:
+            return self.samples_g[..., self.d : -1]
+        return self.samples_g[..., self.d :]
 
     @property
     def sigma_eps(self) -> torch.Tensor:
+        if not self.has_sigma_eps:
+            raise AttributeError('sigma_eps not available for this likelihood')
         return self.samples_g[..., -1]
 
     @property
@@ -111,7 +131,9 @@ class Proposal:
 
     @property
     def parameters(self) -> tuple[torch.Tensor, ...]:
-        return self.ffx, self.sigma_rfx, self.sigma_eps, self.rfx
+        if self.has_sigma_eps:
+            return self.ffx, self.sigma_rfx, self.sigma_eps, self.rfx
+        return self.ffx, self.sigma_rfx, self.rfx
 
     @property
     def log_probs(self) -> tuple[torch.Tensor, ...]:
@@ -132,8 +154,11 @@ class Proposal:
     def partition(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         out = {}
         out['ffx'] = x[..., : self.d]
-        out['sigma_rfx'] = x[..., self.d : -1]
-        out['sigma_eps'] = x[..., -1]
+        if self.has_sigma_eps:
+            out['sigma_rfx'] = x[..., self.d : -1]
+            out['sigma_eps'] = x[..., -1]
+        else:
+            out['sigma_rfx'] = x[..., self.d :]
         return out
 
     def rescale(self, scale: torch.Tensor) -> None:
