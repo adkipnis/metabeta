@@ -124,7 +124,7 @@ class ImportanceSampler:
             out['pareto_k'] = log_w.new_tensor(pareto_k_np)
         else:
             if self.constrain:
-                log_w = dampen(log_w, p=0.70)
+                log_w = dampen(log_w, p=0.80)
             log_w_max = torch.quantile(log_w, 0.99, dim=-1).unsqueeze(-1)
             out['log_w'] = log_w.clamp(max=log_w_max) - log_w_max
 
