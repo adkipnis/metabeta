@@ -1,4 +1,5 @@
 import torch
+from metabeta.utils.families import LIKELIHOOD_FAMILIES
 
 
 def getDevice() -> str:
@@ -26,8 +27,13 @@ def datasetFilename(cfg: dict, partition: str, epoch: int = 0) -> str:
     if partition == 'train':
         parts.append(f'ep{epoch:04d}')
 
+    # likelihood family
+    likelihood_family = cfg.get('likelihood_family', 0)
+    lf = LIKELIHOOD_FAMILIES[likelihood_family]
+
     # sizes
     parts += [
+        lf,
         f'd{cfg["max_d"]}',
         f'q{cfg["max_q"]}',
         f'm{cfg["min_m"]}-{cfg["max_m"]}',
