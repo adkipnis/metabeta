@@ -15,6 +15,7 @@ import schedulefree
 
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.io import setDevice, datasetFilename, runName
+from metabeta.utils.families import LIKELIHOOD_FAMILIES
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import (
     modelFromYaml,
@@ -41,7 +42,7 @@ logger = logging.getLogger('train.py')
 def setup() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
-    parser.add_argument('--name', type=str, default='toy', help='load configs/{name}.yaml')
+    parser.add_argument('--name', type=str, default='small-n', help='load configs/{name}.yaml')
     parser.add_argument('--m_tag', type=str)
 
     # runtime
@@ -184,7 +185,8 @@ class Trainer:
             # load model config
             model_cfg_path = Path(self.dir, '..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
             self.model_cfg = modelFromYaml(
-                model_cfg_path, d_ffx=self.cfg.max_d, d_rfx=self.cfg.max_q
+                model_cfg_path, d_ffx=self.cfg.max_d, d_rfx=self.cfg.max_q,
+                likelihood_family=self.cfg.likelihood_family,
             )
 
         # init model
@@ -263,6 +265,7 @@ class Trainer:
 ====================
 data tag:   {self.cfg.d_tag}
 model tag:  {self.cfg.m_tag}
+likelihood: {LIKELIHOOD_FAMILIES[self.cfg.likelihood_family]}
 # params:   {self.model.n_params}
 size [mb]:  {self.model.n_params * (p / 8.0) * 1e-6:.3f}
 seed:       {self.cfg.seed}
@@ -384,7 +387,7 @@ batch size: {self.cfg.bs}
             proposal = runSIR(self.model, batch, self.cfg)
         else:
             proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
-            if self.cfg.rescale:
+            if self.cfg.rescale and self.cfg.likelihood_family == 0:
                 proposal.rescale(batch['sd_y'])
         t1 = time.perf_counter()
 
@@ -392,12 +395,12 @@ batch size: {self.cfg.bs}
         proposal.tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
         proposal.to('cpu')
         batch = toDevice(batch, 'cpu')
-        if self.cfg.rescale:
+        if self.cfg.rescale and self.cfg.likelihood_family == 0:
             batch = rescaleData(batch)
 
         # get evaluation summary
-        eval_summary = getSummary(proposal, batch)
-        summary_table = summaryTable(eval_summary)
+        eval_summary = getSummary(proposal, batch, likelihood_family=self.cfg.likelihood_family)
+        summary_table = summaryTable(eval_summary, self.cfg.likelihood_family)
         logger.info(summary_table)
         if self.cfg.wandb:
             wandb.log(
