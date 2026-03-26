@@ -95,7 +95,8 @@ class Evaluator:
         else:
             model_cfg_path = Path(self.dir, '..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
             self.model_cfg = modelFromYaml(
-                model_cfg_path, d_ffx=self.cfg.max_d, d_rfx=self.cfg.max_q
+                model_cfg_path, d_ffx=self.cfg.max_d, d_rfx=self.cfg.max_q,
+                likelihood_family=getattr(self.cfg, 'likelihood_family', 0),
             )
         self.model = Approximator(self.model_cfg).to(self.device)
         self.model.eval()
@@ -172,8 +173,9 @@ class Evaluator:
         if self.cfg.rescale:
             batch = rescaleData(batch)
         proposal.to('cpu')
-        eval_summary = getSummary(proposal, batch, calibrator=calibrator)
-        summary_table = summaryTable(eval_summary)
+        lf = getattr(self.cfg, 'likelihood_family', 0)
+        eval_summary = getSummary(proposal, batch, calibrator=calibrator, likelihood_family=lf)
+        summary_table = summaryTable(eval_summary, lf)
         logger.info(summary_table)
         return eval_summary
 
