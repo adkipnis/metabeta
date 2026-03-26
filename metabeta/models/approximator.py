@@ -131,50 +131,96 @@ class Approximator(nn.Module):
             masks.append(torch.ones_like(data['mask_d'][..., 0:1]))
         return torch.cat(masks, dim=-1)
 
-    @staticmethod
-    def _dataStatistics(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def _dataStatistics(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Compute sufficient statistics from grouped data.
 
-        Returns dict with:
-            beta_ols:       (B, d)    pooled OLS fixed-effect estimates
-            sigma_eps_ols:  (B, 1)    pooled residual SD
-            sigma_rfx_ols:  (B, 1)    between-group SD of group means (random intercept proxy)
+        Normal: pooled OLS coefficients, residual SD, between-group SD of means.
+        Bernoulli: pooled IRLS logistic coefficients, between-group SD of log-odds.
         """
         X = data['X']                           # (B, m, n, d)
         y = data['y']                           # (B, m, n)
         mask = data['mask_n'].float()           # (B, m, n)
         mask_m = data['mask_m'].float()         # (B, m)
         ns = data['ns'].clamp(min=1).float()    # (B, m)
-        n_total = data['n'].float()             # (B,)
         m = data['m'].float().unsqueeze(-1)     # (B, 1)
-        
-        # --- pooled OLS: beta = (X'X)^{-1} X'y
         Xm = X * mask.unsqueeze(-1)
         ym = y * mask
-        XtX = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)   # (B, d, d)
-        Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)      # (B, d)
-        beta_ols = torch.linalg.lstsq(XtX, Xty).solution   # (B, d)
 
-        # --- residuals from pooled model
-        yhat = torch.einsum('bmnd,bd->bmn', X, beta_ols)   # (B, m, n)
-        resid = (y - yhat) * mask                         # (B, m, n)
+        if self.likelihood_family == 0:
+            beta, sigma_eps_ols = self._olsNormal(Xm, ym, mask, data['n'].float(), X)
+        elif self.likelihood_family == 1:
+            beta = self._irlsBernoulli(Xm, ym, mask)
+        elif self.likelihood_family == 2:
+            beta = self._irlsPoisson(Xm, ym, mask)
+        else:
+            raise ValueError(f'no summary statistics for likelihood {self.likelihood_family}')
 
-        # --- residual SD
-        ss_resid = resid.square().sum(dim=(1, 2))         # (B,)
-        df = (n_total - X.shape[-1]).clamp(min=1)         # (B,)
-        sigma_eps_ols = (ss_resid / df).sqrt().unsqueeze(-1)   # (B, 1)
-
-        # --- between-group SD of group means (random intercept proxy)
+        # --- between-group SD (random intercept proxy, on link scale)
         group_means = ym.sum(dim=2) / ns                  # (B, m)
+        # if self.likelihood_family == 2:  # poisson: log scale
+        #     group_means = torch.log(group_means.clamp(min=1e-4))
         grand_mean = (group_means * mask_m).sum(dim=1, keepdim=True) / m
         sq_dev = ((group_means - grand_mean).square() * mask_m).sum(dim=1, keepdim=True)
         sigma_rfx_ols = (sq_dev / m.clamp(min=2)).sqrt()  # (B, 1)
+        out.update({'beta_ols': beta, 'sigma_rfx_ols': sigma_rfx_ols})
+        return out
 
-        return {
-            'beta_ols': beta_ols,
-            'sigma_eps_ols': sigma_eps_ols,
-            'sigma_rfx_ols': sigma_rfx_ols,
-        }
+    @staticmethod
+    def _olsNormal(
+        Xm: torch.Tensor, ym: torch.Tensor, mask: torch.Tensor,
+        n_total: torch.Tensor, X: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Pooled OLS: beta = (X'X)^{-1} X'y, plus residual SD."""
+        XtX = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)
+        Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)
+        beta = torch.linalg.lstsq(XtX, Xty).solution
+
+        yhat = torch.einsum('bmnd,bd->bmn', X, beta)
+        resid = (ym - yhat * mask)
+        ss_resid = resid.square().sum(dim=(1, 2))
+        df = (n_total - X.shape[-1]).clamp(min=1)
+        sigma_eps_ols = (ss_resid / df).sqrt().unsqueeze(-1)
+        return beta, sigma_eps_ols
+
+    @staticmethod
+    def _irlsBernoulli(
+        Xm: torch.Tensor, ym: torch.Tensor, mask: torch.Tensor, n_iter: int = 5,
+    ) -> torch.Tensor:
+        """Batched IRLS logistic regression (fixed iterations)."""
+        B, _, _, d = Xm.shape
+        beta = Xm.new_zeros(B, d)
+        for _ in range(n_iter):
+            eta = torch.einsum('bmnd,bd->bmn', Xm, beta)
+            p = torch.sigmoid(eta)
+            w = (p * (1 - p) * mask).clamp(min=1e-6)
+            z = (eta + (ym - p * mask) / w) * mask
+            XwX = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)
+            Xwz = torch.einsum('bmnd,bmn->bd', Xm, w * z)
+            beta = torch.linalg.lstsq(XwX, Xwz).solution
+        return beta
+
+    @staticmethod
+    def _irlsPoisson(
+        Xm: torch.Tensor, ym: torch.Tensor, mask: torch.Tensor,
+        n_iter: int = 5, damping: float = 0.5,
+    ) -> torch.Tensor:
+        """Batched IRLS Poisson regression (damped, warm-started)."""
+        B, _, _, d = Xm.shape
+        # warm-start: intercept = log(mean(y)), slopes = 0
+        n_obs = mask.sum(dim=(1, 2)).clamp(min=1)
+        y_mean = (ym.sum(dim=(1, 2)) / n_obs).clamp(min=1e-4)
+        beta = Xm.new_zeros(B, d)
+        beta[:, 0] = torch.log(y_mean)
+        for _ in range(n_iter):
+            eta = torch.einsum('bmnd,bd->bmn', Xm, beta)
+            mu = torch.exp(eta.clamp(max=20))
+            w = (mu * mask).clamp(min=1e-6)
+            z = (eta + (ym - mu * mask) / w) * mask
+            XwX = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)
+            Xwz = torch.einsum('bmnd,bmn->bd', Xm, w * z)
+            beta_new = torch.linalg.lstsq(XwX, Xwz).solution
+            beta = damping * beta_new + (1 - damping) * beta
+        return beta
 
     def _addMetadata(
         self,
