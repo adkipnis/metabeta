@@ -52,6 +52,11 @@ def runName(cfg: dict, prefix: str = '') -> str:
     parts = []
     if prefix:
         parts.append(prefix)
+
+    # likelihood family
+    likelihood_family = cfg.get('likelihood_family', 0)
+    parts.append(LIKELIHOOD_FAMILIES[likelihood_family])
+
     parts += [
         f'd{cfg["d_tag"]}',
         f'm{cfg["m_tag"]}',
