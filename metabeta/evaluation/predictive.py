@@ -226,3 +226,25 @@ def posteriorPredictiveAUC(
 
 
 def posteriorPredictiveDeviance(
+    pp: D.Distribution,
+    data: dict[str, torch.Tensor],
+    w: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Posterior predictive mean deviance for count outcomes. Returns (b,)."""
+    y_obs = data['y']                        # (b, m, n)
+    mask = data['mask_n'].float()            # (b, m, n)
+    n = mask.sum(dim=(1, 2)).clamp(min=1)    # (b,)
+
+    # posterior mean predicted rate
+    mu = pp.rate                             # (b, m, n, s)
+    if w is not None:
+        w_ = w.unsqueeze(1).unsqueeze(1)
+        mu_mean = (mu * w_).sum(-1)
+    else:
+        mu_mean = mu.mean(-1)               # (b, m, n)
+    mu_mean = mu_mean.clamp(min=1e-8)
+
+    # deviance: 2 * sum[ y*log(y/mu) - (y - mu) ]
+    y = y_obs.clamp(min=1e-8)
+    dev = 2 * (y * torch.log(y / mu_mean) - (y_obs - mu_mean))
+    return (dev * mask).sum(dim=(1, 2)) / n
