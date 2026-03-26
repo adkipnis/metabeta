@@ -40,22 +40,29 @@ class ApproximatorConfig:
     d_rfx: int
     summarizer: SummarizerConfig
     posterior: PosteriorConfig
+    likelihood_family: int = 0
 
     def to_dict(self) -> dict:
         return {
             'd_ffx': self.d_ffx,
             'd_rfx': self.d_rfx,
+            'likelihood_family': self.likelihood_family,
             'summarizer': self.summarizer.to_dict(),
             'posterior': self.posterior.to_dict(),
         }
 
 
-def modelFromYaml(cfg_path: Path, d_ffx: int, d_rfx: int) -> ApproximatorConfig:
+def modelFromYaml(
+    cfg_path: Path, d_ffx: int, d_rfx: int, likelihood_family: int = 0
+) -> ApproximatorConfig:
     with open(cfg_path, 'r') as f:
         model_cfg = yaml.safe_load(f)
     cfg_s = SummarizerConfig(**model_cfg['summarizer'])
     cfg_p = PosteriorConfig(**model_cfg['posterior'])
-    return ApproximatorConfig(d_ffx=d_ffx, d_rfx=d_rfx, summarizer=cfg_s, posterior=cfg_p)
+    return ApproximatorConfig(
+        d_ffx=d_ffx, d_rfx=d_rfx, likelihood_family=likelihood_family,
+        summarizer=cfg_s, posterior=cfg_p,
+    )
 
 
 def dataFromYaml(cfg_path: Path, partition: str, epoch: int = 0) -> str:
