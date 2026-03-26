@@ -16,7 +16,10 @@ from metabeta.evaluation.intervals import (
 from metabeta.evaluation.predictive import (
     getPriorSamples,
     getPosteriorPredictive,
+    posteriorPredictiveAUC,
+    posteriorPredictiveDeviance,
     posteriorPredictiveNLL,
+    posteriorPredictiveR2,
 )
 from metabeta.evaluation.correlation import evaluateCorrelation, summarizeCorrelation
 
@@ -28,6 +31,7 @@ def getSummary(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
     calibrator: Calibrator | None = None,
+    likelihood_family: int = 0,
 ) -> EvaluationSummary:
     out = {}
 
@@ -51,13 +55,19 @@ def getSummary(
         out['rfx_corr'] = summarizeCorrelation(corr_results, data['mask_q'].sum(-1))
 
     # prior predictive fit
-    prior_samples = getPriorSamples(data, proposal.n_samples)
-    pp_0 = getPosteriorPredictive(prior_samples, data)
+    prior_samples = getPriorSamples(data, proposal.n_samples, likelihood_family)
+    pp_0 = getPosteriorPredictive(prior_samples, data, likelihood_family)
     out['prior_nll'] = posteriorPredictiveNLL(pp_0, data)
 
     # posterior predictive fit
-    pp = getPosteriorPredictive(proposal, data)
+    pp = getPosteriorPredictive(proposal, data, likelihood_family)
     out['posterior_nll'] = posteriorPredictiveNLL(pp, data, w=proposal.weights)
+    if likelihood_family == 0:  # normal
+        out['pp_fit'] = posteriorPredictiveR2(pp, data, w=proposal.weights)
+    elif likelihood_family == 1:  # bernoulli
+        out['pp_fit'] = posteriorPredictiveAUC(pp, data, w=proposal.weights)
+    elif likelihood_family == 2:  # poisson
+        out['pp_fit'] = posteriorPredictiveDeviance(pp, data, w=proposal.weights)
 
     # visualize single datasets
     # gt = torch.cat([data['ffx'][0], data['sigma_rfx'][0], data['sigma_eps'][0:1]]).numpy()
