@@ -10,13 +10,14 @@ import arviz as az
 import pytensor
 
 from metabeta.utils.io import datasetFilename
+from metabeta.utils.families import bambiFamilyName, hasSigmaEps
 from metabeta.utils.padding import aggregate, unpad
 
 
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Fit hierarchical datasets with Bambi.')
     # data
-    parser.add_argument('--d_tag', type=str, default='toy', help='name of data config file')
+    parser.add_argument('--d_tag', type=str, default='toy-b', help='name of data config file')
     parser.add_argument(
         '--idx',
         type=int,
@@ -165,10 +166,8 @@ class Fitter:
         nu_ffx = ds['nu_ffx']
         tau_ffx = ds['tau_ffx']
         tau_rfx = ds['tau_rfx']
-        tau_eps = ds['tau_eps']
         family_ffx = int(ds.get('family_ffx', 0))
         family_sigma_rfx = int(ds.get('family_sigma_rfx', 0))
-        family_sigma_eps = int(ds.get('family_sigma_eps', 0))
         priors = {}
 
         # fixed effects
@@ -197,14 +196,17 @@ class Fitter:
                 raise ValueError(f'unknown sigma family: {sigma_name}')
             priors[key] = bmb.Prior('Normal', mu=0, sigma=sigma)
 
-        # noise variance
-        eps_name = SIGMA_FAMILIES[family_sigma_eps]
-        if eps_name == 'halfnormal':
-            priors['sigma'] = bmb.Prior('HalfNormal', sigma=tau_eps)
-        elif eps_name == 'halfstudent':
-            priors['sigma'] = bmb.Prior('HalfStudentT', nu=STUDENT_DF, sigma=tau_eps)
-        elif eps_name == 'exponential':
-            priors['sigma'] = bmb.Prior('Exponential', lam=1.0 / (tau_eps + 1e-12))
+        # noise variance (normal likelihood only)
+        if 'tau_eps' in ds:
+            tau_eps = ds['tau_eps']
+            family_sigma_eps = int(ds.get('family_sigma_eps', 0))
+            eps_name = SIGMA_FAMILIES[family_sigma_eps]
+            if eps_name == 'halfnormal':
+                priors['sigma'] = bmb.Prior('HalfNormal', sigma=tau_eps)
+            elif eps_name == 'halfstudent':
+                priors['sigma'] = bmb.Prior('HalfStudentT', nu=STUDENT_DF, sigma=tau_eps)
+            elif eps_name == 'exponential':
+                priors['sigma'] = bmb.Prior('Exponential', lam=1.0 / (tau_eps + 1e-12))
         return priors
 
     def bambify(self, ds: dict[str, np.ndarray]) -> bmb.Model:
