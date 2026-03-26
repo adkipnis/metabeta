@@ -1,6 +1,6 @@
 # experiment
-name: 'toy'
-d_tag: 'toy'        # points to metabeta/simulation/configs/small.yaml
+name: 'small-n'
+d_tag: 'small-n'          # points to metabeta/simulation/configs/toy.yaml
 m_tag: 'toy'          # points to metabeta/models/configs/toy.yaml
 seed: 42
 
@@ -13,7 +13,7 @@ verbosity: 1          # warnings|infos|debug
 wandb: false
 
 # training
-max_epochs: 100
+max_epochs: 50
 bs: 32                # batch size
 lr: 1.0e-3
 max_grad_norm: 1.0
@@ -25,8 +25,8 @@ skip_ref: false       # skip reference run before training
 # evaluation
 n_samples: 512        # posterior draws
 rescale: true         # unstandardize y
-importance: false      # use IS (importance sampling)
-sir: false            # use SIR (sampling importance resampling)
+importance: false     # importance sampling
+sir: false            # sampling importance resampling
 sir_iter: 8
 plot: true
 
@@ -34,5 +34,5 @@ plot: true
 r_tag: ''             # run tag
 save_latest: true
 save_best: false
-load_latest: false
+load_latest: true
 load_best: false
