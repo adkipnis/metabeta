@@ -142,13 +142,20 @@ class Fitter:
     def _formulate(self, ds: dict[str, np.ndarray]) -> str:
         """setup bambi model formula based on ds"""
         d, q = ds['d'], ds['q']
+        correlated = float(ds.get('eta_rfx', 0)) > 0
         fixed = ' + '.join(f'x{j}' for j in range(1, d))
-        random = ' + '.join(f'x{j}' for j in range(1, q))
-        if not random:  # no random slopes
-            random = '1'
+        slopes = [f'x{j}' for j in range(1, q)]
+
+        if correlated:
+            random = '(1 | i)' if not slopes else f"(1 + {' + '.join(slopes)} | i)"
+        else:
+            random_parts = ['(1 | i)']
+            random_parts.extend(f'(0 + {s} | i)' for s in slopes)
+            random = ' + '.join(random_parts)
+
         if fixed:
-            return f'y ~ 1 + {fixed} + ({random} | i)'
-        return f'y ~ 1 + ({random} | i)'
+            return f'y ~ 1 + {fixed} + {random}'
+        return f'y ~ 1 + {random}'
 
     def _priorize(self, ds: dict[str, np.ndarray]) -> dict[str, bmb.Prior]:
         """setup bambi priors based on true priors"""
