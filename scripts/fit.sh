@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=fit-small-n
-#SBATCH --output=logs/fit-small-n/%A_%a.out
-#SBATCH --error=logs/fit-small-n/%A_%a.err
+#SBATCH --job-name=fit
+#SBATCH --output=logs/fit/%A_%a.out
+#SBATCH --error=logs/fit/%A_%a.err
 #SBATCH --array=0-127
 
 #SBATCH --partition cpu_p
@@ -22,5 +22,5 @@ export PYTENSOR_FLAGS="base_compiledir=$JOB_TMPDIR"
 
 # fit NUTS and ADVI
 cd $HOME/metabeta/metabeta/simulation
-python fit.py --d_tag small-n --idx ${SLURM_ARRAY_TASK_ID} --method nuts --loop
-python fit.py --d_tag small-n --idx ${SLURM_ARRAY_TASK_ID} --method advi
+python fit.py --d_tag medium-n --idx ${SLURM_ARRAY_TASK_ID} --method nuts --loop
+python fit.py --d_tag medium-n --idx ${SLURM_ARRAY_TASK_ID} --method advi

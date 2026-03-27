@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=replenish-data
-#SBATCH --output=logs/replenish-data/%A_%a.out
-#SBATCH --error=logs/replenish-data/%A_%a.err
+#SBATCH --job-name=replenish
+#SBATCH --output=logs/replenish/%A_%a.out
+#SBATCH --error=logs/replenish/%A_%a.err
 #SBATCH --array=0-7
 
 #SBATCH --partition cpu_p

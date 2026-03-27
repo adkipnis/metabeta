@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=gen-data
-#SBATCH --output=logs/gen-data/%j.out
-#SBATCH --error=logs/gen-data/%j.err
+#SBATCH --job-name=generate
+#SBATCH --output=logs/generate/%j.out
+#SBATCH --error=logs/generate/%j.err
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
