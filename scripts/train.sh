@@ -14,4 +14,4 @@
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/training
-python train.py --name small-n -e 250
+python train.py --name small-n -e 250 --wandb
