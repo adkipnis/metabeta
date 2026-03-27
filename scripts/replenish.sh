@@ -21,4 +21,4 @@ BEGIN=$((START_EPOCH + SLURM_ARRAY_TASK_ID * CHUNK_SIZE))
 END=$((BEGIN + CHUNK_SIZE - 1))
 
 cd $HOME/metabeta/metabeta/simulation
-python generate.py --d_tag simple-n --partition train --begin ${BEGIN} --epochs ${END}
+python generate.py --d_tag small-n --partition train --begin ${BEGIN} --epochs ${END}
