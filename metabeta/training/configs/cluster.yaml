@@ -1,6 +1,7 @@
 # experiment
 name: 'cluster'
 d_tag: 'simple'        # points to metabeta/simulation/configs/{d_tag}.yaml
+d_tag_valid: 'simple'  # validation data config tag
 m_tag: 'affine'        # points to metabeta/models/configs/{m_tag}.yaml
 seed: 42
 

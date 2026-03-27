@@ -1,6 +1,7 @@
 # experiment
 name: 'toy-b'
 d_tag: 'toy-b'        # points to metabeta/simulation/configs/small.yaml
+d_tag_valid: 'toy-b'  # validation data config tag
 m_tag: 'toy'          # points to metabeta/models/configs/toy.yaml
 seed: 42
 
