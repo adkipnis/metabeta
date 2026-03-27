@@ -11,6 +11,68 @@ from metabeta.simulation.distributions import (
     Bernoulli,
     NegativeBinomial,
 )
+from scamd import generate_dataset
+from scamd.utils import setSeed as scamdSetSeed
+
+PRESETS = ('smooth_stable', 'balanced_realistic', 'high_variability')
+MAX_RETRIES = 8
+
+
+@dataclass
+class Scammer:
+    """Design sampler that generates covariates via a structural causal model (scamd)."""
+
+    rng: np.random.Generator
+
+    def __post_init__(self):
+        if isinstance(self.rng, np.random.SeedSequence):
+            self.rng = np.random.default_rng(self.rng)
+
+    def _sampleHyperparams(self, d: int) -> dict:
+        """Sample SCM architecture hyperparameters."""
+        n_features = d - 1  # exclude intercept
+        return {
+            'n_causes': int(self.rng.integers(max(n_features, 2), max(n_features * 3, 6) + 1)),
+            'n_layers': int(self.rng.integers(2, 6)),
+            'n_hidden': int(self.rng.integers(16, 64)),
+            'blockwise': bool(self.rng.random() < 0.5),
+        }
+
+    def _generate(self, n: int, d: int) -> np.ndarray:
+        """Try up to MAX_RETRIES hyperparameter draws to get a valid SCM dataset."""
+        for _ in range(MAX_RETRIES):
+            hp = self._sampleHyperparams(d)
+            scamdSetSeed(int(self.rng.integers(0, 2**31)))
+            try:
+                features = generate_dataset(
+                    n_samples=n,
+                    n_features=d - 1,
+                    n_causes=hp['n_causes'],
+                    n_layers=hp['n_layers'],
+                    n_hidden=hp['n_hidden'],
+                    blockwise=hp['blockwise'],
+                    preset='balanced_realistic',
+                )
+            except RuntimeError:
+                continue
+            if not np.isfinite(features).all():
+                continue
+            return features
+        raise RuntimeError(
+            f'Scammer failed to produce a valid dataset after {MAX_RETRIES} attempts'
+        )
+
+    def sample(self, d: int, ns: np.ndarray) -> dict[str, np.ndarray]:
+        n = int(ns.sum())
+        features = self._generate(n, d)
+
+        # prepend intercept column
+        X = np.ones((n, d))
+        X[:, 1:] = features
+
+        groups = counts2groups(ns)
+        return {'X': X, 'groups': groups}
+
 
 DISTDICT = {
     Normal: 0.05,
