@@ -1,5 +1,5 @@
 # re-usable data configuration
-ds_type: 'scm' # type of predictors [toy, flat, scm, sampled]
+ds_type: 'sampled' # type of predictors [toy, flat, scm, sampled]
 source: 'all' # source dataset (ignored, unless ds_type == 'sampled')
 likelihood_family: 0 # 0 = normal, 1 = bernoulli, # 2 = poisson
 max_d: 2 # maximum number of fixed effects (intercept + slopes)
