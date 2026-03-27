@@ -2968,7 +2968,7 @@ wheels = [
 [[package]]
 name = "scamd"
 version = "0.1.0"
-source = { git = "https://github.com/adkipnis/scamd.git#76cc9a72064a581825de833fb3930beb4b79dd2a" }
+source = { git = "https://github.com/adkipnis/scamd.git#0b8f3f0390514455eedb972f9c6e3e98abff7e4b" }
 dependencies = [
     { name = "blue" },
     { name = "matplotlib" },
