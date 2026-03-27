@@ -146,9 +146,11 @@ class Emulator:
         source_is_grouped = 'm' in self.ds
 
         # check source dims
+        min_n = int(ns.min())
         if n > self.ds['n']:
             n = self.ds['n']
-            logger.info(f'not enough observations in source, setting n={n}')
+            m = min(m, n // min_n)
+            logger.info(f'not enough observations in source, setting n={n}, m={m}')
         if source_is_grouped:
             if m > self.ds['m']:
                 m = self.ds['m']
