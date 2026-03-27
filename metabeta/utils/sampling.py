@@ -18,6 +18,7 @@ def sampleCounts(
     rng: np.random.Generator, n: int, m: int, alpha: float | None = None
 ) -> np.ndarray:
     """draw ns (= counts) for m groups, such that the sum is n"""
+    assert n >= m, f'n ({n}) must be >= m ({m}) to have at least 1 obs per group'
     if alpha is None:
         alpha = rng.uniform(2.0, 20.0)  # vary entropy across datasets
     p = rng.dirichlet(np.ones(m) * alpha)
