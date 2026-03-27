@@ -42,7 +42,7 @@ logger = logging.getLogger('train.py')
 def setup() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
-    parser.add_argument('--name', type=str, default='small-n', help='load configs/{name}.yaml')
+    parser.add_argument('--name', type=str, default='medium-n', help='load configs/{name}.yaml')
     parser.add_argument('--d_tag', type=str)
     parser.add_argument('--d_tag_valid', type=str)
     parser.add_argument('--m_tag', type=str)
