@@ -13,7 +13,7 @@ from metabeta.utils.config import dataFromYaml
 @pytest.fixture(scope='session')
 def dataset_path() -> Path:
     # same file as in your __main__ block
-    data_cfg_path = Path('metabeta', 'simulation', 'configs', 'toy.yaml')
+    data_cfg_path = Path('metabeta', 'simulation', 'configs', 'toy-n.yaml')
     data_fname = dataFromYaml(data_cfg_path, 'test')
     path = Path('metabeta', 'outputs', 'data', data_fname)
     assert path.exists(), f'{path} does not exist (tests expect the demo file to be present)'
