@@ -108,14 +108,18 @@ class Generator:
         prior = Prior(rng, hyperparams)
 
         # instantiate design
-        if cfg.ds_type in ['toy', 'flat']:
-            design = Synthesizer(rng, toy=(cfg.ds_type == 'toy'))
-        elif cfg.ds_type == 'scm':
+        ds_type = cfg.ds_type
+        if ds_type == 'mixed':
+            ds_type = rng.choice(['flat', 'sampled'])
+
+        if ds_type in ['toy', 'flat']:
+            design = Synthesizer(rng, toy=(ds_type == 'toy'))
+        elif ds_type == 'scm':
             design = Scammer(rng)
-        elif cfg.ds_type == 'sampled':
+        elif ds_type == 'sampled':
             design = Emulator(rng, source=cfg.source, use_sgld=cfg.sgld)
         else:
-            raise NotImplementedError(f'design sampler type {cfg.ds_type} is not implemented')
+            raise NotImplementedError(f'design sampler type {ds_type} is not implemented')
 
         # sample from simulator
         sim = Simulator(rng, prior, design, ns)
@@ -137,7 +141,7 @@ class Generator:
         d, q, m, ns = self._genSizes(rng, n_datasets, mini_batch_size)
 
         # --- sample batch of single datasets
-        if self.cfg.loop or self.cfg.ds_type == 'scm':   # Option A: loop
+        if self.cfg.loop or self.cfg.ds_type == ('scm'):   # Option A: loop
             datasets = []
             for i in tqdm(range(n_datasets), desc=desc):
                 dataset = self._genDataset(
