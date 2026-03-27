@@ -2,7 +2,7 @@
 name: 'small-n'
 d_tag: 'small-n'          # points to metabeta/simulation/configs/*.yaml
 d_tag_valid: 'small-n'    # validation data config tag
-m_tag: 'small-n'          # points to metabeta/models/configs/*.yaml
+m_tag: 'small'          # points to metabeta/models/configs/*.yaml
 seed: 42
 
 # runtime
