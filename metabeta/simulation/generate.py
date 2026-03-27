@@ -141,7 +141,7 @@ class Generator:
         d, q, m, ns = self._genSizes(rng, n_datasets, mini_batch_size)
 
         # --- sample batch of single datasets
-        if self.cfg.loop:   # Option A: loop
+        if self.cfg.loop or self.cfg.ds_type in ['scm', 'mixed']:   # Option A: loop
             datasets = []
             for i in tqdm(range(n_datasets), desc=desc):
                 dataset = self._genDataset(
