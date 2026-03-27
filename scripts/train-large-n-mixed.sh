@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=train
-#SBATCH --output=logs/train/%j.out
-#SBATCH --error=logs/train/%j.err
+#SBATCH --job-name=train-large-n-mixed
+#SBATCH --output=logs/train/large-n-mixed_%j.out
+#SBATCH --error=logs/train/large-n-mixed_%j.err
 
 #SBATCH --partition gpu_p
 #SBATCH --qos gpu_normal
@@ -14,4 +14,4 @@
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/training
-python train.py --name medium-n -e 250 --wandb
+python train.py --name large-n-mixed -e 250 --wandb

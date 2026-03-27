@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=generate
-#SBATCH --output=logs/generate/%j.out
-#SBATCH --error=logs/generate/%j.err
+#SBATCH --job-name=generate-huge-n-sampled
+#SBATCH --output=logs/generate/huge-n-sampled_%j.out
+#SBATCH --error=logs/generate/huge-n-sampled_%j.err
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
@@ -14,4 +14,4 @@
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/simulation
-python generate.py --d_tag medium-n --partition all --epochs 50
+python generate.py --d_tag huge-n-sampled --partition all --epochs 50

@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=hyper-toy
-#SBATCH --output=logs/hyper-toy/%j.out
-#SBATCH --error=logs/hyper-toy/%j.err
+#SBATCH --job-name=train-small-n-sampled
+#SBATCH --output=logs/train/small-n-sampled_%j.out
+#SBATCH --error=logs/train/small-n-sampled_%j.err
 
 #SBATCH --partition gpu_p
 #SBATCH --qos gpu_normal
@@ -14,4 +14,4 @@
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/training
-python hyperoptimize.py --name hyper
+python train.py --name small-n-sampled -e 250 --wandb
