@@ -1,8 +1,8 @@
 # experiment
-name: 'medium-n'
-d_tag: 'medium-n'          # points to metabeta/simulation/configs/*.yaml
-d_tag_valid: 'medium-n'    # validation data config tag
-m_tag: 'medium'          # points to metabeta/models/configs/*.yaml
+name: 'huge-n-mixed'
+d_tag: 'huge-n-mixed'          # points to metabeta/simulation/configs/*.yaml
+d_tag_valid: 'huge-n-mixed'    # validation data config tag
+m_tag: 'huge'                  # points to metabeta/models/configs/*.yaml
 seed: 42
 
 # runtime
