@@ -8,7 +8,7 @@ from tqdm import tqdm
 from joblib import Parallel, delayed
 import numpy as np
 
-from metabeta.simulation import hypersample, Prior, Synthesizer, Emulator, Simulator
+from metabeta.simulation import hypersample, Prior, Synthesizer, Scammer, Emulator, Simulator
 from metabeta.utils.io import datasetFilename
 from metabeta.utils.sampling import truncLogUni
 from metabeta.utils.padding import aggregate
@@ -26,12 +26,12 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--bs_test', type=int, default=128, help='batch size per testing partition (default = 128).')
     parser.add_argument('--bs_mini', type=int, default=32, help='training minibatch size (for grouping m, q, d - default = 32)')
     # partitions and sources
-    parser.add_argument('--d_tag', type=str, default='small-n', help='name of data config file')
-    parser.add_argument('--partition', type=str, default='all', help='Type of partition in [train, valid, test, all], (default = train)')
+    parser.add_argument('--d_tag', type=str, default='small-n-ood', help='name of data config file')
+    parser.add_argument('--partition', type=str, default='valid', help='Type of partition in [train, valid, test, all], (default = train)')
     parser.add_argument('-b', '--begin', type=int, default=1, help='Begin generating training epoch number #b.')
-    parser.add_argument('-e', '--epochs', type=int, default=50, help='Total number of training epochs to generate.')
+    parser.add_argument('-e', '--epochs', type=int, default=10, help='Total number of training epochs to generate.')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD if ds_type==sampled (default = False)')
-    parser.add_argument('--loop', action='store_true', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
+    parser.add_argument('--loop', action='store_false', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
     return parser.parse_args()
 # fmt: on
 
@@ -110,6 +110,8 @@ class Generator:
         # instantiate design
         if cfg.ds_type in ['toy', 'flat']:
             design = Synthesizer(rng, toy=(cfg.ds_type == 'toy'))
+        elif cfg.ds_type == 'scm':
+            design = Scammer(rng)
         elif cfg.ds_type == 'sampled':
             design = Emulator(rng, source=cfg.source, use_sgld=cfg.sgld)
         else:
@@ -135,7 +137,7 @@ class Generator:
         d, q, m, ns = self._genSizes(rng, n_datasets, mini_batch_size)
 
         # --- sample batch of single datasets
-        if self.cfg.loop:   # Option A: loop
+        if self.cfg.loop or self.cfg.ds_type == 'scm':   # Option A: loop
             datasets = []
             for i in tqdm(range(n_datasets), desc=desc):
                 dataset = self._genDataset(
@@ -181,7 +183,7 @@ class Generator:
         assert self.cfg.begin > 0, 'starting training partition must be a positive integer'
         assert self.cfg.begin <= self.cfg.epochs, 'starting epoch larger than goal epoch'
         assert self.cfg.epochs < 10_000, 'maximum number of epochs exceeded'
-        assert self.cfg.ds_type != 'sampled', 'training data must be synthetic'
+        # assert self.cfg.ds_type != 'sampled', 'training data must be synthetic'
         logger.info(
             f'Generating {self.cfg.epochs} training partitions of {self.cfg.bs_train} datasets each...'
         )
