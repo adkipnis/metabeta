@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import numpy as np
 from metabeta.utils.preprocessing import standardize
 from metabeta.utils.families import hasSigmaEps, simulateYNp
-from metabeta.simulation import Prior, Synthesizer, Emulator
+from metabeta.simulation import Prior, Synthesizer, Scammer, Emulator
 from metabeta.plot import plotDataset
 
 SCALE_PARAMS = {'ffx', 'sigma_rfx', 'sigma_eps', 'rfx'}
@@ -38,7 +38,7 @@ def simulate(
 class Simulator:
     rng: np.random.Generator
     prior: Prior
-    design: Synthesizer | Emulator
+    design: Synthesizer | Scammer | Emulator
     ns: np.ndarray   # number of observations per group
     plot: bool = False
 
