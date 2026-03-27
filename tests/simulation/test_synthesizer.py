@@ -1,5 +1,7 @@
 import numpy as np
-from metabeta.simulation import Synthesizer
+import pytest
+from metabeta.simulation import Synthesizer, Scammer
+from metabeta.utils.sampling import sampleCounts
 
 
 def test_sample_shapes_and_intercept_and_groups():
@@ -94,3 +96,54 @@ def test_sample_returns_float_matrix_and_int_groups():
     assert np.issubdtype(X.dtype, np.floating)
     assert np.issubdtype(groups.dtype, np.integer)
     assert (groups.min() >= 0) and (groups.max() == len(ns) - 1)
+
+
+# ---------------------------------------------------------------------------
+# sampleCounts
+# ---------------------------------------------------------------------------
+
+
+def test_sample_counts_rejects_n_less_than_m():
+    rng = np.random.default_rng(0)
+    with pytest.raises(AssertionError, match='n .* must be >= m'):
+        sampleCounts(rng, n=3, m=10)
+
+
+def test_sample_counts_basic():
+    rng = np.random.default_rng(42)
+    ns = sampleCounts(rng, n=100, m=5)
+    assert ns.sum() == 100
+    assert len(ns) == 5
+    assert (ns >= 1).all()
+
+
+# ---------------------------------------------------------------------------
+# Scammer
+# ---------------------------------------------------------------------------
+
+
+def test_scammer_shapes_and_intercept():
+    rng = np.random.default_rng(42)
+    d = 5
+    ns = np.array([20, 30, 50], dtype=int)
+
+    out = Scammer(rng).sample(d=d, ns=ns)
+    X = out['X']
+    groups = out['groups']
+
+    assert X.shape == (int(ns.sum()), d)
+    assert groups.shape == (int(ns.sum()),)
+    assert np.allclose(X[:, 0], 1.0)
+    assert np.isfinite(X).all()
+
+    expected_groups = np.repeat(np.arange(len(ns)), ns)
+    assert np.array_equal(groups, expected_groups)
+
+
+def test_scammer_accepts_seedsequence():
+    ss = np.random.SeedSequence(2024)
+    d = 4
+    ns = np.array([10, 15], dtype=int)
+    out = Scammer(ss).sample(d=d, ns=ns)  # type: ignore[arg-type]
+    assert out['X'].shape == (25, d)
+    assert np.isfinite(out['X']).all()

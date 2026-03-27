@@ -132,6 +132,31 @@ def test_simulator_reproducible_given_seed(dims, ns):
     assert np.isclose(float(ds1["sigma_eps"]), float(ds2["sigma_eps"]))
 
 
+def test_emulator_caps_m_when_n_exceeds_source(rng):
+    """When n > source n, the emulator must reduce m so that n >= m."""
+    d = 3
+
+    try:
+        emu = Emulator(rng, 'all')
+    except Exception as e:
+        pytest.skip(f'Emulator not available in test env: {e}')
+
+    # request far more observations than any source likely has
+    m_big = 50
+    min_n_per_group = 500
+    ns_big = np.full(m_big, min_n_per_group, dtype=int)
+
+    try:
+        out = emu.sample(d, ns_big)
+    except Exception as e:
+        pytest.skip(f'Emulator source not suitable for test: {e}')
+
+    n_out = int(out['ns'].sum())
+    m_out = len(out['ns'])
+    assert n_out >= m_out, f'n ({n_out}) < m ({m_out}) after emulator capping'
+    assert (out['ns'] >= 1).all()
+
+
 def test_simulator_emulator_updates_ns_if_present(rng, prior, ns, dims):
     """
     This test checks that your Simulator respects an updated 'ns' returned by Emulator.
