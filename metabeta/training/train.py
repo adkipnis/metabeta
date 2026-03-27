@@ -461,14 +461,14 @@ batch size: {self.cfg.bs}
             proposal, batch, plot_dir=self.plot_dir, epoch=self.current_epoch, show=show
         )
         path_rc = None
-        if proposal.q >= 2:
-            path_rc = plotRfxCorrelationRecovery(
-                proposal,
-                batch,
-                plot_dir=self.plot_dir,
-                epoch=self.current_epoch,
-                show=show,
-            )
+        # if proposal.q >= 2:
+        #     path_rc = plotRfxCorrelationRecovery(
+        #         proposal,
+        #         batch,
+        #         plot_dir=self.plot_dir,
+        #         epoch=self.current_epoch,
+        #         show=show,
+        #     )
         if self.cfg.wandb:
             image_logs = {
                 'plot/recovery': wandb.Image(str(path_r)),
