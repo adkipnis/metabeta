@@ -18,7 +18,6 @@ cd metabeta
 uv sync
 source .venv/bin/activate
 uv pip install -e .
-uv pip install "git+https://github.com/adkipnis/scamd.git"
  ```
 ---
 🚧 I'm currently refactoring this repo. For legacy code, switch to branch v1. 🚧

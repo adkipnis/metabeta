@@ -15,6 +15,7 @@ dependencies = [
     "optuna>=4.7.0",
     "pmlb>=1.0.1.post3",
     "pytest>=9.0.2",
+    "scamd",
     "schedulefree>=1.4.1",
     "scipy>=1.16.3",
     "seaborn>=0.13.2",
@@ -42,3 +43,6 @@ extend-exclude = '''
   | ^__pycache__/
 )
 '''
+
+[tool.uv.sources]
+scamd = { git = "https://github.com/adkipnis/scamd.git" }
