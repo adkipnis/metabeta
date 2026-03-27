@@ -33,8 +33,8 @@ class Scammer:
         n_features = d - 1  # exclude intercept
         return {
             'n_causes': int(self.rng.integers(max(n_features, 2), max(n_features * 3, 6) + 1)),
-            'n_layers': int(self.rng.integers(2, 6)),
-            'n_hidden': int(self.rng.integers(16, 64)),
+            'n_layers': int(self.rng.integers(2, 8)),
+            'n_hidden': int(self.rng.integers(8, 32)),
             'blockwise': bool(self.rng.random() < 0.5),
         }
 

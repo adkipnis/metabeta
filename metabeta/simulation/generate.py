@@ -110,7 +110,7 @@ class Generator:
         # instantiate design
         ds_type = cfg.ds_type
         if ds_type == 'mixed':
-            ds_type = rng.choice(['flat', 'sampled'])
+            ds_type = rng.choice(['flat', 'sampled', 'scm'])
 
         if ds_type in ['toy', 'flat']:
             design = Synthesizer(rng, toy=(ds_type == 'toy'))
@@ -141,7 +141,7 @@ class Generator:
         d, q, m, ns = self._genSizes(rng, n_datasets, mini_batch_size)
 
         # --- sample batch of single datasets
-        if self.cfg.loop or self.cfg.ds_type == ('scm'):   # Option A: loop
+        if self.cfg.loop:   # Option A: loop
             datasets = []
             for i in tqdm(range(n_datasets), desc=desc):
                 dataset = self._genDataset(
