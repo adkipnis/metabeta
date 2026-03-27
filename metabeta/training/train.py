@@ -442,7 +442,7 @@ batch size: {self.cfg.bs}
         eval_summary: EvaluationSummary,
         batch: dict[str, torch.Tensor],
     ) -> None:
-        show = True
+        show = not self.cfg.wandb
         path_r = plotRecovery(
             eval_summary,
             batch,
