@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=gen-replenish
-#SBATCH --output=logs/gen-replenish/%A_%a.out
-#SBATCH --error=logs/gen-replenish/%A_%a.err
+#SBATCH --job-name=replenish-data
+#SBATCH --output=logs/replenish-data/%A_%a.out
+#SBATCH --error=logs/replenish-data/%A_%a.err
 #SBATCH --array=0-7
 
 #SBATCH --partition cpu_p
@@ -21,4 +21,4 @@ BEGIN=$((START_EPOCH + SLURM_ARRAY_TASK_ID * CHUNK_SIZE))
 END=$((BEGIN + CHUNK_SIZE - 1))
 
 cd $HOME/metabeta/metabeta/simulation
-python generate.py --d_tag small-n --partition train --begin ${BEGIN} --epochs ${END}
+python generate.py --d_tag medium-n --partition train --begin ${BEGIN} --epochs ${END}

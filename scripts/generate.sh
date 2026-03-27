@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=gen-simple
-#SBATCH --output=logs/gen-simple/%j.out
-#SBATCH --error=logs/gen-simple/%j.err
+#SBATCH --job-name=gen-data
+#SBATCH --output=logs/gen-data/%j.out
+#SBATCH --error=logs/gen-data/%j.err
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
@@ -14,4 +14,4 @@
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/simulation
-python generate.py --d_tag small-n --partition all --epochs 50
+python generate.py --d_tag medium-n --partition all --epochs 50
