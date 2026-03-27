@@ -17,7 +17,7 @@ from metabeta.utils.padding import aggregate, unpad
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Fit hierarchical datasets with Bambi.')
     # data
-    parser.add_argument('--d_tag', type=str, default='toy-b', help='name of data config file')
+    parser.add_argument('--d_tag', type=str, default='toy-n', help='name of data config file')
     parser.add_argument(
         '--idx',
         type=int,
