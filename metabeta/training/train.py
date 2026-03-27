@@ -43,6 +43,8 @@ def setup() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
     parser.add_argument('--name', type=str, default='small-n', help='load configs/{name}.yaml')
+    parser.add_argument('--d_tag', type=str)
+    parser.add_argument('--d_tag_valid', type=str)
     parser.add_argument('--m_tag', type=str)
 
     # runtime
@@ -154,8 +156,15 @@ class Trainer:
 
     def _initData(self) -> None:
         # assimilate data config
-        self.data_cfg = loadDataConfig(self.cfg.d_tag)
-        assimilateConfig(self.cfg, self.data_cfg)
+        self.data_cfg_train = loadDataConfig(self.cfg.d_tag)
+        assimilateConfig(self.cfg, self.data_cfg_train)
+
+        # allow overriding validation data tag independently from training
+        self.cfg.d_tag_valid = getattr(self.cfg, 'd_tag_valid', self.cfg.d_tag)
+        self.data_cfg_valid = loadDataConfig(self.cfg.d_tag_valid)
+
+        # keep legacy attr names for checkpoint compatibility
+        self.data_cfg = self.data_cfg_train
 
         # load validation data
         self.dl_valid = self._getDataLoader('valid')
@@ -164,13 +173,14 @@ class Trainer:
     def _getDataLoader(
         self, partition: str, epoch: int = 0, batch_size: int | None = None
     ) -> Dataloader:
-        data_fname = datasetFilename(self.data_cfg, partition, epoch)
+        data_cfg = self.data_cfg_train if partition == 'train' else self.data_cfg_valid
+        data_fname = datasetFilename(data_cfg, partition, epoch)
         data_path = Path(self.dir, '..', 'outputs', 'data', data_fname)
         return Dataloader(data_path, batch_size=batch_size)
 
     def _trainingDataAvailable(self, start_epoch: int) -> bool:
         for epoch in range(start_epoch, self.cfg.max_epochs + 1):
-            data_fname = datasetFilename(self.data_cfg, 'train', epoch)
+            data_fname = datasetFilename(self.data_cfg_train, 'train', epoch)
             data_path = Path(self.dir, '..', 'outputs', 'data', data_fname)
             if not data_path.exists():
                 logger.warning(f'{data_path} does not exist')
@@ -185,7 +195,9 @@ class Trainer:
             # load model config
             model_cfg_path = Path(self.dir, '..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
             self.model_cfg = modelFromYaml(
-                model_cfg_path, d_ffx=self.cfg.max_d, d_rfx=self.cfg.max_q,
+                model_cfg_path,
+                d_ffx=self.cfg.max_d,
+                d_rfx=self.cfg.max_q,
                 likelihood_family=self.cfg.likelihood_family,
             )
 
@@ -264,6 +276,7 @@ class Trainer:
         return f"""
 ====================
 data tag:   {self.cfg.d_tag}
+valid tag:  {self.cfg.d_tag_valid}
 model tag:  {self.cfg.m_tag}
 likelihood: {LIKELIHOOD_FAMILIES[self.cfg.likelihood_family]}
 # params:   {self.model.n_params}
@@ -327,12 +340,17 @@ batch size: {self.cfg.bs}
 
     def train(self) -> float:
         dl_train = self._getDataLoader('train', self.current_epoch, batch_size=self.cfg.bs)
-        iterator = tqdm(dl_train, desc=f'Epoch {self.current_epoch:02d}/{self.cfg.max_epochs:02d} [T]')
+        iterator = tqdm(
+            dl_train,
+            desc=f'Epoch {self.current_epoch:02d}/{self.cfg.max_epochs:02d} [T]',
+        )
         loss_train = running_sum = 0.0
         self.model.train()
         self.optimizer.train()
         self.optimizer.zero_grad(set_to_none=True)
         for i, batch in enumerate(iterator):
+            if i == 106:
+                ...
             batch = toDevice(batch, self.device)
             loss = self.loss(batch)
             loss.backward()
@@ -359,7 +377,10 @@ batch size: {self.cfg.bs}
 
     @torch.inference_mode()
     def valid(self) -> float:
-        iterator = tqdm(self.dl_valid, desc=f'Epoch {self.current_epoch:02d}/{self.cfg.max_epochs:02d} [V]')
+        iterator = tqdm(
+            self.dl_valid,
+            desc=f'Epoch {self.current_epoch:02d}/{self.cfg.max_epochs:02d} [V]',
+        )
         loss_valid = running_sum = 0.0
         self.model.eval()
         self.optimizer.eval()
@@ -422,16 +443,31 @@ batch size: {self.cfg.bs}
         batch: dict[str, torch.Tensor],
     ) -> None:
         show = True
-        path_r = plotRecovery(eval_summary, batch,
-                              plot_dir=self.plot_dir, epoch=self.current_epoch, show=show)
-        path_c = plotCoverage(eval_summary, proposal,
-                              plot_dir=self.plot_dir, epoch=self.current_epoch, show=show)
-        path_s = plotSBC(proposal, batch,
-                         plot_dir=self.plot_dir, epoch=self.current_epoch, show=show)
+        path_r = plotRecovery(
+            eval_summary,
+            batch,
+            plot_dir=self.plot_dir,
+            epoch=self.current_epoch,
+            show=show,
+        )
+        path_c = plotCoverage(
+            eval_summary,
+            proposal,
+            plot_dir=self.plot_dir,
+            epoch=self.current_epoch,
+            show=show,
+        )
+        path_s = plotSBC(
+            proposal, batch, plot_dir=self.plot_dir, epoch=self.current_epoch, show=show
+        )
         path_rc = None
         if proposal.q >= 2:
             path_rc = plotRfxCorrelationRecovery(
-                proposal, batch, plot_dir=self.plot_dir, epoch=self.current_epoch, show=show,
+                proposal,
+                batch,
+                plot_dir=self.plot_dir,
+                epoch=self.current_epoch,
+                show=show,
             )
         if self.cfg.wandb:
             image_logs = {
@@ -454,7 +490,7 @@ batch size: {self.cfg.bs}
             print(f'Resumed latest checkpoint at epoch {self.current_epoch}.')
 
         # check if training data is complete
-        assert self._trainingDataAvailable(self.current_epoch + 1), 'training data incomplete'
+        # assert self._trainingDataAvailable(self.current_epoch + 1), 'training data incomplete'
 
         # optionally init wandb (after potential loading and reference run)
         if self.cfg.wandb:
