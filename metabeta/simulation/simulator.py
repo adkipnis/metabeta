@@ -52,22 +52,6 @@ class Simulator:
     def m(self) -> int:
         return len(self.ns)
 
-    # def _covsum(
-    #     self,
-    #     parameters: dict[str, np.ndarray],
-    #     observations: dict[str, np.ndarray],
-    # ) -> float:
-    #     """get sum of covariance matrix (minus the first element)"""
-    #     if self.m < 2 or self.q < 2:
-    #         return 0.0
-    #     rfx = parameters['rfx']
-    #     q = rfx.shape[1]
-    #     Z = observations['X'][:, :q]
-    #     weighted_rfx = Z.mean(0, keepdims=True) * rfx
-    #     cov = np.cov(weighted_rfx, rowvar=False)
-    #     cov_sum = cov.sum() - cov[0, 0]
-    #     return cov_sum
-
     def sample(self) -> dict[str, np.ndarray]:
         likelihood_family = int(self.prior.hyperparams.get('likelihood_family', 0))
 
