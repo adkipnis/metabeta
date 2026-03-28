@@ -12,10 +12,8 @@
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
 
-set -euo pipefail
-
-source "$HOME/.bashrc"
-source "$HOME/metabeta/.venv/bin/activate"
+source $HOME/.bashrc
+source $HOME/metabeta/.venv/bin/activate
 
 JOB_TMPDIR="$HOME/tmp/pytensor_$SLURM_JOB_ID"
 mkdir -p "$JOB_TMPDIR"
