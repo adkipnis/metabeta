@@ -3,7 +3,7 @@
 #SBATCH --job-name=replenish-huge-b-sampled
 #SBATCH --output=logs/replenish/huge-b-sampled_%A_%a.out
 #SBATCH --error=logs/replenish/huge-b-sampled_%A_%a.err
-#SBATCH --array=0-239
+#SBATCH --array=0-23
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
@@ -16,7 +16,7 @@ source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 
 START_EPOCH=11
-CHUNK_SIZE=1
+CHUNK_SIZE=10
 BEGIN=$((START_EPOCH + SLURM_ARRAY_TASK_ID * CHUNK_SIZE))
 END=$((BEGIN + CHUNK_SIZE - 1))
 
