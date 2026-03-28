@@ -1,7 +1,7 @@
 # experiment
 name: 'small-n-mixed'
 d_tag: 'small-n-mixed'          # points to metabeta/simulation/configs/*.yaml
-d_tag_valid: 'small-n-mixed'    # validation data config tag
+d_tag_valid: 'small-n-sampled'    # validation data config tag
 m_tag: 'small'                  # points to metabeta/models/configs/*.yaml
 seed: 42
 

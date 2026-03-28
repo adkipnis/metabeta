@@ -1,7 +1,7 @@
 # experiment
 name: 'huge-b-mixed'
 d_tag: 'huge-b-mixed'          # points to metabeta/simulation/configs/*.yaml
-d_tag_valid: 'huge-b-mixed'    # validation data config tag
+d_tag_valid: 'huge-b-sampled'    # validation data config tag
 m_tag: 'huge'                  # points to metabeta/models/configs/*.yaml
 seed: 42
 
