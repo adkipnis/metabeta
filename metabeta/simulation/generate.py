@@ -35,9 +35,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--bs_mini', type=int, default=32, help='training minibatch size (for grouping m, q, d - default = 32)')
     # partitions and sources
     parser.add_argument('--d_tag', type=str, default='small-n-sampled', help='name of data config file')
-    parser.add_argument('--partition', type=str, default='all', help='Type of partition in [train, valid, test, all], (default = train)')
     parser.add_argument('-b', '--begin', type=int, default=1, help='Begin generating training epoch number #b.')
     parser.add_argument('-e', '--epochs', type=int, default=10, help='Total number of training epochs to generate.')
+    parser.add_argument('--partition', type=str, default='train', help='Type of partition in [train, valid, test, all], (default = train)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD if ds_type==sampled (default = False)')
     parser.add_argument('--loop', action='store_false', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
     return parser.parse_args()
