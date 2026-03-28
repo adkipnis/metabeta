@@ -1,10 +1,7 @@
-import logging
 import random
 import numpy as np
 from scipy.stats import wishart
 import torch
-
-logger = logging.getLogger(__name__)
 
 
 def setSeed(s: int) -> None:
@@ -22,18 +19,8 @@ def sampleCounts(
     if alpha is None:
         alpha = rng.uniform(2.0, 20.0)  # vary entropy across datasets
     p = rng.dirichlet(np.ones(m) * alpha)
-    ns = np.round(p * n).astype(int)
-    diff = n - ns.sum()
-    if diff > 0:
-        idx = ns.argmin(0)
-        ns[idx] += diff
-    elif diff < 0:
-        idx = ns.argmax(0)
-        ns[idx] += diff
-    if (ns < 1).any():  # try again
-        logger.info('non-positive counts found')
-        return sampleCounts(rng, n, m, alpha)
-    return ns
+    extra = rng.multinomial(n - m, p)
+    return extra + 1
 
 
 def counts2groups(ns: np.ndarray) -> np.ndarray:
