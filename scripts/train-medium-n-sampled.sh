@@ -14,4 +14,4 @@
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/training
-python train.py --name medium-n-sampled -e 250 --wandb
+python train.py --name medium-n-sampled -e 250 --wandb --device cuda
