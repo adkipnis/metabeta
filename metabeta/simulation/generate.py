@@ -8,7 +8,14 @@ from tqdm import tqdm
 from joblib import Parallel, delayed
 import numpy as np
 
-from metabeta.simulation import hypersample, Prior, Synthesizer, Scammer, Emulator, Simulator
+from metabeta.simulation import (
+    hypersample,
+    Prior,
+    Synthesizer,
+    Scammer,
+    Emulator,
+    Simulator,
+)
 from metabeta.utils.io import datasetFilename
 from metabeta.utils.sampling import truncLogUni
 from metabeta.utils.padding import aggregate
@@ -79,7 +86,11 @@ class Generator:
 
         # number of groups
         m = truncLogUni(
-            rng, low=self.cfg.min_m, high=self.cfg.max_m + 1, size=n_mini_batches, round=True
+            rng,
+            low=self.cfg.min_m,
+            high=self.cfg.max_m + 1,
+            size=n_mini_batches,
+            round=True,
         )
         m = np.repeat(m, mini_batch_size)
 
@@ -194,7 +205,9 @@ class Generator:
         )
         for epoch in range(self.cfg.begin, self.cfg.epochs + 1):
             ds_train = self._genBatch(
-                n_datasets=self.cfg.bs_train, mini_batch_size=self.cfg.bs_mini, epoch=epoch
+                n_datasets=self.cfg.bs_train,
+                mini_batch_size=self.cfg.bs_mini,
+                epoch=epoch,
             )
             ds_train = aggregate(ds_train)
             fn = Path(self.outdir, datasetFilename(vars(self.cfg), 'train', epoch))
