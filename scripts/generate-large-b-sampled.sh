@@ -14,4 +14,4 @@
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/simulation
-python generate.py --d_tag large-b-sampled --partition all --epochs 50
+python generate.py --d_tag large-b-sampled --partition all --epochs 10
