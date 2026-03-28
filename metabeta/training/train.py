@@ -79,19 +79,29 @@ class EarlyStopping:
     def __init__(self, patience: int = 5, delta: float = 1e-3) -> None:
         self.patience = patience
         self.delta = delta
-        self.best = float('inf')
+        self.best_nrmse = float('inf')
+        self.best_abs_lcr = float('inf')
         self.counter = 0
         self.stop = False
 
-    def update(self, loss: float) -> None:
-        diff = self.best - loss
-        if diff > self.delta:
-            self.best = loss
+    def update(self, mean_nrmse: float, mean_lcr: float) -> bool:
+        abs_lcr = abs(mean_lcr)
+        improved_nrmse = (self.best_nrmse - mean_nrmse) > self.delta
+        improved_lcr = (self.best_abs_lcr - abs_lcr) > self.delta
+        improved = improved_nrmse or improved_lcr
+
+        if improved_nrmse:
+            self.best_nrmse = mean_nrmse
+        if improved_lcr:
+            self.best_abs_lcr = abs_lcr
+
+        if improved:
             self.counter = 0
         else:
             self.counter += 1
             if self.counter >= self.patience:
                 self.stop = True
+        return improved
 
 
 # -----------------------------------------------------------------------------
@@ -133,7 +143,8 @@ class Trainer:
 
         # tracking & logging
         self.current_epoch = 0
-        self.best_score = float('inf')
+        self.best_nrmse = float('inf')
+        self.best_abs_lcr = float('inf')
         self.best_epoch = 0
         self.global_step = 0
         self.wandb_run = None
@@ -224,7 +235,6 @@ class Trainer:
         wandb.define_metric('valid/loss_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/mean_nrmse_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/mean_lcr_epoch', step_metric='step/epoch')
-        wandb.define_metric('valid/early_stop_score_epoch', step_metric='step/epoch')
 
     def close(self) -> None:
         if self.wandb_run is not None:
@@ -236,7 +246,8 @@ class Trainer:
             'timestamp': self.timestamp,
             'epoch': self.current_epoch,
             'best_epoch': self.best_epoch,
-            'best_score': self.best_score,
+            'best_nrmse': self.best_nrmse,
+            'best_abs_lcr': self.best_abs_lcr,
             'trainer_cfg': vars(self.cfg).copy(),
             'data_cfg': self.data_cfg.copy(),
             'model_cfg': self.model_cfg.to_dict(),
@@ -264,16 +275,17 @@ class Trainer:
         self.optimizer.load_state_dict(payload['optimizer_state'])
         self.timestamp = payload['timestamp']
         self.best_epoch = payload['best_epoch']
-        self.best_score = payload['best_score']
+        self.best_nrmse = payload['best_nrmse']
+        self.best_abs_lcr = payload['best_abs_lcr']
         if self.stopper is not None:
-            self.stopper.best = self.best_score
+            self.stopper.best_nrmse = self.best_nrmse
+            self.stopper.best_abs_lcr = self.best_abs_lcr
         return int(payload.get('epoch', 0))  # last completed epoch
 
-    def getTrackingMetrics(self, eval_summary: EvaluationSummary) -> tuple[float, float, float]:
+    def getTrackingMetrics(self, eval_summary: EvaluationSummary) -> tuple[float, float]:
         mean_nrmse = dictMean(eval_summary.nrmse)
         mean_lcr = dictMean(eval_summary.lcr)
-        early_stop_score = mean_nrmse + abs(mean_lcr)
-        return mean_nrmse, mean_lcr, early_stop_score
+        return mean_nrmse, mean_lcr
 
     @property
     def info(self) -> str:
@@ -518,12 +530,11 @@ batch size: {self.cfg.bs}
             loss_valid = self.valid()
             mean_nrmse = None
             mean_lcr = None
-            early_stop_score = None
 
             # sample on test set
             if epoch % self.cfg.sample_interval == 0:
                 eval_summary = self.sample()
-                mean_nrmse, mean_lcr, early_stop_score = self.getTrackingMetrics(eval_summary)
+                mean_nrmse, mean_lcr = self.getTrackingMetrics(eval_summary)
 
             # log epoch
             if self.wandb_run is not None:
@@ -534,24 +545,30 @@ batch size: {self.cfg.bs}
                 }
                 if mean_nrmse is not None:
                     logs['valid/mean_nrmse_epoch'] = float(mean_nrmse)
-                    logs['valid/mean_lcr_epoch'] = float(mean_lcr) # type: ignore
-                    logs['valid/early_stop_score_epoch'] = float(early_stop_score) # type: ignore
+                    logs['valid/mean_lcr_epoch'] = float(mean_lcr)  # type: ignore
                 wandb.log(logs)
 
             # save latest ckpt
             if self.cfg.save_latest:
                 self.save('latest')
 
-            # update tracked score and optional early stopping on sample epochs
-            if early_stop_score is not None:
-                if early_stop_score < (self.best_score - 1e-6):
-                    self.best_score = early_stop_score
+            # update tracked metrics and optional early stopping on sample epochs
+            if mean_nrmse is not None:
+                improved_nrmse = mean_nrmse < (self.best_nrmse - 1e-6)
+                improved_lcr = abs(mean_lcr) < (self.best_abs_lcr - 1e-6)  # type: ignore
+                improved = improved_nrmse or improved_lcr
+
+                if improved_nrmse:
+                    self.best_nrmse = mean_nrmse
+                if improved_lcr:
+                    self.best_abs_lcr = abs(mean_lcr)  # type: ignore
+                if improved:
                     self.best_epoch = self.current_epoch
                     if self.cfg.save_best:
                         self.save('best')
 
                 if self.stopper is not None:
-                    self.stopper.update(early_stop_score)
+                    self.stopper.update(float(mean_nrmse), float(mean_lcr))
                     if self.stopper.stop:
                         logger.info(f'early stopping at epoch {self.current_epoch}.')
                         break
