@@ -13,7 +13,13 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='Check generated training datasets and fit files for a d_tag.'
     )
-    parser.add_argument('--d_tag', type=str, required=True, help='name of data config file')
+    parser.add_argument(
+        '--d_tag',
+        type=str,
+        nargs='+',
+        required=True,
+        help='one or more data config tags',
+    )
     parser.add_argument(
         '--n_train_epochs',
         type=int,
@@ -108,13 +114,11 @@ def _fitCfg(d_tag: str) -> argparse.Namespace:
     )
 
 
-def main() -> int:
-    cfg = setup()
-    srcdir = Path(cfg.srcdir).resolve()
+def _runForTag(d_tag: str, cfg: argparse.Namespace, srcdir: Path) -> int:
     fits_dir = srcdir / 'fits'
 
     print('Running dataset and fit checks')
-    print(f'  d_tag: {cfg.d_tag}')
+    print(f'  d_tag: {d_tag}')
     print(f'  expected train files: {cfg.n_train_epochs}')
     print(f'  expected pymc (nuts) fits: {cfg.n_fits}')
     print(f'  expected advi fits: {cfg.n_fits}')
@@ -123,7 +127,7 @@ def main() -> int:
     print(f'  fits directory: {fits_dir}')
     print(f'  npz inspection: {cfg.inspect}')
 
-    data_cfg = _loadDataCfg(cfg.d_tag)
+    data_cfg = _loadDataCfg(d_tag)
 
     # check expected training partitions
     train_paths = [
@@ -167,7 +171,7 @@ def main() -> int:
     reintegrated = False
     if fits_ok and not cfg.no_reintegrate:
         try:
-            fitter = Fitter(_fitCfg(cfg.d_tag), srcdir=srcdir)
+            fitter = Fitter(_fitCfg(d_tag), srcdir=srcdir)
             fitter.reintegrate()
             reintegrated = True
         except Exception as exc:
@@ -179,6 +183,24 @@ def main() -> int:
     if train_ok and fits_ok:
         return 0
     return 1
+
+
+def main() -> int:
+    cfg = setup()
+    srcdir = Path(cfg.srcdir).resolve()
+
+    status_by_tag = {}
+    for i, d_tag in enumerate(cfg.d_tag):
+        if i > 0:
+            print('-' * 60)
+        status_by_tag[d_tag] = _runForTag(d_tag, cfg, srcdir) == 0
+
+    print('-' * 60)
+    print('Final status by d_tag:')
+    for d_tag, ok in status_by_tag.items():
+        print(f"  {d_tag}: {'ok' if ok else 'failed'}")
+
+    return 0 if all(status_by_tag.values()) else 1
 
 
 if __name__ == '__main__':
