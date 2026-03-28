@@ -33,6 +33,7 @@ def loadDataset(source: Path) -> dict:
     assert source.exists(), 'source does not exist'
     data = np.load(source, allow_pickle=True)
     data = {k: restore(data[k]) for k in data.files if restore(data[k]) is not None}
+    data['source'] = source
 
     # check dims
     assert len(data['X']) == data['n'], 'dim mismatch (X, n)'
