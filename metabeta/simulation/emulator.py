@@ -11,7 +11,6 @@ from metabeta.utils.sampling import sampleCounts, counts2groups
 # cached database
 logger = logging.getLogger(__name__)
 DATA_PATH = (Path(__file__).resolve().parent / '..' / 'datasets' / 'preprocessed').resolve()
-# DATA_PATH = Path('..', 'datasets', 'preprocessed')
 VAL_PATHS = list(Path(DATA_PATH, 'validation').glob('*.npz'))
 TEST_PATHS = list(Path(DATA_PATH, 'test').glob('*.npz'))
 PATHS = VAL_PATHS + TEST_PATHS
@@ -53,19 +52,44 @@ class Emulator:
     rng: np.random.Generator
     source: str
     use_sgld: bool = True
+    min_m: int = 1
+    min_n: int = 1
+    max_attempts: int = 20
 
     def __post_init__(self):
         if isinstance(self.rng, np.random.SeedSequence):
             self.rng = np.random.default_rng(self.rng)
+        if self.min_m < 1:
+            raise ValueError(f'min_m must be >= 1, but got {self.min_m}')
+        if self.min_n < 1:
+            raise ValueError(f'min_n must be >= 1, but got {self.min_n}')
+        if self.max_attempts < 1:
+            raise ValueError(f'max_attempts must be >= 1, but got {self.max_attempts}')
         if self.use_sgld:
             self.sgld = SGLD()
 
-    def _pull(self, d: int, m: int):
+    def _maxGroups(self, ds: dict) -> int:
+        n = int(ds['n'])
+        if 'm' in ds and 'ns' in ds and 'groups' in ds:
+            eligible = int(np.sum(ds['ns'] >= self.min_n))
+            return min(int(ds['m']), eligible, n // self.min_n)
+        return n // self.min_n
+
+    def _compatible(self, ds: dict, d: int) -> bool:
+        if d > int(ds['d']):
+            return False
+        return self._maxGroups(ds) >= self.min_m
+
+    def _pull(self, d: int):
         # get dataset from database with matching dims
         database = getDatabase()
         if self.source == 'all':
-            subset = [ds for ds in database if d <= ds['d'] and m <= ds.get('m', float('inf'))]
+            subset = [ds for ds in database if self._compatible(ds, d)]
             n_ds = len(subset)
+            if n_ds == 0:
+                raise ValueError(
+                    f'no source dataset can support d={d}, min_m={self.min_m}, min_n={self.min_n}'
+                )
             idx = self.rng.integers(0, n_ds)
             self.ds = subset[idx]
         else:
@@ -78,7 +102,26 @@ class Emulator:
             else:
                 raise ValueError(f'{self.source} not in known paths.')
             self.ds = database[idx]
-            assert d <= self.ds['d'] and m <= self.ds.get('m', float('inf')), 'dimension mismatch'
+            if not self._compatible(self.ds, d):
+                raise ValueError(
+                    f'dimension mismatch for source={self.source}: '
+                    f'requested d={d}, min_m={self.min_m}, min_n={self.min_n}, '
+                    f"but source has d={self.ds['d']}, n={self.ds['n']}, max_groups={self._maxGroups(self.ds)}"
+                )
+
+    def _sampleCountsMin(self, n: int, m: int) -> np.ndarray:
+        if n < m * self.min_n:
+            raise ValueError(
+                f'cannot sample counts: n={n} is too small for m={m} with min_n={self.min_n}'
+            )
+        base = np.full(m, self.min_n, dtype=int)
+        rem = n - int(base.sum())
+        if rem == 0:
+            return base
+        alpha = self.rng.uniform(2.0, 20.0)
+        p = self.rng.dirichlet(np.ones(m) * alpha)
+        extra = self.rng.multinomial(rem, p)
+        return base + extra
 
     def _subset(
         self,
@@ -95,7 +138,7 @@ class Emulator:
         x = x[:, idx_feat]
 
         # subset observations
-        ns = sampleCounts(self.rng, n, m)
+        ns = self._sampleCountsMin(n, m)
         n = int(ns.sum())
         idx_obs = self.rng.permutation(len(x))[:n]
         x = x[idx_obs]
@@ -117,9 +160,10 @@ class Emulator:
         x_ = x[:, idx_feat]
 
         # hierarchically subset members / observations per member
-        members = self.rng.permutation(ds['m'])[:m]
-        ns = sampleCounts(self.rng, n, m)
-        ns = np.minimum(ds['ns'][members], ns)   # avoid oversampling
+        eligible = np.where(ds['ns'] >= self.min_n)[0]
+        members = self.rng.permutation(eligible)[:m]
+        ns = self._sampleCountsMin(n, m)
+        ns = np.minimum(ds['ns'][members], ns)  # avoid oversampling
 
         # subset observations per member
         member_mask = np.zeros(len(x)).astype(bool)
@@ -137,42 +181,52 @@ class Emulator:
         d: int,  # number of predictors
         ns: np.ndarray,  # n_obs per group (only used as a starting point)
     ) -> dict[str, np.ndarray]:
-        # dims
-        m = len(ns)   # number of groups
-        n = int(ns.sum())   # total number of observations
+        req_m = len(ns)  # number of groups
+        req_n = int(ns.sum())  # total number of observations
 
-        # pull source
-        self._pull(d, m)
-        source_is_grouped = 'm' in self.ds
+        for _ in range(self.max_attempts):
+            # pull source and derive feasible dims
+            self._pull(d)
+            source_is_grouped = 'm' in self.ds and 'ns' in self.ds and 'groups' in self.ds
+            max_groups = self._maxGroups(self.ds)
+            if max_groups < self.min_m:
+                continue
 
-        # check source dims
-        min_n = int(ns.min())
-        if n > self.ds['n']:
-            n = self.ds['n']
-            m = min(m, n // min_n)
-            logger.info(f'not enough observations in source, setting n={n}, m={m}')
-        if source_is_grouped:
-            if m > self.ds['m']:
-                m = self.ds['m']
-                logger.info(f'not enough groups in source, setting m={m}')
+            m = min(req_m, max_groups)
+            if m < self.min_m:
+                continue
 
-        # subsample observations
-        subset_fn = self._subsetGrouped if source_is_grouped else self._subset
-        x, _, ns = subset_fn(self.ds, d, m, n)
-        while checkConstant(x).any():
+            n = min(req_n, int(self.ds['n']))
+            n = max(n, m * self.min_n)
+            if n > int(self.ds['n']):
+                continue
+
+            logger.debug(
+                f'sampling from source with adjusted dims d={d}, m={m}, n={n}, max_groups={max_groups}'
+            )
+
+            # subsample observations
+            subset_fn = self._subsetGrouped if source_is_grouped else self._subset
             x, _, ns = subset_fn(self.ds, d, m, n)
+            if checkConstant(x).any():
+                continue
 
-        # emulate predictors using SGLD
-        if self.use_sgld:
-            x = self.sgld(x, rng=self.rng)
+            # emulate predictors using SGLD
+            if self.use_sgld:
+                x = self.sgld(x, rng=self.rng)
 
-        # get groups from counts
-        groups = counts2groups(ns)
+            # get groups from counts
+            groups = counts2groups(ns)
 
-        # add intercept
-        ones = np.ones_like(x[:, 0:1])
-        x = np.concatenate([ones, x], axis=-1)
-        return {'X': x, 'ns': ns, 'groups': groups}
+            # add intercept
+            ones = np.ones_like(x[:, 0:1])
+            x = np.concatenate([ones, x], axis=-1)
+            return {'X': x, 'ns': ns, 'groups': groups}
+
+        raise RuntimeError(
+            f'failed to sample emulator design after {self.max_attempts} attempts '
+            f'for d={d}, req_m={req_m}, req_n={req_n}, source={self.source}'
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -188,7 +242,7 @@ if __name__ == '__main__':
     seed = 0
     source = 'math'
 
-    getDatabase()   # instantiate
+    getDatabase()  # instantiate
 
     rng = np.random.default_rng(seed)
     main_seed = np.random.SeedSequence(seed)
@@ -202,9 +256,9 @@ if __name__ == '__main__':
     # --- sequential
     t0 = time.perf_counter()
     for rng in tqdm(seeds):
-        Emulator(rng, source).sample(d, ns)   # type: ignore
+        Emulator(rng, source).sample(d, ns)  # type: ignore
     t1 = time.perf_counter()
-    print(f'\n{t1-t0:.2f}s used for sequential sampling.')
+    print(f'\n{t1 - t0:.2f}s used for sequential sampling.')
 
     # --- parallel (only useful when using SGLD)
     t0 = time.perf_counter()
@@ -212,4 +266,4 @@ if __name__ == '__main__':
         delayed(Emulator(rng, source).sample)(d, ns) for rng in tqdm(seeds)  # type: ignore
     )
     t1 = time.perf_counter()
-    print(f'\n{t1-t0:.2f}s used for parallel sampling.')
+    print(f'\n{t1 - t0:.2f}s used for parallel sampling.')
