@@ -8,7 +8,7 @@
 #SBATCH --qos gpu_normal
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 #SBATCH --time=24:00:00
 
 source $HOME/.bashrc
