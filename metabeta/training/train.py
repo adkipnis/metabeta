@@ -25,7 +25,12 @@ from metabeta.utils.config import (
 )
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.evaluation import EvaluationSummary, Proposal, dictMean
+from metabeta.utils.evaluation import (
+    EvaluationSummary,
+    Proposal,
+    dictMean,
+    concatProposalsBatch,
+)
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler, runIS, runSIR
 from metabeta.evaluation.summary import getSummary, summaryTable
@@ -177,7 +182,8 @@ class Trainer:
         self.data_cfg = self.data_cfg_train
 
         # load validation data
-        self.dl_valid = self._getDataLoader('valid')
+        self.dl_valid = self._getDataLoader('valid', batch_size=self.cfg.bs)
+        self.dl_valid_full = self._getDataLoader('valid')
         # self.dl_test = self._getDataLoader('test')
 
     def _getDataLoader(
@@ -401,43 +407,58 @@ batch size: {self.cfg.bs}
             self.dl_valid,
             desc=f'Epoch {self.current_epoch:02d}/{self.cfg.max_epochs:02d} [V]',
         )
-        loss_valid = running_sum = 0.0
+        loss_valid = total_weighted_loss = 0.0
+        total_count = 0
         self.model.eval()
         self.optimizer.eval()
         for i, batch in enumerate(iterator):
             batch = toDevice(batch, self.device)
             loss = self.loss(batch)
-            running_sum += loss.item()
-            loss_valid = running_sum / (i + 1)
+            batch_size = batch['X'].shape[0]
+            total_weighted_loss += loss.item() * batch_size
+            total_count += batch_size
+            loss_valid = total_weighted_loss / max(total_count, 1)
             iterator.set_postfix_str(f'Loss: {loss_valid:.3f}')
         return float(loss_valid)
 
     @torch.inference_mode()
     def sample(self) -> EvaluationSummary:
-        # expects single batch from dl
         self.model.eval()
         self.optimizer.eval()
-        batch = next(iter(self.dl_valid))
-        batch = toDevice(batch, self.device)
+        proposals = []
+        n_datasets = 0
 
-        # sample from proposal distribution
+        # sample from proposal distribution over all validation minibatches
         t0 = time.perf_counter()
-        if self.cfg.importance and not self.cfg.sir:
-            proposal = runIS(self.model, batch, self.cfg)
-        elif self.cfg.sir:
-            proposal = runSIR(self.model, batch, self.cfg)
-        else:
-            proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+        for batch in self.dl_valid:
+            batch = toDevice(batch, self.device)
+            if self.cfg.importance and not self.cfg.sir:
+                proposal = runIS(self.model, batch, self.cfg)
+            elif self.cfg.sir:
+                proposal = runSIR(self.model, batch, self.cfg)
+            else:
+                proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+                if self.cfg.rescale and self.cfg.likelihood_family == 0:
+                    proposal.rescale(batch['sd_y'])
+
+            proposal.to('cpu')
+            batch = toDevice(batch, 'cpu')
             if self.cfg.rescale and self.cfg.likelihood_family == 0:
-                proposal.rescale(batch['sd_y'])
+                batch = rescaleData(batch)
+
+            proposals.append(proposal)
+            n_datasets += batch['X'].shape[0]
         t1 = time.perf_counter()
 
-        # post-process
-        proposal.tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
-        proposal.to('cpu')
+        # merge proposals over minibatches, but evaluate on canonical full-batch collate
+        proposal = concatProposalsBatch(proposals)
+        batch = next(iter(self.dl_valid_full))
         batch = toDevice(batch, 'cpu')
         if self.cfg.rescale and self.cfg.likelihood_family == 0:
             batch = rescaleData(batch)
+
+        # post-process
+        proposal.tpd = (t1 - t0) / max(n_datasets, 1)  # time per dataset
 
         # get evaluation summary
         eval_summary = getSummary(proposal, batch, likelihood_family=self.cfg.likelihood_family)
