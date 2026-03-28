@@ -25,7 +25,7 @@ from metabeta.utils.config import (
 )
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.evaluation import EvaluationSummary, Proposal
+from metabeta.utils.evaluation import EvaluationSummary, Proposal, dictMean
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler, runIS, runSIR
 from metabeta.evaluation.summary import getSummary, summaryTable
@@ -42,7 +42,7 @@ logger = logging.getLogger('train.py')
 def setup() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
-    parser.add_argument('--name', type=str, default='medium-n', help='load configs/{name}.yaml')
+    parser.add_argument('--name', type=str, default='toy-n', help='load configs/{name}.yaml')
     parser.add_argument('--d_tag', type=str)
     parser.add_argument('--d_tag_valid', type=str)
     parser.add_argument('--m_tag', type=str)
@@ -133,7 +133,7 @@ class Trainer:
 
         # tracking & logging
         self.current_epoch = 0
-        self.best_valid = float('inf')
+        self.best_score = float('inf')
         self.best_epoch = 0
         self.global_step = 0
         self.wandb_run = None
@@ -222,6 +222,9 @@ class Trainer:
         wandb.define_metric('train/loss_step', step_metric='step/global')
         wandb.define_metric('train/loss_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/loss_epoch', step_metric='step/epoch')
+        wandb.define_metric('valid/mean_nrmse_epoch', step_metric='step/epoch')
+        wandb.define_metric('valid/mean_lcr_epoch', step_metric='step/epoch')
+        wandb.define_metric('valid/early_stop_score_epoch', step_metric='step/epoch')
 
     def close(self) -> None:
         if self.wandb_run is not None:
@@ -233,7 +236,7 @@ class Trainer:
             'timestamp': self.timestamp,
             'epoch': self.current_epoch,
             'best_epoch': self.best_epoch,
-            'best_valid': self.best_valid,
+            'best_score': self.best_score,
             'trainer_cfg': vars(self.cfg).copy(),
             'data_cfg': self.data_cfg.copy(),
             'model_cfg': self.model_cfg.to_dict(),
@@ -261,10 +264,16 @@ class Trainer:
         self.optimizer.load_state_dict(payload['optimizer_state'])
         self.timestamp = payload['timestamp']
         self.best_epoch = payload['best_epoch']
-        self.best_valid = payload['best_valid']
+        self.best_score = payload['best_score']
         if self.stopper is not None:
-            self.stopper.best = self.best_valid
+            self.stopper.best = self.best_score
         return int(payload.get('epoch', 0))  # last completed epoch
+
+    def getTrackingMetrics(self, eval_summary: EvaluationSummary) -> tuple[float, float, float]:
+        mean_nrmse = dictMean(eval_summary.nrmse)
+        mean_lcr = dictMean(eval_summary.lcr)
+        early_stop_score = mean_nrmse + abs(mean_lcr)
+        return mean_nrmse, mean_lcr, early_stop_score
 
     @property
     def info(self) -> str:
@@ -460,7 +469,7 @@ batch size: {self.cfg.bs}
         path_s = plotSBC(
             proposal, batch, plot_dir=self.plot_dir, epoch=self.current_epoch, show=show
         )
-        path_rc = None
+        # path_rc = None
         # if proposal.q >= 2:
         #     path_rc = plotRfxCorrelationRecovery(
         #         proposal,
@@ -476,8 +485,8 @@ batch size: {self.cfg.bs}
                 'plot/sbc': wandb.Image(str(path_s)),
                 'step/epoch': self.current_epoch,
             }
-            if path_rc is not None:
-                image_logs['plot/rfx_correlation_recovery'] = wandb.Image(str(path_rc))
+            # if path_rc is not None:
+            #     image_logs['plot/rfx_correlation_recovery'] = wandb.Image(str(path_rc))
             wandb.log(image_logs)
 
     def go(self) -> None:
@@ -507,39 +516,45 @@ batch size: {self.cfg.bs}
             self.current_epoch = epoch
             loss_train = self.train()
             loss_valid = self.valid()
+            mean_nrmse = None
+            mean_lcr = None
+            early_stop_score = None
 
             # sample on test set
             if epoch % self.cfg.sample_interval == 0:
-                self.sample()
+                eval_summary = self.sample()
+                mean_nrmse, mean_lcr, early_stop_score = self.getTrackingMetrics(eval_summary)
 
             # log epoch
             if self.wandb_run is not None:
-                wandb.log(
-                    {
-                        'train/loss_epoch': float(loss_train),
-                        'valid/loss_epoch': float(loss_valid),
-                        'step/epoch': self.current_epoch,
-                    },
-                )
+                logs = {
+                    'train/loss_epoch': float(loss_train),
+                    'valid/loss_epoch': float(loss_valid),
+                    'step/epoch': self.current_epoch,
+                }
+                if mean_nrmse is not None:
+                    logs['valid/mean_nrmse_epoch'] = float(mean_nrmse)
+                    logs['valid/mean_lcr_epoch'] = float(mean_lcr) # type: ignore
+                    logs['valid/early_stop_score_epoch'] = float(early_stop_score) # type: ignore
+                wandb.log(logs)
 
             # save latest ckpt
             if self.cfg.save_latest:
                 self.save('latest')
 
-            # update best validation loss and optionally best model
-            if loss_valid < (self.best_valid - 1e-6):
-                self.best_valid = loss_valid
-                self.best_epoch = self.current_epoch
-                if self.cfg.save_best:
-                    self.save('best')
+            # update tracked score and optional early stopping on sample epochs
+            if early_stop_score is not None:
+                if early_stop_score < (self.best_score - 1e-6):
+                    self.best_score = early_stop_score
+                    self.best_epoch = self.current_epoch
+                    if self.cfg.save_best:
+                        self.save('best')
 
-            # optional early stopping
-            if self.stopper is not None:
-                self.stopper.update(loss_valid)
-                if self.stopper.stop:
-                    self.sample()
-                    logger.info(f'early stopping at epoch {self.current_epoch}.')
-                    break
+                if self.stopper is not None:
+                    self.stopper.update(early_stop_score)
+                    if self.stopper.stop:
+                        logger.info(f'early stopping at epoch {self.current_epoch}.')
+                        break
 
 
 # =============================================================================
