@@ -39,6 +39,24 @@ class Collection(torch.utils.data.Dataset):
         assert path.exists(), f'{path} does not exist'
         with np.load(path, allow_pickle=True) as raw:
             self.raw = dict(raw)
+
+        # reduce host-memory footprint for training/validation collections
+        # by storing floating arrays in float32 and large integers in int32.
+        for key, value in self.raw.items():
+            if not isinstance(value, np.ndarray):
+                continue
+            if value.dtype.kind == 'f' and value.dtype != np.float32:
+                self.raw[key] = value.astype(np.float32)
+            elif (
+                value.dtype.kind in ('i', 'u')
+                and value.dtype.itemsize > np.dtype(np.int32).itemsize
+            ):
+                lo, hi = np.iinfo(np.int32).min, np.iinfo(np.int32).max
+                v_min = value.min()
+                v_max = value.max()
+                if lo <= v_min and v_max <= hi:
+                    self.raw[key] = value.astype(np.int32)
+
         self.has_params = 'ffx' in self.raw
         self.has_nuts = 'nuts_ffx' in self.raw
         self.has_advi = 'advi_ffx' in self.raw
