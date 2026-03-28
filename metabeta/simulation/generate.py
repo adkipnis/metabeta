@@ -185,10 +185,37 @@ class Generator:
             datasets = cast(list[dict[str, np.ndarray]], datasets)
         return datasets
 
+    @staticmethod
+    def _castCompactTypes(batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        out: dict[str, np.ndarray] = {}
+        for key, value in batch.items():
+            if (
+                isinstance(value, np.ndarray)
+                and value.dtype.kind == 'f'
+                and value.dtype != np.float32
+            ):
+                out[key] = value.astype(np.float32)
+            elif (
+                isinstance(value, np.ndarray)
+                and value.dtype.kind in ('i', 'u')
+                and value.dtype.itemsize > np.dtype(np.int32).itemsize
+            ):
+                lo, hi = np.iinfo(np.int32).min, np.iinfo(np.int32).max
+                v_min = value.min()
+                v_max = value.max()
+                if lo <= v_min and v_max <= hi:
+                    out[key] = value.astype(np.int32)
+                else:
+                    out[key] = value
+            else:
+                out[key] = value
+        return out
+
     def genTest(self):
         logger.info('Generating test set...')
         ds_test = self._genBatch(n_datasets=self.cfg.bs_test, mini_batch_size=1)
         ds_test = aggregate(ds_test)
+        ds_test = self._castCompactTypes(ds_test)
         fn = Path(self.outdir, datasetFilename(vars(self.cfg), 'test'))
         np.savez_compressed(fn, **ds_test, allow_pickle=True)
         logger.info(f'Saved test set to {fn}')
@@ -197,6 +224,7 @@ class Generator:
         logger.info('Generating validation set...')
         ds_valid = self._genBatch(n_datasets=self.cfg.bs_valid, mini_batch_size=1)
         ds_valid = aggregate(ds_valid)
+        ds_valid = self._castCompactTypes(ds_valid)
         fn = Path(self.outdir, datasetFilename(vars(self.cfg), 'valid'))
         np.savez_compressed(fn, **ds_valid, allow_pickle=True)
         logger.info(f'Saved validation set to {fn}')
@@ -216,6 +244,7 @@ class Generator:
                 epoch=epoch,
             )
             ds_train = aggregate(ds_train)
+            ds_train = self._castCompactTypes(ds_train)
             fn = Path(self.outdir, datasetFilename(vars(self.cfg), 'train', epoch))
             np.savez_compressed(fn, **ds_train, allow_pickle=True)
             logger.debug(f'Saved training set to {fn}')
