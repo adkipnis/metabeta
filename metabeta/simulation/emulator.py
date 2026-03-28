@@ -55,6 +55,7 @@ class Emulator:
     use_sgld: bool = True
     min_m: int = 1
     min_n: int = 1
+    max_n: int | None = None
     max_attempts: int = 20
 
     def __post_init__(self):
@@ -64,10 +65,56 @@ class Emulator:
             raise ValueError(f'min_m must be >= 1, but got {self.min_m}')
         if self.min_n < 1:
             raise ValueError(f'min_n must be >= 1, but got {self.min_n}')
+        if self.max_n is not None and self.max_n < self.min_n:
+            raise ValueError(f'max_n must be >= min_n ({self.min_n}), but got max_n={self.max_n}')
         if self.max_attempts < 1:
             raise ValueError(f'max_attempts must be >= 1, but got {self.max_attempts}')
         if self.use_sgld:
             self.sgld = SGLD()
+
+    def _sampleCountsBounded(self, n: int, m: int, max_n: int | None = None) -> np.ndarray:
+        if n < m * self.min_n:
+            raise ValueError(
+                f'cannot sample counts: n={n} is too small for m={m} with min_n={self.min_n}'
+            )
+
+        if max_n is None:
+            max_n = self.max_n
+        if max_n is not None and n > m * max_n:
+            raise ValueError(
+                f'cannot sample counts: n={n} is too large for m={m} with max_n={max_n}'
+            )
+
+        ns = np.full(m, self.min_n, dtype=int)
+        rem = n - int(ns.sum())
+        if rem == 0:
+            return ns
+
+        caps = None
+        if max_n is not None:
+            caps = np.full(m, max_n - self.min_n, dtype=int)
+
+        while rem > 0:
+            alpha = self.rng.uniform(2.0, 20.0)
+            p = self.rng.dirichlet(np.ones(m) * alpha)
+            extra = self.rng.multinomial(rem, p)
+            if caps is not None:
+                extra = np.minimum(extra, caps)
+            added = int(extra.sum())
+            if added == 0:
+                idx = np.where((caps is None) | (caps > 0))[0]
+                if len(idx) == 0:
+                    break
+                j = int(self.rng.choice(idx))
+                extra[j] = 1
+                added = 1
+            ns += extra
+            rem -= added
+            if caps is not None:
+                caps -= extra
+
+        assert rem == 0, 'failed to distribute all observations under bounds'
+        return ns
 
     def _maxGroups(self, ds: dict) -> int:
         n = int(ds['n'])
@@ -110,20 +157,6 @@ class Emulator:
                     f"but source has d={self.ds['d']}, n={self.ds['n']}, max_groups={self._maxGroups(self.ds)}"
                 )
 
-    def _sampleCountsMin(self, n: int, m: int) -> np.ndarray:
-        if n < m * self.min_n:
-            raise ValueError(
-                f'cannot sample counts: n={n} is too small for m={m} with min_n={self.min_n}'
-            )
-        base = np.full(m, self.min_n, dtype=int)
-        rem = n - int(base.sum())
-        if rem == 0:
-            return base
-        alpha = self.rng.uniform(2.0, 20.0)
-        p = self.rng.dirichlet(np.ones(m) * alpha)
-        extra = self.rng.multinomial(rem, p)
-        return base + extra
-
     def _subset(
         self,
         ds: dict,
@@ -139,7 +172,7 @@ class Emulator:
         x = x[:, idx_feat]
 
         # subset observations
-        ns = self._sampleCountsMin(n, m)
+        ns = self._sampleCountsBounded(n, m)
         n = int(ns.sum())
         idx_obs = self.rng.permutation(len(x))[:n]
         x = x[idx_obs]
@@ -163,8 +196,37 @@ class Emulator:
         # hierarchically subset members / observations per member
         eligible = np.where(ds['ns'] >= self.min_n)[0]
         members = self.rng.permutation(eligible)[:m]
-        ns = self._sampleCountsMin(n, m)
-        ns = np.minimum(ds['ns'][members], ns)  # avoid oversampling
+        member_caps = ds['ns'][members].astype(int, copy=False)
+        if self.max_n is not None:
+            member_caps = np.minimum(member_caps, self.max_n)
+        n_cap = int(member_caps.sum())
+        n = min(n, n_cap)
+        n = max(n, m * self.min_n)
+        ns = self._sampleCountsBounded(n, m, max_n=None)
+        ns = np.minimum(member_caps, ns)  # avoid oversampling and enforce cap
+
+        # redistribute remainder if clipping reduced total count
+        rem = int(n - ns.sum())
+        if rem > 0:
+            spare = member_caps - ns
+            while rem > 0:
+                idx = np.where(spare > 0)[0]
+                if len(idx) == 0:
+                    break
+                alpha = self.rng.uniform(2.0, 20.0)
+                p = self.rng.dirichlet(np.ones(len(idx)) * alpha)
+                extra = self.rng.multinomial(rem, p)
+                room = spare[idx]
+                extra = np.minimum(extra, room)
+                added = int(extra.sum())
+                if added == 0:
+                    j = int(self.rng.choice(idx))
+                    extra[idx == j] = 1
+                    added = 1
+                ns[idx] += extra
+                spare[idx] -= extra
+                rem -= added
+            assert rem == 0, 'failed to allocate grouped observations under bounds'
 
         # subset observations per member
         member_mask = np.zeros(len(x)).astype(bool)
@@ -198,9 +260,24 @@ class Emulator:
                 continue
 
             n = min(req_n, int(self.ds['n']))
+            if self.max_n is not None:
+                n = min(n, m * self.max_n)
             n = max(n, m * self.min_n)
             if n > int(self.ds['n']):
                 continue
+
+            if source_is_grouped:
+                eligible = np.where(self.ds['ns'] >= self.min_n)[0]
+                if len(eligible) < m:
+                    continue
+                member_cap_all = self.ds['ns'][eligible].astype(int, copy=False)
+                if self.max_n is not None:
+                    member_cap_all = np.minimum(member_cap_all, self.max_n)
+                if np.sum(member_cap_all) < n:
+                    n = int(np.sum(member_cap_all))
+                    n = max(n, m * self.min_n)
+                    if np.sum(member_cap_all) < n:
+                        continue
 
             logger.debug(
                 f'sampling from source with adjusted dims d={d}, m={m}, n={n}, max_groups={max_groups}'
@@ -209,6 +286,8 @@ class Emulator:
             # subsample observations
             subset_fn = self._subsetGrouped if source_is_grouped else self._subset
             x, _, ns = subset_fn(self.ds, d, m, n)
+            if self.max_n is not None and int(ns.max()) > self.max_n:
+                continue
             if checkConstant(x).any():
                 continue
 
