@@ -272,7 +272,7 @@ def simulatePoissonNp(
     eta: np.ndarray,
     sigma_eps: float = 0.0,
 ) -> np.ndarray:
-    rate = np.exp(eta)
+    rate = np.exp(np.clip(eta, max=10))
     return rng.poisson(rate).astype(eta.dtype)
 
 
@@ -341,7 +341,7 @@ def _llPoisson(
     sigma_eps: torch.Tensor,  # unused
     y: torch.Tensor,  # (b, m, n, 1)
 ) -> torch.Tensor:
-    rate = torch.exp(eta.clamp(max=30))
+    rate = torch.exp(eta.clamp(max=10))
     return D.Poisson(rate=rate).log_prob(y)
 
 
@@ -387,7 +387,7 @@ def posteriorPredictiveDist(
     elif likelihood_family == 1:  # bernoulli
         return D.Bernoulli(logits=eta)
     elif likelihood_family == 2:  # poisson
-        rate = torch.exp(eta.clamp(max=30))
+        rate = torch.exp(eta.clamp(max=10))
         return D.Poisson(rate=rate)
     raise ValueError(f'unknown likelihood family: {likelihood_family}')
 
