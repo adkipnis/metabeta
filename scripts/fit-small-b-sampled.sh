@@ -19,11 +19,7 @@ JOB_TMPDIR="$HOME/tmp/pytensor_$SLURM_JOB_ID"
 mkdir -p "$JOB_TMPDIR"
 export PYTENSOR_FLAGS="base_compiledir=$JOB_TMPDIR"
 
-cleanup() {
-    rm -rf "$JOB_TMPDIR"
-}
-trap cleanup EXIT
-
 cd $HOME/metabeta/metabeta/simulation
 python fit.py --d_tag small-b-sampled --idx ${SLURM_ARRAY_TASK_ID} --method nuts --loop
 python fit.py --d_tag small-b-sampled --idx ${SLURM_ARRAY_TASK_ID} --method advi
+rm -rf "$JOB_TMPDIR"
