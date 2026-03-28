@@ -113,6 +113,16 @@ def main() -> int:
     srcdir = Path(cfg.srcdir).resolve()
     fits_dir = srcdir / 'fits'
 
+    print('Running dataset and fit checks')
+    print(f'  d_tag: {cfg.d_tag}')
+    print(f'  expected train files: {cfg.n_train_epochs}')
+    print(f'  expected pymc (nuts) fits: {cfg.n_fits}')
+    print(f'  expected advi fits: {cfg.n_fits}')
+    print(f'  expected total fit files: {2 * cfg.n_fits}')
+    print(f'  data directory: {srcdir}')
+    print(f'  fits directory: {fits_dir}')
+    print(f'  npz inspection: {cfg.inspect}')
+
     data_cfg = _loadDataCfg(cfg.d_tag)
 
     # check expected training partitions
