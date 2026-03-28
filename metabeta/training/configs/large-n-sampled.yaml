@@ -34,6 +34,6 @@ plot: true
 # checkpoint
 r_tag: ''             # run tag
 save_latest: true
-save_best: false
+save_best: true
 load_latest: false
 load_best: false
