@@ -200,6 +200,60 @@ def joinProposals(proposals: list[Proposal]) -> Proposal:
     return Proposal(proposed)
 
 
+def concatProposalsBatch(proposals: list[Proposal]) -> Proposal:
+    assert len(proposals) > 0, 'at least one proposal is required'
+    has_sigma_eps = proposals[0].has_sigma_eps
+    max_m = max(proposal.samples_l.shape[1] for proposal in proposals)
+
+    samples_l_padded = []
+    log_prob_l_padded = []
+    for proposal in proposals:
+        samples_l = proposal.samples_l
+        log_prob_l = proposal.log_prob_l
+        b, m, s, q = samples_l.shape
+        if m < max_m:
+            pad_samples = samples_l.new_zeros((b, max_m, s, q))
+            pad_samples[:, :m] = samples_l
+            samples_l = pad_samples
+
+            pad_log_prob = log_prob_l.new_zeros((b, max_m, s))
+            pad_log_prob[:, :m] = log_prob_l
+            log_prob_l = pad_log_prob
+
+        samples_l_padded.append(samples_l)
+        log_prob_l_padded.append(log_prob_l)
+
+    proposed = {
+        'global': {
+            'samples': torch.cat([proposal.samples_g for proposal in proposals], dim=0),
+            'log_prob': torch.cat([proposal.log_prob_g for proposal in proposals], dim=0),
+        },
+        'local': {
+            'samples': torch.cat(samples_l_padded, dim=0),
+            'log_prob': torch.cat(log_prob_l_padded, dim=0),
+        },
+    }
+    merged = Proposal(proposed, has_sigma_eps=has_sigma_eps)
+
+    common_keys: set[str] | None = None
+    for proposal in proposals:
+        keys = set(proposal.is_results.keys())
+        if common_keys is None:
+            common_keys = keys
+        else:
+            common_keys &= keys
+
+    if common_keys:
+        for key in common_keys:
+            values = [proposal.is_results[key] for proposal in proposals]
+            if all(torch.is_tensor(value) for value in values):
+                try:
+                    merged.is_results[key] = torch.cat(values, dim=0)
+                except RuntimeError:
+                    continue
+    return merged
+
+
 def weightedQuantile(
     x: torch.Tensor,
     w: torch.Tensor,
@@ -238,9 +292,9 @@ class EvaluationSummary:
     posterior_nll: torch.Tensor
     sample_efficiency: torch.Tensor | None
     pareto_k: torch.Tensor | None
-    pp_fit: torch.Tensor | None = None   # R² (normal) | AUC (bernoulli) | deviance (poisson)
+    pp_fit: torch.Tensor | None = None  # R² (normal) | AUC (bernoulli) | deviance (poisson)
     rfx_corr: dict[str, float] | None = None
-    tpd: float | None = None   # time per dataset
+    tpd: float | None = None  # time per dataset
 
     def averageOverAlpha(
         self,
@@ -259,33 +313,35 @@ class EvaluationSummary:
         return out
 
     @property
-    def ece(self) -> dict[str, torch.Tensor]:   # expected coverage error
+    def ece(self) -> dict[str, torch.Tensor]:  # expected coverage error
         return self.averageOverAlpha(self.coverage_error)
 
     @property
-    def lcr(self) -> dict[str, torch.Tensor]:   # log coverage ratio
+    def lcr(self) -> dict[str, torch.Tensor]:  # log coverage ratio
         return self.averageOverAlpha(self.log_coverage_ratio)
 
     @property
-    def abs_lcr(self) -> dict[str, torch.Tensor]:   # non-negative version of above for optimization
+    def abs_lcr(
+        self,
+    ) -> dict[str, torch.Tensor]:  # non-negative version of above for optimization
         return self.averageOverAlpha(self.log_coverage_ratio, absolute=True)
 
     @property
-    def mnll(self) -> float:   # median posterior NLL
+    def mnll(self) -> float:  # median posterior NLL
         return self.posterior_nll.median().item()
 
     @property
-    def meff(self) -> None | float:   # median sample efficiency for IS
+    def meff(self) -> None | float:  # median sample efficiency for IS
         if self.sample_efficiency is not None:
             return self.sample_efficiency.median().item()
 
     @property
-    def mk(self) -> None | float:   # median pareto k for PSIS
+    def mk(self) -> None | float:  # median pareto k for PSIS
         if self.pareto_k is not None:
             return self.pareto_k.median().item()
 
     @property
-    def mfit(self) -> None | float:   # median R² or AUC
+    def mfit(self) -> None | float:  # median R² or AUC
         if self.pp_fit is not None:
             return self.pp_fit.nanmedian().item()
 
