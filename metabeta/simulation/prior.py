@@ -105,7 +105,7 @@ class Prior:
         #     dist = norm(loc=0, scale=sigma_rfx)
         #     return dist.rvs(size=(m, self.q), random_state=self.rng)
         cov = np.diag(sigma_rfx) @ corr_mat @ np.diag(sigma_rfx)
-        dist = multivariate_normal(mean=np.zeros(self.q), cov=cov)  # type: ignore
+        dist = multivariate_normal(mean=np.zeros(self.q), cov=cov, allow_singular=True)  # type: ignore
         rfx = dist.rvs(size=m, random_state=self.rng)  # type: ignore
         return rfx.reshape(m, self.q)
 
