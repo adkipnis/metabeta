@@ -15,6 +15,7 @@ from metabeta.utils.padding import aggregate
 
 logger = logging.getLogger(__name__)
 
+
 # -----------------------------------------------------------------------------
 # config
 # fmt: off
@@ -26,12 +27,12 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--bs_test', type=int, default=128, help='batch size per testing partition (default = 128).')
     parser.add_argument('--bs_mini', type=int, default=32, help='training minibatch size (for grouping m, q, d - default = 32)')
     # partitions and sources
-    parser.add_argument('--d_tag', type=str, default='small-n-sampled', help='name of data config file')
-    parser.add_argument('--partition', type=str, default='all', help='Type of partition in [train, valid, test, all], (default = train)')
-    parser.add_argument('-b', '--begin', type=int, default=1, help='Begin generating training epoch number #b.')
+    parser.add_argument('--d_tag', type=str, default='large-n-sampled', help='name of data config file')
+    parser.add_argument('--partition', type=str, default='train', help='Type of partition in [train, valid, test, all], (default = train)')
+    parser.add_argument('-b', '--begin', type=int, default=4, help='Begin generating training epoch number #b.')
     parser.add_argument('-e', '--epochs', type=int, default=10, help='Total number of training epochs to generate.')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD if ds_type==sampled (default = False)')
-    parser.add_argument('--loop', action='store_true', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
+    parser.add_argument('--loop', action='store_false', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
     return parser.parse_args()
 # fmt: on
 
@@ -74,7 +75,7 @@ class Generator:
         # number of random effects
         q = truncLogUni(rng, low=1, high=self.cfg.max_q + 1, size=n_mini_batches, round=True)
         q = np.repeat(q, mini_batch_size)
-        q = np.minimum(d, q)   # q <= d
+        q = np.minimum(d, q)  # q <= d
 
         # number of groups
         m = truncLogUni(
@@ -141,7 +142,7 @@ class Generator:
         d, q, m, ns = self._genSizes(rng, n_datasets, mini_batch_size)
 
         # --- sample batch of single datasets
-        if self.cfg.loop or self.cfg.ds_type in ['scm', 'mixed']:   # Option A: loop
+        if self.cfg.loop or self.cfg.ds_type in ['scm', 'mixed']:  # Option A: loop
             datasets = []
             for i in tqdm(range(n_datasets), desc=desc):
                 dataset = self._genDataset(
@@ -152,7 +153,7 @@ class Generator:
                     ns[i][: m[i]],
                 )
                 datasets.append(dataset)
-        else:   # Option B: parallelize
+        else:  # Option B: parallelize
             datasets = Parallel(n_jobs=-1, backend='loky', batch_size='auto')(
                 delayed(Generator._genDataset)(
                     self.cfg,
