@@ -129,7 +129,13 @@ class Generator:
         elif ds_type == 'scm':
             design = Scammer(rng)
         elif ds_type == 'sampled':
-            design = Emulator(rng, source=cfg.source, use_sgld=cfg.sgld)
+            design = Emulator(
+                rng,
+                source=cfg.source,
+                use_sgld=cfg.sgld,
+                min_m=cfg.min_m,
+                min_n=cfg.min_n,
+            )
         else:
             raise NotImplementedError(f'design sampler type {ds_type} is not implemented')
 
