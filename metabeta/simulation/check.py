@@ -37,6 +37,11 @@ def setup() -> argparse.Namespace:
         action='store_true',
         help='only check files; do not reintegrate fits even when complete',
     )
+    parser.add_argument(
+        '--inspect',
+        action='store_true',
+        help='load each npz file to inspect readability (default = False)',
+    )
     return parser.parse_args()
 
 
@@ -47,12 +52,16 @@ def _loadDataCfg(d_tag: str) -> dict:
         return yaml.safe_load(f)
 
 
-def _checkReadable(paths: list[Path]) -> tuple[list[Path], list[tuple[Path, str]]]:
+def _checkReadable(
+    paths: list[Path], inspect: bool = False
+) -> tuple[list[Path], list[tuple[Path, str]]]:
     missing = []
     broken = []
     for path in paths:
         if not path.exists():
             missing.append(path)
+            continue
+        if not inspect:
             continue
         try:
             with np.load(path, allow_pickle=True) as data:
@@ -111,7 +120,7 @@ def main() -> int:
         srcdir / datasetFilename(data_cfg, partition='train', epoch=epoch)
         for epoch in range(1, cfg.n_train_epochs + 1)
     ]
-    train_missing, train_broken = _checkReadable(train_paths)
+    train_missing, train_broken = _checkReadable(train_paths, inspect=cfg.inspect)
     train_ok = len(train_missing) == 0 and len(train_broken) == 0
     print(
         f'train partitions: {cfg.n_train_epochs - len(train_missing) - len(train_broken)}/{cfg.n_train_epochs} ok'
@@ -129,8 +138,8 @@ def main() -> int:
     pymc_paths = [fits_dir / f'{stem}_nuts_{idx:03d}.npz' for idx in range(cfg.n_fits)]
     advi_paths = [fits_dir / f'{stem}_advi_{idx:03d}.npz' for idx in range(cfg.n_fits)]
 
-    pymc_missing, pymc_broken = _checkReadable(pymc_paths)
-    advi_missing, advi_broken = _checkReadable(advi_paths)
+    pymc_missing, pymc_broken = _checkReadable(pymc_paths, inspect=cfg.inspect)
+    advi_missing, advi_broken = _checkReadable(advi_paths, inspect=cfg.inspect)
 
     pymc_ok = len(pymc_missing) == 0 and len(pymc_broken) == 0
     advi_ok = len(advi_missing) == 0 and len(advi_broken) == 0
