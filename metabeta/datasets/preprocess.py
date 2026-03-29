@@ -1,5 +1,7 @@
 import logging
+from dataclasses import dataclass
 from pathlib import Path
+import re
 import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
@@ -10,6 +12,18 @@ from metabeta.utils.preprocessing import transformPredictors
 logger = logging.getLogger(__name__)
 
 BLACKLIST = 'year age height size n_ num_ number max min attempts begin end name'.split(' ')
+
+
+@dataclass(frozen=True)
+class GroupCandidate:
+    name: str
+    n_groups: int
+    frac_unique: float
+    avg_obs_per_group: float
+    min_obs_per_group: int
+    max_obs_per_group: int
+    imbalance: float
+    score: float
 
 
 def dropPatchyColumns(df: pd.DataFrame, threshold: float = 0.25):
@@ -39,39 +53,98 @@ def dropPatchyRows(df: pd.DataFrame, threshold: float = 0.1, sentinels: list[flo
     return df
 
 
-def potentialGroups(df: pd.DataFrame, threshold: float = 0.2, minimum: int = 5):
-    # detect columns that may contain a grouping variable
-    assert 0.0 < threshold < 1.0, 'threshold must be in (0,1)'
+def detectGroupCandidates(
+    df: pd.DataFrame,
+    min_groups: int = 5,
+    max_frac_unique: float = 0.5,
+    min_obs_per_group: int = 2,
+    max_groups_cap: int = 200,
+    min_frac_singleton: float = 0.05,
+    max_frac_singleton: float = 0.35,
+) -> list[GroupCandidate]:
+    assert 0.0 < max_frac_unique < 1.0, 'max_frac_unique must be in (0,1)'
 
-    # get non-continuous columns
-    cols = df.select_dtypes(exclude=['float']).columns
+    if len(df) == 0:
+        return []
 
-    # exclude blacklisted columns
+    eligible: list[str] = []
+    for col in df.columns:
+        s = df[col]
+        if pd.api.types.is_float_dtype(s):
+            vals = s.dropna().to_numpy(dtype=float)
+            if len(vals) == 0:
+                continue
+            if not np.allclose(vals, np.round(vals), atol=1e-12, rtol=0):
+                continue
+        elif not (
+            pd.api.types.is_integer_dtype(s)
+            or pd.api.types.is_bool_dtype(s)
+            or pd.api.types.is_object_dtype(s)
+            or pd.api.types.is_string_dtype(s)
+            or isinstance(s.dtype, pd.CategoricalDtype)
+        ):
+            continue
+        eligible.append(col)
+
+    if not eligible:
+        return []
+
     pattern = '|'.join(rf'\b{word}\b' for word in BLACKLIST)
-    blacklisted = cols.str.contains(pattern)
-    cols = cols[~blacklisted]
+    eligible = [col for col in eligible if re.search(pattern, col) is None]
+    if not eligible:
+        return []
 
-    # quick escape
-    if len(cols) == 0:
-        return cols
+    n = len(df)
+    max_groups = min(max_groups_cap, int(max_frac_unique * n))
+    candidates: list[GroupCandidate] = []
+    for col in eligible:
+        counts = df[col].value_counts(dropna=True)
+        if len(counts) == 0:
+            continue
 
-    # check if a group has enough but not too many unique values
-    counts = df[cols].nunique()
-    enough = counts > minimum
-    not_too_many = counts <= threshold * len(df)
-    mask = enough * not_too_many
-    cols = cols[mask]
-    if len(cols) == 0:
-        return cols
+        n_groups = int(len(counts))
+        if n_groups < min_groups or n_groups > max_groups:
+            continue
 
-    # check if group sizes are somewhat balanced
-    ratios = np.zeros(len(cols))
-    for i, col in enumerate(cols):
-        group_counts = df[col].value_counts()
-        ratios[i] = group_counts.max() / group_counts.min()
-    mask = pd.Series(ratios < 10)
-    cols = cols[mask]
-    return cols
+        min_count = int(counts.min())
+        if min_count < min_obs_per_group:
+            continue
+
+        max_count = int(counts.max())
+        avg_count = float(counts.mean())
+        frac_unique = float(n_groups / n)
+        imbalance = float(max_count / max(min_count, 1))
+        frac_singleton = float(np.mean(counts == 1))
+
+        score = 0.0
+        score -= abs(np.log10(max(avg_count, 1e-12)) - np.log10(20.0))
+        if 8 <= n_groups <= 150:
+            score += 0.5
+        score -= 0.1 * max(0.0, np.log10(max(imbalance, 1.0)))
+        score -= 1.0 * abs(frac_singleton - 0.15)
+
+        lower = col.lower()
+        if re.search(r'group|subject|school|cluster|site|center|class|id', lower):
+            score += 0.5
+        if re.search(r'train|test|valid|fold|split', lower):
+            score -= 1.0
+        if frac_singleton < min_frac_singleton or frac_singleton > max_frac_singleton:
+            score -= 0.75
+
+        candidates.append(
+            GroupCandidate(
+                name=col,
+                n_groups=n_groups,
+                frac_unique=frac_unique,
+                avg_obs_per_group=avg_count,
+                min_obs_per_group=min_count,
+                max_obs_per_group=max_count,
+                imbalance=imbalance,
+                score=score,
+            )
+        )
+
+    return sorted(candidates, key=lambda c: (-c.score, c.name))
 
 
 def categorical(df: pd.DataFrame):
@@ -170,16 +243,12 @@ def preprocess(
     assert 'y' in df.columns, 'target column y not present'
     y = df.pop('y')
 
-    # detect potential grouping variables
+    # detect potential grouping variable
     if not group_name:
-        potential = potentialGroups(df)
-        if len(potential):
-            group_name = potential[0]
+        candidates = detectGroupCandidates(df)
+        if candidates:
+            group_name = candidates[0].name
             logger.info(f'Detected grouping variable "{group_name}".')
-            if len(potential) > 1:
-                logger.warning(f'Removing other grouping variables {potential[1:]}.')
-                for p in potential[1:]:
-                    df.pop(p)
 
     # sort and isolate grouping variable
     groups = ns = m = None
@@ -246,6 +315,47 @@ def preprocess(
     return out
 
 
+def preprocessAllGroups(
+    df: pd.DataFrame,
+    remove_missing: bool = True,
+    patchy_threshold: float = 0.25,
+    constant_threshold: float = 0.95,
+    outlier_threshold: float = 4.0,
+) -> dict[str, dict]:
+    df = df.copy()
+    df.columns = df.columns.str.lower()
+
+    if remove_missing:
+        df = dropPatchyColumns(df, threshold=patchy_threshold)
+        df = dropPatchyRows(df)
+
+    assert 'y' in df.columns, 'target column y not present'
+    candidates = detectGroupCandidates(df.drop(columns='y'))
+    out: dict[str, dict] = {}
+    if not candidates:
+        out[''] = preprocess(
+            df.copy(),
+            group_name='',
+            remove_missing=False,
+            patchy_threshold=patchy_threshold,
+            constant_threshold=constant_threshold,
+            outlier_threshold=outlier_threshold,
+        )
+        return out
+
+    for cand in candidates:
+        data = preprocess(
+            df.copy(),
+            group_name=cand.name,
+            remove_missing=False,
+            patchy_threshold=patchy_threshold,
+            constant_threshold=constant_threshold,
+            outlier_threshold=outlier_threshold,
+        )
+        out[cand.name] = data
+    return out
+
+
 def wrapper(
     ds_name: str,
     root: str,
@@ -267,34 +377,48 @@ def wrapper(
         logger.error('Dataset has more than 100k rows, skipping.')
         return
 
-    # preprocess dataset
-    data = preprocess(df, group_name=group_name)
+    if group_name:
+        variants = {
+            group_name: preprocess(df, group_name=group_name),
+        }
+    else:
+        variants = preprocessAllGroups(df)
 
-    # discard datasets that are wider than long
-    if data['X'].shape[0] < data['X'].shape[1]:
-        logger.error('Dataset has more columns than rows, skipping.')
-        return
+    out: dict[str, dict] = {}
+    for grp_name, data in variants.items():
+        if data['X'].shape[0] < data['X'].shape[1]:
+            logger.error(
+                f'Dataset variant "{ds_name}" (group="{grp_name or "none"}") has more columns than rows, skipping.'
+            )
+            continue
 
-    # determine partition
-    if partition == 'auto':
-        partition = 'validation' if data['groups'] is None else 'test'
+        partition_i = partition
+        if partition_i == 'auto':
+            partition_i = 'validation' if data['groups'] is None else 'test'
 
-    # save
-    if save:
-        fn = Path('preprocessed', partition, f'{ds_name}.npz')
-        np.savez_compressed(fn, **data)
-        print(f'Saved to {fn}')
+        suffix = ''
+        if grp_name:
+            safe_group = re.sub(r'[^0-9a-zA-Z_]+', '_', grp_name)
+            suffix = f'__grp_{safe_group}'
+        stem = f'{ds_name}{suffix}'
 
-    # plot
-    if plot and data['n'] * data['d'] < 1e6:
-        dat = np.concatenate([data['y'][:, None], data['X']], axis=-1)
-        names = ['y'] + data['columns'].tolist()
-        fig = plotDataset(dat, names, kde=len(dat) < 10_000)
         if save:
-            fn = Path('preprocessed', 'plots', f'{ds_name}.pdf')
-            fig.savefig(fn, dpi=300)
-            plt.close()
-    return data
+            fn = Path('preprocessed', partition_i, f'{stem}.npz')
+            np.savez_compressed(fn, **data)
+            print(f'Saved to {fn}')
+
+        if plot and data['n'] * data['d'] < 1e6:
+            dat = np.concatenate([data['y'][:, None], data['X']], axis=-1)
+            names = ['y'] + data['columns'].tolist()
+            fig = plotDataset(dat, names, kde=len(dat) < 10_000)
+            if save:
+                fn = Path('preprocessed', 'plots', f'{stem}.pdf')
+                fig.savefig(fn, dpi=300)
+                plt.close()
+
+        out[stem] = data
+
+    return out
 
 
 def batchprocess(root: str, group_name: str = '', partition: str = 'auto'):
