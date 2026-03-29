@@ -16,8 +16,8 @@ For each evaluation config (= trained model):
 
 Usage (from experiments/):
     uv run python ablation.py
-    uv run python ablation.py --configs toy
-    uv run python ablation.py --configs small-n-mixed large-n-mixed
+    uv run python ablation.py --configs toy-n small-n-sampled
+    uv run python ablation.py --batch_size 4
 """
 
 import argparse
@@ -29,28 +29,37 @@ import torch
 from tabulate import tabulate
 from tqdm import tqdm
 
-from metabeta.evaluation.evaluate import Evaluator
+from metabeta.models.approximator import Approximator
+from metabeta.posthoc.conformal import Calibrator
+from metabeta.posthoc.importance import runIS, runSIR
+from metabeta.utils.config import (
+    ApproximatorConfig,
+    assimilateConfig,
+    loadDataConfig,
+    modelFromYaml,
+)
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.evaluation import Proposal, concatProposalsBatch, dictMean
-from metabeta.utils.io import datasetFilename
-from metabeta.utils.preprocessing import rescaleData
+from metabeta.utils.io import datasetFilename, runName, setDevice
 from metabeta.utils.logger import setupLogging
-from metabeta.posthoc.importance import runIS, runSIR
+from metabeta.utils.preprocessing import rescaleData
+from metabeta.utils.sampling import setSeed
 from metabeta.evaluation.summary import getSummary
 
 DIR = Path(__file__).resolve().parent
-EVAL_CFG_DIR = DIR / '..' / 'metabeta' / 'evaluation' / 'configs'
+METABETA = DIR / '..' / 'metabeta'
+EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
 OUT_DIR = DIR / 'results'
 
 # default configs to evaluate (each must have a YAML in evaluation/configs/)
-DEFAULT_CONFIGS = ['toy']
+DEFAULT_CONFIGS = ['toy-n', 'small-n-sampled']
 
 # (label, importance, sir, conformal)
 CONDITIONS = [
     ('Baseline', False, False, False),
-    ('+ IS', True, False, False),
     ('+ Conformal', False, False, True),
-    ('+ IS + Conformal', True, False, True),
+    ('+ IS', True, False, False),
+    ('+ Conformal + IS', True, False, True),
 ]
 
 # (display name, extractor, higher_is_better)
@@ -86,25 +95,95 @@ def loadEvalConfig(name: str, **overrides) -> argparse.Namespace:
     return argparse.Namespace(**cfg)
 
 
+def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
+    """Load model architecture from config and restore checkpoint weights."""
+    # data config (needed for d/q dimensions)
+    data_cfg = loadDataConfig(cfg.d_tag)
+    assimilateConfig(cfg, data_cfg)
+
+    # model config
+    model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.m_tag}.yaml'
+    model_cfg = modelFromYaml(
+        model_cfg_path,
+        d_ffx=cfg.max_d,
+        d_rfx=cfg.max_q,
+        likelihood_family=getattr(cfg, 'likelihood_family', 0),
+    )
+    model = Approximator(model_cfg).to(device)
+    model.eval()
+
+    # load checkpoint
+    run = runName(vars(cfg))
+    ckpt_dir = METABETA / 'outputs' / 'checkpoints' / run
+    path = ckpt_dir / f'{cfg.prefix}.pt'
+    assert path.exists(), f'checkpoint not found: {path}'
+    payload = torch.load(path, map_location=device)
+    model.load_state_dict(payload['model_state'])
+
+    if cfg.compile and device.type != 'mps':
+        model.compile()
+
+    return model, data_cfg, run
+
+
+def getDataloader(data_cfg: dict, partition: str, batch_size: int | None = None) -> Dataloader:
+    """Create a dataloader for the given partition."""
+    data_fname = datasetFilename(data_cfg, partition)
+    data_path = METABETA / 'outputs' / 'data' / data_fname
+    assert data_path.exists(), f'data not found: {data_path}'
+    sortish = batch_size is not None
+    return Dataloader(data_path, batch_size=batch_size, sortish=sortish)
+
+
+@torch.inference_mode()
+def calibrate(
+    model: Approximator,
+    cfg: argparse.Namespace,
+    data_cfg: dict,
+    run: str,
+    device: torch.device,
+) -> Calibrator:
+    """Load or compute conformal calibrator from validation set."""
+    calibrator = Calibrator()
+    ckpt_path = METABETA / 'outputs' / 'checkpoints' / run / 'calibrator.npz'
+    if ckpt_path.exists():
+        calibrator.load(run)
+    else:
+        dl_valid = getDataloader(data_cfg, 'valid')
+        batch = next(iter(dl_valid))
+        batch = toDevice(batch, device)
+        proposal = model.estimate(batch, n_samples=cfg.n_samples)
+        if cfg.rescale:
+            proposal.rescale(batch['sd_y'])
+        batch = toDevice(batch, 'cpu')
+        if cfg.rescale:
+            batch = rescaleData(batch)
+        proposal.to('cpu')
+        calibrator.calibrate(proposal, batch)
+        calibrator.save(run)
+    return calibrator
+
+
 @torch.inference_mode()
 def sampleMinibatched(
-    evaluator: Evaluator,
-    dl_test,
+    model: Approximator,
+    cfg: argparse.Namespace,
+    dl: Dataloader,
+    device: torch.device,
     label: str,
 ) -> Proposal:
     """Sample from proposal distribution over minibatches (like Trainer.sample)."""
     proposals = []
     n_datasets = 0
     t0 = time.perf_counter()
-    for batch in tqdm(dl_test, desc=f'  {label}'):
-        batch = toDevice(batch, evaluator.device)
-        cfg = evaluator.cfg
+    for batch in tqdm(dl, desc=f'  {label}'):
+        batch = toDevice(batch, device)
         if cfg.importance and not cfg.sir:
-            proposal = runIS(evaluator.model, batch, cfg)
+            proposal = runIS(model, batch, cfg)
         elif cfg.sir:
-            proposal = runSIR(evaluator.model, batch, cfg)
+            proposal = runSIR(model, batch, cfg)
         else:
-            proposal = evaluator.model.estimate(batch, n_samples=cfg.n_samples)
+            proposal = model.estimate(batch, n_samples=cfg.n_samples)
             if cfg.rescale:
                 proposal.rescale(batch['sd_y'])
         proposal.to('cpu')
@@ -126,38 +205,41 @@ def evaluate(configs: list[str], batch_size: int) -> list[dict]:
         print(f'Config: {config_name}')
         print(f'{"=" * 60}')
 
-        # init evaluator with conformal=True so validation data is loaded for calibration
-        cfg = loadEvalConfig(config_name, conformal=True, plot=False)
-        evaluator = Evaluator(cfg)
+        cfg = loadEvalConfig(config_name, plot=False)
+        setSeed(cfg.seed)
+        device = setDevice(cfg.device)
 
-        # calibrate once
-        calibrator = evaluator.calibrate()
+        # load model and data config
+        model, data_cfg, run = initModel(cfg, device)
 
-        # create a batched test dataloader (prevents OOM for large models)
-        data_fname = datasetFilename(evaluator.data_cfg, 'test')
-        data_path = Path(evaluator.dir, '..', 'outputs', 'data', data_fname)
-        assert data_path.exists(), f'test data not found: {data_path}'
-        dl_test = Dataloader(data_path, batch_size=batch_size, sortish=True)
+        # calibrate once on validation set
+        cal = calibrate(model, cfg, data_cfg, run, device)
 
-        # get full test batch for evaluation (collated on CPU)
+        # create batched test dataloader (prevents OOM for large models)
+        dl_test = getDataloader(data_cfg, 'test', batch_size=batch_size)
+
+        # get full test batch for evaluation metrics (collated on CPU)
         full_batch = dl_test.fullBatch()
-        if evaluator.cfg.rescale:
+        if cfg.rescale:
             full_batch = rescaleData(full_batch)
 
         for label, importance, sir, conformal in CONDITIONS:
             print(f'\n  --- {label} ---')
 
             # toggle post-hoc flags
-            evaluator.cfg.importance = importance
-            evaluator.cfg.sir = sir
+            cfg.importance = importance
+            cfg.sir = sir
+
+            # re-seed so the base distribution draws are identical across conditions
+            setSeed(cfg.seed)
 
             # sample in minibatches
-            proposal = sampleMinibatched(evaluator, dl_test, label)
+            proposal = sampleMinibatched(model, cfg, dl_test, device, label)
 
             # summarize on full batch
-            cal = calibrator if conformal else None
-            lf = getattr(evaluator.cfg, 'likelihood_family', 0)
-            summary = getSummary(proposal, full_batch, calibrator=cal, likelihood_family=lf)
+            calibrator = cal if conformal else None
+            lf = getattr(cfg, 'likelihood_family', 0)
+            summary = getSummary(proposal, full_batch, calibrator=calibrator, likelihood_family=lf)
 
             # extract metrics
             row = {'config': config_name, 'condition': label}
