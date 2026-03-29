@@ -1,10 +1,13 @@
 import math
+import logging
 import numpy as np
 import torch
 from scipy.stats import expon, norm, t
 from torch import distributions as D
 
 from metabeta.utils.preprocessing import standardize
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -24,8 +27,29 @@ LIKELIHOOD_HAS_SIGMA_EPS = (True, False, False)
 LIKELIHOOD_BAMBI_FAMILY = ('gaussian', 'bernoulli', 'poisson')
 
 # numerical stabilization constants
+BERNOULLI_LOGIT_CLIP_ABS = 500.0
 POISSON_ETA_CLIP_MAX = 10.0
 POISSON_X_CLIP_ABS = 6.0
+CLIP_WARN_FRACTION = 0.01
+CLIP_WARN_MAX_MESSAGES = 10
+
+_CLIP_WARN_COUNTS: dict[str, int] = {}
+
+
+def _warnIfFrequentClipping(name: str, frac_clipped: float) -> None:
+    if frac_clipped < CLIP_WARN_FRACTION:
+        return
+    count = _CLIP_WARN_COUNTS.get(name, 0)
+    if count >= CLIP_WARN_MAX_MESSAGES:
+        return
+    _CLIP_WARN_COUNTS[name] = count + 1
+    logger.warning(
+        'Frequent clipping in %s: %.2f%% values clipped (warning %d/%d).',
+        name,
+        100.0 * frac_clipped,
+        count + 1,
+        CLIP_WARN_MAX_MESSAGES,
+    )
 
 
 def hasSigmaEps(likelihood: int) -> bool:
@@ -249,7 +273,11 @@ def sampleSigmaTorch(
 
 
 def _expit(x: np.ndarray) -> np.ndarray:
-    return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
+    lo, hi = -BERNOULLI_LOGIT_CLIP_ABS, BERNOULLI_LOGIT_CLIP_ABS
+    clipped = np.clip(x, lo, hi)
+    frac = float(np.mean((x < lo) | (x > hi)))
+    _warnIfFrequentClipping('bernoulli_logits_np', frac)
+    return 1.0 / (1.0 + np.exp(-clipped))
 
 
 def simulateNormalNp(
@@ -276,6 +304,8 @@ def simulatePoissonNp(
     eta: np.ndarray,
     sigma_eps: float = 0.0,
 ) -> np.ndarray:
+    frac = float(np.mean(eta > POISSON_ETA_CLIP_MAX))
+    _warnIfFrequentClipping('poisson_eta_np', frac)
     rate = np.exp(np.clip(eta, max=POISSON_ETA_CLIP_MAX))
     return rng.poisson(rate).astype(eta.dtype)
 
@@ -345,6 +375,8 @@ def _llPoisson(
     sigma_eps: torch.Tensor,  # unused
     y: torch.Tensor,  # (b, m, n, 1)
 ) -> torch.Tensor:
+    frac = float((eta > POISSON_ETA_CLIP_MAX).float().mean().item())
+    _warnIfFrequentClipping('poisson_eta_torch_ll', frac)
     rate = torch.exp(eta.clamp(max=POISSON_ETA_CLIP_MAX))
     return D.Poisson(rate=rate).log_prob(y)
 
@@ -391,6 +423,8 @@ def posteriorPredictiveDist(
     elif likelihood_family == 1:  # bernoulli
         return D.Bernoulli(logits=eta)
     elif likelihood_family == 2:  # poisson
+        frac = float((eta > POISSON_ETA_CLIP_MAX).float().mean().item())
+        _warnIfFrequentClipping('poisson_eta_torch_ppd', frac)
         rate = torch.exp(eta.clamp(max=POISSON_ETA_CLIP_MAX))
         return D.Poisson(rate=rate)
     raise ValueError(f'unknown likelihood family: {likelihood_family}')
