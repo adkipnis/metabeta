@@ -62,6 +62,14 @@ class Generator:
             for k, v in data_cfg.items():
                 setattr(self.cfg, k, v)
 
+        self.max_m_feasible = min(self.cfg.max_m, self.cfg.max_n_total // self.cfg.min_n)
+        if self.max_m_feasible < self.cfg.min_m:
+            raise ValueError(
+                'incompatible bounds: require min_m <= floor(max_n_total / min_n), '
+                f'but got min_m={self.cfg.min_m}, min_n={self.cfg.min_n}, '
+                f'max_n_total={self.cfg.max_n_total}'
+            )
+
     def _genSizes(
         self,
         rng: np.random.Generator,
@@ -88,7 +96,7 @@ class Generator:
         m = truncLogUni(
             rng,
             low=self.cfg.min_m,
-            high=self.cfg.max_m + 1,
+            high=self.max_m_feasible + 1,
             size=n_mini_batches,
             round=True,
         )
@@ -102,7 +110,67 @@ class Generator:
             size=(n_datasets, self.cfg.max_m),
             round=True,
         )
+
+        ns = self._maskAndCapNs(
+            ns=ns,
+            m=m,
+            max_m=self.cfg.max_m,
+            min_n=self.cfg.min_n,
+            max_n=self.cfg.max_n,
+            max_n_total=self.cfg.max_n_total,
+        )
+
         return d, q, m, ns
+
+    @staticmethod
+    def _maskAndCapNs(
+        ns: np.ndarray,
+        m: np.ndarray,
+        max_m: int,
+        min_n: int,
+        max_n: int,
+        max_n_total: int,
+    ) -> np.ndarray:
+        idx = np.arange(max_m)
+        active = idx[None, :] < m[:, None]
+        ns = np.where(active, ns, 0)
+
+        n_total = ns.sum(axis=1)
+        n_total_min = m * min_n
+        over = n_total > max_n_total
+        if np.any(over):
+            active_over = active[over]
+            base = min_n * active_over.astype(int)
+            extra = ns[over] - base
+            target_extra = max_n_total - n_total_min[over]
+            extra_total = extra.sum(axis=1)
+
+            # smooth compression of extras to hit max_n_total without rejection sampling
+            factor = target_extra / np.maximum(extra_total, 1)
+            extra_f = extra * factor[:, None]
+            extra_scaled = np.floor(extra_f).astype(int)
+
+            cap_extra = max_n - min_n
+            extra_scaled = np.clip(extra_scaled, 0, cap_extra)
+
+            rem = target_extra - extra_scaled.sum(axis=1)
+            if np.any(rem > 0):
+                spare = cap_extra - extra_scaled
+                residual = extra_f - extra_scaled
+                residual = np.where((spare > 0) & active_over, residual, -1.0)
+
+                order = np.argsort(-residual, axis=1)
+                rank = np.empty_like(order)
+                rows = np.arange(order.shape[0])[:, None]
+                rank[rows, order] = np.arange(order.shape[1])[None, :]
+
+                add = (rank < rem[:, None]).astype(int)
+                add = np.minimum(add, spare)
+                extra_scaled += add
+
+            ns[over] = base + extra_scaled
+
+        return ns
 
     @staticmethod
     def _genDataset(
