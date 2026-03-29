@@ -174,6 +174,7 @@ data('VerbAgg', package = 'lme4')
 df <- VerbAgg
 # model <- glmer(r2 ~ anger + gender + btype + situ + (1 | id), family = binomial, data = df)
 df <- renameCol(df, 'r2', 'y')
+df$y <- as.integer(as.character(df$y) == 'Y')
 df <- renameCol(df, 'id', 'group')
 write_parquet(df, path('parquet', 'verbagg.parquet'))
 
@@ -190,6 +191,7 @@ data('Contraception', package = 'mlmRev')
 df <- Contraception
 # model <- glmer(use ~ age + urban + livch + (1 | district), family = binomial, data = df)
 df <- renameCol(df, 'use', 'y')
+df$y <- as.integer(as.character(df$y) == 'Y')
 df <- renameCol(df, 'district', 'group')
 write_parquet(df, path('parquet', 'contraception.parquet'))
 
