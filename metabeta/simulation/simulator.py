@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import numpy as np
 from metabeta.utils.preprocessing import transformPredictors
-from metabeta.utils.families import hasSigmaEps, simulateYNp
+from metabeta.utils.families import hasSigmaEps, simulateYNp, POISSON_X_CLIP_ABS
 from metabeta.simulation import Prior, Synthesizer, Scammer, Emulator
 from metabeta.plot import plotDataset
 
@@ -58,6 +58,8 @@ class Simulator:
         # sample and standardize observations
         obs = self.design.sample(self.d, self.ns)
         obs['X'] = transformPredictors(obs['X'], axis=0, exclude_binary=True, transform_counts=True)
+        if likelihood_family == 2 and obs['X'].shape[-1] > 1:
+            obs['X'][:, 1:] = np.clip(obs['X'][:, 1:], -POISSON_X_CLIP_ABS, POISSON_X_CLIP_ABS)
         if 'ns' in obs:  # in case of update through Emulator
             self.ns = obs['ns']
 
