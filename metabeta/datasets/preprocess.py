@@ -473,11 +473,19 @@ def wrapper(
         return
 
     if group_name:
-        variants = {
-            group_name: preprocess(df, group_name=group_name),
-        }
+        try:
+            variants = {
+                group_name: preprocess(df, group_name=group_name),
+            }
+        except ValueError as e:
+            logger.error(f'Dataset "{ds_name}" skipped: {e}')
+            return
     else:
-        variants = preprocessAllGroups(df)
+        try:
+            variants = preprocessAllGroups(df)
+        except ValueError as e:
+            logger.error(f'Dataset "{ds_name}" skipped: {e}')
+            return
 
     out: dict[str, dict] = {}
     for grp_name, data in variants.items():
