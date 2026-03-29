@@ -429,6 +429,10 @@ batch size: {self.cfg.bs}
 
     @torch.inference_mode()
     def sample(self) -> EvaluationSummary:
+        iterator = tqdm(
+            self.dl_valid,
+            desc=f'Epoch {self.current_epoch:02d}/{self.cfg.max_epochs:02d} [S]',
+        )
         self.model.eval()
         self.optimizer.eval()
         proposals = []
@@ -436,7 +440,7 @@ batch size: {self.cfg.bs}
 
         # sample from proposal distribution over all validation minibatches
         t0 = time.perf_counter()
-        for batch in self.dl_valid:
+        for batch in iterator:
             batch = toDevice(batch, self.device)
             if self.cfg.importance and not self.cfg.sir:
                 proposal = runIS(self.model, batch, self.cfg)
