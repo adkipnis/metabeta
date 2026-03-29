@@ -11,4 +11,4 @@ raw
 *.rdata
 *.Rhistory
 *.pdf
-/experiments/plots
+plots
