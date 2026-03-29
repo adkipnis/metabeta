@@ -12,3 +12,4 @@ raw
 *.Rhistory
 *.pdf
 plots
+/experiments/results
