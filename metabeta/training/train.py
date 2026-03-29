@@ -192,7 +192,15 @@ class Trainer:
         data_cfg = self.data_cfg_train if partition == 'train' else self.data_cfg_valid
         data_fname = datasetFilename(data_cfg, partition, epoch)
         data_path = Path(self.dir, '..', 'outputs', 'data', data_fname)
-        return Dataloader(data_path, batch_size=batch_size)
+        sortish = batch_size is not None
+        return Dataloader(
+            data_path,
+            batch_size=batch_size,
+            sortish=sortish,
+            shuffle=partition == 'train',
+            bucket_mult=50,
+            sort_seed=epoch,
+        )
 
     def _trainingDataAvailable(self, start_epoch: int) -> bool:
         for epoch in range(start_epoch, self.cfg.max_epochs + 1):
@@ -375,8 +383,6 @@ batch size: {self.cfg.bs}
         self.optimizer.train()
         self.optimizer.zero_grad(set_to_none=True)
         for i, batch in enumerate(iterator):
-            if i == 106:
-                ...
             batch = toDevice(batch, self.device)
             loss = self.loss(batch)
             loss.backward()
