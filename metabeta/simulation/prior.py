@@ -35,7 +35,11 @@ def hypersample(
         out['nu_ffx'] = spikeAndSlab(rng, size=d, scale=0.5)
         out['tau_ffx'] = skewedBeta(rng, 0.01, 1.5, mode=0.5, concentration=6.0, size=d)
         out['tau_rfx'] = skewedBeta(rng, 0.01, 1.0, mode=0.3, concentration=5.0, size=q)
-    else:  # normal, bernoulli
+    elif likelihood_family == 1:  # bernoulli (logit link)
+        out['nu_ffx'] = spikeAndSlab(rng, size=d, scale=0.7)
+        out['tau_ffx'] = skewedBeta(rng, 0.01, 3.0, mode=0.8, concentration=6.0, size=d)
+        out['tau_rfx'] = skewedBeta(rng, 0.01, 2.0, mode=0.7, concentration=5.0, size=q)
+    else:  # normal
         out['nu_ffx'] = spikeAndSlab(rng, size=d)
         out['tau_ffx'] = skewedBeta(rng, 0.01, 10.0, mode=1.0, concentration=6.0, size=d)
         out['tau_rfx'] = skewedBeta(rng, 0.01, 5.0, mode=1.0, concentration=5.0, size=q)
