@@ -41,9 +41,8 @@ def datasetFilename(cfg: dict, partition: str, epoch: int = 0) -> str:
         cfg['ds_type'],
     ]
 
-    # optional cap on total observations per dataset
-    if 'max_n_total' in cfg:
-        parts.append(f"nt{cfg['max_n_total']}")
+    # cap on total observations per dataset (required)
+    parts.append(f"nt{cfg['max_n_total']}")
 
     # source of sampled data
     if cfg['ds_type'] == 'sampled':
