@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import numpy as np
-from metabeta.utils.preprocessing import standardize
+from metabeta.utils.preprocessing import transformPredictors
 from metabeta.utils.families import hasSigmaEps, simulateYNp
 from metabeta.simulation import Prior, Synthesizer, Scammer, Emulator
 from metabeta.plot import plotDataset
@@ -17,19 +17,19 @@ def simulate(
 ) -> np.ndarray:
     """draw y given X and theta for a single dataset"""
     # unpack parameters
-    ffx = parameters['ffx']   # (d,)
-    rfx = parameters['rfx']   # (m, q)
+    ffx = parameters['ffx']  # (d,)
+    rfx = parameters['rfx']  # (m, q)
     sigma_eps = float(parameters.get('sigma_eps', 0.0))
     q = rfx.shape[1]
 
     # unpack (standardized) observations
-    X = observations['X']   # (n, d)
-    Z = X[:, :q]   # (n, q)
-    groups = observations['groups']   # (n, )
+    X = observations['X']  # (n, d)
+    Z = X[:, :q]  # (n, q)
+    groups = observations['groups']  # (n, )
 
     # linear predictor
-    rfx_ext = rfx[groups]   # (n, q)
-    eta = X @ ffx + (Z * rfx_ext).sum(-1)   # (n, )
+    rfx_ext = rfx[groups]  # (n, q)
+    eta = X @ ffx + (Z * rfx_ext).sum(-1)  # (n, )
 
     return simulateYNp(rng, eta, sigma_eps, likelihood_family)
 
@@ -39,12 +39,12 @@ class Simulator:
     rng: np.random.Generator
     prior: Prior
     design: Synthesizer | Scammer | Emulator
-    ns: np.ndarray   # number of observations per group
+    ns: np.ndarray  # number of observations per group
     plot: bool = False
 
     def __post_init__(self):
-        self.d = self.prior.d   # number of ffx
-        self.q = self.prior.q   # number of rfx
+        self.d = self.prior.d  # number of ffx
+        self.q = self.prior.q  # number of rfx
         if isinstance(self.ns, list):
             self.ns = np.array(self.ns)
 
@@ -57,8 +57,8 @@ class Simulator:
 
         # sample and standardize observations
         obs = self.design.sample(self.d, self.ns)
-        obs['X'] = standardize(obs['X'], axis=0, exclude_binary=True)
-        if 'ns' in obs:   # in case of update through Emulator
+        obs['X'] = transformPredictors(obs['X'], axis=0, exclude_binary=True, transform_counts=True)
+        if 'ns' in obs:  # in case of update through Emulator
             self.ns = obs['ns']
 
         # sanity check for group indices
