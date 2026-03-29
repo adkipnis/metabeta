@@ -8,7 +8,7 @@ seed: 42
 # runtime
 device: 'cpu'         # cpu|cuda|mps
 cores: 8
-reproducible: true
+reproducible: false
 compile: false
 verbosity: 1          # warnings|infos|debug
 wandb: false
