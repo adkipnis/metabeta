@@ -5,6 +5,9 @@ from metabeta.utils.preprocessing import transformPredictors
 from metabeta.utils.families import (
     hasSigmaEps,
     simulateYNp,
+    BERNOULLI_ETA_ABS_MAX,
+    BERNOULLI_REROLL_EXTREME_FRACTION_MAX,
+    BERNOULLI_REROLL_MAX_ATTEMPTS,
     POISSON_ETA_CLIP_MAX,
     POISSON_X_CLIP_ABS,
     POISSON_REROLL_CLIP_FRACTION_MAX,
@@ -75,6 +78,20 @@ class Simulator:
         eta = X @ ffx + (Z * rfx[groups]).sum(-1)
         return float(np.mean(eta > POISSON_ETA_CLIP_MAX))
 
+    @staticmethod
+    def _bernoulliExtremeEtaFraction(
+        params: dict[str, np.ndarray],
+        observations: dict[str, np.ndarray],
+    ) -> float:
+        ffx = params['ffx']
+        rfx = params['rfx']
+        q = rfx.shape[1]
+        X = observations['X']
+        Z = X[:, :q]
+        groups = observations['groups']
+        eta = X @ ffx + (Z * rfx[groups]).sum(-1)
+        return float(np.mean(np.abs(eta) > BERNOULLI_ETA_ABS_MAX))
+
     def sample(self) -> dict[str, np.ndarray]:
         likelihood_family = int(self.prior.hyperparams.get('likelihood_family', 0))
 
@@ -113,6 +130,27 @@ class Simulator:
                     attempts,
                     POISSON_REROLL_MAX_ATTEMPTS,
                 )
+        elif likelihood_family == 1:
+            extreme_fraction = self._bernoulliExtremeEtaFraction(params, obs)
+            attempts = 1
+            while (
+                extreme_fraction > BERNOULLI_REROLL_EXTREME_FRACTION_MAX
+                and attempts < BERNOULLI_REROLL_MAX_ATTEMPTS
+            ):
+                params = self.prior.sample(self.m)
+                extreme_fraction = self._bernoulliExtremeEtaFraction(params, obs)
+                attempts += 1
+            if extreme_fraction > BERNOULLI_REROLL_EXTREME_FRACTION_MAX:
+                logger.warning(
+                    (
+                        'Bernoulli extreme logits remained high after rerolls: %.2f%% > %.2f%% '
+                        '(attempts=%d/%d). Accepting dataset.'
+                    ),
+                    100.0 * extreme_fraction,
+                    100.0 * BERNOULLI_REROLL_EXTREME_FRACTION_MAX,
+                    attempts,
+                    BERNOULLI_REROLL_MAX_ATTEMPTS,
+                )
 
         # sample outcomes
         y = simulate(self.rng, params, obs, likelihood_family)
@@ -121,10 +159,7 @@ class Simulator:
         if hasSigmaEps(likelihood_family):
             sd = max(y.std(0), 1e-6)
             y /= sd
-            params = {
-                k: v / sd if k in SCALE_PARAMS else v
-                for k, v in params.items()
-            }
+            params = {k: v / sd if k in SCALE_PARAMS else v for k, v in params.items()}
             hyperparams = {
                 k: v / sd if k in SCALE_HYPERPARAMS else v
                 for k, v in self.prior.hyperparams.items()
