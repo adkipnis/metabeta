@@ -13,6 +13,41 @@ logger = logging.getLogger(__name__)
 
 BLACKLIST = 'year age height size n_ num_ number max min attempts begin end name'.split(' ')
 
+# Grouped variants in this whitelist are routed to the test partition when partition='auto'.
+# All other grouped variants are routed to validation.
+TEST_GROUP_WHITELIST: set[tuple[str, str, str]] = {
+    # handpicked/curated from-r exports
+    ('from-r', 'math', 'group'),
+    ('from-r', 'london', 'group'),
+    ('from-r', 'gcse', 'group'),
+    ('from-r', 'sleep', 'group'),
+    ('from-r', 'dyestuff', 'group'),
+    ('from-r', 'orthodont', 'group'),
+    ('from-r', 'oxboys', 'group'),
+    ('from-r', 'penicillin', 'group'),
+    ('from-r', 'cbpp', 'group'),
+    ('from-r', 'theoph', 'group'),
+    ('from-r', 'orange', 'group'),
+    ('from-r', 'indometh', 'group'),
+    ('from-r', 'insteval', 'group'),
+    ('from-r', 'verbagg', 'group'),
+    ('from-r', 'grouseticks', 'group'),
+    ('from-r', 'pastes', 'group'),
+    ('from-r', 'rail', 'group'),
+    ('from-r', 'ergostool', 'group'),
+    ('from-r', 'machines', 'group'),
+    ('from-r', 'oats', 'group'),
+    ('from-r', 'pixel', 'group'),
+    ('from-r', 'hsb82', 'group'),
+    ('from-r', 'chem97', 'group'),
+    ('from-r', 'contraception', 'group'),
+    # clearly plausible mixed-effects datasets in PMLB
+    ('pmlb', '556_analcatdata_apnea2', 'subject'),
+    ('pmlb', '557_analcatdata_apnea1', 'subject'),
+    ('pmlb', 'analcatdata_boxing1', 'judge'),
+    ('pmlb', 'analcatdata_boxing2', 'judge'),
+}
+
 
 @dataclass(frozen=True)
 class GroupCandidate:
@@ -394,7 +429,11 @@ def wrapper(
 
         partition_i = partition
         if partition_i == 'auto':
-            partition_i = 'validation' if data['groups'] is None else 'test'
+            if data['groups'] is None:
+                partition_i = 'validation'
+            else:
+                is_whitelisted = (root, ds_name, grp_name) in TEST_GROUP_WHITELIST
+                partition_i = 'test' if is_whitelisted else 'validation'
 
         suffix = ''
         if grp_name:
