@@ -26,7 +26,7 @@ skip_ref: false       # skip reference run before training
 # evaluation
 n_samples: 512        # posterior draws
 rescale: true         # unstandardize y
-importance: true      # use IS (importance sampling)
+importance: false      # use IS (importance sampling)
 sir: false            # use SIR (sampling importance resampling)
 sir_iter: 8
 plot: true
