@@ -23,6 +23,10 @@ LIKELIHOOD_FAMILIES = ('normal', 'bernoulli', 'poisson')
 LIKELIHOOD_HAS_SIGMA_EPS = (True, False, False)
 LIKELIHOOD_BAMBI_FAMILY = ('gaussian', 'bernoulli', 'poisson')
 
+# numerical stabilization constants
+POISSON_ETA_CLIP_MAX = 10.0
+POISSON_X_CLIP_ABS = 6.0
+
 
 def hasSigmaEps(likelihood: int) -> bool:
     """Whether the likelihood family has a residual variance parameter."""
@@ -261,7 +265,7 @@ def simulateNormalNp(
 def simulateBernoulliNp(
     rng: np.random.Generator,
     eta: np.ndarray,
-    sigma_eps: float = 0.0, # stand-in
+    sigma_eps: float = 0.0,  # stand-in
 ) -> np.ndarray:
     p = _expit(eta)
     return rng.binomial(1, p).astype(eta.dtype)
@@ -272,7 +276,7 @@ def simulatePoissonNp(
     eta: np.ndarray,
     sigma_eps: float = 0.0,
 ) -> np.ndarray:
-    rate = np.exp(np.clip(eta, max=10))
+    rate = np.exp(np.clip(eta, max=POISSON_ETA_CLIP_MAX))
     return rng.poisson(rate).astype(eta.dtype)
 
 
@@ -341,7 +345,7 @@ def _llPoisson(
     sigma_eps: torch.Tensor,  # unused
     y: torch.Tensor,  # (b, m, n, 1)
 ) -> torch.Tensor:
-    rate = torch.exp(eta.clamp(max=10))
+    rate = torch.exp(eta.clamp(max=POISSON_ETA_CLIP_MAX))
     return D.Poisson(rate=rate).log_prob(y)
 
 
@@ -387,7 +391,7 @@ def posteriorPredictiveDist(
     elif likelihood_family == 1:  # bernoulli
         return D.Bernoulli(logits=eta)
     elif likelihood_family == 2:  # poisson
-        rate = torch.exp(eta.clamp(max=10))
+        rate = torch.exp(eta.clamp(max=POISSON_ETA_CLIP_MAX))
         return D.Poisson(rate=rate)
     raise ValueError(f'unknown likelihood family: {likelihood_family}')
 
