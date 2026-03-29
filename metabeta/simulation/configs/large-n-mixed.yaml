@@ -5,6 +5,6 @@ likelihood_family: 0 # 0 = normal, 1 = bernoulli, 2 = poisson
 max_d: 8 # maximum number of fixed effects (intercept + slopes)
 max_q: 3 # maximum number of random effects (intercept + slopes)
 min_m: 5 # minimum number of groups
-max_m: 100 # maximum number of groups
+max_m: 65 # maximum number of groups
 min_n: 10 # minimum number of samples per group
-max_n: 150 # maximum number of samples per group
+max_n: 100 # maximum number of samples per group
