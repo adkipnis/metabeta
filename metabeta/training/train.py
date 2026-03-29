@@ -183,7 +183,6 @@ class Trainer:
 
         # load validation data
         self.dl_valid = self._getDataLoader('valid', batch_size=8)
-        self.dl_valid_full = self._getDataLoader('valid')
         # self.dl_test = self._getDataLoader('test')
 
     def _getDataLoader(
@@ -433,6 +432,7 @@ batch size: {self.cfg.bs}
             self.dl_valid,
             desc=f'Epoch {self.current_epoch:02d}/{self.cfg.max_epochs:02d} [S]',
         )
+        # batch = next(iter(self.dl_valid_full))
         self.model.eval()
         self.optimizer.eval()
         proposals = []
@@ -450,19 +450,17 @@ batch size: {self.cfg.bs}
                 proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
                 if self.cfg.rescale and self.cfg.likelihood_family == 0:
                     proposal.rescale(batch['sd_y'])
-
             proposal.to('cpu')
             batch = toDevice(batch, 'cpu')
             if self.cfg.rescale and self.cfg.likelihood_family == 0:
                 batch = rescaleData(batch)
-
             proposals.append(proposal)
             n_datasets += batch['X'].shape[0]
         t1 = time.perf_counter()
 
         # merge proposals over minibatches, but evaluate on canonical full-batch collate
         proposal = concatProposalsBatch(proposals)
-        batch = next(iter(self.dl_valid_full))
+        batch = self.dl_valid.fullBatch()
         batch = toDevice(batch, 'cpu')
         if self.cfg.rescale and self.cfg.likelihood_family == 0:
             batch = rescaleData(batch)
