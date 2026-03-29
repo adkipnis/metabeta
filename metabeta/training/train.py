@@ -182,7 +182,7 @@ class Trainer:
         self.data_cfg = self.data_cfg_train
 
         # load validation data
-        self.dl_valid = self._getDataLoader('valid', batch_size=self.cfg.bs)
+        self.dl_valid = self._getDataLoader('valid', batch_size=8)
         self.dl_valid_full = self._getDataLoader('valid')
         # self.dl_test = self._getDataLoader('test')
 
