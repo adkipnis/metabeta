@@ -1,7 +1,7 @@
 # experiment
-name: 'toy'
-d_tag: 'toy'          # points to metabeta/simulation/configs/toy.yaml
-m_tag: 'toy'          # points to metabeta/models/configs/toy.yaml
+name: 'big-b-sampled'
+d_tag: 'big-b-sampled'          # points to metabeta/simulation/configs/big-b-sampled.yaml
+m_tag: 'big'                    # points to metabeta/models/configs/big.yaml
 seed: 42
 r_tag: ''
 

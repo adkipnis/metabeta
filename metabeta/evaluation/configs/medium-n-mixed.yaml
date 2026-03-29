@@ -1,7 +1,7 @@
 # experiment
-name: 'toy'
-d_tag: 'toy'          # points to metabeta/simulation/configs/toy.yaml
-m_tag: 'toy'          # points to metabeta/models/configs/toy.yaml
+name: 'medium-n-mixed'
+d_tag: 'medium-n-mixed'          # points to metabeta/simulation/configs/medium-n-mixed.yaml
+m_tag: 'medium'                  # points to metabeta/models/configs/medium.yaml
 seed: 42
 r_tag: ''
 
