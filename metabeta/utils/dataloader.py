@@ -349,10 +349,15 @@ class Dataloader(torch.utils.data.DataLoader):
     ):
         col = Collection(path)
         not_mps = torch.accelerator.current_accelerator().type != 'mps'  # type: ignore
+        self._sortish = sortish
+        self._shuffle = shuffle
+        self._bucket_mult = bucket_mult
+        self._sort_seed = sort_seed
         if batch_size is None:
             batch_size = len(col)
         else:
             batch_size = min(batch_size, len(col))
+        self._batch_size_effective = batch_size
 
         use_sortish = sortish and batch_size < len(col)
         if use_sortish:
@@ -380,7 +385,33 @@ class Dataloader(torch.utils.data.DataLoader):
             )
 
     def __repr__(self) -> str:
-        return f'Dataloader(batch_size={self.batch_size}) for {self.dataset}'
+        return f'Dataloader(batch_size={self._batch_size_effective}) for {self.dataset}'
+
+    def fullBatch(self) -> dict[str, torch.Tensor]:
+        col = self.dataset
+        n = len(col)
+        if n == 0:
+            raise ValueError('cannot collate empty dataset')
+
+        use_sortish = self._sortish and self._batch_size_effective < n
+        if use_sortish:
+            batch_sampler = SortishBatchSampler(
+                m_i=col.m_i,
+                n_i_max=col.n_i_max,
+                batch_size=self._batch_size_effective,
+                shuffle=self._shuffle,
+                bucket_mult=self._bucket_mult,
+                seed=self._sort_seed,
+            )
+            idx = [i for batch in batch_sampler for i in batch]
+        else:
+            idx = list(range(n))
+            if self._shuffle:
+                rng = np.random.default_rng(self._sort_seed)
+                idx = rng.permutation(idx).tolist()
+
+        batch = [col[i] for i in idx]
+        return collateGrouped(batch)
 
 
 # -----------------------------------------------------------------------------
