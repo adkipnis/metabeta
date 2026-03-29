@@ -2,6 +2,7 @@ import torch
 import numpy as np
 from dataclasses import dataclass
 
+
 # --- checkers
 def checkBinary(x: np.ndarray, axis: int = 0) -> np.ndarray:
     binary = (x == 0) + (x == 1)
@@ -17,6 +18,13 @@ def checkContinuous(x: np.ndarray, axis: int = 0, tol: float = 1e-12) -> np.ndar
 def checkConstant(x: np.ndarray, axis: int = 0) -> np.ndarray:
     same = x[0, :] == x
     return np.all(same, axis=axis)
+
+
+def checkCountLike(x: np.ndarray, axis: int = 0, tol: float = 1e-12) -> np.ndarray:
+    is_int = np.all(np.abs(x - x.round()) <= tol, axis=axis)
+    is_nonneg = np.all(x >= -tol, axis=axis)
+    is_binary = checkBinary(x, axis=axis)
+    return is_int & is_nonneg & (~is_binary)
 
 
 # --- standardize
@@ -44,6 +52,27 @@ def standardize(
     return (x - mean) / std
 
 
+def transformPredictors(
+    x: np.ndarray,
+    axis: int = 0,
+    exclude_binary: bool = True,
+    transform_counts: bool = True,
+    eps: float = 1e-6,
+) -> np.ndarray:
+    if x.ndim != 2:
+        raise ValueError(f'expected 2D predictors, got shape={x.shape}')
+    if axis != 0:
+        raise ValueError('transformPredictors currently supports axis=0 only')
+
+    out = x.astype(float, copy=True)
+    if transform_counts:
+        count_like = checkCountLike(out, axis=axis)
+        if np.any(count_like):
+            out[:, count_like] = np.log1p(out[:, count_like])
+
+    return standardize(out, axis=axis, exclude_binary=exclude_binary, eps=eps)
+
+
 @dataclass
 class Standardizer:
     axis: int = 0
@@ -59,7 +88,7 @@ class Standardizer:
 
 
 def rescaleData(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    data = {k: v.clone() for k, v in data.items()}   # avoids side effects
+    data = {k: v.clone() for k, v in data.items()}  # avoids side effects
     for key in (
         'y',
         # params

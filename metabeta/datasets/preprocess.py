@@ -5,6 +5,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 from metabeta.plot import plotDataset
+from metabeta.utils.preprocessing import transformPredictors
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,9 @@ def dropPatchyColumns(df: pd.DataFrame, threshold: float = 0.25):
     offenders = missing[missing > threshold].index
     if len(offenders):
         for offender in offenders:
-            warning = f'Removing "{offender}" due to missing {missing[offender]*100:.2f}% entries.'
+            warning = (
+                f'Removing "{offender}" due to missing {missing[offender] * 100:.2f}% entries.'
+            )
             logger.warning(warning)
         df = df.drop(columns=offenders)
     return df
@@ -213,8 +216,11 @@ def preprocess(
     col_names_num = numerical(df)
     col_names_cat = categorical(df)
 
-    # z-standardize
-    df[col_names_num] = df[col_names_num].apply(standardize)
+    # type-aware transform: log1p(count-like) + z-standardize (binary unchanged)
+    if len(col_names_num):
+        x_num = df[col_names_num].to_numpy(dtype=float)
+        x_num = transformPredictors(x_num, axis=0, exclude_binary=True, transform_counts=True)
+        df[col_names_num] = x_num
     y = standardize(y)
 
     # dummy-code categorical variables
