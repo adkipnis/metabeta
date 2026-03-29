@@ -342,7 +342,7 @@ class Dataloader(torch.utils.data.DataLoader):
         self,
         path: Path,
         batch_size: int | None = None,
-        sortish: bool = False,
+        sortish: bool = True,
         shuffle: bool = False,
         bucket_mult: int = 50,
         sort_seed: int = 0,
