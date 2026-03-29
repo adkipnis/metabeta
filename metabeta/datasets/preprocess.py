@@ -48,6 +48,7 @@ TEST_GROUP_WHITELIST: set[tuple[str, str, str]] = {
     ('pmlb', 'analcatdata_boxing1', 'judge'),
     ('pmlb', 'analcatdata_boxing2', 'judge'),
 }
+MAX_GROUP_CANDIDATES = 3
 
 
 @dataclass(frozen=True)
@@ -426,6 +427,11 @@ def preprocessAllGroups(
 
     assert 'y' in df.columns, 'target column y not present'
     candidates = detectGroupCandidates(df.drop(columns='y'))
+    if len(candidates) > MAX_GROUP_CANDIDATES:
+        logger.warning(
+            f'Found {len(candidates)} potential grouping variables; keeping top {MAX_GROUP_CANDIDATES} by score.'
+        )
+        candidates = candidates[:MAX_GROUP_CANDIDATES]
     out: dict[str, dict] = {}
     if not candidates:
         out[''] = preprocess(
