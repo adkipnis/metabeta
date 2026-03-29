@@ -53,6 +53,18 @@ class Generator:
     cfg: argparse.Namespace
     outdir: Path = Path(__file__).resolve().parent / '..' / 'outputs' / 'data'
 
+    # size-regime defaults (m = groups, n = obs per group)
+    M_CAP: int = 300
+    N_TOTAL_CAP: int = 5000
+    NPG_MIN: int = 2
+    REGIME_PROBS: tuple[float, float, float] = (0.3, 0.5, 0.2)
+    # (m_low, m_high, npg_low, npg_high)
+    REGIMES: tuple[tuple[int, int, int, int], ...] = (
+        (80, 300, 2, 8),
+        (20, 120, 5, 25),
+        (8, 40, 20, 60),
+    )
+
     def __post_init__(self):
         self.outdir.mkdir(parents=True, exist_ok=True)
         data_cfg_path = Path(__file__).resolve().parent / 'configs' / f'{self.cfg.d_tag}.yaml'
@@ -74,7 +86,7 @@ class Generator:
         ), 'number of datasets must be divisible by mini batch size'
         n_mini_batches = n_datasets // mini_batch_size
 
-        # --- presample sizes
+        # --- presample dimensions
         # number of fixed effects
         d = rng.integers(low=2, high=self.cfg.max_d + 1, size=n_mini_batches)
         d = np.repeat(d, mini_batch_size)
@@ -84,25 +96,77 @@ class Generator:
         q = np.repeat(q, mini_batch_size)
         q = np.minimum(d, q)  # q <= d
 
-        # number of groups
-        m = truncLogUni(
-            rng,
-            low=self.cfg.min_m,
-            high=self.cfg.max_m + 1,
+        # --- regime-mixture size sampling
+        regime_ids = rng.choice(
+            len(self.REGIMES),
             size=n_mini_batches,
-            round=True,
+            p=np.array(self.REGIME_PROBS, dtype=float),
         )
-        m = np.repeat(m, mini_batch_size)
+        regime_ids = np.repeat(regime_ids, mini_batch_size)
 
-        # number of observations per group
-        ns = truncLogUni(
-            rng,
-            low=self.cfg.min_n,
-            high=self.cfg.max_n + 1,
-            size=(n_datasets, self.cfg.max_m),
-            round=True,
-        )
+        m = np.zeros(n_datasets, dtype=int)
+        ns = np.zeros((n_datasets, self.M_CAP), dtype=int)
+        for i in range(n_datasets):
+            m_low, m_high, npg_low, npg_high = self.REGIMES[int(regime_ids[i])]
+
+            m_i = int(rng.integers(m_low, m_high + 1))
+            m_i = min(m_i, self.M_CAP)
+
+            npg_target = float(rng.uniform(npg_low, npg_high))
+            n_total = int(round(m_i * npg_target * rng.uniform(0.85, 1.15)))
+            n_total = max(n_total, m_i * self.NPG_MIN)
+            n_total = min(n_total, self.N_TOTAL_CAP)
+            n_total = max(n_total, m_i * self.NPG_MIN)
+
+            ns_i = self._sampleCountsBounded(
+                rng=rng,
+                n=n_total,
+                m=m_i,
+                min_n=self.NPG_MIN,
+                max_n=npg_high,
+            )
+
+            m[i] = m_i
+            ns[i, :m_i] = ns_i
         return d, q, m, ns
+
+    @staticmethod
+    def _sampleCountsBounded(
+        rng: np.random.Generator,
+        n: int,
+        m: int,
+        min_n: int,
+        max_n: int,
+    ) -> np.ndarray:
+        if n < m * min_n:
+            raise ValueError(f'n={n} too small for m={m} and min_n={min_n}')
+        if n > m * max_n:
+            n = m * max_n
+
+        ns = np.full(m, min_n, dtype=int)
+        rem = n - int(ns.sum())
+        if rem == 0:
+            return ns
+
+        caps = np.full(m, max_n - min_n, dtype=int)
+        while rem > 0:
+            alpha = rng.uniform(2.0, 20.0)
+            p = rng.dirichlet(np.ones(m) * alpha)
+            extra = rng.multinomial(rem, p)
+            extra = np.minimum(extra, caps)
+            added = int(extra.sum())
+            if added == 0:
+                idx = np.where(caps > 0)[0]
+                if len(idx) == 0:
+                    break
+                j = int(rng.choice(idx))
+                extra[j] = 1
+                added = 1
+            ns += extra
+            caps -= extra
+            rem -= added
+        assert rem == 0, 'failed to allocate all observations under bounds'
+        return ns
 
     @staticmethod
     def _genDataset(
@@ -133,9 +197,9 @@ class Generator:
                 rng,
                 source=cfg.source,
                 use_sgld=cfg.sgld,
-                min_m=cfg.min_m,
-                min_n=cfg.min_n,
-                max_n=cfg.max_n,
+                min_m=Generator.REGIMES[-1][0],
+                min_n=Generator.NPG_MIN,
+                max_n=max(reg[3] for reg in Generator.REGIMES),
             )
         else:
             raise NotImplementedError(f'design sampler type {ds_type} is not implemented')
