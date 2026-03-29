@@ -111,6 +111,8 @@ class Approximator(nn.Module):
         """get summarizer inputs"""
         d, q = self.d_ffx, self.d_rfx
         y = data['y'].unsqueeze(-1)
+        if self.likelihood_family == 2:
+            y = torch.log1p(y.clamp_min(0))
         X = data['X'][..., 1:d]
         Z = data['Z'][..., 1:q]
         return torch.cat([y, X, Z], dim=-1)
