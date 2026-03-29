@@ -1,12 +1,21 @@
+import logging
 from dataclasses import dataclass
 import numpy as np
 from metabeta.utils.preprocessing import transformPredictors
-from metabeta.utils.families import hasSigmaEps, simulateYNp, POISSON_X_CLIP_ABS
+from metabeta.utils.families import (
+    hasSigmaEps,
+    simulateYNp,
+    POISSON_ETA_CLIP_MAX,
+    POISSON_X_CLIP_ABS,
+    POISSON_REROLL_CLIP_FRACTION_MAX,
+    POISSON_REROLL_MAX_ATTEMPTS,
+)
 from metabeta.simulation import Prior, Synthesizer, Scammer, Emulator
 from metabeta.plot import plotDataset
 
 SCALE_PARAMS = {'ffx', 'sigma_rfx', 'sigma_eps', 'rfx'}
 SCALE_HYPERPARAMS = {'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps'}
+logger = logging.getLogger(__name__)
 
 
 def simulate(
@@ -52,6 +61,20 @@ class Simulator:
     def m(self) -> int:
         return len(self.ns)
 
+    @staticmethod
+    def _poissonClipFraction(
+        params: dict[str, np.ndarray],
+        observations: dict[str, np.ndarray],
+    ) -> float:
+        ffx = params['ffx']
+        rfx = params['rfx']
+        q = rfx.shape[1]
+        X = observations['X']
+        Z = X[:, :q]
+        groups = observations['groups']
+        eta = X @ ffx + (Z * rfx[groups]).sum(-1)
+        return float(np.mean(eta > POISSON_ETA_CLIP_MAX))
+
     def sample(self) -> dict[str, np.ndarray]:
         likelihood_family = int(self.prior.hyperparams.get('likelihood_family', 0))
 
@@ -67,8 +90,29 @@ class Simulator:
         groups = obs['groups']
         assert groups.min() >= 0 and groups.max() < self.m
 
-        # sample parameters
+        # sample parameters and optionally reroll for extreme Poisson eta clipping
         params = self.prior.sample(self.m)
+        if likelihood_family == 2:
+            clip_fraction = self._poissonClipFraction(params, obs)
+            attempts = 1
+            while (
+                clip_fraction > POISSON_REROLL_CLIP_FRACTION_MAX
+                and attempts < POISSON_REROLL_MAX_ATTEMPTS
+            ):
+                params = self.prior.sample(self.m)
+                clip_fraction = self._poissonClipFraction(params, obs)
+                attempts += 1
+            if clip_fraction > POISSON_REROLL_CLIP_FRACTION_MAX:
+                logger.warning(
+                    (
+                        'Poisson eta clipping remained high after rerolls: %.2f%% > %.2f%% '
+                        '(attempts=%d/%d). Accepting dataset.'
+                    ),
+                    100.0 * clip_fraction,
+                    100.0 * POISSON_REROLL_CLIP_FRACTION_MAX,
+                    attempts,
+                    POISSON_REROLL_MAX_ATTEMPTS,
+                )
 
         # sample outcomes
         y = simulate(self.rng, params, obs, likelihood_family)
