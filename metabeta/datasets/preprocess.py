@@ -575,4 +575,4 @@ if __name__ == '__main__':
     batchprocess('pmlb', partition='auto')
 
     # AutoML datasets
-    batchprocess('automl', partition='auto')
+    # batchprocess('automl', partition='auto')
