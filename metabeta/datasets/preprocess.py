@@ -486,18 +486,30 @@ def wrapper(
                 f'Dataset variant "{ds_name}" (group="{grp_name or "none"}") has more columns than rows, skipping.'
             )
             continue
-        if data['X'].shape[1] == 0:
+        if data['n'] < 20:
             logger.warning(
-                f'Dataset variant "{ds_name}" (group="{grp_name or "none"}") has no predictors after preprocessing; keeping intercept-only design.'
+                f'Dataset variant "{ds_name}" (group="{grp_name or "none"}") has too few rows after preprocessing (n={data["n"]}); skipping.'
             )
+            continue
+
+        is_whitelisted_grouped = (root, ds_name, grp_name) in TEST_GROUP_WHITELIST
+        if data['X'].shape[1] == 0:
+            if is_whitelisted_grouped:
+                logger.warning(
+                    f'Dataset variant "{ds_name}" (group="{grp_name or "none"}") has no predictors after preprocessing; keeping intercept-only design.'
+                )
+            else:
+                logger.warning(
+                    f'Dataset variant "{ds_name}" (group="{grp_name or "none"}") has no predictors after preprocessing; skipping.'
+                )
+                continue
 
         partition_i = partition
         if partition_i == 'auto':
             if data['groups'] is None:
                 partition_i = 'validation'
             else:
-                is_whitelisted = (root, ds_name, grp_name) in TEST_GROUP_WHITELIST
-                partition_i = 'test' if is_whitelisted else 'validation'
+                partition_i = 'test' if is_whitelisted_grouped else 'validation'
 
         suffix = ''
         if grp_name:
@@ -539,11 +551,14 @@ if __name__ == '__main__':
     (DATASETS_DIR / 'preprocessed' / 'test').mkdir(parents=True, exist_ok=True)
     (DATASETS_DIR / 'preprocessed' / 'plots').mkdir(parents=True, exist_ok=True)
 
-    # r-package datasets
+    # R-package datasets
     batchprocess('from-r', partition='test', group_name='group')
 
-    # srm datasets
+    # SRM datasets
     batchprocess('srm', partition='auto')
 
-    # pmlb datasets
+    # PMLB datasets
     batchprocess('pmlb', partition='auto')
+
+    # AutoML datasets
+    batchprocess('automl', partition='auto')
