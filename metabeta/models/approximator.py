@@ -7,7 +7,12 @@ from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import getConstrainers
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
-from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES, FamilyEncoder, hasSigmaEps
+from metabeta.utils.families import (
+    FFX_FAMILIES,
+    SIGMA_FAMILIES,
+    FamilyEncoder,
+    hasSigmaEps,
+)
 
 constrainSigma, unconstrainSigma, logDetJacobian = getConstrainers(method='softplus')
 
@@ -40,30 +45,30 @@ class Approximator(nn.Module):
         d_ffx = self.d_ffx
         d_rfx = self.d_rfx
         d_sigma_eps = 1 if self.has_sigma_eps else 0
-        d_var = d_sigma_eps + d_rfx   # number of variance params
+        d_var = d_sigma_eps + d_rfx  # number of variance params
 
         # --- family encoder
         if self.has_sigma_eps:
             n_families = (len(FFX_FAMILIES), len(SIGMA_FAMILIES), len(SIGMA_FAMILIES))
         else:
             n_families = (len(FFX_FAMILIES), len(SIGMA_FAMILIES))
-        embed_dim = None # one-hot, alternatively len(n_families)
+        embed_dim = None  # one-hot, alternatively len(n_families)
         self.family_encoder = FamilyEncoder(n_families, embed_dim=embed_dim)
 
         # --- context
         # global context
-        d_counts = 2   # n_groups, n_total
+        d_counts = 2  # n_groups, n_total
         # nu_ffx, tau_ffx, tau_rfx, [tau_eps], eta_rfx
         d_prior = 2 * d_ffx + d_rfx + d_sigma_eps + 1
         d_family = self.family_encoder.d_output
-        d_stats = d_ffx + 1 + d_sigma_eps   # beta_ols, sigma_rfx0_ols, [sigma_eps_ols]
+        d_stats = d_ffx + 1 + d_sigma_eps  # beta_ols, sigma_rfx0_ols, [sigma_eps_ols]
         d_meta_g = d_counts + d_prior + d_family + d_stats
-        d_context_g = s_cfg.d_output + d_meta_g   # global summary + metadata
+        d_context_g = s_cfg.d_output + d_meta_g  # global summary + metadata
         # local context
-        d_meta_l = 2   # n_obs + eta_rfx (fed to global summarizer)
+        d_meta_l = 2  # n_obs + eta_rfx (fed to global summarizer)
         d_context_l = (
             d_ffx + d_var + s_cfg.d_output + d_meta_l
-        )   # global samples + local summaries + metadata
+        )  # global samples + local summaries + metadata
 
         # --- summarizers
         if s_cfg.type == 'set-transformer':
@@ -114,7 +119,7 @@ class Approximator(nn.Module):
         """get posterior targets"""
         if local:
             targets = data['rfx']
-            if self.d_rfx == 1:   # handle 1D local params for flow
+            if self.d_rfx == 1:  # handle 1D local params for flow
                 targets = F.pad(targets, (0, 1))
             return targets
         return joinGlobals(data)
@@ -123,7 +128,7 @@ class Approximator(nn.Module):
         """get masks for the posterior targets"""
         if local:
             mask_q = data['mask_q']
-            if mask_q.shape[-1] == 1:   # handle 1D local params for flow
+            if mask_q.shape[-1] == 1:  # handle 1D local params for flow
                 mask_q = F.pad(mask_q, (0, 1))
             return data['mask_m'].unsqueeze(-1) & mask_q.unsqueeze(-2)
         masks = [data['mask_d'], data['mask_q']]
@@ -158,7 +163,7 @@ class Approximator(nn.Module):
             raise ValueError(f'no summary statistics for likelihood {self.likelihood_family}')
 
         # --- between-group SD (random intercept proxy, on link scale)
-        group_means = ym.sum(dim=2) / ns                  # (B, m)
+        group_means = ym.sum(dim=2) / ns  # (B, m)
         # if self.likelihood_family == 2:  # poisson: log scale
         #     group_means = torch.log(group_means.clamp(min=1e-4))
         grand_mean = (group_means * mask_m).sum(dim=1, keepdim=True) / m
@@ -169,8 +174,11 @@ class Approximator(nn.Module):
 
     @staticmethod
     def _olsNormal(
-        Xm: torch.Tensor, ym: torch.Tensor, mask: torch.Tensor,
-        n_total: torch.Tensor, X: torch.Tensor,
+        Xm: torch.Tensor,
+        ym: torch.Tensor,
+        mask: torch.Tensor,
+        n_total: torch.Tensor,
+        X: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Pooled OLS: beta = (X'X)^{-1} X'y, plus residual SD."""
         XtX = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)
@@ -178,7 +186,7 @@ class Approximator(nn.Module):
         beta = torch.linalg.lstsq(XtX, Xty).solution
 
         yhat = torch.einsum('bmnd,bd->bmn', X, beta)
-        resid = (ym - yhat * mask)
+        resid = ym - yhat * mask
         ss_resid = resid.square().sum(dim=(1, 2))
         df = (n_total - X.shape[-1]).clamp(min=1)
         sigma_eps_ols = (ss_resid / df).sqrt().unsqueeze(-1)
@@ -186,7 +194,10 @@ class Approximator(nn.Module):
 
     @staticmethod
     def _irlsBernoulli(
-        Xm: torch.Tensor, ym: torch.Tensor, mask: torch.Tensor, n_iter: int = 5,
+        Xm: torch.Tensor,
+        ym: torch.Tensor,
+        mask: torch.Tensor,
+        n_iter: int = 5,
     ) -> torch.Tensor:
         """Batched IRLS logistic regression (fixed iterations)."""
         B, _, _, d = Xm.shape
@@ -203,8 +214,11 @@ class Approximator(nn.Module):
 
     @staticmethod
     def _irlsPoisson(
-        Xm: torch.Tensor, ym: torch.Tensor, mask: torch.Tensor,
-        n_iter: int = 5, damping: float = 0.5,
+        Xm: torch.Tensor,
+        ym: torch.Tensor,
+        mask: torch.Tensor,
+        n_iter: int = 5,
+        damping: float = 0.5,
     ) -> torch.Tensor:
         """Batched IRLS Poisson regression (damped, warm-started)."""
         B, _, _, d = Xm.shape
@@ -272,11 +286,11 @@ class Approximator(nn.Module):
     ) -> torch.Tensor:
         b, m, _ = local_summary.shape
         ndim = global_params.dim()
-        if ndim == 3:   # samples
+        if ndim == 3:  # samples
             s = global_params.shape[-2]
             global_params = global_params.unsqueeze(1).expand(b, m, s, -1)
             local_summary = local_summary.unsqueeze(2).expand(b, m, s, -1)
-        elif ndim == 2:   # ground truth
+        elif ndim == 2:  # ground truth
             global_params = global_params.unsqueeze(1).expand(b, m, -1)
         else:
             raise ValueError(f'global_params has {ndim} dims, expected 2 or 3')
@@ -419,7 +433,7 @@ if __name__ == '__main__':
 
     # init toy model
     model_cfg_path = Path(DIR, '..', 'models', 'configs', 'toy.yaml')
-    model_cfg = modelFromYaml(model_cfg_path, dl.dataset.d, dl.dataset.q)   # type: ignore
+    model_cfg = modelFromYaml(model_cfg_path, dl.dataset.d, dl.dataset.q)  # type: ignore
     model = Approximator(model_cfg)
     # model.compile()
 
