@@ -67,6 +67,8 @@ class Collection(torch.utils.data.Dataset):
         # shapes
         self.d = int(self.raw['d'].max())  # fixed effects
         self.q = int(self.raw['q'].max())  # random effects
+        self.m_i = self.raw['m'].astype(int, copy=False)
+        self.n_i_max = self.raw['ns'].max(axis=1).astype(int, copy=False)
 
         # feature permutations
         self.permute = permute and self.has_params
@@ -283,23 +285,99 @@ def collateFits(
     return out
 
 
+class SortishBatchSampler(torch.utils.data.Sampler[list[int]]):
+    """Batch sampler that sorts collection to reduce memory demands"""
+
+    def __init__(
+        self,
+        m_i: np.ndarray,
+        n_i_max: np.ndarray,
+        batch_size: int,
+        shuffle: bool = True,
+        bucket_mult: int = 50,
+        seed: int = 0,
+    ):
+        self.m_i = m_i
+        self.n_i_max = n_i_max
+        self.batch_size = int(batch_size)
+        self.shuffle = shuffle
+        self.bucket_mult = max(1, int(bucket_mult))
+        self.seed = int(seed)
+        self.n = len(m_i)
+
+    def __len__(self) -> int:
+        return int(np.ceil(self.n / self.batch_size))
+
+    def __iter__(self):
+        rng = np.random.default_rng(self.seed)
+        idx = np.arange(self.n)
+        if self.shuffle:
+            idx = rng.permutation(idx)
+
+        bucket_size = min(self.n, self.batch_size * self.bucket_mult)
+        ordered: list[int] = []
+        for start in range(0, self.n, bucket_size):
+            chunk = idx[start : start + bucket_size]
+            # sort by effective padded area, then by m and n_i
+            key_area = self.m_i[chunk] * self.n_i_max[chunk]
+            order = np.lexsort((self.n_i_max[chunk], self.m_i[chunk], key_area))
+            ordered.extend(chunk[order].tolist())
+
+        batches = [
+            ordered[start : start + self.batch_size]
+            for start in range(0, len(ordered), self.batch_size)
+        ]
+        if self.shuffle and len(batches) > 1:
+            batch_order = rng.permutation(len(batches))
+            batches = [batches[i] for i in batch_order]
+
+        for batch in batches:
+            yield batch
+
+
 class Dataloader(torch.utils.data.DataLoader):
     """Wrapper for torch dataloader"""
 
-    def __init__(self, path: Path, batch_size: int | None = None):
+    def __init__(
+        self,
+        path: Path,
+        batch_size: int | None = None,
+        sortish: bool = False,
+        shuffle: bool = False,
+        bucket_mult: int = 50,
+        sort_seed: int = 0,
+    ):
         col = Collection(path)
         not_mps = torch.accelerator.current_accelerator().type != 'mps'  # type: ignore
         if batch_size is None:
             batch_size = len(col)
         else:
             batch_size = min(batch_size, len(col))
-        super().__init__(
-            dataset=col,
-            batch_size=batch_size,
-            shuffle=False,
-            pin_memory=not_mps,
-            collate_fn=collateGrouped,
-        )
+
+        use_sortish = sortish and batch_size < len(col)
+        if use_sortish:
+            batch_sampler = SortishBatchSampler(
+                m_i=col.m_i,
+                n_i_max=col.n_i_max,
+                batch_size=batch_size,
+                shuffle=shuffle,
+                bucket_mult=bucket_mult,
+                seed=sort_seed,
+            )
+            super().__init__(
+                dataset=col,
+                batch_sampler=batch_sampler,
+                pin_memory=not_mps,
+                collate_fn=collateGrouped,
+            )
+        else:
+            super().__init__(
+                dataset=col,
+                batch_size=batch_size,
+                shuffle=shuffle,
+                pin_memory=not_mps,
+                collate_fn=collateGrouped,
+            )
 
     def __repr__(self) -> str:
         return f'Dataloader(batch_size={self.batch_size}) for {self.dataset}'
