@@ -175,6 +175,7 @@ class Generator:
         d: int,
         q: int,
         ns: np.ndarray,
+        strict_request_filter: bool,
     ) -> dict[str, np.ndarray]:
         rng = np.random.default_rng(seedseq)
 
@@ -200,6 +201,7 @@ class Generator:
                 min_m=Generator.REGIMES[-1][0],
                 min_n=Generator.NPG_MIN,
                 max_n=max(reg[3] for reg in Generator.REGIMES),
+                strict_request_filter=strict_request_filter,
             )
         else:
             raise NotImplementedError(f'design sampler type {ds_type} is not implemented')
@@ -233,6 +235,7 @@ class Generator:
                     d[i],
                     q[i],
                     ns[i][: m[i]],
+                    self.cfg.partition == 'test',
                 )
                 datasets.append(dataset)
         else:  # Option B: parallelize
@@ -243,6 +246,7 @@ class Generator:
                     d[i],
                     q[i],
                     ns[i][: m[i]],
+                    self.cfg.partition == 'test',
                 )
                 for i in tqdm(range(n_datasets), desc=desc)
             )

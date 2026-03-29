@@ -57,6 +57,7 @@ class Emulator:
     min_n: int = 1
     max_n: int | None = None
     max_attempts: int = 20
+    strict_request_filter: bool = False
 
     def __post_init__(self):
         if isinstance(self.rng, np.random.SeedSequence):
@@ -123,20 +124,31 @@ class Emulator:
             return min(int(ds['m']), eligible, n // self.min_n)
         return n // self.min_n
 
-    def _compatible(self, ds: dict, d: int) -> bool:
+    def _compatible(
+        self, ds: dict, d: int, req_m: int | None = None, req_n: int | None = None
+    ) -> bool:
         if d > int(ds['d']):
             return False
-        return self._maxGroups(ds) >= self.min_m
+        max_groups = self._maxGroups(ds)
+        if max_groups < self.min_m:
+            return False
+        if self.strict_request_filter:
+            if req_m is not None and max_groups < req_m:
+                return False
+            if req_n is not None and int(ds['n']) < req_n:
+                return False
+        return True
 
-    def _pull(self, d: int):
+    def _pull(self, d: int, req_m: int | None = None, req_n: int | None = None):
         # get dataset from database with matching dims
         database = getDatabase()
         if self.source == 'all':
-            subset = [ds for ds in database if self._compatible(ds, d)]
+            subset = [ds for ds in database if self._compatible(ds, d, req_m=req_m, req_n=req_n)]
             n_ds = len(subset)
             if n_ds == 0:
                 raise ValueError(
-                    f'no source dataset can support d={d}, min_m={self.min_m}, min_n={self.min_n}'
+                    f'no source dataset can support d={d}, min_m={self.min_m}, min_n={self.min_n}, '
+                    f'req_m={req_m}, req_n={req_n}'
                 )
             idx = self.rng.integers(0, n_ds)
             self.ds = subset[idx]
@@ -150,10 +162,11 @@ class Emulator:
             else:
                 raise ValueError(f'{self.source} not in known paths.')
             self.ds = database[idx]
-            if not self._compatible(self.ds, d):
+            if not self._compatible(self.ds, d, req_m=req_m, req_n=req_n):
                 raise ValueError(
                     f'dimension mismatch for source={self.source}: '
                     f'requested d={d}, min_m={self.min_m}, min_n={self.min_n}, '
+                    f'req_m={req_m}, req_n={req_n}, '
                     f"but source has d={self.ds['d']}, n={self.ds['n']}, max_groups={self._maxGroups(self.ds)}"
                 )
 
@@ -249,7 +262,7 @@ class Emulator:
 
         for _ in range(self.max_attempts):
             # pull source and derive feasible dims
-            self._pull(d)
+            self._pull(d, req_m=req_m, req_n=req_n)
             source_is_grouped = 'm' in self.ds and 'ns' in self.ds and 'groups' in self.ds
             max_groups = self._maxGroups(self.ds)
             if max_groups < self.min_m:
