@@ -34,12 +34,16 @@ def datasetFilename(cfg: dict, partition: str, epoch: int = 0) -> str:
     # sizes
     parts += [
         lf,
-        f'd{cfg["max_d"]}',
-        f'q{cfg["max_q"]}',
-        f'm{cfg["min_m"]}-{cfg["max_m"]}',
-        f'n{cfg["min_n"]}-{cfg["max_n"]}',
+        f"d{cfg['max_d']}",
+        f"q{cfg['max_q']}",
+        f"m{cfg['min_m']}-{cfg['max_m']}",
+        f"n{cfg['min_n']}-{cfg['max_n']}",
         cfg['ds_type'],
     ]
+
+    # optional cap on total observations per dataset
+    if 'max_n_total' in cfg:
+        parts.append(f"nt{cfg['max_n_total']}")
 
     # source of sampled data
     if cfg['ds_type'] == 'sampled':
@@ -58,9 +62,9 @@ def runName(cfg: dict, prefix: str = '') -> str:
     parts.append(LIKELIHOOD_FAMILIES[likelihood_family])
 
     parts += [
-        f'd{cfg["d_tag"]}',
-        f'm{cfg["m_tag"]}',
-        f's{cfg["seed"]}',
+        f"d{cfg['d_tag']}",
+        f"m{cfg['m_tag']}",
+        f"s{cfg['seed']}",
     ]
     if r_tag := cfg['r_tag']:
         parts += [f'r{r_tag}']
