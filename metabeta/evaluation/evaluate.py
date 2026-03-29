@@ -189,14 +189,14 @@ class Evaluator:
         if self.cfg.rescale:
             batch = rescaleData(batch)
         plotComparison(summaries, proposals, labels, batch, plot_dir=self.plot_dir, show=True)
-        
+
     def testrun(self) -> None:
         calibrator = self.calibrate() if self.cfg.conformal else None
         batch = next(iter(self.dl_valid))
         proposal_mb = self.sample(batch)
         summary_mb = self.summary(proposal_mb, batch, calibrator=calibrator)
         self.plot([proposal_mb], [summary_mb], ['MB'], batch)
-    
+
     def go(self) -> None:
         calibrator = self.calibrate() if self.cfg.conformal else None
         batch = next(iter(self.dl_test))
