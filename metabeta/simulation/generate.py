@@ -88,7 +88,7 @@ class Generator:
 
         # --- presample dimensions
         # number of fixed effects
-        d = rng.integers(low=2, high=self.cfg.max_d + 1, size=n_mini_batches)
+        d = truncLogUni(rng, low=2, high=self.cfg.max_d + 1, size=n_mini_batches, round=True)
         d = np.repeat(d, mini_batch_size)
 
         # number of random effects
