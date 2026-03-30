@@ -275,7 +275,10 @@ def collateFits(
             sigma_eps[b] = torch.as_tensor(ds[f'{method}_sigma_eps'], dtype=dtype).squeeze(0)
         # (q, m_i, s) -> (m_i, s, q)
         rfx_i = torch.as_tensor(ds[f'{method}_rfx'], dtype=dtype).permute(1, 2, 0)
-        rfx[b] = rfx_i
+        m_i = int(ds['m'])
+        max_m = min(m_i, rfx_i.shape[0])
+        if max_m > 0:
+            rfx[b, :max_m] = rfx_i[:max_m]
 
     out[f'{method}_ffx'] = ffx
     out[f'{method}_sigma_rfx'] = sigma_rfx
