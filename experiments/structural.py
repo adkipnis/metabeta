@@ -68,9 +68,6 @@ METRICS = [
     ('R_ffx', lambda r: r['corr_ffx'], True),
     ('R_σ', lambda r: r['corr_sigma_rfx'], True),
     ('R_rfx', lambda r: r['corr_rfx'], True),
-    ('RMSE_ffx', lambda r: r['rmse_ffx'], False),
-    ('RMSE_σ', lambda r: r['rmse_sigma_rfx'], False),
-    ('RMSE_rfx', lambda r: r['rmse_rfx'], False),
 ]
 
 
@@ -335,9 +332,11 @@ def sampleMetabeta(
     proposal.to('cpu')
 
     # extract posterior means, trim padding
+    # global: (B, S, D) → [0] → (S, D) → mean(0) → (D,)
     ffx_mean = proposal.ffx[0].mean(dim=0)[:d_actual].numpy()
     sigma_rfx_mean = proposal.sigma_rfx[0].mean(dim=0)[:q_actual].numpy()
-    rfx_mean = proposal.rfx[0].mean(dim=0)[:m_actual, :q_actual].numpy()
+    # local: (B, m, S, q) → [0] → (m, S, q) → mean(1) → (m, q)
+    rfx_mean = proposal.rfx[0].mean(dim=1)[:m_actual, :q_actual].numpy()
 
     return {
         'ffx': ffx_mean,
