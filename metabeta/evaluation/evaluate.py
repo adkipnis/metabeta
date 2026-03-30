@@ -155,18 +155,14 @@ class Evaluator:
 
     def calibrate(self) -> Calibrator:
         calibrator = Calibrator()
-        ckpt_path = Path(self.ckpt_dir, 'calibrator.npz')
-        if ckpt_path.exists():
-            calibrator.load(self.run_name)
-        else:
-            batch = next(iter(self.dl_valid))
-            proposal = self.sample(batch)
-            batch = toDevice(batch, 'cpu')
-            if self.cfg.rescale:
-                batch = rescaleData(batch)
-            proposal.to('cpu')
-            calibrator.calibrate(proposal, batch)
-            calibrator.save(self.run_name)
+        proposal = self.sampleMinibatched(self.dl_valid, 'Calibration')
+        full_batch = self.dl_valid.fullBatch()
+        full_batch = toDevice(full_batch, 'cpu')
+        if self.cfg.rescale:
+            full_batch = rescaleData(full_batch)
+        proposal.to('cpu')
+        calibrator.calibrate(proposal, full_batch)
+        calibrator.save(self.run_name)
         return calibrator
 
     def _fit2proposal(self, batch: dict[str, torch.Tensor], prefix: str) -> Proposal:
