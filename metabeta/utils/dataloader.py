@@ -285,6 +285,7 @@ def collateFits(
     out[f'{method}_rfx'] = rfx
     if has_eps:
         out[f'{method}_sigma_eps'] = sigma_eps
+    out[f'{method}_duration'] = quickCollate(batch, f'{method}_duration')
     return out
 
 
