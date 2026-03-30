@@ -25,6 +25,7 @@ import time
 import yaml
 from pathlib import Path
 
+import numpy as np
 import torch
 from tabulate import tabulate
 from tqdm import tqdm
@@ -63,13 +64,13 @@ CONDITIONS = [
 ]
 
 # (display name, extractor, higher_is_better)
+# higher_is_better: True = max, False = min, 'abs' = closest to 0
 METRICS = [
     ('R', lambda s: dictMean(s.corr), True),
     ('NRMSE', lambda s: dictMean(s.nrmse), False),
-    ('ECE', lambda s: dictMean(s.ece), False),
+    ('ECE', lambda s: dictMean(s.ece), 'abs'),
     ('ppNLL', lambda s: s.mnll, False),
     ('R²', lambda s: s.mfit, True),
-    ('t/ds', lambda s: s.tpd, False),
 ]
 
 
@@ -164,6 +165,12 @@ def calibrate(
     return calibrator
 
 
+def resetRng(model: Approximator, seed: int) -> None:
+    """Reset base distribution RNGs for reproducible sampling."""
+    model.posterior_g.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
+    model.posterior_l.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
+
+
 @torch.inference_mode()
 def sampleMinibatched(
     model: Approximator,
@@ -230,8 +237,10 @@ def evaluate(configs: list[str], batch_size: int) -> list[dict]:
             cfg.importance = importance
             cfg.sir = sir
 
-            # re-seed so the base distribution draws are identical across conditions
+            # reset RNGs so base distribution draws are identical across conditions
             setSeed(cfg.seed)
+            resetRng(model, cfg.seed)
+            model.eval()
 
             # sample in minibatches
             proposal = sampleMinibatched(model, cfg, dl_test, device, label)
@@ -251,9 +260,12 @@ def evaluate(configs: list[str], batch_size: int) -> list[dict]:
 
 
 def bestIndices(rows: list[dict]) -> dict[str, set[int]]:
-    """Find the row index of the best value per metric, grouped by config."""
+    """Find the row index of the best value per metric, grouped by config.
+
+    higher_is_better: True = max, False = min, 'abs' = closest to 0.
+    """
     metric_names = [m[0] for m in METRICS]
-    higher_is_better = {m[0]: m[2] for m in METRICS}
+    direction = {m[0]: m[2] for m in METRICS}
     best: dict[str, set[int]] = {m: set() for m in metric_names}
 
     # group rows by config
@@ -270,7 +282,10 @@ def bestIndices(rows: list[dict]) -> dict[str, set[int]]:
             values = [(i, r[metric]) for i, r in cfg_rows if r[metric] is not None]
             if not values:
                 continue
-            if higher_is_better[metric]:
+            d = direction[metric]
+            if d == 'abs':
+                best_idx = min(values, key=lambda x: abs(x[1]))[0]
+            elif d:
                 best_idx = max(values, key=lambda x: x[1])[0]
             else:
                 best_idx = min(values, key=lambda x: x[1])[0]
