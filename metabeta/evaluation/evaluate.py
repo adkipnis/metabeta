@@ -28,7 +28,7 @@ from metabeta.utils.evaluation import (
 import numpy as np
 
 from metabeta.models.approximator import Approximator
-from metabeta.posthoc.importance import runIS, runSIR
+from metabeta.posthoc.importance import ImportanceSampler, runIS, runSIR
 from metabeta.utils.moe import moeEstimate
 from metabeta.posthoc.conformal import Calibrator
 from metabeta.evaluation.summary import getSummary, summaryTable
@@ -198,8 +198,9 @@ class Evaluator:
             return proposal
 
     def _sampleMoe(self, batch: dict[str, torch.Tensor], n_datasets_seen: int) -> list[Proposal]:
-        """Sample with pseudo-MoE (B=1 per dataset)."""
+        """Sample with pseudo-MoE (B=1 per dataset), optionally applying IS."""
         B = batch['X'].shape[0]
+        lf = getattr(self.cfg, 'likelihood_family', 0)
         proposals = []
         for i in range(B):
             single = {k: v[i : i + 1] if torch.is_tensor(v) else v for k, v in batch.items()}
@@ -207,6 +208,9 @@ class Evaluator:
             proposal = moeEstimate(self.model, single, self.cfg.n_samples, self.cfg.k, rng=rng)
             if self.cfg.rescale:
                 proposal.rescale(single['sd_y'])
+            if self.cfg.importance and not self.cfg.sir:
+                data_is = rescaleData(single) if self.cfg.rescale else single
+                proposal = ImportanceSampler(data_is, sir=False, likelihood_family=lf)(proposal)
             proposals.append(proposal)
         return proposals
 
