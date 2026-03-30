@@ -40,7 +40,9 @@ logger = logging.getLogger('evaluate.py')
 def setup() -> argparse.Namespace:
     """Parse command line arguments for evaluation."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
-    parser.add_argument('--name', type=str, default='small-n-mixed', help='load configs/{name}.yaml')
+    parser.add_argument(
+        '--name', type=str, default='small-p-mixed', help='load configs/{name}.yaml'
+    )
     parser.add_argument('--m_tag', type=str)
     parser.add_argument('--r_tag', type=str)
     parser.add_argument('--d_tag', type=str)
@@ -52,7 +54,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--k', type=int, default=3, help='pseudo-MoE permuted views (0=off)')
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction)
     parser.add_argument('--batch_size', type=int)
-    parser.add_argument('--save_tables', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--save_tables', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--outdir', type=str)
 
     # load YAML then override with any CLI flags
@@ -61,6 +63,8 @@ def setup() -> argparse.Namespace:
     with open(path, 'r') as p:
         cfg = yaml.safe_load(p)
     cfg.update(vars(args))
+    if cfg.get('save_tables') is None:
+        cfg['save_tables'] = True
     return argparse.Namespace(**cfg)
 
 
@@ -189,6 +193,7 @@ class Evaluator:
         proposal = Proposal(proposed, has_sigma_eps=has_sigma_eps)
         if self.cfg.rescale:
             proposal.rescale(batch['sd_y'])
+        proposal.tpd = batch[f'{prefix}_duration'].mean().item()
         return proposal
 
     def _sampleBatch(self, batch: dict[str, torch.Tensor]) -> Proposal:
