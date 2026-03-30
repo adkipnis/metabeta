@@ -138,7 +138,7 @@ class Evaluator:
                 model_cfg_path,
                 d_ffx=self.cfg.max_d,
                 d_rfx=self.cfg.max_q,
-                likelihood_family=getattr(self.cfg, 'likelihood_family', 0),
+                likelihood_family=self.cfg.likelihood_family,
             )
         self.model = Approximator(self.model_cfg).to(self.device)
         self.model.eval()
@@ -200,7 +200,7 @@ class Evaluator:
     def _sampleMoe(self, batch: dict[str, torch.Tensor], n_datasets_seen: int) -> list[Proposal]:
         """Sample with pseudo-MoE (B=1 per dataset), optionally applying IS."""
         B = batch['X'].shape[0]
-        lf = getattr(self.cfg, 'likelihood_family', 0)
+        lf = self.cfg.likelihood_family
         proposals = []
         for i in range(B):
             single = {k: v[i : i + 1] if torch.is_tensor(v) else v for k, v in batch.items()}
@@ -260,7 +260,7 @@ class Evaluator:
         if self.cfg.rescale:
             batch = rescaleData(batch)
         proposal.to('cpu')
-        lf = getattr(self.cfg, 'likelihood_family', 0)
+        lf = self.cfg.likelihood_family
         eval_summary = getSummary(proposal, batch, calibrator=calibrator, likelihood_family=lf)
         summary_table = summaryTable(eval_summary, lf)
         logger.info(summary_table)
@@ -288,7 +288,7 @@ class Evaluator:
 
     def _fitLabel(self) -> str:
         labels = {0: 'ppR2', 1: 'ppAUC', 2: 'ppDev'}
-        return labels.get(getattr(self.cfg, 'likelihood_family', 0), 'ppR2')
+        return labels.get(self.cfg.likelihood_family, 'ppR2')
 
     def _bestIndices(
         self,
