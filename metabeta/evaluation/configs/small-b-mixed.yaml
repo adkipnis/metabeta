@@ -1,6 +1,7 @@
 # experiment
 name: 'small-b-mixed'
 d_tag: 'small-b-mixed'          # points to metabeta/simulation/configs/small-b-mixed.yaml
+d_tag_valid: 'small-b-sampled'
 m_tag: 'small'                  # points to metabeta/models/configs/small.yaml
 seed: 42
 r_tag: ''
@@ -13,10 +14,10 @@ verbosity: 1          # 0=warnings | 1=info | 2=debug
 # evaluation
 n_samples: 512        # posterior draws
 rescale: true         # unstandardize y
-importance: false     # importance sampling post-hoc
+importance: true     # importance sampling post-hoc
 sir: false            # sampling importance resampling
 sir_iter: 8
-conformal: true       # calibrate credible interval estimation using conformal correction
+conformal: false       # calibrate credible interval estimation using conformal correction
 
 # checkpoint
 prefix: 'best'          # best | latest

@@ -1,6 +1,7 @@
 # experiment
 name: 'huge-n-mixed'
 d_tag: 'huge-n-mixed'          # points to metabeta/simulation/configs/huge-n-mixed.yaml
+d_tag_valid: 'huge-n-sampled'
 m_tag: 'huge'                  # points to metabeta/models/configs/huge.yaml
 seed: 42
 r_tag: ''
@@ -13,10 +14,10 @@ verbosity: 1          # 0=warnings | 1=info | 2=debug
 # evaluation
 n_samples: 512        # posterior draws
 rescale: true         # unstandardize y
-importance: false     # importance sampling post-hoc
+importance: true     # importance sampling post-hoc
 sir: false            # sampling importance resampling
 sir_iter: 8
-conformal: true       # calibrate credible interval estimation using conformal correction
+conformal: false       # calibrate credible interval estimation using conformal correction
 
 # checkpoint
 prefix: 'best'          # best | latest
