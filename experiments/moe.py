@@ -17,3 +17,401 @@ Usage (from experiments/):
     uv run python moe.py --ks 0 3 7 15
     uv run python moe.py --valid
 """
+
+import argparse
+import time
+import yaml
+from pathlib import Path
+
+import numpy as np
+import torch
+from tabulate import tabulate
+from tqdm import tqdm
+
+from metabeta.models.approximator import Approximator
+from metabeta.posthoc.conformal import Calibrator
+from metabeta.utils.config import (
+    assimilateConfig,
+    loadDataConfig,
+    modelFromYaml,
+)
+from metabeta.utils.dataloader import Dataloader, toDevice
+from metabeta.utils.evaluation import Proposal, concatProposalsBatch, dictMean
+from metabeta.posthoc.importance import ImportanceSampler
+from metabeta.utils.io import datasetFilename, runName, setDevice
+from metabeta.utils.logger import setupLogging
+from metabeta.utils.moe import moeEstimate
+from metabeta.utils.preprocessing import rescaleData
+from metabeta.utils.sampling import setSeed
+from metabeta.evaluation.summary import getSummary
+
+DIR = Path(__file__).resolve().parent
+METABETA = DIR / '..' / 'metabeta'
+EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
+OUT_DIR = DIR / 'results'
+
+DEFAULT_CONFIGS = ['toy-n']
+DEFAULT_KS = [0, 3, 7]
+
+# (display name, extractor, higher_is_better)
+METRICS = [
+    ('R', lambda s: dictMean(s.corr), True),
+    ('NRMSE', lambda s: dictMean(s.nrmse), False),
+    ('ECE', lambda s: dictMean(s.ece), 'abs'),
+    ('ppNLL', lambda s: s.mnll, False),
+]
+
+
+# fmt: off
+def setup() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='Pseudo-MoE permutation ensembling experiment.')
+    parser.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS, help='evaluation config names (YAML files in evaluation/configs/)')
+    parser.add_argument('--ks', nargs='+', type=int, default=DEFAULT_KS, help='number of extra permuted views (0 = baseline)')
+    parser.add_argument('--importance', action='store_true', help='apply importance sampling on the joined proposal')
+    parser.add_argument('--valid', action='store_true', help='use validation set instead of test set')
+    parser.add_argument('--outdir', type=str, default=str(OUT_DIR), help='output directory for tables')
+    parser.add_argument('--verbosity', type=int, default=1, help='0=warnings | 1=info | 2=debug')
+    return parser.parse_args()
+# fmt: on
+
+
+def loadEvalConfig(name: str, **overrides) -> argparse.Namespace:
+    """Load an evaluation YAML config and apply overrides."""
+    path = EVAL_CFG_DIR / f'{name}.yaml'
+    assert path.exists(), f'eval config not found: {path}'
+    with open(path) as f:
+        cfg = yaml.safe_load(f)
+    cfg['name'] = name
+    cfg.update(overrides)
+    return argparse.Namespace(**cfg)
+
+
+def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
+    """Load model architecture from config and restore checkpoint weights."""
+    data_cfg = loadDataConfig(cfg.d_tag)
+    assimilateConfig(cfg, data_cfg)
+
+    model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.m_tag}.yaml'
+    model_cfg = modelFromYaml(
+        model_cfg_path,
+        d_ffx=cfg.max_d,
+        d_rfx=cfg.max_q,
+        likelihood_family=getattr(cfg, 'likelihood_family', 0),
+    )
+    model = Approximator(model_cfg).to(device)
+    model.eval()
+
+    run = runName(vars(cfg))
+    ckpt_dir = METABETA / 'outputs' / 'checkpoints' / run
+    path = ckpt_dir / f'{cfg.prefix}.pt'
+    assert path.exists(), f'checkpoint not found: {path}'
+    payload = torch.load(path, map_location=device)
+    model.load_state_dict(payload['model_state'])
+
+    if cfg.compile and device.type != 'mps':
+        model.compile()
+
+    return model, data_cfg, run
+
+
+def getDataloader(
+    data_cfg: dict, partition: str, batch_size: int | None = None
+) -> Dataloader:
+    """Create a dataloader for the given partition."""
+    data_fname = datasetFilename(data_cfg, partition)
+    data_path = METABETA / 'outputs' / 'data' / data_fname
+    assert data_path.exists(), f'data not found: {data_path}'
+    sortish = batch_size is not None
+    return Dataloader(data_path, batch_size=batch_size, sortish=sortish)
+
+
+def resetRng(model: Approximator, seed: int) -> None:
+    """Reset base distribution RNGs for reproducible sampling."""
+    model.posterior_g.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
+    model.posterior_l.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
+
+
+@torch.inference_mode()
+def calibrate(
+    model: Approximator,
+    cfg: argparse.Namespace,
+    data_cfg: dict,
+    run: str,
+    device: torch.device,
+) -> Calibrator:
+    """Load or compute conformal calibrator from validation set."""
+    calibrator = Calibrator()
+    ckpt_path = METABETA / 'outputs' / 'checkpoints' / run / 'calibrator.npz'
+    if ckpt_path.exists():
+        calibrator.load(run)
+    else:
+        dl_valid = getDataloader(data_cfg, 'valid')
+        batch = next(iter(dl_valid))
+        batch = toDevice(batch, device)
+        proposal = model.estimate(batch, n_samples=cfg.n_samples)
+        if cfg.rescale:
+            proposal.rescale(batch['sd_y'])
+        batch = toDevice(batch, 'cpu')
+        if cfg.rescale:
+            batch = rescaleData(batch)
+        proposal.to('cpu')
+        calibrator.calibrate(proposal, batch)
+        calibrator.save(run)
+    return calibrator
+
+
+@torch.inference_mode()
+def sampleMoe(
+    model: Approximator,
+    cfg: argparse.Namespace,
+    dl: Dataloader,
+    device: torch.device,
+    k: int,
+    seed: int,
+) -> Proposal:
+    """Run pseudo-MoE inference over a dataloader, one dataset at a time."""
+    proposals = []
+    n_datasets = 0
+    lf = getattr(cfg, 'likelihood_family', 0)
+    t0 = time.perf_counter()
+
+    for batch in tqdm(dl, desc=f'  k={k}'):
+        batch = toDevice(batch, device)
+        B = batch['X'].shape[0]
+
+        # process each dataset individually (B=1 required by moe)
+        for i in range(B):
+            single = {
+                k_: v[i : i + 1] if torch.is_tensor(v) else v for k_, v in batch.items()
+            }
+            rng = np.random.default_rng(seed + n_datasets)
+            proposal = moeEstimate(model, single, cfg.n_samples, k, rng=rng)
+            if cfg.rescale:
+                proposal.rescale(single['sd_y'])
+            if cfg.importance:
+                data_is = rescaleData(single) if cfg.rescale else single
+                imp_sampler = ImportanceSampler(data_is, sir=False, likelihood_family=lf)
+                proposal = imp_sampler(proposal)
+            proposal.to('cpu')
+            proposals.append(proposal)
+            n_datasets += 1
+
+    t1 = time.perf_counter()
+    merged = concatProposalsBatch(proposals)
+    merged.tpd = (t1 - t0) / max(n_datasets, 1)
+    return merged
+
+
+def evaluate(
+    configs: list[str],
+    ks: list[int],
+    use_valid: bool,
+    importance: bool,
+) -> list[dict]:
+    """Run all configs × k values and collect metric rows."""
+    rows = []
+    partition = 'valid' if use_valid else 'test'
+
+    for config_name in configs:
+        print(f'\n{"=" * 60}')
+        print(f'Config: {config_name} (partition={partition}, IS={importance})')
+        print(f'{"=" * 60}')
+
+        cfg = loadEvalConfig(config_name, plot=False)
+        cfg.importance = importance
+        setSeed(cfg.seed)
+        device = setDevice(cfg.device)
+
+        model, data_cfg, run = initModel(cfg, device)
+        cal = calibrate(model, cfg, data_cfg, run, device)
+
+        # B=1 dataloader (moe requires single datasets)
+        dl = getDataloader(data_cfg, partition, batch_size=1)
+        full_batch = dl.fullBatch()
+        if cfg.rescale:
+            full_batch = rescaleData(full_batch)
+
+        # build run list: for each k, run MoE; for each k>0, also run a
+        # control with k=0 but matched total sample count
+        runs = []
+        control_counts = set()
+        for k in ks:
+            total = (1 + k) * cfg.n_samples
+            runs.append((k, cfg.n_samples, f'k={k}', total))
+            if k > 0 and total not in control_counts:
+                control_counts.add(total)
+                runs.append((0, total, f'k=0 (S={total})', total))
+
+        # sort: baseline first, then by total samples, controls before MoE
+        runs.sort(key=lambda r: (r[3], r[0]))
+
+        calibrator = cal if cfg.conformal else None
+        lf = getattr(cfg, 'likelihood_family', 0)
+
+        for k, n_samp, label, total in runs:
+            print(f'\n  --- {label} ({1 + k} views, {total} total samples) ---')
+
+            setSeed(cfg.seed)
+            resetRng(model, cfg.seed)
+            model.eval()
+
+            # temporarily override n_samples for control conditions
+            orig_n_samples = cfg.n_samples
+            cfg.n_samples = n_samp
+            proposal = sampleMoe(model, cfg, dl, device, k, cfg.seed)
+            cfg.n_samples = orig_n_samples
+
+            summary = getSummary(
+                proposal, full_batch, calibrator=calibrator, likelihood_family=lf
+            )
+
+            row = {
+                'config': config_name,
+                'condition': label,
+                'k': k,
+                'total_samples': total,
+            }
+            for metric_name, extractor, _ in METRICS:
+                row[metric_name] = extractor(summary)
+            if summary.tpd is not None:
+                row['t/ds'] = summary.tpd
+            rows.append(row)
+
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Table formatting and output
+# ---------------------------------------------------------------------------
+
+
+def bestIndices(rows: list[dict]) -> dict[str, set[int]]:
+    """Find the row index of the best value per metric, grouped by config."""
+    metric_names = [m[0] for m in METRICS]
+    direction = {m[0]: m[2] for m in METRICS}
+    best: dict[str, set[int]] = {m: set() for m in metric_names}
+
+    configs = []
+    seen = set()
+    for r in rows:
+        if r['config'] not in seen:
+            configs.append(r['config'])
+            seen.add(r['config'])
+
+    for cfg in configs:
+        cfg_rows = [(i, r) for i, r in enumerate(rows) if r['config'] == cfg]
+        for metric in metric_names:
+            values = [(i, r[metric]) for i, r in cfg_rows if r[metric] is not None]
+            if not values:
+                continue
+            d = direction[metric]
+            if d == 'abs':
+                best_idx = min(values, key=lambda x: abs(x[1]))[0]
+            elif d:
+                best_idx = max(values, key=lambda x: x[1])[0]
+            else:
+                best_idx = min(values, key=lambda x: x[1])[0]
+            best[metric].add(best_idx)
+
+    return best
+
+
+def deltaTable(rows: list[dict]) -> str:
+    """Format a table showing changes from baseline (k=0) per config."""
+    metric_names = [m[0] for m in METRICS]
+    table_rows = []
+
+    configs = []
+    seen = set()
+    for r in rows:
+        if r['config'] not in seen:
+            configs.append(r['config'])
+            seen.add(r['config'])
+
+    for cfg in configs:
+        cfg_rows = [r for r in rows if r['config'] == cfg]
+        baseline = cfg_rows[0]
+        for r in cfg_rows[1:]:
+            table_row = [cfg, r['condition'], r['total_samples']]
+            for metric in metric_names:
+                b_val = baseline[metric]
+                val = r[metric]
+                if b_val is None or val is None:
+                    table_row.append('—')
+                else:
+                    delta = val - b_val
+                    table_row.append(f'{delta:+.4f}')
+            table_rows.append(table_row)
+
+    headers = ['Config', 'Condition', 'Samples'] + [f'Δ{m}' for m in metric_names]
+    return tabulate(table_rows, headers=headers, tablefmt='pipe', stralign='right')
+
+
+def formatTable(rows: list[dict], fmt: str = 'pipe') -> str:
+    """Format as a table with best-per-column markers."""
+    metric_names = [m[0] for m in METRICS]
+    best = bestIndices(rows)
+
+    table_rows = []
+    for i, r in enumerate(rows):
+        table_row = [r['config'], r['condition'], r['total_samples']]
+        for metric in metric_names:
+            val = r[metric]
+            if val is None:
+                cell = '—'
+            else:
+                cell = f'{val:.4f}'
+                if i in best.get(metric, set()):
+                    if fmt == 'latex':
+                        cell = f'\\textbf{{{cell}}}'
+                    else:
+                        cell = f'**{cell}**'
+            table_row.append(cell)
+        if 't/ds' in r:
+            table_row.append(f'{r["t/ds"]:.3f}')
+        table_rows.append(table_row)
+
+    headers = ['Config', 'Condition', 'Samples'] + metric_names
+    if any('t/ds' in r for r in rows):
+        headers.append('t/ds [s]')
+    tablefmt = 'latex_booktabs' if fmt == 'latex' else 'pipe'
+    return tabulate(table_rows, headers=headers, tablefmt=tablefmt, stralign='right')
+
+
+def save(rows: list[dict], outdir: Path) -> None:
+    """Save tables in markdown and LaTeX formats."""
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    md_abs = formatTable(rows, fmt='pipe')
+    md_delta = deltaTable(rows)
+    md_path = outdir / 'moe.md'
+    md_path.write_text(
+        f'# Pseudo-MoE Results\n\n## Absolute\n\n{md_abs}\n\n'
+        f'## Change from Baseline (k=0)\n\n{md_delta}\n'
+    )
+    print(f'\nMarkdown saved to {md_path}')
+
+    tex_table = formatTable(rows, fmt='latex')
+    tex_path = outdir / 'moe.tex'
+    tex_path.write_text(tex_table + '\n')
+    print(f'LaTeX saved to {tex_path}')
+
+
+if __name__ == '__main__':
+    args = setup()
+    setupLogging(args.verbosity)
+
+    ks = sorted(args.ks)
+    print(f'Pseudo-MoE experiment: {len(args.configs)} config(s) × {len(ks)} k values')
+    print(f'Configs: {args.configs}')
+    print(f'k values: {ks}')
+    print(f'Partition: {"valid" if args.valid else "test"}')
+    print(f'IS: {args.importance}')
+
+    rows = evaluate(args.configs, ks, args.valid, args.importance)
+
+    print(f'\n{formatTable(rows)}')
+    print(f'\n{deltaTable(rows)}')
+
+    save(rows, Path(args.outdir))
+    print('\nDone.')
