@@ -4,28 +4,29 @@ Misspecification study: evaluate trained models under prior misspecification.
 For each evaluation config:
     1. Load model from checkpoint
     2. Load test set (or validation set under --valid flag)
-    3. For each condition (baseline + 3 misspecified):
-        - Perturb prior context in the batch (variance, family, or both)
+    3. For each condition (baseline + misspecified):
+        - Perturb prior context in the batch (scale, location, family)
         - Sample from the model
         - Evaluate metrics against the same ground truth
     4. Summarize absolute metrics and changes from baseline
     5. Save table in markdown and LaTeX format
 
-Conditions:
-    - Baseline: original priors as stored in the data
-    - Wrong variance: scale prior tau hyperparameters by a factor
+Perturbation types:
+    - Wrong variance: scale tau hyperparameters (multiple factors supported)
+    - Wrong mean: shift nu_ffx by k × tau_ffx (relative to prior width)
     - Wrong family: rotate prior family indices (+1 mod n_families)
-    - Both: wrong variance + wrong family
 
 Usage (from experiments/):
     uv run python missspecification.py
     uv run python missspecification.py --configs toy-n
-    uv run python missspecification.py --scale_factor 5.0
+    uv run python missspecification.py --scale_factors 0.33 3 10
+    uv run python missspecification.py --mean_shifts 1 2 5
     uv run python missspecification.py --valid
 """
 
 import argparse
 import yaml
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +44,7 @@ from metabeta.utils.config import (
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.evaluation import Proposal, concatProposalsBatch, dictMean
 from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES
+from metabeta.posthoc.importance import runIS
 from metabeta.utils.io import datasetFilename, runName, setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
@@ -55,14 +57,8 @@ EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
 OUT_DIR = DIR / 'results'
 
 DEFAULT_CONFIGS = ['toy-n']
-
-# (label, wrong_variance, wrong_family)
-CONDITIONS = [
-    ('Baseline', False, False),
-    ('Wrong variance', True, False),
-    ('Wrong family', False, True),
-    ('Both', True, True),
-]
+DEFAULT_SCALE_FACTORS = [0.33, 3.0]
+DEFAULT_MEAN_SHIFTS = [1.0, 2.0]
 
 # (display name, extractor, higher_is_better)
 # higher_is_better: True = max, False = min, 'abs' = closest to 0
@@ -71,15 +67,49 @@ METRICS = [
     ('NRMSE', lambda s: dictMean(s.nrmse), False),
     ('ECE', lambda s: dictMean(s.ece), 'abs'),
     ('ppNLL', lambda s: s.mnll, False),
-    ('R²', lambda s: s.mfit, True),
 ]
+
+
+@dataclass
+class Condition:
+    label: str
+    scale_factor: float = 1.0   # tau multiplier (1.0 = no change)
+    mean_shift: float = 0.0     # nu_ffx offset in units of tau_ffx (0.0 = no change)
+    wrong_family: bool = False
+
+
+def buildConditions(
+    scale_factors: list[float], mean_shifts: list[float]
+) -> list[Condition]:
+    """Build all combinations of (scale, shift, family) perturbations."""
+    scales = [1.0] + sorted(scale_factors)
+    shifts = [0.0] + sorted(mean_shifts)
+    families = [False, True]
+
+    conditions = []
+    for s in scales:
+        for k in shifts:
+            for fam in families:
+                parts = []
+                if s != 1.0:
+                    parts.append(f'τ×{s:g}')
+                if k != 0.0:
+                    parts.append(f'μ+{k:g}σ')
+                if fam:
+                    parts.append('fam')
+                label = ' + '.join(parts) if parts else 'Baseline'
+                conditions.append(Condition(label, s, k, fam))
+
+    return conditions
 
 
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Misspecification study across prior perturbations.')
     parser.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS, help='evaluation config names (YAML files in evaluation/configs/)')
-    parser.add_argument('--scale_factor', type=float, default=3.0, help='factor to scale tau hyperparameters for wrong-variance condition')
+    parser.add_argument('--scale_factors', nargs='+', type=float, default=DEFAULT_SCALE_FACTORS, help='tau multipliers for wrong-variance conditions')
+    parser.add_argument('--mean_shifts', nargs='+', type=float, default=DEFAULT_MEAN_SHIFTS, help='nu_ffx offsets in units of tau_ffx for wrong-mean conditions')
+    parser.add_argument('--importance', action='store_true', help='use importance sampling post-hoc')
     parser.add_argument('--batch_size', type=int, default=8, help='minibatch size for sampling (prevents OOM)')
     parser.add_argument('--valid', action='store_true', help='use validation set instead of test set')
     parser.add_argument('--outdir', type=str, default=str(OUT_DIR), help='output directory for tables')
@@ -151,24 +181,26 @@ def resetRng(model: Approximator, seed: int) -> None:
 
 def perturbBatch(
     batch: dict[str, torch.Tensor],
-    wrong_variance: bool,
-    wrong_family: bool,
-    scale_factor: float,
+    cond: Condition,
 ) -> dict[str, torch.Tensor]:
     """Clone batch and perturb prior context fields.
 
-    wrong_variance: multiply tau_ffx, tau_rfx, and tau_eps (if present) by scale_factor.
+    scale_factor: multiply tau_ffx, tau_rfx, and tau_eps by this factor.
+    mean_shift: add mean_shift × tau_ffx to nu_ffx (relative to prior width).
     wrong_family: rotate family indices (+1 mod n_families).
     """
     out = {k: v.clone() if torch.is_tensor(v) else v for k, v in batch.items()}
 
-    if wrong_variance:
-        out['tau_ffx'] = out['tau_ffx'] * scale_factor
-        out['tau_rfx'] = out['tau_rfx'] * scale_factor
+    if cond.scale_factor != 1.0:
+        out['tau_ffx'] = out['tau_ffx'] * cond.scale_factor
+        out['tau_rfx'] = out['tau_rfx'] * cond.scale_factor
         if 'tau_eps' in out:
-            out['tau_eps'] = out['tau_eps'] * scale_factor
+            out['tau_eps'] = out['tau_eps'] * cond.scale_factor
 
-    if wrong_family:
+    if cond.mean_shift != 0.0:
+        out['nu_ffx'] = out['nu_ffx'] + cond.mean_shift * batch['tau_ffx']
+
+    if cond.wrong_family:
         n_ffx = len(FFX_FAMILIES)
         n_sigma = len(SIGMA_FAMILIES)
         out['family_ffx'] = (out['family_ffx'] + 1) % n_ffx
@@ -219,19 +251,19 @@ def sampleMinibatched(
     cfg: argparse.Namespace,
     dl: Dataloader,
     device: torch.device,
-    label: str,
-    scale_factor: float,
-    wrong_variance: bool = False,
-    wrong_family: bool = False,
+    cond: Condition,
 ) -> Proposal:
     """Sample from proposal distribution over minibatches with optional perturbation."""
     proposals = []
-    for batch in tqdm(dl, desc=f'  {label}'):
+    for batch in tqdm(dl, desc=f'  {cond.label}'):
         batch = toDevice(batch, device)
-        batch = perturbBatch(batch, wrong_variance, wrong_family, scale_factor)
-        proposal = model.estimate(batch, n_samples=cfg.n_samples)
-        if cfg.rescale:
-            proposal.rescale(batch['sd_y'])
+        batch = perturbBatch(batch, cond)
+        if cfg.importance:
+            proposal = runIS(model, batch, cfg)
+        else:
+            proposal = model.estimate(batch, n_samples=cfg.n_samples)
+            if cfg.rescale:
+                proposal.rescale(batch['sd_y'])
         proposal.to('cpu')
         proposals.append(proposal)
 
@@ -240,9 +272,10 @@ def sampleMinibatched(
 
 def evaluate(
     configs: list[str],
+    conditions: list[Condition],
     batch_size: int,
-    scale_factor: float,
     use_valid: bool,
+    importance: bool,
 ) -> list[dict]:
     """Run all configs × conditions and collect metric rows."""
     rows = []
@@ -250,10 +283,11 @@ def evaluate(
 
     for config_name in configs:
         print(f'\n{"=" * 60}')
-        print(f'Config: {config_name} (partition={partition}, scale_factor={scale_factor})')
+        print(f'Config: {config_name} (partition={partition}, IS={importance})')
         print(f'{"=" * 60}')
 
         cfg = loadEvalConfig(config_name, plot=False)
+        cfg.importance = importance
         setSeed(cfg.seed)
         device = setDevice(cfg.device)
 
@@ -265,18 +299,14 @@ def evaluate(
         if cfg.rescale:
             full_batch = rescaleData(full_batch)
 
-        for label, wrong_variance, wrong_family in CONDITIONS:
-            print(f'\n  --- {label} ---')
+        for cond in conditions:
+            print(f'\n  --- {cond.label} ---')
 
             setSeed(cfg.seed)
             resetRng(model, cfg.seed)
             model.eval()
 
-            proposal = sampleMinibatched(
-                model, cfg, dl, device, label, scale_factor,
-                wrong_variance=wrong_variance,
-                wrong_family=wrong_family,
-            )
+            proposal = sampleMinibatched(model, cfg, dl, device, cond)
 
             calibrator = cal if cfg.conformal else None
             lf = getattr(cfg, 'likelihood_family', 0)
@@ -284,7 +314,7 @@ def evaluate(
                 proposal, full_batch, calibrator=calibrator, likelihood_family=lf
             )
 
-            row = {'config': config_name, 'condition': label}
+            row = {'config': config_name, 'condition': cond.label}
             for metric_name, extractor, _ in METRICS:
                 row[metric_name] = extractor(summary)
             rows.append(row)
@@ -412,12 +442,17 @@ if __name__ == '__main__':
     args = setup()
     setupLogging(args.verbosity)
 
-    print(f'Misspecification study: {len(args.configs)} config(s) × {len(CONDITIONS)} conditions')
-    print(f'Configs: {args.configs}')
-    print(f'Scale factor: {args.scale_factor}')
-    print(f'Partition: {"valid" if args.valid else "test"}')
+    conditions = buildConditions(args.scale_factors, args.mean_shifts)
 
-    rows = evaluate(args.configs, args.batch_size, args.scale_factor, args.valid)
+    print(f'Misspecification study: {len(args.configs)} config(s) × {len(conditions)} conditions')
+    print(f'Configs: {args.configs}')
+    print(f'Scale factors: {args.scale_factors}')
+    print(f'Mean shifts: {args.mean_shifts}')
+    print(f'Partition: {"valid" if args.valid else "test"}')
+    print(f'IS: {args.importance}')
+    print(f'Conditions: {[c.label for c in conditions]}')
+
+    rows = evaluate(args.configs, conditions, args.batch_size, args.valid, args.importance)
 
     print(f'\n{formatTable(rows)}')
     print(f'\n{deltaTable(rows)}')
