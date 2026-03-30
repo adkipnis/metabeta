@@ -26,6 +26,7 @@ from metabeta.utils.evaluation import (
     dictMean,
 )
 import numpy as np
+
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import runIS, runSIR
 from metabeta.utils.moe import moeEstimate
@@ -39,11 +40,11 @@ logger = logging.getLogger('evaluate.py')
 def setup() -> argparse.Namespace:
     """Parse command line arguments for evaluation."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
-    parser.add_argument(
-        '--name', type=str, default='small-n-sampled', help='load configs/{name}.yaml'
-    )
+    parser.add_argument('--name', type=str, default='small-n-mixed', help='load configs/{name}.yaml')
     parser.add_argument('--m_tag', type=str)
     parser.add_argument('--r_tag', type=str)
+    parser.add_argument('--d_tag', type=str)
+    parser.add_argument('--d_tag_valid', type=str)
     parser.add_argument('--device', type=str)
     parser.add_argument('--n_samples', type=int)
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
@@ -103,16 +104,23 @@ class Evaluator:
             self.results_dir.mkdir(parents=True, exist_ok=True)
 
     def _initData(self) -> None:
-        # assimilate data config
-        self.data_cfg = loadDataConfig(self.cfg.d_tag)
-        assimilateConfig(self.cfg, self.data_cfg)
+        # assimilate training data config for model/checkpoint consistency
+        self.data_cfg_train = loadDataConfig(self.cfg.d_tag)
+        assimilateConfig(self.cfg, self.data_cfg_train)
+
+        # allow overriding validation/test data tag independently from training
+        self.data_cfg_valid = loadDataConfig(self.cfg.d_tag_valid)
+
+        # keep legacy attr name for checkpoint comparison compatibility
+        self.data_cfg = self.data_cfg_train
 
         # get dataloaders
         self.dl_valid = self._getDataLoader('valid', batch_size=self.cfg.batch_size)
         self.dl_test = self._getDataLoader('test', batch_size=self.cfg.batch_size)
 
     def _getDataLoader(self, partition: str, batch_size: int | None = None) -> Dataloader:
-        data_fname = datasetFilename(self.data_cfg, partition)
+        data_cfg = self.data_cfg_valid
+        data_fname = datasetFilename(data_cfg, partition)
         data_path = Path(self.dir, '..', 'outputs', 'data', data_fname)
         if partition == 'test':
             data_path = data_path.with_suffix('.fit.npz')
