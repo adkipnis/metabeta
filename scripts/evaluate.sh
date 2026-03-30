@@ -1,15 +1,16 @@
 #!/bin/bash
 
 #SBATCH --job-name=evaluate
-#SBATCH --output=logs/evaluate/evaluate_%j.out
-#SBATCH --error=logs/evaluate/evaluate_%j.err
+#SBATCH --output=logs/evaluate/evaluate_%A_%a.out
+#SBATCH --error=logs/evaluate/evaluate_%A_%a.err
+#SBATCH --array=0-35
 
 #SBATCH --partition gpu_p
 #SBATCH --qos gpu_normal
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=24:00:00
+#SBATCH --time=04:00:00
 
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
@@ -54,9 +55,6 @@ CONFIGS=(
     huge-p-sampled
 )
 
-for cfg in "${CONFIGS[@]}"; do
-    echo "=========================================="
-    echo "Evaluating: $cfg"
-    echo "=========================================="
-    python evaluate.py --name "$cfg" --device cuda --save_tables
-done
+CFG=${CONFIGS[$SLURM_ARRAY_TASK_ID]}
+echo "Evaluating: $CFG (task $SLURM_ARRAY_TASK_ID)"
+python evaluate.py --name "$CFG" --device cuda --save_tables
