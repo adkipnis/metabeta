@@ -91,8 +91,10 @@ class Calibrator:
         # sort and get the (1 - alpha) empirical quantile of scores
         scores, _ = scores.sort(0, descending=False)
         factor = mask.float().mean(0) * b * 1.01
-        idx = (factor * (1 - alpha_t)).ceil().clamp(max=B - 1).to(torch.int64)
+        B_safe = B.clamp(min=1) - 1
+        idx = (factor * (1 - alpha_t)).ceil().clamp(min=torch.tensor(0), max=B_safe).to(torch.int64)
         correction = torch.gather(scores, dim=0, index=idx.unsqueeze(0)).squeeze(0)
+        correction[B == 0] = 0.0  # no correction for fully-masked dimensions
 
         # average over groups for rfx (quantiles: (b, m, 2, q))
         if quantiles.dim() == 4:
