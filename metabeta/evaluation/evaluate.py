@@ -177,10 +177,16 @@ class Evaluator:
         proposed = {}
         ffx = batch[f'{prefix}_ffx']
         sigma_rfx = batch[f'{prefix}_sigma_rfx']
-        sigma_eps = batch[f'{prefix}_sigma_eps'].unsqueeze(-1)
-        proposed['global'] = {'samples': torch.cat([ffx, sigma_rfx, sigma_eps], dim=-1)}
+        samples_g = [ffx, sigma_rfx]
+        if f'{prefix}_sigma_eps' in batch:
+            sigma_eps = batch[f'{prefix}_sigma_eps'].unsqueeze(-1)
+            samples_g.append(sigma_eps)
+            has_sigma_eps = True
+        else:
+            has_sigma_eps = False
+        proposed['global'] = {'samples': torch.cat(samples_g, dim=-1)}
         proposed['local'] = {'samples': batch[f'{prefix}_rfx']}
-        proposal = Proposal(proposed)
+        proposal = Proposal(proposed, has_sigma_eps=has_sigma_eps)
         if self.cfg.rescale:
             proposal.rescale(batch['sd_y'])
         return proposal
