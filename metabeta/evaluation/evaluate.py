@@ -181,18 +181,18 @@ class Evaluator:
             proposal.rescale(batch['sd_y'])
         return proposal
 
-    @torch.inference_mode()
-    def sample(self, batch: dict[str, torch.Tensor]) -> Proposal:
-        batch = toDevice(batch, self.device)
-        t0 = time.perf_counter()
+    def _sampleBatch(self, batch: dict[str, torch.Tensor]) -> Proposal:
+        """Sample a proposal from a batch (no MoE)."""
         if self.cfg.importance and not self.cfg.sir:
-            proposal = runIS(self.model, batch, self.cfg)
+            return runIS(self.model, batch, self.cfg)
         elif self.cfg.sir:
-            proposal = runSIR(self.model, batch, self.cfg)
+            return runSIR(self.model, batch, self.cfg)
         else:
             proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
             if self.cfg.rescale:
                 proposal.rescale(batch['sd_y'])
+            return proposal
+
     def _sampleMoe(self, batch: dict[str, torch.Tensor], n_datasets_seen: int) -> list[Proposal]:
         """Sample with pseudo-MoE (B=1 per dataset)."""
         B = batch['X'].shape[0]
