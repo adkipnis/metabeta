@@ -34,7 +34,6 @@ from metabeta.models.approximator import Approximator
 from metabeta.posthoc.conformal import Calibrator
 from metabeta.posthoc.importance import runIS, runSIR
 from metabeta.utils.config import (
-    ApproximatorConfig,
     assimilateConfig,
     loadDataConfig,
     modelFromYaml,
