@@ -52,7 +52,7 @@ EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
 OUT_DIR = DIR / 'results'
 
 # default configs to evaluate (each must have a YAML in evaluation/configs/)
-DEFAULT_CONFIGS = ['toy-n', 'small-n-sampled']
+DEFAULT_CONFIGS = ['small-n-sampled']
 
 # (label, importance, sir, conformal)
 CONDITIONS = [
