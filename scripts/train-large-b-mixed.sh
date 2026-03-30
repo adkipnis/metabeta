@@ -14,4 +14,4 @@
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/training
-python train.py --name large-b-mixed -e 250 --wandb --device cuda
+python train.py --name large-b-mixed -e 500 --wandb --device cuda
