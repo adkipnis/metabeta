@@ -23,8 +23,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument(
         '--n_train_epochs',
         type=int,
-        default=250,
-        help='number of expected train partitions (default = 250)',
+        default=500,
+        help='number of expected train partitions (default = 500)',
     )
     parser.add_argument(
         '--n_fits',
