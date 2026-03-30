@@ -2,8 +2,11 @@ import yaml
 import time
 import logging
 import argparse
-import torch
 from pathlib import Path
+
+import torch
+from tabulate import tabulate
+from tqdm import tqdm
 
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.io import setDevice, datasetFilename, runName
@@ -16,7 +19,12 @@ from metabeta.utils.config import (
 )
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.evaluation import EvaluationSummary, Proposal
+from metabeta.utils.evaluation import (
+    EvaluationSummary,
+    Proposal,
+    concatProposalsBatch,
+    dictMean,
+)
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import runIS, runSIR
 from metabeta.posthoc.conformal import Calibrator
@@ -29,7 +37,9 @@ logger = logging.getLogger('evaluate.py')
 def setup() -> argparse.Namespace:
     """Parse command line arguments for evaluation."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
-    parser.add_argument('--name', type=str, default='toy', help='load configs/{name}.yaml')
+    parser.add_argument(
+        '--name', type=str, default='small-n-sampled', help='load configs/{name}.yaml'
+    )
     parser.add_argument('--m_tag', type=str)
     parser.add_argument('--r_tag', type=str)
     parser.add_argument('--device', type=str)
@@ -37,6 +47,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
     parser.add_argument('--conformal', action=argparse.BooleanOptionalAction)
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--batch_size', type=int)
+    parser.add_argument('--save_tables', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--outdir', type=str)
 
     # load YAML then override with any CLI flags
     args = parser.parse_args()
@@ -55,6 +68,13 @@ class Evaluator:
         setSeed(cfg.seed)
         self.device = setDevice(cfg.device)
 
+        if not hasattr(self.cfg, 'batch_size'):
+            self.cfg.batch_size = 8
+        if not hasattr(self.cfg, 'save_tables'):
+            self.cfg.save_tables = False
+        if not hasattr(self.cfg, 'outdir'):
+            self.cfg.outdir = str(Path(self.dir, '..', 'outputs', 'results'))
+
         # checkpoint dir
         self.run_name = runName(vars(self.cfg))
         self.ckpt_dir = Path(self.dir, '..', 'outputs', 'checkpoints', self.run_name)
@@ -70,23 +90,30 @@ class Evaluator:
             self.plot_dir = Path(self.dir, '..', 'outputs', 'plots', self.run_name)
             self.plot_dir.mkdir(parents=True, exist_ok=True)
 
+        # results dir
+        self.results_dir = None
+        if self.cfg.save_tables:
+            base_dir = Path(self.cfg.outdir)
+            self.results_dir = base_dir / self.run_name
+            self.results_dir.mkdir(parents=True, exist_ok=True)
+
     def _initData(self) -> None:
         # assimilate data config
         self.data_cfg = loadDataConfig(self.cfg.d_tag)
         assimilateConfig(self.cfg, self.data_cfg)
 
         # get dataloaders
-        if self.cfg.conformal:
-            self.dl_valid = self._getDataLoader('valid')
-        self.dl_test = self._getDataLoader('test')
+        self.dl_valid = self._getDataLoader('valid', batch_size=self.cfg.batch_size)
+        self.dl_test = self._getDataLoader('test', batch_size=self.cfg.batch_size)
 
-    def _getDataLoader(self, partition: str) -> Dataloader:
+    def _getDataLoader(self, partition: str, batch_size: int | None = None) -> Dataloader:
         data_fname = datasetFilename(self.data_cfg, partition)
         data_path = Path(self.dir, '..', 'outputs', 'data', data_fname)
         if partition == 'test':
             data_path = data_path.with_suffix('.fit.npz')
         assert data_path.exists(), f'data file not found: {data_path}'
-        return Dataloader(data_path, batch_size=None)
+        sortish = batch_size is not None
+        return Dataloader(data_path, batch_size=batch_size, sortish=sortish)
 
     def _initModel(self) -> None:
         """Load model architecture from config and restore checkpoint weights."""
@@ -95,7 +122,9 @@ class Evaluator:
         else:
             model_cfg_path = Path(self.dir, '..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
             self.model_cfg = modelFromYaml(
-                model_cfg_path, d_ffx=self.cfg.max_d, d_rfx=self.cfg.max_q,
+                model_cfg_path,
+                d_ffx=self.cfg.max_d,
+                d_rfx=self.cfg.max_q,
                 likelihood_family=getattr(self.cfg, 'likelihood_family', 0),
             )
         self.model = Approximator(self.model_cfg).to(self.device)
@@ -163,6 +192,30 @@ class Evaluator:
         proposal.tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
         return proposal
 
+    @torch.inference_mode()
+    def sampleMinibatched(self, dl: Dataloader, label: str) -> Proposal:
+        proposals = []
+        n_datasets = 0
+        t0 = time.perf_counter()
+        for batch in tqdm(dl, desc=f'  {label}'):
+            batch = toDevice(batch, self.device)
+            if self.cfg.importance and not self.cfg.sir:
+                proposal = runIS(self.model, batch, self.cfg)
+            elif self.cfg.sir:
+                proposal = runSIR(self.model, batch, self.cfg)
+            else:
+                proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+                if self.cfg.rescale:
+                    proposal.rescale(batch['sd_y'])
+            proposal.to('cpu')
+            proposals.append(proposal)
+            n_datasets += batch['X'].shape[0]
+        t1 = time.perf_counter()
+
+        merged = concatProposalsBatch(proposals)
+        merged.tpd = (t1 - t0) / max(n_datasets, 1)
+        return merged
+
     def summary(
         self,
         proposal: Proposal,
@@ -186,39 +239,145 @@ class Evaluator:
         labels: list[str],
         batch: dict[str, torch.Tensor],
     ) -> None:
+        if not self.cfg.plot:
+            return
         if self.cfg.rescale:
             batch = rescaleData(batch)
         plotComparison(summaries, proposals, labels, batch, plot_dir=self.plot_dir, show=True)
 
     def testrun(self) -> None:
         calibrator = self.calibrate() if self.cfg.conformal else None
-        batch = next(iter(self.dl_valid))
-        proposal_mb = self.sample(batch)
-        summary_mb = self.summary(proposal_mb, batch, calibrator=calibrator)
-        self.plot([proposal_mb], [summary_mb], ['MB'], batch)
+        full_batch = self.dl_valid.fullBatch()
+        proposal_mb = self.sampleMinibatched(self.dl_valid, 'MB')
+        summary_mb = self.summary(proposal_mb, full_batch, calibrator=calibrator)
+        self.plot([proposal_mb], [summary_mb], ['MB'], full_batch)
+
+    def _fitLabel(self) -> str:
+        labels = {0: 'ppR2', 1: 'ppAUC', 2: 'ppDev'}
+        return labels.get(getattr(self.cfg, 'likelihood_family', 0), 'ppR2')
+
+    def _bestIndices(
+        self,
+        rows: list[dict],
+        metric_names: list[str],
+        direction: dict[str, bool | str],
+    ) -> dict[str, set[int]]:
+        best: dict[str, set[int]] = {m: set() for m in metric_names}
+        for metric in metric_names:
+            values = [(i, r[metric]) for i, r in enumerate(rows) if r[metric] is not None]
+            if not values:
+                continue
+            d = direction[metric]
+            if d == 'abs':
+                best_idx = min(values, key=lambda x: abs(x[1]))[0]
+            elif d:
+                best_idx = max(values, key=lambda x: x[1])[0]
+            else:
+                best_idx = min(values, key=lambda x: x[1])[0]
+            best[metric].add(best_idx)
+        return best
+
+    def saveTables(self, rows: list[dict]) -> None:
+        if self.results_dir is None:
+            return
+        metric_names = list(rows[0].keys())[1:]
+        direction = {
+            'R': True,
+            'NRMSE': False,
+            'ECE': 'abs',
+            'ppNLL': False,
+            self._fitLabel(): True,
+            'tpd': False,
+            'IS_eff': True,
+            'Pareto_k': False,
+        }
+        direction = {k: v for k, v in direction.items() if k in metric_names}
+        best = self._bestIndices(rows, metric_names, direction)
+
+        table_rows = []
+        for i, r in enumerate(rows):
+            row = [r['method']]
+            for metric in metric_names:
+                val = r[metric]
+                if val is None:
+                    cell = 'NA'
+                else:
+                    cell = f'{val:.4f}'
+                    if i in best.get(metric, set()):
+                        cell = f'**{cell}**'
+                row.append(cell)
+            table_rows.append(row)
+
+        headers = ['Method'] + metric_names
+        md_table = tabulate(table_rows, headers=headers, tablefmt='pipe', stralign='right')
+        md_path = self.results_dir / 'evaluate.md'
+        md_path.write_text(f'# Evaluation Results\n\n{md_table}\n')
+
+        table_rows_tex = []
+        for i, r in enumerate(rows):
+            row = [r['method']]
+            for metric in metric_names:
+                val = r[metric]
+                if val is None:
+                    cell = 'NA'
+                else:
+                    cell = f'{val:.4f}'
+                    if i in best.get(metric, set()):
+                        cell = f'\\textbf{{{cell}}}'
+                row.append(cell)
+            table_rows_tex.append(row)
+
+        tex_table = tabulate(
+            table_rows_tex, headers=headers, tablefmt='latex_booktabs', stralign='right'
+        )
+        tex_path = self.results_dir / 'evaluate.tex'
+        tex_path.write_text(tex_table + '\n')
 
     def go(self) -> None:
         calibrator = self.calibrate() if self.cfg.conformal else None
-        batch = next(iter(self.dl_test))
+        full_batch = self.dl_test.fullBatch()
 
         # MB proposal
-        proposal_mb = self.sample(batch)
-        summary_mb = self.summary(proposal_mb, batch, calibrator=calibrator)
+        proposal_mb = self.sampleMinibatched(self.dl_test, 'MB')
+        summary_mb = self.summary(proposal_mb, full_batch, calibrator=calibrator)
 
         # NUTS proposal
-        proposal_nuts = self._fit2proposal(batch, prefix='nuts')
-        summary_nuts = self.summary(proposal_nuts, batch)
+        proposal_nuts = self._fit2proposal(full_batch, prefix='nuts')
+        summary_nuts = self.summary(proposal_nuts, full_batch)
 
         # ADVI proposal
-        proposal_advi = self._fit2proposal(batch, prefix='advi')
-        summary_advi = self.summary(proposal_advi, batch)
+        proposal_advi = self._fit2proposal(full_batch, prefix='advi')
+        summary_advi = self.summary(proposal_advi, full_batch)
 
         self.plot(
             [proposal_mb, proposal_nuts, proposal_advi],
             [summary_mb, summary_nuts, summary_advi],
             ['MB', 'NUTS', 'ADVI'],
-            batch,
+            full_batch,
         )
+
+        if self.cfg.save_tables:
+            fit_label = self._fitLabel()
+            rows = []
+            for label, summary in [
+                ('MB', summary_mb),
+                ('NUTS', summary_nuts),
+                ('ADVI', summary_advi),
+            ]:
+                rows.append(
+                    {
+                        'method': label,
+                        'R': dictMean(summary.corr),
+                        'NRMSE': dictMean(summary.nrmse),
+                        'ECE': dictMean(summary.ece),
+                        'ppNLL': summary.mnll,
+                        fit_label: summary.mfit,
+                        'tpd': summary.tpd,
+                        'IS_eff': summary.meff,
+                        'Pareto_k': summary.mk,
+                    }
+                )
+            self.saveTables(rows)
 
 
 # =============================================================================
