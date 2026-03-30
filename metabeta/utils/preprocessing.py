@@ -102,6 +102,8 @@ def rescaleData(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         'tau_rfx',
         'tau_eps',
     ):
+        if key not in data:
+            continue
         sd_y = data['sd_y'].view(-1, *([1] * (data[key].ndim - 1)))
         data[key] *= sd_y
     return data
