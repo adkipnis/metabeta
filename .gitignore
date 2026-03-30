@@ -13,3 +13,5 @@ raw
 *.pdf
 plots
 /experiments/results
+/AGENTS.md
+/CLAUDE.md
