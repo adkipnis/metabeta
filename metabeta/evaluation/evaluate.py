@@ -25,8 +25,10 @@ from metabeta.utils.evaluation import (
     concatProposalsBatch,
     dictMean,
 )
+import numpy as np
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import runIS, runSIR
+from metabeta.utils.moe import moeEstimate
 from metabeta.posthoc.conformal import Calibrator
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.plot import plotComparison
@@ -46,6 +48,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--n_samples', type=int)
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
     parser.add_argument('--conformal', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--k', type=int, default=3, help='pseudo-MoE permuted views (0=off)')
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction)
     parser.add_argument('--batch_size', type=int)
     parser.add_argument('--save_tables', action=argparse.BooleanOptionalAction)
@@ -70,6 +73,8 @@ class Evaluator:
 
         if not hasattr(self.cfg, 'batch_size'):
             self.cfg.batch_size = 8
+        if not hasattr(self.cfg, 'k'):
+            self.cfg.k = 0
         if not hasattr(self.cfg, 'save_tables'):
             self.cfg.save_tables = False
         if not hasattr(self.cfg, 'outdir'):
@@ -188,8 +193,30 @@ class Evaluator:
             proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
             if self.cfg.rescale:
                 proposal.rescale(batch['sd_y'])
+    def _sampleMoe(self, batch: dict[str, torch.Tensor], n_datasets_seen: int) -> list[Proposal]:
+        """Sample with pseudo-MoE (B=1 per dataset)."""
+        B = batch['X'].shape[0]
+        proposals = []
+        for i in range(B):
+            single = {k: v[i : i + 1] if torch.is_tensor(v) else v for k, v in batch.items()}
+            rng = np.random.default_rng(self.cfg.seed + n_datasets_seen + i)
+            proposal = moeEstimate(self.model, single, self.cfg.n_samples, self.cfg.k, rng=rng)
+            if self.cfg.rescale:
+                proposal.rescale(single['sd_y'])
+            proposals.append(proposal)
+        return proposals
+
+    @torch.inference_mode()
+    def sample(self, batch: dict[str, torch.Tensor]) -> Proposal:
+        batch = toDevice(batch, self.device)
+        t0 = time.perf_counter()
+        if self.cfg.k > 0:
+            proposals = self._sampleMoe(batch, 0)
+            proposal = concatProposalsBatch(proposals)
+        else:
+            proposal = self._sampleBatch(batch)
         t1 = time.perf_counter()
-        proposal.tpd = (t1 - t0) / batch['X'].shape[0]  # time per dataset
+        proposal.tpd = (t1 - t0) / batch['X'].shape[0]
         return proposal
 
     @torch.inference_mode()
@@ -199,16 +226,15 @@ class Evaluator:
         t0 = time.perf_counter()
         for batch in tqdm(dl, desc=f'  {label}'):
             batch = toDevice(batch, self.device)
-            if self.cfg.importance and not self.cfg.sir:
-                proposal = runIS(self.model, batch, self.cfg)
-            elif self.cfg.sir:
-                proposal = runSIR(self.model, batch, self.cfg)
+            if self.cfg.k > 0:
+                batch_proposals = self._sampleMoe(batch, n_datasets)
+                for p in batch_proposals:
+                    p.to('cpu')
+                    proposals.append(p)
             else:
-                proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
-                if self.cfg.rescale:
-                    proposal.rescale(batch['sd_y'])
-            proposal.to('cpu')
-            proposals.append(proposal)
+                proposal = self._sampleBatch(batch)
+                proposal.to('cpu')
+                proposals.append(proposal)
             n_datasets += batch['X'].shape[0]
         t1 = time.perf_counter()
 
