@@ -3,7 +3,7 @@ ds_type: 'sampled' # type of predictors [toy, flat, scm, sampled, mixed]
 source: 'all' # source dataset (ignored, unless ds_type == 'sampled')
 likelihood_family: 0 # 0 = normal, 1 = bernoulli, 2 = poisson
 max_d: 12 # maximum number of fixed effects (intercept + slopes)
-max_q: 4 # maximum number of random effects (intercept + slopes)
+max_q: 3 # maximum number of random effects (intercept + slopes)
 min_m: 5 # minimum number of groups
 max_m: 180 # maximum number of groups
 min_n: 4 # minimum number of samples per group
