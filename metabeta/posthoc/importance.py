@@ -66,6 +66,9 @@ class ImportanceSampler:
         rfx = proposal.rfx
 
         # log priors
+        pad_d = self.nu_ffx.shape[-1] - ffx.shape[-1]
+        if pad_d > 0:
+            ffx = torch.nn.functional.pad(ffx, (0, pad_d), 'constant', 0)
         lp = logProbFfx(ffx, self.nu_ffx, self.tau_ffx, self.family_ffx, self.mask_d)
 
         if self.has_sigma_eps:
