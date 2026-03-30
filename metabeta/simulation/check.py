@@ -81,20 +81,16 @@ def _printPathPreview(paths: list[Path], label: str) -> None:
     if not paths:
         return
     print(f'{label} ({len(paths)}):')
-    for p in paths[:10]:
+    for p in paths:
         print(f'  - {p}')
-    if len(paths) > 10:
-        print(f'  ... and {len(paths) - 10} more')
 
 
 def _printBrokenPreview(items: list[tuple[Path, str]], label: str) -> None:
     if not items:
         return
     print(f'{label} ({len(items)}):')
-    for p, err in items[:10]:
+    for p, err in items:
         print(f'  - {p}: {err}')
-    if len(items) > 10:
-        print(f'  ... and {len(items) - 10} more')
 
 
 def _fitCfg(d_tag: str) -> argparse.Namespace:
