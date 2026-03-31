@@ -53,8 +53,8 @@ EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
 OUT_DIR = DIR / 'results'
 FITS_DIR = OUT_DIR / 'structural_fits'
 
-DEFAULT_CONFIGS = ['small-n-sampled']
-DEFAULT_SCALES = [0.0, 0.25, 0.5, 1.0, 2.0]
+DEFAULT_CONFIGS = ['small-n-sampled', 'small-n-mixed']
+DEFAULT_SCALES = [0.0, 0.25, 0.5, 0.75, 1.0]
 
 # (display name, extractor, higher_is_better)
 METRICS = [
@@ -160,12 +160,16 @@ def perturbDataset(ds: dict[str, np.ndarray], scale: float) -> dict[str, np.ndar
 
 
 def _fitCachePath(
-    config: str, seed: int, scale: float, idx: int,
+    data_stem: str, seed: int, scale: float, idx: int,
     draws: int, tune: int, chains: int,
 ) -> Path:
-    """Deterministic cache path for a single NUTS fit."""
+    """Deterministic cache path for a single NUTS fit.
+
+    Keyed on the data file (not the eval config) so configs that share the
+    same validation data reuse cached fits.
+    """
     scale_str = f'{scale:.4f}'.replace('.', 'p')
-    return FITS_DIR / f'{config}_s{seed}_lam{scale_str}_i{idx:03d}_d{draws}_t{tune}_c{chains}.npz'
+    return FITS_DIR / f'{data_stem}_s{seed}_lam{scale_str}_i{idx:03d}_d{draws}_t{tune}_c{chains}.npz'
 
 
 def pandify(ds: dict[str, np.ndarray]) -> pd.DataFrame:
@@ -262,7 +266,7 @@ def _runNuts(
         tune=tune,
         draws=draws,
         chains=chains,
-        cores=1,
+        cores=chains,
         inference_method='pymc',
         random_seed=seed,
         return_inferencedata=True,
@@ -295,7 +299,7 @@ def _runNuts(
 
 def fitNuts(
     ds: dict[str, np.ndarray],
-    config: str,
+    data_stem: str,
     seed: int,
     scale: float,
     idx: int,
@@ -305,7 +309,7 @@ def fitNuts(
     refit: bool,
 ) -> dict[str, np.ndarray]:
     """Fit NUTS with caching.  Returns dict with ffx, sigma_rfx, rfx means."""
-    cache_path = _fitCachePath(config, seed, scale, idx, draws, tune, chains)
+    cache_path = _fitCachePath(data_stem, seed, scale, idx, draws, tune, chains)
 
     if cache_path.exists() and not refit:
         with np.load(cache_path) as f:
@@ -343,8 +347,8 @@ def sampleMetabeta(
     batch = toDevice(batch, device)
 
     proposal = model.estimate(batch, n_samples=cfg.n_samples)
-    if cfg.rescale:
-        proposal.rescale(batch['sd_y'])
+    # NOTE: do NOT rescale — NUTS fits on the same (standardized) y,
+    # so both posteriors are already in the same space.
     proposal.to('cpu')
 
     # extract posterior means, trim padding
@@ -414,8 +418,10 @@ def evaluate(
         device = setDevice(cfg.device)
         model, data_cfg = initModel(cfg, device)
 
-        # load validation set as raw numpy
-        data_fname = datasetFilename(data_cfg, 'valid')
+        # load validation set as raw numpy (use d_tag_valid if available)
+        d_tag_valid = getattr(cfg, 'd_tag_valid', cfg.d_tag)
+        valid_data_cfg = loadDataConfig(d_tag_valid)
+        data_fname = datasetFilename(valid_data_cfg, 'valid')
         data_path = METABETA / 'outputs' / 'data' / data_fname
         assert data_path.exists(), f'data not found: {data_path}'
         with np.load(data_path, allow_pickle=True) as raw:
@@ -456,10 +462,11 @@ def evaluate(
                 resetRng(model, seed)
                 mb_list.append(sampleMetabeta(model, perturbed, cfg, device))
 
-                # NUTS (cached)
+                # NUTS (cached by data file, not eval config)
+                data_stem = Path(data_fname).stem
                 nuts_list.append(fitNuts(
                     perturbed,
-                    config=config_name,
+                    data_stem=data_stem,
                     seed=seed,
                     scale=scale,
                     idx=ds_indices[j],
