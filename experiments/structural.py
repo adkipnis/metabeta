@@ -10,24 +10,19 @@ misspecified linear model — the same model NUTS fits.  Agreement between the t
 methods demonstrates that metabeta's errors are due to model choice, not the
 inference procedure.
 
-Workflow:
-    1. Load model checkpoint and validation data
-    2. For each nonlinearity scale (0 = baseline, then increasing):
-        a. Perturb y by adding scale × mean-centered X² to each dataset
-        b. Run metabeta on the perturbed data
-        c. Run NUTS on the perturbed data (per-dataset, using Bambi)
-        d. Compare posteriors: correlation and RMSE of posterior means
-    3. Save results table
+NUTS fits are cached per (config, seed, scale, dataset_index, draws, tune, chains)
+in ``results/structural_fits/``.  Re-run with ``--refit`` to recompute.
 
 Usage (from experiments/):
     uv run python structural.py
     uv run python structural.py --configs small-n-sampled
     uv run python structural.py --scales 0.0 0.25 0.5 1.0 2.0
     uv run python structural.py --max_datasets 8 --nuts_draws 500
+    uv run python structural.py --refit              # force recompute cached fits
+    uv run python structural.py --seed 123           # override config seed
 """
 
 import argparse
-import time
 import yaml
 from pathlib import Path
 
@@ -38,7 +33,6 @@ from tabulate import tabulate
 from tqdm import tqdm
 
 import bambi as bmb
-import arviz as az
 
 from metabeta.models.approximator import Approximator
 from metabeta.utils.config import (
@@ -46,19 +40,18 @@ from metabeta.utils.config import (
     loadDataConfig,
     modelFromYaml,
 )
-from metabeta.utils.dataloader import Dataloader, collateGrouped, toDevice
-from metabeta.utils.evaluation import Proposal
-from metabeta.utils.families import bambiFamilyName, hasSigmaEps, FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
+from metabeta.utils.dataloader import collateGrouped, toDevice
+from metabeta.utils.families import bambiFamilyName, FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
 from metabeta.utils.io import datasetFilename, runName, setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.padding import padToModel, unpad
-from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 
 DIR = Path(__file__).resolve().parent
 METABETA = DIR / '..' / 'metabeta'
 EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
 OUT_DIR = DIR / 'results'
+FITS_DIR = OUT_DIR / 'structural_fits'
 
 DEFAULT_CONFIGS = ['small-n-sampled']
 DEFAULT_SCALES = [0.0, 0.25, 0.5, 1.0, 2.0]
@@ -77,9 +70,11 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS, help='evaluation config names')
     parser.add_argument('--scales', nargs='+', type=float, default=DEFAULT_SCALES, help='nonlinearity scales (0 = baseline)')
     parser.add_argument('--max_datasets', type=int, default=16, help='max datasets to evaluate (NUTS is slow)')
+    parser.add_argument('--seed', type=int, default=None, help='global seed (overrides config seed)')
     parser.add_argument('--nuts_draws', type=int, default=1000, help='NUTS posterior draws per chain')
     parser.add_argument('--nuts_tune', type=int, default=2000, help='NUTS tuning steps')
     parser.add_argument('--nuts_chains', type=int, default=4, help='NUTS chains')
+    parser.add_argument('--refit', action='store_true', help='recompute NUTS fits even if cached')
     parser.add_argument('--outdir', type=str, default=str(OUT_DIR), help='output directory')
     parser.add_argument('--verbosity', type=int, default=1, help='0=warnings | 1=info | 2=debug')
     return parser.parse_args()
@@ -128,14 +123,6 @@ def initModel(cfg: argparse.Namespace, device: torch.device):
     return model, data_cfg
 
 
-def getDataloader(data_cfg: dict, partition: str, batch_size: int | None = None) -> Dataloader:
-    data_fname = datasetFilename(data_cfg, partition)
-    data_path = METABETA / 'outputs' / 'data' / data_fname
-    assert data_path.exists(), f'data not found: {data_path}'
-    sortish = batch_size is not None
-    return Dataloader(data_path, batch_size=batch_size, sortish=sortish)
-
-
 def resetRng(model: Approximator, seed: int) -> None:
     model.posterior_g.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
     model.posterior_l.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
@@ -168,8 +155,17 @@ def perturbDataset(ds: dict[str, np.ndarray], scale: float) -> dict[str, np.ndar
 
 
 # ---------------------------------------------------------------------------
-# NUTS fitting (lightweight, per-dataset, adapted from simulation/fit.py)
+# NUTS fitting with caching
 # ---------------------------------------------------------------------------
+
+
+def _fitCachePath(
+    config: str, seed: int, scale: float, idx: int,
+    draws: int, tune: int, chains: int,
+) -> Path:
+    """Deterministic cache path for a single NUTS fit."""
+    scale_str = f'{scale:.4f}'.replace('.', 'p')
+    return FITS_DIR / f'{config}_s{seed}_lam{scale_str}_i{idx:03d}_d{draws}_t{tune}_c{chains}.npz'
 
 
 def pandify(ds: dict[str, np.ndarray]) -> pd.DataFrame:
@@ -246,17 +242,14 @@ def priorize(ds: dict[str, np.ndarray]) -> dict[str, bmb.Prior]:
     return priors
 
 
-def fitNuts(
+def _runNuts(
     ds: dict[str, np.ndarray],
-    draws: int = 1000,
-    tune: int = 2000,
-    chains: int = 4,
-    seed: int = 42,
+    draws: int,
+    tune: int,
+    chains: int,
+    seed: int,
 ) -> dict[str, np.ndarray]:
-    """Fit a single dataset with NUTS and return posterior means.
-
-    Returns dict with keys: ffx (d,), sigma_rfx (q,), rfx (m, q).
-    """
+    """Fit a single dataset with NUTS and return posterior means."""
     likelihood_family = int(ds.get('likelihood_family', 0))
     df = pandify(ds)
     form = formulate(ds)
@@ -275,31 +268,54 @@ def fitNuts(
         return_inferencedata=True,
     )
 
-    d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
+    d, q = int(ds['d']), int(ds['q'])
 
-    # extract posterior samples and compute means
     def _extract(name: str) -> np.ndarray:
         x = trace.posterior[name].to_numpy()
         return x.reshape(-1, *x.shape[2:])
 
-    ffx_samples = np.stack([_extract('Intercept' if j == 0 else f'x{j}') for j in range(d)], axis=-1)
-    ffx_mean = ffx_samples.mean(axis=0)  # (d,)
+    ffx_mean = np.stack(
+        [_extract('Intercept' if j == 0 else f'x{j}') for j in range(d)], axis=-1
+    ).mean(axis=0)
 
-    sigma_rfx_samples = np.stack(
+    sigma_rfx_mean = np.stack(
         [_extract('1|i_sigma' if j == 0 else f'x{j}|i_sigma') for j in range(q)], axis=-1
-    )
-    sigma_rfx_mean = sigma_rfx_samples.mean(axis=0)  # (q,)
+    ).mean(axis=0)
 
-    rfx_samples = np.stack(
+    rfx_mean = np.stack(
         [_extract('1|i' if j == 0 else f'x{j}|i') for j in range(q)], axis=-1
-    )  # (S, m, q)
-    rfx_mean = rfx_samples.mean(axis=0)  # (m, q)
+    ).mean(axis=0)
 
     return {
         'ffx': ffx_mean,
         'sigma_rfx': sigma_rfx_mean,
         'rfx': rfx_mean,
     }
+
+
+def fitNuts(
+    ds: dict[str, np.ndarray],
+    config: str,
+    seed: int,
+    scale: float,
+    idx: int,
+    draws: int,
+    tune: int,
+    chains: int,
+    refit: bool,
+) -> dict[str, np.ndarray]:
+    """Fit NUTS with caching.  Returns dict with ffx, sigma_rfx, rfx means."""
+    cache_path = _fitCachePath(config, seed, scale, idx, draws, tune, chains)
+
+    if cache_path.exists() and not refit:
+        with np.load(cache_path) as f:
+            return dict(f)
+
+    result = _runNuts(ds, draws=draws, tune=tune, chains=chains, seed=seed)
+
+    FITS_DIR.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(cache_path, **result)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +372,7 @@ def comparePosteriors(
 ) -> dict[str, float]:
     """Compare metabeta and NUTS posterior means pooled across datasets.
 
-    Concatenates all posterior means, then computes correlation and RMSE
+    Concatenates all posterior means, then computes correlation
     per parameter type.
     """
     out = {}
@@ -367,7 +383,6 @@ def comparePosteriors(
             out[f'corr_{key}'] = np.nan
         else:
             out[f'corr_{key}'] = float(np.corrcoef(a, b)[0, 1])
-        out[f'rmse_{key}'] = float(np.sqrt(np.mean((a - b) ** 2)))
     return out
 
 
@@ -380,9 +395,11 @@ def evaluate(
     configs: list[str],
     scales: list[float],
     max_datasets: int,
+    seed_override: int | None,
     nuts_draws: int,
     nuts_tune: int,
     nuts_chains: int,
+    refit: bool,
 ) -> list[dict]:
     rows = []
 
@@ -392,7 +409,8 @@ def evaluate(
         print(f'{"=" * 60}')
 
         cfg = loadEvalConfig(config_name, plot=False)
-        setSeed(cfg.seed)
+        seed = seed_override if seed_override is not None else cfg.seed
+        setSeed(seed)
         device = setDevice(cfg.device)
         model, data_cfg = initModel(cfg, device)
 
@@ -405,9 +423,13 @@ def evaluate(
 
         B = len(raw_batch['d'])
 
-        # extract and unpad individual datasets (skip those exceeding model capacity)
+        # deterministic dataset selection
+        rng = np.random.default_rng(seed)
+        indices = rng.permutation(B)
+
         datasets = []
-        for i in range(B):
+        ds_indices = []  # original batch indices, used for cache keys
+        for i in indices:
             if len(datasets) >= max_datasets:
                 break
             ds = {k: v[i] for k, v in raw_batch.items()}
@@ -416,6 +438,7 @@ def evaluate(
                 continue
             ds = unpad(ds, sizes)
             datasets.append(ds)
+            ds_indices.append(int(i))
 
         print(f'Using {len(datasets)}/{B} validation datasets (max_d={cfg.max_d}, max_q={cfg.max_q})')
 
@@ -425,21 +448,25 @@ def evaluate(
 
             mb_list = []
             nuts_list = []
-            for i, ds in enumerate(tqdm(datasets, desc=f'  {label}')):
+            for j, ds in enumerate(tqdm(datasets, desc=f'  {label}')):
                 perturbed = perturbDataset(ds, scale)
 
                 # metabeta
-                setSeed(cfg.seed)
-                resetRng(model, cfg.seed)
+                setSeed(seed)
+                resetRng(model, seed)
                 mb_list.append(sampleMetabeta(model, perturbed, cfg, device))
 
-                # NUTS
+                # NUTS (cached)
                 nuts_list.append(fitNuts(
                     perturbed,
+                    config=config_name,
+                    seed=seed,
+                    scale=scale,
+                    idx=ds_indices[j],
                     draws=nuts_draws,
                     tune=nuts_tune,
                     chains=nuts_chains,
-                    seed=cfg.seed,
+                    refit=refit,
                 ))
 
             # compare pooled posterior means
@@ -545,15 +572,19 @@ if __name__ == '__main__':
     print(f'Configs: {args.configs}')
     print(f'Scales: {args.scales}')
     print(f'Max datasets: {args.max_datasets}')
+    print(f'Seed: {args.seed or "from config"}')
     print(f'NUTS: {args.nuts_draws} draws, {args.nuts_tune} tune, {args.nuts_chains} chains')
+    print(f'Refit: {args.refit}')
 
     rows = evaluate(
         args.configs,
         args.scales,
         args.max_datasets,
+        args.seed,
         args.nuts_draws,
         args.nuts_tune,
         args.nuts_chains,
+        args.refit,
     )
 
     print(f'\n{formatTable(rows)}')
