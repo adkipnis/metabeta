@@ -389,6 +389,90 @@ def _llPoisson(
 _LIKELIHOOD_LL = (_llNormal, _llBernoulli, _llPoisson)
 
 
+def logMarginalLikelihoodNormal(
+    ffx: torch.Tensor,        # (b, s, d)
+    sigma_rfx: torch.Tensor,  # (b, s, q)
+    sigma_eps: torch.Tensor,  # (b, s)
+    y: torch.Tensor,          # (b, m, n, 1)
+    X: torch.Tensor,          # (b, m, n, d)
+    Z: torch.Tensor,          # (b, m, n, q)
+    mask_n: torch.Tensor,     # (b, m, n, 1)
+    mask_m: torch.Tensor,     # (b, m, 1)
+) -> torch.Tensor:
+    """Marginal log-likelihood for Normal, with rfx integrated out analytically.
+
+    Exploits the Woodbury identity to work with a q×q system per group instead
+    of the n_i×n_i marginal covariance directly:
+
+        V_i = Z_i Σ_rfx Z_i^T + σ²_eps I_{n_i}
+        M_i = Σ_rfx^{-1} + Z_i^T Z_i / σ²_eps           (q×q)
+        log det V_i = log det M_i + log det Σ_rfx + n_i log σ²_eps
+        r_i^T V_i^{-1} r_i = (‖r_i‖² − h_i^T M_i^{-1} h_i / σ²_eps) / σ²_eps
+
+    where r_i = y_i − X_i β and h_i = Z_i^T r_i.
+
+    Padded q-dimensions (inactive rfx) contribute zero net log-det because the
+    Z_i column is zero, making the padded diagonal of M_i equal to 1/σ²_rfx,
+    which exactly cancels the corresponding term in log det Σ_rfx.
+
+    Returns (b, s).
+    """
+    # precompute ZtZ — independent of samples (b, m, q, q)
+    Z_m = Z * mask_n  # zero out padded observations
+    ZtZ = torch.einsum('bmnq,bmnr->bmqr', Z_m, Z_m)
+
+    # residuals and group-level sufficient statistics
+    mu = torch.einsum('bmnd,bsd->bmns', X, ffx)   # (b, m, n, s)
+    r = (y - mu) * mask_n                          # (b, m, n, s)
+    rtr = r.pow(2).sum(dim=2)                      # (b, m, s): ‖r_i‖²
+    h = torch.einsum('bmnq,bmns->bmsq', Z_m, r)   # (b, m, s, q): Z_i^T r_i
+
+    # valid observations per group
+    n_i = mask_n.squeeze(-1).sum(dim=-1).float()   # (b, m)
+
+    # clamp sigma_rfx away from zero: flow can underflow to 0, which makes
+    # both Sigma_inv and log(sigma_rfx) numerically degenerate.
+    sigma_rfx = sigma_rfx.clamp(min=1e-6)
+
+    # M_i = Σ_rfx^{-1} + Z_i^T Z_i / σ²_eps  →  (b, m, s, q, q)
+    s2e = sigma_eps.pow(2)                                          # (b, s)
+    s2r_inv = 1.0 / sigma_rfx.pow(2)                               # (b, s, q)
+    Sigma_inv = torch.diag_embed(s2r_inv).unsqueeze(1)             # (b, 1, s, q, q)
+    M = Sigma_inv + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]  # (b, m, s, q, q)
+
+    # Cholesky factorisation of M — jitter diagonal for numerical stability.
+    # Use cholesky_ex to avoid hard failures; bad elements get -inf log-likelihood.
+    jitter = 1e-6 * torch.eye(M.shape[-1], dtype=M.dtype, device=M.device)
+    chol_M, info = torch.linalg.cholesky_ex(M + jitter)            # (b, m, s, q, q)
+    chol_ok = (info == 0)                                           # (b, m, s)
+
+    log_det_M = 2.0 * chol_M.diagonal(dim1=-2, dim2=-1).log().sum(-1)  # (b, m, s)
+    log_det_M = torch.where(chol_ok, log_det_M, log_det_M.new_tensor(torch.inf))
+
+    # h^T M^{-1} h via Cholesky solve
+    M_inv_h = torch.cholesky_solve(h.unsqueeze(-1), chol_M).squeeze(-1)  # (b, m, s, q)
+    hMh = (h * M_inv_h).sum(-1)                                    # (b, m, s)
+
+    # log det V_i = log det M_i + log det Σ_rfx + n_i log σ²_eps
+    log_det_Sigma = 2.0 * sigma_rfx.log().sum(-1)   # (b, s); padded dims cancel with M
+    log_s2e = s2e.log()                              # (b, s)
+    log_det_V = (
+        log_det_M
+        + log_det_Sigma[:, None, :]
+        + n_i[:, :, None] * log_s2e[:, None, :]
+    )  # (b, m, s)
+
+    # quadratic form
+    s2e_bms = s2e[:, None, :]                        # (b, 1, s)
+    quad = (rtr - hMh / s2e_bms) / s2e_bms          # (b, m, s)
+
+    # per-group log-likelihood
+    ll_i = -0.5 * (n_i[:, :, None] * math.log(2.0 * math.pi) + log_det_V + quad)
+
+    # sum over valid groups
+    return (ll_i * mask_m).sum(dim=1)  # (b, s)
+
+
 def logLikelihood(
     ffx: torch.Tensor,  # (b, s, d)
     sigma_eps: torch.Tensor,  # (b, s)
