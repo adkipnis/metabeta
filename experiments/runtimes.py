@@ -58,7 +58,7 @@ DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixe
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Runtime comparison: metabeta vs NUTS vs ADVI.')
     parser.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS, help='evaluation config names (YAML files in evaluation/configs/)')
-    parser.add_argument('--k', type=int, default=7, help='number of extra MoE permuted views (0 = no MoE)')
+    parser.add_argument('--k', type=int, default=0, help='number of extra MoE permuted views (0 = no MoE)')
     parser.add_argument('--max_datasets', type=int, default=None, help='max datasets per fit file (for quick testing)')
     parser.add_argument('--outdir', type=str, default=str(OUT_DIR), help='output directory for tables')
     parser.add_argument('--verbosity', type=int, default=1, help='0=warnings | 1=info | 2=debug')
