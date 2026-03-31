@@ -41,7 +41,7 @@ def setup() -> argparse.Namespace:
     """Parse command line arguments for evaluation."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
     parser.add_argument(
-        '--name', type=str, default='small-p-mixed', help='load configs/{name}.yaml'
+        '--name', type=str, default='small-p-sampled', help='load configs/{name}.yaml'
     )
     parser.add_argument('--m_tag', type=str)
     parser.add_argument('--r_tag', type=str)
@@ -51,7 +51,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--n_samples', type=int)
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
     parser.add_argument('--conformal', action=argparse.BooleanOptionalAction)
-    parser.add_argument('--k', type=int, default=3, help='pseudo-MoE permuted views (0=off)')
+    parser.add_argument('--k', type=int, default=7, help='pseudo-MoE permuted views (0=off)')
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction)
     parser.add_argument('--batch_size', type=int)
     parser.add_argument('--save_tables', action=argparse.BooleanOptionalAction, default=None)
@@ -288,7 +288,7 @@ class Evaluator:
             return
         if self.cfg.rescale:
             batch = rescaleData(batch)
-        plotComparison(summaries, proposals, labels, batch, plot_dir=self.plot_dir, show=True)
+        plotComparison(summaries, proposals, labels, batch, plot_dir=self.plot_dir, show=False)
 
     def testrun(self) -> None:
         calibrator = self.calibrate() if self.cfg.conformal else None
