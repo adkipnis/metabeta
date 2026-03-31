@@ -1,7 +1,7 @@
 # Rebuttals Figure 1 - Performance for Bernoulli models
 ![Figure 1](fig1.png)
 
-Modeling assumption: $y \sim Binomial(1, sigmoid(\eta))$ with $\eta_i = X\beta + Z_i \alpha_i$.
+Modeling assumption: $y \sim Bernoulli(sigmoid(\eta))$ with $\eta_i = X\beta + Z_i \alpha_i$. Training was performed on the [small model config](../../metabeta/models/configs/small.yaml).
 
 Comparison against NUTS and ADVI on semi-synthetic test set (predictors sampled from real datasets, parameters simulated). Columns (from left to right):
 
