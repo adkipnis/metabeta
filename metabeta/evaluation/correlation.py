@@ -93,8 +93,16 @@ def evaluateCorrelation(
     corr_samples = posteriorCorrelation(rfx, mask_m)  # (b, s, q, q)
     corr_mean = corr_samples.mean(dim=1)  # (b, q, q)
 
+    # sample correlation from true rfx (oracle baseline)
+    corr_sample = posteriorCorrelation(data['rfx'].unsqueeze(2), mask_m)[:, 0]  # (b, q, q)
+
     # upper-triangular indices (unique pairs only)
     ri, ci = torch.triu_indices(q, q, offset=1)
+
+    # posterior credible interval for each pair
+    corr_samples_pairs = corr_samples[:, :, ri, ci]  # (b, s, n_pairs)
+    post_q025 = corr_samples_pairs.quantile(0.025, dim=1)  # (b, n_pairs)
+    post_q975 = corr_samples_pairs.quantile(0.975, dim=1)  # (b, n_pairs)
 
     # upper-tri MAE
     diff = (corr_mean - corr_true).abs()
@@ -143,15 +151,24 @@ def evaluateCorrelation(
     corr_q025 = torch.as_tensor(q025, device=rfx.device, dtype=rfx.dtype)
     corr_q975 = torch.as_tensor(q975, device=rfx.device, dtype=rfx.dtype)
 
+    n_off = len(ri)
+    eta_rfx_pairs = eta_rfx.unsqueeze(-1).expand(b_size, n_off)  # (b, n_pairs)
+    m_pairs = ms.unsqueeze(-1).expand(b_size, n_off)  # (b, n_pairs)
+
     return {
         'corr_mean': corr_mean[:, ri, ci],
         'corr_true': corr_true[:, ri, ci],
+        'corr_sample': corr_sample[:, ri, ci],
         'corr_q025': corr_q025,
         'corr_q975': corr_q975,
+        'post_q025': post_q025,
+        'post_q975': post_q975,
         'offdiag_mae': offdiag_mae,
         'percentile': percentiles,
         'percentile_pairs': percentile_pairs,
         'eta_rfx': eta_rfx,
+        'eta_rfx_pairs': eta_rfx_pairs,
+        'm_pairs': m_pairs,
     }
 
 
@@ -183,3 +200,27 @@ def summarizeCorrelation(
         out['false_positive_rate'] = (pct[uncorrelated] > threshold).float().mean().item()
         # out['false_positive_rate'] = (results['corr_mean'][uncorrelated] > threshold).float().mean().item()
     return out
+
+
+def mergeCorrelationResults(results_list: list[dict]) -> dict:
+    """Merge evaluateCorrelation outputs from multiple configs/batches.
+
+    All (b, n_pairs) tensors are flattened to 1D and concatenated, so configs
+    with different max_q (and therefore different n_pairs) are handled correctly.
+    The (b,) tensors eta_rfx and offdiag_mae/percentile are also concatenated.
+    """
+    # pair-level keys: (b, n_pairs) → flatten to 1D before cat
+    pair_keys = [
+        'corr_mean', 'corr_true', 'corr_sample',
+        'corr_q025', 'corr_q975', 'post_q025', 'post_q975',
+        'eta_rfx_pairs', 'm_pairs', 'percentile_pairs',
+    ]
+    # dataset-level keys: (b,) → cat directly
+    dataset_keys = ['eta_rfx', 'offdiag_mae', 'percentile']
+
+    merged: dict = {}
+    for key in pair_keys:
+        merged[key] = torch.cat([r[key].reshape(-1) for r in results_list])
+    for key in dataset_keys:
+        merged[key] = torch.cat([r[key] for r in results_list])
+    return merged
