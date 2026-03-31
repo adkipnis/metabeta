@@ -22,3 +22,10 @@ All tables and figures referenced in the reviewer responses are located in this 
 | [Fig. 5](fig5) | Empirical distribution of model configurations in 100 published mixed-effects papers | Response UJDm (point 4) |
 
 
+
+### Rebuttal Equations
+
+| ID | Content | Referenced in |
+|---|---|---|
+| [Eq. 1](eq1) | Decomposition of the expected NLL into irreducible posterior entropy and expected KL divergence | Response UJDm (Q2) |
+
