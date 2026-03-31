@@ -17,8 +17,8 @@ All tables and figures referenced in the reviewer responses are located in this 
 |---|---|---|
 | [Fig. 1](fig1) | Bernoulli model performance (logistic link function)| Response 6RHU (point 1.1) |
 | [Fig. 2](fig2) | Poisson model performance (log link function) | Response 6RHU (point 1.1) |
-| Fig. 3 | Correlated random effects: learned vs. true sample correlation structure in local posterior | Response 6RHU (point 1.3) |
-| Fig. 4 | Systematic runtime comparison across 2000 simulated datasets spanning full range of d, q, m, n | Response v7s8 (Q4), Response UJDm (point 3) |
-| Fig. 5 | Empirical distribution of model sizes (d, q) from automated analysis of 100 published mixed-effects papers | Response UJDm (point 4) |
+| Fig. 3 | Correlated random effects: | Response 6RHU (point 1.3) |
+| [Fig. 4](fig4) | Systematic runtime comparison | Response v7s8 (Q4), Response UJDm (point 3) |
+| [Fig. 5](fig5) | Empirical distribution of model configurations in 100 published mixed-effects papers | Response UJDm (point 4) |
 
 
