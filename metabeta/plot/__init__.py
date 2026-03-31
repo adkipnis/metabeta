@@ -1,5 +1,5 @@
 from .comparison import plotComparison
-from .correlation import plotCorrelation, plotRfxCorrelationRecovery
+from .correlation import plotCorrelation, plotRfxCorrelationFromResults, plotRfxCorrelationRecovery
 from .coverage import plotCoverage
 from .dataset import plotDataset
 from .parameters import plotParameters
