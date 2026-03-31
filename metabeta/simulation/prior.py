@@ -67,6 +67,61 @@ def hypersample(
     return out
 
 
+def bambiDefaultPriors(
+    d: int,
+    q: int,
+    likelihood_family: int = 0,
+) -> dict[str, np.ndarray]:
+    """Replicate bambi's default priors for a hierarchical regression model.
+
+    Assumes predictors are standardized (mean 0, sd 1) and, for gaussian
+    likelihood, y is normalized to unit sd.  Under these conditions bambi
+    assigns (verified against bambi 0.15):
+
+        Gaussian:
+            Intercept/slopes  ~ Normal(0, 2.5)
+            sigma_rfx         ~ HalfNormal(2.5)
+            sigma_eps          ~ HalfStudentT(nu=4, sigma=1)
+        Bernoulli:
+            Intercept          ~ Normal(0, 1.5)
+            Slopes             ~ Normal(0, 1.0)
+            sigma_rfx          ~ HalfNormal(2.5)
+        Poisson:
+            Intercept/slopes   ~ Normal(0, 2.5)
+            sigma_rfx          ~ HalfNormal(2.5)
+        corr_rfx               ~ LKJ(1)
+    """
+    out: dict[str, np.ndarray] = {}
+    out['likelihood_family'] = np.array(likelihood_family)
+
+    # location / scale for fixed effects (Normal family = 0)
+    out['nu_ffx'] = np.zeros(d)
+    if likelihood_family == 1:  # bernoulli
+        tau = np.full(d, 1.0)
+        tau[0] = 1.5  # intercept gets wider prior on logit scale
+    else:  # gaussian / poisson
+        tau = np.full(d, 2.5)
+    out['tau_ffx'] = tau
+
+    # scale for random-effect SDs (HalfNormal family = 0)
+    out['tau_rfx'] = np.full(q, 2.5)
+
+    # residual SD (gaussian only) — bambi uses HalfStudentT(nu=4, sigma=1)
+    if hasSigmaEps(likelihood_family):
+        out['tau_eps'] = np.array(1.0)
+
+    # LKJ(1) — uniform over correlations
+    out['eta_rfx'] = np.array(1.0) if q > 1 else np.array(0.0)
+
+    # prior family indices
+    out['family_ffx'] = np.array(0)  # Normal
+    out['family_sigma_rfx'] = np.array(0)  # HalfNormal (bambi default)
+    if hasSigmaEps(likelihood_family):
+        out['family_sigma_eps'] = np.array(1)  # HalfStudentT (nu=STUDENT_DF in code)
+
+    return out
+
+
 @dataclass
 class Prior:
     """class for drawing parameters from prior"""
