@@ -1,4 +1,6 @@
 # Rebuttals Figure 1
+![Figure 1](fig1.png)
+
 Performance comparison against NUTS and ADVI on semi-synthetic test set (predictors sampled from real datasets, parameters simulated). Columns (from left to right):
 
 (1) Parameter recovery from posterior means (separately for fixed effects, variance parameters, random effects). *r* is the Pearson correlation, *NRMSE* is the normalized root mean squared error (RMSE divided by observed standard deviation of the ground truth parameter).
