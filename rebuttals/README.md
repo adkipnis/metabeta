@@ -18,11 +18,10 @@ All tables and figures referenced in the reviewer responses are located in this 
 
 | ID | Content | Referenced in |
 |---|---|---|
-| Rebuttal Fig. 1 | Generalized likelihoods (Bernoulli): parameter recovery and coverage vs. NUTS | Response 6RHU (point 1.1) |
-| Rebuttal Fig. 2 | Generalized likelihoods (Poisson): parameter recovery and coverage vs. NUTS | Response 6RHU (point 1.1) |
+| Rebuttal Fig. 1 | Generalized likelihoods (Bernoulli): parameter recovery and coverage vs. NUTS and ADVI | Response 6RHU (point 1.1) |
+| Rebuttal Fig. 2 | Generalized likelihoods (Poisson): parameter recovery and coverage vs. NUTS ans ADVI | Response 6RHU (point 1.1) |
 | Rebuttal Fig. 3 | Correlated random effects: learned vs. true sample correlation structure in local posterior | Response 6RHU (point 1.3) |
 | Rebuttal Fig. 4 | Systematic runtime comparison across 2000 simulated datasets spanning full range of d, q, m, n | Response v7s8 (Q4), Response UJDm (point 3) |
 | Rebuttal Fig. 5 | Empirical distribution of model sizes (d, q) from automated analysis of 100 published mixed-effects papers | Response UJDm (point 4) |
-| Rebuttal Fig. 6 | NUTS convergence experiment: agreement between metabeta and NUTS posteriors as a function of chain length | Response UJDm (point 8) |
 
 
