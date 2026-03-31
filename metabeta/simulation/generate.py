@@ -10,12 +10,15 @@ import numpy as np
 
 from metabeta.simulation import (
     hypersample,
+    bambiDefaultPriors,
     Prior,
     Synthesizer,
     Scammer,
     Emulator,
     Simulator,
 )
+from metabeta.simulation.emulator import Subsampler
+from metabeta.utils.families import hasSigmaEps
 from metabeta.utils.io import datasetFilename
 from metabeta.utils.sampling import truncLogUni
 from metabeta.utils.padding import aggregate
@@ -191,6 +194,44 @@ class Generator:
         ds_type = cfg.ds_type
         if ds_type == 'mixed':
             ds_type = rng.choice(['flat', 'sampled', 'scm'])
+
+        if ds_type == 'observed':
+            subsampler = Subsampler(
+                rng,
+                source=cfg.source,
+                likelihood_family=likelihood_family,
+                min_m=cfg.min_m,
+                min_n=cfg.min_n,
+                max_n=cfg.max_n,
+            )
+            obs = subsampler.sample(d, ns)
+
+            # bambi-default hyperparameters
+            m = len(obs['ns'])
+            n = len(obs['y'])
+            hyperparams = bambiDefaultPriors(d, q, likelihood_family)
+
+            # NaN placeholders for ground-truth parameters
+            out = {
+                'ffx': np.full(d, np.nan),
+                'sigma_rfx': np.full(q, np.nan),
+                'corr_rfx': np.full((q, q), np.nan),
+                'rfx': np.full((m, q), np.nan),
+                **hyperparams,
+                'y': obs['y'],
+                'X': obs['X'],
+                'groups': obs['groups'],
+                'm': np.array(m),
+                'n': np.array(n),
+                'ns': obs['ns'],
+                'd': np.array(d),
+                'q': np.array(q),
+                'sd_y': obs['sd_y'],
+            }
+            if hasSigmaEps(likelihood_family):
+                out['sigma_eps'] = np.array(np.nan)
+                out['r_squared'] = np.array(np.nan)
+            return out
 
         if ds_type in ['toy', 'flat']:
             design = Synthesizer(rng, toy=(ds_type == 'toy'))
