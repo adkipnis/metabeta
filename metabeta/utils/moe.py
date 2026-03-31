@@ -103,6 +103,34 @@ def _splitProposal(proposal: Proposal, n: int) -> list[Proposal]:
     return proposals
 
 
+def multiCheckpointEstimate(
+    models: list[Approximator],
+    batch: dict[str, torch.Tensor],
+    n_samples: int,
+    k: int = 0,
+    rng: np.random.Generator | None = None,
+) -> Proposal:
+    """True MoE: run multiple checkpoints and join their proposals.
+
+    Each model independently produces n_samples posterior samples for batch
+    (optionally with k permuted views via pseudo-MoE). All proposals are
+    concatenated, yielding len(models) * (1+k) * n_samples total samples.
+
+    Args:
+        models: Trained Approximator models in eval mode. Must share the same
+            d_ffx and d_rfx dimensions (compatible with batch).
+        batch: Batch of datasets. For k>0, must be B=1.
+        n_samples: Posterior samples per model per view.
+        k: Additional permuted views per model (0 = plain forward pass each).
+        rng: Random number generator for permutations.
+
+    Returns:
+        Joined proposal with len(models) * (1+k) * n_samples total samples.
+    """
+    proposals = [moeEstimate(model, batch, n_samples, k, rng=rng) for model in models]
+    return joinProposals(proposals)
+
+
 def moeEstimate(
     model: Approximator,
     batch: dict[str, torch.Tensor],
