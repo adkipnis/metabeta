@@ -10,7 +10,6 @@ raw
 *.npz
 *.rdata
 *.Rhistory
-*.pdf
 plots
 /experiments/results
 /AGENTS.md
