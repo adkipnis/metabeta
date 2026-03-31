@@ -4,13 +4,13 @@ from metabeta.simulation import Prior, Synthesizer, Emulator, hypersample, simul
 from metabeta.utils.sampling import sampleCounts
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope='function')
 def rng():
     # fresh RNG per test for reproducibility
     return np.random.default_rng(1)
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope='function')
 def dims():
     # small but nontrivial
     n = 80
@@ -20,14 +20,14 @@ def dims():
     return n, m, d, q
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope='function')
 def ns(rng, dims):
     n, m, _, _ = dims
     ns = sampleCounts(rng, n, m)
     return np.asarray(ns, dtype=int)
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope='function')
 def prior(rng, dims):
     _, _, d, q = dims
     hyperparams = hypersample(rng, d, q)
@@ -36,21 +36,21 @@ def prior(rng, dims):
 
 def _basic_dataset_assertions(dataset: dict, d: int, q: int):
     # required keys
-    for k in ["X", "groups", "y", "m", "n", "ns", "d", "q", "sigma_eps", "ffx", "rfx"]:
-        assert k in dataset, f"missing key {k}"
+    for k in ['X', 'groups', 'y', 'm', 'n', 'ns', 'd', 'q', 'sigma_eps', 'ffx', 'rfx']:
+        assert k in dataset, f'missing key {k}'
 
-    X = dataset["X"]
-    y = dataset["y"]
-    groups = dataset["groups"]
-    ns = dataset["ns"]
+    X = dataset['X']
+    y = dataset['y']
+    groups = dataset['groups']
+    ns = dataset['ns']
 
-    assert isinstance(dataset["m"], np.ndarray)
-    assert isinstance(dataset["n"], np.ndarray)
-    assert isinstance(dataset["d"], np.ndarray)
-    assert isinstance(dataset["q"], np.ndarray)
+    assert isinstance(dataset['m'], np.ndarray)
+    assert isinstance(dataset['n'], np.ndarray)
+    assert isinstance(dataset['d'], np.ndarray)
+    assert isinstance(dataset['q'], np.ndarray)
 
-    m = int(dataset["m"])
-    n = int(dataset["n"])
+    m = int(dataset['m'])
+    n = int(dataset['n'])
 
     assert X.shape == (n, d)
     assert y.shape == (n,)
@@ -62,8 +62,8 @@ def _basic_dataset_assertions(dataset: dict, d: int, q: int):
     assert groups.max() < m
 
     # rfx should match m and q
-    assert dataset["rfx"].shape == (m, q)
-    assert dataset["ffx"].shape == (d,)
+    assert dataset['rfx'].shape == (m, q)
+    assert dataset['ffx'].shape == (d,)
 
     # y is normalized to unit-ish std (guarded by eps)
     ystd = float(np.std(y))
@@ -98,7 +98,7 @@ def test_simulator_synthesizer_end_to_end(rng, prior, ns, dims):
     _basic_dataset_assertions(dataset, d=d, q=q)
 
     # population R^2 should be in [0, 1]
-    assert 0.0 <= float(dataset["r_squared"]) <= 1.0
+    assert 0.0 <= float(dataset['r_squared']) <= 1.0
 
 
 def test_simulator_reproducible_given_seed(dims, ns):
@@ -124,12 +124,12 @@ def test_simulator_reproducible_given_seed(dims, ns):
     ds2 = sim2.sample()
 
     # exact equality should hold for deterministic RNG use
-    assert np.allclose(ds1["X"], ds2["X"])
-    assert np.allclose(ds1["y"], ds2["y"])
-    assert np.array_equal(ds1["groups"], ds2["groups"])
-    assert np.allclose(ds1["ffx"], ds2["ffx"])
-    assert np.allclose(ds1["rfx"], ds2["rfx"])
-    assert np.isclose(float(ds1["sigma_eps"]), float(ds2["sigma_eps"]))
+    assert np.allclose(ds1['X'], ds2['X'])
+    assert np.allclose(ds1['y'], ds2['y'])
+    assert np.array_equal(ds1['groups'], ds2['groups'])
+    assert np.allclose(ds1['ffx'], ds2['ffx'])
+    assert np.allclose(ds1['rfx'], ds2['rfx'])
+    assert np.isclose(float(ds1['sigma_eps']), float(ds2['sigma_eps']))
 
 
 def test_emulator_caps_m_when_n_exceeds_source(rng):
@@ -167,9 +167,9 @@ def test_simulator_emulator_updates_ns_if_present(rng, prior, ns, dims):
     _, _, d, q = dims
 
     try:
-        design = Emulator(rng, "math")
+        design = Emulator(rng, 'math__grp_group')
     except Exception as e:
-        pytest.skip(f"Emulator not available in test env: {e}")
+        pytest.skip(f'Emulator not available in test env: {e}')
 
     sim = Simulator(rng=rng, prior=prior, design=design, ns=ns, plot=False)
     ds = sim.sample()
@@ -177,6 +177,6 @@ def test_simulator_emulator_updates_ns_if_present(rng, prior, ns, dims):
     _basic_dataset_assertions(ds, d=d, q=q)
 
     # If emulator returns ns, Simulator should store it consistently in the output
-    assert "ns" in ds
-    assert len(ds["ns"]) == ds["m"] # type: ignore
-    assert int(ds["n"]) == int(np.sum(ds["ns"]))
+    assert 'ns' in ds
+    assert len(ds['ns']) == ds['m']   # type: ignore
+    assert int(ds['n']) == int(np.sum(ds['ns']))
