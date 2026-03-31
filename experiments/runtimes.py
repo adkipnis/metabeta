@@ -51,7 +51,7 @@ OUT_DIR = DIR / 'results'
 
 LIKELIHOOD_NAMES = {0: 'normal', 1: 'bernoulli', 2: 'poisson'}
 
-DEFAULT_CONFIGS = ['small-n-sampled']
+DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed', 'large-n-mixed']
 
 
 # fmt: off
