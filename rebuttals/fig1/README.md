@@ -1,7 +1,8 @@
 # Rebuttals Figure 1 - Performance for Bernoulli models
 ![Figure 1](fig1.png)
 
-Modeling assumption: $y \sim Binomial(1, sigmoid(\eta))$ with $\eta_i = X\beta + Z_i \alpha_i$
+Modeling assumption: $y \sim Binomial(1, sigmoid(\eta))$ with $\eta_i = X\beta + Z_i \alpha_i$.
+
 Comparison against NUTS and ADVI on semi-synthetic test set (predictors sampled from real datasets, parameters simulated). Columns (from left to right):
 
 (1) Parameter recovery from posterior means (separately for fixed effects, variance parameters, random effects). *r* is the Pearson correlation, *NRMSE* is the normalized root mean squared error (RMSE divided by observed standard deviation of the ground truth parameter).
