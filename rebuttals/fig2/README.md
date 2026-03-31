@@ -1,7 +1,7 @@
-# Rebuttals Figure 1 - Performance for Poisson models
+# Rebuttals Figure 2 - Performance for Poisson models
 ![Figure 2](fig2.png)
 
-Modeling assumption: $y \sim Poisson(\exp(\eta))$ with $\eta_i = X\beta + Z_i \alpha_i$. Training was performed on the [small model config](../../metabeta/models/configs/small.yaml).
+Modeling assumption: $y \sim Poisson(\exp(\eta))$ with $\eta_i = X\beta + Z_i \alpha_i$. Training was performed on the [small model config](../../metabeta/models/configs/small.yaml). No importance sampling or conformal prediction applied.
 
 Comparison against NUTS and ADVI on semi-synthetic test set (predictors sampled from real datasets, parameters simulated). Columns (from left to right):
 
