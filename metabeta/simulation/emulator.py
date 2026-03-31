@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from metabeta.simulation.sgld import SGLD
-from metabeta.utils.preprocessing import checkConstant
+from metabeta.utils.preprocessing import checkConstant, transformPredictors
 from metabeta.utils.sampling import sampleCounts, counts2groups
 
 
@@ -306,6 +306,229 @@ class Emulator:
         raise RuntimeError(
             f'failed to sample emulator design after {self.max_attempts} attempts '
             f'for d={d}, req_m={req_m}, req_n={req_n}, source={self.source}'
+        )
+
+
+def _yCompatible(y: np.ndarray, likelihood_family: int) -> bool:
+    """Check whether y values are appropriate for the given likelihood family."""
+    if likelihood_family == 0:  # normal: any continuous values
+        return True
+    elif likelihood_family == 1:  # bernoulli: y ∈ {0, 1}
+        unique = np.unique(y)
+        return set(unique.tolist()) <= {0.0, 1.0}
+    elif likelihood_family == 2:  # poisson: non-negative integers
+        if np.any(y < -1e-12):
+            return False
+        return bool(np.allclose(y, np.round(y), atol=1e-12))
+    return False
+
+
+@dataclass
+class Subsampler:
+    """Subsample (X, y, groups) from preprocessed datasets, keeping y as-is.
+
+    Unlike Emulator, this class preserves the original outcome variable and does
+    not apply SGLD to predictors.  Used for out-of-distribution evaluation where
+    no parameter simulation is needed.
+    """
+
+    rng: np.random.Generator
+    source: str
+    likelihood_family: int
+    min_m: int = 1
+    min_n: int = 1
+    max_n: int | None = None
+    max_attempts: int = 20
+
+    def __post_init__(self):
+        if isinstance(self.rng, np.random.SeedSequence):
+            self.rng = np.random.default_rng(self.rng)
+        if self.min_m < 1:
+            raise ValueError(f'min_m must be >= 1, but got {self.min_m}')
+        if self.min_n < 1:
+            raise ValueError(f'min_n must be >= 1, but got {self.min_n}')
+        if self.max_n is not None and self.max_n < self.min_n:
+            raise ValueError(f'max_n must be >= min_n ({self.min_n}), but got max_n={self.max_n}')
+
+    # -- reuse Emulator helpers via composition ----------------------------------
+
+    def _sampleCountsBounded(self, n: int, m: int, max_n: int | None = None) -> np.ndarray:
+        return Emulator._sampleCountsBounded(self, n, m, max_n)
+
+    def _maxGroups(self, ds: dict) -> int:
+        return Emulator._maxGroups(self, ds)
+
+    def _compatible(self, ds: dict, d: int) -> bool:
+        if d > int(ds['d']):
+            return False
+        if self._maxGroups(ds) < self.min_m:
+            return False
+        return _yCompatible(ds['y'], self.likelihood_family)
+
+    def _pull(self, d: int):
+        database = getDatabase()
+        if self.source == 'all':
+            subset = [ds for ds in database if self._compatible(ds, d)]
+            n_ds = len(subset)
+            if n_ds == 0:
+                raise ValueError(
+                    f'no source dataset supports d={d}, min_m={self.min_m}, '
+                    f'min_n={self.min_n}, likelihood_family={self.likelihood_family}'
+                )
+            idx = self.rng.integers(0, n_ds)
+            self.ds = subset[idx]
+        else:
+            path0 = Path(DATA_PATH, 'test', f'{self.source}.npz')
+            path1 = Path(DATA_PATH, 'validation', f'{self.source}.npz')
+            if path0 in PATHS:
+                idx = PATHS.index(path0)
+            elif path1 in PATHS:
+                idx = PATHS.index(path1)
+            else:
+                raise ValueError(f'{self.source} not in known paths.')
+            self.ds = database[idx]
+            if not self._compatible(self.ds, d):
+                raise ValueError(
+                    f'source={self.source} incompatible: d={d}, '
+                    f'likelihood_family={self.likelihood_family}'
+                )
+
+    def _subset(
+        self, ds: dict, d: int, m: int, n: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        x = ds['X'].copy()
+        y = ds['y'].copy()
+
+        idx_feat = self.rng.permutation(x.shape[1])[: d - 1]
+        x = x[:, idx_feat]
+
+        ns = self._sampleCountsBounded(n, m)
+        n = int(ns.sum())
+        idx_obs = self.rng.permutation(len(x))[:n]
+        x = x[idx_obs]
+        y = y[idx_obs]
+        return x, y, ns
+
+    def _subsetGrouped(
+        self, ds: dict, d: int, m: int, n: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        x = ds['X'].copy()
+        y = ds['y'].copy()
+
+        idx_feat = self.rng.permutation(x.shape[1])[: d - 1]
+        x_ = x[:, idx_feat]
+
+        eligible = np.where(ds['ns'] >= self.min_n)[0]
+        members = self.rng.permutation(eligible)[:m]
+        member_caps = ds['ns'][members].astype(int, copy=False)
+        if self.max_n is not None:
+            member_caps = np.minimum(member_caps, self.max_n)
+        n_cap = int(member_caps.sum())
+        n = min(n, n_cap)
+        n = max(n, m * self.min_n)
+        ns = self._sampleCountsBounded(n, m, max_n=None)
+        ns = np.minimum(member_caps, ns)
+
+        rem = int(n - ns.sum())
+        if rem > 0:
+            spare = member_caps - ns
+            while rem > 0:
+                idx = np.where(spare > 0)[0]
+                if len(idx) == 0:
+                    break
+                alpha = self.rng.uniform(2.0, 20.0)
+                p = self.rng.dirichlet(np.ones(len(idx)) * alpha)
+                extra = self.rng.multinomial(rem, p)
+                room = spare[idx]
+                extra = np.minimum(extra, room)
+                added = int(extra.sum())
+                if added == 0:
+                    j = int(self.rng.choice(idx))
+                    extra[idx == j] = 1
+                    added = 1
+                ns[idx] += extra
+                spare[idx] -= extra
+                rem -= added
+            assert rem == 0, 'failed to allocate grouped observations under bounds'
+
+        member_mask = np.zeros(len(x)).astype(bool)
+        for i, member in enumerate(members):
+            idx_member = np.where(ds['groups'] == member)[0]
+            n_i = len(idx_member)
+            idx_obs = self.rng.permutation(n_i)[: ns[i]]
+            member_mask[idx_member[idx_obs]] = True
+        x_ = x_[member_mask]
+        y_ = y[member_mask]
+        return x_, y_, ns
+
+    def sample(
+        self,
+        d: int,
+        ns: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        req_m = len(ns)
+        req_n = int(ns.sum())
+
+        for _ in range(self.max_attempts):
+            self._pull(d)
+            source_is_grouped = 'm' in self.ds and 'ns' in self.ds and 'groups' in self.ds
+            max_groups = self._maxGroups(self.ds)
+            if max_groups < self.min_m:
+                continue
+
+            m = min(req_m, max_groups)
+            if m < self.min_m:
+                continue
+
+            n = min(req_n, int(self.ds['n']))
+            if self.max_n is not None:
+                n = min(n, m * self.max_n)
+            n = max(n, m * self.min_n)
+            if n > int(self.ds['n']):
+                continue
+
+            if source_is_grouped:
+                eligible = np.where(self.ds['ns'] >= self.min_n)[0]
+                if len(eligible) < m:
+                    continue
+                member_cap_all = self.ds['ns'][eligible].astype(int, copy=False)
+                if self.max_n is not None:
+                    member_cap_all = np.minimum(member_cap_all, self.max_n)
+                if np.sum(member_cap_all) < n:
+                    n = int(np.sum(member_cap_all))
+                    n = max(n, m * self.min_n)
+                    if np.sum(member_cap_all) < n:
+                        continue
+
+            subset_fn = self._subsetGrouped if source_is_grouped else self._subset
+            x, y, ns = subset_fn(self.ds, d, m, n)
+            if self.max_n is not None and int(ns.max()) > self.max_n:
+                continue
+            if checkConstant(x).any():
+                continue
+
+            groups = counts2groups(ns)
+
+            # standardize predictors (no SGLD)
+            x = transformPredictors(x, axis=0, exclude_binary=True, transform_counts=True)
+
+            # add intercept
+            ones = np.ones_like(x[:, 0:1])
+            x = np.concatenate([ones, x], axis=-1)
+
+            # normalize y to unit sd for normal likelihood
+            if self.likelihood_family == 0:
+                sd_y = max(float(y.std()), 1e-6)
+                y = y / sd_y
+            else:
+                sd_y = 1.0
+
+            return {'X': x, 'y': y, 'ns': ns, 'groups': groups, 'sd_y': np.array(sd_y)}
+
+        raise RuntimeError(
+            f'failed to subsample after {self.max_attempts} attempts '
+            f'for d={d}, req_m={req_m}, req_n={req_n}, source={self.source}, '
+            f'likelihood_family={self.likelihood_family}'
         )
 
 
