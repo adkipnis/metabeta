@@ -62,6 +62,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--max_datasets', type=int, default=None, help='max datasets per fit file (for quick testing)')
     parser.add_argument('--outdir', type=str, default=str(OUT_DIR), help='output directory for tables')
     parser.add_argument('--verbosity', type=int, default=1, help='0=warnings | 1=info | 2=debug')
+    parser.add_argument('--cuda', action='store_true', help='override eval config device and use CUDA (errors if unavailable)')
     return parser.parse_args()
 # fmt: on
 
@@ -207,9 +208,14 @@ def evaluateConfig(
     config_name: str,
     k: int,
     max_datasets: int | None,
+    cuda: bool = False,
 ) -> list[dict]:
     """Run the runtime comparison for a single config, returning per-dataset records."""
     cfg = loadEvalConfig(config_name, plot=False)
+    if cuda:
+        if not torch.cuda.is_available():
+            raise RuntimeError('--cuda specified but CUDA is not available on this machine')
+        cfg.device = 'cuda'
     setSeed(cfg.seed)
     device = setDevice(cfg.device)
 
@@ -277,6 +283,7 @@ def evaluate(
     configs: list[str],
     k: int,
     max_datasets: int | None,
+    cuda: bool = False,
 ) -> list[dict]:
     """Run the full runtime comparison across all configs."""
     records = []
@@ -284,7 +291,7 @@ def evaluate(
         print(f'\n{"#" * 60}')
         print(f'Config: {config_name}')
         print(f'{"#" * 60}')
-        records.extend(evaluateConfig(config_name, k, max_datasets))
+        records.extend(evaluateConfig(config_name, k, max_datasets, cuda=cuda))
     return records
 
 
@@ -567,7 +574,7 @@ if __name__ == '__main__':
     print(f'Configs: {args.configs}')
     print(f'MoE k={args.k}')
 
-    records = evaluate(args.configs, args.k, args.max_datasets)
+    records = evaluate(args.configs, args.k, args.max_datasets, cuda=args.cuda)
 
     print(f'\n{formatTable(records)}')
     print(f'\n{speedupTable(records)}')
