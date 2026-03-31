@@ -15,6 +15,7 @@ VAL_PATHS = list(Path(DATA_PATH, 'validation').glob('*.npz'))
 TEST_PATHS = list(Path(DATA_PATH, 'test').glob('*.npz'))
 PATHS = VAL_PATHS + TEST_PATHS
 DATABASE: list[dict] | None = None
+TEST_DATABASE: list[dict] | None = None
 
 
 def getDatabase() -> list[dict]:
@@ -23,6 +24,14 @@ def getDatabase() -> list[dict]:
     if DATABASE is None:
         DATABASE = [loadDataset(p) for p in PATHS]
     return DATABASE
+
+
+def getTestDatabase() -> list[dict]:
+    """Lazyload only test-pool datasets (all have group structure)."""
+    global TEST_DATABASE
+    if TEST_DATABASE is None:
+        TEST_DATABASE = [loadDataset(p) for p in TEST_PATHS]
+    return TEST_DATABASE
 
 
 def loadDataset(source: Path) -> dict:
@@ -366,7 +375,7 @@ class Subsampler:
         return _yCompatible(ds['y'], self.likelihood_family)
 
     def _pull(self, d: int):
-        database = getDatabase()
+        database = getTestDatabase()
         if self.source == 'all':
             subset = [ds for ds in database if self._compatible(ds, d)]
             n_ds = len(subset)
@@ -378,14 +387,10 @@ class Subsampler:
             idx = self.rng.integers(0, n_ds)
             self.ds = subset[idx]
         else:
-            path0 = Path(DATA_PATH, 'test', f'{self.source}.npz')
-            path1 = Path(DATA_PATH, 'validation', f'{self.source}.npz')
-            if path0 in PATHS:
-                idx = PATHS.index(path0)
-            elif path1 in PATHS:
-                idx = PATHS.index(path1)
-            else:
-                raise ValueError(f'{self.source} not in known paths.')
+            path = Path(DATA_PATH, 'test', f'{self.source}.npz')
+            if path not in TEST_PATHS:
+                raise ValueError(f'{self.source} not in test pool.')
+            idx = TEST_PATHS.index(path)
             self.ds = database[idx]
             if not self._compatible(self.ds, d):
                 raise ValueError(
