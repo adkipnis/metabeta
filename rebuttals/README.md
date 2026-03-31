@@ -6,16 +6,16 @@ All tables and figures referenced in the reviewer responses are located in this 
 
 | ID | Content | Referenced in |
 |---|---|---|
-| Rebuttal Tab. 1 | Prior misspecification experiment: posterior metrics (RMSE, CE, NLL) for d=5, q=2 under varying offsets to prior families, locations, and scales | Response 6RHU (point 1.4), Response v7s8 (Q1) |
-| Rebuttal Tab. 2 | Ablation study: NPE only / +IS / +CP / +IS+CP for d=5, q=2 across CE and NLL | Response 6RHU (point 5), Response UJDm (point 6) |
-| Rebuttal Tab. 3 | Structural misspecification experiment: posterior agreement (r, RMSE, NLL) between metabeta and HMC under increasing nonlinearity scales | Response v7s8 (Q1) |
-| Rebuttal Tab. 4 | Out-of-sample held-out within-group RMSE for metabeta, HMC, and VI across real datasets | Response v7s8 (Q6) |
+| R-Tab. 1 | Prior misspecification experiment: posterior metrics (RMSE, CE, NLL) for d=5, q=2 under varying offsets to prior families, locations, and scales | Response 6RHU (point 1.4), Response v7s8 (Q1) |
+| R-Tab. 2 | Ablation study: NPE only / +IS / +CP / +IS+CP for d=5, q=2 across CE and NLL | Response 6RHU (point 5), Response UJDm (point 6) |
+| R-Tab. 3 | Structural misspecification experiment: posterior agreement (r, RMSE, NLL) between metabeta and HMC under increasing nonlinearity scales | Response v7s8 (Q1) |
+| R-Tab. 4 | Out-of-sample held-out within-group RMSE for metabeta, HMC, and VI across real datasets | Response v7s8 (Q6) |
 
 ### Figures
 
 | ID | Content | Referenced in |
 |---|---|---|
-| R-Fig. 1 | Generalized likelihoods (Bernoulli): parameter recovery, coverage, SBC | Response 6RHU (point 1.1) |
+| [R-Fig. 1](fig1-bernoulli.pdf) | Generalized likelihoods (Bernoulli): parameter recovery, coverage, SBC | Response 6RHU (point 1.1) |
 | R-Fig. 2 | Generalized likelihoods (Poisson): parameter recovery, coverage, SBC | Response 6RHU (point 1.1) |
 | R-Fig. 3 | Correlated random effects: learned vs. true sample correlation structure in local posterior | Response 6RHU (point 1.3) |
 | R-Fig. 4 | Systematic runtime comparison across 2000 simulated datasets spanning full range of d, q, m, n | Response v7s8 (Q4), Response UJDm (point 3) |
