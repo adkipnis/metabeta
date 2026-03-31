@@ -41,10 +41,11 @@ from metabeta.utils.config import (
     modelFromYaml,
 )
 from metabeta.utils.dataloader import collateGrouped, toDevice
-from metabeta.utils.families import bambiFamilyName, FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
+from metabeta.utils.families import bambiFamilyName, hasSigmaEps, FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
 from metabeta.utils.io import datasetFilename, runName, setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.padding import padToModel, unpad
+from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.utils.sampling import setSeed
 
 DIR = Path(__file__).resolve().parent
@@ -53,13 +54,14 @@ EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
 OUT_DIR = DIR / 'results'
 FITS_DIR = OUT_DIR / 'structural_fits'
 
-DEFAULT_CONFIGS = ['small-n-sampled', 'small-n-mixed']
+DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed', 'large-n-mixed']
 DEFAULT_SCALES = [0.0, 0.25, 0.5, 0.75, 1.0]
 
 # (display name, extractor, higher_is_better)
 METRICS = [
     ('R_ffx', lambda r: r['corr_ffx'], True),
-    ('R_σ', lambda r: r['corr_sigma_rfx'], True),
+    ('R_σ_rfx', lambda r: r['corr_sigma_rfx'], True),
+    ('R_σ_eps', lambda r: r.get('corr_sigma_eps', np.nan), True),
     ('R_rfx', lambda r: r['corr_rfx'], True),
 ]
 
@@ -273,6 +275,7 @@ def _runNuts(
     )
 
     d, q = int(ds['d']), int(ds['q'])
+    likelihood_family = int(ds.get('likelihood_family', 0))
 
     def _extract(name: str) -> np.ndarray:
         x = trace.posterior[name].to_numpy()
@@ -290,11 +293,14 @@ def _runNuts(
         [_extract('1|i' if j == 0 else f'x{j}|i') for j in range(q)], axis=-1
     ).mean(axis=0)
 
-    return {
+    out = {
         'ffx': ffx_mean,
         'sigma_rfx': sigma_rfx_mean,
         'rfx': rfx_mean,
     }
+    if hasSigmaEps(likelihood_family):
+        out['sigma_eps'] = _extract('sigma').mean(axis=0)
+    return out
 
 
 def fitNuts(
@@ -336,9 +342,11 @@ def sampleMetabeta(
 ) -> dict[str, np.ndarray]:
     """Run metabeta on a single (padded) dataset and return posterior means.
 
-    Returns dict with keys: ffx (d,), sigma_rfx (q,), rfx (m, q).
+    Applies importance sampling when ``cfg.importance`` is true.
+    Does NOT rescale — both metabeta and NUTS operate in standardized space.
     """
     d_actual, q_actual, m_actual = int(ds['d']), int(ds['q']), int(ds['m'])
+    lf = getattr(cfg, 'likelihood_family', 0)
 
     # padToModel mutates in-place, so copy first to preserve the original
     ds_copy = {k: v.copy() if isinstance(v, np.ndarray) else v for k, v in ds.items()}
@@ -347,22 +355,38 @@ def sampleMetabeta(
     batch = toDevice(batch, device)
 
     proposal = model.estimate(batch, n_samples=cfg.n_samples)
-    # NOTE: do NOT rescale — NUTS fits on the same (standardized) y,
-    # so both posteriors are already in the same space.
+
+    # importance sampling (in standardized space — no rescale needed)
+    if getattr(cfg, 'importance', False):
+        imp = ImportanceSampler(batch, sir=False, likelihood_family=lf)
+        proposal = imp(proposal)
+
     proposal.to('cpu')
 
-    # extract posterior means, trim padding
-    # global: (B, S, D) → [0] → (S, D) → mean(0) → (D,)
-    ffx_mean = proposal.ffx[0].mean(dim=0)[:d_actual].numpy()
-    sigma_rfx_mean = proposal.sigma_rfx[0].mean(dim=0)[:q_actual].numpy()
-    # local: (B, m, S, q) → [0] → (m, S, q) → mean(1) → (m, q)
-    rfx_mean = proposal.rfx[0].mean(dim=1)[:m_actual, :q_actual].numpy()
+    # compute (optionally weighted) posterior means
+    weights = proposal.weights  # (B, S) or None
+    if weights is not None:
+        w_g = weights[0].unsqueeze(-1)  # (S, 1) for global params
+        w_l = weights[0].unsqueeze(0).unsqueeze(-1)  # (1, S, 1) for local
+        ffx_mean = (proposal.ffx[0] * w_g).sum(0)[:d_actual].numpy()
+        sigma_rfx_mean = (proposal.sigma_rfx[0] * w_g).sum(0)[:q_actual].numpy()
+        rfx_mean = (proposal.rfx[0] * w_l).sum(1)[:m_actual, :q_actual].numpy()
+    else:
+        ffx_mean = proposal.ffx[0].mean(dim=0)[:d_actual].numpy()
+        sigma_rfx_mean = proposal.sigma_rfx[0].mean(dim=0)[:q_actual].numpy()
+        rfx_mean = proposal.rfx[0].mean(dim=1)[:m_actual, :q_actual].numpy()
 
-    return {
+    out = {
         'ffx': ffx_mean,
         'sigma_rfx': sigma_rfx_mean,
         'rfx': rfx_mean,
     }
+    if hasSigmaEps(lf):
+        if weights is not None:
+            out['sigma_eps'] = (proposal.sigma_eps[0] * weights[0]).sum(0).numpy()
+        else:
+            out['sigma_eps'] = proposal.sigma_eps[0].mean(dim=0).numpy()
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -380,9 +404,13 @@ def comparePosteriors(
     per parameter type.
     """
     out = {}
-    for key in ['ffx', 'sigma_rfx', 'rfx']:
-        a = np.concatenate([m[key].ravel() for m in mb_list])
-        b = np.concatenate([n[key].ravel() for n in nuts_list])
+    for key in ['ffx', 'sigma_rfx', 'sigma_eps', 'rfx']:
+        mb_vals = [m[key].ravel() for m in mb_list if key in m]
+        nt_vals = [n[key].ravel() for n in nuts_list if key in n]
+        if not mb_vals or not nt_vals:
+            continue
+        a = np.concatenate(mb_vals)
+        b = np.concatenate(nt_vals)
         if len(a) < 2:
             out[f'corr_{key}'] = np.nan
         else:
