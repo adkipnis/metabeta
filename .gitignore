@@ -6,7 +6,6 @@ outputs
 metabeta.egg-info
 parquet
 raw
-*.csv
 *.npz
 *.rdata
 *.Rhistory
@@ -14,3 +13,4 @@ plots
 /experiments/results
 /AGENTS.md
 /CLAUDE.md
+/metabeta/datasets/pmlb
