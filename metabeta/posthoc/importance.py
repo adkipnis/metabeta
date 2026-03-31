@@ -10,6 +10,7 @@ from metabeta.utils.families import (
     logProbSigma,
     logProbRfx,
     logLikelihood,
+    logMarginalLikelihoodNormal,
 )
 from metabeta.utils.preprocessing import rescaleData
 
@@ -19,7 +20,8 @@ class ImportanceSampler:
         self,
         data: dict[str, torch.Tensor],
         constrain: bool = True,
-        full: bool = False,  # incorporate RFX priors
+        full: bool = False,  # incorporate RFX priors and local log-prob in IS weight
+        marginal: bool = False,  # use marginal likelihood (Normal only); integrates rfx out
         temperature: float = 1.0,  # softmax temperature
         pareto: bool = False,  # use Pareto smoothing (PSIS)
         sir: bool = False,  # use Sampling Importance Resampling (SIR)
@@ -27,8 +29,11 @@ class ImportanceSampler:
         likelihood_family: int = 0,
         eps: float = 1e-12,
     ) -> None:
+        if marginal and likelihood_family != 0:
+            raise ValueError('marginal IS is only implemented for the Normal likelihood family')
         self.constrain = constrain
         self.full = full
+        self.marginal = marginal
         self.temperature = temperature
         self.pareto = pareto
         self.sir = sir
@@ -53,19 +58,16 @@ class ImportanceSampler:
         self.y = data['y'].unsqueeze(-1)   # (b, m, n, 1)
 
         # masks
-        self.mask_d = data['mask_d'].unsqueeze(-2)   # (b, 1, d)
-        self.mask_q = data['mask_q'].unsqueeze(-2)   # (b, 1, q)
-        self.mask_mq = data['mask_mq'].unsqueeze(-2)   # (b, m, 1, q)
-        self.mask_m = data['mask_m'].unsqueeze(-1)   # (b, m, 1)
-        self.mask_n = data['mask_n'].unsqueeze(-1)   # (b, m, n, 1)
+        self.mask_d = data['mask_d'].unsqueeze(-2)    # (b, 1, d)
+        self.mask_q = data['mask_q'].unsqueeze(-2)    # (b, 1, q)
+        self.mask_mq = data['mask_mq'].unsqueeze(-2)  # (b, m, 1, q)
+        self.mask_m = data['mask_m'].unsqueeze(-1)    # (b, m, 1)
+        self.mask_n = data['mask_n'].unsqueeze(-1)    # (b, m, n, 1)
 
-    def unnormalizedPosterior(self, proposal: Proposal) -> tuple[torch.Tensor, ...]:
-        # unpack parameters
+    def unnormalizedPosterior(self, proposal: Proposal) -> tuple[torch.Tensor, torch.Tensor]:
         ffx = proposal.ffx
         sigma_rfx = proposal.sigma_rfx
-        rfx = proposal.rfx
 
-        # log priors
         pad_d = self.nu_ffx.shape[-1] - ffx.shape[-1]
         if pad_d > 0:
             ffx = torch.nn.functional.pad(ffx, (0, pad_d), 'constant', 0)
@@ -77,16 +79,23 @@ class ImportanceSampler:
         else:
             sigma_eps = ffx.new_zeros(ffx.shape[:2])
 
-        # regularize Sigma(RFX)
-        if self.full:
-            lp = lp + logProbSigma(sigma_rfx, self.tau_rfx, self.family_sigma_rfx, self.mask_q)
-            lp = lp + logProbRfx(rfx, sigma_rfx, self.mask_mq)
+        # sigma_rfx is a global parameter included in log q_global for all families,
+        # so its prior must be in the numerator to keep the IS weight balanced.
+        lp = lp + logProbSigma(sigma_rfx, self.tau_rfx, self.family_sigma_rfx, self.mask_q)
 
-        # conditional log likelihood
-        ll = logLikelihood(
-            ffx, sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n,
-            likelihood_family=self.likelihood_family,
-        )
+        if self.marginal:
+            # integrate rfx out analytically — weight is a function of global params only
+            ll = logMarginalLikelihoodNormal(
+                ffx, sigma_rfx, sigma_eps, self.y, self.X, self.Z, self.mask_n, self.mask_m,
+            )
+        else:
+            rfx = proposal.rfx
+            if self.full:
+                lp = lp + logProbRfx(rfx, sigma_rfx, self.mask_mq)
+            ll = logLikelihood(
+                ffx, sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n,
+                likelihood_family=self.likelihood_family,
+            )
         return ll, lp
 
     def __call__(self, proposal: Proposal) -> Proposal:
