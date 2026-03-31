@@ -104,7 +104,7 @@ def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
         )
 
 
-def savePlot(plot_dir: Path, title: str, epoch: int | None = None, ending: str = 'png') -> Path:
+def savePlot(plot_dir: Path, title: str, epoch: int | None = None, ending: str = 'pdf') -> Path:
     fname = plot_dir / f'{title}_latest.{ending}'
     plt.savefig(fname, bbox_inches='tight', pad_inches=0.15)
     if epoch is not None:
