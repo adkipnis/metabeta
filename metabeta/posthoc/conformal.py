@@ -43,9 +43,10 @@ class Calibrator:
         targets = {
             'ffx': data['ffx'],
             'sigma_rfx': data['sigma_rfx'],
-            'sigma_eps': data['sigma_eps'],
             'rfx': data['rfx'],
         }
+        if 'sigma_eps' in data:
+            targets['sigma_eps'] = data['sigma_eps']
         for alpha, ci in ci_dicts.items():
             self.corrections[alpha] = {}
             for key, quantiles in ci.items():
