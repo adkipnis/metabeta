@@ -8,13 +8,16 @@ is based on:
     - Predictive NLL (log p(y | posterior samples))
     - Correlation of posterior means between methods
 
+NUTS and ADVI fits are cached per (config, seed, source, dataset_index, ...)
+in ``results/observed_fits/``.  Re-run with ``--refit`` to recompute.
+
 Workflow:
     1. Load model checkpoint and evaluation config
     2. Subsample observed datasets via Subsampler
     3. For each dataset:
         a. Run metabeta inference
-        b. Run NUTS (per-dataset, using Bambi)
-        c. Run ADVI (per-dataset, using Bambi)
+        b. Run NUTS (per-dataset, cached)
+        c. Run ADVI (per-dataset, cached)
     4. Compute predictive NLL and parameter correlations
     5. Save results table
 
@@ -23,10 +26,10 @@ Usage (from experiments/):
     uv run python observed.py --configs small-n-sampled
     uv run python observed.py --n_datasets 8 --nuts_draws 500
     uv run python observed.py --source math__grp_group
+    uv run python observed.py --refit                       # force recompute cached fits
 """
 
 import argparse
-import time
 import yaml
 from pathlib import Path
 
@@ -49,7 +52,6 @@ from metabeta.utils.config import (
     modelFromYaml,
 )
 from metabeta.utils.dataloader import collateGrouped, toDevice
-from metabeta.utils.evaluation import Proposal
 from metabeta.utils.families import (
     bambiFamilyName,
     hasSigmaEps,
@@ -58,16 +60,16 @@ from metabeta.utils.families import (
     SIGMA_FAMILIES,
     STUDENT_DF,
 )
-from metabeta.utils.io import datasetFilename, runName, setDevice
+from metabeta.utils.io import runName, setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.padding import padToModel
-from metabeta.utils.preprocessing import transformPredictors
 from metabeta.utils.sampling import setSeed, truncLogUni
 
 DIR = Path(__file__).resolve().parent
 METABETA = DIR / '..' / 'metabeta'
 EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
 OUT_DIR = DIR / 'results'
+FITS_DIR = OUT_DIR / 'observed_fits'
 
 DEFAULT_CONFIGS = ['small-n-sampled']
 
@@ -76,7 +78,8 @@ METRICS = [
     ('NLL_nuts', lambda r: r['nll_nuts'], False),
     ('NLL_advi', lambda r: r['nll_advi'], False),
     ('R_ffx', lambda r: r['corr_ffx_mb_nuts'], True),
-    ('R_σ', lambda r: r['corr_sigma_rfx_mb_nuts'], True),
+    ('R_σ_rfx', lambda r: r['corr_sigma_rfx_mb_nuts'], True),
+    ('R_σ_eps', lambda r: r.get('corr_sigma_eps_mb_nuts', np.nan), True),
     ('R_rfx', lambda r: r['corr_rfx_mb_nuts'], True),
 ]
 
@@ -92,6 +95,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--nuts_chains', type=int, default=4, help='NUTS chains')
     parser.add_argument('--advi_iter', type=int, default=50_000, help='ADVI iterations')
     parser.add_argument('--advi_lr', type=float, default=5e-3, help='ADVI learning rate')
+    parser.add_argument('--refit', action='store_true', help='recompute NUTS/ADVI fits even if cached')
     parser.add_argument('--outdir', type=str, default=str(OUT_DIR), help='output directory')
     parser.add_argument('--seed', type=int, default=42, help='random seed')
     parser.add_argument('--verbosity', type=int, default=1, help='0=warnings | 1=info | 2=debug')
@@ -329,12 +333,40 @@ def _extractSamples(
     return out
 
 
-def fitNuts(
+# ---------------------------------------------------------------------------
+# Caching helpers
+# ---------------------------------------------------------------------------
+
+
+def _nutsCachePath(
+    config: str,
+    seed: int,
+    source: str,
+    idx: int,
+    draws: int,
+    tune: int,
+    chains: int,
+) -> Path:
+    return FITS_DIR / f'{config}_s{seed}_{source}_i{idx:03d}_nuts_d{draws}_t{tune}_c{chains}.npz'
+
+
+def _adviCachePath(
+    config: str,
+    seed: int,
+    source: str,
+    idx: int,
+    n_iter: int,
+    draws: int,
+) -> Path:
+    return FITS_DIR / f'{config}_s{seed}_{source}_i{idx:03d}_advi_n{n_iter}_d{draws}.npz'
+
+
+def _runNuts(
     ds: dict[str, np.ndarray],
-    draws: int = 1000,
-    tune: int = 2000,
-    chains: int = 4,
-    seed: int = 42,
+    draws: int,
+    tune: int,
+    chains: int,
+    seed: int,
 ) -> dict[str, np.ndarray]:
     likelihood_family = int(ds.get('likelihood_family', 0))
     df = pandify(ds)
@@ -348,7 +380,6 @@ def fitNuts(
         tune=tune,
         draws=draws,
         chains=chains,
-        cores=1,
         inference_method='pymc',
         random_seed=seed,
         return_inferencedata=True,
@@ -358,12 +389,12 @@ def fitNuts(
     return _extractSamples(trace, d, q, m, hasSigmaEps(likelihood_family))
 
 
-def fitAdvi(
+def _runAdvi(
     ds: dict[str, np.ndarray],
-    n_iter: int = 50_000,
-    lr: float = 5e-3,
-    draws: int = 4000,
-    seed: int = 42,
+    n_iter: int,
+    lr: float,
+    draws: int,
+    seed: int,
 ) -> dict[str, np.ndarray]:
     likelihood_family = int(ds.get('likelihood_family', 0))
     df = pandify(ds)
@@ -386,6 +417,56 @@ def fitAdvi(
 
     d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
     return _extractSamples(trace, d, q, m, hasSigmaEps(likelihood_family))
+
+
+def fitNuts(
+    ds: dict[str, np.ndarray],
+    config: str,
+    seed: int,
+    source: str,
+    idx: int,
+    draws: int,
+    tune: int,
+    chains: int,
+    refit: bool,
+) -> dict[str, np.ndarray]:
+    """Fit NUTS with caching.  Returns posterior samples."""
+    cache_path = _nutsCachePath(config, seed, source, idx, draws, tune, chains)
+
+    if cache_path.exists() and not refit:
+        with np.load(cache_path) as f:
+            return dict(f)
+
+    result = _runNuts(ds, draws=draws, tune=tune, chains=chains, seed=seed)
+
+    FITS_DIR.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(cache_path, **result)
+    return result
+
+
+def fitAdvi(
+    ds: dict[str, np.ndarray],
+    config: str,
+    seed: int,
+    source: str,
+    idx: int,
+    n_iter: int,
+    lr: float,
+    draws: int,
+    refit: bool,
+) -> dict[str, np.ndarray]:
+    """Fit ADVI with caching.  Returns posterior samples."""
+    cache_path = _adviCachePath(config, seed, source, idx, n_iter, draws)
+
+    if cache_path.exists() and not refit:
+        with np.load(cache_path) as f:
+            return dict(f)
+
+    result = _runAdvi(ds, n_iter=n_iter, lr=lr, draws=draws, seed=seed)
+
+    FITS_DIR.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(cache_path, **result)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -513,17 +594,36 @@ def predictiveNLL(
 # ---------------------------------------------------------------------------
 
 
-def comparePosteriors(
-    mb: dict[str, np.ndarray],
-    nuts: dict[str, np.ndarray],
-    advi: dict[str, np.ndarray],
-) -> dict[str, float]:
-    """Correlations of posterior means between methods for one dataset."""
+def _posteriorMeans(samples: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Reduce posterior samples to means (one value per parameter)."""
     out = {}
-    for key in ['ffx', 'sigma_rfx', 'rfx']:
-        a_mb = mb[key].mean(axis=0).ravel()
-        a_nuts = nuts[key].mean(axis=0).ravel()
-        a_advi = advi[key].mean(axis=0).ravel()
+    for key in ('ffx', 'sigma_rfx', 'rfx'):
+        out[key] = samples[key].mean(axis=0).ravel()
+    if 'sigma_eps' in samples:
+        out['sigma_eps'] = np.atleast_1d(samples['sigma_eps'].mean(axis=0))
+    return out
+
+
+def comparePosteriors(
+    mb_list: list[dict[str, np.ndarray]],
+    nuts_list: list[dict[str, np.ndarray]],
+    advi_list: list[dict[str, np.ndarray]],
+) -> dict[str, float]:
+    """Correlations of posterior means pooled across datasets.
+
+    Each entry in the lists is the output of ``_posteriorMeans`` for one
+    dataset.  By concatenating across datasets we get enough points to
+    correlate even scalar parameters (sigma_rfx with q=1, sigma_eps).
+    """
+    keys = ['ffx', 'sigma_rfx', 'rfx']
+    if 'sigma_eps' in mb_list[0]:
+        keys.append('sigma_eps')
+
+    out = {}
+    for key in keys:
+        a_mb = np.concatenate([m[key] for m in mb_list])
+        a_nuts = np.concatenate([n[key] for n in nuts_list])
+        a_advi = np.concatenate([a[key] for a in advi_list])
 
         if len(a_mb) >= 2:
             out[f'corr_{key}_mb_nuts'] = float(np.corrcoef(a_mb, a_nuts)[0, 1])
@@ -574,7 +674,7 @@ def evaluate(args: argparse.Namespace) -> list[dict]:
         print(f'Generated {len(datasets)} datasets')
 
         nll_mb_all, nll_nuts_all, nll_advi_all = [], [], []
-        corr_accum: dict[str, list[float]] = {}
+        mb_means_all, nuts_means_all, advi_means_all = [], [], []
 
         for i, ds in enumerate(tqdm(datasets, desc='datasets')):
             d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
@@ -586,22 +686,31 @@ def evaluate(args: argparse.Namespace) -> list[dict]:
             resetRng(model, cfg.seed)
             mb_samples = sampleMetabeta(model, ds, cfg, device)
 
-            # NUTS
+            # NUTS (cached)
             nuts_samples = fitNuts(
                 ds,
+                config=config_name,
+                seed=args.seed,
+                source=args.source,
+                idx=i,
                 draws=args.nuts_draws,
                 tune=args.nuts_tune,
                 chains=args.nuts_chains,
-                seed=args.seed,
+                refit=args.refit,
             )
 
-            # ADVI
+            # ADVI (cached)
+            advi_draws = args.nuts_draws * args.nuts_chains
             advi_samples = fitAdvi(
                 ds,
+                config=config_name,
+                seed=args.seed,
+                source=args.source,
+                idx=i,
                 n_iter=args.advi_iter,
                 lr=args.advi_lr,
-                draws=args.nuts_draws * args.nuts_chains,
-                seed=args.seed,
+                draws=advi_draws,
+                refit=args.refit,
             )
 
             # predictive NLL
@@ -614,12 +723,14 @@ def evaluate(args: argparse.Namespace) -> list[dict]:
 
             tqdm.write(f'    NLL: mb={nll_mb:.3f}  nuts={nll_nuts:.3f}  advi={nll_advi:.3f}')
 
-            # correlations
-            corrs = comparePosteriors(mb_samples, nuts_samples, advi_samples)
-            for k, v in corrs.items():
-                corr_accum.setdefault(k, []).append(v)
+            # collect posterior means for pooled correlation
+            mb_means_all.append(_posteriorMeans(mb_samples))
+            nuts_means_all.append(_posteriorMeans(nuts_samples))
+            advi_means_all.append(_posteriorMeans(advi_samples))
 
-        # aggregate
+        # pooled correlations across all datasets
+        corrs = comparePosteriors(mb_means_all, nuts_means_all, advi_means_all)
+
         row = {
             'config': config_name,
             'n_datasets': len(datasets),
@@ -627,8 +738,7 @@ def evaluate(args: argparse.Namespace) -> list[dict]:
             'nll_nuts': float(np.mean(nll_nuts_all)),
             'nll_advi': float(np.mean(nll_advi_all)),
         }
-        for k, vals in corr_accum.items():
-            row[k] = float(np.nanmean(vals))
+        row.update(corrs)
         rows.append(row)
 
     return rows
@@ -693,6 +803,7 @@ if __name__ == '__main__':
     print(f'Datasets: {args.n_datasets}')
     print(f'NUTS: {args.nuts_draws} draws, {args.nuts_tune} tune, {args.nuts_chains} chains')
     print(f'ADVI: {args.advi_iter} iterations, lr={args.advi_lr}')
+    print(f'Refit: {args.refit}')
 
     rows = evaluate(args)
 
