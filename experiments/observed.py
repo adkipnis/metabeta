@@ -24,7 +24,7 @@ Workflow:
 Usage (from experiments/):
     uv run python observed.py
     uv run python observed.py --configs small-n-sampled
-    uv run python observed.py --n_datasets 8 --nuts_draws 500
+    uv run python observed.py --n_subsamples 8 --nuts_draws 500
     uv run python observed.py --source math__grp_group
     uv run python observed.py --refit                       # force recompute cached fits
 """
@@ -62,6 +62,7 @@ from metabeta.utils.families import (
 )
 from metabeta.utils.io import runName, setDevice
 from metabeta.utils.logger import setupLogging
+from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.utils.padding import padToModel
 from metabeta.utils.sampling import setSeed, truncLogUni
 
@@ -71,7 +72,10 @@ EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
 OUT_DIR = DIR / 'results'
 FITS_DIR = OUT_DIR / 'observed_fits'
 
-DEFAULT_CONFIGS = ['small-n-sampled']
+# DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed', 'large-n-mixed']
+DEFAULT_CONFIGS = ['small-n-mixed']
+# DEFAULT_SOURCES = ['sleep__grp_group', 'gcse__grp_group', 'london__grp_group', 'math__grp_group', 'orthodont__grp_group', 'oxboys__grp_group', 'ergostool__grp_group', 'machines__grp_group', 'oats__grp_group', 'pixel__grp_group', 'hsb82__grp_group', 'chem97__grp_group']
+DEFAULT_SOURCES = ['theoph__grp_group', 'orange__grp_group', 'indometh__grp_group']
 
 METRICS = [
     ('NLL_mb', lambda r: r['nll_metabeta'], False),
@@ -88,8 +92,8 @@ METRICS = [
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Out-of-distribution: metabeta vs NUTS/ADVI on observed data.')
     parser.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS, help='evaluation config names')
-    parser.add_argument('--source', type=str, default='all', help='source dataset name or "all"')
-    parser.add_argument('--n_datasets', type=int, default=16, help='number of subsampled datasets')
+    parser.add_argument('--sources', nargs='+', default=DEFAULT_SOURCES, help='source dataset name(s) or "all"')
+    parser.add_argument('--n_subsamples', type=int, default=16, help='subsamples per source dataset')
     parser.add_argument('--nuts_draws', type=int, default=1000, help='NUTS posterior draws per chain')
     parser.add_argument('--nuts_tune', type=int, default=2000, help='NUTS tuning steps')
     parser.add_argument('--nuts_chains', type=int, default=4, help='NUTS chains')
@@ -156,7 +160,7 @@ def resetRng(model: Approximator, seed: int) -> None:
 
 
 def subsampleDatasets(
-    n_datasets: int,
+    n_subsamples: int,
     source: str,
     likelihood_family: int,
     max_d: int,
@@ -168,11 +172,24 @@ def subsampleDatasets(
     max_n_total: int,
     seed: int,
 ) -> list[dict[str, np.ndarray]]:
-    """Generate n_datasets subsampled observed datasets using Subsampler."""
+    """Generate n_subsamples subsampled observed datasets using Subsampler."""
+    from metabeta.simulation.emulator import getTestDatabase, TEST_PATHS, _yCompatible
+
     rng = np.random.default_rng(seed)
     datasets = []
 
-    for _ in range(n_datasets):
+    # when targeting a specific source, cap dimensions to what it supports
+    if source != 'all':
+        from metabeta.simulation.emulator import DATA_PATH, loadDataset
+
+        path = Path(DATA_PATH, 'test', f'{source}.npz')
+        assert path.exists(), f'source {source} not found in test pool'
+        src = loadDataset(path)
+        # source 'd' already includes the intercept
+        max_d = min(max_d, int(src['d']))
+        max_m = min(max_m, int(src['m']))
+
+    for _ in range(n_subsamples):
         # sample dimensions (mirroring Generator._genSizes logic)
         d = int(truncLogUni(rng, low=2, high=max_d + 1, size=1, round=True)[0])
         q = int(truncLogUni(rng, low=1, high=max_q + 1, size=1, round=True)[0])
@@ -337,9 +354,11 @@ def _extractSamples(
 # Caching helpers
 # ---------------------------------------------------------------------------
 
+def _configStem(config_name: str) -> str:
+    return '-'.join(config_name.split('-')[:-1])
 
 def _nutsCachePath(
-    config: str,
+    config_stem: str,
     seed: int,
     source: str,
     idx: int,
@@ -347,18 +366,21 @@ def _nutsCachePath(
     tune: int,
     chains: int,
 ) -> Path:
-    return FITS_DIR / f'{config}_s{seed}_{source}_i{idx:03d}_nuts_d{draws}_t{tune}_c{chains}.npz'
+    """Keyed on data identity (not eval config) so different metabeta configs
+    that subsample the same source reuse cached NUTS fits."""
+    return FITS_DIR / f'm{config_stem}_s{seed}_{source}_i{idx:03d}_nuts_d{draws}_t{tune}_c{chains}.npz'
 
 
 def _adviCachePath(
-    config: str,
+    config_stem: str,
     seed: int,
     source: str,
     idx: int,
     n_iter: int,
     draws: int,
 ) -> Path:
-    return FITS_DIR / f'{config}_s{seed}_{source}_i{idx:03d}_advi_n{n_iter}_d{draws}.npz'
+    """Keyed on data identity (not eval config) — same rationale as _nutsCachePath."""
+    return FITS_DIR / f'm{config_stem}_s{seed}_{source}_i{idx:03d}_advi_n{n_iter}_d{draws}.npz'
 
 
 def _runNuts(
@@ -421,7 +443,7 @@ def _runAdvi(
 
 def fitNuts(
     ds: dict[str, np.ndarray],
-    config: str,
+    config_stem: str,
     seed: int,
     source: str,
     idx: int,
@@ -431,7 +453,7 @@ def fitNuts(
     refit: bool,
 ) -> dict[str, np.ndarray]:
     """Fit NUTS with caching.  Returns posterior samples."""
-    cache_path = _nutsCachePath(config, seed, source, idx, draws, tune, chains)
+    cache_path = _nutsCachePath(config_stem, seed, source, idx, draws, tune, chains)
 
     if cache_path.exists() and not refit:
         with np.load(cache_path) as f:
@@ -446,7 +468,7 @@ def fitNuts(
 
 def fitAdvi(
     ds: dict[str, np.ndarray],
-    config: str,
+    config_stem: str,
     seed: int,
     source: str,
     idx: int,
@@ -456,7 +478,7 @@ def fitAdvi(
     refit: bool,
 ) -> dict[str, np.ndarray]:
     """Fit ADVI with caching.  Returns posterior samples."""
-    cache_path = _adviCachePath(config, seed, source, idx, n_iter, draws)
+    cache_path = _adviCachePath(config_stem, seed, source, idx, n_iter, draws)
 
     if cache_path.exists() and not refit:
         with np.load(cache_path) as f:
@@ -491,8 +513,15 @@ def sampleMetabeta(
     batch = toDevice(batch, device)
 
     proposal = model.estimate(batch, n_samples=cfg.n_samples)
-    if cfg.rescale:
-        proposal.rescale(batch['sd_y'])
+    # NOTE: do NOT rescale here — NUTS/ADVI fit on normalised y, so we keep
+    # metabeta on the same normalised scale for fair NLL and correlation.
+
+    # importance sampling (in normalised space — consistent with no rescale)
+    if getattr(cfg, 'importance', False):
+        lf = int(ds.get('likelihood_family', 0))
+        imp = ImportanceSampler(batch, sir=False, likelihood_family=lf)
+        proposal = imp(proposal)
+
     proposal.to('cpu')
 
     # global: (B, S, D) → [0] → (S, D)
@@ -648,6 +677,7 @@ def evaluate(args: argparse.Namespace) -> list[dict]:
         print(f'\n{"=" * 60}')
         print(f'Config: {config_name}')
         print(f'{"=" * 60}')
+        config_stem = _configStem(config_name)
 
         cfg = loadEvalConfig(config_name, plot=False)
         setSeed(cfg.seed)
@@ -656,90 +686,95 @@ def evaluate(args: argparse.Namespace) -> list[dict]:
 
         likelihood_family = getattr(cfg, 'likelihood_family', 0)
 
-        # subsample observed datasets
-        print(f'Subsampling {args.n_datasets} observed datasets...')
-        datasets = subsampleDatasets(
-            n_datasets=args.n_datasets,
-            source=args.source,
-            likelihood_family=likelihood_family,
-            max_d=cfg.max_d,
-            max_q=cfg.max_q,
-            min_m=data_cfg.get('min_m', 3),
-            max_m=data_cfg.get('max_m', 25),
-            min_n=data_cfg.get('min_n', 4),
-            max_n=data_cfg.get('max_n', 30),
-            max_n_total=data_cfg.get('max_n_total', 800),
-            seed=args.seed,
-        )
-        print(f'Generated {len(datasets)} datasets')
+        for source in args.sources:
+            print(f'\n  --- source: {source} ---')
 
-        nll_mb_all, nll_nuts_all, nll_advi_all = [], [], []
-        mb_means_all, nuts_means_all, advi_means_all = [], [], []
-
-        for i, ds in enumerate(tqdm(datasets, desc='datasets')):
-            d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
-            n = int(ds['n'])
-            tqdm.write(f'  [{i}] d={d} q={q} m={m} n={n}')
-
-            # metabeta
-            setSeed(cfg.seed)
-            resetRng(model, cfg.seed)
-            mb_samples = sampleMetabeta(model, ds, cfg, device)
-
-            # NUTS (cached)
-            nuts_samples = fitNuts(
-                ds,
-                config=config_name,
+            datasets = subsampleDatasets(
+                n_subsamples=args.n_subsamples,
+                source=source,
+                likelihood_family=likelihood_family,
+                max_d=cfg.max_d,
+                max_q=cfg.max_q,
+                min_m=data_cfg.get('min_m', 3),
+                max_m=data_cfg.get('max_m', 25),
+                min_n=data_cfg.get('min_n', 4),
+                max_n=data_cfg.get('max_n', 30),
+                max_n_total=data_cfg.get('max_n_total', 800),
                 seed=args.seed,
-                source=args.source,
-                idx=i,
-                draws=args.nuts_draws,
-                tune=args.nuts_tune,
-                chains=args.nuts_chains,
-                refit=args.refit,
             )
+            print(f'  Generated {len(datasets)} datasets')
 
-            # ADVI (cached)
-            advi_draws = args.nuts_draws * args.nuts_chains
-            advi_samples = fitAdvi(
-                ds,
-                config=config_name,
-                seed=args.seed,
-                source=args.source,
-                idx=i,
-                n_iter=args.advi_iter,
-                lr=args.advi_lr,
-                draws=advi_draws,
-                refit=args.refit,
-            )
+            nll_mb_all, nll_nuts_all, nll_advi_all = [], [], []
+            mb_means_all, nuts_means_all, advi_means_all = [], [], []
 
-            # predictive NLL
-            nll_mb = predictiveNLL(mb_samples, ds)
-            nll_nuts = predictiveNLL(nuts_samples, ds)
-            nll_advi = predictiveNLL(advi_samples, ds)
-            nll_mb_all.append(nll_mb)
-            nll_nuts_all.append(nll_nuts)
-            nll_advi_all.append(nll_advi)
+            for i, ds in enumerate(tqdm(datasets, desc=f'  {source}')):
+                d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
+                n = int(ds['n'])
+                tqdm.write(f'  [{i}] d={d} q={q} m={m} n={n}')
 
-            tqdm.write(f'    NLL: mb={nll_mb:.3f}  nuts={nll_nuts:.3f}  advi={nll_advi:.3f}')
+                # metabeta
+                setSeed(cfg.seed)
+                resetRng(model, cfg.seed)
+                mb_samples = sampleMetabeta(model, ds, cfg, device)
 
-            # collect posterior means for pooled correlation
-            mb_means_all.append(_posteriorMeans(mb_samples))
-            nuts_means_all.append(_posteriorMeans(nuts_samples))
-            advi_means_all.append(_posteriorMeans(advi_samples))
+                # NUTS (cached)
+                nuts_samples = fitNuts(
+                    ds,
+                    config_stem=config_stem,
+                    seed=args.seed,
+                    source=source,
+                    idx=i,
+                    draws=args.nuts_draws,
+                    tune=args.nuts_tune,
+                    chains=args.nuts_chains,
+                    refit=args.refit,
+                )
+                if nuts_samples['sigma_rfx'].shape[-1] != mb_samples['sigma_rfx'].shape[-1]:
+                    raise ValueError('shape mismatch')
 
-        # pooled correlations across all datasets
-        corrs = comparePosteriors(mb_means_all, nuts_means_all, advi_means_all)
+                # ADVI (cached)
+                advi_draws = args.nuts_draws * args.nuts_chains
+                advi_samples = fitAdvi(
+                    ds,
+                    config_stem=config_stem,
+                    seed=args.seed,
+                    source=source,
+                    idx=i,
+                    n_iter=args.advi_iter,
+                    lr=args.advi_lr,
+                    draws=advi_draws,
+                    refit=args.refit,
+                )
 
-        row = {
-            'config': config_name,
-            'n_datasets': len(datasets),
-            'nll_metabeta': float(np.mean(nll_mb_all)),
-            'nll_nuts': float(np.mean(nll_nuts_all)),
-            'nll_advi': float(np.mean(nll_advi_all)),
-        }
-        row.update(corrs)
-        rows.append(row)
+                # predictive NLL
+                nll_mb = predictiveNLL(mb_samples, ds)
+                nll_nuts = predictiveNLL(nuts_samples, ds)
+                nll_advi = predictiveNLL(advi_samples, ds)
+                nll_mb_all.append(nll_mb)
+                nll_nuts_all.append(nll_nuts)
+                nll_advi_all.append(nll_advi)
+
+                tqdm.write(f'    NLL: mb={nll_mb:.3f}  nuts={nll_nuts:.3f}  advi={nll_advi:.3f}')
+
+                # collect posterior means for pooled correlation
+                mb_means_all.append(_posteriorMeans(mb_samples))
+                nuts_means_all.append(_posteriorMeans(nuts_samples))
+                advi_means_all.append(_posteriorMeans(advi_samples))
+                
+
+            # pooled correlations across all datasets for this source
+            corrs = comparePosteriors(mb_means_all, nuts_means_all, advi_means_all)
+
+            row = {
+                'config': config_name,
+                'source': source,
+                'n_subsamples': len(datasets),
+                'nll_metabeta': float(np.mean(nll_mb_all)),
+                'nll_nuts': float(np.mean(nll_nuts_all)),
+                'nll_advi': float(np.mean(nll_advi_all)),
+            }
+            row.update(corrs)
+            rows.append(row)
 
     return rows
 
@@ -755,7 +790,7 @@ def formatTable(rows: list[dict], fmt: str = 'pipe') -> str:
 
     table_rows = []
     for r in rows:
-        table_row = [r['config'], r['n_datasets']]
+        table_row = [r['config'], r['source'], r['n_subsamples']]
         for metric in metric_names:
             try:
                 val = extractors[metric](r)
@@ -768,7 +803,7 @@ def formatTable(rows: list[dict], fmt: str = 'pipe') -> str:
             table_row.append(cell)
         table_rows.append(table_row)
 
-    headers = ['Config', 'N'] + metric_names
+    headers = ['Config', 'Source', 'N'] + metric_names
     tablefmt = 'latex_booktabs' if fmt == 'latex' else 'pipe'
     return tabulate(table_rows, headers=headers, tablefmt=tablefmt, stralign='right')
 
@@ -799,8 +834,8 @@ if __name__ == '__main__':
 
     print(f'Out-of-distribution evaluation: {len(args.configs)} config(s)')
     print(f'Configs: {args.configs}')
-    print(f'Source: {args.source}')
-    print(f'Datasets: {args.n_datasets}')
+    print(f'Sources: {args.sources}')
+    print(f'Subsamples per source: {args.n_subsamples}')
     print(f'NUTS: {args.nuts_draws} draws, {args.nuts_tune} tune, {args.nuts_chains} chains')
     print(f'ADVI: {args.advi_iter} iterations, lr={args.advi_lr}')
     print(f'Refit: {args.refit}')
