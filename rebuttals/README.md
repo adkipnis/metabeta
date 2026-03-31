@@ -15,7 +15,7 @@ All tables and figures referenced in the reviewer responses are located in this 
 
 | ID | Content | Referenced in |
 |---|---|---|
-| [R-Fig. 1](fig1-bernoulli.pdf) | Generalized likelihoods (Bernoulli): parameter recovery, coverage, SBC | Response 6RHU (point 1.1) |
+| [R-Fig. 1](fig1-bernoulli.pdf) | Generalized likelihoods (Bernoulli) | Response 6RHU (point 1.1) |
 | R-Fig. 2 | Generalized likelihoods (Poisson): parameter recovery, coverage, SBC | Response 6RHU (point 1.1) |
 | R-Fig. 3 | Correlated random effects: learned vs. true sample correlation structure in local posterior | Response 6RHU (point 1.3) |
 | R-Fig. 4 | Systematic runtime comparison across 2000 simulated datasets spanning full range of d, q, m, n | Response v7s8 (Q4), Response UJDm (point 3) |
