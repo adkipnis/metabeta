@@ -15,7 +15,7 @@ verbosity: 1          # 0=warnings | 1=info | 2=debug
 likelihood_family: 2
 n_samples: 512        # posterior draws
 rescale: true         # unstandardize y
-importance: true     # importance sampling post-hoc
+importance: false     # importance sampling post-hoc
 sir: false            # sampling importance resampling
 sir_iter: 8
 conformal: false       # calibrate credible interval estimation using conformal correction
