@@ -32,7 +32,7 @@ sir_iter: 8
 plot: true
 
 # checkpoint
-r_tag: 'elu+bias'             # run tag
+r_tag: ''             # run tag
 save_latest: true
 save_best: true
 load_latest: false
