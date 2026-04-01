@@ -14,7 +14,7 @@ All tables and figures referenced in the reviewer responses are located in this 
 ### Rebuttal Figures
 
 | ID | Content | Referenced in |
-|----|---|---|
+|-----|---|---|
 | [Fig. 1](fig1) | Bernoulli model performance (logistic link function)| Response 6RHU (point 1.1) |
 | [Fig. 2](fig2) | Poisson model performance (log link function) | Response 6RHU (point 1.1) |
 | [Fig. 3](fig3) | Correlated random effects | Response 6RHU (point 1.3) |
