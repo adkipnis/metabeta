@@ -19,7 +19,7 @@ All tables and figures referenced in the reviewer responses are located in this 
 | [Fig. 2](fig2) | Poisson model performance (log link function) | Response 6RHU (point 1.1) |
 | [Fig. 3](fig3) | Correlated random effects | Response 6RHU (point 1.3) |
 | [Fig. 4](fig4) | Systematic runtime comparison | Response v7s8 (point4), Response UJDm (point 3) |
-| [Fig. 5](fig5) | Empirical distribution of model configurations in 100 published mixed-effects papers | Response UJDm (point 4) |
+| [Fig. 5](fig5) | Model configurations reported in 100 papers | Response UJDm (point 4) |
 
 
 
