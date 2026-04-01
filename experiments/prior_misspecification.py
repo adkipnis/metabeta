@@ -44,7 +44,7 @@ from metabeta.utils.config import (
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.evaluation import Proposal, concatProposalsBatch, dictMean
 from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES
-from metabeta.posthoc.importance import runIS
+from metabeta.posthoc.importance import ImportanceSampler, runIS
 from metabeta.utils.io import datasetFilename, runName, setDevice
 from metabeta.utils.moe import moeEstimate
 from metabeta.utils.logger import setupLogging
@@ -57,7 +57,7 @@ METABETA = DIR / '..' / 'metabeta'
 EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
 OUT_DIR = DIR / 'results'
 
-DEFAULT_CONFIGS = ['small-n-sampled', 'mid-n-sampled', 'medium-n-sampled']
+DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed']
 DEFAULT_SCALE_FACTORS = [0.33, 3.0]
 DEFAULT_MEAN_SHIFTS = [1.0, 2.0]
 
@@ -111,7 +111,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--scale_factors', nargs='+', type=float, default=DEFAULT_SCALE_FACTORS, help='tau multipliers for wrong-variance conditions')
     parser.add_argument('--mean_shifts', nargs='+', type=float, default=DEFAULT_MEAN_SHIFTS, help='nu_ffx offsets in units of tau_ffx for wrong-mean conditions')
     parser.add_argument('--importance', action='store_true', help='use importance sampling post-hoc')
-    parser.add_argument('--k', type=int, default=7, help='pseudo-MoE extra permuted views (0 = disabled)')
+    parser.add_argument('--k', type=int, default=3, help='pseudo-MoE extra permuted views (0 = disabled)')
     parser.add_argument('--batch_size', type=int, default=8, help='minibatch size for sampling (prevents OOM)')
     parser.add_argument('--valid', action='store_true', help='use validation set instead of test set')
     parser.add_argument('--outdir', type=str, default=str(OUT_DIR), help='output directory for tables')
@@ -238,12 +238,17 @@ def sampleMinibatched(
         batch = perturbBatch(batch, cond)
         if k > 0:
             B = batch['X'].shape[0]
+            lf = getattr(cfg, 'likelihood_family', 0)
             for i in range(B):
                 single = {k_: v[i : i + 1] if torch.is_tensor(v) else v for k_, v in batch.items()}
                 rng = np.random.default_rng(cfg.seed + n_datasets)
                 proposal = moeEstimate(model, single, cfg.n_samples, k, rng=rng)
                 if cfg.rescale:
                     proposal.rescale(single['sd_y'])
+                if cfg.importance:
+                    data_is = rescaleData(single) if cfg.rescale else single
+                    imp_sampler = ImportanceSampler(data_is, sir=False, likelihood_family=lf)
+                    proposal = imp_sampler(proposal)
                 proposal.to('cpu')
                 proposals.append(proposal)
                 n_datasets += 1
