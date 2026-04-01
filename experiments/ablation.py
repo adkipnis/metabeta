@@ -58,11 +58,15 @@ OUT_DIR = DIR / 'results'
 DEFAULT_CONFIGS = ['small-n-mixed']
 
 # (label, importance, sir, conformal)
-# When conformal=True, the calibrator is matched to the proposal: IS uses cal_is, raw uses cal_raw.
+# When conformal=True, the calibrator is matched to the proposal distribution:
+#   raw → cal_raw, IS → cal_is, SIR → cal_sir
 CONDITIONS = [
-    ('Baseline', False, False, False),
-    ('+ CP', False, False, True),
-    ('+ IS + CP', True, False, True),
+    ('Baseline',  False, False, False),
+    ('+ CP',      False, False, True),
+    ('+ IS',      True,  False, False),
+    ('+ SIR',     True,  True,  False),
+    ('+ IS + CP', True,  False, True),
+    ('+ SIR + CP',True,  True,  True),
 ]
 
 # (display name, extractor, higher_is_better)
@@ -150,31 +154,36 @@ def calibrate(
     run: str,
     device: torch.device,
     use_is: bool = False,
+    use_sir: bool = False,
     batch_size: int | None = None,
 ) -> Calibrator:
     """Load or compute conformal calibrator from validation set.
 
-    Two variants are supported:
-      use_is=False  calibrates on raw posterior samples  → saved as calibrator.npz
-      use_is=True   calibrates on IS-corrected samples   → saved as calibrator_is.npz
-
-    The IS calibrator must be used at test time whenever IS is applied, so that
-    the conformal correction matches the distribution it was computed on.
+    Three variants are supported, each matched to a test-time proposal distribution:
+      raw            → calibrator.npz
+      IS-corrected   → calibrator_is.npz
+      SIR-resampled  → calibrator_sir.npz
     """
-    suffix = '_is' if use_is else ''
+    if use_sir:
+        suffix = '_sir'
+    elif use_is:
+        suffix = '_is'
+    else:
+        suffix = ''
+
     calibrator = Calibrator()
     ckpt_path = METABETA / 'outputs' / 'checkpoints' / run / f'calibrator{suffix}.npz'
     if ckpt_path.exists():
         calibrator.load(run, suffix=suffix)
         return calibrator
 
-    if use_is:
-        # sample validation set with the same IS pipeline used at test time
+    if use_is or use_sir:
         cfg_cal = copy.copy(cfg)
         cfg_cal.importance = True
-        cfg_cal.sir = False
+        cfg_cal.sir = use_sir
+        label = 'calibrate (SIR)' if use_sir else 'calibrate (IS)'
         dl_valid = getDataloader(data_cfg, 'valid', batch_size=batch_size)
-        proposal = sampleMinibatched(model, cfg_cal, dl_valid, device, 'calibrate (IS)')
+        proposal = sampleMinibatched(model, cfg_cal, dl_valid, device, label)
     else:
         dl_valid = getDataloader(data_cfg, 'valid')
         batch = next(iter(dl_valid))
@@ -266,9 +275,10 @@ def evaluate(configs: list[str], batch_size: int, k: int = 0) -> list[dict]:
         # load model and data config
         model, data_cfg, run = initModel(cfg, device)
 
-        # calibrate on validation set: raw posterior and IS-corrected posterior
-        cal_raw = calibrate(model, cfg, data_cfg, run, device, use_is=False)
-        cal_is = calibrate(model, cfg, data_cfg, run, device, use_is=True, batch_size=batch_size)
+        # calibrate on validation set: one calibrator per proposal distribution
+        cal_raw = calibrate(model, cfg, data_cfg, run, device, use_is=False, use_sir=False)
+        cal_is  = calibrate(model, cfg, data_cfg, run, device, use_is=True,  use_sir=False, batch_size=batch_size)
+        cal_sir = calibrate(model, cfg, data_cfg, run, device, use_is=True,  use_sir=True,  batch_size=batch_size)
 
         # create batched test dataloader (prevents OOM for large models)
         dl_test = getDataloader(data_cfg, 'test', batch_size=batch_size)
@@ -294,7 +304,10 @@ def evaluate(configs: list[str], batch_size: int, k: int = 0) -> list[dict]:
             proposal = sampleMinibatched(model, cfg, dl_test, device, label)
 
             # when CP is applied, use the calibrator matched to the proposal distribution
-            calibrator = (cal_is if importance else cal_raw) if conformal else None
+            if conformal:
+                calibrator = cal_sir if sir else (cal_is if importance else cal_raw)
+            else:
+                calibrator = None
             lf = getattr(cfg, 'likelihood_family', 0)
             summary = getSummary(proposal, full_batch, calibrator=calibrator, likelihood_family=lf)
 
