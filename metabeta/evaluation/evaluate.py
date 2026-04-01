@@ -41,7 +41,7 @@ def setup() -> argparse.Namespace:
     """Parse command line arguments for evaluation."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
     parser.add_argument(
-        '--name', type=str, default='mid-n-mixed', help='load configs/{name}.yaml'
+        '--name', type=str, default='big-n-mixed', help='load configs/{name}.yaml'
     )
     parser.add_argument('--m_tag', type=str)
     parser.add_argument('--r_tag', type=str)
@@ -288,7 +288,7 @@ class Evaluator:
             return
         if self.cfg.rescale:
             batch = rescaleData(batch)
-        plotComparison(summaries, proposals, labels, batch, plot_dir=self.plot_dir, show=False)
+        plotComparison(summaries, proposals, labels, batch, plot_dir=self.plot_dir, show=True)
 
     def testrun(self) -> None:
         calibrator = self.calibrate() if self.cfg.conformal else None
