@@ -1,7 +1,7 @@
 # Rebuttals Figure 4 - Runtime Comparison
 ![Figure 4](runtimes.png)
 
-Systematic runtime comparison of metabeta, NUTS, and ADVI across 2000+ simulated datasets spanning the full range of $d$, $q$, $m$, and $n$ covered by the [model configs](../../metabeta/model/configs).
+Systematic runtime comparison of metabeta, NUTS, and ADVI across 2000+ simulated datasets spanning the full range of $d$, $q$, $m$, and $n$ covered by the [model configs](../../metabeta/models/configs).
 
 ## Procedure
 
