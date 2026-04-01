@@ -61,6 +61,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--bs', type=int)
     parser.add_argument('--lr', type=float)
     parser.add_argument('--seed', type=int)
+    parser.add_argument('--num_workers', type=int)
 
     # evaluation
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
@@ -201,6 +202,7 @@ class Trainer:
             shuffle=partition == 'train',
             bucket_mult=50,
             sort_seed=epoch,
+            num_workers=getattr(self.cfg, 'num_workers', 4),
         )
 
     def _trainingDataAvailable(self, start_epoch: int) -> bool:

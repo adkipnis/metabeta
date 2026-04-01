@@ -350,6 +350,7 @@ class Dataloader(torch.utils.data.DataLoader):
         shuffle: bool = False,
         bucket_mult: int = 50,
         sort_seed: int = 0,
+        num_workers: int = 0,
     ):
         col = Collection(path)
         not_mps = torch.accelerator.current_accelerator().type != 'mps'  # type: ignore
@@ -364,6 +365,7 @@ class Dataloader(torch.utils.data.DataLoader):
         self._batch_size_effective = batch_size
 
         use_sortish = sortish and batch_size < len(col)
+        persistent = num_workers > 0
         if use_sortish:
             batch_sampler = SortishBatchSampler(
                 m_i=col.m_i,
@@ -378,6 +380,8 @@ class Dataloader(torch.utils.data.DataLoader):
                 batch_sampler=batch_sampler,
                 pin_memory=not_mps,
                 collate_fn=collateGrouped,
+                num_workers=num_workers,
+                persistent_workers=persistent,
             )
         else:
             super().__init__(
@@ -386,6 +390,8 @@ class Dataloader(torch.utils.data.DataLoader):
                 shuffle=shuffle,
                 pin_memory=not_mps,
                 collate_fn=collateGrouped,
+                num_workers=num_workers,
+                persistent_workers=persistent,
             )
 
     def __repr__(self) -> str:
