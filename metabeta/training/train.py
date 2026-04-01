@@ -60,6 +60,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('-e', '--max_epochs', type=int)
     parser.add_argument('--bs', type=int)
     parser.add_argument('--lr', type=float)
+    parser.add_argument('--seed', type=int)
 
     # evaluation
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
