@@ -1,5 +1,16 @@
 #!/bin/bash
 
+#SBATCH --job-name=train
+#SBATCH --output=logs/train/train_%j.out
+#SBATCH --error=logs/train/train_%j.err
+
+#SBATCH --partition gpu_p
+#SBATCH --qos gpu_normal
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --time=24:00:00
+
 EPOCHS=500
 
 while [[ $# -gt 0 ]]; do
@@ -11,17 +22,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 [[ -z "$D_TAG" ]] && { echo "Usage: $0 --d_tag <tag> [--epochs N] [--seed N]"; exit 1; }
-
-#SBATCH --job-name=train
-#SBATCH --output=logs/train/train_%j.out
-#SBATCH --error=logs/train/train_%j.err
-
-#SBATCH --partition gpu_p
-#SBATCH --qos gpu_normal
-#SBATCH --nodes=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --time=24:00:00
 
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
