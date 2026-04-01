@@ -35,6 +35,4 @@ Datasets used as the held-out real-world test suite. All 23 datasets were source
 | [VerbAgg](https://rdrr.io/cran/lme4/man/VerbAgg.html) | [lme4](https://cran.r-project.org/package=lme4) | verbal aggression response | Binomial | 9 | 316 | 7584 | 24–24 | 1.000 |
 
 
-[^1]: $$H = \frac{-\sum_{i=1}^{m} p_i \log p_i}{\log m}, \quad p_i = \frac{n_i}{n}$$
-
-where $H = 1$ indicates perfectly balanced groups and $H \to 0$ indicates extreme imbalance.
+[^1]: $H = \frac{-\sum_{i=1}^{m} p_i \log p_i}{\log m}, \quad p_i = \frac{n_i}{n}$ where $H = 1$ indicates perfectly balanced groups and $H \to 0$ indicates extreme imbalance.
