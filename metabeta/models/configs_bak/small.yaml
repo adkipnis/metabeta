@@ -1,7 +1,7 @@
 summarizer:
     type: 'set-transformer'
     d_model: 64 # input
-    d_ff: 256 # 4x d_model
+    d_ff: 128 # hidden
     d_output: 32 # summary dim
     n_blocks: 3 # encoder blocks
     n_isab: 1 # ISAB blocks (first of the three encoder blocks)
@@ -16,9 +16,9 @@ posterior:
     n_blocks: 2 # coupling blocks
     subnet_kwargs:
         net_type: 'residual' # residual MLP as conditioner
-        activation: 'ELU'
+        activation: 'ReLU'
         d_ff: 128 # hidden
         depth: 3 # depth of MLP
-        dropout: 0.0
+        dropout: 0.01
         zero_init: True
         use_bias: False

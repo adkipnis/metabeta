@@ -16,7 +16,7 @@ posterior:
     n_blocks: 2
     subnet_kwargs:
         net_type: 'residual'
-        activation: 'ELU'
+        activation: 'ReLU'
         d_ff: 64
         depth: 3
         dropout: 0.01
