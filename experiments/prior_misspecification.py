@@ -36,7 +36,6 @@ from tabulate import tabulate
 from tqdm import tqdm
 
 from metabeta.models.approximator import Approximator
-from metabeta.posthoc.conformal import Calibrator
 from metabeta.utils.config import (
     assimilateConfig,
     loadDataConfig,
@@ -47,6 +46,7 @@ from metabeta.utils.evaluation import Proposal, concatProposalsBatch, dictMean
 from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES
 from metabeta.posthoc.importance import runIS
 from metabeta.utils.io import datasetFilename, runName, setDevice
+from metabeta.utils.moe import moeEstimate
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
@@ -57,7 +57,7 @@ METABETA = DIR / '..' / 'metabeta'
 EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
 OUT_DIR = DIR / 'results'
 
-DEFAULT_CONFIGS = ['toy-n']
+DEFAULT_CONFIGS = ['small-n-sampled', 'mid-n-sampled', 'medium-n-sampled']
 DEFAULT_SCALE_FACTORS = [0.33, 3.0]
 DEFAULT_MEAN_SHIFTS = [1.0, 2.0]
 
@@ -111,6 +111,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--scale_factors', nargs='+', type=float, default=DEFAULT_SCALE_FACTORS, help='tau multipliers for wrong-variance conditions')
     parser.add_argument('--mean_shifts', nargs='+', type=float, default=DEFAULT_MEAN_SHIFTS, help='nu_ffx offsets in units of tau_ffx for wrong-mean conditions')
     parser.add_argument('--importance', action='store_true', help='use importance sampling post-hoc')
+    parser.add_argument('--k', type=int, default=7, help='pseudo-MoE extra permuted views (0 = disabled)')
     parser.add_argument('--batch_size', type=int, default=8, help='minibatch size for sampling (prevents OOM)')
     parser.add_argument('--valid', action='store_true', help='use validation set instead of test set')
     parser.add_argument('--outdir', type=str, default=str(OUT_DIR), help='output directory for tables')
@@ -221,55 +222,40 @@ def perturbBatch(
 
 
 @torch.inference_mode()
-def calibrate(
-    model: Approximator,
-    cfg: argparse.Namespace,
-    data_cfg: dict,
-    run: str,
-    device: torch.device,
-) -> Calibrator:
-    """Load or compute conformal calibrator from validation set."""
-    calibrator = Calibrator()
-    ckpt_path = METABETA / 'outputs' / 'checkpoints' / run / 'calibrator.npz'
-    if ckpt_path.exists():
-        calibrator.load(run)
-    else:
-        dl_valid = getDataloader(data_cfg, 'valid')
-        batch = next(iter(dl_valid))
-        batch = toDevice(batch, device)
-        proposal = model.estimate(batch, n_samples=cfg.n_samples)
-        if cfg.rescale:
-            proposal.rescale(batch['sd_y'])
-        batch = toDevice(batch, 'cpu')
-        if cfg.rescale:
-            batch = rescaleData(batch)
-        proposal.to('cpu')
-        calibrator.calibrate(proposal, batch)
-        calibrator.save(run)
-    return calibrator
-
-
-@torch.inference_mode()
 def sampleMinibatched(
     model: Approximator,
     cfg: argparse.Namespace,
     dl: Dataloader,
     device: torch.device,
     cond: Condition,
+    k: int = 0,
 ) -> Proposal:
     """Sample from proposal distribution over minibatches with optional perturbation."""
     proposals = []
+    n_datasets = 0
     for batch in tqdm(dl, desc=f'  {cond.label}'):
         batch = toDevice(batch, device)
         batch = perturbBatch(batch, cond)
-        if cfg.importance:
-            proposal = runIS(model, batch, cfg)
+        if k > 0:
+            B = batch['X'].shape[0]
+            for i in range(B):
+                single = {k_: v[i : i + 1] if torch.is_tensor(v) else v for k_, v in batch.items()}
+                rng = np.random.default_rng(cfg.seed + n_datasets)
+                proposal = moeEstimate(model, single, cfg.n_samples, k, rng=rng)
+                if cfg.rescale:
+                    proposal.rescale(single['sd_y'])
+                proposal.to('cpu')
+                proposals.append(proposal)
+                n_datasets += 1
         else:
-            proposal = model.estimate(batch, n_samples=cfg.n_samples)
-            if cfg.rescale:
-                proposal.rescale(batch['sd_y'])
-        proposal.to('cpu')
-        proposals.append(proposal)
+            if cfg.importance:
+                proposal = runIS(model, batch, cfg)
+            else:
+                proposal = model.estimate(batch, n_samples=cfg.n_samples)
+                if cfg.rescale:
+                    proposal.rescale(batch['sd_y'])
+            proposal.to('cpu')
+            proposals.append(proposal)
 
     return concatProposalsBatch(proposals)
 
@@ -280,6 +266,7 @@ def evaluate(
     batch_size: int,
     use_valid: bool,
     importance: bool,
+    k: int = 0,
 ) -> list[dict]:
     """Run all configs × conditions and collect metric rows."""
     rows = []
@@ -287,7 +274,7 @@ def evaluate(
 
     for config_name in configs:
         print(f'\n{"=" * 60}')
-        print(f'Config: {config_name} (partition={partition}, IS={importance})')
+        print(f'Config: {config_name} (partition={partition}, IS={importance}, k={k})')
         print(f'{"=" * 60}')
 
         cfg = loadEvalConfig(config_name, plot=False)
@@ -296,9 +283,9 @@ def evaluate(
         device = setDevice(cfg.device)
 
         model, data_cfg, run = initModel(cfg, device)
-        cal = calibrate(model, cfg, data_cfg, run, device)
 
-        dl = getDataloader(data_cfg, partition, batch_size=batch_size)
+        effective_batch_size = 1 if k > 0 else batch_size
+        dl = getDataloader(data_cfg, partition, batch_size=effective_batch_size)
         full_batch = dl.fullBatch()
         if cfg.rescale:
             full_batch = rescaleData(full_batch)
@@ -310,12 +297,11 @@ def evaluate(
             resetRng(model, cfg.seed)
             model.eval()
 
-            proposal = sampleMinibatched(model, cfg, dl, device, cond)
+            proposal = sampleMinibatched(model, cfg, dl, device, cond, k=k)
 
-            calibrator = cal if cfg.conformal else None
             lf = getattr(cfg, 'likelihood_family', 0)
             summary = getSummary(
-                proposal, full_batch, calibrator=calibrator, likelihood_family=lf
+                proposal, full_batch, calibrator=None, likelihood_family=lf
             )
 
             row = {'config': config_name, 'condition': cond.label}
@@ -454,9 +440,10 @@ if __name__ == '__main__':
     print(f'Mean shifts: {args.mean_shifts}')
     print(f'Partition: {"valid" if args.valid else "test"}')
     print(f'IS: {args.importance}')
+    print(f'k (pseudo-MoE): {args.k}')
     print(f'Conditions: {[c.label for c in conditions]}')
 
-    rows = evaluate(args.configs, conditions, args.batch_size, args.valid, args.importance)
+    rows = evaluate(args.configs, conditions, args.batch_size, args.valid, args.importance, k=args.k)
 
     print(f'\n{formatTable(rows)}')
     print(f'\n{deltaTable(rows)}')
