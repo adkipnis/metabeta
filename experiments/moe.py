@@ -68,6 +68,7 @@ def setup() -> argparse.Namespace:
     # multi-checkpoint MoE mode
     parser.add_argument('--multi', action='store_true', help='true MoE: treat --configs as a list of checkpoints to mix')
     parser.add_argument('--eval-config', type=str, default=None, help='config whose data/calibrator is used for evaluation in --multi mode (default: first of --configs)')
+    parser.add_argument('--seeds', nargs='+', type=int, default=None, help='training seeds for --multi mode; a single --configs entry is replicated once per seed')
     # head-to-head comparison mode
     parser.add_argument('--compare', action='store_true', help='compare pseudo-MoE (k=1) vs true MoE (2 experts) at matched sample counts')
     parser.add_argument('--mix-configs', nargs='+', default=None, help='second checkpoint per eval config for --compare mode (must match --configs length)')
@@ -348,6 +349,7 @@ def evaluateMulti(
     eval_config: str | None,
     use_valid: bool,
     importance: bool,
+    seeds: list[int] | None = None,
 ) -> list[dict]:
     """True MoE: load one checkpoint per config, mix proposals on shared eval data.
 
@@ -381,8 +383,11 @@ def evaluateMulti(
     # load all checkpoints; validate compatibility
     models: list[Approximator] = []
     labels: list[str] = []
-    for name in configs:
+    seed_overrides = seeds if seeds is not None else [None] * len(configs)
+    for name, seed_override in zip(configs, seed_overrides):
         cfg = loadEvalConfig(name, plot=False, importance=importance)
+        if seed_override is not None:
+            cfg.seed = seed_override
         lf = getattr(cfg, 'likelihood_family', 0)
         eval_lf = getattr(eval_cfg, 'likelihood_family', 0)
         if lf != eval_lf:
@@ -391,7 +396,8 @@ def evaluateMulti(
             )
         model, _, _ = initModel(cfg, device)
         models.append(model)
-        labels.append(name)
+        label = f'{name}@s{cfg.seed}' if seed_override is not None else name
+        labels.append(label)
 
     calibrator = cal if eval_cfg.conformal else None
     lf = getattr(eval_cfg, 'likelihood_family', 0)
@@ -635,16 +641,28 @@ if __name__ == '__main__':
         rows = evaluateComparison(args.configs, args.mix_configs, args.valid, args.importance)
         outfile = 'compare_moe'
     elif args.multi:
-        if len(args.configs) < 2:
-            raise ValueError('--multi requires at least 2 configs (one per checkpoint to mix)')
-        print(f'True MoE experiment: {len(args.configs)} checkpoint(s), {len(ks)} k value(s)')
-        print(f'Checkpoints : {args.configs}')
-        print(f'Eval config : {args.eval_config or args.configs[0]}')
+        multi_configs = args.configs
+        multi_seeds = args.seeds
+        if multi_seeds is not None:
+            if len(multi_configs) == 1:
+                multi_configs = multi_configs * len(multi_seeds)
+            elif len(multi_configs) != len(multi_seeds):
+                raise ValueError(
+                    f'--seeds length ({len(multi_seeds)}) must match --configs length '
+                    f'({len(multi_configs)}) or --configs must have exactly one entry'
+                )
+        if len(multi_configs) < 2:
+            raise ValueError('--multi requires at least 2 checkpoints (use --seeds to expand a single config)')
+        print(f'True MoE experiment: {len(multi_configs)} checkpoint(s), {len(ks)} k value(s)')
+        print(f'Checkpoints : {multi_configs}')
+        if multi_seeds is not None:
+            print(f'Seeds       : {multi_seeds}')
+        print(f'Eval config : {args.eval_config or multi_configs[0]}')
         print(f'k values    : {ks}')
         print(f'Partition   : {"valid" if args.valid else "test"}')
         print(f'IS          : {args.importance}')
         rows = evaluateMulti(
-            args.configs, ks, args.eval_config, args.valid, args.importance
+            multi_configs, ks, args.eval_config, args.valid, args.importance, seeds=multi_seeds
         )
         outfile = 'multi_moe'
     else:
