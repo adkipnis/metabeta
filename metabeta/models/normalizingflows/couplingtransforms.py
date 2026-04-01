@@ -269,8 +269,6 @@ class RationalQuadratic(CouplingTransform):
         cumwidths = torch.cumsum(widths, dim=-1)
         cumwidths = F.pad(cumwidths, (1, 0))
         cumwidths = (right - left) * cumwidths + left
-        cumwidths[..., 0] = left.squeeze(-1)
-        cumwidths[..., -1] = right.squeeze(-1)
 
         # --- heights
         heights = params['heights']
@@ -279,8 +277,6 @@ class RationalQuadratic(CouplingTransform):
         cumheights = torch.cumsum(heights, dim=-1)
         cumheights = F.pad(cumheights, pad=(1, 0))
         cumheights = (top - bottom) * cumheights + bottom
-        cumheights[..., 0] = bottom.squeeze(-1)
-        cumheights[..., -1] = top.squeeze(-1)
 
         return dict(
             bounds=bounds,
