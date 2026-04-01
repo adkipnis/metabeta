@@ -107,10 +107,10 @@ class Calibrator:
         self.corrections = corrections
         self.alphas = list(corrections.keys())
 
-    def save(self, model_id: str) -> None:
+    def save(self, model_id: str, suffix: str = '') -> None:
         ckpt_dir = Path(__file__).resolve().parent.parent / 'outputs' / 'checkpoints' / model_id
         ckpt_dir.mkdir(parents=True, exist_ok=True)
-        fn = Path(ckpt_dir, 'calibrator.npz')
+        fn = Path(ckpt_dir, f'calibrator{suffix}.npz')
         # flatten nested dict to "{alpha}/{key}" string keys
         out = {
             f'{a}/{k}': t.cpu().numpy()
@@ -120,13 +120,13 @@ class Calibrator:
         np.savez_compressed(fn, **out, allow_pickle=True)
         print(f'Saved calibration values to {fn}.')
 
-    def load(self, model_id: str) -> None:
+    def load(self, model_id: str, suffix: str = '') -> None:
         fn = (
             Path(__file__).resolve().parent.parent
             / 'outputs'
             / 'checkpoints'
             / model_id
-            / 'calibrator.npz'
+            / f'calibrator{suffix}.npz'
         )
         raw = np.load(fn)
         corrections: Corrections = {}
