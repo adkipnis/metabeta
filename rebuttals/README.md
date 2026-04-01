@@ -27,5 +27,5 @@ All tables and figures referenced in the reviewer responses are located in this 
 
 | ID | Content | Referenced in |
 |---|---|---|
-| [Eq. 1](eq1) | Decomposition of the expected NLL into irreducible posterior entropy and expected KL divergence | Response UJDm (Q2) |
+| [Eq. 1](eq1) | Relationship between NLL and KL divergence | Response UJDm (Q2) |
 
