@@ -82,7 +82,7 @@ def setup() -> argparse.Namespace:
 
 # -----------------------------------------------------------------------------
 class EarlyStopping:
-    def __init__(self, patience: int = 5, delta: float = 1e-3) -> None:
+    def __init__(self, patience: int = 10, delta: float = 1e-3) -> None:
         self.patience = patience
         self.delta = delta
         self.best_nrmse = float('inf')
