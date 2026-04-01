@@ -26,4 +26,4 @@ done
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/training
-python train.py --name "${D_TAG}" -e ${EPOCHS} ${SEED:+--seed ${SEED}} --wandb --device cuda
+python train.py --name "${D_TAG}" -e ${EPOCHS} ${SEED:+--seed ${SEED}} --wandb --device cuda --plot False
