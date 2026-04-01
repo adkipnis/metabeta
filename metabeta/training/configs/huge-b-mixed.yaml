@@ -6,7 +6,7 @@ m_tag: 'huge'                  # points to metabeta/models/configs/*.yaml
 seed: 42
 
 # runtime
-device: 'cpu'         # cpu|cuda|mps
+device: 'cuda'         # cpu|cuda|mps
 cores: 8
 reproducible: false
 compile: false
@@ -14,13 +14,13 @@ verbosity: 1          # warnings|infos|debug
 wandb: false
 
 # training
-max_epochs: 10
+max_epochs: 500
 bs: 32                # batch size
 lr: 1.0e-3
 max_grad_norm: 1.0
 loss_type: 'forward'  # forward|backward|mixed
 patience: 10          # early stopping
-sample_interval: 5
+sample_interval: 10
 skip_ref: false       # skip reference run before training
 
 # evaluation
