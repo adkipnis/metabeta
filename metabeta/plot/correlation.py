@@ -7,7 +7,7 @@ from matplotlib.axes import Axes
 
 from metabeta.evaluation.correlation import evaluateCorrelation
 from metabeta.utils.evaluation import Proposal
-from metabeta.utils.plot import niceify, savePlot
+from metabeta.utils.plot import DPI, niceify, savePlot
 
 
 def plotCorrelation(
@@ -244,7 +244,7 @@ def plotRfxCorrelationFromResults(
     if labels is None:
         labels = [''] * len(results_list)
     nrows = len(results_list)
-    fig, axs = plt.subplots(nrows, 1, figsize=(11, 6 * nrows), dpi=300, squeeze=False)
+    fig, axs = plt.subplots(nrows, 1, figsize=(11, 6 * nrows), dpi=DPI, squeeze=False)
 
     for i, (results, label) in enumerate(zip(results_list, labels)):
         _plotRecoveryWithBounds(

@@ -6,7 +6,7 @@ from matplotlib.axes import Axes
 
 from metabeta.evaluation.sbc import getFractionalRanks, simultaneousBands
 from metabeta.utils.evaluation import getAllNames, getMasks, Proposal, joinSigmas
-from metabeta.utils.plot import savePlot, niceify
+from metabeta.utils.plot import DPI, savePlot, niceify
 
 
 def _plotSbcEcdf(
@@ -98,7 +98,7 @@ def plotSBC(
     if labels is None:
         labels = [''] * len(proposals)
     nrows = len(proposals)
-    fig, axs = plt.subplots(nrows, 1, figsize=(6, 6 * nrows), dpi=300, squeeze=False)
+    fig, axs = plt.subplots(nrows, 1, figsize=(6, 6 * nrows), dpi=DPI, squeeze=False)
     axs = axs.flatten()
 
     for i, (proposal, label) in enumerate(zip(proposals, labels)):

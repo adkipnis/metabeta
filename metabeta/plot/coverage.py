@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 
 from metabeta.utils.evaluation import EvaluationSummary, getNames, Proposal, dictMean
-from metabeta.utils.plot import PALETTE, savePlot, niceify
+from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
 
 
 def _plotCoverage(
@@ -67,7 +67,7 @@ def plotCoverage(
     if labels is None:
         labels = [''] * len(summaries)
     nrows = len(summaries)
-    fig, axs = plt.subplots(nrows, 1, figsize=(6, 6 * nrows), dpi=300, squeeze=False)
+    fig, axs = plt.subplots(nrows, 1, figsize=(6, 6 * nrows), dpi=DPI, squeeze=False)
     axs = axs.flatten()
 
     for i, (summary, proposal, label) in enumerate(zip(summaries, proposals, labels)):

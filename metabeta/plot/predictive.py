@@ -14,7 +14,7 @@ from metabeta.evaluation.predictive import (
     ppcBetweenGroupSD,
     intervalCheck,
 )
-from metabeta.utils.plot import niceify, savePlot
+from metabeta.utils.plot import DPI, niceify, savePlot
 
 
 def toNumpy(t: torch.Tensor) -> np.ndarray:
@@ -107,7 +107,7 @@ def plotPPD(
     y_rep = posteriorPredictiveSample(pp, data)
     y_prior_rep = posteriorPredictiveSample(pp_prior, data) if pp_prior is not None else None
     mask_n = data['mask_n']
-    fig, axs = plt.subplots(figsize=(6 * len(indices), 6), ncols=len(indices), dpi=300)
+    fig, axs = plt.subplots(figsize=(6 * len(indices), 6), ncols=len(indices), dpi=DPI)
     first = True
 
     # plot posterior predictive densities for {indices} datasets
@@ -182,7 +182,7 @@ def plotPPC(
 ) -> None:
     y_obs = data['y'].unsqueeze(-1)
     y_rep = posteriorPredictiveSample(pp, data)
-    fig, axs = plt.subplots(figsize=(6 * 3, 6), ncols=3, dpi=300)
+    fig, axs = plt.subplots(figsize=(6 * 3, 6), ncols=3, dpi=DPI)
 
     # within group SD
     sd_within_rep = ppcWithinGroupSD(y_rep, data)

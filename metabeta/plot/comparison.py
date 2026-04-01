@@ -3,7 +3,7 @@ import torch
 from matplotlib import pyplot as plt
 
 from metabeta.utils.evaluation import EvaluationSummary, getNames, Proposal, dictMean
-from metabeta.utils.plot import savePlot
+from metabeta.utils.plot import DPI, savePlot
 from metabeta.plot.recovery import _prepareRecoveryData, _plotRecoveryGrouped
 from metabeta.plot.coverage import _plotCoverage
 from metabeta.plot.sbc import _plotSbcRow
@@ -21,7 +21,7 @@ def plotComparison(
     show: bool = False,
 ) -> Path | None:
     nrows = len(summaries)
-    fig, axs = plt.subplots(nrows, 5, figsize=(30, 6 * nrows), dpi=300, squeeze=False)
+    fig, axs = plt.subplots(nrows, 5, figsize=(30, 6 * nrows), dpi=DPI, squeeze=False)
 
     for i, (summary, proposal, label) in enumerate(zip(summaries, proposals, labels)):
         upper = i == 0

@@ -6,7 +6,7 @@ from matplotlib.axes import Axes
 from matplotlib.ticker import MultipleLocator
 
 from metabeta.utils.evaluation import EvaluationSummary, getMasks, getNames, joinSigmas
-from metabeta.utils.plot import PALETTE, savePlot, niceify
+from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
 
 
 def _plotRecovery(
@@ -194,7 +194,7 @@ def plotRecovery(
     if labels is None:
         labels = [None] * len(summaries)  # type: ignore[list-item]
     nrows = len(summaries)
-    fig, axs = plt.subplots(nrows, 3, figsize=(18, 6 * nrows), dpi=300, squeeze=False)
+    fig, axs = plt.subplots(nrows, 3, figsize=(18, 6 * nrows), dpi=DPI, squeeze=False)
 
     for i, (summary, label) in enumerate(zip(summaries, labels)):
         upper = i == 0
