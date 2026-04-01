@@ -3,16 +3,22 @@ Tests whether a trained model actually incorporates prior family information
 into its posteriors, rather than ignoring the family encoding.
 
 Approach:
-    1. Load a trained model and a batch of test data
-    2. Fix the random seed and dataset
-    3. For each parameter group (ffx, sigma_rfx, sigma_eps), swap the family
+    1. Load trained models and test data for each evaluation config
+    2. For each parameter group (ffx, sigma_rfx, sigma_eps), swap the family
        index while keeping everything else identical
-    4. Compare posterior mean and SD under each family
-    5. Verify that heavier-tailed families (StudentT, HalfStudentT) produce
+    3. Compare posterior SD under each family
+    4. Verify that heavier-tailed families (StudentT, HalfStudentT) produce
        wider posteriors than lighter ones (Normal, HalfNormal)
+    5. Aggregate results across configs and plot
+
+Usage (from experiments/):
+    uv run python prior_families.py
+    uv run python prior_families.py --configs mid-n-mixed large-n-mixed
+    uv run python prior_families.py --delta
 """
 
 import argparse
+import yaml
 from pathlib import Path
 
 import numpy as np
@@ -20,52 +26,57 @@ import torch
 from matplotlib import pyplot as plt
 
 from metabeta.models.approximator import Approximator
+from metabeta.utils.config import assimilateConfig, loadDataConfig, modelFromYaml
 from metabeta.utils.dataloader import Dataloader
-from metabeta.utils.config import dataFromYaml, modelFromYaml
-from metabeta.utils.io import runName
+from metabeta.utils.io import datasetFilename, runName
 from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES
 from metabeta.utils.plot import PALETTE, niceify
 
 
 DIR = Path(__file__).resolve().parent
-ROOT = DIR / '..'
-CKPT_DIR = ROOT / 'metabeta' / 'outputs' / 'checkpoints'
-SEED = 42
+METABETA = DIR / '..' / 'metabeta'
+EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
+CKPT_DIR = METABETA / 'outputs' / 'checkpoints'
+
+DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed']
 
 
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Prior family sensitivity experiment.')
-    parser.add_argument('--d_tag', type=str, default='toy', help='data config tag')
-    parser.add_argument('--m_tag', type=str, default='toy', help='model config tag')
-    parser.add_argument('--seed', type=int, default=SEED, help='training seed (for checkpoint lookup)')
-    parser.add_argument('--r_tag', type=str, default=None, help='run tag (for checkpoint lookup)')
+    parser.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS, help='evaluation config names (YAML files in evaluation/configs/)')
     parser.add_argument('--n_samples', type=int, default=512, help='posterior samples')
-    parser.add_argument('--prefix', type=str, default='latest', help='checkpoint prefix [latest, best]')
     parser.add_argument('--valid', action='store_true', help='use validation set instead of test set')
     parser.add_argument('--delta', action='store_true', help='plot delta variance instead of absolute')
     return parser.parse_args()
 # fmt: on
 
 
-def loadData(cfg: argparse.Namespace) -> dict[str, torch.Tensor]:
-    """Load a single batch from test (default) or validation set."""
-    data_cfg_path = ROOT / 'metabeta' / 'simulation' / 'configs' / f'{cfg.d_tag}.yaml'
-    partition = 'valid' if cfg.valid else 'test'
-    data_fname = dataFromYaml(data_cfg_path, partition)
-    data_path = ROOT / 'metabeta' / 'outputs' / 'data' / data_fname
-    assert data_path.exists(), f'{data_path} not found'
-    dl = Dataloader(data_path)
-    return next(iter(dl))
+def loadEvalConfig(name: str) -> argparse.Namespace:
+    """Load an evaluation YAML config."""
+    path = EVAL_CFG_DIR / f'{name}.yaml'
+    assert path.exists(), f'eval config not found: {path}'
+    with open(path) as f:
+        cfg = yaml.safe_load(f)
+    cfg['name'] = name
+    return argparse.Namespace(**cfg)
 
 
-def loadModel(cfg: argparse.Namespace, d: int, q: int) -> Approximator:
-    """Load model from latest (or best) checkpoint."""
-    model_cfg_path = ROOT / 'metabeta' / 'models' / 'configs' / f'{cfg.m_tag}.yaml'
-    model_cfg = modelFromYaml(model_cfg_path, d, q)
+def initModel(cfg: argparse.Namespace) -> tuple[Approximator, dict]:
+    """Load model and return it alongside the valid data config."""
+    data_cfg = loadDataConfig(cfg.d_tag)
+    assimilateConfig(cfg, data_cfg)
+    data_cfg_valid = loadDataConfig(cfg.d_tag_valid)
+
+    model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.m_tag}.yaml'
+    model_cfg = modelFromYaml(
+        model_cfg_path,
+        d_ffx=cfg.max_d,
+        d_rfx=cfg.max_q,
+        likelihood_family=getattr(cfg, 'likelihood_family', 0),
+    )
     model = Approximator(model_cfg)
 
-    # find checkpoint
     run = runName(vars(cfg))
     ckpt_path = CKPT_DIR / run / f'{cfg.prefix}.pt'
     assert ckpt_path.exists(), f'checkpoint not found: {ckpt_path}'
@@ -75,13 +86,23 @@ def loadModel(cfg: argparse.Namespace, d: int, q: int) -> Approximator:
     print(f'  loaded {cfg.prefix} checkpoint (epoch {epoch}) from {ckpt_path}')
 
     model.eval()
-    return model
+    return model, data_cfg_valid
 
 
-def resetRng(model: Approximator) -> None:
+def getFullBatch(data_cfg: dict, partition: str) -> dict[str, torch.Tensor]:
+    """Load the full batch for a given partition."""
+    data_fname = datasetFilename(data_cfg, partition)
+    data_path = METABETA / 'outputs' / 'data' / data_fname
+    if partition == 'test':
+        data_path = data_path.with_suffix('.fit.npz')
+    assert data_path.exists(), f'data not found: {data_path}'
+    return Dataloader(data_path).fullBatch()
+
+
+def resetRng(model: Approximator, seed: int) -> None:
     """Reset base distribution RNGs for reproducible sampling."""
-    model.posterior_g.base_dist.base.rng = np.random.default_rng(SEED)   # type: ignore
-    model.posterior_l.base_dist.base.rng = np.random.default_rng(SEED)   # type: ignore
+    model.posterior_g.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
+    model.posterior_l.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
 
 
 @torch.inference_mode()
@@ -89,9 +110,10 @@ def getPosteriorStats(
     model: Approximator,
     batch: dict[str, torch.Tensor],
     n_samples: int,
+    seed: int,
 ) -> dict[str, dict[str, torch.Tensor]]:
     """Run inference and return posterior mean and SD per parameter group (rescaled)."""
-    resetRng(model)
+    resetRng(model, seed)
     proposal = model.estimate(batch, n_samples=n_samples)
     proposal.rescale(batch['sd_y'])
     return {
@@ -128,6 +150,7 @@ def checkPosteriorChanges(
     model: Approximator,
     batch: dict[str, torch.Tensor],
     n_samples: int,
+    seed: int,
 ) -> None:
     """For each parameter group, verify that swapping the family index
     changes the posterior mean and SD."""
@@ -144,9 +167,8 @@ def checkPosteriorChanges(
         stats_per_family = {}
         for i, name in enumerate(families):
             b = setBatchFamily(batch, family_key, i)
-            stats_per_family[name] = getPosteriorStats(model, b, n_samples)
+            stats_per_family[name] = getPosteriorStats(model, b, n_samples, seed)
 
-        # compare all pairs
         names = list(stats_per_family.keys())
         for j in range(len(names)):
             for k in range(j + 1, len(names)):
@@ -185,6 +207,7 @@ def collectTailStats(
     model: Approximator,
     batch: dict[str, torch.Tensor],
     n_samples: int,
+    seed: int,
 ) -> dict[str, dict[str, torch.Tensor]]:
     """Collect per-dataset posterior SDs for each family and parameter group.
 
@@ -196,9 +219,36 @@ def collectTailStats(
         results[param_key] = {}
         for name, idx in ordered_families:
             b = setBatchFamily(batch, family_key, idx)
-            stats = getPosteriorStats(model, b, n_samples)
+            stats = getPosteriorStats(model, b, n_samples, seed)
             results[param_key][name] = stats[param_key]['sd']
     return results
+
+
+def aggregateTailStats(
+    stats_list: list[dict[str, dict[str, torch.Tensor]]],
+    n_list: list[torch.Tensor],
+) -> tuple[dict[str, dict[str, torch.Tensor]], dict[str, torch.Tensor]]:
+    """Flatten and concatenate tail stats across configs.
+
+    Different configs may have different param dimensions (d, q), so tensors
+    are flattened before concatenation. Returns aggregated stats and a matching
+    n tensor per param key (with each dataset's n repeated once per param dim).
+    """
+    agg: dict[str, dict[str, torch.Tensor]] = {}
+    n_per_param: dict[str, torch.Tensor] = {}
+    for param_key in stats_list[0]:
+        agg[param_key] = {}
+        n_flat_parts = []
+        for ts, n in zip(stats_list, n_list):
+            any_fam = next(iter(ts[param_key].values()))
+            n_dims = any_fam.shape[-1] if any_fam.dim() > 1 else 1
+            n_flat_parts.append(n.repeat_interleave(n_dims))
+        n_per_param[param_key] = torch.cat(n_flat_parts)
+        for family_name in stats_list[0][param_key]:
+            agg[param_key][family_name] = torch.cat(
+                [ts[param_key][family_name].flatten() for ts in stats_list]
+            )
+    return agg, n_per_param
 
 
 def checkTailDirection(
@@ -261,30 +311,24 @@ MICRO_PANELS = [
 SIZE_RANGE = (15.0, 120.0)
 
 
-def _pointSizes(
-    n: torch.Tensor,
-    n_param_dims: int,
-) -> np.ndarray:
-    """Map total observation counts to marker sizes, repeating per parameter dim."""
-    n_np = n.float().numpy()
-    n_min, n_max = n_np.min(), n_np.max()
+def _pointSizes(n_flat: np.ndarray) -> np.ndarray:
+    """Map observation counts to marker sizes (already repeated per param dim)."""
+    n_min, n_max = n_flat.min(), n_flat.max()
     if n_max > n_min:
-        sizes = np.interp(n_np, (n_min, n_max), SIZE_RANGE)
-    else:
-        sizes = np.full_like(n_np, np.mean(SIZE_RANGE), dtype=float)
-    return np.repeat(sizes, n_param_dims)
+        return np.interp(n_flat, (n_min, n_max), SIZE_RANGE)
+    return np.full_like(n_flat, np.mean(SIZE_RANGE), dtype=float)
 
 
 def plotMicro(
     tail_stats: dict[str, dict[str, torch.Tensor]],
-    batch: dict[str, torch.Tensor],
+    n_per_param: dict[str, torch.Tensor],
+    n_raw: torch.Tensor,
     out_path: Path | None = None,
     delta: bool = False,
 ) -> None:
     """Three panels: x = posterior variance (lighter family).
     y = posterior variance (heavier family) if delta=False, else delta variance.
     Colors distinguish parameter groups; point size reflects total n."""
-    n = batch['n']
     fig, axes = plt.subplots(1, 3, figsize=(20, 6), dpi=300)
 
     for i, (ax, (title, light, heavy, light_lbl, heavy_lbl, param_keys)) in enumerate(
@@ -297,8 +341,7 @@ def plotMicro(
             sd_heavy = tail_stats[pk][heavy]
             var_light = (sd_light**2).flatten().numpy()
             var_heavy = (sd_heavy**2).flatten().numpy()
-            n_dims = sd_light.shape[-1] if sd_light.dim() > 1 else 1
-            sizes = _pointSizes(n, n_dims)
+            sizes = _pointSizes(n_per_param[pk].float().numpy())
             all_x.append(var_light)
             all_y.append(var_heavy - var_light if delta else var_heavy)
             all_s.append(sizes)
@@ -314,10 +357,10 @@ def plotMicro(
         else:
             lo = min(x.min(), y.min()) * 0.95
             hi = max(x.max(), y.max()) * 1.05
-            if 'ffx' in param_keys:
-                lo, hi = 0.0, 3.8
+            # if 'ffx' in param_keys:
+            #     lo, hi = 0.0, 3.8
             ax.plot([lo, hi], [lo, hi], '--', color='grey', lw=1, alpha=0.6)
-            step = 0.5
+            step = 1.0
             ticks = np.arange(np.floor(lo / step) * step, hi + step, step)
             ax.set_xticks(ticks)
             ax.set_yticks(ticks)
@@ -327,26 +370,31 @@ def plotMicro(
         ax.set_axisbelow(True)
         ax.grid(True, alpha=0.3)
 
-        # stats
-        var_heavy_raw = np.concatenate(
-            [(tail_stats[pk][heavy] ** 2).flatten().numpy() for pk in param_keys]
+        # stats — SD-ratio matches checkTailDirection output
+        sd_light_all = np.concatenate(
+            [tail_stats[pk][light].flatten().numpy() for pk in param_keys]
         )
-        var_ratio = var_heavy_raw / (x + 1e-12)
-        frac_above = (var_heavy_raw > x).mean()
-        ylabel = rf'$\Delta$ Var({heavy_lbl})' if delta else f'Var({heavy_lbl})'
+        sd_heavy_all = np.concatenate(
+            [tail_stats[pk][heavy].flatten().numpy() for pk in param_keys]
+        )
+        sd_ratio = sd_heavy_all.mean() / (sd_light_all.mean() + 1e-12)
+        larger = sd_heavy_all > sd_light_all
+        above_1 = sd_light_all > 1
+        frac_above = larger[above_1].mean()
+        ylabel = rf'$\Delta$ SD({heavy_lbl})' if delta else f'SD({heavy_lbl})'
         niceify(
             ax,
             {
                 'title': title,
                 'title_fs': 22,
-                'xlabel': f'Var({light_lbl})',
+                'xlabel': f'SD({light_lbl})',
                 'xlabel_fs': 20,
                 'ylabel': ylabel,
                 'ylabel_fs': 20,
                 'show_legend': False,
-                'stats': {'Var-ratio': var_ratio.mean(), '% above': frac_above * 100},
+                'stats': {'SD-ratio': sd_ratio, '% above': frac_above * 100},
                 'stats_suffix': '',
-                'stats_loc_x': 0.65,
+                'stats_loc_x': 0.63,
                 'stats_loc_y': 0.05,
             },
         )
@@ -364,8 +412,8 @@ def plotMicro(
         )
         for pk in ('ffx', 'sigma_rfx', 'sigma_eps')
     ]
-    # size legend based on n
-    n_np = n.float().numpy()
+    # size legend based on raw n (one value per dataset, not repeated)
+    n_np = n_raw.float().numpy()
     n_levels = np.unique(np.round(np.quantile(n_np, [0.0, 0.5, 1.0])).astype(int))
     n_min, n_max = n_np.min(), n_np.max()
     size_handles = []
@@ -399,24 +447,36 @@ def plotMicro(
 
 
 if __name__ == '__main__':
-    cfg = setup()
-    print('Prior Family Sensitivity Experiment')
+    args = setup()
+    partition = 'valid' if args.valid else 'test'
+    print(f'Prior Family Sensitivity Experiment')
+    print(f'Configs: {args.configs} | partition: {partition}')
 
-    # load data and model
-    batch = loadData(cfg)
-    d = int(batch['mask_d'].shape[-1])
-    q = int(batch['mask_q'].shape[-1])
-    model = loadModel(cfg, d, q)
-    print(f'  d={d}, q={q}, batch_size={batch["y"].shape[0]}')
+    all_tail_stats = []
+    all_n = []
 
-    # run checks
-    # checkPosteriorChanges(model, batch, cfg.n_samples)
-    tail_stats = collectTailStats(model, batch, cfg.n_samples)
-    checkTailDirection(tail_stats)
+    for config_name in args.configs:
+        print(f'\n{"=" * 60}')
+        print(f'Config: {config_name}')
+        print(f'{"=" * 60}')
 
-    # visualize
+        cfg = loadEvalConfig(config_name)
+        model, data_cfg_valid = initModel(cfg)
+        batch = getFullBatch(data_cfg_valid, partition)
+        print(f'  datasets={batch["y"].shape[0]}')
+
+        # checkPosteriorChanges(model, batch, args.n_samples, cfg.seed)
+        tail_stats = collectTailStats(model, batch, args.n_samples, cfg.seed)
+        all_tail_stats.append(tail_stats)
+        all_n.append(batch['n'])
+
+    agg_tail_stats, n_per_param = aggregateTailStats(all_tail_stats, all_n)
+    n_raw = torch.cat(all_n, dim=0)
+
+    checkTailDirection(agg_tail_stats)
+
     out_path = DIR / 'plots'
     out_path.mkdir(exist_ok=True)
-    plotMicro(tail_stats, batch, out_path, delta=cfg.delta)
+    plotMicro(agg_tail_stats, n_per_param, n_raw, out_path, delta=args.delta)
 
     print('\nDone.')
