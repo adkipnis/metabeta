@@ -14,7 +14,7 @@ $$\mathbf{s} = f_{\Sigma_g}(\tilde{\mathbf{s}}) \in \mathbb R^{1 \times h_g}$$
 where $f_{\Sigma_g}$ is the global summary network with output dim $h_g$. Before entering as context to the Posterior Network, local and global summaries are appended with local and global metadata respectively (e.g. $n_i$ resp. $m$).
 
 
-## Pooling at the end of the Set Transformer
+## Pooling at the end of each Summary Network
 Each summary network thus pools over a different level of observations: The local summarizer pools over observations per group, the global summarizer pools over groups. The permutation-invariant pooling operation is implemented with a learned CLS token.
 
 Let $\mathbf H^{(0)} \in \mathbb{R}^{n \times d_{\mathrm{model}}}$ be the input matrix to the set transformer (after linear embedding). The CLS token $\mathbf{c}\in \mathbb{R}^{d_{\mathrm{model}}}$ is simply concatenated as the first element in the sequence:
