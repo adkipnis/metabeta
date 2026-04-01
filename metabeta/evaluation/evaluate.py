@@ -41,7 +41,7 @@ def setup() -> argparse.Namespace:
     """Parse command line arguments for evaluation."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
     parser.add_argument(
-        '--name', type=str, default='small-n-mixed', help='load configs/{name}.yaml'
+        '--name', type=str, default='mid-n-mixed', help='load configs/{name}.yaml'
     )
     parser.add_argument('--m_tag', type=str)
     parser.add_argument('--r_tag', type=str)

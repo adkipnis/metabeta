@@ -73,7 +73,6 @@ OUT_DIR = DIR / 'results'
 FITS_DIR = OUT_DIR / 'observed_fits'
 
 DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed', 'large-n-mixed']
-# DEFAULT_CONFIGS = ['small-n-mixed']
 DEFAULT_SOURCES = ['557_analcatdata_apnea1__grp_subject', 'sleep__grp_group', 'gcse__grp_group', 'london__grp_group', 'math__grp_group', 'orthodont__grp_group', 'oxboys__grp_group', 'ergostool__grp_group', 'machines__grp_group', 'oats__grp_group', 'pixel__grp_group', 'hsb82__grp_group', 'chem97__grp_group', 'theoph__grp_group', 'orange__grp_group', 'indometh__grp_group']
 
 METRICS = [
