@@ -10,8 +10,7 @@ raw
 *.rdata
 *.Rhistory
 plots
-/experiments/results
+results
 /AGENTS.md
 /CLAUDE.md
 /metabeta/datasets/pmlb
-/metabeta/models/configs2
