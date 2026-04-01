@@ -22,5 +22,4 @@ $$ \tilde{\mathbf H}^{(0)} =  \begin{pmatrix} \mathbf c \\\ \mathbf H^{(0)}\end{
 
 After passing through $\ell$ transformer encoder blocks we get $\tilde{\mathbf H}^{(\ell)} \in \mathbb{R}^{(n+1) \times d_{\mathrm{model}}}$. The first row is extracted and passed through a linear projection. Given fixed network weights, this output is invariant to permutations of $\mathbf H^{(0)}$ along the attended axis. Intuitively $\mathbf{c}$ thus aggregates information via the multihead attention over several blocks.
 
-$$\tilde{\mathbf H}^{(0)}$$
-$$\begin{pmatrix} \mathbf c \\\ \mathbf H^{(0)}\end{pmatrix}$$
+$$\tilde{\mathbf H}^{(0)} = \begin{pmatrix} \mathbf c \\\ \mathbf H^{(0)}\end{pmatrix}$$
