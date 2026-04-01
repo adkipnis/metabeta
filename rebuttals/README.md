@@ -29,4 +29,7 @@ All tables and figures referenced in the reviewer responses are located in this 
 | ID | Content | Referenced in |
 |---|---|---|
 | [Eq. 1](eq1/README.md) | Relationship between NLL and KL divergence | Response UJDm (point 2) |
+| [Eq. 2](eq2/README.md) | Hierarchical Summarization and Pooling | Response 6RHU  (point 8) |
+
+
 
