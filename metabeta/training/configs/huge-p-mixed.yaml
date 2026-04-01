@@ -20,7 +20,7 @@ lr: 1.0e-3
 max_grad_norm: 1.0
 loss_type: 'forward'  # forward|backward|mixed
 patience: 10          # early stopping
-sample_interval: 10
+sample_interval: 5
 skip_ref: false       # skip reference run before training
 
 # evaluation
