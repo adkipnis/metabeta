@@ -1,7 +1,7 @@
 # Rebuttals Figure 4 - Runtime Comparison
 ![Figure 4](runtimes.png)
 
-Systematic runtime comparison of metabeta, NUTS, and ADVI across 2000+ simulated datasets spanning the full range of $d$, $q$, $m$, and $n$ covered by the [model configs](../../metabeta/models/configs). For scalability, runtimes were produced on a Computer Cluster (GPU: Tesla V100-SXM2-32GB, CPU: Intel Xeon 6248r with 8 Cores).
+Systematic runtime comparison of metabeta, NUTS, and ADVI across 2000+ simulated datasets spanning the full range of $d$, $q$, $m$, and $n$ covered by the [model configs](../../metabeta/models/configs). The effective number of parameters per model is $d + q + m * q + 1$. For scalability, runtimes were produced on a Computer Cluster (GPU: Tesla V100-SXM2-32GB, CPU: Intel Xeon 6248r with 8 Cores).
 
 ## Procedure
 
