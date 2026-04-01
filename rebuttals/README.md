@@ -10,6 +10,7 @@ All tables and figures referenced in the reviewer responses are located in this 
 | [Tab. 2](tab2/README.md) | Post-hoc ablation experiment (Baseline, CP, IS, SIR) | Response 6RHU (point 5), Response UJDm (point 6) |
 | [Tab. 3](tab3/README.md) | Structural misspecification experiment | Response v7s8 (point 1) |
 | Tab. 4 | Out-of-sample prediction experiment | Response v7s8 (point 6) |
+| Tab. 5 | Updated real datasets experiment | Response v7s8 (point 6),  Response 6RHU  (point 9) |
 | [Tab. 6](tab6/README.md) | Real-world datasets from R packages | Response 6RHU  (point 9) |
 
 ### Rebuttal Figures
