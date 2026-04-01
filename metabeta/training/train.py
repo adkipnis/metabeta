@@ -251,6 +251,7 @@ class Trainer:
         wandb.define_metric('valid/loss_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/mean_nrmse_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/mean_abs_lcr_epoch', step_metric='step/epoch')
+        wandb.define_metric('valid/median_nll_epoch', step_metric='step/epoch')
 
     def close(self) -> None:
         if self.wandb_run is not None:
@@ -300,10 +301,11 @@ class Trainer:
             self.stopper.best_abs_lcr = self.best_abs_lcr
         return int(payload.get('epoch', 0))  # last completed epoch
 
-    def getTrackingMetrics(self, eval_summary: EvaluationSummary) -> tuple[float, float]:
+    def getTrackingMetrics(self, eval_summary: EvaluationSummary) -> tuple[float, float, float]:
         mean_nrmse = dictMean(eval_summary.nrmse)
         mean_abs_lcr = dictMean(eval_summary.abs_lcr)
-        return mean_nrmse, mean_abs_lcr
+        median_nll = eval_summary.mnll
+        return mean_nrmse, mean_abs_lcr, median_nll
 
     @property
     def info(self) -> str:
@@ -564,11 +566,12 @@ batch size: {self.cfg.bs}
             loss_valid = self.valid()
             mean_nrmse = None
             mean_abs_lcr = None
+            median_nll = None
 
             # sample on test set
             if epoch % self.cfg.sample_interval == 0:
                 eval_summary = self.sample()
-                mean_nrmse, mean_abs_lcr = self.getTrackingMetrics(eval_summary)
+                mean_nrmse, mean_abs_lcr, median_nll = self.getTrackingMetrics(eval_summary)
 
             # log epoch
             if self.wandb_run is not None:
@@ -580,6 +583,7 @@ batch size: {self.cfg.bs}
                 if mean_nrmse is not None:
                     logs['valid/mean_nrmse_epoch'] = float(mean_nrmse)
                     logs['valid/mean_abs_lcr_epoch'] = float(mean_abs_lcr)  # type: ignore
+                    logs['valid/median_nll_epoch'] = float(median_nll)  # type: ignore
                 wandb.log(logs)
 
             # save latest ckpt
