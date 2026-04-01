@@ -2,7 +2,7 @@
 
 Datasets used as the held-out real-world test suite. All 23 datasets were sourced from standard R mixed-effects packages ([`lme4`](https://cran.r-project.org/package=lme4), [`nlme`](https://cran.r-project.org/package=nlme), [`mlmRev`](https://cran.r-project.org/package=mlmRev), [`MEMSS`](https://cran.r-project.org/package=MEMSS), [`datasets`](https://stat.ethz.ch/R-manual/R-devel/library/datasets/html/00Index.html)), loaded via [`metabeta/datasets/from-r/package-datasets.R`](../../metabeta/datasets/from-r/package-datasets.R) and preprocessed via [`metabeta/datasets/preprocess.py`](../../metabeta/datasets/preprocess.py).
 
-*d* = number of fixed effects including intercept (after dummy-coding categoricals). *m* = groups. *n* = total observations. *n/group* = min–max observations per group. *H* = group-size entropy ratio $^1$.
+*d* = number of fixed effects including intercept (after dummy-coding categoricals), *m* = groups, *n* = total observations, *n/group* = min–max observations per group, *H* = group-size entropy ratio $^1$.
 
 
 
