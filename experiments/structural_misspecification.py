@@ -54,7 +54,7 @@ EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
 OUT_DIR = DIR / 'results'
 FITS_DIR = OUT_DIR / 'structural_fits'
 
-DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed', 'large-n-mixed']
+DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed']
 DEFAULT_SCALES = [0.0, 0.25, 0.5, 0.75, 1.0]
 
 # (display name, extractor, higher_is_better)
