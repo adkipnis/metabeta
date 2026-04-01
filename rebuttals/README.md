@@ -20,6 +20,7 @@ All tables and figures referenced in the reviewer responses are located in this 
 | [Fig. 3](fig3) | Correlated random effects | Response 6RHU (point 1.3) |
 | [Fig. 4](fig4) | Systematic runtime comparison | Response v7s8 (point4), Response UJDm (point 3) |
 | [Fig. 5](fig5) | Model configurations reported in 100 papers | Response UJDm (point 4) |
+| [Fig. 6](fig6) | Posterior sensitivity to prior family | Response UJDm (point 4) |
 
 
 
