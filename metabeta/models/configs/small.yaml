@@ -16,9 +16,9 @@ posterior:
     n_blocks: 2 # coupling blocks
     subnet_kwargs:
         net_type: 'residual' # residual MLP as conditioner
-        activation: 'ReLU'
+        activation: 'ELU'
         d_ff: 128 # hidden
         depth: 3 # depth of MLP
         dropout: 0.01
         zero_init: True
-        use_bias: False
+        use_bias: True
