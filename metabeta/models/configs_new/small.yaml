@@ -1,7 +1,7 @@
 summarizer:
     type: 'set-transformer'
     d_model: 64 # input
-    d_ff: 128 # hidden
+    d_ff: 256 # 4x d_model
     d_output: 32 # summary dim
     n_blocks: 3 # encoder blocks
     n_isab: 1 # ISAB blocks (first of the three encoder blocks)
