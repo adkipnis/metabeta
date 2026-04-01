@@ -8,9 +8,9 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -z "$D_TAG" ]] && { echo "Usage: $0 --d_tag <tag>"; exit 1; }
 
-#SBATCH --job-name=generate
-#SBATCH --output=logs/generate/generate_%j.out
-#SBATCH --error=logs/generate/generate_%j.err
+#SBATCH --job-name=generate-test
+#SBATCH --output=logs/generate-test/generate_%j.out
+#SBATCH --error=logs/generate-test/generate_%j.err
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
