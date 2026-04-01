@@ -21,6 +21,7 @@ Usage (from experiments/):
 """
 
 import argparse
+import copy
 import time
 import yaml
 from pathlib import Path
@@ -32,7 +33,8 @@ from tqdm import tqdm
 
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.conformal import Calibrator
-from metabeta.posthoc.importance import runIS, runSIR
+from metabeta.posthoc.importance import ImportanceSampler, runIS, runSIR
+from metabeta.utils.moe import moeEstimate
 from metabeta.utils.config import (
     assimilateConfig,
     loadDataConfig,
@@ -52,14 +54,15 @@ EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
 OUT_DIR = DIR / 'results'
 
 # default configs to evaluate (each must have a YAML in evaluation/configs/)
-DEFAULT_CONFIGS = ['small-n-sampled']
+# DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed', 'large-n-mixed']
+DEFAULT_CONFIGS = ['small-n-mixed']
 
 # (label, importance, sir, conformal)
+# When conformal=True, the calibrator is matched to the proposal: IS uses cal_is, raw uses cal_raw.
 CONDITIONS = [
     ('Baseline', False, False, False),
-    ('+ Conformal', False, False, True),
-    ('+ IS', True, False, False),
-    ('+ Conformal + IS', True, False, True),
+    ('+ CP', False, False, True),
+    ('+ IS + CP', True, False, True),
 ]
 
 # (display name, extractor, higher_is_better)
@@ -78,6 +81,7 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Ablation study across post-hoc methods.')
     parser.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS, help='evaluation config names (YAML files in evaluation/configs/)')
     parser.add_argument('--batch_size', type=int, default=8, help='minibatch size for sampling (prevents OOM)')
+    parser.add_argument('--k', type=int, default=7, help='number of pseudo-MoE permuted views (0 = disabled)')
     parser.add_argument('--outdir', type=str, default=str(OUT_DIR), help='output directory for tables')
     parser.add_argument('--verbosity', type=int, default=1, help='0=warnings | 1=info | 2=debug')
     return parser.parse_args()
@@ -100,6 +104,7 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
     # data config (needed for d/q dimensions)
     data_cfg = loadDataConfig(cfg.d_tag)
     assimilateConfig(cfg, data_cfg)
+    data_cfg_valid = loadDataConfig(cfg.d_tag_valid)
 
     # model config
     model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.m_tag}.yaml'
@@ -123,13 +128,15 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
     if cfg.compile and device.type != 'mps':
         model.compile()
 
-    return model, data_cfg, run
+    return model, data_cfg_valid, run
 
 
 def getDataloader(data_cfg: dict, partition: str, batch_size: int | None = None) -> Dataloader:
     """Create a dataloader for the given partition."""
     data_fname = datasetFilename(data_cfg, partition)
     data_path = METABETA / 'outputs' / 'data' / data_fname
+    if partition == 'test':
+        data_path = data_path.with_suffix('.fit.npz')
     assert data_path.exists(), f'data not found: {data_path}'
     sortish = batch_size is not None
     return Dataloader(data_path, batch_size=batch_size, sortish=sortish)
@@ -142,12 +149,32 @@ def calibrate(
     data_cfg: dict,
     run: str,
     device: torch.device,
+    use_is: bool = False,
+    batch_size: int | None = None,
 ) -> Calibrator:
-    """Load or compute conformal calibrator from validation set."""
+    """Load or compute conformal calibrator from validation set.
+
+    Two variants are supported:
+      use_is=False  calibrates on raw posterior samples  → saved as calibrator.npz
+      use_is=True   calibrates on IS-corrected samples   → saved as calibrator_is.npz
+
+    The IS calibrator must be used at test time whenever IS is applied, so that
+    the conformal correction matches the distribution it was computed on.
+    """
+    suffix = '_is' if use_is else ''
     calibrator = Calibrator()
-    ckpt_path = METABETA / 'outputs' / 'checkpoints' / run / 'calibrator.npz'
+    ckpt_path = METABETA / 'outputs' / 'checkpoints' / run / f'calibrator{suffix}.npz'
     if ckpt_path.exists():
-        calibrator.load(run)
+        calibrator.load(run, suffix=suffix)
+        return calibrator
+
+    if use_is:
+        # sample validation set with the same IS pipeline used at test time
+        cfg_cal = copy.copy(cfg)
+        cfg_cal.importance = True
+        cfg_cal.sir = False
+        dl_valid = getDataloader(data_cfg, 'valid', batch_size=batch_size)
+        proposal = sampleMinibatched(model, cfg_cal, dl_valid, device, 'calibrate (IS)')
     else:
         dl_valid = getDataloader(data_cfg, 'valid')
         batch = next(iter(dl_valid))
@@ -155,12 +182,13 @@ def calibrate(
         proposal = model.estimate(batch, n_samples=cfg.n_samples)
         if cfg.rescale:
             proposal.rescale(batch['sd_y'])
-        batch = toDevice(batch, 'cpu')
-        if cfg.rescale:
-            batch = rescaleData(batch)
         proposal.to('cpu')
-        calibrator.calibrate(proposal, batch)
-        calibrator.save(run)
+
+    full_batch = getDataloader(data_cfg, 'valid').fullBatch()
+    if cfg.rescale:
+        full_batch = rescaleData(full_batch)
+    calibrator.calibrate(proposal, full_batch)
+    calibrator.save(run, suffix=suffix)
     return calibrator
 
 
@@ -179,22 +207,41 @@ def sampleMinibatched(
     label: str,
 ) -> Proposal:
     """Sample from proposal distribution over minibatches (like Trainer.sample)."""
+    k = getattr(cfg, 'k', 0)
     proposals = []
     n_datasets = 0
     t0 = time.perf_counter()
     for batch in tqdm(dl, desc=f'  {label}'):
         batch = toDevice(batch, device)
-        if cfg.importance and not cfg.sir:
-            proposal = runIS(model, batch, cfg)
-        elif cfg.sir:
-            proposal = runSIR(model, batch, cfg)
+        if k > 0:
+            # pseudo-MoE requires processing one dataset at a time
+            B = batch['X'].shape[0]
+            for i in range(B):
+                single = {key: v[i:i+1] if torch.is_tensor(v) else v for key, v in batch.items()}
+                rng = np.random.default_rng(cfg.seed + n_datasets)
+                proposal = moeEstimate(model, single, cfg.n_samples, k, rng=rng)
+                if cfg.rescale:
+                    proposal.rescale(single['sd_y'])
+                if cfg.importance:
+                    lf = getattr(cfg, 'likelihood_family', 0)
+                    data_is = rescaleData(single) if cfg.rescale else single
+                    imp_sampler = ImportanceSampler(data_is, sir=cfg.sir, likelihood_family=lf)
+                    proposal = imp_sampler(proposal)
+                proposal.to('cpu')
+                proposals.append(proposal)
+                n_datasets += 1
         else:
-            proposal = model.estimate(batch, n_samples=cfg.n_samples)
-            if cfg.rescale:
-                proposal.rescale(batch['sd_y'])
-        proposal.to('cpu')
-        proposals.append(proposal)
-        n_datasets += batch['X'].shape[0]
+            if cfg.importance and not cfg.sir:
+                proposal = runIS(model, batch, cfg)
+            elif cfg.sir:
+                proposal = runSIR(model, batch, cfg)
+            else:
+                proposal = model.estimate(batch, n_samples=cfg.n_samples)
+                if cfg.rescale:
+                    proposal.rescale(batch['sd_y'])
+            proposal.to('cpu')
+            proposals.append(proposal)
+            n_datasets += batch['X'].shape[0]
     t1 = time.perf_counter()
 
     merged = concatProposalsBatch(proposals)
@@ -202,7 +249,7 @@ def sampleMinibatched(
     return merged
 
 
-def evaluate(configs: list[str], batch_size: int) -> list[dict]:
+def evaluate(configs: list[str], batch_size: int, k: int = 0) -> list[dict]:
     """Run all configs × conditions and collect metric rows."""
     rows = []
 
@@ -212,14 +259,16 @@ def evaluate(configs: list[str], batch_size: int) -> list[dict]:
         print(f'{"=" * 60}')
 
         cfg = loadEvalConfig(config_name, plot=False)
+        cfg.k = k
         setSeed(cfg.seed)
         device = setDevice(cfg.device)
 
         # load model and data config
         model, data_cfg, run = initModel(cfg, device)
 
-        # calibrate once on validation set
-        cal = calibrate(model, cfg, data_cfg, run, device)
+        # calibrate on validation set: raw posterior and IS-corrected posterior
+        cal_raw = calibrate(model, cfg, data_cfg, run, device, use_is=False)
+        cal_is = calibrate(model, cfg, data_cfg, run, device, use_is=True, batch_size=batch_size)
 
         # create batched test dataloader (prevents OOM for large models)
         dl_test = getDataloader(data_cfg, 'test', batch_size=batch_size)
@@ -244,8 +293,8 @@ def evaluate(configs: list[str], batch_size: int) -> list[dict]:
             # sample in minibatches
             proposal = sampleMinibatched(model, cfg, dl_test, device, label)
 
-            # summarize on full batch
-            calibrator = cal if conformal else None
+            # when CP is applied, use the calibrator matched to the proposal distribution
+            calibrator = (cal_is if importance else cal_raw) if conformal else None
             lf = getattr(cfg, 'likelihood_family', 0)
             summary = getSummary(proposal, full_batch, calibrator=calibrator, likelihood_family=lf)
 
@@ -345,7 +394,7 @@ if __name__ == '__main__':
     print(f'Ablation study: {len(args.configs)} config(s) × {len(CONDITIONS)} conditions')
     print(f'Configs: {args.configs}')
 
-    rows = evaluate(args.configs, args.batch_size)
+    rows = evaluate(args.configs, args.batch_size, k=args.k)
 
     # print to console
     print(f'\n{formatTable(rows)}')
