@@ -134,6 +134,7 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
     """Load model architecture from config and restore checkpoint weights."""
     data_cfg = loadDataConfig(cfg.d_tag)
     assimilateConfig(cfg, data_cfg)
+    data_cfg_valid = loadDataConfig(cfg.d_tag_valid)
 
     model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.m_tag}.yaml'
     model_cfg = modelFromYaml(
@@ -155,7 +156,7 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
     if cfg.compile and device.type != 'mps':
         model.compile()
 
-    return model, data_cfg, run
+    return model, data_cfg_valid, run
 
 
 def getDataloader(
@@ -164,6 +165,8 @@ def getDataloader(
     """Create a dataloader for the given partition."""
     data_fname = datasetFilename(data_cfg, partition)
     data_path = METABETA / 'outputs' / 'data' / data_fname
+    if partition == 'test':
+        data_path = data_path.with_suffix('.fit.npz')
     assert data_path.exists(), f'data not found: {data_path}'
     sortish = batch_size is not None
     return Dataloader(data_path, batch_size=batch_size, sortish=sortish)
