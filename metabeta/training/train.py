@@ -153,6 +153,7 @@ class Trainer:
         self.best_epoch = 0
         self.global_step = 0
         self.wandb_run = None
+        self.wandb_run_id = None
         self.stopper = None
         if self.cfg.patience > 0:
             self.stopper = EarlyStopping(self.cfg.patience)
@@ -241,6 +242,8 @@ class Trainer:
             name=self.run_name,
             config=vars(self.cfg),
             dir=output_dir,
+            id=self.wandb_run_id,
+            resume='must' if self.wandb_run_id is not None else None,
         )
         wandb.config.update({'data_cfg': self.data_cfg, 'model_cfg': self.model_cfg.to_dict()})
         wandb.define_metric('train/loss_step', step_metric='step/global')
@@ -266,6 +269,7 @@ class Trainer:
             'model_cfg': self.model_cfg.to_dict(),
             'model_state': self.model.state_dict(),
             'optimizer_state': self.optimizer.state_dict(),
+            'wandb_run_id': self.wandb_run.id if self.wandb_run is not None else None,
         }
         tmp_path = path.with_suffix(path.suffix + '.tmp')
         torch.save(payload, tmp_path)
@@ -290,6 +294,7 @@ class Trainer:
         self.best_epoch = payload['best_epoch']
         self.best_nrmse = payload['best_nrmse']
         self.best_abs_lcr = payload['best_abs_lcr']
+        self.wandb_run_id = payload.get('wandb_run_id')
         if self.stopper is not None:
             self.stopper.best_nrmse = self.best_nrmse
             self.stopper.best_abs_lcr = self.best_abs_lcr
