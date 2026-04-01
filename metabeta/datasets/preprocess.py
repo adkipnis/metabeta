@@ -7,6 +7,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 from metabeta.plot import plotDataset
+from metabeta.utils.plot import DPI
 from metabeta.utils.preprocessing import transformPredictors
 
 logger = logging.getLogger(__name__)
@@ -542,7 +543,7 @@ def wrapper(
             fig = plotDataset(dat, names, kde=len(dat) < 10_000)
             if save:
                 fn = DATASETS_DIR / 'preprocessed' / 'plots' / f'{stem}.pdf'
-                fig.savefig(fn, dpi=300)
+                fig.savefig(fn, dpi=DPI)
                 plt.close()
 
         out[stem] = data
