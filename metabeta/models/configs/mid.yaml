@@ -13,7 +13,7 @@ posterior:
     transform: 'spline+'
     base_family: 'normal'
     base_trainable: True
-    n_blocks: 3
+    n_blocks: 4
     subnet_kwargs:
         net_type: 'residual'
         activation: 'ReLU'
