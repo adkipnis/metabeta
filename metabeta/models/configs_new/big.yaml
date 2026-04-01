@@ -21,4 +21,4 @@ posterior:
         depth: 3
         dropout: 0.0
         zero_init: True
-        use_bias: True
+        use_bias: False
