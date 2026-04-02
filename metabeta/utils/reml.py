@@ -101,3 +101,61 @@ def _GLSNLL(
 
 
 def remlSolve(
+    Xm: torch.Tensor,  # (B, m, n, d)  masked X
+    ym: torch.Tensor,  # (B, m, n)     masked y
+    Zm: torch.Tensor,  # (B, m, n, q)  masked Z  (= Xm[..., :q] in metabeta)
+    ns: torch.Tensor,  # (B, m)        group sizes
+    n_iter: int = 200,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Batched REML for mixed effects regression with full rfx covariance.
+
+    Parameterises Σ_rfx = L Lᵀ (Cholesky) and optimizes the REML log-likelihood
+    over (l_diag, l_off, log σ_ε) with L-BFGS. β̂ is obtained analytically via
+    GLS at the optimal variance components.
+
+    """
+    # init
+    B, _, _, q = Zm.shape
+    n_off = q * (q - 1) // 2
+    mask_m = (ns > 0).to(Xm.dtype)
+    ns_f = ns.float().clamp(min=1.0)
+
+    # inner products over n
+    stats = _sufficientStats(Xm, ym, Zm)
+
+    # optimization parameters [l_diag (q), l_off (n_off), log_se (1)].
+    l_params = torch.zeros(B, q + n_off + 1, device=Xm.device, dtype=Xm.dtype, requires_grad=True)
+
+    # batched REML of covariance parameters
+    optimizer = torch.optim.LBFGS(
+        [l_params],
+        max_iter=n_iter,
+        line_search_fn='strong_wolfe',
+        tolerance_grad=1e-5,
+        tolerance_change=1e-7,
+    )
+
+    def closure():
+        optimizer.zero_grad()
+        l_diag = l_params[:, :q]
+        l_off = l_params[:, q : q + n_off]  # shape (B, 0) when q == 1
+        log_se = l_params[:, -1]
+        _, nll = _GLSNLL(l_diag, l_off, log_se, *stats, ns_f, mask_m)   # type: ignore
+        loss = nll.sum()
+        loss.backward()
+        return loss
+
+    optimizer.step(closure)
+
+    # batched GLS of fixed effects
+    with torch.no_grad():
+        l_diag = l_params[:, :q]
+        l_off = l_params[:, q : q + n_off]
+        log_se = l_params[:, -1]
+        beta, _ = _GLSNLL(l_diag, l_off, log_se, *stats, ns_f, mask_m)   # type: ignore
+        L = _getL(l_diag, l_off, q)
+        Sigma_u = L @ L.transpose(-1, -2)   # (B, q, q)
+        sigma_eps = log_se.exp()             # (B,)
+
+    return beta, Sigma_u, sigma_eps
