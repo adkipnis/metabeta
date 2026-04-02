@@ -2,13 +2,30 @@
 
 flat      — pass the tall (B, m*n, d) matrix directly to lstsq; better
             conditioned because the normal equations are never formed.
-compacted — form XtX / XwX explicitly (B, d, d) before solving; cheaper
-            when m*n >> d but squares the condition number.
+            NOTE: CUDA's lstsq driver (gels) requires full column rank and
+            will error when X has zero-padded columns (variable-d batches).
+            Use the compacted variants in production.
 
-The flat variants are the defaults used in production.
+compacted — form XtX / XwX explicitly (B, d, d) before solving; cheaper
+            when m*n >> d. Uses a scale-adaptive ridge εI scaled by the
+            largest diagonal entry, so exactly-zero columns (from variable-d
+            padding) produce beta_j = 0 without perturbing active columns.
 """
 
 import torch
+
+
+def _adaptive_ridge(A: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """Scale-adaptive ridge: eps * max_diag(A) * I.
+
+    For active columns the ridge is eps-fraction of their scale (negligible).
+    For zero-padded columns (diagonal exactly 0) the ridge is eps * max_active,
+    which is large enough to be nonsingular while keeping beta_j ≈ 0 because
+    the corresponding rhs entry is also zero.
+    """
+    d = A.shape[-1]
+    scale = A.diagonal(dim1=-2, dim2=-1).amax(dim=-1).clamp(min=1.0)  # (B,)
+    return eps * scale.view(-1, 1, 1) * torch.eye(d, device=A.device, dtype=A.dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -23,7 +40,10 @@ def olsNormal(
     n_total: torch.Tensor,
     X: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Pooled OLS via tall-matrix lstsq, plus residual SD."""
+    """Pooled OLS via tall-matrix lstsq, plus residual SD.
+
+    NOTE: fails on CUDA when X has zero-padded columns (variable-d batches).
+    """
     B, m, n, d = Xm.shape
     beta = torch.linalg.lstsq(
         Xm.reshape(B, m * n, d),
@@ -44,14 +64,12 @@ def olsNormalCompacted(
     mask: torch.Tensor,
     n_total: torch.Tensor,
     X: torch.Tensor,
-    ridge: float = 1e-6,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Pooled OLS via normal equations (X'X + εI)^{-1} X'y, plus residual SD."""
+    """Pooled OLS via normal equations (X'X + ridge)^{-1} X'y, plus residual SD."""
     d = Xm.shape[-1]
     XtX = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)
     Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)
-    eye = ridge * torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand_as(XtX)
-    beta = torch.linalg.solve(XtX + eye, Xty)
+    beta = torch.linalg.solve(XtX + _adaptive_ridge(XtX), Xty)
 
     yhat = torch.einsum('bmnd,bd->bmn', X, beta)
     resid = ym - yhat * mask
@@ -72,7 +90,10 @@ def irlsBernoulli(
     mask: torch.Tensor,
     n_iter: int = 5,
 ) -> torch.Tensor:
-    """Batched IRLS logistic regression via tall-matrix WLS."""
+    """Batched IRLS logistic regression via tall-matrix WLS.
+
+    NOTE: fails on CUDA when X has zero-padded columns (variable-d batches).
+    """
     B, m, n, d = Xm.shape
     beta = Xm.new_zeros(B, d)
     for _ in range(n_iter):
@@ -92,12 +113,10 @@ def irlsBernoulliCompacted(
     ym: torch.Tensor,
     mask: torch.Tensor,
     n_iter: int = 5,
-    ridge: float = 1e-6,
 ) -> torch.Tensor:
     """Batched IRLS logistic regression via normal equations XwX."""
-    d = Xm.shape[-1]
-    beta = Xm.new_zeros(Xm.shape[0], d)
-    eye = ridge * torch.eye(d, device=Xm.device, dtype=Xm.dtype)
+    B, d = Xm.shape[0], Xm.shape[-1]
+    beta = Xm.new_zeros(B, d)
     for _ in range(n_iter):
         eta = torch.einsum('bmnd,bd->bmn', Xm, beta)
         p = torch.sigmoid(eta)
@@ -105,7 +124,7 @@ def irlsBernoulliCompacted(
         z = (eta + (ym - p * mask) / w) * mask
         XwX = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)
         Xwz = torch.einsum('bmnd,bmn->bd', Xm, w * z)
-        beta = torch.linalg.solve(XwX + eye, Xwz)
+        beta = torch.linalg.solve(XwX + _adaptive_ridge(XwX), Xwz)
     return beta
 
 
@@ -121,7 +140,10 @@ def irlsPoisson(
     n_iter: int = 5,
     damping: float = 0.5,
 ) -> torch.Tensor:
-    """Batched IRLS Poisson regression via tall-matrix WLS (damped)."""
+    """Batched IRLS Poisson regression via tall-matrix WLS (damped).
+
+    NOTE: fails on CUDA when X has zero-padded columns (variable-d batches).
+    """
     B, m, n, d = Xm.shape
     n_obs = mask.sum(dim=(1, 2)).clamp(min=1)
     y_mean = (ym.sum(dim=(1, 2)) / n_obs).clamp(min=1e-4)
@@ -146,7 +168,6 @@ def irlsPoissonCompacted(
     mask: torch.Tensor,
     n_iter: int = 5,
     damping: float = 0.5,
-    ridge: float = 1e-6,
 ) -> torch.Tensor:
     """Batched IRLS Poisson regression via normal equations XwX (damped)."""
     B, m, n, d = Xm.shape
@@ -154,7 +175,6 @@ def irlsPoissonCompacted(
     y_mean = (ym.sum(dim=(1, 2)) / n_obs).clamp(min=1e-4)
     beta = Xm.new_zeros(B, d)
     beta[:, 0] = torch.log(y_mean)
-    eye = ridge * torch.eye(d, device=Xm.device, dtype=Xm.dtype)
     for _ in range(n_iter):
         eta = torch.einsum('bmnd,bd->bmn', Xm, beta)
         mu = torch.exp(eta.clamp(max=20))
@@ -162,6 +182,6 @@ def irlsPoissonCompacted(
         z = (eta + (ym - mu * mask) / w) * mask
         XwX = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)
         Xwz = torch.einsum('bmnd,bmn->bd', Xm, w * z)
-        beta_new = torch.linalg.solve(XwX + eye, Xwz)
+        beta_new = torch.linalg.solve(XwX + _adaptive_ridge(XwX), Xwz)
         beta = damping * beta_new + (1 - damping) * beta
     return beta
