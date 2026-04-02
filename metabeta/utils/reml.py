@@ -17,3 +17,19 @@ def _sufficientStats(
     return XtX_g, Xty_g, yty_g, ZtZ_g, ZtX_g, Zty_g
 
 
+def _getL(
+    l_diag: torch.Tensor,  # (B, q)   log L_jj
+    l_off: torch.Tensor,  # (B, q*(q-1)//2)  L_ij, i > j
+    q: int,
+) -> torch.Tensor:         # (B, q, q) lower triangular
+    """assemble the Cholesky factor L from unconstrained parameters"""
+    L = torch.diag_embed(l_diag.exp())  # (B, q, q) positive diagonal
+    if q > 1:
+        rows, cols = torch.tril_indices(q, q, offset=-1, device=l_diag.device)
+        n_off = rows.shape[0]
+        basis = torch.zeros(n_off, q, q, device=l_diag.device, dtype=l_diag.dtype)
+        basis[torch.arange(n_off), rows, cols] = 1.0
+        L = L + torch.einsum('bk,kij->bij', l_off, basis)
+    return L
+
+
