@@ -204,7 +204,8 @@ class Trainer:
             shuffle=partition == 'train',
             bucket_mult=50,
             sort_seed=epoch,
-            num_workers=getattr(self.cfg, 'num_workers', 4),
+            num_workers=4,
+            persistent_workers=(partition != 'train'),
         )
 
     def _trainingDataAvailable(self, start_epoch: int) -> bool:
