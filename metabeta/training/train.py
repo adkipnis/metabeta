@@ -87,19 +87,19 @@ class EarlyStopping:
         self.patience = patience
         self.delta = delta
         self.best_nrmse = float('inf')
-        self.best_abs_lcr = float('inf')
+        self.best_median_nll = float('inf')
         self.counter = 0
         self.stop = False
 
-    def update(self, mean_nrmse: float, mean_abs_lcr: float) -> bool:
+    def update(self, mean_nrmse: float, median_nll: float) -> bool:
         improved_nrmse = (self.best_nrmse - mean_nrmse) > self.delta
-        improved_lcr = (self.best_abs_lcr - mean_abs_lcr) > self.delta
-        improved = improved_nrmse or improved_lcr
+        improved_nll = (self.best_median_nll - median_nll) > self.delta
+        improved = improved_nrmse or improved_nll
 
         if improved_nrmse:
             self.best_nrmse = mean_nrmse
-        if improved_lcr:
-            self.best_abs_lcr = mean_abs_lcr
+        if improved_nll:
+            self.best_median_nll = median_nll
 
         if improved:
             self.counter = 0
@@ -150,7 +150,7 @@ class Trainer:
         # tracking & logging
         self.current_epoch = 0
         self.best_nrmse = float('inf')
-        self.best_abs_lcr = float('inf')
+        self.best_median_nll = float('inf')
         self.best_epoch = 0
         self.global_step = 0
         self.wandb_run = None
@@ -266,7 +266,7 @@ class Trainer:
             'epoch': self.current_epoch,
             'best_epoch': self.best_epoch,
             'best_nrmse': self.best_nrmse,
-            'best_abs_lcr': self.best_abs_lcr,
+            'best_median_nll': self.best_median_nll,
             'trainer_cfg': vars(self.cfg).copy(),
             'data_cfg': self.data_cfg.copy(),
             'model_cfg': self.model_cfg.to_dict(),
@@ -296,11 +296,11 @@ class Trainer:
         self.timestamp = payload['timestamp']
         self.best_epoch = payload['best_epoch']
         self.best_nrmse = payload['best_nrmse']
-        self.best_abs_lcr = payload['best_abs_lcr']
+        self.best_median_nll = payload['best_median_nll']
         self.wandb_run_id = payload.get('wandb_run_id')
         if self.stopper is not None:
             self.stopper.best_nrmse = self.best_nrmse
-            self.stopper.best_abs_lcr = self.best_abs_lcr
+            self.stopper.best_median_nll = self.best_median_nll
         return int(payload.get('epoch', 0))  # last completed epoch
 
     def getTrackingMetrics(self, eval_summary: EvaluationSummary) -> tuple[float, float, float]:
@@ -595,20 +595,20 @@ batch size: {self.cfg.bs}
             # update tracked metrics and optional early stopping on sample epochs
             if mean_nrmse is not None:
                 improved_nrmse = mean_nrmse < (self.best_nrmse - 1e-6)
-                improved_lcr = mean_abs_lcr < (self.best_abs_lcr - 1e-6)  # type: ignore
-                improved = improved_nrmse or improved_lcr
+                improved_nll = median_nll < (self.best_median_nll - 1e-6)  # type: ignore
+                improved = improved_nrmse or improved_nll
 
                 if improved_nrmse:
                     self.best_nrmse = mean_nrmse
-                if improved_lcr:
-                    self.best_abs_lcr = mean_abs_lcr  # type: ignore
+                if improved_nll:
+                    self.best_median_nll = median_nll  # type: ignore
                 if improved:
                     self.best_epoch = self.current_epoch
                     if self.cfg.save_best:
                         self.save('best')
 
                 if self.stopper is not None:
-                    self.stopper.update(float(mean_nrmse), float(mean_abs_lcr))
+                    self.stopper.update(float(mean_nrmse), float(median_nll))  # type: ignore
                     if self.stopper.stop:
                         logger.info(f'early stopping at epoch {self.current_epoch}.')
                         break
