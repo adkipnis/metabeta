@@ -120,7 +120,9 @@ class TestMakeOOSSplits:
         splits = makeOOSSplits(mask_n, n_splits=10, p_test=p_test, generator=g)
         fracs = [test.float().sum() / mask_n.float().sum() for _, test in splits]
         mean_frac = torch.tensor(fracs).mean().item()
-        assert abs(mean_frac - p_test) < 0.05, f'mean test fraction {mean_frac:.3f} far from {p_test}'
+        assert (
+            abs(mean_frac - p_test) < 0.05
+        ), f'mean test fraction {mean_frac:.3f} far from {p_test}'
 
     def test_every_group_has_at_least_one_train_obs(self):
         """No group with valid observations should be left with zero train obs."""
@@ -263,29 +265,50 @@ class TestEstimateOOSProposals:
 
     def test_rng_reproducible(self, batch, model):
         """Same Generator seed gives identical proposals."""
-        masks = [t for t, _ in makeOOSSplits(batch['mask_n'], n_splits=1,
-                                              generator=torch.Generator().manual_seed(0))]
-        p1 = estimateOOSProposals(model, batch, masks, n_samples=16, rng=np.random.default_rng(7))[0]
-        p2 = estimateOOSProposals(model, batch, masks, n_samples=16, rng=np.random.default_rng(7))[0]
-        assert torch.allclose(p1.samples_g, p2.samples_g), 'same Generator seed gave different global samples'
-        assert torch.allclose(p1.samples_l, p2.samples_l), 'same Generator seed gave different local samples'
+        masks = [
+            t
+            for t, _ in makeOOSSplits(
+                batch['mask_n'], n_splits=1, generator=torch.Generator().manual_seed(0)
+            )
+        ]
+        p1 = estimateOOSProposals(model, batch, masks, n_samples=16, rng=np.random.default_rng(7))[
+            0
+        ]
+        p2 = estimateOOSProposals(model, batch, masks, n_samples=16, rng=np.random.default_rng(7))[
+            0
+        ]
+        assert torch.allclose(
+            p1.samples_g, p2.samples_g
+        ), 'same Generator seed gave different global samples'
+        assert torch.allclose(
+            p1.samples_l, p2.samples_l
+        ), 'same Generator seed gave different local samples'
 
     def test_rng_generator_advances_across_splits(self, batch, model):
         """A single Generator shared across splits produces different samples per split."""
-        masks = [t for t, _ in makeOOSSplits(batch['mask_n'], n_splits=2,
-                                              generator=torch.Generator().manual_seed(1))]
-        proposals = estimateOOSProposals(model, batch, masks, n_samples=16,
-                                         rng=np.random.default_rng(5))
-        assert not torch.allclose(proposals[0].samples_g, proposals[1].samples_g), (
-            'Generator did not advance across splits — both splits got identical base samples'
+        masks = [
+            t
+            for t, _ in makeOOSSplits(
+                batch['mask_n'], n_splits=2, generator=torch.Generator().manual_seed(1)
+            )
+        ]
+        proposals = estimateOOSProposals(
+            model, batch, masks, n_samples=16, rng=np.random.default_rng(5)
         )
+        assert not torch.allclose(
+            proposals[0].samples_g, proposals[1].samples_g
+        ), 'Generator did not advance across splits — both splits got identical base samples'
 
     def test_estimate_rng_reproducible(self, batch, model):
         """model.estimate with same Generator seed produces identical samples."""
         p1 = model.estimate(batch, n_samples=16, rng=np.random.default_rng(99))
         p2 = model.estimate(batch, n_samples=16, rng=np.random.default_rng(99))
-        assert torch.allclose(p1.samples_g, p2.samples_g), 'same Generator seed gave different global samples'
-        assert torch.allclose(p1.samples_l, p2.samples_l), 'same Generator seed gave different local samples'
+        assert torch.allclose(
+            p1.samples_g, p2.samples_g
+        ), 'same Generator seed gave different global samples'
+        assert torch.allclose(
+            p1.samples_l, p2.samples_l
+        ), 'same Generator seed gave different local samples'
 
     def test_estimate_rng_global_local_differ(self, batch, model):
         """With a shared Generator, global and local posteriors draw distinct samples."""
@@ -293,10 +316,10 @@ class TestEstimateOOSProposals:
         # If both flows used a fresh RandomState from the same seed they'd produce
         # identical initial draws; a shared advancing Generator prevents this.
         global_flat = p.samples_g.reshape(-1)
-        local_flat = p.samples_l.reshape(-1)[:global_flat.numel()]
-        assert not torch.allclose(global_flat, local_flat), (
-            'global and local samples appear identical — rng state is not advancing between them'
-        )
+        local_flat = p.samples_l.reshape(-1)[: global_flat.numel()]
+        assert not torch.allclose(
+            global_flat, local_flat
+        ), 'global and local samples appear identical — rng state is not advancing between them'
 
 
 # ---------------------------------------------------------------------------
@@ -327,24 +350,48 @@ class TestOosNLL:
         """Same Generator seed gives identical OOS NLL."""
         g1 = torch.Generator().manual_seed(11)
         g2 = torch.Generator().manual_seed(11)
-        r1 = oosNLL(model, batch, n_splits=2, n_samples=16, generator=g1, rng=np.random.default_rng(42))
-        r2 = oosNLL(model, batch, n_splits=2, n_samples=16, generator=g2, rng=np.random.default_rng(42))
+        r1 = oosNLL(
+            model, batch, n_splits=2, n_samples=16, generator=g1, rng=np.random.default_rng(42)
+        )
+        r2 = oosNLL(
+            model, batch, n_splits=2, n_samples=16, generator=g2, rng=np.random.default_rng(42)
+        )
         assert torch.allclose(r1, r2), 'same Generator seed should give identical OOS NLL'
 
     def test_different_rngs_give_different_results(self, batch, model):
         """Different Generator seeds should produce different NLL values."""
         g1 = torch.Generator().manual_seed(11)
         g2 = torch.Generator().manual_seed(11)
-        r1 = oosNLL(model, batch, n_splits=2, n_samples=16, generator=g1, rng=np.random.default_rng(42))
-        r2 = oosNLL(model, batch, n_splits=2, n_samples=16, generator=g2, rng=np.random.default_rng(99))
+        r1 = oosNLL(
+            model, batch, n_splits=2, n_samples=16, generator=g1, rng=np.random.default_rng(42)
+        )
+        r2 = oosNLL(
+            model, batch, n_splits=2, n_samples=16, generator=g2, rng=np.random.default_rng(99)
+        )
         assert not torch.allclose(r1, r2), 'different Generator seeds gave identical OOS NLL'
 
     def test_mixture_and_expected_modes_differ(self, batch, model):
         """mixture and expected modes score the same draws differently."""
         g1 = torch.Generator().manual_seed(55)
         g2 = torch.Generator().manual_seed(55)
-        r_mix = oosNLL(model, batch, n_splits=2, n_samples=32, mode='mixture', generator=g1, rng=np.random.default_rng(7))
-        r_exp = oosNLL(model, batch, n_splits=2, n_samples=32, mode='expected', generator=g2, rng=np.random.default_rng(7))
+        r_mix = oosNLL(
+            model,
+            batch,
+            n_splits=2,
+            n_samples=32,
+            mode='mixture',
+            generator=g1,
+            rng=np.random.default_rng(7),
+        )
+        r_exp = oosNLL(
+            model,
+            batch,
+            n_splits=2,
+            n_samples=32,
+            mode='expected',
+            generator=g2,
+            rng=np.random.default_rng(7),
+        )
         # Both should be finite, and the two modes should give different values
         assert torch.isfinite(r_mix).all()
         assert torch.isfinite(r_exp).all()
@@ -366,9 +413,9 @@ class TestOosNLL:
         nll_test = posteriorPredictiveNLL(pp, data_test)
 
         # NLL values should differ since they score different observations
-        assert not torch.allclose(nll_train, nll_test), (
-            'train and test NLL are identical — test masking is not working'
-        )
+        assert not torch.allclose(
+            nll_train, nll_test
+        ), 'train and test NLL are identical — test masking is not working'
 
     def test_expected_mode_runs(self, batch, model):
         result = oosNLL(model, batch, n_splits=2, n_samples=16, mode='expected')
