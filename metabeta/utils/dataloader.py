@@ -351,6 +351,7 @@ class Dataloader(torch.utils.data.DataLoader):
         bucket_mult: int = 50,
         sort_seed: int = 0,
         num_workers: int = 0,
+        persistent_workers: bool = False,
     ):
         col = Collection(path)
         not_mps = torch.accelerator.current_accelerator().type != 'mps'  # type: ignore
@@ -365,7 +366,7 @@ class Dataloader(torch.utils.data.DataLoader):
         self._batch_size_effective = batch_size
 
         use_sortish = sortish and batch_size < len(col)
-        persistent = num_workers > 0
+        persistent = num_workers > 0 and persistent_workers
         if use_sortish:
             batch_sampler = SortishBatchSampler(
                 m_i=col.m_i,
