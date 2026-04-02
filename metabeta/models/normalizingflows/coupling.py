@@ -1,4 +1,5 @@
 from typing import Literal
+import numpy as np
 import torch
 from torch import nn
 from metabeta.models.normalizingflows import (
@@ -213,6 +214,7 @@ class CouplingFlow(nn.Module):
         n_samples: int,
         context: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
+        rng: np.random.Generator | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
 
         # determine shape
@@ -236,7 +238,7 @@ class CouplingFlow(nn.Module):
             mask_z = None
 
         # sample from base
-        z = self.base_dist.sample(shape).to(device=self.device, dtype=self.dtype)
+        z = self.base_dist.sample(shape, rng=rng).to(device=self.device, dtype=self.dtype)
 
         # simple backward pass
         if mask_z is None:

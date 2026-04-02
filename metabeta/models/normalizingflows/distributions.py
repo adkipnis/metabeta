@@ -40,8 +40,10 @@ class StaticDist(nn.Module):
         else:
             raise ValueError
 
-    def sample(self, shape: tuple[int, ...]) -> torch.Tensor:
-        x = self._sampling_dist.rvs(size=shape, random_state=self.rng)
+    def sample(
+        self, shape: tuple[int, ...], rng: np.random.Generator | None = None
+    ) -> torch.Tensor:
+        x = self._sampling_dist.rvs(size=shape, random_state=rng if rng is not None else self.rng)
         return torch.from_numpy(x)
 
     def logProb(self, x: torch.Tensor) -> torch.Tensor:
@@ -86,7 +88,9 @@ class TrainableDist(nn.Module):
         else:
             raise ValueError
 
-    def sample(self, shape: tuple[int, ...]) -> torch.Tensor:
+    def sample(
+        self, shape: tuple[int, ...], rng: np.random.Generator | None = None
+    ) -> torch.Tensor:
         if shape[-1] != len(self._params['loc']):
             raise ValueError(
                 f'last shape dim should be {len(self._params["loc"])}, but found {shape[-1]}'
@@ -94,7 +98,7 @@ class TrainableDist(nn.Module):
         with torch.no_grad():
             params = {k: v.cpu() for k, v in self._params.items()}
             sampling_dist = self._dist['scipy'](**params)
-            x = sampling_dist.rvs(size=shape, random_state=self.rng)
+            x = sampling_dist.rvs(size=shape, random_state=rng if rng is not None else self.rng)
             return torch.from_numpy(x)
 
     def logProb(self, x: torch.Tensor) -> torch.Tensor:
@@ -128,8 +132,10 @@ class BaseDist(nn.Module):
     def __repr__(self) -> str:
         return self.base.__repr__()
 
-    def sample(self, shape: tuple[int, ...]) -> torch.Tensor:
-        return self.base.sample(shape)
+    def sample(
+        self, shape: tuple[int, ...], rng: np.random.Generator | None = None
+    ) -> torch.Tensor:
+        return self.base.sample(shape, rng=rng)
 
     def logProb(self, x: torch.Tensor) -> torch.Tensor:
         return self.base.logProb(x)

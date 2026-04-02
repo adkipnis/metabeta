@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -314,6 +315,7 @@ class Approximator(nn.Module):
         data: dict[str, torch.Tensor],
         summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
         n_samples: int = 1,
+        rng: np.random.Generator | None = None,
     ) -> Proposal:
         """inference method: sample and apply conditional backward pass"""
         assert n_samples > 0, 'n_samples must be positive'
@@ -328,7 +330,7 @@ class Approximator(nn.Module):
         # global posterior
         mask_g = self._masks(data, local=False)
         samples_g, log_prob_g = self.posterior_g.sample(  # type: ignore
-            n_samples, context=summary_g, mask=mask_g
+            n_samples, context=summary_g, mask=mask_g, rng=rng
         )
         proposed['global'] = {'samples': samples_g, 'log_prob': log_prob_g}
 
@@ -338,7 +340,7 @@ class Approximator(nn.Module):
         mask_l = mask_l.unsqueeze(-2).expand(b, m, n_samples, q)
         context_l = self._localContext(summary_l, samples_g)
         samples_l, log_prob_l = self.posterior_l.sample(  # type: ignore
-            1, context=context_l, mask=mask_l
+            1, context=context_l, mask=mask_l, rng=rng
         )
         samples_l, log_prob_l = samples_l.squeeze(-2), log_prob_l.squeeze(-1)
         proposed['local'] = {'samples': samples_l, 'log_prob': log_prob_l}
@@ -348,8 +350,14 @@ class Approximator(nn.Module):
         return proposal
 
     @torch.inference_mode()
-    def estimate(self, data, summaries=None, n_samples=1) -> Proposal:
-        return self.backward(data, summaries=summaries, n_samples=n_samples)
+    def estimate(
+        self,
+        data,
+        summaries=None,
+        n_samples=1,
+        rng: np.random.Generator | None = None,
+    ) -> Proposal:
+        return self.backward(data, summaries=summaries, n_samples=n_samples, rng=rng)
 
 
 # =============================================================================
