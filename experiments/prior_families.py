@@ -283,7 +283,7 @@ PARAM_COLORS = {
 }
 PARAM_LABELS = {
     'ffx': r'$\beta$',
-    'sigma_rfx': r'$\sigma_0$',
+    'sigma_rfx': r'$\sigma_\alpha$',
     'sigma_eps': r'$\sigma_\epsilon$',
 }
 
