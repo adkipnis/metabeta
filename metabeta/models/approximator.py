@@ -8,7 +8,7 @@ from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import getConstrainers
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
-from metabeta.utils.least_squares import irlsBernoulli, irlsPoisson, olsNormal
+from metabeta.utils.least_squares import irlsBernoulliCompacted, irlsPoissonCompacted, olsNormalCompacted
 from metabeta.utils.families import (
     FFX_FAMILIES,
     SIGMA_FAMILIES,
@@ -157,12 +157,12 @@ class Approximator(nn.Module):
         ym = y * mask
 
         if self.likelihood_family == 0:
-            beta, sigma_eps_ols = olsNormal(Xm, ym, mask, data['n'].float(), X)
+            beta, sigma_eps_ols = olsNormalCompacted(Xm, ym, mask, data['n'].float(), X)
             out['sigma_eps_ols'] = sigma_eps_ols
         elif self.likelihood_family == 1:
-            beta = irlsBernoulli(Xm, ym, mask)
+            beta = irlsBernoulliCompacted(Xm, ym, mask)
         elif self.likelihood_family == 2:
-            beta = irlsPoisson(Xm, ym, mask)
+            beta = irlsPoissonCompacted(Xm, ym, mask)
         else:
             raise ValueError(f'no summary statistics for likelihood {self.likelihood_family}')
 
