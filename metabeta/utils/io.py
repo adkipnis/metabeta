@@ -13,9 +13,11 @@ def getDevice() -> str:
 def setDevice(device: str = ''):
     if not device:
         return torch.device(getDevice())
-    elif device == 'cuda' and torch.cuda.is_available():
+    elif device == 'cuda':
+        assert torch.cuda.is_available(), 'cuda is not avalialbe'
         return torch.device('cuda')
-    elif device == 'mps' and torch.backends.mps.is_available():
+    elif device == 'mps':
+        assert torch.backends.mps.is_available(), 'mps are not available'
         return torch.device('mps')
     else:
         return torch.device('cpu')
