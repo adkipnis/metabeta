@@ -207,7 +207,7 @@ class Approximator(nn.Module):
             out += [
                 n_total,
                 n_groups,
-                stats['beta_ols'],
+                torch.arcsinh(stats['beta_ols']),
                 stats['sigma_rfx_ols'],
                 nu_ffx,
                 tau_ffx,
