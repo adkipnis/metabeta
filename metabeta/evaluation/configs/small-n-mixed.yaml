@@ -18,7 +18,7 @@ rescale: true         # unstandardize y
 importance: true     # importance sampling post-hoc
 sir: false            # sampling importance resampling
 sir_iter: 8
-conformal: true       # calibrate credible interval estimation using conformal correction
+conformal: false       # calibrate credible interval estimation using conformal correction
 
 # checkpoint
 prefix: 'best'          # best | latest
