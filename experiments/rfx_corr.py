@@ -35,7 +35,7 @@ from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 from metabeta.evaluation.correlation import evaluateCorrelation, mergeCorrelationResults
-from metabeta.plot import plotRfxCorrelationFromResults
+from metabeta.plotting import plotRfxCorrelationFromResults
 
 DIR = Path(__file__).resolve().parent
 METABETA = DIR / '..' / 'metabeta'
@@ -160,9 +160,9 @@ def run(configs: list[str], n_sim: int, show: bool) -> None:
     n_skipped = 0
 
     for config_name in configs:
-        print(f'\n{"=" * 60}')
+        print(f"\n{'=' * 60}")
         print(f'Config: {config_name}')
-        print(f'{"=" * 60}')
+        print(f"{'=' * 60}")
 
         cfg = loadEvalConfig(config_name)
         setSeed(cfg.seed)
@@ -189,9 +189,7 @@ def run(configs: list[str], n_sim: int, show: bool) -> None:
         batch = rescaleData(full_batch) if cfg.rescale else full_batch
 
         for label, proposal in zip(METHODS, [proposal_mb, proposal_nuts, proposal_advi]):
-            results_by_method[label].append(
-                evaluateCorrelation(proposal.rfx, batch, n_sim=n_sim)
-            )
+            results_by_method[label].append(evaluateCorrelation(proposal.rfx, batch, n_sim=n_sim))
 
     if len(configs) == n_skipped:
         print('\nNo valid configs to plot.')
