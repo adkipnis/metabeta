@@ -390,14 +390,14 @@ _LIKELIHOOD_LL = (_llNormal, _llBernoulli, _llPoisson)
 
 
 def logMarginalLikelihoodNormal(
-    ffx: torch.Tensor,        # (b, s, d)
+    ffx: torch.Tensor,  # (b, s, d)
     sigma_rfx: torch.Tensor,  # (b, s, q)
     sigma_eps: torch.Tensor,  # (b, s)
-    y: torch.Tensor,          # (b, m, n, 1)
-    X: torch.Tensor,          # (b, m, n, d)
-    Z: torch.Tensor,          # (b, m, n, q)
-    mask_n: torch.Tensor,     # (b, m, n, 1)
-    mask_m: torch.Tensor,     # (b, m, 1)
+    y: torch.Tensor,  # (b, m, n, 1)
+    X: torch.Tensor,  # (b, m, n, d)
+    Z: torch.Tensor,  # (b, m, n, q)
+    mask_n: torch.Tensor,  # (b, m, n, 1)
+    mask_m: torch.Tensor,  # (b, m, 1)
 ) -> torch.Tensor:
     """Marginal log-likelihood for Normal, with rfx integrated out analytically.
 
@@ -444,7 +444,7 @@ def logMarginalLikelihoodNormal(
     # Use cholesky_ex to avoid hard failures; bad elements get -inf log-likelihood.
     jitter = 1e-6 * torch.eye(M.shape[-1], dtype=M.dtype, device=M.device)
     chol_M, info = torch.linalg.cholesky_ex(M + jitter)            # (b, m, s, q, q)
-    chol_ok = (info == 0)                                           # (b, m, s)
+    chol_ok = info == 0                                           # (b, m, s)
 
     log_det_M = 2.0 * chol_M.diagonal(dim1=-2, dim2=-1).log().sum(-1)  # (b, m, s)
     log_det_M = torch.where(chol_ok, log_det_M, log_det_M.new_tensor(torch.inf))
@@ -457,9 +457,7 @@ def logMarginalLikelihoodNormal(
     log_det_Sigma = 2.0 * sigma_rfx.log().sum(-1)   # (b, s); padded dims cancel with M
     log_s2e = s2e.log()                              # (b, s)
     log_det_V = (
-        log_det_M
-        + log_det_Sigma[:, None, :]
-        + n_i[:, :, None] * log_s2e[:, None, :]
+        log_det_M + log_det_Sigma[:, None, :] + n_i[:, :, None] * log_s2e[:, None, :]
     )  # (b, m, s)
 
     # quadratic form

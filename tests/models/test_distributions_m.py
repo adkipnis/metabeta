@@ -1,4 +1,3 @@
-
 import pytest
 import torch
 
@@ -9,6 +8,7 @@ from metabeta.models.normalizingflows.distributions import StaticDist, Trainable
 # Fixtures
 # -----------------------
 
+
 @pytest.fixture
 def batch_shape():
     return (8, 3)  # (batch, d_data)
@@ -17,6 +17,7 @@ def batch_shape():
 # -----------------------
 # StaticDist Tests
 # -----------------------
+
 
 @pytest.mark.parametrize('family', ['normal', 'student'])
 def test_staticdist_sample_shape(batch_shape, family):
@@ -39,6 +40,7 @@ def test_staticdist_logprob(batch_shape, family):
 # -----------------------
 # TrainableDist Tests
 # -----------------------
+
 
 @pytest.mark.parametrize('family', ['normal', 'student'])
 def test_traindist_sample_shape(batch_shape, family):
@@ -66,6 +68,7 @@ def test_traindist_invalid_sample_shape():
 # -----------------------
 # BaseDist Tests
 # -----------------------
+
 
 @pytest.mark.parametrize('trainable', [False, True])
 @pytest.mark.parametrize('family', ['normal', 'student'])

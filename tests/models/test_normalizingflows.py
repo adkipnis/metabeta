@@ -14,25 +14,31 @@ torch.manual_seed(0)
 # Fixtures
 # -----------------------
 
+
 @pytest.fixture
 def batch():
     return torch.randn(B, 10, 3)
+
 
 @pytest.fixture
 def context():
     return torch.randn(B, 10, 5)
 
+
 @pytest.fixture(params=['affine', 'spline'])
 def transform(request: pytest.FixtureRequest) -> str:
     return str(request.param)
+
 
 @pytest.fixture(params=['mlp', 'residual'])
 def net_type(request: pytest.FixtureRequest) -> str:
     return str(request.param)
 
+
 @pytest.fixture(params=[True, False])
 def zero_init(request: pytest.FixtureRequest) -> bool:
     return bool(request.param)
+
 
 @pytest.fixture
 def subnet_kwargs(net_type: str, zero_init: bool) -> dict[str, object]:
@@ -41,10 +47,12 @@ def subnet_kwargs(net_type: str, zero_init: bool) -> dict[str, object]:
         'zero_init': zero_init,
     }
 
+
 def random_mask(x: torch.Tensor):
     mask = torch.randint(low=0, high=2, size=x.shape, dtype=torch.float32)
     x = x * mask
     return x, mask
+
 
 def _numerical_logdet(z: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
     """
@@ -73,9 +81,10 @@ def test_actnorm(batch):
     x = x.detach().clone().requires_grad_(True)
     z, log_det, _ = model.forward(x, mask=mask)
     log_det_num = _numerical_logdet(z, x)
-    assert torch.allclose(log_det, log_det_num, atol=ATOL), (
-        f'Log determinant mismatch! Computed: {log_det}, Numerical: {log_det_num}'
-    )
+    assert torch.allclose(
+        log_det, log_det_num, atol=ATOL
+    ), f'Log determinant mismatch! Computed: {log_det}, Numerical: {log_det_num}'
+
 
 # -----------------------
 # LU
@@ -93,9 +102,10 @@ def test_lu(batch, identity_init):
     x = x.detach().clone().requires_grad_(True)
     z, log_det, _ = model.forward(x, mask=mask)
     log_det_num = _numerical_logdet(z, x)
-    assert torch.allclose(log_det, log_det_num, atol=ATOL), (
-        f'Log determinant mismatch! Computed: {log_det}, Numerical: {log_det_num}'
-    )
+    assert torch.allclose(
+        log_det, log_det_num, atol=ATOL
+    ), f'Log determinant mismatch! Computed: {log_det}, Numerical: {log_det_num}'
+
 
 # -----------------------
 # Permute
@@ -111,9 +121,10 @@ def test_permute(batch):
     x = x.detach().clone().requires_grad_(True)
     z, log_det, _ = model.forward(x, mask=mask)
     log_det_num = _numerical_logdet(z, x)
-    assert torch.allclose(log_det, log_det_num, atol=ATOL), (
-        f'Log determinant mismatch! Computed: {log_det}, Numerical: {log_det_num}'
-    )
+    assert torch.allclose(
+        log_det, log_det_num, atol=ATOL
+    ), f'Log determinant mismatch! Computed: {log_det}, Numerical: {log_det_num}'
+
 
 # -----------------------
 # Single Coupling
@@ -130,16 +141,15 @@ def test_single_coupling(batch, context, subnet_kwargs, transform):
         transform=transform,
     )
     model.eval()
-    (z1, z2), _ = model.forward(
-        x1, x2, context=context, mask1=mask1, mask2=mask2)
-    (x1_rec, x2_rec), _ = model.inverse(
-        z1, z2, context=context, mask1=mask1, mask2=mask2)
+    (z1, z2), _ = model.forward(x1, x2, context=context, mask1=mask1, mask2=mask2)
+    (x1_rec, x2_rec), _ = model.inverse(z1, z2, context=context, mask1=mask1, mask2=mask2)
     assert torch.isfinite(z1).all(), 'anomaly in left forward pass'
     assert torch.isfinite(z2).all(), 'anomaly in right forward pass'
     assert torch.isfinite(x1_rec).all(), 'anomaly in left backward pass'
     assert torch.isfinite(x2_rec).all(), 'anomaly in right backward pass'
     assert torch.allclose(x1, x1_rec, atol=ATOL), 'left recovery failed'
     assert torch.allclose(x2, x2_rec, atol=ATOL), 'right recovery failed'
+
 
 # -----------------------
 # Dual Coupling
@@ -154,16 +164,17 @@ def test_dual_coupling(batch, context, subnet_kwargs, transform):
     )
     model.eval()
     z, _, _ = model.forward(x, context=context, mask=mask)
-    x_rec, _, _ = model.inverse(z, context,  mask=mask)
+    x_rec, _, _ = model.inverse(z, context, mask=mask)
     assert torch.isfinite(z).all(), 'anomaly in forward pass'
     assert torch.isfinite(x_rec).all(), 'anomaly in backward pass'
     assert torch.allclose(x, x_rec, atol=ATOL), 'recovery failed'
     x = x.detach().clone().requires_grad_(True)
     z, log_det, _ = model.forward(x, context=context, mask=mask)
     log_det_num = _numerical_logdet(z, x)
-    assert torch.allclose(log_det, log_det_num, atol=ATOL), (
-        f'Log determinant mismatch! Computed: {log_det}, Numerical: {log_det_num}'
-    )
+    assert torch.allclose(
+        log_det, log_det_num, atol=ATOL
+    ), f'Log determinant mismatch! Computed: {log_det}, Numerical: {log_det_num}'
+
 
 # -----------------------
 # Coupling Flow
@@ -182,18 +193,16 @@ def test_coupling_flow(batch, context, subnet_kwargs, transform, n_blocks):
     )
     model.eval()
     z, _, _ = model.forward(x, context=context, mask=mask)
-    x_rec, _, _ = model.inverse(z, context,  mask=mask)
+    x_rec, _, _ = model.inverse(z, context, mask=mask)
     assert torch.isfinite(z).all(), 'anomaly in forward pass'
     assert torch.isfinite(x_rec).all(), 'anomaly in backward pass'
     assert torch.allclose(x, x_rec, atol=ATOL), 'recovery failed'
     x = x.detach().clone().requires_grad_(True)
     z, log_det, _ = model.forward(x, context=context, mask=mask)
     log_det_num = _numerical_logdet(z, x)
-    assert torch.allclose(log_det, log_det_num, atol=ATOL), (
-        f'Log determinant mismatch! Computed: {log_det}, Numerical: {log_det_num}'
-    )
+    assert torch.allclose(
+        log_det, log_det_num, atol=ATOL
+    ), f'Log determinant mismatch! Computed: {log_det}, Numerical: {log_det_num}'
     x_samp, log_prob = model.sample(10, context=context, mask=mask)
     assert torch.isfinite(x_samp).all(), 'anomaly in samples'
     assert torch.isfinite(log_prob).all(), 'anomaly in log_prob'
-
-

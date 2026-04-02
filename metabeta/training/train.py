@@ -34,7 +34,7 @@ from metabeta.utils.evaluation import (
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler, runIS, runSIR
 from metabeta.evaluation.summary import getSummary, summaryTable
-from metabeta.plot import (
+from metabeta.plotting import (
     plotRecovery,
     plotCoverage,
     plotSBC,
@@ -47,7 +47,9 @@ logger = logging.getLogger('train.py')
 def setup() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
-    parser.add_argument('--name', type=str, default='small-n-sampled', help='load configs/{name}.yaml')
+    parser.add_argument(
+        '--name', type=str, default='small-n-sampled', help='load configs/{name}.yaml'
+    )
     parser.add_argument('--d_tag', type=str)
     parser.add_argument('--d_tag_valid', type=str)
     parser.add_argument('--m_tag', type=str)

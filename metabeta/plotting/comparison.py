@@ -4,11 +4,17 @@ from matplotlib import pyplot as plt
 
 from metabeta.utils.evaluation import EvaluationSummary, getNames, Proposal, dictMean
 from metabeta.utils.plot import DPI, savePlot
-from metabeta.plot.recovery import _prepareRecoveryData, _plotRecoveryGrouped
-from metabeta.plot.coverage import _plotCoverage
-from metabeta.plot.sbc import _plotSbcRow
+from metabeta.plotting.recovery import _prepareRecoveryData, _plotRecoveryGrouped
+from metabeta.plotting.coverage import _plotCoverage
+from metabeta.plotting.sbc import _plotSbcRow
 
-_COL_TITLES = ['Fixed Effects', 'Variances', 'Random Effects', 'Observed CI', 'Uniform ECDF']
+_COL_TITLES = [
+    'Fixed Effects',
+    'Variances',
+    'Random Effects',
+    'Observed CI',
+    'Uniform ECDF',
+]
 
 
 def plotComparison(
@@ -30,7 +36,7 @@ def plotComparison(
         # cols 0-2: recovery scatter
         targets, estimates, masks, names, metrics = _prepareRecoveryData(summary, data)
         _plotRecoveryGrouped(
-            axs[i, :3], # type: ignore
+            axs[i, :3],  # type: ignore
             targets=targets,
             estimates=estimates,
             masks=masks,
@@ -44,9 +50,9 @@ def plotComparison(
 
         # col 3: coverage
         names_cov = (
-            getNames('ffx', proposal.d) +
-            getNames('sigmas', proposal.q, has_sigma_eps=proposal.has_sigma_eps) +
-            getNames('rfx', proposal.q)
+            getNames('ffx', proposal.d)
+            + getNames('sigmas', proposal.q, has_sigma_eps=proposal.has_sigma_eps)
+            + getNames('rfx', proposal.q)
         )
         stats_cov = {
             'ECE': 100 * dictMean(summary.ece),

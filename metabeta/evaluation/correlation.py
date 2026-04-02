@@ -211,9 +211,16 @@ def mergeCorrelationResults(results_list: list[dict]) -> dict:
     """
     # pair-level keys: (b, n_pairs) → flatten to 1D before cat
     pair_keys = [
-        'corr_mean', 'corr_true', 'corr_sample',
-        'corr_q025', 'corr_q975', 'post_q025', 'post_q975',
-        'eta_rfx_pairs', 'm_pairs', 'percentile_pairs',
+        'corr_mean',
+        'corr_true',
+        'corr_sample',
+        'corr_q025',
+        'corr_q975',
+        'post_q025',
+        'post_q975',
+        'eta_rfx_pairs',
+        'm_pairs',
+        'percentile_pairs',
     ]
     # dataset-level keys: (b,) → cat directly
     dataset_keys = ['eta_rfx', 'offdiag_mae', 'percentile']

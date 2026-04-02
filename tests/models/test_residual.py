@@ -12,6 +12,7 @@ from metabeta.models.feedforward.residual import (
 # Fixtures
 # -----------------------
 
+
 @pytest.fixture
 def batch():
     return torch.randn(4, 16)
@@ -30,6 +31,7 @@ def device():
 # -----------------------
 # ResidualBlock
 # -----------------------
+
 
 def test_residualblock_output_shape(batch):
     block = ResidualBlock(d_hidden=16)
@@ -65,6 +67,7 @@ def test_residualblock_backward(batch):
 # ResidualNet
 # -----------------------
 
+
 def test_residualnet_forward(batch):
     net = ResidualNet(d_input=16, d_hidden=32, d_output=8, depth=2)
     out = net(batch)
@@ -90,18 +93,18 @@ def test_residualnet_backward(batch):
 def test_residualnet_forward_and_grads(batch):
     net = ResidualNet(d_input=16, d_hidden=32, d_output=8, depth=2)
     out = net(batch)
-    
+
     # check output numerics
     assert torch.isfinite(out).all()
-    
+
     # backward
     loss = out.mean()
     loss.backward()
-    
+
     grads = [p.grad for p in net.parameters() if p.requires_grad]
     # at least one grad exists
     assert any(g is not None for g in grads)
-    
+
     # check all grads are finite (skip None)
     for g in grads:
         if g is not None:
@@ -111,6 +114,7 @@ def test_residualnet_forward_and_grads(batch):
 # -----------------------
 # FlowResidualNet
 # -----------------------
+
 
 def test_flowresidualnet_forward(batch):
     net = FlowResidualNet(d_input=16, d_hidden=32, d_output=16, depth=2)
@@ -132,4 +136,3 @@ def test_flowresidualnet_backward(batch):
 
     grads = [p.grad for p in net.parameters() if p.requires_grad]
     assert any(g is not None for g in grads)
-    

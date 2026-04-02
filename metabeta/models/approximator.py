@@ -8,7 +8,11 @@ from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import getConstrainers
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
-from metabeta.utils.least_squares import irlsBernoulliCompacted, irlsPoissonCompacted, olsNormalCompacted
+from metabeta.utils.least_squares import (
+    irlsBernoulliCompacted,
+    irlsPoissonCompacted,
+    olsNormalCompacted,
+)
 from metabeta.utils.families import (
     FFX_FAMILIES,
     SIGMA_FAMILIES,

@@ -27,9 +27,9 @@ from metabeta.utils.families import (
 )
 
 
-SIGMA_HALFNORMAL = SIGMA_FAMILIES.index("halfnormal")
-SIGMA_HALFSTUDENT = SIGMA_FAMILIES.index("halfstudent")
-SIGMA_EXPONENTIAL = SIGMA_FAMILIES.index("exponential")
+SIGMA_HALFNORMAL = SIGMA_FAMILIES.index('halfnormal')
+SIGMA_HALFSTUDENT = SIGMA_FAMILIES.index('halfstudent')
+SIGMA_EXPONENTIAL = SIGMA_FAMILIES.index('exponential')
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ SIGMA_EXPONENTIAL = SIGMA_FAMILIES.index("exponential")
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("family", range(len(FFX_FAMILIES)))
+@pytest.mark.parametrize('family', range(len(FFX_FAMILIES)))
 def test_sampleFfxNp_shape_and_finite(family):
     rng = np.random.default_rng(0)
     loc = np.array([0.0, 1.0, -0.5])
@@ -47,7 +47,7 @@ def test_sampleFfxNp_shape_and_finite(family):
     assert np.all(np.isfinite(x))
 
 
-@pytest.mark.parametrize("family", range(len(SIGMA_FAMILIES)))
+@pytest.mark.parametrize('family', range(len(SIGMA_FAMILIES)))
 def test_sampleSigmaNp_positive_and_finite(family):
     rng = np.random.default_rng(0)
     scale = np.array([1.0, 2.0])
@@ -212,9 +212,7 @@ def test_logProbSigma_mixed_batch():
 
     import math
 
-    lp1 = (
-        D.StudentT(df=STUDENT_DF, loc=0, scale=scale[1]).log_prob(x[1]) + math.log(2.0)
-    ).sum(-1)
+    lp1 = (D.StudentT(df=STUDENT_DF, loc=0, scale=scale[1]).log_prob(x[1]) + math.log(2.0)).sum(-1)
     torch.testing.assert_close(lp[1], lp1)
 
 
@@ -223,7 +221,7 @@ def test_logProbSigma_mixed_batch():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("family_idx", range(len(FFX_FAMILIES)))
+@pytest.mark.parametrize('family_idx', range(len(FFX_FAMILIES)))
 def test_sampleFfxTorch_shape(family_idx):
     b, d, n_samples = 4, 3, 50
     loc = torch.randn(b, d)
@@ -234,7 +232,7 @@ def test_sampleFfxTorch_shape(family_idx):
     assert torch.all(torch.isfinite(x))
 
 
-@pytest.mark.parametrize("family_idx", range(len(SIGMA_FAMILIES)))
+@pytest.mark.parametrize('family_idx', range(len(SIGMA_FAMILIES)))
 def test_sampleSigmaTorch_shape_and_positive(family_idx):
     b, q, n_samples = 4, 2, 50
     scale = torch.rand(b, q) + 0.1

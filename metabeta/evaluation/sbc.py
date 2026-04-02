@@ -8,7 +8,7 @@ from metabeta.utils.evaluation import Proposal
 def fractionalRanks(
     samples: torch.Tensor,  # (b, ..., s, d)
     targets: torch.Tensor,  # (b, ..., d)
-    weights: torch.Tensor | None = None, # (b, s)
+    weights: torch.Tensor | None = None,  # (b, s)
 ) -> torch.Tensor:
     sample_dim = -1 if targets.dim() == 1 else -2
     targets = targets.unsqueeze(sample_dim)

@@ -413,6 +413,7 @@ class RationalQuadratic(CouplingTransform):
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
+
     seed = 0
 
     b = 512
@@ -459,8 +460,7 @@ if __name__ == '__main__':
     plt.grid(True)
     with torch.no_grad():
         for i in range(n_lines):
-            transform = RationalQuadratic(
-                split_dims, d_context, NET_KWARGS, n_bins=n_bins)
+            transform = RationalQuadratic(split_dims, d_context, NET_KWARGS, n_bins=n_bins)
             x1 = torch.randn(1, split_dims[0]).expand(b, -1)
             context = torch.randn(1, d_context).expand(b, -1)
             y2, _ = transform.forward(x1, x2, context)

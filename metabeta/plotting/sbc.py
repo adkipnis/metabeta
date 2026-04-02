@@ -72,8 +72,14 @@ def _plotSbcRow(
     n_eff_min = len(data['X'])
     for k in ('ffx', 'sigmas', 'rfx'):
         _plotSbcEcdf(
-            ax, ranks[k], names[k], masks[k], diff=diff,
-            title=title, show_legend=show_legend, show_x=show_x,
+            ax,
+            ranks[k],
+            names[k],
+            masks[k],
+            diff=diff,
+            title=title,
+            show_legend=show_legend,
+            show_x=show_x,
         )
         mask_k = masks[k]
         if mask_k is not None:
@@ -103,7 +109,10 @@ def plotSBC(
 
     for i, (proposal, label) in enumerate(zip(proposals, labels)):
         _plotSbcRow(
-            axs[i], proposal, data, diff=diff,
+            axs[i],
+            proposal,
+            data,
+            diff=diff,
             title=label,
             show_legend=(i == 0),
             show_x=(i == nrows - 1),

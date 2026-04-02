@@ -52,7 +52,10 @@ class HyperOptimizer:
         model_cfg_path = Path(self.dir, '..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
         likelihood_family = data_cfg.get('likelihood_family', 0)
         self.model_cfg = modelFromYaml(
-            model_cfg_path, d_ffx=d_ffx, d_rfx=d_rfx, likelihood_family=likelihood_family,
+            model_cfg_path,
+            d_ffx=d_ffx,
+            d_rfx=d_rfx,
+            likelihood_family=likelihood_family,
         ).to_dict()
 
         # optuna study
@@ -114,7 +117,7 @@ class HyperOptimizer:
             trainer_cfg.model_cfg = self.suggest(trial)
             trainer_cfg.bs = trial.suggest_categorical('bs', [16, 32, 64, 128])
             trainer_cfg.lr = trial.suggest_float('lr', 1e-4, 5e-3)
-            trainer_cfg.wandb = False # no wandb logging inside trial
+            trainer_cfg.wandb = False   # no wandb logging inside trial
             trainer = Trainer(trainer_cfg)
             trainer.go()
             eval_summary = trainer.sample()

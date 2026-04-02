@@ -32,7 +32,7 @@ from metabeta.posthoc.importance import ImportanceSampler, runIS, runSIR
 from metabeta.utils.moe import moeEstimate
 from metabeta.posthoc.conformal import Calibrator
 from metabeta.evaluation.summary import getSummary, summaryTable
-from metabeta.plot import plotComparison
+from metabeta.plotting import plotComparison
 
 logger = logging.getLogger('evaluate.py')
 

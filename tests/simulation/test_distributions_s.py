@@ -17,7 +17,7 @@ DISCRETE = [Bernoulli, NegativeBinomial]
 ALL = CONTINUOUS + DISCRETE
 
 
-@pytest.mark.parametrize("Dist", ALL)
+@pytest.mark.parametrize('Dist', ALL)
 def test_sample_shape_and_finite(Dist):
     rng = np.random.default_rng(123)
     d = Dist(rng=rng, truncate=True)
@@ -29,7 +29,7 @@ def test_sample_shape_and_finite(Dist):
     assert np.all(np.isfinite(x))
 
 
-@pytest.mark.parametrize("Dist", DISCRETE)
+@pytest.mark.parametrize('Dist', DISCRETE)
 def test_discrete_not_truncated(Dist):
     rng = np.random.default_rng(0)
     d = Dist(rng=rng, truncate=True)
@@ -126,8 +126,8 @@ def test_uniform_support_matches_params():
     d = Uniform(rng=rng, truncate=False)
 
     # scipy.stats.uniform: support is [loc, loc+scale]
-    loc = d.params["loc"]
-    scale = d.params["scale"]
+    loc = d.params['loc']
+    scale = d.params['scale']
     lb, ub = d.dist.support()
 
     assert np.isclose(lb, loc)
@@ -138,8 +138,8 @@ def test_scaledbeta_support_matches_scale():
     rng = np.random.default_rng(1234)
     d = ScaledBeta(rng=rng, truncate=False)
 
-    scale = d.params["scale"]
+    scale = d.params['scale']
     lb, ub = d.dist.support()
 
     assert np.isclose(lb, 0.0)
-    assert np.isclose(ub, scale) 
+    assert np.isclose(ub, scale)

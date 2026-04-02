@@ -10,8 +10,8 @@ def test_sample_shapes_and_intercept_and_groups():
     ns = np.array([3, 1, 5], dtype=int)
 
     out = Synthesizer(rng).sample(d=d, ns=ns)
-    X = out["X"]
-    groups = out["groups"]
+    X = out['X']
+    groups = out['groups']
 
     assert X.shape == (int(ns.sum()), d)
     assert groups.shape == (int(ns.sum()),)
@@ -33,8 +33,8 @@ def test_reproducibility_with_seedsequence():
     out1 = Synthesizer(ss).sample(d=d, ns=ns)  # type: ignore[arg-type]
     out2 = Synthesizer(np.random.SeedSequence(2024)).sample(d=d, ns=ns)  # type: ignore[arg-type]
 
-    assert np.array_equal(out1["groups"], out2["groups"])
-    assert np.allclose(out1["X"], out2["X"])
+    assert np.array_equal(out1['groups'], out2['groups'])
+    assert np.allclose(out1['X'], out2['X'])
 
 
 def test_no_correlation_when_disabled():
@@ -92,7 +92,7 @@ def test_sample_returns_float_matrix_and_int_groups():
     ns = np.array([10, 10], dtype=int)
     out = Synthesizer(rng).sample(d=d, ns=ns)
 
-    X, groups = out["X"], out["groups"]
+    X, groups = out['X'], out['groups']
     assert np.issubdtype(X.dtype, np.floating)
     assert np.issubdtype(groups.dtype, np.integer)
     assert (groups.min() >= 0) and (groups.max() == len(ns) - 1)

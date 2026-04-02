@@ -34,10 +34,12 @@ class Coupling(nn.Module):
             self.transform = Affine(split_dims, d_context, subnet_kwargs)
         elif transform == 'spline':
             self.transform = RationalQuadratic(
-                split_dims, d_context, subnet_kwargs, adaptive_domain=False)
+                split_dims, d_context, subnet_kwargs, adaptive_domain=False
+            )
         elif transform == 'spline+':
             self.transform = RationalQuadratic(
-                split_dims, d_context, subnet_kwargs, adaptive_domain=True)
+                split_dims, d_context, subnet_kwargs, adaptive_domain=True
+            )
         else:
             raise NotImplementedError('only affine and spline transforms are supported')
 
@@ -137,7 +139,7 @@ class CouplingFlow(nn.Module):
         base_family: Literal['normal', 'student'] = 'normal',  # family of base distribution
         base_trainable: bool = True,  # train parameters of base distribution
         subnet_kwargs: dict | None = None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__()
         assert d_target >= 2, 'Coupling Flow requires at least 2-dim target'

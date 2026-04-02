@@ -6,11 +6,12 @@ from metabeta.models.feedforward.mlp import (
     MLP,
     TransformerFFN,
     FlowMLP,
-    )
+)
 
 # -----------------------
 # helpers / fixtures
 # -----------------------
+
 
 @pytest.fixture
 def batch():
@@ -25,6 +26,7 @@ def device():
 # -----------------------
 # Feedforward
 # -----------------------
+
 
 def test_feedforward_output_shape(batch):
     layer = Feedforward(
@@ -67,6 +69,7 @@ def test_feedforward_residual_forward(batch):
 # -----------------------
 # MLP
 # -----------------------
+
 
 def test_mlp_basic_forward(batch):
     mlp = MLP(
@@ -124,18 +127,18 @@ def test_mlp_forward_and_grads(batch):
         d_output=8,
     )
     out = mlp(batch)
-    
+
     # check output numerics
     assert torch.isfinite(out).all()
-    
+
     # backward
     loss = out.mean()
     loss.backward()
-    
+
     grads = [p.grad for p in mlp.parameters() if p.requires_grad]
     # at least one grad exists
     assert any(g is not None for g in grads)
-    
+
     # check all grads are finite (skip None)
     for g in grads:
         if g is not None:
@@ -145,6 +148,7 @@ def test_mlp_forward_and_grads(batch):
 # -----------------------
 # TransformerFFN
 # -----------------------
+
 
 def test_transformer_ffn_forward():
     x = torch.randn(2, 10)
@@ -160,6 +164,7 @@ def test_transformer_ffn_forward():
 # -----------------------
 # FlowMLP
 # -----------------------
+
 
 def test_flowmlp_without_context():
     x = torch.randn(3, 6)

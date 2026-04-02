@@ -56,8 +56,7 @@ def _sizeEncoding(
         sizes = np.interp(m_pairs, (m_min, m_max), size_range)
         m_levels = np.unique(np.round(np.quantile(m_pairs, [0.0, 0.5, 1.0])).astype(int))
         size_labels = [
-            (int(m), float(np.interp(float(m), (m_min, m_max), size_range)))
-            for m in m_levels
+            (int(m), float(np.interp(float(m), (m_min, m_max), size_range))) for m in m_levels
         ]
     else:
         sizes = np.full_like(m_pairs, np.mean(size_range), dtype=float)
@@ -157,7 +156,8 @@ def _plotRecoveryWithBounds(
             ax.add_artist(class_legend)
         if size_labels:
             size_handles = [
-                ax.scatter([], [], s=s_level, alpha=0.40, color='grey') for _, s_level in size_labels
+                ax.scatter([], [], s=s_level, alpha=0.40, color='grey')
+                for _, s_level in size_labels
             ]
             size_text = [f'{m_level}' for m_level, _ in size_labels]
             ax.legend(
@@ -198,9 +198,21 @@ def _plotSampleVsPosterior(
     mask_unc = eta_pairs == 0
     mask_cor = eta_pairs > 0
     if mask_unc.any():
-        ax.scatter(corr_sample[mask_unc], corr_mean[mask_unc], s=sizes[mask_unc], alpha=0.40, label='Uncorrelated')
+        ax.scatter(
+            corr_sample[mask_unc],
+            corr_mean[mask_unc],
+            s=sizes[mask_unc],
+            alpha=0.40,
+            label='Uncorrelated',
+        )
     if mask_cor.any():
-        ax.scatter(corr_sample[mask_cor], corr_mean[mask_cor], s=sizes[mask_cor], alpha=0.40, label='Correlated')
+        ax.scatter(
+            corr_sample[mask_cor],
+            corr_mean[mask_cor],
+            s=sizes[mask_cor],
+            alpha=0.40,
+            label='Correlated',
+        )
     ax.plot([-1, 1], [-1, 1], '--', lw=2, color='grey', alpha=0.7)
     ax.set_xlim(-lim, lim)
     ax.set_ylim(-lim, lim)

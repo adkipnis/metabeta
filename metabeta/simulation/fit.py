@@ -220,7 +220,11 @@ class Fitter:
             priors = self._priorize(ds)
         family = bambiFamilyName(likelihood_family)
         model = bmb.Model(
-            formula=form, data=df, family=family, categorical='i', priors=priors,
+            formula=form,
+            data=df,
+            family=family,
+            categorical='i',
+            priors=priors,
         )
         model.build()
         return model
@@ -369,7 +373,7 @@ class Fitter:
 
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
-    print(f'PyTensor tmp directory: {pytensor.config.base_compiledir}') # type: ignore
+    print(f'PyTensor tmp directory: {pytensor.config.base_compiledir}')   # type: ignore
     cfg = setup()
     fitter = Fitter(cfg)
     if cfg.reintegrate:

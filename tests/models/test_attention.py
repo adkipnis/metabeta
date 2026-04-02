@@ -1,4 +1,3 @@
-
 import pytest
 import torch
 
@@ -8,6 +7,7 @@ from metabeta.models.transformers.attention import MHA, MAB, ISAB
 # -----------------------
 # Fixtures
 # -----------------------
+
 
 @pytest.fixture
 def batch():
@@ -29,6 +29,7 @@ def context(batch):
 # -----------------------
 # MHA Tests
 # -----------------------
+
 
 def test_mha_forward_shape(batch):
     model = MHA(d_model=16)
@@ -73,7 +74,7 @@ def test_mha_mask_behavior(batch):
     out_full = model(batch, key_padding_mask=~mask)
     mask[..., 0] = False
     batch_mod = batch.clone()
-    batch_mod[..., 0] = -99.  # entry should not affect output
+    batch_mod[..., 0] = -99.0  # entry should not affect output
     out_masked = model(batch_mod, key_padding_mask=~mask)
     # masked entries should not affect attended outputs
     assert torch.allclose(out_full[mask], out_masked[mask], atol=1e-5)
@@ -82,6 +83,7 @@ def test_mha_mask_behavior(batch):
 # -----------------------
 # MAB Tests
 # -----------------------
+
 
 def test_mab_forward(batch, context):
     model = MAB(d_model=16, d_ff=64, pre_norm=False)
@@ -117,6 +119,7 @@ def test_mab_backward(batch):
 # ISAB Tests
 # -----------------------
 
+
 def test_isab_forward_shape(batch, mask):
     model = ISAB(d_model=16, d_ff=64, n_inducing=32)
     out = model(batch)
@@ -136,4 +139,3 @@ def test_isab_backward(batch):
     for g in grads:
         if g is not None:
             assert torch.isfinite(g).all()
-

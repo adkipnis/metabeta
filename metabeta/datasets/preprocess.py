@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
 
-from metabeta.plot import plotDataset
+from metabeta.plotting import plotDataset
 from metabeta.utils.plot import DPI
 from metabeta.utils.preprocessing import transformPredictors
 

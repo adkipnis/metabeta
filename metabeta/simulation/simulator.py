@@ -14,7 +14,7 @@ from metabeta.utils.families import (
     POISSON_REROLL_MAX_ATTEMPTS,
 )
 from metabeta.simulation import Prior, Synthesizer, Scammer, Emulator
-from metabeta.plot import plotDataset
+from metabeta.plotting import plotDataset
 
 SCALE_PARAMS = {'ffx', 'sigma_rfx', 'sigma_eps', 'rfx'}
 SCALE_HYPERPARAMS = {'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps'}

@@ -60,8 +60,11 @@ def modelFromYaml(
     cfg_s = SummarizerConfig(**model_cfg['summarizer'])
     cfg_p = PosteriorConfig(**model_cfg['posterior'])
     return ApproximatorConfig(
-        d_ffx=d_ffx, d_rfx=d_rfx, likelihood_family=likelihood_family,
-        summarizer=cfg_s, posterior=cfg_p,
+        d_ffx=d_ffx,
+        d_rfx=d_rfx,
+        likelihood_family=likelihood_family,
+        summarizer=cfg_s,
+        posterior=cfg_p,
     )
 
 

@@ -42,7 +42,7 @@ def test_forward_runs_and_is_finite(model: Approximator, batch: dict[str, torch.
 
 def test_backward_produces_gradients(model: Approximator, batch: dict[str, torch.Tensor]):
     log_probs = model.forward(batch)
-    loss = (log_probs['global'].mean() + log_probs['local'].mean())
+    loss = log_probs['global'].mean() + log_probs['local'].mean()
     loss.backward()
 
     grads = [p.grad for p in model.parameters() if p.requires_grad]
@@ -51,7 +51,7 @@ def test_backward_produces_gradients(model: Approximator, batch: dict[str, torch
 
 
 def test_estimate_shapes_and_constraints(model: Approximator, batch: dict[str, torch.Tensor]):
-    model.forward(batch) # warmup
+    model.forward(batch)   # warmup
     model.eval()
     n_samples = 12
     proposal = model.estimate(batch, n_samples=n_samples)

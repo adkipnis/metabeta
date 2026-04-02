@@ -69,8 +69,6 @@ def logDetSqrtSoftplus(x: torch.Tensor) -> torch.Tensor:
     return torch.where(x != 0, val, torch.zeros_like(x))
 
 
-
-
 def getConstrainers(
     method: Literal['exp', 'softplus', 'softplus-sqrt'] = 'softplus',
 ):
@@ -94,6 +92,7 @@ def squish(x: torch.Tensor) -> torch.Tensor:
 
 if __name__ == '__main__':
     from matplotlib import pyplot as plt
+
     WIDE_BETA = 0.5
 
     x = torch.randn(64, 8)
