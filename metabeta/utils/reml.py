@@ -33,3 +33,71 @@ def _getL(
     return L
 
 
+def _GLSNLL(
+    l_diag: torch.Tensor,  # (B, q)
+    l_off: torch.Tensor,  # (B, q*(q-1)//2)
+    log_sigma_eps: torch.Tensor,  # (B,)
+    XtX_g: torch.Tensor,  # (B, m, d, d)
+    Xty_g: torch.Tensor,  # (B, m, d)
+    yty_g: torch.Tensor,  # (B, m)
+    ZtZ_g: torch.Tensor,  # (B, m, q, q)
+    ZtX_g: torch.Tensor,  # (B, m, q, d)
+    Zty_g: torch.Tensor,  # (B, m, q)
+    ns: torch.Tensor,  # (B, m)  group sizes (float)
+    mask_m: torch.Tensor,  # (B, m)  1 for active groups
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """GLS β̂ and REML negative log-likelihood for given variance components.
+
+    Returns (beta, nll) with shapes (B, d) and (B,).
+    """
+    B, _, q = Zty_g.shape
+    inv_se2 = torch.exp(-2 * log_sigma_eps)  # (B,)
+
+    # --- Σ^{-1} from Cholesky factor L via triangular solve
+    L = _getL(l_diag, l_off, q)  # (B, q, q)
+    eye_q = torch.eye(q, device=l_diag.device, dtype=l_diag.dtype).unsqueeze(0).expand(B, -1, -1)
+    L_inv = torch.linalg.solve_triangular(L, eye_q, upper=False)  # (B, q, q)
+    Sigma_inv = L_inv.transpose(-1, -2) @ L_inv                 # (B, q, q)
+    log_det_Sigma = 2.0 * l_diag.sum(dim=-1)  # (B,)
+
+    # --- Woodbury identity
+    M_g = Sigma_inv.unsqueeze(1) + inv_se2[:, None, None, None] * ZtZ_g
+    MinvZtX = torch.linalg.solve(M_g, ZtX_g)  # (B, m, q, d)
+    MinvZty = torch.linalg.solve(M_g, Zty_g)  # (B, m, q)
+    wood_XX = torch.einsum('bmqd,bmqk->bmdk', ZtX_g, MinvZtX)  # (B, m, d, d)
+    wood_Xy = torch.einsum('bmqd,bmq->bmd', ZtX_g, MinvZty)    # (B, m, d)
+    wood_yy = (Zty_g * MinvZty).sum(dim=-1)                    # (B, m)
+    inv_se2_4d = inv_se2[:, None, None, None]
+    inv_se2_3d = inv_se2[:, None, None]
+    inv_se2_2d = inv_se2[:, None]
+
+    # --- GLS cross-products via Woodbury
+    A_g = inv_se2_4d * (XtX_g - inv_se2_4d * wood_XX)  # (B, m, d, d)
+    b_g = inv_se2_3d * (Xty_g - inv_se2_3d * wood_Xy)  # (B, m, d)
+    c_g = inv_se2_2d * (yty_g - inv_se2_2d * wood_yy)  # (B, m)
+
+    # sum over active groups
+    A = (A_g * mask_m[:, :, None, None]).sum(dim=1)  # (B, d, d)
+    b_vec = (b_g * mask_m[:, :, None]).sum(dim=1)    # (B, d)
+    c = (c_g * mask_m).sum(dim=1)                    # (B,)
+
+    # GLS: β̂ = (A + ridge)^{-1} b
+    beta = torch.linalg.solve(A + _adaptive_ridge(A), b_vec)  # (B, d)
+
+    # --- REML NLL
+    # quadratic form y'Py = c − b'β̂  (≥ 0)
+    quad = (c - (b_vec * beta).sum(dim=-1)).clamp(min=0.0)  # (B,)
+
+    # logdet of compound covariance matrix
+    _, log_det_M = torch.linalg.slogdet(M_g)  # (B, m)
+    log_se2 = 2 * log_sigma_eps
+    log_V_i = log_det_M + log_det_Sigma[:, None] + ns * log_se2[:, None]
+    sum_log_V = (log_V_i * mask_m).sum(dim=1)  # (B,)
+
+    # logdet of A
+    _, log_det_A = torch.linalg.slogdet(A)  # (B,)
+    nll = 0.5 * (sum_log_V + log_det_A + quad)
+    return beta, nll
+
+
+def remlSolve(
