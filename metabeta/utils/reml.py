@@ -8,12 +8,12 @@ def _sufficientStats(
     Zm: torch.Tensor,  # (B, m, n, q)
 ) -> tuple[torch.Tensor, ...]:
     """Group-level sufficient statistics"""
-    XtX_g = torch.einsum('bmnd,bmnk->bmdk', Xm, Xm)   # (B, m, d, d)
-    Xty_g = torch.einsum('bmnd,bmn->bmd', Xm, ym)     # (B, m, d)
-    yty_g = (ym * ym).sum(dim=2)                      # (B, m)
-    ZtZ_g = torch.einsum('bmnq,bmnr->bmqr', Zm, Zm)   # (B, m, q, q)
-    ZtX_g = torch.einsum('bmnq,bmnd->bmqd', Zm, Xm)   # (B, m, q, d)
-    Zty_g = torch.einsum('bmnq,bmn->bmq', Zm, ym)     # (B, m, q)
+    XtX_g = torch.einsum('bmnd,bmnk->bmdk', Xm, Xm)  # (B, m, d, d)
+    Xty_g = torch.einsum('bmnd,bmn->bmd', Xm, ym)  # (B, m, d)
+    yty_g = (ym * ym).sum(dim=2)  # (B, m)
+    ZtZ_g = torch.einsum('bmnq,bmnr->bmqr', Zm, Zm)  # (B, m, q, q)
+    ZtX_g = torch.einsum('bmnq,bmnd->bmqd', Zm, Xm)  # (B, m, q, d)
+    Zty_g = torch.einsum('bmnq,bmn->bmq', Zm, ym)  # (B, m, q)
     return XtX_g, Xty_g, yty_g, ZtZ_g, ZtX_g, Zty_g
 
 
@@ -21,7 +21,7 @@ def _getL(
     l_diag: torch.Tensor,  # (B, q)   log L_jj
     l_off: torch.Tensor,  # (B, q*(q-1)//2)  L_ij, i > j
     q: int,
-) -> torch.Tensor:         # (B, q, q) lower triangular
+) -> torch.Tensor:  # (B, q, q) lower triangular
     """assemble the Cholesky factor L from unconstrained parameters"""
     L = torch.diag_embed(l_diag.exp())  # (B, q, q) positive diagonal
     if q > 1:
@@ -53,11 +53,24 @@ def _GLSNLL(
     B, _, q = Zty_g.shape
     inv_se2 = torch.exp(-2 * log_sigma_eps)  # (B,)
 
+    # Neutralize inactive (padded) groups before the Woodbury computation.
+    # Zero-padded groups have ZtZ_g = 0, so M_g = Sigma_inv + inv_se2 * 0 =
+    # Sigma_inv — well-conditioned on its own. But replacing ZtZ_g with I
+    # means M_g = Sigma_inv + inv_se2 * I regardless of inv_se2 magnitude,
+    # eliminating any Inf * 0 = NaN path. ZtX_g and Zty_g are zeroed so the
+    # Woodbury correction for inactive groups is exactly 0. mask_m still
+    # zeroes their contributions to all downstream sums.
+    active = mask_m.bool()  # (B, m)
+    eye_q = torch.eye(q, device=ZtZ_g.device, dtype=ZtZ_g.dtype)  # (q, q)
+    ZtZ_g = torch.where(active[:, :, None, None], ZtZ_g, eye_q)
+    ZtX_g = ZtX_g * active[:, :, None, None]
+    Zty_g = Zty_g * active[:, :, None]
+
     # --- Σ^{-1} from Cholesky factor L via triangular solve
     L = _getL(l_diag, l_off, q)  # (B, q, q)
     eye_q = torch.eye(q, device=l_diag.device, dtype=l_diag.dtype).unsqueeze(0).expand(B, -1, -1)
     L_inv = torch.linalg.solve_triangular(L, eye_q, upper=False)  # (B, q, q)
-    Sigma_inv = L_inv.transpose(-1, -2) @ L_inv                 # (B, q, q)
+    Sigma_inv = L_inv.transpose(-1, -2) @ L_inv  # (B, q, q)
     log_det_Sigma = 2.0 * l_diag.sum(dim=-1)  # (B,)
 
     # --- Woodbury identity
@@ -65,8 +78,8 @@ def _GLSNLL(
     MinvZtX = torch.linalg.solve(M_g, ZtX_g)  # (B, m, q, d)
     MinvZty = torch.linalg.solve(M_g, Zty_g)  # (B, m, q)
     wood_XX = torch.einsum('bmqd,bmqk->bmdk', ZtX_g, MinvZtX)  # (B, m, d, d)
-    wood_Xy = torch.einsum('bmqd,bmq->bmd', ZtX_g, MinvZty)    # (B, m, d)
-    wood_yy = (Zty_g * MinvZty).sum(dim=-1)                    # (B, m)
+    wood_Xy = torch.einsum('bmqd,bmq->bmd', ZtX_g, MinvZty)  # (B, m, d)
+    wood_yy = (Zty_g * MinvZty).sum(dim=-1)  # (B, m)
     inv_se2_4d = inv_se2[:, None, None, None]
     inv_se2_3d = inv_se2[:, None, None]
     inv_se2_2d = inv_se2[:, None]
@@ -78,8 +91,8 @@ def _GLSNLL(
 
     # sum over active groups
     A = (A_g * mask_m[:, :, None, None]).sum(dim=1)  # (B, d, d)
-    b_vec = (b_g * mask_m[:, :, None]).sum(dim=1)    # (B, d)
-    c = (c_g * mask_m).sum(dim=1)                    # (B,)
+    b_vec = (b_g * mask_m[:, :, None]).sum(dim=1)  # (B, d)
+    c = (c_g * mask_m).sum(dim=1)  # (B,)
 
     # GLS: β̂ = (A + ridge)^{-1} b
     beta = torch.linalg.solve(A + _adaptive_ridge(A), b_vec)  # (B, d)
@@ -104,6 +117,7 @@ def remlSolve(
     Xm: torch.Tensor,  # (B, m, n, d)  masked X
     ym: torch.Tensor,  # (B, m, n)     masked y
     Zm: torch.Tensor,  # (B, m, n, q)  masked Z  (= Xm[..., :q] in metabeta)
+    mask_m: torch.Tensor,  # (B, m)
     ns: torch.Tensor,  # (B, m)        group sizes
     n_iter: int = 200,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -115,47 +129,79 @@ def remlSolve(
     GLS at the optimal variance components.
 
     """
-    # init
-    B, _, _, q = Zm.shape
-    n_off = q * (q - 1) // 2
-    mask_m = (ns > 0).to(Xm.dtype)
-    ns_f = ns.float().clamp(min=1.0)
+    # Detach inputs to prevent gradients flowing back to caller
+    Xm = Xm.detach()
+    ym = ym.detach()
+    Zm = Zm.detach()
+    mask_m = mask_m.detach()
+    ns = ns.detach()
 
-    # inner products over n
-    stats = _sufficientStats(Xm, ym, Zm)
+    # inference_mode(False) exits any outer inference_mode context (enable_grad
+    # alone cannot override it); enable_grad then re-enables autograd tracking.
+    with torch.inference_mode(False), torch.enable_grad():
+        # Clone to convert inference-mode tensors to normal tensors — inference
+        # tensors cannot be saved for backward even outside inference mode.
+        Xm = Xm.clone()
+        ym = ym.clone()
+        Zm = Zm.clone()
+        mask_m = mask_m.clone()
+        ns = ns.clone()
 
-    # optimization parameters [l_diag (q), l_off (n_off), log_se (1)].
-    l_params = torch.zeros(B, q + n_off + 1, device=Xm.device, dtype=Xm.dtype, requires_grad=True)
+        # init
+        B, _, _, q = Zm.shape
+        n_off = q * (q - 1) // 2
+        ns_f = ns.float().clamp(min=1.0)
 
-    # batched REML of covariance parameters
-    optimizer = torch.optim.LBFGS(
-        [l_params],
-        max_iter=n_iter,
-        line_search_fn='strong_wolfe',
-        tolerance_grad=1e-5,
-        tolerance_change=1e-7,
-    )
+        # inner products over n
+        stats = _sufficientStats(Xm, ym, Zm)
 
-    def closure():
-        optimizer.zero_grad()
-        l_diag = l_params[:, :q]
-        l_off = l_params[:, q : q + n_off]  # shape (B, 0) when q == 1
-        log_se = l_params[:, -1]
-        _, nll = _GLSNLL(l_diag, l_off, log_se, *stats, ns_f, mask_m)   # type: ignore
-        loss = nll.sum()
-        loss.backward()
-        return loss
+        # optimization parameters [l_diag (q), l_off (n_off), log_se (1)].
+        l_params = torch.zeros(
+            B, q + n_off + 1, device=Xm.device, dtype=Xm.dtype, requires_grad=True
+        )
 
-    optimizer.step(closure)
+        # batched REML of covariance parameters
+        optimizer = torch.optim.LBFGS(
+            [l_params],
+            max_iter=n_iter,
+            line_search_fn='strong_wolfe', # None
+            tolerance_grad=1e-5,
+            tolerance_change=1e-7, # 1e-9
+            # history_size=10,
+        )
+        
+        def closure():
+            optimizer.zero_grad()
+            # Clamp prevents exp(±2*val) from overflowing float32 (max ~exp(88)).
+            # ±15 gives inv_se2 up to exp(30) ≈ 1e13, well within float32 range.
+            l_diag = l_params[:, :q].clamp(-15, 15)
+            l_off = l_params[:, q : q + n_off]  # shape (B, 0) when q == 1
+            log_se = l_params[:, -1].clamp(-15, 15)
+            _, nll = _GLSNLL(l_diag, l_off, log_se, *stats, ns_f, mask_m)  # type: ignore
+            # Replace any remaining NaN/Inf (genuinely degenerate batches, e.g.
+            # near-singular A) with a large finite value so the strong-Wolfe
+            # line search reduces t rather than doubling it to overflow.
+            loss = nll.nan_to_num(nan=1e6, posinf=1e6).sum()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_([l_params], max_norm=10.0)
+            return loss
 
-    # batched GLS of fixed effects
-    with torch.no_grad():
-        l_diag = l_params[:, :q]
-        l_off = l_params[:, q : q + n_off]
-        log_se = l_params[:, -1]
-        beta, _ = _GLSNLL(l_diag, l_off, log_se, *stats, ns_f, mask_m)   # type: ignore
-        L = _getL(l_diag, l_off, q)
-        Sigma_u = L @ L.transpose(-1, -2)   # (B, q, q)
-        sigma_eps = log_se.exp()             # (B,)
+        optimizer.step(closure)
 
-    return beta, Sigma_u, sigma_eps
+        # batched GLS of fixed effects
+        with torch.no_grad():
+            l_diag = l_params[:, :q].clamp(-15, 15)
+            l_off = l_params[:, q : q + n_off]
+            log_se = l_params[:, -1].clamp(-15, 15)
+            beta, _ = _GLSNLL(l_diag, l_off, log_se, *stats, ns_f, mask_m)  # type: ignore
+            L = _getL(l_diag, l_off, q)
+            Sigma = L @ L.transpose(-1, -2)  # (B, q, q)
+            sigma_eps = log_se.exp()  # (B,)
+
+    # Sanitize: if any batch still has NaN/Inf (degenerate data), replace with
+    # neutral defaults rather than poisoning the downstream summary context.
+    beta = beta.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    Sigma = Sigma.nan_to_num(nan=1.0, posinf=1.0, neginf=0.0)
+    sigma_eps = sigma_eps.nan_to_num(nan=1.0, posinf=1.0)
+
+    return beta, Sigma, sigma_eps
