@@ -8,10 +8,11 @@ from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import getConstrainers
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
+from metabeta.utils.gls import glsNormalCompacted
 from metabeta.utils.least_squares import (
+    olsNormalCompacted,
     irlsBernoulliCompacted,
     irlsPoissonCompacted,
-    olsNormalCompacted,
 )
 from metabeta.utils.families import (
     FFX_FAMILIES,
@@ -67,7 +68,7 @@ class Approximator(nn.Module):
         # nu_ffx, tau_ffx, tau_rfx, [tau_eps], eta_rfx
         d_prior = 2 * d_ffx + d_rfx + d_sigma_eps + 1
         d_family = self.family_encoder.d_output
-        d_stats = d_ffx + 1 + d_sigma_eps  # beta_ols, sigma_rfx0_ols, [sigma_eps_ols]
+        d_stats = d_ffx + 1 + d_sigma_eps # beta_ols, sigma_rfx_ols, [sigma_eps_ols]
         d_meta_g = d_counts + d_prior + d_family + d_stats
         d_context_g = s_cfg.d_output + d_meta_g  # global summary + metadata
         # local context
@@ -147,37 +148,38 @@ class Approximator(nn.Module):
     def _dataStatistics(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Compute sufficient statistics from grouped data.
 
-        Normal: pooled OLS coefficients, residual SD, between-group SD of means.
-        Bernoulli: pooled IRLS logistic coefficients, between-group SD of log-odds.
+        Normal: within-group OLS residual SD, Henderson MoM random-effects SD, GLS beta.
+        Bernoulli/Poisson: pooled IRLS coefficients, between-group SD of means.
         """
         out = {}
-        X = data['X']                           # (B, m, n, d)
-        y = data['y']                           # (B, m, n)
-        mask = data['mask_n'].float()           # (B, m, n)
-        mask_m = data['mask_m'].float()         # (B, m)
-        ns = data['ns'].clamp(min=1).float()    # (B, m)
-        m = data['m'].float().unsqueeze(-1)     # (B, 1)
-        Xm = X * mask.unsqueeze(-1)
-        ym = y * mask
+        mask_n = data['mask_n'].float()  # (B, m, n)
+        mask_m = data['mask_m'].float()  # (B, m)
+        ns = data['ns'].clamp(min=1).float()  # (B, m)
+        m = data['m'].float().unsqueeze(-1)  # (B, 1)
+        Xm = data['X']  # (B, m, n, d)
+        ym = data['y']  # (B, m, n)
 
         if self.likelihood_family == 0:
-            beta, sigma_eps_ols = olsNormalCompacted(Xm, ym, mask, data['n'].float(), X)
-            out['sigma_eps_ols'] = sigma_eps_ols
+            beta, sigma_eps, sigma_rfx = glsNormalCompacted(
+                Xm, ym, mask_n, mask_m, ns, data['n'].float()
+            )
+            out['beta_est'] = beta
+            out['sigma_eps_est'] = sigma_eps
+            out['sigma_rfx_est'] = sigma_rfx
+            return out
         elif self.likelihood_family == 1:
-            beta = irlsBernoulliCompacted(Xm, ym, mask)
+            beta = irlsBernoulliCompacted(Xm, ym, mask_n)
         elif self.likelihood_family == 2:
-            beta = irlsPoissonCompacted(Xm, ym, mask)
+            beta = irlsPoissonCompacted(Xm, ym, mask_n)
         else:
             raise ValueError(f'no summary statistics for likelihood {self.likelihood_family}')
 
-        # --- between-group SD (random intercept proxy, on link scale)
+        # --- between-group SD for non-normal likelihoods (on link scale)
         group_means = ym.sum(dim=2) / ns  # (B, m)
-        # if self.likelihood_family == 2:  # poisson: log scale
-        #     group_means = torch.log(group_means.clamp(min=1e-4))
         grand_mean = (group_means * mask_m).sum(dim=1, keepdim=True) / m
         sq_dev = ((group_means - grand_mean).square() * mask_m).sum(dim=1, keepdim=True)
         sigma_rfx_ols = (sq_dev / m.clamp(min=2)).sqrt()  # (B, 1)
-        out.update({'beta_ols': beta, 'sigma_rfx_ols': sigma_rfx_ols})
+        out.update({'beta_est': beta, 'sigma_rfx_est': sigma_rfx_ols})
         return out
 
     def _addMetadata(
@@ -207,8 +209,8 @@ class Approximator(nn.Module):
             out += [
                 n_total,
                 n_groups,
-                torch.arcsinh(stats['beta_ols']),
-                stats['sigma_rfx_ols'],
+                stats['beta_est'],
+                stats['sigma_rfx_est'],
                 nu_ffx,
                 tau_ffx,
                 tau_rfx,
@@ -218,7 +220,7 @@ class Approximator(nn.Module):
             if self.has_sigma_eps:
                 tau_eps = data['tau_eps'].clone().unsqueeze(-1)
                 out.append(tau_eps)
-                out.append(stats['sigma_eps_ols'])
+                out.append(stats['sigma_eps_est'])
         return torch.cat(out, dim=-1)
 
     def _localContext(
@@ -353,7 +355,7 @@ class Approximator(nn.Module):
         proposal = self._postprocess(proposed)
         return proposal
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def estimate(
         self,
         data,
@@ -374,7 +376,7 @@ if __name__ == '__main__':
     torch.manual_seed(0)
 
     # load toy data
-    data_cfg_path = Path(DIR, '..', 'simulation', 'configs', 'small.yaml')
+    data_cfg_path = Path(DIR, '..', 'simulation', 'configs', 'small-n-sampled.yaml')
     data_fname = dataFromYaml(data_cfg_path, 'test')
     data_path = Path(DIR, '..', 'outputs', 'data', data_fname)
     dl = Dataloader(data_path, batch_size=8)
