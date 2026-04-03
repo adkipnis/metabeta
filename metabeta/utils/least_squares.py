@@ -63,7 +63,6 @@ def olsNormalCompacted(
     ym: torch.Tensor,
     mask: torch.Tensor,
     n_total: torch.Tensor,
-    X: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Pooled OLS via normal equations (X'X + ridge)^{-1} X'y, plus residual SD."""
     d = Xm.shape[-1]
@@ -71,7 +70,7 @@ def olsNormalCompacted(
     Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)
     beta = torch.linalg.solve(XtX + _adaptive_ridge(XtX), Xty)
 
-    yhat = torch.einsum('bmnd,bd->bmn', X, beta)
+    yhat = torch.einsum('bmnd,bd->bmn', Xm, beta)
     resid = ym - yhat * mask
     ss_resid = resid.square().sum(dim=(1, 2))
     df = (n_total - d).clamp(min=1)
