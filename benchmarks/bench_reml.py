@@ -102,11 +102,12 @@ def collate_batch(datasets: list[dict]) -> dict[str, torch.Tensor]:
     Z = _t(np.stack([g['Z'] for g in grouped]))       # (B, m, n, q)
     mask = _t(np.stack([g['mask'] for g in grouped]))   # (B, m, n)
     ns = _t(np.stack([ds['ns'] for ds in datasets])).long()  # (B, m)
+    mask_m = (ns > 0).to(X.dtype)
 
     Xm = X * mask.unsqueeze(-1)
     ym = y * mask
     Zm = Z * mask.unsqueeze(-1)
-    return dict(Xm=Xm, ym=ym, Zm=Zm, mask=mask, ns=ns)
+    return dict(Xm=Xm, ym=ym, Zm=Zm, mask=mask, mask_m=mask_m, ns=ns)
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +201,7 @@ print('=' * 65)
 datasets_q1 = [gen_dataset(rng_global, d=D, q=1) for _ in range(B)]
 batch_q1 = collate_batch(datasets_q1)
 beta_r1, Sigma_u_r1, se_r1 = remlSolve(
-    batch_q1['Xm'], batch_q1['ym'], batch_q1['Zm'], batch_q1['ns']
+    batch_q1['Xm'], batch_q1['ym'], batch_q1['Zm'], batch_q1['mask_m'], batch_q1['ns']
 )
 
 for b, ds in enumerate(datasets_q1):
@@ -229,7 +230,7 @@ print('=' * 65)
 datasets_q2 = [gen_dataset(rng_global, d=D, q=2) for _ in range(B)]
 batch_q2 = collate_batch(datasets_q2)
 beta_r2, Sigma_u_r2, se_r2 = remlSolve(
-    batch_q2['Xm'], batch_q2['ym'], batch_q2['Zm'], batch_q2['ns']
+    batch_q2['Xm'], batch_q2['ym'], batch_q2['Zm'], batch_q2['mask_m'], batch_q2['ns']
 )
 
 for b, ds in enumerate(datasets_q2):
@@ -283,13 +284,13 @@ for m_, n_ in SIZES:
         bt = collate_batch(dss)
         dfs = [to_df(ds) for ds in dss]
 
-        remlSolve(bt['Xm'], bt['ym'], bt['Zm'], bt['ns'])  # warm-up
+        remlSolve(bt['Xm'], bt['ym'], bt['Zm'], bt['mask_m'], bt['ns'])  # warm-up
 
         if DEVICE.type == 'cuda':
             torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(N_REPEAT):
-            remlSolve(bt['Xm'], bt['ym'], bt['Zm'], bt['ns'])
+            remlSolve(bt['Xm'], bt['ym'], bt['Zm'], bt['mask_m'], bt['ns'])
             if DEVICE.type == 'cuda':
                 torch.cuda.synchronize()
         t_torch = (time.perf_counter() - t0) / N_REPEAT * 1e3
