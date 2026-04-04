@@ -2,7 +2,6 @@ import os
 
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 
-import yaml
 import time
 import logging
 import argparse
@@ -24,6 +23,7 @@ from metabeta.utils.config import (
     loadDataConfig,
 )
 from metabeta.utils.templates import (
+    setupConfigParser,
     generateTrainingConfig,
     saveConfigToCheckpoint,
 )
@@ -48,23 +48,19 @@ from metabeta.plotting import (
 logger = logging.getLogger('train.py')
 
 
+# fmt: off
 def setup() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
 
     # Template-based config generation
-    parser.add_argument('--size', type=str, help='Size preset: toy/small/mid/medium/large/big/huge')
-    parser.add_argument(
-        '--family', type=int, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson'
-    )
-    parser.add_argument('--ds_type', type=str, help='Dataset type: toy/mixed/sampled/full')
-    parser.add_argument(
-        '--valid_ds_type', type=str, help='Validation dataset type (default: sampled)'
-    )
+    parser.add_argument('--size', type=str, default='tiny', help='Size preset: tiny|small|medium|large|huge')
+    parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
+    parser.add_argument('--ds_type', type=str, default='toy', help='Dataset type: toy|flat|scm|mixed|sampled|observed')
+    parser.add_argument('--valid_ds_type', type=str, default='toy', help='Validation dataset type')
 
-    # Legacy: direct config file
+    # Alternatively: direct config file
     parser.add_argument('--config', type=str, help='Path to custom YAML config file')
-    parser.add_argument('--name', type=str, help='Legacy: load configs/{name}.yaml (deprecated)')
 
     # Config overrides
     parser.add_argument('--data_id', type=str)
@@ -72,13 +68,13 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--m_tag', type=str)
 
     # CLI-only runtime params (no YAML defaults)
-    parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--wandb', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--verbosity', type=int, default=1)
 
     # Training hyperparameters (can override template/YAML)
-    parser.add_argument('-e', '--max_epochs', type=int)
+    parser.add_argument('-e', '--max_epochs', type=int, default=10)
     parser.add_argument('--bs', type=int)
     parser.add_argument('--lr', type=float)
     parser.add_argument('--num_workers', type=int)
@@ -92,62 +88,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--load_latest', action=argparse.BooleanOptionalAction)
     parser.add_argument('--load_best', action=argparse.BooleanOptionalAction)
 
-    args = parser.parse_args()
-
-    # Generate config from templates or load from file
-    if args.size is not None and args.family is not None and args.ds_type is not None:
-        # Template-based generation
-        cfg_dict = generateTrainingConfig(
-            size=args.size,
-            family=args.family,
-            ds_type=args.ds_type,
-            valid_ds_type=getattr(args, 'valid_ds_type', None),
-            **vars(args),
-        )
-    elif hasattr(args, 'config') and args.config:
-        # Custom YAML config
-        with open(args.config) as f:
-            cfg_dict = yaml.safe_load(f)
-        # Merge CLI args (they override YAML)
-        for k, v in vars(args).items():
-            if v is not None and k not in [
-                'config',
-                'size',
-                'family',
-                'ds_type',
-                'valid_ds_type',
-            ]:
-                cfg_dict[k] = v
-    elif hasattr(args, 'name') and args.name:
-        # Legacy name-based config
-        path = Path(__file__).resolve().parent / 'configs' / f'{args.name}.yaml'
-        if path.exists():
-            with open(path) as f:
-                cfg_dict = yaml.safe_load(f)
-            # Merge CLI args
-            for k, v in vars(args).items():
-                if v is not None and k not in [
-                    'config',
-                    'name',
-                    'size',
-                    'family',
-                    'ds_type',
-                ]:
-                    cfg_dict[k] = v
-        else:
-            raise FileNotFoundError(
-                f'Config file not found: {path}\n'
-                f'Use --size/--family/--type for template-based generation or --config for custom YAML.'
-            )
-    else:
-        raise ValueError(
-            'Must specify one of:\n'
-            '  1. Template-based: --size <size> --family <family> --ds_type <ds_type>\n'
-            '  2. Custom config: --config <path>\n'
-            '  3. Legacy: --name <name> (deprecated)'
-        )
-
-    return argparse.Namespace(**cfg_dict)
+    return setupConfigParser(parser, generateTrainingConfig, 'Train neural approximators.')
+# fmt: on
 
 
 # -----------------------------------------------------------------------------
