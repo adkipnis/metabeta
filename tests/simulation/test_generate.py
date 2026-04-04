@@ -22,7 +22,7 @@ def make_cfg(**overrides: Any) -> argparse.Namespace:
         bs_test=8,
         bs_load=4,
         # partitions / sources
-        d_tag='toy-n',
+        data_id='tiny-n-toy',
         partition='valid',
         begin=1,
         epochs=3,
