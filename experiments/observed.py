@@ -73,7 +73,24 @@ OUT_DIR = DIR / 'results'
 FITS_DIR = OUT_DIR / 'observed_fits'
 
 DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed', 'large-n-mixed']
-DEFAULT_SOURCES = ['557_analcatdata_apnea1__grp_subject', 'sleep__grp_group', 'gcse__grp_group', 'london__grp_group', 'math__grp_group', 'orthodont__grp_group', 'oxboys__grp_group', 'ergostool__grp_group', 'machines__grp_group', 'oats__grp_group', 'pixel__grp_group', 'hsb82__grp_group', 'chem97__grp_group', 'theoph__grp_group', 'orange__grp_group', 'indometh__grp_group']
+DEFAULT_SOURCES = [
+    '557_analcatdata_apnea1__grp_subject',
+    'sleep__grp_group',
+    'gcse__grp_group',
+    'london__grp_group',
+    'math__grp_group',
+    'orthodont__grp_group',
+    'oxboys__grp_group',
+    'ergostool__grp_group',
+    'machines__grp_group',
+    'oats__grp_group',
+    'pixel__grp_group',
+    'hsb82__grp_group',
+    'chem97__grp_group',
+    'theoph__grp_group',
+    'orange__grp_group',
+    'indometh__grp_group',
+]
 
 METRICS = [
     ('NLL_mb', lambda r: r['nll_metabeta'], False),
@@ -121,7 +138,7 @@ def loadEvalConfig(name: str, **overrides) -> argparse.Namespace:
 
 
 def initModel(cfg: argparse.Namespace, device: torch.device):
-    data_cfg = loadDataConfig(cfg.d_tag)
+    data_cfg = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg)
 
     model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.m_tag}.yaml'
@@ -352,8 +369,10 @@ def _extractSamples(
 # Caching helpers
 # ---------------------------------------------------------------------------
 
+
 def _configStem(config_name: str) -> str:
     return '-'.join(config_name.split('-')[:-1])
+
 
 def _nutsCachePath(
     config_stem: str,
@@ -366,7 +385,9 @@ def _nutsCachePath(
 ) -> Path:
     """Keyed on data identity (not eval config) so different metabeta configs
     that subsample the same source reuse cached NUTS fits."""
-    return FITS_DIR / f'm{config_stem}_s{seed}_{source}_i{idx:03d}_nuts_d{draws}_t{tune}_c{chains}.npz'
+    return (
+        FITS_DIR / f'm{config_stem}_s{seed}_{source}_i{idx:03d}_nuts_d{draws}_t{tune}_c{chains}.npz'
+    )
 
 
 def _adviCachePath(
@@ -758,7 +779,6 @@ def evaluate(args: argparse.Namespace) -> list[dict]:
                 mb_means_all.append(_posteriorMeans(mb_samples))
                 nuts_means_all.append(_posteriorMeans(nuts_samples))
                 advi_means_all.append(_posteriorMeans(advi_samples))
-                
 
             # pooled correlations across all datasets for this source
             corrs = comparePosteriors(mb_means_all, nuts_means_all, advi_means_all)

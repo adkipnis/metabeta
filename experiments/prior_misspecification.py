@@ -74,14 +74,12 @@ METRICS = [
 @dataclass
 class Condition:
     label: str
-    scale_factor: float = 1.0   # tau multiplier (1.0 = no change)
-    mean_shift: float = 0.0     # nu_ffx offset in units of tau_ffx (0.0 = no change)
+    scale_factor: float = 1.0  # tau multiplier (1.0 = no change)
+    mean_shift: float = 0.0  # nu_ffx offset in units of tau_ffx (0.0 = no change)
     wrong_family: bool = False
 
 
-def buildConditions(
-    scale_factors: list[float], mean_shifts: list[float]
-) -> list[Condition]:
+def buildConditions(scale_factors: list[float], mean_shifts: list[float]) -> list[Condition]:
     """Build all combinations of (scale, shift, family) perturbations."""
     scales = [1.0] + sorted(scale_factors)
     shifts = [0.0] + sorted(mean_shifts)
@@ -133,9 +131,9 @@ def loadEvalConfig(name: str, **overrides) -> argparse.Namespace:
 
 def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
     """Load model architecture from config and restore checkpoint weights."""
-    data_cfg = loadDataConfig(cfg.d_tag)
+    data_cfg = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg)
-    data_cfg_valid = loadDataConfig(cfg.d_tag_valid)
+    data_cfg_valid = loadDataConfig(cfg.data_id_valid)
 
     model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.m_tag}.yaml'
     model_cfg = modelFromYaml(
@@ -160,12 +158,10 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
     return model, data_cfg_valid, run
 
 
-def getDataloader(
-    data_cfg: dict, partition: str, batch_size: int | None = None
-) -> Dataloader:
+def getDataloader(data_cfg: dict, partition: str, batch_size: int | None = None) -> Dataloader:
     """Create a dataloader for the given partition."""
-    data_fname = datasetFilename(data_cfg, partition)
-    data_path = METABETA / 'outputs' / 'data' / data_fname
+    data_fname = datasetFilename(partition)
+    data_path = METABETA / 'outputs' / 'data' / data_cfg['data_id'] / data_fname
     if partition == 'test':
         data_path = data_path.with_suffix('.fit.npz')
     assert data_path.exists(), f'data not found: {data_path}'
@@ -278,9 +274,9 @@ def evaluate(
     partition = 'valid' if use_valid else 'test'
 
     for config_name in configs:
-        print(f'\n{"=" * 60}')
+        print(f"\n{'=' * 60}")
         print(f'Config: {config_name} (partition={partition}, IS={importance}, k={k})')
-        print(f'{"=" * 60}')
+        print(f"{'=' * 60}")
 
         cfg = loadEvalConfig(config_name, plot=False)
         cfg.importance = importance
@@ -305,9 +301,7 @@ def evaluate(
             proposal = sampleMinibatched(model, cfg, dl, device, cond, k=k)
 
             lf = getattr(cfg, 'likelihood_family', 0)
-            summary = getSummary(
-                proposal, full_batch, calibrator=None, likelihood_family=lf
-            )
+            summary = getSummary(proposal, full_batch, calibrator=None, likelihood_family=lf)
 
             row = {'config': config_name, 'condition': cond.label}
             for metric_name, extractor, _ in METRICS:
@@ -443,12 +437,14 @@ if __name__ == '__main__':
     print(f'Configs: {args.configs}')
     print(f'Scale factors: {args.scale_factors}')
     print(f'Mean shifts: {args.mean_shifts}')
-    print(f'Partition: {"valid" if args.valid else "test"}')
+    print(f"Partition: {'valid' if args.valid else 'test'}")
     print(f'IS: {args.importance}')
     print(f'k (pseudo-MoE): {args.k}')
     print(f'Conditions: {[c.label for c in conditions]}')
 
-    rows = evaluate(args.configs, conditions, args.batch_size, args.valid, args.importance, k=args.k)
+    rows = evaluate(
+        args.configs, conditions, args.batch_size, args.valid, args.importance, k=args.k
+    )
 
     print(f'\n{formatTable(rows)}')
     print(f'\n{deltaTable(rows)}')

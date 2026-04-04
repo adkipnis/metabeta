@@ -74,21 +74,23 @@ def Collect(test_dir: Path) -> list[dict]:
         h_max = float(np.log(m))  # entropy of uniform distribution over m groups
         h_ratio = h / h_max if h_max > 0 else 1.0
 
-        rows.append({
-            'name': path.stem,
-            'd': d,
-            'm': m,
-            'n': int(data['n']),
-            'ns_min': int(ns.min()),
-            'ns_max': int(ns.max()),
-            'ns_mean': float(ns.mean()),
-            'ns_std': float(ns.std()),
-            'ns_entropy': h,
-            'ns_entropy_ratio': h_ratio,  # 1 = perfectly uniform
-            'nu_ffx': nu_ffx,
-            'tau_ffx': tau_ffx,
-            'columns': data.get('columns', np.array([])),
-        })
+        rows.append(
+            {
+                'name': path.stem,
+                'd': d,
+                'm': m,
+                'n': int(data['n']),
+                'ns_min': int(ns.min()),
+                'ns_max': int(ns.max()),
+                'ns_mean': float(ns.mean()),
+                'ns_std': float(ns.std()),
+                'ns_entropy': h,
+                'ns_entropy_ratio': h_ratio,  # 1 = perfectly uniform
+                'nu_ffx': nu_ffx,
+                'tau_ffx': tau_ffx,
+                'columns': data.get('columns', np.array([])),
+            }
+        )
     return rows
 
 
@@ -115,8 +117,7 @@ def PrintSummary(rows: list[dict]) -> None:
     for r in rows:
         cols = ['intercept'] + list(r['columns'])
         pairs = [
-            f'{c}: N({nu:.2f}, {tau:.2f})'
-            for c, nu, tau in zip(cols, r['nu_ffx'], r['tau_ffx'])
+            f'{c}: N({nu:.2f}, {tau:.2f})' for c, nu, tau in zip(cols, r['nu_ffx'], r['tau_ffx'])
         ]
         print(f"  {r['name']}: {', '.join(pairs)}")
 

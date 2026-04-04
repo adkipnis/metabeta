@@ -89,7 +89,7 @@ def loadEvalConfig(name: str, **overrides) -> argparse.Namespace:
 
 def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
     """Load model architecture from config and restore checkpoint weights."""
-    data_cfg = loadDataConfig(cfg.d_tag)
+    data_cfg = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg)
 
     model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.m_tag}.yaml'
@@ -115,12 +115,10 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
     return model, data_cfg, run
 
 
-def getDataloader(
-    data_cfg: dict, partition: str, batch_size: int | None = None
-) -> Dataloader:
+def getDataloader(data_cfg: dict, partition: str, batch_size: int | None = None) -> Dataloader:
     """Create a dataloader for the given partition."""
-    data_fname = datasetFilename(data_cfg, partition)
-    data_path = METABETA / 'outputs' / 'data' / data_fname
+    data_fname = datasetFilename(partition)
+    data_path = METABETA / 'outputs' / 'data' / data_cfg['data_id'] / data_fname
     assert data_path.exists(), f'data not found: {data_path}'
     sortish = batch_size is not None
     return Dataloader(data_path, batch_size=batch_size, sortish=sortish)
@@ -182,9 +180,7 @@ def sampleMoe(
 
         # process each dataset individually (B=1 required by moe)
         for i in range(B):
-            single = {
-                k_: v[i : i + 1] if torch.is_tensor(v) else v for k_, v in batch.items()
-            }
+            single = {k_: v[i : i + 1] if torch.is_tensor(v) else v for k_, v in batch.items()}
             rng = np.random.default_rng(seed + n_datasets)
             proposal = moeEstimate(model, single, cfg.n_samples, k, rng=rng)
             if cfg.rescale:
@@ -223,9 +219,7 @@ def sampleMultiMoe(
         B = batch['X'].shape[0]
 
         for i in range(B):
-            single = {
-                k_: v[i : i + 1] if torch.is_tensor(v) else v for k_, v in batch.items()
-            }
+            single = {k_: v[i : i + 1] if torch.is_tensor(v) else v for k_, v in batch.items()}
             rng = np.random.default_rng(seed + n_datasets)
             proposal = multiCheckpointEstimate(models, single, cfg.n_samples, k=k, rng=rng)
             if cfg.rescale:
@@ -265,9 +259,9 @@ def evaluateComparison(
     rows = []
 
     for eval_config, mix_config in zip(eval_configs, mix_configs):
-        print(f'\n{"=" * 60}')
+        print(f"\n{'=' * 60}")
         print(f'Comparison: {eval_config} vs +{mix_config}  (partition={partition})')
-        print(f'{"=" * 60}')
+        print(f"{'=' * 60}")
 
         eval_cfg = loadEvalConfig(eval_config, plot=False, importance=importance)
         setSeed(eval_cfg.seed)
@@ -285,9 +279,7 @@ def evaluateComparison(
 
         mix_cfg = loadEvalConfig(mix_config, plot=False, importance=importance)
         if getattr(mix_cfg, 'likelihood_family', 0) != lf:
-            raise ValueError(
-                f'{mix_config} has different likelihood_family than {eval_config}'
-            )
+            raise ValueError(f'{mix_config} has different likelihood_family than {eval_config}')
         mix_model, _, _ = initModel(mix_cfg, device)
 
         n = eval_cfg.n_samples  # per model / per view
@@ -299,13 +291,15 @@ def evaluateComparison(
         eval_model.eval()
         proposal = sampleMoe(eval_model, eval_cfg, dl, device, k=0, seed=eval_cfg.seed)
         summary = getSummary(proposal, full_batch, calibrator=calibrator, likelihood_family=lf)
-        rows.append({
-            'config': eval_config,
-            'condition': 'baseline',
-            'total_samples': n,
-            **{mn: ex(summary) for mn, ex, _ in METRICS},
-            **({'t/ds': summary.tpd} if summary.tpd is not None else {}),
-        })
+        rows.append(
+            {
+                'config': eval_config,
+                'condition': 'baseline',
+                'total_samples': n,
+                **{mn: ex(summary) for mn, ex, _ in METRICS},
+                **({'t/ds': summary.tpd} if summary.tpd is not None else {}),
+            }
+        )
 
         # --- pseudo-MoE: eval model, k=1 → 2*n samples ---
         print(f'\n  --- pseudo-MoE ({eval_config}, k=1, S={2 * n}) ---')
@@ -314,13 +308,15 @@ def evaluateComparison(
         eval_model.eval()
         proposal = sampleMoe(eval_model, eval_cfg, dl, device, k=1, seed=eval_cfg.seed)
         summary = getSummary(proposal, full_batch, calibrator=calibrator, likelihood_family=lf)
-        rows.append({
-            'config': eval_config,
-            'condition': 'pseudo-MoE (k=1)',
-            'total_samples': 2 * n,
-            **{mn: ex(summary) for mn, ex, _ in METRICS},
-            **({'t/ds': summary.tpd} if summary.tpd is not None else {}),
-        })
+        rows.append(
+            {
+                'config': eval_config,
+                'condition': 'pseudo-MoE (k=1)',
+                'total_samples': 2 * n,
+                **{mn: ex(summary) for mn, ex, _ in METRICS},
+                **({'t/ds': summary.tpd} if summary.tpd is not None else {}),
+            }
+        )
 
         # --- true MoE: [eval_model, mix_model], k=0 → 2*n samples ---
         print(f'\n  --- true MoE ({eval_config}+{mix_config}, k=0, S={2 * n}) ---')
@@ -332,13 +328,15 @@ def evaluateComparison(
             [eval_model, mix_model], eval_cfg, dl, device, k=0, seed=eval_cfg.seed
         )
         summary = getSummary(proposal, full_batch, calibrator=calibrator, likelihood_family=lf)
-        rows.append({
-            'config': eval_config,
-            'condition': f'true MoE ({mix_config})',
-            'total_samples': 2 * n,
-            **{mn: ex(summary) for mn, ex, _ in METRICS},
-            **({'t/ds': summary.tpd} if summary.tpd is not None else {}),
-        })
+        rows.append(
+            {
+                'config': eval_config,
+                'condition': f'true MoE ({mix_config})',
+                'total_samples': 2 * n,
+                **{mn: ex(summary) for mn, ex, _ in METRICS},
+                **({'t/ds': summary.tpd} if summary.tpd is not None else {}),
+            }
+        )
 
     return rows
 
@@ -361,11 +359,11 @@ def evaluateMulti(
 
     partition = 'valid' if use_valid else 'test'
 
-    print(f'\n{"=" * 60}')
+    print(f"\n{'=' * 60}")
     print(f'True MoE: {len(configs)} checkpoint(s) → eval on {eval_config}')
     print(f'Configs : {configs}')
     print(f'Partition: {partition}, IS={importance}')
-    print(f'{"=" * 60}')
+    print(f"{'=' * 60}")
 
     # load eval infrastructure from the designated eval config
     eval_cfg = loadEvalConfig(eval_config, plot=False, importance=importance)
@@ -459,9 +457,9 @@ def evaluate(
     partition = 'valid' if use_valid else 'test'
 
     for config_name in configs:
-        print(f'\n{"=" * 60}')
+        print(f"\n{'=' * 60}")
         print(f'Config: {config_name} (partition={partition}, IS={importance})')
-        print(f'{"=" * 60}')
+        print(f"{'=' * 60}")
 
         cfg = loadEvalConfig(config_name, plot=False)
         cfg.importance = importance
@@ -507,9 +505,7 @@ def evaluate(
             proposal = sampleMoe(model, cfg, dl, device, k, cfg.seed)
             cfg.n_samples = orig_n_samples
 
-            summary = getSummary(
-                proposal, full_batch, calibrator=calibrator, likelihood_family=lf
-            )
+            summary = getSummary(proposal, full_batch, calibrator=calibrator, likelihood_family=lf)
 
             row = {
                 'config': config_name,
@@ -614,7 +610,7 @@ def formatTable(rows: list[dict], fmt: str = 'pipe') -> str:
                         cell = f'**{cell}**'
             table_row.append(cell)
         if 't/ds' in r:
-            table_row.append(f'{r["t/ds"]:.3f}')
+            table_row.append(f"{r['t/ds']:.3f}")
         table_rows.append(table_row)
 
     headers = ['Config', 'Condition', 'Samples'] + metric_names
@@ -632,11 +628,13 @@ if __name__ == '__main__':
 
     if args.compare:
         if not args.mix_configs or len(args.mix_configs) != len(args.configs):
-            raise ValueError('--compare requires --mix-configs with the same number of entries as --configs')
+            raise ValueError(
+                '--compare requires --mix-configs with the same number of entries as --configs'
+            )
         print(f'MoE comparison: {len(args.configs)} family(ies), pseudo k=1 vs true 2-expert')
         print(f'Eval configs : {args.configs}')
         print(f'Mix  configs : {args.mix_configs}')
-        print(f'Partition    : {"valid" if args.valid else "test"}')
+        print(f"Partition    : {'valid' if args.valid else 'test'}")
         print(f'IS           : {args.importance}')
         rows = evaluateComparison(args.configs, args.mix_configs, args.valid, args.importance)
         outfile = 'compare_moe'
@@ -652,24 +650,31 @@ if __name__ == '__main__':
                     f'({len(multi_configs)}) or --configs must have exactly one entry'
                 )
         if len(multi_configs) < 2:
-            raise ValueError('--multi requires at least 2 checkpoints (use --seeds to expand a single config)')
+            raise ValueError(
+                '--multi requires at least 2 checkpoints (use --seeds to expand a single config)'
+            )
         print(f'True MoE experiment: {len(multi_configs)} checkpoint(s), {len(ks)} k value(s)')
         print(f'Checkpoints : {multi_configs}')
         if multi_seeds is not None:
             print(f'Seeds       : {multi_seeds}')
         print(f'Eval config : {args.eval_config or multi_configs[0]}')
         print(f'k values    : {ks}')
-        print(f'Partition   : {"valid" if args.valid else "test"}')
+        print(f"Partition   : {'valid' if args.valid else 'test'}")
         print(f'IS          : {args.importance}')
         rows = evaluateMulti(
-            multi_configs, ks, args.eval_config, args.valid, args.importance, seeds=multi_seeds
+            multi_configs,
+            ks,
+            args.eval_config,
+            args.valid,
+            args.importance,
+            seeds=multi_seeds,
         )
         outfile = 'multi_moe'
     else:
         print(f'Pseudo-MoE experiment: {len(args.configs)} config(s) × {len(ks)} k values')
         print(f'Configs: {args.configs}')
         print(f'k values: {ks}')
-        print(f'Partition: {"valid" if args.valid else "test"}')
+        print(f"Partition: {'valid' if args.valid else 'test'}")
         print(f'IS: {args.importance}')
         rows = evaluate(args.configs, ks, args.valid, args.importance)
         outfile = 'moe'

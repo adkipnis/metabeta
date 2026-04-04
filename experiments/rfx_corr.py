@@ -67,7 +67,7 @@ def loadEvalConfig(name: str, **overrides) -> argparse.Namespace:
 
 
 def initModel(cfg: argparse.Namespace, device: torch.device) -> tuple[Approximator, dict, str]:
-    data_cfg = loadDataConfig(cfg.d_tag)
+    data_cfg = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg)
 
     model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.m_tag}.yaml'
@@ -96,8 +96,8 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> tuple[Approximat
 def getTestDataloader(cfg: argparse.Namespace, batch_size: int | None = None) -> Dataloader:
     d_tag_valid = getattr(cfg, 'd_tag_valid', cfg.d_tag)
     data_cfg_valid = loadDataConfig(d_tag_valid)
-    data_fname = datasetFilename(data_cfg_valid, 'test')
-    data_path = METABETA / 'outputs' / 'data' / data_fname
+    data_fname = datasetFilename('test')
+    data_path = METABETA / 'outputs' / 'data' / data_cfg_valid['data_id'] / data_fname
     data_path = data_path.with_suffix('.fit.npz')
     assert data_path.exists(), f'fitted test data not found: {data_path}'
     sortish = batch_size is not None

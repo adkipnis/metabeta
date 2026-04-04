@@ -61,12 +61,12 @@ DEFAULT_CONFIGS = ['small-n-mixed']
 # When conformal=True, the calibrator is matched to the proposal distribution:
 #   raw → cal_raw, IS → cal_is, SIR → cal_sir
 CONDITIONS = [
-    ('Baseline',  False, False, False),
-    ('+ CP',      False, False, True),
-    ('+ IS',      True,  False, False),
-    ('+ SIR',     True,  True,  False),
-    ('+ IS + CP', True,  False, True),
-    ('+ SIR + CP',True,  True,  True),
+    ('Baseline', False, False, False),
+    ('+ CP', False, False, True),
+    ('+ IS', True, False, False),
+    ('+ SIR', True, True, False),
+    ('+ IS + CP', True, False, True),
+    ('+ SIR + CP', True, True, True),
 ]
 
 # (display name, extractor, higher_is_better)
@@ -106,9 +106,9 @@ def loadEvalConfig(name: str, **overrides) -> argparse.Namespace:
 def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
     """Load model architecture from config and restore checkpoint weights."""
     # data config (needed for d/q dimensions)
-    data_cfg = loadDataConfig(cfg.d_tag)
+    data_cfg = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg)
-    data_cfg_valid = loadDataConfig(cfg.d_tag_valid)
+    data_cfg_valid = loadDataConfig(cfg.data_id_valid)
 
     # model config
     model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.m_tag}.yaml'
@@ -137,8 +137,8 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
 
 def getDataloader(data_cfg: dict, partition: str, batch_size: int | None = None) -> Dataloader:
     """Create a dataloader for the given partition."""
-    data_fname = datasetFilename(data_cfg, partition)
-    data_path = METABETA / 'outputs' / 'data' / data_fname
+    data_fname = datasetFilename(partition)
+    data_path = METABETA / 'outputs' / 'data' / data_cfg['data_id'] / data_fname
     if partition == 'test':
         data_path = data_path.with_suffix('.fit.npz')
     assert data_path.exists(), f'data not found: {data_path}'
@@ -226,7 +226,9 @@ def sampleMinibatched(
             # pseudo-MoE requires processing one dataset at a time
             B = batch['X'].shape[0]
             for i in range(B):
-                single = {key: v[i:i+1] if torch.is_tensor(v) else v for key, v in batch.items()}
+                single = {
+                    key: v[i : i + 1] if torch.is_tensor(v) else v for key, v in batch.items()
+                }
                 rng = np.random.default_rng(cfg.seed + n_datasets)
                 proposal = moeEstimate(model, single, cfg.n_samples, k, rng=rng)
                 if cfg.rescale:
@@ -263,9 +265,9 @@ def evaluate(configs: list[str], batch_size: int, k: int = 0) -> list[dict]:
     rows = []
 
     for config_name in configs:
-        print(f'\n{"=" * 60}')
+        print(f"\n{'=' * 60}")
         print(f'Config: {config_name}')
-        print(f'{"=" * 60}')
+        print(f"{'=' * 60}")
 
         cfg = loadEvalConfig(config_name, plot=False)
         cfg.k = k
@@ -277,8 +279,26 @@ def evaluate(configs: list[str], batch_size: int, k: int = 0) -> list[dict]:
 
         # calibrate on validation set: one calibrator per proposal distribution
         cal_raw = calibrate(model, cfg, data_cfg, run, device, use_is=False, use_sir=False)
-        cal_is  = calibrate(model, cfg, data_cfg, run, device, use_is=True,  use_sir=False, batch_size=batch_size)
-        cal_sir = calibrate(model, cfg, data_cfg, run, device, use_is=True,  use_sir=True,  batch_size=batch_size)
+        cal_is = calibrate(
+            model,
+            cfg,
+            data_cfg,
+            run,
+            device,
+            use_is=True,
+            use_sir=False,
+            batch_size=batch_size,
+        )
+        cal_sir = calibrate(
+            model,
+            cfg,
+            data_cfg,
+            run,
+            device,
+            use_is=True,
+            use_sir=True,
+            batch_size=batch_size,
+        )
 
         # create batched test dataloader (prevents OOM for large models)
         dl_test = getDataloader(data_cfg, 'test', batch_size=batch_size)

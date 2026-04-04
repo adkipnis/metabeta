@@ -80,7 +80,7 @@ def loadEvalConfig(name: str, **overrides) -> argparse.Namespace:
 
 def initModel(cfg: argparse.Namespace, device: torch.device):
     """Load model architecture from config and restore checkpoint weights."""
-    data_cfg = loadDataConfig(cfg.d_tag)
+    data_cfg = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg)
 
     model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.m_tag}.yaml'

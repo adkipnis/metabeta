@@ -41,7 +41,13 @@ from metabeta.utils.config import (
     modelFromYaml,
 )
 from metabeta.utils.dataloader import collateGrouped, toDevice
-from metabeta.utils.families import bambiFamilyName, hasSigmaEps, FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
+from metabeta.utils.families import (
+    bambiFamilyName,
+    hasSigmaEps,
+    FFX_FAMILIES,
+    SIGMA_FAMILIES,
+    STUDENT_DF,
+)
 from metabeta.utils.io import datasetFilename, runName, setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.padding import padToModel, unpad
@@ -99,7 +105,7 @@ def loadEvalConfig(name: str, **overrides) -> argparse.Namespace:
 
 
 def initModel(cfg: argparse.Namespace, device: torch.device):
-    data_cfg = loadDataConfig(cfg.d_tag)
+    data_cfg = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg)
 
     model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.m_tag}.yaml'
@@ -151,7 +157,7 @@ def perturbDataset(ds: dict[str, np.ndarray], scale: float) -> dict[str, np.ndar
         return out  # intercept-only model, nothing to perturb
     predictors = X[:, 1:d]  # (n, d-1)
     centered = predictors - predictors.mean(axis=0, keepdims=True)
-    nonlinear = (centered ** 2).sum(axis=1)  # (n,)
+    nonlinear = (centered**2).sum(axis=1)  # (n,)
     out['y'] = ds['y'] + scale * nonlinear
     return out
 
@@ -162,8 +168,13 @@ def perturbDataset(ds: dict[str, np.ndarray], scale: float) -> dict[str, np.ndar
 
 
 def _fitCachePath(
-    data_stem: str, seed: int, scale: float, idx: int,
-    draws: int, tune: int, chains: int,
+    data_stem: str,
+    seed: int,
+    scale: float,
+    idx: int,
+    draws: int,
+    tune: int,
+    chains: int,
 ) -> Path:
     """Deterministic cache path for a single NUTS fit.
 
@@ -171,7 +182,9 @@ def _fitCachePath(
     same validation data reuse cached fits.
     """
     scale_str = f'{scale:.4f}'.replace('.', 'p')
-    return FITS_DIR / f'{data_stem}_s{seed}_lam{scale_str}_i{idx:03d}_d{draws}_t{tune}_c{chains}.npz'
+    return (
+        FITS_DIR / f'{data_stem}_s{seed}_lam{scale_str}_i{idx:03d}_d{draws}_t{tune}_c{chains}.npz'
+    )
 
 
 def pandify(ds: dict[str, np.ndarray]) -> pd.DataFrame:
@@ -286,12 +299,13 @@ def _runNuts(
     ).mean(axis=0)
 
     sigma_rfx_mean = np.stack(
-        [_extract('1|i_sigma' if j == 0 else f'x{j}|i_sigma') for j in range(q)], axis=-1
+        [_extract('1|i_sigma' if j == 0 else f'x{j}|i_sigma') for j in range(q)],
+        axis=-1,
     ).mean(axis=0)
 
-    rfx_mean = np.stack(
-        [_extract('1|i' if j == 0 else f'x{j}|i') for j in range(q)], axis=-1
-    ).mean(axis=0)
+    rfx_mean = np.stack([_extract('1|i' if j == 0 else f'x{j}|i') for j in range(q)], axis=-1).mean(
+        axis=0
+    )
 
     out = {
         'ffx': ffx_mean,
@@ -436,9 +450,9 @@ def evaluate(
     rows = []
 
     for config_name in configs:
-        print(f'\n{"=" * 60}')
+        print(f"\n{'=' * 60}")
         print(f'Config: {config_name}')
-        print(f'{"=" * 60}')
+        print(f"{'=' * 60}")
 
         cfg = loadEvalConfig(config_name, plot=False)
         seed = seed_override if seed_override is not None else cfg.seed
@@ -449,8 +463,8 @@ def evaluate(
         # load validation set as raw numpy (use d_tag_valid if available)
         d_tag_valid = getattr(cfg, 'd_tag_valid', cfg.d_tag)
         valid_data_cfg = loadDataConfig(d_tag_valid)
-        data_fname = datasetFilename(valid_data_cfg, 'valid')
-        data_path = METABETA / 'outputs' / 'data' / data_fname
+        data_fname = datasetFilename('valid')
+        data_path = METABETA / 'outputs' / 'data' / valid_data_cfg['data_id'] / data_fname
         assert data_path.exists(), f'data not found: {data_path}'
         with np.load(data_path, allow_pickle=True) as raw:
             raw_batch = dict(raw)
@@ -474,7 +488,9 @@ def evaluate(
             datasets.append(ds)
             ds_indices.append(int(i))
 
-        print(f'Using {len(datasets)}/{B} validation datasets (max_d={cfg.max_d}, max_q={cfg.max_q})')
+        print(
+            f'Using {len(datasets)}/{B} validation datasets (max_d={cfg.max_d}, max_q={cfg.max_q})'
+        )
 
         for scale in scales:
             label = f'λ={scale:g}'
@@ -492,17 +508,19 @@ def evaluate(
 
                 # NUTS (cached by data file, not eval config)
                 data_stem = Path(data_fname).stem
-                nuts_list.append(fitNuts(
-                    perturbed,
-                    data_stem=data_stem,
-                    seed=seed,
-                    scale=scale,
-                    idx=ds_indices[j],
-                    draws=nuts_draws,
-                    tune=nuts_tune,
-                    chains=nuts_chains,
-                    refit=refit,
-                ))
+                nuts_list.append(
+                    fitNuts(
+                        perturbed,
+                        data_stem=data_stem,
+                        seed=seed,
+                        scale=scale,
+                        idx=ds_indices[j],
+                        draws=nuts_draws,
+                        tune=nuts_tune,
+                        chains=nuts_chains,
+                        refit=refit,
+                    )
+                )
 
             # compare pooled posterior means
             row = {'config': config_name, 'condition': label}
@@ -607,7 +625,7 @@ if __name__ == '__main__':
     print(f'Configs: {args.configs}')
     print(f'Scales: {args.scales}')
     print(f'Max datasets: {args.max_datasets}')
-    print(f'Seed: {args.seed or "from config"}')
+    print(f"Seed: {args.seed or 'from config'}")
     print(f'NUTS: {args.nuts_draws} draws, {args.nuts_tune} tune, {args.nuts_chains} chains')
     print(f'Refit: {args.refit}')
 

@@ -64,9 +64,9 @@ def loadEvalConfig(name: str) -> argparse.Namespace:
 
 def initModel(cfg: argparse.Namespace) -> tuple[Approximator, dict]:
     """Load model and return it alongside the valid data config."""
-    data_cfg = loadDataConfig(cfg.d_tag)
+    data_cfg = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg)
-    data_cfg_valid = loadDataConfig(cfg.d_tag_valid)
+    data_cfg_valid = loadDataConfig(cfg.data_id_valid)
 
     model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.m_tag}.yaml'
     model_cfg = modelFromYaml(
@@ -91,8 +91,8 @@ def initModel(cfg: argparse.Namespace) -> tuple[Approximator, dict]:
 
 def getFullBatch(data_cfg: dict, partition: str) -> dict[str, torch.Tensor]:
     """Load the full batch for a given partition."""
-    data_fname = datasetFilename(data_cfg, partition)
-    data_path = METABETA / 'outputs' / 'data' / data_fname
+    data_fname = datasetFilename(partition)
+    data_path = METABETA / 'outputs' / 'data' / data_cfg['data_id'] / data_fname
     if partition == 'test':
         data_path = data_path.with_suffix('.fit.npz')
     assert data_path.exists(), f'data not found: {data_path}'
@@ -259,7 +259,7 @@ def checkTailDirection(
 
     for _, param_key, ordered_families in TAIL_ORDER:
         names = [n for n, _ in ordered_families]
-        print(f'\n  [{param_key}] tail ordering: {" < ".join(names)}')
+        print(f"\n  [{param_key}] tail ordering: {' < '.join(names)}")
         sds = []
         for name in names:
             sd = tail_stats[param_key][name].mean().item()
@@ -456,14 +456,14 @@ if __name__ == '__main__':
     all_n = []
 
     for config_name in args.configs:
-        print(f'\n{"=" * 60}')
+        print(f"\n{'=' * 60}")
         print(f'Config: {config_name}')
-        print(f'{"=" * 60}')
+        print(f"{'=' * 60}")
 
         cfg = loadEvalConfig(config_name)
         model, data_cfg_valid = initModel(cfg)
         batch = getFullBatch(data_cfg_valid, partition)
-        print(f'  datasets={batch["y"].shape[0]}')
+        print(f"  datasets={batch['y'].shape[0]}")
 
         # checkPosteriorChanges(model, batch, args.n_samples, cfg.seed)
         tail_stats = collectTailStats(model, batch, args.n_samples, cfg.seed)
