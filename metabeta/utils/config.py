@@ -3,7 +3,13 @@ import yaml
 from pathlib import Path
 from typing import Literal
 from dataclasses import dataclass, asdict
+
 from metabeta.utils.io import datasetFilename
+from metabeta.utils.templates import (
+        generateSimulationConfig,
+        PRESETS,
+        FAMILY_NAMES_REVERSE,
+    )
 
 
 @dataclass(frozen=True)
@@ -74,13 +80,51 @@ def dataFromYaml(cfg_path: Path, partition: str, epoch: int = 0) -> str:
     return datasetFilename(data_cfg, partition, epoch)
 
 
-def loadDataConfig(d_tag: str) -> dict:
+def loadDataConfig(data_id: str) -> dict:
+    """
+    Load data configuration by data_id.
+
+    First tries template-based config generation (from data_id pattern like 'small-n-mixed'),
+    then falls back to looking for config.yaml in outputs/data/{data_id}/.
+    Returns data config dict.
+    """
+
+    # Try to parse as template-based data_id: size-family-ds_type
+    parts = data_id.split('-')
+    if len(parts) >= 3:
+        size = parts[0]
+        family_str = parts[1]
+        ds_type = '-'.join(parts[2:])  # Handle types with hyphens
+
+        # Check if it's a valid template combination
+        if size in PRESETS['sizes']:
+            # Try parsing family as word (n/b/p) or integer
+            family = None
+            if family_str in FAMILY_NAMES_REVERSE:
+                family = FAMILY_NAMES_REVERSE[family_str]
+            else:
+                try:
+                    family = int(family_str)
+                except ValueError:
+                    pass
+
+            if family is not None and family in PRESETS['families']:
+                # Generate from template
+                return generateSimulationConfig(size=size, family=family, ds_type=ds_type)
+
+    # Fallback: try loading from dataset directory (new location)
     root = Path(__file__).resolve().parent
-    config_path = Path(root, '..', 'simulation', 'configs', f'{d_tag}.yaml')
-    assert config_path.exists(), f'data config not found: {config_path}'
-    with open(config_path, 'r') as f:
-        data_cfg = yaml.safe_load(f)
-    return data_cfg
+    data_dir = Path(root, '..', 'outputs', 'data', data_id)
+    config_path = data_dir / 'config.yaml'
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f)
+
+    raise FileNotFoundError(
+        f'Data config not found for data_id: {data_id}\n'
+        f'  - Template-based pattern: <size>-<family>-<ds_type> (e.g., small-n-mixed)\n'
+        f'  - Dataset config file: {config_path}\n'
+    )
 
 
 def assimilateConfig(big: argparse.Namespace, small: dict) -> None:
