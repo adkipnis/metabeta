@@ -23,37 +23,37 @@ def setDevice(device: str = ''):
         return torch.device('cpu')
 
 
-def datasetFilename(cfg: dict, partition: str, epoch: int = 0) -> str:
-    # partition type and optionally epoch
+def datasetFilename(partition: str, epoch: int = 0) -> str:
+    """
+    Generate dataset filename (without directory path).
+
+    Dataset files are organized in subdirectories by data_id,
+    so the filename only contains the partition and epoch info.
+
+    Args:
+        partition: One of 'train', 'valid', 'test'
+        epoch: Training epoch number (only used for partition='train')
+
+    Returns:
+        Filename like 'train_ep0001.npz' or 'test.npz'
+    """
     parts = [partition]
     if partition == 'train':
         parts.append(f'ep{epoch:04d}')
-
-    # likelihood family
-    likelihood_family = cfg.get('likelihood_family', 0)
-    lf = LIKELIHOOD_FAMILIES[likelihood_family]
-
-    # sizes
-    parts += [
-        lf,
-        f"d{cfg['max_d']}",
-        f"q{cfg['max_q']}",
-        f"m{cfg['min_m']}-{cfg['max_m']}",
-        f"n{cfg['min_n']}-{cfg['max_n']}",
-        cfg['ds_type'],
-    ]
-
-    # cap on total observations per dataset (required)
-    parts.append(f"nt{cfg['max_n_total']}")
-
-    # source of sampled data
-    if cfg['ds_type'] == 'sampled':
-        parts.append(cfg['source'])
-
     return '_'.join(parts) + '.npz'
 
 
 def runName(cfg: dict, prefix: str = '') -> str:
+    """
+    Generate run name for checkpoints.
+
+    Args:
+        cfg: Config dict containing data_id, m_tag, seed, etc.
+        prefix: Optional prefix for the run name
+
+    Returns:
+        Run name like 'tiny-n-toy_mtiny_s42' or 'prefix_tiny-n-toy_mtiny_s42'
+    """
     parts = []
     if prefix:
         parts.append(prefix)
@@ -63,7 +63,7 @@ def runName(cfg: dict, prefix: str = '') -> str:
     parts.append(LIKELIHOOD_FAMILIES[likelihood_family])
 
     parts += [
-        f"d{cfg['d_tag']}",
+        f"d{cfg['data_id']}",
         f"m{cfg['m_tag']}",
         f"s{cfg['seed']}",
     ]
