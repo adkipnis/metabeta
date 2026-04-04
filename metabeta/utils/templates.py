@@ -1,0 +1,273 @@
+"""
+Template-based configuration generation and validation.
+
+Key features:
+- Pydantic validation for simulation and training configs
+- Runtime config generation from metabeta/configs/presets.yaml
+- Checkpoint config persistence for reproducibility
+- CLI-only parameter handling (device, verbosity, wandb, seed)
+
+Usage:
+    # Generate simulation config
+    cfg = generateSimulationConfig(size='small', family=0, ds_type='mixed')
+
+    # Generate training config
+    cfg = generateTrainingConfig(size='small', family=0, ds_type='mixed')
+
+    # Save config to checkpoint
+    saveConfigToCheckpoint(cfg, Path('checkpoints/small-0-mixed'))
+
+    # Load config from checkpoint
+    cfg = loadConfigFromCheckpoint(Path('checkpoints/small-0-mixed'))
+"""
+
+import sys
+from pathlib import Path
+from typing import Any, Literal, Optional
+import yaml
+from pydantic import BaseModel, Field, field_validator
+
+
+# Load presets once at module import
+_REPO_ROOT = Path(__file__).parent.parent
+_PRESETS_PATH = _REPO_ROOT / 'configs' / 'presets.yaml'
+
+with open(_PRESETS_PATH) as f:
+    PRESETS = yaml.safe_load(f)
+
+CLI_ONLY = set(PRESETS['cli_only'])
+
+# Family integer to short name mapping
+FAMILY_NAMES = {0: 'n', 1: 'b', 2: 'p'}  # normal, bernoulli, poisson
+FAMILY_NAMES_REVERSE = {'n': 0, 'b': 1, 'p': 2}
+
+
+class SimulationConfig(BaseModel):
+    """Validates simulation/data generation configs."""
+
+    ds_type: str
+    source: str = 'all'
+    likelihood_family: Literal[0, 1, 2]
+    max_d: int = Field(gt=0)
+    max_q: int = Field(ge=0)
+    min_m: int = Field(gt=0)
+    max_m: int = Field(gt=0)
+    min_n: int = Field(gt=0)
+    max_n: int = Field(gt=0)
+    max_n_total: int = Field(gt=0)
+    data_id: Optional[str] = None  # Auto-generated if not provided
+
+    @field_validator('max_m')
+    @classmethod
+    def max_m_gt_min_m(cls, v, info):
+        if info.data.get('min_m') is not None and v <= info.data['min_m']:
+            raise ValueError(f"max_m ({v}) must be > min_m ({info.data['min_m']})")
+        return v
+
+    @field_validator('max_n')
+    @classmethod
+    def max_n_gt_min_n(cls, v, info):
+        if info.data.get('min_n') is not None and v <= info.data['min_n']:
+            raise ValueError(f"max_n ({v}) must be > min_n ({info.data['min_n']})")
+        return v
+
+    model_config = {'extra': 'allow'}
+
+
+class TrainingConfig(BaseModel):
+    """Validates training configs."""
+
+    name: str
+    data_id: str
+    data_id_valid: Optional[str] = None
+    m_tag: str
+
+    # Training hyperparameters
+    max_epochs: int = Field(gt=0, default=500)
+    bs: int = Field(gt=0, default=32)
+    lr: float = Field(gt=0, default=1e-3)
+    max_grad_norm: float = Field(gt=0, default=1.0)
+    loss_type: str = 'forward'
+    patience: int = Field(ge=0, default=10)
+    sample_interval: int = Field(gt=0, default=5)
+    skip_ref: bool = False
+
+    # Runtime settings (will be overridden by CLI-only params)
+    cores: int = Field(gt=0, default=8)
+    reproducible: bool = False
+    compile: bool = False
+
+    # Evaluation settings
+    n_samples: int = Field(gt=0, default=512)
+    rescale: bool = True
+    importance: bool = False
+    sir: bool = False
+    sir_iter: int = Field(gt=0, default=8)
+    plot: bool = True
+
+    # Checkpoint settings
+    r_tag: str = ''
+    save_latest: bool = True
+    save_best: bool = True
+    load_latest: bool = False
+    load_best: bool = False
+
+    model_config = {'extra': 'allow'}
+
+
+def generateSimulationConfig(size: str, family: int, ds_type: str, **overrides) -> dict[str, Any]:
+    """
+    Generate simulation config from size/family presets with specified ds_type.
+
+    Args:
+        size: One of tiny/small/medium/large/huge
+        family: Likelihood family integer (0=normal, 1=bernoulli, 2=poisson)
+        ds_type: Dataset type (toy/flat/scm/mixed/sampled/observed)
+        **overrides: Additional overrides from CLI (excluding CLI-only params)
+
+    Returns:
+        Validated config dict with auto-generated data_id
+
+    Raises:
+        ValueError: If size/family is invalid
+        pydantic.ValidationError: If generated config is invalid
+    """
+    if size not in PRESETS['sizes']:
+        raise ValueError(f"Invalid size '{size}'. Choose from: {list(PRESETS['sizes'].keys())}")
+    if family not in PRESETS['families']:
+        raise ValueError(
+            f"Invalid family {family}. Choose from: {list(PRESETS['families'].keys())}"
+        )
+
+    # Merge presets
+    cfg = {}
+    cfg.update(PRESETS['sizes'][size])
+    cfg.update(PRESETS['families'][family])
+    cfg['ds_type'] = ds_type
+
+    # Apply overrides (excluding CLI-only params)
+    for k, v in overrides.items():
+        if k not in CLI_ONLY and v is not None:
+            cfg[k] = v
+
+    # Auto-generate data_id if not provided
+    if 'data_id' not in cfg:
+        family_name = FAMILY_NAMES[family]
+        cfg['data_id'] = f'{size}-{family_name}-{ds_type}'
+
+    # Validate
+    validated = SimulationConfig(**cfg)
+    return validated.model_dump()
+
+
+def generateTrainingConfig(
+    size: str,
+    family: int,
+    ds_type: str,
+    valid_ds_type: Optional[str] = None,
+    **overrides,
+) -> dict[str, Any]:
+    """
+    Generate training config from size/family presets with specified ds_type.
+
+    Args:
+        size: One of tiny/small/medium/large/huge
+        family: Likelihood family integer (0=normal, 1=bernoulli, 2=poisson)
+        ds_type: Dataset type for training (toy/flat/scm/mixed/sampled/observed)
+        valid_ds_type: Optional validation dataset type (defaults to 'sampled')
+        **overrides: Additional overrides from CLI (excluding CLI-only params)
+
+    Returns:
+        Validated config dict with auto-generated data_id fields
+
+    Raises:
+        ValueError: If size/family is invalid
+        pydantic.ValidationError: If generated config is invalid
+    """
+    if size not in PRESETS['sizes']:
+        raise ValueError(f"Invalid size '{size}'. Choose from: {list(PRESETS['sizes'].keys())}")
+    if family not in PRESETS['families']:
+        raise ValueError(
+            f"Invalid family {family}. Choose from: {list(PRESETS['families'].keys())}"
+        )
+
+    # Auto-generate tags based on size/family/ds_type
+    family_name = FAMILY_NAMES[family]
+    cfg = {
+        'name': f'{size}-{family_name}-{ds_type}',
+        'data_id': f'{size}-{family_name}-{ds_type}',
+        'data_id_valid': f"{size}-{family_name}-{valid_ds_type or 'sampled'}",
+        'm_tag': size,
+    }
+
+    # Apply overrides (excluding CLI-only params)
+    for k, v in overrides.items():
+        if k not in CLI_ONLY and v is not None:
+            cfg[k] = v
+
+    # Validate
+    validated = TrainingConfig(**cfg) # type: ignore
+    return validated.model_dump()
+
+
+def saveConfigToCheckpoint(cfg: dict[str, Any], checkpoint_dir: Path) -> None:
+    """
+    Save resolved config to checkpoint directory for reproducibility.
+
+    Args:
+        cfg: Configuration dict to save
+        checkpoint_dir: Path to checkpoint directory
+    """
+    checkpoint_dir = Path(checkpoint_dir)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path = checkpoint_dir / 'config.yaml'
+    with open(config_path, 'w') as f:
+        yaml.dump(cfg, f, sort_keys=False, default_flow_style=False)
+
+
+def loadConfigFromCheckpoint(checkpoint_dir: Path) -> dict[str, Any]:
+    """
+    Load config from checkpoint directory.
+
+    Args:
+        checkpoint_dir: Path to checkpoint directory
+
+    Returns:
+        Config dict
+
+    Raises:
+        FileNotFoundError: If config.yaml not found in checkpoint dir
+    """
+    config_path = Path(checkpoint_dir) / 'config.yaml'
+
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f'No config.yaml found in {checkpoint_dir}. '
+            'This checkpoint may be from an older version.'
+        )
+
+    with open(config_path) as f:
+        return yaml.safe_load(f)
+
+
+def getExplicitArgs() -> set[str]:
+    """
+    Returns set of argument names explicitly provided via CLI.
+
+    This allows us to distinguish between user-provided values and argparse defaults,
+    so we only override YAML config values with explicitly-provided CLI args.
+    """
+    explicit = set()
+    for arg in sys.argv[1:]:
+        if arg.startswith('--'):
+            # Handle --arg or --arg=value
+            arg_name = arg[2:].split('=')[0]
+            explicit.add(arg_name)
+        elif arg.startswith('-') and len(arg) == 2:
+            # Handle short flags like -b, -e
+            # Map to long form based on argparse config
+            flag_map = {'b': 'begin', 'e': 'epochs'}
+            if arg[1] in flag_map:
+                explicit.add(flag_map[arg[1]])
+    return explicit
