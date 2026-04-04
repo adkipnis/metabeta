@@ -19,7 +19,7 @@ from metabeta.simulation import (
 )
 from metabeta.simulation.emulator import Subsampler
 from metabeta.utils.families import hasSigmaEps
-from metabeta.utils.io import datasetFilename, datasetDir
+from metabeta.utils.io import datasetFilename
 from metabeta.utils.sampling import truncLogUni
 from metabeta.utils.padding import aggregate
 from metabeta.utils.templates import getExplicitArgs, generateSimulationConfig
@@ -56,7 +56,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('-b', '--begin', type=int, default=1, help='Begin generating training epoch number #b.')
     parser.add_argument('-e', '--epochs', type=int, default=20, help='Total number of training epochs to generate.')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD if ds_type==sampled (default = False)')
-    parser.add_argument('--loop', action='store_false', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
+    parser.add_argument('--loop', action='store_true', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
 
     args = parser.parse_args()
     explicit_args = getExplicitArgs()
@@ -356,7 +356,7 @@ class Generator:
 
     def saveConfig(self):
         """Save generation config to dataset directory for reproducibility."""
-        dataset_dir = self.outdir / datasetDir(vars(self.cfg))
+        dataset_dir = self.outdir / self.cfg.data_id
         dataset_dir.mkdir(parents=True, exist_ok=True)
 
         # Save full resolved config (excluding runtime-only params)
@@ -375,9 +375,9 @@ class Generator:
         ds_test = self._genBatch(n_datasets=self.cfg.bs_test, mini_batch_size=1)
         ds_test = aggregate(ds_test)
         ds_test = self._castCompactTypes(ds_test)
-        dataset_dir = self.outdir / datasetDir(vars(self.cfg))
+        dataset_dir = self.outdir / self.cfg.data_id
         dataset_dir.mkdir(parents=True, exist_ok=True)
-        fn = dataset_dir / datasetFilename(vars(self.cfg), 'test')
+        fn = dataset_dir / datasetFilename('test')
         np.savez_compressed(fn, **ds_test, allow_pickle=True)
         logger.info(f'Saved test set to {fn}')
 
@@ -386,9 +386,9 @@ class Generator:
         ds_valid = self._genBatch(n_datasets=self.cfg.bs_valid, mini_batch_size=1)
         ds_valid = aggregate(ds_valid)
         ds_valid = self._castCompactTypes(ds_valid)
-        dataset_dir = self.outdir / datasetDir(vars(self.cfg))
+        dataset_dir = self.outdir / self.cfg.data_id
         dataset_dir.mkdir(parents=True, exist_ok=True)
-        fn = dataset_dir / datasetFilename(vars(self.cfg), 'valid')
+        fn = dataset_dir / datasetFilename('valid')
         np.savez_compressed(fn, **ds_valid, allow_pickle=True)
         logger.info(f'Saved validation set to {fn}')
 
@@ -400,7 +400,7 @@ class Generator:
         logger.info(
             f'Generating {self.cfg.epochs} training partitions of {self.cfg.bs_train} datasets each...'
         )
-        dataset_dir = self.outdir / datasetDir(vars(self.cfg))
+        dataset_dir = self.outdir / self.cfg.data_id
         dataset_dir.mkdir(parents=True, exist_ok=True)
         for epoch in range(self.cfg.begin, self.cfg.epochs + 1):
             ds_train = self._genBatch(
@@ -410,7 +410,7 @@ class Generator:
             )
             ds_train = aggregate(ds_train)
             ds_train = self._castCompactTypes(ds_train)
-            fn = dataset_dir / datasetFilename(vars(self.cfg), 'train', epoch)
+            fn = dataset_dir / datasetFilename('train', epoch)
             np.savez_compressed(fn, **ds_train, allow_pickle=True)
             logger.debug(f'Saved training set to {fn}')
 
