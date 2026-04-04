@@ -1,8 +1,9 @@
 import argparse
-import yaml
 from pathlib import Path
 from typing import Literal
-from dataclasses import dataclass, asdict
+
+import yaml
+from pydantic import BaseModel, Field
 
 from metabeta.utils.io import datasetFilename
 from metabeta.utils.templates import (
@@ -12,49 +13,52 @@ from metabeta.utils.templates import (
 )
 
 
-@dataclass(frozen=True)
-class SummarizerConfig:
-    d_model: int
-    d_ff: int
-    d_output: int
-    n_blocks: int
-    n_isab: int = 0
+class SummarizerConfig(BaseModel):
+    d_model: int = Field(gt=0)
+    d_ff: int = Field(gt=0)
+    d_output: int = Field(gt=0)
+    n_blocks: int = Field(gt=0)
+    n_isab: int = Field(ge=0, default=0)
     activation: str = 'GELU'
-    dropout: float = 0.01
+    dropout: float = Field(ge=0.0, default=0.01)
     type: Literal['set-transformer'] = 'set-transformer'
 
+    model_config = {'extra': 'allow'}
+
     def to_dict(self) -> dict:
-        return asdict(self)
+        return self.model_dump()
 
 
-@dataclass(frozen=True)
-class PosteriorConfig:
-    n_blocks: int
+class PosteriorConfig(BaseModel):
+    n_blocks: int = Field(gt=0)
     subnet_kwargs: dict | None = None
     type: Literal['coupling'] = 'coupling'
     transform: Literal['affine', 'spline'] = 'affine'
     base_family: Literal['normal', 'student'] = 'normal'
     base_trainable: bool = True
 
+    model_config = {'extra': 'allow'}
+
     def to_dict(self) -> dict:
-        return asdict(self)
+        return self.model_dump()
 
 
-@dataclass(frozen=True)
-class ApproximatorConfig:
-    d_ffx: int
-    d_rfx: int
+class ApproximatorConfig(BaseModel):
+    d_ffx: int = Field(gt=0)
+    d_rfx: int = Field(ge=0)
     summarizer: SummarizerConfig
     posterior: PosteriorConfig
-    likelihood_family: int = 0
+    likelihood_family: int = Field(ge=0, default=0)
+
+    model_config = {'extra': 'allow'}
 
     def to_dict(self) -> dict:
         return {
             'd_ffx': self.d_ffx,
             'd_rfx': self.d_rfx,
             'likelihood_family': self.likelihood_family,
-            'summarizer': self.summarizer.to_dict(),
-            'posterior': self.posterior.to_dict(),
+            'summarizer': self.summarizer.model_dump(),
+            'posterior': self.posterior.model_dump(),
         }
 
 
@@ -77,7 +81,8 @@ def modelFromYaml(
 def dataFromYaml(cfg_path: Path, partition: str, epoch: int = 0) -> str:
     with open(cfg_path, 'r') as f:
         data_cfg = yaml.safe_load(f)
-    return datasetFilename(data_cfg, partition, epoch)
+    data_id = data_cfg.get('data_id', cfg_path.stem)
+    return str(Path(data_id) / datasetFilename(partition, epoch))
 
 
 def loadDataConfig(data_id: str) -> dict:
