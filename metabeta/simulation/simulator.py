@@ -13,6 +13,7 @@ from metabeta.utils.families import (
     POISSON_REROLL_CLIP_FRACTION_MAX,
     POISSON_REROLL_MAX_ATTEMPTS,
 )
+from metabeta.simulation.nonlinear import addNonlinearity, adjustParamsForNonlinearity
 from metabeta.simulation import Prior, Synthesizer, Scammer, Emulator
 from metabeta.plotting import plotDataset
 
@@ -26,6 +27,7 @@ def simulate(
     parameters: dict[str, np.ndarray],
     observations: dict[str, np.ndarray],
     likelihood_family: int = 0,
+    nonlinear_term: np.ndarray | None = None,
 ) -> np.ndarray:
     """draw y given X and theta for a single dataset"""
     # unpack parameters
@@ -39,9 +41,11 @@ def simulate(
     Z = X[:, :q]  # (n, q)
     groups = observations['groups']  # (n, )
 
-    # linear predictor
+    # linear predictor (optionally augmented with a nonlinear term)
     rfx_ext = rfx[groups]  # (n, q)
     eta = X @ ffx + (Z * rfx_ext).sum(-1)  # (n, )
+    if nonlinear_term is not None:
+        eta = eta + nonlinear_term
 
     return simulateYNp(rng, eta, sigma_eps, likelihood_family)
 
@@ -53,6 +57,8 @@ class Simulator:
     design: Synthesizer | Scammer | Emulator
     ns: np.ndarray  # number of observations per group
     plot: bool = False
+    nonlinear_kind: str | None = None  # one of NONLINEAR_KINDS, or None for no perturbation
+    nonlinear_scale: float = 0.5  # amplitude of the nonlinear term
 
     def __post_init__(self):
         self.d = self.prior.d  # number of ffx
@@ -152,8 +158,15 @@ class Simulator:
                     BERNOULLI_REROLL_MAX_ATTEMPTS,
                 )
 
+        # optionally compute a nonlinear perturbation; decompose it into a linear
+        # component absorbed into ffx / sigma_eps and the residual passed to simulate()
+        nonlinear_term = None
+        if self.nonlinear_kind is not None:
+            f_X = addNonlinearity(self.rng, obs['X'], self.nonlinear_kind, self.nonlinear_scale)
+            params, nonlinear_term = adjustParamsForNonlinearity(params, obs['X'], f_X)
+
         # sample outcomes
-        y = simulate(self.rng, params, obs, likelihood_family)
+        y = simulate(self.rng, params, obs, likelihood_family, nonlinear_term=nonlinear_term)
 
         # normalize to unit SD (continuous likelihoods only)
         if hasSigmaEps(likelihood_family):
