@@ -1,3 +1,10 @@
+"""Config schemas and config loading helpers.
+
+This module defines typed configuration models (Pydantic) and helpers for
+loading model/data configs from YAML. It does not generate preset-based
+configs; those live in `metabeta/utils/templates.py`.
+"""
+
 import argparse
 from pathlib import Path
 from typing import Literal

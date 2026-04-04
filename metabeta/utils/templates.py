@@ -1,11 +1,9 @@
-"""
-Template-based configuration generation and validation.
+"""Template-based config generation and validation.
 
-Key features:
-- Pydantic validation for simulation and training configs
-- Runtime config generation from metabeta/configs/presets.yaml
-- Checkpoint config persistence for reproducibility
-- CLI-only parameter handling (device, verbosity, wandb, seed)
+This module generates preset-based simulation/training configs using
+`metabeta/configs/presets.yaml`, applies CLI overrides, and validates via
+Pydantic. It intentionally does not define model network schemas; those live in
+`metabeta/utils/config.py`.
 
 Usage:
     # Generate simulation config
@@ -206,7 +204,7 @@ def generateTrainingConfig(
             cfg[k] = v
 
     # Validate
-    validated = TrainingConfig(**cfg) # type: ignore
+    validated = TrainingConfig(**cfg)  # type: ignore
     return validated.model_dump()
 
 
