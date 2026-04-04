@@ -8,7 +8,7 @@ from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import getConstrainers
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
-from metabeta.utils.gls import glsNormalCompacted
+from metabeta.utils.gls import glsNormal
 from metabeta.utils.least_squares import (
     olsNormalCompacted,
     irlsBernoulliCompacted,
@@ -68,11 +68,11 @@ class Approximator(nn.Module):
         # nu_ffx, tau_ffx, tau_rfx, [tau_eps], eta_rfx
         d_prior = 2 * d_ffx + d_rfx + d_sigma_eps + 1
         d_family = self.family_encoder.d_output
-        d_stats = d_ffx + 1 + d_sigma_eps # beta_ols, sigma_rfx_ols, [sigma_eps_ols]
+        d_stats = d_ffx + d_rfx + d_sigma_eps  # beta_est, sigma_rfx_est (q), [sigma_eps_est]
         d_meta_g = d_counts + d_prior + d_family + d_stats
         d_context_g = s_cfg.d_output + d_meta_g  # global summary + metadata
         # local context
-        d_meta_l = 2  # n_obs + eta_rfx (fed to global summarizer)
+        d_meta_l = 2 + d_rfx  # n_obs + eta_rfx + blup_est (scaled BLUPs, q values)
         d_context_l = (
             d_ffx + d_var + s_cfg.d_output + d_meta_l
         )  # global samples + local summaries + metadata
@@ -127,20 +127,26 @@ class Approximator(nn.Module):
     def _targets(self, data: dict[str, torch.Tensor], local: bool = False) -> torch.Tensor:
         """get posterior targets"""
         if local:
-            targets = data['rfx']
+            targets = data['rfx'][..., : self.d_rfx]
             if self.d_rfx == 1:  # handle 1D local params for flow
                 targets = F.pad(targets, (0, 1))
             return targets
-        return joinGlobals(data)
+        # Slice to model dims before joining — data may carry max-dim columns.
+        sliced = {
+            **data,
+            'ffx': data['ffx'][..., : self.d_ffx],
+            'sigma_rfx': data['sigma_rfx'][..., : self.d_rfx],
+        }
+        return joinGlobals(sliced)
 
     def _masks(self, data: dict[str, torch.Tensor], local: bool = False) -> torch.Tensor:
         """get masks for the posterior targets"""
         if local:
-            mask_q = data['mask_q']
+            mask_q = data['mask_q'][..., : self.d_rfx]
             if mask_q.shape[-1] == 1:  # handle 1D local params for flow
                 mask_q = F.pad(mask_q, (0, 1))
             return data['mask_m'].unsqueeze(-1) & mask_q.unsqueeze(-2)
-        masks = [data['mask_d'], data['mask_q']]
+        masks = [data['mask_d'][..., : self.d_ffx], data['mask_q'][..., : self.d_rfx]]
         if self.has_sigma_eps:
             masks.append(torch.ones_like(data['mask_d'][..., 0:1]))
         return torch.cat(masks, dim=-1)
@@ -148,7 +154,7 @@ class Approximator(nn.Module):
     def _dataStatistics(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Compute sufficient statistics from grouped data.
 
-        Normal: within-group OLS residual SD, Henderson MoM random-effects SD, GLS beta.
+        Normal: within-Z OLS residual SD, MoM random-effects SDs, GLS beta.
         Bernoulli/Poisson: pooled IRLS coefficients, between-group SD of means.
         """
         out = {}
@@ -160,12 +166,14 @@ class Approximator(nn.Module):
         ym = data['y']  # (B, m, n)
 
         if self.likelihood_family == 0:
-            beta, sigma_eps, sigma_rfx = glsNormalCompacted(
-                Xm, ym, mask_n, mask_m, ns, data['n'].float()
+            Zm = data['Z'][..., : self.d_rfx]  # (B, m, n, q) — slice to model's q
+            beta, sigma_eps, sigma_rfx, blups = glsNormal(
+                Xm, ym, Zm, mask_n, mask_m, ns, data['n'].float()
             )
-            out['beta_est'] = beta
-            out['sigma_eps_est'] = sigma_eps
-            out['sigma_rfx_est'] = sigma_rfx
+            out['beta_est'] = beta            # (B, d)
+            out['sigma_eps_est'] = sigma_eps  # (B, 1)
+            out['sigma_rfx_est'] = sigma_rfx  # (B, q)
+            out['blup_est'] = blups           # (B, m, q)
             return out
         elif self.likelihood_family == 1:
             beta = irlsBernoulliCompacted(Xm, ym, mask_n)
@@ -175,11 +183,16 @@ class Approximator(nn.Module):
             raise ValueError(f'no summary statistics for likelihood {self.likelihood_family}')
 
         # --- between-group SD for non-normal likelihoods (on link scale)
+        # Compute a scalar estimate and broadcast to (B, d_rfx) for context consistency.
         group_means = ym.sum(dim=2) / ns  # (B, m)
         grand_mean = (group_means * mask_m).sum(dim=1, keepdim=True) / m
         sq_dev = ((group_means - grand_mean).square() * mask_m).sum(dim=1, keepdim=True)
-        sigma_rfx_ols = (sq_dev / m.clamp(min=2)).sqrt()  # (B, 1)
-        out.update({'beta_est': beta, 'sigma_rfx_est': sigma_rfx_ols})
+        sigma_rfx_scalar = (sq_dev / m.clamp(min=2)).sqrt()  # (B, 1)
+        sigma_rfx_ols = sigma_rfx_scalar.expand(-1, self.d_rfx)  # (B, q)
+        # No GLS BLUPs for non-normal likelihoods; fill zeros so context dim is consistent.
+        B_dim, m_dim = Xm.shape[0], Xm.shape[1]
+        blup_zeros = torch.zeros(B_dim, m_dim, self.d_rfx, device=Xm.device, dtype=Xm.dtype)
+        out.update({'beta_est': beta, 'sigma_rfx_est': sigma_rfx_ols, 'blup_est': blup_zeros})
         return out
 
     def _addMetadata(
@@ -187,20 +200,33 @@ class Approximator(nn.Module):
         summary: torch.Tensor,
         data: dict[str, torch.Tensor],
         local: bool = False,
+        stats: dict[str, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """append summary with selected metadata"""
+        if stats is None:
+            stats = self._dataStatistics(data)
         out = [summary]
         if local:
-            n_obs = data['ns'].unsqueeze(-1).float().sqrt() / 10
-            eta_rfx = data['eta_rfx'].unsqueeze(-1).expand(-1, summary.shape[1])
-            out += [n_obs, eta_rfx.unsqueeze(-1)]
+            # BLUPs scaled by RMS of σ_rfx_est across q components (shared scale).
+            # Using per-component σ_rfx_est causes large outliers for q>1 when
+            # off-diagonal Ψ cross-terms give nonzero BLUPs for near-zero components.
+            # RMS is always ≥ each component, bounding the scaled values.
+            # sigma_rfx_rms = (  # (B, 1, 1)
+            #     stats['sigma_rfx_est'].square().mean(dim=-1).sqrt().clamp(min=0.01)
+            #     [..., None, None]
+            # )
+            blup_scaled = stats['blup_est'] #/ sigma_rfx_rms  # (B, m, q)
+            n_obs = data['ns'].unsqueeze(-1).float().sqrt() / 10           # (B, m, 1)
+            eta_rfx = (
+                data['eta_rfx'].unsqueeze(-1).expand(-1, summary.shape[1]).unsqueeze(-1)
+            )                                                               # (B, m, 1)
+            out += [n_obs, eta_rfx, blup_scaled]
         else:
             n_total = data['n'].unsqueeze(-1).float().sqrt() / 10
             n_groups = data['m'].unsqueeze(-1).float().sqrt() / 10
-            stats = self._dataStatistics(data)
             nu_ffx = data['nu_ffx'].clone()
             tau_ffx = data['tau_ffx'].clone()
-            tau_rfx = data['tau_rfx'].clone()
+            tau_rfx = data['tau_rfx'][..., : self.d_rfx].clone()
             eta_rfx = data['eta_rfx'].clone().unsqueeze(-1)
             families = [data['family_ffx'], data['family_sigma_rfx']]
             if self.has_sigma_eps:
@@ -279,9 +305,10 @@ class Approximator(nn.Module):
     def summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)
         summary_l = self.summarizer_l(inputs, mask=data['mask_n'])
-        summary_l = self._addMetadata(summary_l, data, local=True)
+        stats = self._dataStatistics(data)  # compute once, share across both contexts
+        summary_l = self._addMetadata(summary_l, data, local=True, stats=stats)
         summary_g = self.summarizer_g(summary_l, mask=data['mask_m'])
-        summary_g = self._addMetadata(summary_g, data, local=False)
+        summary_g = self._addMetadata(summary_g, data, local=False, stats=stats)
         return summary_g, summary_l
 
     def forward(
