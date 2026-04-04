@@ -20,8 +20,9 @@ Usage:
 """
 
 import sys
+import argparse
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Callable
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
@@ -81,7 +82,7 @@ class TrainingConfig(BaseModel):
     m_tag: str
 
     # Training hyperparameters
-    max_epochs: int = Field(gt=0, default=500)
+    max_epochs: int = Field(gt=0, default=1000)
     bs: int = Field(gt=0, default=32)
     lr: float = Field(gt=0, default=1e-3)
     max_grad_norm: float = Field(gt=0, default=1.0)
@@ -264,8 +265,82 @@ def getExplicitArgs() -> set[str]:
             explicit.add(arg_name)
         elif arg.startswith('-') and len(arg) == 2:
             # Handle short flags like -b, -e
-            # Map to long form based on argparse config
-            flag_map = {'b': 'begin', 'e': 'epochs'}
+            # Map to long form - need to handle different scripts
+            flag_map = {
+                'b': 'begin',  # generate.py
+                'e': 'epochs',  # generate.py (will be mapped to max_epochs in train.py)
+            }
             if arg[1] in flag_map:
-                explicit.add(flag_map[arg[1]])
+                long_form = flag_map[arg[1]]
+                explicit.add(long_form)
+                # Also add the alternative mapping for train.py
+                if long_form == 'epochs':
+                    explicit.add('max_epochs')
     return explicit
+
+
+def setupConfigParser(
+    parser: argparse.ArgumentParser,
+    config_generator: Callable[..., dict[str, Any]],
+    description: str = '',
+) -> argparse.Namespace:
+    """
+    Unified configuration setup for scripts using template-based configs.
+
+    Args:
+        parser: Pre-configured ArgumentParser with script-specific arguments
+        config_generator: Function to generate config (generateSimulationConfig or generateTrainingConfig)
+        description: Parser description
+
+    Returns:
+        argparse.Namespace with merged configuration
+    """
+    if description:
+        parser.description = description
+
+    # Parse arguments
+    args = parser.parse_args()
+    explicit_args = getExplicitArgs()
+
+    # Generate config: either from custom YAML or from templates
+    if hasattr(args, 'config') and args.config:
+        # Path 1: Load custom YAML config
+        with open(args.config) as f:
+            cfg_dict = yaml.safe_load(f)
+        # Only explicit CLI args override YAML values
+        for k, v in vars(args).items():
+            if k in explicit_args and k != 'config':
+                cfg_dict[k] = v
+    else:
+        # Path 2: Template-based generation with defaults
+        args_dict = vars(args)
+
+        # Separate template args from overrides
+        template_args = {}
+        overrides = {}
+
+        for k, v in args_dict.items():
+            if k in ['size', 'family', 'ds_type', 'valid_ds_type']:
+                template_args[k] = v
+            elif k not in ['config'] and k not in CLI_ONLY:
+                if v is not None:  # Only include non-None values
+                    overrides[k] = v
+
+        # Generate config using the appropriate generator
+        cfg_dict = config_generator(**template_args, **overrides)
+
+    # Handle CLI-only parameters with proper defaults
+    cli_only_defaults = {
+        'device': 'cpu',
+        'wandb': False,
+        'seed': 42,
+        'verbosity': 1,
+    }
+
+    for key, default_value in cli_only_defaults.items():
+        if key in explicit_args:
+            cfg_dict[key] = getattr(args, key)
+        else:
+            cfg_dict.setdefault(key, default_value)
+
+    return argparse.Namespace(**cfg_dict)
