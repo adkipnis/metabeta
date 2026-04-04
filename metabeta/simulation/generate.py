@@ -22,20 +22,16 @@ from metabeta.utils.families import hasSigmaEps
 from metabeta.utils.io import datasetFilename
 from metabeta.utils.sampling import truncLogUni
 from metabeta.utils.padding import aggregate
-from metabeta.utils.templates import getExplicitArgs, generateSimulationConfig
+from metabeta.utils.templates import setupConfigParser, generateSimulationConfig
 
 logger = logging.getLogger(__name__)
-
-
-# -----------------------------------------------------------------------------
-# Helper functions
 
 
 # -----------------------------------------------------------------------------
 # config
 # fmt: off
 def setup() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Generate hierarchical datasets.')
+    parser = argparse.ArgumentParser()
 
     # Template-based config generation (primary interface)
     parser.add_argument('--size', type=str, default='tiny', help='Size preset: tiny|small|medium|large|huge')
@@ -58,31 +54,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--sgld', action='store_true', help='Use SGLD if ds_type==sampled (default = False)')
     parser.add_argument('--loop', action='store_true', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
 
-    args = parser.parse_args()
-    explicit_args = getExplicitArgs()
-
-    # Generate config: either from custom YAML or from templates
-    if args.config:
-        # Path 1: Load custom YAML config
-        with open(args.config) as f:
-            cfg_dict = yaml.safe_load(f)
-        # Only explicit CLI args override YAML values
-        for k, v in vars(args).items():
-            if k in explicit_args and k != 'config':
-                cfg_dict[k] = v
-    else:
-        # Path 2: Template-based generation with defaults
-        # Pass non-template args as overrides
-        args_dict = vars(args)
-        overrides = {
-            k: v for k, v in args_dict.items()
-            if k not in ['size', 'family', 'ds_type', 'config']
-        }
-        cfg_dict = generateSimulationConfig(
-            size=args.size, family=args.family, ds_type=args.ds_type, **overrides
-        )
-
-    return argparse.Namespace(**cfg_dict)
+    return setupConfigParser(parser, generateSimulationConfig, 'Generate hierarchical datasets.')
 # fmt: on
 
 
