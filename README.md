@@ -21,7 +21,3 @@ uv pip install -e .
  ```
 ## Rebuttals
 Rebuttals figures and tables are found [here](rebuttals/README.md).
-
----
-🚧 I'm currently refactoring this repo. For legacy code, switch to branch v1. 🚧
-
