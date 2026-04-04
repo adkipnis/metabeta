@@ -61,17 +61,6 @@ families:
     likelihood_family: 2
     name: poisson
 
-# Dataset type presets
-types:
-  toy:
-    ds_type: toy
-  mixed:
-    ds_type: mixed
-  sampled:
-    ds_type: sampled
-  full:
-    ds_type: full
-
 # CLI-only parameters (never have defaults in YAML configs)
 cli_only:
   - device
