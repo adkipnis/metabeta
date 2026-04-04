@@ -23,6 +23,10 @@ from metabeta.utils.config import (
     assimilateConfig,
     loadDataConfig,
 )
+from metabeta.utils.templates import (
+    generateTrainingConfig,
+    saveConfigToCheckpoint,
+)
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import (
@@ -47,40 +51,103 @@ logger = logging.getLogger('train.py')
 def setup() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
+
+    # Template-based config generation
+    parser.add_argument('--size', type=str, help='Size preset: toy/small/mid/medium/large/big/huge')
     parser.add_argument(
-        '--name', type=str, default='toy-n', help='load configs/{name}.yaml'
+        '--family', type=int, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson'
     )
-    parser.add_argument('--d_tag', type=str)
-    parser.add_argument('--d_tag_valid', type=str)
+    parser.add_argument('--ds_type', type=str, help='Dataset type: toy/mixed/sampled/full')
+    parser.add_argument(
+        '--valid_ds_type', type=str, help='Validation dataset type (default: sampled)'
+    )
+
+    # Legacy: direct config file
+    parser.add_argument('--config', type=str, help='Path to custom YAML config file')
+    parser.add_argument('--name', type=str, help='Legacy: load configs/{name}.yaml (deprecated)')
+
+    # Config overrides
+    parser.add_argument('--data_id', type=str)
+    parser.add_argument('--data_id_valid', type=str)
     parser.add_argument('--m_tag', type=str)
 
-    # runtime
-    parser.add_argument('--device', type=str)
-    parser.add_argument('--wandb', action=argparse.BooleanOptionalAction)
+    # CLI-only runtime params (no YAML defaults)
+    parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--wandb', action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--verbosity', type=int, default=1)
 
-    # training
+    # Training hyperparameters (can override template/YAML)
     parser.add_argument('-e', '--max_epochs', type=int)
     parser.add_argument('--bs', type=int)
     parser.add_argument('--lr', type=float)
-    parser.add_argument('--seed', type=int)
     parser.add_argument('--num_workers', type=int)
 
-    # evaluation
+    # Evaluation settings
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction)
 
-    # saving & loading
+    # Saving & loading
     parser.add_argument('--r_tag', type=str)
     parser.add_argument('--load_latest', action=argparse.BooleanOptionalAction)
     parser.add_argument('--load_best', action=argparse.BooleanOptionalAction)
 
-    # load and override
     args = parser.parse_args()
-    path = Path(__file__).resolve().parent / 'configs' / f'{args.name}.yaml'
-    with open(path, 'r') as p:
-        cfg = yaml.safe_load(p)
-    cfg.update(vars(args))
-    return argparse.Namespace(**cfg)
+
+    # Generate config from templates or load from file
+    if args.size is not None and args.family is not None and args.ds_type is not None:
+        # Template-based generation
+        cfg_dict = generateTrainingConfig(
+            size=args.size,
+            family=args.family,
+            ds_type=args.ds_type,
+            valid_ds_type=getattr(args, 'valid_ds_type', None),
+            **vars(args),
+        )
+    elif hasattr(args, 'config') and args.config:
+        # Custom YAML config
+        with open(args.config) as f:
+            cfg_dict = yaml.safe_load(f)
+        # Merge CLI args (they override YAML)
+        for k, v in vars(args).items():
+            if v is not None and k not in [
+                'config',
+                'size',
+                'family',
+                'ds_type',
+                'valid_ds_type',
+            ]:
+                cfg_dict[k] = v
+    elif hasattr(args, 'name') and args.name:
+        # Legacy name-based config
+        path = Path(__file__).resolve().parent / 'configs' / f'{args.name}.yaml'
+        if path.exists():
+            with open(path) as f:
+                cfg_dict = yaml.safe_load(f)
+            # Merge CLI args
+            for k, v in vars(args).items():
+                if v is not None and k not in [
+                    'config',
+                    'name',
+                    'size',
+                    'family',
+                    'ds_type',
+                ]:
+                    cfg_dict[k] = v
+        else:
+            raise FileNotFoundError(
+                f'Config file not found: {path}\n'
+                f'Use --size/--family/--type for template-based generation or --config for custom YAML.'
+            )
+    else:
+        raise ValueError(
+            'Must specify one of:\n'
+            '  1. Template-based: --size <size> --family <family> --ds_type <ds_type>\n'
+            '  2. Custom config: --config <path>\n'
+            '  3. Legacy: --name <name> (deprecated)'
+        )
+
+    return argparse.Namespace(**cfg_dict)
 
 
 # -----------------------------------------------------------------------------
@@ -143,6 +210,9 @@ class Trainer:
         self.ckpt_dir = Path(self.dir, '..', 'outputs', 'checkpoints', self.run_name)
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
+        # Save resolved config to checkpoint dir for reproducibility
+        saveConfigToCheckpoint(vars(self.cfg), self.ckpt_dir)
+
         # plot dir
         self.plot_dir = None
         if self.cfg.plot:
@@ -176,12 +246,12 @@ class Trainer:
 
     def _initData(self) -> None:
         # assimilate data config
-        self.data_cfg_train = loadDataConfig(self.cfg.d_tag)
+        self.data_cfg_train = loadDataConfig(self.cfg.data_id)
         assimilateConfig(self.cfg, self.data_cfg_train)
 
-        # allow overriding validation data tag independently from training
-        self.cfg.d_tag_valid = getattr(self.cfg, 'd_tag_valid', self.cfg.d_tag)
-        self.data_cfg_valid = loadDataConfig(self.cfg.d_tag_valid)
+        # allow overriding validation data id independently from training
+        self.cfg.data_id_valid = getattr(self.cfg, 'data_id_valid', self.cfg.data_id)
+        self.data_cfg_valid = loadDataConfig(self.cfg.data_id_valid)
 
         # keep legacy attr names for checkpoint compatibility
         self.data_cfg = self.data_cfg_train
@@ -194,8 +264,9 @@ class Trainer:
         self, partition: str, epoch: int = 0, batch_size: int | None = None
     ) -> Dataloader:
         data_cfg = self.data_cfg_train if partition == 'train' else self.data_cfg_valid
-        data_fname = datasetFilename(data_cfg, partition, epoch)
-        data_path = Path(self.dir, '..', 'outputs', 'data', data_fname)
+        data_fname = datasetFilename(partition, epoch)
+        data_subdir = data_cfg['data_id']
+        data_path = Path(self.dir, '..', 'outputs', 'data', data_subdir, data_fname)
         sortish = batch_size is not None
         return Dataloader(
             data_path,
@@ -210,8 +281,9 @@ class Trainer:
 
     def _trainingDataAvailable(self, start_epoch: int) -> bool:
         for epoch in range(start_epoch, self.cfg.max_epochs + 1):
-            data_fname = datasetFilename(self.data_cfg_train, 'train', epoch)
-            data_path = Path(self.dir, '..', 'outputs', 'data', data_fname)
+            data_fname = datasetFilename('train', epoch)
+            data_subdir = self.data_cfg_train['data_id']
+            data_path = Path(self.dir, '..', 'outputs', 'data', data_subdir, data_fname)
             if not data_path.exists():
                 logger.warning(f'{data_path} does not exist')
                 return False
@@ -222,8 +294,8 @@ class Trainer:
             assert isinstance(self.cfg.model_cfg, ApproximatorConfig), 'wrong model cfg class'
             self.model_cfg = self.cfg.model_cfg
         else:
-            # load model config
-            model_cfg_path = Path(self.dir, '..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
+            # load model config from new location
+            model_cfg_path = Path(self.dir, '..', 'configs', 'models', f'{self.cfg.m_tag}.yaml')
             self.model_cfg = modelFromYaml(
                 model_cfg_path,
                 d_ffx=self.cfg.max_d,
@@ -321,8 +393,8 @@ class Trainer:
             raise ValueError(f'model has unknown dtype {self.model.dtype}')
         return f"""
 ====================
-data tag:   {self.cfg.d_tag}
-valid tag:  {self.cfg.d_tag_valid}
+data id:    {self.cfg.data_id}
+valid id:   {self.cfg.data_id_valid}
 model tag:  {self.cfg.m_tag}
 likelihood: {LIKELIHOOD_FAMILIES[self.cfg.likelihood_family]}
 # params:   {self.model.n_params}
@@ -618,10 +690,14 @@ batch size: {self.cfg.bs}
 
 
 # =============================================================================
-if __name__ == '__main__':
+def main() -> None:
     cfg = setup()
     setupLogging(cfg.verbosity)
     trainer = Trainer(cfg)
     logger.info(trainer.info)
     trainer.go()
     trainer.close()
+
+
+if __name__ == '__main__':
+    main()

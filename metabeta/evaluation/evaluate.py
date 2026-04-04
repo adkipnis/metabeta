@@ -17,6 +17,7 @@ from metabeta.utils.config import (
     assimilateConfig,
     loadDataConfig,
 )
+from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import (
@@ -40,14 +41,28 @@ logger = logging.getLogger('evaluate.py')
 def setup() -> argparse.Namespace:
     """Parse command line arguments for evaluation."""
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
+
+    # Primary: Load from checkpoint config
+    parser.add_argument('--checkpoint', type=str, help='Path to checkpoint directory')
     parser.add_argument(
-        '--name', type=str, default='small-n-mixed', help='load configs/{name}.yaml'
+        '--prefix', type=str, default='best', help='Checkpoint prefix: best or latest'
     )
+
+    # Legacy: Load from config file
+    parser.add_argument('--config', type=str, help='Path to custom YAML config file')
+    parser.add_argument('--name', type=str, help='Legacy: load configs/{name}.yaml (deprecated)')
+
+    # Config overrides
     parser.add_argument('--m_tag', type=str)
     parser.add_argument('--r_tag', type=str)
-    parser.add_argument('--d_tag', type=str)
-    parser.add_argument('--d_tag_valid', type=str)
-    parser.add_argument('--device', type=str)
+    parser.add_argument('--data_id', type=str)
+    parser.add_argument('--data_id_valid', type=str)
+
+    # CLI-only runtime params
+    parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--verbosity', type=int, default=1)
+
+    # Evaluation settings (override checkpoint config)
     parser.add_argument('--n_samples', type=int)
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
     parser.add_argument('--conformal', action=argparse.BooleanOptionalAction)
@@ -57,15 +72,55 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--save_tables', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--outdir', type=str)
 
-    # load YAML then override with any CLI flags
     args = parser.parse_args()
-    path = Path(__file__).resolve().parent / 'configs' / f'{args.name}.yaml'
-    with open(path, 'r') as p:
-        cfg = yaml.safe_load(p)
-    cfg.update(vars(args))
-    if cfg.get('save_tables') is None:
-        cfg['save_tables'] = True
-    return argparse.Namespace(**cfg)
+
+    # Load config from checkpoint or file
+    if hasattr(args, 'checkpoint') and args.checkpoint:
+        # Load from checkpoint directory
+        checkpoint_path = Path(args.checkpoint)
+        cfg_dict = loadConfigFromCheckpoint(checkpoint_path)
+        # Store checkpoint path and prefix for loading model
+        cfg_dict['_checkpoint_dir'] = str(checkpoint_path)
+        cfg_dict['_checkpoint_prefix'] = args.prefix
+        # Merge CLI overrides
+        for k, v in vars(args).items():
+            if v is not None and k not in ['checkpoint', 'prefix', 'config', 'name']:
+                cfg_dict[k] = v
+    elif hasattr(args, 'config') and args.config:
+        # Custom YAML config
+        with open(args.config) as f:
+            cfg_dict = yaml.safe_load(f)
+        # Merge CLI args
+        for k, v in vars(args).items():
+            if v is not None and k not in ['checkpoint', 'config', 'name']:
+                cfg_dict[k] = v
+    elif hasattr(args, 'name') and args.name:
+        # Legacy name-based config
+        path = Path(__file__).resolve().parent / 'configs' / f'{args.name}.yaml'
+        if path.exists():
+            with open(path) as f:
+                cfg_dict = yaml.safe_load(f)
+            # Merge CLI args
+            for k, v in vars(args).items():
+                if v is not None and k not in ['checkpoint', 'config', 'name']:
+                    cfg_dict[k] = v
+        else:
+            raise FileNotFoundError(
+                f'Config file not found: {path}\n'
+                f'Use --checkpoint <dir> to load from checkpoint or --config for custom YAML.'
+            )
+    else:
+        raise ValueError(
+            'Must specify one of:\n'
+            '  1. Checkpoint: --checkpoint <checkpoint_dir> [--prefix best|latest]\n'
+            '  2. Custom config: --config <path>\n'
+            '  3. Legacy: --name <name> (deprecated)'
+        )
+
+    if cfg_dict.get('save_tables') is None:
+        cfg_dict['save_tables'] = True
+
+    return argparse.Namespace(**cfg_dict)
 
 
 # -----------------------------------------------------------------------------
@@ -86,8 +141,15 @@ class Evaluator:
             self.cfg.outdir = str(Path(self.dir, '..', 'outputs', 'results'))
 
         # checkpoint dir
-        self.run_name = runName(vars(self.cfg))
-        self.ckpt_dir = Path(self.dir, '..', 'outputs', 'checkpoints', self.run_name)
+        if hasattr(self.cfg, '_checkpoint_dir'):
+            # Use explicit checkpoint directory from --checkpoint arg
+            self.ckpt_dir = Path(self.cfg._checkpoint_dir)
+            self.checkpoint_prefix = getattr(self.cfg, '_checkpoint_prefix', 'best')
+        else:
+            # Legacy: construct from run name
+            self.run_name = runName(vars(self.cfg))
+            self.ckpt_dir = Path(self.dir, '..', 'outputs', 'checkpoints', self.run_name)
+            self.checkpoint_prefix = 'best'
 
         # load data and model
         self._initData()
@@ -109,11 +171,11 @@ class Evaluator:
 
     def _initData(self) -> None:
         # assimilate training data config for model/checkpoint consistency
-        self.data_cfg_train = loadDataConfig(self.cfg.d_tag)
+        self.data_cfg_train = loadDataConfig(self.cfg.data_id)
         assimilateConfig(self.cfg, self.data_cfg_train)
 
-        # allow overriding validation/test data tag independently from training
-        self.data_cfg_valid = loadDataConfig(self.cfg.d_tag_valid)
+        # allow overriding validation/test data id independently from training
+        self.data_cfg_valid = loadDataConfig(self.cfg.data_id_valid)
 
         # keep legacy attr name for checkpoint comparison compatibility
         self.data_cfg = self.data_cfg_train
@@ -124,8 +186,9 @@ class Evaluator:
 
     def _getDataLoader(self, partition: str, batch_size: int | None = None) -> Dataloader:
         data_cfg = self.data_cfg_valid
-        data_fname = datasetFilename(data_cfg, partition)
-        data_path = Path(self.dir, '..', 'outputs', 'data', data_fname)
+        data_fname = datasetFilename(partition)
+        data_subdir = data_cfg['data_id']
+        data_path = Path(self.dir, '..', 'outputs', 'data', data_subdir, data_fname)
         if partition == 'test':
             data_path = data_path.with_suffix('.fit.npz')
         assert data_path.exists(), f'data file not found: {data_path}'
@@ -137,7 +200,7 @@ class Evaluator:
         if hasattr(self.cfg, 'model_cfg') and isinstance(self.cfg.model_cfg, ApproximatorConfig):
             self.model_cfg = self.cfg.model_cfg
         else:
-            model_cfg_path = Path(self.dir, '..', 'models', 'configs', f'{self.cfg.m_tag}.yaml')
+            model_cfg_path = Path(self.dir, '..', 'configs', 'models', f'{self.cfg.m_tag}.yaml')
             self.model_cfg = modelFromYaml(
                 model_cfg_path,
                 d_ffx=self.cfg.max_d,
@@ -148,7 +211,8 @@ class Evaluator:
         self.model.eval()
 
     def _load(self) -> None:
-        path = Path(self.ckpt_dir, self.cfg.prefix + '.pt')
+        prefix = getattr(self, 'checkpoint_prefix', getattr(self.cfg, 'prefix', 'best'))
+        path = Path(self.ckpt_dir, prefix + '.pt')
         assert path.exists(), f'checkpoint not found: {path}'
         payload = torch.load(path, map_location=self.device)
 
@@ -426,9 +490,13 @@ class Evaluator:
 
 
 # =============================================================================
-if __name__ == '__main__':
+def main() -> None:
     cfg = setup()
     setupLogging(cfg.verbosity)
     evaluator = Evaluator(cfg)
     # evaluator.testrun()
     evaluator.go()
+
+
+if __name__ == '__main__':
+    main()

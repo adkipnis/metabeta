@@ -28,6 +28,11 @@ dependencies = [
     "wandb>=0.25.0",
 ]
 
+[project.scripts]
+metabeta-generate = "metabeta.simulation.generate:main"
+metabeta-train = "metabeta.training.train:main"
+metabeta-evaluate = "metabeta.evaluation.evaluate:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 

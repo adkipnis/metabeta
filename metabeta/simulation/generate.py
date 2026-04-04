@@ -438,7 +438,11 @@ class Generator:
 
 
 # -----------------------------------------------------------------------------
-if __name__ == '__main__':
+def main() -> None:
     cfg = setup()
     generator = Generator(cfg)
     generator.go()
+
+
+if __name__ == '__main__':
+    main()
