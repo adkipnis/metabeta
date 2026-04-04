@@ -1,5 +1,6 @@
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 import math
+import numpy as np
 import torch
 from torch import distributions as D
 
@@ -10,6 +11,9 @@ from metabeta.utils.families import (
     sampleFfxTorch,
     sampleSigmaTorch,
 )
+
+if TYPE_CHECKING:
+    from metabeta.models.approximator import Approximator
 
 
 def getPriorSamples(
@@ -248,3 +252,154 @@ def posteriorPredictiveDeviance(
     y = y_obs.clamp(min=1e-8)
     dev = 2 * (y * torch.log(y / mu_mean) - (y_obs - mu_mean))
     return (dev * mask).sum(dim=(1, 2)) / n
+
+
+# ---------------------------------------------------------------------------
+# Out-of-sample NLL
+# ---------------------------------------------------------------------------
+
+
+def makeOOSSplits(
+    mask_n: torch.Tensor,
+    n_splits: int,
+    p_test: float = 0.2,
+    generator: torch.Generator | None = None,
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Generate n_splits independent random train/test observation splits.
+
+    Each valid observation (where mask_n is True) is independently assigned to
+    the test set with probability p_test. Groups that would otherwise have zero
+    train observations have their first valid observation forced back to train.
+
+    Args:
+        mask_n: bool tensor of shape (B, m, n) marking valid observations.
+        n_splits: number of independent splits to generate.
+        p_test: probability of assigning an observation to the test set.
+        generator: optional RNG for reproducibility.
+
+    Returns:
+        List of (train_mask, test_mask) pairs, each of shape (B, m, n).
+    """
+    splits = []
+    for _ in range(n_splits):
+        rand = torch.rand(mask_n.shape, generator=generator, device=mask_n.device)
+        test_mask = (rand < p_test) & mask_n
+        train_mask = mask_n & ~test_mask
+
+        # Guarantee at least one train observation per group that has any data.
+        # cumsum == 1 picks out the first valid position along the n dimension.
+        first_valid = (mask_n.cumsum(dim=-1) == 1) & mask_n  # (B, m, n)
+        starved = (train_mask.sum(dim=-1) == 0) & mask_n.any(dim=-1)  # (B, m)
+        force_train = first_valid & starved.unsqueeze(-1)
+        train_mask = train_mask | force_train
+        test_mask = test_mask & ~force_train
+
+        splits.append((train_mask, test_mask))
+    return splits
+
+
+def applyObsMask(
+    data: dict[str, torch.Tensor],
+    obs_mask: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    """Return a shallow copy of data with the observation mask and derived fields updated.
+
+    Updates mask_n, ns, n, and mask_m consistently.  Does not copy or zero y, X, or Z:
+    the model multiplies these by mask_n internally, so excluded positions are already
+    treated as zero in all downstream computations.
+
+    Args:
+        data: batched dataset dict.
+        obs_mask: bool tensor of shape (B, m, n) — the new mask_n to apply.
+
+    Returns:
+        Shallow copy of data with mask_n, ns, n, mask_m replaced.
+    """
+    ns = obs_mask.sum(dim=-1).to(data['ns'].dtype)   # (B, m)
+    n = ns.sum(dim=-1).to(data['n'].dtype)            # (B,)
+    mask_m = ns > 0                                    # (B, m)
+    return {**data, 'mask_n': obs_mask, 'ns': ns, 'n': n, 'mask_m': mask_m}
+
+
+def estimateOOSProposals(
+    approximator: 'Approximator',
+    data: dict[str, torch.Tensor],
+    train_masks: list[torch.Tensor],
+    n_samples: int,
+    rng: np.random.Generator | None = None,
+) -> list[Proposal]:
+    """Estimate one posterior proposal per train split, processing all B datasets in parallel.
+
+    For each train mask the approximator sees only the masked observations; the full
+    batch of B datasets is processed in a single forward pass per split.
+
+    Args:
+        approximator: trained Approximator on the target device.
+        data: full batched dataset on the same device as the approximator.
+        train_masks: list of (B, m, n) bool tensors, one per split.
+        n_samples: number of posterior samples to draw per dataset.
+        rng: numpy Generator or None. Its state advances across splits, giving
+            distinct samples per split from a single object.
+
+    Returns:
+        List of Proposal objects, one per split.
+    """
+    proposals = []
+    for train_mask in train_masks:
+        data_train = applyObsMask(data, train_mask)
+        proposals.append(approximator.estimate(data_train, n_samples=n_samples, rng=rng))
+    return proposals
+
+
+def oosNLL(
+    approximator: 'Approximator',
+    data: dict[str, torch.Tensor],
+    n_splits: int = 5,
+    p_test: float = 0.2,
+    n_samples: int = 500,
+    likelihood_family: int = 0,
+    mode: Literal['expected', 'mixture'] = 'mixture',
+    generator: torch.Generator | None = None,
+    rng: np.random.Generator | None = None,
+) -> torch.Tensor:
+    """Estimate out-of-sample posterior predictive NLL via random within-group splits.
+
+    For each split: condition the posterior on train observations only, then evaluate
+    the predictive NLL on the held-out test observations. The posterior predictive
+    distribution p(y_test | X, Z, theta) is evaluated at all positions (using the full
+    X and Z), with the test mask applied only at the NLL scoring step.
+
+    With mode='mixture' this approximates the ELPD:
+        E[ log int p(y_test | theta) p(theta | y_train) dtheta ]
+
+    Args:
+        approximator: trained Approximator on the target device.
+        data: batched dataset dict on the same device.
+        n_splits: number of independent random splits; NLL is averaged over splits.
+        p_test: fraction of observations held out per group per split.
+        n_samples: posterior samples per split (trades off variance vs. cost).
+        likelihood_family: 0=Normal, 1=Bernoulli, 2=Poisson.
+        mode: 'mixture' for ELPD (recommended), 'expected' for E[-log p].
+        generator: torch.Generator controlling the train/test split masks.
+        rng: numpy Generator controlling the flow's base distribution sampler.
+            Pass a freshly-seeded Generator on each call for reproducibility.
+
+    Returns:
+        Tensor of shape (B,) with per-dataset OOS NLL averaged over splits.
+    """
+    splits = makeOOSSplits(data['mask_n'], n_splits, p_test=p_test, generator=generator)
+    train_masks = [train for train, _ in splits]
+    test_masks = [test for _, test in splits]
+
+    proposals = estimateOOSProposals(approximator, data, train_masks, n_samples, rng=rng)
+
+    nlls = []
+    for proposal, test_mask in zip(proposals, test_masks):
+        # Evaluate p(y | X, Z, theta) at all positions using full X and Z.
+        pp = getPosteriorPredictive(proposal, data, likelihood_family)
+        # Score only the held-out test observations.
+        data_test = applyObsMask(data, test_mask)
+        nll = posteriorPredictiveNLL(pp, data_test, w=proposal.weights, mode=mode)
+        nlls.append(nll)
+
+    return torch.stack(nlls).mean(dim=0)  # (B,)
