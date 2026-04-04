@@ -40,7 +40,7 @@ class PosteriorConfig(BaseModel):
     n_blocks: int = Field(gt=0)
     subnet_kwargs: dict | None = None
     type: Literal['coupling'] = 'coupling'
-    transform: Literal['affine', 'spline'] = 'affine'
+    transform: Literal['affine', 'spline', 'spline+'] = 'affine'
     base_family: Literal['normal', 'student'] = 'normal'
     base_trainable: bool = True
 
