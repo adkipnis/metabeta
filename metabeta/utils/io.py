@@ -5,8 +5,6 @@ from metabeta.utils.families import LIKELIHOOD_FAMILIES
 def getDevice() -> str:
     if torch.cuda.is_available():
         return 'gpu'
-    elif torch.backends.mps.is_available():
-        return 'mps'
     return 'cpu'
 
 
@@ -16,9 +14,6 @@ def setDevice(device: str = ''):
     elif device == 'cuda':
         assert torch.cuda.is_available(), 'cuda is not avalialbe'
         return torch.device('cuda')
-    elif device == 'mps':
-        assert torch.backends.mps.is_available(), 'mps are not available'
-        return torch.device('mps')
     else:
         return torch.device('cpu')
 
