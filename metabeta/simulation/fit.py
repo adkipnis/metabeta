@@ -17,7 +17,7 @@ from metabeta.utils.padding import aggregate, unpad
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Fit hierarchical datasets with Bambi.')
     # data
-    parser.add_argument('--d_tag', type=str, default='toy-n', help='name of data config file')
+    parser.add_argument('--data_id', type=str, default='toy-n', help='name of data config file')
     parser.add_argument(
         '--idx',
         type=int,
@@ -94,7 +94,7 @@ class Fitter:
         self.outdir.mkdir(parents=True, exist_ok=True)
 
         # load dataset config
-        data_cfg_path = Path(__file__).resolve().parent / 'configs' / f'{self.cfg.d_tag}.yaml'
+        data_cfg_path = Path(__file__).resolve().parent / 'configs' / f'{self.cfg.data_id}.yaml'
         assert data_cfg_path.exists(), f'config file {data_cfg_path} does not exist'
         with open(data_cfg_path, 'r') as f:
             data_cfg = yaml.safe_load(f)
@@ -102,8 +102,8 @@ class Fitter:
                 setattr(self.cfg, k, v)
 
         # determine path to data
-        self.fname = datasetFilename(vars(self.cfg), partition='test')
-        self.batch_path = Path(self.srcdir, self.fname)
+        self.fname = datasetFilename(partition='test')
+        self.batch_path = Path(self.srcdir, self.cfg.data_id, self.fname)
         assert self.batch_path.exists(), f'{self.batch_path} does not exist'
 
         # load batch
@@ -373,7 +373,7 @@ class Fitter:
 
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
-    print(f'PyTensor tmp directory: {pytensor.config.base_compiledir}')   # type: ignore
+    print(f'PyTensor tmp directory: {pytensor.config.base_compiledir}')  # type: ignore
     cfg = setup()
     fitter = Fitter(cfg)
     if cfg.reintegrate:

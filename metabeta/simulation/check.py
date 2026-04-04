@@ -14,7 +14,7 @@ def setup() -> argparse.Namespace:
         description='Check generated training datasets and fit files for a d_tag.'
     )
     parser.add_argument(
-        '--d_tag',
+        '--data_id',
         type=str,
         nargs='+',
         required=True,
@@ -51,8 +51,8 @@ def setup() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _loadDataCfg(d_tag: str) -> dict:
-    cfg_path = Path(__file__).resolve().parent / 'configs' / f'{d_tag}.yaml'
+def _loadDataCfg(data_id: str) -> dict:
+    cfg_path = Path(__file__).resolve().parent / 'configs' / f'{data_id}.yaml'
     assert cfg_path.exists(), f'config file {cfg_path} does not exist'
     with open(cfg_path, 'r') as f:
         return yaml.safe_load(f)
@@ -93,9 +93,9 @@ def _printBrokenPreview(items: list[tuple[Path, str]], label: str) -> None:
         print(f'  - {p}: {err}')
 
 
-def _fitCfg(d_tag: str) -> argparse.Namespace:
+def _fitCfg(data_id: str) -> argparse.Namespace:
     return argparse.Namespace(
-        d_tag=d_tag,
+        d_tag=data_id,
         idx=0,
         reintegrate=True,
         respecify_ffx=False,
@@ -110,11 +110,11 @@ def _fitCfg(d_tag: str) -> argparse.Namespace:
     )
 
 
-def _runForTag(d_tag: str, cfg: argparse.Namespace, srcdir: Path) -> int:
+def _runForTag(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> int:
     fits_dir = srcdir / 'fits'
 
     print('Running dataset and fit checks')
-    print(f'  d_tag: {d_tag}')
+    print(f'  data_id: {data_id}')
     print(f'  expected train files: {cfg.n_train_epochs}')
     print(f'  expected pymc (nuts) fits: {cfg.n_fits}')
     print(f'  expected advi fits: {cfg.n_fits}')
@@ -123,11 +123,11 @@ def _runForTag(d_tag: str, cfg: argparse.Namespace, srcdir: Path) -> int:
     print(f'  fits directory: {fits_dir}')
     print(f'  npz inspection: {cfg.inspect}')
 
-    data_cfg = _loadDataCfg(d_tag)
+    data_cfg = _loadDataCfg(data_id)
 
     # check expected training partitions
     train_paths = [
-        srcdir / datasetFilename(data_cfg, partition='train', epoch=epoch)
+        srcdir / data_id / datasetFilename(partition='train', epoch=epoch)
         for epoch in range(1, cfg.n_train_epochs + 1)
     ]
     train_missing, train_broken = _checkReadable(train_paths, inspect=cfg.inspect)
@@ -139,8 +139,8 @@ def _runForTag(d_tag: str, cfg: argparse.Namespace, srcdir: Path) -> int:
     _printBrokenPreview(train_broken, 'broken train partitions')
 
     # check expected fit files
-    test_fname = datasetFilename(data_cfg, partition='test')
-    test_path = srcdir / test_fname
+    test_fname = datasetFilename(partition='test')
+    test_path = srcdir / data_id / test_fname
     if not test_path.exists():
         print(f'missing test batch used for fit naming: {test_path}')
 
@@ -167,7 +167,7 @@ def _runForTag(d_tag: str, cfg: argparse.Namespace, srcdir: Path) -> int:
     reintegrated = False
     if fits_ok and not cfg.no_reintegrate:
         try:
-            fitter = Fitter(_fitCfg(d_tag), srcdir=srcdir)
+            fitter = Fitter(_fitCfg(data_id), srcdir=srcdir)
             fitter.reintegrate()
             reintegrated = True
         except Exception as exc:
@@ -186,15 +186,15 @@ def main() -> int:
     srcdir = Path(cfg.srcdir).resolve()
 
     status_by_tag = {}
-    for i, d_tag in enumerate(cfg.d_tag):
+    for i, data_id in enumerate(cfg.data_id):
         if i > 0:
             print('-' * 60)
-        status_by_tag[d_tag] = _runForTag(d_tag, cfg, srcdir) == 0
+        status_by_tag[data_id] = _runForTag(data_id, cfg, srcdir) == 0
 
     print('-' * 60)
-    print('Final status by d_tag:')
-    for d_tag, ok in status_by_tag.items():
-        print(f"  {d_tag}: {'ok' if ok else 'failed'}")
+    print('Final status by data_id:')
+    for data_id, ok in status_by_tag.items():
+        print(f"  {data_id}: {'ok' if ok else 'failed'}")
 
     return 0 if all(status_by_tag.values()) else 1
 
