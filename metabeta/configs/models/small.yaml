@@ -6,14 +6,14 @@ summarizer:
     n_blocks: 3 # encoder blocks
     n_isab: 1 # ISAB blocks (first of the three encoder blocks)
     activation: 'GELU'
-    dropout: 0.0
+    dropout: 0.01
 
 posterior:
     type: 'coupling'
     transform: 'spline+' # Neural Spline Flow with learned domain
     base_family: 'normal'
     base_trainable: True # mean and variance of base are learned
-    n_blocks: 3 # coupling blocks
+    n_blocks: 4 # coupling blocks
     subnet_kwargs:
         net_type: 'residual' # residual MLP as conditioner
         activation: 'ReLU'
