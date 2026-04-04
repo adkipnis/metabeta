@@ -6,10 +6,10 @@ from dataclasses import dataclass, asdict
 
 from metabeta.utils.io import datasetFilename
 from metabeta.utils.templates import (
-        generateSimulationConfig,
-        PRESETS,
-        FAMILY_NAMES_REVERSE,
-    )
+    generateSimulationConfig,
+    PRESETS,
+    FAMILY_NAMES_REVERSE,
+)
 
 
 @dataclass(frozen=True)
