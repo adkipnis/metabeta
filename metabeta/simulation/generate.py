@@ -19,11 +19,16 @@ from metabeta.simulation import (
 )
 from metabeta.simulation.emulator import Subsampler
 from metabeta.utils.families import hasSigmaEps
-from metabeta.utils.io import datasetFilename
+from metabeta.utils.io import datasetFilename, datasetDir
 from metabeta.utils.sampling import truncLogUni
 from metabeta.utils.padding import aggregate
+from metabeta.utils.templates import getExplicitArgs, generateSimulationConfig
 
 logger = logging.getLogger(__name__)
+
+
+# -----------------------------------------------------------------------------
+# Helper functions
 
 
 # -----------------------------------------------------------------------------
@@ -31,19 +36,53 @@ logger = logging.getLogger(__name__)
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate hierarchical datasets.')
-    # batch dimensions
+
+    # Template-based config generation (primary interface)
+    parser.add_argument('--size', type=str, default='tiny', help='Size preset: tiny|small|medium|large|huge')
+    parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
+    parser.add_argument('--ds_type', type=str, default='toy', help='Dataset type: toy|flat|scm|mixed|sampled|observed')
+
+    # Custom config file (alternative to template-based)
+    parser.add_argument('--config', type=str, help='Path to custom YAML config file')
+
+    # Batch dimensions
     parser.add_argument('--bs_train', type=int, default=4096, help='batch size per training partition (default = 4,096).')
     parser.add_argument('--bs_valid', type=int, default=256, help='batch size for validation partition (default = 256).')
     parser.add_argument('--bs_test', type=int, default=128, help='batch size per testing partition (default = 128).')
     parser.add_argument('--bs_mini', type=int, default=32, help='training minibatch size (for grouping m, q, d - default = 32)')
-    # partitions and sources
-    parser.add_argument('--d_tag', type=str, default='toy-n', help='name of data config file')
+
+    # Partitions and sources
     parser.add_argument('--partition', type=str, default='all', help='Type of partition in [train, valid, test, all], (default = train)')
     parser.add_argument('-b', '--begin', type=int, default=1, help='Begin generating training epoch number #b.')
     parser.add_argument('-e', '--epochs', type=int, default=20, help='Total number of training epochs to generate.')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD if ds_type==sampled (default = False)')
-    parser.add_argument('--loop', action='store_true', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
-    return parser.parse_args()
+    parser.add_argument('--loop', action='store_false', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
+
+    args = parser.parse_args()
+    explicit_args = getExplicitArgs()
+
+    # Generate config: either from custom YAML or from templates
+    if args.config:
+        # Path 1: Load custom YAML config
+        with open(args.config) as f:
+            cfg_dict = yaml.safe_load(f)
+        # Only explicit CLI args override YAML values
+        for k, v in vars(args).items():
+            if k in explicit_args and k != 'config':
+                cfg_dict[k] = v
+    else:
+        # Path 2: Template-based generation with defaults
+        # Pass non-template args as overrides
+        args_dict = vars(args)
+        overrides = {
+            k: v for k, v in args_dict.items()
+            if k not in ['size', 'family', 'ds_type', 'config']
+        }
+        cfg_dict = generateSimulationConfig(
+            size=args.size, family=args.family, ds_type=args.ds_type, **overrides
+        )
+
+    return argparse.Namespace(**cfg_dict)
 # fmt: on
 
 
@@ -58,12 +97,6 @@ class Generator:
 
     def __post_init__(self):
         self.outdir.mkdir(parents=True, exist_ok=True)
-        data_cfg_path = Path(__file__).resolve().parent / 'configs' / f'{self.cfg.d_tag}.yaml'
-        assert data_cfg_path.exists(), f'config file {data_cfg_path} does not exist'
-        with open(data_cfg_path, 'r') as f:
-            data_cfg = yaml.safe_load(f)
-            for k, v in data_cfg.items():
-                setattr(self.cfg, k, v)
 
         self.max_m_feasible = min(self.cfg.max_m, self.cfg.max_n_total // self.cfg.min_n)
         if self.max_m_feasible < self.cfg.min_m:
@@ -186,7 +219,7 @@ class Generator:
         rng = np.random.default_rng(seedseq)
 
         # sample prior
-        likelihood_family = getattr(cfg, 'likelihood_family', 0)
+        likelihood_family = cfg.likelihood_family
         hyperparams = hypersample(rng, d, q, likelihood_family=likelihood_family)
         prior = Prior(rng, hyperparams)
 
@@ -321,12 +354,30 @@ class Generator:
                 out[key] = value
         return out
 
+    def saveConfig(self):
+        """Save generation config to dataset directory for reproducibility."""
+        dataset_dir = self.outdir / datasetDir(vars(self.cfg))
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save full resolved config (excluding runtime-only params)
+        cfg_dict = vars(self.cfg).copy()
+        # Remove runtime-only values that shouldn't be persisted
+        for key in ['partition', 'begin', 'epochs', 'loop']:
+            cfg_dict.pop(key, None)
+
+        config_path = dataset_dir / 'config.yaml'
+        with open(config_path, 'w') as f:
+            yaml.dump(cfg_dict, f, sort_keys=False, default_flow_style=False)
+        logger.info(f'Saved config to {config_path}')
+
     def genTest(self):
         logger.info('Generating test set...')
         ds_test = self._genBatch(n_datasets=self.cfg.bs_test, mini_batch_size=1)
         ds_test = aggregate(ds_test)
         ds_test = self._castCompactTypes(ds_test)
-        fn = Path(self.outdir, datasetFilename(vars(self.cfg), 'test'))
+        dataset_dir = self.outdir / datasetDir(vars(self.cfg))
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        fn = dataset_dir / datasetFilename(vars(self.cfg), 'test')
         np.savez_compressed(fn, **ds_test, allow_pickle=True)
         logger.info(f'Saved test set to {fn}')
 
@@ -335,7 +386,9 @@ class Generator:
         ds_valid = self._genBatch(n_datasets=self.cfg.bs_valid, mini_batch_size=1)
         ds_valid = aggregate(ds_valid)
         ds_valid = self._castCompactTypes(ds_valid)
-        fn = Path(self.outdir, datasetFilename(vars(self.cfg), 'valid'))
+        dataset_dir = self.outdir / datasetDir(vars(self.cfg))
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        fn = dataset_dir / datasetFilename(vars(self.cfg), 'valid')
         np.savez_compressed(fn, **ds_valid, allow_pickle=True)
         logger.info(f'Saved validation set to {fn}')
 
@@ -347,6 +400,8 @@ class Generator:
         logger.info(
             f'Generating {self.cfg.epochs} training partitions of {self.cfg.bs_train} datasets each...'
         )
+        dataset_dir = self.outdir / datasetDir(vars(self.cfg))
+        dataset_dir.mkdir(parents=True, exist_ok=True)
         for epoch in range(self.cfg.begin, self.cfg.epochs + 1):
             ds_train = self._genBatch(
                 n_datasets=self.cfg.bs_train,
@@ -355,11 +410,14 @@ class Generator:
             )
             ds_train = aggregate(ds_train)
             ds_train = self._castCompactTypes(ds_train)
-            fn = Path(self.outdir, datasetFilename(vars(self.cfg), 'train', epoch))
+            fn = dataset_dir / datasetFilename(vars(self.cfg), 'train', epoch)
             np.savez_compressed(fn, **ds_train, allow_pickle=True)
             logger.debug(f'Saved training set to {fn}')
 
     def go(self):
+        # Save config before generation
+        self.saveConfig()
+
         if self.cfg.partition == 'test':
             self.genTest()
         elif self.cfg.partition == 'valid':
