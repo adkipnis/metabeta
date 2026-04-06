@@ -7,15 +7,11 @@ import pytest
 import torch
 
 from metabeta.utils.dataloader import Collection, Dataloader
-from metabeta.utils.config import dataFromYaml
 
 
 @pytest.fixture(scope='session')
 def dataset_path() -> Path:
-    # same file as in your __main__ block
-    data_cfg_path = Path('metabeta', 'simulation', 'configs', 'toy-n.yaml')
-    data_fname = dataFromYaml(data_cfg_path, 'test')
-    path = Path('metabeta', 'outputs', 'data', data_fname)
+    path = Path('metabeta', 'outputs', 'data', 'tiny-n-toy', 'test.npz')
     assert path.exists(), f'{path} does not exist (tests expect the demo file to be present)'
     return path
 
@@ -123,11 +119,12 @@ def test_mask_dq_are_rowwise_permuted(dataset_path: Path):
     # This checks that mask_d/mask_q correspond to 'd'/'q' sizes *after* applying dperm/qperm.
     col = Collection(dataset_path, permute=True)
 
-    # build a small batch deterministically
+    # build a small batch deterministically — sortish=False keeps items in index order
+    # so col[i] and dl's iteration agree on which item occupies position i
     batch_np = [col[i] for i in range(min(4, len(col)))]
 
     # use the public wrapper to collate (through iteration)
-    dl = Dataloader(dataset_path, batch_size=len(batch_np))
+    dl = Dataloader(dataset_path, batch_size=len(batch_np), sortish=False)
     batch = next(iter(dl))
 
     d_max = batch['mask_d'].shape[-1]

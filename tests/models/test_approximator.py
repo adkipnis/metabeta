@@ -6,12 +6,10 @@ import torch
 
 from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import Dataloader
-from metabeta.utils.config import dataFromYaml, modelFromYaml
+from metabeta.utils.config import modelFromYaml
 
 
-data_cfg_path = Path('metabeta', 'simulation', 'configs', 'toy-n.yaml')
-data_fname = dataFromYaml(data_cfg_path, 'test')
-DATA_PATH = Path('metabeta', 'outputs', 'data', data_fname)
+DATA_PATH = Path('metabeta', 'outputs', 'data', 'tiny-n-toy', 'test.npz')
 if not DATA_PATH.exists():
     pytest.skip(
         'validation dataset not found',
@@ -28,8 +26,9 @@ def batch() -> dict[str, torch.Tensor]:
 
 @pytest.fixture(scope='module')
 def model() -> Approximator:
-    model_cfg_path = Path('metabeta', 'models', 'configs', 'toy.yaml')
-    model_cfg = modelFromYaml(model_cfg_path, 2, 1)
+    dl = Dataloader(DATA_PATH, batch_size=8)
+    model_cfg_path = Path('metabeta', 'configs', 'models', 'tiny.yaml')
+    model_cfg = modelFromYaml(model_cfg_path, dl.dataset.d, dl.dataset.q)
     return Approximator(model_cfg)
 
 
@@ -68,9 +67,12 @@ def test_estimate_shapes_and_constraints(model: Approximator, batch: dict[str, t
     assert samples_g.shape[1] == n_samples
     assert logp_g.shape == (b, n_samples)
 
-    assert samples_l.shape == (b, m, n_samples, 1)
+    assert samples_l.shape == (b, m, n_samples, model.d_rfx)
     assert logp_l.shape == (b, m, n_samples)
 
     d = model.d_ffx
     sigmas = samples_g[..., d:]
-    assert (sigmas > 0).all(), 'global sigmas must be positive'
+    # mask_g covers [ffx | rfx | sigma_eps]; check only the unmasked sigma positions
+    mask_g = model._masks(batch, local=False)  # (b, d_ffx + d_var)
+    sigma_mask = mask_g[..., d:].unsqueeze(1).expand_as(sigmas)
+    assert (sigmas[sigma_mask] > 0).all(), 'unmasked global sigmas must be positive'
