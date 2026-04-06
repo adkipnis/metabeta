@@ -111,7 +111,7 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
     data_cfg_valid = loadDataConfig(cfg.data_id_valid)
 
     # model config
-    model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.m_tag}.yaml'
+    model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.model_id}.yaml'
     model_cfg = modelFromYaml(
         model_cfg_path,
         d_ffx=cfg.max_d,
