@@ -18,7 +18,6 @@ class MHA(nn.Module):
     ) -> None:
         super().__init__()
         self.mha = nn.MultiheadAttention(d_model, n_heads, dropout, bias=use_bias, batch_first=True)
-        self.dropout = nn.Dropout(dropout)
         if zero_init:
             zeroInitializer(self.mha.out_proj)
 
@@ -37,7 +36,7 @@ class MHA(nn.Module):
 
         # forward pass
         h, _ = self.mha(query, key, value, key_padding_mask=key_padding_mask)
-        return self.dropout(h)
+        return h
 
 
 class MAB(nn.Module):
