@@ -63,7 +63,7 @@ def setup() -> argparse.Namespace:
 
     # Template-based config generation (primary interface)
     parser.add_argument('--size', type=str, default='tiny', help='Size preset: tiny|small|medium|large|huge')
-    parser.add_argument('--family', type=int, default=1, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
+    parser.add_argument('--family', type=int, default=2, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
     parser.add_argument('--ds_type', type=str, default='toy', help='Dataset type: toy|flat|scm|mixed|sampled|observed')
 
     # Alternative: load config from a saved YAML (e.g. outputs/data/{data_id}/config.yaml)
