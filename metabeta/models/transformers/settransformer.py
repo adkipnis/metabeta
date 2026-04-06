@@ -119,16 +119,18 @@ class SetTransformer(nn.Module):
         # linear embedding
         x = self.proj_in(x)
 
-        # insert token
+        # ISAB blocks: operate on data only (pool token excluded)
+        inv_mask = ~mask if mask is not None else None
+        for block in self.blocks[: self.n_isab]:
+            x = block(x, key_padding_mask=inv_mask)
+
+        # insert pool token before MAB blocks
         x, mask = self._insertToken(x, mask)
+        inv_mask = ~mask if mask is not None else None
 
-        # invert mask to signal True -> skip
-        if mask is not None:
-            mask = ~mask
-
-        # attend
-        for block in self.blocks:
-            x = block(x, key_padding_mask=mask)
+        # MAB blocks: pool token participates as CLS token
+        for block in self.blocks[self.n_isab :]:
+            x = block(x, key_padding_mask=inv_mask)
         x = self.norm(x)
 
         # pool by extracting token
