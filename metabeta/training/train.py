@@ -80,7 +80,10 @@ def setup() -> argparse.Namespace:
 
         Uses small-size data dimensions but loads the large model architecture.
     """
-    parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
+    parser = argparse.ArgumentParser(
+        argument_default=argparse.SUPPRESS,
+        epilog='Advanced options (max_grad_norm, sir, sir_iter, rescale, skip_ref, save_latest, save_best) can be set via --config.',
+    )
 
     # Template-based config generation (primary interface)
     parser.add_argument('--size', type=str, default='tiny', help='Size preset: tiny|small|medium|large|huge')
@@ -104,7 +107,13 @@ def setup() -> argparse.Namespace:
     parser.add_argument('-e', '--max_epochs', type=int, default=10, help='Number of training epochs')
     parser.add_argument('--bs', type=int, help='Batch size (number of datasets per step)')
     parser.add_argument('--lr', type=float, help='Learning rate')
-    parser.add_argument('--num_workers', type=int, help='DataLoader worker processes')
+    parser.add_argument('--loss_type', type=str, help='Loss type: forward|backward|mixed (default = forward)')
+    parser.add_argument('--n_samples', type=int, help='Posterior samples drawn per evaluation dataset (default = 512)')
+    parser.add_argument('--patience', type=int, help='Early stopping patience in epochs; 0 = disabled (default = 10)')
+    parser.add_argument('--sample_interval', type=int, help='Run full posterior evaluation every N epochs (default = 5)')
+    parser.add_argument('--cores', type=int, help='CPU thread count passed to torch.set_num_threads (default = 8)')
+    parser.add_argument('--compile', action=argparse.BooleanOptionalAction, help='Compile model with torch.compile (default = False)')
+    parser.add_argument('--reproducible', action=argparse.BooleanOptionalAction, help='Enable deterministic algorithms for reproducibility (default = False)')
 
     # Evaluation settings
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction, help='Run importance sampling evaluation')

@@ -57,7 +57,9 @@ def setup() -> argparse.Namespace:
         Reproduces the exact data dimensions from a previous run. Explicit CLI
         args (e.g. -b, -e, --partition) still override the loaded YAML.
     """
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        epilog='Data dimension overrides (max_d, max_q, min_m, max_m, min_n, max_n, max_n_total) can be set via --config.',
+    )
 
     # Template-based config generation (primary interface)
     parser.add_argument('--size', type=str, default='tiny', help='Size preset: tiny|small|medium|large|huge')
@@ -77,6 +79,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--partition', type=str, default='all', help='Which partition(s) to generate: train|valid|test|all (default = all)')
     parser.add_argument('-b', '--begin', type=int, default=1, help='First training epoch to generate (default = 1)')
     parser.add_argument('-e', '--epochs', type=int, default=20, help='Last training epoch to generate (default = 20)')
+    parser.add_argument('--source', type=str, default='all', help='Dataset source key for sampled/observed ds_type (default = all)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD sampler when ds_type=sampled (default = False)')
     parser.add_argument('--loop', action='store_true', help='Generate datasets sequentially instead of in parallel with joblib (default = False)')
 
