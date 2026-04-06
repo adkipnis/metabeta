@@ -7,8 +7,8 @@ from metabeta.utils.initializers import getInitializer
 
 class SetTransformer(nn.Module):
     """Set Transformer:
-    Linear -> Dropout -> [MAB] * n_blocks -> Pool (-> Linear -> Dropout)
-    Optionally use ISAB instead of MAB to go from O(n²) to O(n)"""
+    Linear -> GELU -> Dropout -> [ISAB] * n_isab -> Pool token -> [MAB] * n_mab -> Norm -> Pool (-> Dropout -> Linear)
+    ISAB blocks run on data-only (no pool token) to keep induced summaries clean."""
 
     def __init__(
         self,
@@ -30,10 +30,12 @@ class SetTransformer(nn.Module):
     ):
         super().__init__()
         assert n_blocks >= n_isab, 'n_isab must not be larger than n_blocks'
+        self.n_isab = n_isab
 
         # input projector
         self.proj_in = nn.Sequential(
             nn.Linear(d_input, d_model),
+            nn.GELU(),
             nn.Dropout(dropout),
         )
 
