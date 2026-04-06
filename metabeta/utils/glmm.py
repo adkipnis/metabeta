@@ -339,7 +339,7 @@ def _lmmGlmm(
     ns: torch.Tensor,  # (B, m)     group sizes (float)
     n_total: torch.Tensor,  # (B,)       total active observations
     likelihood_family: int,
-    n_newton: int = 3,
+    n_newton: int = 5,
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM variance-component estimator (private).
 
@@ -528,7 +528,7 @@ def lmmBernoulli(
     mask_m: torch.Tensor,
     ns: torch.Tensor,
     n_total: torch.Tensor,
-    n_newton: int = 3,
+    n_newton: int = 5,
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM for Bernoulli/logit outcomes."""
     return _lmmGlmm(Xm, ym, Zm, mask_n, mask_m, ns, n_total, likelihood_family=1, n_newton=n_newton)
@@ -542,7 +542,7 @@ def lmmPoisson(
     mask_m: torch.Tensor,
     ns: torch.Tensor,
     n_total: torch.Tensor,
-    n_newton: int = 3,
+    n_newton: int = 5,
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM for Poisson/log outcomes."""
     return _lmmGlmm(Xm, ym, Zm, mask_n, mask_m, ns, n_total, likelihood_family=2, n_newton=n_newton)
