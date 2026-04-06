@@ -1,4 +1,7 @@
-"""Batched OLS and IRLS solvers in two formulations.
+"""Batched GLM (Generalized Linear Model) estimators in two formulations.
+
+GLM = no random effects; regression on pooled or grouped data.  Pairs with
+lmm.py, which adds group-level random effects.
 
 flat      — pass the tall (B, m*n, d) matrix directly to lstsq; better
             conditioned because the normal equations are never formed.
@@ -15,7 +18,7 @@ compacted — form XtX / XwX explicitly (B, d, d) before solving; cheaper
 import torch
 
 
-def _adaptive_ridge(A: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+def _adaptiveRidge(A: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """Scale-adaptive ridge: eps * max_diag(A) * I.
 
     For active columns the ridge is eps-fraction of their scale (negligible).
@@ -68,7 +71,7 @@ def olsNormalCompacted(
     d = Xm.shape[-1]
     XtX = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)
     Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)
-    beta = torch.linalg.solve(XtX + _adaptive_ridge(XtX), Xty)
+    beta = torch.linalg.solve(XtX + _adaptiveRidge(XtX), Xty)
 
     yhat = torch.einsum('bmnd,bd->bmn', Xm, beta)
     resid = ym - yhat * mask
@@ -123,7 +126,7 @@ def irlsBernoulliCompacted(
         z = (eta + (ym - p * mask) / w) * mask
         XwX = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)
         Xwz = torch.einsum('bmnd,bmn->bd', Xm, w * z)
-        beta = torch.linalg.solve(XwX + _adaptive_ridge(XwX), Xwz)
+        beta = torch.linalg.solve(XwX + _adaptiveRidge(XwX), Xwz)
     return beta
 
 
@@ -181,6 +184,6 @@ def irlsPoissonCompacted(
         z = (eta + (ym - mu * mask) / w) * mask
         XwX = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)
         Xwz = torch.einsum('bmnd,bmn->bd', Xm, w * z)
-        beta_new = torch.linalg.solve(XwX + _adaptive_ridge(XwX), Xwz)
+        beta_new = torch.linalg.solve(XwX + _adaptiveRidge(XwX), Xwz)
         beta = damping * beta_new + (1 - damping) * beta
     return beta

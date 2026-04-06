@@ -1,5 +1,5 @@
 import torch
-from metabeta.utils.least_squares import _adaptive_ridge
+from metabeta.utils.glm import _adaptiveRidge
 
 
 def _sufficientStats(
@@ -95,7 +95,7 @@ def _GLSNLL(
     c = (c_g * mask_m).sum(dim=1)  # (B,)
 
     # GLS: β̂ = (A + ridge)^{-1} b
-    beta = torch.linalg.solve(A + _adaptive_ridge(A), b_vec)  # (B, d)
+    beta = torch.linalg.solve(A + _adaptiveRidge(A), b_vec)  # (B, d)
 
     # --- REML NLL
     # quadratic form y'Py = c − b'β̂  (≥ 0)
