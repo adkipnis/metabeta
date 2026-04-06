@@ -11,6 +11,7 @@ via mask_n and mask_m padding.
 """
 
 import torch
+import torch.nn.functional as F
 
 from metabeta.utils.least_squares import (
     _adaptive_ridge,
@@ -18,6 +19,34 @@ from metabeta.utils.least_squares import (
     irlsPoissonCompacted,
 )
 from metabeta.utils.gls import _adaptive_ridge_bm
+
+
+def _group_nll(
+    bg: torch.Tensor,
+    beta_0: torch.Tensor,
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    Psi_inv: torch.Tensor,
+    likelihood_family: int,
+) -> torch.Tensor:
+    """Per-group negative log-posterior (B, m) at random-effects bg.
+
+    f(b_g) = -Σ_i log p(y_i | eta_i) + (1/2) b_g^T Ψ^{-1} b_g
+    """
+    eta = torch.einsum('bmnd,bd->bmn', Xm, beta_0) + torch.einsum('bmnq,bmq->bmn', Zm, bg)
+    if likelihood_family == 1:
+        nll_obs = (
+            -ym * F.logsigmoid(eta)
+            - (1.0 - ym) * F.logsigmoid(-eta)
+        ) * mask_n
+    else:
+        mu = torch.exp(eta.clamp(max=20))
+        nll_obs = (-(ym * eta - mu)) * mask_n
+    nll_g = nll_obs.sum(dim=-1)  # (B, m)
+    prior_g = 0.5 * torch.einsum('bmq,bqr,bmr->bm', bg, Psi_inv, bg)
+    return nll_g + prior_g
 
 
 def _psd_project(M: torch.Tensor) -> torch.Tensor:
@@ -78,7 +107,7 @@ def glmmFull(
     ns: torch.Tensor,  # (B, m)     group sizes (float)
     n_total: torch.Tensor,  # (B,)       total active observations
     likelihood_family: int = 1,
-    n_newton: int = 2,
+    n_newton: int = 5,
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM variance-component estimator.
 
@@ -170,7 +199,11 @@ def glmmFull(
     beta_wg = torch.linalg.solve(sum_A + _adaptive_ridge(sum_A), sum_rhs)  # (B, d)
 
     # group-level naive OLS estimates of bg
-    resid1 = (ytilde1 - torch.einsum('bmnd,bd->bmn', Xm, beta_wg)) * mask_n  # (B, m, n)
+    # Key: use beta_0 (pooled IRLS) not beta_wg, because beta_wg does not
+    # estimate the components of β that lie in Z's column space — the same
+    # reasoning as glsNormalFull's Stage 2 comment.  beta_0 is a consistent
+    # estimator of all fixed-effect components, so E[b̂_g] ≈ b_g.
+    resid1 = (ytilde1 - torch.einsum('bmnd,bd->bmn', Xm, beta_0)) * mask_n  # (B, m, n)
     ZW_resid1 = torch.einsum('bmnq,bmn->bmq', Zm, w1 * resid1)       # (B, m, q)
     bhat_ols = torch.einsum('bmqr,bmr->bmq', ZWZ_inv, ZW_resid1)     # (B, m, q)
     bhat_ols = bhat_ols * mask_m[:, :, None]                          # zero inactive
@@ -189,14 +222,18 @@ def glmmFull(
     # ------------------------------------------------------------------
     Psi_inv = _pseudo_inverse(Psi_pql)                                # (B, q, q)
 
-    # Newton iterations starting from bhat_ols
-    bg = bhat_ols.clone()                                              # (B, m, q)
+    # Damped Newton cold-started from zeros with Armijo backtracking.
+    # Pure Newton from far-from-mode starting points can overshoot into regions
+    # where w = mu(1-mu) ~ 0, making subsequent Hessians near-singular and
+    # causing oscillating divergence.  Armijo backtracking guarantees monotone
+    # decrease of the (globally convex) negative log-posterior at every step.
+    bg = ym.new_zeros(B, m, q)                                        # (B, m, q)
     for _ in range(n_newton):
-        eta_t = torch.einsum('bmnd,bd->bmn', Xm, beta_wg) + torch.einsum('bmnq,bmq->bmn', Zm, bg)
+        eta_t = torch.einsum('bmnd,bd->bmn', Xm, beta_0) + torch.einsum('bmnq,bmq->bmn', Zm, bg)
         w_t, ytilde_t = _pql_working(eta_t, ym, mask_n, likelihood_family)
 
         ZWZ_t = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_t, Zm)     # (B, m, q, q)
-        # gradient: Z^T(y - mu)*mask_n - Psi_inv @ bg
+        # gradient of log-posterior: Z^T(y - mu)*mask_n - Psi_inv @ bg
         if likelihood_family == 1:
             mu_t = torch.sigmoid(eta_t)
         else:
@@ -208,10 +245,25 @@ def glmmFull(
         ZWZ_t_safe = torch.where(active[:, :, None, None], ZWZ_t, eye_q)
         Hg = ZWZ_t_safe + Psi_inv[:, None]                            # (B, m, q, q)
         delta = torch.linalg.solve(Hg + _adaptive_ridge_bm(Hg), grad_g)  # (B, m, q)
-        bg = (bg + delta) * mask_m[:, :, None]
 
-    # final working quantities at Laplace mode bg
-    eta_f = torch.einsum('bmnd,bd->bmn', Xm, beta_wg) + torch.einsum('bmnq,bmq->bmn', Zm, bg)
+        # Armijo backtracking: monotone decrease of NLL per group.
+        # slope = grad_g . delta > 0 (delta is an ascent direction for log-post).
+        slope = (grad_g * delta).sum(dim=-1)                           # (B, m)
+        f_old = _group_nll(bg, beta_0, Xm, ym, Zm, mask_n, Psi_inv, likelihood_family)
+        alpha = torch.ones(B, m, device=Xm.device, dtype=Xm.dtype)    # (B, m)
+        for _ls in range(10):
+            bg_trial = (bg + alpha[:, :, None] * delta) * mask_m[:, :, None]
+            f_new = _group_nll(bg_trial, beta_0, Xm, ym, Zm, mask_n, Psi_inv, likelihood_family)
+            # sufficient decrease (c=0.1): accept if NLL decreased by ≥ c*alpha*slope
+            accept = (f_new <= f_old - 0.1 * alpha * slope) | ~active
+            if accept.all():
+                break
+            alpha = torch.where(accept, alpha, alpha * 0.5)
+
+        bg = (bg + alpha[:, :, None] * delta) * mask_m[:, :, None]
+
+    # final working quantities at (beta_0, Laplace-mode bg)
+    eta_f = torch.einsum('bmnd,bd->bmn', Xm, beta_0) + torch.einsum('bmnq,bmq->bmn', Zm, bg)
     w_f, ytilde_f = _pql_working(eta_f, ym, mask_n, likelihood_family)
 
     ZWZ_f = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_f, Zm)         # (B, m, q, q)
