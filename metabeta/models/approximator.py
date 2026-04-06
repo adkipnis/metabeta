@@ -8,13 +8,7 @@ from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import getConstrainers
 from metabeta.utils.config import ApproximatorConfig, SummarizerConfig, PosteriorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
-from metabeta.utils.gls import glsNormal
-from metabeta.utils.glmm import glmmFull
-from metabeta.utils.least_squares import (
-    olsNormalCompacted,
-    irlsBernoulliCompacted,
-    irlsPoissonCompacted,
-)
+from metabeta.utils.glmm import glmm
 from metabeta.utils.families import (
     FFX_FAMILIES,
     SIGMA_FAMILIES,
@@ -149,43 +143,14 @@ class Approximator(nn.Module):
         return torch.cat(masks, dim=-1)
 
     def _dataStatistics(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """Compute sufficient statistics from grouped data.
-
-        Normal: within-Z OLS residual SD, MoM random-effects SDs, GLS beta.
-        Bernoulli/Poisson: pooled IRLS coefficients, between-group SD of means.
-        """
-        out = {}
-        mask_n = data['mask_n'].float()  # (B, m, n)
-        mask_m = data['mask_m'].float()  # (B, m)
-        ns = data['ns'].clamp(min=1).float()  # (B, m)
-        m = data['m'].float().unsqueeze(-1)  # (B, 1)
-        Xm = data['X']  # (B, m, n, d)
-        ym = data['y']  # (B, m, n)
-
-        if self.likelihood_family == 0:
-            Zm = data['Z'][..., : self.d_rfx]  # (B, m, n, q) — slice to model's q
-            beta, sigma_eps, sigma_rfx, blups = glsNormal(
-                Xm, ym, Zm, mask_n, mask_m, ns, data['n'].float()
-            )
-            out['beta_est'] = beta            # (B, d)
-            out['sigma_eps_est'] = sigma_eps  # (B, 1)
-            out['sigma_rfx_est'] = sigma_rfx  # (B, q)
-            out['blup_est'] = blups           # (B, m, q)
-            return out
-        elif self.likelihood_family in (1, 2):
-            Zm = data['Z'][..., : self.d_rfx]
-            return glmmFull(
-                Xm,
-                ym,
-                Zm,
-                mask_n,
-                mask_m,
-                ns,
-                data['n'].float(),
-                likelihood_family=self.likelihood_family,
-            )
-        else:
-            raise ValueError(f'no summary statistics for likelihood {self.likelihood_family}')
+        """Compute sufficient statistics: GLS/GLMM β̂, σ̂, BLUPs."""
+        Zm = data['Z'][..., : self.d_rfx]
+        return glmm(
+            data['X'], data['y'], Zm,
+            data['mask_n'].float(), data['mask_m'].float(),
+            data['ns'].clamp(min=1).float(), data['n'].float(),
+            likelihood_family=self.likelihood_family,
+        )
 
     def _addMetadata(
         self,
