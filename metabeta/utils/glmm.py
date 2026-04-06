@@ -413,6 +413,13 @@ def _lmmGlmm(
     mean_ZWZ_inv = (ZWZ_inv * mask4).sum(dim=1) / G[:, None, None]
     Psi_pql = _psdProject(mean_bhat_outer - mean_ZWZ_inv)                 # (B, q, q)
 
+    # Floor eigenvalues at psi_0 (overdispersion-based RE scale estimate).
+    # Prevents degenerate near-zero Ψ̂_PQL after PSD projection, which would
+    # make Ψ̂_PQL⁻¹ → ∞ and kill Newton updates.
+    vals_pql, vecs_pql = torch.linalg.eigh(Psi_pql)
+    vals_pql = vals_pql.clamp(min=psi_0[:, None])
+    Psi_pql = vecs_pql @ torch.diag_embed(vals_pql) @ vecs_pql.mT        # (B, q, q)
+
     # ------------------------------------------------------------------
     # Stage 2: damped Newton → Laplace mode b̂_g, Ψ̂_Lap, β̂_GLS, BLUPs
     # ------------------------------------------------------------------
