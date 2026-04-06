@@ -65,12 +65,12 @@ class SetTransformer(nn.Module):
         # posthoc norm
         self.norm = nn.LayerNorm(d_model, eps=eps)
 
-        # optional output projector
+        # optional output projector (dropout before linear to avoid noisy summaries)
         self.proj_out = None
         if d_output is not None:
             self.proj_out = nn.Sequential(
-                nn.Linear(d_model, d_output),
                 nn.Dropout(dropout),
+                nn.Linear(d_model, d_output),
             )
 
         # optional weight initialization for the projectors
@@ -78,7 +78,7 @@ class SetTransformer(nn.Module):
             initializer = getInitializer(*weight_init)
             initializer(self.proj_in[0])
             if self.proj_out is not None:
-                initializer(self.proj_out[0])
+                initializer(self.proj_out[1])
 
     def _reshape(
         self,
