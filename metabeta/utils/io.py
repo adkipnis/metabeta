@@ -43,7 +43,7 @@ def runName(cfg: dict, prefix: str = '') -> str:
     Generate run name for checkpoints.
 
     Args:
-        cfg: Config dict containing data_id, m_tag, seed, etc.
+        cfg: Config dict containing data_id, model_id, seed, etc.
         prefix: Optional prefix for the run name
 
     Returns:
@@ -59,7 +59,7 @@ def runName(cfg: dict, prefix: str = '') -> str:
 
     parts += [
         f"d{cfg['data_id']}",
-        f"m{cfg['m_tag']}",
+        f"m{cfg['model_id']}",
         f"s{cfg['seed']}",
     ]
     if r_tag := cfg['r_tag']:

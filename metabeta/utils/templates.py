@@ -79,7 +79,7 @@ class TrainingConfig(BaseModel):
     name: str
     data_id: str
     data_id_valid: Optional[str] = None
-    m_tag: str
+    model_id: str
 
     # Training hyperparameters
     max_epochs: int = Field(gt=0, default=1000)
@@ -196,7 +196,7 @@ def generateTrainingConfig(
         'name': f'{size}-{family_name}-{ds_type}',
         'data_id': f'{size}-{family_name}-{ds_type}',
         'data_id_valid': f"{size}-{family_name}-{valid_ds_type or 'sampled'}",
-        'm_tag': size,
+        'model_id': size,
     }
 
     # Apply overrides (excluding CLI-only params)

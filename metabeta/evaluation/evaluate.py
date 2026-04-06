@@ -53,7 +53,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--name', type=str, help='Legacy: load configs/{name}.yaml (deprecated)')
 
     # Config overrides
-    parser.add_argument('--m_tag', type=str)
+    parser.add_argument('--model_id', type=str)
     parser.add_argument('--r_tag', type=str)
     parser.add_argument('--data_id', type=str)
     parser.add_argument('--data_id_valid', type=str)
@@ -200,7 +200,7 @@ class Evaluator:
         if hasattr(self.cfg, 'model_cfg') and isinstance(self.cfg.model_cfg, ApproximatorConfig):
             self.model_cfg = self.cfg.model_cfg
         else:
-            model_cfg_path = Path(self.dir, '..', 'configs', 'models', f'{self.cfg.m_tag}.yaml')
+            model_cfg_path = Path(self.dir, '..', 'configs', 'models', f'{self.cfg.model_id}.yaml')
             self.model_cfg = modelFromYaml(
                 model_cfg_path,
                 d_ffx=self.cfg.max_d,
