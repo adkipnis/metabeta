@@ -9,6 +9,7 @@ from metabeta.utils.regularization import getConstrainers
 from metabeta.utils.config import ApproximatorConfig, SummarizerConfig, PosteriorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
 from metabeta.utils.gls import glsNormal
+from metabeta.utils.glmm import glmmFull
 from metabeta.utils.least_squares import (
     olsNormalCompacted,
     irlsBernoulliCompacted,
@@ -171,25 +172,20 @@ class Approximator(nn.Module):
             out['sigma_rfx_est'] = sigma_rfx  # (B, q)
             out['blup_est'] = blups           # (B, m, q)
             return out
-        elif self.likelihood_family == 1:
-            beta = irlsBernoulliCompacted(Xm, ym, mask_n)
-        elif self.likelihood_family == 2:
-            beta = irlsPoissonCompacted(Xm, ym, mask_n)
+        elif self.likelihood_family in (1, 2):
+            Zm = data['Z'][..., : self.d_rfx]
+            return glmmFull(
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                ns,
+                data['n'].float(),
+                likelihood_family=self.likelihood_family,
+            )
         else:
             raise ValueError(f'no summary statistics for likelihood {self.likelihood_family}')
-
-        # --- between-group SD for non-normal likelihoods (on link scale)
-        # Compute a scalar estimate and broadcast to (B, d_rfx) for context consistency.
-        group_means = ym.sum(dim=2) / ns  # (B, m)
-        grand_mean = (group_means * mask_m).sum(dim=1, keepdim=True) / m
-        sq_dev = ((group_means - grand_mean).square() * mask_m).sum(dim=1, keepdim=True)
-        sigma_rfx_scalar = (sq_dev / m.clamp(min=2)).sqrt()  # (B, 1)
-        sigma_rfx_ols = sigma_rfx_scalar.expand(-1, self.d_rfx)  # (B, q)
-        # No GLS BLUPs for non-normal likelihoods; fill zeros so context dim is consistent.
-        B_dim, m_dim = Xm.shape[0], Xm.shape[1]
-        blup_zeros = torch.zeros(B_dim, m_dim, self.d_rfx, device=Xm.device, dtype=Xm.dtype)
-        out.update({'beta_est': beta, 'sigma_rfx_est': sigma_rfx_ols, 'blup_est': blup_zeros})
-        return out
 
     def _addMetadata(
         self,
@@ -211,7 +207,7 @@ class Approximator(nn.Module):
             #     stats['sigma_rfx_est'].square().mean(dim=-1).sqrt().clamp(min=0.01)
             #     [..., None, None]
             # )
-            blup_scaled = stats['blup_est'] #/ sigma_rfx_rms  # (B, m, q)
+            blup_scaled = stats['blup_est']   # / sigma_rfx_rms  # (B, m, q)
             n_obs = data['ns'].unsqueeze(-1).float().sqrt() / 10           # (B, m, 1)
             eta_rfx = (
                 data['eta_rfx'].unsqueeze(-1).expand(-1, summary.shape[1]).unsqueeze(-1)
