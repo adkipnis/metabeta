@@ -31,28 +31,54 @@ logger = logging.getLogger(__name__)
 # config
 # fmt: off
 def setup() -> argparse.Namespace:
+    """Parse command line arguments.
+
+    Usage modes
+    -----------
+    Fresh start (template-based):
+        python generate.py --size small --family 0 --ds_type toy
+
+        Generates config from size/family/ds_type presets and writes all
+        partitions (train/valid/test) to outputs/data/{data_id}/. The data_id
+        is auto-derived as '{size}-{family_char}-{ds_type}' (e.g. small-n-toy).
+
+    Generate a single partition:
+        python generate.py --size small --family 0 --ds_type toy --partition train
+        python generate.py --size small --family 0 --ds_type toy --partition valid --bs_valid 512
+
+    Resume / extend training epochs:
+        python generate.py --size small --family 0 --ds_type toy --partition train -b 11 -e 30
+
+        Generates epochs 11–30, leaving already-generated epochs untouched.
+
+    Load config from a saved YAML:
+        python generate.py --config outputs/data/small-n-toy/config.yaml --partition train -b 21 -e 40
+
+        Reproduces the exact data dimensions from a previous run. Explicit CLI
+        args (e.g. -b, -e, --partition) still override the loaded YAML.
+    """
     parser = argparse.ArgumentParser()
 
     # Template-based config generation (primary interface)
     parser.add_argument('--size', type=str, default='tiny', help='Size preset: tiny|small|medium|large|huge')
-    parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
+    parser.add_argument('--family', type=int, default=1, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
     parser.add_argument('--ds_type', type=str, default='toy', help='Dataset type: toy|flat|scm|mixed|sampled|observed')
 
-    # Custom config file (alternative to template-based)
-    parser.add_argument('--config', type=str, help='Path to custom YAML config file')
+    # Alternative: load config from a saved YAML (e.g. outputs/data/{data_id}/config.yaml)
+    parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
 
     # Batch dimensions
-    parser.add_argument('--bs_train', type=int, default=4096, help='batch size per training partition (default = 4,096).')
-    parser.add_argument('--bs_valid', type=int, default=256, help='batch size for validation partition (default = 256).')
-    parser.add_argument('--bs_test', type=int, default=128, help='batch size per testing partition (default = 128).')
-    parser.add_argument('--bs_mini', type=int, default=32, help='training minibatch size (for grouping m, q, d - default = 32)')
+    parser.add_argument('--bs_train', type=int, default=4096, help='Number of datasets per training epoch file (default = 4096)')
+    parser.add_argument('--bs_valid', type=int, default=256, help='Number of datasets in the validation file (default = 256)')
+    parser.add_argument('--bs_test', type=int, default=128, help='Number of datasets in the test file (default = 128)')
+    parser.add_argument('--bs_mini', type=int, default=32, help='Mini-batch size for grouping m/q/d across datasets (default = 32)')
 
     # Partitions and sources
-    parser.add_argument('--partition', type=str, default='all', help='Type of partition in [train, valid, test, all], (default = train)')
-    parser.add_argument('-b', '--begin', type=int, default=1, help='Begin generating training epoch number #b.')
-    parser.add_argument('-e', '--epochs', type=int, default=20, help='Total number of training epochs to generate.')
-    parser.add_argument('--sgld', action='store_true', help='Use SGLD if ds_type==sampled (default = False)')
-    parser.add_argument('--loop', action='store_true', help='Loop dataset sampling instead of parallelizing it with joblib (default = False)')
+    parser.add_argument('--partition', type=str, default='all', help='Which partition(s) to generate: train|valid|test|all (default = all)')
+    parser.add_argument('-b', '--begin', type=int, default=1, help='First training epoch to generate (default = 1)')
+    parser.add_argument('-e', '--epochs', type=int, default=20, help='Last training epoch to generate (default = 20)')
+    parser.add_argument('--sgld', action='store_true', help='Use SGLD sampler when ds_type=sampled (default = False)')
+    parser.add_argument('--loop', action='store_true', help='Generate datasets sequentially instead of in parallel with joblib (default = False)')
 
     return setupConfigParser(parser, generateSimulationConfig, 'Generate hierarchical datasets.')
 # fmt: on
