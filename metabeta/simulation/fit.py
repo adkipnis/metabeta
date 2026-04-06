@@ -1,5 +1,4 @@
 import argparse
-import yaml
 from pathlib import Path
 import time
 import numpy as np
@@ -12,12 +11,19 @@ import pytensor
 from metabeta.utils.io import datasetFilename
 from metabeta.utils.families import bambiFamilyName, hasSigmaEps
 from metabeta.utils.padding import aggregate, unpad
+from metabeta.utils.templates import setupConfigParser, generateSimulationConfig
 
 
+# fmt: off
 def setup() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Fit hierarchical datasets with Bambi.')
-    # data
-    parser.add_argument('--data_id', type=str, default='toy-n', help='name of data config file')
+    parser = argparse.ArgumentParser()
+
+    # data (template-based, matching generate.py)
+    parser.add_argument('--size', type=str, default='tiny', help='Size preset: tiny|small|medium|large|huge')
+    parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
+    parser.add_argument('--ds_type', type=str, default='toy', help='Dataset type: toy|flat|scm|mixed|sampled|observed')
+    parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
+
     parser.add_argument(
         '--idx',
         type=int,
@@ -78,7 +84,8 @@ def setup() -> argparse.Namespace:
         default=5e-3,
         help='Adam learning rate for ADVI (default = 5e-3)',
     )
-    return parser.parse_args()
+    return setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets with Bambi.')
+# fmt: on
 
 
 class Fitter:
@@ -90,16 +97,8 @@ class Fitter:
         assert cfg.method in ['nuts', 'advi'], 'fit method must be in [nuts, advi]'
         self.cfg = cfg
         self.srcdir = srcdir
-        self.outdir = Path(srcdir, 'fits')
+        self.outdir = Path(srcdir, self.cfg.data_id, 'fits')
         self.outdir.mkdir(parents=True, exist_ok=True)
-
-        # load dataset config
-        data_cfg_path = Path(__file__).resolve().parent / 'configs' / f'{self.cfg.data_id}.yaml'
-        assert data_cfg_path.exists(), f'config file {data_cfg_path} does not exist'
-        with open(data_cfg_path, 'r') as f:
-            data_cfg = yaml.safe_load(f)
-            for k, v in data_cfg.items():
-                setattr(self.cfg, k, v)
 
         # determine path to data
         self.fname = datasetFilename(partition='test')
