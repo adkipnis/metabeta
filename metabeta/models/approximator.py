@@ -6,7 +6,7 @@ from torch.nn import functional as F
 from metabeta.models.transformers import SetTransformer
 from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import getConstrainers
-from metabeta.utils.config import ApproximatorConfig
+from metabeta.utils.config import ApproximatorConfig, SummarizerConfig, PosteriorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
 from metabeta.utils.gls import glsNormal
 from metabeta.utils.least_squares import (
@@ -22,6 +22,18 @@ from metabeta.utils.families import (
 )
 
 constrainSigma, unconstrainSigma, logDetJacobian = getConstrainers(method='softplus')
+
+
+def _buildSummarizer(cfg: SummarizerConfig, d_input: int) -> nn.Module:
+    if cfg.type == 'set-transformer':
+        return SetTransformer(d_input=d_input, **cfg.to_dict())
+    raise NotImplementedError(f'unknown summarizer type: {cfg.type}')
+
+
+def _buildPosterior(cfg: PosteriorConfig, d_target: int, d_context: int) -> nn.Module:
+    if cfg.type == 'coupling':
+        return CouplingFlow(d_target=d_target, d_context=d_context, **cfg.to_dict())
+    raise NotImplementedError(f'unknown posterior type: {cfg.type}')
 
 
 class Approximator(nn.Module):
@@ -47,8 +59,6 @@ class Approximator(nn.Module):
         return hasSigmaEps(self.likelihood_family)
 
     def build(self) -> None:
-        s_cfg = self.cfg.summarizer
-        p_cfg = self.cfg.posterior
         d_ffx = self.d_ffx
         d_rfx = self.d_rfx
         d_sigma_eps = 1 if self.has_sigma_eps else 0
@@ -59,41 +69,27 @@ class Approximator(nn.Module):
             n_families = (len(FFX_FAMILIES), len(SIGMA_FAMILIES), len(SIGMA_FAMILIES))
         else:
             n_families = (len(FFX_FAMILIES), len(SIGMA_FAMILIES))
-        embed_dim = None  # one-hot, alternatively len(n_families)
-        self.family_encoder = FamilyEncoder(n_families, embed_dim=embed_dim)
-
-        # --- context
-        # global context
-        d_counts = 2  # n_groups, n_total
-        # nu_ffx, tau_ffx, tau_rfx, [tau_eps], eta_rfx
-        d_prior = 2 * d_ffx + d_rfx + d_sigma_eps + 1
-        d_family = self.family_encoder.d_output
-        d_stats = d_ffx + d_rfx + d_sigma_eps  # beta_est, sigma_rfx_est (q), [sigma_eps_est]
-        d_meta_g = d_counts + d_prior + d_family + d_stats
-        d_context_g = s_cfg.d_output + d_meta_g  # global summary + metadata
-        # local context
-        d_meta_l = 2 + d_rfx  # n_obs + eta_rfx + blup_est (scaled BLUPs, q values)
-        d_context_l = (
-            d_ffx + d_var + s_cfg.d_output + d_meta_l
-        )  # global samples + local summaries + metadata
+        self.family_encoder = FamilyEncoder(n_families, embed_dim=None)
 
         # --- summarizers
-        if s_cfg.type == 'set-transformer':
-            Summarizer = SetTransformer
-        else:
-            raise NotImplementedError('unknown summarizer type')
+        # local: y + X[1:d] + Z[1:q] per observation
         d_input_l = 1 + (d_ffx - 1) + (d_rfx - 1)
-        d_input_g = s_cfg.d_output + d_meta_l
-        self.summarizer_l = Summarizer(d_input=d_input_l, **s_cfg.to_dict())
-        self.summarizer_g = Summarizer(d_input=d_input_g, **s_cfg.to_dict())
+        self.summarizer_l = _buildSummarizer(self.cfg.summarizer_l, d_input_l)
+        # global: local summaries + local metadata, aggregated across groups
+        d_meta_l = 2 + d_rfx  # n_obs + eta_rfx + blup_est (scaled BLUPs, q values)
+        d_input_g = self.cfg.summarizer_l.d_output + d_meta_l
+        self.summarizer_g = _buildSummarizer(self.cfg.summarizer_g, d_input_g)
 
         # --- posteriors
-        if p_cfg.type == 'coupling':
-            Posterior = CouplingFlow
-        else:
-            raise NotImplementedError('unknown posterior type')
-        self.posterior_g = Posterior(d_ffx + d_var, d_context_g, **p_cfg.to_dict())
-        self.posterior_l = Posterior(max(d_rfx, 2), d_context_l, **p_cfg.to_dict())
+        # global: fixed effects + variance params conditioned on global summary + metadata
+        d_prior = 2 * d_ffx + d_rfx + d_sigma_eps + 1  # nu_ffx, tau_ffx, tau_rfx, [tau_eps], eta_rfx
+        d_stats = d_ffx + d_rfx + d_sigma_eps           # beta_est, sigma_rfx_est, [sigma_eps_est]
+        d_meta_g = 2 + d_prior + self.family_encoder.d_output + d_stats  # n_groups, n_total, ...
+        d_context_g = self.cfg.summarizer_g.d_output + d_meta_g
+        self.posterior_g = _buildPosterior(self.cfg.posterior_g, d_ffx + d_var, d_context_g)
+        # local: random effects conditioned on global samples + local summary + local metadata
+        d_context_l = d_ffx + d_var + self.cfg.summarizer_l.d_output + d_meta_l
+        self.posterior_l = _buildPosterior(self.cfg.posterior_l, max(d_rfx, 2), d_context_l)
 
     def compile(self) -> None:
         self.summarizer_l = torch.compile(self.summarizer_l)

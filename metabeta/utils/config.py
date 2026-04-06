@@ -53,8 +53,10 @@ class PosteriorConfig(BaseModel):
 class ApproximatorConfig(BaseModel):
     d_ffx: int = Field(gt=0)
     d_rfx: int = Field(ge=0)
-    summarizer: SummarizerConfig
-    posterior: PosteriorConfig
+    summarizer_l: SummarizerConfig
+    summarizer_g: SummarizerConfig
+    posterior_l: PosteriorConfig
+    posterior_g: PosteriorConfig
     likelihood_family: int = Field(ge=0, default=0)
 
     model_config = {'extra': 'allow'}
@@ -64,8 +66,10 @@ class ApproximatorConfig(BaseModel):
             'd_ffx': self.d_ffx,
             'd_rfx': self.d_rfx,
             'likelihood_family': self.likelihood_family,
-            'summarizer': self.summarizer.model_dump(),
-            'posterior': self.posterior.model_dump(),
+            'summarizer_l': self.summarizer_l.model_dump(),
+            'summarizer_g': self.summarizer_g.model_dump(),
+            'posterior_l': self.posterior_l.model_dump(),
+            'posterior_g': self.posterior_g.model_dump(),
         }
 
 
@@ -74,14 +78,17 @@ def modelFromYaml(
 ) -> ApproximatorConfig:
     with open(cfg_path, 'r') as f:
         model_cfg = yaml.safe_load(f)
-    cfg_s = SummarizerConfig(**model_cfg['summarizer'])
-    cfg_p = PosteriorConfig(**model_cfg['posterior'])
+    # Global config is the full spec; local inherits from global and overrides what differs
+    s_g = model_cfg['summarizer_g']
+    p_g = model_cfg['posterior_g']
     return ApproximatorConfig(
         d_ffx=d_ffx,
         d_rfx=d_rfx,
         likelihood_family=likelihood_family,
-        summarizer=cfg_s,
-        posterior=cfg_p,
+        summarizer_g=SummarizerConfig(**s_g),
+        summarizer_l=SummarizerConfig(**{**s_g, **model_cfg.get('summarizer_l', {})}),
+        posterior_g=PosteriorConfig(**p_g),
+        posterior_l=PosteriorConfig(**{**p_g, **model_cfg.get('posterior_l', {})}),
     )
 
 
