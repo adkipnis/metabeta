@@ -78,6 +78,7 @@ class MAB(nn.Module):
         # Layer Norms
         self.pre_norm = pre_norm
         self.norm0 = nn.LayerNorm(d_model, eps=eps)
+        self.norm_z = nn.LayerNorm(d_model, eps=eps)  # separate norm for cross-attn key
         self.norm1 = nn.LayerNorm(d_model, eps=eps)
 
     def forward(
@@ -89,13 +90,13 @@ class MAB(nn.Module):
         if self.pre_norm:
             h = self.mha(
                 self.norm0(x),
-                self.norm0(z) if z is not None else None,
+                self.norm_z(z) if z is not None else None,
                 key_padding_mask=key_padding_mask,
             )
             x = x + h
             x = x + self.mlp(self.norm1(x))
         else:
-            h = self.mha(x, z, key_padding_mask=key_padding_mask)
+            h = self.mha(x, self.norm_z(z) if z is not None else None, key_padding_mask=key_padding_mask)
             x = self.norm0(x + h)
             x = self.norm1(x + self.mlp(x))
         return x
