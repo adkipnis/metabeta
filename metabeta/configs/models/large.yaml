@@ -10,7 +10,7 @@ summarizer_g:
 
 summarizer_l:
     n_isab: 0
-    n_blocks: 3
+    n_blocks: 2
 
 posterior_g:
     type: 'coupling'
