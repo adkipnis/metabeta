@@ -339,7 +339,7 @@ def _lmmGlmm(
     ns: torch.Tensor,  # (B, m)     group sizes (float)
     n_total: torch.Tensor,  # (B,)       total active observations
     likelihood_family: int,
-    n_newton: int = 5,
+    n_newton: int = 3,
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM variance-component estimator (private).
 
@@ -418,7 +418,13 @@ def _lmmGlmm(
     # ------------------------------------------------------------------
     Psi_inv = _pseudoInverse(Psi_pql)                                     # (B, q, q)
 
-    bg = bhat_ols.clone()
+    # Cold-start from zero. Warm-starting from bhat_ols is unsafe for Poisson:
+    # large bhat_ols values cause exp(η) overflow, making f(bhat_ols) = inf and
+    # stalling Armijo (alpha → 0, bg frozen). Cold-start also acts as implicit
+    # regularisation: with n_newton=3 the iterate hasn't fully converged under
+    # the noisy Psi_pql penalty, providing extra shrinkage that corrects for
+    # MoM upward bias after PSD projection. More steps or warm-start worsen BLUPs.
+    bg = ym.new_zeros(B, m, q)
     for _ in range(n_newton):
         eta_t = torch.einsum('bmnd,bd->bmn', Xm, beta_0) + torch.einsum('bmnq,bmq->bmn', Zm, bg)
 
@@ -528,7 +534,7 @@ def lmmBernoulli(
     mask_m: torch.Tensor,
     ns: torch.Tensor,
     n_total: torch.Tensor,
-    n_newton: int = 5,
+    n_newton: int = 3,
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM for Bernoulli/logit outcomes."""
     return _lmmGlmm(Xm, ym, Zm, mask_n, mask_m, ns, n_total, likelihood_family=1, n_newton=n_newton)
@@ -542,7 +548,7 @@ def lmmPoisson(
     mask_m: torch.Tensor,
     ns: torch.Tensor,
     n_total: torch.Tensor,
-    n_newton: int = 5,
+    n_newton: int = 3,
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM for Poisson/log outcomes."""
     return _lmmGlmm(Xm, ym, Zm, mask_n, mask_m, ns, n_total, likelihood_family=2, n_newton=n_newton)
