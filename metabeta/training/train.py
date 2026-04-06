@@ -50,43 +50,70 @@ logger = logging.getLogger('train.py')
 
 # fmt: off
 def setup() -> argparse.Namespace:
-    """Parse command line arguments."""
+    """Parse command line arguments.
+
+    Usage modes
+    -----------
+    Fresh start (template-based):
+        python train.py --size small --family 0 --ds_type toy
+
+        Generates config from size/family/ds_type presets. The checkpoint
+        directory name is derived from the config (e.g. normal_dsmall-n-toy_msmall_s42).
+        Model architecture is loaded from configs/models/{model_id}.yaml, which
+        defaults to the same value as --size but can be overridden with --model_id.
+
+    Continue from checkpoint config:
+        python train.py --config path/to/checkpoint/config.yaml --load_latest
+
+        Loads the full config from a saved YAML. Explicit CLI args (e.g. --max_epochs)
+        override the YAML values. Use --load_latest to resume from the most recent
+        saved weights, or --load_best to resume from the best validation checkpoint.
+
+    Override individual fields:
+        python train.py --size tiny --family 0 --ds_type toy --lr 1e-4 --bs 64
+
+        Any training hyperparameter can be overridden on top of both template-based
+        configs and loaded YAML configs.
+
+    Decouple model and data size:
+        python train.py --size small --model_id large
+
+        Uses small-size data dimensions but loads the large model architecture.
+    """
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
 
-    # Template-based config generation
+    # Template-based config generation (primary interface)
     parser.add_argument('--size', type=str, default='tiny', help='Size preset: tiny|small|medium|large|huge')
     parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
-    parser.add_argument('--ds_type', type=str, default='toy', help='Dataset type: toy|flat|scm|mixed|sampled|observed')
-    parser.add_argument('--valid_ds_type', type=str, default='toy', help='Validation dataset type')
+    parser.add_argument('--ds_type', type=str, default='toy', help='Training dataset type: toy|flat|scm|mixed|sampled|observed')
+    parser.add_argument('--valid_ds_type', type=str, default='toy', help='Validation dataset type: toy|flat|scm|mixed|sampled|observed')
 
-    # Alternatively: direct config file
-    parser.add_argument('--config', type=str, help='Path to custom YAML config file')
+    # Alternative: load config from a saved YAML (e.g. a checkpoint config.yaml)
+    parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
+    parser.add_argument('--data_id', type=str, help='Training dataset ID (subfolder name under outputs/data/)')
+    parser.add_argument('--data_id_valid', type=str, help='Validation dataset ID (defaults to data_id with valid_ds_type suffix)')
+    parser.add_argument('--model_id', type=str, help='Model architecture ID; loads configs/models/{model_id}.yaml (defaults to --size)')
 
-    # Config overrides
-    parser.add_argument('--data_id', type=str)
-    parser.add_argument('--data_id_valid', type=str)
-    parser.add_argument('--m_tag', type=str)
+    # CLI-only runtime params (never written to config.yaml)
+    parser.add_argument('--device', type=str, default='cpu', help='Compute device: cpu|cuda|mps')
+    parser.add_argument('--wandb', action=argparse.BooleanOptionalAction, default=False, help='Log metrics to Weights & Biases')
+    parser.add_argument('--seed', type=int, default=42, help='Global random seed')
+    parser.add_argument('--verbosity', type=int, default=1, help='Logging verbosity level')
 
-    # CLI-only runtime params (no YAML defaults)
-    parser.add_argument('--device', type=str, default='cpu')
-    parser.add_argument('--wandb', action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--verbosity', type=int, default=1)
-
-    # Training hyperparameters (can override template/YAML)
-    parser.add_argument('-e', '--max_epochs', type=int, default=10)
-    parser.add_argument('--bs', type=int)
-    parser.add_argument('--lr', type=float)
-    parser.add_argument('--num_workers', type=int)
+    # Training hyperparameters (override template or loaded YAML)
+    parser.add_argument('-e', '--max_epochs', type=int, default=10, help='Number of training epochs')
+    parser.add_argument('--bs', type=int, help='Batch size (number of datasets per step)')
+    parser.add_argument('--lr', type=float, help='Learning rate')
+    parser.add_argument('--num_workers', type=int, help='DataLoader worker processes')
 
     # Evaluation settings
-    parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
-    parser.add_argument('--plot', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--importance', action=argparse.BooleanOptionalAction, help='Run importance sampling evaluation')
+    parser.add_argument('--plot', action=argparse.BooleanOptionalAction, help='Generate evaluation plots after each epoch')
 
     # Saving & loading
-    parser.add_argument('--r_tag', type=str)
-    parser.add_argument('--load_latest', action=argparse.BooleanOptionalAction)
-    parser.add_argument('--load_best', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--r_tag', type=str, help='Run tag suffix appended to the checkpoint directory name')
+    parser.add_argument('--load_latest', action=argparse.BooleanOptionalAction, help='Resume training from latest.pt in the checkpoint directory')
+    parser.add_argument('--load_best', action=argparse.BooleanOptionalAction, help='Resume training from best.pt in the checkpoint directory')
 
     return setupConfigParser(parser, generateTrainingConfig, 'Train neural approximators.')
 # fmt: on
@@ -237,7 +264,7 @@ class Trainer:
             self.model_cfg = self.cfg.model_cfg
         else:
             # load model config from new location
-            model_cfg_path = Path(self.dir, '..', 'configs', 'models', f'{self.cfg.m_tag}.yaml')
+            model_cfg_path = Path(self.dir, '..', 'configs', 'models', f'{self.cfg.model_id}.yaml')
             self.model_cfg = modelFromYaml(
                 model_cfg_path,
                 d_ffx=self.cfg.max_d,
@@ -337,7 +364,7 @@ class Trainer:
 ====================
 data id:    {self.cfg.data_id}
 valid id:   {self.cfg.data_id_valid}
-model tag:  {self.cfg.m_tag}
+model id:   {self.cfg.model_id}
 likelihood: {LIKELIHOOD_FAMILIES[self.cfg.likelihood_family]}
 # params:   {self.model.n_params}
 size [mb]:  {self.model.n_params * (p / 8.0) * 1e-6:.3f}
