@@ -1,4 +1,4 @@
-summarizer:
+summarizer_g:
     type: 'set-transformer'
     d_model: 32
     d_ff: 128
@@ -8,7 +8,10 @@ summarizer:
     activation: 'GELU'
     dropout: 0.01
 
-posterior:
+summarizer_l:
+    n_blocks: 1
+
+posterior_g:
     type: 'coupling'
     transform: 'spline+'
     base_family: 'normal'
@@ -22,3 +25,6 @@ posterior:
         dropout: 0.0
         zero_init: True
         use_bias: False
+
+posterior_l:
+    n_blocks: 2

@@ -1,24 +1,31 @@
-summarizer:
+summarizer_g:
     type: 'set-transformer'
-    d_model: 64 # input
-    d_ff: 256 # 4x d_model
-    d_output: 32 # summary dim
-    n_blocks: 3 # encoder blocks
-    n_isab: 1 # ISAB blocks (first of the three encoder blocks)
+    d_model: 64
+    d_ff: 256
+    d_output: 32
+    n_blocks: 3
+    n_isab: 1
     activation: 'GELU'
     dropout: 0.01
 
-posterior:
+summarizer_l:
+    n_isab: 0
+    n_blocks: 2
+
+posterior_g:
     type: 'coupling'
-    transform: 'spline+' # Neural Spline Flow with learned domain
+    transform: 'spline+'
     base_family: 'normal'
-    base_trainable: True # mean and variance of base are learned
-    n_blocks: 4 # coupling blocks
+    base_trainable: True
+    n_blocks: 4
     subnet_kwargs:
-        net_type: 'residual' # residual MLP as conditioner
+        net_type: 'residual'
         activation: 'ReLU'
-        d_ff: 128 # hidden
-        depth: 3 # depth of MLP
+        d_ff: 128
+        depth: 3
         dropout: 0.0
         zero_init: True
         use_bias: False
+
+posterior_l:
+    n_blocks: 2
