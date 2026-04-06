@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from metabeta.simulation import Prior, Synthesizer, Simulator, hypersample
-from metabeta.utils.glmm import glmmFull
+from metabeta.utils.glmm import lmmBernoulli, lmmPoisson, glmm
 
 
 DEVICE = torch.device('cpu')
@@ -82,7 +82,7 @@ def test_glmm_output_shapes(likelihood_family, q):
     datasets = [_gen_dataset(rng, d, q, likelihood_family, m=m) for _ in range(B)]
     bt = _collate(datasets, d, q)
 
-    result = glmmFull(
+    result = glmm(
         bt['Xm'],
         bt['ym'],
         bt['Zm'],
@@ -117,7 +117,7 @@ def test_glmm_finite_and_valid(likelihood_family):
     datasets = [_gen_dataset(rng, d, q, likelihood_family, m=m) for _ in range(B)]
     bt = _collate(datasets, d, q)
 
-    result = glmmFull(
+    result = glmm(
         bt['Xm'],
         bt['ym'],
         bt['Zm'],
@@ -163,7 +163,7 @@ def test_glmm_trivial_zero_rfx(likelihood_family):
         datasets.append(ds)
 
     bt = _collate(datasets, d, q)
-    result = glmmFull(
+    result = glmm(
         bt['Xm'],
         bt['ym'],
         bt['Zm'],
@@ -203,7 +203,7 @@ def test_glmm_recovers_nonzero_rfx(likelihood_family):
         pytest.skip('not enough high-rfx datasets; re-run with different seed')
 
     bt = _collate(selected, d, q)
-    result = glmmFull(
+    result = glmm(
         bt['Xm'],
         bt['ym'],
         bt['Zm'],
