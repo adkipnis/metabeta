@@ -1,3 +1,5 @@
+posterior_correlation: true
+
 summarizer_g:
     type: 'set-transformer'
     d_model: 32
