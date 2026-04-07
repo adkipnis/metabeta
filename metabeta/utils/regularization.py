@@ -81,6 +81,48 @@ def getConstrainers(
     raise ValueError(f'unknown constrainer method: {method}')
 
 
+# correlation parameterization (LKJCholesky partial-correlation encoding)
+
+
+def corrToUnconstrained(corr: torch.Tensor) -> torch.Tensor:
+    """Correlation matrix (..., q, q) → unconstrained vector (..., q*(q-1)//2).
+
+    Identity correlation maps to zero. Inverse: unconstrainedToCholeskyCorr.
+    """
+    q = corr.shape[-1]
+    if q == 1:
+        return corr.new_zeros(*corr.shape[:-2], 0)
+    eye = torch.eye(q, dtype=corr.dtype, device=corr.device)
+    L = torch.linalg.cholesky(corr + 1e-6 * eye)
+    z_parts = []
+    for i in range(1, q):
+        row = L[..., i, :i]
+        cumsum_sq = F.pad(row.pow(2)[..., :-1].cumsum(-1), (1, 0))
+        denom = (1.0 - cumsum_sq).clamp(min=1e-8).sqrt()
+        z_parts.append(torch.atanh((row / denom).clamp(-1 + 1e-6, 1 - 1e-6)))
+    return torch.cat(z_parts, dim=-1)
+
+
+def unconstrainedToCholeskyCorr(z: torch.Tensor, q: int) -> torch.Tensor:
+    """Unconstrained vector (..., q*(q-1)//2) → lower-triangular Cholesky (..., q, q).
+
+    Correlation matrix is L @ L.mT. Inverse of corrToUnconstrained.
+    """
+    batch = z.shape[:-1]
+    L = z.new_zeros(*batch, q, q)
+    L[..., 0, 0] = 1.0
+    cursor = 0
+    for i in range(1, q):
+        w = torch.tanh(z[..., cursor : cursor + i])
+        cursor += i
+        remaining = torch.ones(*batch, dtype=z.dtype, device=z.device)
+        for j in range(i):
+            L[..., i, j] = w[..., j] * remaining.clamp(min=1e-8).sqrt()
+            remaining = remaining - L[..., i, j].pow(2)
+        L[..., i, i] = remaining.clamp(min=1e-8).sqrt()
+    return L
+
+
 # crunching
 def dampen(x: torch.Tensor, p: float = 0.45) -> torch.Tensor:
     return x.sign() * x.abs().pow(p)
