@@ -3,12 +3,14 @@ import arviz as az
 import torch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import Proposal, joinProposals
-from metabeta.utils.regularization import dampen
+from metabeta.utils.regularization import dampen, unconstrainedToCholeskyCorr
 from metabeta.utils.families import (
     hasSigmaEps,
     logProbFfx,
     logProbSigma,
     logProbRfx,
+    logProbRfxCorrelated,
+    logProbCorrRfx,
     logLikelihood,
     logMarginalLikelihoodNormal,
 )
@@ -51,6 +53,7 @@ class ImportanceSampler:
         if self.has_sigma_eps:
             self.tau_eps = data['tau_eps'].unsqueeze(-1) + self.eps   # (b, 1)
             self.family_sigma_eps = data['family_sigma_eps']   # (b,)
+        self.eta_rfx = data.get('eta_rfx')   # (b,) or None
 
         # observations
         self.X = data['X']   # (b, m, n, d)
@@ -83,6 +86,11 @@ class ImportanceSampler:
         # so its prior must be in the numerator to keep the IS weight balanced.
         lp = lp + logProbSigma(sigma_rfx, self.tau_rfx, self.family_sigma_rfx, self.mask_q)
 
+        # corr_rfx: modeled in unconstrained z-space by the global flow — add matching prior
+        if proposal.d_corr > 0 and self.eta_rfx is not None:
+            z_corr = proposal.samples_g[..., -proposal.d_corr :]  # (b, s, d_corr)
+            lp = lp + logProbCorrRfx(z_corr, proposal.q, self.eta_rfx)
+
         if self.marginal:
             # integrate rfx out analytically — weight is a function of global params only
             ll = logMarginalLikelihoodNormal(
@@ -91,7 +99,13 @@ class ImportanceSampler:
         else:
             rfx = proposal.rfx
             if self.full:
-                lp = lp + logProbRfx(rfx, sigma_rfx, self.mask_mq)
+                if proposal.d_corr > 0:
+                    L = unconstrainedToCholeskyCorr(
+                        proposal.samples_g[..., -proposal.d_corr :], proposal.q
+                    )
+                    lp = lp + logProbRfxCorrelated(rfx, sigma_rfx, L, self.mask_mq)
+                else:
+                    lp = lp + logProbRfx(rfx, sigma_rfx, self.mask_mq)
             ll = logLikelihood(
                 ffx, sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n,
                 likelihood_family=self.likelihood_family,
