@@ -112,10 +112,10 @@ def test_aggregate_zero_padding(tmp_path: Path):
     assert np.array_equal(out['y'][1], np.array([9, 0]))
 
 
-def test_gen_sizes_shapes_and_constraints(tmp_path: Path):
+def test_gen_dims_shapes_and_constraints(tmp_path: Path):
     """
-    Verify that _genSizes returns arrays of correct shape and respects
-    q <= d and min/max bounds for m and n (assuming truncLogUni round=True returns ints).
+    Verify that _genDims returns arrays of correct shape and respects
+    q <= d and min/max bounds for m.
     """
     cfg = make_cfg(partition='train', max_d=6, max_q=10, min_m=2, max_m=7, min_n=3, max_n=11)
     g = Generator(cfg, tmp_path)
@@ -125,17 +125,36 @@ def test_gen_sizes_shapes_and_constraints(tmp_path: Path):
     n_datasets = 16
     mini_bs = 4
 
-    d, q, m, ns = g._genSizes(rng, n_datasets=n_datasets, mini_batch_size=mini_bs)
+    d, q, m = g._genDims(rng, n_datasets=n_datasets, mini_batch_size=mini_bs)
 
     assert d.shape == (n_datasets,)
     assert q.shape == (n_datasets,)
     assert m.shape == (n_datasets,)
-    assert ns.shape == (n_datasets, cfg.max_m)
 
     assert np.all(d >= 2) and np.all(d <= cfg.max_d)
     assert np.all(q >= 1)
     assert np.all(q <= d)
     assert np.all(m >= cfg.min_m) and np.all(m <= cfg.max_m)
+
+
+def test_gen_ns_shapes_and_constraints(tmp_path: Path):
+    """
+    Verify that _genNs returns an array of correct shape and respects min/max bounds
+    for active groups, zeros inactive slots, and caps total observations.
+    """
+    cfg = make_cfg(partition='train', max_d=6, max_q=10, min_m=2, max_m=7, min_n=3, max_n=11)
+    g = Generator(cfg, tmp_path)
+
+    main_seed = 2
+    rng = np.random.default_rng(main_seed)
+    n_datasets = 16
+    mini_bs = 4
+
+    _, _, m = g._genDims(rng, n_datasets=n_datasets, mini_batch_size=mini_bs)
+    ns = g._genNs(rng, n_datasets=n_datasets, m=m)
+
+    assert ns.shape == (n_datasets, cfg.max_m)
+
     active = np.arange(cfg.max_m)[None, :] < m[:, None]
     assert np.all(ns[active] >= cfg.min_n) and np.all(ns[active] <= cfg.max_n)
     assert np.all(ns[~active] == 0)
@@ -148,7 +167,7 @@ def test_genbatch_calls_genDataset_with_correct_args(monkeypatch, tmp_path: Path
     - produces the requested number of datasets
     - slices ns to m groups
     - enforces q <= d (via the args passed to _genDataset)
-    This uses the real _genSizes and monkeypatches only _genDataset.
+    This uses the real _genDims/_genNs and monkeypatches only _genDataset.
     """
     cfg = make_cfg(
         partition='train',
