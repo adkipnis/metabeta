@@ -1,5 +1,6 @@
 import torch
 from metabeta.utils.evaluation import Proposal, getMasks, weightedQuantile
+from metabeta.utils.regularization import corrToLower
 
 EPS = 1e-6
 ALPHAS = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
@@ -30,6 +31,8 @@ def getCredibleInterval(
     w = proposal.weights
     ci_g = getQuantiles(roots, proposal.samples_g, w)
     out = proposal.partition(ci_g)
+    if proposal.d_corr > 0:
+        out['corr_rfx'] = getQuantiles(roots, corrToLower(proposal.corr_rfx), w)
     out['rfx'] = getQuantiles(roots, proposal.samples_l, w)
     return out
 
@@ -66,6 +69,9 @@ def getCoveragePerParameter(
     out = {}
     masks = getMasks(data)
     for key, ci in ci_dict.items():
+        if key == 'corr_rfx':
+            out[key] = getAtomicCoverage(ci, corrToLower(data['corr_rfx']), mask=None)
+            continue
         gt = data[key]
         mask = masks[key]
         if key == 'sigma_eps':

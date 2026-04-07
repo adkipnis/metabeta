@@ -3,7 +3,7 @@ import torch
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 
-from metabeta.utils.evaluation import EvaluationSummary, getNames, Proposal, dictMean
+from metabeta.utils.evaluation import EvaluationSummary, getNames, getCorrRfxNames, Proposal, dictMean
 from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
 
 
@@ -74,6 +74,7 @@ def plotCoverage(
         names = (
             getNames('ffx', proposal.d)
             + getNames('sigmas', proposal.q, has_sigma_eps=proposal.has_sigma_eps)
+            + (getCorrRfxNames(proposal.q) if proposal.d_corr > 0 else [])
             + getNames('rfx', proposal.q)
         )
         stats = {
