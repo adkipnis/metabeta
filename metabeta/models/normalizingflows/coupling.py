@@ -1,5 +1,4 @@
 from typing import Literal
-import numpy as np
 import torch
 from torch import nn
 from metabeta.models.normalizingflows import (
@@ -216,7 +215,6 @@ class CouplingFlow(nn.Module):
         n_samples: int,
         context: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
-        rng: np.random.Generator | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
 
         # determine shape
@@ -240,24 +238,16 @@ class CouplingFlow(nn.Module):
             mask_z = None
 
         # sample from base
-        z = self.base_dist.sample(shape, rng=rng).to(device=self.device, dtype=self.dtype)
+        z = self.base_dist.sample(shape).to(device=self.device, dtype=self.dtype)
 
-        # simple backward pass
         if mask_z is None:
-            # project z back to x space
             x, log_det, _ = self.inverse(z, context, mask_z)
-
-            # get probability in x-space
             log_prob = self._logProb(z, log_det, mask_z)
-
-        # make use of mask to skip empty dims
         else:
-            # init outputs
             x = torch.zeros_like(z)
             log_det = torch.zeros_like(x[..., 0])
             log_prob = torch.zeros_like(log_det)
 
-            # flatten and mask out empty dims
             non_empty = mask_z.any(-1)
             z = z[non_empty]
             mask_z = mask_z[non_empty]
@@ -265,10 +255,7 @@ class CouplingFlow(nn.Module):
             if context is not None:
                 context = context[non_empty]
 
-            # backward pass
             x[non_empty], log_det[non_empty], _ = self.inverse(z, context, mask_z)
-
-            # get probability in x-space
             log_prob[non_empty] = self._logProb(z, log_det[non_empty], mask_z)
 
         return x, log_prob
