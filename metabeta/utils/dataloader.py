@@ -354,7 +354,7 @@ class Dataloader(torch.utils.data.DataLoader):
         persistent_workers: bool = False,
     ):
         col = Collection(path)
-        not_mps = torch.accelerator.current_accelerator().type != 'mps'  # type: ignore
+        pin_memory = torch.cuda.is_available()
         self._sortish = sortish
         self._shuffle = shuffle
         self._bucket_mult = bucket_mult
@@ -379,7 +379,7 @@ class Dataloader(torch.utils.data.DataLoader):
             super().__init__(
                 dataset=col,
                 batch_sampler=batch_sampler,
-                pin_memory=not_mps,
+                pin_memory=pin_memory,
                 collate_fn=collateGrouped,
                 num_workers=num_workers,
                 persistent_workers=persistent,
@@ -389,7 +389,7 @@ class Dataloader(torch.utils.data.DataLoader):
                 dataset=col,
                 batch_size=batch_size,
                 shuffle=shuffle,
-                pin_memory=not_mps,
+                pin_memory=pin_memory,
                 collate_fn=collateGrouped,
                 num_workers=num_workers,
                 persistent_workers=persistent,

@@ -98,7 +98,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--model_id', type=str, help='Model architecture ID; loads configs/models/{model_id}.yaml (defaults to --size)')
 
     # CLI-only runtime params (never written to config.yaml)
-    parser.add_argument('--device', type=str, default='cpu', help='Compute device: cpu|cuda|mps')
+    parser.add_argument('--device', type=str, default='cpu', help='Compute device: cpu|cuda')
     parser.add_argument('--wandb', action=argparse.BooleanOptionalAction, default=False, help='Log metrics to Weights & Biases')
     parser.add_argument('--seed', type=int, default=42, help='Global random seed')
     parser.add_argument('--verbosity', type=int, default=1, help='Logging verbosity level')
@@ -213,13 +213,6 @@ class Trainer:
 
     def _reproducible(self) -> None:
         torch.use_deterministic_algorithms(True)
-        if self.cfg.device == 'mps':
-            self.cfg.device = 'cpu'
-            logger.warning(
-                'setting device from mps to cpu for reproducibility - to prevent this, set --reproducible to False'
-            )
-        elif self.cfg.device == 'cuda':
-            torch.use_deterministic_algorithms(True)
             torch.backends.cudnn.deterministic = True
 
     def _initData(self) -> None:
@@ -283,7 +276,7 @@ class Trainer:
 
         # init model
         self.model = Approximator(self.model_cfg).to(self.device)
-        if self.cfg.compile and self.device.type != 'mps':
+        if self.cfg.compile and self.device.type == 'cuda':
             self.model.compile()
 
         # init optimizer

@@ -226,7 +226,7 @@ class Evaluator:
         self.model.load_state_dict(payload['model_state'])
 
         # optionally compile
-        if self.cfg.compile and self.device.type != 'mps':
+        if self.cfg.compile and self.device.type == 'cuda':
             self.model.compile()
 
     def calibrate(self) -> Calibrator:
