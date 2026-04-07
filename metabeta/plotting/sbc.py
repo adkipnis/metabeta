@@ -5,7 +5,7 @@ from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 
 from metabeta.evaluation.sbc import getFractionalRanks, simultaneousBands
-from metabeta.utils.evaluation import getAllNames, getMasks, Proposal, joinSigmas
+from metabeta.utils.evaluation import getAllNames, getCorrRfxNames, getMasks, Proposal, joinSigmas
 from metabeta.utils.plot import DPI, savePlot, niceify
 
 
@@ -70,7 +70,7 @@ def _plotSbcRow(
     masks = getMasks(data, has_sigma_eps=has_eps)
 
     n_eff_min = len(data['X'])
-    for k in ('ffx', 'sigmas', 'rfx'):
+    for k in ('ffx', 'sigmas'):
         _plotSbcEcdf(
             ax,
             ranks[k],
@@ -86,6 +86,32 @@ def _plotSbcRow(
             dims = tuple(range(mask_k.dim() - 1))
             n_eff = int(mask_k.sum(dims).min())
             n_eff_min = min(n_eff_min, n_eff)
+    if 'corr_rfx' in ranks:
+        _plotSbcEcdf(
+            ax,
+            ranks['corr_rfx'],
+            getCorrRfxNames(proposal.q),
+            mask=None,
+            diff=diff,
+            title=title,
+            show_legend=show_legend,
+            show_x=show_x,
+        )
+    _plotSbcEcdf(
+        ax,
+        ranks['rfx'],
+        names['rfx'],
+        masks['rfx'],
+        diff=diff,
+        title=title,
+        show_legend=show_legend,
+        show_x=show_x,
+    )
+    mask_rfx = masks['rfx']
+    if mask_rfx is not None:
+        dims = tuple(range(mask_rfx.dim() - 1))
+        n_eff = int(mask_rfx.sum(dims).min())
+        n_eff_min = min(n_eff_min, n_eff)
     p, low, high = simultaneousBands(n_eff=n_eff_min, diff=diff)
     ax.fill_between(p, low, high, color='grey', alpha=0.1)
 

@@ -6,6 +6,7 @@ from scipy.stats import expon, norm, t
 from torch import distributions as D
 
 from metabeta.utils.preprocessing import standardize
+from metabeta.utils.regularization import unconstrainedToCholeskyCorr
 
 logger = logging.getLogger(__name__)
 
@@ -344,6 +345,74 @@ def logProbRfx(
     if mask is not None:
         lp = lp * mask
     return lp.sum(dim=(1, -1))  # (b, s)
+
+
+def logProbRfxCorrelated(
+    rfx: torch.Tensor,  # (b, m, s, q)
+    sigma_rfx: torch.Tensor,  # (b, s, q)
+    L_corr: torch.Tensor,  # (b, s, q, q) lower-triangular Cholesky of correlation matrix
+    mask: torch.Tensor | None = None,  # (b, m, 1, q)
+) -> torch.Tensor:
+    """Log-prior for rfx under correlated Normal: rfx_i ~ MVN(0, diag(σ) @ C @ diag(σ)).
+
+    Uses the Cholesky factor of C (L_corr) to build the covariance Cholesky efficiently.
+    Returns (b, s).
+    """
+    q = L_corr.shape[-1]
+    # unsqueeze m dim so the distribution broadcasts over groups: (b, 1, s, q, q)
+    L_cov = sigma_rfx.unsqueeze(1).unsqueeze(-1) * L_corr.unsqueeze(1) + 1e-12 * torch.eye(
+        q, dtype=L_corr.dtype, device=L_corr.device
+    )
+    loc = torch.zeros(*L_cov.shape[:-1], dtype=L_corr.dtype, device=L_corr.device)
+    dist = D.MultivariateNormal(loc=loc, scale_tril=L_cov)  # batch (b, 1, s), event (q,)
+    lp = dist.log_prob(rfx)  # rfx (b, m, s, q) → lp (b, m, s)
+    if mask is not None:
+        # mask shape (b, m, 1, q) — reduce to (b, m, s) by checking any active q dim
+        active = mask[..., 0].expand_as(lp)  # (b, m, s)
+        lp = lp * active
+    return lp.sum(dim=1)  # (b, s)
+
+
+def _logJacobianZtoL(z: torch.Tensor, L: torch.Tensor, q: int) -> torch.Tensor:
+    """Log |det J| of the z → L map from unconstrainedToCholeskyCorr. Returns (...,)."""
+    log_jac = torch.zeros(z.shape[:-1], dtype=z.dtype, device=z.device)
+    cursor = 0
+    for i in range(1, q):
+        w = torch.tanh(z[..., cursor : cursor + i])  # (..., i)
+        # log(sech²(z)) = log(1 - tanh²(z))
+        log_jac = log_jac + torch.log1p(-(w ** 2) + 1e-12).sum(-1)
+        # remaining_{i,j} = 1 - sum_{k<j} L_{ik}^2; stored on L diagonal would need
+        # recomputation — reconstruct from L off-diagonal entries for this row
+        L_row = L[..., i, :i]  # (..., i)
+        cum_sq = torch.nn.functional.pad(L_row.pow(2).cumsum(-1)[..., :-1], (1, 0))
+        remaining = (1.0 - cum_sq).clamp(min=1e-8)  # (..., i)
+        log_jac = log_jac + (0.5 * remaining.log()).sum(-1)
+        cursor += i
+    return log_jac
+
+
+def logProbCorrRfx(
+    z_corr: torch.Tensor,  # (b, s, d_corr)
+    q: int,
+    eta: torch.Tensor,  # (b,)  LKJ concentration; 0 = inactive (q < 2 for this dataset)
+) -> torch.Tensor:
+    """Log prior for z_corr in unconstrained space. Returns (b, s).
+
+    Datasets with eta=0 (q<2, no correlation) get zero contribution — their z_corr
+    dimensions are masked in the flow and carry no prior information.
+    """
+    b, s = z_corr.shape[:2]
+    lp = torch.zeros(b, s, dtype=z_corr.dtype, device=z_corr.device)
+    active = eta > 0  # (b,) — datasets with an LKJ prior (q >= 2)
+    if not active.any():
+        return lp
+    z_a = z_corr[active]  # (b_a, s, d_corr)
+    L = unconstrainedToCholeskyCorr(z_a, q)  # (b_a, s, q, q)
+    concentration = eta[active].unsqueeze(-1).expand(-1, s)  # (b_a, s)
+    lp_lkj = D.LKJCholesky(dim=q, concentration=concentration).log_prob(L)  # (b_a, s)
+    log_jac = _logJacobianZtoL(z_a, L, q)  # (b_a, s)
+    lp[active] = lp_lkj + log_jac
+    return lp
 
 
 def _linearPredictor(

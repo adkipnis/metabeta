@@ -2,17 +2,11 @@ from typing import Literal, Sequence
 from dataclasses import dataclass
 import torch
 from metabeta.utils.dataloader import toDevice
+from metabeta.utils.regularization import unconstrainedToCholeskyCorr
 
 
 Proposed = dict[str, dict[str, torch.Tensor]]
 Source = Literal['global', 'local']
-
-
-def numFixed(proposed: Proposed, has_sigma_eps: bool = True) -> int:
-    q = proposed['local']['samples'].shape[-1]
-    D = proposed['global']['samples'].shape[-1]
-    d = D - q - (1 if has_sigma_eps else 0)
-    return int(d)
 
 
 def getMasks(
@@ -45,6 +39,11 @@ def getNames(source: str, num: int, has_sigma_eps: bool = True) -> list[str]:
         raise ValueError(f'source {source} unknown.')
 
 
+def getCorrRfxNames(q: int) -> list[str]:
+    """Names for the lower-triangle correlation pairs: ρ_{01}, ρ_{02}, ρ_{12}, ..."""
+    return [rf'$\rho_{{{j}{i}}}$' for i in range(q) for j in range(i)]
+
+
 def getAllNames(d: int, q: int, has_sigma_eps: bool = True) -> dict[str, list[str]]:
     return {
         'ffx': getNames('ffx', d),
@@ -69,12 +68,17 @@ def joinGlobals(data: dict[str, torch.Tensor]) -> torch.Tensor:
 
 class Proposal:
     def __init__(
-        self, proposed: dict[str, dict[str, torch.Tensor]], has_sigma_eps: bool = True
+        self,
+        proposed: dict[str, dict[str, torch.Tensor]],
+        has_sigma_eps: bool = True,
+        d_corr: int = 0,
     ) -> None:
         self.data = proposed
         self.has_sigma_eps = has_sigma_eps
-        self.d = numFixed(proposed, has_sigma_eps)
+        self.d_corr = d_corr
         self.q = proposed['local']['samples'].shape[-1]
+        D = proposed['global']['samples'].shape[-1]
+        self.d = D - self.q - (1 if has_sigma_eps else 0) - d_corr
         self.is_results = {}
         self.tpd: float | None = None
 
@@ -111,19 +115,29 @@ class Proposal:
 
     @property
     def sigma_rfx(self) -> torch.Tensor:
-        if self.has_sigma_eps:
-            return self.samples_g[..., self.d : -1]
-        return self.samples_g[..., self.d :]
+        return self.samples_g[..., self.d : self.d + self.q]
 
     @property
     def sigma_eps(self) -> torch.Tensor:
         if not self.has_sigma_eps:
             raise AttributeError('sigma_eps not available for this likelihood')
-        return self.samples_g[..., -1]
+        return self.samples_g[..., self.d + self.q]
 
     @property
     def sigmas(self) -> torch.Tensor:
-        return self.samples_g[..., self.d :]
+        end = self.d + self.q + (1 if self.has_sigma_eps else 0)
+        return self.samples_g[..., self.d : end]
+
+    @property
+    def corr_rfx(self) -> torch.Tensor | None:
+        """Correlation matrix reconstructed from unconstrained samples, shape (..., q, q).
+
+        Returns None when the model was built without posterior_correlation.
+        """
+        if self.d_corr == 0:
+            return None
+        L = unconstrainedToCholeskyCorr(self.samples_g[..., -self.d_corr :], self.q)
+        return L @ L.mT
 
     @property
     def rfx(self) -> torch.Tensor:
@@ -154,11 +168,9 @@ class Proposal:
     def partition(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         out = {}
         out['ffx'] = x[..., : self.d]
+        out['sigma_rfx'] = x[..., self.d : self.d + self.q]
         if self.has_sigma_eps:
-            out['sigma_rfx'] = x[..., self.d : -1]
-            out['sigma_eps'] = x[..., -1]
-        else:
-            out['sigma_rfx'] = x[..., self.d :]
+            out['sigma_eps'] = x[..., self.d + self.q]
         return out
 
     def rescale(self, scale: torch.Tensor) -> None:
@@ -191,6 +203,8 @@ class Proposal:
 def joinProposals(proposals: list[Proposal]) -> Proposal:
     has_sigma_eps = [p.has_sigma_eps for p in proposals]
     assert len(set(has_sigma_eps)) == 1, 'proposals disagree whether they have sigma_eps'
+    d_corrs = [p.d_corr for p in proposals]
+    assert len(set(d_corrs)) == 1, 'proposals disagree on d_corr'
     samples_g = torch.cat([p.samples_g for p in proposals], dim=-2)
     samples_l = torch.cat([p.samples_l for p in proposals], dim=-2)
     log_prob_g = torch.cat([p.log_prob_g for p in proposals], dim=-1)
@@ -199,7 +213,7 @@ def joinProposals(proposals: list[Proposal]) -> Proposal:
         'global': {'samples': samples_g, 'log_prob': log_prob_g},
         'local': {'samples': samples_l, 'log_prob': log_prob_l},
     }
-    return Proposal(proposed, has_sigma_eps=has_sigma_eps[0])
+    return Proposal(proposed, has_sigma_eps=has_sigma_eps[0], d_corr=d_corrs[0])
 
 
 def concatProposalsBatch(proposals: list[Proposal]) -> Proposal:
@@ -235,7 +249,7 @@ def concatProposalsBatch(proposals: list[Proposal]) -> Proposal:
             'log_prob': torch.cat(log_prob_l_padded, dim=0),
         },
     }
-    merged = Proposal(proposed, has_sigma_eps=has_sigma_eps)
+    merged = Proposal(proposed, has_sigma_eps=has_sigma_eps, d_corr=proposals[0].d_corr)
 
     common_keys: set[str] | None = None
     for proposal in proposals:
@@ -295,7 +309,6 @@ class EvaluationSummary:
     sample_efficiency: torch.Tensor | None
     pareto_k: torch.Tensor | None
     pp_fit: torch.Tensor | None = None  # R² (normal) | AUC (bernoulli) | deviance (poisson)
-    rfx_corr: dict[str, float] | None = None
     tpd: float | None = None  # time per dataset
 
     def averageOverAlpha(

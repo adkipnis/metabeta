@@ -71,8 +71,8 @@ def test_estimate_shapes_and_constraints(model: Approximator, batch: dict[str, t
     assert logp_l.shape == (b, m, n_samples)
 
     d = model.d_ffx
-    sigmas = samples_g[..., d:]
-    # mask_g covers [ffx | rfx | sigma_eps]; check only the unmasked sigma positions
-    mask_g = model._masks(batch, local=False)  # (b, d_ffx + d_var)
-    sigma_mask = mask_g[..., d:].unsqueeze(1).expand_as(sigmas)
+    q_var = model.d_rfx + (1 if model.has_sigma_eps else 0)
+    sigmas = samples_g[..., d : d + q_var]
+    mask_g = model._masks(batch, local=False)
+    sigma_mask = mask_g[..., d : d + q_var].unsqueeze(1).expand_as(sigmas)
     assert (sigmas[sigma_mask] > 0).all(), 'unmasked global sigmas must be positive'

@@ -21,7 +21,6 @@ from metabeta.evaluation.predictive import (
     posteriorPredictiveNLL,
     posteriorPredictiveR2,
 )
-from metabeta.evaluation.correlation import evaluateCorrelation, summarizeCorrelation
 
 
 EST_TYPE = 'mean'
@@ -48,11 +47,6 @@ def getSummary(
     out['coverage'] = cvrg_dicts = getCoverages(ci_dicts, data)
     out['coverage_error'] = getCoverageErrors(cvrg_dicts, log_ratio=False)
     out['log_coverage_ratio'] = getCoverageErrors(cvrg_dicts, log_ratio=True)
-
-    # rfx correlation
-    if proposal.rfx.shape[-1] >= 2:
-        corr_results = evaluateCorrelation(proposal.rfx, data)
-        out['rfx_corr'] = summarizeCorrelation(corr_results, data['mask_q'].sum(-1))
 
     # prior predictive fit
     prior_samples = getPriorSamples(data, proposal.n_samples, likelihood_family)
@@ -90,7 +84,7 @@ def summaryTable(s: EvaluationSummary, likelihood_family: int = 0) -> str:
     long_table = longTable(s.corr, s.nrmse, s.ece, s.lcr)
     fit_labels = {0: 'Median pp R²', 1: 'Median pp AUC', 2: 'Median pp Deviance'}
     fit_label = fit_labels.get(likelihood_family, 'Median pp R²')
-    flat_table = flatTable(s.tpd, s.mnll, s.mfit, fit_label, s.meff, s.mk, s.rfx_corr)
+    flat_table = flatTable(s.tpd, s.mnll, s.mfit, fit_label, s.meff, s.mk)
     return long_table + '\n' + flat_table
 
 
@@ -111,10 +105,11 @@ def longTable(
         'ffx': 'FFX',
         'sigma_rfx': 'Sigma(RFX)',
         'sigma_eps': 'Sigma(Eps)',
+        'corr_rfx': 'Corr(RFX)',
         'rfx': 'RFX',
     }
     keys = [k for k in names if k in corr]
-    rows = [[names[k], corr[k], nrmse[k], ece[k], lcr[k]] for k in keys]
+    rows = [[names[k], corr[k], nrmse[k], ece.get(k), lcr.get(k)] for k in keys]
     rows = [process(row) for row in rows]
     rows += [['Average', dictMean(corr), dictMean(nrmse), dictMean(ece), dictMean(lcr)]]
     results = tabulate(
@@ -122,6 +117,7 @@ def longTable(
         headers=['', 'R', 'NRMSE', 'ECE', 'LCR'],
         floatfmt='.3f',
         tablefmt='simple',
+        missingval='-',
     )
     return f'\n{results}\n'
 
@@ -133,7 +129,6 @@ def flatTable(
     fit_label: str = 'Median pp R²',
     meff: float | None = None,
     mk: float | None = None,
-    rfx_corr: dict[str, float] | None = None,
 ) -> str:
     rows = []
     results = ''
@@ -147,12 +142,6 @@ def flatTable(
         rows += [['Median IS Efficency', meff]]
     if mk is not None:
         rows += [['Median Pareto k', mk]]
-    if rfx_corr is not None:
-        rows += [['Median RFX Corr MAE', rfx_corr.get('mae_all', float('nan'))]]
-        # if 'detection_rate' in rfx_corr:
-        #     rows += [['RFX Corr Detection Rate', rfx_corr['detection_rate']]]
-        # if 'false_positive_rate' in rfx_corr:
-        #     rows += [['RFX Corr FP Rate', rfx_corr['false_positive_rate']]]
     if rows:
         results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
     return f'{results}\n'

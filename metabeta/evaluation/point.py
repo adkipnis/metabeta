@@ -4,6 +4,7 @@ from scipy.stats import pearsonr
 import numpy as np
 
 from metabeta.utils.evaluation import Proposal, getMasks, weightedQuantile
+from metabeta.utils.regularization import corrToLower
 
 
 def maskedMean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -57,6 +58,16 @@ def getPointEstimates(proposal: Proposal, method: str) -> dict[str, torch.Tensor
         global_est = getMAP(proposal.samples_g, proposal.log_prob_g)
         out = proposal.partition(global_est)
         out['rfx'] = getMAP(proposal.samples_l, proposal.log_prob_l)
+
+    if proposal.d_corr > 0:
+        corr_samples = proposal.corr_rfx  # (b, n_s, q, q)
+        w = proposal.weights
+        if w is None:
+            corr_mean = corr_samples.mean(dim=-3)
+        else:
+            corr_mean = (corr_samples * w.unsqueeze(-1).unsqueeze(-1)).sum(dim=-3)
+        out['corr_rfx'] = corrToLower(corr_mean)
+
     return out
 
 
@@ -68,8 +79,12 @@ def getRMSE(
     out = {}
     masks = getMasks(data)
     for key, est in ests.items():
-        gt = data[key]   # ground truth
-        mask = masks[key]
+        if key == 'corr_rfx':
+            gt = corrToLower(data['corr_rfx'])
+            mask = None
+        else:
+            gt = data[key]   # ground truth
+            mask = masks[key]
         se = (gt - est).square()
         if mask is not None:
             mse = maskedMean(se, mask)
@@ -91,6 +106,14 @@ def getCorrelation(
     out = {}
     masks = getMasks(data)
     for key, est in locs.items():
+        if key == 'corr_rfx':
+            gt = corrToLower(data['corr_rfx'])  # (b, d_corr)
+            corr = np.array([
+                cast(np.float32, pearsonr(gt[:, k].numpy(), est[:, k].numpy())[0])
+                for k in range(gt.shape[-1])
+            ], dtype=np.float32)
+            out[key] = torch.tensor(corr)
+            continue
         gt = data[key]
         mask = masks[key]
         if mask is not None:

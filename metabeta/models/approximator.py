@@ -4,7 +4,12 @@ from torch.nn import functional as F
 
 from metabeta.models.transformers import SetTransformer
 from metabeta.models.normalizingflows import CouplingFlow
-from metabeta.utils.regularization import getConstrainers
+from metabeta.utils.regularization import (
+    getConstrainers,
+    corrToLower,
+    corrToUnconstrained,
+    unconstrainedToCholeskyCorr,
+)
 from metabeta.utils.config import ApproximatorConfig, SummarizerConfig, PosteriorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
 from metabeta.utils.glmm import glmm
@@ -52,6 +57,10 @@ class Approximator(nn.Module):
     def has_sigma_eps(self) -> bool:
         return hasSigmaEps(self.likelihood_family)
 
+    @property
+    def d_corr(self) -> int:
+        return self.cfg.d_corr
+
     def build(self) -> None:
         d_ffx = self.d_ffx
         d_rfx = self.d_rfx
@@ -78,11 +87,14 @@ class Approximator(nn.Module):
         # global: fixed effects + variance params conditioned on global summary + metadata
         d_prior = 2 * d_ffx + d_rfx + d_sigma_eps + 1  # nu_ffx, tau_ffx, tau_rfx, [tau_eps], eta_rfx
         d_stats = d_ffx + d_rfx + d_sigma_eps           # beta_est, sigma_rfx_est, [sigma_eps_est]
-        d_meta_g = 2 + d_prior + self.family_encoder.d_output + d_stats  # n_groups, n_total, ...
+        # blup_corr: sample correlation of BLUPs across groups — direct rfx-correlation signal
+        d_meta_g = 2 + d_prior + self.family_encoder.d_output + d_stats + self.d_corr  # n_groups, n_total, ...
         d_context_g = self.cfg.summarizer_g.d_output + d_meta_g
-        self.posterior_g = _buildPosterior(self.cfg.posterior_g, d_ffx + d_var, d_context_g)
+        d_target_g = d_ffx + d_var + self.d_corr
+        self.posterior_g = _buildPosterior(self.cfg.posterior_g, d_target_g, d_context_g)
         # local: random effects conditioned on global samples + local summary + local metadata
-        d_context_l = d_ffx + d_var + self.cfg.summarizer_l.d_output + d_meta_l
+        # global params now include d_corr extra dims that the local flow also receives as context
+        d_context_l = d_ffx + d_var + self.d_corr + self.cfg.summarizer_l.d_output + d_meta_l
         self.posterior_l = _buildPosterior(self.cfg.posterior_l, max(d_rfx, 2), d_context_l)
 
     def compile(self) -> None:
@@ -127,7 +139,12 @@ class Approximator(nn.Module):
             'ffx': data['ffx'][..., : self.d_ffx],
             'sigma_rfx': data['sigma_rfx'][..., : self.d_rfx],
         }
-        return joinGlobals(sliced)
+        targets = joinGlobals(sliced)
+        if self.d_corr > 0:
+            corr = data['corr_rfx'][..., : self.d_rfx, : self.d_rfx]  # (B, q, q)
+            z_corr = corrToUnconstrained(corr)  # (B, d_corr)
+            targets = torch.cat([targets, z_corr], dim=-1)
+        return targets
 
     def _masks(self, data: dict[str, torch.Tensor], local: bool = False) -> torch.Tensor:
         """get masks for the posterior targets"""
@@ -139,6 +156,10 @@ class Approximator(nn.Module):
         masks = [data['mask_d'][..., : self.d_ffx], data['mask_q'][..., : self.d_rfx]]
         if self.has_sigma_eps:
             masks.append(torch.ones_like(data['mask_d'][..., 0:1]))
+        if self.d_corr > 0:
+            # Correlation is active only when the second rfx dim is active (q >= 2).
+            corr_mask = data['mask_q'][..., 1:2].expand(-1, self.d_corr)
+            masks.append(corr_mask)
         return torch.cat(masks, dim=-1)
 
     def _dataStatistics(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -149,6 +170,7 @@ class Approximator(nn.Module):
             data['mask_n'].float(), data['mask_m'].float(),
             data['ns'].clamp(min=1).float(), data['n'].float(),
             likelihood_family=self.likelihood_family,
+            eta_rfx=data['eta_rfx'],
         )
 
     def _addMetadata(
@@ -203,6 +225,12 @@ class Approximator(nn.Module):
                 tau_eps = data['tau_eps'].clone().unsqueeze(-1)
                 out.append(tau_eps)
                 out.append(stats['sigma_eps_est'])
+            if self.d_corr > 0:
+                # Correlation from GLMM Psi: more reliable than sample BLUP correlation.
+                Psi = stats['Psi'] if 'Psi' in stats else stats['Psi_lap']  # (b, q, q)
+                std = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8).sqrt()  # (b, q)
+                psi_corr = (Psi / (std.unsqueeze(-1) * std.unsqueeze(-2))).clamp(-1, 1)
+                out.append(corrToLower(psi_corr))
         return torch.cat(out, dim=-1)
 
     def _localContext(
@@ -228,17 +256,20 @@ class Approximator(nn.Module):
             return targets
         targets = targets.clone()
         d = self.d_ffx
+        q_var = self.d_rfx + (1 if self.has_sigma_eps else 0)
 
-        # project from R+ to R
-        sigmas = targets[..., d:]
-        log_sigmas = unconstrainSigma(sigmas)
-        targets[..., d:] = log_sigmas
+        # project the sigma block [d : d+q_var] from R+ to R
+        # correlation scalars [d+q_var :] are already unconstrained — leave them
+        sigmas = targets[..., d : d + q_var]
+        targets[..., d : d + q_var] = unconstrainSigma(sigmas)
         return targets
 
     def _postprocess(self, proposed: dict[str, dict[str, torch.Tensor]]):
         """reverse _preprocess for samples"""
         d = self.d_ffx
         q = self.d_rfx
+        d_corr = self.d_corr
+        q_var = q + (1 if self.has_sigma_eps else 0)
 
         # local postprocessing
         if 'local' in proposed:
@@ -249,14 +280,19 @@ class Approximator(nn.Module):
         # global postprocessing
         if 'global' in proposed:
             samples = proposed['global']['samples']
-            log_sigmas = samples[..., d:].clone()
+            # only the sigma block [d : d+q_var] is log-scale; corr_z is already unconstrained
+            log_sigmas = samples[..., d : d + q_var].clone()
             log_det = logDetJacobian(log_sigmas)
             log_prob_g = proposed['global']['log_prob'] - log_det.sum(dim=-1)
             proposed['global']['log_prob'] = log_prob_g
             sigmas = constrainSigma(log_sigmas)
-            samples_out = torch.cat([samples[..., :d], sigmas], dim=-1)
+            if d_corr > 0:
+                corr_z = samples[..., d + q_var :]
+                samples_out = torch.cat([samples[..., :d], sigmas, corr_z], dim=-1)
+            else:
+                samples_out = torch.cat([samples[..., :d], sigmas], dim=-1)
             proposed['global']['samples'] = samples_out
-        return Proposal(proposed, has_sigma_eps=self.has_sigma_eps)
+        return Proposal(proposed, has_sigma_eps=self.has_sigma_eps, d_corr=d_corr)
 
     def summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)

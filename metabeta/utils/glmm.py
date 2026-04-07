@@ -570,13 +570,28 @@ def glmm(
     ns: torch.Tensor,
     n_total: torch.Tensor,
     likelihood_family: int = 0,
+    eta_rfx: torch.Tensor | None = None,
     **kwargs,
 ) -> dict[str, torch.Tensor]:
-    """Dispatch to lmmNormal / lmmBernoulli / lmmPoisson by likelihood_family."""
+    """Dispatch to lmmNormal / lmmBernoulli / lmmPoisson by likelihood_family.
+
+    When eta_rfx is provided, datasets with eta_rfx == 0 (uncorrelated rfx) have
+    their Psi constrained to diagonal — zeroing noisy off-diagonal MoM estimates.
+    """
     if likelihood_family == 0:
-        return lmmNormal(Xm, ym, Zm, mask_n, mask_m, ns, n_total)
+        stats = lmmNormal(Xm, ym, Zm, mask_n, mask_m, ns, n_total)
     elif likelihood_family == 1:
-        return lmmBernoulli(Xm, ym, Zm, mask_n, mask_m, ns, n_total, **kwargs)
+        stats = lmmBernoulli(Xm, ym, Zm, mask_n, mask_m, ns, n_total, **kwargs)
     elif likelihood_family == 2:
-        return lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, **kwargs)
-    raise ValueError(f'unsupported likelihood_family={likelihood_family}')
+        stats = lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, **kwargs)
+    else:
+        raise ValueError(f'unsupported likelihood_family={likelihood_family}')
+
+    if eta_rfx is not None:
+        uncorr = (eta_rfx == 0)[:, None, None]  # (B, 1, 1)
+        for key in ('Psi', 'Psi_pql', 'Psi_lap'):
+            if key in stats:
+                P = stats[key]
+                stats[key] = torch.where(uncorr, torch.diag_embed(P.diagonal(dim1=-2, dim2=-1)), P)
+
+    return stats
