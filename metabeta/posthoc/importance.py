@@ -23,6 +23,7 @@ class ImportanceSampler:
         data: dict[str, torch.Tensor],
         constrain: bool = True,
         full: bool = False,  # incorporate RFX priors and local log-prob in IS weight
+        corr_prior: bool = True,  # include LKJ prior on z_corr in IS weight (global param — should be True)
         marginal: bool = False,  # use marginal likelihood (Normal only); integrates rfx out
         temperature: float = 1.0,  # softmax temperature
         pareto: bool = False,  # use Pareto smoothing (PSIS)
@@ -35,6 +36,7 @@ class ImportanceSampler:
             raise ValueError('marginal IS is only implemented for the Normal likelihood family')
         self.constrain = constrain
         self.full = full
+        self.corr_prior = corr_prior
         self.marginal = marginal
         self.temperature = temperature
         self.pareto = pareto
@@ -87,7 +89,7 @@ class ImportanceSampler:
         lp = lp + logProbSigma(sigma_rfx, self.tau_rfx, self.family_sigma_rfx, self.mask_q)
 
         # corr_rfx: modeled in unconstrained z-space by the global flow — add matching prior
-        if proposal.d_corr > 0 and self.eta_rfx is not None:
+        if self.corr_prior and proposal.d_corr > 0 and self.eta_rfx is not None:
             z_corr = proposal.samples_g[..., -proposal.d_corr :]  # (b, s, d_corr)
             lp = lp + logProbCorrRfx(z_corr, proposal.q, self.eta_rfx)
 
