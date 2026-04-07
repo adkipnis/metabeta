@@ -218,18 +218,12 @@ class CouplingFlow(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
 
         # determine shape
-        base_shape = (1,)
-        if context is not None:
-            base_shape = context.shape[:-1]
-        elif mask is not None:
-            base_shape = mask.shape[:-1]
+        base_shape = context.shape[:-1] if context is not None else (mask.shape[:-1] if mask is not None else (1,))
         shape = (*base_shape, n_samples, self.d_target)
 
-        # prepare context
+        # expand context and mask to the sample dimension
         if context is not None:
             context = context.unsqueeze(-2).expand(*base_shape, n_samples, -1)
-
-        # prepare mask
         if mask is not None:
             if mask.dim() < len(shape):
                 mask = mask.unsqueeze(-2).expand(*shape)
@@ -240,22 +234,20 @@ class CouplingFlow(nn.Module):
         # sample from base
         z = self.base_dist.sample(shape).to(device=self.device, dtype=self.dtype)
 
-        if mask_z is None:
+        if mask_z is None or torch.compiler.is_compiling():
+            # compiled path: full-tensor ops, no dynamic shapes from nonzero
+            if mask_z is not None:
+                z = z * mask_z
             x, log_det, _ = self.inverse(z, context, mask_z)
-            log_prob = self._logProb(z, log_det, mask_z)
-        else:
-            x = torch.zeros_like(z)
-            log_det = torch.zeros_like(x[..., 0])
-            log_prob = torch.zeros_like(log_det)
+            return x, self._logProb(z, log_det, mask_z)
 
-            non_empty = mask_z.any(-1)
-            z = z[non_empty]
-            mask_z = mask_z[non_empty]
-            z = z * mask_z
-            if context is not None:
-                context = context[non_empty]
-
-            x[non_empty], log_det[non_empty], _ = self.inverse(z, context, mask_z)
-            log_prob[non_empty] = self._logProb(z, log_det[non_empty], mask_z)
-
+        # eager path: skip fully-empty rows to avoid wasted compute on padding
+        x = torch.zeros_like(z)
+        log_prob = torch.zeros(z.shape[:-1], device=z.device, dtype=z.dtype)
+        non_empty = mask_z.any(-1)
+        z_s = z[non_empty] * mask_z[non_empty]
+        ctx_s = context[non_empty] if context is not None else None
+        mask_s = mask_z[non_empty]
+        x[non_empty], log_det_s, _ = self.inverse(z_s, ctx_s, mask_s)
+        log_prob[non_empty] = self._logProb(z_s, log_det_s, mask_s)
         return x, log_prob
