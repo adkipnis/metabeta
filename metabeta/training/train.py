@@ -372,7 +372,7 @@ likelihood: {LIKELIHOOD_FAMILIES[self.cfg.likelihood_family]}
 size [mb]:  {self.model.n_params * (p / 8.0) * 1e-6:.3f}
 seed:       {self.cfg.seed}
 device:     {self.cfg.device}
-compiled:   {self.model.is_compiled()}
+compiled:   {self.cfg.compile and self.model.device.type == 'cuda'}
 loss type:  {self.cfg.loss_type}
 lr:         {self.cfg.lr}
 batch size: {self.cfg.bs}
