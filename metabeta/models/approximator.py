@@ -6,6 +6,7 @@ from metabeta.models.transformers import SetTransformer
 from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import (
     getConstrainers,
+    corrToLower,
     corrToUnconstrained,
     unconstrainedToCholeskyCorr,
 )
@@ -86,7 +87,8 @@ class Approximator(nn.Module):
         # global: fixed effects + variance params conditioned on global summary + metadata
         d_prior = 2 * d_ffx + d_rfx + d_sigma_eps + 1  # nu_ffx, tau_ffx, tau_rfx, [tau_eps], eta_rfx
         d_stats = d_ffx + d_rfx + d_sigma_eps           # beta_est, sigma_rfx_est, [sigma_eps_est]
-        d_meta_g = 2 + d_prior + self.family_encoder.d_output + d_stats  # n_groups, n_total, ...
+        # blup_corr: sample correlation of BLUPs across groups — direct rfx-correlation signal
+        d_meta_g = 2 + d_prior + self.family_encoder.d_output + d_stats + self.d_corr  # n_groups, n_total, ...
         d_context_g = self.cfg.summarizer_g.d_output + d_meta_g
         d_target_g = d_ffx + d_var + self.d_corr
         self.posterior_g = _buildPosterior(self.cfg.posterior_g, d_target_g, d_context_g)
@@ -168,6 +170,7 @@ class Approximator(nn.Module):
             data['mask_n'].float(), data['mask_m'].float(),
             data['ns'].clamp(min=1).float(), data['n'].float(),
             likelihood_family=self.likelihood_family,
+            eta_rfx=data['eta_rfx'],
         )
 
     def _addMetadata(
@@ -222,6 +225,12 @@ class Approximator(nn.Module):
                 tau_eps = data['tau_eps'].clone().unsqueeze(-1)
                 out.append(tau_eps)
                 out.append(stats['sigma_eps_est'])
+            if self.d_corr > 0:
+                # Correlation from GLMM Psi: more reliable than sample BLUP correlation.
+                Psi = stats['Psi'] if 'Psi' in stats else stats['Psi_lap']  # (b, q, q)
+                std = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8).sqrt()  # (b, q)
+                psi_corr = (Psi / (std.unsqueeze(-1) * std.unsqueeze(-2))).clamp(-1, 1)
+                out.append(corrToLower(psi_corr))
         return torch.cat(out, dim=-1)
 
     def _localContext(
