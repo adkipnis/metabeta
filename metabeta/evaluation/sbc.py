@@ -3,6 +3,7 @@ import numpy as np
 from scipy.stats import binom
 
 from metabeta.utils.evaluation import Proposal
+from metabeta.utils.regularization import corrToLower
 
 
 def fractionalRanks(
@@ -34,6 +35,10 @@ def getFractionalRanks(
         samples = getattr(proposal, param)
         targets = data[param]
         ranks[param] = fractionalRanks(samples, targets, weights)
+    if proposal.d_corr > 0:
+        ranks['corr_rfx'] = fractionalRanks(
+            corrToLower(proposal.corr_rfx), corrToLower(data['corr_rfx']), weights
+        )
     return ranks
 
 
