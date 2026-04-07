@@ -1,5 +1,8 @@
 from typing import Literal
 import math
+import numpy as np
+import arviz as az
+from scipy.special import logsumexp as sp_logsumexp
 import torch
 from torch import distributions as D
 
@@ -125,9 +128,6 @@ def psisLooNLL(
         handled jointly: log w_ij^s = log w_IS^s - log p(y_ij | θ^s).
         When None, the raw proposal is treated as the posterior (uniform base).
     """
-    import numpy as np
-    import arviz as az
-    from scipy.special import logsumexp as sp_logsumexp
 
     y_obs = data['y'].unsqueeze(-1)   # (b, m, n, 1)
     log_p = pp.log_prob(y_obs)        # (b, m, n, s)
