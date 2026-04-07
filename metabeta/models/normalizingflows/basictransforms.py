@@ -28,53 +28,45 @@ class Transform(nn.Module):
 class ActNorm(Transform):
     def __init__(self, d_target: int):
         super().__init__()
-        self.register_buffer('initialized', torch.tensor(False))
+        self._py_initialized: bool = False  # Python bool: Dynamo specializes, no graph break
         self.log_scale = nn.Parameter(torch.zeros(d_target))
         self.shift = nn.Parameter(torch.zeros(d_target))
 
     def __str__(self) -> str:
         return 'ActNorm'
 
+    def get_extra_state(self) -> bool:
+        return self._py_initialized
+
+    def set_extra_state(self, state: bool) -> None:
+        self._py_initialized = bool(state)
+
     @torch.no_grad()
     def _initialize(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> None:
-        """init params based on first batch"""
-        device = x.device
         dims = tuple(range(x.dim() - 1))
         if mask is None:
-            mean = x.mean(dims)
-            std = x.std(dims)
+            mean, std = x.mean(dims), x.std(dims)
         else:
             x = x * mask
             n = mask.sum(dims).clamp_min(1.0)
-            n_1 = (n - 1).clamp_min(1.0)
             mean = x.sum(dims) / n
-            var = ((x - mean).square() * mask).sum(dims) / n_1
-            std = torch.sqrt(var)
-        std = torch.where(std == 0, 1, std)
-        self.shift.data = mean.to(device)
-        self.log_scale.data = torch.log(std).to(device)
-        self.initialized.data = torch.tensor(True)
-
-    def _broadcast(self, x: torch.Tensor, d: int) -> torch.Tensor:
-        shape = [1] * (d - 1)
-        return x.view(*shape, -1)
+            std = ((x - mean).square() * mask).sum(dims).div((n - 1).clamp_min(1.0)).sqrt()
+        self.shift.data.copy_(mean)
+        self.log_scale.data.copy_(std.clamp(min=1e-8).log())
+        self._py_initialized = True
 
     def forward(self, x, context=None, mask=None, inverse=False):
-        if not self.initialized and self.training:
+        if not self._py_initialized and self.training:
             self._initialize(x, mask)
-        log_scale = self._broadcast(self.log_scale, x.dim())
-        shift = self._broadcast(self.shift, x.dim())
+        shape = [1] * (x.dim() - 1) + [-1]
+        log_scale = self.log_scale.view(shape)
+        shift = self.shift.view(shape)
         if mask is not None:
             log_scale = log_scale * mask
             shift = shift * mask
-        scale = torch.exp(log_scale)
         if inverse:
-            x = x * scale + shift
-            log_det = log_scale.sum(-1)
-        else:
-            x = (x - shift) / scale
-            log_det = -log_scale.sum(-1)
-        return x, log_det, mask
+            return x * log_scale.exp() + shift, log_scale.sum(-1), mask
+        return (x - shift) / log_scale.exp(), -log_scale.sum(-1), mask
 
 
 class Permute(Transform):
