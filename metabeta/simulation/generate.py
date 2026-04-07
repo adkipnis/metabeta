@@ -107,39 +107,43 @@ class Generator:
                 f'max_n_total={self.cfg.max_n_total}'
             )
 
-    def _genSizes(
+    def _genDims(
         self,
         rng: np.random.Generator,
         n_datasets: int,
         mini_batch_size: int,
-    ) -> tuple[np.ndarray, ...]:
-        """batch generate size arrays for dataset sampling"""
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Sample mini-batch-uniform d, q, m arrays."""
         assert (
             n_datasets % mini_batch_size == 0
         ), 'number of datasets must be divisible by mini batch size'
-        n_mini_batches = n_datasets // mini_batch_size
+        n_mini = n_datasets // mini_batch_size
 
-        # --- presample dimensions
-        # number of fixed effects
-        d = truncLogUni(rng, low=2, high=self.cfg.max_d + 1, size=n_mini_batches, round=True)
+        d = truncLogUni(rng, low=2, high=self.cfg.max_d + 1, size=n_mini, round=True)
         d = np.repeat(d, mini_batch_size)
 
-        # number of random effects
-        q = truncLogUni(rng, low=1, high=self.cfg.max_q + 1, size=n_mini_batches, round=True)
+        q = truncLogUni(rng, low=1, high=self.cfg.max_q + 1, size=n_mini, round=True)
         q = np.repeat(q, mini_batch_size)
         q = np.minimum(d, q)  # q <= d
 
-        # number of groups
         m = truncLogUni(
             rng,
             low=self.cfg.min_m,
             high=self.max_m_feasible + 1,
-            size=n_mini_batches,
+            size=n_mini,
             round=True,
         )
         m = np.repeat(m, mini_batch_size)
 
-        # number of observations per group
+        return d, q, m
+
+    def _genNs(
+        self,
+        rng: np.random.Generator,
+        n_datasets: int,
+        m: np.ndarray,
+    ) -> np.ndarray:
+        """Sample per-group observation counts with masking and max_n_total cap."""
         ns = truncLogUni(
             rng,
             low=self.cfg.min_n,
@@ -147,8 +151,7 @@ class Generator:
             size=(n_datasets, self.cfg.max_m),
             round=True,
         )
-
-        ns = self._maskAndCapNs(
+        return self._maskAndCapNs(
             ns=ns,
             m=m,
             max_m=self.cfg.max_m,
@@ -156,8 +159,6 @@ class Generator:
             max_n=self.cfg.max_n,
             max_n_total=self.cfg.max_n_total,
         )
-
-        return d, q, m, ns
 
     @staticmethod
     def _maskAndCapNs(
@@ -299,8 +300,30 @@ class Generator:
         if self.cfg.partition == 'train':
             desc = f'{epoch:02d}/{self.cfg.epochs:02d}'
 
-        # --- presample sizes
-        d, q, m, ns = self._genSizes(rng, n_datasets, mini_batch_size)
+        # --- presample dimensions (always mini-batch-uniform)
+        d, q, m = self._genDims(rng, n_datasets, mini_batch_size)
+
+        # --- presample per-group counts
+        if self.cfg.ds_type in ('sampled', 'observed'):
+            # Emulator/Subsampler override ns internally based on source dataset constraints;
+            # only req_m = len(ns_i) and req_n = sum(ns_i) survive as loose hints.
+            # Skip the detailed per-group breakdown and max_n_total capping.
+            n_hint = truncLogUni(
+                rng,
+                low=self.cfg.min_m * self.cfg.min_n,
+                high=self.cfg.max_n_total + 1,
+                size=n_datasets,
+                round=True,
+            )
+            n_hint = np.clip(n_hint, m * self.cfg.min_n, m * self.cfg.max_n)
+            ns_slices = [
+                np.full(int(m[i]), int(n_hint[i]) // int(m[i]), dtype=int)
+                for i in range(n_datasets)
+            ]
+        else:
+            # toy, flat, scm, mixed: ns is used directly by Synthesizer/Scammer/Emulator
+            ns = self._genNs(rng, n_datasets, m)
+            ns_slices = [ns[i][: m[i]] for i in range(n_datasets)]
 
         # --- sample batch of single datasets
         if self.cfg.loop or self.cfg.ds_type in ['scm', 'mixed']:  # Option A: loop
@@ -311,7 +334,7 @@ class Generator:
                     seedseqs[i],
                     d[i],
                     q[i],
-                    ns[i][: m[i]],
+                    ns_slices[i],
                 )
                 datasets.append(dataset)
         else:  # Option B: parallelize
@@ -321,7 +344,7 @@ class Generator:
                     seedseqs[i],
                     d[i],
                     q[i],
-                    ns[i][: m[i]],
+                    ns_slices[i],
                 )
                 for i in tqdm(range(n_datasets), desc=desc)
             )
