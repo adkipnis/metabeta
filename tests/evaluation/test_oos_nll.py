@@ -24,6 +24,8 @@ from metabeta.utils.dataloader import Dataloader
 # ---------------------------------------------------------------------------
 
 data_cfg_path = Path('metabeta', 'simulation', 'configs', 'toy-n.yaml')
+if not data_cfg_path.exists():
+    pytest.skip('toy-n simulation config not found', allow_module_level=True)
 data_fname = dataFromYaml(data_cfg_path, 'test')
 DATA_PATH = Path('metabeta', 'outputs', 'data', data_fname)
 if not DATA_PATH.exists():
