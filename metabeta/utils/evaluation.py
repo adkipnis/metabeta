@@ -310,6 +310,8 @@ class EvaluationSummary:
     pareto_k: torch.Tensor | None
     pp_fit: torch.Tensor | None = None  # R² (normal) | AUC (bernoulli) | deviance (poisson)
     tpd: float | None = None  # time per dataset
+    loo_nll: torch.Tensor | None = None  # PSIS-LOO NLL (loo_is when IS ran, else loo_raw)
+    loo_pareto_k: torch.Tensor | None = None  # per-dataset mean Pareto k from LOO PSIS
 
     def averageOverAlpha(
         self,
@@ -344,6 +346,16 @@ class EvaluationSummary:
     @property
     def mnll(self) -> float:  # median posterior NLL
         return self.posterior_nll.median().item()
+
+    @property
+    def mloonll(self) -> float | None:  # median PSIS-LOO NLL
+        if self.loo_nll is not None:
+            return self.loo_nll.median().item()
+
+    @property
+    def mloo_k(self) -> float | None:  # median LOO Pareto k diagnostic
+        if self.loo_pareto_k is not None:
+            return self.loo_pareto_k.nanmedian().item()
 
     @property
     def meff(self) -> None | float:  # median sample efficiency for IS

@@ -1,0 +1,140 @@
+"""Tests for psisLooNLL in metabeta.evaluation.predictive."""
+import pytest
+import torch
+from torch import distributions as D
+
+from metabeta.evaluation.predictive import posteriorPredictiveNLL, psisLooNLL
+
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_pp(b: int, m: int, n: int, s: int, seed: int = 0) -> D.Distribution:
+    """Normal pp with loc that varies per sample (so PSIS has non-trivial weights)."""
+    torch.manual_seed(seed)
+    loc = 0.5 * torch.randn(b, m, n, s)       # data-independent but varies with s
+    scale = torch.ones(b, m, n, s) * 0.8
+    return D.Normal(loc, scale)
+
+
+def _make_data(b: int, m: int, n: int, seed: int = 1) -> dict[str, torch.Tensor]:
+    torch.manual_seed(seed)
+    return {
+        'y': torch.randn(b, m, n),
+        'mask_n': torch.ones(b, m, n, dtype=torch.bool),
+    }
+
+
+# ---------------------------------------------------------------------------
+# shape and finiteness
+# ---------------------------------------------------------------------------
+
+
+def test_psisLooNLL_shape_and_finite():
+    b, m, n, s = 3, 4, 6, 256
+    pp = _make_pp(b, m, n, s)
+    data = _make_data(b, m, n)
+    loo_nll, pareto_k = psisLooNLL(pp, data)
+    assert loo_nll.shape == (b,)
+    assert pareto_k.shape == (b,)
+    assert torch.isfinite(loo_nll).all(), f'loo_nll: {loo_nll}'
+    # pareto_k may be nan for degenerate obs but should not be inf
+    assert not pareto_k.isinf().any(), f'pareto_k contains inf: {pareto_k}'
+
+
+def test_psisLooNLL_with_is_weights_shape_and_finite():
+    b, m, n, s = 3, 4, 6, 256
+    pp = _make_pp(b, m, n, s)
+    data = _make_data(b, m, n)
+    torch.manual_seed(3)
+    w = torch.softmax(torch.randn(b, s), dim=-1)
+    loo_nll, pareto_k = psisLooNLL(pp, data, w=w)
+    assert loo_nll.shape == (b,)
+    assert pareto_k.shape == (b,)
+    assert torch.isfinite(loo_nll).all(), f'loo_nll: {loo_nll}'
+    assert not pareto_k.isinf().any(), f'pareto_k contains inf: {pareto_k}'
+
+
+# ---------------------------------------------------------------------------
+# masking
+# ---------------------------------------------------------------------------
+
+
+def test_psisLooNLL_respects_mask():
+    """LOO NLL should be finite for variable-length groups."""
+    b, m, n_max, s = 2, 3, 8, 256
+    ns = [8, 5, 3]
+
+    torch.manual_seed(2)
+    y = torch.randn(b, m, n_max)
+    mask_n = torch.zeros(b, m, n_max, dtype=torch.bool)
+    for i in range(b):
+        for j in range(m):
+            mask_n[i, j, : ns[j]] = True
+
+    data = {'y': y, 'mask_n': mask_n}
+    pp = _make_pp(b, m, n_max, s)
+
+    loo_nll, _ = psisLooNLL(pp, data)
+    assert loo_nll.shape == (b,)
+    assert torch.isfinite(loo_nll).all(), f'loo_nll: {loo_nll}'
+
+
+# ---------------------------------------------------------------------------
+# LOO NLL >= in-sample NLL for an overfitting-prone model
+# ---------------------------------------------------------------------------
+
+
+def test_psisLooNLL_optimism_on_average():
+    """
+    LOO NLL should exceed in-sample ppNLL on average when the posterior mean
+    tracks the observed data (i.e. the model is 'over-tuned' to the data).
+    """
+    torch.manual_seed(42)
+    b, m, n, s = 10, 4, 8, 512
+
+    y = torch.randn(b, m, n)
+    data = {'y': y, 'mask_n': torch.ones(b, m, n, dtype=torch.bool)}
+
+    # pp strongly centered on y — leaving one out shifts the distribution away
+    loc = y.unsqueeze(-1) + 0.1 * torch.randn(b, m, n, s)
+    scale = torch.full((b, m, n, s), 0.3)
+    pp = D.Normal(loc, scale)
+
+    in_sample = posteriorPredictiveNLL(pp, data)   # (b,)
+    loo_nll, _ = psisLooNLL(pp, data)              # (b,)
+
+    mean_diff = (loo_nll - in_sample).mean().item()
+    assert mean_diff > 0, (
+        f'Expected LOO NLL > in-sample NLL on average, got mean diff = {mean_diff:.4f}'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pareto k diagnostic
+# ---------------------------------------------------------------------------
+
+
+def test_psisLooNLL_pareto_k_benign():
+    """
+    For a diffuse model with many obs per group, each observation is low-
+    influence and mean Pareto k should be well below 0.7.
+    """
+    torch.manual_seed(7)
+    b, m, n, s = 4, 5, 15, 512
+
+    y = torch.randn(b, m, n)
+    data = {'y': y, 'mask_n': torch.ones(b, m, n, dtype=torch.bool)}
+
+    # pp with varying loc (so weights differ across s) but large scale (diffuse)
+    loc = 0.3 * torch.randn(b, m, n, s)
+    scale = torch.full((b, m, n, s), 2.0)
+    pp = D.Normal(loc, scale)
+
+    _, pareto_k = psisLooNLL(pp, data)
+
+    # use nanmean in case some obs have degenerate k
+    k_mean = pareto_k.nanmean().item()
+    assert k_mean < 0.7, f'Mean Pareto k = {k_mean:.3f}, expected < 0.7 for benign model'

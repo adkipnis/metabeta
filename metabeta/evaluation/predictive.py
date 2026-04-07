@@ -1,5 +1,8 @@
 from typing import Literal
 import math
+import numpy as np
+import arviz as az
+from scipy.special import logsumexp as sp_logsumexp
 import torch
 from torch import distributions as D
 
@@ -96,6 +99,83 @@ def posteriorPredictiveNLL(
         return -(log_mix * obs_mask).sum(dim=(1, 2)) / n_obs
     else:
         raise ValueError(f'unknown mode: {mode}')
+
+
+def psisLooNLL(
+    pp: D.Distribution,
+    data: dict[str, torch.Tensor],
+    w: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    PSIS-LOO NLL per dataset. Returns (loo_nll, pareto_k), both shape (b,).
+
+    Leaves out one within-group observation at a time and uses Pareto-smoothed
+    importance sampling (PSIS) to stabilize the harmonic-mean LOO estimator.
+
+    The LOO IS weight for observation (i, j) and sample s is
+        log w_ij^s = -log p(y_ij | θ^s)   [+ log w_IS^s if w is provided]
+    PSIS smooths the upper tail of these weights, then the LOO-predictive
+    log-density is  log p_loo(y_ij) = logsumexp(log_w_psis_norm + log_p, dim=-1)
+    where log_w_psis_norm are the log-normalized PSIS weights.
+
+    When PSIS fails for an observation (degenerate weights, too few samples),
+    the raw normalized log-weights are used as a fallback and pareto_k is nan.
+
+    Parameters
+    ----------
+    w : existing IS weights (b, s). When provided, folds in the IS correction
+        so that both the proposal-posterior gap and the LOO leave-out are
+        handled jointly: log w_ij^s = log w_IS^s - log p(y_ij | θ^s).
+        When None, the raw proposal is treated as the posterior (uniform base).
+    """
+
+    y_obs = data['y'].unsqueeze(-1)   # (b, m, n, 1)
+    log_p = pp.log_prob(y_obs)        # (b, m, n, s)
+    mask = data['mask_n']             # (b, m, n)
+    n_obs = mask.sum(dim=(1, 2))      # (b,)
+
+    # LOO IS log-weights: log w_ij^s = -log p(y_ij | θ^s) [+ log w_IS^s]
+    log_w = -log_p                    # (b, m, n, s)
+    if w is not None:
+        log_w = log_w + w.log().unsqueeze(1).unsqueeze(1)
+
+    b, m, n, s = log_p.shape
+
+    # PSIS per observation — az.psislw expects (n_obs, n_draws) with last axis = samples.
+    # Samples are i.i.d. from the flow, so reff=1.
+    log_w_np = log_w.detach().reshape(b * m * n, s).numpy()
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        log_w_psis_np, k_np = az.psislw(log_w_np, reff=1.0)
+
+    # Fallback for rows where PSIS fails (degenerate / constant weights):
+    # substitute normalized raw log-weights and flag k as nan.
+    bad = ~np.isfinite(log_w_psis_np).all(axis=-1)
+    if bad.any():
+        raw_norm = log_w_np[bad] - sp_logsumexp(log_w_np[bad], axis=-1, keepdims=True)
+        log_w_psis_np[bad] = raw_norm
+        k_np[bad] = np.nan
+
+    # Also replace inf k (heavy-tail Pareto fits that technically converged but are unreliable)
+    # with nan so they don't dominate means/medians.
+    k_np = np.where(np.isfinite(k_np), k_np, np.nan)
+
+    log_w_psis = log_p.new_tensor(log_w_psis_np).reshape(b, m, n, s)
+    k = log_p.new_tensor(k_np).reshape(b, m, n)
+
+    # az.psislw returns log-normalized weights (logsumexp = 0), so:
+    # log p_loo(y_ij) = logsumexp(log_w_psis_norm + log_p_ij, dim=samples)
+    log_p_loo = torch.logsumexp(log_w_psis + log_p, dim=-1)   # (b, m, n)
+
+    mask_f = mask.float()
+    loo_nll = -(log_p_loo * mask_f).sum(dim=(1, 2)) / n_obs   # (b,)
+    # nanmean over valid positions (nan = PSIS failed; inf k already replaced above)
+    k[~mask] = float('nan')
+    pareto_k = k.reshape(b, m * n).nanmean(dim=-1)     # (b,)
+
+    return loo_nll, pareto_k
 
 
 def posteriorPredictiveSample(

@@ -352,7 +352,7 @@ class Trainer:
     def getTrackingMetrics(self, eval_summary: EvaluationSummary) -> tuple[float, float, float]:
         mean_nrmse = dictMean(eval_summary.nrmse)
         mean_abs_lcr = dictMean(eval_summary.abs_lcr)
-        median_nll = eval_summary.mnll
+        median_nll = eval_summary.mloonll if eval_summary.mloonll is not None else eval_summary.mnll
         return mean_nrmse, mean_abs_lcr, median_nll
 
     @property

@@ -20,6 +20,7 @@ from metabeta.evaluation.predictive import (
     posteriorPredictiveDeviance,
     posteriorPredictiveNLL,
     posteriorPredictiveR2,
+    psisLooNLL,
 )
 
 
@@ -55,7 +56,10 @@ def getSummary(
 
     # posterior predictive fit
     pp = getPosteriorPredictive(proposal, data, likelihood_family)
-    out['posterior_nll'] = posteriorPredictiveNLL(pp, data, w=proposal.weights)
+    out['posterior_nll'] = posteriorPredictiveNLL(pp, data, w=proposal.weights)  # in-sample
+    # PSIS-LOO NLL: automatically uses loo_is when IS weights are available (w=proposal.weights),
+    # falling back to loo_raw (w=None) when no IS was done.
+    out['loo_nll'], out['loo_pareto_k'] = psisLooNLL(pp, data, w=proposal.weights)
     if likelihood_family == 0:  # normal
         out['pp_fit'] = posteriorPredictiveR2(pp, data, w=proposal.weights)
     elif likelihood_family == 1:  # bernoulli
@@ -84,7 +88,7 @@ def summaryTable(s: EvaluationSummary, likelihood_family: int = 0) -> str:
     long_table = longTable(s.corr, s.nrmse, s.ece, s.lcr)
     fit_labels = {0: 'Median pp R²', 1: 'Median pp AUC', 2: 'Median pp Deviance'}
     fit_label = fit_labels.get(likelihood_family, 'Median pp R²')
-    flat_table = flatTable(s.tpd, s.mnll, s.mfit, fit_label, s.meff, s.mk)
+    flat_table = flatTable(s.tpd, s.mloonll, s.mfit, fit_label, s.meff, s.mk, s.mloo_k)
     return long_table + '\n' + flat_table
 
 
@@ -124,24 +128,28 @@ def longTable(
 
 def flatTable(
     tpd: float | None = None,
-    mnll: float | None = None,
+    mloonll: float | None = None,
     mfit: float | None = None,
     fit_label: str = 'Median pp R²',
     meff: float | None = None,
     mk: float | None = None,
+    mloo_k: float | None = None,
 ) -> str:
     rows = []
     results = ''
     if tpd is not None:
         rows += [['Estimation time / ds [s]', tpd]]
-    if mnll is not None:
-        rows += [['Median ppNLL', mnll]]
+    # in-sample ppNLL omitted from table (optimistic; use LOO NLL instead)
+    if mloonll is not None:
+        rows += [['Median LOO-NLL', mloonll]]
     if mfit is not None:
         rows += [[fit_label, mfit]]
     if meff is not None:
-        rows += [['Median IS Efficency', meff]]
+        rows += [['Median IS Efficiency', meff]]
     if mk is not None:
-        rows += [['Median Pareto k', mk]]
+        rows += [['Median IS Pareto k', mk]]
+    if mloo_k is not None:
+        rows += [['Median LOO Pareto k', mloo_k]]
     if rows:
         results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
     return f'{results}\n'
