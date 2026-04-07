@@ -5,7 +5,8 @@ from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.ticker import MultipleLocator
 
-from metabeta.utils.evaluation import EvaluationSummary, getMasks, getNames, joinSigmas
+from metabeta.utils.evaluation import EvaluationSummary, getMasks, getNames, getCorrRfxNames, joinSigmas
+from metabeta.utils.regularization import corrToLower
 from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
 
 
@@ -166,6 +167,24 @@ def _prepareRecoveryData(
         }
     )
 
+    # correlation coefficients (only when model estimated them)
+    if 'corr_rfx' in est:
+        corr_target = corrToLower(data['corr_rfx'])
+        mask_q = data['mask_q']
+        mask_corr = torch.stack(
+            [mask_q[:, i] & mask_q[:, j] for i in range(q) for j in range(i)], dim=-1
+        )
+        targets.append(corr_target)
+        estimates.append(est['corr_rfx'])
+        masks.append(mask_corr)
+        names.append(getCorrRfxNames(q))
+        metrics.append(
+            {
+                'r': stats['corr']['corr_rfx'].mean().item(),
+                'NRMSE': stats['nrmse']['corr_rfx'].mean().item(),
+            }
+        )
+
     # random effects
     targets.append(data['rfx'].view(-1, q))
     estimates.append(est['rfx'].view(-1, q))
@@ -194,7 +213,11 @@ def plotRecovery(
     if labels is None:
         labels = [None] * len(summaries)  # type: ignore[list-item]
     nrows = len(summaries)
-    fig, axs = plt.subplots(nrows, 3, figsize=(18, 6 * nrows), dpi=DPI, squeeze=False)
+    has_corr = 'corr_rfx' in summaries[0].estimates
+    ncols = 4 if has_corr else 3
+    all_titles = ['Fixed Effects', 'Variances', 'Correlations', 'Random Effects']
+    titles = all_titles[:ncols]
+    fig, axs = plt.subplots(nrows, ncols, figsize=(6 * ncols, 6 * nrows), dpi=DPI, squeeze=False)
 
     for i, (summary, label) in enumerate(zip(summaries, labels)):
         upper = i == 0
@@ -207,7 +230,7 @@ def plotRecovery(
             masks=masks,
             metrics=metrics,
             names=names,
-            titles=['Fixed Effects', 'Variances', 'Random Effects'],
+            titles=titles,
             ylabel=label,
             upper=upper,
             lower=lower,
