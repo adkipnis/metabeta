@@ -58,14 +58,23 @@ class ApproximatorConfig(BaseModel):
     posterior_l: PosteriorConfig
     posterior_g: PosteriorConfig
     likelihood_family: int = Field(ge=0, default=0)
+    posterior_correlation: bool = True
 
     model_config = {'extra': 'allow'}
+
+    @property
+    def d_corr(self) -> int:
+        """Number of unconstrained partial-correlation scalars (q*(q-1)//2, or 0)."""
+        if self.posterior_correlation and self.d_rfx >= 2:
+            return self.d_rfx * (self.d_rfx - 1) // 2
+        return 0
 
     def to_dict(self) -> dict:
         return {
             'd_ffx': self.d_ffx,
             'd_rfx': self.d_rfx,
             'likelihood_family': self.likelihood_family,
+            'posterior_correlation': self.posterior_correlation,
             'summarizer_l': self.summarizer_l.model_dump(),
             'summarizer_g': self.summarizer_g.model_dump(),
             'posterior_l': self.posterior_l.model_dump(),
@@ -85,6 +94,7 @@ def modelFromYaml(
         d_ffx=d_ffx,
         d_rfx=d_rfx,
         likelihood_family=likelihood_family,
+        posterior_correlation=model_cfg['posterior_correlation'],
         summarizer_g=SummarizerConfig(**s_g),
         summarizer_l=SummarizerConfig(**{**s_g, **model_cfg.get('summarizer_l', {})}),
         posterior_g=PosteriorConfig(**p_g),
