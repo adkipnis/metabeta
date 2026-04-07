@@ -39,6 +39,11 @@ def getNames(source: str, num: int, has_sigma_eps: bool = True) -> list[str]:
         raise ValueError(f'source {source} unknown.')
 
 
+def getCorrRfxNames(q: int) -> list[str]:
+    """Names for the lower-triangle correlation pairs: ρ_{01}, ρ_{02}, ρ_{12}, ..."""
+    return [rf'$\rho_{{{j}{i}}}$' for i in range(q) for j in range(i)]
+
+
 def getAllNames(d: int, q: int, has_sigma_eps: bool = True) -> dict[str, list[str]]:
     return {
         'ffx': getNames('ffx', d),
@@ -304,7 +309,6 @@ class EvaluationSummary:
     sample_efficiency: torch.Tensor | None
     pareto_k: torch.Tensor | None
     pp_fit: torch.Tensor | None = None  # R² (normal) | AUC (bernoulli) | deviance (poisson)
-    rfx_corr: dict[str, float] | None = None
     tpd: float | None = None  # time per dataset
 
     def averageOverAlpha(
