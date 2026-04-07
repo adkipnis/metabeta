@@ -103,6 +103,12 @@ def corrToUnconstrained(corr: torch.Tensor) -> torch.Tensor:
     return torch.cat(z_parts, dim=-1)
 
 
+def corrToLower(corr: torch.Tensor) -> torch.Tensor:
+    """Correlation matrix (..., q, q) → lower-triangle values (..., q*(q-1)//2)."""
+    q = corr.shape[-1]
+    return torch.stack([corr[..., i, j] for i in range(q) for j in range(i)], dim=-1)
+
+
 def unconstrainedToCholeskyCorr(z: torch.Tensor, q: int) -> torch.Tensor:
     """Unconstrained vector (..., q*(q-1)//2) → lower-triangular Cholesky (..., q, q).
 
