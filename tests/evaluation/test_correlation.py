@@ -31,6 +31,7 @@ def test_evaluate_correlation_returns_bounds_and_percentiles():
         'corr_rfx': torch.from_numpy(corr_true),
         'eta_rfx': torch.tensor([0.0, 1.3]),
         'm': torch.tensor([m, m]),
+        'rfx': rfx_t[:, :, 0, :],  # (b, m, q) true rfx for oracle baseline
     }
 
     out = evaluateCorrelation(rfx_t, data, n_sim=1200)

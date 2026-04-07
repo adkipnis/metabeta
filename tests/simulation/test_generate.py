@@ -27,8 +27,17 @@ def make_cfg(**overrides: Any) -> argparse.Namespace:
         begin=1,
         epochs=3,
         source='all',
+        ds_type='toy',
         sgld=False,
         loop=True,  # default to loop in tests for speed/determinism
+        # data shape bounds (tiny preset)
+        max_d=2,
+        max_q=2,
+        min_m=10,
+        max_m=20,
+        min_n=20,
+        max_n=30,
+        max_n_total=500,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
