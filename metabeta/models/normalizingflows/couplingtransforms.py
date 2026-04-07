@@ -291,124 +291,90 @@ class RationalQuadratic(CouplingTransform):
         raw = self._propose(x1, context, mask1)
         params = self._constrain(raw)
 
-        # construct boundary masks
         bounds = params['bounds'].chunk(4, -1)
         left, right, bottom, top = (t.squeeze(-1) for t in bounds)
-        if inverse:
-            inside = (bottom <= x2) & (x2 < top)
-        else:
-            inside = (left <= x2) & (x2 < right)
-        outside = ~inside
-
-        # incorporate mask
+        inside = (bottom <= x2) & (x2 < top) if inverse else (left <= x2) & (x2 < right)
         if mask2 is not None:
             inside = inside & mask2.bool()
-            outside = outside & mask2.bool()
 
-        # init outputs
-        log_det = torch.zeros_like(x2)
-        z2 = x2.clone()
+        z_spline, ld_spline = self._spline(x2, params, inverse=inverse)
+        z_affine, ld_affine = self._affine(x2, params, inverse=inverse)
 
-        # apply spline transform
-        if inside.any():
-            z2[inside], log_det[inside] = self._spline(x2, params, inside, inverse=inverse)
-
-        # apply affine transform
-        if outside.any():
-            z2[outside], log_det[outside] = self._affine(x2, params, outside, inverse=inverse)
+        z2 = torch.where(inside, z_spline, z_affine)
+        log_det = torch.where(inside, ld_spline, ld_affine)
+        if mask2 is not None:
+            mask2_bool = mask2.bool()
+            z2 = torch.where(mask2_bool, z2, x2)
+            log_det = torch.where(mask2_bool, log_det, torch.zeros_like(log_det))
         return z2, log_det.sum(-1)
 
     def _spline(
         self,
         x2: torch.Tensor,
         params: dict[str, torch.Tensor],
-        inside: torch.Tensor,
         inverse: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # unpack and apply mask
-        x2 = x2[inside]
-        cumwidths = params['cumwidths'][inside]
-        cumheights = params['cumheights'][inside]
+        cumwidths = params['cumwidths']
+        cumheights = params['cumheights']
         widths = cumwidths[..., 1:] - cumwidths[..., :-1]
         heights = cumheights[..., 1:] - cumheights[..., :-1]
-        derivatives = params['derivatives'][inside]
+        derivatives = params['derivatives']
 
-        # map each x to a bin between two knots
-        if inverse:
-            idx = self._searchSorted(cumheights, x2)
-        else:
-            idx = self._searchSorted(cumwidths, x2)
+        idx = self._searchSorted(cumheights if inverse else cumwidths, x2)
 
-        # for each knot k, get the RQ parts
-        x_k_delta = widths.gather(-1, idx).squeeze(-1)
         x_k = cumwidths.gather(-1, idx).squeeze(-1)
-        y_k_delta = heights.gather(-1, idx).squeeze(-1)
+        x_k_delta = widths.gather(-1, idx).squeeze(-1)
         y_k = cumheights.gather(-1, idx).squeeze(-1)
-        delta = heights / widths
-        s_k = delta.gather(-1, idx).squeeze(-1)
+        y_k_delta = heights.gather(-1, idx).squeeze(-1)
+        s_k = (heights / widths).gather(-1, idx).squeeze(-1)
         d_k_0 = derivatives.gather(-1, idx).squeeze(-1)
         d_k_1 = derivatives[..., 1:].gather(-1, idx).squeeze(-1)
 
-        # apply RQ spline
         if inverse:
-            # get analytical inverse of rq
             a = y_k_delta * (s_k - d_k_0) + (x2 - y_k) * (d_k_1 + d_k_0 - 2 * s_k)
             b = y_k_delta * d_k_0 - (x2 - y_k) * (d_k_1 + d_k_0 - 2 * s_k)
             c = -s_k * (x2 - y_k)
-            discriminant = b.pow(2) - 4 * a * c
-            discriminant = torch.clamp(discriminant, min=1e-12)
-            xi = (2 * c) / (-b - torch.sqrt(discriminant))
+            discriminant = (b.pow(2) - 4 * a * c).clamp(min=0.0)
+            # denominator is always negative for valid in-domain inputs; clamp prevents ÷0
+            xi = (2 * c) / (-b - discriminant.sqrt()).clamp(max=-1e-8)
             z2 = xi * x_k_delta + x_k
-
-            # log_det variables
             xi_1_minus_xi = xi * (1 - xi)
-            beta_k = s_k + ((d_k_1 + d_k_0 - 2 * s_k) * xi_1_minus_xi)
+            beta_k = s_k + (d_k_1 + d_k_0 - 2 * s_k) * xi_1_minus_xi
             ld_factor = -1
         else:
-            # helper variables
             xi = (x2 - x_k) / x_k_delta
             xi_1_minus_xi = xi * (1 - xi)
+            alpha_k = y_k_delta * (s_k * xi.pow(2) + d_k_0 * xi_1_minus_xi)
+            beta_k = s_k + (d_k_1 + d_k_0 - 2 * s_k) * xi_1_minus_xi
+            z2 = y_k + alpha_k / beta_k.clamp(min=1e-8)
             ld_factor = 1
 
-            # construct RQ splines
-            alpha_k = y_k_delta * (s_k * xi.pow(2) + d_k_0 * xi_1_minus_xi)
-            beta_k = s_k + ((d_k_1 + d_k_0 - 2 * s_k) * xi_1_minus_xi)
-            z2 = y_k + alpha_k / beta_k
-
-        # get log determinant
+        # clamp before log guards against out-of-domain inputs (discarded by torch.where)
         derivative_numerator = s_k.pow(2) * (
             d_k_1 * xi.pow(2) + 2 * s_k * xi_1_minus_xi + d_k_0 * (1 - xi).pow(2)
         )
-        log_det = derivative_numerator.log() - 2 * beta_k.log()
+        log_det = derivative_numerator.clamp(min=1e-8).log() - 2 * beta_k.clamp(min=1e-8).log()
         return z2, ld_factor * log_det
 
     def _affine(
         self,
         x2: torch.Tensor,
         params: dict[str, torch.Tensor],
-        outside: torch.Tensor,
         inverse: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # unpack and apply mask
-        x2 = x2[outside]
-        log_weight = params['log_weight'][outside]
-        bias = params['bias'][outside]
-
-        # apply affine transform
+        log_weight = params['log_weight']
         weight = log_weight.exp()
+        bias = params['bias']
         if inverse:
-            z2 = (x2 - bias) / weight
-            log_det = -log_weight
-        else:
-            z2 = weight * x2 + bias
-            log_det = log_weight
-        return z2, log_det
+            return (x2 - bias) / weight, -log_weight
+        return weight * x2 + bias, log_weight
 
     def _searchSorted(self, reference: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        reference = reference.detach().clone()
-        reference[..., -1] = reference[..., -1] + self.eps
-        idx = torch.searchsorted(reference, target.unsqueeze(-1), right=True) - 1
-        return idx
+        # bump the upper knot by eps to make the boundary inclusive, without in-place ops
+        bumped = torch.cat([reference[..., :-1], reference[..., -1:] + self.eps], dim=-1)
+        idx = torch.searchsorted(bumped, target.unsqueeze(-1).contiguous(), right=True) - 1
+        # clamp to valid bin range — guards gather for out-of-domain inputs
+        return idx.clamp(0, reference.shape[-1] - 2)
 
 
 if __name__ == '__main__':
