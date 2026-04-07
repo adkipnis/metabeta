@@ -158,6 +158,10 @@ def psisLooNLL(
         log_w_psis_np[bad] = raw_norm
         k_np[bad] = np.nan
 
+    # Also replace inf k (heavy-tail Pareto fits that technically converged but are unreliable)
+    # with nan so they don't dominate means/medians.
+    k_np = np.where(np.isfinite(k_np), k_np, np.nan)
+
     log_w_psis = log_p.new_tensor(log_w_psis_np).reshape(b, m, n, s)
     k = log_p.new_tensor(k_np).reshape(b, m, n)
 
@@ -167,10 +171,9 @@ def psisLooNLL(
 
     mask_f = mask.float()
     loo_nll = -(log_p_loo * mask_f).sum(dim=(1, 2)) / n_obs   # (b,)
-    # nanmean over valid positions for pareto_k diagnostic
-    k_masked = k * mask_f
-    k_masked[~mask] = float('nan')
-    pareto_k = k_masked.reshape(b, m * n).nanmean(dim=-1)     # (b,)
+    # nanmean over valid positions (nan = PSIS failed; inf k already replaced above)
+    k[~mask] = float('nan')
+    pareto_k = k.reshape(b, m * n).nanmean(dim=-1)     # (b,)
 
     return loo_nll, pareto_k
 
