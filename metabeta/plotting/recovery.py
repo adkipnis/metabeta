@@ -5,7 +5,13 @@ from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.ticker import MultipleLocator
 
-from metabeta.utils.evaluation import EvaluationSummary, getMasks, getNames, getCorrRfxNames, joinSigmas
+from metabeta.utils.evaluation import (
+    EvaluationSummary,
+    getMasks,
+    getNames,
+    getCorrRfxNames,
+    joinSigmas,
+)
 from metabeta.utils.regularization import corrToLower
 from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
 
@@ -215,8 +221,10 @@ def plotRecovery(
     nrows = len(summaries)
     has_corr = 'corr_rfx' in summaries[0].estimates
     ncols = 4 if has_corr else 3
-    all_titles = ['Fixed Effects', 'Variances', 'Correlations', 'Random Effects']
-    titles = all_titles[:ncols]
+    if has_corr:
+        titles = ['Fixed Effects', 'Variances', 'Correlations', 'Random Effects']
+    else:
+        titles = ['Fixed Effects', 'Variances', 'Random Effects']
     fig, axs = plt.subplots(nrows, ncols, figsize=(6 * ncols, 6 * nrows), dpi=DPI, squeeze=False)
 
     for i, (summary, label) in enumerate(zip(summaries, labels)):
