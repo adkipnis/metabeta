@@ -88,10 +88,25 @@ for name in dataset_names:
             print(f'Skipping {name} (n={len(df)} < 50)')
             continue
 
+        # encode multiclass classification targets as non-numeric strings so the
+        # preprocessor can detect them as 'multiclass' rather than misidentifying
+        # them as count data
+        if name in summary.index:
+            meta_row = summary.loc[name]
+            if meta_row['task'] == 'classification' and meta_row['n_classes'] > 2:
+                df['y'] = 'class_' + df['y'].astype(str)
+                skipped_multiclass.append(name)
+
+        # annotate categorical columns using PMLB metadata
+        df = _apply_column_metadata(df, name)
+
         fn = Path(out_dir, f'{name}.parquet')
         df.to_parquet(fn)
         print(f'Saved to {fn}')
         datasets += [df]
     except Exception as e:
         print(e)
+
 print(f'\n{len(datasets)} datasets saved.')
+print(f'{len(skipped_small)} datasets skipped (n < 50): {skipped_small}')
+print(f'{len(skipped_multiclass)} multiclass datasets re-encoded with string labels.')
