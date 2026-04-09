@@ -13,6 +13,7 @@ from metabeta.datasets.preprocess import (
     _dropHeavyColumns,
     coerceTargetToNumeric,
     detectGroupCandidates,
+    detectMulticlassY,
     detectYType,
     lumpCategories,
     preprocess,
@@ -101,6 +102,42 @@ def test_detect_y_type_count():
 def test_detect_y_type_continuous():
     y = np.array([1.5, -0.3, 2.7])
     assert detectYType(y, y_is_binary=False) == 'continuous'
+
+
+def test_detect_y_type_multiclass():
+    y = np.array([0.0, 1.0, 2.0, 0.0])
+    assert detectYType(y, y_is_binary=False, is_multiclass=True) == 'multiclass'
+
+
+# ---------------------------------------------------------------------------
+# detectMulticlassY
+# ---------------------------------------------------------------------------
+
+
+def test_detect_multiclass_string_labels():
+    y = pd.Series(['class_0', 'class_1', 'class_2', 'class_0'])
+    assert detectMulticlassY(y)
+
+
+def test_detect_multiclass_arbitrary_strings():
+    y = pd.Series(['cat', 'dog', 'bird', 'cat'])
+    assert detectMulticlassY(y)
+
+
+def test_detect_multiclass_binary_not_multiclass():
+    y = pd.Series(['yes', 'no', 'yes'])
+    assert not detectMulticlassY(y)
+
+
+def test_detect_multiclass_numeric_not_multiclass():
+    y = pd.Series([0, 1, 2, 0])
+    assert not detectMulticlassY(y)
+
+
+def test_detect_multiclass_numeric_strings_not_multiclass():
+    # "0"/"1"/"2" as strings are parseable → not detected as multiclass
+    y = pd.Series(['0', '1', '2', '0'])
+    assert not detectMulticlassY(y)
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +351,17 @@ def test_preprocessor_count_y_not_standardised():
     result = DataPreprocessor().fit_transform(df)
     assert result['y_type'] == 'count'
     assert result['y'].dtype == np.int64
+
+
+def test_preprocessor_multiclass_y():
+    rng = np.random.default_rng(0)
+    n = 120
+    classes = np.tile(['class_0', 'class_1', 'class_2', 'class_3'], n // 4)
+    df = pd.DataFrame({'x': rng.normal(size=n), 'y': classes})
+    result = DataPreprocessor().fit_transform(df)
+    assert result['y_type'] == 'multiclass'
+    assert result['y'].dtype == np.int64
+    assert set(result['y'].tolist()) == {0, 1, 2, 3}
 
 
 def test_preprocessor_treatment_contrasts():
