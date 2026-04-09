@@ -110,6 +110,51 @@ class NumericTransformer:
     mean_: np.ndarray | None = field(default=None, repr=False)
     std_: np.ndarray | None = field(default=None, repr=False)
 
+    def fit(self, x: np.ndarray) -> 'NumericTransformer':
+        if x.ndim != 2:
+            raise ValueError(f'expected 2D array, got shape={x.shape}')
+        x = x.astype(float)
+        n, d = x.shape
+
+        self.is_binary_ = checkBinary(x, axis=0) if self.exclude_binary else np.zeros(d, dtype=bool)
+        self.is_count_like_ = (
+            checkCountLike(x, axis=0) & ~self.is_binary_
+            if self.transform_counts
+            else np.zeros(d, dtype=bool)
+        )
+
+        # log1p only for count-like columns that are sufficiently right-skewed;
+        # mildly skewed count predictors are z-standardised on the raw scale to
+        # avoid changing the functional form of the relationship.
+        self.is_log1p_ = np.zeros(d, dtype=bool)
+        if self.is_count_like_.any() and n > 2:
+            from scipy.stats import skew as _skew
+
+            skewness = np.zeros(d)
+            skewness[self.is_count_like_] = _skew(x[:, self.is_count_like_], axis=0)
+            self.is_log1p_ = self.is_count_like_ & (np.abs(skewness) > self.log1p_skew_threshold)
+
+        # apply log1p to the selected subset of count-like columns;
+        # clip to [0, inf) first as a safeguard even though checkCountLike already
+        # enforces non-negativity — log1p is undefined for negative inputs.
+        x_work = x.copy()
+        if self.is_log1p_.any():
+            x_work[:, self.is_log1p_] = np.clip(x_work[:, self.is_log1p_], 0, None)
+            x_work[:, self.is_log1p_] = np.log1p(x_work[:, self.is_log1p_])
+
+        # z-standardise all non-binary columns (log1p-transformed + raw count-like + continuous)
+        needs_z = ~self.is_binary_
+        self.mean_ = np.zeros(d)
+        self.std_ = np.ones(d)
+        if needs_z.any():
+            self.mean_[needs_z] = x_work[:, needs_z].mean(axis=0)
+            std = x_work[:, needs_z].std(axis=0)
+            bad = (~np.isfinite(std)) | (std < self.eps)
+            self.std_[needs_z] = np.where(bad, 1.0, std)
+
+        return self
+
+    def transform(self, x: np.ndarray) -> np.ndarray:
 def rescaleData(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     data = {k: v.clone() for k, v in data.items()}  # avoids side effects
     for key in (
