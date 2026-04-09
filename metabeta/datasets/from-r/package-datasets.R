@@ -87,6 +87,8 @@ write_parquet(df, path('parquet', 'penicillin.parquet'))
 data('Pastes', package = 'lme4')
 df <- Pastes
 # model <- lmer(strength ~ 1 + (1 | batch) + (1 | cask), data = df)
+# 'sample' is a nested row-level ID (30 unique / 60 rows); not a predictor
+df <- df |> select(-c('sample'))
 df <- renameCol(df, 'strength', 'y')
 df <- renameCol(df, 'batch', 'group')
 write_parquet(df, path('parquet', 'pastes.parquet'))
