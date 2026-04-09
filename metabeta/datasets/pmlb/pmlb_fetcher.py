@@ -1,19 +1,23 @@
+import json
+import time
 from pathlib import Path
+
 import pandas as pd
+import requests
+import yaml
 from pmlb import dataset_names, fetch_data
 
 # summary table
 url = 'https://raw.githubusercontent.com/EpistasisLab/pmlb/master/pmlb/all_summary_stats.tsv'
 stats_df = pd.read_csv(url, sep='\t')
 stats_df.to_csv('pmlb_summary.csv')
+summary = stats_df.set_index('dataset')
 
 # init
 raw_dir = Path('raw')
 raw_dir.mkdir(parents=True, exist_ok=True)
 out_dir = Path('parquet')
 out_dir.mkdir(parents=True, exist_ok=True)
-datasets = []
-candidate_cols = []
 
 # fetch all datasets
 for name in dataset_names:
