@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 # --- checkers
@@ -86,6 +86,18 @@ class Standardizer:
     def backward(self, x: np.ndarray) -> np.ndarray:
         return x * self.std + self.mean
 
+
+@dataclass
+class NumericTransformer:
+    """Stateful fit/transform for numeric predictors.
+
+    Column classification:
+      - binary {0,1}: pass-through unchanged.
+      - count-like with |skew| > log1p_skew_threshold: log1p then z-standardise.
+      - count-like with low skew: z-standardise only (log1p would impose an
+        unwarranted multiplicative functional form on a near-symmetric variable).
+      - continuous: z-standardise.
+    """
 
 def rescaleData(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     data = {k: v.clone() for k, v in data.items()}  # avoids side effects
