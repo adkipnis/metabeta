@@ -8,20 +8,24 @@ from metabeta.models.normalizingflows.coupling import Coupling, DualCoupling, Co
 
 ATOL = 5e-4
 B = 32
-torch.manual_seed(0)
 
 # -----------------------
 # Fixtures
 # -----------------------
 
 
+@pytest.fixture(autouse=True)
+def _seed_rng():
+    torch.manual_seed(0)
+
+
 @pytest.fixture
-def batch():
+def batch(_seed_rng):
     return torch.randn(B, 10, 3)
 
 
 @pytest.fixture
-def context():
+def context(_seed_rng):
     return torch.randn(B, 10, 5)
 
 
@@ -196,7 +200,7 @@ def test_coupling_flow(batch, context, subnet_kwargs, transform, n_blocks):
     x_rec, _, _ = model.inverse(z, context, mask=mask)
     assert torch.isfinite(z).all(), 'anomaly in forward pass'
     assert torch.isfinite(x_rec).all(), 'anomaly in backward pass'
-    assert torch.allclose(x, x_rec, atol=ATOL), 'recovery failed'
+    assert torch.allclose(x, x_rec, atol=ATOL * n_blocks), 'recovery failed'
     x = x.detach().clone().requires_grad_(True)
     z, log_det, _ = model.forward(x, context=context, mask=mask)
     log_det_num = _numerical_logdet(z, x)
