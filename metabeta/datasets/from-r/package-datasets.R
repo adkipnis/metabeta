@@ -59,14 +59,6 @@ df <- renameCol(df, 'Reaction', 'y')
 df <- renameCol(df, 'Subject', 'group')
 write_parquet(df, path('parquet', 'sleep.parquet'))
 
-# Dyestuff (d=1)
-data('Dyestuff', package = 'lme4')
-df <- Dyestuff
-# model <- lmer(Yield ~ (1 | Batch), data = df)
-df <- renameCol(df, 'Yield', 'y')
-df <- renameCol(df, 'Batch', 'group')
-write_parquet(df, path('parquet', 'dyestuff.parquet'))
-
 # Orthodont (d=3)
 data('Orthodont', package = 'nlme')
 df <- Orthodont
@@ -98,14 +90,6 @@ df <- Pastes
 df <- renameCol(df, 'strength', 'y')
 df <- renameCol(df, 'batch', 'group')
 write_parquet(df, path('parquet', 'pastes.parquet'))
-
-# Rail (d=1)
-data('Rail', package = 'nlme')
-df <- Rail
-# model <- lme(travel ~ 1, random = ~ 1 | Rail, data = df)
-df <- renameCol(df, 'travel', 'y')
-df <- renameCol(df, 'Rail', 'group')
-write_parquet(df, path('parquet', 'rail.parquet'))
 
 # ErgoStool (d=2)
 data('ergoStool', package = 'nlme')
