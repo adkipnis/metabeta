@@ -174,7 +174,7 @@ class Emulator:
         n: int,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         x = ds['X'].copy()
-        y = ds['y'].copy()
+        y = ds['y'].copy() if 'y' in ds else np.zeros(len(ds['X']))
 
         # subset features
         idx_feat = self.rng.permutation(x.shape[1])[: d - 1]
@@ -196,7 +196,7 @@ class Emulator:
         n: int,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         x = ds['X'].copy()
-        y = ds['y'].copy()
+        y = ds['y'].copy() if 'y' in ds else np.zeros(len(ds['X']))
 
         # subset features
         idx_feat = self.rng.permutation(x.shape[1])[: d - 1]
@@ -371,6 +371,8 @@ class Subsampler:
         if d > int(ds['d']):
             return False
         if self._maxGroups(ds) < self.min_m:
+            return False
+        if 'y' not in ds:
             return False
         return _yCompatible(ds['y'], self.likelihood_family)
 
