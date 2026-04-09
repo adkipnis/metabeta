@@ -127,6 +127,8 @@ write_parquet(df, path('parquet', 'pixel.parquet'))
 data('Hsb82', package = 'mlmRev')
 df <- Hsb82
 # model <- lmer(mAch ~ ses + meanses + minrty + sx + (1 | school), data = df)
+# 'cses' is centered ses (corr=0.85, not caught by correlation filter); 'sector' not in model
+df <- df |> select(-c('cses', 'sector'))
 df <- renameCol(df, 'mAch', 'y')
 df <- renameCol(df, 'school', 'group')
 write_parquet(df, path('parquet', 'hsb82.parquet'))
@@ -135,6 +137,9 @@ write_parquet(df, path('parquet', 'hsb82.parquet'))
 data('Chem97', package = 'mlmRev')
 df <- Chem97
 # model <- lmer(score ~ age + gcsescore + gender + (1 | school), data = df)
+# 'lea' (region) and 'student' (row ID) are not in the reference model; 'gcsecnt' is
+# centered gcsescore (r=1)
+df <- df |> select(-c('lea', 'student', 'gcsecnt'))
 df <- renameCol(df, 'score', 'y')
 df <- renameCol(df, 'school', 'group')
 write_parquet(df, path('parquet', 'chem97.parquet'))
@@ -149,6 +154,8 @@ write_parquet(df, path('parquet', 'chem97.parquet'))
 data('cbpp', package = 'lme4')
 df <- cbpp
 # model <- glmer(cbind(incidence, size - incidence) ~ period + (1 | herd), family = binomial, data = df)
+# 'size' is the binomial denominator (total animals at risk), not a fixed-effect predictor
+df <- df |> select(-c('size'))
 df <- renameCol(df, 'incidence', 'y')
 df <- renameCol(df, 'herd', 'group')
 write_parquet(df, path('parquet', 'cbpp.parquet'))
@@ -157,6 +164,9 @@ write_parquet(df, path('parquet', 'cbpp.parquet'))
 data('VerbAgg', package = 'lme4')
 df <- VerbAgg
 # model <- glmer(r2 ~ anger + gender + btype + situ + (1 | id), family = binomial, data = df)
+# 'resp' is a 3-level version of the binary target (perfect data leakage); 'item' is a
+# random effect (24-level stimulus ID), not a fixed predictor
+df <- df |> select(-c('item', 'resp'))
 df <- renameCol(df, 'r2', 'y')
 df$y <- as.integer(as.character(df$y) == 'Y')
 df <- renameCol(df, 'id', 'group')
@@ -166,6 +176,8 @@ write_parquet(df, path('parquet', 'verbagg.parquet'))
 data('grouseticks', package = 'lme4')
 df <- grouseticks
 # model <- glmer(TICKS ~ YEAR + HEIGHT + (1 | BROOD), family = poisson, data = df)
+# 'INDEX' is a row ID; 'cHEIGHT' is centered HEIGHT (r=1); 'LOCATION' is not in reference model
+df <- df |> select(-c('INDEX', 'cHEIGHT', 'LOCATION'))
 df <- renameCol(df, 'TICKS', 'y')
 df <- renameCol(df, 'BROOD', 'group')
 write_parquet(df, path('parquet', 'grouseticks.parquet'))
@@ -174,6 +186,8 @@ write_parquet(df, path('parquet', 'grouseticks.parquet'))
 data('Contraception', package = 'mlmRev')
 df <- Contraception
 # model <- glmer(use ~ age + urban + livch + (1 | district), family = binomial, data = df)
+# 'woman' is a person-level row ID, not a predictor
+df <- df |> select(-c('woman'))
 df <- renameCol(df, 'use', 'y')
 df$y <- as.integer(as.character(df$y) == 'Y')
 df <- renameCol(df, 'district', 'group')
@@ -183,6 +197,9 @@ write_parquet(df, path('parquet', 'contraception.parquet'))
 data('InstEval', package = 'lme4')
 df <- InstEval
 # model <- lmer(y ~ service + dept + (1 | s), data = df)
+# 'd' is the instructor ID (1128 levels, random effect); 'studage' and 'lectage' are not
+# in the reference model
+df <- df |> select(-c('d', 'studage', 'lectage'))
 df <- renameCol(df, 's', 'group')
 write_parquet(df, path('parquet', 'insteval.parquet'))
 
