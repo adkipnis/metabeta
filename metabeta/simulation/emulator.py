@@ -14,45 +14,78 @@ DATA_PATH = (Path(__file__).resolve().parent / '..' / 'datasets' / 'preprocessed
 VAL_PATHS = list(Path(DATA_PATH, 'validation').glob('*.npz'))
 TEST_PATHS = list(Path(DATA_PATH, 'test').glob('*.npz'))
 PATHS = VAL_PATHS + TEST_PATHS
-DATABASE: list[dict] | None = None
-TEST_DATABASE: list[dict] | None = None
+
+# Metadata-only index: scalars + ns arrays (tiny).  Populated lazily.
+_META_DB: list[dict] | None = None
+_TEST_META_DB: list[dict] | None = None
+# Full datasets loaded on demand and cached by path.
+_DATA_CACHE: dict[Path, dict] = {}
+
+
+# y_type strings saved by preprocess.py → compatible likelihood families
+# family 0=normal (always), 1=bernoulli, 2=poisson
+_Y_TYPE_FAMILIES: dict[str, set[int]] = {
+    'continuous': {0},
+    'binary': {0, 1},
+    'count': {0, 2},
+    'multiclass': {0},
+}
+
+
+def _loadMeta(path: Path) -> dict:
+    """Load only lightweight fields (no X/y/groups arrays).
+
+    Derives y-compatibility from the stored ``y_type`` string so the large
+    ``y`` array is never read during metadata loading.
+    """
+    restore = lambda v: v.item() if v.shape == () else v
+    data = np.load(path, allow_pickle=True)
+    meta: dict = {}
+    for k in data.files:
+        if k in ('X', 'y', 'groups'):
+            continue
+        v = restore(data[k])
+        if v is not None:
+            meta[k] = v
+    y_type = str(meta.get('y_type', ''))
+    meta['y_families'] = _Y_TYPE_FAMILIES.get(y_type, set()) if 'y' in data.files else set()
+    meta['source'] = path
+    return meta
 
 
 def getDatabase() -> list[dict]:
-    # lazyload database on first use
-    global DATABASE
-    if DATABASE is None:
-        DATABASE = [loadDataset(p) for p in PATHS]
-    return DATABASE
+    """Lazyload metadata-only index for all datasets."""
+    global _META_DB
+    if _META_DB is None:
+        _META_DB = [_loadMeta(p) for p in PATHS]
+    return _META_DB
 
 
 def getTestDatabase() -> list[dict]:
-    """Lazyload only test-pool datasets (all have group structure)."""
-    global TEST_DATABASE
-    if TEST_DATABASE is None:
-        TEST_DATABASE = [loadDataset(p) for p in TEST_PATHS]
-    return TEST_DATABASE
+    """Lazyload metadata-only index for test-pool datasets."""
+    global _TEST_META_DB
+    if _TEST_META_DB is None:
+        _TEST_META_DB = [_loadMeta(p) for p in TEST_PATHS]
+    return _TEST_META_DB
 
 
 def loadDataset(source: Path) -> dict:
-    """wrapper for loading preprocessed npz dataset"""
+    """Load full dataset (X, y, ...) on demand; cache by path."""
+    if source in _DATA_CACHE:
+        return _DATA_CACHE[source]
     restore = lambda v: v.item() if v.shape == () else v
-
-    # load preprocessed dataset
     assert source.exists(), 'source does not exist'
     data = np.load(source, allow_pickle=True)
-    data = {k: restore(data[k]) for k in data.files if restore(data[k]) is not None}
-    data['source'] = source
-
-    # check dims
-    assert len(data['X']) == data['n'], 'dim mismatch (X, n)'
-    groups = data.get('groups')
+    result = {k: restore(data[k]) for k in data.files if restore(data[k]) is not None}
+    result['source'] = source
+    assert len(result['X']) == result['n'], 'dim mismatch (X, n)'
+    groups = result.get('groups')
     if groups is not None:
-        assert len(groups) == len(data['X']), 'dim mismatch (group, X)'
-        assert len(np.unique(groups)) == data['m'], 'dim mismatch (group, m)'
-        assert data['n'] == data['ns'].sum(), 'dim mismatch (n, ns)'
-
-    return data
+        assert len(groups) == len(result['X']), 'dim mismatch (group, X)'
+        assert len(np.unique(groups)) == result['m'], 'dim mismatch (group, m)'
+        assert result['n'] == result['ns'].sum(), 'dim mismatch (n, ns)'
+    _DATA_CACHE[source] = result
+    return result
 
 
 @dataclass
@@ -127,7 +160,7 @@ class Emulator:
 
     def _maxGroups(self, ds: dict) -> int:
         n = int(ds['n'])
-        if 'm' in ds and 'ns' in ds and 'groups' in ds:
+        if 'm' in ds and 'ns' in ds:
             eligible = int(np.sum(ds['ns'] >= self.min_n))
             return min(int(ds['m']), eligible, n // self.min_n)
         return n // self.min_n
@@ -138,33 +171,34 @@ class Emulator:
         return self._maxGroups(ds) >= self.min_m
 
     def _pull(self, d: int):
-        # get dataset from database with matching dims
-        database = getDatabase()
+        # select from lightweight metadata index, then load full data for chosen path only
+        meta_db = getDatabase()
         if self.source == 'all':
-            subset = [ds for ds in database if self._compatible(ds, d)]
+            subset = [m for m in meta_db if self._compatible(m, d)]
             n_ds = len(subset)
             if n_ds == 0:
                 raise ValueError(
                     f'no source dataset can support d={d}, min_m={self.min_m}, min_n={self.min_n}'
                 )
             idx = self.rng.integers(0, n_ds)
-            self.ds = subset[idx]
+            self.ds = loadDataset(subset[idx]['source'])
         else:
             path0 = Path(DATA_PATH, 'test', f'{self.source}.npz')
             path1 = Path(DATA_PATH, 'validation', f'{self.source}.npz')
             if path0 in PATHS:
-                idx = PATHS.index(path0)
+                path = path0
             elif path1 in PATHS:
-                idx = PATHS.index(path1)
+                path = path1
             else:
                 raise ValueError(f'{self.source} not in known paths.')
-            self.ds = database[idx]
-            if not self._compatible(self.ds, d):
+            meta = next(m for m in meta_db if m['source'] == path)
+            if not self._compatible(meta, d):
                 raise ValueError(
                     f'dimension mismatch for source={self.source}: '
                     f'requested d={d}, min_m={self.min_m}, min_n={self.min_n}, '
-                    f"but source has d={self.ds['d']}, n={self.ds['n']}, max_groups={self._maxGroups(self.ds)}"
+                    f"but source has d={meta['d']}, n={meta['n']}, max_groups={self._maxGroups(meta)}"
                 )
+            self.ds = loadDataset(path)
 
     def _subset(
         self,
@@ -372,14 +406,14 @@ class Subsampler:
             return False
         if self._maxGroups(ds) < self.min_m:
             return False
-        if 'y' not in ds:
-            return False
-        return _yCompatible(ds['y'], self.likelihood_family)
+        # use precomputed y_families flag from metadata (no y array needed)
+        return self.likelihood_family in ds.get('y_families', set())
 
     def _pull(self, d: int):
-        database = getTestDatabase()
+        # select from lightweight metadata index, then load full data for chosen path only
+        meta_db = getTestDatabase()
         if self.source == 'all':
-            subset = [ds for ds in database if self._compatible(ds, d)]
+            subset = [m for m in meta_db if self._compatible(m, d)]
             n_ds = len(subset)
             if n_ds == 0:
                 raise ValueError(
@@ -387,18 +421,18 @@ class Subsampler:
                     f'min_n={self.min_n}, likelihood_family={self.likelihood_family}'
                 )
             idx = self.rng.integers(0, n_ds)
-            self.ds = subset[idx]
+            self.ds = loadDataset(subset[idx]['source'])
         else:
             path = Path(DATA_PATH, 'test', f'{self.source}.npz')
             if path not in TEST_PATHS:
                 raise ValueError(f'{self.source} not in test pool.')
-            idx = TEST_PATHS.index(path)
-            self.ds = database[idx]
-            if not self._compatible(self.ds, d):
+            meta = next(m for m in meta_db if m['source'] == path)
+            if not self._compatible(meta, d):
                 raise ValueError(
                     f'source={self.source} incompatible: d={d}, '
                     f'likelihood_family={self.likelihood_family}'
                 )
+            self.ds = loadDataset(path)
 
     def _subset(
         self, ds: dict, d: int, m: int, n: int
