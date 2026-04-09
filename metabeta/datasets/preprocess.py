@@ -237,15 +237,37 @@ def coerceTargetToNumeric(y: pd.Series) -> tuple[np.ndarray, bool]:
     raise ValueError(f'Cannot convert target y to numeric. dtype={y.dtype}, sample=[{sample}]')
 
 
-def detectYType(y: np.ndarray, y_is_binary: bool) -> str:
-    """Return 'binary', 'count', or 'continuous'."""
+def detectYType(y: np.ndarray, y_is_binary: bool, is_multiclass: bool = False) -> str:
+    """Return 'binary', 'count', 'continuous', or 'multiclass'."""
     if y_is_binary:
         return 'binary'
+    if is_multiclass:
+        return 'multiclass'
     finite = y[np.isfinite(y)]
     if len(finite) == 0:
         return 'continuous'
     is_count = checkCountLike(finite.reshape(-1, 1), axis=0)[0]
     return 'count' if is_count else 'continuous'
+
+
+def detectMulticlassY(y: pd.Series) -> bool:
+    """Return True if y is a non-numeric string column with more than 2 unique values.
+
+    Used to identify multiclass classification targets (e.g. PMLB datasets where
+    class labels are stored as ``"class_0"``, ``"class_1"``, ... strings).
+    """
+    if not (
+        pd.api.types.is_object_dtype(y)
+        or pd.api.types.is_string_dtype(y)
+        or isinstance(y.dtype, pd.CategoricalDtype)
+    ):
+        return False
+    y_str = y.astype('string').str.strip()
+    non_missing = y_str.dropna()
+    if non_missing.nunique() <= 2:
+        return False
+    parsed = pd.to_numeric(non_missing, errors='coerce')
+    return parsed.notna().sum() < len(non_missing)
 
 
 # ---------------------------------------------------------------------------
@@ -517,7 +539,11 @@ class DataPreprocessor:
         y: np.ndarray | None = None
         if 'y' in df.columns:
             y_raw = df.pop('y')
-            y, _ = coerceTargetToNumeric(y_raw)
+            if self._y_type == 'multiclass':
+                codes, _ = pd.factorize(y_raw)
+                y = codes.astype(float)
+            else:
+                y, _ = coerceTargetToNumeric(y_raw)
 
         # --- group extraction ---
         groups: np.ndarray | None = None
@@ -574,7 +600,7 @@ class DataPreprocessor:
         if y is not None:
             if self._y_type == 'continuous':
                 y = (y - self._y_mean) / self._y_std
-            elif self._y_type == 'count':
+            elif self._y_type in ('count', 'multiclass'):
                 y = y.astype(np.int64)
 
         # --- group summary ---
@@ -630,8 +656,14 @@ class DataPreprocessor:
         df = _dropHeavyColumns(df, self.col_miss_threshold)
 
         # --- coerce and detect y type ---
-        y, y_is_binary = coerceTargetToNumeric(y_col)
-        self._y_type = detectYType(y, y_is_binary)
+        y_is_multiclass = detectMulticlassY(y_col)
+        if y_is_multiclass:
+            codes, _ = pd.factorize(y_col)
+            y = codes.astype(float)
+            y_is_binary = False
+        else:
+            y, y_is_binary = coerceTargetToNumeric(y_col)
+        self._y_type = detectYType(y, y_is_binary, y_is_multiclass)
 
         # remove rows with non-finite y (listwise on the target is non-negotiable)
         y_valid = np.isfinite(y)
@@ -794,7 +826,7 @@ class DataPreprocessor:
             self._y_mean = float(np.nanmean(y))
             self._y_std = float(max(float(np.nanstd(y)), 1e-6))
             y_out = (y - self._y_mean) / self._y_std
-        elif self._y_type == 'count':
+        elif self._y_type in ('count', 'multiclass'):
             self._y_mean = 0.0
             self._y_std = 1.0
             y_out = y.astype(np.int64)
