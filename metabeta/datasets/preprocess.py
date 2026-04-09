@@ -440,75 +440,386 @@ def lumpCategories(
 
 
 # ---------------------------------------------------------------------------
+# DataPreprocessor
+# ---------------------------------------------------------------------------
+
+
+class DataPreprocessor:
+    """Stateful preprocessor for LMM/GLMM data.
+
+    Call ``fit_transform`` (simulation path) to fit all statistics and return
+    cleaned, encoded data in one pass.  Call ``fit`` then ``transform``
+    (deployment path) to replay the same pipeline on new data without re-fitting.
+
+    Missing values are handled consistently in both paths via group-aware
+    median/mode imputation — there is no listwise deletion.  Extreme numeric
+    values are winsorized (not deleted) so that no rows are ever removed after
+    the initial heavy-column drop and non-finite-y filter.
+
+    The output dict schema matches the ``.npz`` files expected by the emulator:
+    ``X`` (n x d-1, no intercept), ``y``, ``groups``, ``columns``, ``d``,
+    ``n``, ``ns``, ``m``, ``y_type``.
+    """
+
+    _version = '1'
+
+    def __init__(
+        self,
+        group_name: str = '',
+        col_miss_threshold: float = 0.25,
+        constant_threshold: float = 0.95,
+        outlier_threshold: float = 4.0,
+        corr_threshold: float = 0.95,
+        max_categories: int = 10,
+        min_prevalence: float = 0.05,
+        sentinels: list[float] | None = None,
+    ):
+        self.group_name = group_name
+        self.col_miss_threshold = col_miss_threshold
+        self.constant_threshold = constant_threshold
+        self.outlier_threshold = outlier_threshold
+        self.corr_threshold = corr_threshold
+        self.max_categories = max_categories
+        self.min_prevalence = min_prevalence
+        self.sentinels: list[float] = sentinels if sentinels is not None else [-999]
+        self._fitted = False
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def fit(self, df: pd.DataFrame) -> 'DataPreprocessor':
+        self._fit_core(df)
+        return self
+
+    def fit_transform(self, df: pd.DataFrame) -> dict:
+        return self._fit_core(df)
+
+    def transform(self, df: pd.DataFrame) -> dict:
+        """Apply the fitted pipeline to new data (deployment path).
+
+        No rows are ever dropped. Missing values are filled using the
+        group-aware statistics fitted during ``fit``/``fit_transform``.
+        Winsorization bounds are applied identically to the training path.
+        """
+        if not self._fitted:
+            raise RuntimeError('DataPreprocessor must be fitted before transform.')
+        df = df.copy()
+        df.columns = df.columns.str.lower()
+        df = df.reset_index(drop=True)
+        df = _sentinelReplace(df, self.sentinels)
+
+        # --- extract y if present ---
+        y: np.ndarray | None = None
+        if 'y' in df.columns:
+            y_raw = df.pop('y')
+            y, _ = coerceTargetToNumeric(y_raw)
+
+        # --- group extraction ---
+        groups: np.ndarray | None = None
+        group_name = self._group_name_fitted
+        if group_name and group_name in df.columns:
+            df = df.sort_values(by=group_name)
+            sort_idx = df.index.values
+            if y is not None and len(y) == len(df):
+                y = y[sort_idx]
+            df = df.reset_index(drop=True)
+            groups_raw = df.pop(group_name)
+            groups, _ = pd.factorize(groups_raw)
+
+        df = df.reset_index(drop=True)
+
+        # --- imputation (consistent with training path) ---
+        df = _applyImputation(df, groups, self._num_impute_stats, self._cat_impute_stats)
+
+        # --- apply lump maps ---
+        for col, lump_levels in self._lump_maps.items():
+            if col not in df.columns or not lump_levels:
+                continue
+            mask = df[col].isin(lump_levels)
+            if self._lump_has_other.get(col, False):
+                df[col] = df[col].where(~mask, 'other')
+            else:
+                df[col] = df[col].where(~mask, np.nan)
+
+        # --- drop fitted-dropped columns ---
+        drop_present = [c for c in self._dropped_cols if c in df.columns]
+        if drop_present:
+            df = df.drop(columns=drop_present)
+
+        # --- winsorize (consistent with training path) ---
+        df = _applyWinsor(df, self._winsor_bounds)
+
+        # --- numeric transform ---
+        x_parts: list[np.ndarray] = []
+        if self._numeric_cols and self._num_transformer is not None:
+            cols_present = [c for c in self._numeric_cols if c in df.columns]
+            x_num = df[cols_present].to_numpy(dtype=float)
+            x_num = self._num_transformer.transform(x_num)
+            x_parts.append(x_num)
+
+        # --- categorical encode ---
+        if self._categorical_cols and self._encoder is not None:
+            cols_present = [c for c in self._categorical_cols if c in df.columns]
+            x_cat = self._encoder.transform(df[cols_present]).astype(float)
+            x_parts.append(x_cat)
+
+        X = np.concatenate(x_parts, axis=1) if x_parts else np.empty((len(df), 0))
+
+        # --- standardise y ---
+        if y is not None:
+            if self._y_type == 'continuous':
+                y = (y - self._y_mean) / self._y_std
+            elif self._y_type == 'count':
+                y = y.astype(np.int64)
+
+        # --- group summary ---
+        ns: np.ndarray | None = None
+        m: int | None = None
+        if groups is not None:
+            _, ns = np.unique(groups, return_counts=True)
+            m = int(len(ns))
+
+        n, d_minus_1 = X.shape
+        return {
+            'X': X.astype(np.float64),
+            'y': y,
+            'groups': groups,
+            'columns': np.array(self._output_columns, dtype=str),
+            'd': d_minus_1 + 1,
+            'n': n,
+            'ns': ns,
+            'm': m,
+            'y_type': self._y_type,
+        }
+
+    def save(self, path: str | Path) -> None:
+        joblib.dump(self, path)
+
+    @classmethod
+    def load(cls, path: str | Path) -> 'DataPreprocessor':
+        obj = joblib.load(path)
+        if not isinstance(obj, cls):
+            raise ValueError(f'Expected DataPreprocessor, got {type(obj)}')
+        return obj
+
+    # ------------------------------------------------------------------
+    # Core fit logic (single pass)
+    # ------------------------------------------------------------------
+
+    def _fit_core(self, df: pd.DataFrame) -> dict:
+        """Fit all statistics and transform training data in one pass.
+
+        Sets all ``_fitted`` state on self. Returns the output dict.
+        """
+        df = df.copy()
+        df.columns = df.columns.str.lower()
+        df = df.reset_index(drop=True)
+        df = _sentinelReplace(df, self.sentinels)
+
+        # --- pop y so it doesn't influence column-level decisions ---
+        if 'y' not in df.columns:
+            raise ValueError("DataFrame must contain a 'y' column.")
+        y_col = df.pop('y')
+
+        # --- drop heavily-missing columns (only columns are removed here) ---
+        df = _dropHeavyColumns(df, self.col_miss_threshold)
+
+        # --- coerce and detect y type ---
+        y, y_is_binary = coerceTargetToNumeric(y_col)
+        self._y_type = detectYType(y, y_is_binary)
+
+        # remove rows with non-finite y (listwise on the target is non-negotiable)
+        y_valid = np.isfinite(y)
+        if not np.all(y_valid):
+            n_bad = int((~y_valid).sum())
+            logger.warning(f'Removing {n_bad} rows with non-finite y.')
+            keep = np.where(y_valid)[0]
+            df = df.iloc[keep].reset_index(drop=True)
+            y = y[keep]
+
+        # --- group detection and extraction ---
+        # Group detection runs before imputation so that group membership can
+        # inform within-group imputation statistics.
+        group_name = self.group_name
+        if not group_name:
+            candidates = detectGroupCandidates(df)
+            if candidates:
+                group_name = candidates[0].name
+                logger.info(
+                    f'Auto-detected grouping variable "{group_name}" '
+                    f'(simulation path only; specify group_name explicitly for deployment).'
+                )
+
+        # High-cardinality categoricals (> max_categories levels) are more appropriately
+        # modelled as random effects than as lumped fixed-effect dummies.  If no group
+        # variable has been found yet, route the highest-cardinality categorical column
+        # as the grouping factor, provided it has ≥ 2 observations per level on average.
+        if not group_name:
+            hi_card = [
+                c for c in categorical(df).tolist() if df[c].nunique() > self.max_categories
+            ]
+            if hi_card:
+                best_hi = max(hi_card, key=lambda c: df[c].nunique())
+                if len(df) / df[best_hi].nunique() >= 2:
+                    group_name = best_hi
+                    logger.info(
+                        f'Routing high-cardinality categorical "{group_name}" '
+                        f'({df[group_name].nunique()} levels) as random effect.'
+                    )
+
+        self._group_name_fitted = group_name
+
+        groups: np.ndarray | None = None
+        if group_name and group_name in df.columns:
+            df = df.sort_values(by=group_name)
+            sort_idx = df.index.values
+            y = y[sort_idx]
+            df = df.reset_index(drop=True)
+            groups_raw = df.pop(group_name)
+            groups, _ = pd.factorize(groups_raw)
+
+        # --- consistent group-aware imputation ---
+        # Fit on training data; apply in transform() too — no listwise deletion.
+        # Within-group median/mode is used when grouping is available; falls back
+        # to the global statistic for groups where the column is entirely missing.
+        num_cols_for_imp = numerical(df).tolist()
+        cat_cols_for_imp = categorical(df).tolist()
+        self._num_impute_stats, self._cat_impute_stats = _computeImputeStats(
+            df, groups, num_cols_for_imp, cat_cols_for_imp
+        )
+        df = _applyImputation(df, groups, self._num_impute_stats, self._cat_impute_stats)
+
+        # --- winsorize numeric columns ---
+        # Extreme values are clipped to [mean ± outlier_threshold * std] rather than
+        # deleted, so no rows are lost and the same bounds can be applied in transform().
+        num_cols_now = numerical(df).tolist()
+        if num_cols_now:
+            self._winsor_bounds = _computeWinsorBounds(
+                df[num_cols_now], threshold=self.outlier_threshold
+            )
+            df = _applyWinsor(df, self._winsor_bounds)
         else:
-            mapper = {unique[0]: 0.0, unique[1]: 1.0}
-        mapped = y_str.map(mapper).to_numpy(dtype=float)
-        return mapped, True
+            self._winsor_bounds: dict[str, tuple[float, float]] = {}
 
-    parsed = pd.to_numeric(y_str, errors='coerce')
-    if parsed.notna().sum() == non_missing.shape[0]:
-        arr = parsed.to_numpy(dtype=float)
-        uniq = np.unique(arr[np.isfinite(arr)])
-        is_binary = len(uniq) == 2 and set(uniq.tolist()).issubset({0.0, 1.0})
-        return arr, is_binary
+        # --- near-constant column removal ---
+        num_cols_now = numerical(df).tolist()
+        bad_const = [
+            c
+            for c in num_cols_now
+            if df[c].value_counts(normalize=True).max() > self.constant_threshold
+        ]
+        if bad_const:
+            logger.warning(f'Dropping near-constant columns {bad_const}.')
+        dropped: set[str] = set(bad_const)
+        df = df.drop(columns=bad_const)
 
-    sample = ', '.join(map(str, unique[:8]))
-    raise ValueError(
-        f'Cannot convert target y to numeric dtype. dtype={y.dtype}, sample values=[{sample}]'
-    )
+        # --- correlation filter ---
+        df, corr_dropped = _corrFilter(df, threshold=self.corr_threshold)
+        dropped |= corr_dropped
+        self._dropped_cols = dropped
 
+        # --- categorical lumping ---
+        cat_cols = categorical(df).tolist()
+        self._lump_maps: dict[str, set] = {}
+        self._lump_has_other: dict[str, bool] = {}
+        for col in cat_cols:
+            lumped, lump_levels, has_other = lumpCategories(
+                df[col], self.max_categories, self.min_prevalence
+            )
+            df[col] = lumped
+            self._lump_maps[col] = lump_levels
+            self._lump_has_other[col] = has_other
 
-def findOutliers(df: pd.DataFrame, threshold: float = 4.0, min_std: float = 1e-12):
-    # detect values that are more than {threshold} SDs away from the mean
-    x = df.to_numpy(dtype=float)
-    mean = np.nanmean(x, axis=0)
-    std = np.nanstd(x, axis=0)
-    std = np.maximum(std, min_std)
-    z = (x - mean) / std
-    outliers = (np.abs(z) > threshold).any(axis=1)
-    frac = outliers.mean()
-    if frac > 0.1:
-        logger.warning(f'Removing {frac * 100:.2f}% outlier rows.')
-    return outliers
+        # drop rows where rare categories became NaN (pool too small for "other")
+        if cat_cols:
+            still_missing = df[cat_cols].isnull().any(axis=1)
+            if still_missing.any():
+                keep = np.where(~still_missing)[0]
+                df = df.iloc[keep].reset_index(drop=True)
+                y = y[keep]
+                if groups is not None:
+                    groups = groups[keep]
+                    groups, _ = pd.factorize(pd.Series(groups))
 
+        # --- classify columns ---
+        self._numeric_cols: list[str] = numerical(df).tolist()
+        self._categorical_cols: list[str] = categorical(df).tolist()
 
-# def findOutliersMAD(
-#     df: pd.DataFrame,
-#     threshold: float = 12.0,
-#     min_std: float = 1e-12,
-# ):
-#     # MAD version of the above
-#     x = df.to_numpy(dtype=float)
-#     median = np.nanmedian(x, axis=0)
-#     mad = np.nanmedian(np.abs(x - median), axis=0)
-#     mad = np.maximum(mad, min_std)
-#     z = 0.6745 * (x - median) / mad
-#     outliers = (np.abs(z) > threshold).any(axis=1)
-#     frac = outliers.mean()
-#     if frac > 0.1:
-#         print(f'--- Warning: Removing {frac * 100:.2f}% outlier rows.')
-#     return outliers
+        # --- fit and apply numeric transformer ---
+        if self._numeric_cols:
+            x_num = df[self._numeric_cols].to_numpy(dtype=float)
+            self._num_transformer: NumericTransformer | None = NumericTransformer(
+                exclude_binary=True,
+                transform_counts=True,
+            )
+            x_num = self._num_transformer.fitTransform(x_num)
+        else:
+            self._num_transformer = None
+            x_num = np.empty((len(df), 0))
 
+        # --- fit and apply categorical encoder ---
+        if self._categorical_cols:
+            # Drop the most frequent level as the reference category, matching
+            # R's contr.treatment convention of using the largest group as baseline.
+            modal_refs = [
+                df[col].value_counts().index[0] for col in self._categorical_cols
+            ]
+            self._encoder: OneHotEncoder | None = OneHotEncoder(
+                drop=modal_refs,
+                sparse_output=False,
+                handle_unknown='ignore',
+            )
+            x_cat = self._encoder.fit_transform(df[self._categorical_cols]).astype(float)
+        else:
+            self._encoder = None
+            x_cat = np.empty((len(df), 0))
 
-def dummify(df: pd.DataFrame, colname: str, max_columns: int = 10, min_prevalence: float = 0.05):
-    # make dummy variables out of categorical columns
-    unique = df[colname].nunique()
-    if unique > max_columns:
-        logger.warning(f'Removing category {colname} due to {unique} factors.')
-        return df.drop(colname, axis=1)
-    ref_category = df[colname].mode()[0]
-    dummies = pd.get_dummies(df[colname], prefix=colname).astype(int)
-    dummies = dummies.drop(f'{colname}_{ref_category}', axis=1)
+        # --- output column names ---
+        dummy_cols: list[str] = []
+        if self._encoder is not None:
+            dummy_cols = self._encoder.get_feature_names_out(self._categorical_cols).tolist()
+        self._output_columns: list[str] = self._numeric_cols + dummy_cols
 
-    # drop rare dummies
-    rare = dummies.columns[dummies.mean() < min_prevalence]
-    if len(rare):
-        logger.warning(f'Removing rare dummies {list(rare)} (prevalence < {min_prevalence}).')
-        dummies = dummies.drop(columns=rare)
+        # --- combine X ---
+        parts = [p for p in [x_num, x_cat] if p.shape[1] > 0]
+        X = np.concatenate(parts, axis=1) if parts else np.empty((len(df), 0))
 
-    df = pd.concat([df, dummies], axis=1)
-    df = df.drop(colname, axis=1)
-    return df
+        # --- y standardisation ---
+        if self._y_type == 'continuous':
+            self._y_mean = float(np.nanmean(y))
+            self._y_std = float(max(float(np.nanstd(y)), 1e-6))
+            y_out = (y - self._y_mean) / self._y_std
+        elif self._y_type == 'count':
+            self._y_mean = 0.0
+            self._y_std = 1.0
+            y_out = y.astype(np.int64)
+        else:  # binary
+            self._y_mean = 0.0
+            self._y_std = 1.0
+            y_out = y.astype(float)
+
+        # --- group summary ---
+        ns: np.ndarray | None = None
+        m: int | None = None
+        if groups is not None:
+            _, ns = np.unique(groups, return_counts=True)
+            m = int(len(ns))
+
+        self._fitted = True
+
+        n, d_minus_1 = X.shape
+        return {
+            'X': X.astype(np.float64),
+            'y': y_out,
+            'groups': groups,
+            'columns': np.array(self._output_columns, dtype=str),
+            'd': d_minus_1 + 1,
+            'n': n,
+            'ns': ns,
+            'm': m,
+            'y_type': self._y_type,
+        }
 
 
 def preprocess(
