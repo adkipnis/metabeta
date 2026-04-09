@@ -99,6 +99,15 @@ def test_detect_y_type_count():
     assert detectYType(y, y_is_binary=False) == 'count'
 
 
+def test_detect_y_type_offset_integers_are_continuous():
+    # Integer-valued y whose minimum is > 0 should be treated as continuous
+    # (discretised measurements such as ratings, scores, diameters), not count.
+    y = np.array([1.0, 2.0, 3.0, 4.0, 5.0])  # ratings
+    assert detectYType(y, y_is_binary=False) == 'continuous'
+    y = np.array([18.0, 20.0, 23.0, 27.0])  # diameters
+    assert detectYType(y, y_is_binary=False) == 'continuous'
+
+
 def test_detect_y_type_continuous():
     y = np.array([1.5, -0.3, 2.7])
     assert detectYType(y, y_is_binary=False) == 'continuous'
