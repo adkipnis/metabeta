@@ -1042,3 +1042,4 @@ if __name__ == '__main__':
     batchProcess('from-r', partition='test', group_name='group')
     batchProcess('srm', partition='auto')
     batchProcess('pmlb', partition='auto')
+    batchProcess('ucimlr', partition='auto')
