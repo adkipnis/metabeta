@@ -7,52 +7,10 @@ import requests
 import yaml
 from pmlb import dataset_names, fetch_data
 
-# summary table
-url = 'https://raw.githubusercontent.com/EpistasisLab/pmlb/master/pmlb/all_summary_stats.tsv'
-stats_df = pd.read_csv(url, sep='\t')
-stats_df.to_csv('pmlb_summary.csv')
-summary = stats_df.set_index('dataset')
-
-# init
-raw_dir = Path('raw')
-raw_dir.mkdir(parents=True, exist_ok=True)
-out_dir = Path('parquet')
-out_dir.mkdir(parents=True, exist_ok=True)
-
-# ---------------------------------------------------------------------------
-# Fetch and cache per-dataset feature-type metadata from PMLB GitHub.
-# The packaged .tsv.gz files strip schema information, so integer-encoded
-# nominal features are indistinguishable from true numeric features without
-# this metadata.  The canonical source is:
-#   https://raw.githubusercontent.com/EpistasisLab/pmlb/master/datasets/
-#       <dataset>/metadata.yaml
-# ---------------------------------------------------------------------------
-metadata_cache = Path('pmlb_metadata.json')
-if metadata_cache.exists():
-    with open(metadata_cache) as f:
-        metadata: dict = json.load(f)
-    print(f'Loaded cached metadata for {len(metadata)} datasets.')
-else:
-    print('Fetching per-dataset metadata from PMLB GitHub...')
-    metadata = {}
-    base_url = 'https://raw.githubusercontent.com/EpistasisLab/pmlb/master/datasets'
-    for i, name in enumerate(dataset_names):
-        meta_url = f'{base_url}/{name}/metadata.yaml'
-        try:
-            r = requests.get(meta_url, timeout=15)
-            if r.status_code == 200:
-                metadata[name] = yaml.safe_load(r.text)
-        except Exception as e:
-            print(f'  [{name}] metadata fetch failed: {e}')
-        if i % 50 == 49:
-            print(f'  {i + 1}/{len(dataset_names)} fetched...')
-            time.sleep(0.5)  # be polite to GitHub
-    with open(metadata_cache, 'w') as f:
-        json.dump(metadata, f, indent=2)
-    print(f'Cached metadata for {len(metadata)} datasets.')
+RATE_LIMIT_DELAY = 0.5
 
 
-def _apply_column_metadata(df: pd.DataFrame, name: str) -> pd.DataFrame:
+def applyColumnMetadata(df: pd.DataFrame, name: str, metadata: dict) -> pd.DataFrame:
     """Convert PMLB-typed categorical columns to pandas CategoricalDtype.
 
     The preprocessor's ``categorical()`` helper detects only object/category/string
@@ -72,41 +30,93 @@ def _apply_column_metadata(df: pd.DataFrame, name: str) -> pd.DataFrame:
     return df
 
 
-# fetch all datasets
-datasets = []
-skipped_small = []
-skipped_multiclass = []
+def main():
+    # Summary table
+    url = 'https://raw.githubusercontent.com/EpistasisLab/pmlb/master/pmlb/all_summary_stats.tsv'
+    stats_df = pd.read_csv(url, sep='\t')
+    stats_df.to_csv('pmlb_summary.csv')
+    summary = stats_df.set_index('dataset')
 
-for name in dataset_names:
-    try:
-        df = fetch_data(name, local_cache_dir=raw_dir)
-        df = df.rename(columns={'target': 'y'})
+    raw_dir = Path('raw')
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = Path('parquet')
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-        # skip tiny datasets (too few rows for meaningful group-level statistics)
-        if len(df) < 50:
-            skipped_small.append(name)
-            print(f'Skipping {name} (n={len(df)} < 50)')
-            continue
+    # Fetch and cache per-dataset feature-type metadata from PMLB GitHub.
+    # The packaged .tsv.gz files strip schema information, so integer-encoded
+    # nominal features are indistinguishable from true numeric features without
+    # this metadata.  The canonical source is:
+    #   https://raw.githubusercontent.com/EpistasisLab/pmlb/master/datasets/
+    #       <dataset>/metadata.yaml
+    metadata_cache = Path('pmlb_metadata.json')
+    if metadata_cache.exists():
+        with open(metadata_cache) as f:
+            metadata: dict = json.load(f)
+        print(f'Loaded cached metadata for {len(metadata)} datasets.')
+    else:
+        print('Fetching per-dataset metadata from PMLB GitHub...')
+        metadata = {}
+        base_url = 'https://raw.githubusercontent.com/EpistasisLab/pmlb/master/datasets'
+        for i, name in enumerate(dataset_names):
+            meta_url = f'{base_url}/{name}/metadata.yaml'
+            try:
+                r = requests.get(meta_url, timeout=15)
+                if r.status_code == 200:
+                    metadata[name] = yaml.safe_load(r.text)
+            except Exception as e:
+                print(f'  [{name}] metadata fetch failed: {e}')
+            if i % 50 == 49:
+                print(f'  {i + 1}/{len(dataset_names)} fetched...')
+                time.sleep(RATE_LIMIT_DELAY)
+        with open(metadata_cache, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        print(f'Cached metadata for {len(metadata)} datasets.')
 
-        # encode multiclass classification targets as non-numeric strings so the
-        # preprocessor can detect them as 'multiclass' rather than misidentifying
-        # them as count data
-        if name in summary.index:
-            meta_row = summary.loc[name]
-            if meta_row['task'] == 'classification' and meta_row['n_classes'] > 2:
-                df['y'] = 'class_' + df['y'].astype(str)
-                skipped_multiclass.append(name)
+    n_saved = n_skipped = 0
+    n_multiclass = n_binary_recoded = 0
 
-        # annotate categorical columns using PMLB metadata
-        df = _apply_column_metadata(df, name)
+    for name in dataset_names:
+        try:
+            df = fetch_data(name, local_cache_dir=raw_dir)
+            df = df.rename(columns={'target': 'y'})
 
-        fn = Path(out_dir, f'{name}.parquet')
-        df.to_parquet(fn)
-        print(f'Saved to {fn}')
-        datasets += [df]
-    except Exception as e:
-        print(e)
+            if len(df) < 50:
+                n_skipped += 1
+                print(f'Skipping {name} (n={len(df)} < 50)')
+                continue
 
-print(f'\n{len(datasets)} datasets saved.')
-print(f'{len(skipped_small)} datasets skipped (n < 50): {skipped_small}')
-print(f'{len(skipped_multiclass)} multiclass datasets re-encoded with string labels.')
+            if name in summary.index:
+                meta_row = summary.loc[name]
+                task = meta_row['task']
+                n_classes = int(meta_row.get('n_classes', 0))
+
+                if task == 'classification':
+                    if n_classes > 2:
+                        # Encode multiclass targets as non-numeric strings so the
+                        # preprocessor detects them as 'multiclass'.
+                        df['y'] = 'class_' + df['y'].astype(str)
+                        n_multiclass += 1
+                    else:
+                        # Recode binary targets to {0, 1} so the preprocessor
+                        # detects them as binary rather than continuous.
+                        classes = sorted(df['y'].dropna().unique().tolist(), key=str)
+                        if list(classes) != [0, 1]:
+                            df['y'] = df['y'].map({classes[0]: 0, classes[1]: 1})
+                            n_binary_recoded += 1
+
+            df = applyColumnMetadata(df, name, metadata)
+
+            fn = Path(out_dir, f'{name}.parquet')
+            df.to_parquet(fn)
+            print(f'Saved to {fn}')
+            n_saved += 1
+        except Exception as e:
+            print(e)
+
+    print(f'\n{n_saved} datasets saved, {n_skipped} skipped (n < 50).')
+    print(f'{n_multiclass} multiclass datasets re-encoded with string labels.')
+    print(f'{n_binary_recoded} binary datasets recoded to {{0, 1}}.')
+
+
+if __name__ == '__main__':
+    main()
