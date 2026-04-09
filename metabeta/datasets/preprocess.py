@@ -194,6 +194,61 @@ def _applyImputation(
     return df
 
 
+# ---------------------------------------------------------------------------
+# Target coercion & type detection
+# ---------------------------------------------------------------------------
+
+
+def coerceTargetToNumeric(y: pd.Series) -> tuple[np.ndarray, bool]:
+    if len(y) == 0:
+        raise ValueError('Target y is empty.')
+
+    if pd.api.types.is_numeric_dtype(y):
+        arr = y.to_numpy(dtype=float)
+        uniq = np.unique(arr[np.isfinite(arr)])
+        is_binary = len(uniq) == 2 and set(uniq.tolist()).issubset({0.0, 1.0})
+        return arr, is_binary
+
+    y_str = y.astype('string').str.strip()
+    non_missing = y_str.dropna()
+    unique = sorted(non_missing.unique().tolist())
+
+    if len(unique) == 2:
+        lower = [u.lower() for u in unique]
+        if set(lower) == {'n', 'y'}:
+            mapper = {unique[lower.index('n')]: 0.0, unique[lower.index('y')]: 1.0}
+        elif set(lower) == {'no', 'yes'}:
+            mapper = {unique[lower.index('no')]: 0.0, unique[lower.index('yes')]: 1.0}
+        elif set(lower) == {'false', 'true'}:
+            mapper = {unique[lower.index('false')]: 0.0, unique[lower.index('true')]: 1.0}
+        else:
+            mapper = {unique[0]: 0.0, unique[1]: 1.0}
+        mapped = y_str.map(mapper).to_numpy(dtype=float)
+        return mapped, True
+
+    parsed = pd.to_numeric(y_str, errors='coerce')
+    if parsed.notna().sum() == non_missing.shape[0]:
+        arr = parsed.to_numpy(dtype=float)
+        uniq = np.unique(arr[np.isfinite(arr)])
+        is_binary = len(uniq) == 2 and set(uniq.tolist()).issubset({0.0, 1.0})
+        return arr, is_binary
+
+    sample = ', '.join(map(str, unique[:8]))
+    raise ValueError(f'Cannot convert target y to numeric. dtype={y.dtype}, sample=[{sample}]')
+
+
+def detectYType(y: np.ndarray, y_is_binary: bool) -> str:
+    """Return 'binary', 'count', or 'continuous'."""
+    if y_is_binary:
+        return 'binary'
+    finite = y[np.isfinite(y)]
+    if len(finite) == 0:
+        return 'continuous'
+    is_count = checkCountLike(finite.reshape(-1, 1), axis=0)[0]
+    return 'count' if is_count else 'continuous'
+
+
+# ---------------------------------------------------------------------------
 def detectGroupCandidates(
     df: pd.DataFrame,
     min_groups: int = 5,
