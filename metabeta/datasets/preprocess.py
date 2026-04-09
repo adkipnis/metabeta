@@ -100,6 +100,31 @@ def _dropHeavyColumns(df: pd.DataFrame, col_miss_threshold: float = 0.25) -> pd.
     return df
 
 
+def _computeWinsorBounds(
+    df: pd.DataFrame, threshold: float = 4.0
+) -> dict[str, tuple[float, float]]:
+    """Compute per-column winsorization bounds (mean ± threshold * std) on numeric columns."""
+    bounds: dict[str, tuple[float, float]] = {}
+    for col in numerical(df).tolist():
+        vals = df[col].dropna().to_numpy(dtype=float)
+        if len(vals) < 2:
+            continue
+        mean = float(np.mean(vals))
+        std = float(np.std(vals))
+        if std < 1e-12:
+            continue
+        bounds[col] = (mean - threshold * std, mean + threshold * std)
+    return bounds
+
+
+def _applyWinsor(df: pd.DataFrame, bounds: dict[str, tuple[float, float]]) -> pd.DataFrame:
+    """Clip numeric columns to pre-computed winsorization bounds."""
+    for col, (lo, hi) in bounds.items():
+        if col in df.columns:
+            df[col] = df[col].clip(lower=lo, upper=hi)
+    return df
+
+
 def detectGroupCandidates(
     df: pd.DataFrame,
     min_groups: int = 5,
