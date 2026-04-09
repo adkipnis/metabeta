@@ -648,7 +648,7 @@ class DataPreprocessor:
         group_name = self.group_name
         if not group_name:
             candidates = detectGroupCandidates(df)
-            if candidates:
+            if candidates and candidates[0].score > 0:
                 group_name = candidates[0].name
                 logger.info(
                     f'Auto-detected grouping variable "{group_name}" '
