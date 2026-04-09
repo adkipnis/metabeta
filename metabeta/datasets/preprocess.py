@@ -161,6 +161,39 @@ def _computeImputeStats(
 
 
 def _applyImputation(
+    df: pd.DataFrame,
+    groups: np.ndarray | None,
+    num_stats: dict[str, dict],
+    cat_stats: dict[str, dict],
+) -> pd.DataFrame:
+    """Fill missing values using stored group-aware statistics."""
+    for col, stats in num_stats.items():
+        if col not in df.columns:
+            continue
+        missing_idx = df.index[df[col].isnull()].to_numpy()
+        if len(missing_idx) == 0:
+            continue
+        if groups is not None and stats['by_group']:
+            fill = [stats['by_group'].get(int(groups[i]), stats['global']) for i in missing_idx]
+        else:
+            fill = [stats['global']] * len(missing_idx)
+        df.loc[missing_idx, col] = fill
+
+    for col, stats in cat_stats.items():
+        if col not in df.columns:
+            continue
+        missing_idx = df.index[df[col].isnull()].to_numpy()
+        if len(missing_idx) == 0:
+            continue
+        if groups is not None and stats['by_group']:
+            fill = [stats['by_group'].get(int(groups[i]), stats['global']) for i in missing_idx]
+        else:
+            fill = [stats['global']] * len(missing_idx)
+        df.loc[missing_idx, col] = fill
+
+    return df
+
+
 def detectGroupCandidates(
     df: pd.DataFrame,
     min_groups: int = 5,
