@@ -245,6 +245,11 @@ def detectYType(y: np.ndarray, y_is_binary: bool, is_multiclass: bool = False) -
     if len(finite) == 0:
         return 'continuous'
     is_count = checkCountLike(finite.reshape(-1, 1), axis=0)[0]
+    # Integer arrays whose minimum is above 0 are more likely to be discretised
+    # measurements (scores, ratings, diameters) than genuine event counts; only
+    # classify as 'count' when values start at zero.
+    if is_count and finite.min() > 0:
+        is_count = False
     return 'count' if is_count else 'continuous'
 
 
