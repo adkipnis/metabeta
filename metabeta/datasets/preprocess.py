@@ -979,21 +979,13 @@ def batchProcess(root: str, group_name: str = '', partition: str = 'auto'):
         processDataset(name, root, group_name=group_name, partition=partition)
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 if __name__ == '__main__':
-    # init preprocessed directory
     (DATASETS_DIR / 'preprocessed' / 'validation').mkdir(parents=True, exist_ok=True)
     (DATASETS_DIR / 'preprocessed' / 'test').mkdir(parents=True, exist_ok=True)
     (DATASETS_DIR / 'preprocessed' / 'plots').mkdir(parents=True, exist_ok=True)
 
-    # R-package datasets
-    batchprocess('from-r', partition='test', group_name='group')
-
-    # SRM datasets
-    batchprocess('srm', partition='auto')
-
-    # PMLB datasets
-    batchprocess('pmlb', partition='auto')
-
-    # AutoML datasets
-    # batchprocess('automl', partition='auto')
+    batchProcess('from-r', partition='test', group_name='group')
+    batchProcess('srm', partition='auto')
+    batchProcess('pmlb', partition='auto')
+    # batchProcess('automl', partition='auto')
