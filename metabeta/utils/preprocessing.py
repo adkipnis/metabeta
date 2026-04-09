@@ -155,6 +155,26 @@ class NumericTransformer:
         return self
 
     def transform(self, x: np.ndarray) -> np.ndarray:
+        if self.is_binary_ is None:
+            raise RuntimeError('NumericTransformer must be fitted before transform')
+        x = x.astype(float, copy=True)
+
+        # conditional log1p for skewed count-like columns; clip first (see fit)
+        if self.is_log1p_.any():
+            x[:, self.is_log1p_] = np.clip(x[:, self.is_log1p_], 0, None)
+            x[:, self.is_log1p_] = np.log1p(x[:, self.is_log1p_])
+
+        # z-standardise all non-binary columns
+        needs_z = ~self.is_binary_
+        if needs_z.any():
+            x[:, needs_z] = (x[:, needs_z] - self.mean_[needs_z]) / self.std_[needs_z]
+
+        return x
+
+    def fitTransform(self, x: np.ndarray) -> np.ndarray:
+        return self.fit(x).transform(x)
+
+
 def rescaleData(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     data = {k: v.clone() for k, v in data.items()}  # avoids side effects
     for key in (
