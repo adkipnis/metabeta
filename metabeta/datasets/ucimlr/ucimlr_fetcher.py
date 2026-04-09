@@ -37,6 +37,18 @@ RATE_LIMIT_DELAY = 0.5
 CATALOG_API_URL = 'https://archive.ics.uci.edu/api/datasets/list'
 DATASET_API_URL = 'https://archive.ics.uci.edu/api/dataset'
 
+# Datasets excluded from the collection.
+# 312  Dow Jones Index           — dollar-formatted price strings ($15.82 etc.) treated as
+#                                  high-cardinality categoricals; 700+ unique values / 750 rows
+#                                  → top-10 lumping destroys all numeric information.
+# 380  YouTube Spam Collection   — features are author, date, and free-text content; after
+#                                  lumping all three collapse to 'other', leaving no signal.
+# 461  Drug Reviews (Druglib.com)— benefitsReview / sideEffectsReview / commentsReview are
+#                                  4000+ unique free-text fields; pure NLP dataset.
+# 911  Recipe Reviews            — text / user_id / user_name columns (10k–18k unique each);
+#                                  pure NLP dataset.
+BLACKLIST: set[int] = {312, 380, 461, 911}
+
 
 def fetchDatasetMetadata(dataset_id: int) -> dict[str, Any]:
     """Fetch dataset-level metadata without downloading data."""
@@ -97,6 +109,10 @@ def main():
         dataset_name = row['name']
         out_path = out_dir / f'{dataset_id}_{dataset_name}.parquet'
 
+        if dataset_id in BLACKLIST:
+            n_skipped += 1
+            continue
+
         if out_path.exists():
             n_saved += 1
             continue
@@ -150,10 +166,36 @@ def main():
                     y = y.iloc[:, 0]
                 df['y'] = y
 
-                task_type = str(getattr(data.metadata, 'task', '')).lower()
-                if 'classification' in task_type and df['y'].nunique() > 2:
-                    df['y'] = 'class_' + df['y'].astype(str)
-                    print(f'  Encoded {df["y"].nunique()}-class target as strings.')
+                # Determine whether target is a classification variable.
+                # Prefer explicit task metadata; fall back to target variable type.
+                task_type = str(getattr(data.metadata, 'task', '') or '').lower()
+                target_var_type = None
+                if data.variables is not None:
+                    target_rows = data.variables[data.variables['role'] == 'Target']
+                    if len(target_rows) > 0:
+                        target_var_type = target_rows.iloc[0].get('type')
+                is_classification = (
+                    'classification' in task_type
+                    or target_var_type in ('Categorical', 'Binary')
+                )
+
+                if is_classification:
+                    # Strip trailing punctuation/whitespace from string labels
+                    # (train/test merge artefact in e.g. Adult/Census Income).
+                    if pd.api.types.is_object_dtype(df['y']) or pd.api.types.is_string_dtype(df['y']):
+                        df['y'] = df['y'].str.strip().str.rstrip('.')
+
+                    n_classes = df['y'].nunique()
+                    if n_classes > 2:
+                        df['y'] = 'class_' + df['y'].astype(str)
+                        print(f'  Encoded {n_classes}-class target as strings.')
+                    else:
+                        # Recode binary targets to 0/1 so the preprocessor detects
+                        # them as binary rather than continuous (handles {1,2}, {2,4}, etc.)
+                        classes = sorted(df['y'].dropna().unique().tolist(), key=str)
+                        if list(classes) != [0, 1]:
+                            df['y'] = df['y'].map({classes[0]: 0, classes[1]: 1})
+                            print(f'  Recoded binary target {classes} -> [0, 1].')
 
             # Apply categorical type annotations from UCI metadata
             if data.variables is not None:
