@@ -1,24 +1,27 @@
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
-import re
-import pandas as pd
+
+import joblib
 import numpy as np
+import pandas as pd
 from matplotlib import pyplot as plt
+from sklearn.preprocessing import OneHotEncoder
 
 from metabeta.plotting import plotDataset
 from metabeta.utils.plot import DPI
-from metabeta.utils.preprocessing import transformPredictors
+from metabeta.utils.preprocessing import (
+    NumericTransformer,
+    checkCountLike,
+)
 
 logger = logging.getLogger(__name__)
 DATASETS_DIR = Path(__file__).resolve().parent
 
 BLACKLIST = 'year age height size n_ num_ number max min attempts begin end name'.split(' ')
 
-# Grouped variants in this whitelist are routed to the test partition when partition='auto'.
-# All other grouped variants are routed to validation.
 TEST_GROUP_WHITELIST: set[tuple[str, str, str]] = {
-    # handpicked/curated from-r exports
     ('from-r', 'math', 'group'),
     ('from-r', 'london', 'group'),
     ('from-r', 'gcse', 'group'),
@@ -43,13 +46,17 @@ TEST_GROUP_WHITELIST: set[tuple[str, str, str]] = {
     ('from-r', 'hsb82', 'group'),
     ('from-r', 'chem97', 'group'),
     ('from-r', 'contraception', 'group'),
-    # clearly plausible mixed-effects datasets in PMLB
     ('pmlb', '556_analcatdata_apnea2', 'subject'),
     ('pmlb', '557_analcatdata_apnea1', 'subject'),
     ('pmlb', 'analcatdata_boxing1', 'judge'),
     ('pmlb', 'analcatdata_boxing2', 'judge'),
 }
 MAX_GROUP_CANDIDATES = 3
+
+
+# ---------------------------------------------------------------------------
+# Type helpers
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -64,30 +71,32 @@ class GroupCandidate:
     score: float
 
 
-def dropPatchyColumns(df: pd.DataFrame, threshold: float = 0.25):
-    # drop columns with at least {threshold} missing values
-    missing = df.drop(columns='y').isnull().mean()
-    offenders = missing[missing > threshold].index
-    if len(offenders):
-        for offender in offenders:
-            warning = (
-                f'Removing "{offender}" due to missing {missing[offender] * 100:.2f}% entries.'
-            )
-            logger.warning(warning)
-        df = df.drop(columns=offenders)
+def categorical(df: pd.DataFrame) -> pd.Index:
+    return df.select_dtypes(include=['object', 'category', 'string']).columns
+
+
+def numerical(df: pd.DataFrame) -> pd.Index:
+    return df.select_dtypes(include=[np.number]).columns
+
+
+# ---------------------------------------------------------------------------
+# Missing value handling
+# ---------------------------------------------------------------------------
+
+
+def _sentinelReplace(df: pd.DataFrame, sentinels: list[float]) -> pd.DataFrame:
+    for s in sentinels:
+        df = df.replace(s, np.nan)
     return df
 
 
-def dropPatchyRows(df: pd.DataFrame, threshold: float = 0.1, sentinels: list[float] | None = None):
-    # drop rows with missing values
-    if sentinels is None:
-        sentinels = [-999]
-    for s in sentinels:
-        df = df.replace(s, np.nan)
-    missing = df.drop(columns='y').isnull().any(axis=1)
-    if missing.mean() > threshold:
-        logger.warning(f'{missing.mean() * 100:.2f}% patchy rows.')
-    df = df[~missing]
+def _dropHeavyColumns(df: pd.DataFrame, col_miss_threshold: float = 0.25) -> pd.DataFrame:
+    """Drop columns whose fraction of missing values exceeds col_miss_threshold."""
+    miss_frac = df.isnull().mean()
+    heavy = miss_frac[miss_frac > col_miss_threshold].index.tolist()
+    if heavy:
+        logger.warning(f'Dropping {heavy} (>{col_miss_threshold * 100:.0f}% missing).')
+        df = df.drop(columns=heavy)
     return df
 
 
