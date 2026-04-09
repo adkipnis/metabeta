@@ -125,6 +125,42 @@ def _applyWinsor(df: pd.DataFrame, bounds: dict[str, tuple[float, float]]) -> pd
     return df
 
 
+def _computeImputeStats(
+    df: pd.DataFrame,
+    groups: np.ndarray | None,
+    numeric_cols: list[str],
+    cat_cols: list[str],
+) -> tuple[dict[str, dict], dict[str, dict]]:
+    """Compute group-aware imputation statistics (median for numeric, mode for categorical).
+
+    For each column, stores a global statistic and, when groups are available,
+    per-group statistics. Missing values in a group fall back to the global value.
+    """
+    num_stats: dict[str, dict] = {}
+    for col in numeric_cols:
+        global_val = float(df[col].median()) if df[col].notna().any() else 0.0
+        by_group: dict[int, float] = {}
+        if groups is not None:
+            for g in np.unique(groups):
+                vals = df.loc[groups == g, col].dropna()
+                by_group[int(g)] = float(vals.median()) if len(vals) > 0 else global_val
+        num_stats[col] = {'global': global_val, 'by_group': by_group}
+
+    cat_stats: dict[str, dict] = {}
+    for col in cat_cols:
+        mode_s = df[col].mode()
+        global_val_c = str(mode_s.iloc[0]) if len(mode_s) > 0 else ''
+        by_group_c: dict[int, str] = {}
+        if groups is not None:
+            for g in np.unique(groups):
+                mode_g = df.loc[groups == g, col].mode()
+                by_group_c[int(g)] = str(mode_g.iloc[0]) if len(mode_g) > 0 else global_val_c
+        cat_stats[col] = {'global': global_val_c, 'by_group': by_group_c}
+
+    return num_stats, cat_stats
+
+
+def _applyImputation(
 def detectGroupCandidates(
     df: pd.DataFrame,
     min_groups: int = 5,
