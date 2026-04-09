@@ -825,161 +825,64 @@ class DataPreprocessor:
 def preprocess(
     df: pd.DataFrame,
     group_name: str = '',
-    remove_missing: bool = True,
-    patchy_threshold: float = 0.25,
+    col_miss_threshold: float = 0.25,
     constant_threshold: float = 0.95,
     outlier_threshold: float = 4.0,
 ) -> dict:
-    # put column names to lower case
-    df.columns = df.columns.str.lower()
-
-    # remove NA values
-    if remove_missing:
-        # remove columns with more than 25% missing values
-        df = dropPatchyColumns(df, threshold=patchy_threshold)
-
-        # remove rows with missing values
-        df = dropPatchyRows(df)
-
-    # isolate target
-    assert 'y' in df.columns, 'target column y not present'
-    y_raw = df.pop('y')
-    y, y_is_binary = coerceTargetToNumeric(y_raw)
-
-    # remove rows with missing/non-finite targets
-    y_valid = np.isfinite(y)
-    if not np.all(y_valid):
-        n_bad = int((~y_valid).sum())
-        logger.warning(f'Removing {n_bad} rows with missing/non-finite target values.')
-        df = df.loc[y_valid].copy()
-        y = y[y_valid]
-        if len(df) == 0:
-            raise ValueError(
-                'All observations were removed due to missing/non-finite target values.'
-            )
-
-    # detect potential grouping variable
-    if not group_name:
-        candidates = detectGroupCandidates(df)
-        if candidates:
-            group_name = candidates[0].name
-            logger.info(f'Detected grouping variable "{group_name}".')
-
-    # sort and isolate grouping variable
-    groups = ns = m = None
-    if group_name:
-        df = df.sort_values(by=group_name)
-        groups = df.pop(group_name)
-        groups, _ = pd.factorize(groups)
-
-    # remove outliers
-    col_names_num = numerical(df)
-    outliers = findOutliers(df[col_names_num], threshold=outlier_threshold)
-    df = df[~outliers]
-    y = y[~outliers]
-
-    # optionally update group objects
-    if groups is not None:
-        m_before = len(np.unique(groups))
-        groups = groups[~outliers]
-        groups, _ = pd.factorize(groups)
-        _, ns = np.unique(groups, return_counts=True)
-        m = len(ns)
-        if m < m_before:
-            logger.warning(f'{m_before - m} groups lost all observations after outlier removal.')
-
-    # remove numeric columns with more than 95% constant values
-    # (categorical near-constants are handled by dummify's min_prevalence)
-    num_cols = numerical(df)
-    bad = [c for c in num_cols if df[c].value_counts(normalize=True).max() > constant_threshold]
-    if bad:
-        logger.warning(f'Removing {bad} due to mostly constant entries.')
-        df = df.drop(columns=bad)
-
-    # (re-)analyze column types
-    col_names_num = numerical(df)
-    col_names_cat = categorical(df)
-
-    # type-aware transform: log1p(count-like) + z-standardize (binary unchanged)
-    if len(col_names_num):
-        x_num = df[col_names_num].to_numpy(dtype=float)
-        x_num = transformPredictors(x_num, axis=0, exclude_binary=True, transform_counts=True)
-        df[col_names_num] = x_num
-    if y_is_binary:
-        y = y.astype(float)
-    else:
-        y = standardize(pd.Series(y))
-
-    # dummy-code categorical variables
-    for col in col_names_cat:
-        df = dummify(df, col)
-
-    # finalize
-    X = df.to_numpy()
-    n, d_ = X.shape
-    out = {
-        # data
-        'X': X,
-        'y': y,
-        'groups': groups,
-        # names
-        'columns': df.columns.to_numpy().astype(str),
-        # dims
-        'd': d_ + 1,  # as X has no intercept
-        'n': n,
-        'ns': ns,
-        'm': m,
-    }
-    return out
+    return DataPreprocessor(
+        group_name=group_name,
+        col_miss_threshold=col_miss_threshold,
+        constant_threshold=constant_threshold,
+        outlier_threshold=outlier_threshold,
+    ).fit_transform(df)
 
 
 def preprocessAllGroups(
     df: pd.DataFrame,
-    remove_missing: bool = True,
-    patchy_threshold: float = 0.25,
+    col_miss_threshold: float = 0.25,
     constant_threshold: float = 0.95,
     outlier_threshold: float = 4.0,
 ) -> dict[str, dict]:
     df = df.copy()
     df.columns = df.columns.str.lower()
 
-    if remove_missing:
-        df = dropPatchyColumns(df, threshold=patchy_threshold)
-        df = dropPatchyRows(df)
-
-    assert 'y' in df.columns, 'target column y not present'
-    candidates = detectGroupCandidates(df.drop(columns='y'))
+    df_no_y = df.drop(columns=['y'], errors='ignore')
+    candidates = detectGroupCandidates(df_no_y)
     if len(candidates) > MAX_GROUP_CANDIDATES:
         logger.warning(
-            f'Found {len(candidates)} potential grouping variables; keeping top {MAX_GROUP_CANDIDATES} by score.'
+            f'{len(candidates)} group candidates; keeping top {MAX_GROUP_CANDIDATES}.'
         )
         candidates = candidates[:MAX_GROUP_CANDIDATES]
+
     out: dict[str, dict] = {}
     if not candidates:
-        out[''] = preprocess(
-            df.copy(),
-            group_name='',
-            remove_missing=False,
-            patchy_threshold=patchy_threshold,
+        out[''] = DataPreprocessor(
+            col_miss_threshold=col_miss_threshold,
             constant_threshold=constant_threshold,
             outlier_threshold=outlier_threshold,
-        )
+        ).fit_transform(df)
         return out
 
     for cand in candidates:
-        data = preprocess(
-            df.copy(),
-            group_name=cand.name,
-            remove_missing=False,
-            patchy_threshold=patchy_threshold,
-            constant_threshold=constant_threshold,
-            outlier_threshold=outlier_threshold,
-        )
-        out[cand.name] = data
+        try:
+            data = DataPreprocessor(
+                group_name=cand.name,
+                col_miss_threshold=col_miss_threshold,
+                constant_threshold=constant_threshold,
+                outlier_threshold=outlier_threshold,
+            ).fit_transform(df)
+            out[cand.name] = data
+        except ValueError as e:
+            logger.error(f'Group "{cand.name}" skipped: {e}')
     return out
 
 
-def wrapper(
+# ---------------------------------------------------------------------------
+# Batch pipeline
+# ---------------------------------------------------------------------------
+
+
+def processDataset(
     ds_name: str,
     root: str,
     group_name: str = '',
@@ -989,22 +892,18 @@ def wrapper(
 ):
     assert partition in ['validation', 'test', 'auto']
 
-    # import data
     fn = DATASETS_DIR / root / 'parquet' / f'{ds_name}.parquet'
     assert fn.exists(), f'File {fn} does not exist.'
     print(f'\nProcessing {ds_name}...')
     df = pd.read_parquet(fn)
 
-    # discard gigantic datasets
     if len(df) > 100_000:
         logger.error('Dataset has more than 100k rows, skipping.')
         return
 
     if group_name:
         try:
-            variants = {
-                group_name: preprocess(df, group_name=group_name),
-            }
+            variants = {group_name: preprocess(df, group_name=group_name)}
         except ValueError as e:
             logger.error(f'Dataset "{ds_name}" skipped: {e}')
             return
@@ -1019,24 +918,24 @@ def wrapper(
     for grp_name, data in variants.items():
         if data['X'].shape[0] < data['X'].shape[1]:
             logger.error(
-                f'Dataset variant "{ds_name}" (group="{grp_name or "none"}") has more columns than rows, skipping.'
+                f'"{ds_name}" (group="{grp_name or "none"}") more columns than rows, skipping.'
             )
             continue
         if data['n'] < 20:
             logger.warning(
-                f'Dataset variant "{ds_name}" (group="{grp_name or "none"}") has too few rows after preprocessing (n={data["n"]}); skipping.'
+                f'"{ds_name}" (group="{grp_name or "none"}") too few rows (n={data["n"]}); skipping.'
             )
             continue
 
-        is_whitelisted_grouped = (root, ds_name, grp_name) in TEST_GROUP_WHITELIST
+        is_whitelisted = (root, ds_name, grp_name) in TEST_GROUP_WHITELIST
         if data['X'].shape[1] == 0:
-            if is_whitelisted_grouped:
+            if is_whitelisted:
                 logger.warning(
-                    f'Dataset variant "{ds_name}" (group="{grp_name or "none"}") has no predictors after preprocessing; keeping intercept-only design.'
+                    f'"{ds_name}" (group="{grp_name or "none"}") no predictors; keeping intercept-only.'
                 )
             else:
                 logger.warning(
-                    f'Dataset variant "{ds_name}" (group="{grp_name or "none"}") has no predictors after preprocessing; skipping.'
+                    f'"{ds_name}" (group="{grp_name or "none"}") no predictors; skipping.'
                 )
                 continue
 
@@ -1045,7 +944,7 @@ def wrapper(
             if data['groups'] is None:
                 partition_i = 'validation'
             else:
-                partition_i = 'test' if is_whitelisted_grouped else 'validation'
+                partition_i = 'test' if is_whitelisted else 'validation'
 
         suffix = ''
         if grp_name:
@@ -1054,17 +953,17 @@ def wrapper(
         stem = f'{ds_name}{suffix}'
 
         if save:
-            fn = DATASETS_DIR / 'preprocessed' / partition_i / f'{stem}.npz'
-            np.savez_compressed(fn, **data)
-            print(f'Saved to {fn.relative_to(DATASETS_DIR)}')
+            fn_out = DATASETS_DIR / 'preprocessed' / partition_i / f'{stem}.npz'
+            np.savez_compressed(fn_out, **{k: v for k, v in data.items() if v is not None})
+            print(f'Saved to {fn_out.relative_to(DATASETS_DIR)}')
 
         if plot and data['n'] * data['d'] < 1e6:
             dat = np.concatenate([data['y'][:, None], data['X']], axis=-1)
             names = ['y'] + data['columns'].tolist()
             fig = plotDataset(dat, names, kde=len(dat) < 10_000)
             if save:
-                fn = DATASETS_DIR / 'preprocessed' / 'plots' / f'{stem}.pdf'
-                fig.savefig(fn, dpi=DPI)
+                fn_plot = DATASETS_DIR / 'preprocessed' / 'plots' / f'{stem}.pdf'
+                fig.savefig(fn_plot, dpi=DPI)
                 plt.close()
 
         out[stem] = data
@@ -1072,12 +971,12 @@ def wrapper(
     return out
 
 
-def batchprocess(root: str, group_name: str = '', partition: str = 'auto'):
-    paths = Path(root, 'parquet').glob('*.parquet')
+def batchProcess(root: str, group_name: str = '', partition: str = 'auto'):
+    paths = Path(DATASETS_DIR, root, 'parquet').glob('*.parquet')
     names = sorted([p.stem for p in paths])
     logger.info(f'\nProcessing {len(names)} datasets from {root}...')
     for name in names:
-        wrapper(name, root, group_name=group_name, partition=partition)
+        processDataset(name, root, group_name=group_name, partition=partition)
 
 
 # -----------------------------------------------------------------------------
