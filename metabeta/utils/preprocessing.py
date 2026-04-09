@@ -99,6 +99,17 @@ class NumericTransformer:
       - continuous: z-standardise.
     """
 
+    exclude_binary: bool = True
+    transform_counts: bool = True
+    log1p_skew_threshold: float = 1.0  # only log1p count-like cols with |skew| above this
+    eps: float = 1e-6
+    # fitted state
+    is_binary_: np.ndarray | None = field(default=None, repr=False)
+    is_count_like_: np.ndarray | None = field(default=None, repr=False)
+    is_log1p_: np.ndarray | None = field(default=None, repr=False)
+    mean_: np.ndarray | None = field(default=None, repr=False)
+    std_: np.ndarray | None = field(default=None, repr=False)
+
 def rescaleData(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     data = {k: v.clone() for k, v in data.items()}  # avoids side effects
     for key in (
