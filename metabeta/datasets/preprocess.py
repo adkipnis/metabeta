@@ -392,22 +392,54 @@ def _corrFilter(
     return df.drop(columns=list(dropped)), dropped
 
 
+# ---------------------------------------------------------------------------
+# Categorical lumping  (fct_lump_n style)
+# ---------------------------------------------------------------------------
 
-    y_str = y.astype('string').str.strip()
-    non_missing = y_str.dropna()
-    unique = sorted(non_missing.unique().tolist())
 
-    if len(unique) == 2:
-        lower = [u.lower() for u in unique]
-        if set(lower) == {'n', 'y'}:
-            mapper = {unique[lower.index('n')]: 0.0, unique[lower.index('y')]: 1.0}
-        elif set(lower) == {'no', 'yes'}:
-            mapper = {unique[lower.index('no')]: 0.0, unique[lower.index('yes')]: 1.0}
-        elif set(lower) == {'false', 'true'}:
-            mapper = {
-                unique[lower.index('false')]: 0.0,
-                unique[lower.index('true')]: 1.0,
-            }
+def lumpCategories(
+    series: pd.Series,
+    max_categories: int = 10,
+    min_prevalence: float = 0.05,
+) -> tuple[pd.Series, set, bool]:
+    """Pool rare levels into 'other' when a column has > max_categories levels.
+
+    Returns (lumped_series, lump_levels, has_other).
+    - lump_levels: original level names that were pooled.
+    - has_other: True if the pooled mass >= min_prevalence ('other' was added);
+      False if the rare observations are set to NaN (to be dropped).
+    """
+    # Categorical dtype doesn't allow assigning new values; convert to object
+    if hasattr(series, 'cat'):
+        series = series.astype(object)
+
+    counts = series.value_counts(dropna=True)
+    if len(counts) <= max_categories:
+        return series, set(), False
+
+    keep = set(counts.index[:max_categories])
+    rare_mask = ~series.isin(keep) & series.notna()
+    lump_levels = set(series[rare_mask].unique())
+    lump_frac = rare_mask.mean()
+
+    series = series.copy()
+    if lump_frac >= min_prevalence:
+        series[rare_mask] = 'other'
+        logger.warning(
+            f'Column "{series.name}": pooled {len(lump_levels)} rare levels '
+            f'({lump_frac * 100:.1f}%) into "other".'
+        )
+        return series, lump_levels, True
+    else:
+        series[rare_mask] = np.nan
+        logger.warning(
+            f'Column "{series.name}": dropped {len(lump_levels)} rare levels '
+            f'({lump_frac * 100:.1f}%); pool too small for "other".'
+        )
+        return series, lump_levels, False
+
+
+# ---------------------------------------------------------------------------
         else:
             mapper = {unique[0]: 0.0, unique[1]: 1.0}
         mapped = y_str.map(mapper).to_numpy(dtype=float)
