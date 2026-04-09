@@ -73,10 +73,21 @@ def _apply_column_metadata(df: pd.DataFrame, name: str) -> pd.DataFrame:
 
 
 # fetch all datasets
+datasets = []
+skipped_small = []
+skipped_multiclass = []
+
 for name in dataset_names:
     try:
         df = fetch_data(name, local_cache_dir=raw_dir)
         df = df.rename(columns={'target': 'y'})
+
+        # skip tiny datasets (too few rows for meaningful group-level statistics)
+        if len(df) < 50:
+            skipped_small.append(name)
+            print(f'Skipping {name} (n={len(df)} < 50)')
+            continue
+
         fn = Path(out_dir, f'{name}.parquet')
         df.to_parquet(fn)
         print(f'Saved to {fn}')
