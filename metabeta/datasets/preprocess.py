@@ -249,6 +249,10 @@ def detectYType(y: np.ndarray, y_is_binary: bool) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Grouping variable detection
+# ---------------------------------------------------------------------------
+
+
 def detectGroupCandidates(
     df: pd.DataFrame,
     min_groups: int = 5,
@@ -258,7 +262,7 @@ def detectGroupCandidates(
     min_frac_singleton: float = 0.05,
     max_frac_singleton: float = 0.35,
 ) -> list[GroupCandidate]:
-    assert 0.0 < max_frac_unique < 1.0, 'max_frac_unique must be in (0,1)'
+    assert 0.0 < max_frac_unique < 1.0
 
     if len(df) == 0:
         return []
@@ -343,35 +347,51 @@ def detectGroupCandidates(
     return sorted(candidates, key=lambda c: (-c.score, c.name))
 
 
-def categorical(df: pd.DataFrame):
-    cat_cols = df.select_dtypes(include=['object', 'category']).columns
-    return cat_cols
+# ---------------------------------------------------------------------------
+# Correlation filter
+# ---------------------------------------------------------------------------
 
 
-def numerical(df: pd.DataFrame):
-    num_cols = df.select_dtypes(include=[np.number]).columns
-    return num_cols
+def _corrFilter(
+    df: pd.DataFrame, threshold: float = 0.95
+) -> tuple[pd.DataFrame, set[str]]:
+    """Drop one column from each highly correlated pair (|r| > threshold).
+
+    Greedy: at each step, remove the column with the higher mean absolute
+    correlation to all remaining columns.
+    """
+    num_cols = numerical(df).tolist()
+    if len(num_cols) < 2:
+        return df, set()
+
+    corr = df[num_cols].corr().abs()
+    corr_vals = corr.to_numpy(copy=True)
+    np.fill_diagonal(corr_vals, 0.0)
+    corr = pd.DataFrame(corr_vals, index=corr.index, columns=corr.columns)
+
+    active = list(num_cols)
+    dropped: set[str] = set()
+
+    while True:
+        sub = corr.loc[active, active]
+        upper_vals = sub.values[np.triu(np.ones(sub.shape, dtype=bool), k=1)]
+        if len(upper_vals) == 0 or upper_vals.max() <= threshold:
+            break
+        upper = sub.where(np.triu(np.ones(sub.shape, dtype=bool), k=1))
+        j = upper.max(axis=0).idxmax()
+        i = upper[j].idxmax()
+        others = [c for c in active if c != i and c != j]
+        mean_i = sub.loc[i, others].mean() if others else 0.0
+        mean_j = sub.loc[j, others].mean() if others else 0.0
+        drop = i if mean_i >= mean_j else j
+        active.remove(drop)
+        dropped.add(drop)
+
+    if dropped:
+        logger.warning(f'Dropping correlated columns {sorted(dropped)}.')
+    return df.drop(columns=list(dropped)), dropped
 
 
-def standardize(col: pd.Series):
-    x = col.values.astype(float)
-    mean = np.nanmean(x)
-    std = np.nanstd(x)
-    if std < 1e-12:
-        return np.zeros_like(x)
-    out = (x - mean) / std
-    return out
-
-
-def coerceTargetToNumeric(y: pd.Series) -> tuple[np.ndarray, bool]:
-    if len(y) == 0:
-        raise ValueError('Target y is empty.')
-
-    if pd.api.types.is_numeric_dtype(y):
-        arr = y.to_numpy(dtype=float)
-        uniq = np.unique(arr[np.isfinite(arr)])
-        is_binary = len(uniq) == 2 and set(uniq.tolist()).issubset({0.0, 1.0})
-        return arr, is_binary
 
     y_str = y.astype('string').str.strip()
     non_missing = y_str.dropna()
