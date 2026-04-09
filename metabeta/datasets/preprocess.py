@@ -659,23 +659,34 @@ class DataPreprocessor:
         df = _dropHeavyColumns(df, self.col_miss_threshold)
 
         # --- coerce and detect y type ---
-        y_is_multiclass = detectMulticlassY(y_col)
-        if y_is_multiclass:
-            codes, _ = pd.factorize(y_col)
-            y = codes.astype(float)
-            y_is_binary = False
+        # When the entire target column is missing (e.g. UCI datasets with no
+        # designated target), skip y processing and keep all rows.  The dataset
+        # can still serve as a design-matrix source for ds_type='sampled'.
+        y_all_missing = y_col.isna().all()
+        if y_all_missing:
+            logger.warning('Target y is entirely missing; dataset will be saved without y.')
+            self._y_type = 'unobserved'
+            self._y_mean = 0.0
+            self._y_std = 1.0
+            y = None
         else:
-            y, y_is_binary = coerceTargetToNumeric(y_col)
-        self._y_type = detectYType(y, y_is_binary, y_is_multiclass)
+            y_is_multiclass = detectMulticlassY(y_col)
+            if y_is_multiclass:
+                codes, _ = pd.factorize(y_col)
+                y = codes.astype(float)
+                y_is_binary = False
+            else:
+                y, y_is_binary = coerceTargetToNumeric(y_col)
+            self._y_type = detectYType(y, y_is_binary, y_is_multiclass)
 
-        # remove rows with non-finite y (listwise on the target is non-negotiable)
-        y_valid = np.isfinite(y)
-        if not np.all(y_valid):
-            n_bad = int((~y_valid).sum())
-            logger.warning(f'Removing {n_bad} rows with non-finite y.')
-            keep = np.where(y_valid)[0]
-            df = df.iloc[keep].reset_index(drop=True)
-            y = y[keep]
+            # remove rows with non-finite y (listwise on the target is non-negotiable)
+            y_valid = np.isfinite(y)
+            if not np.all(y_valid):
+                n_bad = int((~y_valid).sum())
+                logger.warning(f'Removing {n_bad} rows with non-finite y.')
+                keep = np.where(y_valid)[0]
+                df = df.iloc[keep].reset_index(drop=True)
+                y = y[keep]
 
         # --- group detection and extraction ---
         # Group detection runs before imputation so that group membership can
@@ -713,7 +724,8 @@ class DataPreprocessor:
         if group_name and group_name in df.columns:
             df = df.sort_values(by=group_name)
             sort_idx = df.index.values
-            y = y[sort_idx]
+            if y is not None:
+                y = y[sort_idx]
             df = df.reset_index(drop=True)
             groups_raw = df.pop(group_name)
             groups, _ = pd.factorize(groups_raw)
@@ -776,7 +788,8 @@ class DataPreprocessor:
             if still_missing.any():
                 keep = np.where(~still_missing)[0]
                 df = df.iloc[keep].reset_index(drop=True)
-                y = y[keep]
+                if y is not None:
+                    y = y[keep]
                 if groups is not None:
                     groups = groups[keep]
                     groups, _ = pd.factorize(pd.Series(groups))
@@ -825,7 +838,9 @@ class DataPreprocessor:
         X = np.concatenate(parts, axis=1) if parts else np.empty((len(df), 0))
 
         # --- y standardisation ---
-        if self._y_type == 'continuous':
+        if self._y_type == 'unobserved':
+            y_out = None
+        elif self._y_type == 'continuous':
             self._y_mean = float(np.nanmean(y))
             self._y_std = float(max(float(np.nanstd(y)), 1e-6))
             y_out = (y - self._y_mean) / self._y_std
