@@ -289,8 +289,12 @@ def detectGroupCandidates(
     if not eligible:
         return []
 
-    pattern = '|'.join(rf'\b{word}\b' for word in BLACKLIST)
-    eligible = [col for col in eligible if re.search(pattern, col) is None]
+    _bl = set(BLACKLIST)
+    eligible = [
+        col
+        for col in eligible
+        if not any(tok in _bl for tok in re.split(r'[\s_]+', col.lower()))
+    ]
     if not eligible:
         return []
 
