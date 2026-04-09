@@ -105,6 +105,7 @@ class Affine(CouplingTransform):
         params = self.affine_conditioner(x1, context=context, mask=mask1)
         log_weight, bias = params.chunk(2, dim=-1)
         log_weight = self.alpha * torch.tanh(log_weight / self.alpha)   # softclamp
+        bias = self.alpha * torch.tanh(bias / self.alpha)               # softclamp
         return {'log_weight': log_weight, 'bias': bias}
 
     def forward(self, x1, x2, context=None, mask1=None, mask2=None, inverse=False):

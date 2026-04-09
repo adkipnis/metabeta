@@ -200,7 +200,7 @@ def test_coupling_flow(batch, context, subnet_kwargs, transform, n_blocks):
     x_rec, _, _ = model.inverse(z, context, mask=mask)
     assert torch.isfinite(z).all(), 'anomaly in forward pass'
     assert torch.isfinite(x_rec).all(), 'anomaly in backward pass'
-    assert torch.allclose(x, x_rec, atol=ATOL * n_blocks), 'recovery failed'
+    assert torch.allclose(x, x_rec, atol=ATOL), 'recovery failed'
     x = x.detach().clone().requires_grad_(True)
     z, log_det, _ = model.forward(x, context=context, mask=mask)
     log_det_num = _numerical_logdet(z, x)
