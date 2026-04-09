@@ -53,6 +53,25 @@ else:
 
 
 def _apply_column_metadata(df: pd.DataFrame, name: str) -> pd.DataFrame:
+    """Convert PMLB-typed categorical columns to pandas CategoricalDtype.
+
+    The preprocessor's ``categorical()`` helper detects only object/category/string
+    columns.  PMLB integer-encodes nominal features, so without this annotation they
+    would be treated as numeric (z-standardised) instead of one-hot encoded.
+
+    Only ``type: categorical`` features are converted; ``binary``, ``ordinal``, and
+    ``continuous`` features are left as numeric so the pipeline handles them normally.
+    """
+    if name not in metadata:
+        return df
+    features = metadata[name].get('features', [])
+    cat_cols = {f['name'] for f in features if f.get('type') == 'categorical'}
+    for col in df.columns:
+        if col in cat_cols:
+            df[col] = df[col].astype('category')
+    return df
+
+
 # fetch all datasets
 for name in dataset_names:
     try:
