@@ -13,6 +13,7 @@ plots
 results
 /AGENTS.md
 /CLAUDE.md
-/metabeta/datasets/pmlb
+/metabeta/datasets/*/*.csv
+/metabeta/datasets/*/*.json
 /benchmarks
 /paper
