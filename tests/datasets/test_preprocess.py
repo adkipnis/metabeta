@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from metabeta.datasets.preprocess import (
+from metabeta.datasets.preprocessor import (
     DataPreprocessor,
     _corrFilter,
     _dropHeavyColumns,

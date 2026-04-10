@@ -1,1 +1,1 @@
-from metabeta.datasets.preprocess import DataPreprocessor as DataPreprocessor
+from metabeta.datasets.preprocessor import DataPreprocessor as DataPreprocessor
