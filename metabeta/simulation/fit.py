@@ -2,14 +2,14 @@ import argparse
 from pathlib import Path
 import time
 import numpy as np
-import pandas as pd
+import pymc as pm
+import pytensor.tensor as pt
 from pymc import adam
-import bambi as bmb
 import arviz as az
 import pytensor
 
 from metabeta.utils.io import datasetFilename
-from metabeta.utils.families import bambiFamilyName, hasSigmaEps
+from metabeta.utils.families import hasSigmaEps
 from metabeta.utils.padding import aggregate, unpad
 from metabeta.utils.templates import setupConfigParser, generateSimulationConfig
 
@@ -24,67 +24,26 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--ds_type', type=str, default='toy', help='Dataset type: toy|flat|scm|mixed|sampled|observed')
     parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
 
-    parser.add_argument(
-        '--idx',
-        type=int,
-        default=0,
-        help='Index of dataset in batch, for which we want to fit the data (default = 0)',
-    )
-    parser.add_argument(
-        '--reintegrate',
-        action='store_true',
-        help='Check if fits exist for each dataset and reintegrate into batch (default = False)',
-    )
-
-    # bambi
-    parser.add_argument(
-        '--respecify_ffx',
-        action='store_true',
-        help='Use automatic fixed effects priors by bambi instead of true priors (default = False)',
-    )
-    parser.add_argument(
-        '--method',
-        type=str,
-        default='nuts',
-        help='Inference method for bambi [nuts, advi], (default = nuts)',
-    )
-    parser.add_argument('--seed', type=int, default=42, help='Seed for bambi (default = 42)')
-    parser.add_argument(
-        '--tune',
-        type=int,
-        default=2000,
-        help='Number of tuning steps (burnin) for MCMC (default = 2000)',
-    )
-    parser.add_argument(
-        '--draws',
-        type=int,
-        default=1000,
-        help='Number of posterior samples (default = 1000)',
-    )
-    parser.add_argument(
-        '--chains',
-        type=int,
-        default=4,
-        help='Number of posterior sampling chains (default = 4)',
-    )
-    parser.add_argument(
-        '--loop',
-        action='store_true',
-        help='Loop chain sampling instead of parallelizing it (default = False)',
-    )
-    parser.add_argument(
-        '--viter',
-        type=int,
-        default=50_000,
-        help='Number of ADVI steps (default = 50_000)',
-    )
-    parser.add_argument(
-        '--lr',
-        type=float,
-        default=5e-3,
-        help='Adam learning rate for ADVI (default = 5e-3)',
-    )
-    return setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets with Bambi.')
+    parser.add_argument('--idx', type=int, default=0,
+        help='Index of dataset in batch to fit (default=0)')
+    parser.add_argument('--reintegrate', action='store_true',
+        help='Aggregate individual fit files back into the batch (default=False)')
+    parser.add_argument('--method', type=str, default='nuts',
+        help='Inference method [nuts, advi] (default=nuts)')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed (default=42)')
+    parser.add_argument('--tune', type=int, default=2000,
+        help='NUTS tuning steps (default=2000)')
+    parser.add_argument('--draws', type=int, default=1000,
+        help='Posterior draws per chain (default=1000)')
+    parser.add_argument('--chains', type=int, default=4,
+        help='Number of chains (default=4)')
+    parser.add_argument('--loop', action='store_true',
+        help='Run chains sequentially instead of in parallel (default=False)')
+    parser.add_argument('--viter', type=int, default=50_000,
+        help='ADVI iterations (default=50_000)')
+    parser.add_argument('--lr', type=float, default=5e-3,
+        help='Adam learning rate for ADVI (default=5e-3)')
+    return setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets with PyMC.')
 # fmt: on
 
 
@@ -100,23 +59,17 @@ class Fitter:
         self.outdir = Path(srcdir, self.cfg.data_id, 'fits')
         self.outdir.mkdir(parents=True, exist_ok=True)
 
-        # determine path to data
         self.fname = datasetFilename(partition='test')
         self.batch_path = Path(self.srcdir, self.cfg.data_id, self.fname)
         assert self.batch_path.exists(), f'{self.batch_path} does not exist'
 
-        # load batch
         with np.load(self.batch_path, allow_pickle=True) as batch:
             self.batch = dict(batch)
         assert 0 <= self.cfg.idx < len(self), 'idx out of bounds'
         self.ds = self._getSingle(self.batch, self.cfg.idx)
-
-        # setup outpath
-        outname = self._outname(cfg.idx)
-        self.outpath = Path(self.outdir, outname)
+        self.outpath = Path(self.outdir, self._outname(cfg.idx))
 
     def _getSingle(self, batch: dict[str, np.ndarray], idx: int) -> dict[str, np.ndarray]:
-        """extract single dataset at index {idx} and unpad"""
         ds = {k: v[idx] for k, v in batch.items()}
         sizes = {k: ds[k] for k in list('dqmn')}
         return unpad(ds, sizes)
