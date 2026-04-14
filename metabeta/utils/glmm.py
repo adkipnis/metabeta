@@ -526,10 +526,15 @@ def _lmmGlmm(
     mean_Hg_inv = mean_Hg_inv.nan_to_num(nan=0.0, posinf=0.0)
     sigma_rfx_est = Psi_lap.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().nan_to_num()
 
+    # Per-group posterior variance of each BLUP: diagonal of H_g^{-1}
+    blup_var = Hg_inv.diagonal(dim1=-2, dim2=-1).clamp(min=0.0)     # (B, m, q)
+    blup_var = (blup_var * mask_m[:, :, None]).nan_to_num(nan=0.0, posinf=0.0)
+
     return {
         'beta_est': beta_gls,           # (B, d)
         'sigma_rfx_est': sigma_rfx_est, # (B, q)
         'blup_est': blups,              # (B, m, q)
+        'blup_var': blup_var,           # (B, m, q)
         'phi_pearson': phi_pearson,     # (B,)
         'psi_0': psi_0,                 # (B,)
         'Psi_pql': Psi_pql,             # (B, q, q)
