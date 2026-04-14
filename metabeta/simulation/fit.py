@@ -103,27 +103,32 @@ class Fitter:
 
         y_obs = ds['y'].astype(np.float32)
         X = ds['X'].astype(np.float32).copy()  # (n, d); column 0 is the intercept
-        Z = X[:, :q].copy()                    # (n, q)
-        groups = ds['groups'].astype(int)
+        Z = X[:, :q].copy()                    # (n, q); rfx design matrix
+        groups = ds['groups'].astype(int)       # (n,); group index per observation
+
+        # Center predictors to match bambi's center_predictors=True default
         if d > 1:
             means = X[:, 1:].mean(axis=0)
             X[:, 1:] -= means
             Z[:, 1:] -= means[: q - 1]
 
-        nu_ffx = ds['nu_ffx'].astype(float)
-        tau_ffx = ds['tau_ffx'].astype(float)
-        tau_rfx = ds['tau_rfx'].astype(float)
+        nu_ffx = ds['nu_ffx'].astype(float)    # prior means for fixed effects
+        tau_ffx = ds['tau_ffx'].astype(float)  # prior scales for fixed effects
+        tau_rfx = ds['tau_rfx'].astype(float)  # prior scales for rfx sigmas
 
-        ffx_family   = FFX_FAMILIES[int(ds.get('family_ffx', 0))]
+        ffx_family = FFX_FAMILIES[int(ds.get('family_ffx', 0))]
         sigma_family = SIGMA_FAMILIES[int(ds.get('family_sigma_rfx', 0))]
-        eps_family   = SIGMA_FAMILIES[int(ds.get('family_sigma_eps', 0))]
-        likelihood   = int(ds.get('likelihood_family', 0))
+        eps_family = SIGMA_FAMILIES[int(ds.get('family_sigma_eps', 0))]
+        likelihood = int(ds.get('likelihood_family', 0))
+
+        # ---- helpers
 
         def rlabel(j: int, suffix: str = '') -> str:
+            """Variable name for rfx dimension j, matching bambi's convention."""
             return ('1|i' if j == 0 else f'x{j}|i') + suffix
 
         def half_rv(name: str, family: str, scale, as_dist: bool = False):
-            """Half-* RV (named) or free distribution (for LKJCholeskyCov sd_dist)."""
+            """Half-* RV (named) or anonymous distribution (for LKJCholeskyCov sd_dist)."""
             if family == 'halfnormal':
                 cls, kw = pm.HalfNormal, {'sigma': scale}
             elif family == 'halfstudent':
@@ -135,7 +140,7 @@ class Fitter:
             return cls.dist(**kw) if as_dist else cls(name, **kw)
 
         with pm.Model() as model:
-            # ---- fixed effects
+            # ---- fixed effects: beta_j ~ Normal or StudentT
             betas = []
             for j in range(d):
                 name = 'Intercept' if j == 0 else f'x{j}'
@@ -146,10 +151,14 @@ class Fitter:
                 else:
                     raise ValueError(f'unsupported ffx family: {ffx_family}')
 
-            # ---- random effects
+            # ---- random effects: non-centered parametrization b = z * sigma (or z @ chol.T)
             if correlated:
+                # LKJ-Cholesky prior on full covariance Σ = D·R·D;
+                # chol is the Cholesky factor of Σ, sigma_vec are the marginal SDs
                 chol, _, sigma_vec = pm.LKJCholeskyCov(
-                    '_lkj_rfx', n=q, eta=float(ds['eta_rfx']),
+                    '_lkj_rfx',
+                    n=q,
+                    eta=float(ds['eta_rfx']),
                     sd_dist=half_rv('', sigma_family, tau_rfx, as_dist=True),
                     compute_corr=True,
                 )
@@ -160,6 +169,7 @@ class Fitter:
                 for j in range(q):
                     pm.Deterministic(rlabel(j), b[:, j])
             else:
+                # Independent rfx: b_j = z_j * sigma_j, each dimension separately
                 cols = []
                 for j in range(q):
                     s = half_rv(rlabel(j, '_sigma'), sigma_family, float(tau_rfx[j]))
@@ -167,17 +177,17 @@ class Fitter:
                     cols.append(pm.Deterministic(rlabel(j), z * s))
                 b = pt.stack(cols, axis=1)  # (m, q)
 
-            # ---- linear predictor
+            # ---- linear predictor: X @ beta + row-wise dot of Z with b[group]
             mu = pt.dot(pt.as_tensor_variable(X), pt.stack(betas))
             mu = mu + (pt.as_tensor_variable(Z) * b[groups]).sum(axis=1)
 
             # ---- likelihood
-            if likelihood == 0:
+            if likelihood == 0:  # Gaussian
                 sigma_eps = half_rv('sigma', eps_family, float(ds.get('tau_eps', 1.0)))
                 pm.Normal('y_obs', mu=mu, sigma=sigma_eps, observed=y_obs)
-            elif likelihood == 1:
+            elif likelihood == 1:  # Bernoulli (logistic)
                 pm.Bernoulli('y_obs', logit_p=mu, observed=y_obs.astype(int))
-            elif likelihood == 2:
+            elif likelihood == 2:  # Poisson (log-linear)
                 pm.Poisson('y_obs', mu=pt.exp(mu), observed=y_obs.astype(int))
             else:
                 raise ValueError(f'unsupported likelihood_family: {likelihood}')
