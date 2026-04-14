@@ -172,11 +172,16 @@ def _lmmNormalCompacted(
 
     Psi = sigma_rfx.square().unsqueeze(-1)                          # (B, 1, 1)
 
+    # Posterior variance of each BLUP: Var(b_g | data) = σ_rfx² · (1 − λ_g)
+    blup_var = (sigma_rfx_sq_val[:, None] * (1.0 - lambda_g2)).clamp(min=0.0)  # (B, m)
+    blup_var = blup_var.unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)           # (B, m, 1)
+
     return {
         'beta_est': beta_gls,           # (B, d)
         'sigma_eps_est': sigma_eps,     # (B, 1)
         'sigma_rfx_est': sigma_rfx,     # (B, 1)
         'blup_est': blups,              # (B, m, 1)
+        'blup_var': blup_var,           # (B, m, 1)
         'Psi': Psi,                     # (B, 1, 1)
     }
 
