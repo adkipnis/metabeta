@@ -9,7 +9,7 @@ import arviz as az
 import pytensor
 
 from metabeta.utils.io import datasetFilename
-from metabeta.utils.families import hasSigmaEps
+from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF, hasSigmaEps
 from metabeta.utils.padding import aggregate, unpad
 from metabeta.utils.templates import setupConfigParser, generateSimulationConfig
 
@@ -96,7 +96,6 @@ class Fitter:
         All RFX variables are stored as Deterministics named '1|i', 'x1|i',
         '1|i_sigma', … so that _extractAll works for both cases.
         """
-        from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
 
         d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
         correlated = float(ds.get('eta_rfx', 0)) > 0 and q >= 2
