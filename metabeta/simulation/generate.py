@@ -72,7 +72,7 @@ def setup() -> argparse.Namespace:
     # Batch dimensions
     parser.add_argument('--bs_train', type=int, default=4096, help='Number of datasets per training epoch file (default = 4096)')
     parser.add_argument('--bs_valid', type=int, default=256, help='Number of datasets in the validation file (default = 256)')
-    parser.add_argument('--bs_test', type=int, default=128, help='Number of datasets in the test file (default = 128)')
+    parser.add_argument('--bs_test', type=int, default=512, help='Number of datasets in the test file (default = 512); split into equal chunks for uncertainty estimates')
     parser.add_argument('--bs_mini', type=int, default=32, help='Mini-batch size for grouping m/q/d across datasets (default = 32)')
 
     # Partitions and sources
