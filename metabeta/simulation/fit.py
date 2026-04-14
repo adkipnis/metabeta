@@ -243,21 +243,46 @@ class Fitter:
         out['nuts_duration'] = np.array(t1 - t0)
         return out
 
-    def _fitAdvi(self, cfg: argparse.Namespace, ds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    def _fitAdvi(
+        self,
+        cfg: argparse.Namespace,
+        ds: dict[str, np.ndarray],
+        elbo_every: int = 500,
+    ) -> dict[str, np.ndarray]:
+        """Fit with ADVI and record the ELBO curve.
+
+        The ELBO is recorded every ``elbo_every`` iterations (default 500),
+        giving ~1000 points for the default 500k-iteration budget.
+        PyMC minimises the *negative* ELBO, so ``hist`` contains negative
+        values; we negate before storing so the saved array is the ELBO itself
+        (should increase / plateau during training).
+        """
         pymc_model = self._buildPymc(ds)
+
+        elbo_steps: list[int] = []
+        elbo_vals: list[float] = []
+
+        def _record(approx, hist, i):
+            if i % elbo_every == 0:
+                elbo_steps.append(i)
+                elbo_vals.append(-float(hist[-1]))  # negate loss → ELBO
+
         t0 = time.perf_counter()
         with pymc_model:
             mean_field = pm.fit(
                 n=cfg.viter,
                 method='advi',
                 obj_optimizer=adam(learning_rate=cfg.lr),
+                callbacks=[_record],
+                progressbar=False,
             )
+        t1 = time.perf_counter()
+
         trace = mean_field.sample(
             draws=(cfg.draws * cfg.chains),
             random_seed=cfg.seed,
             return_inferencedata=True,
         )
-        t1 = time.perf_counter()
 
         d, q = int(ds['d']), int(ds['q'])
         out = self._extractAll(trace, d, q, 'advi')
@@ -265,6 +290,8 @@ class Fitter:
         out['advi_names'] = summary.index.to_numpy(dtype=str)
         out['advi_ess'] = summary['ess_bulk'].to_numpy()
         out['advi_duration'] = np.array(t1 - t0)
+        out['advi_elbo'] = np.array(elbo_vals, dtype=np.float64)   # (T,)
+        out['advi_elbo_step'] = np.array(elbo_steps, dtype=np.int64)  # (T,)
         return out
 
     def go(self) -> None:
