@@ -79,7 +79,7 @@ class Approximator(nn.Module):
         d_input_l = 1 + (d_ffx - 1) + (d_rfx - 1)
         self.summarizer_l = _buildSummarizer(self.cfg.summarizer_l, d_input_l)
         # global: local summaries + local metadata, aggregated across groups
-        d_meta_l = 2 + d_rfx  # n_obs + eta_rfx + blup_est (scaled BLUPs, q values)
+        d_meta_l = 2 + 2 * d_rfx  # n_obs + eta_rfx + blup_est (q) + blup_std (q)
         d_input_g = self.cfg.summarizer_l.d_output + d_meta_l
         self.summarizer_g = _buildSummarizer(self.cfg.summarizer_g, d_input_g)
 
@@ -87,8 +87,10 @@ class Approximator(nn.Module):
         # global: fixed effects + variance params conditioned on global summary + metadata
         d_prior = 2 * d_ffx + d_rfx + d_sigma_eps + 1  # nu_ffx, tau_ffx, tau_rfx, [tau_eps], eta_rfx
         d_stats = d_ffx + d_rfx + d_sigma_eps           # beta_est, sigma_rfx_est, [sigma_eps_est]
+        # phi_pearson (Bernoulli/Poisson overdispersion) — absent for Normal (has_sigma_eps)
+        d_phi = 0 if self.has_sigma_eps else 1
         # blup_corr: sample correlation of BLUPs across groups — direct rfx-correlation signal
-        d_meta_g = 2 + d_prior + self.family_encoder.d_output + d_stats + self.d_corr  # n_groups, n_total, ...
+        d_meta_g = 2 + d_prior + self.family_encoder.d_output + d_stats + self.d_corr + d_phi
         d_context_g = self.cfg.summarizer_g.d_output + d_meta_g
         d_target_g = d_ffx + d_var + self.d_corr
         self.posterior_g = _buildPosterior(self.cfg.posterior_g, d_target_g, d_context_g)
@@ -194,11 +196,15 @@ class Approximator(nn.Module):
             #     [..., None, None]
             # )
             blup_scaled = stats['blup_est']   # / sigma_rfx_rms  # (B, m, q)
+            # Posterior std of each BLUP: sqrt of per-group Laplace/GLS conditional variance.
+            # Encodes per-group identifiability of random effects beyond what n_obs alone conveys:
+            # depends jointly on n_g, σ_ε, and the current Ψ estimate.
+            blup_std = stats['blup_var'].clamp(min=0.0).sqrt()            # (B, m, q)
             n_obs = data['ns'].unsqueeze(-1).float().sqrt() / 10           # (B, m, 1)
             eta_rfx = (
                 data['eta_rfx'].unsqueeze(-1).expand(-1, summary.shape[1]).unsqueeze(-1)
             )                                                               # (B, m, 1)
-            out += [n_obs, eta_rfx, blup_scaled]
+            out += [n_obs, eta_rfx, blup_scaled, blup_std]
         else:
             n_total = data['n'].unsqueeze(-1).float().sqrt() / 10
             n_groups = data['m'].unsqueeze(-1).float().sqrt() / 10
@@ -225,6 +231,11 @@ class Approximator(nn.Module):
                 tau_eps = data['tau_eps'].clone().unsqueeze(-1)
                 out.append(tau_eps)
                 out.append(stats['sigma_eps_est'])
+            else:
+                # Pearson overdispersion φ = Σ(y−μ)²/V(μ) / (N−d): signals excess variability
+                # beyond the nominal link variance; informs the flow how much RE mass is needed.
+                phi = stats['phi_pearson'].clamp(min=0.0).unsqueeze(-1)   # (B, 1)
+                out.append(phi)
             if self.d_corr > 0:
                 # Correlation from GLMM Psi: more reliable than sample BLUP correlation.
                 Psi = stats['Psi'] if 'Psi' in stats else stats['Psi_lap']  # (b, q, q)
