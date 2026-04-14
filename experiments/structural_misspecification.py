@@ -14,12 +14,29 @@ NUTS fits are cached per (config, seed, scale, dataset_index, draws, tune, chain
 in ``results/structural_fits/``.  Re-run with ``--refit`` to recompute.
 
 Usage (from experiments/):
-    uv run python structural.py
-    uv run python structural.py --configs small-n-sampled
-    uv run python structural.py --scales 0.0 0.25 0.5 1.0 2.0
-    uv run python structural.py --max_datasets 8 --nuts_draws 500
-    uv run python structural.py --refit              # force recompute cached fits
-    uv run python structural.py --seed 123           # override config seed
+    uv run python structural_misspecification.py
+    uv run python structural_misspecification.py --configs small-n-sampled
+    uv run python structural_misspecification.py --scales 0.0 0.25 0.5 1.0 2.0
+    uv run python structural_misspecification.py --max_datasets 8 --nuts_draws 500
+    uv run python structural_misspecification.py --refit   # force recompute cached fits
+    uv run python structural_misspecification.py --seed 123
+
+TODO (IS correction under structural misspecification, moderate effort):
+    Currently only the raw amortized metabeta posterior is compared to NUTS.
+    Adding IS post-hoc would test whether the IS correction partially recovers
+    agreement when the linear model is structurally misspecified (λ > 0).
+
+    Concretely:
+      - After calling model.estimate(), apply ImportanceSampler with the perturbed y
+        (including the nonlinear term) and the same global-only IS scheme used
+        elsewhere (full=False).
+      - Add an IS row alongside the Baseline row in the output table.
+      - Expected outcome: at small λ IS likely improves agreement further; at large λ
+        IS weights may degenerate (high k̂), flagging the structural mismatch, which
+        is itself a useful diagnostic property worth reporting.
+      - This requires passing the perturbed batch dict (with modified y) into
+        ImportanceSampler; the batch perturbation logic can be adapted from
+        prior_misspecification.py.
 """
 
 import argparse
