@@ -1,4 +1,4 @@
-posterior_correlation: true
+posterior_correlation: false
 
 summarizer_g:
     type: 'set-transformer'
