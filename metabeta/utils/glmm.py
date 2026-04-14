@@ -299,6 +299,10 @@ def _lmmNormalFull(
     blups = torch.einsum('bmqp,bmp->bmq', W_g, Ztr_gls)              # (B, m, q)
     blups = blups.nan_to_num(nan=0.0)
 
+    # Posterior variance of each BLUP: Cov(b_g | data) = σ_ε² · W_g  (diagonal = marginal var)
+    blup_var = (se2[:, None, None, None] * W_g).diagonal(dim1=-2, dim2=-1).clamp(min=0.0)
+    blup_var = blup_var.nan_to_num(nan=0.0, posinf=0.0)              # (B, m, q)
+
     sigma_rfx = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()  # (B, q)
 
     return {
@@ -306,6 +310,7 @@ def _lmmNormalFull(
         'sigma_eps_est': sigma_eps_1d.unsqueeze(-1), # (B, 1)
         'sigma_rfx_est': sigma_rfx,                 # (B, q)
         'blup_est': blups,                          # (B, m, q)
+        'blup_var': blup_var,                       # (B, m, q)
         'Psi': Psi,                                 # (B, q, q)
     }
 
