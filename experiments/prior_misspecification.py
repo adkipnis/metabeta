@@ -17,11 +17,29 @@ Perturbation types:
     - Wrong family: rotate prior family indices (+1 mod n_families)
 
 Usage (from experiments/):
-    uv run python missspecification.py
-    uv run python missspecification.py --configs toy-n
-    uv run python missspecification.py --scale_factors 0.33 3 10
-    uv run python missspecification.py --mean_shifts 1 2 5
-    uv run python missspecification.py --valid
+    uv run python prior_misspecification.py
+    uv run python prior_misspecification.py --configs toy-n
+    uv run python prior_misspecification.py --scale_factors 0.33 3 10
+    uv run python prior_misspecification.py --mean_shifts 1 2 5
+    uv run python prior_misspecification.py --importance   # apply IS post-hoc
+    uv run python prior_misspecification.py --valid
+
+TODO (HMC baseline comparison, larger effort):
+    For a rigorous comparison we should additionally run NUTS/HMC with the same
+    misspecified prior under each perturbation condition and compare its metric
+    degradation profile to metabeta's.  This would confirm that metabeta degrades
+    at most as fast as the gold-standard sampler, ruling out additional loss from
+    the amortization approximation.
+
+    Concretely:
+      - Re-use the Bambi/PyMC runner from experiments/structural_misspecification.py
+        (which already calls NUTS with custom priors) and pass the perturbed
+        hyperparameters (scaled tau, shifted nu) to Bambi's prior_common argument.
+      - Run only the two most practically relevant conditions: tau×0.33 and tau×3,
+        focusing on the configuration where divergence is largest (medium-n-mixed).
+      - Cache NUTS fits to results/misspec_nuts/ analogously to structural_fits/.
+      - Add HMC rows to the output table alongside metabeta rows.
+      - The experiment is expensive; run with --max_datasets 16 (same as structural).
 """
 # subset datatsets
 
@@ -57,7 +75,7 @@ METABETA = DIR / '..' / 'metabeta'
 EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
 OUT_DIR = DIR / 'results'
 
-DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed']
+DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed', 'large-n-mixed']
 DEFAULT_SCALE_FACTORS = [0.33, 3.0]
 DEFAULT_MEAN_SHIFTS = [1.0, 2.0]
 
