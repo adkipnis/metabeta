@@ -82,172 +82,151 @@ class Fitter:
         use_method = self.cfg.method if method is None else method
         return f'{stem}_{use_method}_{idx:03d}.npz'
 
-    def _pandify(self, ds: dict[str, np.ndarray]) -> pd.DataFrame:
-        """get observations as dataframe"""
-        n, d = ds['n'], ds['d']
-        df = pd.DataFrame(index=range(n))
-        df['i'] = ds['groups']
-        df['y'] = ds['y']
-        for j in range(1, d):
-            df[f'x{j}'] = ds['X'][..., j]
-        return df
+    def _buildPymc(self, ds: dict[str, np.ndarray]) -> pm.Model:
+        """Build a PyMC GLMM for correlated or independent random effects.
 
-    def _formulate(self, ds: dict[str, np.ndarray]) -> str:
-        """setup bambi model formula based on ds"""
-        d, q = ds['d'], ds['q']
-        correlated = float(ds.get('eta_rfx', 0)) > 0
-        fixed = ' + '.join(f'x{j}' for j in range(1, d))
-        slopes = [f'x{j}' for j in range(1, q)]
+        Independent (eta_rfx == 0 or q == 1): per-dimension half-* sigma,
+        non-centered as b_j = z_j * sigma_j.  Variable names and
+        parametrisation match bambi exactly (verified in compare_bambi_pymc.py).
 
-        if correlated:
-            random = '(1 | i)' if not slopes else f"(1 + {' + '.join(slopes)} | i)"
-        else:
-            random_parts = ['(1 | i)']
-            random_parts.extend(f'(0 + {s} | i)' for s in slopes)
-            random = ' + '.join(random_parts)
+        Correlated (eta_rfx > 0 and q >= 2): LKJ-Cholesky prior on the full
+        covariance, non-centered as b = z @ chol.T.
 
-        if fixed:
-            return f'y ~ 1 + {fixed} + {random}'
-        return f'y ~ 1 + {random}'
-
-    def _priorize(self, ds: dict[str, np.ndarray]) -> dict[str, bmb.Prior]:
-        """setup bambi priors based on true priors"""
+        Covariates are mean-centered to match bambi's center_predictors=True.
+        All RFX variables are stored as Deterministics named '1|i', 'x1|i',
+        '1|i_sigma', … so that _extractAll works for both cases.
+        """
         from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
 
-        d, q = ds['d'], ds['q']
-        nu_ffx = ds['nu_ffx']
-        tau_ffx = ds['tau_ffx']
-        tau_rfx = ds['tau_rfx']
-        family_ffx = int(ds.get('family_ffx', 0))
-        family_sigma_rfx = int(ds.get('family_sigma_rfx', 0))
-        priors = {}
+        d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
+        correlated = float(ds.get('eta_rfx', 0)) > 0 and q >= 2
 
-        # fixed effects
-        if not self.cfg.respecify_ffx:
-            ffx_name = FFX_FAMILIES[family_ffx]
-            for j in range(d):
-                key = 'Intercept' if j == 0 else f'x{j}'
-                if ffx_name == 'normal':
-                    priors[key] = bmb.Prior('Normal', mu=nu_ffx[j], sigma=tau_ffx[j])
-                elif ffx_name == 'student':
-                    priors[key] = bmb.Prior(
-                        'StudentT', nu=STUDENT_DF, mu=nu_ffx[j], sigma=tau_ffx[j]
-                    )
+        y_obs = ds['y'].astype(np.float32)
+        X = ds['X'].astype(np.float32).copy()  # (n, d); column 0 is the intercept
+        Z = X[:, :q].copy()                    # (n, q)
+        groups = ds['groups'].astype(int)
+        if d > 1:
+            means = X[:, 1:].mean(axis=0)
+            X[:, 1:] -= means
+            Z[:, 1:] -= means[: q - 1]
 
-        # random effects variance
-        sigma_name = SIGMA_FAMILIES[family_sigma_rfx]
-        for j in range(q):
-            key = '1|i' if j == 0 else f'x{j}|i'
-            if sigma_name == 'halfnormal':
-                sigma = bmb.Prior('HalfNormal', sigma=tau_rfx[j])
-            elif sigma_name == 'halfstudent':
-                sigma = bmb.Prior('HalfStudentT', nu=STUDENT_DF, sigma=tau_rfx[j])
-            elif sigma_name == 'exponential':
-                sigma = bmb.Prior('Exponential', lam=1.0 / (tau_rfx[j] + 1e-12))
+        nu_ffx = ds['nu_ffx'].astype(float)
+        tau_ffx = ds['tau_ffx'].astype(float)
+        tau_rfx = ds['tau_rfx'].astype(float)
+
+        ffx_family   = FFX_FAMILIES[int(ds.get('family_ffx', 0))]
+        sigma_family = SIGMA_FAMILIES[int(ds.get('family_sigma_rfx', 0))]
+        eps_family   = SIGMA_FAMILIES[int(ds.get('family_sigma_eps', 0))]
+        likelihood   = int(ds.get('likelihood_family', 0))
+
+        def rlabel(j: int, suffix: str = '') -> str:
+            return ('1|i' if j == 0 else f'x{j}|i') + suffix
+
+        def half_rv(name: str, family: str, scale, as_dist: bool = False):
+            """Half-* RV (named) or free distribution (for LKJCholeskyCov sd_dist)."""
+            if family == 'halfnormal':
+                cls, kw = pm.HalfNormal, {'sigma': scale}
+            elif family == 'halfstudent':
+                cls, kw = pm.HalfStudentT, {'nu': STUDENT_DF, 'sigma': scale}
+            elif family == 'exponential':
+                cls, kw = pm.Exponential, {'lam': 1.0 / (np.asarray(scale) + 1e-12)}
             else:
-                raise ValueError(f'unknown sigma family: {sigma_name}')
-            priors[key] = bmb.Prior('Normal', mu=0, sigma=sigma)
+                raise ValueError(f'unsupported sigma family: {family}')
+            return cls.dist(**kw) if as_dist else cls(name, **kw)
 
-        # noise variance (normal likelihood only)
-        if 'tau_eps' in ds:
-            tau_eps = ds['tau_eps']
-            family_sigma_eps = int(ds.get('family_sigma_eps', 0))
-            eps_name = SIGMA_FAMILIES[family_sigma_eps]
-            if eps_name == 'halfnormal':
-                priors['sigma'] = bmb.Prior('HalfNormal', sigma=tau_eps)
-            elif eps_name == 'halfstudent':
-                priors['sigma'] = bmb.Prior('HalfStudentT', nu=STUDENT_DF, sigma=tau_eps)
-            elif eps_name == 'exponential':
-                priors['sigma'] = bmb.Prior('Exponential', lam=1.0 / (tau_eps + 1e-12))
-        return priors
+        with pm.Model() as model:
+            # ---- fixed effects
+            betas = []
+            for j in range(d):
+                name = 'Intercept' if j == 0 else f'x{j}'
+                if ffx_family == 'normal':
+                    betas.append(pm.Normal(name, mu=nu_ffx[j], sigma=tau_ffx[j]))
+                elif ffx_family == 'student':
+                    betas.append(pm.StudentT(name, nu=STUDENT_DF, mu=nu_ffx[j], sigma=tau_ffx[j]))
+                else:
+                    raise ValueError(f'unsupported ffx family: {ffx_family}')
 
-    def bambify(self, ds: dict[str, np.ndarray]) -> bmb.Model:
-        """setup bambi model from dataset dict
-        optionally allow bambi to setup its own priors for the fixed effects"""
-        likelihood_family = int(ds.get('likelihood_family', 0))
-        df = self._pandify(ds)
-        form = self._formulate(ds)
-        priors = None
-        if 'nu_ffx' in ds:
-            priors = self._priorize(ds)
-        family = bambiFamilyName(likelihood_family)
-        model = bmb.Model(
-            formula=form,
-            data=df,
-            family=family,
-            categorical='i',
-            priors=priors,
-        )
-        model.build()
+            # ---- random effects
+            if correlated:
+                chol, _, sigma_vec = pm.LKJCholeskyCov(
+                    '_lkj_rfx', n=q, eta=float(ds['eta_rfx']),
+                    sd_dist=half_rv('', sigma_family, tau_rfx, as_dist=True),
+                    compute_corr=True,
+                )
+                for j in range(q):
+                    pm.Deterministic(rlabel(j, '_sigma'), sigma_vec[j])
+                z = pm.Normal('_rfx_offset', 0.0, 1.0, shape=(m, q))
+                b = pm.Deterministic('_rfx', pt.dot(z, chol.T))  # (m, q)
+                for j in range(q):
+                    pm.Deterministic(rlabel(j), b[:, j])
+            else:
+                cols = []
+                for j in range(q):
+                    s = half_rv(rlabel(j, '_sigma'), sigma_family, float(tau_rfx[j]))
+                    z = pm.Normal(rlabel(j, '_offset'), 0.0, 1.0, shape=(m,))
+                    cols.append(pm.Deterministic(rlabel(j), z * s))
+                b = pt.stack(cols, axis=1)  # (m, q)
+
+            # ---- linear predictor
+            mu = pt.dot(pt.as_tensor_variable(X), pt.stack(betas))
+            mu = mu + (pt.as_tensor_variable(Z) * b[groups]).sum(axis=1)
+
+            # ---- likelihood
+            if likelihood == 0:
+                sigma_eps = half_rv('sigma', eps_family, float(ds.get('tau_eps', 1.0)))
+                pm.Normal('y_obs', mu=mu, sigma=sigma_eps, observed=y_obs)
+            elif likelihood == 1:
+                pm.Bernoulli('y_obs', logit_p=mu, observed=y_obs.astype(int))
+            elif likelihood == 2:
+                pm.Poisson('y_obs', mu=pt.exp(mu), observed=y_obs.astype(int))
+            else:
+                raise ValueError(f'unsupported likelihood_family: {likelihood}')
+
         return model
 
     def _extract(self, trace: az.InferenceData, name: str) -> np.ndarray:
-        """extract {name} samples from posterior"""
         x = trace.posterior[name].to_numpy()  # type: ignore
-        shape = (x.shape[0] * x.shape[1],) + x.shape[2:]
-        x = x.reshape(shape)
+        x = x.reshape((x.shape[0] * x.shape[1],) + x.shape[2:])
         return x[None, ...]
 
     def _extractAll(
         self, trace: az.InferenceData, d: int, q: int, prefix: str
     ) -> dict[str, np.ndarray]:
-        """extract all posterior samples"""
         likelihood_family = int(self.ds.get('likelihood_family', 0))
 
-        # fixed effects
-        ffx = []
-        for j in range(d):
-            key = 'Intercept' if j == 0 else f'x{j}'
-            val = self._extract(trace, key)
-            ffx.append(val)
-        ffx = np.concatenate(ffx, axis=0)
+        ffx = np.concatenate(
+            [self._extract(trace, 'Intercept' if j == 0 else f'x{j}') for j in range(d)], axis=0
+        )
+        sigma_rfx = np.concatenate(
+            [self._extract(trace, '1|i_sigma' if j == 0 else f'x{j}|i_sigma') for j in range(q)],
+            axis=0,
+        )
+        rfx = np.concatenate(
+            [self._extract(trace, '1|i' if j == 0 else f'x{j}|i') for j in range(q)], axis=0
+        ).swapaxes(2, 1)
 
-        # variances
-        sigma_rfx = []
-        for j in range(q):
-            key = '1|i_sigma' if j == 0 else f'x{j}|i_sigma'
-            val = self._extract(trace, key)
-            sigma_rfx.append(val)
-        sigma_rfx = np.concatenate(sigma_rfx, axis=0)
-
-        # random effects
-        rfx = []
-        for j in range(q):
-            key = '1|i' if j == 0 else f'x{j}|i'
-            val = self._extract(trace, key)
-            rfx.append(val)
-        rfx = np.concatenate(rfx, axis=0).swapaxes(2, 1)
-
-        # package
-        out = {
-            f'{prefix}_ffx': ffx,
-            f'{prefix}_sigma_rfx': sigma_rfx,
-            f'{prefix}_rfx': rfx,
-        }
+        out = {f'{prefix}_ffx': ffx, f'{prefix}_sigma_rfx': sigma_rfx, f'{prefix}_rfx': rfx}
         if hasSigmaEps(likelihood_family):
             out[f'{prefix}_sigma_eps'] = self._extract(trace, 'sigma')
         return out
 
     def _fitNuts(self, cfg: argparse.Namespace, ds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        """fit NUTS-based MCMC model and return samples and diagnostics"""
-        model = self.bambify(ds)
+        pymc_model = self._buildPymc(ds)
         t0 = time.perf_counter()
-        trace = model.fit(
-            tune=cfg.tune,
-            draws=cfg.draws,
-            chains=cfg.chains,
-            cores=(1 if cfg.loop else cfg.chains),
-            inference_method='pymc',
-            random_seed=cfg.seed,
-            return_inferencedata=True,
-        )
+        with pymc_model:
+            trace = pm.sample(
+                tune=cfg.tune,
+                draws=cfg.draws,
+                chains=cfg.chains,
+                cores=(1 if cfg.loop else cfg.chains),
+                random_seed=cfg.seed,
+                return_inferencedata=True,
+                progressbar=True,
+            )
         t1 = time.perf_counter()
 
-        # --- extract samples
         d, q = int(ds['d']), int(ds['q'])
         out = self._extractAll(trace, d, q, 'nuts')
-
-        # --- extract diagnostics
         summary = az.summary(trace, kind='diagnostics')
         out['nuts_names'] = summary.index.to_numpy(dtype=str)
         out['nuts_ess'] = summary['ess_bulk'].to_numpy()
@@ -256,14 +235,14 @@ class Fitter:
         return out
 
     def _fitAdvi(self, cfg: argparse.Namespace, ds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        """fit ADVI model (using ADAM) and return samples and diagnostics"""
-        model = self.bambify(ds)
+        pymc_model = self._buildPymc(ds)
         t0 = time.perf_counter()
-        mean_field = model.fit(
-            inference_method='vi',
-            n=cfg.viter,
-            obj_optimizer=adam(learning_rate=cfg.lr),
-        )
+        with pymc_model:
+            mean_field = pm.fit(
+                n=cfg.viter,
+                method='advi',
+                obj_optimizer=adam(learning_rate=cfg.lr),
+            )
         trace = mean_field.sample(
             draws=(cfg.draws * cfg.chains),
             random_seed=cfg.seed,
@@ -271,11 +250,8 @@ class Fitter:
         )
         t1 = time.perf_counter()
 
-        # --- extract samples
         d, q = int(ds['d']), int(ds['q'])
         out = self._extractAll(trace, d, q, 'advi')
-
-        # --- extract diagnostics
         summary = az.summary(trace, kind='diagnostics')
         out['advi_names'] = summary.index.to_numpy(dtype=str)
         out['advi_ess'] = summary['ess_bulk'].to_numpy()
@@ -283,7 +259,6 @@ class Fitter:
         return out
 
     def go(self) -> None:
-        """wrapper for fitting a single dataset with index {idx} in cfg"""
         print(f'Fitting dataset {self.cfg.idx} with {self.cfg.method.upper()}...')
         if self.cfg.method == 'nuts':
             results = self._fitNuts(self.cfg, self.ds)
@@ -295,15 +270,9 @@ class Fitter:
         print(f'Saved results to {self.outpath}')
 
     def _aggregate(self, method: str) -> dict[str, np.ndarray]:
-        """load all fits of {method}, aggregate and update batch"""
-        # get paths
         paths = [Path(self.outdir, self._outname(i, method=method)) for i in range(len(self))]
-
-        # check if all files exist
         for p in paths:
-            assert p.exists(), f'cannot aggregate: the fit file {p} does not exist, yet.'
-
-        # load fits safely
+            assert p.exists(), f'cannot aggregate: {p} does not exist'
         fits = []
         for p in paths:
             with np.load(p, allow_pickle=True) as f:
@@ -311,12 +280,8 @@ class Fitter:
         return aggregate(fits)
 
     def reintegrate(self) -> None:
-        # update batch for each fit method
         for method in ['nuts', 'advi']:
-            fits = self._aggregate(method)
-            self.batch.update(fits)
-
-        # save updated batch
+            self.batch.update(self._aggregate(method))
         fit_suffix = '.fit' + self.batch_path.suffix
         path = self.batch_path.with_suffix(fit_suffix)
         np.savez_compressed(path, **self.batch, allow_pickle=True)
