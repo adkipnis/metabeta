@@ -1,7 +1,7 @@
 [project]
 name = "metabeta"
 version = "0.3"
-description = "Add your description here"
+description = "Amortized inference for Bayesian GLMMs"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
