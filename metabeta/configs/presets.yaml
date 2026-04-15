@@ -11,7 +11,7 @@ sizes:
     min_n: 20
     max_n: 30
     max_n_total: 500
-  
+
   small:
     max_d: 4
     max_q: 2
@@ -20,7 +20,7 @@ sizes:
     min_n: 5
     max_n: 20
     max_n_total: 1000
-  
+
   medium:
     max_d: 6
     max_q: 3
@@ -29,7 +29,7 @@ sizes:
     min_n: 3
     max_n: 30
     max_n_total: 2000
-  
+
   large:
     max_d: 9
     max_q: 3
