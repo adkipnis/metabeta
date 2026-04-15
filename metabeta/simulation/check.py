@@ -29,8 +29,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument(
         '--n_fits',
         type=int,
-        default=128,
-        help='number of expected fit files per method (default = 128)',
+        default=512,
+        help='number of expected fit files per method (default = 512)',
     )
     parser.add_argument(
         '--srcdir',
