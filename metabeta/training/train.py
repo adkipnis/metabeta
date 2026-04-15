@@ -171,6 +171,8 @@ class Trainer:
         # misc setup
         self.device = setDevice(self.cfg.device)
         torch.set_num_threads(cfg.cores)
+        if self.device.type == 'cuda':
+            torch.set_float32_matmul_precision('high')
 
         # init data, model and optimizer
         self._initData()
