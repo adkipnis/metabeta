@@ -154,7 +154,7 @@ def _lmmNormalCompacted(
     b_gls = inv_se2[:, None] * (Xty - Xbary)
     beta_gls = torch.linalg.solve(A_gls + _adaptiveRidge(A_gls), b_gls)
 
-    beta_gls = beta_gls.nan_to_num(nan=0.0)
+    beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
     sigma_eps = sigma_eps_sq.sqrt().unsqueeze(-1).nan_to_num(nan=1.0, posinf=1.0)  # (B, 1)
     sigma_rfx = sigma_rfx_sq.sqrt().unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)  # (B, 1)
 
@@ -168,7 +168,7 @@ def _lmmNormalCompacted(
     y_mean2 = ym.sum(dim=2) / ns_f2
     X_mean2 = Xm.sum(dim=2) / ns_f2.unsqueeze(-1)
     r_g = (y_mean2 - torch.einsum('bmd,bd->bm', X_mean2, beta_gls)) * mask_m
-    blups = (lambda_g2 * r_g).unsqueeze(-1).nan_to_num(nan=0.0)    # (B, m, 1)
+    blups = (lambda_g2 * r_g).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)  # (B, m, 1)
 
     Psi = sigma_rfx.square().unsqueeze(-1)                          # (B, 1, 1)
 
@@ -289,7 +289,7 @@ def _lmmNormalFull(
     b_gls = inv_se2[:, None] * (Xty_pool - correction_Xy)        # (B, d)
     beta_gls = torch.linalg.solve(A_gls + _adaptiveRidge(A_gls), b_gls)  # (B, d)
 
-    beta_gls = beta_gls.nan_to_num(nan=0.0)
+    beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
     sigma_eps_1d = sigma_eps_sq.sqrt().nan_to_num(nan=1.0, posinf=1.0)  # (B,)
     Psi = Psi.nan_to_num(nan=0.0, posinf=0.0)
 
@@ -297,7 +297,7 @@ def _lmmNormalFull(
     resid_gls = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)) * mask_n
     Ztr_gls = torch.einsum('bmnq,bmn->bmq', Zm, resid_gls)           # (B, m, q)
     blups = torch.einsum('bmqp,bmp->bmq', W_g, Ztr_gls)              # (B, m, q)
-    blups = blups.nan_to_num(nan=0.0)
+    blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
 
     # Posterior variance of each BLUP: Cov(b_g | data) = σ_ε² · W_g  (diagonal = marginal var)
     blup_var = (se2[:, None, None, None] * W_g).diagonal(dim1=-2, dim2=-1).clamp(min=0.0)
@@ -519,8 +519,8 @@ def _lmmGlmm(
     # ------------------------------------------------------------------
     # Pack outputs
     # ------------------------------------------------------------------
-    beta_gls = beta_gls.nan_to_num(nan=0.0)
-    blups = blups.nan_to_num(nan=0.0)
+    beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
     Psi_lap = Psi_lap.nan_to_num(nan=0.0, posinf=0.0)
     Psi_pql = Psi_pql.nan_to_num(nan=0.0, posinf=0.0)
     mean_Hg_inv = mean_Hg_inv.nan_to_num(nan=0.0, posinf=0.0)
