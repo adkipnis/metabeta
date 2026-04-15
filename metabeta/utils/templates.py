@@ -94,7 +94,7 @@ class TrainingConfig(BaseModel):
     # Runtime settings (will be overridden by CLI-only params)
     cores: int = Field(gt=0, default=8)
     reproducible: bool = False
-    compile: bool = True
+    compile: bool = False
 
     # Evaluation settings
     n_samples: int = Field(gt=0, default=512)
