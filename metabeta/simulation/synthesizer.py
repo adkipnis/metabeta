@@ -33,11 +33,11 @@ class Scammer:
         return {
             'n_causes': int(self.rng.integers(max(n_features, 2), max(n_features * 3, 6) + 1)),
             'n_layers': int(self.rng.integers(2, 8)),
-            'n_hidden': int(self.rng.integers(8, 32)),
+            'n_hidden': int(self.rng.integers(16, 64)),
             'blockwise': bool(self.rng.random() < 0.5),
             'p_posthoc': float(self.rng.uniform(0.20, 0.90)),
             'preset': str(self.rng.choice(PRESETS)),
-            'use_dag': bool(self.rng.random() < 0.20),
+            'use_dag': bool(self.rng.random() < 0.40),
         }
 
     def _generate(self, n: int, d: int) -> np.ndarray:
