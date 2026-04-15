@@ -100,10 +100,10 @@ class Approximator(nn.Module):
         self.posterior_l = _buildPosterior(self.cfg.posterior_l, max(d_rfx, 2), d_context_l)
 
     def compile(self) -> None:
-        self.summarizer_l = torch.compile(self.summarizer_l, dynamic=True)
-        self.summarizer_g = torch.compile(self.summarizer_g, dynamic=True)
-        self.posterior_g = torch.compile(self.posterior_g, dynamic=True)
-        self.posterior_l = torch.compile(self.posterior_l, dynamic=True)
+        # Only compile the posteriors: Set Transformers use variable-length masked sequences
+        # that trigger an Inductor tiling assertion bug (pytorch/pytorch#139438).
+        self.posterior_g = torch.compile(self.posterior_g)
+        self.posterior_l = torch.compile(self.posterior_l)
 
     @property
     def device(self):
