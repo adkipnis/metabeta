@@ -86,9 +86,9 @@ def setup() -> argparse.Namespace:
     )
 
     # Template-based config generation (primary interface)
-    parser.add_argument('--size', type=str, default='tiny', help='Size preset: tiny|small|medium|large|huge')
+    parser.add_argument('--size', type=str, default='small', help='Size preset: tiny|small|medium|large|huge')
     parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
-    parser.add_argument('--ds_type', type=str, default='toy', help='Training dataset type: toy|flat|scm|mixed|sampled|observed')
+    parser.add_argument('--ds_type', type=str, default='mixed', help='Training dataset type: toy|flat|scm|mixed|sampled|observed')
     parser.add_argument('--valid_ds_type', type=str, default='sampled', help='Validation dataset type: toy|flat|scm|mixed|sampled|observed')
 
     # Alternative: load config from a saved YAML (e.g. a checkpoint config.yaml)
@@ -104,7 +104,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--verbosity', type=int, default=1, help='Logging verbosity level')
 
     # Training hyperparameters (override template or loaded YAML)
-    parser.add_argument('-e', '--max_epochs', type=int, default=10, help='Number of training epochs')
+    parser.add_argument('-e', '--max_epochs', type=int, default=20, help='Number of training epochs')
     parser.add_argument('--bs', type=int, help='Batch size (number of datasets per step)')
     parser.add_argument('--lr', type=float, help='Learning rate')
     parser.add_argument('--loss_type', type=str, help='Loss type: forward|backward|mixed (default = forward)')
