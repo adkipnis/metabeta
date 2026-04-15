@@ -19,5 +19,3 @@ uv sync
 source .venv/bin/activate
 uv pip install -e .
  ```
-## Rebuttals
-Rebuttals figures and tables are found [here](rebuttals/README.md).
