@@ -11,8 +11,7 @@ from metabeta.simulation.distributions import (
     Bernoulli,
     NegativeBinomial,
 )
-from scamd import generate_dataset
-from scamd.utils import setSeed as scamdSetSeed
+from scamd import generateDataset
 
 PRESETS = ('smooth_stable', 'balanced_realistic', 'high_variability')
 MAX_RETRIES = 8
@@ -36,22 +35,28 @@ class Scammer:
             'n_layers': int(self.rng.integers(2, 8)),
             'n_hidden': int(self.rng.integers(8, 32)),
             'blockwise': bool(self.rng.random() < 0.5),
+            'p_posthoc': float(self.rng.uniform(0.20, 0.90)),
+            'preset': str(self.rng.choice(PRESETS)),
+            'use_dag': bool(self.rng.random() < 0.20),
         }
 
     def _generate(self, n: int, d: int) -> np.ndarray:
         """Try up to MAX_RETRIES hyperparameter draws to get a valid SCM dataset."""
         for _ in range(MAX_RETRIES):
             hp = self._sampleHyperparams(d)
-            scamdSetSeed(int(self.rng.integers(0, 2**31)))
+            scamd_rng = np.random.default_rng(int(self.rng.integers(0, 2**31)))
             try:
-                features = generate_dataset(
+                features = generateDataset(
                     n_samples=n,
                     n_features=d - 1,
                     n_causes=hp['n_causes'],
                     n_layers=hp['n_layers'],
                     n_hidden=hp['n_hidden'],
                     blockwise=hp['blockwise'],
-                    preset='balanced_realistic',
+                    p_posthoc=hp['p_posthoc'],
+                    preset=hp['preset'],
+                    use_dag=hp['use_dag'],
+                    rng=scamd_rng,
                 )
             except RuntimeError:
                 continue
