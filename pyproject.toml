@@ -1,9 +1,13 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "metabeta"
 version = "0.3"
 description = "Amortized inference for Bayesian GLMMs"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "bambi>=0.17.2",
     "blue>=0.9.1",
@@ -50,5 +54,20 @@ extend-exclude = '''
 )
 '''
 
+[tool.uv]
+package = true
+environments = [
+    "sys_platform == 'linux' and python_version == '3.12'",
+    "sys_platform == 'darwin' and python_version == '3.12'",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
 [tool.uv.sources]
 scamd = { git = "https://github.com/adkipnis/scamd.git" }
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
+]
