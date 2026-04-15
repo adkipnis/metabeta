@@ -526,6 +526,14 @@ class DataPreprocessor:
             df = df.reset_index(drop=True)
             groups_raw = df.pop(group_name)
             groups, _ = pd.factorize(groups_raw)
+            # pd.factorize assigns -1 to NaN values; drop those rows so that
+            # group IDs are always contiguous non-negative integers (0, 1, ...)
+            if np.any(groups == -1):
+                keep = groups != -1
+                df = df.iloc[keep].reset_index(drop=True)
+                if y is not None:
+                    y = y[keep]
+                groups = groups[keep]
 
         df = df.reset_index(drop=True)
 
@@ -696,6 +704,19 @@ class DataPreprocessor:
             df = df.reset_index(drop=True)
             groups_raw = df.pop(group_name)
             groups, _ = pd.factorize(groups_raw)
+            # pd.factorize assigns -1 to NaN values; drop those rows so that
+            # group IDs are always contiguous non-negative integers (0, 1, ...)
+            if np.any(groups == -1):
+                n_dropped = int((groups == -1).sum())
+                logger.warning(
+                    f'Dropping {n_dropped} rows with missing group membership '
+                    f'(group_name="{group_name}").'
+                )
+                keep = groups != -1
+                df = df.iloc[keep].reset_index(drop=True)
+                if y is not None:
+                    y = y[keep]
+                groups = groups[keep]
 
         # --- consistent group-aware imputation ---
         # Fit on training data; apply in transform() too — no listwise deletion.
