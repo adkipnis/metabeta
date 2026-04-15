@@ -1,49 +1,80 @@
 """
-ADVI ELBO convergence experiment.
+ADVI / Pathfinder convergence experiment.
 
-Runs ADVI on a handful of tiny-n-toy test datasets and records the ELBO
-trajectory.  Purpose: assess whether the paper's iteration budget (5e5) and
-learning rate (5e-3) produce a converged mean-field approximation, or whether
-the observed underperformance vs HMC could partly reflect optimization failure.
+Compares:
+  - ADVI with Adam     at learning rates [1e-2, 5e-3, 1e-3]
+  - ADVI with Adagrad-window at learning rates [1e-2, 1e-3, 1e-4]
+  - Pathfinder (L-BFGS, no LR / budget needed)
 
-We also compare lr=5e-3 (paper default) against lr=1e-3 (conservative alternative)
-at a 50k-iteration budget (the CLI default; ≈10% of the paper budget).
-If the ELBO plateaus before 50k, the 500k budget is definitively sufficient.
+…on a random subset of tiny-n-toy test datasets, recording ELBO curves for
+the ADVI variants and wall times for all methods.
 
 Usage (from experiments/):
     python advi_elbo_convergence.py
-    python advi_elbo_convergence.py --n_datasets 10 --viter 100000
+    python advi_elbo_convergence.py --n_datasets 8 --viter 100000
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import sys
 import time
 from pathlib import Path
 
 import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
-from pymc import adam
 from matplotlib import pyplot as plt
 from matplotlib.gridspec import GridSpec
+from pymc.variational.updates import adam, adagrad_window
 
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
 DIR = Path(__file__).resolve().parent
 DATA_DIR = DIR / '..' / 'metabeta' / 'outputs' / 'data'
 OUT_DIR = DIR / 'results'
 BATCH_PATH = DATA_DIR / 'tiny-n-toy' / 'test.npz'
 
+# ---------------------------------------------------------------------------
+# Pathfinder loader (pymc-experimental, bypassing its broken __init__)
+# ---------------------------------------------------------------------------
+
+def _load_pathfinder():
+    """Import fit_pathfinder without triggering pymc_experimental's broken __init__."""
+    stub = type(sys)('stub')
+    for mod in [
+        'pymc_experimental',
+        'pymc_experimental.statespace',
+        'pymc_experimental.gp',
+        'pymc_experimental.model',
+        'pymc_experimental.utils',
+    ]:
+        if mod not in sys.modules:
+            sys.modules[mod] = stub
+    pf_path = Path(
+        '/sessions/modest-eager-bardeen/.local/lib/python3.10/'
+        'site-packages/pymc_experimental/inference/pathfinder.py'
+    )
+    if not pf_path.exists():
+        return None
+    spec = importlib.util.spec_from_file_location('_pathfinder_mod', pf_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.fit_pathfinder
+
 
 # ---------------------------------------------------------------------------
-# PyMC model builder (simplified version matching fit.py for Normal outcome)
+# PyMC model builder
 # ---------------------------------------------------------------------------
 
-def build_normal_model(ds: dict) -> pm.Model:
-    """Build a Normal GLMM matching the paper's PyMC parameterisation."""
+def build_model(ds: dict) -> pm.Model:
+    """Build a Normal GLMM matching the paper's PyMC parametrisation."""
     n_obs = int(ds['n'])
-    m = int(ds['m'])
-    d = int(ds['d'])
-    q = int(ds['q'])
+    m     = int(ds['m'])
+    d     = int(ds['d'])
+    q     = int(ds['q'])
     correlated = float(ds.get('eta_rfx', 0)) > 0 and q >= 2
 
     X = ds['X'][:n_obs].astype(np.float32).copy()
@@ -51,23 +82,24 @@ def build_normal_model(ds: dict) -> pm.Model:
     Z = X[:, :q].copy()
     groups = ds['groups'][:n_obs].astype(int)
 
-    # centre predictors
     if d > 1:
         means = X[:, 1:].mean(0)
         X[:, 1:] -= means
         Z[:, 1:] -= means[:q - 1]
 
-    nu_ffx = ds['nu_ffx'].astype(float)
+    nu_ffx  = ds['nu_ffx'].astype(float)
     tau_ffx = ds['tau_ffx'].astype(float)
     tau_rfx = ds['tau_rfx'].astype(float)
     tau_eps = float(ds.get('tau_eps', 1.0))
 
     with pm.Model() as model:
-        betas = [pm.Normal('Intercept' if j == 0 else f'x{j}',
-                            mu=nu_ffx[j], sigma=tau_ffx[j])
-                 for j in range(d)]
+        betas = [
+            pm.Normal('Intercept' if j == 0 else f'x{j}',
+                      mu=nu_ffx[j], sigma=tau_ffx[j])
+            for j in range(d)
+        ]
         if correlated:
-            chol, _, sigma_vec = pm.LKJCholeskyCov(
+            chol, _, _ = pm.LKJCholeskyCov(
                 '_lkj_rfx', n=q, eta=float(ds['eta_rfx']),
                 sd_dist=pm.HalfNormal.dist(sigma=tau_rfx),
                 compute_corr=True,
@@ -86,34 +118,35 @@ def build_normal_model(ds: dict) -> pm.Model:
         mu = mu + (pt.as_tensor_variable(Z) * b[groups]).sum(axis=1)
         sigma_eps = pm.HalfNormal('sigma', sigma=tau_eps)
         pm.Normal('y_obs', mu=mu, sigma=sigma_eps, observed=y)
+
     return model
 
 
 # ---------------------------------------------------------------------------
-# ELBO recording
+# ADVI runner
 # ---------------------------------------------------------------------------
 
-def fit_advi_with_elbo(
+def fit_advi(
     model: pm.Model,
     n_iter: int,
-    lr: float,
-    every: int = 100,
+    optimizer_fn,
+    every: int = 200,
 ) -> tuple[np.ndarray, np.ndarray, float]:
-    """Fit ADVI and return (steps, elbo_values, wall_time_seconds)."""
+    """Return (steps, elbo, wall_seconds)."""
     steps: list[int] = []
     elbo_vals: list[float] = []
 
     def _record(approx, hist, i):
         if i % every == 0:
             steps.append(i)
-            elbo_vals.append(-float(hist[-1]))  # negate loss → ELBO
+            elbo_vals.append(-float(hist[-1]))
 
     t0 = time.perf_counter()
     with model:
         pm.fit(
             n=n_iter,
             method='advi',
-            obj_optimizer=adam(learning_rate=lr),
+            obj_optimizer=optimizer_fn,
             callbacks=[_record],
             progressbar=False,
         )
@@ -126,27 +159,15 @@ def fit_advi_with_elbo(
 # ---------------------------------------------------------------------------
 
 def convergence_stats(elbo: np.ndarray, tail_frac: float = 0.2) -> dict:
-    """
-    Assess convergence from the ELBO trajectory.
-
-    Returns:
-        plateau_delta   – mean absolute change in ELBO in the last tail_frac
-                          of iterations (small → converged)
-        plateau_rel     – plateau_delta / |final ELBO| (scale-free)
-        still_rising    – True if the tail is on average still increasing
-        max_elbo        – maximum ELBO seen
-        final_elbo      – last recorded ELBO
-    """
     n_tail = max(2, int(len(elbo) * tail_frac))
     tail = elbo[-n_tail:]
     diffs = np.diff(tail)
     plateau_delta = float(np.mean(np.abs(diffs)))
     final_elbo = float(elbo[-1])
     max_elbo = float(np.max(elbo))
-    plateau_rel = plateau_delta / max(abs(final_elbo), 1e-8)
+    plateau_rel = plateau_delta / max(abs(max_elbo), 1e-8)
     still_rising = float(np.mean(diffs)) > 0
     return dict(
-        plateau_delta=plateau_delta,
         plateau_rel=plateau_rel,
         still_rising=still_rising,
         max_elbo=max_elbo,
@@ -155,151 +176,242 @@ def convergence_stats(elbo: np.ndarray, tail_frac: float = 0.2) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Main experiment
+# Experiment configs
+# ---------------------------------------------------------------------------
+
+ADVI_CONFIGS = [
+    # (label, optimizer_factory, color, linestyle)
+    ('adam lr=1e-2',  lambda: adam(learning_rate=1e-2),          '#e05c47', '-'),
+    ('adam lr=5e-3',  lambda: adam(learning_rate=5e-3),          '#e05c47', '--'),
+    ('adam lr=1e-3',  lambda: adam(learning_rate=1e-3),          '#e05c47', ':'),
+    ('agw lr=1e-2',   lambda: adagrad_window(learning_rate=1e-2), '#4a90d9', '-'),
+    ('agw lr=1e-3',   lambda: adagrad_window(learning_rate=1e-3), '#4a90d9', '--'),
+    ('agw lr=1e-4',   lambda: adagrad_window(learning_rate=1e-4), '#4a90d9', ':'),
+]
+
+
+# ---------------------------------------------------------------------------
+# Main
 # ---------------------------------------------------------------------------
 
 def run(args: argparse.Namespace) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    fit_pathfinder = _load_pathfinder()
+    if fit_pathfinder is None:
+        print('WARNING: Pathfinder not available — skipping.')
+
     batch = dict(np.load(BATCH_PATH, allow_pickle=True))
     n_batch = len(batch['y'])
-    indices = list(range(min(args.n_datasets, n_batch)))
 
-    # Pick a diverse subset: vary by q (q=1 vs q=2) and m
-    if args.n_datasets <= 8:
-        q_arr = batch['q']
-        m_arr = batch['m']
-        q1_idx = [i for i in range(n_batch) if q_arr[i] == 1][:args.n_datasets // 2]
-        q2_idx = [i for i in range(n_batch) if q_arr[i] == 2][:args.n_datasets - len(q1_idx)]
-        indices = sorted(q1_idx + q2_idx)
+    # Diverse subset: balanced q=1 / q=2
+    q_arr = batch['q']
+    q1_idx = [i for i in range(n_batch) if q_arr[i] == 1][:args.n_datasets // 2]
+    q2_idx = [i for i in range(n_batch) if q_arr[i] == 2][:args.n_datasets - len(q1_idx)]
+    indices = sorted(q1_idx + q2_idx)
 
-    print(f'Running ADVI on {len(indices)} datasets '
-          f'({args.viter} iters, lr_paper={args.lr_paper}, lr_alt={args.lr_alt})')
+    print(f'Datasets: {indices}')
+    print(f'ADVI budget: {args.viter} iters, recording every {args.every} steps')
+    print(f'Configs: {len(ADVI_CONFIGS)} ADVI + {"Pathfinder" if fit_pathfinder else "no Pathfinder"}')
+    print()
 
-    results = []
+    all_results = []
+
     for idx in indices:
         ds = {k: v[idx] for k, v in batch.items()}
-        n_obs, m, d, q = int(ds['n']), int(ds['m']), int(ds['d']), int(ds['q'])
-        correlated = float(ds.get('eta_rfx', 0)) > 0 and q >= 2
-        print(f'  Dataset {idx}: n={n_obs}, m={m}, d={d}, q={q}, '
-              f'corr={correlated}', end='', flush=True)
+        n_obs = int(ds['n'])
+        m     = int(ds['m'])
+        d     = int(ds['d'])
+        q     = int(ds['q'])
+        corr  = float(ds.get('eta_rfx', 0)) > 0 and q >= 2
+        print(f'=== Dataset {idx}: n={n_obs}, m={m}, d={d}, q={q}, corr={corr} ===')
 
-        row: dict = dict(idx=idx, n=n_obs, m=m, d=d, q=q, correlated=correlated)
+        row = dict(idx=idx, n=n_obs, m=m, d=d, q=q, corr=corr, advi=[], pathfinder=None)
 
-        for label, lr in [('paper', args.lr_paper), ('alt', args.lr_alt)]:
-            model = build_normal_model(ds)
-            steps, elbo, wall = fit_advi_with_elbo(model, args.viter, lr, every=args.every)
+        # --- ADVI configs ---
+        for label, opt_factory, color, ls in ADVI_CONFIGS:
+            model = build_model(ds)
+            steps, elbo, wall = fit_advi(model, args.viter, opt_factory(), args.every)
             stats = convergence_stats(elbo)
-            row[f'steps_{label}'] = steps
-            row[f'elbo_{label}'] = elbo
-            row[f'wall_{label}'] = wall
-            row.update({f'{k}_{label}': v for k, v in stats.items()})
-            print(f'  lr={lr}: {wall:.0f}s, '
-                  f'final_ELBO={stats["final_elbo"]:.1f}, '
-                  f'plateau_rel={stats["plateau_rel"]:.4f}, '
-                  f'still_rising={stats["still_rising"]}', end='')
+            row['advi'].append(dict(
+                label=label, color=color, ls=ls,
+                steps=steps, elbo=elbo, wall=wall, **stats,
+            ))
+            print(f'  {label:18s}  wall={wall:5.1f}s  '
+                  f'final_ELBO={stats["final_elbo"]:8.1f}  '
+                  f'plateau_rel={stats["plateau_rel"]:.4f}  '
+                  f'rising={stats["still_rising"]}')
 
+        # --- Pathfinder ---
+        if fit_pathfinder is not None:
+            model = build_model(ds)
+            t0 = time.perf_counter()
+            try:
+                idata = fit_pathfinder(model=model, samples=4000, random_seed=42)
+                pf_wall = time.perf_counter() - t0
+                row['pathfinder'] = dict(wall=pf_wall, ok=True)
+                print(f'  {"pathfinder":18s}  wall={pf_wall:5.1f}s  (no ELBO curve)')
+            except Exception as e:
+                pf_wall = time.perf_counter() - t0
+                row['pathfinder'] = dict(wall=pf_wall, ok=False, error=str(e))
+                print(f'  {"pathfinder":18s}  FAILED: {e}')
         print()
-        results.append(row)
+        all_results.append(row)
 
     # -----------------------------------------------------------------------
-    # Plot
+    # Plot: ELBO curves + wall-time bars
     # -----------------------------------------------------------------------
-    n_ds = len(results)
-    fig = plt.figure(figsize=(14, 3 * n_ds))
-    gs = GridSpec(n_ds, 2, figure=fig, hspace=0.45, wspace=0.35)
+    n_ds = len(all_results)
+    fig = plt.figure(figsize=(16, 3.2 * n_ds + 2))
+    gs = GridSpec(n_ds + 1, 2, figure=fig,
+                  height_ratios=[3] * n_ds + [2],
+                  hspace=0.55, wspace=0.35)
 
-    for row_i, row in enumerate(results):
-        for col_i, (label, color) in enumerate([('paper', '#e05c47'), ('alt', '#4a90d9')]):
-            ax = fig.add_subplot(gs[row_i, col_i])
-            steps = row[f'steps_{label}']
-            elbo = row[f'elbo_{label}']
+    for row_i, row in enumerate(all_results):
+        # --- ELBO curves ---
+        ax_elbo = fig.add_subplot(gs[row_i, 0])
+        best_final = max(r['final_elbo'] for r in row['advi'])
+        for cfg in row['advi']:
+            steps = cfg['steps']
+            elbo  = cfg['elbo']
+            k = max(1, len(elbo) // 40)
+            smooth = np.convolve(elbo, np.ones(k) / k, mode='valid')
+            steps_s = steps[k - 1:]
+            ax_elbo.plot(steps, elbo, alpha=0.15, color=cfg['color'], linewidth=0.5)
+            ax_elbo.plot(steps_s, smooth, color=cfg['color'], linestyle=cfg['ls'],
+                         linewidth=1.6, label=cfg['label'])
 
-            # Smooth with rolling median to tame noise
-            k = max(1, len(elbo) // 50)
-            elbo_smooth = np.convolve(elbo, np.ones(k) / k, mode='valid')
-            steps_smooth = steps[k - 1:]
+        ax_elbo.set_title(
+            f'ds={row["idx"]}  n={row["n"]}, m={row["m"]}, d={row["d"]}, q={row["q"]}',
+            fontsize=8,
+        )
+        ax_elbo.set_xlabel('Iteration', fontsize=7)
+        ax_elbo.set_ylabel('ELBO', fontsize=7)
+        ax_elbo.tick_params(labelsize=7)
+        ax_elbo.legend(fontsize=6, ncol=2, loc='lower right')
 
-            ax.plot(steps, elbo, alpha=0.25, color=color, linewidth=0.6)
-            ax.plot(steps_smooth, elbo_smooth, color=color, linewidth=1.5)
+        # --- Convergence heatmap (plateau_rel per config) ---
+        ax_heat = fig.add_subplot(gs[row_i, 1])
+        labels  = [c['label'] for c in row['advi']]
+        prel    = [c['plateau_rel'] for c in row['advi']]
+        rising  = [c['still_rising'] for c in row['advi']]
+        walls   = [c['wall'] for c in row['advi']]
+        colors_bar = ['#2ca02c' if p < 0.005 and not r else
+                      '#ff7f0e' if p < 0.02 else
+                      '#d62728'
+                      for p, r in zip(prel, rising)]
+        bars = ax_heat.barh(range(len(labels)), prel, color=colors_bar, height=0.6)
+        ax_heat.set_yticks(range(len(labels)))
+        ax_heat.set_yticklabels(labels, fontsize=7)
+        ax_heat.axvline(0.005, color='green', linestyle=':', linewidth=1, alpha=0.6,
+                        label='converged (<0.005)')
+        ax_heat.axvline(0.020, color='orange', linestyle=':', linewidth=1, alpha=0.6,
+                        label='marginal (<0.02)')
+        ax_heat.set_xlabel('plateau_rel (tail mean |ΔELBO| / |max ELBO|)', fontsize=7)
+        ax_heat.set_title(f'Convergence  ds={row["idx"]}', fontsize=8)
+        ax_heat.tick_params(labelsize=7)
+        # annotate with wall time
+        for i, (bar, w) in enumerate(zip(bars, walls)):
+            ax_heat.text(bar.get_width() + 0.001, bar.get_y() + bar.get_height() / 2,
+                         f'{w:.0f}s', va='center', fontsize=6, color='#333')
+        ax_heat.legend(fontsize=6, loc='lower right')
 
-            lr = args.lr_paper if label == 'paper' else args.lr_alt
-            pr = row[f'plateau_rel_{label}']
-            sr = row[f'still_rising_{label}']
-            converged_str = '✓ converged' if pr < 0.01 and not sr else '? oscillating' if pr < 0.05 else '✗ not converged'
-            ax.set_title(
-                f'ds={row["idx"]}  n={row["n"]}, m={row["m"]}, q={row["q"]}\n'
-                f'lr={lr}  plateau_rel={pr:.4f}  {converged_str}',
-                fontsize=8,
-            )
-            ax.set_xlabel('Iteration', fontsize=7)
-            ax.set_ylabel('ELBO', fontsize=7)
-            ax.tick_params(labelsize=7)
-            ax.axvline(x=steps[-1], color='gray', linestyle=':', linewidth=0.8, alpha=0.5)
+    # --- Bottom: wall-time comparison across all datasets ---
+    ax_time = fig.add_subplot(gs[n_ds, :])
+    x = np.arange(len(all_results))
+    width = 0.12
+    config_labels = [c[0] for c in ADVI_CONFIGS]
+    for ci, (label, _, color, ls) in enumerate(ADVI_CONFIGS):
+        walls = [row['advi'][ci]['wall'] for row in all_results]
+        offset = (ci - len(ADVI_CONFIGS) / 2 + 0.5) * width
+        ax_time.bar(x + offset, walls, width, label=label,
+                    color=color, alpha=0.5 + 0.15 * (ci % 3),
+                    hatch=['', '//','..'][ci % 3])
+    if any(row['pathfinder'] and row['pathfinder']['ok'] for row in all_results):
+        pf_walls = [
+            row['pathfinder']['wall'] if row['pathfinder'] and row['pathfinder']['ok'] else np.nan
+            for row in all_results
+        ]
+        ax_time.bar(x + len(ADVI_CONFIGS) / 2 * width + width,
+                    pf_walls, width, label='pathfinder', color='#9467bd', alpha=0.8)
+    ax_time.set_xticks(x)
+    ax_time.set_xticklabels([f'ds={r["idx"]}\nn={r["n"]},q={r["q"]}' for r in all_results],
+                             fontsize=7)
+    ax_time.set_ylabel('Wall time (s)', fontsize=8)
+    ax_time.set_title('Wall-clock time by method and dataset', fontsize=9)
+    ax_time.legend(fontsize=6, ncol=4)
+    ax_time.tick_params(labelsize=7)
 
     fig.suptitle(
-        f'ADVI ELBO convergence  |  tiny-n-toy test set  |  {args.viter} iterations\n'
-        f'Left: lr={args.lr_paper} (paper default)    Right: lr={args.lr_alt} (conservative)',
-        fontsize=10, y=1.01,
+        f'ADVI convergence comparison  |  tiny-n-toy  |  {args.viter} ADVI iterations\n'
+        'adam (red) vs adagrad_window / agw (blue) at 3 LRs each; Pathfinder (purple)',
+        fontsize=10, y=1.005,
     )
     out_path = OUT_DIR / 'advi_elbo_convergence.pdf'
     fig.savefig(out_path, bbox_inches='tight')
-    print(f'\nFigure saved to {out_path}')
+    print(f'Figure saved → {out_path}')
 
     # -----------------------------------------------------------------------
     # Summary table
     # -----------------------------------------------------------------------
-    print('\n--- Convergence summary ---')
-    header = f'{"idx":>4}  {"n":>5}  {"m":>4}  {"q":>2}  '
-    header += f'{"lr_paper plateau_rel":>20}  {"rising_paper":>12}  '
-    header += f'{"lr_alt plateau_rel":>18}  {"rising_alt":>10}'
+    print('\n--- Convergence summary (plateau_rel; green < 0.005, orange < 0.02, red ≥ 0.02) ---')
+    col_w = 10
+    header = f'{"ds":>3}  {"n":>5}  {"q":>2}  ' + '  '.join(f'{c[0]:>{col_w}}' for c in ADVI_CONFIGS)
+    if fit_pathfinder:
+        header += f'  {"pathfinder":>{col_w}}'
     print(header)
     print('-' * len(header))
-    for row in results:
-        print(
-            f'{row["idx"]:>4}  {row["n"]:>5}  {row["m"]:>4}  {row["q"]:>2}  '
-            f'{row["plateau_rel_paper"]:>20.4f}  {str(row["still_rising_paper"]):>12}  '
-            f'{row["plateau_rel_alt"]:>18.4f}  {str(row["still_rising_alt"]):>10}'
-        )
+    for row in all_results:
+        line = f'{row["idx"]:>3}  {row["n"]:>5}  {row["q"]:>2}  '
+        for cfg in row['advi']:
+            pr = cfg['plateau_rel']
+            sr = cfg['still_rising']
+            tag = '✓' if pr < 0.005 and not sr else '~' if pr < 0.02 else '✗'
+            line += f'  {tag}{pr:.4f}'.rjust(col_w + 2)
+        if row['pathfinder']:
+            pf = row['pathfinder']
+            line += f'  {"OK" if pf["ok"] else "ERR"} {pf["wall"]:.1f}s'.rjust(col_w + 2)
+        print(line)
 
     # Overall verdict
-    not_converged_paper = sum(
-        1 for r in results
-        if r['plateau_rel_paper'] >= 0.01 or r['still_rising_paper']
-    )
-    not_converged_alt = sum(
-        1 for r in results
-        if r['plateau_rel_alt'] >= 0.01 or r['still_rising_alt']
-    )
-    print(f'\nNot converged (plateau_rel >= 0.01 or still rising):')
-    print(f'  lr={args.lr_paper} (paper): {not_converged_paper}/{len(results)} datasets')
-    print(f'  lr={args.lr_alt}  (alt):   {not_converged_alt}/{len(results)} datasets')
-    if not_converged_paper == 0:
-        print(f'\nVerdict: paper lr={args.lr_paper} converges on tiny-n-toy within {args.viter} iters.')
-        print('  The 5e5 budget is likely more than sufficient; performance reflects mean-field expressivity.')
-    elif not_converged_alt < not_converged_paper:
-        print(f'\nVerdict: lr={args.lr_alt} converges more reliably. Consider switching.')
-    else:
-        print(f'\nVerdict: neither LR shows clean convergence — increase budget or reduce LR further.')
+    print('\n--- Best ADVI config per dataset ---')
+    for row in all_results:
+        best = min(row['advi'], key=lambda c: (c['still_rising'], c['plateau_rel']))
+        print(f'  ds={row["idx"]}: {best["label"]}  '
+              f'plateau_rel={best["plateau_rel"]:.4f}  '
+              f'rising={best["still_rising"]}  '
+              f'wall={best["wall"]:.1f}s')
+
+    print()
+    all_converged_adam = [
+        c for row in all_results for c in row['advi']
+        if 'adam' in c['label'] and c['plateau_rel'] < 0.005 and not c['still_rising']
+    ]
+    all_converged_agw = [
+        c for row in all_results for c in row['advi']
+        if 'agw' in c['label'] and c['plateau_rel'] < 0.005 and not c['still_rising']
+    ]
+    print(f'Configs reaching plateau_rel<0.005 and not rising:')
+    print(f'  Adam:          {len(all_converged_adam)}/{len(all_results)*3} runs')
+    print(f'  Adagrad-window:{len(all_converged_agw)}/{len(all_results)*3} runs')
+    if fit_pathfinder:
+        pf_ok = sum(1 for row in all_results if row['pathfinder'] and row['pathfinder']['ok'])
+        pf_mean = np.mean([row['pathfinder']['wall'] for row in all_results
+                           if row['pathfinder'] and row['pathfinder']['ok']])
+        advi_mean = np.mean([c['wall'] for row in all_results for c in row['advi']])
+        print(f'  Pathfinder:    {pf_ok}/{len(all_results)} OK, mean wall={pf_mean:.1f}s '
+              f'(ADVI mean={advi_mean:.1f}s)')
 
 
 # ---------------------------------------------------------------------------
 
 def setup() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description='ADVI ELBO convergence experiment')
-    p.add_argument('--n_datasets', type=int, default=6,
-                   help='Number of test datasets to evaluate (default 6)')
-    p.add_argument('--viter', type=int, default=50_000,
-                   help='ADVI iteration budget (default 50_000)')
-    p.add_argument('--lr_paper', type=float, default=5e-3,
-                   help='Learning rate: paper default (default 5e-3)')
-    p.add_argument('--lr_alt', type=float, default=1e-3,
-                   help='Learning rate: conservative alternative (default 1e-3)')
-    p.add_argument('--every', type=int, default=100,
-                   help='Record ELBO every N iterations (default 100)')
+    p = argparse.ArgumentParser(description='ADVI / Pathfinder convergence experiment')
+    p.add_argument('--n_datasets', type=int, default=6)
+    p.add_argument('--viter',      type=int, default=50_000)
+    p.add_argument('--every',      type=int, default=200)
     return p.parse_args()
 
 
 if __name__ == '__main__':
-    args = setup()
-    run(args)
+    run(setup())
