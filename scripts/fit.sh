@@ -3,7 +3,7 @@
 #SBATCH --job-name=fit
 #SBATCH --output=logs/fit/fit_%A_%a.out
 #SBATCH --error=logs/fit/fit_%A_%a.err
-#SBATCH --array=0-127
+#SBATCH --array=0-511
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
