@@ -84,6 +84,14 @@ def loadDataset(source: Path) -> dict:
         assert len(groups) == len(result['X']), 'dim mismatch (group, X)'
         assert len(np.unique(groups)) == result['m'], 'dim mismatch (group, m)'
         assert result['n'] == result['ns'].sum(), 'dim mismatch (n, ns)'
+        unique_groups = np.sort(np.unique(groups))
+        expected = np.arange(len(unique_groups))
+        if not np.array_equal(unique_groups, expected):
+            raise ValueError(
+                f'Non-contiguous group IDs in {source.name}: '
+                f'expected 0..{len(unique_groups) - 1} but got {unique_groups.tolist()}. '
+                'Re-run preprocessing to fix (DataPreprocessor now drops NaN-group rows).'
+            )
     _DATA_CACHE[source] = result
     return result
 
