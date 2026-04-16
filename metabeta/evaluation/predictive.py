@@ -43,7 +43,8 @@ def getPriorSamples(
 
     # rfx
     mask = data['mask_mq'].unsqueeze(-2)
-    shape = (int(data['m'].max()),)
+    # shape = (int(data['m'].max()),)
+    shape = (mask.shape[1],)
     rfx = D.Normal(loc=0, scale=sigma_rfx + 1e-12).sample(shape).movedim(0, 1) * mask
 
     # bundle
