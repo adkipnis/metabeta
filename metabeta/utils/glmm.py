@@ -180,32 +180,40 @@ def _lmmNormalCompacted(
     # Posterior variance: Var(b_g | data) = σ_rfx² · (1 − λ_g)
     blup_var = (sigma_rfx_sq_val[:, None] * (1.0 - lambda_g2)).clamp(min=0.0).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)  # (B, m, 1)
 
-    # EM iterations: M-step σ_rfx² = mean_g E[b_g²|data], E-step recomputes shrinkage.
+    # EM iterations: jointly update σ_rfx², σ_ε², and β̂_GLS.
+    # M-step: σ_rfx² = mean_g(b̂_g² + σ²_rfx(1−λ_g)), σ_ε² = RSS/(N−d−T) (REML-like).
+    # E-step: recompute λ_g, then β̂_GLS, r_g, BLUPs under updated parameters.
     for _ in range(n_em):
+        # M-step
         sigma_rfx_sq_val = (
             (blups.squeeze(-1).square() + blup_var.squeeze(-1)) * mask_m
-        ).sum(dim=1) / G  # (B,)
+        ).sum(dim=1) / G
         sigma_rfx_sq_val = sigma_rfx_sq_val.clamp(min=0.0)
+
+        fitted = torch.einsum('bmnd,bd->bmn', Xm, beta_gls) + blups.squeeze(-1).unsqueeze(-1)
+        ss_em = ((ym - fitted) * mask_n).square().sum(dim=(1, 2))   # (B,)
+        T = (lambda_g2 * mask_m).sum(dim=1)                         # (B,)  Σ_g λ_g
+        sigma_eps_sq_val = (ss_em / (N - d - T).clamp(min=1.0)).clamp(min=1e-12)
+
+        # E-step
         lambda_g2 = (ns_f * sigma_rfx_sq_val[:, None]) / (
             sigma_eps_sq_val[:, None] + ns_f * sigma_rfx_sq_val[:, None]
         )
+        w_bg = lambda_g2 * ns_f
+        XbarXbar = torch.einsum('bmd,bm,bmk->bdk', X_mean, w_bg, X_mean)
+        Xbary = torch.einsum('bmd,bm,bm->bd', X_mean, w_bg, y_mean)
+        inv_se2 = 1.0 / sigma_eps_sq_val
+        A_gls = inv_se2[:, None, None] * (XtX - XbarXbar)
+        b_gls = inv_se2[:, None] * (Xty - Xbary)
+        beta_gls = _safeSolve(A_gls + _adaptiveRidge(A_gls), b_gls)
+        beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
+        r_g = (y_mean - torch.einsum('bmd,bd->bm', X_mean, beta_gls)) * mask_m
         blups = (lambda_g2 * r_g).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
         blup_var = (sigma_rfx_sq_val[:, None] * (1.0 - lambda_g2)).clamp(min=0.0).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)
 
-    # Output EM-derived sigma_rfx/Psi: EM is now properly initialized (r_g_var floor)
-    # so it converges to the ML estimate and avoids the hard-clip-to-0 from MoM (~10% of cases).
     sigma_rfx = sigma_rfx_sq_val.clamp(min=0.0).sqrt().unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)
     Psi = sigma_rfx.square().unsqueeze(-1)                          # (B, 1, 1)
-
-    # EM M-step corrected sigma_eps: use full GLS residuals + REML-like df correction.
-    # T = Σ_g λ_g (effective df consumed by random effects for q=1).
-    # sigma_eps²_corr = SS_gls / (N − d − T) avoids the within-group overestimation bias.
-    fitted = (torch.einsum('bmnd,bd->bmn', Xm, beta_gls) + blups.squeeze(-1).unsqueeze(-1))
-    resid_em = (ym - fitted) * mask_n
-    ss_em = resid_em.square().sum(dim=(1, 2))                       # (B,)
-    T = (lambda_g2 * mask_m).sum(dim=1)                             # (B,)  Σ_g λ_g
-    df_corr = (N - d - T).clamp(min=1.0)
-    sigma_eps = (ss_em / df_corr).clamp(min=0.0).sqrt().unsqueeze(-1).nan_to_num(nan=1.0, posinf=1.0)
+    sigma_eps = sigma_eps_sq_val.clamp(min=0.0).sqrt().unsqueeze(-1).nan_to_num(nan=1.0, posinf=1.0)
 
     return {
         'beta_est': beta_gls,           # (B, d)
@@ -340,45 +348,55 @@ def _lmmNormalFull(
     blup_var = (se2[:, None, None, None] * W_g).diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
     blup_var = blup_var.nan_to_num(nan=0.0, posinf=0.0)              # (B, m, q)
 
-    # EM iterations: M-step Ψ = mean_g(b̂_g b̂_g' + diag(blup_var_g)), E-step recomputes W_g, blups.
-    # Keeps se2, Ztr_gls, beta_gls fixed. Uses diagonal posterior-cov approximation (more stable
-    # than full se2*W_g for small G / near-singular ZtZ).
-    # Use ridge-regularized Psi_inv (not pseudoinverse) in E-step: when Psi≈0, pseudoinverse
-    # zeros Psi_inv and removes the shrinkage penalty → BLUPs collapse to OLS (high variance).
-    # A ridge ensures large Psi_inv for small Psi → strong shrinkage → BLUPs→0 (correct for
-    # small σ_rfx). Ridge scale: σ_ε² × 1e-4 — tiny relative to any meaningful Psi eigenvalue.
-    psi_ridge = se2[:, None, None] * 1e-4 * eye_q                   # (B, q, q)
+    # EM iterations: jointly update Ψ, σ_ε², and β̂_GLS.
+    # M-step: Ψ = mean_g(b̂_g b̂_g' + σ²_ε W_g) — exact E[b_g b_g'|data] for Gaussian b_g,
+    #         σ_ε² = RSS/(N−d−T) (REML-like, T = Σ_g tr(ZtZ_g W_g) effective df).
+    # E-step: W_g via ridge-regularized Ψ⁻¹, then β̂_GLS and BLUPs under updated parameters.
     for _ in range(n_em):
+        # M-step: Ψ using full posterior covariance (exact for Gaussian b_g)
         blup_outer = torch.einsum('bmq,bmr->bmqr', blups, blups)     # (B, m, q, q)
-        post_cov_diag = torch.diag_embed(blup_var)                   # (B, m, q, q) diagonal
+        post_cov = se2[:, None, None, None] * W_g                    # (B, m, q, q)  σ²_ε W_g
         Psi = _psdProject(
-            ((blup_outer + post_cov_diag) * mask4).sum(dim=1) / G[:, None, None]
+            ((blup_outer + post_cov) * mask4).sum(dim=1) / G[:, None, None]
         )  # (B, q, q)
-        # Ridge-regularized inverse: (Psi + ridge)^{-1} via eigendecomposition
+
+        # M-step: σ_ε² (REML-like df correction using current blups and beta_gls)
+        resid_em = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)
+                    - torch.einsum('bmnq,bmq->bmn', Zm, blups)) * mask_n
+        ss_em = resid_em.square().sum(dim=(1, 2))                    # (B,)
+        ZtZ_W = torch.einsum('bmqr,bmrs->bmqs', ZtZ_safe, W_g)      # (B, m, q, q)
+        T = (ZtZ_W.diagonal(dim1=-2, dim2=-1).sum(dim=-1) * mask_m).sum(dim=1)  # (B,)
+        se2 = (ss_em / (N - d - T).clamp(min=1.0)).clamp(min=1e-12)
+
+        # E-step: W_g via ridge-regularized Ψ⁻¹ using updated Ψ and se2
+        psi_ridge = se2[:, None, None] * 1e-4 * eye_q
         psi_reg = Psi + psi_ridge
         vals_r, vecs_r = torch.linalg.eigh(psi_reg)
         Psi_inv = vecs_r @ torch.diag_embed(1.0 / vals_r.clamp(min=1e-30)) @ vecs_r.mT
         inner = se2[:, None, None, None] * Psi_inv[:, None] + ZtZ_safe  # (B, m, q, q)
         W_g = _safeSolve(inner + _adaptiveRidgeBm(inner), eye_q_bm) * mask4
+
+        # E-step: β̂_GLS and Ztr_gls under updated W_g and se2
+        inv_se2 = 1.0 / se2
+        W_ZtX = torch.einsum('bmqp,bmpd->bmqd', W_g, ZtX)
+        correction_XX = torch.einsum('bmdq,bmqk->bdk', XtZ, W_ZtX)
+        W_Zty = torch.einsum('bmqp,bmp->bmq', W_g, Zty)
+        correction_Xy = torch.einsum('bmdq,bmq->bd', XtZ, W_Zty)
+        A_gls = inv_se2[:, None, None] * (XtX - correction_XX)
+        b_gls = inv_se2[:, None] * (Xty - correction_Xy)
+        beta_gls = _safeSolve(A_gls + _adaptiveRidge(A_gls), b_gls)
+        beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
+        resid_gls = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)) * mask_n
+        Ztr_gls = torch.einsum('bmnq,bmn->bmq', Zm, resid_gls)
+
+        # E-step: BLUPs and posterior variance
         blups = torch.einsum('bmqp,bmp->bmq', W_g, Ztr_gls)
         blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
         blup_var = (se2[:, None, None, None] * W_g).diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
         blup_var = blup_var.nan_to_num(nan=0.0, posinf=0.0)
 
-    # Output EM-derived sigma_rfx/Psi: Stage-3 ridge ensures proper initial BLUPs so
-    # EM converges to the ML estimate rather than OLS-level, avoiding the MoM hard-clip.
-    sigma_rfx = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()  # (B, q)
-
-    # EM M-step corrected sigma_eps: use full GLS residuals + REML-like df correction.
-    # T = Σ_g trace(W_g ZtZ_g) (effective df consumed by random effects).
-    # sigma_eps²_corr = SS_gls / (N − d − T) avoids the within-Z overestimation bias.
-    resid_em = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)
-                - torch.einsum('bmnq,bmq->bmn', Zm, blups)) * mask_n
-    ss_em = resid_em.square().sum(dim=(1, 2))                        # (B,)
-    ZtZ_W = torch.einsum('bmqr,bmrs->bmqs', ZtZ_safe, W_g)          # (B, m, q, q)
-    T = (ZtZ_W.diagonal(dim1=-2, dim2=-1).sum(dim=-1) * mask_m).sum(dim=1)  # (B,)
-    df_corr = (N - d - T).clamp(min=1.0)
-    sigma_eps_1d = (ss_em / df_corr).clamp(min=0.0).sqrt().nan_to_num(nan=1.0, posinf=1.0)
+    sigma_rfx = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()          # (B, q)
+    sigma_eps_1d = se2.clamp(min=0.0).sqrt().nan_to_num(nan=1.0, posinf=1.0)  # (B,)
 
     return {
         'beta_est': beta_gls,                       # (B, d)
