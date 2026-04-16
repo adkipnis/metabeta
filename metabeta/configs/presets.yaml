@@ -48,6 +48,15 @@ sizes:
     max_n: 80
     max_n_total: 8000
 
+  final:
+    max_d: 16
+    max_q: 4
+    min_m: 5
+    max_m: 300
+    min_n: 2
+    max_n: 100
+    max_n_total: 12000
+
 # Likelihood family presets
 # Use integer IDs: 0=normal, 1=bernoulli, 2=poisson
 families:
