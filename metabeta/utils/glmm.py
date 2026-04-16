@@ -5,7 +5,7 @@ lmmBernoulli (logit), lmmPoisson (log). All return the same dict keys.
 import torch
 import torch.nn.functional as F
 
-from metabeta.utils.glm import _adaptiveRidge, irlsBernoulliCompacted, irlsPoissonCompacted
+from metabeta.utils.glm import _adaptiveRidge, _safeSolve, irlsBernoulliCompacted, irlsPoissonCompacted
 
 
 def _adaptiveRidgeBm(A: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -111,7 +111,7 @@ def _lmmNormalCompacted(
 
     XtX_w = torch.einsum('bmnd,bmnk->bdk', X_tilde, X_tilde)         # (B, d, d)
     Xty_w = torch.einsum('bmnd,bmn->bd', X_tilde, y_tilde)           # (B, d)
-    beta_wg = torch.linalg.solve(XtX_w + _adaptiveRidge(XtX_w), Xty_w)
+    beta_wg = _safeSolve(XtX_w + _adaptiveRidge(XtX_w), Xty_w)
 
     yhat_w = torch.einsum('bmnd,bd->bmn', X_tilde, beta_wg)
     ss_w = ((y_tilde - yhat_w) ** 2).sum(dim=(1, 2))                 # (B,)
@@ -124,7 +124,7 @@ def _lmmNormalCompacted(
     wt = ns_f * mask_m                                                # (B, m)
     XWX = torch.einsum('bmd,bm,bmk->bdk', X_mean, wt, X_mean)        # (B, d, d)
     XWy = torch.einsum('bmd,bm,bm->bd', X_mean, wt, y_mean * mask_m)
-    beta_bg = torch.linalg.solve(XWX + _adaptiveRidge(XWX), XWy)
+    beta_bg = _safeSolve(XWX + _adaptiveRidge(XWX), XWy)
 
     resid_bg = (y_mean - torch.einsum('bmd,bd->bm', X_mean, beta_bg)) * mask_m
     ss_bg = (wt * resid_bg.square()).sum(dim=1)                       # (B,)
@@ -152,9 +152,11 @@ def _lmmNormalCompacted(
     inv_se2 = 1.0 / se2
     A_gls = inv_se2[:, None, None] * (XtX - XbarXbar)
     b_gls = inv_se2[:, None] * (Xty - Xbary)
-    beta_gls = torch.linalg.solve(A_gls + _adaptiveRidge(A_gls), b_gls)
+    beta_gls = _safeSolve(A_gls + _adaptiveRidge(A_gls), b_gls)
 
-    beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    # clamp before BLUP computation: near-cancellation in A_gls=(XtX−XbarXbar) when λ→1
+    # produces finite-but-huge values that nan_to_num cannot catch.
+    beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
     sigma_eps = sigma_eps_sq.sqrt().unsqueeze(-1).nan_to_num(nan=1.0, posinf=1.0)  # (B, 1)
     sigma_rfx = sigma_rfx_sq.sqrt().unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)  # (B, 1)
 
@@ -216,7 +218,7 @@ def _lmmNormalFull(
     # ------------------------------------------------------------------
     ZtZ = torch.einsum('bmnq,bmnr->bmqr', Zm, Zm)                # (B, m, q, q)
     ZtZ_safe = torch.where(active[:, :, None, None], ZtZ, eye_q)  # (B, m, q, q)
-    ZtZ_inv = torch.linalg.solve(
+    ZtZ_inv = _safeSolve(
         ZtZ_safe + _adaptiveRidgeBm(ZtZ_safe), eye_q_bm
     )                                                              # (B, m, q, q)
 
@@ -230,7 +232,7 @@ def _lmmNormalFull(
 
     MXtMX = torch.einsum('bmnd,bmnk->bdk', MX, MX)               # (B, d, d)
     MXtMy = torch.einsum('bmnd,bmn->bd', MX, My)                  # (B, d)
-    beta_wg = torch.linalg.solve(MXtMX + _adaptiveRidge(MXtMX), MXtMy)  # (B, d)
+    beta_wg = _safeSolve(MXtMX + _adaptiveRidge(MXtMX), MXtMy)  # (B, d)
 
     resid_M = My - torch.einsum('bmnd,bd->bmn', MX, beta_wg)     # (B, m, n)
     ss_w = resid_M.square().sum(dim=(1, 2))                       # (B,)
@@ -242,7 +244,7 @@ def _lmmNormalFull(
     # ------------------------------------------------------------------
     XtX = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)                 # (B, d, d)
     Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)                   # (B, d)
-    beta_ols = torch.linalg.solve(XtX + _adaptiveRidge(XtX), Xty)  # (B, d)
+    beta_ols = _safeSolve(XtX + _adaptiveRidge(XtX), Xty)  # (B, d)
     resid_full = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_ols)) * mask_n  # (B, m, n)
     Ztr = torch.einsum('bmnq,bmn->bmq', Zm, resid_full)          # (B, m, q)
     bhat = torch.einsum('bmqr,bmr->bmq', ZtZ_inv, Ztr)           # (B, m, q)  b̂_g
@@ -255,7 +257,7 @@ def _lmmNormalFull(
     sum_ZtZ_bhat = (ZtZ_bhat * mask4).sum(dim=1)                  # (B, q, q)
 
     rhs_mom = sum_ZtZ_bhat - sigma_eps_sq[:, None, None] * G[:, None, None] * eye_q
-    Psi_raw = torch.linalg.solve(sum_ZtZ + _adaptiveRidge(sum_ZtZ), rhs_mom)  # (B, q, q)
+    Psi_raw = _safeSolve(sum_ZtZ + _adaptiveRidge(sum_ZtZ), rhs_mom)  # (B, q, q)
 
     Psi_raw = 0.5 * (Psi_raw + Psi_raw.mT)
     vals, vecs = torch.linalg.eigh(Psi_raw)                      # (B, q), (B, q, q)
@@ -272,7 +274,7 @@ def _lmmNormalFull(
     Psi_inv = vecs @ torch.diag_embed(inv_vals) @ vecs.mT        # (B, q, q)
 
     inner = se2[:, None, None, None] * Psi_inv[:, None] + ZtZ_safe  # (B, m, q, q)
-    W_g = torch.linalg.solve(inner + _adaptiveRidgeBm(inner), eye_q_bm)  # (B, m, q, q)
+    W_g = _safeSolve(inner + _adaptiveRidgeBm(inner), eye_q_bm)  # (B, m, q, q)
     W_g = W_g * mask4                                             # (B, m, q, q)
 
     XtX_pool = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)            # (B, d, d)
@@ -287,9 +289,11 @@ def _lmmNormalFull(
     inv_se2 = 1.0 / se2
     A_gls = inv_se2[:, None, None] * (XtX_pool - correction_XX)  # (B, d, d)
     b_gls = inv_se2[:, None] * (Xty_pool - correction_Xy)        # (B, d)
-    beta_gls = torch.linalg.solve(A_gls + _adaptiveRidge(A_gls), b_gls)  # (B, d)
+    beta_gls = _safeSolve(A_gls + _adaptiveRidge(A_gls), b_gls)  # (B, d)
 
-    beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    # clamp before BLUP computation: near-cancellation in A_gls=(XtX−correction_XX) when
+    # Psi_lap≈0 produces finite-but-huge values that nan_to_num cannot catch.
+    beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
     sigma_eps_1d = sigma_eps_sq.sqrt().nan_to_num(nan=1.0, posinf=1.0)  # (B,)
     Psi = Psi.nan_to_num(nan=0.0, posinf=0.0)
 
@@ -297,10 +301,12 @@ def _lmmNormalFull(
     resid_gls = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)) * mask_n
     Ztr_gls = torch.einsum('bmnq,bmn->bmq', Zm, resid_gls)           # (B, m, q)
     blups = torch.einsum('bmqp,bmp->bmq', W_g, Ztr_gls)              # (B, m, q)
-    blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    # clamp: Kg_inv can be huge when ZtZ is near-singular (small n_g, q=2) even with beta clamped
+    blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
 
     # Posterior variance of each BLUP: Cov(b_g | data) = σ_ε² · W_g  (diagonal = marginal var)
-    blup_var = (se2[:, None, None, None] * W_g).diagonal(dim1=-2, dim2=-1).clamp(min=0.0)
+    # cap at 25 (std ≤ 5) — W_g = Kg_inv can be large when ZtZ is near-singular (small n_g, q=2)
+    blup_var = (se2[:, None, None, None] * W_g).diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
     blup_var = blup_var.nan_to_num(nan=0.0, posinf=0.0)              # (B, m, q)
 
     sigma_rfx = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()  # (B, q)
@@ -413,7 +419,7 @@ def _lmmGlmm(
     ZWZ = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w1, Zm)          # (B, m, q, q)
 
     ZWZ_safe = torch.where(active[:, :, None, None], ZWZ, eye_q)
-    ZWZ_inv = torch.linalg.solve(ZWZ_safe + _adaptiveRidgeBm(ZWZ_safe), eye_q_bm)  # (B, m, q, q)
+    ZWZ_inv = _safeSolve(ZWZ_safe + _adaptiveRidgeBm(ZWZ_safe), eye_q_bm)  # (B, m, q, q)
 
     ZtYmMu = torch.einsum('bmnq,bmn->bmq', Zm, (ym - mu_0) * mask_n)  # (B, m, q)
     bhat_ols = torch.einsum('bmqr,bmr->bmq', ZWZ_inv, ZtYmMu) * mask_m[:, :, None]
@@ -459,7 +465,7 @@ def _lmmGlmm(
 
         ZWZ_t_safe = torch.where(active[:, :, None, None], ZWZ_t, eye_q)
         Hg = ZWZ_t_safe + Psi_inv[:, None]                                # (B, m, q, q)
-        delta = torch.linalg.solve(Hg + _adaptiveRidgeBm(Hg), grad_g)  # (B, m, q)
+        delta = _safeSolve(Hg + _adaptiveRidgeBm(Hg), grad_g)  # (B, m, q)
 
         slope = (grad_g * delta).sum(dim=-1)                               # (B, m)
         f_old = _groupNll(bg, beta_0, Xm, ym, Zm, mask_n, Psi_inv, likelihood_family)
@@ -481,7 +487,7 @@ def _lmmGlmm(
     ZWZ_f_safe = torch.where(active[:, :, None, None], ZWZ_f, eye_q)
 
     Hg_f = ZWZ_f_safe + Psi_inv[:, None]
-    Hg_inv = torch.linalg.solve(Hg_f + _adaptiveRidgeBm(Hg_f), eye_q_bm) * mask4
+    Hg_inv = _safeSolve(Hg_f + _adaptiveRidgeBm(Hg_f), eye_q_bm) * mask4
     bg_outer = torch.einsum('bmq,bmr->bmqr', bg, bg)
     Psi_lap = _psdProject((bg_outer + Hg_inv).sum(dim=1) / G[:, None, None])  # (B, q, q)
     mean_Hg_inv = (Hg_inv * mask4).sum(dim=1) / G[:, None, None]
@@ -494,7 +500,7 @@ def _lmmGlmm(
     ZWy_f = torch.einsum('bmnq,bmn->bmq', Zm, w_f * ytilde_f)             # (B, m, q)
 
     Kg = ZWZ_f_safe + Psi_lap_inv[:, None]                                 # (B, m, q, q)
-    Kg_inv = torch.linalg.solve(Kg + _adaptiveRidgeBm(Kg), eye_q_bm) * mask4
+    Kg_inv = _safeSolve(Kg + _adaptiveRidgeBm(Kg), eye_q_bm) * mask4
 
     ZWX_f = XWZ_f.mT                                                       # (B, m, q, d)
     A_g = XWX_f - torch.einsum(                                            # Schur complement
@@ -504,7 +510,7 @@ def _lmmGlmm(
                                   torch.einsum('bmqr,bmr->bmq', Kg_inv, ZWy_f))
 
     sum_A = (A_g * mask4).sum(dim=1)
-    beta_gls = torch.linalg.solve(
+    beta_gls = _safeSolve(
         sum_A + _adaptiveRidge(sum_A),
         (rhs_g * mask_m[:, :, None]).sum(dim=1),
     )                                                                       # (B, d)

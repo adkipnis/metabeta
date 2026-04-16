@@ -18,6 +18,32 @@ compacted — form XtX / XwX explicitly (B, d, d) before solving; cheaper
 import torch
 
 
+def _safeSolve(A: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """torch.linalg.solve with a per-element ridge boost for singular batches.
+
+    torch.linalg.solve raises LinAlgError if *any* batch element is singular,
+    aborting the whole batch. On failure this function:
+      1. Computes the minimum eigenvalue per batch element (eigvalsh — valid
+         because all A in glmm.py are symmetric by construction).
+      2. Adds just enough ridge to bring each element's condition number to ≤1e4;
+         well-conditioned elements receive zero additional boost.
+      3. Retries; falls back to zeros only if that also fails (degenerate edge).
+    """
+    try:
+        return torch.linalg.solve(A, b)
+    except torch.linalg.LinAlgError:
+        eigvals = torch.linalg.eigvalsh(A)           # (..., n), ascending
+        max_eig = eigvals[..., -1].clamp(min=1.0)    # (...)
+        boost = (max_eig * 1e-4 - eigvals[..., 0]).clamp(min=0.0)  # 0 for well-conditioned
+        d = A.shape[-1]
+        eye = torch.eye(d, device=A.device, dtype=A.dtype)
+        A_fixed = A + boost[..., None, None] * eye
+        try:
+            return torch.linalg.solve(A_fixed, b)
+        except torch.linalg.LinAlgError:
+            return torch.zeros_like(b)
+
+
 def _adaptiveRidge(A: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """Scale-adaptive ridge: eps * max_diag(A) * I.
 
