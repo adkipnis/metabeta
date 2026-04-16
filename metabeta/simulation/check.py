@@ -1,9 +1,7 @@
 import argparse
 import sys
 from pathlib import Path
-
 import numpy as np
-import yaml
 
 from metabeta.simulation.fit import Fitter
 from metabeta.utils.io import datasetFilename
@@ -103,7 +101,7 @@ def _fitCfg(data_id: str) -> argparse.Namespace:
 
 
 def _runForTag(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> int:
-    fits_dir = srcdir / 'fits'
+    fits_dir = srcdir / data_id / 'fits'
 
     print('Running dataset and fit checks')
     print(f'  data_id: {data_id}')
