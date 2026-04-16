@@ -90,10 +90,11 @@ def _lmmNormalCompacted(
     mask_m: torch.Tensor,   # (B, m)     1 for active groups
     ns: torch.Tensor,       # (B, m)     group sizes (float, ≥ 1 for active)
     n_total: torch.Tensor,  # (B,)       total active observations
+    n_em: int = 3,
 ) -> dict[str, torch.Tensor]:
     """Closed-form GLS for the random-intercept linear mixed model (q=1).
 
-    Returns a dict with keys: beta_est, sigma_eps_est, sigma_rfx_est, blup_est, Psi.
+    Returns a dict with keys: beta_est, sigma_eps_est, sigma_rfx_est, blup_est, blup_var, Psi.
     """
     B, m, n, d = Xm.shape
     ns_f = ns.clamp(min=1.0)                          # (B, m)
@@ -160,23 +161,51 @@ def _lmmNormalCompacted(
     sigma_eps = sigma_eps_sq.sqrt().unsqueeze(-1).nan_to_num(nan=1.0, posinf=1.0)  # (B, 1)
     sigma_rfx = sigma_rfx_sq.sqrt().unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)  # (B, 1)
 
-    # BLUPs for q=1: λ_g · (ȳ_g − X̄_g β̂)
-    sigma_rfx_sq_val = sigma_rfx.squeeze(-1).square()              # (B,)
+    # BLUPs for q=1: EM-refined shrinkage.
+    sigma_rfx_sq_val = sigma_rfx.squeeze(-1).square()              # (B,)  MoM, may be 0
     sigma_eps_sq_val = sigma_eps.squeeze(-1).square()              # (B,)
-    ns_f2 = ns.clamp(min=1.0)
-    lambda_g2 = (ns_f2 * sigma_rfx_sq_val[:, None]) / (
-        sigma_eps_sq_val[:, None] + ns_f2 * sigma_rfx_sq_val[:, None]
+
+    r_g = (y_mean - torch.einsum('bmd,bd->bm', X_mean, beta_gls)) * mask_m
+
+    # EM init: floor σ_rfx² with 10% of mean(r_g²) so EM doesn't get stuck when MoM clips
+    # to 0. mean_g(r_g²) ≈ σ_eps²/n̄ + σ_rfx² in expectation — always ≥ 0.
+    r_g_var = (r_g.square() * mask_m).sum(dim=1) / G              # (B,)
+    sigma_rfx_sq_val = sigma_rfx_sq_val.clamp(min=r_g_var * 0.1)
+
+    lambda_g2 = (ns_f * sigma_rfx_sq_val[:, None]) / (
+        sigma_eps_sq_val[:, None] + ns_f * sigma_rfx_sq_val[:, None]
     )
-    y_mean2 = ym.sum(dim=2) / ns_f2
-    X_mean2 = Xm.sum(dim=2) / ns_f2.unsqueeze(-1)
-    r_g = (y_mean2 - torch.einsum('bmd,bd->bm', X_mean2, beta_gls)) * mask_m
     blups = (lambda_g2 * r_g).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)  # (B, m, 1)
 
+    # Posterior variance: Var(b_g | data) = σ_rfx² · (1 − λ_g)
+    blup_var = (sigma_rfx_sq_val[:, None] * (1.0 - lambda_g2)).clamp(min=0.0).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)  # (B, m, 1)
+
+    # EM iterations: M-step σ_rfx² = mean_g E[b_g²|data], E-step recomputes shrinkage.
+    for _ in range(n_em):
+        sigma_rfx_sq_val = (
+            (blups.squeeze(-1).square() + blup_var.squeeze(-1)) * mask_m
+        ).sum(dim=1) / G  # (B,)
+        sigma_rfx_sq_val = sigma_rfx_sq_val.clamp(min=0.0)
+        lambda_g2 = (ns_f * sigma_rfx_sq_val[:, None]) / (
+            sigma_eps_sq_val[:, None] + ns_f * sigma_rfx_sq_val[:, None]
+        )
+        blups = (lambda_g2 * r_g).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+        blup_var = (sigma_rfx_sq_val[:, None] * (1.0 - lambda_g2)).clamp(min=0.0).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)
+
+    # Output EM-derived sigma_rfx/Psi: EM is now properly initialized (r_g_var floor)
+    # so it converges to the ML estimate and avoids the hard-clip-to-0 from MoM (~10% of cases).
+    sigma_rfx = sigma_rfx_sq_val.clamp(min=0.0).sqrt().unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)
     Psi = sigma_rfx.square().unsqueeze(-1)                          # (B, 1, 1)
 
-    # Posterior variance of each BLUP: Var(b_g | data) = σ_rfx² · (1 − λ_g)
-    blup_var = (sigma_rfx_sq_val[:, None] * (1.0 - lambda_g2)).clamp(min=0.0)  # (B, m)
-    blup_var = blup_var.unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)           # (B, m, 1)
+    # EM M-step corrected sigma_eps: use full GLS residuals + REML-like df correction.
+    # T = Σ_g λ_g (effective df consumed by random effects for q=1).
+    # sigma_eps²_corr = SS_gls / (N − d − T) avoids the within-group overestimation bias.
+    fitted = (torch.einsum('bmnd,bd->bmn', Xm, beta_gls) + blups.squeeze(-1).unsqueeze(-1))
+    resid_em = (ym - fitted) * mask_n
+    ss_em = resid_em.square().sum(dim=(1, 2))                       # (B,)
+    T = (lambda_g2 * mask_m).sum(dim=1)                             # (B,)  Σ_g λ_g
+    df_corr = (N - d - T).clamp(min=1.0)
+    sigma_eps = (ss_em / df_corr).clamp(min=0.0).sqrt().unsqueeze(-1).nan_to_num(nan=1.0, posinf=1.0)
 
     return {
         'beta_est': beta_gls,           # (B, d)
@@ -196,13 +225,15 @@ def _lmmNormalFull(
     mask_m: torch.Tensor,   # (B, m)     1 for active groups
     ns: torch.Tensor,       # (B, m)     group sizes (float, ≥ 1 for active)
     n_total: torch.Tensor,  # (B,)       total active observations
+    n_em: int = 3,
 ) -> dict[str, torch.Tensor]:
-    """Closed-form GLS for the LME y_g = X_g β + Z_g b_g + ε_g, b_g ~ N(0, Ψ).
+    """GLS estimator for the LME y_g = X_g β + Z_g b_g + ε_g, b_g ~ N(0, Ψ).
 
-    Non-iterative: within-Z projection for σ̂_ε, MINQUE-weighted MoM for Ψ̂,
-    then Woodbury GLS for β̂.  Handles arbitrary q (including q=1).
+    Three-stage pipeline: (1) within-Z projection for σ̂_ε, (2) MoM for Ψ̂,
+    (3) Woodbury GLS for β̂ and BLUPs; followed by EM refinement of Ψ and σ_ε.
+    Handles arbitrary q (including q=1).
 
-    Returns a dict with keys: beta_est, sigma_eps_est, sigma_rfx_est, blup_est, Psi.
+    Returns a dict with keys: beta_est, sigma_eps_est, sigma_rfx_est, blup_est, blup_var, Psi.
     """
     B, m, n, d = Xm.shape
     q = Zm.shape[-1]
@@ -269,47 +300,85 @@ def _lmmNormalFull(
     # ------------------------------------------------------------------
     se2 = sigma_eps_sq.clamp(min=1e-12)
 
-    tol_eig = vals.amax(dim=-1, keepdim=True).clamp(min=1e-8) * 1e-6
-    inv_vals = torch.where(vals > tol_eig, 1.0 / vals.clamp(min=1e-30), torch.zeros_like(vals))
+    # Ridge-regularized Psi_inv: (Psi + σ_ε²×1e-4×I)^{-1} reusing Stage-2 eigenvectors.
+    # Pseudoinverse zeros eigenvalues ≈ 0 → Psi_inv≈0 → inner≈ZtZ → W_g=ZtZ_inv (OLS, no shrinkage).
+    # Ridge ensures inv is large for small eigenvalues → strong shrinkage → BLUPs→0 for small Psi.
+    # Effect is negligible when Psi eigenvalues >> σ_ε²×1e-4.
+    inv_vals = 1.0 / (vals + se2[:, None] * 1e-4).clamp(min=1e-30)
     Psi_inv = vecs @ torch.diag_embed(inv_vals) @ vecs.mT        # (B, q, q)
 
     inner = se2[:, None, None, None] * Psi_inv[:, None] + ZtZ_safe  # (B, m, q, q)
     W_g = _safeSolve(inner + _adaptiveRidgeBm(inner), eye_q_bm)  # (B, m, q, q)
     W_g = W_g * mask4                                             # (B, m, q, q)
 
-    XtX_pool = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)            # (B, d, d)
-    Xty_pool = torch.einsum('bmnd,bmn->bd', Xm, ym)              # (B, d)
-    XtZ = torch.einsum('bmnd,bmnq->bmdq', Xm, Zm)               # (B, m, d, q)
+    XtZ = torch.einsum('bmnd,bmnq->bmdq', Xm, Zm)                  # (B, m, d, q)
 
-    W_ZtX = torch.einsum('bmqp,bmpd->bmqd', W_g, ZtX)            # (B, m, q, d)
-    correction_XX = torch.einsum('bmdq,bmqk->bdk', XtZ, W_ZtX)   # (B, d, d)
-    W_Zty = torch.einsum('bmqp,bmp->bmq', W_g, Zty)              # (B, m, q)
-    correction_Xy = torch.einsum('bmdq,bmq->bd', XtZ, W_Zty)     # (B, d)
+    W_ZtX = torch.einsum('bmqp,bmpd->bmqd', W_g, ZtX)              # (B, m, q, d)
+    correction_XX = torch.einsum('bmdq,bmqk->bdk', XtZ, W_ZtX)     # (B, d, d)
+    W_Zty = torch.einsum('bmqp,bmp->bmq', W_g, Zty)                # (B, m, q)
+    correction_Xy = torch.einsum('bmdq,bmq->bd', XtZ, W_Zty)       # (B, d)
 
     inv_se2 = 1.0 / se2
-    A_gls = inv_se2[:, None, None] * (XtX_pool - correction_XX)  # (B, d, d)
-    b_gls = inv_se2[:, None] * (Xty_pool - correction_Xy)        # (B, d)
+    A_gls = inv_se2[:, None, None] * (XtX - correction_XX)         # (B, d, d)
+    b_gls = inv_se2[:, None] * (Xty - correction_Xy)               # (B, d)
     beta_gls = _safeSolve(A_gls + _adaptiveRidge(A_gls), b_gls)  # (B, d)
 
     # clamp before BLUP computation: near-cancellation in A_gls=(XtX−correction_XX) when
     # Psi_lap≈0 produces finite-but-huge values that nan_to_num cannot catch.
     beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
-    sigma_eps_1d = sigma_eps_sq.sqrt().nan_to_num(nan=1.0, posinf=1.0)  # (B,)
     Psi = Psi.nan_to_num(nan=0.0, posinf=0.0)
 
     # BLUPs
     resid_gls = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)) * mask_n
     Ztr_gls = torch.einsum('bmnq,bmn->bmq', Zm, resid_gls)           # (B, m, q)
     blups = torch.einsum('bmqp,bmp->bmq', W_g, Ztr_gls)              # (B, m, q)
-    # clamp: Kg_inv can be huge when ZtZ is near-singular (small n_g, q=2) even with beta clamped
+    # clamp: W_g can be huge when ZtZ is near-singular (small n_g, q=2) even with beta clamped
     blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
 
-    # Posterior variance of each BLUP: Cov(b_g | data) = σ_ε² · W_g  (diagonal = marginal var)
-    # cap at 25 (std ≤ 5) — W_g = Kg_inv can be large when ZtZ is near-singular (small n_g, q=2)
+    # Posterior variance: Cov(b_g | data) = σ_ε² · W_g  (diagonal = marginal var)
+    # cap at 25 (std ≤ 5) — W_g can be large when ZtZ near-singular (small n_g, q=2)
     blup_var = (se2[:, None, None, None] * W_g).diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
     blup_var = blup_var.nan_to_num(nan=0.0, posinf=0.0)              # (B, m, q)
 
+    # EM iterations: M-step Ψ = mean_g(b̂_g b̂_g' + diag(blup_var_g)), E-step recomputes W_g, blups.
+    # Keeps se2, Ztr_gls, beta_gls fixed. Uses diagonal posterior-cov approximation (more stable
+    # than full se2*W_g for small G / near-singular ZtZ).
+    # Use ridge-regularized Psi_inv (not pseudoinverse) in E-step: when Psi≈0, pseudoinverse
+    # zeros Psi_inv and removes the shrinkage penalty → BLUPs collapse to OLS (high variance).
+    # A ridge ensures large Psi_inv for small Psi → strong shrinkage → BLUPs→0 (correct for
+    # small σ_rfx). Ridge scale: σ_ε² × 1e-4 — tiny relative to any meaningful Psi eigenvalue.
+    psi_ridge = se2[:, None, None] * 1e-4 * eye_q                   # (B, q, q)
+    for _ in range(n_em):
+        blup_outer = torch.einsum('bmq,bmr->bmqr', blups, blups)     # (B, m, q, q)
+        post_cov_diag = torch.diag_embed(blup_var)                   # (B, m, q, q) diagonal
+        Psi = _psdProject(
+            ((blup_outer + post_cov_diag) * mask4).sum(dim=1) / G[:, None, None]
+        )  # (B, q, q)
+        # Ridge-regularized inverse: (Psi + ridge)^{-1} via eigendecomposition
+        psi_reg = Psi + psi_ridge
+        vals_r, vecs_r = torch.linalg.eigh(psi_reg)
+        Psi_inv = vecs_r @ torch.diag_embed(1.0 / vals_r.clamp(min=1e-30)) @ vecs_r.mT
+        inner = se2[:, None, None, None] * Psi_inv[:, None] + ZtZ_safe  # (B, m, q, q)
+        W_g = _safeSolve(inner + _adaptiveRidgeBm(inner), eye_q_bm) * mask4
+        blups = torch.einsum('bmqp,bmp->bmq', W_g, Ztr_gls)
+        blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
+        blup_var = (se2[:, None, None, None] * W_g).diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
+        blup_var = blup_var.nan_to_num(nan=0.0, posinf=0.0)
+
+    # Output EM-derived sigma_rfx/Psi: Stage-3 ridge ensures proper initial BLUPs so
+    # EM converges to the ML estimate rather than OLS-level, avoiding the MoM hard-clip.
     sigma_rfx = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()  # (B, q)
+
+    # EM M-step corrected sigma_eps: use full GLS residuals + REML-like df correction.
+    # T = Σ_g trace(W_g ZtZ_g) (effective df consumed by random effects).
+    # sigma_eps²_corr = SS_gls / (N − d − T) avoids the within-Z overestimation bias.
+    resid_em = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)
+                - torch.einsum('bmnq,bmq->bmn', Zm, blups)) * mask_n
+    ss_em = resid_em.square().sum(dim=(1, 2))                        # (B,)
+    ZtZ_W = torch.einsum('bmqr,bmrs->bmqs', ZtZ_safe, W_g)          # (B, m, q, q)
+    T = (ZtZ_W.diagonal(dim1=-2, dim2=-1).sum(dim=-1) * mask_m).sum(dim=1)  # (B,)
+    df_corr = (N - d - T).clamp(min=1.0)
+    sigma_eps_1d = (ss_em / df_corr).clamp(min=0.0).sqrt().nan_to_num(nan=1.0, posinf=1.0)
 
     return {
         'beta_est': beta_gls,                       # (B, d)
@@ -334,11 +403,12 @@ def lmmNormal(
     mask_m: torch.Tensor,   # (B, m)
     ns: torch.Tensor,       # (B, m)
     n_total: torch.Tensor,  # (B,)
+    n_em: int = 3,
 ) -> dict[str, torch.Tensor]:
     """Closed-form GLS for the Gaussian LMM. Routes to q=1 compacted or full."""
     if Zm.shape[-1] == 1:
-        return _lmmNormalCompacted(Xm, ym, mask_n, mask_m, ns, n_total)
-    return _lmmNormalFull(Xm, ym, Zm, mask_n, mask_m, ns, n_total)
+        return _lmmNormalCompacted(Xm, ym, mask_n, mask_m, ns, n_total, n_em=n_em)
+    return _lmmNormalFull(Xm, ym, Zm, mask_n, mask_m, ns, n_total, n_em=n_em)
 
 
 # ---------------------------------------------------------------------------
