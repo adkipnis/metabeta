@@ -194,8 +194,6 @@ class Approximator(nn.Module):
         stats: dict[str, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """append summary with selected metadata"""
-        if stats is None:
-            stats = self._dataStatistics(data)
         out = [summary]
         ctx = self.analytical_context
         if local:
@@ -232,7 +230,7 @@ class Approximator(nn.Module):
             out.append(family_enc)
 
             # point estimates
-            if ctx != 'none':
+            if ctx != 'none' and stats is not None:
                 out.append(stats['beta_est'].clamp(-15.0, 15.0))
                 out.append(stats['sigma_rfx_est'].clamp(0.0, 20.0))
                 if self.d_corr > 0:
@@ -306,7 +304,10 @@ class Approximator(nn.Module):
     def summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)
         summary_l = self.summarizer_l(inputs, mask=data['mask_n'])
-        stats = self._dataStatistics(data)  # compute once, share across both contexts
+        if self.analytical_context != 'none':
+            stats = self._dataStatistics(data)  # compute once, share across both contexts
+        else:
+            stats = None
         summary_l = self._addMetadata(summary_l, data, local=True, stats=stats)
         summary_g = self.summarizer_g(summary_l, mask=data['mask_m'])
         summary_g = self._addMetadata(summary_g, data, local=False, stats=stats)
