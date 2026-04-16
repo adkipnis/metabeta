@@ -114,8 +114,13 @@ class Collection(torch.utils.data.Dataset):
         sizes['q'] = self.q
         ds = unpad(ds, sizes)
 
-        # init rfx design matrix and re-insert max-padded ns
+        # init rfx design matrix: first ds['q'] cols of X are active random effects;
+        # remaining cols (self.q > ds['q']) are zero-padded so that inactive Z columns
+        # do not contaminate glmm computations with fixed-effect covariate data.
         ds['Z'] = ds['X'][..., : self.q].copy()
+        actual_q = int(ds['q'])
+        if actual_q < self.q:
+            ds['Z'][..., actual_q:] = 0.0
 
         # optionally permute
         if self.permute:
