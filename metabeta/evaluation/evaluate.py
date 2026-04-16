@@ -31,7 +31,6 @@ import numpy as np
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler, runIS, runSIR
 from metabeta.utils.moe import moeEstimate
-from metabeta.posthoc.conformal import Calibrator
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.plotting import plotComparison
 
@@ -50,7 +49,6 @@ def setup() -> argparse.Namespace:
 
     # Legacy: Load from config file
     parser.add_argument('--config', type=str, help='Path to custom YAML config file')
-    parser.add_argument('--name', type=str, help='Legacy: load configs/{name}.yaml (deprecated)')
 
     # Config overrides
     parser.add_argument('--model_id', type=str)
@@ -66,7 +64,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--n_samples', type=int)
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
     parser.add_argument('--conformal', action=argparse.BooleanOptionalAction)
-    parser.add_argument('--k', type=int, default=7, help='pseudo-MoE permuted views (0=off)')
+    parser.add_argument('--k', type=int, default=0, help='pseudo-MoE permuted views (0=off)')
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction)
     parser.add_argument('--batch_size', type=int)
     parser.add_argument('--save_tables', action=argparse.BooleanOptionalAction, default=None)
@@ -94,27 +92,11 @@ def setup() -> argparse.Namespace:
         for k, v in vars(args).items():
             if v is not None and k not in ['checkpoint', 'config', 'name']:
                 cfg_dict[k] = v
-    elif hasattr(args, 'name') and args.name:
-        # Legacy name-based config
-        path = Path(__file__).resolve().parent / 'configs' / f'{args.name}.yaml'
-        if path.exists():
-            with open(path) as f:
-                cfg_dict = yaml.safe_load(f)
-            # Merge CLI args
-            for k, v in vars(args).items():
-                if v is not None and k not in ['checkpoint', 'config', 'name']:
-                    cfg_dict[k] = v
-        else:
-            raise FileNotFoundError(
-                f'Config file not found: {path}\n'
-                f'Use --checkpoint <dir> to load from checkpoint or --config for custom YAML.'
-            )
     else:
         raise ValueError(
             'Must specify one of:\n'
             '  1. Checkpoint: --checkpoint <checkpoint_dir> [--prefix best|latest]\n'
             '  2. Custom config: --config <path>\n'
-            '  3. Legacy: --name <name> (deprecated)'
         )
 
     if cfg_dict.get('save_tables') is None:
@@ -229,18 +211,6 @@ class Evaluator:
         if self.cfg.compile and self.device.type == 'cuda':
             self.model.compile()
 
-    def calibrate(self) -> Calibrator:
-        calibrator = Calibrator()
-        proposal = self.sampleMinibatched(self.dl_valid, 'Calibration')
-        full_batch = self.dl_valid.fullBatch()
-        full_batch = toDevice(full_batch, 'cpu')
-        if self.cfg.rescale:
-            full_batch = rescaleData(full_batch)
-        proposal.to('cpu')
-        calibrator.calibrate(proposal, full_batch)
-        calibrator.save(self.run_name)
-        return calibrator
-
     def _fit2proposal(self, batch: dict[str, torch.Tensor], prefix: str) -> Proposal:
         proposed = {}
         ffx = batch[f'{prefix}_ffx']
@@ -329,14 +299,13 @@ class Evaluator:
         self,
         proposal: Proposal,
         batch: dict[str, torch.Tensor],
-        calibrator: Calibrator | None = None,
     ) -> EvaluationSummary:
         batch = toDevice(batch, 'cpu')
         if self.cfg.rescale:
             batch = rescaleData(batch)
         proposal.to('cpu')
         lf = self.cfg.likelihood_family
-        eval_summary = getSummary(proposal, batch, calibrator=calibrator, likelihood_family=lf)
+        eval_summary = getSummary(proposal, batch, likelihood_family=lf)
         summary_table = summaryTable(eval_summary, lf)
         logger.info(summary_table)
         return eval_summary
@@ -355,10 +324,9 @@ class Evaluator:
         plotComparison(summaries, proposals, labels, batch, plot_dir=self.plot_dir, show=True)
 
     def testrun(self) -> None:
-        calibrator = self.calibrate() if self.cfg.conformal else None
         full_batch = self.dl_valid.fullBatch()
         proposal_mb = self.sampleMinibatched(self.dl_valid, 'MB')
-        summary_mb = self.summary(proposal_mb, full_batch, calibrator=calibrator)
+        summary_mb = self.summary(proposal_mb, full_batch)
         self.plot([proposal_mb], [summary_mb], ['MB'], full_batch)
 
     def _fitLabel(self) -> str:
@@ -443,12 +411,11 @@ class Evaluator:
         tex_path.write_text(tex_table + '\n')
 
     def go(self) -> None:
-        calibrator = self.calibrate() if self.cfg.conformal else None
         full_batch = self.dl_test.fullBatch()
 
         # MB proposal
         proposal_mb = self.sampleMinibatched(self.dl_test, 'MB')
-        summary_mb = self.summary(proposal_mb, full_batch, calibrator=calibrator)
+        summary_mb = self.summary(proposal_mb, full_batch)
 
         # NUTS proposal
         proposal_nuts = self._fit2proposal(full_batch, prefix='nuts')
