@@ -170,7 +170,10 @@ def _lmmNormalCompacted(
     # EM init: floor σ_rfx² with 10% of mean(r_g²) so EM doesn't get stuck when MoM clips
     # to 0. mean_g(r_g²) ≈ σ_eps²/n̄ + σ_rfx² in expectation — always ≥ 0.
     r_g_var = (r_g.square() * mask_m).sum(dim=1) / G              # (B,)
-    sigma_rfx_sq_val = sigma_rfx_sq_val.clamp(min=r_g_var * 0.1)
+    # Floor σ_rfx² at 50% of r_g_var so EM doesn't get stuck when MoM clips to 0.
+    # E[r_g²] ≈ σ_rfx² + σ_ε²/n̄, so 0.5 × r_g_var ≈ σ_rfx²/2 at high SNR — close
+    # enough that EM converges in 1 step (λ_g → 1 → BLUPs ≈ r_g → M-step ≈ mean(r_g²)).
+    sigma_rfx_sq_val = sigma_rfx_sq_val.clamp(min=r_g_var * 0.5)
 
     lambda_g2 = (ns_f * sigma_rfx_sq_val[:, None]) / (
         sigma_eps_sq_val[:, None] + ns_f * sigma_rfx_sq_val[:, None]
@@ -193,7 +196,10 @@ def _lmmNormalCompacted(
         fitted = torch.einsum('bmnd,bd->bmn', Xm, beta_gls) + blups.squeeze(-1).unsqueeze(-1)
         ss_em = ((ym - fitted) * mask_n).square().sum(dim=(1, 2))   # (B,)
         T = (lambda_g2 * mask_m).sum(dim=1)                         # (B,)  Σ_g λ_g
-        sigma_eps_sq_val = (ss_em / (N - d - T).clamp(min=1.0)).clamp(min=1e-12)
+        # Cap T so the REML denominator N−d−T stays ≥ 10% of N−d, preventing blow-up
+        # when T ≈ N−d (all λ_g → 1, i.e., large rfx relative to noise).
+        T_safe = T.clamp(max=0.9 * (N - d).clamp(min=1.0))
+        sigma_eps_sq_val = (ss_em / (N - d - T_safe).clamp(min=1.0)).clamp(min=1e-12)
 
         # E-step
         lambda_g2 = (ns_f * sigma_rfx_sq_val[:, None]) / (
@@ -298,6 +304,21 @@ def _lmmNormalFull(
     rhs_mom = sum_ZtZ_bhat - sigma_eps_sq[:, None, None] * G[:, None, None] * eye_q
     Psi_raw = _safeSolve(sum_ZtZ + _adaptiveRidge(sum_ZtZ), rhs_mom)  # (B, q, q)
 
+    # Per-component noise-corrected Psi diagonal floor to prevent EM getting stuck near Psi=0.
+    # E[bhat_i²] ≈ Psi_ii + σ_ε² mean_g(ZtZ_inv_ii). Removing the noise term gives an
+    # estimate of Psi_ii ≈ σ_rfx_i², which is near 0 when σ_rfx_i is small (so the floor
+    # only activates for high-SNR components where MoM tends to under-estimate).
+    # Applied per-component so inactive rfx dimensions (second Z column = 0 for q=1 datasets)
+    # are not inflated — their signal_var ≈ 0 and the floor stays at 0.
+    mean_ZtZ_inv_diag = (
+        ZtZ_inv.diagonal(dim1=-2, dim2=-1) * mask_m[:, :, None]
+    ).sum(dim=1) / G[:, None]                                           # (B, q)
+    bhat_var = (bhat.square() * mask_m[:, :, None]).sum(dim=1) / G[:, None]  # (B, q)
+    psi_diag_floor = (bhat_var - sigma_eps_sq[:, None] * mean_ZtZ_inv_diag).clamp(min=0.0) * 0.5
+    Psi_raw = Psi_raw + torch.diag_embed(
+        (psi_diag_floor - Psi_raw.diagonal(dim1=-2, dim2=-1)).clamp(min=0.0)
+    )                                                                   # bump diag to floor
+
     Psi_raw = 0.5 * (Psi_raw + Psi_raw.mT)
     vals, vecs = torch.linalg.eigh(Psi_raw)                      # (B, q), (B, q, q)
     vals = vals.clamp(min=0.0)
@@ -366,7 +387,10 @@ def _lmmNormalFull(
         ss_em = resid_em.square().sum(dim=(1, 2))                    # (B,)
         ZtZ_W = torch.einsum('bmqr,bmrs->bmqs', ZtZ_safe, W_g)      # (B, m, q, q)
         T = (ZtZ_W.diagonal(dim1=-2, dim2=-1).sum(dim=-1) * mask_m).sum(dim=1)  # (B,)
-        se2 = (ss_em / (N - d - T).clamp(min=1.0)).clamp(min=1e-12)
+        # Cap T so the REML denominator N−d−T stays ≥ 10% of N−d, preventing blow-up
+        # when T ≈ N−d (λ_g → 1 for all groups at high SNR or near-singular ZtZ_g).
+        T_safe = T.clamp(max=0.9 * (N - d).clamp(min=1.0))
+        se2 = (ss_em / (N - d - T_safe).clamp(min=1.0)).clamp(min=1e-12)
 
         # E-step: W_g via ridge-regularized Ψ⁻¹ using updated Ψ and se2
         psi_ridge = se2[:, None, None] * 1e-4 * eye_q
