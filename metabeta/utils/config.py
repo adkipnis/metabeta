@@ -59,8 +59,7 @@ class ApproximatorConfig(BaseModel):
     posterior_g: PosteriorConfig
     likelihood_family: int = Field(ge=0, default=0)
     posterior_correlation: bool = True
-    analytical_context: Literal['full', 'no_analytics'] = 'full'
-
+    analytical_context: Literal['full', 'none'] = 'none'
     model_config = {'extra': 'allow'}
 
     @property
