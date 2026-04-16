@@ -59,6 +59,7 @@ class ApproximatorConfig(BaseModel):
     posterior_g: PosteriorConfig
     likelihood_family: int = Field(ge=0, default=0)
     posterior_correlation: bool = True
+    analytical_context: Literal['full', 'no_analytics'] = 'full'
 
     model_config = {'extra': 'allow'}
 
@@ -75,6 +76,7 @@ class ApproximatorConfig(BaseModel):
             'd_rfx': self.d_rfx,
             'likelihood_family': self.likelihood_family,
             'posterior_correlation': self.posterior_correlation,
+            'analytical_context': self.analytical_context,
             'summarizer_l': self.summarizer_l.model_dump(),
             'summarizer_g': self.summarizer_g.model_dump(),
             'posterior_l': self.posterior_l.model_dump(),
