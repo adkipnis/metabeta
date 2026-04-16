@@ -67,9 +67,9 @@ class Approximator(nn.Module):
     def _analyticsGlobalDim(self) -> int:
         """Dimension added to global context by GLMM statistics (beta_est + sigma_rfx + eps/phi)."""
         ctx = self.analytical_context
-        if ctx == 'no_analytics':
+        if ctx == 'none':
             return 0
-        d_phi = 0 if self.has_sigma_eps else 1 # for non-gaussian
+        d_phi = 0 if self.has_sigma_eps else 1   # for non-gaussian
         return self.d_ffx + self.d_rfx + d_phi + self.d_corr
 
     def build(self) -> None:
@@ -90,13 +90,15 @@ class Approximator(nn.Module):
         d_input_l = 1 + (d_ffx - 1) + (d_rfx - 1)
         self.summarizer_l = _buildSummarizer(self.cfg.summarizer_l, d_input_l)
         # global: local summaries + local metadata, aggregated across groups
-        d_meta_l = 2 # n_obs + eta_rfx
+        d_meta_l = 2   # n_obs + eta_rfx
         d_input_g = self.cfg.summarizer_l.d_output + d_meta_l
         self.summarizer_g = _buildSummarizer(self.cfg.summarizer_g, d_input_g)
 
         # --- posteriors
         # global: fixed effects + variance params conditioned on global summary + metadata
-        d_prior = 2 * d_ffx + d_rfx + d_sigma_eps + 1  # nu_ffx, tau_ffx, tau_rfx, [tau_eps], eta_rfx
+        d_prior = (
+            2 * d_ffx + d_rfx + d_sigma_eps + 1
+        )  # nu_ffx, tau_ffx, tau_rfx, [tau_eps], eta_rfx
         d_meta_g = 2 + d_prior + self.family_encoder.d_output + self._analyticsGlobalDim()
         d_context_g = self.cfg.summarizer_g.d_output + d_meta_g
         d_target_g = d_ffx + d_var + self.d_corr
@@ -173,9 +175,13 @@ class Approximator(nn.Module):
         """Compute sufficient statistics: GLS/GLMM β̂, σ̂, BLUPs."""
         Zm = data['Z'][..., : self.d_rfx]
         return glmm(
-            data['X'], data['y'], Zm,
-            data['mask_n'].float(), data['mask_m'].float(),
-            data['ns'].clamp(min=1).float(), data['n'].float(),
+            data['X'],
+            data['y'],
+            Zm,
+            data['mask_n'].float(),
+            data['mask_m'].float(),
+            data['ns'].clamp(min=1).float(),
+            data['n'].float(),
             likelihood_family=self.likelihood_family,
             eta_rfx=data.get('eta_rfx'),
         )
@@ -195,17 +201,19 @@ class Approximator(nn.Module):
         if local:
             # counts
             n_obs = data['ns'].unsqueeze(-1).float().sqrt() / 10  # (B, m, 1)
-            
+
             # correlation prior
-            eta_rfx = data['eta_rfx'].unsqueeze(-1).expand(-1, summary.shape[1]).unsqueeze(-1) # (B, m, 1)
+            eta_rfx = (
+                data['eta_rfx'].unsqueeze(-1).expand(-1, summary.shape[1]).unsqueeze(-1)
+            )   # (B, m, 1)
             out += [n_obs, eta_rfx]
-            
+
         else:
             # counts
             n_total = data['n'].unsqueeze(-1).float().sqrt() / 10
             n_groups = data['m'].unsqueeze(-1).float().sqrt() / 10
             out += [n_total, n_groups]
-            
+
             # prior parameters and families
             nu_ffx = data['nu_ffx'].clone()
             tau_ffx = data['tau_ffx'].clone()
@@ -215,16 +223,16 @@ class Approximator(nn.Module):
                 tau_eps = data['tau_eps'].clone().unsqueeze(-1)
                 out.append(tau_eps)
             out += [nu_ffx, tau_ffx, tau_rfx, eta_rfx]
-            
+
             # prior families
             families = [data['family_ffx'], data['family_sigma_rfx']]
             if self.has_sigma_eps:
                 families.append(data['family_sigma_eps'])
             family_enc = self.family_encoder(families)
             out.append(family_enc)
-            
+
             # point estimates
-            if ctx != 'no_analytics':
+            if ctx != 'none':
                 out.append(stats['beta_est'].clamp(-15.0, 15.0))
                 out.append(stats['sigma_rfx_est'].clamp(0.0, 20.0))
                 if self.d_corr > 0:
