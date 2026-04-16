@@ -85,7 +85,7 @@ def _printBrokenPreview(items: list[tuple[Path, str]], label: str) -> None:
 
 def _fitCfg(data_id: str) -> argparse.Namespace:
     return argparse.Namespace(
-        d_tag=data_id,
+        data_id=data_id,
         idx=0,
         reintegrate=True,
         respecify_ffx=False,
