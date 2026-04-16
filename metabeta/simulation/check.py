@@ -50,14 +50,6 @@ def setup() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-
-def _loadDataCfg(data_id: str) -> dict:
-    cfg_path = Path(__file__).resolve().parent / 'configs' / f'{data_id}.yaml'
-    assert cfg_path.exists(), f'config file {cfg_path} does not exist'
-    with open(cfg_path, 'r') as f:
-        return yaml.safe_load(f)
-
-
 def _checkReadable(
     paths: list[Path], inspect: bool = False
 ) -> tuple[list[Path], list[tuple[Path, str]]]:
@@ -122,8 +114,6 @@ def _runForTag(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> int:
     print(f'  data directory: {srcdir}')
     print(f'  fits directory: {fits_dir}')
     print(f'  npz inspection: {cfg.inspect}')
-
-    data_cfg = _loadDataCfg(data_id)
 
     # check expected training partitions
     train_paths = [
