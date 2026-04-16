@@ -1,5 +1,6 @@
 import torch
 from metabeta.utils.glm import _adaptiveRidge
+from metabeta.utils.glmm import lmmNormal
 
 
 def _sufficientStats(
@@ -155,10 +156,45 @@ def remlSolve(
         # inner products over n
         stats = _sufficientStats(Xm, ym, Zm)
 
+        # Warm-start: initialize from Henderson MoM (lmmNormal) estimates.
+        # Starting at zeros (Σ=I, σ_eps=1) lets L-BFGS wander into spurious
+        # large-Ψ local optima where the REML surface is nearly flat.
+        with torch.no_grad():
+            n_dim = Xm.shape[2]
+            arange = torch.arange(n_dim, device=Xm.device)
+            mask_n_ws = (arange[None, None, :] < ns.long()[:, :, None]).float()
+            n_total_ws = (ns_f * mask_m).sum(dim=1)
+            mom = lmmNormal(Xm, ym, Zm, mask_n_ws, mask_m, ns_f, n_total_ws)
+
+            sigma_eps_mom = mom['sigma_eps_est'].squeeze(-1).clamp(min=1e-4)  # (B,)
+            log_se_init = sigma_eps_mom.log()  # (B,)
+
+            # Build initial Cholesky factor from MoM Psi (already PSD from lmmNormal)
+            Psi_mom = mom['Psi']  # (B, q, q)
+            # Add tiny jitter scaled to trace to ensure strict PD for Cholesky
+            trace_scale = Psi_mom.diagonal(dim1=-2, dim2=-1).mean(dim=-1).clamp(min=1e-6)
+            eye_q_ws = torch.eye(q, device=Xm.device, dtype=Xm.dtype)
+            Psi_pd = Psi_mom + (1e-6 * trace_scale)[:, None, None] * eye_q_ws
+            try:
+                L_init = torch.linalg.cholesky(Psi_pd)  # (B, q, q)
+            except Exception:
+                # Fallback: diagonal from sigma_rfx_est
+                sigma_rfx_mom = mom['sigma_rfx_est'].clamp(min=1e-4)  # (B, q)
+                L_init = torch.diag_embed(sigma_rfx_mom)
+
+            l_diag_init = L_init.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8).log()  # (B, q)
+            if n_off > 0:
+                rows_ws, cols_ws = torch.tril_indices(q, q, offset=-1, device=Xm.device)
+                l_off_init = L_init[:, rows_ws, cols_ws]  # (B, n_off)
+            else:
+                l_off_init = torch.zeros(B, 0, device=Xm.device, dtype=Xm.dtype)
+
+            init_params = torch.cat(
+                [l_diag_init, l_off_init, log_se_init.unsqueeze(-1)], dim=-1
+            ).clamp(-10, 10)
+
         # optimization parameters [l_diag (q), l_off (n_off), log_se (1)].
-        l_params = torch.zeros(
-            B, q + n_off + 1, device=Xm.device, dtype=Xm.dtype, requires_grad=True
-        )
+        l_params = init_params.clone().detach().requires_grad_(True)
 
         # batched REML of covariance parameters
         optimizer = torch.optim.LBFGS(
