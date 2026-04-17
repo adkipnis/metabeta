@@ -205,6 +205,23 @@ def _pqlPass(
     eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
     beta_var = _safeSolve(sum_A_reg, eye_d).diagonal(dim1=-2, dim2=-1).clamp(min=0.0)  # (B, d)
 
+    # --- BLUPs: K_g⁻¹ Zᵀ W (ỹ − X β̂_GLS) ---
+    # Clamp beta_gls before residuals: near-singular GLS produces extreme values that
+    # cause eta overflow in the next Newton pass or catastrophic BLUP outliers.
+    beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
+    resid_gls = (ytilde_f - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)) * mask_n
+    blups = torch.einsum(
+        'bmqr,bmr->bmq', Kg_inv,
+        torch.einsum('bmnq,bmn->bmq', Zm, w_f * resid_gls),
+    ) * mask_m[:, :, None]                                                 # (B, m, q)
+
+    blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
+
+    # Return Kg_inv for blup_var: (ZWZ + Psi_lap^{-1})^{-1} is the posterior covariance
+    # of b_g under the final Psi_lap estimate — consistent with the Normal path's se²·W_g.
+    return beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, beta_var
+
+
 # ---------------------------------------------------------------------------
 # Private normal-LMM implementations
 # ---------------------------------------------------------------------------
