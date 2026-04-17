@@ -66,9 +66,11 @@ families:
   1:
     likelihood_family: 1
     name: bernoulli
+    min_bg_df: 4  # need ≥4 between-group df for reliable PQL variance estimation
   2:
     likelihood_family: 2
     name: poisson
+    min_bg_df: 4  # need ≥4 between-group df for reliable PQL variance estimation
 
 # CLI-only parameters (never have defaults in YAML configs)
 cli_only:
