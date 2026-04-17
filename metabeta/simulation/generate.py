@@ -363,7 +363,41 @@ class Generator:
             )
             # joblib returns list[Any], so for type safety we cast it
             datasets = cast(list[dict[str, np.ndarray]], datasets)
+
+        # Enforce min_bg_df on datasets where the Emulator returned fewer groups
+        # than sampled (reducing m below d + min_bg_df).  Fix by trimming d.
+        min_bg_df = getattr(self.cfg, 'min_bg_df', 0)
+        if min_bg_df > 0:
+            datasets = [Generator._clampD(ds, min_bg_df) for ds in datasets]
+
         return datasets
+
+    @staticmethod
+    def _clampD(ds: dict[str, np.ndarray], min_bg_df: int) -> dict[str, np.ndarray]:
+        """Reduce d (and q if needed) so that m − d ≥ min_bg_df.
+
+        Called after dataset generation to fix pathological cases where the
+        Emulator returned fewer groups than the sampled m_target, causing
+        bg_df = m − d to fall below the configured minimum.
+        """
+        m = int(ds['ns'].shape[0])
+        d = int(ds['d'])
+        if m - d >= min_bg_df:
+            return ds
+        d_new = max(1, m - min_bg_df)
+        if d_new >= d:
+            return ds
+        q_new = min(int(ds['q']), d_new)
+        ds = dict(ds)
+        ds['X'] = ds['X'][:, :d_new]
+        ds['ffx'] = ds['ffx'][:d_new]
+        ds['d'] = np.array(d_new)
+        if q_new < int(ds['q']):
+            ds['q'] = np.array(q_new)
+            ds['rfx'] = ds['rfx'][:, :q_new]
+            ds['sigma_rfx'] = ds['sigma_rfx'][:q_new]
+            ds['corr_rfx'] = ds['corr_rfx'][:q_new, :q_new]
+        return ds
 
     @staticmethod
     def _castCompactTypes(batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
