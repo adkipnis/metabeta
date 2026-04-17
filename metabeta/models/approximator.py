@@ -68,17 +68,17 @@ class Approximator(nn.Module):
     def _analyticsGlobalDim(self) -> int:
         """Dimension added to global context by GLMM statistics.
 
-        beta_est (d_ffx) + beta_wg (d_ffx) + sigma_rfx (d_rfx) + eps/phi (1) + corr (d_corr).
+        beta_est (d_ffx) + sigma_rfx (d_rfx) + eps/phi (1) + corr (d_corr).
         """
         if self.analytical_context == 'none':
             return 0
-        return 1 * self.d_ffx + self.d_rfx + self.d_corr + 1
+        return self.d_ffx + self.d_rfx + self.d_corr + 1
 
     def _analyticsLocalDim(self) -> int:
         """Dimension added to local context by GLMM stats.
 
         blup_est (d_rfx) + blup_std (d_rfx) + lambda_g (d_rfx) + resid_g (1)
-        + icc (d_rfx, normal only — requires sigma_eps).
+        + icc (d_rfx, normal only)
         """
         if self.analytical_context == 'none':
             return 0
@@ -258,7 +258,6 @@ class Approximator(nn.Module):
             # point estimates
             if ctx != 'none' and stats is not None:
                 beta_est = stats['beta_est'].clamp(-CLAMP, CLAMP)   # (B, d)
-                # beta_wg = stats['beta_wg'].clamp(-CLAMP, CLAMP)
                 sigma_rfx_est = stats['sigma_rfx_est'].clamp(max=CLAMP)   # (B, q)
                 out += [beta_est, sigma_rfx_est]
                 if self.has_sigma_eps:
