@@ -72,11 +72,11 @@ class Approximator(nn.Module):
         return self.d_ffx + self.d_rfx + self.d_corr + 1
 
     def _analyticsLocalDim(self) -> int:
-        """Dimension added to local context by GLMM statistics (blups)."""
+        """Dimension added to local context by GLMM statistics (blup_est + blup_std + lambda_g)."""
         ctx = self.analytical_context
         if ctx == 'none':
             return 0
-        return self.d_rfx
+        return self.d_rfx * 3
 
     def build(self) -> None:
         d_ffx = self.d_ffx
@@ -215,6 +215,10 @@ class Approximator(nn.Module):
             # point estimates
             if ctx != 'none' and stats is not None:
                 out.append(stats['blup_est'].clamp(-20.0, 20.0))
+                blup_std = stats['blup_var'].clamp(min=0.0).sqrt().clamp(max=5.0)  # (B, m, q)
+                sigma_rfx_sq = stats['sigma_rfx_est'].unsqueeze(-2) ** 2  # (B, 1, q)
+                lambda_g = (1.0 - stats['blup_var'] / (sigma_rfx_sq + 1e-8)).clamp(0.0, 1.0)
+                out += [blup_std, lambda_g]
 
         else:
             # counts
