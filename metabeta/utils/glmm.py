@@ -30,6 +30,18 @@ def _pseudoInverse(M: torch.Tensor) -> torch.Tensor:
     return vecs @ torch.diag_embed(inv_vals) @ vecs.mT
 
 
+def _ridgeInv(M: torch.Tensor, floor: torch.Tensor) -> torch.Tensor:
+    """Ridge-regularized inverse of a PSD (B, q, q) matrix.
+
+    floor: (B,) per-batch scalar added to all eigenvalues before inversion.
+    Unlike pseudoinverse, never zeros any eigenvalue — ensures strong shrinkage
+    when M eigenvalues are near or below floor.
+    """
+    vals, vecs = torch.linalg.eigh(M)
+    inv_vals = 1.0 / (vals + floor[:, None]).clamp(min=1e-30)
+    return vecs @ torch.diag_embed(inv_vals) @ vecs.mT
+
+
 def _pqlWorking(
     eta: torch.Tensor,
     y: torch.Tensor,
