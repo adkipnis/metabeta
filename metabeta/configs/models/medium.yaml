@@ -30,4 +30,4 @@ posterior_g:
         use_bias: False
 
 posterior_l:
-    n_blocks: 2
+    n_blocks: 4
