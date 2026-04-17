@@ -119,20 +119,33 @@ class Generator:
         ), 'number of datasets must be divisible by mini batch size'
         n_mini = n_datasets // mini_batch_size
 
-        d = truncLogUni(rng, low=2, high=self.cfg.max_d + 1, size=n_mini, round=True)
-        d = np.repeat(d, mini_batch_size)
+        d_uniq = truncLogUni(rng, low=2, high=self.cfg.max_d + 1, size=n_mini, round=True)
+        d = np.repeat(d_uniq, mini_batch_size)
 
         q = truncLogUni(rng, low=1, high=self.cfg.max_q + 1, size=n_mini, round=True)
         q = np.repeat(q, mini_batch_size)
         q = np.minimum(d, q)  # q <= d
 
-        m = truncLogUni(
-            rng,
-            low=self.cfg.min_m,
-            high=self.max_m_feasible + 1,
-            size=n_mini,
-            round=True,
-        )
+        min_bg_df = getattr(self.cfg, 'min_bg_df', 0)
+        if min_bg_df > 0:
+            # Enforce m − d ≥ min_bg_df by sampling m with a per-element floor keyed on
+            # d_uniq (one value per mini-batch, before the repeat to n_datasets).
+            m_low = np.minimum(
+                np.maximum(self.cfg.min_m, d_uniq + min_bg_df),
+                self.max_m_feasible,
+            )
+            m = np.array([
+                int(np.floor(np.exp(rng.uniform(np.log(lo), np.log(self.max_m_feasible + 1)))))
+                for lo in m_low
+            ])
+        else:
+            m = truncLogUni(
+                rng,
+                low=self.cfg.min_m,
+                high=self.max_m_feasible + 1,
+                size=n_mini,
+                round=True,
+            )
         m = np.repeat(m, mini_batch_size)
 
         return d, q, m
