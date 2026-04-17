@@ -106,7 +106,7 @@ def _pqlPass(
     likelihood_family: int,
     n_newton: int = 3,
     bg_init: torch.Tensor | None = None,  # warm start; None = cold start from zeros
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """One PQL pass: damped Newton → Ψ̂_Lap M-step → GLS β̂ and BLUPs.
 
     Newton starts from bg_init (or zeros if None) under (beta, Psi_inv).
@@ -124,7 +124,6 @@ def _pqlPass(
     Kg_inv     : (B, m, q, q) GLS posterior covariance (ZWZ + Psi_lap_inv)^{-1}
     mean_Hg_inv: (B, q, q)    mean Laplace posterior covariance across groups
     resid_gls  : (B, m, n)    working residual ỹ − Xβ̂_GLS (masked)
-    beta_var   : (B, d)       GLS posterior variance diag((Σ_g A_g + ridge)^{-1})
     """
     B, m, _, d = Xm.shape
     q = Zm.shape[-1]
@@ -200,11 +199,6 @@ def _pqlPass(
         (rhs_g * mask_m[:, :, None]).sum(dim=1),
     )                                                                       # (B, d)
 
-    # GLS posterior variance: diag((Σ_g A_g + ridge)^{-1}).
-    # Large when m is small or X is poorly conditioned — useful uncertainty signal for NN context.
-    eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
-    beta_var = _safeSolve(sum_A_reg, eye_d).diagonal(dim1=-2, dim2=-1).clamp(min=0.0)  # (B, d)
-
     # --- BLUPs: K_g⁻¹ Zᵀ W (ỹ − X β̂_GLS) ---
     # Clamp beta_gls before residuals: near-singular GLS produces extreme values that
     # cause eta overflow in the next Newton pass or catastrophic BLUP outliers.
@@ -219,7 +213,7 @@ def _pqlPass(
 
     # Return Kg_inv for blup_var: (ZWZ + Psi_lap^{-1})^{-1} is the posterior covariance
     # of b_g under the final Psi_lap estimate — consistent with the Normal path's se²·W_g.
-    return beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, beta_var
+    return beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls
 
 
 # ---------------------------------------------------------------------------
@@ -298,9 +292,7 @@ def _lmmNormalCompacted(
     A_gls = inv_se2[:, None, None] * (XtX - XbarXbar)
     b_gls = inv_se2[:, None] * (Xty - Xbary)
     A_gls_reg = A_gls + _adaptiveRidge(A_gls)
-    eye_d_c = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
     beta_gls = _safeSolve(A_gls_reg, b_gls)
-    beta_var = _safeSolve(A_gls_reg, eye_d_c).diagonal(dim1=-2, dim2=-1).clamp(min=0.0)  # (B, d)
 
     # clamp before BLUP computation: near-cancellation in A_gls=(XtX−XbarXbar) when λ→1
     # produces finite-but-huge values that nan_to_num cannot catch.
@@ -360,7 +352,6 @@ def _lmmNormalCompacted(
         b_gls = inv_se2[:, None] * (Xty - Xbary)
         A_gls_reg = A_gls + _adaptiveRidge(A_gls)
         beta_gls = _safeSolve(A_gls_reg, b_gls)
-        beta_var = _safeSolve(A_gls_reg, eye_d_c).diagonal(dim1=-2, dim2=-1).clamp(min=0.0)
         beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
         r_g = (y_mean - torch.einsum('bmd,bd->bm', X_mean, beta_gls)) * mask_m
         blups = (lambda_g2 * r_g).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
@@ -375,11 +366,8 @@ def _lmmNormalCompacted(
     beta_wg_out = beta_wg.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
     bhat_out = resid_bg.unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)  # (B, m, 1)
 
-    beta_var = beta_var.nan_to_num(nan=0.0, posinf=0.0).clamp(min=0.0)           # (B, d)
-
     return {
         'beta_est': beta_gls,           # (B, d)
-        'beta_var': beta_var,           # (B, d)  GLS posterior variance
         'beta_wg': beta_wg_out,         # (B, d)
         'sigma_eps_est': sigma_eps,     # (B, 1)
         'sigma_rfx_est': sigma_rfx,     # (B, 1)
@@ -512,8 +500,6 @@ def _lmmNormalFull(
     b_gls = inv_se2[:, None] * (Xty - correction_Xy)               # (B, d)
     A_gls_reg = A_gls + _adaptiveRidge(A_gls)
     beta_gls = _safeSolve(A_gls_reg, b_gls)                        # (B, d)
-    eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
-    beta_var = _safeSolve(A_gls_reg, eye_d).diagonal(dim1=-2, dim2=-1).clamp(min=0.0)  # (B, d)
 
     # clamp before BLUP computation: near-cancellation in A_gls=(XtX−correction_XX) when
     # Psi_lap≈0 produces finite-but-huge values that nan_to_num cannot catch.
@@ -573,7 +559,6 @@ def _lmmNormalFull(
         b_gls = inv_se2[:, None] * (Xty - correction_Xy)
         A_gls_reg = A_gls + _adaptiveRidge(A_gls)
         beta_gls = _safeSolve(A_gls_reg, b_gls)
-        beta_var = _safeSolve(A_gls_reg, eye_d).diagonal(dim1=-2, dim2=-1).clamp(min=0.0)
         beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
         resid_gls = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)) * mask_n
         Ztr_gls = torch.einsum('bmnq,bmn->bmq', Zm, resid_gls)
@@ -594,11 +579,8 @@ def _lmmNormalFull(
     beta_wg_out = beta_wg.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
     bhat_out = bhat.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)             # (B, m, q)
 
-    beta_var = beta_var.nan_to_num(nan=0.0, posinf=0.0).clamp(min=0.0)           # (B, d)
-
     return {
         'beta_est': beta_gls,                       # (B, d)
-        'beta_var': beta_var,                       # (B, d)  GLS posterior variance
         'beta_wg': beta_wg_out,                     # (B, d)
         'sigma_eps_est': sigma_eps_1d.unsqueeze(-1), # (B, 1)
         'sigma_rfx_est': sigma_rfx,                 # (B, q)
@@ -757,7 +739,7 @@ def _lmmGlmm(
 
     # Pass 1: pooled β₀, pseudoinverse of Psi_pql (cold start)
     Psi_inv = _pseudoInverse(Psi_pql)
-    beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, beta_var = _pqlPass(
+    beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls = _pqlPass(
         beta_0, Psi_inv, *pass_args
     )
     beta_gls, Psi_lap = _sanitize(beta_gls, Psi_lap)
@@ -771,7 +753,7 @@ def _lmmGlmm(
         psi_diag_prev = Psi_lap.diagonal(dim1=-2, dim2=-1)
 
         Psi_inv = _ridgeInv(Psi_lap, psi_0_floor)
-        beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, beta_var = _pqlPass(
+        beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls = _pqlPass(
             beta_gls, Psi_inv, *pass_args, bg_init=blups
         )
         beta_gls, Psi_lap = _sanitize(beta_gls, Psi_lap)
@@ -790,7 +772,6 @@ def _lmmGlmm(
     Psi_pql = Psi_pql.nan_to_num(nan=0.0, posinf=0.0)
     mean_Hg_inv = mean_Hg_inv.nan_to_num(nan=0.0, posinf=0.0)
     sigma_rfx_est = Psi_lap.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().nan_to_num()
-    beta_var = beta_var.nan_to_num(nan=0.0, posinf=0.0).clamp(min=0.0)             # (B, d)
 
     # Per-group posterior variance: diagonal of K_g^{-1} = (ZWZ + Ψ̂_Lap^{-1})^{-1}.
     # Uses the GLS-consistent Ψ̂_Lap precision (not the ridge-inflated Newton Ψ⁻¹),
@@ -807,7 +788,6 @@ def _lmmGlmm(
 
     return {
         'beta_est': beta_gls,           # (B, d)
-        'beta_var': beta_var,           # (B, d)  GLS posterior variance diag((ΣA+ridge)^{-1})
         'beta_wg': beta_wg_out,         # (B, d)  pooled IRLS (no-rfx analog of beta_wg)
         'sigma_rfx_est': sigma_rfx_est, # (B, q)
         'blup_est': blups,              # (B, m, q)
