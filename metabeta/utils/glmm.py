@@ -221,12 +221,20 @@ def _lmmNormalCompacted(
     Psi = sigma_rfx.square().unsqueeze(-1)                          # (B, 1, 1)
     sigma_eps = sigma_eps_sq_val.clamp(min=0.0).sqrt().unsqueeze(-1).nan_to_num(nan=1.0, posinf=1.0)
 
+    resid_g = r_g.unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)  # (B, m, 1)
+
+    beta_wg_out = beta_wg.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    bhat_out = resid_bg.unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)  # (B, m, 1)
+
     return {
         'beta_est': beta_gls,           # (B, d)
+        'beta_wg': beta_wg_out,         # (B, d)
         'sigma_eps_est': sigma_eps,     # (B, 1)
         'sigma_rfx_est': sigma_rfx,     # (B, 1)
         'blup_est': blups,              # (B, m, 1)
         'blup_var': blup_var,           # (B, m, 1)
+        'bhat': bhat_out,               # (B, m, 1)
+        'resid_g': resid_g,             # (B, m, 1)
         'Psi': Psi,                     # (B, 1, 1)
     }
 
@@ -422,12 +430,22 @@ def _lmmNormalFull(
     sigma_rfx = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()          # (B, q)
     sigma_eps_1d = se2.clamp(min=0.0).sqrt().nan_to_num(nan=1.0, posinf=1.0)  # (B,)
 
+    ns_f_loc = ns.clamp(min=1.0)                                              # (B, m)
+    resid_g = (resid_gls.sum(dim=2) / ns_f_loc * mask_m).unsqueeze(-1)       # (B, m, 1)
+    resid_g = resid_g.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+
+    beta_wg_out = beta_wg.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    bhat_out = bhat.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)             # (B, m, q)
+
     return {
         'beta_est': beta_gls,                       # (B, d)
+        'beta_wg': beta_wg_out,                     # (B, d)
         'sigma_eps_est': sigma_eps_1d.unsqueeze(-1), # (B, 1)
         'sigma_rfx_est': sigma_rfx,                 # (B, q)
         'blup_est': blups,                          # (B, m, q)
         'blup_var': blup_var,                       # (B, m, q)
+        'bhat': bhat_out,                           # (B, m, q)
+        'resid_g': resid_g,                         # (B, m, 1)
         'Psi': Psi,                                 # (B, q, q)
     }
 
@@ -648,11 +666,21 @@ def _lmmGlmm(
     blup_var = Hg_inv.diagonal(dim1=-2, dim2=-1).clamp(min=0.0)     # (B, m, q)
     blup_var = (blup_var * mask_m[:, :, None]).nan_to_num(nan=0.0, posinf=0.0)
 
+    # Per-group mean working residual (after removing fixed effects)
+    resid_g = (resid_gls.sum(dim=2) / ns.clamp(min=1.0) * mask_m).unsqueeze(-1)  # (B, m, 1)
+    resid_g = resid_g.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+
+    beta_wg_out = beta_0.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)  # pooled IRLS (no rfx)
+    bhat_out = bhat_ols.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)   # (B, m, q)
+
     return {
         'beta_est': beta_gls,           # (B, d)
+        'beta_wg': beta_wg_out,         # (B, d)  pooled IRLS (no-rfx analog of beta_wg)
         'sigma_rfx_est': sigma_rfx_est, # (B, q)
         'blup_est': blups,              # (B, m, q)
         'blup_var': blup_var,           # (B, m, q)
+        'bhat': bhat_out,               # (B, m, q)
+        'resid_g': resid_g,             # (B, m, 1)
         'phi_pearson': phi_pearson,     # (B,)
         'psi_0': psi_0,                 # (B,)
         'Psi_pql': Psi_pql,             # (B, q, q)
