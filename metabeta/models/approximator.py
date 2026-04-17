@@ -69,8 +69,14 @@ class Approximator(nn.Module):
         ctx = self.analytical_context
         if ctx == 'none':
             return 0
-        d_phi = 0 if self.has_sigma_eps else 1   # for non-gaussian
-        return self.d_ffx + self.d_rfx + d_phi + self.d_corr
+        return self.d_ffx + self.d_rfx + self.d_corr + 1
+
+    def _analyticsLocalDim(self) -> int:
+        """Dimension added to local context by GLMM statistics (blups)."""
+        ctx = self.analytical_context
+        if ctx == 'none':
+            return 0
+        return self.d_rfx
 
     def build(self) -> None:
         d_ffx = self.d_ffx
@@ -90,7 +96,7 @@ class Approximator(nn.Module):
         d_input_l = 1 + (d_ffx - 1) + (d_rfx - 1)
         self.summarizer_l = _buildSummarizer(self.cfg.summarizer_l, d_input_l)
         # global: local summaries + local metadata, aggregated across groups
-        d_meta_l = 2   # n_obs + eta_rfx
+        d_meta_l = 2 + self._analyticsLocalDim() # n_obs + eta_rfx
         d_input_g = self.cfg.summarizer_l.d_output + d_meta_l
         self.summarizer_g = _buildSummarizer(self.cfg.summarizer_g, d_input_g)
 
@@ -206,6 +212,10 @@ class Approximator(nn.Module):
             )   # (B, m, 1)
             out += [n_obs, eta_rfx]
 
+            # point estimates
+            if ctx != 'none' and stats is not None:
+                out.append(stats['blup_est'].clamp(-20.0, 20.0))
+
         else:
             # counts
             n_total = data['n'].unsqueeze(-1).float().sqrt() / 10
@@ -231,8 +241,10 @@ class Approximator(nn.Module):
 
             # point estimates
             if ctx != 'none' and stats is not None:
-                out.append(stats['beta_est'].clamp(-15.0, 15.0))
+                out.append(stats['beta_est'].clamp(-20.0, 20.0))
                 out.append(stats['sigma_rfx_est'].clamp(0.0, 20.0))
+                if self.has_sigma_eps:
+                    out.append(stats['sigma_eps_est'].clamp(0.0, 20.0))
                 if self.d_corr > 0:
                     Psi = stats['Psi'] if 'Psi' in stats else stats['Psi_lap']  # (b, q, q)
                     std = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8).sqrt()  # (b, q)
