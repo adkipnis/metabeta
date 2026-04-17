@@ -15,6 +15,14 @@ _COL_TITLES = [
     'Observed CI',
     'Uniform ECDF',
 ]
+_COL_TITLES_CORR = [
+    'Fixed Effects',
+    'Variances',
+    'Correlations',
+    'Random Effects',
+    'Observed CI',
+    'Uniform ECDF',
+]
 
 
 def plotComparison(
@@ -26,29 +34,33 @@ def plotComparison(
     epoch: int | None = None,
     show: bool = False,
 ) -> Path | None:
+    has_corr = all('corr_rfx' in s.estimates for s in summaries)
+    col_titles = _COL_TITLES_CORR if has_corr else _COL_TITLES
+    n_rec = 4 if has_corr else 3   # recovery columns
+    ncols = n_rec + 2              # + coverage + SBC
     nrows = len(summaries)
-    fig, axs = plt.subplots(nrows, 5, figsize=(30, 6 * nrows), dpi=DPI, squeeze=False)
+    fig, axs = plt.subplots(nrows, ncols, figsize=(6 * ncols, 6 * nrows), dpi=DPI, squeeze=False)
 
     for i, (summary, proposal, label) in enumerate(zip(summaries, proposals, labels)):
         upper = i == 0
         lower = i == nrows - 1
 
-        # cols 0-2: recovery scatter
+        # cols 0-(n_rec-1): recovery scatter
         targets, estimates, masks, names, metrics = _prepareRecoveryData(summary, data)
         _plotRecoveryGrouped(
-            axs[i, :3],  # type: ignore
+            axs[i, :n_rec],  # type: ignore
             targets=targets,
             estimates=estimates,
             masks=masks,
             metrics=metrics,
             names=names,
-            titles=_COL_TITLES[:3],
+            titles=col_titles[:n_rec],
             ylabel=label,
             upper=upper,
             lower=lower,
         )
 
-        # col 3: coverage
+        # col n_rec: coverage
         names_cov = (
             getNames('ffx', proposal.d)
             + getNames('sigmas', proposal.q, has_sigma_eps=proposal.has_sigma_eps)
@@ -59,27 +71,27 @@ def plotComparison(
             'LCR': 100 * dictMean(summary.lcr),
         }
         _plotCoverage(
-            axs[i, 3],
+            axs[i, n_rec],
             summary.coverage,
             names_cov,
             stats_cov,
-            title=_COL_TITLES[3] if upper else None,
+            title=col_titles[n_rec] if upper else None,
             show_legend=upper,
             show_x=lower,
         )
-        axs[i, 3].set_ylabel('')
+        axs[i, n_rec].set_ylabel('')
 
-        # col 4: SBC
+        # col n_rec+1: SBC
         _plotSbcRow(
-            axs[i, 4],
+            axs[i, n_rec + 1],
             proposal,
             data,
             diff=False,
-            title=_COL_TITLES[4] if upper else None,
+            title=col_titles[n_rec + 1] if upper else None,
             show_legend=upper,
             show_x=lower,
         )
-        axs[i, 4].set_ylabel('')
+        axs[i, n_rec + 1].set_ylabel('')
 
     for ax in axs.flat:
         ax.set_box_aspect(1)
