@@ -70,7 +70,7 @@ class Approximator(nn.Module):
 
         beta_est (d_ffx) + sigma_rfx (d_rfx) + eps/phi (1) + corr (d_corr).
         """
-        if self.analytical_context == 'none':
+        if not self.analytical_context:
             return 0
         return self.d_ffx + self.d_rfx + self.d_corr + 1
 
@@ -79,7 +79,7 @@ class Approximator(nn.Module):
 
         blup_est (d_rfx) + blup_std (d_rfx) + lambda_g (d_rfx)
         """
-        if self.analytical_context == 'none':
+        if not self.analytical_context:
             return 0
         return 3 * self.d_rfx
 
@@ -206,7 +206,6 @@ class Approximator(nn.Module):
     ) -> torch.Tensor:
         """append summary with selected metadata"""
         out = [summary]
-        ctx = self.analytical_context
         if local:
             # counts
             n_obs = data['ns'].unsqueeze(-1).float().sqrt() / 10  # (B, m, 1)
@@ -218,7 +217,7 @@ class Approximator(nn.Module):
             out += [n_obs, eta_rfx]
 
             # point estimates
-            if ctx != 'none' and stats is not None:
+            if stats is not None:
                 blup_est = stats['blup_est'].clamp(-CLAMP, CLAMP)   # (B, m, q)
                 blup_std = stats['blup_var'].clamp(min=0.0).sqrt().clamp(max=CLAMP)  # (B, m, q)
                 sigma_rfx_sq = stats['sigma_rfx_est'].unsqueeze(-2) ** 2  # (B, 1, q)
@@ -249,7 +248,7 @@ class Approximator(nn.Module):
             out.append(family_enc)
 
             # point estimates
-            if ctx != 'none' and stats is not None:
+            if stats is not None:
                 beta_est = stats['beta_est'].clamp(-CLAMP, CLAMP)   # (B, d)
                 sigma_rfx_est = stats['sigma_rfx_est'].clamp(max=CLAMP)   # (B, q)
                 out += [beta_est, sigma_rfx_est]
@@ -329,7 +328,7 @@ class Approximator(nn.Module):
     def summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)
         summary_l = self.summarizer_l(inputs, mask=data['mask_n'])
-        if self.analytical_context != 'none':
+        if self.analytical_context:
             stats = self._dataStatistics(data)  # compute once, share across both contexts
         else:
             stats = None
