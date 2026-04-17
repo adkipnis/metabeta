@@ -217,6 +217,13 @@ class Fitter:
         out = {f'{prefix}_ffx': ffx, f'{prefix}_sigma_rfx': sigma_rfx, f'{prefix}_rfx': rfx}
         if hasSigmaEps(likelihood_family):
             out[f'{prefix}_sigma_eps'] = self._extract(trace, 'sigma')
+        correlated = float(self.ds.get('eta_rfx', 0)) > 0 and q >= 2
+        if correlated:
+            out[f'{prefix}_corr_rfx'] = self._extract(trace, '_lkj_rfx_corr')
+        else:
+            # Always save corr_rfx so aggregate sees a consistent key set across datasets.
+            n_s = ffx.shape[-1]
+            out[f'{prefix}_corr_rfx'] = np.tile(np.eye(q, dtype=ffx.dtype)[None, None], (1, n_s, 1, 1))
         return out
 
     def _fitNuts(self, cfg: argparse.Namespace, ds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
