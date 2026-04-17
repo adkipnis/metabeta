@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from tqdm import tqdm
 
 from metabeta.simulation.fit import Fitter
 from metabeta.utils.io import datasetFilename
@@ -31,9 +32,9 @@ def setup() -> argparse.Namespace:
 # fmt: on
 
 
-def _check(paths: list[Path], inspect: bool = False) -> tuple[list[Path], list[tuple[Path, str]]]:
+def _check(paths: list[Path], label: str, inspect: bool = False) -> tuple[list[Path], list[tuple[Path, str]]]:
     missing, broken = [], []
-    for p in paths:
+    for p in tqdm(paths, desc=label, unit='file'):
         if not p.exists():
             missing.append(p)
         elif inspect:
@@ -58,7 +59,7 @@ def _checkTrain(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
         srcdir / data_id / datasetFilename(partition='train', epoch=e)
         for e in range(1, cfg.n_train_epochs + 1)
     ]
-    missing, broken = _check(paths, inspect=cfg.inspect)
+    missing, broken = _check(paths, 'train partitions', inspect=cfg.inspect)
     _report('train partitions', len(paths) - len(missing) - len(broken), len(paths), missing, broken)
     return not missing and not broken
 
@@ -70,8 +71,8 @@ def _checkTest(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
     pymc_paths = [fits_dir / f'{stem}_nuts_{i:03d}.npz' for i in range(cfg.n_fits)]
     advi_paths = [fits_dir / f'{stem}_advi_{i:03d}.npz' for i in range(cfg.n_fits)]
 
-    pymc_missing, pymc_broken = _check(pymc_paths, inspect=cfg.inspect)
-    advi_missing, advi_broken = _check(advi_paths, inspect=cfg.inspect)
+    pymc_missing, pymc_broken = _check(pymc_paths, 'nuts fits', inspect=cfg.inspect)
+    advi_missing, advi_broken = _check(advi_paths, 'advi fits', inspect=cfg.inspect)
     _report('nuts fits', len(pymc_paths) - len(pymc_missing) - len(pymc_broken), len(pymc_paths), pymc_missing, pymc_broken)
     _report('advi fits', len(advi_paths) - len(advi_missing) - len(advi_broken), len(advi_paths), advi_missing, advi_broken)
 
