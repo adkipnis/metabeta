@@ -54,6 +54,7 @@ class SimulationConfig(BaseModel):
     min_n: int = Field(gt=0)
     max_n: int = Field(gt=0)
     max_n_total: int = Field(gt=0)
+    min_bg_df: int = Field(ge=0, default=0)  # minimum between-group df (m − d); 0 = unconstrained
     data_id: Optional[str] = None  # Auto-generated if not provided
 
     @field_validator('max_m')
