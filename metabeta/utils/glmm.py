@@ -727,90 +727,59 @@ def _lmmGlmm(
     Psi_pql = vecs_pql @ torch.diag_embed(vals_pql) @ vecs_pql.mT        # (B, q, q)
 
     # ------------------------------------------------------------------
-    # Stage 2: damped Newton → Laplace mode b̂_g, Ψ̂_Lap, β̂_GLS, BLUPs
+    # Stage 2 (three-pass): β₀/b̂_g/Ψ̂_Lap/β̂_GLS made mutually consistent.
+    #
+    # Pass 1: cold-start Newton under pooled β₀ and pseudoinverse(Ψ̂_PQL).
+    #   Psi_pql eigenvalues are already floored at psi_0, so pseudoinverse is safe.
+    #   Produces a first estimate of (β̂_GLS, Ψ̂_Lap, b̂_g) better than β₀.
+    #
+    # Pass 2: warm-start Newton (from Pass 1 blups) under β̂_GLS₁ and
+    #   ridge-regularized Ψ̂_Lap₁.  Ridge floor = psi_0 prevents sticky-OLS.
+    #   Warm start lets 3 Newton steps converge closer to the true mode.
+    #
+    # Pass 3: warm-start Newton from Pass 2 blups under β̂_GLS₂ and
+    #   ridge-regularized Ψ̂_Lap₂.  A third alternation further closes the gap
+    #   between β and Ψ, especially for Poisson with large random effects.
+    #
+    # bg is clamped at ±20 inside each Newton step (see _pqlPass) to prevent
+    # bg_outer from inflating Psi_lap for overdispersed Poisson datasets.
     # ------------------------------------------------------------------
-    Psi_inv = _pseudoInverse(Psi_pql)                                     # (B, q, q)
+    pass_args = (Xm, ym, Zm, mask_n, mask_m, mask4, active, eye_q, eye_q_bm, G, likelihood_family, n_newton)
+    psi_0_floor = psi_0.clamp(min=1e-6)
+    max_passes = 6
 
-    # Cold-start from zero. Warm-starting from bhat_ols is unsafe for Poisson:
-    # large bhat_ols values cause exp(η) overflow, making f(bhat_ols) = inf and
-    # stalling Armijo (alpha → 0, bg frozen). Cold-start also acts as implicit
-    # regularisation: with n_newton=3 the iterate hasn't fully converged under
-    # the noisy Psi_pql penalty, providing extra shrinkage that corrects for
-    # MoM upward bias after PSD projection. More steps or warm-start worsen BLUPs.
-    bg = ym.new_zeros(B, m, q)
-    for _ in range(n_newton):
-        eta_t = torch.einsum('bmnd,bd->bmn', Xm, beta_0) + torch.einsum('bmnq,bmq->bmn', Zm, bg)
+    def _sanitize(b_gls: torch.Tensor, psi: torch.Tensor):
+        """Clamp beta_gls and clean Psi_lap before using as next-pass inputs."""
+        return (
+            b_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0),
+            psi.nan_to_num(nan=0.0, posinf=0.0),
+        )
 
-        if likelihood_family == 1:
-            mu_t = torch.sigmoid(eta_t)
-        else:
-            mu_t = torch.exp(eta_t.clamp(max=20))
-        w_t = (mu_t * (1.0 - mu_t) if likelihood_family == 1 else mu_t).clamp(min=1e-6) * mask_n
-
-        ZWZ_t = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_t, Zm)         # (B, m, q, q)
-        grad_g = (
-            torch.einsum('bmnq,bmn->bmq', Zm, (ym - mu_t) * mask_n)      # Zᵀ(y−μ)
-            - torch.einsum('bqr,bmr->bmq', Psi_inv, bg)                   # −Ψ⁻¹b
-        )                                                                   # (B, m, q)
-
-        ZWZ_t_safe = torch.where(active[:, :, None, None], ZWZ_t, eye_q)
-        Hg = ZWZ_t_safe + Psi_inv[:, None]                                # (B, m, q, q)
-        delta = _safeSolve(Hg + _adaptiveRidgeBm(Hg), grad_g)  # (B, m, q)
-
-        slope = (grad_g * delta).sum(dim=-1)                               # (B, m)
-        f_old = _groupNll(bg, beta_0, Xm, ym, Zm, mask_n, Psi_inv, likelihood_family)
-        alpha = torch.ones(B, m, device=Xm.device, dtype=Xm.dtype)
-        for _ls in range(10):
-            bg_trial = (bg + alpha[:, :, None] * delta) * mask_m[:, :, None]
-            f_new = _groupNll(bg_trial, beta_0, Xm, ym, Zm, mask_n, Psi_inv, likelihood_family)
-            accept = (f_new <= f_old - 0.1 * alpha * slope) | ~active
-            if accept.all():
-                break
-            alpha = torch.where(accept, alpha, alpha * 0.5)
-
-        bg = (bg + alpha[:, :, None] * delta) * mask_m[:, :, None]
-
-    # Final working quantities at (β₀, b̂_g)
-    eta_f = torch.einsum('bmnd,bd->bmn', Xm, beta_0) + torch.einsum('bmnq,bmq->bmn', Zm, bg)
-    w_f, ytilde_f = _pqlWorking(eta_f, ym, mask_n, likelihood_family)
-    ZWZ_f = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_f, Zm)             # (B, m, q, q)
-    ZWZ_f_safe = torch.where(active[:, :, None, None], ZWZ_f, eye_q)
-
-    Hg_f = ZWZ_f_safe + Psi_inv[:, None]
-    Hg_inv = _safeSolve(Hg_f + _adaptiveRidgeBm(Hg_f), eye_q_bm) * mask4
-    bg_outer = torch.einsum('bmq,bmr->bmqr', bg, bg)
-    Psi_lap = _psdProject((bg_outer + Hg_inv).sum(dim=1) / G[:, None, None])  # (B, q, q)
-    mean_Hg_inv = (Hg_inv * mask4).sum(dim=1) / G[:, None, None]
-
-    # β̂_GLS via Woodbury with Ψ̂_Lap
-    Psi_lap_inv = _pseudoInverse(Psi_lap)
-    XWX_f = torch.einsum('bmnd,bmn,bmnk->bmdk', Xm, w_f, Xm)             # (B, m, d, d)
-    XWZ_f = torch.einsum('bmnd,bmn,bmnq->bmdq', Xm, w_f, Zm)             # (B, m, d, q)
-    XWy_f = torch.einsum('bmnd,bmn->bmd', Xm, w_f * ytilde_f)             # (B, m, d)
-    ZWy_f = torch.einsum('bmnq,bmn->bmq', Zm, w_f * ytilde_f)             # (B, m, q)
-
-    Kg = ZWZ_f_safe + Psi_lap_inv[:, None]                                 # (B, m, q, q)
-    Kg_inv = _safeSolve(Kg + _adaptiveRidgeBm(Kg), eye_q_bm) * mask4
-
-    ZWX_f = XWZ_f.mT                                                       # (B, m, q, d)
-    A_g = XWX_f - torch.einsum(                                            # Schur complement
-        'bmdq,bmqk->bmdk', XWZ_f, torch.einsum('bmqr,bmrd->bmqd', Kg_inv, ZWX_f)
+    # Pass 1: pooled β₀, pseudoinverse of Psi_pql (cold start)
+    Psi_inv = _pseudoInverse(Psi_pql)
+    beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, beta_var = _pqlPass(
+        beta_0, Psi_inv, *pass_args
     )
-    rhs_g = XWy_f - torch.einsum('bmdq,bmq->bmd', XWZ_f,
-                                  torch.einsum('bmqr,bmr->bmq', Kg_inv, ZWy_f))
+    beta_gls, Psi_lap = _sanitize(beta_gls, Psi_lap)
 
-    sum_A = (A_g * mask4).sum(dim=1)
-    beta_gls = _safeSolve(
-        sum_A + _adaptiveRidge(sum_A),
-        (rhs_g * mask_m[:, :, None]).sum(dim=1),
-    )                                                                       # (B, d)
+    # Passes 2–max_passes: warm start, ridge-regularized Ψ̂_Lap, until convergence.
+    # Each pass refines (β, b̂_g, Ψ̂_Lap) jointly. Early exit when the 95th-percentile
+    # change across the batch is below tolerance — avoids running all max_passes when a
+    # few pathological datasets (small m) never satisfy the strict amax criterion.
+    for _ in range(max_passes - 1):
+        beta_prev = beta_gls
+        psi_diag_prev = Psi_lap.diagonal(dim1=-2, dim2=-1)
 
-    # BLUPs: K_g⁻¹ Zᵀ W (ỹ − X β̂_GLS)
-    resid_gls = (ytilde_f - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)) * mask_n
-    blups = torch.einsum(
-        'bmqr,bmr->bmq', Kg_inv,
-        torch.einsum('bmnq,bmn->bmq', Zm, w_f * resid_gls),
-    ) * mask_m[:, :, None]                                                 # (B, m, q)
+        Psi_inv = _ridgeInv(Psi_lap, psi_0_floor)
+        beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, beta_var = _pqlPass(
+            beta_gls, Psi_inv, *pass_args, bg_init=blups
+        )
+        beta_gls, Psi_lap = _sanitize(beta_gls, Psi_lap)
+
+        d_beta = (beta_gls - beta_prev).abs().amax(dim=-1)                               # (B,)
+        d_psi = (Psi_lap.diagonal(dim1=-2, dim2=-1) - psi_diag_prev).abs().amax(dim=-1)  # (B,)
+        if torch.quantile(d_beta, 0.95) < 1e-3 and torch.quantile(d_psi, 0.95) < 1e-3:
+            break
 
     # ------------------------------------------------------------------
     # Pack outputs
@@ -821,9 +790,12 @@ def _lmmGlmm(
     Psi_pql = Psi_pql.nan_to_num(nan=0.0, posinf=0.0)
     mean_Hg_inv = mean_Hg_inv.nan_to_num(nan=0.0, posinf=0.0)
     sigma_rfx_est = Psi_lap.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().nan_to_num()
+    beta_var = beta_var.nan_to_num(nan=0.0, posinf=0.0).clamp(min=0.0)             # (B, d)
 
-    # Per-group posterior variance of each BLUP: diagonal of H_g^{-1}
-    blup_var = Hg_inv.diagonal(dim1=-2, dim2=-1).clamp(min=0.0)     # (B, m, q)
+    # Per-group posterior variance: diagonal of K_g^{-1} = (ZWZ + Ψ̂_Lap^{-1})^{-1}.
+    # Uses the GLS-consistent Ψ̂_Lap precision (not the ridge-inflated Newton Ψ⁻¹),
+    # mirroring the Normal path's σ²_ε · W_g.  Cap at 25 (std ≤ 5).
+    blup_var = Kg_inv.diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)  # (B, m, q)
     blup_var = (blup_var * mask_m[:, :, None]).nan_to_num(nan=0.0, posinf=0.0)
 
     # Per-group mean working residual (after removing fixed effects)
@@ -835,6 +807,7 @@ def _lmmGlmm(
 
     return {
         'beta_est': beta_gls,           # (B, d)
+        'beta_var': beta_var,           # (B, d)  GLS posterior variance diag((ΣA+ridge)^{-1})
         'beta_wg': beta_wg_out,         # (B, d)  pooled IRLS (no-rfx analog of beta_wg)
         'sigma_rfx_est': sigma_rfx_est, # (B, q)
         'blup_est': blups,              # (B, m, q)
