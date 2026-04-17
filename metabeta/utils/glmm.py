@@ -127,6 +127,43 @@ def _pqlPass(
     beta_var   : (B, d)       GLS posterior variance diag((Σ_g A_g + ridge)^{-1})
     """
     B, m, _, d = Xm.shape
+    q = Zm.shape[-1]
+
+    # --- Newton loop ---
+    # Cold start from zeros (Pass 1) or warm start from previous blups (Pass 2+).
+    # bg is clamped at ±20 after each step: prevents bg_outer from inflating Psi_lap
+    # for Poisson datasets with large counts, where 3 unconstrained Newton steps can
+    # push bg to O(100) and Psi_lap to O(10000).
+    bg = bg_init.clone() if bg_init is not None else ym.new_zeros(B, m, q)
+    for _ in range(n_newton):
+        eta_t = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Zm, bg)
+        if likelihood_family == 1:
+            mu_t = torch.sigmoid(eta_t)
+        else:
+            mu_t = torch.exp(eta_t.clamp(max=20))
+        w_t = (mu_t * (1.0 - mu_t) if likelihood_family == 1 else mu_t).clamp(min=1e-6) * mask_n
+        ZWZ_t = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_t, Zm)         # (B, m, q, q)
+        grad_g = (
+            torch.einsum('bmnq,bmn->bmq', Zm, (ym - mu_t) * mask_n)      # Zᵀ(y−μ)
+            - torch.einsum('bqr,bmr->bmq', Psi_inv, bg)                   # −Ψ⁻¹b
+        )
+        ZWZ_t_safe = torch.where(active[:, :, None, None], ZWZ_t, eye_q)
+        Hg = ZWZ_t_safe + Psi_inv[:, None]
+        delta = _safeSolve(Hg + _adaptiveRidgeBm(Hg), grad_g)             # (B, m, q)
+        slope = (grad_g * delta).sum(dim=-1)                               # (B, m)
+        f_old = _groupNll(bg, beta, Xm, ym, Zm, mask_n, Psi_inv, likelihood_family)
+        alpha = torch.ones(B, m, device=Xm.device, dtype=Xm.dtype)
+        for _ls in range(10):
+            bg_trial = (bg + alpha[:, :, None] * delta) * mask_m[:, :, None]
+            f_new = _groupNll(bg_trial, beta, Xm, ym, Zm, mask_n, Psi_inv, likelihood_family)
+            accept = (f_new <= f_old - 0.1 * alpha * slope) | ~active
+            if accept.all():
+                break
+            alpha = torch.where(accept, alpha, alpha * 0.5)
+        bg = (bg + alpha[:, :, None] * delta) * mask_m[:, :, None]
+        bg = bg.clamp(-20.0, 20.0)  # prevent bg_outer blow-up in Psi_lap M-step
+
+    # --- Final working quantities at (beta, bg) ---
 # ---------------------------------------------------------------------------
 # Private normal-LMM implementations
 # ---------------------------------------------------------------------------
