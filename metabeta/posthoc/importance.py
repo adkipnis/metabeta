@@ -217,11 +217,12 @@ def runSIR(
     # init importance sampler
     lf = getattr(cfg, 'likelihood_family', 0)
     n_sir = cfg.n_samples // cfg.sir_iter
+    n_proposal = getattr(cfg, 'sir_n_proposal', cfg.n_samples)
     imp_sampler = ImportanceSampler(data_eval, sir=True, n_sir=n_sir, likelihood_family=lf)
     selected = []
     n_remaining = cfg.n_samples
     while n_remaining > 0:
-        proposal = model.estimate(data, n_samples=cfg.n_samples)
+        proposal = model.estimate(data, n_samples=n_proposal)
         if cfg.rescale:
             proposal.rescale(data['sd_y'])
         proposal = imp_sampler(proposal)
