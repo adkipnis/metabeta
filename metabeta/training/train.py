@@ -119,9 +119,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction, help='Run importance sampling evaluation')
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction, help='Generate evaluation plots after each epoch')
 
-    # Model architecture overrides
-    parser.add_argument('--analytical_context', type=str, choices=['full', 'none'], help='Override analytical_context in model config (full|none)')
-
     # Saving & loading
     parser.add_argument('--r_tag', type=str, help='Run tag suffix appended to the checkpoint directory name')
     parser.add_argument('--load_latest', action=argparse.BooleanOptionalAction, help='Resume training from latest.pt in the checkpoint directory')
