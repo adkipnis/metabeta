@@ -72,10 +72,12 @@ class Proposal:
         proposed: dict[str, dict[str, torch.Tensor]],
         has_sigma_eps: bool = True,
         d_corr: int = 0,
+        corr_rfx: torch.Tensor | None = None,
     ) -> None:
         self.data = proposed
         self.has_sigma_eps = has_sigma_eps
         self.d_corr = d_corr
+        self._corr_rfx = corr_rfx
         self.q = proposed['local']['samples'].shape[-1]
         D = proposed['global']['samples'].shape[-1]
         self.d = D - self.q - (1 if has_sigma_eps else 0) - d_corr
@@ -130,10 +132,14 @@ class Proposal:
 
     @property
     def corr_rfx(self) -> torch.Tensor | None:
-        """Correlation matrix reconstructed from unconstrained samples, shape (..., q, q).
+        """Correlation matrix, shape (..., q, q).
 
-        Returns None when the model was built without posterior_correlation.
+        For flow proposals: reconstructed from unconstrained global samples.
+        For NUTS/ADVI proposals: stored directly from the trace.
+        Returns None when neither source is available.
         """
+        if self._corr_rfx is not None:
+            return self._corr_rfx
         if self.d_corr == 0:
             return None
         L = unconstrainedToCholeskyCorr(self.samples_g[..., -self.d_corr :], self.q)
