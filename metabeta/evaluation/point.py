@@ -59,7 +59,7 @@ def getPointEstimates(proposal: Proposal, method: str) -> dict[str, torch.Tensor
         out = proposal.partition(global_est)
         out['rfx'] = getMAP(proposal.samples_l, proposal.log_prob_l)
 
-    if proposal.d_corr > 0:
+    if proposal.corr_rfx is not None:
         corr_samples = proposal.corr_rfx  # (b, n_s, q, q)
         w = proposal.weights
         if w is None:

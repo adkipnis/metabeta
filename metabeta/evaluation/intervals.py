@@ -31,7 +31,7 @@ def getCredibleInterval(
     w = proposal.weights
     ci_g = getQuantiles(roots, proposal.samples_g, w)
     out = proposal.partition(ci_g)
-    if proposal.d_corr > 0:
+    if proposal.corr_rfx is not None:
         out['corr_rfx'] = getQuantiles(roots, corrToLower(proposal.corr_rfx), w)
     out['rfx'] = getQuantiles(roots, proposal.samples_l, w)
     return out

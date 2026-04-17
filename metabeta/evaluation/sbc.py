@@ -35,7 +35,7 @@ def getFractionalRanks(
         samples = getattr(proposal, param)
         targets = data[param]
         ranks[param] = fractionalRanks(samples, targets, weights)
-    if proposal.d_corr > 0:
+    if proposal.corr_rfx is not None:
         ranks['corr_rfx'] = fractionalRanks(
             corrToLower(proposal.corr_rfx), corrToLower(data['corr_rfx']), weights
         )
