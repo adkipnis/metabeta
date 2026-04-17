@@ -1,4 +1,5 @@
 from typing import Literal
+import warnings
 import math
 import numpy as np
 import arviz as az
@@ -144,24 +145,31 @@ def psisLooNLL(
 
     # PSIS per observation — az.psislw expects (n_obs, n_draws) with last axis = samples.
     # Samples are i.i.d. from the flow, so reff=1.
-    log_w_np = log_w.detach().reshape(b * m * n, s).numpy()
-    import warnings
+    # Only run PSIS on real (non-padded) observations; scatter results back afterward.
+    valid = mask.reshape(b * m * n).numpy()  # (b*m*n,) bool
+    log_w_flat = log_w.detach().reshape(b * m * n, s).numpy()
+    log_w_valid = log_w_flat[valid]          # (n_valid, s)
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', RuntimeWarning)
-        log_w_psis_np, k_np = az.psislw(log_w_np, reff=1.0)
+        log_w_psis_valid, k_valid = az.psislw(log_w_valid, reff=1.0)
 
     # Fallback for rows where PSIS fails (degenerate / constant weights):
     # substitute normalized raw log-weights and flag k as nan.
-    bad = ~np.isfinite(log_w_psis_np).all(axis=-1)
+    bad = ~np.isfinite(log_w_psis_valid).all(axis=-1)
     if bad.any():
-        raw_norm = log_w_np[bad] - sp_logsumexp(log_w_np[bad], axis=-1, keepdims=True)
-        log_w_psis_np[bad] = raw_norm
-        k_np[bad] = np.nan
+        raw_norm = log_w_valid[bad] - sp_logsumexp(log_w_valid[bad], axis=-1, keepdims=True)
+        log_w_psis_valid[bad] = raw_norm
+        k_valid[bad] = np.nan
 
-    # Also replace inf k (heavy-tail Pareto fits that technically converged but are unreliable)
-    # with nan so they don't dominate means/medians.
-    k_np = np.where(np.isfinite(k_np), k_np, np.nan)
+    # Also replace inf k with nan so they don't dominate means/medians.
+    k_valid = np.where(np.isfinite(k_valid), k_valid, np.nan)
+
+    # Scatter back into full (b*m*n, s) / (b*m*n,) arrays (padded slots stay 0/nan).
+    log_w_psis_np = np.zeros((b * m * n, s), dtype=log_w_psis_valid.dtype)
+    log_w_psis_np[valid] = log_w_psis_valid
+    k_np = np.full(b * m * n, np.nan, dtype=k_valid.dtype)
+    k_np[valid] = k_valid
 
     log_w_psis = log_p.new_tensor(log_w_psis_np).reshape(b, m, n, s)
     k = log_p.new_tensor(k_np).reshape(b, m, n)
