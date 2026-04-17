@@ -54,6 +54,13 @@ def _plotSbcEcdf(
     niceify(ax, info)
 
 
+def _nEff(mask: torch.Tensor | None, n_datasets: int) -> int:
+    if mask is None:
+        return n_datasets
+    dims = tuple(range(mask.dim() - 1))
+    return int(mask.sum(dims).min())
+
+
 def _plotSbcRow(
     ax: Axes,
     proposal: Proposal,
@@ -69,7 +76,10 @@ def _plotSbcRow(
     names = getAllNames(proposal.d, proposal.q, has_sigma_eps=has_eps)
     masks = getMasks(data, has_sigma_eps=has_eps)
 
-    n_eff_min = len(data['X'])
+    n_datasets = len(data['X'])
+
+    # Global parameters: ffx, sigmas, corr_rfx
+    n_eff_global = n_datasets
     for k in ('ffx', 'sigmas'):
         _plotSbcEcdf(
             ax,
@@ -81,11 +91,7 @@ def _plotSbcRow(
             show_legend=show_legend,
             show_x=show_x,
         )
-        mask_k = masks[k]
-        if mask_k is not None:
-            dims = tuple(range(mask_k.dim() - 1))
-            n_eff = int(mask_k.sum(dims).min())
-            n_eff_min = min(n_eff_min, n_eff)
+        n_eff_global = min(n_eff_global, _nEff(masks[k], n_datasets))
     if 'corr_rfx' in ranks:
         _plotSbcEcdf(
             ax,
@@ -97,6 +103,12 @@ def _plotSbcRow(
             show_legend=show_legend,
             show_x=show_x,
         )
+        # corr_rfx only present for q > 1 datasets; no per-entry mask
+        n_eff_global = min(n_eff_global, n_datasets)
+    p, low, high = simultaneousBands(n_eff=n_eff_global, diff=diff)
+    ax.fill_between(p, low, high, color='grey', alpha=0.2, label='95% band (global)')
+
+    # Local parameters: rfx
     _plotSbcEcdf(
         ax,
         ranks['rfx'],
@@ -107,13 +119,12 @@ def _plotSbcRow(
         show_legend=show_legend,
         show_x=show_x,
     )
-    mask_rfx = masks['rfx']
-    if mask_rfx is not None:
-        dims = tuple(range(mask_rfx.dim() - 1))
-        n_eff = int(mask_rfx.sum(dims).min())
-        n_eff_min = min(n_eff_min, n_eff)
-    p, low, high = simultaneousBands(n_eff=n_eff_min, diff=diff)
-    ax.fill_between(p, low, high, color='grey', alpha=0.1)
+    n_eff_local = _nEff(masks['rfx'], n_datasets)
+    p, low, high = simultaneousBands(n_eff=n_eff_local, diff=diff)
+    ax.fill_between(p, low, high, color='steelblue', alpha=0.1, label='95% band (local)')
+
+    if show_legend:
+        ax.legend(fontsize=18, markerscale=2.5, loc='upper left')
 
 
 def plotSBC(
