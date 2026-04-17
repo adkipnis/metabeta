@@ -224,7 +224,8 @@ class Evaluator:
             has_sigma_eps = False
         proposed['global'] = {'samples': torch.cat(samples_g, dim=-1)}
         proposed['local'] = {'samples': batch[f'{prefix}_rfx']}
-        proposal = Proposal(proposed, has_sigma_eps=has_sigma_eps)
+        corr_rfx = batch.get(f'{prefix}_corr_rfx', None)
+        proposal = Proposal(proposed, has_sigma_eps=has_sigma_eps, corr_rfx=corr_rfx)
         if self.cfg.rescale:
             proposal.rescale(batch['sd_y'])
         proposal.tpd = batch[f'{prefix}_duration'].mean().item()
