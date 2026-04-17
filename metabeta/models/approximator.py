@@ -20,6 +20,7 @@ from metabeta.utils.families import (
 )
 
 constrainSigma, unconstrainSigma, logDetJacobian = getConstrainers(method='softplus')
+CLAMP = 20.0
 
 
 def _buildSummarizer(cfg: SummarizerConfig, d_input: int) -> nn.Module:
@@ -65,18 +66,23 @@ class Approximator(nn.Module):
         return self.cfg.analytical_context
 
     def _analyticsGlobalDim(self) -> int:
-        """Dimension added to global context by GLMM statistics (beta_est + sigma_rfx + eps/phi)."""
-        ctx = self.analytical_context
-        if ctx == 'none':
+        """Dimension added to global context by GLMM statistics.
+
+        beta_est (d_ffx) + beta_wg (d_ffx) + sigma_rfx (d_rfx) + eps/phi (1) + corr (d_corr).
+        """
+        if self.analytical_context == 'none':
             return 0
-        return self.d_ffx + self.d_rfx + self.d_corr + 1
+        return 1 * self.d_ffx + self.d_rfx + self.d_corr + 1
 
     def _analyticsLocalDim(self) -> int:
-        """Dimension added to local context by GLMM statistics (blup_est + blup_std + lambda_g)."""
-        ctx = self.analytical_context
-        if ctx == 'none':
+        """Dimension added to local context by GLMM stats.
+
+        blup_est (d_rfx) + blup_std (d_rfx) + lambda_g (d_rfx) + resid_g (1)
+        + icc (d_rfx, normal only — requires sigma_eps).
+        """
+        if self.analytical_context == 'none':
             return 0
-        return self.d_rfx * 3
+        return 3 * self.d_rfx + 1 + (self.d_rfx if self.has_sigma_eps else 0)
 
     def build(self) -> None:
         d_ffx = self.d_ffx
@@ -96,7 +102,7 @@ class Approximator(nn.Module):
         d_input_l = 1 + (d_ffx - 1) + (d_rfx - 1)
         self.summarizer_l = _buildSummarizer(self.cfg.summarizer_l, d_input_l)
         # global: local summaries + local metadata, aggregated across groups
-        d_meta_l = 2 + self._analyticsLocalDim() # n_obs + eta_rfx
+        d_meta_l = 2 + self._analyticsLocalDim()   # n_obs + eta_rfx
         d_input_g = self.cfg.summarizer_l.d_output + d_meta_l
         self.summarizer_g = _buildSummarizer(self.cfg.summarizer_g, d_input_g)
 
@@ -214,11 +220,17 @@ class Approximator(nn.Module):
 
             # point estimates
             if ctx != 'none' and stats is not None:
-                out.append(stats['blup_est'].clamp(-20.0, 20.0))
-                blup_std = stats['blup_var'].clamp(min=0.0).sqrt().clamp(max=5.0)  # (B, m, q)
+                blup_est = stats['blup_est'].clamp(-CLAMP, CLAMP)   # (B, m, q)
+                blup_std = stats['blup_var'].clamp(min=0.0).sqrt().clamp(max=CLAMP)  # (B, m, q)
                 sigma_rfx_sq = stats['sigma_rfx_est'].unsqueeze(-2) ** 2  # (B, 1, q)
-                lambda_g = (1.0 - stats['blup_var'] / (sigma_rfx_sq + 1e-8)).clamp(0.0, 1.0)
-                out += [blup_std, lambda_g]
+                lambda_g = (1.0 - stats['blup_var'] / (sigma_rfx_sq + 1e-8)).clamp(0.0, 1.0)   # (B, m, q)
+                resid_g = stats['resid_g'].clamp(-CLAMP, CLAMP)   # (B, m, 1)
+                out += [blup_est, blup_std, lambda_g, resid_g]
+                if self.has_sigma_eps:
+                    sigma_eps_sq = stats['sigma_eps_est'] ** 2            # (B, 1)
+                    icc = sigma_rfx_sq.squeeze(-2) / (sigma_rfx_sq.squeeze(-2) + sigma_eps_sq + 1e-8)  # (B, q)
+                    icc = icc[:, None, :].expand(-1, summary.shape[1], -1)  # (B, m, q)
+                    out.append(icc)
 
         else:
             # counts
@@ -245,13 +257,18 @@ class Approximator(nn.Module):
 
             # point estimates
             if ctx != 'none' and stats is not None:
-                out.append(stats['beta_est'].clamp(-20.0, 20.0))
-                out.append(stats['sigma_rfx_est'].clamp(max=20.0))
+                beta_est = stats['beta_est'].clamp(-CLAMP, CLAMP)   # (B, d)
+                # beta_wg = stats['beta_wg'].clamp(-CLAMP, CLAMP)
+                sigma_rfx_est = stats['sigma_rfx_est'].clamp(max=CLAMP)   # (B, q)
+                out += [beta_est, sigma_rfx_est]
                 if self.has_sigma_eps:
-                    out.append(stats['sigma_eps_est'].clamp(max=20.0))
+                    out.append(stats['sigma_eps_est'].clamp(max=CLAMP))   # (B, 1)
+                else:
+                    # phi_pearson fills the reserved +1 slot in _analyticsGlobalDim for GLMM
+                    out.append(stats['phi_pearson'].clamp(max=CLAMP).unsqueeze(-1))  # (B, 1)
                 if self.d_corr > 0:
-                    Psi = stats['Psi'] if 'Psi' in stats else stats['Psi_lap']  # (b, q, q)
-                    std = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8).sqrt()  # (b, q)
+                    Psi = stats['Psi'] if 'Psi' in stats else stats['Psi_lap']  # (B, q, q)
+                    std = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8).sqrt()  # (B, q)
                     psi_corr = (Psi / (std.unsqueeze(-1) * std.unsqueeze(-2))).clamp(-1, 1)
                     out.append(corrToLower(psi_corr))
         return torch.cat(out, dim=-1)
