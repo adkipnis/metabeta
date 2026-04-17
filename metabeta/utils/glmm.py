@@ -201,6 +201,10 @@ def _pqlPass(
     )                                                                       # (B, d)
 
     # GLS posterior variance: diag((Σ_g A_g + ridge)^{-1}).
+    # Large when m is small or X is poorly conditioned — useful uncertainty signal for NN context.
+    eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
+    beta_var = _safeSolve(sum_A_reg, eye_d).diagonal(dim1=-2, dim2=-1).clamp(min=0.0)  # (B, d)
+
 # ---------------------------------------------------------------------------
 # Private normal-LMM implementations
 # ---------------------------------------------------------------------------
