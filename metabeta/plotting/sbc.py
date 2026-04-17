@@ -106,7 +106,7 @@ def _plotSbcRow(
         # corr_rfx only present for q > 1 datasets; no per-entry mask
         n_eff_global = min(n_eff_global, n_datasets)
     p, low, high = simultaneousBands(n_eff=n_eff_global, diff=diff)
-    ax.fill_between(p, low, high, color='grey', alpha=0.2, label='95% band (global)')
+    ax.fill_between(p, low, high, color='grey', alpha=0.2, label='_nolegend_')
 
     # Local parameters: rfx
     _plotSbcEcdf(
@@ -121,7 +121,7 @@ def _plotSbcRow(
     )
     n_eff_local = _nEff(masks['rfx'], n_datasets)
     p, low, high = simultaneousBands(n_eff=n_eff_local, diff=diff)
-    ax.fill_between(p, low, high, color='steelblue', alpha=0.1, label='95% band (local)')
+    ax.fill_between(p, low, high, color='steelblue', alpha=0.1, label='_nolegend_')
 
     if show_legend:
         ax.legend(fontsize=18, markerscale=2.5, loc='upper left')
