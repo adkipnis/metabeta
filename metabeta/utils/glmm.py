@@ -232,7 +232,8 @@ def _lmmNormalCompacted(
 ) -> dict[str, torch.Tensor]:
     """Closed-form GLS for the random-intercept linear mixed model (q=1).
 
-    Returns a dict with keys: beta_est, sigma_eps_est, sigma_rfx_est, blup_est, blup_var, Psi.
+    Returns a dict with keys: beta_est, beta_wg, sigma_eps_est, sigma_rfx_est,
+    blup_est, blup_var, bhat, resid_g, Psi.
     """
     B, m, n, d = Xm.shape
     ns_f = ns.clamp(min=1.0)                          # (B, m)
@@ -306,8 +307,6 @@ def _lmmNormalCompacted(
 
     r_g = (y_mean - torch.einsum('bmd,bd->bm', X_mean, beta_gls)) * mask_m
 
-    # EM init: floor σ_rfx² with 10% of mean(r_g²) so EM doesn't get stuck when MoM clips
-    # to 0. mean_g(r_g²) ≈ σ_eps²/n̄ + σ_rfx² in expectation — always ≥ 0.
     r_g_var = (r_g.square() * mask_m).sum(dim=1) / G              # (B,)
     # Floor σ_rfx² at 50% of r_g_var so EM doesn't get stuck when MoM clips to 0.
     # E[r_g²] ≈ σ_rfx² + σ_ε²/n̄, so 0.5 × r_g_var ≈ σ_rfx²/2 at high SNR — close
@@ -395,7 +394,8 @@ def _lmmNormalFull(
     (3) Woodbury GLS for β̂ and BLUPs; followed by EM refinement of Ψ and σ_ε.
     Handles arbitrary q (including q=1).
 
-    Returns a dict with keys: beta_est, sigma_eps_est, sigma_rfx_est, blup_est, blup_var, Psi.
+    Returns a dict with keys: beta_est, beta_wg, sigma_eps_est, sigma_rfx_est,
+    blup_est, blup_var, bhat, resid_g, Psi.
     """
     B, m, n, d = Xm.shape
     q = Zm.shape[-1]
@@ -502,7 +502,7 @@ def _lmmNormalFull(
     beta_gls = _safeSolve(A_gls_reg, b_gls)                        # (B, d)
 
     # clamp before BLUP computation: near-cancellation in A_gls=(XtX−correction_XX) when
-    # Psi_lap≈0 produces finite-but-huge values that nan_to_num cannot catch.
+    # Ψ≈0 produces finite-but-huge values that nan_to_num cannot catch.
     beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
     Psi = Psi.nan_to_num(nan=0.0, posinf=0.0)
 
@@ -643,8 +643,8 @@ def _lmmGlmm(
 
     Returns
     -------
-    dict with keys: beta_est, sigma_rfx_est, blup_est,
-                    phi_pearson, psi_0, Psi_pql, Psi_lap, mean_Hg_inv
+    dict with keys: beta_est, beta_wg, sigma_rfx_est, blup_est, blup_var,
+                    bhat, resid_g, phi_pearson, psi_0, Psi_pql, Psi_lap, mean_Hg_inv
     """
     B, m, n, d = Xm.shape
     q = Zm.shape[-1]
@@ -709,22 +709,11 @@ def _lmmGlmm(
     Psi_pql = vecs_pql @ torch.diag_embed(vals_pql) @ vecs_pql.mT        # (B, q, q)
 
     # ------------------------------------------------------------------
-    # Stage 2 (three-pass): β₀/b̂_g/Ψ̂_Lap/β̂_GLS made mutually consistent.
-    #
-    # Pass 1: cold-start Newton under pooled β₀ and pseudoinverse(Ψ̂_PQL).
-    #   Psi_pql eigenvalues are already floored at psi_0, so pseudoinverse is safe.
-    #   Produces a first estimate of (β̂_GLS, Ψ̂_Lap, b̂_g) better than β₀.
-    #
-    # Pass 2: warm-start Newton (from Pass 1 blups) under β̂_GLS₁ and
-    #   ridge-regularized Ψ̂_Lap₁.  Ridge floor = psi_0 prevents sticky-OLS.
-    #   Warm start lets 3 Newton steps converge closer to the true mode.
-    #
-    # Pass 3: warm-start Newton from Pass 2 blups under β̂_GLS₂ and
-    #   ridge-regularized Ψ̂_Lap₂.  A third alternation further closes the gap
-    #   between β and Ψ, especially for Poisson with large random effects.
-    #
-    # bg is clamped at ±20 inside each Newton step (see _pqlPass) to prevent
-    # bg_outer from inflating Psi_lap for overdispersed Poisson datasets.
+    # Stage 2: alternating Newton–GLS loop, up to max_passes=6.
+    # Pass 1 cold-starts Newton under pooled β₀ and pseudoinv(Ψ̂_PQL).
+    # Passes 2–max_passes warm-start from previous BLUPs under β̂_GLS and
+    # ridge-inv(Ψ̂_Lap); early exit when the 95th-percentile change in both
+    # β and diag(Ψ̂) falls below 1e-3.
     # ------------------------------------------------------------------
     pass_args = (Xm, ym, Zm, mask_n, mask_m, mask4, active, eye_q, eye_q_bm, G, likelihood_family, n_newton)
     psi_0_floor = psi_0.clamp(min=1e-6)
