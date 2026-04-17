@@ -90,6 +90,43 @@ def _groupNll(
     return nll_obs.sum(dim=-1) + 0.5 * torch.einsum('bmq,bqr,bmr->bm', bg, Psi_inv, bg)
 
 
+def _pqlPass(
+    beta: torch.Tensor,      # (B, d) fixed effects for this pass
+    Psi_inv: torch.Tensor,   # (B, q, q) precision used for Newton penalty and Hg
+    Xm: torch.Tensor,        # (B, m, n, d)
+    ym: torch.Tensor,        # (B, m, n)
+    Zm: torch.Tensor,        # (B, m, n, q)
+    mask_n: torch.Tensor,    # (B, m, n)
+    mask_m: torch.Tensor,    # (B, m)
+    mask4: torch.Tensor,     # (B, m, 1, 1)
+    active: torch.Tensor,    # (B, m) bool
+    eye_q: torch.Tensor,     # (q, q)
+    eye_q_bm: torch.Tensor,  # (B, m, q, q)
+    G: torch.Tensor,         # (B,)
+    likelihood_family: int,
+    n_newton: int = 3,
+    bg_init: torch.Tensor | None = None,  # warm start; None = cold start from zeros
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """One PQL pass: damped Newton → Ψ̂_Lap M-step → GLS β̂ and BLUPs.
+
+    Newton starts from bg_init (or zeros if None) under (beta, Psi_inv).
+    After Newton, computes Ψ̂_Lap = mean_g(b̂_g b̂_g' + H_g^{-1}), then
+    β̂_GLS and BLUPs via the Woodbury/Schur-complement GLS under Ψ̂_Lap.
+
+    bg is clamped to ±20 after each Newton step to prevent bg_outer from
+    inflating Psi_lap for overdispersed Poisson or ill-conditioned datasets.
+
+    Returns
+    -------
+    beta_gls   : (B, d)       GLS-corrected fixed effects
+    Psi_lap    : (B, q, q)    Laplace M-step estimate of Ψ
+    blups      : (B, m, q)    per-group random effects
+    Kg_inv     : (B, m, q, q) GLS posterior covariance (ZWZ + Psi_lap_inv)^{-1}
+    mean_Hg_inv: (B, q, q)    mean Laplace posterior covariance across groups
+    resid_gls  : (B, m, n)    working residual ỹ − Xβ̂_GLS (masked)
+    beta_var   : (B, d)       GLS posterior variance diag((Σ_g A_g + ridge)^{-1})
+    """
+    B, m, _, d = Xm.shape
 # ---------------------------------------------------------------------------
 # Private normal-LMM implementations
 # ---------------------------------------------------------------------------
