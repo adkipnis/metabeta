@@ -297,7 +297,10 @@ def _lmmNormalCompacted(
     inv_se2 = 1.0 / se2
     A_gls = inv_se2[:, None, None] * (XtX - XbarXbar)
     b_gls = inv_se2[:, None] * (Xty - Xbary)
-    beta_gls = _safeSolve(A_gls + _adaptiveRidge(A_gls), b_gls)
+    A_gls_reg = A_gls + _adaptiveRidge(A_gls)
+    eye_d_c = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
+    beta_gls = _safeSolve(A_gls_reg, b_gls)
+    beta_var = _safeSolve(A_gls_reg, eye_d_c).diagonal(dim1=-2, dim2=-1).clamp(min=0.0)  # (B, d)
 
     # clamp before BLUP computation: near-cancellation in A_gls=(XtX−XbarXbar) when λ→1
     # produces finite-but-huge values that nan_to_num cannot catch.
@@ -355,7 +358,9 @@ def _lmmNormalCompacted(
         inv_se2 = 1.0 / sigma_eps_sq_val
         A_gls = inv_se2[:, None, None] * (XtX - XbarXbar)
         b_gls = inv_se2[:, None] * (Xty - Xbary)
-        beta_gls = _safeSolve(A_gls + _adaptiveRidge(A_gls), b_gls)
+        A_gls_reg = A_gls + _adaptiveRidge(A_gls)
+        beta_gls = _safeSolve(A_gls_reg, b_gls)
+        beta_var = _safeSolve(A_gls_reg, eye_d_c).diagonal(dim1=-2, dim2=-1).clamp(min=0.0)
         beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
         r_g = (y_mean - torch.einsum('bmd,bd->bm', X_mean, beta_gls)) * mask_m
         blups = (lambda_g2 * r_g).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
@@ -370,8 +375,11 @@ def _lmmNormalCompacted(
     beta_wg_out = beta_wg.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
     bhat_out = resid_bg.unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)  # (B, m, 1)
 
+    beta_var = beta_var.nan_to_num(nan=0.0, posinf=0.0).clamp(min=0.0)           # (B, d)
+
     return {
         'beta_est': beta_gls,           # (B, d)
+        'beta_var': beta_var,           # (B, d)  GLS posterior variance
         'beta_wg': beta_wg_out,         # (B, d)
         'sigma_eps_est': sigma_eps,     # (B, 1)
         'sigma_rfx_est': sigma_rfx,     # (B, 1)
@@ -502,7 +510,10 @@ def _lmmNormalFull(
     inv_se2 = 1.0 / se2
     A_gls = inv_se2[:, None, None] * (XtX - correction_XX)         # (B, d, d)
     b_gls = inv_se2[:, None] * (Xty - correction_Xy)               # (B, d)
-    beta_gls = _safeSolve(A_gls + _adaptiveRidge(A_gls), b_gls)  # (B, d)
+    A_gls_reg = A_gls + _adaptiveRidge(A_gls)
+    beta_gls = _safeSolve(A_gls_reg, b_gls)                        # (B, d)
+    eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
+    beta_var = _safeSolve(A_gls_reg, eye_d).diagonal(dim1=-2, dim2=-1).clamp(min=0.0)  # (B, d)
 
     # clamp before BLUP computation: near-cancellation in A_gls=(XtX−correction_XX) when
     # Psi_lap≈0 produces finite-but-huge values that nan_to_num cannot catch.
@@ -560,7 +571,9 @@ def _lmmNormalFull(
         correction_Xy = torch.einsum('bmdq,bmq->bd', XtZ, W_Zty)
         A_gls = inv_se2[:, None, None] * (XtX - correction_XX)
         b_gls = inv_se2[:, None] * (Xty - correction_Xy)
-        beta_gls = _safeSolve(A_gls + _adaptiveRidge(A_gls), b_gls)
+        A_gls_reg = A_gls + _adaptiveRidge(A_gls)
+        beta_gls = _safeSolve(A_gls_reg, b_gls)
+        beta_var = _safeSolve(A_gls_reg, eye_d).diagonal(dim1=-2, dim2=-1).clamp(min=0.0)
         beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
         resid_gls = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)) * mask_n
         Ztr_gls = torch.einsum('bmnq,bmn->bmq', Zm, resid_gls)
@@ -581,8 +594,11 @@ def _lmmNormalFull(
     beta_wg_out = beta_wg.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
     bhat_out = bhat.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)             # (B, m, q)
 
+    beta_var = beta_var.nan_to_num(nan=0.0, posinf=0.0).clamp(min=0.0)           # (B, d)
+
     return {
         'beta_est': beta_gls,                       # (B, d)
+        'beta_var': beta_var,                       # (B, d)  GLS posterior variance
         'beta_wg': beta_wg_out,                     # (B, d)
         'sigma_eps_est': sigma_eps_1d.unsqueeze(-1), # (B, 1)
         'sigma_rfx_est': sigma_rfx,                 # (B, q)
