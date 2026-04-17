@@ -340,7 +340,6 @@ def setupConfigParser(
         # generate.py runtime-only keys stripped from saved configs
         'partition': 'all',
         'begin': 1,
-        'epochs': 20,
         'loop': False,
         'sgld': False,
     }
