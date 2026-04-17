@@ -176,6 +176,31 @@ def _pqlPass(
     Psi_lap = _psdProject((bg_outer + Hg_inv).sum(dim=1) / G[:, None, None])  # (B, q, q)
     mean_Hg_inv = (Hg_inv * mask4).sum(dim=1) / G[:, None, None]
 
+    # --- β̂_GLS via Woodbury/Schur complement under freshly computed Ψ̂_Lap ---
+    Psi_lap_inv = _pseudoInverse(Psi_lap)
+    XWX_f = torch.einsum('bmnd,bmn,bmnk->bmdk', Xm, w_f, Xm)             # (B, m, d, d)
+    XWZ_f = torch.einsum('bmnd,bmn,bmnq->bmdq', Xm, w_f, Zm)             # (B, m, d, q)
+    XWy_f = torch.einsum('bmnd,bmn->bmd', Xm, w_f * ytilde_f)             # (B, m, d)
+    ZWy_f = torch.einsum('bmnq,bmn->bmq', Zm, w_f * ytilde_f)             # (B, m, q)
+
+    Kg = ZWZ_f_safe + Psi_lap_inv[:, None]                                 # (B, m, q, q)
+    Kg_inv = _safeSolve(Kg + _adaptiveRidgeBm(Kg), eye_q_bm) * mask4
+
+    ZWX_f = XWZ_f.mT                                                       # (B, m, q, d)
+    A_g = XWX_f - torch.einsum(                                            # Schur complement
+        'bmdq,bmqk->bmdk', XWZ_f, torch.einsum('bmqr,bmrd->bmqd', Kg_inv, ZWX_f)
+    )
+    rhs_g = XWy_f - torch.einsum(
+        'bmdq,bmq->bmd', XWZ_f, torch.einsum('bmqr,bmr->bmq', Kg_inv, ZWy_f)
+    )
+    sum_A = (A_g * mask4).sum(dim=1)
+    sum_A_reg = sum_A + _adaptiveRidge(sum_A)
+    beta_gls = _safeSolve(
+        sum_A_reg,
+        (rhs_g * mask_m[:, :, None]).sum(dim=1),
+    )                                                                       # (B, d)
+
+    # GLS posterior variance: diag((Σ_g A_g + ridge)^{-1}).
 # ---------------------------------------------------------------------------
 # Private normal-LMM implementations
 # ---------------------------------------------------------------------------
