@@ -164,6 +164,18 @@ def _pqlPass(
         bg = bg.clamp(-20.0, 20.0)  # prevent bg_outer blow-up in Psi_lap M-step
 
     # --- Final working quantities at (beta, bg) ---
+    eta_f = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Zm, bg)
+    w_f, ytilde_f = _pqlWorking(eta_f, ym, mask_n, likelihood_family)
+    ZWZ_f = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_f, Zm)             # (B, m, q, q)
+    ZWZ_f_safe = torch.where(active[:, :, None, None], ZWZ_f, eye_q)
+
+    # Ψ̂_Lap M-step: Ψ = mean_g(b̂_g b̂_g' + H_g^{-1})
+    Hg_f = ZWZ_f_safe + Psi_inv[:, None]
+    Hg_inv = _safeSolve(Hg_f + _adaptiveRidgeBm(Hg_f), eye_q_bm) * mask4
+    bg_outer = torch.einsum('bmq,bmr->bmqr', bg, bg)
+    Psi_lap = _psdProject((bg_outer + Hg_inv).sum(dim=1) / G[:, None, None])  # (B, q, q)
+    mean_Hg_inv = (Hg_inv * mask4).sum(dim=1) / G[:, None, None]
+
 # ---------------------------------------------------------------------------
 # Private normal-LMM implementations
 # ---------------------------------------------------------------------------
