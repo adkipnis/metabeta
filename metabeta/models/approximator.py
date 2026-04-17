@@ -242,9 +242,9 @@ class Approximator(nn.Module):
             # point estimates
             if ctx != 'none' and stats is not None:
                 out.append(stats['beta_est'].clamp(-20.0, 20.0))
-                out.append(stats['sigma_rfx_est'].clamp(0.0, 20.0))
+                out.append(stats['sigma_rfx_est'].clamp(max=20.0))
                 if self.has_sigma_eps:
-                    out.append(stats['sigma_eps_est'].clamp(0.0, 20.0))
+                    out.append(stats['sigma_eps_est'].clamp(max=20.0))
                 if self.d_corr > 0:
                     Psi = stats['Psi'] if 'Psi' in stats else stats['Psi_lap']  # (b, q, q)
                     std = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8).sqrt()  # (b, q)
