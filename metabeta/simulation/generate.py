@@ -289,7 +289,7 @@ class Generator:
             design = Emulator(
                 rng,
                 source=cfg.source,
-                use_sgld=cfg.sgld,
+                use_sgld=getattr(cfg, 'sgld', False),
                 min_m=cfg.min_m,
                 min_n=cfg.min_n,
                 max_n=cfg.max_n,
@@ -339,7 +339,7 @@ class Generator:
             ns_slices = [ns[i][: m[i]] for i in range(n_datasets)]
 
         # --- sample batch of single datasets
-        if self.cfg.loop or self.cfg.ds_type in ['scm', 'mixed']:  # Option A: loop
+        if getattr(self.cfg, 'loop', False) or self.cfg.ds_type in ['scm', 'mixed']:  # Option A: loop
             datasets = []
             for i in tqdm(range(n_datasets), desc=desc):
                 dataset = self._genDataset(

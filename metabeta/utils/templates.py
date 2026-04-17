@@ -337,6 +337,12 @@ def setupConfigParser(
         'wandb': False,
         'seed': 42,
         'verbosity': 1,
+        # generate.py runtime-only keys stripped from saved configs
+        'partition': 'all',
+        'begin': 1,
+        'epochs': 20,
+        'loop': False,
+        'sgld': False,
     }
 
     for key, default_value in cli_only_defaults.items():
