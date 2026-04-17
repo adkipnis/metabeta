@@ -290,6 +290,15 @@ def collateFits(
     out[f'{method}_rfx'] = rfx
     if has_eps:
         out[f'{method}_sigma_eps'] = sigma_eps
+
+    if f'{method}_corr_rfx' in batch[0]:
+        corr_rfx = torch.zeros((B, s, q, q), dtype=dtype)
+        for b, ds in enumerate(batch):
+            c = torch.as_tensor(ds[f'{method}_corr_rfx'], dtype=dtype).squeeze(0)  # (s, q_i, q_i)
+            q_i = c.shape[-1]
+            corr_rfx[b, :, :q_i, :q_i] = c
+        out[f'{method}_corr_rfx'] = corr_rfx
+
     out[f'{method}_duration'] = quickCollate(batch, f'{method}_duration')
     return out
 
