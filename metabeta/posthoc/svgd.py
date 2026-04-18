@@ -261,3 +261,62 @@ class SVGDRefiner:
 
         return g + lr * phi_g, u + lr * phi_u, float(log_p.mean().item())
 
+    # ------------------------------------------------------------------
+    # Final u-sampling (Normal only)
+    # ------------------------------------------------------------------
+
+    def _sampleU(
+        self,
+        ffx: Tensor,       # (b, s, d)
+        sigma_rfx: Tensor, # (b, s, q)
+        sigma_eps: Tensor, # (b, s)
+        z_corr: Tensor | None,
+    ) -> Tensor:
+        """Draw rfx ~ p(rfx | θ_g, y) via Normal-Normal conjugacy; return u.
+
+        For each group j:
+            M_j  = Σ_rfx⁻¹ + Z_j^T Z_j / σ²_eps
+            rfx_j ~ N(M_j⁻¹ Z_j^T r_j / σ²_eps,  M_j⁻¹)
+        Returns u = uFromRfx(σ_rfx, rfx) of shape (b, m, s, q).
+        """
+        X, Z, y = self.model.X, self.model.Z, self.model.y
+        mask_n, mask_m = self.model.mask_n, self.model._mask_m
+
+        b, s = ffx.shape[:2]
+        q = sigma_rfx.shape[-1]
+
+        Z_m = Z * mask_n
+        ZtZ = torch.einsum('bmnq,bmnr->bmqr', Z_m, Z_m)   # (b, m, q, q)
+
+        mu_ffx = torch.einsum('bmnd,bsd->bmns', X, ffx)
+        r = (y - mu_ffx) * mask_n                           # (b, m, n, s)
+        Ztr = torch.einsum('bmnq,bmns->bmsq', Z_m, r)      # (b, m, s, q)
+
+        sigma_rfx_c = sigma_rfx.clamp(min=1e-6)
+        if z_corr is not None:
+            L_corr = unconstrainedToCholeskyCorr(z_corr, q)
+            L_rfx = L_corr * sigma_rfx_c.unsqueeze(-1)
+        else:
+            L_rfx = torch.diag_embed(sigma_rfx_c)
+
+        eye = torch.eye(q, device=ffx.device, dtype=ffx.dtype).expand(b, s, q, q)
+        Sigma_inv = torch.cholesky_solve(eye, L_rfx)
+
+        s2e = sigma_eps.pow(2)
+        M = Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]
+        jitter = 1e-6 * torch.eye(q, device=M.device, dtype=M.dtype)
+        chol_M = torch.linalg.cholesky(M + jitter)
+
+        rhs = Ztr / s2e[:, None, :, None]
+        rfx_mean = torch.cholesky_solve(rhs.unsqueeze(-1), chol_M).squeeze(-1)
+
+        active = mask_m[:, :, None, None].float()
+        z = torch.randn_like(rfx_mean)
+        noise = torch.linalg.solve_triangular(
+            chol_M.mT, z.unsqueeze(-1), upper=True
+        ).squeeze(-1) * active
+        rfx = rfx_mean * active + noise
+
+        return self.model.uFromRfx(sigma_rfx, rfx, z_corr)
+
+    # ------------------------------------------------------------------
