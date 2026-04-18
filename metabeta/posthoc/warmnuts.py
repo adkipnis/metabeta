@@ -99,3 +99,83 @@ class WarmNuts:
         self.model = buildPymc(ds)
 
     # ------------------------------------------------------------------
+    # Init-value construction
+    # ------------------------------------------------------------------
+
+    def _initVals(self, proposal: Proposal, b_idx: int) -> list[dict]:
+        """Select n_chains diverse start points from proposal and back-transform.
+
+        Diversity: samples at evenly-spaced quantiles of log_prob_g.
+        Falls back to uniform spacing if log_prob_g is unavailable.
+        """
+        C = self.n_chains
+        d, q, m = self.d, self.q, self.m
+
+        sg = proposal.samples_g[b_idx].cpu()   # (n_s, D_g)
+        sl = proposal.samples_l[b_idx].cpu()   # (m_batch, n_s, q_batch)
+        n_s = sg.shape[0]
+
+        # Diverse indices: quantiles of log density
+        try:
+            lp = proposal.log_prob_g[b_idx].cpu()   # (n_s,)
+            sorted_idx = torch.argsort(lp)
+            qs = torch.linspace(0, 1, C + 2)[1:-1]  # C interior quantiles
+            pick = (qs * n_s).long().clamp(0, n_s - 1)
+            indices = sorted_idx[pick].tolist()
+        except (AttributeError, KeyError):
+            indices = torch.linspace(0, n_s - 1, C).long().tolist()
+
+        # The flow always outputs d_ffx fixed effects and d_rfx sigma values.
+        # Use proposal.d / proposal.q (full layout) to locate sigma_rfx and
+        # sigma_eps correctly; only extract the first d/q values for this dataset.
+        p_d = proposal.d   # full d_ffx in the global tensor
+        p_q = proposal.q   # full d_rfx in the global tensor
+        ffx_s = sg[:, :d]                    # (n_s, d) — first d of d_ffx
+        sigma_rfx_s = sg[:, p_d : p_d + q]  # (n_s, q) — first q of d_rfx, at correct offset
+
+        # Cache corr_rfx for efficiency (computed lazily by Proposal)
+        corr_rfx_all: Tensor | None = proposal.corr_rfx  # (b, n_s, q, q) or None
+
+        init_list = []
+        for s_idx in indices:
+            iv: dict = {}
+
+            # Fixed effects
+            ffx_i = ffx_s[s_idx].numpy()
+            for j in range(d):
+                iv['Intercept' if j == 0 else f'x{j}'] = ffx_i[j]
+
+            # sigma_eps (Normal only; PyMC applies log-transform internally)
+            if self.has_sigma_eps:
+                s_eps = float(sg[s_idx, p_d + p_q].item())  # at correct offset in flow tensor
+                iv['sigma'] = max(s_eps, 1e-6)
+
+            sr_i = sigma_rfx_s[s_idx].numpy().clip(1e-6)      # (q,)
+            rfx_i = sl[:m, s_idx, :q].numpy()               # (m, q) — trim groups and rfx dims
+
+            if self.correlated:
+                # Build Cholesky of Σ_rfx = D @ R @ D
+                if corr_rfx_all is not None:
+                    R = corr_rfx_all[b_idx, s_idx, :q, :q].cpu().numpy()  # (q, q) — actual q
+                else:
+                    R = np.eye(q, dtype=np.float32)
+                D_mat = np.diag(sr_i)
+                Sigma = D_mat @ R @ D_mat + 1e-6 * np.eye(q)
+                chol = np.linalg.cholesky(Sigma)   # lower triangular
+                # rfx = z @ chol.T  →  z = solve(chol, rfx.T).T
+                z = np.linalg.solve(chol, rfx_i.T).T   # (m, q)
+                iv['_rfx_offset'] = z
+                # sigma / corr parts of LKJCholeskyCov left at PyMC defaults
+
+            else:
+                for j in range(q):
+                    s_name = '1|i_sigma' if j == 0 else f'x{j}|i_sigma'
+                    o_name = '1|i_offset' if j == 0 else f'x{j}|i_offset'
+                    iv[s_name] = float(sr_i[j])
+                    iv[o_name] = rfx_i[:, j] / (sr_i[j] + 1e-12)   # (m,)
+
+            init_list.append(iv)
+
+        return init_list
+
+    # ------------------------------------------------------------------
