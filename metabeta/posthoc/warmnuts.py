@@ -228,3 +228,44 @@ class WarmNuts:
         return Proposal(proposed, has_sigma_eps=self.has_sigma_eps, corr_rfx=corr_rfx)
 
     # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
+
+    def __call__(self, proposal: Proposal, b_idx: int = 0) -> tuple['Proposal', dict]:
+        """Run warm-started NUTS for the dataset at batch index b_idx.
+
+        Parameters
+        ----------
+        proposal : Proposal
+            Flow proposal used to initialise chains (samples at b_idx).
+        b_idx : int
+            Dataset index within the batch.
+
+        Returns
+        -------
+        proposal_out : Proposal with n_chains * draws samples and b=1.
+        diag : dict with keys 'n_divergences' (int) and 'max_rhat' (float).
+        """
+        initvals = self._initVals(proposal, b_idx)
+        with self.model:
+            trace = pm.sample(
+                tune=self.tune,
+                draws=self.draws,
+                chains=self.n_chains,
+                initvals=initvals,
+                target_accept=self.target_accept,
+                random_seed=self.seed,
+                return_inferencedata=True,
+                progressbar=False,
+            )
+        n_divs = int(trace.sample_stats['diverging'].values.sum())
+        try:
+            rhat_df = az.summary(trace, kind='diagnostics')
+            max_rhat = float(rhat_df['r_hat'].max())
+        except Exception:
+            max_rhat = float('nan')
+        diag = {'n_divergences': n_divs, 'max_rhat': max_rhat}
+        return self._traceToProposal(trace), diag
+
+
+# ---------------------------------------------------------------------------
