@@ -135,7 +135,7 @@ class RationalQuadratic(CouplingTransform):
         min_bin: float = 0.1,
         min_deriv: float = 1e-3,
         adaptive_domain: bool = False,
-        alpha: float = 2.0,  # softclamping
+        alpha: float = 4.0,  # softclamping scale for adaptive center
         eps: float = 1e-6,  # clamping
     ):
         super().__init__()
@@ -244,6 +244,8 @@ class RationalQuadratic(CouplingTransform):
         derivatives[..., -1] = 1.0
 
         # --- bounds
+        # center: softclamped to (-alpha, alpha); half_width: softplus, ≈ default_size at zero init
+        center = self.alpha * torch.tanh(params['center'] / self.alpha)
         half_width = self.min_delta / 2 + F.softplus(params['log_half_width'] + self._shift_hw)
         left = center - half_width
         right = center + half_width
