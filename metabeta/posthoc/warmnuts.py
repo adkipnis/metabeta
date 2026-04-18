@@ -367,3 +367,56 @@ def _stackProposals(
     return merged
 
 
+# ---------------------------------------------------------------------------
+# Top-level convenience function
+# ---------------------------------------------------------------------------
+
+
+def runWarmNuts(
+    model: Approximator,
+    data: dict[str, torch.Tensor],
+    ds_list: list[dict[str, np.ndarray]],
+    cfg: argparse.Namespace,
+) -> Proposal:
+    """Draw a flow proposal, then correct each dataset with warm-started NUTS.
+
+    Operates dataset-by-dataset (NUTS is not batched).  The flow is run once
+    on the full batch to provide start points for all chains.
+
+    cfg fields
+    ----------
+    n_samples      : int   — flow samples for warm-start (>= wn_chains; default 100)
+    wn_chains      : int   — NUTS chains per dataset (default 4)
+    wn_tune        : int   — NUTS tuning steps (default 500)
+    wn_draws       : int   — NUTS draws per chain (default 500)
+    wn_target_accept : float — target acceptance rate (default 0.9)
+    rescale        : bool
+    seed           : int
+    """
+    n_chains = getattr(cfg, 'wn_chains', 4)
+    tune = getattr(cfg, 'wn_tune', 500)
+    draws = getattr(cfg, 'wn_draws', 500)
+    seed = getattr(cfg, 'seed', 42)
+    target_accept = getattr(cfg, 'wn_target_accept', 0.9)
+    n_samples = getattr(cfg, 'n_samples', max(n_chains, 100))
+
+    # The flow proposal must stay in standardized space — buildPymc (via WarmNuts)
+    # models standardized ds['y']/ds['X'] (from col.raw / Fitter._getSingle).
+    # Rescale the stacked output afterward if cfg.rescale is set.
+    proposal = model.estimate(data, n_samples=n_samples)
+
+    proposals = []
+    for b, ds in enumerate(ds_list):
+        wn_proposal, _ = WarmNuts(
+            ds,
+            n_chains=n_chains,
+            tune=tune,
+            draws=draws,
+            seed=seed,
+            target_accept=target_accept,
+        )(proposal, b_idx=b)
+        proposals.append(wn_proposal)
+    merged = _stackProposals(proposals)
+    if cfg.rescale:
+        merged.rescale(data['sd_y'])
+    return merged
