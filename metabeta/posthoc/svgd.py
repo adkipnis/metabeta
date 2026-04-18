@@ -42,3 +42,22 @@ Notes
 - SVGD is asymptotically correct as s → ∞ and lr → 0.  With s=100–500 flow
   particles as initialization, convergence in 50–200 steps is typical.
 """
+
+import argparse
+import math
+
+import torch
+from torch import Tensor
+
+from metabeta.models.approximator import Approximator
+from metabeta.posthoc.generative import HierarchicalModel
+from metabeta.utils.evaluation import Proposal
+from metabeta.utils.families import (
+    logMarginalLikelihoodNormal,
+    logProbFfx,
+    logProbSigma,
+)
+from metabeta.utils.preprocessing import rescaleData
+from metabeta.utils.regularization import unconstrainedToCholeskyCorr
+
+
