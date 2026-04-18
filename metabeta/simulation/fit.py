@@ -47,6 +47,142 @@ def setup() -> argparse.Namespace:
 # fmt: on
 
 
+def buildPymc(ds: dict[str, np.ndarray]) -> 'pm.Model':
+    """Build a PyMC GLMM for a single unpadded dataset.
+
+    Independent (eta_rfx == 0 or q == 1): per-dimension half-* sigma,
+    non-centered as b_j = z_j * sigma_j.
+
+    Correlated (eta_rfx > 0 and q >= 2): LKJ-Cholesky prior on the full
+    covariance, non-centered as b = z @ chol.T.
+
+    All RFX variables are stored as Deterministics named '1|i', 'x1|i',
+    '1|i_sigma', … so that extractAll works for both cases.
+    """
+    d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
+    correlated = float(ds.get('eta_rfx', 0)) > 0 and q >= 2
+
+    y_obs = ds['y'].astype(np.float32)
+    X = ds['X'].astype(np.float32).copy()
+    Z = X[:, :q].copy()
+    groups = ds['groups'].astype(int)
+
+    if d > 1:
+        means = X[:, 1:].mean(axis=0)
+        X[:, 1:] -= means
+        Z[:, 1:] -= means[: q - 1]
+
+    nu_ffx = ds['nu_ffx'].astype(float)
+    tau_ffx = ds['tau_ffx'].astype(float)
+    tau_rfx = ds['tau_rfx'].astype(float)
+
+    ffx_family = FFX_FAMILIES[int(ds.get('family_ffx', 0))]
+    sigma_family = SIGMA_FAMILIES[int(ds.get('family_sigma_rfx', 0))]
+    eps_family = SIGMA_FAMILIES[int(ds.get('family_sigma_eps', 0))]
+    likelihood = int(ds.get('likelihood_family', 0))
+
+    def rlabel(j: int, suffix: str = '') -> str:
+        return ('1|i' if j == 0 else f'x{j}|i') + suffix
+
+    def half_rv(name: str, family: str, scale, as_dist: bool = False):
+        if family == 'halfnormal':
+            cls, kw = pm.HalfNormal, {'sigma': scale}
+        elif family == 'halfstudent':
+            cls, kw = pm.HalfStudentT, {'nu': STUDENT_DF, 'sigma': scale}
+        elif family == 'exponential':
+            cls, kw = pm.Exponential, {'lam': 1.0 / (np.asarray(scale) + 1e-12)}
+        else:
+            raise ValueError(f'unsupported sigma family: {family}')
+        return cls.dist(**kw) if as_dist else cls(name, **kw)
+
+    with pm.Model() as model:
+        betas = []
+        for j in range(d):
+            name = 'Intercept' if j == 0 else f'x{j}'
+            if ffx_family == 'normal':
+                betas.append(pm.Normal(name, mu=nu_ffx[j], sigma=tau_ffx[j]))
+            elif ffx_family == 'student':
+                betas.append(pm.StudentT(name, nu=STUDENT_DF, mu=nu_ffx[j], sigma=tau_ffx[j]))
+            else:
+                raise ValueError(f'unsupported ffx family: {ffx_family}')
+
+        if correlated:
+            chol, _, sigma_vec = pm.LKJCholeskyCov(
+                '_lkj_rfx',
+                n=q,
+                eta=float(ds['eta_rfx']),
+                sd_dist=half_rv('', sigma_family, tau_rfx, as_dist=True),
+                compute_corr=True,
+            )
+            for j in range(q):
+                pm.Deterministic(rlabel(j, '_sigma'), sigma_vec[j])
+            z = pm.Normal('_rfx_offset', 0.0, 1.0, shape=(m, q))
+            b = pm.Deterministic('_rfx', pt.dot(z, chol.T))
+            for j in range(q):
+                pm.Deterministic(rlabel(j), b[:, j])
+        else:
+            cols = []
+            for j in range(q):
+                s = half_rv(rlabel(j, '_sigma'), sigma_family, float(tau_rfx[j]))
+                z = pm.Normal(rlabel(j, '_offset'), 0.0, 1.0, shape=(m,))
+                cols.append(pm.Deterministic(rlabel(j), z * s))
+            b = pt.stack(cols, axis=1)
+
+        mu = pt.dot(pt.as_tensor_variable(X), pt.stack(betas))
+        mu = mu + (pt.as_tensor_variable(Z) * b[groups]).sum(axis=1)
+
+        if likelihood == 0:
+            sigma_eps = half_rv('sigma', eps_family, float(ds.get('tau_eps', 1.0)))
+            pm.Normal('y_obs', mu=mu, sigma=sigma_eps, observed=y_obs)
+        elif likelihood == 1:
+            pm.Bernoulli('y_obs', logit_p=mu, observed=y_obs.astype(int))
+        elif likelihood == 2:
+            pm.Poisson('y_obs', mu=pt.exp(mu), observed=y_obs.astype(int))
+        else:
+            raise ValueError(f'unsupported likelihood_family: {likelihood}')
+
+    return model
+
+
+def extractSingle(trace: 'az.InferenceData', name: str) -> np.ndarray:
+    """Flatten (chains, draws, ...) → (1, n_s, ...)."""
+    x = trace.posterior[name].to_numpy()  # type: ignore
+    x = x.reshape((x.shape[0] * x.shape[1],) + x.shape[2:])
+    return x[None, ...]
+
+
+def extractAll(
+    trace: 'az.InferenceData',
+    ds: dict[str, np.ndarray],
+    d: int,
+    q: int,
+    prefix: str,
+) -> dict[str, np.ndarray]:
+    """Extract all posterior arrays from a trace into the (1, n_s, ...) convention."""
+    likelihood_family = int(ds.get('likelihood_family', 0))
+    ffx = np.concatenate(
+        [extractSingle(trace, 'Intercept' if j == 0 else f'x{j}') for j in range(d)], axis=0
+    )
+    sigma_rfx = np.concatenate(
+        [extractSingle(trace, '1|i_sigma' if j == 0 else f'x{j}|i_sigma') for j in range(q)],
+        axis=0,
+    )
+    rfx = np.concatenate(
+        [extractSingle(trace, '1|i' if j == 0 else f'x{j}|i') for j in range(q)], axis=0
+    ).swapaxes(2, 1)
+
+    out = {f'{prefix}_ffx': ffx, f'{prefix}_sigma_rfx': sigma_rfx, f'{prefix}_rfx': rfx}
+    if hasSigmaEps(likelihood_family):
+        out[f'{prefix}_sigma_eps'] = extractSingle(trace, 'sigma')
+    correlated = float(ds.get('eta_rfx', 0)) > 0 and q >= 2
+    if correlated:
+        out[f'{prefix}_corr_rfx'] = extractSingle(trace, '_lkj_rfx_corr')
+    else:
+        n_s = ffx.shape[-1]
+        out[f'{prefix}_corr_rfx'] = np.tile(np.eye(q, dtype=ffx.dtype)[None, None], (1, n_s, 1, 1))
+    return out
+
+
 class Fitter:
     def __init__(
         self,
@@ -83,148 +219,15 @@ class Fitter:
         return f'{stem}_{use_method}_{idx:03d}.npz'
 
     def _buildPymc(self, ds: dict[str, np.ndarray]) -> pm.Model:
-        """Build a PyMC GLMM for correlated or independent random effects.
-
-        Independent (eta_rfx == 0 or q == 1): per-dimension half-* sigma,
-        non-centered as b_j = z_j * sigma_j.  Variable names and
-        parametrisation match bambi exactly (verified in compare_bambi_pymc.py).
-
-        Correlated (eta_rfx > 0 and q >= 2): LKJ-Cholesky prior on the full
-        covariance, non-centered as b = z @ chol.T.
-
-        Covariates are mean-centered to match bambi's center_predictors=True.
-        All RFX variables are stored as Deterministics named '1|i', 'x1|i',
-        '1|i_sigma', … so that _extractAll works for both cases.
-        """
-
-        d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
-        correlated = float(ds.get('eta_rfx', 0)) > 0 and q >= 2
-
-        y_obs = ds['y'].astype(np.float32)
-        X = ds['X'].astype(np.float32).copy()  # (n, d); column 0 is the intercept
-        Z = X[:, :q].copy()                    # (n, q); rfx design matrix
-        groups = ds['groups'].astype(int)       # (n,); group index per observation
-
-        # Center predictors to match bambi's center_predictors=True default
-        if d > 1:
-            means = X[:, 1:].mean(axis=0)
-            X[:, 1:] -= means
-            Z[:, 1:] -= means[: q - 1]
-
-        nu_ffx = ds['nu_ffx'].astype(float)    # prior means for fixed effects
-        tau_ffx = ds['tau_ffx'].astype(float)  # prior scales for fixed effects
-        tau_rfx = ds['tau_rfx'].astype(float)  # prior scales for rfx sigmas
-
-        ffx_family = FFX_FAMILIES[int(ds.get('family_ffx', 0))]
-        sigma_family = SIGMA_FAMILIES[int(ds.get('family_sigma_rfx', 0))]
-        eps_family = SIGMA_FAMILIES[int(ds.get('family_sigma_eps', 0))]
-        likelihood = int(ds.get('likelihood_family', 0))
-
-        # ---- helpers
-
-        def rlabel(j: int, suffix: str = '') -> str:
-            """Variable name for rfx dimension j, matching bambi's convention."""
-            return ('1|i' if j == 0 else f'x{j}|i') + suffix
-
-        def half_rv(name: str, family: str, scale, as_dist: bool = False):
-            """Half-* RV (named) or anonymous distribution (for LKJCholeskyCov sd_dist)."""
-            if family == 'halfnormal':
-                cls, kw = pm.HalfNormal, {'sigma': scale}
-            elif family == 'halfstudent':
-                cls, kw = pm.HalfStudentT, {'nu': STUDENT_DF, 'sigma': scale}
-            elif family == 'exponential':
-                cls, kw = pm.Exponential, {'lam': 1.0 / (np.asarray(scale) + 1e-12)}
-            else:
-                raise ValueError(f'unsupported sigma family: {family}')
-            return cls.dist(**kw) if as_dist else cls(name, **kw)
-
-        with pm.Model() as model:
-            # ---- fixed effects: beta_j ~ Normal or StudentT
-            betas = []
-            for j in range(d):
-                name = 'Intercept' if j == 0 else f'x{j}'
-                if ffx_family == 'normal':
-                    betas.append(pm.Normal(name, mu=nu_ffx[j], sigma=tau_ffx[j]))
-                elif ffx_family == 'student':
-                    betas.append(pm.StudentT(name, nu=STUDENT_DF, mu=nu_ffx[j], sigma=tau_ffx[j]))
-                else:
-                    raise ValueError(f'unsupported ffx family: {ffx_family}')
-
-            # ---- random effects: non-centered parametrization b = z * sigma (or z @ chol.T)
-            if correlated:
-                # LKJ-Cholesky prior on full covariance Σ = D·R·D;
-                # chol is the Cholesky factor of Σ, sigma_vec are the marginal SDs
-                chol, _, sigma_vec = pm.LKJCholeskyCov(
-                    '_lkj_rfx',
-                    n=q,
-                    eta=float(ds['eta_rfx']),
-                    sd_dist=half_rv('', sigma_family, tau_rfx, as_dist=True),
-                    compute_corr=True,
-                )
-                for j in range(q):
-                    pm.Deterministic(rlabel(j, '_sigma'), sigma_vec[j])
-                z = pm.Normal('_rfx_offset', 0.0, 1.0, shape=(m, q))
-                b = pm.Deterministic('_rfx', pt.dot(z, chol.T))  # (m, q)
-                for j in range(q):
-                    pm.Deterministic(rlabel(j), b[:, j])
-            else:
-                # Independent rfx: b_j = z_j * sigma_j, each dimension separately
-                cols = []
-                for j in range(q):
-                    s = half_rv(rlabel(j, '_sigma'), sigma_family, float(tau_rfx[j]))
-                    z = pm.Normal(rlabel(j, '_offset'), 0.0, 1.0, shape=(m,))
-                    cols.append(pm.Deterministic(rlabel(j), z * s))
-                b = pt.stack(cols, axis=1)  # (m, q)
-
-            # ---- linear predictor: X @ beta + row-wise dot of Z with b[group]
-            mu = pt.dot(pt.as_tensor_variable(X), pt.stack(betas))
-            mu = mu + (pt.as_tensor_variable(Z) * b[groups]).sum(axis=1)
-
-            # ---- likelihood
-            if likelihood == 0:  # Gaussian
-                sigma_eps = half_rv('sigma', eps_family, float(ds.get('tau_eps', 1.0)))
-                pm.Normal('y_obs', mu=mu, sigma=sigma_eps, observed=y_obs)
-            elif likelihood == 1:  # Bernoulli (logistic)
-                pm.Bernoulli('y_obs', logit_p=mu, observed=y_obs.astype(int))
-            elif likelihood == 2:  # Poisson (log-linear)
-                pm.Poisson('y_obs', mu=pt.exp(mu), observed=y_obs.astype(int))
-            else:
-                raise ValueError(f'unsupported likelihood_family: {likelihood}')
-
-        return model
+        return buildPymc(ds)
 
     def _extract(self, trace: az.InferenceData, name: str) -> np.ndarray:
-        x = trace.posterior[name].to_numpy()  # type: ignore
-        x = x.reshape((x.shape[0] * x.shape[1],) + x.shape[2:])
-        return x[None, ...]
+        return extractSingle(trace, name)
 
     def _extractAll(
         self, trace: az.InferenceData, d: int, q: int, prefix: str
     ) -> dict[str, np.ndarray]:
-        likelihood_family = int(self.ds.get('likelihood_family', 0))
-
-        ffx = np.concatenate(
-            [self._extract(trace, 'Intercept' if j == 0 else f'x{j}') for j in range(d)], axis=0
-        )
-        sigma_rfx = np.concatenate(
-            [self._extract(trace, '1|i_sigma' if j == 0 else f'x{j}|i_sigma') for j in range(q)],
-            axis=0,
-        )
-        rfx = np.concatenate(
-            [self._extract(trace, '1|i' if j == 0 else f'x{j}|i') for j in range(q)], axis=0
-        ).swapaxes(2, 1)
-
-        out = {f'{prefix}_ffx': ffx, f'{prefix}_sigma_rfx': sigma_rfx, f'{prefix}_rfx': rfx}
-        if hasSigmaEps(likelihood_family):
-            out[f'{prefix}_sigma_eps'] = self._extract(trace, 'sigma')
-        correlated = float(self.ds.get('eta_rfx', 0)) > 0 and q >= 2
-        if correlated:
-            out[f'{prefix}_corr_rfx'] = self._extract(trace, '_lkj_rfx_corr')
-        else:
-            # Always save corr_rfx so aggregate sees a consistent key set across datasets.
-            n_s = ffx.shape[-1]
-            out[f'{prefix}_corr_rfx'] = np.tile(np.eye(q, dtype=ffx.dtype)[None, None], (1, n_s, 1, 1))
-        return out
+        return extractAll(trace, self.ds, d, q, prefix)
 
     def _fitNuts(self, cfg: argparse.Namespace, ds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         pymc_model = self._buildPymc(ds)
