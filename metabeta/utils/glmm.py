@@ -15,16 +15,50 @@ def _adaptiveRidgeBm(A: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     return eps * scale[..., None, None] * torch.eye(q, device=A.device, dtype=A.dtype)
 
 
+_EIGH_JITTERS = [1e-6, 1e-4, 1e-2, 1.0]
+
+
+def _eighWithJitter(M: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Batch eigh with fallback to element-wise jitter for ill-conditioned matrices.
+
+    Fast path: full-batch eigh with no overhead.
+    On failure: retry each element individually with increasing diagonal jitter.
+    Elements that fail even at max jitter get vals=0, vecs=I (soft failure).
+    """
+    try:
+        return torch.linalg.eigh(M)
+    except torch.linalg.LinAlgError:
+        pass
+
+    B, q, _ = M.shape
+    eye = torch.eye(q, device=M.device, dtype=M.dtype)
+    all_vals, all_vecs = [], []
+    for i in range(B):
+        Mi = M[i]
+        result = None
+        for jitter in _EIGH_JITTERS:
+            try:
+                result = torch.linalg.eigh(Mi + jitter * eye)
+                break
+            except torch.linalg.LinAlgError:
+                continue
+        if result is None:
+            result = (torch.zeros(q, device=M.device, dtype=M.dtype), eye)
+        all_vals.append(result[0])
+        all_vecs.append(result[1])
+    return torch.stack(all_vals), torch.stack(all_vecs)
+
+
 def _psdProject(M: torch.Tensor) -> torch.Tensor:
     """Project a symmetric (B, q, q) matrix onto the PSD cone."""
     M = 0.5 * (M + M.mT)
-    vals, vecs = torch.linalg.eigh(M)
+    vals, vecs = _eighWithJitter(M)
     return vecs @ torch.diag_embed(vals.clamp(min=0.0)) @ vecs.mT
 
 
 def _pseudoInverse(M: torch.Tensor) -> torch.Tensor:
     """Pseudo-inverse of a PSD (B, q, q) matrix via eigendecomposition."""
-    vals, vecs = torch.linalg.eigh(M)
+    vals, vecs = _eighWithJitter(M)
     tol = vals.amax(dim=-1, keepdim=True).clamp(min=1e-8) * 1e-6
     inv_vals = torch.where(vals > tol, 1.0 / vals.clamp(min=1e-30), torch.zeros_like(vals))
     return vecs @ torch.diag_embed(inv_vals) @ vecs.mT
@@ -37,7 +71,7 @@ def _ridgeInv(M: torch.Tensor, floor: torch.Tensor) -> torch.Tensor:
     Unlike pseudoinverse, never zeros any eigenvalue — ensures strong shrinkage
     when M eigenvalues are near or below floor.
     """
-    vals, vecs = torch.linalg.eigh(M)
+    vals, vecs = _eighWithJitter(M)
     inv_vals = 1.0 / (vals + floor[:, None]).clamp(min=1e-30)
     return vecs @ torch.diag_embed(inv_vals) @ vecs.mT
 
