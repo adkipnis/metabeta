@@ -3,6 +3,13 @@ from tabulate import tabulate
 
 from metabeta.posthoc.conformal import Calibrator
 from metabeta.utils.evaluation import Proposal, EvaluationSummary, dictMean
+
+# Parameters excluded from the Average row (structural, not estimable like free params).
+_AVG_EXCLUDE = frozenset({'corr_rfx'})
+
+
+def _dictMeanExcl(td: dict) -> float:
+    return dictMean({k: v for k, v in td.items() if k not in _AVG_EXCLUDE})
 from metabeta.evaluation.point import (
     getPointEstimates,
     getRMSE,
