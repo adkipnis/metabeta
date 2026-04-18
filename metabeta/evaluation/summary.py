@@ -93,7 +93,7 @@ def getSummary(
 
 
 def summaryTable(s: EvaluationSummary, likelihood_family: int = 0) -> str:
-    long_table = longTable(s.corr, s.nrmse, s.ece, s.lcr)
+    long_table = longTable(s.corr, s.nrmse, s.ece, s.eace)
     fit_labels = {0: 'Median pp R²', 1: 'Median pp AUC', 2: 'Median pp Deviance'}
     fit_label = fit_labels.get(likelihood_family, 'Median pp R²')
     flat_table = flatTable(s.tpd, s.mloonll, s.mfit, fit_label, s.meff, s.mk, s.mloo_k)
@@ -103,8 +103,8 @@ def summaryTable(s: EvaluationSummary, likelihood_family: int = 0) -> str:
 def longTable(
     corr: dict[str, torch.Tensor],  # Pearson correlation
     nrmse: dict[str, torch.Tensor],  # normalized root mean square error
-    ece: dict[str, torch.Tensor],  # expeced coverage error
-    lcr: dict[str, torch.Tensor],  # log coverage ratio
+    ece: dict[str, torch.Tensor],  # expected coverage error (signed)
+    eace: dict[str, torch.Tensor],  # absolute ECE (abs per dataset, then avg)
 ) -> str:
     def process(row: list[str | torch.Tensor]) -> list[str | float]:
         out = []
@@ -121,12 +121,14 @@ def longTable(
         'rfx': 'RFX',
     }
     keys = [k for k in names if k in corr]
-    rows = [[names[k], corr[k], nrmse[k], ece.get(k), lcr.get(k)] for k in keys]
+    rows = [[names[k], corr[k], nrmse[k], ece.get(k), eace.get(k)] for k in keys]
     rows = [process(row) for row in rows]
-    rows += [['Average', dictMean(corr), dictMean(nrmse), dictMean(ece), dictMean(lcr)]]
+    # Average row: exclude corr_rfx from all averages.
+    rows += [['Average', _dictMeanExcl(corr), _dictMeanExcl(nrmse),
+              _dictMeanExcl(ece), _dictMeanExcl(eace)]]
     results = tabulate(
         rows,
-        headers=['', 'R', 'NRMSE', 'ECE', 'LCR'],
+        headers=['', 'R', 'NRMSE', 'ECE', 'EACE'],
         floatfmt='.3f',
         tablefmt='simple',
         missingval='-',
