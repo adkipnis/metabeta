@@ -67,7 +67,7 @@ def getSummary(
     
     # PSIS-LOO NLL: automatically uses loo_is when IS weights are available (w=proposal.weights),
     # falling back to loo_raw (w=None) when no IS was done.
-    out['loo_nll'], out['loo_pareto_k'] = psisLooNLL(pp, data, w=proposal.weights)
+    out['loo_nll'], out['loo_pareto_k'] = psisLooNLL(pp, data, w=proposal.weights, reff=proposal.reff)
     if likelihood_family == 0:  # normal
         out['pp_fit'] = posteriorPredictiveR2(pp, data, w=proposal.weights)
     elif likelihood_family == 1:  # bernoulli
