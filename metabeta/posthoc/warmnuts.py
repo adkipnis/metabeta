@@ -39,3 +39,19 @@ Evaluator.summary() / plotComparison.  Key diagnostics:
   - NRMSE, coverage, SBC ranks via the standard evaluation pipeline
 """
 
+import argparse
+
+import arviz as az
+import numpy as np
+import pymc as pm
+import torch
+from torch import Tensor
+
+from metabeta.models.approximator import Approximator
+from metabeta.posthoc.importance import ImportanceSampler
+from metabeta.simulation.fit import buildPymc, extractAll
+from metabeta.utils.evaluation import Proposal
+from metabeta.utils.families import hasSigmaEps
+from metabeta.utils.preprocessing import rescaleData
+
+
