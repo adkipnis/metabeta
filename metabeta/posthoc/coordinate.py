@@ -250,3 +250,88 @@ class CoordinateDescent:
         return u.detach()
 
     # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
+
+    def __call__(self, proposal: Proposal) -> tuple[Proposal, dict]:
+        """Run coordinate cycles on all flow particles.
+
+        Parameters
+        ----------
+        proposal : Proposal
+            Flow proposal; all s samples used as independent starting particles.
+
+        Returns
+        -------
+        proposal_out : Proposal
+            Refined particles (same n_samples as input).
+        diagnostics : dict
+            'log_joint_curve' : list[float]  — mean log_joint per cycle
+            'n_cycles'        : int          — cycles completed (may be < n_outer)
+        """
+        ncp = self.model.initFromProposal(proposal)
+
+        # Leaf tensors for θ_g optimization
+        ffx = ncp.ffx.detach().clone().requires_grad_(True)
+        log_sr = ncp.sigma_rfx.clamp(min=1e-8).log().detach().clone().requires_grad_(True)
+        log_se: Tensor | None = None
+        if self.model.has_sigma_eps and ncp.sigma_eps is not None:
+            log_se = ncp.sigma_eps.clamp(min=1e-8).log().detach().clone().requires_grad_(True)
+        z_corr: Tensor | None = None
+        if ncp.z_corr is not None:
+            z_corr = ncp.z_corr.detach().clone().requires_grad_(True)
+
+        # Local params: start from NCP-converted flow rfx; will be replaced each u-step
+        u = ncp.u.detach().clone()
+
+        log_joint_curve: list[float] = []
+
+        for _ in range(self.n_outer):
+            sr = log_sr.exp().detach()
+            se = log_se.exp().detach() if log_se is not None else None
+            zc = z_corr.detach() if z_corr is not None else None
+
+            # u-step (before g-step so θ_g is consistent on first pass)
+            if self.lf == 0:
+                u = self._uStepNormal(ffx.detach(), sr, se, zc)
+            else:
+                u = self._uStepGLMM(ffx.detach(), sr, se, zc, u)
+
+            # θ_g-step
+            self._gStep(ffx, log_sr, log_se, z_corr, u)
+
+            # Track convergence using log_joint (includes u for diagnostics)
+            with torch.no_grad():
+                sr_now = log_sr.exp()
+                se_now = log_se.exp().detach() if log_se is not None else None
+                zc_now = z_corr.detach() if z_corr is not None else None
+                lj = self.model.logJoint(ffx.detach(), sr_now, se_now, u, zc_now)
+                log_joint_curve.append(float(lj.mean().item()))
+
+            if len(log_joint_curve) > 1:
+                if abs(log_joint_curve[-1] - log_joint_curve[-2]) < self.tol:
+                    break
+
+        # Final u-step: sample from the conditional posterior (not the mean) to
+        # give rfx proper uncertainty.  θ_g is the MAP (replicated s times);
+        # rfx ~ p(rfx | θ_g_MAP, y) gives s independent Rao-Blackwellised draws.
+        with torch.no_grad():
+            sr_final = log_sr.exp().detach()
+            se_final = log_se.exp().detach() if log_se is not None else None
+            zc_final = z_corr.detach() if z_corr is not None else None
+            if self.lf == 0:
+                u = self._uStepNormal(ffx.detach(), sr_final, se_final, zc_final, sample=True)
+            # For GLMM, u is already the latest Adam update — no change needed.
+
+            proposal_out = self.model.toProposal(
+                ffx.detach(), sr_final, se_final, u, zc_final
+            )
+
+        proposal_out.tpd = proposal.tpd
+        return proposal_out, {
+            'log_joint_curve': log_joint_curve,
+            'n_cycles': len(log_joint_curve),
+        }
+
+
+# ---------------------------------------------------------------------------
