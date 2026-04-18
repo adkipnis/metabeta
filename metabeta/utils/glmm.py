@@ -578,7 +578,7 @@ def _lmmNormalFull(
         # E-step: W_g via ridge-regularized Ψ⁻¹ using updated Ψ and se2
         psi_ridge = se2[:, None, None] * 1e-4 * eye_q
         psi_reg = Psi + psi_ridge
-        vals_r, vecs_r = torch.linalg.eigh(psi_reg)
+        vals_r, vecs_r = _eighWithJitter(psi_reg)
         Psi_inv = vecs_r @ torch.diag_embed(1.0 / vals_r.clamp(min=1e-30)) @ vecs_r.mT
         inner = se2[:, None, None, None] * Psi_inv[:, None] + ZtZ_safe  # (B, m, q, q)
         W_g = _safeSolve(inner + _adaptiveRidgeBm(inner), eye_q_bm) * mask4
