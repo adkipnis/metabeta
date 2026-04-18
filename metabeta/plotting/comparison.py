@@ -69,7 +69,7 @@ def plotComparison(
         )
         stats_cov = {
             'ECE': 100 * dictMean(summary.ece),
-            'LCR': 100 * dictMean(summary.lcr),
+            'EACE': 100 * dictMean(summary.eace),
         }
         _plotCoverage(
             axs[i, 3],
