@@ -313,3 +313,50 @@ class LaplaceRefiner:
         return H  # (b, m, q, q)
 
     # ------------------------------------------------------------------
+    # Sampling from the Laplace Gaussian
+    # ------------------------------------------------------------------
+
+    def _sampleGlobal(self, g_map: Tensor, H_g: Tensor) -> Tensor:
+        """Draw n_samples from N(g_map, −H_g⁻¹) via eigendecomposition.
+
+        g_map : (b, D_g) — MAP in unconstrained space
+        H_g   : (b, D_g, D_g) — Hessian (negative definite at MAP)
+        Returns (b, n_samples, D_g).
+        """
+        b, D_g = g_map.shape
+        s = self.n_samples
+
+        # Eigendecompose: H = V diag(λ) V^T  (λ should be ≤ 0 at MAP)
+        lam, V = torch.linalg.eigh(-H_g)        # lam (b, D_g), V (b, D_g, D_g)
+        # lam are eigenvalues of -H; at MAP they should all be positive.
+        # Clamp and also cap std at 3.0 to prevent exp() overflow for log-sigma params.
+        lam = lam.clamp(min=self.jitter)
+        std = lam.rsqrt().clamp(max=3.0)         # (b, D_g) — 1/sqrt(λ)
+
+        z = torch.randn(b, s, D_g, device=g_map.device, dtype=g_map.dtype)
+        # sample = g_map + V @ diag(std) @ z^T  for each batch elem
+        # = g_map + (V * std[:, None, :]) @ z[:, :, :, None]  → (b, s, D_g)
+        delta = torch.einsum('bdi,bi,bsi->bsd', V, std, z)
+        return g_map.unsqueeze(1) + delta       # (b, s, D_g)
+
+    def _sampleLocal(self, u_map: Tensor, H_l: Tensor) -> Tensor:
+        """Draw n_samples from N(u_j*, −H_bj⁻¹) per group via Cholesky.
+
+        u_map : (b, m, 1, q)
+        H_l   : (b, m, q, q) — per-group Hessian (negative definite for active groups)
+        Returns (b, m, n_samples, q).
+        """
+        b, m, _, q = u_map.shape
+        s = self.n_samples
+
+        # Eigendecompose -H_l per (b, m) block; clamp and cap std like _sampleGlobal.
+        lam, V = torch.linalg.eigh(-H_l)            # (b, m, q), (b, m, q, q)
+        lam = lam.clamp(min=self.jitter)
+        std = lam.rsqrt().clamp(max=3.0)             # (b, m, q)
+
+        z = torch.randn(b, m, s, q, device=u_map.device, dtype=u_map.dtype)
+        # delta[b,m,s,j] = sum_k V[b,m,j,k] * std[b,m,k] * z[b,m,s,k]
+        delta = torch.einsum('bmjk,bmk,bmsk->bmsj', V, std, z)
+        return u_map + delta                          # (b, m, n_samples, q)
+
+    # ------------------------------------------------------------------
