@@ -287,3 +287,54 @@ class MetropolisSampler:
         return rfx   # (b, m, s_out, q)
 
     # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
+
+    def __call__(self, proposal: Proposal) -> tuple[Proposal, dict]:
+        """Run IMH chains on a pre-drawn flow proposal.
+
+        Parameters
+        ----------
+        proposal : Proposal
+            Output of model.estimate(data, n_samples=n_chains * n_steps).
+
+        Returns
+        -------
+        proposal_out : Proposal
+            Post-burnin samples; n_chains * (n_steps - burnin) samples per dataset.
+        diagnostics : dict
+            'accept_rate' (b, n_chains) — fraction of proposals accepted post-burnin.
+        """
+        s_expected = self.n_chains * self.n_steps
+        if proposal.n_samples != s_expected:
+            raise ValueError(
+                f'proposal has {proposal.n_samples} samples; '
+                f'expected n_chains × n_steps = {s_expected}'
+            )
+
+        d, q = proposal.d, proposal.q
+        d_corr = proposal.d_corr
+
+        log_w = self._logWeights(proposal)   # (b, s)
+
+        # Run chain — rfx travels with globals for 'global' and 'joint' modes
+        sl_in = proposal.samples_l if self.mode != 'marginal' else None
+        sg_out, sl_out, accept_rate = self._runChains(log_w, proposal.samples_g, sl_in)
+
+        # Attach rfx
+        if self.mode == 'marginal':
+            sl_out = self._sampleRfxConditional(sg_out, d, q, d_corr)
+        # 'global' and 'joint': sl_out already set by _runChains
+
+        b, s_out = sg_out.shape[0], sg_out.shape[1]
+        m = sl_out.shape[1]
+        proposed = {
+            'global': {'samples': sg_out, 'log_prob': sg_out.new_zeros(b, s_out)},
+            'local': {'samples': sl_out, 'log_prob': sl_out.new_zeros(b, m, s_out)},
+        }
+        out = Proposal(proposed, has_sigma_eps=proposal.has_sigma_eps, d_corr=d_corr)
+        out.tpd = proposal.tpd
+        return out, {'accept_rate': accept_rate}
+
+
+# ---------------------------------------------------------------------------
