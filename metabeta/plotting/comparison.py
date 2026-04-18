@@ -102,7 +102,8 @@ def plotComparison(
 
     saved_path = None
     if plot_dir is not None:
-        saved_path = savePlot(plot_dir, 'comparison', epoch=epoch)
+        savePlot(plot_dir, 'comparison', epoch=epoch, ending='pdf')
+        saved_path = savePlot(plot_dir, 'comparison', epoch=epoch, ending='png')
     if show:
         plt.show()
     plt.close(fig)
