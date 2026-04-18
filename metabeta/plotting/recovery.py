@@ -132,6 +132,7 @@ def _plotRecoveryGrouped(
 def _prepareRecoveryData(
     summary: EvaluationSummary,
     data: dict[str, torch.Tensor],
+    show_corr_rfx: bool = False,
 ) -> tuple[list, list, list, list, list]:
     has_eps = 'sigma_eps' in data
     allMasks = getMasks(data, has_sigma_eps=has_eps)
@@ -173,8 +174,8 @@ def _prepareRecoveryData(
         }
     )
 
-    # correlation coefficients (only when model estimated them)
-    if 'corr_rfx' in est:
+    # correlation coefficients (only when model estimated them and flag is set)
+    if show_corr_rfx and 'corr_rfx' in est:
         corr_target = corrToLower(data['corr_rfx'])
         mask_q = data['mask_q']
         mask_corr = torch.stack(
@@ -213,13 +214,14 @@ def plotRecovery(
     plot_dir: Path | None = None,
     epoch: int | None = None,
     show: bool = False,
+    show_corr_rfx: bool = False,
 ) -> Path | None:
     if not isinstance(summaries, list):
         summaries = [summaries]
     if labels is None:
         labels = [None] * len(summaries)  # type: ignore[list-item]
     nrows = len(summaries)
-    has_corr = 'corr_rfx' in summaries[0].estimates
+    has_corr = show_corr_rfx and 'corr_rfx' in summaries[0].estimates
     ncols = 4 if has_corr else 3
     if has_corr:
         titles = ['Fixed Effects', 'Variances', 'Correlations', 'Random Effects']
@@ -230,7 +232,7 @@ def plotRecovery(
     for i, (summary, label) in enumerate(zip(summaries, labels)):
         upper = i == 0
         lower = i == nrows - 1
-        targets, estimates, masks, names, metrics = _prepareRecoveryData(summary, data)
+        targets, estimates, masks, names, metrics = _prepareRecoveryData(summary, data, show_corr_rfx=show_corr_rfx)
         _plotRecoveryGrouped(
             axs[i],
             targets=targets,
