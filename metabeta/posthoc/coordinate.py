@@ -51,3 +51,38 @@ from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.regularization import unconstrainedToCholeskyCorr
 
 
+class CoordinateDescent:
+    """Coordinate descent (EM-style) post-hoc refinement for flow posteriors.
+
+    Parameters
+    ----------
+    model : HierarchicalModel
+    n_outer : int
+        Number of coordinate cycles (g-step + u-step).
+    n_g_steps : int
+        Adam steps per g-step per outer cycle.
+    n_u_steps : int
+        Adam steps per u-step for GLMM (ignored for Normal — exact update).
+    lr : float
+        Adam learning rate for both g- and u-steps.
+    tol : float
+        Early stopping: halt if |Δ mean log_joint| < tol between cycles.
+    """
+
+    def __init__(
+        self,
+        model: HierarchicalModel,
+        n_outer: int = 20,
+        n_g_steps: int = 30,
+        n_u_steps: int = 10,
+        lr: float = 5e-2,
+        tol: float = 1e-4,
+    ) -> None:
+        self.model = model
+        self.n_outer = n_outer
+        self.n_g_steps = n_g_steps
+        self.n_u_steps = n_u_steps
+        self.lr = lr
+        self.tol = tol
+        self.lf = model.likelihood_family
+
