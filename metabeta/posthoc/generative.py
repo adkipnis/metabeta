@@ -242,3 +242,64 @@ class HierarchicalModel:
         return ll + lp
 
     # ------------------------------------------------------------------
+    # Proposal ↔ NCPParams conversion
+    # ------------------------------------------------------------------
+
+    def initFromProposal(self, proposal: Proposal) -> NCPParams:
+        """Extract NCP parameters from a flow Proposal.
+
+        Converts the centered rfx (samples_l) to non-centered u by solving
+        u = rfx / σ_rfx (independent) or u = L_full⁻¹ rfx (correlated).
+        Returns detached tensors; callers should clone and set requires_grad.
+        """
+        ffx = proposal.ffx.detach()               # (b, s, d)
+        sigma_rfx = proposal.sigma_rfx.detach()   # (b, s, q)
+        sigma_eps = proposal.sigma_eps.detach() if self.has_sigma_eps else None
+
+        z_corr: Tensor | None = None
+        if proposal.d_corr > 0:
+            z_corr = proposal.samples_g[..., -proposal.d_corr :].detach()  # (b, s, d_corr)
+
+        rfx = proposal.samples_l.detach()         # (b, m, s, q)
+        u = self.uFromRfx(sigma_rfx, rfx, z_corr)
+
+        return NCPParams(ffx=ffx, sigma_rfx=sigma_rfx, sigma_eps=sigma_eps, u=u, z_corr=z_corr)
+
+    def toProposal(
+        self,
+        ffx: Tensor,                   # (b, s, d)
+        sigma_rfx: Tensor,             # (b, s, q)
+        sigma_eps: Tensor | None,      # (b, s) or None
+        u: Tensor,                     # (b, m, s, q)
+        z_corr: Tensor | None = None,  # (b, s, d_corr)
+    ) -> Proposal:
+        """Pack optimized NCP parameters into a Proposal.
+
+        Converts u back to centered rfx, assembles samples_g / samples_l, and
+        fills log_prob with zeros (no flow density available post-optimization).
+        """
+        with torch.no_grad():
+            rfx = self.rfxFromU(sigma_rfx, u, z_corr)   # (b, m, s, q)
+
+        b, s = ffx.shape[:2]
+        m = rfx.shape[1]
+        d_corr = z_corr.shape[-1] if z_corr is not None else 0
+
+        parts: list[Tensor] = [ffx.detach(), sigma_rfx.detach()]
+        if self.has_sigma_eps and sigma_eps is not None:
+            parts.append(sigma_eps.detach().unsqueeze(-1))
+        if z_corr is not None:
+            parts.append(z_corr.detach())
+        samples_g = torch.cat(parts, dim=-1)               # (b, s, D_g)
+
+        proposed = {
+            'global': {
+                'samples': samples_g,
+                'log_prob': samples_g.new_zeros(b, s),
+            },
+            'local': {
+                'samples': rfx.detach(),                   # (b, m, s, q)
+                'log_prob': rfx.new_zeros(b, m, s),
+            },
+        }
+        return Proposal(proposed, has_sigma_eps=self.has_sigma_eps, d_corr=d_corr)
