@@ -320,3 +320,74 @@ class SVGDRefiner:
         return self.model.uFromRfx(sigma_rfx, rfx, z_corr)
 
     # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
+
+    def __call__(self, proposal: Proposal) -> tuple[Proposal, dict]:
+        """Run SVGD on flow particles.
+
+        Parameters
+        ----------
+        proposal : Proposal
+            Flow proposal; all s samples used as starting particles.
+
+        Returns
+        -------
+        proposal_out : Proposal
+            Refined particles (same n_samples).
+        diagnostics : dict
+            'log_p_history' : list[float] — mean log p per step
+        """
+        ncp = self.model.initFromProposal(proposal)
+
+        d = ncp.ffx.shape[-1]
+        q = ncp.sigma_rfx.shape[-1]
+        has_se = self.model.has_sigma_eps and ncp.sigma_eps is not None
+        has_zc = ncp.z_corr is not None
+
+        # Pack g: unconstrained global params (b, s, D_g)
+        parts: list[Tensor] = [ncp.ffx, ncp.sigma_rfx.clamp(min=1e-8).log()]
+        if has_se:
+            parts.append(ncp.sigma_eps.clamp(min=1e-8).log().unsqueeze(-1))
+        if has_zc:
+            parts.append(ncp.z_corr)
+        g = torch.cat(parts, dim=-1).detach()  # (b, s, D_g)
+
+        u = ncp.u.detach()   # (b, m, s, q) — only used for GLMM
+
+        log_p_history: list[float] = []
+        denom = max(self.n_steps - 1, 1)
+
+        for step in range(self.n_steps):
+            # Cosine schedule: lr → lr * lr_decay over n_steps
+            t = step / denom
+            cos_factor = 0.5 * (1.0 + math.cos(math.pi * t))
+            lr_t = self.lr * (self.lr_decay + (1.0 - self.lr_decay) * cos_factor)
+            if self.lf == 0:
+                g, lp_val = self._stepMarginal(g, d, q, has_se, has_zc, lr=lr_t)
+            else:
+                g, u, lp_val = self._stepJoint(g, u, d, q, has_se, has_zc, lr=lr_t)
+            log_p_history.append(lp_val)
+
+        # Unpack final g
+        with torch.no_grad():
+            ffx_f = g[..., :d]
+            sr_f = g[..., d:d + q].exp()
+            cursor = d + q
+            se_f: Tensor | None = None
+            if has_se:
+                se_f = g[..., cursor].exp()
+                cursor += 1
+            zc_f: Tensor | None = g[..., cursor:] if has_zc else None
+
+            # Normal: sample rfx from exact conditional; GLMM: use final u
+            if self.lf == 0:
+                u = self._sampleU(ffx_f, sr_f, se_f, zc_f)
+
+            proposal_out = self.model.toProposal(ffx_f, sr_f, se_f, u, zc_f)
+
+        proposal_out.tpd = proposal.tpd
+        return proposal_out, {'log_p_history': log_p_history}
+
+
+# ---------------------------------------------------------------------------
