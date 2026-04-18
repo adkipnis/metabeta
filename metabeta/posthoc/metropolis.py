@@ -101,3 +101,37 @@ class MetropolisSampler:
         self._mask_n = data['mask_n'].unsqueeze(-1)   # (b, m, n, 1)
         self._mask_m = data['mask_m'].unsqueeze(-1)   # (b, m, 1)
 
+    # ------------------------------------------------------------------
+    # Log-weight computation
+    # ------------------------------------------------------------------
+
+    def _logWeights(self, proposal: Proposal) -> Tensor:
+        """Compute unnormalised log IS weights (b, s) according to self.mode."""
+        log_q_g = proposal.log_prob_g  # (b, s)
+
+        if self.mode == 'marginal':
+            ffx = proposal.ffx         # (b, s, d)
+            sigma_rfx = proposal.sigma_rfx   # (b, s, q)
+            sigma_eps = proposal.sigma_eps   # (b, s)
+            ll = logMarginalLikelihoodNormal(
+                ffx, sigma_rfx, sigma_eps,
+                self._y, self._X, self._Z, self._mask_n, self._mask_m,
+            )
+            lp = logProbFfx(ffx, self._is.nu_ffx, self._is.tau_ffx,
+                            self._is.family_ffx, self._is.mask_d)
+            lp = lp + logProbSigma(sigma_rfx, self._is.tau_rfx,
+                                   self._is.family_sigma_rfx, self._is.mask_q)
+            lp = lp + logProbSigma(sigma_eps, self._is.tau_eps,
+                                   self._is.family_sigma_eps)
+            return ll + lp - log_q_g
+
+        # 'global' or 'joint': delegate to ImportanceSampler
+        ll, lp = self._is.unnormalizedPosterior(proposal)
+        if self.mode == 'joint':
+            log_q_l = proposal.log_prob_l   # (b, m, s)
+            lq = log_q_g + (log_q_l * self._is.mask_m).sum(1)
+            return ll + lp - lq
+
+        return ll + lp - log_q_g
+
+    # ------------------------------------------------------------------
