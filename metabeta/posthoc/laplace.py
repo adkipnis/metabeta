@@ -99,3 +99,73 @@ class LaplaceRefiner:
         return NCPParams(ffx=ffx, sigma_rfx=sigma_rfx, sigma_eps=sigma_eps, u=u, z_corr=z_corr)
 
     # ------------------------------------------------------------------
+    # MAP finding
+    # ------------------------------------------------------------------
+
+    def _findMAP(self, init: NCPParams) -> tuple[NCPParams, Tensor, Tensor | None, Tensor | None, dict]:
+        """Optimize logJoint to find MAP.
+
+        Returns the MAP as NCPParams (s=1) together with the unconstrained
+        log-sigma leaf tensors (log_sr, log_se) needed for Hessian computation
+        in unconstrained space.
+        """
+        ffx = init.ffx.detach().clone().requires_grad_(True)
+        log_sr = init.sigma_rfx.clamp(min=1e-8).log().detach().clone().requires_grad_(True)
+        u = init.u.detach().clone().requires_grad_(True)
+
+        opt_params: list[Tensor] = [ffx, log_sr, u]
+        log_se: Tensor | None = None
+        if self.model.has_sigma_eps and init.sigma_eps is not None:
+            log_se = init.sigma_eps.clamp(min=1e-8).log().detach().clone().requires_grad_(True)
+            opt_params.append(log_se)
+        z_corr: Tensor | None = None
+        if init.z_corr is not None:
+            z_corr = init.z_corr.detach().clone().requires_grad_(True)
+            opt_params.append(z_corr)
+
+        optimizer = torch.optim.Adam(opt_params, lr=self.lr)
+        losses: list[float] = []
+
+        best_loss = float('inf')
+        best_state = {p: p.detach().clone() for p in opt_params}
+
+        for _ in range(self.n_steps):
+            optimizer.zero_grad()
+            lj = self.model.logJoint(
+                ffx,
+                log_sr.exp(),
+                log_se.exp() if log_se is not None else None,
+                u,
+                z_corr,
+            )
+            loss = -lj.sum()
+            if not torch.isfinite(loss):
+                break
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(opt_params, max_norm=10.0)
+            optimizer.step()
+            val = float(loss.detach())
+            losses.append(val)
+            if val < best_loss:
+                best_loss = val
+                best_state = {p: p.detach().clone() for p in opt_params}
+
+        # Restore best observed params (guards against divergence near the end)
+        with torch.no_grad():
+            for p, v in best_state.items():
+                p.copy_(v)
+
+        with torch.no_grad():
+            map_params = NCPParams(
+                ffx=ffx.detach(),
+                sigma_rfx=log_sr.exp().detach(),
+                sigma_eps=log_se.exp().detach() if log_se is not None else None,
+                u=u.detach(),
+                z_corr=z_corr.detach() if z_corr is not None else None,
+            )
+        final = losses[-1] if losses else float('inf')
+        return map_params, log_sr.detach(), log_se.detach() if log_se is not None else None, \
+            z_corr.detach() if z_corr is not None else None, \
+            {'loss_curve': losses, 'final_loss': final}
+
+    # ------------------------------------------------------------------
