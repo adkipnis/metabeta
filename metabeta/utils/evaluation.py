@@ -83,6 +83,7 @@ class Proposal:
         self.d = D - self.q - (1 if has_sigma_eps else 0) - d_corr
         self.is_results = {}
         self.tpd: float | None = None
+        self.reff: float = 1.0  # relative ESS; 1.0 for i.i.d. flow samples, <1 for MCMC
 
     @property
     def n_samples(self) -> int:
