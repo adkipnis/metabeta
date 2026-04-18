@@ -55,3 +55,47 @@ from metabeta.utils.families import hasSigmaEps
 from metabeta.utils.preprocessing import rescaleData
 
 
+class WarmNuts:
+    def __init__(
+        self,
+        ds: dict[str, np.ndarray],
+        n_chains: int = 4,
+        tune: int = 500,
+        draws: int = 500,
+        seed: int = 42,
+        target_accept: float = 0.9,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        ds : dict
+            Single unpadded dataset (output of Fitter._getSingle / unpad).
+        n_chains : int
+            Number of independent NUTS chains.
+        tune : int
+            NUTS tuning steps (burn-in; discarded by PyMC).
+        draws : int
+            Posterior draws per chain.
+        seed : int
+            Random seed passed to pm.sample.
+        target_accept : float
+            Target acceptance rate for step-size adaptation.  0.9 is
+            recommended for posteriors with complex geometry (default 0.9).
+        """
+        self.ds = ds
+        self.n_chains = n_chains
+        self.tune = tune
+        self.draws = draws
+        self.seed = seed
+        self.target_accept = target_accept
+
+        self.d = int(ds['d'])
+        self.q = int(ds['q'])
+        self.m = int(ds['m'])
+        self.correlated = float(ds.get('eta_rfx', 0)) > 0 and self.q >= 2
+        self.has_sigma_eps = hasSigmaEps(int(ds.get('likelihood_family', 0)))
+
+        # Build PyMC model once; reused across __call__ invocations.
+        self.model = buildPymc(ds)
+
+    # ------------------------------------------------------------------
