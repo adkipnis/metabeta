@@ -338,3 +338,42 @@ class MetropolisSampler:
 
 
 # ---------------------------------------------------------------------------
+# Top-level convenience function
+# ---------------------------------------------------------------------------
+
+
+def runIMH(
+    model: Approximator,
+    data: dict[str, torch.Tensor],
+    cfg: argparse.Namespace,
+) -> tuple[Proposal, dict]:
+    """Draw a flow proposal and correct it with IMH.
+
+    cfg fields
+    ----------
+    n_chains       : int  — number of independent chains (default 4)
+    n_steps        : int  — steps per chain including burnin (default 250)
+    imh_burnin     : int  — burnin steps to discard (default 50)
+    imh_mode       : str  — 'global' | 'marginal' | 'joint'
+                     defaults to 'marginal' for Normal, 'global' otherwise
+    rescale        : bool
+    likelihood_family : int
+    """
+    lf = getattr(cfg, 'likelihood_family', 0)
+    n_chains = getattr(cfg, 'n_chains', 4)
+    n_steps = getattr(cfg, 'n_steps', 250)
+    burnin = getattr(cfg, 'imh_burnin', 50)
+    default_mode = 'marginal' if lf == 0 else 'global'
+    mode: Mode = getattr(cfg, 'imh_mode', default_mode)
+
+    proposal = model.estimate(data, n_samples=n_chains * n_steps)
+
+    if cfg.rescale:
+        proposal.rescale(data['sd_y'])
+        data = rescaleData(data)
+
+    sampler = MetropolisSampler(
+        data, n_chains=n_chains, n_steps=n_steps, burnin=burnin,
+        mode=mode, likelihood_family=lf,
+    )
+    return sampler(proposal)
