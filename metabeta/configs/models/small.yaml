@@ -1,5 +1,3 @@
-posterior_correlation: false
-
 summarizer_g:
     type: 'set-transformer'
     d_model: 64
@@ -31,3 +29,5 @@ posterior_g:
 
 posterior_l:
     n_blocks: 2
+
+posterior_correlation: False
