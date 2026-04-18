@@ -2,7 +2,7 @@ from pathlib import Path
 import torch
 from matplotlib import pyplot as plt
 
-from metabeta.utils.evaluation import EvaluationSummary, getNames, Proposal, dictMean
+from metabeta.utils.evaluation import EvaluationSummary, getNames, getCorrRfxNames, Proposal, dictMean
 from metabeta.utils.plot import DPI, savePlot
 from metabeta.plotting.recovery import _prepareRecoveryData, _plotRecoveryGrouped
 from metabeta.plotting.coverage import _plotCoverage
@@ -33,11 +33,10 @@ def plotComparison(
     plot_dir: Path | None = None,
     epoch: int | None = None,
     show: bool = False,
+    show_corr_rfx: bool = False,
 ) -> Path | None:
-    has_corr = all('corr_rfx' in s.estimates for s in summaries)
-    col_titles = _COL_TITLES_CORR if has_corr else _COL_TITLES
-    n_rec = 4 if has_corr else 3   # recovery columns
-    ncols = n_rec + 2              # + coverage + SBC
+    col_titles = _COL_TITLES
+    ncols = 5
     nrows = len(summaries)
     fig, axs = plt.subplots(nrows, ncols, figsize=(6 * ncols, 6 * nrows), dpi=DPI, squeeze=False)
 
@@ -48,13 +47,13 @@ def plotComparison(
         # cols 0-(n_rec-1): recovery scatter
         targets, estimates, masks, names, metrics = _prepareRecoveryData(summary, data)
         _plotRecoveryGrouped(
-            axs[i, :n_rec],  # type: ignore
+            axs[i, :3],  # type: ignore
             targets=targets,
             estimates=estimates,
             masks=masks,
             metrics=metrics,
             names=names,
-            titles=col_titles[:n_rec],
+            titles=col_titles[:3],
             ylabel=label,
             upper=upper,
             lower=lower,
@@ -64,6 +63,7 @@ def plotComparison(
         names_cov = (
             getNames('ffx', proposal.d)
             + getNames('sigmas', proposal.q, has_sigma_eps=proposal.has_sigma_eps)
+            + (getCorrRfxNames(proposal.q) if show_corr_rfx and proposal.d_corr > 0 else [])
             + getNames('rfx', proposal.q)
         )
         stats_cov = {
@@ -71,27 +71,29 @@ def plotComparison(
             'LCR': 100 * dictMean(summary.lcr),
         }
         _plotCoverage(
-            axs[i, n_rec],
+            axs[i, 3],
             summary.coverage,
             names_cov,
             stats_cov,
-            title=col_titles[n_rec] if upper else None,
+            title=col_titles[3] if upper else None,
             show_legend=upper,
             show_x=lower,
+            show_corr_rfx=show_corr_rfx,
         )
-        axs[i, n_rec].set_ylabel('')
+        axs[i, 3].set_ylabel('')
 
         # col n_rec+1: SBC
         _plotSbcRow(
-            axs[i, n_rec + 1],
+            axs[i, 4],
             proposal,
             data,
             diff=False,
-            title=col_titles[n_rec + 1] if upper else None,
+            title=col_titles[4] if upper else None,
             show_legend=upper,
             show_x=lower,
+            show_corr_rfx=show_corr_rfx,
         )
-        axs[i, n_rec + 1].set_ylabel('')
+        axs[i, 4].set_ylabel('')
 
     for ax in axs.flat:
         ax.set_box_aspect(1)
