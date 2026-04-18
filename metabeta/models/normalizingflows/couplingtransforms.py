@@ -156,7 +156,7 @@ class RationalQuadratic(CouplingTransform):
         # set number of parameters per dim
         self.n_params_per_dim = 3 * self.n_bins - 1
         if self.adaptive_domain:
-            self.n_params_per_dim += 4
+            self.n_params_per_dim += 2
 
         # check sizes
         if min_bin * n_bins > 1.0:
@@ -215,15 +215,13 @@ class RationalQuadratic(CouplingTransform):
         heights = params[..., k : 2 * k]
         derivatives = params[..., 2 * k : 3 * k - 1]
         if self.adaptive_domain:
-            log_weight = params[..., 3 * k - 1]
-            bias = params[..., 3 * k]
-            left = params[..., -2]
-            delta_x = params[..., -1]
+            left = params[..., 3 * k - 1]
+            delta_x = params[..., 3 * k]
         else:
-            log_weight = torch.zeros_like(params[..., 0])
-            bias = torch.zeros_like(log_weight)
-            left = torch.zeros_like(log_weight)
-            delta_x = torch.zeros_like(log_weight)
+            left = torch.zeros_like(params[..., 0])
+            delta_x = torch.zeros_like(left)
+        log_weight = torch.zeros_like(params[..., 0])
+        bias = torch.zeros_like(log_weight)
         return {
             'widths': widths,
             'heights': heights,
