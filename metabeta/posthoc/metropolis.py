@@ -135,3 +135,79 @@ class MetropolisSampler:
         return ll + lp - log_q_g
 
     # ------------------------------------------------------------------
+    # MH chain
+    # ------------------------------------------------------------------
+
+    def _runChains(
+        self,
+        log_w: Tensor,          # (b, s)
+        sg: Tensor,             # (b, s, D_g)
+        sl: Tensor | None,      # (b, m, s, q) — None for marginal mode
+    ) -> tuple[Tensor, Tensor | None, Tensor]:
+        """Run n_chains independent IMH chains, return (sg_out, sl_out, accept_rate).
+
+        Outputs:
+            sg_out       (b, C*T_post, D_g)
+            sl_out       (b, m, C*T_post, q)  or None
+            accept_rate  (b, C)  — fraction of proposals accepted after burnin
+        """
+        b, s, D_g = sg.shape
+        C, T = self.n_chains, self.n_steps
+        T_post = T - self.burnin
+
+        # Reshape pool into (b, C, T, ...)
+        sg_ct = sg.reshape(b, C, T, D_g)
+        lw_ct = log_w.reshape(b, C, T)
+        if sl is not None:
+            m, q = sl.shape[1], sl.shape[-1]
+            sl_ct = sl.permute(0, 2, 1, 3).reshape(b, C, T, m, q)
+
+        # Initialise at the best-weight sample in each chain's block.
+        # This prevents chains from getting permanently stuck when the first
+        # proposal has very high weight and subsequent ones never beat it.
+        best_t = lw_ct.argmax(dim=-1)                          # (b, C)
+        bt_g = best_t.unsqueeze(-1).unsqueeze(-1).expand(b, C, 1, D_g)
+        cur_g = sg_ct.gather(2, bt_g).squeeze(2).clone()       # (b, C, D_g)
+        bt_lw = best_t.unsqueeze(-1)
+        cur_lw = lw_ct.gather(2, bt_lw).squeeze(-1).clone()    # (b, C)
+        if sl is not None:
+            bt_l = best_t.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(b, C, 1, m, q)
+            cur_l = sl_ct.gather(2, bt_l).squeeze(2).clone()   # (b, C, m, q)
+
+        keep_g: list[Tensor] = []
+        keep_l: list[Tensor] = []
+        keep_acc: list[Tensor] = []
+
+        for t in range(1, T):
+            prop_lw = lw_ct[:, :, t]   # (b, C)
+
+            log_alpha = (prop_lw - cur_lw).clamp(max=0.0)
+            accept = torch.rand_like(log_alpha).log() < log_alpha  # (b, C)
+
+            cur_g = torch.where(accept.unsqueeze(-1), sg_ct[:, :, t], cur_g)
+            cur_lw = torch.where(accept, prop_lw, cur_lw)
+            if sl is not None:
+                cur_l = torch.where(accept[:, :, None, None], sl_ct[:, :, t], cur_l)
+
+            if t >= self.burnin:
+                keep_g.append(cur_g.clone())
+                if sl is not None:
+                    keep_l.append(cur_l.clone())
+                keep_acc.append(accept.float())
+
+        # Stack post-burnin samples: (T_post, b, C, D_g) → (b, C*T_post, D_g)
+        sg_out = torch.stack(keep_g, dim=0).permute(1, 2, 0, 3).reshape(b, C * T_post, D_g)
+
+        sl_out = None
+        if sl is not None:
+            sl_out = (
+                torch.stack(keep_l, dim=0)        # (T_post, b, C, m, q)
+                .permute(1, 2, 0, 3, 4)           # (b, C, T_post, m, q)
+                .reshape(b, C * T_post, m, q)
+                .permute(0, 2, 1, 3)              # (b, m, C*T_post, q)
+            )
+
+        accept_rate = torch.stack(keep_acc, dim=0).mean(0)  # (b, C)
+        return sg_out, sl_out, accept_rate
+
+    # ------------------------------------------------------------------
