@@ -212,3 +212,52 @@ class SVGDRefiner:
         return grad_g, grad_u, log_p.detach()
 
     # ------------------------------------------------------------------
+    # SVGD steps
+    # ------------------------------------------------------------------
+
+    def _stepMarginal(
+        self,
+        g: Tensor,   # (b, s, D_g)
+        d: int,
+        q: int,
+        has_se: bool,
+        has_zc: bool,
+        lr: float | None = None,
+    ) -> tuple[Tensor, float]:
+        """One SVGD step on global params using the marginal log p (Normal)."""
+        if lr is None:
+            lr = self.lr
+        grad_g, log_p = self._marginalGrads(g, d, q, has_se, has_zc)
+        K, rep = self._rbfKernel(g)
+        phi = torch.bmm(K, grad_g) / g.shape[1] + rep   # (b, s, D_g)
+        return g + lr * phi, float(log_p.mean().item())
+
+    def _stepJoint(
+        self,
+        g: Tensor,   # (b, s, D_g)
+        u: Tensor,   # (b, m, s, q)
+        d: int,
+        q: int,
+        has_se: bool,
+        has_zc: bool,
+        lr: float | None = None,
+    ) -> tuple[Tensor, Tensor, float]:
+        """One SVGD step on global + local params using log_joint (GLMM)."""
+        if lr is None:
+            lr = self.lr
+        b, s, D_g = g.shape
+        m, q_u = u.shape[1], u.shape[-1]
+
+        grad_g, grad_u, log_p = self._jointGrads(g, u, d, q, has_se, has_zc)
+
+        K_g, rep_g = self._rbfKernel(g)
+        phi_g = torch.bmm(K_g, grad_g) / s + rep_g
+
+        u_flat = u.permute(0, 2, 1, 3).reshape(b, s, m * q_u)   # (b, s, m*q)
+        K_u, rep_u = self._rbfKernel(u_flat)
+        grad_u_flat = grad_u.permute(0, 2, 1, 3).reshape(b, s, m * q_u)
+        phi_u_flat = torch.bmm(K_u, grad_u_flat) / s + rep_u
+        phi_u = phi_u_flat.reshape(b, s, m, q_u).permute(0, 2, 1, 3)
+
+        return g + lr * phi_g, u + lr * phi_u, float(log_p.mean().item())
+
