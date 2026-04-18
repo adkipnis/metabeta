@@ -340,6 +340,10 @@ class EvaluationSummary:
         return self.averageOverAlpha(self.coverage_error)
 
     @property
+    def eace(self) -> dict[str, torch.Tensor]:  # abs CE per alpha, then avg over alpha
+        return self.averageOverAlpha(self.coverage_error, absolute=True)
+
+    @property
     def lcr(self) -> dict[str, torch.Tensor]:  # log coverage ratio
         return self.averageOverAlpha(self.log_coverage_ratio)
 
