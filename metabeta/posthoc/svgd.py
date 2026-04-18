@@ -61,3 +61,39 @@ from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.regularization import unconstrainedToCholeskyCorr
 
 
+class SVGDRefiner:
+    """SVGD post-hoc refinement for flow posteriors.
+
+    Parameters
+    ----------
+    model : HierarchicalModel
+    n_steps : int
+        Number of SVGD update steps.
+    lr : float
+        Step size (equivalent to Adam lr; typical range 1e-3 – 5e-2).
+    grad_clip : float
+        Element-wise gradient clamp applied before kernel weighting.
+    """
+
+    def __init__(
+        self,
+        model: HierarchicalModel,
+        n_steps: int = 100,
+        lr: float = 1e-2,
+        grad_clip: float = 10.0,
+        lr_decay: float = 1.0,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        lr_decay : float
+            Final lr as a fraction of initial lr, using a cosine schedule.
+            1.0 = constant (default).  0.1 = cosine decay to lr/10.
+        """
+        self.model = model
+        self.n_steps = n_steps
+        self.lr = lr
+        self.grad_clip = grad_clip
+        self.lr_decay = lr_decay
+        self.lf = model.likelihood_family
+
