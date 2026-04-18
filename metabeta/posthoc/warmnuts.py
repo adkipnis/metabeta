@@ -225,7 +225,8 @@ class WarmNuts:
 
         # extractAll always stores corr_rfx (identity for non-correlated datasets)
         corr_rfx = _f32(out['wn_corr_rfx'])   # (1, n_s, q, q)
-        return Proposal(proposed, has_sigma_eps=self.has_sigma_eps, corr_rfx=corr_rfx)
+        proposal = Proposal(proposed, has_sigma_eps=self.has_sigma_eps, corr_rfx=corr_rfx)
+        return proposal
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -259,13 +260,19 @@ class WarmNuts:
                 progressbar=False,
             )
         n_divs = int(trace.sample_stats['diverging'].values.sum())
+        n_draws_total = self.n_chains * self.draws
         try:
             rhat_df = az.summary(trace, kind='diagnostics')
             max_rhat = float(rhat_df['r_hat'].max())
+            ess_df = az.summary(trace, kind='stats')
+            reff = float(ess_df['ess_bulk'].mean() / n_draws_total)
         except Exception:
             max_rhat = float('nan')
-        diag = {'n_divergences': n_divs, 'max_rhat': max_rhat}
-        return self._traceToProposal(trace), diag
+            reff = 1.0
+        diag = {'n_divergences': n_divs, 'max_rhat': max_rhat, 'reff': reff}
+        proposal = self._traceToProposal(trace)
+        proposal.reff = reff
+        return proposal, diag
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +355,8 @@ def _stackProposals(
         },
     }
     merged = Proposal(proposed, has_sigma_eps=has_sigma_eps)
+    # Propagate reff: use the mean across per-dataset proposals.
+    merged.reff = float(np.mean([p.reff for p in proposals]))
 
     # Stack corr_rfx — all WarmNuts proposals always have it (identity for non-correlated)
     corr_rfx_list = [p.corr_rfx for p in proposals]
