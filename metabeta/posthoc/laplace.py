@@ -71,3 +71,31 @@ class LaplaceRefiner:
         self.jitter = jitter
 
     # ------------------------------------------------------------------
+    # Initialisation
+    # ------------------------------------------------------------------
+
+    def _bestInit(self, proposal: Proposal) -> NCPParams:
+        """Pick the highest log_prob_g sample per batch element as MAP init."""
+        b = proposal.samples_g.shape[0]
+        best = proposal.log_prob_g.argmax(dim=-1)           # (b,)
+        ba = torch.arange(b, device=proposal.samples_g.device)
+
+        ffx = proposal.ffx[ba, best].unsqueeze(1)           # (b, 1, d)
+        sigma_rfx = proposal.sigma_rfx[ba, best].unsqueeze(1)  # (b, 1, q)
+        sigma_eps = None
+        if self.model.has_sigma_eps:
+            sigma_eps = proposal.sigma_eps[ba, best].unsqueeze(1)  # (b, 1)
+        z_corr = None
+        if proposal.d_corr > 0:
+            z_corr = proposal.samples_g[ba, best, -proposal.d_corr:].unsqueeze(1)
+
+        # Initialise u at zero (prior mean) rather than rfx/sigma_rfx.
+        # This avoids large initial gradients when sigma_rfx is small.
+        # The optimizer will move u to the posterior mode from here.
+        b_sz, m = proposal.samples_l.shape[0], proposal.samples_l.shape[1]
+        q = proposal.samples_l.shape[-1]
+        u = torch.zeros(b_sz, m, 1, q, device=proposal.samples_g.device,
+                        dtype=proposal.samples_g.dtype)
+        return NCPParams(ffx=ffx, sigma_rfx=sigma_rfx, sigma_eps=sigma_eps, u=u, z_corr=z_corr)
+
+    # ------------------------------------------------------------------
