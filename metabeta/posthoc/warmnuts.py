@@ -179,3 +179,52 @@ class WarmNuts:
         return init_list
 
     # ------------------------------------------------------------------
+    # Trace → Proposal conversion
+    # ------------------------------------------------------------------
+
+    def _traceToProposal(self, trace: az.InferenceData) -> Proposal:
+        """Convert a PyMC NUTS trace to a Proposal with b=1."""
+        d, q = self.d, self.q
+        out = extractAll(trace, self.ds, d, q, 'wn')
+
+        # Shapes from extractAll:
+        #   wn_ffx:       (d, n_s)
+        #   wn_sigma_rfx: (q, n_s)
+        #   wn_sigma_eps: (1, n_s)   — if Normal
+        #   wn_rfx:       (q, m, n_s)
+        #   wn_corr_rfx:  (1, n_s, q, q)
+
+        # arviz returns float64 arrays; cast to float32 for compatibility with the
+        # rest of the pipeline (model tensors, evaluation, etc.).
+        def _f32(a) -> torch.Tensor:
+            return torch.as_tensor(a).float()
+
+        ffx = _f32(out['wn_ffx']).T                           # (n_s, d)
+        sigma_rfx = _f32(out['wn_sigma_rfx']).T               # (n_s, q)
+        n_s = ffx.shape[0]
+        parts = [ffx, sigma_rfx]
+
+        if self.has_sigma_eps:
+            sigma_eps = _f32(out['wn_sigma_eps']).squeeze(0)  # (n_s,)
+            parts.append(sigma_eps.unsqueeze(-1))              # (n_s, 1)
+
+        samples_g = torch.cat(parts, dim=-1).unsqueeze(0)               # (1, n_s, D)
+        # (q, m, n_s) → permute(1, 2, 0) → (m, n_s, q) → unsqueeze(0) → (1, m, n_s, q)
+        samples_l = _f32(out['wn_rfx']).permute(1, 2, 0).unsqueeze(0)
+
+        proposed = {
+            'global': {
+                'samples': samples_g,
+                'log_prob': torch.zeros(1, n_s),           # dummy
+            },
+            'local': {
+                'samples': samples_l,
+                'log_prob': torch.zeros(1, self.m, n_s),   # dummy
+            },
+        }
+
+        # extractAll always stores corr_rfx (identity for non-correlated datasets)
+        corr_rfx = _f32(out['wn_corr_rfx'])   # (1, n_s, q, q)
+        return Proposal(proposed, has_sigma_eps=self.has_sigma_eps, corr_rfx=corr_rfx)
+
+    # ------------------------------------------------------------------
