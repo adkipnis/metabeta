@@ -146,3 +146,46 @@ class HierarchicalModel:
         return m
 
     # ------------------------------------------------------------------
+    # NCP ↔ centered conversion
+    # ------------------------------------------------------------------
+
+    def rfxFromU(self, sigma_rfx: Tensor, u: Tensor, z_corr: Tensor | None = None) -> Tensor:
+        """Compute centered rfx from non-centered offsets u.
+
+        Independent (z_corr is None):
+            rfx = u * σ_rfx              broadcasts (b, m, s, q) × (b, s, q)
+
+        Correlated:
+            L_full = diag(σ_rfx) @ L_corr    (b, s, q, q)
+            rfx[b, m, s, :] = u[b, m, s, :] @ L_full[b, s, :, :].T
+
+        Returns (b, m, s, q).
+        """
+        if z_corr is None:
+            return u * sigma_rfx.unsqueeze(1)
+
+        L_corr = unconstrainedToCholeskyCorr(z_corr, self.q)  # (b, s, q, q)
+        # diag(sigma_rfx) @ L_corr: multiply row i of L_corr by sigma_rfx[b, s, i]
+        L_full = sigma_rfx.unsqueeze(-1) * L_corr             # (b, s, q, q)
+        # rfx[b,m,s,j] = sum_i u[b,m,s,i] * L_full[b,s,j,i]
+        return torch.einsum('bmsi,bsji->bmsj', u, L_full)
+
+    def uFromRfx(self, sigma_rfx: Tensor, rfx: Tensor, z_corr: Tensor | None = None) -> Tensor:
+        """Inverse of rfxFromU: recover non-centered u from centered rfx.
+
+        Returns (b, m, s, q).
+        """
+        if z_corr is None:
+            return rfx / sigma_rfx.unsqueeze(1).clamp(min=self.eps)
+
+        L_corr = unconstrainedToCholeskyCorr(z_corr, self.q)  # (b, s, q, q)
+        L_full = sigma_rfx.unsqueeze(-1) * L_corr             # (b, s, q, q)
+
+        # Solve L_full @ u_j = rfx_j  per group (lower-triangular)
+        b, m, s, q = rfx.shape
+        L_exp = L_full.unsqueeze(1).expand(b, m, s, q, q)     # (b, m, s, q, q)
+        return torch.linalg.solve_triangular(
+            L_exp, rfx.unsqueeze(-1), upper=False
+        ).squeeze(-1)                                          # (b, m, s, q)
+
+    # ------------------------------------------------------------------
