@@ -72,29 +72,29 @@ def plotComparison(
             'EACE': 100 * dictMean(summary.eace),
         }
         _plotCoverage(
-            axs[i, 3],
+            axs[i, n_rec],
             summary.coverage,
             names_cov,
             stats_cov,
-            title=col_titles[3] if upper else None,
+            title=col_titles[n_rec] if upper else None,
             show_legend=upper,
             show_x=lower,
             show_corr_rfx=show_corr_rfx,
         )
-        axs[i, 3].set_ylabel('')
+        axs[i, n_rec].set_ylabel('')
 
         # col n_rec+1: SBC
         _plotSbcRow(
-            axs[i, 4],
+            axs[i, n_rec + 1],
             proposal,
             data,
             diff=False,
-            title=col_titles[4] if upper else None,
+            title=col_titles[n_rec + 1] if upper else None,
             show_legend=upper,
             show_x=lower,
             show_corr_rfx=show_corr_rfx,
         )
-        axs[i, 4].set_ylabel('')
+        axs[i, n_rec + 1].set_ylabel('')
 
     for ax in axs.flat:
         ax.set_box_aspect(1)
