@@ -30,3 +30,44 @@ Step 3 — Sampling:
 """
 
 import argparse
+
+import torch
+from torch import Tensor
+
+from metabeta.models.approximator import Approximator
+from metabeta.posthoc.generative import HierarchicalModel, NCPParams
+from metabeta.utils.evaluation import Proposal
+from metabeta.utils.preprocessing import rescaleData
+
+
+class LaplaceRefiner:
+    """MAP + Laplace approximation as a posthoc correction for flow posteriors.
+
+    Parameters
+    ----------
+    model : HierarchicalModel
+    n_steps : int
+        Adam steps for MAP finding.
+    lr : float
+        Adam learning rate.
+    n_samples : int
+        Posterior samples to draw from the Laplace Gaussian.
+    jitter : float
+        Added to Hessian diagonal before inversion for numerical stability.
+    """
+
+    def __init__(
+        self,
+        model: HierarchicalModel,
+        n_steps: int = 300,
+        lr: float = 5e-2,
+        n_samples: int = 1000,
+        jitter: float = 1e-4,
+    ) -> None:
+        self.model = model
+        self.n_steps = n_steps
+        self.lr = lr
+        self.n_samples = n_samples
+        self.jitter = jitter
+
+    # ------------------------------------------------------------------
