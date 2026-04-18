@@ -42,3 +42,24 @@ The diagnostics dict returned by __call__ contains per-chain acceptance rates as
 quality indicator before running the full evaluation.
 """
 
+import argparse
+from typing import Literal
+
+import torch
+from torch import Tensor
+
+from metabeta.models.approximator import Approximator
+from metabeta.posthoc.importance import ImportanceSampler
+from metabeta.utils.evaluation import Proposal
+from metabeta.utils.families import (
+    hasSigmaEps,
+    logMarginalLikelihoodNormal,
+    logProbFfx,
+    logProbSigma,
+)
+from metabeta.utils.preprocessing import rescaleData
+from metabeta.utils.regularization import unconstrainedToCholeskyCorr
+
+Mode = Literal['global', 'marginal', 'joint']
+
+
