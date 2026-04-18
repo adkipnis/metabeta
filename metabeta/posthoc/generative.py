@@ -189,3 +189,56 @@ class HierarchicalModel:
         ).squeeze(-1)                                          # (b, m, s, q)
 
     # ------------------------------------------------------------------
+    # Log joint
+    # ------------------------------------------------------------------
+
+    def logJoint(
+        self,
+        ffx: Tensor,                   # (b, s, d)
+        sigma_rfx: Tensor,             # (b, s, q)
+        sigma_eps: Tensor | None,      # (b, s) or None
+        u: Tensor,                     # (b, m, s, q)
+        z_corr: Tensor | None = None,  # (b, s, d_corr)
+    ) -> Tensor:
+        """Differentiable log p(y, θ_g, u) under NCP. Returns (b, s).
+
+        log p = log p(y | ffx, σ_eps, rfx(u, σ_rfx))
+              + Σ_j log p(u_j)         [N(0, I), summed over valid groups × rfx dims]
+              + log p(ffx)
+              + log p(σ_rfx)
+              + log p(σ_eps)           [Normal only]
+              + log p(z_corr)          [LKJ, if correlated]
+        """
+        rfx = self.rfxFromU(sigma_rfx, u, z_corr)    # (b, m, s, q)
+
+        # Likelihood — pass zero sigma_eps for families that ignore it
+        _sigma_eps = sigma_eps if sigma_eps is not None else ffx.new_zeros(ffx.shape[:2])
+        ll = logLikelihood(
+            ffx, _sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n,
+            likelihood_family=self.likelihood_family,
+        )   # (b, s)
+
+        # Global priors
+        lp = logProbFfx(ffx, self.nu_ffx, self.tau_ffx, self.family_ffx, self._mask_d_lp)
+        lp = lp + logProbSigma(
+            sigma_rfx, self.tau_rfx, self.family_sigma_rfx, self._mask_q_lp
+        )
+        if self.has_sigma_eps and sigma_eps is not None:
+            lp = lp + logProbSigma(sigma_eps, self.tau_eps, self.family_sigma_eps)
+
+        # LKJ prior on correlation (if correlated rfx)
+        if z_corr is not None and self.eta_rfx is not None:
+            lp = lp + logProbCorrRfx(z_corr, self.q, self.eta_rfx)
+
+        # Prior on u: N(0, I), masked over valid (group, rfx-dim) pairs
+        # u: (b, m, s, q) — sum over dims 1 (m) and 3 (q) → (b, s)
+        mask_u = (
+            self._mask_m[:, :, None, None]       # (b, m, 1, 1)
+            * self._mask_q[:, None, None, :]     # (b, 1, 1, q)
+        )
+        log_p_u = (-0.5 * (u.pow(2) + _LOG_2PI) * mask_u).sum(dim=(1, 3))
+        lp = lp + log_p_u
+
+        return ll + lp
+
+    # ------------------------------------------------------------------
