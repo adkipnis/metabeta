@@ -86,3 +86,57 @@ class CoordinateDescent:
         self.tol = tol
         self.lf = model.likelihood_family
 
+    # ------------------------------------------------------------------
+    # g-step: optimize global params
+    # ------------------------------------------------------------------
+
+    def _gStep(
+        self,
+        ffx: Tensor,             # (b, s, d)  leaf
+        log_sr: Tensor,          # (b, s, q)  leaf
+        log_se: Tensor | None,   # (b, s)     leaf or None
+        z_corr: Tensor | None,   # (b, s, d_corr) leaf or None
+        u_fixed: Tensor,         # (b, m, s, q) detached — only used for GLMM
+    ) -> None:
+        """In-place Adam update of global leaf tensors for n_g_steps iterations."""
+        opt_params: list[Tensor] = [ffx, log_sr]
+        if log_se is not None:
+            opt_params.append(log_se)
+        if z_corr is not None:
+            opt_params.append(z_corr)
+
+        optimizer = torch.optim.Adam(opt_params, lr=self.lr)
+
+        for _ in range(self.n_g_steps):
+            optimizer.zero_grad()
+            sr = log_sr.exp()
+            se = log_se.exp() if log_se is not None else None   # (b, s) or None
+
+            if self.lf == 0:
+                # Normal: marginal (integrates out rfx analytically)
+                lml = logMarginalLikelihoodNormal(
+                    ffx, sr, se,
+                    self.model.y, self.model.X, self.model.Z,
+                    self.model.mask_n, self.model._mask_m.unsqueeze(-1),
+                )   # (b, s)
+                lp = logProbFfx(
+                    ffx, self.model.nu_ffx, self.model.tau_ffx,
+                    self.model.family_ffx, self.model._mask_d_lp,
+                )
+                lp = lp + logProbSigma(
+                    sr, self.model.tau_rfx, self.model.family_sigma_rfx,
+                    self.model._mask_q_lp,
+                )
+                lp = lp + logProbSigma(se, self.model.tau_eps, self.model.family_sigma_eps)
+                loss = -(lml + lp).sum()
+            else:
+                # GLMM: conditional on current u
+                lj = self.model.logJoint(ffx, sr, se, u_fixed, z_corr)
+                loss = -lj.sum()
+
+            if not torch.isfinite(loss):
+                break
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(opt_params, max_norm=10.0)
+            optimizer.step()
+
