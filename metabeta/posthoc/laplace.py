@@ -433,3 +433,44 @@ class LaplaceRefiner:
 
 
 # ---------------------------------------------------------------------------
+# Top-level convenience function
+# ---------------------------------------------------------------------------
+
+
+def runLaplace(
+    model: Approximator,
+    data: dict[str, torch.Tensor],
+    cfg: argparse.Namespace,
+) -> tuple[Proposal, dict]:
+    """Draw a flow proposal and refine with MAP + Laplace approximation.
+
+    cfg fields
+    ----------
+    n_samples         : int   — Laplace samples (also used for flow init)
+    laplace_n_steps   : int   — Adam steps for MAP (default 300)
+    laplace_lr        : float — Adam learning rate (default 0.05)
+    laplace_jitter    : float — Hessian jitter (default 1e-4)
+    rescale           : bool
+    likelihood_family : int
+    """
+    import torch
+
+    lf = getattr(cfg, 'likelihood_family', 0)
+    n_steps = getattr(cfg, 'laplace_n_steps', 300)
+    lr = getattr(cfg, 'laplace_lr', 5e-2)
+    jitter = getattr(cfg, 'laplace_jitter', 1e-4)
+
+    proposal = model.estimate(data, n_samples=cfg.n_samples)
+    if cfg.rescale:
+        proposal.rescale(data['sd_y'])
+        data = rescaleData(data)
+
+    gen_model = HierarchicalModel(data, likelihood_family=lf)
+    refiner = LaplaceRefiner(
+        gen_model,
+        n_steps=n_steps,
+        lr=lr,
+        n_samples=cfg.n_samples,
+        jitter=jitter,
+    )
+    return refiner(proposal)
