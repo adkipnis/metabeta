@@ -211,3 +211,79 @@ class MetropolisSampler:
         return sg_out, sl_out, accept_rate
 
     # ------------------------------------------------------------------
+    # Normal-Normal conditional rfx posterior
+    # ------------------------------------------------------------------
+
+    def _sampleRfxConditional(
+        self,
+        sg_out: Tensor,   # (b, s_out, D_g)
+        d: int,
+        q: int,
+        d_corr: int,
+    ) -> Tensor:
+        """Draw rfx ~ p(rfx | θ_g, y) using Normal-Normal conjugacy.
+
+        For each accepted global sample and each group j:
+            V_j⁻¹ = Σ_rfx⁻¹ + Zⱼᵀ Zⱼ / σ²_eps
+            μ_j   = V_j (Zⱼᵀ rⱼ / σ²_eps)     where rⱼ = yⱼ − Xⱼ β
+            rfx_j ~ N(μ_j, V_j)
+
+        Σ_rfx = diag(σ_rfx²) for independent rfx, or D R Dᵀ for correlated
+        (D = diag(σ_rfx), R reconstructed from the unconstrained z_corr dims).
+
+        Returns (b, m, s_out, q).
+        """
+        b, s_out, _ = sg_out.shape
+        m = self._X.shape[1]
+
+        # Extract global parameter components from sg_out
+        ffx = sg_out[..., :d]                     # (b, s_out, d)
+        sigma_rfx = sg_out[..., d:d + q]          # (b, s_out, q)
+        sigma_eps = sg_out[..., d + q]             # (b, s_out)
+
+        # Residuals: r = y - X @ ffx  (b, m, n, s_out)
+        mu_ffx = torch.einsum('bmnd,bsd->bmns', self._X, ffx)
+        r = (self._y - mu_ffx) * self._mask_n     # (b, m, n, s_out)
+
+        # Group-level sufficient statistics
+        Z_m = self._Z * self._mask_n              # (b, m, n, q) — zero out padded obs
+        ZtZ = torch.einsum('bmnq,bmnr->bmqr', Z_m, Z_m)              # (b, m, q, q)
+        Ztr = torch.einsum('bmnq,bmns->bmsq', Z_m, r)                # (b, m, s_out, q)
+
+        # Σ_rfx Cholesky factor L such that Σ_rfx = L @ Lᵀ
+        sigma_rfx_c = sigma_rfx.clamp(min=1e-6)
+        if d_corr > 0:
+            L_corr = unconstrainedToCholeskyCorr(sg_out[..., -d_corr:], q)  # (b, s_out, q, q)
+            L_rfx = L_corr * sigma_rfx_c.unsqueeze(-1)                      # (b, s_out, q, q)
+        else:
+            L_rfx = torch.diag_embed(sigma_rfx_c)   # (b, s_out, q, q) diagonal
+
+        # Σ_rfx⁻¹ via Cholesky solve: solve L Lᵀ x = I
+        eye = torch.eye(q, device=sg_out.device, dtype=sg_out.dtype).expand(b, s_out, q, q)
+        Sigma_inv = torch.cholesky_solve(eye, L_rfx)   # (b, s_out, q, q)
+
+        # M = Σ_rfx⁻¹ + ZᵀZ / σ²_eps  (b, m, s_out, q, q)
+        s2e = sigma_eps.pow(2)  # (b, s_out)
+        M = Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]
+
+        # Cholesky of M (posterior precision)
+        jitter = 1e-6 * torch.eye(q, device=M.device, dtype=M.dtype)
+        chol_M = torch.linalg.cholesky(M + jitter)   # (b, m, s_out, q, q)
+
+        # Posterior mean: μ = M⁻¹ (Zᵀr / σ²_eps)
+        rhs = Ztr / s2e[:, None, :, None]             # (b, m, s_out, q)
+        post_mean = torch.cholesky_solve(
+            rhs.unsqueeze(-1), chol_M
+        ).squeeze(-1)                                  # (b, m, s_out, q)
+
+        # Sample: rfx = μ + chol_M⁻ᵀ z  where z ~ N(0, I)
+        # chol_M is Chol(M) = Chol(V⁻¹), so Chol(V) = chol_M⁻ᵀ (upper-triangular solve)
+        z = torch.randn_like(post_mean)
+        rfx_centered = torch.linalg.solve_triangular(
+            chol_M.mT, z.unsqueeze(-1), upper=True
+        ).squeeze(-1)                                  # (b, m, s_out, q)
+
+        rfx = (post_mean + rfx_centered) * self._mask_m.unsqueeze(-1).float()
+        return rfx   # (b, m, s_out, q)
+
+    # ------------------------------------------------------------------
