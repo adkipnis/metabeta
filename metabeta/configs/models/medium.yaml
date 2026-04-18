@@ -10,14 +10,14 @@ summarizer_g:
 
 summarizer_l:
     n_isab: 0
-    n_blocks: 2
+    n_blocks: 3
 
 posterior_g:
     type: 'coupling'
     transform: 'spline+'
     base_family: 'normal'
     base_trainable: True
-    n_blocks: 5
+    n_blocks: 6
     subnet_kwargs:
         net_type: 'residual'
         activation: 'ReLU'
