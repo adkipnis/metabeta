@@ -58,3 +58,56 @@ class NCPParams(NamedTuple):
     z_corr: Tensor | None      # (b, s, d_corr) — None if independent rfx
 
 
+class HierarchicalModel:
+    """Differentiable joint log p(y, θ_g, u) for a padded batch of hierarchical datasets.
+
+    Parameters
+    ----------
+    data : dict
+        Padded batch tensors: X (b, m, n, d), Z (b, m, n, q), y (b, m, n),
+        masks, and prior hyperparameters (nu_ffx, tau_ffx, tau_rfx, ...).
+    likelihood_family : int
+        0 = Normal, 1 = Bernoulli, 2 = Poisson.
+    eps : float
+        Numerical floor added to scale parameters.
+    """
+
+    def __init__(
+        self,
+        data: dict[str, Tensor],
+        likelihood_family: int = 0,
+        eps: float = 1e-12,
+    ) -> None:
+        self.likelihood_family = likelihood_family
+        self.has_sigma_eps = hasSigmaEps(likelihood_family)
+        self.eps = eps
+
+        # Observations (unsqueeze last dim for broadcasting with (b, m, n, s))
+        self.X = data['X']                         # (b, m, n, d)
+        self.Z = data['Z']                         # (b, m, n, q)
+        self.y = data['y'].unsqueeze(-1)           # (b, m, n, 1)
+        self.mask_n = data['mask_n'].unsqueeze(-1) # (b, m, n, 1)
+
+        # Raw masks — reshaped as needed per operation
+        self._mask_m = data['mask_m']              # (b, m)
+        self._mask_q = data['mask_q']              # (b, q)
+
+        # Masks pre-shaped for logProbFfx / logProbSigma (expect (b, 1, d/q))
+        self._mask_d_lp = data['mask_d'].unsqueeze(-2)    # (b, 1, d)
+        self._mask_q_lp = data['mask_q'].unsqueeze(-2)    # (b, 1, q)
+        self._mask_mq = data['mask_mq'].unsqueeze(-2)     # (b, m, 1, q)
+
+        # Priors (unsqueeze sample dim for broadcasting with (b, s, d/q))
+        self.nu_ffx = data['nu_ffx'].unsqueeze(-2)             # (b, 1, d)
+        self.tau_ffx = data['tau_ffx'].unsqueeze(-2) + eps     # (b, 1, d)
+        self.tau_rfx = data['tau_rfx'].unsqueeze(-2) + eps     # (b, 1, q)
+        self.family_ffx = data['family_ffx']                   # (b,)
+        self.family_sigma_rfx = data['family_sigma_rfx']       # (b,)
+        if self.has_sigma_eps:
+            self.tau_eps = data['tau_eps'].unsqueeze(-1) + eps # (b, 1)
+            self.family_sigma_eps = data['family_sigma_eps']   # (b,)
+
+        self.eta_rfx: Tensor | None = data.get('eta_rfx')     # (b,) or None
+        self.q = data['mask_q'].shape[-1]                      # padded rfx dim
+
+    # ------------------------------------------------------------------
