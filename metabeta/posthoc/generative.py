@@ -30,3 +30,23 @@ Downstream methods (MAP, particle descent, coordinate descent) should:
   4. Call to_proposal to wrap the refined parameters.
 """
 
+import math
+from typing import NamedTuple
+
+import torch
+from torch import Tensor
+
+from metabeta.utils.evaluation import Proposal
+from metabeta.utils.families import (
+    hasSigmaEps,
+    logLikelihood,
+    logProbCorrRfx,
+    logProbFfx,
+    logProbSigma,
+)
+from metabeta.utils.regularization import unconstrainedToCholeskyCorr
+
+
+_LOG_2PI = math.log(2 * math.pi)
+
+
