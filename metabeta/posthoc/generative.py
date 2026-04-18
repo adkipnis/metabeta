@@ -111,3 +111,38 @@ class HierarchicalModel:
         self.q = data['mask_q'].shape[-1]                      # padded rfx dim
 
     # ------------------------------------------------------------------
+    # Batch slicing
+    # ------------------------------------------------------------------
+
+    def sliceBatch(self, bi: int) -> 'HierarchicalModel':
+        """Return a view of this model containing only batch element bi (b=1).
+
+        Used by Hessian loops that need per-element calls to logJoint without
+        cross-batch contamination of the boolean-indexed log-prob functions.
+        """
+        m = HierarchicalModel.__new__(HierarchicalModel)
+        m.likelihood_family = self.likelihood_family
+        m.has_sigma_eps = self.has_sigma_eps
+        m.eps = self.eps
+        m.q = self.q
+        m.X = self.X[bi:bi + 1]
+        m.Z = self.Z[bi:bi + 1]
+        m.y = self.y[bi:bi + 1]
+        m.mask_n = self.mask_n[bi:bi + 1]
+        m._mask_m = self._mask_m[bi:bi + 1]
+        m._mask_q = self._mask_q[bi:bi + 1]
+        m._mask_d_lp = self._mask_d_lp[bi:bi + 1]
+        m._mask_q_lp = self._mask_q_lp[bi:bi + 1]
+        m._mask_mq = self._mask_mq[bi:bi + 1]
+        m.nu_ffx = self.nu_ffx[bi:bi + 1]
+        m.tau_ffx = self.tau_ffx[bi:bi + 1]
+        m.tau_rfx = self.tau_rfx[bi:bi + 1]
+        m.family_ffx = self.family_ffx[bi:bi + 1]
+        m.family_sigma_rfx = self.family_sigma_rfx[bi:bi + 1]
+        if self.has_sigma_eps:
+            m.tau_eps = self.tau_eps[bi:bi + 1]
+            m.family_sigma_eps = self.family_sigma_eps[bi:bi + 1]
+        m.eta_rfx = self.eta_rfx[bi:bi + 1] if self.eta_rfx is not None else None
+        return m
+
+    # ------------------------------------------------------------------
