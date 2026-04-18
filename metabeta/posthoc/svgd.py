@@ -97,3 +97,42 @@ class SVGDRefiner:
         self.lr_decay = lr_decay
         self.lf = model.likelihood_family
 
+    # ------------------------------------------------------------------
+    # RBF kernel
+    # ------------------------------------------------------------------
+
+    def _rbfKernel(self, X: Tensor) -> tuple[Tensor, Tensor]:
+        """Per-dimension RBF kernel with median-heuristic bandwidth.
+
+        Uses a separate bandwidth h_d per dimension so that tight dimensions
+        (e.g. σ_eps) are not over-repelled relative to broad ones (e.g. ffx):
+
+            k(x, y) = exp(-Σ_d (x_d - y_d)² / h_d)
+
+        X          : (b, s, D)
+        Returns
+        K          : (b, s, s)
+        repulsion  : (b, s, D) — (1/s) Σ_j ∇_{X_i} k(X_i, X_j)
+                                = (2/h_d) * (1/s) Σ_j K_ij (X_i - X_j)_d
+        """
+        b, s, D = X.shape
+        diff = X.unsqueeze(2) - X.unsqueeze(1)   # (b, s, s, D)
+        sq_per_dim = diff.pow(2)                   # (b, s, s, D)
+
+        if s > 1:
+            r, c = torch.triu_indices(s, s, offset=1, device=X.device)
+            med = sq_per_dim[:, r, c, :].median(dim=1).values  # (b, D)
+            h = (med / (2.0 * math.log(s))).clamp(min=1e-6)    # (b, D)
+        else:
+            h = X.new_ones(b, D)
+
+        scaled = sq_per_dim / h[:, None, None, :]               # (b, s, s, D)
+        K = torch.exp(-scaled.sum(-1))                           # (b, s, s)
+
+        # repulsion[b, i, d] = (2/h_d) * (1/s) * Σ_j K[b,i,j] * diff[b,i,j,d]
+        repulsion = (2.0 / (h[:, None, :] * s)) * torch.einsum(
+            'bij,bijd->bid', K, diff
+        )   # (b, s, D)
+
+        return K, repulsion
+
