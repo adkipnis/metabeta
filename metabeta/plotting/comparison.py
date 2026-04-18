@@ -35,8 +35,9 @@ def plotComparison(
     show: bool = False,
     show_corr_rfx: bool = False,
 ) -> Path | None:
-    col_titles = _COL_TITLES
-    ncols = 5
+    col_titles = _COL_TITLES_CORR if show_corr_rfx else _COL_TITLES
+    n_rec = 4 if show_corr_rfx else 3
+    ncols = n_rec + 2
     nrows = len(summaries)
     fig, axs = plt.subplots(nrows, ncols, figsize=(6 * ncols, 6 * nrows), dpi=DPI, squeeze=False)
 
@@ -45,15 +46,15 @@ def plotComparison(
         lower = i == nrows - 1
 
         # cols 0-(n_rec-1): recovery scatter
-        targets, estimates, masks, names, metrics = _prepareRecoveryData(summary, data)
+        targets, estimates, masks, names, metrics = _prepareRecoveryData(summary, data, show_corr_rfx=show_corr_rfx)
         _plotRecoveryGrouped(
-            axs[i, :3],  # type: ignore
+            axs[i, :n_rec],  # type: ignore
             targets=targets,
             estimates=estimates,
             masks=masks,
             metrics=metrics,
             names=names,
-            titles=col_titles[:3],
+            titles=col_titles[:n_rec],
             ylabel=label,
             upper=upper,
             lower=lower,
