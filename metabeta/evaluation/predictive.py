@@ -107,6 +107,7 @@ def psisLooNLL(
     pp: D.Distribution,
     data: dict[str, torch.Tensor],
     w: torch.Tensor | None = None,
+    reff: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     PSIS-LOO NLL per dataset. Returns (loo_nll, pareto_k), both shape (b,).
@@ -129,6 +130,9 @@ def psisLooNLL(
         so that both the proposal-posterior gap and the LOO leave-out are
         handled jointly: log w_ij^s = log w_IS^s - log p(y_ij | θ^s).
         When None, the raw proposal is treated as the posterior (uniform base).
+    reff : relative effective sample size (ESS / n_draws). Use 1.0 for i.i.d.
+        samples (flow / IS). For MCMC, pass mean(ESS) / n_draws to set the
+        correct PSIS tail threshold.
     """
 
     y_obs = data['y'].unsqueeze(-1)   # (b, m, n, 1)
@@ -144,7 +148,6 @@ def psisLooNLL(
     b, m, n, s = log_p.shape
 
     # PSIS per observation — az.psislw expects (n_obs, n_draws) with last axis = samples.
-    # Samples are i.i.d. from the flow, so reff=1.
     # Only run PSIS on real (non-padded) observations; scatter results back afterward.
     valid = mask.reshape(b * m * n).numpy()  # (b*m*n,) bool
     log_w_flat = log_w.detach().reshape(b * m * n, s).numpy()
@@ -152,7 +155,7 @@ def psisLooNLL(
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', RuntimeWarning)
-        log_w_psis_valid, k_valid = az.psislw(log_w_valid, reff=1.0)
+        log_w_psis_valid, k_valid = az.psislw(log_w_valid, reff=reff)
 
     # Fallback for rows where PSIS fails (degenerate / constant weights):
     # substitute normalized raw log-weights and flag k as nan.
