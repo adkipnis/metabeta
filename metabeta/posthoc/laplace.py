@@ -169,3 +169,147 @@ class LaplaceRefiner:
             {'loss_curve': losses, 'final_loss': final}
 
     # ------------------------------------------------------------------
+    # Hessian computation
+    # ------------------------------------------------------------------
+
+    def _gFlat(
+        self,
+        ffx_b: Tensor,      # (1, d)
+        log_sr_b: Tensor,   # (1, q)
+        log_se_b: Tensor | None,  # (1,) or None
+        zc_b: Tensor | None,      # (1, d_corr) or None
+    ) -> Tensor:
+        """Concatenate unconstrained global params into a flat (D_g,) vector."""
+        parts: list[Tensor] = [ffx_b.squeeze(0), log_sr_b.squeeze(0)]
+        if log_se_b is not None:
+            parts.append(log_se_b.squeeze(0))
+        if zc_b is not None:
+            parts.append(zc_b.squeeze(0))
+        return torch.cat(parts)
+
+    def _ljFromGFlat(
+        self,
+        g: Tensor,              # (D_g,) unconstrained global vector for one batch elem
+        u_b: Tensor,            # (1, m, 1, q) fixed
+        d: int,
+        q: int,
+        has_se: bool,
+        has_zc: bool,
+        model: HierarchicalModel | None = None,  # sliced (b=1) model; defaults to self.model
+    ) -> Tensor:
+        """Scalar log_joint for a single batch element from a flat global vector."""
+        model = model if model is not None else self.model
+        cursor = 0
+        ffx_b = g[cursor:cursor + d].reshape(1, 1, d)
+        cursor += d
+        sr_b = g[cursor:cursor + q].exp().reshape(1, 1, q)
+        cursor += q
+        se_b: Tensor | None = None
+        if has_se:
+            se_b = g[cursor:cursor + 1].exp().reshape(1, 1)  # (1, 1) = (b=1, s=1)
+            cursor += 1
+        zc_b: Tensor | None = None
+        if has_zc:
+            d_corr = g.shape[0] - cursor
+            zc_b = g[cursor:].reshape(1, 1, d_corr)
+        return model.logJoint(ffx_b, sr_b, se_b, u_b, zc_b).squeeze()
+
+    def _globalHessian(
+        self,
+        ffx_map: Tensor,        # (b, 1, d)
+        log_sr_map: Tensor,     # (b, 1, q)
+        log_se_map: Tensor | None,  # (b, 1) or None
+        zc_map: Tensor | None,  # (b, 1, d_corr) or None
+        u_map: Tensor,          # (b, m, 1, q)
+    ) -> Tensor:
+        """Full (b, D_g, D_g) Hessian of logJoint w.r.t. concatenated unconstrained globals.
+
+        Computed element-wise over the batch via two rounds of autograd.
+        """
+        b = ffx_map.shape[0]
+        d, q = ffx_map.shape[-1], log_sr_map.shape[-1]
+        has_se = log_se_map is not None
+        has_zc = zc_map is not None
+        D_g = d + q + (1 if has_se else 0) + (zc_map.shape[-1] if has_zc else 0)
+
+        H = ffx_map.new_zeros(b, D_g, D_g)
+        for bi in range(b):
+            model_bi = self.model.sliceBatch(bi)
+            log_se_bi = log_se_map[bi:bi + 1] if has_se else None
+            zc_bi = zc_map[bi:bi + 1] if has_zc else None
+            g0 = self._gFlat(ffx_map[bi], log_sr_map[bi], log_se_bi, zc_bi)
+            g0 = g0.detach().requires_grad_(True)
+            u_bi = u_map[bi:bi + 1]
+
+            lj = self._ljFromGFlat(g0, u_bi, d, q, has_se, has_zc, model_bi)
+            grad1 = torch.autograd.grad(lj, g0, create_graph=True)[0]  # (D_g,)
+            H_bi = g0.new_zeros(D_g, D_g)
+            for i in range(D_g):
+                grad2 = torch.autograd.grad(
+                    grad1[i], g0, retain_graph=(i < D_g - 1)
+                )[0]
+                H_bi[i] = grad2.detach()
+            H[bi] = H_bi
+        return H  # (b, D_g, D_g)
+
+    def _localHessian(
+        self,
+        ffx_map: Tensor,        # (b, 1, d)
+        log_sr_map: Tensor,     # (b, 1, q)
+        log_se_map: Tensor | None,
+        zc_map: Tensor | None,
+        u_map: Tensor,          # (b, m, 1, q)
+    ) -> Tensor:
+        """Block-diagonal (b, m, q, q) Hessian of logJoint w.r.t. u, one block per group.
+
+        Groups are conditionally independent given θ_g, so off-diagonal blocks
+        are exactly zero.  Only active groups (mask_m == 1) are computed; the
+        rest retain the identity (prior Hessian = -I).
+        """
+        b, m, _, q = u_map.shape
+        d = ffx_map.shape[-1]
+        has_se = log_se_map is not None
+        has_zc = zc_map is not None
+        H = u_map.new_zeros(b, m, q, q)
+
+        for bi in range(b):
+            model_bi = self.model.sliceBatch(bi)
+            sr_bi = log_sr_map[bi].exp()                       # (1, q)
+            se_bi = log_se_map[bi].exp() if has_se else None   # (1,) or None
+            zc_bi = zc_map[bi:bi + 1] if has_zc else None
+            n_active = int(self.model._mask_m[bi].sum().item())
+
+            for j in range(n_active):
+                u_j = u_map[bi, j, 0, :].detach().requires_grad_(True)  # (q,)
+
+                # Rebuild u_full with u_j as the differentiable leaf
+                u_full = torch.cat([
+                    u_map[bi:bi + 1, :j].detach(),
+                    u_j.reshape(1, 1, 1, q),
+                    u_map[bi:bi + 1, j + 1:].detach(),
+                ], dim=1)  # (1, m, 1, q)
+
+                lj = model_bi.logJoint(
+                    ffx_map[bi:bi + 1],
+                    sr_bi.unsqueeze(0),
+                    se_bi.unsqueeze(0) if se_bi is not None else None,
+                    u_full,
+                    zc_bi,
+                ).squeeze()
+
+                grad1 = torch.autograd.grad(lj, u_j, create_graph=True)[0]  # (q,)
+                H_bj = u_j.new_zeros(q, q)
+                for i in range(q):
+                    grad2 = torch.autograd.grad(
+                        grad1[i], u_j, retain_graph=(i < q - 1)
+                    )[0]
+                    H_bj[i] = grad2.detach()
+                H[bi, j] = H_bj
+
+            # Inactive groups: Hessian is -I (only the N(0,I) prior contributes)
+            for j in range(n_active, m):
+                H[bi, j] = -torch.eye(q, device=H.device, dtype=H.dtype)
+
+        return H  # (b, m, q, q)
+
+    # ------------------------------------------------------------------
