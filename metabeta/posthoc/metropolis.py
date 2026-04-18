@@ -63,3 +63,41 @@ from metabeta.utils.regularization import unconstrainedToCholeskyCorr
 Mode = Literal['global', 'marginal', 'joint']
 
 
+class MetropolisSampler:
+    def __init__(
+        self,
+        data: dict[str, Tensor],
+        n_chains: int = 4,
+        n_steps: int = 250,
+        burnin: int = 50,
+        mode: Mode = 'marginal',
+        likelihood_family: int = 0,
+        eps: float = 1e-12,
+    ) -> None:
+        if mode == 'marginal' and likelihood_family != 0:
+            raise ValueError("mode='marginal' requires likelihood_family=0 (Normal)")
+        if burnin >= n_steps:
+            raise ValueError('burnin must be < n_steps')
+
+        self.n_chains = n_chains
+        self.n_steps = n_steps
+        self.burnin = burnin
+        self.mode = mode
+        self.likelihood_family = likelihood_family
+        self.has_sigma_eps = hasSigmaEps(likelihood_family)
+        self.eps = eps
+
+        # Reuse ImportanceSampler for prior log-prob computation and unnormalizedPosterior.
+        # 'joint' needs full=True (includes rfx prior and local log-prob).
+        self._is = ImportanceSampler(
+            data, full=(mode == 'joint'), likelihood_family=likelihood_family, eps=eps
+        )
+
+        # Data tensors for the Normal-Normal conditional (marginal mode).
+        # These mirror what ImportanceSampler stores but are kept as direct references.
+        self._X = data['X']           # (b, m, n, d)
+        self._Z = data['Z']           # (b, m, n, q)
+        self._y = data['y'].unsqueeze(-1)  # (b, m, n, 1)
+        self._mask_n = data['mask_n'].unsqueeze(-1)   # (b, m, n, 1)
+        self._mask_m = data['mask_m'].unsqueeze(-1)   # (b, m, 1)
+
