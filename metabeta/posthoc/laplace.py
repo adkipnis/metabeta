@@ -360,3 +360,76 @@ class LaplaceRefiner:
         return u_map + delta                          # (b, m, n_samples, q)
 
     # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
+
+    def __call__(self, proposal: Proposal) -> tuple[Proposal, dict]:
+        """Find MAP, compute Hessians, draw Laplace samples, return Proposal.
+
+        Parameters
+        ----------
+        proposal : Proposal
+            Flow proposal used for initialisation (any n_samples).
+
+        Returns
+        -------
+        proposal_out : Proposal
+            n_samples draws from the Laplace Gaussian approximation.
+        diagnostics : dict
+            'loss_curve', 'final_loss' from MAP; 'global_eigvals' (b, D_g)
+            minimum eigenvalue of -H_g as a p.d. quality check.
+        """
+        init = self._bestInit(proposal)
+        map_params, log_sr_map, log_se_map, zc_map, map_diag = self._findMAP(init)
+
+        d, q = map_params.ffx.shape[-1], map_params.sigma_rfx.shape[-1]
+
+        # Hessians in unconstrained space
+        H_g = self._globalHessian(
+            map_params.ffx, log_sr_map, log_se_map, zc_map, map_params.u
+        )
+        H_l = self._localHessian(
+            map_params.ffx, log_sr_map, log_se_map, zc_map, map_params.u
+        )
+
+        # Assemble MAP global flat vector (unconstrained)
+        b = map_params.ffx.shape[0]
+        g_map_parts: list[Tensor] = [
+            map_params.ffx.squeeze(1),           # (b, d)
+            log_sr_map.squeeze(1),               # (b, q)
+        ]
+        if log_se_map is not None:
+            g_map_parts.append(log_se_map)       # (b, 1)
+        if zc_map is not None:
+            g_map_parts.append(zc_map.squeeze(1))
+        g_map_flat = torch.cat(g_map_parts, dim=-1)  # (b, D_g)
+
+        # Draw samples
+        g_samples = self._sampleGlobal(g_map_flat, H_g)     # (b, s, D_g)
+        u_samples = self._sampleLocal(map_params.u, H_l)    # (b, m, s, q)
+
+        # Unpack g_samples back to constrained params
+        cursor = 0
+        ffx_s = g_samples[..., cursor:cursor + d]
+        cursor += d
+        sigma_rfx_s = g_samples[..., cursor:cursor + q].exp()
+        cursor += q
+        sigma_eps_s: Tensor | None = None
+        if log_se_map is not None:
+            sigma_eps_s = g_samples[..., cursor].exp()
+            cursor += 1
+        z_corr_s: Tensor | None = None
+        if zc_map is not None:
+            z_corr_s = g_samples[..., cursor:]
+
+        proposal_out = self.model.toProposal(
+            ffx_s, sigma_rfx_s, sigma_eps_s, u_samples, z_corr_s
+        )
+        proposal_out.tpd = proposal.tpd
+
+        min_eigval = torch.linalg.eigvalsh(-H_g).min(dim=-1).values  # (b,)
+        diag = {**map_diag, 'global_min_eigval': min_eigval}
+        return proposal_out, diag
+
+
+# ---------------------------------------------------------------------------
