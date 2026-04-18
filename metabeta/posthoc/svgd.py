@@ -391,3 +391,38 @@ class SVGDRefiner:
 
 
 # ---------------------------------------------------------------------------
+# Top-level convenience function
+# ---------------------------------------------------------------------------
+
+
+def runSVGD(
+    model: Approximator,
+    data: dict[str, torch.Tensor],
+    cfg: argparse.Namespace,
+) -> tuple[Proposal, dict]:
+    """Draw a flow proposal and refine with SVGD.
+
+    cfg fields
+    ----------
+    n_samples         : int   — flow samples (= n_particles)
+    svgd_n_steps      : int   — SVGD steps (default 100)
+    svgd_lr           : float — initial step size (default 0.01)
+    svgd_grad_clip    : float — element-wise gradient clamp (default 10.0)
+    svgd_lr_decay     : float — final lr fraction for cosine schedule (default 1.0)
+    rescale           : bool
+    likelihood_family : int
+    """
+    lf = getattr(cfg, 'likelihood_family', 0)
+    n_steps = getattr(cfg, 'svgd_n_steps', 100)
+    lr = getattr(cfg, 'svgd_lr', 1e-2)
+    grad_clip = getattr(cfg, 'svgd_grad_clip', 10.0)
+    lr_decay = getattr(cfg, 'svgd_lr_decay', 1.0)
+
+    proposal = model.estimate(data, n_samples=cfg.n_samples)
+    if cfg.rescale:
+        proposal.rescale(data['sd_y'])
+        data = rescaleData(data)
+
+    gen_model = HierarchicalModel(data, likelihood_family=lf)
+    refiner = SVGDRefiner(gen_model, n_steps=n_steps, lr=lr, grad_clip=grad_clip, lr_decay=lr_decay)
+    return refiner(proposal)
