@@ -15,8 +15,11 @@ def _plotCoverage(
     title: str | None = 'Credible Intervals',
     show_legend: bool = True,
     show_x: bool = True,
+    show_corr_rfx: bool = False,
 ) -> None:
     # prepare data
+    if not show_corr_rfx:
+        cvrg = {alpha: {k: v for k, v in d.items() if k != 'corr_rfx'} for alpha, d in cvrg.items()}
     cols = [torch.cat(list(v.values())).unsqueeze(1) for v in cvrg.values()]
     matrix = torch.cat(cols, dim=1)
     assert len(names) == len(matrix), 'shape mismatch for names'
@@ -59,6 +62,7 @@ def plotCoverage(
     plot_dir: Path | None = None,
     epoch: int | None = None,
     show: bool = False,
+    show_corr_rfx: bool = False,
 ) -> Path | None:
     if not isinstance(summaries, list):
         summaries = [summaries]
@@ -74,7 +78,7 @@ def plotCoverage(
         names = (
             getNames('ffx', proposal.d)
             + getNames('sigmas', proposal.q, has_sigma_eps=proposal.has_sigma_eps)
-            + (getCorrRfxNames(proposal.q) if proposal.d_corr > 0 else [])
+            + (getCorrRfxNames(proposal.q) if show_corr_rfx and proposal.d_corr > 0 else [])
             + getNames('rfx', proposal.q)
         )
         stats = {
@@ -89,6 +93,7 @@ def plotCoverage(
             title=label,
             show_legend=(i == 0),
             show_x=(i == nrows - 1),
+            show_corr_rfx=show_corr_rfx,
         )
         axs[i].set_box_aspect(1)
 

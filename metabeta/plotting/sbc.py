@@ -69,6 +69,7 @@ def _plotSbcRow(
     title: str | None,
     show_legend: bool,
     show_x: bool,
+    show_corr_rfx: bool = False,
 ) -> None:
     ranks = getFractionalRanks(proposal, data)
     ranks['sigmas'] = joinSigmas(ranks)
@@ -92,7 +93,7 @@ def _plotSbcRow(
             show_x=show_x,
         )
         n_eff_global = min(n_eff_global, _nEff(masks[k], n_datasets))
-    if 'corr_rfx' in ranks:
+    if show_corr_rfx and 'corr_rfx' in ranks:
         _plotSbcEcdf(
             ax,
             ranks['corr_rfx'],
@@ -135,6 +136,7 @@ def plotSBC(
     plot_dir: Path | None = None,
     epoch: int | None = None,
     show: bool = False,
+    show_corr_rfx: bool = False,
 ) -> Path | None:
     if not isinstance(proposals, list):
         proposals = [proposals]
@@ -153,6 +155,7 @@ def plotSBC(
             title=label,
             show_legend=(i == 0),
             show_x=(i == nrows - 1),
+            show_corr_rfx=show_corr_rfx,
         )
         axs[i].set_box_aspect(1)
 
