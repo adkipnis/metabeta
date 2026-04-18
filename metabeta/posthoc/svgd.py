@@ -136,3 +136,79 @@ class SVGDRefiner:
 
         return K, repulsion
 
+    # ------------------------------------------------------------------
+    # Gradient computation
+    # ------------------------------------------------------------------
+
+    def _marginalGrads(
+        self,
+        g: Tensor,   # (b, s, D_g) detached
+        d: int,
+        q: int,
+        has_se: bool,
+        has_zc: bool,
+    ) -> tuple[Tensor, Tensor]:
+        """∇ log p_marginal(θ_g | y) for all particles (Normal only).
+
+        Returns (grad_g, log_p) both (b, s).
+        """
+        g_leaf = g.clone().requires_grad_(True)
+        ffx = g_leaf[..., :d]
+        sr = g_leaf[..., d:d + q].exp()
+        cursor = d + q
+        se = g_leaf[..., cursor].exp() if has_se else None
+        if has_se:
+            cursor += 1
+        zc = g_leaf[..., cursor:] if has_zc else None
+
+        lml = logMarginalLikelihoodNormal(
+            ffx, sr, se,
+            self.model.y, self.model.X, self.model.Z,
+            self.model.mask_n, self.model._mask_m.unsqueeze(-1),
+        )
+        lp = logProbFfx(
+            ffx, self.model.nu_ffx, self.model.tau_ffx,
+            self.model.family_ffx, self.model._mask_d_lp,
+        )
+        lp = lp + logProbSigma(
+            sr, self.model.tau_rfx, self.model.family_sigma_rfx, self.model._mask_q_lp,
+        )
+        lp = lp + logProbSigma(se, self.model.tau_eps, self.model.family_sigma_eps)
+        log_p = lml + lp   # (b, s)
+        log_p.sum().backward()
+
+        grad_g = g_leaf.grad.clamp(-self.grad_clip, self.grad_clip).detach()
+        return grad_g, log_p.detach()
+
+    def _jointGrads(
+        self,
+        g: Tensor,   # (b, s, D_g) detached
+        u: Tensor,   # (b, m, s, q) detached
+        d: int,
+        q: int,
+        has_se: bool,
+        has_zc: bool,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """∇ log p(θ_g, u | y) for all particles (GLMM).
+
+        Returns (grad_g, grad_u, log_p).
+        """
+        g_leaf = g.clone().requires_grad_(True)
+        u_leaf = u.clone().requires_grad_(True)
+
+        ffx = g_leaf[..., :d]
+        sr = g_leaf[..., d:d + q].exp()
+        cursor = d + q
+        se = g_leaf[..., cursor].exp() if has_se else None
+        if has_se:
+            cursor += 1
+        zc = g_leaf[..., cursor:] if has_zc else None
+
+        log_p = self.model.logJoint(ffx, sr, se, u_leaf, zc)   # (b, s)
+        log_p.sum().backward()
+
+        grad_g = g_leaf.grad.clamp(-self.grad_clip, self.grad_clip).detach()
+        grad_u = u_leaf.grad.clamp(-self.grad_clip, self.grad_clip).detach()
+        return grad_g, grad_u, log_p.detach()
+
+    # ------------------------------------------------------------------
