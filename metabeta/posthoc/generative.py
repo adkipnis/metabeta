@@ -50,3 +50,11 @@ from metabeta.utils.regularization import unconstrainedToCholeskyCorr
 _LOG_2PI = math.log(2 * math.pi)
 
 
+class NCPParams(NamedTuple):
+    ffx: Tensor                # (b, s, d)
+    sigma_rfx: Tensor          # (b, s, q)
+    sigma_eps: Tensor | None   # (b, s) — None for non-Normal
+    u: Tensor                  # (b, m, s, q)
+    z_corr: Tensor | None      # (b, s, d_corr) — None if independent rfx
+
+
