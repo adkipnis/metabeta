@@ -335,3 +335,47 @@ class CoordinateDescent:
 
 
 # ---------------------------------------------------------------------------
+# Top-level convenience function
+# ---------------------------------------------------------------------------
+
+
+def runCoordinateDescent(
+    model: Approximator,
+    data: dict[str, torch.Tensor],
+    cfg: argparse.Namespace,
+) -> tuple[Proposal, dict]:
+    """Draw a flow proposal and refine with coordinate descent.
+
+    cfg fields
+    ----------
+    n_samples         : int   — flow samples (= number of particles)
+    cd_n_outer        : int   — coordinate cycles (default 20)
+    cd_n_g_steps      : int   — Adam steps per g-step (default 30)
+    cd_n_u_steps      : int   — Adam steps per u-step for GLMM (default 10)
+    cd_lr             : float — Adam learning rate (default 0.05)
+    cd_tol            : float — early-stopping tolerance (default 1e-4)
+    rescale           : bool
+    likelihood_family : int
+    """
+    lf = getattr(cfg, 'likelihood_family', 0)
+    n_outer = getattr(cfg, 'cd_n_outer', 20)
+    n_g_steps = getattr(cfg, 'cd_n_g_steps', 30)
+    n_u_steps = getattr(cfg, 'cd_n_u_steps', 10)
+    lr = getattr(cfg, 'cd_lr', 5e-2)
+    tol = getattr(cfg, 'cd_tol', 1e-4)
+
+    proposal = model.estimate(data, n_samples=cfg.n_samples)
+    if cfg.rescale:
+        proposal.rescale(data['sd_y'])
+        data = rescaleData(data)
+
+    gen_model = HierarchicalModel(data, likelihood_family=lf)
+    cd = CoordinateDescent(
+        gen_model,
+        n_outer=n_outer,
+        n_g_steps=n_g_steps,
+        n_u_steps=n_u_steps,
+        lr=lr,
+        tol=tol,
+    )
+    return cd(proposal)
