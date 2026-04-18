@@ -390,6 +390,13 @@ def _lmmNormalCompacted(
         blups = (lambda_g2 * r_g).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
         blup_var = (sigma_rfx_sq_val[:, None] * (1.0 - lambda_g2)).clamp(min=0.0).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)
 
+    # Inflate blup_var to account for uncertainty in the sigma_rfx² estimate.
+    # Var[sigma_rfx²] ~ 2*(sigma_rfx²)²/(G-d) (chi-squared); delta-method propagation
+    # gives a multiplicative factor 1 + 2/(G-d), correcting the systematic overconfidence
+    # that arises when treating estimated sigma_rfx as known.
+    df_sigma = (G - d).clamp(min=1.0)
+    blup_var = blup_var * (1.0 + 2.0 / df_sigma)[:, None, None]
+
     sigma_rfx = sigma_rfx_sq_val.clamp(min=0.0).sqrt().unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)
     Psi = sigma_rfx.square().unsqueeze(-1)                          # (B, 1, 1)
     sigma_eps = sigma_eps_sq_val.clamp(min=0.0).sqrt().unsqueeze(-1).nan_to_num(nan=1.0, posinf=1.0)
@@ -603,6 +610,11 @@ def _lmmNormalFull(
         blup_var = (se2[:, None, None, None] * W_g).diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
         blup_var = blup_var.nan_to_num(nan=0.0, posinf=0.0)
 
+    # Inflate blup_var to account for uncertainty in the Psi estimate (same rationale
+    # as the compacted path: Var[Psi] ∝ Psi²/(G-d), delta-method gives 1 + 2/(G-d)).
+    df_sigma = (G - d).clamp(min=1.0)
+    blup_var = blup_var * (1.0 + 2.0 / df_sigma)[:, None, None]
+
     sigma_rfx = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()          # (B, q)
     sigma_eps_1d = se2.clamp(min=0.0).sqrt().nan_to_num(nan=1.0, posinf=1.0)  # (B,)
 
@@ -801,6 +813,11 @@ def _lmmGlmm(
     # mirroring the Normal path's σ²_ε · W_g.  Cap at 25 (std ≤ 5).
     blup_var = Kg_inv.diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)  # (B, m, q)
     blup_var = (blup_var * mask_m[:, :, None]).nan_to_num(nan=0.0, posinf=0.0)
+
+    # Inflate blup_var to account for uncertainty in Ψ̂_Lap (same rationale as Normal path).
+    # Use G as denominator (no d subtraction) since PQL doesn't have an explicit df formula.
+    df_sigma = G.clamp(min=1.0)
+    blup_var = blup_var * (1.0 + 2.0 / df_sigma)[:, None, None]
 
     # Per-group mean working residual (after removing fixed effects)
     resid_g = (resid_gls.sum(dim=2) / ns.clamp(min=1.0) * mask_m).unsqueeze(-1)  # (B, m, 1)
