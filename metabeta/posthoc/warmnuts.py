@@ -269,3 +269,101 @@ class WarmNuts:
 
 
 # ---------------------------------------------------------------------------
+# Batch-stacking helper
+# ---------------------------------------------------------------------------
+
+
+def _stackProposals(
+    proposals: list[Proposal],
+    target_d: int | None = None,
+    target_q: int | None = None,
+) -> Proposal:
+    """Stack per-dataset proposals (b=1 each) into a batch proposal along dim 0.
+
+    Unlike concatProposalsBatch (which concatenates along the sample dim),
+    this stacks along the batch dim, padding d/q/m dims as needed.
+
+    WarmNuts proposals have actual d and q (from unpadded individual datasets),
+    which may differ across datasets in a mixed-d/q collection.  samples_g is
+    rebuilt as [ffx_padded(target_d), sigma_rfx_padded(target_q), sigma_eps(1)]
+    so all batch entries share the same D_g dimension.
+
+    Parameters
+    ----------
+    target_d : int or None
+        Target fixed-effects dimension (≥ max actual d). Defaults to max actual d.
+    target_q : int or None
+        Target random-effects dimension (≥ max actual q). Defaults to max actual q.
+    """
+    has_sigma_eps = proposals[0].has_sigma_eps
+    n_s = proposals[0].n_samples
+    max_d = target_d if target_d is not None else max(p.d for p in proposals)
+    max_q = target_q if target_q is not None else max(p.q for p in proposals)
+    max_m = max(p.samples_l.shape[1] for p in proposals)
+
+    # Rebuild samples_g with uniform [max_d, max_q, (1)] layout.
+    sg_list, lg_list = [], []
+    for p in proposals:
+        ffx = p.ffx           # (1, n_s, d_i)
+        srfx = p.sigma_rfx    # (1, n_s, q_i)
+        parts: list[torch.Tensor] = []
+        # pad ffx to max_d
+        if p.d < max_d:
+            parts.append(torch.cat([ffx, ffx.new_zeros(1, n_s, max_d - p.d)], dim=-1))
+        else:
+            parts.append(ffx)
+        # pad sigma_rfx to max_q
+        if p.q < max_q:
+            parts.append(torch.cat([srfx, srfx.new_zeros(1, n_s, max_q - p.q)], dim=-1))
+        else:
+            parts.append(srfx)
+        if has_sigma_eps:
+            parts.append(p.sigma_eps.unsqueeze(-1))  # (1, n_s) → (1, n_s, 1)
+        sg_list.append(torch.cat(parts, dim=-1))   # (1, n_s, max_d+max_q+1)
+        lg_list.append(p.log_prob_g)               # (1, n_s)
+
+    samples_g = torch.cat(sg_list, dim=0)    # (B, n_s, D)
+    log_prob_g = torch.cat(lg_list, dim=0)   # (B, n_s)
+
+    # Pad m and q dims for locals.
+    sl_list, lp_list = [], []
+    for p in proposals:
+        m_i = p.samples_l.shape[1]
+        q_i = p.samples_l.shape[3]
+        sl = p.samples_l   # (1, m_i, n_s, q_i)
+        lp = p.log_prob_l  # (1, m_i, n_s)
+        if m_i < max_m:
+            sl = torch.cat([sl, sl.new_zeros(1, max_m - m_i, n_s, q_i)], dim=1)
+            lp = torch.cat([lp, lp.new_zeros(1, max_m - m_i, n_s)], dim=1)
+        if q_i < max_q:
+            sl = torch.cat([sl, sl.new_zeros(1, max_m, n_s, max_q - q_i)], dim=-1)
+        sl_list.append(sl)
+        lp_list.append(lp)
+
+    proposed = {
+        'global': {'samples': samples_g, 'log_prob': log_prob_g},
+        'local': {
+            'samples': torch.cat(sl_list, dim=0),    # (B, max_m, n_s, max_q)
+            'log_prob': torch.cat(lp_list, dim=0),   # (B, max_m, n_s)
+        },
+    }
+    merged = Proposal(proposed, has_sigma_eps=has_sigma_eps)
+
+    # Stack corr_rfx — all WarmNuts proposals always have it (identity for non-correlated)
+    corr_rfx_list = [p.corr_rfx for p in proposals]
+    if all(c is not None for c in corr_rfx_list):
+        stacked = []
+        for c in corr_rfx_list:
+            q_i = c.shape[-1]  # type: ignore[union-attr]
+            if q_i < max_q:
+                eye = torch.eye(max_q, dtype=c.dtype)
+                c_pad = eye.unsqueeze(0).unsqueeze(0).expand(1, n_s, -1, -1).clone()
+                c_pad[:, :, :q_i, :q_i] = c
+                stacked.append(c_pad)
+            else:
+                stacked.append(c)
+        merged._corr_rfx = torch.cat(stacked, dim=0)   # (B, n_s, max_q, max_q)
+
+    return merged
+
+
