@@ -154,13 +154,15 @@ class RationalQuadratic(CouplingTransform):
         self.alpha = alpha
         self.eps = eps
         self._shift = np.log(np.e - 1)
-        # softplus shift so delta_x ≈ default_delta at zero init
-        self._shift_dx = float(np.log(np.exp(self.default_delta - self.min_delta) - 1))
+        # softplus shift so half_width ≈ default_size at zero init
+        self._shift_hw = float(np.log(np.exp(default_size - self.min_delta / 2) - 1))
+        # center can range freely; clamp to ±2*default_size to prevent extreme domain shifts
+        self.center_scale = 2.0 * default_size
 
         # set number of parameters per dim
         self.n_params_per_dim = 3 * self.n_bins - 1
         if self.adaptive_domain:
-            self.n_params_per_dim += 2  # left boundary offset, log_delta_x
+            self.n_params_per_dim += 2  # center, log_half_width
         if self.adaptive_tails:
             self.n_params_per_dim += 2  # log_weight, bias
 
@@ -221,11 +223,11 @@ class RationalQuadratic(CouplingTransform):
         heights = params[..., k : 2 * k]
         derivatives = params[..., 2 * k : 3 * k - 1]
         if self.adaptive_domain:
-            left = params[..., 3 * k - 1]
-            log_delta_x = params[..., 3 * k]
+            center = params[..., 3 * k - 1]
+            log_half_width = params[..., 3 * k]
         else:
-            left = torch.zeros_like(params[..., 0])
-            log_delta_x = torch.zeros_like(left)
+            center = torch.zeros_like(params[..., 0])
+            log_half_width = torch.zeros_like(center)
         if self.adaptive_tails:
             offset = 3 * k + 1 if self.adaptive_domain else 3 * k - 1
             log_weight = params[..., offset]
@@ -239,8 +241,8 @@ class RationalQuadratic(CouplingTransform):
             'derivatives': derivatives,
             'log_weight': log_weight.unsqueeze(-1),
             'bias': bias.unsqueeze(-1),
-            'left': left.unsqueeze(-1),
-            'log_delta_x': log_delta_x.unsqueeze(-1),
+            'center': center.unsqueeze(-1),
+            'log_half_width': log_half_width.unsqueeze(-1),
         }
 
     def _constrain(
@@ -260,10 +262,11 @@ class RationalQuadratic(CouplingTransform):
         derivatives[..., 0] = weight.squeeze(-1)
         derivatives[..., -1] = weight.squeeze(-1)
 
-        # --- bounds: additive offsets from defaults; softplus replaces clamp_min
-        left = self.default_left + params['left']
-        delta_x = self.min_delta + F.softplus(params['log_delta_x'] + self._shift_dx)
-        right = left + delta_x
+        # --- bounds: center softclamped to ±center_scale; half_width via softplus ≈ default_size at zero init
+        center = self.center_scale * torch.tanh(params['center'] / self.center_scale)
+        half_width = self.min_delta / 2 + F.softplus(params['log_half_width'] + self._shift_hw)
+        left = center - half_width
+        right = center + half_width
         bottom = weight * left + bias
         top = weight * right + bias
         bounds = torch.cat([left, right, bottom, top], dim=-1)
