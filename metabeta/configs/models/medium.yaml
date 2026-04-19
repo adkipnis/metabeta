@@ -6,7 +6,7 @@ summarizer_g:
     n_blocks: 4
     n_isab: 1
     activation: 'GELU'
-    dropout: 0.01
+    dropout: 0.0
 
 summarizer_l:
     n_isab: 0
