@@ -64,7 +64,7 @@ def getSummary(
     # posterior predictive fit
     pp = getPosteriorPredictive(proposal, data, likelihood_family)
     out['posterior_nll'] = posteriorPredictiveNLL(pp, data, w=proposal.weights)  # in-sample
-    
+
     # PSIS-LOO NLL: automatically uses loo_is when IS weights are available (w=proposal.weights),
     # falling back to loo_raw (w=None) when no IS was done.
     out['loo_nll'], out['loo_pareto_k'] = psisLooNLL(pp, data, w=proposal.weights, reff=proposal.reff)
