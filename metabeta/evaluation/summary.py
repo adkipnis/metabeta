@@ -31,7 +31,7 @@ from metabeta.evaluation.predictive import (
 )
 
 
-EST_TYPE = 'hybrid'
+EST_TYPE = 'mean'
 
 
 def getSummary(
