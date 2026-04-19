@@ -26,6 +26,8 @@ class SummarizerConfig(BaseModel):
     d_output: int = Field(gt=0)
     n_blocks: int = Field(gt=0)
     n_isab: int = Field(ge=0, default=0)
+    n_inducing: int = Field(gt=0, default=32)
+    pooling: str = 'cls'
     activation: str = 'GELU'
     dropout: float = Field(ge=0.0, default=0.01)
     type: Literal['set-transformer'] = 'set-transformer'
