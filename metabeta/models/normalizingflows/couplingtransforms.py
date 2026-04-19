@@ -55,7 +55,7 @@ class Affine(CouplingTransform):
         split_dims: tuple[int, int],
         d_context: int,
         subnet_kwargs: dict | None = None,
-        alpha: float = 1.0,  # softclamping scale
+        alpha: float = 2.0,  # softclamping scale
     ):
         super().__init__()
         self.split_dims = split_dims
@@ -136,7 +136,7 @@ class RationalQuadratic(CouplingTransform):
         min_deriv: float = 1e-3,
         adaptive_domain: bool = False,
         adaptive_tails: bool = False,  # learn affine tails outside spline domain
-        alpha: float = 1.0,  # softclamping scale
+        alpha: float = 2.0,  # softclamping scale
         eps: float = 1e-6,  # clamping
     ):
         super().__init__()
