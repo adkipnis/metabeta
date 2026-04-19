@@ -3,6 +3,7 @@ from torch import nn
 
 from metabeta.models.transformers import MAB, ISAB
 from metabeta.utils.initializers import getInitializer
+from metabeta.utils.activations import getActivation
 
 
 class SetTransformer(nn.Module):
@@ -35,7 +36,7 @@ class SetTransformer(nn.Module):
         # input projector
         self.proj_in = nn.Sequential(
             nn.Linear(d_input, d_model),
-            nn.GELU(),
+            getActivation(activation),
             nn.Dropout(dropout),
         )
 
