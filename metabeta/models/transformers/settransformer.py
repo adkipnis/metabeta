@@ -33,10 +33,12 @@ class SetTransformer(nn.Module):
         assert n_blocks >= n_isab, 'n_isab must not be larger than n_blocks'
         self.n_isab = n_isab
 
-        # input projector
+        # input projector: GeGLU is a FFN-bottleneck activation and doesn't fit
+        # a single embedding linear, so fall back to GELU for proj_in.
+        proj_activation = 'GELU' if activation == 'GeGLU' else activation
         self.proj_in = nn.Sequential(
             nn.Linear(d_input, d_model),
-            getActivation(activation),
+            getActivation(proj_activation),
             nn.Dropout(dropout),
         )
 
