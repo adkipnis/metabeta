@@ -27,6 +27,7 @@ posterior_g:
         dropout: 0.0
         zero_init: true
         use_bias: false
+        use_glu: true
     rq_kwargs:
         adaptive_domain: true
         adaptive_tails: true
