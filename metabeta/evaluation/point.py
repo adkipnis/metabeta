@@ -40,24 +40,13 @@ def pointEstimate(
         raise NotImplementedError(f'method {method} not implemented')
 
 
-def getMAP(x: torch.Tensor, log_prob: torch.Tensor) -> torch.Tensor:
-    """sample-based maximum a-posteriori estimate"""
-    idx = log_prob.argmax(-1, keepdim=True)
-    shape = (*idx.shape, x.shape[-1])
-    idx_ext = idx.unsqueeze(-1).expand(shape)
-    return x.gather(dim=-2, index=idx_ext).squeeze(-2)
-
-
 def getPointEstimates(proposal: Proposal, method: str) -> dict[str, torch.Tensor]:
-    if method != 'map':
-        w = proposal.weights
-        global_est = pointEstimate(proposal.samples_g, w, method)
-        out = proposal.partition(global_est)
-        out['rfx'] = pointEstimate(proposal.samples_l, w, method)
-    else:
-        global_est = getMAP(proposal.samples_g, proposal.log_prob_g)
-        out = proposal.partition(global_est)
-        out['rfx'] = getMAP(proposal.samples_l, proposal.log_prob_l)
+    if method not in ('mean', 'median'):
+        raise ValueError(f"method must be 'mean' or 'median', got '{method}'")
+    w = proposal.weights
+    global_est = pointEstimate(proposal.samples_g, w, method)
+    out = proposal.partition(global_est)
+    out['rfx'] = pointEstimate(proposal.samples_l, w, method)
 
     if proposal.corr_rfx is not None:
         corr_samples = proposal.corr_rfx  # (b, n_s, q, q)
