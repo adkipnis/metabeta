@@ -135,7 +135,7 @@ class RationalQuadratic(CouplingTransform):
         min_bin: float = 0.1,
         min_deriv: float = 1e-3,
         adaptive_domain: bool = False,
-        alpha: float = 4.0,  # softclamping scale for adaptive center
+        alpha: float = 2.0,  # softclamping scale
         eps: float = 1e-6,  # clamping
     ):
         super().__init__()
@@ -149,17 +149,16 @@ class RationalQuadratic(CouplingTransform):
         self.min_bin = min_bin
         self.min_deriv = min_deriv
         self.adaptive_domain = adaptive_domain
-        self.default_size = default_size
         self.alpha = alpha
         self.eps = eps
         self._shift = np.log(np.e - 1)
-        # softplus shift so half_width ≈ default_size at zero init
-        self._shift_hw = float(np.log(np.exp(default_size - self.min_delta / 2) - 1))
+        # softplus shift so delta_x ≈ default_delta at zero init
+        self._shift_dx = float(np.log(np.exp(self.default_delta - self.min_delta) - 1))
 
         # set number of parameters per dim
         self.n_params_per_dim = 3 * self.n_bins - 1
         if self.adaptive_domain:
-            self.n_params_per_dim += 2
+            self.n_params_per_dim += 4  # left boundary offset, log_delta_x, log_weight, bias
 
         # check sizes
         if min_bin * n_bins > 1.0:
@@ -218,17 +217,23 @@ class RationalQuadratic(CouplingTransform):
         heights = params[..., k : 2 * k]
         derivatives = params[..., 2 * k : 3 * k - 1]
         if self.adaptive_domain:
-            center = params[..., 3 * k - 1]
-            log_half_width = params[..., 3 * k]
+            left = params[..., 3 * k - 1]
+            log_delta_x = params[..., 3 * k]
+            log_weight = params[..., 3 * k + 1]
+            bias = params[..., 3 * k + 2]
         else:
-            center = torch.zeros_like(params[..., 0])
-            log_half_width = torch.zeros_like(center)
+            left = torch.zeros_like(params[..., 0])
+            log_delta_x = torch.zeros_like(left)
+            log_weight = torch.zeros_like(left)
+            bias = torch.zeros_like(left)
         return {
             'widths': widths,
             'heights': heights,
             'derivatives': derivatives,
-            'center': center.unsqueeze(-1),
-            'log_half_width': log_half_width.unsqueeze(-1),
+            'log_weight': log_weight.unsqueeze(-1),
+            'bias': bias.unsqueeze(-1),
+            'left': left.unsqueeze(-1),
+            'log_delta_x': log_delta_x.unsqueeze(-1),
         }
 
     def _constrain(
@@ -236,20 +241,25 @@ class RationalQuadratic(CouplingTransform):
         params: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
 
-        # --- derivatives: interior knots via softplus; boundary = 1 (identity tails)
+        # --- affine tail params: softclamped; zeros → identity for fixed domain
+        log_weight = self.alpha * torch.tanh(params['log_weight'] / self.alpha)
+        weight = log_weight.exp()
+        bias = self.alpha * torch.tanh(params['bias'] / self.alpha)
+
+        # --- derivatives: interior knots via softplus; boundary = weight (matches affine tail slope)
         derivatives = params['derivatives']
         derivatives = self.min_deriv + F.softplus(derivatives + self._shift)
         derivatives = F.pad(derivatives, (1, 1))
-        derivatives[..., 0] = 1.0
-        derivatives[..., -1] = 1.0
+        derivatives[..., 0] = weight.squeeze(-1)
+        derivatives[..., -1] = weight.squeeze(-1)
 
-        # --- bounds
-        # center: softclamped to (-alpha, alpha); half_width: softplus, ≈ default_size at zero init
-        center = self.alpha * torch.tanh(params['center'] / self.alpha)
-        half_width = self.min_delta / 2 + F.softplus(params['log_half_width'] + self._shift_hw)
-        left = center - half_width
-        right = center + half_width
-        bounds = torch.cat([left, right, left, right], dim=-1)  # bottom=left, top=right (identity tails)
+        # --- bounds: additive offsets from defaults; softplus replaces clamp_min
+        left = self.default_left + params['left']
+        delta_x = self.min_delta + F.softplus(params['log_delta_x'] + self._shift_dx)
+        right = left + delta_x
+        bottom = weight * left + bias
+        top = weight * right + bias
+        bounds = torch.cat([left, right, bottom, top], dim=-1)
 
         # --- widths: softmax → min-shifted → stretched to [left, right]
         widths = params['widths']
@@ -259,19 +269,21 @@ class RationalQuadratic(CouplingTransform):
         cumwidths = F.pad(cumwidths, (1, 0))
         cumwidths = (right - left) * cumwidths + left
 
-        # --- heights: softmax → min-shifted → stretched to [bottom, top] = [left, right]
+        # --- heights: softmax → min-shifted → stretched to [bottom, top]
         heights = params['heights']
         heights = F.softmax(heights, dim=-1)
         heights = self.min_bin + (1 - self.min_bin * self.n_bins) * heights
         cumheights = torch.cumsum(heights, dim=-1)
         cumheights = F.pad(cumheights, pad=(1, 0))
-        cumheights = (right - left) * cumheights + left
+        cumheights = (top - bottom) * cumheights + bottom
 
         return dict(
             bounds=bounds,
             cumwidths=cumwidths,
             cumheights=cumheights,
             derivatives=derivatives,
+            log_weight=log_weight,
+            bias=bias,
         )
 
     def forward(self, x1, x2, context=None, mask1=None, mask2=None, inverse=False):
@@ -349,8 +361,12 @@ class RationalQuadratic(CouplingTransform):
         params: dict[str, torch.Tensor],
         inverse: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # tails are always identity: weight=1, bias=0
-        return x2, torch.zeros_like(x2)
+        log_weight = params['log_weight'].squeeze(-1)
+        bias = params['bias'].squeeze(-1)
+        weight = log_weight.exp()
+        if inverse:
+            return (x2 - bias) / weight, -log_weight
+        return weight * x2 + bias, log_weight
 
     def _searchSorted(self, reference: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         # bump the upper knot by eps to make the boundary inclusive, without in-place ops
