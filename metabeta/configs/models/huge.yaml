@@ -14,7 +14,7 @@ summarizer_l:
 
 posterior_g:
     type: 'coupling'
-    transform: 'spline+'
+    transform: 'spline'
     base_family: 'normal'
     base_trainable: True
     n_blocks: 8
@@ -26,6 +26,8 @@ posterior_g:
         dropout: 0.0
         zero_init: True
         use_bias: False
+    rq_kwargs:
+        adaptive_domain: true
 
 posterior_l:
     n_blocks: 2
