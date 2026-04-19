@@ -33,9 +33,10 @@ def context(_seed_rng):
     params=[
         ('affine', {}),
         ('spline', {}),
+        ('spline', {'adaptive_tails': True}),
         ('spline', {'adaptive_domain': True, 'adaptive_tails': True}),
     ],
-    ids=['affine', 'spline_fixed', 'spline_adaptive'],
+    ids=['affine', 'spline_fixed', 'spline_fixed_tails', 'spline_adaptive'],
 )
 def transform_cfg(request: pytest.FixtureRequest) -> tuple[str, dict]:
     return request.param
@@ -239,9 +240,10 @@ def test_coupling_flow(batch, context, subnet_kwargs, transform_cfg, n_blocks):
     'rq_kwargs',
     [
         {},
+        {'adaptive_tails': True},
         {'adaptive_domain': True, 'adaptive_tails': True},
     ],
-    ids=['fixed_domain', 'adaptive_domain'],
+    ids=['fixed_domain', 'fixed_domain_adaptive_tails', 'adaptive_domain'],
 )
 def test_spline_stability(context, rq_kwargs):
     """
