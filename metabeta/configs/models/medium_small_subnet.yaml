@@ -22,7 +22,7 @@ posterior_g:
     subnet_kwargs:
         net_type: 'residual'
         activation: 'ReLU'
-        d_ff: 192
+        d_ff: 128             # capped to small-model level; tests whether subnet overcapacity drives domain instability
         depth: 3
         dropout: 0.0
         zero_init: true

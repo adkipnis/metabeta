@@ -22,14 +22,14 @@ posterior_g:
     subnet_kwargs:
         net_type: 'residual'
         activation: 'ReLU'
-        d_ff: 192
+        d_ff: 128             # small-model subnet; reduces domain overfitting
         depth: 3
         dropout: 0.0
         zero_init: true
         use_bias: false
         use_glu: true
     rq_kwargs:
-        adaptive_domain: true
+        adaptive_domain: false   # fixed domain; eliminates per-context boundary drift
         adaptive_tails: true
         alpha: 2.0
 

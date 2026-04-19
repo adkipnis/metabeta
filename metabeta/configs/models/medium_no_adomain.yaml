@@ -29,7 +29,7 @@ posterior_g:
         use_bias: false
         use_glu: true
     rq_kwargs:
-        adaptive_domain: true
+        adaptive_domain: false   # fixed ±3σ domain; removes per-context boundary prediction
         adaptive_tails: true
         alpha: 2.0
 
