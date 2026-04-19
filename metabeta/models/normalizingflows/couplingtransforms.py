@@ -135,7 +135,8 @@ class RationalQuadratic(CouplingTransform):
         min_bin: float = 0.1,
         min_deriv: float = 1e-3,
         adaptive_domain: bool = False,
-        alpha: float = 2.0,  # softclamping scale
+        adaptive_tails: bool = True,  # learn affine tails (only used when adaptive_domain=True)
+        alpha: float = 1.0,  # softclamping scale
         eps: float = 1e-6,  # clamping
     ):
         super().__init__()
@@ -149,6 +150,7 @@ class RationalQuadratic(CouplingTransform):
         self.min_bin = min_bin
         self.min_deriv = min_deriv
         self.adaptive_domain = adaptive_domain
+        self.adaptive_tails = adaptive_tails and adaptive_domain
         self.alpha = alpha
         self.eps = eps
         self._shift = np.log(np.e - 1)
@@ -158,7 +160,9 @@ class RationalQuadratic(CouplingTransform):
         # set number of parameters per dim
         self.n_params_per_dim = 3 * self.n_bins - 1
         if self.adaptive_domain:
-            self.n_params_per_dim += 4  # left boundary offset, log_delta_x, log_weight, bias
+            self.n_params_per_dim += 2  # left boundary offset, log_delta_x
+        if self.adaptive_tails:
+            self.n_params_per_dim += 2  # log_weight, bias
 
         # check sizes
         if min_bin * n_bins > 1.0:
@@ -219,13 +223,16 @@ class RationalQuadratic(CouplingTransform):
         if self.adaptive_domain:
             left = params[..., 3 * k - 1]
             log_delta_x = params[..., 3 * k]
-            log_weight = params[..., 3 * k + 1]
-            bias = params[..., 3 * k + 2]
         else:
             left = torch.zeros_like(params[..., 0])
             log_delta_x = torch.zeros_like(left)
-            log_weight = torch.zeros_like(left)
-            bias = torch.zeros_like(left)
+        if self.adaptive_tails:
+            offset = 3 * k + 1 if self.adaptive_domain else 3 * k - 1
+            log_weight = params[..., offset]
+            bias = params[..., offset + 1]
+        else:
+            log_weight = torch.zeros_like(params[..., 0])
+            bias = torch.zeros_like(log_weight)
         return {
             'widths': widths,
             'heights': heights,
