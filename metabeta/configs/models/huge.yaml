@@ -18,7 +18,7 @@ posterior_g:
     base_family: 'normal'
     base_trainable: true
     base_context: true
-    n_blocks: 6
+    n_blocks: 5
     subnet_kwargs:
         net_type: 'residual'
         activation: 'ReLU'
