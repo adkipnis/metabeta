@@ -25,19 +25,21 @@ class Coupling(nn.Module):
         d_context: int = 0,
         subnet_kwargs: dict | None = None,
         transform: str = 'affine',
+        rq_kwargs: dict | None = None,
     ):
         super().__init__()
         self.split_dims = split_dims
         self.transform_type = transform
+        rq_kwargs = rq_kwargs or {}
         if transform == 'affine':
             self.transform = Affine(split_dims, d_context, subnet_kwargs)
         elif transform == 'spline':
             self.transform = RationalQuadratic(
-                split_dims, d_context, subnet_kwargs, adaptive_domain=False
+                split_dims, d_context, subnet_kwargs, adaptive_domain=False, **rq_kwargs
             )
         elif transform == 'spline+':
             self.transform = RationalQuadratic(
-                split_dims, d_context, subnet_kwargs, adaptive_domain=True
+                split_dims, d_context, subnet_kwargs, adaptive_domain=True, **rq_kwargs
             )
         else:
             raise NotImplementedError('only affine and spline transforms are supported')
@@ -77,6 +79,7 @@ class DualCoupling(Transform):
         d_context: int = 0,
         subnet_kwargs: dict | None = None,
         transform: str = 'affine',
+        rq_kwargs: dict | None = None,
     ):
         super().__init__()
         self.d_target = d_target
@@ -88,12 +91,14 @@ class DualCoupling(Transform):
             d_context=d_context,
             subnet_kwargs=subnet_kwargs,
             transform=transform,
+            rq_kwargs=rq_kwargs,
         )
         self.coupling2 = Coupling(
             split_dims=(split_dims[1], split_dims[0]),
             d_context=d_context,
             subnet_kwargs=subnet_kwargs,
             transform=transform,
+            rq_kwargs=rq_kwargs,
         )
 
     def __str__(self) -> str:
@@ -138,6 +143,7 @@ class CouplingFlow(nn.Module):
         base_family: Literal['normal', 'student'] = 'normal',  # family of base distribution
         base_trainable: bool = True,  # train parameters of base distribution
         subnet_kwargs: dict | None = None,
+        rq_kwargs: dict | None = None,
         **kwargs,
     ):
         super().__init__()
@@ -158,6 +164,7 @@ class CouplingFlow(nn.Module):
                     d_context=d_context,
                     transform=transform,
                     subnet_kwargs=subnet_kwargs,
+                    rq_kwargs=rq_kwargs,
                 )
             ]
         self.flows = nn.ModuleList(flows)
