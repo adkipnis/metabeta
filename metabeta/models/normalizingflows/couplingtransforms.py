@@ -135,7 +135,7 @@ class RationalQuadratic(CouplingTransform):
         min_bin: float = 0.1,
         min_deriv: float = 1e-3,
         adaptive_domain: bool = False,
-        adaptive_tails: bool = True,  # learn affine tails (only used when adaptive_domain=True)
+        adaptive_tails: bool = False,  # learn affine tails outside spline domain
         alpha: float = 1.0,  # softclamping scale
         eps: float = 1e-6,  # clamping
     ):
@@ -150,19 +150,17 @@ class RationalQuadratic(CouplingTransform):
         self.min_bin = min_bin
         self.min_deriv = min_deriv
         self.adaptive_domain = adaptive_domain
-        self.adaptive_tails = adaptive_tails and adaptive_domain
+        self.adaptive_tails = adaptive_tails
         self.alpha = alpha
         self.eps = eps
         self._shift = np.log(np.e - 1)
-        # softplus shift so half_width ≈ default_size at zero init
-        self._shift_hw = float(np.log(np.exp(default_size - self.min_delta / 2) - 1))
-        # center can range freely; clamp to ±2*default_size to prevent extreme domain shifts
-        self.center_scale = 2.0 * default_size
+        # softplus shift so delta_x ≈ default_delta at zero init
+        self._shift_dx = float(np.log(np.exp(self.default_delta - self.min_delta) - 1))
 
         # set number of parameters per dim
         self.n_params_per_dim = 3 * self.n_bins - 1
         if self.adaptive_domain:
-            self.n_params_per_dim += 2  # center, log_half_width
+            self.n_params_per_dim += 2  # left, log_delta_x
         if self.adaptive_tails:
             self.n_params_per_dim += 2  # log_weight, bias
 
@@ -223,11 +221,11 @@ class RationalQuadratic(CouplingTransform):
         heights = params[..., k : 2 * k]
         derivatives = params[..., 2 * k : 3 * k - 1]
         if self.adaptive_domain:
-            center = params[..., 3 * k - 1]
-            log_half_width = params[..., 3 * k]
+            left = params[..., 3 * k - 1]
+            log_delta_x = params[..., 3 * k]
         else:
-            center = torch.zeros_like(params[..., 0])
-            log_half_width = torch.zeros_like(center)
+            left = torch.zeros_like(params[..., 0])
+            log_delta_x = torch.zeros_like(left)
         if self.adaptive_tails:
             offset = 3 * k + 1 if self.adaptive_domain else 3 * k - 1
             log_weight = params[..., offset]
@@ -241,8 +239,8 @@ class RationalQuadratic(CouplingTransform):
             'derivatives': derivatives,
             'log_weight': log_weight.unsqueeze(-1),
             'bias': bias.unsqueeze(-1),
-            'center': center.unsqueeze(-1),
-            'log_half_width': log_half_width.unsqueeze(-1),
+            'left': left.unsqueeze(-1),
+            'log_delta_x': log_delta_x.unsqueeze(-1),
         }
 
     def _constrain(
@@ -262,11 +260,12 @@ class RationalQuadratic(CouplingTransform):
         derivatives[..., 0] = weight.squeeze(-1)
         derivatives[..., -1] = weight.squeeze(-1)
 
-        # --- bounds: center softclamped to ±center_scale; half_width via softplus ≈ default_size at zero init
-        center = self.center_scale * torch.tanh(params['center'] / self.center_scale)
-        half_width = self.min_delta / 2 + F.softplus(params['log_half_width'] + self._shift_hw)
-        left = center - half_width
-        right = center + half_width
+        # --- bounds: left softclamped to ±default_size; delta_x via softplus ≈ default_delta at zero init
+        left = self.default_left + self.default_delta * torch.tanh(
+            params['left'] / self.default_delta
+        )
+        delta_x = self.min_delta + F.softplus(params['log_delta_x'] + self._shift_dx)
+        right = left + delta_x
         bottom = weight * left + bias
         top = weight * right + bias
         bounds = torch.cat([left, right, bottom, top], dim=-1)
