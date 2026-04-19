@@ -29,9 +29,16 @@ def context(_seed_rng):
     return torch.randn(B, 10, 5)
 
 
-@pytest.fixture(params=['affine', 'spline', 'spline+'])
-def transform(request: pytest.FixtureRequest) -> str:
-    return str(request.param)
+@pytest.fixture(
+    params=[
+        ('affine', {}),
+        ('spline', {}),
+        ('spline', {'adaptive_domain': True, 'adaptive_tails': True}),
+    ],
+    ids=['affine', 'spline_fixed', 'spline_adaptive'],
+)
+def transform_cfg(request: pytest.FixtureRequest) -> tuple[str, dict]:
+    return request.param
 
 
 @pytest.fixture(params=['mlp', 'residual'])
@@ -133,7 +140,8 @@ def test_permute(batch):
 # -----------------------
 # Single Coupling
 # -----------------------
-def test_single_coupling(batch, context, subnet_kwargs, transform):
+def test_single_coupling(batch, context, subnet_kwargs, transform_cfg):
+    transform, rq_kwargs = transform_cfg
     x, mask = random_mask(batch)
     x1, x2 = x.chunk(2, dim=-1)
     mask1, mask2 = mask.chunk(2, dim=-1)
@@ -143,6 +151,7 @@ def test_single_coupling(batch, context, subnet_kwargs, transform):
         d_context=context.shape[-1],
         subnet_kwargs=subnet_kwargs,
         transform=transform,
+        rq_kwargs=rq_kwargs,
     )
     model.eval()
     (z1, z2), _ = model.forward(x1, x2, context=context, mask1=mask1, mask2=mask2)
@@ -158,13 +167,15 @@ def test_single_coupling(batch, context, subnet_kwargs, transform):
 # -----------------------
 # Dual Coupling
 # -----------------------
-def test_dual_coupling(batch, context, subnet_kwargs, transform):
+def test_dual_coupling(batch, context, subnet_kwargs, transform_cfg):
+    transform, rq_kwargs = transform_cfg
     x, mask = random_mask(batch)
     model = DualCoupling(
         d_target=x.shape[-1],
         d_context=context.shape[-1],
         subnet_kwargs=subnet_kwargs,
         transform=transform,
+        rq_kwargs=rq_kwargs,
     )
     model.eval()
     z, _, _ = model.forward(x, context=context, mask=mask)
@@ -184,7 +195,8 @@ def test_dual_coupling(batch, context, subnet_kwargs, transform):
 # Coupling Flow
 # -----------------------
 @pytest.mark.parametrize('n_blocks', [1, 3, 5])
-def test_coupling_flow(batch, context, subnet_kwargs, transform, n_blocks):
+def test_coupling_flow(batch, context, subnet_kwargs, transform_cfg, n_blocks):
+    transform, rq_kwargs = transform_cfg
     x, mask = random_mask(batch)
     model = CouplingFlow(
         d_target=x.shape[-1],
@@ -194,15 +206,17 @@ def test_coupling_flow(batch, context, subnet_kwargs, transform, n_blocks):
         use_permute=False,
         transform=transform,
         subnet_kwargs=subnet_kwargs,
+        rq_kwargs=rq_kwargs,
     )
     model.eval()
     z, _, _ = model.forward(x, context=context, mask=mask)
     x_rec, _, _ = model.inverse(z, context, mask=mask)
     assert torch.isfinite(z).all(), 'anomaly in forward pass'
     assert torch.isfinite(x_rec).all(), 'anomaly in backward pass'
-    # spline+ with random (untrained) affine tails compounds weight across blocks before
-    # training constrains it; tight tolerance only meaningful for zero_init or fixed domain
-    tight = transform != 'spline+' or subnet_kwargs.get('zero_init', False)
+    # adaptive tails with random (untrained) weights compound across blocks;
+    # tight tolerance only meaningful for zero_init or non-adaptive
+    adaptive_tails = rq_kwargs.get('adaptive_tails', False)
+    tight = not adaptive_tails or subnet_kwargs.get('zero_init', False)
     if tight:
         assert torch.allclose(x, x_rec, atol=ATOL), 'recovery failed'
     x = x.detach().clone().requires_grad_(True)
@@ -219,18 +233,21 @@ def test_coupling_flow(batch, context, subnet_kwargs, transform, n_blocks):
 
 
 # -----------------------
-# spline+ stability: adaptive vs fixed domain, 6 blocks, no zero-init
+# Spline stability: fixed vs adaptive domain, 6 blocks, no zero-init
 # -----------------------
 @pytest.mark.parametrize(
-    'transform',
-    ['spline', 'spline+'],
+    'rq_kwargs',
+    [
+        {},
+        {'adaptive_domain': True, 'adaptive_tails': True},
+    ],
     ids=['fixed_domain', 'adaptive_domain'],
 )
-def test_spline_plus_stability(context, transform):
+def test_spline_stability(context, rq_kwargs):
     """
     6 blocks, no zero-init.
-    Fixed-domain spline must meet tight ATOL (identity tails, no compounding).
-    Adaptive-domain spline+ has learned affine tails whose weights compound before
+    Fixed-domain spline must meet tight ATOL (no compounding).
+    Adaptive-domain spline with learned tails has weights that compound before
     training constrains them; we verify invertibility and finite log-det only.
     """
     torch.manual_seed(0)
@@ -243,8 +260,9 @@ def test_spline_plus_stability(context, transform):
         n_blocks=6,
         use_actnorm=True,
         use_permute=False,
-        transform=transform,
+        transform='spline',
         subnet_kwargs=subnet_kwargs,
+        rq_kwargs=rq_kwargs,
     )
     model.eval()
 
@@ -257,8 +275,8 @@ def test_spline_plus_stability(context, transform):
     z_g, log_det, _ = model.forward(x_g, context=context, mask=mask)
     assert torch.isfinite(log_det).all(), 'non-finite log-det'
 
-    if transform == 'spline':
-        # fixed domain, identity tails: must be numerically tight
+    if not rq_kwargs.get('adaptive_tails', False):
+        # fixed domain, no adaptive tails: must be numerically tight
         err = (log_det - _numerical_logdet(z_g, x_g)).abs()
         assert torch.allclose(x, x_rec, atol=ATOL), 'recovery failed'
         assert err.max() < ATOL, f'log-det mismatch: mean={err.mean():.4f}, max={err.max():.4f}'
