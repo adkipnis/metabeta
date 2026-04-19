@@ -41,12 +41,20 @@ def pointEstimate(
 
 
 def getPointEstimates(proposal: Proposal, method: str) -> dict[str, torch.Tensor]:
-    if method not in ('mean', 'median'):
-        raise ValueError(f"method must be 'mean' or 'median', got '{method}'")
+    if method not in ('mean', 'median', 'hybrid'):
+        raise ValueError(f"method must be 'mean', 'median', or 'hybrid', got '{method}'")
     w = proposal.weights
-    global_est = pointEstimate(proposal.samples_g, w, method)
-    out = proposal.partition(global_est)
-    out['rfx'] = pointEstimate(proposal.samples_l, w, method)
+    if method == 'hybrid':
+        # median for location params (ffx), mean for scale params (sigma_*) and rfx
+        global_mean   = pointEstimate(proposal.samples_g, w, 'mean')
+        global_median = pointEstimate(proposal.samples_g, w, 'median')
+        out = proposal.partition(global_mean)
+        out['ffx'] = proposal.partition(global_median)['ffx']
+        out['rfx'] = pointEstimate(proposal.samples_l, w, 'mean')
+    else:
+        global_est = pointEstimate(proposal.samples_g, w, method)
+        out = proposal.partition(global_est)
+        out['rfx'] = pointEstimate(proposal.samples_l, w, method)
 
     if proposal.corr_rfx is not None:
         corr_samples = proposal.corr_rfx  # (b, n_s, q, q)
