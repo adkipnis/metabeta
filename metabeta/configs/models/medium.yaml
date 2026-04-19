@@ -17,6 +17,7 @@ posterior_g:
     transform: 'spline'
     base_family: 'normal'
     base_trainable: True
+    base_context: true
     n_blocks: 6
     subnet_kwargs:
         net_type: 'residual'
