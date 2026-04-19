@@ -18,6 +18,7 @@ EPOCHS=1000
 while [[ $# -gt 0 ]]; do
     case $1 in
         --tag) TAG="$2"; shift 2 ;;
+        --model_id) MODEL_ID="$2"; shift 2 ;;
         --valid_ds_type) VALID_DS_TYPE="$2"; shift 2 ;;
         --epochs) EPOCHS="$2"; shift 2 ;;
         --seed) SEED="$2"; shift 2 ;;
@@ -39,6 +40,7 @@ source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/training
 python train.py \
     --size "${SIZE}" \
+    --model_id "${MODEL_ID:-${SIZE}}" \
     --family ${FAMILY} \
     --ds_type "${DS_TYPE}" \
     ${VALID_DS_TYPE:+--valid_ds_type ${VALID_DS_TYPE}} \
