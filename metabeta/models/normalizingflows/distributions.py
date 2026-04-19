@@ -82,7 +82,7 @@ class BaseDist(nn.Module):
                 df = F.softplus(self._log_df) + 3.0
                 z = D.StudentT(df).sample(shape[:-1])  # (*batch_dims, d_data), df broadcasts
             else:
-                z = torch.randn(shape)
+                z = torch.randn(shape, device=loc.device, dtype=loc.dtype)
             return loc + scale * z
 
     def logProb(self, x: torch.Tensor, context: torch.Tensor | None = None) -> torch.Tensor:
