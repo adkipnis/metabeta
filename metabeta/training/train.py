@@ -113,7 +113,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--sample_interval', type=int, help='Run full posterior evaluation every N epochs (default = 5)')
     parser.add_argument('--cores', type=int, help='CPU thread count passed to torch.set_num_threads (default = 8)')
     parser.add_argument('--compile', action=argparse.BooleanOptionalAction, help='Compile model with torch.compile (default = False)')
-    parser.add_argument('--reproducible', action=argparse.BooleanOptionalAction, help='Enable deterministic algorithms for reproducibility (default = False)')
+    parser.add_argument('--reproducible', action=argparse.BooleanOptionalAction, help='Enable deterministic algorithms for reproducibility (default = True)')
 
     # Evaluation settings
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction, help='Run importance sampling evaluation')
