@@ -12,8 +12,12 @@ from metabeta.utils.initializers import (
 
 
 class ResidualBlock(nn.Module):
-    """Residual Block with optional GLU:
-    Linear -> Norm -> Activation -> Dropout -> Linear -> Norm -> (GLU ->) Residual Sum
+    """Residual Block with optional GLU or FiLM context conditioning:
+    Linear -> Norm -> Activation -> Dropout -> Linear -> Norm -> (GLU | FiLM ->) Residual Sum
+
+    use_glu:  context is projected to d_hidden, gated with h via GLU.
+    use_film: context produces (gamma, beta); h <- (1 + gamma) * h + beta before residual.
+              Zero-initialized so FiLM starts as identity.
     """
 
     def __init__(
@@ -27,6 +31,7 @@ class ResidualBlock(nn.Module):
         activation: str = 'ReLU',
         dropout: float = 0.0,
         use_glu: bool = False,
+        use_film: bool = False,
         rscale: float = 0.1,  # residual scale
         cscale: float = 0.1,  # context scale
     ):
@@ -52,16 +57,25 @@ class ResidualBlock(nn.Module):
         if d_context and use_glu:
             self.proj = nn.Linear(d_context, d_hidden, bias=use_bias)
 
+        # FiLM modulation: context -> (gamma, beta), h <- (1 + gamma) * h + beta
+        self.film_proj = None
+        if d_context and use_film:
+            self.film_proj = nn.Linear(d_context, 2 * d_hidden, bias=True)
+
     @property
     def rscale(self) -> torch.Tensor:
         return F.softplus(self._rscale).clamp(max=1)
 
     def forward(self, x: torch.Tensor, context: torch.Tensor | None = None) -> torch.Tensor:
         h = self.layers(x)
-        if context is not None and self.proj is not None:
-            ctx = self.cscale * self.proj(context)
-            h = torch.cat([h, ctx], dim=-1)
-            h = F.glu(h, dim=-1)
+        if context is not None:
+            if self.film_proj is not None:
+                gamma, beta = self.film_proj(context).chunk(2, dim=-1)
+                h = (1 + gamma) * h + beta
+            elif self.proj is not None:
+                ctx = self.cscale * self.proj(context)
+                h = torch.cat([h, ctx], dim=-1)
+                h = F.glu(h, dim=-1)
         h = x + self.rscale * h
         return h
 
@@ -84,6 +98,7 @@ class ResidualNet(nn.Module):
         activation: str = 'ReLU',
         dropout: float = 0.01,
         use_glu: bool = False,
+        use_film: bool = False,
         weight_init: tuple[str, str] | None = None,
         zero_init: bool = False,
         weight_norm: bool = False,
@@ -109,6 +124,7 @@ class ResidualNet(nn.Module):
                 activation=activation,
                 dropout=dropout,
                 use_glu=use_glu,
+                use_film=use_film,
             )
             for _ in range(depth)
         ]
@@ -119,11 +135,14 @@ class ResidualNet(nn.Module):
             initializer = getInitializer(*weight_init)
             self.apply(initializer)
 
-        # optionally zero-init final layer
+        # optionally zero-init final layer; also zero-init FiLM projections so they start as identity
         if zero_init:
             zeroInitializer(self.proj_out[0])
             for block in self.blocks:
                 lastZeroInitializer(block.layers)   # type: ignore
+                if block.film_proj is not None:
+                    nn.init.zeros_(block.film_proj.weight)
+                    nn.init.zeros_(block.film_proj.bias)
 
         # optionally apply weight norm to linear layers
         if weight_norm:
@@ -148,7 +167,8 @@ class FlowResidualNet(nn.Module):
         depth: int,
         d_context: int = 0,
         use_bias: bool = True,
-        use_glu: bool = True,
+        use_glu: bool = False,
+        use_film: bool = False,
         activation: str = 'ReLU',
         dropout: float = 0.0,
         zero_init: bool = True,
@@ -161,7 +181,8 @@ class FlowResidualNet(nn.Module):
             depth=depth,
             d_context=d_context,
             use_bias=use_bias,
-            use_glu=use_glu,
+            use_glu=use_glu if not use_film else False,
+            use_film=use_film,
             activation=activation,
             dropout=dropout,
             zero_init=zero_init,
