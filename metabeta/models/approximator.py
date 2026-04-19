@@ -67,18 +67,14 @@ class Approximator(nn.Module):
 
     def _analyticsGlobalDim(self) -> int:
         """Dimension added to global context by GLMM statistics.
-
-        beta_est (d_ffx) + sigma_rfx (d_rfx) + sigma_rfx_se (d_rfx) + eps/phi (1) + corr (d_corr).
-        sigma_rfx_se = sigma_rfx_est / sqrt(max(G - d_ffx, 1)) — standard error of the
-        MoM variance estimator, giving the flow a per-dataset signal about posterior width.
+        beta_est (d_ffx) + sigma_rfx (d_rfx) +  eps/phi (1) + corr (d_corr).
         """
         if not self.analytical_context:
             return 0
-        return self.d_ffx + 2 * self.d_rfx + self.d_corr + 1
+        return self.d_ffx +  self.d_rfx + self.d_corr + 1
 
     def _analyticsLocalDim(self) -> int:
         """Dimension added to local context by GLMM stats.
-
         blup_est (d_rfx) + blup_std (d_rfx) + lambda_g (d_rfx)
         """
         if not self.analytical_context:
@@ -254,14 +250,6 @@ class Approximator(nn.Module):
                 beta_est = stats['beta_est'].clamp(-CLAMP, CLAMP)   # (B, d)
                 sigma_rfx_est = stats['sigma_rfx_est'].clamp(max=CLAMP)   # (B, q)
                 out += [beta_est, sigma_rfx_est]
-                # SE of sigma_rfx estimate: sigma_rfx_est / sqrt(max(G - d_ffx, 1))
-                # Encodes per-dataset uncertainty about sigma_rfx so the flow can
-                # adapt posterior width (small G-d → wide, large G-d → narrow).
-                sigma_rfx_se = (
-                    sigma_rfx_est
-                    / (data['m'].float() - self.d_ffx).clamp(min=1.0).sqrt().unsqueeze(-1)
-                ).clamp(max=CLAMP)  # (B, q)
-                out.append(sigma_rfx_se)
                 if self.has_sigma_eps:
                     out.append(stats['sigma_eps_est'].clamp(max=CLAMP))   # (B, 1)
                 else:
