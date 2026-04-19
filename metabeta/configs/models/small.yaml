@@ -16,7 +16,7 @@ posterior_g:
     type: 'coupling'
     transform: 'spline'
     base_family: 'normal'
-    base_trainable: True
+    base_trainable: true
     base_context: true
     n_blocks: 4
     subnet_kwargs:
