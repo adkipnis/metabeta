@@ -200,9 +200,10 @@ class CouplingFlow(nn.Module):
         z: torch.Tensor,
         log_det: torch.Tensor,
         mask: torch.Tensor | None = None,
+        context: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """joint log density of normalized target"""
-        log_prob = self.base_dist.logProb(z)
+        log_prob = self.base_dist.logProb(z, context=context)
         if mask is not None:
             log_prob *= mask
         return log_prob.sum(dim=-1) + log_det
@@ -214,7 +215,7 @@ class CouplingFlow(nn.Module):
         mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """used for forward KL Loss (aka NLL)"""
-        return self._logProb(*self.forward(x, context, mask))
+        return self._logProb(*self.forward(x, context, mask), context=context)
 
     def sample(
         self,
@@ -238,14 +239,14 @@ class CouplingFlow(nn.Module):
             mask_z = None
 
         # sample from base
-        z = self.base_dist.sample(shape).to(device=self.device, dtype=self.dtype)
+        z = self.base_dist.sample(shape, context=context).to(device=self.device, dtype=self.dtype)
 
         if mask_z is None or torch.compiler.is_compiling():
             # compiled path: full-tensor ops, no dynamic shapes from nonzero
             if mask_z is not None:
                 z = z * mask_z
             x, log_det, _ = self.inverse(z, context, mask_z)
-            return x, self._logProb(z, log_det, mask_z)
+            return x, self._logProb(z, log_det, mask_z, context=context)
 
         # eager path: skip fully-empty rows to avoid wasted compute on padding
         x = torch.zeros_like(z)
@@ -255,5 +256,5 @@ class CouplingFlow(nn.Module):
         ctx_s = context[non_empty] if context is not None else None
         mask_s = mask_z[non_empty]
         x[non_empty], log_det_s, _ = self.inverse(z_s, ctx_s, mask_s)
-        log_prob[non_empty] = self._logProb(z_s, log_det_s, mask_s)
+        log_prob[non_empty] = self._logProb(z_s, log_det_s, mask_s, context=ctx_s)
         return x, log_prob
