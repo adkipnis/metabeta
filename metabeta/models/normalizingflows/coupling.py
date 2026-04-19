@@ -132,10 +132,12 @@ class CouplingFlow(nn.Module):
         d_context: int = 0,
         n_blocks: int = 6,
         use_actnorm: bool = True,
+        use_lu: bool = False,
         use_permute: bool = True,
         transform: Literal['affine', 'spline'] = 'affine',
         base_family: Literal['normal', 'student'] = 'normal',  # family of base distribution
         base_trainable: bool = True,  # train parameters of base distribution
+        base_context: bool = False,  # condition base distribution loc/scale on context
         subnet_kwargs: dict | None = None,
         rq_kwargs: dict | None = None,
         **kwargs,
@@ -143,13 +145,16 @@ class CouplingFlow(nn.Module):
         super().__init__()
         assert d_target >= 2, 'Coupling Flow requires at least 2-dim target'
         self.d_target = d_target
-        self.base_dist = BaseDist(d_target, family=base_family, trainable=base_trainable)
+        base_d_context = d_context if base_context else 0
+        self.base_dist = BaseDist(
+            d_target, family=base_family, trainable=base_trainable, d_context=base_d_context
+        )
         flows = []
         for _ in range(n_blocks):
             if use_actnorm:
                 flows += [ActNorm(d_target)]
-            # if transform == 'spline':
-            #     flows += [LU(d_target, identity_init=True)]
+            if use_lu:
+                flows += [LU(d_target, identity_init=True)]
             if use_permute:
                 flows += [Permute(d_target)]
             flows += [
