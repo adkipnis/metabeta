@@ -151,6 +151,45 @@ class ISAB(nn.Module):
         return h
 
 
+class PMA(nn.Module):
+    """Pooling by Multihead Attention: single learnable seed attends to encoded set.
+    MAB(seed, X) -> squeeze -> (batch, d_model)"""
+
+    def __init__(
+        self,
+        d_model: int,
+        d_ff: int,
+        n_heads: int = 4,
+        use_bias: bool = True,
+        pre_norm: bool = True,
+        activation: str = 'GELU',
+        dropout: float = 0.01,
+        eps: float = 1e-3,
+    ):
+        super().__init__()
+        self.seed = nn.Parameter(torch.empty(d_model))
+        nn.init.normal_(self.seed, 0.0, 0.02)
+        self.mab = MAB(
+            d_model=d_model,
+            d_ff=d_ff,
+            n_heads=n_heads,
+            use_bias=use_bias,
+            pre_norm=pre_norm,
+            activation=activation,
+            dropout=dropout,
+            eps=eps,
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,  # (batch, seq_len, d_model)
+        key_padding_mask: torch.Tensor | None = None,  # (batch, seq_len), True = ignore
+    ) -> torch.Tensor:  # (batch, d_model)
+        seed = self.seed.unsqueeze(0).unsqueeze(0).expand(x.size(0), 1, -1)
+        out = self.mab(seed, x, key_padding_mask=key_padding_mask)  # (B, 1, d_model)
+        return out.squeeze(1)
+
+
 # --------------------------------------------------------
 if __name__ == '__main__':
 
