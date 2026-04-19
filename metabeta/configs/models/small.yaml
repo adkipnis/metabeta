@@ -25,8 +25,8 @@ posterior_g:
         d_ff: 128
         depth: 3
         dropout: 0.0
-        zero_init: True
-        use_bias: False
+        zero_init: true
+        use_bias: false
     rq_kwargs:
         adaptive_domain: true
         adaptive_tails: true
@@ -35,4 +35,4 @@ posterior_g:
 posterior_l:
     n_blocks: 2
 
-posterior_correlation: False
+posterior_correlation: false
