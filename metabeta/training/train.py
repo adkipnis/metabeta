@@ -300,6 +300,7 @@ class Trainer:
         )
         wandb.config.update({'data_cfg': self.data_cfg, 'model_cfg': self.model_cfg.to_dict()})
         wandb.define_metric('train/loss_step', step_metric='step/global')
+        wandb.define_metric('train/grad_norm', step_metric='step/global')
         wandb.define_metric('train/loss_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/loss_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/mean_nrmse_epoch', step_metric='step/epoch')
@@ -462,6 +463,7 @@ batch size: {self.cfg.bs}
                 wandb.log(
                     {
                         'train/loss_step': float(loss_train),
+                        'train/grad_norm': float(grad_norm),
                         'step/global': self.global_step,
                     }
                 )
