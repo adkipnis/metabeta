@@ -13,7 +13,7 @@
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
 
-EPOCHS=1000
+EPOCHS=2000
 
 while [[ $# -gt 0 ]]; do
     case $1 in
