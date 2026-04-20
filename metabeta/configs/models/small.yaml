@@ -6,7 +6,7 @@ summarizer_g:
     n_blocks: 3
     n_isab: 1
     activation: 'GELU'
-    dropout: 0.0
+    dropout: 0.01
 
 summarizer_l:
     n_isab: 0
@@ -22,11 +22,12 @@ posterior_g:
     subnet_kwargs:
         net_type: 'residual'
         activation: 'ReLU'
-        d_ff: 128
+        d_ff: 192
         depth: 3
         dropout: 0.0
         zero_init: true
         use_bias: false
+        use_glu: true
     rq_kwargs:
         adaptive_domain: true
         adaptive_tails: true
