@@ -43,6 +43,7 @@ quality indicator before running the full evaluation.
 """
 
 import argparse
+import time
 from typing import Literal
 
 import torch
@@ -305,6 +306,7 @@ class MetropolisSampler:
         diagnostics : dict
             'accept_rate' (b, n_chains) — fraction of proposals accepted post-burnin.
         """
+        t0 = time.perf_counter()
         s_expected = self.n_chains * self.n_steps
         if proposal.n_samples != s_expected:
             raise ValueError(
@@ -333,7 +335,8 @@ class MetropolisSampler:
             'local': {'samples': sl_out, 'log_prob': sl_out.new_zeros(b, m, s_out)},
         }
         out = Proposal(proposed, has_sigma_eps=proposal.has_sigma_eps, d_corr=d_corr)
-        out.tpd = proposal.tpd
+        t1 = time.perf_counter()
+        out.tpd = proposal.tpd + (t1 - t0)
         return out, {'accept_rate': accept_rate}
 
 
