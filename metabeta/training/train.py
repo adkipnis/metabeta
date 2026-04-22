@@ -109,7 +109,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--lr', type=float, help='Learning rate')
     parser.add_argument('--loss_type', type=str, help='Loss type: forward|backward|mixed (default = forward)')
     parser.add_argument('--n_samples', type=int, help='Posterior samples drawn per evaluation dataset (default = 512)')
-    parser.add_argument('--patience', type=int, help='Early stopping patience in epochs; 0 = disabled (default = 50)')
+    parser.add_argument('--patience', type=int, help='Early stopping patience in epochs; 0 = disabled (default = 0)')
     parser.add_argument('--sample_interval', type=int, help='Run full posterior evaluation every N epochs (default = 5)')
     parser.add_argument('--cores', type=int, help='CPU thread count passed to torch.set_num_threads (default = 8)')
     parser.add_argument('--compile', action=argparse.BooleanOptionalAction, help='Compile model with torch.compile (default = False)')
