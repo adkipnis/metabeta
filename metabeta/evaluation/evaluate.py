@@ -65,7 +65,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
     parser.add_argument('--conformal', action=argparse.BooleanOptionalAction)
     parser.add_argument('--k', type=int, default=0, help='pseudo-MoE permuted views (0=off)')
-    parser.add_argument('--plot', action=argparse.BooleanOptionalAction)
     parser.add_argument('--batch_size', type=int)
     parser.add_argument('--save_tables', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--outdir', type=str)
@@ -140,9 +139,8 @@ class Evaluator:
 
         # plot dir
         self.plot_dir = None
-        if self.cfg.plot:
-            self.plot_dir = Path(self.dir, '..', 'outputs', 'plots', self.run_name)
-            self.plot_dir.mkdir(parents=True, exist_ok=True)
+        self.plot_dir = Path(self.dir, '..', 'outputs', 'plots', self.run_name)
+        self.plot_dir.mkdir(parents=True, exist_ok=True)
 
         # results dir
         self.results_dir = None
@@ -318,8 +316,6 @@ class Evaluator:
         labels: list[str],
         batch: dict[str, torch.Tensor],
     ) -> None:
-        if not self.cfg.plot:
-            return
         if self.cfg.rescale:
             batch = rescaleData(batch)
         plotComparison(summaries, proposals, labels, batch, plot_dir=self.plot_dir, show=True)
