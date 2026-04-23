@@ -74,6 +74,16 @@ class SimulationConfig(BaseModel):
     model_config = {'extra': 'allow'}
 
 
+CLI_ONLY_PARAMS: set[str] = {
+    'plot',
+    'wandb',
+    'load_best',
+    'load_latest',
+    'save_best',
+    'save_latest',
+}
+
+
 class TrainingConfig(BaseModel):
     """Validates training configs."""
 

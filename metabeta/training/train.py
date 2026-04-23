@@ -26,6 +26,7 @@ from metabeta.utils.templates import (
     setupConfigParser,
     generateTrainingConfig,
     saveConfigToCheckpoint,
+    CLI_ONLY_PARAMS,
 )
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
@@ -319,7 +320,7 @@ class Trainer:
             'best_epoch': self.best_epoch,
             'best_nrmse': self.best_nrmse,
             'best_median_nll': self.best_median_nll,
-            'trainer_cfg': vars(self.cfg).copy(),
+            'trainer_cfg': self.cfg.model_dump(exclude=CLI_ONLY_PARAMS),
             'data_cfg': self.data_cfg.copy(),
             'model_cfg': self.model_cfg.to_dict(),
             'model_state': self.model.state_dict(),
