@@ -320,7 +320,7 @@ class Trainer:
             'best_epoch': self.best_epoch,
             'best_nrmse': self.best_nrmse,
             'best_median_nll': self.best_median_nll,
-            'trainer_cfg': self.cfg.model_dump(exclude=CLI_ONLY_PARAMS),
+            'trainer_cfg': {k: v for k, v in vars(self.cfg).items() if k not in CLI_ONLY_PARAMS},
             'data_cfg': self.data_cfg.copy(),
             'model_cfg': self.model_cfg.to_dict(),
             'model_state': self.model.state_dict(),
