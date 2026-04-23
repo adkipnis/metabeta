@@ -89,7 +89,7 @@ class TrainingConfig(BaseModel):
     max_grad_norm: float = Field(gt=0, default=1.0)
     loss_type: str = 'forward'
     patience: int = Field(ge=0, default=0)
-    sample_interval: int = Field(gt=0, default=5)
+    sample_interval: int = Field(gt=0, default=20)
     skip_ref: bool = False
 
     # Runtime settings (will be overridden by CLI-only params)
