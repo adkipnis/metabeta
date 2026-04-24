@@ -30,5 +30,4 @@ esac
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/simulation
-python generate.py --size "${SIZE}" --family ${FAMILY} --ds_type "${DS_TYPE}" --partition valid
-python generate.py --size "${SIZE}" --family ${FAMILY} --ds_type "${DS_TYPE}" --partition test
+python generate.py --size "${SIZE}" --family ${FAMILY} --ds_type "${DS_TYPE}" --partition eval
