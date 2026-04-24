@@ -508,11 +508,16 @@ bs_test:    {cfg.bs_test}
             self.genValid()
         elif self.cfg.partition == 'train':
             self.genTrain()
-        elif self.cfg.partition == 'all':
-            self.cfg.partition = 'test'
-            self.genTest()
+        elif self.cfg.partition == 'eval':
             self.cfg.partition = 'valid'
             self.genValid()
+            self.cfg.partition = 'test'
+            self.genTest()
+        elif self.cfg.partition == 'all':
+            self.cfg.partition = 'valid'
+            self.genValid()
+            self.cfg.partition = 'test'
+            self.genTest()
             self.cfg.partition = 'train'
             self.genTrain()
         else:
