@@ -106,7 +106,8 @@ def setup() -> argparse.Namespace:
 
     # Training hyperparameters (override template or loaded YAML)
     parser.add_argument('-e', '--max_epochs', type=int, default=20, help='Number of training epochs')
-    parser.add_argument('--bs', type=int, help='Batch size (number of datasets per step)')
+    parser.add_argument('--bs', type=int, help='Batch size (number of datasets per step, default = 8)')
+    parser.add_argument('--accum_steps', type=int, help='Gradient accumulation steps; effective batch size = bs × accum_steps (default = 4)')
     parser.add_argument('--lr', type=float, help='Learning rate')
     parser.add_argument('--loss_type', type=str, help='Loss type: forward|backward|mixed (default = forward)')
     parser.add_argument('--n_samples', type=int, help='Posterior samples drawn per evaluation dataset (default = 512)')
@@ -382,7 +383,7 @@ device:     {self.cfg.device}
 compiled:   {self.cfg.compile and self.model.device.type == 'cuda'}
 loss type:  {self.cfg.loss_type}
 lr:         {self.cfg.lr}
-batch size: {self.cfg.bs}
+batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg.accum_steps} (effective)' if self.cfg.accum_steps > 1 else ''}
 ===================="""
 
     def loss(
@@ -436,6 +437,8 @@ batch size: {self.cfg.bs}
 
     def train(self) -> float:
         dl_train = self._getDataLoader('train', self.current_epoch, batch_size=self.cfg.bs)
+        n_batches = len(dl_train)
+        accum_steps = self.cfg.accum_steps
         iterator = tqdm(
             dl_train,
             desc=f'Epoch {self.current_epoch:02d}/{self.cfg.max_epochs:02d} [T]',
@@ -446,28 +449,31 @@ batch size: {self.cfg.bs}
         self.optimizer.zero_grad(set_to_none=True)
         for i, batch in enumerate(iterator):
             batch = toDevice(batch, self.device)
-            loss = self.loss(batch)
+            loss = self.loss(batch) / accum_steps
             loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), self.cfg.max_grad_norm
-            )
-            if torch.isfinite(grad_norm):
-                self.optimizer.step()
-                self.global_step += 1
-            self.optimizer.zero_grad(set_to_none=True)
 
             # write loss
             running_sum += loss.item()
             loss_train = running_sum / (i + 1)
             iterator.set_postfix_str(f'Loss: {loss_train:.3f}')
-            if self.wandb_run is not None:
-                wandb.log(
-                    {
-                        'train/loss_step': float(loss_train),
-                        'train/grad_norm': float(grad_norm),
-                        'step/global': self.global_step,
-                    }
+
+            # optimizer step at accumulation boundary or end of epoch
+            if (i + 1) % accum_steps == 0 or i == n_batches - 1:
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), self.cfg.max_grad_norm
                 )
+                if torch.isfinite(grad_norm):
+                    self.optimizer.step()
+                    self.global_step += 1
+                self.optimizer.zero_grad(set_to_none=True)
+                if self.wandb_run is not None:
+                    wandb.log(
+                        {
+                            'train/loss_step': float(loss_train),
+                            'train/grad_norm': float(grad_norm),
+                            'step/global': self.global_step,
+                        }
+                    )
         return float(loss_train)
 
     @torch.inference_mode()
