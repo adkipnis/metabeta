@@ -194,7 +194,7 @@ class Trainer:
 
         # plot dir
         self.plot_dir = None
-        if self.cfg.plot:
+        if getattr(self.cfg, 'plot', False):
             self.plot_dir = Path(self.dir, '..', 'outputs', 'plots', self.run_name)
             self.plot_dir.mkdir(parents=True, exist_ok=True)
 
@@ -209,7 +209,7 @@ class Trainer:
         self.stopper = None
         if self.cfg.patience > 0:
             self.stopper = EarlyStopping(self.cfg.patience)
-            if not self.cfg.save_best:
+            if not getattr(self.cfg, 'save_best', True):
                 logger.warning('early stopping enabled without saving best checkpoints!')
 
     def _reproducible(self) -> None:
@@ -545,7 +545,7 @@ batch size: {self.cfg.bs}
             )
 
         # make plots
-        if self.cfg.plot:
+        if getattr(self.cfg, 'plot', False):
             self.plot(proposal, eval_summary, batch)
         return eval_summary
 
@@ -595,10 +595,10 @@ batch size: {self.cfg.bs}
 
     def go(self) -> None:
         # optionally load previous checkpoint
-        if self.cfg.load_best:
+        if getattr(self.cfg, 'load_best', False):
             self.current_epoch = self.load('best')
             print(f'Resumed best checkpoint at epoch {self.current_epoch}.')
-        elif self.cfg.load_latest:
+        elif getattr(self.cfg, 'load_latest', False):
             self.current_epoch = self.load('latest')
             print(f'Resumed latest checkpoint at epoch {self.current_epoch}.')
 
@@ -643,7 +643,7 @@ batch size: {self.cfg.bs}
                 wandb.log(logs)
 
             # save latest ckpt
-            if self.cfg.save_latest:
+            if getattr(self.cfg, 'save_latest', True):
                 self.save('latest')
 
             # update tracked metrics and optional early stopping on sample epochs
@@ -658,7 +658,7 @@ batch size: {self.cfg.bs}
                     self.best_median_nll = median_nll  # type: ignore
                 if improved:
                     self.best_epoch = self.current_epoch
-                    if self.cfg.save_best:
+                    if getattr(self.cfg, 'save_best', True):
                         self.save('best')
 
                 if self.stopper is not None:
