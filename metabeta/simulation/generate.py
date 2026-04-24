@@ -18,7 +18,7 @@ from metabeta.simulation import (
     Simulator,
 )
 from metabeta.simulation.emulator import Subsampler
-from metabeta.utils.families import hasSigmaEps
+from metabeta.utils.families import hasSigmaEps, LIKELIHOOD_FAMILIES
 from metabeta.utils.io import datasetFilename
 from metabeta.utils.sampling import truncLogUni
 from metabeta.utils.padding import aggregate
@@ -76,7 +76,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--bs_mini', type=int, default=32, help='Mini-batch size for grouping m/q/d across datasets (default = 32)')
 
     # Partitions and sources
-    parser.add_argument('--partition', type=str, default='all', help='Which partition(s) to generate: train|valid|test|all (default = all)')
+    parser.add_argument('--partition', type=str, default='all', help='Which partition(s) to generate: train|valid|test|eval|all (default = all)')
     parser.add_argument('-b', '--begin', type=int, default=1, help='First training epoch to generate (default = 1)')
     parser.add_argument('-e', '--epochs', type=int, default=20, help='Last training epoch to generate (default = 20)')
     parser.add_argument('--source', type=str, default='all', help='Dataset source key for sampled/observed ds_type (default = all)')
@@ -475,7 +475,28 @@ class Generator:
             ds_train = self._castCompactTypes(ds_train)
             fn = dataset_dir / datasetFilename('train', epoch)
             np.savez_compressed(fn, **ds_train, allow_pickle=True)
-            logger.debug(f'Saved training set to {fn}')
+            logger.info(f'Saved training set to {fn}')
+
+    @property
+    def info(self) -> str:
+        cfg = self.cfg
+        epoch_range = f'{cfg.begin}–{cfg.epochs}' if cfg.partition in ['train', 'all'] else 'n/a'
+        return f"""
+====================
+data id:    {cfg.data_id}
+likelihood: {LIKELIHOOD_FAMILIES[cfg.likelihood_family]}
+ds type:    {cfg.ds_type}
+partition:  {cfg.partition}
+epochs:     {epoch_range}
+d:          1–{cfg.max_d}
+q:          1–{cfg.max_q}
+m:          {cfg.min_m}–{self.max_m_feasible}
+n:          {cfg.min_n}–{cfg.max_n}
+n_total:    ≤{cfg.max_n_total}
+bs_train:   {cfg.bs_train}
+bs_valid:   {cfg.bs_valid}
+bs_test:    {cfg.bs_test}
+===================="""
 
     def go(self):
         # Save config before generation
@@ -504,6 +525,7 @@ class Generator:
 def main() -> None:
     cfg = setup()
     generator = Generator(cfg)
+    print(generator.info)
     generator.go()
 
 
