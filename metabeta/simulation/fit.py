@@ -33,6 +33,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--seed', type=int, default=42, help='Random seed (default=42)')
     parser.add_argument('--tune', type=int, default=2000,
         help='NUTS tuning steps (default=2000)')
+    parser.add_argument('--target_accept', type=float, default=0.95,
+        help='NUTS target acceptance rate (default=0.95)')
     parser.add_argument('--draws', type=int, default=1000,
         help='Posterior draws per chain (default=1000)')
     parser.add_argument('--chains', type=int, default=4,
@@ -239,6 +241,7 @@ class Fitter:
                 chains=cfg.chains,
                 cores=(1 if cfg.loop else cfg.chains),
                 random_seed=cfg.seed,
+                target_accept=cfg.target_accept,
                 return_inferencedata=True,
                 progressbar=True,
             )
