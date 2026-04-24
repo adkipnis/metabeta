@@ -2,9 +2,14 @@
 # Used by metabeta/utils/templates.py
 
 # Size presets for simulation/training configs
+# min_d / min_q define non-overlapping bands used for test-set generation,
+# so that each regime exercises a clearly distinct slice of problem space.
+# Training on the full range always uses min_d=2, min_q=1 (huge preset or CLI override).
 sizes:
   tiny:
+    min_d: 2
     max_d: 2
+    min_q: 1
     max_q: 1
     min_m: 5
     max_m: 20
@@ -13,7 +18,9 @@ sizes:
     max_n_total: 500
 
   small:
+    min_d: 3
     max_d: 4
+    min_q: 1
     max_q: 2
     min_m: 5
     max_m: 25
@@ -22,7 +29,9 @@ sizes:
     max_n_total: 1000
 
   medium:
+    min_d: 5
     max_d: 8
+    min_q: 2
     max_q: 3
     min_m: 5
     max_m: 60
@@ -31,7 +40,9 @@ sizes:
     max_n_total: 2000
 
   large:
+    min_d: 9
     max_d: 16
+    min_q: 3
     max_q: 4
     min_m: 5
     max_m: 100
@@ -40,7 +51,9 @@ sizes:
     max_n_total: 4000
 
   huge:
+    min_d: 17
     max_d: 32
+    min_q: 4
     max_q: 5
     min_m: 5
     max_m: 200
