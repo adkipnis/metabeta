@@ -99,6 +99,17 @@ CLI_ONLY_PARAMS: set[str] = {
     'save_latest',
 }
 
+# Fields excluded from config.yaml (session/environment specific, one-time actions,
+# or generate.py runtime params that leak into training configs via cli_only_defaults).
+CONFIG_YAML_EXCLUDE: set[str] = CLI_ONLY_PARAMS | {
+    'device',       # environment-specific
+    'verbosity',    # session preference
+    'partition',    # generate.py runtime param
+    'begin',        # generate.py runtime param
+    'loop',         # generate.py runtime param
+    'sgld',         # generate.py runtime param
+}
+
 
 class TrainingConfig(BaseModel):
     """Validates training configs."""
@@ -241,6 +252,10 @@ def saveConfigToCheckpoint(cfg: dict[str, Any], checkpoint_dir: Path) -> None:
     """
     Save resolved config to checkpoint directory for reproducibility.
 
+    Session-specific and one-time-action fields (defined in CONFIG_YAML_EXCLUDE)
+    are stripped so that loading the saved config for resuming does not re-trigger
+    load flags or inherit the original device/verbosity/etc.
+
     Args:
         cfg: Configuration dict to save
         checkpoint_dir: Path to checkpoint directory
@@ -248,9 +263,10 @@ def saveConfigToCheckpoint(cfg: dict[str, Any], checkpoint_dir: Path) -> None:
     checkpoint_dir = Path(checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+    filtered = {k: v for k, v in cfg.items() if k not in CONFIG_YAML_EXCLUDE}
     config_path = checkpoint_dir / 'config.yaml'
     with open(config_path, 'w') as f:
-        yaml.dump(cfg, f, sort_keys=False, default_flow_style=False)
+        yaml.dump(filtered, f, sort_keys=False, default_flow_style=False)
 
 
 def loadConfigFromCheckpoint(checkpoint_dir: Path) -> dict[str, Any]:
