@@ -447,18 +447,24 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         self.model.train()
         self.optimizer.train()
         self.optimizer.zero_grad(set_to_none=True)
+        # size of the final (possibly partial) accumulation window
+        trailing = n_batches % accum_steps or accum_steps  # accum_steps when evenly divisible
         for i, batch in enumerate(iterator):
             batch = toDevice(batch, self.device)
-            loss = self.loss(batch) / accum_steps
-            loss.backward()
+            is_step = (i + 1) % accum_steps == 0 or i == n_batches - 1
+            # trailing window: correct divisor so its effective lr matches full windows
+            in_trailing = i >= n_batches - trailing
+            window_size = trailing if in_trailing else accum_steps
+            raw_loss = self.loss(batch)
+            (raw_loss / window_size).backward()
 
-            # write loss
-            running_sum += loss.item()
+            # write loss (track unscaled value so it's comparable to valid loss)
+            running_sum += raw_loss.item()
             loss_train = running_sum / (i + 1)
             iterator.set_postfix_str(f'Loss: {loss_train:.3f}')
 
             # optimizer step at accumulation boundary or end of epoch
-            if (i + 1) % accum_steps == 0 or i == n_batches - 1:
+            if is_step:
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.cfg.max_grad_norm
                 )
