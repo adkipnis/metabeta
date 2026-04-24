@@ -47,15 +47,31 @@ class SimulationConfig(BaseModel):
     ds_type: str
     source: str = 'all'
     likelihood_family: Literal[0, 1, 2]
+    min_d: int = Field(ge=1, default=2)  # lower bound for d; defines non-overlapping test band
     max_d: int = Field(gt=0)
+    min_q: int = Field(ge=1, default=1)  # lower bound for q; defines non-overlapping test band
     max_q: int = Field(ge=0)
     min_m: int = Field(gt=0)
     max_m: int = Field(gt=0)
     min_n: int = Field(gt=0)
     max_n: int = Field(gt=0)
     max_n_total: int = Field(gt=0)
-    min_bg_df: int = Field(ge=0, default=0)  # minimum between-group df (m − d); 0 = unconstrained
+    min_bg_df: int = Field(ge=0, default=0)  # minimum between-group df (m − q); 0 = unconstrained
     data_id: Optional[str] = None  # Auto-generated if not provided
+
+    @field_validator('max_d')
+    @classmethod
+    def max_d_ge_min_d(cls, v, info):
+        if info.data.get('min_d') is not None and v < info.data['min_d']:
+            raise ValueError(f"max_d ({v}) must be >= min_d ({info.data['min_d']})")
+        return v
+
+    @field_validator('max_q')
+    @classmethod
+    def max_q_ge_min_q(cls, v, info):
+        if info.data.get('min_q') is not None and v < info.data['min_q']:
+            raise ValueError(f"max_q ({v}) must be >= min_q ({info.data['min_q']})")
+        return v
 
     @field_validator('max_m')
     @classmethod
