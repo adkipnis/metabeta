@@ -3,7 +3,7 @@ summarizer_g:
     d_model: 128
     d_ff: 512
     d_output: 32
-    n_blocks: 4
+    n_blocks: 6
     n_isab: 1
     activation: 'GELU'
     dropout: 0.01
@@ -18,7 +18,7 @@ posterior_g:
     base_family: 'normal'
     base_trainable: true
     base_context: true
-    n_blocks: 5
+    n_blocks: 6
     subnet_kwargs:
         net_type: 'residual'
         activation: 'ReLU'
