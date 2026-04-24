@@ -81,7 +81,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('-e', '--epochs', type=int, default=20, help='Last training epoch to generate (default = 20)')
     parser.add_argument('--source', type=str, default='all', help='Dataset source key for sampled/observed ds_type (default = all)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD sampler when ds_type=sampled (default = False)')
-    parser.add_argument('--loop', action='store_true', help='Generate datasets sequentially instead of in parallel with joblib (default = False)')
+    parser.add_argument('--loop', action='store_false', help='Generate datasets sequentially instead of in parallel with joblib (default = True)')
 
     return setupConfigParser(parser, generateSimulationConfig, 'Generate hierarchical datasets.')
 # fmt: on
