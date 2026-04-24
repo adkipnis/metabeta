@@ -54,6 +54,7 @@ families:
   0:
     likelihood_family: 0
     name: normal
+    min_bg_df: 4  # need ≥4 between-group df for Normal variance components to be estimable
   1:
     likelihood_family: 1
     name: bernoulli
