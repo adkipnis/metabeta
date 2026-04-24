@@ -62,7 +62,6 @@ class ApproximatorConfig(BaseModel):
     likelihood_family: int = Field(ge=0, default=0)
     posterior_correlation: bool = True
     analytical_context: bool = True
-    analytical_context_mode: str = 'concat'  # 'concat' or 'cross_attn'
     model_config = {'extra': 'allow'}
 
     @property
@@ -99,8 +98,6 @@ def modelFromYaml(
         d_rfx=d_rfx,
         likelihood_family=likelihood_family,
         posterior_correlation=model_cfg['posterior_correlation'],
-        analytical_context=model_cfg.get('analytical_context', True),
-        analytical_context_mode=model_cfg.get('analytical_context_mode', 'concat'),
         summarizer_g=SummarizerConfig(**s_g),
         summarizer_l=SummarizerConfig(**{**s_g, **model_cfg.get('summarizer_l', {})}),
         posterior_g=PosteriorConfig(**p_g),

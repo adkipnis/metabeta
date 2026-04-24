@@ -8,12 +8,10 @@ from metabeta.utils.activations import getActivation
 
 class SetTransformer(nn.Module):
     """Set Transformer:
-    cls:  Linear -> Act -> Dropout -> [ISAB]*n_isab -> Pool token -> [MAB]*n_mab -> [CrossAttn] -> Norm -> x[:,0] (-> Dropout -> Linear)
-    mean: Linear -> Act -> Dropout -> [ISAB]*n_isab -> [MAB]*n_mab -> [CrossAttn] -> Norm -> masked mean (-> Dropout -> Linear)
-    pma:  Linear -> Act -> Dropout -> [ISAB]*n_isab -> [MAB]*n_mab -> [CrossAttn] -> Norm -> PMA(x) (-> Dropout -> Linear)
-    ISAB blocks run on data-only (no pool token) to keep induced summaries clean.
-    Optional cross-attention block (d_context != None) lets each set element attend to
-    an external context sequence after all self-attention blocks, before pooling."""
+    cls:  Linear -> Act -> Dropout -> [ISAB]*n_isab -> Pool token -> [MAB]*n_mab -> Norm -> x[:,0] (-> Dropout -> Linear)
+    mean: Linear -> Act -> Dropout -> [ISAB]*n_isab -> [MAB]*n_mab -> Norm -> masked mean (-> Dropout -> Linear)
+    pma:  Linear -> Act -> Dropout -> [ISAB]*n_isab -> [MAB]*n_mab -> Norm -> PMA(x) (-> Dropout -> Linear)
+    ISAB blocks run on data-only (no pool token) to keep induced summaries clean."""
 
     def __init__(
         self,
@@ -21,7 +19,6 @@ class SetTransformer(nn.Module):
         d_model: int,
         d_ff: int,
         d_output: int | None = None,
-        d_context: int | None = None,  # if set, adds a cross-attn block to an external context
         n_inducing: int = 32,  # for ISAB blocks
         n_heads: int = 4,
         n_blocks: int = 2,
@@ -81,13 +78,6 @@ class SetTransformer(nn.Module):
         # posthoc norm
         self.norm = nn.LayerNorm(d_model, eps=eps)
 
-        # optional cross-attention block: set elements attend to an external context sequence
-        self.proj_context = None
-        self.cross_attn = None
-        if d_context is not None:
-            self.proj_context = nn.Linear(d_context, d_model)
-            self.cross_attn = MAB(**cfg)  # type: ignore
-
         # optional output projector (dropout before linear to avoid noisy summaries)
         self.proj_out = None
         if d_output is not None:
@@ -102,24 +92,18 @@ class SetTransformer(nn.Module):
             initializer(self.proj_in[0])
             if self.proj_out is not None:
                 initializer(self.proj_out[1])
-            if self.proj_context is not None:
-                initializer(self.proj_context)
 
     def _reshape(
         self,
         x: torch.Tensor,
         mask: torch.Tensor | None = None,
-        context: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
-        # deal with sequences longer than 3d (e.g. local summarizer sees B×m×n×d)
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        # deal with sequences longer than 3d
         if x.dim() > 3:
             x = x.reshape(-1, *x.shape[-2:])
             if mask is not None:
                 mask = mask.reshape(-1, *mask.shape[-1:])
-            if context is not None:
-                # context: (B, m, k, d_ctx) → (B*m, k, d_ctx)
-                context = context.reshape(-1, *context.shape[-2:])
-        return x, mask, context
+        return x, mask
 
     def _insertToken(
         self,
@@ -139,12 +123,11 @@ class SetTransformer(nn.Module):
         self,
         x: torch.Tensor,
         mask: torch.Tensor | None = None,
-        context: torch.Tensor | None = None,
     ) -> torch.Tensor:
 
         # optionally reshape inputs
         old_shape = x.shape
-        x, mask, context = self._reshape(x, mask, context)
+        x, mask = self._reshape(x, mask)
 
         # linear embedding
         x = self.proj_in(x)
@@ -162,12 +145,6 @@ class SetTransformer(nn.Module):
         # MAB blocks
         for block in self.blocks[self.n_isab :]:
             x = block(x, key_padding_mask=inv_mask)
-
-        # cross-attention to external context (after self-attn, before pooling)
-        if context is not None and self.cross_attn is not None:
-            ctx = self.proj_context(context)  # (B_eff, k, d_model)
-            x = self.cross_attn(x, z=ctx)     # each set element attends to context tokens
-
         x = self.norm(x)
 
         # pool

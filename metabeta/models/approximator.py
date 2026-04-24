@@ -23,9 +23,9 @@ constrainSigma, unconstrainSigma, logDetJacobian = getConstrainers(method='softp
 CLAMP = 20.0
 
 
-def _buildSummarizer(cfg: SummarizerConfig, d_input: int, d_context: int | None = None) -> nn.Module:
+def _buildSummarizer(cfg: SummarizerConfig, d_input: int) -> nn.Module:
     if cfg.type == 'set-transformer':
-        return SetTransformer(d_input=d_input, d_context=d_context, **cfg.to_dict())
+        return SetTransformer(d_input=d_input, **cfg.to_dict())
     raise NotImplementedError(f'unknown summarizer type: {cfg.type}')
 
 
@@ -62,22 +62,8 @@ class Approximator(nn.Module):
         return self.cfg.d_corr
 
     @property
-    def analytical_context(self) -> bool:
+    def analytical_context(self) -> str:
         return self.cfg.analytical_context
-
-    @property
-    def cross_attn_mode(self) -> bool:
-        return self.analytical_context and self.cfg.analytical_context_mode == 'cross_attn'
-
-    @property
-    def _use_xattn(self) -> bool:
-        """True when analytics stats are fed as cross-attention context tokens."""
-        return self.analytical_context and self.cfg.analytical_context_mode in ('cross_attn', 'both')
-
-    @property
-    def _use_concat(self) -> bool:
-        """True when analytics stats are concatenated into the feature vector."""
-        return self.analytical_context and self.cfg.analytical_context_mode in ('concat', 'both')
 
     def _analyticsGlobalDim(self) -> int:
         """Dimension added to global context by GLMM statistics.
@@ -111,24 +97,18 @@ class Approximator(nn.Module):
         # --- summarizers
         # local: y + X[1:d] + Z[1:q] per observation
         d_input_l = 1 + (d_ffx - 1) + (d_rfx - 1)
-        # cross-attn context for local GLMM stats (None = no cross-attn block)
-        d_ctx_l = self._analyticsLocalDim() if self._use_xattn else None
-        self.summarizer_l = _buildSummarizer(self.cfg.summarizer_l, d_input_l, d_context=d_ctx_l)
+        self.summarizer_l = _buildSummarizer(self.cfg.summarizer_l, d_input_l)
         # global: local summaries + local metadata, aggregated across groups
-        d_analytics_l = self._analyticsLocalDim() if self._use_concat else 0
-        d_meta_l = 2 + d_analytics_l   # n_obs + eta_rfx [+ local GLMM stats if concat/both mode]
+        d_meta_l = 2 + self._analyticsLocalDim()   # n_obs + eta_rfx
         d_input_g = self.cfg.summarizer_l.d_output + d_meta_l
-        # cross-attn context for global GLMM stats (None = no cross-attn block)
-        d_ctx_g = self._analyticsGlobalDim() if self._use_xattn else None
-        self.summarizer_g = _buildSummarizer(self.cfg.summarizer_g, d_input_g, d_context=d_ctx_g)
+        self.summarizer_g = _buildSummarizer(self.cfg.summarizer_g, d_input_g)
 
         # --- posteriors
         # global: fixed effects + variance params conditioned on global summary + metadata
         d_prior = (
             2 * d_ffx + d_rfx + d_sigma_eps + 1
         )  # nu_ffx, tau_ffx, tau_rfx, [tau_eps], eta_rfx
-        d_analytics_g = self._analyticsGlobalDim() if self._use_concat else 0
-        d_meta_g = 2 + d_prior + self.family_encoder.d_output + d_analytics_g
+        d_meta_g = 2 + d_prior + self.family_encoder.d_output + self._analyticsGlobalDim()
         d_context_g = self.cfg.summarizer_g.d_output + d_meta_g
         d_target_g = d_ffx + d_var + self.d_corr
         self.posterior_g = _buildPosterior(self.cfg.posterior_g, d_target_g, d_context_g)
@@ -215,34 +195,6 @@ class Approximator(nn.Module):
             eta_rfx=data.get('eta_rfx'),
         )
 
-    def _statsContext_l(self, stats: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Build local cross-attention context: (B, m, 1, 3*d_rfx).
-        Each group gets one context token containing its BLUP stats."""
-        blup_est = stats['blup_est'].clamp(-CLAMP, CLAMP)                             # (B, m, q)
-        blup_std = stats['blup_var'].clamp(min=0.0).sqrt().clamp(max=CLAMP)           # (B, m, q)
-        sigma_rfx_sq = stats['sigma_rfx_est'].unsqueeze(-2) ** 2                      # (B, 1, q)
-        lambda_g = (1.0 - stats['blup_var'] / (sigma_rfx_sq + 1e-8)).clamp(0.0, 1.0) # (B, m, q)
-        ctx = torch.cat([blup_est, blup_std, lambda_g], dim=-1)                       # (B, m, 3q)
-        return ctx.unsqueeze(-2)                                                       # (B, m, 1, 3q)
-
-    def _statsContext_g(self, data: dict[str, torch.Tensor], stats: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Build global cross-attention context: (B, 1, d_analytics_global).
-        One context token per dataset containing global GLMM estimates."""
-        out = []
-        out.append(stats['beta_est'].clamp(-CLAMP, CLAMP))          # (B, d_ffx)
-        out.append(stats['sigma_rfx_est'].clamp(max=CLAMP))         # (B, q)
-        if self.has_sigma_eps:
-            out.append(stats['sigma_eps_est'].clamp(max=CLAMP))     # (B, 1)
-        else:
-            out.append(stats['phi_pearson'].clamp(max=CLAMP).unsqueeze(-1))  # (B, 1)
-        if self.d_corr > 0:
-            Psi = stats['Psi'] if 'Psi' in stats else stats['Psi_lap']
-            std = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8).sqrt()
-            psi_corr = (Psi / (std.unsqueeze(-1) * std.unsqueeze(-2))).clamp(-1, 1)
-            out.append(corrToLower(psi_corr))
-        ctx = torch.cat(out, dim=-1)                                 # (B, d_analytics_global)
-        return ctx.unsqueeze(-2)                                     # (B, 1, d_analytics_global)
-
     def _addMetadata(
         self,
         summary: torch.Tensor,
@@ -262,8 +214,8 @@ class Approximator(nn.Module):
             )   # (B, m, 1)
             out += [n_obs, eta_rfx]
 
-            # point estimates (included when concat or both mode)
-            if stats is not None and self._use_concat:
+            # point estimates
+            if stats is not None:
                 blup_est = stats['blup_est'].clamp(-CLAMP, CLAMP)   # (B, m, q)
                 blup_std = stats['blup_var'].clamp(min=0.0).sqrt().clamp(max=CLAMP)  # (B, m, q)
                 sigma_rfx_sq = stats['sigma_rfx_est'].unsqueeze(-2) ** 2  # (B, 1, q)
@@ -293,8 +245,8 @@ class Approximator(nn.Module):
             family_enc = self.family_encoder(families)
             out.append(family_enc)
 
-            # point estimates (included when concat or both mode)
-            if stats is not None and self._use_concat:
+            # point estimates
+            if stats is not None:
                 beta_est = stats['beta_est'].clamp(-CLAMP, CLAMP)   # (B, d)
                 sigma_rfx_est = stats['sigma_rfx_est'].clamp(max=CLAMP)   # (B, q)
                 out += [beta_est, sigma_rfx_est]
@@ -373,13 +325,13 @@ class Approximator(nn.Module):
 
     def summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)
-        stats = self._dataStatistics(data) if self.analytical_context else None
-        # build cross-attn context tokens when needed (cross_attn or both mode)
-        ctx_l = self._statsContext_l(stats) if self._use_xattn and stats is not None else None
-        ctx_g = self._statsContext_g(data, stats) if self._use_xattn and stats is not None else None
-        summary_l = self.summarizer_l(inputs, mask=data['mask_n'], context=ctx_l)
+        summary_l = self.summarizer_l(inputs, mask=data['mask_n'])
+        if self.analytical_context:
+            stats = self._dataStatistics(data)  # compute once, share across both contexts
+        else:
+            stats = None
         summary_l = self._addMetadata(summary_l, data, local=True, stats=stats)
-        summary_g = self.summarizer_g(summary_l, mask=data['mask_m'], context=ctx_g)
+        summary_g = self.summarizer_g(summary_l, mask=data['mask_m'])
         summary_g = self._addMetadata(summary_g, data, local=False, stats=stats)
         return summary_g, summary_l
 
