@@ -143,6 +143,8 @@ class Collection(torch.utils.data.Dataset):
                     ds[f'{method}_ffx'] = ds[f'{method}_ffx'][dperm]
                     ds[f'{method}_sigma_rfx'] = ds[f'{method}_sigma_rfx'][qperm]
                     ds[f'{method}_rfx'] = ds[f'{method}_rfx'][qperm]
+                    if f'{method}_corr_rfx' in ds:
+                        ds[f'{method}_corr_rfx'] = ds[f'{method}_corr_rfx'][..., qperm, :][..., qperm]
 
         return ds
 
