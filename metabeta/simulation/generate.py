@@ -122,30 +122,21 @@ class Generator:
         d_uniq = truncLogUni(rng, low=2, high=self.cfg.max_d + 1, size=n_mini, round=True)
         d = np.repeat(d_uniq, mini_batch_size)
 
-        q = truncLogUni(rng, low=1, high=self.cfg.max_q + 1, size=n_mini, round=True)
-        q = np.repeat(q, mini_batch_size)
-        q = np.minimum(d, q)  # q <= d
+        q_uniq = truncLogUni(rng, low=1, high=self.cfg.max_q + 1, size=n_mini, round=True)
+        q_uniq = np.minimum(d_uniq, q_uniq)  # q <= d, per mini-batch before repeat
+        q = np.repeat(q_uniq, mini_batch_size)
 
+        # σ_α has ~(m − q) between-group df; enforce a minimum margin so that
+        # variance components remain estimable regardless of likelihood family.
         min_bg_df = getattr(self.cfg, 'min_bg_df', 0)
-        if min_bg_df > 0:
-            # Enforce m − d ≥ min_bg_df by sampling m with a per-element floor keyed on
-            # d_uniq (one value per mini-batch, before the repeat to n_datasets).
-            m_low = np.minimum(
-                np.maximum(self.cfg.min_m, d_uniq + min_bg_df),
-                self.max_m_feasible,
-            )
-            m = np.array([
-                int(np.floor(np.exp(rng.uniform(np.log(lo), np.log(self.max_m_feasible + 1)))))
-                for lo in m_low
-            ])
-        else:
-            m = truncLogUni(
-                rng,
-                low=self.cfg.min_m,
-                high=self.max_m_feasible + 1,
-                size=n_mini,
-                round=True,
-            )
+        m_low = np.minimum(
+            np.maximum(self.cfg.min_m, q_uniq + min_bg_df),
+            self.max_m_feasible,
+        )
+        m = np.array([
+            int(np.floor(np.exp(rng.uniform(np.log(lo), np.log(self.max_m_feasible + 1)))))
+            for lo in m_low
+        ])
         m = np.repeat(m, mini_batch_size)
 
         return d, q, m
@@ -368,35 +359,31 @@ class Generator:
         # than sampled (reducing m below d + min_bg_df).  Fix by trimming d.
         min_bg_df = getattr(self.cfg, 'min_bg_df', 0)
         if min_bg_df > 0:
-            datasets = [Generator._clampD(ds, min_bg_df) for ds in datasets]
+            datasets = [Generator._clampQ(ds, min_bg_df) for ds in datasets]
 
         return datasets
 
     @staticmethod
-    def _clampD(ds: dict[str, np.ndarray], min_bg_df: int) -> dict[str, np.ndarray]:
-        """Reduce d (and q if needed) so that m − d ≥ min_bg_df.
+    def _clampQ(ds: dict[str, np.ndarray], min_bg_df: int) -> dict[str, np.ndarray]:
+        """Reduce q so that m − q ≥ min_bg_df.
 
         Called after dataset generation to fix pathological cases where the
         Emulator returned fewer groups than the sampled m_target, causing
-        bg_df = m − d to fall below the configured minimum.
+        m − q to fall below the configured minimum.  d is left unchanged
+        since fixed-effect estimation pools over all n observations.
         """
         m = int(ds['ns'].shape[0])
-        d = int(ds['d'])
-        if m - d >= min_bg_df:
+        q = int(ds['q'])
+        if m - q >= min_bg_df:
             return ds
-        d_new = max(1, m - min_bg_df)
-        if d_new >= d:
+        q_new = max(1, m - min_bg_df)
+        if q_new >= q:
             return ds
-        q_new = min(int(ds['q']), d_new)
         ds = dict(ds)
-        ds['X'] = ds['X'][:, :d_new]
-        ds['ffx'] = ds['ffx'][:d_new]
-        ds['d'] = np.array(d_new)
-        if q_new < int(ds['q']):
-            ds['q'] = np.array(q_new)
-            ds['rfx'] = ds['rfx'][:, :q_new]
-            ds['sigma_rfx'] = ds['sigma_rfx'][:q_new]
-            ds['corr_rfx'] = ds['corr_rfx'][:q_new, :q_new]
+        ds['q'] = np.array(q_new)
+        ds['rfx'] = ds['rfx'][:, :q_new]
+        ds['sigma_rfx'] = ds['sigma_rfx'][:q_new]
+        ds['corr_rfx'] = ds['corr_rfx'][:q_new, :q_new]
         return ds
 
     @staticmethod
