@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from metabeta.simulation.sgld import SGLD
+from metabeta.simulation.synthesizer import Scammer
 from metabeta.utils.preprocessing import checkConstant, transformPredictors
 from metabeta.utils.sampling import sampleCounts, counts2groups
 
@@ -174,8 +175,7 @@ class Emulator:
         return n // self.min_n
 
     def _compatible(self, ds: dict, d: int) -> bool:
-        if d > int(ds['d']):
-            return False
+        # d constraint removed: shortfall columns are filled with SCM-generated features
         return self._maxGroups(ds) >= self.min_m
 
     def _pull(self, d: int):
@@ -218,8 +218,9 @@ class Emulator:
         x = ds['X'].copy()
         y = ds['y'].copy() if 'y' in ds else np.zeros(len(ds['X']))
 
-        # subset features
-        idx_feat = self.rng.permutation(x.shape[1])[: d - 1]
+        # subset features (take as many real columns as available, up to d-1)
+        k_real = min(x.shape[1], d - 1)
+        idx_feat = self.rng.permutation(x.shape[1])[:k_real]
         x = x[:, idx_feat]
 
         # subset observations
@@ -228,6 +229,13 @@ class Emulator:
         idx_obs = self.rng.permutation(len(x))[:n]
         x = x[idx_obs]
         y = y[idx_obs]
+
+        # fill any remaining feature columns with SCM-generated data
+        k_gap = (d - 1) - x.shape[1]
+        if k_gap > 0:
+            scm_features = Scammer(self.rng)._generate(len(x), k_gap + 1)
+            x = np.concatenate([x, scm_features], axis=1)
+
         return x, y, ns
 
     def _subsetGrouped(
@@ -240,8 +248,9 @@ class Emulator:
         x = ds['X'].copy()
         y = ds['y'].copy() if 'y' in ds else np.zeros(len(ds['X']))
 
-        # subset features
-        idx_feat = self.rng.permutation(x.shape[1])[: d - 1]
+        # subset features (take as many real columns as available, up to d-1)
+        k_real = min(x.shape[1], d - 1)
+        idx_feat = self.rng.permutation(x.shape[1])[:k_real]
         x_ = x[:, idx_feat]
 
         # hierarchically subset members / observations per member
@@ -288,6 +297,13 @@ class Emulator:
             member_mask[idx_member[idx_obs]] = True
         x_ = x_[member_mask]
         y_ = y[member_mask]
+
+        # fill any remaining feature columns with SCM-generated data
+        k_gap = (d - 1) - x_.shape[1]
+        if k_gap > 0:
+            scm_features = Scammer(self.rng)._generate(len(x_), k_gap + 1)
+            x_ = np.concatenate([x_, scm_features], axis=1)
+
         return x_, y_, ns
 
     def sample(
