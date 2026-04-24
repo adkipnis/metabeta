@@ -64,6 +64,7 @@ class WarmNuts:
         draws: int = 500,
         seed: int = 42,
         target_accept: float = 0.9,
+        max_treedepth: int = 12,
     ) -> None:
         """
         Parameters
@@ -81,6 +82,10 @@ class WarmNuts:
         target_accept : float
             Target acceptance rate for step-size adaptation.  0.9 is
             recommended for posteriors with complex geometry (default 0.9).
+        max_treedepth : int
+            NUTS maximum tree depth (default 12; PyMC default 10).  Higher
+            values allow the sampler to take longer trajectories through
+            difficult posteriors at the cost of more gradient evaluations.
         """
         self.ds = ds
         self.n_chains = n_chains
@@ -88,6 +93,7 @@ class WarmNuts:
         self.draws = draws
         self.seed = seed
         self.target_accept = target_accept
+        self.max_treedepth = max_treedepth
 
         self.d = int(ds['d'])
         self.q = int(ds['q'])
@@ -255,6 +261,7 @@ class WarmNuts:
                 chains=self.n_chains,
                 initvals=initvals,
                 target_accept=self.target_accept,
+                nuts_kwargs={'max_treedepth': self.max_treedepth},
                 random_seed=self.seed,
                 return_inferencedata=True,
                 progressbar=False,
@@ -399,6 +406,7 @@ def runWarmNuts(
     wn_tune        : int   — NUTS tuning steps (default 500)
     wn_draws       : int   — NUTS draws per chain (default 500)
     wn_target_accept : float — target acceptance rate (default 0.9)
+    wn_max_treedepth : int   — NUTS max tree depth (default 12)
     rescale        : bool
     seed           : int
     """
@@ -407,6 +415,7 @@ def runWarmNuts(
     draws = getattr(cfg, 'wn_draws', 500)
     seed = getattr(cfg, 'seed', 42)
     target_accept = getattr(cfg, 'wn_target_accept', 0.9)
+    max_treedepth = getattr(cfg, 'wn_max_treedepth', 12)
     n_samples = getattr(cfg, 'n_samples', max(n_chains, 100))
 
     # The flow proposal must stay in standardized space — buildPymc (via WarmNuts)
@@ -423,6 +432,7 @@ def runWarmNuts(
             draws=draws,
             seed=seed,
             target_accept=target_accept,
+            max_treedepth=max_treedepth,
         )(proposal, b_idx=b)
         proposals.append(wn_proposal)
     merged = _stackProposals(proposals)

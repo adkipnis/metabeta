@@ -35,6 +35,8 @@ def setup() -> argparse.Namespace:
         help='NUTS tuning steps (default=2000)')
     parser.add_argument('--target_accept', type=float, default=0.95,
         help='NUTS target acceptance rate (default=0.95)')
+    parser.add_argument('--max_treedepth', type=int, default=12,
+        help='NUTS maximum tree depth (default=12; PyMC default=10)')
     parser.add_argument('--draws', type=int, default=1000,
         help='Posterior draws per chain (default=1000)')
     parser.add_argument('--chains', type=int, default=4,
@@ -242,6 +244,7 @@ class Fitter:
                 cores=(1 if cfg.loop else cfg.chains),
                 random_seed=cfg.seed,
                 target_accept=cfg.target_accept,
+                nuts_kwargs={'max_treedepth': cfg.max_treedepth},
                 return_inferencedata=True,
                 progressbar=True,
             )
