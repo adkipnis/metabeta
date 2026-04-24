@@ -119,10 +119,15 @@ class Generator:
         ), 'number of datasets must be divisible by mini batch size'
         n_mini = n_datasets // mini_batch_size
 
-        d_uniq = truncLogUni(rng, low=2, high=self.cfg.max_d + 1, size=n_mini, round=True)
+        # min_d/min_q define non-overlapping test bands; ignored during training
+        # so that the single training run covers the full (d, q) space.
+        is_train = getattr(self.cfg, 'partition', 'train') == 'train'
+        min_d = 2 if is_train else getattr(self.cfg, 'min_d', 2)
+        d_uniq = truncLogUni(rng, low=min_d, high=self.cfg.max_d + 1, size=n_mini, round=True)
         d = np.repeat(d_uniq, mini_batch_size)
 
-        q_uniq = truncLogUni(rng, low=1, high=self.cfg.max_q + 1, size=n_mini, round=True)
+        min_q = 1 if is_train else getattr(self.cfg, 'min_q', 1)
+        q_uniq = truncLogUni(rng, low=min_q, high=self.cfg.max_q + 1, size=n_mini, round=True)
         q_uniq = np.minimum(d_uniq, q_uniq)  # q <= d, per mini-batch before repeat
         q = np.repeat(q_uniq, mini_batch_size)
 
