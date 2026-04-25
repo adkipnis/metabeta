@@ -121,27 +121,51 @@ class Generator:
 
         # min_d/min_q define non-overlapping test bands; ignored during training
         # so that the single training run covers the full (d, q) space.
+        # d and q are sampled uniformly (integers) so every value in the
+        # configured range is equally likely — avoids log-uniform's geometric
+        # bias toward the smallest values while still covering the full range.
         is_train = getattr(self.cfg, 'partition', 'train') == 'train'
         min_d = 2 if is_train else getattr(self.cfg, 'min_d', 2)
-        d_uniq = truncLogUni(rng, low=min_d, high=self.cfg.max_d + 1, size=n_mini, round=True)
+        d_uniq = rng.integers(min_d, self.cfg.max_d + 1, size=n_mini)
         d = np.repeat(d_uniq, mini_batch_size)
 
         min_q = 1 if is_train else getattr(self.cfg, 'min_q', 1)
-        q_uniq = truncLogUni(rng, low=min_q, high=self.cfg.max_q + 1, size=n_mini, round=True)
-        q_uniq = np.minimum(d_uniq, q_uniq)  # q <= d, per mini-batch before repeat
+        max_q_val = self.cfg.max_q
+        q_uniq = np.array([
+            rng.integers(min_q, min(max_q_val, int(d_i)) + 1) for d_i in d_uniq
+        ])
         q = np.repeat(q_uniq, mini_batch_size)
 
-        # σ_α has ~(m − q) between-group df; enforce a minimum margin so that
-        # variance components remain estimable regardless of likelihood family.
+        # Two identifiability constraints for variance-component estimation:
+        #   (1) Fixed effects β: m > d  (m − d is the between-group df in
+        #       Henderson Method 3; needed for the q=1 compacted path)
+        #   (2) Random-effects covariance Ψ (q×q, q(q+1)/2 free parameters):
+        #       m > q(q+1)/2 so there are enough group-level observations to
+        #       identify Ψ regardless of likelihood family.
+        # m_low = max(d, q(q+1)/2) + min_bg_df satisfies both simultaneously.
+        # m is drawn from skewedBeta(m_low, max_m, mode=m_low + 0.08*(max_m−m_low))
+        # which produces a heavy left-skew matching real grouped-data distributions
+        # (test-set median m≈19, p75≈71) while keeping a tail toward max_m.
         min_bg_df = getattr(self.cfg, 'min_bg_df', 0)
+        psi_df = q_uniq * (q_uniq + 1) // 2  # free parameters in q×q Ψ
         m_low = np.minimum(
-            np.maximum(self.cfg.min_m, q_uniq + min_bg_df),
+            np.maximum(self.cfg.min_m, np.maximum(d_uniq, psi_df) + min_bg_df),
             self.max_m_feasible,
         )
-        m = np.array([
-            int(np.floor(np.exp(rng.uniform(np.log(lo), np.log(self.max_m_feasible + 1)))))
-            for lo in m_low
-        ])
+        # Inline skewedBeta(low=m_low, high=max_m+1, mode=m_low+0.08*excess, c=2)
+        # vectorised over per-element m_low; mode is clamped so low < mode < high
+        # even for the degenerate edge case m_low == max_m_feasible.
+        high_m = float(self.max_m_feasible + 1)
+        m_mode = np.clip(
+            m_low + 0.08 * (self.max_m_feasible - m_low),
+            m_low + 1e-3,
+            self.max_m_feasible - 1e-3,
+        ).astype(float)
+        t = (m_mode - m_low) / (high_m - m_low)   # fraction in (0, 1)
+        a_beta = 1.0 + t                            # concentration=2 → (c-1)=1
+        b_beta = 2.0 - t
+        m = np.floor(m_low + (high_m - m_low) * rng.beta(a_beta, b_beta)).astype(int)
+        m = m.clip(m_low, self.max_m_feasible)
         m = np.repeat(m, mini_batch_size)
 
         return d, q, m
@@ -357,17 +381,30 @@ class Generator:
             else [0] * n_datasets
         )
 
+        min_bg_df = getattr(self.cfg, 'min_bg_df', 0)
+        _max_retries = 20
+
         if getattr(self.cfg, 'loop', False) or self.cfg.ds_type in ['scm', 'mixed']:  # Option A: loop
             datasets = []
             for i in tqdm(range(n_datasets), desc=desc):
-                dataset = self._genDataset(
-                    self.cfg,
-                    seedseqs[i],
-                    d[i],
-                    q[i],
-                    ns_slices[i],
-                    min_n_eff=min_n_effs[i],
-                )
+                # If min_bg_df is set, retry until m − d ≥ min_bg_df.  Trimming X
+                # while keeping Y intact creates mismatched ground truth (dropped
+                # predictors inflate sigma_eps), so we redraw instead.
+                retry_seeds = seedseqs[i].spawn(_max_retries)
+                for attempt in range(_max_retries + 1):
+                    seed = seedseqs[i] if attempt == 0 else retry_seeds[attempt - 1]
+                    dataset = self._genDataset(
+                        self.cfg,
+                        seed,
+                        d[i],
+                        q[i],
+                        ns_slices[i],
+                        min_n_eff=min_n_effs[i],
+                    )
+                    m_i = int(dataset['ns'].shape[0])
+                    d_i = int(dataset['d'])
+                    if min_bg_df == 0 or m_i - d_i >= min_bg_df:
+                        break
                 datasets.append(dataset)
         else:  # Option B: parallelize
             datasets = Parallel(n_jobs=-1, backend='loky', batch_size='auto')(
@@ -384,9 +421,8 @@ class Generator:
             # joblib returns list[Any], so for type safety we cast it
             datasets = cast(list[dict[str, np.ndarray]], datasets)
 
-        # Enforce min_bg_df on datasets where the Emulator returned fewer groups
-        # than sampled (reducing m below d + min_bg_df).  Fix by trimming d.
-        min_bg_df = getattr(self.cfg, 'min_bg_df', 0)
+        # Enforce min_bg_df for q (trimming q is safe: rfx are zero-mean latents
+        # that don't create Y-X mismatch the way dropping X columns would).
         if min_bg_df > 0:
             datasets = [Generator._clampQ(ds, min_bg_df) for ds in datasets]
 
@@ -394,20 +430,26 @@ class Generator:
 
     @staticmethod
     def _clampQ(ds: dict[str, np.ndarray], min_bg_df: int) -> dict[str, np.ndarray]:
-        """Reduce q so that m − q ≥ min_bg_df.
+        """Reduce q so that q(q+1)/2 + min_bg_df ≤ m (Ψ identifiability).
 
-        Called after dataset generation to fix pathological cases where the
-        Emulator returned fewer groups than the sampled m_target, causing
-        m − q to fall below the configured minimum.  d is left unchanged
-        since fixed-effect estimation pools over all n observations.
+        Handles cases where the Emulator returned fewer groups than requested,
+        causing m to fall below the identifiability floor for the current q.
+        Trimming q is safe because rfx are zero-mean latents: dropping rfx
+        columns does not create a Y-X mismatch the way dropping X columns would
+        (the residuals absorb the dropped rfx variance symmetrically, without
+        systematically inflating sigma_eps).  d is left unchanged since
+        fixed-effect estimation pools over all n observations, not group means.
+
+        The largest feasible q satisfies q(q+1)/2 ≤ m − min_bg_df, solved via
+        the positive root of the quadratic: q* = floor((√(1+8k)−1)/2), k = m−min_bg_df.
         """
         m = int(ds['ns'].shape[0])
         q = int(ds['q'])
-        if m - q >= min_bg_df:
+        k = max(0, m - min_bg_df)
+        q_max_feasible = max(1, int(np.floor((np.sqrt(1 + 8 * k) - 1) / 2)))
+        if q_max_feasible >= q:
             return ds
-        q_new = max(1, m - min_bg_df)
-        if q_new >= q:
-            return ds
+        q_new = q_max_feasible
         ds = dict(ds)
         ds['q'] = np.array(q_new)
         ds['rfx'] = ds['rfx'][:, :q_new]
