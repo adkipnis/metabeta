@@ -11,8 +11,8 @@ sizes:
     max_q: 1
     min_m: 5
     max_m: 25
-    min_n: 3
-    max_n: 50
+    min_n: 5
+    max_n: 25
     max_n_total: 250
 
   small:
@@ -20,8 +20,8 @@ sizes:
     max_q: 2
     min_m: 5
     max_m: 50
-    min_n: 3
-    max_n: 100
+    min_n: 5
+    max_n: 50
     max_n_total: 500
 
   medium:
@@ -29,26 +29,26 @@ sizes:
     max_q: 3
     min_m: 5
     max_m: 100
-    min_n: 3
-    max_n: 150
+    min_n: 5
+    max_n: 100
     max_n_total: 1000
 
   large:
     max_d: 16
     max_q: 4
     min_m: 5
-    max_m: 200
-    min_n: 3
-    max_n: 250
+    max_m: 150
+    min_n: 5
+    max_n: 150
     max_n_total: 2000
 
   huge:
     max_d: 32
     max_q: 5
     min_m: 5
-    max_m: 300
-    min_n: 3
-    max_n: 500
+    max_m: 200
+    min_n: 5
+    max_n: 200
     max_n_total: 4000
 
 # Likelihood family presets
