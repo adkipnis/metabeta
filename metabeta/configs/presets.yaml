@@ -15,7 +15,7 @@ sizes:
     max_m: 25
     min_n: 3
     max_n: 50
-    max_n_total: 500
+    max_n_total: 250
 
   small:
     min_d: 3
@@ -26,7 +26,7 @@ sizes:
     max_m: 50
     min_n: 3
     max_n: 100
-    max_n_total: 1000
+    max_n_total: 500
 
   medium:
     min_d: 5
@@ -37,7 +37,7 @@ sizes:
     max_m: 100
     min_n: 3
     max_n: 150
-    max_n_total: 2000
+    max_n_total: 1000
 
   large:
     min_d: 9
@@ -48,7 +48,7 @@ sizes:
     max_m: 200
     min_n: 3
     max_n: 250
-    max_n_total: 4000
+    max_n_total: 2000
 
   huge:
     min_d: 17
@@ -59,7 +59,7 @@ sizes:
     max_m: 300
     min_n: 3
     max_n: 500
-    max_n_total: 8000
+    max_n_total: 4000
 
 # Likelihood family presets
 # Use integer IDs: 0=normal, 1=bernoulli, 2=poisson
