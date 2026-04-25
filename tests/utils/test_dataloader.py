@@ -161,3 +161,28 @@ def test_dataloader_repr(dataset_path: Path):
     assert rep.startswith('Dataloader(')
     assert 'batch_size=8' in rep
     assert 'Collection(' in rep
+
+
+def test_dataloader_respects_explicit_max_dims(dataset_path: Path):
+    col_default = Collection(dataset_path, permute=True)
+    d_override = int(col_default.d) + 2
+    q_override = int(col_default.q) + 2
+
+    col = Collection(dataset_path, permute=True, max_d=d_override, max_q=q_override)
+    assert col.d == d_override
+    assert col.q == q_override
+
+    dl = Dataloader(dataset_path, batch_size=4, sortish=False, max_d=d_override, max_q=q_override)
+    batch = next(iter(dl))
+    assert batch['X'].shape[-1] == d_override
+    assert batch['Z'].shape[-1] == q_override
+    assert batch['mask_d'].shape[-1] == d_override
+    assert batch['mask_q'].shape[-1] == q_override
+
+
+def test_collection_rejects_too_small_overrides(dataset_path: Path):
+    col_default = Collection(dataset_path, permute=True)
+    with pytest.raises(ValueError, match='max_d override'):
+        Collection(dataset_path, permute=True, max_d=int(col_default.d) - 1)
+    with pytest.raises(ValueError, match='max_q override'):
+        Collection(dataset_path, permute=True, max_q=int(col_default.q) - 1)

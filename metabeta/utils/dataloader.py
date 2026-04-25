@@ -3,7 +3,7 @@ import numpy as np
 import torch
 
 from metabeta.utils.sampling import samplePermutation
-from metabeta.utils.padding import unpad
+from metabeta.utils.padding import unpad, padToModel
 
 
 def toDevice(batch: dict[str, torch.Tensor], device: torch.device | str) -> dict[str, torch.Tensor]:
@@ -32,6 +32,8 @@ class Collection(torch.utils.data.Dataset):
         self,
         path: Path,
         permute: bool = True,
+        max_d: int | None = None,
+        max_q: int | None = None,
     ):
         super().__init__()
 
@@ -65,8 +67,18 @@ class Collection(torch.utils.data.Dataset):
         self._groupCheck(len(self))
 
         # shapes
-        self.d = int(self.raw['d'].max())  # fixed effects
-        self.q = int(self.raw['q'].max())  # random effects
+        d_file = int(self.raw['d'].max())  # fixed effects in file
+        q_file = int(self.raw['q'].max())  # random effects in file
+        if max_d is not None and max_d < d_file:
+            raise ValueError(
+                f'max_d override ({max_d}) is smaller than file maximum d ({d_file}) for {path}'
+            )
+        if max_q is not None and max_q < q_file:
+            raise ValueError(
+                f'max_q override ({max_q}) is smaller than file maximum q ({q_file}) for {path}'
+            )
+        self.d = int(max_d) if max_d is not None else d_file
+        self.q = int(max_q) if max_q is not None else q_file
         self.m_i = self.raw['m'].astype(int, copy=False)
         self.n_i_max = self.raw['ns'].max(axis=1).astype(int, copy=False)
 
@@ -108,19 +120,14 @@ class Collection(torch.utils.data.Dataset):
             # if not (k.startswith('nuts') or k.startswith('advi'))
         }
 
-        # unpad m/n but keep d/q maximal
+        # unpad to actual d/q, then pad to collection/model maxima
         sizes = {k: ds[k] for k in ('m', 'n')}
-        sizes['d'] = self.d
-        sizes['q'] = self.q
+        sizes['d'] = int(ds['d'])
+        sizes['q'] = int(ds['q'])
         ds = unpad(ds, sizes)
+        ds = padToModel(ds, max_d=self.d, max_q=self.q)
 
-        # init rfx design matrix: first ds['q'] cols of X are active random effects;
-        # remaining cols (self.q > ds['q']) are zero-padded so that inactive Z columns
-        # do not contaminate glmm computations with fixed-effect covariate data.
-        ds['Z'] = ds['X'][..., : self.q].copy()
-        actual_q = int(ds['q'])
-        if actual_q < self.q:
-            ds['Z'][..., actual_q:] = 0.0
+        # padToModel builds Z from padded X and zeros inactive random-effect columns.
 
         # optionally permute
         if self.permute:
@@ -368,10 +375,12 @@ class Dataloader(torch.utils.data.DataLoader):
         shuffle: bool = False,
         bucket_mult: int = 50,
         sort_seed: int = 0,
+        max_d: int | None = None,
+        max_q: int | None = None,
         num_workers: int = 0,
         persistent_workers: bool = False,
     ):
-        col = Collection(path)
+        col = Collection(path, max_d=max_d, max_q=max_q)
         pin_memory = torch.cuda.is_available()
         self._sortish = sortish
         self._shuffle = shuffle

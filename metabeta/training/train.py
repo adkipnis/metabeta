@@ -248,6 +248,8 @@ class Trainer:
             shuffle=partition == 'train',
             bucket_mult=50,
             sort_seed=epoch,
+            max_d=data_cfg.get('max_d'),
+            max_q=data_cfg.get('max_q'),
             # num_workers=0,
             # persistent_workers=(partition != 'train'),
         )
