@@ -235,6 +235,7 @@ class Generator:
         d: int,
         q: int,
         ns: np.ndarray,
+        min_n_eff: int = 0,  # per-dataset effective min_n (from min_within_df); 0 = use cfg.min_n
     ) -> dict[str, np.ndarray]:
         rng = np.random.default_rng(seedseq)
 
@@ -296,7 +297,7 @@ class Generator:
                 source=cfg.source,
                 use_sgld=getattr(cfg, 'sgld', False),
                 min_m=cfg.min_m,
-                min_n=cfg.min_n,
+                min_n=max(cfg.min_n, min_n_eff),  # respect per-dataset min_within_df floor
                 max_n=cfg.max_n,
             )
         else:
@@ -322,6 +323,7 @@ class Generator:
         d, q, m = self._genDims(rng, n_datasets, mini_batch_size)
 
         # --- presample per-group counts
+        min_ng = None  # may be set in else branch
         if self.cfg.ds_type in ('sampled', 'observed'):
             # Emulator/Subsampler override ns internally based on source dataset constraints;
             # only req_m = len(ns_i) and req_n = sum(ns_i) survive as loose hints.
@@ -349,6 +351,12 @@ class Generator:
             ns_slices = [ns[i][: m[i]] for i in range(n_datasets)]
 
         # --- sample batch of single datasets
+        min_n_effs = (
+            [int(min_ng[i]) for i in range(n_datasets)]
+            if min_ng is not None
+            else [0] * n_datasets
+        )
+
         if getattr(self.cfg, 'loop', False) or self.cfg.ds_type in ['scm', 'mixed']:  # Option A: loop
             datasets = []
             for i in tqdm(range(n_datasets), desc=desc):
@@ -358,6 +366,7 @@ class Generator:
                     d[i],
                     q[i],
                     ns_slices[i],
+                    min_n_eff=min_n_effs[i],
                 )
                 datasets.append(dataset)
         else:  # Option B: parallelize
@@ -368,6 +377,7 @@ class Generator:
                     d[i],
                     q[i],
                     ns_slices[i],
+                    min_n_effs[i],
                 )
                 for i in tqdm(range(n_datasets), desc=desc)
             )
