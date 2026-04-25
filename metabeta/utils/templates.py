@@ -121,8 +121,8 @@ class TrainingConfig(BaseModel):
 
     # Training hyperparameters
     max_epochs: int = Field(gt=0, default=1000)
-    bs: int = Field(gt=0, default=8)
-    accum_steps: int = Field(gt=0, default=4)
+    bs: int = Field(gt=0, default=32)
+    accum_steps: int = Field(gt=0, default=1)
     lr: float = Field(gt=0, default=3e-4)
     max_grad_norm: float = Field(gt=0, default=1.0)
     loss_type: str = 'forward'
