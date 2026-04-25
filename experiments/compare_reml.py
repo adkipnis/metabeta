@@ -106,20 +106,32 @@ def _reml_estimates(
             return None
 
 
-def run_comparison(n_datasets: int = 1000, seed: int = 0) -> None:
+def run_comparison(
+    n_datasets: int = 1000,
+    seed: int = 0,
+    data_id: str = 'small-n-mixed',
+    partition: str = 'train',
+    n_epochs: int = 20,
+) -> None:
     rng = np.random.default_rng(seed)
 
-    data_cfg = loadDataConfig('small-n-mixed')
+    data_cfg = loadDataConfig(data_id)
     max_q = data_cfg['max_q']
     data_dir = ROOT / 'outputs' / 'data' / data_cfg['data_id']
 
     from metabeta.utils.io import datasetFilename
 
-    paths = [data_dir / datasetFilename('train', ep) for ep in range(1, 21)]
-    paths = [p for p in paths if p.exists()]
+    if partition == 'train':
+        paths = [data_dir / datasetFilename('train', ep) for ep in range(1, n_epochs + 1)]
+        paths = [p for p in paths if p.exists()]
+    elif partition == 'test':
+        paths = [data_dir / 'test.npz']
+    else:
+        paths = [data_dir / 'valid.npz']
 
     # Collect all batches then sample (permute=False so X col 0 = intercept)
-    print(f'Loading {len(paths)} training files ...')
+    print(f'data_id={data_id}  partition={partition}  files={len(paths)}\n')
+    print(f'Loading {len(paths)} file(s) ...')
     all_batches: list = []
     for path in paths:
         col = Collection(path, permute=False)
@@ -692,5 +704,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_datasets', type=int, default=1000)
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--data-id', default='small-n-mixed')
+    parser.add_argument('--partition', default='train', choices=['train', 'valid', 'test'])
+    parser.add_argument('--n-epochs', type=int, default=20)
     args = parser.parse_args()
-    run_comparison(n_datasets=args.n_datasets, seed=args.seed)
+    run_comparison(
+        n_datasets=args.n_datasets,
+        seed=args.seed,
+        data_id=args.data_id,
+        partition=args.partition,
+        n_epochs=args.n_epochs,
+    )
