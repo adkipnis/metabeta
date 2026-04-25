@@ -182,14 +182,21 @@ class Emulator:
         # select from lightweight metadata index, then load full data for chosen path only
         meta_db = getDatabase()
         if self.source == 'all':
-            subset = [m for m in meta_db if self._compatible(m, d)]
-            n_ds = len(subset)
-            if n_ds == 0:
+            compatible = [m for m in meta_db if self._compatible(m, d)]
+            if len(compatible) == 0:
                 raise ValueError(
                     f'no source dataset can support d={d}, min_m={self.min_m}, min_n={self.min_n}'
                 )
-            idx = self.rng.integers(0, n_ds)
-            self.ds = loadDataset(subset[idx]['source'])
+            # Weight datasets by real-column coverage: min(d_true, d) / d.
+            # Datasets with d_true >= d all score 1.0 (no SCM padding needed);
+            # those below score proportionally so sampling degrades smoothly
+            # rather than creating a hard cliff at d_true == d.
+            weights = np.array(
+                [min(int(m.get('d', 1)), d) / d for m in compatible], dtype=float
+            )
+            weights /= weights.sum()
+            idx = int(self.rng.choice(len(compatible), p=weights))
+            self.ds = loadDataset(compatible[idx]['source'])
         else:
             path0 = Path(DATA_PATH, 'test', f'{self.source}.npz')
             path1 = Path(DATA_PATH, 'validation', f'{self.source}.npz')
