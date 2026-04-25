@@ -183,7 +183,7 @@ def test_genbatch_calls_genDataset_with_correct_args(monkeypatch, tmp_path: Path
 
     seen: list[dict[str, Any]] = []
 
-    def fake_gen_dataset(cfg_arg, seedseq, d, q, ns_i):
+    def fake_gen_dataset(cfg_arg, seedseq, d, q, ns_i, min_n_eff=0):
         # record inputs
         seen.append(
             dict(
@@ -200,6 +200,9 @@ def test_genbatch_calls_genDataset_with_correct_args(monkeypatch, tmp_path: Path
             'X': np.zeros((n_total, int(d)), dtype=np.float32),
             'groups': np.repeat(np.arange(len(ns_i), dtype=np.int64), ns_i),
             'theta': np.zeros((int(d) + int(q) + 1,), dtype=np.float32),
+            'ns': ns_i.astype(int).copy(),
+            'd': np.array(int(d)),
+            'q': np.array(int(q)),
         }
 
     monkeypatch.setattr(Generator, '_genDataset', staticmethod(fake_gen_dataset))
@@ -246,9 +249,14 @@ def test_genbatch_deterministic_given_partition_and_epoch(monkeypatch, tmp_path:
     def run_once() -> list[tuple[int, int, int, tuple[int, ...]]]:
         seen: list[tuple[int, int, int, tuple[int, ...]]] = []
 
-        def fake_gen_dataset(cfg_arg, seedseq, d, q, ns_i):
+        def fake_gen_dataset(cfg_arg, seedseq, d, q, ns_i, min_n_eff=0):
             seen.append((int(d), int(q), int(len(ns_i)), tuple(int(x) for x in ns_i)))
-            return {'dummy': np.zeros((1,), dtype=np.float32)}
+            return {
+                'dummy': np.zeros((1,), dtype=np.float32),
+                'ns': ns_i.astype(int).copy(),
+                'd': np.array(int(d)),
+                'q': np.array(int(q)),
+            }
 
         monkeypatch.setattr(Generator, '_genDataset', staticmethod(fake_gen_dataset))
         _ = g._genBatch(n_datasets=12, mini_batch_size=3, epoch=1)
@@ -280,9 +288,14 @@ def test_seed_mapping_deterministic_within_partition(monkeypatch, tmp_path: Path
     def run(epoch: int) -> list[int]:
         seen: list[int] = []
 
-        def fake_gen_dataset(cfg_arg, seedseq, d, q, ns_i):
+        def fake_gen_dataset(cfg_arg, seedseq, d, q, ns_i, min_n_eff=0):
             seen.append(int(d))
-            return {'dummy': np.zeros((1,), dtype=np.float32)}
+            return {
+                'dummy': np.zeros((1,), dtype=np.float32),
+                'ns': ns_i.astype(int).copy(),
+                'd': np.array(int(d)),
+                'q': np.array(int(q)),
+            }
 
         monkeypatch.setattr(Generator, '_genDataset', staticmethod(fake_gen_dataset))
         _ = g._genBatch(n_datasets=9, mini_batch_size=3, epoch=epoch)
@@ -314,13 +327,16 @@ def test_parallel_and_loop_produce_same_inputs(monkeypatch, tmp_path: Path):
     mini_bs = 4
     epoch = 3
 
-    def fake_gen_dataset(cfg_arg, seedseq, d, q, ns_i):
+    def fake_gen_dataset(cfg_arg, seedseq, d, q, ns_i, min_n_eff=0):
         # signature purely from inputs
         return {
             'sig': np.array(
                 [int(d), int(q), int(len(ns_i)), int(np.sum(ns_i))],
                 dtype=np.int64,
-            )
+            ),
+            'ns': ns_i.astype(int).copy(),
+            'd': np.array(int(d)),
+            'q': np.array(int(q)),
         }
 
     monkeypatch.setattr(Generator, '_genDataset', staticmethod(fake_gen_dataset))
@@ -338,3 +354,44 @@ def test_parallel_and_loop_produce_same_inputs(monkeypatch, tmp_path: Path):
     par_sigs = np.stack([ds['sig'] for ds in par_batch], axis=0)
 
     assert np.array_equal(loop_sigs, par_sigs)
+
+
+@pytest.mark.parametrize(
+    'low,high',
+    [
+        (2, 3),   # tiny-like d (degenerate)
+        (2, 5),   # small-like d
+        (2, 9),   # medium-like d
+        (2, 17),  # large-like d
+        (2, 33),  # huge-like d
+        (1, 2),   # tiny-like q (degenerate)
+        (1, 3),   # small-like q
+        (1, 4),   # medium-like q
+        (1, 5),   # large-like q
+        (1, 6),   # huge-like q
+    ],
+)
+def test_beta22_less_left_skewed_than_loguniform(low: int, high: int):
+    """Beta(2,2) should not be more left-skewed than log-uniform."""
+    rng_beta = np.random.default_rng(123)
+    rng_log = np.random.default_rng(456)
+    n = 300_000
+
+    beta_draws = np.floor(low + (high - low) * rng_beta.beta(2.0, 2.0, size=n)).astype(int)
+    beta_draws = np.clip(beta_draws, low, high - 1)
+
+    logu_draws = np.exp(rng_log.uniform(np.log(low), np.log(high), size=n))
+    logu_draws = np.floor(logu_draws).astype(int)
+    logu_draws = np.clip(logu_draws, low, high - 1)
+
+    # For non-degenerate ranges, Beta(2,2) should move mass away from min bin
+    # and produce a higher average sampled index than log-uniform.
+    if high - low > 1:
+        beta_min_mass = float(np.mean(beta_draws == low))
+        logu_min_mass = float(np.mean(logu_draws == low))
+        assert beta_min_mass < logu_min_mass
+        assert float(beta_draws.mean()) > float(logu_draws.mean())
+    else:
+        # Degenerate one-bin ranges should match exactly.
+        assert np.all(beta_draws == low)
+        assert np.all(logu_draws == low)

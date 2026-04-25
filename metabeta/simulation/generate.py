@@ -121,15 +121,12 @@ class Generator:
 
         # min_d/min_q define non-overlapping test bands; ignored during training
         # so that the single training run covers the full (d, q) space.
-        # d and q are drawn from skewedBeta(t=0.10, c=3) → Beta(1.2, 2.8), which
-        # places the mode at 10% of the integer range and the mean at 30%.
-        # This is a middle ground between uniform (too many large-d hard cases at
-        # max_d=32) and log-uniform (over-represents d=2; too left-skewed).
+        # d and q are drawn from Beta(2, 2): symmetric over (0, 1) and less
+        # left-skewed than log-uniform across preset ranges.
         is_train = getattr(self.cfg, 'partition', 'train') == 'train'
         min_d = 2 if is_train else getattr(self.cfg, 'min_d', 2)
         low_d, high_d = float(min_d), float(self.cfg.max_d + 1)
-        # Beta(1.2, 2.8): t=0.10, c=3 → (c-1)=2; mode at t, mean at (1+t*2)/4 = 0.30
-        a_dq, b_dq = 1.2, 2.8
+        a_dq, b_dq = 2.0, 2.0
         d_uniq = np.floor(low_d + (high_d - low_d) * rng.beta(a_dq, b_dq, size=n_mini)).astype(int)
         d_uniq = d_uniq.clip(min_d, self.cfg.max_d)
         d = np.repeat(d_uniq, mini_batch_size)
