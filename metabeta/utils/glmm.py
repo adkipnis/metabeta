@@ -481,16 +481,24 @@ def _lmmNormalFull(
     beta_ols = _safeSolve(XtX + _adaptiveRidge(XtX), Xty)  # (B, d)
     resid_full = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_ols)) * mask_n  # (B, m, n)
     Ztr = torch.einsum('bmnq,bmn->bmq', Zm, resid_full)          # (B, m, q)
-    bhat = torch.einsum('bmqr,bmr->bmq', ZtZ_inv, Ztr)           # (B, m, q)  b̂_g
+    bhat = torch.einsum('bmqr,bmr->bmq', ZtZ_inv, Ztr) * mask_m[:, :, None]  # (B, m, q) b̂_g
+
+    # For the Psi MoM, exclude groups with n_g ≤ q+1: their ZtZ is near-singular,
+    # so ZtZ_inv blows up and bhat can be orders of magnitude larger than the true b_g,
+    # inflating Psi_raw catastrophically. Groups with n_g > q+1 have sufficient
+    # within-group df for a reliable OLS estimate.
+    mom_mask = mask_m * (ns > q + 1).float()    # (B, m)
+    G_mom = mom_mask.sum(dim=1).clamp(min=1.0)  # (B,)
+    mom4 = mom_mask[:, :, None, None]            # (B, m, 1, 1)
 
     bhat_outer = torch.einsum('bmq,bmr->bmqr', bhat, bhat)        # (B, m, q, q)
     ZtZ_bhat = torch.einsum('bmqp,bmpk->bmqk', ZtZ_safe, bhat_outer)  # (B, m, q, q)
 
     mask4 = mask_m[:, :, None, None]                              # (B, m, 1, 1)
-    sum_ZtZ = (ZtZ_safe * mask4).sum(dim=1)                       # (B, q, q)
-    sum_ZtZ_bhat = (ZtZ_bhat * mask4).sum(dim=1)                  # (B, q, q)
+    sum_ZtZ = (ZtZ_safe * mom4).sum(dim=1)                        # (B, q, q) safe groups only
+    sum_ZtZ_bhat = (ZtZ_bhat * mom4).sum(dim=1)                   # (B, q, q) safe groups only
 
-    rhs_mom = sum_ZtZ_bhat - sigma_eps_sq[:, None, None] * G[:, None, None] * eye_q
+    rhs_mom = sum_ZtZ_bhat - sigma_eps_sq[:, None, None] * G_mom[:, None, None] * eye_q
     Psi_raw = _safeSolve(sum_ZtZ + _adaptiveRidge(sum_ZtZ), rhs_mom)  # (B, q, q)
 
     # Per-component noise-corrected Psi diagonal floor to prevent EM getting stuck near Psi=0.
@@ -499,10 +507,11 @@ def _lmmNormalFull(
     # only activates for high-SNR components where MoM tends to under-estimate).
     # Applied per-component so inactive rfx dimensions (second Z column = 0 for q=1 datasets)
     # are not inflated — their signal_var ≈ 0 and the floor stays at 0.
+    # Uses mom_mask to exclude near-singular groups (same as MoM sums above).
     mean_ZtZ_inv_diag = (
-        ZtZ_inv.diagonal(dim1=-2, dim2=-1) * mask_m[:, :, None]
-    ).sum(dim=1) / G[:, None]                                           # (B, q)
-    bhat_var = (bhat.square() * mask_m[:, :, None]).sum(dim=1) / G[:, None]  # (B, q)
+        ZtZ_inv.diagonal(dim1=-2, dim2=-1) * mom_mask[:, :, None]
+    ).sum(dim=1) / G_mom[:, None]                                       # (B, q)
+    bhat_var = (bhat.square() * mom_mask[:, :, None]).sum(dim=1) / G_mom[:, None]  # (B, q)
     psi_diag_floor = (bhat_var - sigma_eps_sq[:, None] * mean_ZtZ_inv_diag).clamp(min=0.0) * 0.5
     Psi_raw = Psi_raw + torch.diag_embed(
         (psi_diag_floor - Psi_raw.diagonal(dim1=-2, dim2=-1)).clamp(min=0.0)
@@ -623,7 +632,9 @@ def _lmmNormalFull(
     resid_g = resid_g.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
 
     beta_wg_out = beta_wg.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
-    bhat_out = bhat.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)             # (B, m, q)
+    # Clamp bhat output: pathological groups (n_g ≈ q) still have bhat blown up via ZtZ_inv,
+    # but they were excluded from MoM so Psi is clean. Cap output to ±10 for NN input safety.
+    bhat_out = bhat.clamp(-10.0, 10.0).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)  # (B, m, q)
 
     return {
         'beta_est': beta_gls,                       # (B, d)
