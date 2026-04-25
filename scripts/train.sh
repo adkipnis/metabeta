@@ -14,6 +14,7 @@
 #SBATCH --time=24:00:00
 
 EPOCHS=2000
+ACCUM=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -22,6 +23,7 @@ while [[ $# -gt 0 ]]; do
         --valid_ds_type) VALID_DS_TYPE="$2"; shift 2 ;;
         --epochs) EPOCHS="$2"; shift 2 ;;
         --seed) SEED="$2"; shift 2 ;;
+        --accum) ACCUM=1; shift ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -38,6 +40,12 @@ esac
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/training
+
+EXTRA_ARGS=()
+if [[ "$ACCUM" -eq 1 ]]; then
+    EXTRA_ARGS+=(--bs 16 --accum_steps 2)
+fi
+
 python train.py \
     --size "${SIZE}" \
     --model_id "${MODEL_ID:-${SIZE}}" \
@@ -46,6 +54,7 @@ python train.py \
     ${VALID_DS_TYPE:+--valid_ds_type ${VALID_DS_TYPE}} \
     -e ${EPOCHS} \
     ${SEED:+--seed ${SEED}} \
+    "${EXTRA_ARGS[@]}" \
     --wandb \
     --device cuda \
     --no-plot
