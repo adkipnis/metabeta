@@ -67,15 +67,15 @@ families:
   0:
     likelihood_family: 0
     name: normal
-    min_bg_df: 4  # need ≥4 between-group df for Normal variance components to be estimable
+    min_bg_df: 4  # buffer above max(d, q(q+1)/2); m_low = max(d, q(q+1)/2) + min_bg_df
   1:
     likelihood_family: 1
     name: bernoulli
-    min_bg_df: 4  # need ≥4 between-group df for reliable PQL variance estimation
+    min_bg_df: 4  # buffer above max(d, q(q+1)/2); m_low = max(d, q(q+1)/2) + min_bg_df
   2:
     likelihood_family: 2
     name: poisson
-    min_bg_df: 4  # need ≥4 between-group df for reliable PQL variance estimation
+    min_bg_df: 4  # buffer above max(d, q(q+1)/2); m_low = max(d, q(q+1)/2) + min_bg_df
 
 # CLI-only parameters (never have defaults in YAML configs)
 cli_only:
