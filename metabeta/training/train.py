@@ -106,8 +106,8 @@ def setup() -> argparse.Namespace:
 
     # Training hyperparameters (override template or loaded YAML)
     parser.add_argument('-e', '--max_epochs', type=int, default=20, help='Number of training epochs')
-    parser.add_argument('--bs', type=int, help='Batch size (number of datasets per step, default = 8)')
-    parser.add_argument('--accum_steps', type=int, help='Gradient accumulation steps; effective batch size = bs × accum_steps (default = 4)')
+    parser.add_argument('--bs', type=int, help='Batch size (number of datasets per step, default = 32)')
+    parser.add_argument('--accum_steps', type=int, help='Gradient accumulation steps; effective batch size = bs × accum_steps (default = 1)')
     parser.add_argument('--lr', type=float, help='Learning rate')
     parser.add_argument('--loss_type', type=str, help='Loss type: forward|backward|mixed (default = forward)')
     parser.add_argument('--n_samples', type=int, help='Posterior samples drawn per evaluation dataset (default = 512)')
