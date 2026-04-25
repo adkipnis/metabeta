@@ -338,9 +338,11 @@ class SortishBatchSampler(torch.utils.data.Sampler[list[int]]):
         ordered: list[int] = []
         for start in range(0, self.n, bucket_size):
             chunk = idx[start : start + bucket_size]
-            # sort by effective padded area, then by m and n_i
-            key_area = self.m_i[chunk] * self.n_i_max[chunk]
-            order = np.lexsort((self.n_i_max[chunk], self.m_i[chunk], key_area))
+            # sort by m first (primary), then n_i_max (secondary) — this minimises
+            # the padded tensor area because m varies more widely than n_i_max and
+            # area-based sorting groups datasets with the same product but different
+            # shapes, causing cross-axis waste.
+            order = np.lexsort((self.n_i_max[chunk], self.m_i[chunk]))
             ordered.extend(chunk[order].tolist())
 
         batches = [
