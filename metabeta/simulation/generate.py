@@ -121,19 +121,20 @@ class Generator:
 
         # min_d/min_q define non-overlapping test bands; ignored during training
         # so that the single training run covers the full (d, q) space.
-        # d and q are drawn from Beta(2, 2): symmetric over (0, 1) and less
-        # left-skewed than log-uniform across preset ranges.
+        # d and q are drawn log-uniformly over their bounded integer ranges.
         is_train = getattr(self.cfg, 'partition', 'train') == 'train'
         min_d = 2 if is_train else getattr(self.cfg, 'min_d', 2)
         low_d, high_d = float(min_d), float(self.cfg.max_d + 1)
-        a_dq, b_dq = 2.0, 2.0
-        d_uniq = np.floor(low_d + (high_d - low_d) * rng.beta(a_dq, b_dq, size=n_mini)).astype(int)
+        d_uniq = truncLogUni(rng, low=low_d, high=high_d, size=n_mini, round=True).astype(int)
         d_uniq = d_uniq.clip(min_d, self.cfg.max_d)
         d = np.repeat(d_uniq, mini_batch_size)
 
         min_q = 1 if is_train else getattr(self.cfg, 'min_q', 1)
         q_max_i = np.minimum(self.cfg.max_q, d_uniq).astype(float)  # (n_mini,) upper bound
-        q_uniq = np.floor(min_q + (q_max_i + 1 - min_q) * rng.beta(a_dq, b_dq, size=n_mini)).astype(int)
+        q_hi = q_max_i + 1.0
+        q_uniq = np.floor(np.exp(rng.uniform(np.log(float(min_q)), np.log(q_hi), size=n_mini))).astype(
+            int
+        )
         q_uniq = q_uniq.clip(min_q, np.minimum(self.cfg.max_q, d_uniq))
         q = np.repeat(q_uniq, mini_batch_size)
 
