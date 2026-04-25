@@ -121,19 +121,23 @@ class Generator:
 
         # min_d/min_q define non-overlapping test bands; ignored during training
         # so that the single training run covers the full (d, q) space.
-        # d and q are sampled uniformly (integers) so every value in the
-        # configured range is equally likely — avoids log-uniform's geometric
-        # bias toward the smallest values while still covering the full range.
+        # d and q are drawn from skewedBeta(t=0.10, c=3) → Beta(1.2, 2.8), which
+        # places the mode at 10% of the integer range and the mean at 30%.
+        # This is a middle ground between uniform (too many large-d hard cases at
+        # max_d=32) and log-uniform (over-represents d=2; too left-skewed).
         is_train = getattr(self.cfg, 'partition', 'train') == 'train'
         min_d = 2 if is_train else getattr(self.cfg, 'min_d', 2)
-        d_uniq = rng.integers(min_d, self.cfg.max_d + 1, size=n_mini)
+        low_d, high_d = float(min_d), float(self.cfg.max_d + 1)
+        # Beta(1.2, 2.8): t=0.10, c=3 → (c-1)=2; mode at t, mean at (1+t*2)/4 = 0.30
+        a_dq, b_dq = 1.2, 2.8
+        d_uniq = np.floor(low_d + (high_d - low_d) * rng.beta(a_dq, b_dq, size=n_mini)).astype(int)
+        d_uniq = d_uniq.clip(min_d, self.cfg.max_d)
         d = np.repeat(d_uniq, mini_batch_size)
 
         min_q = 1 if is_train else getattr(self.cfg, 'min_q', 1)
-        max_q_val = self.cfg.max_q
-        q_uniq = np.array([
-            rng.integers(min_q, min(max_q_val, int(d_i)) + 1) for d_i in d_uniq
-        ])
+        q_max_i = np.minimum(self.cfg.max_q, d_uniq).astype(float)  # (n_mini,) upper bound
+        q_uniq = np.floor(min_q + (q_max_i + 1 - min_q) * rng.beta(a_dq, b_dq, size=n_mini)).astype(int)
+        q_uniq = q_uniq.clip(min_q, np.minimum(self.cfg.max_q, d_uniq))
         q = np.repeat(q_uniq, mini_batch_size)
 
         # Two identifiability constraints for variance-component estimation:
@@ -143,27 +147,29 @@ class Generator:
         #       m > q(q+1)/2 so there are enough group-level observations to
         #       identify Ψ regardless of likelihood family.
         # m_low = max(d, q(q+1)/2) + min_bg_df satisfies both simultaneously.
-        # m is drawn from skewedBeta(m_low, max_m, mode=m_low + 0.08*(max_m−m_low))
-        # which produces a heavy left-skew matching real grouped-data distributions
-        # (test-set median m≈19, p75≈71) while keeping a tail toward max_m.
+        # m is drawn from skewedBeta(m_low, max_m, mode=m_low+min(0.08*excess,20), c=8)
+        # The absolute mode cap of 20 keeps the mode near real-data cluster regardless
+        # of max_m (real test-set: p50≈19, p75≈71).  c=8 concentrates mass to the
+        # left of the mode so the bulk of draws stay near small m even for huge presets.
         min_bg_df = getattr(self.cfg, 'min_bg_df', 0)
         psi_df = q_uniq * (q_uniq + 1) // 2  # free parameters in q×q Ψ
         m_low = np.minimum(
             np.maximum(self.cfg.min_m, np.maximum(d_uniq, psi_df) + min_bg_df),
             self.max_m_feasible,
         )
-        # Inline skewedBeta(low=m_low, high=max_m+1, mode=m_low+0.08*excess, c=2)
+        # Inline skewedBeta(low=m_low, high=max_m+1, mode=m_low+min(0.08*excess,20), c=8)
         # vectorised over per-element m_low; mode is clamped so low < mode < high
         # even for the degenerate edge case m_low == max_m_feasible.
         high_m = float(self.max_m_feasible + 1)
+        excess_m = (self.max_m_feasible - m_low).astype(float)
         m_mode = np.clip(
-            m_low + 0.08 * (self.max_m_feasible - m_low),
+            m_low + np.minimum(0.08 * excess_m, 20.0),
             m_low + 1e-3,
             self.max_m_feasible - 1e-3,
         ).astype(float)
         t = (m_mode - m_low) / (high_m - m_low)   # fraction in (0, 1)
-        a_beta = 1.0 + t                            # concentration=2 → (c-1)=1
-        b_beta = 2.0 - t
+        a_beta = 1.0 + t * 7                        # concentration=8 → (c-1)=7
+        b_beta = 1.0 + (1.0 - t) * 7
         m = np.floor(m_low + (high_m - m_low) * rng.beta(a_beta, b_beta)).astype(int)
         m = m.clip(m_low, self.max_m_feasible)
         m = np.repeat(m, mini_batch_size)
