@@ -55,7 +55,7 @@ class Affine(CouplingTransform):
         split_dims: tuple[int, int],
         d_context: int,
         subnet_kwargs: dict | None = None,
-        alpha: float = 2.0,  # softclamping scale
+        alpha: float = 1.0,  # softclamping scale
     ):
         super().__init__()
         self.split_dims = split_dims
