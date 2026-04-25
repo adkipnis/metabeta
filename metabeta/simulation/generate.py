@@ -151,8 +151,15 @@ class Generator:
         rng: np.random.Generator,
         n_datasets: int,
         m: np.ndarray,
+        min_ng: np.ndarray | None = None,
     ) -> np.ndarray:
-        """Sample per-group observation counts with masking and max_n_total cap."""
+        """Sample per-group observation counts with masking and max_n_total cap.
+
+        min_ng: optional (n_datasets,) int array of per-dataset minimum group
+                sizes.  When provided (e.g. from min_within_df), each group in
+                dataset i gets at least min_ng[i] observations before capping.
+        """
+        effective_min_n = self.cfg.min_n if min_ng is None else int(np.max(min_ng))
         ns = truncLogUni(
             rng,
             low=self.cfg.min_n,
@@ -160,11 +167,13 @@ class Generator:
             size=(n_datasets, self.cfg.max_m),
             round=True,
         )
+        if min_ng is not None:
+            ns = np.maximum(ns, min_ng[:, None])  # (n_datasets, max_m) per-dataset floor
         return self._maskAndCapNs(
             ns=ns,
             m=m,
             max_m=self.cfg.max_m,
-            min_n=self.cfg.min_n,
+            min_n=effective_min_n,
             max_n=self.cfg.max_n,
             max_n_total=self.cfg.max_n_total,
         )
@@ -331,7 +340,12 @@ class Generator:
             ]
         else:
             # toy, flat, scm, mixed: ns is used directly by Synthesizer/Scammer/Emulator
-            ns = self._genNs(rng, n_datasets, m)
+            # Enforce within-group df floor: n_g >= q + min_within_df so that ZtZ_g
+            # has at least min_within_df residual df for per-group variance estimation.
+            # Mirrors min_bg_df (between-group floor) but applied within each group.
+            min_within_df = getattr(self.cfg, 'min_within_df', 0)
+            min_ng = np.maximum(self.cfg.min_n, q + min_within_df) if min_within_df else None
+            ns = self._genNs(rng, n_datasets, m, min_ng=min_ng)
             ns_slices = [ns[i][: m[i]] for i in range(n_datasets)]
 
         # --- sample batch of single datasets
