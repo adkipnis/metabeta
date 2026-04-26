@@ -19,9 +19,9 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     # data (template-based, matching generate.py)
-    parser.add_argument('--size', type=str, default='tiny', help='Size preset: tiny|small|medium|large|huge')
+    parser.add_argument('--size', type=str, default='small', help='Size preset: tiny|small|medium|large|huge')
     parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
-    parser.add_argument('--ds_type', type=str, default='toy', help='Dataset type: toy|flat|scm|mixed|sampled|observed')
+    parser.add_argument('--ds_type', type=str, default='sampled', help='Dataset type: toy|flat|scm|mixed|sampled|observed')
     parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
 
     parser.add_argument('--idx', type=int, default=0,
@@ -255,7 +255,11 @@ class Fitter:
         summary = az.summary(trace, kind='diagnostics')
         out['nuts_names'] = summary.index.to_numpy(dtype=str)
         out['nuts_ess'] = summary['ess_bulk'].to_numpy()
-        out['nuts_divergences'] = trace.sample_stats['diverging'].values.sum(-1)
+        out['nuts_ess_tail'] = summary['ess_tail'].to_numpy()
+        out['nuts_rhat'] = summary['r_hat'].to_numpy()
+        out['nuts_divergences'] = trace.sample_stats['diverging'].values.sum(-1)  # (chains,)
+        tree_depth = trace.sample_stats['tree_depth'].values  # (chains, draws)
+        out['nuts_max_treedepth'] = (tree_depth >= cfg.max_treedepth).mean(-1)  # frac saturated per chain
         out['nuts_duration'] = np.array(t1 - t0)
         return out
 
@@ -344,6 +348,22 @@ class Fitter:
 if __name__ == '__main__':
     print(f'PyTensor tmp directory: {pytensor.config.base_compiledir}')  # type: ignore
     cfg = setup()
+    # Provide defaults for fit-specific keys missing when loading from --config YAML
+    for _k, _v in [
+        ('method', 'nuts'),
+        ('idx', 0),
+        ('reintegrate', False),
+        ('tune', 2000),
+        ('target_accept', 0.8),
+        ('max_treedepth', 10),
+        ('draws', 1000),
+        ('chains', 4),
+        ('loop', False),
+        ('viter', 50_000),
+        ('lr', 5e-3),
+    ]:
+        if not hasattr(cfg, _k):
+            setattr(cfg, _k, _v)
     fitter = Fitter(cfg)
     if cfg.reintegrate:
         fitter.reintegrate()
