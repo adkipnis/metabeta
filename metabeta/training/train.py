@@ -294,7 +294,7 @@ class Trainer:
     def _initWandb(self) -> None:
         output_dir = Path(self.dir, '..', 'outputs')
         output_dir.mkdir(parents=True, exist_ok=True)
-        self.wandb_run = wandb.init(
+        init_kwargs = dict(
             project='metabeta',
             name=self.run_name,
             config=vars(self.cfg),
@@ -302,6 +302,14 @@ class Trainer:
             id=self.wandb_run_id,
             resume='must' if self.wandb_run_id is not None else None,
         )
+        try:
+            self.wandb_run = wandb.init(**init_kwargs)
+        except wandb.errors.UsageError:
+            print(
+                f'WARNING: Could not resume wandb run {self.wandb_run_id!r}; starting a new run.'
+            )
+            init_kwargs.update(id=None, resume=None)
+            self.wandb_run = wandb.init(**init_kwargs)
         wandb.config.update({'data_cfg': self.data_cfg, 'model_cfg': self.model_cfg.to_dict()})
         wandb.define_metric('train/loss_step', step_metric='step/global')
         wandb.define_metric('train/grad_norm', step_metric='step/global')
