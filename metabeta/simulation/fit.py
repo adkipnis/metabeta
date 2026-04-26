@@ -66,8 +66,8 @@ def buildPymc(ds: dict[str, np.ndarray]) -> 'pm.Model':
     d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
     correlated = float(ds.get('eta_rfx', 0)) > 0 and q >= 2
 
-    y_obs = ds['y'].astype(np.float32)
-    X = ds['X'].astype(np.float32).copy()
+    y_obs = ds['y'].astype(np.float64)
+    X = ds['X'].astype(np.float64).copy()
     Z = X[:, :q].copy()
     groups = ds['groups'].astype(int)
 
