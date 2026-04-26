@@ -71,11 +71,6 @@ def buildPymc(ds: dict[str, np.ndarray]) -> 'pm.Model':
     Z = X[:, :q].copy()
     groups = ds['groups'].astype(int)
 
-    if d > 1:
-        means = X[:, 1:].mean(axis=0)
-        X[:, 1:] -= means
-        Z[:, 1:] -= means[: q - 1]
-
     nu_ffx = ds['nu_ffx'].astype(float)
     tau_ffx = ds['tau_ffx'].astype(float)
     tau_rfx = ds['tau_rfx'].astype(float)
