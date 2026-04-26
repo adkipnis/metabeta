@@ -355,14 +355,18 @@ class Generator:
         if self.cfg.ds_type in ('sampled', 'observed'):
             # Emulator/Subsampler override ns internally based on source dataset constraints;
             # only req_m = len(ns_i) and req_n = sum(ns_i) survive as loose hints.
-            # Skip the detailed per-group breakdown and max_n_total capping.
-            n_hint = truncLogUni(
+            # Draw req_n the same way the flat/scm path does: sample a per-group n
+            # log-uniformly from [min_n, max_n] and multiply by m.  This aligns the
+            # req_n scale with what _genNs produces, so the Emulator receives a similar
+            # total-n budget regardless of which sub-type mixed resolves to.
+            n_hint_pg = truncLogUni(
                 rng,
-                low=self.cfg.min_m * self.cfg.min_n,
-                high=self.cfg.max_n_total + 1,
+                low=self.cfg.min_n,
+                high=self.cfg.max_n + 1,
                 size=n_datasets,
                 round=True,
             )
+            n_hint = n_hint_pg * m
             n_hint = np.clip(n_hint, m * self.cfg.min_n, m * self.cfg.max_n)
             ns_slices = [
                 np.full(int(m[i]), int(n_hint[i]) // int(m[i]), dtype=int)
