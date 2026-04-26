@@ -180,6 +180,22 @@ class Proposal:
             out['sigma_eps'] = x[..., self.d + self.q]
         return out
 
+    def slice_b(self, start: int, end: int) -> 'Proposal':
+        """Return a view of this proposal restricted to datasets [start:end]."""
+        new_data = {
+            src: {k: v[start:end] for k, v in inner.items()}
+            for src, inner in self.data.items()
+        }
+        corr = self._corr_rfx[start:end] if self._corr_rfx is not None else None
+        sliced = Proposal(
+            new_data, has_sigma_eps=self.has_sigma_eps, d_corr=self.d_corr, corr_rfx=corr
+        )
+        sliced.reff = self.reff
+        sliced.is_results = {
+            k: v[start:end] if torch.is_tensor(v) else v for k, v in self.is_results.items()
+        }
+        return sliced
+
     def rescale(self, scale: torch.Tensor) -> None:
         for source in ('global', 'local'):
             samples = self.data[source]['samples']
@@ -311,10 +327,10 @@ class EvaluationSummary:
     coverage: dict[float, dict[str, torch.Tensor]]
     coverage_error: dict[float, dict[str, torch.Tensor]]
     log_coverage_ratio: dict[float, dict[str, torch.Tensor]]
-    prior_nll: torch.Tensor
     posterior_nll: torch.Tensor
     sample_efficiency: torch.Tensor | None
     pareto_k: torch.Tensor | None
+    prior_nll: torch.Tensor | None = None
     pp_fit: torch.Tensor | None = None  # R² (normal) | AUC (bernoulli) | deviance (poisson)
     tpd: float | None = None  # time per dataset
     loo_nll: torch.Tensor | None = None  # PSIS-LOO NLL (loo_is when IS ran, else loo_raw)
