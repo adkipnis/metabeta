@@ -3,7 +3,7 @@ summarizer_g:
     d_model: 128
     d_ff: 512
     d_output: 32
-    n_blocks: 6
+    n_blocks: 3
     n_isab: 1
     activation: 'GELU'
     dropout: 0.01
@@ -34,6 +34,6 @@ posterior_g:
         alpha: 2.0
 
 posterior_l:
-    n_blocks: 3
+    n_blocks: 6
 
 posterior_correlation: false
