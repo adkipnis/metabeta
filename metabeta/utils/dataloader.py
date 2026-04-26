@@ -309,6 +309,18 @@ def collateFits(
         out[f'{method}_corr_rfx'] = corr_rfx
 
     out[f'{method}_duration'] = quickCollate(batch, f'{method}_duration')
+
+    # per-dataset diagnostics: shape (b, chains) or (b, n_params)
+    for diag_key in (
+        f'{method}_divergences',
+        f'{method}_max_treedepth',
+        f'{method}_ess',
+        f'{method}_ess_tail',
+        f'{method}_rhat',
+    ):
+        if diag_key in batch[0]:
+            out[diag_key] = quickCollate(batch, diag_key)
+
     return out
 
 
