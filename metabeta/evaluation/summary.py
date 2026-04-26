@@ -63,11 +63,12 @@ def getSummary(
 
     # posterior predictive fit
     pp = getPosteriorPredictive(proposal, data, likelihood_family)
-    out['posterior_nll'] = posteriorPredictiveNLL(pp, data, w=proposal.weights)  # in-sample
+    log_p = pp.log_prob(data['y'].unsqueeze(-1))  # (b, m, n, s) — computed once, shared below
+    out['posterior_nll'] = posteriorPredictiveNLL(pp, data, w=proposal.weights, log_p=log_p)  # in-sample
 
     # PSIS-LOO NLL: automatically uses loo_is when IS weights are available (w=proposal.weights),
     # falling back to loo_raw (w=None) when no IS was done.
-    out['loo_nll'], out['loo_pareto_k'] = psisLooNLL(pp, data, w=proposal.weights, reff=proposal.reff)
+    out['loo_nll'], out['loo_pareto_k'] = psisLooNLL(pp, data, w=proposal.weights, reff=proposal.reff, log_p=log_p)
     if likelihood_family == 0:  # normal
         out['pp_fit'] = posteriorPredictiveR2(pp, data, w=proposal.weights)
     elif likelihood_family == 1:  # bernoulli

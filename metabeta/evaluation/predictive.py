@@ -73,6 +73,7 @@ def posteriorPredictiveNLL(
     data: dict[str, torch.Tensor],
     w: torch.Tensor | None = None,
     mode: Literal['expected', 'mixture'] = 'mixture',
+    log_p: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
     Returns per-dataset NLL with shape (b,).
@@ -81,8 +82,9 @@ def posteriorPredictiveNLL(
     mode='mixture':
         -log E_p(theta|D)[ p(y | theta) ]
     """
-    y_obs = data['y'].unsqueeze(-1)   # (b, m, n, 1)
-    log_p = pp.log_prob(y_obs)   # (b, m, n, s)
+    if log_p is None:
+        y_obs = data['y'].unsqueeze(-1)   # (b, m, n, 1)
+        log_p = pp.log_prob(y_obs)        # (b, m, n, s)
     obs_mask = data['mask_n']   # (b, m, n)
     n_obs = obs_mask.sum(dim=(1, 2))   # (b, )
     if mode == 'expected':
@@ -108,6 +110,7 @@ def psisLooNLL(
     data: dict[str, torch.Tensor],
     w: torch.Tensor | None = None,
     reff: float = 1.0,
+    log_p: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     PSIS-LOO NLL per dataset. Returns (loo_nll, pareto_k), both shape (b,).
@@ -133,10 +136,13 @@ def psisLooNLL(
     reff : relative effective sample size (ESS / n_draws). Use 1.0 for i.i.d.
         samples (flow / IS). For MCMC, pass mean(ESS) / n_draws to set the
         correct PSIS tail threshold.
+    log_p : precomputed log_prob tensor (b, m, n, s). When provided, skips the
+        pp.log_prob call (avoids recomputing when sharing with posteriorPredictiveNLL).
     """
 
-    y_obs = data['y'].unsqueeze(-1)   # (b, m, n, 1)
-    log_p = pp.log_prob(y_obs)        # (b, m, n, s)
+    if log_p is None:
+        y_obs = data['y'].unsqueeze(-1)   # (b, m, n, 1)
+        log_p = pp.log_prob(y_obs)        # (b, m, n, s)
     mask = data['mask_n']             # (b, m, n)
     n_obs = mask.sum(dim=(1, 2))      # (b,)
 
