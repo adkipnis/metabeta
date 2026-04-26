@@ -5,11 +5,23 @@ from tabulate import tabulate
 
 from metabeta.posthoc.conformal import Calibrator
 from metabeta.utils.evaluation import Proposal, EvaluationSummary, dictMean
+from metabeta.evaluation.point import getPointEstimates, getRMSE, getCorrelation
+from metabeta.evaluation.intervals import getCoverageErrors, getCoverages, getCredibleIntervals
+from metabeta.evaluation.predictive import (
+    getPriorSamples,
+    getPosteriorPredictive,
+    posteriorPredictiveAUC,
+    posteriorPredictiveDeviance,
+    posteriorPredictiveNLL,
+    posteriorPredictiveR2,
+    psisLooNLL,
+)
 
 logger = logging.getLogger(__name__)
 
 # Parameters excluded from the Average row (structural, not estimable like free params).
 _AVG_EXCLUDE = frozenset({'corr_rfx'})
+EST_TYPE = 'mean'
 
 
 def _dictMeanExcl(td: dict) -> float:
@@ -22,34 +34,7 @@ def _t(label: str, t0: float) -> float:
     return time.perf_counter()
 
 
-from metabeta.evaluation.point import (
-    getPointEstimates,
-    getRMSE,
-    getCorrelation,
-)
-from metabeta.evaluation.intervals import (
-    getCoverageErrors,
-    getCoverages,
-    getCredibleIntervals,
-)
-from metabeta.evaluation.predictive import (
-    getPriorSamples,
-    getPosteriorPredictive,
-    posteriorPredictiveAUC,
-    posteriorPredictiveDeviance,
-    posteriorPredictiveNLL,
-    posteriorPredictiveR2,
-    psisLooNLL,
-)
-
-
-
-EST_TYPE = 'mean'
-
-
-def _sliceData(
-    data: dict[str, torch.Tensor], start: int, end: int
-) -> dict[str, torch.Tensor]:
+def _sliceData(data: dict[str, torch.Tensor], start: int, end: int) -> dict[str, torch.Tensor]:
     return {k: v[start:end] if torch.is_tensor(v) else v for k, v in data.items()}
 
 
@@ -65,13 +50,11 @@ def getSummary(
     t0 = time.perf_counter()
     logger.debug('getSummary: s=%d', proposal.n_samples)
 
-    # parameter recovery
     out['estimates'] = est = getPointEstimates(proposal, EST_TYPE)
     out['nrmse'] = getRMSE(est, data, normalize=True)
     out['corr'] = getCorrelation(est, data)
     t0 = _t('point estimates', t0)
 
-    # coverage and calibration
     ci_dicts = getCredibleIntervals(proposal)
     t0 = _t('credible intervals (quantiles)', t0)
     if calibrator is not None:
@@ -82,7 +65,7 @@ def getSummary(
     out['log_coverage_ratio'] = getCoverageErrors(cvrg_dicts, log_ratio=True)
     t0 = _t('coverage errors', t0)
 
-    # prior predictive fit (optional — skipped by default, costs two (b,m,n,s) computations)
+    # prior predictive fit (optional — costs two (b,m,n,s) materializations)
     if compute_prior:
         prior_samples = getPriorSamples(data, proposal.n_samples, likelihood_family)
         pp_0 = getPosteriorPredictive(prior_samples, data, likelihood_family)
@@ -90,8 +73,7 @@ def getSummary(
         t0 = _t('prior NLL', t0)
 
     # Posterior predictive quantities, chunked over datasets to bound peak memory.
-    # Each (b, m, n, s) tensor is O(b * m * n * s); for MCMC s≈4000 this can be several GB.
-    # Processing dataset_chunk_size datasets at a time keeps the working set manageable.
+    # (b, m, n, s) tensors can be several GB for MCMC (s≈4000); process chunk datasets at a time.
     b = proposal.samples_g.shape[0]
     chunk = min(dataset_chunk_size, b)
     logger.debug('  %-30s b=%d chunk=%d', 'predictive (chunked)', b, chunk)
@@ -103,33 +85,33 @@ def getSummary(
         p_c = proposal.slice_b(start, end)
         d_c = _sliceData(data, start, end)
 
-        _t0 = time.perf_counter()
+        tc = time.perf_counter()
         pp_c = getPosteriorPredictive(p_c, d_c, likelihood_family)
-        _t1 = time.perf_counter(); t_pp += _t1 - _t0
+        t_pp += time.perf_counter() - tc
 
+        tc = time.perf_counter()
         log_p_c = pp_c.log_prob(d_c['y'].unsqueeze(-1))   # (chunk, m, n, s)
-        _t2 = time.perf_counter(); t_logp += _t2 - _t1
+        t_logp += time.perf_counter() - tc
 
-        posterior_nlls.append(
-            posteriorPredictiveNLL(pp_c, d_c, w=p_c.weights, log_p=log_p_c)
-        )
-        _t3 = time.perf_counter(); t_nll += _t3 - _t2
+        tc = time.perf_counter()
+        posterior_nlls.append(posteriorPredictiveNLL(pp_c, d_c, w=p_c.weights, log_p=log_p_c))
+        t_nll += time.perf_counter() - tc
 
-        loo_nll_c, loo_k_c = psisLooNLL(
-            pp_c, d_c, w=p_c.weights, reff=p_c.reff, log_p=log_p_c
-        )
-        del log_p_c   # free (chunk, m, n, s) before next chunk
-        _t4 = time.perf_counter(); t_loo += _t4 - _t3
+        tc = time.perf_counter()
+        loo_nll_c, loo_k_c = psisLooNLL(pp_c, d_c, w=p_c.weights, reff=p_c.reff, log_p=log_p_c)
+        del log_p_c   # free before next chunk
+        t_loo += time.perf_counter() - tc
         loo_nlls.append(loo_nll_c)
         loo_ks.append(loo_k_c)
 
-        if likelihood_family == 0:   # normal
+        tc = time.perf_counter()
+        if likelihood_family == 0:
             pp_fits.append(posteriorPredictiveR2(pp_c, d_c, w=p_c.weights))
-        elif likelihood_family == 1:   # bernoulli
+        elif likelihood_family == 1:
             pp_fits.append(posteriorPredictiveAUC(pp_c, d_c, w=p_c.weights))
-        elif likelihood_family == 2:   # poisson
+        elif likelihood_family == 2:
             pp_fits.append(posteriorPredictiveDeviance(pp_c, d_c, w=p_c.weights))
-        _t5 = time.perf_counter(); t_fit += _t5 - _t4
+        t_fit += time.perf_counter() - tc
 
     logger.debug('  %-30s %.2fs', 'linear predictor (eta)', t_pp)
     logger.debug('  %-30s %.2fs', 'log_prob', t_logp)
@@ -141,22 +123,11 @@ def getSummary(
     out['loo_nll'] = torch.cat(loo_nlls)
     out['loo_pareto_k'] = torch.cat(loo_ks)
     out['pp_fit'] = torch.cat(pp_fits) if pp_fits else None
-
-    # visualize single datasets
-    # gt = torch.cat([data['ffx'][0], data['sigma_rfx'][0], data['sigma_eps'][0:1]]).numpy()
-    # plotParameters(proposal, index=0, truth=gt, prior=prior_samples)
-    # plotPPC(pp, data)
-    # plotPPD(pp, data, pp_prior=pp_0)
-
-    # importance sampling
     out['sample_efficiency'] = proposal.efficiency
     out['pareto_k'] = proposal.pareto_k
-
-    # time per dataset
     out['tpd'] = proposal.tpd
 
-    summary = EvaluationSummary(**out)
-    return summary
+    return EvaluationSummary(**out)
 
 
 def summaryTable(s: EvaluationSummary, likelihood_family: int = 0) -> str:
@@ -168,18 +139,11 @@ def summaryTable(s: EvaluationSummary, likelihood_family: int = 0) -> str:
 
 
 def longTable(
-    corr: dict[str, torch.Tensor],  # Pearson correlation
-    nrmse: dict[str, torch.Tensor],  # normalized root mean square error
-    ece: dict[str, torch.Tensor],  # expected coverage error (signed)
-    eace: dict[str, torch.Tensor],  # absolute ECE (abs per dataset, then avg)
+    corr: dict[str, torch.Tensor],
+    nrmse: dict[str, torch.Tensor],
+    ece: dict[str, torch.Tensor],
+    eace: dict[str, torch.Tensor],
 ) -> str:
-    def process(row: list[str | torch.Tensor]) -> list[str | float]:
-        out = []
-        for e in row:
-            e = torch.mean(e).item() if isinstance(e, torch.Tensor) else e
-            out.append(e)
-        return out
-
     names = {
         'ffx': 'FFX',
         'sigma_rfx': 'Sigma(RFX)',
@@ -187,20 +151,25 @@ def longTable(
         'corr_rfx': 'Corr(RFX)',
         'rfx': 'RFX',
     }
+
+    def to_float(v: str | torch.Tensor) -> str | float:
+        return torch.mean(v).item() if isinstance(v, torch.Tensor) else v
+
     keys = [k for k in names if k in corr]
-    rows = [[names[k], corr[k], nrmse[k], ece.get(k), eace.get(k)] for k in keys]
-    rows = [process(row) for row in rows]
-    # Average row: exclude corr_rfx from all averages.
-    rows += [['Average', _dictMeanExcl(corr), _dictMeanExcl(nrmse),
-              _dictMeanExcl(ece), _dictMeanExcl(eace)]]
-    results = tabulate(
+    rows = [
+        [to_float(x) for x in [names[k], corr[k], nrmse[k], ece.get(k), eace.get(k)]]
+        for k in keys
+    ]
+    rows.append(
+        ['Average', _dictMeanExcl(corr), _dictMeanExcl(nrmse), _dictMeanExcl(ece), _dictMeanExcl(eace)]
+    )
+    return '\n' + tabulate(
         rows,
         headers=['', 'R', 'NRMSE', 'ECE', 'EACE'],
         floatfmt='.3f',
         tablefmt='simple',
         missingval='-',
-    )
-    return f'\n{results}\n'
+    ) + '\n'
 
 
 def flatTable(
@@ -212,21 +181,17 @@ def flatTable(
     mk: float | None = None,
     mloo_k: float | None = None,
 ) -> str:
-    rows = []
-    results = ''
-    if tpd is not None:
-        rows += [['Estimation time / ds [s]', tpd]]
-    # in-sample ppNLL omitted from table (optimistic; use LOO NLL instead)
-    if mloonll is not None:
-        rows += [['Median LOO-NLL', mloonll]]
-    if mfit is not None:
-        rows += [[fit_label, mfit]]
-    if meff is not None:
-        rows += [['Median IS Efficiency', meff]]
-    if mk is not None:
-        rows += [['Median IS Pareto k', mk]]
-    if mloo_k is not None:
-        rows += [['Median LOO Pareto k', mloo_k]]
-    if rows:
-        results = tabulate(rows, floatfmt='.3f', tablefmt='simple')
-    return f'{results}\n'
+    # in-sample ppNLL omitted (optimistic; use LOO NLL instead)
+    rows = [
+        row for row in [
+            ['Estimation time / ds [s]', tpd],
+            ['Median LOO-NLL', mloonll],
+            [fit_label, mfit],
+            ['Median IS Efficiency', meff],
+            ['Median IS Pareto k', mk],
+            ['Median LOO Pareto k', mloo_k],
+        ]
+        if row[1] is not None
+    ]
+    result = tabulate(rows, floatfmt='.3f', tablefmt='simple') if rows else ''
+    return f'{result}\n'
