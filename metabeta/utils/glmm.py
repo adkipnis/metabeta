@@ -518,7 +518,7 @@ def _lmmNormalFull(
     )                                                                   # bump diag to floor
 
     Psi_raw = 0.5 * (Psi_raw + Psi_raw.mT)
-    vals, vecs = torch.linalg.eigh(Psi_raw)                      # (B, q), (B, q, q)
+    vals, vecs = _eighWithJitter(Psi_raw)                         # (B, q), (B, q, q)
     vals = vals.clamp(min=0.0)
     Psi = vecs @ torch.diag_embed(vals) @ vecs.mT                 # (B, q, q)
 
@@ -761,7 +761,7 @@ def _lmmGlmm(
     # Floor eigenvalues at psi_0 (overdispersion-based RE scale estimate).
     # Prevents degenerate near-zero Ψ̂_PQL after PSD projection, which would
     # make Ψ̂_PQL⁻¹ → ∞ and kill Newton updates.
-    vals_pql, vecs_pql = torch.linalg.eigh(Psi_pql)
+    vals_pql, vecs_pql = _eighWithJitter(Psi_pql)
     vals_pql = vals_pql.clamp(min=psi_0[:, None])
     Psi_pql = vecs_pql @ torch.diag_embed(vals_pql) @ vecs_pql.mT        # (B, q, q)
 
