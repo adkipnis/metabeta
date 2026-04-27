@@ -6,13 +6,14 @@ from matplotlib.axes import Axes
 
 from metabeta.evaluation.sbc import getFractionalRanks, simultaneousBands
 from metabeta.utils.evaluation import getAllNames, getCorrRfxNames, getMasks, Proposal, joinSigmas
-from metabeta.utils.plot import DPI, savePlot, niceify
+from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
 
 
 def _plotSbcEcdf(
     ax: Axes,
     ranks: torch.Tensor,
     names: list[str],
+    colors: list[str],
     mask: torch.Tensor | None,
     diff: bool,
     title: str | None = 'Uniform ECDF',
@@ -20,6 +21,7 @@ def _plotSbcEcdf(
     show_x: bool = True,
 ) -> None:
     assert len(names) == ranks.shape[-1], 'shape mismatch'
+    assert len(colors) == len(names), 'shape mismatch'
     for i, name in enumerate(names):
         if mask is not None:
             mask_i = mask[..., i]
@@ -33,7 +35,7 @@ def _plotSbcEcdf(
         y = np.linspace(0, 1, num=x.shape[-1])
         if diff:
             y = y - x
-        ax.plot(x, y, label=name, lw=3)
+        ax.plot(x, y, label=name, lw=3, color=colors[i])
     xlim = (0, 1)
     ylim = (0, 0) if diff else xlim
     ax.plot(xlim, ylim, '--', lw=2, zorder=1, color='grey', alpha=0.2)
@@ -78,6 +80,14 @@ def _plotSbcRow(
     masks = getMasks(data, has_sigma_eps=has_eps)
 
     n_datasets = len(data['X'])
+    n_colors = len(PALETTE)
+    color_offset = 0
+
+    def _nextColors(n: int) -> list[str]:
+        nonlocal color_offset
+        out = [PALETTE[(color_offset + i) % n_colors] for i in range(n)]
+        color_offset += n
+        return out
 
     # Global parameters: ffx, sigmas, corr_rfx
     n_eff_global = n_datasets
@@ -86,6 +96,7 @@ def _plotSbcRow(
             ax,
             ranks[k],
             names[k],
+            _nextColors(len(names[k])),
             masks[k],
             diff=diff,
             title=title,
@@ -98,6 +109,7 @@ def _plotSbcRow(
             ax,
             ranks['corr_rfx'],
             getCorrRfxNames(proposal.q),
+            _nextColors(ranks['corr_rfx'].shape[-1]),
             mask=None,
             diff=diff,
             title=title,
@@ -114,6 +126,7 @@ def _plotSbcRow(
         ax,
         ranks['rfx'],
         names['rfx'],
+        _nextColors(len(names['rfx'])),
         masks['rfx'],
         diff=diff,
         title=title,
