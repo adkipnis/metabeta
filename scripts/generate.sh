@@ -12,8 +12,8 @@
 #SBATCH --mem=8G
 #SBATCH --time=24:00:00
 
-N_EPOCHS=2000
 CHUNK_SIZE=1
+START_EPOCH=1 # ends at START_EPOCH + N_ARRAYS
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -34,7 +34,6 @@ esac
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 
-START_EPOCH=1
 BEGIN=$(( START_EPOCH + SLURM_ARRAY_TASK_ID * CHUNK_SIZE ))
 END=$(( BEGIN + CHUNK_SIZE - 1 ))
 
