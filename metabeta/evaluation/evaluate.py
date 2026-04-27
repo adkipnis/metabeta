@@ -77,6 +77,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--outdir', type=str)
 
     args = parser.parse_args()
+    args.config = Path('..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge_s0', 'config.yaml')
 
     # Load config from checkpoint or file
     if hasattr(args, 'checkpoint') and args.checkpoint:
@@ -421,6 +422,105 @@ class Evaluator:
         tex_path = self.results_dir / 'evaluate.tex'
         tex_path.write_text(tex_table + '\n')
 
+    def _nutsFailureAnalysis(
+        self,
+        summary: EvaluationSummary,
+        batch: dict[str, torch.Tensor],
+    ) -> None:
+        """Report NUTS convergence diagnostics and their Spearman correlation with LOO-NLL.
+
+        Failure criteria (in descending severity):
+          1. R-hat > 1.01 on any parameter  — chains didn't converge to the same distribution
+          2. Any divergences                 — sampler hit a region of bad geometry
+          3. >5% tree-depth saturation      — trajectories truncated, stationary dist. may be wrong
+          4. Min ESS < 400                  — too few effective samples for reliable inference
+        """
+        if 'nuts_divergences' not in batch:
+            return
+
+        import numpy as np
+        from scipy.stats import spearmanr
+
+        def _nanfield(key: str) -> np.ndarray | None:
+            return batch[key].numpy().astype(np.float64) if key in batch else None
+
+        total_div = batch['nuts_divergences'].numpy().sum(-1)   # (b,)
+        duration = batch['nuts_duration'].numpy().ravel()       # (b,)
+
+        ess = _nanfield('nuts_ess')
+        ess_tail = _nanfield('nuts_ess_tail')
+        rhat = _nanfield('nuts_rhat')
+        treedepth = _nanfield('nuts_max_treedepth')  # frac saturated per chain (b, chains)
+
+        def _param_stat(arr, fn):
+            """Apply fn over the param axis, masking zero-padded entries."""
+            if arr is None:
+                return None
+            a = arr.copy()
+            a[a <= 0] = np.nan
+            return fn(a, axis=-1)
+
+        min_ess = _param_stat(ess, np.nanmin)
+        min_ess_tail = _param_stat(ess_tail, np.nanmin)
+        max_rhat = _param_stat(rhat, np.nanmax)
+        mean_treedepth_sat = treedepth.mean(-1) if treedepth is not None else None  # avg over chains
+
+        loo = summary.loo_nll.numpy() if summary.loo_nll is not None else None
+        b = len(total_div)
+
+        # --- failure flags (ordered by severity) ---
+        RHAT_THRESH = 1.01
+        TREE_SAT_THRESH = 0.05
+        ESS_THRESH = 400
+
+        f_rhat = (max_rhat > RHAT_THRESH) if max_rhat is not None else np.zeros(b, bool)
+        f_div = total_div > 0
+        f_tree = (mean_treedepth_sat > TREE_SAT_THRESH) if mean_treedepth_sat is not None else np.zeros(b, bool)
+        f_ess = (min_ess < ESS_THRESH) if min_ess is not None else np.zeros(b, bool)
+        fail = f_rhat | f_div | f_tree | f_ess
+
+        counts = {
+            f'R-hat > {RHAT_THRESH}': int(f_rhat.sum()),
+            'divergences > 0': int(f_div.sum()),
+            f'tree-depth sat > {TREE_SAT_THRESH:.0%}': int(f_tree.sum()),
+            f'ESS < {ESS_THRESH}': int(f_ess.sum()),
+            'any failure': int(fail.sum()),
+        }
+
+        # --- Spearman correlations with LOO-NLL ---
+        diag_pairs = [
+            ('Max R-hat', max_rhat),
+            ('Total divergences', total_div),
+            ('Mean tree-depth sat', mean_treedepth_sat),
+            ('Min ESS (bulk)', min_ess),
+            ('Min ESS (tail)', min_ess_tail),
+            ('Duration [s]', duration),
+        ]
+        rows = []
+        if loo is not None:
+            for name, diag in diag_pairs:
+                if diag is None:
+                    continue
+                ok = np.isfinite(diag) & np.isfinite(loo)
+                r_s = float(spearmanr(diag[ok], loo[ok]).statistic) if ok.sum() > 2 else float('nan')
+                rows.append([name, r_s])
+
+        # --- failure vs clean LOO-NLL ---
+        lines = ['  ' + '  |  '.join(f'{k}: {v}/{b}' for k, v in counts.items())]
+        if loo is not None and fail.any() and (~fail).any():
+            fail_med = float(np.median(loo[fail]))
+            clean_med = float(np.median(loo[~fail]))
+            lines.append(
+                f'  Median LOO-NLL:  {fail_med:.3f} (fail) vs {clean_med:.3f} (clean)'
+                f'   Δ = {fail_med - clean_med:+.3f}'
+            )
+
+        corr_table = tabulate(
+            rows, headers=['Diagnostic', 'ρ(LOO-NLL)'], floatfmt='.3f', tablefmt='simple'
+        )
+        logger.info('\nNUTS diagnostics (%d datasets)\n%s\n%s\n',
+                    b, corr_table, '\n'.join(lines))
+
     def go(self) -> None:
         full_batch = self.dl_test.fullBatch()
 
@@ -431,6 +531,7 @@ class Evaluator:
         # NUTS proposal
         proposal_nuts = self._fit2proposal(full_batch, prefix='nuts')
         summary_nuts = self.summary(proposal_nuts, full_batch)
+        self._nutsFailureAnalysis(summary_nuts, full_batch)
 
         # ADVI proposal
         proposal_advi = self._fit2proposal(full_batch, prefix='advi')
