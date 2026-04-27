@@ -17,8 +17,8 @@ def setup() -> argparse.Namespace:
                         help='one or more data config tags')
     parser.add_argument('--mode', choices=['train', 'test'], required=True,
                         help='check training partitions (train) or test fits (test)')
-    parser.add_argument('--n_train_epochs', type=int, default=1000,
-                        help='expected number of train partitions (default: 1000)')
+    parser.add_argument('-b', type=int, default=1000,
+                        help='batch size: expected number of train partitions (default: 1000)')
     parser.add_argument('--n_fits', type=int, default=512,
                         help='expected fit files per method (default: 512)')
     parser.add_argument('--srcdir', type=str,
@@ -57,7 +57,7 @@ def _report(label: str, n_ok: int, total: int, missing: list[Path], broken: list
 def _checkTrain(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
     paths = [
         srcdir / data_id / datasetFilename(partition='train', epoch=e)
-        for e in range(1, cfg.n_train_epochs + 1)
+        for e in range(1, cfg.b + 1)
     ]
     missing, broken = _check(paths, 'train partitions', inspect=cfg.inspect)
     _report('train partitions', len(paths) - len(missing) - len(broken), len(paths), missing, broken)
