@@ -4,6 +4,7 @@ from metabeta.utils.regularization import corrToLower
 
 EPS = 1e-6
 ALPHAS = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
+RFX_COVERAGE_AGGREGATIONS = ('group_weighted', 'slot_mean')
 
 # --- Credible Intervals
 def getQuantiles(
@@ -91,8 +92,15 @@ def getAtomicCoverage(
 def getCoveragePerParameter(
     ci_dict: dict[str, torch.Tensor],
     data: dict[str, torch.Tensor],
+    rfx_coverage_aggregation: str = 'group_weighted',
 ) -> dict[str, torch.Tensor]:
     """get coverage for each parameter type"""
+    if rfx_coverage_aggregation not in RFX_COVERAGE_AGGREGATIONS:
+        raise ValueError(
+            f'unknown rfx_coverage_aggregation={rfx_coverage_aggregation!r}; '
+            f'use one of {RFX_COVERAGE_AGGREGATIONS}'
+        )
+
     out = {}
     masks = getMasks(data)
     for key, ci in ci_dict.items():
@@ -105,18 +113,31 @@ def getCoveragePerParameter(
             gt = gt.unsqueeze(-1)
             ci = ci.unsqueeze(-1)
         out[key] = getAtomicCoverage(ci, gt, mask)
-        if key == 'rfx':   # average over groups
-            out[key] = out[key].mean(0)
+        if key == 'rfx':
+            if rfx_coverage_aggregation == 'group_weighted':
+                # Equal weight per active (dataset, group), then average over alpha.
+                # Shape: inside/mask -> (B, M, Q), output -> (Q,)
+                inside = (ci[..., 0, :] - EPS <= gt) & (gt <= ci[..., 1, :] + EPS)
+                inside = inside & mask
+                out[key] = inside.float().sum((0, 1)) / mask.sum((0, 1)).clamp_min(1.0)
+            else:
+                # Legacy behavior: per-group-slot coverage then unweighted mean over slots.
+                out[key] = out[key].mean(0)
     return out
 
 
 def getCoverages(
     ci_dicts: dict[float, dict[str, torch.Tensor]],
     data: dict[str, torch.Tensor],
+    rfx_coverage_aggregation: str = 'group_weighted',
 ) -> dict[float, dict[str, torch.Tensor]]:
     out = {}
     for alpha, ci_per_parameter in ci_dicts.items():
-        out[alpha] = getCoveragePerParameter(ci_per_parameter, data)
+        out[alpha] = getCoveragePerParameter(
+            ci_per_parameter,
+            data,
+            rfx_coverage_aggregation=rfx_coverage_aggregation,
+        )
     return out
 
 
