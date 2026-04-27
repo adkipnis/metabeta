@@ -77,7 +77,7 @@ def plotComparison(
             names_cov,
             stats_cov,
             title=col_titles[n_rec] if upper else None,
-            show_legend=upper,
+            show_legend=False,
             show_x=lower,
             show_corr_rfx=show_corr_rfx,
         )
@@ -90,7 +90,7 @@ def plotComparison(
             data,
             diff=False,
             title=col_titles[n_rec + 1] if upper else None,
-            show_legend=upper,
+            show_legend=False,
             show_x=lower,
             show_corr_rfx=show_corr_rfx,
         )
