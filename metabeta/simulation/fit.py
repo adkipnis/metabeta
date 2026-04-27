@@ -47,24 +47,26 @@ def setup() -> argparse.Namespace:
         help='ADVI iterations (default=50_000)')
     parser.add_argument('--lr', type=float, default=5e-3,
         help='Adam learning rate for ADVI (default=5e-3)')
+    parser.add_argument('--diagonal', action='store_true',
+        help='Force diagonal (uncorrelated) RFX covariance even when eta_rfx > 0 (default=False)')
     return setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets with PyMC.')
 # fmt: on
 
 
-def buildPymc(ds: dict[str, np.ndarray]) -> 'pm.Model':
+def buildPymc(ds: dict[str, np.ndarray], force_diagonal: bool = False) -> 'pm.Model':
     """Build a PyMC GLMM for a single unpadded dataset.
 
-    Independent (eta_rfx == 0 or q == 1): per-dimension half-* sigma,
-    non-centered as b_j = z_j * sigma_j.
+    Independent (eta_rfx == 0 or q == 1 or force_diagonal): per-dimension
+    half-* sigma, non-centered as b_j = z_j * sigma_j.
 
-    Correlated (eta_rfx > 0 and q >= 2): LKJ-Cholesky prior on the full
-    covariance, non-centered as b = z @ chol.T.
+    Correlated (eta_rfx > 0 and q >= 2 and not force_diagonal): LKJ-Cholesky
+    prior on the full covariance, non-centered as b = z @ chol.T.
 
     All RFX variables are stored as Deterministics named '1|i', 'x1|i',
     '1|i_sigma', … so that extractAll works for both cases.
     """
     d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
-    correlated = float(ds.get('eta_rfx', 0)) > 0 and q >= 2
+    correlated = float(ds.get('eta_rfx', 0)) > 0 and q >= 2 and not force_diagonal
 
     y_obs = ds['y'].astype(np.float64)
     X = ds['X'].astype(np.float64).copy()
@@ -156,6 +158,7 @@ def extractAll(
     d: int,
     q: int,
     prefix: str,
+    force_diagonal: bool = False,
 ) -> dict[str, np.ndarray]:
     """Extract all posterior arrays from a trace into the (1, n_s, ...) convention."""
     likelihood_family = int(ds.get('likelihood_family', 0))
@@ -173,7 +176,7 @@ def extractAll(
     out = {f'{prefix}_ffx': ffx, f'{prefix}_sigma_rfx': sigma_rfx, f'{prefix}_rfx': rfx}
     if hasSigmaEps(likelihood_family):
         out[f'{prefix}_sigma_eps'] = extractSingle(trace, 'sigma')
-    correlated = float(ds.get('eta_rfx', 0)) > 0 and q >= 2
+    correlated = float(ds.get('eta_rfx', 0)) > 0 and q >= 2 and not force_diagonal
     if correlated:
         out[f'{prefix}_corr_rfx'] = extractSingle(trace, '_lkj_rfx_corr')
     else:
@@ -215,10 +218,12 @@ class Fitter:
     def _outname(self, idx: int, method: str | None = None) -> str:
         stem = self.batch_path.stem
         use_method = self.cfg.method if method is None else method
+        if use_method == 'nuts' and getattr(self.cfg, 'diagonal', False):
+            use_method = 'nutsdiag'
         return f'{stem}_{use_method}_{idx:03d}.npz'
 
     def _buildPymc(self, ds: dict[str, np.ndarray]) -> pm.Model:
-        return buildPymc(ds)
+        return buildPymc(ds, force_diagonal=getattr(self.cfg, 'diagonal', False))
 
     def _extract(self, trace: az.InferenceData, name: str) -> np.ndarray:
         return extractSingle(trace, name)
@@ -226,7 +231,8 @@ class Fitter:
     def _extractAll(
         self, trace: az.InferenceData, d: int, q: int, prefix: str
     ) -> dict[str, np.ndarray]:
-        return extractAll(trace, self.ds, d, q, prefix)
+        return extractAll(trace, self.ds, d, q, prefix,
+                          force_diagonal=getattr(self.cfg, 'diagonal', False))
 
     def _fitNuts(self, cfg: argparse.Namespace, ds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         pymc_model = self._buildPymc(ds)
@@ -356,6 +362,7 @@ if __name__ == '__main__':
         ('loop', False),
         ('viter', 50_000),
         ('lr', 5e-3),
+        ('diagonal', False),
     ]:
         if not hasattr(cfg, _k):
             setattr(cfg, _k, _v)
