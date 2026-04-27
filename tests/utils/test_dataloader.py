@@ -154,6 +154,10 @@ def test_mask_dq_are_rowwise_permuted(dataset_path: Path):
     assert torch.equal(batch['mask_d'], exp_d)
     assert torch.equal(batch['mask_q'], exp_q)
 
+    # mask_mq should always be derived from the final (possibly permuted) mask_q.
+    expected_mq = batch['mask_m'].unsqueeze(-1) & batch['mask_q'].unsqueeze(-2)
+    assert torch.equal(batch['mask_mq'], expected_mq)
+
 
 def test_dataloader_repr(dataset_path: Path):
     dl = Dataloader(dataset_path, batch_size=8)
