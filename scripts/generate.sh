@@ -3,7 +3,7 @@
 #SBATCH --job-name=generate
 #SBATCH --output=logs/generate/generate_%A_%a.out
 #SBATCH --error=logs/generate/generate_%A_%a.err
-#SBATCH --array=0-1999
+#SBATCH --array=0-3999
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
