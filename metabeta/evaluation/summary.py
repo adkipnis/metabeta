@@ -1,12 +1,13 @@
 import time
 import logging
+import numpy as np
 import torch
 from tabulate import tabulate
 
 from metabeta.posthoc.conformal import Calibrator
 from metabeta.utils.evaluation import Proposal, EvaluationSummary, dictMean
 from metabeta.evaluation.point import getPointEstimates, getRMSE, getCorrelation
-from metabeta.evaluation.intervals import getCoverageErrors, getCoverages, getCredibleIntervals
+from metabeta.evaluation.intervals import ALPHAS, getCoverageErrors, getCoverages, getCredibleIntervals
 from metabeta.evaluation.predictive import (
     getPriorSamples,
     getPosteriorPredictive,
@@ -64,6 +65,7 @@ def getSummary(
     out['coverage_error'] = getCoverageErrors(cvrg_dicts, log_ratio=False)
     out['log_coverage_ratio'] = getCoverageErrors(cvrg_dicts, log_ratio=True)
     t0 = _t('coverage errors', t0)
+    out['rfx_joint_ece'], out['rfx_joint_eace'] = _rfxJointCalibration(proposal, data)
 
     # prior predictive fit (optional — costs two (b,m,n,s) materializations)
     if compute_prior:
@@ -130,11 +132,97 @@ def getSummary(
     return EvaluationSummary(**out)
 
 
+def _rfxJointCalibration(
+    proposal: Proposal,
+    data: dict[str, torch.Tensor],
+) -> tuple[float | None, float | None]:
+    """Joint calibration for random effects via Mahalanobis fractional ranks."""
+    rfx_samples = proposal.rfx
+    if rfx_samples.dim() != 4:
+        return None, None
+
+    mask_q = data['mask_q']
+    mask_m = data['mask_m']
+    truth = data['rfx']
+    weights = proposal.weights
+    n_samples = rfx_samples.shape[-2]
+
+    ranks: list[float] = []
+    eye_cache: dict[int, torch.Tensor] = {}
+
+    for i in range(rfx_samples.shape[0]):
+        q_i = int(mask_q[i].sum().item())
+        if q_i < 2:
+            continue
+
+        if q_i not in eye_cache:
+            eye_cache[q_i] = torch.eye(q_i, device=rfx_samples.device, dtype=rfx_samples.dtype)
+        eye = eye_cache[q_i]
+
+        w_i = None
+        if weights is not None:
+            w_i = weights[i]
+            w_i = w_i / w_i.sum().clamp_min(1e-12)
+
+        for j in range(rfx_samples.shape[1]):
+            if not bool(mask_m[i, j]):
+                continue
+
+            samp = rfx_samples[i, j, :, :q_i]  # (s, q_i)
+            mu = samp.mean(0)
+            centered = samp - mu
+            if n_samples > 1:
+                cov = centered.mT @ centered / (n_samples - 1)
+            else:
+                cov = centered.mT @ centered
+            cov = cov + 1e-10 * eye
+
+            try:
+                cov_inv = torch.linalg.pinv(cov)
+            except RuntimeError:
+                continue
+
+            d2_samples = (centered @ cov_inv * centered).sum(-1)
+            delta = truth[i, j, :q_i] - mu
+            d2_truth = (delta @ cov_inv @ delta).item()
+            inside = (d2_samples <= d2_truth).float()
+            if w_i is None:
+                rank = float(inside.mean().item())
+            else:
+                rank = float((inside * w_i).sum().item())
+            if np.isfinite(rank):
+                ranks.append(rank)
+
+    if not ranks:
+        return None, None
+
+    r = np.asarray(ranks, dtype=np.float64)
+    ece = 0.0
+    eace = 0.0
+    for alpha in ALPHAS:
+        nominal = 1.0 - alpha
+        covered = (np.abs(r - 0.5) <= nominal / 2.0).astype(np.float64)
+        err = float(covered.mean() - nominal)
+        ece += err
+        eace += abs(err)
+    return ece / len(ALPHAS), eace / len(ALPHAS)
+
+
 def summaryTable(s: EvaluationSummary, likelihood_family: int = 0) -> str:
     long_table = longTable(s.corr, s.nrmse, s.ece, s.eace)
     fit_labels = {0: 'Median pp R²', 1: 'Median pp AUC', 2: 'Median pp Deviance'}
     fit_label = fit_labels.get(likelihood_family, 'Median pp R²')
-    flat_table = flatTable(s.tpd, s.mloonll, s.mfit, fit_label, s.meff, s.mk, s.mloo_k)
+    flat_table = flatTable(
+        s.tpd,
+        s.mloonll,
+        s.mfit,
+        fit_label,
+        s.meff,
+        s.mk,
+        s.mloo_k,
+        s.rfx_joint_ece,
+        s.rfx_joint_eace,
+    )
     return long_table + '\n' + flat_table
 
 
@@ -180,11 +268,15 @@ def flatTable(
     meff: float | None = None,
     mk: float | None = None,
     mloo_k: float | None = None,
+    rfx_joint_ece: float | None = None,
+    rfx_joint_eace: float | None = None,
 ) -> str:
     # in-sample ppNLL omitted (optimistic; use LOO NLL instead)
     rows = [
         row for row in [
             ['Estimation time / ds [s]', tpd],
+            ['RFX Joint ECE', rfx_joint_ece],
+            ['RFX Joint EACE', rfx_joint_eace],
             [fit_label, mfit],
             ['Median LOO-NLL', mloonll],
             ['Median LOO Pareto k', mloo_k],
@@ -193,5 +285,5 @@ def flatTable(
         ]
         if row[1] is not None
     ]
-    result = tabulate(rows, floatfmt='.3f', tablefmt='simple') if rows else ''
+    result = tabulate(rows, floatfmt='.3f', tablefmt='simple')
     return f'{result}\n'
