@@ -190,11 +190,11 @@ def flatTable(
     rows = [
         row for row in [
             ['Estimation time / ds [s]', tpd],
-            ['Median LOO-NLL', mloonll],
             [fit_label, mfit],
+            ['Median LOO-NLL', mloonll],
+            ['Median LOO Pareto k', mloo_k],
             ['Median IS Efficiency', meff],
             ['Median IS Pareto k', mk],
-            ['Median LOO Pareto k', mloo_k],
         ]
         if row[1] is not None
     ]
