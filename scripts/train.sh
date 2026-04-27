@@ -24,6 +24,7 @@ while [[ $# -gt 0 ]]; do
         --epochs) EPOCHS="$2"; shift 2 ;;
         --seed) SEED="$2"; shift 2 ;;
         --accum) ACCUM=1; shift ;;
+        --load_latest) LOAD_LATEST=1; shift ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -44,6 +45,9 @@ cd $HOME/metabeta/metabeta/training
 EXTRA_ARGS=()
 if [[ "$ACCUM" -eq 1 ]]; then
     EXTRA_ARGS+=(--bs 16 --accum_steps 2)
+fi
+if [[ "$LOAD_LATEST" -eq 1 ]]; then
+    EXTRA_ARGS+=(--load_latest)
 fi
 
 python train.py \
