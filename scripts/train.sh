@@ -10,7 +10,7 @@
 #SBATCH --constraint=[a100_40gb|a100_80gb|h100_80gb]
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=80G
+#SBATCH --mem=40G
 #SBATCH --time=24:00:00
 
 EPOCHS=4000

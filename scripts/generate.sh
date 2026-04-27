@@ -9,7 +9,7 @@
 #SBATCH --qos cpu_normal
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --mem=16G
 #SBATCH --time=24:00:00
 
 N_EPOCHS=2000
