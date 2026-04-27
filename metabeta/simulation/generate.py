@@ -64,7 +64,7 @@ def setup() -> argparse.Namespace:
     # Template-based config generation (primary interface)
     parser.add_argument('--size', type=str, default='small', help='Size preset: tiny|small|medium|large|huge')
     parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
-    parser.add_argument('--ds_type', type=str, default='mixed', help='Dataset type: toy|flat|scm|mixed|sampled|observed')
+    parser.add_argument('--ds_type', type=str, default='sampled', help='Dataset type: toy|flat|scm|mixed|sampled|observed')
 
     # Alternative: load config from a saved YAML (e.g. outputs/data/{data_id}/config.yaml)
     parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
@@ -367,7 +367,7 @@ class Generator:
                 round=True,
             )
             n_hint = n_hint_pg * m
-            n_hint = np.clip(n_hint, m * self.cfg.min_n, m * self.cfg.max_n)
+            n_hint = np.clip(n_hint, m * self.cfg.min_n, np.minimum(m * self.cfg.max_n, self.cfg.max_n_total))
             ns_slices = [
                 np.full(int(m[i]), int(n_hint[i]) // int(m[i]), dtype=int)
                 for i in range(n_datasets)
