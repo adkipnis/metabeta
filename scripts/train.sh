@@ -13,7 +13,7 @@
 #SBATCH --mem=80G
 #SBATCH --time=24:00:00
 
-EPOCHS=2000
+EPOCHS=4000
 ACCUM=0
 
 while [[ $# -gt 0 ]]; do
