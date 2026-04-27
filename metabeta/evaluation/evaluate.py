@@ -32,7 +32,6 @@ from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler, runIS, runSIR
 from metabeta.utils.moe import moeEstimate
 from metabeta.evaluation.summary import getSummary, summaryTable
-from metabeta.evaluation.intervals import RFX_COVERAGE_AGGREGATIONS
 from metabeta.plotting import plotComparison
 
 logger = logging.getLogger('evaluate.py')
@@ -67,12 +66,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--conformal', action=argparse.BooleanOptionalAction)
     parser.add_argument('--k', type=int, default=0, help='pseudo-MoE permuted views (0=off)')
     parser.add_argument('--batch_size', type=int)
-    parser.add_argument(
-        '--rfx_coverage_aggregation',
-        type=str,
-        choices=RFX_COVERAGE_AGGREGATIONS,
-        help='RFX coverage aggregation: group_weighted (default) or slot_mean (legacy)',
-    )
     parser.add_argument('--save_tables', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--outdir', type=str)
 
@@ -126,8 +119,6 @@ class Evaluator:
             self.cfg.k = 0
         if not hasattr(self.cfg, 'save_tables'):
             self.cfg.save_tables = False
-        if not hasattr(self.cfg, 'rfx_coverage_aggregation'):
-            self.cfg.rfx_coverage_aggregation = 'group_weighted'
         if not hasattr(self.cfg, 'outdir'):
             self.cfg.outdir = str(Path(self.dir, '..', 'outputs', 'results'))
 
@@ -314,12 +305,7 @@ class Evaluator:
             batch = rescaleData(batch)
         proposal.to('cpu')
         lf = self.cfg.likelihood_family
-        eval_summary = getSummary(
-            proposal,
-            batch,
-            likelihood_family=lf,
-            rfx_coverage_aggregation=self.cfg.rfx_coverage_aggregation,
-        )
+        eval_summary = getSummary(proposal, batch, likelihood_family=lf)
         summary_table = summaryTable(eval_summary, lf)
         logger.info(summary_table)
         return eval_summary

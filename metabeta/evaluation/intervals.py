@@ -4,7 +4,7 @@ from metabeta.utils.regularization import corrToLower
 
 EPS = 1e-6
 ALPHAS = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
-RFX_COVERAGE_AGGREGATIONS = ('group_weighted', 'slot_mean')
+_RFX_COVERAGE_AGGREGATIONS = ('group_weighted', 'slot_mean')
 
 # --- Credible Intervals
 def getQuantiles(
@@ -95,10 +95,10 @@ def getCoveragePerParameter(
     rfx_coverage_aggregation: str = 'group_weighted',
 ) -> dict[str, torch.Tensor]:
     """get coverage for each parameter type"""
-    if rfx_coverage_aggregation not in RFX_COVERAGE_AGGREGATIONS:
+    if rfx_coverage_aggregation not in _RFX_COVERAGE_AGGREGATIONS:
         raise ValueError(
             f'unknown rfx_coverage_aggregation={rfx_coverage_aggregation!r}; '
-            f'use one of {RFX_COVERAGE_AGGREGATIONS}'
+            f'use one of {_RFX_COVERAGE_AGGREGATIONS}'
         )
 
     out = {}
@@ -129,15 +129,10 @@ def getCoveragePerParameter(
 def getCoverages(
     ci_dicts: dict[float, dict[str, torch.Tensor]],
     data: dict[str, torch.Tensor],
-    rfx_coverage_aggregation: str = 'group_weighted',
 ) -> dict[float, dict[str, torch.Tensor]]:
     out = {}
     for alpha, ci_per_parameter in ci_dicts.items():
-        out[alpha] = getCoveragePerParameter(
-            ci_per_parameter,
-            data,
-            rfx_coverage_aggregation=rfx_coverage_aggregation,
-        )
+        out[alpha] = getCoveragePerParameter(ci_per_parameter, data)
     return out
 
 

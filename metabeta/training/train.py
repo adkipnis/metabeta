@@ -39,7 +39,6 @@ from metabeta.utils.evaluation import (
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler, runIS, runSIR
 from metabeta.evaluation.summary import getSummary, summaryTable
-from metabeta.evaluation.intervals import RFX_COVERAGE_AGGREGATIONS
 from metabeta.plotting import (
     plotRecovery,
     plotCoverage,
@@ -121,12 +120,6 @@ def setup() -> argparse.Namespace:
     # Evaluation settings
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction, help='Run importance sampling evaluation')
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction, help='Generate evaluation plots after each epoch')
-    parser.add_argument(
-        '--rfx_coverage_aggregation',
-        type=str,
-        choices=RFX_COVERAGE_AGGREGATIONS,
-        help='RFX coverage aggregation: group_weighted (default) or slot_mean (legacy)',
-    )
 
     # Saving & loading
     parser.add_argument('--r_tag', type=str, help='Run tag suffix appended to the checkpoint directory name')
@@ -294,9 +287,6 @@ class Trainer:
         self.model = Approximator(self.model_cfg).to(self.device)
         if self.cfg.compile and self.device.type == 'cuda':
             self.model.compile()
-
-        if not hasattr(self.cfg, 'rfx_coverage_aggregation'):
-            self.cfg.rfx_coverage_aggregation = 'group_weighted'
 
         # init optimizer
         self.optimizer = schedulefree.AdamWScheduleFree(self.model.parameters(), lr=self.cfg.lr)
@@ -569,7 +559,6 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             proposal,
             batch,
             likelihood_family=self.cfg.likelihood_family,
-            rfx_coverage_aggregation=self.cfg.rfx_coverage_aggregation,
         )
         summary_table = summaryTable(eval_summary, self.cfg.likelihood_family)
         logger.info(summary_table)

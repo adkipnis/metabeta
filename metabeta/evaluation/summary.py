@@ -45,7 +45,6 @@ def getSummary(
     likelihood_family: int = 0,
     compute_prior: bool = False,
     dataset_chunk_size: int = 16,
-    rfx_coverage_aggregation: str = 'group_weighted',
 ) -> EvaluationSummary:
     out = {}
     t0 = time.perf_counter()
@@ -61,11 +60,7 @@ def getSummary(
     if calibrator is not None:
         ci_dicts = calibrator.apply(ci_dicts)
     out['credible_intervals'] = ci_dicts
-    out['coverage'] = cvrg_dicts = getCoverages(
-        ci_dicts,
-        data,
-        rfx_coverage_aggregation=rfx_coverage_aggregation,
-    )
+    out['coverage'] = cvrg_dicts = getCoverages(ci_dicts, data)
     out['coverage_error'] = getCoverageErrors(cvrg_dicts, log_ratio=False)
     out['log_coverage_ratio'] = getCoverageErrors(cvrg_dicts, log_ratio=True)
     t0 = _t('coverage errors', t0)
