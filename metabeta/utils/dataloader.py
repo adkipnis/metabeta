@@ -245,12 +245,14 @@ def collateGrouped(
 
     # remaining mask handling
     out['mask_m'] = out['ns'] != 0
-    out['mask_mq'] = out['mask_m'].unsqueeze(-1) & out['mask_q'].unsqueeze(-2)
     if 'dperm' in batch[0]:
         out['dperm'] = quickCollate(batch, 'dperm', torch.int64)
         out['qperm'] = quickCollate(batch, 'qperm', torch.int64)
         out['mask_d'] = torch.gather(out['mask_d'], dim=1, index=out['dperm'])
         out['mask_q'] = torch.gather(out['mask_q'], dim=1, index=out['qperm'])
+
+    # mask_mq must be built after any mask_q permutation handling.
+    out['mask_mq'] = out['mask_m'].unsqueeze(-1) & out['mask_q'].unsqueeze(-2)
 
     # collate fit samples if present
     for method in ('nuts', 'advi'):
