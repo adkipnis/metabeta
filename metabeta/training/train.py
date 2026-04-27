@@ -316,7 +316,7 @@ class Trainer:
         wandb.define_metric('train/loss_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/loss_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/mean_nrmse_epoch', step_metric='step/epoch')
-        wandb.define_metric('valid/mean_abs_lcr_epoch', step_metric='step/epoch')
+        wandb.define_metric('valid/mean_eace_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/median_nll_epoch', step_metric='step/epoch')
 
     def close(self) -> None:
@@ -369,9 +369,9 @@ class Trainer:
 
     def getTrackingMetrics(self, eval_summary: EvaluationSummary) -> tuple[float, float, float]:
         mean_nrmse = dictMean(eval_summary.nrmse)
-        mean_abs_lcr = dictMean(eval_summary.abs_lcr)
+        mean_eace = dictMean(eval_summary.eace)
         median_nll = eval_summary.mloonll if eval_summary.mloonll else 0.0
-        return mean_nrmse, mean_abs_lcr, median_nll
+        return mean_nrmse, mean_eace, median_nll
 
     @property
     def info(self) -> str:
@@ -647,13 +647,13 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             loss_train = self.train()
             loss_valid = self.valid()
             mean_nrmse = None
-            mean_abs_lcr = None
+            mean_eace = None
             median_nll = None
 
             # sample on test set
             if epoch % self.cfg.sample_interval == 0:
                 eval_summary = self.sample()
-                mean_nrmse, mean_abs_lcr, median_nll = self.getTrackingMetrics(eval_summary)
+                mean_nrmse, mean_eace, median_nll = self.getTrackingMetrics(eval_summary)
 
             # log epoch
             if self.wandb_run is not None:
@@ -664,7 +664,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                 }
                 if mean_nrmse is not None:
                     logs['valid/mean_nrmse_epoch'] = float(mean_nrmse)
-                    logs['valid/mean_abs_lcr_epoch'] = float(mean_abs_lcr)  # type: ignore
+                    logs['valid/mean_eace_epoch'] = float(mean_eace)  # type: ignore
                     logs['valid/median_nll_epoch'] = float(median_nll)  # type: ignore
                 wandb.log(logs)
 
