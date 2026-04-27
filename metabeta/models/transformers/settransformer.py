@@ -136,6 +136,9 @@ class SetTransformer(nn.Module):
         inv_mask = ~mask if mask is not None else None
         for block in self.blocks[: self.n_isab]:
             x = block(x, key_padding_mask=inv_mask)
+        if self.n_isab > 0:
+            # empty groups (all-masked keys) → mab0 softmax(-inf,...) = NaN; zero them out
+            x = torch.nan_to_num(x, nan=0.0)
 
         # insert pool token before MAB blocks (cls only)
         if self.pooling == 'cls':
