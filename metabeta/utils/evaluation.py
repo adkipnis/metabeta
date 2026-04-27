@@ -335,6 +335,8 @@ class EvaluationSummary:
     tpd: float | None = None  # time per dataset
     loo_nll: torch.Tensor | None = None  # PSIS-LOO NLL (loo_is when IS ran, else loo_raw)
     loo_pareto_k: torch.Tensor | None = None  # per-dataset mean Pareto k from LOO PSIS
+    rfx_joint_ece: float | None = None
+    rfx_joint_eace: float | None = None
 
     def averageOverAlpha(
         self,
