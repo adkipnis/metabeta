@@ -9,7 +9,7 @@
 #SBATCH --qos cpu_normal
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=16G
+#SBATCH --mem=8G
 #SBATCH --time=24:00:00
 
 while [[ $# -gt 0 ]]; do
