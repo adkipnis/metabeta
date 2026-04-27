@@ -26,9 +26,10 @@ def _plotCoverage(
     nominal = [int(100.0 * (1.0 - alpha)) for alpha in cvrg]
 
     # plot coverage per parameter
+    n_colors = len(PALETTE)
     for i, values in enumerate(matrix):
         coverage_i = 100.0 * values
-        ax.plot(nominal, coverage_i, label=names[i], color=PALETTE[i], alpha=0.8, lw=3)
+        ax.plot(nominal, coverage_i, label=names[i], color=PALETTE[i % n_colors], alpha=0.8, lw=3)
 
     # final touches
     limits = (min(nominal), max(nominal))
