@@ -478,7 +478,8 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.cfg.max_grad_norm
                 )
-                if torch.isfinite(grad_norm):
+                step_taken = torch.isfinite(grad_norm)
+                if step_taken:
                     self.optimizer.step()
                     self.global_step += 1
                 self.optimizer.zero_grad(set_to_none=True)
@@ -487,6 +488,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                         {
                             'train/loss_step': float(loss_train),
                             'train/grad_norm': float(grad_norm),
+                            'train/step_skipped': int(not step_taken),
                             'step/global': self.global_step,
                         }
                     )
