@@ -76,6 +76,12 @@ def setup() -> argparse.Namespace:
         default=True,
         help='Also evaluate/plot on the NUTS-converged subset of test datasets',
     )
+    parser.add_argument(
+        '--pred_coverage',
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help='Compute predictive interval coverage/width (adds Pred. EACE and 90%% width to output)',
+    )
 
     args = parser.parse_args()
     args.config = Path('..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge_s2', 'config.yaml')
@@ -315,7 +321,10 @@ class Evaluator:
             batch = rescaleData(batch)
         proposal.to('cpu')
         lf = self.cfg.likelihood_family
-        eval_summary = getSummary(proposal, batch, likelihood_family=lf)
+        pred_cov = getattr(self.cfg, 'pred_coverage', False)
+        eval_summary = getSummary(
+            proposal, batch, likelihood_family=lf, compute_pred_coverage=pred_cov
+        )
         summary_table = summaryTable(eval_summary, lf)
         logger.info(summary_table)
         return eval_summary
@@ -471,7 +480,9 @@ class Evaluator:
 
         f_rhat = (max_rhat > 1.01) if max_rhat is not None else np.zeros(b, bool)
         f_div = total_div > 0
-        f_tree = (mean_treedepth_sat > 0.05) if mean_treedepth_sat is not None else np.zeros(b, bool)
+        f_tree = (
+            (mean_treedepth_sat > 0.05) if mean_treedepth_sat is not None else np.zeros(b, bool)
+        )
         f_ess = (min_ess < 400) if min_ess is not None else np.zeros(b, bool)
         f_ess_tail = (min_ess_tail < 400) if min_ess_tail is not None else np.zeros(b, bool)
 
@@ -499,7 +510,9 @@ class Evaluator:
                 if diag is None:
                     continue
                 ok = np.isfinite(diag) & np.isfinite(loo)
-                r_s = float(spearmanr(diag[ok], loo[ok]).statistic) if ok.sum() > 2 else float('nan')
+                r_s = (
+                    float(spearmanr(diag[ok], loo[ok]).statistic) if ok.sum() > 2 else float('nan')
+                )
                 rows.append([name, r_s])
 
         # --- failure vs clean LOO-NLL ---
