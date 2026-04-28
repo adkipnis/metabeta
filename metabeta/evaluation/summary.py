@@ -51,6 +51,7 @@ def getSummary(
     calibrator: Calibrator | None = None,
     likelihood_family: int = 0,
     compute_prior: bool = False,
+    compute_pred_coverage: bool = True,
     dataset_chunk_size: int = 16,
 ) -> EvaluationSummary:
     out = {}
@@ -122,25 +123,27 @@ def getSummary(
             pp_fits.append(posteriorPredictiveDeviance(pp_c, d_c, w=p_c.weights))
         t_fit += time.perf_counter() - tc
 
-        tc = time.perf_counter()
-        cov_c, wid_c = posteriorPredictiveCoverage(pp_c, d_c, w=p_c.weights)
-        pp_covs.append(cov_c)
-        pp_widths.append(wid_c)
-        t_cov += time.perf_counter() - tc
+        if compute_pred_coverage:
+            tc = time.perf_counter()
+            cov_c, wid_c = posteriorPredictiveCoverage(pp_c, d_c, w=p_c.weights)
+            pp_covs.append(cov_c)
+            pp_widths.append(wid_c)
+            t_cov += time.perf_counter() - tc
 
     logger.debug('  %-30s %.2fs', 'linear predictor (eta)', t_pp)
     logger.debug('  %-30s %.2fs', 'log_prob', t_logp)
     logger.debug('  %-30s %.2fs', 'posterior NLL', t_nll)
     logger.debug('  %-30s %.2fs', 'PSIS-LOO NLL', t_loo)
     logger.debug('  %-30s %.2fs', 'pp fit (R²/AUC/deviance)', t_fit)
-    logger.debug('  %-30s %.2fs', 'predictive coverage/width', t_cov)
+    if compute_pred_coverage:
+        logger.debug('  %-30s %.2fs', 'predictive coverage/width', t_cov)
 
     out['posterior_nll'] = torch.cat(posterior_nlls)
     out['loo_nll'] = torch.cat(loo_nlls)
     out['loo_pareto_k'] = torch.cat(loo_ks)
     out['pp_fit'] = torch.cat(pp_fits) if pp_fits else None
-    out['pp_cov_coverage'] = torch.cat(pp_covs, dim=-1)   # (n_alphas, b)
-    out['pp_cov_width'] = torch.cat(pp_widths, dim=-1)     # (n_alphas, b)
+    out['pp_cov_coverage'] = torch.cat(pp_covs, dim=-1) if pp_covs else None
+    out['pp_cov_width'] = torch.cat(pp_widths, dim=-1) if pp_widths else None
     out['sample_efficiency'] = proposal.efficiency
     out['pareto_k'] = proposal.pareto_k
     out['tpd'] = proposal.tpd

@@ -236,6 +236,60 @@ def _predQuantile(
     return q_flat.reshape(b, m, n, -1).permute(3, 0, 1, 2)   # (n_levels, b, m, n)
 
 
+def _ppcNormal(
+    pp: D.Normal,
+    y_obs: torch.Tensor,
+    mask: torch.Tensor,
+    mask_f: torch.Tensor,
+    n_obs: torch.Tensor,
+    alphas: list[float],
+    w: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Fast analytic path for Normal predictive distributions.
+
+    Avoids sampling and sorting by working directly with the Normal CDF.
+
+    Coverage: for each observation, compute the mixture CDF at y_obs —
+        F(y) = mean_s[ Φ((y - mu_s) / sigma_s) ]
+    then y is inside the (1-alpha) interval iff alpha/2 <= F(y) <= 1 - alpha/2.
+
+    Width: moment approximation for the Normal mixture —
+        std_mix = sqrt( E_s[sigma_s^2] + Var_s[mu_s] )
+    which is exact when all components are identical and a tight lower bound
+    otherwise. Sufficient for comparing dispersion across methods.
+    """
+    # mixture CDF at y_obs — shape (b, m, n)
+    y_exp = y_obs.unsqueeze(-1)   # (b, m, n, 1) broadcasts against (b, m, n, s)
+    if w is None:
+        F_y = pp.cdf(y_exp).mean(dim=-1)
+        mu_var = pp.mean.var(dim=-1)
+        sigma2_mean = pp.variance.mean(dim=-1)
+    else:
+        w_norm = w / w.sum(-1, keepdim=True).clamp(min=1e-12)
+        w_exp = w_norm[:, None, None, :]
+        F_y = (pp.cdf(y_exp) * w_exp).sum(dim=-1)
+        mu = pp.mean
+        mu_w = (mu * w_exp).sum(-1)
+        mu_var = ((mu**2) * w_exp).sum(-1) - mu_w**2
+        sigma2_mean = (pp.variance * w_exp).sum(-1)
+
+    std_mix = (mu_var.clamp(min=0) + sigma2_mean).sqrt()   # (b, m, n)
+
+    n_alphas = len(alphas)
+    b = y_obs.shape[0]
+    coverage = y_obs.new_zeros(n_alphas, b)
+    width = y_obs.new_zeros(n_alphas, b)
+    _std_normal = D.Normal(y_obs.new_zeros(()), y_obs.new_ones(()))
+
+    for a, alpha in enumerate(alphas):
+        inside = ((F_y >= alpha / 2) & (F_y <= 1 - alpha / 2)) & mask
+        coverage[a] = inside.float().sum(dim=(1, 2)) / n_obs
+        z = _std_normal.icdf(y_obs.new_tensor(1 - alpha / 2))
+        width[a] = (2 * z * std_mix * mask_f).sum(dim=(1, 2)) / n_obs
+
+    return coverage, width
+
+
 def posteriorPredictiveCoverage(
     pp: D.Distribution,
     data: dict[str, torch.Tensor],
@@ -244,17 +298,18 @@ def posteriorPredictiveCoverage(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """In-sample predictive interval coverage and width for observed y.
 
-    Draws one predictive replicate per posterior sample, then computes
-    equal-tailed (1-alpha)*100% intervals via quantiles over the sample
-    dimension. Reports per-dataset coverage and mean interval width.
+    For Normal predictive distributions uses an analytic CDF path (fast,
+    no sampling or sorting). For other families falls back to drawing one
+    replicate per posterior sample and computing empirical quantiles.
 
     Comparing coverage and width between MB and NUTS reveals whether a
-    LOO-NLL gap stems from over/under-dispersion in the predictive distribution
-    rather than from posterior parameter quality (which is captured by ECE/NRMSE).
+    LOO-NLL gap stems from over/under-dispersion in the predictive
+    distribution rather than from posterior parameter quality
+    (which ECE/NRMSE already capture).
 
     Parameters
     ----------
-    w      : IS weights (b, s). When provided, uses weighted quantiles.
+    w      : IS weights (b, s). When provided uses weighted statistics.
     alphas : significance levels. Defaults to the standard parameter ALPHAS.
 
     Returns
@@ -272,6 +327,11 @@ def posteriorPredictiveCoverage(
     mask_f = mask.float()
     n_obs = mask_f.sum(dim=(1, 2)).clamp(min=1)   # (b,)
 
+    if isinstance(pp, D.Normal):
+        with torch.no_grad():
+            return _ppcNormal(pp, y_obs, mask, mask_f, n_obs, alphas, w)
+
+    # Sampling fallback for non-Normal families
     with torch.no_grad():
         y_rep = pp.sample()   # (b, m, n, s)
 

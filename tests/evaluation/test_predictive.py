@@ -237,3 +237,43 @@ def test_ppc_respects_mask():
     assert cov.shape == (1, b)
     assert torch.isfinite(cov).all()
     assert torch.isfinite(wid).all()
+
+
+def test_ppc_normal_fast_path_matches_sampling():
+    """Normal fast path (CDF) should agree with the sampling path on coverage."""
+    from metabeta.evaluation.predictive import _predQuantile
+
+    torch.manual_seed(99)
+    b, m, n, s = 8, 4, 12, 4096   # large s for accurate sampling reference
+
+    loc = torch.randn(b, m, n, s)
+    scale = torch.rand(b, m, n, s) + 0.5
+    pp_normal = D.Normal(loc, scale)
+
+    y = torch.randn(b, m, n)
+    data = {'y': y, 'mask_n': torch.ones(b, m, n, dtype=torch.bool)}
+    alphas = [0.1, 0.5]
+
+    # Normal fast path
+    cov_fast, wid_fast = posteriorPredictiveCoverage(pp_normal, data, alphas=alphas)
+
+    # Sampling reference (force the slow path via a wrapper distribution)
+    class _Wrap(D.Distribution):
+        arg_constraints = {}
+        has_rsample = False
+
+        def __init__(self, base):
+            super().__init__(base.batch_shape, base.event_shape, validate_args=False)
+            self._base = base
+
+        def sample(self, sample_shape=torch.Size()):
+            return self._base.sample(sample_shape)
+
+        def log_prob(self, x):
+            return self._base.log_prob(x)
+
+    cov_slow, _ = posteriorPredictiveCoverage(_Wrap(pp_normal), data, alphas=alphas)
+
+    # Coverage should agree to within Monte Carlo noise (< 3pp on 4096 samples)
+    diff = (cov_fast - cov_slow).abs().mean().item()
+    assert diff < 0.03, f'Normal fast path vs sampling path mean coverage diff = {diff:.4f}'
