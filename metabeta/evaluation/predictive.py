@@ -72,7 +72,7 @@ def posteriorPredictiveNLL(
     pp: D.Distribution,
     data: dict[str, torch.Tensor],
     w: torch.Tensor | None = None,
-    mode: Literal['expected', 'mixture'] = 'mixture',
+    mode: Literal['expected', 'mixture', 'loo_proxy'] = 'mixture',
     log_p: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
@@ -81,6 +81,8 @@ def posteriorPredictiveNLL(
         E_p(theta|D)[ -log p(y | theta) ]
     mode='mixture':
         -log E_p(theta|D)[ p(y | theta) ]
+    mode='loo_proxy':
+        log E_p(theta|D)[ 1/p(y | theta) ]  — naive IS LOO estimate; always >= mixture NLL
     """
     if log_p is None:
         y_obs = data['y'].unsqueeze(-1)   # (b, m, n, 1)
@@ -101,6 +103,14 @@ def posteriorPredictiveNLL(
             log_w = w.log().unsqueeze(1).unsqueeze(1)
             log_mix = torch.logsumexp(log_p + log_w, dim=-1)
         return -(log_mix * obs_mask).sum(dim=(1, 2)) / n_obs
+    elif mode == 'loo_proxy':
+        if w is None:
+            s = log_p.shape[-1]
+            log_loo = torch.logsumexp(-log_p, dim=-1) - math.log(s)
+        else:
+            log_w = w.log().unsqueeze(1).unsqueeze(1)
+            log_loo = torch.logsumexp(-log_p + log_w, dim=-1)
+        return (log_loo * obs_mask).sum(dim=(1, 2)) / n_obs
     else:
         raise ValueError(f'unknown mode: {mode}')
 

@@ -453,7 +453,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                 batch, summaries, n_samples=getattr(self.cfg, 'n_loss_samples', 64)
             )
             pp = getPosteriorPredictive(proposal, batch, self.cfg.likelihood_family)
-            L_pred = posteriorPredictiveNLL(pp, batch, w=proposal.weights).mean()
+            L_pred = posteriorPredictiveNLL(pp, batch, mode='mixture').mean() # Alternative: loo_proxy with smaller lambda
             pred_nll_weight = getattr(self.cfg, 'pred_nll_weight', 0.1)
             return fkl + pred_nll_weight * L_pred
 
