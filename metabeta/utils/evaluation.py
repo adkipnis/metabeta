@@ -184,8 +184,7 @@ class Proposal:
     def slice_b(self, start: int, end: int) -> 'Proposal':
         """Return a view of this proposal restricted to datasets [start:end]."""
         new_data = {
-            src: {k: v[start:end] for k, v in inner.items()}
-            for src, inner in self.data.items()
+            src: {k: v[start:end] for k, v in inner.items()} for src, inner in self.data.items()
         }
         corr = self._corr_rfx[start:end] if self._corr_rfx is not None else None
         sliced = Proposal(
@@ -338,6 +337,8 @@ class EvaluationSummary:
     loo_pareto_k: torch.Tensor | None = None  # per-dataset mean Pareto k from LOO PSIS
     rfx_joint_ece: float | None = None
     rfx_joint_eace: float | None = None
+    pp_cov_coverage: torch.Tensor | None = None   # (n_alphas, b) predictive interval coverage
+    pp_cov_width: torch.Tensor | None = None       # (n_alphas, b) predictive interval width
 
     def averageOverAlpha(
         self,
@@ -402,6 +403,31 @@ class EvaluationSummary:
         if self.pp_fit is not None:
             return self.pp_fit.nanmedian().item()
 
+    @property
+    def pp_eace(self) -> float | None:
+        """Mean absolute predictive coverage error, then median over datasets."""
+        if self.pp_cov_coverage is None:
+            return None
+        from metabeta.evaluation.intervals import ALPHAS
+
+        n = min(len(ALPHAS), self.pp_cov_coverage.shape[0])
+        nominals = self.pp_cov_coverage.new_tensor([1.0 - a for a in ALPHAS[:n]])
+        err = (self.pp_cov_coverage[:n] - nominals.unsqueeze(-1)).abs()   # (n, b)
+        return float(err.mean(dim=0).median().item())
+
+    @property
+    def pp_width_90(self) -> float | None:
+        """Median 90% predictive interval width (alpha=0.1) over datasets."""
+        if self.pp_cov_width is None:
+            return None
+        from metabeta.evaluation.intervals import ALPHAS
+
+        try:
+            idx = ALPHAS.index(0.1)
+        except ValueError:
+            idx = 0
+        return float(self.pp_cov_width[idx].median().item())
+
 
 def nutsConvergeMask(batch: dict[str, torch.Tensor]) -> np.ndarray | None:
     """Boolean mask (shape b) that is True for NUTS-converged datasets.
@@ -444,10 +470,7 @@ def nutsConvergeMask(batch: dict[str, torch.Tensor]) -> np.ndarray | None:
 def subsetProposal(proposal: 'Proposal', mask: np.ndarray) -> 'Proposal':
     """Return a new Proposal restricted to datasets selected by a boolean mask."""
     idx = torch.from_numpy(mask)
-    new_data = {
-        src: {k: v[idx] for k, v in inner.items()}
-        for src, inner in proposal.data.items()
-    }
+    new_data = {src: {k: v[idx] for k, v in inner.items()} for src, inner in proposal.data.items()}
     corr = proposal._corr_rfx[idx] if proposal._corr_rfx is not None else None
     sub = Proposal(
         new_data,
