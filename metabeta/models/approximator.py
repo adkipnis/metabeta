@@ -71,7 +71,7 @@ class Approximator(nn.Module):
         """
         if not self.analytical_context:
             return 0
-        return self.d_ffx +  self.d_rfx + self.d_corr + 1
+        return self.d_ffx + self.d_rfx + self.d_corr + 1
 
     def _analyticsLocalDim(self) -> int:
         """Dimension added to local context by GLMM stats.
@@ -219,7 +219,9 @@ class Approximator(nn.Module):
                 blup_est = stats['blup_est'].clamp(-CLAMP, CLAMP)   # (B, m, q)
                 blup_std = stats['blup_var'].clamp(min=0.0).sqrt().clamp(max=CLAMP)  # (B, m, q)
                 sigma_rfx_sq = stats['sigma_rfx_est'].unsqueeze(-2) ** 2  # (B, 1, q)
-                lambda_g = (1.0 - stats['blup_var'] / (sigma_rfx_sq + 1e-8)).clamp(0.0, 1.0)   # (B, m, q)
+                lambda_g = (1.0 - stats['blup_var'] / (sigma_rfx_sq + 1e-8)).clamp(
+                    0.0, 1.0
+                )   # (B, m, q)
                 # resid_g = stats['resid_g'].clamp(-CLAMP, CLAMP)   # (B, m, 1)
                 out += [blup_est, blup_std, lambda_g]
         else:
@@ -339,6 +341,7 @@ class Approximator(nn.Module):
         self,
         data: dict[str, torch.Tensor],
         summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
+        ancestral: bool = False,
     ) -> dict[str, torch.Tensor]:
         """training method: learn conditional forward pass"""
         log_probs = {}
@@ -361,7 +364,13 @@ class Approximator(nn.Module):
         targets_l = self._targets(data, local=True)
         targets_l = self._preprocess(targets_l, local=True)
         mask_l = self._masks(data, local=True)
-        context_l = self._localContext(summary_l, targets_g)
+        if ancestral:
+            # sample globals and use them as context so posterior_l trains on the
+            # same input distribution it sees at inference (closes teacher-forcing gap)
+            samples_g, _ = self.posterior_g.sample(1, context=summary_g, mask=mask_g)  # type: ignore
+            context_l = self._localContext(summary_l, samples_g.squeeze(-2).detach())
+        else:
+            context_l = self._localContext(summary_l, targets_g)
         log_probs['local'] = self.posterior_l.logProb(  # type: ignore
             targets_l, context=context_l, mask=mask_l
         )
