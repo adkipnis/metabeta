@@ -1,5 +1,6 @@
 from typing import Literal, Sequence
 from dataclasses import dataclass
+import numpy as np
 import torch
 from metabeta.utils.dataloader import toDevice
 from metabeta.utils.regularization import unconstrainedToCholeskyCorr
@@ -400,6 +401,66 @@ class EvaluationSummary:
     def mfit(self) -> None | float:  # median R² or AUC
         if self.pp_fit is not None:
             return self.pp_fit.nanmedian().item()
+
+
+def nutsConvergeMask(batch: dict[str, torch.Tensor]) -> np.ndarray | None:
+    """Boolean mask (shape b) that is True for NUTS-converged datasets.
+
+    Failure criteria (any one is sufficient):
+      - R-hat > 1.01 on any parameter
+      - Any divergences
+      - Mean tree-depth saturation > 5% (averaged over chains)
+      - Min bulk ESS < 400 or min tail ESS < 400
+    """
+    if 'nuts_divergences' not in batch:
+        return None
+
+    def _field(key: str) -> np.ndarray | None:
+        return batch[key].numpy().astype(np.float64) if key in batch else None
+
+    def _param_stat(arr: np.ndarray | None, fn) -> np.ndarray | None:
+        if arr is None:
+            return None
+        a = arr.copy()
+        a[a <= 0] = np.nan
+        return fn(a, axis=-1)
+
+    total_div = batch['nuts_divergences'].numpy().sum(-1)          # (b,)
+    max_rhat = _param_stat(_field('nuts_rhat'), np.nanmax)
+    min_ess = _param_stat(_field('nuts_ess'), np.nanmin)
+    min_ess_tail = _param_stat(_field('nuts_ess_tail'), np.nanmin)
+    treedepth = _field('nuts_max_treedepth')
+    mean_treedepth_sat = treedepth.mean(-1) if treedepth is not None else None
+
+    b = len(total_div)
+    f_rhat = (max_rhat > 1.01) if max_rhat is not None else np.zeros(b, bool)
+    f_div = total_div > 0
+    f_tree = (mean_treedepth_sat > 0.05) if mean_treedepth_sat is not None else np.zeros(b, bool)
+    f_ess = (min_ess < 400) if min_ess is not None else np.zeros(b, bool)
+    f_ess_tail = (min_ess_tail < 400) if min_ess_tail is not None else np.zeros(b, bool)
+    return ~(f_rhat | f_div | f_tree | f_ess | f_ess_tail)
+
+
+def subsetProposal(proposal: 'Proposal', mask: np.ndarray) -> 'Proposal':
+    """Return a new Proposal restricted to datasets selected by a boolean mask."""
+    idx = torch.from_numpy(mask)
+    new_data = {
+        src: {k: v[idx] for k, v in inner.items()}
+        for src, inner in proposal.data.items()
+    }
+    corr = proposal._corr_rfx[idx] if proposal._corr_rfx is not None else None
+    sub = Proposal(
+        new_data,
+        has_sigma_eps=proposal.has_sigma_eps,
+        d_corr=proposal.d_corr,
+        corr_rfx=corr,
+    )
+    sub.reff = proposal.reff
+    sub.tpd = proposal.tpd
+    sub.is_results = {
+        k: v[idx] if torch.is_tensor(v) else v for k, v in proposal.is_results.items()
+    }
+    return sub
 
 
 def dictMean(td: dict[str, torch.Tensor]) -> float:
