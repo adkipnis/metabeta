@@ -256,9 +256,7 @@ class RationalQuadratic(CouplingTransform):
         # --- derivatives: interior knots via softplus; boundary = weight (matches affine tail slope)
         derivatives = params['derivatives']
         derivatives = self.min_deriv + F.softplus(derivatives + self._shift)
-        derivatives = F.pad(derivatives, (1, 1))
-        derivatives[..., 0] = weight.squeeze(-1)
-        derivatives[..., -1] = weight.squeeze(-1)
+        derivatives = torch.cat([weight, derivatives, weight], dim=-1)
 
         # --- bounds: left softclamped to ±default_size; delta_x via softplus ≈ default_delta at zero init
         left = self.default_left + self.default_delta * torch.tanh(
