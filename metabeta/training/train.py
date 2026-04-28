@@ -110,7 +110,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--lr', type=float, help='Learning rate')
     parser.add_argument('--accum_steps', type=int, help='Gradient accumulation steps; effective batch size = bs × accum_steps (default = 1)')
     parser.add_argument('--loss_type', type=str, help='Loss type: forward|backward|mixed (default = forward)')
-    parser.add_argument('--ancestral_forward', action=argparse.BooleanOptionalAction, help='Sample globals as local-flow context during forward KL (closes teacher-forcing gap, default = False)')
+    parser.add_argument('--ancestral', action=argparse.BooleanOptionalAction, help='Sample globals as local-flow context during forward KL (closes teacher-forcing gap, default = False)')
     parser.add_argument('--n_samples', type=int, help='Posterior samples drawn per evaluation dataset (default = 512)')
     parser.add_argument('--patience', type=int, help='Early stopping patience in epochs; 0 = disabled (default = 0)')
     parser.add_argument('--sample_interval', type=int, help='Run full posterior evaluation every N epochs (default = 20)')
@@ -418,7 +418,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
 
         # forward KL loss
         if mode == 'forward':
-            ancestral = getattr(self.cfg, 'ancestral_forward', False)
+            ancestral = getattr(self.cfg, 'ancestral', False)
             log_probs = self.model.forward(batch, summaries, ancestral=ancestral)
             lq_g = log_probs['global']
             lq_l = log_probs['local'] * mask

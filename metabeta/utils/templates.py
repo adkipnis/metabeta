@@ -57,7 +57,9 @@ class SimulationConfig(BaseModel):
     max_n: int = Field(gt=0)
     max_n_total: int = Field(gt=0)
     min_bg_df: int = Field(ge=0, default=0)  # minimum between-group df (m − q); 0 = unconstrained
-    min_within_df: int = Field(ge=0, default=2)  # minimum within-group df (n_g − q); prevents near-singular ZtZ
+    min_within_df: int = Field(
+        ge=0, default=2
+    )  # minimum within-group df (n_g − q); prevents near-singular ZtZ
     data_id: Optional[str] = None  # Auto-generated if not provided
 
     @field_validator('max_d')
@@ -103,12 +105,12 @@ CLI_ONLY_PARAMS: set[str] = {
 # Fields excluded from config.yaml (session/environment specific, one-time actions,
 # or generate.py runtime params that leak into training configs via cli_only_defaults).
 CONFIG_YAML_EXCLUDE: set[str] = CLI_ONLY_PARAMS | {
-    'device',       # environment-specific
-    'verbosity',    # session preference
-    'partition',    # generate.py runtime param
-    'begin',        # generate.py runtime param
-    'loop',         # generate.py runtime param
-    'sgld',         # generate.py runtime param
+    'device',  # environment-specific
+    'verbosity',  # session preference
+    'partition',  # generate.py runtime param
+    'begin',  # generate.py runtime param
+    'loop',  # generate.py runtime param
+    'sgld',  # generate.py runtime param
 }
 
 
@@ -127,7 +129,7 @@ class TrainingConfig(BaseModel):
     lr: float = Field(gt=0, default=3e-4)
     max_grad_norm: float = Field(gt=0, default=1.0)
     loss_type: str = 'forward'
-    ancestral_forward: bool = False
+    ancestral: bool = False
     patience: int = Field(ge=0, default=0)
     sample_interval: int = Field(gt=0, default=20)
     skip_ref: bool = False
@@ -388,7 +390,7 @@ def setupConfigParser(
         'loop': False,
         'sgld': False,
         # training flags added after initial release; default keeps old behaviour
-        'ancestral_forward': False,
+        'ancestral': False,
     }
 
     for key, default_value in cli_only_defaults.items():
