@@ -45,7 +45,9 @@ def setup() -> argparse.Namespace:
 
     # Primary: Load from checkpoint config
     parser.add_argument('--checkpoint', type=str, help='Path to checkpoint directory')
-    parser.add_argument('--prefix', type=str, default='best', help='Checkpoint prefix: best or latest')
+    parser.add_argument(
+        '--prefix', type=str, default='best', help='Checkpoint prefix: best or latest'
+    )
 
     # Legacy: Load from config file
     parser.add_argument('--config', type=str, help='Path to custom YAML config file')
@@ -377,6 +379,8 @@ class Evaluator:
             'tpd': False,
             'IS_eff': True,
             'Pareto_k': False,
+            'ppEACE': False,
+            'ppWidth90': False,
         }
         direction = {k: v for k, v in direction.items() if k in metric_names}
         best = self._bestIndices(rows, metric_names, direction)
@@ -511,8 +515,7 @@ class Evaluator:
         corr_table = tabulate(
             rows, headers=['Diagnostic', 'ρ(LOO-NLL)'], floatfmt='.3f', tablefmt='simple'
         )
-        logger.info('\nNUTS diagnostics (%d datasets)\n%s\n%s\n',
-                    b, corr_table, '\n'.join(lines))
+        logger.info('\nNUTS diagnostics (%d datasets)\n%s\n%s\n', b, corr_table, '\n'.join(lines))
 
     def _makeRow(self, label: str, summary: EvaluationSummary, fit_label: str) -> dict:
         return {
@@ -527,6 +530,8 @@ class Evaluator:
             'tpd': summary.tpd,
             'IS_eff': summary.meff,
             'Pareto_k': summary.mk,
+            'ppEACE': summary.pp_eace,
+            'ppWidth90': summary.pp_width_90,
         }
 
     def go(self) -> None:
