@@ -326,6 +326,17 @@ def collateFits(
     return out
 
 
+def subsetBatch(
+    batch: dict[str, torch.Tensor], mask: np.ndarray
+) -> dict[str, torch.Tensor]:
+    """Filter a collated batch dict to the datasets selected by a boolean mask."""
+    idx = torch.from_numpy(mask)
+    return {
+        k: v[idx] if torch.is_tensor(v) and v.shape[0] == len(mask) else v
+        for k, v in batch.items()
+    }
+
+
 class SortishBatchSampler(torch.utils.data.Sampler[list[int]]):
     """Batch sampler that sorts collection to reduce memory demands"""
 
