@@ -7,11 +7,17 @@ from tabulate import tabulate
 from metabeta.posthoc.conformal import Calibrator
 from metabeta.utils.evaluation import Proposal, EvaluationSummary, dictMean
 from metabeta.evaluation.point import getPointEstimates, getRMSE, getCorrelation
-from metabeta.evaluation.intervals import ALPHAS, getCoverageErrors, getCoverages, getCredibleIntervals
+from metabeta.evaluation.intervals import (
+    ALPHAS,
+    getCoverageErrors,
+    getCoverages,
+    getCredibleIntervals,
+)
 from metabeta.evaluation.predictive import (
     getPriorSamples,
     getPosteriorPredictive,
     posteriorPredictiveAUC,
+    posteriorPredictiveCoverage,
     posteriorPredictiveDeviance,
     posteriorPredictiveNLL,
     posteriorPredictiveR2,
@@ -80,7 +86,8 @@ def getSummary(
     chunk = min(dataset_chunk_size, b)
     logger.debug('  %-30s b=%d chunk=%d', 'predictive (chunked)', b, chunk)
     posterior_nlls, loo_nlls, loo_ks, pp_fits = [], [], [], []
-    t_pp = t_logp = t_nll = t_loo = t_fit = 0.0
+    pp_covs, pp_widths = [], []
+    t_pp = t_logp = t_nll = t_loo = t_fit = t_cov = 0.0
 
     for start in range(0, b, chunk):
         end = min(start + chunk, b)
@@ -115,16 +122,25 @@ def getSummary(
             pp_fits.append(posteriorPredictiveDeviance(pp_c, d_c, w=p_c.weights))
         t_fit += time.perf_counter() - tc
 
+        tc = time.perf_counter()
+        cov_c, wid_c = posteriorPredictiveCoverage(pp_c, d_c, w=p_c.weights)
+        pp_covs.append(cov_c)
+        pp_widths.append(wid_c)
+        t_cov += time.perf_counter() - tc
+
     logger.debug('  %-30s %.2fs', 'linear predictor (eta)', t_pp)
     logger.debug('  %-30s %.2fs', 'log_prob', t_logp)
     logger.debug('  %-30s %.2fs', 'posterior NLL', t_nll)
     logger.debug('  %-30s %.2fs', 'PSIS-LOO NLL', t_loo)
     logger.debug('  %-30s %.2fs', 'pp fit (R²/AUC/deviance)', t_fit)
+    logger.debug('  %-30s %.2fs', 'predictive coverage/width', t_cov)
 
     out['posterior_nll'] = torch.cat(posterior_nlls)
     out['loo_nll'] = torch.cat(loo_nlls)
     out['loo_pareto_k'] = torch.cat(loo_ks)
     out['pp_fit'] = torch.cat(pp_fits) if pp_fits else None
+    out['pp_cov_coverage'] = torch.cat(pp_covs, dim=-1)   # (n_alphas, b)
+    out['pp_cov_width'] = torch.cat(pp_widths, dim=-1)     # (n_alphas, b)
     out['sample_efficiency'] = proposal.efficiency
     out['pareto_k'] = proposal.pareto_k
     out['tpd'] = proposal.tpd
@@ -222,6 +238,8 @@ def summaryTable(s: EvaluationSummary, likelihood_family: int = 0) -> str:
         s.mloo_k,
         s.rfx_joint_ece,
         s.rfx_joint_eace,
+        s.pp_eace,
+        s.pp_width_90,
     )
     return long_table + '\n' + flat_table
 
@@ -245,19 +263,28 @@ def longTable(
 
     keys = [k for k in names if k in corr]
     rows = [
-        [to_float(x) for x in [names[k], corr[k], nrmse[k], ece.get(k), eace.get(k)]]
-        for k in keys
+        [to_float(x) for x in [names[k], corr[k], nrmse[k], ece.get(k), eace.get(k)]] for k in keys
     ]
     rows.append(
-        ['Average', _dictMeanExcl(corr), _dictMeanExcl(nrmse), _dictMeanExcl(ece), _dictMeanExcl(eace)]
+        [
+            'Average',
+            _dictMeanExcl(corr),
+            _dictMeanExcl(nrmse),
+            _dictMeanExcl(ece),
+            _dictMeanExcl(eace),
+        ]
     )
-    return '\n' + tabulate(
-        rows,
-        headers=['', 'R', 'NRMSE', 'ECE', 'EACE'],
-        floatfmt='.3f',
-        tablefmt='simple',
-        missingval='-',
-    ) + '\n'
+    return (
+        '\n'
+        + tabulate(
+            rows,
+            headers=['', 'R', 'NRMSE', 'ECE', 'EACE'],
+            floatfmt='.3f',
+            tablefmt='simple',
+            missingval='-',
+        )
+        + '\n'
+    )
 
 
 def flatTable(
@@ -270,18 +297,21 @@ def flatTable(
     mloo_k: float | None = None,
     rfx_joint_ece: float | None = None,
     rfx_joint_eace: float | None = None,
+    pp_eace: float | None = None,
+    pp_width_90: float | None = None,
 ) -> str:
     # in-sample ppNLL omitted (optimistic; use LOO NLL instead)
     rows = [
-        row for row in [
+        row
+        for row in [
             ['Estimation time / ds [s]', tpd],
             ['RFX Joint ECE', rfx_joint_ece],
             ['RFX Joint EACE', rfx_joint_eace],
-            [fit_label, mfit],
+            ['Pred. EACE', pp_eace],
+            ['Median 90% pred. width', pp_width_90],
             ['Median LOO-NLL', mloonll],
             ['Median LOO Pareto k', mloo_k],
-            ['Median IS Efficiency', meff],
-            ['Median IS Pareto k', mk],
+            [fit_label, mfit],
         ]
         if row[1] is not None
     ]
