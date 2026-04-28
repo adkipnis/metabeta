@@ -130,6 +130,8 @@ class TrainingConfig(BaseModel):
     max_grad_norm: float = Field(gt=0, default=1.0)
     loss_type: str = 'forward'
     ancestral: bool = False
+    n_loss_samples: int = Field(gt=0, default=64)
+    pred_nll_weight: float = 0.1
     patience: int = Field(ge=0, default=0)
     sample_interval: int = Field(gt=0, default=20)
     skip_ref: bool = False
@@ -391,6 +393,8 @@ def setupConfigParser(
         'sgld': False,
         # training flags added after initial release; default keeps old behaviour
         'ancestral': False,
+        'n_loss_samples': 64,
+        'pred_nll_weight': 0.1,
     }
 
     for key, default_value in cli_only_defaults.items():

@@ -39,6 +39,7 @@ from metabeta.utils.evaluation import (
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler, runIS, runSIR
 from metabeta.evaluation.summary import getSummary, summaryTable
+from metabeta.evaluation.predictive import getPosteriorPredictive, posteriorPredictiveNLL
 from metabeta.plotting import (
     plotRecovery,
     plotCoverage,
@@ -109,8 +110,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--bs', type=int, help='Batch size (number of datasets per step, default = 32)')
     parser.add_argument('--lr', type=float, help='Learning rate')
     parser.add_argument('--accum_steps', type=int, help='Gradient accumulation steps; effective batch size = bs × accum_steps (default = 1)')
-    parser.add_argument('--loss_type', type=str, help='Loss type: forward|backward|mixed (default = forward)')
+    parser.add_argument('--loss_type', type=str, help='Loss type: forward|backward|mixed|predictive (default = forward)')
     parser.add_argument('--ancestral', action=argparse.BooleanOptionalAction, help='Sample globals as local-flow context during forward KL (closes teacher-forcing gap, default = False)')
+    parser.add_argument('--n_loss_samples', type=int, help='Posterior samples for backward KL and predictive NLL loss modes (default = 64)')
+    parser.add_argument('--pred_nll_weight', type=float, help='Weight for predictive NLL auxiliary term when loss_type=predictive (default = 0.1)')
     parser.add_argument('--n_samples', type=int, help='Posterior samples drawn per evaluation dataset (default = 512)')
     parser.add_argument('--patience', type=int, help='Early stopping patience in epochs; 0 = disabled (default = 0)')
     parser.add_argument('--sample_interval', type=int, help='Run full posterior evaluation every N epochs (default = 20)')
@@ -427,7 +430,9 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
 
         # backward KL loss
         elif mode == 'backward':
-            proposal = self.model.backward(batch, summaries, n_samples=32)
+            proposal = self.model.backward(
+                batch, summaries, n_samples=getattr(self.cfg, 'n_loss_samples', 64)
+            )
             lq_g, lq_l = proposal.log_probs
             lq_l = lq_l * mask
             lq = lq_g + lq_l.sum(1) / m
@@ -440,6 +445,17 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             bkl = self.loss(batch, summaries, mode='backward')
             alpha = (fkl.detach().abs() / (bkl.detach().abs() + 1e-8)).clamp(max=1.0)
             return fkl + 0.05 * alpha * bkl
+
+        # forward KL + predictive NLL auxiliary
+        elif mode == 'predictive':
+            fkl = self.loss(batch, summaries, mode='forward')
+            proposal = self.model.backward(
+                batch, summaries, n_samples=getattr(self.cfg, 'n_loss_samples', 64)
+            )
+            pp = getPosteriorPredictive(proposal, batch, self.cfg.likelihood_family)
+            L_pred = posteriorPredictiveNLL(pp, batch, w=proposal.weights).mean()
+            pred_nll_weight = getattr(self.cfg, 'pred_nll_weight', 0.1)
+            return fkl + pred_nll_weight * L_pred
 
         else:
             raise ValueError(f'unknown loss type: {mode}')
