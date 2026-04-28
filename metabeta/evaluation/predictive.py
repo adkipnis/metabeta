@@ -206,6 +206,95 @@ def posteriorPredictiveSample(
     return y_rep   # (b, m, n, s)
 
 
+def _predQuantile(
+    y_rep: torch.Tensor,
+    levels: torch.Tensor,
+    w: torch.Tensor | None,
+) -> torch.Tensor:
+    """Predictive quantiles at given probability levels.
+
+    y_rep  : (b, m, n, s) — one draw per posterior sample
+    levels : (n_levels,) in [0, 1], sorted ascending
+    w      : (b, s) IS weights or None (uniform)
+
+    Returns (n_levels, b, m, n).
+    """
+    b, m, n, s = y_rep.shape
+    if w is None:
+        return torch.quantile(y_rep, levels, dim=-1)   # (n_levels, b, m, n)
+
+    w_norm = w / w.sum(-1, keepdim=True).clamp(min=1e-12)
+    w_exp = w_norm[:, None, None, :].expand(b, m, n, s)
+    y_sorted, sort_idx = torch.sort(y_rep, dim=-1)
+    w_sorted = torch.gather(w_exp, dim=-1, index=sort_idx)
+    cdf = w_sorted.cumsum(dim=-1).contiguous()          # (b, m, n, s)
+
+    cdf_flat = cdf.reshape(b * m * n, s)
+    levels_exp = levels.unsqueeze(0).expand(b * m * n, -1).contiguous()
+    idx = torch.searchsorted(cdf_flat, levels_exp, right=False).clamp(0, s - 1)
+    q_flat = y_sorted.reshape(b * m * n, s).gather(1, idx)   # (b*m*n, n_levels)
+    return q_flat.reshape(b, m, n, -1).permute(3, 0, 1, 2)   # (n_levels, b, m, n)
+
+
+def posteriorPredictiveCoverage(
+    pp: D.Distribution,
+    data: dict[str, torch.Tensor],
+    w: torch.Tensor | None = None,
+    alphas: list[float] | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """In-sample predictive interval coverage and width for observed y.
+
+    Draws one predictive replicate per posterior sample, then computes
+    equal-tailed (1-alpha)*100% intervals via quantiles over the sample
+    dimension. Reports per-dataset coverage and mean interval width.
+
+    Comparing coverage and width between MB and NUTS reveals whether a
+    LOO-NLL gap stems from over/under-dispersion in the predictive distribution
+    rather than from posterior parameter quality (which is captured by ECE/NRMSE).
+
+    Parameters
+    ----------
+    w      : IS weights (b, s). When provided, uses weighted quantiles.
+    alphas : significance levels. Defaults to the standard parameter ALPHAS.
+
+    Returns
+    -------
+    coverage : (n_alphas, b) — fraction of y_obs inside each interval
+    width    : (n_alphas, b) — mean predictive interval width over valid obs
+    """
+    from metabeta.evaluation.intervals import ALPHAS as _ALPHAS
+
+    if alphas is None:
+        alphas = _ALPHAS
+
+    y_obs = data['y']       # (b, m, n)
+    mask = data['mask_n']   # (b, m, n)
+    mask_f = mask.float()
+    n_obs = mask_f.sum(dim=(1, 2)).clamp(min=1)   # (b,)
+
+    with torch.no_grad():
+        y_rep = pp.sample()   # (b, m, n, s)
+
+    all_levels = sorted({q for alpha in alphas for q in (alpha / 2, 1 - alpha / 2)})
+    levels_t = y_rep.new_tensor(all_levels)
+    quantiles = _predQuantile(y_rep, levels_t, w)   # (n_levels, b, m, n)
+    level_idx = {lv: i for i, lv in enumerate(all_levels)}
+
+    n_alphas = len(alphas)
+    b = y_obs.shape[0]
+    coverage = y_obs.new_zeros(n_alphas, b)
+    width = y_obs.new_zeros(n_alphas, b)
+
+    for a, alpha in enumerate(alphas):
+        q_lo = quantiles[level_idx[alpha / 2]]
+        q_hi = quantiles[level_idx[1 - alpha / 2]]
+        inside = ((y_obs >= q_lo) & (y_obs <= q_hi)) & mask
+        coverage[a] = inside.float().sum(dim=(1, 2)) / n_obs
+        width[a] = ((q_hi - q_lo) * mask_f).sum(dim=(1, 2)) / n_obs
+
+    return coverage, width
+
+
 def intervalCheck(
     t_obs: torch.Tensor,  # (b, )
     t_rep: torch.Tensor,  # (b, s)
