@@ -18,13 +18,15 @@ from metabeta.utils.config import (
     loadDataConfig,
 )
 from metabeta.utils.templates import loadConfigFromCheckpoint
-from metabeta.utils.dataloader import Dataloader, toDevice
+from metabeta.utils.dataloader import Dataloader, toDevice, subsetBatch
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import (
     EvaluationSummary,
     Proposal,
     concatProposalsBatch,
     dictMean,
+    nutsConvergeMask,
+    subsetProposal,
 )
 import numpy as np
 
@@ -43,9 +45,7 @@ def setup() -> argparse.Namespace:
 
     # Primary: Load from checkpoint config
     parser.add_argument('--checkpoint', type=str, help='Path to checkpoint directory')
-    parser.add_argument(
-        '--prefix', type=str, default='best', help='Checkpoint prefix: best or latest'
-    )
+    parser.add_argument('--prefix', type=str, default='best', help='Checkpoint prefix: best or latest')
 
     # Legacy: Load from config file
     parser.add_argument('--config', type=str, help='Path to custom YAML config file')
@@ -61,16 +61,22 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--verbosity', type=int, default=1)
 
     # Evaluation settings (override checkpoint config)
-    parser.add_argument('--n_samples', type=int)
+    parser.add_argument('--n_samples', type=int, default=1000)
     parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
     parser.add_argument('--conformal', action=argparse.BooleanOptionalAction)
     parser.add_argument('--k', type=int, default=0, help='pseudo-MoE permuted views (0=off)')
     parser.add_argument('--batch_size', type=int)
     parser.add_argument('--save_tables', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--outdir', type=str)
+    parser.add_argument(
+        '--converged_subset',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='Also evaluate/plot on the NUTS-converged subset of test datasets',
+    )
 
     args = parser.parse_args()
-    args.config = Path('..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge_s0', 'config.yaml')
+    args.config = Path('..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge_s2', 'config.yaml')
 
     # Load config from checkpoint or file
     if hasattr(args, 'checkpoint') and args.checkpoint:
@@ -119,6 +125,8 @@ class Evaluator:
             self.cfg.k = 0
         if not hasattr(self.cfg, 'save_tables'):
             self.cfg.save_tables = False
+        if not hasattr(self.cfg, 'converged_subset'):
+            self.cfg.converged_subset = False
         if not hasattr(self.cfg, 'outdir'):
             self.cfg.outdir = str(Path(self.dir, '..', 'outputs', 'results'))
 
@@ -316,10 +324,12 @@ class Evaluator:
         summaries: list[EvaluationSummary],
         labels: list[str],
         batch: dict[str, torch.Tensor],
+        plot_dir: Path | None = None,
     ) -> None:
         if self.cfg.rescale:
             batch = rescaleData(batch)
-        plotComparison(summaries, proposals, labels, batch, plot_dir=self.plot_dir, show=True)
+        target_dir = plot_dir if plot_dir is not None else self.plot_dir
+        plotComparison(summaries, proposals, labels, batch, plot_dir=target_dir, show=True)
 
     def testrun(self) -> None:
         full_batch = self.dl_valid.fullBatch()
@@ -421,57 +431,52 @@ class Evaluator:
           1. R-hat > 1.01 on any parameter  — chains didn't converge to the same distribution
           2. Any divergences                 — sampler hit a region of bad geometry
           3. >5% tree-depth saturation      — trajectories truncated, stationary dist. may be wrong
-          4. Min ESS < 400                  — too few effective samples for reliable inference
+          4. Min bulk or tail ESS < 400     — too few effective samples for reliable inference
         """
         if 'nuts_divergences' not in batch:
             return
 
-        import numpy as np
         from scipy.stats import spearmanr
 
         def _nanfield(key: str) -> np.ndarray | None:
             return batch[key].numpy().astype(np.float64) if key in batch else None
 
-        total_div = batch['nuts_divergences'].numpy().sum(-1)   # (b,)
-        duration = batch['nuts_duration'].numpy().ravel()       # (b,)
-
-        ess = _nanfield('nuts_ess')
-        ess_tail = _nanfield('nuts_ess_tail')
-        rhat = _nanfield('nuts_rhat')
-        treedepth = _nanfield('nuts_max_treedepth')  # frac saturated per chain (b, chains)
-
         def _param_stat(arr, fn):
-            """Apply fn over the param axis, masking zero-padded entries."""
             if arr is None:
                 return None
             a = arr.copy()
             a[a <= 0] = np.nan
             return fn(a, axis=-1)
 
-        min_ess = _param_stat(ess, np.nanmin)
+        conv = nutsConvergeMask(batch)  # True = converged
+        fail = ~conv
+        total_div = batch['nuts_divergences'].numpy().sum(-1)
+        duration = batch['nuts_duration'].numpy().ravel()
+
+        ess_tail = _nanfield('nuts_ess_tail')
+        rhat = _nanfield('nuts_rhat')
+        treedepth = _nanfield('nuts_max_treedepth')
+
+        min_ess = _param_stat(_nanfield('nuts_ess'), np.nanmin)
         min_ess_tail = _param_stat(ess_tail, np.nanmin)
         max_rhat = _param_stat(rhat, np.nanmax)
-        mean_treedepth_sat = treedepth.mean(-1) if treedepth is not None else None  # avg over chains
+        mean_treedepth_sat = treedepth.mean(-1) if treedepth is not None else None
 
         loo = summary.loo_nll.numpy() if summary.loo_nll is not None else None
         b = len(total_div)
 
-        # --- failure flags (ordered by severity) ---
-        RHAT_THRESH = 1.01
-        TREE_SAT_THRESH = 0.05
-        ESS_THRESH = 400
-
-        f_rhat = (max_rhat > RHAT_THRESH) if max_rhat is not None else np.zeros(b, bool)
+        f_rhat = (max_rhat > 1.01) if max_rhat is not None else np.zeros(b, bool)
         f_div = total_div > 0
-        f_tree = (mean_treedepth_sat > TREE_SAT_THRESH) if mean_treedepth_sat is not None else np.zeros(b, bool)
-        f_ess = (min_ess < ESS_THRESH) if min_ess is not None else np.zeros(b, bool)
-        fail = f_rhat | f_div | f_tree | f_ess
+        f_tree = (mean_treedepth_sat > 0.05) if mean_treedepth_sat is not None else np.zeros(b, bool)
+        f_ess = (min_ess < 400) if min_ess is not None else np.zeros(b, bool)
+        f_ess_tail = (min_ess_tail < 400) if min_ess_tail is not None else np.zeros(b, bool)
 
         counts = {
-            f'R-hat > {RHAT_THRESH}': int(f_rhat.sum()),
+            'R-hat > 1.01': int(f_rhat.sum()),
             'divergences > 0': int(f_div.sum()),
-            f'tree-depth sat > {TREE_SAT_THRESH:.0%}': int(f_tree.sum()),
-            f'ESS < {ESS_THRESH}': int(f_ess.sum()),
+            'tree-depth sat > 5%': int(f_tree.sum()),
+            'ESS < 400': int(f_ess.sum()),
+            'tail ESS < 400': int(f_ess_tail.sum()),
             'any failure': int(fail.sum()),
         }
 
@@ -509,6 +514,21 @@ class Evaluator:
         logger.info('\nNUTS diagnostics (%d datasets)\n%s\n%s\n',
                     b, corr_table, '\n'.join(lines))
 
+    def _makeRow(self, label: str, summary: EvaluationSummary, fit_label: str) -> dict:
+        return {
+            'method': label,
+            'R': dictMean(summary.corr),
+            'NRMSE': dictMean(summary.nrmse),
+            'ECE': dictMean(summary.ece),
+            'RFX_joint_ECE': summary.rfx_joint_ece,
+            'RFX_joint_EACE': summary.rfx_joint_eace,
+            'ppNLL': summary.mnll,
+            fit_label: summary.mfit,
+            'tpd': summary.tpd,
+            'IS_eff': summary.meff,
+            'Pareto_k': summary.mk,
+        }
+
     def go(self) -> None:
         full_batch = self.dl_test.fullBatch()
 
@@ -532,29 +552,47 @@ class Evaluator:
             full_batch,
         )
 
+        fit_label = self._fitLabel()
+        rows = []
+        for label, summary in [
+            ('MB', summary_mb),
+            ('NUTS', summary_nuts),
+            ('ADVI', summary_advi),
+        ]:
+            rows.append(self._makeRow(label, summary, fit_label))
+
+        # --- converged subset ---
+        if self.cfg.converged_subset:
+            conv_mask = nutsConvergeMask(full_batch)
+            if conv_mask is not None:
+                n_conv = int(conv_mask.sum())
+                n_total = len(conv_mask)
+                logger.info('\nConverged subset: %d / %d datasets', n_conv, n_total)
+                if 0 < n_conv < n_total:
+                    conv_batch = subsetBatch(full_batch, conv_mask)
+                    conv_mb = subsetProposal(proposal_mb, conv_mask)
+                    conv_nuts = subsetProposal(proposal_nuts, conv_mask)
+                    conv_advi = subsetProposal(proposal_advi, conv_mask)
+                    summary_mb_conv = self.summary(conv_mb, conv_batch)
+                    summary_nuts_conv = self.summary(conv_nuts, conv_batch)
+                    summary_advi_conv = self.summary(conv_advi, conv_batch)
+                    for label, summary in [
+                        ('MB_conv', summary_mb_conv),
+                        ('NUTS_conv', summary_nuts_conv),
+                        ('ADVI_conv', summary_advi_conv),
+                    ]:
+                        rows.append(self._makeRow(label, summary, fit_label))
+                    conv_plot_dir = self.plot_dir / 'conv'
+                    conv_plot_dir.mkdir(parents=True, exist_ok=True)
+                    self.plot(
+                        [conv_mb, conv_nuts, conv_advi],
+                        [summary_mb_conv, summary_nuts_conv, summary_advi_conv],
+                        ['MB_conv', 'NUTS_conv', 'ADVI_conv'],
+                        conv_batch,
+                        plot_dir=conv_plot_dir,
+                    )
+
         if self.cfg.save_tables:
-            fit_label = self._fitLabel()
-            rows = []
-            for label, summary in [
-                ('MB', summary_mb),
-                ('NUTS', summary_nuts),
-                ('ADVI', summary_advi),
-            ]:
-                rows.append(
-                    {
-                        'method': label,
-                        'R': dictMean(summary.corr),
-                        'NRMSE': dictMean(summary.nrmse),
-                        'ECE': dictMean(summary.ece),
-                        'RFX_joint_ECE': summary.rfx_joint_ece,
-                        'RFX_joint_EACE': summary.rfx_joint_eace,
-                        'ppNLL': summary.mnll,
-                        fit_label: summary.mfit,
-                        'tpd': summary.tpd,
-                        'IS_eff': summary.meff,
-                        'Pareto_k': summary.mk,
-                    }
-                )
             self.saveTables(rows)
 
 
