@@ -107,9 +107,10 @@ def setup() -> argparse.Namespace:
     # Training hyperparameters (override template or loaded YAML)
     parser.add_argument('-e', '--max_epochs', type=int, default=20, help='Number of training epochs')
     parser.add_argument('--bs', type=int, help='Batch size (number of datasets per step, default = 32)')
-    parser.add_argument('--accum_steps', type=int, help='Gradient accumulation steps; effective batch size = bs × accum_steps (default = 1)')
     parser.add_argument('--lr', type=float, help='Learning rate')
+    parser.add_argument('--accum_steps', type=int, help='Gradient accumulation steps; effective batch size = bs × accum_steps (default = 1)')
     parser.add_argument('--loss_type', type=str, help='Loss type: forward|backward|mixed (default = forward)')
+    parser.add_argument('--ancestral_forward', action=argparse.BooleanOptionalAction, help='Sample globals as local-flow context during forward KL (closes teacher-forcing gap, default = False)')
     parser.add_argument('--n_samples', type=int, help='Posterior samples drawn per evaluation dataset (default = 512)')
     parser.add_argument('--patience', type=int, help='Early stopping patience in epochs; 0 = disabled (default = 0)')
     parser.add_argument('--sample_interval', type=int, help='Run full posterior evaluation every N epochs (default = 20)')
@@ -125,7 +126,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--r_tag', type=str, help='Run tag suffix appended to the checkpoint directory name')
     parser.add_argument('--load_latest', action=argparse.BooleanOptionalAction, help='Resume training from latest.pt in the checkpoint directory')
     parser.add_argument('--load_best', action=argparse.BooleanOptionalAction, help='Resume training from best.pt in the checkpoint directory')
-
     return setupConfigParser(parser, generateTrainingConfig, 'Train neural approximators.')
 # fmt: on
 
@@ -305,9 +305,7 @@ class Trainer:
         try:
             self.wandb_run = wandb.init(**init_kwargs)
         except wandb.errors.UsageError:
-            print(
-                f'WARNING: Could not resume wandb run {self.wandb_run_id!r}; starting a new run.'
-            )
+            print(f'WARNING: Could not resume wandb run {self.wandb_run_id!r}; starting a new run.')
             init_kwargs.update(id=None, resume=None)
             self.wandb_run = wandb.init(**init_kwargs)
         wandb.config.update({'data_cfg': self.data_cfg, 'model_cfg': self.model_cfg.to_dict()})
@@ -420,7 +418,8 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
 
         # forward KL loss
         if mode == 'forward':
-            log_probs = self.model.forward(batch, summaries)
+            ancestral = getattr(self.cfg, 'ancestral_forward', False)
+            log_probs = self.model.forward(batch, summaries, ancestral=ancestral)
             lq_g = log_probs['global']
             lq_l = log_probs['local'] * mask
             lq = lq_g + lq_l.sum(1) / m
