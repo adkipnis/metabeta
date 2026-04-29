@@ -374,6 +374,7 @@ class Approximator(nn.Module):
         data: dict[str, torch.Tensor],
         summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
         n_samples: int = 1,
+        detach_global: bool = False,
     ) -> Proposal:
         """inference method: sample and apply conditional backward pass"""
         assert n_samples > 0, 'n_samples must be positive'
@@ -387,9 +388,16 @@ class Approximator(nn.Module):
 
         # global posterior
         mask_g = self._masks(data, local=False)
-        samples_g, log_prob_g = self.posterior_g.sample(  # type: ignore
-            n_samples, context=summary_g, mask=mask_g
-        )
+        if detach_global:
+            with torch.no_grad():
+                samples_g, log_prob_g = self.posterior_g.sample(  # type: ignore
+                    n_samples, context=summary_g, mask=mask_g
+                )
+            samples_g = samples_g.detach()
+        else:
+            samples_g, log_prob_g = self.posterior_g.sample(  # type: ignore
+                n_samples, context=summary_g, mask=mask_g
+            )
         proposed['global'] = {'samples': samples_g, 'log_prob': log_prob_g}
 
         # local posterior

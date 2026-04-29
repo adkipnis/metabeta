@@ -444,14 +444,18 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             alpha = (fkl.detach().abs() / (bkl.detach().abs() + 1e-8)).clamp(max=1.0)
             return fkl + 0.05 * alpha * bkl
 
-        # forward KL + predictive NLL auxiliary
+        # forward KL + predictive NLL auxiliary (globals detached: posterior_g trained by L_fkl)
         elif mode == 'predictive':
             fkl = self.loss(batch, summaries, mode='forward')
             proposal = self.model.backward(
-                batch, summaries, n_samples=getattr(self.cfg, 'n_loss_samples', 64)
+                batch,
+                summaries,
+                n_samples=getattr(self.cfg, 'n_loss_samples', 64),
+                detach_global=True,
             )
             pp = getPosteriorPredictive(proposal, batch, self.cfg.likelihood_family)
-            L_pred = posteriorPredictiveNLL(pp, batch, mode='mixture').mean() # Alternative: loo_proxy with smaller lambda
+            L_pred = posteriorPredictiveNLL(pp, batch, w=proposal.weights).mean()
+            # L_pred = posteriorPredictiveNLL(pp, batch, w=proposal.weights, mode='loo_proxy').mean()
             pred_nll_weight = getattr(self.cfg, 'pred_nll_weight', 0.1)
             return fkl + pred_nll_weight * L_pred
 
