@@ -129,7 +129,6 @@ class TrainingConfig(BaseModel):
     lr: float = Field(gt=0, default=3e-4)
     max_grad_norm: float = Field(gt=0, default=1.0)
     loss_type: str = 'forward'
-    ancestral: bool = False
     n_loss_samples: int = Field(gt=0, default=64)
     pred_nll_weight: float = 0.1
     patience: int = Field(ge=0, default=0)
@@ -392,7 +391,6 @@ def setupConfigParser(
         'loop': False,
         'sgld': False,
         # training flags added after initial release; default keeps old behaviour
-        'ancestral': False,
         'n_loss_samples': 64,
         'pred_nll_weight': 0.1,
     }

@@ -341,7 +341,6 @@ class Approximator(nn.Module):
         self,
         data: dict[str, torch.Tensor],
         summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
-        ancestral: bool = False,
     ) -> dict[str, torch.Tensor]:
         """training method: learn conditional forward pass"""
         log_probs = {}
@@ -364,13 +363,7 @@ class Approximator(nn.Module):
         targets_l = self._targets(data, local=True)
         targets_l = self._preprocess(targets_l, local=True)
         mask_l = self._masks(data, local=True)
-        if ancestral:
-            # sample globals and use them as context so posterior_l trains on the
-            # same input distribution it sees at inference (closes teacher-forcing gap)
-            samples_g, _ = self.posterior_g.sample(1, context=summary_g, mask=mask_g)  # type: ignore
-            context_l = self._localContext(summary_l, samples_g.squeeze(-2).detach())
-        else:
-            context_l = self._localContext(summary_l, targets_g)
+        context_l = self._localContext(summary_l, targets_g)
         log_probs['local'] = self.posterior_l.logProb(  # type: ignore
             targets_l, context=context_l, mask=mask_l
         )
