@@ -2,12 +2,14 @@ import os
 
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 
+import random
 import time
 import logging
 import argparse
 from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime
+import numpy as np
 import torch
 import wandb
 import schedulefree
@@ -328,6 +330,7 @@ class Trainer:
         payload = {
             'timestamp': self.timestamp,
             'epoch': self.current_epoch,
+            'global_step': self.global_step,
             'best_epoch': self.best_epoch,
             'best_nrmse': self.best_nrmse,
             'best_median_nll': self.best_median_nll,
@@ -337,6 +340,10 @@ class Trainer:
             'model_state': self.model.state_dict(),
             'optimizer_state': self.optimizer.state_dict(),
             'wandb_run_id': self.wandb_run.id if self.wandb_run is not None else None,
+            'rng_torch': torch.get_rng_state(),
+            'rng_torch_cuda': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            'rng_numpy': np.random.get_state(),
+            'rng_python': random.getstate(),
         }
         tmp_path = path.with_suffix(path.suffix + '.tmp')
         torch.save(payload, tmp_path)
@@ -358,6 +365,7 @@ class Trainer:
         self.model.load_state_dict(payload['model_state'])
         self.optimizer.load_state_dict(payload['optimizer_state'])
         self.timestamp = payload['timestamp']
+        self.global_step = payload.get('global_step', 0)
         self.best_epoch = payload['best_epoch']
         self.best_nrmse = payload['best_nrmse']
         self.best_median_nll = payload['best_median_nll']
@@ -365,6 +373,17 @@ class Trainer:
         if self.stopper is not None:
             self.stopper.best_nrmse = self.best_nrmse
             self.stopper.best_median_nll = self.best_median_nll
+
+        # restore RNG states for reproducibility
+        if 'rng_torch' in payload:
+            torch.set_rng_state(payload['rng_torch'])
+        if payload.get('rng_torch_cuda') is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(payload['rng_torch_cuda'])
+        if 'rng_numpy' in payload:
+            np.random.set_state(payload['rng_numpy'])
+        if 'rng_python' in payload:
+            random.setstate(payload['rng_python'])
+
         return int(payload.get('epoch', 0))  # last completed epoch
 
     def getTrackingMetrics(self, eval_summary: EvaluationSummary) -> tuple[float, float, float]:
