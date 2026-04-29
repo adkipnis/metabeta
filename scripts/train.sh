@@ -13,7 +13,7 @@
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
 
-EPOCHS=4000
+EPOCHS=6000
 ACCUM=0
 
 while [[ $# -gt 0 ]]; do
@@ -24,11 +24,13 @@ while [[ $# -gt 0 ]]; do
         --epochs) EPOCHS="$2"; shift 2 ;;
         --seed) SEED="$2"; shift 2 ;;
         --accum) ACCUM=1; shift ;;
-        --load_latest) LOAD_LATEST=1; shift ;;
+        --latest) LOAD_LATEST=1; shift ;;
+        --best) LOAD_BEST=1; shift ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
-[[ -z "$TAG" ]] && { echo "Usage: $0 --tag <size-family-ds_type> [--valid_ds_type <type>] [--epochs N] [--seed N]"; exit 1; }
+[[ -z "$TAG" ]] && { echo "Usage: $0 --tag <size-family-ds_type> [--valid_ds_type <type>] [--epochs N] [--seed N] [--latest|--best]"; exit 1; }
+[[ "$LOAD_LATEST" -eq 1 && "$LOAD_BEST" -eq 1 ]] && { echo "Error: --latest and --best are mutually exclusive"; exit 1; }
 
 IFS='-' read -r SIZE FAM_NAME DS_TYPE <<< "$TAG"
 case $FAM_NAME in
@@ -48,6 +50,9 @@ if [[ "$ACCUM" -eq 1 ]]; then
 fi
 if [[ "$LOAD_LATEST" -eq 1 ]]; then
     EXTRA_ARGS+=(--load_latest)
+fi
+if [[ "$LOAD_BEST" -eq 1 ]]; then
+    EXTRA_ARGS+=(--load_best)
 fi
 
 python train.py \
