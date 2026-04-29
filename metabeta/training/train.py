@@ -51,6 +51,11 @@ from metabeta.plotting import (
 
 logger = logging.getLogger('train.py')
 
+# Curriculum: ancestral conditioning rate for local posterior ramps up as global NRMSE improves.
+# At the empirical convergence floor (~0.15), the rate reaches P_MAX.
+_NRMSE_FLOOR = 0.15
+_ANCESTRAL_P_MAX = 0.5
+
 
 # fmt: off
 def setup() -> argparse.Namespace:
@@ -209,6 +214,7 @@ class Trainer:
         self.best_median_nll = float('inf')
         self.best_epoch = 0
         self.global_step = 0
+        self.ancestral_rate = 0.0
         self.wandb_run = None
         self.wandb_run_id = None
         self.stopper = None
@@ -316,6 +322,7 @@ class Trainer:
         wandb.define_metric('train/loss_step', step_metric='step/global')
         wandb.define_metric('train/grad_norm', step_metric='step/global')
         wandb.define_metric('train/loss_epoch', step_metric='step/epoch')
+        wandb.define_metric('train/ancestral_rate', step_metric='step/epoch')
         wandb.define_metric('valid/loss_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/mean_nrmse_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/mean_eace_epoch', step_metric='step/epoch')
@@ -420,6 +427,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         batch: dict[str, torch.Tensor],
         summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
         mode: str = '',
+        ancestral_rate: float = 0.0,
     ) -> torch.Tensor:
         if not mode:
             mode = self.cfg.loss_type
@@ -439,7 +447,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
 
         # forward KL loss
         if mode == 'forward':
-            log_probs = self.model.forward(batch, summaries)
+            log_probs = self.model.forward(batch, summaries, ancestral_rate=ancestral_rate)
             lq_g = log_probs['global']
             lq_l = log_probs['local'] * mask
             lq = lq_g + lq_l.sum(1) / m
@@ -458,14 +466,14 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
 
         # mix KL loss
         elif mode == 'mixed':
-            fkl = self.loss(batch, summaries, mode='forward')
+            fkl = self.loss(batch, summaries, mode='forward', ancestral_rate=ancestral_rate)
             bkl = self.loss(batch, summaries, mode='backward')
             alpha = (fkl.detach().abs() / (bkl.detach().abs() + 1e-8)).clamp(max=1.0)
             return fkl + 0.05 * alpha * bkl
 
         # forward KL + predictive NLL auxiliary (globals detached: posterior_g trained by L_fkl)
         elif mode == 'predictive':
-            fkl = self.loss(batch, summaries, mode='forward')
+            fkl = self.loss(batch, summaries, mode='forward', ancestral_rate=ancestral_rate)
             proposal = self.model.backward(
                 batch,
                 summaries,
@@ -501,7 +509,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             # trailing window: correct divisor so its effective lr matches full windows
             in_trailing = i >= n_batches - trailing
             window_size = trailing if in_trailing else accum_steps
-            raw_loss = self.loss(batch)
+            raw_loss = self.loss(batch, ancestral_rate=self.ancestral_rate)
             (raw_loss / window_size).backward()
 
             # write loss (track unscaled value so it's comparable to valid loss)
@@ -693,10 +701,21 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                 eval_summary = self.sample()
                 mean_nrmse, mean_eace, median_nll = self.getTrackingMetrics(eval_summary)
 
+                # update curriculum: ramp ancestral rate as global NRMSE approaches floor
+                nrmse_global = dictMean({k: v for k, v in eval_summary.nrmse.items() if k != 'rfx'})
+                self.ancestral_rate = _ANCESTRAL_P_MAX * float(
+                    np.clip((1.0 - nrmse_global) / (1.0 - _NRMSE_FLOOR), 0.0, 1.0)
+                )
+                logger.info(
+                    f'Curriculum: global NRMSE={nrmse_global:.3f} '
+                    f'→ ancestral_rate={self.ancestral_rate:.3f}'
+                )
+
             # log epoch
             if self.wandb_run is not None:
                 logs = {
                     'train/loss_epoch': float(loss_train),
+                    'train/ancestral_rate': float(self.ancestral_rate),
                     'valid/loss_epoch': float(loss_valid),
                     'step/epoch': self.current_epoch,
                 }
