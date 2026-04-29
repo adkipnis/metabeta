@@ -46,7 +46,7 @@ def setup() -> argparse.Namespace:
     # Primary: Load from checkpoint config
     parser.add_argument('--checkpoint', type=str, help='Path to checkpoint directory')
     parser.add_argument(
-        '--prefix', type=str, default='best', help='Checkpoint prefix: best or latest'
+        '--prefix', type=str, default='latest', help='Checkpoint prefix: best or latest'
     )
 
     # Legacy: Load from config file
@@ -142,12 +142,11 @@ class Evaluator:
         if hasattr(self.cfg, '_checkpoint_dir'):
             # Use explicit checkpoint directory from --checkpoint arg
             self.ckpt_dir = Path(self.cfg._checkpoint_dir)
-            self.checkpoint_prefix = getattr(self.cfg, '_checkpoint_prefix', 'best')
         else:
             # Legacy: construct from run name
             self.run_name = runName(vars(self.cfg))
             self.ckpt_dir = Path(self.dir, '..', 'outputs', 'checkpoints', self.run_name)
-            self.checkpoint_prefix = 'best'
+        self.checkpoint_prefix = getattr(self.cfg, 'prefix', 'latest')
 
         # load data and model
         self._initData()
