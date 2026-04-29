@@ -113,6 +113,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--lr', type=float, help='Learning rate')
     parser.add_argument('--accum_steps', type=int, help='Gradient accumulation steps; effective batch size = bs × accum_steps (default = 1)')
     parser.add_argument('--loss_type', type=str, help='Loss type: forward|backward|mixed|predictive (default = forward)')
+    parser.add_argument('--ancestral', action=argparse.BooleanOptionalAction, help='Enable ancestral curriculum: ramp local posterior conditioning from true to sampled globals as training converges (default = False)')
     parser.add_argument('--n_loss_samples', type=int, help='Posterior samples for backward KL and predictive NLL loss modes (default = 64)')
     parser.add_argument('--pred_nll_weight', type=float, help='Weight for predictive NLL auxiliary term when loss_type=predictive (default = 0.1)')
     parser.add_argument('--n_samples', type=int, help='Posterior samples drawn per evaluation dataset (default = 512)')
@@ -703,12 +704,15 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                 mean_nrmse, mean_eace, median_nll = self.getTrackingMetrics(eval_summary)
 
                 # update curriculum: ramp ancestral rate as global NRMSE approaches floor
-                nrmse_global = dictMean({k: v for k, v in eval_summary.nrmse.items() if k != 'rfx'})
-                self.ancestral_rate = _ancestralRate(nrmse_global)
-                logger.info(
-                    f'Curriculum: global NRMSE={nrmse_global:.3f} '
-                    f'→ ancestral_rate={self.ancestral_rate:.3f}'
-                )
+                if getattr(self.cfg, 'ancestral', False):
+                    nrmse_global = dictMean(
+                        {k: v for k, v in eval_summary.nrmse.items() if k != 'rfx'}
+                    )
+                    self.ancestral_rate = _ancestralRate(nrmse_global)
+                    logger.info(
+                        f'Curriculum: global NRMSE={nrmse_global:.3f} '
+                        f'→ ancestral_rate={self.ancestral_rate:.3f}'
+                    )
 
             # log epoch
             if self.wandb_run is not None:
