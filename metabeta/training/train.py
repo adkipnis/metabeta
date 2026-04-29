@@ -51,11 +51,6 @@ from metabeta.plotting import (
 
 logger = logging.getLogger('train.py')
 
-# Curriculum: ancestral conditioning rate for local posterior ramps up as global NRMSE improves.
-# At the empirical convergence floor (~0.15), the rate reaches P_MAX.
-_NRMSE_FLOOR = 0.15
-_ANCESTRAL_P_MAX = 0.5
-
 
 # fmt: off
 def setup() -> argparse.Namespace:
@@ -137,6 +132,12 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--load_best', action=argparse.BooleanOptionalAction, help='Resume training from best.pt in the checkpoint directory')
     return setupConfigParser(parser, generateTrainingConfig, 'Train neural approximators.')
 # fmt: on
+
+
+# -----------------------------------------------------------------------------
+def _ancestralRate(nrmse_global: float, p_max: float = 0.5, nrmse_floor: float = 0.15) -> float:
+    """Ancestral conditioning rate: ramps from 0 to p_max as global NRMSE approaches nrmse_floor."""
+    return p_max * float(np.clip((1.0 - nrmse_global) / (1.0 - nrmse_floor), 0.0, 1.0))
 
 
 # -----------------------------------------------------------------------------
@@ -703,9 +704,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
 
                 # update curriculum: ramp ancestral rate as global NRMSE approaches floor
                 nrmse_global = dictMean({k: v for k, v in eval_summary.nrmse.items() if k != 'rfx'})
-                self.ancestral_rate = _ANCESTRAL_P_MAX * float(
-                    np.clip((1.0 - nrmse_global) / (1.0 - _NRMSE_FLOOR), 0.0, 1.0)
-                )
+                self.ancestral_rate = _ancestralRate(nrmse_global)
                 logger.info(
                     f'Curriculum: global NRMSE={nrmse_global:.3f} '
                     f'→ ancestral_rate={self.ancestral_rate:.3f}'
