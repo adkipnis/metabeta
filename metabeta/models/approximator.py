@@ -341,6 +341,7 @@ class Approximator(nn.Module):
         self,
         data: dict[str, torch.Tensor],
         summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
+        ancestral_rate: float = 0.0,
     ) -> dict[str, torch.Tensor]:
         """training method: learn conditional forward pass"""
         log_probs = {}
@@ -359,11 +360,19 @@ class Approximator(nn.Module):
             targets_g, context=summary_g, mask=mask_g
         )
 
-        # local posterior
+        # local posterior — with curriculum, sometimes condition on sampled globals
         targets_l = self._targets(data, local=True)
         targets_l = self._preprocess(targets_l, local=True)
         mask_l = self._masks(data, local=True)
-        context_l = self._localContext(summary_l, targets_g)
+        if ancestral_rate > 0.0 and torch.rand(1).item() < ancestral_rate:
+            with torch.no_grad():
+                samples_g, _ = self.posterior_g.sample(  # type: ignore
+                    1, context=summary_g, mask=mask_g
+                )
+            context_g = samples_g.squeeze(-2)
+        else:
+            context_g = targets_g
+        context_l = self._localContext(summary_l, context_g)
         log_probs['local'] = self.posterior_l.logProb(  # type: ignore
             targets_l, context=context_l, mask=mask_l
         )
