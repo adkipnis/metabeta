@@ -5,11 +5,11 @@ Pseudo-MoE (default): single checkpoint, k random feature permutations per datas
 True MoE (--multi)  : one checkpoint per config, proposals mixed across all models.
 
 Usage (from experiments/):
-    uv run python moe.py                                              # pseudo, toy-n
-    uv run python moe.py --configs small-n-sampled --ks 0 3 7        # pseudo
-    uv run python moe.py --multi --configs small-n-sampled small-n-mixed  # true MoE
-    uv run python moe.py --multi --configs small-n-sampled small-n-mixed --eval-config small-n-sampled
-    uv run python moe.py --valid --importance
+    uv run python compare_moe.py --configs normal_dsmall-n-sampled_mlarge_s0 --ks 0 3 7
+    uv run python compare_moe.py --multi --configs normal_dsmall-n-mixed_mlarge --seeds 0 1 2 3
+    uv run python compare_moe.py --multi --configs normal_dsmall-n-mixed_mlarge_s0 normal_dsmall-n-mixed_mlarge_s1
+    uv run python compare_moe.py --compare --configs normal_dsmall-n-mixed_mlarge_s0 --mix-configs normal_dsmall-n-mixed_mlarge_s1
+    uv run python compare_moe.py --valid
 """
 
 import argparse
@@ -23,7 +23,6 @@ from tabulate import tabulate
 from tqdm import tqdm
 
 from metabeta.models.approximator import Approximator
-from metabeta.posthoc.conformal import Calibrator
 from metabeta.utils.config import (
     assimilateConfig,
     loadDataConfig,
@@ -31,8 +30,7 @@ from metabeta.utils.config import (
 )
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.evaluation import Proposal, concatProposalsBatch, dictMean
-from metabeta.posthoc.importance import ImportanceSampler
-from metabeta.utils.io import datasetFilename, runName, setDevice
+from metabeta.utils.io import datasetFilename, setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.moe import moeEstimate, multiCheckpointEstimate
 from metabeta.utils.preprocessing import rescaleData
@@ -41,10 +39,9 @@ from metabeta.evaluation.summary import getSummary
 
 DIR = Path(__file__).resolve().parent
 METABETA = DIR / '..' / 'metabeta'
-EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
 OUT_DIR = DIR / 'results'
 
-DEFAULT_CONFIGS = ['toy-n']
+DEFAULT_CONFIGS = ['normal_dtiny-n-toy_mtiny_s42']
 DEFAULT_KS = [0, 3, 7]
 
 # (display name, extractor, higher_is_better)
@@ -59,40 +56,45 @@ METRICS = [
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='MoE experiment: pseudo (permutation) and true (multi-checkpoint).')
-    parser.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS, help='evaluation config names (YAML files in evaluation/configs/)')
+    parser.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS, help='checkpoint run names (directories under outputs/checkpoints/)')
     parser.add_argument('--ks', nargs='+', type=int, default=DEFAULT_KS, help='number of extra permuted views (0 = baseline)')
-    parser.add_argument('--importance', action='store_true', help='apply importance sampling on the joined proposal')
     parser.add_argument('--valid', action='store_true', help='use validation set instead of test set')
     parser.add_argument('--outdir', type=str, default=str(OUT_DIR), help='output directory for tables')
     parser.add_argument('--verbosity', type=int, default=1, help='0=warnings | 1=info | 2=debug')
     # multi-checkpoint MoE mode
     parser.add_argument('--multi', action='store_true', help='true MoE: treat --configs as a list of checkpoints to mix')
-    parser.add_argument('--eval-config', type=str, default=None, help='config whose data/calibrator is used for evaluation in --multi mode (default: first of --configs)')
-    parser.add_argument('--seeds', nargs='+', type=int, default=None, help='training seeds for --multi mode; a single --configs entry is replicated once per seed')
+    parser.add_argument('--eval-config', type=str, default=None, help='full run name used for data/settings in --multi mode (default: first resolved run name)')
+    parser.add_argument('--seeds', nargs='+', type=int, default=None, help='seeds for --multi mode; a single --configs entry is paired with each seed as {config}_s{seed}')
     # head-to-head comparison mode
     parser.add_argument('--compare', action='store_true', help='compare pseudo-MoE (k=1) vs true MoE (2 experts) at matched sample counts')
-    parser.add_argument('--mix-configs', nargs='+', default=None, help='second checkpoint per eval config for --compare mode (must match --configs length)')
+    parser.add_argument('--mix-configs', nargs='+', default=None, help='second checkpoint run name per eval config for --compare mode (must match --configs length)')
     return parser.parse_args()
 # fmt: on
 
 
-def loadEvalConfig(name: str, **overrides) -> argparse.Namespace:
-    """Load an evaluation YAML config and apply overrides."""
-    path = EVAL_CFG_DIR / f'{name}.yaml'
-    assert path.exists(), f'eval config not found: {path}'
+def resolveRunName(base: str, seed: int | None) -> str:
+    """Append _s{seed} suffix to a base run name when seed is given."""
+    return f'{base}_s{seed}' if seed is not None else base
+
+
+def loadRunConfig(run_name: str) -> argparse.Namespace:
+    """Load config from the checkpoint directory."""
+    path = METABETA / 'outputs' / 'checkpoints' / run_name / 'config.yaml'
+    assert path.exists(), f'checkpoint config not found: {path}'
     with open(path) as f:
         cfg = yaml.safe_load(f)
-    cfg['name'] = name
-    cfg.update(overrides)
+    cfg['run_name'] = run_name
+    cfg.setdefault('prefix', 'best')
+    cfg.setdefault('device', '')
     return argparse.Namespace(**cfg)
 
 
-def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
-    """Load model architecture from config and restore checkpoint weights."""
+def initModel(cfg: argparse.Namespace, device: torch.device) -> tuple[Approximator, dict, str]:
+    """Load model architecture from checkpoint config and restore weights."""
     data_cfg = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg)
 
-    model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.model_id}.yaml'
+    model_cfg_path = METABETA / 'configs' / 'models' / f'{cfg.model_id}.yaml'
     model_cfg = modelFromYaml(
         model_cfg_path,
         d_ffx=cfg.max_d,
@@ -102,8 +104,7 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
     model = Approximator(model_cfg).to(device)
     model.eval()
 
-    run = runName(vars(cfg))
-    ckpt_dir = METABETA / 'outputs' / 'checkpoints' / run
+    ckpt_dir = METABETA / 'outputs' / 'checkpoints' / cfg.run_name
     path = ckpt_dir / f'{cfg.prefix}.pt'
     assert path.exists(), f'checkpoint not found: {path}'
     payload = torch.load(path, map_location=device)
@@ -112,7 +113,11 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
     if cfg.compile and device.type != 'mps':
         model.compile()
 
-    return model, data_cfg, run
+    # Prefer data_id_valid for test/valid evaluation data (may differ from training data)
+    eval_data_id = getattr(cfg, 'data_id_valid', None) or cfg.data_id
+    eval_data_cfg = loadDataConfig(eval_data_id)
+
+    return model, eval_data_cfg, cfg.run_name
 
 
 def getDataloader(data_cfg: dict, partition: str, batch_size: int | None = None) -> Dataloader:
@@ -123,40 +128,6 @@ def getDataloader(data_cfg: dict, partition: str, batch_size: int | None = None)
     sortish = batch_size is not None
     return Dataloader(data_path, batch_size=batch_size, sortish=sortish)
 
-
-def resetRng(model: Approximator, seed: int) -> None:
-    """Reset base distribution RNGs for reproducible sampling."""
-    model.posterior_g.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
-    model.posterior_l.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
-
-
-@torch.inference_mode()
-def calibrate(
-    model: Approximator,
-    cfg: argparse.Namespace,
-    data_cfg: dict,
-    run: str,
-    device: torch.device,
-) -> Calibrator:
-    """Load or compute conformal calibrator from validation set."""
-    calibrator = Calibrator()
-    ckpt_path = METABETA / 'outputs' / 'checkpoints' / run / 'calibrator.npz'
-    if ckpt_path.exists():
-        calibrator.load(run)
-    else:
-        dl_valid = getDataloader(data_cfg, 'valid')
-        batch = next(iter(dl_valid))
-        batch = toDevice(batch, device)
-        proposal = model.estimate(batch, n_samples=cfg.n_samples)
-        if cfg.rescale:
-            proposal.rescale(batch['sd_y'])
-        batch = toDevice(batch, 'cpu')
-        if cfg.rescale:
-            batch = rescaleData(batch)
-        proposal.to('cpu')
-        calibrator.calibrate(proposal, batch)
-        calibrator.save(run)
-    return calibrator
 
 
 @torch.inference_mode()
@@ -171,24 +142,18 @@ def sampleMoe(
     """Run pseudo-MoE inference over a dataloader, one dataset at a time."""
     proposals = []
     n_datasets = 0
-    lf = getattr(cfg, 'likelihood_family', 0)
     t0 = time.perf_counter()
 
     for batch in tqdm(dl, desc=f'  k={k}'):
         batch = toDevice(batch, device)
         B = batch['X'].shape[0]
 
-        # process each dataset individually (B=1 required by moe)
         for i in range(B):
             single = {k_: v[i : i + 1] if torch.is_tensor(v) else v for k_, v in batch.items()}
             rng = np.random.default_rng(seed + n_datasets)
             proposal = moeEstimate(model, single, cfg.n_samples, k, rng=rng)
             if cfg.rescale:
                 proposal.rescale(single['sd_y'])
-            if cfg.importance:
-                data_is = rescaleData(single) if cfg.rescale else single
-                imp_sampler = ImportanceSampler(data_is, sir=False, likelihood_family=lf)
-                proposal = imp_sampler(proposal)
             proposal.to('cpu')
             proposals.append(proposal)
             n_datasets += 1
@@ -211,7 +176,6 @@ def sampleMultiMoe(
     """Run multi-checkpoint MoE inference over a dataloader, one dataset at a time."""
     proposals = []
     n_datasets = 0
-    lf = getattr(cfg, 'likelihood_family', 0)
     t0 = time.perf_counter()
 
     for batch in tqdm(dl, desc=f'  multi k={k}'):
@@ -224,10 +188,6 @@ def sampleMultiMoe(
             proposal = multiCheckpointEstimate(models, single, cfg.n_samples, k=k, rng=rng)
             if cfg.rescale:
                 proposal.rescale(single['sd_y'])
-            if cfg.importance:
-                data_is = rescaleData(single) if cfg.rescale else single
-                imp_sampler = ImportanceSampler(data_is, sir=False, likelihood_family=lf)
-                proposal = imp_sampler(proposal)
             proposal.to('cpu')
             proposals.append(proposal)
             n_datasets += 1
@@ -239,37 +199,34 @@ def sampleMultiMoe(
 
 
 def evaluateComparison(
-    eval_configs: list[str],
-    mix_configs: list[str],
+    eval_runs: list[str],
+    mix_runs: list[str],
     use_valid: bool,
-    importance: bool,
 ) -> list[dict]:
     """Head-to-head: pseudo-MoE (k=1) vs true MoE (2 experts, k=0) at equal sample counts.
 
-    For each (eval_config, mix_config) pair, runs three conditions — all on the
-    eval config's test data:
+    For each (eval_run, mix_run) pair, runs three conditions — all on the
+    eval run's test data:
       baseline   : eval model, k=0, n_samples       → n_samples total
       pseudo-MoE : eval model, k=1, n_samples       → 2*n_samples total
       true MoE   : [eval_model, mix_model], k=0     → 2*n_samples total
     """
-    if len(eval_configs) != len(mix_configs):
+    if len(eval_runs) != len(mix_runs):
         raise ValueError('--configs and --mix-configs must have the same length')
 
     partition = 'valid' if use_valid else 'test'
     rows = []
 
-    for eval_config, mix_config in zip(eval_configs, mix_configs):
+    for eval_run, mix_run in zip(eval_runs, mix_runs):
         print(f"\n{'=' * 60}")
-        print(f'Comparison: {eval_config} vs +{mix_config}  (partition={partition})')
+        print(f'Comparison: {eval_run} vs +{mix_run}  (partition={partition})')
         print(f"{'=' * 60}")
 
-        eval_cfg = loadEvalConfig(eval_config, plot=False, importance=importance)
+        eval_cfg = loadRunConfig(eval_run)
         setSeed(eval_cfg.seed)
         device = setDevice(eval_cfg.device)
 
-        eval_model, eval_data_cfg, eval_run = initModel(eval_cfg, device)
-        cal = calibrate(eval_model, eval_cfg, eval_data_cfg, eval_run, device)
-        calibrator = cal if eval_cfg.conformal else None
+        eval_model, eval_data_cfg, _ = initModel(eval_cfg, device)
         lf = getattr(eval_cfg, 'likelihood_family', 0)
 
         dl = getDataloader(eval_data_cfg, partition, batch_size=1)
@@ -277,23 +234,21 @@ def evaluateComparison(
         if eval_cfg.rescale:
             full_batch = rescaleData(full_batch)
 
-        mix_cfg = loadEvalConfig(mix_config, plot=False, importance=importance)
+        mix_cfg = loadRunConfig(mix_run)
         if getattr(mix_cfg, 'likelihood_family', 0) != lf:
-            raise ValueError(f'{mix_config} has different likelihood_family than {eval_config}')
+            raise ValueError(f'{mix_run} has different likelihood_family than {eval_run}')
         mix_model, _, _ = initModel(mix_cfg, device)
 
-        n = eval_cfg.n_samples  # per model / per view
+        n = eval_cfg.n_samples
 
-        # --- baseline: eval model, k=0 ---
-        print(f'\n  --- baseline ({eval_config}, k=0, S={n}) ---')
+        print(f'\n  --- baseline ({eval_run}, k=0, S={n}) ---')
         setSeed(eval_cfg.seed)
-        resetRng(eval_model, eval_cfg.seed)
         eval_model.eval()
         proposal = sampleMoe(eval_model, eval_cfg, dl, device, k=0, seed=eval_cfg.seed)
-        summary = getSummary(proposal, full_batch, calibrator=calibrator, likelihood_family=lf)
+        summary = getSummary(proposal, full_batch, likelihood_family=lf)
         rows.append(
             {
-                'config': eval_config,
+                'config': eval_run,
                 'condition': 'baseline',
                 'total_samples': n,
                 **{mn: ex(summary) for mn, ex, _ in METRICS},
@@ -301,16 +256,14 @@ def evaluateComparison(
             }
         )
 
-        # --- pseudo-MoE: eval model, k=1 → 2*n samples ---
-        print(f'\n  --- pseudo-MoE ({eval_config}, k=1, S={2 * n}) ---')
+        print(f'\n  --- pseudo-MoE ({eval_run}, k=1, S={2 * n}) ---')
         setSeed(eval_cfg.seed)
-        resetRng(eval_model, eval_cfg.seed)
         eval_model.eval()
         proposal = sampleMoe(eval_model, eval_cfg, dl, device, k=1, seed=eval_cfg.seed)
-        summary = getSummary(proposal, full_batch, calibrator=calibrator, likelihood_family=lf)
+        summary = getSummary(proposal, full_batch, likelihood_family=lf)
         rows.append(
             {
-                'config': eval_config,
+                'config': eval_run,
                 'condition': 'pseudo-MoE (k=1)',
                 'total_samples': 2 * n,
                 **{mn: ex(summary) for mn, ex, _ in METRICS},
@@ -318,20 +271,18 @@ def evaluateComparison(
             }
         )
 
-        # --- true MoE: [eval_model, mix_model], k=0 → 2*n samples ---
-        print(f'\n  --- true MoE ({eval_config}+{mix_config}, k=0, S={2 * n}) ---')
+        print(f'\n  --- true MoE ({eval_run}+{mix_run}, k=0, S={2 * n}) ---')
         for m in [eval_model, mix_model]:
             setSeed(eval_cfg.seed)
-            resetRng(m, eval_cfg.seed)
             m.eval()
         proposal = sampleMultiMoe(
             [eval_model, mix_model], eval_cfg, dl, device, k=0, seed=eval_cfg.seed
         )
-        summary = getSummary(proposal, full_batch, calibrator=calibrator, likelihood_family=lf)
+        summary = getSummary(proposal, full_batch, likelihood_family=lf)
         rows.append(
             {
-                'config': eval_config,
-                'condition': f'true MoE ({mix_config})',
+                'config': eval_run,
+                'condition': f'true MoE (+{mix_run})',
                 'total_samples': 2 * n,
                 **{mn: ex(summary) for mn, ex, _ in METRICS},
                 **({'t/ds': summary.tpd} if summary.tpd is not None else {}),
@@ -344,74 +295,67 @@ def evaluateComparison(
 def evaluateMulti(
     configs: list[str],
     ks: list[int],
-    eval_config: str | None,
+    eval_run: str | None,
     use_valid: bool,
-    importance: bool,
     seeds: list[int] | None = None,
 ) -> list[dict]:
-    """True MoE: load one checkpoint per config, mix proposals on shared eval data.
+    """True MoE: load one checkpoint per run, mix proposals on shared eval data.
 
     Baselines: each individual model run separately.
     Mixture: all models combined with multiCheckpointEstimate.
     """
-    if eval_config is None:
-        eval_config = configs[0]
+    seed_list = seeds if seeds is not None else [None] * len(configs)
+    bases = configs * len(seed_list) if len(configs) == 1 and len(seed_list) > 1 else configs
+    run_names = [resolveRunName(base, seed) for base, seed in zip(bases, seed_list)]
+
+    if eval_run is None:
+        eval_run = run_names[0]
 
     partition = 'valid' if use_valid else 'test'
 
     print(f"\n{'=' * 60}")
-    print(f'True MoE: {len(configs)} checkpoint(s) → eval on {eval_config}')
-    print(f'Configs : {configs}')
-    print(f'Partition: {partition}, IS={importance}')
+    print(f'True MoE: {len(run_names)} checkpoint(s) → eval on {eval_run}')
+    print(f'Run names: {run_names}')
+    print(f'Partition: {partition}')
     print(f"{'=' * 60}")
 
-    # load eval infrastructure from the designated eval config
-    eval_cfg = loadEvalConfig(eval_config, plot=False, importance=importance)
+    eval_cfg = loadRunConfig(eval_run)
     setSeed(eval_cfg.seed)
     device = setDevice(eval_cfg.device)
 
-    eval_model, eval_data_cfg, eval_run = initModel(eval_cfg, device)
-    cal = calibrate(eval_model, eval_cfg, eval_data_cfg, eval_run, device)
+    eval_model, eval_data_cfg, _ = initModel(eval_cfg, device)
 
     dl = getDataloader(eval_data_cfg, partition, batch_size=1)
     full_batch = dl.fullBatch()
     if eval_cfg.rescale:
         full_batch = rescaleData(full_batch)
 
-    # load all checkpoints; validate compatibility
     models: list[Approximator] = []
     labels: list[str] = []
-    seed_overrides = seeds if seeds is not None else [None] * len(configs)
-    for name, seed_override in zip(configs, seed_overrides):
-        cfg = loadEvalConfig(name, plot=False, importance=importance)
-        if seed_override is not None:
-            cfg.seed = seed_override
+    eval_lf = getattr(eval_cfg, 'likelihood_family', 0)
+    for run_name in run_names:
+        cfg = loadRunConfig(run_name)
         lf = getattr(cfg, 'likelihood_family', 0)
-        eval_lf = getattr(eval_cfg, 'likelihood_family', 0)
         if lf != eval_lf:
             raise ValueError(
-                f'Config {name} has likelihood_family={lf} but eval config has {eval_lf}'
+                f'Run {run_name} has likelihood_family={lf} but eval run has {eval_lf}'
             )
         model, _, _ = initModel(cfg, device)
         models.append(model)
-        label = f'{name}@s{cfg.seed}' if seed_override is not None else name
-        labels.append(label)
+        labels.append(run_name)
 
-    calibrator = cal if eval_cfg.conformal else None
-    lf = getattr(eval_cfg, 'likelihood_family', 0)
+    lf = eval_lf
     rows = []
 
     for k in ks:
-        # individual baselines
         for model, label in zip(models, labels):
             print(f'\n  --- {label} (single, k={k}) ---')
             setSeed(eval_cfg.seed)
-            resetRng(model, eval_cfg.seed)
             model.eval()
             proposal = sampleMoe(model, eval_cfg, dl, device, k, eval_cfg.seed)
-            summary = getSummary(proposal, full_batch, calibrator=calibrator, likelihood_family=lf)
+            summary = getSummary(proposal, full_batch, likelihood_family=lf)
             row = {
-                'config': eval_config,
+                'config': eval_run,
                 'condition': f'{label} (k={k})',
                 'k': k,
                 'total_samples': (1 + k) * eval_cfg.n_samples,
@@ -422,17 +366,15 @@ def evaluateMulti(
                 row['t/ds'] = summary.tpd
             rows.append(row)
 
-        # mixture of all models
         total = len(models) * (1 + k) * eval_cfg.n_samples
         print(f'\n  --- mixture ({len(models)} experts, k={k}, {total} total samples) ---')
         for model in models:
             setSeed(eval_cfg.seed)
-            resetRng(model, eval_cfg.seed)
             model.eval()
         proposal = sampleMultiMoe(models, eval_cfg, dl, device, k, eval_cfg.seed)
-        summary = getSummary(proposal, full_batch, calibrator=calibrator, likelihood_family=lf)
+        summary = getSummary(proposal, full_batch, likelihood_family=lf)
         row = {
-            'config': eval_config,
+            'config': eval_run,
             'condition': f'mixture ({len(models)} experts, k={k})',
             'k': k,
             'total_samples': total,
@@ -450,33 +392,27 @@ def evaluate(
     configs: list[str],
     ks: list[int],
     use_valid: bool,
-    importance: bool,
 ) -> list[dict]:
-    """Run all configs × k values and collect metric rows."""
+    """Run all run names × k values and collect metric rows."""
     rows = []
     partition = 'valid' if use_valid else 'test'
 
-    for config_name in configs:
+    for run_name in configs:
         print(f"\n{'=' * 60}")
-        print(f'Config: {config_name} (partition={partition}, IS={importance})')
+        print(f'Run: {run_name} (partition={partition})')
         print(f"{'=' * 60}")
 
-        cfg = loadEvalConfig(config_name, plot=False)
-        cfg.importance = importance
+        cfg = loadRunConfig(run_name)
         setSeed(cfg.seed)
         device = setDevice(cfg.device)
 
-        model, data_cfg, run = initModel(cfg, device)
-        cal = calibrate(model, cfg, data_cfg, run, device)
+        model, data_cfg, _ = initModel(cfg, device)
 
-        # B=1 dataloader (moe requires single datasets)
         dl = getDataloader(data_cfg, partition, batch_size=1)
         full_batch = dl.fullBatch()
         if cfg.rescale:
             full_batch = rescaleData(full_batch)
 
-        # build run list: for each k, run MoE; for each k>0, also run a
-        # control with k=0 but matched total sample count
         runs = []
         control_counts = set()
         for k in ks:
@@ -486,29 +422,25 @@ def evaluate(
                 control_counts.add(total)
                 runs.append((0, total, f'k=0 (S={total})', total))
 
-        # sort: baseline first, then by total samples, controls before MoE
         runs.sort(key=lambda r: (r[3], r[0]))
 
-        calibrator = cal if cfg.conformal else None
         lf = getattr(cfg, 'likelihood_family', 0)
 
         for k, n_samp, label, total in runs:
             print(f'\n  --- {label} ({1 + k} views, {total} total samples) ---')
 
             setSeed(cfg.seed)
-            resetRng(model, cfg.seed)
             model.eval()
 
-            # temporarily override n_samples for control conditions
             orig_n_samples = cfg.n_samples
             cfg.n_samples = n_samp
             proposal = sampleMoe(model, cfg, dl, device, k, cfg.seed)
             cfg.n_samples = orig_n_samples
 
-            summary = getSummary(proposal, full_batch, calibrator=calibrator, likelihood_family=lf)
+            summary = getSummary(proposal, full_batch, likelihood_family=lf)
 
             row = {
-                'config': config_name,
+                'config': run_name,
                 'condition': label,
                 'k': k,
                 'total_samples': total,
@@ -631,52 +563,44 @@ if __name__ == '__main__':
             raise ValueError(
                 '--compare requires --mix-configs with the same number of entries as --configs'
             )
-        print(f'MoE comparison: {len(args.configs)} family(ies), pseudo k=1 vs true 2-expert')
-        print(f'Eval configs : {args.configs}')
-        print(f'Mix  configs : {args.mix_configs}')
-        print(f"Partition    : {'valid' if args.valid else 'test'}")
-        print(f'IS           : {args.importance}')
-        rows = evaluateComparison(args.configs, args.mix_configs, args.valid, args.importance)
+        print(f'MoE comparison: {len(args.configs)} pair(s), pseudo k=1 vs true 2-expert')
+        print(f'Eval runs : {args.configs}')
+        print(f'Mix  runs : {args.mix_configs}')
+        print(f"Partition : {'valid' if args.valid else 'test'}")
+        rows = evaluateComparison(args.configs, args.mix_configs, args.valid)
         outfile = 'compare_moe'
     elif args.multi:
-        multi_configs = args.configs
         multi_seeds = args.seeds
-        if multi_seeds is not None:
-            if len(multi_configs) == 1:
-                multi_configs = multi_configs * len(multi_seeds)
-            elif len(multi_configs) != len(multi_seeds):
-                raise ValueError(
-                    f'--seeds length ({len(multi_seeds)}) must match --configs length '
-                    f'({len(multi_configs)}) or --configs must have exactly one entry'
-                )
-        if len(multi_configs) < 2:
+        if multi_seeds is not None and len(args.configs) > 1 and len(args.configs) != len(multi_seeds):
+            raise ValueError(
+                f'--seeds length ({len(multi_seeds)}) must match --configs length '
+                f'({len(args.configs)}) or --configs must have exactly one entry'
+            )
+        n_ckpts = len(multi_seeds) if multi_seeds else len(args.configs)
+        if n_ckpts < 2:
             raise ValueError(
                 '--multi requires at least 2 checkpoints (use --seeds to expand a single config)'
             )
-        print(f'True MoE experiment: {len(multi_configs)} checkpoint(s), {len(ks)} k value(s)')
-        print(f'Checkpoints : {multi_configs}')
-        if multi_seeds is not None:
+        print(f'True MoE experiment: {n_ckpts} checkpoint(s), {len(ks)} k value(s)')
+        print(f'Base configs: {args.configs}')
+        if multi_seeds:
             print(f'Seeds       : {multi_seeds}')
-        print(f'Eval config : {args.eval_config or multi_configs[0]}')
         print(f'k values    : {ks}')
         print(f"Partition   : {'valid' if args.valid else 'test'}")
-        print(f'IS          : {args.importance}')
         rows = evaluateMulti(
-            multi_configs,
+            args.configs,
             ks,
             args.eval_config,
             args.valid,
-            args.importance,
             seeds=multi_seeds,
         )
         outfile = 'multi_moe'
     else:
-        print(f'Pseudo-MoE experiment: {len(args.configs)} config(s) × {len(ks)} k values')
-        print(f'Configs: {args.configs}')
-        print(f'k values: {ks}')
+        print(f'Pseudo-MoE experiment: {len(args.configs)} run(s) × {len(ks)} k values')
+        print(f'Run names: {args.configs}')
+        print(f'k values : {ks}')
         print(f"Partition: {'valid' if args.valid else 'test'}")
-        print(f'IS: {args.importance}')
-        rows = evaluate(args.configs, ks, args.valid, args.importance)
+        rows = evaluate(args.configs, ks, args.valid)
         outfile = 'moe'
 
     print(f'\n{formatTable(rows)}')
