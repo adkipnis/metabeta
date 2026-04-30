@@ -43,10 +43,10 @@ def setup() -> argparse.Namespace:
         help='Number of chains (default=4)')
     parser.add_argument('--loop', action='store_true',
         help='Run chains sequentially instead of in parallel (default=False)')
-    parser.add_argument('--viter', type=int, default=50_000,
-        help='ADVI iterations (default=50_000)')
-    parser.add_argument('--lr', type=float, default=5e-3,
-        help='Adam learning rate for ADVI (default=5e-3)')
+    parser.add_argument('--viter', type=int, default=100_000,
+        help='ADVI iterations (default=100_000)')
+    parser.add_argument('--lr', type=float, default=1e-3,
+        help='Adam learning rate for ADVI (default=1e-3)')
     parser.add_argument('--diagonal', action='store_true',
         help='Force diagonal (uncorrelated) RFX covariance even when eta_rfx > 0 (default=False)')
     return setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets with PyMC.')
@@ -269,14 +269,21 @@ class Fitter:
         cfg: argparse.Namespace,
         ds: dict[str, np.ndarray],
         elbo_every: int = 500,
+        es_min_iter: int = 20_000,
+        es_window: int = 20,
+        es_tol: float = 2e-3,
     ) -> dict[str, np.ndarray]:
         """Fit with ADVI and record the ELBO curve.
 
-        The ELBO is recorded every ``elbo_every`` iterations (default 500),
-        giving ~1000 points for the default 500k-iteration budget.
+        The ELBO is recorded every ``elbo_every`` iterations (default 500).
         PyMC minimises the *negative* ELBO, so ``hist`` contains negative
         values; we negate before storing so the saved array is the ELBO itself
         (should increase / plateau during training).
+
+        Early stopping: once ``es_min_iter`` steps have passed, checks whether
+        the last ``es_window`` recorded ELBO values have plateaued —
+        mean(|ΔELBO|) / |ELBO| < ``es_tol``. Raises StopIteration (caught by
+        PyMC) to terminate cleanly.
         """
         pymc_model = self._buildPymc(ds)
 
@@ -287,6 +294,13 @@ class Fitter:
             if i % elbo_every == 0:
                 elbo_steps.append(i)
                 elbo_vals.append(-float(hist[-1]))  # negate loss → ELBO
+            # Compare two consecutive smoothed blocks; robust to stochastic noise.
+            if i >= es_min_iter and len(elbo_vals) >= 2 * es_window:
+                recent = np.mean(elbo_vals[-es_window:])
+                prev   = np.mean(elbo_vals[-2 * es_window:-es_window])
+                delta  = abs(recent - prev) / max(abs(recent), 1.0)
+                if delta < es_tol:
+                    raise StopIteration
 
         t0 = time.perf_counter()
         with pymc_model:
@@ -360,8 +374,8 @@ if __name__ == '__main__':
         ('draws', 1000),
         ('chains', 4),
         ('loop', False),
-        ('viter', 50_000),
-        ('lr', 5e-3),
+        ('viter', 100_000),
+        ('lr', 1e-3),
         ('diagonal', False),
     ]:
         if not hasattr(cfg, _k):
