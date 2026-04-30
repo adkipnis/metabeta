@@ -144,10 +144,6 @@ class TrainingConfig(BaseModel):
     # Evaluation settings
     n_samples: int = Field(gt=0, default=512)
     rescale: bool = True
-    importance: bool = False
-    sir: bool = False
-    sir_iter: int = Field(gt=0, default=8)
-    sir_n_proposal: int = Field(gt=0, default=2048)
     plot: bool = True
 
     # Checkpoint settings

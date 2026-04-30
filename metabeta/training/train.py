@@ -39,7 +39,7 @@ from metabeta.utils.evaluation import (
     concatProposalsBatch,
 )
 from metabeta.models.approximator import Approximator
-from metabeta.posthoc.importance import ImportanceSampler, runIS, runSIR
+from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.evaluation.predictive import getPosteriorPredictive, posteriorPredictiveNLL
 from metabeta.plotting import (
@@ -86,7 +86,7 @@ def setup() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(
         argument_default=argparse.SUPPRESS,
-        epilog='Advanced options (max_grad_norm, sir, sir_iter, rescale, skip_ref, save_latest, save_best) can be set via --config.',
+        epilog='Advanced options (max_grad_norm, rescale, skip_ref, save_latest, save_best) can be set via --config.',
     )
 
     # Template-based config generation (primary interface)
@@ -124,7 +124,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--reproducible', action=argparse.BooleanOptionalAction, help='Enable deterministic algorithms for reproducibility (default = True)')
 
     # Evaluation settings
-    parser.add_argument('--importance', action=argparse.BooleanOptionalAction, help='Run importance sampling evaluation')
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction, help='Generate evaluation plots after each epoch')
 
     # Saving & loading
@@ -188,12 +187,6 @@ class Trainer:
         # init data, model and optimizer
         self._initData()
         self._initModel()
-
-        # check IS sizes
-        if self.cfg.sir:
-            assert (
-                self.cfg.n_samples % self.cfg.sir_iter == 0
-            ), 'number of samples must be divisible by number of SIR iterations'
 
         # checkpoint dir
         self.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -576,14 +569,9 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         t0 = time.perf_counter()
         for batch in iterator:
             batch = toDevice(batch, self.device)
-            if self.cfg.importance and not self.cfg.sir:
-                proposal = runIS(self.model, batch, self.cfg)
-            elif self.cfg.sir:
-                proposal = runSIR(self.model, batch, self.cfg)
-            else:
-                proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
-                if self.cfg.rescale and self.cfg.likelihood_family == 0:
-                    proposal.rescale(batch['sd_y'])
+            proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+            if self.cfg.rescale and self.cfg.likelihood_family == 0:
+                proposal.rescale(batch['sd_y'])
             proposal.to('cpu')
             batch = toDevice(batch, 'cpu')
             if self.cfg.rescale and self.cfg.likelihood_family == 0:
