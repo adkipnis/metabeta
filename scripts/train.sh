@@ -18,7 +18,7 @@ ACCUM=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --tag) TAG="$2"; shift 2 ;;
+        --data_id) TAG="$2"; shift 2 ;;
         --model_id) MODEL_ID="$2"; shift 2 ;;
         --valid_ds_type) VALID_DS_TYPE="$2"; shift 2 ;;
         --epochs) EPOCHS="$2"; shift 2 ;;
@@ -29,7 +29,7 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
-[[ -z "$TAG" ]] && { echo "Usage: $0 --tag <size-family-ds_type> [--valid_ds_type <type>] [--epochs N] [--seed N] [--latest|--best]"; exit 1; }
+[[ -z "$TAG" ]] && { echo "Usage: $0 --data_id <size-family-ds_type> [--valid_ds_type <type>] [--epochs N] [--seed N] [--latest|--best]"; exit 1; }
 [[ "$LOAD_LATEST" -eq 1 && "$LOAD_BEST" -eq 1 ]] && { echo "Error: --latest and --best are mutually exclusive"; exit 1; }
 
 IFS='-' read -r SIZE FAM_NAME DS_TYPE <<< "$TAG"

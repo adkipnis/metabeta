@@ -13,11 +13,11 @@
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --tag) TAG="$2"; shift 2 ;;
+        --data_id) TAG="$2"; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
-[[ -z "$TAG" ]] && { echo "Usage: $0 --tag <size-family-ds_type>"; exit 1; }
+[[ -z "$TAG" ]] && { echo "Usage: $0 --data_id <size-family-ds_type>"; exit 1; }
 
 IFS='-' read -r SIZE FAM_NAME DS_TYPE <<< "$TAG"
 case $FAM_NAME in
