@@ -291,8 +291,7 @@ def simulateNormalNp(
     eta: np.ndarray,
     sigma_eps: float,
 ) -> np.ndarray:
-    eps = rng.normal(size=eta.shape) * sigma_eps
-    return eta + eps
+    return rng.normal(loc=eta, scale=sigma_eps).astype(eta.dtype)
 
 
 def simulateBernoulliNp(
