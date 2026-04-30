@@ -135,9 +135,11 @@ def setup() -> argparse.Namespace:
 
 
 # -----------------------------------------------------------------------------
-def _ancestralRate(nrmse_global: float, p_max: float = 0.5, nrmse_floor: float = 0.15) -> float:
-    """Ancestral conditioning rate: ramps from 0 to p_max as global NRMSE approaches nrmse_floor."""
-    return p_max * float(np.clip((1.0 - nrmse_global) / (1.0 - nrmse_floor), 0.0, 1.0))
+def _ancestralRate(
+    loo_nll: float, loo_nll_0: float, p_max: float = 0.5, loo_floor: float = 1.75
+) -> float:
+    """Ancestral conditioning rate: ramps from 0 to p_max as LOO-NLL improves from loo_nll_0 to loo_floor."""
+    return p_max * float(np.clip((loo_nll_0 - loo_nll) / (loo_nll_0 - loo_floor), 0.0, 1.0))
 
 
 # -----------------------------------------------------------------------------
@@ -210,6 +212,7 @@ class Trainer:
         self.best_epoch = 0
         self.global_step = 0
         self.ancestral_rate = 0.0
+        self.loo_nll_0: float | None = None
         self.wandb_run = None
         self.wandb_run_id = None
         self.stopper = None
@@ -336,6 +339,7 @@ class Trainer:
             'best_epoch': self.best_epoch,
             'best_nrmse': self.best_nrmse,
             'best_median_nll': self.best_median_nll,
+            'loo_nll_0': self.loo_nll_0,
             'trainer_cfg': {k: v for k, v in vars(self.cfg).items() if k not in CLI_ONLY_PARAMS},
             'data_cfg': self.data_cfg.copy(),
             'model_cfg': self.model_cfg.to_dict(),
@@ -371,6 +375,7 @@ class Trainer:
         self.best_epoch = payload['best_epoch']
         self.best_nrmse = payload['best_nrmse']
         self.best_median_nll = payload['best_median_nll']
+        self.loo_nll_0 = payload.get('loo_nll_0', None)
         self.wandb_run_id = payload.get('wandb_run_id')
         if self.stopper is not None:
             self.stopper.best_nrmse = self.best_nrmse
@@ -692,14 +697,13 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                 mean_nrmse, mean_eace, median_nll = self.getTrackingMetrics(eval_summary)
 
                 # update curriculum: ramp ancestral rate as global NRMSE approaches floor
-                if getattr(self.cfg, 'ancestral', False):
-                    nrmse_global = dictMean(
-                        {k: v for k, v in eval_summary.nrmse.items() if k != 'rfx'}
-                    )
-                    self.ancestral_rate = _ancestralRate(nrmse_global)
+                if getattr(self.cfg, 'ancestral', False) and median_nll is not None:
+                    if self.loo_nll_0 is None:
+                        self.loo_nll_0 = float(median_nll)
+                    self.ancestral_rate = _ancestralRate(float(median_nll), self.loo_nll_0)
                     logger.info(
-                        f'Curriculum: global NRMSE={nrmse_global:.3f} '
-                        f'→ ancestral_rate={self.ancestral_rate:.3f}'
+                        f'Curriculum: LOO-NLL={median_nll:.3f} (ref={self.loo_nll_0:.3f})'
+                        f' → ancestral_rate={self.ancestral_rate:.3f}'
                     )
 
             # log epoch
