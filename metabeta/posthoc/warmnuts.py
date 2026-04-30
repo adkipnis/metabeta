@@ -269,14 +269,23 @@ class WarmNuts:
         n_divs = int(trace.sample_stats['diverging'].values.sum())
         n_draws_total = self.n_chains * self.draws
         try:
-            rhat_df = az.summary(trace, kind='diagnostics')
-            max_rhat = float(rhat_df['r_hat'].max())
-            ess_df = az.summary(trace, kind='stats')
-            reff = float(ess_df['ess_bulk'].mean() / n_draws_total)
+            df = az.summary(trace, kind='diagnostics')
+            max_rhat = float(df['r_hat'].max())
+            min_ess = float(df['ess_bulk'].min())
+            min_ess_t = float(df['ess_tail'].min())
+            reff = float(df['ess_bulk'].mean() / n_draws_total)
         except Exception:
             max_rhat = float('nan')
+            min_ess = float('nan')
+            min_ess_t = float('nan')
             reff = 1.0
-        diag = {'n_divergences': n_divs, 'max_rhat': max_rhat, 'reff': reff}
+        diag = {
+            'n_divergences': n_divs,
+            'max_rhat': max_rhat,
+            'min_ess': min_ess,
+            'min_ess_t': min_ess_t,
+            'reff': reff,
+        }
         proposal = self._traceToProposal(trace)
         proposal.reff = reff
         return proposal, diag
