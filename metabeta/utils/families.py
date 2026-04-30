@@ -291,8 +291,7 @@ def simulateNormalNp(
     eta: np.ndarray,
     sigma_eps: float,
 ) -> np.ndarray:
-    eps = rng.normal(size=eta.shape)
-    eps = standardize(eps, axis=0) * sigma_eps
+    eps = rng.normal(size=eta.shape) * sigma_eps
     return eta + eps
 
 
