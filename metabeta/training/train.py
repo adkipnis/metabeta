@@ -135,6 +135,11 @@ def setup() -> argparse.Namespace:
 
 
 # -----------------------------------------------------------------------------
+# Cap on reference LOO-NLL: prevents inflated starting values from compressing the useful range
+# and causing the ancestral rate to surge prematurely once the model exits the "garbage" phase.
+_LOO_NLL_0_CAP = 5.0
+
+
 def _ancestralRate(
     loo_nll: float, loo_nll_0: float, p_max: float = 0.5, loo_floor: float = 1.75
 ) -> float:
@@ -699,7 +704,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                 # update curriculum: ramp ancestral rate as global NRMSE approaches floor
                 if getattr(self.cfg, 'ancestral', False) and median_nll is not None:
                     if self.loo_nll_0 is None:
-                        self.loo_nll_0 = float(median_nll)
+                        self.loo_nll_0 = min(float(median_nll), _LOO_NLL_0_CAP)
                     self.ancestral_rate = _ancestralRate(float(median_nll), self.loo_nll_0)
                     logger.info(
                         f'Curriculum: LOO-NLL={median_nll:.3f} (ref={self.loo_nll_0:.3f})'
