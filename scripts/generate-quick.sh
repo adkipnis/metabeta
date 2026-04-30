@@ -1,9 +1,9 @@
 #!/bin/bash
 
-#SBATCH --job-name=generate
-#SBATCH --output=logs/generate/generate_%A_%a.out
-#SBATCH --error=logs/generate/generate_%A_%a.err
-#SBATCH --array=0-3999
+#SBATCH --job-name=quick
+#SBATCH --output=logs/quick/generate_%A_%a.out
+#SBATCH --error=logs/quick/generate_%A_%a.err
+#SBATCH --array=0-99
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
