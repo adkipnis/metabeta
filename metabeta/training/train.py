@@ -364,7 +364,9 @@ class Trainer:
     def load(self, prefix: str = 'latest') -> int:
         path = Path(self.ckpt_dir, prefix + '.pt')
         assert path.exists(), f'checkpoint not found: {path}'
-        payload = torch.load(path, map_location=self.device)
+        # Checkpoints store optimizer state and RNG snapshots, so use the full
+        # loader for trusted local resume files.
+        payload = torch.load(path, map_location=self.device, weights_only=False)
 
         # compare configs
         if self.data_cfg != payload['data_cfg']:
