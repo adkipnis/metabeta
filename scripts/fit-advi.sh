@@ -1,9 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=fit
-#SBATCH --output=logs/fit/fit_%A_%a.out
-#SBATCH --error=logs/fit/fit_%A_%a.err
-#SBATCH --array=0-511
+#SBATCH --job-name=advi
+#SBATCH --output=logs/advi/%j.out
+#SBATCH --error=logs/advi/%j.err
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
@@ -36,6 +35,5 @@ mkdir -p "$JOB_TMPDIR"
 export PYTENSOR_FLAGS="base_compiledir=$JOB_TMPDIR"
 
 cd $HOME/metabeta/metabeta/simulation
-python fit.py --size "${SIZE}" --family ${FAMILY} --ds_type "${DS_TYPE}" --idx ${SLURM_ARRAY_TASK_ID} --method nuts --loop
 python fit.py --size "${SIZE}" --family ${FAMILY} --ds_type "${DS_TYPE}" --idx ${SLURM_ARRAY_TASK_ID} --method advi
 rm -rf "$JOB_TMPDIR"
