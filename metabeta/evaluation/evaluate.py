@@ -583,9 +583,9 @@ class Evaluator:
                     summary_nuts_conv = self.summary(conv_nuts, conv_batch)
                     summary_advi_conv = self.summary(conv_advi, conv_batch)
                     for label, summary in [
-                        ('MB_conv', summary_mb_conv),
-                        ('NUTS_conv', summary_nuts_conv),
-                        ('ADVI_conv', summary_advi_conv),
+                        ('MB', summary_mb_conv),
+                        ('NUTS', summary_nuts_conv),
+                        ('ADVI', summary_advi_conv),
                     ]:
                         rows.append(self._makeRow(label, summary, fit_label))
                     conv_plot_dir = self.plot_dir / 'conv'
@@ -593,7 +593,7 @@ class Evaluator:
                     self.plot(
                         [conv_mb, conv_nuts, conv_advi],
                         [summary_mb_conv, summary_nuts_conv, summary_advi_conv],
-                        ['MB_conv', 'NUTS_conv', 'ADVI_conv'],
+                        ['MB', 'NUTS', 'ADVI'],
                         conv_batch,
                         plot_dir=conv_plot_dir,
                     )
