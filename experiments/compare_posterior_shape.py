@@ -4,9 +4,9 @@ experiments/posterior_shape.py — Posterior shape diagnostics: MB vs NUTS.
 Four diagnostics on the NUTS-converged subset of test datasets:
 
   1. Width    — std(MB) / std(NUTS) per parameter type
-  2. Corr     — mean |Corr_MB − Corr_NUTS| for global parameters
-  3. LocalUnc — cond_std_Gauss / marginal_std per rfx dim  [family == 0 only]
-  4. Rank     — rank of each NUTS sample in the MB marginal (uniform = shapes match)
+  2. Rank     — rank of each NUTS sample in the MB marginal (uniform = shapes match)
+  3. Corr     — mean |Corr_MB − Corr_NUTS| for global parameters
+  4. LocalUnc — cond_std_Gauss / marginal_std per rfx dim  [family == 0 only]
 
 Usage (from metabeta/experiments/):
   uv run python posterior_shape.py --checkpoint ../outputs/checkpoints/<run>
@@ -179,105 +179,7 @@ def _widthDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> list[dict
 
 
 # ---------------------------------------------------------------------------
-# Diagnostic 2 — global correlation structure
-# ---------------------------------------------------------------------------
-
-
-def _corrDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> dict:
-    """Per-dataset mean |Corr_MB − Corr_NUTS| on active global dimensions."""
-    mask_d, mask_q = batch.get('mask_d'), batch.get('mask_q')
-    B = p_mb.ffx.shape[0]
-
-    def _globals(p, b, d, q):
-        return torch.cat([p.ffx[b, :, :d], p.sigma_rfx[b, :, :q], p.sigma_eps[b].unsqueeze(-1)], dim=-1)
-
-    per_ds = []
-    for b in range(B):
-        d = int(mask_d[b].sum()) if mask_d is not None else p_mb.ffx.shape[-1]
-        q = int(mask_q[b].sum()) if mask_q is not None else p_mb.sigma_rfx.shape[-1]
-        if d + q + 1 < 2:
-            continue
-        try:
-            c_mb   = torch.corrcoef(_globals(p_mb,   b, d, q).T)
-            c_nuts = torch.corrcoef(_globals(p_nuts, b, d, q).T)
-        except Exception:
-            continue
-        off  = ~torch.eye(c_mb.shape[0], dtype=torch.bool)
-        diff = float((c_mb - c_nuts).abs()[off].mean())
-        if np.isfinite(diff):
-            per_ds.append(diff)
-
-    if not per_ds:
-        return {'mean |ΔCorr|': float('nan'), 'median |ΔCorr|': float('nan'), 'p90 |ΔCorr|': float('nan')}
-    return {
-        'mean |ΔCorr|':   float(np.mean(per_ds)),
-        'median |ΔCorr|': float(np.median(per_ds)),
-        'p90 |ΔCorr|':    float(np.percentile(per_ds, 90)),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Diagnostic 3 — local uncertainty decomposition (family == 0 only)
-# ---------------------------------------------------------------------------
-
-
-@torch.inference_mode()
-def _localUncertaintyDecomp(
-    p_mb: Proposal, p_nuts: Proposal, batch: dict, batch_size: int
-) -> list[dict]:
-    """Decompose rfx marginal std into conditional (local) vs global contributions.
-
-    marginal_std  = std_S(b_i) / sd_y          — total, includes global uncertainty
-    cond_std_Gauss = E_S[diag(Λ_i^{-1})^½] / sd_y — given globals (local only)
-    ratio = cond / marginal:  near 0 = global dominates, near 1 = local dominates
-    """
-    group_mask = batch['mask_n'].any(-1)
-    B, q = batch['y'].shape[0], p_mb.q
-    sd_y = batch['sd_y']
-    mask_q  = batch.get('mask_q', torch.ones(B, q, dtype=torch.bool))
-    mask_mq = group_mask.unsqueeze(-1) & mask_q.unsqueeze(1)
-
-    def _marginal_std(p):
-        return p.rfx.std(dim=2) / sd_y.view(-1, 1, 1)
-
-    def _cond_std(p):
-        chunks = []
-        for s in range(0, B, batch_size):
-            e  = min(s + batch_size, B)
-            sd = sd_y[s:e]
-            sr = p.sigma_rfx[s:e] / sd.view(-1, 1, 1)
-            se = p.sigma_eps[s:e]  / sd.view(-1, 1)
-            Z_m   = batch['Z'][s:e, :, :, :q] * batch['mask_n'][s:e].float().unsqueeze(-1)
-            ZtZ   = torch.einsum('bmnq,bmnp->bmpq', Z_m, Z_m)
-            Lambda = (
-                ZtZ.unsqueeze(2) / se.clamp(min=1e-6)[:, None, :, None, None] ** 2
-                + torch.diag_embed(1.0 / sr.clamp(min=1e-6) ** 2).unsqueeze(1)
-            )
-            L     = torch.linalg.cholesky(Lambda)
-            L_inv = torch.linalg.solve_triangular(
-                L, torch.eye(q, device=L.device, dtype=L.dtype).expand_as(L), upper=False
-            )
-            chunks.append((L_inv ** 2).sum(dim=-2).sqrt().mean(dim=2))  # (bs, m, q)
-        return torch.cat(chunks, dim=0)
-
-    rows = []
-    for label, proposal in [('MB', p_mb), ('NUTS', p_nuts)]:
-        std_m = _marginal_std(proposal)
-        std_c = _cond_std(proposal)
-        ratio = std_c / std_m.clamp(min=1e-8)
-        rows.append({
-            'Method':               label,
-            'marginal_std (med)':   float(np.median(std_m[mask_mq].numpy())),
-            'cond_std_Gauss (med)': float(np.median(std_c[mask_mq].numpy())),
-            'ratio p50':            float(np.median(ratio[mask_mq].numpy())),
-            'ratio p25':            float(np.percentile(ratio[mask_mq].numpy(), 25)),
-            'ratio p75':            float(np.percentile(ratio[mask_mq].numpy(), 75)),
-        })
-    return rows
-
-
-# ---------------------------------------------------------------------------
-# Diagnostic 4 — marginal rank calibration
+# Diagnostic 2 — marginal rank calibration
 # ---------------------------------------------------------------------------
 
 
@@ -343,6 +245,107 @@ def _rankDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> list[dict]
     return rows
 
 
+
+# ---------------------------------------------------------------------------
+# Diagnostic 3 — global correlation structure
+# ---------------------------------------------------------------------------
+
+
+def _corrDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> dict:
+    """Per-dataset mean |Corr_MB − Corr_NUTS| on active global dimensions."""
+    mask_d, mask_q = batch.get('mask_d'), batch.get('mask_q')
+    B = p_mb.ffx.shape[0]
+
+    def _globals(p, b, d, q):
+        return torch.cat([p.ffx[b, :, :d], p.sigma_rfx[b, :, :q], p.sigma_eps[b].unsqueeze(-1)], dim=-1)
+
+    per_ds = []
+    for b in range(B):
+        d = int(mask_d[b].sum()) if mask_d is not None else p_mb.ffx.shape[-1]
+        q = int(mask_q[b].sum()) if mask_q is not None else p_mb.sigma_rfx.shape[-1]
+        if d + q + 1 < 2:
+            continue
+        try:
+            c_mb   = torch.corrcoef(_globals(p_mb,   b, d, q).T)
+            c_nuts = torch.corrcoef(_globals(p_nuts, b, d, q).T)
+        except Exception:
+            continue
+        off  = ~torch.eye(c_mb.shape[0], dtype=torch.bool)
+        diff = float((c_mb - c_nuts).abs()[off].mean())
+        if np.isfinite(diff):
+            per_ds.append(diff)
+
+    if not per_ds:
+        return {'mean |ΔCorr|': float('nan'), 'median |ΔCorr|': float('nan'), 'p90 |ΔCorr|': float('nan')}
+    return {
+        'mean |ΔCorr|':   float(np.mean(per_ds)),
+        'median |ΔCorr|': float(np.median(per_ds)),
+        'p90 |ΔCorr|':    float(np.percentile(per_ds, 90)),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic 4 — local uncertainty decomposition (family == 0 only)
+# ---------------------------------------------------------------------------
+
+
+@torch.inference_mode()
+def _localUncertaintyDecomp(
+    p_mb: Proposal, p_nuts: Proposal, batch: dict, batch_size: int
+) -> list[dict]:
+    """Decompose rfx marginal std into conditional (local) vs global contributions.
+
+    marginal_std  = std_S(b_i) / sd_y          — total, includes global uncertainty
+    cond_std_Gauss = E_S[diag(Λ_i^{-1})^½] / sd_y — given globals (local only)
+    ratio = cond / marginal:  near 0 = global dominates, near 1 = local dominates
+    """
+    group_mask = batch['mask_n'].any(-1)
+    B, q = batch['y'].shape[0], p_mb.q
+    sd_y = batch['sd_y']
+    mask_q  = batch.get('mask_q', torch.ones(B, q, dtype=torch.bool))
+    mask_mq = group_mask.unsqueeze(-1) & mask_q.unsqueeze(1)
+
+    def _marginal_std(p):
+        return p.rfx.std(dim=2) / sd_y.view(-1, 1, 1)
+
+    def _cond_std(p):
+        chunks = []
+        for s in range(0, B, batch_size):
+            e  = min(s + batch_size, B)
+            sd = sd_y[s:e]
+            sr = p.sigma_rfx[s:e] / sd.view(-1, 1, 1)
+            se = p.sigma_eps[s:e]  / sd.view(-1, 1)
+            Z_m   = batch['Z'][s:e, :, :, :q] * batch['mask_n'][s:e].float().unsqueeze(-1)
+            ZtZ   = torch.einsum('bmnq,bmnp->bmpq', Z_m, Z_m)
+            Lambda = (
+                ZtZ.unsqueeze(2) / se.clamp(min=1e-6)[:, None, :, None, None] ** 2
+                + torch.diag_embed(1.0 / sr.clamp(min=1e-6) ** 2).unsqueeze(1)
+            )
+            L     = torch.linalg.cholesky(Lambda)
+            L_inv = torch.linalg.solve_triangular(
+                L, torch.eye(q, device=L.device, dtype=L.dtype).expand_as(L), upper=False
+            )
+            chunks.append((L_inv ** 2).sum(dim=-2).sqrt().mean(dim=2))  # (bs, m, q)
+        return torch.cat(chunks, dim=0)
+
+    rows = []
+    for label, proposal in [('MB', p_mb), ('NUTS', p_nuts)]:
+        std_m = _marginal_std(proposal)
+        std_c = _cond_std(proposal)
+        ratio = std_c / std_m.clamp(min=1e-8)
+        rows.append({
+            'Method':               label,
+            'marginal_std (med)':   float(np.median(std_m[mask_mq].numpy())),
+            'cond_std_Gauss (med)': float(np.median(std_c[mask_mq].numpy())),
+            'ratio p50':            float(np.median(ratio[mask_mq].numpy())),
+            'ratio p25':            float(np.percentile(ratio[mask_mq].numpy(), 25)),
+            'ratio p75':            float(np.percentile(ratio[mask_mq].numpy(), 75)),
+        })
+    return rows
+
+
+
+
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
@@ -359,28 +362,29 @@ def _printWidth(rows: list[dict]) -> None:
     print('  Ratio > 1: MB wider (overdispersed)  |  < 1: MB narrower (underdispersed)\n')
 
 
+def _printRank(rows: list[dict]) -> None:
+    headers = ['Type', 'p10 (exp 0.10)', 'p25 (exp 0.25)', 'p50 (exp 0.50)', 'p75 (exp 0.75)', 'p90 (exp 0.90)']
+    fmt = lambda v: v if isinstance(v, str) else f'{v:.3f}'
+    print('=== 2. Marginal rank calibration: rank of NUTS in MB distribution ===')
+    print(tabulate([[fmt(r[h]) for h in headers] for r in rows], headers=headers, tablefmt='simple'))
+    print('  Values near expected → shapes match')
+    print('  p50 ≠ 0.50 → bias  |  compressed quantiles → MB overdispersed  |  spread → MB underdispersed\n')
+    
+
 def _printCorr(d: dict) -> None:
-    print('=== 2. Global correlation structure: |Corr_MB − Corr_NUTS| ===')
+    print('=== 3. Global correlation structure: |Corr_MB − Corr_NUTS| ===')
     for k, v in d.items():
         print(f'  {k}: {v:.4f}')
     print('  Near 0: MB captures global correlations  |  Large: MB misses correlation structure\n')
 
 
 def _printLocalUncertainty(rows: list[dict]) -> None:
-    print('=== 3. Local uncertainty decomposition (rfx, standardised space) ===')
+    print('=== 4. Local uncertainty decomposition (rfx, standardised space) ===')
     print(_table(rows, ['Method', 'marginal_std (med)', 'cond_std_Gauss (med)', 'ratio p50', 'ratio p25', 'ratio p75']))
     print('  ratio = cond_std / marginal_std')
     print('  ratio → 0: global uncertainty dominates rfx spread')
     print('  ratio → 1: local (conditional) uncertainty dominates rfx spread\n')
 
-
-def _printRank(rows: list[dict]) -> None:
-    headers = ['Type', 'p10 (exp 0.10)', 'p25 (exp 0.25)', 'p50 (exp 0.50)', 'p75 (exp 0.75)', 'p90 (exp 0.90)']
-    fmt = lambda v: v if isinstance(v, str) else f'{v:.3f}'
-    print('=== 4. Marginal rank calibration: rank of NUTS in MB distribution ===')
-    print(tabulate([[fmt(r[h]) for h in headers] for r in rows], headers=headers, tablefmt='simple'))
-    print('  Values near expected → shapes match')
-    print('  p50 ≠ 0.50 → bias  |  compressed quantiles → MB overdispersed  |  spread → MB underdispersed\n')
 
 
 # ---------------------------------------------------------------------------
@@ -414,8 +418,8 @@ def main() -> None:
         logger.warning('No NUTS convergence diagnostics found; using all datasets')
 
     _printWidth(_widthDiagnostic(proposal_mb, proposal_nuts, batch_rescaled))
+    _printRank(_rankDiagnostic(proposal_mb, proposal_nuts, batch_rescaled))
     _printCorr(_corrDiagnostic(proposal_mb, proposal_nuts, batch_rescaled))
-
     if cfg.likelihood_family == 0:
         _printLocalUncertainty(
             _localUncertaintyDecomp(proposal_mb, proposal_nuts, batch_rescaled, cfg.batch_size)
@@ -423,8 +427,6 @@ def main() -> None:
     else:
         logger.info('Local uncertainty diagnostic skipped (family != 0)')
 
-    _printRank(_rankDiagnostic(proposal_mb, proposal_nuts, batch_rescaled))
-
-
+    
 if __name__ == '__main__':
     main()
