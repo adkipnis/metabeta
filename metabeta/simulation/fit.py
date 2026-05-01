@@ -35,8 +35,8 @@ def setup() -> argparse.Namespace:
         help='NUTS tuning steps (default=2000)')
     parser.add_argument('--target_accept', type=float, default=0.8,
         help='NUTS target acceptance rate (PyMC default=0.8)')
-    parser.add_argument('--max_treedepth', type=int, default=16,
-        help='NUTS maximum tree depth (PyMC default=10, default=16)')
+    parser.add_argument('--max_treedepth', type=int, default=10,
+        help='NUTS maximum tree depth (PyMC default=10)')
     parser.add_argument('--draws', type=int, default=1000,
         help='Posterior draws per chain (default=1000)')
     parser.add_argument('--chains', type=int, default=4,
