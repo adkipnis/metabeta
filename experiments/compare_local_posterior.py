@@ -103,7 +103,7 @@ def _loadData(cfg: argparse.Namespace, dir: Path) -> tuple[Dataloader, Dataloade
 
     def _dl(partition: str) -> Dataloader:
         fname = datasetFilename(partition)
-        path = dir / '..' / 'outputs' / 'data' / data_id / fname
+        path = dir / '..' / 'metabeta' / 'outputs' / 'data' / data_id / fname
         if partition == 'test':
             path = path.with_suffix('.fit.npz')
         path = path.resolve()
@@ -114,7 +114,7 @@ def _loadData(cfg: argparse.Namespace, dir: Path) -> tuple[Dataloader, Dataloade
 
 
 def _loadModel(cfg: argparse.Namespace, dir: Path, device: torch.device) -> Approximator:
-    model_cfg_path = dir / '..' / 'configs' / 'models' / f'{cfg.model_id}.yaml'
+    model_cfg_path = dir / '..' / 'metabeta' / 'configs' / 'models' / f'{cfg.model_id}.yaml'
     model_cfg = modelFromYaml(
         model_cfg_path.resolve(),
         d_ffx=cfg.max_d,
@@ -128,7 +128,7 @@ def _loadModel(cfg: argparse.Namespace, dir: Path, device: torch.device) -> Appr
     prefix = cfg._checkpoint_prefix
     path = ckpt_dir / f'{prefix}.pt'
     assert path.exists(), f'checkpoint not found: {path}'
-    payload = torch.load(path, map_location=device)
+    payload = torch.load(path, map_location=device, weights_only=False)
     model.load_state_dict(payload['model_state'])
     logger.info('Loaded checkpoint: %s', path)
     return model
