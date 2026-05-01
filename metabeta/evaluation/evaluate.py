@@ -75,6 +75,19 @@ def setup() -> argparse.Namespace:
         help='Also evaluate/plot on the NUTS-converged subset of test datasets',
     )
     parser.add_argument(
+        '--convergence_mode',
+        type=str,
+        default='liberal',
+        choices=['strict', 'liberal'],
+        help='NUTS convergence filter mode for converged_subset (default: liberal)',
+    )
+    parser.add_argument(
+        '--pareto_k_thr',
+        type=float,
+        default=0.7,
+        help='Pareto-k threshold for LOO-NLL subset; filters on NUTS k only (default: 0.7)',
+    )
+    parser.add_argument(
         '--pred_coverage',
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -133,6 +146,10 @@ class Evaluator:
             self.cfg.save_tables = False
         if not hasattr(self.cfg, 'converged_subset'):
             self.cfg.converged_subset = False
+        if not hasattr(self.cfg, 'convergence_mode'):
+            self.cfg.convergence_mode = 'liberal'
+        if not hasattr(self.cfg, 'pareto_k_thr'):
+            self.cfg.pareto_k_thr = 0.7
         if not hasattr(self.cfg, 'outdir'):
             self.cfg.outdir = str(Path(self.dir, '..', 'outputs', 'results'))
 
@@ -449,7 +466,7 @@ class Evaluator:
             a[a <= 0] = np.nan
             return fn(a, axis=-1)
 
-        conv = nutsConvergeMask(batch)  # True = converged
+        conv = nutsConvergeMask(batch, mode=self.cfg.convergence_mode)
         fail = ~conv
         total_div = batch['nuts_divergences'].numpy().sum(-1)
         duration = batch['nuts_duration'].numpy().ravel()
@@ -569,11 +586,14 @@ class Evaluator:
 
         # --- converged subset ---
         if self.cfg.converged_subset:
-            conv_mask = nutsConvergeMask(full_batch)
+            conv_mask = nutsConvergeMask(full_batch, mode=self.cfg.convergence_mode)
             if conv_mask is not None:
                 n_conv = int(conv_mask.sum())
                 n_total = len(conv_mask)
-                logger.info('\nConverged subset: %d / %d datasets', n_conv, n_total)
+                logger.info(
+                    '\nConverged subset (%s): %d / %d datasets',
+                    self.cfg.convergence_mode, n_conv, n_total,
+                )
                 if 0 < n_conv < n_total:
                     conv_batch = subsetBatch(full_batch, conv_mask)
                     conv_mb = subsetProposal(proposal_mb, conv_mask)
@@ -587,7 +607,7 @@ class Evaluator:
                         ('NUTS', summary_nuts_conv),
                         ('ADVI', summary_advi_conv),
                     ]:
-                        rows.append(self._makeRow(label, summary, fit_label))
+                        rows.append(self._makeRow(label + '_conv', summary, fit_label))
                     conv_plot_dir = self.plot_dir / 'conv'
                     conv_plot_dir.mkdir(parents=True, exist_ok=True)
                     self.plot(
@@ -597,6 +617,30 @@ class Evaluator:
                         conv_batch,
                         plot_dir=conv_plot_dir,
                     )
+
+                    # --- converged + reliable LOO subset (NUTS k filter only) ---
+                    k_thr = self.cfg.pareto_k_thr
+                    nuts_k = summary_nuts_conv.loo_pareto_k
+                    if nuts_k is not None:
+                        k_mask = (nuts_k < k_thr).numpy()
+                        n_k = int(k_mask.sum())
+                        logger.info(
+                            'Reliable LOO subset (NUTS k<%.1f): %d / %d', k_thr, n_k, n_conv
+                        )
+                        if 0 < n_k < n_conv:
+                            k_batch = subsetBatch(conv_batch, k_mask)
+                            k_mb   = subsetProposal(conv_mb,   k_mask)
+                            k_nuts = subsetProposal(conv_nuts, k_mask)
+                            k_advi = subsetProposal(conv_advi, k_mask)
+                            summary_mb_k   = self.summary(k_mb,   k_batch)
+                            summary_nuts_k = self.summary(k_nuts, k_batch)
+                            summary_advi_k = self.summary(k_advi, k_batch)
+                            for label, summary in [
+                                ('MB', summary_mb_k),
+                                ('NUTS', summary_nuts_k),
+                                ('ADVI', summary_advi_k),
+                            ]:
+                                rows.append(self._makeRow(label + '_loo', summary, fit_label))
 
         if self.cfg.save_tables:
             self.saveTables(rows)
