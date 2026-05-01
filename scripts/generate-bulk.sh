@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=bulk
-#SBATCH --output=logs/bulk/generate_%A_%a.out
-#SBATCH --error=logs/bulk/generate_%A_%a.err
+#SBATCH --output=logs/bulk/%A_%a.out
+#SBATCH --error=logs/bulk/%A_%a.err
 #SBATCH --array=0-4899
 
 #SBATCH --partition cpu_p

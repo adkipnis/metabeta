@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=train
-#SBATCH --output=logs/train/train_%j.out
-#SBATCH --error=logs/train/train_%j.err
+#SBATCH --output=logs/train/%j.out
+#SBATCH --error=logs/train/%j.err
 
 #SBATCH --partition gpu_p
 #SBATCH --qos gpu_normal

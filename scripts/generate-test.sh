@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=test
-#SBATCH --output=logs/test/generate_%j.out
-#SBATCH --error=logs/test/generate_%j.err
+#SBATCH --output=logs/test/%j.out
+#SBATCH --error=logs/test/%j.err
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
