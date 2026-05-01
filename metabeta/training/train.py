@@ -147,6 +147,24 @@ def _ancestralRate(
     return p_max * float(np.clip((loo_nll_0 - loo_nll) / (loo_nll_0 - loo_floor), 0.0, 1.0))
 
 
+def _coerce_rng_state_byte_tensor(state: object) -> torch.Tensor:
+    """Normalize serialized RNG state to the CPU ByteTensor format PyTorch expects."""
+    if isinstance(state, torch.Tensor):
+        return state.detach().to(device='cpu', dtype=torch.uint8)
+    if isinstance(state, np.ndarray):
+        return torch.as_tensor(state, dtype=torch.uint8, device='cpu')
+    if isinstance(state, (bytes, bytearray)):
+        return torch.tensor(list(state), dtype=torch.uint8)
+    return torch.tensor(state, dtype=torch.uint8)
+
+
+def _coerce_cuda_rng_states(states: object) -> list[torch.Tensor]:
+    """Normalize serialized per-device CUDA RNG states for torch.cuda.set_rng_state_all()."""
+    if isinstance(states, torch.Tensor | np.ndarray | bytes | bytearray):
+        return [_coerce_rng_state_byte_tensor(states)]
+    return [_coerce_rng_state_byte_tensor(state) for state in states]
+
+
 # -----------------------------------------------------------------------------
 class EarlyStopping:
     def __init__(self, patience: int = 0, delta: float = 1e-3) -> None:
@@ -390,11 +408,9 @@ class Trainer:
 
         # restore RNG states for reproducibility
         if 'rng_torch' in payload:
-            # Checkpoint tensors are map_location'd to the active device on load,
-            # but torch.set_rng_state() only accepts a CPU ByteTensor.
-            torch.set_rng_state(payload['rng_torch'].cpu())
+            torch.set_rng_state(_coerce_rng_state_byte_tensor(payload['rng_torch']))
         if payload.get('rng_torch_cuda') is not None and torch.cuda.is_available():
-            torch.cuda.set_rng_state_all(payload['rng_torch_cuda'])
+            torch.cuda.set_rng_state_all(_coerce_cuda_rng_states(payload['rng_torch_cuda']))
         if 'rng_numpy' in payload:
             np.random.set_state(payload['rng_numpy'])
         if 'rng_python' in payload:

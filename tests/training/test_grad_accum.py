@@ -13,10 +13,12 @@ import math
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 import torch
 
 from metabeta.models.approximator import Approximator
+from metabeta.training.train import _coerce_cuda_rng_states, _coerce_rng_state_byte_tensor
 from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Dataloader
 
@@ -54,6 +56,7 @@ def _forward_loss(model: Approximator, batch: dict) -> torch.Tensor:
 # 1. Gradient correctness
 # ---------------------------------------------------------------------------
 
+
 def test_gradient_accumulation_correctness(model: Approximator, dl: Dataloader):
     """grad(loss/2).backward() twice == grad(loss).backward() once."""
     batch = next(iter(dl))
@@ -62,22 +65,14 @@ def test_gradient_accumulation_correctness(model: Approximator, dl: Dataloader):
     model_a = copy.deepcopy(model)
     model_a.zero_grad()
     _forward_loss(model_a, batch).backward()
-    grads_baseline = [
-        p.grad.detach().clone()
-        for p in model_a.parameters()
-        if p.grad is not None
-    ]
+    grads_baseline = [p.grad.detach().clone() for p in model_a.parameters() if p.grad is not None]
 
     # Accumulation: two backwardss, each scaled by 1/2
     model_b = copy.deepcopy(model)
     model_b.zero_grad()
     for _ in range(2):
         (_forward_loss(model_b, batch) / 2).backward()
-    grads_accum = [
-        p.grad.detach().clone()
-        for p in model_b.parameters()
-        if p.grad is not None
-    ]
+    grads_accum = [p.grad.detach().clone() for p in model_b.parameters() if p.grad is not None]
 
     assert len(grads_baseline) == len(grads_accum), 'parameter count mismatch'
     for ga, gb in zip(grads_baseline, grads_accum):
@@ -88,13 +83,14 @@ def test_gradient_accumulation_correctness(model: Approximator, dl: Dataloader):
 # 2. Optimizer step count
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     'n_batches, accum_steps, expected_steps',
     [
-        (6, 1, 6),   # no accumulation: step every batch
-        (6, 2, 3),   # clean division: 3 windows of 2
-        (6, 4, 2),   # 4+2: full window + trailing window
-        (5, 2, 3),   # 2+2+1: two full windows + trailing micro-batch
+        (6, 1, 6),  # no accumulation: step every batch
+        (6, 2, 3),  # clean division: 3 windows of 2
+        (6, 4, 2),  # 4+2: full window + trailing window
+        (5, 2, 3),  # 2+2+1: two full windows + trailing micro-batch
     ],
 )
 def test_optimizer_step_count(
@@ -126,3 +122,31 @@ def test_optimizer_step_count(
             step_count += 1
 
     assert step_count == expected_steps
+
+
+def test_coerce_rng_state_byte_tensor_from_cuda_like_tensor():
+    state = torch.tensor([1.0, 2.0, 255.0], dtype=torch.float32)
+
+    normalized = _coerce_rng_state_byte_tensor(state)
+
+    assert normalized.device.type == 'cpu'
+    assert normalized.dtype == torch.uint8
+    torch.testing.assert_close(normalized, torch.tensor([1, 2, 255], dtype=torch.uint8))
+
+
+def test_coerce_cuda_rng_states_from_mixed_serialized_formats():
+    states = (
+        torch.tensor([3.0, 4.0], dtype=torch.float32),
+        np.array([5, 6], dtype=np.int64),
+        b'\x07\x08',
+    )
+
+    normalized = _coerce_cuda_rng_states(states)
+
+    assert len(normalized) == 3
+    for state in normalized:
+        assert state.device.type == 'cpu'
+        assert state.dtype == torch.uint8
+    torch.testing.assert_close(normalized[0], torch.tensor([3, 4], dtype=torch.uint8))
+    torch.testing.assert_close(normalized[1], torch.tensor([5, 6], dtype=torch.uint8))
+    torch.testing.assert_close(normalized[2], torch.tensor([7, 8], dtype=torch.uint8))
