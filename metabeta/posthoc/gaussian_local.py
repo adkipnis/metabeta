@@ -60,7 +60,9 @@ def analyticalRFX(
 
     mu = torch.linalg.solve(Lambda, ZtR / eps_sq[:, None, :, None])  # (B, m, S, q)
 
-    L = torch.linalg.cholesky(Lambda)
+    diag_max = Lambda.diagonal(dim1=-2, dim2=-1).amax(-1, keepdim=True).unsqueeze(-1).clamp(min=1.0)
+    jitter = torch.eye(q, device=Lambda.device, dtype=Lambda.dtype) * (diag_max * 1e-6)
+    L = torch.linalg.cholesky(Lambda + jitter)
     z = torch.randn(B, m, S, q, device=Y.device, dtype=Y.dtype)
     samples = mu + torch.linalg.solve_triangular(L.mT, z.unsqueeze(-1), upper=True).squeeze(-1)
 
