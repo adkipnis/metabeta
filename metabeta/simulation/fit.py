@@ -43,6 +43,8 @@ def setup() -> argparse.Namespace:
         help='Number of chains (default=4)')
     parser.add_argument('--loop', action='store_true',
         help='Run chains sequentially instead of in parallel (default=False)')
+    parser.add_argument('--mp_ctx', type=str, default='forkserver',
+        help='Multiprocessing context for parallel chains: fork|forkserver|spawn (default=forkserver)')
     parser.add_argument('--viter', type=int, default=100_000,
         help='ADVI iterations (default=100_000)')
     parser.add_argument('--lr', type=float, default=1e-3,
@@ -238,11 +240,13 @@ class Fitter:
         pymc_model = self._buildPymc(ds)
         t0 = time.perf_counter()
         with pymc_model:
+            parallel = not cfg.loop
             trace = pm.sample(
                 tune=cfg.tune,
                 draws=cfg.draws,
                 chains=cfg.chains,
-                cores=(1 if cfg.loop else cfg.chains),
+                cores=(cfg.chains if parallel else 1),
+                mp_ctx=(cfg.mp_ctx if parallel else None),
                 random_seed=cfg.seed,
                 target_accept=cfg.target_accept,
                 nuts_kwargs={'max_treedepth': cfg.max_treedepth},
@@ -375,6 +379,7 @@ if __name__ == '__main__':
         ('draws', 1000),
         ('chains', 4),
         ('loop', False),
+        ('mp_ctx', 'forkserver'),
         ('viter', 100_000),
         ('lr', 1e-3),
         ('diagonal', False),

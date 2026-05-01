@@ -36,5 +36,5 @@ mkdir -p "$JOB_TMPDIR"
 export PYTENSOR_FLAGS="base_compiledir=$JOB_TMPDIR"
 
 cd $HOME/metabeta/metabeta/simulation
-python fit.py --size "${SIZE}" --family ${FAMILY} --ds_type "${DS_TYPE}" --idx ${SLURM_ARRAY_TASK_ID} --method nuts --loop
+python fit.py --size "${SIZE}" --family ${FAMILY} --ds_type "${DS_TYPE}" --idx ${SLURM_ARRAY_TASK_ID} --method nuts
 rm -rf "$JOB_TMPDIR"
