@@ -4,6 +4,7 @@ from torch.nn import functional as F
 
 from metabeta.models.transformers import SetTransformer
 from metabeta.models.normalizingflows import CouplingFlow
+from metabeta.posthoc.gaussian_local import analyticalBLUPStats
 from metabeta.utils.regularization import (
     getConstrainers,
     corrToLower,
@@ -268,18 +269,56 @@ class Approximator(nn.Module):
         self,
         local_summary: torch.Tensor,
         global_params: torch.Tensor,
+        data: dict[str, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         b, m, _ = local_summary.shape
         ndim = global_params.dim()
         if ndim == 3:  # samples
             s = global_params.shape[-2]
-            global_params = global_params.unsqueeze(1).expand(b, m, s, -1)
-            local_summary = local_summary.unsqueeze(2).expand(b, m, s, -1)
+            global_params_exp = global_params.unsqueeze(1).expand(b, m, s, -1)
+            local_summary_exp = local_summary.unsqueeze(2).expand(b, m, s, -1)
         elif ndim == 2:  # ground truth
-            global_params = global_params.unsqueeze(1).expand(b, m, -1)
+            global_params_exp = global_params.unsqueeze(1).expand(b, m, -1)
+            local_summary_exp = local_summary
         else:
             raise ValueError(f'global_params has {ndim} dims, expected 2 or 3')
-        return torch.cat([local_summary, global_params], dim=-1)
+        ctx = torch.cat([local_summary_exp, global_params_exp], dim=-1)
+        if data is not None and self.analytical_context and self.likelihood_family == 0:
+            ctx = torch.cat([ctx, self._analyticalBLUPContext(data, global_params)], dim=-1)
+        return ctx
+
+    def _analyticalBLUPContext(
+        self,
+        data: dict[str, torch.Tensor],
+        global_params: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute BLUP mean, std, shrinkage from current global params (unconstrained sigma).
+
+        global_params: (B, d_g) ground-truth or (B, S, d_g) samples — sigma in softplus space.
+        Returns: (B, m, 3*q) or (B, m, S, 3*q).
+        """
+        has_s = global_params.dim() == 3
+        gp = global_params.unsqueeze(1) if not has_s else global_params  # (B, S, d_g)
+
+        d, q = self.d_ffx, self.d_rfx
+        beta = gp[..., :d]                                           # (B, S, d_ffx)
+        sigma_rfx = constrainSigma(gp[..., d : d + q])              # (B, S, q)
+        sigma_eps = constrainSigma(gp[..., d + q : d + q + 1]).squeeze(-1)  # (B, S)
+
+        mu, blup_std, lambda_g = analyticalBLUPStats(
+            data['y'],
+            data['X'][..., :d],
+            data['Z'][..., :q],
+            beta,
+            sigma_rfx,
+            sigma_eps,
+            data['mask_n'],
+        )  # each (B, m, S, q)
+
+        blup_ctx = torch.cat(
+            [mu.clamp(-CLAMP, CLAMP), blup_std.clamp(max=CLAMP), lambda_g], dim=-1
+        )  # (B, m, S, 3*q)
+        return blup_ctx.squeeze(2) if not has_s else blup_ctx
 
     def _preprocess(self, targets: torch.Tensor, local: bool = False) -> torch.Tensor:
         """constrain target parameters"""
@@ -327,14 +366,21 @@ class Approximator(nn.Module):
 
     def summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)
-        summary_l = self.summarizer_l(inputs, mask=data['mask_n'])
+        summary_l_raw = self.summarizer_l(inputs, mask=data['mask_n'])
         if self.analytical_context:
             stats = self._dataStatistics(data)  # compute once, share across both contexts
         else:
             stats = None
-        summary_l = self._addMetadata(summary_l, data, local=True, stats=stats)
-        summary_g = self.summarizer_g(summary_l, mask=data['mask_m'])
+        # Global summarizer sees REML BLUPs per group (best available at this point).
+        summary_l_for_g = self._addMetadata(summary_l_raw, data, local=True, stats=stats)
+        summary_g = self.summarizer_g(summary_l_for_g, mask=data['mask_m'])
         summary_g = self._addMetadata(summary_g, data, local=False, stats=stats)
+        # Local context gets BLUP-free summary; analytical BLUPs are injected in _localContext
+        # from the current global params to stay consistent with the conditioning sigma.
+        if self.analytical_context and self.likelihood_family == 0:
+            summary_l = self._addMetadata(summary_l_raw, data, local=True, stats=None)
+        else:
+            summary_l = summary_l_for_g
         return summary_g, summary_l
 
     def forward(
@@ -372,7 +418,7 @@ class Approximator(nn.Module):
             context_g = samples_g.squeeze(-2)
         else:
             context_g = targets_g
-        context_l = self._localContext(summary_l, context_g)
+        context_l = self._localContext(summary_l, context_g, data)
         log_probs['local'] = self.posterior_l.logProb(  # type: ignore
             targets_l, context=context_l, mask=mask_l
         )
@@ -413,7 +459,7 @@ class Approximator(nn.Module):
         mask_l = self._masks(data, local=True)
         b, m, q = mask_l.shape
         mask_l = mask_l.unsqueeze(-2).expand(b, m, n_samples, q)
-        context_l = self._localContext(summary_l, samples_g)
+        context_l = self._localContext(summary_l, samples_g, data)
         samples_l, log_prob_l = self.posterior_l.sample(  # type: ignore
             1, context=context_l, mask=mask_l
         )
