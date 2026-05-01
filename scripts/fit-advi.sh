@@ -8,7 +8,7 @@
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=24:00:00
 
