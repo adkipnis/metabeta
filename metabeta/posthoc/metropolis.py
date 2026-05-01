@@ -336,7 +336,7 @@ class MetropolisSampler:
         }
         out = Proposal(proposed, has_sigma_eps=proposal.has_sigma_eps, d_corr=d_corr)
         t1 = time.perf_counter()
-        out.tpd = proposal.tpd + (t1 - t0)
+        out.tpd = (proposal.tpd or 0.0) + (t1 - t0)
         return out, {'accept_rate': accept_rate}
 
 
