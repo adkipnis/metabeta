@@ -3,7 +3,13 @@ import torch
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 
-from metabeta.utils.evaluation import EvaluationSummary, getNames, getCorrRfxNames, Proposal, dictMean
+from metabeta.utils.evaluation import (
+    EvaluationSummary,
+    getNames,
+    getCorrRfxNames,
+    Proposal,
+    dictMeanExcl,
+)
 from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
 
 
@@ -83,8 +89,8 @@ def plotCoverage(
             + getNames('rfx', proposal.q)
         )
         stats = {
-            'ECE': 100 * dictMean(summary.ece),
-            'EACE': 100 * dictMean(summary.eace),
+            'ECE': 100 * dictMeanExcl(summary.ece),
+            'EACE': 100 * dictMeanExcl(summary.eace),
         }
         _plotCoverage(
             axs[i],

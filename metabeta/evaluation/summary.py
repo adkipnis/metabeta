@@ -5,7 +5,7 @@ import torch
 from tabulate import tabulate
 
 from metabeta.posthoc.conformal import Calibrator
-from metabeta.utils.evaluation import Proposal, EvaluationSummary, dictMean
+from metabeta.utils.evaluation import Proposal, EvaluationSummary, dictMean, dictMeanExcl
 from metabeta.evaluation.point import getPointEstimates, getRMSE, getCorrelation
 from metabeta.evaluation.intervals import (
     ALPHAS,
@@ -26,13 +26,7 @@ from metabeta.evaluation.predictive import (
 
 logger = logging.getLogger(__name__)
 
-# Parameters excluded from the Average row (structural, not estimable like free params).
-_AVG_EXCLUDE = frozenset({'corr_rfx'})
 EST_TYPE = 'mean'
-
-
-def _dictMeanExcl(td: dict) -> float:
-    return dictMean({k: v for k, v in td.items() if k not in _AVG_EXCLUDE})
 
 
 def _t(label: str, t0: float) -> float:
@@ -271,10 +265,10 @@ def longTable(
     rows.append(
         [
             'Average',
-            _dictMeanExcl(corr),
-            _dictMeanExcl(nrmse),
-            _dictMeanExcl(ece),
-            _dictMeanExcl(eace),
+            dictMeanExcl(corr),
+            dictMeanExcl(nrmse),
+            dictMeanExcl(ece),
+            dictMeanExcl(eace),
         ]
     )
     return (

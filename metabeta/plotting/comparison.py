@@ -2,7 +2,13 @@ from pathlib import Path
 import torch
 from matplotlib import pyplot as plt
 
-from metabeta.utils.evaluation import EvaluationSummary, getNames, getCorrRfxNames, Proposal, dictMean
+from metabeta.utils.evaluation import (
+    EvaluationSummary,
+    getNames,
+    getCorrRfxNames,
+    Proposal,
+    dictMeanExcl,
+)
 from metabeta.utils.plot import DPI, savePlot
 from metabeta.plotting.recovery import _prepareRecoveryData, _plotRecoveryGrouped
 from metabeta.plotting.coverage import _plotCoverage
@@ -46,7 +52,9 @@ def plotComparison(
         lower = i == nrows - 1
 
         # cols 0-(n_rec-1): recovery scatter
-        targets, estimates, masks, names, metrics = _prepareRecoveryData(summary, data, show_corr_rfx=show_corr_rfx)
+        targets, estimates, masks, names, metrics = _prepareRecoveryData(
+            summary, data, show_corr_rfx=show_corr_rfx
+        )
         _plotRecoveryGrouped(
             axs[i, :n_rec],  # type: ignore
             targets=targets,
@@ -68,8 +76,8 @@ def plotComparison(
             + getNames('rfx', proposal.q)
         )
         stats_cov = {
-            'ECE': 100 * dictMean(summary.ece),
-            'EACE': 100 * dictMean(summary.eace),
+            'ECE': 100 * dictMeanExcl(summary.ece),
+            'EACE': 100 * dictMeanExcl(summary.eace),
         }
         _plotCoverage(
             axs[i, n_rec],
