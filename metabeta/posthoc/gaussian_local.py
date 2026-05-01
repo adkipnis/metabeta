@@ -72,6 +72,56 @@ def analyticalRFX(
     return samples, log_prob
 
 
+def analyticalBLUPStats(
+    Y: Tensor,
+    X: Tensor,
+    Z: Tensor,
+    beta: Tensor,
+    sigma_rfx: Tensor,
+    sigma_eps: Tensor,
+    mask_n: Tensor,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Analytical BLUP mean, marginal std, and shrinkage for the Gaussian rfx posterior.
+
+    Shapes: Y (B,m,n), X (B,m,n,d), Z (B,m,n,q), beta (B,S,d),
+            sigma_rfx (B,S,q), sigma_eps (B,S), mask_n (B,m,n) bool.
+    Returns: mean (B,m,S,q), std (B,m,S,q), lambda_g (B,m,S,q).
+    """
+    se = sigma_eps.clamp(min=_SIGMA_MIN)
+    sr = sigma_rfx.clamp(min=_SIGMA_MIN)
+    q = Z.shape[-1]
+
+    Z_m = Z * mask_n.float().unsqueeze(-1)
+    Xbeta = torch.einsum('bmnf,bsf->bmsn', X, beta)
+    r = (Y.unsqueeze(2) - Xbeta) * mask_n.float().unsqueeze(2)  # (B, m, S, n)
+
+    ZtZ = torch.einsum('bmnq,bmnp->bmpq', Z_m, Z_m)  # (B, m, q, q)
+    ZtR = torch.einsum('bmnq,bmsn->bmsq', Z_m, r)    # (B, m, S, q)
+
+    eps_sq = se ** 2
+    Lambda = (
+        ZtZ.unsqueeze(2) / eps_sq[:, None, :, None, None]
+        + torch.diag_embed(1.0 / sr ** 2).unsqueeze(1)
+    )  # (B, m, S, q, q)
+
+    diag_max = Lambda.diagonal(dim1=-2, dim2=-1).amax(-1, keepdim=True).unsqueeze(-1).clamp(min=1.0)
+    jitter = torch.eye(q, device=Lambda.device, dtype=Lambda.dtype) * (diag_max * 1e-6)
+    Lam_j = Lambda + jitter
+
+    mu = torch.linalg.solve(Lam_j, ZtR / eps_sq[:, None, :, None])  # (B, m, S, q)
+
+    # Diagonal of Lam_j^{-1}: solve Lam_j @ X = I, broadcast identity across batch dims
+    eye = torch.eye(q, device=Lam_j.device, dtype=Lam_j.dtype).reshape(
+        (1,) * (Lam_j.dim() - 2) + (q, q)
+    )
+    Lambda_inv_diag = torch.linalg.solve(Lam_j, eye).diagonal(dim1=-2, dim2=-1)  # (B, m, S, q)
+
+    blup_std = Lambda_inv_diag.clamp(min=0.0).sqrt()
+    lambda_g = (1.0 - Lambda_inv_diag / (sr.unsqueeze(1) ** 2 + 1e-8)).clamp(0.0, 1.0)
+
+    return mu, blup_std, lambda_g
+
+
 def gaussianCeiling(
     batch: dict[str, Tensor],
     d_ffx: int,
