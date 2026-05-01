@@ -132,6 +132,7 @@ class TrainingConfig(BaseModel):
     ancestral: bool = False
     n_loss_samples: int = Field(gt=0, default=64)
     pred_nll_weight: float = 0.1
+    kl_mix_weight: float = Field(gt=0, default=0.05)
     patience: int = Field(ge=0, default=0)
     sample_interval: int = Field(gt=0, default=20)
     skip_ref: bool = False
@@ -390,6 +391,7 @@ def setupConfigParser(
         # training flags added after initial release; default keeps old behaviour
         'n_loss_samples': 64,
         'pred_nll_weight': 0.1,
+        'kl_mix_weight': 0.05,
     }
 
     for key, default_value in cli_only_defaults.items():
