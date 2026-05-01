@@ -12,15 +12,22 @@
 #SBATCH --mem=16G
 #SBATCH --time=24:00:00
 
+set -euo pipefail
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --data_id) TAG="$2"; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
-[[ -z "$TAG" ]] && { echo "Usage: $0 --data_id <size-family-ds_type>"; exit 1; }
+
+[[ -z "${TAG:-}" ]] && {
+    echo "Usage: $0 --data_id <size-family-ds_type>"
+    exit 1
+}
 
 IFS='-' read -r SIZE FAM_NAME DS_TYPE <<< "$TAG"
+
 case $FAM_NAME in
     n) FAMILY=0 ;;
     b) FAMILY=1 ;;
@@ -28,16 +35,39 @@ case $FAM_NAME in
     *) echo "Unknown family letter: $FAM_NAME (use n, b, or p)"; exit 1 ;;
 esac
 
-source $HOME/.bashrc
-source $HOME/metabeta/.venv/bin/activate
+SIF="$HOME/containers/python312.sif"
+VENV="$HOME/metabeta/.venv-apptainer"
 
-JOB_TMPDIR="$HOME/tmp/pytensor_$SLURM_JOB_ID"
+JOB_TMPDIR="$HOME/tmp/pytensor_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
 mkdir -p "$JOB_TMPDIR"
-GXX=$(which g++ 2>/dev/null)
-CXX_FLAG=${GXX:+",cxx=$GXX"}
-export PYTENSOR_FLAGS="base_compiledir=$JOB_TMPDIR${CXX_FLAG}"
-[ -z "$GXX" ] && echo "WARNING: g++ not found on $(hostname), running in Python mode"
+mkdir -p logs/nuts
 
-cd $HOME/metabeta/metabeta/simulation
-python fit.py --size "${SIZE}" --family ${FAMILY} --ds_type "${DS_TYPE}" --idx ${SLURM_ARRAY_TASK_ID} --method nuts
+apptainer exec \
+  --bind "$HOME:$HOME" \
+  "$SIF" \
+  bash -lc "
+    set -euo pipefail
+
+    cd '$HOME/metabeta'
+    source '$VENV/bin/activate'
+
+    export PYTENSOR_FLAGS='base_compiledir=$JOB_TMPDIR,cxx=/usr/bin/g++'
+
+    echo 'hostname:' \$(hostname)
+    echo 'python:' \$(command -v python)
+    echo 'python version:' \$(python --version)
+    echo 'g++:' \$(command -v g++)
+    g++ --version
+    echo 'PYTENSOR_FLAGS:' \$PYTENSOR_FLAGS
+
+    cd '$HOME/metabeta/metabeta/simulation'
+
+    python fit.py \
+      --size '$SIZE' \
+      --family '$FAMILY' \
+      --ds_type '$DS_TYPE' \
+      --idx '$SLURM_ARRAY_TASK_ID' \
+      --method nuts
+  "
+
 rm -rf "$JOB_TMPDIR"
