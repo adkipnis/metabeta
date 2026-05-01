@@ -79,14 +79,14 @@ def _loadTestData(cfg, dir) -> Dataloader:
     data_cfg_train = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg_train)
     data_id = loadDataConfig(cfg.data_id_valid)['data_id']
-    path = (dir / '..' / 'outputs' / 'data' / data_id / datasetFilename('test')).resolve()
+    path = (dir / '..' / 'metabeta' / 'outputs' / 'data' / data_id / datasetFilename('test')).resolve()
     path = path.with_suffix('.fit.npz')
     assert path.exists(), f'data not found: {path}'
     return Dataloader(path, batch_size=cfg.batch_size, sortish=True)
 
 
 def _loadModel(cfg, dir, device) -> 'Approximator':
-    model_cfg_path = (dir / '..' / 'configs' / 'models' / f'{cfg.model_id}.yaml').resolve()
+    model_cfg_path = (dir / '..' / 'metabeta' / 'configs' / 'models' / f'{cfg.model_id}.yaml').resolve()
     model_cfg = modelFromYaml(
         model_cfg_path, d_ffx=cfg.max_d, d_rfx=cfg.max_q,
         likelihood_family=cfg.likelihood_family,
@@ -95,7 +95,7 @@ def _loadModel(cfg, dir, device) -> 'Approximator':
     model.eval()
     path = Path(cfg._checkpoint_dir) / f'{cfg._checkpoint_prefix}.pt'
     assert path.exists(), f'checkpoint not found: {path}'
-    model.load_state_dict(torch.load(path, map_location=device)['model_state'])
+    model.load_state_dict(torch.load(path, map_location=device, weights_only=False)['model_state'])
     logger.info('Loaded checkpoint: %s', path)
     return model
 
