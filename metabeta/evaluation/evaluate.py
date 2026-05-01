@@ -31,7 +31,6 @@ from metabeta.utils.evaluation import (
 import numpy as np
 
 from metabeta.models.approximator import Approximator
-from metabeta.posthoc.importance import ImportanceSampler, runIS, runSIR
 from metabeta.utils.moe import moeEstimate
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.plotting import plotComparison
@@ -64,7 +63,6 @@ def setup() -> argparse.Namespace:
 
     # Evaluation settings (override checkpoint config)
     parser.add_argument('--n_samples', type=int, default=1000)
-    parser.add_argument('--importance', action=argparse.BooleanOptionalAction)
     parser.add_argument('--conformal', action=argparse.BooleanOptionalAction)
     parser.add_argument('--k', type=int, default=0, help='pseudo-MoE permuted views (0=off)')
     parser.add_argument('--batch_size', type=int)
@@ -210,7 +208,7 @@ class Evaluator:
         prefix = getattr(self, 'checkpoint_prefix', getattr(self.cfg, 'prefix', 'best'))
         path = Path(self.ckpt_dir, prefix + '.pt')
         assert path.exists(), f'checkpoint not found: {path}'
-        payload = torch.load(path, map_location=self.device)
+        payload = torch.load(path, map_location=self.device, weights_only=False)
 
         # compare configs
         if self.data_cfg != payload['data_cfg']:
@@ -247,20 +245,14 @@ class Evaluator:
 
     def _sampleBatch(self, batch: dict[str, torch.Tensor]) -> Proposal:
         """Sample a proposal from a batch (no MoE)."""
-        if self.cfg.importance and not self.cfg.sir:
-            return runIS(self.model, batch, self.cfg)
-        elif self.cfg.sir:
-            return runSIR(self.model, batch, self.cfg)
-        else:
-            proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
-            if self.cfg.rescale:
-                proposal.rescale(batch['sd_y'])
-            return proposal
+        proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+        if self.cfg.rescale:
+            proposal.rescale(batch['sd_y'])
+        return proposal
 
     def _sampleMoe(self, batch: dict[str, torch.Tensor], n_datasets_seen: int) -> list[Proposal]:
         """Sample with pseudo-MoE (B=1 per dataset), optionally applying IS."""
         B = batch['X'].shape[0]
-        lf = self.cfg.likelihood_family
         proposals = []
         for i in range(B):
             single = {k: v[i : i + 1] if torch.is_tensor(v) else v for k, v in batch.items()}
@@ -268,9 +260,6 @@ class Evaluator:
             proposal = moeEstimate(self.model, single, self.cfg.n_samples, self.cfg.k, rng=rng)
             if self.cfg.rescale:
                 proposal.rescale(single['sd_y'])
-            if self.cfg.importance and not self.cfg.sir:
-                data_is = rescaleData(single) if self.cfg.rescale else single
-                proposal = ImportanceSampler(data_is, sir=False, likelihood_family=lf)(proposal)
             proposals.append(proposal)
         return proposals
 
