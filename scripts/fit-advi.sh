@@ -33,7 +33,10 @@ source $HOME/metabeta/.venv/bin/activate
 
 JOB_TMPDIR="$HOME/tmp/pytensor_$SLURM_JOB_ID"
 mkdir -p "$JOB_TMPDIR"
-export PYTENSOR_FLAGS="base_compiledir=$JOB_TMPDIR,cxx=/usr/bin/g++"
+GXX=$(which g++ 2>/dev/null)
+CXX_FLAG=${GXX:+",cxx=$GXX"}
+export PYTENSOR_FLAGS="base_compiledir=$JOB_TMPDIR${CXX_FLAG}"
+[ -z "$GXX" ] && echo "WARNING: g++ not found on $(hostname), running in Python mode"
 
 cd $HOME/metabeta/metabeta/simulation
 python fit.py --size "${SIZE}" --family ${FAMILY} --ds_type "${DS_TYPE}" --idx ${SLURM_ARRAY_TASK_ID} --method advi
