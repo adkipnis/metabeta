@@ -5,8 +5,8 @@
 #SBATCH --error=logs/nuts/%A_%a.err
 #SBATCH --array=0-511
 
-#SBATCH --partition cpu_p
-#SBATCH --qos cpu_normal
+#SBATCH --partition=cpu_p
+#SBATCH --qos=cpu_normal
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
@@ -28,7 +28,7 @@ done
 
 IFS='-' read -r SIZE FAM_NAME DS_TYPE <<< "$TAG"
 
-case $FAM_NAME in
+case "$FAM_NAME" in
     n) FAMILY=0 ;;
     b) FAMILY=1 ;;
     p) FAMILY=2 ;;
@@ -38,9 +38,9 @@ esac
 SIF="$HOME/containers/python312.sif"
 VENV="$HOME/metabeta/.venv-apptainer"
 
+mkdir -p logs/nuts
 JOB_TMPDIR="$HOME/tmp/pytensor_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
 mkdir -p "$JOB_TMPDIR"
-mkdir -p logs/nuts
 
 apptainer exec \
   --bind "$HOME:$HOME" \
@@ -51,14 +51,20 @@ apptainer exec \
     cd '$HOME/metabeta'
     source '$VENV/bin/activate'
 
+    export OMP_NUM_THREADS=1
+    export MKL_NUM_THREADS=1
+    export OPENBLAS_NUM_THREADS=1
+    export NUMEXPR_NUM_THREADS=1
+
     export PYTENSOR_FLAGS='base_compiledir=$JOB_TMPDIR,cxx=/usr/bin/g++'
 
     echo 'hostname:' \$(hostname)
     echo 'python:' \$(command -v python)
-    echo 'python version:' \$(python --version)
+    python --version
     echo 'g++:' \$(command -v g++)
     g++ --version
     echo 'PYTENSOR_FLAGS:' \$PYTENSOR_FLAGS
+    echo 'SLURM_CPUS_PER_TASK:' ${SLURM_CPUS_PER_TASK}
 
     cd '$HOME/metabeta/metabeta/simulation'
 
@@ -66,7 +72,7 @@ apptainer exec \
       --size '$SIZE' \
       --family '$FAMILY' \
       --ds_type '$DS_TYPE' \
-      --idx '$SLURM_ARRAY_TASK_ID' \
+      --idx '${SLURM_ARRAY_TASK_ID}' \
       --method nuts
   "
 
