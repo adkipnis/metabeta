@@ -116,6 +116,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--ancestral', action=argparse.BooleanOptionalAction, help='Enable ancestral curriculum: ramp local posterior conditioning from true to sampled globals as training converges (default = False)')
     parser.add_argument('--n_loss_samples', type=int, help='Posterior samples for backward KL and predictive NLL loss modes (default = 64)')
     parser.add_argument('--pred_nll_weight', type=float, help='Weight for predictive NLL auxiliary term when loss_type=predictive (default = 0.1)')
+    parser.add_argument('--kl_mix_weight', type=float, help='Backward KL coefficient in mixed loss: total = fkl + kl_mix_weight * alpha * bkl (default = 0.05)')
     parser.add_argument('--n_samples', type=int, help='Posterior samples drawn per evaluation dataset (default = 512)')
     parser.add_argument('--patience', type=int, help='Early stopping patience in epochs; 0 = disabled (default = 0)')
     parser.add_argument('--sample_interval', type=int, help='Run full posterior evaluation every N epochs (default = 20)')
@@ -478,23 +479,36 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             lq = lq_g + lq_l.sum(1) / m
             return -lq.mean()
 
-        # backward KL loss
+        # backward KL loss (globals-only for Normal; joint for other families)
         elif mode == 'backward':
             proposal = self.model.backward(
                 batch, summaries, n_samples=getattr(self.cfg, 'n_loss_samples', 64)
             )
-            lq_g, lq_l = proposal.log_probs
-            lq_l = lq_l * mask
-            lq = lq_g + lq_l.sum(1) / m
-            ll, lp = ImportanceSampler(batch).unnormalizedPosterior(proposal)
-            return (lq - lp - ll).mean()
+            lf = self.cfg.likelihood_family
+            if lf == 0:
+                # Analytic marginal likelihood: gradient flows only through global flow,
+                # avoiding rfx-sample noise that obscures sigma_rfx overdispersion signal.
+                lq_g, _ = proposal.log_probs
+                ll, lp = ImportanceSampler(
+                    batch, marginal=True, likelihood_family=lf
+                ).unnormalizedPosterior(proposal)
+                return (lq_g - lp - ll).mean()
+            else:
+                lq_g, lq_l = proposal.log_probs
+                lq_l = lq_l * mask
+                lq = lq_g + lq_l.sum(1) / m
+                ll, lp = ImportanceSampler(
+                    batch, likelihood_family=lf
+                ).unnormalizedPosterior(proposal)
+                return (lq - lp - ll).mean()
 
-        # mix KL loss
+        # mixed KL loss
         elif mode == 'mixed':
             fkl = self.loss(batch, summaries, mode='forward', ancestral_rate=ancestral_rate)
             bkl = self.loss(batch, summaries, mode='backward')
+            w = getattr(self.cfg, 'kl_mix_weight', 0.05)
             alpha = (fkl.detach().abs() / (bkl.detach().abs() + 1e-8)).clamp(max=1.0)
-            return fkl + 0.05 * alpha * bkl
+            return fkl + w * alpha * bkl
 
         # forward KL + predictive NLL auxiliary (globals detached: posterior_g trained by L_fkl)
         elif mode == 'predictive':
