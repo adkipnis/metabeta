@@ -390,7 +390,9 @@ class Trainer:
 
         # restore RNG states for reproducibility
         if 'rng_torch' in payload:
-            torch.set_rng_state(payload['rng_torch'])
+            # Checkpoint tensors are map_location'd to the active device on load,
+            # but torch.set_rng_state() only accepts a CPU ByteTensor.
+            torch.set_rng_state(payload['rng_torch'].cpu())
         if payload.get('rng_torch_cuda') is not None and torch.cuda.is_available():
             torch.cuda.set_rng_state_all(payload['rng_torch_cuda'])
         if 'rng_numpy' in payload:
