@@ -1,8 +1,9 @@
 #!/bin/bash
 
 #SBATCH --job-name=advi
-#SBATCH --output=logs/advi/%j.out
-#SBATCH --error=logs/advi/%j.err
+#SBATCH --output=logs/advi/%A_%a.out
+#SBATCH --error=logs/advi/%A_%a.err
+#SBATCH --array=0-511
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
