@@ -33,7 +33,7 @@ source $HOME/metabeta/.venv/bin/activate
 
 JOB_TMPDIR="$HOME/tmp/pytensor_$SLURM_JOB_ID"
 mkdir -p "$JOB_TMPDIR"
-export PYTENSOR_FLAGS="base_compiledir=$JOB_TMPDIR"
+export PYTENSOR_FLAGS="base_compiledir=$JOB_TMPDIR,cxx=/usr/bin/g++"
 
 cd $HOME/metabeta/metabeta/simulation
 python fit.py --size "${SIZE}" --family ${FAMILY} --ds_type "${DS_TYPE}" --idx ${SLURM_ARRAY_TASK_ID} --method nuts
