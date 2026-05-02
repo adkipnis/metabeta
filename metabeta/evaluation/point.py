@@ -46,7 +46,7 @@ def getPointEstimates(proposal: Proposal, method: str) -> dict[str, torch.Tensor
     w = proposal.weights
     if method == 'hybrid':
         # median for location params (ffx), mean for scale params (sigma_*) and rfx
-        global_mean   = pointEstimate(proposal.samples_g, w, 'mean')
+        global_mean = pointEstimate(proposal.samples_g, w, 'mean')
         global_median = pointEstimate(proposal.samples_g, w, 'median')
         out = proposal.partition(global_mean)
         out['ffx'] = proposal.partition(global_median)['ffx']
@@ -109,13 +109,16 @@ def getCorrelation(
     for key, est in locs.items():
         if key == 'corr_rfx':
             gt = corrToLower(data['corr_rfx'])  # (b, d_corr)
-            ds_mask = data['mask_q'][:, 1]      # True for q>=2 datasets
+            ds_mask = data['mask_q'].sum(dim=-1) >= 2
             gt = gt[ds_mask]
             est = est[ds_mask]
-            corr = np.array([
-                cast(np.float32, pearsonr(gt[:, k].numpy(), est[:, k].numpy())[0])
-                for k in range(gt.shape[-1])
-            ], dtype=np.float32)
+            corr = np.array(
+                [
+                    cast(np.float32, pearsonr(gt[:, k].numpy(), est[:, k].numpy())[0])
+                    for k in range(gt.shape[-1])
+                ],
+                dtype=np.float32,
+            )
             out[key] = torch.tensor(corr)
             continue
         gt = data[key]
