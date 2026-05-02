@@ -402,6 +402,10 @@ def _lmmNormalCompacted(
     Psi = sigma_rfx.square().unsqueeze(-1)                          # (B, 1, 1)
     sigma_eps = sigma_eps_sq_val.clamp(min=0.0).sqrt().unsqueeze(-1).nan_to_num(nan=1.0, posinf=1.0)
 
+    # GLS posterior variance for β: diag(A_gls_reg⁻¹), i.e. Var(β̂_j | data, σ estimates)
+    eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
+    beta_var = _safeSolve(A_gls_reg, eye_d).diagonal(dim1=-1, dim2=-2).clamp(min=1e-8)  # (B, d)
+
     resid_g = r_g.unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)  # (B, m, 1)
 
     beta_wg_out = beta_wg.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
@@ -409,6 +413,7 @@ def _lmmNormalCompacted(
 
     return {
         'beta_est': beta_gls,           # (B, d)
+        'beta_var': beta_var,           # (B, d)
         'beta_wg': beta_wg_out,         # (B, d)
         'sigma_eps_est': sigma_eps,     # (B, 1)
         'sigma_rfx_est': sigma_rfx,     # (B, 1)
@@ -634,6 +639,10 @@ def _lmmNormalFull(
     sigma_rfx = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()          # (B, q)
     sigma_eps_1d = se2.clamp(min=0.0).sqrt().nan_to_num(nan=1.0, posinf=1.0)  # (B,)
 
+    # GLS posterior variance for β: diag(A_gls_reg⁻¹), i.e. Var(β̂_j | data, σ estimates)
+    eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
+    beta_var = _safeSolve(A_gls_reg, eye_d).diagonal(dim1=-1, dim2=-2).clamp(min=1e-8)  # (B, d)
+
     ns_f_loc = ns.clamp(min=1.0)                                              # (B, m)
     resid_g = (resid_gls.sum(dim=2) / ns_f_loc * mask_m).unsqueeze(-1)       # (B, m, 1)
     resid_g = resid_g.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
@@ -645,6 +654,7 @@ def _lmmNormalFull(
 
     return {
         'beta_est': beta_gls,                       # (B, d)
+        'beta_var': beta_var,                       # (B, d)
         'beta_wg': beta_wg_out,                     # (B, d)
         'sigma_eps_est': sigma_eps_1d.unsqueeze(-1), # (B, 1)
         'sigma_rfx_est': sigma_rfx,                 # (B, q)
