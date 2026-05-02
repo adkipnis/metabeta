@@ -196,10 +196,19 @@ class Proposal:
         return sliced
 
     def rescale(self, scale: torch.Tensor) -> None:
-        for source in ('global', 'local'):
-            samples = self.data[source]['samples']
-            scale_ = scale.view(-1, *([1] * (samples.ndim - 1)))
-            self.data[source]['samples'] *= scale_
+        samples_l = self.data['local']['samples']
+        scale_l = scale.view(-1, *([1] * (samples_l.ndim - 1)))
+        self.data['local']['samples'] = samples_l * scale_l
+
+        samples_g = self.data['global']['samples']
+        scale_g = scale.view(-1, *([1] * (samples_g.ndim - 1)))
+        if self.d_corr > 0:
+            non_corr = samples_g[..., : -self.d_corr] * scale_g
+            self.data['global']['samples'] = torch.cat(
+                [non_corr, samples_g[..., -self.d_corr :]], dim=-1
+            )
+        else:
+            self.data['global']['samples'] = samples_g * scale_g
 
     def subset(self, idx: torch.Tensor) -> None:
         b, s = idx.shape
