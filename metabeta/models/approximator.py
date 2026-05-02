@@ -205,7 +205,18 @@ class Approximator(nn.Module):
         local: bool = False,
         stats: dict[str, torch.Tensor] | None = None,
     ) -> torch.Tensor:
-        """append summary with selected metadata"""
+        """Append analytical metadata to a set-transformer summary.
+
+        Three distinct call sites, each serving a different role:
+          • Local for global summarizer (local=True, stats=stats):
+              n_obs, eta_rfx + [REML blup_est, blup_std, λ_g if stats]
+              REML BLUPs give the global SetTransformer the best available per-group signal.
+          • Global posterior context (local=False, stats=stats):
+              n_total, n_groups, prior params + families + [beta_est, sigma_rfx, sigma_eps/phi, psi_corr if stats]
+          • Local posterior context (local=True, stats=None):
+              n_obs, eta_rfx only — REML BLUPs intentionally omitted; _localContext injects
+              analytically exact BLUPs conditioned on the current global-param sample instead.
+        """
         out = [summary]
         if local:
             # counts
@@ -304,8 +315,8 @@ class Approximator(nn.Module):
     ) -> torch.Tensor:
         """Delegate to analyticalBLUPContext after extracting constrained params.
 
-        global_params: (B, d_g) ground-truth or (B, S, d_g) samples — sigma in softplus space.
-        Returns: (B, m, 3*q) or (B, m, S, 3*q).
+        global_params: (B, d_g) ground-truth or (B, s, d_g) samples — sigma in softplus space.
+        Returns: (B, m, 3*q) or (B, m, s, 3*q).
         """
         has_s = global_params.dim() == 3
         gp = global_params.unsqueeze(1) if not has_s else global_params  # (B, S, d_g)
@@ -316,7 +327,6 @@ class Approximator(nn.Module):
         sigma_rfx = constrainSigma(gp[..., d : d + q])
         sigma_eps = constrainSigma(gp[..., d + q : d + q + 1]).squeeze(-1)
         z_corr = gp[..., d + q_var : d + q_var + self.d_corr] if self.d_corr > 0 else None
-
         ctx = analyticalBLUPContext(data, beta, sigma_rfx, sigma_eps, z_corr, clamp=CLAMP)
         return ctx.squeeze(2) if not has_s else ctx
 
@@ -371,20 +381,21 @@ class Approximator(nn.Module):
     def summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)
         summary_l_raw = self.summarizer_l(inputs, mask=data['mask_n'])
-        if self.analytical_context:
-            stats = self._dataStatistics(data)  # compute once, share across both contexts
-        else:
-            stats = None
-        # Global summarizer sees REML BLUPs per group (best available at this point).
-        summary_l_for_g = self._addMetadata(summary_l_raw, data, local=True, stats=stats)
-        summary_g = self.summarizer_g(summary_l_for_g, mask=data['mask_m'])
+        stats = self._dataStatistics(data) if self.analytical_context else None
+
+        # Global path: augment per-group summaries with REML point estimates before pooling.
+        summary_l_with_stats = self._addMetadata(summary_l_raw, data, local=True, stats=stats)
+        summary_g = self.summarizer_g(summary_l_with_stats, mask=data['mask_m'])
         summary_g = self._addMetadata(summary_g, data, local=False, stats=stats)
-        # Local context gets BLUP-free summary; analytical BLUPs are injected in _localContext
-        # from the current global params to stay consistent with the conditioning sigma.
-        if self.analytical_context and self.likelihood_family == 0:
-            summary_l = self._addMetadata(summary_l_raw, data, local=True, stats=None)
-        else:
-            summary_l = summary_l_for_g
+
+        # Local posterior path: strip REML BLUPs when _localContext will re-inject them
+        # analytically, conditioned on the exact global-param sample being evaluated.
+        # Non-normal models and no-analytical-context fall back to the REML-augmented summary.
+        inject_analytical_blups = self.analytical_context and self.likelihood_family == 0
+        summary_l = self._addMetadata(
+            summary_l_raw, data, local=True, stats=None if inject_analytical_blups else stats
+        )
+
         return summary_g, summary_l
 
     def forward(
