@@ -402,9 +402,9 @@ def _lmmNormalCompacted(
     Psi = sigma_rfx.square().unsqueeze(-1)                          # (B, 1, 1)
     sigma_eps = sigma_eps_sq_val.clamp(min=0.0).sqrt().unsqueeze(-1).nan_to_num(nan=1.0, posinf=1.0)
 
-    # GLS posterior variance for β: diag(A_gls_reg⁻¹), i.e. Var(β̂_j | data, σ estimates)
-    eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
-    beta_var = _safeSolve(A_gls_reg, eye_d).diagonal(dim1=-1, dim2=-2).clamp(min=1e-8)  # (B, d)
+    # # GLS posterior variance for β: diag(A_gls_reg⁻¹), i.e. Var(β̂_j | data, σ estimates)
+    # eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
+    # beta_var = _safeSolve(A_gls_reg, eye_d).diagonal(dim1=-1, dim2=-2).clamp(min=1e-8)  # (B, d)
 
     resid_g = r_g.unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)  # (B, m, 1)
 
@@ -413,7 +413,7 @@ def _lmmNormalCompacted(
 
     return {
         'beta_est': beta_gls,           # (B, d)
-        'beta_var': beta_var,           # (B, d)
+        # 'beta_var': beta_var,           # (B, d)
         'beta_wg': beta_wg_out,         # (B, d)
         'sigma_eps_est': sigma_eps,     # (B, 1)
         'sigma_rfx_est': sigma_rfx,     # (B, 1)

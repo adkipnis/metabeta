@@ -70,12 +70,11 @@ class Approximator(nn.Module):
 
     def _analyticsGlobalDim(self) -> int:
         """Dimension added to global context by GLMM statistics.
-        beta_est (d_ffx) + log_beta_var (d_ffx, normal only) + sigma_rfx (d_rfx) + eps/phi (1) + corr (d_corr).
+        beta_est (d_ffx) + sigma_rfx (d_rfx) + eps/phi (1) + corr (d_corr).
         """
         if not self.analytical_context:
             return 0
-        d_beta_var = self.d_ffx if self.has_sigma_eps else 0
-        return self.d_ffx + d_beta_var + self.d_rfx + self.d_corr + 1
+        return self.d_ffx + self.d_rfx + self.d_corr + 1
 
     def _analyticsLocalDim(self) -> int:
         """Dimension added to local context by GLMM stats.
@@ -276,8 +275,6 @@ class Approximator(nn.Module):
                 beta_est = stats['beta_est'].clamp(-CLAMP, CLAMP)   # (B, d)
                 sigma_rfx_est = stats['sigma_rfx_est'].clamp(max=CLAMP)   # (B, q)
                 out += [beta_est, sigma_rfx_est]
-                if self.has_sigma_eps and 'beta_var' in stats:
-                    out.append(stats['beta_var'].clamp(min=1e-8).log())   # (B, d)
                 if self.has_sigma_eps:
                     out.append(stats['sigma_eps_est'].clamp(max=CLAMP))   # (B, 1)
                 else:
