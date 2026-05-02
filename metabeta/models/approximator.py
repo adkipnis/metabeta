@@ -84,14 +84,6 @@ class Approximator(nn.Module):
             return 0
         return 3 * self.d_rfx
 
-    def _crossBlupDim(self) -> int:
-        """Extra dims added to the global-transformer input only: cross-BLUP (d_corr).
-        Separate from _analyticsLocalDim because cross-BLUP is not in the local-flow context.
-        """
-        if not self.analytical_context:
-            return 0
-        return self.d_corr
-
     def build(self) -> None:
         d_ffx = self.d_ffx
         d_rfx = self.d_rfx
@@ -111,7 +103,7 @@ class Approximator(nn.Module):
         self.summarizer_l = _buildSummarizer(self.cfg.summarizer_l, d_input_l)
         # global: local summaries + local metadata, aggregated across groups
         d_meta_l = 2 + self._analyticsLocalDim()   # n_obs + eta_rfx
-        d_input_g = self.cfg.summarizer_l.d_output + d_meta_l + self._crossBlupDim()
+        d_input_g = self.cfg.summarizer_l.d_output + d_meta_l
         self.summarizer_g = _buildSummarizer(self.cfg.summarizer_g, d_input_g)
 
         # --- posteriors
@@ -233,20 +225,7 @@ class Approximator(nn.Module):
                 lambda_g = (1.0 - stats['blup_var'] / (sigma_rfx_sq + 1e-8)).clamp(
                     0.0, 1.0
                 )   # (B, m, q)
-                # resid_g = stats['resid_g'].clamp(-CLAMP, CLAMP)   # (B, m, 1)
                 out += [blup_est, blup_std, lambda_g]
-                if self.d_corr > 0:
-                    # Per-group normalized cross-BLUP: b_i*b_j/(σ_i*σ_j) for each pair i<j.
-                    # Gives the global set transformer raw per-group correlation evidence
-                    # so it can learn to aggregate (rather than only seeing pre-averaged psi_corr).
-                    sr = stats['sigma_rfx_est'].unsqueeze(-2).clamp(min=1e-8)  # (B, 1, q)
-                    blup_norm = blup_est / sr                                  # (B, m, q)
-                    q = blup_norm.shape[-1]
-                    cross = torch.stack(
-                        [blup_norm[..., j] * blup_norm[..., i] for i in range(q) for j in range(i)],
-                        dim=-1,
-                    ).clamp(-CLAMP, CLAMP)                                     # (B, m, d_corr)
-                    out.append(cross)
         else:
             # counts
             n_total = data['n'].unsqueeze(-1).float().sqrt() / 10
@@ -293,7 +272,7 @@ class Approximator(nn.Module):
                     alpha = (G_mom / (G_mom + 10.0)).view(-1, 1, 1)        # (B, 1, 1)
                     eye = torch.eye(q_rfx, dtype=Psi.dtype, device=Psi.device)
                     psi_corr = (psi_corr * alpha + eye * (1 - alpha)).clamp(-1 + 1e-6, 1 - 1e-6)
-                    out.append(corrToUnconstrained(psi_corr))  # atanh space matches target
+                    out.append(corrToUnconstrained(psi_corr))
         return torch.cat(out, dim=-1)
 
     def _localContext(
