@@ -625,6 +625,12 @@ def _lmmNormalFull(
     df_sigma = (G - d).clamp(min=1.0)
     blup_var = blup_var * (1.0 + 2.0 / df_sigma)[:, None, None]
 
+    # Floor blup_var at Psi_diag / (2 * n_g): prevents near-zero declared variance for
+    # small groups on real (sampled) data where the Gaussian model may be misspecified.
+    psi_diag = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0)  # (B, q)
+    blup_var_floor = psi_diag[:, None, :] / (2.0 * ns.clamp(min=1.0)[:, :, None])
+    blup_var = blup_var.clamp(min=blup_var_floor)
+
     sigma_rfx = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()          # (B, q)
     sigma_eps_1d = se2.clamp(min=0.0).sqrt().nan_to_num(nan=1.0, posinf=1.0)  # (B,)
 
