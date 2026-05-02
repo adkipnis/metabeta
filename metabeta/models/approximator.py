@@ -84,6 +84,14 @@ class Approximator(nn.Module):
             return 0
         return 3 * self.d_rfx
 
+    def _crossBlupDim(self) -> int:
+        """Extra dims added to the global-transformer input only: cross-BLUP (d_corr).
+        Separate from _analyticsLocalDim because cross-BLUP is not in the local-flow context.
+        """
+        if not self.analytical_context:
+            return 0
+        return self.d_corr
+
     def build(self) -> None:
         d_ffx = self.d_ffx
         d_rfx = self.d_rfx
@@ -103,7 +111,7 @@ class Approximator(nn.Module):
         self.summarizer_l = _buildSummarizer(self.cfg.summarizer_l, d_input_l)
         # global: local summaries + local metadata, aggregated across groups
         d_meta_l = 2 + self._analyticsLocalDim()   # n_obs + eta_rfx
-        d_input_g = self.cfg.summarizer_l.d_output + d_meta_l
+        d_input_g = self.cfg.summarizer_l.d_output + d_meta_l + self._crossBlupDim()
         self.summarizer_g = _buildSummarizer(self.cfg.summarizer_g, d_input_g)
 
         # --- posteriors
@@ -227,6 +235,18 @@ class Approximator(nn.Module):
                 )   # (B, m, q)
                 # resid_g = stats['resid_g'].clamp(-CLAMP, CLAMP)   # (B, m, 1)
                 out += [blup_est, blup_std, lambda_g]
+                if self.d_corr > 0:
+                    # Per-group normalized cross-BLUP: b_i*b_j/(σ_i*σ_j) for each pair i<j.
+                    # Gives the global set transformer raw per-group correlation evidence
+                    # so it can learn to aggregate (rather than only seeing pre-averaged psi_corr).
+                    sr = stats['sigma_rfx_est'].unsqueeze(-2).clamp(min=1e-8)  # (B, 1, q)
+                    blup_norm = blup_est / sr                                  # (B, m, q)
+                    q = blup_norm.shape[-1]
+                    cross = torch.stack(
+                        [blup_norm[..., j] * blup_norm[..., i] for i in range(q) for j in range(i)],
+                        dim=-1,
+                    ).clamp(-CLAMP, CLAMP)                                     # (B, m, d_corr)
+                    out.append(cross)
         else:
             # counts
             n_total = data['n'].unsqueeze(-1).float().sqrt() / 10
@@ -264,6 +284,15 @@ class Approximator(nn.Module):
                     Psi = stats['Psi'] if 'Psi' in stats else stats['Psi_lap']  # (B, q, q)
                     std = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8).sqrt()  # (B, q)
                     psi_corr = (Psi / (std.unsqueeze(-1) * std.unsqueeze(-2))).clamp(-1, 1)
+                    # Shrink toward identity: α = G_mom / (G_mom + C), C=5
+                    # Reduces variance of the noisy MoM estimate without hurting ranking (R)
+                    q_rfx = Psi.shape[-1]
+                    G_mom = (
+                        data['mask_m'].bool() & (data['ns'] > q_rfx + 1)
+                    ).float().sum(-1)                                       # (B,)
+                    alpha = (G_mom / (G_mom + 10.0)).view(-1, 1, 1)        # (B, 1, 1)
+                    eye = torch.eye(q_rfx, dtype=Psi.dtype, device=Psi.device)
+                    psi_corr = (psi_corr * alpha + eye * (1 - alpha)).clamp(-1 + 1e-6, 1 - 1e-6)
                     out.append(corrToUnconstrained(psi_corr))  # atanh space matches target
         return torch.cat(out, dim=-1)
 
