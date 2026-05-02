@@ -37,3 +37,5 @@ posterior_l:
     n_blocks: 4
 
 posterior_correlation: false
+analytical_context: true
+analytical_blup_from_globals: true
