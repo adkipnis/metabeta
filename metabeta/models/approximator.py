@@ -178,8 +178,11 @@ class Approximator(nn.Module):
         if self.has_sigma_eps:
             masks.append(torch.ones_like(data['mask_d'][..., 0:1]))
         if self.d_corr > 0:
-            # Correlation is active only when the second rfx dim is active (q >= 2).
-            corr_mask = data['mask_q'][..., 1:2].expand(-1, self.d_corr)
+            mq = data['mask_q'][..., : self.d_rfx]
+            corr_mask = torch.stack(
+                [mq[..., i] & mq[..., j] for i in range(1, self.d_rfx) for j in range(i)],
+                dim=-1,
+            )
             masks.append(corr_mask)
         return torch.cat(masks, dim=-1)
 
