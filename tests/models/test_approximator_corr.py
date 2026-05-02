@@ -265,8 +265,18 @@ def test_local_context_blup_block_stays_fixed_with_reml_stats():
     assert blup_width > 0
     blup_start = model.cfg.summarizer_l.d_output + 2
     blup_end = blup_start + blup_width
+    expected_width = model.cfg.summarizer_l.d_output + 2 + blup_width + model.posterior_g.d_target
+    assert context_1.shape[-1] == expected_width
     assert torch.allclose(context_1[..., blup_start:blup_end], context_2[..., blup_start:blup_end])
     assert not torch.allclose(context_1, context_2)
+
+
+def test_forward_with_reml_local_stats_uses_expected_context_width():
+    model = Approximator(make_cfg(analytical_blup_from_globals=False))
+    batch = make_batch()
+    log_probs = model.forward(batch)
+    assert torch.isfinite(log_probs['global']).all()
+    assert torch.isfinite(log_probs['local']).all()
 
 
 def test_non_gaussian_blup_from_globals_uses_glmm_stats_path():
