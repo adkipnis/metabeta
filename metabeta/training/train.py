@@ -35,7 +35,7 @@ from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import (
     EvaluationSummary,
     Proposal,
-    dictMean,
+    dictMeanExcl,
     concatProposalsBatch,
 )
 from metabeta.models.approximator import Approximator
@@ -420,8 +420,8 @@ class Trainer:
         return int(payload.get('epoch', 0))  # last completed epoch
 
     def getTrackingMetrics(self, eval_summary: EvaluationSummary) -> tuple[float, float, float]:
-        mean_nrmse = dictMean(eval_summary.nrmse)
-        mean_eace = dictMean(eval_summary.eace)
+        mean_nrmse = dictMeanExcl(eval_summary.nrmse)
+        mean_eace = dictMeanExcl(eval_summary.eace)
         median_nll = eval_summary.mloonll if eval_summary.mloonll else 0.0
         return mean_nrmse, mean_eace, median_nll
 
