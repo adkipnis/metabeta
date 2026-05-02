@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT.parent))
 
 from metabeta.utils.glmm import glmm
+from metabeta.utils.regularization import corrToLower
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.config import loadDataConfig
 
@@ -145,6 +146,12 @@ def run_diagnostic(
     blup_var_list:  list[np.ndarray] = []  # predicted Var(b_g)
     blup_ns_list:   list[np.ndarray] = []  # group sizes, aligned with blup arrays
 
+    # corr_rfx: psi_corr vs true rho, per correlated dataset (eta_rfx > 0 and q >= 2)
+    corr_r_hat_list:   list[np.ndarray] = []  # psi_corr lower-triangle
+    corr_r_true_list:  list[np.ndarray] = []  # true corr_rfx lower-triangle
+    corr_G_mom_list:   list[np.ndarray] = []  # informative-group count per dataset
+    corr_m_list:       list[np.ndarray] = []  # total group count per dataset
+
     # Per-dataset scalars for breakdown
     ds: list[dict] = []
 
@@ -208,6 +215,23 @@ def run_diagnostic(
                 rfx_true_list.append(rfx_true[b, :m, :q].reshape(-1))
                 blup_var_list.append(bv.reshape(-1))
                 blup_ns_list.append(np.repeat(grp_ns, q))
+
+                # psi_corr vs true rho (only for correlated datasets with q >= 2)
+                if max_q >= 2 and q >= 2 and 'Psi' in stats:
+                    eta_b = float(batch['eta_rfx'][b].item()) if 'eta_rfx' in batch else 1.0
+                    if eta_b > 0:
+                        Psi_b = stats['Psi'][b, :q, :q].cpu()            # (q, q)
+                        std_b = Psi_b.diagonal().clamp(min=1e-8).sqrt()  # (q,)
+                        psi_c = (Psi_b / (std_b.unsqueeze(0) * std_b.unsqueeze(1))).clamp(-1, 1)
+                        r_hat_b = corrToLower(psi_c.unsqueeze(0)).squeeze(0).numpy()   # (d_corr,)
+                        corr_rfx_b = batch['corr_rfx'][b, :q, :q].cpu()
+                        r_true_b = corrToLower(corr_rfx_b.unsqueeze(0)).squeeze(0).numpy()
+                        # G_mom: informative groups (mask_m AND ns > q+1)
+                        G_mom_b = float(((mask_m[b]) & (ns_np[b, :] > q + 1)).sum())
+                        corr_r_hat_list.append(r_hat_b[np.newaxis, :])
+                        corr_r_true_list.append(r_true_b[np.newaxis, :])
+                        corr_G_mom_list.append(np.array([G_mom_b]))
+                        corr_m_list.append(np.array([float(m)]))
 
                 ds.append({
                     'n': int(n_np[b]),
@@ -389,6 +413,65 @@ def run_diagnostic(
             print(tabulate(rows,
                 headers=['n', 'm', 'd', 'bg_df', 'σ_rfx_true', 'σ_rfx_err', 'clip'],
                 tablefmt='simple'))
+
+
+    # ===========================================================================
+    # 7. Corr(RFX): psi_corr quality and shrinkage comparison
+    # ===========================================================================
+    if corr_r_hat_list:
+        r_hat_all  = np.concatenate(corr_r_hat_list)    # (N, d_corr)
+        r_true_all = np.concatenate(corr_r_true_list)
+        G_mom_all  = np.concatenate(corr_G_mom_list)    # (N,)
+        m_all_corr = np.concatenate(corr_m_list)        # (N,)
+        N_corr = r_hat_all.shape[0]
+
+        def _corr_metrics(est: np.ndarray, true: np.ndarray) -> tuple[float, float, float, float]:
+            e, t = est.reshape(-1), true.reshape(-1)
+            r = float(np.corrcoef(e, t)[0, 1]) if len(e) > 1 else float('nan')
+            mae  = float(np.abs(e - t).mean())
+            rmse = float(np.sqrt(np.mean((e - t) ** 2)))
+            sign = float((np.sign(e) == np.sign(t)).mean() * 100)
+            return r, mae, rmse, sign
+
+        # Shrinkage variants: alpha = G_mom / (G_mom + C) applied to r_hat
+        shrinkage_Cs = [1, 3, 5, 10]
+        alpha_all = {C: (G_mom_all / (G_mom_all + C))[:, np.newaxis] for C in shrinkage_Cs}
+
+        print(f'\n=== Corr(RFX): psi_corr quality  (N={N_corr} correlated datasets) ===')
+        rows_corr = []
+        r0, mae0, rmse0, sign0 = _corr_metrics(r_hat_all, r_true_all)
+        rows_corr.append(['raw psi_corr', f'{r0:.3f}', f'{mae0:.3f}', f'{rmse0:.3f}', f'{sign0:.1f}%'])
+        for C in shrinkage_Cs:
+            shrunk = r_hat_all * alpha_all[C]
+            r_s, mae_s, rmse_s, sign_s = _corr_metrics(shrunk, r_true_all)
+            rows_corr.append([f'shrunk  C={C}', f'{r_s:.3f}', f'{mae_s:.3f}', f'{rmse_s:.3f}', f'{sign_s:.1f}%'])
+        print(tabulate(rows_corr, headers=['Estimator', 'R', 'MAE', 'RMSE', 'Sign%'], tablefmt='simple'))
+
+        # Breakdown by m
+        print('\n=== Corr(RFX) by m (number of groups) ===')
+        print(f'  (showing R for raw psi_corr and best shrinkage C=3)')
+        bdown_rows = []
+        for lo, hi in [(2, 5), (5, 10), (10, 20), (20, 1000)]:
+            sel = (m_all_corr >= lo) & (m_all_corr < hi)
+            if sel.sum() < 5:
+                continue
+            label = f'm={lo}–{hi-1}' if hi < 1000 else f'm≥{lo}'
+            r_r = float(np.corrcoef(r_hat_all[sel].reshape(-1), r_true_all[sel].reshape(-1))[0, 1])
+            shrunk3 = r_hat_all[sel] * alpha_all[3][sel]
+            r_s = float(np.corrcoef(shrunk3.reshape(-1), r_true_all[sel].reshape(-1))[0, 1])
+            mae_r = float(np.abs(r_hat_all[sel] - r_true_all[sel]).mean())
+            mae_s = float(np.abs(shrunk3 - r_true_all[sel]).mean())
+            bdown_rows.append([label, int(sel.sum()), f'{r_r:.3f}', f'{r_s:.3f}',
+                                f'{mae_r:.3f}', f'{mae_s:.3f}'])
+        print(tabulate(bdown_rows,
+                       headers=['m range', 'N', 'R(raw)', 'R(C=3)', 'MAE(raw)', 'MAE(C=3)'],
+                       tablefmt='simple'))
+
+        # G_mom distribution
+        print(f'\n  G_mom stats: mean={G_mom_all.mean():.1f}  median={np.median(G_mom_all):.1f}'
+              f'  p25={np.percentile(G_mom_all, 25):.1f}  p75={np.percentile(G_mom_all, 75):.1f}')
+    else:
+        print('\n=== Corr(RFX): no correlated datasets with q >= 2 found ===')
 
 
 if __name__ == '__main__':
