@@ -4,18 +4,17 @@ from torch.nn import functional as F
 
 from metabeta.models.transformers import SetTransformer
 from metabeta.models.normalizingflows import CouplingFlow
-from metabeta.posthoc.gaussian_local import analyticalBLUPStats
 from metabeta.utils.regularization import (
     getConstrainers,
     corrToLower,
     corrToUnconstrained,
     corrLowerToUnconstrained,
     logDetJacobianCorr,
-    unconstrainedToCholeskyCorr,
+    unconstrainedToCholesky,
 )
 from metabeta.utils.config import ApproximatorConfig, SummarizerConfig, PosteriorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
-from metabeta.utils.glmm import glmm
+from metabeta.utils.glmm import glmm, analyticalBLUPContext
 from metabeta.utils.families import (
     FFX_FAMILIES,
     SIGMA_FAMILIES,
@@ -295,7 +294,7 @@ class Approximator(nn.Module):
         data: dict[str, torch.Tensor],
         global_params: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute BLUP mean, std, shrinkage from current global params (unconstrained sigma).
+        """Delegate to analyticalBLUPContext after extracting constrained params.
 
         global_params: (B, d_g) ground-truth or (B, S, d_g) samples — sigma in softplus space.
         Returns: (B, m, 3*q) or (B, m, S, 3*q).
@@ -305,34 +304,13 @@ class Approximator(nn.Module):
 
         d, q = self.d_ffx, self.d_rfx
         q_var = q + 1  # sigma_rfx (q) + sigma_eps (1); lf==0 always has sigma_eps
-        beta = gp[..., :d]                                            # (B, S, d_ffx)
-        sigma_rfx = constrainSigma(gp[..., d : d + q])               # (B, S, q)
-        sigma_eps = constrainSigma(gp[..., d + q : d + q + 1]).squeeze(-1)  # (B, S)
+        beta = gp[..., :d]
+        sigma_rfx = constrainSigma(gp[..., d : d + q])
+        sigma_eps = constrainSigma(gp[..., d + q : d + q + 1]).squeeze(-1)
+        z_corr = gp[..., d + q_var : d + q_var + self.d_corr] if self.d_corr > 0 else None
 
-        Sigma_rfx_inv: torch.Tensor | None = None
-        if self.d_corr > 0:
-            z_corr = gp[..., d + q_var : d + q_var + self.d_corr]    # (B, S, d_corr)
-            L_corr = unconstrainedToCholeskyCorr(z_corr, q)           # (B, S, q, q)
-            # Σ_rfx^{-1} = (diag(σ) L L^T diag(σ))^{-1} = (L diag(σ))^{-T} (L diag(σ))^{-1}
-            sr_inv_diag = torch.diag_embed(1.0 / sigma_rfx.clamp(min=1e-6))  # (B, S, q, q)
-            A = torch.linalg.solve_triangular(L_corr, sr_inv_diag, upper=False)  # (B, S, q, q)
-            Sigma_rfx_inv = A.mT @ A                                  # (B, S, q, q)
-
-        mu, blup_std, lambda_g = analyticalBLUPStats(
-            data['y'],
-            data['X'][..., :d],
-            data['Z'][..., :q],
-            beta,
-            sigma_rfx,
-            sigma_eps,
-            data['mask_n'],
-            Sigma_rfx_inv=Sigma_rfx_inv,
-        )  # each (B, m, S, q)
-
-        blup_ctx = torch.cat(
-            [mu.clamp(-CLAMP, CLAMP), blup_std.clamp(max=CLAMP), lambda_g], dim=-1
-        )  # (B, m, S, 3*q)
-        return blup_ctx.squeeze(2) if not has_s else blup_ctx
+        ctx = analyticalBLUPContext(data, beta, sigma_rfx, sigma_eps, z_corr, clamp=CLAMP)
+        return ctx.squeeze(2) if not has_s else ctx
 
     def _preprocess(self, targets: torch.Tensor, local: bool = False) -> torch.Tensor:
         """constrain target parameters"""
@@ -345,12 +323,10 @@ class Approximator(nn.Module):
         # project sigma block R+ → R
         sigmas = targets[..., d : d + q_var]
         targets[..., d : d + q_var] = unconstrainSigma(sigmas)
-        # project corr lower triangle (-1,1) → R  (mirrors sigma handling above)
+        # project corr lower triangle (-1,1) → R
         if self.d_corr > 0:
             r_corr = targets[..., d + q_var : d + q_var + self.d_corr]
-            targets[..., d + q_var : d + q_var + self.d_corr] = corrLowerToUnconstrained(
-                r_corr, self.d_rfx
-            )
+            targets[..., d + q_var : d + q_var + self.d_corr] = corrLowerToUnconstrained(r_corr, self.d_rfx)
         return targets
 
     def _postprocess(self, proposed: dict[str, dict[str, torch.Tensor]]):
@@ -373,16 +349,15 @@ class Approximator(nn.Module):
             log_det = logDetJacobian(log_sigmas)
             log_prob_g = proposed['global']['log_prob'] - log_det.sum(dim=-1)
             sigmas = constrainSigma(log_sigmas)
+            samples_out = [samples[..., :d], sigmas]
             if d_corr > 0:
                 z_corr = samples[..., d + q_var : d + q_var + d_corr]
                 log_prob_g = log_prob_g - logDetJacobianCorr(z_corr, q)
-                L_corr = unconstrainedToCholeskyCorr(z_corr, q)
+                L_corr = unconstrainedToCholesky(z_corr, q)
                 r_corr = corrToLower(L_corr @ L_corr.mT)
-                samples_out = torch.cat([samples[..., :d], sigmas, r_corr], dim=-1)
-            else:
-                samples_out = torch.cat([samples[..., :d], sigmas], dim=-1)
+                samples_out.append(r_corr)
             proposed['global']['log_prob'] = log_prob_g
-            proposed['global']['samples'] = samples_out
+            proposed['global']['samples'] = torch.cat(samples_out, dim=-1)
         return Proposal(proposed, has_sigma_eps=self.has_sigma_eps, d_corr=d_corr)
 
     def summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
