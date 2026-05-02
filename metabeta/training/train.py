@@ -104,6 +104,7 @@ def setup() -> argparse.Namespace:
     # CLI-only runtime params (never written to config.yaml)
     parser.add_argument('--device', type=str, default='cpu', help='Compute device: cpu|cuda')
     parser.add_argument('--wandb', action=argparse.BooleanOptionalAction, default=False, help='Log metrics to Weights & Biases')
+    parser.add_argument('--wandb_suffix', type=str, default='', help='Suffix for WandB project name')
     parser.add_argument('--seed', type=int, default=42, help='Global random seed')
     parser.add_argument('--verbosity', type=int, default=1, help='Logging verbosity level')
 
@@ -327,8 +328,11 @@ class Trainer:
     def _initWandb(self) -> None:
         output_dir = Path(self.dir, '..', 'outputs')
         output_dir.mkdir(parents=True, exist_ok=True)
+        project = 'metabeta'
+        if suffix := getattr(self.cfg, 'wandb_suffix', ''):
+            project += f'-{suffix}'
         init_kwargs = dict(
-            project='metabeta',
+            project=project,
             name=self.run_name,
             config=vars(self.cfg),
             dir=output_dir,
