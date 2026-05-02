@@ -35,8 +35,8 @@ done
 IFS='-' read -r SIZE FAM_NAME DS_TYPE <<< "$TAG"
 case $FAM_NAME in
     n) FAMILY=0 ;;
-    b) FAMILY=1 ;;
-    p) FAMILY=2 ;;
+    b) FAMILY=1; WANDB_SUFFIX=bernoulli ;;
+    p) FAMILY=2; WANDB_SUFFIX=poisson ;;
     *) echo "Unknown family letter: $FAM_NAME (use n, b, or p)"; exit 1 ;;
 esac
 
@@ -53,6 +53,9 @@ if [[ "$LOAD_LATEST" -eq 1 ]]; then
 fi
 if [[ "$LOAD_BEST" -eq 1 ]]; then
     EXTRA_ARGS+=(--load_best)
+fi
+if [[ -n "$WANDB_SUFFIX" ]]; then
+    EXTRA_ARGS+=(--wandb_suffix "$WANDB_SUFFIX")
 fi
 
 python train.py \
