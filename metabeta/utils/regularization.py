@@ -150,14 +150,20 @@ def corrLowerToUnconstrained(r: torch.Tensor, q: int) -> torch.Tensor:
 def logDetJacobianCorr(z: torch.Tensor, q: int) -> torch.Tensor:
     """log |d corrToLower(L L^T) / dz| for the LKJ partial-correlation encoding.
 
-    For q == 2: r = tanh(z), so log|dr/dz| = log(1 - tanh^2(z)) summed to a scalar.
+    The Jacobian of z → corrToLower(L(z) @ L(z)^T) is lower-triangular. The diagonal
+    entry for z_{i,j} (row i, column j of the Cholesky factor) equals
+    sech²(z_{i,j}) × rem_{i,j} × L_{j,j}. Multiplying across all entries yields:
+
+        log|det J| = Σ_{i,j} (q - j) · log sech(z_{i,j})
+                   = 0.5 · Σ_k (q - j_k) · log(1 - tanh²(z_k))
+
     Returns shape (...) — one scalar per batch element.
     """
     if q <= 1:
         return z.new_zeros(z.shape[:-1])
-    if q == 2:
-        return torch.log1p(-torch.tanh(z).pow(2).clamp(max=1 - 1e-7)).sum(-1)
-    raise NotImplementedError(f'logDetJacobianCorr not implemented for q={q}')
+    coeffs = z.new_tensor([q - j for i in range(1, q) for j in range(i)])
+    log1m_tanh_sq = torch.log1p(-torch.tanh(z).pow(2).clamp(max=1 - 1e-7))
+    return (0.5 * coeffs * log1m_tanh_sq).sum(-1)
 
 
 # crunching
