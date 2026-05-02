@@ -1,9 +1,9 @@
-"""Tests for corrToUnconstrained / unconstrainedToCholeskyCorr round-trips."""
+"""Tests for corrToUnconstrained / unconstrainedToCholesky round-trips."""
 
 import torch
 import pytest
 
-from metabeta.utils.regularization import corrToUnconstrained, unconstrainedToCholeskyCorr
+from metabeta.utils.regularization import corrToUnconstrained, unconstrainedToCholesky
 
 
 def _lkj_corr(q: int, eta: float = 1.0, seed: int = 0) -> torch.Tensor:
@@ -21,7 +21,7 @@ def _lkj_corr(q: int, eta: float = 1.0, seed: int = 0) -> torch.Tensor:
 def test_round_trip_single(q: int):
     corr = _lkj_corr(q)
     z = corrToUnconstrained(corr.unsqueeze(0))  # (1, d_corr)
-    L = unconstrainedToCholeskyCorr(z, q)  # (1, q, q)
+    L = unconstrainedToCholesky(z, q)  # (1, q, q)
     corr_back = (L @ L.mT).squeeze(0)
     assert torch.allclose(corr_back, corr, atol=1e-4), f'round-trip failed for q={q}'
 
@@ -31,7 +31,7 @@ def test_round_trip_batch(q: int):
     B = 8
     corr = torch.stack([_lkj_corr(q, seed=i) for i in range(B)])  # (B, q, q)
     z = corrToUnconstrained(corr)  # (B, d_corr)
-    L = unconstrainedToCholeskyCorr(z, q)  # (B, q, q)
+    L = unconstrainedToCholesky(z, q)  # (B, q, q)
     corr_back = L @ L.mT
     assert torch.allclose(corr_back, corr, atol=1e-4)
 
@@ -44,7 +44,7 @@ def test_round_trip_with_sample_dim():
     ).reshape(B, S, q, q)
     z = corrToUnconstrained(corr)  # (B, S, d_corr)
     assert z.shape == (B, S, q * (q - 1) // 2)
-    L = unconstrainedToCholeskyCorr(z, q)  # (B, S, q, q)
+    L = unconstrainedToCholesky(z, q)  # (B, S, q, q)
     corr_back = L @ L.mT
     assert torch.allclose(corr_back, corr, atol=1e-4)
 
@@ -94,7 +94,7 @@ def test_output_shapes(q: int):
     corr = torch.stack([_lkj_corr(q, seed=i) for i in range(B)])
     z = corrToUnconstrained(corr)
     assert z.shape == (B, d_corr)
-    L = unconstrainedToCholeskyCorr(z, q)
+    L = unconstrainedToCholesky(z, q)
     assert L.shape == (B, q, q)
     # L must be lower-triangular with positive diagonal
     assert torch.allclose(torch.triu(L, diagonal=1), torch.zeros_like(L), atol=1e-6)

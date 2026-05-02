@@ -6,7 +6,7 @@ from scipy.stats import expon, norm, t
 from torch import distributions as D
 
 from metabeta.utils.preprocessing import standardize
-from metabeta.utils.regularization import unconstrainedToCholeskyCorr
+from metabeta.utils.regularization import unconstrainedToCholesky
 
 logger = logging.getLogger(__name__)
 
@@ -372,7 +372,7 @@ def logProbRfxCorrelated(
 
 
 def _logJacobianZtoL(z: torch.Tensor, L: torch.Tensor, q: int) -> torch.Tensor:
-    """Log |det J| of the z → L map from unconstrainedToCholeskyCorr. Returns (...,)."""
+    """Log |det J| of the z → L map from unconstrainedToCholesky. Returns (...,)."""
     log_jac = torch.zeros(z.shape[:-1], dtype=z.dtype, device=z.device)
     cursor = 0
     for i in range(1, q):
@@ -405,7 +405,7 @@ def logProbCorrRfx(
     if not active.any():
         return lp
     z_a = z_corr[active]  # (b_a, s, d_corr)
-    L = unconstrainedToCholeskyCorr(z_a, q)  # (b_a, s, q, q)
+    L = unconstrainedToCholesky(z_a, q)  # (b_a, s, q, q)
     concentration = eta[active].unsqueeze(-1).expand(-1, s)  # (b_a, s)
     lp_lkj = D.LKJCholesky(dim=q, concentration=concentration).log_prob(L)  # (b_a, s)
     log_jac = _logJacobianZtoL(z_a, L, q)  # (b_a, s)

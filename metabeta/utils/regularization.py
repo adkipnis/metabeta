@@ -87,7 +87,7 @@ def getConstrainers(
 def corrToUnconstrained(corr: torch.Tensor) -> torch.Tensor:
     """Correlation matrix (..., q, q) → unconstrained vector (..., q*(q-1)//2).
 
-    Identity correlation maps to zero. Inverse: unconstrainedToCholeskyCorr.
+    Identity correlation maps to zero. Inverse: unconstrainedToCholesky.
     """
     q = corr.shape[-1]
     if q == 1:
@@ -109,7 +109,7 @@ def corrToLower(corr: torch.Tensor) -> torch.Tensor:
     return torch.stack([corr[..., i, j] for i in range(q) for j in range(i)], dim=-1)
 
 
-def unconstrainedToCholeskyCorr(z: torch.Tensor, q: int) -> torch.Tensor:
+def unconstrainedToCholesky(z: torch.Tensor, q: int) -> torch.Tensor:
     """Unconstrained vector (..., q*(q-1)//2) → lower-triangular Cholesky (..., q, q).
 
     Correlation matrix is L @ L.mT. Inverse of corrToUnconstrained.
@@ -129,7 +129,7 @@ def unconstrainedToCholeskyCorr(z: torch.Tensor, q: int) -> torch.Tensor:
     return L
 
 
-def corrLowerToFull(r: torch.Tensor, q: int) -> torch.Tensor:
+def corrLowerToCorr(r: torch.Tensor, q: int) -> torch.Tensor:
     """Lower-triangle values (..., d_corr) → symmetric (..., q, q) correlation matrix."""
     batch = r.shape[:-1]
     corr = torch.eye(q, device=r.device, dtype=r.dtype).reshape((1,) * len(batch) + (q, q)).expand(*batch, q, q).clone()
@@ -144,7 +144,7 @@ def corrLowerToFull(r: torch.Tensor, q: int) -> torch.Tensor:
 
 def corrLowerToUnconstrained(r: torch.Tensor, q: int) -> torch.Tensor:
     """Lower-triangle correlation values (..., d_corr) → unconstrained (..., d_corr)."""
-    return corrToUnconstrained(corrLowerToFull(r, q))
+    return corrToUnconstrained(corrLowerToCorr(r, q))
 
 
 def logDetJacobianCorr(z: torch.Tensor, q: int) -> torch.Tensor:
