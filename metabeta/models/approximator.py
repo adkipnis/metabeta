@@ -265,7 +265,7 @@ class Approximator(nn.Module):
                     Psi = stats['Psi'] if 'Psi' in stats else stats['Psi_lap']  # (B, q, q)
                     std = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8).sqrt()  # (B, q)
                     psi_corr = (Psi / (std.unsqueeze(-1) * std.unsqueeze(-2))).clamp(-1, 1)
-                    out.append(corrToLower(psi_corr))
+                    out.append(corrToUnconstrained(psi_corr))  # atanh space matches target
         return torch.cat(out, dim=-1)
 
     def _localContext(
@@ -304,9 +304,19 @@ class Approximator(nn.Module):
         gp = global_params.unsqueeze(1) if not has_s else global_params  # (B, S, d_g)
 
         d, q = self.d_ffx, self.d_rfx
-        beta = gp[..., :d]                                           # (B, S, d_ffx)
-        sigma_rfx = constrainSigma(gp[..., d : d + q])              # (B, S, q)
+        q_var = q + 1  # sigma_rfx (q) + sigma_eps (1); lf==0 always has sigma_eps
+        beta = gp[..., :d]                                            # (B, S, d_ffx)
+        sigma_rfx = constrainSigma(gp[..., d : d + q])               # (B, S, q)
         sigma_eps = constrainSigma(gp[..., d + q : d + q + 1]).squeeze(-1)  # (B, S)
+
+        Sigma_rfx_inv: torch.Tensor | None = None
+        if self.d_corr > 0:
+            z_corr = gp[..., d + q_var : d + q_var + self.d_corr]    # (B, S, d_corr)
+            L_corr = unconstrainedToCholeskyCorr(z_corr, q)           # (B, S, q, q)
+            # Σ_rfx^{-1} = (diag(σ) L L^T diag(σ))^{-1} = (L diag(σ))^{-T} (L diag(σ))^{-1}
+            sr_inv_diag = torch.diag_embed(1.0 / sigma_rfx.clamp(min=1e-6))  # (B, S, q, q)
+            A = torch.linalg.solve_triangular(L_corr, sr_inv_diag, upper=False)  # (B, S, q, q)
+            Sigma_rfx_inv = A.mT @ A                                  # (B, S, q, q)
 
         mu, blup_std, lambda_g = analyticalBLUPStats(
             data['y'],
