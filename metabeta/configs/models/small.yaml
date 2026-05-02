@@ -36,4 +36,4 @@ posterior_g:
 posterior_l:
     n_blocks: 2
 
-posterior_correlation: false
+posterior_correlation: true

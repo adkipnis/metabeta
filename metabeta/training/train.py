@@ -199,6 +199,7 @@ class EarlyStopping:
 class Trainer:
     def __init__(self, cfg: argparse.Namespace) -> None:
         self.cfg = cfg
+        # self.cfg.load_latest = True
         self.dir = Path(__file__).resolve().parent
 
         # reproducibility
@@ -662,13 +663,14 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         batch: dict[str, torch.Tensor],
     ) -> None:
         show = not self.cfg.wandb
+        show_corr_rfx = self.model.d_corr > 0
         path_r = plotRecovery(
             eval_summary,
             batch,
             plot_dir=self.plot_dir,
             epoch=self.current_epoch,
             show=show,
-            show_corr_rfx=self.model.d_corr > 0
+            show_corr_rfx=show_corr_rfx,
         )
         path_c = plotCoverage(
             eval_summary,
@@ -676,9 +678,11 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             plot_dir=self.plot_dir,
             epoch=self.current_epoch,
             show=show,
+            show_corr_rfx=show_corr_rfx,
         )
         path_s = plotSBC(
-            proposal, batch, plot_dir=self.plot_dir, epoch=self.current_epoch, show=show
+            proposal, batch, plot_dir=self.plot_dir, epoch=self.current_epoch,
+            show=show, show_corr_rfx=show_corr_rfx,
         )
         # path_rc = None
         # if proposal.q >= 2:
