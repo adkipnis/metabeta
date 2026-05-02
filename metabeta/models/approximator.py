@@ -65,8 +65,12 @@ class Approximator(nn.Module):
         return self.cfg.d_corr
 
     @property
-    def analytical_context(self) -> str:
+    def analytical_context(self) -> bool:
         return self.cfg.analytical_context
+
+    @property
+    def analytical_blup_from_globals(self) -> bool:
+        return self.cfg.analytical_blup_from_globals
 
     def _analyticsGlobalDim(self) -> int:
         """Dimension added to global context by GLMM statistics.
@@ -276,8 +280,8 @@ class Approximator(nn.Module):
                     # Reduces variance of the noisy MoM estimate without hurting ranking (R)
                     q_rfx = Psi.shape[-1]
                     G_mom = (
-                        data['mask_m'].bool() & (data['ns'] > q_rfx + 1)
-                    ).float().sum(-1)                                       # (B,)
+                        (data['mask_m'].bool() & (data['ns'] > q_rfx + 1)).float().sum(-1)
+                    )                                       # (B,)
                     alpha = (G_mom / (G_mom + 10.0)).view(-1, 1, 1)        # (B, 1, 1)
                     eye = torch.eye(q_rfx, dtype=Psi.dtype, device=Psi.device)
                     psi_corr = (psi_corr * alpha + eye * (1 - alpha)).clamp(-1 + 1e-6, 1 - 1e-6)
@@ -342,7 +346,9 @@ class Approximator(nn.Module):
         # project corr lower triangle (-1,1) → R
         if self.d_corr > 0:
             r_corr = targets[..., d + q_var : d + q_var + self.d_corr]
-            targets[..., d + q_var : d + q_var + self.d_corr] = corrLowerToUnconstrained(r_corr, self.d_rfx)
+            targets[..., d + q_var : d + q_var + self.d_corr] = corrLowerToUnconstrained(
+                r_corr, self.d_rfx
+            )
         return targets
 
     def _postprocess(self, proposed: dict[str, dict[str, torch.Tensor]]):
@@ -386,10 +392,13 @@ class Approximator(nn.Module):
         summary_g = self.summarizer_g(summary_l_with_stats, mask=data['mask_m'])
         summary_g = self._addMetadata(summary_g, data, local=False, stats=stats)
 
-        # Local posterior path: strip REML BLUPs when _localContext will re-inject them
-        # analytically, conditioned on the exact global-param sample being evaluated.
-        # Non-normal models and no-analytical-context fall back to the REML-augmented summary.
-        inject_analytical_blups = self.analytical_context and self.likelihood_family == 0
+        # Local posterior path: either keep REML BLUP features in the summary or
+        # re-inject sample-conditioned Gaussian BLUPs in _localContext.
+        inject_analytical_blups = (
+            self.analytical_context
+            and self.analytical_blup_from_globals
+            and self.likelihood_family == 0
+        )
         summary_l = self._addMetadata(
             summary_l_raw, data, local=True, stats=None if inject_analytical_blups else stats
         )

@@ -62,6 +62,7 @@ class ApproximatorConfig(BaseModel):
     likelihood_family: int = Field(ge=0, default=0)
     posterior_correlation: bool = True
     analytical_context: bool = True
+    analytical_blup_from_globals: bool = True
     model_config = {'extra': 'allow'}
 
     @property
@@ -78,6 +79,7 @@ class ApproximatorConfig(BaseModel):
             'likelihood_family': self.likelihood_family,
             'posterior_correlation': self.posterior_correlation,
             'analytical_context': self.analytical_context,
+            'analytical_blup_from_globals': self.analytical_blup_from_globals,
             'summarizer_l': self.summarizer_l.model_dump(),
             'summarizer_g': self.summarizer_g.model_dump(),
             'posterior_l': self.posterior_l.model_dump(),
@@ -98,6 +100,8 @@ def modelFromYaml(
         d_rfx=d_rfx,
         likelihood_family=likelihood_family,
         posterior_correlation=model_cfg['posterior_correlation'],
+        analytical_context=model_cfg.get('analytical_context', True),
+        analytical_blup_from_globals=model_cfg.get('analytical_blup_from_globals', True),
         summarizer_g=SummarizerConfig(**s_g),
         summarizer_l=SummarizerConfig(**{**s_g, **model_cfg.get('summarizer_l', {})}),
         posterior_g=PosteriorConfig(**p_g),
