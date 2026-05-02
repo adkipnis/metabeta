@@ -36,9 +36,13 @@ def getFractionalRanks(
         targets = data[param]
         ranks[param] = fractionalRanks(samples, targets, weights)
     if proposal.corr_rfx is not None:
-        ranks['corr_rfx'] = fractionalRanks(
-            corrToLower(proposal.corr_rfx), corrToLower(data['corr_rfx']), weights
-        )
+        ds_mask = data['mask_q'][:, 1]  # True only for q>=2 datasets
+        if ds_mask.any():
+            ranks['corr_rfx'] = fractionalRanks(
+                corrToLower(proposal.corr_rfx)[ds_mask],
+                corrToLower(data['corr_rfx'])[ds_mask],
+                weights[ds_mask] if weights is not None else None,
+            )
     return ranks
 
 

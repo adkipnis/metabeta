@@ -78,7 +78,11 @@ def getRMSE(
     for key, est in ests.items():
         if key == 'corr_rfx':
             gt = corrToLower(data['corr_rfx'])
-            mask = None
+            q = data['mask_q'].shape[-1]
+            mask = torch.stack(
+                [data['mask_q'][:, i] & data['mask_q'][:, j] for i in range(q) for j in range(i)],
+                dim=-1,
+            )  # (B, d_corr)
         else:
             gt = data[key]   # ground truth
             mask = masks[key]
@@ -105,6 +109,9 @@ def getCorrelation(
     for key, est in locs.items():
         if key == 'corr_rfx':
             gt = corrToLower(data['corr_rfx'])  # (b, d_corr)
+            ds_mask = data['mask_q'][:, 1]      # True for q>=2 datasets
+            gt = gt[ds_mask]
+            est = est[ds_mask]
             corr = np.array([
                 cast(np.float32, pearsonr(gt[:, k].numpy(), est[:, k].numpy())[0])
                 for k in range(gt.shape[-1])

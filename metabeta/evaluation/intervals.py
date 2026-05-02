@@ -105,7 +105,12 @@ def getCoveragePerParameter(
     masks = getMasks(data)
     for key, ci in ci_dict.items():
         if key == 'corr_rfx':
-            out[key] = getAtomicCoverage(ci, corrToLower(data['corr_rfx']), mask=None)
+            q = data['mask_q'].shape[-1]
+            mask_corr = torch.stack(
+                [data['mask_q'][:, i] & data['mask_q'][:, j] for i in range(q) for j in range(i)],
+                dim=-1,
+            )  # (B, d_corr) — False for q<2 datasets
+            out[key] = getAtomicCoverage(ci, corrToLower(data['corr_rfx']), mask=mask_corr)
             continue
         gt = data[key]
         mask = masks[key]
