@@ -24,6 +24,8 @@ def make_cfg(
     d_rfx: int = 2,
     posterior_correlation: bool = True,
     likelihood_family: int = 0,
+    analytical_context: bool = True,
+    analytical_blup_from_globals: bool = True,
 ) -> ApproximatorConfig:
     s_cfg = SummarizerConfig(d_model=16, d_ff=16, d_output=16, n_blocks=1)
     p_cfg = PosteriorConfig(n_blocks=2)
@@ -32,6 +34,8 @@ def make_cfg(
         d_rfx=d_rfx,
         likelihood_family=likelihood_family,
         posterior_correlation=posterior_correlation,
+        analytical_context=analytical_context,
+        analytical_blup_from_globals=analytical_blup_from_globals,
         summarizer_l=s_cfg,
         summarizer_g=s_cfg,
         posterior_l=p_cfg,
@@ -171,9 +175,42 @@ def test_global_flow_d_target():
     d_corr = model.d_corr  # = 1 for q=2
     has_eps = model.has_sigma_eps
     expected = d_ffx + d_rfx + (1 if has_eps else 0) + d_corr
-    assert model.posterior_g.d_target == expected, (
-        f'Expected d_target={expected}, got {model.posterior_g.d_target}'
+    assert (
+        model.posterior_g.d_target == expected
+    ), f'Expected d_target={expected}, got {model.posterior_g.d_target}'
+
+
+def test_analytical_blup_from_globals_default_on():
+    cfg = make_cfg()
+    assert cfg.analytical_blup_from_globals is True
+
+
+def test_model_from_yaml_reads_analytical_context_flags(tmp_path):
+    cfg_path = tmp_path / 'model.yaml'
+    cfg_path.write_text(
+        '\n'.join(
+            [
+                'summarizer_g:',
+                "  type: 'set-transformer'",
+                '  d_model: 16',
+                '  d_ff: 16',
+                '  d_output: 16',
+                '  n_blocks: 1',
+                'posterior_g:',
+                "  type: 'coupling'",
+                '  n_blocks: 2',
+                'posterior_correlation: false',
+                'analytical_context: false',
+                'analytical_blup_from_globals: false',
+            ]
+        )
     )
+
+    from metabeta.utils.config import modelFromYaml
+
+    cfg = modelFromYaml(cfg_path, d_ffx=2, d_rfx=1)
+    assert cfg.analytical_context is False
+    assert cfg.analytical_blup_from_globals is False
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +234,57 @@ def test_forward_without_corr_flag_unchanged():
     log_probs = model_off.forward(batch)
     assert torch.isfinite(log_probs['global']).all()
     assert torch.isfinite(log_probs['local']).all()
+
+
+def test_local_context_changes_with_globals_when_blup_from_globals():
+    model = Approximator(make_cfg(analytical_blup_from_globals=True))
+    batch = make_batch()
+    _, summary_l = model.summarize(batch)
+    global_params_1 = model._preprocess(model._targets(batch, local=False), local=False)
+    global_params_2 = global_params_1.clone()
+    global_params_2[:, 0] = global_params_2[:, 0] + 0.5
+
+    context_1 = model._localContext(summary_l, global_params_1, batch)
+    context_2 = model._localContext(summary_l, global_params_2, batch)
+
+    assert not torch.allclose(context_1, context_2)
+
+
+def test_local_context_blup_block_stays_fixed_with_reml_stats():
+    model = Approximator(make_cfg(analytical_blup_from_globals=False))
+    batch = make_batch()
+    _, summary_l = model.summarize(batch)
+    global_params_1 = model._preprocess(model._targets(batch, local=False), local=False)
+    global_params_2 = global_params_1.clone()
+    global_params_2[:, 0] = global_params_2[:, 0] + 0.5
+
+    context_1 = model._localContext(summary_l, global_params_1, batch)
+    context_2 = model._localContext(summary_l, global_params_2, batch)
+
+    blup_width = model._analyticsLocalDim()
+    assert blup_width > 0
+    blup_start = model.cfg.summarizer_l.d_output + 2
+    blup_end = blup_start + blup_width
+    assert torch.allclose(context_1[..., blup_start:blup_end], context_2[..., blup_start:blup_end])
+    assert not torch.allclose(context_1, context_2)
+
+
+def test_non_gaussian_blup_from_globals_uses_glmm_stats_path():
+    model = Approximator(make_cfg(likelihood_family=1, analytical_blup_from_globals=True))
+    batch = make_batch(likelihood_family=1)
+    _, summary_l = model.summarize(batch)
+    global_params_1 = model._preprocess(model._targets(batch, local=False), local=False)
+    global_params_2 = global_params_1.clone()
+    global_params_2[:, 0] = global_params_2[:, 0] + 0.5
+
+    context_1 = model._localContext(summary_l, global_params_1, batch)
+    context_2 = model._localContext(summary_l, global_params_2, batch)
+
+    blup_width = model._analyticsLocalDim()
+    assert blup_width > 0
+    blup_start = model.cfg.summarizer_l.d_output + 2
+    blup_end = blup_start + blup_width
+    assert torch.allclose(context_1[..., blup_start:blup_end], context_2[..., blup_start:blup_end])
 
 
 def test_forward_backward_gradients():
