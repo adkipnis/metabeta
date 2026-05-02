@@ -58,7 +58,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--data_id_valid', type=str)
 
     # CLI-only runtime params
-    parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--verbosity', type=int, default=1)
 
     # Evaluation settings (override checkpoint config)
@@ -95,7 +95,11 @@ def setup() -> argparse.Namespace:
     )
 
     args = parser.parse_args()
-    args.config = Path('..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge_s2', 'config.yaml')
+    args.config = Path(
+        '..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge_s0', 'config.yaml'
+    )
+    # args.config = Path('..', 'outputs', 'checkpoints', 'normal_dmedium-n-mixed_mlarge_s2', 'config.yaml')
+    # args.config = Path('..', 'outputs', 'checkpoints', 'normal_dmedium-n-mixed_mhuge-s_s1', 'config.yaml')
 
     # Load config from checkpoint or file
     if hasattr(args, 'checkpoint') and args.checkpoint:
