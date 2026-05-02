@@ -129,6 +129,37 @@ def unconstrainedToCholeskyCorr(z: torch.Tensor, q: int) -> torch.Tensor:
     return L
 
 
+def corrLowerToFull(r: torch.Tensor, q: int) -> torch.Tensor:
+    """Lower-triangle values (..., d_corr) → symmetric (..., q, q) correlation matrix."""
+    batch = r.shape[:-1]
+    corr = torch.eye(q, device=r.device, dtype=r.dtype).reshape((1,) * len(batch) + (q, q)).expand(*batch, q, q).clone()
+    cursor = 0
+    for i in range(1, q):
+        for j in range(i):
+            corr[..., i, j] = r[..., cursor]
+            corr[..., j, i] = r[..., cursor]
+            cursor += 1
+    return corr
+
+
+def corrLowerToUnconstrained(r: torch.Tensor, q: int) -> torch.Tensor:
+    """Lower-triangle correlation values (..., d_corr) → unconstrained (..., d_corr)."""
+    return corrToUnconstrained(corrLowerToFull(r, q))
+
+
+def logDetJacobianCorr(z: torch.Tensor, q: int) -> torch.Tensor:
+    """log |d corrToLower(L L^T) / dz| for the LKJ partial-correlation encoding.
+
+    For q == 2: r = tanh(z), so log|dr/dz| = log(1 - tanh^2(z)) summed to a scalar.
+    Returns shape (...) — one scalar per batch element.
+    """
+    if q <= 1:
+        return z.new_zeros(z.shape[:-1])
+    if q == 2:
+        return torch.log1p(-torch.tanh(z).pow(2).clamp(max=1 - 1e-7)).sum(-1)
+    raise NotImplementedError(f'logDetJacobianCorr not implemented for q={q}')
+
+
 # crunching
 def dampen(x: torch.Tensor, p: float = 0.45) -> torch.Tensor:
     return x.sign() * x.abs().pow(p)

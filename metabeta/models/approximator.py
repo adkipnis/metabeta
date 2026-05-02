@@ -9,6 +9,9 @@ from metabeta.utils.regularization import (
     getConstrainers,
     corrToLower,
     corrToUnconstrained,
+    corrLowerToUnconstrained,
+    logDetJacobianCorr,
+    unconstrainedToCholeskyCorr,
 )
 from metabeta.utils.config import ApproximatorConfig, SummarizerConfig, PosteriorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
@@ -161,8 +164,8 @@ class Approximator(nn.Module):
         targets = joinGlobals(sliced)
         if self.d_corr > 0:
             corr = data['corr_rfx'][..., : self.d_rfx, : self.d_rfx]  # (B, q, q)
-            z_corr = corrToUnconstrained(corr)  # (B, d_corr)
-            targets = torch.cat([targets, z_corr], dim=-1)
+            r_corr = corrToLower(corr)  # (B, d_corr) — constrained lower triangle
+            targets = torch.cat([targets, r_corr], dim=-1)
         return targets
 
     def _masks(self, data: dict[str, torch.Tensor], local: bool = False) -> torch.Tensor:
@@ -328,10 +331,15 @@ class Approximator(nn.Module):
         d = self.d_ffx
         q_var = self.d_rfx + (1 if self.has_sigma_eps else 0)
 
-        # project the sigma block [d : d+q_var] from R+ to R
-        # correlation scalars [d+q_var :] are already unconstrained — leave them
+        # project sigma block R+ → R
         sigmas = targets[..., d : d + q_var]
         targets[..., d : d + q_var] = unconstrainSigma(sigmas)
+        # project corr lower triangle (-1,1) → R  (mirrors sigma handling above)
+        if self.d_corr > 0:
+            r_corr = targets[..., d + q_var : d + q_var + self.d_corr]
+            targets[..., d + q_var : d + q_var + self.d_corr] = corrLowerToUnconstrained(
+                r_corr, self.d_rfx
+            )
         return targets
 
     def _postprocess(self, proposed: dict[str, dict[str, torch.Tensor]]):
@@ -350,17 +358,19 @@ class Approximator(nn.Module):
         # global postprocessing
         if 'global' in proposed:
             samples = proposed['global']['samples']
-            # only the sigma block [d : d+q_var] is log-scale; corr_z is already unconstrained
             log_sigmas = samples[..., d : d + q_var].clone()
             log_det = logDetJacobian(log_sigmas)
             log_prob_g = proposed['global']['log_prob'] - log_det.sum(dim=-1)
-            proposed['global']['log_prob'] = log_prob_g
             sigmas = constrainSigma(log_sigmas)
             if d_corr > 0:
-                corr_z = samples[..., d + q_var :]
-                samples_out = torch.cat([samples[..., :d], sigmas, corr_z], dim=-1)
+                z_corr = samples[..., d + q_var : d + q_var + d_corr]
+                log_prob_g = log_prob_g - logDetJacobianCorr(z_corr, q)
+                L_corr = unconstrainedToCholeskyCorr(z_corr, q)
+                r_corr = corrToLower(L_corr @ L_corr.mT)
+                samples_out = torch.cat([samples[..., :d], sigmas, r_corr], dim=-1)
             else:
                 samples_out = torch.cat([samples[..., :d], sigmas], dim=-1)
+            proposed['global']['log_prob'] = log_prob_g
             proposed['global']['samples'] = samples_out
         return Proposal(proposed, has_sigma_eps=self.has_sigma_eps, d_corr=d_corr)
 
