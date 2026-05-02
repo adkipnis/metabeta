@@ -316,6 +316,7 @@ class Approximator(nn.Module):
             sigma_rfx,
             sigma_eps,
             data['mask_n'],
+            Sigma_rfx_inv=Sigma_rfx_inv,
         )  # each (B, m, S, q)
 
         blup_ctx = torch.cat(
