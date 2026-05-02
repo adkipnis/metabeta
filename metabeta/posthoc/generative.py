@@ -44,7 +44,7 @@ from metabeta.utils.families import (
     logProbFfx,
     logProbSigma,
 )
-from metabeta.utils.regularization import unconstrainedToCholeskyCorr
+from metabeta.utils.regularization import unconstrainedToCholeskyCorr, corrLowerToUnconstrained, corrToLower
 
 
 _LOG_2PI = math.log(2 * math.pi)
@@ -258,7 +258,8 @@ class HierarchicalModel:
 
         z_corr: Tensor | None = None
         if proposal.d_corr > 0:
-            z_corr = proposal.samples_g[..., -proposal.d_corr :].detach()  # (b, s, d_corr)
+            r_corr = proposal.samples_g[..., -proposal.d_corr :].detach()  # (b, s, d_corr)
+            z_corr = corrLowerToUnconstrained(r_corr, self.q)
 
         rfx = proposal.samples_l.detach()         # (b, m, s, q)
         u = self.uFromRfx(sigma_rfx, rfx, z_corr)
@@ -289,7 +290,8 @@ class HierarchicalModel:
         if self.has_sigma_eps and sigma_eps is not None:
             parts.append(sigma_eps.detach().unsqueeze(-1))
         if z_corr is not None:
-            parts.append(z_corr.detach())
+            L = unconstrainedToCholeskyCorr(z_corr, self.q)
+            parts.append(corrToLower(L @ L.mT).detach())
         samples_g = torch.cat(parts, dim=-1)               # (b, s, D_g)
 
         proposed = {

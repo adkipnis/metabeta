@@ -3,7 +3,7 @@ import arviz as az
 import torch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import Proposal, joinProposals
-from metabeta.utils.regularization import dampen, unconstrainedToCholeskyCorr
+from metabeta.utils.regularization import dampen, corrLowerToUnconstrained, unconstrainedToCholeskyCorr
 from metabeta.utils.families import (
     hasSigmaEps,
     logProbFfx,
@@ -88,9 +88,10 @@ class ImportanceSampler:
         # so its prior must be in the numerator to keep the IS weight balanced.
         lp = lp + logProbSigma(sigma_rfx, self.tau_rfx, self.family_sigma_rfx, self.mask_q)
 
-        # corr_rfx: modeled in unconstrained z-space by the global flow — add matching prior
+        # corr_rfx: stored as constrained r (lower triangle); unconstrain to z for the prior
         if self.corr_prior and proposal.d_corr > 0 and self.eta_rfx is not None:
-            z_corr = proposal.samples_g[..., -proposal.d_corr :]  # (b, s, d_corr)
+            r_corr = proposal.samples_g[..., -proposal.d_corr :]  # (b, s, d_corr)
+            z_corr = corrLowerToUnconstrained(r_corr, proposal.q)
             lp = lp + logProbCorrRfx(z_corr, proposal.q, self.eta_rfx)
 
         if self.marginal:
@@ -102,9 +103,9 @@ class ImportanceSampler:
             rfx = proposal.rfx
             if self.full:
                 if proposal.d_corr > 0:
-                    L = unconstrainedToCholeskyCorr(
-                        proposal.samples_g[..., -proposal.d_corr :], proposal.q
-                    )
+                    r_corr = proposal.samples_g[..., -proposal.d_corr :]
+                    z_corr_full = corrLowerToUnconstrained(r_corr, proposal.q)
+                    L = unconstrainedToCholeskyCorr(z_corr_full, proposal.q)
                     lp = lp + logProbRfxCorrelated(rfx, sigma_rfx, L, self.mask_mq)
                 else:
                     lp = lp + logProbRfx(rfx, sigma_rfx, self.mask_mq)

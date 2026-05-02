@@ -38,6 +38,7 @@ from metabeta.models.approximator import Approximator
 from metabeta.posthoc.generative import HierarchicalModel, NCPParams
 from metabeta.utils.evaluation import Proposal
 from metabeta.utils.preprocessing import rescaleData
+from metabeta.utils.regularization import corrLowerToUnconstrained
 
 
 class LaplaceRefiner:
@@ -87,7 +88,8 @@ class LaplaceRefiner:
             sigma_eps = proposal.sigma_eps[ba, best].unsqueeze(1)  # (b, 1)
         z_corr = None
         if proposal.d_corr > 0:
-            z_corr = proposal.samples_g[ba, best, -proposal.d_corr:].unsqueeze(1)
+            r_corr = proposal.samples_g[ba, best, -proposal.d_corr:].unsqueeze(1)
+            z_corr = corrLowerToUnconstrained(r_corr, proposal.q)
 
         # Initialise u at zero (prior mean) rather than rfx/sigma_rfx.
         # This avoids large initial gradients when sigma_rfx is small.

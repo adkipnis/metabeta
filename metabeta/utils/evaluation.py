@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 from metabeta.utils.dataloader import toDevice
-from metabeta.utils.regularization import unconstrainedToCholeskyCorr
+from metabeta.utils.regularization import corrLowerToFull
 
 
 Proposed = dict[str, dict[str, torch.Tensor]]
@@ -144,8 +144,7 @@ class Proposal:
             return self._corr_rfx
         if self.d_corr == 0:
             return None
-        L = unconstrainedToCholeskyCorr(self.samples_g[..., -self.d_corr :], self.q)
-        return L @ L.mT
+        return corrLowerToFull(self.samples_g[..., -self.d_corr :], self.q)
 
     @property
     def rfx(self) -> torch.Tensor:
