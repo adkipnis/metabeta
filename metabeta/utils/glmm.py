@@ -398,13 +398,16 @@ def _lmmNormalCompacted(
     df_sigma = (G - d).clamp(min=1.0)
     blup_var = blup_var * (1.0 + 2.0 / df_sigma)[:, None, None]
 
+    # Kackar-Harville correction: blup_var conditions on β as known, but actual BLUP error
+    # also includes λ_g² * x̄_g' Var(β_hat) x̄_g. Dominant for large groups where λ→1, (1-λ)Ψ→0.
+    eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
+    beta_var = _safeSolve(A_gls_reg, eye_d).diagonal(dim1=-1, dim2=-2).clamp(min=1e-8)  # (B, d)
+    kh_corr = (lambda_g2.unsqueeze(-1) ** 2 * (X_mean ** 2 * beta_var[:, None, :]).sum(dim=-1, keepdim=True))  # (B, m, 1)
+    blup_var = blup_var + kh_corr
+
     sigma_rfx = sigma_rfx_sq_val.clamp(min=0.0).sqrt().unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)
     Psi = sigma_rfx.square().unsqueeze(-1)                          # (B, 1, 1)
     sigma_eps = sigma_eps_sq_val.clamp(min=0.0).sqrt().unsqueeze(-1).nan_to_num(nan=1.0, posinf=1.0)
-
-    # # GLS posterior variance for β: diag(A_gls_reg⁻¹), i.e. Var(β̂_j | data, σ estimates)
-    # eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
-    # beta_var = _safeSolve(A_gls_reg, eye_d).diagonal(dim1=-1, dim2=-2).clamp(min=1e-8)  # (B, d)
 
     resid_g = r_g.unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)  # (B, m, 1)
 
@@ -630,6 +633,14 @@ def _lmmNormalFull(
     df_sigma = (G - d).clamp(min=1.0)
     blup_var = blup_var * (1.0 + 2.0 / df_sigma)[:, None, None]
 
+    # Kackar-Harville correction: blup_var = diag(σ²W_g) conditions on β as known, but actual
+    # BLUP error also includes W_g Z^T X (β_hat - β). Dominant for large groups where W_g→Ψ⁻¹,
+    # (1-λ)Ψ→0. beta_var = diag(A_gls_reg⁻¹), W_ZtX = W_g Z^T X already computed in EM loop.
+    eye_d_kh = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
+    beta_var_kh = _safeSolve(A_gls_reg, eye_d_kh).diagonal(dim1=-1, dim2=-2).clamp(min=1e-8)  # (B, d)
+    kh_corr = (W_ZtX ** 2 * beta_var_kh[:, None, None, :]).sum(dim=-1)  # (B, m, q)
+    blup_var = blup_var + kh_corr
+
     # Floor blup_var at Psi_diag / (2 * n_g): prevents near-zero declared variance for
     # small groups on real (sampled) data where the Gaussian model may be misspecified.
     psi_diag = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0)  # (B, q)
@@ -638,10 +649,6 @@ def _lmmNormalFull(
 
     sigma_rfx = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()          # (B, q)
     sigma_eps_1d = se2.clamp(min=0.0).sqrt().nan_to_num(nan=1.0, posinf=1.0)  # (B,)
-
-    # GLS posterior variance for β: diag(A_gls_reg⁻¹), i.e. Var(β̂_j | data, σ estimates)
-    eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
-    beta_var = _safeSolve(A_gls_reg, eye_d).diagonal(dim1=-1, dim2=-2).clamp(min=1e-8)  # (B, d)
 
     ns_f_loc = ns.clamp(min=1.0)                                              # (B, m)
     resid_g = (resid_gls.sum(dim=2) / ns_f_loc * mask_m).unsqueeze(-1)       # (B, m, 1)
@@ -654,7 +661,7 @@ def _lmmNormalFull(
 
     return {
         'beta_est': beta_gls,                       # (B, d)
-        'beta_var': beta_var,                       # (B, d)
+        'beta_var': beta_var_kh,                    # (B, d)
         'beta_wg': beta_wg_out,                     # (B, d)
         'sigma_eps_est': sigma_eps_1d.unsqueeze(-1), # (B, 1)
         'sigma_rfx_est': sigma_rfx,                 # (B, q)
