@@ -251,8 +251,13 @@ def collateGrouped(
         out['mask_d'] = torch.gather(out['mask_d'], dim=1, index=out['dperm'])
         out['mask_q'] = torch.gather(out['mask_q'], dim=1, index=out['qperm'])
 
-    # mask_mq must be built after any mask_q permutation handling.
-    out['mask_mq'] = out['mask_m'].unsqueeze(-1) & out['mask_q'].unsqueeze(-2)
+    # mask_mq and mask_corr must be built after any mask_q permutation handling.
+    mq = out['mask_q']
+    out['mask_mq'] = out['mask_m'].unsqueeze(-1) & mq.unsqueeze(-2)
+    q = mq.shape[-1]
+    out['mask_corr'] = torch.stack(
+        [mq[..., i] & mq[..., j] for i in range(1, q) for j in range(i)], dim=-1
+    ) if q >= 2 else mq.new_zeros(B, 0)
 
     # collate fit samples if present
     for method in ('nuts', 'advi'):
