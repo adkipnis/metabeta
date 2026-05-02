@@ -79,6 +79,8 @@ def make_batch(
     mask_m = torch.ones(b, m, dtype=torch.bool)
     mask_n = torch.ones(b, m, n, dtype=torch.bool)
     mask_mq = torch.ones(b, m, q, dtype=torch.bool)
+    d_corr = q * (q - 1) // 2
+    mask_corr = torch.ones(b, d_corr, dtype=torch.bool)
 
     # counts
     ns = torch.full((b, m), float(n))
@@ -108,6 +110,7 @@ def make_batch(
         mask_m=mask_m,
         mask_n=mask_n,
         mask_mq=mask_mq,
+        mask_corr=mask_corr,
         ns=ns,
         n=total_n,
         m=total_m,
