@@ -306,7 +306,12 @@ class Approximator(nn.Module):
         else:
             raise ValueError(f'global_params has {ndim} dims, expected 2 or 3')
         ctx = torch.cat([local_summary_exp, global_params_exp], dim=-1)
-        if data is not None and self.analytical_context and self.likelihood_family == 0:
+        if (
+            data is not None
+            and self.analytical_context
+            and self.analytical_blup_from_globals
+            and self.likelihood_family == 0
+        ):
             ctx = torch.cat([ctx, self._analyticalBLUPContext(data, global_params)], dim=-1)
         return ctx
 
