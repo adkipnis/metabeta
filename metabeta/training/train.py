@@ -668,6 +668,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             plot_dir=self.plot_dir,
             epoch=self.current_epoch,
             show=show,
+            show_corr_rfx=self.model.d_corr > 0
         )
         path_c = plotCoverage(
             eval_summary,
