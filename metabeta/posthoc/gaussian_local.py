@@ -80,11 +80,13 @@ def analyticalBLUPStats(
     sigma_rfx: Tensor,
     sigma_eps: Tensor,
     mask_n: Tensor,
+    Sigma_rfx_inv: Tensor | None = None,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Analytical BLUP mean, marginal std, and shrinkage for the Gaussian rfx posterior.
 
     Shapes: Y (B,m,n), X (B,m,n,d), Z (B,m,n,q), beta (B,S,d),
             sigma_rfx (B,S,q), sigma_eps (B,S), mask_n (B,m,n) bool.
+    Sigma_rfx_inv: optional (B,S,q,q) full precision; if None uses diag(1/sigma_rfx^2).
     Returns: mean (B,m,S,q), std (B,m,S,q), lambda_g (B,m,S,q).
     """
     se = sigma_eps.clamp(min=_SIGMA_MIN)
@@ -99,10 +101,12 @@ def analyticalBLUPStats(
     ZtR = torch.einsum('bmnq,bmsn->bmsq', Z_m, r)    # (B, m, S, q)
 
     eps_sq = se ** 2
-    Lambda = (
-        ZtZ.unsqueeze(2) / eps_sq[:, None, :, None, None]
-        + torch.diag_embed(1.0 / sr ** 2).unsqueeze(1)
-    )  # (B, m, S, q, q)
+    prior_prec = (
+        Sigma_rfx_inv.unsqueeze(1)
+        if Sigma_rfx_inv is not None
+        else torch.diag_embed(1.0 / sr ** 2).unsqueeze(1)
+    )  # (B, 1, S, q, q) → broadcasts to (B, m, S, q, q)
+    Lambda = ZtZ.unsqueeze(2) / eps_sq[:, None, :, None, None] + prior_prec  # (B, m, S, q, q)
 
     diag_max = Lambda.diagonal(dim1=-2, dim2=-1).amax(-1, keepdim=True).unsqueeze(-1).clamp(min=1.0)
     jitter = torch.eye(q, device=Lambda.device, dtype=Lambda.dtype) * (diag_max * 1e-6)
