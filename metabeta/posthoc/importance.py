@@ -3,7 +3,7 @@ import arviz as az
 import torch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import Proposal, joinProposals
-from metabeta.utils.regularization import dampen, corrLowerToUnconstrained, unconstrainedToCholeskyCorr
+from metabeta.utils.regularization import dampen, corrLowerToUnconstrained, unconstrainedToCholesky
 from metabeta.utils.families import (
     hasSigmaEps,
     logProbFfx,
@@ -105,7 +105,7 @@ class ImportanceSampler:
                 if proposal.d_corr > 0:
                     r_corr = proposal.samples_g[..., -proposal.d_corr :]
                     z_corr_full = corrLowerToUnconstrained(r_corr, proposal.q)
-                    L = unconstrainedToCholeskyCorr(z_corr_full, proposal.q)
+                    L = unconstrainedToCholesky(z_corr_full, proposal.q)
                     lp = lp + logProbRfxCorrelated(rfx, sigma_rfx, L, self.mask_mq)
                 else:
                     lp = lp + logProbRfx(rfx, sigma_rfx, self.mask_mq)

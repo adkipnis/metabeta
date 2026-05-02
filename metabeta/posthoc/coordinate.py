@@ -48,7 +48,7 @@ from metabeta.utils.families import (
     logProbSigma,
 )
 from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.regularization import unconstrainedToCholeskyCorr
+from metabeta.utils.regularization import unconstrainedToCholesky
 
 
 class CoordinateDescent:
@@ -184,7 +184,7 @@ class CoordinateDescent:
         # Cholesky factor of Σ_rfx
         sigma_rfx_c = sigma_rfx.clamp(min=1e-6)
         if z_corr is not None:
-            L_corr = unconstrainedToCholeskyCorr(z_corr, q)  # (b, s, q, q)
+            L_corr = unconstrainedToCholesky(z_corr, q)  # (b, s, q, q)
             L_rfx = L_corr * sigma_rfx_c.unsqueeze(-1)        # (b, s, q, q)
         else:
             L_rfx = torch.diag_embed(sigma_rfx_c)             # (b, s, q, q)

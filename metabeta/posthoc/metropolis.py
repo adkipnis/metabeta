@@ -59,7 +59,7 @@ from metabeta.utils.families import (
     logProbSigma,
 )
 from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.regularization import unconstrainedToCholeskyCorr
+from metabeta.utils.regularization import unconstrainedToCholesky
 
 Mode = Literal['global', 'marginal', 'joint']
 
@@ -254,7 +254,7 @@ class MetropolisSampler:
         # Σ_rfx Cholesky factor L such that Σ_rfx = L @ Lᵀ
         sigma_rfx_c = sigma_rfx.clamp(min=1e-6)
         if d_corr > 0:
-            L_corr = unconstrainedToCholeskyCorr(sg_out[..., -d_corr:], q)  # (b, s_out, q, q)
+            L_corr = unconstrainedToCholesky(sg_out[..., -d_corr:], q)  # (b, s_out, q, q)
             L_rfx = L_corr * sigma_rfx_c.unsqueeze(-1)                      # (b, s_out, q, q)
         else:
             L_rfx = torch.diag_embed(sigma_rfx_c)   # (b, s_out, q, q) diagonal

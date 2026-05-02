@@ -44,7 +44,7 @@ from metabeta.utils.families import (
     logProbFfx,
     logProbSigma,
 )
-from metabeta.utils.regularization import unconstrainedToCholeskyCorr, corrLowerToUnconstrained, corrToLower
+from metabeta.utils.regularization import unconstrainedToCholesky, corrLowerToUnconstrained, corrToLower
 
 
 _LOG_2PI = math.log(2 * math.pi)
@@ -164,7 +164,7 @@ class HierarchicalModel:
         if z_corr is None:
             return u * sigma_rfx.unsqueeze(1)
 
-        L_corr = unconstrainedToCholeskyCorr(z_corr, self.q)  # (b, s, q, q)
+        L_corr = unconstrainedToCholesky(z_corr, self.q)  # (b, s, q, q)
         # diag(sigma_rfx) @ L_corr: multiply row i of L_corr by sigma_rfx[b, s, i]
         L_full = sigma_rfx.unsqueeze(-1) * L_corr             # (b, s, q, q)
         # rfx[b,m,s,j] = sum_i u[b,m,s,i] * L_full[b,s,j,i]
@@ -178,7 +178,7 @@ class HierarchicalModel:
         if z_corr is None:
             return rfx / sigma_rfx.unsqueeze(1).clamp(min=self.eps)
 
-        L_corr = unconstrainedToCholeskyCorr(z_corr, self.q)  # (b, s, q, q)
+        L_corr = unconstrainedToCholesky(z_corr, self.q)  # (b, s, q, q)
         L_full = sigma_rfx.unsqueeze(-1) * L_corr             # (b, s, q, q)
 
         # Solve L_full @ u_j = rfx_j  per group (lower-triangular)
@@ -290,7 +290,7 @@ class HierarchicalModel:
         if self.has_sigma_eps and sigma_eps is not None:
             parts.append(sigma_eps.detach().unsqueeze(-1))
         if z_corr is not None:
-            L = unconstrainedToCholeskyCorr(z_corr, self.q)
+            L = unconstrainedToCholesky(z_corr, self.q)
             parts.append(corrToLower(L @ L.mT).detach())
         samples_g = torch.cat(parts, dim=-1)               # (b, s, D_g)
 
