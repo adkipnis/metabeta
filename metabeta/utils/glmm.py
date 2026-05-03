@@ -437,6 +437,7 @@ def _lmmNormalFull(
     ns: torch.Tensor,       # (B, m)     group sizes (float, ≥ 1 for active)
     n_total: torch.Tensor,  # (B,)       total active observations
     n_em: int = 3,
+    uncorr: torch.Tensor | None = None,  # (B,) bool — force Ψ diagonal for these datasets
 ) -> dict[str, torch.Tensor]:
     """GLS estimator for the LME y_g = X_g β + Z_g b_g + ε_g, b_g ~ N(0, Ψ).
 
@@ -531,6 +532,10 @@ def _lmmNormalFull(
     vals = vals.clamp(min=0.0)
     Psi = vecs @ torch.diag_embed(vals) @ vecs.mT                 # (B, q, q)
 
+    if uncorr is not None:
+        Psi = torch.where(uncorr[:, None, None], torch.diag_embed(Psi.diagonal(dim1=-2, dim2=-1)), Psi)
+        vals, vecs = _eighWithJitter(Psi)
+
     # ------------------------------------------------------------------
     # Stage 3: GLS β̂ via Woodbury
     # ------------------------------------------------------------------
@@ -588,6 +593,8 @@ def _lmmNormalFull(
         Psi = _psdProject(
             ((blup_outer + post_cov) * mask4).sum(dim=1) / G[:, None, None]
         )  # (B, q, q)
+        if uncorr is not None:
+            Psi = torch.where(uncorr[:, None, None], torch.diag_embed(Psi.diagonal(dim1=-2, dim2=-1)), Psi)
 
         # M-step: σ_ε² (REML-like df correction using current blups and beta_gls)
         resid_em = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)
@@ -687,11 +694,12 @@ def lmmNormal(
     ns: torch.Tensor,       # (B, m)
     n_total: torch.Tensor,  # (B,)
     n_em: int = 3,
+    uncorr: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     """Closed-form GLS for the Gaussian LMM. Routes to q=1 compacted or full."""
     if Zm.shape[-1] == 1:
         return _lmmNormalCompacted(Xm, ym, mask_n, mask_m, ns, n_total, n_em=n_em)
-    return _lmmNormalFull(Xm, ym, Zm, mask_n, mask_m, ns, n_total, n_em=n_em)
+    return _lmmNormalFull(Xm, ym, Zm, mask_n, mask_m, ns, n_total, n_em=n_em, uncorr=uncorr)
 
 
 # ---------------------------------------------------------------------------
@@ -709,6 +717,7 @@ def _lmmGlmm(
     n_total: torch.Tensor,  # (B,)       total active observations
     likelihood_family: int,
     n_newton: int = 3,
+    uncorr: torch.Tensor | None = None,  # (B,) bool — force Ψ diagonal for these datasets
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM variance-component estimator (private).
 
@@ -788,6 +797,8 @@ def _lmmGlmm(
     vals_pql, vecs_pql = _eighWithJitter(Psi_pql)
     vals_pql = vals_pql.clamp(min=psi_0[:, None])
     Psi_pql = vecs_pql @ torch.diag_embed(vals_pql) @ vecs_pql.mT        # (B, q, q)
+    if uncorr is not None:
+        Psi_pql = torch.where(uncorr[:, None, None], torch.diag_embed(Psi_pql.diagonal(dim1=-2, dim2=-1)), Psi_pql)
 
     # ------------------------------------------------------------------
     # Stage 2: alternating Newton–GLS loop, up to max_passes=6.
@@ -813,6 +824,8 @@ def _lmmGlmm(
         beta_0, Psi_inv, *pass_args
     )
     beta_gls, Psi_lap = _sanitize(beta_gls, Psi_lap)
+    if uncorr is not None:
+        Psi_lap = torch.where(uncorr[:, None, None], torch.diag_embed(Psi_lap.diagonal(dim1=-2, dim2=-1)), Psi_lap)
 
     # Passes 2–max_passes: warm start, ridge-regularized Ψ̂_Lap, until convergence.
     # Each pass refines (β, b̂_g, Ψ̂_Lap) jointly. Early exit when the 95th-percentile
@@ -827,6 +840,8 @@ def _lmmGlmm(
             beta_gls, Psi_inv, *pass_args, bg_init=blups
         )
         beta_gls, Psi_lap = _sanitize(beta_gls, Psi_lap)
+        if uncorr is not None:
+            Psi_lap = torch.where(uncorr[:, None, None], torch.diag_embed(Psi_lap.diagonal(dim1=-2, dim2=-1)), Psi_lap)
 
         d_beta = (beta_gls - beta_prev).abs().amax(dim=-1)                               # (B,)
         d_psi = (Psi_lap.diagonal(dim1=-2, dim2=-1) - psi_diag_prev).abs().amax(dim=-1)  # (B,)
@@ -891,9 +906,10 @@ def lmmBernoulli(
     ns: torch.Tensor,
     n_total: torch.Tensor,
     n_newton: int = 3,
+    uncorr: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM for Bernoulli/logit outcomes."""
-    return _lmmGlmm(Xm, ym, Zm, mask_n, mask_m, ns, n_total, likelihood_family=1, n_newton=n_newton)
+    return _lmmGlmm(Xm, ym, Zm, mask_n, mask_m, ns, n_total, likelihood_family=1, n_newton=n_newton, uncorr=uncorr)
 
 
 def lmmPoisson(
@@ -905,9 +921,10 @@ def lmmPoisson(
     ns: torch.Tensor,
     n_total: torch.Tensor,
     n_newton: int = 3,
+    uncorr: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM for Poisson/log outcomes."""
-    return _lmmGlmm(Xm, ym, Zm, mask_n, mask_m, ns, n_total, likelihood_family=2, n_newton=n_newton)
+    return _lmmGlmm(Xm, ym, Zm, mask_n, mask_m, ns, n_total, likelihood_family=2, n_newton=n_newton, uncorr=uncorr)
 
 
 def glmm(
@@ -925,23 +942,18 @@ def glmm(
     """Dispatch to lmmNormal / lmmBernoulli / lmmPoisson by likelihood_family.
 
     When eta_rfx is provided, datasets with eta_rfx == 0 (uncorrelated rfx) have
-    their Psi constrained to diagonal — zeroing noisy off-diagonal MoM estimates.
+    Ψ constrained to diagonal throughout estimation — BLUPs and Ψ outputs are
+    consistent with the diagonal constraint.
     """
+    uncorr = (eta_rfx == 0) if eta_rfx is not None else None  # (B,) bool or None
     if likelihood_family == 0:
-        stats = lmmNormal(Xm, ym, Zm, mask_n, mask_m, ns, n_total)
+        stats = lmmNormal(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr)
     elif likelihood_family == 1:
-        stats = lmmBernoulli(Xm, ym, Zm, mask_n, mask_m, ns, n_total, **kwargs)
+        stats = lmmBernoulli(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
     elif likelihood_family == 2:
-        stats = lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, **kwargs)
+        stats = lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
     else:
         raise ValueError(f'unsupported likelihood_family={likelihood_family}')
-
-    if eta_rfx is not None:
-        uncorr = (eta_rfx == 0)[:, None, None]  # (B, 1, 1)
-        for key in ('Psi', 'Psi_pql', 'Psi_lap'):
-            if key in stats:
-                P = stats[key]
-                stats[key] = torch.where(uncorr, torch.diag_embed(P.diagonal(dim1=-2, dim2=-1)), P)
 
     return stats
 
