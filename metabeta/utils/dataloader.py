@@ -316,6 +316,8 @@ def collateFits(
         out[f'{method}_corr_rfx'] = corr_rfx
 
     out[f'{method}_duration'] = quickCollate(batch, f'{method}_duration')
+    if f'{method}_failed' in batch[0]:
+        out[f'{method}_failed'] = quickCollate(batch, f'{method}_failed', torch.bool)
 
     # per-dataset diagnostics: shape (b, chains) or (b, n_params)
     for diag_key in (

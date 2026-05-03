@@ -264,6 +264,12 @@ class Evaluator:
         proposal.tpd = batch[f'{prefix}_duration'].mean().item()
         return proposal
 
+    def _fitBatchMask(self, batch: dict[str, torch.Tensor], prefix: str) -> np.ndarray:
+        failed_key = f'{prefix}_failed'
+        if failed_key not in batch:
+            return np.ones(batch['X'].shape[0], dtype=bool)
+        return ~batch[failed_key].cpu().numpy().astype(bool)
+
     def _sampleBatch(self, batch: dict[str, torch.Tensor]) -> Proposal:
         """Sample a proposal from a batch (no MoE)."""
         proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
@@ -558,6 +564,8 @@ class Evaluator:
 
     def go(self) -> None:
         full_batch = self.dl_test.fullBatch()
+        advi_mask = self._fitBatchMask(full_batch, prefix='advi')
+        advi_batch = subsetBatch(full_batch, advi_mask)
 
         # MB proposal
         proposal_mb = self.sampleMinibatched(self.dl_test, 'MB')
@@ -569,15 +577,11 @@ class Evaluator:
         self._nutsFailureAnalysis(summary_nuts, full_batch)
 
         # ADVI proposal
-        proposal_advi = self._fit2proposal(full_batch, prefix='advi')
-        summary_advi = self.summary(proposal_advi, full_batch)
+        proposal_advi = self._fit2proposal(advi_batch, prefix='advi')
+        summary_advi = self.summary(proposal_advi, advi_batch)
 
-        self.plot(
-            [proposal_mb, proposal_nuts, proposal_advi],
-            [summary_mb, summary_nuts, summary_advi],
-            ['MB', 'NUTS', 'ADVI'],
-            full_batch,
-        )
+        self.plot([proposal_mb, proposal_nuts], [summary_mb, summary_nuts], ['MB', 'NUTS'], full_batch)
+        self.plot([proposal_advi], [summary_advi], ['ADVI'], advi_batch, plot_dir=self.plot_dir / 'advi')
 
         fit_label = self._fitLabel()
         rows = []
@@ -602,10 +606,12 @@ class Evaluator:
                     conv_batch = subsetBatch(full_batch, conv_mask)
                     conv_mb = subsetProposal(proposal_mb, conv_mask)
                     conv_nuts = subsetProposal(proposal_nuts, conv_mask)
-                    conv_advi = subsetProposal(proposal_advi, conv_mask)
+                    conv_advi_mask = advi_mask & conv_mask
+                    conv_advi_batch = subsetBatch(full_batch, conv_advi_mask)
+                    conv_advi = subsetProposal(proposal_advi, conv_mask[advi_mask])
                     summary_mb_conv = self.summary(conv_mb, conv_batch)
                     summary_nuts_conv = self.summary(conv_nuts, conv_batch)
-                    summary_advi_conv = self.summary(conv_advi, conv_batch)
+                    summary_advi_conv = self.summary(conv_advi, conv_advi_batch)
                     for label, summary in [
                         ('MB', summary_mb_conv),
                         ('NUTS', summary_nuts_conv),
@@ -615,11 +621,18 @@ class Evaluator:
                     conv_plot_dir = self.plot_dir / 'conv'
                     conv_plot_dir.mkdir(parents=True, exist_ok=True)
                     self.plot(
-                        [conv_mb, conv_nuts, conv_advi],
-                        [summary_mb_conv, summary_nuts_conv, summary_advi_conv],
-                        ['MB', 'NUTS', 'ADVI'],
+                        [conv_mb, conv_nuts],
+                        [summary_mb_conv, summary_nuts_conv],
+                        ['MB', 'NUTS'],
                         conv_batch,
                         plot_dir=conv_plot_dir,
+                    )
+                    self.plot(
+                        [conv_advi],
+                        [summary_advi_conv],
+                        ['ADVI'],
+                        conv_advi_batch,
+                        plot_dir=conv_plot_dir / 'advi',
                     )
 
                     # --- converged + reliable LOO subset (NUTS k filter only) ---
@@ -635,10 +648,11 @@ class Evaluator:
                             k_batch = subsetBatch(conv_batch, k_mask)
                             k_mb   = subsetProposal(conv_mb,   k_mask)
                             k_nuts = subsetProposal(conv_nuts, k_mask)
-                            k_advi = subsetProposal(conv_advi, k_mask)
+                            k_advi_batch = subsetBatch(conv_advi_batch, k_mask[conv_advi_mask[conv_mask]])
+                            k_advi = subsetProposal(conv_advi, k_mask[conv_advi_mask[conv_mask]])
                             summary_mb_k   = self.summary(k_mb,   k_batch)
                             summary_nuts_k = self.summary(k_nuts, k_batch)
-                            summary_advi_k = self.summary(k_advi, k_batch)
+                            summary_advi_k = self.summary(k_advi, k_advi_batch)
                             for label, summary in [
                                 ('MB', summary_mb_k),
                                 ('NUTS', summary_nuts_k),
