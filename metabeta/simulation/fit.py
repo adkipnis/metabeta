@@ -291,45 +291,31 @@ class Fitter:
         PyMC) to terminate cleanly.
         """
         pymc_model = self._buildPymc(ds)
+        elbo_steps: list[int] = []
+        elbo_vals: list[float] = []
 
-        def _run_advi(method: str) -> tuple[pm.Approximation, list[int], list[float], float]:
-            elbo_steps: list[int] = []
-            elbo_vals: list[float] = []
+        def _record(approx, hist, i):
+            if i % elbo_every == 0:
+                elbo_steps.append(i)
+                elbo_vals.append(-float(hist[-1]))  # negate loss → ELBO
+            # Compare two consecutive smoothed blocks; robust to stochastic noise.
+            if i >= es_min_iter and len(elbo_vals) >= 2 * es_window:
+                recent = np.mean(elbo_vals[-es_window:])
+                prev = np.mean(elbo_vals[-2 * es_window : -es_window])
+                delta = abs(recent - prev) / max(abs(recent), 1.0)
+                if delta < es_tol:
+                    raise StopIteration
 
-            def _record(approx, hist, i):
-                if i % elbo_every == 0:
-                    elbo_steps.append(i)
-                    elbo_vals.append(-float(hist[-1]))  # negate loss → ELBO
-                # Compare two consecutive smoothed blocks; robust to stochastic noise.
-                if i >= es_min_iter and len(elbo_vals) >= 2 * es_window:
-                    recent = np.mean(elbo_vals[-es_window:])
-                    prev = np.mean(elbo_vals[-2 * es_window : -es_window])
-                    delta = abs(recent - prev) / max(abs(recent), 1.0)
-                    if delta < es_tol:
-                        raise StopIteration
-
-            t0 = time.perf_counter()
-            with pymc_model:
-                approx = pm.fit(
-                    n=cfg.viter,
-                    method=method,
-                    obj_optimizer=adam(learning_rate=cfg.lr),
-                    callbacks=[_record],
-                    progressbar=False,
-                )
-            duration = time.perf_counter() - t0
-            return approx, elbo_steps, elbo_vals, duration
-
-        try:
-            mean_field, elbo_steps, elbo_vals, duration = _run_advi('advi')
-            advi_variant = 'advi'
-        except FloatingPointError:
-            print(
-                f'Dataset {self.cfg.idx}: mean-field ADVI failed with NaNs; '
-                'retrying with full-rank ADVI...'
+        t0 = time.perf_counter()
+        with pymc_model:
+            mean_field = pm.fit(
+                n=cfg.viter,
+                method='advi',
+                obj_optimizer=adam(learning_rate=cfg.lr),
+                callbacks=[_record],
+                progressbar=False,
             )
-            mean_field, elbo_steps, elbo_vals, duration = _run_advi('fullrank_advi')
-            advi_variant = 'fullrank_advi'
+        duration = time.perf_counter() - t0
 
         trace = mean_field.sample(
             draws=(cfg.draws * cfg.chains),
@@ -345,7 +331,31 @@ class Fitter:
         out['advi_duration'] = np.array(duration)
         out['advi_elbo'] = np.array(elbo_vals, dtype=np.float64)   # (T,)
         out['advi_elbo_step'] = np.array(elbo_steps, dtype=np.int64)  # (T,)
-        out['advi_variant'] = np.array(advi_variant)
+        out['advi_failed'] = np.array(False)
+        return out
+
+    def _adviFailureResult(
+        self,
+        cfg: argparse.Namespace,
+        ds: dict[str, np.ndarray],
+        duration: float = np.nan,
+    ) -> dict[str, np.ndarray]:
+        d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
+        s = int(cfg.draws * cfg.chains)
+        out: dict[str, np.ndarray] = {
+            'advi_ffx': np.full((d, s), np.nan, dtype=np.float64),
+            'advi_sigma_rfx': np.full((q, s), np.nan, dtype=np.float64),
+            'advi_rfx': np.full((q, m, s), np.nan, dtype=np.float64),
+            'advi_corr_rfx': np.full((1, s, q, q), np.nan, dtype=np.float64),
+            'advi_names': np.array([], dtype=str),
+            'advi_ess': np.array([], dtype=np.float64),
+            'advi_duration': np.array(duration, dtype=np.float64),
+            'advi_elbo': np.array([], dtype=np.float64),
+            'advi_elbo_step': np.array([], dtype=np.int64),
+            'advi_failed': np.array(True),
+        }
+        if hasSigmaEps(int(ds.get('likelihood_family', 0))):
+            out['advi_sigma_eps'] = np.full((1, s), np.nan, dtype=np.float64)
         return out
 
     def go(self) -> None:
@@ -353,7 +363,11 @@ class Fitter:
         if self.cfg.method == 'nuts':
             results = self._fitNuts(self.cfg, self.ds)
         elif self.cfg.method == 'advi':
-            results = self._fitAdvi(self.cfg, self.ds)
+            try:
+                results = self._fitAdvi(self.cfg, self.ds)
+            except FloatingPointError as exc:
+                print(f'ADVI failed for dataset {self.cfg.idx}: {exc}')
+                results = self._adviFailureResult(self.cfg, self.ds)
         else:
             raise NotImplementedError
         np.savez_compressed(self.outpath, **results, allow_pickle=True)
