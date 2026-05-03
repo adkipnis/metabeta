@@ -54,6 +54,25 @@ def _report(label: str, n_ok: int, total: int, missing: list[Path], broken: list
         print(f'  broken   {p}: {err}')
 
 
+def _failedFitIndices(missing: list[Path], broken: list[tuple[Path, str]]) -> list[int]:
+    failed_paths = [*missing, *(p for p, _ in broken)]
+    indices = []
+    for path in failed_paths:
+        try:
+            indices.append(int(path.stem.rsplit('_', maxsplit=1)[-1]))
+        except ValueError:
+            continue
+    return sorted(set(indices))
+
+
+def _printRefitCommand(data_id: str, method: str, failed_idx: list[int]) -> None:
+    if not failed_idx:
+        return
+    idx_args = ' '.join(str(idx) for idx in failed_idx)
+    print('  rerun with:')
+    print(f'    scripts/fit-selected.sh --method {method} --data_id {data_id} --idx {idx_args}')
+
+
 def _checkTrain(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
     paths = [
         srcdir / data_id / datasetFilename(partition='train', epoch=e)
@@ -75,6 +94,8 @@ def _checkTest(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
     advi_missing, advi_broken = _check(advi_paths, 'advi fits', inspect=cfg.inspect)
     _report('nuts fits', len(pymc_paths) - len(pymc_missing) - len(pymc_broken), len(pymc_paths), pymc_missing, pymc_broken)
     _report('advi fits', len(advi_paths) - len(advi_missing) - len(advi_broken), len(advi_paths), advi_missing, advi_broken)
+    _printRefitCommand(data_id, 'nuts', _failedFitIndices(pymc_missing, pymc_broken))
+    _printRefitCommand(data_id, 'advi', _failedFitIndices(advi_missing, advi_broken))
 
     fits_ok = not any([pymc_missing, pymc_broken, advi_missing, advi_broken])
     if fits_ok and not cfg.no_reintegrate:
