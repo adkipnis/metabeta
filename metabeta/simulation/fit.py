@@ -380,7 +380,10 @@ class Fitter:
         fits = []
         for p in paths:
             with np.load(p, allow_pickle=True) as f:
-                fits.append(dict(f))
+                fit = dict(f)
+            if method == 'advi' and 'advi_failed' not in fit:
+                fit['advi_failed'] = np.array(False)
+            fits.append(fit)
         return aggregate(fits)
 
     def reintegrate(self) -> None:
