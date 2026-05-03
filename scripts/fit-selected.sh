@@ -124,7 +124,7 @@ case "$METHOD" in
         ;;
 esac
 
-if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
+if [[ -z "$IDX_MAP" ]]; then
     [[ ${#IDX_VALUES[@]} -gt 0 ]] || {
         echo "At least one --idx value is required" >&2
         usage
@@ -156,11 +156,6 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
         --idx_map "$IDX_MAP"
     exit 0
 fi
-
-[[ -n "$IDX_MAP" ]] || {
-    echo "--idx_map is required inside the array job" >&2
-    exit 1
-}
 
 IFS=',' read -r -a IDX_ARRAY <<< "$IDX_MAP"
 TASK_SLOT="${SLURM_ARRAY_TASK_ID}"
