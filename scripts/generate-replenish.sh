@@ -1,9 +1,9 @@
 #!/bin/bash
 
-#SBATCH --job-name=bulk
-#SBATCH --output=logs/bulk/%A_%a.out
-#SBATCH --error=logs/bulk/%A_%a.err
-#SBATCH --array=0-5899
+#SBATCH --job-name=replenish
+#SBATCH --output=logs/replenish/%A_%a.out
+#SBATCH --error=logs/replenish/%A_%a.err
+#SBATCH --array=0-999
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
@@ -13,7 +13,7 @@
 #SBATCH --time=24:00:00
 
 CHUNK_SIZE=1
-START_EPOCH=101 # ends at START_EPOCH + N_ARRAYS
+START_EPOCH=5001 # ends at START_EPOCH + N_ARRAYS
 
 while [[ $# -gt 0 ]]; do
     case $1 in
