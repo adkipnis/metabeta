@@ -17,8 +17,8 @@ def setup() -> argparse.Namespace:
                         help='one or more data config tags')
     parser.add_argument('--mode', choices=['train', 'test'], required=True,
                         help='check training partitions (train) or test fits (test)')
-    parser.add_argument('-b', type=int, default=1000,
-                        help='batch size: expected number of train partitions (default: 1000)')
+    parser.add_argument('-b', type=int, default=5000,
+                        help='batch size: expected number of train partitions (default: 5000)')
     parser.add_argument('--n_fits', type=int, default=512,
                         help='expected fit files per method (default: 512)')
     parser.add_argument('--srcdir', type=str,
