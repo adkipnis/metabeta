@@ -648,12 +648,14 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         summary_table = summaryTable(eval_summary, self.cfg.likelihood_family)
         logger.info(summary_table)
         if self.cfg.wandb:
-            wandb.log(
-                {
-                    'summary/table': wandb.Html(f'<pre>{summary_table}</pre>'),
-                    'step/epoch': self.current_epoch,
-                }
-            )
+            sample_logs: dict = {
+                'summary/table': wandb.Html(f'<pre>{summary_table}</pre>'),
+                'step/epoch': self.current_epoch,
+            }
+            # DEBUG: log correlation Jacobian diagnostics
+            if proposal.debug_stats is not None:
+                sample_logs.update({'debug/' + k: v for k, v in proposal.debug_stats.items()})
+            wandb.log(sample_logs)
 
         # make plots
         if getattr(self.cfg, 'plot', False):

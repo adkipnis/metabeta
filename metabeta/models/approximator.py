@@ -370,6 +370,7 @@ class Approximator(nn.Module):
                 proposed['local']['samples'] = samples_l[..., :1]
 
         # global postprocessing
+        _debug_corr: dict | None = None  # DEBUG: Jacobian diagnostics
         if 'global' in proposed:
             samples = proposed['global']['samples']
             log_sigmas = samples[..., d : d + q_var].clone()
@@ -379,13 +380,23 @@ class Approximator(nn.Module):
             samples_out = [samples[..., :d], sigmas]
             if d_corr > 0:
                 z_corr = samples[..., d + q_var : d + q_var + d_corr]
-                log_prob_g = log_prob_g - logDetJacobianCorr(z_corr, q)
+                ldj_corr = logDetJacobianCorr(z_corr, q)  # DEBUG
+                log_prob_g_pre = log_prob_g  # DEBUG
+                log_prob_g = log_prob_g - ldj_corr
+                _debug_corr = {  # DEBUG
+                    'ldj_corr_mean': ldj_corr.mean().item(),
+                    'log_prob_g_pre_corr': log_prob_g_pre.mean().item(),
+                    'log_prob_g_post_corr': log_prob_g.mean().item(),
+                    'z_corr_norm_mean': z_corr.norm(dim=-1).mean().item(),
+                }
                 L_corr = unconstrainedToCholesky(z_corr, q)
                 r_corr = corrToLower(L_corr @ L_corr.mT)
                 samples_out.append(r_corr)
             proposed['global']['log_prob'] = log_prob_g
             proposed['global']['samples'] = torch.cat(samples_out, dim=-1)
-        return Proposal(proposed, has_sigma_eps=self.has_sigma_eps, d_corr=d_corr)
+        proposal = Proposal(proposed, has_sigma_eps=self.has_sigma_eps, d_corr=d_corr)
+        proposal.debug_stats = _debug_corr  # DEBUG
+        return proposal
 
     def summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)

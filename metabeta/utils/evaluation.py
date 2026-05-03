@@ -85,6 +85,7 @@ class Proposal:
         self.is_results = {}
         self.tpd: float | None = None
         self.reff: float = 1.0  # relative ESS; 1.0 for i.i.d. flow samples, <1 for MCMC
+        self.debug_stats: dict | None = None  # DEBUG: Jacobian diagnostics from _postprocess
 
     @property
     def n_samples(self) -> int:
@@ -298,6 +299,13 @@ def concatProposalsBatch(proposals: list[Proposal]) -> Proposal:
                     merged.is_results[key] = torch.cat(values, dim=0)
                 except RuntimeError:
                     continue
+
+    # DEBUG: average per-batch Jacobian diagnostics across minibatches
+    debug_list = [p.debug_stats for p in proposals if p.debug_stats is not None]
+    if debug_list:
+        keys = debug_list[0].keys()
+        merged.debug_stats = {k: sum(d[k] for d in debug_list) / len(debug_list) for k in keys}
+
     return merged
 
 
