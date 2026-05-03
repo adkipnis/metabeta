@@ -34,11 +34,12 @@ done
 
 IFS='-' read -r SIZE FAM_NAME DS_TYPE <<< "$TAG"
 case $FAM_NAME in
-    n) FAMILY=0; WANDB_SUFFIX=normal ;;
-    b) FAMILY=1; WANDB_SUFFIX=bernoulli ;;
-    p) FAMILY=2; WANDB_SUFFIX=poisson ;;
+    n) FAMILY=0; FAMILY_NAME=normal ;;
+    b) FAMILY=1; FAMILY_NAME=bernoulli ;;
+    p) FAMILY=2; FAMILY_NAME=poisson ;;
     *) echo "Unknown family letter: $FAM_NAME (use n, b, or p)"; exit 1 ;;
 esac
+WANDB_SUFFIX="${SIZE}-${FAMILY_NAME}"
 
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
