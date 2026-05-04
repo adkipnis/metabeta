@@ -1,16 +1,11 @@
 #!/bin/bash
-
-#SBATCH --job-name=sub
-#SBATCH --output=logs/sub/%A_%a.out
-#SBATCH --error=logs/sub/%A_%a.err
-#SBATCH --array=0-15
-
-#SBATCH --partition=cpu_p
-#SBATCH --qos=cpu_normal
-#SBATCH --nodes=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=4G
-#SBATCH --time=00:30:00
+# Generate 32 real-data subsets per source dataset for a given regime.
+#
+# Usage: bash generate-sub.sh --data_id <size-family>
+# Example: bash generate-sub.sh --data_id small-n
+#
+# Outputs: metabeta/outputs/real/<size>-<fam>-<source>/test.npz
+# Run from the metabeta/simulation directory or via srun.
 
 set -eo pipefail
 
@@ -22,7 +17,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -z "${TAG:-}" ]] && {
-    echo "Usage: sbatch $0 --data_id <size-family>  (e.g. small-n)"
+    echo "Usage: $0 --data_id <size-family>  (e.g. small-n, medium-n)"
     exit 1
 }
 
@@ -55,19 +50,18 @@ SOURCES=(
     "indometh__grp_group"
 )
 
-SOURCE="${SOURCES[${SLURM_ARRAY_TASK_ID}]}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/../metabeta/simulation"
 
-mkdir -p logs/sub
+for SOURCE in "${SOURCES[@]}"; do
+    echo "Generating subsets for source: $SOURCE"
+    python generate.py \
+        --size "${SIZE}" \
+        --family "${FAMILY}" \
+        --ds_type real \
+        --source "${SOURCE}" \
+        --bs_test 32 \
+        --partition test
+done
 
-source $HOME/.bashrc
-source $HOME/metabeta/.venv/bin/activate
-cd $HOME/metabeta/metabeta/simulation
-
-echo "Generating subsets for source: $SOURCE"
-python generate.py \
-    --size "${SIZE}" \
-    --family "${FAMILY}" \
-    --ds_type real \
-    --source "${SOURCE}" \
-    --bs_test 32 \
-    --partition test
+echo "Done. Generated ${#SOURCES[@]} source batches for ${TAG}."
