@@ -293,7 +293,7 @@ def buildRow(
     nrmse_vals: torch.Tensor,
     ece_vals: torch.Tensor,
     eace_vals: torch.Tensor,
-    loo_nll: torch.Tensor | None,
+    loo_nll_median: float | None,
     tpd: float | None,
 ) -> dict:
     row: dict = {'regime': regime, 'method': label}
@@ -301,7 +301,7 @@ def buildRow(
     row['NRMSE'] = _ms(nrmse_vals)
     row['ECE'] = _ms(ece_vals)
     row['EACE'] = _ms(eace_vals)
-    row['LOO-NLL'] = _ms(loo_nll) if loo_nll is not None else (float('nan'), float('nan'))
+    row['LOO-NLL'] = loo_nll_median  # scalar median, matches evaluate.py's Median LOO-NLL
     row['time'] = tpd
     return row
 
@@ -363,7 +363,7 @@ def evaluateRegime(
             nrmse_vals=flattenActiveParams(summary.nrmse, active_d, active_q, has_eps),
             ece_vals=flattenActiveParams(summary.ece, active_d, active_q, has_eps),
             eace_vals=flattenActiveParams(summary.eace, active_d, active_q, has_eps),
-            loo_nll=summary.loo_nll,
+            loo_nll_median=summary.mloonll,
             tpd=summary.tpd,
         ))
 
