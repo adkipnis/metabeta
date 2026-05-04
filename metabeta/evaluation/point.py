@@ -115,6 +115,8 @@ def getCorrelation(
             corr = np.array(
                 [
                     cast(np.float32, pearsonr(gt[:, k].numpy(), est[:, k].numpy())[0])
+                    if gt.shape[0] >= 2
+                    else float('nan')
                     for k in range(gt.shape[-1])
                 ],
                 dtype=np.float32,
@@ -130,7 +132,10 @@ def getCorrelation(
                 mask_i = mask[..., i]
                 gt_i = gt[mask_i, i]
                 est_i = est[mask_i, i]
-                corr[i] = cast(np.float32, pearsonr(gt_i, est_i)[0])
+                if len(gt_i) < 2:
+                    corr[i] = float('nan')
+                else:
+                    corr[i] = cast(np.float32, pearsonr(gt_i, est_i)[0])
         else:
             corr = cast(np.float32, pearsonr(gt, est)[0])
         out[key] = torch.tensor(corr)
