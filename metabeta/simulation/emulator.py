@@ -191,9 +191,7 @@ class Emulator:
             # Datasets with d_true >= d all score 1.0 (no SCM padding needed);
             # those below score proportionally so sampling degrades smoothly
             # rather than creating a hard cliff at d_true == d.
-            weights = np.array(
-                [min(int(m.get('d', 1)), d) / d for m in compatible], dtype=float
-            )
+            weights = np.array([min(int(m.get('d', 1)), d) / d for m in compatible], dtype=float)
             weights /= weights.sum()
             idx = int(self.rng.choice(len(compatible), p=weights))
             self.ds = loadDataset(compatible[idx]['source'])
@@ -595,7 +593,14 @@ class Subsampler:
             else:
                 sd_y = 1.0
 
-            return {'X': x, 'y': y, 'ns': ns, 'groups': groups, 'sd_y': np.array(sd_y)}
+            return {
+                'X': x,
+                'y': y,
+                'ns': ns,
+                'groups': groups,
+                'sd_y': np.array(sd_y),
+                'source': np.array(self.ds['source'].stem, dtype=object),
+            }
 
         raise RuntimeError(
             f'failed to subsample after {self.max_attempts} attempts '
