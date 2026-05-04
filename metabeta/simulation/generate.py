@@ -279,6 +279,17 @@ class Generator:
             ds_type = rng.choice(['flat', 'sampled', 'scm'])
 
         if ds_type == 'real':
+            # Cap d/q to what the source dataset actually has (Subsampler has no SCM fallback).
+            if cfg.source != 'all':
+                from metabeta.simulation.emulator import getTestDatabase, DATA_PATH
+
+                meta_db = getTestDatabase()
+                src_path = Path(DATA_PATH, 'test', f'{cfg.source}.npz')
+                meta = next((m for m in meta_db if m['source'] == src_path), None)
+                if meta is not None:
+                    d = min(d, int(meta['d']))
+                    q = min(q, d)
+
             subsampler = Subsampler(
                 rng,
                 source=cfg.source,
