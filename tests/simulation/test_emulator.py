@@ -205,6 +205,7 @@ def test_subsampler_sample_normal(rng, ns_small):
     ss = Subsampler(rng, source=source, likelihood_family=0)
     out = ss.sample(d=3, ns=ns_small)
     assert 'X' in out and 'y' in out
+    assert out['source'].item() == source
 
 
 def test_subsampler_loads_only_one_dataset(rng, ns_small):

@@ -112,6 +112,17 @@ def test_aggregate_zero_padding(tmp_path: Path):
     assert np.array_equal(out['y'][1], np.array([9, 0]))
 
 
+def test_aggregate_preserves_object_source_names():
+    batch = [
+        {'source': np.array('a', dtype=object)},
+        {'source': np.array('much_longer_source_name', dtype=object)},
+    ]
+    out = aggregate(batch)
+
+    assert out['source'].dtype == object
+    assert out['source'].tolist() == ['a', 'much_longer_source_name']
+
+
 def test_gen_dims_shapes_and_constraints(tmp_path: Path):
     """
     Verify that _genDims returns arrays of correct shape and respects
@@ -135,6 +146,57 @@ def test_gen_dims_shapes_and_constraints(tmp_path: Path):
     assert np.all(q >= 1)
     assert np.all(q <= d)
     assert np.all(m >= cfg.min_m) and np.all(m <= cfg.max_m)
+
+
+def test_real_gen_dims_clamps_max_d_to_source_pool(monkeypatch, tmp_path: Path):
+    """
+    Real-data generation must not sample d larger than the compatible source pool.
+    """
+    monkeypatch.setattr(
+        'metabeta.simulation.generate.Subsampler.maxCompatibleD',
+        lambda self: 4,
+    )
+    cfg = make_cfg(
+        ds_type='real',
+        likelihood_family=0,
+        partition='train',
+        max_d=10,
+        max_q=10,
+        min_m=2,
+        max_m=10,
+        min_n=3,
+        max_n=11,
+    )
+    g = Generator(cfg, tmp_path)
+
+    assert cfg.max_d == 4
+
+    rng = np.random.default_rng(2)
+    d, q, _ = g._genDims(rng, n_datasets=16, mini_batch_size=4)
+
+    assert np.all(d >= 2)
+    assert np.all(d <= 4)
+    assert np.all(q <= d)
+
+
+def test_real_gen_dims_raises_when_source_pool_below_min_d(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(
+        'metabeta.simulation.generate.Subsampler.maxCompatibleD',
+        lambda self: 1,
+    )
+    cfg = make_cfg(
+        ds_type='real',
+        likelihood_family=0,
+        partition='train',
+        max_d=10,
+        min_m=2,
+        max_m=10,
+        min_n=3,
+        max_n=11,
+    )
+
+    with pytest.raises(ValueError, match='only supports max_d=1'):
+        Generator(cfg, tmp_path)
 
 
 def test_gen_ns_shapes_and_constraints(tmp_path: Path):
@@ -354,4 +416,3 @@ def test_parallel_and_loop_produce_same_inputs(monkeypatch, tmp_path: Path):
     par_sigs = np.stack([ds['sig'] for ds in par_batch], axis=0)
 
     assert np.array_equal(loop_sigs, par_sigs)
-
