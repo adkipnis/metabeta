@@ -107,6 +107,25 @@ class Generator:
                 f'max_n_total={self.cfg.max_n_total}'
             )
 
+        self.max_d_feasible = self.cfg.max_d
+        if self.cfg.ds_type == 'real':
+            subsampler = Subsampler(
+                np.random.default_rng(0),
+                source=self.cfg.source,
+                likelihood_family=self.cfg.likelihood_family,
+                min_m=self.cfg.min_m,
+                min_n=self.cfg.min_n,
+                max_n=self.cfg.max_n,
+            )
+            self.max_d_feasible = min(self.cfg.max_d, subsampler.maxCompatibleD())
+            min_d = 2 if getattr(self.cfg, 'partition', 'train') == 'train' else self.cfg.min_d
+            if self.max_d_feasible < min_d:
+                raise ValueError(
+                    f'real source pool only supports max_d={self.max_d_feasible}, '
+                    f'but requested minimum d is {min_d}'
+                )
+            self.cfg.max_d = self.max_d_feasible
+
     def _genDims(
         self,
         rng: np.random.Generator,
