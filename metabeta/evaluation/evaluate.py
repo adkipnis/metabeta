@@ -580,8 +580,16 @@ class Evaluator:
         proposal_advi = self._fit2proposal(advi_batch, prefix='advi')
         summary_advi = self.summary(proposal_advi, advi_batch)
 
-        self.plot([proposal_mb, proposal_nuts], [summary_mb, summary_nuts], ['MB', 'NUTS'], full_batch)
-        self.plot([proposal_advi], [summary_advi], ['ADVI'], advi_batch, plot_dir=self.plot_dir / 'advi')
+        mb_sub = subsetProposal(proposal_mb, advi_mask)
+        nuts_sub = subsetProposal(proposal_nuts, advi_mask)
+        summary_mb_sub = self.summary(mb_sub, advi_batch)
+        summary_nuts_sub = self.summary(nuts_sub, advi_batch)
+        self.plot(
+            [mb_sub, nuts_sub, proposal_advi],
+            [summary_mb_sub, summary_nuts_sub, summary_advi],
+            ['MB', 'NUTS', 'ADVI'],
+            advi_batch,
+        )
 
         fit_label = self._fitLabel()
         rows = []
@@ -609,9 +617,13 @@ class Evaluator:
                     conv_advi_mask = advi_mask & conv_mask
                     conv_advi_batch = subsetBatch(full_batch, conv_advi_mask)
                     conv_advi = subsetProposal(proposal_advi, conv_mask[advi_mask])
+                    conv_mb_sub = subsetProposal(conv_mb, conv_advi_mask[conv_mask])
+                    conv_nuts_sub = subsetProposal(conv_nuts, conv_advi_mask[conv_mask])
                     summary_mb_conv = self.summary(conv_mb, conv_batch)
                     summary_nuts_conv = self.summary(conv_nuts, conv_batch)
                     summary_advi_conv = self.summary(conv_advi, conv_advi_batch)
+                    summary_mb_conv_sub = self.summary(conv_mb_sub, conv_advi_batch)
+                    summary_nuts_conv_sub = self.summary(conv_nuts_sub, conv_advi_batch)
                     for label, summary in [
                         ('MB', summary_mb_conv),
                         ('NUTS', summary_nuts_conv),
@@ -621,18 +633,11 @@ class Evaluator:
                     conv_plot_dir = self.plot_dir / 'conv'
                     conv_plot_dir.mkdir(parents=True, exist_ok=True)
                     self.plot(
-                        [conv_mb, conv_nuts],
-                        [summary_mb_conv, summary_nuts_conv],
-                        ['MB', 'NUTS'],
-                        conv_batch,
-                        plot_dir=conv_plot_dir,
-                    )
-                    self.plot(
-                        [conv_advi],
-                        [summary_advi_conv],
-                        ['ADVI'],
+                        [conv_mb_sub, conv_nuts_sub, conv_advi],
+                        [summary_mb_conv_sub, summary_nuts_conv_sub, summary_advi_conv],
+                        ['MB', 'NUTS', 'ADVI'],
                         conv_advi_batch,
-                        plot_dir=conv_plot_dir / 'advi',
+                        plot_dir=conv_plot_dir,
                     )
 
                     # --- converged + reliable LOO subset (NUTS k filter only) ---
