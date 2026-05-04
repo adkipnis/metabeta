@@ -95,7 +95,7 @@ def setup() -> argparse.Namespace:
     )
 
     args = parser.parse_args()
-    args.config = Path('..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge-r_s0', 'config.yaml')
+    args.config = Path('..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge-r_s1', 'config.yaml')
 
     # Load config from checkpoint or file
     if hasattr(args, 'checkpoint') and args.checkpoint:
@@ -132,7 +132,7 @@ def setup() -> argparse.Namespace:
 
 # -----------------------------------------------------------------------------
 class Evaluator:
-    def __init__(self, cfg: argparse.Namespace) -> None:
+    def __init__(self, cfg: argparse.Namespace) -> None:     
         self.cfg = cfg
         self.dir = Path(__file__).resolve().parent
         setSeed(cfg.seed)
