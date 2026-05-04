@@ -24,7 +24,7 @@ from tqdm import tqdm
 from metabeta.models.approximator import Approximator
 from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch, toDevice
-from metabeta.utils.evaluation import Proposal, concatProposalsBatch
+from metabeta.utils.evaluation import Proposal, concatProposalsBatch, nutsConvergeMask, subsetProposal
 from metabeta.utils.io import setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
@@ -64,7 +64,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--data_ids',   type=str, nargs='+', default=DEFAULT_DATA_IDS)
     parser.add_argument('--outdir',     type=str, default=str(OUT_DIR))
     parser.add_argument('--verbosity',  type=int, default=1)
-    parser.add_argument('--rescale',    action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--convergence_mode', type=str, default='liberal',
+                        choices=['liberal', 'strict'])
     # fmt: on
     return parser.parse_args()
 
@@ -228,10 +230,11 @@ def sampleMB(
     n_samples: int,
     batch_size: int,
     device: torch.device,
-) -> Proposal:
+) -> tuple[Proposal, torch.Tensor]:
+    """Returns (proposal, tpd_arr) where tpd_arr is per-dataset time (s), shape (B,)."""
     B = batch['X'].shape[0]
     proposals: list[Proposal] = []
-    t0 = time.perf_counter()
+    tpd_list: list[float] = []
     for start in tqdm(range(0, B, batch_size), desc='  MB', leave=False):
         end = min(start + batch_size, B)
         b_chunk = {
@@ -239,13 +242,16 @@ def sampleMB(
             for k, v in batch.items()
         }
         b_chunk = toDevice(b_chunk, device)
+        t0_chunk = time.perf_counter()
         p_chunk = model.estimate(b_chunk, n_samples=n_samples)
+        tpd_chunk = (time.perf_counter() - t0_chunk) / (end - start)
+        tpd_list.extend([tpd_chunk] * (end - start))
         p_chunk.to('cpu')
         proposals.append(p_chunk)
-    elapsed = time.perf_counter() - t0
     merged = concatProposalsBatch(proposals)
-    merged.tpd = elapsed / max(B, 1)
-    return merged
+    tpd_arr = torch.tensor(tpd_list, dtype=torch.float64)
+    merged.tpd = tpd_arr.mean().item()
+    return merged, tpd_arr
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +294,16 @@ def _ms(t: torch.Tensor) -> tuple[float, float]:
     return mean, std
 
 
+def _medianMad(t: torch.Tensor) -> tuple[float, float]:
+    """Median and MAD, ignoring NaNs."""
+    t = t[~torch.isnan(t)].double()
+    if len(t) == 0:
+        return float('nan'), float('nan')
+    med = t.median().item()
+    mad = (t - med).abs().median().item()
+    return med, mad
+
+
 def buildRow(
     label: str,
     regime: str,
@@ -295,21 +311,55 @@ def buildRow(
     nrmse_vals: torch.Tensor,
     ece_vals: torch.Tensor,
     eace_vals: torch.Tensor,
-    loo_nll_median: float | None,
-    tpd: float | None,
+    loo_nll: torch.Tensor | None,
+    tpd_arr: torch.Tensor | None,
 ) -> dict:
     row: dict = {'regime': regime, 'method': label}
     row['r'] = _ms(corr_vals)
     row['NRMSE'] = _ms(nrmse_vals)
     row['ECE'] = _ms(ece_vals)
     row['EACE'] = _ms(eace_vals)
-    row['LOO-NLL'] = loo_nll_median  # scalar median, matches evaluate.py's Median LOO-NLL
-    row['time'] = tpd
+    row['LOO-NLL'] = _medianMad(loo_nll) if loo_nll is not None else None
+    row['time'] = _ms(tpd_arr.float()) if tpd_arr is not None else None
     return row
 
 
 # ---------------------------------------------------------------------------
 # Regime evaluation
+
+
+def _evalGroup(
+    quads: list[tuple[str, Proposal, dict, torch.Tensor | None]],
+    regime: str,
+    likelihood_family: int,
+    rescale: bool,
+) -> list[dict]:
+    """Evaluate a list of (label, proposal, batch, tpd_arr) tuples and return rows."""
+    rows = []
+    for label, proposal, batch, tpd_arr in quads:
+        if proposal is None:
+            continue
+        proposal.to('cpu')
+        if rescale:
+            proposal.rescale(batch['sd_y'])
+            batch = rescaleData(batch)
+        summary = getSummary(
+            proposal, batch, likelihood_family=likelihood_family, compute_pred_coverage=False
+        )
+        active_d = batch['mask_d'].any(0)
+        active_q = batch['mask_q'].any(0)
+        has_eps = 'sigma_eps' in summary.nrmse
+        rows.append(buildRow(
+            label,
+            regime,
+            corr_vals=flattenActiveParams(summary.corr, active_d, active_q, has_eps),
+            nrmse_vals=flattenActiveParams(summary.nrmse, active_d, active_q, has_eps),
+            ece_vals=flattenActiveParams(summary.ece, active_d, active_q, has_eps),
+            eace_vals=flattenActiveParams(summary.eace, active_d, active_q, has_eps),
+            loo_nll=summary.loo_nll,
+            tpd_arr=tpd_arr,
+        ))
+    return rows
 
 
 def evaluateRegime(
@@ -323,57 +373,63 @@ def evaluateRegime(
     device: torch.device,
     regime: str,
     rescale: bool = True,
-) -> list[dict]:
+    convergence_mode: str = 'liberal',
+) -> tuple[list[dict], list[dict] | None]:
+    """Returns (rows_full, rows_conv) — rows_conv is None if no convergence data."""
     logger.info('\n--- Regime: %s ---', regime)
 
     cap_batch, n_total, n_kept = loadRegimeBatch(data_path, max_d, max_q)
     logger.info('  Capacity filter: %d / %d (d≤%d, q≤%d)', n_kept, n_total, max_d, max_q)
     if n_kept == 0:
         logger.warning('  No datasets pass capacity filter — skipping.')
-        return []
+        return [], None
 
     advi_mask = fitBatchMask(cap_batch, 'advi')
     n_advi = int(advi_mask.sum())
     logger.info('  ADVI success: %d / %d', n_advi, n_kept)
     advi_batch = subsetBatch(cap_batch, advi_mask)
 
-    proposal_mb = sampleMB(model, cap_batch, n_samples, batch_size, device)
+    proposal_mb, mb_tpd_arr = sampleMB(model, cap_batch, n_samples, batch_size, device)
     proposal_nuts = fit2proposal(cap_batch, 'nuts')
     proposal_advi = fit2proposal(advi_batch, 'advi') if n_advi > 0 else None
 
-    rows = []
-    for label, proposal, batch in [
-        ('MB', proposal_mb, cap_batch),
-        ('NUTS', proposal_nuts, cap_batch),
-        ('ADVI', proposal_advi, advi_batch),
-    ]:
-        if proposal is None:
-            continue
+    nuts_tpd = cap_batch.get('nuts_duration')
+    advi_tpd = advi_batch.get('advi_duration') if n_advi > 0 else None
 
-        proposal.to('cpu')
-        if rescale:
-            proposal.rescale(batch['sd_y'])
-            batch = rescaleData(batch)
-        summary = getSummary(
-            proposal, batch, likelihood_family=likelihood_family, compute_pred_coverage=False
-        )
+    # Build convergence subsets BEFORE the eval loop (rescale is in-place on proposals)
+    conv_quads: list[tuple[str, Proposal, dict, torch.Tensor | None]] | None = None
+    conv_mask = nutsConvergeMask(cap_batch, mode=convergence_mode)
+    if conv_mask is not None:
+        n_conv = int(conv_mask.sum())
+        logger.info('  NUTS convergence (%s): %d / %d', convergence_mode, n_conv, n_kept)
+        if 0 < n_conv < n_kept:
+            conv_batch = subsetBatch(cap_batch, conv_mask)
+            conv_mb = subsetProposal(proposal_mb, conv_mask)
+            conv_nuts = subsetProposal(proposal_nuts, conv_mask)
+            conv_advi_mask = advi_mask & conv_mask
+            n_conv_advi = int(conv_advi_mask.sum())
+            conv_advi_batch = subsetBatch(cap_batch, conv_advi_mask)
+            conv_advi = (
+                subsetProposal(proposal_advi, conv_mask[advi_mask])
+                if n_advi > 0 and n_conv_advi > 0
+                else None
+            )
+            idx = torch.from_numpy(conv_mask)
+            conv_quads = [
+                ('MB',   conv_mb,   conv_batch,      mb_tpd_arr[idx]),
+                ('NUTS', conv_nuts, conv_batch,      nuts_tpd[idx] if nuts_tpd is not None else None),
+                ('ADVI', conv_advi, conv_advi_batch, conv_advi_batch.get('advi_duration')),
+            ]
 
-        active_d = batch['mask_d'].any(0)
-        active_q = batch['mask_q'].any(0)
-        has_eps = 'sigma_eps' in summary.nrmse
+    full_quads = [
+        ('MB',   proposal_mb,   cap_batch,   mb_tpd_arr),
+        ('NUTS', proposal_nuts, cap_batch,   nuts_tpd),
+        ('ADVI', proposal_advi, advi_batch,  advi_tpd),
+    ]
+    rows = _evalGroup(full_quads, regime, likelihood_family, rescale)
+    rows_conv = _evalGroup(conv_quads, regime, likelihood_family, rescale) if conv_quads else None
 
-        rows.append(buildRow(
-            label,
-            regime,
-            corr_vals=flattenActiveParams(summary.corr, active_d, active_q, has_eps),
-            nrmse_vals=flattenActiveParams(summary.nrmse, active_d, active_q, has_eps),
-            ece_vals=flattenActiveParams(summary.ece, active_d, active_q, has_eps),
-            eace_vals=flattenActiveParams(summary.eace, active_d, active_q, has_eps),
-            loo_nll_median=summary.mloonll,
-            tpd=summary.tpd,
-        ))
-
-    return rows
+    return rows, rows_conv
 
 
 # ---------------------------------------------------------------------------
@@ -470,13 +526,14 @@ def main() -> None:
     logger.info('Model: %s  max_d=%d  max_q=%d  likelihood=%d', run_name, max_d, max_q, lf)
 
     rows_by_regime: dict[str, list[dict]] = {}
+    rows_by_regime_conv: dict[str, list[dict]] = {}
     for data_id in cfg.data_ids:
         data_path = METABETA / 'outputs' / 'data' / data_id / 'test.fit.npz'
         if not data_path.exists():
             logger.warning('Skipping %s: test.fit.npz not found', data_id)
             continue
         regime = data_id.split('-')[0]
-        rows = evaluateRegime(
+        rows, rows_conv = evaluateRegime(
             model,
             data_path,
             max_d,
@@ -487,15 +544,20 @@ def main() -> None:
             device=device,
             regime=regime,
             rescale=cfg.rescale,
+            convergence_mode=cfg.convergence_mode,
         )
         if rows:
             rows_by_regime[regime] = rows
+        if rows_conv:
+            rows_by_regime_conv[regime] = rows_conv
 
     if not rows_by_regime:
         logger.error('No regimes evaluated — check data_ids and checkpoint.')
         return
 
     saveTables(rows_by_regime, Path(cfg.outdir), run_name)
+    if rows_by_regime_conv:
+        saveTables(rows_by_regime_conv, Path(cfg.outdir), f'{run_name}_conv')
 
 
 if __name__ == '__main__':
