@@ -737,6 +737,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             self.sample()
 
         print(f'\nTraining for {self.cfg.max_epochs - self.current_epoch} epochs...')
+        should_stop = False
         for epoch in range(self.current_epoch + 1, self.cfg.max_epochs + 1):
             self.current_epoch = epoch
             loss_train = self.train()
@@ -774,10 +775,6 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                     logs['valid/median_nll_epoch'] = float(median_nll)  # type: ignore
                 wandb.log(logs)
 
-            # save latest ckpt
-            if getattr(self.cfg, 'save_latest', True):
-                self.save('latest')
-
             # update tracked metrics and optional early stopping on sample epochs
             if mean_nrmse is not None:
                 improved_nrmse = mean_nrmse < (self.best_nrmse - 1e-6)
@@ -797,7 +794,14 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                     self.stopper.update(float(mean_nrmse), float(median_nll))  # type: ignore
                     if self.stopper.stop:
                         logger.info(f'early stopping at epoch {self.current_epoch}.')
-                        break
+                        should_stop = True
+
+            # save latest ckpt after all epoch-level training state has been updated
+            if getattr(self.cfg, 'save_latest', True):
+                self.save('latest')
+
+            if should_stop:
+                break
 
 
 # =============================================================================
