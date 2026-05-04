@@ -143,17 +143,18 @@ class Generator:
         # d and q are drawn log-uniformly over their bounded integer ranges.
         is_train = getattr(self.cfg, 'partition', 'train') == 'train'
         min_d = 2 if is_train else getattr(self.cfg, 'min_d', 2)
-        low_d, high_d = float(min_d), float(self.cfg.max_d + 1)
+        max_d = self.max_d_feasible if self.cfg.ds_type == 'real' else self.cfg.max_d
+        low_d, high_d = float(min_d), float(max_d + 1)
         d_uniq = truncLogUni(rng, low=low_d, high=high_d, size=n_mini, round=True).astype(int)
-        d_uniq = d_uniq.clip(min_d, self.cfg.max_d)
+        d_uniq = d_uniq.clip(min_d, max_d)
         d = np.repeat(d_uniq, mini_batch_size)
 
         min_q = 1 if is_train else getattr(self.cfg, 'min_q', 1)
         q_max_i = np.minimum(self.cfg.max_q, d_uniq).astype(float)  # (n_mini,) upper bound
         q_hi = q_max_i + 1.0
-        q_uniq = np.floor(np.exp(rng.uniform(np.log(float(min_q)), np.log(q_hi), size=n_mini))).astype(
-            int
-        )
+        q_uniq = np.floor(
+            np.exp(rng.uniform(np.log(float(min_q)), np.log(q_hi), size=n_mini))
+        ).astype(int)
         q_uniq = q_uniq.clip(min_q, np.minimum(self.cfg.max_q, d_uniq))
         q = np.repeat(q_uniq, mini_batch_size)
 
@@ -328,6 +329,7 @@ class Generator:
                 'd': np.array(d),
                 'q': np.array(q),
                 'sd_y': obs['sd_y'],
+                'source': obs['source'],
             }
             if hasSigmaEps(likelihood_family):
                 out['sigma_eps'] = np.array(np.nan)
@@ -386,7 +388,9 @@ class Generator:
                 round=True,
             )
             n_hint = n_hint_pg * m
-            n_hint = np.clip(n_hint, m * self.cfg.min_n, np.minimum(m * self.cfg.max_n, self.cfg.max_n_total))
+            n_hint = np.clip(
+                n_hint, m * self.cfg.min_n, np.minimum(m * self.cfg.max_n, self.cfg.max_n_total)
+            )
             ns_slices = [
                 np.full(int(m[i]), int(n_hint[i]) // int(m[i]), dtype=int)
                 for i in range(n_datasets)
@@ -403,9 +407,7 @@ class Generator:
 
         # --- sample batch of single datasets
         min_n_effs = (
-            [int(min_ng[i]) for i in range(n_datasets)]
-            if min_ng is not None
-            else [0] * n_datasets
+            [int(min_ng[i]) for i in range(n_datasets)] if min_ng is not None else [0] * n_datasets
         )
 
         min_bg_df = getattr(self.cfg, 'min_bg_df', 0)
