@@ -17,25 +17,23 @@ set -euo pipefail
 while [[ $# -gt 0 ]]; do
     case $1 in
         --data_id) TAG="$2"; shift 2 ;;
-        --srcdir)  SRCDIR="$2"; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
 
 [[ -z "${TAG:-}" ]] && {
-    echo "Usage: $0 --data_id <size-family-ds_type|size-family-source> [--srcdir <path>]"
+    echo "Usage: $0 --data_id <size-family-ds_type>"
     exit 1
 }
 
-if [[ -z "${SRCDIR:-}" ]]; then
-    IFS='-' read -r SIZE FAM_NAME DS_TYPE <<< "$TAG"
-    case "$FAM_NAME" in
-        n) FAMILY=0 ;;
-        b) FAMILY=1 ;;
-        p) FAMILY=2 ;;
-        *) echo "Unknown family letter: $FAM_NAME (use n, b, or p)"; exit 1 ;;
-    esac
-fi
+IFS='-' read -r SIZE FAM_NAME DS_TYPE <<< "$TAG"
+
+case "$FAM_NAME" in
+    n) FAMILY=0 ;;
+    b) FAMILY=1 ;;
+    p) FAMILY=2 ;;
+    *) echo "Unknown family letter: $FAM_NAME (use n, b, or p)"; exit 1 ;;
+esac
 
 SIF="$HOME/containers/python312.sif"
 VENV="$HOME/metabeta/.venv-apptainer"
@@ -70,20 +68,12 @@ apptainer exec \
 
     cd '$HOME/metabeta/metabeta/simulation'
 
-    if [[ -n "${SRCDIR:-}" ]]; then
-      python fit.py \
-        --config '${SRCDIR}/${TAG}/config.yaml' \
-        --idx '${SLURM_ARRAY_TASK_ID}' \
-        --method advi \
-        --srcdir '${SRCDIR}'
-    else
-      python fit.py \
-        --size '$SIZE' \
-        --family '$FAMILY' \
-        --ds_type '$DS_TYPE' \
-        --idx '${SLURM_ARRAY_TASK_ID}' \
-        --method advi
-    fi
+    python fit.py \
+      --size '$SIZE' \
+      --family '$FAMILY' \
+      --ds_type '$DS_TYPE' \
+      --idx '${SLURM_ARRAY_TASK_ID}' \
+      --method advi
   "
 
 rm -rf "$JOB_TMPDIR"

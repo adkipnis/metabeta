@@ -64,7 +64,7 @@ def setup() -> argparse.Namespace:
     # Template-based config generation (primary interface)
     parser.add_argument('--size', type=str, default='small', help='Size preset: tiny|small|medium|large|huge')
     parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
-    parser.add_argument('--ds_type', type=str, default='sampled', help='Dataset type: toy|flat|scm|mixed|sampled|real')
+    parser.add_argument('--ds_type', type=str, default='sampled', help='Dataset type: toy|flat|scm|mixed|sampled|observed')
 
     # Alternative: load config from a saved YAML (e.g. outputs/data/{data_id}/config.yaml)
     parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
@@ -79,10 +79,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--partition', type=str, default='all', help='Which partition(s) to generate: train|valid|test|eval|all (default = all)')
     parser.add_argument('-b', '--begin', type=int, default=1, help='First training epoch to generate (default = 1)')
     parser.add_argument('-e', '--epochs', type=int, default=20, help='Last training epoch to generate (default = 20)')
-    parser.add_argument('--source', type=str, default='all', help='Dataset source key for sampled/real ds_type (default = all)')
+    parser.add_argument('--source', type=str, default='all', help='Dataset source key for sampled/observed ds_type (default = all)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD sampler when ds_type=sampled (default = False)')
     parser.add_argument('--loop', action='store_false', help='Generate datasets sequentially instead of in parallel with joblib (default = True)')
-    parser.add_argument('--outdir', type=str, default=None, help='Override output base directory (default: outputs/data, or outputs/real for ds_type=real)')
 
     return setupConfigParser(parser, generateSimulationConfig, 'Generate hierarchical datasets.')
 # fmt: on
@@ -133,9 +132,9 @@ class Generator:
         min_q = 1 if is_train else getattr(self.cfg, 'min_q', 1)
         q_max_i = np.minimum(self.cfg.max_q, d_uniq).astype(float)  # (n_mini,) upper bound
         q_hi = q_max_i + 1.0
-        q_uniq = np.floor(
-            np.exp(rng.uniform(np.log(float(min_q)), np.log(q_hi), size=n_mini))
-        ).astype(int)
+        q_uniq = np.floor(np.exp(rng.uniform(np.log(float(min_q)), np.log(q_hi), size=n_mini))).astype(
+            int
+        )
         q_uniq = q_uniq.clip(min_q, np.minimum(self.cfg.max_q, d_uniq))
         q = np.repeat(q_uniq, mini_batch_size)
 
@@ -278,7 +277,7 @@ class Generator:
         if ds_type == 'mixed':
             ds_type = rng.choice(['flat', 'sampled', 'scm'])
 
-        if ds_type == 'real':
+        if ds_type == 'observed':
             subsampler = Subsampler(
                 rng,
                 source=cfg.source,
@@ -353,7 +352,7 @@ class Generator:
 
         # --- presample per-group counts
         min_ng = None  # may be set in else branch
-        if self.cfg.ds_type in ('sampled', 'real'):
+        if self.cfg.ds_type in ('sampled', 'observed'):
             # Emulator/Subsampler override ns internally based on source dataset constraints;
             # only req_m = len(ns_i) and req_n = sum(ns_i) survive as loose hints.
             # Draw req_n the same way the flat/scm path does: sample a per-group n
@@ -368,9 +367,7 @@ class Generator:
                 round=True,
             )
             n_hint = n_hint_pg * m
-            n_hint = np.clip(
-                n_hint, m * self.cfg.min_n, np.minimum(m * self.cfg.max_n, self.cfg.max_n_total)
-            )
+            n_hint = np.clip(n_hint, m * self.cfg.min_n, np.minimum(m * self.cfg.max_n, self.cfg.max_n_total))
             ns_slices = [
                 np.full(int(m[i]), int(n_hint[i]) // int(m[i]), dtype=int)
                 for i in range(n_datasets)
@@ -387,16 +384,15 @@ class Generator:
 
         # --- sample batch of single datasets
         min_n_effs = (
-            [int(min_ng[i]) for i in range(n_datasets)] if min_ng is not None else [0] * n_datasets
+            [int(min_ng[i]) for i in range(n_datasets)]
+            if min_ng is not None
+            else [0] * n_datasets
         )
 
         min_bg_df = getattr(self.cfg, 'min_bg_df', 0)
         _max_retries = 20
 
-        if getattr(self.cfg, 'loop', False) or self.cfg.ds_type in [
-            'scm',
-            'mixed',
-        ]:  # Option A: loop
+        if getattr(self.cfg, 'loop', False) or self.cfg.ds_type in ['scm', 'mixed']:  # Option A: loop
             datasets = []
             for i in tqdm(range(n_datasets), desc=desc):
                 # If min_bg_df is set, retry until m − d ≥ min_bg_df.  Trimming X
@@ -503,7 +499,7 @@ class Generator:
         # Save full resolved config (excluding runtime-only params)
         cfg_dict = vars(self.cfg).copy()
         # Remove runtime-only values that shouldn't be persisted
-        for key in ['partition', 'begin', 'epochs', 'loop', 'outdir']:
+        for key in ['partition', 'begin', 'epochs', 'loop']:
             cfg_dict.pop(key, None)
 
         config_path = dataset_dir / 'config.yaml'
@@ -607,16 +603,7 @@ bs_test:    {cfg.bs_test}
 # -----------------------------------------------------------------------------
 def main() -> None:
     cfg = setup()
-    if cfg.ds_type == 'observed':
-        raise ValueError("ds_type='observed' was removed for generation; use ds_type='real'.")
-    outdir_arg = getattr(cfg, 'outdir', None)
-    if outdir_arg:
-        outdir = Path(outdir_arg).resolve()
-    elif cfg.ds_type == 'real':
-        outdir = (Path(__file__).resolve().parent / '..' / 'outputs' / 'real').resolve()
-    else:
-        outdir = None
-    generator = Generator(cfg, outdir=outdir) if outdir is not None else Generator(cfg)
+    generator = Generator(cfg)
     print(generator.info)
     generator.go()
 

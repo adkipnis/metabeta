@@ -51,8 +51,6 @@ def setup() -> argparse.Namespace:
         help='Adam learning rate for ADVI (default=1e-3)')
     parser.add_argument('--diagonal', action='store_true',
         help='Force diagonal (uncorrelated) RFX covariance even when eta_rfx > 0 (default=False)')
-    parser.add_argument('--srcdir', type=str, default=None,
-        help='Override base data directory (default: outputs/data; use outputs/real for real subsets)')
     return setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets with PyMC.')
 # fmt: on
 
@@ -419,8 +417,7 @@ if __name__ == '__main__':
     ]:
         if not hasattr(cfg, _k):
             setattr(cfg, _k, _v)
-    srcdir = Path(cfg.srcdir) if getattr(cfg, 'srcdir', None) else None
-    fitter = Fitter(cfg, srcdir=srcdir) if srcdir is not None else Fitter(cfg)
+    fitter = Fitter(cfg)
     if cfg.reintegrate:
         fitter.reintegrate()
     else:
