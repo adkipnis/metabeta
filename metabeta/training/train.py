@@ -502,9 +502,9 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                 lq_g, lq_l = proposal.log_probs
                 lq_l = lq_l * mask
                 lq = lq_g + lq_l.sum(1) / m
-                ll, lp = ImportanceSampler(
-                    batch, likelihood_family=lf
-                ).unnormalizedPosterior(proposal)
+                ll, lp = ImportanceSampler(batch, likelihood_family=lf).unnormalizedPosterior(
+                    proposal
+                )
                 return (lq - lp - ll).mean()
 
         # mixed KL loss
@@ -687,8 +687,12 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             show_corr_rfx=show_corr_rfx,
         )
         path_s = plotSBC(
-            proposal, batch, plot_dir=self.plot_dir, epoch=self.current_epoch,
-            show=show, show_corr_rfx=show_corr_rfx,
+            proposal,
+            batch,
+            plot_dir=self.plot_dir,
+            epoch=self.current_epoch,
+            show=show,
+            show_corr_rfx=show_corr_rfx,
         )
         # path_rc = None
         # if proposal.q >= 2:
