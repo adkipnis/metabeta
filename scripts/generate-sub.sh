@@ -26,7 +26,8 @@ done
     exit 1
 }
 
-IFS='-' read -r SIZE FAM_NAME <<< "$TAG"
+SIZE="${TAG%%-*}"
+FAM_NAME="${TAG##*-}"
 
 case "$FAM_NAME" in
     n) FAMILY=0 ;;
