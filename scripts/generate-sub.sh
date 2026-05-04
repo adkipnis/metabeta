@@ -12,7 +12,7 @@
 #SBATCH --mem=4G
 #SBATCH --time=00:30:00
 
-set -euo pipefail
+set -eo pipefail
 
 while [[ $# -gt 0 ]]; do
     case $1 in
