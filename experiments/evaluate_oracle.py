@@ -27,6 +27,7 @@ from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch, t
 from metabeta.utils.evaluation import Proposal, concatProposalsBatch
 from metabeta.utils.io import setDevice
 from metabeta.utils.logger import setupLogging
+from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.evaluation.summary import getSummary
@@ -63,6 +64,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--data_ids',   type=str, nargs='+', default=DEFAULT_DATA_IDS)
     parser.add_argument('--outdir',     type=str, default=str(OUT_DIR))
     parser.add_argument('--verbosity',  type=int, default=1)
+    parser.add_argument('--rescale',    action=argparse.BooleanOptionalAction, default=True)
     # fmt: on
     return parser.parse_args()
 
@@ -320,6 +322,7 @@ def evaluateRegime(
     batch_size: int,
     device: torch.device,
     regime: str,
+    rescale: bool = True,
 ) -> list[dict]:
     logger.info('\n--- Regime: %s ---', regime)
 
@@ -348,6 +351,9 @@ def evaluateRegime(
             continue
 
         proposal.to('cpu')
+        if rescale:
+            proposal.rescale(batch['sd_y'])
+            batch = rescaleData(batch)
         summary = getSummary(
             proposal, batch, likelihood_family=likelihood_family, compute_pred_coverage=False
         )
@@ -480,6 +486,7 @@ def main() -> None:
             batch_size=cfg.batch_size,
             device=device,
             regime=regime,
+            rescale=cfg.rescale,
         )
         if rows:
             rows_by_regime[regime] = rows
