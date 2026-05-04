@@ -438,6 +438,36 @@ class Subsampler:
         # use precomputed y_families flag from metadata (no y array needed)
         return self.likelihood_family in ds.get('y_families', set())
 
+    def maxCompatibleD(self) -> int:
+        """Return the largest d available in the real-data test pool."""
+        meta_db = getTestDatabase()
+        if self.source == 'all':
+            subset = [
+                m
+                for m in meta_db
+                if self._maxGroups(m) >= self.min_m
+                and self.likelihood_family in m.get('y_families', set())
+            ]
+            if len(subset) == 0:
+                raise ValueError(
+                    f'no source dataset supports min_m={self.min_m}, min_n={self.min_n}, '
+                    f'likelihood_family={self.likelihood_family}'
+                )
+            return max(int(m['d']) for m in subset)
+
+        path = Path(DATA_PATH, 'test', f'{self.source}.npz')
+        if path not in TEST_PATHS:
+            raise ValueError(f'{self.source} not in test pool.')
+        meta = next(m for m in meta_db if m['source'] == path)
+        if self._maxGroups(meta) < self.min_m or self.likelihood_family not in meta.get(
+            'y_families', set()
+        ):
+            raise ValueError(
+                f'source={self.source} incompatible: min_m={self.min_m}, '
+                f'min_n={self.min_n}, likelihood_family={self.likelihood_family}'
+            )
+        return int(meta['d'])
+
     def _pull(self, d: int):
         # select from lightweight metadata index, then load full data for chosen path only
         meta_db = getTestDatabase()
