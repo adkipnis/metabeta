@@ -974,6 +974,8 @@ def analyticalBLUPContext(
     """Analytical BLUP mean, marginal std, and shrinkage given global parameter samples.
 
     Uses the closed-form Gaussian posterior (family == 0 only).
+    Non-normal GLMMs would need per-sample Newton/Laplace solves for every group
+    rather than a closed form, so they currently use the fixed PQL BLUP stats.
     Returns (B, m, S, 3*q).
     """
     from metabeta.posthoc.gaussian_local import analyticalBLUPStats
