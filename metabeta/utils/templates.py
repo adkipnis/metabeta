@@ -111,6 +111,8 @@ CONFIG_YAML_EXCLUDE: set[str] = CLI_ONLY_PARAMS | {
     'begin',  # generate.py runtime param
     'loop',  # generate.py runtime param
     'sgld',  # generate.py runtime param
+    'outdir',  # generate.py runtime param
+    'srcdir',  # fit.py runtime param
 }
 
 
@@ -164,7 +166,7 @@ def generateSimulationConfig(size: str, family: int, ds_type: str, **overrides) 
     Args:
         size: One of tiny/small/medium/large/huge
         family: Likelihood family integer (0=normal, 1=bernoulli, 2=poisson)
-        ds_type: Dataset type (toy/flat/scm/mixed/sampled/observed)
+        ds_type: Dataset type (toy/flat/scm/mixed/sampled/real)
         **overrides: Additional overrides from CLI (excluding CLI-only params)
 
     Returns:
@@ -180,6 +182,8 @@ def generateSimulationConfig(size: str, family: int, ds_type: str, **overrides) 
         raise ValueError(
             f"Invalid family {family}. Choose from: {list(PRESETS['families'].keys())}"
         )
+    if ds_type == 'observed':
+        raise ValueError("ds_type='observed' was removed for generation; use ds_type='real'.")
 
     # Merge presets
     cfg = {}
@@ -195,7 +199,12 @@ def generateSimulationConfig(size: str, family: int, ds_type: str, **overrides) 
     # Auto-generate data_id if not provided
     if 'data_id' not in cfg:
         family_name = FAMILY_NAMES[family]
-        cfg['data_id'] = f'{size}-{family_name}-{ds_type}'
+        source = cfg.get('source', 'all')
+        if ds_type == 'real' and source and source != 'all':
+            source_short = source.split('__')[0]
+            cfg['data_id'] = f'{size}-{family_name}-{source_short}'
+        else:
+            cfg['data_id'] = f'{size}-{family_name}-{ds_type}'
 
     # Validate
     validated = SimulationConfig(**cfg)
