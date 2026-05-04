@@ -95,11 +95,7 @@ def setup() -> argparse.Namespace:
     )
 
     args = parser.parse_args()
-    args.config = Path(
-        '..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge_s0', 'config.yaml'
-    )
-    # args.config = Path('..', 'outputs', 'checkpoints', 'normal_dmedium-n-mixed_mlarge_s2', 'config.yaml')
-    # args.config = Path('..', 'outputs', 'checkpoints', 'normal_dmedium-n-mixed_mhuge-s_s1', 'config.yaml')
+    args.config = Path('..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge-r_s0', 'config.yaml')
 
     # Load config from checkpoint or file
     if hasattr(args, 'checkpoint') and args.checkpoint:
