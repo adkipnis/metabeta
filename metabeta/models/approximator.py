@@ -215,6 +215,7 @@ class Approximator(nn.Module):
             data['n'].float(),
             likelihood_family=self.likelihood_family,
             eta_rfx=data.get('eta_rfx'),
+            mask_q=data.get('mask_q', None),
         )
 
     def _addMetadata(
