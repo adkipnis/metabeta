@@ -21,6 +21,7 @@ from metabeta.utils.families import (
     FamilyEncoder,
     hasSigmaEps,
 )
+from metabeta.posthoc.gaussian_local import gaussianHybrid
 
 constrainSigma, unconstrainSigma, logDetJacobian = getConstrainers(method='softplus')
 CLAMP = 20.0
@@ -35,6 +36,8 @@ def _buildSummarizer(cfg: SummarizerConfig, d_input: int) -> nn.Module:
 def _buildPosterior(cfg: PosteriorConfig, d_target: int, d_context: int) -> nn.Module:
     if cfg.type == 'coupling':
         return CouplingFlow(d_target=d_target, d_context=d_context, **cfg.to_dict())
+    if cfg.type == 'analytical':
+        raise ValueError('analytical posterior is only supported for posterior_l')
     raise NotImplementedError(f'unknown posterior type: {cfg.type}')
 
 
@@ -71,6 +74,10 @@ class Approximator(nn.Module):
     @property
     def analytical_blup_from_globals(self) -> bool:
         return self.cfg.analytical_blup_from_globals
+
+    @property
+    def analytical_local_posterior(self) -> bool:
+        return self.cfg.posterior_l.type == 'analytical'
 
     def _analyticsGlobalDim(self) -> int:
         """Dimension added to global context by GLMM statistics.
@@ -121,14 +128,21 @@ class Approximator(nn.Module):
         self.posterior_g = _buildPosterior(self.cfg.posterior_g, d_target_g, d_context_g)
         # local: random effects conditioned on global samples + local summary + local metadata
         # global params now include d_corr extra dims that the local flow also receives as context
-        d_context_l = d_ffx + d_var + self.d_corr + self.cfg.summarizer_l.d_output + d_meta_l
-        self.posterior_l = _buildPosterior(self.cfg.posterior_l, max(d_rfx, 2), d_context_l)
+        if self.analytical_local_posterior:
+            if self.likelihood_family != 0:
+                raise ValueError(
+                    'posterior_l.type="analytical" is only supported for Gaussian data'
+                )
+        else:
+            d_context_l = d_ffx + d_var + self.d_corr + self.cfg.summarizer_l.d_output + d_meta_l
+            self.posterior_l = _buildPosterior(self.cfg.posterior_l, max(d_rfx, 2), d_context_l)
 
     def compile(self) -> None:
         # Only compile the posteriors: Set Transformers use variable-length masked sequences
         # that trigger an Inductor tiling assertion bug (pytorch/pytorch#139438).
         self.posterior_g = torch.compile(self.posterior_g)
-        self.posterior_l = torch.compile(self.posterior_l)
+        if not self.analytical_local_posterior:
+            self.posterior_l = torch.compile(self.posterior_l)
 
     @property
     def device(self):
@@ -446,6 +460,9 @@ class Approximator(nn.Module):
         log_probs['global'] = self.posterior_g.logProb(  # type: ignore
             targets_g, context=summary_g, mask=mask_g
         )
+        if self.analytical_local_posterior:
+            log_probs['local'] = data['mask_m'].new_zeros(data['mask_m'].shape, dtype=self.dtype)
+            return log_probs
 
         # local posterior — with curriculum, sometimes condition on sampled globals
         targets_l = self._targets(data, local=True)
@@ -495,6 +512,18 @@ class Approximator(nn.Module):
                 n_samples, context=summary_g, mask=mask_g
             )
         proposed['global'] = {'samples': samples_g, 'log_prob': log_prob_g}
+        if self.analytical_local_posterior:
+            b = data['y'].shape[0]
+            m = data['mask_m'].shape[1]
+            q = self.d_rfx
+            proposed['local'] = {
+                'samples': samples_g.new_zeros(b, m, n_samples, q),
+                'log_prob': samples_g.new_zeros(b, m, n_samples),
+            }
+            proposal = self._postprocess(proposed)
+            proposal_out = gaussianHybrid(proposal, data)
+            proposal_out.debug_stats = proposal.debug_stats
+            return proposal_out
 
         # local posterior
         mask_l = self._masks(data, local=True)
