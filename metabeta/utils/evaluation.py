@@ -97,6 +97,9 @@ class Proposal:
     def to(self, device: str | torch.device) -> None:
         self.data['global'] = toDevice(self.data['global'], device)
         self.data['local'] = toDevice(self.data['local'], device)
+        if self._corr_rfx is not None:
+            self._corr_rfx = self._corr_rfx.to(device)
+        self.is_results = toDevice(self.is_results, device)
 
     @property
     def samples_g(self) -> torch.Tensor:
