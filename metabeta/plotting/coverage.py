@@ -51,8 +51,8 @@ def _plotCoverage(
     # niceify
     info = {
         'title': title,
-        'ylabel': 'Observed',
-        'xlabel': 'Nominal CI',
+        'ylabel': 'Empirical Coverage',
+        'xlabel': 'Nominal Coverage',
         'show_title': True,
         'show_legend': show_legend,
         'show_x': show_x,
