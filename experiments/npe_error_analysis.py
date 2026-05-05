@@ -68,9 +68,7 @@ def _corr(x: np.ndarray, y: np.ndarray, label: str, indent: str = '    ') -> Non
     if ok.sum() < 5:
         return
     rho, pval = spearmanr(x[ok], y[ok])
-    stars = (
-        '***' if pval < 0.001 else '**' if pval < 0.01 else '*' if pval < 0.05 else ''
-    )
+    stars = '***' if pval < 0.001 else '**' if pval < 0.01 else '*' if pval < 0.05 else ''
     print(f'{indent}{label:<50s}  ρ={rho:+.3f}  p={pval:.2e}  {stars}')
 
 
@@ -260,9 +258,7 @@ def printCoverageCalibration(
                 if key == 'sigma_eps':
                     gt = gt.unsqueeze(-1)
                     ci = ci.unsqueeze(-1)
-                inside = (
-                    (ci[..., 0, :] - EPS_CI <= gt) & (gt <= ci[..., 1, :] + EPS_CI)
-                ).float()
+                inside = ((ci[..., 0, :] - EPS_CI <= gt) & (gt <= ci[..., 1, :] + EPS_CI)).float()
                 if key == 'rfx':
                     m = masks['rfx']
                     cov = (inside * m).sum() / m.float().sum().clamp_min(1.0)
@@ -317,11 +313,16 @@ def runGLMMDiagnostics(
 
     try:
         result = glmm(
-            data['X'], data['y'], Zm,
-            data['mask_n'].float(), data['mask_m'].float(),
-            data['ns'].clamp(min=1).float(), data['n'].float(),
+            data['X'],
+            data['y'],
+            Zm,
+            data['mask_n'].float(),
+            data['mask_m'].float(),
+            data['ns'].clamp(min=1).float(),
+            data['n'].float(),
             likelihood_family=likelihood_family,
             eta_rfx=data.get('eta_rfx'),
+            mask_q=data.get('mask_q'),
         )
     except Exception as exc:
         print(f'  [warn] GLMM failed: {exc}')
@@ -331,55 +332,47 @@ def runGLMMDiagnostics(
 
     # ── FFX ───────────────────────────────────────────────────────────────────
     beta_est = result['beta_est'].cpu()      # (B, d)
-    gt_ffx   = data['ffx']                   # (B, d)
-    mask_d   = data['mask_d']
-    std_d    = _maskedStd(gt_ffx, mask_d).clamp_min(1e-8)        # (d,)
+    gt_ffx = data['ffx']                   # (B, d)
+    mask_d = data['mask_d']
+    std_d = _maskedStd(gt_ffx, mask_d).clamp_min(1e-8)        # (d,)
     mask_f_d = mask_d.float()
-    n_d      = mask_f_d.sum(-1).clamp_min(1.0)                   # (B,)
+    n_d = mask_f_d.sum(-1).clamp_min(1.0)                   # (B,)
     se_normed = (beta_est - gt_ffx).square() / std_d.square()    # (B, d)
-    diag['glmm_ffx_nrmse'] = (
-        (se_normed * mask_f_d).sum(-1).div(n_d).sqrt().numpy()
-    )
+    diag['glmm_ffx_nrmse'] = (se_normed * mask_f_d).sum(-1).div(n_d).sqrt().numpy()
 
     # ── Sigma_rfx ─────────────────────────────────────────────────────────────
     sigma_est = result['sigma_rfx_est'].cpu()  # (B, q)
-    gt_sigma  = data['sigma_rfx']               # (B, q)
-    mask_q    = data['mask_q']
-    std_q     = _maskedStd(gt_sigma, mask_q).clamp_min(1e-8)     # (q,)
-    mask_f_q  = mask_q.float()
-    n_q       = mask_f_q.sum(-1).clamp_min(1.0)                  # (B,)
+    gt_sigma = data['sigma_rfx']               # (B, q)
+    mask_q = data['mask_q']
+    std_q = _maskedStd(gt_sigma, mask_q).clamp_min(1e-8)     # (q,)
+    mask_f_q = mask_q.float()
+    n_q = mask_f_q.sum(-1).clamp_min(1.0)                  # (B,)
     se_normed = (sigma_est - gt_sigma).square() / std_q.square()
-    diag['glmm_sigma_nrmse'] = (
-        (se_normed * mask_f_q).sum(-1).div(n_q).sqrt().numpy()
-    )
+    diag['glmm_sigma_nrmse'] = (se_normed * mask_f_q).sum(-1).div(n_q).sqrt().numpy()
 
     # ── BLUPs ─────────────────────────────────────────────────────────────────
-    blup_est  = result['blup_est'].cpu()   # (B, m, q)
-    gt_rfx    = data['rfx']                # (B, m, q)
-    mask_mq   = data['mask_mq']
-    std_mq    = _maskedStd(gt_rfx, mask_mq).clamp_min(1e-8)      # (q,)
+    blup_est = result['blup_est'].cpu()   # (B, m, q)
+    gt_rfx = data['rfx']                # (B, m, q)
+    mask_mq = data['mask_mq']
+    std_mq = _maskedStd(gt_rfx, mask_mq).clamp_min(1e-8)      # (q,)
     mask_f_mq = mask_mq.float()
-    n_mq      = mask_f_mq.sum(dim=(1, 2)).clamp_min(1.0)         # (B,)
-    blup_err  = blup_est - gt_rfx
+    n_mq = mask_f_mq.sum(dim=(1, 2)).clamp_min(1.0)         # (B,)
+    blup_err = blup_est - gt_rfx
     se_normed = blup_err.square() / std_mq.square()
-    diag['glmm_blup_nrmse'] = (
-        (se_normed * mask_f_mq).sum(dim=(1, 2)).div(n_mq).sqrt().numpy()
-    )
+    diag['glmm_blup_nrmse'] = (se_normed * mask_f_mq).sum(dim=(1, 2)).div(n_mq).sqrt().numpy()
 
     # ── BLUP variance calibration ─────────────────────────────────────────────
-    blup_var  = result['blup_var'].cpu()   # (B, m, q)
-    mse_b     = (blup_err.square() * mask_f_mq).sum(dim=(1, 2)) / n_mq
-    mvar_b    = (blup_var * mask_f_mq).sum(dim=(1, 2)) / n_mq
+    blup_var = result['blup_var'].cpu()   # (B, m, q)
+    mse_b = (blup_err.square() * mask_f_mq).sum(dim=(1, 2)) / n_mq
+    mvar_b = (blup_var * mask_f_mq).sum(dim=(1, 2)) / n_mq
     diag['glmm_blup_var_ratio'] = (mse_b / mvar_b.clamp_min(1e-30)).numpy()
 
     # ── Sigma_eps (Normal only) ───────────────────────────────────────────────
     if likelihood_family == 0 and 'sigma_eps_est' in result:
         seps_est = result['sigma_eps_est'].squeeze(-1).cpu()  # (B,)
-        gt_seps  = data['sigma_eps']                           # (B,)
+        gt_seps = data['sigma_eps']                           # (B,)
         norm_eps = float(gt_seps.std(unbiased=False).clamp_min(1e-8))
-        diag['glmm_seps_nrmse'] = (
-            (seps_est - gt_seps).abs().div(norm_eps).numpy()
-        )
+        diag['glmm_seps_nrmse'] = (seps_est - gt_seps).abs().div(norm_eps).numpy()
 
     # ── Combined NRMSE for ranking (global params only, matching combinedNRMSE) ─
     combined_keys = ['glmm_ffx_nrmse', 'glmm_sigma_nrmse']
@@ -487,13 +480,19 @@ def printHeadToHeadSection(
     _section('HEAD-TO-HEAD: MB vs NUTS and MB vs ADVI')
     if 'NUTS' in nrmse_all:
         printHeadToHead(
-            nrmse_all['MB'], nrmse_all['NUTS'],
-            loo_nll_all['MB'], loo_nll_all['NUTS'], 'NUTS',
+            nrmse_all['MB'],
+            nrmse_all['NUTS'],
+            loo_nll_all['MB'],
+            loo_nll_all['NUTS'],
+            'NUTS',
         )
     if 'ADVI' in nrmse_all:
         printHeadToHead(
-            nrmse_all['MB'], nrmse_all['ADVI'],
-            loo_nll_all['MB'], loo_nll_all['ADVI'], 'ADVI',
+            nrmse_all['MB'],
+            nrmse_all['ADVI'],
+            loo_nll_all['MB'],
+            loo_nll_all['ADVI'],
+            'ADVI',
         )
 
 
@@ -613,9 +612,9 @@ def printGLMMSection(
     # ── GLMM vs NPE head-to-head per parameter ────────────────────────────────
     _section('GLMM vs NPE HEAD-TO-HEAD  (same NRMSE scale)')
     glmm_nrmse_map = {
-        'ffx':       'glmm_ffx_nrmse',
+        'ffx': 'glmm_ffx_nrmse',
         'sigma_rfx': 'glmm_sigma_nrmse',
-        'rfx':       'glmm_blup_nrmse',
+        'rfx': 'glmm_blup_nrmse',
     }
     if 'glmm_seps_nrmse' in glmm_diag:
         glmm_nrmse_map['sigma_eps'] = 'glmm_seps_nrmse'

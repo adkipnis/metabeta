@@ -184,6 +184,7 @@ def run_comparison(
                 batch['n'].float(),
                 likelihood_family=0,
                 eta_rfx=batch.get('eta_rfx'),
+                mask_q=batch.get('mask_q'),
             )
 
         # Boolean masks for active dims — robust to column permutation.

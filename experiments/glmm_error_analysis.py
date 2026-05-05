@@ -38,10 +38,11 @@ from metabeta.utils.config import loadDataConfig
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
     """sqrt(MSE(err)) / std(truth) — matches evaluation/point.py getRMSE."""
     denom = float(np.std(truth))
-    return float(np.sqrt(np.mean(err ** 2))) / max(denom, 1e-8)
+    return float(np.sqrt(np.mean(err**2))) / max(denom, 1e-8)
 
 
 def _bias(arr: np.ndarray) -> float:
@@ -79,18 +80,24 @@ def _breakdown(
         e = err[mask]
         if len(e) < 2:
             continue
-        rows.append([
-            label, int(mask.sum()),
-            f'{_bias(e):+.4f}',
-            f'{np.sqrt(np.mean(e**2)):.4f}',
-            f'{np.nanpercentile(np.abs(e), 95):.4f}',
-        ])
-    return tabulate(rows, headers=[factor_label, 'N', 'Bias', 'RMSE', '|err| p95'], tablefmt='simple')
+        rows.append(
+            [
+                label,
+                int(mask.sum()),
+                f'{_bias(e):+.4f}',
+                f'{np.sqrt(np.mean(e**2)):.4f}',
+                f'{np.nanpercentile(np.abs(e), 95):.4f}',
+            ]
+        )
+    return tabulate(
+        rows, headers=[factor_label, 'N', 'Bias', 'RMSE', '|err| p95'], tablefmt='simple'
+    )
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def run_diagnostic(
     data_id: str = 'small-b-mixed',
@@ -125,7 +132,9 @@ def run_diagnostic(
         paths = [data_dir / 'valid.npz']
         assert paths[0].exists(), f'missing: {paths[0]}'
 
-    print(f'data_id={data_id}  partition={partition}  files={len(paths)}  likelihood_family={likelihood_family}\n')
+    print(
+        f'data_id={data_id}  partition={partition}  files={len(paths)}  likelihood_family={likelihood_family}\n'
+    )
 
     all_batches: list = []
     for path in paths:
@@ -134,23 +143,23 @@ def run_diagnostic(
     print(f'Total batches: {len(all_batches)}')
 
     # Per-component flat arrays (all active dims across all datasets)
-    beta_err_list:  list[np.ndarray] = []
+    beta_err_list: list[np.ndarray] = []
     beta_true_list: list[np.ndarray] = []
-    srfx_err_list:  list[np.ndarray] = []
+    srfx_err_list: list[np.ndarray] = []
     srfx_true_list: list[np.ndarray] = []
-    seps_err_list:  list[float] = []
+    seps_err_list: list[float] = []
     seps_true_list: list[float] = []
-    rfx_err_list:   list[np.ndarray] = []
-    rfx_true_list:  list[np.ndarray] = []
+    rfx_err_list: list[np.ndarray] = []
+    rfx_true_list: list[np.ndarray] = []
     # blup_var calibration: predicted posterior variance vs actual squared error
-    blup_var_list:  list[np.ndarray] = []  # predicted Var(b_g)
-    blup_ns_list:   list[np.ndarray] = []  # group sizes, aligned with blup arrays
+    blup_var_list: list[np.ndarray] = []  # predicted Var(b_g)
+    blup_ns_list: list[np.ndarray] = []  # group sizes, aligned with blup arrays
 
     # corr_rfx: psi_corr vs true rho, per correlated dataset (eta_rfx > 0 and q >= 2)
-    corr_r_hat_list:   list[np.ndarray] = []  # psi_corr lower-triangle
-    corr_r_true_list:  list[np.ndarray] = []  # true corr_rfx lower-triangle
-    corr_G_mom_list:   list[np.ndarray] = []  # informative-group count per dataset
-    corr_m_list:       list[np.ndarray] = []  # total group count per dataset
+    corr_r_hat_list: list[np.ndarray] = []  # psi_corr lower-triangle
+    corr_r_true_list: list[np.ndarray] = []  # true corr_rfx lower-triangle
+    corr_G_mom_list: list[np.ndarray] = []  # informative-group count per dataset
+    corr_m_list: list[np.ndarray] = []  # total group count per dataset
 
     # Per-dataset scalars for breakdown
     ds: list[dict] = []
@@ -162,30 +171,35 @@ def run_diagnostic(
 
             Zm = batch['Z'][..., :max_q]
             stats = glmm(
-                batch['X'], batch['y'], Zm,
-                batch['mask_n'].float(), batch['mask_m'].float(),
-                batch['ns'].clamp(min=1).float(), batch['n'].float(),
+                batch['X'],
+                batch['y'],
+                Zm,
+                batch['mask_n'].float(),
+                batch['mask_m'].float(),
+                batch['ns'].clamp(min=1).float(),
+                batch['n'].float(),
                 likelihood_family=likelihood_family,
                 eta_rfx=batch.get('eta_rfx'),
+                mask_q=batch.get('mask_q'),
             )
 
             # Numpy copies
-            beta_est  = stats['beta_est'].cpu().numpy()          # (B, d)
-            srfx_est  = stats['sigma_rfx_est'].cpu().numpy()     # (B, q)
-            blup_est  = stats['blup_est'].cpu().numpy()          # (B, m, q)
-            blup_var  = stats['blup_var'].cpu().numpy()          # (B, m, q)
-            ffx_true  = batch['ffx'].cpu().numpy()               # (B, d)
+            beta_est = stats['beta_est'].cpu().numpy()          # (B, d)
+            srfx_est = stats['sigma_rfx_est'].cpu().numpy()     # (B, q)
+            blup_est = stats['blup_est'].cpu().numpy()          # (B, m, q)
+            blup_var = stats['blup_var'].cpu().numpy()          # (B, m, q)
+            ffx_true = batch['ffx'].cpu().numpy()               # (B, d)
             srfx_true = batch['sigma_rfx'].cpu().numpy()         # (B, q)
-            rfx_true  = batch['rfx'].cpu().numpy()               # (B, m, q)
-            mask_d    = batch['mask_d'].cpu().numpy().astype(bool)  # (B, d)
-            mask_q    = batch['mask_q'].cpu().numpy().astype(bool)  # (B, q)
-            mask_m    = batch['mask_m'].cpu().numpy().astype(bool)  # (B, m)
-            ns_np     = batch['ns'].cpu().numpy()                # (B, m)
-            n_np      = batch['n'].cpu().numpy()                 # (B,)
-            m_np      = batch['m'].cpu().numpy()                 # (B,)
+            rfx_true = batch['rfx'].cpu().numpy()               # (B, m, q)
+            mask_d = batch['mask_d'].cpu().numpy().astype(bool)  # (B, d)
+            mask_q = batch['mask_q'].cpu().numpy().astype(bool)  # (B, q)
+            mask_m = batch['mask_m'].cpu().numpy().astype(bool)  # (B, m)
+            ns_np = batch['ns'].cpu().numpy()                # (B, m)
+            n_np = batch['n'].cpu().numpy()                 # (B,)
+            m_np = batch['m'].cpu().numpy()                 # (B,)
 
             if likelihood_family == 0:
-                seps_est_np  = stats['sigma_eps_est'].squeeze(-1).cpu().numpy()  # (B,)
+                seps_est_np = stats['sigma_eps_est'].squeeze(-1).cpu().numpy()  # (B,)
                 seps_true_np = batch['sigma_eps'].cpu().numpy()                  # (B,)
             else:
                 seps_est_np = seps_true_np = np.full(B, float('nan'))
@@ -202,7 +216,7 @@ def run_diagnostic(
 
                 # Active group × rfx errors
                 rfx_e = blup_est[b, :m, :q] - rfx_true[b, :m, :q]  # (m, q)
-                bv    = blup_var[b, :m, :q]                          # (m, q)
+                bv = blup_var[b, :m, :q]                          # (m, q)
                 grp_ns = ns_np[b, :m]                               # (m,)
 
                 beta_err_list.append(be)
@@ -233,55 +247,61 @@ def run_diagnostic(
                         corr_G_mom_list.append(np.array([G_mom_b]))
                         corr_m_list.append(np.array([float(m)]))
 
-                ds.append({
-                    'n': int(n_np[b]),
-                    'm': m,
-                    'd': d,
-                    'q': q,
-                    'n_over_d': int(n_np[b]) / max(d, 1),
-                    'bg_df': max(m - d, 1),
-                    'snr': float(srfx_true[b, :q].mean() / seps_true_np[b]) if likelihood_family == 0 else float('nan'),
-                    'seps_true': float(seps_true_np[b]),
-                    'srfx_true_mean': float(srfx_true[b, :q].mean()),
-                    'seps_err': eps_e,
-                    'srfx_err_mean': float(se.mean()),
-                    'srfx_clipped': bool((srfx_est[b, :q] == 0.0).any()),
-                    'rfx_rmse': float(np.sqrt(np.mean(rfx_e ** 2))),
-                    '_rfx_err': rfx_e.reshape(-1).tolist(),
-                    '_rfx_ns':  np.repeat(grp_ns, q).tolist(),
-                    '_beta_err': be.tolist(),
-                    '_beta_true': ffx_true[b, :d].tolist(),
-                })
+                ds.append(
+                    {
+                        'n': int(n_np[b]),
+                        'm': m,
+                        'd': d,
+                        'q': q,
+                        'n_over_d': int(n_np[b]) / max(d, 1),
+                        'bg_df': max(m - d, 1),
+                        'snr': float(srfx_true[b, :q].mean() / seps_true_np[b])
+                        if likelihood_family == 0
+                        else float('nan'),
+                        'seps_true': float(seps_true_np[b]),
+                        'srfx_true_mean': float(srfx_true[b, :q].mean()),
+                        'seps_err': eps_e,
+                        'srfx_err_mean': float(se.mean()),
+                        'srfx_clipped': bool((srfx_est[b, :q] == 0.0).any()),
+                        'rfx_rmse': float(np.sqrt(np.mean(rfx_e**2))),
+                        '_rfx_err': rfx_e.reshape(-1).tolist(),
+                        '_rfx_ns': np.repeat(grp_ns, q).tolist(),
+                        '_beta_err': be.tolist(),
+                        '_beta_true': ffx_true[b, :d].tolist(),
+                    }
+                )
 
     print(f'Collected {len(ds)} datasets\n')
 
     # Flat arrays for global stats
-    beta_err_flat  = np.concatenate(beta_err_list)
+    beta_err_flat = np.concatenate(beta_err_list)
     beta_true_flat = np.concatenate(beta_true_list)
-    srfx_err_flat  = np.concatenate(srfx_err_list)
+    srfx_err_flat = np.concatenate(srfx_err_list)
     srfx_true_flat = np.concatenate(srfx_true_list)
-    seps_err_arr   = np.array(seps_err_list)
-    seps_true_arr  = np.array(seps_true_list)
-    rfx_err_flat   = np.concatenate(rfx_err_list)
-    rfx_true_flat  = np.concatenate(rfx_true_list)
-    rfx_ns_flat    = np.array([x for r in ds for x in r['_rfx_ns']])
-    blup_var_flat  = np.concatenate(blup_var_list)
-    blup_ns_flat   = np.concatenate(blup_ns_list)
+    seps_err_arr = np.array(seps_err_list)
+    seps_true_arr = np.array(seps_true_list)
+    rfx_err_flat = np.concatenate(rfx_err_list)
+    rfx_true_flat = np.concatenate(rfx_true_list)
+    rfx_ns_flat = np.array([x for r in ds for x in r['_rfx_ns']])
+    blup_var_flat = np.concatenate(blup_var_list)
+    blup_ns_flat = np.concatenate(blup_ns_list)
 
     # Per-dataset scalars
-    def col(k): return np.array([r[k] for r in ds], dtype=float)
-    n_arr        = col('n')
-    m_arr        = col('m')
-    d_arr        = col('d')
+    def col(k):
+        return np.array([r[k] for r in ds], dtype=float)
+
+    n_arr = col('n')
+    m_arr = col('m')
+    d_arr = col('d')
     n_over_d_arr = col('n_over_d')
-    bg_df_arr    = col('bg_df')
-    snr_arr      = col('snr')
-    seps_true_d  = col('seps_true')
-    srfx_true_d  = col('srfx_true_mean')
-    seps_err_d   = col('seps_err')
-    srfx_err_d   = col('srfx_err_mean')
-    srfx_clip    = np.array([r['srfx_clipped'] for r in ds])
-    beta_err_ds  = np.array([np.sqrt(np.mean(np.array(r['_beta_err'])**2)) for r in ds])
+    bg_df_arr = col('bg_df')
+    snr_arr = col('snr')
+    seps_true_d = col('seps_true')
+    srfx_true_d = col('srfx_true_mean')
+    seps_err_d = col('seps_err')
+    srfx_err_d = col('srfx_err_mean')
+    srfx_clip = np.array([r['srfx_clipped'] for r in ds])
+    beta_err_ds = np.array([np.sqrt(np.mean(np.array(r['_beta_err']) ** 2)) for r in ds])
     # Use the global std(beta_true) as scale — consistent with _nrmse and robust to
     # near-zero per-dataset beta values (which occur when the Emulator draws real datasets
     # with small coefficients on the training partition).
@@ -294,31 +314,50 @@ def run_diagnostic(
     print('  GLMM Estimates vs Ground Truth  (NN eval uses same NRMSE)')
     print('=' * 65)
     rows_nrmse = [
-        ['FFX (β)',       f'{_nrmse(beta_err_flat,  beta_true_flat):.4f}',  f'{_bias(beta_err_flat):+.4f}'],
-        ['Sigma(RFX)',    f'{_nrmse(srfx_err_flat,  srfx_true_flat):.4f}',  f'{_bias(srfx_err_flat):+.4f}'],
+        [
+            'FFX (β)',
+            f'{_nrmse(beta_err_flat,  beta_true_flat):.4f}',
+            f'{_bias(beta_err_flat):+.4f}',
+        ],
+        [
+            'Sigma(RFX)',
+            f'{_nrmse(srfx_err_flat,  srfx_true_flat):.4f}',
+            f'{_bias(srfx_err_flat):+.4f}',
+        ],
     ]
     if likelihood_family == 0:
         rows_nrmse.append(
-            ['Sigma(Eps)', f'{_nrmse(seps_err_arr, seps_true_arr):.4f}', f'{_bias(seps_err_arr):+.4f}']
+            [
+                'Sigma(Eps)',
+                f'{_nrmse(seps_err_arr, seps_true_arr):.4f}',
+                f'{_bias(seps_err_arr):+.4f}',
+            ]
         )
     rows_nrmse.append(
         ['RFX (BLUPs)', f'{_nrmse(rfx_err_flat, rfx_true_flat):.4f}', f'{_bias(rfx_err_flat):+.4f}']
     )
-    print(tabulate(rows_nrmse, headers=['Parameter', 'NRMSE', 'Bias (est−truth)'], tablefmt='simple'))
+    print(
+        tabulate(rows_nrmse, headers=['Parameter', 'NRMSE', 'Bias (est−truth)'], tablefmt='simple')
+    )
 
     # ===========================================================================
     # 2. Absolute error quantiles
     # ===========================================================================
     print('\n=== Absolute error quantiles ===')
     rows_q = [
-        ['FFX (β)']     + _quantile_row(beta_err_flat),
-        ['Sigma(RFX)']  + _quantile_row(srfx_err_flat),
+        ['FFX (β)'] + _quantile_row(beta_err_flat),
+        ['Sigma(RFX)'] + _quantile_row(srfx_err_flat),
     ]
     if likelihood_family == 0:
         rows_q.append(['Sigma(Eps)'] + _quantile_row(seps_err_arr))
     rows_q.append(['RFX (BLUPs)'] + _quantile_row(rfx_err_flat))
-    print(tabulate(rows_q, headers=['', '|err| p25', '|err| p50', '|err| p75', '|err| p95', '|err| p99'],
-    tablefmt='simple'))
+    print(
+        tabulate(
+            rows_q,
+            headers=['', '|err| p25', '|err| p50', '|err| p75', '|err| p95', '|err| p99'],
+            tablefmt='simple',
+        )
+    )
 
     # ===========================================================================
     # 3. sigma_rfx: clip rate and breakdown by between-group df
@@ -356,26 +395,37 @@ def run_diagnostic(
     #     ratio < 1  → overconfident  (predicted var too small, BLUPs overshrunk)
     # ===========================================================================
     print('\n=== blup_var calibration: mean(err²) / mean(blup_var) by group size ===')
-    print('  Ratio > 1 → overconfident (blup_var too small; actual errors exceed predicted variance → BLUPs overshrunk)')
+    print(
+        '  Ratio > 1 → overconfident (blup_var too small; actual errors exceed predicted variance → BLUPs overshrunk)'
+    )
     print('  Ratio < 1 → underconfident (blup_var too large)')
-    rfx_err2_flat = rfx_err_flat ** 2
+    rfx_err2_flat = rfx_err_flat**2
     finite_mask = np.isfinite(rfx_err2_flat) & np.isfinite(blup_var_flat) & (blup_var_flat > 0)
     edges_ng = np.nanpercentile(blup_ns_flat[finite_mask], np.linspace(0, 100, 6))
     edges_ng = np.unique(np.round(edges_ng))
     calib_rows = []
     for i in range(len(edges_ng) - 1):
         lo, hi = edges_ng[i], edges_ng[i + 1]
-        sel = finite_mask & (blup_ns_flat >= lo) & (blup_ns_flat <= (hi if i == len(edges_ng) - 2 else hi - 1e-9))
+        sel = (
+            finite_mask
+            & (blup_ns_flat >= lo)
+            & (blup_ns_flat <= (hi if i == len(edges_ng) - 2 else hi - 1e-9))
+        )
         if sel.sum() < 2:
             continue
-        mse  = float(np.mean(rfx_err2_flat[sel]))
+        mse = float(np.mean(rfx_err2_flat[sel]))
         mvar = float(np.mean(blup_var_flat[sel]))
         ratio = mse / max(mvar, 1e-30)
-        calib_rows.append([f'{lo:.0f}–{hi:.0f}', int(sel.sum()),
-                           f'{mvar:.4f}', f'{mse:.4f}', f'{ratio:.3f}'])
-    print(tabulate(calib_rows,
-        headers=['n_g', 'N', 'mean(blup_var)', 'mean(err²)', 'ratio'],
-        tablefmt='simple'))
+        calib_rows.append(
+            [f'{lo:.0f}–{hi:.0f}', int(sel.sum()), f'{mvar:.4f}', f'{mse:.4f}', f'{ratio:.3f}']
+        )
+    print(
+        tabulate(
+            calib_rows,
+            headers=['n_g', 'N', 'mean(blup_var)', 'mean(err²)', 'ratio'],
+            tablefmt='simple',
+        )
+    )
 
     # ===========================================================================
     # 5c. FFX (beta) breakdown by n/d — checks if poor NRMSE is unavoidable
@@ -392,43 +442,77 @@ def run_diagnostic(
 
     for label, err_col, thresh_key in worst_targets:
         thresh = np.nanpercentile(np.abs(err_col), 99)
-        worst  = [r for r in ds if abs(r[thresh_key]) >= thresh][:10]
+        worst = [r for r in ds if abs(r[thresh_key]) >= thresh][:10]
         print(f'\n=== Worst 1% by |{label} error| (threshold={thresh:.3f}) ===')
         if likelihood_family == 0:
-            rows = [[r['n'], r['m'], r['d'], r['bg_df'],
-                     f'{r["srfx_true_mean"]:.3f}', f'{r["seps_true"]:.3f}',
-                     f'{r["srfx_err_mean"]:+.3f}', f'{r["seps_err"]:+.3f}',
-                     f'{r["snr"]:.2f}', '✓' if r['srfx_clipped'] else '']
-                    for r in worst]
-            print(tabulate(rows,
-                headers=['n', 'm', 'd', 'bg_df', 'σ_rfx_true', 'σ_eps_true',
-                         'σ_rfx_err', 'σ_eps_err', 'SNR', 'clip'],
-                tablefmt='simple'))
+            rows = [
+                [
+                    r['n'],
+                    r['m'],
+                    r['d'],
+                    r['bg_df'],
+                    f'{r["srfx_true_mean"]:.3f}',
+                    f'{r["seps_true"]:.3f}',
+                    f'{r["srfx_err_mean"]:+.3f}',
+                    f'{r["seps_err"]:+.3f}',
+                    f'{r["snr"]:.2f}',
+                    '✓' if r['srfx_clipped'] else '',
+                ]
+                for r in worst
+            ]
+            print(
+                tabulate(
+                    rows,
+                    headers=[
+                        'n',
+                        'm',
+                        'd',
+                        'bg_df',
+                        'σ_rfx_true',
+                        'σ_eps_true',
+                        'σ_rfx_err',
+                        'σ_eps_err',
+                        'SNR',
+                        'clip',
+                    ],
+                    tablefmt='simple',
+                )
+            )
         else:
-            rows = [[r['n'], r['m'], r['d'], r['bg_df'],
-                     f'{r["srfx_true_mean"]:.3f}',
-                     f'{r["srfx_err_mean"]:+.3f}',
-                     '✓' if r['srfx_clipped'] else '']
-                    for r in worst]
-            print(tabulate(rows,
-                headers=['n', 'm', 'd', 'bg_df', 'σ_rfx_true', 'σ_rfx_err', 'clip'],
-                tablefmt='simple'))
-
+            rows = [
+                [
+                    r['n'],
+                    r['m'],
+                    r['d'],
+                    r['bg_df'],
+                    f'{r["srfx_true_mean"]:.3f}',
+                    f'{r["srfx_err_mean"]:+.3f}',
+                    '✓' if r['srfx_clipped'] else '',
+                ]
+                for r in worst
+            ]
+            print(
+                tabulate(
+                    rows,
+                    headers=['n', 'm', 'd', 'bg_df', 'σ_rfx_true', 'σ_rfx_err', 'clip'],
+                    tablefmt='simple',
+                )
+            )
 
     # ===========================================================================
     # 7. Corr(RFX): psi_corr quality and shrinkage comparison
     # ===========================================================================
     if corr_r_hat_list:
-        r_hat_all  = np.concatenate(corr_r_hat_list)    # (N, d_corr)
+        r_hat_all = np.concatenate(corr_r_hat_list)    # (N, d_corr)
         r_true_all = np.concatenate(corr_r_true_list)
-        G_mom_all  = np.concatenate(corr_G_mom_list)    # (N,)
+        G_mom_all = np.concatenate(corr_G_mom_list)    # (N,)
         m_all_corr = np.concatenate(corr_m_list)        # (N,)
         N_corr = r_hat_all.shape[0]
 
         def _corr_metrics(est: np.ndarray, true: np.ndarray) -> tuple[float, float, float, float]:
             e, t = est.reshape(-1), true.reshape(-1)
             r = float(np.corrcoef(e, t)[0, 1]) if len(e) > 1 else float('nan')
-            mae  = float(np.abs(e - t).mean())
+            mae = float(np.abs(e - t).mean())
             rmse = float(np.sqrt(np.mean((e - t) ** 2)))
             sign = float((np.sign(e) == np.sign(t)).mean() * 100)
             return r, mae, rmse, sign
@@ -440,12 +524,20 @@ def run_diagnostic(
         print(f'\n=== Corr(RFX): psi_corr quality  (N={N_corr} correlated datasets) ===')
         rows_corr = []
         r0, mae0, rmse0, sign0 = _corr_metrics(r_hat_all, r_true_all)
-        rows_corr.append(['raw psi_corr', f'{r0:.3f}', f'{mae0:.3f}', f'{rmse0:.3f}', f'{sign0:.1f}%'])
+        rows_corr.append(
+            ['raw psi_corr', f'{r0:.3f}', f'{mae0:.3f}', f'{rmse0:.3f}', f'{sign0:.1f}%']
+        )
         for C in shrinkage_Cs:
             shrunk = r_hat_all * alpha_all[C]
             r_s, mae_s, rmse_s, sign_s = _corr_metrics(shrunk, r_true_all)
-            rows_corr.append([f'shrunk  C={C}', f'{r_s:.3f}', f'{mae_s:.3f}', f'{rmse_s:.3f}', f'{sign_s:.1f}%'])
-        print(tabulate(rows_corr, headers=['Estimator', 'R', 'MAE', 'RMSE', 'Sign%'], tablefmt='simple'))
+            rows_corr.append(
+                [f'shrunk  C={C}', f'{r_s:.3f}', f'{mae_s:.3f}', f'{rmse_s:.3f}', f'{sign_s:.1f}%']
+            )
+        print(
+            tabulate(
+                rows_corr, headers=['Estimator', 'R', 'MAE', 'RMSE', 'Sign%'], tablefmt='simple'
+            )
+        )
 
         # Breakdown by m
         print('\n=== Corr(RFX) by m (number of groups) ===')
@@ -461,15 +553,22 @@ def run_diagnostic(
             r_s = float(np.corrcoef(shrunk3.reshape(-1), r_true_all[sel].reshape(-1))[0, 1])
             mae_r = float(np.abs(r_hat_all[sel] - r_true_all[sel]).mean())
             mae_s = float(np.abs(shrunk3 - r_true_all[sel]).mean())
-            bdown_rows.append([label, int(sel.sum()), f'{r_r:.3f}', f'{r_s:.3f}',
-                                f'{mae_r:.3f}', f'{mae_s:.3f}'])
-        print(tabulate(bdown_rows,
-                       headers=['m range', 'N', 'R(raw)', 'R(C=3)', 'MAE(raw)', 'MAE(C=3)'],
-                       tablefmt='simple'))
+            bdown_rows.append(
+                [label, int(sel.sum()), f'{r_r:.3f}', f'{r_s:.3f}', f'{mae_r:.3f}', f'{mae_s:.3f}']
+            )
+        print(
+            tabulate(
+                bdown_rows,
+                headers=['m range', 'N', 'R(raw)', 'R(C=3)', 'MAE(raw)', 'MAE(C=3)'],
+                tablefmt='simple',
+            )
+        )
 
         # G_mom distribution
-        print(f'\n  G_mom stats: mean={G_mom_all.mean():.1f}  median={np.median(G_mom_all):.1f}'
-              f'  p25={np.percentile(G_mom_all, 25):.1f}  p75={np.percentile(G_mom_all, 75):.1f}')
+        print(
+            f'\n  G_mom stats: mean={G_mom_all.mean():.1f}  median={np.median(G_mom_all):.1f}'
+            f'  p25={np.percentile(G_mom_all, 25):.1f}  p75={np.percentile(G_mom_all, 75):.1f}'
+        )
     else:
         print('\n=== Corr(RFX): no correlated datasets with q >= 2 found ===')
 
