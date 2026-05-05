@@ -245,7 +245,11 @@ def joinProposals(proposals: list[Proposal]) -> Proposal:
         'global': {'samples': samples_g, 'log_prob': log_prob_g},
         'local': {'samples': samples_l, 'log_prob': log_prob_l},
     }
-    return Proposal(proposed, has_sigma_eps=has_sigma_eps[0], d_corr=d_corrs[0])
+    corr = None
+    corr_parts = [p._corr_rfx for p in proposals]
+    if all(part is not None for part in corr_parts):
+        corr = torch.cat(corr_parts, dim=-3)  # type: ignore[arg-type]
+    return Proposal(proposed, has_sigma_eps=has_sigma_eps[0], d_corr=d_corrs[0], corr_rfx=corr)
 
 
 def concatProposalsBatch(proposals: list[Proposal]) -> Proposal:
@@ -281,7 +285,13 @@ def concatProposalsBatch(proposals: list[Proposal]) -> Proposal:
             'log_prob': torch.cat(log_prob_l_padded, dim=0),
         },
     }
-    merged = Proposal(proposed, has_sigma_eps=has_sigma_eps, d_corr=proposals[0].d_corr)
+    corr = None
+    corr_parts = [proposal._corr_rfx for proposal in proposals]
+    if all(part is not None for part in corr_parts):
+        corr = torch.cat(corr_parts, dim=0)  # type: ignore[arg-type]
+    merged = Proposal(
+        proposed, has_sigma_eps=has_sigma_eps, d_corr=proposals[0].d_corr, corr_rfx=corr
+    )
 
     common_keys: set[str] | None = None
     for proposal in proposals:
