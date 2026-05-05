@@ -2,7 +2,8 @@
 options(repos = c(CRAN = "https://cloud.r-project.org"))
 packages <- c(
   "rstudioapi", "fs", "arrow", "lme4", "nlme",
-  "mlmRev", "MEMSS", "dplyr"
+  "mlmRev", "MEMSS", "MASS", "boot", "gamlss.data",
+  "glmmTMB", "geepack", "dplyr", "tidyr"
 )
 missing <- packages[!packages %in% installed.packages()[,"Package"]]
 if (length(missing) > 0) {
@@ -21,6 +22,15 @@ dir.create('parquet', showWarnings = F)
 # helpers
 renameCol <- function(df, old,  new){
   colnames(df)[colnames(df) == old] <- new
+  return(df)
+}
+
+expandBinomial <- function(df, success, total){
+  df$successes <- df[[success]]
+  df$trials <- df[[total]]
+  df <- df |> uncount(trials, .id = 'trial')
+  df$y <- as.integer(df$trial <= df$successes)
+  df <- df |> select(-c(all_of(success), all_of(total), 'successes', 'trial'))
   return(df)
 }
 
@@ -146,19 +156,25 @@ df <- renameCol(df, 'score', 'y')
 df <- renameCol(df, 'school', 'group')
 write_parquet(df, path('parquet', 'chem97.parquet'))
 
-# ---------------------------------------------------------------------------
-# Generalized mixed-effects (non-Gaussian outcomes)
+# InstEval (d=3, grouped ratings)
+data('InstEval', package = 'lme4')
+df <- InstEval
+# model <- lmer(y ~ service + dept + (1 | s), data = df)
+# 'd' is the instructor ID (1128 levels, random effect); 'studage' and 'lectage' are not
+# in the reference model
+df <- df |> select(-c('d', 'studage', 'lectage'))
+df <- renameCol(df, 's', 'group')
+write_parquet(df, path('parquet', 'insteval.parquet'))
 
 # ---------------------------------------------------------------------------
-# Generalized mixed-effects (non-Gaussian outcomes)
+# Generalized mixed-effects (Bernoulli outcomes)
 
-# CBPP (d=2, binomial)
+# CBPP (d=2, Bernoulli from aggregate binomial)
 data('cbpp', package = 'lme4')
 df <- cbpp
 # model <- glmer(cbind(incidence, size - incidence) ~ period + (1 | herd), family = binomial, data = df)
-# 'size' is the binomial denominator (total animals at risk), not a fixed-effect predictor
-df <- df |> select(-c('size'))
-df <- renameCol(df, 'incidence', 'y')
+# expand aggregate binomial counts to Bernoulli rows; 'size' is the denominator, not a predictor
+df <- expandBinomial(df, 'incidence', 'size')
 df <- renameCol(df, 'herd', 'group')
 write_parquet(df, path('parquet', 'cbpp.parquet'))
 
@@ -174,16 +190,6 @@ df$y <- as.integer(as.character(df$y) == 'Y')
 df <- renameCol(df, 'id', 'group')
 write_parquet(df, path('parquet', 'verbagg.parquet'))
 
-# Grouseticks (d=3, count)
-data('grouseticks', package = 'lme4')
-df <- grouseticks
-# model <- glmer(TICKS ~ YEAR + HEIGHT + (1 | BROOD), family = poisson, data = df)
-# 'INDEX' is a row ID; 'cHEIGHT' is centered HEIGHT (r=1); 'LOCATION' is not in reference model
-df <- df |> select(-c('INDEX', 'cHEIGHT', 'LOCATION'))
-df <- renameCol(df, 'TICKS', 'y')
-df <- renameCol(df, 'BROOD', 'group')
-write_parquet(df, path('parquet', 'grouseticks.parquet'))
-
 # Contraception (d=4, binomial)
 data('Contraception', package = 'mlmRev')
 df <- Contraception
@@ -195,15 +201,152 @@ df$y <- as.integer(as.character(df$y) == 'Y')
 df <- renameCol(df, 'district', 'group')
 write_parquet(df, path('parquet', 'contraception.parquet'))
 
-# InstEval (d=3, grouped ratings)
-data('InstEval', package = 'lme4')
-df <- InstEval
-# model <- lmer(y ~ service + dept + (1 | s), data = df)
-# 'd' is the instructor ID (1128 levels, random effect); 'studage' and 'lectage' are not
-# in the reference model
-df <- df |> select(-c('d', 'studage', 'lectage'))
-df <- renameCol(df, 's', 'group')
-write_parquet(df, path('parquet', 'insteval.parquet'))
+# Bacteria (d=5, Bernoulli)
+data('bacteria', package = 'MASS')
+df <- bacteria
+# model <- glmer(y ~ ap + hilo + week + trt + (1 | ID), family = binomial, data = df)
+df$y <- as.integer(as.character(df$y) == 'y')
+df <- renameCol(df, 'ID', 'group')
+write_parquet(df, path('parquet', 'bacteria.parquet'))
+
+# Guatemala immunization (d=16, Bernoulli)
+data('guImmun', package = 'mlmRev')
+df <- guImmun
+# model <- glmer(immun ~ kid2p + mom25p + ord + ethn + momEd + husEd + momWork + rural + pcInd81 + (1 | comm), family = binomial, data = df)
+# 'kid' and 'mom' are nested person/family IDs, not fixed-effect predictors
+df <- df |> select(-c('kid', 'mom'))
+df <- renameCol(df, 'immun', 'y')
+df$y <- as.integer(as.character(df$y) == 'Y')
+df <- renameCol(df, 'comm', 'group')
+write_parquet(df, path('parquet', 'guimmun.parquet'))
+
+# Guatemala prenatal care (d=22, Bernoulli)
+data('guPrenat', package = 'mlmRev')
+df <- guPrenat
+# model <- glmer(prenat ~ childAge + motherAge + birthOrd + indig + momEd + husEd + husEmpl + toilet + TV + pcInd81 + ssDist + (1 | cluster), family = binomial, data = df)
+# 'kid' and 'mom' are nested person/family IDs, not fixed-effect predictors
+df <- df |> select(-c('kid', 'mom'))
+df <- renameCol(df, 'prenat', 'y')
+df$y <- as.integer(as.character(df$y) == 'Modern')
+df <- renameCol(df, 'cluster', 'group')
+write_parquet(df, path('parquet', 'guprenat.parquet'))
+
+# OME (d=6, Bernoulli from aggregate binomial)
+data('OME', package = 'MASS')
+df <- OME
+# model <- glmer(cbind(Correct, Trials - Correct) ~ Age + OME + Loud + Noise + (1 | ID), family = binomial, data = df)
+# expand aggregate binomial counts to Bernoulli rows; 'Trials' is the denominator
+df <- expandBinomial(df, 'Correct', 'Trials')
+df <- renameCol(df, 'ID', 'group')
+write_parquet(df, path('parquet', 'ome.parquet'))
+
+# Respiratory infection (d=10, Bernoulli)
+data('respInf', package = 'gamlss.data')
+df <- respInf
+# model <- glmer(time ~ time.1 + age + xero + cosine + sine + female + height + stunted + (1 | id), family = binomial, data = df)
+# 'resp' is a vector of ones; 'age1', 'season', and 'time2' are derived/redundant
+df <- df |> select(-c('resp', 'age1', 'season', 'time2'))
+df <- renameCol(df, 'time', 'y')
+df <- renameCol(df, 'id', 'group')
+write_parquet(df, path('parquet', 'respinf.parquet'))
+
+# Sugar-cane disease (d=3, Bernoulli from aggregate binomial)
+data('cane', package = 'boot')
+df <- cane
+# model <- glmer(cbind(r, n - r) ~ x + block + (1 | var), family = binomial, data = df)
+# expand aggregate binomial counts to Bernoulli rows; 'n' is the denominator
+df <- expandBinomial(df, 'r', 'n')
+df <- renameCol(df, 'var', 'group')
+write_parquet(df, path('parquet', 'cane.parquet'))
+
+# Ohio children wheeze status (d=3, Bernoulli)
+data('ohio', package = 'geepack')
+df <- ohio
+# model <- glmer(resp ~ age + smoke + (1 | id), family = binomial, data = df)
+df <- renameCol(df, 'resp', 'y')
+df <- renameCol(df, 'id', 'group')
+write_parquet(df, path('parquet', 'ohio.parquet'))
+
+# Respiratory illness trial (d=7, Bernoulli)
+data('respiratory', package = 'geepack')
+df <- respiratory
+# model <- glmer(outcome ~ center + treat + sex + age + baseline + visit + (1 | id), family = binomial, data = df)
+df <- renameCol(df, 'outcome', 'y')
+df <- renameCol(df, 'id', 'group')
+write_parquet(df, path('parquet', 'respiratory.parquet'))
+
+# Muscatine obesity (d=5, Bernoulli)
+data('muscatine', package = 'geepack')
+df <- muscatine
+# model <- glmer(obese ~ gender + base_age + age + occasion + (1 | id), family = binomial, data = df)
+# 'numobese' is a subject-level summary of the repeated binary outcome
+df <- df |> select(-c('numobese'))
+df <- renameCol(df, 'obese', 'y')
+df$y <- as.integer(as.character(df$y) == 'yes')
+df <- renameCol(df, 'id', 'group')
+write_parquet(df, path('parquet', 'muscatine.parquet'))
+
+# ---------------------------------------------------------------------------
+# Generalized mixed-effects (Poisson outcomes)
+
+# Grouseticks (d=3, Poisson)
+data('grouseticks', package = 'lme4')
+df <- grouseticks
+# model <- glmer(TICKS ~ YEAR + HEIGHT + (1 | BROOD), family = poisson, data = df)
+# 'INDEX' is a row ID; 'cHEIGHT' is centered HEIGHT (r=1); 'LOCATION' is not in reference model
+df <- df |> select(-c('INDEX', 'cHEIGHT', 'LOCATION'))
+df <- renameCol(df, 'TICKS', 'y')
+df <- renameCol(df, 'BROOD', 'group')
+write_parquet(df, path('parquet', 'grouseticks.parquet'))
+
+# Epilepsy seizures (d=5, Poisson)
+data('epil', package = 'MASS')
+df <- epil
+# model <- glmer(y ~ trt + V4 + lbase + lage + (1 | subject), family = poisson, data = df)
+# 'base', 'age', and 'period' are redundant with the transformed/model covariates
+df <- df |> select(-c('base', 'age', 'period'))
+df <- renameCol(df, 'subject', 'group')
+write_parquet(df, path('parquet', 'epil.parquet'))
+
+# Arabidopsis fruits (d=5, Poisson)
+data('Arabidopsis', package = 'lme4')
+df <- Arabidopsis
+# model <- glmer(total.fruits ~ nutrient + amd + status + (1 | popu), family = poisson, data = df)
+# 'reg', 'gen', and 'rack' are nesting/blocking IDs, not fixed-effect predictors
+df <- df |> select(-c('reg', 'gen', 'rack'))
+df <- renameCol(df, 'total.fruits', 'y')
+df <- renameCol(df, 'popu', 'group')
+write_parquet(df, path('parquet', 'arabidopsis.parquet'))
+
+# Malignant melanoma deaths in Europe (d=3, Poisson)
+data('Mmmec', package = 'mlmRev')
+df <- Mmmec
+# model <- glmer(deaths ~ uvb + offset(log(expected)) + (1 | nation), family = poisson, data = df)
+# offset terms are not represented in the current parquet schema, so 'expected' is kept
+# as an ordinary predictor for now; 'region' and 'county' are nested location IDs
+df <- df |> select(-c('region', 'county'))
+df <- renameCol(df, 'deaths', 'y')
+df <- renameCol(df, 'nation', 'group')
+write_parquet(df, path('parquet', 'mmmec.parquet'))
+
+# Salamanders (d=8, Poisson)
+data('Salamanders', package = 'glmmTMB')
+df <- Salamanders
+# model <- glmer(count ~ spp * mined + cover + sample + DOP + Wtemp + DOY + (1 | site), family = poisson, data = df)
+df <- renameCol(df, 'count', 'y')
+df <- renameCol(df, 'site', 'group')
+write_parquet(df, path('parquet', 'salamanders.parquet'))
+
+# Owl sibling negotiation (d=5, Poisson)
+data('Owls', package = 'glmmTMB')
+df <- Owls
+# model <- glmer(SiblingNegotiation ~ FoodTreatment * SexParent + ArrivalTime + logBroodSize + (1 | Nest), family = poisson, data = df)
+# 'NegPerChick' is derived from the outcome and brood size; 'BroodSize' is redundant with
+# 'logBroodSize', which approximates the common offset term as a predictor for now
+df <- df |> select(-c('NegPerChick', 'BroodSize'))
+df <- renameCol(df, 'SiblingNegotiation', 'y')
+df <- renameCol(df, 'Nest', 'group')
+write_parquet(df, path('parquet', 'owls.parquet'))
 
 # ---------------------------------------------------------------------------
 # Nonlinear mixed-effects (NLME)
