@@ -236,6 +236,7 @@ def gaussianHybrid(global_proposal: Proposal, batch: dict[str, Tensor]) -> Propo
     """Replace local samples of an existing Proposal with analytical Gaussian samples.
 
     The global part (samples and log_prob) is preserved unchanged.
+    The local log_prob is the analytical conditional density for proposal accounting.
     Only valid for likelihood_family == 0.
     """
     lf = batch.get('likelihood_family', 0)
