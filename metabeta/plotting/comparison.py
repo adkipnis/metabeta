@@ -18,16 +18,16 @@ _COL_TITLES = [
     'Fixed Effects',
     'Variances',
     'Random Effects',
-    'Observed CI',
-    'Uniform ECDF',
+    'Empirical Coverage',
+    'Δ Uniform ECDF',
 ]
 _COL_TITLES_CORR = [
     'Fixed Effects',
     'Variances',
     'Correlations',
     'Random Effects',
-    'Observed CI',
-    'Uniform ECDF',
+    'Empirical Coverage',
+    'Δ Uniform ECDF',
 ]
 
 
@@ -96,7 +96,7 @@ def plotComparison(
             axs[i, n_rec + 1],
             proposal,
             data,
-            diff=False,
+            diff=True,
             title=col_titles[n_rec + 1] if upper else None,
             show_legend=False,
             show_x=lower,
