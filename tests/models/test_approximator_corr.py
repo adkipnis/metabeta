@@ -542,6 +542,18 @@ def test_proposal_no_corr_when_d_corr_zero():
     assert p.corr_rfx is None
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
+def test_proposal_to_moves_cached_corr_rfx_to_cpu():
+    q = 2
+    corr = torch.eye(q, device='cuda').expand(2, 5, q, q).clone()
+    p = _make_fake_proposal(q=q, d_corr=0, corr_rfx=corr)
+
+    p.to('cpu')
+
+    assert p.corr_rfx is not None
+    assert p.corr_rfx.device.type == 'cpu'
+
+
 def test_proposal_partition_excludes_corr_z():
     """partition() covers only the named model params; corr_z is accessed via corr_rfx."""
     p = _make_fake_proposal(d=2, q=2, has_eps=True, d_corr=1)
