@@ -71,6 +71,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--seed',             type=int, default=0)
     parser.add_argument('--outdir',           type=str, default=str(OUT_DIR))
     parser.add_argument('--verbosity',        type=int, default=1)
+    parser.add_argument('--data_ids',         type=str, nargs='+', default=None,
+                        help='Data IDs to evaluate (default: tiny/small/medium/large-{fam}-real)')
+    parser.add_argument('--decimals',         type=int, default=2,
+                        help='Decimal places in table cells (default: 2)')
     parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--convergence_mode', type=str, default='liberal',
                         choices=['liberal', 'strict'])
@@ -425,10 +429,12 @@ def evaluateReal(
             advi_batch = rescaleData(advi_batch)
 
     # LOO-NLL via getSummary; NRMSE/corr will be NaN since real data has no ground truth
-    summary_mb = getSummary(proposal_mb, batch, lf, compute_pred_coverage=False)
-    summary_nuts = getSummary(proposal_nuts, batch, lf, compute_pred_coverage=False)
+    summary_mb = getSummary(proposal_mb, batch, likelihood_family=lf, compute_pred_coverage=False)
+    summary_nuts = getSummary(
+        proposal_nuts, batch, likelihood_family=lf, compute_pred_coverage=False
+    )
     summary_advi = (
-        getSummary(proposal_advi, advi_batch, lf, compute_pred_coverage=False)
+        getSummary(proposal_advi, advi_batch, likelihood_family=lf, compute_pred_coverage=False)
         if proposal_advi is not None
         else None
     )
@@ -501,45 +507,69 @@ HEADERS_TEX = [
 ]
 
 
-def _fmtMd(val: tuple[float, float] | float | None) -> str:
+def _fmtMd(val: tuple[float, float] | float | None, dp: int = 2) -> str:
     if val is None:
         return 'NA'
     if isinstance(val, tuple):
         m, s = val
-        return 'NA' if m != m else f'{m:.3f} ± {s:.3f}'
-    return f'{val:.4f}' if val == val else 'NA'
+        return 'NA' if m != m else f'{m:.{dp}f} ± {s:.{dp}f}'
+    return f'{val:.{dp}f}' if val == val else 'NA'
 
 
-def _fmtTex(val: tuple[float, float] | float | None) -> str:
+def _fmtTex(val: tuple[float, float] | float | None, dp: int = 2) -> str:
     if val is None:
         return r'\textrm{NA}'
     if isinstance(val, tuple):
         m, s = val
-        return r'\textrm{NA}' if m != m else f'${m:.3f} \\pm {s:.3f}$'
-    return f'${val:.4f}$' if val == val else r'\textrm{NA}'
+        return r'\textrm{NA}' if m != m else f'${m:.{dp}f} \\pm {s:.{dp}f}$'
+    return f'${val:.{dp}f}$' if val == val else r'\textrm{NA}'
 
 
-def saveTables(rows: list[dict], outdir: Path, run_name: str) -> None:
+def saveTables(
+    rows_by_regime: dict[str, list[dict]],
+    outdir: Path,
+    run_name: str,
+    dp: int = 2,
+) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
 
+    fmt_md = lambda v: _fmtMd(v, dp)
+    fmt_tex = lambda v: _fmtTex(v, dp)
+
     # --- Markdown ---
-    md_rows = [[r['method']] + [_fmtMd(r[m]) for m in METRICS] for r in rows]
-    md_table = tabulate(md_rows, headers=HEADERS_MD, tablefmt='pipe', stralign='right')
+    md_rows = []
+    for regime, rows in rows_by_regime.items():
+        for r in rows:
+            md_rows.append([regime, r['method']] + [fmt_md(r[m]) for m in METRICS])
+    md_table = tabulate(
+        md_rows,
+        headers=['regime', 'method'] + HEADERS_MD[1:],
+        tablefmt='pipe',
+        stralign='right',
+    )
     md_path = outdir / f'real_{run_name}.md'
     md_path.write_text(f'# Real-data evaluation: {run_name}\n\n{md_table}\n')
     logger.info('Saved Markdown → %s', md_path)
 
     # --- LaTeX ---
-    header_row = ' & '.join(HEADERS_TEX) + r' \\'
+    header_cols = ' & '.join(HEADERS_TEX)
     lines: list[str] = [
-        r'\begin{tabular}{c|ccccc}',
+        r'\begin{tabular}{cc|ccccc}',
         r'    \toprule',
-        f'    {header_row}',
+        rf'    $\mathrm{{regime}}$ & {header_cols} \\',
         r'    \midrule',
     ]
-    for row in rows:
-        cells = ' & '.join([rf'\texttt{{{row["method"]}}}'] + [_fmtTex(row[m]) for m in METRICS])
-        lines.append(f'    {cells} \\\\')
+    first = True
+    for regime, rows in rows_by_regime.items():
+        if not first:
+            lines.append(r'    \midrule')
+        first = False
+        for j, row in enumerate(rows):
+            regime_cell = rf'\texttt{{{regime}}}' if j == 0 else ''
+            cells = ' & '.join(
+                [rf'\texttt{{{row["method"]}}}'] + [fmt_tex(row[m]) for m in METRICS]
+            )
+            lines.append(rf'      {regime_cell} & {cells} \\')
     lines += [r'    \bottomrule', r'\end{tabular}', '']
     tex_path = outdir / f'real_{run_name}.tex'
     tex_path.write_text('\n'.join(lines))
@@ -548,6 +578,8 @@ def saveTables(rows: list[dict], outdir: Path, run_name: str) -> None:
 
 # ---------------------------------------------------------------------------
 # Main
+
+DEFAULT_SIZES = ['tiny', 'small', 'medium', 'large']
 
 
 def main() -> None:
@@ -559,41 +591,55 @@ def main() -> None:
     ckpt_dir = Path(cfg.checkpoint)
     model, model_cfg = loadModel(ckpt_dir, cfg.prefix, device)
 
-    size = model_cfg.data_id.split('-')[0]
     lf = model_cfg.likelihood_family
     fam = _FAM_LETTER[lf]
+    dp = getattr(cfg, 'decimals', 2)
 
-    data_id = f'{size}-{fam}-real'
-    data_path = METABETA / 'outputs' / 'data' / data_id / 'test.fit.npz'
-    if not data_path.exists():
-        logger.error('Test file not found: %s', data_path)
-        return
+    data_ids: list[str] = getattr(cfg, 'data_ids', None) or [
+        f'{s}-{fam}-real' for s in DEFAULT_SIZES
+    ]
 
     logger.info('Checkpoint: %s  (prefix=%s)', ckpt_dir.name, cfg.prefix)
-    logger.info('Data      : %s', data_path)
     logger.info('max_d=%d  max_q=%d  family=%d', model_cfg.max_d, model_cfg.max_q, lf)
+    logger.info('Evaluating: %s', data_ids)
 
-    rows = evaluateReal(
-        model=model,
-        data_path=data_path,
-        max_d=model_cfg.max_d,
-        max_q=model_cfg.max_q,
-        lf=lf,
-        n_samples=cfg.n_samples,
-        batch_size=cfg.batch_size,
-        device=device,
-        rescale=cfg.rescale,
-        convergence_mode=cfg.convergence_mode,
-    )
+    rows_by_regime: dict[str, list[dict]] = {}
+    for data_id in data_ids:
+        data_path = METABETA / 'outputs' / 'data' / data_id / 'test.fit.npz'
+        if not data_path.exists():
+            logger.warning('Skipping %s: test.fit.npz not found', data_id)
+            continue
+        regime = data_id.split('-')[0]
+        logger.info('\n--- Regime: %s (%s) ---', regime, data_id)
+        rows = evaluateReal(
+            model=model,
+            data_path=data_path,
+            max_d=model_cfg.max_d,
+            max_q=model_cfg.max_q,
+            lf=lf,
+            n_samples=cfg.n_samples,
+            batch_size=cfg.batch_size,
+            device=device,
+            rescale=cfg.rescale,
+            convergence_mode=cfg.convergence_mode,
+        )
+        if rows:
+            rows_by_regime[regime] = rows
 
-    if not rows:
-        logger.error('No rows produced — check data and convergence settings.')
+    if not rows_by_regime:
+        logger.error('No regimes evaluated — check data_ids and checkpoint.')
         return
 
-    md_rows = [[r['method']] + [_fmtMd(r[m]) for m in METRICS] for r in rows]
-    print('\n' + tabulate(md_rows, headers=HEADERS_MD, tablefmt='simple'))
+    # Console summary
+    md_rows = []
+    for regime, rows in rows_by_regime.items():
+        for r in rows:
+            md_rows.append([regime, r['method']] + [_fmtMd(r[m], dp) for m in METRICS])
+    print(
+        '\n' + tabulate(md_rows, headers=['regime', 'method'] + HEADERS_MD[1:], tablefmt='simple')
+    )
 
-    saveTables(rows, Path(cfg.outdir), ckpt_dir.name)
+    saveTables(rows_by_regime, Path(cfg.outdir), ckpt_dir.name, dp=dp)
 
 
 if __name__ == '__main__':
