@@ -202,6 +202,8 @@ def irlsBernoulliCompacted(
 # IRLS (Poisson)
 # ---------------------------------------------------------------------------
 
+_POISSON_ETA_CLIP_MAX = 10.0
+
 
 def irlsPoisson(
     Xm: torch.Tensor,
@@ -221,9 +223,10 @@ def irlsPoisson(
     beta[:, 0] = torch.log(y_mean)
     for _ in range(n_iter):
         eta = torch.einsum('bmnd,bd->bmn', Xm, beta)
-        mu = torch.exp(eta.clamp(max=20))
+        eta_eff = eta.clamp(max=_POISSON_ETA_CLIP_MAX)
+        mu = torch.exp(eta_eff)
         w = (mu * mask).clamp(min=1e-6)
-        z = (eta + (ym - mu * mask) / w) * mask
+        z = (eta_eff + (ym - mu * mask) / w) * mask
         w_sqrt = w.sqrt()
         Xw = (Xm * w_sqrt.unsqueeze(-1)).reshape(B, m * n, d)
         zw = (z * w_sqrt).reshape(B, m * n, 1)
@@ -247,9 +250,10 @@ def irlsPoissonCompacted(
     beta[:, 0] = torch.log(y_mean)
     for _ in range(n_iter):
         eta = torch.einsum('bmnd,bd->bmn', Xm, beta)
-        mu = torch.exp(eta.clamp(max=20))
+        eta_eff = eta.clamp(max=_POISSON_ETA_CLIP_MAX)
+        mu = torch.exp(eta_eff)
         w = (mu * mask).clamp(min=1e-6)
-        z = (eta + (ym - mu * mask) / w) * mask
+        z = (eta_eff + (ym - mu * mask) / w) * mask
         XwX = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)
         Xwz = torch.einsum('bmnd,bmn->bd', Xm, w * z)
         beta_new = torch.linalg.solve(XwX + _adaptiveRidge(XwX), Xwz)

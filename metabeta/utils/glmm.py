@@ -29,6 +29,10 @@ _BERNOULLI_BLUP_VAR_INFLATION = 1.5
 _BERNOULLI_CORR_SHRINKAGE_C = 10.0
 _BERNOULLI_BLUP_KH_VAR_CAP = 0.2
 _BERNOULLI_HIGH_D_BLUP_VAR_FLOOR = 0.25
+_POISSON_ETA_CLIP_MAX = 10.0
+_POISSON_INITIAL_PSI_FLOOR = 0.01
+_POISSON_HG_INV_EIG_CAP = 25.0
+_POISSON_PSI_EIG_CAP = 25.0
 
 
 def _eighWithJitter(M: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -129,9 +133,10 @@ def _pqlWorking(
         w = (mu * (1.0 - mu)).clamp(min=1e-6) * mask_n
         ytilde = (eta + (y - mu) / w.clamp(min=1e-30)) * mask_n
     elif likelihood_family == 2:
-        mu = torch.exp(eta.clamp(max=20))
+        eta_eff = eta.clamp(max=_POISSON_ETA_CLIP_MAX)
+        mu = torch.exp(eta_eff)
         w = mu.clamp(min=1e-6) * mask_n
-        ytilde = (eta + (y - mu) / w.clamp(min=1e-30)) * mask_n
+        ytilde = (eta_eff + (y - mu) / w.clamp(min=1e-30)) * mask_n
     else:
         raise ValueError(f'unsupported likelihood_family={likelihood_family}')
     return w, ytilde
@@ -155,8 +160,9 @@ def _groupNll(
     if likelihood_family == 1:
         nll_obs = (-ym * F.logsigmoid(eta) - (1.0 - ym) * F.logsigmoid(-eta)) * mask_n
     else:
-        mu = torch.exp(eta.clamp(max=20))
-        nll_obs = (-(ym * eta - mu)) * mask_n
+        eta_eff = eta.clamp(max=_POISSON_ETA_CLIP_MAX)
+        mu = torch.exp(eta_eff)
+        nll_obs = (-(ym * eta_eff - mu)) * mask_n
     return nll_obs.sum(dim=-1) + 0.5 * torch.einsum('bmq,bqr,bmr->bm', bg, Psi_inv, bg)
 
 
@@ -218,7 +224,7 @@ def _pqlPass(
         if likelihood_family == 1:
             mu_t = torch.sigmoid(eta_t)
         else:
-            mu_t = torch.exp(eta_t.clamp(max=20))
+            mu_t = torch.exp(eta_t.clamp(max=_POISSON_ETA_CLIP_MAX))
         w_t = (mu_t * (1.0 - mu_t) if likelihood_family == 1 else mu_t).clamp(min=1e-6) * mask_n
         ZWZ_t = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_t, Zm)         # (B, m, q, q)
         grad_g = torch.einsum('bmnq,bmn->bmq', Zm, (ym - mu_t) * mask_n) - torch.einsum(  # Zᵀ(y−μ)
@@ -259,11 +265,18 @@ def _pqlPass(
         cov_weight = (outcome_balance.sqrt() * info_weight).clamp(0.0, 1.0) * mask_m
         Hg_inv = _psdClampEigenvalues(Hg_inv, _BERNOULLI_HG_INV_EIG_CAP)
         Hg_inv = Hg_inv * cov_weight[:, :, None, None]
+    elif likelihood_family == 2:
+        info_g = ZWZ_f.diagonal(dim1=-2, dim2=-1).sum(dim=-1).clamp(min=0.0)
+        info_weight = info_g / (info_g + float(q))
+        Hg_inv = _psdClampEigenvalues(Hg_inv, _POISSON_HG_INV_EIG_CAP)
+        Hg_inv = Hg_inv * (info_weight * mask_m)[:, :, None, None]
 
     bg_outer = torch.einsum('bmq,bmr->bmqr', bg, bg)
     Psi_lap = _psdProject((bg_outer + Hg_inv).sum(dim=1) / G[:, None, None])  # (B, q, q)
     if likelihood_family == 1:
         Psi_lap = _psdClampEigenvalues(Psi_lap, _BERNOULLI_PSI_EIG_CAP)
+    elif likelihood_family == 2:
+        Psi_lap = _psdClampEigenvalues(Psi_lap, _POISSON_PSI_EIG_CAP)
     mean_Hg_inv = (Hg_inv * mask4).sum(dim=1) / G[:, None, None]
 
     # --- β̂_GLS via Woodbury/Schur complement under freshly computed Ψ̂_Lap ---
@@ -856,7 +869,7 @@ def _lmmGlmm(
         mu_0 = torch.sigmoid(eta_0)
         pearson = (ym - mu_0).square() / (mu_0 * (1.0 - mu_0)).clamp(min=1e-6)
     else:
-        mu_0 = torch.exp(eta_0.clamp(max=20))
+        mu_0 = torch.exp(eta_0.clamp(max=_POISSON_ETA_CLIP_MAX))
         pearson = (ym - mu_0).square() / mu_0.clamp(min=1e-6)
 
     phi_pearson = (pearson * mask_n).sum(dim=(1, 2)) / (N - d).clamp(min=1.0)  # (B,)
@@ -900,7 +913,7 @@ def _lmmGlmm(
 
     # ------------------------------------------------------------------
     # Stage 2: alternating Newton–GLS loop, up to max_passes=6.
-    # Pass 1 cold-starts Newton under pooled β₀ and pseudoinv(Ψ̂_PQL).
+    # Pass 1 cold-starts Newton under pooled β₀ and a stabilized Ψ̂_PQL inverse.
     # Passes 2–max_passes warm-start from previous BLUPs under β̂_GLS and
     # ridge-inv(Ψ̂_Lap); early exit when the 95th-percentile change in both
     # β and diag(Ψ̂) falls below 1e-3.
@@ -921,6 +934,8 @@ def _lmmGlmm(
     )
     if likelihood_family == 1:
         psi_0_floor = psi_0.clamp(min=_BERNOULLI_INITIAL_PSI_FLOOR)
+    elif likelihood_family == 2:
+        psi_0_floor = psi_0.clamp(min=_POISSON_INITIAL_PSI_FLOOR)
     else:
         psi_0_floor = psi_0.clamp(min=1e-6)
     max_passes = 6
@@ -932,9 +947,11 @@ def _lmmGlmm(
             psi.nan_to_num(nan=0.0, posinf=0.0),
         )
 
-    # Pass 1: pooled β₀, cold start.  Bernoulli separation often makes Psi_pql exactly
-    # zero; use a weak logit-scale variance floor so the first group modes are shrunk.
-    Psi_inv = _ridgeInv(Psi_pql, psi_0_floor) if likelihood_family == 1 else _pseudoInverse(Psi_pql)
+    # Pass 1: pooled β₀, cold start.  Discrete outcomes can make Psi_pql exactly
+    # zero in weakly identified directions; use a weak variance floor for shrinkage.
+    Psi_inv = (
+        _ridgeInv(Psi_pql, psi_0_floor) if likelihood_family in (1, 2) else _pseudoInverse(Psi_pql)
+    )
     beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, blup_kh_var = _pqlPass(
         beta_0, Psi_inv, *pass_args
     )
