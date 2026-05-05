@@ -26,6 +26,9 @@ _BERNOULLI_INITIAL_PSI_FLOOR = 0.25
 _BERNOULLI_HG_INV_EIG_CAP = 25.0
 _BERNOULLI_PSI_EIG_CAP = 49.0
 _BERNOULLI_BLUP_VAR_INFLATION = 1.5
+_BERNOULLI_CORR_SHRINKAGE_C = 10.0
+_BERNOULLI_BLUP_KH_VAR_CAP = 0.2
+_BERNOULLI_HIGH_D_BLUP_VAR_FLOOR = 0.25
 
 
 def _eighWithJitter(M: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -81,6 +84,12 @@ def _psdClampEigenvalues(M: torch.Tensor, max_eig: torch.Tensor | float) -> torc
         cap = M.new_full((flat_M.shape[0], 1), float(max_eig))
     vals = torch.minimum(vals, cap.clamp(min=0.0))
     return (vecs @ torch.diag_embed(vals) @ vecs.mT).reshape(*leading_shape, q, q)
+
+
+def _shrinkOffDiagonal(M: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
+    """Shrink covariance off-diagonals toward zero while preserving the diagonal."""
+    diag = torch.diag_embed(M.diagonal(dim1=-2, dim2=-1))
+    return alpha[:, None, None] * M + (1.0 - alpha[:, None, None]) * diag
 
 
 def _pseudoInverse(M: torch.Tensor) -> torch.Tensor:
@@ -167,7 +176,15 @@ def _pqlPass(
     likelihood_family: int,
     n_newton: int = 3,
     bg_init: torch.Tensor | None = None,  # warm start; None = cold start from zeros
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
     """One PQL pass: damped Newton → Ψ̂_Lap M-step → GLS β̂ and BLUPs.
 
     Newton starts from bg_init (or zeros if None) under (beta, Psi_inv).
@@ -185,6 +202,7 @@ def _pqlPass(
     Kg_inv     : (B, m, q, q) GLS posterior covariance (ZWZ + Psi_lap_inv)^{-1}
     mean_Hg_inv: (B, q, q)    mean Laplace posterior covariance across groups
     resid_gls  : (B, m, n)    working residual ỹ − Xβ̂_GLS (masked)
+    blup_kh_var: (B, m, q)    beta-estimation uncertainty contribution to blup_var
     """
     B, m, _, d = Xm.shape
     q = Zm.shape[-1]
@@ -288,9 +306,20 @@ def _pqlPass(
 
     blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
 
+    eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
+    beta_var = _safeSolve(sum_A_reg, eye_d).diagonal(dim1=-2, dim2=-1).clamp(min=1e-8)
+    K_ZWX = torch.einsum('bmqr,bmrd->bmqd', Kg_inv, ZWX_f)
+    blup_kh_var = (K_ZWX.square() * beta_var[:, None, None, :]).sum(dim=-1)
+    blup_kh_var = (blup_kh_var * mask_m[:, :, None]).nan_to_num(nan=0.0, posinf=0.0)
+    if likelihood_family == 1:
+        kh_scale = max(min((d - 8) / 8.0, 1.0), 0.0)
+        blup_kh_var = blup_kh_var.clamp(max=_BERNOULLI_BLUP_KH_VAR_CAP * kh_scale)
+    else:
+        blup_kh_var = torch.zeros_like(blup_kh_var)
+
     # Return Kg_inv for blup_var: (ZWZ + Psi_lap^{-1})^{-1} is the posterior covariance
     # of b_g under the final Psi_lap estimate — consistent with the Normal path's se²·W_g.
-    return beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls
+    return beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, blup_kh_var
 
 
 # ---------------------------------------------------------------------------
@@ -906,7 +935,9 @@ def _lmmGlmm(
     # Pass 1: pooled β₀, cold start.  Bernoulli separation often makes Psi_pql exactly
     # zero; use a weak logit-scale variance floor so the first group modes are shrunk.
     Psi_inv = _ridgeInv(Psi_pql, psi_0_floor) if likelihood_family == 1 else _pseudoInverse(Psi_pql)
-    beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls = _pqlPass(beta_0, Psi_inv, *pass_args)
+    beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, blup_kh_var = _pqlPass(
+        beta_0, Psi_inv, *pass_args
+    )
     beta_gls, Psi_lap = _sanitize(beta_gls, Psi_lap)
     if uncorr is not None:
         Psi_lap = torch.where(
@@ -922,7 +953,7 @@ def _lmmGlmm(
         psi_diag_prev = Psi_lap.diagonal(dim1=-2, dim2=-1)
 
         Psi_inv = _ridgeInv(Psi_lap, psi_0_floor)
-        beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls = _pqlPass(
+        beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, blup_kh_var = _pqlPass(
             beta_gls, Psi_inv, *pass_args, bg_init=blups
         )
         beta_gls, Psi_lap = _sanitize(beta_gls, Psi_lap)
@@ -942,6 +973,9 @@ def _lmmGlmm(
     beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
     blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
     Psi_lap = Psi_lap.nan_to_num(nan=0.0, posinf=0.0)
+    if likelihood_family == 1:
+        corr_alpha = G / (G + _BERNOULLI_CORR_SHRINKAGE_C)
+        Psi_lap = _shrinkOffDiagonal(Psi_lap, corr_alpha)
     Psi_pql = Psi_pql.nan_to_num(nan=0.0, posinf=0.0)
     mean_Hg_inv = mean_Hg_inv.nan_to_num(nan=0.0, posinf=0.0)
     sigma_rfx_est = Psi_lap.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().nan_to_num()
@@ -956,8 +990,11 @@ def _lmmGlmm(
     # Use G as denominator (no d subtraction) since PQL doesn't have an explicit df formula.
     df_sigma = G.clamp(min=1.0)
     blup_var = blup_var * (1.0 + 2.0 / df_sigma)[:, None, None]
+    blup_var = blup_var + blup_kh_var
     if likelihood_family == 1:
         blup_var = blup_var * _BERNOULLI_BLUP_VAR_INFLATION
+        if d > 8:
+            blup_var = blup_var + _BERNOULLI_HIGH_D_BLUP_VAR_FLOOR * mask_m[:, :, None]
 
     # Per-group mean working residual (after removing fixed effects)
     resid_g = (resid_gls.sum(dim=2) / ns.clamp(min=1.0) * mask_m).unsqueeze(-1)  # (B, m, 1)
