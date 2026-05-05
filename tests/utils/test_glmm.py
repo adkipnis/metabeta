@@ -221,6 +221,92 @@ def test_glmm_bernoulli_separation_does_not_inflate_sigma_rfx():
     assert (vals >= -1e-5).all()
 
 
+def test_glmm_normal_rank_deficient_z_groups_do_not_inflate_sigma_rfx():
+    B, m, n_per_group, d, q = 1, 24, 5, 4, 2
+    Xm = torch.zeros(B, m, n_per_group, d)
+    Zm = torch.zeros(B, m, n_per_group, q)
+    mask_n = torch.ones(B, m, n_per_group)
+    mask_m = torch.ones(B, m)
+    ns = torch.full((B, m), float(n_per_group))
+    n_total = torch.full((B,), m * n_per_group)
+
+    x = torch.linspace(-1.0, 1.0, n_per_group)
+    beta = torch.tensor([0.8, 0.4, 0.8, -0.8])
+    for g in range(m):
+        Xm[:, g, :, 0] = 1.0
+        Xm[:, g, :, 1] = float(g % 2)
+        Xm[:, g, :, 2] = x
+        Xm[:, g, :, 3] = float((g % 3) - 1) * x
+        Zm[:, g, :, 0] = 1.0
+        Zm[:, g, :, 1] = 1.0
+
+    ym = torch.einsum('bmnd,d->bmn', Xm, beta)
+    ym = ym + 0.002 * torch.sin(torch.arange(m * n_per_group).reshape(1, m, n_per_group))
+
+    result = glmm(
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        ns,
+        n_total,
+        likelihood_family=0,
+    )
+
+    assert torch.isfinite(result['sigma_rfx_est']).all()
+    assert torch.isfinite(result['Psi']).all()
+    assert torch.isfinite(result['blup_est']).all()
+    assert result['sigma_rfx_est'].amax().item() < 0.5
+    assert result['blup_est'].abs().amax().item() < 0.5
+
+
+def test_glmm_normal_mixed_rank_z_groups_keep_sigma_bounded():
+    B, m, n_per_group, d, q = 1, 16, 8, 3, 2
+    Xm = torch.zeros(B, m, n_per_group, d)
+    Zm = torch.zeros(B, m, n_per_group, q)
+    mask_n = torch.ones(B, m, n_per_group)
+    mask_m = torch.ones(B, m)
+    ns = torch.full((B, m), float(n_per_group))
+    n_total = torch.full((B,), m * n_per_group)
+
+    x = torch.linspace(-1.0, 1.0, n_per_group)
+    beta = torch.tensor([0.2, -0.4, 0.1])
+    rfx = torch.zeros(m, q)
+    for g in range(m):
+        Xm[:, g, :, 0] = 1.0
+        Xm[:, g, :, 1] = x
+        Xm[:, g, :, 2] = float(g - m / 2) / m
+        Zm[:, g, :, 0] = 1.0
+        if g < m // 2:
+            Zm[:, g, :, 1] = 1.0
+        else:
+            Zm[:, g, :, 1] = x
+        rfx[g, 0] = 0.25 * torch.sin(torch.tensor(float(g)))
+        rfx[g, 1] = 0.35 * torch.cos(torch.tensor(float(g)))
+
+    ym = torch.einsum('bmnd,d->bmn', Xm, beta)
+    ym = ym + torch.einsum('bmnq,mq->bmn', Zm, rfx)
+    ym = ym + 0.05 * torch.sin(torch.arange(m * n_per_group).reshape(1, m, n_per_group))
+
+    result = glmm(
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        ns,
+        n_total,
+        likelihood_family=0,
+    )
+
+    assert torch.isfinite(result['sigma_eps_est']).all()
+    assert torch.isfinite(result['sigma_rfx_est']).all()
+    assert torch.isfinite(result['blup_est']).all()
+    assert result['sigma_eps_est'].item() < 0.2
+    assert result['sigma_rfx_est'].amax().item() < 1.5
+
+
 # ---------------------------------------------------------------------------
 # 4. Recovery test: nonzero rfx → sigma_rfx_est should be positive
 # ---------------------------------------------------------------------------
