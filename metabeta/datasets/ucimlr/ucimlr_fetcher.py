@@ -56,7 +56,9 @@ def fetchDatasetMetadata(dataset_id: int) -> dict[str, Any]:
     response.raise_for_status()
     payload = response.json()
     if payload.get('status') != 200 or 'data' not in payload:
-        raise ValueError(f'Metadata API error for id={dataset_id}: {payload.get("message", "unknown")}')
+        raise ValueError(
+            f'Metadata API error for id={dataset_id}: {payload.get("message", "unknown")}'
+        )
     d = payload['data']
     return {
         'id': dataset_id,
@@ -137,20 +139,24 @@ def main():
             print(f'[{dataset_id}] Fetching {dataset_name} (n={n_instances:,})...')
             data = fetch_ucirepo(id=dataset_id)
 
-            metadata[dataset_id].update({
-                'name': getattr(data.metadata, 'name', dataset_name),
-                'uci_id': getattr(data.metadata, 'uci_id', dataset_id),
-                'abstract': getattr(data.metadata, 'abstract', None),
-                'area': getattr(data.metadata, 'area', None),
-                'task': getattr(data.metadata, 'task', None),
-                'characteristics': getattr(data.metadata, 'characteristics', None),
-                'num_instances': getattr(data.metadata, 'num_instances', n_instances),
-                'num_features': getattr(data.metadata, 'num_features', None),
-                'year': getattr(data.metadata, 'year_of_dataset_creation', None),
-                'intro_paper': getattr(data.metadata, 'intro_paper', None),
-                'additional_info': getattr(data.metadata, 'additional_info', None),
-                'variables': data.variables.to_dict('records') if data.variables is not None else None,
-            })
+            metadata[dataset_id].update(
+                {
+                    'name': getattr(data.metadata, 'name', dataset_name),
+                    'uci_id': getattr(data.metadata, 'uci_id', dataset_id),
+                    'abstract': getattr(data.metadata, 'abstract', None),
+                    'area': getattr(data.metadata, 'area', None),
+                    'task': getattr(data.metadata, 'task', None),
+                    'characteristics': getattr(data.metadata, 'characteristics', None),
+                    'num_instances': getattr(data.metadata, 'num_instances', n_instances),
+                    'num_features': getattr(data.metadata, 'num_features', None),
+                    'year': getattr(data.metadata, 'year_of_dataset_creation', None),
+                    'intro_paper': getattr(data.metadata, 'intro_paper', None),
+                    'additional_info': getattr(data.metadata, 'additional_info', None),
+                    'variables': data.variables.to_dict('records')
+                    if data.variables is not None
+                    else None,
+                }
+            )
 
             X = data.data.features
             y = data.data.targets
@@ -174,15 +180,17 @@ def main():
                     target_rows = data.variables[data.variables['role'] == 'Target']
                     if len(target_rows) > 0:
                         target_var_type = target_rows.iloc[0].get('type')
-                is_classification = (
-                    'classification' in task_type
-                    or target_var_type in ('Categorical', 'Binary')
+                is_classification = 'classification' in task_type or target_var_type in (
+                    'Categorical',
+                    'Binary',
                 )
 
                 if is_classification:
                     # Strip trailing punctuation/whitespace from string labels
                     # (train/test merge artefact in e.g. Adult/Census Income).
-                    if pd.api.types.is_object_dtype(df['y']) or pd.api.types.is_string_dtype(df['y']):
+                    if pd.api.types.is_object_dtype(df['y']) or pd.api.types.is_string_dtype(
+                        df['y']
+                    ):
                         df['y'] = df['y'].str.strip().str.rstrip('.')
 
                     n_classes = df['y'].nunique()
@@ -199,9 +207,9 @@ def main():
 
             # Apply categorical type annotations from UCI metadata
             if data.variables is not None:
-                cat_cols = data.variables[
-                    data.variables['type'].isin(['Categorical', 'Binary'])
-                ]['name'].tolist()
+                cat_cols = data.variables[data.variables['type'].isin(['Categorical', 'Binary'])][
+                    'name'
+                ].tolist()
                 for col in cat_cols:
                     if col in df.columns:
                         df[col] = df[col].astype('category')
