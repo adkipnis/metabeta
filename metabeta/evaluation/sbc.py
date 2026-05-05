@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from scipy.stats import binom
+from scipy.stats import binom, beta as beta_dist
 
 from metabeta.utils.evaluation import Proposal
 from metabeta.utils.regularization import corrToLower
@@ -69,6 +69,7 @@ def simultaneousBands(
     max_n: int = 1000,  # upper bound for n_eff
     n_sim: int = 2000,  # number of draws from the uniform
     eps: float = 1e-5,
+    smooth: bool = False,  # use beta distribution for smooth bands
 ) -> tuple[np.ndarray, ...]:
     """Simultanous ECDF bands as proposed by Sailynoja et al. (2022):
     - sample n_sim uniform values for each posterior
@@ -76,12 +77,18 @@ def simultaneousBands(
     - use the alpha quantile of these probabilites instead of exact alpha
     """
     K = min(n_eff, max_n)
-    z = np.linspace(0.0 + eps, 1.0 - eps, K)
+    z_sim = np.linspace(0.0 + eps, 1.0 - eps, K)
     u = np.random.uniform(size=(n_sim, n_eff))
-    gammas = _minimalCoverageProbs(z, u)   # (n_sim, )
+    gammas = _minimalCoverageProbs(z_sim, u)   # (n_sim, )
     gamma = np.percentile(gammas, 100.0 * alpha)
-    lower = binom(n_eff, z).ppf(gamma / 2.0) / n_eff
-    upper = binom(n_eff, z).ppf(1.0 - gamma / 2.0) / n_eff
+    if smooth:
+        z = np.linspace(0.0 + eps, 1.0 - eps, max(K, 500))
+        lower = beta_dist.ppf(gamma / 2.0, n_eff * z, n_eff * (1 - z) + 1)
+        upper = beta_dist.ppf(1.0 - gamma / 2.0, n_eff * z + 1, n_eff * (1 - z))
+    else:
+        z = z_sim
+        lower = binom(n_eff, z).ppf(gamma / 2.0) / n_eff
+        upper = binom(n_eff, z).ppf(1.0 - gamma / 2.0) / n_eff
     if diff:
         lower -= z
         upper -= z
