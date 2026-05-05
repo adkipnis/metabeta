@@ -5,6 +5,8 @@ All tests use synthetic data (no fixture files needed).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import torch
 import pytest
 
@@ -26,9 +28,11 @@ def make_cfg(
     likelihood_family: int = 0,
     analytical_context: bool = True,
     analytical_blup_from_globals: bool = True,
+    posterior_l_type: str = 'coupling',
 ) -> ApproximatorConfig:
     s_cfg = SummarizerConfig(d_model=16, d_ff=16, d_output=16, n_blocks=1)
     p_cfg = PosteriorConfig(n_blocks=2)
+    p_l_cfg = PosteriorConfig(type=posterior_l_type)
     return ApproximatorConfig(
         d_ffx=d_ffx,
         d_rfx=d_rfx,
@@ -38,7 +42,7 @@ def make_cfg(
         analytical_blup_from_globals=analytical_blup_from_globals,
         summarizer_l=s_cfg,
         summarizer_g=s_cfg,
-        posterior_l=p_cfg,
+        posterior_l=p_l_cfg,
         posterior_g=p_cfg,
     )
 
@@ -213,6 +217,27 @@ def test_model_from_yaml_reads_analytical_context_flags(tmp_path):
     assert cfg.analytical_blup_from_globals is False
 
 
+def test_model_from_yaml_reads_analytical_local_posterior():
+    from metabeta.utils.config import modelFromYaml
+
+    cfg_path = (
+        Path(__file__).resolve().parents[2] / 'metabeta' / 'configs' / 'models' / 'large-r-ana.yaml'
+    )
+    cfg = modelFromYaml(cfg_path, d_ffx=2, d_rfx=2, likelihood_family=0)
+
+    assert cfg.posterior_l.type == 'analytical'
+    assert cfg.posterior_l.n_blocks == 1
+    model = Approximator(cfg)
+    assert model.analytical_local_posterior
+    assert not hasattr(model, 'posterior_l')
+
+
+def test_analytical_local_rejects_non_gaussian():
+    cfg = make_cfg(likelihood_family=1, posterior_l_type='analytical')
+    with pytest.raises(ValueError, match='only supported for Gaussian'):
+        Approximator(cfg)
+
+
 # ---------------------------------------------------------------------------
 # forward pass
 # ---------------------------------------------------------------------------
@@ -234,6 +259,16 @@ def test_forward_without_corr_flag_unchanged():
     log_probs = model_off.forward(batch)
     assert torch.isfinite(log_probs['global']).all()
     assert torch.isfinite(log_probs['local']).all()
+
+
+def test_forward_analytical_local_returns_zero_local_term():
+    model = Approximator(make_cfg(posterior_l_type='analytical'))
+    batch = make_batch()
+    log_probs = model.forward(batch)
+
+    assert torch.isfinite(log_probs['global']).all()
+    assert log_probs['local'].shape == batch['mask_m'].shape
+    assert torch.equal(log_probs['local'], torch.zeros_like(log_probs['local']))
 
 
 def test_local_context_changes_with_globals_when_blup_from_globals():
@@ -308,6 +343,15 @@ def test_forward_backward_gradients():
     assert all(g is None or torch.isfinite(g).all() for g in grads)
 
 
+def test_analytical_local_drops_local_flow_params():
+    flow_model = Approximator(make_cfg())
+    ana_model = Approximator(make_cfg(posterior_l_type='analytical'))
+
+    assert hasattr(flow_model, 'posterior_l')
+    assert not hasattr(ana_model, 'posterior_l')
+    assert ana_model.n_params < flow_model.n_params
+
+
 # ---------------------------------------------------------------------------
 # backward pass / sampling
 # ---------------------------------------------------------------------------
@@ -329,6 +373,25 @@ def test_backward_proposal_shapes():
     assert proposal.log_prob_g.shape == (b, n_samples)
     assert proposal.samples_l.shape == (b, m, n_samples, q)
     assert proposal.log_prob_l.shape == (b, m, n_samples)
+
+
+def test_backward_analytical_local_proposal_shapes_and_finite():
+    b, m, n, d, q = 2, 4, 8, 2, 2
+    n_samples = 7
+    model = Approximator(make_cfg(d_ffx=d, d_rfx=q, posterior_l_type='analytical'))
+    batch = make_batch(b=b, m=m, n=n, d=d, q=q)
+
+    proposal = model.estimate(batch, n_samples=n_samples)
+
+    d_corr = model.d_corr
+    expected_D = d + q + 1 + d_corr
+    assert proposal.samples_g.shape == (b, n_samples, expected_D)
+    assert proposal.log_prob_g.shape == (b, n_samples)
+    assert proposal.samples_l.shape == (b, m, n_samples, q)
+    assert proposal.log_prob_l.shape == (b, m, n_samples)
+    assert torch.isfinite(proposal.samples_l).all()
+    assert torch.isfinite(proposal.log_prob_l).all()
+    assert not torch.allclose(proposal.log_prob_l, torch.zeros_like(proposal.log_prob_l))
 
 
 def test_proposal_d_and_q():
