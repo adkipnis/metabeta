@@ -283,9 +283,7 @@ def detectGroupCandidates(
 
     _bl = set(BLACKLIST)
     eligible = [
-        col
-        for col in eligible
-        if not any(tok in _bl for tok in re.split(r'[\s_]+', col.lower()))
+        col for col in eligible if not any(tok in _bl for tok in re.split(r'[\s_]+', col.lower()))
     ]
     if not eligible:
         return []
@@ -348,9 +346,7 @@ def detectGroupCandidates(
 # ---------------------------------------------------------------------------
 
 
-def _corrFilter(
-    df: pd.DataFrame, threshold: float = 0.95
-) -> tuple[pd.DataFrame, set[str]]:
+def _corrFilter(df: pd.DataFrame, threshold: float = 0.95) -> tuple[pd.DataFrame, set[str]]:
     """Drop one column from each highly correlated pair (|r| > threshold).
 
     Greedy: at each step, remove the column with the higher mean absolute
@@ -681,9 +677,7 @@ class DataPreprocessor:
         # variable has been found yet, route the highest-cardinality categorical column
         # as the grouping factor, provided it has ≥ 2 observations per level on average.
         if not group_name:
-            hi_card = [
-                c for c in categorical(df).tolist() if df[c].nunique() > self.max_categories
-            ]
+            hi_card = [c for c in categorical(df).tolist() if df[c].nunique() > self.max_categories]
             if hi_card:
                 best_hi = max(hi_card, key=lambda c: df[c].nunique())
                 if len(df) / df[best_hi].nunique() >= 2:
@@ -802,9 +796,7 @@ class DataPreprocessor:
         if self._categorical_cols:
             # Drop the most frequent level as the reference category, matching
             # R's contr.treatment convention of using the largest group as baseline.
-            modal_refs = [
-                df[col].value_counts().index[0] for col in self._categorical_cols
-            ]
+            modal_refs = [df[col].value_counts().index[0] for col in self._categorical_cols]
             self._encoder: OneHotEncoder | None = OneHotEncoder(
                 drop=modal_refs,
                 sparse_output=False,
@@ -891,9 +883,7 @@ def preprocessAllGroups(
     df_no_y = df.drop(columns=['y'], errors='ignore')
     candidates = detectGroupCandidates(df_no_y)
     if len(candidates) > MAX_GROUP_CANDIDATES:
-        logger.warning(
-            f'{len(candidates)} group candidates; keeping top {MAX_GROUP_CANDIDATES}.'
-        )
+        logger.warning(f'{len(candidates)} group candidates; keeping top {MAX_GROUP_CANDIDATES}.')
         candidates = candidates[:MAX_GROUP_CANDIDATES]
 
     out: dict[str, dict] = {}
