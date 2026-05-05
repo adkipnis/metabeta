@@ -39,9 +39,9 @@ class SummarizerConfig(BaseModel):
 
 
 class PosteriorConfig(BaseModel):
-    n_blocks: int = Field(gt=0)
+    n_blocks: int = Field(gt=0, default=1)
     subnet_kwargs: dict | None = None
-    type: Literal['coupling'] = 'coupling'
+    type: Literal['coupling', 'analytical'] = 'coupling'
     transform: Literal['affine', 'spline'] = 'affine'
     base_family: Literal['normal', 'student'] = 'normal'
     base_trainable: bool = True
@@ -95,6 +95,8 @@ def modelFromYaml(
     # Global config is the full spec; local inherits from global and overrides what differs
     s_g = model_cfg['summarizer_g']
     p_g = model_cfg['posterior_g']
+    p_l = model_cfg.get('posterior_l', {})
+    posterior_l_cfg = p_l if p_l.get('type') == 'analytical' else {**p_g, **p_l}
     return ApproximatorConfig(
         d_ffx=d_ffx,
         d_rfx=d_rfx,
@@ -105,7 +107,7 @@ def modelFromYaml(
         summarizer_g=SummarizerConfig(**s_g),
         summarizer_l=SummarizerConfig(**{**s_g, **model_cfg.get('summarizer_l', {})}),
         posterior_g=PosteriorConfig(**p_g),
-        posterior_l=PosteriorConfig(**{**p_g, **model_cfg.get('posterior_l', {})}),
+        posterior_l=PosteriorConfig(**posterior_l_cfg),
     )
 
 
