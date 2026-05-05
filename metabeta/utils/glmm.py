@@ -37,6 +37,84 @@ _POISSON_CORR_SHRINKAGE_C = 20.0
 _POISSON_ETA_TAPER_WIDTH = 0.5
 _POISSON_BETA_CLAMP = 10.0
 _POISSON_BLUP_CLAMP = 10.0
+_NORMAL_Z_COND_CAP = 1e6
+_NORMAL_RANK_REL_TOL = 1e-5
+_NORMAL_RANK_ABS_TOL = 1e-8
+_NORMAL_FULL_MIN_EM = 3
+
+
+def _rankFromEigenvalues(
+    vals: torch.Tensor,
+    rel_tol: float = _NORMAL_RANK_REL_TOL,
+    abs_tol: float = _NORMAL_RANK_ABS_TOL,
+) -> torch.Tensor:
+    """Numerical rank from non-negative eigenvalues."""
+    vals = vals.clamp(min=0.0)
+    scale = vals.amax(dim=-1, keepdim=True)
+    tol = torch.maximum(scale * rel_tol, vals.new_tensor(abs_tol))
+    return (vals > tol).sum(dim=-1)
+
+
+def _groupZDiagnostics(
+    ZtZ: torch.Tensor,
+    mask_m: torch.Tensor,
+    ns: torch.Tensor,
+    q: int,
+    cond_cap: float = _NORMAL_Z_COND_CAP,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Identify groups whose random-effect design can estimate all q components."""
+    B, m, _, _ = ZtZ.shape
+    vals, _ = _eighWithJitter(ZtZ.reshape(B * m, q, q))
+    vals = vals.clamp(min=0.0).reshape(B, m, q)
+    ranks = _rankFromEigenvalues(vals).to(ZtZ.dtype)
+
+    max_eig = vals.amax(dim=-1)
+    rank_tol = torch.maximum(
+        max_eig[..., None] * _NORMAL_RANK_REL_TOL,
+        vals.new_tensor(_NORMAL_RANK_ABS_TOL),
+    )
+    min_active_eig = torch.where(vals > rank_tol, vals, vals.new_full((), float('inf'))).amin(
+        dim=-1
+    )
+    cond = max_eig / min_active_eig.clamp(min=1e-30)
+
+    diag_sum = (ZtZ.diagonal(dim1=-2, dim2=-1).clamp(min=0.0) * mask_m[:, :, None]).sum(dim=1)
+    diag_scale = diag_sum.amax(dim=-1, keepdim=True)
+    diag_tol = torch.maximum(
+        diag_scale * _NORMAL_RANK_REL_TOL,
+        diag_sum.new_tensor(_NORMAL_RANK_ABS_TOL),
+    )
+    active_components = diag_sum > diag_tol
+    active_count = active_components.sum(dim=-1).to(ZtZ.dtype)
+    informative = (
+        mask_m.bool()
+        & (active_count[:, None] > 0)
+        & (ns > active_count[:, None] + 1)
+        & (ranks >= active_count[:, None])
+        & (cond <= cond_cap)
+    )
+    return informative.to(ZtZ.dtype), ranks * mask_m, cond, active_components, active_count
+
+
+def _gramRank(A: torch.Tensor) -> torch.Tensor:
+    """Numerical rank of a batched Gram matrix."""
+    vals, _ = _eighWithJitter(0.5 * (A + A.mT))
+    return _rankFromEigenvalues(vals).to(A.dtype)
+
+
+def _maskedMean(values: torch.Tensor, mask: torch.Tensor, dim: int) -> torch.Tensor:
+    count = mask.sum(dim=dim).clamp(min=1.0)
+    return (values * mask).sum(dim=dim) / count
+
+
+def _maskedMedian(values: torch.Tensor, mask: torch.Tensor, dim: int) -> torch.Tensor:
+    masked = torch.where(mask.bool(), values, values.new_full((), float('inf')))
+    sorted_vals = masked.sort(dim=dim).values
+    count = mask.sum(dim=dim).long()
+    kth = ((count - 1).clamp(min=0)).unsqueeze(dim)
+    kth = kth.expand(*sorted_vals.shape[:dim], 1, *sorted_vals.shape[dim + 1 :])
+    median = sorted_vals.gather(dim, kth).squeeze(dim)
+    return torch.where(count > 0, median, torch.zeros_like(median))
 
 
 def _eighWithJitter(M: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -553,6 +631,7 @@ def _lmmNormalFull(
     n_total: torch.Tensor,  # (B,)       total active observations
     n_em: int = 3,
     uncorr: torch.Tensor | None = None,  # (B,) bool — force Ψ diagonal for these datasets
+    mask_q: torch.Tensor | None = None,  # (B, q) bool — active random-effect components
 ) -> dict[str, torch.Tensor]:
     """GLS estimator for the LME y_g = X_g β + Z_g b_g + ε_g, b_g ~ N(0, Ψ).
 
@@ -565,6 +644,8 @@ def _lmmNormalFull(
     """
     B, m, n, d = Xm.shape
     q = Zm.shape[-1]
+    if mask_q is not None:
+        Zm = Zm * mask_q.to(device=Zm.device, dtype=Zm.dtype)[:, None, None, :q]
     N = n_total.float()                               # (B,)
     G = mask_m.sum(dim=1).clamp(min=1.0)              # (B,)
     active = mask_m.bool()                            # (B, m)
@@ -577,6 +658,17 @@ def _lmmNormalFull(
     # ------------------------------------------------------------------
     ZtZ = torch.einsum('bmnq,bmnr->bmqr', Zm, Zm)                # (B, m, q, q)
     ZtZ_safe = torch.where(active[:, :, None, None], ZtZ, eye_q)  # (B, m, q, q)
+    mom_mask, z_rank, _, active_components, active_count = _groupZDiagnostics(ZtZ, mask_m, ns, q)
+    G_mom_raw = mom_mask.sum(dim=1)                               # (B,)
+    G_mom = G_mom_raw.clamp(min=1.0)                              # (B,)
+    mom4 = mom_mask[:, :, None, None]                              # (B, m, 1, 1)
+    enough_full_mom = G_mom_raw >= torch.maximum(
+        active_count + 1.0, G_mom_raw.new_full((B,), float(d + 1))
+    )
+    enough_diag_mom = (G_mom_raw >= 2.0) & (active_count > 0)
+    active_q = active_components.to(Zm.dtype)
+    active_qq = active_q[:, :, None] * active_q[:, None, :]
+
     ZtZ_inv = _safeSolve(
         ZtZ_safe + _adaptiveRidgeBm(ZtZ_safe), eye_q_bm
     )                                                              # (B, m, q, q)
@@ -595,7 +687,8 @@ def _lmmNormalFull(
 
     resid_M = My - torch.einsum('bmnd,bd->bmn', MX, beta_wg)     # (B, m, n)
     ss_w = resid_M.square().sum(dim=(1, 2))                       # (B,)
-    df_w = (N - G * q - (d - q)).clamp(min=1.0)                   # (B,)
+    mx_rank = _gramRank(MXtMX)
+    df_w = (N - z_rank.sum(dim=1) - mx_rank).clamp(min=1.0)       # (B,)
     sigma_eps_sq = (ss_w / df_w).clamp(min=0.0)                   # (B,)
 
     # ------------------------------------------------------------------
@@ -607,14 +700,6 @@ def _lmmNormalFull(
     resid_full = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_ols)) * mask_n  # (B, m, n)
     Ztr = torch.einsum('bmnq,bmn->bmq', Zm, resid_full)          # (B, m, q)
     bhat = torch.einsum('bmqr,bmr->bmq', ZtZ_inv, Ztr) * mask_m[:, :, None]  # (B, m, q) b̂_g
-
-    # For the Psi MoM, exclude groups with n_g ≤ q+1: their ZtZ is near-singular,
-    # so ZtZ_inv blows up and bhat can be orders of magnitude larger than the true b_g,
-    # inflating Psi_raw catastrophically. Groups with n_g > q+1 have sufficient
-    # within-group df for a reliable OLS estimate.
-    mom_mask = mask_m * (ns > q + 1).float()    # (B, m)
-    G_mom = mom_mask.sum(dim=1).clamp(min=1.0)  # (B,)
-    mom4 = mom_mask[:, :, None, None]            # (B, m, 1, 1)
 
     bhat_outer = torch.einsum('bmq,bmr->bmqr', bhat, bhat)        # (B, m, q, q)
     ZtZ_bhat = torch.einsum('bmqp,bmpk->bmqk', ZtZ_safe, bhat_outer)  # (B, m, q, q)
@@ -638,16 +723,40 @@ def _lmmNormalFull(
     ) / G_mom[
         :, None
     ]                                       # (B, q)
-    bhat_var = (bhat.square() * mom_mask[:, :, None]).sum(dim=1) / G_mom[:, None]  # (B, q)
-    psi_diag_floor = (bhat_var - sigma_eps_sq[:, None] * mean_ZtZ_inv_diag).clamp(min=0.0) * 0.5
+    bhat_signal = (
+        bhat.square() - sigma_eps_sq[:, None, None] * ZtZ_inv.diagonal(dim1=-2, dim2=-1)
+    ).clamp(min=0.0)
+    bhat_var = _maskedMean(bhat.square(), mom_mask[:, :, None], dim=1)  # (B, q)
+    signal_mean = _maskedMean(bhat_signal, mom_mask[:, :, None], dim=1)
+    signal_cap = (4.0 * signal_mean).clamp(min=sigma_eps_sq[:, None] * 1e-6)
+    signal_winsor = torch.minimum(bhat_signal, signal_cap[:, None, :])
+    signal_mean = _maskedMean(signal_winsor, mom_mask[:, :, None], dim=1)
+    signal_median = _maskedMedian(signal_winsor, mom_mask[:, :, None], dim=1)
+    psi_diag_signal = torch.minimum(signal_mean, 2.0 * signal_median)
+
+    active_ns_mean = _maskedMean(ns, mask_m, dim=1).clamp(min=1.0)
+    fallback_diag = (sigma_eps_sq / active_ns_mean).clamp(min=1e-10)[:, None].expand(B, q)
+    fallback_diag = fallback_diag * active_q
+    psi_diag_floor = torch.where(
+        enough_diag_mom[:, None],
+        torch.maximum(0.5 * psi_diag_signal * active_q, fallback_diag),
+        fallback_diag,
+    )
+    psi_eig_cap = torch.maximum(
+        (4.0 * psi_diag_signal * active_q).amax(dim=1),
+        fallback_diag.amax(dim=1),
+    )
     Psi_raw = Psi_raw + torch.diag_embed(
         (psi_diag_floor - Psi_raw.diagonal(dim1=-2, dim2=-1)).clamp(min=0.0)
     )                                                                   # bump diag to floor
 
     Psi_raw = 0.5 * (Psi_raw + Psi_raw.mT)
+    Psi_raw = Psi_raw * active_qq
+    Psi_raw = torch.where(enough_full_mom[:, None, None], Psi_raw, torch.diag_embed(psi_diag_floor))
     vals, vecs = _eighWithJitter(Psi_raw)                         # (B, q), (B, q, q)
     vals = vals.clamp(min=0.0)
     Psi = vecs @ torch.diag_embed(vals) @ vecs.mT                 # (B, q, q)
+    Psi = _psdClampEigenvalues(Psi, psi_eig_cap)
 
     if uncorr is not None:
         Psi = torch.where(
@@ -705,13 +814,17 @@ def _lmmNormalFull(
     # M-step: Ψ = mean_g(b̂_g b̂_g' + σ²_ε W_g) — exact E[b_g b_g'|data] for Gaussian b_g,
     #         σ_ε² = RSS/(N−d−T) (REML-like, T = Σ_g tr(ZtZ_g W_g) effective df).
     # E-step: W_g via ridge-regularized Ψ⁻¹, then β̂_GLS and BLUPs under updated parameters.
+    beta_rank = mx_rank.clamp(min=1.0, max=float(d))
     for _ in range(n_em):
         # M-step: Ψ using full posterior covariance (exact for Gaussian b_g)
         blup_outer = torch.einsum('bmq,bmr->bmqr', blups, blups)     # (B, m, q, q)
         post_cov = se2[:, None, None, None] * W_g                    # (B, m, q, q)  σ²_ε W_g
-        Psi = _psdProject(
-            ((blup_outer + post_cov) * mask4).sum(dim=1) / G[:, None, None]
+        Psi_em = _psdProject(
+            ((blup_outer + post_cov) * mom4).sum(dim=1) / G_mom[:, None, None]
         )  # (B, q, q)
+        psi_diag_em = Psi_em.diagonal(dim1=-2, dim2=-1).clamp(min=psi_diag_floor)
+        Psi_em = torch.where(enough_full_mom[:, None, None], Psi_em, torch.diag_embed(psi_diag_em))
+        Psi = _psdClampEigenvalues(_psdProject((0.5 * Psi + 0.5 * Psi_em) * active_qq), psi_eig_cap)
         if uncorr is not None:
             Psi = torch.where(
                 uncorr[:, None, None], torch.diag_embed(Psi.diagonal(dim1=-2, dim2=-1)), Psi
@@ -728,8 +841,8 @@ def _lmmNormalFull(
         T = (ZtZ_W.diagonal(dim1=-2, dim2=-1).sum(dim=-1) * mask_m).sum(dim=1)  # (B,)
         # Cap T so the REML denominator N−d−T stays ≥ 10% of N−d, preventing blow-up
         # when T ≈ N−d (λ_g → 1 for all groups at high SNR or near-singular ZtZ_g).
-        T_safe = T.clamp(max=0.9 * (N - d).clamp(min=1.0))
-        se2 = (ss_em / (N - d - T_safe).clamp(min=1.0)).clamp(min=1e-12)
+        T_safe = T.clamp(max=0.9 * (N - beta_rank).clamp(min=1.0))
+        se2 = (ss_em / (N - beta_rank - T_safe).clamp(min=1.0)).clamp(min=1e-12)
 
         # E-step: W_g via ridge-regularized Ψ⁻¹ using updated Ψ and se2
         psi_ridge = se2[:, None, None] * 1e-4 * eye_q
@@ -823,11 +936,23 @@ def lmmNormal(
     n_total: torch.Tensor,  # (B,)
     n_em: int = 3,
     uncorr: torch.Tensor | None = None,
+    mask_q: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     """Closed-form GLS for the Gaussian LMM. Routes to q=1 compacted or full."""
     if Zm.shape[-1] == 1:
         return _lmmNormalCompacted(Xm, ym, mask_n, mask_m, ns, n_total, n_em=n_em)
-    return _lmmNormalFull(Xm, ym, Zm, mask_n, mask_m, ns, n_total, n_em=n_em, uncorr=uncorr)
+    return _lmmNormalFull(
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        ns,
+        n_total,
+        n_em=max(n_em, _NORMAL_FULL_MIN_EM),
+        uncorr=uncorr,
+        mask_q=mask_q,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1130,6 +1255,7 @@ def glmm(
     n_total: torch.Tensor,
     likelihood_family: int = 0,
     eta_rfx: torch.Tensor | None = None,
+    mask_q: torch.Tensor | None = None,
     **kwargs,
 ) -> dict[str, torch.Tensor]:
     """Dispatch to lmmNormal / lmmBernoulli / lmmPoisson by likelihood_family.
@@ -1140,7 +1266,7 @@ def glmm(
     """
     uncorr = (eta_rfx == 0) if eta_rfx is not None else None  # (B,) bool or None
     if likelihood_family == 0:
-        stats = lmmNormal(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr)
+        stats = lmmNormal(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, mask_q=mask_q)
     elif likelihood_family == 1:
         stats = lmmBernoulli(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
     elif likelihood_family == 2:
