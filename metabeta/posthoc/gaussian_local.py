@@ -52,10 +52,11 @@ def analyticalRFX(
     ZtZ = torch.einsum('bmnq,bmnp->bmpq', Z_m, Z_m)             # (B, m, q, q)
     ZtR = torch.einsum('bmnq,bmsn->bmsq', Z_m, r)               # (B, m, S, q)
 
-    eps_sq = se ** 2
-    Lambda = (
-        ZtZ.unsqueeze(2) / eps_sq[:, None, :, None, None]
-        + torch.diag_embed(1.0 / sr ** 2).unsqueeze(1)
+    eps_sq = se**2
+    Lambda = ZtZ.unsqueeze(2) / eps_sq[:, None, :, None, None] + torch.diag_embed(
+        1.0 / sr**2
+    ).unsqueeze(
+        1
     )                                                             # (B, m, S, q, q)
 
     mu = torch.linalg.solve(Lambda, ZtR / eps_sq[:, None, :, None])  # (B, m, S, q)
@@ -67,7 +68,7 @@ def analyticalRFX(
     samples = mu + torch.linalg.solve_triangular(L.mT, z.unsqueeze(-1), upper=True).squeeze(-1)
 
     log_det_L = L.diagonal(dim1=-2, dim2=-1).clamp(min=1e-30).log().sum(-1)  # (B, m, S)
-    log_prob = log_det_L - 0.5 * (z ** 2).sum(-1) - 0.5 * q * math.log(2.0 * math.pi)
+    log_prob = log_det_L - 0.5 * (z**2).sum(-1) - 0.5 * q * math.log(2.0 * math.pi)
 
     return samples, log_prob
 
@@ -100,11 +101,11 @@ def analyticalBLUPStats(
     ZtZ = torch.einsum('bmnq,bmnp->bmpq', Z_m, Z_m)  # (B, m, q, q)
     ZtR = torch.einsum('bmnq,bmsn->bmsq', Z_m, r)    # (B, m, S, q)
 
-    eps_sq = se ** 2
+    eps_sq = se**2
     prior_prec = (
         Sigma_rfx_inv.unsqueeze(1)
         if Sigma_rfx_inv is not None
-        else torch.diag_embed(1.0 / sr ** 2).unsqueeze(1)
+        else torch.diag_embed(1.0 / sr**2).unsqueeze(1)
     )  # (B, 1, S, q, q) → broadcasts to (B, m, S, q, q)
     Lambda = ZtZ.unsqueeze(2) / eps_sq[:, None, :, None, None] + prior_prec  # (B, m, S, q, q)
 
@@ -144,24 +145,35 @@ def gaussianCeiling(
     if lf != 0:
         raise ValueError('gaussianCeiling is only valid for likelihood_family == 0')
 
-    ffx       = batch['ffx'][..., :d_ffx]           # (B, d_ffx)
+    ffx = batch['ffx'][..., :d_ffx]           # (B, d_ffx)
     sigma_rfx = batch['sigma_rfx'][..., :d_rfx]     # (B, d_rfx)
     sigma_eps = batch['sigma_eps']                   # (B,)
     B = ffx.shape[0]
 
     beta_rep = ffx.unsqueeze(1).expand(-1, n_samples, -1)
-    sr_rep   = sigma_rfx.unsqueeze(1).expand(-1, n_samples, -1)
-    se_rep   = sigma_eps.unsqueeze(1).expand(-1, n_samples)
+    sr_rep = sigma_rfx.unsqueeze(1).expand(-1, n_samples, -1)
+    se_rep = sigma_eps.unsqueeze(1).expand(-1, n_samples)
 
     samples_l, _ = analyticalRFX(
-        batch['y'], batch['X'][..., :d_ffx], batch['Z'][..., :d_rfx],
-        beta_rep, sr_rep, se_rep, batch['mask_n'],
+        batch['y'],
+        batch['X'][..., :d_ffx],
+        batch['Z'][..., :d_rfx],
+        beta_rep,
+        sr_rep,
+        se_rep,
+        batch['mask_n'],
     )
 
     global_samples = torch.cat([beta_rep, sr_rep, se_rep.unsqueeze(-1)], dim=-1)
     proposed = {
-        'global': {'samples': global_samples, 'log_prob': torch.zeros(B, n_samples, device=ffx.device)},
-        'local':  {'samples': samples_l,      'log_prob': torch.zeros(B, samples_l.shape[1], n_samples, device=ffx.device)},
+        'global': {
+            'samples': global_samples,
+            'log_prob': torch.zeros(B, n_samples, device=ffx.device),
+        },
+        'local': {
+            'samples': samples_l,
+            'log_prob': torch.zeros(B, samples_l.shape[1], n_samples, device=ffx.device),
+        },
     }
     return Proposal(proposed, has_sigma_eps=True)
 
@@ -178,20 +190,27 @@ def gaussianHybrid(global_proposal: Proposal, batch: dict[str, Tensor]) -> Propo
     if lf != 0:
         raise ValueError('gaussianHybrid is only valid for likelihood_family == 0')
 
-    q     = global_proposal.q
-    beta  = global_proposal.ffx         # (B, S, d_ffx)
-    sr    = global_proposal.sigma_rfx   # (B, S, q)
-    se    = global_proposal.sigma_eps   # (B, S)
+    q = global_proposal.q
+    beta = global_proposal.ffx         # (B, S, d_ffx)
+    sr = global_proposal.sigma_rfx   # (B, S, q)
+    se = global_proposal.sigma_eps   # (B, S)
 
     samples_l, log_prob_l = analyticalRFX(
-        batch['y'], batch['X'][..., :beta.shape[-1]], batch['Z'][..., :q],
-        beta, sr, se, batch['mask_n'],
+        batch['y'],
+        batch['X'][..., : beta.shape[-1]],
+        batch['Z'][..., :q],
+        beta,
+        sr,
+        se,
+        batch['mask_n'],
     )
 
     new_data = {
         'global': dict(global_proposal.data['global']),
-        'local':  {'samples': samples_l, 'log_prob': log_prob_l},
+        'local': {'samples': samples_l, 'log_prob': log_prob_l},
     }
-    out = Proposal(new_data, has_sigma_eps=global_proposal.has_sigma_eps, d_corr=global_proposal.d_corr)
+    out = Proposal(
+        new_data, has_sigma_eps=global_proposal.has_sigma_eps, d_corr=global_proposal.d_corr
+    )
     out.tpd = global_proposal.tpd
     return out

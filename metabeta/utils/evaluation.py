@@ -497,9 +497,11 @@ def nutsConvergeMask(
 
     b = len(total_div)
     f_rhat = (max_rhat > thr['rhat']) if max_rhat is not None else np.zeros(b, bool)
-    f_div  = (total_div / total_samples) > thr['div_rate']
-    f_tree = (mean_treedepth_sat > thr['td']) if mean_treedepth_sat is not None else np.zeros(b, bool)
-    f_ess  = (min_ess < thr['ess']) if min_ess is not None else np.zeros(b, bool)
+    f_div = (total_div / total_samples) > thr['div_rate']
+    f_tree = (
+        (mean_treedepth_sat > thr['td']) if mean_treedepth_sat is not None else np.zeros(b, bool)
+    )
+    f_ess = (min_ess < thr['ess']) if min_ess is not None else np.zeros(b, bool)
     f_ess_tail = (min_ess_tail < thr['ess']) if min_ess_tail is not None else np.zeros(b, bool)
     return ~(f_rhat | f_div | f_tree | f_ess | f_ess_tail)
 

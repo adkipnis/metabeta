@@ -44,7 +44,11 @@ from metabeta.utils.families import (
     logProbFfx,
     logProbSigma,
 )
-from metabeta.utils.regularization import unconstrainedToCholesky, corrLowerToUnconstrained, corrToLower
+from metabeta.utils.regularization import (
+    unconstrainedToCholesky,
+    corrLowerToUnconstrained,
+    corrToLower,
+)
 
 
 _LOG_2PI = math.log(2 * math.pi)
@@ -86,7 +90,7 @@ class HierarchicalModel:
         self.X = data['X']                         # (b, m, n, d)
         self.Z = data['Z']                         # (b, m, n, q)
         self.y = data['y'].unsqueeze(-1)           # (b, m, n, 1)
-        self.mask_n = data['mask_n'].unsqueeze(-1) # (b, m, n, 1)
+        self.mask_n = data['mask_n'].unsqueeze(-1)   # (b, m, n, 1)
 
         # Raw masks — reshaped as needed per operation
         self._mask_m = data['mask_m']              # (b, m)
@@ -104,7 +108,7 @@ class HierarchicalModel:
         self.family_ffx = data['family_ffx']                   # (b,)
         self.family_sigma_rfx = data['family_sigma_rfx']       # (b,)
         if self.has_sigma_eps:
-            self.tau_eps = data['tau_eps'].unsqueeze(-1) + eps # (b, 1)
+            self.tau_eps = data['tau_eps'].unsqueeze(-1) + eps   # (b, 1)
             self.family_sigma_eps = data['family_sigma_eps']   # (b,)
 
         self.eta_rfx: Tensor | None = data.get('eta_rfx')     # (b,) or None
@@ -125,24 +129,24 @@ class HierarchicalModel:
         m.has_sigma_eps = self.has_sigma_eps
         m.eps = self.eps
         m.q = self.q
-        m.X = self.X[bi:bi + 1]
-        m.Z = self.Z[bi:bi + 1]
-        m.y = self.y[bi:bi + 1]
-        m.mask_n = self.mask_n[bi:bi + 1]
-        m._mask_m = self._mask_m[bi:bi + 1]
-        m._mask_q = self._mask_q[bi:bi + 1]
-        m._mask_d_lp = self._mask_d_lp[bi:bi + 1]
-        m._mask_q_lp = self._mask_q_lp[bi:bi + 1]
-        m._mask_mq = self._mask_mq[bi:bi + 1]
-        m.nu_ffx = self.nu_ffx[bi:bi + 1]
-        m.tau_ffx = self.tau_ffx[bi:bi + 1]
-        m.tau_rfx = self.tau_rfx[bi:bi + 1]
-        m.family_ffx = self.family_ffx[bi:bi + 1]
-        m.family_sigma_rfx = self.family_sigma_rfx[bi:bi + 1]
+        m.X = self.X[bi : bi + 1]
+        m.Z = self.Z[bi : bi + 1]
+        m.y = self.y[bi : bi + 1]
+        m.mask_n = self.mask_n[bi : bi + 1]
+        m._mask_m = self._mask_m[bi : bi + 1]
+        m._mask_q = self._mask_q[bi : bi + 1]
+        m._mask_d_lp = self._mask_d_lp[bi : bi + 1]
+        m._mask_q_lp = self._mask_q_lp[bi : bi + 1]
+        m._mask_mq = self._mask_mq[bi : bi + 1]
+        m.nu_ffx = self.nu_ffx[bi : bi + 1]
+        m.tau_ffx = self.tau_ffx[bi : bi + 1]
+        m.tau_rfx = self.tau_rfx[bi : bi + 1]
+        m.family_ffx = self.family_ffx[bi : bi + 1]
+        m.family_sigma_rfx = self.family_sigma_rfx[bi : bi + 1]
         if self.has_sigma_eps:
-            m.tau_eps = self.tau_eps[bi:bi + 1]
-            m.family_sigma_eps = self.family_sigma_eps[bi:bi + 1]
-        m.eta_rfx = self.eta_rfx[bi:bi + 1] if self.eta_rfx is not None else None
+            m.tau_eps = self.tau_eps[bi : bi + 1]
+            m.family_sigma_eps = self.family_sigma_eps[bi : bi + 1]
+        m.eta_rfx = self.eta_rfx[bi : bi + 1] if self.eta_rfx is not None else None
         return m
 
     # ------------------------------------------------------------------
@@ -184,9 +188,9 @@ class HierarchicalModel:
         # Solve L_full @ u_j = rfx_j  per group (lower-triangular)
         b, m, s, q = rfx.shape
         L_exp = L_full.unsqueeze(1).expand(b, m, s, q, q)     # (b, m, s, q, q)
-        return torch.linalg.solve_triangular(
-            L_exp, rfx.unsqueeze(-1), upper=False
-        ).squeeze(-1)                                          # (b, m, s, q)
+        return torch.linalg.solve_triangular(L_exp, rfx.unsqueeze(-1), upper=False).squeeze(
+            -1
+        )                                          # (b, m, s, q)
 
     # ------------------------------------------------------------------
     # Log joint
@@ -194,10 +198,10 @@ class HierarchicalModel:
 
     def logJoint(
         self,
-        ffx: Tensor,                   # (b, s, d)
-        sigma_rfx: Tensor,             # (b, s, q)
-        sigma_eps: Tensor | None,      # (b, s) or None
-        u: Tensor,                     # (b, m, s, q)
+        ffx: Tensor,  # (b, s, d)
+        sigma_rfx: Tensor,  # (b, s, q)
+        sigma_eps: Tensor | None,  # (b, s) or None
+        u: Tensor,  # (b, m, s, q)
         z_corr: Tensor | None = None,  # (b, s, d_corr)
     ) -> Tensor:
         """Differentiable log p(y, θ_g, u) under NCP. Returns (b, s).
@@ -214,15 +218,19 @@ class HierarchicalModel:
         # Likelihood — pass zero sigma_eps for families that ignore it
         _sigma_eps = sigma_eps if sigma_eps is not None else ffx.new_zeros(ffx.shape[:2])
         ll = logLikelihood(
-            ffx, _sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n,
+            ffx,
+            _sigma_eps,
+            rfx,
+            self.y,
+            self.X,
+            self.Z,
+            self.mask_n,
             likelihood_family=self.likelihood_family,
         )   # (b, s)
 
         # Global priors
         lp = logProbFfx(ffx, self.nu_ffx, self.tau_ffx, self.family_ffx, self._mask_d_lp)
-        lp = lp + logProbSigma(
-            sigma_rfx, self.tau_rfx, self.family_sigma_rfx, self._mask_q_lp
-        )
+        lp = lp + logProbSigma(sigma_rfx, self.tau_rfx, self.family_sigma_rfx, self._mask_q_lp)
         if self.has_sigma_eps and sigma_eps is not None:
             lp = lp + logProbSigma(sigma_eps, self.tau_eps, self.family_sigma_eps)
 
@@ -233,8 +241,8 @@ class HierarchicalModel:
         # Prior on u: N(0, I), masked over valid (group, rfx-dim) pairs
         # u: (b, m, s, q) — sum over dims 1 (m) and 3 (q) → (b, s)
         mask_u = (
-            self._mask_m[:, :, None, None]       # (b, m, 1, 1)
-            * self._mask_q[:, None, None, :]     # (b, 1, 1, q)
+            self._mask_m[:, :, None, None]  # (b, m, 1, 1)
+            * self._mask_q[:, None, None, :]  # (b, 1, 1, q)
         )
         log_p_u = (-0.5 * (u.pow(2) + _LOG_2PI) * mask_u).sum(dim=(1, 3))
         lp = lp + log_p_u
@@ -268,10 +276,10 @@ class HierarchicalModel:
 
     def toProposal(
         self,
-        ffx: Tensor,                   # (b, s, d)
-        sigma_rfx: Tensor,             # (b, s, q)
-        sigma_eps: Tensor | None,      # (b, s) or None
-        u: Tensor,                     # (b, m, s, q)
+        ffx: Tensor,  # (b, s, d)
+        sigma_rfx: Tensor,  # (b, s, q)
+        sigma_eps: Tensor | None,  # (b, s) or None
+        u: Tensor,  # (b, m, s, q)
         z_corr: Tensor | None = None,  # (b, s, d_corr)
     ) -> Proposal:
         """Pack optimized NCP parameters into a Proposal.
@@ -300,7 +308,7 @@ class HierarchicalModel:
                 'log_prob': samples_g.new_zeros(b, s),
             },
             'local': {
-                'samples': rfx.detach(),                   # (b, m, s, q)
+                'samples': rfx.detach(),  # (b, m, s, q)
                 'log_prob': rfx.new_zeros(b, m, s),
             },
         }

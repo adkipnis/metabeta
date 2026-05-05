@@ -32,7 +32,9 @@ def setup() -> argparse.Namespace:
 # fmt: on
 
 
-def _check(paths: list[Path], label: str, inspect: bool = False) -> tuple[list[Path], list[tuple[Path, str]]]:
+def _check(
+    paths: list[Path], label: str, inspect: bool = False
+) -> tuple[list[Path], list[tuple[Path, str]]]:
     missing, broken = [], []
     for p in tqdm(paths, desc=label, unit='file'):
         if not p.exists():
@@ -46,7 +48,9 @@ def _check(paths: list[Path], label: str, inspect: bool = False) -> tuple[list[P
     return missing, broken
 
 
-def _report(label: str, n_ok: int, total: int, missing: list[Path], broken: list[tuple[Path, str]]) -> None:
+def _report(
+    label: str, n_ok: int, total: int, missing: list[Path], broken: list[tuple[Path, str]]
+) -> None:
     print(f'{label}: {n_ok}/{total} ok')
     for p in missing:
         print(f'  missing  {p}')
@@ -75,11 +79,12 @@ def _printRefitCommand(data_id: str, method: str, failed_idx: list[int]) -> None
 
 def _checkTrain(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
     paths = [
-        srcdir / data_id / datasetFilename(partition='train', epoch=e)
-        for e in range(1, cfg.b + 1)
+        srcdir / data_id / datasetFilename(partition='train', epoch=e) for e in range(1, cfg.b + 1)
     ]
     missing, broken = _check(paths, 'train partitions', inspect=cfg.inspect)
-    _report('train partitions', len(paths) - len(missing) - len(broken), len(paths), missing, broken)
+    _report(
+        'train partitions', len(paths) - len(missing) - len(broken), len(paths), missing, broken
+    )
     return not missing and not broken
 
 
@@ -92,8 +97,20 @@ def _checkTest(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
 
     pymc_missing, pymc_broken = _check(pymc_paths, 'nuts fits', inspect=cfg.inspect)
     advi_missing, advi_broken = _check(advi_paths, 'advi fits', inspect=cfg.inspect)
-    _report('nuts fits', len(pymc_paths) - len(pymc_missing) - len(pymc_broken), len(pymc_paths), pymc_missing, pymc_broken)
-    _report('advi fits', len(advi_paths) - len(advi_missing) - len(advi_broken), len(advi_paths), advi_missing, advi_broken)
+    _report(
+        'nuts fits',
+        len(pymc_paths) - len(pymc_missing) - len(pymc_broken),
+        len(pymc_paths),
+        pymc_missing,
+        pymc_broken,
+    )
+    _report(
+        'advi fits',
+        len(advi_paths) - len(advi_missing) - len(advi_broken),
+        len(advi_paths),
+        advi_missing,
+        advi_broken,
+    )
     _printRefitCommand(data_id, 'nuts', _failedFitIndices(pymc_missing, pymc_broken))
     _printRefitCommand(data_id, 'advi', _failedFitIndices(advi_missing, advi_broken))
 

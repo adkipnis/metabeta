@@ -97,7 +97,14 @@ class ImportanceSampler:
         if self.marginal:
             # integrate rfx out analytically — weight is a function of global params only
             ll = logMarginalLikelihoodNormal(
-                ffx, sigma_rfx, sigma_eps, self.y, self.X, self.Z, self.mask_n, self.mask_m,
+                ffx,
+                sigma_rfx,
+                sigma_eps,
+                self.y,
+                self.X,
+                self.Z,
+                self.mask_n,
+                self.mask_m,
             )
         else:
             rfx = proposal.rfx
@@ -110,7 +117,13 @@ class ImportanceSampler:
                 else:
                     lp = lp + logProbRfx(rfx, sigma_rfx, self.mask_mq)
             ll = logLikelihood(
-                ffx, sigma_eps, rfx, self.y, self.X, self.Z, self.mask_n,
+                ffx,
+                sigma_eps,
+                rfx,
+                self.y,
+                self.X,
+                self.Z,
+                self.mask_n,
                 likelihood_family=self.likelihood_family,
             )
         return ll, lp
@@ -118,7 +131,7 @@ class ImportanceSampler:
     def __call__(self, proposal: Proposal) -> Proposal:
         # posterior log probs
         log_q_g, log_q_l = proposal.log_probs
-        lq = log_q_g 
+        lq = log_q_g
         if self.full:
             lq = lq + (log_q_l * self.mask_m).sum(1)
 

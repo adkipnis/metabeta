@@ -221,11 +221,11 @@ class WarmNuts:
         proposed = {
             'global': {
                 'samples': samples_g,
-                'log_prob': torch.zeros(1, n_s),           # dummy
+                'log_prob': torch.zeros(1, n_s),  # dummy
             },
             'local': {
                 'samples': samples_l,
-                'log_prob': torch.zeros(1, self.m, n_s),   # dummy
+                'log_prob': torch.zeros(1, self.m, n_s),  # dummy
             },
         }
 
@@ -366,8 +366,8 @@ def _stackProposals(
     proposed = {
         'global': {'samples': samples_g, 'log_prob': log_prob_g},
         'local': {
-            'samples': torch.cat(sl_list, dim=0),    # (B, max_m, n_s, max_q)
-            'log_prob': torch.cat(lp_list, dim=0),   # (B, max_m, n_s)
+            'samples': torch.cat(sl_list, dim=0),  # (B, max_m, n_s, max_q)
+            'log_prob': torch.cat(lp_list, dim=0),  # (B, max_m, n_s)
         },
     }
     merged = Proposal(proposed, has_sigma_eps=has_sigma_eps)

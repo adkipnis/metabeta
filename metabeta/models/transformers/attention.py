@@ -96,7 +96,9 @@ class MAB(nn.Module):
             x = x + h
             x = x + self.mlp(self.norm1(x))
         else:
-            h = self.mha(x, self.norm_z(z) if z is not None else None, key_padding_mask=key_padding_mask)
+            h = self.mha(
+                x, self.norm_z(z) if z is not None else None, key_padding_mask=key_padding_mask
+            )
             x = self.norm0(x + h)
             x = self.norm1(x + self.mlp(x))
         return x

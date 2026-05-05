@@ -54,9 +54,7 @@ class BaseDist(nn.Module):
                 s = f'df={df:.2f}, {s}'
         return f'{kind}{self.family.title()}({s}{ctx})'
 
-    def _params(
-        self, context: torch.Tensor | None = None
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def _params(self, context: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
         """Return (loc, scale) with optional context-conditional correction."""
         loc = self._loc
         log_scale = self._log_scale

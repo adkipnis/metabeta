@@ -115,15 +115,22 @@ class MetropolisSampler:
             sigma_rfx = proposal.sigma_rfx   # (b, s, q)
             sigma_eps = proposal.sigma_eps   # (b, s)
             ll = logMarginalLikelihoodNormal(
-                ffx, sigma_rfx, sigma_eps,
-                self._y, self._X, self._Z, self._mask_n, self._mask_m,
+                ffx,
+                sigma_rfx,
+                sigma_eps,
+                self._y,
+                self._X,
+                self._Z,
+                self._mask_n,
+                self._mask_m,
             )
-            lp = logProbFfx(ffx, self._is.nu_ffx, self._is.tau_ffx,
-                            self._is.family_ffx, self._is.mask_d)
-            lp = lp + logProbSigma(sigma_rfx, self._is.tau_rfx,
-                                   self._is.family_sigma_rfx, self._is.mask_q)
-            lp = lp + logProbSigma(sigma_eps, self._is.tau_eps,
-                                   self._is.family_sigma_eps)
+            lp = logProbFfx(
+                ffx, self._is.nu_ffx, self._is.tau_ffx, self._is.family_ffx, self._is.mask_d
+            )
+            lp = lp + logProbSigma(
+                sigma_rfx, self._is.tau_rfx, self._is.family_sigma_rfx, self._is.mask_q
+            )
+            lp = lp + logProbSigma(sigma_eps, self._is.tau_eps, self._is.family_sigma_eps)
             return ll + lp - log_q_g
 
         # 'global' or 'joint': delegate to ImportanceSampler
@@ -141,9 +148,9 @@ class MetropolisSampler:
 
     def _runChains(
         self,
-        log_w: Tensor,          # (b, s)
-        sg: Tensor,             # (b, s, D_g)
-        sl: Tensor | None,      # (b, m, s, q) — None for marginal mode
+        log_w: Tensor,  # (b, s)
+        sg: Tensor,  # (b, s, D_g)
+        sl: Tensor | None,  # (b, m, s, q) — None for marginal mode
     ) -> tuple[Tensor, Tensor | None, Tensor]:
         """Run n_chains independent IMH chains, return (sg_out, sl_out, accept_rate).
 
@@ -202,10 +209,10 @@ class MetropolisSampler:
         sl_out = None
         if sl is not None:
             sl_out = (
-                torch.stack(keep_l, dim=0)        # (T_post, b, C, m, q)
-                .permute(1, 2, 0, 3, 4)           # (b, C, T_post, m, q)
+                torch.stack(keep_l, dim=0)  # (T_post, b, C, m, q)
+                .permute(1, 2, 0, 3, 4)  # (b, C, T_post, m, q)
                 .reshape(b, C * T_post, m, q)
-                .permute(0, 2, 1, 3)              # (b, m, C*T_post, q)
+                .permute(0, 2, 1, 3)  # (b, m, C*T_post, q)
             )
 
         accept_rate = torch.stack(keep_acc, dim=0).mean(0)  # (b, C)
@@ -217,7 +224,7 @@ class MetropolisSampler:
 
     def _sampleRfxConditional(
         self,
-        sg_out: Tensor,   # (b, s_out, D_g)
+        sg_out: Tensor,  # (b, s_out, D_g)
         d: int,
         q: int,
         d_corr: int,
@@ -239,7 +246,7 @@ class MetropolisSampler:
 
         # Extract global parameter components from sg_out
         ffx = sg_out[..., :d]                     # (b, s_out, d)
-        sigma_rfx = sg_out[..., d:d + q]          # (b, s_out, q)
+        sigma_rfx = sg_out[..., d : d + q]          # (b, s_out, q)
         sigma_eps = sg_out[..., d + q]             # (b, s_out)
 
         # Residuals: r = y - X @ ffx  (b, m, n, s_out)
@@ -273,16 +280,18 @@ class MetropolisSampler:
 
         # Posterior mean: μ = M⁻¹ (Zᵀr / σ²_eps)
         rhs = Ztr / s2e[:, None, :, None]             # (b, m, s_out, q)
-        post_mean = torch.cholesky_solve(
-            rhs.unsqueeze(-1), chol_M
-        ).squeeze(-1)                                  # (b, m, s_out, q)
+        post_mean = torch.cholesky_solve(rhs.unsqueeze(-1), chol_M).squeeze(
+            -1
+        )                                  # (b, m, s_out, q)
 
         # Sample: rfx = μ + chol_M⁻ᵀ z  where z ~ N(0, I)
         # chol_M is Chol(M) = Chol(V⁻¹), so Chol(V) = chol_M⁻ᵀ (upper-triangular solve)
         z = torch.randn_like(post_mean)
         rfx_centered = torch.linalg.solve_triangular(
             chol_M.mT, z.unsqueeze(-1), upper=True
-        ).squeeze(-1)                                  # (b, m, s_out, q)
+        ).squeeze(
+            -1
+        )                                  # (b, m, s_out, q)
 
         rfx = (post_mean + rfx_centered) * self._mask_m.unsqueeze(-1).float()
         return rfx   # (b, m, s_out, q)
@@ -376,7 +385,11 @@ def runIMH(
         data = rescaleData(data)
 
     sampler = MetropolisSampler(
-        data, n_chains=n_chains, n_steps=n_steps, burnin=burnin,
-        mode=mode, likelihood_family=lf,
+        data,
+        n_chains=n_chains,
+        n_steps=n_steps,
+        burnin=burnin,
+        mode=mode,
+        likelihood_family=lf,
     )
     return sampler(proposal)

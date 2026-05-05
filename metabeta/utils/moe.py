@@ -44,9 +44,11 @@ def _permuteBatch(
     mq = out['mask_q']
     out['mask_mq'] = out['mask_m'].unsqueeze(-1) & mq.unsqueeze(-2)
     q = mq.shape[-1]
-    out['mask_corr'] = torch.stack(
-        [mq[..., i] & mq[..., j] for i in range(1, q) for j in range(i)], dim=-1
-    ) if q >= 2 else mq.new_zeros(mq.shape[0], 0)
+    out['mask_corr'] = (
+        torch.stack([mq[..., i] & mq[..., j] for i in range(1, q) for j in range(i)], dim=-1)
+        if q >= 2
+        else mq.new_zeros(mq.shape[0], 0)
+    )
 
     return out
 

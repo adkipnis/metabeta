@@ -232,7 +232,9 @@ def plotRecovery(
     for i, (summary, label) in enumerate(zip(summaries, labels)):
         upper = i == 0
         lower = i == nrows - 1
-        targets, estimates, masks, names, metrics = _prepareRecoveryData(summary, data, show_corr_rfx=show_corr_rfx)
+        targets, estimates, masks, names, metrics = _prepareRecoveryData(
+            summary, data, show_corr_rfx=show_corr_rfx
+        )
         _plotRecoveryGrouped(
             axs[i],
             targets=targets,

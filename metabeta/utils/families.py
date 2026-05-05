@@ -378,7 +378,7 @@ def _logJacobianZtoL(z: torch.Tensor, L: torch.Tensor, q: int) -> torch.Tensor:
     for i in range(1, q):
         w = torch.tanh(z[..., cursor : cursor + i])  # (..., i)
         # log(sech²(z)) = log(1 - tanh²(z))
-        log_jac = log_jac + torch.log1p(-(w ** 2) + 1e-12).sum(-1)
+        log_jac = log_jac + torch.log1p(-(w**2) + 1e-12).sum(-1)
         # remaining_{i,j} = 1 - sum_{k<j} L_{ik}^2; stored on L diagonal would need
         # recomputation — reconstruct from L off-diagonal entries for this row
         L_row = L[..., i, :i]  # (..., i)

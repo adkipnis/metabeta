@@ -141,5 +141,3 @@ def samplePermutation(
     zero = np.zeros((1,), dtype=int)
     perm = np.concatenate([zero, perm])
     return perm
-
-

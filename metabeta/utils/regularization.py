@@ -132,7 +132,12 @@ def unconstrainedToCholesky(z: torch.Tensor, q: int) -> torch.Tensor:
 def corrLowerToCorr(r: torch.Tensor, q: int) -> torch.Tensor:
     """Lower-triangle values (..., d_corr) → symmetric (..., q, q) correlation matrix."""
     batch = r.shape[:-1]
-    corr = torch.eye(q, device=r.device, dtype=r.dtype).reshape((1,) * len(batch) + (q, q)).expand(*batch, q, q).clone()
+    corr = (
+        torch.eye(q, device=r.device, dtype=r.dtype)
+        .reshape((1,) * len(batch) + (q, q))
+        .expand(*batch, q, q)
+        .clone()
+    )
     cursor = 0
     for i in range(1, q):
         for j in range(i):

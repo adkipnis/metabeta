@@ -36,7 +36,9 @@ class Coupling(nn.Module):
         elif transform == 'spline':
             self.transform = RationalQuadratic(split_dims, d_context, subnet_kwargs, **rq_kwargs)
         else:
-            raise NotImplementedError(f'unknown transform: {transform!r}; expected affine or spline')
+            raise NotImplementedError(
+                f'unknown transform: {transform!r}; expected affine or spline'
+            )
 
     def __str__(self) -> str:
         return f'{self.transform_type.capitalize()}Coupling(d={self.split_dims})'
@@ -225,7 +227,11 @@ class CouplingFlow(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
 
         # determine shape
-        base_shape = context.shape[:-1] if context is not None else (mask.shape[:-1] if mask is not None else (1,))
+        base_shape = (
+            context.shape[:-1]
+            if context is not None
+            else (mask.shape[:-1] if mask is not None else (1,))
+        )
         shape = (*base_shape, n_samples, self.d_target)
 
         # expand context and mask to the sample dimension

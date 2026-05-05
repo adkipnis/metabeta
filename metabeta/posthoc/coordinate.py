@@ -92,11 +92,11 @@ class CoordinateDescent:
 
     def _gStep(
         self,
-        ffx: Tensor,             # (b, s, d)  leaf
-        log_sr: Tensor,          # (b, s, q)  leaf
-        log_se: Tensor | None,   # (b, s)     leaf or None
-        z_corr: Tensor | None,   # (b, s, d_corr) leaf or None
-        u_fixed: Tensor,         # (b, m, s, q) detached — only used for GLMM
+        ffx: Tensor,  # (b, s, d)  leaf
+        log_sr: Tensor,  # (b, s, q)  leaf
+        log_se: Tensor | None,  # (b, s)     leaf or None
+        z_corr: Tensor | None,  # (b, s, d_corr) leaf or None
+        u_fixed: Tensor,  # (b, m, s, q) detached — only used for GLMM
     ) -> None:
         """In-place Adam update of global leaf tensors for n_g_steps iterations."""
         opt_params: list[Tensor] = [ffx, log_sr]
@@ -115,16 +115,26 @@ class CoordinateDescent:
             if self.lf == 0:
                 # Normal: marginal (integrates out rfx analytically)
                 lml = logMarginalLikelihoodNormal(
-                    ffx, sr, se,
-                    self.model.y, self.model.X, self.model.Z,
-                    self.model.mask_n, self.model._mask_m.unsqueeze(-1),
+                    ffx,
+                    sr,
+                    se,
+                    self.model.y,
+                    self.model.X,
+                    self.model.Z,
+                    self.model.mask_n,
+                    self.model._mask_m.unsqueeze(-1),
                 )   # (b, s)
                 lp = logProbFfx(
-                    ffx, self.model.nu_ffx, self.model.tau_ffx,
-                    self.model.family_ffx, self.model._mask_d_lp,
+                    ffx,
+                    self.model.nu_ffx,
+                    self.model.tau_ffx,
+                    self.model.family_ffx,
+                    self.model._mask_d_lp,
                 )
                 lp = lp + logProbSigma(
-                    sr, self.model.tau_rfx, self.model.family_sigma_rfx,
+                    sr,
+                    self.model.tau_rfx,
+                    self.model.family_sigma_rfx,
                     self.model._mask_q_lp,
                 )
                 lp = lp + logProbSigma(se, self.model.tau_eps, self.model.family_sigma_eps)
@@ -146,7 +156,7 @@ class CoordinateDescent:
 
     def _uStepNormal(
         self,
-        ffx: Tensor,        # (b, s, d)
+        ffx: Tensor,  # (b, s, d)
         sigma_rfx: Tensor,  # (b, s, q)
         sigma_eps: Tensor,  # (b, s)
         z_corr: Tensor | None,
@@ -212,9 +222,10 @@ class CoordinateDescent:
             # Sample from N(μ_j, M_j⁻¹): rfx = μ_j + chol_M⁻ᵀ z
             # chol_M is Chol(M) = Chol(V⁻¹), so Chol(V) = chol_M⁻ᵀ
             z = torch.randn_like(rfx_mean)
-            noise = torch.linalg.solve_triangular(
-                chol_M.mT, z.unsqueeze(-1), upper=True
-            ).squeeze(-1) * active  # (b, m, s, q)
+            noise = (
+                torch.linalg.solve_triangular(chol_M.mT, z.unsqueeze(-1), upper=True).squeeze(-1)
+                * active
+            )  # (b, m, s, q)
             rfx_out = rfx_mean + noise
         else:
             rfx_out = rfx_mean
@@ -225,11 +236,11 @@ class CoordinateDescent:
 
     def _uStepGLMM(
         self,
-        ffx: Tensor,               # (b, s, d) detached
-        sigma_rfx: Tensor,         # (b, s, q) detached
+        ffx: Tensor,  # (b, s, d) detached
+        sigma_rfx: Tensor,  # (b, s, q) detached
         sigma_eps: Tensor | None,  # (b, s) detached or None
         z_corr: Tensor | None,
-        u_current: Tensor,         # (b, m, s, q)
+        u_current: Tensor,  # (b, m, s, q)
     ) -> Tensor:
         """Adam steps on u with θ_g frozen (GLMM).
 
@@ -323,9 +334,7 @@ class CoordinateDescent:
                 u = self._uStepNormal(ffx.detach(), sr_final, se_final, zc_final, sample=True)
             # For GLMM, u is already the latest Adam update — no change needed.
 
-            proposal_out = self.model.toProposal(
-                ffx.detach(), sr_final, se_final, u, zc_final
-            )
+            proposal_out = self.model.toProposal(ffx.detach(), sr_final, se_final, u, zc_final)
 
         proposal_out.tpd = proposal.tpd
         return proposal_out, {

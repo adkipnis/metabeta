@@ -88,7 +88,7 @@ class LaplaceRefiner:
             sigma_eps = proposal.sigma_eps[ba, best].unsqueeze(1)  # (b, 1)
         z_corr = None
         if proposal.d_corr > 0:
-            r_corr = proposal.samples_g[ba, best, -proposal.d_corr:].unsqueeze(1)
+            r_corr = proposal.samples_g[ba, best, -proposal.d_corr :].unsqueeze(1)
             z_corr = corrLowerToUnconstrained(r_corr, proposal.q)
 
         # Initialise u at zero (prior mean) rather than rfx/sigma_rfx.
@@ -96,15 +96,18 @@ class LaplaceRefiner:
         # The optimizer will move u to the posterior mode from here.
         b_sz, m = proposal.samples_l.shape[0], proposal.samples_l.shape[1]
         q = proposal.samples_l.shape[-1]
-        u = torch.zeros(b_sz, m, 1, q, device=proposal.samples_g.device,
-                        dtype=proposal.samples_g.dtype)
+        u = torch.zeros(
+            b_sz, m, 1, q, device=proposal.samples_g.device, dtype=proposal.samples_g.dtype
+        )
         return NCPParams(ffx=ffx, sigma_rfx=sigma_rfx, sigma_eps=sigma_eps, u=u, z_corr=z_corr)
 
     # ------------------------------------------------------------------
     # MAP finding
     # ------------------------------------------------------------------
 
-    def _findMAP(self, init: NCPParams) -> tuple[NCPParams, Tensor, Tensor | None, Tensor | None, dict]:
+    def _findMAP(
+        self, init: NCPParams
+    ) -> tuple[NCPParams, Tensor, Tensor | None, Tensor | None, dict]:
         """Optimize logJoint to find MAP.
 
         Returns the MAP as NCPParams (s=1) together with the unconstrained
@@ -166,9 +169,13 @@ class LaplaceRefiner:
                 z_corr=z_corr.detach() if z_corr is not None else None,
             )
         final = losses[-1] if losses else float('inf')
-        return map_params, log_sr.detach(), log_se.detach() if log_se is not None else None, \
-            z_corr.detach() if z_corr is not None else None, \
-            {'loss_curve': losses, 'final_loss': final}
+        return (
+            map_params,
+            log_sr.detach(),
+            log_se.detach() if log_se is not None else None,
+            z_corr.detach() if z_corr is not None else None,
+            {'loss_curve': losses, 'final_loss': final},
+        )
 
     # ------------------------------------------------------------------
     # Hessian computation
@@ -176,10 +183,10 @@ class LaplaceRefiner:
 
     def _gFlat(
         self,
-        ffx_b: Tensor,      # (1, d)
-        log_sr_b: Tensor,   # (1, q)
+        ffx_b: Tensor,  # (1, d)
+        log_sr_b: Tensor,  # (1, q)
         log_se_b: Tensor | None,  # (1,) or None
-        zc_b: Tensor | None,      # (1, d_corr) or None
+        zc_b: Tensor | None,  # (1, d_corr) or None
     ) -> Tensor:
         """Concatenate unconstrained global params into a flat (D_g,) vector."""
         parts: list[Tensor] = [ffx_b.squeeze(0), log_sr_b.squeeze(0)]
@@ -191,8 +198,8 @@ class LaplaceRefiner:
 
     def _ljFromGFlat(
         self,
-        g: Tensor,              # (D_g,) unconstrained global vector for one batch elem
-        u_b: Tensor,            # (1, m, 1, q) fixed
+        g: Tensor,  # (D_g,) unconstrained global vector for one batch elem
+        u_b: Tensor,  # (1, m, 1, q) fixed
         d: int,
         q: int,
         has_se: bool,
@@ -202,13 +209,13 @@ class LaplaceRefiner:
         """Scalar log_joint for a single batch element from a flat global vector."""
         model = model if model is not None else self.model
         cursor = 0
-        ffx_b = g[cursor:cursor + d].reshape(1, 1, d)
+        ffx_b = g[cursor : cursor + d].reshape(1, 1, d)
         cursor += d
-        sr_b = g[cursor:cursor + q].exp().reshape(1, 1, q)
+        sr_b = g[cursor : cursor + q].exp().reshape(1, 1, q)
         cursor += q
         se_b: Tensor | None = None
         if has_se:
-            se_b = g[cursor:cursor + 1].exp().reshape(1, 1)  # (1, 1) = (b=1, s=1)
+            se_b = g[cursor : cursor + 1].exp().reshape(1, 1)  # (1, 1) = (b=1, s=1)
             cursor += 1
         zc_b: Tensor | None = None
         if has_zc:
@@ -218,11 +225,11 @@ class LaplaceRefiner:
 
     def _globalHessian(
         self,
-        ffx_map: Tensor,        # (b, 1, d)
-        log_sr_map: Tensor,     # (b, 1, q)
+        ffx_map: Tensor,  # (b, 1, d)
+        log_sr_map: Tensor,  # (b, 1, q)
         log_se_map: Tensor | None,  # (b, 1) or None
         zc_map: Tensor | None,  # (b, 1, d_corr) or None
-        u_map: Tensor,          # (b, m, 1, q)
+        u_map: Tensor,  # (b, m, 1, q)
     ) -> Tensor:
         """Full (b, D_g, D_g) Hessian of logJoint w.r.t. concatenated unconstrained globals.
 
@@ -237,30 +244,28 @@ class LaplaceRefiner:
         H = ffx_map.new_zeros(b, D_g, D_g)
         for bi in range(b):
             model_bi = self.model.sliceBatch(bi)
-            log_se_bi = log_se_map[bi:bi + 1] if has_se else None
-            zc_bi = zc_map[bi:bi + 1] if has_zc else None
+            log_se_bi = log_se_map[bi : bi + 1] if has_se else None
+            zc_bi = zc_map[bi : bi + 1] if has_zc else None
             g0 = self._gFlat(ffx_map[bi], log_sr_map[bi], log_se_bi, zc_bi)
             g0 = g0.detach().requires_grad_(True)
-            u_bi = u_map[bi:bi + 1]
+            u_bi = u_map[bi : bi + 1]
 
             lj = self._ljFromGFlat(g0, u_bi, d, q, has_se, has_zc, model_bi)
             grad1 = torch.autograd.grad(lj, g0, create_graph=True)[0]  # (D_g,)
             H_bi = g0.new_zeros(D_g, D_g)
             for i in range(D_g):
-                grad2 = torch.autograd.grad(
-                    grad1[i], g0, retain_graph=(i < D_g - 1)
-                )[0]
+                grad2 = torch.autograd.grad(grad1[i], g0, retain_graph=(i < D_g - 1))[0]
                 H_bi[i] = grad2.detach()
             H[bi] = H_bi
         return H  # (b, D_g, D_g)
 
     def _localHessian(
         self,
-        ffx_map: Tensor,        # (b, 1, d)
-        log_sr_map: Tensor,     # (b, 1, q)
+        ffx_map: Tensor,  # (b, 1, d)
+        log_sr_map: Tensor,  # (b, 1, q)
         log_se_map: Tensor | None,
         zc_map: Tensor | None,
-        u_map: Tensor,          # (b, m, 1, q)
+        u_map: Tensor,  # (b, m, 1, q)
     ) -> Tensor:
         """Block-diagonal (b, m, q, q) Hessian of logJoint w.r.t. u, one block per group.
 
@@ -278,21 +283,24 @@ class LaplaceRefiner:
             model_bi = self.model.sliceBatch(bi)
             sr_bi = log_sr_map[bi].exp()                       # (1, q)
             se_bi = log_se_map[bi].exp() if has_se else None   # (1,) or None
-            zc_bi = zc_map[bi:bi + 1] if has_zc else None
+            zc_bi = zc_map[bi : bi + 1] if has_zc else None
             n_active = int(self.model._mask_m[bi].sum().item())
 
             for j in range(n_active):
                 u_j = u_map[bi, j, 0, :].detach().requires_grad_(True)  # (q,)
 
                 # Rebuild u_full with u_j as the differentiable leaf
-                u_full = torch.cat([
-                    u_map[bi:bi + 1, :j].detach(),
-                    u_j.reshape(1, 1, 1, q),
-                    u_map[bi:bi + 1, j + 1:].detach(),
-                ], dim=1)  # (1, m, 1, q)
+                u_full = torch.cat(
+                    [
+                        u_map[bi : bi + 1, :j].detach(),
+                        u_j.reshape(1, 1, 1, q),
+                        u_map[bi : bi + 1, j + 1 :].detach(),
+                    ],
+                    dim=1,
+                )  # (1, m, 1, q)
 
                 lj = model_bi.logJoint(
-                    ffx_map[bi:bi + 1],
+                    ffx_map[bi : bi + 1],
                     sr_bi.unsqueeze(0),
                     se_bi.unsqueeze(0) if se_bi is not None else None,
                     u_full,
@@ -302,9 +310,7 @@ class LaplaceRefiner:
                 grad1 = torch.autograd.grad(lj, u_j, create_graph=True)[0]  # (q,)
                 H_bj = u_j.new_zeros(q, q)
                 for i in range(q):
-                    grad2 = torch.autograd.grad(
-                        grad1[i], u_j, retain_graph=(i < q - 1)
-                    )[0]
+                    grad2 = torch.autograd.grad(grad1[i], u_j, retain_graph=(i < q - 1))[0]
                     H_bj[i] = grad2.detach()
                 H[bi, j] = H_bj
 
@@ -387,18 +393,14 @@ class LaplaceRefiner:
         d, q = map_params.ffx.shape[-1], map_params.sigma_rfx.shape[-1]
 
         # Hessians in unconstrained space
-        H_g = self._globalHessian(
-            map_params.ffx, log_sr_map, log_se_map, zc_map, map_params.u
-        )
-        H_l = self._localHessian(
-            map_params.ffx, log_sr_map, log_se_map, zc_map, map_params.u
-        )
+        H_g = self._globalHessian(map_params.ffx, log_sr_map, log_se_map, zc_map, map_params.u)
+        H_l = self._localHessian(map_params.ffx, log_sr_map, log_se_map, zc_map, map_params.u)
 
         # Assemble MAP global flat vector (unconstrained)
         b = map_params.ffx.shape[0]
         g_map_parts: list[Tensor] = [
-            map_params.ffx.squeeze(1),           # (b, d)
-            log_sr_map.squeeze(1),               # (b, q)
+            map_params.ffx.squeeze(1),  # (b, d)
+            log_sr_map.squeeze(1),  # (b, q)
         ]
         if log_se_map is not None:
             g_map_parts.append(log_se_map)       # (b, 1)
@@ -412,9 +414,9 @@ class LaplaceRefiner:
 
         # Unpack g_samples back to constrained params
         cursor = 0
-        ffx_s = g_samples[..., cursor:cursor + d]
+        ffx_s = g_samples[..., cursor : cursor + d]
         cursor += d
-        sigma_rfx_s = g_samples[..., cursor:cursor + q].exp()
+        sigma_rfx_s = g_samples[..., cursor : cursor + q].exp()
         cursor += q
         sigma_eps_s: Tensor | None = None
         if log_se_map is not None:
@@ -424,9 +426,7 @@ class LaplaceRefiner:
         if zc_map is not None:
             z_corr_s = g_samples[..., cursor:]
 
-        proposal_out = self.model.toProposal(
-            ffx_s, sigma_rfx_s, sigma_eps_s, u_samples, z_corr_s
-        )
+        proposal_out = self.model.toProposal(ffx_s, sigma_rfx_s, sigma_eps_s, u_samples, z_corr_s)
         proposal_out.tpd = proposal.tpd
 
         min_eigval = torch.linalg.eigvalsh(-H_g).min(dim=-1).values  # (b,)

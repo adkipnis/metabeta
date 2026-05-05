@@ -5,7 +5,12 @@ lmmBernoulli (logit), lmmPoisson (log). All return the same dict keys.
 import torch
 import torch.nn.functional as F
 
-from metabeta.utils.glm import _adaptiveRidge, _safeSolve, irlsBernoulliCompacted, irlsPoissonCompacted
+from metabeta.utils.glm import (
+    _adaptiveRidge,
+    _safeSolve,
+    irlsBernoulliCompacted,
+    irlsPoissonCompacted,
+)
 from metabeta.utils.regularization import unconstrainedToCholesky
 
 
@@ -126,18 +131,18 @@ def _groupNll(
 
 
 def _pqlPass(
-    beta: torch.Tensor,      # (B, d) fixed effects for this pass
-    Psi_inv: torch.Tensor,   # (B, q, q) precision used for Newton penalty and Hg
-    Xm: torch.Tensor,        # (B, m, n, d)
-    ym: torch.Tensor,        # (B, m, n)
-    Zm: torch.Tensor,        # (B, m, n, q)
-    mask_n: torch.Tensor,    # (B, m, n)
-    mask_m: torch.Tensor,    # (B, m)
-    mask4: torch.Tensor,     # (B, m, 1, 1)
-    active: torch.Tensor,    # (B, m) bool
-    eye_q: torch.Tensor,     # (q, q)
+    beta: torch.Tensor,  # (B, d) fixed effects for this pass
+    Psi_inv: torch.Tensor,  # (B, q, q) precision used for Newton penalty and Hg
+    Xm: torch.Tensor,  # (B, m, n, d)
+    ym: torch.Tensor,  # (B, m, n)
+    Zm: torch.Tensor,  # (B, m, n, q)
+    mask_n: torch.Tensor,  # (B, m, n)
+    mask_m: torch.Tensor,  # (B, m)
+    mask4: torch.Tensor,  # (B, m, 1, 1)
+    active: torch.Tensor,  # (B, m) bool
+    eye_q: torch.Tensor,  # (q, q)
     eye_q_bm: torch.Tensor,  # (B, m, q, q)
-    G: torch.Tensor,         # (B,)
+    G: torch.Tensor,  # (B,)
     likelihood_family: int,
     n_newton: int = 3,
     bg_init: torch.Tensor | None = None,  # warm start; None = cold start from zeros
@@ -177,10 +182,9 @@ def _pqlPass(
             mu_t = torch.exp(eta_t.clamp(max=20))
         w_t = (mu_t * (1.0 - mu_t) if likelihood_family == 1 else mu_t).clamp(min=1e-6) * mask_n
         ZWZ_t = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_t, Zm)         # (B, m, q, q)
-        grad_g = (
-            torch.einsum('bmnq,bmn->bmq', Zm, (ym - mu_t) * mask_n)      # Zᵀ(y−μ)
-            - torch.einsum('bqr,bmr->bmq', Psi_inv, bg)                   # −Ψ⁻¹b
-        )
+        grad_g = torch.einsum('bmnq,bmn->bmq', Zm, (ym - mu_t) * mask_n) - torch.einsum(  # Zᵀ(y−μ)
+            'bqr,bmr->bmq', Psi_inv, bg
+        )  # −Ψ⁻¹b
         ZWZ_t_safe = torch.where(active[:, :, None, None], ZWZ_t, eye_q)
         Hg = ZWZ_t_safe + Psi_inv[:, None]
         delta = _safeSolve(Hg + _adaptiveRidgeBm(Hg), grad_g)             # (B, m, q)
@@ -221,7 +225,7 @@ def _pqlPass(
     Kg_inv = _safeSolve(Kg + _adaptiveRidgeBm(Kg), eye_q_bm) * mask4
 
     ZWX_f = XWZ_f.mT                                                       # (B, m, q, d)
-    A_g = XWX_f - torch.einsum(                                            # Schur complement
+    A_g = XWX_f - torch.einsum(  # Schur complement
         'bmdq,bmqk->bmdk', XWZ_f, torch.einsum('bmqr,bmrd->bmqd', Kg_inv, ZWX_f)
     )
     rhs_g = XWy_f - torch.einsum(
@@ -239,10 +243,14 @@ def _pqlPass(
     # cause eta overflow in the next Newton pass or catastrophic BLUP outliers.
     beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
     resid_gls = (ytilde_f - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)) * mask_n
-    blups = torch.einsum(
-        'bmqr,bmr->bmq', Kg_inv,
-        torch.einsum('bmnq,bmn->bmq', Zm, w_f * resid_gls),
-    ) * mask_m[:, :, None]                                                 # (B, m, q)
+    blups = (
+        torch.einsum(
+            'bmqr,bmr->bmq',
+            Kg_inv,
+            torch.einsum('bmnq,bmn->bmq', Zm, w_f * resid_gls),
+        )
+        * mask_m[:, :, None]
+    )                                                 # (B, m, q)
 
     blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
 
@@ -257,11 +265,11 @@ def _pqlPass(
 
 
 def _lmmNormalCompacted(
-    Xm: torch.Tensor,       # (B, m, n, d)
-    ym: torch.Tensor,       # (B, m, n)
-    mask_n: torch.Tensor,   # (B, m, n)  1 for active observations
-    mask_m: torch.Tensor,   # (B, m)     1 for active groups
-    ns: torch.Tensor,       # (B, m)     group sizes (float, ≥ 1 for active)
+    Xm: torch.Tensor,  # (B, m, n, d)
+    ym: torch.Tensor,  # (B, m, n)
+    mask_n: torch.Tensor,  # (B, m, n)  1 for active observations
+    mask_m: torch.Tensor,  # (B, m)     1 for active groups
+    ns: torch.Tensor,  # (B, m)     group sizes (float, ≥ 1 for active)
     n_total: torch.Tensor,  # (B,)       total active observations
     n_em: int = 3,
 ) -> dict[str, torch.Tensor]:
@@ -354,16 +362,21 @@ def _lmmNormalCompacted(
     blups = (lambda_g2 * r_g).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)  # (B, m, 1)
 
     # Posterior variance: Var(b_g | data) = σ_rfx² · (1 − λ_g)
-    blup_var = (sigma_rfx_sq_val[:, None] * (1.0 - lambda_g2)).clamp(min=0.0).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)  # (B, m, 1)
+    blup_var = (
+        (sigma_rfx_sq_val[:, None] * (1.0 - lambda_g2))
+        .clamp(min=0.0)
+        .unsqueeze(-1)
+        .nan_to_num(nan=0.0, posinf=0.0)
+    )  # (B, m, 1)
 
     # EM iterations: jointly update σ_rfx², σ_ε², and β̂_GLS.
     # M-step: σ_rfx² = mean_g(b̂_g² + σ²_rfx(1−λ_g)), σ_ε² = RSS/(N−d−T) (REML-like).
     # E-step: recompute λ_g, then β̂_GLS, r_g, BLUPs under updated parameters.
     for _ in range(n_em):
         # M-step
-        sigma_rfx_sq_val = (
-            (blups.squeeze(-1).square() + blup_var.squeeze(-1)) * mask_m
-        ).sum(dim=1) / G
+        sigma_rfx_sq_val = ((blups.squeeze(-1).square() + blup_var.squeeze(-1)) * mask_m).sum(
+            dim=1
+        ) / G
         sigma_rfx_sq_val = sigma_rfx_sq_val.clamp(min=0.0)
 
         fitted = torch.einsum('bmnd,bd->bmn', Xm, beta_gls) + blups.squeeze(-1).unsqueeze(-1)
@@ -389,7 +402,12 @@ def _lmmNormalCompacted(
         beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
         r_g = (y_mean - torch.einsum('bmd,bd->bm', X_mean, beta_gls)) * mask_m
         blups = (lambda_g2 * r_g).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
-        blup_var = (sigma_rfx_sq_val[:, None] * (1.0 - lambda_g2)).clamp(min=0.0).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)
+        blup_var = (
+            (sigma_rfx_sq_val[:, None] * (1.0 - lambda_g2))
+            .clamp(min=0.0)
+            .unsqueeze(-1)
+            .nan_to_num(nan=0.0, posinf=0.0)
+        )
 
     # Inflate blup_var to account for uncertainty in the sigma_rfx² estimate.
     # Var[sigma_rfx²] ~ 2*(sigma_rfx²)²/(G-d) (chi-squared); delta-method propagation
@@ -402,7 +420,9 @@ def _lmmNormalCompacted(
     # also includes λ_g² * x̄_g' Var(β_hat) x̄_g. Dominant for large groups where λ→1, (1-λ)Ψ→0.
     eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
     beta_var = _safeSolve(A_gls_reg, eye_d).diagonal(dim1=-1, dim2=-2).clamp(min=1e-8)  # (B, d)
-    kh_corr = (lambda_g2.unsqueeze(-1) ** 2 * (X_mean ** 2 * beta_var[:, None, :]).sum(dim=-1, keepdim=True))  # (B, m, 1)
+    kh_corr = lambda_g2.unsqueeze(-1) ** 2 * (X_mean**2 * beta_var[:, None, :]).sum(
+        dim=-1, keepdim=True
+    )  # (B, m, 1)
     blup_var = blup_var + kh_corr
 
     sigma_rfx = sigma_rfx_sq_val.clamp(min=0.0).sqrt().unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)
@@ -415,26 +435,26 @@ def _lmmNormalCompacted(
     bhat_out = resid_bg.unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)  # (B, m, 1)
 
     return {
-        'beta_est': beta_gls,           # (B, d)
+        'beta_est': beta_gls,  # (B, d)
         # 'beta_var': beta_var,           # (B, d)
-        'beta_wg': beta_wg_out,         # (B, d)
-        'sigma_eps_est': sigma_eps,     # (B, 1)
-        'sigma_rfx_est': sigma_rfx,     # (B, 1)
-        'blup_est': blups,              # (B, m, 1)
-        'blup_var': blup_var,           # (B, m, 1)
-        'bhat': bhat_out,               # (B, m, 1)
-        'resid_g': resid_g,             # (B, m, 1)
-        'Psi': Psi,                     # (B, 1, 1)
+        'beta_wg': beta_wg_out,  # (B, d)
+        'sigma_eps_est': sigma_eps,  # (B, 1)
+        'sigma_rfx_est': sigma_rfx,  # (B, 1)
+        'blup_est': blups,  # (B, m, 1)
+        'blup_var': blup_var,  # (B, m, 1)
+        'bhat': bhat_out,  # (B, m, 1)
+        'resid_g': resid_g,  # (B, m, 1)
+        'Psi': Psi,  # (B, 1, 1)
     }
 
 
 def _lmmNormalFull(
-    Xm: torch.Tensor,       # (B, m, n, d)
-    ym: torch.Tensor,       # (B, m, n)
-    Zm: torch.Tensor,       # (B, m, n, q)
-    mask_n: torch.Tensor,   # (B, m, n)  1 for active observations
-    mask_m: torch.Tensor,   # (B, m)     1 for active groups
-    ns: torch.Tensor,       # (B, m)     group sizes (float, ≥ 1 for active)
+    Xm: torch.Tensor,  # (B, m, n, d)
+    ym: torch.Tensor,  # (B, m, n)
+    Zm: torch.Tensor,  # (B, m, n, q)
+    mask_n: torch.Tensor,  # (B, m, n)  1 for active observations
+    mask_m: torch.Tensor,  # (B, m)     1 for active groups
+    ns: torch.Tensor,  # (B, m)     group sizes (float, ≥ 1 for active)
     n_total: torch.Tensor,  # (B,)       total active observations
     n_em: int = 3,
     uncorr: torch.Tensor | None = None,  # (B,) bool — force Ψ diagonal for these datasets
@@ -518,9 +538,11 @@ def _lmmNormalFull(
     # Applied per-component so inactive rfx dimensions (second Z column = 0 for q=1 datasets)
     # are not inflated — their signal_var ≈ 0 and the floor stays at 0.
     # Uses mom_mask to exclude near-singular groups (same as MoM sums above).
-    mean_ZtZ_inv_diag = (
-        ZtZ_inv.diagonal(dim1=-2, dim2=-1) * mom_mask[:, :, None]
-    ).sum(dim=1) / G_mom[:, None]                                       # (B, q)
+    mean_ZtZ_inv_diag = (ZtZ_inv.diagonal(dim1=-2, dim2=-1) * mom_mask[:, :, None]).sum(
+        dim=1
+    ) / G_mom[
+        :, None
+    ]                                       # (B, q)
     bhat_var = (bhat.square() * mom_mask[:, :, None]).sum(dim=1) / G_mom[:, None]  # (B, q)
     psi_diag_floor = (bhat_var - sigma_eps_sq[:, None] * mean_ZtZ_inv_diag).clamp(min=0.0) * 0.5
     Psi_raw = Psi_raw + torch.diag_embed(
@@ -533,7 +555,9 @@ def _lmmNormalFull(
     Psi = vecs @ torch.diag_embed(vals) @ vecs.mT                 # (B, q, q)
 
     if uncorr is not None:
-        Psi = torch.where(uncorr[:, None, None], torch.diag_embed(Psi.diagonal(dim1=-2, dim2=-1)), Psi)
+        Psi = torch.where(
+            uncorr[:, None, None], torch.diag_embed(Psi.diagonal(dim1=-2, dim2=-1)), Psi
+        )
         vals, vecs = _eighWithJitter(Psi)
 
     # ------------------------------------------------------------------
@@ -594,11 +618,16 @@ def _lmmNormalFull(
             ((blup_outer + post_cov) * mask4).sum(dim=1) / G[:, None, None]
         )  # (B, q, q)
         if uncorr is not None:
-            Psi = torch.where(uncorr[:, None, None], torch.diag_embed(Psi.diagonal(dim1=-2, dim2=-1)), Psi)
+            Psi = torch.where(
+                uncorr[:, None, None], torch.diag_embed(Psi.diagonal(dim1=-2, dim2=-1)), Psi
+            )
 
         # M-step: σ_ε² (REML-like df correction using current blups and beta_gls)
-        resid_em = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)
-                    - torch.einsum('bmnq,bmq->bmn', Zm, blups)) * mask_n
+        resid_em = (
+            ym
+            - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)
+            - torch.einsum('bmnq,bmq->bmn', Zm, blups)
+        ) * mask_n
         ss_em = resid_em.square().sum(dim=(1, 2))                    # (B,)
         ZtZ_W = torch.einsum('bmqr,bmrs->bmqs', ZtZ_safe, W_g)      # (B, m, q, q)
         T = (ZtZ_W.diagonal(dim1=-2, dim2=-1).sum(dim=-1) * mask_m).sum(dim=1)  # (B,)
@@ -632,7 +661,9 @@ def _lmmNormalFull(
         # E-step: BLUPs and posterior variance
         blups = torch.einsum('bmqp,bmp->bmq', W_g, Ztr_gls)
         blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
-        blup_var = (se2[:, None, None, None] * W_g).diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
+        blup_var = (
+            (se2[:, None, None, None] * W_g).diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
+        )
         blup_var = blup_var.nan_to_num(nan=0.0, posinf=0.0)
 
     # Inflate blup_var to account for uncertainty in the Psi estimate (same rationale
@@ -644,8 +675,10 @@ def _lmmNormalFull(
     # BLUP error also includes W_g Z^T X (β_hat - β). Dominant for large groups where W_g→Ψ⁻¹,
     # (1-λ)Ψ→0. beta_var = diag(A_gls_reg⁻¹), W_ZtX = W_g Z^T X already computed in EM loop.
     eye_d_kh = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
-    beta_var_kh = _safeSolve(A_gls_reg, eye_d_kh).diagonal(dim1=-1, dim2=-2).clamp(min=1e-8)  # (B, d)
-    kh_corr = (W_ZtX ** 2 * beta_var_kh[:, None, None, :]).sum(dim=-1)  # (B, m, q)
+    beta_var_kh = (
+        _safeSolve(A_gls_reg, eye_d_kh).diagonal(dim1=-1, dim2=-2).clamp(min=1e-8)
+    )  # (B, d)
+    kh_corr = (W_ZtX**2 * beta_var_kh[:, None, None, :]).sum(dim=-1)  # (B, m, q)
     blup_var = blup_var + kh_corr
 
     # Floor blup_var at Psi_diag / (2 * n_g): prevents near-zero declared variance for
@@ -667,16 +700,16 @@ def _lmmNormalFull(
     bhat_out = bhat.clamp(-10.0, 10.0).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)  # (B, m, q)
 
     return {
-        'beta_est': beta_gls,                       # (B, d)
-        'beta_var': beta_var_kh,                    # (B, d)
-        'beta_wg': beta_wg_out,                     # (B, d)
-        'sigma_eps_est': sigma_eps_1d.unsqueeze(-1), # (B, 1)
-        'sigma_rfx_est': sigma_rfx,                 # (B, q)
-        'blup_est': blups,                          # (B, m, q)
-        'blup_var': blup_var,                       # (B, m, q)
-        'bhat': bhat_out,                           # (B, m, q)
-        'resid_g': resid_g,                         # (B, m, 1)
-        'Psi': Psi,                                 # (B, q, q)
+        'beta_est': beta_gls,  # (B, d)
+        'beta_var': beta_var_kh,  # (B, d)
+        'beta_wg': beta_wg_out,  # (B, d)
+        'sigma_eps_est': sigma_eps_1d.unsqueeze(-1),  # (B, 1)
+        'sigma_rfx_est': sigma_rfx,  # (B, q)
+        'blup_est': blups,  # (B, m, q)
+        'blup_var': blup_var,  # (B, m, q)
+        'bhat': bhat_out,  # (B, m, q)
+        'resid_g': resid_g,  # (B, m, 1)
+        'Psi': Psi,  # (B, q, q)
     }
 
 
@@ -686,12 +719,12 @@ def _lmmNormalFull(
 
 
 def lmmNormal(
-    Xm: torch.Tensor,       # (B, m, n, d)
-    ym: torch.Tensor,       # (B, m, n)
-    Zm: torch.Tensor,       # (B, m, n, q)
-    mask_n: torch.Tensor,   # (B, m, n)
-    mask_m: torch.Tensor,   # (B, m)
-    ns: torch.Tensor,       # (B, m)
+    Xm: torch.Tensor,  # (B, m, n, d)
+    ym: torch.Tensor,  # (B, m, n)
+    Zm: torch.Tensor,  # (B, m, n, q)
+    mask_n: torch.Tensor,  # (B, m, n)
+    mask_m: torch.Tensor,  # (B, m)
+    ns: torch.Tensor,  # (B, m)
     n_total: torch.Tensor,  # (B,)
     n_em: int = 3,
     uncorr: torch.Tensor | None = None,
@@ -798,7 +831,9 @@ def _lmmGlmm(
     vals_pql = vals_pql.clamp(min=psi_0[:, None])
     Psi_pql = vecs_pql @ torch.diag_embed(vals_pql) @ vecs_pql.mT        # (B, q, q)
     if uncorr is not None:
-        Psi_pql = torch.where(uncorr[:, None, None], torch.diag_embed(Psi_pql.diagonal(dim1=-2, dim2=-1)), Psi_pql)
+        Psi_pql = torch.where(
+            uncorr[:, None, None], torch.diag_embed(Psi_pql.diagonal(dim1=-2, dim2=-1)), Psi_pql
+        )
 
     # ------------------------------------------------------------------
     # Stage 2: alternating Newton–GLS loop, up to max_passes=6.
@@ -807,7 +842,20 @@ def _lmmGlmm(
     # ridge-inv(Ψ̂_Lap); early exit when the 95th-percentile change in both
     # β and diag(Ψ̂) falls below 1e-3.
     # ------------------------------------------------------------------
-    pass_args = (Xm, ym, Zm, mask_n, mask_m, mask4, active, eye_q, eye_q_bm, G, likelihood_family, n_newton)
+    pass_args = (
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        mask4,
+        active,
+        eye_q,
+        eye_q_bm,
+        G,
+        likelihood_family,
+        n_newton,
+    )
     psi_0_floor = psi_0.clamp(min=1e-6)
     max_passes = 6
 
@@ -820,12 +868,12 @@ def _lmmGlmm(
 
     # Pass 1: pooled β₀, pseudoinverse of Psi_pql (cold start)
     Psi_inv = _pseudoInverse(Psi_pql)
-    beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls = _pqlPass(
-        beta_0, Psi_inv, *pass_args
-    )
+    beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls = _pqlPass(beta_0, Psi_inv, *pass_args)
     beta_gls, Psi_lap = _sanitize(beta_gls, Psi_lap)
     if uncorr is not None:
-        Psi_lap = torch.where(uncorr[:, None, None], torch.diag_embed(Psi_lap.diagonal(dim1=-2, dim2=-1)), Psi_lap)
+        Psi_lap = torch.where(
+            uncorr[:, None, None], torch.diag_embed(Psi_lap.diagonal(dim1=-2, dim2=-1)), Psi_lap
+        )
 
     # Passes 2–max_passes: warm start, ridge-regularized Ψ̂_Lap, until convergence.
     # Each pass refines (β, b̂_g, Ψ̂_Lap) jointly. Early exit when the 95th-percentile
@@ -841,7 +889,9 @@ def _lmmGlmm(
         )
         beta_gls, Psi_lap = _sanitize(beta_gls, Psi_lap)
         if uncorr is not None:
-            Psi_lap = torch.where(uncorr[:, None, None], torch.diag_embed(Psi_lap.diagonal(dim1=-2, dim2=-1)), Psi_lap)
+            Psi_lap = torch.where(
+                uncorr[:, None, None], torch.diag_embed(Psi_lap.diagonal(dim1=-2, dim2=-1)), Psi_lap
+            )
 
         d_beta = (beta_gls - beta_prev).abs().amax(dim=-1)                               # (B,)
         d_psi = (Psi_lap.diagonal(dim1=-2, dim2=-1) - psi_diag_prev).abs().amax(dim=-1)  # (B,)
@@ -877,18 +927,18 @@ def _lmmGlmm(
     bhat_out = bhat_ols.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)   # (B, m, q)
 
     return {
-        'beta_est': beta_gls,           # (B, d)
-        'beta_wg': beta_wg_out,         # (B, d)  pooled IRLS (no-rfx analog of beta_wg)
-        'sigma_rfx_est': sigma_rfx_est, # (B, q)
-        'blup_est': blups,              # (B, m, q)
-        'blup_var': blup_var,           # (B, m, q)
-        'bhat': bhat_out,               # (B, m, q)
-        'resid_g': resid_g,             # (B, m, 1)
-        'phi_pearson': phi_pearson,     # (B,)
-        'psi_0': psi_0,                 # (B,)
-        'Psi_pql': Psi_pql,             # (B, q, q)
-        'Psi_lap': Psi_lap,             # (B, q, q)
-        'mean_Hg_inv': mean_Hg_inv,     # (B, q, q)
+        'beta_est': beta_gls,  # (B, d)
+        'beta_wg': beta_wg_out,  # (B, d)  pooled IRLS (no-rfx analog of beta_wg)
+        'sigma_rfx_est': sigma_rfx_est,  # (B, q)
+        'blup_est': blups,  # (B, m, q)
+        'blup_var': blup_var,  # (B, m, q)
+        'bhat': bhat_out,  # (B, m, q)
+        'resid_g': resid_g,  # (B, m, 1)
+        'phi_pearson': phi_pearson,  # (B,)
+        'psi_0': psi_0,  # (B,)
+        'Psi_pql': Psi_pql,  # (B, q, q)
+        'Psi_lap': Psi_lap,  # (B, q, q)
+        'mean_Hg_inv': mean_Hg_inv,  # (B, q, q)
     }
 
 
@@ -909,7 +959,18 @@ def lmmBernoulli(
     uncorr: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM for Bernoulli/logit outcomes."""
-    return _lmmGlmm(Xm, ym, Zm, mask_n, mask_m, ns, n_total, likelihood_family=1, n_newton=n_newton, uncorr=uncorr)
+    return _lmmGlmm(
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        ns,
+        n_total,
+        likelihood_family=1,
+        n_newton=n_newton,
+        uncorr=uncorr,
+    )
 
 
 def lmmPoisson(
@@ -924,7 +985,18 @@ def lmmPoisson(
     uncorr: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM for Poisson/log outcomes."""
-    return _lmmGlmm(Xm, ym, Zm, mask_n, mask_m, ns, n_total, likelihood_family=2, n_newton=n_newton, uncorr=uncorr)
+    return _lmmGlmm(
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        ns,
+        n_total,
+        likelihood_family=2,
+        n_newton=n_newton,
+        uncorr=uncorr,
+    )
 
 
 def glmm(
@@ -965,9 +1037,9 @@ def glmm(
 
 def analyticalBLUPContext(
     data: dict[str, torch.Tensor],
-    beta: torch.Tensor,           # (B, S, d) fixed effects — constrained scale
-    sigma_rfx: torch.Tensor,      # (B, S, q) — constrained scale
-    sigma_eps: torch.Tensor,      # (B, S)   — constrained scale
+    beta: torch.Tensor,  # (B, S, d) fixed effects — constrained scale
+    sigma_rfx: torch.Tensor,  # (B, S, q) — constrained scale
+    sigma_eps: torch.Tensor,  # (B, S)   — constrained scale
     z_corr: torch.Tensor | None,  # (B, S, d_corr) unconstrained atanh or None
     clamp: float = 20.0,
 ) -> torch.Tensor:

@@ -151,7 +151,9 @@ class Collection(torch.utils.data.Dataset):
                     ds[f'{method}_sigma_rfx'] = ds[f'{method}_sigma_rfx'][qperm]
                     ds[f'{method}_rfx'] = ds[f'{method}_rfx'][qperm]
                     if f'{method}_corr_rfx' in ds:
-                        ds[f'{method}_corr_rfx'] = ds[f'{method}_corr_rfx'][..., qperm, :][..., qperm]
+                        ds[f'{method}_corr_rfx'] = ds[f'{method}_corr_rfx'][..., qperm, :][
+                            ..., qperm
+                        ]
 
         return ds
 
@@ -255,9 +257,11 @@ def collateGrouped(
     mq = out['mask_q']
     out['mask_mq'] = out['mask_m'].unsqueeze(-1) & mq.unsqueeze(-2)
     q = mq.shape[-1]
-    out['mask_corr'] = torch.stack(
-        [mq[..., i] & mq[..., j] for i in range(1, q) for j in range(i)], dim=-1
-    ) if q >= 2 else mq.new_zeros(B, 0)
+    out['mask_corr'] = (
+        torch.stack([mq[..., i] & mq[..., j] for i in range(1, q) for j in range(i)], dim=-1)
+        if q >= 2
+        else mq.new_zeros(B, 0)
+    )
 
     # collate fit samples if present
     for method in ('nuts', 'advi'):
@@ -333,14 +337,11 @@ def collateFits(
     return out
 
 
-def subsetBatch(
-    batch: dict[str, torch.Tensor], mask: np.ndarray
-) -> dict[str, torch.Tensor]:
+def subsetBatch(batch: dict[str, torch.Tensor], mask: np.ndarray) -> dict[str, torch.Tensor]:
     """Filter a collated batch dict to the datasets selected by a boolean mask."""
     idx = torch.from_numpy(mask)
     return {
-        k: v[idx] if torch.is_tensor(v) and v.shape[0] == len(mask) else v
-        for k, v in batch.items()
+        k: v[idx] if torch.is_tensor(v) and v.shape[0] == len(mask) else v for k, v in batch.items()
     }
 
 

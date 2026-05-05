@@ -142,7 +142,7 @@ class SVGDRefiner:
 
     def _marginalGrads(
         self,
-        g: Tensor,   # (b, s, D_g) detached
+        g: Tensor,  # (b, s, D_g) detached
         d: int,
         q: int,
         has_se: bool,
@@ -154,7 +154,7 @@ class SVGDRefiner:
         """
         g_leaf = g.clone().requires_grad_(True)
         ffx = g_leaf[..., :d]
-        sr = g_leaf[..., d:d + q].exp()
+        sr = g_leaf[..., d : d + q].exp()
         cursor = d + q
         se = g_leaf[..., cursor].exp() if has_se else None
         if has_se:
@@ -162,16 +162,27 @@ class SVGDRefiner:
         zc = g_leaf[..., cursor:] if has_zc else None
 
         lml = logMarginalLikelihoodNormal(
-            ffx, sr, se,
-            self.model.y, self.model.X, self.model.Z,
-            self.model.mask_n, self.model._mask_m.unsqueeze(-1),
+            ffx,
+            sr,
+            se,
+            self.model.y,
+            self.model.X,
+            self.model.Z,
+            self.model.mask_n,
+            self.model._mask_m.unsqueeze(-1),
         )
         lp = logProbFfx(
-            ffx, self.model.nu_ffx, self.model.tau_ffx,
-            self.model.family_ffx, self.model._mask_d_lp,
+            ffx,
+            self.model.nu_ffx,
+            self.model.tau_ffx,
+            self.model.family_ffx,
+            self.model._mask_d_lp,
         )
         lp = lp + logProbSigma(
-            sr, self.model.tau_rfx, self.model.family_sigma_rfx, self.model._mask_q_lp,
+            sr,
+            self.model.tau_rfx,
+            self.model.family_sigma_rfx,
+            self.model._mask_q_lp,
         )
         lp = lp + logProbSigma(se, self.model.tau_eps, self.model.family_sigma_eps)
         log_p = lml + lp   # (b, s)
@@ -182,8 +193,8 @@ class SVGDRefiner:
 
     def _jointGrads(
         self,
-        g: Tensor,   # (b, s, D_g) detached
-        u: Tensor,   # (b, m, s, q) detached
+        g: Tensor,  # (b, s, D_g) detached
+        u: Tensor,  # (b, m, s, q) detached
         d: int,
         q: int,
         has_se: bool,
@@ -197,7 +208,7 @@ class SVGDRefiner:
         u_leaf = u.clone().requires_grad_(True)
 
         ffx = g_leaf[..., :d]
-        sr = g_leaf[..., d:d + q].exp()
+        sr = g_leaf[..., d : d + q].exp()
         cursor = d + q
         se = g_leaf[..., cursor].exp() if has_se else None
         if has_se:
@@ -217,7 +228,7 @@ class SVGDRefiner:
 
     def _stepMarginal(
         self,
-        g: Tensor,   # (b, s, D_g)
+        g: Tensor,  # (b, s, D_g)
         d: int,
         q: int,
         has_se: bool,
@@ -234,8 +245,8 @@ class SVGDRefiner:
 
     def _stepJoint(
         self,
-        g: Tensor,   # (b, s, D_g)
-        u: Tensor,   # (b, m, s, q)
+        g: Tensor,  # (b, s, D_g)
+        u: Tensor,  # (b, m, s, q)
         d: int,
         q: int,
         has_se: bool,
@@ -267,9 +278,9 @@ class SVGDRefiner:
 
     def _sampleU(
         self,
-        ffx: Tensor,       # (b, s, d)
-        sigma_rfx: Tensor, # (b, s, q)
-        sigma_eps: Tensor, # (b, s)
+        ffx: Tensor,  # (b, s, d)
+        sigma_rfx: Tensor,  # (b, s, q)
+        sigma_eps: Tensor,  # (b, s)
         z_corr: Tensor | None,
     ) -> Tensor:
         """Draw rfx ~ p(rfx | θ_g, y) via Normal-Normal conjugacy; return u.
@@ -312,9 +323,10 @@ class SVGDRefiner:
 
         active = mask_m[:, :, None, None].float()
         z = torch.randn_like(rfx_mean)
-        noise = torch.linalg.solve_triangular(
-            chol_M.mT, z.unsqueeze(-1), upper=True
-        ).squeeze(-1) * active
+        noise = (
+            torch.linalg.solve_triangular(chol_M.mT, z.unsqueeze(-1), upper=True).squeeze(-1)
+            * active
+        )
         rfx = rfx_mean * active + noise
 
         return self.model.uFromRfx(sigma_rfx, rfx, z_corr)
@@ -372,7 +384,7 @@ class SVGDRefiner:
         # Unpack final g
         with torch.no_grad():
             ffx_f = g[..., :d]
-            sr_f = g[..., d:d + q].exp()
+            sr_f = g[..., d : d + q].exp()
             cursor = d + q
             se_f: Tensor | None = None
             if has_se:

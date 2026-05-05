@@ -413,7 +413,10 @@ class Generator:
         min_bg_df = getattr(self.cfg, 'min_bg_df', 0)
         _max_retries = 20
 
-        if getattr(self.cfg, 'loop', False) or self.cfg.ds_type in ['scm', 'mixed']:  # Option A: loop
+        if getattr(self.cfg, 'loop', False) or self.cfg.ds_type in [
+            'scm',
+            'mixed',
+        ]:  # Option A: loop
             datasets = []
             for i in tqdm(range(n_datasets), desc=desc):
                 # If min_bg_df is set, retry until m − d ≥ min_bg_df.  Trimming X

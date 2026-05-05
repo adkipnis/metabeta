@@ -34,7 +34,11 @@ class SetTransformer(nn.Module):
     ):
         super().__init__()
         assert n_blocks >= n_isab, 'n_isab must not be larger than n_blocks'
-        assert pooling in ('cls', 'mean', 'pma'), f"pooling must be 'cls', 'mean', or 'pma', got '{pooling}'"
+        assert pooling in (
+            'cls',
+            'mean',
+            'pma',
+        ), f"pooling must be 'cls', 'mean', or 'pma', got '{pooling}'"
         self.n_isab = n_isab
         self.pooling = pooling
 

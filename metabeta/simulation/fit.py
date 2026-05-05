@@ -233,8 +233,9 @@ class Fitter:
     def _extractAll(
         self, trace: az.InferenceData, d: int, q: int, prefix: str
     ) -> dict[str, np.ndarray]:
-        return extractAll(trace, self.ds, d, q, prefix,
-                          force_diagonal=getattr(self.cfg, 'diagonal', False))
+        return extractAll(
+            trace, self.ds, d, q, prefix, force_diagonal=getattr(self.cfg, 'diagonal', False)
+        )
 
     def _fitNuts(self, cfg: argparse.Namespace, ds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         pymc_model = self._buildPymc(ds)
@@ -265,7 +266,9 @@ class Fitter:
         out['nuts_divergences'] = trace.sample_stats['diverging'].values.sum(-1)  # (chains,)
         out['nuts_draws'] = np.array(cfg.draws)
         tree_depth = trace.sample_stats['tree_depth'].values  # (chains, draws)
-        out['nuts_max_treedepth'] = (tree_depth >= cfg.max_treedepth).mean(-1)  # frac saturated per chain
+        out['nuts_max_treedepth'] = (tree_depth >= cfg.max_treedepth).mean(
+            -1
+        )  # frac saturated per chain
         out['nuts_duration'] = np.array(t1 - t0)
         return out
 
