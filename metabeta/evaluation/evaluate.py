@@ -132,7 +132,7 @@ def setup() -> argparse.Namespace:
 
 # -----------------------------------------------------------------------------
 class Evaluator:
-    def __init__(self, cfg: argparse.Namespace) -> None:     
+    def __init__(self, cfg: argparse.Namespace) -> None:
         self.cfg = cfg
         self.dir = Path(__file__).resolve().parent
         setSeed(cfg.seed)
@@ -604,7 +604,9 @@ class Evaluator:
                 n_total = len(conv_mask)
                 logger.info(
                     '\nConverged subset (%s): %d / %d datasets',
-                    self.cfg.convergence_mode, n_conv, n_total,
+                    self.cfg.convergence_mode,
+                    n_conv,
+                    n_total,
                 )
                 if 0 < n_conv < n_total:
                     conv_batch = subsetBatch(full_batch, conv_mask)
@@ -647,11 +649,13 @@ class Evaluator:
                         )
                         if 0 < n_k < n_conv:
                             k_batch = subsetBatch(conv_batch, k_mask)
-                            k_mb   = subsetProposal(conv_mb,   k_mask)
+                            k_mb = subsetProposal(conv_mb, k_mask)
                             k_nuts = subsetProposal(conv_nuts, k_mask)
-                            k_advi_batch = subsetBatch(conv_advi_batch, k_mask[conv_advi_mask[conv_mask]])
+                            k_advi_batch = subsetBatch(
+                                conv_advi_batch, k_mask[conv_advi_mask[conv_mask]]
+                            )
                             k_advi = subsetProposal(conv_advi, k_mask[conv_advi_mask[conv_mask]])
-                            summary_mb_k   = self.summary(k_mb,   k_batch)
+                            summary_mb_k = self.summary(k_mb, k_batch)
                             summary_nuts_k = self.summary(k_nuts, k_batch)
                             summary_advi_k = self.summary(k_advi, k_advi_batch)
                             for label, summary in [
