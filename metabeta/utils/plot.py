@@ -13,7 +13,7 @@ INFO = {
     'show_title': True,
     'title_fs': 32,
     'title_pad': 15,
-    'ticks_ls': 18,
+    'ticks_ls': 20,
     'show_x': True,
     'xlabel_fs': 28,
     'xlabel_pad': 10,
@@ -27,10 +27,11 @@ INFO = {
     'legend_loc': 'upper left',
     'stats': None,  # dict[str, float]
     'stats_suffix': '',
-    'stats_fs': 20,
-    'stats_loc_x': 0.70,
+    'stats_fs': 22,
+    'stats_loc_x': 0.69,
     'stats_loc_y': 0.05,
     'stats_box': True,
+    'grid_alpha': 0.8,
 }
 
 
@@ -43,6 +44,11 @@ def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
     else:
         ax.tick_params(axis='x', labelcolor='w', size=1)
         ax.tick_params(axis='y', labelcolor='w', size=1)
+        
+    # grid
+    grid_alpha = info['grid_alpha']
+    if grid_alpha != 1.0:
+        ax.grid(True, alpha=grid_alpha)
 
     # title
     if info['show_title'] and info.get('title') is not None:
