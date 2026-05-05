@@ -34,6 +34,9 @@ _POISSON_INITIAL_PSI_FLOOR = 0.01
 _POISSON_HG_INV_EIG_CAP = 25.0
 _POISSON_PSI_EIG_CAP = 25.0
 _POISSON_CORR_SHRINKAGE_C = 20.0
+_POISSON_ETA_TAPER_WIDTH = 0.5
+_POISSON_BETA_CLAMP = 10.0
+_POISSON_BLUP_CLAMP = 10.0
 
 
 def _eighWithJitter(M: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -117,6 +120,16 @@ def _ridgeInv(M: torch.Tensor, floor: torch.Tensor) -> torch.Tensor:
     return vecs @ torch.diag_embed(inv_vals) @ vecs.mT
 
 
+def _poissonMeanDerivative(eta: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Poisson mean and d min(eta, cap) / d eta with a short taper near the cap."""
+    eta_eff = eta.clamp(max=_POISSON_ETA_CLIP_MAX)
+    mu = torch.exp(eta_eff)
+    taper_start = _POISSON_ETA_CLIP_MAX - _POISSON_ETA_TAPER_WIDTH
+    deriv = ((_POISSON_ETA_CLIP_MAX - eta) / _POISSON_ETA_TAPER_WIDTH).clamp(0.0, 1.0)
+    deriv = torch.where(eta <= taper_start, torch.ones_like(deriv), deriv)
+    return mu, deriv
+
+
 def _pqlWorking(
     eta: torch.Tensor,
     y: torch.Tensor,
@@ -134,10 +147,10 @@ def _pqlWorking(
         w = (mu * (1.0 - mu)).clamp(min=1e-6) * mask_n
         ytilde = (eta + (y - mu) / w.clamp(min=1e-30)) * mask_n
     elif likelihood_family == 2:
-        eta_eff = eta.clamp(max=_POISSON_ETA_CLIP_MAX)
-        mu = torch.exp(eta_eff)
-        w = mu.clamp(min=1e-6) * mask_n
-        ytilde = (eta_eff + (y - mu) / w.clamp(min=1e-30)) * mask_n
+        mu, deriv = _poissonMeanDerivative(eta)
+        grad_mu = (mu * deriv.clamp(min=1e-6)).clamp(min=1e-12)
+        w = mu * deriv.square() * mask_n
+        ytilde = (eta + (y - mu) / grad_mu) * mask_n
     else:
         raise ValueError(f'unsupported likelihood_family={likelihood_family}')
     return w, ytilde
@@ -224,11 +237,14 @@ def _pqlPass(
         eta_t = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Zm, bg)
         if likelihood_family == 1:
             mu_t = torch.sigmoid(eta_t)
+            score_t = ym - mu_t
+            w_t = (mu_t * (1.0 - mu_t)).clamp(min=1e-6) * mask_n
         else:
-            mu_t = torch.exp(eta_t.clamp(max=_POISSON_ETA_CLIP_MAX))
-        w_t = (mu_t * (1.0 - mu_t) if likelihood_family == 1 else mu_t).clamp(min=1e-6) * mask_n
+            mu_t, deriv_t = _poissonMeanDerivative(eta_t)
+            score_t = (ym - mu_t) * deriv_t
+            w_t = mu_t * deriv_t.square() * mask_n
         ZWZ_t = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_t, Zm)         # (B, m, q, q)
-        grad_g = torch.einsum('bmnq,bmn->bmq', Zm, (ym - mu_t) * mask_n) - torch.einsum(  # Zᵀ(y−μ)
+        grad_g = torch.einsum('bmnq,bmn->bmq', Zm, score_t * mask_n) - torch.einsum(  # Zᵀscore
             'bqr,bmr->bmq', Psi_inv, bg
         )  # −Ψ⁻¹b
         ZWZ_t_safe = torch.where(active[:, :, None, None], ZWZ_t, eye_q)
@@ -307,7 +323,8 @@ def _pqlPass(
     # --- BLUPs: K_g⁻¹ Zᵀ W (ỹ − X β̂_GLS) ---
     # Clamp beta_gls before residuals: near-singular GLS produces extreme values that
     # cause eta overflow in the next Newton pass or catastrophic BLUP outliers.
-    beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
+    beta_clamp = _POISSON_BETA_CLAMP if likelihood_family == 2 else 50.0
+    beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-beta_clamp, beta_clamp)
     resid_gls = (ytilde_f - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)) * mask_n
     blups = (
         torch.einsum(
@@ -318,7 +335,8 @@ def _pqlPass(
         * mask_m[:, :, None]
     )                                                 # (B, m, q)
 
-    blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
+    blup_clamp = _POISSON_BLUP_CLAMP if likelihood_family == 2 else 20.0
+    blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-blup_clamp, blup_clamp)
 
     eye_d = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
     beta_var = _safeSolve(sum_A_reg, eye_d).diagonal(dim1=-2, dim2=-1).clamp(min=1e-8)
@@ -870,7 +888,7 @@ def _lmmGlmm(
         mu_0 = torch.sigmoid(eta_0)
         pearson = (ym - mu_0).square() / (mu_0 * (1.0 - mu_0)).clamp(min=1e-6)
     else:
-        mu_0 = torch.exp(eta_0.clamp(max=_POISSON_ETA_CLIP_MAX))
+        mu_0, deriv_0 = _poissonMeanDerivative(eta_0)
         pearson = (ym - mu_0).square() / mu_0.clamp(min=1e-6)
 
     phi_pearson = (pearson * mask_n).sum(dim=(1, 2)) / (N - d).clamp(min=1.0)  # (B,)
@@ -893,7 +911,11 @@ def _lmmGlmm(
     ZWZ_safe = torch.where(active[:, :, None, None], ZWZ, eye_q)
     ZWZ_inv = _safeSolve(ZWZ_safe + _adaptiveRidgeBm(ZWZ_safe), eye_q_bm)  # (B, m, q, q)
 
-    ZtYmMu = torch.einsum('bmnq,bmn->bmq', Zm, (ym - mu_0) * mask_n)  # (B, m, q)
+    if likelihood_family == 2:
+        score_0 = (ym - mu_0) * deriv_0
+    else:
+        score_0 = ym - mu_0
+    ZtYmMu = torch.einsum('bmnq,bmn->bmq', Zm, score_0 * mask_n)  # (B, m, q)
     bhat_ols = torch.einsum('bmqr,bmr->bmq', ZWZ_inv, ZtYmMu) * mask_m[:, :, None]
 
     bhat_outer = torch.einsum('bmq,bmr->bmqr', bhat_ols, bhat_ols)       # (B, m, q, q)
@@ -943,8 +965,9 @@ def _lmmGlmm(
 
     def _sanitize(b_gls: torch.Tensor, psi: torch.Tensor):
         """Clamp beta_gls and clean Psi_lap before using as next-pass inputs."""
+        beta_clamp = _POISSON_BETA_CLAMP if likelihood_family == 2 else 50.0
         return (
-            b_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0),
+            b_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-beta_clamp, beta_clamp),
             psi.nan_to_num(nan=0.0, posinf=0.0),
         )
 

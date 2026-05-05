@@ -203,6 +203,17 @@ def irlsBernoulliCompacted(
 # ---------------------------------------------------------------------------
 
 _POISSON_ETA_CLIP_MAX = 10.0
+_POISSON_ETA_TAPER_WIDTH = 0.5
+
+
+def _poissonMeanDerivative(eta: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Poisson mean and d min(eta, cap) / d eta with a short taper near the cap."""
+    eta_eff = eta.clamp(max=_POISSON_ETA_CLIP_MAX)
+    mu = torch.exp(eta_eff)
+    taper_start = _POISSON_ETA_CLIP_MAX - _POISSON_ETA_TAPER_WIDTH
+    deriv = ((_POISSON_ETA_CLIP_MAX - eta) / _POISSON_ETA_TAPER_WIDTH).clamp(0.0, 1.0)
+    deriv = torch.where(eta <= taper_start, torch.ones_like(deriv), deriv)
+    return mu, deriv
 
 
 def irlsPoisson(
@@ -223,10 +234,10 @@ def irlsPoisson(
     beta[:, 0] = torch.log(y_mean)
     for _ in range(n_iter):
         eta = torch.einsum('bmnd,bd->bmn', Xm, beta)
-        eta_eff = eta.clamp(max=_POISSON_ETA_CLIP_MAX)
-        mu = torch.exp(eta_eff)
-        w = (mu * mask).clamp(min=1e-6)
-        z = (eta_eff + (ym - mu * mask) / w) * mask
+        mu, deriv = _poissonMeanDerivative(eta)
+        grad_mu = (mu * deriv.clamp(min=1e-6)).clamp(min=1e-12)
+        w = mu * deriv.square() * mask
+        z = (eta + (ym - mu * mask) / grad_mu) * mask
         w_sqrt = w.sqrt()
         Xw = (Xm * w_sqrt.unsqueeze(-1)).reshape(B, m * n, d)
         zw = (z * w_sqrt).reshape(B, m * n, 1)
@@ -250,10 +261,10 @@ def irlsPoissonCompacted(
     beta[:, 0] = torch.log(y_mean)
     for _ in range(n_iter):
         eta = torch.einsum('bmnd,bd->bmn', Xm, beta)
-        eta_eff = eta.clamp(max=_POISSON_ETA_CLIP_MAX)
-        mu = torch.exp(eta_eff)
-        w = (mu * mask).clamp(min=1e-6)
-        z = (eta_eff + (ym - mu * mask) / w) * mask
+        mu, deriv = _poissonMeanDerivative(eta)
+        grad_mu = (mu * deriv.clamp(min=1e-6)).clamp(min=1e-12)
+        w = mu * deriv.square() * mask
+        z = (eta + (ym - mu * mask) / grad_mu) * mask
         XwX = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)
         Xwz = torch.einsum('bmnd,bmn->bd', Xm, w * z)
         beta_new = torch.linalg.solve(XwX + _adaptiveRidge(XwX), Xwz)
