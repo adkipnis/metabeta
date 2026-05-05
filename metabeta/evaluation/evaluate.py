@@ -96,12 +96,18 @@ def setup() -> argparse.Namespace:
     parser.add_argument(
         '--solo',
         action='store_true',
-        default=True,
+        default=False,
         help='Only evaluate and plot MB (skip NUTS and ADVI)',
     )
 
     args = parser.parse_args()
-    args.config = Path('..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge-r_s1', 'config.yaml')
+    args.config = Path('..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge-r_s3', 'config.yaml')
+    # args.config = Path('..', 'outputs', 'checkpoints', 'normal_dmedium-n-mixed_mlarge-r_s3', 'config.yaml')
+    # args.config = Path('..', 'outputs', 'checkpoints', 'normal_dlarge-n-mixed_mlarge-r_s0', 'config.yaml')
+    
+    # args.config = Path('..', 'outputs', 'checkpoints', 'bernoulli_dsmall-b-mixed_mlarge-r_s2', 'config.yaml')
+    # args.config = Path('..', 'outputs', 'checkpoints', 'poisson_dsmall-p-mixed_mlarge-r_s2', 'config.yaml')
+
 
     # Load config from checkpoint or file
     if hasattr(args, 'checkpoint') and args.checkpoint:
