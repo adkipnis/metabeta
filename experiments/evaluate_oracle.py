@@ -24,7 +24,12 @@ from tqdm import tqdm
 from metabeta.models.approximator import Approximator
 from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch, toDevice
-from metabeta.utils.evaluation import Proposal, concatProposalsBatch, nutsConvergeMask, subsetProposal
+from metabeta.utils.evaluation import (
+    Proposal,
+    concatProposalsBatch,
+    nutsConvergeMask,
+    subsetProposal,
+)
 from metabeta.utils.io import setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
@@ -64,6 +69,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--data_ids',   type=str, nargs='+', default=DEFAULT_DATA_IDS)
     parser.add_argument('--outdir',     type=str, default=str(OUT_DIR))
     parser.add_argument('--verbosity',  type=int, default=1)
+    parser.add_argument('--decimals',         type=int, default=2,
+                        help='Decimal places in table cells (default: 2)')
     parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--convergence_mode', type=str, default='liberal',
                         choices=['liberal', 'strict'])
@@ -111,9 +118,7 @@ def capacityMask(batch: dict[str, torch.Tensor], max_d: int, max_q: int) -> np.n
     return (d_active <= max_d) & (q_active <= max_q)
 
 
-def trimBatch(
-    batch: dict[str, torch.Tensor], max_d: int, max_q: int
-) -> dict[str, torch.Tensor]:
+def trimBatch(batch: dict[str, torch.Tensor], max_d: int, max_q: int) -> dict[str, torch.Tensor]:
     """Slice all relevant tensors to model's max_d/max_q and recompute derived masks.
 
     Safe because permute=False ensures features are in natural (ascending) order,
@@ -151,11 +156,7 @@ def trimBatch(
     q = max_q
     out['mask_corr'] = (
         torch.stack(
-            [
-                out['mask_q'][..., i] & out['mask_q'][..., j]
-                for i in range(1, q)
-                for j in range(i)
-            ],
+            [out['mask_q'][..., i] & out['mask_q'][..., j] for i in range(1, q) for j in range(i)],
             dim=-1,
         )
         if q >= 2
@@ -349,16 +350,18 @@ def _evalGroup(
         active_d = batch['mask_d'].any(0)
         active_q = batch['mask_q'].any(0)
         has_eps = 'sigma_eps' in summary.nrmse
-        rows.append(buildRow(
-            label,
-            regime,
-            corr_vals=flattenActiveParams(summary.corr, active_d, active_q, has_eps),
-            nrmse_vals=flattenActiveParams(summary.nrmse, active_d, active_q, has_eps),
-            ece_vals=flattenActiveParams(summary.ece, active_d, active_q, has_eps),
-            eace_vals=flattenActiveParams(summary.eace, active_d, active_q, has_eps),
-            loo_nll=summary.loo_nll,
-            tpd_arr=tpd_arr,
-        ))
+        rows.append(
+            buildRow(
+                label,
+                regime,
+                corr_vals=flattenActiveParams(summary.corr, active_d, active_q, has_eps),
+                nrmse_vals=flattenActiveParams(summary.nrmse, active_d, active_q, has_eps),
+                ece_vals=flattenActiveParams(summary.ece, active_d, active_q, has_eps),
+                eace_vals=flattenActiveParams(summary.eace, active_d, active_q, has_eps),
+                loo_nll=summary.loo_nll,
+                tpd_arr=tpd_arr,
+            )
+        )
     return rows
 
 
@@ -416,15 +419,15 @@ def evaluateRegime(
             )
             idx = torch.from_numpy(conv_mask)
             conv_quads = [
-                ('MB',   conv_mb,   conv_batch,      mb_tpd_arr[idx]),
-                ('NUTS', conv_nuts, conv_batch,      nuts_tpd[idx] if nuts_tpd is not None else None),
+                ('MB', conv_mb, conv_batch, mb_tpd_arr[idx]),
+                ('NUTS', conv_nuts, conv_batch, nuts_tpd[idx] if nuts_tpd is not None else None),
                 ('ADVI', conv_advi, conv_advi_batch, conv_advi_batch.get('advi_duration')),
             ]
 
     full_quads = [
-        ('MB',   proposal_mb,   cap_batch,   mb_tpd_arr),
-        ('NUTS', proposal_nuts, cap_batch,   nuts_tpd),
-        ('ADVI', proposal_advi, advi_batch,  advi_tpd),
+        ('MB', proposal_mb, cap_batch, mb_tpd_arr),
+        ('NUTS', proposal_nuts, cap_batch, nuts_tpd),
+        ('ADVI', proposal_advi, advi_batch, advi_tpd),
     ]
     rows = _evalGroup(full_quads, regime, likelihood_family, rescale)
     rows_conv = _evalGroup(conv_quads, regime, likelihood_family, rescale) if conv_quads else None
@@ -438,40 +441,44 @@ def evaluateRegime(
 METRICS = ['r', 'NRMSE', 'ECE', 'EACE', 'LOO-NLL', 'time']
 
 
-def _fmtMd(val: tuple[float, float] | float | None) -> str:
+def _fmtMd(val: tuple[float, float] | float | None, dp: int = 2) -> str:
     if val is None:
         return 'NA'
     if isinstance(val, tuple):
         m, s = val
         if m != m:  # NaN check
             return 'NA'
-        return f'{m:.3f} ± {s:.3f}'
-    return f'{val:.4f}'
+        return f'{m:.{dp}f} ± {s:.{dp}f}'
+    return f'{val:.{dp}f}'
 
 
-def _fmtTex(val: tuple[float, float] | float | None) -> str:
+def _fmtTex(val: tuple[float, float] | float | None, dp: int = 2) -> str:
     if val is None:
         return 'NA'
     if isinstance(val, tuple):
         m, s = val
         if m != m:  # NaN check
             return 'NA'
-        return f'${m:.3f} \\pm {s:.3f}$'
-    return f'{val:.4f}'
+        return f'${m:.{dp}f} \\pm {s:.{dp}f}$'
+    return f'${val:.{dp}f}$'
 
 
 def saveTables(
     rows_by_regime: dict[str, list[dict]],
     outdir: Path,
     run_name: str,
+    dp: int = 2,
 ) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
+
+    fmt_md = lambda v: _fmtMd(v, dp)
+    fmt_tex = lambda v: _fmtTex(v, dp)
 
     # --- Markdown ---
     md_rows = []
     for regime, rows in rows_by_regime.items():
         for r in rows:
-            md_rows.append([regime, r['method']] + [_fmtMd(r[c]) for c in METRICS])
+            md_rows.append([regime, r['method']] + [fmt_md(r[c]) for c in METRICS])
     md_table = tabulate(
         md_rows,
         headers=['regime', 'method'] + METRICS,
@@ -497,7 +504,7 @@ def saveTables(
         for j, row in enumerate(rows):
             regime_cell = rf'\texttt{{{regime}}}' if j == 0 else ''
             method_cell = rf'\texttt{{{row["method"]}}}'
-            cells = ' & '.join(_fmtTex(row[c]) for c in METRICS)
+            cells = ' & '.join(fmt_tex(row[c]) for c in METRICS)
             lines.append(rf'      {regime_cell} & {method_cell} & {cells} \\')
     lines += [r'    \bottomrule', r'\end{tabular}', '']
 
@@ -555,9 +562,10 @@ def main() -> None:
         logger.error('No regimes evaluated — check data_ids and checkpoint.')
         return
 
-    saveTables(rows_by_regime, Path(cfg.outdir), run_name)
+    dp = getattr(cfg, 'decimals', 2)
+    saveTables(rows_by_regime, Path(cfg.outdir), run_name, dp=dp)
     if rows_by_regime_conv:
-        saveTables(rows_by_regime_conv, Path(cfg.outdir), f'{run_name}_conv')
+        saveTables(rows_by_regime_conv, Path(cfg.outdir), f'{run_name}_conv', dp=dp)
 
 
 if __name__ == '__main__':
