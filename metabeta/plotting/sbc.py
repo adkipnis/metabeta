@@ -72,6 +72,8 @@ def _plotSbcRow(
     show_legend: bool,
     show_x: bool,
     show_corr_rfx: bool = False,
+    show_band_legend: bool = True,
+    smooth: bool = False,
 ) -> None:
     ranks = getFractionalRanks(proposal, data)
     ranks['sigmas'] = joinSigmas(ranks)
@@ -118,8 +120,9 @@ def _plotSbcRow(
         )
         # corr_rfx only present for q > 1 datasets; no per-entry mask
         n_eff_global = min(n_eff_global, n_datasets)
-    p, low, high = simultaneousBands(n_eff=n_eff_global, diff=diff)
-    ax.fill_between(p, low, high, color='grey', alpha=0.2, label='_nolegend_')
+    p, low, high = simultaneousBands(n_eff=n_eff_global, diff=diff, smooth=smooth)
+    global_label = '95% CB (global)' if show_band_legend else '_nolegend_'
+    ax.fill_between(p, low, high, color='grey', alpha=0.15, label=global_label)
 
     # Local parameters: rfx
     _plotSbcEcdf(
@@ -134,11 +137,17 @@ def _plotSbcRow(
         show_x=show_x,
     )
     n_eff_local = _nEff(masks['rfx'], n_datasets)
-    p, low, high = simultaneousBands(n_eff=n_eff_local, diff=diff)
-    ax.fill_between(p, low, high, color='steelblue', alpha=0.1, label='_nolegend_')
+    p, low, high = simultaneousBands(n_eff=n_eff_local, diff=diff, smooth=smooth)
+    local_label = '95% CB (local)' if show_band_legend else '_nolegend_'
+    ax.fill_between(p, low, high, color='steelblue', alpha=0.20, label=local_label)
 
-    if show_legend:
-        ax.legend(fontsize=18, markerscale=2.5, loc='upper left')
+    if show_legend or show_band_legend:
+        handles, labels = ax.get_legend_handles_labels()
+        if not show_legend:
+            # keep only band patches
+            handles = [h for h, l in zip(handles, labels) if l.startswith('95%')]
+            labels = [l for l in labels if l.startswith('95%')]
+        ax.legend(handles=handles, labels=labels, fontsize=18, markerscale=2.5, loc='upper left')
 
 
 def plotSBC(
@@ -150,6 +159,8 @@ def plotSBC(
     epoch: int | None = None,
     show: bool = False,
     show_corr_rfx: bool = False,
+    show_band_legend: bool = False,
+    smooth: bool = False,
 ) -> Path | None:
     if not isinstance(proposals, list):
         proposals = [proposals]
@@ -169,6 +180,8 @@ def plotSBC(
             show_legend=(i == 0),
             show_x=(i == nrows - 1),
             show_corr_rfx=show_corr_rfx,
+            show_band_legend=show_band_legend,
+            smooth=smooth,
         )
         axs[i].set_box_aspect(1)
 
