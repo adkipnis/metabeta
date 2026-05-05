@@ -93,6 +93,12 @@ def setup() -> argparse.Namespace:
         default=False,
         help='Compute predictive interval coverage/width (adds Pred. EACE and 90%% width to output)',
     )
+    parser.add_argument(
+        '--solo',
+        action='store_true',
+        default=True,
+        help='Only evaluate and plot MB (skip NUTS and ADVI)',
+    )
 
     args = parser.parse_args()
     args.config = Path('..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge-r_s1', 'config.yaml')
@@ -150,6 +156,8 @@ class Evaluator:
             self.cfg.convergence_mode = 'liberal'
         if not hasattr(self.cfg, 'pareto_k_thr'):
             self.cfg.pareto_k_thr = 0.7
+        if not hasattr(self.cfg, 'solo'):
+            self.cfg.solo = False
         if not hasattr(self.cfg, 'outdir'):
             self.cfg.outdir = str(Path(self.dir, '..', 'outputs', 'results'))
 
@@ -560,6 +568,17 @@ class Evaluator:
 
     def go(self) -> None:
         full_batch = self.dl_test.fullBatch()
+        fit_label = self._fitLabel()
+
+        if self.cfg.solo:
+            proposal_mb = self.sampleMinibatched(self.dl_test, 'MB')
+            summary_mb = self.summary(proposal_mb, full_batch)
+            self.plot([proposal_mb], [summary_mb], ['MB'], full_batch)
+            rows = [self._makeRow('MB', summary_mb, fit_label)]
+            if self.cfg.save_tables:
+                self.saveTables(rows)
+            return
+
         advi_mask = self._fitBatchMask(full_batch, prefix='advi')
         advi_batch = subsetBatch(full_batch, advi_mask)
 
@@ -587,7 +606,6 @@ class Evaluator:
             advi_batch,
         )
 
-        fit_label = self._fitLabel()
         rows = []
         for label, summary in [
             ('MB', summary_mb),
