@@ -150,7 +150,8 @@ def initModel(cfg: argparse.Namespace, device: torch.device):
 
 def resetRng(model: Approximator, seed: int) -> None:
     model.posterior_g.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
-    model.posterior_l.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
+    if hasattr(model, 'posterior_l'):
+        model.posterior_l.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
 
 
 # ---------------------------------------------------------------------------

@@ -147,7 +147,8 @@ def extractDatasets(
 def resetRng(model: Approximator, seed: int) -> None:
     """Reset base distribution RNGs for reproducible sampling."""
     model.posterior_g.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
-    model.posterior_l.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
+    if hasattr(model, 'posterior_l'):
+        model.posterior_l.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
 
 
 @torch.inference_mode()
