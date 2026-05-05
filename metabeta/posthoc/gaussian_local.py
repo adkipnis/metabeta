@@ -1,9 +1,10 @@
 """
 posthoc/gaussian_local.py — Analytical Gaussian local posterior for LMMs (family == 0).
 
-For y_i | β, b_i, σ_ε ~ N(X_i β + Z_i b_i, σ_ε² I) and b_i | σ_rfx ~ N(0, diag(σ_rfx²)):
+For y_i | β, b_i, σ_ε ~ N(X_i β + Z_i b_i, σ_ε² I) and
+b_i | σ_rfx, R ~ N(0, D R D), where D = diag(σ_rfx):
 
-    Λ_i = Z_i^T Z_i / σ_ε² + diag(σ_rfx^{-2})
+    Λ_i = Z_i^T Z_i / σ_ε² + (D R D)^{-1}
     b_i | y_i, θ ~ N(Λ_i^{-1} Z_i^T (y_i - X_i β) / σ_ε², Λ_i^{-1})
 
 Public API
@@ -19,8 +20,47 @@ import torch
 from torch import Tensor
 
 from metabeta.utils.evaluation import Proposal
+from metabeta.utils.regularization import corrToLower
 
 _SIGMA_MIN = 1e-6
+
+
+def _correlationPrecision(
+    sigma_rfx: Tensor,
+    corr_rfx: Tensor | None = None,
+    eta_rfx: Tensor | None = None,
+) -> Tensor | None:
+    """Build Σ_rfx^{-1} for optional correlated random effects.
+
+    sigma_rfx: (B, S, q), corr_rfx: (B, q, q) or (B, S, q, q).
+    eta_rfx == 0 marks independent-rfx datasets and forces identity correlation.
+    """
+    if corr_rfx is None:
+        return None
+    B, S, q = sigma_rfx.shape
+    if q <= 1:
+        return None
+
+    corr = corr_rfx[..., :q, :q].to(device=sigma_rfx.device, dtype=sigma_rfx.dtype)
+    if corr.dim() == 3:
+        corr = corr.unsqueeze(1).expand(B, S, q, q)
+    elif corr.dim() != 4:
+        raise ValueError(f'corr_rfx has {corr.dim()} dims, expected 3 or 4')
+    if corr.shape[:2] != (B, S):
+        raise ValueError(
+            f'corr_rfx leading shape {corr.shape[:2]} does not match sigma_rfx {(B, S)}'
+        )
+
+    eye = torch.eye(q, device=sigma_rfx.device, dtype=sigma_rfx.dtype)
+    if eta_rfx is not None:
+        active = eta_rfx.to(device=sigma_rfx.device).view(B, 1, 1, 1) > 0
+        corr = torch.where(active, corr, eye.reshape(1, 1, q, q))
+
+    jitter = 1e-6 * eye
+    L_corr = torch.linalg.cholesky(corr + jitter)
+    sr_inv_diag = torch.diag_embed(1.0 / sigma_rfx.clamp(min=_SIGMA_MIN))
+    A = torch.linalg.solve_triangular(L_corr, sr_inv_diag, upper=False)
+    return A.mT @ A
 
 
 def analyticalRFX(
@@ -31,11 +71,13 @@ def analyticalRFX(
     sigma_rfx: Tensor,
     sigma_eps: Tensor,
     mask_n: Tensor,
+    Sigma_rfx_inv: Tensor | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Sample from the exact Gaussian local posterior, one draw per global sample.
 
     Shapes: Y (B,m,n), X (B,m,n,d), Z (B,m,n,q), beta (B,S,d),
             sigma_rfx (B,S,q), sigma_eps (B,S), mask_n (B,m,n) bool.
+    Sigma_rfx_inv: optional (B,S,q,q) full precision; if None uses diag(1/sigma_rfx^2).
     Returns: samples (B,m,S,q), log_prob (B,m,S).
     """
     B, m, _ = Y.shape
@@ -53,11 +95,12 @@ def analyticalRFX(
     ZtR = torch.einsum('bmnq,bmsn->bmsq', Z_m, r)               # (B, m, S, q)
 
     eps_sq = se**2
-    Lambda = ZtZ.unsqueeze(2) / eps_sq[:, None, :, None, None] + torch.diag_embed(
-        1.0 / sr**2
-    ).unsqueeze(
-        1
-    )                                                             # (B, m, S, q, q)
+    prior_prec = (
+        Sigma_rfx_inv.unsqueeze(1)
+        if Sigma_rfx_inv is not None
+        else torch.diag_embed(1.0 / sr**2).unsqueeze(1)
+    )
+    Lambda = ZtZ.unsqueeze(2) / eps_sq[:, None, :, None, None] + prior_prec
 
     mu = torch.linalg.solve(Lambda, ZtR / eps_sq[:, None, :, None])  # (B, m, S, q)
 
@@ -153,8 +196,11 @@ def gaussianCeiling(
     beta_rep = ffx.unsqueeze(1).expand(-1, n_samples, -1)
     sr_rep = sigma_rfx.unsqueeze(1).expand(-1, n_samples, -1)
     se_rep = sigma_eps.unsqueeze(1).expand(-1, n_samples)
+    corr_rfx = batch.get('corr_rfx')
+    eta_rfx = batch.get('eta_rfx')
+    Sigma_rfx_inv = _correlationPrecision(sr_rep, corr_rfx, eta_rfx)
 
-    samples_l, _ = analyticalRFX(
+    samples_l, log_prob_l = analyticalRFX(
         batch['y'],
         batch['X'][..., :d_ffx],
         batch['Z'][..., :d_rfx],
@@ -162,9 +208,17 @@ def gaussianCeiling(
         sr_rep,
         se_rep,
         batch['mask_n'],
+        Sigma_rfx_inv=Sigma_rfx_inv,
     )
 
-    global_samples = torch.cat([beta_rep, sr_rep, se_rep.unsqueeze(-1)], dim=-1)
+    parts_g = [beta_rep, sr_rep, se_rep.unsqueeze(-1)]
+    d_corr = d_rfx * (d_rfx - 1) // 2
+    if d_corr > 0 and corr_rfx is not None:
+        r_corr = corrToLower(corr_rfx[..., :d_rfx, :d_rfx])
+        if eta_rfx is not None:
+            r_corr = torch.where(eta_rfx.unsqueeze(-1) > 0, r_corr, torch.zeros_like(r_corr))
+        parts_g.append(r_corr.unsqueeze(1).expand(-1, n_samples, -1))
+    global_samples = torch.cat(parts_g, dim=-1)
     proposed = {
         'global': {
             'samples': global_samples,
@@ -172,10 +226,10 @@ def gaussianCeiling(
         },
         'local': {
             'samples': samples_l,
-            'log_prob': torch.zeros(B, samples_l.shape[1], n_samples, device=ffx.device),
+            'log_prob': log_prob_l,
         },
     }
-    return Proposal(proposed, has_sigma_eps=True)
+    return Proposal(proposed, has_sigma_eps=True, d_corr=d_corr if len(parts_g) == 4 else 0)
 
 
 def gaussianHybrid(global_proposal: Proposal, batch: dict[str, Tensor]) -> Proposal:
@@ -194,6 +248,7 @@ def gaussianHybrid(global_proposal: Proposal, batch: dict[str, Tensor]) -> Propo
     beta = global_proposal.ffx         # (B, S, d_ffx)
     sr = global_proposal.sigma_rfx   # (B, S, q)
     se = global_proposal.sigma_eps   # (B, S)
+    Sigma_rfx_inv = _correlationPrecision(sr, global_proposal.corr_rfx, batch.get('eta_rfx'))
 
     samples_l, log_prob_l = analyticalRFX(
         batch['y'],
@@ -203,6 +258,7 @@ def gaussianHybrid(global_proposal: Proposal, batch: dict[str, Tensor]) -> Propo
         sr,
         se,
         batch['mask_n'],
+        Sigma_rfx_inv=Sigma_rfx_inv,
     )
 
     new_data = {
@@ -210,7 +266,10 @@ def gaussianHybrid(global_proposal: Proposal, batch: dict[str, Tensor]) -> Propo
         'local': {'samples': samples_l, 'log_prob': log_prob_l},
     }
     out = Proposal(
-        new_data, has_sigma_eps=global_proposal.has_sigma_eps, d_corr=global_proposal.d_corr
+        new_data,
+        has_sigma_eps=global_proposal.has_sigma_eps,
+        d_corr=global_proposal.d_corr,
+        corr_rfx=global_proposal.corr_rfx,
     )
     out.tpd = global_proposal.tpd
     return out
