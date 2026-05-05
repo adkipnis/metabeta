@@ -33,6 +33,7 @@ _POISSON_ETA_CLIP_MAX = 10.0
 _POISSON_INITIAL_PSI_FLOOR = 0.01
 _POISSON_HG_INV_EIG_CAP = 25.0
 _POISSON_PSI_EIG_CAP = 25.0
+_POISSON_CORR_SHRINKAGE_C = 20.0
 
 
 def _eighWithJitter(M: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -992,6 +993,9 @@ def _lmmGlmm(
     Psi_lap = Psi_lap.nan_to_num(nan=0.0, posinf=0.0)
     if likelihood_family == 1:
         corr_alpha = G / (G + _BERNOULLI_CORR_SHRINKAGE_C)
+        Psi_lap = _shrinkOffDiagonal(Psi_lap, corr_alpha)
+    elif likelihood_family == 2:
+        corr_alpha = G / (G + _POISSON_CORR_SHRINKAGE_C)
         Psi_lap = _shrinkOffDiagonal(Psi_lap, corr_alpha)
     Psi_pql = Psi_pql.nan_to_num(nan=0.0, posinf=0.0)
     mean_Hg_inv = mean_Hg_inv.nan_to_num(nan=0.0, posinf=0.0)
