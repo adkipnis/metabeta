@@ -22,6 +22,10 @@ def _adaptiveRidgeBm(A: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
 
 
 _EIGH_JITTERS = [1e-6, 1e-4, 1e-2, 1.0]
+_BERNOULLI_INITIAL_PSI_FLOOR = 0.25
+_BERNOULLI_HG_INV_EIG_CAP = 25.0
+_BERNOULLI_PSI_EIG_CAP = 49.0
+_BERNOULLI_BLUP_VAR_INFLATION = 1.5
 
 
 def _eighWithJitter(M: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -60,6 +64,23 @@ def _psdProject(M: torch.Tensor) -> torch.Tensor:
     M = 0.5 * (M + M.mT)
     vals, vecs = _eighWithJitter(M)
     return vecs @ torch.diag_embed(vals.clamp(min=0.0)) @ vecs.mT
+
+
+def _psdClampEigenvalues(M: torch.Tensor, max_eig: torch.Tensor | float) -> torch.Tensor:
+    """Project to PSD and cap eigenvalues for arbitrary leading batch dimensions."""
+    M = 0.5 * (M + M.mT)
+    leading_shape = M.shape[:-2]
+    q = M.shape[-1]
+    flat_M = M.reshape(-1, q, q)
+    vals, vecs = _eighWithJitter(flat_M)
+    vals = vals.clamp(min=0.0)
+
+    if isinstance(max_eig, torch.Tensor):
+        cap = max_eig.to(device=M.device, dtype=M.dtype).reshape(-1, 1)
+    else:
+        cap = M.new_full((flat_M.shape[0], 1), float(max_eig))
+    vals = torch.minimum(vals, cap.clamp(min=0.0))
+    return (vecs @ torch.diag_embed(vals) @ vecs.mT).reshape(*leading_shape, q, q)
 
 
 def _pseudoInverse(M: torch.Tensor) -> torch.Tensor:
@@ -210,8 +231,21 @@ def _pqlPass(
     # Ψ̂_Lap M-step: Ψ = mean_g(b̂_g b̂_g' + H_g^{-1})
     Hg_f = ZWZ_f_safe + Psi_inv[:, None]
     Hg_inv = _safeSolve(Hg_f + _adaptiveRidgeBm(Hg_f), eye_q_bm) * mask4
+
+    if likelihood_family == 1:
+        ns_g = mask_n.sum(dim=-1).clamp(min=1.0)                         # (B, m)
+        y_rate = (ym * mask_n).sum(dim=-1) / ns_g                         # (B, m)
+        outcome_balance = (4.0 * y_rate * (1.0 - y_rate)).clamp(0.0, 1.0)  # (B, m)
+        info_g = ZWZ_f.diagonal(dim1=-2, dim2=-1).sum(dim=-1).clamp(min=0.0)
+        info_weight = info_g / (info_g + float(q))
+        cov_weight = (outcome_balance.sqrt() * info_weight).clamp(0.0, 1.0) * mask_m
+        Hg_inv = _psdClampEigenvalues(Hg_inv, _BERNOULLI_HG_INV_EIG_CAP)
+        Hg_inv = Hg_inv * cov_weight[:, :, None, None]
+
     bg_outer = torch.einsum('bmq,bmr->bmqr', bg, bg)
     Psi_lap = _psdProject((bg_outer + Hg_inv).sum(dim=1) / G[:, None, None])  # (B, q, q)
+    if likelihood_family == 1:
+        Psi_lap = _psdClampEigenvalues(Psi_lap, _BERNOULLI_PSI_EIG_CAP)
     mean_Hg_inv = (Hg_inv * mask4).sum(dim=1) / G[:, None, None]
 
     # --- β̂_GLS via Woodbury/Schur complement under freshly computed Ψ̂_Lap ---
@@ -856,7 +890,10 @@ def _lmmGlmm(
         likelihood_family,
         n_newton,
     )
-    psi_0_floor = psi_0.clamp(min=1e-6)
+    if likelihood_family == 1:
+        psi_0_floor = psi_0.clamp(min=_BERNOULLI_INITIAL_PSI_FLOOR)
+    else:
+        psi_0_floor = psi_0.clamp(min=1e-6)
     max_passes = 6
 
     def _sanitize(b_gls: torch.Tensor, psi: torch.Tensor):
@@ -866,8 +903,9 @@ def _lmmGlmm(
             psi.nan_to_num(nan=0.0, posinf=0.0),
         )
 
-    # Pass 1: pooled β₀, pseudoinverse of Psi_pql (cold start)
-    Psi_inv = _pseudoInverse(Psi_pql)
+    # Pass 1: pooled β₀, cold start.  Bernoulli separation often makes Psi_pql exactly
+    # zero; use a weak logit-scale variance floor so the first group modes are shrunk.
+    Psi_inv = _ridgeInv(Psi_pql, psi_0_floor) if likelihood_family == 1 else _pseudoInverse(Psi_pql)
     beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls = _pqlPass(beta_0, Psi_inv, *pass_args)
     beta_gls, Psi_lap = _sanitize(beta_gls, Psi_lap)
     if uncorr is not None:
@@ -918,6 +956,8 @@ def _lmmGlmm(
     # Use G as denominator (no d subtraction) since PQL doesn't have an explicit df formula.
     df_sigma = G.clamp(min=1.0)
     blup_var = blup_var * (1.0 + 2.0 / df_sigma)[:, None, None]
+    if likelihood_family == 1:
+        blup_var = blup_var * _BERNOULLI_BLUP_VAR_INFLATION
 
     # Per-group mean working residual (after removing fixed effects)
     resid_g = (resid_gls.sum(dim=2) / ns.clamp(min=1.0) * mask_m).unsqueeze(-1)  # (B, m, 1)

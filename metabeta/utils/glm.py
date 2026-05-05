@@ -176,7 +176,9 @@ def irlsBernoulliCompacted(
     Xm: torch.Tensor,
     ym: torch.Tensor,
     mask: torch.Tensor,
-    n_iter: int = 5,
+    n_iter: int = 8,
+    damping: float = 0.7,
+    clamp: float = 20.0,
 ) -> torch.Tensor:
     """Batched IRLS logistic regression via normal equations XwX."""
     B, d = Xm.shape[0], Xm.shape[-1]
@@ -188,7 +190,11 @@ def irlsBernoulliCompacted(
         z = (eta + (ym - p * mask) / w) * mask
         XwX = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)
         Xwz = torch.einsum('bmnd,bmn->bd', Xm, w * z)
-        beta = torch.linalg.solve(XwX + _adaptiveRidge(XwX), Xwz)
+        beta_new = _safeSolve(XwX + _adaptiveRidge(XwX), Xwz)
+        beta = (damping * beta_new + (1.0 - damping) * beta).nan_to_num(
+            nan=0.0, posinf=0.0, neginf=0.0
+        )
+        beta = beta.clamp(-clamp, clamp)
     return beta
 
 

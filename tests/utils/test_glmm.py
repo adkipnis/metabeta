@@ -183,6 +183,44 @@ def test_glmm_trivial_zero_rfx(likelihood_family):
     ), f'Psi_lap diagonal too large for zero-rfx case: {psi_lap_diag_mean:.4f}'
 
 
+def test_glmm_bernoulli_separation_does_not_inflate_sigma_rfx():
+    """Separated binary groups should not turn non-identifiability into huge sigma_rfx."""
+    B, m, n_per_group, d, q = 3, 10, 6, 2, 1
+    Xm = torch.zeros(B, m, n_per_group, d)
+    Zm = torch.zeros(B, m, n_per_group, q)
+    ym = torch.zeros(B, m, n_per_group)
+    mask_n = torch.ones(B, m, n_per_group)
+    mask_m = torch.ones(B, m)
+    ns = torch.full((B, m), float(n_per_group))
+    n_total = torch.full((B,), m * n_per_group)
+
+    x = torch.linspace(-1.0, 1.0, n_per_group)
+    Xm[..., 0] = 1.0
+    Xm[..., 1] = x
+    Zm[..., 0] = 1.0
+
+    ym[:, 1::2] = 1.0
+    ym[1, :2] = 0.0
+    ym[2, -2:] = 1.0
+
+    result = glmm(
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        ns,
+        n_total,
+        likelihood_family=1,
+    )
+
+    assert torch.isfinite(result['sigma_rfx_est']).all()
+    assert torch.isfinite(result['blup_est']).all()
+    assert result['sigma_rfx_est'].amax().item() < 8.0
+    vals = torch.linalg.eigvalsh(result['Psi_lap'])
+    assert (vals >= -1e-5).all()
+
+
 # ---------------------------------------------------------------------------
 # 4. Recovery test: nonzero rfx → sigma_rfx_est should be positive
 # ---------------------------------------------------------------------------
