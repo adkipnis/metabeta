@@ -40,7 +40,7 @@ _POISSON_BLUP_CLAMP = 10.0
 _NORMAL_Z_COND_CAP = 1e6
 _NORMAL_RANK_REL_TOL = 1e-5
 _NORMAL_RANK_ABS_TOL = 1e-8
-_NORMAL_FULL_MIN_EM = 3
+_NORMAL_FULL_MIN_EM = 5
 
 
 def _rankFromEigenvalues(
@@ -723,12 +723,17 @@ def _lmmNormalFull(
     ) / G_mom[
         :, None
     ]                                       # (B, q)
+    # Center bhat over informative groups before squaring so that a shared beta_ols offset
+    # (bhat_g ≈ b_g + (beta_true − beta_ols)) cancels in the variance rather than inflating
+    # signal_mean and psi_eig_cap. Without centering, the squared offset can be O(1) while
+    # sigma_rfx² ≈ 0.2, loosening the cap by 10–20× and producing catastrophic EM spikes.
+    bhat_mean = _maskedMean(bhat, mom_mask[:, :, None], dim=1)  # (B, q)
+    bhat_centered = bhat - bhat_mean[:, None, :]                 # (B, m, q)
     bhat_signal = (
-        bhat.square() - sigma_eps_sq[:, None, None] * ZtZ_inv.diagonal(dim1=-2, dim2=-1)
+        bhat_centered.square() - sigma_eps_sq[:, None, None] * ZtZ_inv.diagonal(dim1=-2, dim2=-1)
     ).clamp(min=0.0)
-    bhat_var = _maskedMean(bhat.square(), mom_mask[:, :, None], dim=1)  # (B, q)
     signal_mean = _maskedMean(bhat_signal, mom_mask[:, :, None], dim=1)
-    signal_cap = (4.0 * signal_mean).clamp(min=sigma_eps_sq[:, None] * 1e-6)
+    signal_cap = (6.0 * signal_mean).clamp(min=sigma_eps_sq[:, None] * 1e-6)
     signal_winsor = torch.minimum(bhat_signal, signal_cap[:, None, :])
     signal_mean = _maskedMean(signal_winsor, mom_mask[:, :, None], dim=1)
     signal_median = _maskedMedian(signal_winsor, mom_mask[:, :, None], dim=1)
@@ -743,7 +748,7 @@ def _lmmNormalFull(
         fallback_diag,
     )
     psi_eig_cap = torch.maximum(
-        (4.0 * psi_diag_signal * active_q).amax(dim=1),
+        (6.0 * psi_diag_signal * active_q).amax(dim=1),
         fallback_diag.amax(dim=1),
     )
     Psi_raw = Psi_raw + torch.diag_embed(
@@ -876,8 +881,10 @@ def _lmmNormalFull(
 
     # Inflate blup_var to account for uncertainty in the Psi estimate (same rationale
     # as the compacted path: Var[Psi] ∝ Psi²/(G-d), delta-method gives 1 + 2/(G-d)).
+    # Clamp denominator at 4 to cap inflation at 50% for large G; uncapped it over-inflates
+    # blup_var in real-data regimes where Psi is well-estimated (observed ratio < 0.5).
     df_sigma = (G - d).clamp(min=1.0)
-    blup_var = blup_var * (1.0 + 2.0 / df_sigma)[:, None, None]
+    blup_var = blup_var * (1.0 + 2.0 / df_sigma.clamp(min=4.0))[:, None, None]
 
     # Kackar-Harville correction: blup_var = diag(σ²W_g) conditions on β as known, but actual
     # BLUP error also includes W_g Z^T X (β_hat - β). Dominant for large groups where W_g→Ψ⁻¹,
