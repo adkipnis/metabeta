@@ -381,6 +381,30 @@ def test_corr_rfx_shape_and_symmetry():
     assert (off.abs() < 1.0).all()
 
 
+def test_corr_rfx_masked_to_identity_when_eta_zero():
+    b, q, n_s = 2, 2, 6
+    model = Approximator(make_cfg(d_rfx=q, posterior_correlation=True))
+    batch = make_batch(b=b, q=q)
+    batch['eta_rfx'][0] = 0.0
+    batch['corr_rfx'][0] = torch.eye(q)
+
+    mask_g = model._masks(batch, local=False)
+    assert not mask_g[0, -model.d_corr :].any()
+    assert mask_g[1, -model.d_corr :].all()
+
+    proposal = model.estimate(batch, n_samples=n_s)
+    assert torch.allclose(
+        proposal.samples_g[0, :, -model.d_corr :],
+        torch.zeros_like(proposal.samples_g[0, :, -model.d_corr :]),
+        atol=1e-6,
+    )
+
+    corr = proposal.corr_rfx
+    assert corr is not None
+    expected = torch.eye(q).expand(n_s, q, q)
+    assert torch.allclose(corr[0], expected, atol=1e-5)
+
+
 def test_corr_rfx_none_when_flag_off():
     model = Approximator(make_cfg(posterior_correlation=False))
     batch = make_batch()
@@ -409,7 +433,7 @@ def test_corr_rfx_none_for_q1():
 # ---------------------------------------------------------------------------
 
 
-def _make_fake_proposal(b=2, s=5, d=2, q=2, has_eps=True, d_corr=1):
+def _make_fake_proposal(b=2, s=5, d=2, q=2, has_eps=True, d_corr=1, corr_rfx=None):
     D = d + q + (1 if has_eps else 0) + d_corr
     samples_g = torch.randn(b, s, D)
     # make sigma block positive by squaring
@@ -423,7 +447,7 @@ def _make_fake_proposal(b=2, s=5, d=2, q=2, has_eps=True, d_corr=1):
         'global': {'samples': samples_g, 'log_prob': log_prob_g},
         'local': {'samples': samples_l, 'log_prob': log_prob_l},
     }
-    return Proposal(proposed, has_sigma_eps=has_eps, d_corr=d_corr)
+    return Proposal(proposed, has_sigma_eps=has_eps, d_corr=d_corr, corr_rfx=corr_rfx)
 
 
 def test_proposal_d_correct():
@@ -475,4 +499,34 @@ def test_concat_proposals_batch_preserves_d_corr():
     p2 = _make_fake_proposal(b=3, s=5, d=2, q=2, d_corr=1)
     merged = concatProposalsBatch([p1, p2])
     assert merged.d_corr == 1
+
+
+def test_join_proposals_preserves_cached_corr_rfx():
+    q = 2
+    corr1 = torch.eye(q).expand(2, 3, q, q).clone()
+    corr2 = torch.eye(q).expand(2, 4, q, q).clone()
+    corr2[:, :, 0, 1] = 0.25
+    corr2[:, :, 1, 0] = 0.25
+    p1 = _make_fake_proposal(b=2, s=3, q=q, d_corr=0, corr_rfx=corr1)
+    p2 = _make_fake_proposal(b=2, s=4, q=q, d_corr=0, corr_rfx=corr2)
+
+    joined = joinProposals([p1, p2])
+
+    assert joined.corr_rfx is not None
+    assert torch.allclose(joined.corr_rfx, torch.cat([corr1, corr2], dim=1))
+
+
+def test_concat_proposals_batch_preserves_cached_corr_rfx():
+    q = 2
+    corr1 = torch.eye(q).expand(2, 5, q, q).clone()
+    corr2 = torch.eye(q).expand(3, 5, q, q).clone()
+    corr2[:, :, 0, 1] = -0.25
+    corr2[:, :, 1, 0] = -0.25
+    p1 = _make_fake_proposal(b=2, s=5, q=q, d_corr=0, corr_rfx=corr1)
+    p2 = _make_fake_proposal(b=3, s=5, q=q, d_corr=0, corr_rfx=corr2)
+
+    merged = concatProposalsBatch([p1, p2])
+
+    assert merged.corr_rfx is not None
+    assert torch.allclose(merged.corr_rfx, torch.cat([corr1, corr2], dim=0))
     assert merged.samples_g.shape[0] == 5  # 2+3 batch
