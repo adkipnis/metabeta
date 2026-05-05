@@ -182,7 +182,10 @@ class Approximator(nn.Module):
         if self.has_sigma_eps:
             masks.append(torch.ones_like(data['mask_d'][..., 0:1]))
         if self.d_corr > 0:
-            masks.append(data['mask_corr'][..., : self.d_corr])
+            mask_corr = data['mask_corr'][..., : self.d_corr]
+            if 'eta_rfx' in data:
+                mask_corr = mask_corr & (data['eta_rfx'].unsqueeze(-1) > 0)
+            masks.append(mask_corr)
         return torch.cat(masks, dim=-1)
 
     def _dataStatistics(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
