@@ -41,7 +41,7 @@ class SummarizerConfig(BaseModel):
 class PosteriorConfig(BaseModel):
     n_blocks: int = Field(gt=0, default=1)
     subnet_kwargs: dict | None = None
-    type: Literal['coupling', 'analytical'] = 'coupling'
+    type: Literal['coupling'] = 'coupling'
     transform: Literal['affine', 'spline'] = 'affine'
     base_family: Literal['normal', 'student'] = 'normal'
     base_trainable: bool = True
@@ -96,7 +96,7 @@ def modelFromYaml(
     s_g = model_cfg['summarizer_g']
     p_g = model_cfg['posterior_g']
     p_l = model_cfg.get('posterior_l', {})
-    posterior_l_cfg = p_l if p_l.get('type') == 'analytical' else {**p_g, **p_l}
+    posterior_l_cfg = {**p_g, **p_l}
     return ApproximatorConfig(
         d_ffx=d_ffx,
         d_rfx=d_rfx,
