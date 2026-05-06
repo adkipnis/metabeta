@@ -70,3 +70,19 @@ def test_correlation_precision_eta_zero_forces_identity():
 
     assert torch.allclose(samples_corr, samples_diag, atol=1e-5)
     assert torch.allclose(log_prob_corr, log_prob_diag, atol=1e-5)
+
+
+def test_analytical_rfx_handles_degenerate_precision():
+    y, x, z, beta, sigma_rfx, sigma_eps, mask_n = _inputs()
+    b, s, q = sigma_rfx.shape
+    sigma_inv = torch.zeros(b, s, q, q)
+    mask_n = torch.zeros_like(mask_n)
+
+    samples, log_prob = analyticalRFX(
+        y, x, z, beta, sigma_rfx, sigma_eps, mask_n, Sigma_rfx_inv=sigma_inv
+    )
+
+    assert samples.shape == (b, x.shape[1], s, q)
+    assert log_prob.shape == (b, x.shape[1], s)
+    assert torch.isfinite(samples).all()
+    assert torch.isfinite(log_prob).all()
