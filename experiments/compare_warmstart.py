@@ -6,10 +6,10 @@ draws=1000, chains=4) — no NUTS is re-run by this script.
 
 Conditions (warm only)
 ----------------------
-warm_2000  MB     ta=0.90  tune=2000  draws=1000  chains=4  max_td=12  Claim 1
-warm_1000  MB     ta=0.90  tune=1000  draws=1000  chains=4  max_td=12  Claim 2 mid
-warm_500   MB     ta=0.90  tune=500   draws=1000  chains=4  max_td=12  Claim 2
-warm_250   MB     ta=0.90  tune=250   draws=1000  chains=4  max_td=12  Claim 2 lb
+warm_2000  MB     ta=0.80  tune=2000  draws=1000  chains=4  max_td=10  Claim 1
+warm_1000  MB     ta=0.80  tune=1000  draws=1000  chains=4  max_td=10  Claim 2 mid
+warm_500   MB     ta=0.80  tune=500   draws=1000  chains=4  max_td=10  Claim 2
+warm_250   MB     ta=0.80  tune=250   draws=1000  chains=4  max_td=10  Claim 2 lb
 
 Metrics per dataset
 -------------------
@@ -43,22 +43,26 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import arviz as az
 import numpy as np
+import pymc as pm
 import torch
 from tabulate import tabulate
 
 from metabeta.evaluation.summary import getSummary
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.warmnuts import WarmNuts
+from metabeta.simulation.fit import buildPymc, extractAll
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped
 from metabeta.utils.evaluation import Proposal
+from metabeta.utils.families import hasSigmaEps
 from metabeta.utils.padding import padToModel, unpad
 from metabeta.utils.warmfit import cachePath, loadFit, saveFit
 
 DIR = Path(__file__).resolve().parent
 OUTPUTS_DIR = DIR / '..' / 'metabeta' / 'outputs'
-WN_FLOW_SAMPLES = 100
+WN_FLOW_SAMPLES = 1000
 MB_BENCH_SAMPLES = 1000
 
 DEFAULT_DATA_IDS = ['tiny-n-sampled', 'small-n-sampled', 'medium-n-sampled', 'large-n-sampled']
@@ -77,13 +81,15 @@ class Condition:
     draws: int
     chains: int
     max_treedepth: int = 10
+    warm: bool = True  # False → cold NUTS (PyMC default init, no flow start)
 
 
 CONDITIONS: list[Condition] = [
-    Condition('warm_2000', 0.80, 2000, 1000, 4, 10),
-    Condition('warm_1000', 0.80, 1000, 1000, 4, 10),
-    Condition('warm_500', 0.80, 500, 1000, 4, 10),
-    Condition('warm_250', 0.80, 250, 1000, 4, 10),
+    Condition('warm_2000', 0.80, 2000, 1000, 4, 10, warm=True),
+    Condition('warm_1000', 0.80, 1000, 1000, 4, 10, warm=True),
+    Condition('warm_500', 0.80, 500, 1000, 4, 10, warm=True),
+    Condition('warm_250', 0.80, 250, 1000, 4, 10, warm=True),
+    Condition('cold_live', 0.80, 2000, 1000, 4, 10, warm=False),
 ]
 COND_BY_LABEL = {c.label: c for c in CONDITIONS}
 
@@ -100,7 +106,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--data_ids',   nargs='+', default=DEFAULT_DATA_IDS,
                    help='Data directory names under metabeta/outputs/data/')
     p.add_argument('--n_datasets', type=int, default=16)
-    p.add_argument('--conditions', nargs='*', default=[c.label for c in CONDITIONS],
+    p.add_argument('--conditions', nargs='*', default=['warm_2000'],
                    choices=[c.label for c in CONDITIONS],
                    help='warm conditions to run (cold_std always loaded from test.fit.npz)')
     p.add_argument('--seed',       type=int, default=42)
@@ -244,6 +250,58 @@ def runWarm(
         max_rhat=raw_diag['max_rhat'],
         min_ess=raw_diag.get('min_ess', float('nan')),
         min_ess_t=raw_diag.get('min_ess_t', float('nan')),
+        wall_s=wall_s,
+    )
+    return samples, diag
+
+
+def runCold(
+    ds: dict,
+    cond: Condition,
+    seed: int,
+) -> tuple[dict[str, np.ndarray], dict]:
+    """Cold NUTS: PyMC default initialisation (jitter+adapt_diag), no flow start."""
+    d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
+    model = buildPymc(ds)
+    t0 = time.perf_counter()
+    with model:
+        trace = pm.sample(
+            tune=cond.tune,
+            draws=cond.draws,
+            chains=cond.chains,
+            target_accept=cond.target_accept,
+            nuts_kwargs={'max_treedepth': cond.max_treedepth},
+            random_seed=seed,
+            return_inferencedata=True,
+            progressbar=False,
+        )
+    wall_s = time.perf_counter() - t0
+
+    n_divs = int(trace.sample_stats['diverging'].values.sum())
+    try:
+        df = az.summary(trace, kind='diagnostics')
+        max_rhat = float(df['r_hat'].max())
+        min_ess = float(df['ess_bulk'].min())
+        min_ess_t = float(df['ess_tail'].min())
+    except Exception:
+        max_rhat = float('nan')
+        min_ess = float('nan')
+        min_ess_t = float('nan')
+
+    out = extractAll(trace, ds, d, q, 'wn')
+    samples: dict[str, np.ndarray] = {
+        'ffx': np.asarray(out['wn_ffx'], dtype=np.float32).T,
+        'sigma_rfx': np.asarray(out['wn_sigma_rfx'], dtype=np.float32).T,
+        'rfx': np.asarray(out['wn_rfx'], dtype=np.float32).transpose(2, 1, 0),
+    }
+    if hasSigmaEps(int(ds.get('likelihood_family', 0))):
+        samples['sigma_eps'] = np.asarray(out['wn_sigma_eps'], dtype=np.float32).squeeze(0)
+
+    diag = dict(
+        n_div=float(n_divs),
+        max_rhat=max_rhat,
+        min_ess=min_ess,
+        min_ess_t=min_ess_t,
         wall_s=wall_s,
     )
     return samples, diag
@@ -557,7 +615,9 @@ def run(args: argparse.Namespace) -> None:
         raise FileNotFoundError(f'Checkpoint not found: {ckpt}')
     ckpt_name = ckpt.parent.name
 
-    warm_conds = [COND_BY_LABEL[l] for l in args.conditions]
+    selected_conds = [COND_BY_LABEL[l] for l in args.conditions]
+    warm_conds = [c for c in selected_conds if c.warm]
+    cold_live_conds = [c for c in selected_conds if not c.warm]
     model = loadModel(ckpt) if (warm_conds or args.benchmark_mb) else None
 
     for data_id in args.data_ids:
@@ -591,6 +651,29 @@ def run(args: argparse.Namespace) -> None:
 
         print(f'\n--- cold_std: imported from test.fit.npz ---')
         all_results: list[dict] = _importColdStd(test_fit_path, fits_dir, n_ds, args.refit)
+
+        for cond in cold_live_conds:
+            print(
+                f'\n--- {cond.label}: cold live  ta={cond.target_accept}  '
+                f'tune={cond.tune}  draws={cond.draws} ---'
+            )
+            for idx, ds in enumerate(ds_list):
+                cache = cachePath(fits_dir, cond.label, idx)
+                if cache.exists() and not args.refit:
+                    samples, diag = loadFit(cache)
+                else:
+                    samples, diag = runCold(ds, cond, args.seed)
+                    saveFit(cache, samples, diag)
+
+                diag['ess_s'] = diag['min_ess'] / max(diag['wall_s'], 1e-3)
+                all_results.append({'cond': cond.label, 'idx': idx, 'samples': samples, **diag})
+                print(
+                    f'  ds={idx:02d}  div={diag["n_div"]:4.0f}  '
+                    f'rhat={diag["max_rhat"]:.3f}  '
+                    f'ess={diag["min_ess"]:.0f}  '
+                    f'wall={diag["wall_s"]:.1f}s',
+                    flush=True,
+                )
 
         proposal = None
         if warm_conds and model is not None:
