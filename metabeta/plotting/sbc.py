@@ -72,7 +72,7 @@ def _plotSbcRow(
     show_legend: bool,
     show_x: bool,
     show_corr_rfx: bool = False,
-    show_band_legend: bool = True,
+    show_band_legend: bool = False,
     smooth: bool = False,
 ) -> None:
     ranks = getFractionalRanks(proposal, data)
