@@ -19,8 +19,9 @@ from metabeta.utils.plot import PALETTE, niceify
 COND_STYLE: dict[str, dict] = {
     'mb': {'color': PALETTE[0], 'label': 'MB'},
     'cold_std': {'color': PALETTE[3], 'label': 'NUTS'},
-    'warm_2000': {'color': PALETTE[4], 'label': 'MB-NUTS (2000)'},
-    'warm_1000': {'color': PALETTE[4], 'label': 'MB-NUTS'},
+    'cold_live': {'color': PALETTE[2], 'label': 'NUTS (live)'},
+    'warm_2000': {'color': PALETTE[4], 'label': 'MB-NUTS'},
+    'warm_1000': {'color': PALETTE[4], 'label': 'MB-NUTS (1000)'},
     'warm_500': {'color': PALETTE[4], 'label': 'MB-NUTS (500)'},
     'warm_250': {'color': PALETTE[4], 'label': 'MB-NUTS (250)'},
     'advi': {'color': PALETTE[1], 'label': 'ADVI'},
