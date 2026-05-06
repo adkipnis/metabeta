@@ -71,7 +71,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument(
         '--converged_subset',
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help='Also evaluate/plot on the NUTS-converged subset of test datasets',
     )
     parser.add_argument(
@@ -91,7 +91,7 @@ def setup() -> argparse.Namespace:
         '--pred_coverage',
         action=argparse.BooleanOptionalAction,
         default=False,
-        help='Compute predictive interval coverage/width (adds Pred. EACE and 90%% width to output)',
+        help='Compute predictive interval coverage/width (adds Pred. EACE and 90% width to output)',
     )
     parser.add_argument(
         '--solo',
@@ -585,22 +585,21 @@ class Evaluator:
                 self.saveTables(rows)
             return
 
-        advi_mask = self._fitBatchMask(full_batch, prefix='advi')
-        advi_batch = subsetBatch(full_batch, advi_mask)
-
         # MB proposal
         proposal_mb = self.sampleMinibatched(self.dl_test, 'MB')
-        summary_mb = self.summary(proposal_mb, full_batch)
+        # summary_mb = self.summary(proposal_mb, full_batch)
 
         # NUTS proposal
         proposal_nuts = self._fit2proposal(full_batch, prefix='nuts')
-        summary_nuts = self.summary(proposal_nuts, full_batch)
-        self._nutsFailureAnalysis(summary_nuts, full_batch)
-
+        # summary_nuts = self.summary(proposal_nuts, full_batch)
+        
         # ADVI proposal
+        advi_mask = self._fitBatchMask(full_batch, prefix='advi')
+        advi_batch = subsetBatch(full_batch, advi_mask)
         proposal_advi = self._fit2proposal(advi_batch, prefix='advi')
         summary_advi = self.summary(proposal_advi, advi_batch)
-
+        
+        # Subset to batch where each method has a proposal
         mb_sub = subsetProposal(proposal_mb, advi_mask)
         nuts_sub = subsetProposal(proposal_nuts, advi_mask)
         summary_mb_sub = self.summary(mb_sub, advi_batch)
@@ -614,14 +613,16 @@ class Evaluator:
 
         rows = []
         for label, summary in [
-            ('MB', summary_mb),
-            ('NUTS', summary_nuts),
+            ('MB', summary_mb_sub),
+            ('NUTS', summary_nuts_sub),
             ('ADVI', summary_advi),
         ]:
             rows.append(self._makeRow(label, summary, fit_label))
 
         # --- converged subset ---
         if self.cfg.converged_subset:
+            summary_nuts = self.summary(proposal_nuts, full_batch)
+            self._nutsFailureAnalysis(summary_nuts, full_batch)
             conv_mask = nutsConvergeMask(full_batch, mode=self.cfg.convergence_mode)
             if conv_mask is not None:
                 n_conv = int(conv_mask.sum())
