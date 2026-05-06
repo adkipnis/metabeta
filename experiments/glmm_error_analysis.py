@@ -206,28 +206,30 @@ def run_diagnostic(
                 seps_est_np = seps_true_np = np.full(B, float('nan'))
 
             for b in range(B):
-                d = int(mask_d[b].sum())
-                q = int(mask_q[b].sum())
+                active_d = np.flatnonzero(mask_d[b])
+                active_q = np.flatnonzero(mask_q[b])
+                d = int(active_d.size)
+                q = int(active_q.size)
                 m = int(m_np[b])
 
                 # Active-component errors
-                be = beta_est[b, :d] - ffx_true[b, :d]           # (d,)
-                se = srfx_est[b, :q] - srfx_true[b, :q]          # (q,)
+                be = beta_est[b, active_d] - ffx_true[b, active_d]  # (d,)
+                se = srfx_est[b, active_q] - srfx_true[b, active_q]  # (q,)
                 eps_e = float(seps_est_np[b] - seps_true_np[b])
 
                 # Active group × rfx errors
-                rfx_e = blup_est[b, :m, :q] - rfx_true[b, :m, :q]  # (m, q)
-                bv = blup_var[b, :m, :q]                          # (m, q)
+                rfx_e = blup_est[b, :m][:, active_q] - rfx_true[b, :m][:, active_q]  # (m, q)
+                bv = blup_var[b, :m][:, active_q]                 # (m, q)
                 grp_ns = ns_np[b, :m]                               # (m,)
 
                 beta_err_list.append(be)
-                beta_true_list.append(ffx_true[b, :d])
+                beta_true_list.append(ffx_true[b, active_d])
                 srfx_err_list.append(se)
-                srfx_true_list.append(srfx_true[b, :q])
+                srfx_true_list.append(srfx_true[b, active_q])
                 seps_err_list.append(eps_e)
                 seps_true_list.append(float(seps_true_np[b]))
                 rfx_err_list.append(rfx_e.reshape(-1))
-                rfx_true_list.append(rfx_true[b, :m, :q].reshape(-1))
+                rfx_true_list.append(rfx_true[b, :m][:, active_q].reshape(-1))
                 blup_var_list.append(bv.reshape(-1))
                 blup_ns_list.append(np.repeat(grp_ns, q))
 
@@ -235,11 +237,14 @@ def run_diagnostic(
                 if max_q >= 2 and q >= 2 and 'Psi' in stats:
                     eta_b = float(batch['eta_rfx'][b].item()) if 'eta_rfx' in batch else 1.0
                     if eta_b > 0:
-                        Psi_b = stats['Psi'][b, :q, :q].cpu()            # (q, q)
+                        q_idx = torch.as_tensor(active_q, dtype=torch.long)
+                        Psi_b = stats['Psi'][b].cpu().index_select(0, q_idx).index_select(1, q_idx)
                         std_b = Psi_b.diagonal().clamp(min=1e-8).sqrt()  # (q,)
                         psi_c = (Psi_b / (std_b.unsqueeze(0) * std_b.unsqueeze(1))).clamp(-1, 1)
                         r_hat_b = corrToLower(psi_c.unsqueeze(0)).squeeze(0).numpy()   # (d_corr,)
-                        corr_rfx_b = batch['corr_rfx'][b, :q, :q].cpu()
+                        corr_rfx_b = (
+                            batch['corr_rfx'][b].cpu().index_select(0, q_idx).index_select(1, q_idx)
+                        )
                         r_true_b = corrToLower(corr_rfx_b.unsqueeze(0)).squeeze(0).numpy()
                         # G_mom: informative groups (mask_m AND ns > q+1)
                         G_mom_b = float(((mask_m[b]) & (ns_np[b, :] > q + 1)).sum())
@@ -256,19 +261,19 @@ def run_diagnostic(
                         'q': q,
                         'n_over_d': int(n_np[b]) / max(d, 1),
                         'bg_df': max(m - d, 1),
-                        'snr': float(srfx_true[b, :q].mean() / seps_true_np[b])
+                        'snr': float(srfx_true[b, active_q].mean() / seps_true_np[b])
                         if likelihood_family == 0
                         else float('nan'),
                         'seps_true': float(seps_true_np[b]),
-                        'srfx_true_mean': float(srfx_true[b, :q].mean()),
+                        'srfx_true_mean': float(srfx_true[b, active_q].mean()),
                         'seps_err': eps_e,
                         'srfx_err_mean': float(se.mean()),
-                        'srfx_clipped': bool((srfx_est[b, :q] == 0.0).any()),
+                        'srfx_clipped': bool((srfx_est[b, active_q] == 0.0).any()),
                         'rfx_rmse': float(np.sqrt(np.mean(rfx_e**2))),
                         '_rfx_err': rfx_e.reshape(-1).tolist(),
                         '_rfx_ns': np.repeat(grp_ns, q).tolist(),
                         '_beta_err': be.tolist(),
-                        '_beta_true': ffx_true[b, :d].tolist(),
+                        '_beta_true': ffx_true[b, active_d].tolist(),
                     }
                 )
 
