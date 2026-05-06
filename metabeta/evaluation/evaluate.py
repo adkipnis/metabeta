@@ -56,6 +56,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--r_tag', type=str)
     parser.add_argument('--data_id', type=str)
     parser.add_argument('--data_id_valid', type=str)
+    parser.add_argument('--data_id_test', type=str)
 
     # CLI-only runtime params
     parser.add_argument('--device', type=str, default='cpu')
@@ -199,8 +200,11 @@ class Evaluator:
         self.data_cfg_train = loadDataConfig(self.cfg.data_id)
         assimilateConfig(self.cfg, self.data_cfg_train)
 
-        # allow overriding validation/test data id independently from training
+        # allow overriding validation and test data ids independently from training
+        self.cfg.data_id_valid = getattr(self.cfg, 'data_id_valid', self.cfg.data_id)
+        self.cfg.data_id_test = getattr(self.cfg, 'data_id_test', self.cfg.data_id_valid)
         self.data_cfg_valid = loadDataConfig(self.cfg.data_id_valid)
+        self.data_cfg_test = loadDataConfig(self.cfg.data_id_test)
 
         # keep legacy attr name for checkpoint comparison compatibility
         self.data_cfg = self.data_cfg_train
@@ -210,7 +214,7 @@ class Evaluator:
         self.dl_test = self._getDataLoader('test', batch_size=self.cfg.batch_size)
 
     def _getDataLoader(self, partition: str, batch_size: int | None = None) -> Dataloader:
-        data_cfg = self.data_cfg_valid
+        data_cfg = self.data_cfg_test if partition == 'test' else self.data_cfg_valid
         data_fname = datasetFilename(partition)
         data_subdir = data_cfg['data_id']
         data_path = Path(self.dir, '..', 'outputs', 'data', data_subdir, data_fname)
@@ -218,7 +222,13 @@ class Evaluator:
             data_path = data_path.with_suffix('.fit.npz')
         assert data_path.exists(), f'data file not found: {data_path}'
         sortish = batch_size is not None
-        return Dataloader(data_path, batch_size=batch_size, sortish=sortish)
+        return Dataloader(
+            data_path,
+            batch_size=batch_size,
+            sortish=sortish,
+            max_d=self.cfg.max_d,
+            max_q=self.cfg.max_q,
+        )
 
     def _initModel(self) -> None:
         """Load model architecture from config and restore checkpoint weights."""
