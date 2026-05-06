@@ -74,12 +74,12 @@ class Approximator(nn.Module):
         return self.cfg.analytical_context
 
     @property
-    def analytical_blup_from_globals(self) -> bool:
-        return self.cfg.analytical_blup_from_globals
+    def analytical_local_at_inference(self) -> bool:
+        return self.cfg.analytical_local_at_inference
 
     @property
     def analytical_local_posterior(self) -> bool:
-        return self.analytical_blup_from_globals and self.likelihood_family == 0
+        return self.analytical_local_at_inference and self.likelihood_family == 0
 
     def _analyticsGlobalDim(self) -> int:
         """Dimension added to global context by GLMM statistics.
