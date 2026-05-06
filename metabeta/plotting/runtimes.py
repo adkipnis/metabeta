@@ -1,7 +1,7 @@
 """
 Runtime vs n_params figure (Panel A of warm-start figure).
 
-Lines: MB | MB-NUTS (warm_1000) | NUTS | ADVI
+Lines: MB | MB-NUTS (warm_2000) | NUTS | ADVI
 X-axis: n_params = d + q + m*q (effective model parameters per dataset)
 Line + band: equal-count bins → median + 5th/95th percentile
 
@@ -35,7 +35,7 @@ from metabeta.utils.warmfit import (
 )
 
 _WARM_CONDS = frozenset(COND_STYLE) - {'mb', 'advi', 'cold_std'}
-_DEFAULT_CONDS = ['mb', 'warm_1000', 'cold_std', 'advi']
+_DEFAULT_CONDS = ['mb', 'warm_2000', 'cold_std', 'advi']
 
 
 def _collectRuntimeRecords(data_dir: Path, fits_tag: str, conds: list[str]) -> list[dict]:

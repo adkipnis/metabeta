@@ -1,7 +1,7 @@
 """
 Warm-start efficiency figure.
 
-Panel B: ESS/s vs n_params — NUTS (cold_std) vs MB-NUTS (warm_1000)
+Panel B: ESS/s vs n_params — NUTS (cold_std) vs MB-NUTS (warm_2000)
 
 X-axis: n_params = d + q + m*q (effective model parameters per dataset)
 Line + band: equal-count bins in n_params space → median + 5th/95th percentile
@@ -33,7 +33,7 @@ def plotWarmStart(
     show: bool = False,
 ) -> Path | None:
     if conds is None:
-        conds = ['cold_std', 'warm_1000']
+        conds = ['cold_std', 'warm_2000']
 
     records: list[dict] = []
     for d in dirs:
@@ -55,7 +55,7 @@ def plotWarmStart(
         'Effective samples / second',
         'Sampling efficiency',
         n_bins,
-        log_y=True,
+        log_y=False,
     )
     fig.tight_layout()
 
@@ -81,7 +81,7 @@ def _setup() -> argparse.Namespace:
                    help='data directories (e.g. metabeta/outputs/data/tiny-n-sampled)')
     p.add_argument('--fits_tag', required=True,
                    help='fits subdirectory, e.g. fits_warm_normal_dsmall-n-mixed_mlarge-r_s3')
-    p.add_argument('--conds',    nargs='+', default=['cold_std', 'warm_1000'])
+    p.add_argument('--conds',    nargs='+', default=['cold_std', 'warm_2000'])
     p.add_argument('--out_dir',  type=Path, default=None)
     p.add_argument('--n_bins',   type=int, default=8)
     p.add_argument('--show',     action='store_true')
