@@ -306,7 +306,7 @@ def test_normal_local_context_uses_analytical_moments_even_without_analytical_in
     assert not torch.allclose(context_1, context_2)
 
 
-def test_normal_analytical_local_context_respects_q_and_corr_masks():
+def test_normal_analytical_local_context_returns_blup_stats_and_respects_q_masks():
     q = 3
     model = Approximator(make_cfg(d_rfx=q, analytical_local_at_inference=False))
     batch = make_batch(q=q)
@@ -322,12 +322,12 @@ def test_normal_analytical_local_context_respects_q_and_corr_masks():
     moments = context[..., -model._analyticsLocalDim() :]
     mean = moments[..., :q]
     std = moments[..., q : 2 * q]
-    corr = moments[..., 2 * q :]
+    lambda_g = moments[..., 2 * q :]
 
+    assert model._analyticsLocalDim() == 3 * q
     assert torch.equal(mean[0, :, 2], torch.zeros_like(mean[0, :, 2]))
     assert torch.equal(std[0, :, 2], torch.zeros_like(std[0, :, 2]))
-    assert torch.equal(corr[0, :, 1:], torch.zeros_like(corr[0, :, 1:]))
-    assert torch.equal(corr[1], torch.zeros_like(corr[1]))
+    assert torch.equal(lambda_g[0, :, 2], torch.zeros_like(lambda_g[0, :, 2]))
 
 
 def test_forward_with_reml_local_stats_uses_expected_context_width():

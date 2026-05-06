@@ -23,7 +23,7 @@ from metabeta.utils.families import (
 )
 from metabeta.posthoc.gaussian_local import (
     _correlationPrecision,
-    analyticalRFXMoments,
+    analyticalBLUPStats,
     gaussianHybrid,
 )
 
@@ -90,11 +90,11 @@ class Approximator(nn.Module):
         return self.d_ffx + self.d_rfx + self.d_corr + 1
 
     def _analyticsLocalDim(self) -> int:
-        """Dimension added to local posterior context by analytical local stats."""
+        """Dimension added to local context by analytical BLUP stats.
+        blup_est (d_rfx) + blup_std (d_rfx) + lambda_g (d_rfx)
+        """
         if not self.analytical_context:
             return 0
-        if self.likelihood_family == 0:
-            return 2 * self.d_rfx + self.d_corr
         return 3 * self.d_rfx
 
     def _summaryLocalDim(self) -> int:
@@ -332,31 +332,15 @@ class Approximator(nn.Module):
             ctx = torch.cat([ctx, self._analyticalBLUPContext(data, global_params)], dim=-1)
         return ctx
 
-    def _corrMask(self, data: dict[str, torch.Tensor]) -> torch.Tensor:
-        if self.d_corr == 0:
-            return data['mask_q'].new_zeros(data['mask_q'].shape[0], 0)
-        if 'mask_corr' in data:
-            mask_corr = data['mask_corr'][..., : self.d_corr]
-        else:
-            q = self.d_rfx
-            mask_q = data['mask_q'][..., :q]
-            mask_corr = torch.stack(
-                [mask_q[:, i] & mask_q[:, j] for i in range(q) for j in range(i)],
-                dim=-1,
-            )
-        if 'eta_rfx' in data:
-            mask_corr = mask_corr & (data['eta_rfx'].unsqueeze(-1) > 0)
-        return mask_corr
-
     def _analyticalBLUPContext(
         self,
         data: dict[str, torch.Tensor],
         global_params: torch.Tensor,
     ) -> torch.Tensor:
-        """Exact Gaussian local posterior moments given global parameter samples.
+        """Gaussian BLUP context given global parameter samples.
 
         global_params: (B, d_g) ground-truth or (B, s, d_g) samples — sigma in softplus space.
-        Returns mean, marginal std, and lower correlation: (B,m,[S], 2*q+d_corr).
+        Returns mean, marginal std, and contraction: (B,m,[S], 3*q).
         """
         has_s = global_params.dim() == 3
         gp = global_params.unsqueeze(1) if not has_s else global_params  # (B, S, d_g)
@@ -372,7 +356,7 @@ class Approximator(nn.Module):
             L_corr = unconstrainedToCholesky(z_corr, q)
             corr_rfx = L_corr @ L_corr.mT
         Sigma_rfx_inv = _correlationPrecision(sigma_rfx, corr_rfx, data.get('eta_rfx'))
-        mean, covariance = analyticalRFXMoments(
+        mean, std, lambda_g = analyticalBLUPStats(
             data['y'],
             data['X'][..., :d],
             data['Z'][..., :q],
@@ -386,18 +370,9 @@ class Approximator(nn.Module):
         mask_mq = data['mask_mq'][..., :q]
         mask = mask_mq.unsqueeze(2)
         mean = mean.clamp(-CLAMP, CLAMP) * mask
-        std = covariance.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().clamp(max=CLAMP)
-        std = std * mask
-        parts = [mean, std]
-        if self.d_corr > 0:
-            denom = (std.unsqueeze(-1) * std.unsqueeze(-2)).clamp(min=1e-8)
-            corr = (covariance / denom).clamp(-1.0, 1.0)
-            corr_l = corrToLower(corr)
-            mask_corr = self._corrMask(data)
-            corr_mask = data['mask_m'].unsqueeze(-1) & mask_corr.unsqueeze(1)
-            corr_l = corr_l * corr_mask.unsqueeze(2)
-            parts.append(corr_l)
-        ctx = torch.cat(parts, dim=-1)
+        std = std.clamp(max=CLAMP) * mask
+        lambda_g = lambda_g * mask
+        ctx = torch.cat([mean, std, lambda_g], dim=-1)
         return ctx.squeeze(2) if not has_s else ctx
 
     def _preprocess(self, targets: torch.Tensor, local: bool = False) -> torch.Tensor:
