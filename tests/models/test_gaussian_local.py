@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import torch
 
-from metabeta.posthoc.gaussian_local import analyticalRFX, _correlationPrecision
+from metabeta.posthoc.gaussian_local import (
+    analyticalRFX,
+    analyticalRFXMoments,
+    _correlationPrecision,
+)
 
 
 def _inputs() -> tuple[torch.Tensor, ...]:
@@ -86,3 +90,24 @@ def test_analytical_rfx_handles_degenerate_precision():
     assert log_prob.shape == (b, x.shape[1], s)
     assert torch.isfinite(samples).all()
     assert torch.isfinite(log_prob).all()
+
+
+def test_analytical_rfx_moments_padded_inactive_dimension_does_not_shrink_active_mean():
+    y, x, z, beta, sigma_rfx, sigma_eps, mask_n = _inputs()
+    z_1 = z[..., :1]
+    beta_1 = beta
+    sigma_rfx_1 = sigma_rfx[..., :1]
+
+    mean_1, cov_1 = analyticalRFXMoments(y, x, z_1, beta_1, sigma_rfx_1, sigma_eps, mask_n)
+
+    z_pad = torch.cat([z_1, torch.zeros_like(z_1)], dim=-1)
+    sigma_pad = torch.cat([sigma_rfx_1, torch.zeros_like(sigma_rfx_1)], dim=-1)
+    mean_pad, cov_pad = analyticalRFXMoments(y, x, z_pad, beta_1, sigma_pad, sigma_eps, mask_n)
+
+    assert torch.allclose(mean_pad[..., 0], mean_1[..., 0], atol=1e-4, rtol=1e-4)
+    assert torch.allclose(
+        cov_pad[..., 0, 0],
+        cov_1[..., 0, 0],
+        atol=1e-4,
+        rtol=1e-4,
+    )
