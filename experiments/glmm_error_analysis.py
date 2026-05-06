@@ -156,10 +156,11 @@ def run_diagnostic(
     blup_ns_list: list[np.ndarray] = []  # group sizes, aligned with blup arrays
 
     # corr_rfx: psi_corr vs true rho, per correlated dataset (eta_rfx > 0 and q >= 2)
-    corr_r_hat_list: list[np.ndarray] = []  # psi_corr lower-triangle
-    corr_r_true_list: list[np.ndarray] = []  # true corr_rfx lower-triangle
-    corr_G_mom_list: list[np.ndarray] = []  # informative-group count per dataset
-    corr_m_list: list[np.ndarray] = []  # total group count per dataset
+    # q can vary across mixed/sampled datasets, so keep lower-triangle entries flat.
+    corr_r_hat_list: list[np.ndarray] = []  # psi_corr lower-triangle entries
+    corr_r_true_list: list[np.ndarray] = []  # true corr_rfx lower-triangle entries
+    corr_G_mom_list: list[np.ndarray] = []  # informative-group count, repeated per entry
+    corr_m_list: list[np.ndarray] = []  # total group count, repeated per entry
 
     # Per-dataset scalars for breakdown
     ds: list[dict] = []
@@ -242,10 +243,10 @@ def run_diagnostic(
                         r_true_b = corrToLower(corr_rfx_b.unsqueeze(0)).squeeze(0).numpy()
                         # G_mom: informative groups (mask_m AND ns > q+1)
                         G_mom_b = float(((mask_m[b]) & (ns_np[b, :] > q + 1)).sum())
-                        corr_r_hat_list.append(r_hat_b[np.newaxis, :])
-                        corr_r_true_list.append(r_true_b[np.newaxis, :])
-                        corr_G_mom_list.append(np.array([G_mom_b]))
-                        corr_m_list.append(np.array([float(m)]))
+                        corr_r_hat_list.append(r_hat_b)
+                        corr_r_true_list.append(r_true_b)
+                        corr_G_mom_list.append(np.full_like(r_hat_b, G_mom_b, dtype=float))
+                        corr_m_list.append(np.full_like(r_hat_b, float(m), dtype=float))
 
                 ds.append(
                     {
@@ -503,11 +504,11 @@ def run_diagnostic(
     # 7. Corr(RFX): psi_corr quality and shrinkage comparison
     # ===========================================================================
     if corr_r_hat_list:
-        r_hat_all = np.concatenate(corr_r_hat_list)    # (N, d_corr)
+        N_corr = len(corr_r_hat_list)
+        r_hat_all = np.concatenate(corr_r_hat_list)    # (N_corr_entries,)
         r_true_all = np.concatenate(corr_r_true_list)
-        G_mom_all = np.concatenate(corr_G_mom_list)    # (N,)
-        m_all_corr = np.concatenate(corr_m_list)        # (N,)
-        N_corr = r_hat_all.shape[0]
+        G_mom_all = np.concatenate(corr_G_mom_list)    # (N_corr_entries,)
+        m_all_corr = np.concatenate(corr_m_list)        # (N_corr_entries,)
 
         def _corr_metrics(est: np.ndarray, true: np.ndarray) -> tuple[float, float, float, float]:
             e, t = est.reshape(-1), true.reshape(-1)
@@ -519,9 +520,12 @@ def run_diagnostic(
 
         # Shrinkage variants: alpha = G_mom / (G_mom + C) applied to r_hat
         shrinkage_Cs = [1, 3, 5, 10]
-        alpha_all = {C: (G_mom_all / (G_mom_all + C))[:, np.newaxis] for C in shrinkage_Cs}
+        alpha_all = {C: G_mom_all / (G_mom_all + C) for C in shrinkage_Cs}
 
-        print(f'\n=== Corr(RFX): psi_corr quality  (N={N_corr} correlated datasets) ===')
+        print(
+            f'\n=== Corr(RFX): psi_corr quality  '
+            f'(N={N_corr} correlated datasets, entries={r_hat_all.size}) ==='
+        )
         rows_corr = []
         r0, mae0, rmse0, sign0 = _corr_metrics(r_hat_all, r_true_all)
         rows_corr.append(
