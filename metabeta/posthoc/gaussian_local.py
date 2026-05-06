@@ -26,6 +26,12 @@ from metabeta.utils.regularization import corrToLower
 _SIGMA_MIN = 1e-6
 
 
+def _adaptiveDiagonalJitter(Lambda: Tensor, eps: float = 1e-6) -> Tensor:
+    """Scale ridge per random-effect dimension, preserving padded-dim separation."""
+    diag = Lambda.diagonal(dim1=-2, dim2=-1).abs().clamp(min=1.0)
+    return torch.diag_embed(diag * eps)
+
+
 def _correlationPrecision(
     sigma_rfx: Tensor,
     corr_rfx: Tensor | None = None,
@@ -103,9 +109,7 @@ def analyticalRFX(
     )
     Lambda = ZtZ.unsqueeze(2) / eps_sq[:, None, :, None, None] + prior_prec
 
-    diag_max = Lambda.diagonal(dim1=-2, dim2=-1).amax(-1, keepdim=True).unsqueeze(-1).clamp(min=1.0)
-    jitter = torch.eye(q, device=Lambda.device, dtype=Lambda.dtype) * (diag_max * 1e-6)
-    Lam_j = Lambda + jitter
+    Lam_j = Lambda + _adaptiveDiagonalJitter(Lambda)
     mu = _safeSolve(Lam_j, ZtR / eps_sq[:, None, :, None])  # (B, m, S, q)
 
     L = torch.linalg.cholesky(Lam_j)
@@ -153,9 +157,7 @@ def analyticalRFXMoments(
     )
     Lambda = ZtZ.unsqueeze(2) / eps_sq[:, None, :, None, None] + prior_prec
 
-    diag_max = Lambda.diagonal(dim1=-2, dim2=-1).amax(-1, keepdim=True).unsqueeze(-1).clamp(min=1.0)
-    jitter = torch.eye(q, device=Lambda.device, dtype=Lambda.dtype) * (diag_max * 1e-6)
-    Lam_j = Lambda + jitter
+    Lam_j = Lambda + _adaptiveDiagonalJitter(Lambda)
 
     mean = _safeSolve(Lam_j, ZtR / eps_sq[:, None, :, None])
     eye = torch.eye(q, device=Lam_j.device, dtype=Lam_j.dtype).reshape(
