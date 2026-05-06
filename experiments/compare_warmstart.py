@@ -59,16 +59,19 @@ import pymc as pm
 import torch
 from tabulate import tabulate
 
+from metabeta.evaluation.summary import getSummary
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.warmnuts import WarmNuts
 from metabeta.simulation.fit import buildPymc, extractAll
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped
+from metabeta.utils.evaluation import Proposal
 from metabeta.utils.padding import unpad
 
 DIR = Path(__file__).resolve().parent
 OUTPUTS_DIR = DIR / '..' / 'metabeta' / 'outputs'
 WN_FLOW_SAMPLES = 100
+MB_BENCH_SAMPLES = 1000
 
 DEFAULT_DATA_IDS = ['tiny-n-sampled', 'small-n-sampled', 'medium-n-sampled', 'large-n-sampled']
 
@@ -115,7 +118,12 @@ def setup() -> argparse.Namespace:
     p.add_argument('--conditions', nargs='+', default=[c.label for c in CONDITIONS],
                    choices=[c.label for c in CONDITIONS])
     p.add_argument('--seed',       type=int, default=42)
-    p.add_argument('--refit',      action='store_true', help='ignore cache')
+    p.add_argument('--refit',        action='store_true', help='ignore cache')
+    p.add_argument('--benchmark_mb', action='store_true',
+                   help='benchmark MB inference on test.npz and cache timings')
+    p.add_argument('--out_dir',    type=Path,
+                   default=Path(__file__).resolve().parent / 'results' / 'warm_start',
+                   help='Directory for markdown result files')
     return p.parse_args()
 # fmt: on
 
@@ -135,14 +143,14 @@ def loadModel(ckpt: Path) -> Approximator:
 
 
 def loadData(
-    data_dir: Path, n_limit: int, max_d: int | None = None, max_q: int | None = None
+    path: Path, n_limit: int, max_d: int | None = None, max_q: int | None = None
 ) -> tuple[dict, list[dict]]:
     """Return (tensor_batch for model.estimate, list of unpadded numpy dicts for PyMC).
 
     Pass max_d/max_q from the model so the tensor batch is padded to model capacity
     even when the dataset's native dimensions are smaller.
     """
-    col = Collection(data_dir / 'valid.npz', permute=False, max_d=max_d, max_q=max_q)
+    col = Collection(path, permute=False, max_d=max_d, max_q=max_q)
     n = min(n_limit, len(col))
     tensor_batch = collateGrouped([col[i] for i in range(n)])
     ds_list = []
@@ -175,6 +183,39 @@ def _load(path: Path) -> tuple[dict[str, np.ndarray], dict]:
         {k: raw[k] for k in sample_keys if k in raw},
         {k: float(raw[k]) for k in diag_keys if k in raw},
     )
+
+
+def _benchmarkMB(
+    model: Approximator,
+    ds_list: list[dict],
+    fits_dir: Path,
+    n_samples: int = MB_BENCH_SAMPLES,
+    refit: bool = False,
+) -> None:
+    """Run model.estimate per dataset, saving samples + wall_s as mb__{idx:03d}.npz."""
+    to_run = [i for i in range(len(ds_list)) if refit or not _cachePath(fits_dir, 'mb', i).exists()]
+    if not to_run:
+        return
+    warmup = collateGrouped([ds_list[to_run[0]]])
+    with torch.inference_mode():
+        model.estimate(warmup, n_samples=n_samples)
+    for i in to_run:
+        ds = ds_list[i]
+        d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
+        batch = collateGrouped([ds])
+        with torch.inference_mode():
+            t0 = time.perf_counter()
+            proposal = model.estimate(batch, n_samples=n_samples)
+            wall_s = time.perf_counter() - t0
+        samples: dict[str, np.ndarray] = {
+            'ffx': proposal.ffx[0, :, :d].numpy(),
+            'sigma_rfx': proposal.sigma_rfx[0, :, :q].numpy(),
+            'rfx': proposal.samples_l[0, :m, :, :q].permute(1, 0, 2).numpy(),
+        }
+        if proposal.has_sigma_eps:
+            samples['sigma_eps'] = proposal.sigma_eps[0].numpy()
+        _save(_cachePath(fits_dir, 'mb', i), samples, {'wall_s': wall_s})
+        print(f'  ds={i:02d}  wall={wall_s:.3f}s', flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +355,151 @@ def posteriorAgreement(
 
 
 # ---------------------------------------------------------------------------
+# Posterior quality evaluation (recovery, calibration, PSIS-LOO)
+# ---------------------------------------------------------------------------
+
+
+def buildProposal(
+    sample_list: list[dict[str, np.ndarray]],
+    d_ffx: int,
+    d_rfx: int,
+    m_max: int,
+) -> Proposal:
+    """Build a batched Proposal (B, S, ...) from a list of per-dataset sample dicts."""
+    has_sigma_eps = 'sigma_eps' in sample_list[0]
+    n_s = sample_list[0]['ffx'].shape[0]
+
+    samples_g_parts: list[np.ndarray] = []
+    samples_l_parts: list[np.ndarray] = []
+
+    for s in sample_list:
+        ffx = np.zeros((n_s, d_ffx), dtype=np.float32)
+        ffx[:, : s['ffx'].shape[1]] = s['ffx']
+
+        srfx = np.zeros((n_s, d_rfx), dtype=np.float32)
+        srfx[:, : s['sigma_rfx'].shape[1]] = s['sigma_rfx']
+
+        g_parts = [ffx, srfx]
+        if has_sigma_eps:
+            seps = s.get('sigma_eps', np.zeros(n_s, dtype=np.float32))
+            g_parts.append(seps[:, np.newaxis])
+        samples_g_parts.append(np.concatenate(g_parts, axis=-1))  # (n_s, D)
+
+        # rfx saved as (n_s, m, q); Proposal wants (M_max, n_s, d_rfx)
+        rfx = s['rfx']  # (n_s, m, q)
+        n_s_i, m_i, q_i = rfx.shape
+        rfx_padded = np.zeros((m_max, n_s, d_rfx), dtype=np.float32)
+        rfx_padded[:m_i, :, :q_i] = rfx.transpose(1, 0, 2)
+        samples_l_parts.append(rfx_padded)  # (M_max, n_s, d_rfx)
+
+    samples_g = torch.from_numpy(np.stack(samples_g_parts).astype(np.float32))  # (B, n_s, D)
+    samples_l = torch.from_numpy(np.stack(samples_l_parts).astype(np.float32))  # (B, M_max, n_s, d_rfx)
+
+    proposed = {
+        'global': {'samples': samples_g},
+        'local': {'samples': samples_l},
+    }
+    return Proposal(proposed, has_sigma_eps=has_sigma_eps)
+
+
+def _meanActive(
+    metric_dict: dict[str, torch.Tensor],
+    active_d: torch.Tensor,
+    active_q: torch.Tensor,
+    has_eps: bool,
+) -> float:
+    """Mean of a per-parameter metric over active dimensions only."""
+    parts: list[torch.Tensor] = []
+    if 'ffx' in metric_dict:
+        parts.append(metric_dict['ffx'][active_d].float())
+    if 'sigma_rfx' in metric_dict:
+        parts.append(metric_dict['sigma_rfx'][active_q].float())
+    if 'rfx' in metric_dict:
+        parts.append(metric_dict['rfx'][active_q].float())
+    if has_eps and 'sigma_eps' in metric_dict:
+        v = metric_dict['sigma_eps'].float()
+        parts.append(v.reshape(1) if v.dim() == 0 else v)
+    if not parts:
+        return float('nan')
+    return float(torch.cat(parts).nanmean().item())
+
+
+def computeQuality(
+    cond_results: list[dict],
+    tensor_batch: dict,
+    likelihood_family: int,
+    d_ffx: int,
+    d_rfx: int,
+) -> dict[str, float]:
+    """Build Proposal from NUTS samples and run getSummary to get quality metrics."""
+    sample_list = [r['samples'] for r in sorted(cond_results, key=lambda r: r['idx'])]
+    m_max = int(tensor_batch['rfx'].shape[1])
+
+    proposal = buildProposal(sample_list, d_ffx, d_rfx, m_max)
+    summary = getSummary(
+        proposal, tensor_batch, likelihood_family=likelihood_family, compute_pred_coverage=False
+    )
+
+    active_d = tensor_batch['mask_d'].any(0)
+    active_q = tensor_batch['mask_q'].any(0)
+    has_eps = 'sigma_eps' in summary.nrmse
+
+    return {
+        'r': _meanActive(summary.corr, active_d, active_q, has_eps),
+        'nrmse': _meanActive(summary.nrmse, active_d, active_q, has_eps),
+        'eace': _meanActive(summary.eace, active_d, active_q, has_eps),
+        'loo_nll': summary.mloonll if summary.loo_nll is not None else float('nan'),
+        'loo_k': summary.mloo_k if summary.loo_pareto_k is not None else float('nan'),
+    }
+
+
+def printQualityTable(quality: dict[str, dict[str, float]], active_conds: list[str]) -> str:
+    rows = []
+    for cond in active_conds:
+        q = quality.get(cond)
+        if q is None:
+            continue
+        rows.append([
+            cond,
+            f'{q["r"]:.3f}',
+            f'{q["nrmse"]:.3f}',
+            f'{q["eace"]:.3f}',
+            f'{q["loo_nll"]:.3f}' if np.isfinite(q['loo_nll']) else '—',
+            f'{q["loo_k"]:.3f}' if np.isfinite(q['loo_k']) else '—',
+        ])
+    headers = ['Condition', 'r ↑', 'NRMSE ↓', 'EACE ↓', 'LOO-NLL ↓', 'LOO k']
+    print(tabulate(rows, headers=headers, tablefmt='simple'))
+    return tabulate(rows, headers=headers, tablefmt='pipe')
+
+
+def printQualityDiff(quality: dict[str, dict[str, float]], active_conds: list[str]) -> str | None:
+    """Quality delta vs cold_gold — positive Δr and negative Δ(others) means no quality loss."""
+    if 'cold_gold' not in quality:
+        return None
+    gold = quality['cold_gold']
+    non_gold = [c for c in active_conds if c != 'cold_gold' and c in quality]
+    if not non_gold:
+        return None
+
+    print('\nQuality vs cold_gold  (Δr ≈ 0 and Δothers ≈ 0 means quality preserved)')
+    rows = []
+    for cond in non_gold:
+        q = quality[cond]
+        rows.append([
+            cond,
+            f'{q["r"] - gold["r"]:+.3f}',
+            f'{q["nrmse"] - gold["nrmse"]:+.3f}',
+            f'{q["eace"] - gold["eace"]:+.3f}',
+            f'{q["loo_nll"] - gold["loo_nll"]:+.3f}'
+            if np.isfinite(q['loo_nll']) and np.isfinite(gold['loo_nll'])
+            else '—',
+        ])
+    headers = ['Condition', 'Δr ↑', 'Δ NRMSE ↓', 'Δ EACE ↓', 'Δ LOO-NLL ↓']
+    print(tabulate(rows, headers=headers, tablefmt='simple'))
+    return tabulate(rows, headers=headers, tablefmt='pipe')
+
+
+# ---------------------------------------------------------------------------
 # Summary and analysis tables
 # ---------------------------------------------------------------------------
 
@@ -327,7 +513,7 @@ def _fmt(med: float, p25: float, p75: float, decimals: int = 3) -> str:
     return f'{fmt.format(med)} [{fmt.format(p25)}–{fmt.format(p75)}]'
 
 
-def printSummary(results: list[dict], active_conds: list[str]) -> None:
+def printSummary(results: list[dict], active_conds: list[str]) -> str:
     metrics = [
         ('n_div', 'Divergences', 0),
         ('max_rhat', 'Max R-hat', 3),
@@ -351,19 +537,20 @@ def printSummary(results: list[dict], active_conds: list[str]) -> None:
         rows.append(row)
     headers = ['Condition'] + [m[1] for m in metrics]
     print(tabulate(rows, headers=headers, tablefmt='simple'))
+    return tabulate(rows, headers=headers, tablefmt='pipe')
 
 
-def printAnalysis(results: list[dict], active_conds: list[str]) -> None:
+def printAnalysis(results: list[dict], active_conds: list[str]) -> str | None:
     """Print warm vs cold_std comparison: direction indicates improvement."""
     if 'cold_std' not in active_conds:
-        return
+        return None
     cold_results = {r['idx']: r for r in results if r['cond'] == 'cold_std'}
     if not cold_results:
-        return
+        return None
 
     warm_conds = [c for c in active_conds if c.startswith('warm_')]
     if not warm_conds:
-        return
+        return None
 
     print('\nWarm vs cold_std  (positive Δ = improvement over cold baseline)')
     rows = []
@@ -393,6 +580,7 @@ def printAnalysis(results: list[dict], active_conds: list[str]) -> None:
 
     headers = ['Condition', 'Δ Div ↑', 'Δ R-hat ↑', 'Δ ESS ↑', 'Speedup ×', 'Δ ESS/s ↑']
     print(tabulate(rows, headers=headers, tablefmt='simple'))
+    return tabulate(rows, headers=headers, tablefmt='pipe')
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +597,7 @@ def run(args: argparse.Namespace) -> None:
     active_conds = [COND_BY_LABEL[l] for l in args.conditions]
     needs_warm = any(c.init == 'warm' for c in active_conds)
 
-    model = loadModel(ckpt) if needs_warm else None
+    model = loadModel(ckpt) if (needs_warm or args.benchmark_mb) else None
 
     for data_id in args.data_ids:
         data_dir = (OUTPUTS_DIR / 'data' / data_id).resolve()
@@ -425,8 +613,19 @@ def run(args: argparse.Namespace) -> None:
 
         max_d = model.d_ffx if model is not None else None
         max_q = model.d_rfx if model is not None else None
-        tensor_batch, ds_list = loadData(data_dir, args.n_datasets, max_d=max_d, max_q=max_q)
+        tensor_batch, ds_list = loadData(
+            data_dir / 'valid.npz', args.n_datasets, max_d=max_d, max_q=max_q
+        )
         n_ds = len(ds_list)
+
+        if args.benchmark_mb and model is not None:
+            test_path = data_dir / 'test.npz'
+            if not test_path.exists():
+                print(f'  [mb] test.npz not found — skipping')
+            else:
+                _, test_ds = loadData(test_path, args.n_datasets, max_d=max_d, max_q=max_q)
+                print(f'  [mb] benchmarking {len(test_ds)} test datasets...')
+                _benchmarkMB(model, test_ds, fits_dir, refit=args.refit)
 
         proposal = None
         if needs_warm and model is not None:
@@ -484,8 +683,55 @@ def run(args: argparse.Namespace) -> None:
         print(f'\n{"=" * 70}')
         print(f'Summary — {data_id}  ({n_ds} datasets)')
         print(f'{"=" * 70}')
-        printSummary(all_results, args.conditions)
-        printAnalysis(all_results, args.conditions)
+        md_sections: list[str] = [f'# {data_id}  ({n_ds} datasets)  ckpt={ckpt_name}\n']
+        md_sections.append('## MCMC diagnostics\n')
+        md_sections.append(printSummary(all_results, args.conditions))
+
+        analysis_md = printAnalysis(all_results, args.conditions)
+        if analysis_md:
+            md_sections.append('\n## Warm vs cold_std\n')
+            md_sections.append(analysis_md)
+
+        # Quality evaluation: recovery, calibration, PSIS-LOO
+        d_ffx = model.d_ffx if model is not None else int(tensor_batch['mask_d'].shape[-1])
+        d_rfx = model.d_rfx if model is not None else int(tensor_batch['mask_q'].shape[-1])
+        lf = int(tensor_batch['likelihood_family'][0].item())
+
+        print(f'\nQuality — {data_id}  (recovery / calibration / PSIS-LOO)')
+        quality: dict[str, dict[str, float]] = {}
+        for cond in active_conds:
+            cond_results = [r for r in all_results if r['cond'] == cond.label]
+            if not cond_results:
+                continue
+            print(f'  evaluating {cond.label}...', end=' ', flush=True)
+            quality[cond.label] = computeQuality(cond_results, tensor_batch, lf, d_ffx, d_rfx)
+            print('done')
+
+        md_sections.append('\n## Posterior quality\n')
+        md_sections.append(printQualityTable(quality, args.conditions))
+
+        diff_md = printQualityDiff(quality, args.conditions)
+        if diff_md:
+            md_sections.append('\n## Quality vs cold_gold\n')
+            md_sections.append(diff_md)
+
+        mb_wall_s = [
+            float(_load(p)[1]['wall_s'])
+            for p in sorted(fits_dir.glob('mb__*.npz'))
+        ]
+        if mb_wall_s:
+            arr = np.array(mb_wall_s)
+            print(
+                f'\nMB timings (test.npz, {len(arr)} datasets): '
+                f'median={np.median(arr):.3f}s  '
+                f'[{np.percentile(arr, 25):.3f}–{np.percentile(arr, 75):.3f}]'
+            )
+
+        out_dir: Path = args.out_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+        md_path = out_dir / f'{ckpt_name}__{data_id}__{n_ds}ds.md'
+        md_path.write_text('\n'.join(md_sections) + '\n')
+        print(f'\nSaved → {md_path}')
 
 
 if __name__ == '__main__':
