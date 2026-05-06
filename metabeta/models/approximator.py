@@ -14,14 +14,18 @@ from metabeta.utils.regularization import (
 )
 from metabeta.utils.config import ApproximatorConfig, SummarizerConfig, PosteriorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
-from metabeta.utils.glmm import glmm, analyticalBLUPContext
+from metabeta.utils.glmm import glmm
 from metabeta.utils.families import (
     FFX_FAMILIES,
     SIGMA_FAMILIES,
     FamilyEncoder,
     hasSigmaEps,
 )
-from metabeta.posthoc.gaussian_local import gaussianHybrid
+from metabeta.posthoc.gaussian_local import (
+    _correlationPrecision,
+    analyticalRFXMoments,
+    gaussianHybrid,
+)
 
 constrainSigma, unconstrainSigma, logDetJacobian = getConstrainers(method='softplus')
 CLAMP = 20.0
@@ -36,8 +40,6 @@ def _buildSummarizer(cfg: SummarizerConfig, d_input: int) -> nn.Module:
 def _buildPosterior(cfg: PosteriorConfig, d_target: int, d_context: int) -> nn.Module:
     if cfg.type == 'coupling':
         return CouplingFlow(d_target=d_target, d_context=d_context, **cfg.to_dict())
-    if cfg.type == 'analytical':
-        raise ValueError('analytical posterior is only supported for posterior_l')
     raise NotImplementedError(f'unknown posterior type: {cfg.type}')
 
 
@@ -77,7 +79,7 @@ class Approximator(nn.Module):
 
     @property
     def analytical_local_posterior(self) -> bool:
-        return self.cfg.posterior_l.type == 'analytical'
+        return self.analytical_blup_from_globals and self.likelihood_family == 0
 
     def _analyticsGlobalDim(self) -> int:
         """Dimension added to global context by GLMM statistics.
@@ -88,9 +90,15 @@ class Approximator(nn.Module):
         return self.d_ffx + self.d_rfx + self.d_corr + 1
 
     def _analyticsLocalDim(self) -> int:
-        """Dimension added to local context by GLMM stats.
-        blup_est (d_rfx) + blup_std (d_rfx) + lambda_g (d_rfx)
-        """
+        """Dimension added to local posterior context by analytical local stats."""
+        if not self.analytical_context:
+            return 0
+        if self.likelihood_family == 0:
+            return 2 * self.d_rfx + self.d_corr
+        return 3 * self.d_rfx
+
+    def _summaryLocalDim(self) -> int:
+        """Dimension added to per-group summaries before global pooling."""
         if not self.analytical_context:
             return 0
         return 3 * self.d_rfx
@@ -113,8 +121,8 @@ class Approximator(nn.Module):
         d_input_l = 1 + (d_ffx - 1) + (d_rfx - 1)
         self.summarizer_l = _buildSummarizer(self.cfg.summarizer_l, d_input_l)
         # global: local summaries + local metadata, aggregated across groups
-        d_meta_l = 2 + self._analyticsLocalDim()   # n_obs + eta_rfx
-        d_input_g = self.cfg.summarizer_l.d_output + d_meta_l
+        d_meta_l_summary = 2 + self._summaryLocalDim()   # n_obs + eta_rfx
+        d_input_g = self.cfg.summarizer_l.d_output + d_meta_l_summary
         self.summarizer_g = _buildSummarizer(self.cfg.summarizer_g, d_input_g)
 
         # --- posteriors
@@ -128,21 +136,17 @@ class Approximator(nn.Module):
         self.posterior_g = _buildPosterior(self.cfg.posterior_g, d_target_g, d_context_g)
         # local: random effects conditioned on global samples + local summary + local metadata
         # global params now include d_corr extra dims that the local flow also receives as context
-        if self.analytical_local_posterior:
-            if self.likelihood_family != 0:
-                raise ValueError(
-                    'posterior_l.type="analytical" is only supported for Gaussian data'
-                )
-        else:
-            d_context_l = d_ffx + d_var + self.d_corr + self.cfg.summarizer_l.d_output + d_meta_l
-            self.posterior_l = _buildPosterior(self.cfg.posterior_l, max(d_rfx, 2), d_context_l)
+        d_meta_l_context = 2 + self._analyticsLocalDim()
+        d_context_l = (
+            d_ffx + d_var + self.d_corr + self.cfg.summarizer_l.d_output + d_meta_l_context
+        )
+        self.posterior_l = _buildPosterior(self.cfg.posterior_l, max(d_rfx, 2), d_context_l)
 
     def compile(self) -> None:
         # Only compile the posteriors: Set Transformers use variable-length masked sequences
         # that trigger an Inductor tiling assertion bug (pytorch/pytorch#139438).
         self.posterior_g = torch.compile(self.posterior_g)
-        if not self.analytical_local_posterior:
-            self.posterior_l = torch.compile(self.posterior_l)
+        self.posterior_l = torch.compile(self.posterior_l)
 
     @property
     def device(self):
@@ -197,7 +201,7 @@ class Approximator(nn.Module):
             masks.append(torch.ones_like(data['mask_d'][..., 0:1]))
         if self.d_corr > 0:
             mask_corr = data['mask_corr'][..., : self.d_corr]
-            if 'eta_rfx' in data:
+            if 'eta_rfx' in data:  # this breaks earlier models
                 mask_corr = mask_corr & (data['eta_rfx'].unsqueeze(-1) > 0)
             masks.append(mask_corr)
         return torch.cat(masks, dim=-1)
@@ -324,24 +328,35 @@ class Approximator(nn.Module):
         else:
             raise ValueError(f'global_params has {ndim} dims, expected 2 or 3')
         ctx = torch.cat([local_summary_exp, global_params_exp], dim=-1)
-        if (
-            data is not None
-            and self.analytical_context
-            and self.analytical_blup_from_globals
-            and self.likelihood_family == 0
-        ):
+        if data is not None and self.analytical_context and self.likelihood_family == 0:
             ctx = torch.cat([ctx, self._analyticalBLUPContext(data, global_params)], dim=-1)
         return ctx
+
+    def _corrMask(self, data: dict[str, torch.Tensor]) -> torch.Tensor:
+        if self.d_corr == 0:
+            return data['mask_q'].new_zeros(data['mask_q'].shape[0], 0)
+        if 'mask_corr' in data:
+            mask_corr = data['mask_corr'][..., : self.d_corr]
+        else:
+            q = self.d_rfx
+            mask_q = data['mask_q'][..., :q]
+            mask_corr = torch.stack(
+                [mask_q[:, i] & mask_q[:, j] for i in range(q) for j in range(i)],
+                dim=-1,
+            )
+        if 'eta_rfx' in data:
+            mask_corr = mask_corr & (data['eta_rfx'].unsqueeze(-1) > 0)
+        return mask_corr
 
     def _analyticalBLUPContext(
         self,
         data: dict[str, torch.Tensor],
         global_params: torch.Tensor,
     ) -> torch.Tensor:
-        """Delegate to analyticalBLUPContext after extracting constrained params.
+        """Exact Gaussian local posterior moments given global parameter samples.
 
         global_params: (B, d_g) ground-truth or (B, s, d_g) samples — sigma in softplus space.
-        Returns: (B, m, 3*q) or (B, m, s, 3*q).
+        Returns mean, marginal std, and lower correlation: (B,m,[S], 2*q+d_corr).
         """
         has_s = global_params.dim() == 3
         gp = global_params.unsqueeze(1) if not has_s else global_params  # (B, S, d_g)
@@ -351,8 +366,38 @@ class Approximator(nn.Module):
         beta = gp[..., :d]
         sigma_rfx = constrainSigma(gp[..., d : d + q])
         sigma_eps = constrainSigma(gp[..., d + q : d + q + 1]).squeeze(-1)
-        z_corr = gp[..., d + q_var : d + q_var + self.d_corr] if self.d_corr > 0 else None
-        ctx = analyticalBLUPContext(data, beta, sigma_rfx, sigma_eps, z_corr, clamp=CLAMP)
+        corr_rfx = None
+        if self.d_corr > 0:
+            z_corr = gp[..., d + q_var : d + q_var + self.d_corr]
+            L_corr = unconstrainedToCholesky(z_corr, q)
+            corr_rfx = L_corr @ L_corr.mT
+        Sigma_rfx_inv = _correlationPrecision(sigma_rfx, corr_rfx, data.get('eta_rfx'))
+        mean, covariance = analyticalRFXMoments(
+            data['y'],
+            data['X'][..., :d],
+            data['Z'][..., :q],
+            beta,
+            sigma_rfx,
+            sigma_eps,
+            data['mask_n'],
+            Sigma_rfx_inv=Sigma_rfx_inv,
+        )
+
+        mask_mq = data['mask_mq'][..., :q]
+        mask = mask_mq.unsqueeze(2)
+        mean = mean.clamp(-CLAMP, CLAMP) * mask
+        std = covariance.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().clamp(max=CLAMP)
+        std = std * mask
+        parts = [mean, std]
+        if self.d_corr > 0:
+            denom = (std.unsqueeze(-1) * std.unsqueeze(-2)).clamp(min=1e-8)
+            corr = (covariance / denom).clamp(-1.0, 1.0)
+            corr_l = corrToLower(corr)
+            mask_corr = self._corrMask(data)
+            corr_mask = data['mask_m'].unsqueeze(-1) & mask_corr.unsqueeze(1)
+            corr_l = corr_l * corr_mask.unsqueeze(2)
+            parts.append(corr_l)
+        ctx = torch.cat(parts, dim=-1)
         return ctx.squeeze(2) if not has_s else ctx
 
     def _preprocess(self, targets: torch.Tensor, local: bool = False) -> torch.Tensor:
@@ -428,11 +473,7 @@ class Approximator(nn.Module):
 
         # Local posterior path: either keep REML BLUP features in the summary or
         # re-inject sample-conditioned Gaussian BLUPs in _localContext.
-        inject_analytical_blups = (
-            self.analytical_context
-            and self.analytical_blup_from_globals
-            and self.likelihood_family == 0
-        )
+        inject_analytical_blups = self.analytical_context and self.likelihood_family == 0
         summary_l = self._addMetadata(
             summary_l_raw, data, local=True, stats=None if inject_analytical_blups else stats
         )
@@ -461,9 +502,6 @@ class Approximator(nn.Module):
         log_probs['global'] = self.posterior_g.logProb(  # type: ignore
             targets_g, context=summary_g, mask=mask_g
         )
-        if self.analytical_local_posterior:
-            log_probs['local'] = data['mask_m'].new_zeros(data['mask_m'].shape, dtype=self.dtype)
-            return log_probs
 
         # local posterior — with curriculum, sometimes condition on sampled globals
         targets_l = self._targets(data, local=True)
