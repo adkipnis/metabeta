@@ -1,19 +1,11 @@
 """
-compare_warmstart.py — Cold vs warm-started NUTS on real data.
+compare_warmstart.py — Warm-started NUTS vs cold NUTS baseline on real data.
 
-Two claims
-----------
-Claim 1 (divergence reduction):
-    warm_2000 vs cold_std — same tune/draws budget, fewer divergences and better R-hat
+cold_std baseline is always loaded from test.fit.npz (NUTS, ta=0.80, tune=2000,
+draws=1000, chains=4) — no NUTS is re-run by this script.
 
-Claim 2 (speed):
-    warm_500 / warm_250 vs cold_gold — posterior quality matches the gold standard
-    with 4–8× fewer tuning steps
-
-Conditions
-----------
-cold_std   prior  ta=0.80  tune=2000  draws=1000  chains=4  max_td=10  typical user
-cold_gold  prior  ta=0.95  tune=4000  draws=2000  chains=4  max_td=10  reference
+Conditions (warm only)
+----------------------
 warm_2000  MB     ta=0.90  tune=2000  draws=1000  chains=4  max_td=12  Claim 1
 warm_1000  MB     ta=0.90  tune=1000  draws=1000  chains=4  max_td=12  Claim 2 mid
 warm_500   MB     ta=0.90  tune=500   draws=1000  chains=4  max_td=12  Claim 2
@@ -27,8 +19,6 @@ min_ess    min bulk ESS across all parameters
 min_ess_t  min tail ESS across all parameters
 wall_s     wall time (tune + sampling)
 ess_s      min_ess / wall_s  (efficiency)
-agree      mean |μ_cond − μ_gold| / σ_gold over globals vs cold_gold
-agree_r    Pearson r of per-parameter posterior means vs cold_gold
 
 Fits are cached per condition × dataset in {data_dir}/fits_warm_{ckpt_name}/.
 Rerun with --refit to ignore the cache.
@@ -41,7 +31,7 @@ Usage (from repo root):
     uv run python experiments/compare_warmstart.py \\
         --ckpt ... --n_datasets 8
     uv run python experiments/compare_warmstart.py \\
-        --ckpt ... --conditions cold_std warm_500
+        --ckpt ... --conditions warm_1000 warm_500
     uv run python experiments/compare_warmstart.py \\
         --ckpt ... --refit
 """
@@ -53,20 +43,18 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import arviz as az
 import numpy as np
-import pymc as pm
 import torch
 from tabulate import tabulate
 
 from metabeta.evaluation.summary import getSummary
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.warmnuts import WarmNuts
-from metabeta.simulation.fit import buildPymc, extractAll
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped
 from metabeta.utils.evaluation import Proposal
 from metabeta.utils.padding import padToModel, unpad
+from metabeta.utils.warmfit import cachePath, loadFit, saveFit
 
 DIR = Path(__file__).resolve().parent
 OUTPUTS_DIR = DIR / '..' / 'metabeta' / 'outputs'
@@ -84,7 +72,6 @@ DEFAULT_DATA_IDS = ['tiny-n-sampled', 'small-n-sampled', 'medium-n-sampled', 'la
 @dataclass
 class Condition:
     label: str
-    init: str  # 'cold' | 'warm'
     target_accept: float
     tune: int
     draws: int
@@ -93,12 +80,10 @@ class Condition:
 
 
 CONDITIONS: list[Condition] = [
-    Condition('cold_std', 'cold', 0.80, 2000, 1000, 4, 10),
-    Condition('cold_gold', 'cold', 0.95, 4000, 2000, 4, 10),
-    Condition('warm_2000', 'warm', 0.90, 2000, 1000, 4, 12),
-    Condition('warm_1000', 'warm', 0.90, 1000, 1000, 4, 12),
-    Condition('warm_500', 'warm', 0.90, 500, 1000, 4, 12),
-    Condition('warm_250', 'warm', 0.90, 250, 1000, 4, 12),
+    Condition('warm_2000', 0.80, 2000, 1000, 4, 10),
+    Condition('warm_1000', 0.80, 1000, 1000, 4, 10),
+    Condition('warm_500', 0.80, 500, 1000, 4, 10),
+    Condition('warm_250', 0.80, 250, 1000, 4, 10),
 ]
 COND_BY_LABEL = {c.label: c for c in CONDITIONS}
 
@@ -115,8 +100,9 @@ def setup() -> argparse.Namespace:
     p.add_argument('--data_ids',   nargs='+', default=DEFAULT_DATA_IDS,
                    help='Data directory names under metabeta/outputs/data/')
     p.add_argument('--n_datasets', type=int, default=16)
-    p.add_argument('--conditions', nargs='+', default=[c.label for c in CONDITIONS],
-                   choices=[c.label for c in CONDITIONS])
+    p.add_argument('--conditions', nargs='*', default=[c.label for c in CONDITIONS],
+                   choices=[c.label for c in CONDITIONS],
+                   help='warm conditions to run (cold_std always loaded from test.fit.npz)')
     p.add_argument('--seed',       type=int, default=42)
     p.add_argument('--refit',        action='store_true', help='ignore cache')
     p.add_argument('--benchmark_mb', action='store_true',
@@ -184,31 +170,6 @@ def loadFitDatasets(
     return tensor_batch, ds_list
 
 
-# ---------------------------------------------------------------------------
-# Cache helpers
-# ---------------------------------------------------------------------------
-
-
-def _cachePath(fits_dir: Path, cond_label: str, idx: int) -> Path:
-    return fits_dir / f'{cond_label}__{idx:03d}.npz'
-
-
-def _save(path: Path, samples: dict[str, np.ndarray], diag: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, **samples, **{k: np.array(v) for k, v in diag.items()})
-
-
-def _load(path: Path) -> tuple[dict[str, np.ndarray], dict]:
-    with np.load(path) as f:
-        raw = dict(f)
-    sample_keys = {'ffx', 'sigma_rfx', 'sigma_eps', 'rfx'}
-    diag_keys = {'n_div', 'max_rhat', 'min_ess', 'min_ess_t', 'wall_s'}
-    return (
-        {k: raw[k] for k in sample_keys if k in raw},
-        {k: float(raw[k]) for k in diag_keys if k in raw},
-    )
-
-
 def _benchmarkMB(
     model: Approximator,
     tensor_batch: dict,
@@ -218,7 +179,7 @@ def _benchmarkMB(
     refit: bool = False,
 ) -> None:
     """Run model.estimate per dataset, saving samples + wall_s as mb__{idx:03d}.npz."""
-    to_run = [i for i in range(len(ds_list)) if refit or not _cachePath(fits_dir, 'mb', i).exists()]
+    to_run = [i for i in range(len(ds_list)) if refit or not cachePath(fits_dir, 'mb', i).exists()]
     if not to_run:
         return
     warmup = {k: v[to_run[0] : to_run[0] + 1] for k, v in tensor_batch.items()}
@@ -239,65 +200,13 @@ def _benchmarkMB(
         }
         if proposal.has_sigma_eps:
             samples['sigma_eps'] = proposal.sigma_eps[0].numpy()
-        _save(_cachePath(fits_dir, 'mb', i), samples, {'wall_s': wall_s})
+        saveFit(cachePath(fits_dir, 'mb', i), samples, {'wall_s': wall_s})
         print(f'  ds={i:02d}  wall={wall_s:.3f}s', flush=True)
-
-
-# ---------------------------------------------------------------------------
-# Trace → samples / diagnostics
-# ---------------------------------------------------------------------------
-
-
-def _traceToSamples(trace: az.InferenceData, ds: dict) -> dict[str, np.ndarray]:
-    d, q = int(ds['d']), int(ds['q'])
-    out = extractAll(trace, ds, d, q, '_x')
-    samples = {
-        'ffx': out['_x_ffx'].T,  # (n_s, d)
-        'sigma_rfx': out['_x_sigma_rfx'].T,  # (n_s, q)
-        'rfx': out['_x_rfx'].transpose(2, 1, 0),  # (n_s, m, q)
-    }
-    if '_x_sigma_eps' in out:
-        samples['sigma_eps'] = out['_x_sigma_eps'].squeeze(0)  # (n_s,)
-    return samples
-
-
-def _traceToDiag(trace: az.InferenceData, wall_s: float) -> dict:
-    n_div = int(trace.sample_stats['diverging'].values.sum())
-    try:
-        df = az.summary(trace, kind='diagnostics')
-        max_rhat = float(df['r_hat'].max())
-        min_ess = float(df['ess_bulk'].min())
-        min_ess_t = float(df['ess_tail'].min())
-    except Exception:
-        max_rhat = min_ess = min_ess_t = float('nan')
-    return dict(n_div=n_div, max_rhat=max_rhat, min_ess=min_ess, min_ess_t=min_ess_t, wall_s=wall_s)
 
 
 # ---------------------------------------------------------------------------
 # Run one condition on one dataset
 # ---------------------------------------------------------------------------
-
-
-def runCold(
-    ds: dict,
-    cond: Condition,
-    seed: int,
-) -> tuple[dict[str, np.ndarray], dict]:
-    model = buildPymc(ds)
-    t0 = time.perf_counter()
-    with model:
-        trace = pm.sample(
-            tune=cond.tune,
-            draws=cond.draws,
-            chains=cond.chains,
-            target_accept=cond.target_accept,
-            nuts_kwargs={'max_treedepth': cond.max_treedepth},
-            random_seed=seed,
-            return_inferencedata=True,
-            progressbar=False,
-        )
-    wall_s = time.perf_counter() - t0
-    return _traceToSamples(trace, ds), _traceToDiag(trace, wall_s)
 
 
 def runWarm(
@@ -341,45 +250,6 @@ def runWarm(
 
 
 # ---------------------------------------------------------------------------
-# Posterior agreement vs cold_gold
-# ---------------------------------------------------------------------------
-
-
-def _globalMeans(samples: dict[str, np.ndarray]) -> np.ndarray:
-    parts = [samples['ffx'].mean(0), samples['sigma_rfx'].mean(0)]
-    if 'sigma_eps' in samples:
-        parts.append(np.atleast_1d(samples['sigma_eps'].mean()))
-    return np.concatenate(parts)
-
-
-def _globalStds(samples: dict[str, np.ndarray]) -> np.ndarray:
-    parts = [samples['ffx'].std(0), samples['sigma_rfx'].std(0)]
-    if 'sigma_eps' in samples:
-        parts.append(np.atleast_1d(samples['sigma_eps'].std()))
-    return np.concatenate(parts)
-
-
-def posteriorAgreement(
-    cond_samples: dict[str, np.ndarray],
-    gold_samples: dict[str, np.ndarray],
-) -> tuple[float, float]:
-    """Return (agree, agree_r) vs gold_samples.
-
-    agree   mean |μ_cond − μ_gold| / max(σ_gold, 1e-6) over global params
-    agree_r Pearson r of per-parameter posterior means
-    """
-    mu_cond = _globalMeans(cond_samples)
-    mu_gold = _globalMeans(gold_samples)
-    sd_gold = np.maximum(_globalStds(gold_samples), 1e-6)
-    agree = float(np.mean(np.abs(mu_cond - mu_gold) / sd_gold))
-    if len(mu_cond) >= 2:
-        agree_r = float(np.corrcoef(mu_cond, mu_gold)[0, 1])
-    else:
-        agree_r = float('nan')
-    return agree, agree_r
-
-
-# ---------------------------------------------------------------------------
 # Posterior quality evaluation (recovery, calibration, PSIS-LOO)
 # ---------------------------------------------------------------------------
 
@@ -418,7 +288,9 @@ def buildProposal(
         samples_l_parts.append(rfx_padded)  # (M_max, n_s, d_rfx)
 
     samples_g = torch.from_numpy(np.stack(samples_g_parts).astype(np.float32))  # (B, n_s, D)
-    samples_l = torch.from_numpy(np.stack(samples_l_parts).astype(np.float32))  # (B, M_max, n_s, d_rfx)
+    samples_l = torch.from_numpy(
+        np.stack(samples_l_parts).astype(np.float32)
+    )  # (B, M_max, n_s, d_rfx)
 
     proposed = {
         'global': {'samples': samples_g},
@@ -484,41 +356,45 @@ def printQualityTable(quality: dict[str, dict[str, float]], active_conds: list[s
         q = quality.get(cond)
         if q is None:
             continue
-        rows.append([
-            cond,
-            f'{q["r"]:.3f}',
-            f'{q["nrmse"]:.3f}',
-            f'{q["eace"]:.3f}',
-            f'{q["loo_nll"]:.3f}' if np.isfinite(q['loo_nll']) else '—',
-            f'{q["loo_k"]:.3f}' if np.isfinite(q['loo_k']) else '—',
-        ])
+        rows.append(
+            [
+                cond,
+                f'{q["r"]:.3f}',
+                f'{q["nrmse"]:.3f}',
+                f'{q["eace"]:.3f}',
+                f'{q["loo_nll"]:.3f}' if np.isfinite(q['loo_nll']) else '—',
+                f'{q["loo_k"]:.3f}' if np.isfinite(q['loo_k']) else '—',
+            ]
+        )
     headers = ['Condition', 'r ↑', 'NRMSE ↓', 'EACE ↓', 'LOO-NLL ↓', 'LOO k']
     print(tabulate(rows, headers=headers, tablefmt='simple'))
     return tabulate(rows, headers=headers, tablefmt='pipe')
 
 
 def printQualityDiff(quality: dict[str, dict[str, float]], active_conds: list[str]) -> str | None:
-    """Quality delta vs cold_gold — positive Δr and negative Δ(others) means no quality loss."""
-    if 'cold_gold' not in quality:
+    """Quality delta of warm conditions vs cold_std baseline."""
+    if 'cold_std' not in quality:
         return None
-    gold = quality['cold_gold']
-    non_gold = [c for c in active_conds if c != 'cold_gold' and c in quality]
-    if not non_gold:
+    baseline = quality['cold_std']
+    warm_conds = [c for c in active_conds if c.startswith('warm_') and c in quality]
+    if not warm_conds:
         return None
 
-    print('\nQuality vs cold_gold  (Δr ≈ 0 and Δothers ≈ 0 means quality preserved)')
+    print('\nQuality vs cold_std  (Δr ≈ 0 and Δothers ≈ 0 means no quality loss)')
     rows = []
-    for cond in non_gold:
+    for cond in warm_conds:
         q = quality[cond]
-        rows.append([
-            cond,
-            f'{q["r"] - gold["r"]:+.3f}',
-            f'{q["nrmse"] - gold["nrmse"]:+.3f}',
-            f'{q["eace"] - gold["eace"]:+.3f}',
-            f'{q["loo_nll"] - gold["loo_nll"]:+.3f}'
-            if np.isfinite(q['loo_nll']) and np.isfinite(gold['loo_nll'])
-            else '—',
-        ])
+        rows.append(
+            [
+                cond,
+                f'{q["r"] - baseline["r"]:+.3f}',
+                f'{q["nrmse"] - baseline["nrmse"]:+.3f}',
+                f'{q["eace"] - baseline["eace"]:+.3f}',
+                f'{q["loo_nll"] - baseline["loo_nll"]:+.3f}'
+                if np.isfinite(q['loo_nll']) and np.isfinite(baseline['loo_nll'])
+                else '—',
+            ]
+        )
     headers = ['Condition', 'Δr ↑', 'Δ NRMSE ↓', 'Δ EACE ↓', 'Δ LOO-NLL ↓']
     print(tabulate(rows, headers=headers, tablefmt='simple'))
     return tabulate(rows, headers=headers, tablefmt='pipe')
@@ -546,8 +422,6 @@ def printSummary(results: list[dict], active_conds: list[str]) -> str:
         ('min_ess_t', 'Min ESS tail', 0),
         ('wall_s', 'Wall time (s)', 1),
         ('ess_s', 'ESS / s', 2),
-        ('agree', 'Agree (norm Δμ)', 3),
-        ('agree_r', 'Agree (r)', 3),
     ]
     rows = []
     for cond_label in active_conds:
@@ -591,21 +465,85 @@ def printAnalysis(results: list[dict], active_conds: list[str]) -> str | None:
         delta_rhat = np.array([c['max_rhat'] - w['max_rhat'] for w, c in paired])
         delta_ess = np.array([w['min_ess'] - c['min_ess'] for w, c in paired])
         speedup = np.array([c['wall_s'] / max(w['wall_s'], 1e-3) for w, c in paired])
-        delta_ess_s = np.array([w.get('ess_s', float('nan')) - c.get('ess_s', float('nan'))
-                                for w, c in paired])
+        delta_ess_s = np.array(
+            [w.get('ess_s', float('nan')) - c.get('ess_s', float('nan')) for w, c in paired]
+        )
 
-        rows.append([
-            cond_label,
-            _fmt(*_iqr(delta_div), 0),
-            _fmt(*_iqr(delta_rhat), 3),
-            _fmt(*_iqr(delta_ess), 0),
-            _fmt(*_iqr(speedup), 2),
-            _fmt(*_iqr(delta_ess_s), 2),
-        ])
+        rows.append(
+            [
+                cond_label,
+                _fmt(*_iqr(delta_div), 0),
+                _fmt(*_iqr(delta_rhat), 3),
+                _fmt(*_iqr(delta_ess), 0),
+                _fmt(*_iqr(speedup), 2),
+                _fmt(*_iqr(delta_ess_s), 2),
+            ]
+        )
 
     headers = ['Condition', 'Δ Div ↑', 'Δ R-hat ↑', 'Δ ESS ↑', 'Speedup ×', 'Δ ESS/s ↑']
     print(tabulate(rows, headers=headers, tablefmt='simple'))
     return tabulate(rows, headers=headers, tablefmt='pipe')
+
+
+# ---------------------------------------------------------------------------
+# Import cold_std from test.fit.npz
+# ---------------------------------------------------------------------------
+
+
+def _importColdStd(
+    test_fit_path: Path, fits_dir: Path, n: int, refit: bool = False
+) -> list[dict]:
+    """Load NUTS fits from test.fit.npz, cache ALL datasets as cold_std, return first n.
+
+    All datasets are cached (free — no NUTS re-running) so plotting scripts see the
+    full distribution. Only the first n results are returned for quality comparison
+    against warm conditions.
+    """
+    with np.load(test_fit_path, allow_pickle=True) as f:
+        raw = dict(f)
+    n_total = len(raw['d'])
+
+    results = []
+    for i in range(n_total):
+        path = cachePath(fits_dir, 'cold_std', i)
+        need_return = i < n
+
+        if refit or not path.exists():
+            d_i, q_i, m_i = int(raw['d'][i]), int(raw['q'][i]), int(raw['m'][i])
+            samples: dict[str, np.ndarray] = {
+                'ffx': raw['nuts_ffx'][i, :d_i, :].T,
+                'sigma_rfx': raw['nuts_sigma_rfx'][i, :q_i, :].T,
+                'rfx': raw['nuts_rfx'][i, :q_i, :m_i, :].transpose(2, 1, 0),
+            }
+            if 'nuts_sigma_eps' in raw:
+                samples['sigma_eps'] = raw['nuts_sigma_eps'][i].squeeze(0)
+            active = raw['nuts_ess'][i] > 0
+            diag: dict = {
+                'n_div': int(raw['nuts_divergences'][i].sum()),
+                'max_rhat': float(raw['nuts_rhat'][i][active].max()),
+                'min_ess': float(raw['nuts_ess'][i][active].min()),
+                'min_ess_t': float(raw['nuts_ess_tail'][i][active].min()),
+                'wall_s': float(raw['nuts_duration'][i]),
+            }
+            saveFit(path, samples, diag)
+        elif need_return:
+            samples, diag = loadFit(path)
+
+        if not need_return:
+            continue
+
+        diag['ess_s'] = diag['min_ess'] / max(diag['wall_s'], 1e-3)
+        results.append({'cond': 'cold_std', 'idx': i, 'samples': samples, **diag})
+        print(
+            f'  ds={i:02d}  div={diag["n_div"]:4.0f}  '
+            f'rhat={diag["max_rhat"]:.3f}  '
+            f'ess={diag["min_ess"]:.0f}  '
+            f'wall={diag["wall_s"]:.1f}s',
+        )
+
+    if n_total > n:
+        print(f'  (cached {n_total - n} additional cold_std fits for plotting)')
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -619,10 +557,8 @@ def run(args: argparse.Namespace) -> None:
         raise FileNotFoundError(f'Checkpoint not found: {ckpt}')
     ckpt_name = ckpt.parent.name
 
-    active_conds = [COND_BY_LABEL[l] for l in args.conditions]
-    needs_warm = any(c.init == 'warm' for c in active_conds)
-
-    model = loadModel(ckpt) if (needs_warm or args.benchmark_mb) else None
+    warm_conds = [COND_BY_LABEL[l] for l in args.conditions]
+    model = loadModel(ckpt) if (warm_conds or args.benchmark_mb) else None
 
     for data_id in args.data_ids:
         data_dir = (OUTPUTS_DIR / 'data' / data_id).resolve()
@@ -639,48 +575,45 @@ def run(args: argparse.Namespace) -> None:
         max_d = model.d_ffx if model is not None else None
         max_q = model.d_rfx if model is not None else None
         tensor_batch, ds_list = loadData(
-            data_dir / 'valid.npz', args.n_datasets, max_d=max_d, max_q=max_q
+            data_dir / 'test.npz', args.n_datasets, max_d=max_d, max_q=max_q
         )
         n_ds = len(ds_list)
 
+        test_fit_path = data_dir / 'test.fit.npz'
+        if not test_fit_path.exists():
+            print(f'  [warn] test.fit.npz not found in {data_dir} — skipping')
+            continue
+
         if args.benchmark_mb and model is not None:
-            test_fit_path = data_dir / 'test.fit.npz'
-            if not test_fit_path.exists():
-                print(f'  [mb] test.fit.npz not found — skipping')
-            else:
-                test_tb, test_ds = loadFitDatasets(test_fit_path, args.n_datasets, max_d, max_q)
-                print(f'  [mb] benchmarking {len(test_ds)} test datasets...')
-                _benchmarkMB(model, test_tb, test_ds, fits_dir, refit=args.refit)
+            test_tb, test_ds = loadFitDatasets(test_fit_path, args.n_datasets, max_d, max_q)
+            print(f'  [mb] benchmarking {len(test_ds)} test datasets...')
+            _benchmarkMB(model, test_tb, test_ds, fits_dir, refit=args.refit)
+
+        print(f'\n--- cold_std: imported from test.fit.npz ---')
+        all_results: list[dict] = _importColdStd(test_fit_path, fits_dir, n_ds, args.refit)
 
         proposal = None
-        if needs_warm and model is not None:
+        if warm_conds and model is not None:
             print(f'Running flow ({WN_FLOW_SAMPLES} samples)...')
             with torch.inference_mode():
                 proposal = model.estimate(tensor_batch, n_samples=WN_FLOW_SAMPLES)
 
-        all_results: list[dict] = []
-
-        for cond in active_conds:
+        for cond in warm_conds:
             print(
-                f'\n--- {cond.label}: {cond.init}  ta={cond.target_accept}  '
+                f'\n--- {cond.label}: warm  ta={cond.target_accept}  '
                 f'tune={cond.tune}  draws={cond.draws} ---'
             )
             for idx, ds in enumerate(ds_list):
-                cache = _cachePath(fits_dir, cond.label, idx)
+                cache = cachePath(fits_dir, cond.label, idx)
                 if cache.exists() and not args.refit:
-                    samples, diag = _load(cache)
-                elif cond.init == 'cold':
-                    samples, diag = runCold(ds, cond, args.seed)
-                    _save(cache, samples, diag)
+                    samples, diag = loadFit(cache)
                 else:
                     assert proposal is not None
                     samples, diag = runWarm(ds, cond, proposal, idx, args.seed)
-                    _save(cache, samples, diag)
+                    saveFit(cache, samples, diag)
 
                 diag['ess_s'] = diag['min_ess'] / max(diag['wall_s'], 1e-3)
-                all_results.append(
-                    {'cond': cond.label, 'idx': idx, 'samples': samples, **diag}
-                )
+                all_results.append({'cond': cond.label, 'idx': idx, 'samples': samples, **diag})
                 print(
                     f'  ds={idx:02d}  div={diag["n_div"]:4.0f}  '
                     f'rhat={diag["max_rhat"]:.3f}  '
@@ -689,30 +622,15 @@ def run(args: argparse.Namespace) -> None:
                     flush=True,
                 )
 
-        gold_by_idx: dict[int, dict] = {}
-        if 'cold_gold' in args.conditions:
-            for r in all_results:
-                if r['cond'] == 'cold_gold':
-                    gold_by_idx[r['idx']] = r['samples']
-
-        if gold_by_idx:
-            for r in all_results:
-                if r['cond'] == 'cold_gold':
-                    r['agree'] = 0.0
-                    r['agree_r'] = 1.0
-                    continue
-                gold = gold_by_idx.get(r['idx'])
-                if gold is not None:
-                    r['agree'], r['agree_r'] = posteriorAgreement(r['samples'], gold)
-
+        display_conds = ['cold_std'] + args.conditions
         print(f'\n{"=" * 70}')
         print(f'Summary — {data_id}  ({n_ds} datasets)')
         print(f'{"=" * 70}')
         md_sections: list[str] = [f'# {data_id}  ({n_ds} datasets)  ckpt={ckpt_name}\n']
         md_sections.append('## MCMC diagnostics\n')
-        md_sections.append(printSummary(all_results, args.conditions))
+        md_sections.append(printSummary(all_results, display_conds))
 
-        analysis_md = printAnalysis(all_results, args.conditions)
+        analysis_md = printAnalysis(all_results, display_conds)
         if analysis_md:
             md_sections.append('\n## Warm vs cold_std\n')
             md_sections.append(analysis_md)
@@ -724,26 +642,23 @@ def run(args: argparse.Namespace) -> None:
 
         print(f'\nQuality — {data_id}  (recovery / calibration / PSIS-LOO)')
         quality: dict[str, dict[str, float]] = {}
-        for cond in active_conds:
-            cond_results = [r for r in all_results if r['cond'] == cond.label]
+        for cond_label in display_conds:
+            cond_results = [r for r in all_results if r['cond'] == cond_label]
             if not cond_results:
                 continue
-            print(f'  evaluating {cond.label}...', end=' ', flush=True)
-            quality[cond.label] = computeQuality(cond_results, tensor_batch, lf, d_ffx, d_rfx)
+            print(f'  evaluating {cond_label}...', end=' ', flush=True)
+            quality[cond_label] = computeQuality(cond_results, tensor_batch, lf, d_ffx, d_rfx)
             print('done')
 
         md_sections.append('\n## Posterior quality\n')
-        md_sections.append(printQualityTable(quality, args.conditions))
+        md_sections.append(printQualityTable(quality, display_conds))
 
-        diff_md = printQualityDiff(quality, args.conditions)
+        diff_md = printQualityDiff(quality, display_conds)
         if diff_md:
-            md_sections.append('\n## Quality vs cold_gold\n')
+            md_sections.append('\n## Quality vs cold_std\n')
             md_sections.append(diff_md)
 
-        mb_wall_s = [
-            float(_load(p)[1]['wall_s'])
-            for p in sorted(fits_dir.glob('mb__*.npz'))
-        ]
+        mb_wall_s = [float(loadFit(p)[1]['wall_s']) for p in sorted(fits_dir.glob('mb__*.npz'))]
         if mb_wall_s:
             arr = np.array(mb_wall_s)
             print(
