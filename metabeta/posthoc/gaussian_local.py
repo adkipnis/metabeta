@@ -19,6 +19,7 @@ import math
 import torch
 from torch import Tensor
 
+from metabeta.utils.glm import _safeSolve
 from metabeta.utils.evaluation import Proposal
 from metabeta.utils.regularization import corrToLower
 
@@ -102,11 +103,12 @@ def analyticalRFX(
     )
     Lambda = ZtZ.unsqueeze(2) / eps_sq[:, None, :, None, None] + prior_prec
 
-    mu = torch.linalg.solve(Lambda, ZtR / eps_sq[:, None, :, None])  # (B, m, S, q)
-
     diag_max = Lambda.diagonal(dim1=-2, dim2=-1).amax(-1, keepdim=True).unsqueeze(-1).clamp(min=1.0)
     jitter = torch.eye(q, device=Lambda.device, dtype=Lambda.dtype) * (diag_max * 1e-6)
-    L = torch.linalg.cholesky(Lambda + jitter)
+    Lam_j = Lambda + jitter
+    mu = _safeSolve(Lam_j, ZtR / eps_sq[:, None, :, None])  # (B, m, S, q)
+
+    L = torch.linalg.cholesky(Lam_j)
     z = torch.randn(B, m, S, q, device=Y.device, dtype=Y.dtype)
     samples = mu + torch.linalg.solve_triangular(L.mT, z.unsqueeze(-1), upper=True).squeeze(-1)
 
@@ -156,13 +158,13 @@ def analyticalBLUPStats(
     jitter = torch.eye(q, device=Lambda.device, dtype=Lambda.dtype) * (diag_max * 1e-6)
     Lam_j = Lambda + jitter
 
-    mu = torch.linalg.solve(Lam_j, ZtR / eps_sq[:, None, :, None])  # (B, m, S, q)
+    mu = _safeSolve(Lam_j, ZtR / eps_sq[:, None, :, None])  # (B, m, S, q)
 
     # Diagonal of Lam_j^{-1}: solve Lam_j @ X = I, broadcast identity across batch dims
     eye = torch.eye(q, device=Lam_j.device, dtype=Lam_j.dtype).reshape(
         (1,) * (Lam_j.dim() - 2) + (q, q)
     )
-    Lambda_inv_diag = torch.linalg.solve(Lam_j, eye).diagonal(dim1=-2, dim2=-1)  # (B, m, S, q)
+    Lambda_inv_diag = _safeSolve(Lam_j, eye).diagonal(dim1=-2, dim2=-1)  # (B, m, S, q)
 
     blup_std = Lambda_inv_diag.clamp(min=0.0).sqrt()
     lambda_g = (1.0 - Lambda_inv_diag / (sr.unsqueeze(1) ** 2 + 1e-8)).clamp(0.0, 1.0)
