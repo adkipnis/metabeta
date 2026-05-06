@@ -99,6 +99,7 @@ def plotComparison(
             diff=True,
             title=col_titles[n_rec + 1] if upper else None,
             show_legend=False,
+            show_band_legend=upper,
             show_x=lower,
             show_corr_rfx=show_corr_rfx,
         )
