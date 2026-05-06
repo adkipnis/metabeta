@@ -29,6 +29,11 @@ def _plotCoverage(
     cols = [torch.cat(list(v.values())).unsqueeze(1) for v in cvrg.values()]
     matrix = torch.cat(cols, dim=1)
     assert len(names) == len(matrix), 'shape mismatch for names'
+    active = torch.isfinite(matrix).any(dim=1)
+    matrix = matrix[active]
+    names = [name for name, keep in zip(names, active.tolist()) if keep]
+    if matrix.numel() == 0:
+        return
     nominal = [int(100.0 * (1.0 - alpha)) for alpha in cvrg]
 
     # plot coverage per parameter
@@ -44,7 +49,7 @@ def _plotCoverage(
     ax.set_xticks(nominal)
 
     # y-ticks: steps of 5, lower bound from data
-    y_min = float(100.0 * matrix.min())
+    y_min = float(100.0 * matrix[torch.isfinite(matrix)].min())
     y_lo = (int(y_min) // 5) * 5
     ax.set_yticks(range(y_lo, 96, 5))
 

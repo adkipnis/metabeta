@@ -121,6 +121,17 @@ def padToModel(
                 padded[:q] = ds[rfx_key]
                 ds[rfx_key] = padded
 
+        corr_key = f'{method}_corr_rfx'
+        if corr_key in ds:
+            ds[corr_key] = ds[corr_key][..., :q, :q]
+            if q < max_q:
+                corr = ds[corr_key]
+                padded = np.zeros((*corr.shape[:-2], max_q, max_q), dtype=corr.dtype)
+                padded[..., :q, :q] = corr
+                diag = np.arange(max_q)
+                padded[..., diag, diag] = 1
+                ds[corr_key] = padded
+
     return ds
 
 

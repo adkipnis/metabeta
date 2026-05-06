@@ -84,8 +84,9 @@ def getAtomicCoverage(
     inside = above & below
     if mask is not None:
         inside = inside & mask
-        n = mask.sum(0).clamp_min(1.0)
-        return inside.float().sum(0) / n
+        n = mask.sum(0)
+        coverage = inside.float().sum(0) / n.clamp_min(1.0)
+        return torch.where(n > 0, coverage, torch.full_like(coverage, float('nan')))
     return inside.float().mean(0)
 
 
@@ -124,7 +125,9 @@ def getCoveragePerParameter(
                 # Shape: inside/mask -> (B, M, Q), output -> (Q,)
                 inside = (ci[..., 0, :] - EPS <= gt) & (gt <= ci[..., 1, :] + EPS)
                 inside = inside & mask
-                out[key] = inside.float().sum((0, 1)) / mask.sum((0, 1)).clamp_min(1.0)
+                n = mask.sum((0, 1))
+                coverage = inside.float().sum((0, 1)) / n.clamp_min(1.0)
+                out[key] = torch.where(n > 0, coverage, torch.full_like(coverage, float('nan')))
             else:
                 # Legacy behavior: per-group-slot coverage then unweighted mean over slots.
                 out[key] = out[key].mean(0)

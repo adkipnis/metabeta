@@ -16,6 +16,10 @@ from metabeta.utils.regularization import corrToLower
 from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
 
 
+def _nanMean(x: torch.Tensor) -> float:
+    return float(torch.nanmean(x).item())
+
+
 def _plotRecovery(
     ax: Axes,
     targets: np.ndarray,
@@ -149,8 +153,8 @@ def _prepareRecoveryData(
     names.append(getNames('ffx', d))
     metrics.append(
         {
-            'r': stats['corr']['ffx'].mean().item(),
-            'NRMSE': stats['nrmse']['ffx'].mean().item(),
+            'r': _nanMean(stats['corr']['ffx']),
+            'NRMSE': _nanMean(stats['nrmse']['ffx']),
         }
     )
 
@@ -161,16 +165,15 @@ def _prepareRecoveryData(
     masks.append(allMasks['sigmas'])
     names.append(getNames('sigmas', q, has_sigma_eps=has_eps))
     if has_eps:
-        w_rfx, w_eps = q / (q + 1), 1 / (q + 1)
-        nrmse = w_rfx * stats['nrmse']['sigma_rfx'] + w_eps * stats['nrmse']['sigma_eps']
-        r = w_rfx * stats['corr']['sigma_rfx'] + w_eps * stats['corr']['sigma_eps']
+        nrmse = torch.cat([stats['nrmse']['sigma_rfx'], stats['nrmse']['sigma_eps'].view(-1)])
+        r = torch.cat([stats['corr']['sigma_rfx'], stats['corr']['sigma_eps'].view(-1)])
     else:
         nrmse = stats['nrmse']['sigma_rfx']
         r = stats['corr']['sigma_rfx']
     metrics.append(
         {
-            'r': r.mean().item(),
-            'NRMSE': nrmse.mean().item(),
+            'r': _nanMean(r),
+            'NRMSE': _nanMean(nrmse),
         }
     )
 
@@ -187,8 +190,8 @@ def _prepareRecoveryData(
         names.append(getCorrRfxNames(q))
         metrics.append(
             {
-                'r': stats['corr']['corr_rfx'].mean().item(),
-                'NRMSE': stats['nrmse']['corr_rfx'].mean().item(),
+                'r': _nanMean(stats['corr']['corr_rfx']),
+                'NRMSE': _nanMean(stats['nrmse']['corr_rfx']),
             }
         )
 
@@ -199,8 +202,8 @@ def _prepareRecoveryData(
     names.append(getNames('rfx', q))
     metrics.append(
         {
-            'r': stats['corr']['rfx'].mean().item(),
-            'NRMSE': stats['nrmse']['rfx'].mean().item(),
+            'r': _nanMean(stats['corr']['rfx']),
+            'NRMSE': _nanMean(stats['nrmse']['rfx']),
         }
     )
 

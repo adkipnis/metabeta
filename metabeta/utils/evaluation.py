@@ -382,7 +382,7 @@ class EvaluationSummary:
             cat = torch.cat(param_values)
             if absolute:
                 cat = torch.abs(cat)
-            out[param] = cat.mean(0)
+            out[param] = torch.nanmean(cat, 0)
         return out
 
     @property
@@ -540,10 +540,15 @@ def subsetProposal(proposal: 'Proposal', mask: np.ndarray) -> 'Proposal':
 
 def dictMean(td: dict[str, torch.Tensor]) -> float:
     values = list(td.values())
+    if not values:
+        return float('nan')
     for i, v in enumerate(values):
         if v.dim() == 0:
             values[i] = v.unsqueeze(0)
-    return torch.cat(values).mean().item()
+    cat = torch.cat(values)
+    if cat.numel() == 0 or torch.isnan(cat).all():
+        return float('nan')
+    return torch.nanmean(cat).item()
 
 
 def dictMeanExcl(

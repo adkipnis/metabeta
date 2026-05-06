@@ -60,7 +60,11 @@ def _nEff(mask: torch.Tensor | None, n_datasets: int) -> int:
     if mask is None:
         return n_datasets
     dims = tuple(range(mask.dim() - 1))
-    return int(mask.sum(dims).min())
+    counts = mask.sum(dims)
+    active_counts = counts[counts > 0]
+    if active_counts.numel() == 0:
+        return 0
+    return int(active_counts.min())
 
 
 def _plotSbcRow(

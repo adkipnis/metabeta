@@ -256,7 +256,7 @@ def longTable(
     }
 
     def to_float(v: str | torch.Tensor) -> str | float:
-        return torch.mean(v).item() if isinstance(v, torch.Tensor) else v
+        return torch.nanmean(v).item() if isinstance(v, torch.Tensor) else v
 
     keys = [k for k in names if k in corr]
     rows = [
