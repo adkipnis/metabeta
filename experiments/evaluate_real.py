@@ -495,15 +495,15 @@ def evaluateReal(
 
 METRICS = ['r', 'sigma_ratio', 'rank_mad', 'delta_nll', 'delta_tpd']
 
-HEADERS_MD = ['method', 'r ↑', 'σ-ratio → 1', 'rank-MAD ↓', 'ΔNLL ↓', 'Δtime (s) ↓']
+HEADERS_MD = ['method', 'r ↑', 'σ-ratio → 1', 'rank-MAD ↓', 'ΔLOO-NLL ↓', 'Δtime ↓']
 
 HEADERS_TEX = [
     r'$\mathrm{model}$',
     r'$r$',
     r'$\sigma\text{-ratio}$',
     r'$\mathrm{rank\text{-}MAD}$',
-    r'$\Delta\mathrm{NLL}$',
-    r'$\Delta\mathrm{time}\ (\mathrm{s})$',
+    r'$\Delta\mathrm{LOO\text{-}NLL}$',
+    r'$\Delta\mathrm{time}$',
 ]
 
 
