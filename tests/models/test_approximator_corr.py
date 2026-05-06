@@ -28,11 +28,10 @@ def make_cfg(
     likelihood_family: int = 0,
     analytical_context: bool = True,
     analytical_blup_from_globals: bool = True,
-    posterior_l_type: str = 'coupling',
 ) -> ApproximatorConfig:
     s_cfg = SummarizerConfig(d_model=16, d_ff=16, d_output=16, n_blocks=1)
     p_cfg = PosteriorConfig(n_blocks=2)
-    p_l_cfg = PosteriorConfig(type=posterior_l_type)
+    p_l_cfg = PosteriorConfig()
     return ApproximatorConfig(
         d_ffx=d_ffx,
         d_rfx=d_rfx,
@@ -217,7 +216,7 @@ def test_model_from_yaml_reads_analytical_context_flags(tmp_path):
     assert cfg.analytical_blup_from_globals is False
 
 
-def test_model_from_yaml_reads_analytical_local_posterior():
+def test_model_from_yaml_reads_analytical_inference_flag():
     from metabeta.utils.config import modelFromYaml
 
     cfg_path = (
@@ -225,17 +224,16 @@ def test_model_from_yaml_reads_analytical_local_posterior():
     )
     cfg = modelFromYaml(cfg_path, d_ffx=2, d_rfx=2, likelihood_family=0)
 
-    assert cfg.posterior_l.type == 'analytical'
-    assert cfg.posterior_l.n_blocks == 1
+    assert cfg.posterior_l.type == 'coupling'
+    assert cfg.posterior_l.n_blocks == cfg.posterior_g.n_blocks
     model = Approximator(cfg)
     assert model.analytical_local_posterior
-    assert not hasattr(model, 'posterior_l')
+    assert hasattr(model, 'posterior_l')
 
 
-def test_analytical_local_rejects_non_gaussian():
-    cfg = make_cfg(likelihood_family=1, posterior_l_type='analytical')
-    with pytest.raises(ValueError, match='only supported for Gaussian'):
-        Approximator(cfg)
+def test_posterior_l_analytical_type_removed():
+    with pytest.raises(ValueError):
+        PosteriorConfig(type='analytical')
 
 
 # ---------------------------------------------------------------------------
@@ -261,14 +259,15 @@ def test_forward_without_corr_flag_unchanged():
     assert torch.isfinite(log_probs['local']).all()
 
 
-def test_forward_analytical_local_returns_zero_local_term():
-    model = Approximator(make_cfg(posterior_l_type='analytical'))
+def test_forward_with_analytical_inference_still_trains_local_flow():
+    model = Approximator(make_cfg(analytical_blup_from_globals=True))
     batch = make_batch()
     log_probs = model.forward(batch)
 
     assert torch.isfinite(log_probs['global']).all()
+    assert torch.isfinite(log_probs['local']).all()
     assert log_probs['local'].shape == batch['mask_m'].shape
-    assert torch.equal(log_probs['local'], torch.zeros_like(log_probs['local']))
+    assert not torch.equal(log_probs['local'], torch.zeros_like(log_probs['local']))
 
 
 def test_local_context_changes_with_globals_when_blup_from_globals():
@@ -285,7 +284,7 @@ def test_local_context_changes_with_globals_when_blup_from_globals():
     assert not torch.allclose(context_1, context_2)
 
 
-def test_local_context_blup_block_stays_fixed_with_reml_stats():
+def test_normal_local_context_uses_analytical_moments_even_without_analytical_inference():
     model = Approximator(make_cfg(analytical_blup_from_globals=False))
     batch = make_batch()
     _, summary_l = model.summarize(batch)
@@ -296,14 +295,39 @@ def test_local_context_blup_block_stays_fixed_with_reml_stats():
     context_1 = model._localContext(summary_l, global_params_1, batch)
     context_2 = model._localContext(summary_l, global_params_2, batch)
 
-    blup_width = model._analyticsLocalDim()
-    assert blup_width > 0
-    blup_start = model.cfg.summarizer_l.d_output + 2
-    blup_end = blup_start + blup_width
-    expected_width = model.cfg.summarizer_l.d_output + 2 + blup_width + model.posterior_g.d_target
+    assert summary_l.shape[-1] == model.cfg.summarizer_l.d_output + 2
+    expected_width = (
+        model.cfg.summarizer_l.d_output
+        + 2
+        + model.posterior_g.d_target
+        + model._analyticsLocalDim()
+    )
     assert context_1.shape[-1] == expected_width
-    assert torch.allclose(context_1[..., blup_start:blup_end], context_2[..., blup_start:blup_end])
     assert not torch.allclose(context_1, context_2)
+
+
+def test_normal_analytical_local_context_respects_q_and_corr_masks():
+    q = 3
+    model = Approximator(make_cfg(d_rfx=q, analytical_blup_from_globals=False))
+    batch = make_batch(q=q)
+    batch['mask_q'][0, 2] = False
+    batch['mask_mq'][0, :, 2] = False
+    batch['mask_corr'][0, 1:] = False
+    batch['eta_rfx'][1] = 0.0
+
+    _, summary_l = model.summarize(batch)
+    global_params = model._preprocess(model._targets(batch, local=False), local=False)
+    context = model._localContext(summary_l, global_params, batch)
+
+    moments = context[..., -model._analyticsLocalDim() :]
+    mean = moments[..., :q]
+    std = moments[..., q : 2 * q]
+    corr = moments[..., 2 * q :]
+
+    assert torch.equal(mean[0, :, 2], torch.zeros_like(mean[0, :, 2]))
+    assert torch.equal(std[0, :, 2], torch.zeros_like(std[0, :, 2]))
+    assert torch.equal(corr[0, :, 1:], torch.zeros_like(corr[0, :, 1:]))
+    assert torch.equal(corr[1], torch.zeros_like(corr[1]))
 
 
 def test_forward_with_reml_local_stats_uses_expected_context_width():
@@ -343,13 +367,13 @@ def test_forward_backward_gradients():
     assert all(g is None or torch.isfinite(g).all() for g in grads)
 
 
-def test_analytical_local_drops_local_flow_params():
-    flow_model = Approximator(make_cfg())
-    ana_model = Approximator(make_cfg(posterior_l_type='analytical'))
+def test_analytical_inference_keeps_local_flow_params():
+    flow_model = Approximator(make_cfg(analytical_blup_from_globals=False))
+    ana_model = Approximator(make_cfg(analytical_blup_from_globals=True))
 
     assert hasattr(flow_model, 'posterior_l')
-    assert not hasattr(ana_model, 'posterior_l')
-    assert ana_model.n_params < flow_model.n_params
+    assert hasattr(ana_model, 'posterior_l')
+    assert ana_model.n_params == flow_model.n_params
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +402,7 @@ def test_backward_proposal_shapes():
 def test_backward_analytical_local_proposal_shapes_and_finite():
     b, m, n, d, q = 2, 4, 8, 2, 2
     n_samples = 7
-    model = Approximator(make_cfg(d_ffx=d, d_rfx=q, posterior_l_type='analytical'))
+    model = Approximator(make_cfg(d_ffx=d, d_rfx=q, analytical_blup_from_globals=True))
     batch = make_batch(b=b, m=m, n=n, d=d, q=q)
 
     proposal = model.estimate(batch, n_samples=n_samples)
