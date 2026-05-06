@@ -66,7 +66,7 @@ from metabeta.simulation.fit import buildPymc, extractAll
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped
 from metabeta.utils.evaluation import Proposal
-from metabeta.utils.padding import unpad
+from metabeta.utils.padding import padToModel, unpad
 
 DIR = Path(__file__).resolve().parent
 OUTPUTS_DIR = DIR / '..' / 'metabeta' / 'outputs'
@@ -160,6 +160,30 @@ def loadData(
     return tensor_batch, ds_list
 
 
+def loadFitDatasets(
+    fit_path: Path, n_limit: int, max_d: int, max_q: int
+) -> tuple[dict, list[dict]]:
+    """Load datasets from a .fit.npz file, padded to model capacity.
+
+    Datasets whose d or q exceed the model's capacity are skipped.
+    Returns (tensor_batch, list of unpadded dicts) — same contract as loadData.
+    """
+    with np.load(fit_path, allow_pickle=True) as raw:
+        raw = dict(raw)
+    n_use = min(len(raw['d']), n_limit)
+    col_items: list[dict] = []
+    ds_list: list[dict] = []
+    for i in range(n_use):
+        ds = {k: v[i] for k, v in raw.items()}
+        if int(ds['d']) > max_d or int(ds['q']) > max_q:
+            continue
+        ds_unpad = unpad(ds, {k: int(ds[k]) for k in 'dqmn'})
+        ds_list.append(ds_unpad)
+        col_items.append(padToModel(ds_unpad, max_d, max_q))
+    tensor_batch = collateGrouped(col_items)
+    return tensor_batch, ds_list
+
+
 # ---------------------------------------------------------------------------
 # Cache helpers
 # ---------------------------------------------------------------------------
@@ -187,6 +211,7 @@ def _load(path: Path) -> tuple[dict[str, np.ndarray], dict]:
 
 def _benchmarkMB(
     model: Approximator,
+    tensor_batch: dict,
     ds_list: list[dict],
     fits_dir: Path,
     n_samples: int = MB_BENCH_SAMPLES,
@@ -196,13 +221,13 @@ def _benchmarkMB(
     to_run = [i for i in range(len(ds_list)) if refit or not _cachePath(fits_dir, 'mb', i).exists()]
     if not to_run:
         return
-    warmup = collateGrouped([ds_list[to_run[0]]])
+    warmup = {k: v[to_run[0] : to_run[0] + 1] for k, v in tensor_batch.items()}
     with torch.inference_mode():
         model.estimate(warmup, n_samples=n_samples)
     for i in to_run:
         ds = ds_list[i]
         d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
-        batch = collateGrouped([ds])
+        batch = {k: v[i : i + 1] for k, v in tensor_batch.items()}
         with torch.inference_mode():
             t0 = time.perf_counter()
             proposal = model.estimate(batch, n_samples=n_samples)
@@ -619,13 +644,13 @@ def run(args: argparse.Namespace) -> None:
         n_ds = len(ds_list)
 
         if args.benchmark_mb and model is not None:
-            test_path = data_dir / 'test.npz'
-            if not test_path.exists():
-                print(f'  [mb] test.npz not found — skipping')
+            test_fit_path = data_dir / 'test.fit.npz'
+            if not test_fit_path.exists():
+                print(f'  [mb] test.fit.npz not found — skipping')
             else:
-                _, test_ds = loadData(test_path, args.n_datasets, max_d=max_d, max_q=max_q)
+                test_tb, test_ds = loadFitDatasets(test_fit_path, args.n_datasets, max_d, max_q)
                 print(f'  [mb] benchmarking {len(test_ds)} test datasets...')
-                _benchmarkMB(model, test_ds, fits_dir, refit=args.refit)
+                _benchmarkMB(model, test_tb, test_ds, fits_dir, refit=args.refit)
 
         proposal = None
         if needs_warm and model is not None:
