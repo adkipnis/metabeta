@@ -11,18 +11,18 @@ PALETTE += [mcolors.to_hex(cmap(i)) for i in range(1, cmap.N, 2)]
 
 INFO = {
     'show_title': True,
-    'title_fs': 32,
+    'title_fs': 33,
     'title_pad': 15,
     'ticks_ls': 20,
     'show_x': True,
-    'xlabel_fs': 28,
+    'xlabel_fs': 33,
     'xlabel_pad': 10,
     'show_y': True,
-    'ylabel_fs': 28,
+    'ylabel_fs': 33,
     'ylabel_pad': 10,
     'despine': False,
     'show_legend': True,
-    'legend_fs': 22,
+    'legend_fs': 24,
     'legend_ms': 2.5,
     'legend_loc': 'upper left',
     'stats': None,  # dict[str, float]
