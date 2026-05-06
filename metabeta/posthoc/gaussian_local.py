@@ -118,6 +118,53 @@ def analyticalRFX(
     return samples, log_prob
 
 
+def analyticalRFXMoments(
+    Y: Tensor,
+    X: Tensor,
+    Z: Tensor,
+    beta: Tensor,
+    sigma_rfx: Tensor,
+    sigma_eps: Tensor,
+    mask_n: Tensor,
+    Sigma_rfx_inv: Tensor | None = None,
+) -> tuple[Tensor, Tensor]:
+    """Analytical Gaussian local posterior mean and covariance.
+
+    Shapes match analyticalRFX. Returns mean (B,m,S,q) and covariance
+    (B,m,S,q,q), both conditioned on each global sample.
+    """
+    q = Z.shape[-1]
+
+    se = sigma_eps.clamp(min=_SIGMA_MIN)
+    sr = sigma_rfx.clamp(min=_SIGMA_MIN)
+
+    Z_m = Z * mask_n.float().unsqueeze(-1)
+    Xbeta = torch.einsum('bmnf,bsf->bmsn', X, beta)
+    r = (Y.unsqueeze(2) - Xbeta) * mask_n.float().unsqueeze(2)
+
+    ZtZ = torch.einsum('bmnq,bmnp->bmpq', Z_m, Z_m)
+    ZtR = torch.einsum('bmnq,bmsn->bmsq', Z_m, r)
+
+    eps_sq = se**2
+    prior_prec = (
+        Sigma_rfx_inv.unsqueeze(1)
+        if Sigma_rfx_inv is not None
+        else torch.diag_embed(1.0 / sr**2).unsqueeze(1)
+    )
+    Lambda = ZtZ.unsqueeze(2) / eps_sq[:, None, :, None, None] + prior_prec
+
+    diag_max = Lambda.diagonal(dim1=-2, dim2=-1).amax(-1, keepdim=True).unsqueeze(-1).clamp(min=1.0)
+    jitter = torch.eye(q, device=Lambda.device, dtype=Lambda.dtype) * (diag_max * 1e-6)
+    Lam_j = Lambda + jitter
+
+    mean = _safeSolve(Lam_j, ZtR / eps_sq[:, None, :, None])
+    eye = torch.eye(q, device=Lam_j.device, dtype=Lam_j.dtype).reshape(
+        (1,) * (Lam_j.dim() - 2) + (q, q)
+    )
+    covariance = _safeSolve(Lam_j, eye)
+    return mean, covariance
+
+
 def analyticalBLUPStats(
     Y: Tensor,
     X: Tensor,
@@ -135,36 +182,18 @@ def analyticalBLUPStats(
     Sigma_rfx_inv: optional (B,S,q,q) full precision; if None uses diag(1/sigma_rfx^2).
     Returns: mean (B,m,S,q), std (B,m,S,q), lambda_g (B,m,S,q).
     """
-    se = sigma_eps.clamp(min=_SIGMA_MIN)
     sr = sigma_rfx.clamp(min=_SIGMA_MIN)
-    q = Z.shape[-1]
-
-    Z_m = Z * mask_n.float().unsqueeze(-1)
-    Xbeta = torch.einsum('bmnf,bsf->bmsn', X, beta)
-    r = (Y.unsqueeze(2) - Xbeta) * mask_n.float().unsqueeze(2)  # (B, m, S, n)
-
-    ZtZ = torch.einsum('bmnq,bmnp->bmpq', Z_m, Z_m)  # (B, m, q, q)
-    ZtR = torch.einsum('bmnq,bmsn->bmsq', Z_m, r)    # (B, m, S, q)
-
-    eps_sq = se**2
-    prior_prec = (
-        Sigma_rfx_inv.unsqueeze(1)
-        if Sigma_rfx_inv is not None
-        else torch.diag_embed(1.0 / sr**2).unsqueeze(1)
-    )  # (B, 1, S, q, q) → broadcasts to (B, m, S, q, q)
-    Lambda = ZtZ.unsqueeze(2) / eps_sq[:, None, :, None, None] + prior_prec  # (B, m, S, q, q)
-
-    diag_max = Lambda.diagonal(dim1=-2, dim2=-1).amax(-1, keepdim=True).unsqueeze(-1).clamp(min=1.0)
-    jitter = torch.eye(q, device=Lambda.device, dtype=Lambda.dtype) * (diag_max * 1e-6)
-    Lam_j = Lambda + jitter
-
-    mu = _safeSolve(Lam_j, ZtR / eps_sq[:, None, :, None])  # (B, m, S, q)
-
-    # Diagonal of Lam_j^{-1}: solve Lam_j @ X = I, broadcast identity across batch dims
-    eye = torch.eye(q, device=Lam_j.device, dtype=Lam_j.dtype).reshape(
-        (1,) * (Lam_j.dim() - 2) + (q, q)
+    mu, covariance = analyticalRFXMoments(
+        Y,
+        X,
+        Z,
+        beta,
+        sigma_rfx,
+        sigma_eps,
+        mask_n,
+        Sigma_rfx_inv=Sigma_rfx_inv,
     )
-    Lambda_inv_diag = _safeSolve(Lam_j, eye).diagonal(dim1=-2, dim2=-1)  # (B, m, S, q)
+    Lambda_inv_diag = covariance.diagonal(dim1=-2, dim2=-1)  # (B, m, S, q)
 
     blup_std = Lambda_inv_diag.clamp(min=0.0).sqrt()
     lambda_g = (1.0 - Lambda_inv_diag / (sr.unsqueeze(1) ** 2 + 1e-8)).clamp(0.0, 1.0)
