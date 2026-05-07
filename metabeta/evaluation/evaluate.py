@@ -100,6 +100,13 @@ def setup() -> argparse.Namespace:
         default=False,
         help='Only evaluate and plot MB (skip NUTS and ADVI)',
     )
+    parser.add_argument(
+        '--comparison_legend',
+        type=str,
+        choices=['panel', 'right'],
+        default='panel',
+        help='Place comparison plot legends in each panel or once at the right (default: panel)',
+    )
 
     args = parser.parse_args()
     args.config = Path('..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge-r_s3', 'config.yaml')
@@ -375,7 +382,15 @@ class Evaluator:
         if self.cfg.rescale:
             batch = rescaleData(batch)
         target_dir = plot_dir if plot_dir is not None else self.plot_dir
-        plotComparison(summaries, proposals, labels, batch, plot_dir=target_dir, show=True)
+        plotComparison(
+            summaries,
+            proposals,
+            labels,
+            batch,
+            plot_dir=target_dir,
+            show=True,
+            legend_right=getattr(self.cfg, 'comparison_legend', 'panel') == 'right',
+        )
 
     def testrun(self) -> None:
         full_batch = self.dl_valid.fullBatch()
@@ -607,12 +622,15 @@ class Evaluator:
         advi_mask = self._fitBatchMask(full_batch, prefix='advi')
         advi_batch = subsetBatch(full_batch, advi_mask)
         proposal_advi = self._fit2proposal(advi_batch, prefix='advi')
+        print('ADVI')
         summary_advi = self.summary(proposal_advi, advi_batch)
         
         # Subset to batch where each method has a proposal
         mb_sub = subsetProposal(proposal_mb, advi_mask)
         nuts_sub = subsetProposal(proposal_nuts, advi_mask)
+        print('MB')
         summary_mb_sub = self.summary(mb_sub, advi_batch)
+        print('NUTS')
         summary_nuts_sub = self.summary(nuts_sub, advi_batch)
         self.plot(
             [mb_sub, nuts_sub, proposal_advi],
