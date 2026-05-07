@@ -78,6 +78,7 @@ def _plotSbcRow(
     show_corr_rfx: bool = False,
     show_band_legend: bool = False,
     smooth: bool = False,
+    draw_legend: bool = True,
 ) -> None:
     ranks = getFractionalRanks(proposal, data)
     ranks['sigmas'] = joinSigmas(ranks)
@@ -145,7 +146,7 @@ def _plotSbcRow(
     local_label = '95% CB (local)' if show_band_legend else '_nolegend_'
     ax.fill_between(p, low, high, color='steelblue', alpha=0.20, label=local_label)
 
-    if show_legend or show_band_legend:
+    if draw_legend and (show_legend or show_band_legend):
         handles, labels = ax.get_legend_handles_labels()
         if not show_legend:
             # keep only band patches

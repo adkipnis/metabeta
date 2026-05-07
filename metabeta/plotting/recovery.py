@@ -41,6 +41,7 @@ def _plotRecovery(
     alpha: float = 0.15,
     upper: bool = True,
     lower: bool = True,
+    show_legend: bool | None = None,
 ) -> None:
     """scatter plot: ground truth vs. estimates"""
     # check sizes
@@ -86,7 +87,7 @@ def _plotRecovery(
         'ylabel': ylabel,
         'xlabel': 'Ground Truth',
         'show_title': upper,
-        'show_legend': upper,
+        'show_legend': upper if show_legend is None else show_legend,
         'show_x': lower,
         'stats': stats,
     }
@@ -108,6 +109,7 @@ def _plotRecoveryGrouped(
     alpha: float = 0.25,
     upper: bool = True,
     lower: bool = True,
+    show_legend: bool | None = None,
 ) -> None:
     i = 0
     for ax, tar, est, mas, met, nam, tit in zip(
@@ -134,6 +136,7 @@ def _plotRecoveryGrouped(
             alpha=alpha,
             upper=upper,
             lower=lower,
+            show_legend=show_legend,
         )
         i += len(nam)
 

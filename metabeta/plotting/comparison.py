@@ -40,6 +40,7 @@ def plotComparison(
     epoch: int | None = None,
     show: bool = False,
     show_corr_rfx: bool = False,
+    legend_right: bool = False,
 ) -> Path | None:
     col_titles = _COL_TITLES_CORR if show_corr_rfx else _COL_TITLES
     n_rec = 4 if show_corr_rfx else 3
@@ -66,6 +67,7 @@ def plotComparison(
             ylabel=label,
             upper=upper,
             lower=lower,
+            show_legend=False if legend_right else None,
         )
 
         # col n_rec: coverage
@@ -102,12 +104,32 @@ def plotComparison(
             show_band_legend=upper,
             show_x=lower,
             show_corr_rfx=show_corr_rfx,
+            draw_legend=not legend_right,
         )
         axs[i, n_rec + 1].set_ylabel('')
 
     for ax in axs.flat:
         ax.set_box_aspect(1)
-    fig.tight_layout()
+    if legend_right:
+        handles_by_label = {}
+        for ax in axs.flat:
+            handles, axis_labels = ax.get_legend_handles_labels()
+            for handle, axis_label in zip(handles, axis_labels):
+                if axis_label.startswith('_') or axis_label in handles_by_label:
+                    continue
+                handles_by_label[axis_label] = handle
+        if handles_by_label:
+            fig.legend(
+                handles_by_label.values(),
+                handles_by_label.keys(),
+                loc='center left',
+                bbox_to_anchor=(1.0, 0.5),
+                fontsize=18,
+                markerscale=2.5,
+            )
+        fig.tight_layout(rect=(0.0, 0.0, 0.86, 1.0))
+    else:
+        fig.tight_layout()
 
     saved_path = None
     if plot_dir is not None:
