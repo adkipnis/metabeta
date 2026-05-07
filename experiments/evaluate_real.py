@@ -6,10 +6,10 @@ outputs/data/{size}-{fam}-real/test.fit.npz, comparing MB and ADVI posteriors
 against NUTS as reference.  Since there are no ground-truth parameters, all
 metrics are relative to NUTS; only NUTS-converged datasets are included.
 
-Metrics (mean ± std over datasets):
+Metrics (median ± MAD over datasets):
   r          — Pearson r of posterior means (method vs NUTS), pooled active params
   σ-ratio    — per-dataset median(std_method / std_NUTS) across active params
-  rank-MAD   — mean |empirical quantile − expected| for NUTS-in-MB rank fracs (pooled)
+  rank-MAD   — per-dataset mean |empirical quantile − expected| for NUTS-in-MB rank fracs
   ΔNLL       — LOO-NLL(method) − LOO-NLL(NUTS), per dataset
   Δtime (s)  — tpd(method) − tpd(NUTS), seconds per dataset
 
@@ -76,7 +76,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--decimals',         type=int, default=2,
                         help='Decimal places in table cells (default: 2)')
     parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument('--convergence_mode', type=str, default='liberal',
+    parser.add_argument('--convergence_mode', type=str, default='strict',
                         choices=['liberal', 'strict'])
     # fmt: on
     return parser.parse_args()
@@ -291,54 +291,70 @@ def _rankFracs(mb: np.ndarray, nuts: np.ndarray) -> np.ndarray:
     )
 
 
+def _rankMADFromFracs(fracs: np.ndarray) -> float:
+    expected = np.array([0.10, 0.25, 0.50, 0.75, 0.90])
+    empirical = np.array([np.percentile(fracs, 100 * q) for q in expected])
+    return float(np.mean(np.abs(empirical - expected)))
+
+
 def computeRankMAD(
     p_method: Proposal,
     p_nuts: Proposal,
     batch: dict[str, torch.Tensor],
-) -> float:
-    """Mean |empirical quantile − expected| for NUTS-in-method rank fracs (pooled).
+) -> np.ndarray:
+    """Per-dataset rank calibration error for NUTS-in-method rank fracs.
 
-    Fracs are pooled over all active (param_dim × dataset) entries.
-    Returns 0 for perfect shape agreement, larger values for systematic disagreement.
+    Within each dataset, rank fractions are pooled over active parameter entries.
+    Returns (B,), where 0 indicates perfect shape agreement and larger values
+    indicate systematic disagreement.
     """
     mask_d, mask_q, group_mask = _masks(batch)
     B = p_method.ffx.shape[0]
-    all_fracs: list[np.ndarray] = []
+    mads = np.empty(B)
 
-    def _add_global(mb_v: torch.Tensor, nu_v: torch.Tensor, mask: torch.Tensor | None) -> None:
-        mb_np, nu_np = mb_v.numpy(), nu_v.numpy()   # (B, S, D)
+    def _add_global(
+        all_fracs: list[np.ndarray],
+        mb_v: torch.Tensor,
+        nu_v: torch.Tensor,
+        b: int,
+        mask: torch.Tensor | None,
+    ) -> None:
+        mb_np, nu_np = mb_v[b].numpy(), nu_v[b].numpy()   # (S, D)
         D = mb_np.shape[-1]
         for di in range(D):
-            active = mask[:, di].numpy() if mask is not None else np.ones(B, dtype=bool)
-            if active.any():
-                all_fracs.append(_rankFracs(mb_np[active, :, di], nu_np[active, :, di]))
+            if mask is not None and not bool(mask[b, di]):
+                continue
+            all_fracs.append(_rankFracs(mb_np[:, di][None, :], nu_np[:, di][None, :]))
 
-    _add_global(p_method.ffx, p_nuts.ffx, mask_d)
-    _add_global(p_method.sigma_rfx, p_nuts.sigma_rfx, mask_q)
-    if p_method.has_sigma_eps:
-        _add_global(p_method.sigma_eps.unsqueeze(-1), p_nuts.sigma_eps.unsqueeze(-1), None)
+    for b in range(B):
+        all_fracs: list[np.ndarray] = []
 
-    # rfx: (B, max_m, S, max_q) — pool over active (b, m) pairs per rfx dim
-    mb_rfx = p_method.rfx.numpy()
-    nu_rfx = p_nuts.rfx.numpy()
-    q_any = int(mask_q.any(0).sum()) if mask_q is not None else p_method.rfx.shape[-1]
-    gm_np = group_mask.numpy()
+        _add_global(all_fracs, p_method.ffx, p_nuts.ffx, b, mask_d)
+        _add_global(all_fracs, p_method.sigma_rfx, p_nuts.sigma_rfx, b, mask_q)
+        if p_method.has_sigma_eps:
+            _add_global(
+                all_fracs,
+                p_method.sigma_eps.unsqueeze(-1),
+                p_nuts.sigma_eps.unsqueeze(-1),
+                b,
+                None,
+            )
 
-    for k in range(q_any):
-        qk_active = mask_q[:, k].numpy() if mask_q is not None else np.ones(B, dtype=bool)
-        bm_active = gm_np & qk_active[:, None]  # (B, max_m) bool
-        if bm_active.any():
-            mb_k = mb_rfx[bm_active][:, :, k]  # (n_active, S)
-            nu_k = nu_rfx[bm_active][:, :, k]
-            all_fracs.append(_rankFracs(mb_k, nu_k))
+        q_mask = (
+            mask_q[b].numpy().astype(bool)
+            if mask_q is not None
+            else np.ones(p_method.rfx.shape[-1], dtype=bool)
+        )
+        active_groups = group_mask[b].numpy().astype(bool)
+        if active_groups.any() and q_mask.any():
+            mb_rfx = p_method.rfx[b][active_groups].numpy()   # (m_active, S, q)
+            nu_rfx = p_nuts.rfx[b][active_groups].numpy()
+            for k in np.flatnonzero(q_mask):
+                all_fracs.append(_rankFracs(mb_rfx[:, :, k], nu_rfx[:, :, k]))
 
-    if not all_fracs:
-        return float('nan')
+        mads[b] = _rankMADFromFracs(np.concatenate(all_fracs)) if all_fracs else np.nan
 
-    fracs = np.concatenate(all_fracs)
-    expected = np.array([0.10, 0.25, 0.50, 0.75, 0.90])
-    empirical = np.array([np.percentile(fracs, 100 * q) for q in expected])
-    return float(np.mean(np.abs(empirical - expected)))
+    return mads
 
 
 # ---------------------------------------------------------------------------
@@ -346,20 +362,22 @@ def computeRankMAD(
 
 
 def _ms(arr: np.ndarray | None) -> tuple[float, float] | None:
-    """Mean and Bessel-corrected std, NaNs ignored. Returns None when arr is None."""
+    """Median and unscaled median absolute deviation, NaNs ignored."""
     if arr is None:
         return None
     a = arr[~np.isnan(arr)]
     if len(a) == 0:
         return (float('nan'), float('nan'))
-    return (float(np.mean(a)), float(np.std(a, ddof=1)) if len(a) > 1 else 0.0)
+    median = float(np.median(a))
+    mad = float(np.median(np.abs(a - median)))
+    return (median, mad)
 
 
 def _buildRow(
     label: str,
     r: np.ndarray,
     sigma_ratio: np.ndarray,
-    rank_mad: float,
+    rank_mad: np.ndarray,
     delta_nll: np.ndarray,
     delta_tpd: np.ndarray | None,
 ) -> dict:
@@ -367,7 +385,7 @@ def _buildRow(
         'method': label,
         'r': _ms(r),
         'sigma_ratio': _ms(sigma_ratio),
-        'rank_mad': rank_mad,
+        'rank_mad': _ms(rank_mad),
         'delta_nll': _ms(delta_nll),
         'delta_tpd': _ms(delta_tpd),
     }
