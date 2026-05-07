@@ -171,6 +171,8 @@ def plotWarmPanel(
     ylabel: str,
     title: str,
     n_bins: int,
+    x_metric: str = 'n_params',
+    xlabel: str = '# parameters',
     log_y: bool = False,
     legend_loc: str = 'upper left',
     center: str = 'median',
@@ -189,7 +191,7 @@ def plotWarmPanel(
         sub = [r for r in records if r['cond'] == cond]
         if not sub:
             continue
-        x = np.array([r['n_params'] for r in sub], dtype=float)
+        x = np.array([r[x_metric] for r in sub], dtype=float)
         y = np.array([r[metric] for r in sub], dtype=float)
 
         if scatter_alpha > 0:
@@ -231,7 +233,7 @@ def plotWarmPanel(
         ax,
         {
             'title': title,
-            'xlabel': '# parameters',
+            'xlabel': xlabel,
             'ylabel': ylabel,
             'title_fs': 24,
             'xlabel_fs': 20,

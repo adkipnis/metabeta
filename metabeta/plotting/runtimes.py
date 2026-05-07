@@ -103,6 +103,7 @@ def plotRuntimes(
     n_bins: int = 8,
     log_y: bool = True,
     show: bool = False,
+    title: str = 'runtimes',
 ) -> Path | None:
     if conds is None:
         conds = _DEFAULT_CONDS
@@ -146,8 +147,8 @@ def plotRuntimes(
     saved = None
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
-        saved = savePlot(out_dir, 'runtimes')
-        savePlot(out_dir, 'runtimes', ending='pdf')
+        saved = savePlot(out_dir, title)
+        savePlot(out_dir, title, ending='pdf')
     if show:
         plt.show()
     plt.close(fig)
@@ -160,8 +161,17 @@ def plotRuntimeRecords(
     n_bins: int = 8,
     log_y: bool = True,
     show: bool = False,
+    title: str = 'runtimes',
+    config: str | None = 'large-n-mixed',
+    x_key: str = 'n_params',
 ) -> Path | None:
     """Plot runtime experiment records produced by experiments/runtimes.py."""
+    if x_key not in {'n_params', 'n'}:
+        raise ValueError(f'unknown x_key: {x_key}')
+
+    if config is not None:
+        records = [r for r in records if r.get('config') == config]
+
     plot_records = []
     for r in records:
         cond = _METHOD_TO_COND.get(r['method'])
@@ -173,6 +183,7 @@ def plotRuntimeRecords(
                 'idx': r.get('idx'),
                 'cond': cond,
                 'n_params': r['n_params'],
+                'n': r['n'],
                 'wall_s': r['duration'],
             }
         )
@@ -182,6 +193,8 @@ def plotRuntimeRecords(
 
     conds = ['mb', 'cold_std', 'advi']
     fig, ax = plt.subplots(1, 1, figsize=(6, 5), dpi=DPI)
+    xlabel = '# observations' if x_key == 'n' else '# parameters'
+    x_range = (0, 300) if x_key == 'n_params' else (0, max(r[x_key] for r in plot_records))
     plotWarmPanel(
         ax,
         plot_records,
@@ -191,6 +204,8 @@ def plotRuntimeRecords(
         'Wall time (s)',
         'Runtime',
         n_bins,
+        x_metric=x_key,
+        xlabel=xlabel,
         log_y=log_y,
         legend_loc='center',
         center='mean',
@@ -200,7 +215,7 @@ def plotRuntimeRecords(
         line_lw=4.0,
         band_alpha=0.22,
         scatter_alpha=0.0,
-        x_range=(0, 300),
+        x_range=x_range,
         plain_log_y_ticks=True,
     )
     fig.tight_layout()
@@ -208,8 +223,8 @@ def plotRuntimeRecords(
     saved = None
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
-        saved = savePlot(out_dir, 'runtimes')
-        savePlot(out_dir, 'runtimes', ending='pdf')
+        saved = savePlot(out_dir, title)
+        savePlot(out_dir, title, ending='pdf')
     if show:
         plt.show()
     plt.close(fig)
