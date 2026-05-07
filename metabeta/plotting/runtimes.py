@@ -163,12 +163,8 @@ def plotRuntimeRecords(
     show: bool = False,
     title: str = 'runtimes',
     config: str | None = 'large-n-mixed',
-    x_key: str = 'n_params',
 ) -> Path | None:
-    """Plot runtime experiment records produced by experiments/runtimes.py."""
-    if x_key not in {'n_params', 'n'}:
-        raise ValueError(f'unknown x_key: {x_key}')
-
+    """Two-panel runtime figure (left: # parameters, right: # observations)."""
     if config is not None:
         records = [r for r in records if r.get('config') == config]
 
@@ -192,22 +188,10 @@ def plotRuntimeRecords(
         raise ValueError('No plottable runtime records collected.')
 
     conds = ['mb', 'cold_std', 'advi']
-    fig, ax = plt.subplots(1, 1, figsize=(6, 5), dpi=DPI)
-    xlabel = '# observations' if x_key == 'n' else '# parameters'
-    x_range = (0, 300) if x_key == 'n_params' else (0, max(r[x_key] for r in plot_records))
-    plotWarmPanel(
-        ax,
-        plot_records,
-        'wall_s',
-        conds,
-        COND_STYLE,
-        'Wall time (s)',
-        'Runtime',
-        n_bins,
-        x_metric=x_key,
-        xlabel=xlabel,
+    shared_kw = dict(
         log_y=log_y,
         legend_loc='center',
+        show_title=False,
         center='mean',
         lo_pct=0.5,
         hi_pct=99.5,
@@ -215,9 +199,31 @@ def plotRuntimeRecords(
         line_lw=4.0,
         band_alpha=0.22,
         scatter_alpha=0.0,
-        x_range=x_range,
         plain_log_y_ticks=True,
     )
+
+    max_params = max(r['n_params'] for r in plot_records)
+    max_n = max(r['n'] for r in plot_records)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), dpi=DPI)
+
+    plotWarmPanel(
+        axes[0], plot_records, 'wall_s', conds, COND_STYLE,
+        'Wall time (s)', '', n_bins,
+        x_metric='n_params', xlabel='# parameters',
+        x_range=(0, max_params),
+        show_legend=True,
+        **shared_kw,
+    )
+    plotWarmPanel(
+        axes[1], plot_records, 'wall_s', conds, COND_STYLE,
+        '', '', n_bins,
+        x_metric='n', xlabel='# observations',
+        x_range=(0, max_n),
+        show_legend=False,
+        **shared_kw,
+    )
+
     fig.tight_layout()
 
     saved = None
