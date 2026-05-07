@@ -58,19 +58,21 @@ sizes:
 
 # Likelihood family presets
 # Use integer IDs: 0=normal, 1=bernoulli, 2=poisson
+# min_bg_df = minimal between group degree of freedom:
+# buffer above max(d, q(q+1)/2); m_low = max(d, q(q+1)/2) + min_bg_df
 families:
   0:
     likelihood_family: 0
     name: normal
-    min_bg_df: 4  # buffer above max(d, q(q+1)/2); m_low = max(d, q(q+1)/2) + min_bg_df
+    min_bg_df: 4
   1:
     likelihood_family: 1
     name: bernoulli
-    min_bg_df: 4  # buffer above max(d, q(q+1)/2); m_low = max(d, q(q+1)/2) + min_bg_df
+    min_bg_df: 4
   2:
     likelihood_family: 2
     name: poisson
-    min_bg_df: 4  # buffer above max(d, q(q+1)/2); m_low = max(d, q(q+1)/2) + min_bg_df
+    min_bg_df: 4
 
 # CLI-only parameters (never have defaults in YAML configs)
 cli_only:
