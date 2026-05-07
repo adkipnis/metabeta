@@ -118,7 +118,7 @@ class Generator:
                 max_n=self.cfg.max_n,
             )
             self.max_d_feasible = min(self.cfg.max_d, subsampler.maxCompatibleD())
-            min_d = 2 if getattr(self.cfg, 'partition', 'train') == 'train' else self.cfg.min_d
+            min_d = self.cfg.min_d
             if self.max_d_feasible < min_d:
                 raise ValueError(
                     f'real source pool only supports max_d={self.max_d_feasible}, '
@@ -138,11 +138,9 @@ class Generator:
         ), 'number of datasets must be divisible by mini batch size'
         n_mini = n_datasets // mini_batch_size
 
-        # min_d/min_q define non-overlapping test bands; ignored during training
-        # so that the single training run covers the full (d, q) space.
         # d and q are drawn log-uniformly over their bounded integer ranges.
         is_train = getattr(self.cfg, 'partition', 'train') == 'train'
-        min_d = 2 if is_train else getattr(self.cfg, 'min_d', 2)
+        min_d = getattr(self.cfg, 'min_d', 2)
         max_d = self.max_d_feasible if self.cfg.ds_type == 'real' else self.cfg.max_d
         low_d, high_d = float(min_d), float(max_d + 1)
         d_uniq = truncLogUni(rng, low=low_d, high=high_d, size=n_mini, round=True).astype(int)
