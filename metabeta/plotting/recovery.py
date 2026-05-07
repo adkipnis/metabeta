@@ -20,6 +20,11 @@ def _nanMean(x: torch.Tensor) -> float:
     return float(torch.nanmean(x).item())
 
 
+def _paletteSlice(offset: int, n: int) -> list[str]:
+    n_colors = len(PALETTE)
+    return [PALETTE[(offset + i) % n_colors] for i in range(n)]
+
+
 def _plotRecovery(
     ax: Axes,
     targets: np.ndarray,
@@ -114,7 +119,7 @@ def _plotRecoveryGrouped(
         names,
         titles,  # type: ignore
     ):
-        col = PALETTE[i : i + len(nam)]
+        col = _paletteSlice(i, len(nam))
         _plotRecovery(
             ax,
             targets=tar.numpy(),
