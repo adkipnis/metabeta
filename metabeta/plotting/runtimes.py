@@ -34,9 +34,15 @@ from metabeta.utils.warmfit import (
     plotWarmPanel,
 )
 
-_WARM_CONDS = frozenset(COND_STYLE) - {'mb', 'advi', 'cold_std'}
+_WARM_CONDS = frozenset(COND_STYLE) - {'mb', 'mb_gpu', 'mb_cpu', 'advi', 'cold_std'}
 _DEFAULT_CONDS = ['mb', 'warm_2000', 'cold_std', 'advi']
-_METHOD_TO_COND = {'metabeta': 'mb', 'NUTS': 'cold_std', 'ADVI': 'advi'}
+_METHOD_TO_COND = {
+    'metabeta': 'mb',
+    'metabeta_gpu': 'mb_gpu',
+    'metabeta_cpu': 'mb_cpu',
+    'NUTS': 'cold_std',
+    'ADVI': 'advi',
+}
 
 
 def _collectRuntimeRecords(data_dir: Path, fits_tag: str, conds: list[str]) -> list[dict]:
@@ -187,10 +193,10 @@ def plotRuntimeRecords(
     if not plot_records:
         raise ValueError('No plottable runtime records collected.')
 
-    conds = ['mb', 'cold_std', 'advi']
+    conds = ['mb_gpu', 'mb_cpu', 'cold_std', 'advi']
     shared_kw = dict(
         log_y=log_y,
-        legend_loc='center',
+        legend_loc=(0.02, 0.28),
         show_title=False,
         center='mean',
         lo_pct=0.5,
@@ -212,7 +218,7 @@ def plotRuntimeRecords(
         'Wall time (s)', '', n_bins,
         x_metric='n_params', xlabel='# parameters',
         x_range=(0, max_params),
-        show_legend=True,
+        show_legend=False,
         **shared_kw,
     )
     plotWarmPanel(
@@ -224,6 +230,15 @@ def plotRuntimeRecords(
         **shared_kw,
     )
 
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles, labels,
+        loc='center left',
+        bbox_to_anchor=(1.01, 0.5),
+        fontsize=16,
+        markerscale=1.5,
+        frameon=True,
+    )
     fig.tight_layout()
 
     saved = None
