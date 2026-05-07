@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 from matplotlib.axes import Axes
+from matplotlib.ticker import FuncFormatter
 
 from metabeta.utils.dataloader import Collection
 from metabeta.utils.plot import PALETTE, niceify
@@ -59,10 +60,13 @@ def binStats(
     n_bins: int,
     lo_pct: float = 5.0,
     hi_pct: float = 95.0,
+    center: str = 'median',
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Equal-count bins → (centers, medians, lo, hi); bins with < 2 pts are dropped."""
+    """Equal-count bins -> (centers, center stats, lo, hi); bins with < 2 pts are dropped."""
+    if center not in {'mean', 'median'}:
+        raise ValueError(f'unknown center statistic: {center}')
     edges = np.unique(np.percentile(x, np.linspace(0, 100, n_bins + 1)))
-    centers, meds, los, his = [], [], [], []
+    centers, mids, los, his = [], [], [], []
     for i in range(len(edges) - 1):
         last = i == len(edges) - 2
         mask = (x >= edges[i]) & (x <= edges[i + 1] if last else x < edges[i + 1])
@@ -70,10 +74,57 @@ def binStats(
         if len(vals) < 2:
             continue
         centers.append(float(np.median(x[mask])))
-        meds.append(float(np.median(vals)))
+        mids.append(float(np.mean(vals) if center == 'mean' else np.median(vals)))
         los.append(float(np.percentile(vals, lo_pct)))
         his.append(float(np.percentile(vals, hi_pct)))
-    return np.array(centers), np.array(meds), np.array(los), np.array(his)
+    return np.array(centers), np.array(mids), np.array(los), np.array(his)
+
+
+def _smoothBand(
+    x: np.ndarray,
+    mid: np.ndarray,
+    lo: np.ndarray,
+    hi: np.ndarray,
+    n: int = 200,
+    x_range: tuple[float, float] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if len(x) < 3:
+        return x, mid, lo, hi
+
+    order = np.argsort(x)
+    x, mid, lo, hi = x[order], mid[order], lo[order], hi[order]
+    x_unique, idx = np.unique(x, return_index=True)
+    if len(x_unique) < 3:
+        return x, mid, lo, hi
+    mid, lo, hi = mid[idx], lo[idx], hi[idx]
+    x_min = float(x_unique.min()) if x_range is None else float(x_range[0])
+    x_max = float(x_unique.max()) if x_range is None else float(x_range[1])
+    grid = np.linspace(x_min, x_max, n)
+    eval_grid = np.clip(grid, float(x_unique.min()), float(x_unique.max()))
+    try:
+        from scipy.interpolate import PchipInterpolator
+
+        return (
+            grid,
+            PchipInterpolator(x_unique, mid)(eval_grid),
+            PchipInterpolator(x_unique, lo)(eval_grid),
+            PchipInterpolator(x_unique, hi)(eval_grid),
+        )
+    except ImportError:
+        return (
+            grid,
+            np.interp(eval_grid, x_unique, mid),
+            np.interp(eval_grid, x_unique, lo),
+            np.interp(eval_grid, x_unique, hi),
+        )
+
+
+def _formatSecondsTick(value: float, _pos: int) -> str:
+    if value <= 0:
+        return ''
+    if value >= 1:
+        return f'{value:g}'
+    return f'{value:.3g}'
 
 
 def collectWarmRecords(data_dir: Path, fits_tag: str, conds: list[str]) -> list[dict]:
@@ -122,6 +173,16 @@ def plotWarmPanel(
     n_bins: int,
     log_y: bool = False,
     legend_loc: str = 'upper left',
+    center: str = 'median',
+    lo_pct: float = 5.0,
+    hi_pct: float = 95.0,
+    smooth_band: bool = False,
+    line_lw: float = 2.0,
+    band_alpha: float = 0.15,
+    scatter_alpha: float = 0.2,
+    scatter_s: float = 25,
+    x_range: tuple[float, float] | None = None,
+    plain_log_y_ticks: bool = False,
 ) -> None:
     for cond in conds:
         style = cond_style.get(cond, {'color': 'grey', 'label': cond})
@@ -131,27 +192,41 @@ def plotWarmPanel(
         x = np.array([r['n_params'] for r in sub], dtype=float)
         y = np.array([r[metric] for r in sub], dtype=float)
 
-        ax.scatter(x, y, color=style['color'], alpha=0.2, s=25, zorder=2, linewidths=0)
+        if scatter_alpha > 0:
+            ax.scatter(
+                x,
+                y,
+                color=style['color'],
+                alpha=scatter_alpha,
+                s=scatter_s,
+                zorder=2,
+                linewidths=0,
+            )
 
         # Fewer bins for sparse conditions to avoid gaps from tied x-values collapsing bins
         cond_bins = max(2, min(n_bins, len(sub) // 4))
-        centers, meds, los, his = binStats(x, y, cond_bins)
+        centers, mids, los, his = binStats(x, y, cond_bins, lo_pct, hi_pct, center=center)
         if len(centers) == 0:
             continue
+        if smooth_band:
+            centers, mids, los, his = _smoothBand(centers, mids, los, his, x_range=x_range)
         ax.plot(
             centers,
-            meds,
-            '-o',
+            mids,
+            '-',
             color=style['color'],
-            lw=2.0,
-            ms=6,
+            lw=line_lw,
             zorder=3,
             label=style['label'],
         )
-        ax.fill_between(centers, los, his, color=style['color'], alpha=0.15, zorder=1)
+        ax.fill_between(centers, los, his, color=style['color'], alpha=band_alpha, zorder=1)
 
     if log_y:
         ax.set_yscale('log')
+        if plain_log_y_ticks:
+            ax.yaxis.set_major_formatter(FuncFormatter(_formatSecondsTick))
+    if x_range is not None:
+        ax.set_xlim(*x_range)
     niceify(
         ax,
         {
