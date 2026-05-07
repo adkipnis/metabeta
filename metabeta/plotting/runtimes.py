@@ -36,6 +36,7 @@ from metabeta.utils.warmfit import (
 
 _WARM_CONDS = frozenset(COND_STYLE) - {'mb', 'advi', 'cold_std'}
 _DEFAULT_CONDS = ['mb', 'warm_2000', 'cold_std', 'advi']
+_METHOD_TO_COND = {'metabeta': 'mb', 'NUTS': 'cold_std', 'ADVI': 'advi'}
 
 
 def _collectRuntimeRecords(data_dir: Path, fits_tag: str, conds: list[str]) -> list[dict]:
@@ -129,7 +130,78 @@ def plotRuntimes(
         'Runtime',
         n_bins,
         log_y=log_y,
-        legend_loc='upper left',
+        legend_loc='center',
+        center='mean',
+        lo_pct=0.5,
+        hi_pct=99.5,
+        smooth_band=True,
+        line_lw=4.0,
+        band_alpha=0.22,
+        scatter_alpha=0.0,
+        x_range=(0, 300),
+        plain_log_y_ticks=True,
+    )
+    fig.tight_layout()
+
+    saved = None
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        saved = savePlot(out_dir, 'runtimes')
+        savePlot(out_dir, 'runtimes', ending='pdf')
+    if show:
+        plt.show()
+    plt.close(fig)
+    return saved
+
+
+def plotRuntimeRecords(
+    records: list[dict],
+    out_dir: Path | None = None,
+    n_bins: int = 8,
+    log_y: bool = True,
+    show: bool = False,
+) -> Path | None:
+    """Plot runtime experiment records produced by experiments/runtimes.py."""
+    plot_records = []
+    for r in records:
+        cond = _METHOD_TO_COND.get(r['method'])
+        if cond is None:
+            continue
+        plot_records.append(
+            {
+                'data_dir': r['source'],
+                'idx': r.get('idx'),
+                'cond': cond,
+                'n_params': r['n_params'],
+                'wall_s': r['duration'],
+            }
+        )
+
+    if not plot_records:
+        raise ValueError('No plottable runtime records collected.')
+
+    conds = ['mb', 'cold_std', 'advi']
+    fig, ax = plt.subplots(1, 1, figsize=(6, 5), dpi=DPI)
+    plotWarmPanel(
+        ax,
+        plot_records,
+        'wall_s',
+        conds,
+        COND_STYLE,
+        'Wall time (s)',
+        'Runtime',
+        n_bins,
+        log_y=log_y,
+        legend_loc='center',
+        center='mean',
+        lo_pct=0.5,
+        hi_pct=99.5,
+        smooth_band=True,
+        line_lw=4.0,
+        band_alpha=0.22,
+        scatter_alpha=0.0,
+        x_range=(0, 300),
+        plain_log_y_ticks=True,
     )
     fig.tight_layout()
 
