@@ -455,6 +455,39 @@ def evaluate(
     return records
 
 
+def splitRecordsByDevice(
+    records: list[dict],
+    cache: dict[str, float],
+    devices: list[str] | None = None,
+) -> list[dict]:
+    """Replace 'metabeta' records with per-device variants using the runtime cache.
+
+    Cache keys: config|model_id|seed|prefix|source|idx|n_samples|k|device
+    Output method names: 'metabeta_gpu' (cuda) and 'metabeta_cpu' (cpu).
+    Non-metabeta records (NUTS, ADVI) are passed through unchanged.
+    """
+    if devices is None:
+        devices = ['cuda', 'cpu']
+    device_suffix = {'cuda': 'metabeta_gpu', 'cpu': 'metabeta_cpu'}
+
+    # Infer common metadata from existing cache keys
+    sample_key = next(iter(cache))
+    parts = sample_key.split('|')
+    model_id, seed, prefix, n_samples, k = parts[1], parts[2], parts[3], parts[6], parts[7]
+
+    out = [r for r in records if r['method'] != 'metabeta']
+    for r in records:
+        if r['method'] != 'metabeta':
+            continue
+        for device in devices:
+            key = '|'.join([r['config'], model_id, seed, prefix, r['source'],
+                            str(r['idx']), n_samples, k, device])
+            if key not in cache:
+                continue
+            out.append({**r, 'method': device_suffix[device], 'duration': cache[key]})
+    return out
+
+
 def _groupKey(r: dict) -> tuple:
     return (r['config'], r['source'], r['method'])
 
