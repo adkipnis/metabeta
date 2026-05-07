@@ -12,6 +12,7 @@ Usage (from experiments/):
 """
 
 import argparse
+import gc
 import logging
 import time
 from pathlib import Path
@@ -65,6 +66,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--device',     type=str, default='cpu')
     parser.add_argument('--n_samples',  type=int, default=1000)
     parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--summary_batch_size', type=int, default=1,
+                        help='Datasets per chunk for posterior predictive / LOO summaries')
     parser.add_argument('--seed',       type=int, default=0)
     parser.add_argument('--data_ids',   type=str, nargs='+', default=DEFAULT_DATA_IDS)
     parser.add_argument('--outdir',     type=str, default=str(OUT_DIR))
@@ -166,6 +169,17 @@ def trimBatch(batch: dict[str, torch.Tensor], max_d: int, max_q: int) -> dict[st
     return out
 
 
+def dropFitKeys(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Return a view-like dict excluding large cached NUTS/ADVI fit tensors."""
+    return {k: v for k, v in batch.items() if not (k.startswith('nuts_') or k.startswith('advi_'))}
+
+
+def methodFitBatch(batch: dict[str, torch.Tensor], prefix: str) -> dict[str, torch.Tensor]:
+    """Return only cached fit tensors for one method."""
+    stem = f'{prefix}_'
+    return {k: v for k, v in batch.items() if k.startswith(stem)}
+
+
 def loadRegimeBatch(
     data_path: Path,
     max_d: int,
@@ -249,6 +263,9 @@ def sampleMB(
         tpd_list.extend([tpd_chunk] * (end - start))
         p_chunk.to('cpu')
         proposals.append(p_chunk)
+        del b_chunk
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
     merged = concatProposalsBatch(proposals)
     tpd_arr = torch.tensor(tpd_list, dtype=torch.float64)
     merged.tpd = tpd_arr.mean().item()
@@ -334,6 +351,7 @@ def _evalGroup(
     regime: str,
     likelihood_family: int,
     rescale: bool,
+    summary_batch_size: int,
 ) -> list[dict]:
     """Evaluate a list of (label, proposal, batch, tpd_arr) tuples and return rows."""
     rows = []
@@ -345,7 +363,11 @@ def _evalGroup(
             proposal.rescale(batch['sd_y'])
             batch = rescaleData(batch)
         summary = getSummary(
-            proposal, batch, likelihood_family=likelihood_family, compute_pred_coverage=False
+            proposal,
+            batch,
+            likelihood_family=likelihood_family,
+            compute_pred_coverage=False,
+            dataset_chunk_size=summary_batch_size,
         )
         active_d = batch['mask_d'].any(0)
         active_q = batch['mask_q'].any(0)
@@ -377,6 +399,7 @@ def evaluateRegime(
     regime: str,
     rescale: bool = True,
     convergence_mode: str = 'liberal',
+    summary_batch_size: int = 1,
 ) -> tuple[list[dict], list[dict] | None]:
     """Returns (rows_full, rows_conv) — rows_conv is None if no convergence data."""
     logger.info('\n--- Regime: %s ---', regime)
@@ -390,14 +413,23 @@ def evaluateRegime(
     advi_mask = fitBatchMask(cap_batch, 'advi')
     n_advi = int(advi_mask.sum())
     logger.info('  ADVI success: %d / %d', n_advi, n_kept)
-    advi_batch = subsetBatch(cap_batch, advi_mask)
 
-    proposal_mb, mb_tpd_arr = sampleMB(model, cap_batch, n_samples, batch_size, device)
+    data_batch = dropFitKeys(cap_batch)
+    advi_data_batch = subsetBatch(data_batch, advi_mask)
+
+    proposal_mb, mb_tpd_arr = sampleMB(model, data_batch, n_samples, batch_size, device)
     proposal_nuts = fit2proposal(cap_batch, 'nuts')
-    proposal_advi = fit2proposal(advi_batch, 'advi') if n_advi > 0 else None
+    advi_fit_batch = (
+        subsetBatch(methodFitBatch(cap_batch, 'advi'), advi_mask) if n_advi > 0 else None
+    )
+    proposal_advi = fit2proposal(advi_fit_batch, 'advi') if advi_fit_batch is not None else None
 
     nuts_tpd = cap_batch.get('nuts_duration')
-    advi_tpd = advi_batch.get('advi_duration') if n_advi > 0 else None
+    advi_tpd = advi_fit_batch.get('advi_duration') if advi_fit_batch is not None else None
+    for key in list(cap_batch):
+        if key.startswith('advi_'):
+            del cap_batch[key]
+    gc.collect()
 
     # Build convergence subsets BEFORE the eval loop (rescale is in-place on proposals)
     conv_quads: list[tuple[str, Proposal, dict, torch.Tensor | None]] | None = None
@@ -406,31 +438,41 @@ def evaluateRegime(
         n_conv = int(conv_mask.sum())
         logger.info('  NUTS convergence (%s): %d / %d', convergence_mode, n_conv, n_kept)
         if 0 < n_conv < n_kept:
-            conv_batch = subsetBatch(cap_batch, conv_mask)
+            conv_batch = subsetBatch(data_batch, conv_mask)
             conv_mb = subsetProposal(proposal_mb, conv_mask)
             conv_nuts = subsetProposal(proposal_nuts, conv_mask)
             conv_advi_mask = advi_mask & conv_mask
             n_conv_advi = int(conv_advi_mask.sum())
-            conv_advi_batch = subsetBatch(cap_batch, conv_advi_mask)
+            conv_advi_batch = subsetBatch(data_batch, conv_advi_mask)
             conv_advi = (
                 subsetProposal(proposal_advi, conv_mask[advi_mask])
                 if n_advi > 0 and n_conv_advi > 0
                 else None
             )
             idx = torch.from_numpy(conv_mask)
+            advi_idx = torch.from_numpy(conv_mask[advi_mask])
             conv_quads = [
                 ('MB', conv_mb, conv_batch, mb_tpd_arr[idx]),
                 ('NUTS', conv_nuts, conv_batch, nuts_tpd[idx] if nuts_tpd is not None else None),
-                ('ADVI', conv_advi, conv_advi_batch, conv_advi_batch.get('advi_duration')),
+                (
+                    'ADVI',
+                    conv_advi,
+                    conv_advi_batch,
+                    advi_tpd[advi_idx] if advi_tpd is not None else None,
+                ),
             ]
 
     full_quads = [
-        ('MB', proposal_mb, cap_batch, mb_tpd_arr),
-        ('NUTS', proposal_nuts, cap_batch, nuts_tpd),
-        ('ADVI', proposal_advi, advi_batch, advi_tpd),
+        ('MB', proposal_mb, data_batch, mb_tpd_arr),
+        ('NUTS', proposal_nuts, data_batch, nuts_tpd),
+        ('ADVI', proposal_advi, advi_data_batch, advi_tpd),
     ]
-    rows = _evalGroup(full_quads, regime, likelihood_family, rescale)
-    rows_conv = _evalGroup(conv_quads, regime, likelihood_family, rescale) if conv_quads else None
+    rows = _evalGroup(full_quads, regime, likelihood_family, rescale, summary_batch_size)
+    rows_conv = (
+        _evalGroup(conv_quads, regime, likelihood_family, rescale, summary_batch_size)
+        if conv_quads
+        else None
+    )
 
     return rows, rows_conv
 
@@ -552,6 +594,7 @@ def main() -> None:
             regime=regime,
             rescale=cfg.rescale,
             convergence_mode=cfg.convergence_mode,
+            summary_batch_size=cfg.summary_batch_size,
         )
         if rows:
             rows_by_regime[regime] = rows
