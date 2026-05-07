@@ -109,15 +109,20 @@ def getCorrelation(
     for key, est in locs.items():
         if key == 'corr_rfx':
             gt = corrToLower(data['corr_rfx'])  # (b, d_corr)
-            ds_mask = data['mask_q'].sum(dim=-1) >= 2
-            gt = gt[ds_mask]
-            est = est[ds_mask]
+            q = data['mask_q'].shape[-1]
+            pair_masks = [
+                data['mask_q'][:, i] & data['mask_q'][:, j]
+                for i in range(q)
+                for j in range(i)
+            ]
             corr = np.array(
                 [
-                    cast(np.float32, pearsonr(gt[:, k].numpy(), est[:, k].numpy())[0])
-                    if gt.shape[0] >= 2
+                    cast(np.float32, pearsonr(gt[pm, k].numpy(), est[pm, k].numpy())[0])
+                    if pm.sum() >= 2
+                    and gt[pm, k].std().item() > 0
+                    and est[pm, k].std().item() > 0
                     else float('nan')
-                    for k in range(gt.shape[-1])
+                    for k, pm in enumerate(pair_masks)
                 ],
                 dtype=np.float32,
             )
@@ -132,7 +137,7 @@ def getCorrelation(
                 mask_i = mask[..., i]
                 gt_i = gt[mask_i, i]
                 est_i = est[mask_i, i]
-                if len(gt_i) < 2:
+                if len(gt_i) < 2 or gt_i.std().item() == 0 or est_i.std().item() == 0:
                     corr[i] = float('nan')
                 else:
                     corr[i] = cast(np.float32, pearsonr(gt_i, est_i)[0])
