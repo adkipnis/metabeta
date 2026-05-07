@@ -12,24 +12,24 @@ For a given evaluation config (= trained model):
 
 Usage (from experiments/):
     uv run python runtimes.py
-    uv run python runtimes.py --configs large-n-sampled
-    uv run python runtimes.py --configs small-n-sampled large-n-sampled --k 7
-    uv run python runtimes.py --configs large-n-sampled --max_datasets 32
+    uv run python runtimes.py --configs small-n-mixed --model_id large-r --seed 0
+    uv run python runtimes.py --configs small-n-mixed --test_data_ids tiny-n-sampled small-n-sampled
+    uv run python runtimes.py --configs small-n-mixed --max_test_sets 2 --max_datasets 32
 """
 
 import argparse
+import json
 import time
 import yaml
 from pathlib import Path
 
 import numpy as np
 import torch
-from matplotlib import pyplot as plt
-from matplotlib.lines import Line2D
 from tabulate import tabulate
 from tqdm import tqdm
 
 from metabeta.models.approximator import Approximator
+from metabeta.plotting.runtimes import plotRuntimeRecords
 from metabeta.utils.config import (
     assimilateConfig,
     loadDataConfig,
@@ -40,7 +40,6 @@ from metabeta.utils.io import runName, setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.moe import moeEstimate
 from metabeta.utils.padding import padToModel, unpad
-from metabeta.utils.plot import niceify
 from metabeta.utils.sampling import setSeed
 
 DIR = Path(__file__).resolve().parent
@@ -57,23 +56,52 @@ DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixe
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Runtime comparison: metabeta vs NUTS vs ADVI.')
-    parser.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS, help='evaluation config names (YAML files in evaluation/configs/)')
+    parser.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS, help='training data config names, or YAML files in evaluation/configs/')
+    parser.add_argument('--model_id', default='large-r', help='model config id used when --configs names data ids')
+    parser.add_argument('--seed', type=int, default=0, help='checkpoint seed used when --configs names data ids')
+    parser.add_argument('--prefix', default='best', help='checkpoint prefix to load')
     parser.add_argument('--k', type=int, default=0, help='number of extra MoE permuted views (0 = no MoE)')
+    parser.add_argument('--test_data_ids', nargs='+', default=None, help='specific outputs/data/* test sets to benchmark')
+    parser.add_argument('--max_test_sets', type=int, default=None, help='max number of test.fit.npz files to benchmark')
     parser.add_argument('--max_datasets', type=int, default=None, help='max datasets per fit file (for quick testing)')
     parser.add_argument('--outdir', type=str, default=str(OUT_DIR), help='output directory for tables')
+    parser.add_argument('--cache_path', type=Path, default=None, help='JSON cache for metabeta runtimes (default: outdir/runtimes_cache.json)')
+    parser.add_argument('--refresh_cache', action='store_true', help='recompute metabeta runtimes even if cached')
     parser.add_argument('--verbosity', type=int, default=1, help='0=warnings | 1=info | 2=debug')
     parser.add_argument('--cuda', action='store_true', help='override eval config device and use CUDA (errors if unavailable)')
     return parser.parse_args()
 # fmt: on
 
 
-def loadEvalConfig(name: str, **overrides) -> argparse.Namespace:
-    """Load an evaluation YAML config and apply overrides."""
+def loadEvalConfig(
+    name: str,
+    model_id: str = 'large-r',
+    seed: int = 0,
+    prefix: str = 'best',
+    **overrides,
+) -> argparse.Namespace:
+    """Load an evaluation YAML or checkpoint config and apply overrides."""
     path = EVAL_CFG_DIR / f'{name}.yaml'
-    assert path.exists(), f'eval config not found: {path}'
-    with open(path) as f:
-        cfg = yaml.safe_load(f)
+    if path.exists():
+        with open(path) as f:
+            cfg = yaml.safe_load(f)
+    else:
+        cfg = {
+            'data_id': name,
+            'model_id': model_id,
+            'seed': seed,
+            'r_tag': '',
+            'likelihood_family': 0,
+        }
+        ckpt_cfg = METABETA / 'outputs' / 'checkpoints' / runName(cfg) / 'config.yaml'
+        assert ckpt_cfg.exists(), f'eval config not found: {path} or {ckpt_cfg}'
+        with open(ckpt_cfg) as f:
+            cfg = yaml.safe_load(f)
     cfg['name'] = name
+    cfg.setdefault('device', 'cpu')
+    cfg.setdefault('compile', False)
+    cfg.setdefault('prefix', prefix)
+    cfg.setdefault('r_tag', '')
     cfg.update(overrides)
     return argparse.Namespace(**cfg)
 
@@ -83,7 +111,7 @@ def initModel(cfg: argparse.Namespace, device: torch.device):
     data_cfg = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg)
 
-    model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.model_id}.yaml'
+    model_cfg_path = METABETA / 'configs' / 'models' / f'{cfg.model_id}.yaml'
     model_cfg = modelFromYaml(
         model_cfg_path,
         d_ffx=cfg.max_d,
@@ -97,7 +125,7 @@ def initModel(cfg: argparse.Namespace, device: torch.device):
     ckpt_dir = METABETA / 'outputs' / 'checkpoints' / run
     path = ckpt_dir / f'{cfg.prefix}.pt'
     assert path.exists(), f'checkpoint not found: {path}'
-    payload = torch.load(path, map_location=device)
+    payload = torch.load(path, map_location=device, weights_only=False)
     model.load_state_dict(payload['model_state'])
 
     if cfg.compile and device.type != 'mps':
@@ -106,12 +134,35 @@ def initModel(cfg: argparse.Namespace, device: torch.device):
     return model, data_cfg
 
 
-def discoverFitFiles(likelihood_family: int) -> list[Path]:
+def _fitFileLikelihood(path: Path) -> int | None:
+    try:
+        return int(loadDataConfig(path.parent.name).get('likelihood_family', 0))
+    except FileNotFoundError:
+        return None
+
+
+def discoverFitFiles(
+    likelihood_family: int,
+    test_data_ids: list[str] | None = None,
+    max_test_sets: int | None = None,
+) -> list[Path]:
     """Find all .fit.npz test files matching the given likelihood family."""
     lf_name = LIKELIHOOD_NAMES[likelihood_family]
-    pattern = f'test_{lf_name}_*.fit.npz'
-    paths = sorted(DATA_DIR.glob(pattern))
-    assert len(paths) > 0, f'no fit files found for pattern {pattern} in {DATA_DIR}'
+    if test_data_ids is not None:
+        paths = [DATA_DIR / data_id / 'test.fit.npz' for data_id in test_data_ids]
+    else:
+        pattern = f'test_{lf_name}_*.fit.npz'
+        paths = sorted(DATA_DIR.glob(pattern))
+        paths.extend(
+            p
+            for p in sorted(DATA_DIR.glob('*/test.fit.npz'))
+            if _fitFileLikelihood(p) == likelihood_family
+        )
+
+    paths = [p for p in paths if p.exists()]
+    if max_test_sets is not None:
+        paths = paths[:max_test_sets]
+    assert len(paths) > 0, f'no fit files found for likelihood {lf_name} in {DATA_DIR}'
     return paths
 
 
@@ -120,7 +171,7 @@ def extractDatasets(
     max_d: int,
     max_q: int,
     max_datasets: int | None = None,
-) -> list[dict[str, np.ndarray]]:
+) -> list[tuple[int, dict[str, np.ndarray]]]:
     """Load a fit.npz file, unpad individual datasets, and re-pad to model dims."""
     with np.load(path, allow_pickle=True) as raw:
         raw = dict(raw)
@@ -139,22 +190,27 @@ def extractDatasets(
         ds = unpad(ds, sizes)
         # re-pad to model dimensions
         ds = padToModel(ds, max_d, max_q)
-        datasets.append(ds)
+        datasets.append((i, ds))
 
     return datasets
 
 
 def resetRng(model: Approximator, seed: int) -> None:
     """Reset base distribution RNGs for reproducible sampling."""
-    model.posterior_g.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
+    base_g = model.posterior_g.base_dist
+    if hasattr(base_g, 'base') and hasattr(base_g.base, 'rng'):
+        base_g.base.rng = np.random.default_rng(seed)  # type: ignore
     if hasattr(model, 'posterior_l'):
-        model.posterior_l.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
+        base_l = model.posterior_l.base_dist
+        if hasattr(base_l, 'base') and hasattr(base_l.base, 'rng'):
+            base_l.base.rng = np.random.default_rng(seed)  # type: ignore
 
 
 @torch.inference_mode()
 def benchmarkModel(
     model: Approximator,
     datasets: list[dict[str, np.ndarray]],
+    dataset_idxs: list[int],
     n_samples: int,
     k: int,
     device: torch.device,
@@ -176,7 +232,7 @@ def benchmarkModel(
 
         setSeed(seed)
         resetRng(model, seed)
-        rng = np.random.default_rng(seed + i)
+        rng = np.random.default_rng(seed + dataset_idxs[i])
 
         t0 = time.perf_counter()
         proposal = moeEstimate(model, batch, n_samples, k, rng=rng)
@@ -191,6 +247,8 @@ def benchmarkModel(
 
 def sourceLabel(path: Path) -> str:
     """Extract a short label from a fit file name, e.g. 'd3_q1_m5-25'."""
+    if path.name == 'test.fit.npz':
+        return path.parent.name
     stem = path.stem.replace('.fit', '')
     # test_normal_d3_q1_m5-25_n4-18_sampled_nt800_all → d3_q1_m5-25_n4-18
     parts = stem.split('_')
@@ -205,14 +263,62 @@ def nParams(ds: dict[str, np.ndarray]) -> int:
     return d + q + m * q
 
 
+def _cacheKey(
+    cfg: argparse.Namespace,
+    source: str,
+    idx: int,
+    n_samples: int,
+    k: int,
+    device: torch.device,
+) -> str:
+    parts = [
+        str(cfg.data_id),
+        str(cfg.model_id),
+        str(cfg.seed),
+        str(cfg.prefix),
+        str(source),
+        str(idx),
+        str(n_samples),
+        str(k),
+        str(device.type),
+    ]
+    return '|'.join(parts)
+
+
+def loadRuntimeCache(path: Path) -> dict[str, float]:
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        raw = json.load(f)
+    if isinstance(raw, dict) and 'durations' in raw:
+        raw = raw['durations']
+    return {str(k): float(v) for k, v in raw.items()}
+
+
+def saveRuntimeCache(path: Path, cache: dict[str, float]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    payload = {'durations': dict(sorted(cache.items()))}
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+    tmp.replace(path)
+
+
 def evaluateConfig(
     config_name: str,
+    model_id: str,
+    seed: int,
+    prefix: str,
     k: int,
+    test_data_ids: list[str] | None,
+    max_test_sets: int | None,
     max_datasets: int | None,
+    runtime_cache: dict[str, float],
+    cache_path: Path,
+    refresh_cache: bool = False,
     cuda: bool = False,
 ) -> list[dict]:
     """Run the runtime comparison for a single config, returning per-dataset records."""
-    cfg = loadEvalConfig(config_name, plot=False)
+    cfg = loadEvalConfig(config_name, model_id=model_id, seed=seed, prefix=prefix, plot=False)
     if cuda:
         if not torch.cuda.is_available():
             raise RuntimeError('--cuda specified but CUDA is not available on this machine')
@@ -227,7 +333,7 @@ def evaluateConfig(
 
     print(f'Model: {config_name} (max_d={max_d}, max_q={max_q}, lf={lf})')
 
-    fit_paths = discoverFitFiles(lf)
+    fit_paths = discoverFitFiles(lf, test_data_ids=test_data_ids, max_test_sets=max_test_sets)
     print(f'Found {len(fit_paths)} fit file(s)')
 
     records = []
@@ -237,10 +343,12 @@ def evaluateConfig(
         print(f'\n{"=" * 60}')
         print(f'Source: {path.name} ({label})')
 
-        datasets = extractDatasets(path, max_d, max_q, max_datasets)
-        if not datasets:
+        indexed_datasets = extractDatasets(path, max_d, max_q, max_datasets)
+        if not indexed_datasets:
             print('  (skipped — no compatible datasets)')
             continue
+        raw_idxs = [idx for idx, _ in indexed_datasets]
+        datasets = [ds for _, ds in indexed_datasets]
 
         N = len(datasets)
         ds_d = np.array([int(ds['d']) for ds in datasets])
@@ -254,20 +362,48 @@ def evaluateConfig(
         print(f'  {N} datasets, d={ds_d.min()}-{ds_d.max()}, q={ds_q.min()}-{ds_q.max()}')
         print(f'  NUTS draws={nuts_n_samples}, model: {n_samples_per_view}×{1+k}={total_samples}')
 
-        # model runtimes
-        model_dur = benchmarkModel(
-            model, datasets, n_samples_per_view, k, device, cfg.seed, cfg.rescale
-        )
+        cache_keys = [
+            _cacheKey(cfg, label, raw_idx, n_samples_per_view, k, device) for raw_idx in raw_idxs
+        ]
+        model_dur = np.full(N, np.nan)
+        missing_pos = []
+        for i, key in enumerate(cache_keys):
+            if not refresh_cache and key in runtime_cache:
+                model_dur[i] = runtime_cache[key]
+            else:
+                missing_pos.append(i)
+
+        n_cached = N - len(missing_pos)
+        if n_cached:
+            print(f'  metabeta cache hits={n_cached}/{N}')
+        if missing_pos:
+            missing_datasets = [datasets[i] for i in missing_pos]
+            missing_idxs = [raw_idxs[i] for i in missing_pos]
+            missing_dur = benchmarkModel(
+                model,
+                missing_datasets,
+                missing_idxs,
+                n_samples_per_view,
+                k,
+                device,
+                cfg.seed,
+                cfg.rescale,
+            )
+            for pos, dur in zip(missing_pos, missing_dur):
+                model_dur[pos] = dur
+                runtime_cache[cache_keys[pos]] = float(dur)
+            saveRuntimeCache(cache_path, runtime_cache)
 
         # NUTS and ADVI runtimes (pre-computed in fit file)
         with np.load(path, allow_pickle=True) as raw:
-            nuts_dur = raw['nuts_duration'][:N].astype(np.float64)
-            advi_dur = raw['advi_duration'][:N].astype(np.float64)
+            nuts_dur = raw['nuts_duration'][raw_idxs].astype(np.float64)
+            advi_dur = raw['advi_duration'][raw_idxs].astype(np.float64)
 
-        for i, ds in enumerate(datasets):
+        for i, (raw_idx, ds) in enumerate(zip(raw_idxs, datasets)):
             base = {
                 'config': config_name,
                 'source': label,
+                'idx': raw_idx,
                 'n': int(ds['n']),
                 'd': int(ds['d']),
                 'q': int(ds['q']),
@@ -275,24 +411,47 @@ def evaluateConfig(
                 'n_params': nParams(ds),
             }
             for method, dur in [('metabeta', model_dur), ('NUTS', nuts_dur), ('ADVI', advi_dur)]:
-                records.append({**base, 'method': method, 'duration': dur[i]})
+                records.append({**base, 'method': method, 'duration': float(dur[i])})
 
     return records
 
 
 def evaluate(
     configs: list[str],
+    model_id: str,
+    seed: int,
+    prefix: str,
     k: int,
+    test_data_ids: list[str] | None,
+    max_test_sets: int | None,
     max_datasets: int | None,
+    cache_path: Path,
+    refresh_cache: bool = False,
     cuda: bool = False,
 ) -> list[dict]:
     """Run the full runtime comparison across all configs."""
+    runtime_cache = loadRuntimeCache(cache_path)
     records = []
     for config_name in configs:
         print(f'\n{"#" * 60}')
         print(f'Config: {config_name}')
         print(f'{"#" * 60}')
-        records.extend(evaluateConfig(config_name, k, max_datasets, cuda=cuda))
+        records.extend(
+            evaluateConfig(
+                config_name,
+                model_id,
+                seed,
+                prefix,
+                k,
+                test_data_ids,
+                max_test_sets,
+                max_datasets,
+                runtime_cache,
+                cache_path,
+                refresh_cache=refresh_cache,
+                cuda=cuda,
+            )
+        )
     return records
 
 
@@ -423,131 +582,6 @@ def speedupTable(records: list[dict]) -> str:
     return tabulate(table_rows, headers=headers, tablefmt='pipe', stralign='right')
 
 
-METHOD_COLORS = {'metabeta': '#1f77b4', 'NUTS': '#d62728', 'ADVI': '#ff7f0e'}
-METHOD_MARKERS = {'metabeta': 'o', 'NUTS': 's', 'ADVI': 'D'}
-
-
-def plotRuntimes(records: list[dict], outdir: Path) -> Path:
-    """Scatter plot: total n vs runtime, size ~ n_params, color ~ method.
-
-    Each point is one dataset.  Both axes are log-scaled.  Marker size is
-    proportional to the effective number of parameters (d + q + m*q), giving
-    an immediate sense of model complexity.  Thin vertical lines connect the
-    three methods for the same dataset so the speedup gap is easy to read.
-    """
-    fig, ax = plt.subplots(figsize=(10, 6), dpi=150)
-
-    # size scaling: map n_params to marker area
-    all_np = np.array([r['n_params'] for r in records])
-    np_min, np_max = all_np.min(), all_np.max()
-    s_min, s_max = 25, 220
-    if np_max > np_min:
-        scale = lambda p: s_min + (s_max - s_min) * (p - np_min) / (np_max - np_min)
-    else:
-        scale = lambda p: (s_min + s_max) / 2
-
-    # draw connector lines between methods for each dataset
-    from collections import defaultdict
-
-    dataset_groups: dict[tuple, list[dict]] = defaultdict(list)
-    for r in records:
-        key = (r['config'], r['source'], r['d'], r['q'], r['m'], r['n'])
-        dataset_groups[key].append(r)
-
-    for key, group in dataset_groups.items():
-        if len(group) < 2:
-            continue
-        n = key[-1]  # total observations
-        durs = [r['duration'] for r in group]
-        ax.plot(
-            [n, n],
-            [min(durs), max(durs)],
-            color='#cccccc',
-            linewidth=0.7,
-            zorder=1,
-        )
-
-    # scatter by method
-    for method in ['NUTS', 'ADVI', 'metabeta']:
-        sub = [r for r in records if r['method'] == method]
-        if not sub:
-            continue
-        x = np.array([r['n'] for r in sub])
-        y = np.array([r['duration'] for r in sub])
-        s = np.array([scale(r['n_params']) for r in sub])
-        ax.scatter(
-            x,
-            y,
-            s=s,
-            c=METHOD_COLORS[method],
-            marker=METHOD_MARKERS[method],
-            alpha=0.7,
-            edgecolors='white',
-            linewidths=0.4,
-            label=method,
-            zorder=3,
-        )
-
-    ax.set_xscale('log')
-    ax.set_yscale('log')
-    ax.set_axisbelow(True)
-    ax.grid(True, alpha=0.25, which='both')
-
-    # method legend
-    niceify(
-        ax,
-        {
-            'title': 'Runtime Comparison',
-            'xlabel': 'Total observations (n)',
-            'ylabel': 'Time [s]',
-            'title_fs': 20,
-            'xlabel_fs': 16,
-            'ylabel_fs': 16,
-            'ticks_ls': 13,
-            'legend_fs': 13,
-            'legend_ms': 1.5,
-            'legend_loc': 'upper left',
-            'despine': True,
-        },
-    )
-
-    # size legend (n_params)
-    n_unique = len(np.unique(all_np))
-    size_ticks = np.linspace(np_min, np_max, min(4, n_unique))
-    size_ticks = np.unique(np.round(size_ticks).astype(int))
-    size_handles = [
-        Line2D(
-            [0],
-            [0],
-            marker='o',
-            color='none',
-            markerfacecolor='grey',
-            markeredgecolor='none',
-            markersize=np.sqrt(scale(v)),
-            label=str(v),
-        )
-        for v in size_ticks
-    ]
-    size_leg = ax.legend(
-        handles=size_handles,
-        title='n params',
-        fontsize=11,
-        title_fontsize=12,
-        loc='lower right',
-        framealpha=0.8,
-    )
-    ax.add_artist(size_leg)
-    # restore method legend
-    ax.legend(fontsize=13, markerscale=1.5, loc='upper left')
-
-    outdir.mkdir(parents=True, exist_ok=True)
-    path = outdir / 'runtimes.png'
-    fig.savefig(path, bbox_inches='tight', pad_inches=0.15)
-    fig.savefig(outdir / 'runtimes.pdf', bbox_inches='tight', pad_inches=0.15)
-    plt.close(fig)
-    return path
-
-
 def save(records: list[dict], outdir: Path) -> None:
     """Save tables and plot."""
     outdir.mkdir(parents=True, exist_ok=True)
@@ -563,7 +597,11 @@ def save(records: list[dict], outdir: Path) -> None:
     )
     print(f'\nMarkdown saved to {md_path}')
 
-    fig_path = plotRuntimes(records, outdir)
+    records_path = outdir / 'runtimes_records.json'
+    records_path.write_text(json.dumps(records, indent=2, sort_keys=True) + '\n')
+    print(f'Records saved to {records_path}')
+
+    fig_path = plotRuntimeRecords(records, out_dir=outdir)
     print(f'Plot saved to {fig_path}')
 
 
@@ -575,10 +613,25 @@ if __name__ == '__main__':
     print(f'Configs: {args.configs}')
     print(f'MoE k={args.k}')
 
-    records = evaluate(args.configs, args.k, args.max_datasets, cuda=args.cuda)
+    outdir = Path(args.outdir)
+    cache_path = args.cache_path if args.cache_path is not None else outdir / 'runtimes_cache.json'
+
+    records = evaluate(
+        args.configs,
+        args.model_id,
+        args.seed,
+        args.prefix,
+        args.k,
+        args.test_data_ids,
+        args.max_test_sets,
+        args.max_datasets,
+        cache_path,
+        refresh_cache=args.refresh_cache,
+        cuda=args.cuda,
+    )
 
     print(f'\n{formatTable(records)}')
     print(f'\n{speedupTable(records)}')
 
-    save(records, Path(args.outdir))
+    save(records, outdir)
     print('\nDone.')
