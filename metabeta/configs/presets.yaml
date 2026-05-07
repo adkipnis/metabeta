@@ -8,6 +8,7 @@
 sizes:
   tiny: # just for prototyping
     max_d: 2
+    min_d: 1
     max_q: 1
     min_m: 5
     max_m: 25
