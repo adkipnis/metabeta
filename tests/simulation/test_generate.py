@@ -10,6 +10,9 @@ import pytest
 from metabeta.simulation import Generator
 from metabeta.utils.padding import maxShapes, aggregate
 
+# Path to golden snapshot captured before the refactor (committed alongside this file).
+_SNAPSHOT_PATH = Path(__file__).parent / 'snapshot_generate.npy'
+
 
 def make_cfg(**overrides: Any) -> argparse.Namespace:
     """
@@ -272,7 +275,7 @@ def test_genbatch_calls_genDataset_with_correct_args(monkeypatch, tmp_path: Path
     n_datasets = 16
     mini_bs = 4
     epoch = 2
-    batch = g._genBatch(n_datasets=n_datasets, mini_batch_size=mini_bs, epoch=epoch)
+    batch = g._genBatch(n_datasets=n_datasets, mini_batch_size=mini_bs, partition='train', epoch=epoch)
 
     assert len(batch) == n_datasets
     assert len(seen) == n_datasets
@@ -321,7 +324,7 @@ def test_genbatch_deterministic_given_partition_and_epoch(monkeypatch, tmp_path:
             }
 
         monkeypatch.setattr(Generator, '_genDataset', staticmethod(fake_gen_dataset))
-        _ = g._genBatch(n_datasets=12, mini_batch_size=3, epoch=1)
+        _ = g._genBatch(n_datasets=12, mini_batch_size=3, partition='train', epoch=1)
         return seen
 
     seen1 = run_once()
@@ -360,7 +363,7 @@ def test_seed_mapping_deterministic_within_partition(monkeypatch, tmp_path: Path
             }
 
         monkeypatch.setattr(Generator, '_genDataset', staticmethod(fake_gen_dataset))
-        _ = g._genBatch(n_datasets=9, mini_batch_size=3, epoch=epoch)
+        _ = g._genBatch(n_datasets=9, mini_batch_size=3, partition=partition, epoch=epoch)
         return seen
 
     a = run(epoch=3)
@@ -406,13 +409,53 @@ def test_parallel_and_loop_produce_same_inputs(monkeypatch, tmp_path: Path):
     # loop
     cfg_loop = argparse.Namespace(**{**vars(base_cfg), 'loop': True})
     g_loop = Generator(cfg_loop, tmp_path / 'loop')
-    loop_batch = g_loop._genBatch(n_datasets=n_datasets, mini_batch_size=mini_bs, epoch=epoch)
+    loop_batch = g_loop._genBatch(n_datasets=n_datasets, mini_batch_size=mini_bs, partition='train', epoch=epoch)
     loop_sigs = np.stack([ds['sig'] for ds in loop_batch], axis=0)
 
     # parallel
     cfg_par = argparse.Namespace(**{**vars(base_cfg), 'loop': False})
     g_par = Generator(cfg_par, tmp_path / 'par')
-    par_batch = g_par._genBatch(n_datasets=n_datasets, mini_batch_size=mini_bs, epoch=epoch)
+    par_batch = g_par._genBatch(n_datasets=n_datasets, mini_batch_size=mini_bs, partition='train', epoch=epoch)
     par_sigs = np.stack([ds['sig'] for ds in par_batch], axis=0)
 
     assert np.array_equal(loop_sigs, par_sigs)
+
+
+@pytest.mark.skipif(not _SNAPSHOT_PATH.exists(), reason='golden snapshot not found')
+def test_genbatch_output_unchanged_after_refactor(tmp_path: Path):
+    """Golden-file regression: same seed must produce identical outputs after refactoring."""
+    cfg = make_cfg(
+        partition='train',
+        ds_type='toy',
+        source='all',
+        loop=True,
+        sgld=False,
+        likelihood_family=0,
+        max_d=2,
+        min_d=1,
+        max_q=1,
+        min_q=1,
+        min_m=5,
+        max_m=10,
+        min_n=5,
+        max_n=20,
+        max_n_total=100,
+        min_bg_df=0,
+        min_within_df=0,
+        bs_train=32,
+        bs_valid=8,
+        bs_test=8,
+        bs_mini=8,
+        begin=1,
+        epochs=3,
+    )
+    g = Generator(cfg, tmp_path)
+    batch = g._genBatch(n_datasets=32, mini_batch_size=8, partition='train', epoch=1)
+
+    golden = np.load(_SNAPSHOT_PATH, allow_pickle=True).item()
+    for key, expected in sorted(golden.items()):
+        i, field = key.split('_', 1)
+        actual = float(np.sum(batch[int(i)][field]))
+        assert np.isclose(actual, expected, rtol=1e-5), (
+            f"dataset {i}, field '{field}': got {actual}, expected {expected}"
+        )
