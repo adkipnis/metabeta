@@ -192,6 +192,16 @@ class Generator:
 
         return d, q, m
 
+    # Fraction of datasets that get perfectly balanced group sizes (all n_g equal).
+    # Calibrated to real data (~45 % of grouped datasets are balanced panels).
+    _P_BALANCED = 0.45
+    # Dirichlet concentration α ~ LogUniform(low, high) for the variable regime.
+    # α=8 → H_ratio≈0.99 (near-uniform), α=1.5 → H_ratio≈0.85 (moderately variable).
+    # Chosen so the simulated H_ratio distribution matches observed real-data proportions:
+    # ~0% below 0.80, ~5% in [0.80,0.93), ~25% in [0.93,0.97), ~25% in [0.97,1), ~45% at 1.
+    _ALPHA_LOW = 1.5
+    _ALPHA_HIGH = 8.0
+
     def _genNs(
         self,
         rng: np.random.Generator,
@@ -199,22 +209,61 @@ class Generator:
         m: np.ndarray,
         min_ng: np.ndarray | None = None,
     ) -> np.ndarray:
-        """Sample per-group observation counts with masking and max_n_total cap.
+        """Sample per-group observation counts with per-dataset entropy variation.
+
+        Each dataset independently draws a regime:
+          - balanced  (p=_P_BALANCED): all active groups get the same n → H_ratio=1.
+          - variable  (p=1-_P_BALANCED): group sizes drawn from Dirichlet(α·1_m)
+            where α ~ LogUniform(_ALPHA_LOW, _ALPHA_HIGH) controls spread.
 
         min_ng: optional (n_datasets,) int array of per-dataset minimum group
                 sizes.  When provided (e.g. from min_within_df), each group in
                 dataset i gets at least min_ng[i] observations before capping.
         """
-        effective_min_n = self.cfg.min_n if min_ng is None else int(np.max(min_ng))
-        ns = truncLogUni(
+        # Per-dataset regime: True = balanced panel
+        is_balanced = rng.random(n_datasets) < self._P_BALANCED  # (n_datasets,)
+
+        # Mean n per dataset — used as the fixed n for balanced, and budget basis for variable
+        mean_n = truncLogUni(
             rng,
             low=self.cfg.min_n,
             high=self.cfg.max_n + 1,
-            size=(n_datasets, self.cfg.max_m),
+            size=n_datasets,
             round=True,
+        ).astype(float)
+
+        # Active-group mask: (n_datasets, max_m)
+        active = np.arange(self.cfg.max_m)[None, :] < m[:, None]
+
+        # --- balanced path: broadcast single n to all active columns ---
+        ns_bal = np.where(active, mean_n[:, None], 0.0)
+
+        # --- variable path: Dirichlet-proportioned allocation ---
+        alpha = np.exp(
+            rng.uniform(np.log(self._ALPHA_LOW), np.log(self._ALPHA_HIGH), size=n_datasets)
+        )  # (n_datasets,)
+        # Gamma(α_i) draws; inactive groups zeroed before normalising so proportions
+        # sum to 1 over active groups only.
+        gamma_raw = rng.standard_gamma(
+            np.where(active, alpha[:, None], 1.0)  # dummy shape=1 for inactive; zeroed next
+        )  # (n_datasets, max_m)
+        gamma_raw = np.where(active, gamma_raw, 0.0)
+        props = gamma_raw / np.maximum(gamma_raw.sum(axis=1, keepdims=True), 1e-12)
+
+        n_budget = np.clip(
+            mean_n * m,
+            m * self.cfg.min_n,
+            np.minimum(m * self.cfg.max_n, self.cfg.max_n_total),
         )
+        ns_var = np.round(props * n_budget[:, None]).clip(self.cfg.min_n, self.cfg.max_n)
+
+        # --- merge regimes ---
+        ns = np.where(is_balanced[:, None], ns_bal, ns_var).astype(int)
+
         if min_ng is not None:
-            ns = np.maximum(ns, min_ng[:, None])  # (n_datasets, max_m) per-dataset floor
+            ns = np.maximum(ns, min_ng[:, None])
+
+        effective_min_n = self.cfg.min_n if min_ng is None else int(np.max(min_ng))
         return self._maskAndCapNs(
             ns=ns,
             m=m,
