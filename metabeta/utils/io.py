@@ -1,5 +1,4 @@
 import torch
-from metabeta.utils.families import LIKELIHOOD_FAMILIES
 
 
 def getDevice() -> str:
@@ -49,21 +48,17 @@ def runName(cfg: dict, prefix: str = '') -> str:
         prefix: Optional prefix for the run name
 
     Returns:
-        Run name like 'tiny-n-toy_mtiny_s42' or 'prefix_tiny-n-toy_mtiny_s42'
+        Run name like 'data=tiny-n-toy_model=tiny_seed=42' or 'prefix_data=tiny-n-toy_model=tiny_seed=42'
     """
     parts = []
     if prefix:
         parts.append(prefix)
 
-    # likelihood family
-    likelihood_family = cfg.get('likelihood_family', 0)
-    parts.append(LIKELIHOOD_FAMILIES[likelihood_family])
-
     parts += [
-        f"d{cfg['data_id']}",
-        f"m{cfg['model_id']}",
-        f"s{cfg['seed']}",
+        f"data={cfg['data_id']}",
+        f"model={cfg['model_id']}",
+        f"seed={cfg['seed']}",
     ]
     if r_tag := cfg['r_tag']:
-        parts += [f'r{r_tag}']
+        parts.append(f'run={r_tag}')
     return '_'.join(parts)
