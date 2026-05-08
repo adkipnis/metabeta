@@ -16,6 +16,7 @@ from metabeta.analytical.linalg import (
     _psdClampEigenvalues,
     _psdProject,
     _safeSolve,
+    _shrinkOffDiagonal,
 )
 
 
@@ -156,7 +157,8 @@ def _initialPsiMom(
         Zm, resid_full, mask_m, ns, sigma_eps_sq, active_q
     )
     has_joint_mom = mom_mask.sum(dim=1) > 0
-    use_component_diag = (component_count >= 2.0) & ~has_joint_mom[:, None]
+    reliable_component = component_count >= 5.0
+    use_component_diag = reliable_component & ~has_joint_mom[:, None]
 
     active_ns_mean = _maskedMean(ns, mask_m, dim=1).clamp(min=1.0)
     fallback_diag = (sigma_eps_sq / active_ns_mean).clamp(min=1e-10)[:, None].expand(B, q)
@@ -172,7 +174,13 @@ def _initialPsiMom(
         torch.maximum(diag_floor_signal, fallback_diag),
         fallback_diag,
     )
-    diag_cap_signal = torch.where(enough_diag_mom[:, None], psi_diag_signal, component_diag_signal)
+    # Gate cap signal per-component: unreliable components (< 5 valid groups) should not
+    # inflate psi_eig_cap via amax — fall back to the conservative fallback_diag signal.
+    diag_cap_signal = torch.where(
+        enough_diag_mom[:, None],
+        psi_diag_signal,
+        torch.where(reliable_component, component_diag_signal, fallback_diag),
+    )
     psi_eig_cap = torch.maximum(
         (6.0 * diag_cap_signal * active_q).amax(dim=1),
         fallback_diag.amax(dim=1),
@@ -288,6 +296,9 @@ def _emRefineNormal(
     N = n_total.float()
     se2_anchor = se2
     for _ in range(n_em):
+        psi_prev = Psi
+        se2_prev = se2
+
         blup_outer = torch.einsum('bmq,bmr->bmqr', gls.blups, gls.blups)
         post_cov = se2[:, None, None, None] * gls.W_g
         Psi_em = _psdProject(((blup_outer + post_cov) * mom4).sum(dim=1) / G_mom[:, None, None])
@@ -330,6 +341,11 @@ def _emRefineNormal(
             beta_wg,
             beta_mask,
         )
+
+        psi_delta = (Psi - psi_prev).abs().amax(dim=(-2, -1)).amax()
+        se2_delta = (se2 - se2_prev).abs().amax()
+        if psi_delta < 1e-3 and se2_delta < 1e-3:
+            break
 
     return Psi, se2, gls
 
@@ -483,10 +499,10 @@ def _lmmNormalFull(
 
     # Inflate blup_var to account for uncertainty in the Psi estimate.
     # Var[Psi] ∝ Psi²/(G-d), delta-method gives 1 + 2/(G-d).
-    # Clamp denominator at 4 to cap inflation at 50% for large G; uncapped it over-inflates
-    # blup_var in real-data regimes where Psi is well-estimated (observed ratio < 0.5).
+    # Clamp denominator at 2 (max 100% inflation) instead of 4; Fix 1 already handles large-n_g
+    # over-confidence via the Ψ/G_mom additive floor, so the multiplicative cap can be looser.
     df_sigma = (G - d).clamp(min=1.0)
-    blup_var = blup_var * (1.0 + 2.0 / df_sigma.clamp(min=4.0))[:, None, None]
+    blup_var = blup_var * (1.0 + 2.0 / df_sigma.clamp(min=2.0))[:, None, None]
 
     # Kackar-Harville correction: blup_var = diag(σ²W_g) conditions on β as known, but actual
     # BLUP error also includes W_g Z^T X (β_hat - β). Dominant for large groups where W_g→Ψ⁻¹,
@@ -515,6 +531,14 @@ def _lmmNormalFull(
     psi_diag = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0)  # (B, q)
     blup_var_floor = psi_diag[:, None, :] / (2.0 * ns.clamp(min=1.0)[:, :, None])
     blup_var = blup_var.clamp(min=blup_var_floor)
+    # Ψ-uncertainty additive floor: when Ψ̂ is noisy (small G_mom), the dominant
+    # blup prediction error source is Ψ̂/G_mom regardless of n_g. This term stays
+    # finite for large groups where σ²W_g→0, preventing catastrophic overconfidence.
+    blup_var_psi_floor = psi_diag[:, None, :] / G_mom.clamp(min=1.0)[:, None, None]
+    blup_var = blup_var + blup_var_psi_floor
+
+    corr_alpha = G / (G + 5.0)
+    Psi = _shrinkOffDiagonal(Psi, corr_alpha)
 
     sigma_rfx = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()          # (B, q)
     sigma_eps_1d = se2.clamp(min=0.0).sqrt().nan_to_num(nan=1.0, posinf=1.0)  # (B,)
