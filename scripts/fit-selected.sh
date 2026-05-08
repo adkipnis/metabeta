@@ -21,14 +21,18 @@ Usage:
   scripts/fit-selected.sh --method <nuts|advi> --data_id <size-family-ds_type> --idx <i1,i2,...>
   scripts/fit-selected.sh --method <nuts|advi> --data_id <size-family-ds_type> --idx <i1> --idx <i2>
 
+Options:
+  --partition test|valid   Which partition to fit (default: test)
+
 Examples:
   scripts/fit-selected.sh --method nuts --data_id small-n-sampled --idx 0 7 13
-  scripts/fit-selected.sh --method advi --data_id small-b-flat --idx 1,4,9
+  scripts/fit-selected.sh --method advi --data_id small-b-flat --idx 1,4,9 --partition valid
 EOF
 }
 
 METHOD=""
 TAG=""
+PARTITION="test"
 IDX_MAP=""
 IDX_VALUES=()
 
@@ -74,6 +78,10 @@ while [[ $# -gt 0 ]]; do
             TAG="$2"
             shift 2
             ;;
+        --partition)
+            PARTITION="$2"
+            shift 2
+            ;;
         --idx)
             shift
             [[ $# -gt 0 ]] || {
@@ -106,6 +114,11 @@ done
     usage
     exit 1
 }
+
+case "$PARTITION" in
+    test|valid) ;;
+    *) echo "Unknown partition: $PARTITION (use test or valid)" >&2; exit 1 ;;
+esac
 
 case "$METHOD" in
     advi)
@@ -153,6 +166,7 @@ if [[ -z "$IDX_MAP" ]]; then
         "$0" \
         --method "$METHOD" \
         --data_id "$TAG" \
+        --partition "$PARTITION" \
         --idx_map "$IDX_MAP"
     exit 0
 fi
@@ -221,7 +235,8 @@ apptainer exec \
       --family '$FAMILY' \
       --ds_type '$DS_TYPE' \
       --idx '$FIT_IDX' \
-      --method '$METHOD'
+      --method '$METHOD' \
+      --partition '$PARTITION'
   "
 
 rm -rf "$JOB_TMPDIR"

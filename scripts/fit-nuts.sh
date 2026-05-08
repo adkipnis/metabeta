@@ -14,17 +14,25 @@
 
 set -euo pipefail
 
+PARTITION="test"
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --data_id) TAG="$2"; shift 2 ;;
+        --partition) PARTITION="$2"; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
 
 [[ -z "${TAG:-}" ]] && {
-    echo "Usage: $0 --data_id <size-family-ds_type>"
+    echo "Usage: $0 --data_id <size-family-ds_type> [--partition test|valid]"
     exit 1
 }
+
+case "$PARTITION" in
+    test|valid) ;;
+    *) echo "Unknown partition: $PARTITION (use test or valid)"; exit 1 ;;
+esac
 
 IFS='-' read -r SIZE FAM_NAME DS_TYPE <<< "$TAG"
 
@@ -73,7 +81,8 @@ apptainer exec \
       --family '$FAMILY' \
       --ds_type '$DS_TYPE' \
       --idx '${SLURM_ARRAY_TASK_ID}' \
-      --method nuts
+      --method nuts \
+      --partition '$PARTITION'
   "
 
 rm -rf "$JOB_TMPDIR"
