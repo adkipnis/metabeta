@@ -43,14 +43,19 @@ _FIT_MODELS = frozenset(('NUTS', 'ADVI'))
 def setup() -> argparse.Namespace:
     # fmt: off
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
+    # Primary: load from checkpoint (required when MB is evaluated)
     parser.add_argument('--checkpoint', type=str, help='Path to checkpoint directory')
     parser.add_argument('--prefix', type=str, default='latest', help='Checkpoint prefix: best or latest')
-    parser.add_argument('--config', type=str, help='Path to custom YAML config file')
+    # Data-direct: evaluate fit-only models without a checkpoint
+    parser.add_argument('--data_path_test', type=str, help='Direct path to test.fit.npz (no checkpoint needed for NUTS/ADVI)')
+    parser.add_argument('--data_path_valid', type=str, help='Direct path to valid.fit.npz')
+    parser.add_argument('--config', type=str, help='Path to custom YAML config file (legacy)')
     parser.add_argument('--model_id', type=str)
     parser.add_argument('--r_tag', type=str)
     parser.add_argument('--data_id', type=str)
     parser.add_argument('--data_id_valid', type=str)
     parser.add_argument('--data_id_test', type=str)
+    parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--verbosity', type=int, default=1)
     parser.add_argument('--n_samples', type=int, default=1000)
@@ -98,6 +103,16 @@ def setup() -> argparse.Namespace:
         for k, v in vars(args).items():
             if v is not None and k not in ['checkpoint', 'prefix', 'config', 'name']:
                 cfg_dict[k] = v
+    elif (hasattr(args, 'data_path_test') and args.data_path_test) or (
+        hasattr(args, 'data_path_valid') and args.data_path_valid
+    ):
+        cfg_dict = {k: v for k, v in vars(args).items() if v is not None}
+        models_str = cfg_dict.get('models', 'all')
+        active = [x.strip().upper() for x in (list(_ALL_MODELS) if models_str == 'all' else models_str.split(','))]
+        if 'MB' in active:
+            raise ValueError(
+                '--data_path_test/--data_path_valid mode: use --models NUTS,ADVI (no MB without --checkpoint)'
+            )
     elif hasattr(args, 'config') and args.config:
         with open(args.config) as f:
             cfg_dict = yaml.safe_load(f)
@@ -107,8 +122,9 @@ def setup() -> argparse.Namespace:
     else:
         raise ValueError(
             'Must specify one of:\n'
-            '  1. Checkpoint: --checkpoint <checkpoint_dir> [--prefix best|latest]\n'
-            '  2. Custom config: --config <path>\n'
+            '  1. Checkpoint (required for MB): --checkpoint <dir> [--prefix best|latest]\n'
+            '  2. Data paths (NUTS/ADVI only): --data_path_test <path> [--data_path_valid <path>]\n'
+            '  3. Custom config (legacy):       --config <path>\n'
         )
 
     if cfg_dict.get('save_tables') is None:
@@ -133,16 +149,23 @@ class Evaluator:
         self.cfg.pareto_k_thr = getattr(cfg, 'pareto_k_thr', 0.7)
         self.cfg.outdir = getattr(cfg, 'outdir', str(Path(self.dir, '..', 'outputs', 'results')))
 
-        self.run_name = runName(vars(cfg))
-        if hasattr(cfg, '_checkpoint_dir'):
-            self.ckpt_dir = Path(cfg._checkpoint_dir)
+        if hasattr(cfg, 'data_path_test') or hasattr(cfg, 'data_path_valid'):
+            # data-direct mode: run name derived from the data directory
+            data_p = Path(getattr(cfg, 'data_path_test', None) or cfg.data_path_valid)
+            self.run_name = data_p.parent.name
+            self.ckpt_dir = None
         else:
-            self.ckpt_dir = Path(self.dir, '..', 'outputs', 'checkpoints', self.run_name)
+            self.run_name = runName(vars(cfg))
+            if hasattr(cfg, '_checkpoint_dir'):
+                self.ckpt_dir = Path(cfg._checkpoint_dir)
+            else:
+                self.ckpt_dir = Path(self.dir, '..', 'outputs', 'checkpoints', self.run_name)
         self.checkpoint_prefix = getattr(cfg, 'prefix', 'latest')
 
         self._initData()
-        self._initModel()
-        self._load()
+        if 'MB' in self._resolveModels():
+            self._initModel()
+            self._load()
 
         self.plot_dir = Path(self.dir, '..', 'outputs', 'plots', self.run_name)
         self.plot_dir.mkdir(parents=True, exist_ok=True)
@@ -154,6 +177,12 @@ class Evaluator:
             self.results_dir.mkdir(parents=True, exist_ok=True)
 
     def _initData(self) -> None:
+        if hasattr(self.cfg, 'data_path_test') or hasattr(self.cfg, 'data_path_valid'):
+            self._initDataDirect()
+        else:
+            self._initDataFromConfig()
+
+    def _initDataFromConfig(self) -> None:
         self.data_cfg_train = loadDataConfig(self.cfg.data_id)
         assimilateConfig(self.cfg, self.data_cfg_train)
         self.cfg.data_id_valid = getattr(self.cfg, 'data_id_valid', self.cfg.data_id)
@@ -167,6 +196,31 @@ class Evaluator:
         self.dl_test, self.data_path_test = self._getDataLoader(
             'test', batch_size=self.cfg.batch_size
         )
+
+    def _initDataDirect(self) -> None:
+        """Initialise data from explicit file paths; infers config fields from the npz."""
+        test_p = Path(self.cfg.data_path_test) if hasattr(self.cfg, 'data_path_test') else None
+        valid_p = Path(self.cfg.data_path_valid) if hasattr(self.cfg, 'data_path_valid') else None
+        self.data_path_test = test_p or valid_p
+        self.data_path_valid = valid_p or test_p
+
+        bs = self.cfg.batch_size
+        self.dl_test = Dataloader(self.data_path_test, batch_size=bs, sortish=True)
+        self.dl_valid = Dataloader(self.data_path_valid, batch_size=bs, sortish=True)
+
+        # Infer missing config fields from the collection
+        col = self.dl_test.dataset
+        if not hasattr(self.cfg, 'max_d'):
+            self.cfg.max_d = col.d
+        if not hasattr(self.cfg, 'max_q'):
+            self.cfg.max_q = col.q
+        if not hasattr(self.cfg, 'likelihood_family'):
+            raw_lf = col.raw.get('likelihood_family')
+            self.cfg.likelihood_family = int(raw_lf[0]) if raw_lf is not None else 0
+        if not hasattr(self.cfg, 'rescale'):
+            self.cfg.rescale = False
+
+        self.data_cfg = {}
 
     def _getDataLoader(
         self, partition: str, batch_size: int | None = None
