@@ -458,11 +458,12 @@ class Generator:
         elif ds_type == 'scm':
             design = Scammer(rng)
         elif ds_type == 'sampled':
+            min_bg_df = getattr(cfg, 'min_bg_df', 0)
             design = Emulator(
                 rng,
                 source=cfg.source,
                 use_sgld=getattr(cfg, 'sgld', False),
-                min_m=cfg.min_m,
+                min_m=max(cfg.min_m, d + min_bg_df),  # ensure m >= d+min_bg_df for GLS identifiability
                 min_n=max(cfg.min_n, min_n_eff),  # respect per-dataset min_within_df floor
                 max_n=cfg.max_n,
             )
