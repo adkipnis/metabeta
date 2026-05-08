@@ -22,7 +22,7 @@ from tabulate import tabulate
 ROOT = Path(__file__).resolve().parent.parent / 'metabeta'
 sys.path.insert(0, str(ROOT.parent))
 
-from metabeta.utils.glmm import glmm
+from metabeta.analytical.glmm import glmm
 from metabeta.utils.dataloader import Collection, Dataloader, collateGrouped, toDevice
 from metabeta.utils.config import loadDataConfig
 

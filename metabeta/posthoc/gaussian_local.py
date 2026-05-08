@@ -19,7 +19,7 @@ import math
 import torch
 from torch import Tensor
 
-from metabeta.utils.glm import _safeSolve
+from metabeta.analytical.glm import _safeSolve
 from metabeta.utils.evaluation import Proposal
 from metabeta.utils.regularization import corrToLower
 

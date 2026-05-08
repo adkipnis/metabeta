@@ -28,7 +28,7 @@ from tabulate import tabulate
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT.parent))
 
-from metabeta.utils.glmm import glmm
+from metabeta.analytical.glmm import glmm
 from metabeta.utils.regularization import corrToLower
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.config import loadDataConfig

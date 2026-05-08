@@ -31,7 +31,7 @@ from metabeta.evaluation.predictive import (
 )
 from metabeta.utils.dataloader import toDevice
 from metabeta.utils.evaluation import Proposal, getMasks
-from metabeta.utils.glmm import glmm
+from metabeta.analytical.glmm import glmm
 from metabeta.utils.preprocessing import rescaleData
 
 SEP = '=' * 80
