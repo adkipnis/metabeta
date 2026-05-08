@@ -2,7 +2,7 @@ import torch
 import pytest
 
 from metabeta.plotting.coverage import plotCoverage
-from metabeta.utils.evaluation import Proposal, dictMean
+from metabeta.utils.evaluation import Proposal, AggregatedMetrics, dictMean
 
 
 def _make_proposal() -> Proposal:
@@ -19,6 +19,21 @@ def _make_proposal() -> Proposal:
     return Proposal(proposed, has_sigma_eps=False, d_corr=1)
 
 
+def _make_aggregated(**overrides) -> AggregatedMetrics:
+    defaults = dict(
+        corr={},
+        nrmse={},
+        coverage={},
+        ece={},
+        eace={},
+        lcr={},
+        abs_lcr={},
+        estimates={},
+    )
+    defaults.update(overrides)
+    return AggregatedMetrics(**defaults)
+
+
 def test_dict_mean_includes_corr_rfx() -> None:
     values = {
         'ffx': torch.tensor([0.1]),
@@ -33,26 +48,28 @@ def test_dict_mean_includes_corr_rfx() -> None:
 def test_plot_coverage_stats_include_corr_rfx(monkeypatch) -> None:
     proposal = _make_proposal()
     summary = type('Summary', (), {})()
-    summary.coverage = {
-        0.1: {
-            'ffx': torch.tensor([0.90]),
-            'sigma_rfx': torch.tensor([0.80, 0.80]),
-            'corr_rfx': torch.tensor([0.99]),
-            'rfx': torch.tensor([0.70, 0.70]),
-        }
-    }
-    summary.ece = {
-        'ffx': torch.tensor([0.10]),
-        'sigma_rfx': torch.tensor([0.20, 0.20]),
-        'corr_rfx': torch.tensor([0.90]),
-        'rfx': torch.tensor([0.30, 0.30]),
-    }
-    summary.eace = {
-        'ffx': torch.tensor([0.11]),
-        'sigma_rfx': torch.tensor([0.21, 0.21]),
-        'corr_rfx': torch.tensor([0.91]),
-        'rfx': torch.tensor([0.31, 0.31]),
-    }
+    summary.aggregated = _make_aggregated(
+        coverage={
+            0.1: {
+                'ffx': torch.tensor([0.90]),
+                'sigma_rfx': torch.tensor([0.80, 0.80]),
+                'corr_rfx': torch.tensor([0.99]),
+                'rfx': torch.tensor([0.70, 0.70]),
+            }
+        },
+        ece={
+            'ffx': torch.tensor([0.10]),
+            'sigma_rfx': torch.tensor([0.20, 0.20]),
+            'corr_rfx': torch.tensor([0.90]),
+            'rfx': torch.tensor([0.30, 0.30]),
+        },
+        eace={
+            'ffx': torch.tensor([0.11]),
+            'sigma_rfx': torch.tensor([0.21, 0.21]),
+            'corr_rfx': torch.tensor([0.91]),
+            'rfx': torch.tensor([0.31, 0.31]),
+        },
+    )
 
     captured: dict[str, float] = {}
 
