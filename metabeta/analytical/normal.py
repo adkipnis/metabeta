@@ -299,7 +299,13 @@ def _emRefineNormal(
         psi_prev = Psi
         se2_prev = se2
 
-        blup_outer = torch.einsum('bmq,bmr->bmqr', gls.blups, gls.blups)
+        # Winsorize BLUPs before M-step outer product: prevents groups with numerically
+        # blown BLUPs (GLS near-singularity at high d/q) from spiking Ψ_em.
+        # Cap at 10×σ̂_rfx using the current Ψ so the threshold adapts as Ψ converges.
+        psi_diag_cur = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=psi_diag_floor).sqrt()
+        blup_cap = 10.0 * psi_diag_cur[:, None, :]  # (B, 1, q) broadcasts over groups
+        blups_winsor = gls.blups.clamp(min=-blup_cap, max=blup_cap)
+        blup_outer = torch.einsum('bmq,bmr->bmqr', blups_winsor, blups_winsor)
         post_cov = se2[:, None, None, None] * gls.W_g
         Psi_em = _psdProject(((blup_outer + post_cov) * mom4).sum(dim=1) / G_mom[:, None, None])
         psi_diag_em = Psi_em.diagonal(dim1=-2, dim2=-1).clamp(min=psi_diag_floor)
