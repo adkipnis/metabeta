@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from metabeta.analytical.glm import _safeSolve
+from metabeta.analytical.linalg import _safeSolve
 
 
 def test_safe_solve_matches_torch_solve_for_well_conditioned_batch():

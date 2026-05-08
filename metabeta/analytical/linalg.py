@@ -10,6 +10,75 @@ from metabeta.analytical.constants import (
 )
 
 
+def _expandBatchMask(mask: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Expand a batch-shaped mask across the matrix/vector solve dimensions."""
+    while mask.dim() < target.dim():
+        mask = mask.unsqueeze(-1)
+    return mask
+
+
+def _safeSolve(A: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """torch.linalg.solve with escalating ridge fallback for singular batches.
+
+    torch.linalg.solve raises LinAlgError if *any* batch element is singular,
+    aborting the whole batch. On failure this function:
+      1. Uses solve_ex to recover any batch elements that still solve cleanly.
+      2. Adds escalating diagonal jitter to the failed elements without relying
+         on an eigendecomposition, which can fail for ill-conditioned batches.
+      3. Falls back to zeros only for elements that remain degenerate.
+    """
+    try:
+        solution = torch.linalg.solve(A, b)
+        if torch.isfinite(solution).all():
+            return solution
+    except torch.linalg.LinAlgError:
+        pass
+
+    A_safe = A.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    b_safe = b.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+
+    try:
+        solution, info = torch.linalg.solve_ex(A_safe, b_safe, check_errors=False)
+    except torch.linalg.LinAlgError:
+        solution = torch.zeros_like(b_safe)
+        info = torch.ones(A_safe.shape[:-2], device=A.device, dtype=torch.int32)
+
+    solution = solution.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    ok = info == 0
+    finite = torch.isfinite(solution).flatten(start_dim=ok.dim()).all(dim=-1)
+    ok = ok & finite
+
+    d = A.shape[-1]
+    eye = torch.eye(d, device=A.device, dtype=A.dtype)
+    scale = A_safe.abs().flatten(start_dim=-2).amax(dim=-1).clamp(min=1.0)
+    for eps in (1e-6, 1e-4, 1e-2, 1.0, 100.0):
+        if bool(ok.all()):
+            break
+        A_fixed = A_safe + (eps * scale)[..., None, None] * eye
+        try:
+            candidate, candidate_info = torch.linalg.solve_ex(A_fixed, b_safe, check_errors=False)
+        except torch.linalg.LinAlgError:
+            continue
+        candidate = candidate.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+        candidate_ok = candidate_info == 0
+        candidate_finite = (
+            torch.isfinite(candidate).flatten(start_dim=candidate_ok.dim()).all(dim=-1)
+        )
+        candidate_ok = candidate_ok & candidate_finite
+        take = candidate_ok & ~ok
+        solution = torch.where(_expandBatchMask(take, solution), candidate, solution)
+        ok = ok | take
+
+    return torch.where(_expandBatchMask(ok, solution), solution, torch.zeros_like(solution))
+
+
+def _adaptiveRidge(A: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """Scale-adaptive ridge for batched square systems."""
+    d = A.shape[-1]
+    scale = A.diagonal(dim1=-2, dim2=-1).amax(dim=-1).clamp(min=1.0)
+    return eps * scale[..., None, None] * torch.eye(d, device=A.device, dtype=A.dtype)
+
+
 def _adaptiveRidgeBm(A: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """Scale-adaptive ridge for (B, m, q, q) block matrices."""
     scale = A.diagonal(dim1=-2, dim2=-1).amax(dim=-1).clamp(min=1.0)  # (B, m)

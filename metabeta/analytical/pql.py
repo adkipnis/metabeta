@@ -1,10 +1,10 @@
 """PQL estimators for Bernoulli and Poisson GLMMs."""
 
+from dataclasses import dataclass
+
 import torch
 
 from metabeta.analytical.glm import (
-    _adaptiveRidge,
-    _safeSolve,
     irlsBernoulliCompacted,
     irlsPoissonCompacted,
 )
@@ -24,12 +24,14 @@ from metabeta.analytical.constants import (
     _POISSON_PSI_EIG_CAP,
 )
 from metabeta.analytical.linalg import (
+    _adaptiveRidge,
     _adaptiveRidgeBm,
     _eighWithJitter,
     _psdClampEigenvalues,
     _psdProject,
     _pseudoInverse,
     _ridgeInv,
+    _safeSolve,
     _shrinkOffDiagonal,
 )
 from metabeta.analytical.working import (
@@ -39,31 +41,39 @@ from metabeta.analytical.working import (
 )
 
 
+@dataclass(frozen=True)
+class _PqlPassContext:
+    Xm: torch.Tensor
+    ym: torch.Tensor
+    Zm: torch.Tensor
+    mask_n: torch.Tensor
+    mask_m: torch.Tensor
+    mask4: torch.Tensor
+    active: torch.Tensor
+    eye_q: torch.Tensor
+    eye_q_bm: torch.Tensor
+    G: torch.Tensor
+    likelihood_family: int
+    n_newton: int
+
+
+@dataclass(frozen=True)
+class _PqlPassResult:
+    beta_gls: torch.Tensor
+    Psi_lap: torch.Tensor
+    blups: torch.Tensor
+    Kg_inv: torch.Tensor
+    mean_Hg_inv: torch.Tensor
+    resid_gls: torch.Tensor
+    blup_kh_var: torch.Tensor
+
+
 def _pqlPass(
     beta: torch.Tensor,  # (B, d) fixed effects for this pass
     Psi_inv: torch.Tensor,  # (B, q, q) precision used for Newton penalty and Hg
-    Xm: torch.Tensor,  # (B, m, n, d)
-    ym: torch.Tensor,  # (B, m, n)
-    Zm: torch.Tensor,  # (B, m, n, q)
-    mask_n: torch.Tensor,  # (B, m, n)
-    mask_m: torch.Tensor,  # (B, m)
-    mask4: torch.Tensor,  # (B, m, 1, 1)
-    active: torch.Tensor,  # (B, m) bool
-    eye_q: torch.Tensor,  # (q, q)
-    eye_q_bm: torch.Tensor,  # (B, m, q, q)
-    G: torch.Tensor,  # (B,)
-    likelihood_family: int,
-    n_newton: int = 3,
+    ctx: _PqlPassContext,
     bg_init: torch.Tensor | None = None,  # warm start; None = cold start from zeros
-) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-]:
+) -> _PqlPassResult:
     """One PQL pass: damped Newton → Ψ̂_Lap M-step → GLS β̂ and BLUPs.
 
     Newton starts from bg_init (or zeros if None) under (beta, Psi_inv).
@@ -83,6 +93,17 @@ def _pqlPass(
     resid_gls  : (B, m, n)    working residual ỹ − Xβ̂_GLS (masked)
     blup_kh_var: (B, m, q)    beta-estimation uncertainty contribution to blup_var
     """
+    Xm = ctx.Xm
+    ym = ctx.ym
+    Zm = ctx.Zm
+    mask_n = ctx.mask_n
+    mask_m = ctx.mask_m
+    mask4 = ctx.mask4
+    active = ctx.active
+    eye_q = ctx.eye_q
+    eye_q_bm = ctx.eye_q_bm
+    G = ctx.G
+    likelihood_family = ctx.likelihood_family
     B, m, _, d = Xm.shape
     q = Zm.shape[-1]
 
@@ -92,7 +113,7 @@ def _pqlPass(
     # for Poisson datasets with large counts, where 3 unconstrained Newton steps can
     # push bg to O(100) and Psi_lap to O(10000).
     bg = bg_init.clone() if bg_init is not None else ym.new_zeros(B, m, q)
-    for _ in range(n_newton):
+    for _ in range(ctx.n_newton):
         eta_t = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Zm, bg)
         if likelihood_family == 1:
             mu_t = torch.sigmoid(eta_t)
@@ -210,7 +231,15 @@ def _pqlPass(
 
     # Return Kg_inv for blup_var: (ZWZ + Psi_lap^{-1})^{-1} is the posterior covariance
     # of b_g under the final Psi_lap estimate — consistent with the Normal path's se²·W_g.
-    return beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, blup_kh_var
+    return _PqlPassResult(
+        beta_gls=beta_gls,
+        Psi_lap=Psi_lap,
+        blups=blups,
+        Kg_inv=Kg_inv,
+        mean_Hg_inv=mean_Hg_inv,
+        resid_gls=resid_gls,
+        blup_kh_var=blup_kh_var,
+    )
 
 
 def _lmmGlmm(
@@ -319,19 +348,19 @@ def _lmmGlmm(
     # ridge-inv(Ψ̂_Lap); early exit when the 95th-percentile change in both
     # β and diag(Ψ̂) falls below 1e-3.
     # ------------------------------------------------------------------
-    pass_args = (
-        Xm,
-        ym,
-        Zm,
-        mask_n,
-        mask_m,
-        mask4,
-        active,
-        eye_q,
-        eye_q_bm,
-        G,
-        likelihood_family,
-        n_newton,
+    pass_ctx = _PqlPassContext(
+        Xm=Xm,
+        ym=ym,
+        Zm=Zm,
+        mask_n=mask_n,
+        mask_m=mask_m,
+        mask4=mask4,
+        active=active,
+        eye_q=eye_q,
+        eye_q_bm=eye_q_bm,
+        G=G,
+        likelihood_family=likelihood_family,
+        n_newton=n_newton,
     )
     if likelihood_family == 1:
         psi_0_floor = psi_0.clamp(min=_BERNOULLI_INITIAL_PSI_FLOOR)
@@ -351,12 +380,15 @@ def _lmmGlmm(
 
     # Pass 1: pooled β₀, cold start.  Discrete outcomes can make Psi_pql exactly
     # zero in weakly identified directions; use a weak variance floor for shrinkage.
-    Psi_inv = (
-        _ridgeInv(Psi_pql, psi_0_floor) if likelihood_family in (1, 2) else _pseudoInverse(Psi_pql)
-    )
-    beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, blup_kh_var = _pqlPass(
-        beta_0, Psi_inv, *pass_args
-    )
+    Psi_inv = _ridgeInv(Psi_pql, psi_0_floor)
+    pql_pass = _pqlPass(beta_0, Psi_inv, pass_ctx)
+    beta_gls = pql_pass.beta_gls
+    Psi_lap = pql_pass.Psi_lap
+    blups = pql_pass.blups
+    Kg_inv = pql_pass.Kg_inv
+    mean_Hg_inv = pql_pass.mean_Hg_inv
+    resid_gls = pql_pass.resid_gls
+    blup_kh_var = pql_pass.blup_kh_var
     beta_gls, Psi_lap = _sanitize(beta_gls, Psi_lap)
     if uncorr is not None:
         Psi_lap = torch.where(
@@ -372,9 +404,14 @@ def _lmmGlmm(
         psi_diag_prev = Psi_lap.diagonal(dim1=-2, dim2=-1)
 
         Psi_inv = _ridgeInv(Psi_lap, psi_0_floor)
-        beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, blup_kh_var = _pqlPass(
-            beta_gls, Psi_inv, *pass_args, bg_init=blups
-        )
+        pql_pass = _pqlPass(beta_gls, Psi_inv, pass_ctx, bg_init=blups)
+        beta_gls = pql_pass.beta_gls
+        Psi_lap = pql_pass.Psi_lap
+        blups = pql_pass.blups
+        Kg_inv = pql_pass.Kg_inv
+        mean_Hg_inv = pql_pass.mean_Hg_inv
+        resid_gls = pql_pass.resid_gls
+        blup_kh_var = pql_pass.blup_kh_var
         beta_gls, Psi_lap = _sanitize(beta_gls, Psi_lap)
         if uncorr is not None:
             Psi_lap = torch.where(
