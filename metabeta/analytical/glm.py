@@ -1,4 +1,4 @@
-"""Batched compact GLM estimators used to initialize analytical GLMMs."""
+"""Batched GLM estimators used to initialize analytical GLMMs."""
 
 import torch
 
@@ -6,7 +6,7 @@ from metabeta.analytical.linalg import _adaptiveRidge, _safeSolve
 from metabeta.analytical.working import _poissonMeanDerivative
 
 
-def olsNormalCompacted(
+def olsNormal(
     Xm: torch.Tensor,
     ym: torch.Tensor,
     mask: torch.Tensor,
@@ -26,7 +26,7 @@ def olsNormalCompacted(
     return beta, sigma_eps_ols
 
 
-def irlsBernoulliCompacted(
+def irlsBernoulli(
     Xm: torch.Tensor,
     ym: torch.Tensor,
     mask: torch.Tensor,
@@ -52,7 +52,7 @@ def irlsBernoulliCompacted(
     return beta
 
 
-def irlsPoissonCompacted(
+def irlsPoisson(
     Xm: torch.Tensor,
     ym: torch.Tensor,
     mask: torch.Tensor,

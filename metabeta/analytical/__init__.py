@@ -1,9 +1,9 @@
 """Analytical GLM/GLMM estimators and local Gaussian posterior utilities."""
 
 from metabeta.analytical.glm import (
-    irlsBernoulliCompacted,
-    irlsPoissonCompacted,
-    olsNormalCompacted,
+    irlsBernoulli,
+    irlsPoisson,
+    olsNormal,
 )
 from metabeta.analytical.glmm import (
     analyticalBLUPContext,
@@ -16,10 +16,10 @@ from metabeta.analytical.glmm import (
 __all__ = [
     'analyticalBLUPContext',
     'glmm',
-    'irlsBernoulliCompacted',
-    'irlsPoissonCompacted',
+    'irlsBernoulli',
+    'irlsPoisson',
     'lmmBernoulli',
     'lmmNormal',
     'lmmPoisson',
-    'olsNormalCompacted',
+    'olsNormal',
 ]
