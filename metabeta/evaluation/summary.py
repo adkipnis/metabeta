@@ -5,7 +5,7 @@ import torch
 from tabulate import tabulate
 
 from metabeta.posthoc.conformal import Calibrator
-from metabeta.utils.evaluation import Proposal, EvaluationSummary, dictMean, dictMeanExcl
+from metabeta.utils.evaluation import Proposal, EvaluationSummary, dictMean
 from metabeta.evaluation.point import getPointEstimates, getRMSE, getCorrelation
 from metabeta.evaluation.intervals import (
     ALPHAS,
@@ -265,10 +265,10 @@ def longTable(
     rows.append(
         [
             'Average',
-            dictMeanExcl(corr),
-            dictMeanExcl(nrmse),
-            dictMeanExcl(ece),
-            dictMeanExcl(eace),
+            dictMean(corr),
+            dictMean(nrmse),
+            dictMean(ece),
+            dictMean(eace),
         ]
     )
     return (

@@ -24,7 +24,7 @@ from metabeta.utils.evaluation import (
     EvaluationSummary,
     Proposal,
     concatProposalsBatch,
-    dictMeanExcl,
+    dictMean,
     nutsConvergeMask,
     subsetProposal,
 )
@@ -576,9 +576,9 @@ class Evaluator:
     def _makeRow(self, label: str, summary: EvaluationSummary, fit_label: str) -> dict:
         return {
             'method': label,
-            'R': dictMeanExcl(summary.corr),
-            'NRMSE': dictMeanExcl(summary.nrmse),
-            'ECE': dictMeanExcl(summary.ece),
+            'R': dictMean(summary.corr),
+            'NRMSE': dictMean(summary.nrmse),
+            'ECE': dictMean(summary.ece),
             'RFX_joint_ECE': summary.rfx_joint_ece,
             'RFX_joint_EACE': summary.rfx_joint_eace,
             'ppNLL': summary.mnll,

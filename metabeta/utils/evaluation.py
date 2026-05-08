@@ -551,9 +551,3 @@ def dictMean(td: dict[str, torch.Tensor]) -> float:
     return torch.nanmean(cat).item()
 
 
-def dictMeanExcl(
-    td: dict[str, torch.Tensor],
-    exclude: set[str] | frozenset[str] = frozenset({'corr_rfx'}),
-) -> float:
-    """Mean over dict values while excluding named keys."""
-    return dictMean({k: v for k, v in td.items() if k not in exclude})
