@@ -619,10 +619,9 @@ def _lmmNormalFull(
     # Fall back to the within-Z OLS estimate (β_wg) for those datasets: for q=d, β_wg=0
     # (no within-group information either), which at least keeps BLUPs well-behaved.
     xtx_max_diag = XtX.diagonal(dim1=-1, dim2=-2).amax(dim=-1).clamp(min=1.0)  # (B,)
-    beta_identified = (
-        (XtX - correction_XX).diagonal(dim1=-1, dim2=-2).abs().amax(dim=-1)
-        > 1e-3 * xtx_max_diag
-    )  # (B,) True = between-group information is non-negligible
+    beta_identified = (XtX - correction_XX).diagonal(dim1=-1, dim2=-2).abs().amax(
+        dim=-1
+    ) > 1e-3 * xtx_max_diag  # (B,) True = between-group information is non-negligible
 
     A_gls_reg = A_gls + _adaptiveRidge(A_gls)
     beta_gls = _safeSolve(A_gls_reg, b_gls)                        # (B, d)
