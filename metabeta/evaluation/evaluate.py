@@ -1,4 +1,3 @@
-import yaml
 import time
 import logging
 import argparse
@@ -49,7 +48,6 @@ def setup() -> argparse.Namespace:
     # Data-direct: evaluate fit-only models without a checkpoint
     parser.add_argument('--data_path_test', type=str, help='Direct path to test.fit.npz (no checkpoint needed for NUTS/ADVI)')
     parser.add_argument('--data_path_valid', type=str, help='Direct path to valid.fit.npz')
-    parser.add_argument('--config', type=str, help='Path to custom YAML config file (legacy)')
     parser.add_argument('--model_id', type=str)
     parser.add_argument('--r_tag', type=str)
     parser.add_argument('--data_id', type=str)
@@ -101,7 +99,7 @@ def setup() -> argparse.Namespace:
         cfg_dict['_checkpoint_dir'] = str(checkpoint_path)
         cfg_dict['_checkpoint_prefix'] = args.prefix
         for k, v in vars(args).items():
-            if v is not None and k not in ['checkpoint', 'prefix', 'config', 'name']:
+            if v is not None and k not in ['checkpoint', 'prefix', 'name']:
                 cfg_dict[k] = v
     elif (hasattr(args, 'data_path_test') and args.data_path_test) or (
         hasattr(args, 'data_path_valid') and args.data_path_valid
@@ -113,18 +111,11 @@ def setup() -> argparse.Namespace:
             raise ValueError(
                 '--data_path_test/--data_path_valid mode: use --models NUTS,ADVI (no MB without --checkpoint)'
             )
-    elif hasattr(args, 'config') and args.config:
-        with open(args.config) as f:
-            cfg_dict = yaml.safe_load(f)
-        for k, v in vars(args).items():
-            if v is not None and k not in ['checkpoint', 'config', 'name']:
-                cfg_dict[k] = v
     else:
         raise ValueError(
             'Must specify one of:\n'
             '  1. Checkpoint (required for MB): --checkpoint <dir> [--prefix best|latest]\n'
             '  2. Data paths (NUTS/ADVI only): --data_path_test <path> [--data_path_valid <path>]\n'
-            '  3. Custom config (legacy):       --config <path>\n'
         )
 
     if cfg_dict.get('save_tables') is None:
