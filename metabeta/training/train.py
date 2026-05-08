@@ -355,10 +355,76 @@ class Trainer:
         wandb.define_metric('valid/mean_nrmse_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/mean_eace_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/median_nll_epoch', step_metric='step/epoch')
+        for _metric in ('mean_nrmse', 'mean_eace', 'median_nll'):
+            wandb.define_metric(f'ref/nuts/{_metric}', step_metric='step/epoch')
 
     def close(self) -> None:
         if self.wandb_run is not None:
             wandb.finish()
+
+    def _logFitReference(self) -> None:
+        """Load or compute NUTS valid summary; print it and optionally log to WandB."""
+        data_dir = Path(self.dir, '..', 'outputs', 'data', self.cfg.data_id_valid)
+        fit_path = data_dir / 'valid.fit.npz'
+        cache_path = data_dir / 'summary_valid_nuts.pt'
+
+        ref_summary = None
+
+        # Try loading from cache
+        if cache_path.exists():
+            ref_mtime = fit_path.stat().st_mtime if fit_path.exists() else 0.0
+            if cache_path.stat().st_mtime >= ref_mtime:
+                try:
+                    ref_summary = EvaluationSummary.load(cache_path)
+                except Exception as e:
+                    logger.warning('Could not load NUTS reference cache: %s', e)
+
+        # Fall back: compute from fit file
+        if ref_summary is None:
+            if not fit_path.exists():
+                logger.warning('NUTS reference: %s not found, skipping.', fit_path)
+                return
+            dl_ref = Dataloader(
+                fit_path, batch_size=8, sortish=True,
+                max_d=self.cfg.max_d, max_q=self.cfg.max_q,
+            )
+            batch = dl_ref.fullBatch()
+            del dl_ref  # free fit file from memory before the summary computation
+            if 'nuts_ffx' not in batch:
+                logger.warning('NUTS reference: no NUTS samples in %s, skipping.', fit_path)
+                return
+            samples_g = [batch['nuts_ffx'], batch['nuts_sigma_rfx']]
+            has_sigma_eps = 'nuts_sigma_eps' in batch
+            if has_sigma_eps:
+                samples_g.append(batch['nuts_sigma_eps'].unsqueeze(-1))
+            proposal = Proposal(
+                {
+                    'global': {'samples': torch.cat(samples_g, dim=-1)},
+                    'local': {'samples': batch['nuts_rfx']},
+                },
+                has_sigma_eps=has_sigma_eps,
+                corr_rfx=batch.get('nuts_corr_rfx'),
+            )
+            if self.cfg.rescale and self.cfg.likelihood_family == 0:
+                proposal.rescale(batch['sd_y'])
+                batch = rescaleData(batch)
+            proposal.tpd = batch['nuts_duration'].mean().item()
+            ref_summary = getSummary(proposal, batch, likelihood_family=self.cfg.likelihood_family)
+            ref_summary.save(cache_path)
+            logger.info('Saved NUTS reference summary to %s', cache_path)
+
+        summary_table = summaryTable(ref_summary, self.cfg.likelihood_family)
+        print(f'\nNUTS reference (validation):\n{summary_table}')
+
+        if self.wandb_run is not None:
+            mean_nrmse, mean_eace, median_nll = self.getTrackingMetrics(ref_summary)
+            wandb.log({
+                'ref/nuts/table': wandb.Html(f'<pre>{summary_table}</pre>'),
+                'ref/nuts/mean_nrmse': float(mean_nrmse),
+                'ref/nuts/mean_eace': float(mean_eace),
+                'ref/nuts/median_nll': float(median_nll),
+                'step/epoch': 0,
+            })
 
     def save(self, prefix: str = 'latest') -> None:
         path = Path(self.ckpt_dir, prefix + '.pt')
@@ -730,6 +796,9 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         # optionally init wandb (after potential loading and reference run)
         if self.cfg.wandb:
             self._initWandb()
+
+        # print NUTS reference baseline; also logs to wandb if enabled
+        self._logFitReference()
 
         # optionally get performance before (resumed) training
         if not self.cfg.skip_ref:
