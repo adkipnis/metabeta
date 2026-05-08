@@ -154,31 +154,18 @@ def _coerce_cuda_rng_states(states: object) -> list[torch.Tensor]:
 
 # -----------------------------------------------------------------------------
 class EarlyStopping:
-    def __init__(self, patience: int = 0, delta: float = 1e-3) -> None:
+    def __init__(self, patience: int = 0) -> None:
         self.patience = patience
-        self.delta = delta
-        self.best_nrmse = float('inf')
-        self.best_median_nll = float('inf')
         self.counter = 0
         self.stop = False
 
-    def update(self, mean_nrmse: float, median_nll: float) -> bool:
-        improved_nrmse = (self.best_nrmse - mean_nrmse) > self.delta
-        improved_nll = (self.best_median_nll - median_nll) > self.delta
-        improved = improved_nrmse or improved_nll
-
-        if improved_nrmse:
-            self.best_nrmse = mean_nrmse
-        if improved_nll:
-            self.best_median_nll = median_nll
-
+    def update(self, improved: bool) -> None:
         if improved:
             self.counter = 0
         else:
             self.counter += 1
             if self.counter >= self.patience:
                 self.stop = True
-        return improved
 
 
 # -----------------------------------------------------------------------------
@@ -187,9 +174,9 @@ class Trainer:
         self.cfg = cfg
         self.dir = Path(__file__).resolve().parent
 
-        # reproducibility
         if cfg.reproducible:
-            self._reproducible()
+            torch.use_deterministic_algorithms(True)
+            torch.backends.cudnn.deterministic = True
         setSeed(cfg.seed)
 
         # misc setup
@@ -223,29 +210,17 @@ class Trainer:
         self.global_step = 0
         self.wandb_run = None
         self.wandb_run_id = None
-        self.stopper = None
-        if self.cfg.patience > 0:
-            self.stopper = EarlyStopping(self.cfg.patience)
-            if not getattr(self.cfg, 'save_best', True):
-                logger.warning('early stopping enabled without saving best checkpoints!')
-
-    def _reproducible(self) -> None:
-        torch.use_deterministic_algorithms(True)
-        torch.backends.cudnn.deterministic = True
+        self.stopper = EarlyStopping(self.cfg.patience) if self.cfg.patience > 0 else None
+        if self.stopper is not None and not getattr(self.cfg, 'save_best', True):
+            logger.warning('early stopping enabled without saving best checkpoints!')
 
     def _initData(self) -> None:
-        # assimilate data config
         self.data_cfg_train = loadDataConfig(self.cfg.data_id)
         assimilateConfig(self.cfg, self.data_cfg_train)
 
-        # allow overriding validation data id independently from training
         self.cfg.data_id_valid = getattr(self.cfg, 'data_id_valid', self.cfg.data_id)
         self.data_cfg_valid = loadDataConfig(self.cfg.data_id_valid)
 
-        # keep legacy attr names for checkpoint compatibility
-        self.data_cfg = self.data_cfg_train
-
-        # load validation data
         self.dl_valid = self._getDataLoader('valid', batch_size=8)
 
     def _getDataLoader(
@@ -268,22 +243,11 @@ class Trainer:
             max_q=data_cfg.get('max_q'),
         )
 
-    def _trainingDataAvailable(self, start_epoch: int) -> bool:
-        for epoch in range(start_epoch, self.cfg.max_epochs + 1):
-            data_fname = datasetFilename('train', epoch)
-            data_subdir = self.data_cfg_train['data_id']
-            data_path = Path(self.dir, '..', 'outputs', 'data', data_subdir, data_fname)
-            if not data_path.exists():
-                logger.warning(f'{data_path} does not exist')
-                return False
-        return True
-
     def _initModel(self) -> None:
         if hasattr(self.cfg, 'model_cfg'):
             assert isinstance(self.cfg.model_cfg, ApproximatorConfig), 'wrong model cfg class'
             self.model_cfg = self.cfg.model_cfg
         else:
-            # load model config from new location
             model_cfg_path = Path(self.dir, '..', 'configs', 'models', f'{self.cfg.model_id}.yaml')
             self.model_cfg = modelFromYaml(
                 model_cfg_path,
@@ -325,7 +289,7 @@ class Trainer:
             print(f'WARNING: Could not resume wandb run {self.wandb_run_id!r}; starting a new run.')
             init_kwargs.update(id=None, resume=None)
             self.wandb_run = wandb.init(**init_kwargs)
-        wandb.config.update({'data_cfg': self.data_cfg, 'model_cfg': self.model_cfg.to_dict()})
+        wandb.config.update({'data_cfg': self.data_cfg_train, 'model_cfg': self.model_cfg.to_dict()})
         wandb.define_metric('train/loss_step', step_metric='step/global')
         wandb.define_metric('train/grad_norm', step_metric='step/global')
         wandb.define_metric('train/loss_epoch', step_metric='step/epoch')
@@ -414,7 +378,7 @@ class Trainer:
             'best_nrmse': self.best_nrmse,
             'best_median_nll': self.best_median_nll,
             'trainer_cfg': {k: v for k, v in vars(self.cfg).items() if k not in CLI_ONLY_PARAMS},
-            'data_cfg': self.data_cfg.copy(),
+            'data_cfg': self.data_cfg_train.copy(),
             'model_cfg': self.model_cfg.to_dict(),
             'model_state': self.model.state_dict(),
             'optimizer_state': self.optimizer.state_dict(),
@@ -437,7 +401,7 @@ class Trainer:
         payload = torch.load(path, map_location=self.device, weights_only=False)
 
         # compare configs
-        if self.data_cfg != payload['data_cfg']:
+        if self.data_cfg_train != payload['data_cfg']:
             logger.warning('data config mismatch between current and checkpoint')
         if self.model_cfg.to_dict() != payload['model_cfg']:
             logger.warning('model config mismatch between current and checkpoint')
@@ -451,9 +415,6 @@ class Trainer:
         self.best_nrmse = payload['best_nrmse']
         self.best_median_nll = payload['best_median_nll']
         self.wandb_run_id = payload.get('wandb_run_id')
-        if self.stopper is not None:
-            self.stopper.best_nrmse = self.best_nrmse
-            self.stopper.best_median_nll = self.best_median_nll
 
         # restore RNG states for reproducibility
         if 'rng_torch' in payload:
@@ -630,7 +591,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         total_count = 0
         self.model.eval()
         self.optimizer.eval()
-        for i, batch in enumerate(iterator):
+        for batch in iterator:
             batch = toDevice(batch, self.device)
             loss = self.loss(batch)
             batch_size = batch['X'].shape[0]
@@ -657,9 +618,6 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             if self.cfg.rescale and self.cfg.likelihood_family == 0:
                 proposal.rescale(batch['sd_y'])
             proposal.to('cpu')
-            batch = toDevice(batch, 'cpu')
-            if self.cfg.rescale and self.cfg.likelihood_family == 0:
-                batch = rescaleData(batch)
             proposals.append(proposal)
             n_datasets += batch['X'].shape[0]
         t1 = time.perf_counter()
@@ -671,8 +629,6 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             batch = rescaleData(batch)
 
         proposal.tpd = (t1 - t0) / max(n_datasets, 1)
-
-        # get evaluation summary
         eval_summary = getSummary(
             proposal,
             batch,
@@ -681,14 +637,10 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         summary_table = summaryTable(eval_summary, self.cfg.likelihood_family)
         logger.info(summary_table)
         if self.cfg.wandb:
-            sample_logs: dict = {
+            wandb.log({
                 'summary/table': wandb.Html(f'<pre>{summary_table}</pre>'),
                 'step/epoch': self.current_epoch,
-            }
-            # DEBUG: log correlation Jacobian diagnostics
-            if proposal.debug_stats is not None:
-                sample_logs.update({'debug/' + k: v for k, v in proposal.debug_stats.items()})
-            wandb.log(sample_logs)
+            })
 
         # make plots
         if getattr(self.cfg, 'plot', False):
@@ -758,20 +710,16 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             self.sample()
 
         print(f'\nTraining for {self.cfg.max_epochs - self.current_epoch} epochs...')
-        should_stop = False
         for epoch in range(self.current_epoch + 1, self.cfg.max_epochs + 1):
             self.current_epoch = epoch
             loss_train = self.train()
             loss_valid = self.valid()
-            mean_nrmse = None
-            mean_eace = None
-            median_nll = None
+            mean_nrmse = mean_eace = median_nll = None
 
             if epoch % self.cfg.sample_interval == 0:
                 eval_summary = self.sample()
                 mean_nrmse, mean_eace, median_nll = self.getTrackingMetrics(eval_summary)
 
-            # log epoch
             if self.wandb_run is not None:
                 logs = {
                     'train/loss_epoch': float(loss_train),
@@ -784,12 +732,10 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                     logs['valid/median_nll_epoch'] = float(median_nll)  # type: ignore
                 wandb.log(logs)
 
-            # update tracked metrics and optional early stopping on sample epochs
             if mean_nrmse is not None:
                 improved_nrmse = mean_nrmse < (self.best_nrmse - 1e-6)
                 improved_nll = median_nll < (self.best_median_nll - 1e-6)  # type: ignore
                 improved = improved_nrmse or improved_nll
-
                 if improved_nrmse:
                     self.best_nrmse = mean_nrmse
                 if improved_nll:
@@ -798,19 +744,16 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                     self.best_epoch = self.current_epoch
                     if getattr(self.cfg, 'save_best', True):
                         self.save('best')
-
                 if self.stopper is not None:
-                    self.stopper.update(float(mean_nrmse), float(median_nll))  # type: ignore
+                    self.stopper.update(improved)
                     if self.stopper.stop:
                         logger.info(f'early stopping at epoch {self.current_epoch}.')
-                        should_stop = True
+                        if getattr(self.cfg, 'save_latest', True):
+                            self.save('latest')
+                        break
 
-            # save latest ckpt after all epoch-level training state has been updated
             if getattr(self.cfg, 'save_latest', True):
                 self.save('latest')
-
-            if should_stop:
-                break
 
 
 # =============================================================================
