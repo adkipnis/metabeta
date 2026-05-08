@@ -795,12 +795,26 @@ def _lmmNormalFull(
     inv_se2 = 1.0 / se2
     A_gls = inv_se2[:, None, None] * (XtX - correction_XX)         # (B, d, d)
     b_gls = inv_se2[:, None] * (Xty - correction_Xy)               # (B, d)
+
+    # Detect GLS collapse: when correction_XX ≈ XtX (occurs when q ≥ d at high SNR,
+    # because the random-effects space absorbs all between-group X variation), the
+    # between-group information for β vanishes → A_gls → 0 → β_gls explodes and gets
+    # clamped to ±50, corrupting residuals and BLUPs throughout the EM loop.
+    # Fall back to the within-Z OLS estimate (β_wg) for those datasets: for q=d, β_wg=0
+    # (no within-group information either), which at least keeps BLUPs well-behaved.
+    xtx_max_diag = XtX.diagonal(dim1=-1, dim2=-2).amax(dim=-1).clamp(min=1.0)  # (B,)
+    beta_identified = (
+        (XtX - correction_XX).diagonal(dim1=-1, dim2=-2).abs().amax(dim=-1)
+        > 1e-3 * xtx_max_diag
+    )  # (B,) True = between-group information is non-negligible
+
     A_gls_reg = A_gls + _adaptiveRidge(A_gls)
     beta_gls = _safeSolve(A_gls_reg, b_gls)                        # (B, d)
 
     # clamp before BLUP computation: near-cancellation in A_gls=(XtX−correction_XX) when
     # Ψ≈0 produces finite-but-huge values that nan_to_num cannot catch.
     beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
+    beta_gls = torch.where(beta_identified[:, None], beta_gls, beta_wg)
     Psi = Psi.nan_to_num(nan=0.0, posinf=0.0)
 
     # BLUPs
@@ -868,6 +882,7 @@ def _lmmNormalFull(
         A_gls_reg = A_gls + _adaptiveRidge(A_gls)
         beta_gls = _safeSolve(A_gls_reg, b_gls)
         beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
+        beta_gls = torch.where(beta_identified[:, None], beta_gls, beta_wg)
         resid_gls = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_gls)) * mask_n
         Ztr_gls = torch.einsum('bmnq,bmn->bmq', Zm, resid_gls)
 
@@ -888,12 +903,24 @@ def _lmmNormalFull(
 
     # Kackar-Harville correction: blup_var = diag(σ²W_g) conditions on β as known, but actual
     # BLUP error also includes W_g Z^T X (β_hat - β). Dominant for large groups where W_g→Ψ⁻¹,
-    # (1-λ)Ψ→0. beta_var = diag(A_gls_reg⁻¹), W_ZtX = W_g Z^T X already computed in EM loop.
-    eye_d_kh = torch.eye(d, device=Xm.device, dtype=Xm.dtype).expand(B, d, d)
-    beta_var_kh = (
-        _safeSolve(A_gls_reg, eye_d_kh).diagonal(dim1=-1, dim2=-2).clamp(min=1e-8)
-    )  # (B, d)
+    # (1-λ)Ψ→0.
+    # beta_var uses a truncated eigendecomposition of A_gls_reg: near-zero eigenvalues (rank
+    # deficiency from m<d, collinear group means, or q≥d collapse) inflate beta_var_kh via
+    # the adaptive-ridge reciprocal ≈1e6. Truncating below 1e-3 × max_eig caps beta_var at
+    # the identified directions only, zeroing contributions from the null space.
+    vals_kh, vecs_kh = torch.linalg.eigh(A_gls_reg)                # (B, d), (B, d, d)
+    max_kh = vals_kh.amax(dim=-1, keepdim=True).clamp(min=1.0)     # (B, 1)
+    inv_vals_kh = torch.where(
+        vals_kh > 1e-3 * max_kh,
+        1.0 / vals_kh.clamp(min=1e-30),
+        torch.zeros_like(vals_kh),
+    )
+    beta_var_kh = (vecs_kh**2 * inv_vals_kh[:, None, :]).sum(dim=-1).clamp(min=1e-8)  # (B, d)
     kh_corr = (W_ZtX**2 * beta_var_kh[:, None, None, :]).sum(dim=-1)  # (B, m, q)
+    # Zero KH for collapsed GLS (q≥d or G<d): those datasets use beta_wg so β-uncertainty
+    # is not meaningful; truncation above handles the collinear-group-means case.
+    gls_determined = G >= float(d)  # (B,)
+    kh_corr = kh_corr * (beta_identified & gls_determined)[:, None, None]
     blup_var = blup_var + kh_corr
 
     # Floor blup_var at Psi_diag / (2 * n_g): prevents near-zero declared variance for
