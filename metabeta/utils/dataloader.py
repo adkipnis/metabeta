@@ -31,7 +31,7 @@ class Collection(torch.utils.data.Dataset):
     def __init__(
         self,
         path: Path,
-        permute: bool = True,
+        permute: bool = False,
         max_d: int | None = None,
         max_q: int | None = None,
     ):
