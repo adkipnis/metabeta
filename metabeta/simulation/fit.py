@@ -51,6 +51,8 @@ def setup() -> argparse.Namespace:
         help='Adam learning rate for ADVI (default=1e-3)')
     parser.add_argument('--diagonal', action='store_true',
         help='Force diagonal (uncorrelated) RFX covariance even when eta_rfx > 0 (default=False)')
+    parser.add_argument('--partition', type=str, default='test', choices=['test', 'valid'],
+        help='Which partition to fit: test or valid (default=test)')
     return setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets with PyMC.')
 # fmt: on
 
@@ -199,7 +201,7 @@ class Fitter:
         self.outdir = Path(srcdir, self.cfg.data_id, 'fits')
         self.outdir.mkdir(parents=True, exist_ok=True)
 
-        self.fname = datasetFilename(partition='test')
+        self.fname = datasetFilename(partition=cfg.partition)
         self.batch_path = Path(self.srcdir, self.cfg.data_id, self.fname)
         assert self.batch_path.exists(), f'{self.batch_path} does not exist'
 
@@ -417,6 +419,7 @@ if __name__ == '__main__':
         ('viter', 100_000),
         ('lr', 1e-3),
         ('diagonal', False),
+        ('partition', 'test'),
     ]:
         if not hasattr(cfg, _k):
             setattr(cfg, _k, _v)
