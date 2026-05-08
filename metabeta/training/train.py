@@ -46,7 +46,6 @@ from metabeta.plotting import (
     plotRecovery,
     plotCoverage,
     plotSBC,
-    # plotRfxCorrelationRecovery,
 )
 
 logger = logging.getLogger('train.py')
@@ -114,7 +113,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--lr', type=float, help='Learning rate')
     parser.add_argument('--accum_steps', type=int, help='Gradient accumulation steps; effective batch size = bs × accum_steps (default = 1)')
     parser.add_argument('--loss_type', type=str, help='Loss type: forward|backward|mixed|predictive (default = forward)')
-    parser.add_argument('--ancestral', action=argparse.BooleanOptionalAction, help='Enable ancestral curriculum: ramp local posterior conditioning from true to sampled globals as training converges (default = False)')
     parser.add_argument('--n_loss_samples', type=int, help='Posterior samples for backward KL and predictive NLL loss modes (default = 64)')
     parser.add_argument('--pred_nll_weight', type=float, help='Weight for predictive NLL auxiliary term when loss_type=predictive (default = 0.1)')
     parser.add_argument('--kl_mix_weight', type=float, help='Backward KL coefficient in mixed loss: total = fkl + kl_mix_weight * alpha * bkl (default = 0.05)')
@@ -134,19 +132,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--load_best', action=argparse.BooleanOptionalAction, help='Resume training from best.pt in the checkpoint directory')
     return setupConfigParser(parser, generateTrainingConfig, 'Train neural approximators.')
 # fmt: on
-
-
-# -----------------------------------------------------------------------------
-# Cap on reference LOO-NLL: prevents inflated starting values from compressing the useful range
-# and causing the ancestral rate to surge prematurely once the model exits the "garbage" phase.
-_LOO_NLL_0_CAP = 5.0
-
-
-def _ancestralRate(
-    loo_nll: float, loo_nll_0: float, p_max: float = 0.5, loo_floor: float = 1.75
-) -> float:
-    """Ancestral conditioning rate: ramps from 0 to p_max as LOO-NLL improves from loo_nll_0 to loo_floor."""
-    return p_max * float(np.clip((loo_nll_0 - loo_nll) / (loo_nll_0 - loo_floor), 0.0, 1.0))
 
 
 def _coerce_rng_state_byte_tensor(state: object) -> torch.Tensor:
@@ -200,7 +185,6 @@ class EarlyStopping:
 class Trainer:
     def __init__(self, cfg: argparse.Namespace) -> None:
         self.cfg = cfg
-        # self.cfg.load_latest = True
         self.dir = Path(__file__).resolve().parent
 
         # reproducibility
@@ -237,8 +221,6 @@ class Trainer:
         self.best_median_nll = float('inf')
         self.best_epoch = 0
         self.global_step = 0
-        self.ancestral_rate = 0.0
-        self.loo_nll_0: float | None = None
         self.wandb_run = None
         self.wandb_run_id = None
         self.stopper = None
@@ -265,7 +247,6 @@ class Trainer:
 
         # load validation data
         self.dl_valid = self._getDataLoader('valid', batch_size=8)
-        # self.dl_test = self._getDataLoader('test')
 
     def _getDataLoader(
         self, partition: str, epoch: int = 0, batch_size: int | None = None
@@ -285,8 +266,6 @@ class Trainer:
             sort_seed=epoch,
             max_d=data_cfg.get('max_d'),
             max_q=data_cfg.get('max_q'),
-            # num_workers=0,
-            # persistent_workers=(partition != 'train'),
         )
 
     def _trainingDataAvailable(self, start_epoch: int) -> bool:
@@ -350,7 +329,6 @@ class Trainer:
         wandb.define_metric('train/loss_step', step_metric='step/global')
         wandb.define_metric('train/grad_norm', step_metric='step/global')
         wandb.define_metric('train/loss_epoch', step_metric='step/epoch')
-        wandb.define_metric('train/ancestral_rate', step_metric='step/epoch')
         wandb.define_metric('valid/loss_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/mean_nrmse_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/mean_eace_epoch', step_metric='step/epoch')
@@ -435,7 +413,6 @@ class Trainer:
             'best_epoch': self.best_epoch,
             'best_nrmse': self.best_nrmse,
             'best_median_nll': self.best_median_nll,
-            'loo_nll_0': self.loo_nll_0,
             'trainer_cfg': {k: v for k, v in vars(self.cfg).items() if k not in CLI_ONLY_PARAMS},
             'data_cfg': self.data_cfg.copy(),
             'model_cfg': self.model_cfg.to_dict(),
@@ -473,7 +450,6 @@ class Trainer:
         self.best_epoch = payload['best_epoch']
         self.best_nrmse = payload['best_nrmse']
         self.best_median_nll = payload['best_median_nll']
-        self.loo_nll_0 = payload.get('loo_nll_0', None)
         self.wandb_run_id = payload.get('wandb_run_id')
         if self.stopper is not None:
             self.stopper.best_nrmse = self.best_nrmse
@@ -525,17 +501,13 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         batch: dict[str, torch.Tensor],
         summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
         mode: str = '',
-        ancestral_rate: float = 0.0,
     ) -> torch.Tensor:
         if not mode:
             mode = self.cfg.loss_type
 
-        #  init group variables
         m = batch['m']  # number of groups
         mask = batch['mask_m']  # group mask
-        if mode in [
-            'backward',
-        ]:
+        if mode == 'backward':
             m = m.unsqueeze(-1)
             mask = mask.unsqueeze(-1)
 
@@ -545,7 +517,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
 
         # forward KL loss
         if mode == 'forward':
-            log_probs = self.model.forward(batch, summaries, ancestral_rate=ancestral_rate)
+            log_probs = self.model.forward(batch, summaries)
             lq_g = log_probs['global']
             lq_l = log_probs['local'] * mask
             lq = lq_g + lq_l.sum(1) / m
@@ -576,7 +548,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
 
         # mixed KL loss
         elif mode == 'mixed':
-            fkl = self.loss(batch, summaries, mode='forward', ancestral_rate=ancestral_rate)
+            fkl = self.loss(batch, summaries, mode='forward')
             bkl = self.loss(batch, summaries, mode='backward')
             w = getattr(self.cfg, 'kl_mix_weight', 0.05)
             alpha = (fkl.detach().abs() / (bkl.detach().abs() + 1e-8)).clamp(max=1.0)
@@ -584,7 +556,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
 
         # forward KL + predictive NLL auxiliary (globals detached: posterior_g trained by L_fkl)
         elif mode == 'predictive':
-            fkl = self.loss(batch, summaries, mode='forward', ancestral_rate=ancestral_rate)
+            fkl = self.loss(batch, summaries, mode='forward')
             proposal = self.model.backward(
                 batch,
                 summaries,
@@ -593,7 +565,6 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             )
             pp = getPosteriorPredictive(proposal, batch, self.cfg.likelihood_family)
             L_pred = posteriorPredictiveNLL(pp, batch, w=proposal.weights).mean()
-            # L_pred = posteriorPredictiveNLL(pp, batch, w=proposal.weights, mode='loo_proxy').mean()
             pred_nll_weight = getattr(self.cfg, 'pred_nll_weight', 0.1)
             return fkl + pred_nll_weight * L_pred
 
@@ -620,7 +591,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             # trailing window: correct divisor so its effective lr matches full windows
             in_trailing = i >= n_batches - trailing
             window_size = trailing if in_trailing else accum_steps
-            raw_loss = self.loss(batch, ancestral_rate=self.ancestral_rate)
+            raw_loss = self.loss(batch)
             (raw_loss / window_size).backward()
 
             # write loss (track unscaled value so it's comparable to valid loss)
@@ -675,13 +646,10 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             self.dl_valid,
             desc=f'Epoch {self.current_epoch:02d}/{self.cfg.max_epochs:02d} [S]',
         )
-        # batch = next(iter(self.dl_valid_full))
         self.model.eval()
         self.optimizer.eval()
         proposals = []
         n_datasets = 0
-
-        # sample from proposal distribution over all validation minibatches
         t0 = time.perf_counter()
         for batch in iterator:
             batch = toDevice(batch, self.device)
@@ -696,15 +664,13 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             n_datasets += batch['X'].shape[0]
         t1 = time.perf_counter()
 
-        # merge proposals over minibatches, but evaluate on canonical full-batch collate
         proposal = concatProposalsBatch(proposals)
         batch = self.dl_valid.fullBatch()
         batch = toDevice(batch, 'cpu')
         if self.cfg.rescale and self.cfg.likelihood_family == 0:
             batch = rescaleData(batch)
 
-        # post-process
-        proposal.tpd = (t1 - t0) / max(n_datasets, 1)  # time per dataset
+        proposal.tpd = (t1 - t0) / max(n_datasets, 1)
 
         # get evaluation summary
         eval_summary = getSummary(
@@ -761,25 +727,13 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             show=show,
             show_corr_rfx=show_corr_rfx,
         )
-        # path_rc = None
-        # if proposal.q >= 2:
-        #     path_rc = plotRfxCorrelationRecovery(
-        #         proposal,
-        #         batch,
-        #         plot_dir=self.plot_dir,
-        #         epoch=self.current_epoch,
-        #         show=show,
-        #     )
         if self.cfg.wandb:
-            image_logs = {
+            wandb.log({
                 'plot/recovery': wandb.Image(str(path_r)),
                 'plot/coverage': wandb.Image(str(path_c)),
                 'plot/sbc': wandb.Image(str(path_s)),
                 'step/epoch': self.current_epoch,
-            }
-            # if path_rc is not None:
-            #     image_logs['plot/rfx_correlation_recovery'] = wandb.Image(str(path_rc))
-            wandb.log(image_logs)
+            })
 
     def go(self) -> None:
         # optionally load previous checkpoint
@@ -789,9 +743,6 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         elif getattr(self.cfg, 'load_latest', False):
             self.current_epoch = self.load('latest')
             print(f'Resumed latest checkpoint at epoch {self.current_epoch}.')
-
-        # check if training data is complete
-        # assert self._trainingDataAvailable(self.current_epoch + 1), 'training data incomplete'
 
         # optionally init wandb (after potential loading and reference run)
         if self.cfg.wandb:
@@ -816,26 +767,14 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             mean_eace = None
             median_nll = None
 
-            # sample on test set
             if epoch % self.cfg.sample_interval == 0:
                 eval_summary = self.sample()
                 mean_nrmse, mean_eace, median_nll = self.getTrackingMetrics(eval_summary)
-
-                # update curriculum: ramp ancestral rate as global NRMSE approaches floor
-                if getattr(self.cfg, 'ancestral', False) and median_nll is not None:
-                    if self.loo_nll_0 is None:
-                        self.loo_nll_0 = min(float(median_nll), _LOO_NLL_0_CAP)
-                    self.ancestral_rate = _ancestralRate(float(median_nll), self.loo_nll_0)
-                    logger.info(
-                        f'Curriculum: LOO-NLL={median_nll:.3f} (ref={self.loo_nll_0:.3f})'
-                        f' → ancestral_rate={self.ancestral_rate:.3f}'
-                    )
 
             # log epoch
             if self.wandb_run is not None:
                 logs = {
                     'train/loss_epoch': float(loss_train),
-                    'train/ancestral_rate': float(self.ancestral_rate),
                     'valid/loss_epoch': float(loss_valid),
                     'step/epoch': self.current_epoch,
                 }
