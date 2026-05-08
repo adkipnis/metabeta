@@ -5,7 +5,13 @@ import torch
 from tabulate import tabulate
 
 from metabeta.posthoc.conformal import Calibrator
-from metabeta.utils.evaluation import Proposal, EvaluationSummary, dictMean
+from metabeta.utils.evaluation import (
+    Proposal,
+    EvaluationSummary,
+    PerDatasetMetrics,
+    AggregatedMetrics,
+    dictMean,
+)
 from metabeta.evaluation.point import getPointEstimates, getRMSE, getCorrelation
 from metabeta.evaluation.intervals import (
     ALPHAS,
@@ -27,6 +33,19 @@ from metabeta.evaluation.predictive import (
 logger = logging.getLogger(__name__)
 
 EST_TYPE = 'mean'
+
+
+def _averageOverAlpha(
+    nested: dict[float, dict[str, torch.Tensor]],
+    absolute: bool = False,
+) -> dict[str, torch.Tensor]:
+    alphas = list(nested.keys())
+    params = list(nested[alphas[0]].keys())
+    out = {}
+    for param in params:
+        vals = torch.cat([nested[a][param].unsqueeze(0) for a in alphas])
+        out[param] = torch.nanmean(vals.abs() if absolute else vals, 0)
+    return out
 
 
 def _t(label: str, t0: float) -> float:
@@ -132,17 +151,34 @@ def getSummary(
     if compute_pred_coverage:
         logger.debug('  %-30s %.2fs', 'predictive coverage/width', t_cov)
 
-    out['posterior_nll'] = torch.cat(posterior_nlls)
-    out['loo_nll'] = torch.cat(loo_nlls)
-    out['loo_pareto_k'] = torch.cat(loo_ks)
-    out['pp_fit'] = torch.cat(pp_fits) if pp_fits else None
-    out['pp_cov_coverage'] = torch.cat(pp_covs, dim=-1) if pp_covs else None
-    out['pp_cov_width'] = torch.cat(pp_widths, dim=-1) if pp_widths else None
-    out['sample_efficiency'] = proposal.efficiency
-    out['pareto_k'] = proposal.pareto_k
-    out['tpd'] = proposal.tpd
+    coverage_error = getCoverageErrors(out['coverage'], log_ratio=False)
+    log_coverage_ratio = getCoverageErrors(out['coverage'], log_ratio=True)
 
-    return EvaluationSummary(**out)
+    per_dataset = PerDatasetMetrics(
+        posterior_nll=torch.cat(posterior_nlls),
+        loo_nll=torch.cat(loo_nlls),
+        loo_pareto_k=torch.cat(loo_ks),
+        pp_fit=torch.cat(pp_fits) if pp_fits else None,
+        pp_cov_coverage=torch.cat(pp_covs, dim=-1) if pp_covs else None,
+        pp_cov_width=torch.cat(pp_widths, dim=-1) if pp_widths else None,
+        sample_efficiency=proposal.efficiency,
+        pareto_k=proposal.pareto_k,
+        prior_nll=out.get('prior_nll'),
+    )
+    rfx_joint_ece, rfx_joint_eace = out['rfx_joint_ece'], out['rfx_joint_eace']
+    aggregated = AggregatedMetrics(
+        corr=out['corr'],
+        nrmse=out['nrmse'],
+        coverage=out['coverage'],
+        ece=_averageOverAlpha(coverage_error),
+        eace=_averageOverAlpha(coverage_error, absolute=True),
+        lcr=_averageOverAlpha(log_coverage_ratio),
+        abs_lcr=_averageOverAlpha(log_coverage_ratio, absolute=True),
+        estimates=out['estimates'],
+        rfx_joint_ece=rfx_joint_ece,
+        rfx_joint_eace=rfx_joint_eace,
+    )
+    return EvaluationSummary(per_dataset=per_dataset, aggregated=aggregated, tpd=proposal.tpd)
 
 
 def _rfxJointCalibration(
@@ -222,21 +258,21 @@ def _rfxJointCalibration(
 
 
 def summaryTable(s: EvaluationSummary, likelihood_family: int = 0) -> str:
-    long_table = longTable(s.corr, s.nrmse, s.ece, s.eace)
+    ag, pd = s.aggregated, s.per_dataset
+    long_table = longTable(ag.corr, ag.nrmse, ag.ece, ag.eace)
     fit_labels = {0: 'Median pp R²', 1: 'Median pp AUC', 2: 'Median pp Deviance'}
-    fit_label = fit_labels.get(likelihood_family, 'Median pp R²')
     flat_table = flatTable(
         s.tpd,
-        s.mloonll,
-        s.mfit,
-        fit_label,
-        s.meff,
-        s.mk,
-        s.mloo_k,
-        s.rfx_joint_ece,
-        s.rfx_joint_eace,
-        s.pp_eace,
-        s.pp_width_90,
+        pd.mloonll,
+        pd.mfit,
+        fit_labels.get(likelihood_family, 'Median pp R²'),
+        pd.meff,
+        pd.mk,
+        pd.mloo_k,
+        ag.rfx_joint_ece,
+        ag.rfx_joint_eace,
+        pd.pp_eace,
+        pd.pp_width_90,
     )
     return long_table + '\n' + flat_table
 
