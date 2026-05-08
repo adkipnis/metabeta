@@ -406,6 +406,7 @@ class Dataloader(torch.utils.data.DataLoader):
         batch_size: int | None = None,
         sortish: bool = True,
         shuffle: bool = False,
+        permute: bool = False,
         bucket_mult: int = 50,
         sort_seed: int = 0,
         max_d: int | None = None,
@@ -413,7 +414,7 @@ class Dataloader(torch.utils.data.DataLoader):
         num_workers: int = 0,
         persistent_workers: bool = False,
     ):
-        col = Collection(path, max_d=max_d, max_q=max_q)
+        col = Collection(path, permute=permute, max_d=max_d, max_q=max_q)
         pin_memory = torch.cuda.is_available()
         self._sortish = sortish
         self._shuffle = shuffle

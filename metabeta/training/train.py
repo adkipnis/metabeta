@@ -280,6 +280,7 @@ class Trainer:
             batch_size=batch_size,
             sortish=sortish,
             shuffle=partition == 'train',
+            permute=partition == 'train',
             bucket_mult=50,
             sort_seed=epoch,
             max_d=data_cfg.get('max_d'),
