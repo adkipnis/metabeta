@@ -66,6 +66,45 @@ def _estimateWithinGroupVariance(
     return beta_wg, sigma_eps_sq, mx_rank
 
 
+def _componentwisePsiDiagSignal(
+    Zm: torch.Tensor,
+    resid: torch.Tensor,
+    mask_m: torch.Tensor,
+    ns: torch.Tensor,
+    sigma_eps_sq: torch.Tensor,
+    active_q: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Estimate diagonal Psi signal one component at a time.
+
+    The full MoM path requires groups whose Z design identifies all active random-effect
+    components jointly. High-q sampled datasets often have no such groups, but individual
+    components can still be estimated from groups where that column has support.
+    """
+    z2 = torch.einsum('bmnq,bmnq->bmq', Zm, Zm)
+    ztr = torch.einsum('bmnq,bmn->bmq', Zm, resid)
+    z2_sum = (z2 * mask_m[:, :, None]).sum(dim=1)
+    z2_tol = torch.maximum(z2_sum[:, None, :] * 1e-6, z2.new_tensor(1e-8))
+    component_mask = (
+        mask_m[:, :, None].bool()
+        & active_q[:, None, :].bool()
+        & (ns[:, :, None] > 2.0)
+        & (z2 > z2_tol)
+    ).to(Zm.dtype)
+    component_count = component_mask.sum(dim=1)
+
+    bhat = ztr / z2.clamp(min=1e-8)
+    bhat_mean = _maskedMean(bhat, component_mask, dim=1)
+    bhat_centered = bhat - bhat_mean[:, None, :]
+    bhat_noise = sigma_eps_sq[:, None, None] / z2.clamp(min=1e-8)
+    bhat_signal = (bhat_centered.square() - bhat_noise).clamp(min=0.0)
+    signal_mean = _maskedMean(bhat_signal, component_mask, dim=1)
+    signal_cap = (6.0 * signal_mean).clamp(min=sigma_eps_sq[:, None] * 1e-6)
+    signal_winsor = torch.minimum(bhat_signal, signal_cap[:, None, :])
+    signal_mean = _maskedMean(signal_winsor, component_mask, dim=1)
+    signal_median = _maskedMedian(signal_winsor, component_mask, dim=1)
+    return torch.minimum(signal_mean, 2.0 * signal_median) * active_q, component_count
+
+
 def _initialPsiMom(
     Xm: torch.Tensor,
     ym: torch.Tensor,
@@ -113,17 +152,29 @@ def _initialPsiMom(
     signal_mean = _maskedMean(signal_winsor, mom_mask[:, :, None], dim=1)
     signal_median = _maskedMedian(signal_winsor, mom_mask[:, :, None], dim=1)
     psi_diag_signal = torch.minimum(signal_mean, 2.0 * signal_median)
+    component_diag_signal, component_count = _componentwisePsiDiagSignal(
+        Zm, resid_full, mask_m, ns, sigma_eps_sq, active_q
+    )
+    has_joint_mom = mom_mask.sum(dim=1) > 0
+    use_component_diag = (component_count >= 2.0) & ~has_joint_mom[:, None]
 
     active_ns_mean = _maskedMean(ns, mask_m, dim=1).clamp(min=1.0)
     fallback_diag = (sigma_eps_sq / active_ns_mean).clamp(min=1e-10)[:, None].expand(B, q)
     fallback_diag = fallback_diag * active_q
-    psi_diag_floor = torch.where(
+    diag_floor_signal = torch.where(
         enough_diag_mom[:, None],
-        torch.maximum(0.5 * psi_diag_signal * active_q, fallback_diag),
+        0.5 * psi_diag_signal * active_q,
+        0.1 * component_diag_signal * active_q,
+    )
+    enough_diag = enough_diag_mom[:, None] | use_component_diag
+    psi_diag_floor = torch.where(
+        enough_diag,
+        torch.maximum(diag_floor_signal, fallback_diag),
         fallback_diag,
     )
+    diag_cap_signal = torch.where(enough_diag_mom[:, None], psi_diag_signal, component_diag_signal)
     psi_eig_cap = torch.maximum(
-        (6.0 * psi_diag_signal * active_q).amax(dim=1),
+        (6.0 * diag_cap_signal * active_q).amax(dim=1),
         fallback_diag.amax(dim=1),
     )
     Psi_raw = Psi_raw + torch.diag_embed(
@@ -224,7 +275,7 @@ def _emRefineNormal(
     active_qq: torch.Tensor,
     beta_wg: torch.Tensor,
     beta_rank: torch.Tensor,
-    beta_identified: torch.Tensor,
+    beta_mask: torch.Tensor,
     Psi: torch.Tensor,
     se2: torch.Tensor,
     psi_diag_floor: torch.Tensor,
@@ -235,6 +286,7 @@ def _emRefineNormal(
 ) -> tuple[torch.Tensor, torch.Tensor, _NormalGlsResult]:
     """EM refinement of Psi, sigma_eps_sq, beta, and BLUPs."""
     N = n_total.float()
+    se2_anchor = se2
     for _ in range(n_em):
         blup_outer = torch.einsum('bmq,bmr->bmqr', gls.blups, gls.blups)
         post_cov = se2[:, None, None, None] * gls.W_g
@@ -253,7 +305,11 @@ def _emRefineNormal(
         ZtZ_W = torch.einsum('bmqr,bmrs->bmqs', ZtZ_safe, gls.W_g)
         T = (ZtZ_W.diagonal(dim1=-2, dim2=-1).sum(dim=-1) * mask_m).sum(dim=1)
         T_safe = T.clamp(max=0.9 * (N - beta_rank).clamp(min=1.0))
-        se2 = (ss_em / (N - beta_rank - T_safe).clamp(min=1.0)).clamp(min=1e-12)
+        se2_next = (ss_em / (N - beta_rank - T_safe).clamp(min=1.0)).clamp(min=1e-12)
+        # In weakly identified batches, unstable beta/BLUP passes can repeatedly inflate
+        # residual variance and poison the next GLS step. Large genuine changes should
+        # already be visible in the projection estimate, so cap EM growth relative to it.
+        se2 = torch.minimum(se2_next, (100.0 * se2_anchor).clamp(min=1e-12))
 
         gls = _normalGlsAndBlups(
             Xm,
@@ -272,7 +328,7 @@ def _emRefineNormal(
             eye_q_bm,
             mask4,
             beta_wg,
-            beta_identified[:, None],
+            beta_mask,
         )
 
     return Psi, se2, gls
@@ -377,7 +433,12 @@ def _lmmNormalFull(
         mask4,
         beta_gls_fallback,
     )
-    beta_identified = gls.beta_mask.any(dim=-1)
+    weak_multi_q = (active_count > 1.0) & ~enough_full_mom
+    beta_mask = torch.where(
+        weak_multi_q[:, None],
+        gls.beta_mask,
+        gls.beta_mask.any(dim=-1, keepdim=True),
+    )
     beta_rank = mx_rank.clamp(min=1.0, max=float(d))
     Psi, se2, gls = _emRefineNormal(
         Xm,
@@ -402,7 +463,7 @@ def _lmmNormalFull(
         active_qq,
         beta_wg,
         beta_rank,
-        beta_identified,
+        beta_mask,
         Psi,
         se2,
         psi_diag_floor,
@@ -418,6 +479,7 @@ def _lmmNormalFull(
     resid_gls = gls.resid
     blups = gls.blups
     blup_var = gls.blup_var
+    beta_identified = gls.beta_mask.any(dim=-1)
 
     # Inflate blup_var to account for uncertainty in the Psi estimate.
     # Var[Psi] ∝ Psi²/(G-d), delta-method gives 1 + 2/(G-d).
