@@ -67,7 +67,7 @@ def setup() -> argparse.Namespace:
     # Template-based config generation (primary interface)
     parser.add_argument('--size', type=str, default='small', help='Size preset: tiny|small|medium|large|huge')
     parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
-    parser.add_argument('--ds_type', type=str, default='sampled', help='Dataset type: toy|flat|scm|mixed|sampled|real')
+    parser.add_argument('--ds_type', type=str, default='mixed', help='Dataset type: toy|flat|scm|mixed|sampled|real')
 
     # Alternative: load config from a saved YAML (e.g. outputs/data/{data_id}/config.yaml)
     parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
@@ -171,21 +171,17 @@ class Generator:
         if partition is None:
             partition = getattr(self.cfg, 'partition', 'train')
 
-        # d and q are drawn log-uniformly over their bounded integer ranges.
+        # d is drawn uniformly; q is drawn log-uniformly (favouring small q).
         min_d = getattr(self.cfg, 'min_d', 2)
         max_d = self.max_d_feasible if self.cfg.ds_type == 'real' else self.cfg.max_d
-        d_uniq = truncLogUni(rng, low=float(min_d), high=float(max_d + 1), size=n_mini, round=True).astype(int)
-        d_uniq = d_uniq.clip(min_d, max_d)
+        d_uniq = rng.integers(min_d, max_d + 1, size=n_mini)
         d = np.repeat(d_uniq, mini_batch_size)
 
         # min_q respects the preset band for non-training partitions so each
         # test/valid regime exercises a clearly distinct slice of problem space.
         min_q = getattr(self.cfg, 'min_q', 1) if partition != 'train' else 1
         q_max_i = np.minimum(self.cfg.max_q, d_uniq).astype(float)  # (n_mini,) upper bound
-        q_hi = q_max_i + 1.0
-        q_uniq = np.floor(
-            np.exp(rng.uniform(np.log(float(min_q)), np.log(q_hi), size=n_mini))
-        ).astype(int)
+        q_uniq = truncLogUni(rng, low=float(min_q), high=q_max_i + 1.0, round=True)
         q_uniq = q_uniq.clip(min_q, np.minimum(self.cfg.max_q, d_uniq))
         q = np.repeat(q_uniq, mini_batch_size)
 

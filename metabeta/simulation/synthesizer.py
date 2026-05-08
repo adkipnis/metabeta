@@ -69,11 +69,9 @@ class Scammer:
 
     def sample(self, d: int, ns: np.ndarray) -> dict[str, np.ndarray]:
         n = int(ns.sum())
-        features = self._generate(n, d)
-
-        # prepend intercept column
         X = np.ones((n, d))
-        X[:, 1:] = features
+        if d > 1:
+            X[:, 1:] = self._generate(n, d)
 
         groups = counts2groups(ns)
         return {'X': X, 'groups': groups}
@@ -146,6 +144,10 @@ class Synthesizer:
         # toy samples
         if self.toy:
             x[..., 1:] = self.rng.normal(size=(n, d - 1))
+            return x
+
+        # intercept-only model — nothing more to sample
+        if d == 1:
             return x
 
         # choose distributions
