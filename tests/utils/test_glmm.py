@@ -1,4 +1,4 @@
-"""Tests for metabeta.utils.glmm.glmmFull.
+"""Tests for metabeta.analytical.glmm.glmmFull.
 
 Tests cover shape correctness, numerical validity, trivial-case recovery,
 signal-detection, and integration with Approximator._dataStatistics.
@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from metabeta.simulation import Prior, Synthesizer, Simulator, hypersample
-from metabeta.utils.glmm import lmmBernoulli, lmmPoisson, glmm
+from metabeta.analytical.glmm import lmmBernoulli, lmmPoisson, glmm
 
 
 DEVICE = torch.device('cpu')
