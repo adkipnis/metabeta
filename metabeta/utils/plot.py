@@ -44,7 +44,7 @@ def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
     else:
         ax.tick_params(axis='x', labelcolor='w', size=1)
         ax.tick_params(axis='y', labelcolor='w', size=1)
-        
+
     # grid
     grid_alpha = info['grid_alpha']
     if grid_alpha != 1.0:

@@ -106,7 +106,10 @@ def setup() -> argparse.Namespace:
     ):
         cfg_dict = {k: v for k, v in vars(args).items() if v is not None}
         models_str = cfg_dict.get('models', 'all')
-        active = [x.strip().upper() for x in (list(_ALL_MODELS) if models_str == 'all' else models_str.split(','))]
+        active = [
+            x.strip().upper()
+            for x in (list(_ALL_MODELS) if models_str == 'all' else models_str.split(','))
+        ]
         if 'MB' in active:
             raise ValueError(
                 '--data_path_test/--data_path_valid mode: use --models NUTS,ADVI (no MB without --checkpoint)'
@@ -488,8 +491,12 @@ class Evaluator:
             return f'\\textbf{{{cell}}}' if i in best.get(metric, set()) else cell
 
         headers = ['Method'] + metric_names
-        md_rows = [[r['method']] + [_fmt(r[m], i, m) for m in metric_names] for i, r in enumerate(rows)]
-        tex_rows = [[r['method']] + [_fmt_tex(r[m], i, m) for m in metric_names] for i, r in enumerate(rows)]
+        md_rows = [
+            [r['method']] + [_fmt(r[m], i, m) for m in metric_names] for i, r in enumerate(rows)
+        ]
+        tex_rows = [
+            [r['method']] + [_fmt_tex(r[m], i, m) for m in metric_names] for i, r in enumerate(rows)
+        ]
 
         md_path = self.results_dir / 'evaluate.md'
         md_path.write_text(
@@ -581,14 +588,15 @@ class Evaluator:
 
         # Collect raw (native-batch) proposals
         raw: dict[str, tuple[Proposal, np.ndarray | None]] = {
-            model: self._getProposalAndMask(model, partition, full_batch, dl)
-            for model in active
+            model: self._getProposalAndMask(model, partition, full_batch, dl) for model in active
         }
 
         # Align all proposals to their common batch (intersection of all native masks)
         n = full_batch['X'].shape[0]
         common_mask = self._commonMask([mask for _, mask in raw.values()], n)
-        common_batch = subsetBatch(full_batch, common_mask) if common_mask is not None else full_batch
+        common_batch = (
+            subsetBatch(full_batch, common_mask) if common_mask is not None else full_batch
+        )
         aligned: dict[str, Proposal] = {
             model: self._alignToCommon(proposal, mask, common_mask)
             for model, (proposal, mask) in raw.items()
@@ -602,7 +610,9 @@ class Evaluator:
                 model == 'ADVI' or (model == 'NUTS' and common_mask is None)
             )
             if native_batch:
-                s = self._loadOrComputeSummary(aligned[model], common_batch, partition, model.lower())
+                s = self._loadOrComputeSummary(
+                    aligned[model], common_batch, partition, model.lower()
+                )
             else:
                 s = self.summary(aligned[model], common_batch)
             summaries[model] = s
@@ -612,7 +622,13 @@ class Evaluator:
         # Comparison plot
         plot_dir = self.plot_dir if partition == 'test' else self.plot_dir / partition
         plot_dir.mkdir(parents=True, exist_ok=True)
-        self.plot(list(aligned.values()), list(summaries.values()), active, common_batch, plot_dir=plot_dir)
+        self.plot(
+            list(aligned.values()),
+            list(summaries.values()),
+            active,
+            common_batch,
+            plot_dir=plot_dir,
+        )
 
         # NUTS convergence diagnostics and sub-population rows
         if self.cfg.converged_subset and has_fits and 'NUTS' in active:
@@ -644,8 +660,14 @@ class Evaluator:
         logger.info('\nConverged subset (%s): %d / %d', self.cfg.convergence_mode, n_conv, n)
 
         rows = self._subsetEval(
-            'conv', active, raw, full_batch, conv_mask, fit_label,
-            do_plot=True, base_plot_dir=base_plot_dir,
+            'conv',
+            active,
+            raw,
+            full_batch,
+            conv_mask,
+            fit_label,
+            do_plot=True,
+            base_plot_dir=base_plot_dir,
         )
 
         # LOO-reliable subset: NUTS Pareto-k filter applied on top of convergence
@@ -657,8 +679,14 @@ class Evaluator:
             logger.info('Reliable LOO subset (k<%.1f): %d / %d', k_thr, n_k, n_conv)
             if 0 < n_k < n_conv:
                 rows += self._subsetEval(
-                    'loo', active, raw, full_batch, k_mask, fit_label,
-                    do_plot=False, base_plot_dir=base_plot_dir,
+                    'loo',
+                    active,
+                    raw,
+                    full_batch,
+                    k_mask,
+                    fit_label,
+                    do_plot=False,
+                    base_plot_dir=base_plot_dir,
                 )
 
         return rows
@@ -705,8 +733,11 @@ class Evaluator:
             plot_dir = (base_plot_dir or self.plot_dir) / tag
             plot_dir.mkdir(parents=True, exist_ok=True)
             self.plot(
-                list(sub_aligned.values()), list(summaries.values()), active,
-                sub_common_batch, plot_dir=plot_dir,
+                list(sub_aligned.values()),
+                list(summaries.values()),
+                active,
+                sub_common_batch,
+                plot_dir=plot_dir,
             )
 
         return rows
@@ -746,7 +777,9 @@ class Evaluator:
         max_rhat = _param_stat(rhat, np.nanmax)
         mean_treedepth_sat = treedepth.mean(-1) if treedepth is not None else None
 
-        loo = summary.per_dataset.loo_nll.numpy() if summary.per_dataset.loo_nll is not None else None
+        loo = (
+            summary.per_dataset.loo_nll.numpy() if summary.per_dataset.loo_nll is not None else None
+        )
         b = len(total_div)
 
         f_rhat = (max_rhat > 1.01) if max_rhat is not None else np.zeros(b, bool)

@@ -358,7 +358,7 @@ class PerDatasetMetrics:
     pp_fit: torch.Tensor | None = None            # (B,)  R² | AUC | deviance
     pp_cov_coverage: torch.Tensor | None = None   # (n_alphas, B)
     pp_cov_width: torch.Tensor | None = None      # (n_alphas, B)
-    sample_efficiency: torch.Tensor | None = None # (B,)
+    sample_efficiency: torch.Tensor | None = None   # (B,)
     pareto_k: torch.Tensor | None = None          # (B,)
     prior_nll: torch.Tensor | None = None         # (B,)  only when compute_prior=True
 
@@ -380,7 +380,9 @@ class PerDatasetMetrics:
 
     @property
     def meff(self) -> float | None:
-        return float(self.sample_efficiency.median()) if self.sample_efficiency is not None else None
+        return (
+            float(self.sample_efficiency.median()) if self.sample_efficiency is not None else None
+        )
 
     @property
     def mk(self) -> float | None:
@@ -391,6 +393,7 @@ class PerDatasetMetrics:
         if self.pp_cov_coverage is None:
             return None
         from metabeta.evaluation.intervals import ALPHAS
+
         n = min(len(ALPHAS), self.pp_cov_coverage.shape[0])
         nominals = self.pp_cov_coverage.new_tensor([1.0 - a for a in ALPHAS[:n]])
         err = (self.pp_cov_coverage[:n] - nominals.unsqueeze(-1)).abs()  # (n, B)
@@ -401,6 +404,7 @@ class PerDatasetMetrics:
         if self.pp_cov_width is None:
             return None
         from metabeta.evaluation.intervals import ALPHAS
+
         try:
             idx = ALPHAS.index(0.1)
         except ValueError:
@@ -616,5 +620,3 @@ def dictMean(td: dict[str, torch.Tensor]) -> float:
     if cat.numel() == 0 or torch.isnan(cat).all():
         return float('nan')
     return torch.nanmean(cat).item()
-
-

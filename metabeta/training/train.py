@@ -289,7 +289,9 @@ class Trainer:
             print(f'WARNING: Could not resume wandb run {self.wandb_run_id!r}; starting a new run.')
             init_kwargs.update(id=None, resume=None)
             self.wandb_run = wandb.init(**init_kwargs)
-        wandb.config.update({'data_cfg': self.data_cfg_train, 'model_cfg': self.model_cfg.to_dict()})
+        wandb.config.update(
+            {'data_cfg': self.data_cfg_train, 'model_cfg': self.model_cfg.to_dict()}
+        )
         wandb.define_metric('train/loss_step', step_metric='step/global')
         wandb.define_metric('train/grad_norm', step_metric='step/global')
         wandb.define_metric('train/loss_epoch', step_metric='step/epoch')
@@ -327,8 +329,11 @@ class Trainer:
                 logger.warning('NUTS reference: %s not found, skipping.', fit_path)
                 return
             dl_ref = Dataloader(
-                fit_path, batch_size=8, sortish=True,
-                max_d=self.cfg.max_d, max_q=self.cfg.max_q,
+                fit_path,
+                batch_size=8,
+                sortish=True,
+                max_d=self.cfg.max_d,
+                max_q=self.cfg.max_q,
             )
             batch = dl_ref.fullBatch()
             del dl_ref  # free fit file from memory before the summary computation
@@ -360,13 +365,15 @@ class Trainer:
 
         if self.wandb_run is not None:
             mean_nrmse, mean_eace, median_nll = self.getTrackingMetrics(ref_summary)
-            wandb.log({
-                'ref/nuts/table': wandb.Html(f'<pre>{summary_table}</pre>'),
-                'ref/nuts/mean_nrmse': float(mean_nrmse),
-                'ref/nuts/mean_eace': float(mean_eace),
-                'ref/nuts/median_nll': float(median_nll),
-                'step/epoch': 0,
-            })
+            wandb.log(
+                {
+                    'ref/nuts/table': wandb.Html(f'<pre>{summary_table}</pre>'),
+                    'ref/nuts/mean_nrmse': float(mean_nrmse),
+                    'ref/nuts/mean_eace': float(mean_eace),
+                    'ref/nuts/median_nll': float(median_nll),
+                    'step/epoch': 0,
+                }
+            )
 
     def save(self, prefix: str = 'latest') -> None:
         path = Path(self.ckpt_dir, prefix + '.pt')
@@ -637,10 +644,12 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         summary_table = summaryTable(eval_summary, self.cfg.likelihood_family)
         logger.info(summary_table)
         if self.cfg.wandb:
-            wandb.log({
-                'summary/table': wandb.Html(f'<pre>{summary_table}</pre>'),
-                'step/epoch': self.current_epoch,
-            })
+            wandb.log(
+                {
+                    'summary/table': wandb.Html(f'<pre>{summary_table}</pre>'),
+                    'step/epoch': self.current_epoch,
+                }
+            )
 
         # make plots
         if getattr(self.cfg, 'plot', False):
@@ -680,12 +689,14 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             show_corr_rfx=show_corr_rfx,
         )
         if self.cfg.wandb:
-            wandb.log({
-                'plot/recovery': wandb.Image(str(path_r)),
-                'plot/coverage': wandb.Image(str(path_c)),
-                'plot/sbc': wandb.Image(str(path_s)),
-                'step/epoch': self.current_epoch,
-            })
+            wandb.log(
+                {
+                    'plot/recovery': wandb.Image(str(path_r)),
+                    'plot/coverage': wandb.Image(str(path_c)),
+                    'plot/sbc': wandb.Image(str(path_s)),
+                    'step/epoch': self.current_epoch,
+                }
+            )
 
     def go(self) -> None:
         # optionally load previous checkpoint
