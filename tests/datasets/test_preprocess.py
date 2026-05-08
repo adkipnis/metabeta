@@ -314,11 +314,13 @@ def test_hi_card_cat_routed_as_random_effect():
     rng = np.random.default_rng(0)
     n, m = 200, 20  # 20 levels > max_categories=10 → should become random effect
     group = np.repeat(np.arange(m), n // m).astype(str)
-    df = pd.DataFrame({
-        'school': group,
-        'x': rng.normal(size=n),
-        'y': rng.normal(size=n),
-    })
+    df = pd.DataFrame(
+        {
+            'school': group,
+            'x': rng.normal(size=n),
+            'y': rng.normal(size=n),
+        }
+    )
     result = DataPreprocessor().fit_transform(df)
     # 'school' should be the grouping variable, not a dummy column
     assert result['groups'] is not None
