@@ -33,15 +33,18 @@ def counts2groups(ns: np.ndarray) -> np.ndarray:
 
 def truncLogUni(
     rng: np.random.Generator,
-    low: float,
-    high: float,
-    size: int | tuple[int, ...],
+    low: float | np.ndarray,
+    high: float | np.ndarray,
+    size: int | tuple[int, ...] | None = None,
     add: float = 0.0,
     round: bool = False,
 ) -> np.ndarray:
-    """sample from log uniform in [low, high) + {add} and optionally floor to integer"""
-    assert 0 < low, 'lower bound must be positive'
-    assert low <= high, 'lower bound smaller than upper bound'
+    """Sample from log-uniform over [low, high) + {add}, optionally flooring to integer.
+
+    low/high may be arrays; size is inferred from their broadcast shape when omitted.
+    """
+    assert np.all(np.asarray(low) > 0), 'lower bound must be positive'
+    assert np.all(np.asarray(low) <= np.asarray(high)), 'lower bound must not exceed upper bound'
     log_low = np.log(low)
     log_high = np.log(high)
     out = rng.uniform(log_low, log_high, size)
