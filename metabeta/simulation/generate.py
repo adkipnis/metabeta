@@ -655,7 +655,7 @@ likelihood: {LIKELIHOOD_FAMILIES[cfg.likelihood_family]}
 ds type:    {cfg.ds_type}
 partition:  {cfg.partition}
 epochs:     {epoch_range}
-d:          1–{cfg.max_d}
+d:          {cfg.min_d}–{cfg.max_d}
 q:          1–{cfg.max_q}
 m:          {cfg.min_m}–{self.max_m_feasible}
 n:          {cfg.min_n}–{cfg.max_n}
