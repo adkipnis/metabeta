@@ -92,7 +92,7 @@ def setup() -> argparse.Namespace:
         '--pred_coverage',
         action=argparse.BooleanOptionalAction,
         default=False,
-        help='Compute predictive interval coverage/width (adds Pred. EACE and 90% width to output)',
+        help='Compute predictive interval coverage/width (adds Pred. EACE and 90%% width to output)',
     )
     parser.add_argument(
         '--solo',
@@ -109,13 +109,6 @@ def setup() -> argparse.Namespace:
     )
 
     args = parser.parse_args()
-    args.config = Path('..', 'outputs', 'checkpoints', 'normal_dsmall-n-mixed_mlarge-r_s3', 'config.yaml')
-    # args.config = Path('..', 'outputs', 'checkpoints', 'normal_dmedium-n-mixed_mlarge-r_s3', 'config.yaml')
-    # args.config = Path('..', 'outputs', 'checkpoints', 'normal_dlarge-n-mixed_mlarge-r_s0', 'config.yaml')
-    
-    # args.config = Path('..', 'outputs', 'checkpoints', 'bernoulli_dsmall-b-mixed_mlarge-r_s2', 'config.yaml')
-    # args.config = Path('..', 'outputs', 'checkpoints', 'poisson_dsmall-p-mixed_mlarge-r_s2', 'config.yaml')
-
 
     # Load config from checkpoint or file
     if hasattr(args, 'checkpoint') and args.checkpoint:
@@ -617,14 +610,14 @@ class Evaluator:
         # NUTS proposal
         proposal_nuts = self._fit2proposal(full_batch, prefix='nuts')
         # summary_nuts = self.summary(proposal_nuts, full_batch)
-        
+
         # ADVI proposal
         advi_mask = self._fitBatchMask(full_batch, prefix='advi')
         advi_batch = subsetBatch(full_batch, advi_mask)
         proposal_advi = self._fit2proposal(advi_batch, prefix='advi')
         print('ADVI')
         summary_advi = self.summary(proposal_advi, advi_batch)
-        
+
         # Subset to batch where each method has a proposal
         mb_sub = subsetProposal(proposal_mb, advi_mask)
         nuts_sub = subsetProposal(proposal_nuts, advi_mask)
@@ -632,6 +625,7 @@ class Evaluator:
         summary_mb_sub = self.summary(mb_sub, advi_batch)
         print('NUTS')
         summary_nuts_sub = self.summary(nuts_sub, advi_batch)
+
         self.plot(
             [mb_sub, nuts_sub, proposal_advi],
             [summary_mb_sub, summary_nuts_sub, summary_advi],
@@ -721,8 +715,7 @@ class Evaluator:
         if self.cfg.save_tables:
             self.saveTables(rows)
 
-
-# =============================================================================
+#=============================================================================
 def main() -> None:
     cfg = setup()
     setupLogging(cfg.verbosity)
