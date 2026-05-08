@@ -94,12 +94,12 @@ def plotCoverage(
             + getNames('rfx', proposal.q)
         )
         stats = {
-            'ECE': 100 * dictMean(summary.ece),
-            'EACE': 100 * dictMean(summary.eace),
+            'ECE': 100 * dictMean(summary.aggregated.ece),
+            'EACE': 100 * dictMean(summary.aggregated.eace),
         }
         _plotCoverage(
             axs[i],
-            summary.coverage,
+            summary.aggregated.coverage,
             names,
             stats,
             title=label,
