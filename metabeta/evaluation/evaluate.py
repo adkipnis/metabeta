@@ -4,6 +4,7 @@ import logging
 import argparse
 from pathlib import Path
 
+import numpy as np
 import torch
 from tabulate import tabulate
 from tqdm import tqdm
@@ -28,8 +29,6 @@ from metabeta.utils.evaluation import (
     nutsConvergeMask,
     subsetProposal,
 )
-import numpy as np
-
 from metabeta.models.approximator import Approximator
 from metabeta.utils.moe import moeEstimate
 from metabeta.evaluation.summary import getSummary, summaryTable
@@ -37,32 +36,23 @@ from metabeta.plotting import plotComparison
 
 logger = logging.getLogger('evaluate.py')
 
+_ALL_MODELS = ('MB', 'NUTS', 'ADVI')
+_FIT_MODELS = frozenset(('NUTS', 'ADVI'))
+
 
 def setup() -> argparse.Namespace:
-    """Parse command line arguments for evaluation."""
+    # fmt: off
     parser = argparse.ArgumentParser(argument_default=argparse.SUPPRESS)
-
-    # Primary: Load from checkpoint config
     parser.add_argument('--checkpoint', type=str, help='Path to checkpoint directory')
-    parser.add_argument(
-        '--prefix', type=str, default='latest', help='Checkpoint prefix: best or latest'
-    )
-
-    # Legacy: Load from config file
+    parser.add_argument('--prefix', type=str, default='latest', help='Checkpoint prefix: best or latest')
     parser.add_argument('--config', type=str, help='Path to custom YAML config file')
-
-    # Config overrides
     parser.add_argument('--model_id', type=str)
     parser.add_argument('--r_tag', type=str)
     parser.add_argument('--data_id', type=str)
     parser.add_argument('--data_id_valid', type=str)
     parser.add_argument('--data_id_test', type=str)
-
-    # CLI-only runtime params
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--verbosity', type=int, default=1)
-
-    # Evaluation settings (override checkpoint config)
     parser.add_argument('--n_samples', type=int, default=1000)
     parser.add_argument('--conformal', action=argparse.BooleanOptionalAction)
     parser.add_argument('--k', type=int, default=0, help='pseudo-MoE permuted views (0=off)')
@@ -70,63 +60,47 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--save_tables', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--outdir', type=str)
     parser.add_argument(
-        '--converged_subset',
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help='Also evaluate/plot on the NUTS-converged subset of test datasets',
+        '--partition', type=str, default='test', choices=['valid', 'test', 'all'],
+        help='Data partition(s) to evaluate: valid, test, or all (default: test)',
     )
     parser.add_argument(
-        '--convergence_mode',
-        type=str,
-        default='liberal',
-        choices=['strict', 'liberal'],
-        help='NUTS convergence filter mode for converged_subset (default: liberal)',
+        '--models', type=str, default='all',
+        help='Models to evaluate: comma-separated MB/NUTS/ADVI or "all" (default: all)',
     )
     parser.add_argument(
-        '--pareto_k_thr',
-        type=float,
-        default=0.7,
-        help='Pareto-k threshold for LOO-NLL subset; filters on NUTS k only (default: 0.7)',
+        '--converged_subset', action=argparse.BooleanOptionalAction, default=False,
+        help='Also evaluate on the NUTS-converged subset',
     )
     parser.add_argument(
-        '--pred_coverage',
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help='Compute predictive interval coverage/width (adds Pred. EACE and 90%% width to output)',
+        '--convergence_mode', type=str, default='liberal', choices=['strict', 'liberal'],
+        help='NUTS convergence filter mode (default: liberal)',
     )
     parser.add_argument(
-        '--solo',
-        action='store_true',
-        default=False,
-        help='Only evaluate and plot MB (skip NUTS and ADVI)',
+        '--pareto_k_thr', type=float, default=0.7,
+        help='Pareto-k threshold for LOO-NLL subset (default: 0.7)',
     )
     parser.add_argument(
-        '--comparison_legend',
-        type=str,
-        choices=['panel', 'right'],
-        default='panel',
-        help='Place comparison plot legends in each panel or once at the right (default: panel)',
+        '--pred_coverage', action=argparse.BooleanOptionalAction, default=False,
+        help='Compute predictive interval coverage/width',
     )
-
+    parser.add_argument(
+        '--comparison_legend', type=str, choices=['panel', 'right'], default='panel',
+        help='Comparison plot legend placement (default: panel)',
+    )
+    # fmt: on
     args = parser.parse_args()
 
-    # Load config from checkpoint or file
     if hasattr(args, 'checkpoint') and args.checkpoint:
-        # Load from checkpoint directory
         checkpoint_path = Path(args.checkpoint)
         cfg_dict = loadConfigFromCheckpoint(checkpoint_path)
-        # Store checkpoint path and prefix for loading model
         cfg_dict['_checkpoint_dir'] = str(checkpoint_path)
         cfg_dict['_checkpoint_prefix'] = args.prefix
-        # Merge CLI overrides
         for k, v in vars(args).items():
             if v is not None and k not in ['checkpoint', 'prefix', 'config', 'name']:
                 cfg_dict[k] = v
     elif hasattr(args, 'config') and args.config:
-        # Custom YAML config
         with open(args.config) as f:
             cfg_dict = yaml.safe_load(f)
-        # Merge CLI args
         for k, v in vars(args).items():
             if v is not None and k not in ['checkpoint', 'config', 'name']:
                 cfg_dict[k] = v
@@ -143,7 +117,7 @@ def setup() -> argparse.Namespace:
     return argparse.Namespace(**cfg_dict)
 
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 class Evaluator:
     def __init__(self, cfg: argparse.Namespace) -> None:
         self.cfg = cfg
@@ -151,44 +125,28 @@ class Evaluator:
         setSeed(cfg.seed)
         self.device = setDevice(cfg.device)
 
-        if not hasattr(self.cfg, 'batch_size'):
-            self.cfg.batch_size = 8
-        if not hasattr(self.cfg, 'k'):
-            self.cfg.k = 0
-        if not hasattr(self.cfg, 'save_tables'):
-            self.cfg.save_tables = False
-        if not hasattr(self.cfg, 'converged_subset'):
-            self.cfg.converged_subset = False
-        if not hasattr(self.cfg, 'convergence_mode'):
-            self.cfg.convergence_mode = 'liberal'
-        if not hasattr(self.cfg, 'pareto_k_thr'):
-            self.cfg.pareto_k_thr = 0.7
-        if not hasattr(self.cfg, 'solo'):
-            self.cfg.solo = False
-        if not hasattr(self.cfg, 'outdir'):
-            self.cfg.outdir = str(Path(self.dir, '..', 'outputs', 'results'))
+        self.cfg.batch_size = getattr(cfg, 'batch_size', 8)
+        self.cfg.k = getattr(cfg, 'k', 0)
+        self.cfg.save_tables = getattr(cfg, 'save_tables', False)
+        self.cfg.converged_subset = getattr(cfg, 'converged_subset', False)
+        self.cfg.convergence_mode = getattr(cfg, 'convergence_mode', 'liberal')
+        self.cfg.pareto_k_thr = getattr(cfg, 'pareto_k_thr', 0.7)
+        self.cfg.outdir = getattr(cfg, 'outdir', str(Path(self.dir, '..', 'outputs', 'results')))
 
-        # checkpoint dir
-        if hasattr(self.cfg, '_checkpoint_dir'):
-            # Use explicit checkpoint directory from --checkpoint arg
-            self.ckpt_dir = Path(self.cfg._checkpoint_dir)
+        self.run_name = runName(vars(cfg))
+        if hasattr(cfg, '_checkpoint_dir'):
+            self.ckpt_dir = Path(cfg._checkpoint_dir)
         else:
-            # Legacy: construct from run name
-            self.run_name = runName(vars(self.cfg))
             self.ckpt_dir = Path(self.dir, '..', 'outputs', 'checkpoints', self.run_name)
-        self.checkpoint_prefix = getattr(self.cfg, 'prefix', 'latest')
+        self.checkpoint_prefix = getattr(cfg, 'prefix', 'latest')
 
-        # load data and model
         self._initData()
         self._initModel()
         self._load()
 
-        # plot dir
-        self.plot_dir = None
         self.plot_dir = Path(self.dir, '..', 'outputs', 'plots', self.run_name)
         self.plot_dir.mkdir(parents=True, exist_ok=True)
 
-        # results dir
         self.results_dir = None
         if self.cfg.save_tables:
             base_dir = Path(self.cfg.outdir)
@@ -196,42 +154,42 @@ class Evaluator:
             self.results_dir.mkdir(parents=True, exist_ok=True)
 
     def _initData(self) -> None:
-        # assimilate training data config for model/checkpoint consistency
         self.data_cfg_train = loadDataConfig(self.cfg.data_id)
         assimilateConfig(self.cfg, self.data_cfg_train)
-
-        # allow overriding validation and test data ids independently from training
         self.cfg.data_id_valid = getattr(self.cfg, 'data_id_valid', self.cfg.data_id)
         self.cfg.data_id_test = getattr(self.cfg, 'data_id_test', self.cfg.data_id_valid)
         self.data_cfg_valid = loadDataConfig(self.cfg.data_id_valid)
         self.data_cfg_test = loadDataConfig(self.cfg.data_id_test)
-
-        # keep legacy attr name for checkpoint comparison compatibility
         self.data_cfg = self.data_cfg_train
+        self.dl_valid, self.data_path_valid = self._getDataLoader(
+            'valid', batch_size=self.cfg.batch_size
+        )
+        self.dl_test, self.data_path_test = self._getDataLoader(
+            'test', batch_size=self.cfg.batch_size
+        )
 
-        # get dataloaders
-        self.dl_valid = self._getDataLoader('valid', batch_size=self.cfg.batch_size)
-        self.dl_test = self._getDataLoader('test', batch_size=self.cfg.batch_size)
-
-    def _getDataLoader(self, partition: str, batch_size: int | None = None) -> Dataloader:
+    def _getDataLoader(
+        self, partition: str, batch_size: int | None = None
+    ) -> tuple[Dataloader, Path]:
         data_cfg = self.data_cfg_test if partition == 'test' else self.data_cfg_valid
         data_fname = datasetFilename(partition)
         data_subdir = data_cfg['data_id']
         data_path = Path(self.dir, '..', 'outputs', 'data', data_subdir, data_fname)
-        if partition == 'test':
-            data_path = data_path.with_suffix('.fit.npz')
+        fit_path = data_path.with_suffix('.fit.npz')
+        if fit_path.exists():
+            data_path = fit_path
         assert data_path.exists(), f'data file not found: {data_path}'
         sortish = batch_size is not None
-        return Dataloader(
+        dl = Dataloader(
             data_path,
             batch_size=batch_size,
             sortish=sortish,
             max_d=self.cfg.max_d,
             max_q=self.cfg.max_q,
         )
+        return dl, data_path
 
     def _initModel(self) -> None:
-        """Load model architecture from config and restore checkpoint weights."""
         if hasattr(self.cfg, 'model_cfg') and isinstance(self.cfg.model_cfg, ApproximatorConfig):
             self.model_cfg = self.cfg.model_cfg
         else:
@@ -250,19 +208,17 @@ class Evaluator:
         path = Path(self.ckpt_dir, prefix + '.pt')
         assert path.exists(), f'checkpoint not found: {path}'
         payload = torch.load(path, map_location=self.device, weights_only=False)
-
-        # compare configs
         if self.data_cfg != payload['data_cfg']:
             logger.warning('data config mismatch between current and checkpoint')
         if self.model_cfg.to_dict() != payload['model_cfg']:
             logger.warning('model config mismatch between current and checkpoint')
-
-        # load states
         self.model.load_state_dict(payload['model_state'])
-
-        # optionally compile
         if self.cfg.compile and self.device.type == 'cuda':
             self.model.compile()
+
+    # -------------------------------------------------------------------------
+    # Inference
+    # -------------------------------------------------------------------------
 
     def _fit2proposal(self, batch: dict[str, torch.Tensor], prefix: str) -> Proposal:
         proposed = {}
@@ -291,14 +247,12 @@ class Evaluator:
         return ~batch[failed_key].cpu().numpy().astype(bool)
 
     def _sampleBatch(self, batch: dict[str, torch.Tensor]) -> Proposal:
-        """Sample a proposal from a batch (no MoE)."""
         proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
         if self.cfg.rescale:
             proposal.rescale(batch['sd_y'])
         return proposal
 
     def _sampleMoe(self, batch: dict[str, torch.Tensor], n_datasets_seen: int) -> list[Proposal]:
-        """Sample with pseudo-MoE (B=1 per dataset), optionally applying IS."""
         B = batch['X'].shape[0]
         proposals = []
         for i in range(B):
@@ -341,10 +295,13 @@ class Evaluator:
                 proposals.append(proposal)
             n_datasets += batch['X'].shape[0]
         t1 = time.perf_counter()
-
         merged = concatProposalsBatch(proposals)
         merged.tpd = (t1 - t0) / max(n_datasets, 1)
         return merged
+
+    # -------------------------------------------------------------------------
+    # Summary helpers
+    # -------------------------------------------------------------------------
 
     def summary(
         self,
@@ -360,9 +317,34 @@ class Evaluator:
         eval_summary = getSummary(
             proposal, batch, likelihood_family=lf, compute_pred_coverage=pred_cov
         )
-        summary_table = summaryTable(eval_summary, lf)
-        logger.info(summary_table)
+        logger.info(summaryTable(eval_summary, lf))
         return eval_summary
+
+    def _summaryCachePath(self, partition: str, method: str) -> Path:
+        data_path = self.data_path_test if partition == 'test' else self.data_path_valid
+        return data_path.parent / f'summary_{partition}_{method}.pt'
+
+    def _loadOrComputeSummary(
+        self,
+        proposal: Proposal,
+        batch: dict[str, torch.Tensor],
+        partition: str,
+        method: str,
+    ) -> EvaluationSummary:
+        cache_path = self._summaryCachePath(partition, method)
+        data_path = self.data_path_test if partition == 'test' else self.data_path_valid
+        ref_mtime = data_path.stat().st_mtime if data_path.exists() else 0.0
+        if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
+            logger.info('Loading cached %s/%s summary from %s', partition, method, cache_path)
+            return EvaluationSummary.load(cache_path)
+        result = self.summary(proposal, batch)
+        result.save(cache_path)
+        logger.info('Saved %s/%s summary to %s', partition, method, cache_path)
+        return result
+
+    # -------------------------------------------------------------------------
+    # Output
+    # -------------------------------------------------------------------------
 
     def plot(
         self,
@@ -385,15 +367,26 @@ class Evaluator:
             legend_right=getattr(self.cfg, 'comparison_legend', 'panel') == 'right',
         )
 
-    def testrun(self) -> None:
-        full_batch = self.dl_valid.fullBatch()
-        proposal_mb = self.sampleMinibatched(self.dl_valid, 'MB')
-        summary_mb = self.summary(proposal_mb, full_batch)
-        self.plot([proposal_mb], [summary_mb], ['MB'], full_batch)
-
     def _fitLabel(self) -> str:
-        labels = {0: 'ppR2', 1: 'ppAUC', 2: 'ppDev'}
-        return labels.get(self.cfg.likelihood_family, 'ppR2')
+        return {0: 'ppR2', 1: 'ppAUC', 2: 'ppDev'}.get(self.cfg.likelihood_family, 'ppR2')
+
+    def _makeRow(self, label: str, summary: EvaluationSummary, fit_label: str) -> dict:
+        ag, pd = summary.aggregated, summary.per_dataset
+        return {
+            'method': label,
+            'R': dictMean(ag.corr),
+            'NRMSE': dictMean(ag.nrmse),
+            'ECE': dictMean(ag.ece),
+            'RFX_joint_ECE': ag.rfx_joint_ece,
+            'RFX_joint_EACE': ag.rfx_joint_eace,
+            'ppNLL': pd.mnll,
+            fit_label: pd.mfit,
+            'tpd': summary.tpd,
+            'IS_eff': pd.meff,
+            'Pareto_k': pd.mk,
+            'ppEACE': pd.pp_eace,
+            'ppWidth90': pd.pp_width_90,
+        }
 
     def _bestIndices(
         self,
@@ -437,58 +430,248 @@ class Evaluator:
         direction = {k: v for k, v in direction.items() if k in metric_names}
         best = self._bestIndices(rows, metric_names, direction)
 
-        table_rows = []
-        for i, r in enumerate(rows):
-            row = [r['method']]
-            for metric in metric_names:
-                val = r[metric]
-                if val is None:
-                    cell = 'NA'
-                else:
-                    cell = f'{val:.4f}'
-                    if i in best.get(metric, set()):
-                        cell = f'**{cell}**'
-                row.append(cell)
-            table_rows.append(row)
+        def _fmt(val: float | None, i: int, metric: str) -> str:
+            if val is None:
+                return 'NA'
+            cell = f'{val:.4f}'
+            return f'**{cell}**' if i in best.get(metric, set()) else cell
+
+        def _fmt_tex(val: float | None, i: int, metric: str) -> str:
+            if val is None:
+                return 'NA'
+            cell = f'{val:.4f}'
+            return f'\\textbf{{{cell}}}' if i in best.get(metric, set()) else cell
 
         headers = ['Method'] + metric_names
-        md_table = tabulate(table_rows, headers=headers, tablefmt='pipe', stralign='right')
+        md_rows = [[r['method']] + [_fmt(r[m], i, m) for m in metric_names] for i, r in enumerate(rows)]
+        tex_rows = [[r['method']] + [_fmt_tex(r[m], i, m) for m in metric_names] for i, r in enumerate(rows)]
+
         md_path = self.results_dir / 'evaluate.md'
-        md_path.write_text(f'# Evaluation Results\n\n{md_table}\n')
-
-        table_rows_tex = []
-        for i, r in enumerate(rows):
-            row = [r['method']]
-            for metric in metric_names:
-                val = r[metric]
-                if val is None:
-                    cell = 'NA'
-                else:
-                    cell = f'{val:.4f}'
-                    if i in best.get(metric, set()):
-                        cell = f'\\textbf{{{cell}}}'
-                row.append(cell)
-            table_rows_tex.append(row)
-
-        tex_table = tabulate(
-            table_rows_tex, headers=headers, tablefmt='latex_booktabs', stralign='right'
+        md_path.write_text(
+            f'# Evaluation Results\n\n'
+            + tabulate(md_rows, headers=headers, tablefmt='pipe', stralign='right')
+            + '\n'
         )
+
         tex_path = self.results_dir / 'evaluate.tex'
-        tex_path.write_text(tex_table + '\n')
+        tex_path.write_text(
+            tabulate(tex_rows, headers=headers, tablefmt='latex_booktabs', stralign='right') + '\n'
+        )
+
+    # -------------------------------------------------------------------------
+    # Partition-level evaluation
+    # -------------------------------------------------------------------------
+
+    def _resolvePartitions(self) -> list[str]:
+        p = getattr(self.cfg, 'partition', 'test')
+        return ['valid', 'test'] if p == 'all' else [p]
+
+    def _resolveModels(self) -> list[str]:
+        m = getattr(self.cfg, 'models', 'all')
+        if m == 'all':
+            return list(_ALL_MODELS)
+        models = [x.strip().upper() for x in m.split(',')]
+        unknown = [x for x in models if x not in _ALL_MODELS]
+        if unknown:
+            raise ValueError(f'unknown model(s): {unknown}; valid: {_ALL_MODELS}')
+        return models
+
+    def _hasFits(self, partition: str) -> bool:
+        path = self.data_path_test if partition == 'test' else self.data_path_valid
+        return path.name.endswith('.fit.npz')
+
+    def _getPartitionData(self, partition: str) -> tuple[Dataloader, dict, Path]:
+        if partition == 'test':
+            return self.dl_test, self.dl_test.fullBatch(), self.data_path_test
+        return self.dl_valid, self.dl_valid.fullBatch(), self.data_path_valid
+
+    def _getProposalAndMask(
+        self, model: str, partition: str, full_batch: dict, dl: Dataloader
+    ) -> tuple[Proposal, np.ndarray | None]:
+        """Return (proposal, full-batch mask) — mask is None when model covers all datasets."""
+        if model == 'MB':
+            return self.sampleMinibatched(dl, f'MB ({partition})'), None
+        elif model == 'NUTS':
+            return self._fit2proposal(full_batch, prefix='nuts'), None
+        elif model == 'ADVI':
+            mask = self._fitBatchMask(full_batch, prefix='advi')
+            return self._fit2proposal(subsetBatch(full_batch, mask), prefix='advi'), mask
+        raise ValueError(f'unknown model: {model}')
+
+    @staticmethod
+    def _commonMask(masks: list[np.ndarray | None], n: int) -> np.ndarray | None:
+        """Intersection of non-None boolean masks; returns None if all are None."""
+        result = np.ones(n, dtype=bool)
+        any_mask = False
+        for m in masks:
+            if m is not None:
+                result &= m
+                any_mask = True
+        return result if any_mask else None
+
+    @staticmethod
+    def _alignToCommon(
+        proposal: Proposal,
+        src_mask: np.ndarray | None,
+        common_mask: np.ndarray | None,
+    ) -> Proposal:
+        """Subset a proposal (indexed by src_mask in full batch) down to common_mask."""
+        if common_mask is None:
+            return proposal
+        if src_mask is None:
+            return subsetProposal(proposal, common_mask)
+        # common_mask[src_mask]: which of the src positions survive in the common set
+        return subsetProposal(proposal, common_mask[src_mask])
+
+    def _evalPartition(
+        self, partition: str, models: list[str], fit_label: str, multi: bool
+    ) -> list[dict]:
+        dl, full_batch, _ = self._getPartitionData(partition)
+        has_fits = self._hasFits(partition)
+        active = [m for m in models if m == 'MB' or (has_fits and m in _FIT_MODELS)]
+
+        if not active:
+            logger.warning('No active models for partition=%s (no fit file found)', partition)
+            return []
+
+        # Collect raw (native-batch) proposals
+        raw: dict[str, tuple[Proposal, np.ndarray | None]] = {
+            model: self._getProposalAndMask(model, partition, full_batch, dl)
+            for model in active
+        }
+
+        # Align all proposals to their common batch (intersection of all native masks)
+        n = full_batch['X'].shape[0]
+        common_mask = self._commonMask([mask for _, mask in raw.values()], n)
+        common_batch = subsetBatch(full_batch, common_mask) if common_mask is not None else full_batch
+        aligned: dict[str, Proposal] = {
+            model: self._alignToCommon(proposal, mask, common_mask)
+            for model, (proposal, mask) in raw.items()
+        }
+
+        # Compute summaries; cache data-derived methods when they are on their native batch
+        summaries: dict[str, EvaluationSummary] = {}
+        rows: list[dict] = []
+        for model in active:
+            native_batch = model in _FIT_MODELS and (
+                model == 'ADVI' or (model == 'NUTS' and common_mask is None)
+            )
+            if native_batch:
+                s = self._loadOrComputeSummary(aligned[model], common_batch, partition, model.lower())
+            else:
+                s = self.summary(aligned[model], common_batch)
+            summaries[model] = s
+            label = f'{model}_{partition}' if multi else model
+            rows.append(self._makeRow(label, s, fit_label))
+
+        # Comparison plot
+        plot_dir = self.plot_dir if partition == 'test' else self.plot_dir / partition
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        self.plot(list(aligned.values()), list(summaries.values()), active, common_batch, plot_dir=plot_dir)
+
+        # NUTS convergence diagnostics and sub-population rows
+        if self.cfg.converged_subset and has_fits and 'NUTS' in active:
+            rows += self._convergedRows(partition, active, raw, full_batch, fit_label, plot_dir)
+
+        return rows
+
+    def _convergedRows(
+        self,
+        partition: str,
+        active: list[str],
+        raw: dict[str, tuple[Proposal, np.ndarray | None]],
+        full_batch: dict,
+        fit_label: str,
+        base_plot_dir: Path,
+    ) -> list[dict]:
+        """Evaluate NUTS-converged and LOO-reliable subsets; return additional table rows."""
+        nuts_proposal, _ = raw['NUTS']
+        # Full-batch NUTS summary for diagnostics (always cached)
+        summary_nuts_full = self._loadOrComputeSummary(nuts_proposal, full_batch, partition, 'nuts')
+        self._nutsFailureAnalysis(summary_nuts_full, full_batch)
+
+        n = full_batch['X'].shape[0]
+        conv_mask = nutsConvergeMask(full_batch, mode=self.cfg.convergence_mode)
+        if conv_mask is None or not (0 < int(conv_mask.sum()) < n):
+            return []
+
+        n_conv = int(conv_mask.sum())
+        logger.info('\nConverged subset (%s): %d / %d', self.cfg.convergence_mode, n_conv, n)
+
+        rows = self._subsetEval(
+            'conv', active, raw, full_batch, conv_mask, fit_label,
+            do_plot=True, base_plot_dir=base_plot_dir,
+        )
+
+        # LOO-reliable subset: NUTS Pareto-k filter applied on top of convergence
+        nuts_k = summary_nuts_full.per_dataset.loo_pareto_k
+        if nuts_k is not None:
+            k_thr = self.cfg.pareto_k_thr
+            k_mask = (nuts_k < k_thr).numpy() & conv_mask
+            n_k = int(k_mask.sum())
+            logger.info('Reliable LOO subset (k<%.1f): %d / %d', k_thr, n_k, n_conv)
+            if 0 < n_k < n_conv:
+                rows += self._subsetEval(
+                    'loo', active, raw, full_batch, k_mask, fit_label,
+                    do_plot=False, base_plot_dir=base_plot_dir,
+                )
+
+        return rows
+
+    def _subsetEval(
+        self,
+        tag: str,
+        active: list[str],
+        raw: dict[str, tuple[Proposal, np.ndarray | None]],
+        full_batch: dict,
+        subset_mask: np.ndarray,
+        fit_label: str,
+        do_plot: bool = False,
+        base_plot_dir: Path | None = None,
+    ) -> list[dict]:
+        """Evaluate active models on the subset of full_batch selected by subset_mask."""
+        n = full_batch['X'].shape[0]
+
+        # Re-index each model's proposal into the subset_mask context
+        sub_raw: dict[str, tuple[Proposal, np.ndarray | None]] = {}
+        for model, (proposal, src_mask) in raw.items():
+            if src_mask is None:
+                sub_raw[model] = (subsetProposal(proposal, subset_mask), subset_mask)
+            else:
+                new_mask = src_mask & subset_mask
+                sub_raw[model] = (subsetProposal(proposal, subset_mask[src_mask]), new_mask)
+
+        # Align within the subset context (handles any model with a narrower native mask)
+        sub_common_mask = self._commonMask([mask for _, mask in sub_raw.values()], n)
+        sub_common_batch = subsetBatch(full_batch, sub_common_mask)
+        sub_aligned: dict[str, Proposal] = {
+            model: self._alignToCommon(proposal, mask, sub_common_mask)
+            for model, (proposal, mask) in sub_raw.items()
+        }
+
+        summaries: dict[str, EvaluationSummary] = {}
+        rows: list[dict] = []
+        for model in active:
+            s = self.summary(sub_aligned[model], sub_common_batch)
+            summaries[model] = s
+            rows.append(self._makeRow(f'{model}_{tag}', s, fit_label))
+
+        if do_plot and len(active) > 1:
+            plot_dir = (base_plot_dir or self.plot_dir) / tag
+            plot_dir.mkdir(parents=True, exist_ok=True)
+            self.plot(
+                list(sub_aligned.values()), list(summaries.values()), active,
+                sub_common_batch, plot_dir=plot_dir,
+            )
+
+        return rows
 
     def _nutsFailureAnalysis(
         self,
         summary: EvaluationSummary,
         batch: dict[str, torch.Tensor],
     ) -> None:
-        """Report NUTS convergence diagnostics and their Spearman correlation with LOO-NLL.
-
-        Failure criteria (in descending severity):
-          1. R-hat > 1.01 on any parameter  — chains didn't converge to the same distribution
-          2. Any divergences                 — sampler hit a region of bad geometry
-          3. >5% tree-depth saturation      — trajectories truncated, stationary dist. may be wrong
-          4. Min bulk or tail ESS < 400     — too few effective samples for reliable inference
-        """
+        """Report NUTS convergence diagnostics and their Spearman correlation with LOO-NLL."""
         if 'nuts_divergences' not in batch:
             return
 
@@ -518,7 +701,7 @@ class Evaluator:
         max_rhat = _param_stat(rhat, np.nanmax)
         mean_treedepth_sat = treedepth.mean(-1) if treedepth is not None else None
 
-        loo = summary.loo_nll.numpy() if summary.loo_nll is not None else None
+        loo = summary.per_dataset.loo_nll.numpy() if summary.per_dataset.loo_nll is not None else None
         b = len(total_div)
 
         f_rhat = (max_rhat > 1.01) if max_rhat is not None else np.zeros(b, bool)
@@ -538,7 +721,6 @@ class Evaluator:
             'any failure': int(fail.sum()),
         }
 
-        # --- Spearman correlations with LOO-NLL ---
         diag_pairs = [
             ('Max R-hat', max_rhat),
             ('Total divergences', total_div),
@@ -547,7 +729,7 @@ class Evaluator:
             ('Min ESS (tail)', min_ess_tail),
             ('Duration [s]', duration),
         ]
-        rows = []
+        corr_rows = []
         if loo is not None:
             for name, diag in diag_pairs:
                 if diag is None:
@@ -556,9 +738,8 @@ class Evaluator:
                 r_s = (
                     float(spearmanr(diag[ok], loo[ok]).statistic) if ok.sum() > 2 else float('nan')
                 )
-                rows.append([name, r_s])
+                corr_rows.append([name, r_s])
 
-        # --- failure vs clean LOO-NLL ---
         lines = ['  ' + '  |  '.join(f'{k}: {v}/{b}' for k, v in counts.items())]
         if loo is not None and fail.any() and (~fail).any():
             fail_med = float(np.median(loo[fail]))
@@ -569,158 +750,37 @@ class Evaluator:
             )
 
         corr_table = tabulate(
-            rows, headers=['Diagnostic', 'ρ(LOO-NLL)'], floatfmt='.3f', tablefmt='simple'
+            corr_rows, headers=['Diagnostic', 'ρ(LOO-NLL)'], floatfmt='.3f', tablefmt='simple'
         )
         logger.info('\nNUTS diagnostics (%d datasets)\n%s\n%s\n', b, corr_table, '\n'.join(lines))
 
-    def _makeRow(self, label: str, summary: EvaluationSummary, fit_label: str) -> dict:
-        return {
-            'method': label,
-            'R': dictMean(summary.corr),
-            'NRMSE': dictMean(summary.nrmse),
-            'ECE': dictMean(summary.ece),
-            'RFX_joint_ECE': summary.rfx_joint_ece,
-            'RFX_joint_EACE': summary.rfx_joint_eace,
-            'ppNLL': summary.mnll,
-            fit_label: summary.mfit,
-            'tpd': summary.tpd,
-            'IS_eff': summary.meff,
-            'Pareto_k': summary.mk,
-            'ppEACE': summary.pp_eace,
-            'ppWidth90': summary.pp_width_90,
-        }
+    # -------------------------------------------------------------------------
+    # Entry points
+    # -------------------------------------------------------------------------
+
+    def testrun(self) -> None:
+        full_batch = self.dl_valid.fullBatch()
+        proposal_mb = self.sampleMinibatched(self.dl_valid, 'MB')
+        summary_mb = self.summary(proposal_mb, full_batch)
+        self.plot([proposal_mb], [summary_mb], ['MB'], full_batch)
 
     def go(self) -> None:
-        full_batch = self.dl_test.fullBatch()
+        partitions = self._resolvePartitions()
+        models = self._resolveModels()
         fit_label = self._fitLabel()
-
-        if self.cfg.solo:
-            proposal_mb = self.sampleMinibatched(self.dl_test, 'MB')
-            summary_mb = self.summary(proposal_mb, full_batch)
-            self.plot([proposal_mb], [summary_mb], ['MB'], full_batch)
-            rows = [self._makeRow('MB', summary_mb, fit_label)]
-            if self.cfg.save_tables:
-                self.saveTables(rows)
-            return
-
-        # MB proposal
-        proposal_mb = self.sampleMinibatched(self.dl_test, 'MB')
-        # summary_mb = self.summary(proposal_mb, full_batch)
-
-        # NUTS proposal
-        proposal_nuts = self._fit2proposal(full_batch, prefix='nuts')
-        # summary_nuts = self.summary(proposal_nuts, full_batch)
-
-        # ADVI proposal
-        advi_mask = self._fitBatchMask(full_batch, prefix='advi')
-        advi_batch = subsetBatch(full_batch, advi_mask)
-        proposal_advi = self._fit2proposal(advi_batch, prefix='advi')
-        print('ADVI')
-        summary_advi = self.summary(proposal_advi, advi_batch)
-
-        # Subset to batch where each method has a proposal
-        mb_sub = subsetProposal(proposal_mb, advi_mask)
-        nuts_sub = subsetProposal(proposal_nuts, advi_mask)
-        print('MB')
-        summary_mb_sub = self.summary(mb_sub, advi_batch)
-        print('NUTS')
-        summary_nuts_sub = self.summary(nuts_sub, advi_batch)
-
-        self.plot(
-            [mb_sub, nuts_sub, proposal_advi],
-            [summary_mb_sub, summary_nuts_sub, summary_advi],
-            ['MB', 'NUTS', 'ADVI'],
-            advi_batch,
-        )
-
-        rows = []
-        for label, summary in [
-            ('MB', summary_mb_sub),
-            ('NUTS', summary_nuts_sub),
-            ('ADVI', summary_advi),
-        ]:
-            rows.append(self._makeRow(label, summary, fit_label))
-
-        # --- converged subset ---
-        if self.cfg.converged_subset:
-            summary_nuts = self.summary(proposal_nuts, full_batch)
-            self._nutsFailureAnalysis(summary_nuts, full_batch)
-            conv_mask = nutsConvergeMask(full_batch, mode=self.cfg.convergence_mode)
-            if conv_mask is not None:
-                n_conv = int(conv_mask.sum())
-                n_total = len(conv_mask)
-                logger.info(
-                    '\nConverged subset (%s): %d / %d datasets',
-                    self.cfg.convergence_mode,
-                    n_conv,
-                    n_total,
-                )
-                if 0 < n_conv < n_total:
-                    conv_batch = subsetBatch(full_batch, conv_mask)
-                    conv_mb = subsetProposal(proposal_mb, conv_mask)
-                    conv_nuts = subsetProposal(proposal_nuts, conv_mask)
-                    conv_advi_mask = advi_mask & conv_mask
-                    conv_advi_batch = subsetBatch(full_batch, conv_advi_mask)
-                    conv_advi = subsetProposal(proposal_advi, conv_mask[advi_mask])
-                    conv_mb_sub = subsetProposal(conv_mb, conv_advi_mask[conv_mask])
-                    conv_nuts_sub = subsetProposal(conv_nuts, conv_advi_mask[conv_mask])
-                    summary_mb_conv = self.summary(conv_mb, conv_batch)
-                    summary_nuts_conv = self.summary(conv_nuts, conv_batch)
-                    summary_advi_conv = self.summary(conv_advi, conv_advi_batch)
-                    summary_mb_conv_sub = self.summary(conv_mb_sub, conv_advi_batch)
-                    summary_nuts_conv_sub = self.summary(conv_nuts_sub, conv_advi_batch)
-                    for label, summary in [
-                        ('MB', summary_mb_conv),
-                        ('NUTS', summary_nuts_conv),
-                        ('ADVI', summary_advi_conv),
-                    ]:
-                        rows.append(self._makeRow(label + '_conv', summary, fit_label))
-                    conv_plot_dir = self.plot_dir / 'conv'
-                    conv_plot_dir.mkdir(parents=True, exist_ok=True)
-                    self.plot(
-                        [conv_mb_sub, conv_nuts_sub, conv_advi],
-                        [summary_mb_conv_sub, summary_nuts_conv_sub, summary_advi_conv],
-                        ['MB', 'NUTS', 'ADVI'],
-                        conv_advi_batch,
-                        plot_dir=conv_plot_dir,
-                    )
-
-                    # --- converged + reliable LOO subset (NUTS k filter only) ---
-                    k_thr = self.cfg.pareto_k_thr
-                    nuts_k = summary_nuts_conv.loo_pareto_k
-                    if nuts_k is not None:
-                        k_mask = (nuts_k < k_thr).numpy()
-                        n_k = int(k_mask.sum())
-                        logger.info(
-                            'Reliable LOO subset (NUTS k<%.1f): %d / %d', k_thr, n_k, n_conv
-                        )
-                        if 0 < n_k < n_conv:
-                            k_batch = subsetBatch(conv_batch, k_mask)
-                            k_mb = subsetProposal(conv_mb, k_mask)
-                            k_nuts = subsetProposal(conv_nuts, k_mask)
-                            k_advi_batch = subsetBatch(
-                                conv_advi_batch, k_mask[conv_advi_mask[conv_mask]]
-                            )
-                            k_advi = subsetProposal(conv_advi, k_mask[conv_advi_mask[conv_mask]])
-                            summary_mb_k = self.summary(k_mb, k_batch)
-                            summary_nuts_k = self.summary(k_nuts, k_batch)
-                            summary_advi_k = self.summary(k_advi, k_advi_batch)
-                            for label, summary in [
-                                ('MB', summary_mb_k),
-                                ('NUTS', summary_nuts_k),
-                                ('ADVI', summary_advi_k),
-                            ]:
-                                rows.append(self._makeRow(label + '_loo', summary, fit_label))
-
+        multi = len(partitions) > 1
+        rows: list[dict] = []
+        for partition in partitions:
+            rows.extend(self._evalPartition(partition, models, fit_label, multi))
         if self.cfg.save_tables:
             self.saveTables(rows)
 
-#=============================================================================
+
+# =============================================================================
 def main() -> None:
     cfg = setup()
     setupLogging(cfg.verbosity)
     evaluator = Evaluator(cfg)
-    # evaluator.testrun()
     evaluator.go()
 
 
