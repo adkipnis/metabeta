@@ -514,6 +514,14 @@ def _lmmNormalCompacted(
     # clamp before BLUP computation: near-cancellation in A_gls=(XtX−XbarXbar) when λ→1
     # produces finite-but-huge values that nan_to_num cannot catch.
     beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
+    # Fall back to within-group OLS β̂_wg when within-group X variation is too small to
+    # identify the GLS estimate (mirrors _lmmNormalFull). Without this guard, EM propagates
+    # a clamped-at-±50 junk β into σ_ε² via the residual SS, causing blowup.
+    xtx_max_diag = XtX.diagonal(dim1=-1, dim2=-2).amax(dim=-1).clamp(min=1.0)
+    beta_identified = (                                                  # (B,)
+        XtX_w.diagonal(dim1=-1, dim2=-2).amax(dim=-1) > 1e-3 * xtx_max_diag
+    )
+    beta_gls = torch.where(beta_identified[:, None], beta_gls, beta_wg)
     sigma_eps = sigma_eps_sq.sqrt().unsqueeze(-1).nan_to_num(nan=1.0, posinf=1.0)  # (B, 1)
     sigma_rfx = sigma_rfx_sq.sqrt().unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0)  # (B, 1)
 
@@ -573,6 +581,7 @@ def _lmmNormalCompacted(
         A_gls_reg = A_gls + _adaptiveRidge(A_gls)
         beta_gls = _safeSolve(A_gls_reg, b_gls)
         beta_gls = beta_gls.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
+        beta_gls = torch.where(beta_identified[:, None], beta_gls, beta_wg)
         r_g = (y_mean - torch.einsum('bmd,bd->bm', X_mean, beta_gls)) * mask_m
         blups = (lambda_g2 * r_g).unsqueeze(-1).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
         blup_var = (
