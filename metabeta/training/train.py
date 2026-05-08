@@ -90,10 +90,10 @@ def setup() -> argparse.Namespace:
     )
 
     # Template-based config generation (primary interface)
-    parser.add_argument('--size', type=str, default='small', help='Size preset: tiny|small|medium|large|huge')
+    parser.add_argument('--size', type=str, default='tiny', help='Size preset: tiny|small|medium|large|huge')
     parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
-    parser.add_argument('--ds_type', type=str, default='mixed', help='Training dataset type: toy|flat|scm|mixed|sampled|observed')
-    parser.add_argument('--valid_ds_type', type=str, default='sampled', help='Validation dataset type: toy|flat|scm|mixed|sampled|observed')
+    parser.add_argument('--ds_type', type=str, default='toy', help='Training dataset type: toy|flat|scm|mixed|sampled|observed')
+    parser.add_argument('--valid_ds_type', type=str, default='toy', help='Validation dataset type: toy|flat|scm|mixed|sampled|observed')
 
     # Alternative: load config from a saved YAML (e.g. a checkpoint config.yaml)
     parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
@@ -426,9 +426,9 @@ class Trainer:
         return int(payload.get('epoch', 0))  # last completed epoch
 
     def getTrackingMetrics(self, eval_summary: EvaluationSummary) -> tuple[float, float, float]:
-        mean_nrmse = dictMean(eval_summary.nrmse)
-        mean_eace = dictMean(eval_summary.eace)
-        median_nll = eval_summary.mloonll if eval_summary.mloonll else 0.0
+        mean_nrmse = dictMean(eval_summary.aggregated.nrmse)
+        mean_eace = dictMean(eval_summary.aggregated.eace)
+        median_nll = eval_summary.per_dataset.mloonll or 0.0
         return mean_nrmse, mean_eace, median_nll
 
     @property
