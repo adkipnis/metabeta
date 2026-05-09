@@ -677,3 +677,43 @@ alpha=0.50 (0.7198 -> 0.5355), and non-BLUP metrics remain unchanged. The
 limiting row is `medium-n-mixed`: 0.3769 is just under the 3% guardrail versus
 I5 alpha=0.50 (0.3770). The next direction is adaptive alpha from observable
 beta-identification diagnostics, not a higher global scalar alpha.
+
+---
+
+### I7 Fix — Active-d adaptive BLUP beta blend (2026-05-09)
+
+**Diagnostic**: `glmm_alpha_gate_diagnostic.py` tested scalar alpha values and
+observable gates. Simple rank/mask gates did not isolate the tradeoff: they either
+lost too much `small-n-mixed` gain or regressed medium rows. The best kept candidate
+used active fixed-effect dimension:
+
+```python
+alpha = 1.00  if active_d <= 4
+alpha = 0.65  if 5 <= active_d <= 8
+alpha = 0.75  otherwise
+```
+
+**Change**: Keep reported `beta_est = beta_gls`, but choose the final BLUP residual
+blend from active fixed-effect dimension inferred from `XtX`.
+
+**Required 12-way benchmark result**:
+
+| Dataset/Partition | FFX | sRFX | sEps | BLUPs |
+|-------------------|-----|------|------|-------|
+| small-n-mixed/train | 0.2249 | 0.6421 | 0.0839 | 0.3637 |
+| small-n-sampled/valid | 0.1551 | 0.6313 | 0.1031 | 0.4248 |
+| small-n-sampled/test | 0.1686 | 0.6655 | 0.1002 | 0.4209 |
+| medium-n-mixed/train | 0.1452 | 0.5739 | 0.0671 | 0.3714 |
+| medium-n-sampled/valid | 0.3625 | 0.5334 | 0.0978 | 0.4922 |
+| medium-n-sampled/test | 0.2437 | 0.6081 | 0.1029 | 0.4792 |
+| large-n-mixed/train | 0.2686 | 0.4947 | 0.0724 | 0.3643 |
+| large-n-sampled/valid | 0.3874 | 0.5811 | 0.1104 | 0.4782 |
+| large-n-sampled/test | 0.4959 | 0.6065 | 0.1078 | 0.4945 |
+| huge-n-mixed/train | 0.3034 | 0.4957 | 0.0648 | 0.3964 |
+| huge-n-sampled/valid | 0.4208 | 0.7824 | 0.1643 | 0.5095 |
+| huge-n-sampled/test | 0.4662 | 0.5954 | 0.1826 | 0.5186 |
+
+**Assessment**: Accepted. `small-n-mixed` improves 0.5355 -> 0.3637 versus I6,
+and `medium-n-mixed` moves away from the I5 guardrail, 0.3769 -> 0.3714. Non-BLUP
+metrics are unchanged. The largest BLUP regression versus I6 is
+`medium-n-sampled/valid`, 0.4796 -> 0.4922 (+2.6%), inside the 3% budget.
