@@ -16,5 +16,7 @@ GLMM estimator in `metabeta/analytical/`.
 - `glmm_beta_leakage_diagnostic.py` — I5 diagnostic. Measures fixed-effect leakage
   into BLUP residuals, bins BLUP errors by beta/projection/rank diagnostics, and runs
   beta-OLS blend ablations.
+- `glmm_alpha_gate_diagnostic.py` — I7 diagnostic. Tests observable alpha schedules
+  for the final BLUP-residual beta blend across the required 12-way benchmark suite.
 - `glmm_perf_baseline.md` — running fix log and benchmark record for analytical GLMM
   estimator changes.
