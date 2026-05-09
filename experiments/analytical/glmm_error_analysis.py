@@ -10,10 +10,10 @@ and reports:
   5. BLUP error broken down by group size (n_g)
   6. Worst-case examples
 
-Usage (from metabeta/benchmarks/):
-    uv run python diagnose_glmm.py                                 # normal (small-n-mixed)
-    uv run python diagnose_glmm.py --data-id small-b-mixed         # bernoulli
-    uv run python diagnose_glmm.py --data-id small-b-mixed --partition valid
+Usage:
+    uv run python experiments/analytical/glmm_error_analysis.py --data-id small-n-mixed
+    uv run python experiments/analytical/glmm_error_analysis.py --data-id small-b-mixed
+    uv run python experiments/analytical/glmm_error_analysis.py --data-id small-b-mixed --partition valid
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import numpy as np
 import torch
 from tabulate import tabulate
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT.parent))
 
 from metabeta.analytical.glmm import glmm

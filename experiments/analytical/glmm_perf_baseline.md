@@ -2,7 +2,7 @@ GLMM Analytical Estimator — Baseline Performance & Fix Log
 ===========================================================
 
 Diagnostic run: 2026-05-08 (12 combinations × 8192 datasets each)
-Script: experiments/glmm_error_analysis.py
+Script: experiments/analytical/glmm_error_analysis.py
 Data: {small,medium,large,huge}-n-{mixed,sampled}  (mixed→train ep1–2, sampled→valid+test)
 
 ---
@@ -537,7 +537,7 @@ shrinkage and separates Ψ error, σ² error, and β leakage.
 
 ### I4 Diagnostic — shrinkage ratios and oracle BLUP ablations (2026-05-09)
 
-**Script**: `experiments/glmm_shrinkage_diagnostic.py`
+**Script**: `experiments/analytical/glmm_shrinkage_diagnostic.py`
 
 **q=1 shrinkage result**: high BLUP error is concentrated in the central
 `lambda_hat/lambda_true` bucket, not in the shrinkage tails. On small-n-mixed:
@@ -580,8 +580,8 @@ shrinkage strategies.
 ### I5 Diagnostic and Fix — BLUP-only beta_for_blup blend (2026-05-09)
 
 **Scripts**:
-- `experiments/glmm_beta_leakage_diagnostic.py`
-- `experiments/glmm_required_benchmark.py`
+- `experiments/analytical/glmm_beta_leakage_diagnostic.py`
+- `experiments/analytical/glmm_required_benchmark.py`
 
 **Diagnostic result**: BLUP failures track fixed-effect leakage in prediction
 space. On small-n-mixed, the worst quartile by `max |beta_est-beta_true|` has
