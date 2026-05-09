@@ -560,7 +560,11 @@ def _lmmNormalFull(
     )
 
     beta_gls = gls.beta
-    beta_for_blup = (0.5 * gls.beta + 0.5 * beta_ols).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    beta_for_blup = (0.25 * gls.beta + 0.75 * beta_ols).nan_to_num(
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
     resid_gls = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_for_blup)) * mask_n
     Ztr_gls = torch.einsum('bmnq,bmn->bmq', Zm, resid_gls)
     blups = torch.einsum('bmqp,bmp->bmq', gls.W_g, Ztr_gls)

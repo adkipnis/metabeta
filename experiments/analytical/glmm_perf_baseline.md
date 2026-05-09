@@ -641,3 +641,39 @@ resid_gls = y - X @ beta_for_blup
 
 **Assessment**: Accepted. This meets the primary small-n-mixed target (<0.9),
 preserves all non-BLUP outputs, and improves every required BLUP row.
+
+---
+
+### I6 Fix — Tune BLUP-only beta_for_blup blend to alpha=0.75 (2026-05-09)
+
+**Change**: Keep reported `beta_est = beta_gls`, but compute final BLUP residuals
+with a stronger pooled-OLS blend:
+
+```python
+beta_for_blup = 0.25 * beta_gls + 0.75 * beta_ols
+```
+
+Psi, sigma2, `beta_var`, and `blup_var` are unchanged.
+
+**Required 12-way benchmark result**:
+
+| Dataset/Partition | FFX | sRFX | sEps | BLUPs |
+|-------------------|-----|------|------|-------|
+| small-n-mixed/train | 0.2249 | 0.6421 | 0.0839 | 0.5355 |
+| small-n-sampled/valid | 0.1551 | 0.6313 | 0.1031 | 0.4409 |
+| small-n-sampled/test | 0.1686 | 0.6655 | 0.1002 | 0.4480 |
+| medium-n-mixed/train | 0.1452 | 0.5739 | 0.0671 | 0.3769 |
+| medium-n-sampled/valid | 0.3625 | 0.5334 | 0.0978 | 0.4796 |
+| medium-n-sampled/test | 0.2437 | 0.6081 | 0.1029 | 0.4773 |
+| large-n-mixed/train | 0.2686 | 0.4947 | 0.0724 | 0.3643 |
+| large-n-sampled/valid | 0.3874 | 0.5811 | 0.1104 | 0.4782 |
+| large-n-sampled/test | 0.4959 | 0.6065 | 0.1078 | 0.4945 |
+| huge-n-mixed/train | 0.3034 | 0.4957 | 0.0648 | 0.3964 |
+| huge-n-sampled/valid | 0.4208 | 0.7824 | 0.1643 | 0.5095 |
+| huge-n-sampled/test | 0.4662 | 0.5954 | 0.1826 | 0.5186 |
+
+**Assessment**: Accepted. `small-n-mixed` improves another 25.6% versus I5
+alpha=0.50 (0.7198 -> 0.5355), and non-BLUP metrics remain unchanged. The
+limiting row is `medium-n-mixed`: 0.3769 is just under the 3% guardrail versus
+I5 alpha=0.50 (0.3770). The next direction is adaptive alpha from observable
+beta-identification diagnostics, not a higher global scalar alpha.

@@ -348,7 +348,7 @@ def test_glmm_normal_blups_use_beta_for_blup_without_changing_beta_est():
     XtX = torch.einsum('bmnd,bmnk->bdk', X_masked, Xm)
     Xty = torch.einsum('bmnd,bmn->bd', X_masked, ym)
     beta_ols = _safeSolve(XtX + _adaptiveRidge(XtX), Xty)
-    beta_for_blup = 0.5 * result['beta_est'] + 0.5 * beta_ols
+    beta_for_blup = 0.25 * result['beta_est'] + 0.75 * beta_ols
 
     def blup_for(beta_value):
         ZtZ = torch.einsum('bmnq,bmnr->bmqr', Zm, Zm)
