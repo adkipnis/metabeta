@@ -10,6 +10,7 @@ import torch
 
 from metabeta.simulation import Prior, Synthesizer, Simulator, hypersample
 from metabeta.analytical.glmm import lmmBernoulli, lmmPoisson, glmm
+from metabeta.analytical.linalg import _adaptiveRidge, _adaptiveRidgeBm, _eighWithJitter, _safeSolve
 
 
 DEVICE = torch.device('cpu')
@@ -305,6 +306,65 @@ def test_glmm_normal_mixed_rank_z_groups_keep_sigma_bounded():
     assert torch.isfinite(result['blup_est']).all()
     assert result['sigma_eps_est'].item() < 0.2
     assert result['sigma_rfx_est'].amax().item() < 1.5
+
+
+def test_glmm_normal_blups_use_beta_for_blup_without_changing_beta_est():
+    B, m, n_per_group, d, q = 1, 14, 10, 3, 1
+    Xm = torch.zeros(B, m, n_per_group, d)
+    Zm = torch.ones(B, m, n_per_group, q)
+    mask_n = torch.ones(B, m, n_per_group)
+    mask_m = torch.ones(B, m)
+    ns = torch.full((B, m), float(n_per_group))
+    n_total = torch.full((B,), m * n_per_group)
+
+    x = torch.linspace(-1.0, 1.0, n_per_group)
+    group_x = torch.linspace(-1.0, 1.0, m)
+    beta = torch.tensor([0.5, 0.8, -0.4])
+    rfx = 0.7 * group_x.reshape(1, m, 1)
+    for g in range(m):
+        Xm[:, g, :, 0] = 1.0
+        Xm[:, g, :, 1] = x
+        Xm[:, g, :, 2] = group_x[g]
+
+    ym = torch.einsum('bmnd,d->bmn', Xm, beta)
+    ym = ym + torch.einsum('bmnq,bmq->bmn', Zm, rfx)
+    ym = ym + 0.02 * torch.sin(torch.arange(m * n_per_group).reshape(1, m, n_per_group))
+
+    result = glmm(
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        ns,
+        n_total,
+        likelihood_family=0,
+    )
+
+    X_masked = Xm * mask_n[..., None]
+    XtX = torch.einsum('bmnd,bmnk->bdk', X_masked, Xm)
+    Xty = torch.einsum('bmnd,bmn->bd', X_masked, ym)
+    beta_ols = _safeSolve(XtX + _adaptiveRidge(XtX), Xty)
+    beta_for_blup = 0.5 * result['beta_est'] + 0.5 * beta_ols
+
+    def blup_for(beta_value):
+        ZtZ = torch.einsum('bmnq,bmnr->bmqr', Zm, Zm)
+        eye_q = torch.eye(q)
+        vals, vecs = _eighWithJitter(
+            result['Psi'] + result['sigma_eps_est'].square()[:, :, None] * 1e-4 * eye_q
+        )
+        psi_inv = vecs @ torch.diag_embed(1.0 / vals.clamp(min=1e-30)) @ vecs.mT
+        inner = result['sigma_eps_est'].square()[:, :, None, None] * psi_inv[:, None] + ZtZ
+        W_g = _safeSolve(inner + _adaptiveRidgeBm(inner), eye_q.expand(B, m, q, q))
+        resid = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_value)) * mask_n
+        ztr = torch.einsum('bmnq,bmn->bmq', Zm, resid)
+        return torch.einsum('bmqr,bmr->bmq', W_g, ztr).clamp(-20.0, 20.0)
+
+    assert torch.linalg.vector_norm(beta_ols - result['beta_est']).item() > 1e-3
+    assert torch.allclose(result['blup_est'], blup_for(beta_for_blup), atol=1e-5, rtol=1e-5)
+    assert not torch.allclose(
+        result['blup_est'], blup_for(result['beta_est']), atol=1e-4, rtol=1e-4
+    )
 
 
 # ---------------------------------------------------------------------------
