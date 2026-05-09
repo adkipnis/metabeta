@@ -495,24 +495,85 @@ Next investigation: I5 — fixed-effect leakage in the Normal GLS step
   residual, not by Ψ/σ² shrinkage. Any next fix should target beta_est or how BLUPs
   use it.
 
-  Step 1 — Diagnose beta_est failure modes:
-      - Compare beta_est vs beta_true by d, q, n/d, G, G_mom, beta_mask rank, and
-        condition number/effective rank of A_gls_reg.
-      - Compare beta_est to pooled beta_ols and beta_wg only diagnostically. Do not
-        substitute beta_wg directly; oracle ablation shows it is catastrophic.
-      - Break small-n-mixed BLUP NRMSE by beta max-abs-error and beta projection
-        error `X_g(beta_hat-beta_true)` to confirm the leakage path.
+  Important constraints from prior failures:
+    - Do NOT substitute beta_wg directly. Oracle ablation gave BLUP NRMSE 3.33-3.36.
+    - Do NOT change Ψ/σ² and beta in the same patch. I5 should isolate beta behavior.
+    - Do NOT optimize only FFX NRMSE. The failure is beta projection error in BLUP
+      residuals; a lower coefficient RMSE can still produce worse group residuals.
 
-  Step 2 — Generate candidate beta corrections without changing Ψ:
-      - ridge-strength sweep in `_normalGlsAndBlups` A_reg;
-      - beta shrinkage toward pooled beta_ols, gated by A_gls rank/condition;
-      - per-dataset beta fallback when GLS correction is underidentified;
-      - BLUP residual orthogonalization using a beta estimate chosen for local
-        prediction error rather than global FFX NRMSE.
+  Step 1 — Build beta-leakage diagnostic (no estimator changes).
+    Add or extend a diagnostic script to report, for the required 12-way suite:
+      - beta_est, beta_ols, beta_wg NRMSE and bias;
+      - BLUP NRMSE by max |beta_est - beta_true|;
+      - BLUP NRMSE by group-level projection error
+        `sqrt(mean_gi((X_gi @ (beta_est-beta_true))²))`;
+      - BLUP NRMSE by `beta_mask` active count, `beta_mask.any`, and beta_rank;
+      - condition/effective rank of `A_gls_reg` from the final Normal GLS pass;
+      - compare projection error from beta_est vs beta_ols vs beta_wg.
 
-  Step 3 — Benchmark candidates incrementally with the same 12-way required suite.
-    Primary metric remains small-n-mixed BLUP NRMSE; reject any candidate with
-    >3% regression on FFX, sRFX, sEps, or BLUPs elsewhere.
+    Required decision from Step 1:
+      - If BLUP error tracks projection error much more strongly than coefficient
+        NRMSE, prioritize prediction-space regularization.
+      - If failures cluster at low active beta rank / high condition number, prioritize
+        rank- or condition-gated beta fallback/shrinkage.
+      - If beta_ols has lower projection error than beta_est in the failing subset,
+        test shrinkage toward beta_ols. If not, do not use beta_ols as a target.
+
+  Step 2 — Run beta oracle/fallback ablations before patching.
+    For small-n-mixed first, compute BLUPs using current Ψ/σ² and these beta choices:
+      A. beta_est baseline
+      B. beta_ols
+      C. convex blends: (1-a)*beta_est + a*beta_ols for a ∈ {0.1, 0.25, 0.5, 0.75}
+      D. condition-gated blends using A_gls condition/effective rank
+      E. projection-error oracle blend (uses truth; diagnostic only) to estimate upside
+
+    Expand only promising ablations to the required 12-way suite. Reject directions
+    where small-n-mixed BLUP improvement comes from truth-only gates or causes obvious
+    medium/large/huge regressions in the ablation.
+
+  Step 3 — Candidate patch order (one patch at a time).
+    Patch 1 candidate: increase adaptive ridge in final `_normalGlsAndBlups` beta solve
+      only, with a scalar sweep first (e.g. 1e-6 → 1e-5, 1e-4, 1e-3). This is the
+      smallest beta-focused change and requires no new gate.
+
+    Patch 2 candidate: shrink beta_gls toward beta_ols when final A_gls is weakly
+      identified. Gate candidates should be based only on observable numerical
+      diagnostics such as condition number, effective rank, and beta_mask count.
+
+    Patch 3 candidate: for BLUP residuals only, use a conservative beta_for_blup
+      separate from reported beta_est. This is higher risk because it can improve
+      BLUPs while leaving FFX unchanged; only try after Patch 1/2 diagnostics.
+
+    Explicitly dead candidate: beta_wg fallback or shrinkage toward beta_wg.
+
+  Step 4 — Benchmark protocol for every patch.
+    After each single patch, rerun the GLMM error analysis on:
+      - `small|medium|large|huge-n-mixed`, first two training epochs;
+      - `small|medium|large|huge-n-sampled`, valid and test.
+
+    Compare against current Fix C baseline:
+      small-n-mixed/train:    FFX 0.2249, sRFX 0.6421, sEps 0.0839, BLUP 1.0687
+      medium-n-mixed/train:   FFX 0.1452, sRFX 0.5739, sEps 0.0671, BLUP 0.3749
+      large-n-mixed/train:    FFX 0.2686, sRFX 0.4947, sEps 0.0724, BLUP 0.3670
+      huge-n-mixed/train:     FFX 0.3034, sRFX 0.4957, sEps 0.0648, BLUP 0.4663
+      small-n-sampled/valid:  FFX 0.1551, sRFX 0.6313, sEps 0.1031, BLUP 0.7044
+      small-n-sampled/test:   FFX 0.1686, sRFX 0.6655, sEps 0.1002, BLUP 0.7898
+      medium-n-sampled/valid: FFX 0.3625, sRFX 0.5334, sEps 0.0978, BLUP 0.5566
+      medium-n-sampled/test:  FFX 0.2437, sRFX 0.6081, sEps 0.1029, BLUP 0.5367
+      large-n-sampled/valid:  FFX 0.3874, sRFX 0.5811, sEps 0.1104, BLUP 0.6642
+      large-n-sampled/test:   FFX 0.4959, sRFX 0.6065, sEps 0.1078, BLUP 0.6774
+      huge-n-sampled/valid:   FFX 0.4208, sRFX 0.7824, sEps 0.1643, BLUP 0.5827
+      huge-n-sampled/test:    FFX 0.4662, sRFX 0.5954, sEps 0.1826, BLUP 0.6631
+
+    Keep a patch only if:
+      - small-n-mixed BLUP improves by at least 5% initially (target < 1.015);
+      - no required dataset has >3% regression in FFX, sRFX, sEps, or BLUP;
+      - the improvement is not isolated to q=1 rows while q>1 rows regress.
+
+    Revert immediately if:
+      - any medium/large/huge mixed BLUP regresses by >5%;
+      - any sRFX regression exceeds 5%;
+      - small-n-mixed BLUP improvement is <1% after the full 12-way check.
 
   Success criteria remain:
     Primary:    small-n-mixed BLUPs NRMSE < 0.9 (current: 1.0687)
