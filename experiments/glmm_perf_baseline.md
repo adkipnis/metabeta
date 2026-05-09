@@ -574,3 +574,70 @@ True beta nearly solves the BLUP problem even with estimated variance components
 beta_wg is not a viable replacement. Next investigation should target Normal GLS
 beta estimation, beta masking/rank diagnostics, and conservative beta fallback or
 shrinkage strategies.
+
+---
+
+### I5 Diagnostic and Fix — BLUP-only beta_for_blup blend (2026-05-09)
+
+**Scripts**:
+- `experiments/glmm_beta_leakage_diagnostic.py`
+- `experiments/glmm_required_benchmark.py`
+
+**Diagnostic result**: BLUP failures track fixed-effect leakage in prediction
+space. On small-n-mixed, the worst quartile by `max |beta_est-beta_true|` has
+BLUP NRMSE 1.525 while the first three quartiles are 0.232-0.292. The worst
+quartile by `sqrt(mean((X(beta_est-beta_true))²))` has BLUP NRMSE 1.518.
+Low beta rank / low beta_mask_count rows are also bad.
+
+**Ablation result**: Recomputing BLUPs with a beta blend toward pooled OLS was
+promising across the required suite. For small-n-mixed:
+
+| beta used for BLUP residual | BLUP NRMSE |
+|-----------------------------|------------|
+| beta_est baseline | 1.0687 |
+| beta_ols | 0.3632 |
+| 0.75 beta_est + 0.25 beta_ols | 0.9067 |
+| 0.50 beta_est + 0.50 beta_ols | 0.7195 |
+| 0.25 beta_est + 0.75 beta_ols | 0.5352 |
+
+The 50/50 ablation improved every required BLUP row, including medium/large/huge
+mixed, so the direction was not small-n-only.
+
+**Rejected patch 1**: final GLS ridge 1e-6 → 1e-5. Reverted because small-n-mixed
+BLUP did not improve (1.0687 → 1.0698) and huge-n-mixed regressed badly
+(0.4663 → 0.7638).
+
+**Rejected patch 2**: direct reported-beta blend
+`beta_est = 0.75*beta_gls + 0.25*beta_ols`. Reverted because BLUPs improved but
+FFX violated the regression rule, e.g. huge-n-mixed FFX 0.3034 → 0.3266 and
+large-n-sampled/valid FFX 0.3874 → 0.4052.
+
+**Accepted patch 3**: keep reported `beta_est = beta_gls`, but compute final
+BLUP residuals with:
+
+```python
+beta_for_blup = 0.5 * beta_gls + 0.5 * beta_ols
+resid_gls = y - X @ beta_for_blup
+```
+
+Ψ and σ² estimation are unchanged because the blend is applied only after EM.
+
+**Required 12-way benchmark result**:
+
+| Dataset/Partition | FFX | sRFX | sEps | BLUPs |
+|-------------------|-----|------|------|-------|
+| small-n-mixed/train | 0.2249 → 0.2249 | 0.6421 → 0.6421 | 0.0839 → 0.0839 | 1.0687 → 0.7198 |
+| medium-n-mixed/train | 0.1452 → 0.1452 | 0.5739 → 0.5739 | 0.0671 → 0.0671 | 0.3749 → 0.3660 |
+| large-n-mixed/train | 0.2686 → 0.2686 | 0.4947 → 0.4947 | 0.0724 → 0.0724 | 0.3670 → 0.3605 |
+| huge-n-mixed/train | 0.3034 → 0.3034 | 0.4957 → 0.4957 | 0.0648 → 0.0648 | 0.4663 → 0.4038 |
+| small-n-sampled/valid | 0.1551 → 0.1551 | 0.6313 → 0.6313 | 0.1031 → 0.1031 | 0.7044 → 0.5016 |
+| small-n-sampled/test | 0.1686 → 0.1686 | 0.6655 → 0.6655 | 0.1002 → 0.1002 | 0.7898 → 0.5319 |
+| medium-n-sampled/valid | 0.3625 → 0.3625 | 0.5334 → 0.5334 | 0.0978 → 0.0978 | 0.5566 → 0.5201 |
+| medium-n-sampled/test | 0.2437 → 0.2437 | 0.6081 → 0.6081 | 0.1029 → 0.1029 | 0.5367 → 0.4858 |
+| large-n-sampled/valid | 0.3874 → 0.3874 | 0.5811 → 0.5811 | 0.1104 → 0.1104 | 0.6642 → 0.5163 |
+| large-n-sampled/test | 0.4959 → 0.4959 | 0.6065 → 0.6065 | 0.1078 → 0.1078 | 0.6774 → 0.5312 |
+| huge-n-sampled/valid | 0.4208 → 0.4208 | 0.7824 → 0.7824 | 0.1643 → 0.1643 | 0.5827 → 0.5163 |
+| huge-n-sampled/test | 0.4662 → 0.4662 | 0.5954 → 0.5954 | 0.1826 → 0.1826 | 0.6631 → 0.5423 |
+
+**Assessment**: Accepted. This meets the primary small-n-mixed target (<0.9),
+preserves all non-BLUP outputs, and improves every required BLUP row.

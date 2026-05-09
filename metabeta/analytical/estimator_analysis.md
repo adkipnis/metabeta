@@ -1,5 +1,5 @@
 Estimator-by-estimator analysis
-Last updated: 2026-05-09 (after Fixes 1–9, Fix C, Fix E attempted; I3 Option D+C attempted, reverted)
+Last updated: 2026-05-09 (after I5 beta_for_blup fix)
 
 Status key:  ✓ addressed  ~  partially addressed  ✗ open  ! new insight
 
@@ -77,9 +77,9 @@ Status key:  ✓ addressed  ~  partially addressed  ✗ open  ! new insight
   small-n-mixed BLUP error is dominated by beta leakage, not Ψ/σ². True Ψ and true
   σ² with beta_hat left BLUP NRMSE at 1.0599 (baseline 1.0687), while true beta with
   estimated Ψ and σ² reduced BLUP NRMSE to 0.2931. beta_wg was catastrophic
-  (NRMSE 3.33-3.36), so the next direction is fixing or gating the Normal GLS
-  beta estimate, not substituting within-Z beta and not another variance-component
-  gate. See I5 in plan.md.
+  (NRMSE 3.33-3.36). I5 addressed the actionable part by separating reported
+  beta_est from beta_for_blup: final BLUP residuals now use a 50/50 blend of GLS
+  beta and pooled OLS beta, while reported beta_est, Ψ, and σ² are unchanged.
 
   The EM cannot recover from a badly underestimated Ψ: when Ψ̂ → 0, BLUPs → 0,
   M-step Ψ_em → 0, feeding back into worse Ψ. This is a FALSE FIXED POINT of the
@@ -125,6 +125,16 @@ Status key:  ✓ addressed  ~  partially addressed  ✗ open  ! new insight
   - WP-B2 [✗ open] — KH correction collapses at large n_g. The Kackar-Harville
   correction adds (W_g·ZtX)² × Var(β̂). For large n_g, W_g ≈ 0 → KH → 0.
   Correct in principle when Ψ is known, but does nothing when Ψ̂ ≈ 0.
+
+  - WP-B3 [✓ addressed by I5] — Fixed-effect leakage into BLUP residuals. The
+  final BLUP previously used the same beta_gls reported as beta_est. Diagnostics
+  showed that the high-BLUP-error rows were concentrated in the largest beta
+  projection-error quartile, and oracle ablations showed true beta nearly solved
+  BLUPs even with estimated Ψ/σ². I5 keeps beta_est unchanged but computes final
+  BLUP residuals with `beta_for_blup = 0.5*beta_gls + 0.5*beta_ols`. Required
+  12-way benchmark: small-n-mixed BLUP 1.0687 → 0.7198, sampled small valid/test
+  0.7044/0.7898 → 0.5016/0.5319, and no FFX/sRFX/sEps regressions because those
+  outputs are unchanged.
 
   ---
   Stage 4: EM refinement

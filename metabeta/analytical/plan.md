@@ -1,7 +1,7 @@
 Plan
-Last updated: 2026-05-09 (after I4 shrinkage/oracle diagnostics)
+Last updated: 2026-05-09 (after I5 beta_for_blup fix)
 
-Current code state: Fix 1 + Fix 2 + Fix 4 + Fix 7 + Fix 9 + Fix C
+Current code state: Fix 1 + Fix 2 + Fix 4 + Fix 7 + Fix 9 + Fix C + I5
   Code also contains `_remlNewtonStep` in normal.py (correct REML gradient; not wired in)
   Fix 1  — Ψ/G_mom additive blup_var floor (addresses WP-V2, WP-V3)
   Fix 2  — Delta-method cap loosened to min=2 (addresses WP-V1, minimal impact)
@@ -10,6 +10,7 @@ Current code state: Fix 1 + Fix 2 + Fix 4 + Fix 7 + Fix 9 + Fix C
   Fix 7  — Per-component count floor in component-wise MoM (addresses WP-Ψ4)
   Fix 9  — Adaptive M-step BLUP winsorization at 10× (partially addresses WP-EM1)
   Fix C  — Outlier-trimmed Ψ_em M-step at 3× mean BLUP norm (addresses WP-EM1 P3)
+  I5     — BLUP-only beta_for_blup blend with pooled OLS (addresses WP-B3)
   I3 Option E was attempted and reverted; `_remlNewtonStep` remains unused.
 
 ---
@@ -489,7 +490,7 @@ Investigation I4 — oracle shrinkage and variance-ratio diagnostics [COMPLETED 
 
 ---
 
-Next investigation: I5 — fixed-effect leakage in the Normal GLS step
+I5 — fixed-effect leakage in the Normal GLS step
 
   New root cause: BLUP P1 is dominated by β error leaking into the random-effect
   residual, not by Ψ/σ² shrinkage. Any next fix should target beta_est or how BLUPs
@@ -501,8 +502,9 @@ Next investigation: I5 — fixed-effect leakage in the Normal GLS step
     - Do NOT optimize only FFX NRMSE. The failure is beta projection error in BLUP
       residuals; a lower coefficient RMSE can still produce worse group residuals.
 
-  Step 1 — Build beta-leakage diagnostic (no estimator changes).
-    Add or extend a diagnostic script to report, for the required 12-way suite:
+  Step 1 — Build beta-leakage diagnostic (no estimator changes). [DONE]
+    Added `experiments/glmm_beta_leakage_diagnostic.py` to report, for the required
+    12-way suite:
       - beta_est, beta_ols, beta_wg NRMSE and bias;
       - BLUP NRMSE by max |beta_est - beta_true|;
       - BLUP NRMSE by group-level projection error
@@ -511,15 +513,16 @@ Next investigation: I5 — fixed-effect leakage in the Normal GLS step
       - condition/effective rank of `A_gls_reg` from the final Normal GLS pass;
       - compare projection error from beta_est vs beta_ols vs beta_wg.
 
-    Required decision from Step 1:
-      - If BLUP error tracks projection error much more strongly than coefficient
-        NRMSE, prioritize prediction-space regularization.
-      - If failures cluster at low active beta rank / high condition number, prioritize
-        rank- or condition-gated beta fallback/shrinkage.
-      - If beta_ols has lower projection error than beta_est in the failing subset,
-        test shrinkage toward beta_ols. If not, do not use beta_ols as a target.
+    Result:
+      - BLUP error tracks beta error/projection-error tails strongly. On small-n-mixed,
+        the top max-beta-error quartile has BLUP NRMSE 1.525 vs 0.232-0.292 in the
+        first three quartiles; the top projection-error quartile has BLUP NRMSE 1.518.
+      - Low effective-rank / low beta_mask-count rows are also bad (small-n-mixed
+        rank 1-2 BLUP NRMSE 1.775; beta_mask_count 0-2 BLUP NRMSE 1.681).
+      - beta_ols is a useful BLUP residual target, while beta_wg remains unusable:
+        beta_wg projection error is an order of magnitude larger than beta_est/ols.
 
-  Step 2 — Run beta oracle/fallback ablations before patching.
+  Step 2 — Run beta oracle/fallback ablations before patching. [DONE]
     For small-n-mixed first, compute BLUPs using current Ψ/σ² and these beta choices:
       A. beta_est baseline
       B. beta_ols
@@ -527,26 +530,45 @@ Next investigation: I5 — fixed-effect leakage in the Normal GLS step
       D. condition-gated blends using A_gls condition/effective rank
       E. projection-error oracle blend (uses truth; diagnostic only) to estimate upside
 
-    Expand only promising ablations to the required 12-way suite. Reject directions
-    where small-n-mixed BLUP improvement comes from truth-only gates or causes obvious
-    medium/large/huge regressions in the ablation.
+    Result:
 
-  Step 3 — Candidate patch order (one patch at a time).
+      small-n-mixed/train:
+        beta_est baseline: 1.0687
+        beta_ols:          0.3632
+        blend α=0.25:      0.9067
+        blend α=0.50:      0.7195
+        blend α=0.75:      0.5352
+
+    Expanded 12-way ablation showed α=0.50 improved every BLUP row:
+      - medium-n-mixed: 0.3749 → 0.3652
+      - large-n-mixed:  0.3670 → 0.3585
+      - huge-n-mixed:   0.4663 → 0.4021
+      - sampled rows improved by 7-24%.
+
+  Step 3 — Candidate patch order (one patch at a time). [DONE]
     Patch 1 candidate: increase adaptive ridge in final `_normalGlsAndBlups` beta solve
       only, with a scalar sweep first (e.g. 1e-6 → 1e-5, 1e-4, 1e-3). This is the
       smallest beta-focused change and requires no new gate.
+      Result: REVERTED. `1e-5` final ridge did not improve small-n-mixed BLUP
+      (1.0687 → 1.0698) and regressed medium/large/huge mixed BLUPs, worst
+      huge-n-mixed 0.4663 → 0.7638.
 
     Patch 2 candidate: shrink beta_gls toward beta_ols when final A_gls is weakly
       identified. Gate candidates should be based only on observable numerical
       diagnostics such as condition number, effective rank, and beta_mask count.
+      Result: REVERTED in direct-output form. A global 25% reported-beta blend improved
+      BLUPs, but violated the FFX regression rule: huge-n-mixed FFX 0.3034 → 0.3266,
+      large-n-sampled/valid FFX 0.3874 → 0.4052.
 
     Patch 3 candidate: for BLUP residuals only, use a conservative beta_for_blup
       separate from reported beta_est. This is higher risk because it can improve
       BLUPs while leaving FFX unchanged; only try after Patch 1/2 diagnostics.
+      Result: ACCEPTED. Use `beta_for_blup = 0.5*beta_gls + 0.5*beta_ols` only for
+      final BLUP residuals. Reported `beta_est`, Ψ, and σ² are unchanged.
 
     Explicitly dead candidate: beta_wg fallback or shrinkage toward beta_wg.
 
-  Step 4 — Benchmark protocol for every patch.
+  Step 4 — Benchmark protocol for every patch. [DONE for accepted Patch 3]
     After each single patch, rerun the GLMM error analysis on:
       - `small|medium|large|huge-n-mixed`, first two training epochs;
       - `small|medium|large|huge-n-sampled`, valid and test.
@@ -575,10 +597,36 @@ Next investigation: I5 — fixed-effect leakage in the Normal GLS step
       - any sRFX regression exceeds 5%;
       - small-n-mixed BLUP improvement is <1% after the full 12-way check.
 
-  Success criteria remain:
-    Primary:    small-n-mixed BLUPs NRMSE < 0.9 (current: 1.0687)
-    Secondary:  small-n-mixed sRFX NRMSE does not regress (current: 0.6421)
-    Regression: all other required datasets within ±3% of Fix C baseline
+    Accepted Patch 3 results:
+      small-n-mixed/train:    FFX 0.2249, sRFX 0.6421, sEps 0.0839, BLUP 0.7198
+      medium-n-mixed/train:   FFX 0.1452, sRFX 0.5739, sEps 0.0671, BLUP 0.3660
+      large-n-mixed/train:    FFX 0.2686, sRFX 0.4947, sEps 0.0724, BLUP 0.3605
+      huge-n-mixed/train:     FFX 0.3034, sRFX 0.4957, sEps 0.0648, BLUP 0.4038
+      small-n-sampled/valid:  FFX 0.1551, sRFX 0.6313, sEps 0.1031, BLUP 0.5016
+      small-n-sampled/test:   FFX 0.1686, sRFX 0.6655, sEps 0.1002, BLUP 0.5319
+      medium-n-sampled/valid: FFX 0.3625, sRFX 0.5334, sEps 0.0978, BLUP 0.5201
+      medium-n-sampled/test:  FFX 0.2437, sRFX 0.6081, sEps 0.1029, BLUP 0.4858
+      large-n-sampled/valid:  FFX 0.3874, sRFX 0.5811, sEps 0.1104, BLUP 0.5163
+      large-n-sampled/test:   FFX 0.4959, sRFX 0.6065, sEps 0.1078, BLUP 0.5312
+      huge-n-sampled/valid:   FFX 0.4208, sRFX 0.7824, sEps 0.1643, BLUP 0.5163
+      huge-n-sampled/test:    FFX 0.4662, sRFX 0.5954, sEps 0.1826, BLUP 0.5423
+
+  Success criteria:
+    Primary:    small-n-mixed BLUPs NRMSE < 0.9. MET: 0.7198.
+    Secondary:  small-n-mixed sRFX NRMSE does not regress. MET: unchanged 0.6421.
+    Regression: all other required datasets within ±3% of Fix C baseline for
+      FFX/sRFX/sEps, and no BLUP regression. MET in the required benchmark.
+
+  Next direction after I5:
+    - Add a focused unit/regression test for the Normal path proving `beta_est` is
+      unchanged while BLUPs use `beta_for_blup`.
+    - Run the same benchmark on more than two training epochs before broad handoff,
+      because the accepted patch is final-output-only and should be stable but was
+      selected on the required two-epoch protocol.
+    - Investigate whether α can be made data-adaptive from observable diagnostics
+      (projection proxy, beta_mask_count, effective rank). Fixed α=0.5 is accepted,
+      but α=0.75 was better in small-n and still strong in sampled ablations; a gate
+      may capture more upside without changing reported FFX.
 
 ---
 
@@ -608,6 +656,6 @@ Priority order
   │ I4 shrinkage diagnostics   │ Found beta leakage, not  │ analysis  │ Done   │
   │                            │ Ψ/σ², dominates P1       │           │        │
   ├────────────────────────────┼──────────────────────────┼───────────┼────────┤
-  │ I5 beta leakage            │ Diagnose/fix Normal GLS  │ analysis  │ Next   │
-  │                            │ fixed-effect error       │           │        │
+  │ I5 beta leakage            │ BLUP-only beta_for_blup  │ 8 lines   │ Done   │
+  │                            │ blend: small BLUP 0.72   │           │        │
   └────────────────────────────┴──────────────────────────┴───────────┴────────┘

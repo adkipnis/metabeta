@@ -368,7 +368,9 @@ def _emRefineNormal(
         trim_mask = mom_mask_1d & (blup_norm <= outlier_thresh)  # (B, m) True = included
         trim_count = trim_mask.float().sum(dim=1).clamp(min=1.0)  # (B,)
         trim_mask_4d = trim_mask[:, :, None, None]
-        Psi_em = _psdProject(((blup_outer + post_cov) * trim_mask_4d).sum(dim=1) / trim_count[:, None, None])
+        Psi_em = _psdProject(
+            ((blup_outer + post_cov) * trim_mask_4d).sum(dim=1) / trim_count[:, None, None]
+        )
         psi_diag_em = Psi_em.diagonal(dim1=-2, dim2=-1).clamp(min=psi_diag_floor)
         Psi_em = torch.where(enough_full_mom[:, None, None], Psi_em, torch.diag_embed(psi_diag_em))
         Psi = _psdClampEigenvalues(_psdProject((0.5 * Psi + 0.5 * Psi_em) * active_qq), psi_eig_cap)
@@ -558,10 +560,13 @@ def _lmmNormalFull(
     )
 
     beta_gls = gls.beta
+    beta_for_blup = (0.5 * gls.beta + 0.5 * beta_ols).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    resid_gls = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_for_blup)) * mask_n
+    Ztr_gls = torch.einsum('bmnq,bmn->bmq', Zm, resid_gls)
+    blups = torch.einsum('bmqp,bmp->bmq', gls.W_g, Ztr_gls)
+    blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
     W_ZtX = gls.W_ZtX
     A_gls_reg = gls.A_reg
-    resid_gls = gls.resid
-    blups = gls.blups
     blup_var = gls.blup_var
     beta_identified = gls.beta_mask.any(dim=-1)
 
