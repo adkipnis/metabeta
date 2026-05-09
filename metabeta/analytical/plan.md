@@ -618,8 +618,8 @@ I5 — fixed-effect leakage in the Normal GLS step
       FFX/sRFX/sEps, and no BLUP regression. MET in the required benchmark.
 
   Next direction after I5:
-    - Add a focused unit/regression test for the Normal path proving `beta_est` is
-      unchanged while BLUPs use `beta_for_blup`.
+    - Focused regression test added in `tests/utils/test_glmm.py`: `beta_est` remains
+      the reported GLS estimate while BLUPs match the `beta_for_blup` residual path.
     - Run the same benchmark on more than two training epochs before broad handoff,
       because the accepted patch is final-output-only and should be stable but was
       selected on the required two-epoch protocol.
