@@ -165,7 +165,7 @@ def _initialPsiMom(
     fallback_diag = fallback_diag * active_q
     diag_floor_signal = torch.where(
         enough_diag_mom[:, None],
-        0.5 * psi_diag_signal * active_q,
+        0.45 * psi_diag_signal * active_q,
         0.1 * component_diag_signal * active_q,
     )
     enough_diag = enough_diag_mom[:, None] | use_component_diag

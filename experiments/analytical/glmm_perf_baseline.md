@@ -717,3 +717,49 @@ blend from active fixed-effect dimension inferred from `XtX`.
 and `medium-n-mixed` moves away from the I5 guardrail, 0.3769 -> 0.3714. Non-BLUP
 metrics are unchanged. The largest BLUP regression versus I6 is
 `medium-n-sampled/valid`, 0.4796 -> 0.4922 (+2.6%), inside the 3% budget.
+
+---
+
+### I8 Fix — Slightly lower MoM diagonal Psi floor (2026-05-09)
+
+**Diagnostic**: `glmm_srfx_diagnostic.py` showed that sRFX error was concentrated in
+components pinned at the diagonal Psi floor:
+
+| Split | N | sRFX NRMSE | Rel. bias |
+|-------|---|------------|-----------|
+| floor hit = false | 121453 | 0.4871 | +0.197 |
+| floor hit = true | 59430 | 0.9835 | +5.773 |
+
+First EM raw/winsor/trim targets were worse than the final post-EM estimate, and
+eigencap hits were rare, so the first patch targeted only floor construction.
+
+**Rejected scalar variants**:
+- `0.25 * psi_diag_signal`: improved sRFX broadly but failed the BLUP guardrail
+  (`medium-n-sampled/test` 0.4792 -> 0.4978, +3.9%) and moved FFX noticeably.
+- `0.375 * psi_diag_signal`: failed badly on mixed rows (`medium-n-mixed` BLUP
+  0.3714 -> 0.6457; `huge-n-mixed` 0.3964 -> 0.4335).
+
+**Accepted change**: reduce only the joint diagonal MoM floor signal from
+`0.5 * psi_diag_signal` to `0.45 * psi_diag_signal`. Fallback and component-diagonal
+floors are unchanged.
+
+**Required 12-way benchmark result**:
+
+| Dataset/Partition | FFX | sRFX | sEps | BLUPs |
+|-------------------|-----|------|------|-------|
+| small-n-mixed/train | 0.2250 | 0.6353 | 0.0839 | 0.3625 |
+| small-n-sampled/valid | 0.1553 | 0.6313 | 0.1036 | 0.4249 |
+| small-n-sampled/test | 0.1685 | 0.6623 | 0.1002 | 0.4207 |
+| medium-n-mixed/train | 0.1459 | 0.5640 | 0.0671 | 0.3714 |
+| medium-n-sampled/valid | 0.3625 | 0.5326 | 0.0978 | 0.4920 |
+| medium-n-sampled/test | 0.2437 | 0.6028 | 0.1030 | 0.4788 |
+| large-n-mixed/train | 0.2700 | 0.4898 | 0.0724 | 0.3641 |
+| large-n-sampled/valid | 0.3658 | 0.5662 | 0.1105 | 0.4605 |
+| large-n-sampled/test | 0.4627 | 0.5950 | 0.1082 | 0.4803 |
+| huge-n-mixed/train | 0.3069 | 0.4932 | 0.0649 | 0.3965 |
+| huge-n-sampled/valid | 0.4204 | 0.7640 | 0.1644 | 0.5086 |
+| huge-n-sampled/test | 0.4661 | 0.5908 | 0.1828 | 0.5167 |
+
+**Assessment**: Accepted. sRFX improves on every required row versus I7. BLUP stays
+within the 3% I7 guardrail and improves on most rows. Tiny FFX/sEps movements are
+expected because Psi changes the GLS path; no row shows a material FFX/sEps failure.

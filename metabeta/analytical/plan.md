@@ -261,16 +261,59 @@ Interpretation:
 - Off-diagonal correlation NRMSE stays high after shrinkage, but `sigma_rfx` is a diagonal
   scale metric and the floor-hit diagonal bias is the more direct target.
 
-Next patch to try:
+Accepted I8 result: slight diagonal floor reduction
+---------------------------------------------------
 
-1. Keep the accepted I7 BLUP beta schedule fixed.
-2. Patch only the `psi_diag_floor` construction in `_initialPsiMom`.
-3. Start with one conservative candidate: reduce the floor signal multiplier for
-   `enough_diag_mom` rows from `0.5 * psi_diag_signal` to a lower value, while leaving the
-   fallback minimum in place.
-4. Run `glmm_srfx_diagnostic.py` on the required suite to confirm floor-hit bias drops.
-5. Run `glmm_required_benchmark.py`; keep only if sRFX improves materially, FFX/sEps do not
-   regress, and no BLUP row regresses by more than 3% versus I7.
+I8 patched only the joint diagonal MoM floor signal:
+
+```python
+diag_floor_signal = 0.45 * psi_diag_signal * active_q
+```
+
+Fallback and component-diagonal floors are unchanged. More aggressive scalar reductions
+were rejected:
+
+- `0.25` improved sRFX but failed the BLUP guardrail on `medium-n-sampled/test`
+  (`0.4792 -> 0.4978`, +3.9%) and moved FFX noticeably.
+- `0.375` failed badly on mixed rows (`medium-n-mixed` BLUP `0.3714 -> 0.6457`;
+  `huge-n-mixed` `0.3964 -> 0.4335`).
+
+Accepted required benchmark:
+
+| Dataset | Partition | FFX | sRFX | sEps | BLUP |
+| --- | --- | ---: | ---: | ---: | ---: |
+| small-n-mixed | train | 0.2250 | 0.6353 | 0.0839 | 0.3625 |
+| small-n-sampled | valid | 0.1553 | 0.6313 | 0.1036 | 0.4249 |
+| small-n-sampled | test | 0.1685 | 0.6623 | 0.1002 | 0.4207 |
+| medium-n-mixed | train | 0.1459 | 0.5640 | 0.0671 | 0.3714 |
+| medium-n-sampled | valid | 0.3625 | 0.5326 | 0.0978 | 0.4920 |
+| medium-n-sampled | test | 0.2437 | 0.6028 | 0.1030 | 0.4788 |
+| large-n-mixed | train | 0.2700 | 0.4898 | 0.0724 | 0.3641 |
+| large-n-sampled | valid | 0.3658 | 0.5662 | 0.1105 | 0.4605 |
+| large-n-sampled | test | 0.4627 | 0.5950 | 0.1082 | 0.4803 |
+| huge-n-mixed | train | 0.3069 | 0.4932 | 0.0649 | 0.3965 |
+| huge-n-sampled | valid | 0.4204 | 0.7640 | 0.1644 | 0.5086 |
+| huge-n-sampled | test | 0.4661 | 0.5908 | 0.1828 | 0.5167 |
+
+Decision:
+
+- Keep. sRFX improves on every required row versus I7.
+- BLUP stays inside the 3% I7 budget and improves on most rows.
+- FFX/sEps movements are small; changing Psi necessarily changes GLS, but there is no
+  material FFX/sEps failure.
+- The diagnostic still shows floor-hit components are bad (`sRFX=1.0476`, rel bias
+  `+6.009`) but fewer than baseline (`56155` versus `59430` active components).
+
+Next direction:
+
+1. Do not keep searching scalar floor multipliers; `0.25` and `0.375` showed unstable
+   GLS/EM interactions.
+2. Investigate a selective, observable gate for floor reduction rather than another
+   global scalar. Candidate signals: `enough_full_mom`, `G_mom`, active `q`, and
+   `floor_hit` predicted from the pre-clamp diagonal.
+3. Prioritize `diag_mom` and fallback/component paths, where sRFX remains near or above
+   0.9-1.0.
+4. Keep I7 BLUP beta schedule and I8 scalar floor fixed while running the next diagnostic.
 
 Guardrails:
 
