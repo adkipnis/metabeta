@@ -576,6 +576,15 @@ def run_srfx_diagnostic(
         row = _summarize_bin(f'path={path}', records, lambda r, path=path: r['path'] == path)
         if row is not None:
             bin_rows.append(row)
+        for floor_hit in [False, True]:
+            row = _summarize_bin(
+                f'path={path},floor={floor_hit}',
+                records,
+                lambda r, path=path, floor_hit=floor_hit: r['path'] == path
+                and r['floor_post_em'] == floor_hit,
+            )
+            if row is not None:
+                bin_rows.append(row)
     for field in ['floor_post_em', 'cap_post_em']:
         for value in [False, True]:
             row = _summarize_bin(f'{field}={value}', records, lambda r, f=field, v=value: r[f] == v)
