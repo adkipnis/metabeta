@@ -560,7 +560,17 @@ def _lmmNormalFull(
     )
 
     beta_gls = gls.beta
-    beta_for_blup = (0.25 * gls.beta + 0.75 * beta_ols).nan_to_num(
+    active_d_count = (XtX.diagonal(dim1=-2, dim2=-1).abs() > 1e-8).sum(dim=-1)
+    blup_beta_alpha = torch.where(
+        active_d_count <= 4,
+        torch.ones_like(se2),
+        torch.where(
+            active_d_count <= 8, se2.new_full(se2.shape, 0.65), se2.new_full(se2.shape, 0.75)
+        ),
+    )
+    beta_for_blup = (
+        (1.0 - blup_beta_alpha[:, None]) * gls.beta + blup_beta_alpha[:, None] * beta_ols
+    ).nan_to_num(
         nan=0.0,
         posinf=0.0,
         neginf=0.0,

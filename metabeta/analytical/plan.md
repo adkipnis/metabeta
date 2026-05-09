@@ -1,7 +1,7 @@
 Plan
 ====
 
-Last updated: 2026-05-09, after I6 alpha=0.75 benchmark.
+Last updated: 2026-05-09, after I7 active-d adaptive alpha benchmark.
 
 Current estimator state
 -----------------------
@@ -18,6 +18,8 @@ Implemented and kept:
 - I5: compute final BLUP residuals with a BLUP-only beta blend.
 - I6: tune that blend to alpha=0.75:
   `beta_for_blup = 0.25 * beta_gls + 0.75 * beta_ols`.
+- I7: make the BLUP-only beta blend active-d adaptive:
+  alpha 1.00 for active d <= 4, 0.65 for active d 5-8, and 0.75 above that.
 
 Also present but unused:
 
@@ -26,7 +28,7 @@ Also present but unused:
 Active problem
 --------------
 
-The remaining priority is BLUP accuracy, especially `small-n-mixed`.
+The remaining priority is BLUP accuracy without spending the medium/sampled regression budget.
 
 Fix C baseline:
 
@@ -156,25 +158,55 @@ Decision:
 - `medium-n-mixed` is the limiting case: 0.3769 versus the current-I5 guardrail of
   `0.3660 * 1.03 = 0.3770`.
 
-Next direction: adaptive alpha
-------------------------------
+Accepted I7 result: active-d adaptive alpha
+-------------------------------------------
 
-Do not keep increasing the global scalar alpha. Alpha=0.75 is useful, but it consumes almost
-the full `medium-n-mixed` regression budget.
+I7 used `glmm_alpha_gate_diagnostic.py` to compare scalar alphas and observable gates.
+Simple beta-mask/rank gates were not sufficient: they either lost too much small-n gain or
+regressed medium rows. The accepted schedule uses active fixed-effect dimension inferred
+from the design matrix:
 
-Next patch should make alpha data-adaptive:
+```python
+alpha = 1.00  if active_d <= 4
+alpha = 0.65  if 5 <= active_d <= 8
+alpha = 0.75  otherwise
+```
 
-- Use alpha=0.75 where the final GLS beta solve is weakly identified.
-- Use alpha=0.50, or possibly alpha=0.65, where medium-n-like rows are at risk.
-- Gate from observable diagnostics only. Prefer beta_mask_count and effective rank first;
-  use condition number second.
-- Do not use dataset family, partition, true beta, true projection error, or oracle metrics.
+Required benchmark:
 
-Patch order:
+| Dataset | Partition | FFX | sRFX | sEps | BLUP |
+| --- | --- | ---: | ---: | ---: | ---: |
+| small-n-mixed | train | 0.2249 | 0.6421 | 0.0839 | 0.3637 |
+| small-n-sampled | valid | 0.1551 | 0.6313 | 0.1031 | 0.4248 |
+| small-n-sampled | test | 0.1686 | 0.6655 | 0.1002 | 0.4209 |
+| medium-n-mixed | train | 0.1452 | 0.5739 | 0.0671 | 0.3714 |
+| medium-n-sampled | valid | 0.3625 | 0.5334 | 0.0978 | 0.4922 |
+| medium-n-sampled | test | 0.2437 | 0.6081 | 0.1029 | 0.4792 |
+| large-n-mixed | train | 0.2686 | 0.4947 | 0.0724 | 0.3643 |
+| large-n-sampled | valid | 0.3874 | 0.5811 | 0.1104 | 0.4782 |
+| large-n-sampled | test | 0.4959 | 0.6065 | 0.1078 | 0.4945 |
+| huge-n-mixed | train | 0.3034 | 0.4957 | 0.0648 | 0.3964 |
+| huge-n-sampled | valid | 0.4208 | 0.7824 | 0.1643 | 0.5095 |
+| huge-n-sampled | test | 0.4662 | 0.5954 | 0.1826 | 0.5186 |
 
-1. Add a diagnostic script or extend `glmm_beta_leakage_diagnostic.py` to report BLUP NRMSE
-   by candidate observable gates under alpha=0.50, 0.65, and 0.75.
-2. Choose one simple gate that protects `medium-n-mixed` while retaining most small-n gain.
-3. Apply the adaptive-alpha patch as one isolated change.
-4. Rerun the required benchmark and keep only if it improves or matches alpha=0.75 while
-   moving `medium-n-mixed` away from the 3% boundary.
+Decision:
+
+- Keep. `small-n-mixed` improves from 0.5355 to 0.3637 versus I6.
+- `medium-n-mixed` moves away from the I5 guardrail: 0.3769 -> 0.3714.
+- FFX, sRFX, and sEps are unchanged across the required suite.
+- The largest BLUP regression versus I6 is `medium-n-sampled/valid`: 0.4796 -> 0.4922
+  (+2.6%), inside the 3% budget.
+
+Next direction
+--------------
+
+Do not keep tuning scalar alpha without a new diagnostic. The current BLUP error is close
+to the apparent beta-residual limit for small-n, and remaining risk is concentrated in
+sampled medium/high-d rows.
+
+Next investigation should target one of:
+
+1. Better observable gate for medium sampled rows, using design diagnostics beyond active d
+   only if it improves `medium-n-sampled/valid` without losing the small-n gain.
+2. Variance-component accuracy (`sRFX`) separately from BLUP residual beta, since sRFX remains
+   much larger than BLUP error on several rows.
