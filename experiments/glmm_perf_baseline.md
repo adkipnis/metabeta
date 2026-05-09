@@ -481,3 +481,54 @@ cannot unlock. For small-n-mixed, G_mom = 4–7 is irreducible with current simu
 sizes. Fix E is dead; WP-EM2 is a misdiagnosis of the true constraint.
 
 Current state: Fix 1 + Fix 2 + Fix 4 + Fix 7 + Fix 9 + Fix C. (unchanged)
+
+---
+
+### Attempted I3 Option E — post-EM psi_ratio-gated REML (2026-05-09, REVERTED)
+
+**Hypothesis**: The remaining small-n-mixed BLUP error comes from EM collapsing to
+near-zero Ψ. Gate REML on the post-EM result:
+
+```python
+psi_ratio = Psi.diagonal(dim1=-2, dim2=-1).amax(dim=-1) / se2
+reml_gate = psi_ratio < 0.03
+```
+
+**Diagnostic result**: The gate selected the easiest BLUP cases, not the failure mode.
+On small-n-mixed:
+
+| Subset | Share | BLUP NRMSE |
+|--------|-------|------------|
+| all rows | 100% | 1.0687 |
+| psi_ratio < 0.03 | 9.9% | 0.164 |
+| psi_ratio >= 0.03 | 90.1% | 1.113 |
+
+The same pattern held for medium/large/huge-n-mixed: low-ratio rows had lower BLUP
+error than the non-gated majority. Post-EM Ψ/σ² collapse is therefore not the
+remaining P1 failure mode.
+
+**Attempted change**: After `_emRefineNormal`, initialize gated rows at diagonal
+`psi_diag_floor`, keep σ² fixed, run 4 `_remlNewtonStep` iterations with
+`reml_psi_cap = max(psi_eig_cap, 25*σ²)`, then merge gated rows back.
+
+**Required 12-way benchmark result**:
+
+| Dataset/Partition | FFX | sRFX | sEps | BLUPs |
+|-------------------|-----|------|------|-------|
+| small-n-mixed/train | 0.2249 → 0.2249 | 0.6421 → 1.2026 | 0.0839 → 0.0839 | 1.0687 → 1.0690 |
+| medium-n-mixed/train | 0.1452 → 0.1452 | 0.5739 → 1.7796 | 0.0671 → 0.0671 | 0.3749 → 0.3769 |
+| large-n-mixed/train | 0.2686 → 0.2711 | 0.4947 → 1.9061 | 0.0724 → 0.0724 | 0.3670 → 0.3693 |
+| huge-n-mixed/train | 0.3034 → 0.3041 | 0.4957 → 1.6741 | 0.0648 → 0.0648 | 0.4663 → 0.4685 |
+| small-n-sampled/valid | 0.1551 → 0.1550 | 0.6313 → 1.0275 | 0.1031 → 0.1031 | 0.7044 → 0.7045 |
+| small-n-sampled/test | 0.1686 → 0.1686 | 0.6655 → 1.0480 | 0.1002 → 0.1002 | 0.7898 → 0.7900 |
+| medium-n-sampled/valid | 0.3625 → 0.3624 | 0.5334 → 1.3794 | 0.0978 → 0.0978 | 0.5566 → 0.5568 |
+| medium-n-sampled/test | 0.2437 → 0.2438 | 0.6081 → 1.3683 | 0.1029 → 0.1029 | 0.5367 → 0.5368 |
+| large-n-sampled/valid | 0.3874 → 0.3931 | 0.5811 → 1.5843 | 0.1104 → 0.1104 | 0.6642 → 0.6647 |
+| large-n-sampled/test | 0.4959 → 0.4958 | 0.6065 → 1.4271 | 0.1078 → 0.1078 | 0.6774 → 0.6776 |
+| huge-n-sampled/valid | 0.4208 → 0.4211 | 0.7824 → 1.5732 | 0.1643 → 0.1643 | 0.5827 → 0.5812 |
+| huge-n-sampled/test | 0.4662 → 0.4664 | 0.5954 → 1.4824 | 0.1826 → 0.1826 | 0.6631 → 0.6639 |
+
+**Assessment**: Reverted. BLUPs did not improve, and sRFX regressed 2-3× across
+every dataset family. The next direction is not another scalar gate for REML; it is
+an oracle shrinkage diagnostic that directly compares estimated vs true BLUP
+shrinkage and separates Ψ error, σ² error, and β leakage.

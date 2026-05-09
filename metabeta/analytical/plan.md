@@ -1,5 +1,5 @@
 Plan
-Last updated: 2026-05-09 (after I3 Option D + Option C attempted, reverted)
+Last updated: 2026-05-09 (after I3 Option E attempted, reverted)
 
 Current code state: Fix 1 + Fix 2 + Fix 4 + Fix 7 + Fix 9 + Fix C
   Code also contains `_remlNewtonStep` in normal.py (correct REML gradient; not wired in)
@@ -10,6 +10,7 @@ Current code state: Fix 1 + Fix 2 + Fix 4 + Fix 7 + Fix 9 + Fix C
   Fix 7  — Per-component count floor in component-wise MoM (addresses WP-Ψ4)
   Fix 9  — Adaptive M-step BLUP winsorization at 10× (partially addresses WP-EM1)
   Fix C  — Outlier-trimmed Ψ_em M-step at 3× mean BLUP norm (addresses WP-EM1 P3)
+  I3 Option E was attempted and reverted; `_remlNewtonStep` remains unused.
 
 ---
 
@@ -30,7 +31,9 @@ Key lessons from Fixes 1–E
      from a bad Ψ initialization. More iterations = stronger convergence to the wrong
      attractor. The hard cap of 5 is inadvertent regularization. Any extension must
      first verify the fixed point is unbiased, not just that G_mom is large.
-     G_mom is NOT a reliable proxy; psi_df = Σ(ns_g − q − 1) over mom groups is better.
+     G_mom is NOT a reliable proxy; psi_df = Σ(ns_g − q − 1) over mom groups is a
+     better structural summary, but Fix B showed it is still not a reliable gate for
+     fixed-point quality.
 
   3. Adaptive thresholds beat static ones.
      Fix 3 (static cap at 6×sqrt(Ψ̂_init)) was catastrophic; Fix 9 (cap at
@@ -66,6 +69,15 @@ Key lessons from Fixes 1–E
      G_mom alone does not identify the small-n problem: large-n datasets with G_mom < 10
      (10–15% of those datasets) would also be gated, causing catastrophic regressions.
 
+  7. Post-EM Ψ/σ² collapse is NOT the small-n BLUP failure mode.
+     Option E tested `psi_ratio = max diag(Ψ) / σ²` as a runtime gate. The diagnostic
+     showed the opposite of the hypothesis: low-psi_ratio rows were already the BEST
+     BLUP cases. For small-n-mixed, global BLUP NRMSE was 1.0687, but rows with
+     psi_ratio < 0.03 had BLUP NRMSE 0.164 while the non-gated rows had 1.113.
+     Applying REML to the low-ratio rows barely changed BLUPs and doubled/tripled
+     sRFX NRMSE across every dataset. The remaining problem is not Ψ≈0 collapse;
+     it is miscalibrated shrinkage in the non-collapsed majority.
+
 ---
 
 Remaining open problems (ordered by priority)
@@ -74,9 +86,9 @@ Remaining open problems (ordered by priority)
   Every fix has left this effectively unchanged (BLUPs: 1.14 before Fix 9, now ~1.07
   but the small gain came from better M-step, not better Ψ init). The fundamental
   problem is Ψ estimation error (over- OR under-estimation).
-  Target for I3 (REML): NRMSE < 0.9.
+  Target for next fix: NRMSE < 0.9.
 
-  NEW INSIGHT (2026-05-09, after I3 attempt): Oracle diagnostic with TRUE Ψ and σ²
+  NEW INSIGHT (2026-05-09, after I3 attempts): Oracle diagnostic with TRUE Ψ and σ²
   gives BLUP NRMSE = 0.33 — confirming that better Ψ estimation would yield huge gains.
   Breakdown of Fix C NRMSE by G_mom:
     G_mom < 5:    0.87  (104 datasets — small G total, few groups, actually BEST)
@@ -85,10 +97,10 @@ Remaining open problems (ordered by priority)
     G_mom 20-49:  1.10  (4076 datasets — THE REAL PROBLEM, 50% of data)
     G_mom 50+:    1.02  (1006 datasets)
   The original I3 plan targeted G_mom < 10 (the EM false Ψ=0 fixed point), but G_mom <
-  10 datasets are actually the BEST performing subset! The actual problem is G_mom=10-49
-  where MoM has some information but the MoM+EM cycle consistently over- OR under-estimates
-  Ψ. This regime requires REML with a gate based on psi_df (total residual df in informative
-  groups), not G_mom alone. See I3 revised plan.
+  10 datasets are actually the BEST performing subset. Option E then targeted low
+  post-EM Ψ/σ², but that subset is ALSO among the best BLUP performers. The actual
+  problem is the non-collapsed majority where MoM+EM estimates a non-trivial Ψ but
+  the implied BLUP shrinkage is wrong.
 
   P2 — sEps regression from Fix 7 [root cause: variance partitioning + WP-σ1/σ2]
   Most datasets saw 20–66% worse σ̂_eps after Fix 7. The EM σ² update now wanders
@@ -159,11 +171,12 @@ Proposed fixes (ordered by impact-to-effort)
 
 ---
 
-Implementation plan: I3 — REML-Newton for diagonal variance components
+Implementation plan: I3 — REML-Newton for diagonal variance components [ON HOLD]
 
   Target: P1 (small-n-mixed BLUPs, NRMSE ~1.07 → < 0.9)
-  Effort: ~80 lines for REML gradient, ~30 lines integration
-  Risk: Medium-high
+  Status: ON HOLD. Options C/D/E failed or regressed; `_remlNewtonStep` remains available
+  but should not be wired in again without a stronger gate and an oracle-backed target.
+  Risk: High
 
   --- Why REML fixes what EM cannot ---
 
@@ -369,7 +382,7 @@ Implementation plan: I3 — REML-Newton for diagonal variance components
   The structural difference between types is in d (3 vs 6–14) and q (1 vs 2), which
   ARE observable at runtime but fragile — conflates model structure with dataset size.
 
-  --- I3 revised direction (OPTION E) ---
+  --- I3 revised direction (OPTION E) [FAILED — 2026-05-09] ---
 
   Gate on post-EM Ψ/σ²: after the EM has run, check if it collapsed to a near-zero Ψ.
   This detects the EM false fixed point at runtime from its RESULT, not its preconditions.
@@ -383,11 +396,19 @@ Implementation plan: I3 — REML-Newton for diagonal variance components
   For datasets where true Ψ is genuinely small (near 0), REML would be a no-op (the
   signal is also near 0, so REML would confirm Ψ ≈ 0 and stay put).
 
-  Threshold selection: needs a diagnostic sweep across all dataset types to find a
-  threshold that fires on collapsed-EM datasets and not on healthy-EM datasets. Likely
-  in the range 0.01–0.1.
+  Diagnostic result:
+    Baseline trigger rates were similar across all 12 required dataset/split combinations,
+    so the gate did not isolate small-n-mixed. More importantly, low-ratio rows were
+    already low-error:
 
-  Integration (post-EM REML refinement):
+      small-n-mixed global BLUP NRMSE: 1.0687
+      psi_ratio < 0.03:               0.164
+      psi_ratio >= 0.03:              1.113
+
+    The same qualitative pattern held for medium/large/huge-n-mixed. Low `psi_ratio`
+    is a marker for easy, strongly shrunk BLUP cases, not for the false fixed point.
+
+  Attempted integration (post-EM REML refinement):
     # After _emRefineNormal returns (Psi, se2, gls):
     psi_ratio = Psi.diagonal(dim1=-2, dim2=-1).amax(dim=-1) / se2.clamp(min=1e-12)
     reml_gate = psi_ratio < THRESHOLD
@@ -402,35 +423,55 @@ Implementation plan: I3 — REML-Newton for diagonal variance components
             gls_reml = _normalGlsAndBlups(..., Psi_reml, ...)
         # merge Psi and gls fields
 
-  Key advantage: the gate fires on the OUTCOME (EM collapsed) rather than a proxy for
-  conditions that might cause collapse. False positives (large-n datasets where true Ψ
-  is genuinely small) are safe: REML on a dataset with true Ψ≈0 and small signal does
-  nothing harmful.
+  Required 12-way benchmark result for threshold 0.03:
+    small-n-mixed:   BLUP 1.0687 → 1.0690, sRFX 0.6421 → 1.2026
+    medium-n-mixed:  BLUP 0.3749 → 0.3769, sRFX 0.5739 → 1.7796
+    large-n-mixed:   BLUP 0.3670 → 0.3693, sRFX 0.4947 → 1.9061
+    huge-n-mixed:    BLUP 0.4663 → 0.4685, sRFX 0.4957 → 1.6741
+    sampled valid/test showed the same sRFX regression pattern.
 
-  Step 1: run psi_ratio diagnostic — check its distribution per dataset type,
-  separately for datasets where the EM has clearly collapsed (Ψ ≈ psi_diag_floor)
-  vs where it found a non-trivial Ψ. This will reveal the right threshold.
+  Assessment: Option E is dead. REML from neutral init turns low-ratio easy cases into
+  noisy sRFX estimates and does not touch the high-BLUP-error majority.
 
-  Step 2: implement and benchmark with a handful of thresholds.
+---
 
-  --- σ² handling ---
+Next investigation: I4 — oracle shrinkage and variance-ratio diagnostics
 
-  Keep σ² fixed at the post-EM se2 during the REML refinement pass (not Stage 1 σ̂_eps,
-  since the EM σ² update has already run). The REML pass is a pure Ψ correction.
+  Goal: identify what is wrong in the non-collapsed majority before proposing another
+  estimator change. The next fix must target the rows where BLUP NRMSE is high, not
+  rows with low Ψ/σ² or low G_mom.
 
-  --- Success criteria ---
+  Step 1 — Decompose BLUP error by estimated-vs-true shrinkage.
+    For q=1 datasets, compute per-group approximate shrinkage:
+      lambda_hat  = Ψ_hat * z2 / (σ²_hat + Ψ_hat * z2)
+      lambda_true = Ψ_true * z2 / (σ²_true + Ψ_true * z2)
+    where z2 = Σ_i z_gi². Break BLUP NRMSE by:
+      - lambda_hat / lambda_true
+      - Ψ_hat / Ψ_true
+      - σ²_hat / σ²_true
+      - beta error quantiles
+    This directly answers whether high BLUP error is over-shrinkage, under-shrinkage,
+    or fixed-effect leakage.
 
-    Primary:    small-n-mixed BLUPs NRMSE < 0.9 (current: 1.07)
-    Secondary:  small-n-mixed sRFX NRMSE improves (current: ~0.64)
-    Regression: all other datasets within ±3% of Fix C baseline
+  Step 2 — Run oracle ablations on small-n-mixed only:
+      A. true Ψ + true σ² + estimated β
+      B. true Ψ + estimated σ² + estimated β
+      C. estimated Ψ + true σ² + estimated β
+      D. estimated Ψ + estimated σ² + true β
+    This separates variance-component error from β leakage. The existing oracle
+    result (true Ψ and σ² gives BLUP NRMSE 0.33) proves the target is real, but not
+    which estimated quantity is most responsible.
 
-  --- Numerical risks ---
+  Step 3 — Only after Step 1/2, test one narrow correction:
+      - If lambda_hat/lambda_true < 1 in high-error rows: reduce σ² or raise Ψ only
+        where the shrinkage diagnostic predicts over-shrinkage.
+      - If lambda_hat/lambda_true > 1: add shrinkage/regularization to Ψ for those rows.
+      - If β leakage dominates: revisit GLS beta fallback/masking rather than Ψ updates.
 
-    1. False positives on large-n datasets with genuinely small Ψ: safe (REML confirms
-       Ψ≈0 and makes no change).
-    2. psi_eig_cap too tight: use max(psi_eig_cap, 25·σ²) for REML cap.
-    3. psi_ratio threshold miscalibrated: check distribution to confirm separation.
-    4. REML adds cost for any false positives: acceptable at low false positive rate.
+  Success criteria remain:
+    Primary:    small-n-mixed BLUPs NRMSE < 0.9 (current: 1.0687)
+    Secondary:  small-n-mixed sRFX NRMSE does not regress (current: 0.6421)
+    Regression: all other required datasets within ±3% of Fix C baseline
 
 ---
 
@@ -454,7 +495,9 @@ Priority order
   │ Fix E (refresh mom4)       │ ABANDONED — _groupZDiag  │ —         │ Dead   │
   │                            │ is structural; no-op     │           │        │
   ├────────────────────────────┼──────────────────────────┼───────────┼────────┤
-  │ I3 (REML-Newton diagonal)  │ P1: small-n-mixed BLUPs  │ ~120 lines│ Next   │
-  │                            │ target NRMSE < 0.9;      │           │        │
-  │                            │ Option E: post-EM gate   │           │        │
+  │ I3 Option E (post-EM gate) │ ABANDONED — sRFX 2-3×    │ —         │ Dead   │
+  │                            │ regression, no BLUP gain │           │        │
+  ├────────────────────────────┼──────────────────────────┼───────────┼────────┤
+  │ I4 shrinkage diagnostics   │ Identify non-collapsed   │ analysis  │ Next   │
+  │                            │ high-BLUP-error regime   │           │        │
   └────────────────────────────┴──────────────────────────┴───────────┴────────┘

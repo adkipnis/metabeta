@@ -61,17 +61,21 @@ Status key:  ✓ addressed  ~  partially addressed  ✗ open  ! new insight
   structural (= number of groups with ns > active_count + 1 AND full ZtZ rank) —
   no mask refresh or parameter improvement can increase G_mom.
 
-  I3 attempt (2026-05-09, reverted): REML-Newton with gate G_mom<10 + neutral init.
-  Two failure modes discovered:
+  I3 attempts (2026-05-09, reverted): REML-Newton gates failed in three ways.
     (a) Wrong target: G_mom<10 datasets have NRMSE 0.79-0.87 (the BEST subset!). The
         actual problem is G_mom=10-49 (NRMSE 1.10, 78% of datasets). Oracle with true
         Ψ gives NRMSE 0.33 — confirming 3× gap entirely from estimation error.
     (b) Wrong gate: G_mom<10 triggers for 10-15% of large/huge-n-mixed datasets
         (those with many total groups but few informative ones), causing catastrophic
         sRFX regressions (+42-158%). The gate must incorporate n_g/group context.
-  Revised I3 direction: gate on psi_df = Σ_g(ns_g - active_count - 1) < 300 over
-  mom groups. This separates small-n (psi_df≈100) from large-n (psi_df≈960) even at
-  same G_mom. See revised I3 section in plan.md.
+    (c) Post-EM psi_ratio gate also targeted the wrong subset. Rows with
+        max diag(Ψ)/σ² < 0.03 were already very low BLUP error: on small-n-mixed,
+        BLUP NRMSE was 0.164 for gated rows vs 1.113 for non-gated rows. Applying
+        REML to them produced no useful BLUP improvement and regressed sRFX 2-3×
+        across the required benchmark suite.
+  Revised direction: stop designing count/ratio gates. Next run oracle shrinkage
+  diagnostics: compare estimated vs true BLUP shrinkage, Ψ/σ² ratios, and β leakage
+  in the non-collapsed high-error majority. See I4 in plan.md.
 
   The EM cannot recover from a badly underestimated Ψ: when Ψ̂ → 0, BLUPs → 0,
   M-step Ψ_em → 0, feeding back into worse Ψ. This is a FALSE FIXED POINT of the
