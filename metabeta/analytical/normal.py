@@ -307,7 +307,19 @@ def _emRefineNormal(
         blups_winsor = gls.blups.clamp(min=-blup_cap, max=blup_cap)
         blup_outer = torch.einsum('bmq,bmr->bmqr', blups_winsor, blups_winsor)
         post_cov = se2[:, None, None, None] * gls.W_g
-        Psi_em = _psdProject(((blup_outer + post_cov) * mom4).sum(dim=1) / G_mom[:, None, None])
+        # Outlier-trimmed Ψ_em: exclude groups whose ||b̂_g||² exceeds 3× the mean
+        # among mom groups. This is adaptive — when all groups have similar norms (no
+        # outliers) no groups are excluded and Ψ_em equals the original full mean.
+        # Only kicks in when one or more groups are genuinely anomalous relative to the
+        # rest, which is the case where Fix 9's per-BLUP cap occasionally over-clips.
+        blup_norm = blups_winsor.square().sum(dim=-1)  # (B, m)
+        mom_mask_1d = mom4.squeeze(-1).squeeze(-1).bool()  # (B, m)
+        mom_norm_mean = (blup_norm * mom_mask_1d.float()).sum(dim=1) / G_mom  # (B,)
+        outlier_thresh = 3.0 * mom_norm_mean[:, None]  # (B, 1) — 3× mean as outlier gate
+        trim_mask = mom_mask_1d & (blup_norm <= outlier_thresh)  # (B, m) True = included
+        trim_count = trim_mask.float().sum(dim=1).clamp(min=1.0)  # (B,)
+        trim_mask_4d = trim_mask[:, :, None, None]
+        Psi_em = _psdProject(((blup_outer + post_cov) * trim_mask_4d).sum(dim=1) / trim_count[:, None, None])
         psi_diag_em = Psi_em.diagonal(dim1=-2, dim2=-1).clamp(min=psi_diag_floor)
         Psi_em = torch.where(enough_full_mom[:, None, None], Psi_em, torch.diag_embed(psi_diag_em))
         Psi = _psdClampEigenvalues(_psdProject((0.5 * Psi + 0.5 * Psi_em) * active_qq), psi_eig_cap)
