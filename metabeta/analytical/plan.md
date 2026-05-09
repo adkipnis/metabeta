@@ -503,8 +503,8 @@ I5 — fixed-effect leakage in the Normal GLS step
       residuals; a lower coefficient RMSE can still produce worse group residuals.
 
   Step 1 — Build beta-leakage diagnostic (no estimator changes). [DONE]
-    Added `experiments/glmm_beta_leakage_diagnostic.py` to report, for the required
-    12-way suite:
+    Added `experiments/analytical/glmm_beta_leakage_diagnostic.py` to report, for
+    the required 12-way suite:
       - beta_est, beta_ols, beta_wg NRMSE and bias;
       - BLUP NRMSE by max |beta_est - beta_true|;
       - BLUP NRMSE by group-level projection error
@@ -630,6 +630,56 @@ I5 — fixed-effect leakage in the Normal GLS step
 
 ---
 
+Next patch plan: I6 — tune the BLUP-only beta blend
+
+  Rationale:
+    I5 proved the useful intervention is output-local: keep reported `beta_est`,
+    Ψ, and σ² unchanged, but compute BLUP residuals from a beta that is closer to
+    pooled OLS. The ablation before patching showed α=0.75 had much larger upside
+    than the accepted α=0.50:
+
+      small-n-mixed/train:     α=0.50 0.7195, α=0.75 0.5352
+      small-n-sampled/valid:   α=0.50 0.5012, α=0.75 0.4404
+      small-n-sampled/test:    α=0.50 0.5326, α=0.75 0.4488
+      huge-n-mixed/train:      α=0.50 0.4021, α=0.75 0.3947
+
+    The main risk is medium-n-mixed: ablation α=0.75 was 0.3761 vs Fix C baseline
+    0.3749 and current α=0.50 result 0.3660. That is acceptable versus Fix C but
+    near the current-patch regression boundary, so test it as one isolated patch.
+
+  Patch I6-1 candidate:
+    Change only the final BLUP residual beta:
+
+      current: `beta_for_blup = 0.5*beta_gls + 0.5*beta_ols`
+      try:     `beta_for_blup = 0.25*beta_gls + 0.75*beta_ols`
+
+    Do not change reported `beta_est`, Ψ, σ², beta_var, or blup_var formulas in
+    the same patch.
+
+  Benchmark protocol:
+    1. Run `uv run python experiments/analytical/glmm_required_benchmark.py`.
+    2. Compare against both:
+       - Fix C baseline in I5 Step 4; and
+       - current accepted I5 α=0.50 results.
+    3. Keep only if:
+       - small-n-mixed BLUP improves at least another 10% from 0.7198;
+       - no required BLUP row regresses by more than 3% versus Fix C baseline;
+       - medium-n-mixed does not regress by more than 3% versus current I5 α=0.50;
+       - FFX/sRFX/sEps remain unchanged.
+    4. Revert immediately if medium-n-mixed exceeds the current-regression boundary
+       or if any sampled row unexpectedly regresses.
+
+  Patch I6-2 fallback if α=0.75 is too aggressive:
+    Try α=0.65 as the next single patch. It should recover most small-n gain while
+    reducing medium-n-mixed risk.
+
+  Patch I6-3 only after scalar α settles:
+    Make α data-adaptive using observable diagnostics already computed in I5:
+    beta_mask_count/effective rank first, condition number second. Avoid truth-based
+    projection gates and avoid dataset-family gates.
+
+---
+
 Priority order
 
   ┌────────────────────────────┬──────────────────────────┬───────────┬────────┐
@@ -658,4 +708,7 @@ Priority order
   ├────────────────────────────┼──────────────────────────┼───────────┼────────┤
   │ I5 beta leakage            │ BLUP-only beta_for_blup  │ 8 lines   │ Done   │
   │                            │ blend: small BLUP 0.72   │           │        │
+  ├────────────────────────────┼──────────────────────────┼───────────┼────────┤
+  │ I6 beta blend tuning       │ Try α=0.75 BLUP-only;    │ 1 line    │ Next   │
+  │                            │ guard medium-n-mixed     │           │        │
   └────────────────────────────┴──────────────────────────┴───────────┴────────┘
