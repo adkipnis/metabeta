@@ -1,5 +1,5 @@
 Estimator-by-estimator analysis
-Last updated: 2026-05-08 (after Fixes 1–9)
+Last updated: 2026-05-09 (after Fixes 1–9, Fix C, Fix E attempted)
 
 Status key:  ✓ addressed  ~  partially addressed  ✗ open  ! new insight
 
@@ -39,24 +39,33 @@ Status key:  ✓ addressed  ~  partially addressed  ✗ open  ! new insight
 
   Weakpoints:
 
-  - WP-Ψ1 [✗ open] — OLS beta inflates residuals incorrectly. beta_ols is
-  computed without any random effects, so it absorbs between-group variance into
-  the group-level residuals. This causes the MoM equation to overestimate Ψ in
-  some cases, or underestimate it when groups are small and within-group noise
-  dominates. The within-group estimator beta_wg (computed from the Z-projection)
-  would be a better starting point — but the MoM path uses beta_ols specifically
-  because it needs global pooling. Switching to beta_wg for the MoM residual is
-  a one-line change; impact is unknown but potentially significant for small-n-mixed.
+  - WP-Ψ1 [✗ open — Fix A attempted 2026-05-09, abandoned] — OLS beta inflates
+  residuals incorrectly. beta_ols is computed without any random effects, so it
+  absorbs between-group variance into the group-level residuals. Fix A tried
+  using beta_wg (within-Z projection estimator) for the MoM residual. Result:
+  medium-n-mixed FFX blew up by 55,000% — beta_wg is poorly identified when
+  predictors are confounded with group membership (high-d, mixed-n). The assumption
+  that beta_wg is "cleaner" breaks down in the collinear regime. REML (I3) addresses
+  this indirectly: the REML score uses ALL groups weighted by their information,
+  not just mom_mask groups with beta_ols residuals.
 
-  - WP-Ψ2 [✗ open — hardest remaining problem] — Extremely noisy at bg_df = 4–7.
-  The MoM works on G_mom informative groups. With bg_df=4 (4 groups with ns >
-  active_count + 1), you're fitting a q×q matrix from 4 data points. The
+  - WP-Ψ2 [✗ open — hardest remaining problem, target for I3] — Extremely noisy
+  at bg_df = 4–7. The MoM works on G_mom informative groups. With bg_df=4 (4 groups
+  with ns > active_count + 1), you're fitting a q×q matrix from 4 data points. The
   winsorization at 6× mean helps but is still based on a mean computed from those
   same 4 noisy groups. The diagnostic confirmed RMSE for sigma_rfx at these df
-  values is 2–4× worse than at bg_df ≥ 20. No fix to date has improved
-  small-n-mixed BLUPs (stuck at NRMSE 1.14), which is dominated by this regime.
+  values is 2–4× worse than at bg_df ≥ 20.
+
+  Current BLUPs NRMSE for small-n-mixed: ~1.07 (marginally improved from 1.14 before
+  Fix 9 due to better M-step, not better Ψ init). Fix E confirmed G_mom is irreducibly
+  structural (= number of groups with ns > active_count + 1 AND full ZtZ rank) —
+  no mask refresh or parameter improvement can increase G_mom.
+
   The EM cannot recover from a badly underestimated Ψ: when Ψ̂ → 0, BLUPs → 0,
-  M-step Ψ_em → 0, feeding back into worse Ψ. The bias is self-reinforcing.
+  M-step Ψ_em → 0, feeding back into worse Ψ. This is a FALSE FIXED POINT of the
+  EM iteration — it is NOT a stationary point of the likelihood. The REML gradient
+  at Ψ=0 is strictly positive whenever the data have between-group signal, so
+  REML-Newton escapes this trap where EM cannot. See I3 in plan.md.
 
   - WP-Ψ3 [✗ open — attempted Fix 6, reverted] — Winsorization uses the mean of
   the noisy signal. signal_cap = 6.0 × signal_mean. When 1 of 4 groups dominates,
@@ -128,16 +137,16 @@ Status key:  ✓ addressed  ~  partially addressed  ✗ open  ! new insight
   condition (both structural), not the condition-number cap. G_mom is bounded by
   data size (bg_df) and is irreducible — no mask refresh can change this.
 
-  - WP-EM3 [~ partially addressed by Fix 5 + insight from Fix 8] — Fixed 5
+  - WP-EM3 [~ partially addressed by Fix 5, EM extension dead-end] — Fixed 5
   iterations regardless of convergence. Fix 5 added a batch-max early exit (break
   when all datasets satisfy |Ψ_delta| < 1e-3 and |σ²_delta| < 1e-3) — retained
-  as a micro-optimization. Increasing max beyond 5 was attempted twice (Fix 5 with
-  max=10 for all, Fix 8 with max=10 gated on G_mom >= 20) and both caused
-  catastrophic regressions on medium-n datasets.
-  Key insight: the EM fixed point is biased for low-bg_df datasets — more
-  iterations converge MORE strongly to the wrong answer. The hard cap of 5 is
-  inadvertent regularization. G_mom is not a reliable gate; psi_df = Σ(ns_g − q − 1)
-  over mom groups would be a better proxy for "fixed point reliability."
+  as a micro-optimization. Increasing max beyond 5 was attempted three times:
+  Fix 5 (max=10 for all), Fix 8 (max=10 gated on G_mom >= 20), Fix B (max=10
+  gated on psi_df >= 300). All three caused catastrophic regressions on medium-n
+  datasets. No count statistic (G_mom, psi_df, or any structural proxy) reliably
+  distinguishes a biased EM fixed point from an unbiased one. The EM extension
+  direction is CLOSED. The underlying issue (biased fixed point at Ψ=0) requires
+  a different algorithm (REML, see I3), not more iterations.
 
   - WP-EM4 [✗ open] — σ² update is fragile at the cap. The T_safe =
   T.clamp(max=0.9×(N−beta_rank)) prevents negative denominator but can mask
