@@ -532,3 +532,45 @@ remaining P1 failure mode.
 every dataset family. The next direction is not another scalar gate for REML; it is
 an oracle shrinkage diagnostic that directly compares estimated vs true BLUP
 shrinkage and separates Ψ error, σ² error, and β leakage.
+
+---
+
+### I4 Diagnostic — shrinkage ratios and oracle BLUP ablations (2026-05-09)
+
+**Script**: `experiments/glmm_shrinkage_diagnostic.py`
+
+**q=1 shrinkage result**: high BLUP error is concentrated in the central
+`lambda_hat/lambda_true` bucket, not in the shrinkage tails. On small-n-mixed:
+
+| lambda_hat/lambda_true | Share | BLUP NRMSE | median Ψ_hat/Ψ_true | median σ²_hat/σ²_true |
+|------------------------|-------|------------|----------------------|------------------------|
+| 0.5-0.75 | 4.4% | 0.361 | 0.427 | 1.017 |
+| 0.75-1.25 | 79.1% | 1.463 | 0.672 | 1.001 |
+| 1.25-2 | 3.8% | 0.222 | 1.784 | 0.993 |
+| 2-4 | 3.0% | 0.190 | 3.407 | 0.991 |
+| >=4 | 9.4% | 0.155 | 23.394 | 0.986 |
+
+The tails where Ψ is severely under- or over-estimated have relatively low BLUP
+error. The high-error majority has approximately correct shrinkage by the scalar
+lambda proxy and σ² is well calibrated. This points away from variance-component
+gating.
+
+**small-n-mixed oracle BLUP ablations**:
+
+| Case | BLUP NRMSE |
+|------|------------|
+| baseline estimator | 1.0687 |
+| true Ψ + true σ² + beta_hat | 1.0599 |
+| true Ψ + estimated σ² + beta_hat | 1.0599 |
+| estimated Ψ + true σ² + beta_hat | 1.0680 |
+| estimated Ψ + estimated σ² + beta_true | 0.2931 |
+| true Ψ + true σ² + beta_true | 0.2594 |
+| true Ψ + true σ² + beta_wg | 3.3612 |
+| estimated Ψ + estimated σ² + beta_wg | 3.3341 |
+
+**Assessment**: Root cause for P1 is now beta leakage into the BLUP residual, not
+Ψ/σ² estimation. Better variance components barely help if beta_hat is unchanged.
+True beta nearly solves the BLUP problem even with estimated variance components.
+beta_wg is not a viable replacement. Next investigation should target Normal GLS
+beta estimation, beta masking/rank diagnostics, and conservative beta fallback or
+shrinkage strategies.

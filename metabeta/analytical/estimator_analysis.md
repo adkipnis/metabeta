@@ -73,9 +73,13 @@ Status key:  ✓ addressed  ~  partially addressed  ✗ open  ! new insight
         BLUP NRMSE was 0.164 for gated rows vs 1.113 for non-gated rows. Applying
         REML to them produced no useful BLUP improvement and regressed sRFX 2-3×
         across the required benchmark suite.
-  Revised direction: stop designing count/ratio gates. Next run oracle shrinkage
-  diagnostics: compare estimated vs true BLUP shrinkage, Ψ/σ² ratios, and β leakage
-  in the non-collapsed high-error majority. See I4 in plan.md.
+  I4 shrinkage/oracle diagnostic (2026-05-09) changed the root-cause diagnosis:
+  small-n-mixed BLUP error is dominated by beta leakage, not Ψ/σ². True Ψ and true
+  σ² with beta_hat left BLUP NRMSE at 1.0599 (baseline 1.0687), while true beta with
+  estimated Ψ and σ² reduced BLUP NRMSE to 0.2931. beta_wg was catastrophic
+  (NRMSE 3.33-3.36), so the next direction is fixing or gating the Normal GLS
+  beta estimate, not substituting within-Z beta and not another variance-component
+  gate. See I5 in plan.md.
 
   The EM cannot recover from a badly underestimated Ψ: when Ψ̂ → 0, BLUPs → 0,
   M-step Ψ_em → 0, feeding back into worse Ψ. This is a FALSE FIXED POINT of the

@@ -1,5 +1,5 @@
 Plan
-Last updated: 2026-05-09 (after I3 Option E attempted, reverted)
+Last updated: 2026-05-09 (after I4 shrinkage/oracle diagnostics)
 
 Current code state: Fix 1 + Fix 2 + Fix 4 + Fix 7 + Fix 9 + Fix C
   Code also contains `_remlNewtonStep` in normal.py (correct REML gradient; not wired in)
@@ -435,13 +435,13 @@ Implementation plan: I3 — REML-Newton for diagonal variance components [ON HOL
 
 ---
 
-Next investigation: I4 — oracle shrinkage and variance-ratio diagnostics
+Investigation I4 — oracle shrinkage and variance-ratio diagnostics [COMPLETED 2026-05-09]
 
   Goal: identify what is wrong in the non-collapsed majority before proposing another
   estimator change. The next fix must target the rows where BLUP NRMSE is high, not
   rows with low Ψ/σ² or low G_mom.
 
-  Step 1 — Decompose BLUP error by estimated-vs-true shrinkage.
+  Step 1 — Decompose BLUP error by estimated-vs-true shrinkage. [DONE]
     For q=1 datasets, compute per-group approximate shrinkage:
       lambda_hat  = Ψ_hat * z2 / (σ²_hat + Ψ_hat * z2)
       lambda_true = Ψ_true * z2 / (σ²_true + Ψ_true * z2)
@@ -450,23 +450,69 @@ Next investigation: I4 — oracle shrinkage and variance-ratio diagnostics
       - Ψ_hat / Ψ_true
       - σ²_hat / σ²_true
       - beta error quantiles
-    This directly answers whether high BLUP error is over-shrinkage, under-shrinkage,
-    or fixed-effect leakage.
+    Result: the high-error q=1 subset is NOT the over-/under-shrunk tail. It is the
+    central `lambda_hat/lambda_true ≈ 0.75-1.25` majority. On small-n-mixed:
 
-  Step 2 — Run oracle ablations on small-n-mixed only:
+      lambda ratio 0.75-1.25: 79.1% of q=1 groups, BLUP NRMSE 1.463
+      lambda ratio <0.75:      4.7% of q=1 groups, BLUP NRMSE 0.36-0.41
+      lambda ratio >1.25:     16.2% of q=1 groups, BLUP NRMSE 0.16-0.22
+
+    Median σ²_hat/σ²_true is ~1.0 in every bucket. Median Ψ_hat/Ψ_true in the
+    failing central bucket is ~0.67, but the oracle ablation below shows this is
+    not enough to explain the BLUP failure. The error source is fixed-effect leakage.
+
+  Step 2 — Run oracle ablations on small-n-mixed only. [DONE]
       A. true Ψ + true σ² + estimated β
       B. true Ψ + estimated σ² + estimated β
       C. estimated Ψ + true σ² + estimated β
       D. estimated Ψ + estimated σ² + true β
-    This separates variance-component error from β leakage. The existing oracle
-    result (true Ψ and σ² gives BLUP NRMSE 0.33) proves the target is real, but not
-    which estimated quantity is most responsible.
+    Result:
 
-  Step 3 — Only after Step 1/2, test one narrow correction:
-      - If lambda_hat/lambda_true < 1 in high-error rows: reduce σ² or raise Ψ only
-        where the shrinkage diagnostic predicts over-shrinkage.
-      - If lambda_hat/lambda_true > 1: add shrinkage/regularization to Ψ for those rows.
-      - If β leakage dominates: revisit GLS beta fallback/masking rather than Ψ updates.
+      baseline estimator:                 1.0687
+      true Ψ + true σ² + beta_hat:        1.0599
+      true Ψ + estimated σ² + beta_hat:   1.0599
+      estimated Ψ + true σ² + beta_hat:   1.0680
+      estimated Ψ + estimated σ² + beta_true: 0.2931
+      true Ψ + true σ² + beta_true:       0.2594
+
+    This reverses the prior diagnosis. Better Ψ/σ² barely helps when beta_hat is
+    unchanged; true beta nearly solves BLUPs even with estimated Ψ and σ².
+
+  Step 3 — beta_wg fallback check. [DONE]
+    beta_wg is not a viable shortcut:
+
+      true Ψ + true σ² + beta_wg:          3.3612
+      estimated Ψ + estimated σ² + beta_wg: 3.3341
+
+    This matches the earlier failed Fix A: within-Z beta is unstable in the
+    confounded mixed-design regime.
+
+---
+
+Next investigation: I5 — fixed-effect leakage in the Normal GLS step
+
+  New root cause: BLUP P1 is dominated by β error leaking into the random-effect
+  residual, not by Ψ/σ² shrinkage. Any next fix should target beta_est or how BLUPs
+  use it.
+
+  Step 1 — Diagnose beta_est failure modes:
+      - Compare beta_est vs beta_true by d, q, n/d, G, G_mom, beta_mask rank, and
+        condition number/effective rank of A_gls_reg.
+      - Compare beta_est to pooled beta_ols and beta_wg only diagnostically. Do not
+        substitute beta_wg directly; oracle ablation shows it is catastrophic.
+      - Break small-n-mixed BLUP NRMSE by beta max-abs-error and beta projection
+        error `X_g(beta_hat-beta_true)` to confirm the leakage path.
+
+  Step 2 — Generate candidate beta corrections without changing Ψ:
+      - ridge-strength sweep in `_normalGlsAndBlups` A_reg;
+      - beta shrinkage toward pooled beta_ols, gated by A_gls rank/condition;
+      - per-dataset beta fallback when GLS correction is underidentified;
+      - BLUP residual orthogonalization using a beta estimate chosen for local
+        prediction error rather than global FFX NRMSE.
+
+  Step 3 — Benchmark candidates incrementally with the same 12-way required suite.
+    Primary metric remains small-n-mixed BLUP NRMSE; reject any candidate with
+    >3% regression on FFX, sRFX, sEps, or BLUPs elsewhere.
 
   Success criteria remain:
     Primary:    small-n-mixed BLUPs NRMSE < 0.9 (current: 1.0687)
@@ -498,6 +544,9 @@ Priority order
   │ I3 Option E (post-EM gate) │ ABANDONED — sRFX 2-3×    │ —         │ Dead   │
   │                            │ regression, no BLUP gain │           │        │
   ├────────────────────────────┼──────────────────────────┼───────────┼────────┤
-  │ I4 shrinkage diagnostics   │ Identify non-collapsed   │ analysis  │ Next   │
-  │                            │ high-BLUP-error regime   │           │        │
+  │ I4 shrinkage diagnostics   │ Found beta leakage, not  │ analysis  │ Done   │
+  │                            │ Ψ/σ², dominates P1       │           │        │
+  ├────────────────────────────┼──────────────────────────┼───────────┼────────┤
+  │ I5 beta leakage            │ Diagnose/fix Normal GLS  │ analysis  │ Next   │
+  │                            │ fixed-effect error       │           │        │
   └────────────────────────────┴──────────────────────────┴───────────┴────────┘
