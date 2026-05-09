@@ -353,56 +353,70 @@ Implementation plan: I3 — REML-Newton for diagonal variance components
     G_mom 10-49: 1.10       (78% of datasets — the actual problem)
     G_mom 50+:   1.02       (12% of datasets)
 
-  The correct gate must target G_mom=10-49 small-n datasets without harming G_mom=10-49
-  large-n datasets (where MoM works). The discriminator must be n_g (observations per
-  group), not G_mom alone.
+  The correct gate must target small-n datasets with over-shrunk Ψ without harming
+  large-n datasets (where MoM works). DIAGNOSTIC FINDING (2026-05-09): no simple
+  structural feature separates the types at runtime. All scalar features
+  (psi_df, G_mom, mean_ns, m, n_total) have nearly identical distributions across
+  small-n-mixed, medium-n-mixed, large-n-mixed, and huge-n-mixed:
 
-  --- I3 revised direction (NEXT ATTEMPT) ---
+    Feature           small-n  medium-n  large-n  huge-n
+    psi_df < 300      39.5%    40.4%     40.0%    42.3%   ← useless
+    G_mom < 10        10.1%    4.8%      10.7%    15.0%   ← useless
+    mean_ns < 20      45.0%    46.9%     47.9%    49.1%   ← useless
+    m median          24       29        33       37      ← too similar
+    n_total median    548      627       708      783     ← too similar
 
-  Step 1: Verify the psi_df gate distribution (~20-line diagnostic).
+  The structural difference between types is in d (3 vs 6–14) and q (1 vs 2), which
+  ARE observable at runtime but fragile — conflates model structure with dataset size.
 
-  Gate on psi_df = Σ_{g in mom_mask} (ns_g - active_count_g - 1):
+  --- I3 revised direction (OPTION E) ---
 
-    psi_df = ((ns - active_count[:, None] - 1.0).clamp(min=0.0) * mom_mask).sum(dim=1)
-    reml_gate = psi_df < 300  # (B,) — targets small-n, avoids large-n
+  Gate on post-EM Ψ/σ²: after the EM has run, check if it collapsed to a near-zero Ψ.
+  This detects the EM false fixed point at runtime from its RESULT, not its preconditions.
 
-  Rationale: psi_df measures actual information content (total residual df in mom
-  groups), not just group count. For small-n-mixed with G_mom=20 and n_g≈7:
-  psi_df ≈ 20×5 = 100. For large-n-mixed with G_mom=20 and n_g≈50:
-  psi_df ≈ 20×48 = 960. The threshold 300 separates these cleanly.
+    psi_ratio = Psi.diagonal(dim1=-2, dim2=-1).amax(dim=-1) / se2  # (B,)
+    reml_gate = psi_ratio < THRESHOLD  # triggers when post-EM Ψ << σ²
 
-  Before implementing, run the diagnostic to confirm:
-    - small-n-mixed: what fraction has psi_df < 300? (should be ~80%)
-    - large-n-mixed: what fraction has psi_df < 300? (should be < 5%)
-    - huge-n-mixed: same check
-  Adjust threshold if needed based on empirical distributions.
+  Rationale: when the EM converges to the false Ψ=0 fixed point, psi_ratio is very
+  small (Ψ ≈ psi_diag_floor, σ² reasonable). For datasets where EM worked correctly,
+  Ψ reflects a real between-group signal and psi_ratio is meaningful (> 0.1 or so).
+  For datasets where true Ψ is genuinely small (near 0), REML would be a no-op (the
+  signal is also near 0, so REML would confirm Ψ ≈ 0 and stay put).
 
-  Step 2: Implement gated REML.
+  Threshold selection: needs a diagnostic sweep across all dataset types to find a
+  threshold that fires on collapsed-EM datasets and not on healthy-EM datasets. Likely
+  in the range 0.01–0.1.
 
-  For gated datasets: Ψ_neutral = diag(psi_diag_floor), n_reml=8,
-  permissive cap = max(psi_eig_cap, 25·σ²), σ² held at Stage 1.
-  Integration pattern (already debugged from Option D):
-    reml_gate = psi_df < 300
+  Integration (post-EM REML refinement):
+    # After _emRefineNormal returns (Psi, se2, gls):
+    psi_ratio = Psi.diagonal(dim1=-2, dim2=-1).amax(dim=-1) / se2.clamp(min=1e-12)
+    reml_gate = psi_ratio < THRESHOLD
     if reml_gate.any():
+        reml_psi_cap = torch.maximum(psi_eig_cap, (25.0 * se2).clamp(min=0.1))
+        Psi_neutral = torch.diag_embed(psi_diag_floor.clamp(min=1e-10)) * active_qq
         Psi_reml = torch.where(reml_gate[:, None, None], Psi_neutral, Psi)
         gls_reml = _normalGlsAndBlups(..., Psi_reml, ...)
         for _ in range(n_reml):
             Psi_step = _remlNewtonStep(..., reml_psi_cap, ...)
             Psi_reml = torch.where(reml_gate[:, None, None], Psi_step, Psi_reml)
             gls_reml = _normalGlsAndBlups(..., Psi_reml, ...)
-        # merge Psi and gls fields via torch.where + _NormalGlsResult rebuild
+        # merge Psi and gls fields
 
-  Step 3: Verify EM doesn't pull Ψ back down after REML.
+  Key advantage: the gate fires on the OUTCOME (EM collapsed) rather than a proxy for
+  conditions that might cause collapse. False positives (large-n datasets where true Ψ
+  is genuinely small) are safe: REML on a dataset with true Ψ≈0 and small signal does
+  nothing harmful.
 
-  After REML gives a good Ψ, the EM runs with mom4/G_mom unchanged. With good Ψ,
-  BLUPs are non-zero → blup_outer is non-zero → M-step should maintain Ψ rather than
-  collapse to 0. Verify by comparing Ψ before and after the 5 EM iterations for a
-  sample of gated datasets.
+  Step 1: run psi_ratio diagnostic — check its distribution per dataset type,
+  separately for datasets where the EM has clearly collapsed (Ψ ≈ psi_diag_floor)
+  vs where it found a non-trivial Ψ. This will reveal the right threshold.
+
+  Step 2: implement and benchmark with a handful of thresholds.
 
   --- σ² handling ---
 
-  Keep σ² fixed at Stage 1 σ̂_eps during REML iterations to isolate the Ψ problem.
-  The standard EM σ² update runs afterward.
+  Keep σ² fixed at the post-EM se2 during the REML refinement pass (not Stage 1 σ̂_eps,
+  since the EM σ² update has already run). The REML pass is a pure Ψ correction.
 
   --- Success criteria ---
 
@@ -412,19 +426,11 @@ Implementation plan: I3 — REML-Newton for diagonal variance components
 
   --- Numerical risks ---
 
-    1. F_k ≈ 0 (tiny Fisher information): clamp F_k to 1e-10, gives huge step.
-       Mitigation: 0.5 damping on Newton step + floor clamp.
-
-    2. psi_eig_cap too tight: for gated datasets, MoM-derived cap clips REML.
-       Fix: use reml_psi_cap = max(psi_eig_cap, 25·σ²).
-
-    3. psi_df threshold wrong: check distribution before setting 300. If large-n-mixed
-       has psi_df < 300 for > 5% of datasets, lower threshold or add G > 20 guard.
-
-    4. H_g_diag going negative: clamp H_diag to 0 from below before accumulating.
-
-    5. EM regression after REML: if the 5 EM iterations pull Ψ back toward 0, consider
-       reducing n_em for gated datasets or adding a Ψ_lower_bound in the EM M-step.
+    1. False positives on large-n datasets with genuinely small Ψ: safe (REML confirms
+       Ψ≈0 and makes no change).
+    2. psi_eig_cap too tight: use max(psi_eig_cap, 25·σ²) for REML cap.
+    3. psi_ratio threshold miscalibrated: check distribution to confirm separation.
+    4. REML adds cost for any false positives: acceptable at low false positive rate.
 
 ---
 
@@ -450,5 +456,5 @@ Priority order
   ├────────────────────────────┼──────────────────────────┼───────────┼────────┤
   │ I3 (REML-Newton diagonal)  │ P1: small-n-mixed BLUPs  │ ~120 lines│ Next   │
   │                            │ target NRMSE < 0.9;      │           │        │
-  │                            │ revised gate: psi_df<300  │           │        │
+  │                            │ Option E: post-EM gate   │           │        │
   └────────────────────────────┴──────────────────────────┴───────────┴────────┘
