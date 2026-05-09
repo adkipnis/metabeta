@@ -18,5 +18,7 @@ GLMM estimator in `metabeta/analytical/`.
   beta-OLS blend ablations.
 - `glmm_alpha_gate_diagnostic.py` — I7 diagnostic. Tests observable alpha schedules
   for the final BLUP-residual beta blend across the required 12-way benchmark suite.
+- `glmm_srfx_diagnostic.py` — sRFX diagnostic. Replays Gaussian estimator internals
+  and reports MoM, EM, floor/cap, component-fallback, and off-diagonal error splits.
 - `glmm_perf_baseline.md` — running fix log and benchmark record for analytical GLMM
   estimator changes.
