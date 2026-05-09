@@ -197,16 +197,84 @@ Decision:
 - The largest BLUP regression versus I6 is `medium-n-sampled/valid`: 0.4796 -> 0.4922
   (+2.6%), inside the 3% budget.
 
-Next direction
---------------
+Next direction: improve sRFX
+----------------------------
 
-Do not keep tuning scalar alpha without a new diagnostic. The current BLUP error is close
-to the apparent beta-residual limit for small-n, and remaining risk is concentrated in
-sampled medium/high-d rows.
+Stop tuning the final BLUP beta blend unless a new diagnostic shows a clear target.
+I7 brought BLUP error close to the apparent beta-residual limit for small-n. The largest
+remaining analytical error is variance-component accuracy:
 
-Next investigation should target one of:
+| Dataset | Partition | sRFX |
+| --- | --- | ---: |
+| small-n-mixed | train | 0.6421 |
+| small-n-sampled | valid | 0.6313 |
+| small-n-sampled | test | 0.6655 |
+| medium-n-mixed | train | 0.5739 |
+| medium-n-sampled | valid | 0.5334 |
+| medium-n-sampled | test | 0.6081 |
+| large-n-mixed | train | 0.4947 |
+| large-n-sampled | valid | 0.5811 |
+| large-n-sampled | test | 0.6065 |
+| huge-n-mixed | train | 0.4957 |
+| huge-n-sampled | valid | 0.7824 |
+| huge-n-sampled | test | 0.5954 |
 
-1. Better observable gate for medium sampled rows, using design diagnostics beyond active d
-   only if it improves `medium-n-sampled/valid` without losing the small-n gain.
-2. Variance-component accuracy (`sRFX`) separately from BLUP residual beta, since sRFX remains
-   much larger than BLUP error on several rows.
+Working hypothesis:
+
+- BLUP NRMSE was dominated by fixed-effect leakage, now handled output-locally.
+- sRFX is controlled by MoM initialization, component-wise fallback, Psi eigencap/floor,
+  off-diagonal shrinkage, and EM M-step trimming.
+- Previous variance patches failed because they were broad runtime changes without first
+  separating diagonal scale bias from correlation/off-diagonal error and cap/floor effects.
+
+Diagnostic result:
+
+Added `experiments/analytical/glmm_srfx_diagnostic.py`. It replays the Gaussian
+estimator internals and reports the required-suite split by MoM, EM, first EM M-step
+targets, floor/cap activity, component fallback, `G_mom`, active `q`, and off-diagonal
+correlation error.
+
+Key required-suite findings:
+
+| Split | N | sRFX NRMSE | Rel. bias |
+| --- | ---: | ---: | ---: |
+| full MoM path | 166562 | 0.4753 | +1.816 |
+| diag MoM path | 8127 | 0.9257 | +4.985 |
+| component diag path | 4427 | 1.0082 | +4.682 |
+| fallback path | 1767 | 1.0386 | +1.885 |
+| floor hit = false | 121453 | 0.4871 | +0.197 |
+| floor hit = true | 59430 | 0.9835 | +5.773 |
+| cap hit = false | 180096 | 0.5541 | +2.008 |
+| cap hit = true | 787 | 1.3975 | +6.808 |
+
+Interpretation:
+
+- EM improves all dataset rows versus the initial MoM estimate; do not target "more EM" or
+  a broad M-step rewrite first.
+- First EM raw/winsor/trim targets are worse than the final post-EM estimate on every row,
+  so the current iterative shrinkage is helping.
+- Cap-hit rows are very bad but rare (`787` active components); eigencap is not the first
+  high-leverage patch.
+- Floor-hit components are common (`59430` active components), high-error, and strongly
+  overestimated. The likely first target is an overly high diagonal floor, especially when
+  `diag_mom`, `component_diag`, or fallback paths are used.
+- Off-diagonal correlation NRMSE stays high after shrinkage, but `sigma_rfx` is a diagonal
+  scale metric and the floor-hit diagonal bias is the more direct target.
+
+Next patch to try:
+
+1. Keep the accepted I7 BLUP beta schedule fixed.
+2. Patch only the `psi_diag_floor` construction in `_initialPsiMom`.
+3. Start with one conservative candidate: reduce the floor signal multiplier for
+   `enough_diag_mom` rows from `0.5 * psi_diag_signal` to a lower value, while leaving the
+   fallback minimum in place.
+4. Run `glmm_srfx_diagnostic.py` on the required suite to confirm floor-hit bias drops.
+5. Run `glmm_required_benchmark.py`; keep only if sRFX improves materially, FFX/sEps do not
+   regress, and no BLUP row regresses by more than 3% versus I7.
+
+Guardrails:
+
+- Do not change the accepted I7 BLUP beta schedule while investigating sRFX.
+- Do not use truth, dataset family, or partition in runtime gates.
+- Avoid more EM iterations as a first patch; earlier attempts showed biased fixed points.
+- Treat `huge-n-sampled/valid` as a key risk row because its current sRFX is worst at 0.7824.
