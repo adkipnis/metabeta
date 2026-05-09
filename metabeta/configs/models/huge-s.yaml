@@ -18,7 +18,7 @@ posterior_g:
     base_family: 'normal'
     base_trainable: true
     base_context: true
-    n_blocks: 3
+    n_blocks: 4
     subnet_kwargs:
         net_type: 'residual'
         activation: 'ReLU'
@@ -36,6 +36,6 @@ posterior_g:
 posterior_l:
     n_blocks: 3
 
-posterior_correlation: false
+posterior_correlation: true
 analytical_context: true
 analytical_local_at_inference: true
