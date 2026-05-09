@@ -359,45 +359,72 @@ Implementation plan: I3 — REML-Newton for diagonal variance components
 
   --- I3 revised direction (NEXT ATTEMPT) ---
 
-  Gate on psi_df (total residual df in informative groups):
-    psi_df = Σ_{g in mom_mask} (ns_g - active_count_g - 1)
+  Step 1: Verify the psi_df gate distribution (~20-line diagnostic).
 
-  For small-n-mixed with G_mom=20: each group has n_g ≈ 7, psi_df ≈ 20*(7-2) = 100.
-  For large-n-mixed with G_mom=20: each group has n_g ≈ 50, psi_df ≈ 20*(50-2) = 960.
-  With threshold psi_df < 300: small-n-mixed triggers, large-n-mixed does not.
+  Gate on psi_df = Σ_{g in mom_mask} (ns_g - active_count_g - 1):
 
-  This correctly identifies "many informative groups but each with few observations" —
-  the precise regime where MoM+EM fails for small-n-mixed.
-
-  Implementation:
     psi_df = ((ns - active_count[:, None] - 1.0).clamp(min=0.0) * mom_mask).sum(dim=1)
     reml_gate = psi_df < 300  # (B,) — targets small-n, avoids large-n
 
-  For gated datasets: start from Ψ = diag(psi_diag_floor), run 8 REML steps with
-  permissive cap = max(psi_eig_cap, 25·σ²). σ² held at Stage 1.
-  After REML: merge back and run EM as usual.
+  Rationale: psi_df measures actual information content (total residual df in mom
+  groups), not just group count. For small-n-mixed with G_mom=20 and n_g≈7:
+  psi_df ≈ 20×5 = 100. For large-n-mixed with G_mom=20 and n_g≈50:
+  psi_df ≈ 20×48 = 960. The threshold 300 separates these cleanly.
+
+  Before implementing, run the diagnostic to confirm:
+    - small-n-mixed: what fraction has psi_df < 300? (should be ~80%)
+    - large-n-mixed: what fraction has psi_df < 300? (should be < 5%)
+    - huge-n-mixed: same check
+  Adjust threshold if needed based on empirical distributions.
+
+  Step 2: Implement gated REML.
+
+  For gated datasets: Ψ_neutral = diag(psi_diag_floor), n_reml=8,
+  permissive cap = max(psi_eig_cap, 25·σ²), σ² held at Stage 1.
+  Integration pattern (already debugged from Option D):
+    reml_gate = psi_df < 300
+    if reml_gate.any():
+        Psi_reml = torch.where(reml_gate[:, None, None], Psi_neutral, Psi)
+        gls_reml = _normalGlsAndBlups(..., Psi_reml, ...)
+        for _ in range(n_reml):
+            Psi_step = _remlNewtonStep(..., reml_psi_cap, ...)
+            Psi_reml = torch.where(reml_gate[:, None, None], Psi_step, Psi_reml)
+            gls_reml = _normalGlsAndBlups(..., Psi_reml, ...)
+        # merge Psi and gls fields via torch.where + _NormalGlsResult rebuild
+
+  Step 3: Verify EM doesn't pull Ψ back down after REML.
+
+  After REML gives a good Ψ, the EM runs with mom4/G_mom unchanged. With good Ψ,
+  BLUPs are non-zero → blup_outer is non-zero → M-step should maintain Ψ rather than
+  collapse to 0. Verify by comparing Ψ before and after the 5 EM iterations for a
+  sample of gated datasets.
 
   --- σ² handling ---
 
-  For REML iterations, keep σ² fixed at Stage 1 σ̂_eps to isolate the Ψ problem.
+  Keep σ² fixed at Stage 1 σ̂_eps during REML iterations to isolate the Ψ problem.
+  The standard EM σ² update runs afterward.
 
   --- Success criteria ---
 
-    Primary: small-n-mixed BLUPs NRMSE < 0.9 (current: 1.07)
-    No regression: all other datasets within ±3% of Fix C baseline
+    Primary:    small-n-mixed BLUPs NRMSE < 0.9 (current: 1.07)
+    Secondary:  small-n-mixed sRFX NRMSE improves (current: ~0.64)
+    Regression: all other datasets within ±3% of Fix C baseline
 
   --- Numerical risks ---
 
     1. F_k ≈ 0 (tiny Fisher information): clamp F_k to 1e-10, gives huge step.
        Mitigation: 0.5 damping on Newton step + floor clamp.
 
-    2. psi_eig_cap too tight: for gated small-n datasets with underestimated MoM, the
-       cap (based on MoM signal) clamps REML. Fix: use max(psi_eig_cap, 25·σ²).
+    2. psi_eig_cap too tight: for gated datasets, MoM-derived cap clips REML.
+       Fix: use reml_psi_cap = max(psi_eig_cap, 25·σ²).
 
-    3. psi_df gate not separating perfectly: some large-n datasets might have psi_df < 300
-       if they have few informative groups with small n_g. Check distribution before using.
+    3. psi_df threshold wrong: check distribution before setting 300. If large-n-mixed
+       has psi_df < 300 for > 5% of datasets, lower threshold or add G > 20 guard.
 
     4. H_g_diag going negative: clamp H_diag to 0 from below before accumulating.
+
+    5. EM regression after REML: if the 5 EM iterations pull Ψ back toward 0, consider
+       reducing n_em for gated datasets or adding a Ψ_lower_bound in the EM M-step.
 
 ---
 
