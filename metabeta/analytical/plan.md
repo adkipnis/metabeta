@@ -1,7 +1,7 @@
 Plan
 ====
 
-Last updated: 2026-05-09, after I7 active-d adaptive alpha benchmark.
+Last updated: 2026-05-09, after I9 floor-pinned output calibration benchmark.
 
 Current estimator state
 -----------------------
@@ -20,6 +20,9 @@ Implemented and kept:
   `beta_for_blup = 0.25 * beta_gls + 0.75 * beta_ols`.
 - I7: make the BLUP-only beta blend active-d adaptive:
   alpha 1.00 for active d <= 4, 0.65 for active d 5-8, and 0.75 above that.
+- I8: lower the joint diagonal MoM floor signal from `0.5` to `0.45`.
+- I9: calibrate reported `sigma_rfx_est` for floor-pinned rows with active q > 2:
+  `sigma_rfx_est = 0.8 * sqrt(Psi_diag)` only for those reported components.
 
 Also present but unused:
 
@@ -304,20 +307,83 @@ Decision:
 - The diagnostic still shows floor-hit components are bad (`sRFX=1.0476`, rel bias
   `+6.009`) but fewer than baseline (`56155` versus `59430` active components).
 
-Next direction:
+Executed next plan: selective floor calibration
+-----------------------------------------------
 
-1. Do not keep searching scalar floor multipliers; `0.25` and `0.375` showed unstable
-   GLS/EM interactions.
-2. Investigate a selective, observable gate for floor reduction rather than another
-   global scalar. Candidate signals: `enough_full_mom`, `G_mom`, active `q`, and
-   `floor_hit` predicted from the pre-clamp diagonal.
-3. Prioritize `diag_mom` and fallback/component paths, where sRFX remains near or above
-   0.9-1.0.
-4. Keep I7 BLUP beta schedule and I8 scalar floor fixed while running the next diagnostic.
+Ranked paths before execution:
+
+1. Selective observable floor gate. This is most promising because floor-hit components
+   are common and still high-error after I8 (`sRFX=1.0476`, rel bias `+6.009`), while
+   global scalar reductions improved sRFX but destabilized GLS/BLUP on mixed and
+   medium-sampled rows. Test gates using only pre-clamp numerical signals such as
+   path, `G_mom`, active `q`, and predicted floor hit.
+2. Path-specific fallback/diagonal initialization. `diag_mom`, `component_diag`, and
+   fallback paths have the worst sRFX bins, but they are much smaller slices than the
+   full-MoM floor-hit population. Use this after the selective floor gate isolates which
+   weak-identification paths tolerate lower floors.
+3. Eigencap handling. Cap-hit rows are very bad, but rare (`778` active components after
+   I8), so even a successful patch has lower expected benchmark leverage.
+4. Off-diagonal correlation shrinkage. Correlation NRMSE is still high, but `sigma_rfx`
+   is a diagonal scale metric and I8 showed diagonal floor bias is the more direct
+   target.
+5. EM iteration/M-step rewrites or REML gates. Previous attempts converged to biased or
+   unstable fixed points, and the diagnostic showed first EM targets are worse than the
+   final post-EM estimate on every required row.
+
+Execution result:
+
+- Rejected internal diagonal-MoM floor `0.25` for non-full MoM rows. It improved sRFX
+  but failed `medium-n-sampled/test` BLUP (`0.4788 -> 0.4980`) and moved FFX
+  (`0.2437 -> 0.2882`).
+- Rejected internal diagonal-MoM floor `0.35` for non-full MoM rows. BLUP stayed inside
+  budget, but `medium-n-sampled/test` FFX still moved materially (`0.2437 -> 0.2639`).
+- Rejected internal diagonal-MoM floor `0.40` for non-full MoM rows. It failed
+  `large-n-sampled/test` (`FFX 0.4627 -> 0.7005`, BLUP `0.4803 -> 0.5644`).
+- Rejected lowering fallback/component floors to `0.5 * fallback_diag` when no diagonal
+  MoM evidence exists. It worsened sRFX on most rows and increased sEps on large/huge
+  sampled rows.
+- Output-only floor calibration was clean: changing reported sigma after BLUP/sigma-eps
+  computation left FFX, sEps, and BLUP unchanged. The accepted gate applies only when a
+  component is still floor-pinned after EM and active q > 2.
+
+Accepted I9 required benchmark:
+
+| Dataset | Partition | FFX | sRFX | sEps | BLUP |
+| --- | --- | ---: | ---: | ---: | ---: |
+| small-n-mixed | train | 0.2250 | 0.6353 | 0.0839 | 0.3625 |
+| small-n-sampled | valid | 0.1553 | 0.6313 | 0.1036 | 0.4249 |
+| small-n-sampled | test | 0.1685 | 0.6623 | 0.1002 | 0.4207 |
+| medium-n-mixed | train | 0.1459 | 0.5065 | 0.0671 | 0.3714 |
+| medium-n-sampled | valid | 0.3625 | 0.5312 | 0.0978 | 0.4920 |
+| medium-n-sampled | test | 0.2437 | 0.6003 | 0.1030 | 0.4788 |
+| large-n-mixed | train | 0.2700 | 0.4736 | 0.0724 | 0.3641 |
+| large-n-sampled | valid | 0.3658 | 0.5484 | 0.1105 | 0.4605 |
+| large-n-sampled | test | 0.4627 | 0.5589 | 0.1082 | 0.4803 |
+| huge-n-mixed | train | 0.3069 | 0.4655 | 0.0649 | 0.3965 |
+| huge-n-sampled | valid | 0.4204 | 0.7053 | 0.1644 | 0.5086 |
+| huge-n-sampled | test | 0.4661 | 0.5740 | 0.1828 | 0.5167 |
+
+Decision:
+
+- Keep I9. It preserves every I8 FFX, sEps, and BLUP row.
+- It leaves small rows unchanged and improves all medium/large/huge sRFX rows.
+- The largest gain is the priority risk row, `huge-n-sampled/valid`: `0.7640 -> 0.7053`.
+- The failed internal floor tests show that the runtime floor is supporting GLS stability;
+  keep this calibration output-local unless a new diagnostic shows a safer runtime gate.
+
+Next direction after I9:
+
+1. Add a calibration diagnostic for floor-pinned output rows. Bin by active `q`, path,
+   `G_mom`, and floor ratio to see whether the q > 2 gate can be refined further.
+2. Revisit diag-only floor-hit rows only through output calibration first; internal floor
+   reductions repeatedly caused FFX or BLUP regressions.
+3. Treat eigencap rows as the next independent target. They are rare but still very high
+   error (`sRFX=1.4031`, rel bias `+6.064` after I8 diagnostics).
 
 Guardrails:
 
 - Do not change the accepted I7 BLUP beta schedule while investigating sRFX.
 - Do not use truth, dataset family, or partition in runtime gates.
 - Avoid more EM iterations as a first patch; earlier attempts showed biased fixed points.
-- Treat `huge-n-sampled/valid` as a key risk row because its current sRFX is worst at 0.7824.
+- Treat `huge-n-sampled/valid` as the key risk row; I9 improved it to 0.7053, but it
+  remains the largest required-suite sRFX error.

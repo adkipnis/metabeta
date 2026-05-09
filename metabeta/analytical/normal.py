@@ -627,7 +627,14 @@ def _lmmNormalFull(
     corr_alpha = G / (G + 5.0)
     Psi = _shrinkOffDiagonal(Psi, corr_alpha)
 
-    sigma_rfx = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()          # (B, q)
+    psi_diag = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0)                 # (B, q)
+    floor_tol = torch.maximum(psi_diag_floor.abs() * 1e-3, psi_diag_floor.new_full((), 1e-10))
+    floor_limited = (psi_diag <= psi_diag_floor + floor_tol) & (active_count[:, None] > 2.0)
+    # Floor-pinned multi-component rows are systematically high, but lowering the runtime
+    # floor destabilizes GLS. Calibrate only the reported marginal scale after BLUPs.
+    psi_diag_out = torch.where(floor_limited, 0.64 * psi_diag, psi_diag)
+    Psi_out = Psi + torch.diag_embed(psi_diag_out - psi_diag)
+    sigma_rfx = psi_diag_out.sqrt()                                          # (B, q)
     sigma_eps_1d = se2.clamp(min=0.0).sqrt().nan_to_num(nan=1.0, posinf=1.0)  # (B,)
 
     ns_f_loc = ns.clamp(min=1.0)                                              # (B, m)
@@ -649,7 +656,7 @@ def _lmmNormalFull(
         'blup_var': blup_var,  # (B, m, q)
         'bhat': bhat_out,  # (B, m, q)
         'resid_g': resid_g,  # (B, m, 1)
-        'Psi': Psi,  # (B, q, q)
+        'Psi': Psi_out,  # (B, q, q)
     }
 
 

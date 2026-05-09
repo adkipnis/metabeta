@@ -763,3 +763,58 @@ floors are unchanged.
 **Assessment**: Accepted. sRFX improves on every required row versus I7. BLUP stays
 within the 3% I7 guardrail and improves on most rows. Tiny FFX/sEps movements are
 expected because Psi changes the GLS path; no row shows a material FFX/sEps failure.
+
+---
+
+### I9 Fix — Output-only floor-pinned sigma(RFX) calibration (2026-05-09)
+
+**Diagnostic**: I8 still left floor-pinned active components with high error:
+
+| Split | N | sRFX NRMSE | Rel. bias |
+|-------|---|------------|-----------|
+| full MoM, floor hit | 47406 | 0.9305 | +5.988 |
+| diag MoM, floor hit | 3372 | 1.7798 | +8.894 |
+| component diag, floor hit | 4427 | 1.0082 | +4.682 |
+| fallback, floor hit | 950 | 1.0503 | +2.997 |
+
+Internal floor reductions were not robust:
+
+- Non-full diagonal-MoM floor `0.25` failed `medium-n-sampled/test` BLUP
+  (`0.4788 -> 0.4980`) and FFX (`0.2437 -> 0.2882`).
+- Non-full diagonal-MoM floor `0.35` kept BLUP inside budget but still moved
+  `medium-n-sampled/test` FFX (`0.2437 -> 0.2639`).
+- Non-full diagonal-MoM floor `0.40` failed `large-n-sampled/test`
+  (`FFX 0.4627 -> 0.7005`, `BLUP 0.4803 -> 0.5644`).
+- Fallback floor `0.5 * fallback_diag` worsened sRFX on most rows and increased sEps
+  on large/huge sampled rows.
+
+**Accepted change**: keep the runtime floor unchanged for GLS/EM stability, but calibrate
+the reported marginal random-effect scale after BLUPs and `sigma_eps` are computed:
+
+```python
+floor_limited = (Psi_diag <= psi_diag_floor + tol) & (active_q_count > 2)
+sigma_rfx_est = sqrt(0.64 * Psi_diag)  # equivalent to 0.8 * sqrt(Psi_diag)
+```
+
+The returned `Psi` diagonal is updated consistently with the reported `sigma_rfx_est`.
+
+**Required 12-way benchmark result**:
+
+| Dataset/Partition | FFX | sRFX | sEps | BLUPs |
+|-------------------|-----|------|------|-------|
+| small-n-mixed/train | 0.2250 | 0.6353 | 0.0839 | 0.3625 |
+| small-n-sampled/valid | 0.1553 | 0.6313 | 0.1036 | 0.4249 |
+| small-n-sampled/test | 0.1685 | 0.6623 | 0.1002 | 0.4207 |
+| medium-n-mixed/train | 0.1459 | 0.5065 | 0.0671 | 0.3714 |
+| medium-n-sampled/valid | 0.3625 | 0.5312 | 0.0978 | 0.4920 |
+| medium-n-sampled/test | 0.2437 | 0.6003 | 0.1030 | 0.4788 |
+| large-n-mixed/train | 0.2700 | 0.4736 | 0.0724 | 0.3641 |
+| large-n-sampled/valid | 0.3658 | 0.5484 | 0.1105 | 0.4605 |
+| large-n-sampled/test | 0.4627 | 0.5589 | 0.1082 | 0.4803 |
+| huge-n-mixed/train | 0.3069 | 0.4655 | 0.0649 | 0.3965 |
+| huge-n-sampled/valid | 0.4204 | 0.7053 | 0.1644 | 0.5086 |
+| huge-n-sampled/test | 0.4661 | 0.5740 | 0.1828 | 0.5167 |
+
+**Assessment**: Accepted. FFX, sEps, and BLUP are unchanged versus I8. Small rows are
+unchanged, and all medium/large/huge sRFX rows improve. The largest gain is the priority
+risk row, `huge-n-sampled/valid`: 0.7640 -> 0.7053.
