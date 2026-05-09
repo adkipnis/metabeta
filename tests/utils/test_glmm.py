@@ -309,9 +309,9 @@ def test_glmm_normal_mixed_rank_z_groups_keep_sigma_bounded():
 
 
 def test_glmm_normal_blups_use_beta_for_blup_without_changing_beta_est():
-    B, m, n_per_group, d, q = 1, 14, 10, 3, 1
+    B, m, n_per_group, d, q = 1, 20, 12, 4, 1
     Xm = torch.zeros(B, m, n_per_group, d)
-    Zm = torch.ones(B, m, n_per_group, q)
+    Zm = torch.zeros(B, m, n_per_group, q)
     mask_n = torch.ones(B, m, n_per_group)
     mask_m = torch.ones(B, m)
     ns = torch.full((B, m), float(n_per_group))
@@ -319,12 +319,15 @@ def test_glmm_normal_blups_use_beta_for_blup_without_changing_beta_est():
 
     x = torch.linspace(-1.0, 1.0, n_per_group)
     group_x = torch.linspace(-1.0, 1.0, m)
-    beta = torch.tensor([0.5, 0.8, -0.4])
-    rfx = 0.7 * group_x.reshape(1, m, 1)
+    beta = torch.tensor([0.5, 0.8, -0.4, 0.3])
+    rfx = torch.zeros(B, m, q)
     for g in range(m):
         Xm[:, g, :, 0] = 1.0
         Xm[:, g, :, 1] = x
         Xm[:, g, :, 2] = group_x[g]
+        Xm[:, g, :, 3] = group_x[g] * x
+        Zm[:, g, :, 0] = x
+        rfx[:, g, 0] = 0.7 * torch.sin(torch.tensor(float(g)))
 
     ym = torch.einsum('bmnd,d->bmn', Xm, beta)
     ym = ym + torch.einsum('bmnq,bmq->bmn', Zm, rfx)
