@@ -260,6 +260,55 @@ def _normalGlsAndBlups(
     )
 
 
+def _remlNewtonStep(
+    Zm: torch.Tensor,
+    gls: _NormalGlsResult,
+    ZtZ_safe: torch.Tensor,
+    se2: torch.Tensor,
+    Psi: torch.Tensor,
+    mask_m: torch.Tensor,
+    active_qq: torch.Tensor,
+    psi_diag_floor: torch.Tensor,
+    psi_eig_cap: torch.Tensor,
+    uncorr: torch.Tensor | None,
+) -> torch.Tensor:
+    """One diagonal REML-Newton step for variance components ψ_k = diag(Ψ).
+
+    Score: S_k = -½ Σ_g H_{g,kk} + ½ Σ_g (Z_g'V_g⁻¹r_g)²_k, with the exact
+    Z'V⁻¹r from Woodbury. Expected Fisher info: F_k = ½ Σ_g H_{g,kk}². Damped
+    update: Δψ_k = 0.5·S_k/F_k. The exact signal is ~0 at the MLE (safe for all
+    datasets without gating) and strictly positive at Ψ=0 (escapes the EM trap).
+    """
+    active = mask_m.bool()  # (B, m)
+    se2_4d = se2[:, None, None, None]  # (B, 1, 1, 1) for 4D matrix ops
+    se2_3d = se2[:, None, None]        # (B, 1, 1) for 3D ops
+
+    # Diagonal of H_g = Z'V_g⁻¹Z per group via Woodbury: V_g⁻¹ = σ⁻²(I - Z W Z'/σ²)
+    ZtZ_W = torch.einsum('bmqr,bmrs->bmqs', ZtZ_safe, gls.W_g)
+    ZtZ_W_ZtZ = torch.einsum('bmqr,bmrs->bmqs', ZtZ_W, ZtZ_safe)
+    H_diag = (ZtZ_safe - ZtZ_W_ZtZ / se2_4d).diagonal(dim1=-2, dim2=-1) / se2_3d
+    H_diag = H_diag.clamp(min=0.0) * active[:, :, None].to(H_diag.dtype)  # (B, m, q)
+
+    # Exact REML signal: (Z'V_g⁻¹r_g)²_k via Woodbury V_g⁻¹=σ⁻²(I-Z W Z'/σ²)
+    # Z'V⁻¹r = (Ztr - ZtZ_W @ Ztr / σ²) / σ². At Ψ=0: W_g→0, reduces to Ztr/σ².
+    # At true Ψ: gradient→0, so this is safe without a gate (no overshoot at MLE).
+    Ztr = torch.einsum('bmnq,bmn->bmq', Zm, gls.resid)  # (B, m, q)
+    ZtZ_W_Ztr = torch.einsum('bmqr,bmr->bmq', ZtZ_W, Ztr)  # (B, m, q)
+    Vr = (Ztr - ZtZ_W_Ztr / se2_3d) / se2_3d  # Z'V_g⁻¹r per group
+    signal = Vr.square() * active[:, :, None].to(Vr.dtype)
+
+    S = -0.5 * H_diag.sum(dim=1) + 0.5 * signal.sum(dim=1)  # (B, q)
+    F = 0.5 * H_diag.square().sum(dim=1).clamp(min=1e-10)    # (B, q)
+
+    psi_diag = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=psi_diag_floor)
+    psi_diag_new = (psi_diag + 0.5 * S / F).clamp(min=psi_diag_floor)
+
+    return _psdClampEigenvalues(
+        _forceDiagonalPsi(torch.diag_embed(psi_diag_new) * active_qq, uncorr),
+        psi_eig_cap,
+    )
+
+
 def _emRefineNormal(
     Xm: torch.Tensor,
     ym: torch.Tensor,
@@ -474,6 +523,7 @@ def _lmmNormalFull(
         gls.beta_mask.any(dim=-1, keepdim=True),
     )
     beta_rank = mx_rank.clamp(min=1.0, max=float(d))
+
     Psi, se2, gls = _emRefineNormal(
         Xm,
         ym,

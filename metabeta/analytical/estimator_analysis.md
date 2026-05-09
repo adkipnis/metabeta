@@ -1,5 +1,5 @@
 Estimator-by-estimator analysis
-Last updated: 2026-05-09 (after Fixes 1–9, Fix C, Fix E attempted)
+Last updated: 2026-05-09 (after Fixes 1–9, Fix C, Fix E attempted; I3 Option D+C attempted, reverted)
 
 Status key:  ✓ addressed  ~  partially addressed  ✗ open  ! new insight
 
@@ -61,11 +61,23 @@ Status key:  ✓ addressed  ~  partially addressed  ✗ open  ! new insight
   structural (= number of groups with ns > active_count + 1 AND full ZtZ rank) —
   no mask refresh or parameter improvement can increase G_mom.
 
+  I3 attempt (2026-05-09, reverted): REML-Newton with gate G_mom<10 + neutral init.
+  Two failure modes discovered:
+    (a) Wrong target: G_mom<10 datasets have NRMSE 0.79-0.87 (the BEST subset!). The
+        actual problem is G_mom=10-49 (NRMSE 1.10, 78% of datasets). Oracle with true
+        Ψ gives NRMSE 0.33 — confirming 3× gap entirely from estimation error.
+    (b) Wrong gate: G_mom<10 triggers for 10-15% of large/huge-n-mixed datasets
+        (those with many total groups but few informative ones), causing catastrophic
+        sRFX regressions (+42-158%). The gate must incorporate n_g/group context.
+  Revised I3 direction: gate on psi_df = Σ_g(ns_g - active_count - 1) < 300 over
+  mom groups. This separates small-n (psi_df≈100) from large-n (psi_df≈960) even at
+  same G_mom. See revised I3 section in plan.md.
+
   The EM cannot recover from a badly underestimated Ψ: when Ψ̂ → 0, BLUPs → 0,
   M-step Ψ_em → 0, feeding back into worse Ψ. This is a FALSE FIXED POINT of the
   EM iteration — it is NOT a stationary point of the likelihood. The REML gradient
   at Ψ=0 is strictly positive whenever the data have between-group signal, so
-  REML-Newton escapes this trap where EM cannot. See I3 in plan.md.
+  REML-Newton escapes this trap where EM cannot. See revised I3 in plan.md.
 
   - WP-Ψ3 [✗ open — attempted Fix 6, reverted] — Winsorization uses the mean of
   the noisy signal. signal_cap = 6.0 × signal_mean. When 1 of 4 groups dominates,

@@ -1,7 +1,8 @@
 Plan
-Last updated: 2026-05-09
+Last updated: 2026-05-09 (after I3 Option D + Option C attempted, reverted)
 
 Current code state: Fix 1 + Fix 2 + Fix 4 + Fix 7 + Fix 9 + Fix C
+  Code also contains `_remlNewtonStep` in normal.py (correct REML gradient; not wired in)
   Fix 1  — Ψ/G_mom additive blup_var floor (addresses WP-V2, WP-V3)
   Fix 2  — Delta-method cap loosened to min=2 (addresses WP-V1, minimal impact)
   Fix 4  — Off-diagonal Ψ shrinkage in Normal path (addresses WP-C1)
@@ -55,6 +56,16 @@ Key lessons from Fixes 1–E
      G_mom=4–7 is irreducible with current simulation sizes. Any fix to P1 must work
      WITH the constraint G_mom=4–7, not try to expand it.
 
+  6. A regime diagnostic oracle is essential before designing a fix.
+     I3 Option D targeted G_mom < 10 (the "EM false fixed point" regime), but a
+     diagnostic revealed those datasets are ALREADY the best performers (NRMSE 0.79).
+     The actual problem is G_mom=10-49 (NRMSE 1.10, 78% of datasets). Using true Ψ and
+     σ² (oracle GLS) gives NRMSE 0.33, confirming the gap is entirely from Ψ estimation
+     error. Before designing a fix, always run: (a) oracle diagnostic to confirm gap is
+     real, (b) breakdown by G_mom/psi_df to identify the true problem regime.
+     G_mom alone does not identify the small-n problem: large-n datasets with G_mom < 10
+     (10–15% of those datasets) would also be gated, causing catastrophic regressions.
+
 ---
 
 Remaining open problems (ordered by priority)
@@ -62,11 +73,22 @@ Remaining open problems (ordered by priority)
   P1 — small-n-mixed BLUPs stuck at NRMSE ~1.07 [root cause: WP-Ψ2]
   Every fix has left this effectively unchanged (BLUPs: 1.14 before Fix 9, now ~1.07
   but the small gain came from better M-step, not better Ψ init). The fundamental
-  problem is that for bg_df=4–7, the MoM estimates Ψ from 4–7 noisy outer products.
-  Ψ̂ ≪ Ψ_true → BLUPs → 0 → M-step Ψ_em → 0 — a self-reinforcing underestimation
-  cycle the EM cannot escape. Fix E confirmed G_mom is irreducible. No downstream fix
-  can recover BLUP accuracy without first recovering Ψ accuracy.
+  problem is Ψ estimation error (over- OR under-estimation).
   Target for I3 (REML): NRMSE < 0.9.
+
+  NEW INSIGHT (2026-05-09, after I3 attempt): Oracle diagnostic with TRUE Ψ and σ²
+  gives BLUP NRMSE = 0.33 — confirming that better Ψ estimation would yield huge gains.
+  Breakdown of Fix C NRMSE by G_mom:
+    G_mom < 5:    0.87  (104 datasets — small G total, few groups, actually BEST)
+    G_mom 5-9:    0.79  (721 datasets — also good)
+    G_mom 10-19:  1.10  (2285 datasets — THE REAL PROBLEM, 28% of data)
+    G_mom 20-49:  1.10  (4076 datasets — THE REAL PROBLEM, 50% of data)
+    G_mom 50+:    1.02  (1006 datasets)
+  The original I3 plan targeted G_mom < 10 (the EM false Ψ=0 fixed point), but G_mom <
+  10 datasets are actually the BEST performing subset! The actual problem is G_mom=10-49
+  where MoM has some information but the MoM+EM cycle consistently over- OR under-estimates
+  Ψ. This regime requires REML with a gate based on psi_df (total residual df in informative
+  groups), not G_mom alone. See I3 revised plan.
 
   P2 — sEps regression from Fix 7 [root cause: variance partitioning + WP-σ1/σ2]
   Most datasets saw 20–66% worse σ̂_eps after Fix 7. The EM σ² update now wanders
@@ -288,38 +310,76 @@ Implementation plan: I3 — REML-Newton for diagonal variance components
     )
     return Psi_new
 
-  --- Integration strategy ---
+  --- REML signal derivation (key result) ---
 
-  Option A (gated): When G_mom < 8, replace the 5 EM iterations with REML-Newton.
-    Gate: enough_diag_mom & (G_mom_raw < 8). Affects only small-n-mixed.
-    Risk: boundary at G_mom=8 arbitrary; doesn't help edge cases near the gate.
+  The correct REML score signal uses Z_g'Py_g where P = V⁻¹ - V⁻¹X(X'V⁻¹X)⁻¹X'V⁻¹.
+  Since residuals r_g = y_g - X_g β_gls: Z_g'Py = Z_g'V_g⁻¹(y_g - X_g β_gls) = Z_g'V_g⁻¹r_g.
+  This equals (Ztr - ZtZ_W Ztr / σ²) / σ² (exact Woodbury formula). See implemented
+  function `_remlNewtonStep` in normal.py.
 
-  Option B (replace Stage 2 + EM entirely): Drop MoM + EM. Use Stage 1 σ̂_eps for
-    the starting σ², start Ψ from psi_diag_floor·I, run 8–10 REML-Newton iterations.
-    No MoM initialization needed.
-    Risk: Slower convergence for large-n where EM works fine; needs profiling.
+  --- Integration strategy (attempts and lessons) ---
 
-  Option C (REML first, then EM): Run 3 REML-Newton steps (starting from MoM output),
-    then run 3 EM steps for refinement. For small-n-mixed: REML escapes the Ψ=0 trap
-    first, then EM polishes. For large-n: MoM is already good, REML adds minimal cost.
-    Risk: interaction between REML overshoot (Option C runs REML from MoM ≈ 0, still trapped).
+  Option D attempted (2026-05-09, FAILED):
+    Gate: G_mom_raw < 10. Neutral init: Psi = diag(psi_diag_floor). n_reml=8.
+    Result: small-n-mixed BLUPs 1.0687 → 1.0683 (≈0 improvement). Large-n-mixed,
+    huge-n-mixed: catastrophic regressions (+42-158% sRFX).
 
-  Option D (REML with neutral init): Same as Option B but gated on G_mom < 10. For
-    G_mom ≥ 10, MoM+EM unchanged. For G_mom < 10, start from Ψ = psi_diag_floor·I,
-    run 8 REML-Newton iterations.
-    Risk: G_mom gate is still somewhat arbitrary but safe (MoM works at G_mom ≥ 10).
+    Failure mode 1 — Wrong gate. G_mom < 10 triggers for 10.7% of large-n-mixed
+    and 15% of huge-n-mixed datasets (those with many total groups but few informative
+    ones due to small n_g in those specific groups). REML from neutral init for
+    these datasets introduces large noise.
 
-  RECOMMENDATION: Prototype Option D. It's the most conservative:
-    - Large-n datasets (G_mom >> 10): unchanged
-    - Small-n-mixed (G_mom=4–7): REML from neutral init, avoids MoM Ψ≈0 trap
-    - Medium risk (new algorithm for a subset of cases)
+    Failure mode 2 — Wrong target regime. The G_mom < 10 datasets for small-n-mixed
+    are ALREADY the best performers (NRMSE 0.79-0.87). The actual problem is G_mom=10-49
+    (NRMSE 1.10). The plan's diagnosis (EM false fixed point at Ψ=0 primarily harms
+    G_mom=4-7) was wrong — those datasets don't hit the fixed point as hard as thought.
+
+  Option C attempted (2026-05-09, FAILED):
+    No gate. Start REML from MoM Ψ for all datasets. n_reml=4.
+    Result: small-n-mixed BLUPs → 2.67 (catastrophic). All other datasets regress.
+
+    Failure mode — Signal noise at MLE. For large-n datasets where MoM is approximately
+    correct, E[S_k] ≈ 0 but Var[S_k] is O(G·ψ²). With G=50, std(Δψ) ≈ ψ/√50 per step.
+    After 4 steps, accumulated noise ≈ 27% of ψ. REML adds noise to well-estimated Ψ.
+
+  --- New analysis: oracle and true problem regime ---
+
+  Oracle BLUP NRMSE for small-n-mixed (using TRUE Ψ and σ²): 0.3323.
+  The gap 1.07 → 0.33 is entirely from Ψ estimation error. The fix must improve Ψ
+  estimation accuracy for the datasets causing the high NRMSE.
+
+  BLUP NRMSE breakdown by G_mom (Fix C baseline):
+    G_mom < 10:  0.79-0.87  (10% of datasets — not the problem!)
+    G_mom 10-49: 1.10       (78% of datasets — the actual problem)
+    G_mom 50+:   1.02       (12% of datasets)
+
+  The correct gate must target G_mom=10-49 small-n datasets without harming G_mom=10-49
+  large-n datasets (where MoM works). The discriminator must be n_g (observations per
+  group), not G_mom alone.
+
+  --- I3 revised direction (NEXT ATTEMPT) ---
+
+  Gate on psi_df (total residual df in informative groups):
+    psi_df = Σ_{g in mom_mask} (ns_g - active_count_g - 1)
+
+  For small-n-mixed with G_mom=20: each group has n_g ≈ 7, psi_df ≈ 20*(7-2) = 100.
+  For large-n-mixed with G_mom=20: each group has n_g ≈ 50, psi_df ≈ 20*(50-2) = 960.
+  With threshold psi_df < 300: small-n-mixed triggers, large-n-mixed does not.
+
+  This correctly identifies "many informative groups but each with few observations" —
+  the precise regime where MoM+EM fails for small-n-mixed.
+
+  Implementation:
+    psi_df = ((ns - active_count[:, None] - 1.0).clamp(min=0.0) * mom_mask).sum(dim=1)
+    reml_gate = psi_df < 300  # (B,) — targets small-n, avoids large-n
+
+  For gated datasets: start from Ψ = diag(psi_diag_floor), run 8 REML steps with
+  permissive cap = max(psi_eig_cap, 25·σ²). σ² held at Stage 1.
+  After REML: merge back and run EM as usual.
 
   --- σ² handling ---
 
-  For REML iterations, keep σ² fixed at Stage 1 σ̂_eps during the first pass to
-  isolate the Ψ estimation problem. After Ψ converges (or after n_reml steps),
-  run a single GLS + EM σ² update to jointly refine. Mixing σ² updates INTO the
-  REML loop risks introducing the same partitioning instability seen in Fix D.
+  For REML iterations, keep σ² fixed at Stage 1 σ̂_eps to isolate the Ψ problem.
 
   --- Success criteria ---
 
@@ -331,18 +391,13 @@ Implementation plan: I3 — REML-Newton for diagonal variance components
     1. F_k ≈ 0 (tiny Fisher information): clamp F_k to 1e-10, gives huge step.
        Mitigation: 0.5 damping on Newton step + floor clamp.
 
-    2. Overshoot at large Ψ: if REML overshoots and Ψ >> true value, psi_eig_cap
-       prevents catastrophic Ψ, but BLUPs will be under-shrunk.
-       Mitigation: check psi_eig_cap is still active after REML step.
+    2. psi_eig_cap too tight: for gated small-n datasets with underestimated MoM, the
+       cap (based on MoM signal) clamps REML. Fix: use max(psi_eig_cap, 25·σ²).
 
-    3. Divergence for q > 1: the off-diagonal interaction between components is
-       ignored by diagonal Newton. For correlated random effects, diagonal updates
-       may cycle.
-       Mitigation: diagonal-only update is consistent (just slower); check convergence.
+    3. psi_df gate not separating perfectly: some large-n datasets might have psi_df < 300
+       if they have few informative groups with small n_g. Check distribution before using.
 
-    4. H_g_diag going negative: possible for ill-conditioned ZtZ (ZtZ_W_ZtZ > ZtZ).
-       If H_g_diag_k < 0, that component's score is invalid.
-       Mitigation: clamp H_diag to 0 from below before accumulating.
+    4. H_g_diag going negative: clamp H_diag to 0 from below before accumulating.
 
 ---
 
@@ -366,6 +421,7 @@ Priority order
   │ Fix E (refresh mom4)       │ ABANDONED — _groupZDiag  │ —         │ Dead   │
   │                            │ is structural; no-op     │           │        │
   ├────────────────────────────┼──────────────────────────┼───────────┼────────┤
-  │ I3 (REML-Newton diagonal)  │ P1: small-n-mixed BLUPs  │ ~110 lines│ Next   │
-  │                            │ target NRMSE < 0.9       │           │        │
+  │ I3 (REML-Newton diagonal)  │ P1: small-n-mixed BLUPs  │ ~120 lines│ Next   │
+  │                            │ target NRMSE < 0.9;      │           │        │
+  │                            │ revised gate: psi_df<300  │           │        │
   └────────────────────────────┴──────────────────────────┴───────────┴────────┘
