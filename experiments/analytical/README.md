@@ -1,8 +1,8 @@
 Analytical GLMM Experiments
 ===========================
 
-This directory contains diagnostics and compact benchmarks for the analytical
-GLMM estimator in `metabeta/analytical/`.
+This directory contains the retained diagnostics and benchmarks for the
+analytical GLMM estimator in `metabeta/analytical/`.
 
 - `glmm_error_analysis.py` — verbose per-dataset error diagnostic. Reports NRMSE,
   bias, quantiles, variance-component breakdowns, BLUP calibration, correlation
@@ -10,18 +10,13 @@ GLMM estimator in `metabeta/analytical/`.
 - `glmm_required_benchmark.py` — compact required-suite runner. Prints CSV rows for
   FFX, sigma(RFX), sigma(Eps), and BLUP NRMSE on mixed train epochs 1-2 and sampled
   valid/test across small, medium, large, and huge datasets.
-- `glmm_shrinkage_diagnostic.py` — I4 diagnostic. Compares estimated vs true BLUP
-  shrinkage for q=1 rows and runs oracle BLUP ablations separating beta, Psi, and
-  sigma_eps effects.
-- `glmm_beta_leakage_diagnostic.py` — I5 diagnostic. Measures fixed-effect leakage
-  into BLUP residuals, bins BLUP errors by beta/projection/rank diagnostics, and runs
-  beta-OLS blend ablations.
-- `glmm_alpha_gate_diagnostic.py` — I7 diagnostic. Tests observable alpha schedules
-  for the final BLUP-residual beta blend across the required 12-way benchmark suite.
-- `glmm_srfx_diagnostic.py` — sRFX diagnostic. Replays Gaussian estimator internals
-  and reports MoM, EM, floor/cap, component-fallback, and off-diagonal error splits.
-- `glmm_i9_calibration_diagnostic.py` — I9 diagnostic. Replays output-only
-  sigma(RFX) calibration schedules and ranks candidate gates/factors against the
-  current I9 required-suite sRFX baseline.
-- `glmm_perf_baseline.md` — running fix log and benchmark record for analytical GLMM
-  estimator changes.
+- `glmm_perf_baseline.md` — concise final fix summary: accepted changes, rejected
+  experiments, final benchmark, and remaining weaknesses.
+
+Removed historical one-off diagnostics:
+
+- `glmm_shrinkage_diagnostic.py` — I4 shrinkage/oracle BLUP analysis.
+- `glmm_beta_leakage_diagnostic.py` — I5 beta-leakage analysis.
+- `glmm_alpha_gate_diagnostic.py` — I7 beta-blend alpha schedule sweep.
+- `glmm_srfx_diagnostic.py` — sRFX internals replay and floor/cap analysis.
+- `glmm_i9_calibration_diagnostic.py` — output-only sigma(RFX) calibration replay.
