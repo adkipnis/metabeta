@@ -631,11 +631,13 @@ def _lmmNormalFull(
     floor_tol = torch.maximum(psi_diag_floor.abs() * 1e-3, psi_diag_floor.new_full((), 1e-10))
     floor_hit = psi_diag <= psi_diag_floor + floor_tol
     floor_ratio = psi_diag / psi_diag_floor.clamp(min=1e-12)
+    q1_floor_limited = floor_hit & (active_count[:, None] == 1.0) & (floor_ratio <= 0.68)
     floor_limited = floor_hit & (active_count[:, None] > 2.0)
     q2_floor_limited = floor_hit & (active_count[:, None] == 2.0) & (floor_ratio <= 0.68)
     # Floor-pinned multi-component rows are systematically high, but lowering the runtime
     # floor destabilizes GLS. Calibrate only the reported marginal scale after BLUPs.
-    psi_diag_out = torch.where(q2_floor_limited, 0.7225 * psi_diag, psi_diag)
+    psi_diag_out = torch.where(q1_floor_limited, 0.49 * psi_diag, psi_diag)
+    psi_diag_out = torch.where(q2_floor_limited, 0.7225 * psi_diag, psi_diag_out)
     psi_diag_out = torch.where(floor_limited, 0.3025 * psi_diag, psi_diag_out)
     Psi_out = Psi + torch.diag_embed(psi_diag_out - psi_diag)
     sigma_rfx = psi_diag_out.sqrt()                                          # (B, q)
