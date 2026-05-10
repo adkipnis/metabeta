@@ -20,5 +20,8 @@ GLMM estimator in `metabeta/analytical/`.
   for the final BLUP-residual beta blend across the required 12-way benchmark suite.
 - `glmm_srfx_diagnostic.py` — sRFX diagnostic. Replays Gaussian estimator internals
   and reports MoM, EM, floor/cap, component-fallback, and off-diagonal error splits.
+- `glmm_i9_calibration_diagnostic.py` — I9 diagnostic. Replays output-only
+  sigma(RFX) calibration schedules and ranks candidate gates/factors against the
+  current I9 required-suite sRFX baseline.
 - `glmm_perf_baseline.md` — running fix log and benchmark record for analytical GLMM
   estimator changes.
