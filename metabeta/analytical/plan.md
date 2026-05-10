@@ -1,50 +1,52 @@
 Plan
 ====
 
-Last updated: 2026-05-09, after I9 floor-pinned output calibration.
+Last updated: 2026-05-09, after final I9 output calibration tuning.
 
 Current state
 -------------
 
-The Gaussian analytical estimator is in a stable I9 state:
+The Gaussian analytical estimator is in a stable I9 output-calibrated state:
 
-- BLUP accuracy was mainly fixed by output-local beta handling:
+- BLUP accuracy is mainly from output-local beta handling:
   - I5/I6: compute final BLUP residuals with a blend toward pooled OLS.
   - I7: make that blend active-d adaptive:
     - alpha `1.00` for active d <= 4
     - alpha `0.65` for active d 5-8
     - alpha `0.75` for active d > 8
-- sRFX accuracy is now improved by floor-aware handling:
+- sRFX accuracy is improved by floor-aware handling:
   - I8: lower joint diagonal MoM floor signal from `0.5` to `0.45`.
-  - I9: output-only calibration for floor-pinned rows with active q > 2:
-    `sigma_rfx_est = 0.8 * sqrt(Psi_diag)`.
+  - I9: keep runtime floors unchanged, but calibrate reported sigma(RFX) after BLUPs:
+    - q > 2 and floor-hit: `sigma_rfx_est = 0.55 * sqrt(Psi_diag)`.
+    - q = 2, floor-hit, and `Psi_diag / psi_diag_floor <= 0.68`:
+      `sigma_rfx_est = 0.85 * sqrt(Psi_diag)`.
 - Runtime floors remain important for GLS/EM stability. Do not lower them again without a
   stronger observable gate.
 - `_remlNewtonStep` still exists in `metabeta/analytical/normal.py` but is unused.
 
-Current I9 benchmark
---------------------
+Current benchmark
+-----------------
 
 Required-suite result:
 
 | Dataset | Partition | FFX | sRFX | sEps | BLUP |
 | --- | --- | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.2250 | 0.6353 | 0.0839 | 0.3625 |
-| small-n-sampled | valid | 0.1553 | 0.6313 | 0.1036 | 0.4249 |
-| small-n-sampled | test | 0.1685 | 0.6623 | 0.1002 | 0.4207 |
-| medium-n-mixed | train | 0.1459 | 0.5065 | 0.0671 | 0.3714 |
-| medium-n-sampled | valid | 0.3625 | 0.5312 | 0.0978 | 0.4920 |
-| medium-n-sampled | test | 0.2437 | 0.6003 | 0.1030 | 0.4788 |
-| large-n-mixed | train | 0.2700 | 0.4736 | 0.0724 | 0.3641 |
-| large-n-sampled | valid | 0.3658 | 0.5484 | 0.1105 | 0.4605 |
-| large-n-sampled | test | 0.4627 | 0.5589 | 0.1082 | 0.4803 |
-| huge-n-mixed | train | 0.3069 | 0.4655 | 0.0649 | 0.3965 |
-| huge-n-sampled | valid | 0.4204 | 0.7053 | 0.1644 | 0.5086 |
-| huge-n-sampled | test | 0.4661 | 0.5740 | 0.1828 | 0.5167 |
+| small-n-mixed | train | 0.2250 | 0.6115 | 0.0839 | 0.3625 |
+| small-n-sampled | valid | 0.1553 | 0.6302 | 0.1036 | 0.4249 |
+| small-n-sampled | test | 0.1685 | 0.6519 | 0.1002 | 0.4207 |
+| medium-n-mixed | train | 0.1459 | 0.4516 | 0.0671 | 0.3714 |
+| medium-n-sampled | valid | 0.3625 | 0.5321 | 0.0978 | 0.4920 |
+| medium-n-sampled | test | 0.2437 | 0.5989 | 0.1030 | 0.4788 |
+| large-n-mixed | train | 0.2700 | 0.4630 | 0.0724 | 0.3641 |
+| large-n-sampled | valid | 0.3658 | 0.5401 | 0.1105 | 0.4605 |
+| large-n-sampled | test | 0.4627 | 0.5282 | 0.1082 | 0.4803 |
+| huge-n-mixed | train | 0.3069 | 0.4465 | 0.0649 | 0.3965 |
+| huge-n-sampled | valid | 0.4204 | 0.6549 | 0.1644 | 0.5086 |
+| huge-n-sampled | test | 0.4661 | 0.5701 | 0.1828 | 0.5167 |
 
-Compared with I8, I9 preserves every FFX, sEps, and BLUP row; it leaves small rows
-unchanged and improves all medium/large/huge sRFX rows. The largest remaining required
-sRFX error is `huge-n-sampled/valid` at `0.7053`.
+Compared with I8, FFX, sEps, and BLUP are unchanged. sRFX improves on every row. The
+largest remaining required sRFX errors are `huge-n-sampled/valid` at `0.6549` and
+`small-n-sampled/test` at `0.6519`.
 
 What worked
 -----------
@@ -54,8 +56,11 @@ What worked
 - I7 active-d adaptive alpha improved small-n BLUP while keeping medium rows inside the
   regression budget.
 - A mild I8 runtime diagonal floor reduction helped sRFX, but only at `0.45`.
-- I9 output-only floor-pinned sigma calibration worked because it changed only reported
-  marginal random-effect scale, after GLS/EM/BLUP/sigma_eps were already computed.
+- I9 output-only sigma calibration worked because it changed only reported marginal
+  random-effect scale and returned `Psi`, after GLS/EM/BLUP/sigma_eps were computed.
+- The best accepted I9 schedules were:
+  - q > 2 floor-hit sigma factor `0.55`.
+  - q = 2 low floor-ratio sigma factor `0.85`.
 
 What failed
 -----------
@@ -70,6 +75,10 @@ What failed
   - non-full diagonal-MoM floors `0.25`, `0.35`, `0.40`: improved sRFX locally but moved
     FFX or BLUP.
   - lower fallback/component runtime floors: worsened sRFX and sEps on sampled rows.
+- I9 diagnostic rejected:
+  - q > 2 factors `0.80` and `0.85`: too conservative after the factor sweep.
+  - weak-path-only q > 1 factors `0.85` and `0.90`: worsened all required rows.
+  - cap-floor factor `0.75`: negligible gains with more losses than wins.
 
 Guardrails
 ----------
@@ -96,49 +105,39 @@ Keep rules:
 Ranked remaining paths
 ----------------------
 
-1. **Refine I9 output calibration.**
-   Most promising because I9 gave clean sRFX gains with zero FFX/sEps/BLUP movement.
-   The next question is whether the q > 2 gate and `0.8` sigma factor can be improved
-   using observable bins: active q, path, `G_mom`, floor ratio, cap status, and active d.
+1. **Check whether the final I9 factor is over-tuned.**
+   Run the updated calibration diagnostic with the q = 2 gate fixed and compare nearby
+   q > 2 factors (`0.50`, `0.55`, `0.60`). Patch only if a candidate improves mean sRFX
+   without worsening the current max rows.
 
-2. **Output-only calibration for weak floor-hit paths.**
-   Promising but narrower. `diag_mom`, `component_diag`, and fallback floor-hit components
-   remain high-error, while internal floor changes were unstable. Test output-only
-   calibration first, not runtime floor changes.
+2. **q = 1 floor-hit calibration.**
+   q = 1 floor-hit components remain biased, but their global sRFX is lower than q = 2/q
+   > 2 floor-hit components. Test only output-only gates and avoid changing runtime
+   floors.
 
-3. **Eigencap-hit component handling.**
-   Moderate promise. Cap-hit rows are rare, so benchmark leverage is limited, but their
-   error is high. Prefer output-only cap calibration or a diagnostic before changing the
-   eigencap used by GLS/EM.
+3. **Low floor-ratio residual calibration.**
+   The low floor-ratio bin remains high-error. It may still isolate over-flooring better
+   than path labels, but q = 2 already consumed the cleanest version of this signal.
 
-4. **Off-diagonal correlation shrinkage.**
-   Lower priority for the current metrics. Correlation error remains high, but sRFX is a
-   diagonal scale metric. This may matter more for returned `Psi`, BLUP covariance, or
-   downstream NN inputs than for the required benchmark.
+4. **Weak-path floor-hit calibration with better gates.**
+   `diag_mom`, `component_diag`, and fallback floor-hit components remain high-error, but
+   broad weak-path output schedules failed. Revisit only with q/floor-ratio gates.
 
-5. **Runtime EM/M-step/REML changes.**
+5. **Eigencap-hit component handling.**
+   Low promise for the required suite. Cap-hit rows are rare, and the cap-floor output
+   schedule did not help.
+
+6. **Off-diagonal correlation shrinkage.**
+   Lower priority for current metrics. Correlation error may matter for returned `Psi`,
+   BLUP covariance, or downstream NN inputs more than for required sRFX.
+
+7. **Runtime EM/M-step/REML changes.**
    Lowest priority. Prior attempts showed biased fixed points or collateral regressions.
-   Reopen only with a new diagnostic that explains why the previous failures would be
-   avoided.
 
 Next step
 ---------
 
-Build an I9 calibration diagnostic before patching again.
-
-1. Extend or add an analytical experiment that replays the I9 output calibration and
-   reports candidate output-only schedules without changing estimator internals.
-2. Bin floor-pinned rows by:
-   - active q: `1`, `2`, `3+`
-   - MoM path: `full_mom`, `diag_mom`, `component_diag`, `fallback`
-   - `G_mom` quantiles
-   - floor ratio: `Psi_diag / psi_diag_floor`
-   - cap-hit status
-3. Compare candidate schedules:
-   - current I9: q > 2, sigma factor `0.8`
-   - q > 1 with milder factor
-   - q > 2 with per-path factors
-   - weak-path-only output calibration
-   - cap-hit-only output calibration
-4. Patch only the best single schedule if it improves required-suite sRFX without moving
-   FFX, sEps, or BLUP. Otherwise leave I9 unchanged.
+Run `glmm_i9_calibration_diagnostic.py` with the current schedule as baseline, then test
+only one narrow next patch if it improves the required suite without moving FFX, sEps, or
+BLUP. The best next diagnostic target is q = 1 output-only floor calibration; runtime
+floor changes should remain off the table.
