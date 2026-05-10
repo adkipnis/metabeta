@@ -12,7 +12,7 @@ For a given evaluation config (= trained model):
 
 Usage (from experiments/):
     uv run python runtimes.py
-    uv run python runtimes.py --configs small-n-mixed --model_id large-r --seed 0
+    uv run python runtimes.py --configs small-n-mixed --model_id large --seed 0
     uv run python runtimes.py --configs small-n-mixed --test_data_ids tiny-n-sampled small-n-sampled
     uv run python runtimes.py --configs small-n-mixed --max_test_sets 2 --max_datasets 32
 """
@@ -57,7 +57,7 @@ DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixe
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Runtime comparison: metabeta vs NUTS vs ADVI.')
     parser.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS, help='training data config names, or YAML files in evaluation/configs/')
-    parser.add_argument('--model_id', default='large-r', help='model config id used when --configs names data ids')
+    parser.add_argument('--model_id', default='large', help='model config id used when --configs names data ids')
     parser.add_argument('--seed', type=int, default=0, help='checkpoint seed used when --configs names data ids')
     parser.add_argument('--prefix', default='best', help='checkpoint prefix to load')
     parser.add_argument('--k', type=int, default=0, help='number of extra MoE permuted views (0 = no MoE)')
@@ -75,7 +75,7 @@ def setup() -> argparse.Namespace:
 
 def loadEvalConfig(
     name: str,
-    model_id: str = 'large-r',
+    model_id: str = 'large',
     seed: int = 0,
     prefix: str = 'best',
     **overrides,

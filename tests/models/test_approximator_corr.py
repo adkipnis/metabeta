@@ -220,7 +220,7 @@ def test_model_from_yaml_reads_analytical_inference_flag():
     from metabeta.utils.config import modelFromYaml
 
     cfg_path = (
-        Path(__file__).resolve().parents[2] / 'metabeta' / 'configs' / 'models' / 'large-r.yaml'
+        Path(__file__).resolve().parents[2] / 'metabeta' / 'configs' / 'models' / 'large.yaml'
     )
     cfg = modelFromYaml(cfg_path, d_ffx=2, d_rfx=2, likelihood_family=0)
 
