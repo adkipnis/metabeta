@@ -7,8 +7,8 @@ This file records the useful conclusions from the analytical Gaussian GLMM
 experiments. Historical scratch diagnostics were removed; the current reusable
 scripts are documented in `README.md`.
 
-Final Required Benchmark
-------------------------
+Current Production MAP Benchmark
+--------------------------------
 
 Command:
 
@@ -17,22 +17,24 @@ uv run python experiments/analytical/glmm_required_benchmark.py
 ```
 
 Required suite: mixed train epochs 1-2 and sampled valid/test for
-`small|medium|large|huge`.
+`small|medium|large|huge`. These rows are the benchmark baseline for the current
+production marginal MAP sRFX path. The production MAP step replaces only
+`sigma_rfx_est` and the `Psi` diagonal; FFX, sEps, and BLUP remain MoM/EM-derived.
 
 | Dataset | Partition | FFX | sRFX | sEps | BLUP |
 | --- | --- | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.2250 | 0.6100 | 0.0839 | 0.3625 |
-| small-n-sampled | valid | 0.1553 | 0.6291 | 0.1036 | 0.4249 |
-| small-n-sampled | test | 0.1685 | 0.6507 | 0.1002 | 0.4207 |
-| medium-n-mixed | train | 0.1459 | 0.4501 | 0.0671 | 0.3714 |
-| medium-n-sampled | valid | 0.3625 | 0.5302 | 0.0978 | 0.4920 |
-| medium-n-sampled | test | 0.2437 | 0.5979 | 0.1030 | 0.4788 |
-| large-n-mixed | train | 0.2700 | 0.4614 | 0.0724 | 0.3641 |
-| large-n-sampled | valid | 0.3658 | 0.5385 | 0.1105 | 0.4605 |
-| large-n-sampled | test | 0.4627 | 0.5264 | 0.1082 | 0.4803 |
-| huge-n-mixed | train | 0.3069 | 0.4450 | 0.0649 | 0.3965 |
-| huge-n-sampled | valid | 0.4204 | 0.6535 | 0.1644 | 0.5086 |
-| huge-n-sampled | test | 0.4661 | 0.5685 | 0.1828 | 0.5167 |
+| small-n-mixed | train | 0.2250 | 0.5650 | 0.0839 | 0.3625 |
+| small-n-sampled | valid | 0.1553 | 0.5819 | 0.1036 | 0.4249 |
+| small-n-sampled | test | 0.1685 | 0.6242 | 0.1002 | 0.4207 |
+| medium-n-mixed | train | 0.1459 | 0.3700 | 0.0671 | 0.3714 |
+| medium-n-sampled | valid | 0.3625 | 0.4671 | 0.0978 | 0.4920 |
+| medium-n-sampled | test | 0.2437 | 0.5129 | 0.1030 | 0.4788 |
+| large-n-mixed | train | 0.2700 | 0.3849 | 0.0724 | 0.3641 |
+| large-n-sampled | valid | 0.3658 | 0.4679 | 0.1105 | 0.4605 |
+| large-n-sampled | test | 0.4627 | 0.4677 | 0.1082 | 0.4803 |
+| huge-n-mixed | train | 0.3069 | 0.3932 | 0.0649 | 0.3965 |
+| huge-n-sampled | valid | 0.4204 | 0.5911 | 0.1644 | 0.5086 |
+| huge-n-sampled | test | 0.4661 | 0.5050 | 0.1828 | 0.5167 |
 
 Accepted Fixes
 --------------
@@ -95,3 +97,60 @@ Remaining Weaknesses
   helped one regime while breaking another.
 - Off-diagonal Psi quality is only lightly handled. It is lower priority for the
   current required metrics, which score marginal sRFX and BLUP point estimates.
+
+Future Directions
+-----------------
+
+- **Option 1: refined marginal MAP / REML over variance components.** Next
+  concrete diagnostic. Optimize variance scales from the MoM/EM initialization
+  using the exact Gaussian marginal likelihood already used by the MAP path.
+  Expected cost is roughly one extra short Adam loop per batch; expected gain is
+  possible sRFX improvement, especially on sampled rows. Do not integrate unless
+  it beats the current production MAP baseline without material FFX, sEps, or BLUP
+  regressions.
+- **Option 2: Laplace uncertainty around the MAP point.** Secondary direction.
+  Estimate curvature after MAP for context-feature uncertainty, not as a direct
+  point-estimate improvement. Expected cost is higher than Option 1 and expected
+  gain is better uncertainty information rather than lower point NRMSE.
+
+VI-family methods, SGLD, SVGD, MH, and full MCMC are not active analytical
+estimator plans.
+
+REML/Profile MAP Diagnostic Result
+----------------------------------
+
+Command:
+
+```bash
+uv run python experiments/analytical/glmm_reml_diagnostic.py
+```
+
+The first diagnostic run is promising for sRFX, but remains experiment-only. The
+diagnostic keeps FFX and BLUP unchanged; `reml_diag_seps` also moves sEps.
+
+| Dataset | Partition | current sRFX | reml_diag sRFX | reml_diag_seps sRFX |
+| --- | --- | ---: | ---: | ---: |
+| small-n-mixed | train | 0.5650 | 0.5637 | 0.5638 |
+| small-n-sampled | valid | 0.5819 | 0.5751 | 0.5750 |
+| small-n-sampled | test | 0.6242 | 0.6245 | 0.6201 |
+| medium-n-mixed | train | 0.3700 | 0.3406 | 0.3398 |
+| medium-n-sampled | valid | 0.4671 | 0.4478 | 0.4474 |
+| medium-n-sampled | test | 0.5129 | 0.4777 | 0.4903 |
+| large-n-mixed | train | 0.3849 | 0.3611 | 0.3610 |
+| large-n-sampled | valid | 0.4679 | 0.4394 | 0.4403 |
+| large-n-sampled | test | 0.4677 | 0.4293 | 0.4280 |
+| huge-n-mixed | train | 0.3932 | 0.3826 | 0.3826 |
+| huge-n-sampled | valid | 0.5911 | 0.5504 | 0.5512 |
+| huge-n-sampled | test | 0.5050 | 0.4829 | 0.4825 |
+
+Measured suite time in this workspace:
+
+- `current`: 444.33 seconds.
+- `mom_em`: 104.71 seconds.
+- `reml_diag`: 267.92 seconds for the refinement loop; 372.63 seconds with
+  MoM/EM initialization.
+- `reml_diag_seps`: 276.94 seconds for the refinement loop; 381.65 seconds with
+  MoM/EM initialization.
+
+Do not wire this into `glmm.py` until BLUP/GLS recomputation choices are tested
+and sEps movement from the sigma(Eps) variant is judged acceptable.
