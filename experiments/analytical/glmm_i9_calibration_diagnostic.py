@@ -160,6 +160,25 @@ def _candidate_factors() -> list[_Candidate]:
 
         return factors
 
+    def current_plus_q1_floor(q1_factor: float) -> Callable[[_Columns], np.ndarray]:
+        def factors(data: _Columns) -> np.ndarray:
+            out = _current_i9_factor(data)
+            gate = data['floor'] & (data['q'] == 1.0)
+            return np.where(gate, q1_factor, out)
+
+        return factors
+
+    def current_plus_q1_floor_ratio(
+        q1_factor: float,
+        ratio_max: float,
+    ) -> Callable[[_Columns], np.ndarray]:
+        def factors(data: _Columns) -> np.ndarray:
+            out = _current_i9_factor(data)
+            gate = data['floor'] & (data['q'] == 1.0) & (data['floor_ratio'] <= ratio_max)
+            return np.where(gate, q1_factor, out)
+
+        return factors
+
     def path_q_gt2(
         full_factor: float,
         weak_factor: float,
@@ -216,6 +235,16 @@ def _candidate_factors() -> list[_Candidate]:
         _Candidate('q2_f090_diag_mom', current_plus_q2_path(0.90, 'diag_mom')),
         _Candidate('q2_f090_gmom_le018', current_plus_q2_gmom(0.90, 18.0)),
         _Candidate('q2_f090_gmom_le028', current_plus_q2_gmom(0.90, 28.0)),
+        _Candidate('q1_f090_floor', current_plus_q1_floor(0.90)),
+        _Candidate('q1_f080_floor', current_plus_q1_floor(0.80)),
+        _Candidate('q1_f070_floor', current_plus_q1_floor(0.70)),
+        _Candidate('q1_f060_floor', current_plus_q1_floor(0.60)),
+        _Candidate('q1_f080_ratio_le055', current_plus_q1_floor_ratio(0.80, 0.55)),
+        _Candidate('q1_f070_ratio_le055', current_plus_q1_floor_ratio(0.70, 0.55)),
+        _Candidate('q1_f080_ratio_le068', current_plus_q1_floor_ratio(0.80, 0.68)),
+        _Candidate('q1_f070_ratio_le068', current_plus_q1_floor_ratio(0.70, 0.68)),
+        _Candidate('q1_f080_ratio_le089', current_plus_q1_floor_ratio(0.80, 0.89)),
+        _Candidate('q1_f070_ratio_le089', current_plus_q1_floor_ratio(0.70, 0.89)),
         _Candidate('qgt2_full080_weak075', path_q_gt2(0.80, 0.75)),
         _Candidate('qgt2_full085_weak075', path_q_gt2(0.85, 0.75)),
         _Candidate('qgt2_full080_weak070', path_q_gt2(0.80, 0.70)),
