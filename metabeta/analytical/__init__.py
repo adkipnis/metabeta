@@ -11,6 +11,7 @@ from metabeta.analytical.glmm import (
     lmmBernoulli,
     lmmNormal,
     lmmPoisson,
+    refineNormalMapSrfx,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     'lmmNormal',
     'lmmPoisson',
     'olsNormal',
+    'refineNormalMapSrfx',
 ]

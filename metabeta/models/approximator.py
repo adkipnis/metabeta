@@ -209,6 +209,18 @@ class Approximator(nn.Module):
     def _dataStatistics(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Compute sufficient statistics: GLS/GLMM β̂, σ̂, BLUPs."""
         Zm = data['Z'][..., : self.d_rfx]
+        map_kwargs = {}
+        if self.likelihood_family == 0:
+            map_kwargs = {
+                'nu_ffx': data.get('nu_ffx'),
+                'tau_ffx': data.get('tau_ffx'),
+                'family_ffx': data.get('family_ffx'),
+                'tau_rfx': data.get('tau_rfx'),
+                'family_sigma_rfx': data.get('family_sigma_rfx'),
+                'tau_eps': data.get('tau_eps'),
+                'family_sigma_eps': data.get('family_sigma_eps'),
+                'mask_d': data.get('mask_d'),
+            }
         return glmm(
             data['X'],
             data['y'],
@@ -220,6 +232,7 @@ class Approximator(nn.Module):
             likelihood_family=self.likelihood_family,
             eta_rfx=data.get('eta_rfx'),
             mask_q=data.get('mask_q', None),
+            **map_kwargs,
         )
 
     def _addMetadata(

@@ -65,6 +65,14 @@ def run_required_benchmark() -> None:
                             batch['n'].float(),
                             eta_rfx=batch.get('eta_rfx'),
                             mask_q=batch.get('mask_q'),
+                            nu_ffx=batch.get('nu_ffx'),
+                            tau_ffx=batch.get('tau_ffx'),
+                            family_ffx=batch.get('family_ffx'),
+                            tau_rfx=batch.get('tau_rfx'),
+                            family_sigma_rfx=batch.get('family_sigma_rfx'),
+                            tau_eps=batch.get('tau_eps'),
+                            family_sigma_eps=batch.get('family_sigma_eps'),
+                            mask_d=batch.get('mask_d'),
                         )
                         mask_d = batch['mask_d'].bool()
                         mask_q = batch['mask_q'][..., :max_q].bool()

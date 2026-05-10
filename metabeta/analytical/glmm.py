@@ -3,8 +3,19 @@
 import torch
 
 from metabeta.analytical.blup import analyticalBLUPContext
+from metabeta.analytical.map import refineNormalMapSrfx
 from metabeta.analytical.normal import lmmNormal
 from metabeta.analytical.pql import lmmBernoulli, lmmPoisson
+
+_MAP_PRIOR_KEYS = (
+    'nu_ffx',
+    'tau_ffx',
+    'family_ffx',
+    'tau_rfx',
+    'family_sigma_rfx',
+    'tau_eps',
+    'family_sigma_eps',
+)
 
 
 def glmm(
@@ -26,9 +37,35 @@ def glmm(
     Ψ constrained to diagonal throughout estimation — BLUPs and Ψ outputs are
     consistent with the diagonal constraint.
     """
+    map_priors = {key: kwargs.pop(key, None) for key in _MAP_PRIOR_KEYS}
+    map_refine = kwargs.pop('map_refine', True)
+    map_steps = kwargs.pop('map_steps', 20)
+    map_lr = kwargs.pop('map_lr', 0.03)
+    mask_d = kwargs.pop('mask_d', None)
     uncorr = (eta_rfx == 0) if eta_rfx is not None else None  # (B,) bool or None
     if likelihood_family == 0:
         stats = lmmNormal(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, mask_q=mask_q)
+        if map_refine and Zm.shape[-1] > 0 and all(v is not None for v in map_priors.values()):
+            stats = refineNormalMapSrfx(
+                stats,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                map_priors['nu_ffx'],
+                map_priors['tau_ffx'],
+                map_priors['family_ffx'],
+                map_priors['tau_rfx'],
+                map_priors['family_sigma_rfx'],
+                map_priors['tau_eps'],
+                map_priors['family_sigma_eps'],
+                eta_rfx=eta_rfx,
+                mask_d=mask_d,
+                mask_q=mask_q,
+                n_steps=map_steps,
+                lr=map_lr,
+            )
     elif likelihood_family == 1:
         stats = lmmBernoulli(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
     elif likelihood_family == 2:
@@ -45,4 +82,5 @@ __all__ = [
     'lmmBernoulli',
     'lmmNormal',
     'lmmPoisson',
+    'refineNormalMapSrfx',
 ]
