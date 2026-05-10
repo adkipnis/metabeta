@@ -480,8 +480,19 @@ def splitRecordsByDevice(
         if r['method'] != 'metabeta':
             continue
         for device in devices:
-            key = '|'.join([r['config'], model_id, seed, prefix, r['source'],
-                            str(r['idx']), n_samples, k, device])
+            key = '|'.join(
+                [
+                    r['config'],
+                    model_id,
+                    seed,
+                    prefix,
+                    r['source'],
+                    str(r['idx']),
+                    n_samples,
+                    k,
+                    device,
+                ]
+            )
             if key not in cache:
                 continue
             out.append({**r, 'method': device_suffix[device], 'duration': cache[key]})
