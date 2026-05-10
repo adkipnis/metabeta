@@ -10,6 +10,10 @@ analytical GLMM estimator in `metabeta/analytical/`.
 - `glmm_required_benchmark.py` — compact required-suite runner. Prints CSV rows for
   FFX, sigma(RFX), sigma(Eps), and BLUP NRMSE on mixed train epochs 1-2 and sampled
   valid/test across small, medium, large, and huge datasets.
+- `glmm_map_diagnostic.py` — experiment-only comparison of MoM/EM baseline
+  against hybrid MAP global refinements that keep MoM/EM sigma(Eps) and BLUP
+  outputs. It reports FFX-only, sRFX-only, and FFX+sRFX hybrids; optional
+  full-likelihood MAP rows are available for completeness.
 - `glmm_perf_baseline.md` — concise final fix summary: accepted changes, rejected
   experiments, final benchmark, and remaining weaknesses.
 
