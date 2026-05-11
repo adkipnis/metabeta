@@ -15,6 +15,7 @@ import argparse
 import sys
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -24,13 +25,25 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT.parent))
 
 from metabeta.analytical.glmm import glmm
-from metabeta.analytical.reml import gateNormalRemlVsMap, refineNormalRemlSrfx
+from metabeta.analytical.reml import NormalRemlGateConfig, gateNormalRemlVsMap, refineNormalRemlSrfx
 from metabeta.utils.config import loadDataConfig
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.io import datasetFilename
 
 
 SIZES = ['small', 'medium', 'large', 'huge']
+
+
+@dataclass(frozen=True)
+class RemlDiagnosticConfig:
+    """Single source of truth for the retained REML diagnostic policy."""
+
+    n_steps: int = 20
+    lr: float = 0.03
+    gate: NormalRemlGateConfig = NormalRemlGateConfig(min_q=2, max_n_total=1999)
+
+
+CONFIG = RemlDiagnosticConfig()
 
 
 def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
@@ -234,7 +247,7 @@ class _BreakdownStore:
     def print_rows(self) -> None:
         print('')
         print(
-            'breakdown,N,mom_em_sRFX,current_sRFX,reml_diag_sRFX,reml_gated_sRFX,delta,'
+            'breakdown,N,mom_em_sRFX,current_sRFX,raw_reml_sRFX,reml_gated_sRFX,delta,'
             'rel_improve_pct,fallback_rate,clamp_rate,gate_rate,both_worse_than_mom_rate'
         )
         ordered = ['all']
@@ -392,11 +405,10 @@ def run(args: argparse.Namespace) -> None:
                         mask_d=batch.get('mask_d'),
                         mask_q=batch.get('mask_q'),
                         optimize_sigma_eps=False,
-                        n_steps=args.n_steps,
-                        lr=args.lr,
+                        n_steps=CONFIG.n_steps,
+                        lr=CONFIG.lr,
                     )
                     stores['reml_diag'].seconds += time.perf_counter() - start
-                    stores['reml_diag'].add(reml_diag, batch, max_q)
 
                     gated, use_reml_gate = gateNormalRemlVsMap(
                         current,
@@ -404,8 +416,7 @@ def run(args: argparse.Namespace) -> None:
                         reml_meta,
                         batch['n'],
                         mask_q=batch.get('mask_q'),
-                        min_q=args.gate_min_q,
-                        max_n_total=args.gate_max_n,
+                        config=CONFIG.gate,
                     )
                     stores['reml_gated'].add(gated, batch, max_q)
                     if breakdown is not None:
@@ -422,36 +433,10 @@ def run(args: argparse.Namespace) -> None:
                             max_q,
                         )
 
-                    start = time.perf_counter()
-                    reml_diag_seps, _ = refineNormalRemlSrfx(
-                        mom_em,
-                        current,
-                        batch['X'],
-                        batch['y'],
-                        Zm,
-                        batch['mask_n'].float(),
-                        batch['mask_m'].float(),
-                        batch['nu_ffx'],
-                        batch['tau_ffx'],
-                        batch['family_ffx'],
-                        batch['tau_rfx'],
-                        batch['family_sigma_rfx'],
-                        batch['tau_eps'],
-                        batch['family_sigma_eps'],
-                        eta_rfx=batch.get('eta_rfx'),
-                        mask_d=batch.get('mask_d'),
-                        mask_q=batch.get('mask_q'),
-                        optimize_sigma_eps=True,
-                        n_steps=args.n_steps,
-                        lr=args.lr,
-                    )
-                    stores['reml_diag_seps'].seconds += time.perf_counter() - start
-                    stores['reml_diag_seps'].add(reml_diag_seps, batch, max_q)
-
                     n_total += batch['X'].shape[0]
 
             stores['reml_gated'].seconds = stores['reml_diag'].seconds
-            for method in ['current', 'mom_em', 'reml_diag', 'reml_gated', 'reml_diag_seps']:
+            for method in ['current', 'mom_em', 'reml_gated']:
                 print(stores[method].row(method, data_id, partition, n_total))
 
     if breakdown is not None:
@@ -465,10 +450,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--max-batches', type=int, default=None)
-    parser.add_argument('--n-steps', type=int, default=20)
-    parser.add_argument('--lr', type=float, default=0.03)
-    parser.add_argument('--gate-min-q', type=int, default=2)
-    parser.add_argument('--gate-max-n', type=int, default=1999)
     parser.add_argument('--breakdown', action='store_true')
     return parser.parse_args()
 # fmt: on

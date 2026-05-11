@@ -10,17 +10,11 @@ analytical GLMM estimator in `metabeta/analytical/`.
 - `glmm_required_benchmark.py` — compact required-suite runner. Prints CSV rows for
   FFX, sigma(RFX), sigma(Eps), and BLUP NRMSE on mixed train epochs 1-2 and sampled
   valid/test across small, medium, large, and huge datasets.
-- `glmm_map_diagnostic.py` — experiment-only comparison of MoM/EM baseline
-  against hybrid MAP global refinements that keep MoM/EM sigma(Eps) and BLUP
-  outputs. It reports FFX-only, sRFX-only, and FFX+sRFX hybrids; optional
-  full-likelihood MAP rows are available for completeness.
 - `glmm_reml_diagnostic.py` — experiment-only REML/profile-MAP variance-scale
-  diagnostic. It compares current production MAP, MoM/EM, sRFX-only refinement,
-  gated REML-vs-MAP, and sRFX+sEps refinement on the required suite. Use
-  `--breakdown` for binned sRFX current-vs-REML deltas, gate rates,
-  fallback/clamp rates, and MoM/EM comparison.
-- `glmm_perf_baseline.md` — concise final fix summary: accepted changes, rejected
-  experiments, final benchmark, and remaining weaknesses.
+  diagnostic. It compares current production MAP, MoM/EM, and the retained gated
+  REML-vs-MAP candidate. Use `--breakdown` for binned raw/gated REML deltas,
+  gate rates, fallback/clamp rates, and MoM/EM comparison.
+- `glmm_perf_baseline.md` — concise current benchmark and gated REML summary.
 
 Removed historical one-off diagnostics:
 
@@ -29,3 +23,5 @@ Removed historical one-off diagnostics:
 - `glmm_alpha_gate_diagnostic.py` — I7 beta-blend alpha schedule sweep.
 - `glmm_srfx_diagnostic.py` — sRFX internals replay and floor/cap analysis.
 - `glmm_i9_calibration_diagnostic.py` — output-only sigma(RFX) calibration replay.
+- `glmm_map_diagnostic.py` — broad MAP sweep superseded by the retained gated
+  REML diagnostic and current production benchmark.

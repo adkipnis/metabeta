@@ -10,6 +10,7 @@ import torch
 from metabeta.analytical.map import _fixedCorrFromStats, _logMarginalTarget, _replacePsiDiag
 
 __all__ = [
+    'NormalRemlGateConfig',
     'RemlRefineMeta',
     'gateNormalRemlVsMap',
     'refineNormalRemlSrfx',
@@ -22,6 +23,14 @@ class RemlRefineMeta:
 
     valid: torch.Tensor
     clamped: torch.Tensor
+
+
+@dataclass(frozen=True)
+class NormalRemlGateConfig:
+    """Conservative row gate for using REML instead of current MAP output."""
+
+    min_q: int = 2
+    max_n_total: int = 1999
 
 
 def _emptyMeta(stats: dict[str, torch.Tensor]) -> RemlRefineMeta:
@@ -150,8 +159,7 @@ def gateNormalRemlVsMap(
     meta: RemlRefineMeta,
     n_total: torch.Tensor,
     mask_q: torch.Tensor | None = None,
-    min_q: int = 2,
-    max_n_total: int = 1999,
+    config: NormalRemlGateConfig = NormalRemlGateConfig(),
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
     """Return current-MAP stats with REML substituted on conservative rows."""
     q = reml['sigma_rfx_est'].shape[-1]
@@ -160,8 +168,8 @@ def gateNormalRemlVsMap(
     else:
         active_q_count = mask_q[..., :q].bool().sum(dim=-1)
     use_reml = meta.valid & ~meta.clamped
-    use_reml = use_reml & (active_q_count >= min_q)
-    use_reml = use_reml & (n_total.to(device=use_reml.device) <= float(max_n_total))
+    use_reml = use_reml & (active_q_count >= config.min_q)
+    use_reml = use_reml & (n_total.to(device=use_reml.device) <= float(config.max_n_total))
 
     out = dict(current)
     for key in ['sigma_rfx_est', 'sigma_eps_est', 'Psi']:

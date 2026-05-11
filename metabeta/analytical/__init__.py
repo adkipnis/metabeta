@@ -14,12 +14,14 @@ from metabeta.analytical.glmm import (
     refineNormalMapSrfx,
 )
 from metabeta.analytical.reml import (
+    NormalRemlGateConfig,
     RemlRefineMeta,
     gateNormalRemlVsMap,
     refineNormalRemlSrfx,
 )
 
 __all__ = [
+    'NormalRemlGateConfig',
     'RemlRefineMeta',
     'analyticalBLUPContext',
     'gateNormalRemlVsMap',
