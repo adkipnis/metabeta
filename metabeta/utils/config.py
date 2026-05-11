@@ -136,7 +136,12 @@ def loadDataConfig(data_id: str) -> dict:
     if len(parts) >= 3:
         size = parts[0]
         family_str = parts[1]
-        ds_type = '-'.join(parts[2:])  # Handle types with hyphens
+        ds_parts = parts[2:]  # Handle types with hyphens
+        shape_profile = 'standard'
+        if ds_parts and ds_parts[-1] in PRESETS.get('shape_profiles', {}):
+            shape_profile = ds_parts[-1]
+            ds_parts = ds_parts[:-1]
+        ds_type = '-'.join(ds_parts)
 
         # Check if it's a valid template combination
         if size in PRESETS['sizes']:
@@ -152,7 +157,12 @@ def loadDataConfig(data_id: str) -> dict:
 
             if family is not None and family in PRESETS['families']:
                 # Generate from template
-                return generateSimulationConfig(size=size, family=family, ds_type=ds_type)
+                return generateSimulationConfig(
+                    size=size,
+                    family=family,
+                    ds_type=ds_type,
+                    shape_profile=shape_profile,
+                )
 
     # Fallback: try loading from dataset directory (new location)
     root = Path(__file__).resolve().parent
