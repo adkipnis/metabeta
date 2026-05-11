@@ -463,7 +463,9 @@ class Generator:
                 rng,
                 source=cfg.source,
                 use_sgld=getattr(cfg, 'sgld', False),
-                min_m=max(cfg.min_m, d + min_bg_df),  # ensure m >= d+min_bg_df for GLS identifiability
+                min_m=max(
+                    cfg.min_m, d + min_bg_df
+                ),  # ensure m >= d+min_bg_df for GLS identifiability
                 min_n=max(cfg.min_n, min_n_eff),  # respect per-dataset min_within_df floor
                 max_n=cfg.max_n,
             )
