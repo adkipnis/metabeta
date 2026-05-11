@@ -9,7 +9,8 @@ analytical GLMM estimator in `metabeta/analytical/`.
   quality, and worst cases for a selected dataset split.
 - `glmm_required_benchmark.py` — compact required-suite runner. Prints CSV rows for
   FFX, sigma(RFX), sigma(Eps), and BLUP NRMSE on mixed train epochs 1-2 and sampled
-  valid/test across small, medium, large, and huge datasets.
+  valid/test across small, medium, large, and huge datasets. Use `--sizes` and
+  `--methods current raw` for incremental MAP-vs-raw checks.
 - `glmm_reml_diagnostic.py` — experiment-only REML/profile-MAP variance-scale
   diagnostic. It compares current production MAP, MoM/EM, and the retained gated
   REML-vs-MAP candidate. Use `--breakdown` for binned raw/gated REML deltas,

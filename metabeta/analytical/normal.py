@@ -558,12 +558,35 @@ def _lmmNormalFull(
         n_em,
         uncorr,
     )
+    # EM-updated sigma(Eps) is useful during Psi refinement but is a noisy final
+    # scale estimate on generated high-dimensional rows; anchor final outputs to
+    # the within-group projection estimate and recompute GLS/BLUP consistently.
+    se2 = sigma_eps_sq.clamp(min=1e-12)
+    gls = _normalGlsAndBlups(
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        ZtZ_safe,
+        Zty,
+        ZtX,
+        XtX,
+        Xty,
+        XtZ,
+        Psi,
+        se2,
+        eye_q,
+        eye_q_bm,
+        mask4,
+        beta_wg,
+        beta_mask,
+    )
 
     beta_gls = gls.beta
     active_d_count = (XtX.diagonal(dim1=-2, dim2=-1).abs() > 1e-8).sum(dim=-1)
     blup_beta_alpha = torch.where(
         active_d_count <= 4,
-        torch.ones_like(se2),
+        se2.new_full(se2.shape, 0.65),
         torch.where(
             active_d_count <= 8, se2.new_full(se2.shape, 0.65), se2.new_full(se2.shape, 0.75)
         ),
@@ -641,7 +664,7 @@ def _lmmNormalFull(
     psi_diag_out = torch.where(floor_limited, 0.3025 * psi_diag, psi_diag_out)
     Psi_out = Psi + torch.diag_embed(psi_diag_out - psi_diag)
     sigma_rfx = psi_diag_out.sqrt()                                          # (B, q)
-    sigma_eps_1d = se2.clamp(min=0.0).sqrt().nan_to_num(nan=1.0, posinf=1.0)  # (B,)
+    sigma_eps_1d = sigma_eps_sq.clamp(min=0.0).sqrt().nan_to_num(nan=1.0, posinf=1.0)  # (B,)
 
     ns_f_loc = ns.clamp(min=1.0)                                              # (B, m)
     resid_g = (resid_gls.sum(dim=2) / ns_f_loc * mask_m).unsqueeze(-1)       # (B, m, 1)

@@ -1,7 +1,7 @@
 GLMM Analytical Estimator Summary
 =================================
 
-Last updated: 2026-05-11.
+Last updated: 2026-05-11 after the raw-estimator sigma(Eps)/BLUP pass.
 
 This file records the current retained Gaussian GLMM analytical benchmark and the
 gated REML diagnostic. Historical MAP sweep notes were removed; the reusable
@@ -13,30 +13,52 @@ Current Production MAP Benchmark
 Command:
 
 ```bash
-uv run python experiments/analytical/glmm_required_benchmark.py
+uv run python experiments/analytical/glmm_required_benchmark.py --methods current
 ```
 
 Required suite: mixed train epochs 1-2 and sampled valid/test for
 `small|medium|large|huge`. Current production MAP replaces only
-`sigma_rfx_est` and the `Psi` diagonal; FFX, sEps, and BLUP remain MoM/EM-derived.
+`sigma_rfx_est` and the `Psi` diagonal. FFX and BLUP remain raw analytical outputs;
+reported sigma(Eps) now comes from the within-group projection estimate, while the
+final GLS/BLUP pass is recomputed consistently with that projection scale.
 
 | Dataset | Partition | FFX | sRFX | sEps | BLUP |
 | --- | --- | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.2250 | 0.5650 | 0.0839 | 0.3625 |
-| small-n-sampled | valid | 0.1553 | 0.5819 | 0.1036 | 0.4249 |
-| small-n-sampled | test | 0.1685 | 0.6242 | 0.1002 | 0.4207 |
-| medium-n-mixed | train | 0.1459 | 0.3700 | 0.0671 | 0.3714 |
-| medium-n-sampled | valid | 0.3625 | 0.4671 | 0.0978 | 0.4920 |
-| medium-n-sampled | test | 0.2437 | 0.5129 | 0.1030 | 0.4788 |
-| large-n-mixed | train | 0.2700 | 0.3849 | 0.0724 | 0.3641 |
-| large-n-sampled | valid | 0.3658 | 0.4679 | 0.1105 | 0.4605 |
-| large-n-sampled | test | 0.4627 | 0.4677 | 0.1082 | 0.4803 |
-| huge-n-mixed | train | 0.3069 | 0.3932 | 0.0649 | 0.3965 |
-| huge-n-sampled | valid | 0.4204 | 0.5911 | 0.1644 | 0.5086 |
-| huge-n-sampled | test | 0.4661 | 0.5050 | 0.1828 | 0.5167 |
+| small-n-mixed | train | 0.1622 | 0.3828 | 0.1658 | 0.4007 |
+| small-n-sampled | valid | 0.1983 | 0.4917 | 0.2147 | 0.4771 |
+| small-n-sampled | test | 0.1970 | 0.4344 | 0.1973 | 0.4328 |
+| medium-n-mixed | train | 0.5092 | 0.5176 | 0.1294 | 0.5465 |
+| medium-n-sampled | valid | 0.3938 | 0.4144 | 0.1853 | 0.4997 |
+| medium-n-sampled | test | 0.4954 | 0.4496 | 0.1755 | 0.5042 |
+| large-n-mixed | train | 0.9218 | 0.3648 | 0.1117 | 0.5187 |
+| large-n-sampled | valid | 0.9254 | 0.6349 | 0.1344 | 0.5603 |
+| large-n-sampled | test | 0.7178 | 0.4015 | 0.1329 | 0.5122 |
+| huge-n-mixed | train | 0.9782 | 0.5548 | 0.0942 | 0.4890 |
+| huge-n-sampled | valid | 1.1043 | 0.4590 | 0.1197 | 0.5214 |
+| huge-n-sampled | test | 1.3469 | 0.4084 | 0.1171 | 0.5073 |
+
+Raw Estimator Pass
+------------------
+
+Retained changes from the first raw-estimator pass:
+
+- Low-dimensional final BLUP residuals now use the same 65% pooled-OLS beta blend
+  as the medium-dimensional branch instead of a 100% pooled-OLS residual.
+- The final GLS/BLUP pass and reported sigma(Eps) now use the within-group
+  projection sigma(Eps). This fixed the large/huge sigma(Eps) outliers and slightly
+  improved sampled BLUPs, with a medium-mixed FFX tradeoff to monitor.
+
+Rejected candidate:
+
+- Lowering the high-dimensional BLUP beta blend from 0.75 to 0.65/0.50 had mixed
+  results and regressed large-valid or huge-mixed BLUPs, so the high-dimensional
+  branch remains 0.75.
 
 Gated REML Diagnostic
 ---------------------
+
+These numbers predate the raw-estimator pass above and should be rerun before any
+new REML/MAP decision.
 
 Command:
 
