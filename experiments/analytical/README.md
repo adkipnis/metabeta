@@ -14,6 +14,8 @@ analytical GLMM estimator in `metabeta/analytical/`.
   diagnostic. It compares current production MAP, MoM/EM, and the retained gated
   REML-vs-MAP candidate. Use `--breakdown` for binned raw/gated REML deltas,
   gate rates, fallback/clamp rates, and MoM/EM comparison.
+- `statsmodels_reml.py` — spot-checks analytical GLMM estimates against
+  statsmodels REML on individual datasets.
 - `glmm_perf_baseline.md` — concise current benchmark and gated REML summary.
 
 Removed historical one-off diagnostics:

@@ -12,7 +12,6 @@ Examples:
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -21,14 +20,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT.parent))
-
 from metabeta.analytical.glmm import glmm
 from metabeta.analytical.reml import NormalRemlGateConfig, gateNormalRemlVsMap, refineNormalRemlSrfx
 from metabeta.utils.config import loadDataConfig
 from metabeta.utils.dataloader import Dataloader, toDevice
-from metabeta.utils.io import datasetFilename
+from metabeta.utils.experiments import dataFilePath
 
 
 SIZES = ['small', 'medium', 'large', 'huge']
@@ -52,10 +48,9 @@ def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
 
 def _paths(data_id: str, partition: str, n_epochs: int) -> list[Path]:
     cfg = loadDataConfig(data_id)
-    data_dir = ROOT / 'metabeta' / 'outputs' / 'data' / cfg['data_id']
     if partition == 'train':
-        return [data_dir / datasetFilename('train', ep) for ep in range(1, n_epochs + 1)]
-    return [data_dir / f'{partition}.npz']
+        return [dataFilePath(cfg['data_id'], 'train', ep) for ep in range(1, n_epochs + 1)]
+    return [dataFilePath(cfg['data_id'], partition)]
 
 
 class _MetricStore:

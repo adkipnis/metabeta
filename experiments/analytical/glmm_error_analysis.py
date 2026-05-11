@@ -18,20 +18,17 @@ Usage:
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 from tabulate import tabulate
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT.parent))
-
 from metabeta.analytical.glmm import glmm
 from metabeta.utils.regularization import corrToLower
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.config import loadDataConfig
+from metabeta.utils.experiments import dataFilePath
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +107,6 @@ def run_diagnostic(
         partition: 'train' loops over n_epochs files; 'valid' loads valid.npz
         n_epochs:  number of training epochs to load (only used when partition='train')
     """
-    from metabeta.utils.io import datasetFilename
-
     device = torch.device('cpu')
 
     data_cfg = loadDataConfig(data_id)
@@ -119,17 +114,15 @@ def run_diagnostic(
     max_q = data_cfg['max_q']
     likelihood_family = data_cfg.get('likelihood_family', 0)
 
-    data_dir = ROOT / 'metabeta' / 'outputs' / 'data' / data_cfg['data_id']
-
     if partition == 'train':
-        paths = [data_dir / datasetFilename('train', ep) for ep in range(1, n_epochs + 1)]
+        paths = [dataFilePath(data_cfg['data_id'], 'train', ep) for ep in range(1, n_epochs + 1)]
         paths = [p for p in paths if p.exists()]
-        assert paths, f'No training files found in {data_dir}'
+        assert paths, f"No training files found for {data_cfg['data_id']}"
     elif partition == 'test':
-        paths = [data_dir / 'test.npz']
+        paths = [dataFilePath(data_cfg['data_id'], 'test')]
         assert paths[0].exists(), f'missing: {paths[0]}'
     else:
-        paths = [data_dir / 'valid.npz']
+        paths = [dataFilePath(data_cfg['data_id'], 'valid')]
         assert paths[0].exists(), f'missing: {paths[0]}'
 
     print(
