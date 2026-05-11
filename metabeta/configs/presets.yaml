@@ -1,7 +1,7 @@
 # Configuration presets for template-based config generation
 # Used by metabeta/utils/templates.py
 
-# Size presets for simulation/training configs
+# Effect-size presets for simulation/training configs
 # min_d / min_q define non-overlapping bands used for test-set generation,
 # so that each regime exercises a clearly distinct slice of problem space.
 # Training on the full range always uses min_d=2, min_q=1 (huge preset or CLI override).
@@ -10,51 +10,54 @@ sizes:
     max_d: 2
     min_d: 1
     max_q: 1
-    min_m: 5
-    max_m: 25
-    min_n: 5
-    max_n: 25
-    max_n_total: 250
 
   small:
     max_d: 4
     min_d: 1
     max_q: 2
-    min_m: 5
-    max_m: 150
-    min_n: 5
-    max_n: 150
-    max_n_total: 3000
 
   medium:
     max_d: 8
     min_d: 5
     max_q: 3
-    min_m: 5
-    max_m: 150
-    min_n: 5
-    max_n: 150
-    max_n_total: 3000
 
   large:
     max_d: 12
     min_d: 9
     max_q: 4
-    min_m: 5
-    max_m: 150
-    min_n: 5
-    max_n: 150
-    max_n_total: 3000
 
   huge:
     max_d: 16
     min_d: 13
     max_q: 5
+
+# Dataset-shape presets are independent of effect-size presets.  The default
+# keeps the existing memory envelope but samples m/n jointly so high-m datasets
+# also receive realistic total-n budgets.
+shape_profiles:
+  tiny:
     min_m: 5
-    max_m: 150
+    max_m: 25
+    min_n: 5
+    max_n: 25
+    max_n_total: 250
+    m_wide_prob: 0.0
+    m_wide_min: 20
+    mean_n_log_frac: 0.45
+    mean_n_log_m_slope: 0.10
+    mean_n_log_noise: 0.20
+
+  standard:
+    min_m: 5
+    max_m: 200
     min_n: 5
     max_n: 150
     max_n_total: 3000
+    m_wide_prob: 0.20
+    m_wide_min: 60
+    mean_n_log_frac: 0.15
+    mean_n_log_m_slope: 0.65
+    mean_n_log_noise: 0.25
 
 # Likelihood family presets
 # Use integer IDs: 0=normal, 1=bernoulli, 2=poisson
