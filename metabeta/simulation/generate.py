@@ -210,14 +210,15 @@ class Generator:
         return d, q, m
 
     # Fraction of datasets that get perfectly balanced group sizes (all n_g equal).
-    # Calibrated to real data (~45 % of grouped datasets are balanced panels).
-    _P_BALANCED = 0.45
+    # Real grouped benchmark datasets are mostly near-balanced; keep imbalance as
+    # robustness coverage, but make balanced/near-balanced panels the default regime.
+    _P_BALANCED = 0.65
     # Dirichlet concentration α ~ LogUniform(low, high) for the variable regime.
-    # α=8 → H_ratio≈0.99 (near-uniform), α=1.5 → H_ratio≈0.85 (moderately variable).
-    # Chosen so the simulated H_ratio distribution matches observed real-data proportions:
-    # ~0% below 0.80, ~5% in [0.80,0.93), ~25% in [0.93,0.97), ~25% in [0.97,1), ~45% at 1.
-    _ALPHA_LOW = 1.5
-    _ALPHA_HIGH = 8.0
+    # α=40 is nearly balanced; α=8 still gives mild variation.  This keeps the
+    # synthetic group-size entropy closer to the continuous real test pool, whose
+    # lower quartile is already very close to one.
+    _ALPHA_LOW = 8.0
+    _ALPHA_HIGH = 40.0
 
     def _genNs(
         self,
