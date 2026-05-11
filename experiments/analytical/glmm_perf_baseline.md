@@ -1,11 +1,11 @@
 GLMM Analytical Estimator Summary
 =================================
 
-Last updated: 2026-05-11 after the raw-estimator sigma(Eps)/BLUP pass.
+Last updated: 2026-05-11 after refreshing current/raw and REML diagnostics.
 
 This file records the current retained Gaussian GLMM analytical benchmark and the
-gated REML diagnostic. Historical MAP sweep notes were removed; the reusable
-scripts are documented in `README.md`.
+closed REML diagnostic decision. Historical MAP/REML sweep scripts were removed;
+the reusable scripts are documented in `README.md`.
 
 Current Production MAP Benchmark
 --------------------------------
@@ -13,7 +13,7 @@ Current Production MAP Benchmark
 Command:
 
 ```bash
-uv run python experiments/analytical/glmm_required_benchmark.py --methods current
+uv run python experiments/analytical/glmm_required_benchmark.py --methods current raw
 ```
 
 Required suite: mixed train epochs 1-2 and sampled valid/test for
@@ -53,87 +53,81 @@ Rejected candidate:
 - Lowering the high-dimensional BLUP beta blend from 0.75 to 0.65/0.50 had mixed
   results and regressed large-valid or huge-mixed BLUPs, so the high-dimensional
   branch remains 0.75.
+- The refreshed raw baseline has identical FFX, sigma(Eps), and BLUP to current
+  MAP by construction, while current MAP improves sigma(RFX) in every required
+  cell. Raw MoM/EM is therefore not a competitive global sigma(RFX) fallback.
 
-Gated REML Diagnostic
----------------------
+Retired REML Diagnostics
+------------------------
 
-These numbers predate the raw-estimator pass above and should be rerun before any
-new REML/MAP decision.
-
-Command:
-
-```bash
-uv run python experiments/analytical/glmm_reml_diagnostic.py --breakdown
-```
-
-Retained policy in `glmm_reml_diagnostic.py`:
-
-- initialize REML from MoM/EM;
-- keep beta, correlation, sigma(Eps), FFX, BLUP, and BLUP variance fixed;
-- optimize only `log_sigma_rfx`;
-- use REML only for valid, unclamped rows with `q >= 2` and `n < 2000`;
-- otherwise keep current production MAP output.
+REML/profile-MAP was tested as an experiment-only variance-scale refinement and
+retired after the refreshed benchmark. The diagnostic script and package-level
+REML support were removed; MAP is the only retained production path.
 
 Full-suite row-weighted sRFX NRMSE:
 
 | Method | sRFX |
 | --- | ---: |
-| mom_em | 0.5410 |
-| current MAP | 0.4898 |
-| raw REML | 0.4748 |
-| gated REML | 0.4745 |
+| mom_em | 0.7103 |
+| current MAP | 0.4585 |
+| raw-initialized REML | 0.4612 |
+| gated REML | 0.4608 |
+| REML with sigma(Eps) optimized | 0.4608 |
+| current-initialized REML | 0.4738 |
 
 Required-suite cells:
 
 | Dataset | Partition | current MAP | gated REML |
 | --- | --- | ---: | ---: |
-| small-n-mixed | train | 0.5650 | 0.5565 |
-| small-n-sampled | valid | 0.5819 | 0.5803 |
-| small-n-sampled | test | 0.6242 | 0.6183 |
-| medium-n-mixed | train | 0.3700 | 0.3419 |
-| medium-n-sampled | valid | 0.4671 | 0.4489 |
-| medium-n-sampled | test | 0.5129 | 0.4786 |
-| large-n-mixed | train | 0.3849 | 0.3644 |
-| large-n-sampled | valid | 0.4679 | 0.4399 |
-| large-n-sampled | test | 0.4677 | 0.4321 |
-| huge-n-mixed | train | 0.3932 | 0.3865 |
-| huge-n-sampled | valid | 0.5911 | 0.5531 |
-| huge-n-sampled | test | 0.5050 | 0.4839 |
+| small-n-mixed | train | 0.3828 | 0.3805 |
+| small-n-sampled | valid | 0.4917 | 0.4944 |
+| small-n-sampled | test | 0.4344 | 0.4367 |
+| medium-n-mixed | train | 0.5176 | 0.5326 |
+| medium-n-sampled | valid | 0.4144 | 0.4171 |
+| medium-n-sampled | test | 0.4496 | 0.4499 |
+| large-n-mixed | train | 0.3648 | 0.3647 |
+| large-n-sampled | valid | 0.6349 | 0.6336 |
+| large-n-sampled | test | 0.4015 | 0.3998 |
+| huge-n-mixed | train | 0.5548 | 0.5569 |
+| huge-n-sampled | valid | 0.4590 | 0.4593 |
+| huge-n-sampled | test | 0.4084 | 0.4084 |
 
 Best Setup by Case
 ------------------
 
 | Case | Best setup | Evidence |
 | --- | --- | --- |
-| Overall | gated REML | 0.4745 vs raw REML 0.4748 and current MAP 0.4898 |
-| q = 1 | current MAP / gated | 0.4675 vs raw REML 0.4712 |
-| q = 2 | raw REML | 0.4679 vs gated 0.4692 and current MAP 0.4789 |
-| q >= 3 | raw REML | 0.5166 vs gated 0.5187 and current MAP 0.5585 |
-| n >= 2000 | current MAP / gated | 0.4262 vs raw REML 0.4358 |
-| n < 2000 | raw REML | beats current MAP and MoM/EM in both retained n bins |
-| d <= 4 | gated REML | 0.5877 vs raw REML 0.5902 and current MAP 0.5928 |
-| d >= 5 | raw REML | about 6% relative gain over current MAP |
-| MAP expands MoM/EM | gated REML | 0.4462 vs raw REML 0.4482 and current MAP 0.4495 |
-| MAP shrinks MoM/EM | raw REML | 0.5519 vs current MAP 0.6001 |
-| MAP changes MoM/EM by <5% | MoM/EM | both refinements can be worse |
-| true sigma <0.75 | raw REML | strongest gains: 4.88-8.03% over current MAP |
+| Overall | current MAP | 0.4585 vs gated REML 0.4608 and raw REML 0.4612 |
+| q = 1 | current MAP / gated | 0.3283 vs raw REML 0.3289 |
+| q = 2 | current MAP | 0.4531 vs raw/gated REML 0.4534 |
+| q >= 3 | current MAP | 0.5534 vs gated REML 0.5585 |
+| n >= 2000 | current MAP / gated | 0.4053 vs raw REML 0.4073 |
+| n < 2000 | current MAP | beats raw/gated REML in both retained n bins |
+| d bins | current MAP | best in all `d <= 4`, `5-8`, and `9+` bins |
+| MAP expands MoM/EM | current MAP | 0.4090 vs gated REML 0.4131 |
+| MAP shrinks MoM/EM | gated REML, tiny edge | 0.6416 vs current MAP 0.6423 |
+| MAP changes MoM/EM by <5% | current MAP | 0.4179 vs gated REML 0.4185 |
+| true sigma <0.25 | gated REML, diagnostic only | 0.5967 vs current MAP 0.5988 |
+
+Recompute diagnostic:
+
+| Method | FFX | sRFX | sEps | BLUP |
+| --- | ---: | ---: | ---: | ---: |
+| current MAP | 0.6696 | 0.4585 | 0.1331 | 0.4978 |
+| current MAP + recompute GLS/BLUP | 0.8029 | 0.4585 | 0.1331 | 0.5114 |
+| raw-initialized REML + recompute | 0.8017 | 0.4612 | 0.1331 | 0.5118 |
+| gated REML + recompute | 0.8016 | 0.4608 | 0.1331 | 0.5115 |
+| current-initialized REML + recompute | 0.8052 | 0.4738 | 0.1331 | 0.5102 |
 
 Interpretation
 --------------
 
-- REML helps most when variance decomposition is hard: `q >= 2`, moderate/low
-  `n`, and small true random-effect scales.
-- Current MAP is safest for `q = 1` and high-n rows. In these cases the existing
-  output calibration is already strong, and the fixed-beta/fixed-correlation REML
-  profile can move sigma(RFX) away from the scoring target.
-- Row-level cases exist where both MAP and REML are worse than MoM/EM:
-  `both_worse_than_mom_rate = 0.2374`. This is concentrated where MAP barely
-  changes MoM/EM. MoM/EM is not a good global fallback, but a future three-way
-  gate may need a no-refinement branch.
-
-Next Checks
------------
-
-- Test whether recomputing final GLS/BLUP after gated REML preserves FFX and BLUP.
-- If production integration is attempted, keep row-level fallback and expose gate,
-  fallback, and clamp rates in diagnostics.
+- Current MAP is the better default. Gated REML has small local wins in a few cells,
+  but it does not beat MAP overall or by observable gates.
+- Current-initialized REML looked locally promising, improving 11 of 12 cells, but
+  medium-n-mixed regressed from 0.5176 to 0.7568 and made the global score worse.
+- Optimizing sigma(Eps) inside REML worsened reported sigma(Eps).
+- Recomputing GLS/BLUP after refined variance estimates is not viable: it regressed
+  global FFX and BLUP for MAP and every REML variant.
+- Final decision: keep output-local MAP, retire REML from production and package
+  exports, and do not keep a REML diagnostic script in the active experiment set.

@@ -6,25 +6,22 @@ Last updated: 2026-05-11.
 Current Decision
 ----------------
 
-The first raw MoM/EM pass found two retained, low-risk improvements and rejected
-the next obvious beta-blend candidate. There are still diagnostic questions in
-the raw estimator, but no current raw-only candidate has enough evidence to be the
-next implementation priority. The next optimization pass should therefore move to
-the retained MAP/REML variance-scale refinements.
+The current production baseline is `glmm()` with MAP sigma(RFX) refinement. The
+raw MoM/EM pass retained two low-risk improvements, and the subsequent REML pass
+did not find a production-worthy replacement or gate. REML support has therefore
+been retired from the analytical package surface.
 
-This sequencing is now acceptable because the largest raw sigma(Eps) outliers were
-fixed and final GLS/BLUP outputs are consistent with the reported projection
-sigma(Eps). MAP and REML still only refine `sigma_rfx_est` and the `Psi` diagonal
-unless an explicit recompute candidate is tested.
+The key decision is output-local MAP only: MAP replaces `sigma_rfx_est` and the
+`Psi` diagonal. Recomputing final GLS/BLUP after MAP or REML was tested and
+rejected because it regressed global FFX and BLUP.
 
 Stable Baseline
 ---------------
 
 - Current production baseline: `glmm()` with the MAP sigma(RFX) refinement.
 - Raw baseline for the next work cycle: `glmm(..., map_refine=False)`.
-- Retained post-raw candidate: gated REML/profile-MAP over sigma(RFX), initialized
-  from raw MoM/EM.
-- Retained context-only candidate: Laplace curvature around the MAP/REML optimum.
+- Retired production candidate: gated REML/profile-MAP over sigma(RFX).
+- Retained context-only candidate: Laplace curvature around the MAP optimum.
 
 First raw-estimator pass retained two changes:
 
@@ -49,7 +46,7 @@ can still be revisited later:
 Deferred Raw Diagnostics
 ------------------------
 
-If MAP/REML stalls, add or extend an experiment-only raw diagnostic, tentatively
+If MAP stalls, add or extend an experiment-only raw diagnostic, tentatively
 `experiments/analytical/glmm_raw_diagnostic.py`. It should not change
 `metabeta/analytical/glmm.py` while diagnosing. The diagnostic should run the
 required Gaussian suite and collect row-level/stage-level data for the raw path.
@@ -130,67 +127,41 @@ A raw-estimator change should be considered only if it improves at least one
 primary output on the required suite without material regressions elsewhere:
 
 - FFX, sigma(Eps), and BLUP improvements are more important than sigma(RFX) alone,
-  because MAP/REML can refine only the sigma(RFX) report afterward.
+  because output-local MAP can refine only the sigma(RFX) report afterward.
 - A sigma(RFX) raw improvement is still valuable if it improves BLUP or reduces the
-  number of rows where MAP/REML are needed.
+  number of rows where MAP is needed.
 - Any candidate must be compared against both `raw` and `current` production MAP.
 - Changes that only improve oracle-like rows or a single narrow bin stay as
   experiments unless they define a clear gate.
 
-Next Pass: MAP/REML
--------------------
+Closed REML/MAP Pass
+--------------------
 
-The next work cycle should answer whether the retained REML/profile-MAP path is a
-better production default than current MAP on the regenerated data.
+The MAP/REML pass is complete. Current MAP remains the production baseline.
 
-Step 1: refresh the baseline.
+Required-suite results:
 
-- Re-run `glmm_required_benchmark.py --methods current raw` on the full required
-  suite and keep it as the comparison table.
-- Re-run `glmm_reml_diagnostic.py --breakdown` against the updated raw estimator.
-- Record row-weighted sRFX, per-cell sRFX, gate/fallback/clamp rates,
-  `both_worse_than_mom_rate`, and runtime for MoM/EM, MAP, raw REML, and gated
-  REML.
+- Current MAP: FFX 0.6696, sRFX 0.4585, sEps 0.1331, BLUP 0.4978.
+- Raw MoM/EM: same FFX/sEps/BLUP as current MAP, but sRFX 0.7103.
+- Raw-initialized REML: sRFX 0.4612, worse than current MAP.
+- Gated REML: sRFX 0.4608, worse than current MAP.
+- REML with sigma(Eps) optimized: sRFX 0.4608 and sEps regressed to 0.1360.
+- Current-initialized REML: improved 11 of 12 required cells, but medium-n-mixed
+  regressed from 0.5176 to 0.7568, making global sRFX worse at 0.4738.
 
-Step 2: test the production gate before changing `glmm.py`.
+Recompute diagnostics were also rejected:
 
-- Keep the current conservative gate as the first candidate:
-  valid, unclamped, `q >= 2`, and `n < 2000`.
-- Add one diagnostic-only no-refinement candidate for rows where MAP barely changes
-  MoM/EM, because previous analysis found these rows often include cases where both
-  MAP and REML are worse than MoM/EM.
-- Compare three outputs for sigma(RFX): raw MoM/EM, current MAP, and gated REML.
-- Accept a gate only if it improves row-weighted and per-cell sRFX without creating
-  a narrow-bin regression larger than expected Monte Carlo noise.
+- Recomputing GLS/BLUP after current MAP kept sRFX/sEps unchanged but regressed
+  global FFX from 0.6696 to 0.8029 and BLUP from 0.4978 to 0.5114.
+- Recomputing after REML variants likewise regressed global FFX/BLUP.
 
-Step 3: test whether REML should remain output-local.
+Decision:
 
-- First candidate: output-local REML only replaces `sigma_rfx_est` and `Psi`
-  diagonal, matching current MAP's behavioral surface.
-- Second candidate: recompute final GLS/BLUP after gated REML using the refined
-  `Psi` diagonal and fixed projection sigma(Eps).
-- Keep recompute behavior only if FFX, sigma(Eps), and BLUP do not regress on the
-  required suite. If recompute hurts BLUP or FFX, REML stays output-local.
-
-Step 4: compare MAP objective variants only after REML is refreshed.
-
-- Current MAP optimizes beta, sigma(RFX), and sigma(Eps) but only reports
-  sigma(RFX)/Psi. Test a fixed-beta MAP variant to separate objective benefits from
-  nuisance-parameter movement.
-- Test sigma(Eps)-fixed vs sigma(Eps)-optimized variants only as diagnostics; the
-  retained raw pass made projection sigma(Eps) the final reported scale.
-- Do not optimize correlations in production unless diagonal-only REML/MAP has a
-  clear remaining failure mode and the correlation diagnostic shows stable gains.
-
-Step 5: integration criteria.
-
-- Integrate gated REML/MAP into `glmm.py` only after the full required suite beats
-  current MAP in most cells and row-weighted sRFX, without material FFX, sigma(Eps),
-  or BLUP regression.
-- Keep row-level fallback metadata available in the experiment script and expose the
-  gate config near the top of the script.
-- Keep Laplace curvature as a later context/uncertainty feature candidate rather
-  than a point-estimate improvement path.
+- Keep current output-local MAP.
+- Do not integrate REML.
+- Remove REML from the package surface and retire the REML diagnostic script.
+- Keep Laplace curvature as a later context/uncertainty feature candidate around
+  the MAP optimum, not as a point-estimate path.
 
 Commands
 --------
@@ -198,7 +169,6 @@ Commands
 ```bash
 uv run python experiments/analytical/glmm_required_benchmark.py
 uv run python experiments/analytical/glmm_error_analysis.py --data-id small-n-mixed
-uv run python experiments/analytical/glmm_reml_diagnostic.py --breakdown
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical
 ```
