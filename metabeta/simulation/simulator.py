@@ -19,11 +19,11 @@ from metabeta.plotting import plotDataset
 SCALE_PARAMS = {'ffx', 'sigma_rfx', 'sigma_eps', 'rfx'}
 SCALE_HYPERPARAMS = {'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps'}
 NORMAL_R2_CAP_BASE = 0.68
-NORMAL_R2_CAP_FFX_SLOPE = 0.025
-NORMAL_R2_CAP_RFX_SLOPE = 0.015
+NORMAL_R2_CAP_FFX_SLOPE = 0.015
+NORMAL_R2_CAP_RFX_SLOPE = 0.010
 NORMAL_R2_CAP_SD = 0.10
 NORMAL_R2_CAP_MIN = 0.45
-NORMAL_R2_CAP_MAX = 0.98
+NORMAL_R2_CAP_MAX = 0.95
 logger = logging.getLogger(__name__)
 
 
