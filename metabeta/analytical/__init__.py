@@ -13,9 +13,16 @@ from metabeta.analytical.glmm import (
     lmmPoisson,
     refineNormalMapSrfx,
 )
+from metabeta.analytical.reml import (
+    RemlRefineMeta,
+    gateNormalRemlVsMap,
+    refineNormalRemlSrfx,
+)
 
 __all__ = [
+    'RemlRefineMeta',
     'analyticalBLUPContext',
+    'gateNormalRemlVsMap',
     'glmm',
     'irlsBernoulli',
     'irlsPoisson',
@@ -24,4 +31,5 @@ __all__ = [
     'lmmPoisson',
     'olsNormal',
     'refineNormalMapSrfx',
+    'refineNormalRemlSrfx',
 ]
