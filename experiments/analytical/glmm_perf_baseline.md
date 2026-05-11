@@ -154,3 +154,93 @@ Measured suite time in this workspace:
 
 Do not wire this into `glmm.py` until BLUP/GLS recomputation choices are tested
 and sEps movement from the sigma(Eps) variant is judged acceptable.
+
+REML Breakdown Diagnostic Result
+--------------------------------
+
+Command:
+
+```bash
+uv run python experiments/analytical/glmm_reml_diagnostic.py --breakdown
+```
+
+The binned diagnostic confirms that the aggregate `reml_diag` win is not uniform.
+It is strongest where the current MAP path shrinks MoM/EM scale, for multi-component
+random effects, and for small true random-effect scales. It slightly regresses q=1
+overall. Clamp rate is effectively zero, so bounds are not driving the result.
+
+Selected breakdown rows:
+
+| Breakdown | N | current sRFX | reml_diag sRFX | Relative improvement | Fallback rate | Clamp rate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| all | 98304 | 0.4898 | 0.4748 | 3.04% | 0.6800 | 0.0003 |
+| q=1 | 49941 | 0.4675 | 0.4712 | -0.80% | 0.8621 | 0.0000 |
+| q=2 | 25747 | 0.4789 | 0.4679 | 2.31% | 0.6038 | 0.0006 |
+| q=3+ | 22616 | 0.5585 | 0.5166 | 7.49% | 0.3647 | 0.0008 |
+| map_direction=expand | 77164 | 0.4495 | 0.4482 | 0.30% | 0.6895 | 0.0003 |
+| map_direction=shrink | 21106 | 0.6001 | 0.5519 | 8.03% | 0.6452 | 0.0003 |
+| true_sigma=<0.25 | 62098 | 0.5632 | 0.5180 | 8.03% | 0.6978 | 0.0004 |
+| true_sigma=0.25-0.75 | 29554 | 0.5758 | 0.5477 | 4.88% | 0.6246 | 0.0003 |
+| n=2000+ | 12176 | 0.4262 | 0.4358 | -2.26% | 0.6702 | 0.0006 |
+
+The first conservative gate uses REML only for valid, unclamped rows with
+`q >= 2` and `n < 2000`; all other rows keep current MAP. On the full required
+suite this gives:
+
+| Method | Mean suite sRFX row NRMSE |
+| --- | ---: |
+| mom_em | 0.5410 |
+| current MAP | 0.4898 |
+| reml_diag | 0.4748 |
+| reml_gated | 0.4745 |
+
+No aggregate required-suite cell has both current MAP and REML worse than MoM/EM,
+but row-level cases do exist. The `both_worse_than_mom_rate` is 0.2374 overall,
+and it is concentrated in low-change MAP rows (`map_delta=0.1-5pct`: 0.5092)
+and current-MAP shrink rows (`map_direction=shrink`: 0.3785). This means MoM/EM
+is not a good blanket fallback, but future gates may need a no-refinement branch
+for rows where MAP barely changes MoM/EM or where marginal optimization disagrees
+with the per-row squared error.
+
+Next decision check: test whether recomputing final GLS/BLUP after gated REML
+preserves the current FFX/BLUP stability. The high fallback rate means production
+integration needs row-level fallback and explicit logging/metrics.
+
+Statistical Interpretation of Best Method
+-----------------------------------------
+
+Best row-weighted sRFX NRMSE by diagnostic bin:
+
+| Case | Best setup | Evidence |
+| --- | --- | --- |
+| Overall | `reml_gated` | 0.4745 vs raw REML 0.4748 and current MAP 0.4898 |
+| q = 1 | current MAP / gated | 0.4675 vs raw REML 0.4712 |
+| q = 2 | raw REML | 0.4679 vs gated 0.4692 and current MAP 0.4789 |
+| q >= 3 | raw REML | 0.5166 vs gated 0.5187 and current MAP 0.5585 |
+| n >= 2000 | current MAP / gated | 0.4262 vs raw REML 0.4358 |
+| n < 2000 | raw REML | 0.4992-0.4497 beats current MAP and MoM/EM in both n bins |
+| d <= 4 | gated REML | 0.5877 vs raw REML 0.5902 and current MAP 0.5928 |
+| d >= 5 | raw REML | 6.0% relative gain over current MAP in both d bins |
+| current MAP expands MoM/EM | gated REML | 0.4462 vs raw REML 0.4482 and current MAP 0.4495 |
+| current MAP shrinks MoM/EM | raw REML | 0.5519 vs current MAP 0.6001 |
+| MAP barely changes MoM/EM (<5%) | MoM/EM | 0.5156 or tie; both refinement paths can be worse |
+| true sigma < 0.75 | raw REML | strongest gains: 4.88-8.03% over current MAP |
+| true sigma 0.75-1.5 | gated REML | 1.2599 vs raw REML 1.2696 and current MAP 1.2763 |
+
+Likely explanation:
+
+- q = 1 is already well handled by current output calibration, and there is little
+  covariance structure for REML to resolve. The REML objective often falls back
+  and can add small fixed-beta/profile-likelihood noise when it does not.
+- q >= 2 benefits because MoM/EM and output calibration struggle to split scale
+  across multiple random-effect components. The marginal objective uses the full
+  group likelihood, so it can correct over- or under-shrunk component scales.
+- High-n rows expose misspecification in the fixed beta/correlation profile. The
+  marginal likelihood is sharper, so a fixed beta or fixed correlation error can
+  move sigma(RFX) away from the metric target even when the objective improves.
+- When current MAP barely changes MoM/EM, the data/prior signal is weak or already
+  balanced. Additional optimization is mostly noise; these are the strongest
+  candidates for a future "no refinement" branch.
+- When current MAP shrinks MoM/EM, MoM/EM is often overestimating marginal random
+  scale. REML usually helps because it directly optimizes the marginal likelihood
+  around the MoM/EM initialization rather than applying a fixed output calibration.

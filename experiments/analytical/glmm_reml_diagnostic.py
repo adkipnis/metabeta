@@ -12,7 +12,6 @@ Examples:
 from __future__ import annotations
 
 import argparse
-import math
 import sys
 import time
 from collections import defaultdict
@@ -25,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT.parent))
 
 from metabeta.analytical.glmm import glmm
-from metabeta.analytical.map import _fixedCorrFromStats, _logMarginalTarget, _replacePsiDiag
+from metabeta.analytical.reml import gateNormalRemlVsMap, refineNormalRemlSrfx
 from metabeta.utils.config import loadDataConfig
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.io import datasetFilename
@@ -44,98 +43,6 @@ def _paths(data_id: str, partition: str, n_epochs: int) -> list[Path]:
     if partition == 'train':
         return [data_dir / datasetFilename('train', ep) for ep in range(1, n_epochs + 1)]
     return [data_dir / f'{partition}.npz']
-
-
-def _refine_variance_scales(
-    center: dict[str, torch.Tensor],
-    fallback: dict[str, torch.Tensor],
-    batch: dict[str, torch.Tensor],
-    max_q: int,
-    optimize_sigma_eps: bool,
-    n_steps: int,
-    lr: float,
-) -> dict[str, torch.Tensor]:
-    """Refine sigma(RFX), optionally sigma(Eps), with beta/correlation fixed."""
-    if max_q == 0 or n_steps <= 0:
-        return fallback
-
-    corr = _fixedCorrFromStats(
-        center,
-        batch.get('eta_rfx'),
-        batch.get('mask_q'),
-        max_q,
-    ).detach()
-    beta = center['beta_est'].detach()
-    log_sigma_rfx = (
-        center['sigma_rfx_est'].detach().clamp(min=1e-4, max=20.0).log().clone()
-    ).requires_grad_(True)
-    log_sigma_eps = (
-        center['sigma_eps_est'].squeeze(-1).detach().clamp(min=1e-4, max=20.0).log().clone()
-    )
-    params: list[torch.Tensor] = [log_sigma_rfx]
-    if optimize_sigma_eps:
-        log_sigma_eps = log_sigma_eps.clone().requires_grad_(True)
-        params.append(log_sigma_eps)
-
-    optimizer = torch.optim.Adam(params, lr=lr)
-    valid_rows = torch.ones(beta.shape[0], dtype=torch.bool, device=beta.device)
-    with torch.enable_grad():
-        for _ in range(n_steps):
-            optimizer.zero_grad(set_to_none=True)
-            target = _logMarginalTarget(
-                beta.unsqueeze(1),
-                log_sigma_rfx.unsqueeze(1),
-                log_sigma_eps.unsqueeze(1),
-                corr,
-                batch['X'][..., : beta.shape[-1]],
-                batch['y'],
-                batch['Z'][..., :max_q],
-                batch['mask_n'].float(),
-                batch['mask_m'].float(),
-                batch['nu_ffx'],
-                batch['tau_ffx'],
-                batch['family_ffx'],
-                batch['tau_rfx'],
-                batch['family_sigma_rfx'],
-                batch['tau_eps'],
-                batch['family_sigma_eps'],
-                batch.get('mask_d'),
-                batch.get('mask_q'),
-            ).squeeze(1)
-            finite_target = torch.isfinite(target)
-            active_rows = valid_rows & finite_target
-            valid_rows = valid_rows & finite_target
-            if not bool(active_rows.any()):
-                break
-            loss = -target[active_rows].sum()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(params, max_norm=10.0)
-            optimizer.step()
-            with torch.no_grad():
-                log_sigma_rfx.clamp_(math.log(1e-4), math.log(20.0))
-                if optimize_sigma_eps:
-                    log_sigma_eps.clamp_(math.log(1e-4), math.log(20.0))
-
-    sigma_rfx = log_sigma_rfx.detach().exp()
-    sigma_eps = log_sigma_eps.detach().exp()
-    valid = valid_rows & torch.isfinite(sigma_rfx).all(dim=-1)
-    valid = valid & (sigma_rfx >= 1e-4).all(dim=-1) & (sigma_rfx <= 20.0).all(dim=-1)
-    if optimize_sigma_eps:
-        valid = valid & torch.isfinite(sigma_eps) & (sigma_eps >= 1e-4) & (sigma_eps <= 20.0)
-
-    if 'mask_q' in batch:
-        mask_q = batch['mask_q'][..., :max_q].bool()
-        sigma_rfx = torch.where(mask_q, sigma_rfx, fallback['sigma_rfx_est'][..., :max_q])
-    sigma_rfx = torch.where(valid[:, None], sigma_rfx, fallback['sigma_rfx_est'][..., :max_q])
-
-    out = dict(fallback)
-    out['sigma_rfx_est'] = sigma_rfx
-    if optimize_sigma_eps:
-        sigma_eps = torch.where(valid, sigma_eps, fallback['sigma_eps_est'].squeeze(-1))
-        out['sigma_eps_est'] = sigma_eps.unsqueeze(-1)
-    if 'Psi' in fallback:
-        out['Psi'] = _replacePsiDiag(fallback['Psi'], sigma_rfx, batch.get('mask_q'))
-    return out
 
 
 class _MetricStore:
@@ -190,9 +97,216 @@ class _MetricStore:
         return ','.join(values)
 
 
+class _BreakdownBucket:
+    def __init__(self) -> None:
+        self.mom_errs: list[np.ndarray] = []
+        self.current_errs: list[np.ndarray] = []
+        self.reml_errs: list[np.ndarray] = []
+        self.gated_errs: list[np.ndarray] = []
+        self.truths: list[np.ndarray] = []
+        self.n_rows = 0
+        self.valid_rows = 0
+        self.clamped_rows = 0
+        self.gated_rows = 0
+        self.both_worse_rows = 0
+
+    def add(
+        self,
+        mom_err: np.ndarray,
+        current_err: np.ndarray,
+        reml_err: np.ndarray,
+        gated_err: np.ndarray,
+        truth: np.ndarray,
+        valid: bool,
+        clamped: bool,
+        gated: bool,
+    ) -> None:
+        self.mom_errs.append(mom_err)
+        self.current_errs.append(current_err)
+        self.reml_errs.append(reml_err)
+        self.gated_errs.append(gated_err)
+        self.truths.append(truth)
+        self.n_rows += 1
+        self.valid_rows += int(valid)
+        self.clamped_rows += int(clamped)
+        self.gated_rows += int(gated)
+        mom_sse = float(np.square(mom_err).sum())
+        current_sse = float(np.square(current_err).sum())
+        reml_sse = float(np.square(reml_err).sum())
+        self.both_worse_rows += int(current_sse > mom_sse and reml_sse > mom_sse)
+
+    def row(self, label: str) -> str:
+        mom = _nrmse(np.concatenate(self.mom_errs), np.concatenate(self.truths))
+        current = _nrmse(np.concatenate(self.current_errs), np.concatenate(self.truths))
+        reml = _nrmse(np.concatenate(self.reml_errs), np.concatenate(self.truths))
+        gated = _nrmse(np.concatenate(self.gated_errs), np.concatenate(self.truths))
+        values = [
+            label,
+            str(self.n_rows),
+            f'{mom:.4f}',
+            f'{current:.4f}',
+            f'{reml:.4f}',
+            f'{gated:.4f}',
+            f'{reml - current:.4f}',
+            f'{100.0 * (current - reml) / max(current, 1e-8):.2f}',
+            f'{1.0 - self.valid_rows / max(self.n_rows, 1):.4f}',
+            f'{self.clamped_rows / max(self.n_rows, 1):.4f}',
+            f'{self.gated_rows / max(self.n_rows, 1):.4f}',
+            f'{self.both_worse_rows / max(self.n_rows, 1):.4f}',
+        ]
+        return ','.join(values)
+
+
+class _BreakdownStore:
+    def __init__(self) -> None:
+        self.buckets: dict[str, _BreakdownBucket] = defaultdict(_BreakdownBucket)
+
+    def add_batch(
+        self,
+        current: dict[str, torch.Tensor],
+        mom_em: dict[str, torch.Tensor],
+        reml: dict[str, torch.Tensor],
+        gated: dict[str, torch.Tensor],
+        use_reml_gate: torch.Tensor,
+        meta,
+        batch: dict[str, torch.Tensor],
+        dataset: str,
+        partition: str,
+        max_q: int,
+    ) -> None:
+        mask_d = batch['mask_d'].bool()
+        mask_q = batch['mask_q'][..., :max_q].bool()
+        qs = mask_q.sum(dim=-1).cpu().numpy()
+        ds = mask_d.sum(dim=-1).cpu().numpy()
+        ms = batch['mask_m'].sum(dim=-1).cpu().numpy()
+        ns = batch['n'].cpu().numpy()
+        eta = batch.get('eta_rfx')
+        if eta is None:
+            etas = np.ones_like(qs)
+        else:
+            etas = eta.cpu().numpy()
+
+        fallback = ~meta.valid.cpu().numpy()
+        clamped = meta.clamped.cpu().numpy()
+        B = batch['X'].shape[0]
+        for b in range(B):
+            q_mask = mask_q[b]
+            truth = batch['sigma_rfx'][b][q_mask].cpu().numpy()
+            mom_err = mom_em['sigma_rfx_est'][b][q_mask] - batch['sigma_rfx'][b][q_mask]
+            current_err = current['sigma_rfx_est'][b][q_mask] - batch['sigma_rfx'][b][q_mask]
+            reml_err = reml['sigma_rfx_est'][b][q_mask] - batch['sigma_rfx'][b][q_mask]
+            gated_err = gated['sigma_rfx_est'][b][q_mask] - batch['sigma_rfx'][b][q_mask]
+            mom_err_np = mom_err.cpu().numpy()
+            current_err_np = current_err.cpu().numpy()
+            reml_err_np = reml_err.cpu().numpy()
+            gated_err_np = gated_err.cpu().numpy()
+            mom_sigma = mom_em['sigma_rfx_est'][b][q_mask]
+            current_sigma = current['sigma_rfx_est'][b][q_mask]
+            map_rel_delta = (
+                (current_sigma - mom_sigma).abs() / mom_sigma.abs().clamp(min=1e-8)
+            ).amax()
+            map_direction = (current_sigma.mean() - mom_sigma.mean()).item()
+            labels = [
+                'all',
+                f'dataset={dataset}/{partition}',
+                f'partition={partition}',
+                f'q={_q_bin(int(qs[b]))}',
+                f'd={_d_bin(int(ds[b]))}',
+                f'm={_m_bin(float(ms[b]))}',
+                f'n={_n_bin(float(ns[b]))}',
+                f'eta_rfx={int(etas[b] > 0)}',
+                f'map_delta={_map_delta_bin(float(map_rel_delta))}',
+                f'map_direction={_map_direction_bin(map_direction)}',
+                f'true_sigma={_sigma_bin(float(np.mean(truth)))}',
+            ]
+            for label in labels:
+                self.buckets[label].add(
+                    mom_err_np,
+                    current_err_np,
+                    reml_err_np,
+                    gated_err_np,
+                    truth,
+                    valid=not bool(fallback[b]),
+                    clamped=bool(clamped[b]),
+                    gated=bool(use_reml_gate[b]),
+                )
+
+    def print_rows(self) -> None:
+        print('')
+        print(
+            'breakdown,N,mom_em_sRFX,current_sRFX,reml_diag_sRFX,reml_gated_sRFX,delta,'
+            'rel_improve_pct,fallback_rate,clamp_rate,gate_rate,both_worse_than_mom_rate'
+        )
+        ordered = ['all']
+        ordered.extend(sorted(label for label in self.buckets if label != 'all'))
+        for label in ordered:
+            print(self.buckets[label].row(label))
+
+
+def _q_bin(q: int) -> str:
+    if q <= 1:
+        return '1'
+    if q == 2:
+        return '2'
+    return '3+'
+
+
+def _d_bin(d: int) -> str:
+    if d <= 4:
+        return '<=4'
+    if d <= 8:
+        return '5-8'
+    return '9+'
+
+
+def _m_bin(m: float) -> str:
+    if m < 20:
+        return '<20'
+    if m < 50:
+        return '20-49'
+    return '50+'
+
+
+def _n_bin(n: float) -> str:
+    if n < 500:
+        return '<500'
+    if n < 2000:
+        return '500-1999'
+    return '2000+'
+
+
+def _map_delta_bin(delta: float) -> str:
+    if delta < 1e-3:
+        return '<0.1pct'
+    if delta < 0.05:
+        return '0.1-5pct'
+    if delta < 0.20:
+        return '5-20pct'
+    return '20pct+'
+
+
+def _map_direction_bin(delta: float) -> str:
+    if abs(delta) < 1e-6:
+        return 'none'
+    if delta < 0:
+        return 'shrink'
+    return 'expand'
+
+
+def _sigma_bin(sigma: float) -> str:
+    if sigma < 0.25:
+        return '<0.25'
+    if sigma < 0.75:
+        return '0.25-0.75'
+    if sigma < 1.5:
+        return '0.75-1.5'
+    return '1.5+'
+
+
 def run(args: argparse.Namespace) -> None:
     torch.set_grad_enabled(True)
     device = torch.device(args.device)
+    breakdown = _BreakdownStore() if args.breakdown else None
 
     print('method,dataset,partition,N,FFX,sRFX,sEps,BLUP,seconds')
     for size in args.sizes:
@@ -259,11 +373,24 @@ def run(args: argparse.Namespace) -> None:
                     stores['mom_em'].add(mom_em, batch, max_q)
 
                     start = time.perf_counter()
-                    reml_diag = _refine_variance_scales(
+                    reml_diag, reml_meta = refineNormalRemlSrfx(
                         mom_em,
                         current,
-                        batch,
-                        max_q,
+                        batch['X'],
+                        batch['y'],
+                        Zm,
+                        batch['mask_n'].float(),
+                        batch['mask_m'].float(),
+                        batch['nu_ffx'],
+                        batch['tau_ffx'],
+                        batch['family_ffx'],
+                        batch['tau_rfx'],
+                        batch['family_sigma_rfx'],
+                        batch['tau_eps'],
+                        batch['family_sigma_eps'],
+                        eta_rfx=batch.get('eta_rfx'),
+                        mask_d=batch.get('mask_d'),
+                        mask_q=batch.get('mask_q'),
                         optimize_sigma_eps=False,
                         n_steps=args.n_steps,
                         lr=args.lr,
@@ -271,12 +398,49 @@ def run(args: argparse.Namespace) -> None:
                     stores['reml_diag'].seconds += time.perf_counter() - start
                     stores['reml_diag'].add(reml_diag, batch, max_q)
 
+                    gated, use_reml_gate = gateNormalRemlVsMap(
+                        current,
+                        reml_diag,
+                        reml_meta,
+                        batch['n'],
+                        mask_q=batch.get('mask_q'),
+                        min_q=args.gate_min_q,
+                        max_n_total=args.gate_max_n,
+                    )
+                    stores['reml_gated'].add(gated, batch, max_q)
+                    if breakdown is not None:
+                        breakdown.add_batch(
+                            current,
+                            mom_em,
+                            reml_diag,
+                            gated,
+                            use_reml_gate,
+                            reml_meta,
+                            batch,
+                            data_id,
+                            partition,
+                            max_q,
+                        )
+
                     start = time.perf_counter()
-                    reml_diag_seps = _refine_variance_scales(
+                    reml_diag_seps, _ = refineNormalRemlSrfx(
                         mom_em,
                         current,
-                        batch,
-                        max_q,
+                        batch['X'],
+                        batch['y'],
+                        Zm,
+                        batch['mask_n'].float(),
+                        batch['mask_m'].float(),
+                        batch['nu_ffx'],
+                        batch['tau_ffx'],
+                        batch['family_ffx'],
+                        batch['tau_rfx'],
+                        batch['family_sigma_rfx'],
+                        batch['tau_eps'],
+                        batch['family_sigma_eps'],
+                        eta_rfx=batch.get('eta_rfx'),
+                        mask_d=batch.get('mask_d'),
+                        mask_q=batch.get('mask_q'),
                         optimize_sigma_eps=True,
                         n_steps=args.n_steps,
                         lr=args.lr,
@@ -286,8 +450,12 @@ def run(args: argparse.Namespace) -> None:
 
                     n_total += batch['X'].shape[0]
 
-            for method in ['current', 'mom_em', 'reml_diag', 'reml_diag_seps']:
+            stores['reml_gated'].seconds = stores['reml_diag'].seconds
+            for method in ['current', 'mom_em', 'reml_diag', 'reml_gated', 'reml_diag_seps']:
                 print(stores[method].row(method, data_id, partition, n_total))
+
+    if breakdown is not None:
+        breakdown.print_rows()
 
 
 # fmt: off
@@ -299,6 +467,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--max-batches', type=int, default=None)
     parser.add_argument('--n-steps', type=int, default=20)
     parser.add_argument('--lr', type=float, default=0.03)
+    parser.add_argument('--gate-min-q', type=int, default=2)
+    parser.add_argument('--gate-max-n', type=int, default=1999)
+    parser.add_argument('--breakdown', action='store_true')
     return parser.parse_args()
 # fmt: on
 

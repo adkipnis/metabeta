@@ -16,7 +16,9 @@ analytical GLMM estimator in `metabeta/analytical/`.
   full-likelihood MAP rows are available for completeness.
 - `glmm_reml_diagnostic.py` — experiment-only REML/profile-MAP variance-scale
   diagnostic. It compares current production MAP, MoM/EM, sRFX-only refinement,
-  and sRFX+sEps refinement on the required suite.
+  gated REML-vs-MAP, and sRFX+sEps refinement on the required suite. Use
+  `--breakdown` for binned sRFX current-vs-REML deltas, gate rates,
+  fallback/clamp rates, and MoM/EM comparison.
 - `glmm_perf_baseline.md` — concise final fix summary: accepted changes, rejected
   experiments, final benchmark, and remaining weaknesses.
 
