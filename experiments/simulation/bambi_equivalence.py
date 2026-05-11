@@ -12,8 +12,8 @@ different variable orderings seeding different MCMC trajectories.
 Only uncorrelated datasets are tested because bambi v0.17.2 does not support
 correlated random effects.
 
-Run from the simulation/ directory:
-    uv run python compare_bambi_pymc.py [--data_id tiny-n-toy] [--n_datasets 10] [--n_points 50]
+Usage (from repo root):
+    uv run python experiments/simulation/bambi_equivalence.py [--data_id tiny-n-toy] [--n_datasets 10] [--n_points 50]
 """
 
 import argparse
@@ -26,11 +26,13 @@ import bambi as bmb
 from metabeta.utils.families import bambiFamilyName, FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
 from metabeta.utils.padding import unpad
 from metabeta.simulation.fit import Fitter
+from metabeta.utils.experiments import DATA_DIR
 
 
 # ---------------------------------------------------------------------------
 # Bambi reference implementation
 # ---------------------------------------------------------------------------
+
 
 def pandify(ds: dict) -> pd.DataFrame:
     df = pd.DataFrame({'i': ds['groups'], 'y': ds['y']})
@@ -49,7 +51,7 @@ def formulate(ds: dict) -> str:
 def priorize(ds: dict) -> dict:
     d, q = int(ds['d']), int(ds['q'])
     nu_ffx, tau_ffx, tau_rfx = ds['nu_ffx'], ds['tau_ffx'], ds['tau_rfx']
-    ffx_name   = FFX_FAMILIES[int(ds.get('family_ffx', 0))]
+    ffx_name = FFX_FAMILIES[int(ds.get('family_ffx', 0))]
     sigma_name = SIGMA_FAMILIES[int(ds.get('family_sigma_rfx', 0))]
     priors = {}
 
@@ -64,7 +66,7 @@ def priorize(ds: dict) -> dict:
     for j in range(q):
         key = '1|i' if j == 0 else f'x{j}|i'
         sigma_prior = {
-            'halfnormal':  bmb.Prior('HalfNormal', sigma=float(tau_rfx[j])),
+            'halfnormal': bmb.Prior('HalfNormal', sigma=float(tau_rfx[j])),
             'halfstudent': bmb.Prior('HalfStudentT', nu=STUDENT_DF, sigma=float(tau_rfx[j])),
             'exponential': bmb.Prior('Exponential', lam=1.0 / (float(tau_rfx[j]) + 1e-12)),
         }[sigma_name]
@@ -73,7 +75,7 @@ def priorize(ds: dict) -> dict:
     if 'tau_eps' in ds:
         eps_name = SIGMA_FAMILIES[int(ds.get('family_sigma_eps', 0))]
         priors['sigma'] = {
-            'halfnormal':  bmb.Prior('HalfNormal', sigma=float(ds['tau_eps'])),
+            'halfnormal': bmb.Prior('HalfNormal', sigma=float(ds['tau_eps'])),
             'halfstudent': bmb.Prior('HalfStudentT', nu=STUDENT_DF, sigma=float(ds['tau_eps'])),
             'exponential': bmb.Prior('Exponential', lam=1.0 / (float(ds['tau_eps']) + 1e-12)),
         }[eps_name]
@@ -97,6 +99,7 @@ def bambify(ds: dict) -> bmb.Model:
 # Core comparison
 # ---------------------------------------------------------------------------
 
+
 def compare_logp(ds: dict, n_points: int = 50, seed: int = 0) -> np.ndarray:
     """Return |logp_bambi(pt) - logp_pymc(pt)| / max(1, |logp|) for n_points random points.
 
@@ -111,12 +114,15 @@ def compare_logp(ds: dict, n_points: int = 50, seed: int = 0) -> np.ndarray:
     fitter.ds = ds
 
     bm = bambify(ds)
-    pm_bm   = bm.backend.model
+    pm_bm = bm.backend.model
     pm_ours = fitter._buildPymc(ds)
 
-    with pm_bm:   logp_bm   = pm_bm.compile_logp()
-    with pm_ours: logp_ours = pm_ours.compile_logp()
-    with pm_bm:   ip        = pm_bm.initial_point()
+    with pm_bm:
+        logp_bm = pm_bm.compile_logp()
+    with pm_ours:
+        logp_ours = pm_ours.compile_logp()
+    with pm_bm:
+        ip = pm_bm.initial_point()
 
     rng = np.random.default_rng(seed)
     rel_diffs = []
@@ -131,6 +137,7 @@ def compare_logp(ds: dict, n_points: int = 50, seed: int = 0) -> np.ndarray:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     # fmt: off
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -141,8 +148,7 @@ def main() -> None:
     # fmt: on
     args = parser.parse_args()
 
-    _here = Path(__file__).resolve().parent
-    data_path = _here / '..' / 'metabeta' / 'outputs' / 'data' / args.data_id / 'test.npz'
+    data_path = DATA_DIR / args.data_id / 'test.npz'
     assert data_path.exists(), f'data not found: {data_path}'
 
     with np.load(data_path, allow_pickle=True) as f:
@@ -150,7 +156,7 @@ def main() -> None:
 
     uncorr_idx = np.where(batch['eta_rfx'] == 0)[0][: args.n_datasets]
     print(f'Testing {len(uncorr_idx)} uncorrelated datasets from {args.data_id}')
-    print(f"  (bambi v{bmb.__version__} does not support correlated rfx)")
+    print(f'  (bambi v{bmb.__version__} does not support correlated rfx)')
     print()
     print(f'{"idx":>5}  {"q":>3}  {"m":>5}  {"max rel|diff|":>14}  {"mean rel|diff|":>15}')
     print('-' * 52)
@@ -160,7 +166,9 @@ def main() -> None:
         ds = unpad({k: v[idx] for k, v in batch.items()}, {k: batch[k][idx] for k in 'dqmn'})
         diffs = compare_logp(ds, n_points=args.n_points, seed=int(idx))
         all_max.append(diffs.max())
-        print(f'{idx:>5}  {int(ds["q"]):>3}  {int(ds["m"]):>5}  {diffs.max():>14.2e}  {diffs.mean():>15.2e}')
+        print(
+            f'{idx:>5}  {int(ds["q"]):>3}  {int(ds["m"]):>5}  {diffs.max():>14.2e}  {diffs.mean():>15.2e}'
+        )
 
     overall = max(all_max)
     print('-' * 52)

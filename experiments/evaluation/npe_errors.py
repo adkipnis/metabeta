@@ -13,8 +13,8 @@ Unlike evaluate.py (which produces aggregate tables and plots), this reports:
   6. Dataset property correlations with MB estimation error
 
 Run from the repo root:
-    uv run python benchmarks/bench_npe.py
-    uv run python benchmarks/bench_npe.py --checkpoint <path> [--device cuda]
+    uv run python experiments/evaluation/npe_errors.py
+    uv run python experiments/evaluation/npe_errors.py --checkpoint <path> [--device cuda]
 """
 
 import numpy as np

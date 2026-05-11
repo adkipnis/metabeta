@@ -4,12 +4,12 @@ Mixture of Experts experiment: pseudo (permutation) and true (multi-checkpoint) 
 Pseudo-MoE (default): single checkpoint, k random feature permutations per dataset.
 True MoE (--multi)  : one checkpoint per config, proposals mixed across all models.
 
-Usage (from experiments/):
-    uv run python compare_moe.py --configs normal_dsmall-n-sampled_mlarge_s0 --ks 0 3 7
-    uv run python compare_moe.py --multi --configs normal_dsmall-n-mixed_mlarge --seeds 0 1 2 3
-    uv run python compare_moe.py --multi --configs normal_dsmall-n-mixed_mlarge_s0 normal_dsmall-n-mixed_mlarge_s1
-    uv run python compare_moe.py --compare --configs normal_dsmall-n-mixed_mlarge_s0 --mix-configs normal_dsmall-n-mixed_mlarge_s1
-    uv run python compare_moe.py --valid
+Usage (from repo root):
+    uv run python experiments/utils/moe_compare.py --configs normal_dsmall-n-sampled_mlarge_s0 --ks 0 3 7
+    uv run python experiments/utils/moe_compare.py --multi --configs normal_dsmall-n-mixed_mlarge --seeds 0 1 2 3
+    uv run python experiments/utils/moe_compare.py --multi --configs normal_dsmall-n-mixed_mlarge_s0 normal_dsmall-n-mixed_mlarge_s1
+    uv run python experiments/utils/moe_compare.py --compare --configs normal_dsmall-n-mixed_mlarge_s0 --mix-configs normal_dsmall-n-mixed_mlarge_s1
+    uv run python experiments/utils/moe_compare.py --valid
 """
 
 import argparse
@@ -26,7 +26,6 @@ from metabeta.models.approximator import Approximator
 from metabeta.utils.config import (
     assimilateConfig,
     loadDataConfig,
-    modelFromYaml,
 )
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.evaluation import Proposal, concatProposalsBatch, dictMean
@@ -36,10 +35,9 @@ from metabeta.utils.moe import moeEstimate, multiCheckpointEstimate
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 from metabeta.evaluation.summary import getSummary
+from metabeta.utils.experiments import CHECKPOINT_DIR, DATA_DIR, RESULTS_DIR, loadApproximator
 
-DIR = Path(__file__).resolve().parent
-METABETA = DIR / '..' / 'metabeta'
-OUT_DIR = DIR / 'results'
+OUT_DIR = RESULTS_DIR
 
 DEFAULT_CONFIGS = ['normal_dtiny-n-toy_mtiny_s42']
 DEFAULT_KS = [0, 3, 7]
@@ -79,7 +77,7 @@ def resolveRunName(base: str, seed: int | None) -> str:
 
 def loadRunConfig(run_name: str) -> argparse.Namespace:
     """Load config from the checkpoint directory."""
-    path = METABETA / 'outputs' / 'checkpoints' / run_name / 'config.yaml'
+    path = CHECKPOINT_DIR / run_name / 'config.yaml'
     assert path.exists(), f'checkpoint config not found: {path}'
     with open(path) as f:
         cfg = yaml.safe_load(f)
@@ -94,24 +92,13 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> tuple[Approximat
     data_cfg = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg)
 
-    model_cfg_path = METABETA / 'configs' / 'models' / f'{cfg.model_id}.yaml'
-    model_cfg = modelFromYaml(
-        model_cfg_path,
-        d_ffx=cfg.max_d,
-        d_rfx=cfg.max_q,
-        likelihood_family=getattr(cfg, 'likelihood_family', 0),
+    model = loadApproximator(
+        cfg,
+        device,
+        CHECKPOINT_DIR / cfg.run_name,
+        cfg.prefix,
+        compile_model=cfg.compile,
     )
-    model = Approximator(model_cfg).to(device)
-    model.eval()
-
-    ckpt_dir = METABETA / 'outputs' / 'checkpoints' / cfg.run_name
-    path = ckpt_dir / f'{cfg.prefix}.pt'
-    assert path.exists(), f'checkpoint not found: {path}'
-    payload = torch.load(path, map_location=device)
-    model.load_state_dict(payload['model_state'])
-
-    if cfg.compile and device.type != 'mps':
-        model.compile()
 
     # Prefer data_id_valid for test/valid evaluation data (may differ from training data)
     eval_data_id = getattr(cfg, 'data_id_valid', None) or cfg.data_id
@@ -123,11 +110,10 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> tuple[Approximat
 def getDataloader(data_cfg: dict, partition: str, batch_size: int | None = None) -> Dataloader:
     """Create a dataloader for the given partition."""
     data_fname = datasetFilename(partition)
-    data_path = METABETA / 'outputs' / 'data' / data_cfg['data_id'] / data_fname
+    data_path = DATA_DIR / data_cfg['data_id'] / data_fname
     assert data_path.exists(), f'data not found: {data_path}'
     sortish = batch_size is not None
     return Dataloader(data_path, batch_size=batch_size, sortish=sortish)
-
 
 
 @torch.inference_mode()
@@ -568,10 +554,14 @@ if __name__ == '__main__':
         print(f'Mix  runs : {args.mix_configs}')
         print(f"Partition : {'valid' if args.valid else 'test'}")
         rows = evaluateComparison(args.configs, args.mix_configs, args.valid)
-        outfile = 'compare_moe'
+        outfile = 'moe_compare'
     elif args.multi:
         multi_seeds = args.seeds
-        if multi_seeds is not None and len(args.configs) > 1 and len(args.configs) != len(multi_seeds):
+        if (
+            multi_seeds is not None
+            and len(args.configs) > 1
+            and len(args.configs) != len(multi_seeds)
+        ):
             raise ValueError(
                 f'--seeds length ({len(multi_seeds)}) must match --configs length '
                 f'({len(args.configs)}) or --configs must have exactly one entry'

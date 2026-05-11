@@ -5,10 +5,10 @@ Filters datasets that exceed the model's d/q capacity, loads NUTS/ADVI fits from
 test.fit.npz batch, and produces a LaTeX + Markdown table with mean ± std over
 parameter dimensions (for NRMSE/ECE/EACE/R) and over datasets (for LOO-NLL).
 
-Usage (from experiments/):
-    uv run python evaluate_oracle.py --checkpoint PATH
-    uv run python evaluate_oracle.py --checkpoint PATH --n_samples 100 --batch_size 4
-    uv run python evaluate_oracle.py --checkpoint PATH --data_ids small-n-sampled large-n-sampled
+Usage (from repo root):
+    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH
+    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --n_samples 100 --batch_size 4
+    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --data_ids small-n-sampled large-n-sampled
 """
 
 import argparse
@@ -23,7 +23,6 @@ from tabulate import tabulate
 from tqdm import tqdm
 
 from metabeta.models.approximator import Approximator
-from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch, toDevice
 from metabeta.utils.evaluation import (
     Proposal,
@@ -37,10 +36,9 @@ from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.evaluation.summary import getSummary
+from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, loadApproximator
 
-DIR = Path(__file__).resolve().parent
-METABETA = DIR / '..' / 'metabeta'
-OUT_DIR = DIR / 'results'
+OUT_DIR = RESULTS_DIR
 
 DEFAULT_DATA_IDS = [
     'tiny-n-sampled',
@@ -93,20 +91,7 @@ def loadModel(
     cfg_dict = loadConfigFromCheckpoint(ckpt_dir)
     cfg = argparse.Namespace(**cfg_dict)
 
-    model_cfg_path = METABETA / 'configs' / 'models' / f'{cfg.model_id}.yaml'
-    model_cfg = modelFromYaml(
-        model_cfg_path,
-        d_ffx=cfg.max_d,
-        d_rfx=cfg.max_q,
-        likelihood_family=cfg.likelihood_family,
-    )
-    model = Approximator(model_cfg).to(device)
-    model.eval()
-
-    ckpt_path = ckpt_dir / f'{prefix}.pt'
-    assert ckpt_path.exists(), f'checkpoint not found: {ckpt_path}'
-    payload = torch.load(ckpt_path, map_location=device, weights_only=False)
-    model.load_state_dict(payload['model_state'])
+    model = loadApproximator(cfg, device, ckpt_dir, prefix)
 
     return model, cfg
 
@@ -577,7 +562,7 @@ def main() -> None:
     rows_by_regime: dict[str, list[dict]] = {}
     rows_by_regime_conv: dict[str, list[dict]] = {}
     for data_id in cfg.data_ids:
-        data_path = METABETA / 'outputs' / 'data' / data_id / 'test.fit.npz'
+        data_path = DATA_DIR / data_id / 'test.fit.npz'
         if not data_path.exists():
             logger.warning('Skipping %s: test.fit.npz not found', data_id)
             continue

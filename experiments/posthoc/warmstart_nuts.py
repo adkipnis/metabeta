@@ -1,5 +1,5 @@
 """
-compare_warmstart.py — Warm-started NUTS vs cold NUTS baseline on real data.
+warmstart_nuts.py — Warm-started NUTS vs cold NUTS baseline on real data.
 
 cold_std baseline is always loaded from test.fit.npz (NUTS, ta=0.80, tune=2000,
 draws=1000, chains=4) — no NUTS is re-run by this script.
@@ -24,15 +24,15 @@ Fits are cached per condition × dataset in {data_dir}/fits_warm_{ckpt_name}/.
 Rerun with --refit to ignore the cache.
 
 Usage (from repo root):
-    uv run python experiments/compare_warmstart.py \\
+    uv run python experiments/posthoc/warmstart_nuts.py \\
         --ckpt metabeta/outputs/checkpoints/normal_dsmall-n-mixed_mlarge-r_s0/best.pt
-    uv run python experiments/compare_warmstart.py \\
+    uv run python experiments/posthoc/warmstart_nuts.py \\
         --ckpt ... --data_ids tiny-n-sampled small-n-sampled
-    uv run python experiments/compare_warmstart.py \\
+    uv run python experiments/posthoc/warmstart_nuts.py \\
         --ckpt ... --n_datasets 8
-    uv run python experiments/compare_warmstart.py \\
+    uv run python experiments/posthoc/warmstart_nuts.py \\
         --ckpt ... --conditions warm_1000 warm_500
-    uv run python experiments/compare_warmstart.py \\
+    uv run python experiments/posthoc/warmstart_nuts.py \\
         --ckpt ... --refit
 """
 
@@ -59,9 +59,8 @@ from metabeta.utils.evaluation import Proposal
 from metabeta.utils.families import hasSigmaEps
 from metabeta.utils.padding import padToModel, unpad
 from metabeta.utils.warmfit import cachePath, loadFit, saveFit
+from metabeta.utils.experiments import EXPERIMENTS_DIR, OUTPUTS_DIR
 
-DIR = Path(__file__).resolve().parent
-OUTPUTS_DIR = DIR / '..' / 'metabeta' / 'outputs'
 WN_FLOW_SAMPLES = 1000
 MB_BENCH_SAMPLES = 1000
 
@@ -114,7 +113,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--benchmark_mb', action='store_true',
                    help='benchmark MB inference on test.npz and cache timings')
     p.add_argument('--out_dir',    type=Path,
-                   default=Path(__file__).resolve().parent / 'results' / 'warm_start',
+                   default=EXPERIMENTS_DIR / 'results' / 'warm_start',
                    help='Directory for markdown result files')
     return p.parse_args()
 # fmt: on
@@ -548,9 +547,7 @@ def printAnalysis(results: list[dict], active_conds: list[str]) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _importColdStd(
-    test_fit_path: Path, fits_dir: Path, n: int, refit: bool = False
-) -> list[dict]:
+def _importColdStd(test_fit_path: Path, fits_dir: Path, n: int, refit: bool = False) -> list[dict]:
     """Load NUTS fits from test.fit.npz, cache ALL datasets as cold_std, return first n.
 
     All datasets are cached (free — no NUTS re-running) so plotting scripts see the

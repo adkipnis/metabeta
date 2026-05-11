@@ -1,5 +1,5 @@
 """
-experiments/gaussian_ceiling.py — Gaussian local posterior ceiling experiment.
+experiments/posthoc/gaussian_local.py — Gaussian local posterior ceiling experiment.
 
 Ablation for likelihood_family == 0: replaces the learned local flow with the
 exact analytical Gaussian conditional posterior p(b_i | y_i, β, σ_rfx, σ_ε),
@@ -18,9 +18,9 @@ Key questions:
   GaussLoc(MB)   vs MB         — is the learned local flow the bottleneck?
   GaussLoc(NUTS) vs NUTS       — does the analytical form help given good globals?
 
-Usage (from metabeta/experiments/):
-  uv run python gaussian_ceiling.py --checkpoint ../outputs/checkpoints/<run>
-  uv run python gaussian_ceiling.py --checkpoint ../outputs/checkpoints/<run> --prefix best
+Usage (from repo root):
+  uv run python experiments/posthoc/gaussian_local.py --checkpoint metabeta/outputs/checkpoints/<run>
+  uv run python experiments/posthoc/gaussian_local.py --checkpoint metabeta/outputs/checkpoints/<run> --prefix best
 """
 
 import argparse
@@ -32,9 +32,9 @@ from tabulate import tabulate
 from tqdm import tqdm
 
 from metabeta.utils.logger import setupLogging
-from metabeta.utils.io import setDevice, datasetFilename
+from metabeta.utils.io import setDevice
 from metabeta.utils.sampling import setSeed
-from metabeta.utils.config import modelFromYaml, assimilateConfig, loadDataConfig
+from metabeta.utils.config import assimilateConfig, loadDataConfig
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
@@ -42,6 +42,7 @@ from metabeta.utils.evaluation import Proposal, concatProposalsBatch, dictMean
 from metabeta.models.approximator import Approximator
 from metabeta.evaluation.summary import getSummary
 from metabeta.posthoc.gaussian_local import gaussianCeiling, gaussianHybrid
+from metabeta.utils.experiments import dataFilePath, loadApproximator
 
 logger = logging.getLogger('gaussian_ceiling')
 
@@ -94,7 +95,7 @@ def setup() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 
-def _loadData(cfg: argparse.Namespace, dir: Path) -> tuple[Dataloader, Dataloader]:
+def _loadData(cfg: argparse.Namespace) -> tuple[Dataloader, Dataloader]:
     data_cfg_train = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg_train)
 
@@ -102,35 +103,16 @@ def _loadData(cfg: argparse.Namespace, dir: Path) -> tuple[Dataloader, Dataloade
     data_id = data_cfg_valid['data_id']
 
     def _dl(partition: str) -> Dataloader:
-        fname = datasetFilename(partition)
-        path = dir / '..' / 'metabeta' / 'outputs' / 'data' / data_id / fname
-        if partition == 'test':
-            path = path.with_suffix('.fit.npz')
-        path = path.resolve()
+        path = dataFilePath(data_id, partition, fit=partition == 'test')
         assert path.exists(), f'data not found: {path}'
         return Dataloader(path, batch_size=cfg.batch_size, sortish=True)
 
     return _dl('valid'), _dl('test')
 
 
-def _loadModel(cfg: argparse.Namespace, dir: Path, device: torch.device) -> Approximator:
-    model_cfg_path = dir / '..' / 'metabeta' / 'configs' / 'models' / f'{cfg.model_id}.yaml'
-    model_cfg = modelFromYaml(
-        model_cfg_path.resolve(),
-        d_ffx=cfg.max_d,
-        d_rfx=cfg.max_q,
-        likelihood_family=cfg.likelihood_family,
-    )
-    model = Approximator(model_cfg).to(device)
-    model.eval()
-
-    ckpt_dir = Path(cfg._checkpoint_dir)
-    prefix = cfg._checkpoint_prefix
-    path = ckpt_dir / f'{prefix}.pt'
-    assert path.exists(), f'checkpoint not found: {path}'
-    payload = torch.load(path, map_location=device, weights_only=False)
-    model.load_state_dict(payload['model_state'])
-    logger.info('Loaded checkpoint: %s', path)
+def _loadModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
+    model = loadApproximator(cfg, device, cfg._checkpoint_dir, cfg._checkpoint_prefix)
+    logger.info('Loaded checkpoint: %s/%s.pt', cfg._checkpoint_dir, cfg._checkpoint_prefix)
     return model
 
 
@@ -214,7 +196,9 @@ def _analyticalCeilingBatched(
     proposals = []
     for start in tqdm(range(0, B, batch_size), desc='  GaussLoc(true)'):
         end = min(start + batch_size, B)
-        proposals.append(gaussianCeiling(_sliceBatch(batch, start, end, B), d_ffx, d_rfx, n_samples))
+        proposals.append(
+            gaussianCeiling(_sliceBatch(batch, start, end, B), d_ffx, d_rfx, n_samples)
+        )
     return concatProposalsBatch(proposals)
 
 
@@ -230,7 +214,9 @@ def _analyticalHybridBatched(
     for start in tqdm(range(0, B, batch_size), desc=f'  GaussLoc({label})'):
         end = min(start + batch_size, B)
         proposals.append(
-            gaussianHybrid(_sliceProposal(global_proposal, start, end), _sliceBatch(batch, start, end, B))
+            gaussianHybrid(
+                _sliceProposal(global_proposal, start, end), _sliceBatch(batch, start, end, B)
+            )
         )
     return concatProposalsBatch(proposals)
 
@@ -295,10 +281,9 @@ def main() -> None:
         )
 
     device = setDevice(cfg.device)
-    dir = Path(__file__).resolve().parent
 
-    _, dl_test = _loadData(cfg, dir)
-    model = _loadModel(cfg, dir, device)
+    _, dl_test = _loadData(cfg)
+    model = _loadModel(cfg, device)
 
     fit_label = 'ppR2'
 
@@ -315,7 +300,9 @@ def main() -> None:
     proposal_ceil = _analyticalCeilingBatched(
         batch_rescaled, cfg.max_d, cfg.max_q, cfg.n_samples, cfg.batch_size
     )
-    proposal_gl_nuts = _analyticalHybridBatched(proposal_nuts, batch_rescaled, cfg.batch_size, 'NUTS')
+    proposal_gl_nuts = _analyticalHybridBatched(
+        proposal_nuts, batch_rescaled, cfg.batch_size, 'NUTS'
+    )
     proposal_gl_mb = _analyticalHybridBatched(proposal_mb, batch_rescaled, cfg.batch_size, 'MB')
 
     # --- summaries

@@ -16,13 +16,13 @@ Perturbation types:
     - Wrong mean: shift nu_ffx by k × tau_ffx (relative to prior width)
     - Wrong family: rotate prior family indices (+1 mod n_families)
 
-Usage (from experiments/):
-    uv run python prior_misspecification.py
-    uv run python prior_misspecification.py --configs toy-n
-    uv run python prior_misspecification.py --scale_factors 0.33 3 10
-    uv run python prior_misspecification.py --mean_shifts 1 2 5
-    uv run python prior_misspecification.py --importance   # apply IS post-hoc
-    uv run python prior_misspecification.py --valid
+Usage (from repo root):
+    uv run python experiments/posthoc/prior_misspec.py
+    uv run python experiments/posthoc/prior_misspec.py --configs toy-n
+    uv run python experiments/posthoc/prior_misspec.py --scale_factors 0.33 3 10
+    uv run python experiments/posthoc/prior_misspec.py --mean_shifts 1 2 5
+    uv run python experiments/posthoc/prior_misspec.py --importance
+    uv run python experiments/posthoc/prior_misspec.py --valid
 
 TODO (HMC baseline comparison, larger effort):
     For a rigorous comparison we should additionally run NUTS/HMC with the same
@@ -32,7 +32,7 @@ TODO (HMC baseline comparison, larger effort):
     the amortization approximation.
 
     Concretely:
-      - Re-use the Bambi/PyMC runner from experiments/structural_misspecification.py
+      - Re-use the Bambi/PyMC runner from experiments/posthoc/structural_misspec.py
         (which already calls NUTS with custom priors) and pass the perturbed
         hyperparameters (scaled tau, shifted nu) to Bambi's prior_common argument.
       - Run only the two most practically relevant conditions: tau×0.33 and tau×3,
@@ -57,7 +57,6 @@ from metabeta.models.approximator import Approximator
 from metabeta.utils.config import (
     assimilateConfig,
     loadDataConfig,
-    modelFromYaml,
 )
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.evaluation import Proposal, concatProposalsBatch, dictMean
@@ -69,11 +68,16 @@ from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 from metabeta.evaluation.summary import getSummary
+from metabeta.utils.experiments import (
+    CHECKPOINT_DIR,
+    DATA_DIR,
+    EVALUATION_CONFIG_DIR,
+    RESULTS_DIR,
+    loadApproximator,
+)
 
-DIR = Path(__file__).resolve().parent
-METABETA = DIR / '..' / 'metabeta'
-EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
-OUT_DIR = DIR / 'results'
+EVAL_CFG_DIR = EVALUATION_CONFIG_DIR
+OUT_DIR = RESULTS_DIR
 
 DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed', 'large-n-mixed']
 DEFAULT_SCALE_FACTORS = [0.33, 3.0]
@@ -153,25 +157,14 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
     assimilateConfig(cfg, data_cfg)
     data_cfg_valid = loadDataConfig(cfg.data_id_valid)
 
-    model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.model_id}.yaml'
-    model_cfg = modelFromYaml(
-        model_cfg_path,
-        d_ffx=cfg.max_d,
-        d_rfx=cfg.max_q,
-        likelihood_family=getattr(cfg, 'likelihood_family', 0),
-    )
-    model = Approximator(model_cfg).to(device)
-    model.eval()
-
     run = runName(vars(cfg))
-    ckpt_dir = METABETA / 'outputs' / 'checkpoints' / run
-    path = ckpt_dir / f'{cfg.prefix}.pt'
-    assert path.exists(), f'checkpoint not found: {path}'
-    payload = torch.load(path, map_location=device)
-    model.load_state_dict(payload['model_state'])
-
-    if cfg.compile and device.type != 'mps':
-        model.compile()
+    model = loadApproximator(
+        cfg,
+        device,
+        CHECKPOINT_DIR / run,
+        cfg.prefix,
+        compile_model=cfg.compile,
+    )
 
     return model, data_cfg_valid, run
 
@@ -179,7 +172,7 @@ def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
 def getDataloader(data_cfg: dict, partition: str, batch_size: int | None = None) -> Dataloader:
     """Create a dataloader for the given partition."""
     data_fname = datasetFilename(partition)
-    data_path = METABETA / 'outputs' / 'data' / data_cfg['data_id'] / data_fname
+    data_path = DATA_DIR / data_cfg['data_id'] / data_fname
     if partition == 'test':
         data_path = data_path.with_suffix('.fit.npz')
     assert data_path.exists(), f'data not found: {data_path}'

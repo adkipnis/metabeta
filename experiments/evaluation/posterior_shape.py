@@ -1,5 +1,5 @@
 """
-experiments/posterior_shape.py — Posterior shape diagnostics: MB vs NUTS.
+experiments/evaluation/posterior_shape.py — Posterior shape diagnostics: MB vs NUTS.
 
 Four diagnostics on the NUTS-converged subset of test datasets:
 
@@ -8,9 +8,9 @@ Four diagnostics on the NUTS-converged subset of test datasets:
   3. Corr     — mean |Corr_MB − Corr_NUTS| for global parameters
   4. LocalUnc — cond_std_Gauss / marginal_std per rfx dim  [family == 0 only]
 
-Usage (from metabeta/experiments/):
-  uv run python posterior_shape.py --checkpoint ../outputs/checkpoints/<run>
-  uv run python posterior_shape.py --checkpoint ../outputs/checkpoints/<run> --prefix best
+Usage (from repo root):
+  uv run python experiments/evaluation/posterior_shape.py --checkpoint metabeta/outputs/checkpoints/<run>
+  uv run python experiments/evaluation/posterior_shape.py --checkpoint metabeta/outputs/checkpoints/<run> --prefix best
 """
 
 import argparse
@@ -23,9 +23,9 @@ from tabulate import tabulate
 from tqdm import tqdm
 
 from metabeta.utils.logger import setupLogging
-from metabeta.utils.io import setDevice, datasetFilename
+from metabeta.utils.io import setDevice
 from metabeta.utils.sampling import setSeed
-from metabeta.utils.config import modelFromYaml, assimilateConfig, loadDataConfig
+from metabeta.utils.config import assimilateConfig, loadDataConfig
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice, subsetBatch
 from metabeta.utils.preprocessing import rescaleData
@@ -36,6 +36,7 @@ from metabeta.utils.evaluation import (
     subsetProposal,
 )
 from metabeta.models.approximator import Approximator
+from metabeta.utils.experiments import dataFilePath, loadApproximator
 
 logger = logging.getLogger('posterior_shape')
 
@@ -75,28 +76,18 @@ def setup() -> argparse.Namespace:
     return argparse.Namespace(**cfg_dict)
 
 
-def _loadTestData(cfg, dir) -> Dataloader:
+def _loadTestData(cfg) -> Dataloader:
     data_cfg_train = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg_train)
     data_id = loadDataConfig(cfg.data_id_valid)['data_id']
-    path = (dir / '..' / 'metabeta' / 'outputs' / 'data' / data_id / datasetFilename('test')).resolve()
-    path = path.with_suffix('.fit.npz')
+    path = dataFilePath(data_id, 'test', fit=True)
     assert path.exists(), f'data not found: {path}'
     return Dataloader(path, batch_size=cfg.batch_size, sortish=True)
 
 
-def _loadModel(cfg, dir, device) -> 'Approximator':
-    model_cfg_path = (dir / '..' / 'metabeta' / 'configs' / 'models' / f'{cfg.model_id}.yaml').resolve()
-    model_cfg = modelFromYaml(
-        model_cfg_path, d_ffx=cfg.max_d, d_rfx=cfg.max_q,
-        likelihood_family=cfg.likelihood_family,
-    )
-    model = Approximator(model_cfg).to(device)
-    model.eval()
-    path = Path(cfg._checkpoint_dir) / f'{cfg._checkpoint_prefix}.pt'
-    assert path.exists(), f'checkpoint not found: {path}'
-    model.load_state_dict(torch.load(path, map_location=device, weights_only=False)['model_state'])
-    logger.info('Loaded checkpoint: %s', path)
+def _loadModel(cfg, device) -> 'Approximator':
+    model = loadApproximator(cfg, device, cfg._checkpoint_dir, cfg._checkpoint_prefix)
+    logger.info('Loaded checkpoint: %s/%s.pt', cfg._checkpoint_dir, cfg._checkpoint_prefix)
     return model
 
 
@@ -108,7 +99,7 @@ def _batchToProposal(batch: dict, prefix: str, rescale: bool) -> Proposal:
     rfx = batch[f'{prefix}_rfx']
     proposed = {
         'global': {'samples': global_samples, 'log_prob': torch.zeros(global_samples.shape[:2])},
-        'local':  {'samples': rfx,            'log_prob': torch.zeros(rfx.shape[:-1])},
+        'local': {'samples': rfx, 'log_prob': torch.zeros(rfx.shape[:-1])},
     }
     p = Proposal(proposed, has_sigma_eps=has_se, corr_rfx=batch.get(f'{prefix}_corr_rfx'))
     if rescale:
@@ -142,35 +133,37 @@ def _widthDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> list[dict
         # mb_v, nuts_v: (B, S, d); std over sample dim
         std_mb = mb_v.std(dim=1)
         std_nu = nuts_v.std(dim=1)
-        ratio  = std_mb / std_nu.clamp(min=1e-8)
+        ratio = std_mb / std_nu.clamp(min=1e-8)
         active = mask if mask is not None else slice(None)
-        vals   = ratio[active].flatten().numpy()
+        vals = ratio[active].flatten().numpy()
         return {
-            'Type':      name,
-            'std_MB':    float(std_mb[active].mean()),
-            'std_NUTS':  float(std_nu[active].mean()),
+            'Type': name,
+            'std_MB': float(std_mb[active].mean()),
+            'std_NUTS': float(std_nu[active].mean()),
             'Ratio p50': float(np.median(vals)),
             'Ratio p25': float(np.percentile(vals, 25)),
             'Ratio p75': float(np.percentile(vals, 75)),
         }
 
-    mask_q  = batch.get('mask_q', torch.ones(p_mb.rfx.shape[0], p_mb.rfx.shape[-1], dtype=torch.bool))
+    mask_q = batch.get(
+        'mask_q', torch.ones(p_mb.rfx.shape[0], p_mb.rfx.shape[-1], dtype=torch.bool)
+    )
     mask_mq = group_mask.unsqueeze(-1) & mask_q.unsqueeze(1)
 
     # rfx: (B, m, S, q) — std over sample dim=2
     std_mb_l = p_mb.rfx.std(dim=2)
     std_nu_l = p_nuts.rfx.std(dim=2)
-    ratio_l  = std_mb_l / std_nu_l.clamp(min=1e-8)
-    vals_l   = ratio_l[mask_mq].numpy()
+    ratio_l = std_mb_l / std_nu_l.clamp(min=1e-8)
+    vals_l = ratio_l[mask_mq].numpy()
 
     return [
-        _stats('ffx',       p_mb.ffx,                    p_nuts.ffx,                    batch.get('mask_d')),
-        _stats('sigma_rfx', p_mb.sigma_rfx,               p_nuts.sigma_rfx,              batch.get('mask_q')),
-        _stats('sigma_eps', p_mb.sigma_eps.unsqueeze(-1),  p_nuts.sigma_eps.unsqueeze(-1), None),
+        _stats('ffx', p_mb.ffx, p_nuts.ffx, batch.get('mask_d')),
+        _stats('sigma_rfx', p_mb.sigma_rfx, p_nuts.sigma_rfx, batch.get('mask_q')),
+        _stats('sigma_eps', p_mb.sigma_eps.unsqueeze(-1), p_nuts.sigma_eps.unsqueeze(-1), None),
         {
-            'Type':      'rfx',
-            'std_MB':    float(std_mb_l[mask_mq].mean()),
-            'std_NUTS':  float(std_nu_l[mask_mq].mean()),
+            'Type': 'rfx',
+            'std_MB': float(std_mb_l[mask_mq].mean()),
+            'std_NUTS': float(std_nu_l[mask_mq].mean()),
             'Ratio p50': float(np.median(vals_l)),
             'Ratio p25': float(np.percentile(vals_l, 25)),
             'Ratio p75': float(np.percentile(vals_l, 75)),
@@ -197,12 +190,13 @@ def _rankDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> list[dict]
         # mb, nuts: (N, S); returns all rank fractions flattened
         mb_sorted = np.sort(mb, axis=1)
         S = mb_sorted.shape[1]
-        return np.concatenate([np.searchsorted(mb_sorted[i], nuts[i]) / S
-                                for i in range(len(mb_sorted))])
+        return np.concatenate(
+            [np.searchsorted(mb_sorted[i], nuts[i]) / S for i in range(len(mb_sorted))]
+        )
 
     def _quantile_row(name: str, fracs: np.ndarray) -> dict:
         return {
-            'Type':           name,
+            'Type': name,
             'p10 (exp 0.10)': float(np.percentile(fracs, 10)),
             'p25 (exp 0.25)': float(np.percentile(fracs, 25)),
             'p50 (exp 0.50)': float(np.percentile(fracs, 50)),
@@ -223,9 +217,9 @@ def _rankDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> list[dict]
 
     rows = []
     for name, mb_v, nuts_v, mask in [
-        ('ffx',       p_mb.ffx,                    p_nuts.ffx,                    mask_d),
-        ('sigma_rfx', p_mb.sigma_rfx,               p_nuts.sigma_rfx,              mask_q),
-        ('sigma_eps', p_mb.sigma_eps.unsqueeze(-1),  p_nuts.sigma_eps.unsqueeze(-1), None),
+        ('ffx', p_mb.ffx, p_nuts.ffx, mask_d),
+        ('sigma_rfx', p_mb.sigma_rfx, p_nuts.sigma_rfx, mask_q),
+        ('sigma_eps', p_mb.sigma_eps.unsqueeze(-1), p_nuts.sigma_eps.unsqueeze(-1), None),
     ]:
         fracs = _global_fracs(mb_v, nuts_v, mask)
         if fracs.size:
@@ -245,7 +239,6 @@ def _rankDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> list[dict]
     return rows
 
 
-
 # ---------------------------------------------------------------------------
 # Diagnostic 3 — global correlation structure
 # ---------------------------------------------------------------------------
@@ -257,7 +250,9 @@ def _corrDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> dict:
     B = p_mb.ffx.shape[0]
 
     def _globals(p, b, d, q):
-        return torch.cat([p.ffx[b, :, :d], p.sigma_rfx[b, :, :q], p.sigma_eps[b].unsqueeze(-1)], dim=-1)
+        return torch.cat(
+            [p.ffx[b, :, :d], p.sigma_rfx[b, :, :q], p.sigma_eps[b].unsqueeze(-1)], dim=-1
+        )
 
     per_ds = []
     for b in range(B):
@@ -266,21 +261,25 @@ def _corrDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> dict:
         if d + q + 1 < 2:
             continue
         try:
-            c_mb   = torch.corrcoef(_globals(p_mb,   b, d, q).T)
+            c_mb = torch.corrcoef(_globals(p_mb, b, d, q).T)
             c_nuts = torch.corrcoef(_globals(p_nuts, b, d, q).T)
         except Exception:
             continue
-        off  = ~torch.eye(c_mb.shape[0], dtype=torch.bool)
+        off = ~torch.eye(c_mb.shape[0], dtype=torch.bool)
         diff = float((c_mb - c_nuts).abs()[off].mean())
         if np.isfinite(diff):
             per_ds.append(diff)
 
     if not per_ds:
-        return {'mean |ΔCorr|': float('nan'), 'median |ΔCorr|': float('nan'), 'p90 |ΔCorr|': float('nan')}
+        return {
+            'mean |ΔCorr|': float('nan'),
+            'median |ΔCorr|': float('nan'),
+            'p90 |ΔCorr|': float('nan'),
+        }
     return {
-        'mean |ΔCorr|':   float(np.mean(per_ds)),
+        'mean |ΔCorr|': float(np.mean(per_ds)),
         'median |ΔCorr|': float(np.median(per_ds)),
-        'p90 |ΔCorr|':    float(np.percentile(per_ds, 90)),
+        'p90 |ΔCorr|': float(np.percentile(per_ds, 90)),
     }
 
 
@@ -302,7 +301,7 @@ def _localUncertaintyDecomp(
     group_mask = batch['mask_n'].any(-1)
     B, q = batch['y'].shape[0], p_mb.q
     sd_y = batch['sd_y']
-    mask_q  = batch.get('mask_q', torch.ones(B, q, dtype=torch.bool))
+    mask_q = batch.get('mask_q', torch.ones(B, q, dtype=torch.bool))
     mask_mq = group_mask.unsqueeze(-1) & mask_q.unsqueeze(1)
 
     def _marginal_std(p):
@@ -311,21 +310,20 @@ def _localUncertaintyDecomp(
     def _cond_std(p):
         chunks = []
         for s in range(0, B, batch_size):
-            e  = min(s + batch_size, B)
+            e = min(s + batch_size, B)
             sd = sd_y[s:e]
             sr = p.sigma_rfx[s:e] / sd.view(-1, 1, 1)
-            se = p.sigma_eps[s:e]  / sd.view(-1, 1)
-            Z_m   = batch['Z'][s:e, :, :, :q] * batch['mask_n'][s:e].float().unsqueeze(-1)
-            ZtZ   = torch.einsum('bmnq,bmnp->bmpq', Z_m, Z_m)
-            Lambda = (
-                ZtZ.unsqueeze(2) / se.clamp(min=1e-6)[:, None, :, None, None] ** 2
-                + torch.diag_embed(1.0 / sr.clamp(min=1e-6) ** 2).unsqueeze(1)
-            )
-            L     = torch.linalg.cholesky(Lambda)
+            se = p.sigma_eps[s:e] / sd.view(-1, 1)
+            Z_m = batch['Z'][s:e, :, :, :q] * batch['mask_n'][s:e].float().unsqueeze(-1)
+            ZtZ = torch.einsum('bmnq,bmnp->bmpq', Z_m, Z_m)
+            Lambda = ZtZ.unsqueeze(2) / se.clamp(min=1e-6)[
+                :, None, :, None, None
+            ] ** 2 + torch.diag_embed(1.0 / sr.clamp(min=1e-6) ** 2).unsqueeze(1)
+            L = torch.linalg.cholesky(Lambda)
             L_inv = torch.linalg.solve_triangular(
                 L, torch.eye(q, device=L.device, dtype=L.dtype).expand_as(L), upper=False
             )
-            chunks.append((L_inv ** 2).sum(dim=-2).sqrt().mean(dim=2))  # (bs, m, q)
+            chunks.append((L_inv**2).sum(dim=-2).sqrt().mean(dim=2))  # (bs, m, q)
         return torch.cat(chunks, dim=0)
 
     rows = []
@@ -333,17 +331,17 @@ def _localUncertaintyDecomp(
         std_m = _marginal_std(proposal)
         std_c = _cond_std(proposal)
         ratio = std_c / std_m.clamp(min=1e-8)
-        rows.append({
-            'Method':               label,
-            'marginal_std (med)':   float(np.median(std_m[mask_mq].numpy())),
-            'cond_std_Gauss (med)': float(np.median(std_c[mask_mq].numpy())),
-            'ratio p50':            float(np.median(ratio[mask_mq].numpy())),
-            'ratio p25':            float(np.percentile(ratio[mask_mq].numpy(), 25)),
-            'ratio p75':            float(np.percentile(ratio[mask_mq].numpy(), 75)),
-        })
+        rows.append(
+            {
+                'Method': label,
+                'marginal_std (med)': float(np.median(std_m[mask_mq].numpy())),
+                'cond_std_Gauss (med)': float(np.median(std_c[mask_mq].numpy())),
+                'ratio p50': float(np.median(ratio[mask_mq].numpy())),
+                'ratio p25': float(np.percentile(ratio[mask_mq].numpy(), 25)),
+                'ratio p75': float(np.percentile(ratio[mask_mq].numpy(), 75)),
+            }
+        )
     return rows
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +351,9 @@ def _localUncertaintyDecomp(
 
 def _table(rows, headers) -> str:
     fmt = lambda v: v if isinstance(v, str) else f'{v:.4f}'
-    return tabulate([[fmt(r[h]) for h in headers] for r in rows], headers=headers, tablefmt='simple')
+    return tabulate(
+        [[fmt(r[h]) for h in headers] for r in rows], headers=headers, tablefmt='simple'
+    )
 
 
 def _printWidth(rows: list[dict]) -> None:
@@ -363,13 +363,24 @@ def _printWidth(rows: list[dict]) -> None:
 
 
 def _printRank(rows: list[dict]) -> None:
-    headers = ['Type', 'p10 (exp 0.10)', 'p25 (exp 0.25)', 'p50 (exp 0.50)', 'p75 (exp 0.75)', 'p90 (exp 0.90)']
+    headers = [
+        'Type',
+        'p10 (exp 0.10)',
+        'p25 (exp 0.25)',
+        'p50 (exp 0.50)',
+        'p75 (exp 0.75)',
+        'p90 (exp 0.90)',
+    ]
     fmt = lambda v: v if isinstance(v, str) else f'{v:.3f}'
     print('=== 2. Marginal rank calibration: rank of NUTS in MB distribution ===')
-    print(tabulate([[fmt(r[h]) for h in headers] for r in rows], headers=headers, tablefmt='simple'))
+    print(
+        tabulate([[fmt(r[h]) for h in headers] for r in rows], headers=headers, tablefmt='simple')
+    )
     print('  Values near expected → shapes match')
-    print('  p50 ≠ 0.50 → bias  |  compressed quantiles → MB overdispersed  |  spread → MB underdispersed\n')
-    
+    print(
+        '  p50 ≠ 0.50 → bias  |  compressed quantiles → MB overdispersed  |  spread → MB underdispersed\n'
+    )
+
 
 def _printCorr(d: dict) -> None:
     print('=== 3. Global correlation structure: |Corr_MB − Corr_NUTS| ===')
@@ -380,11 +391,22 @@ def _printCorr(d: dict) -> None:
 
 def _printLocalUncertainty(rows: list[dict]) -> None:
     print('=== 4. Local uncertainty decomposition (rfx, standardised space) ===')
-    print(_table(rows, ['Method', 'marginal_std (med)', 'cond_std_Gauss (med)', 'ratio p50', 'ratio p25', 'ratio p75']))
+    print(
+        _table(
+            rows,
+            [
+                'Method',
+                'marginal_std (med)',
+                'cond_std_Gauss (med)',
+                'ratio p50',
+                'ratio p25',
+                'ratio p75',
+            ],
+        )
+    )
     print('  ratio = cond_std / marginal_std')
     print('  ratio → 0: global uncertainty dominates rfx spread')
     print('  ratio → 1: local (conditional) uncertainty dominates rfx spread\n')
-
 
 
 # ---------------------------------------------------------------------------
@@ -398,22 +420,20 @@ def main() -> None:
     setSeed(cfg.seed)
 
     device = setDevice(cfg.device)
-    exp_dir = Path(__file__).resolve().parent
+    dl_test = _loadTestData(cfg)
+    model = _loadModel(cfg, device)
 
-    dl_test = _loadTestData(cfg, exp_dir)
-    model   = _loadModel(cfg, exp_dir, device)
-
-    full_batch    = dl_test.fullBatch()
+    full_batch = dl_test.fullBatch()
     batch_rescaled = rescaleData(full_batch) if cfg.rescale else full_batch
-    proposal_mb   = _sampleMB(model, dl_test, cfg.n_samples, device, cfg.rescale)
+    proposal_mb = _sampleMB(model, dl_test, cfg.n_samples, device, cfg.rescale)
     proposal_nuts = _batchToProposal(full_batch, 'nuts', cfg.rescale)
 
     conv_mask = nutsConvergeMask(full_batch)
     if conv_mask is not None:
         logger.info('Converged NUTS: %d / %d datasets', int(conv_mask.sum()), len(conv_mask))
         batch_rescaled = subsetBatch(batch_rescaled, conv_mask)
-        proposal_mb    = subsetProposal(proposal_mb,   conv_mask)
-        proposal_nuts  = subsetProposal(proposal_nuts, conv_mask)
+        proposal_mb = subsetProposal(proposal_mb, conv_mask)
+        proposal_nuts = subsetProposal(proposal_nuts, conv_mask)
     else:
         logger.warning('No NUTS convergence diagnostics found; using all datasets')
 
@@ -427,6 +447,6 @@ def main() -> None:
     else:
         logger.info('Local uncertainty diagnostic skipped (family != 0)')
 
-    
+
 if __name__ == '__main__':
     main()

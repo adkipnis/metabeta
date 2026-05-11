@@ -1,5 +1,5 @@
 """
-experiments/diagnose_disagreement.py
+experiments/evaluation/posterior_disagreement.py
 
 Per-dataset MB vs NUTS disagreement analysis on the full test set (no convergence pre-filter).
 
@@ -9,9 +9,9 @@ Outputs:
      (full set and NUTS-converged subset separately)
   3. Summary binned by div_rate quartile and by d / q
 
-Usage (from metabeta/experiments/):
-  uv run python diagnose_disagreement.py \\
-      --checkpoint ../metabeta/outputs/checkpoints/<run>
+Usage (from repo root):
+  uv run python experiments/evaluation/posterior_disagreement.py \\
+      --checkpoint metabeta/outputs/checkpoints/<run>
 """
 
 import argparse
@@ -24,15 +24,16 @@ from tabulate import tabulate
 from tqdm import tqdm
 
 from metabeta.utils.logger import setupLogging
-from metabeta.utils.io import setDevice, datasetFilename
+from metabeta.utils.io import setDevice
 from metabeta.utils.sampling import setSeed
-from metabeta.utils.config import modelFromYaml, assimilateConfig, loadDataConfig
+from metabeta.utils.config import assimilateConfig, loadDataConfig
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.evaluation import Proposal, concatProposalsBatch, nutsConvergeMask
 from metabeta.models.approximator import Approximator
+from metabeta.utils.experiments import dataFilePath, loadApproximator
 
-logger = logging.getLogger('diagnose_disagreement')
+logger = logging.getLogger('posterior_disagreement')
 
 
 # ---------------------------------------------------------------------------
@@ -71,12 +72,11 @@ def setup() -> argparse.Namespace:
     return argparse.Namespace(**cfg_dict)
 
 
-def _dataPath(cfg, exp_dir: Path) -> Path:
+def _dataPath(cfg) -> Path:
     data_cfg_train = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg_train)
     data_id = loadDataConfig(cfg.data_id_valid)['data_id']
-    path = (exp_dir / '..' / 'metabeta' / 'outputs' / 'data' / data_id / datasetFilename('test')).resolve()
-    return path.with_suffix('.fit.npz')
+    return dataFilePath(data_id, 'test', fit=True)
 
 
 def _loadTestData(path: Path, batch_size: int) -> Dataloader:
@@ -84,18 +84,9 @@ def _loadTestData(path: Path, batch_size: int) -> Dataloader:
     return Dataloader(path, batch_size=batch_size, sortish=False)
 
 
-def _loadModel(cfg, exp_dir: Path, device) -> Approximator:
-    model_cfg_path = (exp_dir / '..' / 'metabeta' / 'configs' / 'models' / f'{cfg.model_id}.yaml').resolve()
-    model_cfg = modelFromYaml(
-        model_cfg_path, d_ffx=cfg.max_d, d_rfx=cfg.max_q,
-        likelihood_family=cfg.likelihood_family,
-    )
-    model = Approximator(model_cfg).to(device)
-    model.eval()
-    ckpt_path = Path(cfg._checkpoint_dir) / f'{cfg._checkpoint_prefix}.pt'
-    assert ckpt_path.exists(), f'checkpoint not found: {ckpt_path}'
-    model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=False)['model_state'])
-    logger.info('Loaded checkpoint: %s', ckpt_path)
+def _loadModel(cfg, device) -> Approximator:
+    model = loadApproximator(cfg, device, cfg._checkpoint_dir, cfg._checkpoint_prefix)
+    logger.info('Loaded checkpoint: %s/%s.pt', cfg._checkpoint_dir, cfg._checkpoint_prefix)
     return model
 
 
@@ -120,7 +111,7 @@ def _nutsProposal(batch: dict, rescale: bool) -> Proposal:
     rfx = batch['nuts_rfx']
     proposed = {
         'global': {'samples': global_samples, 'log_prob': torch.zeros(global_samples.shape[:2])},
-        'local':  {'samples': rfx,            'log_prob': torch.zeros(rfx.shape[:-1])},
+        'local': {'samples': rfx, 'log_prob': torch.zeros(rfx.shape[:-1])},
     }
     p = Proposal(proposed, has_sigma_eps=has_se, corr_rfx=batch.get('nuts_corr_rfx'))
     if rescale:
@@ -169,8 +160,8 @@ def perDatasetStats(
         return fn(a, axis=-1)
 
     max_rhat = _param_stat('nuts_rhat', np.nanmax)
-    min_ess  = _param_stat('nuts_ess',  np.nanmin)
-    td_sat   = batch['nuts_max_treedepth'].numpy().mean(-1)
+    min_ess = _param_stat('nuts_ess', np.nanmin)
+    td_sat = batch['nuts_max_treedepth'].numpy().mean(-1)
 
     conv_mask = nutsConvergeMask(batch)
 
@@ -181,53 +172,61 @@ def perDatasetStats(
         m_b = int(m_arr[b])
 
         # Global params: (S, d_b+q_b+1)
-        g_mb = torch.cat([
-            p_mb.ffx[b, :, :d_b],
-            p_mb.sigma_rfx[b, :, :q_b],
-            p_mb.sigma_eps[b].unsqueeze(-1),
-        ], dim=-1)
-        g_nuts = torch.cat([
-            p_nuts.ffx[b, :, :d_b],
-            p_nuts.sigma_rfx[b, :, :q_b],
-            p_nuts.sigma_eps[b].unsqueeze(-1),
-        ], dim=-1)
+        g_mb = torch.cat(
+            [
+                p_mb.ffx[b, :, :d_b],
+                p_mb.sigma_rfx[b, :, :q_b],
+                p_mb.sigma_eps[b].unsqueeze(-1),
+            ],
+            dim=-1,
+        )
+        g_nuts = torch.cat(
+            [
+                p_nuts.ffx[b, :, :d_b],
+                p_nuts.sigma_rfx[b, :, :q_b],
+                p_nuts.sigma_eps[b].unsqueeze(-1),
+            ],
+            dim=-1,
+        )
 
-        mu_mb    = g_mb.mean(0).numpy()
-        mu_nuts  = g_nuts.mean(0).numpy()
-        std_mb   = g_mb.std(0).numpy().clip(1e-8)
+        mu_mb = g_mb.mean(0).numpy()
+        mu_nuts = g_nuts.mean(0).numpy()
+        std_mb = g_mb.std(0).numpy().clip(1e-8)
         std_nuts = g_nuts.std(0).numpy().clip(1e-8)
 
         mean_diff_g = float(np.mean(np.abs(mu_mb - mu_nuts) / std_nuts))
-        med_lw_g    = float(np.median(np.log(std_mb / std_nuts)))   # log width ratio
+        med_lw_g = float(np.median(np.log(std_mb / std_nuts)))   # log width ratio
 
         # RFX: (m_b, S, q_b)
-        rfx_mb   = p_mb.rfx[b, :m_b, :, :q_b].numpy()
+        rfx_mb = p_mb.rfx[b, :m_b, :, :q_b].numpy()
         rfx_nuts = p_nuts.rfx[b, :m_b, :, :q_b].numpy()
-        mu_rfx_mb    = rfx_mb.mean(1).reshape(-1)
-        mu_rfx_nuts  = rfx_nuts.mean(1).reshape(-1)
+        mu_rfx_mb = rfx_mb.mean(1).reshape(-1)
+        mu_rfx_nuts = rfx_nuts.mean(1).reshape(-1)
         std_rfx_nuts = rfx_nuts.std(1).reshape(-1).clip(1e-8)
-        std_rfx_mb   = rfx_mb.std(1).reshape(-1).clip(1e-8)
+        std_rfx_mb = rfx_mb.std(1).reshape(-1).clip(1e-8)
 
         mean_diff_rfx = float(np.mean(np.abs(mu_rfx_mb - mu_rfx_nuts) / std_rfx_nuts))
-        med_lw_rfx    = float(np.median(np.log(std_rfx_mb / std_rfx_nuts)))
+        med_lw_rfx = float(np.median(np.log(std_rfx_mb / std_rfx_nuts)))
 
-        rows.append({
-            'idx':           b,
-            'mean_diff_g':   mean_diff_g,
-            'med_lw_g':      med_lw_g,
-            'mean_diff_rfx': mean_diff_rfx,
-            'med_lw_rfx':    med_lw_rfx,
-            'div_rate':      float(div_rate[b]),
-            'max_rhat':      float(max_rhat[b]),
-            'min_ess':       float(min_ess[b]),
-            'td_sat':        float(td_sat[b]),
-            'converged':     bool(conv_mask[b]),
-            'd':             d_b,
-            'q':             q_b,
-            'm':             m_b,
-            'n':             int(n_arr[b]),
-            'r2':            float(r2_arr[b]),
-        })
+        rows.append(
+            {
+                'idx': b,
+                'mean_diff_g': mean_diff_g,
+                'med_lw_g': med_lw_g,
+                'mean_diff_rfx': mean_diff_rfx,
+                'med_lw_rfx': med_lw_rfx,
+                'div_rate': float(div_rate[b]),
+                'max_rhat': float(max_rhat[b]),
+                'min_ess': float(min_ess[b]),
+                'td_sat': float(td_sat[b]),
+                'converged': bool(conv_mask[b]),
+                'd': d_b,
+                'q': q_b,
+                'm': m_b,
+                'n': int(n_arr[b]),
+                'r2': float(r2_arr[b]),
+            }
+        )
 
     return rows
 
@@ -239,22 +238,42 @@ def perDatasetStats(
 
 def printTopDisagreements(rows: list[dict], n: int) -> None:
     top = sorted(rows, key=lambda r: r['mean_diff_g'], reverse=True)[:n]
-    headers = ['idx', 'diff_g', 'lw_g', 'diff_rfx', 'div_rate', 'rhat', 'ess', 'td', 'd', 'q', 'm', 'n', 'r2', 'conv']
+    headers = [
+        'idx',
+        'diff_g',
+        'lw_g',
+        'diff_rfx',
+        'div_rate',
+        'rhat',
+        'ess',
+        'td',
+        'd',
+        'q',
+        'm',
+        'n',
+        'r2',
+        'conv',
+    ]
     disp = []
     for r in top:
-        disp.append([
-            r['idx'],
-            f"{r['mean_diff_g']:.3f}",
-            f"{r['med_lw_g']:+.3f}",
-            f"{r['mean_diff_rfx']:.3f}",
-            f"{r['div_rate']:.4f}",
-            f"{r['max_rhat']:.3f}",
-            f"{r['min_ess']:.0f}",
-            f"{r['td_sat']:.3f}",
-            r['d'], r['q'], r['m'], r['n'],
-            f"{r['r2']:.2f}",
-            'Y' if r['converged'] else 'N',
-        ])
+        disp.append(
+            [
+                r['idx'],
+                f"{r['mean_diff_g']:.3f}",
+                f"{r['med_lw_g']:+.3f}",
+                f"{r['mean_diff_rfx']:.3f}",
+                f"{r['div_rate']:.4f}",
+                f"{r['max_rhat']:.3f}",
+                f"{r['min_ess']:.0f}",
+                f"{r['td_sat']:.3f}",
+                r['d'],
+                r['q'],
+                r['m'],
+                r['n'],
+                f"{r['r2']:.2f}",
+                'Y' if r['converged'] else 'N',
+            ]
+        )
     print(f'\n=== Top {n} datasets by global disagreement (mean |μ_MB−μ_NUTS|/σ_NUTS) ===')
     print(tabulate(disp, headers=headers, tablefmt='simple'))
     print('  lw_g = median log(σ_MB/σ_NUTS); positive = MB wider\n')
@@ -262,15 +281,15 @@ def printTopDisagreements(rows: list[dict], n: int) -> None:
 
 def printCorrelations(rows: list[dict]) -> None:
     predictors = [
-        ('div_rate',  'NUTS divergence rate'),
-        ('max_rhat',  'NUTS max R-hat'),
-        ('min_ess',   'NUTS min ESS (neg assoc expected)'),
-        ('td_sat',    'NUTS treedepth saturation'),
-        ('d',         'd (fixed effects)'),
-        ('q',         'q (rfx dims)'),
-        ('m',         'm (groups)'),
-        ('n',         'n (total obs)'),
-        ('r2',        'R² (simulated)'),
+        ('div_rate', 'NUTS divergence rate'),
+        ('max_rhat', 'NUTS max R-hat'),
+        ('min_ess', 'NUTS min ESS (neg assoc expected)'),
+        ('td_sat', 'NUTS treedepth saturation'),
+        ('d', 'd (fixed effects)'),
+        ('q', 'q (rfx dims)'),
+        ('m', 'm (groups)'),
+        ('n', 'n (total obs)'),
+        ('r2', 'R² (simulated)'),
     ]
 
     def _table(subset, label):
@@ -278,7 +297,9 @@ def printCorrelations(rows: list[dict]) -> None:
         tbl = []
         for key, desc in predictors:
             x = np.array([r[key] for r in subset])
-            tbl.append({'Predictor': key, 'Description': desc, 'Spearman r': f'{_spearman(x, y):+.3f}'})
+            tbl.append(
+                {'Predictor': key, 'Description': desc, 'Spearman r': f'{_spearman(x, y):+.3f}'}
+            )
         print(f'\n=== Spearman r with mean_diff_g — {label} (n={len(subset)}) ===')
         print(tabulate(tbl, headers='keys', tablefmt='simple'))
 
@@ -293,13 +314,19 @@ def printBinnedSummary(rows: list[dict]) -> None:
         return f'{np.median(v):.4f}' if v else 'nan'
 
     # By NUTS convergence
-    conv   = [r['mean_diff_g'] for r in rows if r['converged']]
+    conv = [r['mean_diff_g'] for r in rows if r['converged']]
     noconv = [r['mean_diff_g'] for r in rows if not r['converged']]
     print('=== Disagreement by NUTS convergence ===')
-    print(tabulate([
-        {'Group': f'converged     (n={len(conv)})',   'median diff_g': _med(conv)},
-        {'Group': f'not converged (n={len(noconv)})', 'median diff_g': _med(noconv)},
-    ], headers='keys', tablefmt='simple'))
+    print(
+        tabulate(
+            [
+                {'Group': f'converged     (n={len(conv)})', 'median diff_g': _med(conv)},
+                {'Group': f'not converged (n={len(noconv)})', 'median diff_g': _med(noconv)},
+            ],
+            headers='keys',
+            tablefmt='simple',
+        )
+    )
     print()
 
     # By div_rate quartile
@@ -309,7 +336,13 @@ def printBinnedSummary(rows: list[dict]) -> None:
     for i in range(4):
         lo, hi = thresholds[i], thresholds[i + 1]
         subset = [r['mean_diff_g'] for r in rows if lo <= r['div_rate'] <= hi]
-        bin_rows.append({'div_rate bin': f'[{lo:.4f}, {hi:.4f}]', 'n': len(subset), 'median diff_g': _med(subset)})
+        bin_rows.append(
+            {
+                'div_rate bin': f'[{lo:.4f}, {hi:.4f}]',
+                'n': len(subset),
+                'median diff_g': _med(subset),
+            }
+        )
     print('=== Disagreement by div_rate quartile ===')
     print(tabulate(bin_rows, headers='keys', tablefmt='simple'))
     print()
@@ -317,10 +350,14 @@ def printBinnedSummary(rows: list[dict]) -> None:
     # By d and q
     for dim, label in [('d', 'fixed effects'), ('q', 'rfx dims')]:
         vals = sorted(set(r[dim] for r in rows))
-        tbl = [{'d' if dim == 'd' else 'q': v,
+        tbl = [
+            {
+                'd' if dim == 'd' else 'q': v,
                 'n': sum(1 for r in rows if r[dim] == v),
-                'median diff_g': _med([r['mean_diff_g'] for r in rows if r[dim] == v])}
-               for v in vals]
+                'median diff_g': _med([r['mean_diff_g'] for r in rows if r[dim] == v]),
+            }
+            for v in vals
+        ]
         print(f'=== Disagreement by {dim} ({label}) ===')
         print(tabulate(tbl, headers='keys', tablefmt='simple'))
         print()
@@ -336,21 +373,19 @@ def main() -> None:
     setupLogging(cfg.verbosity)
     setSeed(cfg.seed)
 
-    device  = setDevice(cfg.device)
-    exp_dir = Path(__file__).resolve().parent
-
-    data_path = _dataPath(cfg, exp_dir)
-    dl        = _loadTestData(data_path, cfg.batch_size)
-    model     = _loadModel(cfg, exp_dir, device)
+    device = setDevice(cfg.device)
+    data_path = _dataPath(cfg)
+    dl = _loadTestData(data_path, cfg.batch_size)
+    model = _loadModel(cfg, device)
 
     # Extra fields not loaded by Dataloader — read directly in npz order (sortish=False)
     raw = np.load(data_path, allow_pickle=True)
-    d_arr  = raw['d'].astype(int)
-    q_arr  = raw['q'].astype(int)
+    d_arr = raw['d'].astype(int)
+    q_arr = raw['q'].astype(int)
     r2_arr = raw['r_squared'].astype(float) if 'r_squared' in raw else np.full(len(d_arr), np.nan)
 
-    full_batch    = dl.fullBatch()
-    proposal_mb   = _sampleMB(model, dl, cfg.n_samples, device, cfg.rescale)
+    full_batch = dl.fullBatch()
+    proposal_mb = _sampleMB(model, dl, cfg.n_samples, device, cfg.rescale)
     proposal_nuts = _nutsProposal(full_batch, cfg.rescale)
 
     rows = perDatasetStats(proposal_mb, proposal_nuts, full_batch, d_arr, q_arr, r2_arr)

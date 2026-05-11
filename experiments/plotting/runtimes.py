@@ -10,11 +10,11 @@ For a given evaluation config (= trained model):
     5. Collect per-dataset runtimes for model, NUTS, and ADVI
     6. Produce a summary table grouped by source data config
 
-Usage (from experiments/):
-    uv run python runtimes.py
-    uv run python runtimes.py --configs small-n-mixed --model_id large --seed 0
-    uv run python runtimes.py --configs small-n-mixed --test_data_ids tiny-n-sampled small-n-sampled
-    uv run python runtimes.py --configs small-n-mixed --max_test_sets 2 --max_datasets 32
+Usage (from repo root):
+    uv run python experiments/plotting/runtimes.py
+    uv run python experiments/plotting/runtimes.py --configs small-n-mixed --model_id large --seed 0
+    uv run python experiments/plotting/runtimes.py --configs small-n-mixed --test_data_ids tiny-n-sampled small-n-sampled
+    uv run python experiments/plotting/runtimes.py --configs small-n-mixed --max_test_sets 2 --max_datasets 32
 """
 
 import argparse
@@ -33,7 +33,6 @@ from metabeta.plotting.runtimes import plotRuntimeRecords
 from metabeta.utils.config import (
     assimilateConfig,
     loadDataConfig,
-    modelFromYaml,
 )
 from metabeta.utils.dataloader import collateGrouped, toDevice
 from metabeta.utils.io import runName, setDevice
@@ -41,12 +40,16 @@ from metabeta.utils.logger import setupLogging
 from metabeta.utils.moe import moeEstimate
 from metabeta.utils.padding import padToModel, unpad
 from metabeta.utils.sampling import setSeed
+from metabeta.utils.experiments import (
+    CHECKPOINT_DIR,
+    DATA_DIR,
+    EVALUATION_CONFIG_DIR,
+    RESULTS_DIR,
+    loadApproximator,
+)
 
-DIR = Path(__file__).resolve().parent
-METABETA = DIR / '..' / 'metabeta'
-EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
-DATA_DIR = METABETA / 'outputs' / 'data'
-OUT_DIR = DIR / 'results'
+EVAL_CFG_DIR = EVALUATION_CONFIG_DIR
+OUT_DIR = RESULTS_DIR
 
 LIKELIHOOD_NAMES = {0: 'normal', 1: 'bernoulli', 2: 'poisson'}
 
@@ -93,7 +96,7 @@ def loadEvalConfig(
             'r_tag': '',
             'likelihood_family': 0,
         }
-        ckpt_cfg = METABETA / 'outputs' / 'checkpoints' / runName(cfg) / 'config.yaml'
+        ckpt_cfg = CHECKPOINT_DIR / runName(cfg) / 'config.yaml'
         assert ckpt_cfg.exists(), f'eval config not found: {path} or {ckpt_cfg}'
         with open(ckpt_cfg) as f:
             cfg = yaml.safe_load(f)
@@ -111,25 +114,14 @@ def initModel(cfg: argparse.Namespace, device: torch.device):
     data_cfg = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg)
 
-    model_cfg_path = METABETA / 'configs' / 'models' / f'{cfg.model_id}.yaml'
-    model_cfg = modelFromYaml(
-        model_cfg_path,
-        d_ffx=cfg.max_d,
-        d_rfx=cfg.max_q,
-        likelihood_family=getattr(cfg, 'likelihood_family', 0),
-    )
-    model = Approximator(model_cfg).to(device)
-    model.eval()
-
     run = runName(vars(cfg))
-    ckpt_dir = METABETA / 'outputs' / 'checkpoints' / run
-    path = ckpt_dir / f'{cfg.prefix}.pt'
-    assert path.exists(), f'checkpoint not found: {path}'
-    payload = torch.load(path, map_location=device, weights_only=False)
-    model.load_state_dict(payload['model_state'])
-
-    if cfg.compile and device.type != 'mps':
-        model.compile()
+    model = loadApproximator(
+        cfg,
+        device,
+        CHECKPOINT_DIR / run,
+        cfg.prefix,
+        compile_model=cfg.compile,
+    )
 
     return model, data_cfg
 

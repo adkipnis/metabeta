@@ -11,10 +11,10 @@ Approach:
        wider posteriors than lighter ones (Normal, HalfNormal)
     5. Aggregate results across configs and plot
 
-Usage (from experiments/):
-    uv run python prior_families.py
-    uv run python prior_families.py --configs mid-n-mixed large-n-mixed
-    uv run python prior_families.py --delta
+Usage (from repo root):
+    uv run python experiments/simulation/prior_families.py
+    uv run python experiments/simulation/prior_families.py --configs mid-n-mixed large-n-mixed
+    uv run python experiments/simulation/prior_families.py --delta
 """
 
 import argparse
@@ -26,17 +26,20 @@ import torch
 from matplotlib import pyplot as plt
 
 from metabeta.models.approximator import Approximator
-from metabeta.utils.config import assimilateConfig, loadDataConfig, modelFromYaml
+from metabeta.utils.config import assimilateConfig, loadDataConfig
 from metabeta.utils.dataloader import Dataloader
-from metabeta.utils.io import datasetFilename, runName
+from metabeta.utils.io import runName
 from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES
 from metabeta.utils.plot import PALETTE, niceify
+from metabeta.utils.experiments import (
+    CHECKPOINT_DIR,
+    EVALUATION_CONFIG_DIR,
+    dataFilePath,
+    loadApproximator,
+)
 
-
-DIR = Path(__file__).resolve().parent
-METABETA = DIR / '..' / 'metabeta'
-EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
-CKPT_DIR = METABETA / 'outputs' / 'checkpoints'
+EVAL_CFG_DIR = EVALUATION_CONFIG_DIR
+CKPT_DIR = CHECKPOINT_DIR
 
 DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed']
 
@@ -68,33 +71,16 @@ def initModel(cfg: argparse.Namespace) -> tuple[Approximator, dict]:
     assimilateConfig(cfg, data_cfg)
     data_cfg_valid = loadDataConfig(cfg.data_id_valid)
 
-    model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.model_id}.yaml'
-    model_cfg = modelFromYaml(
-        model_cfg_path,
-        d_ffx=cfg.max_d,
-        d_rfx=cfg.max_q,
-        likelihood_family=getattr(cfg, 'likelihood_family', 0),
-    )
-    model = Approximator(model_cfg)
-
     run = runName(vars(cfg))
     ckpt_path = CKPT_DIR / run / f'{cfg.prefix}.pt'
-    assert ckpt_path.exists(), f'checkpoint not found: {ckpt_path}'
-    payload = torch.load(ckpt_path, map_location='cpu', weights_only=True)
-    model.load_state_dict(payload['model_state'])
-    epoch = payload.get('epoch', '?')
-    print(f'  loaded {cfg.prefix} checkpoint (epoch {epoch}) from {ckpt_path}')
-
-    model.eval()
+    model = loadApproximator(cfg, torch.device('cpu'), CKPT_DIR / run, cfg.prefix)
+    print(f'  loaded {cfg.prefix} checkpoint from {ckpt_path}')
     return model, data_cfg_valid
 
 
 def getFullBatch(data_cfg: dict, partition: str) -> dict[str, torch.Tensor]:
     """Load the full batch for a given partition."""
-    data_fname = datasetFilename(partition)
-    data_path = METABETA / 'outputs' / 'data' / data_cfg['data_id'] / data_fname
-    if partition == 'test':
-        data_path = data_path.with_suffix('.fit.npz')
+    data_path = dataFilePath(data_cfg['data_id'], partition, fit=partition == 'test')
     assert data_path.exists(), f'data not found: {data_path}'
     return Dataloader(data_path).fullBatch()
 

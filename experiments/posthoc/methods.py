@@ -20,7 +20,7 @@ Data loading uses Collection + collateGrouped so that per-dataset unpadded
 dicts are available for NUTS-based methods.
 
 Run from repo root:
-    uv run python benchmarks/benchmark_posthoc.py
+    uv run python experiments/posthoc/methods.py
 """
 
 import sys
@@ -29,8 +29,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
-# Make sibling eval scripts importable without installing benchmarks as a package.
-sys.path.insert(0, str(Path(__file__).parent))
+from metabeta.utils.experiments import DATA_DIR, CHECKPOINT_DIR, REPO_ROOT
+
+# Make benchmark method wrappers importable without installing benchmarks as a package.
+sys.path.insert(0, str(REPO_ROOT / 'benchmarks'))
 
 from eval_coordinate import runCD                                      # noqa: E402
 from eval_imh import runIMH, N_SAMPLES as IMH_N_SAMPLES               # noqa: E402
@@ -65,14 +67,14 @@ N_SAMPLES = 500
 MODELS = [
     dict(
         label='Normal',
-        ckpt=Path('outputs/checkpoints/normal_dsmall-n-mixed_msmall_s42/best.pt'),
-        data_dir=Path('outputs/data/small-n-sampled'),
+        ckpt=CHECKPOINT_DIR / 'normal_dsmall-n-mixed_msmall_s42' / 'best.pt',
+        data_dir=DATA_DIR / 'small-n-sampled',
         likelihood_family=0,
     ),
     dict(
         label='Bernoulli',
-        ckpt=Path('outputs/checkpoints/bernoulli_dsmall-b-mixed_msmall_s42/best.pt'),
-        data_dir=Path('outputs/data/small-b-sampled'),
+        ckpt=CHECKPOINT_DIR / 'bernoulli_dsmall-b-mixed_msmall_s42' / 'best.pt',
+        data_dir=DATA_DIR / 'small-b-sampled',
         likelihood_family=1,
     ),
 ]
@@ -81,6 +83,7 @@ MODELS = [
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
+
 
 def loadModel(ckpt: Path) -> tuple[Approximator, int]:
     payload = torch.load(ckpt, map_location='cpu')
@@ -143,7 +146,11 @@ def runIS(proposals, batches, full_batch, lf):
     with torch.no_grad():
         for p, batch in zip(proposals, batches):
             sampler = ImportanceSampler(
-                batch, full=False, corr_prior=True, pareto=True, likelihood_family=lf,
+                batch,
+                full=False,
+                corr_prior=True,
+                pareto=True,
+                likelihood_family=lf,
             )
             out.append(sampler(p))
     proposal = concatProposalsBatch(out)
@@ -191,8 +198,10 @@ def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch
 
     n_s = data['nuts_ffx'].shape[-1]
     reff = float(data['nuts_ess'][:n_ds].mean() / n_s)
-    print(f'  divergences={total_divs}  reff={reff:.3f}  time/ds={total_time / n_ds:.1f}s  '
-          f'(total={total_time:.0f}s)')
+    print(
+        f'  divergences={total_divs}  reff={reff:.3f}  time/ds={total_time / n_ds:.1f}s  '
+        f'(total={total_time:.0f}s)'
+    )
 
     target_d = tensor_batch['ffx'].shape[-1]
     target_q = tensor_batch['sigma_rfx'].shape[-1]
@@ -209,8 +218,10 @@ for cfg in MODELS:
     lf = cfg['likelihood_family']
     model, epoch = loadModel(cfg['ckpt'])
     print(f'\n{"#" * 70}')
-    print(f'#  {cfg["label"]}  (epoch={epoch}  params={model.n_params:,}  '
-          f'd_ffx={model.d_ffx}  d_rfx={model.d_rfx})')
+    print(
+        f'#  {cfg["label"]}  (epoch={epoch}  params={model.n_params:,}  '
+        f'd_ffx={model.d_ffx}  d_rfx={model.d_rfx})'
+    )
     print(f'{"#" * 70}')
 
     fit_npz = cfg['data_dir'] / 'test.fit.npz'
@@ -225,8 +236,17 @@ for cfg in MODELS:
     imh_proposals, imh_batches = collectProposals(model, items, IMH_N_SAMPLES)
 
     laplace_out = None
-    conditions = ('raw', 'is', 'laplace', 'laplaceIS', 'imhMarginal', 'cd', 'svgd',
-                  'coldNuts', 'warmNuts')
+    conditions = (
+        'raw',
+        'is',
+        'laplace',
+        'laplaceIS',
+        'imhMarginal',
+        'cd',
+        'svgd',
+        'coldNuts',
+        'warmNuts',
+    )
     for cond in conditions:
         if cond == 'coldNuts' and not fit_npz.exists():
             continue

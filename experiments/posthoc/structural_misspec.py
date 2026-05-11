@@ -13,13 +13,13 @@ inference procedure.
 NUTS fits are cached per (config, seed, scale, dataset_index, draws, tune, chains)
 in ``results/structural_fits/``.  Re-run with ``--refit`` to recompute.
 
-Usage (from experiments/):
-    uv run python structural_misspecification.py
-    uv run python structural_misspecification.py --configs small-n-sampled
-    uv run python structural_misspecification.py --scales 0.0 0.25 0.5 1.0 2.0
-    uv run python structural_misspecification.py --max_datasets 8 --nuts_draws 500
-    uv run python structural_misspecification.py --refit   # force recompute cached fits
-    uv run python structural_misspecification.py --seed 123
+Usage (from repo root):
+    uv run python experiments/posthoc/structural_misspec.py
+    uv run python experiments/posthoc/structural_misspec.py --configs small-n-sampled
+    uv run python experiments/posthoc/structural_misspec.py --scales 0.0 0.25 0.5 1.0 2.0
+    uv run python experiments/posthoc/structural_misspec.py --max_datasets 8 --nuts_draws 500
+    uv run python experiments/posthoc/structural_misspec.py --refit
+    uv run python experiments/posthoc/structural_misspec.py --seed 123
 
 TODO (IS correction under structural misspecification, moderate effort):
     Currently only the raw amortized metabeta posterior is compared to NUTS.
@@ -36,7 +36,7 @@ TODO (IS correction under structural misspecification, moderate effort):
         is itself a useful diagnostic property worth reporting.
       - This requires passing the perturbed batch dict (with modified y) into
         ImportanceSampler; the batch perturbation logic can be adapted from
-        prior_misspecification.py.
+        prior_misspec.py.
 """
 
 import argparse
@@ -55,7 +55,6 @@ from metabeta.models.approximator import Approximator
 from metabeta.utils.config import (
     assimilateConfig,
     loadDataConfig,
-    modelFromYaml,
 )
 from metabeta.utils.dataloader import collateGrouped, toDevice
 from metabeta.utils.families import (
@@ -70,11 +69,16 @@ from metabeta.utils.logger import setupLogging
 from metabeta.utils.padding import padToModel, unpad
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.utils.sampling import setSeed
+from metabeta.utils.experiments import (
+    CHECKPOINT_DIR,
+    DATA_DIR,
+    EVALUATION_CONFIG_DIR,
+    RESULTS_DIR,
+    loadApproximator,
+)
 
-DIR = Path(__file__).resolve().parent
-METABETA = DIR / '..' / 'metabeta'
-EVAL_CFG_DIR = METABETA / 'evaluation' / 'configs'
-OUT_DIR = DIR / 'results'
+EVAL_CFG_DIR = EVALUATION_CONFIG_DIR
+OUT_DIR = RESULTS_DIR
 FITS_DIR = OUT_DIR / 'structural_fits'
 
 DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed']
@@ -125,25 +129,14 @@ def initModel(cfg: argparse.Namespace, device: torch.device):
     data_cfg = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg)
 
-    model_cfg_path = METABETA / 'models' / 'configs' / f'{cfg.model_id}.yaml'
-    model_cfg = modelFromYaml(
-        model_cfg_path,
-        d_ffx=cfg.max_d,
-        d_rfx=cfg.max_q,
-        likelihood_family=getattr(cfg, 'likelihood_family', 0),
-    )
-    model = Approximator(model_cfg).to(device)
-    model.eval()
-
     run = runName(vars(cfg))
-    ckpt_dir = METABETA / 'outputs' / 'checkpoints' / run
-    path = ckpt_dir / f'{cfg.prefix}.pt'
-    assert path.exists(), f'checkpoint not found: {path}'
-    payload = torch.load(path, map_location=device)
-    model.load_state_dict(payload['model_state'])
-
-    if cfg.compile and device.type != 'mps':
-        model.compile()
+    model = loadApproximator(
+        cfg,
+        device,
+        CHECKPOINT_DIR / run,
+        cfg.prefix,
+        compile_model=cfg.compile,
+    )
 
     return model, data_cfg
 
@@ -482,7 +475,7 @@ def evaluate(
         d_tag_valid = getattr(cfg, 'd_tag_valid', cfg.d_tag)
         valid_data_cfg = loadDataConfig(d_tag_valid)
         data_fname = datasetFilename('valid')
-        data_path = METABETA / 'outputs' / 'data' / valid_data_cfg['data_id'] / data_fname
+        data_path = DATA_DIR / valid_data_cfg['data_id'] / data_fname
         assert data_path.exists(), f'data not found: {data_path}'
         with np.load(data_path, allow_pickle=True) as raw:
             raw_batch = dict(raw)

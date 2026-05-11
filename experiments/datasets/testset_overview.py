@@ -7,8 +7,8 @@ Metrics per dataset:
   3. m — number of groups
   4. Group-size distribution: min, max, entropy
 
-Usage (from metabeta/datasets/):
-    uv run python overview.py
+Usage (from repo root):
+    uv run python experiments/datasets/testset_overview.py
 """
 
 from pathlib import Path

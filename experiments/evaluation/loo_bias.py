@@ -1,5 +1,5 @@
 """
-experiments/diagnose_loo_bias.py
+experiments/evaluation/loo_bias.py
 
 Answers: under which NUTS exclusion criteria is the LOO-NLL comparison least biased?
 
@@ -16,9 +16,9 @@ Outputs per exclusion mode (none / liberal / strict):
 
 Also shows gap binned by div_rate quartile (all datasets, no exclusion).
 
-Usage (from metabeta/experiments/):
-  uv run python diagnose_loo_bias.py \\
-      --checkpoint ../metabeta/outputs/checkpoints/<run>
+Usage (from repo root):
+  uv run python experiments/evaluation/loo_bias.py \\
+      --checkpoint metabeta/outputs/checkpoints/<run>
 """
 
 import argparse
@@ -31,16 +31,17 @@ from tabulate import tabulate
 from tqdm import tqdm
 
 from metabeta.utils.logger import setupLogging
-from metabeta.utils.io import setDevice, datasetFilename
+from metabeta.utils.io import setDevice
 from metabeta.utils.sampling import setSeed
-from metabeta.utils.config import modelFromYaml, assimilateConfig, loadDataConfig
+from metabeta.utils.config import assimilateConfig, loadDataConfig
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.evaluation import Proposal, concatProposalsBatch, nutsConvergeMask
 from metabeta.models.approximator import Approximator
 from metabeta.evaluation.predictive import getPosteriorPredictive, psisLooNLL
+from metabeta.utils.experiments import dataFilePath, loadApproximator
 
-logger = logging.getLogger('diagnose_loo_bias')
+logger = logging.getLogger('loo_bias')
 
 
 # ---------------------------------------------------------------------------
@@ -74,32 +75,31 @@ def setup() -> argparse.Namespace:
     cfg_dict['_checkpoint_prefix'] = getattr(args, 'prefix', 'best')
     cfg_dict.setdefault('rescale', True)
 
-    for k in ('n_samples', 'nuts_subsample', 'chunk', 'device', 'verbosity', 'seed', 'data_id_valid'):
+    for k in (
+        'n_samples',
+        'nuts_subsample',
+        'chunk',
+        'device',
+        'verbosity',
+        'seed',
+        'data_id_valid',
+    ):
         if hasattr(args, k):
             cfg_dict[k] = getattr(args, k)
 
     return argparse.Namespace(**cfg_dict)
 
 
-def _dataPath(cfg, exp_dir: Path) -> Path:
+def _dataPath(cfg) -> Path:
     data_cfg_train = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg_train)
     data_id = loadDataConfig(cfg.data_id_valid)['data_id']
-    path = (exp_dir / '..' / 'metabeta' / 'outputs' / 'data' / data_id / datasetFilename('test')).resolve()
-    return path.with_suffix('.fit.npz')
+    return dataFilePath(data_id, 'test', fit=True)
 
 
-def _loadModel(cfg, exp_dir: Path, device) -> Approximator:
-    model_cfg_path = (exp_dir / '..' / 'metabeta' / 'configs' / 'models' / f'{cfg.model_id}.yaml').resolve()
-    model_cfg = modelFromYaml(
-        model_cfg_path, d_ffx=cfg.max_d, d_rfx=cfg.max_q,
-        likelihood_family=cfg.likelihood_family,
-    )
-    model = Approximator(model_cfg).to(device)
-    model.eval()
-    ckpt = Path(cfg._checkpoint_dir) / f'{cfg._checkpoint_prefix}.pt'
-    model.load_state_dict(torch.load(ckpt, map_location=device, weights_only=False)['model_state'])
-    logger.info('Loaded checkpoint: %s', ckpt)
+def _loadModel(cfg, device) -> Approximator:
+    model = loadApproximator(cfg, device, cfg._checkpoint_dir, cfg._checkpoint_prefix)
+    logger.info('Loaded checkpoint: %s/%s.pt', cfg._checkpoint_dir, cfg._checkpoint_prefix)
     return model
 
 
@@ -118,14 +118,14 @@ def _sampleMB(model, dl: Dataloader, n_samples: int, device, rescale: bool) -> P
 
 def _nutsProposal(batch: dict, rescale: bool, subsample: int | None = None) -> Proposal:
     """Build Proposal from stored NUTS samples, optionally subsampling draws."""
-    ffx        = batch['nuts_ffx']        # (B, S, d)
-    sigma_rfx  = batch['nuts_sigma_rfx']  # (B, S, q)
-    has_se     = 'nuts_sigma_eps' in batch
-    sigma_eps  = batch['nuts_sigma_eps'].unsqueeze(-1) if has_se else None  # (B, S, 1)
+    ffx = batch['nuts_ffx']        # (B, S, d)
+    sigma_rfx = batch['nuts_sigma_rfx']  # (B, S, q)
+    has_se = 'nuts_sigma_eps' in batch
+    sigma_eps = batch['nuts_sigma_eps'].unsqueeze(-1) if has_se else None  # (B, S, 1)
 
     if subsample is not None and ffx.shape[1] > subsample:
         idx = torch.randperm(ffx.shape[1])[:subsample]
-        ffx       = ffx[:, idx]
+        ffx = ffx[:, idx]
         sigma_rfx = sigma_rfx[:, idx]
         if sigma_eps is not None:
             sigma_eps = sigma_eps[:, idx]
@@ -137,7 +137,7 @@ def _nutsProposal(batch: dict, rescale: bool, subsample: int | None = None) -> P
     global_samples = torch.cat(parts_g, dim=-1)
     proposed = {
         'global': {'samples': global_samples, 'log_prob': torch.zeros(global_samples.shape[:2])},
-        'local':  {'samples': rfx,            'log_prob': torch.zeros(rfx.shape[:-1])},
+        'local': {'samples': rfx, 'log_prob': torch.zeros(rfx.shape[:-1])},
     }
     p = Proposal(proposed, has_sigma_eps=has_se, corr_rfx=batch.get('nuts_corr_rfx'))
     if rescale:
@@ -179,8 +179,8 @@ def computeLooNll(
         p_c = proposal.slice_b(start, end)
         d_c = {k: v[start:end] for k, v in batch.items() if torch.is_tensor(v) and v.shape[0] == B}
 
-        pp_c   = getPosteriorPredictive(p_c, d_c, likelihood_family)
-        log_p  = pp_c.log_prob(d_c['y'].unsqueeze(-1))   # (c, m, n, s)
+        pp_c = getPosteriorPredictive(p_c, d_c, likelihood_family)
+        log_p = pp_c.log_prob(d_c['y'].unsqueeze(-1))   # (c, m, n, s)
         loo_c, k_c = psisLooNLL(pp_c, d_c, w=None, reff=reff, log_p=log_p)
 
         loos.append(loo_c.numpy())
@@ -199,12 +199,12 @@ def _summaryRow(label: str, mb: np.ndarray, nuts: np.ndarray, mask: np.ndarray) 
         return {'Mode': label, 'N': 0}
     gap = mb[mask] - nuts[mask]
     return {
-        'Mode':               label,
-        'N':                  int(mask.sum()),
-        'MB  LOO (med)':      f'{np.median(mb[mask]):.4f}',
-        'NUTS LOO (med)':     f'{np.median(nuts[mask]):.4f}',
-        'Gap med (MB−NUTS)':  f'{np.median(gap):+.4f}',
-        'Gap IQR':            f'[{np.percentile(gap,25):+.3f}, {np.percentile(gap,75):+.3f}]',
+        'Mode': label,
+        'N': int(mask.sum()),
+        'MB  LOO (med)': f'{np.median(mb[mask]):.4f}',
+        'NUTS LOO (med)': f'{np.median(nuts[mask]):.4f}',
+        'Gap med (MB−NUTS)': f'{np.median(gap):+.4f}',
+        'Gap IQR': f'[{np.percentile(gap,25):+.3f}, {np.percentile(gap,75):+.3f}]',
     }
 
 
@@ -216,25 +216,29 @@ def printModeComparison(
     batch: dict,
     k_thr: float = 0.7,
 ) -> None:
-    all_mask     = np.ones(len(mb_loo), dtype=bool)
+    all_mask = np.ones(len(mb_loo), dtype=bool)
     liberal_mask = nutsConvergeMask(batch, mode='liberal')
-    strict_mask  = nutsConvergeMask(batch, mode='strict')
+    strict_mask = nutsConvergeMask(batch, mode='strict')
     # Filter only on NUTS k: ensures the reference (NUTS LOO) is reliable.
     # MB k is intentionally NOT used as a filter — filtering on MB k would discard
     # datasets where MB's LOO estimate is unreliable, hiding potential MB failures.
-    nuts_k_mask  = nuts_k < k_thr
+    nuts_k_mask = nuts_k < k_thr
 
     rows = [
-        _summaryRow('all (no filter)',               mb_loo, nuts_loo, all_mask),
-        _summaryRow('liberal',                       mb_loo, nuts_loo, liberal_mask),
-        _summaryRow('strict',                        mb_loo, nuts_loo, strict_mask),
-        _summaryRow(f'strict + NUTS k<{k_thr}',      mb_loo, nuts_loo, strict_mask & nuts_k_mask),
-        _summaryRow(f'liberal + NUTS k<{k_thr}',     mb_loo, nuts_loo, liberal_mask & nuts_k_mask),
+        _summaryRow('all (no filter)', mb_loo, nuts_loo, all_mask),
+        _summaryRow('liberal', mb_loo, nuts_loo, liberal_mask),
+        _summaryRow('strict', mb_loo, nuts_loo, strict_mask),
+        _summaryRow(f'strict + NUTS k<{k_thr}', mb_loo, nuts_loo, strict_mask & nuts_k_mask),
+        _summaryRow(f'liberal + NUTS k<{k_thr}', mb_loo, nuts_loo, liberal_mask & nuts_k_mask),
     ]
     print('\n=== MB vs NUTS LOO-NLL by exclusion mode (positive gap = MB worse) ===')
     print(tabulate(rows, headers='keys', tablefmt='simple'))
-    print(f'  k > {k_thr} fraction (all):    MB {np.mean(mb_k > k_thr):.2f}, NUTS {np.mean(nuts_k > k_thr):.2f}')
-    print(f'  k > {k_thr} fraction (strict): MB {np.mean(mb_k[strict_mask] > k_thr):.2f}, NUTS {np.mean(nuts_k[strict_mask] > k_thr):.2f}')
+    print(
+        f'  k > {k_thr} fraction (all):    MB {np.mean(mb_k > k_thr):.2f}, NUTS {np.mean(nuts_k > k_thr):.2f}'
+    )
+    print(
+        f'  k > {k_thr} fraction (strict): MB {np.mean(mb_k[strict_mask] > k_thr):.2f}, NUTS {np.mean(nuts_k[strict_mask] > k_thr):.2f}'
+    )
     print(f'  (NUTS k filter only — MB k retained to avoid cherry-picking)\n')
 
 
@@ -243,10 +247,10 @@ def printDivRateBins(
     nuts_loo: np.ndarray,
     batch: dict,
 ) -> None:
-    div_arr  = batch['nuts_divergences'].numpy()
-    n_draws  = int(batch['nuts_draws'].item()) if 'nuts_draws' in batch else 1000
+    div_arr = batch['nuts_divergences'].numpy()
+    n_draws = int(batch['nuts_draws'].item()) if 'nuts_draws' in batch else 1000
     div_rate = div_arr.sum(-1) / (div_arr.shape[-1] * n_draws)
-    gap      = mb_loo - nuts_loo
+    gap = mb_loo - nuts_loo
 
     thresholds = np.quantile(div_rate, [0, 0.25, 0.5, 0.75, 1.0])
     rows = []
@@ -254,19 +258,23 @@ def printDivRateBins(
         lo, hi = thresholds[i], thresholds[i + 1]
         m = (div_rate >= lo) & (div_rate <= hi)
         g = gap[m]
-        rows.append({
-            'div_rate bin':       f'[{lo:.4f}, {hi:.4f}]',
-            'n':                  int(m.sum()),
-            'NUTS LOO (med)':     f'{np.median(nuts_loo[m]):.4f}',
-            'Gap med (MB−NUTS)':  f'{np.median(g):+.4f}',
-        })
+        rows.append(
+            {
+                'div_rate bin': f'[{lo:.4f}, {hi:.4f}]',
+                'n': int(m.sum()),
+                'NUTS LOO (med)': f'{np.median(nuts_loo[m]):.4f}',
+                'Gap med (MB−NUTS)': f'{np.median(g):+.4f}',
+            }
+        )
     print('=== LOO-NLL gap binned by div_rate (all datasets) ===')
     print(tabulate(rows, headers='keys', tablefmt='simple'))
     print()
 
 
 def printKDiagnostics(mb_k: np.ndarray, nuts_k: np.ndarray) -> None:
-    def _frac_bad(k): return float(np.mean(k > 0.7))
+    def _frac_bad(k):
+        return float(np.mean(k > 0.7))
+
     print('=== Pareto-k diagnostics (fraction of datasets with mean k > 0.7) ===')
     print(f'  MB:   {_frac_bad(mb_k):.3f}')
     print(f'  NUTS: {_frac_bad(nuts_k):.3f}')
@@ -283,16 +291,14 @@ def main() -> None:
     setupLogging(cfg.verbosity)
     setSeed(cfg.seed)
 
-    device  = setDevice(cfg.device)
-    exp_dir = Path(__file__).resolve().parent
-
-    data_path = _dataPath(cfg, exp_dir)
+    device = setDevice(cfg.device)
+    data_path = _dataPath(cfg)
     # sortish=False: preserve npz order for nutsConvergeMask alignment
-    dl        = Dataloader(data_path, batch_size=8, sortish=False)
-    model     = _loadModel(cfg, exp_dir, device)
+    dl = Dataloader(data_path, batch_size=8, sortish=False)
+    model = _loadModel(cfg, device)
 
     full_batch = dl.fullBatch()
-    rescale    = cfg.rescale
+    rescale = cfg.rescale
 
     logger.info('Computing MB samples...')
     proposal_mb = _sampleMB(model, dl, cfg.n_samples, device, rescale)
