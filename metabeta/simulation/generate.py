@@ -68,14 +68,15 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--size', type=str, default='small', help='Size preset: tiny|small|medium|large|huge')
     parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
     parser.add_argument('--ds_type', type=str, default='mixed', help='Dataset type: toy|flat|scm|mixed|sampled|real')
+    parser.add_argument('--shape_profile', type=str, default='standard', help='Dataset-shape preset controlling m/n/n_i independently of d/q')
 
     # Alternative: load config from a saved YAML (e.g. outputs/data/{data_id}/config.yaml)
     parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
 
     # Batch dimensions
     parser.add_argument('--bs_train', type=int, default=4096, help='Number of datasets per training epoch file (default = 4096)')
-    parser.add_argument('--bs_valid', type=int, default=512, help='Number of datasets in the validation file (default = 512)')
-    parser.add_argument('--bs_test', type=int, default=512, help='Number of datasets in the test file (default = 512); split into equal chunks for uncertainty estimates')
+    parser.add_argument('--bs_valid', type=int, default=4096, help='Number of datasets in the validation file (default = 512)')
+    parser.add_argument('--bs_test', type=int, default=4096, help='Number of datasets in the test file (default = 512); split into equal chunks for uncertainty estimates')
     parser.add_argument('--bs_mini', type=int, default=32, help='Mini-batch size for grouping m/q/d across datasets (default = 32)')
 
     # Partitions and sources
@@ -155,6 +156,53 @@ class Generator:
         b = 1.0 + (1.0 - t) * (concentration - 1)
         return np.floor(low + (high - low) * rng.beta(a, b)).astype(int).clip(low, max_val)
 
+    @staticmethod
+    def _sampleWideM(
+        rng: np.random.Generator,
+        low: np.ndarray,
+        max_val: int,
+        wide_min: int,
+    ) -> np.ndarray:
+        """Sample a high-m coverage regime without tying it to d/q size presets."""
+        wide_low = np.minimum(np.maximum(low, wide_min), max_val)
+        draw = np.empty_like(wide_low)
+        fixed = wide_low >= max_val
+        draw[fixed] = wide_low[fixed]
+        if np.any(~fixed):
+            draw[~fixed] = rng.integers(wide_low[~fixed], max_val + 1)
+        return draw
+
+    def _sampleMeanGroupN(
+        self,
+        rng: np.random.Generator,
+        m: np.ndarray,
+    ) -> np.ndarray:
+        """Sample mean group size with weak positive m/n coupling."""
+        m = m.astype(float)
+        min_n = float(self.cfg.min_n)
+        max_mean_n = np.minimum(float(self.cfg.max_n), float(self.cfg.max_n_total) / m)
+        max_mean_n = np.maximum(max_mean_n, min_n)
+
+        log_low = np.log(min_n)
+        log_high = np.log(max_mean_n)
+        log_span = np.maximum(log_high - log_low, 0.0)
+
+        m_log_low = np.log(float(self.cfg.min_m))
+        m_log_high = np.log(float(self.max_m_feasible))
+        m_span = max(m_log_high - m_log_low, 1e-12)
+        m_frac = np.clip((np.log(m) - m_log_low) / m_span, 0.0, 1.0)
+
+        center_frac = np.clip(
+            getattr(self.cfg, 'mean_n_log_frac', 0.15)
+            + getattr(self.cfg, 'mean_n_log_m_slope', 0.65) * m_frac,
+            0.0,
+            1.0,
+        )
+        noise_sd = getattr(self.cfg, 'mean_n_log_noise', 0.25) * log_span
+        log_mean_n = log_low + center_frac * log_span + rng.normal(0.0, noise_sd)
+        mean_n = np.round(np.exp(np.clip(log_mean_n, log_low, log_high))).astype(int)
+        return mean_n.clip(self.cfg.min_n, self.cfg.max_n)
+
     def _genDims(
         self,
         rng: np.random.Generator,
@@ -205,6 +253,16 @@ class Generator:
         m = self._sampleSkewedBetaInt(
             rng, m_low, self.max_m_feasible, mode_frac=0.08, mode_cap=20.0, concentration=8
         )
+        m_wide_prob = getattr(self.cfg, 'm_wide_prob', 0.0)
+        if m_wide_prob > 0:
+            wide = rng.random(n_mini) < m_wide_prob
+            if np.any(wide):
+                m[wide] = self._sampleWideM(
+                    rng,
+                    m_low[wide],
+                    self.max_m_feasible,
+                    wide_min=getattr(self.cfg, 'm_wide_min', 60),
+                )
         m = np.repeat(m, mini_batch_size)
 
         return d, q, m
@@ -241,14 +299,10 @@ class Generator:
         # Per-dataset regime: True = balanced panel
         is_balanced = rng.random(n_datasets) < self._P_BALANCED  # (n_datasets,)
 
-        # Mean n per dataset — used as the fixed n for balanced, and budget basis for variable
-        mean_n = truncLogUni(
-            rng,
-            low=self.cfg.min_n,
-            high=self.cfg.max_n + 1,
-            size=n_datasets,
-            round=True,
-        ).astype(float)
+        # Mean n per dataset: used as fixed n for balanced panels and as the
+        # total-budget basis for variable panels.  It is sampled conditionally
+        # on m so total n grows with group count within the memory envelope.
+        mean_n = self._sampleMeanGroupN(rng, m).astype(float)
 
         # Active-group mask: (n_datasets, max_m)
         active = np.arange(self.cfg.max_m)[None, :] < m[:, None]
@@ -355,29 +409,34 @@ class Generator:
         min_n_effs[i] is the per-dataset effective minimum group size (0 = use cfg.min_n).
         """
         if self.cfg.ds_type in ('sampled', 'real'):
+            min_ng = np.full(n_datasets, self.cfg.min_n)
+            if self.cfg.ds_type == 'sampled':
+                min_within_df = getattr(self.cfg, 'min_within_df', 0)
+                if min_within_df:
+                    min_ng = np.maximum(self.cfg.min_n, q + min_within_df)
+
             # Emulator/Subsampler override ns internally based on source dataset constraints;
             # only req_m = len(ns_i) and req_n = sum(ns_i) survive as loose hints.
             # Draw req_n the same way the flat/scm path does: sample a per-group n
-            # log-uniformly from [min_n, max_n] and multiply by m.  This aligns the
-            # req_n scale with what _genNs produces, so the Emulator receives a similar
-            # total-n budget regardless of which sub-type mixed resolves to.
-            n_hint_pg = truncLogUni(
-                rng,
-                low=self.cfg.min_n,
-                high=self.cfg.max_n + 1,
-                size=n_datasets,
-                round=True,
-            )
+            # conditional on m and multiply by m.  This aligns the req_n scale with
+            # what _genNs produces, so the Emulator receives a similar total-n
+            # budget regardless of which sub-type mixed resolves to.
+            n_hint_pg = np.maximum(self._sampleMeanGroupN(rng, m), min_ng)
             n_hint = np.clip(
                 n_hint_pg * m,
-                m * self.cfg.min_n,
+                m * min_ng,
                 np.minimum(m * self.cfg.max_n, self.cfg.max_n_total),
             )
             ns_slices = [
                 np.full(int(m[i]), int(n_hint[i]) // int(m[i]), dtype=int)
                 for i in range(n_datasets)
             ]
-            return ns_slices, [0] * n_datasets
+            min_n_effs = (
+                [int(min_ng[i]) for i in range(n_datasets)]
+                if self.cfg.ds_type == 'sampled'
+                else [0] * n_datasets
+            )
+            return ns_slices, min_n_effs
         else:
             # toy, flat, scm, mixed: ns is used directly by Synthesizer/Scammer/Emulator.
             # Enforce within-group df floor: n_g >= q + min_within_df so that ZtZ_g
