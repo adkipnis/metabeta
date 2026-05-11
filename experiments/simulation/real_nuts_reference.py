@@ -92,7 +92,7 @@ def _datasetFromRealFile(path: Path, y_type: str, q: int) -> dict[str, np.ndarra
         'q': np.array(q_i, dtype=np.int64),
         'sd_y': np.array(np.nanstd(y), dtype=np.float64),
         'r_squared': np.array(np.nan, dtype=np.float64),
-        'source': np.array(path.stem),
+        'source': np.array(path.stem, dtype=object),
     }
     out.update(hyper)
     return out
@@ -131,6 +131,9 @@ def _toTorchBatch(batch: dict[str, np.ndarray]) -> dict[str, torch.Tensor]:
     out = {}
     for key, value in batch.items():
         if key.startswith('nuts_') and np.issubdtype(value.dtype, np.number):
+            if key == 'nuts_draws':
+                value = np.asarray(value).reshape(-1)
+                value = value[:1]
             out[key] = torch.as_tensor(value)
     return out
 
