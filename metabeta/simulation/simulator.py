@@ -18,7 +18,27 @@ from metabeta.plotting import plotDataset
 
 SCALE_PARAMS = {'ffx', 'sigma_rfx', 'sigma_eps', 'rfx'}
 SCALE_HYPERPARAMS = {'nu_ffx', 'tau_ffx', 'tau_rfx', 'tau_eps'}
+NORMAL_R2_CAP_BASE = 0.68
+NORMAL_R2_CAP_FFX_SLOPE = 0.025
+NORMAL_R2_CAP_RFX_SLOPE = 0.015
+NORMAL_R2_CAP_SD = 0.10
+NORMAL_R2_CAP_MIN = 0.45
+NORMAL_R2_CAP_MAX = 0.98
 logger = logging.getLogger(__name__)
+
+
+def linearPredictor(
+    parameters: dict[str, np.ndarray],
+    observations: dict[str, np.ndarray],
+) -> np.ndarray:
+    """Compute eta = X beta + Z b for a single grouped dataset."""
+    ffx = parameters['ffx']
+    rfx = parameters['rfx']
+    q = rfx.shape[1]
+    X = observations['X']
+    Z = X[:, :q]
+    groups = observations['groups']
+    return X @ ffx + (Z * rfx[groups]).sum(-1)
 
 
 def simulate(
@@ -28,21 +48,8 @@ def simulate(
     likelihood_family: int = 0,
 ) -> np.ndarray:
     """draw y given X and theta for a single dataset"""
-    # unpack parameters
-    ffx = parameters['ffx']  # (d,)
-    rfx = parameters['rfx']  # (m, q)
     sigma_eps = float(parameters.get('sigma_eps', 0.0))
-    q = rfx.shape[1]
-
-    # unpack (standardized) observations
-    X = observations['X']  # (n, d)
-    Z = X[:, :q]  # (n, q)
-    groups = observations['groups']  # (n, )
-
-    # linear predictor
-    rfx_ext = rfx[groups]  # (n, q)
-    eta = X @ ffx + (Z * rfx_ext).sum(-1)  # (n, )
-
+    eta = linearPredictor(parameters, observations)
     return simulateYNp(rng, eta, sigma_eps, likelihood_family)
 
 
@@ -83,14 +90,45 @@ class Simulator:
         params: dict[str, np.ndarray],
         observations: dict[str, np.ndarray],
     ) -> float:
-        ffx = params['ffx']
-        rfx = params['rfx']
-        q = rfx.shape[1]
-        X = observations['X']
-        Z = X[:, :q]
-        groups = observations['groups']
-        eta = X @ ffx + (Z * rfx[groups]).sum(-1)
+        eta = linearPredictor(params, observations)
         return float(np.mean(np.abs(eta) > BERNOULLI_ETA_ABS_MAX))
+
+    def _sampleNormalR2Cap(self) -> float:
+        ffx_covariates = max(self.d - 1, 0)
+        rfx_slopes = max(self.q - 1, 0)
+        mean = (
+            NORMAL_R2_CAP_BASE
+            + NORMAL_R2_CAP_FFX_SLOPE * ffx_covariates
+            + NORMAL_R2_CAP_RFX_SLOPE * rfx_slopes
+        )
+        cap = self.rng.normal(mean, NORMAL_R2_CAP_SD)
+        return float(np.clip(cap, NORMAL_R2_CAP_MIN, NORMAL_R2_CAP_MAX))
+
+    def _calibrateNormalResidualShare(
+        self,
+        params: dict[str, np.ndarray],
+        hyperparams: dict[str, np.ndarray],
+        observations: dict[str, np.ndarray],
+    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+        eta = linearPredictor(params, observations)
+        signal_var = float(np.var(eta))
+        if signal_var <= 1e-12:
+            return params, hyperparams
+
+        sigma_eps = max(float(params['sigma_eps']), 1e-8)
+        expected_r2 = signal_var / (signal_var + sigma_eps**2)
+        r2_cap = self._sampleNormalR2Cap()
+        if expected_r2 <= r2_cap:
+            return params, hyperparams
+
+        target_sigma_eps = np.sqrt(signal_var * (1.0 - r2_cap) / max(r2_cap, 1e-8))
+        scale = target_sigma_eps / sigma_eps
+
+        params = dict(params)
+        hyperparams = dict(hyperparams)
+        params['sigma_eps'] = np.array(target_sigma_eps)
+        hyperparams['tau_eps'] = np.asarray(hyperparams['tau_eps']) * scale
+        return params, hyperparams
 
     def sample(self) -> dict[str, np.ndarray]:
         likelihood_family = int(self.prior.hyperparams.get('likelihood_family', 0))
@@ -109,6 +147,7 @@ class Simulator:
 
         # sample parameters and optionally reroll for extreme Poisson eta clipping
         params = self.prior.sample(self.m)
+        hyperparams = dict(self.prior.hyperparams)
         if likelihood_family == 2:
             clip_fraction = self._poissonClipFraction(params, obs)
             attempts = 1
@@ -151,6 +190,8 @@ class Simulator:
                     attempts,
                     BERNOULLI_REROLL_MAX_ATTEMPTS,
                 )
+        elif likelihood_family == 0:
+            params, hyperparams = self._calibrateNormalResidualShare(params, hyperparams, obs)
 
         # sample outcomes
         y = simulate(self.rng, params, obs, likelihood_family)
@@ -161,12 +202,10 @@ class Simulator:
             y /= sd
             params = {k: v / sd if k in SCALE_PARAMS else v for k, v in params.items()}
             hyperparams = {
-                k: v / sd if k in SCALE_HYPERPARAMS else v
-                for k, v in self.prior.hyperparams.items()
+                k: v / sd if k in SCALE_HYPERPARAMS else v for k, v in hyperparams.items()
             }
         else:
             sd = 1.0
-            hyperparams = dict(self.prior.hyperparams)
 
         # optional plot
         if self.plot:

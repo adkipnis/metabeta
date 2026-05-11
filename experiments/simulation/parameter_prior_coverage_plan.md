@@ -73,6 +73,13 @@ sampler for normal data:
 This controls the parameter actually seen by the NPE after normalization and should
 be easier to validate than indirect `tau_eps` tuning.
 
+Implemented variant: use a dataset-specific `R^2` cap rather than a hard target.
+The cap increases with the number of fixed-effect covariates and random slopes, and
+the simulator only raises `sigma_eps` when the sampled signal share exceeds that
+cap. This preserves naturally low-signal draws and still allows higher `R^2` as
+the available covariate space grows. When `sigma_eps` is raised, `tau_eps` is
+scaled by the same factor so the stored prior context remains coherent.
+
 ## Guardrails
 
 - Do not fit hyperpriors directly to the test set.
