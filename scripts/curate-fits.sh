@@ -29,7 +29,9 @@ case "$PARTITION" in
     *) echo "Unknown partition: $PARTITION (use valid or test)"; exit 1 ;;
 esac
 
+set +u
 source $HOME/.bashrc
+set -u
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta
 
