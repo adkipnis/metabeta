@@ -598,7 +598,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                     )
         return float(loss_train)
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def valid(self) -> float:
         iterator = tqdm(
             self.dl_valid,
@@ -618,7 +618,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             iterator.set_postfix_str(f'Loss: {loss_valid:.3f}')
         return float(loss_valid)
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def sample(self) -> EvaluationSummary:
         iterator = tqdm(
             self.dl_valid,

@@ -312,7 +312,7 @@ class Evaluator:
             proposals.append(proposal)
         return proposals
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def sample(self, batch: dict[str, torch.Tensor]) -> Proposal:
         batch = toDevice(batch, self.device)
         t0 = time.perf_counter()
@@ -325,7 +325,7 @@ class Evaluator:
         proposal.tpd = (t1 - t0) / batch['X'].shape[0]
         return proposal
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def sampleMinibatched(self, dl: Dataloader, label: str) -> Proposal:
         proposals = []
         n_datasets = 0
