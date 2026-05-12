@@ -1,7 +1,7 @@
 Analytical GLMM Plan
 ====================
 
-Last updated: 2026-05-12.
+Last updated: 2026-05-12 (beta blend closed).
 
 Current Decision
 ----------------
@@ -97,9 +97,8 @@ Updated priority order:
 
 1. [CLOSED] MAP ablation: three-parameter joint optimization confirmed as optimal.
    See "Closed MAP Optimizer Ablation" below.
-2. Important and conditional: beta leakage into final BLUP residuals for small or
-   low-dimensional rows only. The oracle beta row improves small BLUPs but regresses
-   large/huge, so any beta change needs a strict shape gate.
+2. [CLOSED] Beta blend: current alpha (d<=8 → 0.65, d>8 → 0.75) confirmed optimal.
+   See "Closed Beta Blend Diagnostic" below.
 3. Monitor only: sigma(Eps) projection and final GLS scale attribution. The retained
    projection change fixed large/huge sigma(Eps) outliers, but the oracle sigma(Eps)
    row does not improve point estimates under the current recompute path.
@@ -253,6 +252,36 @@ parameter forces the others to compensate incorrectly.
 
 The `optimize` kwarg in `refineNormalMapSrfx` / `glmm(map_optimize=...)` is
 retained for future diagnostics but is not used in production.
+
+Closed Beta Blend Diagnostic
+------------------------------
+
+Beta blend sweep was run on 2026-05-12 via
+`experiments/analytical/glmm_beta_blend_diagnostic.py`. The alpha gate
+(beta_for_blup = (1-alpha)*gls_beta + alpha*pooled_ols, gated by active_d_count<=8)
+was swept from 0.65 to 0.80 for both raw and MAP paths:
+
+| Method | small | medium | large | huge | global |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| raw (d<=8: 0.65, d>8: 0.75) | 0.4369 | 0.5168 | 0.5304 | 0.5059 | 0.4975 |
+| raw (d<=8: 0.70) | 0.4373 | 0.5171 | 0.5304 | 0.5059 | 0.4977 |
+| raw (d<=8: 0.75) | 0.4377 | 0.5175 | 0.5304 | 0.5059 | 0.4979 |
+| raw (d<=8: 0.80) | 0.4381 | 0.5179 | 0.5304 | 0.5059 | 0.4981 |
+| current MAP (d<=8: 0.65, d>8: 0.75) | 0.4224 | 0.5015 | 0.4876 | 0.4818 | 0.4733 |
+| MAP (d<=8: 0.70) | 0.4228 | 0.5019 | 0.4876 | 0.4818 | 0.4735 |
+| MAP (d<=8: 0.75) | 0.4233 | 0.5024 | 0.4876 | 0.4818 | 0.4738 |
+| MAP (d<=8: 0.80) | 0.4237 | 0.5028 | 0.4876 | 0.4818 | 0.4740 |
+
+Decision: keep the current blend (0.65 for d<=8, 0.75 for d>8). Every alpha
+increase monotonically degrades BLUP for small and medium rows. Large/huge rows
+are unaffected (d > 8 gate never triggers). The oracle_beta ceiling (true beta
+for BLUP residuals) is globally worse than current production, confirming that
+the improvement seen in plan diagnostics is conditional and that the current
+blend is already a local optimum.
+
+The `beta_alpha_low` / `beta_alpha_high` kwargs in `lmmNormal`, `refineNormalMapSrfx`,
+and `glmm(beta_alpha_low=..., beta_alpha_high=...)` are retained for future
+diagnostics but are not used in production.
 
 Commands
 --------

@@ -430,6 +430,8 @@ def _lmmNormalFull(
     n_em: int = 3,
     uncorr: torch.Tensor | None = None,  # (B,) bool — force Ψ diagonal for these datasets
     mask_q: torch.Tensor | None = None,  # (B, q) bool — active random-effect components
+    beta_alpha_low: float = 0.65,
+    beta_alpha_high: float = 0.75,
 ) -> dict[str, torch.Tensor]:
     """GLS estimator for the LME y_g = X_g β + Z_g b_g + ε_g, b_g ~ N(0, Ψ).
 
@@ -585,11 +587,9 @@ def _lmmNormalFull(
     beta_gls = gls.beta
     active_d_count = (XtX.diagonal(dim1=-2, dim2=-1).abs() > 1e-8).sum(dim=-1)
     blup_beta_alpha = torch.where(
-        active_d_count <= 4,
-        se2.new_full(se2.shape, 0.65),
-        torch.where(
-            active_d_count <= 8, se2.new_full(se2.shape, 0.65), se2.new_full(se2.shape, 0.75)
-        ),
+        active_d_count <= 8,
+        se2.new_full(se2.shape, beta_alpha_low),
+        se2.new_full(se2.shape, beta_alpha_high),
     )
     beta_for_blup = (
         (1.0 - blup_beta_alpha[:, None]) * gls.beta + blup_beta_alpha[:, None] * beta_ols
@@ -700,6 +700,8 @@ def lmmNormal(
     n_em: int = 3,
     uncorr: torch.Tensor | None = None,
     mask_q: torch.Tensor | None = None,
+    beta_alpha_low: float = 0.65,
+    beta_alpha_high: float = 0.75,
 ) -> dict[str, torch.Tensor]:
     """Closed-form GLS for the Gaussian LMM."""
     return _lmmNormalFull(
@@ -713,4 +715,6 @@ def lmmNormal(
         n_em=max(n_em, _NORMAL_FULL_MIN_EM),
         uncorr=uncorr,
         mask_q=mask_q,
+        beta_alpha_low=beta_alpha_low,
+        beta_alpha_high=beta_alpha_high,
     )

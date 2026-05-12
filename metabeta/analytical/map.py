@@ -177,6 +177,8 @@ def _recomputeNormalFinalDiagMap(
     mask_m: torch.Tensor,
     sigma_rfx: torch.Tensor,
     mask_q: torch.Tensor | None,
+    beta_alpha_low: float = 0.65,
+    beta_alpha_high: float = 0.75,
 ) -> dict[str, torch.Tensor]:
     """Recompute final Gaussian GLS/BLUP using diagonal MAP Psi."""
     q = Zm.shape[-1]
@@ -225,8 +227,8 @@ def _recomputeNormalFinalDiagMap(
     active_d_count = (XtX.diagonal(dim1=-2, dim2=-1).abs() > 1e-8).sum(dim=-1)
     alpha = torch.where(
         active_d_count <= 8,
-        se2.new_full(se2.shape, 0.65),
-        se2.new_full(se2.shape, 0.75),
+        se2.new_full(se2.shape, beta_alpha_low),
+        se2.new_full(se2.shape, beta_alpha_high),
     )
     beta_for_blup = ((1.0 - alpha[:, None]) * gls.beta + alpha[:, None] * beta_ols).nan_to_num(
         nan=0.0,
@@ -266,6 +268,8 @@ def refineNormalMapSrfx(
     lr: float = 0.03,
     recompute_blup: bool = True,
     optimize: str = 'all',
+    beta_alpha_low: float = 0.65,
+    beta_alpha_high: float = 0.75,
 ) -> dict[str, torch.Tensor]:
     """Return stats with sigma(RFX) refined by marginal MAP.
 
@@ -339,6 +343,17 @@ def refineNormalMapSrfx(
     out['sigma_rfx_est'] = sigma_rfx
     if 'Psi' in stats:
         if recompute_blup:
-            return _recomputeNormalFinalDiagMap(out, Xm, ym, Zm, mask_n, mask_m, sigma_rfx, mask_q)
+            return _recomputeNormalFinalDiagMap(
+                out,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                sigma_rfx,
+                mask_q,
+                beta_alpha_low=beta_alpha_low,
+                beta_alpha_high=beta_alpha_high,
+            )
         out['Psi'] = _replacePsiDiag(stats['Psi'], sigma_rfx, mask_q)
     return out

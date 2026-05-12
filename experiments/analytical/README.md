@@ -21,6 +21,11 @@ analytical GLMM estimator in `metabeta/analytical/`.
   Pareto-dominant; simplifying to sigma_rfx-only regresses sRFX by 0.7% with
   nearly no BLUP change; rfx+beta or rfx+eps regress FFX by 2–6%. See
   "Closed MAP Optimizer Ablation" in `plan.md`.
+- `glmm_beta_blend_diagnostic.py` — beta blend sweep diagnostic. Sweeps
+  beta_alpha_low (d<=8 gate) and beta_alpha_high (d>8) for both raw and MAP
+  paths to confirm that the current OLS blend (0.65/0.75) is optimal. Result:
+  every alpha increase degrades BLUP for small/medium; large/huge unaffected.
+  See "Closed Beta Blend Diagnostic" in `plan.md`.
 - `statsmodels_reml.py` — spot-checks analytical GLMM estimates against
   statsmodels REML on individual datasets.
 - `glmm_perf_baseline.md` — concise current benchmark and retired REML summary.

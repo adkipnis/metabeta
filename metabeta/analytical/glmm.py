@@ -43,10 +43,24 @@ def glmm(
     map_lr = kwargs.pop('map_lr', 0.03)
     map_recompute_blup = kwargs.pop('map_recompute_blup', True)
     map_optimize = kwargs.pop('map_optimize', 'all')
+    beta_alpha_low = kwargs.pop('beta_alpha_low', 0.65)
+    beta_alpha_high = kwargs.pop('beta_alpha_high', 0.75)
     mask_d = kwargs.pop('mask_d', None)
     uncorr = (eta_rfx == 0) if eta_rfx is not None else None  # (B,) bool or None
     if likelihood_family == 0:
-        stats = lmmNormal(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, mask_q=mask_q)
+        stats = lmmNormal(
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            ns,
+            n_total,
+            uncorr=uncorr,
+            mask_q=mask_q,
+            beta_alpha_low=beta_alpha_low,
+            beta_alpha_high=beta_alpha_high,
+        )
         if map_refine and Zm.shape[-1] > 0 and all(v is not None for v in map_priors.values()):
             stats = refineNormalMapSrfx(
                 stats,
@@ -69,6 +83,8 @@ def glmm(
                 lr=map_lr,
                 recompute_blup=map_recompute_blup,
                 optimize=map_optimize,
+                beta_alpha_low=beta_alpha_low,
+                beta_alpha_high=beta_alpha_high,
             )
     elif likelihood_family == 1:
         stats = lmmBernoulli(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
