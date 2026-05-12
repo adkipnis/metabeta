@@ -96,6 +96,10 @@ def _checkTrain(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
 
 def _checkTest(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
     fits_dir = srcdir / data_id / 'fits'
+    fit_path = srcdir / data_id / 'test.fit.npz'
+    if fit_path.exists() and not fits_dir.exists():
+        print('test.fit.npz present, fits/ absent — already reintegrated.')
+        return True
     stem = Path(datasetFilename(partition='test')).stem
 
     pymc_paths = [fits_dir / f'{stem}_nuts_{i:03d}.npz' for i in range(cfg.n_fits)]
@@ -128,6 +132,10 @@ def _checkTest(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
 
 def _checkValid(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
     fits_dir = srcdir / data_id / 'fits'
+    fit_path = srcdir / data_id / 'valid.fit.npz'
+    if fit_path.exists() and not fits_dir.exists():
+        print('valid.fit.npz present, fits/ absent — already reintegrated.')
+        return True
     stem = Path(datasetFilename(partition='valid')).stem
 
     nuts_paths = [fits_dir / f'{stem}_nuts_{i:03d}.npz' for i in range(cfg.n_fits)]
