@@ -16,6 +16,7 @@
 EPOCHS=6000
 ACCUM=0
 NO_PERMUTE=0
+VALID_DS_TYPE=sampled
 
 while [[ $# -gt 0 ]]; do
     case $1 in
