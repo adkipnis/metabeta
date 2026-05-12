@@ -391,13 +391,16 @@ class Fitter:
             fits.append(fit)
         return aggregate(fits)
 
-    def reintegrate(self) -> None:
-        for method in ['nuts', 'advi']:
+    def reintegrate(self, methods: list[str] | None = None) -> None:
+        if methods is None:
+            methods = ['nuts', 'advi']
+        for method in methods:
             self.batch.update(self._aggregate(method))
         fit_suffix = '.fit' + self.batch_path.suffix
         path = self.batch_path.with_suffix(fit_suffix)
         np.savez_compressed(path, **self.batch, allow_pickle=True)
-        print(f'Reintegrated NUTS and ADVI fits into {path}')
+        methods_str = ' and '.join(m.upper() for m in methods)
+        print(f'Reintegrated {methods_str} fits into {path}')
 
 
 # -----------------------------------------------------------------------------
