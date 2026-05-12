@@ -64,6 +64,7 @@ class ApproximatorConfig(BaseModel):
     posterior_correlation: bool = True
     analytical_context: bool = True
     analytical_local_at_inference: bool = True
+    map_refine: bool = True
     model_config = {'extra': 'allow'}
 
     @property
@@ -81,6 +82,7 @@ class ApproximatorConfig(BaseModel):
             'posterior_correlation': self.posterior_correlation,
             'analytical_context': self.analytical_context,
             'analytical_local_at_inference': self.analytical_local_at_inference,
+            'map_refine': self.map_refine,
             'summarizer_l': self.summarizer_l.model_dump(),
             'summarizer_g': self.summarizer_g.model_dump(),
             'posterior_l': self.posterior_l.model_dump(),
@@ -109,6 +111,7 @@ def modelFromYaml(
         posterior_correlation=model_cfg['posterior_correlation'],
         analytical_context=model_cfg.get('analytical_context', True),
         analytical_local_at_inference=analytical_local_at_inference,
+        map_refine=model_cfg.get('map_refine', True),
         summarizer_g=SummarizerConfig(**s_g),
         summarizer_l=SummarizerConfig(**{**s_g, **model_cfg.get('summarizer_l', {})}),
         posterior_g=PosteriorConfig(**p_g),

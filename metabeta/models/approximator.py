@@ -232,6 +232,7 @@ class Approximator(nn.Module):
             likelihood_family=self.likelihood_family,
             eta_rfx=data.get('eta_rfx'),
             mask_q=data.get('mask_q', None),
+            map_refine=self.cfg.map_refine,
             **map_kwargs,
         )
 
