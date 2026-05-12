@@ -29,6 +29,7 @@ class SummarizerConfig(BaseModel):
     n_inducing: int = Field(gt=0, default=32)
     pooling: str = 'cls'
     activation: str = 'GELU'
+    proj_nonlinear: bool = True
     dropout: float = Field(ge=0.0, default=0.01)
     type: Literal['set-transformer'] = 'set-transformer'
 
