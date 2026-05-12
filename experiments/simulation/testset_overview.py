@@ -86,13 +86,15 @@ def setup() -> argparse.Namespace:
     )
     parser.add_argument(
         '--generated-glob',
-        default='train_ep*.npz',
-        help='File glob within each generated data directory.',
+        nargs='+',
+        default=['train_ep*.npz', 'valid.npz', 'test.npz'],
+        help='File glob(s) within each generated data directory. '
+        'Multiple globs are unioned; files matched by any glob are included.',
     )
     parser.add_argument(
         '--max-generated-files',
         type=int,
-        default=2,
+        default=0,
         help='Maximum files loaded per generated data id; use 0 for all files.',
     )
     parser.add_argument(
@@ -124,7 +126,8 @@ def setup() -> argparse.Namespace:
     if args.generated_data_ids is None:
         letter = _Y_TYPE_TO_FAMILY_LETTER.get(args.y_type, 'n')
         args.generated_data_ids = [
-            f'{s}-{letter}-mixed' for s in ('small', 'medium', 'large', 'huge')
+            f'{s}-{letter}-{ds}' for s in ('small', 'medium', 'large', 'huge')
+            for ds in ('mixed', 'sampled')
         ]
     return args
 # fmt: on
@@ -305,8 +308,15 @@ def CollectRealDesign(test_dir: Path, y_type: str) -> list[DesignSummary]:
     return rows
 
 
-def _generatedPaths(data_id: str, glob_pattern: str, max_files: int) -> list[Path]:
-    paths = sorted((DATA_DIR / data_id).glob(glob_pattern))
+def _generatedPaths(data_id: str, glob_patterns: list[str], max_files: int) -> list[Path]:
+    seen: set[Path] = set()
+    paths: list[Path] = []
+    for pattern in glob_patterns:
+        for p in sorted((DATA_DIR / data_id).glob(pattern)):
+            if p not in seen:
+                seen.add(p)
+                paths.append(p)
+    paths.sort()
     if max_files > 0:
         paths = paths[:max_files]
     return paths
