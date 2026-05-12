@@ -6,20 +6,26 @@ Last updated: 2026-05-11.
 Current Decision
 ----------------
 
-The current production baseline is `glmm()` with MAP sigma(RFX) refinement. The
-raw MoM/EM pass retained two low-risk improvements, and the subsequent REML pass
-did not find a production-worthy replacement or gate. REML support has therefore
-been retired from the analytical package surface.
+The current production baseline is `glmm()` with MAP sigma(RFX) refinement and a
+diagonal-MAP final GLS/BLUP pass. The raw MoM/EM pass retained two low-risk
+improvements, and the subsequent REML pass did not find a production-worthy
+replacement or gate. REML support has therefore been retired from the analytical
+package surface.
 
-The key decision is output-local MAP only: MAP replaces `sigma_rfx_est` and the
-`Psi` diagonal. Recomputing final GLS/BLUP after MAP or REML was tested and
-rejected because it regressed global FFX and BLUP.
+The current MAP path reports MAP `sigma_rfx_est`, writes a diagonal MAP `Psi`, and
+recomputes final Gaussian beta/BLUPs with that diagonal covariance. Earlier
+recomputes that preserved estimated correlations were rejected; the retained path
+uses MAP scale but excludes noisy off-diagonal covariance from final BLUP shrinkage.
+The existing calibrated `blup_var` stack is preserved until variance calibration is
+re-checked for the new point-estimate path.
 
 Stable Baseline
 ---------------
 
-- Current production baseline: `glmm()` with the MAP sigma(RFX) refinement.
+- Current production baseline: `glmm()` with MAP sigma(RFX) refinement and
+  diagonal-MAP final GLS/BLUP recompute.
 - Raw baseline for the next work cycle: `glmm(..., map_refine=False)`.
+- Legacy output-local MAP comparison: `glmm(..., map_recompute_blup=False)`.
 - Retired production candidate: gated REML/profile-MAP over sigma(RFX).
 - Retained context-only candidate: Laplace curvature around the MAP optimum.
 
@@ -46,7 +52,64 @@ can still be revisited later:
 Deferred Raw Diagnostics
 ------------------------
 
-If MAP stalls, add or extend an experiment-only raw diagnostic, tentatively
+The next active work should focus on raw MoM/EM attribution and MAP-diagonal
+ablation. Current MAP now improves reported sigma(RFX) and final BLUPs, but
+sigma(Eps) is still raw-derived and the raw Psi path still determines the fallback
+behavior when MAP is disabled.
+
+Initial diagnostic result:
+
+```bash
+uv run python experiments/analytical/glmm_raw_diagnostic.py
+```
+
+Required-suite totals from the first oracle attribution pass:
+
+| Method | FFX | sRFX | sEps | BLUP |
+| --- | ---: | ---: | ---: | ---: |
+| current MAP | 0.6696 | 0.4585 | 0.1331 | 0.4978 |
+| raw MoM/EM | 0.6696 | 0.7103 | 0.1331 | 0.4978 |
+| oracle sigma(Eps) | 0.8140 | 0.7103 | 0.0000 | 0.5336 |
+| oracle beta for BLUP | 0.6696 | 0.7103 | 0.1331 | 0.5133 |
+| oracle Psi | 0.6673 | 0.0000 | 0.1331 | 0.4301 |
+
+Takeaway: the global BLUP ceiling is primarily Psi/shrinkage, not sigma(Eps) or
+beta leakage. Beta leakage remains a conditional low-dimensional issue: true beta
+for final BLUP residuals improves small rows but hurts large/huge rows. True
+sigma(Eps) is not a promising point-estimate path; it often worsens FFX/BLUP under
+the current final GLS/BLUP machinery.
+
+Follow-up Psi decomposition:
+
+| Method | FFX | sRFX | sEps | BLUP |
+| --- | ---: | ---: | ---: | ---: |
+| legacy output-local MAP | 0.6696 | 0.4585 | 0.1331 | 0.4978 |
+| output Psi recompute | 0.8141 | 0.7103 | 0.1331 | 0.5341 |
+| MAP diagonal recompute | 0.6624 | 0.4585 | 0.1331 | 0.4682 |
+| oracle Psi diagonal | 0.6679 | 0.0000 | 0.1331 | 0.4408 |
+| oracle full Psi | 0.6673 | 0.0000 | 0.1331 | 0.4301 |
+
+Decision: keep the MAP diagonal recompute as production. True diagonal explains
+most of the oracle BLUP gain, while estimated off-diagonal correlations are often
+harmful when used in the final BLUP covariance.
+
+Updated priority order:
+
+1. Urgent / most promising: MAP ablation and runtime checks for the diagonal-MAP
+   final GLS/BLUP pass. Confirm whether internal beta/sigma(Eps) optimization in
+   MAP is still necessary now that MAP scale is used for BLUPs.
+2. Important and conditional: beta leakage into final BLUP residuals for small or
+   low-dimensional rows only. The oracle beta row improves small BLUPs but regresses
+   large/huge, so any beta change needs a strict shape gate.
+3. Monitor only: sigma(Eps) projection and final GLS scale attribution. The retained
+   projection change fixed large/huge sigma(Eps) outliers, but the oracle sigma(Eps)
+   row does not improve point estimates under the current recompute path.
+4. Secondary: EM movement gates or damping. Only pursue after the oracle/stage
+   diagnostic shows that EM is the limiting step in broad bins.
+5. Secondary: BLUP variance calibration. Keep monitoring, but point-estimate
+   accuracy is the current bottleneck.
+
+Add or extend an experiment-only raw diagnostic,
 `experiments/analytical/glmm_raw_diagnostic.py`. It should not change
 `metabeta/analytical/glmm.py` while diagnosing. The diagnostic should run the
 required Gaussian suite and collect row-level/stage-level data for the raw path.
@@ -126,18 +189,19 @@ Acceptance Criteria for Raw Changes
 A raw-estimator change should be considered only if it improves at least one
 primary output on the required suite without material regressions elsewhere:
 
-- FFX, sigma(Eps), and BLUP improvements are more important than sigma(RFX) alone,
-  because output-local MAP can refine only the sigma(RFX) report afterward.
+- FFX, sigma(Eps), and BLUP improvements are more important than sigma(RFX) alone.
+  MAP now improves reported sigma(RFX) and BLUPs, but raw changes are still needed
+  for sigma(Eps) or for non-MAP fallback behavior.
 - A sigma(RFX) raw improvement is still valuable if it improves BLUP or reduces the
   number of rows where MAP is needed.
 - Any candidate must be compared against both `raw` and `current` production MAP.
 - Changes that only improve oracle-like rows or a single narrow bin stay as
   experiments unless they define a clear gate.
 
-Closed REML/MAP Pass
---------------------
+Closed REML Pass
+----------------
 
-The MAP/REML pass is complete. Current MAP remains the production baseline.
+The REML pass is complete. Current MAP remains the production baseline.
 
 Required-suite results:
 
@@ -155,19 +219,37 @@ Recompute diagnostics were also rejected:
   global FFX from 0.6696 to 0.8029 and BLUP from 0.4978 to 0.5114.
 - Recomputing after REML variants likewise regressed global FFX/BLUP.
 
-Decision:
+REML decision:
 
-- Keep current output-local MAP.
+- Keep current MAP.
 - Do not integrate REML.
 - Remove REML from the package surface and retire the REML diagnostic script.
 - Keep Laplace curvature as a later context/uncertainty feature candidate around
   the MAP optimum, not as a point-estimate path.
+
+Remaining MAP Checks
+--------------------
+
+MAP is the production baseline, but it should still be simplified if possible.
+The next MAP diagnostic should compare the new default diagonal-MAP recompute
+against optimizer ablations:
+
+- optimize sigma(RFX) only;
+- optimize sigma(RFX) plus beta;
+- optimize sigma(RFX) plus sigma(Eps);
+- compare against the current internal beta + sigma(RFX) + sigma(Eps) objective.
+
+The output contract should remain: MAP reports `sigma_rfx_est`, writes diagonal
+MAP `Psi`, and recomputes final Gaussian beta/BLUPs with that diagonal covariance.
+The purpose is to check whether internal beta/sigma(Eps) optimization is buying
+sigma(RFX)/BLUP accuracy or just adding cost and variance.
 
 Commands
 --------
 
 ```bash
 uv run python experiments/analytical/glmm_required_benchmark.py
+uv run python experiments/analytical/glmm_raw_diagnostic.py
 uv run python experiments/analytical/glmm_error_analysis.py --data-id small-n-mixed
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical

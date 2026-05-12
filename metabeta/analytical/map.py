@@ -5,6 +5,8 @@ import math
 import torch
 from torch.nn import functional as F
 
+from metabeta.analytical.linalg import _adaptiveRidge, _safeSolve
+from metabeta.analytical.normal import _normalGlsAndBlups
 from metabeta.utils.families import logProbFfx, logProbSigma
 
 __all__ = ['refineNormalMapSrfx']
@@ -166,6 +168,83 @@ def _replacePsiDiag(
     return Psi + F.pad(refined - Psi_q, (0, Psi.shape[-1] - q, 0, Psi.shape[-2] - q))
 
 
+def _recomputeNormalFinalDiagMap(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    sigma_rfx: torch.Tensor,
+    mask_q: torch.Tensor | None,
+) -> dict[str, torch.Tensor]:
+    """Recompute final Gaussian GLS/BLUP using diagonal MAP Psi."""
+    q = Zm.shape[-1]
+    if mask_q is not None:
+        Zm = Zm * mask_q[..., :q].to(device=Zm.device, dtype=Zm.dtype)[:, None, None, :]
+
+    B, m, _, _ = Xm.shape
+    device = Xm.device
+    dtype = Xm.dtype
+    active = mask_m.bool()
+    mask4 = mask_m[:, :, None, None]
+    eye_q = torch.eye(q, device=device, dtype=dtype)
+    eye_q_bm = eye_q.expand(B, m, q, q)
+
+    Psi = torch.diag_embed(sigma_rfx.square())
+    ZtZ = torch.einsum('bmnq,bmnr->bmqr', Zm, Zm)
+    ZtZ_safe = torch.where(active[:, :, None, None], ZtZ, eye_q)
+    Zty = torch.einsum('bmnq,bmn->bmq', Zm, ym)
+    ZtX = torch.einsum('bmnq,bmnd->bmqd', Zm, Xm)
+    XtX = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)
+    Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)
+    XtZ = torch.einsum('bmnd,bmnq->bmdq', Xm, Zm)
+    se2 = stats['sigma_eps_est'].squeeze(-1).clamp(min=1e-6).square()
+    beta_fallback = stats.get('beta_wg', stats['beta_est'])
+
+    gls = _normalGlsAndBlups(
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        ZtZ_safe,
+        Zty,
+        ZtX,
+        XtX,
+        Xty,
+        XtZ,
+        Psi,
+        se2,
+        eye_q,
+        eye_q_bm,
+        mask4,
+        beta_fallback,
+    )
+
+    beta_ols = _safeSolve(XtX + _adaptiveRidge(XtX), Xty)
+    active_d_count = (XtX.diagonal(dim1=-2, dim2=-1).abs() > 1e-8).sum(dim=-1)
+    alpha = torch.where(
+        active_d_count <= 8,
+        se2.new_full(se2.shape, 0.65),
+        se2.new_full(se2.shape, 0.75),
+    )
+    beta_for_blup = ((1.0 - alpha[:, None]) * gls.beta + alpha[:, None] * beta_ols).nan_to_num(
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
+    resid = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_for_blup)) * mask_n
+    Ztr = torch.einsum('bmnq,bmn->bmq', Zm, resid)
+    blups = torch.einsum('bmqp,bmp->bmq', gls.W_g, Ztr)
+
+    out = dict(stats)
+    out['beta_est'] = gls.beta
+    out['sigma_rfx_est'] = sigma_rfx
+    out['blup_est'] = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
+    out['Psi'] = Psi
+    return out
+
+
 def refineNormalMapSrfx(
     stats: dict[str, torch.Tensor],
     Xm: torch.Tensor,
@@ -185,11 +264,13 @@ def refineNormalMapSrfx(
     mask_q: torch.Tensor | None = None,
     n_steps: int = 20,
     lr: float = 0.03,
+    recompute_blup: bool = True,
 ) -> dict[str, torch.Tensor]:
-    """Return stats with only sigma_rfx_est/Psi diagonal refined by marginal MAP.
+    """Return stats with sigma(RFX) refined by marginal MAP.
 
-    This is the production version of the `map_marg20_hyb_srfx` diagnostic:
-    MoM/EM beta, sigma(Eps), BLUPs, and BLUP variances are preserved.
+    By default, final Gaussian GLS/BLUP is recomputed with a diagonal MAP Psi.
+    This keeps the useful MAP sigma(RFX) scale while excluding noisy estimated
+    correlations from the final BLUP shrinkage covariance.
     """
     q = Zm.shape[-1]
     if q == 0 or n_steps <= 0:
@@ -244,5 +325,7 @@ def refineNormalMapSrfx(
     out = dict(stats)
     out['sigma_rfx_est'] = sigma_rfx
     if 'Psi' in stats:
+        if recompute_blup:
+            return _recomputeNormalFinalDiagMap(out, Xm, ym, Zm, mask_n, mask_m, sigma_rfx, mask_q)
         out['Psi'] = _replacePsiDiag(stats['Psi'], sigma_rfx, mask_q)
     return out

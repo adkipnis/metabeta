@@ -41,6 +41,7 @@ def glmm(
     map_refine = kwargs.pop('map_refine', True)
     map_steps = kwargs.pop('map_steps', 20)
     map_lr = kwargs.pop('map_lr', 0.03)
+    map_recompute_blup = kwargs.pop('map_recompute_blup', True)
     mask_d = kwargs.pop('mask_d', None)
     uncorr = (eta_rfx == 0) if eta_rfx is not None else None  # (B,) bool or None
     if likelihood_family == 0:
@@ -65,6 +66,7 @@ def glmm(
                 mask_q=mask_q,
                 n_steps=map_steps,
                 lr=map_lr,
+                recompute_blup=map_recompute_blup,
             )
     elif likelihood_family == 1:
         stats = lmmBernoulli(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
