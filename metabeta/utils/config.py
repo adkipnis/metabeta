@@ -108,7 +108,7 @@ def modelFromYaml(
         d_ffx=d_ffx,
         d_rfx=d_rfx,
         likelihood_family=likelihood_family,
-        posterior_correlation=model_cfg['posterior_correlation'],
+        posterior_correlation=model_cfg.get('posterior_correlation', True),
         analytical_context=model_cfg.get('analytical_context', True),
         analytical_local_at_inference=analytical_local_at_inference,
         map_refine=model_cfg.get('map_refine', False),
