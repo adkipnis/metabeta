@@ -1,7 +1,7 @@
 GLMM Analytical Estimator Summary
 =================================
 
-Last updated: 2026-05-11 after refreshing current/raw and REML diagnostics.
+Last updated: 2026-05-11 after adding the diagonal-MAP final GLS/BLUP pass.
 
 This file records the current retained Gaussian GLMM analytical benchmark and the
 closed REML diagnostic decision. Historical MAP/REML sweep scripts were removed;
@@ -17,25 +17,27 @@ uv run python experiments/analytical/glmm_required_benchmark.py --methods curren
 ```
 
 Required suite: mixed train epochs 1-2 and sampled valid/test for
-`small|medium|large|huge`. Current production MAP replaces only
-`sigma_rfx_est` and the `Psi` diagonal. FFX and BLUP remain raw analytical outputs;
-reported sigma(Eps) now comes from the within-group projection estimate, while the
-final GLS/BLUP pass is recomputed consistently with that projection scale.
+`small|medium|large|huge`. Current production MAP reports MAP `sigma_rfx_est`,
+writes a diagonal MAP `Psi`, and recomputes final Gaussian beta/BLUPs with that
+diagonal covariance. This keeps the useful MAP variance scale while excluding
+noisy estimated correlations from final BLUP shrinkage. Reported sigma(Eps) still
+comes from the within-group projection estimate. The existing calibrated
+`blup_var` output is preserved pending a separate variance-calibration pass.
 
 | Dataset | Partition | FFX | sRFX | sEps | BLUP |
 | --- | --- | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.1622 | 0.3828 | 0.1658 | 0.4007 |
-| small-n-sampled | valid | 0.1983 | 0.4917 | 0.2147 | 0.4771 |
-| small-n-sampled | test | 0.1970 | 0.4344 | 0.1973 | 0.4328 |
-| medium-n-mixed | train | 0.5092 | 0.5176 | 0.1294 | 0.5465 |
-| medium-n-sampled | valid | 0.3938 | 0.4144 | 0.1853 | 0.4997 |
-| medium-n-sampled | test | 0.4954 | 0.4496 | 0.1755 | 0.5042 |
-| large-n-mixed | train | 0.9218 | 0.3648 | 0.1117 | 0.5187 |
-| large-n-sampled | valid | 0.9254 | 0.6349 | 0.1344 | 0.5603 |
-| large-n-sampled | test | 0.7178 | 0.4015 | 0.1329 | 0.5122 |
-| huge-n-mixed | train | 0.9782 | 0.5548 | 0.0942 | 0.4890 |
-| huge-n-sampled | valid | 1.1043 | 0.4590 | 0.1197 | 0.5214 |
-| huge-n-sampled | test | 1.3469 | 0.4084 | 0.1171 | 0.5073 |
+| small-n-mixed | train | 0.1694 | 0.3828 | 0.1658 | 0.3795 |
+| small-n-sampled | valid | 0.1983 | 0.4917 | 0.2147 | 0.4675 |
+| small-n-sampled | test | 0.1963 | 0.4344 | 0.1973 | 0.4202 |
+| medium-n-mixed | train | 0.5100 | 0.5176 | 0.1294 | 0.5356 |
+| medium-n-sampled | valid | 0.3682 | 0.4144 | 0.1853 | 0.4854 |
+| medium-n-sampled | test | 0.4830 | 0.4496 | 0.1755 | 0.4835 |
+| large-n-mixed | train | 0.9226 | 0.3648 | 0.1117 | 0.4215 |
+| large-n-sampled | valid | 0.9175 | 0.6349 | 0.1344 | 0.5460 |
+| large-n-sampled | test | 0.7292 | 0.4015 | 0.1329 | 0.4954 |
+| huge-n-mixed | train | 0.9431 | 0.5548 | 0.0942 | 0.4549 |
+| huge-n-sampled | valid | 1.1068 | 0.4590 | 0.1197 | 0.5050 |
+| huge-n-sampled | test | 1.3276 | 0.4084 | 0.1171 | 0.4854 |
 
 Raw Estimator Pass
 ------------------
@@ -53,9 +55,27 @@ Rejected candidate:
 - Lowering the high-dimensional BLUP beta blend from 0.75 to 0.65/0.50 had mixed
   results and regressed large-valid or huge-mixed BLUPs, so the high-dimensional
   branch remains 0.75.
-- The refreshed raw baseline has identical FFX, sigma(Eps), and BLUP to current
-  MAP by construction, while current MAP improves sigma(RFX) in every required
-  cell. Raw MoM/EM is therefore not a competitive global sigma(RFX) fallback.
+- The refreshed raw baseline now remains the non-MAP fallback. Current MAP improves
+  sigma(RFX) in every required cell and, with the diagonal-MAP final covariance,
+  improves global BLUP from 0.4978 to 0.4682.
+
+MAP Diagonal BLUP Pass
+----------------------
+
+The raw-stage attribution diagnostic showed that the BLUP ceiling is mostly the
+diagonal variance scale, not off-diagonal correlation:
+
+| Method | FFX | sRFX | sEps | BLUP |
+| --- | ---: | ---: | ---: | ---: |
+| legacy output-local MAP | 0.6696 | 0.4585 | 0.1331 | 0.4978 |
+| output Psi recompute | 0.8141 | 0.7103 | 0.1331 | 0.5341 |
+| MAP diagonal recompute | 0.6624 | 0.4585 | 0.1331 | 0.4682 |
+| oracle Psi diagonal | 0.6679 | 0.0000 | 0.1331 | 0.4408 |
+| oracle full Psi | 0.6673 | 0.0000 | 0.1331 | 0.4301 |
+
+The production path therefore uses the MAP sigma(RFX) diagonal as the final
+Gaussian covariance for beta/BLUP recompute. The legacy output-local behavior is
+still available for diagnostics via `glmm(..., map_recompute_blup=False)`.
 
 Retired REML Diagnostics
 ------------------------
@@ -109,7 +129,7 @@ Best Setup by Case
 | MAP changes MoM/EM by <5% | current MAP | 0.4179 vs gated REML 0.4185 |
 | true sigma <0.25 | gated REML, diagnostic only | 0.5967 vs current MAP 0.5988 |
 
-Recompute diagnostic:
+Rejected recompute diagnostics:
 
 | Method | FFX | sRFX | sEps | BLUP |
 | --- | ---: | ---: | ---: | ---: |
@@ -127,7 +147,9 @@ Interpretation
 - Current-initialized REML looked locally promising, improving 11 of 12 cells, but
   medium-n-mixed regressed from 0.5176 to 0.7568 and made the global score worse.
 - Optimizing sigma(Eps) inside REML worsened reported sigma(Eps).
-- Recomputing GLS/BLUP after refined variance estimates is not viable: it regressed
-  global FFX and BLUP for MAP and every REML variant.
-- Final decision: keep output-local MAP, retire REML from production and package
-  exports, and do not keep a REML diagnostic script in the active experiment set.
+- Recomputing GLS/BLUP after refined variance estimates while preserving estimated
+  correlations is not viable: it regressed global FFX and BLUP for MAP and every
+  REML variant.
+- Final decision: keep MAP with diagonal final covariance, retire REML from
+  production and package exports, and do not keep a REML diagnostic script in the
+  active experiment set.

@@ -7,6 +7,10 @@ analytical GLMM estimator in `metabeta/analytical/`.
 - `glmm_error_analysis.py` — verbose per-dataset error diagnostic. Reports NRMSE,
   bias, quantiles, variance-component breakdowns, BLUP calibration, correlation
   quality, and worst cases for a selected dataset split.
+- `glmm_raw_diagnostic.py` — required-suite raw MoM/EM attribution diagnostic.
+  Compares production MAP and raw MoM/EM with oracle sigma(Eps), beta-for-BLUP,
+  Psi substitutions, and MAP-diagonal recomputes to identify which raw stage limits
+  accuracy.
 - `glmm_required_benchmark.py` — compact required-suite runner. Prints CSV rows for
   FFX, sigma(RFX), sigma(Eps), and BLUP NRMSE on mixed train epochs 1-2 and sampled
   valid/test across small, medium, large, and huge datasets. Use `--sizes` and
