@@ -32,6 +32,7 @@ class Collection(torch.utils.data.Dataset):
         self,
         path: Path,
         permute: bool = False,
+        permute_seed: int = 0,
         max_d: int | None = None,
         max_q: int | None = None,
     ):
@@ -85,7 +86,7 @@ class Collection(torch.utils.data.Dataset):
         # feature permutations
         self.permute = permute and self.has_params
         if self.permute:
-            rng = np.random.default_rng(0)
+            rng = np.random.default_rng(permute_seed)
             self.dperm = [samplePermutation(rng, self.d) for _ in range(len(self))]
             self.qperm = [samplePermutation(rng, self.q) for _ in range(len(self))]
 
@@ -407,6 +408,7 @@ class Dataloader(torch.utils.data.DataLoader):
         sortish: bool = True,
         shuffle: bool = False,
         permute: bool = False,
+        permute_seed: int = 0,
         bucket_mult: int = 50,
         sort_seed: int = 0,
         max_d: int | None = None,
@@ -414,7 +416,7 @@ class Dataloader(torch.utils.data.DataLoader):
         num_workers: int = 0,
         persistent_workers: bool = False,
     ):
-        col = Collection(path, permute=permute, max_d=max_d, max_q=max_q)
+        col = Collection(path, permute=permute, permute_seed=permute_seed, max_d=max_d, max_q=max_q)
         pin_memory = torch.cuda.is_available()
         self._sortish = sortish
         self._shuffle = shuffle
