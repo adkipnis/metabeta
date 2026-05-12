@@ -11,8 +11,6 @@
 #SBATCH --mem=16G
 #SBATCH --time=01:00:00
 
-set -euo pipefail
-
 while [[ $# -gt 0 ]]; do
     case $1 in
         --data_id) TAG="$2"; shift 2 ;;
@@ -29,9 +27,7 @@ case "$PARTITION" in
     *) echo "Unknown partition: $PARTITION (use valid or test)"; exit 1 ;;
 esac
 
-set +u
 source $HOME/.bashrc
-set -u
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta
 
