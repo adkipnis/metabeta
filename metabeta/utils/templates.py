@@ -147,6 +147,7 @@ class TrainingConfig(BaseModel):
     cores: int = Field(gt=0, default=8)
     reproducible: bool = True
     compile: bool = False
+    permute: bool = True
 
     # Evaluation settings
     n_samples: int = Field(gt=0, default=512)

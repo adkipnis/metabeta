@@ -122,6 +122,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--cores', type=int, help='CPU thread count passed to torch.set_num_threads (default = 8)')
     parser.add_argument('--compile', action=argparse.BooleanOptionalAction, help='Compile model with torch.compile (default = False)')
     parser.add_argument('--reproducible', action=argparse.BooleanOptionalAction, help='Enable deterministic algorithms for reproducibility (default = True)')
+    parser.add_argument('--permute', action=argparse.BooleanOptionalAction, help='Permute feature columns per epoch during training (default = True)')
 
     # Evaluation settings
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction, help='Generate evaluation plots after each epoch')
@@ -231,12 +232,14 @@ class Trainer:
         data_subdir = data_cfg['data_id']
         data_path = Path(self.dir, '..', 'outputs', 'data', data_subdir, data_fname)
         sortish = batch_size is not None
+        do_permute = getattr(self.cfg, 'permute', True) and partition == 'train'
         return Dataloader(
             data_path,
             batch_size=batch_size,
             sortish=sortish,
             shuffle=partition == 'train',
-            permute=partition == 'train',
+            permute=do_permute,
+            permute_seed=epoch,
             bucket_mult=50,
             sort_seed=epoch,
             max_d=data_cfg.get('max_d'),
