@@ -173,12 +173,16 @@ pooled IRLS β₀, no MAP refinement). Metric: NRMSE (same as NN eval). sEps is 
 | --- | --- | ---: | ---: | ---: |
 | small-b-mixed | train | 0.7898 | 0.6275 | 0.6384 |
 | small-b-sampled | valid | 1.1875 | 0.6873 | 0.6828 |
+| small-b-sampled | test | 1.1526 | 0.6856 | 0.6865 |
 | medium-b-mixed | train | 1.5274 | 0.7236 | 0.7667 |
 | medium-b-sampled | valid | 1.6387 | 0.7652 | 0.7901 |
+| medium-b-sampled | test | 1.9131 | 0.8071 | 0.8988 |
 | large-b-mixed | train | 2.0386 | 0.8465 | 0.8809 |
 | large-b-sampled | valid | 2.8019 | 0.9498 | 1.0738 |
+| large-b-sampled | test | 2.9786 | 0.9799 | 1.1372 |
 | huge-b-mixed | train | 3.1533 | 0.9895 | 1.2625 |
 | huge-b-sampled | valid | 3.4570 | 1.0995 | 1.4105 |
+| huge-b-sampled | test | 3.3510 | 0.9934 | 1.1757 |
 
 Root cause analysis from `glmm_error_analysis.py` (all sizes, train + valid):
 
