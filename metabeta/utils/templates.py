@@ -140,7 +140,8 @@ class TrainingConfig(BaseModel):
     pred_nll_weight: float = 0.1
     kl_mix_weight: float = Field(gt=0, default=0.05)
     patience: int = Field(ge=0, default=0)
-    sample_interval: int = Field(gt=0, default=20)
+    valid_interval: int = Field(gt=0, default=5)
+    sample_interval: int = Field(gt=0, default=25)
     skip_ref: bool = False
 
     # Runtime settings (will be overridden by CLI-only params)

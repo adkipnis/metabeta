@@ -118,7 +118,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--kl_mix_weight', type=float, help='Backward KL coefficient in mixed loss: total = fkl + kl_mix_weight * alpha * bkl (default = 0.05)')
     parser.add_argument('--n_samples', type=int, help='Posterior samples drawn per evaluation dataset (default = 512)')
     parser.add_argument('--patience', type=int, help='Early stopping patience in epochs; 0 = disabled (default = 0)')
-    parser.add_argument('--sample_interval', type=int, help='Run full posterior evaluation every N epochs (default = 20)')
+    parser.add_argument('--valid_interval', type=int, help='Run validation loss every N epochs (default = 5)')
+    parser.add_argument('--sample_interval', type=int, help='Run full posterior evaluation every N epochs (default = 25)')
     parser.add_argument('--cores', type=int, help='CPU thread count passed to torch.set_num_threads (default = 8)')
     parser.add_argument('--compile', action=argparse.BooleanOptionalAction, help='Compile model with torch.compile (default = False)')
     parser.add_argument('--reproducible', action=argparse.BooleanOptionalAction, help='Enable deterministic algorithms for reproducibility (default = True)')
@@ -707,7 +708,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         for epoch in range(self.current_epoch + 1, self.cfg.max_epochs + 1):
             self.current_epoch = epoch
             loss_train = self.train()
-            loss_valid = self.valid()
+            loss_valid = self.valid() if epoch % self.cfg.valid_interval == 0 else None
             mean_nrmse = mean_eace = median_nll = None
 
             if epoch % self.cfg.sample_interval == 0:
@@ -717,9 +718,10 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             if self.wandb_run is not None:
                 logs = {
                     'train/loss_epoch': float(loss_train),
-                    'valid/loss_epoch': float(loss_valid),
                     'step/epoch': self.current_epoch,
                 }
+                if loss_valid is not None:
+                    logs['valid/loss_epoch'] = float(loss_valid)
                 if mean_nrmse is not None:
                     logs['valid/mean_nrmse_epoch'] = float(mean_nrmse)
                     logs['valid/mean_eace_epoch'] = float(mean_eace)  # type: ignore
