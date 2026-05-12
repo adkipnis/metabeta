@@ -161,13 +161,149 @@ from 0.65 monotonically degrades BLUP for small/medium rows; large/huge unaffect
 vs 0.4978 raw), confirming the current blend is a local optimum. Decision: keep
 0.65/0.75. `beta_alpha_low`/`beta_alpha_high` kwargs retained for future diagnostics.
 
+Bernoulli PQL Baseline
+----------------------
+
+Last measured: 2026-05-12. Estimator: `lmmBernoulli` (6 PQL passes, unregularized
+pooled IRLS β₀, no MAP refinement). Metric: NRMSE (same as NN eval). sEps is n/a
+(Bernoulli has no residual variance). Collected via `glmm_error_analysis.py` over
+2 mixed train epochs + sampled valid for each size.
+
+| Dataset | Partition | FFX | sRFX | BLUP |
+| --- | --- | ---: | ---: | ---: |
+| small-b-mixed | train | 0.7898 | 0.6275 | 0.6384 |
+| small-b-sampled | valid | 1.1875 | 0.6873 | 0.6828 |
+| medium-b-mixed | train | 1.5274 | 0.7236 | 0.7667 |
+| medium-b-sampled | valid | 1.6387 | 0.7652 | 0.7901 |
+| large-b-mixed | train | 2.0386 | 0.8465 | 0.8809 |
+| large-b-sampled | valid | 2.8019 | 0.9498 | 1.0738 |
+| huge-b-mixed | train | 3.1533 | 0.9895 | 1.2625 |
+| huge-b-sampled | valid | 3.4570 | 1.0995 | 1.4105 |
+
+Root cause analysis from `glmm_error_analysis.py` (all sizes, train + valid):
+
+**FFX (β) — dominant failure mode.** NRMSE scales from 0.79 (small-train) to 3.46
+(huge-valid). Root cause: Bernoulli binary outcomes carry less Fisher information per
+observation than Normal (working weight W = μ(1−μ) ≤ 0.25 vs 1/σ²). At large d
+(9–16), the pooled IRLS is severely underdetermined at low n/d. FFX breakdown by n/d
+at huge-b-sampled: RMSE 5.08 at n/d < 19 (lowest quartile). The GLS refinement
+cannot recover because there is no residual σ² lever — all variation is in the binary
+outcome.
+
+**σ_rfx — systematic bidirectional bias.** Consistent across all sizes:
+- Low true σ_rfx (≤ 0.25): upward bias +0.30–0.36 (Laplace psi_0 floor at 0.25
+  prevents collapse but overshoots small true values)
+- High true σ_rfx (≥ 0.85): downward bias −0.23–0.46 (Laplace M-step shrinks toward
+  the group average; underestimates large variance components)
+- NRMSE 0.63–1.10; 0% clip rate (Laplace never collapses to zero unlike MoM)
+
+**BLUPs — tracks FFX.** NRMSE 0.64 (small-train) to 1.41 (huge-valid). Small-group
+(n_g < 10) BLUP RMSE is 0.67–1.05 across sizes. BLUP quality is gated by FFX
+leakage: bad β contaminates the BLUP residual (ỹ − Xβ), pulling BLUPs away from
+the true random effects.
+
+**blup_var calibration.** Small-b-mixed calibration ratios (mean err²/mean blup_var):
+0.77–1.31 by n_g bin (n_g 5–150). Small groups slightly overconfident (1.31 at
+n_g=5-9), large groups underconfident (0.77 at n_g=25-150). The `_BERNOULLI_BLUP_VAR_INFLATION = 1.5` is a gross inflation that helps small groups
+but overcorrects large groups.
+
+Bernoulli Improvement Paths
+-----------------------------
+
+**Priority 1 — Prior-regularized IRLS β₀ (HIGH impact on FFX)**
+
+Replace `irlsBernoulli` (unregularized Newton-IRLS) with a prior-penalized variant.
+Add a ridge penalty proportional to the FFX prior: diagonal penalty `1/τ_ffx_j²` on
+each predictor, centering at `ν_ffx`. Modified Newton step:
+
+    H_reg = X'WX + diag(1/τ²)   where τ = tau_ffx per predictor
+    grad_reg = X'(y − μ) − (β − ν_ffx) / τ²
+
+At low n/d (the worst-case regime), the regularized IRLS is the main estimator and
+GLS refinement becomes a correction. At high n/d, the ridge penalty is negligible
+relative to `X'WX` → fallback to current unregularized behavior.
+
+Requires: pass `nu_ffx`, `tau_ffx` through `_initialFixedEffects` → `irlsBernoulli`
+→ `_initialPqlState` → `_lmmGlmm` → `lmmBernoulli`.
+
+Acceptance: reduce FFX NRMSE by ≥ 20% at large-b-sampled (current: 2.80) without
+regressing small-b-mixed (current: 0.79). Also check sRFX and BLUP for regressions.
+
+Do NOT attempt if `tau_ffx` is not available in the batch (forward as optional, skip
+penalty when None).
+
+**Priority 2 — Laplace-MAP σ_rfx refinement (MEDIUM impact on sRFX)**
+
+Analogous to `refineNormalMapSrfx` for Normal. After the main PQL passes, run a
+gradient-based MAP optimization of `log σ_rfx` using:
+- Laplace log-marginal as likelihood proxy: `log p_Lap ≈ Σ_g[log p(y_g|β,b̂_g) +
+  log p(b̂_g|Ψ) − 0.5 log|H_g|]` (all already computed by the PQL pass)
+- Prior log-probability `log p(σ_rfx | τ_rfx)` from hyperparameters
+- Final rerun of one PQL pass with refined Ψ = diag(σ_rfx_map²)
+
+This is more complex than Normal MAP because the Laplace log-marginal depends on the
+Newton solution b̂_g and H_g, which themselves depend on Ψ. Options:
+(a) Use the current PQL outputs as fixed-point approximation (ignore gradient through
+    b̂_g, H_g — treat as constants). Cheaper; may underestimate gradient.
+(b) Differentiate through the Newton solve (full gradient). Expensive but exact.
+
+Start with option (a): fixed-point MAP. If σ_rfx gradient direction is consistent
+with the observed bias pattern (positive gradient for low estimates, negative for
+high), this is likely sufficient.
+
+Acceptance: reduce sRFX NRMSE by ≥ 10% at large-b-sampled (current: 0.95) with no
+FFX or BLUP regressions on the required suite.
+
+Do not implement if option (a) is unstable (e.g., if σ_rfx MAP contradicts Laplace
+M-step direction on > 20% of datasets at small-b-mixed).
+
+**Priority 3 — Beta blend for BLUP residuals (LOW impact, quick)**
+
+Apply the Normal-path beta blend technique to Bernoulli final BLUP residuals. In the
+final PQL pass, compute BLUP residuals with a blend of GLS and pooled-IRLS beta:
+
+    beta_for_blup = alpha * beta_gls + (1 − alpha) * beta_0
+
+where alpha ≤ 0.65 for low-d, ≤ 0.75 for high-d (analogous to Normal path). Only
+the BLUP estimate changes; `beta_est` (reported fixed effects) is unchanged.
+
+Expected gain: small (5–10% at small-medium), possibly neutral or negative at
+large-huge (beta_0 from pooled GLM is also poor there). Run oracle ablation to
+verify before implementing.
+
+Acceptance target: no regressions on any dataset × partition cell. A small BLUP
+improvement at small-b-mixed is sufficient to justify.
+
+**Priority 4 — blup_var calibration tuning (LOW priority)**
+
+`_BERNOULLI_BLUP_VAR_INFLATION = 1.5` overcorrects large groups (ratio 0.77 at
+n_g=25-150) while being marginal at small groups (1.31 at n_g=5-9). A group-size-
+dependent inflation (e.g., 1.0 + C/n_g with C tuned on the small dataset) would
+improve calibration without changing point estimates. Defer until priorities 1–3 are
+stable, as blup_var is sensitive to changes in Ψ.
+
+Acceptance Criteria (Bernoulli)
+---------------------------------
+
+A Bernoulli GLMM change should be considered only if it improves at least one
+primary metric on the required suite without material regressions:
+
+- Target FFX improvement ≥ 15% at large-b or huge-b (the high-d failure modes).
+- Target sRFX improvement ≥ 10% at any required cell.
+- BLUP improvement must not regress FFX or sRFX.
+- Compare against current PQL baseline (no `map_refine` applies for Bernoulli).
+- Changes that only improve a narrow bin (single bg_df value or n/d quartile) are
+  experiments only — not production unless globally non-harmful.
+
 Commands
 --------
 
 ```bash
 uv run python experiments/analytical/glmm_required_benchmark.py
+uv run python experiments/analytical/glmm_required_benchmark.py --family b
 uv run python experiments/analytical/glmm_raw_diagnostic.py
 uv run python experiments/analytical/glmm_error_analysis.py --data-id small-n-mixed
+uv run python experiments/analytical/glmm_error_analysis.py --data-id small-b-mixed
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical
 ```
