@@ -80,12 +80,59 @@ cap. This preserves naturally low-signal draws and still allows higher `R^2` as
 the available covariate space grows. When `sigma_eps` is raised, `tau_eps` is
 scaled by the same factor so the stored prior context remains coherent.
 
+## Bernoulli Case
+
+### Finding
+
+`real-b-reference` NUTS fits (14 real binary datasets) and testset_overview diagnostics
+reveal a cumulative linear-predictor variance problem for large d:
+
+- `hypersample()` draws `tau_ffx ~ skewedBeta(0.01, 3.0, mode=0.8)` per predictor.
+- For d=13–16 (huge), `SD(eta_FFX) = sqrt(sum tau_j^2)` has mean ≈ 4.5 and reaches 6.6.
+- P(|eta| > 10) at SD=6.6 is ≈ 13% per observation — irrecoverable by 20 rerolls.
+- Generation logs show 26 "remained high after rerolls" warnings across all sizes,
+  concentrated in large/huge batches.
+
+From the real-b-reference NUTS posteriors:
+- `sd(eta_hat)` = 0.91–3.27, mean ≈ 2.2, p95 ≈ 3.2.
+- Even for d=16 (guimmun) and d=22 (guprenat), sd(eta_hat) ≤ 3.3 because real
+  high-d datasets tend to have many small, sparse effects.
+
+Unlike Normal, there is no `sigma_eps` to act as a lever — the entire signal amplitude
+is the LP variance. Raising or lowering `tau_ffx` shifts the mode but does not prevent
+tail draws from producing extreme cumulative LP variance at high d.
+
+### Why Direct Hyperprior Narrowing Is Not Enough
+
+Narrowing `tau_ffx` max from 3.0 to e.g. 1.5 would make large-d priors
+conservative, but leaves small-d cases under-covered. The problem is
+that cumulative variance grows with d regardless of any fixed per-predictor cap.
+
+### Preferred Approach: LP Scale Calibration
+
+Analogous to the Normal's `_calibrateBernoulliResidualShare`, introduce
+`_calibrateBernoulliEtaScale` in `Simulator.sample()`:
+
+1. After parameter sampling (and any rerolls), compute `eta = X beta + Z b`.
+2. Sample a target LP SD cap uniformly from `[BERNOULLI_LP_SD_CAP_LOW,
+   BERNOULLI_LP_SD_CAP_HIGH]` = `[2.0, 4.0]`.
+3. If `sd(eta) > cap`, scale all parameters (`ffx`, `rfx`, `sigma_rfx`) and
+   hyperparameters (`tau_ffx`, `nu_ffx`, `tau_rfx`) by `cap / sd(eta)`.
+4. This keeps the prior context coherent: stored hyperparams reflect the
+   effective prior after calibration.
+
+Cap bounds rationale:
+- Lower = 2.0: preserves high-signal datasets up to the real-data maximum.
+- Upper = 4.0: at SD=4 → P(|eta| > 10) ≈ 1.2%, well below the 5% reroll threshold.
+
+Acceptance target: essentially eliminate "remained high after rerolls" warnings;
+generated sd(eta) distribution should overlap substantially with NUTS sd(eta_hat)
+range (0.9–3.3), while still covering the full range of plausible Bernoulli signals.
+
 ## Guardrails
 
 - Do not fit hyperpriors directly to the test set.
 - Use real-NUTS posterior summaries only as sanity bounds for where real parameter
   mass appears, not as empirical Bayes targets.
-- Keep Bernoulli and Poisson priors unchanged until their outcome-shape diagnostics
-  are reviewed separately.
 - Keep generated data broad enough to cover plausible real datasets, not just the
   current benchmark pool.
