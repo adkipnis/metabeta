@@ -59,6 +59,9 @@ class DesignSummary:
     min_group_z_df: int | None = None
 
 
+_Y_TYPE_TO_FAMILY_LETTER = {'continuous': 'n', 'binary': 'b', 'count': 'p'}
+
+
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -77,8 +80,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument(
         '--generated-data-ids',
         nargs='+',
-        default=['small-n-mixed', 'medium-n-mixed', 'large-n-mixed', 'huge-n-mixed'],
-        help='Generated data ids to compare against the real test pool.',
+        default=None,
+        help='Generated data ids to compare against the real test pool. '
+        'Defaults to small/medium/large/huge-{family}-mixed derived from --y-type.',
     )
     parser.add_argument(
         '--generated-glob',
@@ -116,23 +120,39 @@ def setup() -> argparse.Namespace:
         help='Directory for overview plots.',
     )
     parser.add_argument('--no-plots', action='store_true', help='Skip PDF plot generation.')
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.generated_data_ids is None:
+        letter = _Y_TYPE_TO_FAMILY_LETTER.get(args.y_type, 'n')
+        args.generated_data_ids = [
+            f'{s}-{letter}-mixed' for s in ('small', 'medium', 'large', 'huge')
+        ]
+    return args
 # fmt: on
 
 
-def BambiDefaultPriors(X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Compute bambi-style default Normal priors for fixed effects."""
-    d = X.shape[1] + 1
-    sy = np.nanstd(y)
+def BambiDefaultPriors(
+    X: np.ndarray, y: np.ndarray, y_type: str = 'continuous'
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute bambi-style default Normal priors for fixed effects.
 
+    For binary outcomes bambi operates on the logit scale with fixed-width
+    priors (intercept: 1.5, slopes: 1.0). For continuous outcomes priors are
+    scaled by sd(y)/sd(x_j).
+    """
+    d = X.shape[1] + 1
     nu_ffx = np.zeros(d)
     tau_ffx = np.zeros(d)
-    nu_ffx[0] = np.nanmean(y)
-    tau_ffx[0] = 2.5 * sy
 
-    for j in range(X.shape[1]):
-        sx = np.nanstd(X[:, j])
-        tau_ffx[j + 1] = 2.5 * sy / sx if sx > 1e-12 else 2.5 * sy
+    if y_type == 'binary':
+        tau_ffx[0] = 1.5
+        tau_ffx[1:] = 1.0
+    else:
+        sy = np.nanstd(y)
+        nu_ffx[0] = np.nanmean(y)
+        tau_ffx[0] = 2.5 * sy
+        for j in range(X.shape[1]):
+            sx = np.nanstd(X[:, j])
+            tau_ffx[j + 1] = 2.5 * sy / sx if sx > 1e-12 else 2.5 * sy
 
     return nu_ffx, tau_ffx
 
@@ -159,7 +179,10 @@ def _realYType(data: dict) -> str:
 def _summaryFromRealFile(path: Path) -> DatasetSummary:
     with np.load(path, allow_pickle=True) as data:
         ns = np.asarray(data['ns'])
-        nu_ffx, tau_ffx = BambiDefaultPriors(np.asarray(data['X']), np.asarray(data['y']))
+        y_type_str = _realYType(data)
+        nu_ffx, tau_ffx = BambiDefaultPriors(
+            np.asarray(data['X']), np.asarray(data['y']), y_type=y_type_str
+        )
         columns = np.asarray(data.get('columns', np.array([])))
         return DatasetSummary(
             source='real',
