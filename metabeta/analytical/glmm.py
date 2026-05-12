@@ -69,6 +69,7 @@ def glmm(
                 Zm,
                 mask_n,
                 mask_m,
+                ns,
                 map_priors['nu_ffx'],
                 map_priors['tau_ffx'],
                 map_priors['family_ffx'],

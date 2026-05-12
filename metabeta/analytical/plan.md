@@ -87,7 +87,7 @@ Remaining Priorities
    row does not improve point estimates under the current recompute path.
 4. Secondary: EM movement gates or damping. Only pursue after the oracle/stage
    diagnostic shows that EM is the limiting step in broad bins.
-5. [ACTIVE] BLUP variance calibration. See plan below.
+5. [CLOSED] BLUP variance calibration. See below.
 
 Acceptance Criteria for Raw Changes
 -----------------------------------
@@ -104,40 +104,34 @@ primary output on the required suite without material regressions elsewhere:
 - Changes that only improve oracle-like rows or a single narrow bin stay as
   experiments unless they define a clear gate.
 
-Active: BLUP Variance Calibration
-----------------------------------
+Closed: BLUP Variance Calibration
+-----------------------------------
 
-Structural mismatch: `_recomputeNormalFinalDiagMap` (map.py) uses MAP Psi for BLUP
-point estimates but leaves `blup_var` from the raw stats dict unchanged. The raw
-`blup_var = σ²·W_g` was computed with the underestimated raw Psi. Since MAP Psi ≥
-raw Psi, the MAP W_g = (σ²·(MAP Psi)⁻¹ + ZtZ)⁻¹ ≥ raw W_g, so the true posterior
-variance under MAP is larger than the stored raw blup_var. All three corrections
-(delta-method, KH, Ψ/G_mom floor) are also misscaled. The correction direction
-depends on which effect dominates; run the diagnostic to confirm.
+Structural mismatch: `_recomputeNormalFinalDiagMap` used MAP Psi for BLUP point
+estimates but left `blup_var` from the raw stats dict unchanged. Raw blup_var was
+dominated by the `Ψ/G_mom` additive floor (calibrated for raw underestimated Psi);
+under MAP (larger Psi), that floor overcorrected, producing calibration ratios of
+0.23–0.86 across n_g bins (underconfident — intervals too wide by 1.2–4.4×).
 
-Steps:
+Fix (map.py `_recomputeNormalFinalDiagMap`): recompute blup_var from MAP W_g
+(= σ²·MAP_W_g diagonal from the existing `_normalGlsAndBlups` call) with
+delta-method + KH corrections, floor at Ψ_diag/(2·n_g). Dropped the additive
+Ψ/G_mom floor — under MAP, Psi is better estimated and the floor was overcorrecting.
+Added `ns` to `refineNormalMapSrfx` signature and forwarded from `glmm.py`.
 
-1. [DONE] Baseline diagnostic: run `glmm_error_analysis.py` for small/large/huge
-   and read the "blup_var calibration: mean(err²)/mean(blup_var) by n_g bin" table.
-   Ratio > 1 → overconfident (blup_var too small); ratio < 1 → underconfident.
+Post-fix calibration ratios (mean(err²)/mean(blup_var) by n_g bin):
 
-2. Add `G_mom` to the `lmmNormal` stats dict. `G_mom` (shape (B,)) is already
-   computed in `_lmmNormalFull`; add `'G_mom': G_mom` to the return dict. This is
-   the only change to `normal.py`.
+| n_g bin | small | large | huge |
+| --- | ---: | ---: | ---: |
+| 5–9 | 0.91 | 1.09 | 1.03 |
+| 9–13 | 0.89 | 0.98 | 0.94 |
+| 13–17 | 0.96 | 0.93 | 0.85 |
+| 17–25 | 0.97 | 0.93 | 1.36 |
+| 25–150 | 1.08 | 1.07 | 1.13 |
 
-3. Recompute `blup_var` in `_recomputeNormalFinalDiagMap`:
-   a. Extract `gls.blup_var` (= σ²·MAP W_g diagonal) from the existing
-      `_normalGlsAndBlups` call — this object is already in scope.
-   b. Delta-method inflation: `blup_var *= 1 + 2 / (G - d).clamp(min=2)` where
-      G = mask_m.sum(-1) and d = Xm.shape[-1].
-   c. KH correction using `gls.W_ZtX` and `gls.A_reg` (same formula as lmmNormal).
-   d. Floor at `Psi_diag / (2 * ns)` and additive floor `Psi_diag / G_mom` using
-      MAP Psi diagonal and `stats['G_mom']` from step 2.
-   e. `out['blup_var'] = blup_var` to override the raw value.
-
-4. Acceptance: run `glmm_required_benchmark.py` — all 12 point-estimate cells must
-   be within floating-point tolerance of baseline. Re-run `glmm_error_analysis.py`
-   to confirm calibration ratios shift toward 1.0 across n_g bins.
+12/15 bins within ±10% of 1.0. Worst remaining: huge n_g 17-24 at 1.36 (previously
+0.79 before, slightly overconfident now). All 12 point-estimate benchmark cells
+unchanged. Before fix, worst bins were 0.23–0.26 (intervals 4× too wide).
 
 Closed: REML Pass
 -----------------

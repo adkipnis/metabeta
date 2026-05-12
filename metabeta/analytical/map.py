@@ -175,6 +175,7 @@ def _recomputeNormalFinalDiagMap(
     Zm: torch.Tensor,
     mask_n: torch.Tensor,
     mask_m: torch.Tensor,
+    ns: torch.Tensor,
     sigma_rfx: torch.Tensor,
     mask_q: torch.Tensor | None,
     beta_alpha_low: float = 0.65,
@@ -185,7 +186,7 @@ def _recomputeNormalFinalDiagMap(
     if mask_q is not None:
         Zm = Zm * mask_q[..., :q].to(device=Zm.device, dtype=Zm.dtype)[:, None, None, :]
 
-    B, m, _, _ = Xm.shape
+    B, m, _, d = Xm.shape
     device = Xm.device
     dtype = Xm.dtype
     active = mask_m.bool()
@@ -239,10 +240,44 @@ def _recomputeNormalFinalDiagMap(
     Ztr = torch.einsum('bmnq,bmn->bmq', Zm, resid)
     blups = torch.einsum('bmqp,bmp->bmq', gls.W_g, Ztr)
 
+    # Recompute blup_var from MAP GLS quantities (σ²·MAP_W_g diagonal).
+    # The raw blup_var uses raw Psi, which understates MAP shrinkage and
+    # produces inflated uncertainty via the Ψ/G_mom additive floor.
+    blup_var = gls.blup_var  # (B, m, q), already clamped/nan-cleaned
+
+    # Delta-method inflation for Psi estimation uncertainty: 1 + 2/(G-d).
+    G = mask_m.float().sum(dim=-1)  # (B,)
+    df_sigma = (G - float(d)).clamp(min=1.0)
+    blup_var = blup_var * (1.0 + 2.0 / df_sigma.clamp(min=2.0))[:, None, None]
+
+    # Kackar-Harville correction: beta uncertainty propagation into BLUPs.
+    beta_identified = gls.beta_mask.any(dim=-1)  # (B,)
+    gls_determined = G >= float(d)
+    vals_kh, vecs_kh = torch.linalg.eigh(gls.A_reg)
+    max_kh = vals_kh.amax(dim=-1, keepdim=True).clamp(min=1.0)
+    inv_vals_kh = torch.where(
+        vals_kh > 1e-3 * max_kh,
+        1.0 / vals_kh.clamp(min=1e-30),
+        torch.zeros_like(vals_kh),
+    )
+    beta_var_kh = (vecs_kh**2 * inv_vals_kh[:, None, :]).sum(dim=-1).clamp(min=1e-8)
+    kh_corr = (gls.W_ZtX**2 * beta_var_kh[:, None, None, :]).sum(dim=-1)
+    kh_corr = kh_corr * (beta_identified & gls_determined)[:, None, None]
+    blup_var = blup_var + kh_corr
+
+    # n_g-dependent floor: prevents near-zero variance for small groups.
+    # The Ψ/G_mom additive floor from the raw path is omitted: under MAP,
+    # Psi is better estimated so the large floor (calibrated for raw scale)
+    # would overstate uncertainty and dominate for medium-to-large groups.
+    psi_diag = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0)
+    blup_var_floor = psi_diag[:, None, :] / (2.0 * ns.clamp(min=1.0)[:, :, None])
+    blup_var = blup_var.clamp(min=blup_var_floor)
+
     out = dict(stats)
     out['beta_est'] = gls.beta
     out['sigma_rfx_est'] = sigma_rfx
     out['blup_est'] = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
+    out['blup_var'] = blup_var
     out['Psi'] = Psi
     return out
 
@@ -254,6 +289,7 @@ def refineNormalMapSrfx(
     Zm: torch.Tensor,
     mask_n: torch.Tensor,
     mask_m: torch.Tensor,
+    ns: torch.Tensor,
     nu_ffx: torch.Tensor,
     tau_ffx: torch.Tensor,
     family_ffx: torch.Tensor,
@@ -350,6 +386,7 @@ def refineNormalMapSrfx(
                 Zm,
                 mask_n,
                 mask_m,
+                ns,
                 sigma_rfx,
                 mask_q,
                 beta_alpha_low=beta_alpha_low,
