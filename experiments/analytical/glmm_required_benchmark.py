@@ -1,4 +1,7 @@
-"""Compact benchmark for the required Gaussian GLMM error-analysis suite."""
+"""Compact benchmark for the required GLMM error-analysis suite.
+
+Supports normal (family=n) and Bernoulli (family=b) likelihood families.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +19,7 @@ from metabeta.utils.experiments import dataFilePath
 
 SIZES = ['small', 'medium', 'large', 'huge']
 METHODS = ['current', 'raw']
+FAMILIES = ['n', 'b']
 
 
 def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
@@ -30,14 +34,16 @@ def _paths(data_id: str, partition: str, n_epochs: int) -> list[Path]:
 
 
 def run_required_benchmark(args: argparse.Namespace) -> None:
+    family = args.family
     print('method,dataset,partition,N,FFX,sRFX,sEps,BLUP', flush=True)
     for size in args.sizes:
-        combos = [(f'{size}-n-mixed', 'train', 2)]
-        combos.extend((f'{size}-n-sampled', part, 0) for part in ['valid', 'test'])
+        combos = [(f'{size}-{family}-mixed', 'train', 2)]
+        combos.extend((f'{size}-{family}-sampled', part, 0) for part in ['valid', 'test'])
         for data_id, partition, n_epochs in combos:
             cfg = loadDataConfig(data_id)
             max_q = cfg['max_q']
-            stores = {method: _MetricStore() for method in args.methods}
+            likelihood_family = int(cfg.get('likelihood_family', 0))
+            stores = {method: _MetricStore(likelihood_family) for method in args.methods}
 
             with torch.no_grad():
                 for path in _paths(data_id, partition, n_epochs):
@@ -69,6 +75,7 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                                 batch['mask_m'].float(),
                                 batch['ns'].clamp(min=1).float(),
                                 batch['n'].float(),
+                                likelihood_family=likelihood_family,
                                 map_refine=method != 'raw',
                                 **common,
                             )
@@ -79,7 +86,8 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
 
 
 class _MetricStore:
-    def __init__(self) -> None:
+    def __init__(self, likelihood_family: int = 0) -> None:
+        self.likelihood_family = likelihood_family
         self.beta_errs: list[np.ndarray] = []
         self.beta_truths: list[np.ndarray] = []
         self.srfx_errs: list[np.ndarray] = []
@@ -108,16 +116,22 @@ class _MetricStore:
                 .numpy()
             )
             self.srfx_truths.append(batch['sigma_rfx'][b][mask_q[b]].cpu().numpy())
-            self.seps_errs.append(
-                (stats['sigma_eps_est'][b, 0] - batch['sigma_eps'][b]).reshape(1).cpu().numpy()
-            )
-            self.seps_truths.append(batch['sigma_eps'][b].reshape(1).cpu().numpy())
+            if self.likelihood_family == 0:
+                self.seps_errs.append(
+                    (stats['sigma_eps_est'][b, 0] - batch['sigma_eps'][b]).reshape(1).cpu().numpy()
+                )
+                self.seps_truths.append(batch['sigma_eps'][b].reshape(1).cpu().numpy())
             blup_est = stats['blup_est'][b][mask_m[b]][:, mask_q[b]]
             blup_true = batch['rfx'][b][mask_m[b]][:, mask_q[b]]
             self.blup_errs.append((blup_est - blup_true).reshape(-1).cpu().numpy())
             self.blup_truths.append(blup_true.reshape(-1).cpu().numpy())
 
     def row(self, method: str, data_id: str, partition: str) -> str:
+        seps_str = (
+            f'{_nrmse(np.concatenate(self.seps_errs), np.concatenate(self.seps_truths)):.4f}'
+            if self.likelihood_family == 0
+            else 'n/a'
+        )
         return ','.join(
             [
                 method,
@@ -126,7 +140,7 @@ class _MetricStore:
                 str(self.n_total),
                 f'{_nrmse(np.concatenate(self.beta_errs), np.concatenate(self.beta_truths)):.4f}',
                 f'{_nrmse(np.concatenate(self.srfx_errs), np.concatenate(self.srfx_truths)):.4f}',
-                f'{_nrmse(np.concatenate(self.seps_errs), np.concatenate(self.seps_truths)):.4f}',
+                seps_str,
                 f'{_nrmse(np.concatenate(self.blup_errs), np.concatenate(self.blup_truths)):.4f}',
             ]
         )
@@ -135,10 +149,11 @@ class _MetricStore:
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--sizes', nargs='+', default=SIZES, choices=SIZES)
-    parser.add_argument('--methods', nargs='+', default=['current'], choices=METHODS)
-    parser.add_argument('--batch-size', type=int, default=32)
-    parser.add_argument('--max-batches', type=int, default=None)
+    parser.add_argument('--sizes',      nargs='+', default=SIZES,      choices=SIZES)
+    parser.add_argument('--methods',    nargs='+', default=['current'], choices=METHODS)
+    parser.add_argument('--family',                default='n',         choices=FAMILIES)
+    parser.add_argument('--batch-size', type=int,  default=32)
+    parser.add_argument('--max-batches',type=int,  default=None)
     return parser.parse_args()
 # fmt: on
 
