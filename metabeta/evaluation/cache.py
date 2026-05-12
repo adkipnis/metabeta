@@ -11,8 +11,8 @@ Typical layout:
 Methods not present in a fit file are silently skipped.
 
 Usage (from repo root):
-    uv run python metabeta/evaluation/cache_nuts_summary.py --data_id small-n-sampled --partition valid
-    uv run python metabeta/evaluation/cache_nuts_summary.py --data_id small-n-sampled --partition test
+    uv run python metabeta/evaluation/cache.py --data_id small-n-sampled --partition valid
+    uv run python metabeta/evaluation/cache.py --data_id small-n-sampled --partition test
 """
 
 import argparse
