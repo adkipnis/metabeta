@@ -103,7 +103,8 @@ def _cache(
         proposal.rescale(batch['sd_y'])
         batch_for_summary = rescaleData(batch)
 
-    logger.info('Computing %s summary...', method)
+    b = proposal.samples_g.shape[0]
+    print(f'\n[{method}] computing summary for {b} datasets ...')
     summary = getSummary(proposal, batch_for_summary, likelihood_family=likelihood_family)
     summary.save(cache_path)
     logger.info('Saved: %s', cache_path)
@@ -129,6 +130,8 @@ def main() -> None:
     logger.info('Loading %s', fit_path)
     dl = Dataloader(fit_path, batch_size=8, sortish=True, max_d=max_d, max_q=max_q)
     batch = dl.fullBatch()
+    n_datasets = batch['y'].shape[0]
+    logger.info('Loaded %d datasets', n_datasets)
     del dl
 
     for method in ('nuts', 'advi'):
