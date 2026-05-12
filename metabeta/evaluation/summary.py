@@ -183,14 +183,19 @@ def getSummary(
     return EvaluationSummary(per_dataset=per_dataset, aggregated=aggregated, tpd=proposal.tpd)
 
 
-def _rfxJointCalibration(
+def _rfxJointRanks(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
-) -> tuple[float | None, float | None]:
-    """Joint calibration for random effects via Mahalanobis fractional ranks."""
+) -> list[float]:
+    """Mahalanobis fractional ranks for random effects (one per active group).
+
+    Returns an empty list when joint calibration is not applicable (q < 2 for
+    all datasets, or rfx_samples is not 4-D).  Callers can accumulate across
+    batches and reduce with _rfxRanksToCalibration.
+    """
     rfx_samples = proposal.rfx
     if rfx_samples.dim() != 4:
-        return None, None
+        return []
 
     mask_q = data['mask_q']
     mask_m = data['mask_m']
@@ -237,16 +242,15 @@ def _rfxJointCalibration(
             delta = truth[i, j, :q_i] - mu
             d2_truth = (delta @ cov_inv @ delta).item()
             inside = (d2_samples <= d2_truth).float()
-            if w_i is None:
-                rank = float(inside.mean().item())
-            else:
-                rank = float((inside * w_i).sum().item())
+            rank = float((inside * w_i).sum().item()) if w_i is not None else float(inside.mean().item())
             if np.isfinite(rank):
                 ranks.append(rank)
 
-    if not ranks:
-        return None, None
+    return ranks
 
+
+def _rfxRanksToCalibration(ranks: list[float]) -> tuple[float, float]:
+    """Reduce accumulated ranks to (ece, eace)."""
     r = np.asarray(ranks, dtype=np.float64)
     ece = 0.0
     eace = 0.0
@@ -257,6 +261,17 @@ def _rfxJointCalibration(
         ece += err
         eace += abs(err)
     return ece / len(ALPHAS), eace / len(ALPHAS)
+
+
+def _rfxJointCalibration(
+    proposal: Proposal,
+    data: dict[str, torch.Tensor],
+) -> tuple[float | None, float | None]:
+    """Joint calibration for random effects via Mahalanobis fractional ranks."""
+    ranks = _rfxJointRanks(proposal, data)
+    if not ranks:
+        return None, None
+    return _rfxRanksToCalibration(ranks)
 
 
 def summaryTable(s: EvaluationSummary, likelihood_family: int = 0) -> str:
