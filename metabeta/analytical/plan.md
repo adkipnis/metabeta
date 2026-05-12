@@ -1,7 +1,7 @@
 Analytical GLMM Plan
 ====================
 
-Last updated: 2026-05-11.
+Last updated: 2026-05-12.
 
 Current Decision
 ----------------
@@ -95,9 +95,8 @@ harmful when used in the final BLUP covariance.
 
 Updated priority order:
 
-1. Urgent / most promising: MAP ablation and runtime checks for the diagonal-MAP
-   final GLS/BLUP pass. Confirm whether internal beta/sigma(Eps) optimization in
-   MAP is still necessary now that MAP scale is used for BLUPs.
+1. [CLOSED] MAP ablation: three-parameter joint optimization confirmed as optimal.
+   See "Closed MAP Optimizer Ablation" below.
 2. Important and conditional: beta leakage into final BLUP residuals for small or
    low-dimensional rows only. The oracle beta row improves small BLUPs but regresses
    large/huge, so any beta change needs a strict shape gate.
@@ -227,22 +226,33 @@ REML decision:
 - Keep Laplace curvature as a later context/uncertainty feature candidate around
   the MAP optimum, not as a point-estimate path.
 
-Remaining MAP Checks
---------------------
+Closed MAP Optimizer Ablation
+------------------------------
 
-MAP is the production baseline, but it should still be simplified if possible.
-The next MAP diagnostic should compare the new default diagonal-MAP recompute
-against optimizer ablations:
+MAP optimizer ablation was run on 2026-05-12 via
+`experiments/analytical/glmm_map_ablation.py`. Four variants were compared:
 
-- optimize sigma(RFX) only;
-- optimize sigma(RFX) plus beta;
-- optimize sigma(RFX) plus sigma(Eps);
-- compare against the current internal beta + sigma(RFX) + sigma(Eps) objective.
+| Method | FFX | sRFX | sEps | BLUP |
+| --- | ---: | ---: | ---: | ---: |
+| raw | 0.6625 | 0.6803 | 0.1482 | 0.4975 |
+| map_rfx only | 0.6581 | 0.4629 | 0.1482 | 0.4734 |
+| map_rfx + eps | 0.6717 | 0.4624 | 0.1482 | 0.4731 |
+| map_rfx + beta | 0.6920 | 0.4602 | 0.1482 | 0.4743 |
+| current (all three) | 0.6560 | 0.4595 | 0.1482 | 0.4733 |
 
-The output contract should remain: MAP reports `sigma_rfx_est`, writes diagonal
-MAP `Psi`, and recomputes final Gaussian beta/BLUPs with that diagonal covariance.
-The purpose is to check whether internal beta/sigma(Eps) optimization is buying
-sigma(RFX)/BLUP accuracy or just adding cost and variance.
+Decision: keep the current three-parameter joint optimization (sigma_rfx + beta +
+sigma_eps). Current is Pareto-dominant: best sRFX (0.4595), best FFX (0.6560), and
+essentially best BLUP (tied with map_rfx_eps at 0.4733 vs 0.4731).
+
+Simplifying to sigma_rfx only: sRFX regresses by 0.7% and BLUP is nearly
+unchanged, but FFX slightly worsens. Adding back individual parameters without
+all three is strictly worse for FFX — rfx+beta causes a 5.5% FFX regression,
+rfx+eps causes a 2.4% FFX regression. The joint optimization stabilizes by
+balancing variance attribution between beta, rfx, and eps; fixing any one
+parameter forces the others to compensate incorrectly.
+
+The `optimize` kwarg in `refineNormalMapSrfx` / `glmm(map_optimize=...)` is
+retained for future diagnostics but is not used in production.
 
 Commands
 --------

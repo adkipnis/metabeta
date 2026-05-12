@@ -15,6 +15,12 @@ analytical GLMM estimator in `metabeta/analytical/`.
   FFX, sigma(RFX), sigma(Eps), and BLUP NRMSE on mixed train epochs 1-2 and sampled
   valid/test across small, medium, large, and huge datasets. Use `--sizes` and
   `--methods current raw` for incremental MAP-vs-raw checks.
+- `glmm_map_ablation.py` — MAP optimizer ablation diagnostic. Compares four MAP
+  variants (sigma_rfx only, rfx+eps, rfx+beta, all three) to confirm that the
+  current joint three-parameter optimization is necessary. Result: current is
+  Pareto-dominant; simplifying to sigma_rfx-only regresses sRFX by 0.7% with
+  nearly no BLUP change; rfx+beta or rfx+eps regress FFX by 2–6%. See
+  "Closed MAP Optimizer Ablation" in `plan.md`.
 - `statsmodels_reml.py` — spot-checks analytical GLMM estimates against
   statsmodels REML on individual datasets.
 - `glmm_perf_baseline.md` — concise current benchmark and retired REML summary.

@@ -265,26 +265,39 @@ def refineNormalMapSrfx(
     n_steps: int = 20,
     lr: float = 0.03,
     recompute_blup: bool = True,
+    optimize: str = 'all',
 ) -> dict[str, torch.Tensor]:
     """Return stats with sigma(RFX) refined by marginal MAP.
 
     By default, final Gaussian GLS/BLUP is recomputed with a diagonal MAP Psi.
     This keeps the useful MAP sigma(RFX) scale while excluding noisy estimated
     correlations from the final BLUP shrinkage covariance.
+
+    optimize controls which parameters receive gradients during MAP optimization.
+    Supported values: 'rfx' (sigma_rfx only), 'rfx_beta', 'rfx_eps', 'all'.
     """
     q = Zm.shape[-1]
     if q == 0 or n_steps <= 0:
         return stats
     corr = _fixedCorrFromStats(stats, eta_rfx, mask_q, q)
-    beta = stats['beta_est'].detach().clone().requires_grad_(True)
+
+    opt_beta = optimize in ('rfx_beta', 'all')
+    opt_eps = optimize in ('rfx_eps', 'all')
+
+    beta = stats['beta_est'].detach().clone().requires_grad_(opt_beta)
     log_sigma_rfx = (
         stats['sigma_rfx_est'].detach().clamp(min=1e-4, max=20.0).log().clone()
     ).requires_grad_(True)
     log_sigma_eps = (
         stats['sigma_eps_est'].squeeze(-1).detach().clamp(min=1e-4, max=20.0).log().clone()
-    ).requires_grad_(True)
+    ).requires_grad_(opt_eps)
 
-    optimizer = torch.optim.Adam([beta, log_sigma_rfx, log_sigma_eps], lr=lr)
+    opt_params = [log_sigma_rfx]
+    if opt_beta:
+        opt_params.append(beta)
+    if opt_eps:
+        opt_params.append(log_sigma_eps)
+    optimizer = torch.optim.Adam(opt_params, lr=lr)
     with torch.enable_grad():
         for _ in range(n_steps):
             optimizer.zero_grad(set_to_none=True)
