@@ -39,6 +39,7 @@ from metabeta.utils.evaluation import (
     concatProposalsBatch,
 )
 from metabeta.models.approximator import Approximator
+from metabeta.utils.regularization import corrToLower
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.evaluation.predictive import getPosteriorPredictive, posteriorPredictiveNLL
@@ -347,18 +348,24 @@ class Trainer:
             has_sigma_eps = 'nuts_sigma_eps' in batch
             if has_sigma_eps:
                 samples_g.append(batch['nuts_sigma_eps'].unsqueeze(-1))
+            d_corr = self.model.d_corr
+            nuts_corr = batch.get('nuts_corr_rfx')
+            if d_corr > 0 and nuts_corr is not None:
+                samples_g.append(corrToLower(nuts_corr))  # (B, S, d_corr)
+            elif d_corr > 0:
+                logger.warning('NUTS reference: nuts_corr_rfx missing, padding zeros for d_corr=%d', d_corr)
+                samples_g.append(samples_g[0].new_zeros(*samples_g[0].shape[:-1], d_corr))
             proposal = Proposal(
                 {
                     'global': {'samples': torch.cat(samples_g, dim=-1)},
                     'local': {'samples': batch['nuts_rfx']},
                 },
                 has_sigma_eps=has_sigma_eps,
-                corr_rfx=batch.get('nuts_corr_rfx'),
+                d_corr=d_corr,
             )
             if self.cfg.rescale and self.cfg.likelihood_family == 0:
                 proposal.rescale(batch['sd_y'])
                 batch = rescaleData(batch)
-            proposal.tpd = batch['nuts_duration'].mean().item()
             ref_summary = getSummary(proposal, batch, likelihood_family=self.cfg.likelihood_family)
             ref_summary.save(cache_path)
             logger.info('Saved NUTS reference summary to %s', cache_path)
