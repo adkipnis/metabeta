@@ -39,7 +39,6 @@ from metabeta.utils.evaluation import (
     concatProposalsBatch,
 )
 from metabeta.models.approximator import Approximator
-from metabeta.utils.regularization import corrToLower
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.evaluation.predictive import getPosteriorPredictive, posteriorPredictiveNLL
@@ -311,64 +310,38 @@ class Trainer:
             wandb.finish()
 
     def _logFitReference(self) -> None:
-        """Load or compute NUTS valid summary; print it and optionally log to WandB."""
+        """Load NUTS valid summary from cache; print it and optionally log to WandB."""
         data_dir = Path(self.dir, '..', 'outputs', 'data', self.cfg.data_id_valid)
         fit_path = data_dir / 'valid.fit.npz'
         cache_path = data_dir / 'summary_valid_nuts.pt'
+        cache_cmd = f'uv run python metabeta/evaluation/cache.py --data_id {self.cfg.data_id_valid} --partition valid'
 
-        ref_summary = None
-
-        # Try loading from cache
-        if cache_path.exists():
-            ref_mtime = fit_path.stat().st_mtime if fit_path.exists() else 0.0
-            if cache_path.stat().st_mtime >= ref_mtime:
-                try:
-                    ref_summary = EvaluationSummary.load(cache_path)
-                except Exception as e:
-                    logger.warning('Could not load NUTS reference cache: %s', e)
-
-        # Fall back: compute from fit file
-        if ref_summary is None:
-            if not fit_path.exists():
-                logger.warning('NUTS reference: %s not found, skipping.', fit_path)
-                return
-            dl_ref = Dataloader(
-                fit_path,
-                batch_size=8,
-                sortish=True,
-                max_d=self.cfg.max_d,
-                max_q=self.cfg.max_q,
+        if not cache_path.exists():
+            logger.warning(
+                'NUTS reference cache not found: %s\n  Build it with: %s',
+                cache_path,
+                cache_cmd,
             )
-            batch = dl_ref.fullBatch()
-            del dl_ref  # free fit file from memory before the summary computation
-            if 'nuts_ffx' not in batch:
-                logger.warning('NUTS reference: no NUTS samples in %s, skipping.', fit_path)
-                return
-            samples_g = [batch['nuts_ffx'], batch['nuts_sigma_rfx']]
-            has_sigma_eps = 'nuts_sigma_eps' in batch
-            if has_sigma_eps:
-                samples_g.append(batch['nuts_sigma_eps'].unsqueeze(-1))
-            d_corr = self.model.d_corr
-            nuts_corr = batch.get('nuts_corr_rfx')
-            if d_corr > 0 and nuts_corr is not None:
-                samples_g.append(corrToLower(nuts_corr))  # (B, S, d_corr)
-            elif d_corr > 0:
-                logger.warning('NUTS reference: nuts_corr_rfx missing, padding zeros for d_corr=%d', d_corr)
-                samples_g.append(samples_g[0].new_zeros(*samples_g[0].shape[:-1], d_corr))
-            proposal = Proposal(
-                {
-                    'global': {'samples': torch.cat(samples_g, dim=-1)},
-                    'local': {'samples': batch['nuts_rfx']},
-                },
-                has_sigma_eps=has_sigma_eps,
-                d_corr=d_corr,
+            return
+
+        ref_mtime = fit_path.stat().st_mtime if fit_path.exists() else 0.0
+        if cache_path.stat().st_mtime < ref_mtime:
+            logger.warning(
+                'NUTS reference cache is stale (older than %s).\n  Refresh it with: %s',
+                fit_path.name,
+                cache_cmd,
             )
-            if self.cfg.rescale and self.cfg.likelihood_family == 0:
-                proposal.rescale(batch['sd_y'])
-                batch = rescaleData(batch)
-            ref_summary = getSummary(proposal, batch, likelihood_family=self.cfg.likelihood_family)
-            ref_summary.save(cache_path)
-            logger.info('Saved NUTS reference summary to %s', cache_path)
+            return
+
+        try:
+            ref_summary = EvaluationSummary.load(cache_path)
+        except Exception as e:
+            logger.warning(
+                'Could not load NUTS reference cache (%s).\n  Rebuild with: %s',
+                e,
+                cache_cmd,
+            )
+            return
 
         summary_table = summaryTable(ref_summary, self.cfg.likelihood_family)
         print(f'\nNUTS reference (validation):\n{summary_table}')
