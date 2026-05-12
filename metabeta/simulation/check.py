@@ -15,17 +15,17 @@ def setup() -> argparse.Namespace:
     )
     parser.add_argument('--data_id', type=str, nargs='+', required=True,
                         help='one or more data config tags')
-    parser.add_argument('--mode', choices=['train', 'test', 'valid'], required=True,
-                        help='check training partitions (train), test fits (test), or valid fits (valid)')
+    parser.add_argument('--partition', choices=['train', 'test', 'valid'], required=True,
+                        help='check training epochs (train), test fits (test), or valid fits (valid)')
     parser.add_argument('-b', type=int, default=5000,
-                        help='batch size: expected number of train partitions (default: 5000)')
+                        help='batch size: expected number of train epochs (default: 5000)')
     parser.add_argument('--n_fits', type=int, default=512,
                         help='expected fit files per method (default: 512)')
     parser.add_argument('--srcdir', type=str,
                         default=str(Path(__file__).resolve().parent / '..' / 'outputs' / 'data'),
                         help='root data directory')
     parser.add_argument('--no_reintegrate', action='store_true',
-                        help='skip reintegration even when all fits are present (test mode only)')
+                        help='skip reintegration even when all fits are present (test partition only)')
     parser.add_argument('--inspect', action='store_true',
                         help='load each npz file to verify readability')
     return parser.parse_args()
@@ -162,7 +162,7 @@ def _reintegrate(
 def main() -> int:
     cfg = setup()
     srcdir = Path(cfg.srcdir).resolve()
-    check_fn = {'train': _checkTrain, 'test': _checkTest, 'valid': _checkValid}[cfg.mode]
+    check_fn = {'train': _checkTrain, 'test': _checkTest, 'valid': _checkValid}[cfg.partition]
 
     results = {}
     for i, data_id in enumerate(cfg.data_id):
