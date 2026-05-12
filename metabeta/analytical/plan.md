@@ -39,31 +39,15 @@ The high-dimensional beta blend was tested at 0.65 and 0.50 and rejected because
 large-valid or huge-mixed BLUPs regressed. The high-dimensional branch remains
 0.75.
 
-Historical notes in `estimator_analysis.md` point to four raw-estimator areas that
-can still be revisited later:
+Historical notes in `experiments/analytical/estimator_analysis.md` cover open
+weakpoints in all five stages. Key dead ends: WP-EM3 (EM extension, 3 attempts,
+all catastrophic on medium-n), WP-Ψ1 (beta_wg for MoM residuals, FFX blowup at
+high-d), WP-EM2 (mom_mask refresh is a no-op, G_mom is structurally bounded).
 
-- Stage 1 sigma(Eps): within-group projection df and rank handling.
-- Stage 2 Psi: noisy low-information MoM diagonal/off-diagonal estimates.
-- Stage 3 GLS/BLUP: fixed-effect leakage into BLUP residuals and beta fallback
-  behavior.
-- Stage 4/5 EM and BLUP variance: biased EM fixed points, sigma(Eps) drift, and
-  residual under-calibration of BLUP uncertainty.
+Raw Attribution Diagnostics
+----------------------------
 
-Deferred Raw Diagnostics
-------------------------
-
-The next active work should focus on raw MoM/EM attribution and MAP-diagonal
-ablation. Current MAP now improves reported sigma(RFX) and final BLUPs, but
-sigma(Eps) is still raw-derived and the raw Psi path still determines the fallback
-behavior when MAP is disabled.
-
-Initial diagnostic result:
-
-```bash
-uv run python experiments/analytical/glmm_raw_diagnostic.py
-```
-
-Required-suite totals from the first oracle attribution pass:
+Required-suite totals from the oracle attribution pass (`glmm_raw_diagnostic.py`):
 
 | Method | FFX | sRFX | sEps | BLUP |
 | --- | ---: | ---: | ---: | ---: |
@@ -93,12 +77,11 @@ Decision: keep the MAP diagonal recompute as production. True diagonal explains
 most of the oracle BLUP gain, while estimated off-diagonal correlations are often
 harmful when used in the final BLUP covariance.
 
-Updated priority order:
+Remaining Priorities
+--------------------
 
 1. [CLOSED] MAP ablation: three-parameter joint optimization confirmed as optimal.
-   See "Closed MAP Optimizer Ablation" below.
 2. [CLOSED] Beta blend: current alpha (d<=8 → 0.65, d>8 → 0.75) confirmed optimal.
-   See "Closed Beta Blend Diagnostic" below.
 3. Monitor only: sigma(Eps) projection and final GLS scale attribution. The retained
    projection change fixed large/huge sigma(Eps) outliers, but the oracle sigma(Eps)
    row does not improve point estimates under the current recompute path.
@@ -106,80 +89,6 @@ Updated priority order:
    diagnostic shows that EM is the limiting step in broad bins.
 5. Secondary: BLUP variance calibration. Keep monitoring, but point-estimate
    accuracy is the current bottleneck.
-
-Add or extend an experiment-only raw diagnostic,
-`experiments/analytical/glmm_raw_diagnostic.py`. It should not change
-`metabeta/analytical/glmm.py` while diagnosing. The diagnostic should run the
-required Gaussian suite and collect row-level/stage-level data for the raw path.
-
-Required estimator rows:
-
-- `raw`: `glmm(..., map_refine=False)`.
-- `current`: production `glmm()` with MAP enabled, reported only as a reference.
-- `oracle_sigma_eps`: raw path with true sigma(Eps) substituted where practical.
-- `oracle_beta_blup`: raw path with true beta used only for final BLUP residuals.
-- `oracle_psi`: raw path with true Psi used for GLS/BLUP, to quantify the remaining
-  variance-component ceiling.
-
-The oracle rows are diagnostic only. They are intended to identify which raw stage
-limits accuracy, not to define production behavior.
-
-Required metrics:
-
-- Standard NRMSE for FFX, sigma(RFX), sigma(Eps), and BLUP.
-- Bias, absolute-error quantiles, and signed error for sigma(Eps) and sigma(RFX).
-- BLUP variance calibration by group-size bins.
-- Runtime per row for raw MoM/EM and production MAP reference.
-- Failure/fallback rates: finite checks, active masks, rank-deficient groups,
-  low-information MoM rows, EM early exit, cap/clamp rates, and beta fallback rates.
-
-Required breakdowns:
-
-- Shape: `d`, `q`, `m`, `n`, median/min/max `n_i`, and `n / m`.
-- Identification: `G_mom`, `G_mom - d`, `enough_full_mom`, componentwise Psi counts,
-  summed `z_rank`, `mx_rank`, and residual df.
-- Signal: true sigma(Eps), mean true sigma(RFX), R2/SNR proxy, eta/correlation mode,
-  and MAP-vs-raw sigma(RFX) direction for reference.
-- Error interactions: beta projection error vs BLUP error, sigma(Eps) error vs
-  sigma(RFX) error, and Psi diagonal underestimation vs BLUP shrinkage.
-
-Stage-Specific Questions
-------------------------
-
-1. sigma(Eps) projection:
-   - Does the within-group estimator become biased when residual df is small or
-     when `mx_rank` is far below active `d`?
-   - Are row-level sigma(Eps) errors mainly structural (`n_i`, rank, df) or signal
-     driven (R2/SNR, true sigma(Eps))?
-   - Does anchoring EM closer to the projection estimate help or hurt the rows
-     where sigma(Eps) currently regresses?
-
-2. Initial Psi MoM:
-   - Are sigma(RFX) errors dominated by rows with low `G_mom`, low component counts,
-     high `q`, or high correlation?
-   - Does the componentwise diagonal path help high-q rows, or does it introduce a
-     distinct bias relative to joint MoM?
-   - Are off-diagonal estimates adding useful information for BLUPs, or mostly noise?
-
-3. GLS beta and BLUP:
-   - Which beta candidate is best by case: pooled OLS, within-group beta, GLS beta,
-     or the current beta-for-BLUP blend?
-   - Is the current beta blend still appropriate after the regenerated simulation
-     data and updated prior coverage?
-   - Are high BLUP errors mostly caused by beta leakage, Psi shrinkage, or both?
-
-4. EM refinement:
-   - Which rows move toward better Psi/sigma(Eps) after each EM iteration, and which
-     rows move toward a biased fixed point?
-   - Do trim/cap rules activate in the same rows where they help?
-   - Is there a measurable gate that can stop EM or damp EM without repeating past
-     failed broad iteration-count changes?
-
-5. BLUP variance:
-   - Does the current delta/KH/floor stack remain calibrated after the latest data
-     regeneration?
-   - Which bins remain under-calibrated: low `G_mom`, large `n_i`, high `q`, or
-     underestimated Psi?
 
 Acceptance Criteria for Raw Changes
 -----------------------------------
@@ -196,92 +105,32 @@ primary output on the required suite without material regressions elsewhere:
 - Changes that only improve oracle-like rows or a single narrow bin stay as
   experiments unless they define a clear gate.
 
-Closed REML Pass
-----------------
+Closed: REML Pass
+-----------------
 
-The REML pass is complete. Current MAP remains the production baseline.
+Current MAP: FFX 0.6696, sRFX 0.4585, sEps 0.1331, BLUP 0.4978. Raw/gated REML
+worse (sRFX 0.4608–0.4612). Current-initialized REML improved 11/12 cells but
+medium-n-mixed regressed from 0.5176 to 0.7568, making global sRFX worse (0.4738).
+Recomputing GLS/BLUP after any variant regressed global FFX/BLUP. Decision: keep
+MAP, retire REML from package surface. Full cell-level results: `glmm_perf_baseline.md`.
 
-Required-suite results:
+Closed: MAP Optimizer Ablation
+--------------------------------
 
-- Current MAP: FFX 0.6696, sRFX 0.4585, sEps 0.1331, BLUP 0.4978.
-- Raw MoM/EM: same FFX/sEps/BLUP as current MAP, but sRFX 0.7103.
-- Raw-initialized REML: sRFX 0.4612, worse than current MAP.
-- Gated REML: sRFX 0.4608, worse than current MAP.
-- REML with sigma(Eps) optimized: sRFX 0.4608 and sEps regressed to 0.1360.
-- Current-initialized REML: improved 11 of 12 required cells, but medium-n-mixed
-  regressed from 0.5176 to 0.7568, making global sRFX worse at 0.4738.
+Results from `glmm_map_ablation.py`. Current (all three params) is Pareto-dominant:
+FFX 0.6560, sRFX 0.4595, BLUP 0.4733. sigma_rfx-only regresses FFX 0.3%, sRFX 0.7%.
+rfx+beta regresses FFX 5.5%; rfx+eps 2.4%. Joint optimization balances variance
+attribution; fixing any one parameter forces the others to compensate incorrectly.
+Decision: keep three-parameter joint optimization. `map_optimize` kwarg retained.
 
-Recompute diagnostics were also rejected:
+Closed: Beta Blend
+-------------------
 
-- Recomputing GLS/BLUP after current MAP kept sRFX/sEps unchanged but regressed
-  global FFX from 0.6696 to 0.8029 and BLUP from 0.4978 to 0.5114.
-- Recomputing after REML variants likewise regressed global FFX/BLUP.
-
-REML decision:
-
-- Keep current MAP.
-- Do not integrate REML.
-- Remove REML from the package surface and retire the REML diagnostic script.
-- Keep Laplace curvature as a later context/uncertainty feature candidate around
-  the MAP optimum, not as a point-estimate path.
-
-Closed MAP Optimizer Ablation
-------------------------------
-
-MAP optimizer ablation was run on 2026-05-12 via
-`experiments/analytical/glmm_map_ablation.py`. Four variants were compared:
-
-| Method | FFX | sRFX | sEps | BLUP |
-| --- | ---: | ---: | ---: | ---: |
-| raw | 0.6625 | 0.6803 | 0.1482 | 0.4975 |
-| map_rfx only | 0.6581 | 0.4629 | 0.1482 | 0.4734 |
-| map_rfx + eps | 0.6717 | 0.4624 | 0.1482 | 0.4731 |
-| map_rfx + beta | 0.6920 | 0.4602 | 0.1482 | 0.4743 |
-| current (all three) | 0.6560 | 0.4595 | 0.1482 | 0.4733 |
-
-Decision: keep the current three-parameter joint optimization (sigma_rfx + beta +
-sigma_eps). Current is Pareto-dominant: best sRFX (0.4595), best FFX (0.6560), and
-essentially best BLUP (tied with map_rfx_eps at 0.4733 vs 0.4731).
-
-Simplifying to sigma_rfx only: sRFX regresses by 0.7% and BLUP is nearly
-unchanged, but FFX slightly worsens. Adding back individual parameters without
-all three is strictly worse for FFX — rfx+beta causes a 5.5% FFX regression,
-rfx+eps causes a 2.4% FFX regression. The joint optimization stabilizes by
-balancing variance attribution between beta, rfx, and eps; fixing any one
-parameter forces the others to compensate incorrectly.
-
-The `optimize` kwarg in `refineNormalMapSrfx` / `glmm(map_optimize=...)` is
-retained for future diagnostics but is not used in production.
-
-Closed Beta Blend Diagnostic
-------------------------------
-
-Beta blend sweep was run on 2026-05-12 via
-`experiments/analytical/glmm_beta_blend_diagnostic.py`. The alpha gate
-(beta_for_blup = (1-alpha)*gls_beta + alpha*pooled_ols, gated by active_d_count<=8)
-was swept from 0.65 to 0.80 for both raw and MAP paths:
-
-| Method | small | medium | large | huge | global |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| raw (d<=8: 0.65, d>8: 0.75) | 0.4369 | 0.5168 | 0.5304 | 0.5059 | 0.4975 |
-| raw (d<=8: 0.70) | 0.4373 | 0.5171 | 0.5304 | 0.5059 | 0.4977 |
-| raw (d<=8: 0.75) | 0.4377 | 0.5175 | 0.5304 | 0.5059 | 0.4979 |
-| raw (d<=8: 0.80) | 0.4381 | 0.5179 | 0.5304 | 0.5059 | 0.4981 |
-| current MAP (d<=8: 0.65, d>8: 0.75) | 0.4224 | 0.5015 | 0.4876 | 0.4818 | 0.4733 |
-| MAP (d<=8: 0.70) | 0.4228 | 0.5019 | 0.4876 | 0.4818 | 0.4735 |
-| MAP (d<=8: 0.75) | 0.4233 | 0.5024 | 0.4876 | 0.4818 | 0.4738 |
-| MAP (d<=8: 0.80) | 0.4237 | 0.5028 | 0.4876 | 0.4818 | 0.4740 |
-
-Decision: keep the current blend (0.65 for d<=8, 0.75 for d>8). Every alpha
-increase monotonically degrades BLUP for small and medium rows. Large/huge rows
-are unaffected (d > 8 gate never triggers). The oracle_beta ceiling (true beta
-for BLUP residuals) is globally worse than current production, confirming that
-the improvement seen in plan diagnostics is conditional and that the current
-blend is already a local optimum.
-
-The `beta_alpha_low` / `beta_alpha_high` kwargs in `lmmNormal`, `refineNormalMapSrfx`,
-and `glmm(beta_alpha_low=..., beta_alpha_high=...)` are retained for future
-diagnostics but are not used in production.
+Results from `glmm_beta_blend_diagnostic.py`. Every alpha increase from 0.65
+monotonically degrades BLUP for small/medium rows; large/huge unaffected (d>8 gate
+never triggers for those datasets). Oracle_beta is globally worse (0.5133 vs 0.4978
+raw), confirming the current blend is a local optimum. Decision: keep 0.65/0.75.
+`beta_alpha_low`/`beta_alpha_high` kwargs retained for diagnostics.
 
 Commands
 --------

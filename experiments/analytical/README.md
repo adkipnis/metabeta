@@ -20,15 +20,16 @@ analytical GLMM estimator in `metabeta/analytical/`.
   current joint three-parameter optimization is necessary. Result: current is
   Pareto-dominant; simplifying to sigma_rfx-only regresses sRFX by 0.7% with
   nearly no BLUP change; rfx+beta or rfx+eps regress FFX by 2–6%. See
-  "Closed MAP Optimizer Ablation" in `plan.md`.
+  "Closed: MAP Optimizer Ablation" in `plan.md`.
 - `glmm_beta_blend_diagnostic.py` — beta blend sweep diagnostic. Sweeps
   beta_alpha_low (d<=8 gate) and beta_alpha_high (d>8) for both raw and MAP
   paths to confirm that the current OLS blend (0.65/0.75) is optimal. Result:
   every alpha increase degrades BLUP for small/medium; large/huge unaffected.
-  See "Closed Beta Blend Diagnostic" in `plan.md`.
-- `statsmodels_reml.py` — spot-checks analytical GLMM estimates against
-  statsmodels REML on individual datasets.
-- `glmm_perf_baseline.md` — concise current benchmark and retired REML summary.
+  See "Closed: Beta Blend" in `plan.md`.
+- `glmm_perf_baseline.md` — current benchmark numbers and retired REML summary.
+- `estimator_analysis.md` — historical per-stage weakpoint analysis. Covers all
+  five stages with open WPs and closed dead ends. Key dead ends: WP-EM3 (EM
+  extension), WP-Ψ1 (beta_wg for MoM residuals), WP-EM2 (mom_mask refresh no-op).
 
 Removed historical one-off diagnostics:
 
@@ -42,3 +43,4 @@ Removed historical one-off diagnostics:
 - `glmm_reml_diagnostic.py` — REML/profile-MAP variance-scale diagnostic. Retired
   after refreshed data showed current MAP was better globally and recomputing
   GLS/BLUP after refined variances regressed FFX/BLUP.
+- `statsmodels_reml.py` — statsmodels REML spot-check. Retired with REML pass.

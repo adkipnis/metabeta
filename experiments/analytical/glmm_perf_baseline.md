@@ -95,7 +95,7 @@ Full-suite row-weighted sRFX NRMSE:
 | REML with sigma(Eps) optimized | 0.4608 |
 | current-initialized REML | 0.4738 |
 
-Required-suite cells:
+Required-suite cells (current MAP vs gated REML):
 
 | Dataset | Partition | current MAP | gated REML |
 | --- | --- | ---: | ---: |
@@ -112,44 +112,8 @@ Required-suite cells:
 | huge-n-sampled | valid | 0.4590 | 0.4593 |
 | huge-n-sampled | test | 0.4084 | 0.4084 |
 
-Best Setup by Case
-------------------
-
-| Case | Best setup | Evidence |
-| --- | --- | --- |
-| Overall | current MAP | 0.4585 vs gated REML 0.4608 and raw REML 0.4612 |
-| q = 1 | current MAP / gated | 0.3283 vs raw REML 0.3289 |
-| q = 2 | current MAP | 0.4531 vs raw/gated REML 0.4534 |
-| q >= 3 | current MAP | 0.5534 vs gated REML 0.5585 |
-| n >= 2000 | current MAP / gated | 0.4053 vs raw REML 0.4073 |
-| n < 2000 | current MAP | beats raw/gated REML in both retained n bins |
-| d bins | current MAP | best in all `d <= 4`, `5-8`, and `9+` bins |
-| MAP expands MoM/EM | current MAP | 0.4090 vs gated REML 0.4131 |
-| MAP shrinks MoM/EM | gated REML, tiny edge | 0.6416 vs current MAP 0.6423 |
-| MAP changes MoM/EM by <5% | current MAP | 0.4179 vs gated REML 0.4185 |
-| true sigma <0.25 | gated REML, diagnostic only | 0.5967 vs current MAP 0.5988 |
-
-Rejected recompute diagnostics:
-
-| Method | FFX | sRFX | sEps | BLUP |
-| --- | ---: | ---: | ---: | ---: |
-| current MAP | 0.6696 | 0.4585 | 0.1331 | 0.4978 |
-| current MAP + recompute GLS/BLUP | 0.8029 | 0.4585 | 0.1331 | 0.5114 |
-| raw-initialized REML + recompute | 0.8017 | 0.4612 | 0.1331 | 0.5118 |
-| gated REML + recompute | 0.8016 | 0.4608 | 0.1331 | 0.5115 |
-| current-initialized REML + recompute | 0.8052 | 0.4738 | 0.1331 | 0.5102 |
-
-Interpretation
---------------
-
-- Current MAP is the better default. Gated REML has small local wins in a few cells,
-  but it does not beat MAP overall or by observable gates.
-- Current-initialized REML looked locally promising, improving 11 of 12 cells, but
-  medium-n-mixed regressed from 0.5176 to 0.7568 and made the global score worse.
-- Optimizing sigma(Eps) inside REML worsened reported sigma(Eps).
-- Recomputing GLS/BLUP after refined variance estimates while preserving estimated
-  correlations is not viable: it regressed global FFX and BLUP for MAP and every
-  REML variant.
-- Final decision: keep MAP with diagonal final covariance, retire REML from
-  production and package exports, and do not keep a REML diagnostic script in the
-  active experiment set.
+Decision: keep current MAP. Gated REML has negligible local wins in 3 cells but is
+globally worse. Current-initialized REML improved 11/12 cells but regressed
+medium-n-mixed from 0.5176 to 0.7568. Recomputing GLS/BLUP after refined variances
+is not viable: regressed global FFX from 0.6696 to 0.8029 and BLUP from 0.4978 to
+0.5114 across all variants.
