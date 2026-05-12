@@ -2,6 +2,7 @@ import time
 import logging
 import numpy as np
 import torch
+from tqdm import tqdm
 from tabulate import tabulate
 
 from metabeta.posthoc.conformal import Calibrator
@@ -105,7 +106,7 @@ def getSummary(
 
     for start in range(0, b, chunk):
         end = min(start + chunk, b)
-        print(f'  predictive checks: {end}/{b} datasets', end='\r', flush=True)
+        tqdm.write(f'  predictive checks: {end}/{b} datasets', end='\r')
         p_c = proposal.slice_b(start, end)
         d_c = _sliceData(data, start, end)
 
@@ -144,7 +145,7 @@ def getSummary(
             pp_widths.append(wid_c)
             t_cov += time.perf_counter() - tc
 
-    print(f'  predictive checks: {b}/{b} datasets — done')
+    tqdm.write(f'  predictive checks: {b}/{b} datasets — done')
     logger.debug('  %-30s %.2fs', 'linear predictor (eta)', t_pp)
     logger.debug('  %-30s %.2fs', 'log_prob', t_logp)
     logger.debug('  %-30s %.2fs', 'posterior NLL', t_nll)

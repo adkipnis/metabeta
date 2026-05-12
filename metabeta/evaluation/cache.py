@@ -20,6 +20,7 @@ import logging
 from pathlib import Path
 
 import torch
+from tqdm import tqdm
 
 from metabeta.utils.config import loadDataConfig
 from metabeta.utils.dataloader import Dataloader
@@ -269,26 +270,26 @@ def _cache(
     batch_sizes: list[int] = []
     all_rfx_ranks: list[float] = []
 
-    for batch in dl:
-        b = batch['y'].shape[0]
-        n_done = sum(batch_sizes) + b
-        print(f'  [{method}] {n_done}/{n_total} datasets ...', end='\r', flush=True)
+    with tqdm(total=n_total, desc=method, unit='ds') as pbar:
+        for batch in dl:
+            b = batch['y'].shape[0]
 
-        proposal = _buildProposal(batch, method, d_corr)
-        batch_for_summary = batch
-        if rescale:
-            proposal.rescale(batch['sd_y'])
-            batch_for_summary = rescaleData(batch)
+            proposal = _buildProposal(batch, method, d_corr)
+            batch_for_summary = batch
+            if rescale:
+                proposal.rescale(batch['sd_y'])
+                batch_for_summary = rescaleData(batch)
 
-        partial = getSummary(proposal, batch_for_summary, likelihood_family=likelihood_family)
-        all_rfx_ranks.extend(_rfxJointRanks(proposal, batch_for_summary))
-        partials.append(partial)
-        small_data_list.append(_smallData(batch_for_summary))
-        batch_sizes.append(b)
+            partial = getSummary(proposal, batch_for_summary, likelihood_family=likelihood_family)
+            all_rfx_ranks.extend(_rfxJointRanks(proposal, batch_for_summary))
+            partials.append(partial)
+            small_data_list.append(_smallData(batch_for_summary))
+            batch_sizes.append(b)
 
-        del batch, proposal, batch_for_summary, partial
+            del batch, proposal, batch_for_summary, partial
+            pbar.update(b)
 
-    print(f'  [{method}] {n_total}/{n_total} datasets — merging ...        ')
+    print(f'  [{method}] merging ...')
     summary = _mergeSummaries(partials, small_data_list, batch_sizes, likelihood_family, all_rfx_ranks)
     summary.save(cache_path)
     logger.info('Saved: %s', cache_path)
