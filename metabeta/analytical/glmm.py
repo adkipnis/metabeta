@@ -3,7 +3,7 @@
 import torch
 
 from metabeta.analytical.blup import analyticalBLUPContext
-from metabeta.analytical.map import refineNormalMapSrfx
+from metabeta.analytical.map import refineBernoulliMapSrfx, refineNormalMapSrfx
 from metabeta.analytical.normal import lmmNormal
 from metabeta.analytical.pql import lmmBernoulli, lmmPoisson
 
@@ -99,6 +99,7 @@ def glmm(
             uncorr=uncorr,
             nu_ffx=map_priors['nu_ffx'] if map_refine else None,
             tau_ffx=map_priors['tau_ffx'] if map_refine else None,
+            family_ffx=map_priors['family_ffx'] if map_refine else None,
             **kwargs,
         )
     elif likelihood_family == 2:

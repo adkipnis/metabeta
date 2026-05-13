@@ -35,21 +35,28 @@ def irlsBernoulli(
     clamp: float = 20.0,
     nu_ffx: torch.Tensor | None = None,
     tau_ffx: torch.Tensor | None = None,
+    family_ffx: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Batched IRLS logistic regression via compact normal equations.
 
-    When nu_ffx and tau_ffx are provided, applies a Gaussian prior N(nu_ffx, diag(tau_ffx²))
-    by adding diag(1/τ²) to XwX and diag(1/τ²)ν to Xwz at each step.
+    When nu_ffx and tau_ffx are provided, applies a MAP prior at each IRLS step:
+    - Normal (family_ffx == 0 or family_ffx is None): Gaussian N(nu_ffx, diag(tau_ffx²));
+      constant precision 1/τ² added to XwX and diag(1/τ²)ν to Xwz.
+    - Student-t (family_ffx == 1, df=5): precision (df+1)/(df·τ²+(β−ν)²) is recomputed
+      from the current beta at each iteration (EM-style adaptive ridge).
+    Inactive dimensions (tau_ffx == 0) always receive zero prior precision.
     """
     B, d = Xm.shape[0], Xm.shape[-1]
     beta = Xm.new_zeros(B, d)
-    prior_prec = (
-        torch.where(
-            tau_ffx > 0, 1.0 / tau_ffx.clamp(min=1e-4).square(), tau_ffx.new_zeros(tau_ffx.shape)
-        )
-        if (nu_ffx is not None and tau_ffx is not None)
-        else None
-    )
+    if nu_ffx is not None and tau_ffx is not None:
+        active_mask = tau_ffx > 0  # (B, d)
+        zeros = tau_ffx.new_zeros(tau_ffx.shape)
+        normal_prec = torch.where(active_mask, 1.0 / tau_ffx.clamp(min=1e-4).square(), zeros)
+        # (B, 1) bool — True for datasets with Student-t FFX prior (df=5)
+        is_student = (family_ffx == 1).unsqueeze(-1) if family_ffx is not None else None
+    else:
+        normal_prec = None
+        is_student = None
     for _ in range(n_iter):
         eta = torch.einsum('bmnd,bd->bmn', Xm, beta)
         p = torch.sigmoid(eta)
@@ -57,7 +64,20 @@ def irlsBernoulli(
         z = (eta + (ym - p * mask) / w) * mask
         XwX = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)
         Xwz = torch.einsum('bmnd,bmn->bd', Xm, w * z)
-        if prior_prec is not None:
+        if normal_prec is not None:
+            if is_student is not None:
+                # Adaptive Student-t precision: (df+1)/(df·τ²+(β−ν)²), df=5
+                student_prec = torch.where(
+                    active_mask,
+                    6.0
+                    / (
+                        5.0 * tau_ffx.clamp(min=1e-8).square() + (beta - nu_ffx).square()
+                    ).clamp(min=1e-8),
+                    zeros,
+                )
+                prior_prec = torch.where(is_student, student_prec, normal_prec)
+            else:
+                prior_prec = normal_prec
             XwX = XwX + torch.diag_embed(prior_prec)
             Xwz = Xwz + prior_prec * nu_ffx
         beta_new = _safeSolve(XwX + _adaptiveRidge(XwX), Xwz)

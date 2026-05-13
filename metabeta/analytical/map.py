@@ -9,7 +9,7 @@ from metabeta.analytical.linalg import _adaptiveRidge, _safeSolve
 from metabeta.analytical.normal import _normalGlsAndBlups
 from metabeta.utils.families import logProbFfx, logProbSigma
 
-__all__ = ['refineNormalMapSrfx']
+__all__ = ['refineBernoulliMapSrfx', 'refineNormalMapSrfx']
 
 
 def _fixedCorrFromStats(
@@ -393,4 +393,69 @@ def refineNormalMapSrfx(
                 beta_alpha_high=beta_alpha_high,
             )
         out['Psi'] = _replacePsiDiag(stats['Psi'], sigma_rfx, mask_q)
+    return out
+
+
+def refineBernoulliMapSrfx(
+    stats: dict[str, torch.Tensor],
+    G: torch.Tensor,
+    tau_rfx: torch.Tensor,
+    family_sigma_rfx: torch.Tensor,
+    mask_q: torch.Tensor | None = None,
+    n_steps: int = 20,
+    lr: float = 0.1,
+) -> dict[str, torch.Tensor]:
+    """Refine sigma_rfx for Bernoulli GLMMs via fixed-point Laplace MAP.
+
+    Uses PQL outputs (Psi_lap, mean_Hg_inv, sigma_rfx_est) — no data re-access
+    needed.  The M-step identity Ψ_lap = (1/G)(Σ b̂_g b̂_g' + Σ H_g^{-1}) gives
+    Σ_g b̂_gj² = G·(Ψ_lap_jj − mean_Hg_inv_jj), which serves as the sufficient
+    statistic for MAP optimization of log σ_j under the rfx prior.
+
+    Inactive rfx dimensions (tau_rfx == 0) are excluded from the objective and
+    kept at their Laplace M-step values in the output.
+    """
+    q = tau_rfx.shape[-1]
+    if q == 0 or n_steps <= 0:
+        return stats
+
+    Psi_lap = stats['Psi_lap'][..., :q, :q]
+    mean_Hg_inv = stats['mean_Hg_inv'][..., :q, :q]
+    sigma_lap = stats['sigma_rfx_est'][..., :q].clamp(min=1e-4)
+
+    psi_diag = Psi_lap.diagonal(dim1=-2, dim2=-1).clamp(min=0.0)
+    h_diag = mean_Hg_inv.diagonal(dim1=-2, dim2=-1).clamp(min=0.0)
+    sum_bhat_sq = (G[:, None] * (psi_diag - h_diag)).clamp(min=0.0)
+
+    # Active rfx mask: exclude inactive dims (tau==0) from objective and prior.
+    active_q = tau_rfx[..., :q] > 0
+    if mask_q is not None:
+        active_q = active_q & mask_q[..., :q].bool()
+    active_float = active_q.float()
+    mask_lp = active_float.unsqueeze(1)
+    tau_lp = tau_rfx[..., :q].clamp(min=1e-4).unsqueeze(1)
+
+    log_sigma = sigma_lap.log().detach().clone().requires_grad_(True)
+    optimizer = torch.optim.Adam([log_sigma], lr=lr)
+
+    with torch.enable_grad():
+        for _ in range(n_steps):
+            optimizer.zero_grad(set_to_none=True)
+            sigma = log_sigma.exp()
+            sigma2 = sigma.square().clamp(min=1e-12)
+            ll = -0.5 * ((sum_bhat_sq / sigma2 + G[:, None] * sigma2.log()) * active_float).sum()
+            lp = logProbSigma(sigma.unsqueeze(1), tau_lp, family_sigma_rfx, mask_lp).sum()
+            loss = -(ll + lp)
+            if not torch.isfinite(loss):
+                break
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_([log_sigma], max_norm=5.0)
+            optimizer.step()
+            with torch.no_grad():
+                log_sigma.clamp_(math.log(1e-4), math.log(20.0))
+
+    sigma_rfx_map = log_sigma.detach().exp()
+    sigma_rfx_map = torch.where(active_q, sigma_rfx_map, sigma_lap)
+    out = dict(stats)
+    out['sigma_rfx_est'] = sigma_rfx_map
     return out
