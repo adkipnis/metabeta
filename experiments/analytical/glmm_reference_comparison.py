@@ -173,8 +173,9 @@ def _cavi_estimate(ds_flat: dict) -> dict | None:
 def _lme4_estimate(ds_flat: dict) -> dict | None:
     """Run lme4::glmer via rpy2 on a flat Bernoulli dataset (any q).
 
-    Uses correlated random effects (1 + z1 + ... | group) — full Ψ, same model
-    as PQL.  Optimizer: bobyqa for robustness.
+    Uses uncorrelated RE terms (1|group) + (0+z1|group) + ... — diagonal Ψ,
+    matching CAVI.  Correlated form (1+z1+...|group) diverges for small groups
+    (q(q+1)/2 variance params underdetermined).  Optimizer: bobyqa.
 
     Returns dict with:
       'beta'      : (d,)   ML fixed-effect estimates
@@ -202,10 +203,16 @@ def _lme4_estimate(ds_flat: dict) -> dict | None:
             df_data[sname] = Z[:, j].astype(float)
             slope_names.append(sname)
 
-    re_int = '1' if has_intercept else '0'
-    re_str = ' + '.join([re_int] + slope_names)
+    # Use uncorrelated RE terms (one scalar variance per dimension, diagonal Ψ).
+    # A correlated form (1 + z1 + ... | group) requires q(q+1)/2 variance params
+    # which is underdetermined for small groups, causing divergence.
+    re_parts = []
+    if has_intercept:
+        re_parts.append('(1 | group)')
+    for sname in slope_names:
+        re_parts.append(f'(0 + {sname} | group)')
     fe_str = ' + '.join(f'x{j}' for j in range(1, d)) if d > 1 else '1'
-    formula_str = f'y ~ {fe_str} + ({re_str} | group)'
+    formula_str = f'y ~ {fe_str} + {" + ".join(re_parts)}'
 
     # S4 generics must be called via ro.r('lme4::...'), not through importr binding
     _fixef = _ro.r('lme4::fixef')
