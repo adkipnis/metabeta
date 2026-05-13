@@ -69,6 +69,8 @@ class _PqlPassContext:
     G: torch.Tensor
     family: _PqlFamilyConfig
     n_newton: int
+    nu_ffx: torch.Tensor | None = None
+    tau_ffx: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -131,9 +133,11 @@ def _initialFixedEffects(
     ym: torch.Tensor,
     mask_n: torch.Tensor,
     family: _PqlFamilyConfig,
+    nu_ffx: torch.Tensor | None = None,
+    tau_ffx: torch.Tensor | None = None,
 ) -> torch.Tensor:
     if family.likelihood_family == 1:
-        return irlsBernoulli(Xm, ym, mask_n)
+        return irlsBernoulli(Xm, ym, mask_n, nu_ffx=nu_ffx, tau_ffx=tau_ffx)
     return irlsPoisson(Xm, ym, mask_n)
 
 
@@ -229,6 +233,8 @@ def _initialPqlState(
     family: _PqlFamilyConfig,
     n_newton: int,
     uncorr: torch.Tensor | None,
+    nu_ffx: torch.Tensor | None = None,
+    tau_ffx: torch.Tensor | None = None,
 ) -> _InitialPqlState:
     B, m, _, d = Xm.shape
     q = Zm.shape[-1]
@@ -239,7 +245,7 @@ def _initialPqlState(
     eye_q = torch.eye(q, device=Xm.device, dtype=Xm.dtype)
     eye_q_bm = eye_q.expand(B, m, q, q)
 
-    beta_0 = _initialFixedEffects(Xm, ym, mask_n, family)
+    beta_0 = _initialFixedEffects(Xm, ym, mask_n, family, nu_ffx=nu_ffx, tau_ffx=tau_ffx)
     eta_0 = torch.einsum('bmnd,bd->bmn', Xm, beta_0)
     score_0, phi_pearson, psi_0 = _initialScorePearsonPsi(eta_0, ym, mask_n, N, G, d, family)
 
@@ -273,6 +279,8 @@ def _initialPqlState(
         G=G,
         family=family,
         n_newton=n_newton,
+        nu_ffx=nu_ffx,
+        tau_ffx=tau_ffx,
     )
     return _InitialPqlState(
         beta_0=beta_0,
@@ -448,6 +456,8 @@ def _lmmGlmm(
     likelihood_family: int,
     n_newton: int = 3,
     uncorr: torch.Tensor | None = None,  # (B,) bool — force Ψ diagonal for these datasets
+    nu_ffx: torch.Tensor | None = None,  # (B, d) prior mean for fixed effects
+    tau_ffx: torch.Tensor | None = None,  # (B, d) prior std for fixed effects
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM variance-component estimator (private).
 
@@ -480,6 +490,8 @@ def _lmmGlmm(
         family,
         n_newton,
         uncorr,
+        nu_ffx=nu_ffx,
+        tau_ffx=tau_ffx,
     )
     beta_0 = initial.beta_0
     phi_pearson = initial.phi_pearson
@@ -588,6 +600,8 @@ def lmmBernoulli(
     n_total: torch.Tensor,
     n_newton: int = 3,
     uncorr: torch.Tensor | None = None,
+    nu_ffx: torch.Tensor | None = None,
+    tau_ffx: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM for Bernoulli/logit outcomes."""
     return _lmmGlmm(
@@ -601,6 +615,8 @@ def lmmBernoulli(
         likelihood_family=1,
         n_newton=n_newton,
         uncorr=uncorr,
+        nu_ffx=nu_ffx,
+        tau_ffx=tau_ffx,
     )
 
 

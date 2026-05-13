@@ -33,10 +33,23 @@ def irlsBernoulli(
     n_iter: int = 8,
     damping: float = 0.7,
     clamp: float = 20.0,
+    nu_ffx: torch.Tensor | None = None,
+    tau_ffx: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Batched IRLS logistic regression via compact normal equations."""
+    """Batched IRLS logistic regression via compact normal equations.
+
+    When nu_ffx and tau_ffx are provided, applies a Gaussian prior N(nu_ffx, diag(tau_ffx²))
+    by adding diag(1/τ²) to XwX and diag(1/τ²)ν to Xwz at each step.
+    """
     B, d = Xm.shape[0], Xm.shape[-1]
     beta = Xm.new_zeros(B, d)
+    prior_prec = (
+        torch.where(
+            tau_ffx > 0, 1.0 / tau_ffx.clamp(min=1e-4).square(), tau_ffx.new_zeros(tau_ffx.shape)
+        )
+        if (nu_ffx is not None and tau_ffx is not None)
+        else None
+    )
     for _ in range(n_iter):
         eta = torch.einsum('bmnd,bd->bmn', Xm, beta)
         p = torch.sigmoid(eta)
@@ -44,6 +57,9 @@ def irlsBernoulli(
         z = (eta + (ym - p * mask) / w) * mask
         XwX = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)
         Xwz = torch.einsum('bmnd,bmn->bd', Xm, w * z)
+        if prior_prec is not None:
+            XwX = XwX + torch.diag_embed(prior_prec)
+            Xwz = Xwz + prior_prec * nu_ffx
         beta_new = _safeSolve(XwX + _adaptiveRidge(XwX), Xwz)
         beta = (damping * beta_new + (1.0 - damping) * beta).nan_to_num(
             nan=0.0, posinf=0.0, neginf=0.0

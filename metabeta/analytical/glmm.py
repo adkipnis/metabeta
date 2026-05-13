@@ -88,7 +88,19 @@ def glmm(
                 beta_alpha_high=beta_alpha_high,
             )
     elif likelihood_family == 1:
-        stats = lmmBernoulli(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
+        stats = lmmBernoulli(
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            ns,
+            n_total,
+            uncorr=uncorr,
+            nu_ffx=map_priors['nu_ffx'] if map_refine else None,
+            tau_ffx=map_priors['tau_ffx'] if map_refine else None,
+            **kwargs,
+        )
     elif likelihood_family == 2:
         stats = lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
     else:
