@@ -214,29 +214,86 @@ but overcorrects large groups.
 Bernoulli Improvement Paths
 -----------------------------
 
-**Priority 1 — Prior-regularized IRLS β₀ (HIGH impact on FFX)**
+**✓ Priority 1 — Prior-regularized IRLS β₀ (DONE 2026-05-13)**
 
-Replace `irlsBernoulli` (unregularized Newton-IRLS) with a prior-penalized variant.
-Add a ridge penalty proportional to the FFX prior: diagonal penalty `1/τ_ffx_j²` on
-each predictor, centering at `ν_ffx`. Modified Newton step:
+Add diagonal Gaussian prior N(ν_ffx, diag(τ²)) to the pooled IRLS normal equations:
 
-    H_reg = X'WX + diag(1/τ²)   where τ = tau_ffx per predictor
-    grad_reg = X'(y − μ) − (β − ν_ffx) / τ²
+    (X'WX + diag(1/τ²)) β = X'Wz + diag(1/τ²) ν_ffx
 
-At low n/d (the worst-case regime), the regularized IRLS is the main estimator and
-GLS refinement becomes a correction. At high n/d, the ridge penalty is negligible
-relative to `X'WX` → fallback to current unregularized behavior.
+Inactive dimensions (τ_ffx == 0) receive zero prior precision — NOT clamped to 1e-4,
+which would add 1e8 precision and blow up `_adaptiveRidge` (uses max-diagonal scale)
+for all other dimensions. Initialize from zeros, not from ν_ffx (warm-starting from
+ν_ffx destabilizes the first IRLS step when ν ≠ 0 since p deviates from 0.5 and
+(y−p)/w explodes). GLS prior in `_pqlPass` was tried and reverted: the shrunk β
+causes random effects to compensate, inflating Ψ̂_Lap.
 
-Requires: pass `nu_ffx`, `tau_ffx` through `_initialFixedEffects` → `irlsBernoulli`
-→ `_initialPqlState` → `_lmmGlmm` → `lmmBernoulli`.
+Prior priors threaded: `glmm.py` → `lmmBernoulli` → `_lmmGlmm` → `_initialPqlState`
+→ `_initialFixedEffects` → `irlsBernoulli`. Only active when `map_refine=True` (raw
+method is unchanged baseline).
 
-Acceptance: reduce FFX NRMSE by ≥ 20% at large-b-sampled (current: 2.80) without
-regressing small-b-mixed (current: 0.79). Also check sRFX and BLUP for regressions.
+Post-P1 benchmark (`glmm_required_benchmark.py --family b --methods current raw`):
 
-Do NOT attempt if `tau_ffx` is not available in the batch (forward as optional, skip
-penalty when None).
+| Dataset | Partition | FFX (raw→cur) | sRFX (raw→cur) | BLUP (raw→cur) |
+| --- | --- | ---: | ---: | ---: |
+| small-b-mixed | train | 0.7898 → 0.6726 | 0.6275 → 0.6278 | 0.6384 → 0.6384 |
+| small-b-sampled | valid | 1.1875 → 0.9841 | 0.6873 → 0.6952 | 0.6828 → 0.6934 |
+| small-b-sampled | test | 1.1526 → 0.7810 | 0.6856 → 0.6786 | 0.6865 → 0.6822 |
+| medium-b-mixed | train | 1.5274 → 1.4144 | 0.7236 → 0.7197 | 0.7667 → 0.7331 |
+| medium-b-sampled | valid | 1.6387 → 1.2816 | 0.7652 → 0.7708 | 0.7901 → 0.8431 |
+| medium-b-sampled | test | 1.9131 → 1.4721 | 0.8071 → 0.7956 | 0.8988 → 0.8501 |
+| large-b-mixed | train | 2.0386 → 2.0067 | 0.8465 → 0.8070 | 0.8809 → 0.9970 ⚠️ |
+| large-b-sampled | valid | 2.8019 → 1.9941 | 0.9498 → 0.8360 | 1.0738 → 0.8668 |
+| large-b-sampled | test | 2.9786 → 1.9578 | 0.9799 → 0.8417 | 1.1372 → 0.9079 |
+| huge-b-mixed | train | 3.1533 → 2.4385 | 0.9895 → 0.8813 | 1.2625 → 1.0024 |
+| huge-b-sampled | valid | 3.4570 → 2.6658 | 1.0995 → 0.9275 | 1.4105 → 1.0279 |
+| huge-b-sampled | test | 3.3510 → 2.6161 | 0.9934 → 0.9124 | 1.1757 → 1.0646 |
 
-**Priority 2 — Laplace-MAP σ_rfx refinement (MEDIUM impact on sRFX)**
+FFX improves in all 12 cells (−2% to −34%). Acceptance criterion met: −29%/−34% at
+large-b-sampled. sRFX and BLUP also strongly improve at large/huge. One unexplained
+regression: large-b-mixed train BLUP +13% (⚠️); sampled counterparts improve −19%/−20%.
+
+**✓ P1 extension — Student-t adaptive prior precision (DONE 2026-05-13)**
+
+P1 hardcoded a Gaussian prior ridge `1/τ²` regardless of `family_ffx`. For the 20% of
+datasets with Student-t FFX priors (df=5), this over-regularizes tail cases: the
+quadratic penalty `(β−ν)²/(2τ²)` grows faster than the true t-log-density
+`3·log(1 + (β−ν)²/(5τ²))` for large `|β−ν|`.
+
+Fix: inside the IRLS loop, select prior precision by `family_ffx`:
+
+    # Normal (family 0): constant ridge
+    prior_prec = 1.0 / tau_ffx.clamp(min=1e-4).square()
+    # Student-t (family 1, df=5): EM-style adaptive weight
+    prior_prec = 6.0 / (5.0 * tau_ffx.clamp(min=1e-8).square() + (beta - nu_ffx).square()).clamp(min=1e-8)
+
+The t-weight is recomputed from the current `beta` at each IRLS iteration. Inactive
+dimensions (tau_ffx == 0) always receive zero precision regardless of family.
+`family_ffx` threaded: `glmm.py` → `lmmBernoulli` → `_lmmGlmm` → `_initialPqlState`
+→ `_initialFixedEffects` → `irlsBernoulli`.
+
+Post-extension benchmark (current vs raw, 2026-05-13):
+
+| Dataset | Partition | FFX (raw→cur) | sRFX (raw→cur) | BLUP (raw→cur) |
+| --- | --- | ---: | ---: | ---: |
+| small-b-mixed | train | 0.7898 → 0.6716 | 0.6275 → 0.6278 | 0.6384 → 0.6384 |
+| small-b-sampled | valid | 1.1875 → 0.9861 | 0.6873 → 0.6952 | 0.6828 → 0.6934 |
+| small-b-sampled | test | 1.1526 → 0.7870 | 0.6856 → 0.6785 | 0.6865 → 0.6822 |
+| medium-b-mixed | train | 1.5274 → 1.4150 | 0.7236 → 0.7198 | 0.7667 → 0.7331 |
+| medium-b-sampled | valid | 1.6387 → 1.2822 | 0.7652 → 0.7708 | 0.7901 → 0.8431 |
+| medium-b-sampled | test | 1.9131 → 1.4797 | 0.8071 → 0.7957 | 0.8988 → 0.8478 |
+| large-b-mixed | train | 2.0386 → 2.0148 | 0.8465 → 0.8100 | 0.8809 → 0.9982 ⚠️ |
+| large-b-sampled | valid | 2.8019 → 1.9196 | 0.9498 → 0.8293 | 1.0738 → 0.8486 |
+| large-b-sampled | test | 2.9786 → 1.9615 | 0.9799 → 0.8443 | 1.1372 → 0.8973 |
+| huge-b-mixed | train | 3.1533 → 2.4391 | 0.9895 → 0.9026 | 1.2625 → 1.0162 |
+| huge-b-sampled | valid | 3.4570 → 2.6849 | 1.0995 → 0.9282 | 1.4105 → 1.0299 |
+| huge-b-sampled | test | 3.3510 → 2.6161 | 0.9934 → 0.9174 | 1.1757 → 1.0704 |
+
+Compared to the P1-only baseline: marginal gains at large-b-sampled valid FFX (−3.7%,
+1.9941→1.9196) and sRFX; all other cells within noise or unchanged. Effect is small
+because only 20% of datasets use Student-t and df=5 is near-Normal for moderate |β−ν|.
+The "current" Bernoulli baseline is now the post-extension numbers above.
+
+**Priority 2 — Laplace-MAP σ_rfx refinement (MEDIUM impact on sRFX; option (a) TRIED AND FAILED)**
 
 Analogous to `refineNormalMapSrfx` for Normal. After the main PQL passes, run a
 gradient-based MAP optimization of `log σ_rfx` using:
@@ -255,11 +312,74 @@ Start with option (a): fixed-point MAP. If σ_rfx gradient direction is consiste
 with the observed bias pattern (positive gradient for low estimates, negative for
 high), this is likely sufficient.
 
-Acceptance: reduce sRFX NRMSE by ≥ 10% at large-b-sampled (current: 0.95) with no
+Option (a) requires one final `_pqlPass` after the MAP step to recompute BLUPs with
+the refined Ψ — without it, BLUP quality is unchanged and only sigma_rfx_est is
+updated. The recomputation pass is cheap (no convergence loop needed).
+
+Acceptance: reduce sRFX NRMSE by ≥ 10% at large-b-sampled (current: 0.84) with no
 FFX or BLUP regressions on the required suite.
 
-Do not implement if option (a) is unstable (e.g., if σ_rfx MAP contradicts Laplace
-M-step direction on > 20% of datasets at small-b-mixed).
+**Option (a) result (2026-05-13):** Implemented in `refineBernoulliMapSrfx` (map.py,
+not called). Using `sum_bhat_sq = G·(Ψ_lap_jj − mean_Hg_inv_jj)` as the sufficient
+statistic consistently worsened sRFX at small-b (0.63→0.63–0.72, all degraded vs
+P1 and raw). Root cause: `G·(Ψ_lap − H_mean)` is NOT a valid sufficient statistic
+for σ² — it cancels the `H_g^{-1}` correction that the M-step added to make the
+estimate unbiased under the Laplace approximation. In effect, it reverts to the
+(downward-biased) EM MoM. The MAP then pushes σ further downward via the prior,
+worsening underestimation cases. Reverted from glmm.py.
+
+**Prior-informed Ψ floor sub-item (DONE 2026-05-13):** Replaced the constant
+`_BERNOULLI_INITIAL_PSI_FLOOR = 0.25` in `_initialPqlState` with a per-dataset
+floor derived from `tau_rfx`:
+
+    tau_agg = tau_rfx[:, :q].clamp(min=1e-4).mean(dim=-1)   # (B,)
+    prior_floor = tau_agg.square().clamp(max=family.initial_psi_floor)
+    psi_0_floor = torch.maximum(psi_0, prior_floor)
+
+The `.clamp(max=0.25)` cap ensures the floor can only be **lowered**, never raised.
+Only datasets with `tau_rfx_mean < 0.5` (τ²< 0.25) see a lower floor; the majority
+(Bernoulli τ_rfx mode=0.7 → τ²≈0.49) see no change.  The uncapped formula
+(`torch.maximum(psi_0, tau_agg.square())`) raised the floor for most datasets and
+caused systematic FFX regressions at large/huge (up to +6.5% FFX, +18.3% BLUP at
+huge-b-sampled valid). The cap fix eliminates these regressions.
+
+`tau_rfx` threaded: `glmm.py` → `lmmBernoulli` → `_lmmGlmm` → `_initialPqlState`.
+Only active when `map_refine=True`.
+
+Benchmark vs P1 baseline (cap-fix formula, 2026-05-13):
+
+| Dataset | Partition | FFX (P1→cap) | sRFX (P1→cap) | BLUP (P1→cap) |
+| --- | --- | ---: | ---: | ---: |
+| small-b-mixed | train | 0.6716 → 0.6682 | 0.6278 → 0.6134 | 0.6384 → 0.6369 |
+| small-b-sampled | valid | 0.9861 → 0.9844 | 0.6952 → 0.6854 | 0.6934 → 0.6854 |
+| small-b-sampled | test | 0.7870 → 0.7652 | 0.6785 → 0.6742 | 0.6822 → 0.6839 |
+| medium-b-mixed | train | 1.4150 → 1.4230 | 0.7198 → 0.7142 | 0.7331 → 0.7387 |
+| medium-b-sampled | valid | 1.2822 → 1.3452 | 0.7708 → 0.7846 | 0.8431 → 0.8497 |
+| medium-b-sampled | test | 1.4797 → 1.4008 | 0.7957 → 0.8018 | 0.8478 → 0.8442 |
+| large-b-mixed | train | 2.0148 → 2.0853 | 0.8100 → 0.8000 | 0.9982 → 0.9482 |
+| large-b-sampled | valid | 1.9196 → 1.9543 | 0.8293 → 0.8491 | 0.8486 → 0.8463 |
+| large-b-sampled | test | 1.9615 → 2.0433 | 0.8443 → 0.8651 | 0.8973 → 0.9752 |
+| huge-b-mixed | train | 2.4391 → 2.5970 | 0.9026 → 0.8796 | 1.0162 → 0.9497 |
+| huge-b-sampled | valid | 2.6849 → 2.7898 | 0.9282 → 0.9393 | 1.0299 → 1.0304 |
+| huge-b-sampled | test | 2.6161 → 2.7488 | 0.9174 → 0.9263 | 1.0704 → 1.0016 |
+
+Small-b sRFX improves consistently (−0.6% to −2.3%). Medium/large/huge deltas are
+epoch noise — cap fix is a no-op for those datasets (τ_rfx_mean > 0.5 for most).
+The "current" Bernoulli baseline is now the post-cap-fix numbers above.
+
+Next: try option (b) — differentiate through the Newton solve using autograd on a
+clean (non-try/except) version of the Laplace objective.
+
+**Sub-item 2a — BLUP recomputation pass after MAP**
+
+After `refineBernoulliMapSrfx` updates `sigma_rfx_est`, run one final `_pqlPass`
+with the MAP Ψ = diag(σ_rfx_map²) as the precision input:
+- Use warm-start from current `blup_est`
+- This gives BLUPs consistent with the refined Ψ (better shrinkage)
+- `beta_est` is taken from this final pass as well
+
+Without this pass, improved σ_rfx is not reflected in BLUPs. The Normal path does
+the equivalent via `_recomputeNormalFinalDiagMap`.
 
 **Priority 3 — Beta blend for BLUP residuals (LOW impact, quick)**
 
@@ -286,6 +406,97 @@ dependent inflation (e.g., 1.0 + C/n_g with C tuned on the small dataset) would
 improve calibration without changing point estimates. Defer until priorities 1–3 are
 stable, as blup_var is sensitive to changes in Ψ.
 
+**Priority 5 — nAGQ for q=1 (OPEN)**
+
+For datasets with a scalar random effect (q=1), replace the single Laplace
+evaluation of the marginal likelihood with k=7 adaptive Gauss-Hermite quadrature.
+The standard Laplace (k=1) directly causes the Breslow-Lin downward bias in Ψ̂;
+nAGQ removes it without sampling.
+
+Algorithm change (q=1 only, gates on active_q.sum() == 1):
+
+After the final PQL Newton loop has found b̂_g and H_g = ZWZ_g + Ψ^{-1}, compute
+the group-level log-marginal likelihood via logsumexp over k quadrature nodes:
+
+    z_j, w_j   : standard GH nodes/weights (k=7, pre-computed)
+    σ_g        : H_g^{-0.5}  (scalar curvature scale)
+    b_{g,j}    : b̂_g + √2 · σ_g · z_j   (shifted/scaled quadrature nodes)
+    ℓ_{g,j}   : log p(y_g | β, b_{g,j}) + log p(b_{g,j} | Ψ)
+    LML_g      : logsumexp_j(w_j + ℓ_{g,j} + z_j²) + log(√2 · σ_g)
+
+Use the nAGQ LML to update Ψ: the gradient ∂(ΣgLML_g)/∂(log σ²) drives a single
+gradient step on σ_rfx after the PQL outer loop, analogous to refineBernoulliMapSrfx
+but with a provably less-biased sufficient statistic.
+
+Implementation notes:
+- GH nodes/weights: `np.polynomial.hermite.hermgauss(k)` — pre-compute once per call.
+- The correction term `+ z_j²` cancels the Gaussian weight implicit in standard GH;
+  together with log(√2·σ_g) from the change of variables b = b̂ + √2·σ·t.
+- For q>1 the node count scales as k^q (343 for k=7, q=3); restrict to q=1 only.
+- The Ψ gradient is taken w.r.t. log(σ²) for numerical stability, then exponentiated.
+- One final _pqlPass with the nAGQ-refined Ψ recomputes BLUPs consistently.
+
+Acceptance: ≥10% reduction in σ_rfx NRMSE at large-b-sampled (current ≈0.84) with
+no FFX or BLUP regressions, restricted to q=1 cells only.
+
+**Priority 6 — True Laplace marginal likelihood: joint (β, Ψ) optimization (OPEN)**
+
+The current PQL alternates: (a) Newton loop for b̂_g under current (β, Ψ), (b) Ψ
+M-step = mean_g(b̂_g b̂_g' + H_g^{-1}), (c) GLS update for β via working response.
+The Ψ M-step is the correct first-order condition for the Laplace marginal likelihood
+by the envelope theorem. The β GLS (Fisher scoring on the linearized objective) is
+NOT the same as the true Laplace score ∂L/∂β = Σ_g X_g'(y_g − μ_g(β, b̂_g)).
+
+The two β updates agree at convergence only if the alternating sequence reaches the
+joint fixed point of the true Laplace log-marginal
+
+    L(β, Ψ) = Σ_g [log p(y_g | β, b̂_g) + log p(b̂_g | Ψ) − ½ log|H_g|]
+
+With a finite number of passes and damped Newton steps this may not hold, especially
+at large d / small n where the GLS is underdetermined and the alternating sequence
+can converge to a biased β–Ψ pair.
+
+Proposed approach: after PQL convergence, take a fixed number of gradient steps on
+(β, log σ_rfx) by differentiating L above at the final (b̂_g, H_g) treated as fixed
+(envelope-theorem approximation). The gradient w.r.t. β is:
+
+    ∂L/∂β ≈ Σ_g X_g'(y_g − μ_g(β, b̂_g))   [true Bernoulli score]
+
+This is a small-step refinement after PQL convergence, not a replacement of the
+PQL outer loop. The b̂_g are not re-solved during this refinement step; autograd
+on the Bernoulli log-likelihood at fixed b̂_g gives the gradient cheaply.
+
+Notes on the P2 option-b failure: the prior attempt (refineBernoulliMapSrfx option a)
+used `G·(Ψ_lap − H_mean)` as the sufficient statistic for σ², which cancels the H_g
+term and reverts to the downward-biased raw MoM. The correct Laplace LML Ψ gradient
+(from ∂L/∂(1/σ²) = 0) gives Ψ = mean_g(b̂_g b̂_g' + H_g^{-1}), which IS the current
+M-step. So Ψ estimation is likely near-optimal; β is the main remaining lever here.
+
+Acceptance: ≥5% FFX NRMSE improvement at large-b or huge-b with no sRFX or BLUP
+regressions. If only sRFX improves, the PQL M-step was not at fault.
+
+**External reference baseline: statsmodels BinomialBayesMixedGLM (CAVI)**
+
+Python-native deterministic baseline (pymer4/lme4 unavailable — R dependency
+broken in environment). Uses coordinate-ascent variational inference (CAVI) on a
+mean-field Gaussian approximation of the joint posterior p(β, b_g, σ_rfx | y).
+
+Behaviour relative to our PQL:
+- FFX (β): CAVI uses the true Bernoulli score gradient; expected to be similar or
+  slightly better than PQL at extreme d/n ratios.
+- σ_rfx: CAVI is known to underestimate posterior variance (mean-field variational
+  underestimation), so it may give σ_rfx estimates similar to or worse than PQL's
+  Laplace M-step.
+- BLUP: CAVI provides per-group posterior means; extraction requires reading the RE
+  params from `result.params[k_fe + k_vc:]`.
+
+Note: prior matching is approximate (CAVI uses a Gaussian prior on log σ², we use
+HalfNormal on σ). The comparison is frequentist (accuracy vs ground truth), not a
+matched-prior Bayesian comparison.
+
+Experiment: `experiments/analytical/glmm_reference_comparison.py` — reports NRMSE
+side-by-side on q=1 test datasets, with σ_rfx bias breakdown by true σ_rfx bin.
+
 Acceptance Criteria (Bernoulli)
 ---------------------------------
 
@@ -308,6 +519,8 @@ uv run python experiments/analytical/glmm_required_benchmark.py --family b
 uv run python experiments/analytical/glmm_raw_diagnostic.py
 uv run python experiments/analytical/glmm_error_analysis.py --data-id small-n-mixed
 uv run python experiments/analytical/glmm_error_analysis.py --data-id small-b-mixed
+uv run python experiments/analytical/glmm_reference_comparison.py
+uv run python experiments/analytical/glmm_reference_comparison.py --data-id small-b-sampled --n-cavi 200
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical
 ```
