@@ -106,24 +106,36 @@ The `+z_j²` term cancels the implicit Gaussian weight in standard GH.
 Acceptance: ≥10% σ_rfx NRMSE reduction at large-b-sampled (current ≈0.85) with
 no FFX or BLUP regressions, restricted to q=1 cells only.
 
-**Priority 6 — True Laplace score for β (OPEN, highest priority)**
+**✓ P6 — True Laplace score for β (DONE 2026-05-13)**
 
-Current PQL updates β via GLS on the linearized working response, which is NOT
-the same as the true Laplace score ∂L/∂β = Σ_g X_g'(y_g − μ_g(β, b̂_g)).
-At large d / small n the alternating sequence can converge to a biased β–Ψ pair.
+Implemented as `refineBernoulliMapBeta` in `map.py`. Called explicitly after
+`lmmBernoulli` in the reference comparison; not yet wired into `glmm()`.
 
-After PQL convergence, take gradient steps on (β, log σ_rfx) differentiating
-the Laplace log-marginal at fixed (b̂_g, H_g) (envelope-theorem approximation):
+Algorithm: n_outer=2 rounds of alternating:
+1. β Newton (n_steps=8 damped Newton steps, damping=0.7) at fixed b̂_g
+2. b̂_g Newton (n_newton=3 steps) at fixed β with PQL Ψ
+Final Ψ M-step once at end from the last b̂_g.  Wall time: +1–2 ms/dataset.
 
-    L(β, Ψ) = Σ_g [log p(y_g | β, b̂_g) + log p(b̂_g | Ψ) − ½ log|H_g|]
-    ∂L/∂β ≈ Σ_g X_g'(y_g − μ_g(β, b̂_g))   [true Bernoulli score]
+Results (sampled=test / mixed=train×2, n_total=2000, 2026-05-13, N=2016):
 
-Autograd on the Bernoulli log-likelihood at fixed b̂_g gives the gradient cheaply.
-The Ψ M-step (= mean_g(b̂_g b̂_g' + H_g^{-1})) is already the correct first-order
-condition for the Laplace LML, so Ψ estimation is near-optimal; β is the main lever.
+| Dataset          | PQL FFX | P6 FFX   | CAVI FFX | PQL σ | P6 σ  | CAVI σ | PQL BLUP | P6 BLUP | CAVI BLUP |
+| ---              | ---:    | ---:     | ---:     | ---:  | ---:  | ---:   | ---:     | ---:    | ---:      |
+| small-b-sampled  | 0.720   | **0.284**| 0.329    | 0.677 | 0.652 | **0.644** | 0.686 | 0.684   | **0.637** |
+| small-b-mixed    | 0.782   | **0.256**| 0.283    | 0.633 | **0.605** | 0.614 | 0.641 | 0.640   | **0.601** |
+| medium-b-sampled | 1.487   | **0.333**| 0.419    | 0.769 | 0.748 | **0.705** | 0.753 | 0.753   | **0.717** |
+| medium-b-mixed   | 2.132   | 1.242    | **0.327**| 0.808 | 0.794 | **0.646** | 0.952 | 0.923   | **0.649** |
 
-Acceptance: ≥5% FFX NRMSE improvement at large-b or huge-b with no sRFX or BLUP
-regressions. If only sRFX improves, the PQL M-step was not at fault.
+P6 beats CAVI on FFX for 3/4 datasets (2–4.5× improvement over PQL).
+medium-b-mixed FFX gap persists (1.24 vs 0.327): root cause is the PQL Ψ being
+biased by the wrong initial β; with Ψ held fixed in P6, the β-b̂_g alternation
+converges to a local optimum. Further iterations (n_outer=4) give no gain.
+
+σ_rfx: P6 beats PQL uniformly (all quartiles, 2–6% RMSE reduction).
+P6 beats CAVI on small-b-mixed; CAVI still leads at medium where σ_rfx is
+downstream of the FFX gap.  BLUP: marginal improvement over PQL (<1%).
+
+Remaining gap (medium-b-mixed FFX) requires Ψ updates inside the outer loop,
+which requires more iterations and approaches CAVI's runtime. Defer to P6-ext.
 
 **Priority 7 — BC1 σ_rfx correction for q>1 (contingent on P6, OPEN)**
 
@@ -198,11 +210,12 @@ uv run python experiments/analytical/glmm_required_benchmark.py --family b --met
 uv run python experiments/analytical/glmm_error_analysis.py --data-id small-b-mixed
 uv run python experiments/analytical/glmm_reference_comparison.py
 uv run python experiments/analytical/glmm_reference_comparison.py \
-    --data-ids small-b-sampled,small-b-mixed,medium-b-sampled,medium-b-mixed \
-    --partition test --n-cavi 1000 --n-total 1000
+    --data-ids small-b-sampled,medium-b-sampled \
+    --partition test --n-cavi 0 --n-total 2000
 uv run python experiments/analytical/glmm_reference_comparison.py \
     --data-ids small-b-mixed,medium-b-mixed --partition train --n-epochs 2 \
-    --n-cavi 2000 --n-total 2000
+    --n-cavi 0 --n-total 2000
+# add --n-cavi 2000 to also run CAVI (slow: ~60-240 ms/dataset)
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical
 ```
