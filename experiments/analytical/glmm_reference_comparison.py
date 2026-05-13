@@ -191,6 +191,7 @@ def run_one_dataset(
     data_id: str,
     partition: str = 'test',
     n_cavi: int = 200,
+    n_total: int = 0,
     n_epochs: int = 1,
     device: torch.device | None = None,
 ) -> dict:
@@ -230,101 +231,106 @@ def run_one_dataset(
     pql_wall: list[float] = []
     cavi_n_tried = cavi_n_ok = 0
 
-    all_batches = []
-    for path in paths:
-        dl = Dataloader(path, batch_size=32, shuffle=False)
-        all_batches.extend(list(dl))
-
     with torch.no_grad():
-        for batch in all_batches:
-            batch = toDevice(batch, device)
-            B = batch['X'].shape[0]
-            Zm = batch['Z'][..., :max_q]
+        n_seen = 0
+        done = False
+        for path in paths:
+            if done:
+                break
+            dl = Dataloader(path, batch_size=32, shuffle=False)
+            for batch in dl:
+                if n_total > 0 and n_seen >= n_total:
+                    done = True
+                    break
+                batch = toDevice(batch, device)
+                B = batch['X'].shape[0]
+                Zm = batch['Z'][..., :max_q]
 
-            t0 = time.perf_counter()
-            stats = glmm(
-                batch['X'],
-                batch['y'],
-                Zm,
-                batch['mask_n'].float(),
-                batch['mask_m'].float(),
-                batch['ns'].clamp(min=1).float(),
-                batch['n'].float(),
-                likelihood_family=likelihood_family,
-                eta_rfx=batch.get('eta_rfx'),
-                mask_q=batch.get('mask_q'),
-                nu_ffx=batch.get('nu_ffx'),
-                tau_ffx=batch.get('tau_ffx'),
-                family_ffx=batch.get('family_ffx'),
-                tau_rfx=batch.get('tau_rfx'),
-                family_sigma_rfx=batch.get('family_sigma_rfx'),
-                tau_eps=batch.get('tau_eps'),
-                family_sigma_eps=batch.get('family_sigma_eps'),
-                mask_d=batch.get('mask_d'),
-            )
-            pql_batch_wall = time.perf_counter() - t0
+                t0 = time.perf_counter()
+                stats = glmm(
+                    batch['X'],
+                    batch['y'],
+                    Zm,
+                    batch['mask_n'].float(),
+                    batch['mask_m'].float(),
+                    batch['ns'].clamp(min=1).float(),
+                    batch['n'].float(),
+                    likelihood_family=likelihood_family,
+                    eta_rfx=batch.get('eta_rfx'),
+                    mask_q=batch.get('mask_q'),
+                    nu_ffx=batch.get('nu_ffx'),
+                    tau_ffx=batch.get('tau_ffx'),
+                    family_ffx=batch.get('family_ffx'),
+                    tau_rfx=batch.get('tau_rfx'),
+                    family_sigma_rfx=batch.get('family_sigma_rfx'),
+                    tau_eps=batch.get('tau_eps'),
+                    family_sigma_eps=batch.get('family_sigma_eps'),
+                    mask_d=batch.get('mask_d'),
+                )
+                pql_batch_wall = time.perf_counter() - t0
 
-            beta_est = stats['beta_est'].cpu().numpy()
-            srfx_est = stats['sigma_rfx_est'].cpu().numpy()
-            blup_est = stats['blup_est'].cpu().numpy()
-            ffx_true = batch['ffx'].cpu().numpy()
-            srfx_true = batch['sigma_rfx'].cpu().numpy()
-            rfx_true = batch['rfx'].cpu().numpy()
-            mask_d_np = (
-                batch['mask_d'].cpu().numpy().astype(bool)
-                if 'mask_d' in batch
-                else np.ones((B, max_d), dtype=bool)
-            )
-            mask_q_np = (
-                batch['mask_q'].cpu().numpy().astype(bool)
-                if 'mask_q' in batch
-                else np.ones((B, max_q), dtype=bool)
-            )
-            m_np = batch['m'].cpu().numpy()
+                beta_est = stats['beta_est'].cpu().numpy()
+                srfx_est = stats['sigma_rfx_est'].cpu().numpy()
+                blup_est = stats['blup_est'].cpu().numpy()
+                ffx_true = batch['ffx'].cpu().numpy()
+                srfx_true = batch['sigma_rfx'].cpu().numpy()
+                rfx_true = batch['rfx'].cpu().numpy()
+                mask_d_np = (
+                    batch['mask_d'].cpu().numpy().astype(bool)
+                    if 'mask_d' in batch
+                    else np.ones((B, max_d), dtype=bool)
+                )
+                mask_q_np = (
+                    batch['mask_q'].cpu().numpy().astype(bool)
+                    if 'mask_q' in batch
+                    else np.ones((B, max_q), dtype=bool)
+                )
+                m_np = batch['m'].cpu().numpy()
 
-            for b in range(B):
-                active_d = np.flatnonzero(mask_d_np[b])
-                active_q = np.flatnonzero(mask_q_np[b])
-                m_b = int(m_np[b])
+                for b in range(B):
+                    active_d = np.flatnonzero(mask_d_np[b])
+                    active_q = np.flatnonzero(mask_q_np[b])
+                    m_b = int(m_np[b])
 
-                be = beta_est[b, active_d] - ffx_true[b, active_d]
-                se = srfx_est[b, active_q] - srfx_true[b, active_q]
-                re_e = (blup_est[b, :m_b][:, active_q] - rfx_true[b, :m_b][:, active_q]).reshape(-1)
-                re_t = rfx_true[b, :m_b][:, active_q].reshape(-1)
+                    be = beta_est[b, active_d] - ffx_true[b, active_d]
+                    se = srfx_est[b, active_q] - srfx_true[b, active_q]
+                    re_e = (blup_est[b, :m_b][:, active_q] - rfx_true[b, :m_b][:, active_q]).reshape(-1)
+                    re_t = rfx_true[b, :m_b][:, active_q].reshape(-1)
 
-                pql_a_be.append(be)
-                pql_a_bt.append(ffx_true[b, active_d])
-                pql_a_se.append(se)
-                pql_a_st.append(srfx_true[b, active_q])
-                pql_a_re.append(re_e)
-                pql_a_rt.append(re_t)
-                pql_wall.append(pql_batch_wall / B)
+                    pql_a_be.append(be)
+                    pql_a_bt.append(ffx_true[b, active_d])
+                    pql_a_se.append(se)
+                    pql_a_st.append(srfx_true[b, active_q])
+                    pql_a_re.append(re_e)
+                    pql_a_rt.append(re_t)
+                    pql_wall.append(pql_batch_wall / B)
+                    n_seen += 1
 
-                if not _HAS_CAVI or cavi_n_tried >= n_cavi:
-                    continue
+                    if not _HAS_CAVI or cavi_n_tried >= n_cavi:
+                        continue
 
-                cavi_n_tried += 1
-                pql_cv_be.append(be)
-                pql_cv_bt.append(ffx_true[b, active_d])
-                pql_cv_se.append(se)
-                pql_cv_st.append(srfx_true[b, active_q])
-                pql_cv_re.append(re_e)
-                pql_cv_rt.append(re_t)
+                    cavi_n_tried += 1
+                    pql_cv_be.append(be)
+                    pql_cv_bt.append(ffx_true[b, active_d])
+                    pql_cv_se.append(se)
+                    pql_cv_st.append(srfx_true[b, active_q])
+                    pql_cv_re.append(re_e)
+                    pql_cv_rt.append(re_t)
 
-                ds_flat = _flatten(batch, b, active_d, active_q)
-                t_c = time.perf_counter()
-                est = _cavi_estimate(ds_flat)
-                cavi_wall.append(time.perf_counter() - t_c)
+                    ds_flat = _flatten(batch, b, active_d, active_q)
+                    t_c = time.perf_counter()
+                    est = _cavi_estimate(ds_flat)
+                    cavi_wall.append(time.perf_counter() - t_c)
 
-                if est is None:
-                    continue
-                cavi_n_ok += 1
-                cavi_be.append(est['beta'] - ffx_true[b, active_d])
-                cavi_bt.append(ffx_true[b, active_d])
-                cavi_se.append(est['sigma_rfx'] - srfx_true[b, active_q])
-                cavi_st.append(srfx_true[b, active_q])
-                cavi_re.append((est['blups'][:m_b] - rfx_true[b, :m_b][:, active_q]).reshape(-1))
-                cavi_rt.append(re_t)
+                    if est is None:
+                        continue
+                    cavi_n_ok += 1
+                    cavi_be.append(est['beta'] - ffx_true[b, active_d])
+                    cavi_bt.append(ffx_true[b, active_d])
+                    cavi_se.append(est['sigma_rfx'] - srfx_true[b, active_q])
+                    cavi_st.append(srfx_true[b, active_q])
+                    cavi_re.append((est['blups'][:m_b] - rfx_true[b, :m_b][:, active_q]).reshape(-1))
+                    cavi_rt.append(re_t)
 
     def flat(lst: list) -> np.ndarray:
         return np.concatenate(lst) if lst else np.array([np.nan])
@@ -441,9 +447,11 @@ def main(
     partition: str = 'test',
     n_epochs: int = 1,
     n_cavi: int = 200,
+    n_total: int = 0,
 ) -> None:
     print(
         f'CAVI: {"enabled" if _HAS_CAVI else "DISABLED"}   vcp_prior={_VCP_PRIOR}   limit={n_cavi}'
+        + (f'   n_total={n_total}' if n_total > 0 else '')
     )
     print()
 
@@ -454,6 +462,7 @@ def main(
                 data_id=data_id,
                 partition=partition,
                 n_cavi=n_cavi,
+                n_total=n_total,
                 n_epochs=n_epochs,
             )
         )
@@ -497,6 +506,7 @@ if __name__ == '__main__':
     parser.add_argument('--partition', default='test', choices=['train', 'valid', 'test'])
     parser.add_argument('--n-epochs',  default=1, type=int)
     parser.add_argument('--n-cavi',    default=200, type=int, help='max datasets for CAVI per data_id')
+    parser.add_argument('--n-total',   default=0,   type=int, help='cap total datasets per data_id (0=all)')
     # fmt: on
     a = parser.parse_args()
     main(
@@ -504,4 +514,5 @@ if __name__ == '__main__':
         partition=a.partition,
         n_epochs=a.n_epochs,
         n_cavi=a.n_cavi,
+        n_total=a.n_total,
     )
