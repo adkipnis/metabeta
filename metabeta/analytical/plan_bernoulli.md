@@ -85,11 +85,14 @@ small-b-mixed is sufficient.
 n_g=25–150) while marginal at small groups (1.31 at n_g=5–9). A group-size-dependent
 inflation (e.g., 1.0+C/n_g) would help. Defer until P5/P6 are stable.
 
-**Priority 5 — nAGQ for q=1 (OPEN)**
+**Priority 5 — nAGQ for q=1 (OPEN, next natural step)**
 
 For datasets with a scalar random effect (q=1), replace single-Laplace marginal
 with k=7 adaptive Gauss-Hermite quadrature to remove the Breslow-Lin downward
 bias in Ψ̂. Gates on `active_q.sum() == 1`; not tractable for q>1 (k^q nodes).
+This is also the targeted fix for the medium-b-mixed P6 FFX gap: the gap is
+caused by biased PQL Ψ (confirmed 2026-05-13); a better Ψ from nAGQ should
+cascade to β and BLUPs via P6's joint MAP.
 
 After the final PQL Newton loop has found b̂_g and H_g = ZWZ_g + Ψ^{-1}:
 
@@ -126,16 +129,22 @@ Results (sampled=test / mixed=train×2, n_total=2000, 2026-05-13, N=2016):
 | medium-b-mixed   | 2.132   | 1.242    | **0.327**| 0.808 | 0.794 | **0.646** | 0.952 | 0.923   | **0.649** |
 
 P6 beats CAVI on FFX for 3/4 datasets (2–4.5× improvement over PQL).
-medium-b-mixed FFX gap persists (1.24 vs 0.327): root cause is the PQL Ψ being
-biased by the wrong initial β; with Ψ held fixed in P6, the β-b̂_g alternation
-converges to a local optimum. Further iterations (n_outer=4) give no gain.
+medium-b-mixed FFX gap persists (1.24 vs 0.327).
 
 σ_rfx: P6 beats PQL uniformly (all quartiles, 2–6% RMSE reduction).
 P6 beats CAVI on small-b-mixed; CAVI still leads at medium where σ_rfx is
 downstream of the FFX gap.  BLUP: marginal improvement over PQL (<1%).
 
-Remaining gap (medium-b-mixed FFX) requires Ψ updates inside the outer loop,
-which requires more iterations and approaches CAVI's runtime. Defer to P6-ext.
+Root cause of medium-b-mixed gap (2026-05-13): The Bernoulli joint log-posterior
+in (β, b̂_g) is globally concave for fixed Ψ, so P6 is already at the global MAP —
+not a local optimum. The gap is entirely a Ψ estimation problem: the PQL Ψ is
+biased by the wrong initial β, and the globally optimal β under the wrong Ψ is
+still wrong. Investigated: (a) P6-ext — Ψ M-step inside the outer loop — found
+to be a structural no-op for n_outer=2 (the Ψ update doesn't propagate to β
+within that turn) and also reverted because it regresses σ_rfx at small datasets.
+(b) Multiple restarts: ruled out — joint concavity guarantees all initializations
+converge to the same global MAP for fixed Ψ. Correct fix: better Ψ estimator,
+i.e., P5 (nAGQ), which directly addresses the Laplace bias in Ψ̂.
 
 **Priority 7 — BC1 σ_rfx correction for q>1 (contingent on P6, OPEN)**
 
