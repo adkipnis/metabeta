@@ -418,18 +418,23 @@ def refineBernoulliMapBeta(
     n_newton: int = 3,
     n_outer: int = 2,
     damping: float = 0.7,
+    update_psi: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Refine β via Newton on the true Bernoulli score at fixed b̂_g, then update BLUPs.
 
     PQL solves for β via a Schur-complement GLS on the linearized working response,
     which introduces approximation error that dominates FFX NRMSE.  This fixes b̂_g
     from PQL and runs Newton steps on the exact score ∑_g X_g'(y_g − σ(Xβ + Zb̂_g)),
-    then recomputes b̂_g with the improved β (Ψ held fixed at the PQL Laplace M-step).
+    then recomputes b̂_g with the improved β.
 
     n_outer controls how many times the β→b̂_g alternation is repeated.  Each outer
     iteration refines β at the current b̂_g (n_steps Newton steps) then recomputes b̂_g
-    at the new β (n_newton Newton steps).  The Ψ M-step runs once after all outer
-    iterations to update σ_rfx from the final b̂_g.
+    at the new β (n_newton Newton steps).
+
+    update_psi: if True (P6-ext), run a Ψ M-step after each outer iteration and refresh
+    Psi_inv for the next cycle.  This breaks the local-optimum trap caused by the PQL
+    Ψ being biased by the wrong initial β.  If False (original P6), Ψ is held fixed
+    throughout and updated only once at the end.
     """
     d = Xm.shape[-1]
     q = Zm.shape[-1]
@@ -452,7 +457,7 @@ def refineBernoulliMapBeta(
 
     has_rfx = q > 0 and n_newton > 0 and 'Psi_lap' in stats
     if has_rfx:
-        Psi_lap = stats['Psi_lap']
+        Psi_lap = stats['Psi_lap'].clone()
         Psi_inv = _pseudoInverse(Psi_lap)
         eye_q = torch.eye(q, device=device, dtype=dtype)
         eye_q_bm = eye_q.expand(B, m, q, q)
@@ -497,7 +502,7 @@ def refineBernoulliMapBeta(
         if not has_rfx:
             continue
 
-        # --- b̂_g Newton: n_newton steps at current β (fixed Ψ) ---
+        # --- b̂_g Newton: n_newton steps at current β ---
         for _ in range(n_newton):
             eta_b = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum(
                 'bmnq,bmq->bmn', Zm, blups
@@ -513,30 +518,50 @@ def refineBernoulliMapBeta(
             blups = (blups + damping * delta_b) * mask_m[:, :, None]
             blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
 
+        # --- Ψ M-step (P6-ext): update Ψ and Psi_inv for next outer iteration ---
+        if update_psi:
+            eta_u = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum(
+                'bmnq,bmq->bmn', Zm, blups
+            )
+            mu_u = torch.sigmoid(eta_u)
+            w_u = (mu_u * (1.0 - mu_u)).clamp(min=1e-6) * mask_n
+            ZWZ_u = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_u, Zm)
+            ZWZ_u_safe = torch.where(active[:, :, None, None], ZWZ_u, eye_q_bm)
+            Hg_u = ZWZ_u_safe + Psi_inv[:, None]
+            Hg_inv_u = _safeSolve(Hg_u + _adaptiveRidgeBm(Hg_u), eye_q_bm) * mask4
+            bg_outer_u = torch.einsum('bmq,bmr->bmqr', blups, blups)
+            Psi_lap = _psdProject((bg_outer_u + Hg_inv_u).sum(dim=1) / G[:, None, None])
+            Psi_lap = _psdClampEigenvalues(Psi_lap, _BERNOULLI_PSI_EIG_CAP)
+            Psi_inv = _pseudoInverse(Psi_lap)
+
     out = dict(stats)
     out['beta_est'] = beta
 
     if not has_rfx:
         return out
 
-    # --- Ψ M-step: Ψ = (1/G) Σ_g (b̂_g b̂_g' + H_g^{-1}) with final b̂_g ---
-    eta_f = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum(
-        'bmnq,bmq->bmn', Zm, blups
-    )
-    mu_f = torch.sigmoid(eta_f)
-    w_f = (mu_f * (1.0 - mu_f)).clamp(min=1e-6) * mask_n
-    ZWZ_f = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_f, Zm)
-    ZWZ_f_safe = torch.where(active[:, :, None, None], ZWZ_f, eye_q_bm)
-    Hg_f = ZWZ_f_safe + Psi_inv[:, None]
-    Hg_inv_f = _safeSolve(Hg_f + _adaptiveRidgeBm(Hg_f), eye_q_bm) * mask4
-    bg_outer_mat = torch.einsum('bmq,bmr->bmqr', blups, blups)
-    Psi_lap_new = _psdProject((bg_outer_mat + Hg_inv_f).sum(dim=1) / G[:, None, None])
-    Psi_lap_new = _psdClampEigenvalues(Psi_lap_new, _BERNOULLI_PSI_EIG_CAP)
-    sigma_rfx_new = Psi_lap_new.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().nan_to_num()
+    if update_psi:
+        # Ψ was updated in the last outer iteration — use it directly
+        sigma_rfx_new = Psi_lap.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().nan_to_num()
+    else:
+        # --- Final Ψ M-step: Ψ = (1/G) Σ_g (b̂_g b̂_g' + H_g^{-1}) with final b̂_g ---
+        eta_f = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum(
+            'bmnq,bmq->bmn', Zm, blups
+        )
+        mu_f = torch.sigmoid(eta_f)
+        w_f = (mu_f * (1.0 - mu_f)).clamp(min=1e-6) * mask_n
+        ZWZ_f = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_f, Zm)
+        ZWZ_f_safe = torch.where(active[:, :, None, None], ZWZ_f, eye_q_bm)
+        Hg_f = ZWZ_f_safe + Psi_inv[:, None]
+        Hg_inv_f = _safeSolve(Hg_f + _adaptiveRidgeBm(Hg_f), eye_q_bm) * mask4
+        bg_outer_mat = torch.einsum('bmq,bmr->bmqr', blups, blups)
+        Psi_lap = _psdProject((bg_outer_mat + Hg_inv_f).sum(dim=1) / G[:, None, None])
+        Psi_lap = _psdClampEigenvalues(Psi_lap, _BERNOULLI_PSI_EIG_CAP)
+        sigma_rfx_new = Psi_lap.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().nan_to_num()
 
     out['blup_est'] = blups
     out['sigma_rfx_est'] = sigma_rfx_new
-    out['Psi_lap'] = Psi_lap_new
+    out['Psi_lap'] = Psi_lap
     return out
 
 
