@@ -16,7 +16,6 @@ dependencies = [
     "joblib>=1.5.2",
     "matplotlib>=3.10.7",
     "pmlb>=1.0.1.post3",
-    "pymer4>=0.9.2",
     "pytest>=9.0.2",
     "scamd",
     "schedulefree>=1.4.1",
