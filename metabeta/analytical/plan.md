@@ -488,26 +488,42 @@ uncorrelated form `(1|g)+(0+z1|g)` fails when n_total/q is small (σ_rfx NRMSE
 33–64 on medium datasets). PQL and CAVI both carry priors that prevent boundary
 solutions; lme4 does not. pymer4 dependency removed from the project.
 
-Measured results (`glmm_reference_comparison.py`, test partition, n_cavi=200):
+Measured results (`glmm_reference_comparison.py`, sampled=test / mixed=train×2,
+n_total=1000–2000 matched datasets per data_id, 2026-05-13):
 
 | Dataset | N | PQL FFX | CAVI FFX | PQL σ | CAVI σ | PQL BLUP | CAVI BLUP |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-b-sampled | 8192 | 0.99 | **0.40** | 0.64 | 0.66 | 0.67 | 0.64 |
-| small-b-mixed | 512 | 0.46 | **0.26** | 0.62 | 0.63 | 0.61 | 0.55 |
-| medium-b-sampled | 8192 | 2.17 | **0.55** | 0.81 | 0.79 | 0.77 | 0.83 |
-| medium-b-mixed | 512 | 0.75 | **0.38** | 0.78 | 0.65 | 0.72 | 0.69 |
+| small-b-sampled | 1024 | 0.754 | **0.353** | 0.668 | **0.647** | 0.657 | **0.641** |
+| small-b-mixed | 2016 | 0.782 | **0.283** | 0.633 | **0.614** | 0.641 | **0.600** |
+| medium-b-sampled | 1024 | 1.256 | **0.445** | 0.770 | **0.718** | **0.743** | 0.752 |
+| medium-b-mixed | 2016 | 2.142 | **0.327** | 0.808 | **0.647** | 0.952 | **0.649** |
 
-(PQL numbers are on the matched CAVI subset of 200 datasets per data_id.)
+σ_rfx RMSE breakdown by true σ_rfx quartile (averaged across datasets):
+
+| Quartile | PQL Bias | PQL RMSE | CAVI Bias | CAVI RMSE | Winner |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Low (≤0.20) | +0.26–0.28 | 0.30–0.32 | +0.33–0.39 | 0.37–0.47 | **PQL** |
+| Med-low (0.20–0.46) | +0.07–0.14 | 0.17–0.44 | +0.22–0.27 | 0.28–0.38 | **PQL** |
+| Med-high (0.46–0.91) | −0.10–0.17 | 0.22–0.31 | +0.06–0.11 | 0.23–0.28 | ~tie |
+| High (≥0.91) | −0.43–0.62 | 0.64–0.83 | −0.25–0.39 | 0.46–0.58 | **CAVI** |
 
 Key findings:
-- **FFX gap is the dominant failure mode**: CAVI's true Bernoulli score gradient
-  gives 1.5–4× better FFX recovery than PQL's GLS working-response update.
-  Gap widens with d (medium > small) confirming P6 as highest priority.
-- **σ_rfx**: PQL and CAVI are comparable (NRMSE within ~3%), with CAVI showing
-  slight positive bias for small σ_rfx (VB underestimation floor). P5 nAGQ
-  targets the residual PQL σ_rfx bias without changing the β path.
-- **BLUP**: small advantage to CAVI on small datasets; comparable on medium.
-  Dominated by FFX leakage (bad β contaminates the BLUP residual).
+- **FFX gap is severe**: CAVI is 2–6.5× better than PQL across all datasets.
+  Gap widens sharply with d (medium > small), confirming P6 as highest priority.
+- **σ_rfx**: CAVI wins overall (3–20% lower NRMSE), but via opposing biases —
+  PQL is better in the 2 lower quartiles (less upward bias); CAVI is better in
+  the top quartile (less downward bias). The overall CAVI advantage is driven
+  by the high-σ_rfx cases. Critically, σ_rfx improvement in CAVI is likely
+  downstream of better β: with accurate β, residuals y−Xβ are more informative,
+  so b̂_g and Ψ are both better estimated. P6 should cascade to σ_rfx.
+- **BLUP**: CAVI wins on 3 of 4 datasets (2–32% better); medium-b-sampled is
+  effectively tied (PQL 0.743 vs CAVI 0.752). Medium-b-mixed is the outlier
+  (PQL 0.952 vs CAVI 0.649) — the 6.5× FFX gap there contaminates PQL BLUPs
+  severely. Again, fixing β via P6 should cascade to BLUPs.
+- **Decision rationale**: P6 (true-score β refinement) is the correct priority
+  regardless of the σ_rfx/BLUP results. If P6 closes the FFX gap, σ_rfx and
+  BLUP should improve as well. Only if a residual σ_rfx gap persists after P6
+  should a separate Ψ-update mechanism be investigated.
 
 Experiment: `experiments/analytical/glmm_reference_comparison.py`.
 
@@ -534,7 +550,12 @@ uv run python experiments/analytical/glmm_raw_diagnostic.py
 uv run python experiments/analytical/glmm_error_analysis.py --data-id small-n-mixed
 uv run python experiments/analytical/glmm_error_analysis.py --data-id small-b-mixed
 uv run python experiments/analytical/glmm_reference_comparison.py
-uv run python experiments/analytical/glmm_reference_comparison.py --data-id small-b-sampled --n-cavi 200
+uv run python experiments/analytical/glmm_reference_comparison.py \
+    --data-ids small-b-sampled,small-b-mixed,medium-b-sampled,medium-b-mixed \
+    --partition test --n-cavi 1000 --n-total 1000
+uv run python experiments/analytical/glmm_reference_comparison.py \
+    --data-ids small-b-mixed,medium-b-mixed --partition train --n-epochs 2 \
+    --n-cavi 2000 --n-total 2000
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical
 ```
