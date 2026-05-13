@@ -4,6 +4,7 @@ import torch
 
 from metabeta.analytical.blup import analyticalBLUPContext
 from metabeta.analytical.map import (
+    refineBernoulliMapBeta,
     refineBernoulliMapSrfx,
     refineBernoulliNagqSrfx,
     refineNormalMapSrfx,
@@ -117,6 +118,18 @@ def glmm(
                 mask_m,
                 mask_q=mask_q,
             )
+        if map_refine:
+            stats = refineBernoulliMapBeta(
+                stats,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx=map_priors['nu_ffx'],
+                tau_ffx=map_priors['tau_ffx'],
+                family_ffx=map_priors['family_ffx'],
+            )
     elif likelihood_family == 2:
         stats = lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
     else:
@@ -131,5 +144,6 @@ __all__ = [
     'lmmBernoulli',
     'lmmNormal',
     'lmmPoisson',
+    'refineBernoulliMapBeta',
     'refineNormalMapSrfx',
 ]

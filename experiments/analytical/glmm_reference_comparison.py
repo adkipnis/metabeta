@@ -299,7 +299,7 @@ def run_one_dataset(
 
                 t0_p6 = time.perf_counter()
                 stats_p6 = refineBernoulliMapBeta(
-                    stats,
+                    stats_p5,
                     batch['X'],
                     batch['y'],
                     Zm,
