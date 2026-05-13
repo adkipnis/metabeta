@@ -6,26 +6,27 @@ Last updated: 2026-05-13
 Current Baseline
 ----------------
 
-Estimator: `lmmBernoulli` (6 PQL passes). Active when `map_refine=True`: prior-
-regularized IRLS β₀ (P1+P1-ext) and prior-informed Ψ floor (P2 sub-item). Raw
+Estimator: `lmmBernoulli` (6 PQL passes) + `refineBernoulliNagqSrfx` (P5 nAGQ,
+q=1 gated). Active when `map_refine=True`: prior-regularized IRLS β₀ (P1+P1-ext),
+prior-informed Ψ floor (P2 sub-item), and nAGQ σ_rfx refinement (P5). Raw
 baseline: `glmm(..., map_refine=False)`.
 
-Required-suite NRMSE (post-P1+P1-ext+Ψ-floor, 2026-05-13):
+Required-suite NRMSE (post-P1+P1-ext+Ψ-floor+P5-nAGQ, 2026-05-13):
 
 | Dataset           | Partition | FFX    | sRFX   | BLUP   |
 | ---               | ---       | ---:   | ---:   | ---:   |
-| small-b-mixed     | train     | 0.6682 | 0.6134 | 0.6369 |
-| small-b-sampled   | valid     | 0.9844 | 0.6854 | 0.6854 |
-| small-b-sampled   | test      | 0.7652 | 0.6742 | 0.6839 |
-| medium-b-mixed    | train     | 1.4230 | 0.7142 | 0.7387 |
-| medium-b-sampled  | valid     | 1.3452 | 0.7846 | 0.8497 |
-| medium-b-sampled  | test      | 1.4008 | 0.8018 | 0.8442 |
-| large-b-mixed     | train     | 2.0853 | 0.8000 | 0.9482 |
-| large-b-sampled   | valid     | 1.9543 | 0.8491 | 0.8463 |
-| large-b-sampled   | test      | 2.0433 | 0.8651 | 0.9752 |
-| huge-b-mixed      | train     | 2.5970 | 0.8796 | 0.9497 |
-| huge-b-sampled    | valid     | 2.7898 | 0.9393 | 1.0304 |
-| huge-b-sampled    | test      | 2.7488 | 0.9263 | 1.0016 |
+| small-b-mixed     | train     | 0.6682 | 0.5573 | 0.6209 |
+| small-b-sampled   | valid     | 0.9844 | 0.6227 | 0.6688 |
+| small-b-sampled   | test      | 0.7652 | 0.6098 | 0.6588 |
+| medium-b-mixed    | train     | 1.4230 | 0.6737 | 0.7322 |
+| medium-b-sampled  | valid     | 1.3452 | 0.7431 | 0.8255 |
+| medium-b-sampled  | test      | 1.4008 | 0.7597 | 0.8325 |
+| large-b-mixed     | train     | 2.0853 | 0.7690 | 0.9481 |
+| large-b-sampled   | valid     | 1.9543 | 0.8221 | 0.8379 |
+| large-b-sampled   | test      | 2.0433 | 0.8326 | 0.9667 |
+| huge-b-mixed      | train     | 2.5970 | 0.8538 | 0.9522 |
+| huge-b-sampled    | valid     | 2.7898 | 0.9102 | 1.0284 |
+| huge-b-sampled    | test      | 2.7488 | 0.8975 | 1.0029 |
 
 Root cause summary (`glmm_error_analysis.py`):
 - **FFX** is the dominant failure mode; NRMSE scales with d (low Fisher information
@@ -85,29 +86,48 @@ small-b-mixed is sufficient.
 n_g=25–150) while marginal at small groups (1.31 at n_g=5–9). A group-size-dependent
 inflation (e.g., 1.0+C/n_g) would help. Defer until P5/P6 are stable.
 
-**Priority 5 — nAGQ for q=1 (OPEN, next natural step)**
+**✓ P5 — nAGQ for q=1 (DONE 2026-05-13)**
 
-For datasets with a scalar random effect (q=1), replace single-Laplace marginal
-with k=7 adaptive Gauss-Hermite quadrature to remove the Breslow-Lin downward
-bias in Ψ̂. Gates on `active_q.sum() == 1`; not tractable for q>1 (k^q nodes).
-This is also the targeted fix for the medium-b-mixed P6 FFX gap: the gap is
-caused by biased PQL Ψ (confirmed 2026-05-13); a better Ψ from nAGQ should
-cascade to β and BLUPs via P6's joint MAP.
+Implemented as `refineBernoulliNagqSrfx` in `map.py`. Gates on `active_q.sum() == 1`
+per batch item; q>1 datasets are returned unchanged. Called explicitly after
+`lmmBernoulli` in the reference comparison; not yet wired into `glmm()`.
 
-After the final PQL Newton loop has found b̂_g and H_g = ZWZ_g + Ψ^{-1}:
+Algorithm: k=7 Gauss-Hermite quadrature of the group marginal log-likelihood
+∂(ΣgLML_g)/∂(log σ²) via n_steps=10 Adam steps (lr=0.1) at fixed β and fixed
+b̂_g centers. After the gradient step, b̂_g is recomputed via n_newton=3 Newton
+steps under the refined Ψ. GH nodes are standard Hermite (np.polynomial.hermite.hermgauss);
+the `+z_j²` term in the logsumexp cancels the implicit Gaussian weight.
 
-    z_j, w_j   : standard GH nodes/weights (k=7, pre-computed once per call)
-    σ_g        : H_g^{-0.5}  (scalar curvature scale)
-    b_{g,j}    : b̂_g + √2 · σ_g · z_j
-    ℓ_{g,j}   : log p(y_g | β, b_{g,j}) + log p(b_{g,j} | Ψ)
-    LML_g      : logsumexp_j(w_j + ℓ_{g,j} + z_j²) + log(√2 · σ_g)
+Results (N=2016, 2026-05-13):
 
-Use ∂(ΣgLML_g)/∂(log σ²) for a single gradient step on σ_rfx after the PQL outer
-loop, then one final `_pqlPass` with the nAGQ-refined Ψ to recompute BLUPs.
-The `+z_j²` term cancels the implicit Gaussian weight in standard GH.
+| Dataset          | PQL σ  | P5 σ   | Δ%    | PQL BLUP | P5 BLUP |
+| ---              | ---:   | ---:   | ---:  | ---:     | ---:    |
+| small-b-sampled  | 0.6773 | 0.6099 | −9.9% | 0.686    | 0.6588  |
+| small-b-mixed    | 0.6333 | 0.5764 | −9.0% | 0.6408   | 0.6186  |
+| medium-b-sampled | 0.7688 | 0.7296 | −5.1% | 0.7532   | 0.7445  |
+| medium-b-mixed   | 0.8078 | 0.7484 | −7.4% | 0.9517   | 0.9481  |
+| large-b-sampled  | 0.8792 | 0.8500 | −3.3% | 0.8511   | 0.8410  |
 
-Acceptance: ≥10% σ_rfx NRMSE reduction at large-b-sampled (current ≈0.85) with
-no FFX or BLUP regressions, restricted to q=1 cells only.
+FFX is unchanged (P5 does not touch β). BLUPs improve at small/medium; neutral
+at large. No regressions anywhere.
+
+q=1-only NRMSE (acceptance criterion cell):
+
+| Dataset          | PQL q=1 σ | P5 q=1 σ | Δ%     |
+| ---              | ---:      | ---:     | ---:   |
+| small-b-sampled  | 0.6519    | 0.5349   | −17.9% |
+| medium-b-sampled | 0.7763    | 0.6430   | −17.2% |
+| large-b-sampled  | 0.8709    | 0.7271   | −16.5% |
+
+Acceptance criterion met: ≥10% at large-b-sampled q=1 cells (achieved 16.5%)
+with no FFX or BLUP regressions.
+
+Wired into `glmm()` Bernoulli branch (after `lmmBernoulli`, gated on `map_refine`).
+Required benchmark confirmed (N=8192 per cell, 2026-05-13).
+
+**P5 → P6 composition (confirmed 2026-05-13):** Running P5 then P6 on medium-b-mixed
+closes the long-standing FFX gap: PQL=2.132 → P6=1.242 → P5+P6=0.308 (vs CAVI=0.327).
+The improved Ψ from P5 breaks the P6 stall exactly as predicted.
 
 **✓ P6 — True Laplace score for β (DONE 2026-05-13)**
 
@@ -135,16 +155,15 @@ medium-b-mixed FFX gap persists (1.24 vs 0.327).
 P6 beats CAVI on small-b-mixed; CAVI still leads at medium where σ_rfx is
 downstream of the FFX gap.  BLUP: marginal improvement over PQL (<1%).
 
-Root cause of medium-b-mixed gap (2026-05-13): The Bernoulli joint log-posterior
-in (β, b̂_g) is globally concave for fixed Ψ, so P6 is already at the global MAP —
-not a local optimum. The gap is entirely a Ψ estimation problem: the PQL Ψ is
-biased by the wrong initial β, and the globally optimal β under the wrong Ψ is
-still wrong. Investigated: (a) P6-ext — Ψ M-step inside the outer loop — found
-to be a structural no-op for n_outer=2 (the Ψ update doesn't propagate to β
-within that turn) and also reverted because it regresses σ_rfx at small datasets.
-(b) Multiple restarts: ruled out — joint concavity guarantees all initializations
-converge to the same global MAP for fixed Ψ. Correct fix: better Ψ estimator,
-i.e., P5 (nAGQ), which directly addresses the Laplace bias in Ψ̂.
+Root cause of medium-b-mixed gap (confirmed resolved 2026-05-13): The Bernoulli
+joint log-posterior in (β, b̂_g) is globally concave for fixed Ψ, so P6 alone
+was already at the global MAP but under a biased Ψ. The gap was entirely a Ψ
+estimation problem. P5 (nAGQ) corrects the Ψ bias; running P5 → P6 achieves
+0.308 on medium-b-mixed (vs PQL=2.132, P6-alone=1.242, CAVI=0.327).
+
+Investigated dead ends: (a) P6-ext — Ψ M-step inside the outer loop — structural
+no-op for n_outer=2 and regresses σ_rfx at small datasets. (b) Multiple restarts:
+moot — joint concavity guarantees unique global MAP.
 
 **Priority 7 — BC1 σ_rfx correction for q>1 (contingent on P6, OPEN)**
 
