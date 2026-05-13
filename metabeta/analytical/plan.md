@@ -477,25 +477,39 @@ regressions. If only sRFX improves, the PQL M-step was not at fault.
 
 **External reference baseline: statsmodels BinomialBayesMixedGLM (CAVI)**
 
-Python-native deterministic baseline (pymer4/lme4 unavailable — R dependency
-broken in environment). Uses coordinate-ascent variational inference (CAVI) on a
-mean-field Gaussian approximation of the joint posterior p(β, b_g, σ_rfx | y).
+Chosen reference: `BinomialBayesMixedGLM` (statsmodels 0.14+). Uses coordinate-
+ascent variational inference (CAVI) on a mean-field Gaussian approximation.
+Supports any q via independent variance components per RE dimension (diagonal Ψ).
+Prior: Gaussian on log σ² (vcp_p=4.0), approximately matching our HalfNormal(τ_rfx).
 
-Behaviour relative to our PQL:
-- FFX (β): CAVI uses the true Bernoulli score gradient; expected to be similar or
-  slightly better than PQL at extreme d/n ratios.
-- σ_rfx: CAVI is known to underestimate posterior variance (mean-field variational
-  underestimation), so it may give σ_rfx estimates similar to or worse than PQL's
-  Laplace M-step.
-- BLUP: CAVI provides per-group posterior means; extraction requires reading the RE
-  params from `result.params[k_fe + k_vc:]`.
+lme4::glmer (via rpy2/pymer4) was evaluated and **removed**: ML without
+regularization diverges catastrophically for small groups with q>1 — even the
+uncorrelated form `(1|g)+(0+z1|g)` fails when n_total/q is small (σ_rfx NRMSE
+33–64 on medium datasets). PQL and CAVI both carry priors that prevent boundary
+solutions; lme4 does not. pymer4 dependency removed from the project.
 
-Note: prior matching is approximate (CAVI uses a Gaussian prior on log σ², we use
-HalfNormal on σ). The comparison is frequentist (accuracy vs ground truth), not a
-matched-prior Bayesian comparison.
+Measured results (`glmm_reference_comparison.py`, test partition, n_cavi=200):
 
-Experiment: `experiments/analytical/glmm_reference_comparison.py` — reports NRMSE
-side-by-side on q=1 test datasets, with σ_rfx bias breakdown by true σ_rfx bin.
+| Dataset | N | PQL FFX | CAVI FFX | PQL σ | CAVI σ | PQL BLUP | CAVI BLUP |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-b-sampled | 8192 | 0.99 | **0.40** | 0.64 | 0.66 | 0.67 | 0.64 |
+| small-b-mixed | 512 | 0.46 | **0.26** | 0.62 | 0.63 | 0.61 | 0.55 |
+| medium-b-sampled | 8192 | 2.17 | **0.55** | 0.81 | 0.79 | 0.77 | 0.83 |
+| medium-b-mixed | 512 | 0.75 | **0.38** | 0.78 | 0.65 | 0.72 | 0.69 |
+
+(PQL numbers are on the matched CAVI subset of 200 datasets per data_id.)
+
+Key findings:
+- **FFX gap is the dominant failure mode**: CAVI's true Bernoulli score gradient
+  gives 1.5–4× better FFX recovery than PQL's GLS working-response update.
+  Gap widens with d (medium > small) confirming P6 as highest priority.
+- **σ_rfx**: PQL and CAVI are comparable (NRMSE within ~3%), with CAVI showing
+  slight positive bias for small σ_rfx (VB underestimation floor). P5 nAGQ
+  targets the residual PQL σ_rfx bias without changing the β path.
+- **BLUP**: small advantage to CAVI on small datasets; comparable on medium.
+  Dominated by FFX leakage (bad β contaminates the BLUP residual).
+
+Experiment: `experiments/analytical/glmm_reference_comparison.py`.
 
 Acceptance Criteria (Bernoulli)
 ---------------------------------
