@@ -237,6 +237,7 @@ def _initialPqlState(
     nu_ffx: torch.Tensor | None = None,
     tau_ffx: torch.Tensor | None = None,
     family_ffx: torch.Tensor | None = None,
+    tau_rfx: torch.Tensor | None = None,
 ) -> _InitialPqlState:
     B, m, _, d = Xm.shape
     q = Zm.shape[-1]
@@ -286,6 +287,12 @@ def _initialPqlState(
         nu_ffx=nu_ffx,
         tau_ffx=tau_ffx,
     )
+    if tau_rfx is not None:
+        tau_agg = tau_rfx[:, :q].clamp(min=1e-4).mean(dim=-1)  # (B,)
+        prior_floor = tau_agg.square().clamp(max=family.initial_psi_floor)
+        psi_0_floor = torch.maximum(psi_0, prior_floor)
+    else:
+        psi_0_floor = psi_0.clamp(min=family.initial_psi_floor)
     return _InitialPqlState(
         beta_0=beta_0,
         phi_pearson=phi_pearson,
@@ -293,7 +300,7 @@ def _initialPqlState(
         Psi_pql=Psi_pql,
         bhat_ols=bhat_ols,
         pass_ctx=pass_ctx,
-        psi_0_floor=psi_0.clamp(min=family.initial_psi_floor),
+        psi_0_floor=psi_0_floor,
     )
 
 
@@ -463,6 +470,7 @@ def _lmmGlmm(
     nu_ffx: torch.Tensor | None = None,  # (B, d) prior mean for fixed effects
     tau_ffx: torch.Tensor | None = None,  # (B, d) prior std for fixed effects
     family_ffx: torch.Tensor | None = None,  # (B,) int — 0=Normal, 1=Student-t
+    tau_rfx: torch.Tensor | None = None,  # (B, q+) prior scale for σ_rfx (sets Ψ floor)
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM variance-component estimator (private).
 
@@ -498,6 +506,7 @@ def _lmmGlmm(
         nu_ffx=nu_ffx,
         tau_ffx=tau_ffx,
         family_ffx=family_ffx,
+        tau_rfx=tau_rfx,
     )
     beta_0 = initial.beta_0
     phi_pearson = initial.phi_pearson
@@ -609,6 +618,7 @@ def lmmBernoulli(
     nu_ffx: torch.Tensor | None = None,
     tau_ffx: torch.Tensor | None = None,
     family_ffx: torch.Tensor | None = None,
+    tau_rfx: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM for Bernoulli/logit outcomes."""
     return _lmmGlmm(
@@ -625,6 +635,7 @@ def lmmBernoulli(
         nu_ffx=nu_ffx,
         tau_ffx=tau_ffx,
         family_ffx=family_ffx,
+        tau_rfx=tau_rfx,
     )
 
 

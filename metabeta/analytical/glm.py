@@ -70,9 +70,9 @@ def irlsBernoulli(
                 student_prec = torch.where(
                     active_mask,
                     6.0
-                    / (
-                        5.0 * tau_ffx.clamp(min=1e-8).square() + (beta - nu_ffx).square()
-                    ).clamp(min=1e-8),
+                    / (5.0 * tau_ffx.clamp(min=1e-8).square() + (beta - nu_ffx).square()).clamp(
+                        min=1e-8
+                    ),
                     zeros,
                 )
                 prior_prec = torch.where(is_student, student_prec, normal_prec)
