@@ -35,7 +35,7 @@ import torch
 from tabulate import tabulate
 
 from metabeta.analytical.glmm import glmm
-from metabeta.analytical.map import refineBernoulliMapBeta
+from metabeta.analytical.map import refineBernoulliMapBeta, refineBernoulliNagqSrfx
 from metabeta.utils.config import loadDataConfig
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.experiments import dataFilePath
@@ -221,6 +221,11 @@ def run_one_dataset(
     pql_a_se, pql_a_st = [], []
     pql_a_re, pql_a_rt = [], []
 
+    p5_a_be, p5_a_bt = [], []
+    p5_a_se, p5_a_st = [], []
+    p5_a_re, p5_a_rt = [], []
+    p5_wall: list[float] = []
+
     p6_a_be, p6_a_bt = [], []
     p6_a_se, p6_a_st = [], []
     p6_a_re, p6_a_rt = [], []
@@ -239,6 +244,7 @@ def run_one_dataset(
     cavi_wall: list[float] = []
     pql_wall: list[float] = []
     p6_wall: list[float] = []
+    # p5_wall declared above
     cavi_n_tried = cavi_n_ok = 0
 
     with torch.no_grad():
@@ -279,6 +285,18 @@ def run_one_dataset(
                 )
                 pql_batch_wall = time.perf_counter() - t0
 
+                t0_p5 = time.perf_counter()
+                stats_p5 = refineBernoulliNagqSrfx(
+                    stats,
+                    batch['X'],
+                    batch['y'],
+                    Zm,
+                    batch['mask_n'].float(),
+                    batch['mask_m'].float(),
+                    mask_q=batch.get('mask_q'),
+                )
+                p5_batch_wall = time.perf_counter() - t0_p5
+
                 t0_p6 = time.perf_counter()
                 stats_p6 = refineBernoulliMapBeta(
                     stats,
@@ -296,6 +314,9 @@ def run_one_dataset(
                 beta_est = stats['beta_est'].cpu().numpy()
                 srfx_est = stats['sigma_rfx_est'].cpu().numpy()
                 blup_est = stats['blup_est'].cpu().numpy()
+                beta_est_p5 = stats_p5['beta_est'].cpu().numpy()
+                srfx_est_p5 = stats_p5['sigma_rfx_est'].cpu().numpy()
+                blup_est_p5 = stats_p5['blup_est'].cpu().numpy()
                 beta_est_p6 = stats_p6['beta_est'].cpu().numpy()
                 srfx_est_p6 = stats_p6['sigma_rfx_est'].cpu().numpy()
                 blup_est_p6 = stats_p6['blup_est'].cpu().numpy()
@@ -321,9 +342,16 @@ def run_one_dataset(
 
                     be = beta_est[b, active_d] - ffx_true[b, active_d]
                     se = srfx_est[b, active_q] - srfx_true[b, active_q]
-                    re_e = (blup_est[b, :m_b][:, active_q] - rfx_true[b, :m_b][:, active_q]).reshape(-1)
+                    re_e = (
+                        blup_est[b, :m_b][:, active_q] - rfx_true[b, :m_b][:, active_q]
+                    ).reshape(-1)
                     re_t = rfx_true[b, :m_b][:, active_q].reshape(-1)
 
+                    be_p5 = beta_est_p5[b, active_d] - ffx_true[b, active_d]
+                    se_p5 = srfx_est_p5[b, active_q] - srfx_true[b, active_q]
+                    re_e_p5 = (
+                        blup_est_p5[b, :m_b][:, active_q] - rfx_true[b, :m_b][:, active_q]
+                    ).reshape(-1)
                     be_p6 = beta_est_p6[b, active_d] - ffx_true[b, active_d]
                     se_p6 = srfx_est_p6[b, active_q] - srfx_true[b, active_q]
                     re_e_p6 = (
@@ -336,6 +364,14 @@ def run_one_dataset(
                     pql_a_re.append(re_e)
                     pql_a_rt.append(re_t)
                     pql_wall.append(pql_batch_wall / B)
+
+                    p5_a_be.append(be_p5)
+                    p5_a_bt.append(ffx_true[b, active_d])
+                    p5_a_se.append(se_p5)
+                    p5_a_st.append(srfx_true[b, active_q])
+                    p5_a_re.append(re_e_p5)
+                    p5_a_rt.append(re_t)
+                    p5_wall.append(p5_batch_wall / B)
 
                     p6_a_be.append(be_p6)
                     p6_a_bt.append(ffx_true[b, active_d])
@@ -377,7 +413,9 @@ def run_one_dataset(
                     cavi_bt.append(ffx_true[b, active_d])
                     cavi_se.append(est['sigma_rfx'] - srfx_true[b, active_q])
                     cavi_st.append(srfx_true[b, active_q])
-                    cavi_re.append((est['blups'][:m_b] - rfx_true[b, :m_b][:, active_q]).reshape(-1))
+                    cavi_re.append(
+                        (est['blups'][:m_b] - rfx_true[b, :m_b][:, active_q]).reshape(-1)
+                    )
                     cavi_rt.append(re_t)
 
     def flat(lst: list) -> np.ndarray:
@@ -388,6 +426,13 @@ def run_one_dataset(
         for k, v in zip(
             'be bt se st re rt'.split(),
             [pql_a_be, pql_a_bt, pql_a_se, pql_a_st, pql_a_re, pql_a_rt],
+        )
+    }
+    p5_a = {
+        k: flat(v)
+        for k, v in zip(
+            'be bt se st re rt'.split(),
+            [p5_a_be, p5_a_bt, p5_a_se, p5_a_st, p5_a_re, p5_a_rt],
         )
     }
     p6_a = {
@@ -426,6 +471,9 @@ def run_one_dataset(
         'pql_ffx': _nrmse(pql_a['be'], pql_a['bt']),
         'pql_srfx': _nrmse(pql_a['se'], pql_a['st']),
         'pql_blup': _nrmse(pql_a['re'], pql_a['rt']),
+        'p5_ffx': _nrmse(p5_a['be'], p5_a['bt']),
+        'p5_srfx': _nrmse(p5_a['se'], p5_a['st']),
+        'p5_blup': _nrmse(p5_a['re'], p5_a['rt']),
         'p6_ffx': _nrmse(p6_a['be'], p6_a['bt']),
         'p6_srfx': _nrmse(p6_a['se'], p6_a['st']),
         'p6_blup': _nrmse(p6_a['re'], p6_a['rt']),
@@ -452,6 +500,19 @@ def run_one_dataset(
         )
     )
 
+    print(f'\nP5 — q=1 only (N={n_pql_all})')
+    print(
+        tabulate(
+            [
+                ['FFX (β)', f'{metrics["p5_ffx"]:.4f}', f'{_bias(p5_a["be"]):+.4f}'],
+                ['σ_rfx', f'{metrics["p5_srfx"]:.4f}', f'{_bias(p5_a["se"]):+.4f}'],
+                ['BLUP', f'{metrics["p5_blup"]:.4f}', f'{_bias(p5_a["re"]):+.4f}'],
+            ],
+            headers=['Parameter', 'NRMSE', 'Bias'],
+            tablefmt='simple',
+        )
+    )
+
     print(f'\nP6 — all q (N={n_pql_all})')
     print(
         tabulate(
@@ -472,15 +533,45 @@ def run_one_dataset(
         print(
             tabulate(
                 [
-                    ['PQL', 'FFX (β)', f'{_nrmse(pql_cv["be"],pql_cv["bt"]):.4f}', f'{_bias(pql_cv["be"]):+.4f}'],
-                    ['PQL', 'σ_rfx',   f'{_nrmse(pql_cv["se"],pql_cv["st"]):.4f}', f'{_bias(pql_cv["se"]):+.4f}'],
-                    ['PQL', 'BLUP',    f'{_nrmse(pql_cv["re"],pql_cv["rt"]):.4f}', f'{_bias(pql_cv["re"]):+.4f}'],
-                    ['P6',  'FFX (β)', f'{_nrmse(p6_cv["be"],p6_cv["bt"]):.4f}',   f'{_bias(p6_cv["be"]):+.4f}'],
-                    ['P6',  'σ_rfx',   f'{_nrmse(p6_cv["se"],p6_cv["st"]):.4f}',   f'{_bias(p6_cv["se"]):+.4f}'],
-                    ['P6',  'BLUP',    f'{_nrmse(p6_cv["re"],p6_cv["rt"]):.4f}',   f'{_bias(p6_cv["re"]):+.4f}'],
-                    ['CAVI', 'FFX (β)', f'{metrics["cavi_ffx"]:.4f}',  f'{_bias(cavi["be"]):+.4f}'],
-                    ['CAVI', 'σ_rfx',   f'{metrics["cavi_srfx"]:.4f}', f'{_bias(cavi["se"]):+.4f}'],
-                    ['CAVI', 'BLUP',    f'{metrics["cavi_blup"]:.4f}', f'{_bias(cavi["re"]):+.4f}'],
+                    [
+                        'PQL',
+                        'FFX (β)',
+                        f'{_nrmse(pql_cv["be"],pql_cv["bt"]):.4f}',
+                        f'{_bias(pql_cv["be"]):+.4f}',
+                    ],
+                    [
+                        'PQL',
+                        'σ_rfx',
+                        f'{_nrmse(pql_cv["se"],pql_cv["st"]):.4f}',
+                        f'{_bias(pql_cv["se"]):+.4f}',
+                    ],
+                    [
+                        'PQL',
+                        'BLUP',
+                        f'{_nrmse(pql_cv["re"],pql_cv["rt"]):.4f}',
+                        f'{_bias(pql_cv["re"]):+.4f}',
+                    ],
+                    [
+                        'P6',
+                        'FFX (β)',
+                        f'{_nrmse(p6_cv["be"],p6_cv["bt"]):.4f}',
+                        f'{_bias(p6_cv["be"]):+.4f}',
+                    ],
+                    [
+                        'P6',
+                        'σ_rfx',
+                        f'{_nrmse(p6_cv["se"],p6_cv["st"]):.4f}',
+                        f'{_bias(p6_cv["se"]):+.4f}',
+                    ],
+                    [
+                        'P6',
+                        'BLUP',
+                        f'{_nrmse(p6_cv["re"],p6_cv["rt"]):.4f}',
+                        f'{_bias(p6_cv["re"]):+.4f}',
+                    ],
+                    ['CAVI', 'FFX (β)', f'{metrics["cavi_ffx"]:.4f}', f'{_bias(cavi["be"]):+.4f}'],
+                    ['CAVI', 'σ_rfx', f'{metrics["cavi_srfx"]:.4f}', f'{_bias(cavi["se"]):+.4f}'],
+                    ['CAVI', 'BLUP', f'{metrics["cavi_blup"]:.4f}', f'{_bias(cavi["re"]):+.4f}'],
                 ],
                 headers=['Method', 'Parameter', 'NRMSE', 'Bias'],
                 tablefmt='simple',
@@ -489,6 +580,8 @@ def run_one_dataset(
 
     print('\nσ_rfx bias by true σ_rfx bin — PQL')
     print(_breakdown_srfx(pql_a['se'], pql_a['st'], 'PQL'))
+    print('\nσ_rfx bias by true σ_rfx bin — P5')
+    print(_breakdown_srfx(p5_a['se'], p5_a['st'], 'P5'))
     print('\nσ_rfx bias by true σ_rfx bin — P6')
     print(_breakdown_srfx(p6_a['se'], p6_a['st'], 'P6'))
     if cavi_n_ok > 0:
@@ -496,9 +589,13 @@ def run_one_dataset(
         print(_breakdown_srfx(cavi['se'], cavi['st'], 'CAVI'))
 
     w_pql = np.array(pql_wall)
+    w_p5 = np.array(p5_wall)
     w_p6 = np.array(p6_wall)
     print(
         f'\nWall time — PQL: mean={w_pql.mean()*1000:.2f} ms  median={np.median(w_pql)*1000:.2f} ms/ds'
+    )
+    print(
+        f'Wall time — P5:  mean={w_p5.mean()*1000:.2f} ms  median={np.median(w_p5)*1000:.2f} ms/ds'
     )
     print(
         f'Wall time — P6:  mean={w_p6.mean()*1000:.2f} ms  median={np.median(w_p6)*1000:.2f} ms/ds'
@@ -558,6 +655,9 @@ def main(
                     fmt(m['pql_ffx']),
                     fmt(m['pql_srfx']),
                     fmt(m['pql_blup']),
+                    fmt(m['p5_ffx']),
+                    fmt(m['p5_srfx']),
+                    fmt(m['p5_blup']),
                     fmt(m['p6_ffx']),
                     fmt(m['p6_srfx']),
                     fmt(m['p6_blup']),
@@ -575,6 +675,9 @@ def main(
                     'PQL-F',
                     'PQL-S',
                     'PQL-B',
+                    'P5-F',
+                    'P5-S',
+                    'P5-B',
                     'P6-F',
                     'P6-S',
                     'P6-B',

@@ -2,6 +2,7 @@
 
 import math
 
+import numpy as np
 import torch
 from torch.nn import functional as F
 
@@ -17,7 +18,12 @@ from metabeta.analytical.linalg import (
 from metabeta.analytical.normal import _normalGlsAndBlups
 from metabeta.utils.families import logProbFfx, logProbSigma
 
-__all__ = ['refineBernoulliMapBeta', 'refineBernoulliMapSrfx', 'refineNormalMapSrfx']
+__all__ = [
+    'refineBernoulliMapBeta',
+    'refineBernoulliMapSrfx',
+    'refineBernoulliNagqSrfx',
+    'refineNormalMapSrfx',
+]
 
 
 def _fixedCorrFromStats(
@@ -478,9 +484,9 @@ def refineBernoulliMapBeta(
                     student_prec = torch.where(
                         active_d_mask,
                         6.0
-                        / (
-                            5.0 * tau_ffx.clamp(min=1e-8).square() + (beta - nu_ffx).square()
-                        ).clamp(min=1e-8),
+                        / (5.0 * tau_ffx.clamp(min=1e-8).square() + (beta - nu_ffx).square()).clamp(
+                            min=1e-8
+                        ),
                         zeros_d,
                     )
                     prior_prec = torch.where(is_student, student_prec, normal_prec)
@@ -490,8 +496,10 @@ def refineBernoulliMapBeta(
                 score = score + prior_prec * (nu_ffx - beta)
 
             delta = _safeSolve(XtWX + _adaptiveRidge(XtWX), score)
-            beta = (beta + damping * delta).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(
-                -50.0, 50.0
+            beta = (
+                (beta + damping * delta)
+                .nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+                .clamp(-50.0, 50.0)
             )
 
         if not has_rfx:
@@ -520,9 +528,7 @@ def refineBernoulliMapBeta(
         return out
 
     # --- Ψ M-step: Ψ = (1/G) Σ_g (b̂_g b̂_g' + H_g^{-1}) with final b̂_g ---
-    eta_f = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum(
-        'bmnq,bmq->bmn', Zm, blups
-    )
+    eta_f = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Zm, blups)
     mu_f = torch.sigmoid(eta_f)
     w_f = (mu_f * (1.0 - mu_f)).clamp(min=1e-6) * mask_n
     ZWZ_f = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_f, Zm)
@@ -534,6 +540,167 @@ def refineBernoulliMapBeta(
     Psi_lap_new = _psdClampEigenvalues(Psi_lap_new, _BERNOULLI_PSI_EIG_CAP)
     sigma_rfx_new = Psi_lap_new.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().nan_to_num()
 
+    out['blup_est'] = blups
+    out['sigma_rfx_est'] = sigma_rfx_new
+    out['Psi_lap'] = Psi_lap_new
+    return out
+
+
+def refineBernoulliNagqSrfx(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    mask_q: torch.Tensor | None = None,
+    n_steps: int = 10,
+    n_newton: int = 3,
+    k: int = 7,
+    lr: float = 0.1,
+) -> dict[str, torch.Tensor]:
+    """Refine σ_rfx for Bernoulli GLMMs with exactly one active RE via nAGQ LML gradient.
+
+    For datasets with active_q == 1 (scalar random effect), replaces the PQL Laplace
+    M-step σ_rfx with a gradient-step estimate from k-point adaptive Gauss-Hermite
+    quadrature of the marginal log-likelihood.  Datasets with active_q > 1 are returned
+    unchanged; the function gates on active_q.sum() == 1 per batch item.
+
+    After the nAGQ gradient step, b̂_g is recomputed via n_newton Newton steps under
+    the refined Ψ to produce consistent BLUPs.
+
+    The +z_j² term in the logsumexp cancels the implicit Gaussian weight in standard GH:
+        LML_g = logsumexp_j(log w_j + ℓ_{g,j} + z_j²) + log(√2 · σ_g)
+    where σ_g = H_g^{-1/2}, H_g = ZWZ_g + σ^{-2}, b_{g,j} = b̂_g + √2·σ_g·z_j,
+    and ℓ_{g,j} = log p(y_g | β, b_{g,j}) + log p(b_{g,j} | σ²).
+    """
+    q = Zm.shape[-1]
+    if q == 0 or 'Psi_lap' not in stats:
+        return stats
+
+    B, m = Xm.shape[:2]
+    device, dtype = Xm.device, Xm.dtype
+
+    # Gate: apply only to datasets with exactly 1 active RE dimension
+    if mask_q is not None:
+        active_q_count = mask_q[:, :q].long().sum(dim=-1)
+    else:
+        active_q_count = torch.full((B,), q, device=device, dtype=torch.long)
+    nagq_eligible = active_q_count == 1  # (B,) bool
+    if not nagq_eligible.any():
+        return stats
+
+    # GH nodes/weights: ∫ f(x) e^{-x²} dx ≈ Σ_j w_j f(z_j)
+    z_np, w_np = np.polynomial.hermite.hermgauss(k)
+    z_nodes = torch.tensor(z_np, dtype=dtype, device=device)       # (k,)
+    log_w = torch.tensor(np.log(w_np), dtype=dtype, device=device)   # (k,)
+
+    # First active q index per dataset
+    if mask_q is not None:
+        q_idx = mask_q[:, :q].long().argmax(dim=-1)  # (B,)
+    else:
+        q_idx = torch.zeros(B, device=device, dtype=torch.long)
+
+    n_max = Zm.shape[2]
+    b_arange = torch.arange(B, device=device)
+
+    # Gather the single active RE z-column  (B, m, n_max)
+    z_col = Zm.gather(3, q_idx[:, None, None, None].expand(B, m, n_max, 1)).squeeze(-1)
+
+    # PQL BLUPs for the active dim — fixed quadrature centers  (B, m)
+    b_g0 = stats['blup_est'].gather(2, q_idx[:, None, None].expand(B, m, 1)).squeeze(-1).detach()
+
+    # Initial log σ² from active Psi_lap diagonal entry
+    log_s2 = stats['Psi_lap'][b_arange, q_idx, q_idx].clamp(min=1e-8).log().detach().clone()
+    log_s2.requires_grad_(True)
+
+    beta = stats['beta_est'].detach()
+    eta_fix = torch.einsum('bmnd,bd->bmn', Xm, beta).detach()  # (B, m, n)
+
+    # ZWZ_g scalar per group (fixed at PQL mode)
+    with torch.no_grad():
+        mu0 = torch.sigmoid((eta_fix + z_col * b_g0[:, :, None]) * mask_n)
+        ZWZ_g = (z_col.square() * (mu0 * (1.0 - mu0)).clamp(min=1e-6) * mask_n).sum(-1)
+
+    elig = nagq_eligible.to(dtype=dtype)
+    optimizer = torch.optim.Adam([log_s2], lr=lr)
+
+    with torch.enable_grad():
+        for _ in range(n_steps):
+            optimizer.zero_grad(set_to_none=True)
+            s2 = log_s2.exp()
+
+            # H_g = ZWZ_g + Ψ^{-1}; curvature σ_g = H_g^{-1/2}
+            H_g = ZWZ_g + 1.0 / s2[:, None].clamp(min=1e-8)  # (B, m)
+            sg = 1.0 / H_g.clamp(min=1e-8).sqrt()
+
+            # Quadrature points b_{g,j} = b̂_g + √2·σ_g·z_j  (B, m, k)
+            b_gj = b_g0[:, :, None] + math.sqrt(2.0) * sg[:, :, None] * z_nodes[None, None, :]
+
+            # Log-likelihood sum over observations  (B, m, k)
+            eta_gj = eta_fix[:, :, :, None] + z_col[:, :, :, None] * b_gj[:, :, None, :]
+            mn4 = mask_n[:, :, :, None]
+            ll_gj = (ym[:, :, :, None] * eta_gj * mn4 - F.softplus(eta_gj) * mn4).sum(2)
+
+            # Log-prior N(0, σ²)  (B, m, k)
+            lp_gj = (
+                -0.5 * math.log(2.0 * math.pi)
+                - 0.5 * log_s2[:, None, None]
+                - b_gj.square() / (2.0 * s2[:, None, None].clamp(min=1e-8))
+            )
+
+            # nAGQ LML per group; +z_j² cancels the implicit GH weight  (B, m)
+            lml_g = (
+                torch.logsumexp(
+                    log_w[None, None, :] + ll_gj + lp_gj + z_nodes[None, None, :].square(),
+                    dim=-1,
+                )
+                + 0.5 * math.log(2.0)
+                - 0.5 * H_g.clamp(min=1e-8).log()
+            )
+
+            lml = ((lml_g * mask_m).sum(-1) * elig).sum()
+            if not torch.isfinite(lml):
+                break
+            (-lml).backward()
+            torch.nn.utils.clip_grad_norm_([log_s2], max_norm=5.0)
+            optimizer.step()
+            with torch.no_grad():
+                log_s2.clamp_(math.log(1e-4), math.log(20.0))
+
+    # Update Psi_lap active diagonal for eligible datasets
+    s2_final = log_s2.detach().exp()
+    Psi_lap_new = stats['Psi_lap'].detach().clone()
+    for b in nagq_eligible.nonzero(as_tuple=True)[0].tolist():
+        qi = int(q_idx[b])
+        Psi_lap_new[b, qi, qi] = s2_final[b]
+    Psi_lap_new = _psdClampEigenvalues(Psi_lap_new, _BERNOULLI_PSI_EIG_CAP)
+
+    # Recompute b̂_g via Newton under refined Ψ
+    blups = stats['blup_est'].detach().clone()
+    Psi_inv_new = _pseudoInverse(Psi_lap_new)
+    eye_q = torch.eye(q, device=device, dtype=dtype)
+    eye_q_bm = eye_q.expand(B, m, q, q)
+    active = mask_m.bool()
+
+    for _ in range(n_newton):
+        eta_b = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Zm, blups)
+        mu_b = torch.sigmoid(eta_b)
+        w_b = (mu_b * (1.0 - mu_b)).clamp(min=1e-6) * mask_n
+        score_g = torch.einsum('bmnq,bmn->bmq', Zm, (ym - mu_b) * mask_n) - torch.einsum(
+            'bqr,bmr->bmq', Psi_inv_new, blups
+        )
+        ZWZ = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_b, Zm)
+        Hg = torch.where(active[:, :, None, None], ZWZ, eye_q_bm) + Psi_inv_new[:, None]
+        blups = (blups + _safeSolve(Hg + _adaptiveRidgeBm(Hg), score_g)) * mask_m[:, :, None]
+        blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
+
+    # Restore ineligible datasets to original BLUPs
+    for b in (~nagq_eligible).nonzero(as_tuple=True)[0].tolist():
+        blups[b] = stats['blup_est'][b]
+
+    sigma_rfx_new = Psi_lap_new.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().nan_to_num()
+    out = dict(stats)
     out['blup_est'] = blups
     out['sigma_rfx_est'] = sigma_rfx_new
     out['Psi_lap'] = Psi_lap_new
