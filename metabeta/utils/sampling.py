@@ -144,3 +144,23 @@ def samplePermutation(
     zero = np.zeros((1,), dtype=int)
     perm = np.concatenate([zero, perm])
     return perm
+
+
+def sampleGroupedPermutation(
+    rng: np.random.Generator,
+    d: int,
+    q: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sample column permutations that preserve FFX↔RFX alignment.
+
+    Permutes within two non-overlapping groups:
+      - mixed-effects slots 1..q-1: same permutation for FFX and RFX columns
+      - fixed-only slots q..d-1: independent permutation, FFX only
+    Index 0 (intercept) is always fixed. Returned qperm == dperm[:q].
+    """
+    zero = np.zeros(1, dtype=int)
+    mixed = rng.permutation(q - 1) + 1   # values in [1, q-1]
+    fixed = rng.permutation(d - q) + q   # values in [q, d-1]
+    dperm = np.concatenate([zero, mixed, fixed])
+    qperm = np.concatenate([zero, mixed])
+    return dperm, qperm

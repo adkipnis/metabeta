@@ -2,7 +2,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from metabeta.utils.sampling import samplePermutation
+from metabeta.utils.sampling import sampleGroupedPermutation
 from metabeta.utils.padding import unpad, padToModel
 
 
@@ -87,8 +87,8 @@ class Collection(torch.utils.data.Dataset):
         self.permute = permute and self.has_params
         if self.permute:
             rng = np.random.default_rng(permute_seed)
-            self.dperm = [samplePermutation(rng, self.d) for _ in range(len(self))]
-            self.qperm = [samplePermutation(rng, self.q) for _ in range(len(self))]
+            perms = [sampleGroupedPermutation(rng, self.d, self.q) for _ in range(len(self))]
+            self.dperm, self.qperm = zip(*perms)
 
     def __len__(self) -> int:
         return len(self.raw['y'])

@@ -154,6 +154,12 @@ def test_mask_dq_are_rowwise_permuted(dataset_path: Path):
     assert torch.equal(batch['mask_d'], exp_d)
     assert torch.equal(batch['mask_q'], exp_q)
 
+    # qperm must equal the first q elements of dperm (within-group invariant)
+    for ds in batch_np:
+        if 'dperm' in ds:
+            q_i = int(ds['q'])
+            np.testing.assert_array_equal(ds['dperm'][:q_i], ds['qperm'])
+
     # mask_mq and mask_corr must be derived from the final (possibly permuted) mask_q.
     expected_mq = batch['mask_m'].unsqueeze(-1) & batch['mask_q'].unsqueeze(-2)
     assert torch.equal(batch['mask_mq'], expected_mq)
