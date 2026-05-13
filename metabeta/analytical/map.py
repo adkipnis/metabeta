@@ -5,11 +5,19 @@ import math
 import torch
 from torch.nn import functional as F
 
-from metabeta.analytical.linalg import _adaptiveRidge, _safeSolve
+from metabeta.analytical.constants import _BERNOULLI_PSI_EIG_CAP
+from metabeta.analytical.linalg import (
+    _adaptiveRidge,
+    _adaptiveRidgeBm,
+    _psdClampEigenvalues,
+    _psdProject,
+    _pseudoInverse,
+    _safeSolve,
+)
 from metabeta.analytical.normal import _normalGlsAndBlups
 from metabeta.utils.families import logProbFfx, logProbSigma
 
-__all__ = ['refineBernoulliMapSrfx', 'refineNormalMapSrfx']
+__all__ = ['refineBernoulliMapBeta', 'refineBernoulliMapSrfx', 'refineNormalMapSrfx']
 
 
 def _fixedCorrFromStats(
@@ -393,6 +401,137 @@ def refineNormalMapSrfx(
                 beta_alpha_high=beta_alpha_high,
             )
         out['Psi'] = _replacePsiDiag(stats['Psi'], sigma_rfx, mask_q)
+    return out
+
+
+def refineBernoulliMapBeta(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor | None = None,
+    tau_ffx: torch.Tensor | None = None,
+    family_ffx: torch.Tensor | None = None,
+    n_steps: int = 8,
+    n_newton: int = 3,
+    damping: float = 0.7,
+) -> dict[str, torch.Tensor]:
+    """Refine β via Newton on the true Bernoulli score at fixed b̂_g, then update BLUPs.
+
+    PQL solves for β via a Schur-complement GLS on the linearized working response,
+    which introduces approximation error that dominates FFX NRMSE.  This fixes b̂_g
+    from PQL and runs Newton steps on the exact score ∑_g X_g'(y_g − σ(Xβ + Zb̂_g)),
+    then recomputes b̂_g with the improved β (Ψ held fixed at the PQL Laplace M-step).
+
+    Phase 1 is equivalent to IRLS on y with a fixed rfx offset Z b̂_g — a convex
+    problem in β, so Newton converges monotonically.  Phase 2 runs damped Newton for
+    b̂_g and recomputes σ_rfx via the Laplace M-step with the updated b̂_g.
+    """
+    d = Xm.shape[-1]
+    q = Zm.shape[-1]
+    if d == 0 or n_steps <= 0:
+        return stats
+
+    B, m = Xm.shape[:2]
+    device, dtype = Xm.device, Xm.dtype
+
+    # --- Phase 1: Newton on β at fixed b̂_g ---
+    blups_fixed = stats['blup_est'].detach()   # (B, m, q) — fixed throughout phase 1
+    beta = stats['beta_est'].detach().clone()  # (B, d)
+
+    # Prior setup mirrors irlsBernoulli
+    active_d_mask = None
+    normal_prec = None
+    is_student = None
+    zeros_d = None
+    if nu_ffx is not None and tau_ffx is not None:
+        active_d_mask = tau_ffx > 0
+        zeros_d = tau_ffx.new_zeros(tau_ffx.shape)
+        normal_prec = torch.where(active_d_mask, 1.0 / tau_ffx.clamp(min=1e-4).square(), zeros_d)
+        is_student = (family_ffx == 1).unsqueeze(-1) if family_ffx is not None else None
+
+    # Fixed rfx contribution to the linear predictor
+    eta_rfx = torch.einsum('bmnq,bmq->bmn', Zm, blups_fixed)  # (B, m, n)
+
+    for _ in range(n_steps):
+        eta = torch.einsum('bmnd,bd->bmn', Xm, beta) + eta_rfx
+        mu = torch.sigmoid(eta)
+        w = (mu * (1.0 - mu)).clamp(min=1e-6) * mask_n                # (B, m, n)
+        XtWX = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)         # (B, d, d)
+        score = torch.einsum('bmnd,bmn->bd', Xm, (ym - mu) * mask_n)  # (B, d)
+
+        if normal_prec is not None:
+            if is_student is not None:
+                student_prec = torch.where(
+                    active_d_mask,
+                    6.0
+                    / (5.0 * tau_ffx.clamp(min=1e-8).square() + (beta - nu_ffx).square()).clamp(
+                        min=1e-8
+                    ),
+                    zeros_d,
+                )
+                prior_prec = torch.where(is_student, student_prec, normal_prec)
+            else:
+                prior_prec = normal_prec
+            XtWX = XtWX + torch.diag_embed(prior_prec)
+            score = score + prior_prec * (nu_ffx - beta)
+
+        delta = _safeSolve(XtWX + _adaptiveRidge(XtWX), score)
+        beta = (beta + damping * delta).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(
+            -50.0, 50.0
+        )
+
+    out = dict(stats)
+    out['beta_est'] = beta
+
+    if q == 0 or n_newton <= 0 or 'Psi_lap' not in stats:
+        return out
+
+    # --- Phase 2: recompute b̂_g with new β (fixed Ψ from PQL Laplace M-step) ---
+    Psi_lap = stats['Psi_lap']              # (B, q, q)
+    Psi_inv = _pseudoInverse(Psi_lap)
+    eye_q = torch.eye(q, device=device, dtype=dtype)
+    eye_q_bm = eye_q.expand(B, m, q, q)
+    active = mask_m.bool()
+    mask4 = mask_m[:, :, None, None]
+    G = mask_m.sum(dim=1).clamp(min=1.0)
+
+    blups_new = blups_fixed.clone()
+    for _ in range(n_newton):
+        eta_b = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum(
+            'bmnq,bmq->bmn', Zm, blups_new
+        )
+        mu_b = torch.sigmoid(eta_b)
+        w_b = (mu_b * (1.0 - mu_b)).clamp(min=1e-6) * mask_n
+        score_g = torch.einsum('bmnq,bmn->bmq', Zm, (ym - mu_b) * mask_n)
+        score_g = score_g - torch.einsum('bqr,bmr->bmq', Psi_inv, blups_new)
+        ZWZ = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_b, Zm)
+        ZWZ_safe = torch.where(active[:, :, None, None], ZWZ, eye_q_bm)
+        Hg = ZWZ_safe + Psi_inv[:, None]
+        delta_b = _safeSolve(Hg + _adaptiveRidgeBm(Hg), score_g)
+        blups_new = (blups_new + damping * delta_b) * mask_m[:, :, None]
+        blups_new = blups_new.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
+
+    # Ψ M-step: Ψ = (1/G) Σ_g (b̂_g b̂_g' + H_g^{-1}) at the new b̂_g
+    eta_f = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum(
+        'bmnq,bmq->bmn', Zm, blups_new
+    )
+    mu_f = torch.sigmoid(eta_f)
+    w_f = (mu_f * (1.0 - mu_f)).clamp(min=1e-6) * mask_n
+    ZWZ_f = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_f, Zm)
+    ZWZ_f_safe = torch.where(active[:, :, None, None], ZWZ_f, eye_q_bm)
+    Hg_f = ZWZ_f_safe + Psi_inv[:, None]
+    Hg_inv_f = _safeSolve(Hg_f + _adaptiveRidgeBm(Hg_f), eye_q_bm) * mask4
+    bg_outer = torch.einsum('bmq,bmr->bmqr', blups_new, blups_new)
+    Psi_lap_new = _psdProject((bg_outer + Hg_inv_f).sum(dim=1) / G[:, None, None])
+    Psi_lap_new = _psdClampEigenvalues(Psi_lap_new, _BERNOULLI_PSI_EIG_CAP)
+    sigma_rfx_new = Psi_lap_new.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().nan_to_num()
+
+    out['blup_est'] = blups_new
+    out['sigma_rfx_est'] = sigma_rfx_new
+    out['Psi_lap'] = Psi_lap_new
     return out
 
 

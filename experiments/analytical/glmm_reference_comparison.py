@@ -35,6 +35,7 @@ import torch
 from tabulate import tabulate
 
 from metabeta.analytical.glmm import glmm
+from metabeta.analytical.map import refineBernoulliMapBeta
 from metabeta.utils.config import loadDataConfig
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.experiments import dataFilePath
@@ -220,15 +221,24 @@ def run_one_dataset(
     pql_a_se, pql_a_st = [], []
     pql_a_re, pql_a_rt = [], []
 
+    p6_a_be, p6_a_bt = [], []
+    p6_a_se, p6_a_st = [], []
+    p6_a_re, p6_a_rt = [], []
+
     pql_cv_be, pql_cv_bt = [], []
     pql_cv_se, pql_cv_st = [], []
     pql_cv_re, pql_cv_rt = [], []
+
+    p6_cv_be, p6_cv_bt = [], []
+    p6_cv_se, p6_cv_st = [], []
+    p6_cv_re, p6_cv_rt = [], []
 
     cavi_be, cavi_bt = [], []
     cavi_se, cavi_st = [], []
     cavi_re, cavi_rt = [], []
     cavi_wall: list[float] = []
     pql_wall: list[float] = []
+    p6_wall: list[float] = []
     cavi_n_tried = cavi_n_ok = 0
 
     with torch.no_grad():
@@ -269,9 +279,26 @@ def run_one_dataset(
                 )
                 pql_batch_wall = time.perf_counter() - t0
 
+                t0_p6 = time.perf_counter()
+                stats_p6 = refineBernoulliMapBeta(
+                    stats,
+                    batch['X'],
+                    batch['y'],
+                    Zm,
+                    batch['mask_n'].float(),
+                    batch['mask_m'].float(),
+                    nu_ffx=batch.get('nu_ffx'),
+                    tau_ffx=batch.get('tau_ffx'),
+                    family_ffx=batch.get('family_ffx'),
+                )
+                p6_batch_wall = time.perf_counter() - t0_p6
+
                 beta_est = stats['beta_est'].cpu().numpy()
                 srfx_est = stats['sigma_rfx_est'].cpu().numpy()
                 blup_est = stats['blup_est'].cpu().numpy()
+                beta_est_p6 = stats_p6['beta_est'].cpu().numpy()
+                srfx_est_p6 = stats_p6['sigma_rfx_est'].cpu().numpy()
+                blup_est_p6 = stats_p6['blup_est'].cpu().numpy()
                 ffx_true = batch['ffx'].cpu().numpy()
                 srfx_true = batch['sigma_rfx'].cpu().numpy()
                 rfx_true = batch['rfx'].cpu().numpy()
@@ -297,6 +324,12 @@ def run_one_dataset(
                     re_e = (blup_est[b, :m_b][:, active_q] - rfx_true[b, :m_b][:, active_q]).reshape(-1)
                     re_t = rfx_true[b, :m_b][:, active_q].reshape(-1)
 
+                    be_p6 = beta_est_p6[b, active_d] - ffx_true[b, active_d]
+                    se_p6 = srfx_est_p6[b, active_q] - srfx_true[b, active_q]
+                    re_e_p6 = (
+                        blup_est_p6[b, :m_b][:, active_q] - rfx_true[b, :m_b][:, active_q]
+                    ).reshape(-1)
+
                     pql_a_be.append(be)
                     pql_a_bt.append(ffx_true[b, active_d])
                     pql_a_se.append(se)
@@ -304,6 +337,15 @@ def run_one_dataset(
                     pql_a_re.append(re_e)
                     pql_a_rt.append(re_t)
                     pql_wall.append(pql_batch_wall / B)
+
+                    p6_a_be.append(be_p6)
+                    p6_a_bt.append(ffx_true[b, active_d])
+                    p6_a_se.append(se_p6)
+                    p6_a_st.append(srfx_true[b, active_q])
+                    p6_a_re.append(re_e_p6)
+                    p6_a_rt.append(re_t)
+                    p6_wall.append(p6_batch_wall / B)
+
                     n_seen += 1
 
                     if not _HAS_CAVI or cavi_n_tried >= n_cavi:
@@ -316,6 +358,13 @@ def run_one_dataset(
                     pql_cv_st.append(srfx_true[b, active_q])
                     pql_cv_re.append(re_e)
                     pql_cv_rt.append(re_t)
+
+                    p6_cv_be.append(be_p6)
+                    p6_cv_bt.append(ffx_true[b, active_d])
+                    p6_cv_se.append(se_p6)
+                    p6_cv_st.append(srfx_true[b, active_q])
+                    p6_cv_re.append(re_e_p6)
+                    p6_cv_rt.append(re_t)
 
                     ds_flat = _flatten(batch, b, active_d, active_q)
                     t_c = time.perf_counter()
@@ -342,11 +391,25 @@ def run_one_dataset(
             [pql_a_be, pql_a_bt, pql_a_se, pql_a_st, pql_a_re, pql_a_rt],
         )
     }
+    p6_a = {
+        k: flat(v)
+        for k, v in zip(
+            'be bt se st re rt'.split(),
+            [p6_a_be, p6_a_bt, p6_a_se, p6_a_st, p6_a_re, p6_a_rt],
+        )
+    }
     pql_cv = {
         k: flat(v)
         for k, v in zip(
             'be bt se st re rt'.split(),
             [pql_cv_be, pql_cv_bt, pql_cv_se, pql_cv_st, pql_cv_re, pql_cv_rt],
+        )
+    }
+    p6_cv = {
+        k: flat(v)
+        for k, v in zip(
+            'be bt se st re rt'.split(),
+            [p6_cv_be, p6_cv_bt, p6_cv_se, p6_cv_st, p6_cv_re, p6_cv_rt],
         )
     }
     cavi = {
@@ -364,6 +427,9 @@ def run_one_dataset(
         'pql_ffx': _nrmse(pql_a['be'], pql_a['bt']),
         'pql_srfx': _nrmse(pql_a['se'], pql_a['st']),
         'pql_blup': _nrmse(pql_a['re'], pql_a['rt']),
+        'p6_ffx': _nrmse(p6_a['be'], p6_a['bt']),
+        'p6_srfx': _nrmse(p6_a['se'], p6_a['st']),
+        'p6_blup': _nrmse(p6_a['re'], p6_a['rt']),
         'cavi_ffx': _nrmse(cavi['be'], cavi['bt']) if cavi_n_ok > 0 else float('nan'),
         'cavi_srfx': _nrmse(cavi['se'], cavi['st']) if cavi_n_ok > 0 else float('nan'),
         'cavi_blup': _nrmse(cavi['re'], cavi['rt']) if cavi_n_ok > 0 else float('nan'),
@@ -387,8 +453,23 @@ def run_one_dataset(
         )
     )
 
+    print(f'\nP6 — all q (N={n_pql_all})')
+    print(
+        tabulate(
+            [
+                ['FFX (β)', f'{metrics["p6_ffx"]:.4f}', f'{_bias(p6_a["be"]):+.4f}'],
+                ['σ_rfx', f'{metrics["p6_srfx"]:.4f}', f'{_bias(p6_a["se"]):+.4f}'],
+                ['BLUP', f'{metrics["p6_blup"]:.4f}', f'{_bias(p6_a["re"]):+.4f}'],
+            ],
+            headers=['Parameter', 'NRMSE', 'Bias'],
+            tablefmt='simple',
+        )
+    )
+
     if cavi_n_ok > 0:
-        print(f'\nPQL vs CAVI — matched (PQL N={len(pql_cv_be)}, CAVI {cavi_n_ok}/{cavi_n_tried})')
+        print(
+            f'\nPQL vs P6 vs CAVI — matched (N={len(pql_cv_be)}, CAVI {cavi_n_ok}/{cavi_n_tried})'
+        )
         print(
             tabulate(
                 [
@@ -410,6 +491,24 @@ def run_one_dataset(
                         f'{_nrmse(pql_cv["re"],pql_cv["rt"]):.4f}',
                         f'{_bias(pql_cv["re"]):+.4f}',
                     ],
+                    [
+                        'P6',
+                        'FFX (β)',
+                        f'{_nrmse(p6_cv["be"],p6_cv["bt"]):.4f}',
+                        f'{_bias(p6_cv["be"]):+.4f}',
+                    ],
+                    [
+                        'P6',
+                        'σ_rfx',
+                        f'{_nrmse(p6_cv["se"],p6_cv["st"]):.4f}',
+                        f'{_bias(p6_cv["se"]):+.4f}',
+                    ],
+                    [
+                        'P6',
+                        'BLUP',
+                        f'{_nrmse(p6_cv["re"],p6_cv["rt"]):.4f}',
+                        f'{_bias(p6_cv["re"]):+.4f}',
+                    ],
                     ['CAVI', 'FFX (β)', f'{metrics["cavi_ffx"]:.4f}', f'{_bias(cavi["be"]):+.4f}'],
                     ['CAVI', 'σ_rfx', f'{metrics["cavi_srfx"]:.4f}', f'{_bias(cavi["se"]):+.4f}'],
                     ['CAVI', 'BLUP', f'{metrics["cavi_blup"]:.4f}', f'{_bias(cavi["re"]):+.4f}'],
@@ -421,13 +520,19 @@ def run_one_dataset(
 
     print('\nσ_rfx bias by true σ_rfx bin — PQL')
     print(_breakdown_srfx(pql_a['se'], pql_a['st'], 'PQL'))
+    print('\nσ_rfx bias by true σ_rfx bin — P6')
+    print(_breakdown_srfx(p6_a['se'], p6_a['st'], 'P6'))
     if cavi_n_ok > 0:
         print('\nσ_rfx bias by true σ_rfx bin — CAVI')
         print(_breakdown_srfx(cavi['se'], cavi['st'], 'CAVI'))
 
     w_pql = np.array(pql_wall)
+    w_p6 = np.array(p6_wall)
     print(
         f'\nWall time — PQL: mean={w_pql.mean()*1000:.2f} ms  median={np.median(w_pql)*1000:.2f} ms/ds'
+    )
+    print(
+        f'Wall time — P6:  mean={w_p6.mean()*1000:.2f} ms  median={np.median(w_p6)*1000:.2f} ms/ds'
     )
     if cavi_wall:
         w = np.array(cavi_wall)
@@ -484,6 +589,9 @@ def main(
                     fmt(m['pql_ffx']),
                     fmt(m['pql_srfx']),
                     fmt(m['pql_blup']),
+                    fmt(m['p6_ffx']),
+                    fmt(m['p6_srfx']),
+                    fmt(m['p6_blup']),
                     fmt(m['cavi_ffx']),
                     fmt(m['cavi_srfx']),
                     fmt(m['cavi_blup']),
@@ -492,7 +600,19 @@ def main(
         print(
             tabulate(
                 rows,
-                headers=['Dataset', 'N', 'PQL-F', 'PQL-S', 'PQL-B', 'CAVI-F', 'CAVI-S', 'CAVI-B'],
+                headers=[
+                    'Dataset',
+                    'N',
+                    'PQL-F',
+                    'PQL-S',
+                    'PQL-B',
+                    'P6-F',
+                    'P6-S',
+                    'P6-B',
+                    'CAVI-F',
+                    'CAVI-S',
+                    'CAVI-B',
+                ],
                 tablefmt='simple',
             )
         )
