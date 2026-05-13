@@ -33,7 +33,8 @@ Reference files
 Removed diagnostics
 -------------------
 
-Scripts removed after single use; results and decisions are documented in `plan.md`.
+Scripts removed after single use; results and decisions are documented in
+`metabeta/analytical/plan_normal.md` and `plan_bernoulli.md`.
 
 - `glmm_map_ablation.py` — MAP optimizer ablation. Confirmed three-parameter joint
   optimization is Pareto-dominant over all subsets.
