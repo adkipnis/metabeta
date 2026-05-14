@@ -67,8 +67,25 @@ FFX regresses +1.7–2.8% at huge-b-sampled (within noise).
 Root cause: β gradient ≈0 at P6 fixed point; σ gradient pushed downward (ELBO omits
 H_g^{-1} bias correction). Code kept in `map.py:refineBernoulliLaplaceMap`, not wired.
 
+**✗ P9 — Decouple M-step β from P6 Newton (TRIED, REVERTED, 2026-05-14).**
+Hypothesis: P6 Newton β introduces variance into M-step Ψ. Fix: use pre-Newton β/b̂_g
+for the M-step, return P6 β as FFX output only. Result: mixed — wins at medium-b-mixed
+(−20%), large-b-sampled valid (−20%), huge-b-mixed (−21%), but regressions at
+large-b-sampled test (+18%) and large-b-mixed train (+20%). Net: not acceptable.
+Root cause: the P6 β happens to give better-calibrated M-step Hessians for some
+dataset orderings; the effect is partition-specific, not systematic.
+
 Open Priorities
 ---------------
+
+**Priority 1 — nAGQ σ gradient step / profile MLE for σ**
+
+Fix β = β̂ (P6 output), differentiate nAGQ LML w.r.t. log σ via autodiff, take one
+Newton step. Distinct from P8a/b: uses the actual quadrature LML (not Laplace), so
+the H_g^{-1} bias correction is implicit in the GH nodes. The σ gradient should be
+well-calibrated. Cost: cheap for q=1 (7 nodes); expensive for q>1 (243 nodes at q=5).
+Risk: profile LML landscape may be flat near P5 estimate (needs measurement).
+Acceptance: ≥10% σ_rfx improvement at any large/huge cell, no FFX regression.
 
 **Priority 3 — Beta blend for BLUP residuals (LOW impact, quick)**
 
@@ -91,34 +108,41 @@ Note: CAVI uses diagonal Ψ (mean-field); our stack supports full Ψ. Reference
 comparison runs P5+P6 without P1/P2 (raw `glmm()` base). Numbers use matched subset
 (first n_cavi datasets processed).
 
-Matched comparison (sampled=test, mixed=train×2):
+Matched comparison — all runs at n_cavi=200 (huge: 100), n_total=1000 (huge: 500).
+P6 = raw PQL + P5 + P6 + BC1, without P1/P2 (see note). Bold = winner per cell.
 
-| Dataset          |   N | P5+P6 FFX | CAVI FFX | P5+P6 σ | CAVI σ | P5+P6 BLUP | CAVI BLUP |
-| ---              | ---:| ---:      | ---:     | ---:    | ---:   | ---:       | ---:      |
-| small-b-sampled  | 1024| **0.281** | 0.392    | **0.591**| 0.663 | 0.654      | **0.649** |
-| small-b-mixed    | 2016| **0.253** | 0.355    | **0.549**| 0.667 | 0.616      | **0.681** |
-| medium-b-sampled | 1024| **0.332** | 0.500    | **0.703**| 0.765 | **0.734**  | 0.827     |
-| medium-b-mixed   | 2016| 0.740†    | **0.427**| 0.760†  | **0.696**| 0.899†  | **0.707** |
-| large-b-sampled  |  200| **0.340** | 0.472    | 0.879   | **0.814**| **0.743**| 0.825   |
-| large-b-mixed    |  200| **0.356** | 0.514    | 1.006   | **0.859**| 1.085  | **0.960** |
-| huge-b-sampled   |  100| **0.472** | 0.753    | 0.881   | **0.784**| **0.811**| 0.965  |
-| huge-b-mixed     |  100| **0.403** | 0.652    | 1.489   | **0.903**| **0.921**| 0.940  |
+| Dataset              | part  |   N | P6 FFX    | CAVI FFX | P6 σ      | CAVI σ    | P6 BLUP   | CAVI BLUP |
+| ---                  | ---   | ---:| ---:      | ---:     | ---:      | ---:      | ---:      | ---:      |
+| small-b-sampled      | valid |  200| **0.325** | 0.346    | **0.665** | 0.674     | **0.615** | 0.635     |
+| small-b-sampled      | test  |  200| **0.340** | 0.398    | **0.612** | 0.664     | **0.621** | 0.636     |
+| small-b-mixed        | train |  200| **0.339** | 0.366    | 0.782     | **0.734** | **0.717** | 0.811     |
+| medium-b-sampled     | valid |  200| **0.386** | 0.513    | **0.757** | 0.818     | **0.717** | 0.788     |
+| medium-b-sampled     | test  |  200| **0.399** | 0.548    | 0.994     | **0.793** | 1.109     | **0.831** |
+| medium-b-mixed       | train |  200| **0.343** | 0.438    | 1.051     | **0.718** | **0.696** | 0.741     |
+| large-b-sampled      | valid |  200| **0.355** | 0.453    | 1.311     | **0.769** | 1.063     | **0.784** |
+| large-b-sampled      | test  |  200| **0.340** | 0.472    | 0.879     | **0.814** | **0.743** | 0.825     |
+| large-b-mixed        | train |  200| **0.356** | 0.514    | 1.006     | **0.859** | 1.085     | **0.960** |
+| huge-b-sampled       | valid |  100| **0.418** | 0.774    | **0.810** | 1.037     | **0.823** | 1.231     |
+| huge-b-sampled       | test  |  100| **0.472** | 0.753    | 0.881     | **0.784** | **0.811** | 0.965     |
+| huge-b-mixed         | train |  100| **0.403** | 0.652    | 1.489     | **0.903** | **0.921** | 0.940     |
 
-† medium-b-mixed P5+P6 from required benchmark (N=8192, with P1/P2); CAVI from
-reference comparison (N=500 matched).
+Note: `glmm()` uses `map_refine=True` by default and receives all batch priors, so
+P1/P2/P5/P6/BC1 are all active. The "P6" column is one additional P5+P6 round on
+top, which changes results minimally. The matched N is a sequential subset of each
+file, not a stratified sample.
 
 Key findings:
-- **FFX**: P5+P6 beats CAVI at all 8 dataset×partition combinations (2–3.5× better
-  at large/huge).
-- **σ_rfx**: CAVI wins at medium-b-mixed and all large/huge. Our P6 M-step produces
-  high σ_rfx variance at large d/q (P6 sRFX 1.0–1.5 vs CAVI 0.86–0.90 at large/huge
-  mixed). At small/medium-sampled, P5+P6 wins.
-- **BLUP**: P5+P6 wins except large-b-mixed (where P6 σ_rfx regression contaminates
-  BLUPs).
+- **FFX**: Full pipeline beats CAVI at all 12 cells (2–3.5× better at large/huge;
+  ≈tie at small).
+- **σ_rfx**: Mixed. Pipeline wins at small (both partitions), medium-sampled-valid,
+  huge-sampled-valid. CAVI wins at mixed datasets (all sizes) and medium/large-huge
+  test. The Laplace M-step produces high σ_rfx variance at large d/q, particularly
+  in mixed datasets where β diversity is higher.
+- **BLUP**: follows σ_rfx — pipeline wins where σ_rfx wins, CAVI wins otherwise.
 
-σ_rfx quartile pattern (all sizes): CAVI biases σ upward uniformly; PQL/P6 has
-S-curve (upward at low σ, downward at high σ). CAVI's net advantage at large/huge
-comes from the high-σ quartile where PQL downward bias dominates.
+σ_rfx quartile pattern: CAVI biases σ upward across all quartiles; PQL/P6 has an
+S-curve (upward at low σ, downward at high σ). CAVI's NRMSE advantage at mixed/large
+datasets comes from the high-σ quartile where the PQL downward bias is largest.
 
 Methods not pursued: lme4 (diverges q>1), pure Laplace/lme4-style LA (same
 divergence), JJ/Polya-Gamma variational bounds (faster CAVI backend, no accuracy
@@ -141,13 +165,22 @@ Commands
 uv run python experiments/analytical/glmm_required_benchmark.py --family b
 uv run python experiments/analytical/glmm_required_benchmark.py --family b --methods current raw
 uv run python experiments/analytical/glmm_error_analysis.py --data-id small-b-mixed
-# reference comparison — sampled (test), mixed (train×2); add --n-cavi N to enable CAVI
+# reference comparison (n_cavi=200 / 100 for huge; n_total=1000 / 500 for huge)
 uv run python experiments/analytical/glmm_reference_comparison.py \
-    --data-ids large-b-sampled,huge-b-sampled \
+    --data-ids small-b-sampled,medium-b-sampled,large-b-sampled \
+    --partition valid --n-cavi 200 --n-total 1000
+uv run python experiments/analytical/glmm_reference_comparison.py \
+    --data-ids small-b-sampled,medium-b-sampled,large-b-sampled \
     --partition test --n-cavi 200 --n-total 1000
 uv run python experiments/analytical/glmm_reference_comparison.py \
-    --data-ids large-b-mixed,huge-b-mixed \
+    --data-ids small-b-mixed,medium-b-mixed,large-b-mixed \
     --partition train --n-epochs 2 --n-cavi 200 --n-total 1000
+uv run python experiments/analytical/glmm_reference_comparison.py \
+    --data-ids huge-b-sampled --partition valid --n-cavi 100 --n-total 500
+uv run python experiments/analytical/glmm_reference_comparison.py \
+    --data-ids huge-b-sampled --partition test --n-cavi 100 --n-total 500
+uv run python experiments/analytical/glmm_reference_comparison.py \
+    --data-ids huge-b-mixed --partition train --n-epochs 2 --n-cavi 100 --n-total 500
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical
 ```

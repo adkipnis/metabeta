@@ -194,6 +194,7 @@ def run_one_dataset(
     n_cavi: int = 200,
     n_total: int = 0,
     n_epochs: int = 1,
+    skip_cavi: bool = False,
     device: torch.device | None = None,
 ) -> dict:
     """Run PQL vs CAVI on one dataset, return metrics dict."""
@@ -383,40 +384,40 @@ def run_one_dataset(
 
                     n_seen += 1
 
-                    if not _HAS_CAVI or cavi_n_tried >= n_cavi:
-                        continue
+                    if cavi_n_tried < n_cavi:
+                        cavi_n_tried += 1
+                        pql_cv_be.append(be)
+                        pql_cv_bt.append(ffx_true[b, active_d])
+                        pql_cv_se.append(se)
+                        pql_cv_st.append(srfx_true[b, active_q])
+                        pql_cv_re.append(re_e)
+                        pql_cv_rt.append(re_t)
 
-                    cavi_n_tried += 1
-                    pql_cv_be.append(be)
-                    pql_cv_bt.append(ffx_true[b, active_d])
-                    pql_cv_se.append(se)
-                    pql_cv_st.append(srfx_true[b, active_q])
-                    pql_cv_re.append(re_e)
-                    pql_cv_rt.append(re_t)
+                        p6_cv_be.append(be_p6)
+                        p6_cv_bt.append(ffx_true[b, active_d])
+                        p6_cv_se.append(se_p6)
+                        p6_cv_st.append(srfx_true[b, active_q])
+                        p6_cv_re.append(re_e_p6)
+                        p6_cv_rt.append(re_t)
 
-                    p6_cv_be.append(be_p6)
-                    p6_cv_bt.append(ffx_true[b, active_d])
-                    p6_cv_se.append(se_p6)
-                    p6_cv_st.append(srfx_true[b, active_q])
-                    p6_cv_re.append(re_e_p6)
-                    p6_cv_rt.append(re_t)
+                        if _HAS_CAVI and not skip_cavi:
+                            ds_flat = _flatten(batch, b, active_d, active_q)
+                            t_c = time.perf_counter()
+                            est = _cavi_estimate(ds_flat)
+                            cavi_wall.append(time.perf_counter() - t_c)
 
-                    ds_flat = _flatten(batch, b, active_d, active_q)
-                    t_c = time.perf_counter()
-                    est = _cavi_estimate(ds_flat)
-                    cavi_wall.append(time.perf_counter() - t_c)
-
-                    if est is None:
-                        continue
-                    cavi_n_ok += 1
-                    cavi_be.append(est['beta'] - ffx_true[b, active_d])
-                    cavi_bt.append(ffx_true[b, active_d])
-                    cavi_se.append(est['sigma_rfx'] - srfx_true[b, active_q])
-                    cavi_st.append(srfx_true[b, active_q])
-                    cavi_re.append(
-                        (est['blups'][:m_b] - rfx_true[b, :m_b][:, active_q]).reshape(-1)
-                    )
-                    cavi_rt.append(re_t)
+                            if est is not None:
+                                cavi_n_ok += 1
+                                cavi_be.append(est['beta'] - ffx_true[b, active_d])
+                                cavi_bt.append(ffx_true[b, active_d])
+                                cavi_se.append(est['sigma_rfx'] - srfx_true[b, active_q])
+                                cavi_st.append(srfx_true[b, active_q])
+                                cavi_re.append(
+                                    (est['blups'][:m_b] - rfx_true[b, :m_b][:, active_q]).reshape(
+                                        -1
+                                    )
+                                )
+                                cavi_rt.append(re_t)
 
     def flat(lst: list) -> np.ndarray:
         return np.concatenate(lst) if lst else np.array([np.nan])
@@ -526,57 +527,25 @@ def run_one_dataset(
         )
     )
 
-    if cavi_n_ok > 0:
-        print(
-            f'\nPQL vs P6 vs CAVI — matched (N={len(pql_cv_be)}, CAVI {cavi_n_ok}/{cavi_n_tried})'
-        )
-        print(
-            tabulate(
-                [
-                    [
-                        'PQL',
-                        'FFX (β)',
-                        f'{_nrmse(pql_cv["be"],pql_cv["bt"]):.4f}',
-                        f'{_bias(pql_cv["be"]):+.4f}',
-                    ],
-                    [
-                        'PQL',
-                        'σ_rfx',
-                        f'{_nrmse(pql_cv["se"],pql_cv["st"]):.4f}',
-                        f'{_bias(pql_cv["se"]):+.4f}',
-                    ],
-                    [
-                        'PQL',
-                        'BLUP',
-                        f'{_nrmse(pql_cv["re"],pql_cv["rt"]):.4f}',
-                        f'{_bias(pql_cv["re"]):+.4f}',
-                    ],
-                    [
-                        'P6',
-                        'FFX (β)',
-                        f'{_nrmse(p6_cv["be"],p6_cv["bt"]):.4f}',
-                        f'{_bias(p6_cv["be"]):+.4f}',
-                    ],
-                    [
-                        'P6',
-                        'σ_rfx',
-                        f'{_nrmse(p6_cv["se"],p6_cv["st"]):.4f}',
-                        f'{_bias(p6_cv["se"]):+.4f}',
-                    ],
-                    [
-                        'P6',
-                        'BLUP',
-                        f'{_nrmse(p6_cv["re"],p6_cv["rt"]):.4f}',
-                        f'{_bias(p6_cv["re"]):+.4f}',
-                    ],
-                    ['CAVI', 'FFX (β)', f'{metrics["cavi_ffx"]:.4f}', f'{_bias(cavi["be"]):+.4f}'],
-                    ['CAVI', 'σ_rfx', f'{metrics["cavi_srfx"]:.4f}', f'{_bias(cavi["se"]):+.4f}'],
-                    ['CAVI', 'BLUP', f'{metrics["cavi_blup"]:.4f}', f'{_bias(cavi["re"]):+.4f}'],
-                ],
-                headers=['Method', 'Parameter', 'NRMSE', 'Bias'],
-                tablefmt='simple',
-            )
-        )
+    if pql_cv_be:
+        cavi_info = f', CAVI {cavi_n_ok}/{cavi_n_tried}' if cavi_n_ok > 0 else ''
+        vs_label = 'PQL vs P6' + (' vs CAVI' if cavi_n_ok > 0 else '')
+        print(f'\n{vs_label} — matched (N={len(pql_cv_be)}{cavi_info})')
+        rows_matched = [
+            ['PQL', 'FFX (β)', f'{_nrmse(pql_cv["be"],pql_cv["bt"]):.4f}', f'{_bias(pql_cv["be"]):+.4f}'],
+            ['PQL', 'σ_rfx',   f'{_nrmse(pql_cv["se"],pql_cv["st"]):.4f}', f'{_bias(pql_cv["se"]):+.4f}'],
+            ['PQL', 'BLUP',    f'{_nrmse(pql_cv["re"],pql_cv["rt"]):.4f}', f'{_bias(pql_cv["re"]):+.4f}'],
+            ['P6',  'FFX (β)', f'{_nrmse(p6_cv["be"],p6_cv["bt"]):.4f}',  f'{_bias(p6_cv["be"]):+.4f}'],
+            ['P6',  'σ_rfx',   f'{_nrmse(p6_cv["se"],p6_cv["st"]):.4f}',  f'{_bias(p6_cv["se"]):+.4f}'],
+            ['P6',  'BLUP',    f'{_nrmse(p6_cv["re"],p6_cv["rt"]):.4f}',  f'{_bias(p6_cv["re"]):+.4f}'],
+        ]
+        if cavi_n_ok > 0:
+            rows_matched += [
+                ['CAVI', 'FFX (β)', f'{metrics["cavi_ffx"]:.4f}', f'{_bias(cavi["be"]):+.4f}'],
+                ['CAVI', 'σ_rfx',   f'{metrics["cavi_srfx"]:.4f}', f'{_bias(cavi["se"]):+.4f}'],
+                ['CAVI', 'BLUP',    f'{metrics["cavi_blup"]:.4f}', f'{_bias(cavi["re"]):+.4f}'],
+            ]
+        print(tabulate(rows_matched, headers=['Method', 'Parameter', 'NRMSE', 'Bias'], tablefmt='simple'))
 
     print('\nσ_rfx bias by true σ_rfx bin — PQL')
     print(_breakdown_srfx(pql_a['se'], pql_a['st'], 'PQL'))
@@ -619,6 +588,7 @@ def main(
     n_epochs: int = 1,
     n_cavi: int = 200,
     n_total: int = 0,
+    skip_cavi: bool = False,
 ) -> None:
     print(
         f'CAVI: {"enabled" if _HAS_CAVI else "DISABLED"}   vcp_prior={_VCP_PRIOR}   limit={n_cavi}'
@@ -635,6 +605,7 @@ def main(
                 n_cavi=n_cavi,
                 n_total=n_total,
                 n_epochs=n_epochs,
+                skip_cavi=skip_cavi,
             )
         )
 
@@ -699,6 +670,7 @@ if __name__ == '__main__':
     parser.add_argument('--n-epochs',  default=1, type=int)
     parser.add_argument('--n-cavi',    default=200, type=int, help='max datasets for CAVI per data_id')
     parser.add_argument('--n-total',   default=0,   type=int, help='cap total datasets per data_id (0=all)')
+    parser.add_argument('--no-cavi',   action='store_true', help='skip CAVI; still track matched-N PQL/P6 subset')
     # fmt: on
     a = parser.parse_args()
     main(
@@ -707,4 +679,5 @@ if __name__ == '__main__':
         n_epochs=a.n_epochs,
         n_cavi=a.n_cavi,
         n_total=a.n_total,
+        skip_cavi=a.no_cavi,
     )
