@@ -19,6 +19,7 @@ from metabeta.analytical.normal import _normalGlsAndBlups
 from metabeta.utils.families import logProbFfx, logProbSigma
 
 __all__ = [
+    'refineBernoulliLaplaceMap',
     'refineBernoulliMapBeta',
     'refineBernoulliMapSrfx',
     'refineBernoulliNagqSrfx',
@@ -558,6 +559,163 @@ def refineBernoulliMapBeta(
     out['blup_est'] = blups
     out['sigma_rfx_est'] = sigma_rfx_new
     out['Psi_lap'] = Psi_lap_new
+    return out
+
+
+def refineBernoulliLaplaceMap(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor | None = None,
+    tau_ffx: torch.Tensor | None = None,
+    family_ffx: torch.Tensor | None = None,
+    tau_rfx: torch.Tensor | None = None,
+    family_sigma_rfx: torch.Tensor | None = None,
+    n_steps: int = 25,
+    n_newton: int = 2,
+    lr: float = 0.03,
+) -> dict[str, torch.Tensor]:
+    """Joint MAP for (β, σ_rfx) via Adam on the profile Laplace ELBO.
+
+    At each gradient step, refreshes b̂_g via n_newton Newton steps, then optimizes
+    L(β,σ) = Σ_g [ℓ_g(β,b̂_g) + log p(b̂_g|Ψ(σ))] + log p(β) + log p(σ)
+    w.r.t. (β, log σ_rfx) jointly.  By the envelope theorem ∂L/∂b̂_g ≈ 0 at the mode,
+    so b̂_g is treated as fixed during each gradient step.  The −½ log|H_g| Laplace
+    log-determinant term is omitted (it is a small correction; add if needed).
+    """
+    d = Xm.shape[-1]
+    q = Zm.shape[-1]
+    if d == 0 or q == 0 or n_steps <= 0 or 'Psi_lap' not in stats:
+        return stats
+
+    B, m = Xm.shape[:2]
+    device, dtype = Xm.device, Xm.dtype
+
+    G = mask_m.sum(dim=1).clamp(min=1.0)  # (B,)
+    active = mask_m.bool()  # (B, m)
+    eye_q = torch.eye(q, device=device, dtype=dtype)
+    eye_q_bm = eye_q.expand(B, m, q, q)
+
+    beta = stats['beta_est'].detach().clone().requires_grad_(True)  # (B, d)
+    blups = stats['blup_est'].detach().clone()  # (B, m, q)
+    log_sigma_rfx = (
+        stats['sigma_rfx_est'][..., :q]
+        .detach()
+        .clamp(min=1e-4, max=20.0)
+        .log()
+        .clone()
+        .requires_grad_(True)
+    )  # (B, q)
+
+    # β prior setup — mirrors refineBernoulliMapBeta
+    has_ffx_prior = nu_ffx is not None and tau_ffx is not None
+    active_d_mask = None
+    normal_prec = None
+    is_student = None
+    zeros_d = None
+    if has_ffx_prior:
+        active_d_mask = tau_ffx > 0
+        zeros_d = tau_ffx.new_zeros(tau_ffx.shape)
+        normal_prec = torch.where(active_d_mask, 1.0 / tau_ffx.clamp(min=1e-4).square(), zeros_d)
+        is_student = (family_ffx == 1).unsqueeze(-1) if family_ffx is not None else None
+
+    has_rfx_prior = tau_rfx is not None and family_sigma_rfx is not None
+
+    optimizer = torch.optim.Adam([beta, log_sigma_rfx], lr=lr)
+
+    with torch.enable_grad():
+        for _step in range(n_steps):
+            # Newton refresh of b̂_g at current (β_det, Ψ_det)
+            with torch.no_grad():
+                sigma_now = log_sigma_rfx.detach().exp().clamp(min=1e-6)
+                Psi_inv_now = torch.diag_embed(1.0 / sigma_now.square())  # (B, q, q)
+                beta_now = beta.detach()
+                for _newton in range(n_newton):
+                    eta_b = torch.einsum('bmnd,bd->bmn', Xm, beta_now) + torch.einsum(
+                        'bmnq,bmq->bmn', Zm, blups
+                    )
+                    mu_b = torch.sigmoid(eta_b)
+                    w_b = (mu_b * (1.0 - mu_b)).clamp(min=1e-6) * mask_n
+                    score_g = torch.einsum(
+                        'bmnq,bmn->bmq', Zm, (ym - mu_b) * mask_n
+                    ) - torch.einsum('bqr,bmr->bmq', Psi_inv_now, blups)
+                    ZWZ = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_b, Zm)
+                    Hg = torch.where(active[:, :, None, None], ZWZ, eye_q_bm) + Psi_inv_now[:, None]
+                    blups = (blups + _safeSolve(Hg + _adaptiveRidgeBm(Hg), score_g)) * mask_m[
+                        :, :, None
+                    ]
+                    blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
+
+            # Profile Laplace ELBO with b̂_g fixed
+            optimizer.zero_grad(set_to_none=True)
+            blups_fixed = blups.detach()
+
+            # Bernoulli log-likelihood Σ_g ℓ_g(β, b̂_g)
+            eta = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum(
+                'bmnq,bmq->bmn', Zm, blups_fixed
+            )
+            ll = ((ym * eta - F.softplus(eta)) * mask_n).sum(dim=-1)  # (B, m)
+            ll = (ll * mask_m).sum(dim=-1)  # (B,)
+
+            # Log prior on b̂_g: log N(b̂_g | 0, Ψ(σ)) = -½ Σ_{g,j} (b̂_gj²/σ_j² + 2 log σ_j)
+            sigma_sq = log_sigma_rfx.exp().square().clamp(min=1e-8)  # (B, q)
+            blup_sq_sum = (blups_fixed.square() * mask_m[:, :, None]).sum(dim=1)  # (B, q)
+            log_prior_blup = -0.5 * (blup_sq_sum / sigma_sq + G[:, None] * 2.0 * log_sigma_rfx).sum(
+                dim=-1
+            )  # (B,)
+
+            # β log-prior
+            lp_ffx = ll.new_zeros(B)
+            if has_ffx_prior:
+                if is_student is not None:
+                    student_prec = torch.where(
+                        active_d_mask,
+                        6.0
+                        / (5.0 * tau_ffx.clamp(min=1e-8).square() + (beta - nu_ffx).square()).clamp(
+                            min=1e-8
+                        ),
+                        zeros_d,
+                    )
+                    prior_prec = torch.where(is_student, student_prec, normal_prec)
+                else:
+                    prior_prec = normal_prec
+                lp_ffx = -0.5 * (prior_prec * (beta - nu_ffx).square()).sum(dim=-1)  # (B,)
+
+            # σ_rfx log-prior
+            lp_rfx = ll.new_zeros(B)
+            if has_rfx_prior:
+                lp_rfx = logProbSigma(
+                    log_sigma_rfx.exp().unsqueeze(1),  # (B, 1, q)
+                    tau_rfx[..., :q].clamp(min=1e-12).unsqueeze(1),  # (B, 1, q)
+                    family_sigma_rfx,  # (B,)
+                ).squeeze(
+                    1
+                )  # (B,)
+
+            target = (ll + log_prior_blup + lp_ffx + lp_rfx).sum()
+            if not torch.isfinite(target):
+                break
+            (-target).backward()
+            torch.nn.utils.clip_grad_norm_([beta, log_sigma_rfx], max_norm=10.0)
+            optimizer.step()
+            with torch.no_grad():
+                beta.clamp_(-50.0, 50.0)
+                log_sigma_rfx.clamp_(math.log(1e-4), math.log(20.0))
+
+    beta_out = beta.detach().nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    sigma_rfx_out = log_sigma_rfx.detach().exp().clamp(min=1e-4, max=20.0)
+    Psi_out = _psdProject(torch.diag_embed(sigma_rfx_out.square()))
+    Psi_out = _psdClampEigenvalues(Psi_out, _BERNOULLI_PSI_EIG_CAP)
+    sigma_rfx_out = Psi_out.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().nan_to_num()
+
+    out = dict(stats)
+    out['beta_est'] = beta_out
+    out['blup_est'] = blups
+    out['sigma_rfx_est'] = sigma_rfx_out
+    out['Psi_lap'] = Psi_out
     return out
 
 

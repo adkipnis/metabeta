@@ -75,6 +75,67 @@ exists in map.py but is not called. P6 (below) is the correct path.
 Open Priorities
 ---------------
 
+**✗ P8a — Profile Laplace joint MAP after P6 (TRIED 2026-05-14, REVERTED)**
+
+Implemented `refineBernoulliLaplaceMap` in `map.py`; wired after P6 in `glmm.py`.
+Result: FFX unchanged everywhere; sRFX regressed at mixed cells (small-b-mixed
++3.3%, medium-b-mixed +2.4%).
+
+Root cause: at the P6 fixed point, both gradients of the profile ELBO are ≈0.
+(a) β gradient = Bernoulli score, already zeroed by P6 Newton.
+(b) σ gradient (without log-det) = G − Σ_g b̂_gj²/σ_j² < 0 at the P6 M-step σ
+(the M-step includes a H_g^{-1} bias correction that the ELBO gradient omits),
+so Adam pushes σ further down. `refineBernoulliLaplaceMap` exists in map.py but
+is not wired into `glmm()`.
+
+**✗ P8b — Profile Laplace joint MAP before P6 (TRIED 2026-05-14, REVERTED)**
+
+Rewired P8 to run after P5 but before P6.  Result: medium-b FFX improved (−10.9%
+mixed, −17.1% sampled-valid), but large-b/huge-b FFX unchanged or worse (+0.6–2.2%),
+and small-b-mixed sRFX regressed +3.3%.  Formal acceptance criterion (FFX ≥15% at
+large-b or huge-b) not met.
+
+Root cause: β gradient at PQL output is nonzero (PQL doesn't zero the Bernoulli
+score exactly), so 25 Adam steps at lr=0.03 move β at medium-b (d≈8) but insufficient
+at large-b/huge-b (d=16).  The β landscape is harder to optimize at high d with
+low Fisher information per binary observation.
+
+Required benchmark (N=8192, P8b = P5→P8→P6, 2026-05-14):
+
+| Dataset           | Partition | FFX    | sRFX   | BLUP   | vs baseline |
+| ---               | ---       | ---:   | ---:   | ---:   | --- |
+| small-b-mixed     | train     | 0.2325 | 0.5472 | 0.6349 | sRFX+3.3%↑ BLUP+2.4%↑ |
+| small-b-sampled   | valid     | 0.2809 | 0.6066 | 0.6633 | neutral |
+| small-b-sampled   | test      | 0.2747 | 0.5894 | 0.6588 | neutral |
+| medium-b-mixed    | train     | 0.6592 | 0.6679 | 0.7288 | FFX−10.9%↓ |
+| medium-b-sampled  | valid     | 0.4859 | 0.7223 | 0.8383 | FFX−17.1%↓ |
+| medium-b-sampled  | test      | 0.6938 | 0.7397 | 0.8327 | FFX+1.4%↑ |
+| large-b-mixed     | train     | 1.6542 | 0.7730 | 0.9363 | regressions |
+| large-b-sampled   | valid     | 0.8656 | 0.8034 | 0.8309 | FFX+0.9%↑ |
+| large-b-sampled   | test      | 1.3746 | 0.8212 | 0.9664 | sRFX−1.6%↓ |
+| huge-b-mixed      | train     | 2.0051 | 0.8453 | 0.9467 | neutral |
+| huge-b-sampled    | valid     | 1.3520 | 0.9030 | 1.0127 | FFX+2.2%↑ |
+| huge-b-sampled    | test      | 1.5527 | 0.8893 | 0.9890 | neutral |
+
+Medium-b FFX wins are real and above 15%, but out of scope (criterion: large-b/huge-b).
+`refineBernoulliLaplaceMap` kept in map.py; not wired.
+
+**Priority 8 — Profile Laplace joint MAP for (β, σ_rfx) (OPEN — needs new approach)**
+
+Both P8a and P8b failed to improve large-b/huge-b FFX.  Candidate next steps:
+
+1. **More Adam steps at large-b** — try n_steps=50–100 to let Adam converge at d=16.
+   Risk: adds wall time; unclear if landscape allows better solution.
+2. **Replace Adam with Newton for β, keep Adam for σ** — each outer step does one
+   Newton solve for β at fixed b̂_g, then one Adam step for log σ.  Faster convergence
+   in β direction.
+3. **nAGQ for q>1** — extend P5 nAGQ to the multivariate case (Gauss-Hermite product
+   rule or sparse grid).  Directly fixes the Ψ bias for q>1 without needing β-σ
+   joint optimization.  Highest engineering cost but most principled approach.
+
+Acceptance: FFX improvement ≥ 15% at large-b or huge-b without regressions.
+Target: large-b-mixed FFX from 1.6439 to ≤ 1.40.
+
 **Priority 3 — Beta blend for BLUP residuals (LOW impact, quick)**
 
 Apply the Normal-path technique to Bernoulli final BLUP residuals:

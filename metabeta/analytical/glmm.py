@@ -4,6 +4,7 @@ import torch
 
 from metabeta.analytical.blup import analyticalBLUPContext
 from metabeta.analytical.map import (
+    refineBernoulliLaplaceMap,
     refineBernoulliMapBeta,
     refineBernoulliMapSrfx,
     refineBernoulliNagqSrfx,
@@ -144,6 +145,7 @@ __all__ = [
     'lmmBernoulli',
     'lmmNormal',
     'lmmPoisson',
+    'refineBernoulliLaplaceMap',
     'refineBernoulliMapBeta',
     'refineNormalMapSrfx',
 ]
