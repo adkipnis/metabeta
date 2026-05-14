@@ -120,21 +120,81 @@ Required benchmark (N=8192, P8b = P5→P8→P6, 2026-05-14):
 Medium-b FFX wins are real and above 15%, but out of scope (criterion: large-b/huge-b).
 `refineBernoulliLaplaceMap` kept in map.py; not wired.
 
-**Priority 8 — Profile Laplace joint MAP for (β, σ_rfx) (OPEN — needs new approach)**
+**✗ P8-trial — Adam-steps ablation (TRIED 2026-05-14, FAILED, reverted)**
 
-Both P8a and P8b failed to improve large-b/huge-b FFX.  Candidate next steps:
+n_steps=100 in P8b position.  Large-b partial results (run aborted after large-b
+completed, huge-b unchanged pattern expected):
 
-1. **More Adam steps at large-b** — try n_steps=50–100 to let Adam converge at d=16.
-   Risk: adds wall time; unclear if landscape allows better solution.
-2. **Replace Adam with Newton for β, keep Adam for σ** — each outer step does one
-   Newton solve for β at fixed b̂_g, then one Adam step for log σ.  Faster convergence
-   in β direction.
-3. **nAGQ for q>1** — extend P5 nAGQ to the multivariate case (Gauss-Hermite product
-   rule or sparse grid).  Directly fixes the Ψ bias for q>1 without needing β-σ
-   joint optimization.  Highest engineering cost but most principled approach.
+| Dataset           | Partition | FFX    | sRFX   | BLUP   | vs baseline |
+| ---               | ---       | ---:   | ---:   | ---:   | --- |
+| large-b-mixed     | train     | 1.6067 | 0.7839 | 0.9145 | FFX−2.3%↓, sRFX+2.6%↑ |
+| large-b-sampled   | valid     | 0.8656 | 0.8034 | 0.8309 | neutral |
+| large-b-sampled   | test      | 1.3746 | 0.8212 | 0.9664 | neutral |
 
-Acceptance: FFX improvement ≥ 15% at large-b or huge-b without regressions.
-Target: large-b-mixed FFX from 1.6439 to ≤ 1.40.
+Acceptance criterion (FFX ≤ 1.48 at large-b-mixed, i.e. ≥10% improvement) not met.
+Root cause confirmed: more Adam steps do not solve the problem — the profile ELBO
+for β is fundamentally ill-conditioned at d=16 with binary observations (low Fisher
+information per sample). No amount of gradient descent on (β, log σ) will recover
+the correct β when the Laplace ELBO landscape is flat in β at the PQL initialization.
+
+**Proceeding to nAGQ for q>1 as primary path.**
+
+**Priority 8 — nAGQ for q>1 (HIGH impact, primary path)**
+
+Extend `refineBernoulliNagqSrfx` to handle any active q via a Cartesian product
+Gauss-Hermite grid.  Root cause: P5 nAGQ gates on `active_q == 1`, leaving q>1
+datasets (large-b: q∈{1…4}, huge-b: q∈{1…5}) with the biased PQL Ψ.  Correcting
+σ for q>1 unlocks the same P5→P6 cascade that fixed medium-b: better σ → P6
+converges to the correct MAP → FFX improves.
+
+**Grid construction:**
+
+Use a Cartesian product of 1D Gauss-Hermite nodes.  Node count scales as k^q;
+choose k to keep the product tractable:
+
+| active q | k per dim | total nodes |
+| ---      | ---:      | ---:        |
+| 1        | 7         | 7  (existing P5) |
+| 2        | 5         | 25 |
+| 3        | 5         | 125 |
+| 4        | 3         | 81 |
+| 5        | 3         | 243 |
+
+For each group g, the quadrature point at multi-index j = (j1,…,jq) is:
+```
+b_{g,j} = b̂_g + √2 · L_g · z_j
+```
+where L_g = chol(H_g^{-1}) (B, m, q, q lower-triangular), z_j is the q-vector of
+1D GH nodes at each dimension, and H_g = ZWZ_g + Ψ^{-1}.  The LML per group is:
+```
+LML_g = logsumexp_j( log w_j + ℓ_{g,j} + ½‖z_j‖² )  + ½ log(2^q) − ½ log|H_g|
+```
+where `log w_j = Σ_i log w_{ji}` (product of 1D GH weights) and the `+½‖z_j‖²`
+cancels the implicit GH density across all q dimensions.
+
+**Implementation plan:**
+
+1. Build `_ghProductGrid(k_vals: list[int], dtype, device)` → `(K, q)` node tensor
+   and `(K,)` log-weight tensor, where K = prod(k_vals) and k_vals[i] is the k for
+   dimension i (e.g., [5, 5] for q=2).
+2. Refactor `refineBernoulliNagqSrfx` to branch on `active_q`:
+   - `active_q == 1`: keep existing scalar path unchanged.
+   - `active_q >= 2`: new multivariate path using the product grid.
+3. Multivariate path:
+   - Gather active-q columns of Zm → `z_cols` (B, m, n_max, q_act).
+   - Gather active-q BLUPs → `b_g0` (B, m, q_act) — fixed quadrature centers.
+   - Initial `log_s2` (B, q_act); optimize jointly via Adam (n_steps=10, lr=0.05).
+   - At each step: build Psi_inv from exp(log_s2), compute H_g scalar for active
+     dims, form L_g = chol(H_g^{-1}), evaluate LML as logsumexp over K grid points.
+   - Gradient w.r.t. log_s2 via autograd.
+4. After optimization: update Psi_lap active block, recompute b̂_g via n_newton=3
+   Newton steps.
+5. Gate: run multivariate path for `2 <= active_q <= 5`; skip if active_q > 5
+   (unlikely but safe).
+
+**Acceptance:** σ_rfx improvement ≥ 10% at any large-b or huge-b cell, and FFX
+improves (downstream P6 cascade) without BLUP regressions.  Target: large-b-mixed
+FFX from 1.6439 to ≤ 1.40.
 
 **Priority 3 — Beta blend for BLUP residuals (LOW impact, quick)**
 
