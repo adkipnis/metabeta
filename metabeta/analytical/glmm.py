@@ -4,9 +4,7 @@ import torch
 
 from metabeta.analytical.blup import analyticalBLUPContext
 from metabeta.analytical.map import (
-    refineBernoulliLaplaceMap,
     refineBernoulliMapBeta,
-    refineBernoulliMapSrfx,
     refineBernoulliNagqSrfx,
     refineNormalMapSrfx,
 )
@@ -51,7 +49,6 @@ def glmm(
     map_optimize = kwargs.pop('map_optimize', 'all')
     beta_alpha_low = kwargs.pop('beta_alpha_low', 0.65)
     beta_alpha_high = kwargs.pop('beta_alpha_high', 0.75)
-    alpha_blup = kwargs.pop('alpha_blup', 1.0)
     mask_d = kwargs.pop('mask_d', None)
     uncorr = (eta_rfx == 0) if eta_rfx is not None else None  # (B,) bool or None
     if likelihood_family == 0:
@@ -131,7 +128,6 @@ def glmm(
                 nu_ffx=map_priors['nu_ffx'],
                 tau_ffx=map_priors['tau_ffx'],
                 family_ffx=map_priors['family_ffx'],
-                alpha_blup=alpha_blup,
             )
     elif likelihood_family == 2:
         stats = lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
@@ -147,7 +143,6 @@ __all__ = [
     'lmmBernoulli',
     'lmmNormal',
     'lmmPoisson',
-    'refineBernoulliLaplaceMap',
     'refineBernoulliMapBeta',
     'refineNormalMapSrfx',
 ]

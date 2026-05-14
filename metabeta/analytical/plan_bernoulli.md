@@ -34,78 +34,25 @@ Root cause summary (`glmm_error_analysis.py`):
   downward at high true σ (M-step shrinkage). CAVI wins mainly in the high-σ quartile.
 - **BLUPs** track FFX: bad β contaminates the BLUP residual ỹ−Xβ.
 
-Done
-----
+Implemented (✓) / Tried and reverted (✗)
+-----------------------------------------
 
 **✓ P1+P1-ext** — Prior-regularized IRLS β₀ with Student-t adaptive precision.
-Net: FFX −2% to −34% across 12 cells; largest gains at large/huge.
-
-**✓ P2 sub-item** — Prior-informed Ψ floor: replaced constant 0.25 with per-dataset
-floor from `tau_rfx`, capped at 0.25. Net: small-b sRFX +0.6–2.3%; other sizes neutral.
-
-**✗ P2** — Laplace-MAP σ_rfx fixed-point (FAILED, reverted). Cancels the H_g^{-1}
-correction added by the M-step, reverting to downward-biased raw MoM. Code kept in
-`map.py:refineBernoulliMapSrfx`, not called.
-
-**✓ P5** — nAGQ for q=1. Adam on k=7 GH quadrature LML gradient + Newton BLUP
-refresh. q=1 sRFX −16–18% at all sizes; FFX unchanged.
-
-**✓ P6** — True Laplace score for β. n_outer=2 rounds of β Newton (n_steps=8,
-damping=0.7) + b̂_g Newton (n_newton=3) + final M-step. FFX −21–65% vs PQL baseline.
-Full-convergence trial (P6-conv): zero improvement — PQL already zeroes the Bernoulli
-score at convergence; MAP under wrong Ψ is not better.
-
+**✓ P2 sub-item** — Prior-informed Ψ floor from `tau_rfx`, capped at 0.25.
+**✓ P5** — nAGQ for q=1. Adam on k=7 GH quadrature LML + Newton BLUP refresh.
+**✓ P6** — True Laplace score for β. n_outer=2 rounds of β Newton + b̂_g Newton + M-step.
 **✓ P7/BC1** — Analytic O(1/n) M-step correction inline in `refineBernoulliMapBeta`.
-`ΔΨ_{jj} = (1/G)Σ_g b̂_{gj}·T3_{gj}·[H_g^{-1}]_{jj}²`. Universal −0.3–1.2%
-sRFX improvement across all 12 cells, no regressions.
+**✓ P8** — nAGQ for q>1 (2≤q≤5) via Cartesian-product GH grid.
 
-**✓ P8** — nAGQ for q>1 (2≤q≤5) via Cartesian-product GH grid. k_per_dim =
-{2:5,3:5,4:3,5:3} → {25,125,81,243} nodes. sRFX −6–12% at large-b; smaller at huge-b.
-FFX regresses +1.7–2.8% at huge-b-sampled (within noise).
+**✗ P2** — Laplace-MAP σ_rfx fixed-point (cancels H_g^{-1} correction). Code in `map.py:refineBernoulliMapSrfx` removed.
+**✗ P3** — Beta blend for BLUP residuals (oracle: partition-specific, no globally safe α).
+**✗ P4** — blup_var `1+C/n_g` formula (calibration depends on both n_g and G; bookkeeping-only anyway).
+**✗ P8a/b** — Joint MAP on (β, log σ) via Adam (β gradient ≈0 at P6 fixed point). Code removed.
+**✗ P9** — Decouple M-step β from P6 Newton (partition-specific wins/losses).
+**✗ P10** — nAGQ σ gradient at P6 β (P6 β makes W≈0, σ uninformative from likelihood).
 
-**✗ P8a/b** — Profile Laplace joint MAP via Adam on (β, log σ) (TRIED, REVERTED).
-Root cause: β gradient ≈0 at P6 fixed point; σ gradient pushed downward (ELBO omits
-H_g^{-1} bias correction). Code kept in `map.py:refineBernoulliLaplaceMap`, not wired.
-
-**✗ P9 — Decouple M-step β from P6 Newton (TRIED, REVERTED, 2026-05-14).**
-Hypothesis: P6 Newton β introduces variance into M-step Ψ. Fix: use pre-Newton β/b̂_g
-for the M-step, return P6 β as FFX output only. Result: mixed — wins at medium-b-mixed
-(−20%), large-b-sampled valid (−20%), huge-b-mixed (−21%), but regressions at
-large-b-sampled test (+18%) and large-b-mixed train (+20%). Net: not acceptable.
-Root cause: the P6 β happens to give better-calibrated M-step Hessians for some
-dataset orderings; the effect is partition-specific, not systematic.
-
-**✗ P10 — nAGQ σ gradient at P6 β (TRIED, REVERTED, 2026-05-14).**
-Hypothesis: re-run `refineBernoulliNagqSrfx` after P6 with P6 β as the fixed point.
-Result: massive σ_rfx regression across all sizes (large-b-sampled test σ: 0.879 → 1.603,
-+82%). Root cause: at large d, P6 β accurately predicts the binary outcomes (μ ≈ 0 or 1),
-making W = μ(1−μ) ≈ 0 and ZWZ_g ≈ 0. With ZWZ_g ≈ 0, H_g ≈ 1/σ² and the frozen-ZWZ
-nAGQ LML gradient ∂LML/∂(log σ) ≈ (b̂_g/σ)² > 0 always — the data is uninformative
-about σ when β is accurate, so the unconstrained profile MLE always pushes σ upward.
-Approach requires a σ prior (MAP, not MLE) or non-frozen ZWZ to be correct; both add
-significant complexity with no guaranteed improvement.
-
-Open Priorities
----------------
-
-**No remaining principled directions.** Profile MLE (P10) fails because P6 β makes data
-near-deterministic, eliminating σ information from the likelihood. Beta blend for BLUPs (P3)
-has no globally safe α — effect is partition-specific (same failure mode as P9). Remaining
-open item is blup_var calibration (P4, bookkeeping only).
-
-**✗ P3 — Beta blend for BLUP residuals (ORACLE FAILED, 2026-05-14).**
-Hypothesis: `beta_for_blup = alpha*beta_P6 + (1−alpha)*beta_PQL` reduces overfit-β
-contamination in the BLUP conditional posterior. Oracle swept α ∈ {0,0.25,0.5,0.65,0.75,1}.
-Results: gain at small-b-sampled-valid (α=0.75: −6.5%) but regression at medium-b-mixed-train
-(α=0.75: +1.5%). Critically, valid and test within the same dataset type (small-b-sampled)
-give opposite optimal α (0.75 vs 0.0), confirming the effect is partition-specific, not
-systematic. Same failure mode as P9. No globally safe α satisfies "no regressions anywhere."
-Code: `alpha_blup` param kept in `refineBernoulliMapBeta` (default=1.0) for experimentation.
-
-**Priority 4 — blup_var calibration tuning (LOW priority)**
-
-`_BERNOULLI_BLUP_VAR_INFLATION=1.5` overcorrects large groups (ratio 0.77 at
-n_g=25–150). Group-size-dependent inflation (e.g., 1.0+C/n_g) would help.
+No remaining principled directions. σ_rfx gap vs CAVI at mixed datasets is structural
+(Laplace M-step instability at large d) and resists all approaches above.
 
 External Reference Baseline
 ----------------------------
@@ -135,37 +82,20 @@ P6 = raw PQL + P5 + P6 + BC1, without P1/P2 (see note). Bold = winner per cell.
 | huge-b-sampled       | test  |  100| **0.472** | 0.753    | 0.881     | **0.784** | **0.811** | 0.965     |
 | huge-b-mixed         | train |  100| **0.403** | 0.652    | 1.489     | **0.903** | **0.921** | 0.940     |
 
-Note: `glmm()` uses `map_refine=True` by default and receives all batch priors, so
-P1/P2/P5/P6/BC1 are all active. The "P6" column is one additional P5+P6 round on
-top, which changes results minimally. The matched N is a sequential subset of each
-file, not a stratified sample.
-
 Key findings:
-- **FFX**: Full pipeline beats CAVI at all 12 cells (2–3.5× better at large/huge;
-  ≈tie at small).
-- **σ_rfx**: Mixed. Pipeline wins at small (both partitions), medium-sampled-valid,
-  huge-sampled-valid. CAVI wins at mixed datasets (all sizes) and medium/large-huge
-  test. The Laplace M-step produces high σ_rfx variance at large d/q, particularly
-  in mixed datasets where β diversity is higher.
-- **BLUP**: follows σ_rfx — pipeline wins where σ_rfx wins, CAVI wins otherwise.
+- **FFX**: Full pipeline beats CAVI at all 12 cells (2–3.5× better at large/huge).
+- **σ_rfx**: Mixed. Pipeline wins at small + huge-sampled-valid; CAVI wins at mixed datasets
+  (all sizes) and medium/large-huge test. Laplace M-step produces high σ variance at large d/q.
+- **BLUP**: follows σ_rfx.
 
-σ_rfx quartile pattern: CAVI biases σ upward across all quartiles; PQL/P6 has an
-S-curve (upward at low σ, downward at high σ). CAVI's NRMSE advantage at mixed/large
-datasets comes from the high-σ quartile where the PQL downward bias is largest.
+**R-INLA:** `inla()` (R-INLA package), INLA Laplace approximation. Script:
+`glmm_inla_comparison.py`. Results in `experiments/analytical/glmm_inla_results.md`.
 
-Methods not pursued: lme4 (diverges q>1), pure Laplace/lme4-style LA (same
-divergence), JJ/Polya-Gamma variational bounds (faster CAVI backend, no accuracy
-gain over statsmodels), INLA (non-trivial for arbitrary q/Ψ), GPBoost (tree-boosted
-FX, unclear full-Ψ support).
-
-Acceptance Criteria
--------------------
-
-- FFX improvement ≥ 15% at large-b or huge-b.
-- σ_rfx improvement ≥ 10% at any required cell.
-- BLUP improvement must not regress FFX or sRFX.
-- Compare against current PQL baseline (`map_refine=True`).
-- Narrow-bin-only improvements are experiments only.
+Key findings (small-b only, n_inla=1000):
+- **FFX**: Full pipeline beats INLA by 1.5–1.7× at small scale.
+- **σ_rfx**: INLA matches or marginally beats PQL (small σ quartile).
+- **BLUP**: Tied (~0.618–0.625).
+- **Speed**: PQL ~6–11 ms/ds vs INLA ~2.1–2.2 s/ds (≈350–400× faster).
 
 Commands
 --------

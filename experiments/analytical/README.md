@@ -46,6 +46,8 @@ Scripts removed after single use; results and decisions are documented in
   optimization is Pareto-dominant over all subsets.
 - `glmm_beta_blend_diagnostic.py` — beta blend sweep. Confirmed 0.65/0.75 alpha
   gate is optimal; oracle_beta globally worse than current.
+- `glmm_blup_blend_oracle.py` — P3 oracle: swept α ∈ {0,…,1} for beta_for_blup blend.
+  Confirmed no globally safe α (partition-specific effect, same failure mode as P9).
 
 Scripts removed earlier after their diagnostic pass was complete.
 
