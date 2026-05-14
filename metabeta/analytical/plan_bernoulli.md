@@ -75,23 +75,32 @@ large-b-sampled test (+18%) and large-b-mixed train (+20%). Net: not acceptable.
 Root cause: the P6 β happens to give better-calibrated M-step Hessians for some
 dataset orderings; the effect is partition-specific, not systematic.
 
+**✗ P10 — nAGQ σ gradient at P6 β (TRIED, REVERTED, 2026-05-14).**
+Hypothesis: re-run `refineBernoulliNagqSrfx` after P6 with P6 β as the fixed point.
+Result: massive σ_rfx regression across all sizes (large-b-sampled test σ: 0.879 → 1.603,
++82%). Root cause: at large d, P6 β accurately predicts the binary outcomes (μ ≈ 0 or 1),
+making W = μ(1−μ) ≈ 0 and ZWZ_g ≈ 0. With ZWZ_g ≈ 0, H_g ≈ 1/σ² and the frozen-ZWZ
+nAGQ LML gradient ∂LML/∂(log σ) ≈ (b̂_g/σ)² > 0 always — the data is uninformative
+about σ when β is accurate, so the unconstrained profile MLE always pushes σ upward.
+Approach requires a σ prior (MAP, not MLE) or non-frozen ZWZ to be correct; both add
+significant complexity with no guaranteed improvement.
+
 Open Priorities
 ---------------
 
-**Priority 1 — nAGQ σ gradient step / profile MLE for σ**
+**No remaining principled directions.** Profile MLE (P10) fails because P6 β makes data
+near-deterministic, eliminating σ information from the likelihood. Beta blend for BLUPs (P3)
+has no globally safe α — effect is partition-specific (same failure mode as P9). Remaining
+open item is blup_var calibration (P4, bookkeeping only).
 
-Fix β = β̂ (P6 output), differentiate nAGQ LML w.r.t. log σ via autodiff, take one
-Newton step. Distinct from P8a/b: uses the actual quadrature LML (not Laplace), so
-the H_g^{-1} bias correction is implicit in the GH nodes. The σ gradient should be
-well-calibrated. Cost: cheap for q=1 (7 nodes); expensive for q>1 (243 nodes at q=5).
-Risk: profile LML landscape may be flat near P5 estimate (needs measurement).
-Acceptance: ≥10% σ_rfx improvement at any large/huge cell, no FFX regression.
-
-**Priority 3 — Beta blend for BLUP residuals (LOW impact, quick)**
-
-`beta_for_blup = alpha*beta_gls + (1−alpha)*beta_0` (alpha ≤ 0.65/0.75 for low/high
-d). `beta_est` unchanged. Expected: 5–10% BLUP at small-medium, neutral at large-huge.
-Run oracle ablation before implementing. Acceptance: no regressions anywhere.
+**✗ P3 — Beta blend for BLUP residuals (ORACLE FAILED, 2026-05-14).**
+Hypothesis: `beta_for_blup = alpha*beta_P6 + (1−alpha)*beta_PQL` reduces overfit-β
+contamination in the BLUP conditional posterior. Oracle swept α ∈ {0,0.25,0.5,0.65,0.75,1}.
+Results: gain at small-b-sampled-valid (α=0.75: −6.5%) but regression at medium-b-mixed-train
+(α=0.75: +1.5%). Critically, valid and test within the same dataset type (small-b-sampled)
+give opposite optimal α (0.75 vs 0.0), confirming the effect is partition-specific, not
+systematic. Same failure mode as P9. No globally safe α satisfies "no regressions anywhere."
+Code: `alpha_blup` param kept in `refineBernoulliMapBeta` (default=1.0) for experimentation.
 
 **Priority 4 — blup_var calibration tuning (LOW priority)**
 

@@ -425,6 +425,7 @@ def refineBernoulliMapBeta(
     n_newton: int = 3,
     n_outer: int = 2,
     damping: float = 0.7,
+    alpha_blup: float = 1.0,
 ) -> dict[str, torch.Tensor]:
     """Refine β via Newton on the true Bernoulli score at fixed b̂_g, then update BLUPs.
 
@@ -442,6 +443,10 @@ def refineBernoulliMapBeta(
     (β, b̂) given the PQL Ψ is worse than early-stopped Newton because PQL Ψ is
     biased, and b̂ compensates for β at the MAP under the wrong Ψ.  The fixed budget
     here acts as beneficial implicit regularization via early stopping.
+
+    alpha_blup: blend weight for BLUP computation.  After the P6 Newton loop and M-step,
+    b̂_g is recomputed at beta_for_blup = alpha_blup*beta_P6 + (1-alpha_blup)*beta_PQL.
+    beta_est output is always beta_P6 (unaffected).  alpha_blup=1.0 = current behaviour.
     """
     d = Xm.shape[-1]
     q = Zm.shape[-1]
@@ -474,6 +479,7 @@ def refineBernoulliMapBeta(
 
     blups = stats['blup_est'].detach().clone()  # (B, m, q) — updated each outer iter
     beta = stats['beta_est'].detach().clone()   # (B, d)
+    beta_init = beta.clone()                    # PQL GLS β — blend target for BLUP
 
     for _outer in range(n_outer):
         # --- β Newton: n_steps steps at current b̂_g ---
@@ -555,6 +561,27 @@ def refineBernoulliMapBeta(
     Psi_lap_new = _psdProject(Psi_lap_raw + torch.diag_embed(bc1_diag))
     Psi_lap_new = _psdClampEigenvalues(Psi_lap_new, _BERNOULLI_PSI_EIG_CAP)
     sigma_rfx_new = Psi_lap_new.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().nan_to_num()
+
+    # --- optional: recompute b̂_g at blended β (oracle ablation for P3) ---
+    if alpha_blup < 1.0:
+        beta_blup = alpha_blup * beta + (1.0 - alpha_blup) * beta_init
+        Psi_inv_new = _pseudoInverse(Psi_lap_new)
+        blups_b = blups.clone()
+        for _ in range(n_newton):
+            eta_b = torch.einsum('bmnd,bd->bmn', Xm, beta_blup) + torch.einsum(
+                'bmnq,bmq->bmn', Zm, blups_b
+            )
+            mu_b = torch.sigmoid(eta_b)
+            w_b = (mu_b * (1.0 - mu_b)).clamp(min=1e-6) * mask_n
+            score_b = torch.einsum('bmnq,bmn->bmq', Zm, (ym - mu_b) * mask_n)
+            score_b = score_b - torch.einsum('bqr,bmr->bmq', Psi_inv_new, blups_b)
+            ZWZ_b = torch.einsum('bmnq,bmn,bmnr->bmqr', Zm, w_b, Zm)
+            ZWZ_b_safe = torch.where(active[:, :, None, None], ZWZ_b, eye_q_bm)
+            Hg_b = ZWZ_b_safe + Psi_inv_new[:, None]
+            delta_b = _safeSolve(Hg_b + _adaptiveRidgeBm(Hg_b), score_b)
+            blups_b = (blups_b + damping * delta_b) * mask_m[:, :, None]
+            blups_b = blups_b.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
+        blups = blups_b
 
     out['blup_est'] = blups
     out['sigma_rfx_est'] = sigma_rfx_new
