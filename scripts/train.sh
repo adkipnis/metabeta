@@ -15,7 +15,7 @@
 
 EPOCHS=7000
 ACCUM=0
-NO_PERMUTE=0
+PERMUTE=0
 VALID_DS_TYPE=sampled
 
 while [[ $# -gt 0 ]]; do
@@ -26,7 +26,7 @@ while [[ $# -gt 0 ]]; do
         --epochs) EPOCHS="$2"; shift 2 ;;
         --seed) SEED="$2"; shift 2 ;;
         --accum) ACCUM=1; shift ;;
-        --no-permute) NO_PERMUTE=1; shift ;;
+        --permute) PERMUTE=1; shift ;;
         --latest) LOAD_LATEST=1; shift ;;
         --best) LOAD_BEST=1; shift ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
@@ -66,8 +66,8 @@ fi
 if [[ -n "$WANDB_SUFFIX" ]]; then
     EXTRA_ARGS+=(--wandb_suffix "$WANDB_SUFFIX")
 fi
-if [[ "$NO_PERMUTE" -eq 1 ]]; then
-    EXTRA_ARGS+=(--no-permute --r_tag no-perm)
+if [[ "$PERMUTE" -eq 1 ]]; then
+    EXTRA_ARGS+=(--permute --r_tag perm)
 fi
 
 python train.py \
