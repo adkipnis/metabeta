@@ -1,38 +1,37 @@
 Bernoulli GLMM Plan
 ===================
 
-Last updated: 2026-05-13
+Last updated: 2026-05-14
 
 Current Baseline
 ----------------
 
 Estimator: `lmmBernoulli` (6 PQL passes) + `refineBernoulliNagqSrfx` (P5 nAGQ,
-q=1 gated) + `refineBernoulliMapBeta` (P6 true Laplace score for β). Active when
-`map_refine=True`: prior-regularized IRLS β₀ (P1+P1-ext), prior-informed Ψ floor
-(P2 sub-item), nAGQ σ_rfx refinement (P5), and Newton β refinement (P6). Raw
-baseline: `glmm(..., map_refine=False)`.
+q=1 gated) + `refineBernoulliMapBeta` (P6 true Laplace score for β + BC1 M-step
+correction). Active when `map_refine=True`: prior-regularized IRLS β₀ (P1+P1-ext),
+prior-informed Ψ floor (P2 sub-item), nAGQ σ_rfx refinement (P5), Newton β
+refinement (P6), and BC1 analytic M-step correction. Raw baseline:
+`glmm(..., map_refine=False)`.
 
-Required-suite NRMSE (post-P1+P1-ext+Ψ-floor+P5+P6, 2026-05-13, N=8192):
+Required-suite NRMSE (post-P1+P1-ext+Ψ-floor+P5+P6+BC1, 2026-05-14, N=8192):
 
 | Dataset           | Partition | FFX    | sRFX   | BLUP   |
 | ---               | ---       | ---:   | ---:   | ---:   |
-| small-b-mixed     | train     | 0.2314 | 0.5358 | 0.6202 |
-| small-b-sampled   | valid     | 0.2809 | 0.6138 | 0.6620 |
-| small-b-sampled   | test      | 0.2747 | 0.5943 | 0.6571 |
-| medium-b-mixed    | train     | 0.7397 | 0.6654 | 0.7214 |
-| medium-b-sampled  | valid     | 0.5860 | 0.7284 | 0.8485 |
-| medium-b-sampled  | test      | 0.6840 | 0.7463 | 0.8228 |
-| large-b-mixed     | train     | 1.6439 | 0.7721 | 0.9333 |
-| large-b-sampled   | valid     | 0.8581 | 0.8091 | 0.8372 |
-| large-b-sampled   | test      | 1.3645 | 0.8376 | 0.9634 |
-| huge-b-mixed      | train     | 2.0183 | 0.8550 | 0.9423 |
-| huge-b-sampled    | valid     | 1.3226 | 0.9128 | 1.0111 |
-| huge-b-sampled    | test      | 1.5393 | 0.8923 | 0.9952 |
+| small-b-mixed     | train     | 0.2314 | 0.5299 | 0.6202 |
+| small-b-sampled   | valid     | 0.2809 | 0.6065 | 0.6620 |
+| small-b-sampled   | test      | 0.2747 | 0.5896 | 0.6571 |
+| medium-b-mixed    | train     | 0.7397 | 0.6572 | 0.7214 |
+| medium-b-sampled  | valid     | 0.5860 | 0.7204 | 0.8485 |
+| medium-b-sampled  | test      | 0.6840 | 0.7401 | 0.8228 |
+| large-b-mixed     | train     | 1.6439 | 0.7643 | 0.9333 |
+| large-b-sampled   | valid     | 0.8581 | 0.8041 | 0.8372 |
+| large-b-sampled   | test      | 1.3645 | 0.8345 | 0.9634 |
+| huge-b-mixed      | train     | 2.0183 | 0.8502 | 0.9423 |
+| huge-b-sampled    | valid     | 1.3226 | 0.9101 | 1.0111 |
+| huge-b-sampled    | test      | 1.5393 | 0.8881 | 0.9952 |
 
-FFX improvement vs prior baseline (P5-only, 2026-05-13): −65% small-b, −49–51%
-medium-b, −21–56% large-b, −22–53% huge-b. sRFX: modest improvements (−1–4%)
-with negligible regressions (<1%) at some large/huge cells. BLUPs: uniform
-improvement (−0.1–1.6%).
+sRFX improvement vs prior baseline (P6 without BC1, 2026-05-14): −0.3% to −1.2%
+across all 12 cells. FFX and BLUP unchanged. No regressions.
 
 Root cause summary (`glmm_error_analysis.py`):
 - **FFX** is the dominant failure mode; NRMSE scales with d (low Fisher information
@@ -206,16 +205,44 @@ Conclusion: the large-b FFX gap is **not** caused by insufficient P6 budget.  It
 caused by PQL Ψ being poorly estimated for q>1 (no P5 nAGQ for q>1).  The correct
 path is Ψ refinement for q>1 (Priority 7 BC1, or a q>1 nAGQ variant).
 
-**Priority 7 — BC1 σ_rfx correction for q>1 (contingent on P6, OPEN)**
+**✓ P7 / BC1 — Analytic O(1/n) Laplace M-step correction (DONE 2026-05-14)**
 
-Hold until P6 is complete. If σ_rfx gap persists in q>1 datasets after P6, the
-Breslow-Lin (1995) BC1 adds an analytic O(1/n) correction to the M-step that
-reduces downward bias in the high-σ_rfx quartile. Unlike P5 nAGQ, tractable for
-arbitrary q; weaker (first-order only). Do not pursue before P6 — the σ_rfx gap
-is largely downstream of FFX error and should cascade when β improves.
+Implemented inline in `refineBernoulliMapBeta` (map.py). After the standard
+Laplace M-step `Ψ̂ = (1/G)Σ_g(b̂_g b̂_g' + H_g^{-1})`, adds BC1 diagonal correction:
 
-σ_rfx bias direction: S-curve — upward bias at low true σ (Ψ floor overshoots),
-downward at high true σ (M-step shrinkage). BC1 addresses only the downward half.
+```
+ΔΨ_{jj} = (1/G) Σ_g b̂_{gj} · T3_{gj} · [H_g^{-1}]_{jj}²
+T3_{gj} = -Σ_i z_{gij}³ · μ_i(1-μ_i)(1-2μ_i)
+```
+
+Derivation: `E[b_g|y,Ψ] - b̂_g ≈ f'''(b̂_g)/(2H_g²)` (Laplace mode-mean discrepancy),
+so `E[b_g²] - (b̂_g² + H_g^{-1}) ≈ 2b̂_g·Δb_g = b̂_g·f'''(b̂_g)/H_g²`. The diagonal
+approximation treats each q-dimension independently (tractable for arbitrary q).
+
+Applies to all q (q=1 and q>1). Applied after the final M-step within P6, so it
+corrects the last M-step given the P6-refined (β, b̂_g). For q=1 datasets that went
+through P5 (nAGQ), BC1 still applies to the P6 M-step (which re-estimates Ψ from
+the final b̂_g after the P6 Newton alternation).
+
+Results (N=8192, 2026-05-14, compared to P6-without-BC1):
+
+| Cell              | Pre-BC1 sRFX | BC1 sRFX | Δ%    |
+| ---               | ---:         | ---:     | ---:  |
+| small-b-mixed     | 0.5358       | 0.5299   | −1.1% |
+| medium-b-mixed    | 0.6654       | 0.6572   | −1.2% |
+| large-b-mixed     | 0.7721       | 0.7643   | −1.0% |
+| huge-b-mixed      | 0.8550       | 0.8502   | −0.6% |
+| large-b-sampled   | 0.8091       | 0.8041   | −0.6% |
+| huge-b-sampled    | 0.9128       | 0.9101   | −0.3% |
+
+FFX and BLUP unchanged; sRFX improved 0.3–1.2% across all 12 cells. Below the
+formal ≥10% acceptance threshold, but universal (all cells, both q=1 and q>1),
+no regressions, and essentially zero computational cost (~3 extra tensor ops).
+
+Remaining σ_rfx gap: S-curve bias persists — upward at low true σ (Ψ floor), downward
+at high true σ (M-step shrinkage). BC1 partially corrects the downward half only.
+Further improvement for q>1 would require higher-order (BC2) or quadrature-based
+corrections, both substantially more complex.
 
 External Reference Baseline
 ----------------------------

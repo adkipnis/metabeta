@@ -532,7 +532,7 @@ def refineBernoulliMapBeta(
     if not has_rfx:
         return out
 
-    # --- Ψ M-step: Ψ = (1/G) Σ_g (b̂_g b̂_g' + H_g^{-1}) with final b̂_g ---
+    # --- Ψ M-step with BC1 analytic correction (Breslow-Lin 1995) ---
     eta_f = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Zm, blups)
     mu_f = torch.sigmoid(eta_f)
     w_f = (mu_f * (1.0 - mu_f)).clamp(min=1e-6) * mask_n
@@ -541,7 +541,17 @@ def refineBernoulliMapBeta(
     Hg_f = ZWZ_f_safe + Psi_inv[:, None]
     Hg_inv_f = _safeSolve(Hg_f + _adaptiveRidgeBm(Hg_f), eye_q_bm) * mask4
     bg_outer_mat = torch.einsum('bmq,bmr->bmqr', blups, blups)
-    Psi_lap_new = _psdProject((bg_outer_mat + Hg_inv_f).sum(dim=1) / G[:, None, None])
+    Psi_lap_raw = (bg_outer_mat + Hg_inv_f).sum(dim=1) / G[:, None, None]
+
+    # BC1: E[b_g|y,Ψ] ≈ b̂_g + f'''/(2H²) → ΔΨ_{jj} = (1/G)Σ_g b̂_{gj}·T3_{gj}·[H_g^{-1}]_{jj}²
+    # T3_{gj} = -Σ_i z_{gij}³·μ_i(1-μ_i)(1-2μ_i)  (third log-likelihood derivative)
+    mu_skew = mu_f * (1.0 - mu_f) * (1.0 - 2.0 * mu_f) * mask_n
+    T3_g = -torch.einsum('bmnq,bmn->bmq', Zm.pow(3), mu_skew)
+    hg_inv_diag = Hg_inv_f.diagonal(dim1=-2, dim2=-1)
+    bc1_diag = (blups * T3_g * hg_inv_diag.square() * mask_m[:, :, None]).sum(dim=1) / G[:, None]
+    bc1_diag = bc1_diag.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+
+    Psi_lap_new = _psdProject(Psi_lap_raw + torch.diag_embed(bc1_diag))
     Psi_lap_new = _psdClampEigenvalues(Psi_lap_new, _BERNOULLI_PSI_EIG_CAP)
     sigma_rfx_new = Psi_lap_new.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt().nan_to_num()
 
