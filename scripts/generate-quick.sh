@@ -3,7 +3,7 @@
 #SBATCH --job-name=quick
 #SBATCH --output=logs/quick/%A_%a.out
 #SBATCH --error=logs/quick/%A_%a.err
-#SBATCH --array=0-99
+#SBATCH --array=0-999
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
