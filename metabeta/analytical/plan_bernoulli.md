@@ -177,6 +177,35 @@ Investigated dead ends: (a) P6-ext — Ψ M-step inside the outer loop — struc
 no-op for n_outer=2 and regresses σ_rfx at small datasets. (b) Multiple restarts:
 moot — joint concavity guarantees unique global MAP.
 
+**✗ P6-conv — Run P6 to full convergence (TRIED 2026-05-13, REVERTED)**
+
+Hypothesis: the large-b FFX gap (CAVI 3.6–6× better) is due to insufficient Newton
+iterations in P6 (fixed budget n_outer=2 × n_steps=8 = 16 steps, not converged).
+Raising n_outer=30, n_steps=50 with a gradient-norm stopping criterion on the inner
+loop and β-change criterion on the outer loop.
+
+Result: **zero improvement at large-b (FFX 2.5334 → 2.5333)**; small-b/medium-b also
+regressed to ≈PQL level.  Reverted to n_outer=2, n_steps=8.
+
+Root cause of the null result:
+
+1. **PQL already zeroes the true Bernoulli score.**  IRLS working-response normal
+   equations reduce to `∑ X'(y − σ(Xβ + Zb)) = 0` at PQL convergence — the exact
+   MAP score condition.  So at PQL (β, b̂), the score is already ≈0.  Increasing the
+   Newton budget cannot move β away from this point.
+
+2. **MAP (β, b̂) given PQL Ψ is not better than PQL (β, b̂).**  Full convergence
+   drives to the MAP under the wrong Ψ.  Because PQL Ψ is biased (downward at high σ),
+   b̂ compensates for β errors at the MAP, leaving FFX unchanged or worse.
+
+3. **The 16-step budget is beneficial implicit regularization via early stopping.**
+   PQL (6 passes) leaves a residual score; those 16 Newton steps partially correct it
+   without over-fitting to the wrong Ψ.  Full convergence removes this regularization.
+
+Conclusion: the large-b FFX gap is **not** caused by insufficient P6 budget.  It is
+caused by PQL Ψ being poorly estimated for q>1 (no P5 nAGQ for q>1).  The correct
+path is Ψ refinement for q>1 (Priority 7 BC1, or a q>1 nAGQ variant).
+
 **Priority 7 — BC1 σ_rfx correction for q>1 (contingent on P6, OPEN)**
 
 Hold until P6 is complete. If σ_rfx gap persists in q>1 datasets after P6, the

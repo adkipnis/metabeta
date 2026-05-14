@@ -436,6 +436,11 @@ def refineBernoulliMapBeta(
     iteration refines β at the current b̂_g (n_steps Newton steps) then recomputes b̂_g
     at the new β (n_newton Newton steps).  The Ψ M-step runs once after all outer
     iterations to update σ_rfx from the final b̂_g.
+
+    Note: running to full convergence (large n_steps/n_outer) is harmful — the MAP
+    (β, b̂) given the PQL Ψ is worse than early-stopped Newton because PQL Ψ is
+    biased, and b̂ compensates for β at the MAP under the wrong Ψ.  The fixed budget
+    here acts as beneficial implicit regularization via early stopping.
     """
     d = Xm.shape[-1]
     q = Zm.shape[-1]
