@@ -1,15 +1,14 @@
 """Experiment: PQL vs R-INLA on Bernoulli/Normal GLMM datasets.
 
-Compares our PQL estimator (+ P5/P6 refinements) against R-INLA on test
-datasets.  INLA supports any q via separate iid random-effect terms per
-RE dimension (diagonal Ψ assumed).
+Compares the full analytical pipeline (glmm() with map_refine=True, i.e.
+P1+P2+P5+P6+BC1) against R-INLA on Bernoulli or Normal test datasets.
 
-For Bernoulli: inla(..., family="binomial", Ntrials=1).
-For Normal:    inla(..., family="gaussian").
-
-Prior matching is approximate: INLA uses a log-gamma(1, 5e-5) prior on
-precision by default; we use HalfNormal(τ_rfx) on σ.  The comparison is
-frequentist — accuracy relative to simulated ground truth.
+RE prior: PC prior P(σ_j > τ_rfx_j) = 0.317 per dimension for uncorrelated
+datasets (eta_rfx=0, or q=1).  For correlated datasets (eta_rfx>0, q=2):
+iid2d model with Wishart prior W(q+1, V) where V_{jj}=1/((q+1)*τ_rfx_j²),
+plus a copy term for the second dimension.
+FE prior: N(ν_ffx_j, τ_ffx_j²) via control.fixed.
+Normal family residual prior: PC prior P(σ_eps > τ_eps) = 0.317.
 
 Usage (from repo root):
     uv run python experiments/analytical/glmm_inla_comparison.py
@@ -78,8 +77,7 @@ def _flatten(batch: dict, b: int, active_d: np.ndarray, active_q: np.ndarray) ->
         g_parts.append(np.full(ng, g, dtype=int))
         Z_parts.append(Z_g)
 
-    # Extract prior parameters for this dataset (per active dimension).
-    # tau_rfx: HalfNormal scale per RE dim. tau_ffx/nu_ffx: Normal scale/mean per FE dim.
+    # Prior parameters for this dataset.
     tau_rfx_np = batch['tau_rfx'][b, active_q].cpu().numpy() if 'tau_rfx' in batch else None
     tau_ffx_np = batch['tau_ffx'][b, active_d].cpu().numpy() if 'tau_ffx' in batch else None
     nu_ffx_np = batch['nu_ffx'][b, active_d].cpu().numpy() if 'nu_ffx' in batch else None
@@ -88,26 +86,14 @@ def _flatten(batch: dict, b: int, active_d: np.ndarray, active_q: np.ndarray) ->
         if 'tau_eps' in batch and batch['tau_eps'] is not None
         else None
     )
+    # eta_rfx > 0 means Ψ is full (correlated); == 0 means diagonal.
+    eta_rfx_b = (
+        float(batch['eta_rfx'][b].item())
+        if 'eta_rfx' in batch and batch['eta_rfx'] is not None
+        else 0.0
+    )
 
-    if not X_parts:
-        return {
-            'X': np.zeros((0, d)),
-            'Z': np.zeros((0, q)),
-            'y': np.zeros(0),
-            'groups': np.zeros(0, dtype=int),
-            'm': m,
-            'd': d,
-            'q': q,
-            'tau_rfx': tau_rfx_np,
-            'tau_ffx': tau_ffx_np,
-            'nu_ffx': nu_ffx_np,
-            'tau_eps': tau_eps_np,
-        }
-    return {
-        'X': np.vstack(X_parts),
-        'Z': np.vstack(Z_parts),
-        'y': np.concatenate(y_parts),
-        'groups': np.concatenate(g_parts),
+    base = {
         'm': m,
         'd': d,
         'q': q,
@@ -115,88 +101,134 @@ def _flatten(batch: dict, b: int, active_d: np.ndarray, active_q: np.ndarray) ->
         'tau_ffx': tau_ffx_np,
         'nu_ffx': nu_ffx_np,
         'tau_eps': tau_eps_np,
+        'eta_rfx': eta_rfx_b,
     }
+    if not X_parts:
+        return {
+            **base,
+            'X': np.zeros((0, d)),
+            'Z': np.zeros((0, q)),
+            'y': np.zeros(0),
+            'groups': np.zeros(0, dtype=int),
+        }
+    return {
+        **base,
+        'X': np.vstack(X_parts),
+        'Z': np.vstack(Z_parts),
+        'y': np.concatenate(y_parts),
+        'groups': np.concatenate(g_parts),
+    }
+
+
+def _sigma_from_marginal(marg_hyper: object, name: str) -> float:
+    """Compute E[1/sqrt(τ)] via numerical integration over an INLA precision marginal."""
+    marg = marg_hyper.rx2(name)
+    tau_v = np.array(marg.rx(True, 1)).ravel()
+    den_v = np.array(marg.rx(True, 2)).ravel()
+    return float(np.trapezoid(den_v / np.sqrt(np.maximum(tau_v, 1e-12)), tau_v))
 
 
 def _inla_estimate(ds_flat: dict, likelihood_family: int) -> dict | None:
     """Run R-INLA on a flat dataset using the simulation's true priors.
 
-    RE prior: HalfNormal(tau_rfx[j]) on sigma_j, expressed as INLA PC prior
-    P(sigma_j > tau_rfx[j]) = 0.317 (matches the HalfNormal(scale) mass above scale).
+    Uncorrelated (eta_rfx == 0 or q == 1): one iid term per RE dimension with
+    PC prior P(sigma_j > tau_rfx[j]) = 0.317.
 
-    FE prior: Normal(nu_ffx[j], tau_ffx[j]^2) on beta_j, passed via control.fixed.
+    Correlated (eta_rfx > 0 and q == 2): iid2d model with a Wishart prior
+    parameterised to match HalfNormal(tau_rfx[j]) marginals on each component;
+    the second dimension is added via a copy term at index offset m.
+    For q > 2 correlated: falls back to independent iid per dimension.
 
-    For q>1: each RE dimension gets an independent iid term (diagonal Ψ).
+    FE prior: Normal(nu_ffx[j], tau_ffx[j]^2) via control.fixed.
 
-    Returns dict with:
-      'beta'      : (d,)   fixed-effect posterior means
-      'sigma_rfx' : (q,)   per-dim posterior std devs  E[σ_j] = E[1/sqrt(τ_j)]
-      'blups'     : (m, q) per-group RE means
-    or None on failure.
+    Returns dict with 'beta' (d,), 'sigma_rfx' (q,), 'blups' (m, q) or None.
     """
     if not _HAS_INLA:
         return None
 
     d, m, q = ds_flat['d'], ds_flat['m'], ds_flat['q']
     X, Z, y, groups = ds_flat['X'], ds_flat['Z'], ds_flat['y'], ds_flat['groups']
-    tau_rfx = ds_flat.get('tau_rfx')   # (q,) HalfNormal scales, or None
-    tau_ffx = ds_flat.get('tau_ffx')   # (d,) Normal scales, or None
-    nu_ffx = ds_flat.get('nu_ffx')     # (d,) Normal means, or None
-    tau_eps = ds_flat.get('tau_eps')   # float HalfNormal scale for eps, or None
+    tau_rfx = ds_flat.get('tau_rfx')
+    tau_ffx = ds_flat.get('tau_ffx')
+    nu_ffx = ds_flat.get('nu_ffx')
+    tau_eps = ds_flat.get('tau_eps')
+    eta_rfx = ds_flat.get('eta_rfx', 0.0)
     n = len(y)
     if n == 0 or m < 2:
         return None
 
     family_str = 'binomial' if likelihood_family == 1 else 'gaussian'
+    correlated = eta_rfx is not None and float(eta_rfx) > 0 and q == 2
 
     try:
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
 
-            # Build R data.frame
+            # ---- Build R data.frame ----
             r_df = {'y': ro.FloatVector(y.astype(float))}
             for j in range(1, d):
                 r_df[f'x{j}'] = ro.FloatVector(X[:, j].astype(float))
-            # Group indices (1-based for R)
-            for j in range(q):
-                r_df[f'group{j}'] = ro.IntVector((groups + 1).astype(int))
-                if not np.allclose(Z[:, j], 1.0):
-                    r_df[f'z{j}'] = ro.FloatVector(Z[:, j].astype(float))
 
-            df = _rbase.as_data_frame(ro.ListVector(r_df))
-
-            # Build formula string.
-            # RE prior: PC prior P(sigma_j > U_j) = 0.317 where U_j = tau_rfx[j].
-            # 0.317 matches P(HalfNormal(scale) > scale) = P(|N(0,1)| > 1).
             fixed_part = ' + '.join(f'x{j}' for j in range(1, d)) if d > 1 else '1'
-            re_parts = []
-            for j in range(q):
-                if tau_rfx is not None and tau_rfx[j] > 0:
-                    pc_hyper = (
-                        f"hyper=list(prec=list(prior='pc.prec',"
-                        f' param=c({tau_rfx[j]:.6f}, 0.317)))'
-                    )
-                else:
-                    pc_hyper = "hyper=list(prec=list(prior='pc.prec', param=c(1, 0.317)))"
-                if np.allclose(Z[:, j], 1.0):
-                    re_parts.append(f"f(group{j}, model='iid', {pc_hyper})")
-                else:
-                    re_parts.append(f"f(group{j}, z{j}, model='iid', {pc_hyper})")
-            formula_str = 'y ~ ' + fixed_part
-            if re_parts:
-                formula_str += ' + ' + ' + '.join(re_parts)
 
-            formula = ro.Formula(formula_str)
-            formula.environment['y'] = df.rx2('y')
-            for j in range(1, d):
-                formula.environment[f'x{j}'] = df.rx2(f'x{j}')
-            for j in range(q):
-                formula.environment[f'group{j}'] = df.rx2(f'group{j}')
-                if not np.allclose(Z[:, j], 1.0):
-                    formula.environment[f'z{j}'] = df.rx2(f'z{j}')
+            if correlated:
+                # iid2d: component j uses index g+j*m+1 (1-based).
+                # Wishart prior W(nu, V) with nu=q+1 and V_{jj}=1/(nu*tau_rfx[j]^2)
+                # gives E[Q_{jj}] = nu*V_{jj} = 1/tau_rfx[j]^2, matching HalfNormal.
+                nu = q + 1  # minimum df = 3 for q=2
+                t0 = float(tau_rfx[0]) if tau_rfx is not None and tau_rfx[0] > 0 else 1.0
+                t1 = float(tau_rfx[1]) if tau_rfx is not None and tau_rfx[1] > 0 else 1.0
+                V00 = 1.0 / (nu * t0**2)
+                V11 = 1.0 / (nu * t1**2)
+                wish = (
+                    f"hyper=list(theta=list(prior='wishart2d',"
+                    f' param=c({nu},{V00:.8f},0,{V11:.8f})))'
+                )
+                # idx0 = group+1, idx1 = group+m+1; weights = Z[:,j]
+                r_df['idx0'] = ro.IntVector((groups + 1).astype(int))
+                r_df['idx1'] = ro.IntVector((groups + m + 1).astype(int))
+                r_df['w0'] = ro.FloatVector(Z[:, 0].astype(float))
+                r_df['w1'] = ro.FloatVector(Z[:, 1].astype(float))
+                df = _rbase.as_data_frame(ro.ListVector(r_df))
+                formula_str = (
+                    f'y ~ {fixed_part} + '
+                    f"f(idx0, w0, model='iid2d', n={2*m}, {wish}) + "
+                    f"f(idx1, w1, copy='idx0', fixed=TRUE)"
+                )
+                formula = ro.Formula(formula_str)
+                formula.environment['y'] = df.rx2('y')
+                for j in range(1, d):
+                    formula.environment[f'x{j}'] = df.rx2(f'x{j}')
+                for k in ['idx0', 'idx1', 'w0', 'w1']:
+                    formula.environment[k] = df.rx2(k)
+            else:
+                # Independent iid per dimension with PC prior.
+                for j in range(q):
+                    r_df[f'group{j}'] = ro.IntVector((groups + 1).astype(int))
+                    if not np.allclose(Z[:, j], 1.0):
+                        r_df[f'z{j}'] = ro.FloatVector(Z[:, j].astype(float))
+                df = _rbase.as_data_frame(ro.ListVector(r_df))
+                re_parts = []
+                for j in range(q):
+                    tau_j = float(tau_rfx[j]) if tau_rfx is not None and tau_rfx[j] > 0 else 1.0
+                    pc = f"hyper=list(prec=list(prior='pc.prec', param=c({tau_j:.6f}, 0.317)))"
+                    if np.allclose(Z[:, j], 1.0):
+                        re_parts.append(f"f(group{j}, model='iid', {pc})")
+                    else:
+                        re_parts.append(f"f(group{j}, z{j}, model='iid', {pc})")
+                formula_str = 'y ~ ' + fixed_part
+                if re_parts:
+                    formula_str += ' + ' + ' + '.join(re_parts)
+                formula = ro.Formula(formula_str)
+                formula.environment['y'] = df.rx2('y')
+                for j in range(1, d):
+                    formula.environment[f'x{j}'] = df.rx2(f'x{j}')
+                for j in range(q):
+                    formula.environment[f'group{j}'] = df.rx2(f'group{j}')
+                    if not np.allclose(Z[:, j], 1.0):
+                        formula.environment[f'z{j}'] = df.rx2(f'z{j}')
 
-            # FE prior: N(nu_ffx[j], tau_ffx[j]^2).  INLA control.fixed uses
-            # precision = 1/tau^2 and a per-covariate list form.
+            # ---- FE prior ----
             fe_names = ['(Intercept)'] + [f'x{j}' for j in range(1, d)]
             if tau_ffx is not None and nu_ffx is not None:
                 mean_list = {nm: float(nu_ffx[i]) for i, nm in enumerate(fe_names)}
@@ -222,7 +254,6 @@ def _inla_estimate(ds_flat: dict, likelihood_family: int) -> dict | None:
             if likelihood_family == 1:
                 inla_kwargs['Ntrials'] = ro.IntVector([1] * n)
             elif likelihood_family == 0 and tau_eps is not None and tau_eps > 0:
-                # Normal: also set a PC prior on residual std dev.
                 inla_kwargs['control.family'] = ro.ListVector(
                     {
                         'hyper': ro.ListVector(
@@ -240,39 +271,47 @@ def _inla_estimate(ds_flat: dict, likelihood_family: int) -> dict | None:
 
             result = _rinla.inla(**inla_kwargs)
 
-        # --- Fixed effects ---
+        # ---- Extract results ----
         sf = result.rx2('summary.fixed')
         beta = np.array(sf.rx(True, 'mean')).ravel()  # (d,)
 
-        # --- Hyperparameters → sigma_rfx ---
-        # Each iid term contributes one precision hyperparameter.
-        # Use marginals for proper E[1/sqrt(τ)].
         marg_hyper = result.rx2('marginals.hyperpar')
         hyper_names = list(marg_hyper.names)
-
-        # Identify the q RE precisions: INLA names them "Precision for group{j}".
-        # E[σ_j] = E[1/sqrt(τ_j)] via numerical integration over the posterior marginal.
-        sigma_rfx = np.zeros(q)
-        for j in range(q):
-            matched = [nm for nm in hyper_names if f'group{j}' in nm and 'Precision' in nm]
-            if matched:
-                marg = marg_hyper.rx2(matched[0])
-                tau_vals = np.array(marg.rx(True, 1)).ravel()
-                dens_vals = np.array(marg.rx(True, 2)).ravel()
-                integrand = dens_vals / np.sqrt(np.maximum(tau_vals, 1e-12))
-                sigma_rfx[j] = float(np.trapezoid(integrand, tau_vals))
-            else:
-                sh = result.rx2('summary.hyperpar')
-                sigma_rfx[j] = float(1.0 / np.sqrt(max(float(sh.rx(j + 1, 'mean')[0]), 1e-12)))
-
-        # --- BLUPs ---
         sr = result.rx2('summary.random')
+
+        sigma_rfx = np.zeros(q)
         blups = np.zeros((m, q))
-        for j in range(q):
-            key = f'group{j}'
-            re_j = sr.rx2(key)
-            means_j = np.array(re_j.rx(True, 'mean')).ravel()  # length m (one per group)
-            blups[: len(means_j), j] = means_j[:m]
+
+        if correlated:
+            # iid2d: hyperpar names "Precision for idx0 (component j+1)".
+            for j in range(q):
+                comp_nm = [
+                    nm
+                    for nm in hyper_names
+                    if 'idx0' in nm and f'component {j+1}' in nm and 'Precision' in nm
+                ]
+                if comp_nm:
+                    sigma_rfx[j] = _sigma_from_marginal(marg_hyper, comp_nm[0])
+                else:
+                    sh = result.rx2('summary.hyperpar')
+                    sigma_rfx[j] = 1.0 / np.sqrt(max(float(sh.rx(j + 1, 'mean')[0]), 1e-12))
+            # BLUPs: summary.random['idx0'] has 2*m rows.
+            # Rows 1..m → component 0, rows m+1..2m → component 1.
+            re_all = sr.rx2('idx0')
+            means_all = np.array(re_all.rx(True, 'mean')).ravel()
+            blups[:, 0] = means_all[:m]
+            blups[:, 1] = means_all[m : 2 * m]
+        else:
+            for j in range(q):
+                matched = [nm for nm in hyper_names if f'group{j}' in nm and 'Precision' in nm]
+                if matched:
+                    sigma_rfx[j] = _sigma_from_marginal(marg_hyper, matched[0])
+                else:
+                    sh = result.rx2('summary.hyperpar')
+                    sigma_rfx[j] = 1.0 / np.sqrt(max(float(sh.rx(j + 1, 'mean')[0]), 1e-12))
+                re_j = sr.rx2(f'group{j}')
+                means_j = np.array(re_j.rx(True, 'mean')).ravel()
+                blups[: len(means_j), j] = means_j[:m]
 
         return {'beta': beta, 'sigma_rfx': sigma_rfx, 'blups': blups}
 

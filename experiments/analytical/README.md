@@ -21,6 +21,12 @@ Active scripts
   investigating whether a raw-stage change would close the BLUP gap. Answers
   "which stage limits accuracy?" via oracle sigma(Eps), beta, and Psi substitutions.
 
+- `glmm_inla_comparison.py` — R-INLA reference baseline. Compares the full
+  analytical pipeline (PQL+P5+P6) against R-INLA on Bernoulli or Normal datasets.
+  Uncorrelated datasets (eta_rfx=0) use independent iid terms with PC priors
+  matching HalfNormal(tau_rfx). Correlated datasets (eta_rfx>0, q=2) use the
+  iid2d model with a Wishart prior. Reports matched NRMSE and wall time.
+
 Reference files
 ---------------
 
