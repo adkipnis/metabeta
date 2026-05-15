@@ -864,17 +864,20 @@ def refineBernoulliLaplaceEb(
     sigma_init: str = 'stats',
     sigma_log_jacobian: bool = True,
     accept_only_improved: bool = True,
+    early_stop: bool = False,
+    early_stop_patience: int = 3,
+    early_stop_min_delta: float = 1e-4,
+    return_diagnostics: bool = False,
 ) -> dict[str, torch.Tensor]:
-    """P14a: diagonal single-mode Laplace-EB refinement for Bernoulli GLMMs.
+    """P14: diagonal single-mode Laplace-EB refinement for Bernoulli GLMMs.
 
-    This is intentionally not wired into `glmm()` yet. It optimizes a true Bernoulli
-    Laplace objective over β and diagonal σ_rfx with a σ continuation cap. By default
-    β starts from the current analytical estimate while the effective σ starts
-    tiny, so random effects cannot immediately absorb fixed-effect signal. The
-    underlying σ parameter starts from the current analytical estimate by default
-    while the effective σ is capped by the continuation schedule. By default the
-    target includes the log-σ Jacobian, optimizing the hyperposterior in log scale
-    rather than the zero-mode σ density.
+    It optimizes a true Bernoulli Laplace objective over β and diagonal σ_rfx with
+    a σ continuation cap. By default β starts from the current analytical estimate
+    while the effective σ starts tiny, so random effects cannot immediately absorb
+    fixed-effect signal. The underlying σ parameter starts from the current
+    analytical estimate by default while the effective σ is capped by the
+    continuation schedule. By default the target includes the log-σ Jacobian,
+    optimizing the hyperposterior in log scale rather than the zero-mode σ density.
     """
     q = Zm.shape[-1]
     d = Xm.shape[-1]
@@ -907,6 +910,9 @@ def refineBernoulliLaplaceEb(
     min_log_sigma = math.log(1e-4)
     start_log_cap = math.log(max(sigma_start, 1e-4))
     final_log_cap = math.log(sigma_max)
+    best_loss = float('inf')
+    stale_steps = 0
+    n_steps_run = 0
 
     with torch.enable_grad():
         for step in range(n_steps):
@@ -951,10 +957,24 @@ def refineBernoulliLaplaceEb(
             loss.backward()
             torch.nn.utils.clip_grad_norm_([beta, log_sigma], max_norm=10.0)
             optimizer.step()
+            n_steps_run = step + 1
+            loss_value = float(loss.detach().item())
+            if loss_value < best_loss - early_stop_min_delta:
+                best_loss = loss_value
+                stale_steps = 0
+            else:
+                stale_steps += 1
             with torch.no_grad():
                 beta.clamp_(-20.0, 20.0)
                 log_sigma.clamp_(min_log_sigma, final_log_cap)
                 log_sigma.masked_fill_(~active_q, min_log_sigma)
+            if (
+                early_stop
+                and step >= max(n_steps // 2, 1)
+                and early_stop_patience > 0
+                and stale_steps >= early_stop_patience
+            ):
+                break
 
     with torch.no_grad():
         beta_final = beta.detach()
@@ -980,6 +1000,9 @@ def refineBernoulliLaplaceEb(
         blup_var = H_inv.diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
         blup_var = blup_var * mask_m[:, :, None] * active_q[:, None, :].to(dtype)
 
+        accept = torch.ones(B, device=device, dtype=torch.bool)
+        final_target = torch.full((B,), float('nan'), device=device, dtype=dtype)
+        base_target = torch.full((B,), float('nan'), device=device, dtype=dtype)
         if accept_only_improved and 'sigma_rfx_est' in stats:
             base_beta = stats['beta_est'][:, :d].detach()
             base_log_sigma = (
@@ -1051,6 +1074,11 @@ def refineBernoulliLaplaceEb(
     out['blup_est'] = blups.detach()
     out['blup_var'] = blup_var.detach()
     out['Psi_lap'] = _psdClampEigenvalues(Psi_lap, _BERNOULLI_PSI_EIG_CAP)
+    if return_diagnostics:
+        out['laplace_eb_accept'] = accept.to(dtype)
+        out['laplace_eb_steps'] = torch.full((B,), float(n_steps_run), device=device, dtype=dtype)
+        out['laplace_eb_target'] = final_target
+        out['laplace_eb_base_target'] = base_target
     return out
 
 

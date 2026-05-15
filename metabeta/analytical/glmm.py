@@ -4,6 +4,7 @@ import torch
 
 from metabeta.analytical.blup import analyticalBLUPContext
 from metabeta.analytical.map import (
+    refineBernoulliLaplaceEb,
     refineBernoulliMapBeta,
     refineBernoulliNagqSrfx,
     refineBernoulliNestedBeta,
@@ -50,6 +51,8 @@ def glmm(
     map_optimize = kwargs.pop('map_optimize', 'all')
     beta_alpha_low = kwargs.pop('beta_alpha_low', 0.65)
     beta_alpha_high = kwargs.pop('beta_alpha_high', 0.75)
+    bernoulli_laplace_eb = kwargs.pop('bernoulli_laplace_eb', False)
+    bernoulli_laplace_eb_diagnostics = kwargs.pop('bernoulli_laplace_eb_diagnostics', False)
     mask_d = kwargs.pop('mask_d', None)
     uncorr = (eta_rfx == 0) if eta_rfx is not None else None  # (B,) bool or None
     if likelihood_family == 0:
@@ -130,6 +133,23 @@ def glmm(
                 tau_ffx=map_priors['tau_ffx'],
                 family_ffx=map_priors['family_ffx'],
             )
+        if map_refine and bernoulli_laplace_eb and Zm.shape[-1] > 0:
+            stats = refineBernoulliLaplaceEb(
+                stats,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx=map_priors['nu_ffx'],
+                tau_ffx=map_priors['tau_ffx'],
+                family_ffx=map_priors['family_ffx'],
+                tau_rfx=map_priors['tau_rfx'],
+                family_sigma_rfx=map_priors['family_sigma_rfx'],
+                mask_d=mask_d,
+                mask_q=mask_q,
+                return_diagnostics=bernoulli_laplace_eb_diagnostics,
+            )
     elif likelihood_family == 2:
         stats = lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
     else:
@@ -144,6 +164,7 @@ __all__ = [
     'lmmBernoulli',
     'lmmNormal',
     'lmmPoisson',
+    'refineBernoulliLaplaceEb',
     'refineBernoulliMapBeta',
     'refineBernoulliNestedBeta',
     'refineNormalMapSrfx',

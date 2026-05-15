@@ -78,8 +78,14 @@ Ranked branches, ordered by expected accuracy per implementation risk:
      sanity benchmark (N=128/split) improved FFX, sRFX, and BLUP on
      small-sampled-test, medium-mixed-train, large-sampled-test, and
      huge-sampled-test with ~4–10 ms/dataset extra CPU time.
-   - **P14c/batched production path** — vectorize active `q≤5`, add early stopping and
-     runtime accounting before broad benchmark comparisons.
+   - **→ P14c/opt-in production path** — Implemented 2026-05-15. `glmm()` now exposes
+     P14 behind `bernoulli_laplace_eb=True`; the default Bernoulli path is unchanged.
+     The refinement remains batched over the incoming mini-batch, supports optional
+     late-stage early stopping, and can return tensor diagnostics
+     (`laplace_eb_accept`, `laplace_eb_steps`, target/base-target) when requested via
+     `bernoulli_laplace_eb_diagnostics=True`. Focused GLMM tests pass. Next decision:
+     benchmark the opt-in path on matched CAVI/INLA subsets and decide whether to
+     route high-risk Bernoulli datasets through it by default.
 
 2. **→ P15/diagnostic fallback gate** — Keep the current hybrid path as the default until
    P14 is proven, then route only high-risk Bernoulli datasets to P14. Candidate gates:
