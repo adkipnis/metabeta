@@ -1,7 +1,7 @@
 Bernoulli GLMM Plan
 ===================
 
-Last updated: 2026-05-14
+Last updated: 2026-05-15
 
 Current Baseline
 ----------------
@@ -34,8 +34,8 @@ Root cause summary (`glmm_error_analysis.py`):
   downward at high true σ (M-step shrinkage). CAVI wins mainly in the high-σ quartile.
 - **BLUPs** track FFX: bad β contaminates the BLUP residual ỹ−Xβ.
 
-Implemented (✓) / Tried and reverted (✗)
------------------------------------------
+Implemented (✓) / Tried and reverted (✗) / In progress (→)
+--------------------------------------------------------------
 
 **✓ P1+P1-ext** — Prior-regularized IRLS β₀ with Student-t adaptive precision.
 **✓ P2 sub-item** — Prior-informed Ψ floor from `tau_rfx`, capped at 0.25.
@@ -43,6 +43,26 @@ Implemented (✓) / Tried and reverted (✗)
 **✓ P6** — True Laplace score for β. n_outer=2 rounds of β Newton + b̂_g Newton + M-step.
 **✓ P7/BC1** — Analytic O(1/n) M-step correction inline in `refineBernoulliMapBeta`.
 **✓ P8** — nAGQ for q>1 (2≤q≤5) via Cartesian-product GH grid.
+**→ P11/INLA-lite** — Grid integration of σ_rfx replacing P6 MAP β.
+
+  Root cause of FFX failure at medium+ scale: IRLS underdetermined at large d, P6 anchors β
+  to the PQL point estimate of σ_rfx. INLA wins because it marginalizes over σ_rfx.
+
+  Design:
+  - After `refineBernoulliNagqSrfx` (P5/P8), build a uniform log-space grid of σ_rfx values
+    centered on the nAGQ estimate ± 2.5 log-units. Grid size: K_per_dim^{q_act} with
+    K={1:15, 2:7, 3:5, 4:4, 5:3} to keep total nodes ≤300.
+  - For each grid point k: run penalized IRLS with σ_rfx fixed (`_pqlPass(fixed_psi=True)`)
+    to get MAP (β̂_k, b̂_k). Evaluate Laplace LML:
+      log p(y|σ_rfx_k) = Σ_g { ℓ_g(β̂, b̂_g) − ½ b̂_g'Ψ⁻¹b̂_g − ½ log|Ψ| − ½ log|H_g| }
+    where H_g = ZWZ_g + Ψ⁻¹.
+  - Weight: w_k = softmax(LML_k + log p_prior(σ_rfx_k)).
+  - Return: β_marg = Σ_k w_k β̂_k, σ_rfx_marg = Σ_k w_k σ_rfx_k.
+  - Final: 3-Newton BLUP refresh at (β_marg, σ_rfx_marg) + BC1 M-step.
+  - `fixed_psi=True` in `_pqlPass` skips the internal Ψ M-step so the mode is found
+    under the grid Ψ exactly (matches INLA's per-hyperparameter mode-finding).
+  - Replaces `refineBernoulliMapBeta` in the call chain; nAGQ still runs first for grid center.
+  - Chunked over K to bound memory: chunk_k = max(1, 64//n_elig) grid points at a time.
 
 **✗ P2** — Laplace-MAP σ_rfx fixed-point (cancels H_g^{-1} correction). Code in `map.py:refineBernoulliMapSrfx` removed.
 **✗ P3** — Beta blend for BLUP residuals (oracle: partition-specific, no globally safe α).
@@ -88,14 +108,39 @@ Key findings:
   (all sizes) and medium/large-huge test. Laplace M-step produces high σ variance at large d/q.
 - **BLUP**: follows σ_rfx.
 
-**R-INLA:** `inla()` (R-INLA package), INLA Laplace approximation. Script:
-`glmm_inla_comparison.py`. Results in `experiments/analytical/glmm_inla_results.md`.
+**R-INLA:** `inla()` (R-INLA package), INLA Laplace approximation. Uncorrelated
+datasets (eta_rfx=0): independent `f(group, model='iid')` per RE dimension with PC
+prior P(σ>τ_rfx)=0.317. Correlated (eta_rfx>0, q=2): `iid2d` + copy with Wishart
+prior matching HalfNormal(τ_rfx) marginals. FE prior: N(ν_ffx, τ_ffx²) via
+control.fixed. Script: `glmm_inla_comparison.py`.
+Full results in `experiments/analytical/glmm_inla_results.md`.
 
-Key findings (small-b only, n_inla=1000):
-- **FFX**: Full pipeline beats INLA by 1.5–1.7× at small scale.
-- **σ_rfx**: INLA matches or marginally beats PQL (small σ quartile).
-- **BLUP**: Tied (~0.618–0.625).
-- **Speed**: PQL ~6–11 ms/ds vs INLA ~2.1–2.2 s/ds (≈350–400× faster).
+Matched comparison — n_inla=1000, n_total=1000. Bold = winner per cell.
+† medium-b-sampled INLA σ outlier driven by 4th quartile instability (RMSE=5.5).
+
+| Dataset           | part  | PQL FFX   | INLA FFX  | PQL σ     | INLA σ    | PQL BLUP  | INLA BLUP |
+| ---               | ---   | ---:      | ---:      | ---:      | ---:      | ---:      | ---:      |
+| small-b-mixed     | train | **0.271** | 0.451     | **0.571** | 0.567     | **0.618** | 0.618     |
+| small-b-sampled   | test  | **0.301** | 0.447     | **0.575** | 0.556     | **0.621** | 0.625     |
+| medium-b-mixed    | train | 1.782     | **0.331** | 0.835     | **0.519** | 1.150     | **0.648** |
+| medium-b-sampled  | test  | **0.345** | 0.400     | **0.651** | 4.490 †   | **0.707** | 0.692     |
+| large-b-mixed     | train | 2.501     | **0.323** | 0.723     | **0.521** | 0.974     | **0.676** |
+| large-b-sampled   | test  | 1.811     | **0.365** | 0.879     | **0.603** | 0.953     | **0.710** |
+| huge-b-mixed      | train | 1.043     | **0.330** | 1.016     | **0.550** | 1.070     | **0.713** |
+| huge-b-sampled    | test  | **0.385** | 0.394     | 0.791     | **0.579** | 0.835     | **0.740** |
+
+Key findings (n_inla=1000 per split, 2026-05-15):
+- **FFX**: PQL wins only at small scale. INLA dominates from medium onward: 5–8×
+  better on mixed (high-d train) splits, 5× at large-sampled, near-tied at
+  medium-sampled (0.345 vs 0.400) and huge-sampled (0.385 vs 0.394). Reversal
+  driven by d: more covariates make PQL's IRLS underdetermined; INLA's marginal
+  Laplace scales better.
+- **σ_rfx**: INLA better at medium+ (except medium-sampled outlier). Quartile
+  pattern consistent across scales: both methods overshoot low σ, PQL undershoots
+  high σ more severely.
+- **BLUP**: INLA better at medium+ scale (0.65–0.74 vs 0.71–1.15 PQL). Tied at
+  small. Tracks FFX improvement.
+- **Speed**: PQL 20–41 ms/ds vs INLA 4.3–5.0 s/ds (≈100–200× faster at medium+).
 
 Commands
 --------

@@ -4,6 +4,7 @@ import torch
 
 from metabeta.analytical.blup import analyticalBLUPContext
 from metabeta.analytical.map import (
+    refineBernoulliInlaBeta,
     refineBernoulliMapBeta,
     refineBernoulliNagqSrfx,
     refineNormalMapSrfx,
@@ -118,17 +119,40 @@ def glmm(
                 mask_q=mask_q,
             )
         if map_refine:
-            stats = refineBernoulliMapBeta(
-                stats,
-                Xm,
-                ym,
-                Zm,
-                mask_n,
-                mask_m,
-                nu_ffx=map_priors['nu_ffx'],
-                tau_ffx=map_priors['tau_ffx'],
-                family_ffx=map_priors['family_ffx'],
+            _inla_priors = (
+                map_priors['tau_rfx'],
+                map_priors['family_sigma_rfx'],
+                map_priors['nu_ffx'],
+                map_priors['tau_ffx'],
+                map_priors['family_ffx'],
             )
+            if all(v is not None for v in _inla_priors):
+                stats = refineBernoulliInlaBeta(
+                    stats,
+                    Xm,
+                    ym,
+                    Zm,
+                    mask_n,
+                    mask_m,
+                    tau_rfx=map_priors['tau_rfx'],
+                    family_sigma_rfx=map_priors['family_sigma_rfx'],
+                    nu_ffx=map_priors['nu_ffx'],
+                    tau_ffx=map_priors['tau_ffx'],
+                    family_ffx=map_priors['family_ffx'],
+                    mask_q=mask_q,
+                )
+            else:
+                stats = refineBernoulliMapBeta(
+                    stats,
+                    Xm,
+                    ym,
+                    Zm,
+                    mask_n,
+                    mask_m,
+                    nu_ffx=map_priors['nu_ffx'],
+                    tau_ffx=map_priors['tau_ffx'],
+                    family_ffx=map_priors['family_ffx'],
+                )
     elif likelihood_family == 2:
         stats = lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
     else:
@@ -143,6 +167,7 @@ __all__ = [
     'lmmBernoulli',
     'lmmNormal',
     'lmmPoisson',
+    'refineBernoulliInlaBeta',
     'refineBernoulliMapBeta',
     'refineNormalMapSrfx',
 ]
