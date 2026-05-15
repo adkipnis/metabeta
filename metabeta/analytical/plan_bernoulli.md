@@ -125,7 +125,10 @@ Ranked branches, ordered by expected accuracy per implementation risk:
    β/σ/Psi when the marginal target accepts the refinement but copies back previous
    `blup_est`/`blup_var` for accepted datasets with large β jumps. Set the threshold
    to `None` to disable. Diagnostics add `laplace_eb_blup_fallback` and
-   `laplace_eb_beta_jump`.
+   `laplace_eb_beta_jump`. First-512 large-b-sampled/test sanity check:
+   base = FFX 2.070, σ 0.559, BLUP 0.905; P14 without fallback = FFX 0.911,
+   σ 0.520, BLUP 0.983; P14 with fallback = FFX 0.911, σ 0.520, BLUP 0.901,
+   with one fallback trigger.
 
 3. **✗ P13/prior-seeded P12 / cold-start** — Tried and reverted (2026-05-15). See P13a/b/c
    entries in the tried section below. Result informs P14: any cold-start route must keep
