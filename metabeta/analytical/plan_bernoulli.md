@@ -44,6 +44,8 @@ Strategic Direction
 Goal: fast, high-accuracy Bernoulli summaries for downstream hierarchical NPE context.
 The analytical estimator does not need to be a complete posterior engine; it needs stable,
 prior-aware point summaries and uncertainty proxies that improve the NPE's conditioning.
+Because `glmm()` outputs are already passed to the hierarchical NPE, do not add a separate
+amortized-correction branch here; the NPE is the correction mechanism.
 
 Decision: do **not** pursue a full PyTorch INLA implementation as the main branch. A faithful
 INLA path would integrate over variance/correlation hyperparameters and repeatedly solve
@@ -54,31 +56,38 @@ Even with batched small-matrix kernels, that multiplier is unlikely to fit a rob
 
 Ranked branches, ordered by expected accuracy per implementation risk:
 
-1. **✗ P13/prior-seeded P12 / cold-start** — Tried and reverted (2026-05-15). See P13a/b/c
-   entries in the tried section below.
+1. **→ P14/single-mode Laplace-EB** — Implement a direct marginal-Laplace empirical-Bayes
+   solver, not full INLA and not another PQL patch. Optimize β and log σ on the true
+   Bernoulli profile/Laplace objective, with vectorized per-group `q×q` Newton modes
+   and priors in the objective. Start diagonal Ψ only, active `q≤5`, and use a σ
+   continuation schedule: initialize σ tiny so b̂_g is effectively zero and β learns
+   first, then relax/optimize σ. Expected improvement: high for high-d FFX and high-σ
+   sRFX; risk: medium. Target runtime: `50–150 ms/dataset` batched CPU/GPU.
 
-2. **→ P14/single-mode Laplace-EB** — Implement a direct marginal-Laplace empirical-Bayes
-   solver, not full INLA. Optimize β and log σ using the true Bernoulli Laplace objective,
-   with vectorized per-group `q×q` Newton modes and priors in the objective. Start with
-   diagonal Ψ and active `q≤5`; only consider full Ψ after diagonal wins. Expected improvement:
-   high for FFX and high-σ sRFX; risk: medium. Target runtime: `50–150 ms/dataset` batched CPU/GPU.
+   Staging:
+   - **P14a/objective smoke test** — q=1/diagonal Ψ, small fixed iteration budget, compare
+     profile LML monotonicity and β/σ against P12 on small/medium.
+   - **P14b/continuation** — add small-to-free σ schedule to prevent FE/RE confounding
+     observed in P13a/b.
+   - **P14c/batched production path** — vectorize active `q≤5`, add early stopping and
+     runtime accounting before broad benchmark comparisons.
 
-3. **→ P15/diagnostic fallback gate** — Keep the current hybrid path as the default and route
-   only high-risk Bernoulli datasets to P14. Candidate gates: high `d`, poor pooled Fisher
-   conditioning, separation/extreme logits, large β update norm, or inconsistent Ψ quartile
-   diagnostics. Expected improvement: medium-high at low average runtime; risk: low-medium.
+2. **→ P15/diagnostic fallback gate** — Keep the current hybrid path as the default until
+   P14 is proven, then route only high-risk Bernoulli datasets to P14. Candidate gates:
+   high `d`, poor pooled Fisher conditioning, separation/extreme logits, large β update
+   norm, or σ/BLUP diagnostics associated with high-σ shrinkage. Expected improvement:
+   medium-high at low average runtime; risk: low-medium.
 
-4. **→ P16/amortized correction** — Train a small correction head from analytical outputs and
-   data summaries to calibrated β/σ/BLUP context. This is NPE-aligned and very fast, but less
-   principled than P14 and easier to overfit to the simulator. Keep it behind P14/P15 unless
-   the Laplace-EB path misses the runtime target.
+3. **✗ P13/prior-seeded P12 / cold-start** — Tried and reverted (2026-05-15). See P13a/b/c
+   entries in the tried section below. Result informs P14: any cold-start route must keep
+   σ tiny while β learns; otherwise b̂_g absorbs the fixed-effect signal.
 
 Deprioritized branches:
 - **Full PyTorch INLA** — Too many hyperparameter-mode solves for the `~100 ms/dataset` target,
   especially with full Ψ. Use INLA concepts, not full INLA integration.
 - **Batched EP / Pólya-Gamma variational GLMM** — Potentially accurate and GPU-friendly, but
   more moving parts than P14. Revisit only if P14 fails on accuracy.
-- **More PQL-local patches** — Low expected upside unless they simplify or stabilize P13/P14.
+- **More PQL-local patches** — Low expected upside after P13 unless they simplify or stabilize P14.
 
 Implemented (✓) / Tried and reverted (✗) / In progress (→)
 --------------------------------------------------------------

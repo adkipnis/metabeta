@@ -2,7 +2,7 @@ Analytical GLMM Plan
 ====================
 
 - [plan_normal.md](plan_normal.md) — Normal GLMM: production MAP path, closed decisions (REML, beta blend, blup_var calibration), open priorities (σ_Eps monitor, EM damping).
-- [plan_bernoulli.md](plan_bernoulli.md) — Bernoulli GLMM: PQL+nAGQ+nested-β baseline, current priority is fast prior-aware Laplace-EB / fallback calibration rather than full INLA.
+- [plan_bernoulli.md](plan_bernoulli.md) — Bernoulli GLMM: PQL+nAGQ+nested-β baseline, next priority is staged prior-aware Laplace-EB with a fallback gate; no full INLA or separate amortized-correction branch.
 
 Testing Scheme
 --------------
