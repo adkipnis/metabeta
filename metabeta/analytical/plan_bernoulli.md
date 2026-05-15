@@ -1,143 +1,64 @@
 Bernoulli GLMM Plan
 ===================
 
-Last updated: 2026-05-15 (P14/P15 matched benchmarks)
+Last updated: 2026-05-15 (debloated after P14/P15 matched benchmarks)
 
-Current Baseline
-----------------
+Goal
+----
 
-Estimator: `lmmBernoulli` (6 PQL passes) + `refineBernoulliNagqSrfx` (P5/P8 nAGQ,
-all q≤5) + `refineBernoulliNestedBeta` (P12 nested β/b̂_g Newton + BC1 M-step).
-Active when `map_refine=True`.
+Build fast, high-accuracy Bernoulli GLMM summaries for downstream hierarchical NPE context.
+The analytical estimator does not need to be a full posterior engine; it needs stable,
+prior-aware point summaries and uncertainty proxies that condition the NPE well.
 
-Required-suite NRMSE (P1+P1-ext+Ψ-floor+P5+P8+P12+BC1, 2026-05-15, N=8192):
+Do **not** add a separate amortized correction branch here. `glmm()` outputs are already
+passed to the hierarchical NPE, which is the correction mechanism.
 
-| Dataset           | Partition | FFX    | sRFX   | BLUP   |
-| ---               | ---       | ---:   | ---:   | ---:   |
-| small-b-mixed     | train     | 0.2290 | 0.4788 | 0.5957 |
-| small-b-sampled   | valid     | 0.2788 | 0.5625 | 0.7048 |
-| small-b-sampled   | test      | 0.3100 | 0.5567 | 0.6789 |
-| medium-b-mixed    | train     | 0.6450 | 0.5662 | 0.6726 |
-| medium-b-sampled  | valid     | 0.4515 | 0.6388 | 0.8037 |
-| medium-b-sampled  | test      | 0.6565 | 0.6851 | 0.7976 |
-| large-b-mixed     | train     | 1.4763 | 0.6797 | 0.8521 |
-| large-b-sampled   | valid     | 0.8266 | 0.7422 | 0.7949 |
-| large-b-sampled   | test      | 1.3627 | 0.7885 | 0.9380 |
-| huge-b-mixed      | train     | 1.9566 | 0.8518 | 0.9427 |
-| huge-b-sampled    | valid     | 1.2558 | 0.9136 | 0.9687 |
-| huge-b-sampled    | test      | 1.5085 | 0.8554 | 0.9810 |
+Do **not** pursue R-INLA as a backend or full PyTorch INLA as the main branch. Full INLA-style
+hyperparameter integration is too expensive for the `~100 ms/dataset` target, especially with
+diagonal Ψ up to `q=5` and full Ψ up to 15 hyperparameters. Use INLA concepts, not full INLA.
 
-P6 → P12 delta (P6 was 2 outer rounds of 8β+3b̂_g; P12 is 12 outer × 4 inner steps):
-FFX improves 1–23% (medium largest), sRFX improves 2–14%, BLUP improves 1–9%.
-Main gains at medium+. small-b-sampled test shows minor FFX regression (within noise).
+Current Estimators
+------------------
 
-Root cause summary (`glmm_error_analysis.py`):
-- **FFX** is the dominant failure mode; NRMSE scales with d (low Fisher information
-  per binary observation, pooled IRLS underdetermined at large d / low n).
-- **σ_rfx** has bidirectional S-curve bias: upward at low true σ (Ψ floor overshoots),
-  downward at high true σ (M-step shrinkage). CAVI wins mainly in the high-σ quartile.
-- **BLUPs** track FFX: bad β contaminates the BLUP residual ỹ−Xβ.
+**Default Bernoulli path:** `lmmBernoulli` + `refineBernoulliNagqSrfx` + `refineBernoulliNestedBeta`.
+Active when `map_refine=True` and `bernoulli_laplace_eb=False`.
 
-Strategic Direction
+**P14 Laplace-EB path:** `refineBernoulliLaplaceEb`, exposed through:
+
+- `glmm(..., bernoulli_laplace_eb=True)` for all Bernoulli datasets.
+- `glmm(..., bernoulli_laplace_eb='auto')` for P15-gated datasets.
+
+P14 optimizes β and diagonal log σ on the true Bernoulli marginal-Laplace target with nested
+per-group random-effect modes, priors in the objective, σ continuation, and an objective
+acceptance gate against the incoming default path.
+
+P14 knobs:
+
+- `bernoulli_laplace_eb_steps` default `12`
+- `bernoulli_laplace_eb_inner` default `4`
+- `bernoulli_laplace_eb_final` default `6`
+- `bernoulli_laplace_eb_lr` default `0.05`
+- `bernoulli_laplace_eb_blup_fallback_beta_jump` default `1.0`, set `None` to disable
+
+P14 diagnostics:
+
+- `laplace_eb_accept`
+- `laplace_eb_steps`
+- `laplace_eb_target`
+- `laplace_eb_base_target`
+- `laplace_eb_blup_fallback`
+- `laplace_eb_beta_jump`
+
+**P15 auto gate:** currently uses effective `d >= 4`, mean estimated `σ_rfx >= 0.75`, or max
+fitted `|η| >= 8`. These are configurable through `bernoulli_laplace_eb_gate_*` kwargs. In
+matched medium+ benchmarks, this gate selects 100% of datasets, so it is a small-scale cost
+saver rather than a medium/large accuracy selector.
+
+Current Performance
 -------------------
 
-Goal: fast, high-accuracy Bernoulli summaries for downstream hierarchical NPE context.
-The analytical estimator does not need to be a complete posterior engine; it needs stable,
-prior-aware point summaries and uncertainty proxies that improve the NPE's conditioning.
-Because `glmm()` outputs are already passed to the hierarchical NPE, do not add a separate
-amortized-correction branch here; the NPE is the correction mechanism.
-
-Decision: do **not** pursue a full PyTorch INLA implementation as the main branch. A faithful
-INLA path would integrate over variance/correlation hyperparameters and repeatedly solve
-latent modes. With current regimes (`d≤16`, `q≤5`, `m≤200`, `n_total≤3000`), diagonal Ψ already
-needs many hyperparameter evaluations, and full Ψ has up to `q(q+1)/2=15` hyperparameters.
-Even with batched small-matrix kernels, that multiplier is unlikely to fit a robust
-`~100 ms/dataset` target. R-INLA remains a reference only, not a backend.
-
-Ranked branches, ordered by expected accuracy per implementation risk:
-
-1. **→ P14/single-mode Laplace-EB** — Implement a direct marginal-Laplace empirical-Bayes
-   solver, not full INLA and not another PQL patch. Optimize β and log σ on the true
-   Bernoulli profile/Laplace objective, with vectorized per-group `q×q` Newton modes
-   and priors in the objective. Start diagonal Ψ only, active `q≤5`, and use a σ
-   continuation schedule: initialize σ tiny so b̂_g is effectively zero and β learns
-   first, then relax/optimize σ. Expected improvement: high for high-d FFX and high-σ
-   sRFX; risk: medium. Target runtime: `50–150 ms/dataset` batched CPU/GPU.
-
-   Staging:
-   - **→ P14a/objective smoke test** — Implemented as `refineBernoulliLaplaceEb`
-     in `map.py` (direct callable, not wired into `glmm()`). Current form uses
-     diagonal Ψ, stats-β initialization by default, σ continuation from a tiny cap,
-     true Bernoulli Laplace target, prior terms when available, and an objective
-     acceptance gate against incoming stats. Smoke tests pass. First-batch checks
-     are finite and close on β but not yet better on σ, so this remains experimental.
-   - **→ P14b/log-σ continuation tuning** — Implemented 2026-05-15. The underlying
-     σ parameter now starts from current stats while the effective σ is capped by
-     continuation, and the target includes the log-σ Jacobian so optimization is
-     on the log-hyperposterior rather than the zero-mode σ density. Four-batch
-     sanity benchmark (N=128/split) improved FFX, sRFX, and BLUP on
-     small-sampled-test, medium-mixed-train, large-sampled-test, and
-     huge-sampled-test with ~4–10 ms/dataset extra CPU time.
-   - **→ P14c/opt-in production path** — Implemented 2026-05-15. `glmm()` now exposes
-     P14 behind `bernoulli_laplace_eb=True`; the default Bernoulli path is unchanged.
-     The refinement remains batched over the incoming mini-batch, supports optional
-     late-stage early stopping, and can return tensor diagnostics
-     (`laplace_eb_accept`, `laplace_eb_steps`, target/base-target) when requested via
-     `bernoulli_laplace_eb_diagnostics=True`. Focused GLMM tests pass. Superseded
-     operationally by P15's explicit auto-gated route.
-   - **→ P14d/deeper budget candidate** — Implemented 2026-05-15 as exposed knobs,
-     not yet the default: `bernoulli_laplace_eb_steps`, `bernoulli_laplace_eb_inner`,
-     `bernoulli_laplace_eb_final`, and `bernoulli_laplace_eb_lr`. Benchmark alias
-     `p14_deep` uses 20 outer steps, 4 inner mode steps, and 8 final mode steps.
-     On matched N=1000 rows it improves over P14-all on every medium/large/huge row,
-     with CPU runtime still ~28-56 ms/dataset. Keep the default 12/4/6 until the
-     full required-suite rerun confirms the small-mixed BLUP tradeoff is acceptable.
-
-2. **→ P15/diagnostic fallback gate** — Implemented 2026-05-15. The current hybrid path
-   remains the default (`bernoulli_laplace_eb=False`). `bernoulli_laplace_eb=True` still
-   routes every Bernoulli dataset through P14, while `bernoulli_laplace_eb='auto'`
-   applies P14 only to datasets selected by a simple diagnostic gate:
-   effective `d >= 4`, mean estimated `σ_rfx >= 0.75`, or max fitted `|η| >= 8`.
-   The thresholds are configurable via `bernoulli_laplace_eb_gate_min_d`,
-   `bernoulli_laplace_eb_gate_min_sigma`, and `bernoulli_laplace_eb_gate_eta_abs`;
-   setting a threshold to `None` disables that component. Diagnostics add
-   `laplace_eb_gate` alongside the P14 accept/step/target tensors, with skipped
-   datasets receiving zero accept/step diagnostics. This intentionally excludes
-   pooled-Fisher and β-update gates for now: the first production gate should have
-   few moving parts and be easy to benchmark. Next decision: matched-subset benchmark
-   `False` vs `True` vs `'auto'` against CAVI/INLA references and tune thresholds only
-   if the first gate misses clear P14 wins.
-
-   Initial smoke check on the first 128 datasets: small-b-sampled/test selected 27%
-   and landed between baseline and full P14 (σ improved, FFX/BLUP roughly flat);
-   large-b-sampled/test selected 100% and improved FFX/σ but regressed BLUP on that
-   first batch. Do not make `'auto'` the default before the matched benchmark; if the
-   BLUP regression persists, prefer a BLUP-specific fallback over adding more gates.
-
-   Follow-up investigation: the large-b-sampled/test first-batch BLUP regression is
-   dominated by a single extreme dataset (global index 10): BLUP RMSE worsened from
-   10.55 to 12.89 while β RMSE improved from 47.43 to 19.43 and σ RMSE improved from
-   5.19 to 4.79. P14 is therefore doing what its marginal Laplace target asks for
-   on β/σ, but its conditional BLUP mode can be worse against simulator latent `rfx`
-   in rare extreme β-jump cases. On the first 1024 large-b-sampled/test datasets,
-   base/P14 BLUP NRMSE was 0.891/0.864; an oracle per-dataset BLUP chooser was 0.819,
-   and a simple observable fallback that keeps base BLUP only when
-   `rmse(β_P14 - β_base) >= 1` reached 0.822. On six 512-row medium/large/huge slices,
-   that β-jump rule triggered only twice and fixed the large-b-sampled/test regression
-   without materially changing the other slices.
-
-   Implemented follow-up: P14 now has a default-on BLUP-only fallback controlled by
-   `blup_fallback_beta_jump=1.0` in `refineBernoulliLaplaceEb` and exposed through
-   `glmm(..., bernoulli_laplace_eb_blup_fallback_beta_jump=...)`. It keeps P14
-   β/σ/Psi when the marginal target accepts the refinement but copies back previous
-   `blup_est`/`blup_var` for accepted datasets with large β jumps. Set the threshold
-   to `None` to disable. Diagnostics add `laplace_eb_blup_fallback` and
-   `laplace_eb_beta_jump`. First-512 large-b-sampled/test sanity check:
-   base = FFX 2.070, σ 0.559, BLUP 0.905; P14 without fallback = FFX 0.911,
-   σ 0.520, BLUP 0.983; P14 with fallback = FFX 0.911, σ 0.520, BLUP 0.901,
-   with one fallback trigger.
-
-Matched P14/P15 benchmark (first 1000 datasets per split, 2026-05-15):
+Matched first-1000 benchmark, 2026-05-15. `p14_deep` means 20 outer steps, 4 inner mode steps,
+and 8 final mode steps. CPU timings are per dataset.
 
 | Dataset | part | Current FFX | P14-all FFX | P14-deep FFX | Current σ | P14-deep σ | Current BLUP | P14-deep BLUP | deep ms/ds |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -155,210 +76,114 @@ Matched P14/P15 benchmark (first 1000 datasets per split, 2026-05-15):
 | huge-b-sampled | test | 0.3840 | 0.3814 | 0.3788 | 0.7908 | 0.6683 | 0.8143 | 0.7651 | 50.33 |
 
 Interpretation:
-- P14-all improves FFX/σ almost everywhere but still trails INLA on the hard
-  medium/large/huge mixed FFX rows. P14-deep consistently improves over P14-all,
-  so the next promising branch is budget/schedule tuning, not P15 threshold tuning.
-- P15-auto selected 100% of medium+ matched rows, so it is currently a small-scale
-  cost saver rather than a medium/large accuracy selector.
-- BLUP is not the limiting metric for NPE context, but P14-deep still has localized
-  BLUP regressions on small-mixed, medium-sampled/test, and medium-sampled/valid.
-  Do not make P14-deep the default until the full required-suite rerun confirms these
-  are small relative to the FFX/σ gains.
 
-CAVI-subset check (first 200 for small/medium/large, first 100 for huge): P14-deep
-beats the stored CAVI table on FFX for all 12 rows and on σ/BLUP for nearly all rows.
-Residual caveats are medium-b-sampled/test BLUP (P14-deep 0.966 vs CAVI 0.831) and
-huge-b-sampled/test σ (P14-deep 0.796 vs CAVI 0.784). This makes INLA, not CAVI, the
-remaining useful external accuracy target.
+- P14-all improves FFX/σ almost everywhere but still trails INLA on hard mixed rows.
+- P14-deep improves over P14-all on every medium/large/huge row and remains below
+  `~56 ms/dataset` CPU in this benchmark.
+- P14-deep has localized BLUP regressions on small-mixed and medium-sampled rows. BLUP is
+  not the limiting metric for NPE context, but do not make P14-deep the default until the
+  full required-suite rerun confirms the tradeoff is acceptable.
+- The β-jump BLUP fallback is rare but useful. On first-512 large-b-sampled/test it changed
+  P14 BLUP NRMSE from `0.983` to `0.901` while keeping FFX `0.911` and σ `0.520`.
 
-3. **✗ P13/prior-seeded P12 / cold-start** — Tried and reverted (2026-05-15). See P13a/b/c
-   entries in the tried section below. Result informs P14: any cold-start route must keep
-   σ tiny while β learns; otherwise b̂_g absorbs the fixed-effect signal.
+External References
+-------------------
 
-Deprioritized branches:
-- **Full PyTorch INLA** — Too many hyperparameter-mode solves for the `~100 ms/dataset` target,
-  especially with full Ψ. Use INLA concepts, not full INLA integration.
-- **Batched EP / Pólya-Gamma variational GLMM** — Potentially accurate and GPU-friendly, but
-  more moving parts than P14. Revisit only if P14 fails on accuracy.
-- **More PQL-local patches** — Low expected upside after P13 unless they simplify or stabilize P14.
+**CAVI:** P14-deep beats the stored CAVI table on FFX for all 12 CAVI-subset rows and on
+σ/BLUP for nearly all rows. Remaining caveats:
 
-Implemented (✓) / Tried and reverted (✗) / In progress (→)
---------------------------------------------------------------
+- medium-b-sampled/test BLUP: P14-deep `0.966` vs CAVI `0.831`
+- huge-b-sampled/test σ: P14-deep `0.796` vs CAVI `0.784`
 
-**✓ P1+P1-ext** — Prior-regularized IRLS β₀ with Student-t adaptive precision.
-**✓ P2 sub-item** — Prior-informed Ψ floor from `tau_rfx`, capped at 0.25.
-**✓ P5** — nAGQ for q=1. Adam on k=7 GH quadrature LML + Newton BLUP refresh.
-**✓ P6** — True Laplace score for β. n_outer=2 rounds of β Newton + b̂_g Newton + M-step. Superseded by P12.
-**✓ P7/BC1** — Analytic O(1/n) M-step correction inline in `refineBernoulliMapBeta` / `refineBernoulliNestedBeta`.
-**✓ P8** — nAGQ for q>1 (2≤q≤5) via Cartesian-product GH grid.
-**✗ P11/INLA-lite** — Grid integration of σ_rfx with β averaging.
+CAVI is no longer the primary target.
 
-  Implemented and benchmarked (2026-05-15). σ_rfx improved (0.447 vs 0.602 nAGQ) but FFX
-  catastrophically regressed (3–4× worse). Root cause: β̂(σ) is monotone in σ (small σ →
-  OLS, large σ → within-group); posterior mass is asymmetric (~60% below LML peak). Averaging
-  pulls β toward the OLS regime, undoing P6's improvements. Reverted.
+**INLA:** INLA remains the useful accuracy target, especially mixed/train FFX:
 
-  Insight from envelope theorem: ∂LML/∂β = Σ_g X_g'(y_g − μ_g) — the exact Bernoulli score —
-  which P6 already computes. P6 and INLA optimize the same β objective. The INLA advantage at
-  high d is not about marginalizing σ_rfx; it is about nested optimization (b_g re-optimized
-  per β step) vs P6 block coordinate ascent from a poor PQL starting point.
+| Dataset | part | P14-deep FFX | INLA FFX | P14-deep σ | INLA σ | P14-deep BLUP | INLA BLUP |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-b-mixed | train | 0.2687 | 0.451 | 0.5170 | 0.567 | 0.6198 | 0.618 |
+| small-b-sampled | test | 0.2921 | 0.447 | 0.5124 | 0.556 | 0.6097 | 0.625 |
+| medium-b-mixed | train | 0.7414 | 0.331 | 0.8078 | 0.519 | 1.0931 | 0.648 |
+| medium-b-sampled | test | 0.3409 | 0.400 | 0.5847 | 4.490 † | 0.7193 | 0.692 |
+| large-b-mixed | train | 0.7743 | 0.323 | 0.6475 | 0.521 | 0.8844 | 0.676 |
+| large-b-sampled | test | 0.7726 | 0.365 | 0.7606 | 0.603 | 0.8269 | 0.710 |
+| huge-b-mixed | train | 0.5533 | 0.330 | 0.9322 | 0.550 | 1.0063 | 0.713 |
+| huge-b-sampled | test | 0.3788 | 0.394 | 0.6683 | 0.579 | 0.7651 | 0.740 |
 
-**✓ P12/nested-β** — Nested β/b̂_g Newton: re-converge b̂_g at each outer β step.
+† INLA medium-b-sampled σ outlier from stored reference table.
 
-  Implemented 2026-05-15 as `refineBernoulliNestedBeta`. Replaces `refineBernoulliMapBeta`
-  (P6) in the call chain. n_beta_steps=12 outer β Newton steps, n_inner=4 inner b̂_g Newton
-  steps per outer step, n_final=3 final b̂_g steps, damping=0.7. Hessian: XtWX (not Schur —
-  Schur correction tried but caused overshoot at large d/σ; XtWX + damping is safer).
+Next Steps
+----------
 
-  Gains vs P6 (N=8192): FFX 1–23%, sRFX 2–14%, BLUP 1–9%. Largest at medium. Remaining gap
-  to INLA at large/huge FFX is structural: PQL initializes from IRLS which underdetermines β
-  at high d; nested Newton improves convergence but cannot fix a poor starting basin.
+1. **Tune P14-deep schedule before changing architecture.**
+   Run a focused schedule grid on the hard INLA-gap rows:
 
-**✗ P2** — Laplace-MAP σ_rfx fixed-point (cancels H_g^{-1} correction). Code in `map.py:refineBernoulliMapSrfx` removed.
-**✗ P3** — Beta blend for BLUP residuals (oracle: partition-specific, no globally safe α).
-**✗ P4** — blup_var `1+C/n_g` formula (calibration depends on both n_g and G; bookkeeping-only anyway).
-**✗ P8a/b** — Joint MAP on (β, log σ) via Adam (β gradient ≈0 at P6 fixed point). Code removed.
-**✗ P9** — Decouple M-step β from P6 Newton (partition-specific wins/losses).
-**✗ P10** — nAGQ σ gradient at P6 β (P6 β makes W≈0, σ uninformative from likelihood).
-**✗ P13a/cold-start-full** — Reset β=ν_ffx and b̂_g=0 before P12, bypassing PQL entirely.
+   - current deep: `20/4/8`, `lr=0.05`
+   - `24/4/8`, `lr=0.05`
+   - `24/4/10`, `lr=0.05`
+   - `20/4/8`, `lr=0.035`
 
-  Hypothesis: PQL/IRLS underdetermines β at large d → bad starting basin → P12 can't
-  escape. A neutral start (β=prior, b̂_g=0) would reach the true Laplace MAP.
+   Primary rows: `medium-b-mixed/train`, `large-b-mixed/train`,
+   `large-b-sampled/test`, `huge-b-mixed/train`.
 
-  Result: catastrophic FFX regression at all scales (small-b-sampled test 0.91 vs 0.31).
-  Root cause: FE/RE confounding. With b̂_g=0 and β=ν_ffx, the inner loop (n_inner=4)
-  converges b̂_g to absorb all between-group variance before β can learn — the β score
-  ∑_g X_g'(y_g − μ(Xβ + Zb̂_g)) is near zero after the inner loop, so β never moves.
-  At large σ_rfx, Ψ^{-1} shrinkage is weak, so blups absorb even more freely.
+2. **Analyze accepted vs rejected P14 cases.**
+   P14-deep acceptance is often `~0.8-0.9`, not 1.0. Quantify whether rejected datasets
+   still have high current error. If yes, the objective acceptance gate may be too
+   conservative or misaligned with the summaries the NPE needs.
 
-  Key insight: PQL is not just an initializer for β — it is necessary to give β a head
-  start before blups are fitted. Without PQL, b̂_g absorbs what β should explain.
+3. **Diagnose remaining hard mixed-row FFX gap.**
+   For high-FFX-error datasets, compare current vs P14:
 
-**✗ P13b/cold-start-beta-only** — Reset β=ν_ffx, keep PQL b̂_g.
+   - β error and β jump
+   - target/base-target delta
+   - σ movement
+   - active `d/q/m/n`
+   - whether acceptance rejected the P14 update
 
-  Hypothesis: PQL blups are reasonable; resetting only β avoids the confounding and
-  lets β find a better basin while blups warm-start from PQL.
+   The remaining gap is likely β-mode quality, not BLUP postprocessing.
 
-  Result: even worse than P13a (small-b-sampled test 1.11 vs 0.31). PQL blups are
-  calibrated to PQL's β; using them with a different β creates a misleading gradient
-  from step 0 that actively pushes β away from the MAP.
+4. **Try a cheap β-only post-pass on P14 σ.**
+   After P14-deep settles σ, run a few nested β Newton updates with σ fixed, then refresh
+   BLUPs. This is lower risk than adding new approximation machinery and directly targets
+   under-converged β.
 
-**✗ P13c/outer-loop-nAGQ** — After P12, re-run nAGQ at P12's β then run P12 again.
+5. **Only if schedule/post-pass saturates: test a tiny multi-start for high-risk rows.**
+   Candidate starts:
 
-  Hypothesis: nAGQ estimates σ_rfx at PQL's β (bad at large d); re-running it at P12's
-  improved β gives better Ψ, which then improves a second P12 round.
+   - current stats β/σ
+   - current stats β with a more aggressive tiny-σ continuation
 
-  Result: diverges and prohibitively slow (9+ minutes for small benchmark at N=8192,
-  vs ~30 s baseline; tests went from 3.6 s to 18.6 s). Root cause: nAGQ (Adam, 10 steps
-  on the marginal Laplace LML for σ_rfx) and P12's M-step (closed-form posterior-mean
-  E[b_g b_g' + H_g^{-1}]) optimize different objectives. Alternating them produces
-  oscillation, not convergence.
+   Pick by Laplace target. Keep this gated to hard/high-risk rows only.
 
-Revised gap analysis (2026-05-15, after P13 experiments):
-- The cold-start experiments confirmed that the PQL initialization is load-bearing, not
-  just a convenient starting point. Without it, the FE/RE confounding prevents β from
-  being estimated altogether.
-- The real INLA advantage is the marginal-Laplace objective with a profile-likelihood
-  approach: optimize σ_rfx on the profile LML (with b̂_g nested), start from tiny
-  σ_rfx so that blups ≈ 0 and β can learn first, then grow σ_rfx. This sidesteps
-  confounding by design. It is structurally different from PQL+refinement.
-- Closing the gap requires implementing P14 (single-mode Laplace-EB): jointly optimize
-  (β, log σ_rfx) on the true Bernoulli Laplace LML from a proper cold start with small
-  initial σ_rfx. The PQL+P12 framework cannot be patched to achieve this.
-- P14 target: ~50–150 ms/dataset batched, matching P12 structure but on the correct
-  joint objective. Next step once capacity allows.
+Deprioritized
+-------------
 
-External Reference Baseline
-----------------------------
+- **Full PyTorch INLA:** too many hyperparameter-mode solves for the runtime target.
+- **R-INLA backend:** not suitable for batched processing/GPU utilization.
+- **More PQL-local patches:** low expected upside after P12/P13.
+- **EP or Pólya-Gamma variational GLMM:** possible future branch, but more moving parts than
+  the current Laplace-EB path.
 
-**CAVI:** `BinomialBayesMixedGLM` (statsmodels 0.14+), CAVI on mean-field Gaussian,
-diagonal Ψ, prior Gaussian on log σ² (vcp_p=4.0). Script: `glmm_reference_comparison.py`.
+Compact Archive
+---------------
 
-Note: CAVI uses diagonal Ψ (mean-field); our stack supports full Ψ. Reference
-comparison runs P5+P6 without P1/P2 (raw `glmm()` base). Numbers use matched subset
-(first n_cavi datasets processed).
+- **P11/INLA-lite grid σ integration:** improved σ but catastrophically worsened FFX because
+  β averaging pulled estimates toward the low-σ/OLS regime. Reverted.
+- **P12 nested β/b̂_g Newton:** current default β refinement. Useful, but cannot fully escape
+  poor PQL basins at high d.
+- **P13 cold starts:** resetting β and/or b̂_g away from PQL caused FE/RE confounding. With
+  weak RE shrinkage, b̂_g absorbs fixed-effect signal before β can learn.
+- **P13 outer nAGQ loop:** too slow and unstable because nAGQ σ updates and P12 M-step optimize
+  different objectives.
 
-Matched comparison — all runs at n_cavi=200 (huge: 100), n_total=1000 (huge: 500).
-P6 = raw PQL + P5 + P6 + BC1, without P1/P2 (see note). Bold = winner per cell.
-
-| Dataset              | part  |   N | P6 FFX    | CAVI FFX | P6 σ      | CAVI σ    | P6 BLUP   | CAVI BLUP |
-| ---                  | ---   | ---:| ---:      | ---:     | ---:      | ---:      | ---:      | ---:      |
-| small-b-sampled      | valid |  200| **0.325** | 0.346    | **0.665** | 0.674     | **0.615** | 0.635     |
-| small-b-sampled      | test  |  200| **0.340** | 0.398    | **0.612** | 0.664     | **0.621** | 0.636     |
-| small-b-mixed        | train |  200| **0.339** | 0.366    | 0.782     | **0.734** | **0.717** | 0.811     |
-| medium-b-sampled     | valid |  200| **0.386** | 0.513    | **0.757** | 0.818     | **0.717** | 0.788     |
-| medium-b-sampled     | test  |  200| **0.399** | 0.548    | 0.994     | **0.793** | 1.109     | **0.831** |
-| medium-b-mixed       | train |  200| **0.343** | 0.438    | 1.051     | **0.718** | **0.696** | 0.741     |
-| large-b-sampled      | valid |  200| **0.355** | 0.453    | 1.311     | **0.769** | 1.063     | **0.784** |
-| large-b-sampled      | test  |  200| **0.340** | 0.472    | 0.879     | **0.814** | **0.743** | 0.825     |
-| large-b-mixed        | train |  200| **0.356** | 0.514    | 1.006     | **0.859** | 1.085     | **0.960** |
-| huge-b-sampled       | valid |  100| **0.418** | 0.774    | **0.810** | 1.037     | **0.823** | 1.231     |
-| huge-b-sampled       | test  |  100| **0.472** | 0.753    | 0.881     | **0.784** | **0.811** | 0.965     |
-| huge-b-mixed         | train |  100| **0.403** | 0.652    | 1.489     | **0.903** | **0.921** | 0.940     |
-
-Key findings:
-- **FFX**: Full pipeline beats CAVI at all 12 cells (2–3.5× better at large/huge).
-- **σ_rfx**: Mixed. Pipeline wins at small + huge-sampled-valid; CAVI wins at mixed datasets
-  (all sizes) and medium/large-huge test. Laplace M-step produces high σ variance at large d/q.
-- **BLUP**: follows σ_rfx.
-
-**R-INLA:** `inla()` (R-INLA package), INLA Laplace approximation. Uncorrelated
-datasets (eta_rfx=0): independent `f(group, model='iid')` per RE dimension with PC
-prior P(σ>τ_rfx)=0.317. Correlated (eta_rfx>0, q=2): `iid2d` + copy with Wishart
-prior matching HalfNormal(τ_rfx) marginals. FE prior: N(ν_ffx, τ_ffx²) via
-control.fixed. Script: `glmm_inla_comparison.py`.
-Full results in `experiments/analytical/glmm_inla_results.md`.
-
-Matched comparison — n_inla=1000, n_total=1000. Bold = winner per cell.
-† medium-b-sampled INLA σ outlier driven by 4th quartile instability (RMSE=5.5).
-
-| Dataset           | part  | PQL FFX   | INLA FFX  | PQL σ     | INLA σ    | PQL BLUP  | INLA BLUP |
-| ---               | ---   | ---:      | ---:      | ---:      | ---:      | ---:      | ---:      |
-| small-b-mixed     | train | **0.271** | 0.451     | **0.571** | 0.567     | **0.618** | 0.618     |
-| small-b-sampled   | test  | **0.301** | 0.447     | **0.575** | 0.556     | **0.621** | 0.625     |
-| medium-b-mixed    | train | 1.782     | **0.331** | 0.835     | **0.519** | 1.150     | **0.648** |
-| medium-b-sampled  | test  | **0.345** | 0.400     | **0.651** | 4.490 †   | **0.707** | 0.692     |
-| large-b-mixed     | train | 2.501     | **0.323** | 0.723     | **0.521** | 0.974     | **0.676** |
-| large-b-sampled   | test  | 1.811     | **0.365** | 0.879     | **0.603** | 0.953     | **0.710** |
-| huge-b-mixed      | train | 1.043     | **0.330** | 1.016     | **0.550** | 1.070     | **0.713** |
-| huge-b-sampled    | test  | **0.385** | 0.394     | 0.791     | **0.579** | 0.835     | **0.740** |
-
-Key findings (n_inla=1000 per split, 2026-05-15):
-- **FFX**: PQL wins only at small scale. INLA dominates from medium onward: 5–8×
-  better on mixed (high-d train) splits, 5× at large-sampled, near-tied at
-  medium-sampled (0.345 vs 0.400) and huge-sampled (0.385 vs 0.394). Reversal
-  driven by d: more covariates make PQL's IRLS underdetermined; INLA's marginal
-  Laplace scales better.
-- **σ_rfx**: INLA better at medium+ (except medium-sampled outlier). Quartile
-  pattern consistent across scales: both methods overshoot low σ, PQL undershoots
-  high σ more severely.
-- **BLUP**: INLA better at medium+ scale (0.65–0.74 vs 0.71–1.15 PQL). Tied at
-  small. Tracks FFX improvement.
-- **Speed**: PQL 20–41 ms/ds vs INLA 4.3–5.0 s/ds (≈100–200× faster at medium+).
-
-Commands
---------
+Useful Commands
+---------------
 
 ```bash
-uv run python experiments/analytical/glmm_required_benchmark.py --family b
-uv run python experiments/analytical/glmm_required_benchmark.py --family b --methods current raw
-uv run python experiments/analytical/glmm_error_analysis.py --data-id small-b-mixed
-# reference comparison (n_cavi=200 / 100 for huge; n_total=1000 / 500 for huge)
-uv run python experiments/analytical/glmm_reference_comparison.py \
-    --data-ids small-b-sampled,medium-b-sampled,large-b-sampled \
-    --partition valid --n-cavi 200 --n-total 1000
-uv run python experiments/analytical/glmm_reference_comparison.py \
-    --data-ids small-b-sampled,medium-b-sampled,large-b-sampled \
-    --partition test --n-cavi 200 --n-total 1000
-uv run python experiments/analytical/glmm_reference_comparison.py \
-    --data-ids small-b-mixed,medium-b-mixed,large-b-mixed \
-    --partition train --n-epochs 2 --n-cavi 200 --n-total 1000
-uv run python experiments/analytical/glmm_reference_comparison.py \
-    --data-ids huge-b-sampled --partition valid --n-cavi 100 --n-total 500
-uv run python experiments/analytical/glmm_reference_comparison.py \
-    --data-ids huge-b-sampled --partition test --n-cavi 100 --n-total 500
-uv run python experiments/analytical/glmm_reference_comparison.py \
-    --data-ids huge-b-mixed --partition train --n-epochs 2 --n-cavi 100 --n-total 500
+uv run python experiments/analytical/glmm_required_benchmark.py \
+    --family b --sizes medium large huge --methods current p14_all p14_deep \
+    --batch-size 32 --max-datasets 1000
+
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical
 ```
