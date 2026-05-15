@@ -107,6 +107,20 @@ Ranked branches, ordered by expected accuracy per implementation risk:
    first batch. Do not make `'auto'` the default before the matched benchmark; if the
    BLUP regression persists, prefer a BLUP-specific fallback over adding more gates.
 
+   Follow-up investigation: the large-b-sampled/test first-batch BLUP regression is
+   dominated by a single extreme dataset (global index 10): BLUP RMSE worsened from
+   10.55 to 12.89 while β RMSE improved from 47.43 to 19.43 and σ RMSE improved from
+   5.19 to 4.79. P14 is therefore doing what its marginal Laplace target asks for
+   on β/σ, but its conditional BLUP mode can be worse against simulator latent `rfx`
+   in rare extreme β-jump cases. On the first 1024 large-b-sampled/test datasets,
+   base/P14 BLUP NRMSE was 0.891/0.864; an oracle per-dataset BLUP chooser was 0.819,
+   and a simple observable fallback that keeps base BLUP only when
+   `rmse(β_P14 - β_base) >= 1` reached 0.822. On six 512-row medium/large/huge slices,
+   that β-jump rule triggered only twice and fixed the large-b-sampled/test regression
+   without materially changing the other slices. Recommended next fix: add an optional
+   P14 BLUP-only fallback keyed by large β jumps, keeping P14 β/σ/Psi but retaining
+   the previous `blup_est`/`blup_var` for those rare cases.
+
 3. **✗ P13/prior-seeded P12 / cold-start** — Tried and reverted (2026-05-15). See P13a/b/c
    entries in the tried section below. Result informs P14: any cold-start route must keep
    σ tiny while β learns; otherwise b̂_g absorbs the fixed-effect signal.
