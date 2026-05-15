@@ -24,6 +24,135 @@ _MAP_PRIOR_KEYS = (
 )
 
 
+def _bernoulliLaplaceEbMode(value: bool | str) -> str:
+    if isinstance(value, bool):
+        return 'all' if value else 'off'
+    if isinstance(value, str):
+        value = value.lower()
+        if value in {'auto', 'gate'}:
+            return 'auto'
+        if value in {'all', 'true', 'yes', 'on'}:
+            return 'all'
+        if value in {'off', 'false', 'no'}:
+            return 'off'
+    raise ValueError("bernoulli_laplace_eb must be bool, 'auto', or 'gate'")
+
+
+def _sliceBatch(
+    value: torch.Tensor | None,
+    selected: torch.Tensor,
+) -> torch.Tensor | None:
+    return None if value is None else value[selected]
+
+
+def _sliceStatsBatch(
+    stats: dict[str, torch.Tensor],
+    selected: torch.Tensor,
+    batch_size: int,
+) -> dict[str, torch.Tensor]:
+    out = {}
+    for key, value in stats.items():
+        if torch.is_tensor(value) and value.shape[:1] == (batch_size,):
+            out[key] = value[selected]
+        else:
+            out[key] = value
+    return out
+
+
+def _emptyDiagnosticLike(
+    key: str,
+    value: torch.Tensor,
+    batch_size: int,
+) -> torch.Tensor:
+    fill_value = float('nan') if key.endswith('target') else 0.0
+    return value.new_full((batch_size, *value.shape[1:]), fill_value)
+
+
+def _mergeStatsBatch(
+    stats: dict[str, torch.Tensor],
+    refined: dict[str, torch.Tensor],
+    selected: torch.Tensor,
+    batch_size: int,
+) -> dict[str, torch.Tensor]:
+    out = dict(stats)
+    for key, value in refined.items():
+        if not torch.is_tensor(value) or value.shape[:1] != (int(selected.sum().item()),):
+            out[key] = value
+            continue
+        if key in out and torch.is_tensor(out[key]) and out[key].shape[:1] == (batch_size,):
+            merged = out[key].clone()
+            merged[selected] = value
+        else:
+            merged = _emptyDiagnosticLike(key, value, batch_size)
+            merged[selected] = value
+        out[key] = merged
+    return out
+
+
+def _addLaplaceEbSkippedDiagnostics(
+    stats: dict[str, torch.Tensor],
+    gate: torch.Tensor,
+    dtype: torch.dtype,
+) -> None:
+    B = gate.shape[0]
+    device = gate.device
+    if 'laplace_eb_accept' not in stats:
+        stats['laplace_eb_accept'] = torch.zeros(B, device=device, dtype=dtype)
+    if 'laplace_eb_steps' not in stats:
+        stats['laplace_eb_steps'] = torch.zeros(B, device=device, dtype=dtype)
+    if 'laplace_eb_target' not in stats:
+        stats['laplace_eb_target'] = torch.full((B,), float('nan'), device=device, dtype=dtype)
+    if 'laplace_eb_base_target' not in stats:
+        stats['laplace_eb_base_target'] = torch.full((B,), float('nan'), device=device, dtype=dtype)
+    stats['laplace_eb_gate'] = gate.to(dtype=dtype)
+
+
+def _bernoulliLaplaceEbGate(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_q: torch.Tensor | None,
+    mask_d: torch.Tensor | None,
+    min_d: int | None,
+    min_sigma: float | None,
+    eta_abs: float | None,
+) -> torch.Tensor:
+    B, _, _, d = Xm.shape
+    q = Zm.shape[-1]
+    device, dtype = Xm.device, Xm.dtype
+    active_q = (
+        mask_q[:, :q].to(device=device).bool()
+        if mask_q is not None
+        else torch.ones(B, q, device=device, dtype=torch.bool)
+    )
+    has_rfx = active_q.any(dim=1)
+    gate = torch.zeros(B, device=device, dtype=torch.bool)
+
+    if min_d is not None:
+        if mask_d is None:
+            d_eff = torch.full((B,), d, device=device, dtype=torch.long)
+        else:
+            d_eff = mask_d[:, :d].to(device=device).bool().sum(dim=1)
+        gate |= d_eff >= int(min_d)
+
+    if min_sigma is not None and 'sigma_rfx_est' in stats:
+        sigma = stats['sigma_rfx_est'][:, :q].detach().to(device=device, dtype=dtype)
+        q_count = active_q.to(dtype).sum(dim=1).clamp(min=1.0)
+        sigma_mean = (sigma * active_q.to(dtype)).sum(dim=1) / q_count
+        gate |= sigma_mean >= float(min_sigma)
+
+    if eta_abs is not None and 'beta_est' in stats and 'blup_est' in stats:
+        beta = stats['beta_est'][:, :d].detach().to(device=device, dtype=dtype)
+        blup = stats['blup_est'][:, :, :q].detach().to(device=device, dtype=dtype)
+        eta = (Xm * beta[:, None, None, :]).sum(dim=-1)
+        eta = eta + (Zm[:, :, :, :q] * blup[:, :, None, :]).sum(dim=-1)
+        eta_abs_max = eta.abs().masked_fill(~mask_n.to(device=device).bool(), 0.0).amax(dim=(1, 2))
+        gate |= eta_abs_max >= float(eta_abs)
+
+    return gate & has_rfx
+
+
 def glmm(
     Xm: torch.Tensor,
     ym: torch.Tensor,
@@ -52,7 +181,11 @@ def glmm(
     beta_alpha_low = kwargs.pop('beta_alpha_low', 0.65)
     beta_alpha_high = kwargs.pop('beta_alpha_high', 0.75)
     bernoulli_laplace_eb = kwargs.pop('bernoulli_laplace_eb', False)
+    bernoulli_laplace_eb_mode = _bernoulliLaplaceEbMode(bernoulli_laplace_eb)
     bernoulli_laplace_eb_diagnostics = kwargs.pop('bernoulli_laplace_eb_diagnostics', False)
+    bernoulli_laplace_eb_gate_min_d = kwargs.pop('bernoulli_laplace_eb_gate_min_d', 4)
+    bernoulli_laplace_eb_gate_min_sigma = kwargs.pop('bernoulli_laplace_eb_gate_min_sigma', 0.75)
+    bernoulli_laplace_eb_gate_eta_abs = kwargs.pop('bernoulli_laplace_eb_gate_eta_abs', 8.0)
     mask_d = kwargs.pop('mask_d', None)
     uncorr = (eta_rfx == 0) if eta_rfx is not None else None  # (B,) bool or None
     if likelihood_family == 0:
@@ -133,23 +266,57 @@ def glmm(
                 tau_ffx=map_priors['tau_ffx'],
                 family_ffx=map_priors['family_ffx'],
             )
-        if map_refine and bernoulli_laplace_eb and Zm.shape[-1] > 0:
-            stats = refineBernoulliLaplaceEb(
-                stats,
-                Xm,
-                ym,
-                Zm,
-                mask_n,
-                mask_m,
-                nu_ffx=map_priors['nu_ffx'],
-                tau_ffx=map_priors['tau_ffx'],
-                family_ffx=map_priors['family_ffx'],
-                tau_rfx=map_priors['tau_rfx'],
-                family_sigma_rfx=map_priors['family_sigma_rfx'],
-                mask_d=mask_d,
-                mask_q=mask_q,
-                return_diagnostics=bernoulli_laplace_eb_diagnostics,
-            )
+        if map_refine and bernoulli_laplace_eb_mode != 'off' and Zm.shape[-1] > 0:
+            if bernoulli_laplace_eb_mode == 'all':
+                gate = torch.ones(Xm.shape[0], device=Xm.device, dtype=torch.bool)
+                stats = refineBernoulliLaplaceEb(
+                    stats,
+                    Xm,
+                    ym,
+                    Zm,
+                    mask_n,
+                    mask_m,
+                    nu_ffx=map_priors['nu_ffx'],
+                    tau_ffx=map_priors['tau_ffx'],
+                    family_ffx=map_priors['family_ffx'],
+                    tau_rfx=map_priors['tau_rfx'],
+                    family_sigma_rfx=map_priors['family_sigma_rfx'],
+                    mask_d=mask_d,
+                    mask_q=mask_q,
+                    return_diagnostics=bernoulli_laplace_eb_diagnostics,
+                )
+            else:
+                gate = _bernoulliLaplaceEbGate(
+                    stats,
+                    Xm,
+                    Zm,
+                    mask_n,
+                    mask_q,
+                    mask_d,
+                    bernoulli_laplace_eb_gate_min_d,
+                    bernoulli_laplace_eb_gate_min_sigma,
+                    bernoulli_laplace_eb_gate_eta_abs,
+                )
+                if gate.any():
+                    refined = refineBernoulliLaplaceEb(
+                        _sliceStatsBatch(stats, gate, Xm.shape[0]),
+                        Xm[gate],
+                        ym[gate],
+                        Zm[gate],
+                        mask_n[gate],
+                        mask_m[gate],
+                        nu_ffx=_sliceBatch(map_priors['nu_ffx'], gate),
+                        tau_ffx=_sliceBatch(map_priors['tau_ffx'], gate),
+                        family_ffx=_sliceBatch(map_priors['family_ffx'], gate),
+                        tau_rfx=_sliceBatch(map_priors['tau_rfx'], gate),
+                        family_sigma_rfx=_sliceBatch(map_priors['family_sigma_rfx'], gate),
+                        mask_d=_sliceBatch(mask_d, gate),
+                        mask_q=_sliceBatch(mask_q, gate),
+                        return_diagnostics=bernoulli_laplace_eb_diagnostics,
+                    )
+                    stats = _mergeStatsBatch(stats, refined, gate, Xm.shape[0])
+            if bernoulli_laplace_eb_diagnostics:
+                _addLaplaceEbSkippedDiagnostics(stats, gate, Xm.dtype)
     elif likelihood_family == 2:
         stats = lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
     else:

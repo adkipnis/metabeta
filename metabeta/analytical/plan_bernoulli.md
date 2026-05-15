@@ -83,15 +83,29 @@ Ranked branches, ordered by expected accuracy per implementation risk:
      The refinement remains batched over the incoming mini-batch, supports optional
      late-stage early stopping, and can return tensor diagnostics
      (`laplace_eb_accept`, `laplace_eb_steps`, target/base-target) when requested via
-     `bernoulli_laplace_eb_diagnostics=True`. Focused GLMM tests pass. Next decision:
-     benchmark the opt-in path on matched CAVI/INLA subsets and decide whether to
-     route high-risk Bernoulli datasets through it by default.
+     `bernoulli_laplace_eb_diagnostics=True`. Focused GLMM tests pass. Superseded
+     operationally by P15's explicit auto-gated route.
 
-2. **→ P15/diagnostic fallback gate** — Keep the current hybrid path as the default until
-   P14 is proven, then route only high-risk Bernoulli datasets to P14. Candidate gates:
-   high `d`, poor pooled Fisher conditioning, separation/extreme logits, large β update
-   norm, or σ/BLUP diagnostics associated with high-σ shrinkage. Expected improvement:
-   medium-high at low average runtime; risk: low-medium.
+2. **→ P15/diagnostic fallback gate** — Implemented 2026-05-15. The current hybrid path
+   remains the default (`bernoulli_laplace_eb=False`). `bernoulli_laplace_eb=True` still
+   routes every Bernoulli dataset through P14, while `bernoulli_laplace_eb='auto'`
+   applies P14 only to datasets selected by a simple diagnostic gate:
+   effective `d >= 4`, mean estimated `σ_rfx >= 0.75`, or max fitted `|η| >= 8`.
+   The thresholds are configurable via `bernoulli_laplace_eb_gate_min_d`,
+   `bernoulli_laplace_eb_gate_min_sigma`, and `bernoulli_laplace_eb_gate_eta_abs`;
+   setting a threshold to `None` disables that component. Diagnostics add
+   `laplace_eb_gate` alongside the P14 accept/step/target tensors, with skipped
+   datasets receiving zero accept/step diagnostics. This intentionally excludes
+   pooled-Fisher and β-update gates for now: the first production gate should have
+   few moving parts and be easy to benchmark. Next decision: matched-subset benchmark
+   `False` vs `True` vs `'auto'` against CAVI/INLA references and tune thresholds only
+   if the first gate misses clear P14 wins.
+
+   Initial smoke check on the first 128 datasets: small-b-sampled/test selected 27%
+   and landed between baseline and full P14 (σ improved, FFX/BLUP roughly flat);
+   large-b-sampled/test selected 100% and improved FFX/σ but regressed BLUP on that
+   first batch. Do not make `'auto'` the default before the matched benchmark; if the
+   BLUP regression persists, prefer a BLUP-specific fallback over adding more gates.
 
 3. **✗ P13/prior-seeded P12 / cold-start** — Tried and reverted (2026-05-15). See P13a/b/c
    entries in the tried section below. Result informs P14: any cold-start route must keep

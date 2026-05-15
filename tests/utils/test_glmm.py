@@ -514,6 +514,51 @@ def test_glmm_bernoulli_laplace_eb_flag_smoke():
     assert result['laplace_eb_steps'].min().item() >= 1.0
 
 
+def test_glmm_bernoulli_laplace_eb_auto_gate_smoke():
+    """P15 routes only gated Bernoulli datasets through P14."""
+    rng = np.random.default_rng(SEED + 15)
+    B, d, q, m, n_per_group = 2, 4, 1, 5, 10
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=1, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+    mask_d = torch.tensor([[True, True, False, False], [True, True, True, True]])
+
+    result = glmm(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+        likelihood_family=1,
+        nu_ffx=torch.as_tensor(np.stack([ds['nu_ffx'] for ds in datasets]), dtype=torch.float32),
+        tau_ffx=torch.as_tensor(np.stack([ds['tau_ffx'] for ds in datasets]), dtype=torch.float32),
+        family_ffx=torch.as_tensor([int(ds['family_ffx']) for ds in datasets], dtype=torch.long),
+        tau_rfx=torch.as_tensor(np.stack([ds['tau_rfx'] for ds in datasets]), dtype=torch.float32),
+        family_sigma_rfx=torch.as_tensor(
+            [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
+        ),
+        mask_d=mask_d,
+        mask_q=torch.ones(B, q, dtype=torch.bool),
+        bernoulli_laplace_eb='auto',
+        bernoulli_laplace_eb_diagnostics=True,
+        bernoulli_laplace_eb_gate_min_d=4,
+        bernoulli_laplace_eb_gate_min_sigma=None,
+        bernoulli_laplace_eb_gate_eta_abs=None,
+    )
+
+    assert result['beta_est'].shape == (B, d)
+    assert result['sigma_rfx_est'].shape == (B, q)
+    assert torch.equal(result['laplace_eb_gate'], torch.tensor([0.0, 1.0]))
+    assert result['laplace_eb_steps'][0].item() == 0.0
+    assert result['laplace_eb_steps'][1].item() >= 1.0
+    assert torch.isfinite(result['beta_est']).all()
+    assert torch.isfinite(result['sigma_rfx_est']).all()
+    assert torch.isfinite(result['blup_est']).all()
+
+
 # ---------------------------------------------------------------------------
 # 5. Smoke test: Approximator._dataStatistics with non-normal families
 # ---------------------------------------------------------------------------
