@@ -1,7 +1,7 @@
 Bernoulli GLMM Plan
 ===================
 
-Last updated: 2026-05-15
+Last updated: 2026-05-15 (P13 experiments)
 
 Current Baseline
 ----------------
@@ -37,6 +37,48 @@ Root cause summary (`glmm_error_analysis.py`):
 - **σ_rfx** has bidirectional S-curve bias: upward at low true σ (Ψ floor overshoots),
   downward at high true σ (M-step shrinkage). CAVI wins mainly in the high-σ quartile.
 - **BLUPs** track FFX: bad β contaminates the BLUP residual ỹ−Xβ.
+
+Strategic Direction
+-------------------
+
+Goal: fast, high-accuracy Bernoulli summaries for downstream hierarchical NPE context.
+The analytical estimator does not need to be a complete posterior engine; it needs stable,
+prior-aware point summaries and uncertainty proxies that improve the NPE's conditioning.
+
+Decision: do **not** pursue a full PyTorch INLA implementation as the main branch. A faithful
+INLA path would integrate over variance/correlation hyperparameters and repeatedly solve
+latent modes. With current regimes (`d≤16`, `q≤5`, `m≤200`, `n_total≤3000`), diagonal Ψ already
+needs many hyperparameter evaluations, and full Ψ has up to `q(q+1)/2=15` hyperparameters.
+Even with batched small-matrix kernels, that multiplier is unlikely to fit a robust
+`~100 ms/dataset` target. R-INLA remains a reference only, not a backend.
+
+Ranked branches, ordered by expected accuracy per implementation risk:
+
+1. **✗ P13/prior-seeded P12 / cold-start** — Tried and reverted (2026-05-15). See P13a/b/c
+   entries in the tried section below.
+
+2. **→ P14/single-mode Laplace-EB** — Implement a direct marginal-Laplace empirical-Bayes
+   solver, not full INLA. Optimize β and log σ using the true Bernoulli Laplace objective,
+   with vectorized per-group `q×q` Newton modes and priors in the objective. Start with
+   diagonal Ψ and active `q≤5`; only consider full Ψ after diagonal wins. Expected improvement:
+   high for FFX and high-σ sRFX; risk: medium. Target runtime: `50–150 ms/dataset` batched CPU/GPU.
+
+3. **→ P15/diagnostic fallback gate** — Keep the current hybrid path as the default and route
+   only high-risk Bernoulli datasets to P14. Candidate gates: high `d`, poor pooled Fisher
+   conditioning, separation/extreme logits, large β update norm, or inconsistent Ψ quartile
+   diagnostics. Expected improvement: medium-high at low average runtime; risk: low-medium.
+
+4. **→ P16/amortized correction** — Train a small correction head from analytical outputs and
+   data summaries to calibrated β/σ/BLUP context. This is NPE-aligned and very fast, but less
+   principled than P14 and easier to overfit to the simulator. Keep it behind P14/P15 unless
+   the Laplace-EB path misses the runtime target.
+
+Deprioritized branches:
+- **Full PyTorch INLA** — Too many hyperparameter-mode solves for the `~100 ms/dataset` target,
+  especially with full Ψ. Use INLA concepts, not full INLA integration.
+- **Batched EP / Pólya-Gamma variational GLMM** — Potentially accurate and GPU-friendly, but
+  more moving parts than P14. Revisit only if P14 fails on accuracy.
+- **More PQL-local patches** — Low expected upside unless they simplify or stabilize P13/P14.
 
 Implemented (✓) / Tried and reverted (✗) / In progress (→)
 --------------------------------------------------------------
@@ -76,10 +118,53 @@ Implemented (✓) / Tried and reverted (✗) / In progress (→)
 **✗ P8a/b** — Joint MAP on (β, log σ) via Adam (β gradient ≈0 at P6 fixed point). Code removed.
 **✗ P9** — Decouple M-step β from P6 Newton (partition-specific wins/losses).
 **✗ P10** — nAGQ σ gradient at P6 β (P6 β makes W≈0, σ uninformative from likelihood).
+**✗ P13a/cold-start-full** — Reset β=ν_ffx and b̂_g=0 before P12, bypassing PQL entirely.
 
-Remaining gap to INLA at large/huge FFX is structural: IRLS initialization underdetermines β
-at high d; P12 improves convergence but the starting basin is poor. No additional principled
-directions identified. σ_rfx gap at mixed datasets (Laplace M-step instability) persists.
+  Hypothesis: PQL/IRLS underdetermines β at large d → bad starting basin → P12 can't
+  escape. A neutral start (β=prior, b̂_g=0) would reach the true Laplace MAP.
+
+  Result: catastrophic FFX regression at all scales (small-b-sampled test 0.91 vs 0.31).
+  Root cause: FE/RE confounding. With b̂_g=0 and β=ν_ffx, the inner loop (n_inner=4)
+  converges b̂_g to absorb all between-group variance before β can learn — the β score
+  ∑_g X_g'(y_g − μ(Xβ + Zb̂_g)) is near zero after the inner loop, so β never moves.
+  At large σ_rfx, Ψ^{-1} shrinkage is weak, so blups absorb even more freely.
+
+  Key insight: PQL is not just an initializer for β — it is necessary to give β a head
+  start before blups are fitted. Without PQL, b̂_g absorbs what β should explain.
+
+**✗ P13b/cold-start-beta-only** — Reset β=ν_ffx, keep PQL b̂_g.
+
+  Hypothesis: PQL blups are reasonable; resetting only β avoids the confounding and
+  lets β find a better basin while blups warm-start from PQL.
+
+  Result: even worse than P13a (small-b-sampled test 1.11 vs 0.31). PQL blups are
+  calibrated to PQL's β; using them with a different β creates a misleading gradient
+  from step 0 that actively pushes β away from the MAP.
+
+**✗ P13c/outer-loop-nAGQ** — After P12, re-run nAGQ at P12's β then run P12 again.
+
+  Hypothesis: nAGQ estimates σ_rfx at PQL's β (bad at large d); re-running it at P12's
+  improved β gives better Ψ, which then improves a second P12 round.
+
+  Result: diverges and prohibitively slow (9+ minutes for small benchmark at N=8192,
+  vs ~30 s baseline; tests went from 3.6 s to 18.6 s). Root cause: nAGQ (Adam, 10 steps
+  on the marginal Laplace LML for σ_rfx) and P12's M-step (closed-form posterior-mean
+  E[b_g b_g' + H_g^{-1}]) optimize different objectives. Alternating them produces
+  oscillation, not convergence.
+
+Revised gap analysis (2026-05-15, after P13 experiments):
+- The cold-start experiments confirmed that the PQL initialization is load-bearing, not
+  just a convenient starting point. Without it, the FE/RE confounding prevents β from
+  being estimated altogether.
+- The real INLA advantage is the marginal-Laplace objective with a profile-likelihood
+  approach: optimize σ_rfx on the profile LML (with b̂_g nested), start from tiny
+  σ_rfx so that blups ≈ 0 and β can learn first, then grow σ_rfx. This sidesteps
+  confounding by design. It is structurally different from PQL+refinement.
+- Closing the gap requires implementing P14 (single-mode Laplace-EB): jointly optimize
+  (β, log σ_rfx) on the true Bernoulli Laplace LML from a proper cold start with small
+  initial σ_rfx. The PQL+P12 framework cannot be patched to achieve this.
+- P14 target: ~50–150 ms/dataset batched, matching P12 structure but on the correct
+  joint objective. Next step once capacity allows.
 
 External Reference Baseline
 ----------------------------

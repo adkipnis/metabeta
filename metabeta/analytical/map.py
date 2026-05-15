@@ -611,8 +611,8 @@ def refineBernoulliNestedBeta(
         mask4 = mask_m[:, :, None, None]
         G = mask_m.sum(dim=1).clamp(min=1.0)
 
-    blups = stats['blup_est'].detach().clone()
     beta = stats['beta_est'].detach().clone()
+    blups = stats['blup_est'].detach().clone()
 
     for _ in range(n_beta_steps):
         # Inner: converge b̂_g at current β (Ψ fixed)
