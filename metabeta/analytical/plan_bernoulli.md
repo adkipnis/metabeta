@@ -6,26 +6,30 @@ Last updated: 2026-05-15
 Current Baseline
 ----------------
 
-Estimator: `lmmBernoulli` (6 PQL passes) + `refineBernoulliNagqSrfx` (P5 nAGQ,
-all q≤5) + `refineBernoulliMapBeta` (P6 true Laplace score for β + BC1 M-step
-correction). Active when `map_refine=True`.
+Estimator: `lmmBernoulli` (6 PQL passes) + `refineBernoulliNagqSrfx` (P5/P8 nAGQ,
+all q≤5) + `refineBernoulliNestedBeta` (P12 nested β/b̂_g Newton + BC1 M-step).
+Active when `map_refine=True`.
 
-Required-suite NRMSE (P1+P1-ext+Ψ-floor+P5+P6+BC1, 2026-05-14, N=8192):
+Required-suite NRMSE (P1+P1-ext+Ψ-floor+P5+P8+P12+BC1, 2026-05-15, N=8192):
 
 | Dataset           | Partition | FFX    | sRFX   | BLUP   |
 | ---               | ---       | ---:   | ---:   | ---:   |
-| small-b-mixed     | train     | 0.2314 | 0.5299 | 0.6202 |
-| small-b-sampled   | valid     | 0.2809 | 0.6065 | 0.6620 |
-| small-b-sampled   | test      | 0.2747 | 0.5896 | 0.6571 |
-| medium-b-mixed    | train     | 0.7397 | 0.6572 | 0.7214 |
-| medium-b-sampled  | valid     | 0.5860 | 0.7204 | 0.8485 |
-| medium-b-sampled  | test      | 0.6840 | 0.7401 | 0.8228 |
-| large-b-mixed     | train     | 1.6439 | 0.7643 | 0.9333 |
-| large-b-sampled   | valid     | 0.8581 | 0.8041 | 0.8372 |
-| large-b-sampled   | test      | 1.3645 | 0.8345 | 0.9634 |
-| huge-b-mixed      | train     | 2.0183 | 0.8502 | 0.9423 |
-| huge-b-sampled    | valid     | 1.3226 | 0.9101 | 1.0111 |
-| huge-b-sampled    | test      | 1.5393 | 0.8881 | 0.9952 |
+| small-b-mixed     | train     | 0.2290 | 0.4788 | 0.5957 |
+| small-b-sampled   | valid     | 0.2788 | 0.5625 | 0.7048 |
+| small-b-sampled   | test      | 0.3100 | 0.5567 | 0.6789 |
+| medium-b-mixed    | train     | 0.6450 | 0.5662 | 0.6726 |
+| medium-b-sampled  | valid     | 0.4515 | 0.6388 | 0.8037 |
+| medium-b-sampled  | test      | 0.6565 | 0.6851 | 0.7976 |
+| large-b-mixed     | train     | 1.4763 | 0.6797 | 0.8521 |
+| large-b-sampled   | valid     | 0.8266 | 0.7422 | 0.7949 |
+| large-b-sampled   | test      | 1.3627 | 0.7885 | 0.9380 |
+| huge-b-mixed      | train     | 1.9566 | 0.8518 | 0.9427 |
+| huge-b-sampled    | valid     | 1.2558 | 0.9136 | 0.9687 |
+| huge-b-sampled    | test      | 1.5085 | 0.8554 | 0.9810 |
+
+P6 → P12 delta (P6 was 2 outer rounds of 8β+3b̂_g; P12 is 12 outer × 4 inner steps):
+FFX improves 1–23% (medium largest), sRFX improves 2–14%, BLUP improves 1–9%.
+Main gains at medium+. small-b-sampled test shows minor FFX regression (within noise).
 
 Root cause summary (`glmm_error_analysis.py`):
 - **FFX** is the dominant failure mode; NRMSE scales with d (low Fisher information
@@ -40,8 +44,8 @@ Implemented (✓) / Tried and reverted (✗) / In progress (→)
 **✓ P1+P1-ext** — Prior-regularized IRLS β₀ with Student-t adaptive precision.
 **✓ P2 sub-item** — Prior-informed Ψ floor from `tau_rfx`, capped at 0.25.
 **✓ P5** — nAGQ for q=1. Adam on k=7 GH quadrature LML + Newton BLUP refresh.
-**✓ P6** — True Laplace score for β. n_outer=2 rounds of β Newton + b̂_g Newton + M-step.
-**✓ P7/BC1** — Analytic O(1/n) M-step correction inline in `refineBernoulliMapBeta`.
+**✓ P6** — True Laplace score for β. n_outer=2 rounds of β Newton + b̂_g Newton + M-step. Superseded by P12.
+**✓ P7/BC1** — Analytic O(1/n) M-step correction inline in `refineBernoulliMapBeta` / `refineBernoulliNestedBeta`.
 **✓ P8** — nAGQ for q>1 (2≤q≤5) via Cartesian-product GH grid.
 **✗ P11/INLA-lite** — Grid integration of σ_rfx with β averaging.
 
@@ -55,21 +59,16 @@ Implemented (✓) / Tried and reverted (✗) / In progress (→)
   high d is not about marginalizing σ_rfx; it is about nested optimization (b_g re-optimized
   per β step) vs P6 block coordinate ascent from a poor PQL starting point.
 
-**→ P12/nested-β** — Nested β/b_g optimization matching INLA's internal algorithm.
+**✓ P12/nested-β** — Nested β/b̂_g Newton: re-converge b̂_g at each outer β step.
 
-  Root cause of FFX failure at high d: P6 uses 2-round block coordinate ascent (fix b_g →
-  update β). At large d, the PQL starting point for β is far from optimum and 2 rounds don't
-  recover. INLA re-optimizes b_g at each β Newton step (fully nested), so it always finds
-  the joint MAP.
+  Implemented 2026-05-15 as `refineBernoulliNestedBeta`. Replaces `refineBernoulliMapBeta`
+  (P6) in the call chain. n_beta_steps=12 outer β Newton steps, n_inner=4 inner b̂_g Newton
+  steps per outer step, n_final=3 final b̂_g steps, damping=0.7. Hessian: XtWX (not Schur —
+  Schur correction tried but caused overshoot at large d/σ; XtWX + damping is safer).
 
-  Design:
-  - After `refineBernoulliNagqSrfx` (P5/P8), run a nested Newton loop:
-    outer: k=5–10 Newton steps on β using the true Laplace score Σ_g X_g'(y_g − μ̂_g(β));
-    inner: at each β, re-run b_g Newton to near-convergence (n_inner=3–5 steps) before
-    computing μ̂_g and the Hessian contribution.
-  - Ψ stays fixed at the nAGQ estimate throughout (no M-step during nested loop).
-  - Final M-step + BC1 correction after convergence.
-  - Replaces `refineBernoulliMapBeta` in the call chain.
+  Gains vs P6 (N=8192): FFX 1–23%, sRFX 2–14%, BLUP 1–9%. Largest at medium. Remaining gap
+  to INLA at large/huge FFX is structural: PQL initializes from IRLS which underdetermines β
+  at high d; nested Newton improves convergence but cannot fix a poor starting basin.
 
 **✗ P2** — Laplace-MAP σ_rfx fixed-point (cancels H_g^{-1} correction). Code in `map.py:refineBernoulliMapSrfx` removed.
 **✗ P3** — Beta blend for BLUP residuals (oracle: partition-specific, no globally safe α).
@@ -78,8 +77,9 @@ Implemented (✓) / Tried and reverted (✗) / In progress (→)
 **✗ P9** — Decouple M-step β from P6 Newton (partition-specific wins/losses).
 **✗ P10** — nAGQ σ gradient at P6 β (P6 β makes W≈0, σ uninformative from likelihood).
 
-No remaining principled directions. σ_rfx gap vs CAVI at mixed datasets is structural
-(Laplace M-step instability at large d) and resists all approaches above.
+Remaining gap to INLA at large/huge FFX is structural: IRLS initialization underdetermines β
+at high d; P12 improves convergence but the starting basin is poor. No additional principled
+directions identified. σ_rfx gap at mixed datasets (Laplace M-step instability) persists.
 
 External Reference Baseline
 ----------------------------

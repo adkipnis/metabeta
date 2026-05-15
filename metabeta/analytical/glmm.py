@@ -6,6 +6,7 @@ from metabeta.analytical.blup import analyticalBLUPContext
 from metabeta.analytical.map import (
     refineBernoulliMapBeta,
     refineBernoulliNagqSrfx,
+    refineBernoulliNestedBeta,
     refineNormalMapSrfx,
 )
 from metabeta.analytical.normal import lmmNormal
@@ -118,7 +119,7 @@ def glmm(
                 mask_q=mask_q,
             )
         if map_refine:
-            stats = refineBernoulliMapBeta(
+            stats = refineBernoulliNestedBeta(
                 stats,
                 Xm,
                 ym,
@@ -144,5 +145,6 @@ __all__ = [
     'lmmNormal',
     'lmmPoisson',
     'refineBernoulliMapBeta',
+    'refineBernoulliNestedBeta',
     'refineNormalMapSrfx',
 ]
