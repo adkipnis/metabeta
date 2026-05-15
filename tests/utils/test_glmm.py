@@ -11,6 +11,7 @@ import torch
 from metabeta.simulation import Prior, Synthesizer, Simulator, hypersample
 from metabeta.analytical.glmm import lmmBernoulli, lmmPoisson, glmm
 from metabeta.analytical.linalg import _adaptiveRidge, _adaptiveRidgeBm, _eighWithJitter, _safeSolve
+from metabeta.analytical.map import refineBernoulliLaplaceEb
 
 
 DEVICE = torch.device('cpu')
@@ -405,6 +406,70 @@ def test_glmm_recovers_nonzero_rfx(likelihood_family):
     assert (
         mean_sigma_rfx_est > 0.01
     ), f'sigma_rfx_est should be positive when true rfx is large, got {mean_sigma_rfx_est:.4f}'
+
+
+def test_refine_bernoulli_laplace_eb_smoke_q1():
+    """P14a diagonal Laplace-EB path is finite and shape-compatible."""
+    rng = np.random.default_rng(SEED + 13)
+    B, d, q, m, n_per_group = 4, 2, 1, 8, 18
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=1, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+    stats = lmmBernoulli(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+    )
+
+    nu_ffx = torch.as_tensor(np.stack([ds['nu_ffx'] for ds in datasets]), dtype=torch.float32)
+    tau_ffx = torch.as_tensor(np.stack([ds['tau_ffx'] for ds in datasets]), dtype=torch.float32)
+    family_ffx = torch.as_tensor([int(ds['family_ffx']) for ds in datasets], dtype=torch.long)
+    tau_rfx = torch.as_tensor(np.stack([ds['tau_rfx'] for ds in datasets]), dtype=torch.float32)
+    family_sigma_rfx = torch.as_tensor(
+        [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
+    )
+    mask_d = torch.ones(B, d, dtype=torch.bool)
+    mask_q = torch.ones(B, q, dtype=torch.bool)
+
+    result = refineBernoulliLaplaceEb(
+        stats,
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        nu_ffx=nu_ffx,
+        tau_ffx=tau_ffx,
+        family_ffx=family_ffx,
+        tau_rfx=tau_rfx,
+        family_sigma_rfx=family_sigma_rfx,
+        mask_d=mask_d,
+        mask_q=mask_q,
+        n_steps=3,
+        n_inner=2,
+        n_final=2,
+    )
+
+    assert result['beta_est'].shape == (B, d)
+    assert result['sigma_rfx_est'].shape == (B, q)
+    assert result['blup_est'].shape == stats['blup_est'].shape
+    assert result['blup_var'].shape == stats['blup_var'].shape
+    assert torch.isfinite(result['beta_est']).all()
+    assert torch.isfinite(result['sigma_rfx_est']).all()
+    assert torch.isfinite(result['blup_est']).all()
+    assert torch.isfinite(result['blup_var']).all()
+    assert (result['sigma_rfx_est'] >= 0).all()
+    assert torch.allclose(
+        result['Psi_lap'].diagonal(dim1=-2, dim2=-1),
+        result['sigma_rfx_est'].square(),
+        atol=1e-5,
+        rtol=1e-5,
+    )
 
 
 # ---------------------------------------------------------------------------

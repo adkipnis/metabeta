@@ -65,10 +65,19 @@ Ranked branches, ordered by expected accuracy per implementation risk:
    sRFX; risk: medium. Target runtime: `50–150 ms/dataset` batched CPU/GPU.
 
    Staging:
-   - **P14a/objective smoke test** — q=1/diagonal Ψ, small fixed iteration budget, compare
-     profile LML monotonicity and β/σ against P12 on small/medium.
-   - **P14b/continuation** — add small-to-free σ schedule to prevent FE/RE confounding
-     observed in P13a/b.
+   - **→ P14a/objective smoke test** — Implemented as `refineBernoulliLaplaceEb`
+     in `map.py` (direct callable, not wired into `glmm()`). Current form uses
+     diagonal Ψ, stats-β initialization by default, σ continuation from a tiny cap,
+     true Bernoulli Laplace target, prior terms when available, and an objective
+     acceptance gate against incoming stats. Smoke tests pass. First-batch checks
+     are finite and close on β but not yet better on σ, so this remains experimental.
+   - **→ P14b/log-σ continuation tuning** — Implemented 2026-05-15. The underlying
+     σ parameter now starts from current stats while the effective σ is capped by
+     continuation, and the target includes the log-σ Jacobian so optimization is
+     on the log-hyperposterior rather than the zero-mode σ density. Four-batch
+     sanity benchmark (N=128/split) improved FFX, sRFX, and BLUP on
+     small-sampled-test, medium-mixed-train, large-sampled-test, and
+     huge-sampled-test with ~4–10 ms/dataset extra CPU time.
    - **P14c/batched production path** — vectorize active `q≤5`, add early stopping and
      runtime accounting before broad benchmark comparisons.
 

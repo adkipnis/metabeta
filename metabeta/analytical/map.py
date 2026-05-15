@@ -19,6 +19,7 @@ from metabeta.analytical.normal import _normalGlsAndBlups
 from metabeta.utils.families import logProbFfx, logProbSigma
 
 __all__ = [
+    'refineBernoulliLaplaceEb',
     'refineBernoulliMapBeta',
     'refineBernoulliNagqSrfx',
     'refineBernoulliNestedBeta',
@@ -618,9 +619,8 @@ def refineBernoulliNestedBeta(
         # Inner: converge b̂_g at current β (Ψ fixed)
         if has_rfx:
             for _ in range(n_inner):
-                eta_in = (
-                    torch.einsum('bmnd,bd->bmn', Xm, beta)
-                    + torch.einsum('bmnq,bmq->bmn', Zm, blups)
+                eta_in = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum(
+                    'bmnq,bmq->bmn', Zm, blups
                 )
                 mu_in = torch.sigmoid(eta_in)
                 w_in = (mu_in * (1.0 - mu_in)).clamp(min=1e-6) * mask_n
@@ -660,16 +660,15 @@ def refineBernoulliNestedBeta(
             score = score + prior_prec * (nu_ffx - beta)
 
         delta = _safeSolve(XtWX + _adaptiveRidge(XtWX), score)
-        beta = (beta + damping * delta).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(
-            -50.0, 50.0
+        beta = (
+            (beta + damping * delta).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-50.0, 50.0)
         )
 
     # Final b̂_g convergence at the converged β
     if has_rfx and n_final > 0:
         for _ in range(n_final):
-            eta_f = (
-                torch.einsum('bmnd,bd->bmn', Xm, beta)
-                + torch.einsum('bmnq,bmq->bmn', Zm, blups)
+            eta_f = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum(
+                'bmnq,bmq->bmn', Zm, blups
             )
             mu_f = torch.sigmoid(eta_f)
             w_f = (mu_f * (1.0 - mu_f)).clamp(min=1e-6) * mask_n
@@ -682,10 +681,7 @@ def refineBernoulliNestedBeta(
             blups = (blups + damping * delta_b) * mask_m[:, :, None]
             blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
         # Reassign final w_f for the M-step below
-        eta_f = (
-            torch.einsum('bmnd,bd->bmn', Xm, beta)
-            + torch.einsum('bmnq,bmq->bmn', Zm, blups)
-        )
+        eta_f = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Zm, blups)
         mu_f = torch.sigmoid(eta_f)
         w_f = (mu_f * (1.0 - mu_f)).clamp(min=1e-6) * mask_n
 
@@ -697,10 +693,7 @@ def refineBernoulliNestedBeta(
 
     # M-step + BC1 analytic correction (same as P6)
     if n_final == 0:
-        eta_f = (
-            torch.einsum('bmnd,bd->bmn', Xm, beta)
-            + torch.einsum('bmnq,bmq->bmn', Zm, blups)
-        )
+        eta_f = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Zm, blups)
         mu_f = torch.sigmoid(eta_f)
         w_f = (mu_f * (1.0 - mu_f)).clamp(min=1e-6) * mask_n
 
@@ -724,6 +717,340 @@ def refineBernoulliNestedBeta(
     out['blup_est'] = blups
     out['sigma_rfx_est'] = sigma_rfx_new
     out['Psi_lap'] = Psi_lap_new
+    return out
+
+
+def _bernoulliLaplaceModeDiag(
+    beta: torch.Tensor,
+    log_sigma_rfx: torch.Tensor,
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    mask_q: torch.Tensor | None,
+    n_inner: int,
+    damping: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Approximate b_g MAP modes and Hessians for diagonal-Ψ Bernoulli GLMMs."""
+    B, m, _, q = Zm.shape
+    device, dtype = Zm.device, Zm.dtype
+    active_q = (
+        mask_q[:, :q].to(device=device).bool()
+        if mask_q is not None
+        else torch.ones(B, q, device=device, dtype=torch.bool)
+    )
+    active = mask_m.bool()
+    Z_eff = Zm * active_q[:, None, None, :].to(dtype)
+    prec = torch.where(active_q, torch.exp(-2.0 * log_sigma_rfx).clamp(max=1e8), 1.0)
+    eye_q = torch.eye(q, device=device, dtype=dtype)
+    eye_q_bm = eye_q.expand(B, m, q, q)
+
+    blups = Zm.new_zeros(B, m, q)
+    for _ in range(n_inner):
+        eta = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Z_eff, blups)
+        mu = torch.sigmoid(eta)
+        w = (mu * (1.0 - mu)).clamp(min=1e-6) * mask_n
+        score_g = torch.einsum('bmnq,bmn->bmq', Z_eff, (ym - mu) * mask_n)
+        score_g = score_g - prec[:, None, :] * blups
+        ZWZ = torch.einsum('bmnq,bmn,bmnr->bmqr', Z_eff, w, Z_eff)
+        H = ZWZ + torch.diag_embed(prec)[:, None]
+        H_safe = torch.where(active[:, :, None, None], H, eye_q_bm)
+        delta = _safeSolve(H_safe + _adaptiveRidgeBm(H_safe), score_g)
+        blups = (blups + damping * delta) * mask_m[:, :, None] * active_q[:, None, :].to(dtype)
+        blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
+
+    eta = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Z_eff, blups)
+    mu = torch.sigmoid(eta)
+    w = (mu * (1.0 - mu)).clamp(min=1e-6) * mask_n
+    ZWZ = torch.einsum('bmnq,bmn,bmnr->bmqr', Z_eff, w, Z_eff)
+    H = ZWZ + torch.diag_embed(prec)[:, None]
+    H = torch.where(active[:, :, None, None], H, eye_q_bm)
+    return blups, H, active_q
+
+
+def _bernoulliLaplaceEbTargetDiag(
+    beta: torch.Tensor,
+    log_sigma_rfx: torch.Tensor,
+    blups: torch.Tensor,
+    H: torch.Tensor,
+    active_q: torch.Tensor,
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor | None,
+    tau_ffx: torch.Tensor | None,
+    family_ffx: torch.Tensor | None,
+    tau_rfx: torch.Tensor | None,
+    family_sigma_rfx: torch.Tensor | None,
+    mask_d: torch.Tensor | None,
+    sigma_log_jacobian: bool,
+) -> torch.Tensor:
+    """Laplace-approximated log posterior target for diagonal Bernoulli GLMMs."""
+    B, _, _, d = Xm.shape
+    q = Zm.shape[-1]
+    dtype = Xm.dtype
+    active_q_f = active_q.to(dtype)
+    Z_eff = Zm * active_q_f[:, None, None, :]
+    eta = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Z_eff, blups)
+    ll = (ym * eta - F.softplus(eta)) * mask_n
+    ll_g = ll.sum(dim=-1)
+
+    sigma = log_sigma_rfx.exp().clamp(min=1e-8)
+    log_prior_b = -0.5 * (
+        math.log(2.0 * math.pi)
+        + 2.0 * log_sigma_rfx[:, None, :]
+        + blups.square() / sigma[:, None, :].square()
+    )
+    log_prior_b = (log_prior_b * active_q_f[:, None, :]).sum(dim=-1)
+
+    sign, log_det_H = torch.linalg.slogdet(H)
+    log_det_H = torch.where(sign > 0, log_det_H, log_det_H.new_zeros(()))
+    q_count = active_q_f.sum(dim=-1)
+    laplace_g = ll_g + log_prior_b + 0.5 * q_count[:, None] * math.log(2.0 * math.pi)
+    laplace_g = laplace_g - 0.5 * log_det_H
+    target = (laplace_g * mask_m).sum(dim=-1)
+
+    if nu_ffx is not None and tau_ffx is not None and family_ffx is not None:
+        if mask_d is None:
+            mask_d_lp = torch.ones(B, 1, d, device=beta.device, dtype=dtype)
+        else:
+            mask_d_lp = mask_d[:, :d].to(device=beta.device, dtype=dtype).unsqueeze(1)
+        target = target + logProbFfx(
+            beta.unsqueeze(1),
+            nu_ffx[:, :d].unsqueeze(1),
+            tau_ffx[:, :d].clamp(min=1e-8).unsqueeze(1),
+            family_ffx,
+            mask_d_lp,
+        ).squeeze(1)
+
+    if tau_rfx is not None and family_sigma_rfx is not None:
+        target = target + logProbSigma(
+            sigma.unsqueeze(1),
+            tau_rfx[:, :q].clamp(min=1e-8).unsqueeze(1),
+            family_sigma_rfx,
+            active_q_f.unsqueeze(1),
+        ).squeeze(1)
+    if sigma_log_jacobian:
+        target = target + (log_sigma_rfx * active_q_f).sum(dim=-1)
+
+    return target
+
+
+def refineBernoulliLaplaceEb(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor | None = None,
+    tau_ffx: torch.Tensor | None = None,
+    family_ffx: torch.Tensor | None = None,
+    tau_rfx: torch.Tensor | None = None,
+    family_sigma_rfx: torch.Tensor | None = None,
+    mask_d: torch.Tensor | None = None,
+    mask_q: torch.Tensor | None = None,
+    n_steps: int = 12,
+    n_inner: int = 4,
+    n_final: int = 6,
+    lr: float = 0.05,
+    damping: float = 0.7,
+    sigma_start: float = 0.03,
+    sigma_max: float = 20.0,
+    beta_start: str = 'stats',
+    sigma_init: str = 'stats',
+    sigma_log_jacobian: bool = True,
+    accept_only_improved: bool = True,
+) -> dict[str, torch.Tensor]:
+    """P14a: diagonal single-mode Laplace-EB refinement for Bernoulli GLMMs.
+
+    This is intentionally not wired into `glmm()` yet. It optimizes a true Bernoulli
+    Laplace objective over β and diagonal σ_rfx with a σ continuation cap. By default
+    β starts from the current analytical estimate while the effective σ starts
+    tiny, so random effects cannot immediately absorb fixed-effect signal. The
+    underlying σ parameter starts from the current analytical estimate by default
+    while the effective σ is capped by the continuation schedule. By default the
+    target includes the log-σ Jacobian, optimizing the hyperposterior in log scale
+    rather than the zero-mode σ density.
+    """
+    q = Zm.shape[-1]
+    d = Xm.shape[-1]
+    if q == 0 or d == 0 or n_steps <= 0:
+        return stats
+
+    B = Xm.shape[0]
+    device, dtype = Xm.device, Xm.dtype
+    active_q = (
+        mask_q[:, :q].to(device=device).bool()
+        if mask_q is not None
+        else torch.ones(B, q, device=device, dtype=torch.bool)
+    )
+
+    if beta_start == 'prior' and nu_ffx is not None:
+        beta_init = nu_ffx[:, :d].detach().clone()
+    else:
+        beta_init = stats['beta_est'][:, :d].detach().clone()
+    beta = beta_init.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
+    beta.requires_grad_(True)
+
+    sigma0 = Zm.new_full((B, q), float(sigma_start)).clamp(min=1e-4, max=sigma_max)
+    if sigma_init == 'stats' and 'sigma_rfx_est' in stats:
+        sigma0 = stats['sigma_rfx_est'][:, :q].detach().clamp(min=1e-4, max=sigma_max)
+    elif sigma_init == 'prior' and tau_rfx is not None:
+        sigma0 = tau_rfx[:, :q].detach().clamp(min=1e-4, max=sigma_max)
+    log_sigma = sigma0.log().clone().requires_grad_(True)
+
+    optimizer = torch.optim.Adam([beta, log_sigma], lr=lr)
+    min_log_sigma = math.log(1e-4)
+    start_log_cap = math.log(max(sigma_start, 1e-4))
+    final_log_cap = math.log(sigma_max)
+
+    with torch.enable_grad():
+        for step in range(n_steps):
+            frac = 1.0 if n_steps == 1 else float(step) / float(n_steps - 1)
+            log_cap = start_log_cap + frac * (final_log_cap - start_log_cap)
+            optimizer.zero_grad(set_to_none=True)
+            log_sigma_step = log_sigma.clamp(min=min_log_sigma, max=log_cap)
+            blups, H, active_q_step = _bernoulliLaplaceModeDiag(
+                beta,
+                log_sigma_step,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                mask_q,
+                n_inner=n_inner,
+                damping=damping,
+            )
+            target = _bernoulliLaplaceEbTargetDiag(
+                beta,
+                log_sigma_step,
+                blups,
+                H,
+                active_q_step,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                tau_rfx,
+                family_sigma_rfx,
+                mask_d,
+                sigma_log_jacobian,
+            )
+            loss = -target.sum()
+            if not torch.isfinite(loss):
+                break
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_([beta, log_sigma], max_norm=10.0)
+            optimizer.step()
+            with torch.no_grad():
+                beta.clamp_(-20.0, 20.0)
+                log_sigma.clamp_(min_log_sigma, final_log_cap)
+                log_sigma.masked_fill_(~active_q, min_log_sigma)
+
+    with torch.no_grad():
+        beta_final = beta.detach()
+        log_sigma_final = log_sigma.detach().clamp(min=min_log_sigma, max=final_log_cap)
+        blups, H, _ = _bernoulliLaplaceModeDiag(
+            beta_final,
+            log_sigma_final,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            mask_q,
+            n_inner=n_final,
+            damping=damping,
+        )
+        eye_q = torch.eye(q, device=device, dtype=dtype).expand(H.shape[0], H.shape[1], q, q)
+        H_inv = _safeSolve(H + _adaptiveRidgeBm(H), eye_q) * mask_m[:, :, None, None]
+        sigma = log_sigma_final.exp()
+        if 'sigma_rfx_est' in stats:
+            sigma = torch.where(active_q, sigma, stats['sigma_rfx_est'][:, :q])
+        Psi_lap = torch.diag_embed(sigma.square())
+        blup_var = H_inv.diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
+        blup_var = blup_var * mask_m[:, :, None] * active_q[:, None, :].to(dtype)
+
+        if accept_only_improved and 'sigma_rfx_est' in stats:
+            base_beta = stats['beta_est'][:, :d].detach()
+            base_log_sigma = (
+                stats['sigma_rfx_est'][:, :q].detach().clamp(min=1e-4, max=sigma_max).log()
+            )
+            base_blups, base_H, base_active_q = _bernoulliLaplaceModeDiag(
+                base_beta,
+                base_log_sigma,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                mask_q,
+                n_inner=n_final,
+                damping=damping,
+            )
+            final_target = _bernoulliLaplaceEbTargetDiag(
+                beta_final,
+                log_sigma_final,
+                blups,
+                H,
+                active_q,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                tau_rfx,
+                family_sigma_rfx,
+                mask_d,
+                sigma_log_jacobian,
+            )
+            base_target = _bernoulliLaplaceEbTargetDiag(
+                base_beta,
+                base_log_sigma,
+                base_blups,
+                base_H,
+                base_active_q,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                tau_rfx,
+                family_sigma_rfx,
+                mask_d,
+                sigma_log_jacobian,
+            )
+            accept = final_target >= base_target - 1e-5
+            beta_final = torch.where(accept[:, None], beta_final, base_beta)
+            sigma = torch.where(accept[:, None], sigma, stats['sigma_rfx_est'][:, :q])
+            blups = torch.where(accept[:, None, None], blups, stats['blup_est'][:, :, :q])
+            if 'blup_var' in stats:
+                blup_var = torch.where(accept[:, None, None], blup_var, stats['blup_var'][:, :, :q])
+            Psi_lap = torch.where(
+                accept[:, None, None], torch.diag_embed(sigma.square()), stats['Psi_lap'][:, :q, :q]
+            )
+
+    out = dict(stats)
+    out['beta_est'] = beta_final
+    out['sigma_rfx_est'] = sigma
+    out['blup_est'] = blups.detach()
+    out['blup_var'] = blup_var.detach()
+    out['Psi_lap'] = _psdClampEigenvalues(Psi_lap, _BERNOULLI_PSI_EIG_CAP)
     return out
 
 
