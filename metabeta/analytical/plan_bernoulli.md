@@ -43,26 +43,33 @@ Implemented (✓) / Tried and reverted (✗) / In progress (→)
 **✓ P6** — True Laplace score for β. n_outer=2 rounds of β Newton + b̂_g Newton + M-step.
 **✓ P7/BC1** — Analytic O(1/n) M-step correction inline in `refineBernoulliMapBeta`.
 **✓ P8** — nAGQ for q>1 (2≤q≤5) via Cartesian-product GH grid.
-**→ P11/INLA-lite** — Grid integration of σ_rfx replacing P6 MAP β.
+**✗ P11/INLA-lite** — Grid integration of σ_rfx with β averaging.
 
-  Root cause of FFX failure at medium+ scale: IRLS underdetermined at large d, P6 anchors β
-  to the PQL point estimate of σ_rfx. INLA wins because it marginalizes over σ_rfx.
+  Implemented and benchmarked (2026-05-15). σ_rfx improved (0.447 vs 0.602 nAGQ) but FFX
+  catastrophically regressed (3–4× worse). Root cause: β̂(σ) is monotone in σ (small σ →
+  OLS, large σ → within-group); posterior mass is asymmetric (~60% below LML peak). Averaging
+  pulls β toward the OLS regime, undoing P6's improvements. Reverted.
+
+  Insight from envelope theorem: ∂LML/∂β = Σ_g X_g'(y_g − μ_g) — the exact Bernoulli score —
+  which P6 already computes. P6 and INLA optimize the same β objective. The INLA advantage at
+  high d is not about marginalizing σ_rfx; it is about nested optimization (b_g re-optimized
+  per β step) vs P6 block coordinate ascent from a poor PQL starting point.
+
+**→ P12/nested-β** — Nested β/b_g optimization matching INLA's internal algorithm.
+
+  Root cause of FFX failure at high d: P6 uses 2-round block coordinate ascent (fix b_g →
+  update β). At large d, the PQL starting point for β is far from optimum and 2 rounds don't
+  recover. INLA re-optimizes b_g at each β Newton step (fully nested), so it always finds
+  the joint MAP.
 
   Design:
-  - After `refineBernoulliNagqSrfx` (P5/P8), build a uniform log-space grid of σ_rfx values
-    centered on the nAGQ estimate ± 2.5 log-units. Grid size: K_per_dim^{q_act} with
-    K={1:15, 2:7, 3:5, 4:4, 5:3} to keep total nodes ≤300.
-  - For each grid point k: run penalized IRLS with σ_rfx fixed (`_pqlPass(fixed_psi=True)`)
-    to get MAP (β̂_k, b̂_k). Evaluate Laplace LML:
-      log p(y|σ_rfx_k) = Σ_g { ℓ_g(β̂, b̂_g) − ½ b̂_g'Ψ⁻¹b̂_g − ½ log|Ψ| − ½ log|H_g| }
-    where H_g = ZWZ_g + Ψ⁻¹.
-  - Weight: w_k = softmax(LML_k + log p_prior(σ_rfx_k)).
-  - Return: β_marg = Σ_k w_k β̂_k, σ_rfx_marg = Σ_k w_k σ_rfx_k.
-  - Final: 3-Newton BLUP refresh at (β_marg, σ_rfx_marg) + BC1 M-step.
-  - `fixed_psi=True` in `_pqlPass` skips the internal Ψ M-step so the mode is found
-    under the grid Ψ exactly (matches INLA's per-hyperparameter mode-finding).
-  - Replaces `refineBernoulliMapBeta` in the call chain; nAGQ still runs first for grid center.
-  - Chunked over K to bound memory: chunk_k = max(1, 64//n_elig) grid points at a time.
+  - After `refineBernoulliNagqSrfx` (P5/P8), run a nested Newton loop:
+    outer: k=5–10 Newton steps on β using the true Laplace score Σ_g X_g'(y_g − μ̂_g(β));
+    inner: at each β, re-run b_g Newton to near-convergence (n_inner=3–5 steps) before
+    computing μ̂_g and the Hessian contribution.
+  - Ψ stays fixed at the nAGQ estimate throughout (no M-step during nested loop).
+  - Final M-step + BC1 correction after convergence.
+  - Replaces `refineBernoulliMapBeta` in the call chain.
 
 **✗ P2** — Laplace-MAP σ_rfx fixed-point (cancels H_g^{-1} correction). Code in `map.py:refineBernoulliMapSrfx` removed.
 **✗ P3** — Beta blend for BLUP residuals (oracle: partition-specific, no globally safe α).

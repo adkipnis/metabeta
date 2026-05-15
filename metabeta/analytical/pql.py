@@ -309,7 +309,6 @@ def _pqlPass(
     Psi_inv: torch.Tensor,  # (B, q, q) precision used for Newton penalty and Hg
     ctx: _PqlPassContext,
     bg_init: torch.Tensor | None = None,  # warm start; None = cold start from zeros
-    fixed_psi: bool = False,  # skip Ψ M-step; Psi_lap returned = Psi_inv^{-1}
 ) -> _PqlPassResult:
     """One PQL pass: damped Newton → Ψ̂_Lap M-step → GLS β̂ and BLUPs.
 
@@ -380,22 +379,17 @@ def _pqlPass(
     ZWZ_f_safe = torch.where(active[:, :, None, None], ZWZ_f, eye_q)
 
     # Ψ̂_Lap M-step: Ψ = mean_g(b̂_g b̂_g' + H_g^{-1})
-    # Skipped when fixed_psi=True — Ψ is held fixed to the input Psi_inv (INLA-lite inner loop).
     Hg_f = ZWZ_f_safe + Psi_inv[:, None]
     Hg_inv = _safeSolve(Hg_f + _adaptiveRidgeBm(Hg_f), eye_q_bm) * mask4
     Hg_inv = _regularizeLaplaceCovariance(Hg_inv, ZWZ_f, ctx)
+
+    bg_outer = torch.einsum('bmq,bmr->bmqr', bg, bg)
+    Psi_lap = _psdProject((bg_outer + Hg_inv).sum(dim=1) / G[:, None, None])  # (B, q, q)
+    Psi_lap = _psdClampEigenvalues(Psi_lap, family.psi_eig_cap)
     mean_Hg_inv = (Hg_inv * mask4).sum(dim=1) / G[:, None, None]
 
-    if fixed_psi:
-        Psi_lap = _pseudoInverse(Psi_inv)
-        Psi_lap_inv = Psi_inv
-    else:
-        bg_outer = torch.einsum('bmq,bmr->bmqr', bg, bg)
-        Psi_lap = _psdProject((bg_outer + Hg_inv).sum(dim=1) / G[:, None, None])  # (B, q, q)
-        Psi_lap = _psdClampEigenvalues(Psi_lap, family.psi_eig_cap)
-        Psi_lap_inv = _pseudoInverse(Psi_lap)
-
     # --- β̂_GLS via Woodbury/Schur complement under freshly computed Ψ̂_Lap ---
+    Psi_lap_inv = _pseudoInverse(Psi_lap)
     XWX_f = torch.einsum('bmnd,bmn,bmnk->bmdk', Xm, w_f, Xm)             # (B, m, d, d)
     XWZ_f = torch.einsum('bmnd,bmn,bmnq->bmdq', Xm, w_f, Zm)             # (B, m, d, q)
     XWy_f = torch.einsum('bmnd,bmn->bmd', Xm, w_f * ytilde_f)             # (B, m, d)
