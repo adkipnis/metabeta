@@ -190,6 +190,10 @@ def glmm(
     bernoulli_laplace_eb_blup_fallback_beta_jump = kwargs.pop(
         'bernoulli_laplace_eb_blup_fallback_beta_jump', 1.0
     )
+    bernoulli_laplace_eb_steps = kwargs.pop('bernoulli_laplace_eb_steps', 12)
+    bernoulli_laplace_eb_inner = kwargs.pop('bernoulli_laplace_eb_inner', 4)
+    bernoulli_laplace_eb_final = kwargs.pop('bernoulli_laplace_eb_final', 6)
+    bernoulli_laplace_eb_lr = kwargs.pop('bernoulli_laplace_eb_lr', 0.05)
     bernoulli_laplace_eb_gate_min_d = kwargs.pop('bernoulli_laplace_eb_gate_min_d', 4)
     bernoulli_laplace_eb_gate_min_sigma = kwargs.pop('bernoulli_laplace_eb_gate_min_sigma', 0.75)
     bernoulli_laplace_eb_gate_eta_abs = kwargs.pop('bernoulli_laplace_eb_gate_eta_abs', 8.0)
@@ -290,6 +294,10 @@ def glmm(
                     family_sigma_rfx=map_priors['family_sigma_rfx'],
                     mask_d=mask_d,
                     mask_q=mask_q,
+                    n_steps=bernoulli_laplace_eb_steps,
+                    n_inner=bernoulli_laplace_eb_inner,
+                    n_final=bernoulli_laplace_eb_final,
+                    lr=bernoulli_laplace_eb_lr,
                     blup_fallback_beta_jump=bernoulli_laplace_eb_blup_fallback_beta_jump,
                     return_diagnostics=bernoulli_laplace_eb_diagnostics,
                 )
@@ -320,6 +328,10 @@ def glmm(
                         family_sigma_rfx=_sliceBatch(map_priors['family_sigma_rfx'], gate),
                         mask_d=_sliceBatch(mask_d, gate),
                         mask_q=_sliceBatch(mask_q, gate),
+                        n_steps=bernoulli_laplace_eb_steps,
+                        n_inner=bernoulli_laplace_eb_inner,
+                        n_final=bernoulli_laplace_eb_final,
+                        lr=bernoulli_laplace_eb_lr,
                         blup_fallback_beta_jump=bernoulli_laplace_eb_blup_fallback_beta_jump,
                         return_diagnostics=bernoulli_laplace_eb_diagnostics,
                     )

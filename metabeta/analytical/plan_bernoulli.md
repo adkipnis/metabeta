@@ -1,7 +1,7 @@
 Bernoulli GLMM Plan
 ===================
 
-Last updated: 2026-05-15 (P13 experiments)
+Last updated: 2026-05-15 (P14/P15 matched benchmarks)
 
 Current Baseline
 ----------------
@@ -85,6 +85,13 @@ Ranked branches, ordered by expected accuracy per implementation risk:
      (`laplace_eb_accept`, `laplace_eb_steps`, target/base-target) when requested via
      `bernoulli_laplace_eb_diagnostics=True`. Focused GLMM tests pass. Superseded
      operationally by P15's explicit auto-gated route.
+   - **→ P14d/deeper budget candidate** — Implemented 2026-05-15 as exposed knobs,
+     not yet the default: `bernoulli_laplace_eb_steps`, `bernoulli_laplace_eb_inner`,
+     `bernoulli_laplace_eb_final`, and `bernoulli_laplace_eb_lr`. Benchmark alias
+     `p14_deep` uses 20 outer steps, 4 inner mode steps, and 8 final mode steps.
+     On matched N=1000 rows it improves over P14-all on every medium/large/huge row,
+     with CPU runtime still ~28-56 ms/dataset. Keep the default 12/4/6 until the
+     full required-suite rerun confirms the small-mixed BLUP tradeoff is acceptable.
 
 2. **→ P15/diagnostic fallback gate** — Implemented 2026-05-15. The current hybrid path
    remains the default (`bernoulli_laplace_eb=False`). `bernoulli_laplace_eb=True` still
@@ -129,6 +136,40 @@ Ranked branches, ordered by expected accuracy per implementation risk:
    base = FFX 2.070, σ 0.559, BLUP 0.905; P14 without fallback = FFX 0.911,
    σ 0.520, BLUP 0.983; P14 with fallback = FFX 0.911, σ 0.520, BLUP 0.901,
    with one fallback trigger.
+
+Matched P14/P15 benchmark (first 1000 datasets per split, 2026-05-15):
+
+| Dataset | part | Current FFX | P14-all FFX | P14-deep FFX | Current σ | P14-deep σ | Current BLUP | P14-deep BLUP | deep ms/ds |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-b-mixed | train | 0.2710 | 0.2703 | 0.2687 | 0.5712 | 0.5170 | 0.6176 | 0.6198 | 15.76 |
+| small-b-sampled | valid | 0.3186 | 0.3152 | 0.3133 | 0.6041 | 0.5456 | 0.6502 | 0.6401 | 14.70 |
+| small-b-sampled | test | 0.2973 | 0.2925 | 0.2921 | 0.5744 | 0.5124 | 0.6177 | 0.6097 | 15.23 |
+| medium-b-mixed | train | 1.7488 | 0.7531 | 0.7414 | 0.8354 | 0.8078 | 1.0896 | 1.0931 | 28.31 |
+| medium-b-sampled | valid | 0.3383 | 0.3351 | 0.3334 | 0.6190 | 0.5522 | 0.6888 | 0.6893 | 31.31 |
+| medium-b-sampled | test | 0.3451 | 0.3420 | 0.3409 | 0.6515 | 0.5847 | 0.7057 | 0.7193 | 30.98 |
+| large-b-mixed | train | 1.8088 | 0.7873 | 0.7743 | 0.7228 | 0.6475 | 0.9583 | 0.8844 | 32.15 |
+| large-b-sampled | valid | 1.6622 | 0.7255 | 0.7180 | 0.8365 | 0.7381 | 1.1129 | 1.0693 | 34.16 |
+| large-b-sampled | test | 1.8280 | 0.7834 | 0.7726 | 0.8752 | 0.7606 | 0.9178 | 0.8269 | 37.25 |
+| huge-b-mixed | train | 0.9525 | 0.5603 | 0.5533 | 1.0181 | 0.9322 | 1.0459 | 1.0063 | 38.64 |
+| huge-b-sampled | valid | 0.3925 | 0.3893 | 0.3869 | 0.8705 | 0.7455 | 0.9367 | 0.8290 | 55.55 |
+| huge-b-sampled | test | 0.3840 | 0.3814 | 0.3788 | 0.7908 | 0.6683 | 0.8143 | 0.7651 | 50.33 |
+
+Interpretation:
+- P14-all improves FFX/σ almost everywhere but still trails INLA on the hard
+  medium/large/huge mixed FFX rows. P14-deep consistently improves over P14-all,
+  so the next promising branch is budget/schedule tuning, not P15 threshold tuning.
+- P15-auto selected 100% of medium+ matched rows, so it is currently a small-scale
+  cost saver rather than a medium/large accuracy selector.
+- BLUP is not the limiting metric for NPE context, but P14-deep still has localized
+  BLUP regressions on small-mixed, medium-sampled/test, and medium-sampled/valid.
+  Do not make P14-deep the default until the full required-suite rerun confirms these
+  are small relative to the FFX/σ gains.
+
+CAVI-subset check (first 200 for small/medium/large, first 100 for huge): P14-deep
+beats the stored CAVI table on FFX for all 12 rows and on σ/BLUP for nearly all rows.
+Residual caveats are medium-b-sampled/test BLUP (P14-deep 0.966 vs CAVI 0.831) and
+huge-b-sampled/test σ (P14-deep 0.796 vs CAVI 0.784). This makes INLA, not CAVI, the
+remaining useful external accuracy target.
 
 3. **✗ P13/prior-seeded P12 / cold-start** — Tried and reverted (2026-05-15). See P13a/b/c
    entries in the tried section below. Result informs P14: any cold-start route must keep

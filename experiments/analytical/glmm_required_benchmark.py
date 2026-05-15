@@ -6,6 +6,7 @@ Supports normal (family=n) and Bernoulli (family=b) likelihood families.
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 
 import numpy as np
@@ -18,7 +19,7 @@ from metabeta.utils.experiments import dataFilePath
 
 
 SIZES = ['small', 'medium', 'large', 'huge']
-METHODS = ['current', 'raw']
+METHODS = ['current', 'raw', 'p14_all', 'p14_deep', 'p15_auto']
 FAMILIES = ['n', 'b']
 
 
@@ -35,7 +36,10 @@ def _paths(data_id: str, partition: str, n_epochs: int) -> list[Path]:
 
 def run_required_benchmark(args: argparse.Namespace) -> None:
     family = args.family
-    print('method,dataset,partition,N,FFX,sRFX,sEps,BLUP', flush=True)
+    print(
+        'method,dataset,partition,N,FFX,sRFX,sEps,BLUP,ms_per_ds,gate,accept,blup_fallback',
+        flush=True,
+    )
     for size in args.sizes:
         combos = [(f'{size}-{family}-mixed', 'train', 2)]
         combos.extend((f'{size}-{family}-sampled', part, 0) for part in ['valid', 'test'])
@@ -46,6 +50,7 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
             stores = {method: _MetricStore(likelihood_family) for method in args.methods}
 
             with torch.no_grad():
+                n_seen = 0
                 for path in _paths(data_id, partition, n_epochs):
                     for batch_idx, batch in enumerate(
                         Dataloader(path, batch_size=args.batch_size, shuffle=False)
@@ -53,6 +58,12 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                         if args.max_batches is not None and batch_idx >= args.max_batches:
                             break
                         batch = toDevice(batch, torch.device('cpu'))
+                        if args.max_datasets is not None:
+                            remaining = args.max_datasets - n_seen
+                            if remaining <= 0:
+                                break
+                            if batch['X'].shape[0] > remaining:
+                                batch = _sliceBatch(batch, remaining)
                         Zm = batch['Z'][..., :max_q]
                         common = dict(
                             eta_rfx=batch.get('eta_rfx'),
@@ -67,6 +78,7 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                             mask_d=batch.get('mask_d'),
                         )
                         for method in args.methods:
+                            t0 = time.perf_counter()
                             stats = glmm(
                                 batch['X'],
                                 batch['y'],
@@ -77,9 +89,19 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                                 batch['n'].float(),
                                 likelihood_family=likelihood_family,
                                 map_refine=method != 'raw',
+                                bernoulli_laplace_eb=True
+                                if method in {'p14_all', 'p14_deep'}
+                                else 'auto'
+                                if method == 'p15_auto'
+                                else False,
+                                bernoulli_laplace_eb_diagnostics=method
+                                in {'p14_all', 'p14_deep', 'p15_auto'},
+                                bernoulli_laplace_eb_steps=20 if method == 'p14_deep' else 12,
+                                bernoulli_laplace_eb_final=8 if method == 'p14_deep' else 6,
                                 **common,
                             )
-                            stores[method].add(stats, batch, max_q)
+                            stores[method].add(stats, batch, max_q, time.perf_counter() - t0)
+                        n_seen += batch['X'].shape[0]
 
             for method in args.methods:
                 print(stores[method].row(method, data_id, partition), flush=True)
@@ -96,16 +118,32 @@ class _MetricStore:
         self.seps_truths: list[np.ndarray] = []
         self.blup_errs: list[np.ndarray] = []
         self.blup_truths: list[np.ndarray] = []
+        self.wall: list[float] = []
+        self.gate: list[np.ndarray] = []
+        self.accept: list[np.ndarray] = []
+        self.blup_fallback: list[np.ndarray] = []
         self.n_total = 0
 
     def add(
-        self, stats: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], max_q: int
+        self,
+        stats: dict[str, torch.Tensor],
+        batch: dict[str, torch.Tensor],
+        max_q: int,
+        elapsed: float,
     ) -> None:
+        B = batch['X'].shape[0]
         mask_d = batch['mask_d'].bool()
         mask_q = batch['mask_q'][..., :max_q].bool()
         mask_m = batch['mask_m'].bool()
-        self.n_total += batch['X'].shape[0]
-        for b in range(batch['X'].shape[0]):
+        self.wall.extend([elapsed / max(B, 1)] * B)
+        if 'laplace_eb_gate' in stats:
+            self.gate.append(stats['laplace_eb_gate'].detach().cpu().numpy())
+        if 'laplace_eb_accept' in stats:
+            self.accept.append(stats['laplace_eb_accept'].detach().cpu().numpy())
+        if 'laplace_eb_blup_fallback' in stats:
+            self.blup_fallback.append(stats['laplace_eb_blup_fallback'].detach().cpu().numpy())
+        self.n_total += B
+        for b in range(B):
             self.beta_errs.append(
                 (stats['beta_est'][b][mask_d[b]] - batch['ffx'][b][mask_d[b]]).cpu().numpy()
             )
@@ -127,6 +165,13 @@ class _MetricStore:
             self.blup_truths.append(blup_true.reshape(-1).cpu().numpy())
 
     def row(self, method: str, data_id: str, partition: str) -> str:
+        gate = float(np.mean(np.concatenate(self.gate))) if self.gate else float('nan')
+        accept = float(np.mean(np.concatenate(self.accept))) if self.accept else float('nan')
+        blup_fallback = (
+            float(np.mean(np.concatenate(self.blup_fallback)))
+            if self.blup_fallback
+            else float('nan')
+        )
         seps_str = (
             f'{_nrmse(np.concatenate(self.seps_errs), np.concatenate(self.seps_truths)):.4f}'
             if self.likelihood_family == 0
@@ -142,8 +187,23 @@ class _MetricStore:
                 f'{_nrmse(np.concatenate(self.srfx_errs), np.concatenate(self.srfx_truths)):.4f}',
                 seps_str,
                 f'{_nrmse(np.concatenate(self.blup_errs), np.concatenate(self.blup_truths)):.4f}',
+                f'{1000.0 * float(np.mean(self.wall)):.2f}',
+                f'{gate:.3f}',
+                f'{accept:.3f}',
+                f'{blup_fallback:.3f}',
             ]
         )
+
+
+def _sliceBatch(batch: dict[str, torch.Tensor], n: int) -> dict[str, torch.Tensor]:
+    out = {}
+    B = batch['X'].shape[0]
+    for key, value in batch.items():
+        if torch.is_tensor(value) and value.shape[:1] == (B,):
+            out[key] = value[:n]
+        else:
+            out[key] = value
+    return out
 
 
 # fmt: off
@@ -154,6 +214,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--family',                default='n',         choices=FAMILIES)
     parser.add_argument('--batch-size', type=int,  default=32)
     parser.add_argument('--max-batches',type=int,  default=None)
+    parser.add_argument('--max-datasets', type=int, default=None)
     return parser.parse_args()
 # fmt: on
 
