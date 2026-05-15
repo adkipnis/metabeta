@@ -867,6 +867,7 @@ def refineBernoulliLaplaceEb(
     early_stop: bool = False,
     early_stop_patience: int = 3,
     early_stop_min_delta: float = 1e-4,
+    blup_fallback_beta_jump: float | None = 1.0,
     return_diagnostics: bool = False,
 ) -> dict[str, torch.Tensor]:
     """P14: diagonal single-mode Laplace-EB refinement for Bernoulli GLMMs.
@@ -1001,10 +1002,12 @@ def refineBernoulliLaplaceEb(
         blup_var = blup_var * mask_m[:, :, None] * active_q[:, None, :].to(dtype)
 
         accept = torch.ones(B, device=device, dtype=torch.bool)
+        blup_fallback = torch.zeros(B, device=device, dtype=torch.bool)
+        beta_jump = torch.full((B,), float('nan'), device=device, dtype=dtype)
         final_target = torch.full((B,), float('nan'), device=device, dtype=dtype)
         base_target = torch.full((B,), float('nan'), device=device, dtype=dtype)
+        base_beta = stats['beta_est'][:, :d].detach() if 'beta_est' in stats else None
         if accept_only_improved and 'sigma_rfx_est' in stats:
-            base_beta = stats['beta_est'][:, :d].detach()
             base_log_sigma = (
                 stats['sigma_rfx_est'][:, :q].detach().clamp(min=1e-4, max=sigma_max).log()
             )
@@ -1067,6 +1070,20 @@ def refineBernoulliLaplaceEb(
             Psi_lap = torch.where(
                 accept[:, None, None], torch.diag_embed(sigma.square()), stats['Psi_lap'][:, :q, :q]
             )
+        if blup_fallback_beta_jump is not None and base_beta is not None and 'blup_est' in stats:
+            if mask_d is None:
+                active_d = torch.ones(B, d, device=device, dtype=torch.bool)
+            else:
+                active_d = mask_d[:, :d].to(device=device).bool()
+            d_count = active_d.to(dtype).sum(dim=1).clamp(min=1.0)
+            beta_diff2 = (beta_final - base_beta).square() * active_d.to(dtype)
+            beta_jump = (beta_diff2.sum(dim=1) / d_count).sqrt()
+            blup_fallback = accept & (beta_jump >= float(blup_fallback_beta_jump))
+            blups = torch.where(blup_fallback[:, None, None], stats['blup_est'][:, :, :q], blups)
+            if 'blup_var' in stats:
+                blup_var = torch.where(
+                    blup_fallback[:, None, None], stats['blup_var'][:, :, :q], blup_var
+                )
 
     out = dict(stats)
     out['beta_est'] = beta_final
@@ -1079,6 +1096,8 @@ def refineBernoulliLaplaceEb(
         out['laplace_eb_steps'] = torch.full((B,), float(n_steps_run), device=device, dtype=dtype)
         out['laplace_eb_target'] = final_target
         out['laplace_eb_base_target'] = base_target
+        out['laplace_eb_blup_fallback'] = blup_fallback.to(dtype)
+        out['laplace_eb_beta_jump'] = beta_jump
     return out
 
 

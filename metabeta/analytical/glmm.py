@@ -64,7 +64,7 @@ def _emptyDiagnosticLike(
     value: torch.Tensor,
     batch_size: int,
 ) -> torch.Tensor:
-    fill_value = float('nan') if key.endswith('target') else 0.0
+    fill_value = float('nan') if key.endswith('target') or key.endswith('beta_jump') else 0.0
     return value.new_full((batch_size, *value.shape[1:]), fill_value)
 
 
@@ -104,6 +104,10 @@ def _addLaplaceEbSkippedDiagnostics(
         stats['laplace_eb_target'] = torch.full((B,), float('nan'), device=device, dtype=dtype)
     if 'laplace_eb_base_target' not in stats:
         stats['laplace_eb_base_target'] = torch.full((B,), float('nan'), device=device, dtype=dtype)
+    if 'laplace_eb_blup_fallback' not in stats:
+        stats['laplace_eb_blup_fallback'] = torch.zeros(B, device=device, dtype=dtype)
+    if 'laplace_eb_beta_jump' not in stats:
+        stats['laplace_eb_beta_jump'] = torch.full((B,), float('nan'), device=device, dtype=dtype)
     stats['laplace_eb_gate'] = gate.to(dtype=dtype)
 
 
@@ -183,6 +187,9 @@ def glmm(
     bernoulli_laplace_eb = kwargs.pop('bernoulli_laplace_eb', False)
     bernoulli_laplace_eb_mode = _bernoulliLaplaceEbMode(bernoulli_laplace_eb)
     bernoulli_laplace_eb_diagnostics = kwargs.pop('bernoulli_laplace_eb_diagnostics', False)
+    bernoulli_laplace_eb_blup_fallback_beta_jump = kwargs.pop(
+        'bernoulli_laplace_eb_blup_fallback_beta_jump', 1.0
+    )
     bernoulli_laplace_eb_gate_min_d = kwargs.pop('bernoulli_laplace_eb_gate_min_d', 4)
     bernoulli_laplace_eb_gate_min_sigma = kwargs.pop('bernoulli_laplace_eb_gate_min_sigma', 0.75)
     bernoulli_laplace_eb_gate_eta_abs = kwargs.pop('bernoulli_laplace_eb_gate_eta_abs', 8.0)
@@ -283,6 +290,7 @@ def glmm(
                     family_sigma_rfx=map_priors['family_sigma_rfx'],
                     mask_d=mask_d,
                     mask_q=mask_q,
+                    blup_fallback_beta_jump=bernoulli_laplace_eb_blup_fallback_beta_jump,
                     return_diagnostics=bernoulli_laplace_eb_diagnostics,
                 )
             else:
@@ -312,6 +320,7 @@ def glmm(
                         family_sigma_rfx=_sliceBatch(map_priors['family_sigma_rfx'], gate),
                         mask_d=_sliceBatch(mask_d, gate),
                         mask_q=_sliceBatch(mask_q, gate),
+                        blup_fallback_beta_jump=bernoulli_laplace_eb_blup_fallback_beta_jump,
                         return_diagnostics=bernoulli_laplace_eb_diagnostics,
                     )
                     stats = _mergeStatsBatch(stats, refined, gate, Xm.shape[0])

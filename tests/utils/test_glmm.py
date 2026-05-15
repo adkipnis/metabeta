@@ -472,6 +472,47 @@ def test_refine_bernoulli_laplace_eb_smoke_q1():
     )
 
 
+def test_refine_bernoulli_laplace_eb_blup_fallback():
+    """P14 can keep incoming BLUPs when the β jump trips the fallback."""
+    rng = np.random.default_rng(SEED + 16)
+    B, d, q, m, n_per_group = 3, 3, 1, 6, 12
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=1, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+    stats = lmmBernoulli(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+    )
+
+    result = refineBernoulliLaplaceEb(
+        stats,
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        mask_d=torch.ones(B, d, dtype=torch.bool),
+        mask_q=torch.ones(B, q, dtype=torch.bool),
+        n_steps=1,
+        n_inner=1,
+        n_final=1,
+        accept_only_improved=False,
+        blup_fallback_beta_jump=0.0,
+        return_diagnostics=True,
+    )
+
+    assert torch.allclose(result['blup_est'], stats['blup_est'])
+    assert torch.allclose(result['blup_var'], stats['blup_var'])
+    assert torch.equal(result['laplace_eb_blup_fallback'], torch.ones(B))
+    assert torch.isfinite(result['laplace_eb_beta_jump']).all()
+
+
 def test_glmm_bernoulli_laplace_eb_flag_smoke():
     """P14c is available through glmm() behind an explicit flag."""
     rng = np.random.default_rng(SEED + 14)
@@ -511,6 +552,8 @@ def test_glmm_bernoulli_laplace_eb_flag_smoke():
     assert torch.isfinite(result['blup_est']).all()
     assert torch.isfinite(result['laplace_eb_accept']).all()
     assert torch.isfinite(result['laplace_eb_steps']).all()
+    assert torch.isfinite(result['laplace_eb_blup_fallback']).all()
+    assert torch.isfinite(result['laplace_eb_beta_jump']).all()
     assert result['laplace_eb_steps'].min().item() >= 1.0
 
 

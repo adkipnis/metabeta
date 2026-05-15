@@ -117,9 +117,15 @@ Ranked branches, ordered by expected accuracy per implementation risk:
    and a simple observable fallback that keeps base BLUP only when
    `rmse(β_P14 - β_base) >= 1` reached 0.822. On six 512-row medium/large/huge slices,
    that β-jump rule triggered only twice and fixed the large-b-sampled/test regression
-   without materially changing the other slices. Recommended next fix: add an optional
-   P14 BLUP-only fallback keyed by large β jumps, keeping P14 β/σ/Psi but retaining
-   the previous `blup_est`/`blup_var` for those rare cases.
+   without materially changing the other slices.
+
+   Implemented follow-up: P14 now has a default-on BLUP-only fallback controlled by
+   `blup_fallback_beta_jump=1.0` in `refineBernoulliLaplaceEb` and exposed through
+   `glmm(..., bernoulli_laplace_eb_blup_fallback_beta_jump=...)`. It keeps P14
+   β/σ/Psi when the marginal target accepts the refinement but copies back previous
+   `blup_est`/`blup_var` for accepted datasets with large β jumps. Set the threshold
+   to `None` to disable. Diagnostics add `laplace_eb_blup_fallback` and
+   `laplace_eb_beta_jump`.
 
 3. **✗ P13/prior-seeded P12 / cold-start** — Tried and reverted (2026-05-15). See P13a/b/c
    entries in the tried section below. Result informs P14: any cold-start route must keep
