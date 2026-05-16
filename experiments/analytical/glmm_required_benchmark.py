@@ -37,7 +37,8 @@ def _paths(data_id: str, partition: str, n_epochs: int) -> list[Path]:
 def run_required_benchmark(args: argparse.Namespace) -> None:
     family = args.family
     print(
-        'method,dataset,partition,N,FFX,sRFX,sEps,BLUP,ms_per_ds,gate,accept,blup_fallback',
+        'method,dataset,partition,N,FFX,sRFX,sEps,BLUP,ms_per_ds,gate,accept,'
+        'blup_fallback,beta_capped,sigma_capped',
         flush=True,
     )
     combos = _combos(args, family)
@@ -137,6 +138,8 @@ class _MetricStore:
         self.gate: list[np.ndarray] = []
         self.accept: list[np.ndarray] = []
         self.blup_fallback: list[np.ndarray] = []
+        self.beta_capped: list[np.ndarray] = []
+        self.sigma_capped: list[np.ndarray] = []
         self.n_total = 0
 
     def add(
@@ -157,6 +160,10 @@ class _MetricStore:
             self.accept.append(stats['laplace_eb_accept'].detach().cpu().numpy())
         if 'laplace_eb_blup_fallback' in stats:
             self.blup_fallback.append(stats['laplace_eb_blup_fallback'].detach().cpu().numpy())
+        if 'laplace_eb_beta_output_capped' in stats:
+            self.beta_capped.append(stats['laplace_eb_beta_output_capped'].detach().cpu().numpy())
+        if 'laplace_eb_sigma_prior_capped' in stats:
+            self.sigma_capped.append(stats['laplace_eb_sigma_prior_capped'].detach().cpu().numpy())
         self.n_total += B
         for b in range(B):
             self.beta_errs.append(
@@ -187,6 +194,12 @@ class _MetricStore:
             if self.blup_fallback
             else float('nan')
         )
+        beta_capped = (
+            float(np.mean(np.concatenate(self.beta_capped))) if self.beta_capped else float('nan')
+        )
+        sigma_capped = (
+            float(np.mean(np.concatenate(self.sigma_capped))) if self.sigma_capped else float('nan')
+        )
         seps_str = (
             f'{_nrmse(np.concatenate(self.seps_errs), np.concatenate(self.seps_truths)):.4f}'
             if self.likelihood_family == 0
@@ -206,6 +219,8 @@ class _MetricStore:
                 f'{gate:.3f}',
                 f'{accept:.3f}',
                 f'{blup_fallback:.3f}',
+                f'{beta_capped:.3f}',
+                f'{sigma_capped:.3f}',
             ]
         )
 
@@ -221,7 +236,7 @@ def _sliceBatch(batch: dict[str, torch.Tensor], n: int) -> dict[str, torch.Tenso
     return out
 
 
-def _p14Kwargs(method: str, args: argparse.Namespace) -> dict[str, int | float]:
+def _p14Kwargs(method: str, args: argparse.Namespace) -> dict[str, int | float | bool]:
     if method == 'p14_deep':
         return {
             'bernoulli_laplace_eb_steps': 20,
@@ -233,6 +248,7 @@ def _p14Kwargs(method: str, args: argparse.Namespace) -> dict[str, int | float]:
             'bernoulli_laplace_eb_inner': args.p14_inner,
             'bernoulli_laplace_eb_final': args.p14_final,
             'bernoulli_laplace_eb_lr': args.p14_lr,
+            **_p14SigmaPriorCap(args),
             **_p14BetaOutputCap(args),
         }
     return {}
@@ -244,6 +260,20 @@ def _p14BetaOutputCap(args: argparse.Namespace) -> dict[str, float]:
     out = {'bernoulli_laplace_eb_beta_output_cap': args.p14_beta_output_cap}
     if args.p14_beta_output_cap_trigger is not None:
         out['bernoulli_laplace_eb_beta_output_cap_trigger'] = args.p14_beta_output_cap_trigger
+    return out
+
+
+def _p14SigmaPriorCap(args: argparse.Namespace) -> dict[str, int | float | bool]:
+    if args.p14_sigma_prior_cap is None:
+        return {}
+    out = {
+        'bernoulli_laplace_eb_sigma_prior_cap': args.p14_sigma_prior_cap,
+        'bernoulli_laplace_eb_recompute_blup_after_calibration': (
+            not args.p14_no_recompute_blup_after_calibration
+        ),
+    }
+    if args.p14_sigma_prior_cap_min_d is not None:
+        out['bernoulli_laplace_eb_sigma_prior_cap_min_d'] = args.p14_sigma_prior_cap_min_d
     return out
 
 
@@ -263,6 +293,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--p14-lr',     type=float, default=0.05)
     parser.add_argument('--p14-beta-output-cap', type=float, default=None)
     parser.add_argument('--p14-beta-output-cap-trigger', type=float, default=None)
+    parser.add_argument('--p14-sigma-prior-cap', type=float, default=None)
+    parser.add_argument('--p14-sigma-prior-cap-min-d', type=int, default=None)
+    parser.add_argument('--p14-no-recompute-blup-after-calibration', action='store_true')
     return parser.parse_args()
 # fmt: on
 

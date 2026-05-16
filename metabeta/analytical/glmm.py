@@ -198,6 +198,13 @@ def glmm(
     bernoulli_laplace_eb_beta_output_cap_trigger = kwargs.pop(
         'bernoulli_laplace_eb_beta_output_cap_trigger', None
     )
+    bernoulli_laplace_eb_sigma_prior_cap = kwargs.pop('bernoulli_laplace_eb_sigma_prior_cap', None)
+    bernoulli_laplace_eb_sigma_prior_cap_min_d = kwargs.pop(
+        'bernoulli_laplace_eb_sigma_prior_cap_min_d', None
+    )
+    bernoulli_laplace_eb_recompute_blup_after_calibration = kwargs.pop(
+        'bernoulli_laplace_eb_recompute_blup_after_calibration', True
+    )
     bernoulli_laplace_eb_gate_min_d = kwargs.pop('bernoulli_laplace_eb_gate_min_d', 4)
     bernoulli_laplace_eb_gate_min_sigma = kwargs.pop('bernoulli_laplace_eb_gate_min_sigma', 0.75)
     bernoulli_laplace_eb_gate_eta_abs = kwargs.pop('bernoulli_laplace_eb_gate_eta_abs', 8.0)
@@ -305,6 +312,11 @@ def glmm(
                     blup_fallback_beta_jump=bernoulli_laplace_eb_blup_fallback_beta_jump,
                     beta_output_cap=bernoulli_laplace_eb_beta_output_cap,
                     beta_output_cap_trigger=bernoulli_laplace_eb_beta_output_cap_trigger,
+                    sigma_prior_cap=bernoulli_laplace_eb_sigma_prior_cap,
+                    sigma_prior_cap_min_d=bernoulli_laplace_eb_sigma_prior_cap_min_d,
+                    recompute_blup_after_calibration=(
+                        bernoulli_laplace_eb_recompute_blup_after_calibration
+                    ),
                     return_diagnostics=bernoulli_laplace_eb_diagnostics,
                 )
             else:
@@ -341,6 +353,11 @@ def glmm(
                         blup_fallback_beta_jump=bernoulli_laplace_eb_blup_fallback_beta_jump,
                         beta_output_cap=bernoulli_laplace_eb_beta_output_cap,
                         beta_output_cap_trigger=bernoulli_laplace_eb_beta_output_cap_trigger,
+                        sigma_prior_cap=bernoulli_laplace_eb_sigma_prior_cap,
+                        sigma_prior_cap_min_d=bernoulli_laplace_eb_sigma_prior_cap_min_d,
+                        recompute_blup_after_calibration=(
+                            bernoulli_laplace_eb_recompute_blup_after_calibration
+                        ),
                         return_diagnostics=bernoulli_laplace_eb_diagnostics,
                     )
                     stats = _mergeStatsBatch(stats, refined, gate, Xm.shape[0])

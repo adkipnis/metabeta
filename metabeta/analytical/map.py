@@ -870,6 +870,9 @@ def refineBernoulliLaplaceEb(
     blup_fallback_beta_jump: float | None = 1.0,
     beta_output_cap: float | None = None,
     beta_output_cap_trigger: float | None = None,
+    sigma_prior_cap: float | None = None,
+    sigma_prior_cap_min_d: int | None = None,
+    recompute_blup_after_calibration: bool = True,
     return_diagnostics: bool = False,
 ) -> dict[str, torch.Tensor]:
     """P14: diagonal single-mode Laplace-EB refinement for Bernoulli GLMMs.
@@ -1005,6 +1008,8 @@ def refineBernoulliLaplaceEb(
 
         accept = torch.ones(B, device=device, dtype=torch.bool)
         blup_fallback = torch.zeros(B, device=device, dtype=torch.bool)
+        beta_output_capped = torch.zeros(B, device=device, dtype=torch.bool)
+        sigma_prior_capped = torch.zeros(B, device=device, dtype=torch.bool)
         beta_jump = torch.full((B,), float('nan'), device=device, dtype=dtype)
         final_target = torch.full((B,), float('nan'), device=device, dtype=dtype)
         base_target = torch.full((B,), float('nan'), device=device, dtype=dtype)
@@ -1087,19 +1092,55 @@ def refineBernoulliLaplaceEb(
                     blup_fallback[:, None, None], stats['blup_var'][:, :, :q], blup_var
                 )
 
-    out = dict(stats)
-    if beta_output_cap is not None:
-        beta_capped = beta_final.clamp(-float(beta_output_cap), float(beta_output_cap))
-        if beta_output_cap_trigger is None:
-            beta_final = beta_capped
-        else:
-            if mask_d is None:
-                active_d = torch.ones(B, d, device=device, dtype=torch.bool)
+        if beta_output_cap is not None:
+            beta_capped = beta_final.clamp(-float(beta_output_cap), float(beta_output_cap))
+            if beta_output_cap_trigger is None:
+                use_cap = torch.ones(B, device=device, dtype=torch.bool)
             else:
-                active_d = mask_d[:, :d].to(device=device).bool()
-            max_abs_beta = beta_final.abs().masked_fill(~active_d, 0.0).amax(dim=1)
-            use_cap = max_abs_beta > float(beta_output_cap_trigger)
+                if mask_d is None:
+                    active_d = torch.ones(B, d, device=device, dtype=torch.bool)
+                else:
+                    active_d = mask_d[:, :d].to(device=device).bool()
+                max_abs_beta = beta_final.abs().masked_fill(~active_d, 0.0).amax(dim=1)
+                use_cap = max_abs_beta > float(beta_output_cap_trigger)
+            beta_output_capped = use_cap
             beta_final = torch.where(use_cap[:, None], beta_capped, beta_final)
+
+        if sigma_prior_cap is not None and tau_rfx is not None:
+            sigma_cap = float(sigma_prior_cap) * tau_rfx[:, :q].to(device=device).clamp(min=1e-4)
+            sigma_capped = torch.minimum(sigma, sigma_cap)
+            cap_active = active_q & (sigma_capped < sigma)
+            if sigma_prior_cap_min_d is not None:
+                if mask_d is None:
+                    d_count = torch.full((B,), d, device=device, dtype=torch.long)
+                else:
+                    d_count = mask_d[:, :d].to(device=device).bool().sum(dim=1)
+                cap_active = cap_active & (d_count >= int(sigma_prior_cap_min_d))[:, None]
+            sigma_prior_capped = cap_active.any(dim=1)
+            sigma = torch.where(cap_active, sigma_capped, sigma)
+            Psi_lap = torch.diag_embed(sigma.square())
+            if recompute_blup_after_calibration and sigma_prior_capped.any():
+                blups_new, H_new, _ = _bernoulliLaplaceModeDiag(
+                    beta_final,
+                    sigma.clamp(min=1e-4, max=sigma_max).log(),
+                    Xm,
+                    ym,
+                    Zm,
+                    mask_n,
+                    mask_m,
+                    mask_q,
+                    n_inner=n_final,
+                    damping=damping,
+                )
+                H_inv_new = (
+                    _safeSolve(H_new + _adaptiveRidgeBm(H_new), eye_q) * mask_m[:, :, None, None]
+                )
+                blup_var_new = H_inv_new.diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
+                blup_var_new = blup_var_new * mask_m[:, :, None] * active_q[:, None, :].to(dtype)
+                blups = torch.where(sigma_prior_capped[:, None, None], blups_new, blups)
+                blup_var = torch.where(sigma_prior_capped[:, None, None], blup_var_new, blup_var)
+
+    out = dict(stats)
     out['beta_est'] = beta_final
     out['sigma_rfx_est'] = sigma
     out['blup_est'] = blups.detach()
@@ -1112,6 +1153,8 @@ def refineBernoulliLaplaceEb(
         out['laplace_eb_base_target'] = base_target
         out['laplace_eb_blup_fallback'] = blup_fallback.to(dtype)
         out['laplace_eb_beta_jump'] = beta_jump
+        out['laplace_eb_beta_output_capped'] = beta_output_capped.to(dtype)
+        out['laplace_eb_sigma_prior_capped'] = sigma_prior_capped.to(dtype)
     return out
 
 

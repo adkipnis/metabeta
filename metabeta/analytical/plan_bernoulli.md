@@ -1,7 +1,7 @@
 Bernoulli GLMM Plan
 ===================
 
-Last updated: 2026-05-15 (after P14 schedule/diagnostic pass)
+Last updated: 2026-05-16 (after P14 sigma/BLUP calibration pass)
 
 Goal
 ----
@@ -41,6 +41,9 @@ P14 knobs:
 - `bernoulli_laplace_eb_blup_fallback_beta_jump` default `1.0`, set `None` to disable
 - `bernoulli_laplace_eb_beta_output_cap` default `None`
 - `bernoulli_laplace_eb_beta_output_cap_trigger` default `None`
+- `bernoulli_laplace_eb_sigma_prior_cap` default `None`
+- `bernoulli_laplace_eb_sigma_prior_cap_min_d` default `None`
+- `bernoulli_laplace_eb_recompute_blup_after_calibration` default `True`
 
 P14 diagnostics:
 
@@ -50,6 +53,8 @@ P14 diagnostics:
 - `laplace_eb_base_target`
 - `laplace_eb_blup_fallback`
 - `laplace_eb_beta_jump`
+- `laplace_eb_beta_output_capped`
+- `laplace_eb_sigma_prior_capped`
 
 **P15 auto gate:** currently uses effective `d >= 4`, mean estimated `σ_rfx >= 0.75`, or max
 fitted `|η| >= 8`. These are configurable through `bernoulli_laplace_eb_gate_*` kwargs. In
@@ -59,24 +64,26 @@ saver rather than a medium/large accuracy selector.
 Current Performance
 -------------------
 
-Matched first-1000 benchmark, 2026-05-15. `p14_guard` means 24 outer steps, 4 inner mode
+Matched first-1000 benchmark, 2026-05-16. `P14-guard` means 24 outer steps, 4 inner mode
 steps, 8 final mode steps, `lr=0.05`, and a separation-only β summary guard:
-`beta_output_cap=3`, `beta_output_cap_trigger=8`. CPU timings are per dataset.
+`beta_output_cap=3`, `beta_output_cap_trigger=8`. `P14-cal` adds
+`sigma_prior_cap=2.0`, `sigma_prior_cap_min_d=5`, and BLUP recomputation after sigma
+calibration. CPU timings are per dataset.
 
-| Dataset | part | Current FFX | P14-deep FFX | P14-guard FFX | Current σ | P14-guard σ | Current BLUP | P14-guard BLUP | guard ms/ds |
+| Dataset | part | P14-guard FFX | P14-cal FFX | P14-guard σ | P14-cal σ | P14-guard BLUP | P14-cal BLUP | cal ms/ds | σ cap |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-b-mixed | train | 0.2710 | 0.2687 | 0.2683 | 0.5712 | 0.5119 | 0.6176 | 0.6127 | 19.00 |
-| small-b-sampled | valid | 0.3186 | 0.3133 | 0.3127 | 0.6041 | 0.5385 | 0.6502 | 0.6386 | 14.35 |
-| small-b-sampled | test | 0.2973 | 0.2921 | 0.2925 | 0.5744 | 0.5041 | 0.6177 | 0.6089 | 14.95 |
-| medium-b-mixed | train | 1.7488 | 0.7414 | 0.3127 | 0.8354 | 0.8186 | 1.0896 | 1.1051 | 30.12 |
-| medium-b-sampled | valid | 0.3383 | 0.3334 | 0.3328 | 0.6190 | 0.5469 | 0.6888 | 0.6874 | 33.10 |
-| medium-b-sampled | test | 0.3451 | 0.3409 | 0.3393 | 0.6515 | 0.5789 | 0.7057 | 0.7173 | 32.53 |
-| large-b-mixed | train | 1.8088 | 0.7743 | 0.3316 | 0.7228 | 0.6830 | 0.9583 | 0.8719 | 33.56 |
-| large-b-sampled | valid | 1.6622 | 0.7180 | 0.3672 | 0.8365 | 0.7330 | 1.1129 | 1.0670 | 35.95 |
-| large-b-sampled | test | 1.8280 | 0.7726 | 0.3574 | 0.8752 | 0.7431 | 0.9178 | 0.8331 | 40.52 |
-| huge-b-mixed | train | 0.9525 | 0.5533 | 0.3352 | 1.0181 | 0.9104 | 1.0459 | 1.0147 | 41.58 |
-| huge-b-sampled | valid | 0.3925 | 0.3869 | 0.3857 | 0.8705 | 0.7260 | 0.9367 | 0.8019 | 58.86 |
-| huge-b-sampled | test | 0.3840 | 0.3788 | 0.3778 | 0.7908 | 0.6455 | 0.8143 | 0.7523 | 53.10 |
+| small-b-mixed | train | 0.2683 | 0.2683 | 0.5119 | 0.5119 | 0.6127 | 0.6127 | 18.06 | 0.000 |
+| small-b-sampled | valid | 0.3127 | 0.3127 | 0.5385 | 0.5385 | 0.6386 | 0.6386 | 16.14 | 0.000 |
+| small-b-sampled | test | 0.2925 | 0.2925 | 0.5041 | 0.5041 | 0.6089 | 0.6089 | 16.95 | 0.000 |
+| medium-b-mixed | train | 0.3127 | 0.3127 | 0.8186 | 0.5426 | 1.1051 | 0.6719 | 35.48 | 0.067 |
+| medium-b-sampled | valid | 0.3328 | 0.3328 | 0.5469 | 0.5736 | 0.6874 | 0.6944 | 39.50 | 0.062 |
+| medium-b-sampled | test | 0.3393 | 0.3393 | 0.5789 | 0.6007 | 0.7173 | 0.7103 | 38.96 | 0.060 |
+| large-b-mixed | train | 0.3316 | 0.3316 | 0.6830 | 0.5529 | 0.8719 | 0.6868 | 40.53 | 0.067 |
+| large-b-sampled | valid | 0.3672 | 0.3672 | 0.7330 | 0.6045 | 1.0670 | 0.7422 | 43.76 | 0.062 |
+| large-b-sampled | test | 0.3574 | 0.3574 | 0.7431 | 0.6229 | 0.8331 | 0.7283 | 47.58 | 0.063 |
+| huge-b-mixed | train | 0.3352 | 0.3352 | 0.9104 | 0.6033 | 1.0147 | 0.7329 | 49.66 | 0.093 |
+| huge-b-sampled | valid | 0.3857 | 0.3857 | 0.7260 | 0.6149 | 0.8019 | 0.7662 | 68.50 | 0.058 |
+| huge-b-sampled | test | 0.3778 | 0.3778 | 0.6455 | 0.6354 | 0.7523 | 0.7549 | 61.79 | 0.067 |
 
 Interpretation:
 
@@ -85,8 +92,11 @@ Interpretation:
 - P14-guard fixes that specific FFX failure mode with a very small trigger rate: about
   `0.1-0.2%` on hard rows and zero on most easy rows. It changes only `beta_est`; σ and BLUP
   are inherited from the 24/4/8 P14 solve.
-- P14-guard is now close to INLA on hard mixed FFX, but σ/BLUP remain behind INLA on
-  medium/large/huge mixed rows.
+- P14-cal leaves β unchanged and closes most of the mixed-row σ/BLUP gap with a small,
+  prior-scale cap on `6-9%` of medium/large/huge rows. The `d >= 5` guard leaves small rows
+  unchanged.
+- P14-cal has small sampled-row tradeoffs: medium/huge sampled BLUP can move by about
+  `0.003-0.007` in either direction, while large sampled improves substantially.
 - The β-jump BLUP fallback is rare but useful. On first-512 large-b-sampled/test it changed
   P14 BLUP NRMSE from `0.983` to `0.901` while keeping FFX `0.911` and σ `0.520`.
 
@@ -103,16 +113,16 @@ CAVI is no longer the primary target.
 
 **INLA:** INLA remains the useful accuracy target, especially mixed/train FFX:
 
-| Dataset | part | P14-guard FFX | INLA FFX | P14-guard σ | INLA σ | P14-guard BLUP | INLA BLUP |
+| Dataset | part | P14-cal FFX | INLA FFX | P14-cal σ | INLA σ | P14-cal BLUP | INLA BLUP |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | small-b-mixed | train | 0.2683 | 0.451 | 0.5119 | 0.567 | 0.6127 | 0.618 |
 | small-b-sampled | test | 0.2925 | 0.447 | 0.5041 | 0.556 | 0.6089 | 0.625 |
-| medium-b-mixed | train | 0.3127 | 0.331 | 0.8186 | 0.519 | 1.1051 | 0.648 |
-| medium-b-sampled | test | 0.3393 | 0.400 | 0.5789 | 4.490 † | 0.7173 | 0.692 |
-| large-b-mixed | train | 0.3316 | 0.323 | 0.6830 | 0.521 | 0.8719 | 0.676 |
-| large-b-sampled | test | 0.3574 | 0.365 | 0.7431 | 0.603 | 0.8331 | 0.710 |
-| huge-b-mixed | train | 0.3352 | 0.330 | 0.9104 | 0.550 | 1.0147 | 0.713 |
-| huge-b-sampled | test | 0.3778 | 0.394 | 0.6455 | 0.579 | 0.7523 | 0.740 |
+| medium-b-mixed | train | 0.3127 | 0.331 | 0.5426 | 0.519 | 0.6719 | 0.648 |
+| medium-b-sampled | test | 0.3393 | 0.400 | 0.6007 | 4.490 † | 0.7103 | 0.692 |
+| large-b-mixed | train | 0.3316 | 0.323 | 0.5529 | 0.521 | 0.6868 | 0.676 |
+| large-b-sampled | test | 0.3574 | 0.365 | 0.6229 | 0.603 | 0.7283 | 0.710 |
+| huge-b-mixed | train | 0.3352 | 0.330 | 0.6033 | 0.550 | 0.7329 | 0.713 |
+| huge-b-sampled | test | 0.3778 | 0.394 | 0.6354 | 0.579 | 0.7549 | 0.740 |
 
 † INLA medium-b-sampled σ outlier from stored reference table.
 
@@ -138,29 +148,27 @@ Acceptance-gate check:
   its `±20` clamp, but the true β values are ordinary in several cases. These cases are rare
   but dominate aggregate FFX NRMSE.
 
+Sigma calibration check:
+
+- The mixed-row σ/BLUP error is broad rather than limited to the rare β-cap rows.
+- Capping σ at `2*tau_rfx` and recomputing BLUP modes improved first-1000 mixed BLUP NRMSE:
+  medium `1.1051 -> 0.6719`, large `0.8719 -> 0.6868`, huge `1.0147 -> 0.7329`.
+- A `d >= 5` guard prevents this branch from touching small rows, where P14-guard already
+  beats or matches the references.
+
 Next Steps
 ----------
 
-1. **Make the P14-guard candidate first-class if downstream checks agree.**
-   It is currently exposed by kwargs and benchmark CLI only. Before changing defaults, run
-   the downstream NPE-context smoke/ablation that consumes `glmm()` summaries. The guard is
-   deliberately simple: it only protects `beta_est` from rare separation-scale summaries.
+1. **Run the downstream NPE-context smoke/ablation for P14-cal.**
+   P14-cal is exposed by kwargs and benchmark CLI only. It is the strongest analytical
+   candidate so far, but defaults should wait for the consumer model check because sampled-row
+   BLUP tradeoffs are small but real.
 
-2. **Close the σ/BLUP gap on mixed rows.**
-   P14-guard solved the main FFX gap, but mixed-row σ/BLUP still trail INLA. The next
-   low-moving-parts branch is a σ shrinkage diagnostic, not a new posterior engine:
+2. **If the downstream check dislikes P14-cal, try one simpler variant before stopping.**
+   Use `sigma_prior_cap=2.5` with the same `d >= 5` guard. Diagnostics suggest slightly weaker
+   BLUP gains but lower risk of over-shrinking sampled rows.
 
-   - compare P14 σ to prior scale `tau_rfx` and true σ on accepted hard mixed rows
-   - test a guarded convex blend between P14 σ and prior-scale σ only when P14 σ is far
-     above the prior scale and β was separation-guarded
-   - recompute BLUP modes after any σ adjustment
-
-3. **Check consistency of β guard with BLUP recomputation.**
-   Current P14-guard changes only `beta_est`; BLUPs still come from the uncapped P14 mode.
-   This is acceptable for NPE context if β and BLUP are separate summary channels, but the
-   next cheap check is to recompute BLUP modes with guarded β and fixed σ on triggered rows.
-
-4. **Defer β-only Newton and multi-start.**
+3. **Defer β-only Newton and multi-start.**
    The diagnostics showed the rejected P14 cases are low-error: accepted rows had high current
    FFX and rejected rows had current/P14 FFX around `0.24-0.29`. More optimizer work is now
    lower priority than σ/BLUP calibration.
@@ -194,7 +202,8 @@ uv run python experiments/analytical/glmm_required_benchmark.py \
     --family b --sizes small medium large huge --methods p14_custom \
     --batch-size 32 --max-datasets 1000 \
     --p14-steps 24 --p14-inner 4 --p14-final 8 --p14-lr 0.05 \
-    --p14-beta-output-cap 3 --p14-beta-output-cap-trigger 8
+    --p14-beta-output-cap 3 --p14-beta-output-cap-trigger 8 \
+    --p14-sigma-prior-cap 2.0 --p14-sigma-prior-cap-min-d 5
 
 uv run python experiments/analytical/glmm_required_benchmark.py \
     --family b --methods p14_custom \

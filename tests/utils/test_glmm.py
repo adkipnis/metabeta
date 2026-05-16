@@ -555,6 +555,56 @@ def test_refine_bernoulli_laplace_eb_beta_output_cap_trigger():
     assert torch.allclose(result['beta_est'][1], stats['beta_est'][1])
 
 
+def test_refine_bernoulli_laplace_eb_sigma_prior_cap_recomputes_blup():
+    """P14 can cap sigma against the prior scale and keep BLUP outputs finite."""
+    rng = np.random.default_rng(SEED + 18)
+    B, d, q, m, n_per_group = 2, 2, 1, 5, 10
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=1, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+    stats = lmmBernoulli(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+    )
+    stats = dict(stats)
+    stats['sigma_rfx_est'] = torch.full((B, q), 10.0)
+    stats['Psi_lap'] = torch.diag_embed(stats['sigma_rfx_est'].square())
+    tau_rfx = torch.ones(B, q)
+
+    result = refineBernoulliLaplaceEb(
+        stats,
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        tau_rfx=tau_rfx,
+        family_sigma_rfx=torch.as_tensor(
+            [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
+        ),
+        mask_d=torch.ones(B, d, dtype=torch.bool),
+        mask_q=torch.ones(B, q, dtype=torch.bool),
+        n_steps=1,
+        n_inner=1,
+        n_final=1,
+        lr=0.0,
+        accept_only_improved=False,
+        sigma_prior_cap=2.0,
+        recompute_blup_after_calibration=True,
+        return_diagnostics=True,
+    )
+
+    assert torch.all(result['sigma_rfx_est'] <= 2.0)
+    assert torch.isfinite(result['blup_est']).all()
+    assert torch.equal(result['laplace_eb_sigma_prior_capped'], torch.ones(B))
+
+
 def test_glmm_bernoulli_laplace_eb_flag_smoke():
     """P14c is available through glmm() behind an explicit flag."""
     rng = np.random.default_rng(SEED + 14)
@@ -596,6 +646,8 @@ def test_glmm_bernoulli_laplace_eb_flag_smoke():
     assert torch.isfinite(result['laplace_eb_steps']).all()
     assert torch.isfinite(result['laplace_eb_blup_fallback']).all()
     assert torch.isfinite(result['laplace_eb_beta_jump']).all()
+    assert torch.isfinite(result['laplace_eb_beta_output_capped']).all()
+    assert torch.isfinite(result['laplace_eb_sigma_prior_capped']).all()
     assert result['laplace_eb_steps'].min().item() >= 1.0
 
 
