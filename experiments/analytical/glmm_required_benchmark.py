@@ -19,8 +19,14 @@ from metabeta.utils.experiments import dataFilePath
 
 
 SIZES = ['small', 'medium', 'large', 'huge']
-METHODS = ['current', 'raw', 'p14_all', 'p14_deep', 'p14_custom', 'p15_auto']
+METHODS = ['current', 'raw', 'p14_cal']
 FAMILIES = ['n', 'b']
+P14_CAL_STEPS = 24
+P14_CAL_INNER = 4
+P14_CAL_FINAL = 8
+P14_CAL_LR = 0.05
+P14_CAL_BETA_CAP = 3.0
+P14_CAL_BETA_TRIGGER = 8.0
 
 
 def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
@@ -88,14 +94,9 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                             batch['n'].float(),
                             likelihood_family=likelihood_family,
                             map_refine=method != 'raw',
-                            bernoulli_laplace_eb=True
-                            if method in {'p14_all', 'p14_deep', 'p14_custom'}
-                            else 'auto'
-                            if method == 'p15_auto'
-                            else False,
-                            bernoulli_laplace_eb_diagnostics=method
-                            in {'p14_all', 'p14_deep', 'p14_custom', 'p15_auto'},
-                            **_p14Kwargs(method, args),
+                            bernoulli_laplace_eb=method == 'p14_cal',
+                            bernoulli_laplace_eb_diagnostics=method == 'p14_cal',
+                            **_p14CalKwargs(method, args),
                             **common,
                         )
                         stores[method].add(stats, batch, max_q, time.perf_counter() - t0)
@@ -236,45 +237,20 @@ def _sliceBatch(batch: dict[str, torch.Tensor], n: int) -> dict[str, torch.Tenso
     return out
 
 
-def _p14Kwargs(method: str, args: argparse.Namespace) -> dict[str, int | float | bool]:
-    if method == 'p14_deep':
-        return {
-            'bernoulli_laplace_eb_steps': 20,
-            'bernoulli_laplace_eb_final': 8,
+def _p14CalKwargs(method: str, args: argparse.Namespace) -> dict[str, int | float | bool]:
+    if method == 'p14_cal':
+        out = {
+            'bernoulli_laplace_eb_steps': P14_CAL_STEPS,
+            'bernoulli_laplace_eb_inner': P14_CAL_INNER,
+            'bernoulli_laplace_eb_final': P14_CAL_FINAL,
+            'bernoulli_laplace_eb_lr': P14_CAL_LR,
+            'bernoulli_laplace_eb_beta_output_cap': P14_CAL_BETA_CAP,
+            'bernoulli_laplace_eb_beta_output_cap_trigger': P14_CAL_BETA_TRIGGER,
+            'bernoulli_laplace_eb_sigma_prior_cap': args.cal_sigma_prior_cap,
+            'bernoulli_laplace_eb_sigma_prior_cap_min_d': args.cal_sigma_prior_cap_min_d,
         }
-    if method == 'p14_custom':
-        return {
-            'bernoulli_laplace_eb_steps': args.p14_steps,
-            'bernoulli_laplace_eb_inner': args.p14_inner,
-            'bernoulli_laplace_eb_final': args.p14_final,
-            'bernoulli_laplace_eb_lr': args.p14_lr,
-            **_p14SigmaPriorCap(args),
-            **_p14BetaOutputCap(args),
-        }
+        return {key: value for key, value in out.items() if value is not None}
     return {}
-
-
-def _p14BetaOutputCap(args: argparse.Namespace) -> dict[str, float]:
-    if args.p14_beta_output_cap is None:
-        return {}
-    out = {'bernoulli_laplace_eb_beta_output_cap': args.p14_beta_output_cap}
-    if args.p14_beta_output_cap_trigger is not None:
-        out['bernoulli_laplace_eb_beta_output_cap_trigger'] = args.p14_beta_output_cap_trigger
-    return out
-
-
-def _p14SigmaPriorCap(args: argparse.Namespace) -> dict[str, int | float | bool]:
-    if args.p14_sigma_prior_cap is None:
-        return {}
-    out = {
-        'bernoulli_laplace_eb_sigma_prior_cap': args.p14_sigma_prior_cap,
-        'bernoulli_laplace_eb_recompute_blup_after_calibration': (
-            not args.p14_no_recompute_blup_after_calibration
-        ),
-    }
-    if args.p14_sigma_prior_cap_min_d is not None:
-        out['bernoulli_laplace_eb_sigma_prior_cap_min_d'] = args.p14_sigma_prior_cap_min_d
-    return out
 
 
 # fmt: off
@@ -287,15 +263,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--max-batches',type=int,  default=None)
     parser.add_argument('--max-datasets', type=int, default=None)
     parser.add_argument('--combos',     nargs='+', default=None)
-    parser.add_argument('--p14-steps',  type=int,   default=20)
-    parser.add_argument('--p14-inner',  type=int,   default=4)
-    parser.add_argument('--p14-final',  type=int,   default=8)
-    parser.add_argument('--p14-lr',     type=float, default=0.05)
-    parser.add_argument('--p14-beta-output-cap', type=float, default=None)
-    parser.add_argument('--p14-beta-output-cap-trigger', type=float, default=None)
-    parser.add_argument('--p14-sigma-prior-cap', type=float, default=None)
-    parser.add_argument('--p14-sigma-prior-cap-min-d', type=int, default=None)
-    parser.add_argument('--p14-no-recompute-blup-after-calibration', action='store_true')
+    parser.add_argument('--cal-sigma-prior-cap', type=float, default=2.0)
+    parser.add_argument('--cal-sigma-prior-cap-min-d', type=int, default=5)
     return parser.parse_args()
 # fmt: on
 
