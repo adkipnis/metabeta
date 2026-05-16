@@ -263,7 +263,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--max-batches',type=int,  default=None)
     parser.add_argument('--max-datasets', type=int, default=None)
     parser.add_argument('--combos',     nargs='+', default=None)
-    parser.add_argument('--cal-sigma-prior-cap', type=float, default=2.0)
+    parser.add_argument('--cal-sigma-prior-cap', type=float, default=2.5)
     parser.add_argument('--cal-sigma-prior-cap-min-d', type=int, default=5)
     return parser.parse_args()
 # fmt: on
