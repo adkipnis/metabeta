@@ -652,7 +652,7 @@ def test_glmm_bernoulli_laplace_eb_flag_smoke():
 
 
 def test_glmm_bernoulli_laplace_eb_cal_preset_matches_explicit_kwargs():
-    """The retained P14-cal preset is equivalent to its explicit kwargs."""
+    """The retained P14-cal preset and Bernoulli default match explicit kwargs."""
     rng = np.random.default_rng(SEED + 19)
     B, d, q, m, n_per_group = 1, 2, 1, 4, 8
     datasets = [
@@ -673,6 +673,16 @@ def test_glmm_bernoulli_laplace_eb_cal_preset_matches_explicit_kwargs():
         bernoulli_laplace_eb_diagnostics=True,
     )
 
+    default = glmm(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+        **common,
+    )
     preset = glmm(
         bt['Xm'],
         bt['ym'],
@@ -704,10 +714,11 @@ def test_glmm_bernoulli_laplace_eb_cal_preset_matches_explicit_kwargs():
         **common,
     )
 
-    assert torch.allclose(preset['beta_est'], explicit['beta_est'])
-    assert torch.allclose(preset['sigma_rfx_est'], explicit['sigma_rfx_est'])
-    assert torch.allclose(preset['blup_est'], explicit['blup_est'])
-    assert torch.equal(preset['laplace_eb_steps'], explicit['laplace_eb_steps'])
+    for result in (default, preset):
+        assert torch.allclose(result['beta_est'], explicit['beta_est'])
+        assert torch.allclose(result['sigma_rfx_est'], explicit['sigma_rfx_est'])
+        assert torch.allclose(result['blup_est'], explicit['blup_est'])
+        assert torch.equal(result['laplace_eb_steps'], explicit['laplace_eb_steps'])
 
 
 def test_glmm_bernoulli_laplace_eb_auto_gate_smoke():

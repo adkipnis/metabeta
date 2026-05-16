@@ -206,7 +206,8 @@ def glmm(
     map_optimize = kwargs.pop('map_optimize', 'all')
     beta_alpha_low = kwargs.pop('beta_alpha_low', 0.65)
     beta_alpha_high = kwargs.pop('beta_alpha_high', 0.75)
-    bernoulli_laplace_eb = kwargs.pop('bernoulli_laplace_eb', False)
+    bernoulli_laplace_eb_default = 'p14_cal' if likelihood_family == 1 else False
+    bernoulli_laplace_eb = kwargs.pop('bernoulli_laplace_eb', bernoulli_laplace_eb_default)
     bernoulli_laplace_eb_mode = _bernoulliLaplaceEbMode(bernoulli_laplace_eb)
     bernoulli_laplace_eb_preset = (
         _BERNOULLI_LAPLACE_EB_CAL_DEFAULTS if bernoulli_laplace_eb_mode == 'cal' else {}

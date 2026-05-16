@@ -19,7 +19,7 @@ from metabeta.utils.experiments import dataFilePath
 
 
 SIZES = ['small', 'medium', 'large', 'huge']
-METHODS = ['current', 'raw', 'p14_cal']
+METHODS = ['default', 'current', 'raw', 'p14_cal']
 FAMILIES = ['n', 'b']
 
 
@@ -88,8 +88,8 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                             batch['n'].float(),
                             likelihood_family=likelihood_family,
                             map_refine=method != 'raw',
-                            bernoulli_laplace_eb='p14_cal' if method == 'p14_cal' else False,
-                            bernoulli_laplace_eb_diagnostics=method == 'p14_cal',
+                            **_methodKwargs(method),
+                            bernoulli_laplace_eb_diagnostics=method in {'default', 'p14_cal'},
                             **_p14CalKwargs(method, args),
                             **common,
                         )
@@ -231,8 +231,21 @@ def _sliceBatch(batch: dict[str, torch.Tensor], n: int) -> dict[str, torch.Tenso
     return out
 
 
+def _methodKwargs(method: str) -> dict[str, str | bool]:
+    if method == 'default':
+        return {}
+    if method == 'p14_cal':
+        return {'bernoulli_laplace_eb': 'p14_cal'}
+    return {'bernoulli_laplace_eb': False}
+
+
 def _p14CalKwargs(method: str, args: argparse.Namespace) -> dict[str, int | float | bool]:
     if method == 'p14_cal':
+        return {
+            'bernoulli_laplace_eb_sigma_prior_cap': args.cal_sigma_prior_cap,
+            'bernoulli_laplace_eb_sigma_prior_cap_min_d': args.cal_sigma_prior_cap_min_d,
+        }
+    if method == 'default':
         return {
             'bernoulli_laplace_eb_sigma_prior_cap': args.cal_sigma_prior_cap,
             'bernoulli_laplace_eb_sigma_prior_cap_min_d': args.cal_sigma_prior_cap_min_d,
