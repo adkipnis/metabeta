@@ -868,6 +868,8 @@ def refineBernoulliLaplaceEb(
     early_stop_patience: int = 3,
     early_stop_min_delta: float = 1e-4,
     blup_fallback_beta_jump: float | None = 1.0,
+    beta_output_cap: float | None = None,
+    beta_output_cap_trigger: float | None = None,
     return_diagnostics: bool = False,
 ) -> dict[str, torch.Tensor]:
     """P14: diagonal single-mode Laplace-EB refinement for Bernoulli GLMMs.
@@ -1086,6 +1088,18 @@ def refineBernoulliLaplaceEb(
                 )
 
     out = dict(stats)
+    if beta_output_cap is not None:
+        beta_capped = beta_final.clamp(-float(beta_output_cap), float(beta_output_cap))
+        if beta_output_cap_trigger is None:
+            beta_final = beta_capped
+        else:
+            if mask_d is None:
+                active_d = torch.ones(B, d, device=device, dtype=torch.bool)
+            else:
+                active_d = mask_d[:, :d].to(device=device).bool()
+            max_abs_beta = beta_final.abs().masked_fill(~active_d, 0.0).amax(dim=1)
+            use_cap = max_abs_beta > float(beta_output_cap_trigger)
+            beta_final = torch.where(use_cap[:, None], beta_capped, beta_final)
     out['beta_est'] = beta_final
     out['sigma_rfx_est'] = sigma
     out['blup_est'] = blups.detach()

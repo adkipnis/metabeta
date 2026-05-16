@@ -194,6 +194,10 @@ def glmm(
     bernoulli_laplace_eb_inner = kwargs.pop('bernoulli_laplace_eb_inner', 4)
     bernoulli_laplace_eb_final = kwargs.pop('bernoulli_laplace_eb_final', 6)
     bernoulli_laplace_eb_lr = kwargs.pop('bernoulli_laplace_eb_lr', 0.05)
+    bernoulli_laplace_eb_beta_output_cap = kwargs.pop('bernoulli_laplace_eb_beta_output_cap', None)
+    bernoulli_laplace_eb_beta_output_cap_trigger = kwargs.pop(
+        'bernoulli_laplace_eb_beta_output_cap_trigger', None
+    )
     bernoulli_laplace_eb_gate_min_d = kwargs.pop('bernoulli_laplace_eb_gate_min_d', 4)
     bernoulli_laplace_eb_gate_min_sigma = kwargs.pop('bernoulli_laplace_eb_gate_min_sigma', 0.75)
     bernoulli_laplace_eb_gate_eta_abs = kwargs.pop('bernoulli_laplace_eb_gate_eta_abs', 8.0)
@@ -299,6 +303,8 @@ def glmm(
                     n_final=bernoulli_laplace_eb_final,
                     lr=bernoulli_laplace_eb_lr,
                     blup_fallback_beta_jump=bernoulli_laplace_eb_blup_fallback_beta_jump,
+                    beta_output_cap=bernoulli_laplace_eb_beta_output_cap,
+                    beta_output_cap_trigger=bernoulli_laplace_eb_beta_output_cap_trigger,
                     return_diagnostics=bernoulli_laplace_eb_diagnostics,
                 )
             else:
@@ -333,6 +339,8 @@ def glmm(
                         n_final=bernoulli_laplace_eb_final,
                         lr=bernoulli_laplace_eb_lr,
                         blup_fallback_beta_jump=bernoulli_laplace_eb_blup_fallback_beta_jump,
+                        beta_output_cap=bernoulli_laplace_eb_beta_output_cap,
+                        beta_output_cap_trigger=bernoulli_laplace_eb_beta_output_cap_trigger,
                         return_diagnostics=bernoulli_laplace_eb_diagnostics,
                     )
                     stats = _mergeStatsBatch(stats, refined, gate, Xm.shape[0])

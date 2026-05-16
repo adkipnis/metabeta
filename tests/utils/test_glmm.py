@@ -513,6 +513,48 @@ def test_refine_bernoulli_laplace_eb_blup_fallback():
     assert torch.isfinite(result['laplace_eb_beta_jump']).all()
 
 
+def test_refine_bernoulli_laplace_eb_beta_output_cap_trigger():
+    """P14 can cap only separation-scale β summaries while leaving ordinary β untouched."""
+    rng = np.random.default_rng(SEED + 17)
+    B, d, q, m, n_per_group = 2, 2, 1, 5, 10
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=1, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+    stats = lmmBernoulli(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+    )
+    stats = dict(stats)
+    stats['beta_est'] = torch.tensor([[12.0, -2.0], [5.0, -5.0]])
+
+    result = refineBernoulliLaplaceEb(
+        stats,
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        mask_d=torch.ones(B, d, dtype=torch.bool),
+        mask_q=torch.ones(B, q, dtype=torch.bool),
+        n_steps=1,
+        n_inner=1,
+        n_final=1,
+        lr=0.0,
+        accept_only_improved=False,
+        beta_output_cap=3.0,
+        beta_output_cap_trigger=8.0,
+    )
+
+    assert torch.all(result['beta_est'][0].abs() <= 3.0)
+    assert torch.allclose(result['beta_est'][1], stats['beta_est'][1])
+
+
 def test_glmm_bernoulli_laplace_eb_flag_smoke():
     """P14c is available through glmm() behind an explicit flag."""
     rng = np.random.default_rng(SEED + 14)
