@@ -651,6 +651,65 @@ def test_glmm_bernoulli_laplace_eb_flag_smoke():
     assert result['laplace_eb_steps'].min().item() >= 1.0
 
 
+def test_glmm_bernoulli_laplace_eb_cal_preset_matches_explicit_kwargs():
+    """The retained P14-cal preset is equivalent to its explicit kwargs."""
+    rng = np.random.default_rng(SEED + 19)
+    B, d, q, m, n_per_group = 1, 2, 1, 4, 8
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=1, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+    common = dict(
+        likelihood_family=1,
+        nu_ffx=torch.as_tensor(np.stack([ds['nu_ffx'] for ds in datasets]), dtype=torch.float32),
+        tau_ffx=torch.as_tensor(np.stack([ds['tau_ffx'] for ds in datasets]), dtype=torch.float32),
+        family_ffx=torch.as_tensor([int(ds['family_ffx']) for ds in datasets], dtype=torch.long),
+        tau_rfx=torch.as_tensor(np.stack([ds['tau_rfx'] for ds in datasets]), dtype=torch.float32),
+        family_sigma_rfx=torch.as_tensor(
+            [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
+        ),
+        mask_d=torch.ones(B, d, dtype=torch.bool),
+        mask_q=torch.ones(B, q, dtype=torch.bool),
+        bernoulli_laplace_eb_diagnostics=True,
+    )
+
+    preset = glmm(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+        bernoulli_laplace_eb='p14_cal',
+        **common,
+    )
+    explicit = glmm(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+        bernoulli_laplace_eb=True,
+        bernoulli_laplace_eb_steps=24,
+        bernoulli_laplace_eb_inner=4,
+        bernoulli_laplace_eb_final=8,
+        bernoulli_laplace_eb_lr=0.05,
+        bernoulli_laplace_eb_beta_output_cap=3.0,
+        bernoulli_laplace_eb_beta_output_cap_trigger=8.0,
+        bernoulli_laplace_eb_sigma_prior_cap=2.5,
+        bernoulli_laplace_eb_sigma_prior_cap_min_d=5,
+        **common,
+    )
+
+    assert torch.allclose(preset['beta_est'], explicit['beta_est'])
+    assert torch.allclose(preset['sigma_rfx_est'], explicit['sigma_rfx_est'])
+    assert torch.allclose(preset['blup_est'], explicit['blup_est'])
+    assert torch.equal(preset['laplace_eb_steps'], explicit['laplace_eb_steps'])
+
+
 def test_glmm_bernoulli_laplace_eb_auto_gate_smoke():
     """P15 routes only gated Bernoulli datasets through P14."""
     rng = np.random.default_rng(SEED + 15)

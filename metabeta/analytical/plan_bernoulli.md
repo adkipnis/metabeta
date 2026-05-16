@@ -24,44 +24,42 @@ Current Candidate
 - Sigma calibration: cap σ at `2.5 * tau_rfx` for effective `d >= 5`, then recompute BLUP
   modes with the calibrated σ.
 
-The candidate is exposed through kwargs, not defaults:
+The candidate is exposed as a named analytical preset:
 
 ```python
 glmm(
     ...,
-    bernoulli_laplace_eb=True,
-    bernoulli_laplace_eb_steps=24,
-    bernoulli_laplace_eb_inner=4,
-    bernoulli_laplace_eb_final=8,
-    bernoulli_laplace_eb_lr=0.05,
-    bernoulli_laplace_eb_beta_output_cap=3.0,
-    bernoulli_laplace_eb_beta_output_cap_trigger=8.0,
-    bernoulli_laplace_eb_sigma_prior_cap=2.5,
-    bernoulli_laplace_eb_sigma_prior_cap_min_d=5,
+    bernoulli_laplace_eb='p14_cal',
 )
 ```
+
+Individual preset values can still be overridden by explicit kwargs for diagnostics.
 
 Performance Snapshot
 --------------------
 
-Matched first-1000 benchmark, CPU ms/dataset. Lower NRMSE is better.
+Matched first-1000 per comparison row, 8k datasets total. CPU ms/dataset. Lower NRMSE is
+better.
 
-| Dataset | part | FFX | σ | BLUP | INLA FFX | INLA σ | INLA BLUP | ms/ds |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-b-mixed | train | 0.2683 | 0.5119 | 0.6127 | 0.451 | 0.567 | 0.618 | 17.54 |
-| small-b-sampled | test | 0.2925 | 0.5041 | 0.6089 | 0.447 | 0.556 | 0.625 | 17.36 |
-| medium-b-mixed | train | 0.3127 | 0.5389 | 0.6865 | 0.331 | 0.519 | 0.648 | 35.58 |
-| medium-b-sampled | test | 0.3393 | 0.5844 | 0.7069 | 0.400 | 4.490 † | 0.692 | 38.46 |
-| large-b-mixed | train | 0.3316 | 0.5423 | 0.6853 | 0.323 | 0.521 | 0.676 | 40.44 |
-| large-b-sampled | test | 0.3574 | 0.6196 | 0.7271 | 0.365 | 0.603 | 0.710 | 48.74 |
-| huge-b-mixed | train | 0.3352 | 0.5998 | 0.7367 | 0.330 | 0.550 | 0.713 | 50.29 |
-| huge-b-sampled | test | 0.3778 | 0.6265 | 0.7528 | 0.394 | 0.579 | 0.740 | 65.43 |
+| Dataset | part | Current FFX | P14-cal FFX | Current σ | P14-cal σ | Current BLUP | P14-cal BLUP | INLA FFX | INLA σ | INLA BLUP | ms/ds |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-b-mixed | train | 0.2710 | 0.2683 | 0.5712 | 0.5119 | 0.6176 | 0.6127 | 0.451 | 0.567 | 0.618 | 15.76 |
+| small-b-sampled | test | 0.2973 | 0.2925 | 0.5744 | 0.5041 | 0.6177 | 0.6089 | 0.447 | 0.556 | 0.625 | 15.11 |
+| medium-b-mixed | train | 1.7488 | 0.3127 | 0.8354 | 0.5389 | 1.0896 | 0.6865 | 0.331 | 0.519 | 0.648 | 30.56 |
+| medium-b-sampled | test | 0.3451 | 0.3393 | 0.6515 | 0.5844 | 0.7057 | 0.7069 | 0.400 | 4.490 † | 0.692 | 33.29 |
+| large-b-mixed | train | 1.8088 | 0.3316 | 0.7228 | 0.5423 | 0.9583 | 0.6853 | 0.323 | 0.521 | 0.676 | 34.18 |
+| large-b-sampled | test | 1.8280 | 0.3574 | 0.8752 | 0.6196 | 0.9178 | 0.7271 | 0.365 | 0.603 | 0.710 | 39.71 |
+| huge-b-mixed | train | 0.9525 | 0.3352 | 1.0181 | 0.5998 | 1.0459 | 0.7367 | 0.330 | 0.550 | 0.713 | 42.44 |
+| huge-b-sampled | test | 0.3840 | 0.3778 | 0.7908 | 0.6265 | 0.8143 | 0.7528 | 0.394 | 0.579 | 0.740 | 54.21 |
 
 † Stored INLA medium-b-sampled σ is an outlier and should not drive decisions.
 
 Takeaways
 ---------
 
+- P14-cal improves over current on every comparison row for FFX and σ.
+- P14-cal improves BLUP on 7/8 rows; the only regression is tiny on medium-b-sampled/test
+  (`0.7057 -> 0.7069`).
 - FFX is effectively closed relative to INLA.
 - Remaining INLA gaps are mostly σ/BLUP: about `0.02-0.05` σ NRMSE and
   `0.01-0.025` BLUP NRMSE on medium/large/huge rows.
@@ -75,10 +73,9 @@ Takeaways
 Next Steps
 ----------
 
-1. **Promote P14-cal to a first-class analytical preset.**
-   Keep the current default path unchanged until the final benchmark pass is accepted, but
-   expose the retained schedule/guards as a named preset or compact option instead of a long
-   list of kwargs.
+1. **Decide whether to make P14-cal the default Bernoulli analytical path.**
+   The final 8k comparison supports promotion. If the default changes, keep an escape hatch
+   for the current PQL/IRLS path for debugging and regression checks.
 
 2. **Do not add more optimizer machinery for the current residual gap.**
    The remaining analytical improvements are likely small and conditional. Keep the candidate

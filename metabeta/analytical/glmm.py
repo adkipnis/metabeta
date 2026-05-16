@@ -23,19 +23,41 @@ _MAP_PRIOR_KEYS = (
     'family_sigma_eps',
 )
 
+_BERNOULLI_LAPLACE_EB_CAL_DEFAULTS = {
+    'bernoulli_laplace_eb_steps': 24,
+    'bernoulli_laplace_eb_inner': 4,
+    'bernoulli_laplace_eb_final': 8,
+    'bernoulli_laplace_eb_lr': 0.05,
+    'bernoulli_laplace_eb_beta_output_cap': 3.0,
+    'bernoulli_laplace_eb_beta_output_cap_trigger': 8.0,
+    'bernoulli_laplace_eb_sigma_prior_cap': 2.5,
+    'bernoulli_laplace_eb_sigma_prior_cap_min_d': 5,
+}
+
 
 def _bernoulliLaplaceEbMode(value: bool | str) -> str:
     if isinstance(value, bool):
         return 'all' if value else 'off'
     if isinstance(value, str):
         value = value.lower()
+        if value in {'cal', 'p14_cal', 'p14-cal'}:
+            return 'cal'
         if value in {'auto', 'gate'}:
             return 'auto'
         if value in {'all', 'true', 'yes', 'on'}:
             return 'all'
         if value in {'off', 'false', 'no'}:
             return 'off'
-    raise ValueError("bernoulli_laplace_eb must be bool, 'auto', or 'gate'")
+    raise ValueError("bernoulli_laplace_eb must be bool, 'cal', 'auto', or 'gate'")
+
+
+def _bernoulliLaplaceEbKwarg(
+    kwargs: dict,
+    key: str,
+    default,
+    preset: dict[str, int | float],
+):
+    return kwargs.pop(key, preset.get(key, default))
 
 
 def _sliceBatch(
@@ -186,21 +208,44 @@ def glmm(
     beta_alpha_high = kwargs.pop('beta_alpha_high', 0.75)
     bernoulli_laplace_eb = kwargs.pop('bernoulli_laplace_eb', False)
     bernoulli_laplace_eb_mode = _bernoulliLaplaceEbMode(bernoulli_laplace_eb)
+    bernoulli_laplace_eb_preset = (
+        _BERNOULLI_LAPLACE_EB_CAL_DEFAULTS if bernoulli_laplace_eb_mode == 'cal' else {}
+    )
+    if bernoulli_laplace_eb_mode == 'cal':
+        bernoulli_laplace_eb_mode = 'all'
     bernoulli_laplace_eb_diagnostics = kwargs.pop('bernoulli_laplace_eb_diagnostics', False)
     bernoulli_laplace_eb_blup_fallback_beta_jump = kwargs.pop(
         'bernoulli_laplace_eb_blup_fallback_beta_jump', 1.0
     )
-    bernoulli_laplace_eb_steps = kwargs.pop('bernoulli_laplace_eb_steps', 12)
-    bernoulli_laplace_eb_inner = kwargs.pop('bernoulli_laplace_eb_inner', 4)
-    bernoulli_laplace_eb_final = kwargs.pop('bernoulli_laplace_eb_final', 6)
-    bernoulli_laplace_eb_lr = kwargs.pop('bernoulli_laplace_eb_lr', 0.05)
-    bernoulli_laplace_eb_beta_output_cap = kwargs.pop('bernoulli_laplace_eb_beta_output_cap', None)
-    bernoulli_laplace_eb_beta_output_cap_trigger = kwargs.pop(
-        'bernoulli_laplace_eb_beta_output_cap_trigger', None
+    bernoulli_laplace_eb_steps = _bernoulliLaplaceEbKwarg(
+        kwargs, 'bernoulli_laplace_eb_steps', 12, bernoulli_laplace_eb_preset
     )
-    bernoulli_laplace_eb_sigma_prior_cap = kwargs.pop('bernoulli_laplace_eb_sigma_prior_cap', None)
-    bernoulli_laplace_eb_sigma_prior_cap_min_d = kwargs.pop(
-        'bernoulli_laplace_eb_sigma_prior_cap_min_d', None
+    bernoulli_laplace_eb_inner = _bernoulliLaplaceEbKwarg(
+        kwargs, 'bernoulli_laplace_eb_inner', 4, bernoulli_laplace_eb_preset
+    )
+    bernoulli_laplace_eb_final = _bernoulliLaplaceEbKwarg(
+        kwargs, 'bernoulli_laplace_eb_final', 6, bernoulli_laplace_eb_preset
+    )
+    bernoulli_laplace_eb_lr = _bernoulliLaplaceEbKwarg(
+        kwargs, 'bernoulli_laplace_eb_lr', 0.05, bernoulli_laplace_eb_preset
+    )
+    bernoulli_laplace_eb_beta_output_cap = _bernoulliLaplaceEbKwarg(
+        kwargs, 'bernoulli_laplace_eb_beta_output_cap', None, bernoulli_laplace_eb_preset
+    )
+    bernoulli_laplace_eb_beta_output_cap_trigger = _bernoulliLaplaceEbKwarg(
+        kwargs,
+        'bernoulli_laplace_eb_beta_output_cap_trigger',
+        None,
+        bernoulli_laplace_eb_preset,
+    )
+    bernoulli_laplace_eb_sigma_prior_cap = _bernoulliLaplaceEbKwarg(
+        kwargs, 'bernoulli_laplace_eb_sigma_prior_cap', None, bernoulli_laplace_eb_preset
+    )
+    bernoulli_laplace_eb_sigma_prior_cap_min_d = _bernoulliLaplaceEbKwarg(
+        kwargs,
+        'bernoulli_laplace_eb_sigma_prior_cap_min_d',
+        None,
+        bernoulli_laplace_eb_preset,
     )
     bernoulli_laplace_eb_recompute_blup_after_calibration = kwargs.pop(
         'bernoulli_laplace_eb_recompute_blup_after_calibration', True

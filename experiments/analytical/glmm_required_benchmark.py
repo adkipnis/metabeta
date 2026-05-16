@@ -21,12 +21,6 @@ from metabeta.utils.experiments import dataFilePath
 SIZES = ['small', 'medium', 'large', 'huge']
 METHODS = ['current', 'raw', 'p14_cal']
 FAMILIES = ['n', 'b']
-P14_CAL_STEPS = 24
-P14_CAL_INNER = 4
-P14_CAL_FINAL = 8
-P14_CAL_LR = 0.05
-P14_CAL_BETA_CAP = 3.0
-P14_CAL_BETA_TRIGGER = 8.0
 
 
 def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
@@ -94,7 +88,7 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                             batch['n'].float(),
                             likelihood_family=likelihood_family,
                             map_refine=method != 'raw',
-                            bernoulli_laplace_eb=method == 'p14_cal',
+                            bernoulli_laplace_eb='p14_cal' if method == 'p14_cal' else False,
                             bernoulli_laplace_eb_diagnostics=method == 'p14_cal',
                             **_p14CalKwargs(method, args),
                             **common,
@@ -239,17 +233,10 @@ def _sliceBatch(batch: dict[str, torch.Tensor], n: int) -> dict[str, torch.Tenso
 
 def _p14CalKwargs(method: str, args: argparse.Namespace) -> dict[str, int | float | bool]:
     if method == 'p14_cal':
-        out = {
-            'bernoulli_laplace_eb_steps': P14_CAL_STEPS,
-            'bernoulli_laplace_eb_inner': P14_CAL_INNER,
-            'bernoulli_laplace_eb_final': P14_CAL_FINAL,
-            'bernoulli_laplace_eb_lr': P14_CAL_LR,
-            'bernoulli_laplace_eb_beta_output_cap': P14_CAL_BETA_CAP,
-            'bernoulli_laplace_eb_beta_output_cap_trigger': P14_CAL_BETA_TRIGGER,
+        return {
             'bernoulli_laplace_eb_sigma_prior_cap': args.cal_sigma_prior_cap,
             'bernoulli_laplace_eb_sigma_prior_cap_min_d': args.cal_sigma_prior_cap_min_d,
         }
-        return {key: value for key, value in out.items() if value is not None}
     return {}
 
 
