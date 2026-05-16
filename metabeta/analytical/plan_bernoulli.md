@@ -6,12 +6,8 @@ Last updated: 2026-05-16
 Goal
 ----
 
-Provide fast, high-accuracy Bernoulli GLMM summaries for the hierarchical NPE context.
-The analytical estimator should be stable, prior-aware, and cheap; it is not intended to
-be a full posterior engine.
-
-Do not add an amortized correction branch here. `glmm()` summaries are already consumed by
-the hierarchical NPE, which is the correction mechanism.
+Provide a fast, high-accuracy analytical Bernoulli GLMM estimator. The estimator should be
+stable, prior-aware, and cheap; it is not intended to be a full posterior engine.
 
 Do not pursue R-INLA as a backend or full PyTorch INLA as the main path. Use INLA concepts
 only where they stay compatible with batched CPU/GPU processing and the `~100 ms/dataset`
@@ -79,14 +75,16 @@ Takeaways
 Next Steps
 ----------
 
-1. **Run the downstream NPE-context smoke/ablation for P14-cal.**
-   Promote the candidate only if the consumer model likes the calibrated summaries.
+1. **Promote P14-cal to a first-class analytical preset.**
+   Keep the current default path unchanged until the final benchmark pass is accepted, but
+   expose the retained schedule/guards as a named preset or compact option instead of a long
+   list of kwargs.
 
 2. **Do not add more optimizer machinery for the current residual gap.**
    The remaining analytical improvements are likely small and conditional. Keep the candidate
-   simple unless the downstream NPE-context check identifies a real failure mode.
+   simple unless benchmark diagnostics identify a real failure mode.
 
-3. **Consider one conditional sampled-row rule only if needed.**
+3. **Consider one conditional sampled-row rule only if benchmarks justify it.**
    Candidate rule: apply sigma calibration only when P14 σ is far above `tau_rfx` or when
    existing instability diagnostics fire. Keep this as one predicate, not a new optimizer.
 
