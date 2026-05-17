@@ -124,6 +124,26 @@ Takeaway: the prototype improves σ_rfx and BLUP in every row while keeping σ_e
 FFX is mostly neutral, with meaningful improvements on large/huge mixed/test and small
 regressions on huge sampled rows. Runtime remains single-digit milliseconds per dataset.
 
+Diagonal R-INLA Snapshot
+-----------------------
+
+Mixed/train rows, first 1000 datasets per row. This run used `raw,map` only; it completed
+before `normal_eb` was added to `glmm_inla_comparison.py`. The INLA reference uses diagonal
+random effects because the exact correlated Gaussian INLA branch was numerically unstable on
+these datasets.
+
+| Dataset | RAW FFX | MAP FFX | INLA FFX | RAW σ | MAP σ | INLA σ | RAW BLUP | MAP BLUP | INLA BLUP | RAW ms | MAP ms | INLA s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | 0.1124 | 0.1096 | 0.0985 | 0.7978 | 0.4814 | 0.3665 | 0.4761 | 0.4192 | 0.4081 | 0.37 | 7.26 | 2.368 |
+| medium-n-mixed | 0.5758 | 0.5489 | 0.2301 | 0.5236 | 0.3798 | 0.3421 | 0.4550 | 0.4409 | 0.4288 | 0.57 | 2.81 | 2.614 |
+| large-n-mixed | 1.7363 | 1.8207 | 0.2377 | 0.5449 | 0.4148 | 0.3397 | 0.4675 | 0.4361 | 0.4185 | 0.85 | 3.80 | 2.786 |
+| huge-n-mixed | 1.0635 | 1.3100 | 0.2413 | 0.5752 | 0.4280 | 0.2809 | 0.4925 | 0.4742 | 0.4548 | 1.22 | 5.11 | 3.071 |
+
+Takeaway: diagonal INLA is the accuracy leader on mixed/train, especially FFX for
+medium/large/huge. MAP closes much of the raw σ/BLUP gap but still leaves about
+`0.012-0.019` BLUP NRMSE on medium/large/huge and a larger σ gap on huge. INLA is
+roughly seconds per dataset versus low single-digit milliseconds for analytical MAP.
+
 Acceptance Criteria
 -------------------
 
@@ -148,15 +168,15 @@ uv run python experiments/analytical/glmm_required_benchmark.py \
 uv run python experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-n-mixed,medium-n-mixed,large-n-mixed,huge-n-mixed \
     --partition train --n-epochs 2 --n-inla 1000 --n-total 1000 \
-    --analytical-methods raw,map --normal-re-correlation diagonal
+    --analytical-methods raw,map,normal_eb --normal-re-correlation diagonal
 uv run python experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-n-sampled,medium-n-sampled,large-n-sampled,huge-n-sampled \
     --partition valid --n-inla 1000 --n-total 1000 \
-    --analytical-methods raw,map --normal-re-correlation diagonal
+    --analytical-methods raw,map,normal_eb --normal-re-correlation diagonal
 uv run python experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-n-sampled,medium-n-sampled,large-n-sampled,huge-n-sampled \
     --partition test --n-inla 1000 --n-total 1000 \
-    --analytical-methods raw,map --normal-re-correlation diagonal
+    --analytical-methods raw,map,normal_eb --normal-re-correlation diagonal
 uv run python experiments/analytical/glmm_raw_diagnostic.py
 uv run python experiments/analytical/glmm_error_analysis.py --data-id small-n-mixed
 uv run pytest tests/utils/test_glmm.py
