@@ -48,21 +48,46 @@ dataset, roughly two orders of magnitude slower on these benchmarks.
 Normal Diagonal R-INLA Snapshot
 -------------------------------
 
-Mixed/train rows, first 1000 datasets per row. This run used `raw,map` only; the
-`normal_eb` prototype was added afterward. The normal reference uses diagonal random
-effects because the exact correlated Gaussian INLA branch was numerically unstable on
-these datasets.
+The normal analytical path now carries MAP β for `d > 4`, reports a prior-capped β
+(`ν_ffx ± 4τ_ffx`) to remove rare FFX tail explosions, and keeps the uncapped MAP β for
+BLUP residuals. `normal_eb` applies the one-shot σ update on top of that path.
+
+Small-scale rough placement, mixed/train, first 100 datasets per row. This includes the
+`normal_eb` prototype.
+
+| Dataset | RAW FFX | MAP FFX | EB FFX | INLA FFX | RAW σ | MAP σ | EB σ | INLA σ | RAW BLUP | MAP BLUP | EB BLUP | INLA BLUP | RAW ms | MAP ms | EB ms | INLA s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | 0.3355 | 0.3349 | 0.3349 | 0.3150 | 0.6666 | 0.5441 | 0.5400 | 0.4761 | 0.5040 | 0.4975 | 0.4974 | 0.4770 | 0.35 | 9.42 | 2.44 | 2.568 |
+| medium-n-mixed | 0.4407 | 0.4380 | 0.4345 | 0.3035 | 0.8218 | 0.6634 | 0.6099 | 0.4939 | 0.5697 | 0.5436 | 0.5398 | 0.5258 | 0.73 | 3.56 | 4.03 | 2.964 |
+| large-n-mixed | 1.5804 | 1.5953 | 1.5972 | 0.3387 | 0.8528 | 0.7878 | 0.6572 | 0.5475 | 0.6719 | 0.6586 | 0.6640 | 0.6139 | 1.10 | 42.77 | 4.88 | 2.699 |
+| huge-n-mixed | 0.7923 | 0.7751 | 0.7747 | 0.3054 | 0.6018 | 0.3913 | 0.3501 | 0.3273 | 0.5095 | 0.4750 | 0.4737 | 0.4516 | 1.19 | 4.92 | 5.60 | 2.858 |
+
+Current analytical mixed/train rows after the prior β cap, first 1000 datasets per row:
+
+| Dataset | MAP FFX | EB FFX | MAP σ | EB σ | MAP BLUP | EB BLUP | MAP ms | EB ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | 0.1096 | 0.1095 | 0.4814 | 0.4203 | 0.4192 | 0.4173 | 2.95 | 2.52 |
+| medium-n-mixed | 0.2515 | 0.2515 | 0.3798 | 0.3619 | 0.4212 | 0.4198 | 2.73 | 3.05 |
+| large-n-mixed | 0.4075 | 0.4075 | 0.4148 | 0.3711 | 0.4155 | 0.4148 | 3.71 | 4.23 |
+| huge-n-mixed | 0.3314 | 0.3314 | 0.4280 | 0.3776 | 0.4573 | 0.4545 | 4.74 | 5.34 |
+
+Mixed/train diagonal R-INLA reference, first 1000 datasets per row. The INLA cells are
+from the completed `raw,map,normal_eb` rerun; analytical FFX values above include the
+post-rerun prior β cap on the same first-1000 rows.
 
 | Dataset | RAW FFX | MAP FFX | INLA FFX | RAW σ | MAP σ | INLA σ | RAW BLUP | MAP BLUP | INLA BLUP | RAW ms | MAP ms | INLA s |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | small-n-mixed | 0.1124 | 0.1096 | 0.0985 | 0.7978 | 0.4814 | 0.3665 | 0.4761 | 0.4192 | 0.4081 | 0.37 | 7.26 | 2.368 |
-| medium-n-mixed | 0.5758 | 0.5489 | 0.2301 | 0.5236 | 0.3798 | 0.3421 | 0.4550 | 0.4409 | 0.4288 | 0.57 | 2.81 | 2.614 |
-| large-n-mixed | 1.7363 | 1.8207 | 0.2377 | 0.5449 | 0.4148 | 0.3397 | 0.4675 | 0.4361 | 0.4185 | 0.85 | 3.80 | 2.786 |
-| huge-n-mixed | 1.0635 | 1.3100 | 0.2413 | 0.5752 | 0.4280 | 0.2809 | 0.4925 | 0.4742 | 0.4548 | 1.22 | 5.11 | 3.071 |
+| medium-n-mixed | 0.5758 | 0.2515 | 0.2301 | 0.5236 | 0.3798 | 0.3419 | 0.4550 | 0.4212 | 0.4289 | 0.63 | 2.73 | 2.604 |
+| large-n-mixed | 1.7363 | 0.4075 | 0.2377 | 0.5449 | 0.4148 | 0.3393 | 0.4675 | 0.4155 | 0.4185 | 0.96 | 3.71 | 2.786 |
+| huge-n-mixed | 1.0635 | 0.3314 | 0.2413 | 0.5752 | 0.4280 | 0.2808 | 0.4925 | 0.4573 | 0.4548 | 1.37 | 4.74 | 2.965 |
 
 Normal takeaways:
 
-- INLA is best on all mixed/train normal rows, especially FFX on medium/large/huge.
-- MAP closes much of the raw σ/BLUP gap but leaves measurable σ/BLUP room for a
-  fast diagonal EB calibration.
+- The prior β cap closes most of the normal FFX gap on small/medium/huge and reduces the
+  large-row FFX gap substantially.
+- `normal_eb` closes additional σ/BLUP error with a one-shot update.
+- The remaining Gaussian FFX issue appears tail-dominated: on patched MAP, large/huge
+  mixed/train have mean per-dataset β RMSE around `0.06-0.09`, but rare maxima above
+  `5-10` drove aggregate NRMSE before the prior cap.
 - INLA remains about seconds per dataset; analytical MAP is milliseconds per dataset.
