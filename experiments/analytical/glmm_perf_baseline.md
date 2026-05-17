@@ -1,14 +1,14 @@
 GLMM Analytical Estimator Summary
 =================================
 
-Last updated: 2026-05-11 after adding the diagonal-MAP final GLS/BLUP pass.
+Last updated: 2026-05-17 after promoting normal EB to the retained Gaussian path.
 
 This file records the current retained Gaussian GLMM analytical benchmark and the
 closed REML diagnostic decision. Historical MAP/REML sweep scripts were removed;
 the reusable scripts are documented in `README.md`.
 
-Current Production MAP Benchmark
---------------------------------
+Current Production EB Benchmark
+-------------------------------
 
 Command:
 
@@ -17,12 +17,11 @@ uv run python experiments/analytical/glmm_required_benchmark.py --methods curren
 ```
 
 Required suite: mixed train epochs 1-2 and sampled valid/test for
-`small|medium|large|huge`. Current production MAP reports MAP `sigma_rfx_est`,
-writes a diagonal MAP `Psi`, and recomputes final Gaussian beta/BLUPs with that
-diagonal covariance. This keeps the useful MAP variance scale while excluding
-noisy estimated correlations from final BLUP shrinkage. Reported sigma(Eps) still
-comes from the within-group projection estimate. The existing calibrated
-`blup_var` output is preserved pending a separate variance-calibration pass.
+`small|medium|large|huge`. The current production normal path uses the MAP stage
+internally, reports prior-capped medium+ β, then applies the one-shot diagonal EB
+σ_rfx update before final BLUP output. Reported sigma(Eps) still comes from the
+within-group projection estimate. The existing calibrated `blup_var` output is
+preserved pending a separate variance-calibration pass.
 
 | Dataset | Partition | FFX | sRFX | sEps | BLUP |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -89,8 +88,8 @@ The retained normal path now carries the optimized MAP β for `d > 4`; `d <= 4` 
 older GLS/OLS final β because direct MAP β overfits those small rows. The reported
 medium+ β is prior-capped at `ν_ffx ± 4τ_ffx`, while BLUP residuals continue to use the
 uncapped MAP β to preserve BLUP accuracy. The variance-scale add-on is a normal-specific
-diagonal Laplace-EB calibration, available behind `glmm(..., normal_laplace_eb=True)` and
-benchmarked as `normal_eb`:
+diagonal Laplace-EB calibration, now the default normal GLMM answer and benchmarked as
+`normal_eb`:
 
 - use the exact Gaussian marginal likelihood rather than a Bernoulli-style nested
   random-effect optimizer;
@@ -101,8 +100,8 @@ benchmarked as `normal_eb`:
 - accept only objective-improving, finite updates, otherwise return current MAP;
 - promote only if the required-suite BLUP improves without FFX/σ(Eps) regressions.
 
-First-1000 required-suite result after the β cap patch: MAP FFX improves sharply on every
-medium/large/huge row, and `normal_eb` improves σ(RFX) and BLUP in all 12 normal rows
+First-1000 required-suite result after the β cap patch: the internal MAP β stage improves
+FFX sharply on every medium/large/huge row, and EB improves σ(RFX) and BLUP in all 12 rows
 while keeping σ(Eps) unchanged. Runtime remains single-digit milliseconds per dataset.
 Detailed row table is in `metabeta/analytical/plan_normal.md`.
 
@@ -111,7 +110,8 @@ Retired REML Diagnostics
 
 REML/profile-MAP was tested as an experiment-only variance-scale refinement and
 retired after the refreshed benchmark. The diagnostic script and package-level
-REML support were removed; MAP is the only retained production path.
+REML support were removed; MAP is retained only as the internal initializer/refinement
+stage for the EB path.
 
 Full-suite row-weighted sRFX NRMSE:
 

@@ -1,8 +1,8 @@
 Analytical GLMM Plan
 ====================
 
-- [plan_normal.md](plan_normal.md) — Normal GLMM: production MAP path now carries MAP β
-  for `d > 4`; active priority is validating `normal_eb` and the remaining R-INLA gap.
+- [plan_normal.md](plan_normal.md) — Normal GLMM: production EB path uses the MAP stage
+  internally, carries MAP β for `d > 4`, and reports prior-capped β for tail control.
 - [plan_bernoulli.md](plan_bernoulli.md) — Bernoulli GLMM: default P14-cal Laplace-EB path;
   no full INLA or separate amortized-correction branch.
 

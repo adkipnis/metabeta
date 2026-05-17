@@ -205,7 +205,7 @@ def glmm(
     map_lr = kwargs.pop('map_lr', 0.03)
     map_recompute_blup = kwargs.pop('map_recompute_blup', True)
     map_optimize = kwargs.pop('map_optimize', 'all')
-    normal_laplace_eb = kwargs.pop('normal_laplace_eb', False)
+    normal_laplace_eb = kwargs.pop('normal_laplace_eb', likelihood_family == 0)
     normal_laplace_eb_steps = kwargs.pop('normal_laplace_eb_steps', 3)
     normal_laplace_eb_lr = kwargs.pop('normal_laplace_eb_lr', 0.08)
     normal_laplace_eb_mode = kwargs.pop('normal_laplace_eb_mode', 'moment')
@@ -308,7 +308,8 @@ def glmm(
                 beta_prior_cap=normal_map_beta_prior_cap,
             )
         if (
-            normal_laplace_eb
+            map_refine
+            and normal_laplace_eb
             and Zm.shape[-1] > 0
             and all(v is not None for v in map_priors.values())
         ):
@@ -469,5 +470,6 @@ __all__ = [
     'refineBernoulliLaplaceEb',
     'refineBernoulliMapBeta',
     'refineBernoulliNestedBeta',
+    'refineNormalLaplaceEb',
     'refineNormalMapSrfx',
 ]

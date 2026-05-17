@@ -371,7 +371,7 @@ def test_glmm_normal_blups_use_beta_for_blup_without_changing_beta_est():
     )
 
 
-def test_glmm_normal_laplace_eb_flag_smoke():
+def test_glmm_normal_laplace_eb_default_smoke():
     rng = np.random.default_rng(SEED + 21)
     B, d, q, m, n_per_group = 3, 3, 2, 10, 16
     datasets = [
@@ -401,7 +401,6 @@ def test_glmm_normal_laplace_eb_flag_smoke():
         ),
         mask_d=torch.ones(B, d, dtype=torch.bool),
         mask_q=torch.ones(B, q, dtype=torch.bool),
-        normal_laplace_eb=True,
         normal_laplace_eb_steps=2,
     )
 

@@ -21,7 +21,7 @@ from metabeta.utils.experiments import dataFilePath
 
 
 DATA_IDS = ['small-n-mixed', 'medium-n-mixed', 'large-n-mixed', 'huge-n-mixed']
-METHODS = ['map', 'normal_eb']
+METHODS = ['normal_eb']
 
 
 def _sliceBatch(batch: dict[str, torch.Tensor], n: int) -> dict[str, torch.Tensor]:
@@ -60,7 +60,7 @@ def _binByM(m: int) -> str:
 def _methodKwargs(method: str) -> dict[str, bool]:
     if method == 'normal_eb':
         return {'map_refine': True, 'bernoulli_laplace_eb': False, 'normal_laplace_eb': True}
-    return {'map_refine': True, 'bernoulli_laplace_eb': False}
+    raise ValueError(f'unsupported analytical method: {method}')
 
 
 def runDiagnostic(args: argparse.Namespace) -> None:

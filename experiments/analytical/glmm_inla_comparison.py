@@ -1,8 +1,7 @@
 """Experiment: analytical GLMM vs R-INLA on Bernoulli/Normal GLMM datasets.
 
 Compares analytical GLMM summaries against R-INLA on Bernoulli or Normal datasets.
-The analytical side can run the raw estimator, the MAP/default estimator, and the
-normal Laplace-EB prototype.
+The analytical side can run the raw estimator and the current EB-refined estimator.
 
 RE prior: PC prior P(σ_j > τ_rfx_j) = 0.317 per dimension for uncorrelated
 datasets (eta_rfx=0, or q=1).  For correlated datasets (eta_rfx>0, q=2):
@@ -17,7 +16,7 @@ Usage (from repo root):
         --data-ids small-b-sampled,small-n-sampled --n-inla 100
     uv run python experiments/analytical/glmm_inla_comparison.py \\
         --data-ids small-n-sampled --n-inla 200 --partition test \\
-        --analytical-methods raw,map,normal_eb
+        --analytical-methods raw,current
 """
 
 from __future__ import annotations
@@ -36,7 +35,7 @@ from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.experiments import dataFilePath
 
 
-ANALYTICAL_METHODS = ('raw', 'map', 'normal_eb')
+ANALYTICAL_METHODS = ('raw', 'current', 'normal_eb')
 
 try:
     import rpy2.robjects as ro
@@ -68,17 +67,19 @@ def _parseAnalyticalMethods(value: str) -> list[str]:
     invalid = sorted(set(methods) - set(ANALYTICAL_METHODS))
     if invalid:
         raise ValueError(f'unsupported analytical method(s): {", ".join(invalid)}')
-    return methods or ['raw', 'map']
+    return methods or ['raw', 'current']
 
 
 def _methodLabel(method: str, likelihood_family: int) -> str:
     if method == 'raw':
         return 'RAW'
+    if method in {'current', 'normal_eb'} and likelihood_family == 1:
+        return 'P14'
+    if method in {'current', 'normal_eb'} and likelihood_family == 0:
+        return 'NORMAL-EB'
     if method == 'normal_eb':
         return 'NORMAL-EB'
-    if likelihood_family == 1:
-        return 'MAP/P14'
-    return 'MAP'
+    return method.upper()
 
 
 def _metricLists() -> dict[str, list[np.ndarray] | list[float]]:
@@ -416,7 +417,7 @@ def run_one_dataset(
     if device is None:
         device = torch.device('cpu')
     if analytical_methods is None:
-        analytical_methods = ['raw', 'map']
+        analytical_methods = ['raw', 'current']
     data_cfg = loadDataConfig(data_id)
     max_d = data_cfg['max_d']
     max_q = data_cfg['max_q']
@@ -458,13 +459,20 @@ def run_one_dataset(
 
                 stats_np = {}
                 for method in analytical_methods:
-                    method_kwargs = {'map_refine': method == 'map'}
                     if method == 'raw':
-                        method_kwargs['bernoulli_laplace_eb'] = False
-                    if method == 'normal_eb':
-                        method_kwargs['map_refine'] = True
-                        method_kwargs['bernoulli_laplace_eb'] = False
-                        method_kwargs['normal_laplace_eb'] = True
+                        method_kwargs = {
+                            'map_refine': False,
+                            'bernoulli_laplace_eb': False,
+                            'normal_laplace_eb': False,
+                        }
+                    elif method == 'normal_eb' and likelihood_family == 0:
+                        method_kwargs = {
+                            'map_refine': True,
+                            'bernoulli_laplace_eb': False,
+                            'normal_laplace_eb': True,
+                        }
+                    else:
+                        method_kwargs = {'map_refine': True}
                     t0 = time.perf_counter()
                     stats = glmm(
                         batch['X'],
@@ -702,7 +710,7 @@ def main(
     normal_re_correlation: str = 'auto',
 ) -> None:
     if analytical_methods is None:
-        analytical_methods = ['raw', 'map']
+        analytical_methods = ['raw', 'current']
     print(
         f'R-INLA: {"enabled" if _HAS_INLA else "DISABLED"}   limit={n_inla}'
         + (f'   n_total={n_total}' if n_total > 0 else '')
@@ -785,8 +793,8 @@ if __name__ == '__main__':
     parser.add_argument('--n-epochs',  default=1,   type=int)
     parser.add_argument('--n-inla',    default=100, type=int, help='max datasets for INLA per data_id')
     parser.add_argument('--n-total',   default=0,   type=int, help='cap total datasets per data_id (0=all)')
-    parser.add_argument('--analytical-methods', default='raw,map',
-                        help='comma-separated analytical methods: raw,map,normal_eb')
+    parser.add_argument('--analytical-methods', default='raw,current',
+                        help='comma-separated analytical methods: raw,current,normal_eb')
     parser.add_argument('--normal-re-correlation', default='auto',
                         choices=['auto', 'diagonal'],
                         help='R-INLA RE correlation for normal datasets')

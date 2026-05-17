@@ -237,10 +237,12 @@ def _sliceBatch(batch: dict[str, torch.Tensor], n: int) -> dict[str, torch.Tenso
 
 
 def _methodKwargs(method: str) -> dict[str, str | bool]:
-    if method == 'default':
+    if method in {'default', 'current'}:
         return {}
+    if method == 'raw':
+        return {'bernoulli_laplace_eb': False, 'normal_laplace_eb': False}
     if method == 'p14_cal':
-        return {'bernoulli_laplace_eb': 'p14_cal'}
+        return {'bernoulli_laplace_eb': 'p14_cal', 'normal_laplace_eb': False}
     if method == 'normal_eb':
         return {'bernoulli_laplace_eb': False, 'normal_laplace_eb': True}
     return {'bernoulli_laplace_eb': False}
@@ -252,7 +254,7 @@ def _p14CalKwargs(method: str, args: argparse.Namespace) -> dict[str, int | floa
             'bernoulli_laplace_eb_sigma_prior_cap': args.cal_sigma_prior_cap,
             'bernoulli_laplace_eb_sigma_prior_cap_min_d': args.cal_sigma_prior_cap_min_d,
         }
-    if method == 'default':
+    if method in {'default', 'current'}:
         return {
             'bernoulli_laplace_eb_sigma_prior_cap': args.cal_sigma_prior_cap,
             'bernoulli_laplace_eb_sigma_prior_cap_min_d': args.cal_sigma_prior_cap_min_d,
@@ -261,7 +263,7 @@ def _p14CalKwargs(method: str, args: argparse.Namespace) -> dict[str, int | floa
 
 
 def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, int | float | str]:
-    if method != 'normal_eb':
+    if method not in {'default', 'current', 'normal_eb'}:
         return {}
     return {
         'normal_laplace_eb_mode': args.normal_eb_mode,

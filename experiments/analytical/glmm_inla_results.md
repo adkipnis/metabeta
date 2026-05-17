@@ -48,12 +48,12 @@ dataset, roughly two orders of magnitude slower on these benchmarks.
 Normal Diagonal R-INLA Snapshot
 -------------------------------
 
-The normal analytical path now carries MAP β for `d > 4`, reports a prior-capped β
-(`ν_ffx ± 4τ_ffx`) to remove rare FFX tail explosions, and keeps the uncapped MAP β for
-BLUP residuals. `normal_eb` applies the one-shot σ update on top of that path.
+The retained normal analytical path now carries MAP β internally for `d > 4`, reports a
+prior-capped β (`ν_ffx ± 4τ_ffx`) to remove rare FFX tail explosions, keeps the uncapped
+MAP β for BLUP residuals, and applies the one-shot EB σ update by default.
 
-Small-scale rough placement, mixed/train, first 100 datasets per row. This includes the
-`normal_eb` prototype.
+Small-scale rough placement, mixed/train, first 100 datasets per row. MAP columns are
+historical internal-stage diagnostics, not a retained standalone mode.
 
 | Dataset | RAW FFX | MAP FFX | EB FFX | INLA FFX | RAW σ | MAP σ | EB σ | INLA σ | RAW BLUP | MAP BLUP | EB BLUP | INLA BLUP | RAW ms | MAP ms | EB ms | INLA s |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -72,8 +72,8 @@ Current analytical mixed/train rows after the prior β cap, first 1000 datasets 
 | huge-n-mixed | 0.3314 | 0.3314 | 0.4280 | 0.3776 | 0.4573 | 0.4545 | 4.74 | 5.34 |
 
 Mixed/train diagonal R-INLA reference, first 1000 datasets per row. The INLA cells are
-from the completed `raw,map,normal_eb` rerun; analytical FFX values above include the
-post-rerun prior β cap on the same first-1000 rows.
+from the completed rerun; analytical FFX values above include the post-rerun prior β cap
+on the same first-1000 rows.
 
 | Dataset | RAW FFX | MAP FFX | INLA FFX | RAW σ | MAP σ | INLA σ | RAW BLUP | MAP BLUP | INLA BLUP | RAW ms | MAP ms | INLA s |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -86,8 +86,8 @@ Normal takeaways:
 
 - The prior β cap closes most of the normal FFX gap on small/medium/huge and reduces the
   large-row FFX gap substantially.
-- `normal_eb` closes additional σ/BLUP error with a one-shot update.
+- EB closes additional σ/BLUP error with a one-shot update.
 - The remaining Gaussian FFX issue appears tail-dominated: on patched MAP, large/huge
   mixed/train have mean per-dataset β RMSE around `0.06-0.09`, but rare maxima above
   `5-10` drove aggregate NRMSE before the prior cap.
-- INLA remains about seconds per dataset; analytical MAP is milliseconds per dataset.
+- INLA remains about seconds per dataset; analytical EB is milliseconds per dataset.

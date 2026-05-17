@@ -19,7 +19,7 @@ Current Path
 - diagonal final Ψ for GLS/BLUP recompute;
 - d-gated MAP β carry-forward for `d > 4`;
 - prior-capped reported β for `d > 4`: `β_report = clamp(β_MAP, ν_ffx ± 4τ_ffx)`;
-- optional `normal_laplace_eb=True` posterior-moment diagonal σ_rfx calibration.
+- default posterior-moment diagonal σ_rfx EB calibration.
 
 The d gate is intentional. A direct MAP β carry-forward improves medium/large/huge rows
 but badly overfits small `d <= 4` rows, so small keeps the older GLS/OLS final β path.
@@ -47,7 +47,7 @@ First 1000 datasets per row. Lower NRMSE is better.
 | huge-n-sampled | test | 0.3398 | 0.3398 | 0.4092 | 0.3870 | 0.1438 | 0.1438 | 0.4630 | 0.4619 | 5.84 | 6.63 |
 
 Relative to the previous normal prototype, carrying and prior-capping MAP β for `d > 4`
-substantially reduces FFX NRMSE on every medium/large/huge row. `normal_eb` still improves
+substantially reduces FFX NRMSE on every medium/large/huge row. EB then improves
 σ_rfx and BLUP on every row, while leaving σ_eps unchanged. The β cap is sparse: it fires
 on about `1.1%` of medium mixed rows, `4.4%` of large mixed rows, `4.0%` of huge mixed
 rows, and `1.7-5.9%` of medium+ sampled rows.
@@ -55,10 +55,9 @@ rows, and `1.7-5.9%` of medium+ sampled rows.
 R-INLA Reference
 ----------------
 
-The mixed/train 1k R-INLA rerun completed with `raw,map,normal_eb`; the analytical columns
-below use the post-rerun prior-capped β patch on the same first-1000 rows. INLA uses
-diagonal random effects because the exact correlated Gaussian R-INLA branch is unstable on
-these datasets.
+The mixed/train 1k R-INLA rerun completed on the same first-1000 rows. INLA uses diagonal
+random effects because the exact correlated Gaussian R-INLA branch is unstable on these
+datasets.
 
 | Dataset | EB FFX | INLA FFX | EB σ | INLA σ | EB BLUP | INLA BLUP | EB ms | INLA s |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -94,10 +93,10 @@ our analytical path is still a plug-in MAP plus final GLS/BLUP recompute.
 Next Steps
 ----------
 
-1. **Keep the d-gated MAP β carry-forward plus prior reporting cap.** It is simple,
+1. **Keep the d-gated MAP β carry-forward plus prior reporting cap internally.** It is simple,
    sparse, and directly fixes the observed β tail failures.
-2. **Keep `normal_eb` as the preferred variance-scale add-on.** It is a one-shot
-   posterior-moment update, not another optimizer, and improves σ/BLUP broadly.
+2. **Use EB as the retained normal answer.** It is a one-shot posterior-moment update,
+   not another optimizer, and improves σ/BLUP broadly.
 3. **Next validation should be sampled-set R-INLA only if needed.** The mixed/train R-INLA
    rerun is enough to justify the patch direction; sampled R-INLA is expensive and should
    be used only if analytical sampled rows regress.
@@ -109,14 +108,14 @@ Commands
 
 ```bash
 uv run python experiments/analytical/glmm_required_benchmark.py \
-    --family n --methods current normal_eb --max-datasets 1000 --batch-size 32
+    --family n --methods current raw --max-datasets 1000 --batch-size 32
 
 uv run python experiments/analytical/glmm_normal_inla_diagnostic.py --n-inla 8 --batch-size 8
 
 uv run python experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-n-mixed,medium-n-mixed,large-n-mixed,huge-n-mixed \
     --partition train --n-epochs 2 --n-inla 1000 --n-total 1000 \
-    --analytical-methods raw,map,normal_eb --normal-re-correlation diagonal
+    --analytical-methods raw,current --normal-re-correlation diagonal
 
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical tests
