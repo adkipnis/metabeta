@@ -79,6 +79,8 @@ def _methodLabel(method: str, likelihood_family: int) -> str:
         return 'NORMAL-EB'
     if method == 'normal_eb':
         return 'NORMAL-EB'
+    if method == 'current' and likelihood_family == 2:
+        return 'POISSON-PQL'
     return method.upper()
 
 
@@ -211,7 +213,7 @@ def _inla_estimate(
     if n == 0 or m < 2:
         return None
 
-    family_str = 'binomial' if likelihood_family == 1 else 'gaussian'
+    family_str = {0: 'gaussian', 1: 'binomial', 2: 'poisson'}.get(likelihood_family, 'gaussian')
     correlated = eta_rfx is not None and float(eta_rfx) > 0 and q == 2
     if likelihood_family == 0 and normal_re_correlation == 'diagonal':
         correlated = False

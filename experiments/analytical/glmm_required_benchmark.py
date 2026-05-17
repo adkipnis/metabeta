@@ -20,7 +20,7 @@ from metabeta.utils.experiments import dataFilePath
 
 SIZES = ['small', 'medium', 'large', 'huge']
 METHODS = ['default', 'current', 'raw', 'bernoulli_eb', 'normal_eb']
-FAMILIES = ['n', 'b']
+FAMILIES = ['n', 'b', 'p']
 
 
 def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
