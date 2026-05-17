@@ -7,7 +7,9 @@ is for failure-mode attribution, not the required benchmark table.
 from __future__ import annotations
 
 import argparse
+import csv
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -39,6 +41,34 @@ def _rmse(x: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(x)))) if x.size else float('nan')
 
 
+def _safeCond(x: np.ndarray) -> float:
+    if x.shape[0] == 0 or x.shape[1] == 0:
+        return float('nan')
+    try:
+        s = np.linalg.svd(x, compute_uv=False)
+    except np.linalg.LinAlgError:
+        return float('inf')
+    s = s[np.isfinite(s)]
+    if s.size == 0:
+        return float('inf')
+    s_max = float(np.max(s))
+    s_min = float(np.min(s))
+    if s_min <= 1e-12:
+        return float('inf')
+    return s_max / s_min
+
+
+def _corr(x: np.ndarray, y: np.ndarray) -> float:
+    finite = np.isfinite(x) & np.isfinite(y)
+    if finite.sum() < 3:
+        return float('nan')
+    x_sel = x[finite]
+    y_sel = y[finite]
+    if float(np.std(x_sel)) <= 1e-12 or float(np.std(y_sel)) <= 1e-12:
+        return float('nan')
+    return float(np.corrcoef(x_sel, y_sel)[0, 1])
+
+
 def _binByD(d: int) -> str:
     if d <= 4:
         return 'd<=4'
@@ -57,14 +87,81 @@ def _binByM(m: int) -> str:
     return 'm>=61'
 
 
+def _binByCond(value: float) -> str:
+    if not np.isfinite(value):
+        return 'cond=inf'
+    if value < 10:
+        return 'cond<10'
+    if value < 100:
+        return '10<=cond<100'
+    if value < 1000:
+        return '100<=cond<1000'
+    return 'cond>=1000'
+
+
+def _binByR2(value: float) -> str:
+    if not np.isfinite(value):
+        return 'r2=nan'
+    if value < 0.25:
+        return 'r2<0.25'
+    if value < 0.5:
+        return '0.25<=r2<0.5'
+    if value < 0.75:
+        return '0.5<=r2<0.75'
+    return 'r2>=0.75'
+
+
 def _methodKwargs(method: str) -> dict[str, bool]:
     if method == 'normal_eb':
         return {'map_refine': True, 'bernoulli_laplace_eb': False, 'normal_laplace_eb': True}
     raise ValueError(f'unsupported analytical method: {method}')
 
 
+def _designDiagnostics(ds_flat: dict) -> dict[str, float | np.ndarray]:
+    x = np.asarray(ds_flat['X'], dtype=float)
+    z = np.asarray(ds_flat['Z'], dtype=float)
+    groups = np.asarray(ds_flat['groups'], dtype=int)
+    d = x.shape[1]
+    m = int(ds_flat['m'])
+
+    resid_parts = []
+    for g in range(m):
+        sel = groups == g
+        if not np.any(sel):
+            continue
+        x_g = x[sel]
+        z_g = z[sel]
+        if z_g.shape[1] == 0:
+            resid_parts.append(x_g)
+            continue
+        try:
+            coef = np.linalg.lstsq(z_g, x_g, rcond=1e-8)[0]
+            resid_parts.append(x_g - z_g @ coef)
+        except np.linalg.LinAlgError:
+            resid_parts.append(x_g)
+
+    rx = np.vstack(resid_parts) if resid_parts else x
+    x_slope = x[:, 1:] if d > 1 else x[:, :0]
+    rx_slope = rx[:, 1:] if d > 1 else rx[:, :0]
+    raw_ss = np.sum(np.square(x), axis=0)
+    resid_ss = np.sum(np.square(rx), axis=0)
+    fe_re_r2 = np.where(raw_ss > 1e-12, 1.0 - resid_ss / raw_ss, np.nan)
+    fe_re_r2 = np.clip(fe_re_r2, 0.0, 1.0)
+    slope_r2 = fe_re_r2[1:] if d > 1 else np.array([], dtype=float)
+
+    return {
+        'x_cond': _safeCond(x_slope),
+        'rx_cond': _safeCond(rx_slope),
+        'max_fe_re_r2': float(np.nanmax(fe_re_r2)) if fe_re_r2.size else float('nan'),
+        'max_slope_fe_re_r2': float(np.nanmax(slope_r2)) if slope_r2.size else float('nan'),
+        'mean_slope_fe_re_r2': (float(np.nanmean(slope_r2)) if slope_r2.size else float('nan')),
+        'fe_re_r2': fe_re_r2,
+    }
+
+
 def runDiagnostic(args: argparse.Namespace) -> None:
     rows = []
+    gap_rows = []
     t0 = time.perf_counter()
     for data_id in args.data_ids:
         cfg = loadDataConfig(data_id)
@@ -119,13 +216,19 @@ def runDiagnostic(args: argparse.Namespace) -> None:
                 mask_d = batch['mask_d'].cpu().numpy().astype(bool)
                 mask_q = batch['mask_q'].cpu().numpy().astype(bool)
                 m_arr = batch['m'].cpu().numpy()
+                n_arr = batch['n'].cpu().numpy()
+                ns_arr = batch['ns'].cpu().numpy()
+                sigma_eps_true = batch['sigma_eps'].cpu().numpy()
 
                 for b in range(B):
                     active_d = np.flatnonzero(mask_d[b])
                     active_q = np.flatnonzero(mask_q[b])
                     m = int(m_arr[b])
+                    n = int(n_arr[b])
+                    flat = _flatten(batch, b, active_d, active_q)
+                    design = _designDiagnostics(flat)
                     est = _inla_estimate(
-                        _flatten(batch, b, active_d, active_q),
+                        flat,
                         likelihood_family=0,
                         normal_re_correlation='diagonal',
                     )
@@ -139,26 +242,78 @@ def runDiagnostic(args: argparse.Namespace) -> None:
                             (est['blups'][:m] - rfx_true[b, :m][:, active_q]).reshape(-1)
                         ),
                     }
+                    ns_b = ns_arr[b, :m].astype(float)
+                    ns_mean = float(np.mean(ns_b)) if ns_b.size else float('nan')
+                    ns_cv = float(np.std(ns_b) / max(ns_mean, 1e-8)) if ns_b.size else float('nan')
                     for method in METHODS:
+                        beta_est = stats[method]['beta_est'][b, active_d].detach().cpu().numpy()
+                        sigma_est = (
+                            stats[method]['sigma_rfx_est'][b, active_q].detach().cpu().numpy()
+                        )
+                        blup_est = (
+                            stats[method]['blup_est'][b, :m][:, active_q].detach().cpu().numpy()
+                        )
+                        beta_err = beta_est - ffx_true[b, active_d]
+                        sigma_err = sigma_est - srfx_true[b, active_q]
+                        blup_err = (blup_est - rfx_true[b, :m][:, active_q]).reshape(-1)
                         method_err = {
-                            'ffx': _rmse(
-                                stats[method]['beta_est'][b, active_d].detach().cpu().numpy()
-                                - ffx_true[b, active_d]
-                            ),
-                            'sigma': _rmse(
-                                stats[method]['sigma_rfx_est'][b, active_q].detach().cpu().numpy()
-                                - srfx_true[b, active_q]
-                            ),
-                            'blup': _rmse(
-                                (
-                                    stats[method]['blup_est'][b, :m][:, active_q]
-                                    .detach()
-                                    .cpu()
-                                    .numpy()
-                                    - rfx_true[b, :m][:, active_q]
-                                ).reshape(-1)
-                            ),
+                            'ffx': _rmse(beta_err),
+                            'sigma': _rmse(sigma_err),
+                            'blup': _rmse(blup_err),
                         }
+                        cap_default = torch.zeros(B, dtype=torch.float32)
+                        cap_hit = float(
+                            stats[method]
+                            .get('normal_map_beta_prior_capped', cap_default)[b]
+                            .detach()
+                            .cpu()
+                            .item()
+                        )
+                        beta_abs_err = np.abs(beta_err)
+                        fe_re_r2 = design['fe_re_r2']
+                        beta_r2_corr = _corr(beta_abs_err, fe_re_r2[: len(active_d)])
+                        diag = {
+                            'data_id': data_id,
+                            'dataset_idx': seen - 1,
+                            'method': method,
+                            'd': len(active_d),
+                            'q': len(active_q),
+                            'm': m,
+                            'n': n,
+                            'ns_min': float(np.min(ns_b)) if ns_b.size else float('nan'),
+                            'ns_max': float(np.max(ns_b)) if ns_b.size else float('nan'),
+                            'ns_cv': ns_cv,
+                            'x_cond': design['x_cond'],
+                            'rx_cond': design['rx_cond'],
+                            'max_fe_re_r2': design['max_fe_re_r2'],
+                            'max_slope_fe_re_r2': design['max_slope_fe_re_r2'],
+                            'mean_slope_fe_re_r2': design['mean_slope_fe_re_r2'],
+                            'beta_r2_corr': beta_r2_corr,
+                            'beta_prior_cap': cap_hit,
+                            'beta_abs_err_mean': float(np.mean(beta_abs_err)),
+                            'beta_abs_err_max': float(np.max(beta_abs_err)),
+                            'sigma_true_mean': float(np.mean(srfx_true[b, active_q])),
+                            'sigma_eb_mean': float(np.mean(sigma_est)),
+                            'sigma_inla_mean': float(np.mean(est['sigma_rfx'])),
+                            'sigma_eb_bias_mean': float(np.mean(sigma_err)),
+                            'sigma_inla_bias_mean': float(
+                                np.mean(est['sigma_rfx'] - srfx_true[b, active_q])
+                            ),
+                            'sigma_eps_true': float(sigma_eps_true[b]),
+                            'sigma_eps_eb': float(
+                                stats[method]['sigma_eps_est'][b, 0].detach().cpu().item()
+                            ),
+                            'ffx_eb_rmse': method_err['ffx'],
+                            'ffx_inla_rmse': inla_err['ffx'],
+                            'ffx_gap': method_err['ffx'] - inla_err['ffx'],
+                            'sigma_eb_rmse': method_err['sigma'],
+                            'sigma_inla_rmse': inla_err['sigma'],
+                            'sigma_gap': method_err['sigma'] - inla_err['sigma'],
+                            'blup_eb_rmse': method_err['blup'],
+                            'blup_inla_rmse': inla_err['blup'],
+                            'blup_gap': method_err['blup'] - inla_err['blup'],
+                        }
+                        gap_rows.append(diag)
                         for metric, value in method_err.items():
                             rows.append(
                                 {
@@ -169,6 +324,9 @@ def runDiagnostic(args: argparse.Namespace) -> None:
                                     'inla_rmse': inla_err[metric],
                                     'd_bin': _binByD(len(active_d)),
                                     'm_bin': _binByM(m),
+                                    'rx_cond_bin': _binByCond(float(design['rx_cond'])),
+                                    'slope_r2_bin': _binByR2(float(design['max_slope_fe_re_r2'])),
+                                    'cap_bin': 'cap' if cap_hit else 'no_cap',
                                     'q': len(active_q),
                                 }
                             )
@@ -177,6 +335,14 @@ def runDiagnostic(args: argparse.Namespace) -> None:
     _printSummary(rows, 'data_id')
     _printSummary(rows, 'd_bin')
     _printSummary(rows, 'm_bin')
+    _printSummary(rows, 'rx_cond_bin')
+    _printSummary(rows, 'slope_r2_bin')
+    _printSummary(rows, 'cap_bin')
+    _printRanked(gap_rows, 'ffx_gap', args.top_k)
+    _printRanked(gap_rows, 'sigma_gap', args.top_k)
+    _printRanked(gap_rows, 'blup_gap', args.top_k)
+    if args.output_csv:
+        _writeCsv(gap_rows, Path(args.output_csv))
 
 
 def _printSummary(rows: list[dict], by: str) -> None:
@@ -217,6 +383,80 @@ def _printSummary(rows: list[dict], by: str) -> None:
     )
 
 
+def _fmt(value: float) -> str:
+    if not np.isfinite(value):
+        return 'inf' if value > 0 else 'nan'
+    return f'{value:.4f}'
+
+
+def _printRanked(rows: list[dict], metric: str, top_k: int) -> None:
+    selected = sorted(rows, key=lambda row: row[metric], reverse=True)[:top_k]
+    table = []
+    for row in selected:
+        table.append(
+            [
+                row['data_id'],
+                row['dataset_idx'],
+                _fmt(row[metric]),
+                _fmt(row['ffx_eb_rmse']),
+                _fmt(row['ffx_inla_rmse']),
+                _fmt(row['sigma_eb_rmse']),
+                _fmt(row['sigma_inla_rmse']),
+                _fmt(row['blup_eb_rmse']),
+                _fmt(row['blup_inla_rmse']),
+                row['d'],
+                row['q'],
+                row['m'],
+                _fmt(row['ns_cv']),
+                _fmt(row['rx_cond']),
+                _fmt(row['max_slope_fe_re_r2']),
+                int(row['beta_prior_cap']),
+                _fmt(row['sigma_true_mean']),
+                _fmt(row['sigma_eb_mean']),
+                _fmt(row['sigma_inla_mean']),
+            ]
+        )
+    print(f'\nTop {len(selected)} by {metric} (positive means Normal EB worse than INLA)')
+    print(
+        tabulate(
+            table,
+            headers=[
+                'data',
+                'idx',
+                'gap',
+                'EB FFX',
+                'INLA FFX',
+                'EB sigma',
+                'INLA sigma',
+                'EB BLUP',
+                'INLA BLUP',
+                'd',
+                'q',
+                'm',
+                'ns_cv',
+                'rx_cond',
+                'max RE R2',
+                'cap',
+                'sig true',
+                'sig EB',
+                'sig INLA',
+            ],
+            tablefmt='github',
+        )
+    )
+
+
+def _writeCsv(rows: list[dict], path: Path) -> None:
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f'\nwrote per-dataset diagnostics to {path}')
+
+
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -225,6 +465,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--n-epochs',   type=int,  default=2)
     parser.add_argument('--n-inla',     type=int,  default=10)
     parser.add_argument('--batch-size', type=int,  default=16)
+    parser.add_argument('--top-k',      type=int,  default=10)
+    parser.add_argument('--output-csv',           default='')
     return parser.parse_args()
 # fmt: on
 
