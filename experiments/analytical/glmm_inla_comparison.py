@@ -1,7 +1,7 @@
-"""Experiment: PQL vs R-INLA on Bernoulli/Normal GLMM datasets.
+"""Experiment: analytical GLMM vs R-INLA on Bernoulli/Normal GLMM datasets.
 
-Compares the full analytical pipeline (glmm() with map_refine=True, i.e.
-P1+P2+P5+P6+BC1) against R-INLA on Bernoulli or Normal test datasets.
+Compares analytical GLMM summaries against R-INLA on Bernoulli or Normal datasets.
+The analytical side can run the raw estimator, the MAP/default estimator, or both.
 
 RE prior: PC prior P(σ_j > τ_rfx_j) = 0.317 per dimension for uncorrelated
 datasets (eta_rfx=0, or q=1).  For correlated datasets (eta_rfx>0, q=2):
@@ -15,7 +15,8 @@ Usage (from repo root):
     uv run python experiments/analytical/glmm_inla_comparison.py \\
         --data-ids small-b-sampled,small-n-sampled --n-inla 100
     uv run python experiments/analytical/glmm_inla_comparison.py \\
-        --data-ids small-b-sampled --n-inla 200 --partition test
+        --data-ids small-n-sampled --n-inla 200 --partition test \\
+        --analytical-methods raw,map
 """
 
 from __future__ import annotations
@@ -29,10 +30,12 @@ import torch
 from tabulate import tabulate
 
 from metabeta.analytical.glmm import glmm
-from metabeta.analytical.map import refineBernoulliMapBeta, refineBernoulliNagqSrfx
 from metabeta.utils.config import loadDataConfig
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.experiments import dataFilePath
+
+
+ANALYTICAL_METHODS = ('raw', 'map')
 
 try:
     import rpy2.robjects as ro
@@ -57,6 +60,49 @@ def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
 
 def _bias(arr: np.ndarray) -> float:
     return float(np.nanmean(arr))
+
+
+def _parseAnalyticalMethods(value: str) -> list[str]:
+    methods = [method.strip().lower() for method in value.split(',') if method.strip()]
+    invalid = sorted(set(methods) - set(ANALYTICAL_METHODS))
+    if invalid:
+        raise ValueError(f'unsupported analytical method(s): {", ".join(invalid)}')
+    return methods or ['raw', 'map']
+
+
+def _methodLabel(method: str, likelihood_family: int) -> str:
+    if method == 'raw':
+        return 'RAW'
+    if likelihood_family == 1:
+        return 'MAP/P14'
+    return 'MAP'
+
+
+def _metricLists() -> dict[str, list[np.ndarray] | list[float]]:
+    return {
+        'be': [],
+        'bt': [],
+        'se': [],
+        'st': [],
+        're': [],
+        'rt': [],
+        'wall': [],
+    }
+
+
+def _flat(values: list[np.ndarray]) -> np.ndarray:
+    return np.concatenate(values) if values else np.array([np.nan])
+
+
+def _sliceBatch(batch: dict[str, torch.Tensor], n: int) -> dict[str, torch.Tensor]:
+    out = {}
+    B = batch['X'].shape[0]
+    for key, value in batch.items():
+        if torch.is_tensor(value) and value.shape[:1] == (B,):
+            out[key] = value[:n]
+        else:
+            out[key] = value
+    return out
 
 
 def _flatten(batch: dict, b: int, active_d: np.ndarray, active_q: np.ndarray) -> dict:
@@ -353,11 +399,14 @@ def run_one_dataset(
     n_inla: int = 100,
     n_total: int = 0,
     n_epochs: int = 1,
+    analytical_methods: list[str] | None = None,
     device: torch.device | None = None,
 ) -> dict:
-    """Run PQL+P5+P6 vs R-INLA on one dataset, return metrics dict."""
+    """Run analytical GLMM methods vs R-INLA on one dataset, return metrics dict."""
     if device is None:
         device = torch.device('cpu')
+    if analytical_methods is None:
+        analytical_methods = ['raw', 'map']
     data_cfg = loadDataConfig(data_id)
     max_d = data_cfg['max_d']
     max_q = data_cfg['max_q']
@@ -373,28 +422,9 @@ def run_one_dataset(
 
     assert paths and paths[0].exists(), f'No data at {paths[0] if paths else data_id}/{partition}'
 
-    pql_a_be, pql_a_bt = [], []
-    pql_a_se, pql_a_st = [], []
-    pql_a_re, pql_a_rt = [], []
-
-    p6_a_be, p6_a_bt = [], []
-    p6_a_se, p6_a_st = [], []
-    p6_a_re, p6_a_rt = [], []
-
-    # matched subset (same datasets INLA ran on)
-    pql_cv_be, pql_cv_bt = [], []
-    pql_cv_se, pql_cv_st = [], []
-    pql_cv_re, pql_cv_rt = [], []
-    p6_cv_be, p6_cv_bt = [], []
-    p6_cv_se, p6_cv_st = [], []
-    p6_cv_re, p6_cv_rt = [], []
-
-    inla_be, inla_bt = [], []
-    inla_se, inla_st = [], []
-    inla_re, inla_rt = [], []
-    inla_wall: list[float] = []
-    pql_wall: list[float] = []
-    p6_wall: list[float] = []
+    all_metrics = {method: _metricLists() for method in analytical_methods}
+    matched_metrics = {method: _metricLists() for method in analytical_methods}
+    inla_metrics = _metricLists()
     inla_n_tried = inla_n_ok = 0
 
     with torch.no_grad():
@@ -408,66 +438,49 @@ def run_one_dataset(
                 if n_total > 0 and n_seen >= n_total:
                     done = True
                     break
+                if n_total > 0:
+                    remaining = n_total - n_seen
+                    if batch['X'].shape[0] > remaining:
+                        batch = _sliceBatch(batch, remaining)
                 batch = toDevice(batch, device)
                 B = batch['X'].shape[0]
                 Zm = batch['Z'][..., :max_q]
 
-                t0 = time.perf_counter()
-                stats = glmm(
-                    batch['X'],
-                    batch['y'],
-                    Zm,
-                    batch['mask_n'].float(),
-                    batch['mask_m'].float(),
-                    batch['ns'].clamp(min=1).float(),
-                    batch['n'].float(),
-                    likelihood_family=likelihood_family,
-                    eta_rfx=batch.get('eta_rfx'),
-                    mask_q=batch.get('mask_q'),
-                    nu_ffx=batch.get('nu_ffx'),
-                    tau_ffx=batch.get('tau_ffx'),
-                    family_ffx=batch.get('family_ffx'),
-                    tau_rfx=batch.get('tau_rfx'),
-                    family_sigma_rfx=batch.get('family_sigma_rfx'),
-                    tau_eps=batch.get('tau_eps'),
-                    family_sigma_eps=batch.get('family_sigma_eps'),
-                    mask_d=batch.get('mask_d'),
-                )
-                pql_batch_wall = time.perf_counter() - t0
-
-                if likelihood_family == 1:
-                    stats_p5 = refineBernoulliNagqSrfx(
-                        stats,
+                stats_np = {}
+                for method in analytical_methods:
+                    method_kwargs = {'map_refine': method == 'map'}
+                    if method == 'raw':
+                        method_kwargs['bernoulli_laplace_eb'] = False
+                    t0 = time.perf_counter()
+                    stats = glmm(
                         batch['X'],
                         batch['y'],
                         Zm,
                         batch['mask_n'].float(),
                         batch['mask_m'].float(),
+                        batch['ns'].clamp(min=1).float(),
+                        batch['n'].float(),
+                        likelihood_family=likelihood_family,
+                        eta_rfx=batch.get('eta_rfx'),
                         mask_q=batch.get('mask_q'),
-                    )
-                    t0_p6 = time.perf_counter()
-                    stats_p6 = refineBernoulliMapBeta(
-                        stats_p5,
-                        batch['X'],
-                        batch['y'],
-                        Zm,
-                        batch['mask_n'].float(),
-                        batch['mask_m'].float(),
                         nu_ffx=batch.get('nu_ffx'),
                         tau_ffx=batch.get('tau_ffx'),
                         family_ffx=batch.get('family_ffx'),
+                        tau_rfx=batch.get('tau_rfx'),
+                        family_sigma_rfx=batch.get('family_sigma_rfx'),
+                        tau_eps=batch.get('tau_eps'),
+                        family_sigma_eps=batch.get('family_sigma_eps'),
+                        mask_d=batch.get('mask_d'),
+                        **method_kwargs,
                     )
-                    p6_batch_wall = time.perf_counter() - t0_p6
-                else:
-                    stats_p6 = stats
-                    p6_batch_wall = 0.0
+                    elapsed = time.perf_counter() - t0
+                    stats_np[method] = {
+                        'beta': stats['beta_est'].cpu().numpy(),
+                        'srfx': stats['sigma_rfx_est'].cpu().numpy(),
+                        'blup': stats['blup_est'].cpu().numpy(),
+                        'wall': elapsed / B,
+                    }
 
-                beta_est = stats['beta_est'].cpu().numpy()
-                srfx_est = stats['sigma_rfx_est'].cpu().numpy()
-                blup_est = stats['blup_est'].cpu().numpy()
-                beta_est_p6 = stats_p6['beta_est'].cpu().numpy()
-                srfx_est_p6 = stats_p6['sigma_rfx_est'].cpu().numpy()
-                blup_est_p6 = stats_p6['blup_est'].cpu().numpy()
                 ffx_true = batch['ffx'].cpu().numpy()
                 srfx_true = batch['sigma_rfx'].cpu().numpy()
                 rfx_true = batch['rfx'].cpu().numpy()
@@ -487,35 +500,25 @@ def run_one_dataset(
                     active_d = np.flatnonzero(mask_d_np[b])
                     active_q = np.flatnonzero(mask_q_np[b])
                     m_b = int(m_np[b])
-
-                    be = beta_est[b, active_d] - ffx_true[b, active_d]
-                    se = srfx_est[b, active_q] - srfx_true[b, active_q]
-                    re_e = (
-                        blup_est[b, :m_b][:, active_q] - rfx_true[b, :m_b][:, active_q]
-                    ).reshape(-1)
                     re_t = rfx_true[b, :m_b][:, active_q].reshape(-1)
 
-                    be_p6 = beta_est_p6[b, active_d] - ffx_true[b, active_d]
-                    se_p6 = srfx_est_p6[b, active_q] - srfx_true[b, active_q]
-                    re_e_p6 = (
-                        blup_est_p6[b, :m_b][:, active_q] - rfx_true[b, :m_b][:, active_q]
-                    ).reshape(-1)
-
-                    pql_a_be.append(be)
-                    pql_a_bt.append(ffx_true[b, active_d])
-                    pql_a_se.append(se)
-                    pql_a_st.append(srfx_true[b, active_q])
-                    pql_a_re.append(re_e)
-                    pql_a_rt.append(re_t)
-                    pql_wall.append(pql_batch_wall / B)
-
-                    p6_a_be.append(be_p6)
-                    p6_a_bt.append(ffx_true[b, active_d])
-                    p6_a_se.append(se_p6)
-                    p6_a_st.append(srfx_true[b, active_q])
-                    p6_a_re.append(re_e_p6)
-                    p6_a_rt.append(re_t)
-                    p6_wall.append(p6_batch_wall / B)
+                    per_method_errors = {}
+                    for method in analytical_methods:
+                        be = stats_np[method]['beta'][b, active_d] - ffx_true[b, active_d]
+                        se = stats_np[method]['srfx'][b, active_q] - srfx_true[b, active_q]
+                        re_e = (
+                            stats_np[method]['blup'][b, :m_b][:, active_q]
+                            - rfx_true[b, :m_b][:, active_q]
+                        ).reshape(-1)
+                        per_method_errors[method] = {'be': be, 'se': se, 're': re_e}
+                        store = all_metrics[method]
+                        store['be'].append(be)
+                        store['bt'].append(ffx_true[b, active_d])
+                        store['se'].append(se)
+                        store['st'].append(srfx_true[b, active_q])
+                        store['re'].append(re_e)
+                        store['rt'].append(re_t)
+                        store['wall'].append(stats_np[method]['wall'])
 
                     n_seen += 1
 
@@ -523,202 +526,144 @@ def run_one_dataset(
                         continue
 
                     inla_n_tried += 1
-                    pql_cv_be.append(be)
-                    pql_cv_bt.append(ffx_true[b, active_d])
-                    pql_cv_se.append(se)
-                    pql_cv_st.append(srfx_true[b, active_q])
-                    pql_cv_re.append(re_e)
-                    pql_cv_rt.append(re_t)
-                    p6_cv_be.append(be_p6)
-                    p6_cv_bt.append(ffx_true[b, active_d])
-                    p6_cv_se.append(se_p6)
-                    p6_cv_st.append(srfx_true[b, active_q])
-                    p6_cv_re.append(re_e_p6)
-                    p6_cv_rt.append(re_t)
+                    for method in analytical_methods:
+                        store = matched_metrics[method]
+                        store['be'].append(per_method_errors[method]['be'])
+                        store['bt'].append(ffx_true[b, active_d])
+                        store['se'].append(per_method_errors[method]['se'])
+                        store['st'].append(srfx_true[b, active_q])
+                        store['re'].append(per_method_errors[method]['re'])
+                        store['rt'].append(re_t)
 
                     ds_flat = _flatten(batch, b, active_d, active_q)
                     t_i = time.perf_counter()
                     est = _inla_estimate(ds_flat, likelihood_family)
-                    inla_wall.append(time.perf_counter() - t_i)
+                    inla_metrics['wall'].append(time.perf_counter() - t_i)
 
                     if est is None:
                         continue
                     inla_n_ok += 1
-                    inla_be.append(est['beta'] - ffx_true[b, active_d])
-                    inla_bt.append(ffx_true[b, active_d])
-                    inla_se.append(est['sigma_rfx'] - srfx_true[b, active_q])
-                    inla_st.append(srfx_true[b, active_q])
-                    inla_re.append(
+                    inla_metrics['be'].append(est['beta'] - ffx_true[b, active_d])
+                    inla_metrics['bt'].append(ffx_true[b, active_d])
+                    inla_metrics['se'].append(est['sigma_rfx'] - srfx_true[b, active_q])
+                    inla_metrics['st'].append(srfx_true[b, active_q])
+                    inla_metrics['re'].append(
                         (est['blups'][:m_b] - rfx_true[b, :m_b][:, active_q]).reshape(-1)
                     )
-                    inla_rt.append(re_t)
+                    inla_metrics['rt'].append(re_t)
 
-    def flat(lst: list) -> np.ndarray:
-        return np.concatenate(lst) if lst else np.array([np.nan])
+    all_flat = {
+        method: {key: _flat(values) for key, values in store.items() if key != 'wall'}
+        for method, store in all_metrics.items()
+    }
+    matched_flat = {
+        method: {key: _flat(values) for key, values in store.items() if key != 'wall'}
+        for method, store in matched_metrics.items()
+    }
+    inla = {key: _flat(values) for key, values in inla_metrics.items() if key != 'wall'}
 
-    pql_a = {
-        k: flat(v)
-        for k, v in zip(
-            'be bt se st re rt'.split(),
-            [pql_a_be, pql_a_bt, pql_a_se, pql_a_st, pql_a_re, pql_a_rt],
-        )
-    }
-    p6_a = {
-        k: flat(v)
-        for k, v in zip(
-            'be bt se st re rt'.split(), [p6_a_be, p6_a_bt, p6_a_se, p6_a_st, p6_a_re, p6_a_rt]
-        )
-    }
-    pql_cv = {
-        k: flat(v)
-        for k, v in zip(
-            'be bt se st re rt'.split(),
-            [pql_cv_be, pql_cv_bt, pql_cv_se, pql_cv_st, pql_cv_re, pql_cv_rt],
-        )
-    }
-    p6_cv = {
-        k: flat(v)
-        for k, v in zip(
-            'be bt se st re rt'.split(),
-            [p6_cv_be, p6_cv_bt, p6_cv_se, p6_cv_st, p6_cv_re, p6_cv_rt],
-        )
-    }
-    inla = {
-        k: flat(v)
-        for k, v in zip(
-            'be bt se st re rt'.split(), [inla_be, inla_bt, inla_se, inla_st, inla_re, inla_rt]
-        )
-    }
-
-    n_pql_all = len(pql_a_be)
+    n_all = len(all_metrics[analytical_methods[0]]['be']) if analytical_methods else 0
     metrics = {
         'data_id': data_id,
-        'n_pql': n_pql_all,
+        'n_analytical': n_all,
         'n_inla': inla_n_ok,
-        'pql_ffx': _nrmse(pql_a['be'], pql_a['bt']),
-        'pql_srfx': _nrmse(pql_a['se'], pql_a['st']),
-        'pql_blup': _nrmse(pql_a['re'], pql_a['rt']),
-        'p6_ffx': _nrmse(p6_a['be'], p6_a['bt']),
-        'p6_srfx': _nrmse(p6_a['se'], p6_a['st']),
-        'p6_blup': _nrmse(p6_a['re'], p6_a['rt']),
+        'analytical_methods': analytical_methods,
         'inla_ffx': _nrmse(inla['be'], inla['bt']) if inla_n_ok > 0 else float('nan'),
         'inla_srfx': _nrmse(inla['se'], inla['st']) if inla_n_ok > 0 else float('nan'),
         'inla_blup': _nrmse(inla['re'], inla['rt']) if inla_n_ok > 0 else float('nan'),
     }
+    for method in analytical_methods:
+        vals = all_flat[method]
+        metrics[f'{method}_ffx'] = _nrmse(vals['be'], vals['bt'])
+        metrics[f'{method}_srfx'] = _nrmse(vals['se'], vals['st'])
+        metrics[f'{method}_blup'] = _nrmse(vals['re'], vals['rt'])
 
     sep = '=' * 70
     print(sep)
-    print(f'  {data_id}  |  partition={partition}  N={n_pql_all}  family={likelihood_family}')
+    print(f'  {data_id}  |  partition={partition}  N={n_all}  family={likelihood_family}')
     print(sep)
 
     family_label = {0: 'Normal', 1: 'Bernoulli', 2: 'Poisson'}.get(
         likelihood_family, str(likelihood_family)
     )
-    p6_label = 'P6' if likelihood_family == 1 else 'MAP'
+    print(f'Family: {family_label}')
 
-    print(f'\nPQL — all q (N={n_pql_all})')
-    print(
-        tabulate(
-            [
-                ['FFX (β)', f'{metrics["pql_ffx"]:.4f}', f'{_bias(pql_a["be"]):+.4f}'],
-                ['σ_rfx', f'{metrics["pql_srfx"]:.4f}', f'{_bias(pql_a["se"]):+.4f}'],
-                ['BLUP', f'{metrics["pql_blup"]:.4f}', f'{_bias(pql_a["re"]):+.4f}'],
-            ],
-            headers=['Parameter', 'NRMSE', 'Bias'],
-            tablefmt='simple',
-        )
-    )
-
-    print(f'\n{p6_label} — all q (N={n_pql_all})')
-    print(
-        tabulate(
-            [
-                ['FFX (β)', f'{metrics["p6_ffx"]:.4f}', f'{_bias(p6_a["be"]):+.4f}'],
-                ['σ_rfx', f'{metrics["p6_srfx"]:.4f}', f'{_bias(p6_a["se"]):+.4f}'],
-                ['BLUP', f'{metrics["p6_blup"]:.4f}', f'{_bias(p6_a["re"]):+.4f}'],
-            ],
-            headers=['Parameter', 'NRMSE', 'Bias'],
-            tablefmt='simple',
-        )
-    )
-
-    if inla_n_ok > 0:
-        print(
-            f'\nPQL vs {p6_label} vs R-INLA — matched'
-            f' (N={len(pql_cv_be)}, INLA {inla_n_ok}/{inla_n_tried})'
-        )
+    for method in analytical_methods:
+        label = _methodLabel(method, likelihood_family)
+        vals = all_flat[method]
+        print(f'\n{label} — all q (N={n_all})')
         print(
             tabulate(
                 [
-                    [
-                        'PQL',
-                        'FFX (β)',
-                        f'{_nrmse(pql_cv["be"], pql_cv["bt"]):.4f}',
-                        f'{_bias(pql_cv["be"]):+.4f}',
-                    ],
-                    [
-                        'PQL',
-                        'σ_rfx',
-                        f'{_nrmse(pql_cv["se"], pql_cv["st"]):.4f}',
-                        f'{_bias(pql_cv["se"]):+.4f}',
-                    ],
-                    [
-                        'PQL',
-                        'BLUP',
-                        f'{_nrmse(pql_cv["re"], pql_cv["rt"]):.4f}',
-                        f'{_bias(pql_cv["re"]):+.4f}',
-                    ],
-                    [
-                        p6_label,
-                        'FFX (β)',
-                        f'{_nrmse(p6_cv["be"], p6_cv["bt"]):.4f}',
-                        f'{_bias(p6_cv["be"]):+.4f}',
-                    ],
-                    [
-                        p6_label,
-                        'σ_rfx',
-                        f'{_nrmse(p6_cv["se"], p6_cv["st"]):.4f}',
-                        f'{_bias(p6_cv["se"]):+.4f}',
-                    ],
-                    [
-                        p6_label,
-                        'BLUP',
-                        f'{_nrmse(p6_cv["re"], p6_cv["rt"]):.4f}',
-                        f'{_bias(p6_cv["re"]):+.4f}',
-                    ],
-                    [
-                        'R-INLA',
-                        'FFX (β)',
-                        f'{metrics["inla_ffx"]:.4f}',
-                        f'{_bias(inla["be"]):+.4f}',
-                    ],
-                    ['R-INLA', 'σ_rfx', f'{metrics["inla_srfx"]:.4f}', f'{_bias(inla["se"]):+.4f}'],
-                    ['R-INLA', 'BLUP', f'{metrics["inla_blup"]:.4f}', f'{_bias(inla["re"]):+.4f}'],
+                    ['FFX (β)', f'{metrics[f"{method}_ffx"]:.4f}', f'{_bias(vals["be"]):+.4f}'],
+                    ['σ_rfx', f'{metrics[f"{method}_srfx"]:.4f}', f'{_bias(vals["se"]):+.4f}'],
+                    ['BLUP', f'{metrics[f"{method}_blup"]:.4f}', f'{_bias(vals["re"]):+.4f}'],
                 ],
-                headers=['Method', 'Parameter', 'NRMSE', 'Bias'],
+                headers=['Parameter', 'NRMSE', 'Bias'],
                 tablefmt='simple',
             )
         )
 
-    print('\nσ_rfx bias by true σ_rfx bin — PQL')
-    print(_breakdown_srfx(pql_a['se'], pql_a['st'], 'PQL'))
-    print(f'\nσ_rfx bias by true σ_rfx bin — {p6_label}')
-    print(_breakdown_srfx(p6_a['se'], p6_a['st'], p6_label))
+    if inla_n_ok > 0:
+        print(
+            f'\nAnalytical vs R-INLA — matched'
+            f' (N={len(matched_metrics[analytical_methods[0]]["be"])},'
+            f' INLA {inla_n_ok}/{inla_n_tried})'
+        )
+        rows = []
+        for method in analytical_methods:
+            label = _methodLabel(method, likelihood_family)
+            vals = matched_flat[method]
+            rows.extend(
+                [
+                    [
+                        label,
+                        'FFX (β)',
+                        f'{_nrmse(vals["be"], vals["bt"]):.4f}',
+                        f'{_bias(vals["be"]):+.4f}',
+                    ],
+                    [
+                        label,
+                        'σ_rfx',
+                        f'{_nrmse(vals["se"], vals["st"]):.4f}',
+                        f'{_bias(vals["se"]):+.4f}',
+                    ],
+                    [
+                        label,
+                        'BLUP',
+                        f'{_nrmse(vals["re"], vals["rt"]):.4f}',
+                        f'{_bias(vals["re"]):+.4f}',
+                    ],
+                ]
+            )
+        rows.extend(
+            [
+                ['R-INLA', 'FFX (β)', f'{metrics["inla_ffx"]:.4f}', f'{_bias(inla["be"]):+.4f}'],
+                ['R-INLA', 'σ_rfx', f'{metrics["inla_srfx"]:.4f}', f'{_bias(inla["se"]):+.4f}'],
+                ['R-INLA', 'BLUP', f'{metrics["inla_blup"]:.4f}', f'{_bias(inla["re"]):+.4f}'],
+            ]
+        )
+        print(tabulate(rows, headers=['Method', 'Parameter', 'NRMSE', 'Bias'], tablefmt='simple'))
+
+    for method in analytical_methods:
+        label = _methodLabel(method, likelihood_family)
+        vals = all_flat[method]
+        print(f'\nσ_rfx bias by true σ_rfx bin — {label}')
+        print(_breakdown_srfx(vals['se'], vals['st'], label))
     if inla_n_ok > 0:
         print('\nσ_rfx bias by true σ_rfx bin — R-INLA')
         print(_breakdown_srfx(inla['se'], inla['st'], 'R-INLA'))
 
-    w_pql = np.array(pql_wall)
-    w_p6 = np.array(p6_wall)
-    print(
-        f'\nWall time — PQL:  mean={w_pql.mean()*1000:.2f} ms  median={np.median(w_pql)*1000:.2f} ms/ds'
-    )
-    if likelihood_family == 1:
+    print()
+    for method in analytical_methods:
+        label = _methodLabel(method, likelihood_family)
+        w = np.array(all_metrics[method]['wall'])
         print(
-            f'Wall time — P6:   mean={w_p6.mean()*1000:.2f} ms  median={np.median(w_p6)*1000:.2f} ms/ds'
+            f'Wall time — {label}: mean={w.mean()*1000:.2f} ms  '
+            f'median={np.median(w)*1000:.2f} ms/ds'
         )
-    if inla_wall:
-        w = np.array(inla_wall)
+    if inla_metrics['wall']:
+        w = np.array(inla_metrics['wall'])
         print(f'Wall time — INLA: mean={w.mean():.3f} s  median={np.median(w):.3f} s/ds')
     print()
 
@@ -736,11 +681,15 @@ def main(
     n_epochs: int = 1,
     n_inla: int = 100,
     n_total: int = 0,
+    analytical_methods: list[str] | None = None,
 ) -> None:
+    if analytical_methods is None:
+        analytical_methods = ['raw', 'map']
     print(
         f'R-INLA: {"enabled" if _HAS_INLA else "DISABLED"}   limit={n_inla}'
         + (f'   n_total={n_total}' if n_total > 0 else '')
     )
+    print(f'Analytical methods: {", ".join(analytical_methods)}')
     print()
 
     all_metrics = []
@@ -752,6 +701,7 @@ def main(
                 n_inla=n_inla,
                 n_total=n_total,
                 n_epochs=n_epochs,
+                analytical_methods=analytical_methods,
             )
         )
 
@@ -766,36 +716,23 @@ def main(
                 return f'{v:.4f}' if not np.isnan(v) else '—'
 
             rows.append(
-                [
-                    m['data_id'],
-                    m['n_pql'],
-                    fmt(m['pql_ffx']),
-                    fmt(m['pql_srfx']),
-                    fmt(m['pql_blup']),
-                    fmt(m['p6_ffx']),
-                    fmt(m['p6_srfx']),
-                    fmt(m['p6_blup']),
-                    fmt(m['inla_ffx']),
-                    fmt(m['inla_srfx']),
-                    fmt(m['inla_blup']),
+                [m['data_id'], m['n_analytical']]
+                + [
+                    fmt(m[f'{method}_{suffix}'])
+                    for method in analytical_methods
+                    for suffix in ['ffx', 'srfx', 'blup']
                 ]
+                + [fmt(m['inla_ffx']), fmt(m['inla_srfx']), fmt(m['inla_blup'])]
             )
+        method_headers = [
+            f'{method.upper()}-{short}'
+            for method in analytical_methods
+            for short in ['F', 'S', 'B']
+        ]
         print(
             tabulate(
                 rows,
-                headers=[
-                    'Dataset',
-                    'N',
-                    'PQL-F',
-                    'PQL-S',
-                    'PQL-B',
-                    'P6-F',
-                    'P6-S',
-                    'P6-B',
-                    'INLA-F',
-                    'INLA-S',
-                    'INLA-B',
-                ],
+                headers=['Dataset', 'N'] + method_headers + ['INLA-F', 'INLA-S', 'INLA-B'],
                 tablefmt='simple',
             )
         )
@@ -803,13 +740,15 @@ def main(
 
 if __name__ == '__main__':
     # fmt: off
-    parser = argparse.ArgumentParser(description='PQL vs R-INLA comparison on GLMM datasets')
+    parser = argparse.ArgumentParser(description='Analytical GLMM vs R-INLA comparison')
     parser.add_argument('--data-ids',  default='small-b-sampled',
                         help='comma-separated data config ids (default: small-b-sampled)')
     parser.add_argument('--partition', default='test', choices=['train', 'valid', 'test'])
     parser.add_argument('--n-epochs',  default=1,   type=int)
     parser.add_argument('--n-inla',    default=100, type=int, help='max datasets for INLA per data_id')
     parser.add_argument('--n-total',   default=0,   type=int, help='cap total datasets per data_id (0=all)')
+    parser.add_argument('--analytical-methods', default='raw,map',
+                        help='comma-separated analytical methods: raw,map')
     # fmt: on
     a = parser.parse_args()
     main(
@@ -818,4 +757,5 @@ if __name__ == '__main__':
         n_epochs=a.n_epochs,
         n_inla=a.n_inla,
         n_total=a.n_total,
+        analytical_methods=_parseAnalyticalMethods(a.analytical_methods),
     )

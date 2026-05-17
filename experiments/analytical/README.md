@@ -24,7 +24,9 @@ Active scripts
   "which stage limits accuracy?" via oracle sigma(Eps), beta, and Psi substitutions.
 
 - `glmm_inla_comparison.py` — R-INLA reference baseline. Compares the full
-  analytical pipeline (PQL+P5+P6) against R-INLA on Bernoulli or Normal datasets.
+  analytical pipeline against R-INLA on Bernoulli or Normal datasets. Supports
+  `--analytical-methods raw,map` so normal datasets can compare `lmmNormal`
+  against the prior-aware MAP-refined normal path and R-INLA.
   Uncorrelated datasets (eta_rfx=0) use independent iid terms with PC priors
   matching HalfNormal(tau_rfx). Correlated datasets (eta_rfx>0, q=2) use the
   iid2d model with a Wishart prior. Reports matched NRMSE and wall time.
