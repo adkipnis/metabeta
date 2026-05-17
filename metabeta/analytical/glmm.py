@@ -24,7 +24,7 @@ _MAP_PRIOR_KEYS = (
     'family_sigma_eps',
 )
 
-_BERNOULLI_LAPLACE_EB_CAL_DEFAULTS = {
+_BERNOULLI_LAPLACE_EB_DEFAULTS = {
     'bernoulli_laplace_eb_steps': 24,
     'bernoulli_laplace_eb_inner': 4,
     'bernoulli_laplace_eb_final': 8,
@@ -41,7 +41,7 @@ def _bernoulliLaplaceEbMode(value: bool | str) -> str:
         return 'all' if value else 'off'
     if isinstance(value, str):
         value = value.lower()
-        if value in {'cal', 'p14_cal', 'p14-cal'}:
+        if value in {'bernoulli_eb', 'calibrated', 'cal', 'default'}:
             return 'cal'
         if value in {'auto', 'gate'}:
             return 'auto'
@@ -49,7 +49,9 @@ def _bernoulliLaplaceEbMode(value: bool | str) -> str:
             return 'all'
         if value in {'off', 'false', 'no'}:
             return 'off'
-    raise ValueError("bernoulli_laplace_eb must be bool, 'cal', 'auto', or 'gate'")
+    raise ValueError(
+        "bernoulli_laplace_eb must be bool, 'bernoulli_eb', 'calibrated', 'auto', or 'gate'"
+    )
 
 
 def _bernoulliLaplaceEbKwarg(
@@ -216,11 +218,11 @@ def glmm(
     normal_map_beta_prior_cap = kwargs.pop('normal_map_beta_prior_cap', 4.0)
     beta_alpha_low = kwargs.pop('beta_alpha_low', 0.65)
     beta_alpha_high = kwargs.pop('beta_alpha_high', 0.75)
-    bernoulli_laplace_eb_default = 'p14_cal' if likelihood_family == 1 else False
+    bernoulli_laplace_eb_default = 'bernoulli_eb' if likelihood_family == 1 else False
     bernoulli_laplace_eb = kwargs.pop('bernoulli_laplace_eb', bernoulli_laplace_eb_default)
     bernoulli_laplace_eb_mode = _bernoulliLaplaceEbMode(bernoulli_laplace_eb)
     bernoulli_laplace_eb_preset = (
-        _BERNOULLI_LAPLACE_EB_CAL_DEFAULTS if bernoulli_laplace_eb_mode == 'cal' else {}
+        _BERNOULLI_LAPLACE_EB_DEFAULTS if bernoulli_laplace_eb_mode == 'cal' else {}
     )
     if bernoulli_laplace_eb_mode == 'cal':
         bernoulli_laplace_eb_mode = 'all'

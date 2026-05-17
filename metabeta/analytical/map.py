@@ -1167,7 +1167,7 @@ def refineBernoulliLaplaceEb(
     recompute_blup_after_calibration: bool = True,
     return_diagnostics: bool = False,
 ) -> dict[str, torch.Tensor]:
-    """P14: diagonal single-mode Laplace-EB refinement for Bernoulli GLMMs.
+    """Diagonal single-mode Laplace-EB refinement for Bernoulli GLMMs.
 
     It optimizes a true Bernoulli Laplace objective over β and diagonal σ_rfx with
     a σ continuation cap. By default β starts from the current analytical estimate

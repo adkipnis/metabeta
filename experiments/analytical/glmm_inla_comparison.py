@@ -74,7 +74,7 @@ def _methodLabel(method: str, likelihood_family: int) -> str:
     if method == 'raw':
         return 'RAW'
     if method in {'current', 'normal_eb'} and likelihood_family == 1:
-        return 'P14'
+        return 'BERNOULLI-EB'
     if method in {'current', 'normal_eb'} and likelihood_family == 0:
         return 'NORMAL-EB'
     if method == 'normal_eb':

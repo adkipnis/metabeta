@@ -11,8 +11,8 @@ Active scripts
   analytical code commit. Prints FFX/sRFX/sEps/BLUP NRMSE CSV for the full
   required suite (mixed-train ×2 + sampled valid/test, all four sizes). Use
   `--methods current raw` for a production-vs-raw comparison, `--methods default` for
-  the production path, and `--methods p14_cal` to verify the explicit Bernoulli
-  Laplace-EB preset against the default.
+  the production path, and `--methods bernoulli_eb` to verify the explicit Bernoulli
+  EB preset against the default.
 
 - `glmm_error_analysis.py` — the only calibration diagnostic. Run this when
   verifying `blup_var` or checking interval coverage. Reports BLUP coverage ratios

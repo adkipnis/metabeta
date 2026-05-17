@@ -19,7 +19,7 @@ from metabeta.utils.experiments import dataFilePath
 
 
 SIZES = ['small', 'medium', 'large', 'huge']
-METHODS = ['default', 'current', 'raw', 'p14_cal', 'normal_eb']
+METHODS = ['default', 'current', 'raw', 'bernoulli_eb', 'normal_eb']
 FAMILIES = ['n', 'b']
 
 
@@ -89,8 +89,10 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                             likelihood_family=likelihood_family,
                             map_refine=method != 'raw',
                             **_methodKwargs(method),
-                            bernoulli_laplace_eb_diagnostics=method in {'default', 'p14_cal'},
-                            **_p14CalKwargs(method, args),
+                            bernoulli_laplace_eb_diagnostics=(
+                                method in {'default', 'current', 'bernoulli_eb'}
+                            ),
+                            **_bernoulliEbKwargs(method, args),
                             **_normalEbKwargs(method, args),
                             **common,
                         )
@@ -241,23 +243,23 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
         return {}
     if method == 'raw':
         return {'bernoulli_laplace_eb': False, 'normal_laplace_eb': False}
-    if method == 'p14_cal':
-        return {'bernoulli_laplace_eb': 'p14_cal', 'normal_laplace_eb': False}
+    if method == 'bernoulli_eb':
+        return {'bernoulli_laplace_eb': 'bernoulli_eb', 'normal_laplace_eb': False}
     if method == 'normal_eb':
         return {'bernoulli_laplace_eb': False, 'normal_laplace_eb': True}
     return {'bernoulli_laplace_eb': False}
 
 
-def _p14CalKwargs(method: str, args: argparse.Namespace) -> dict[str, int | float | bool]:
-    if method == 'p14_cal':
+def _bernoulliEbKwargs(method: str, args: argparse.Namespace) -> dict[str, int | float | bool]:
+    if method == 'bernoulli_eb':
         return {
-            'bernoulli_laplace_eb_sigma_prior_cap': args.cal_sigma_prior_cap,
-            'bernoulli_laplace_eb_sigma_prior_cap_min_d': args.cal_sigma_prior_cap_min_d,
+            'bernoulli_laplace_eb_sigma_prior_cap': args.bernoulli_eb_sigma_prior_cap,
+            'bernoulli_laplace_eb_sigma_prior_cap_min_d': (args.bernoulli_eb_sigma_prior_cap_min_d),
         }
     if method in {'default', 'current'}:
         return {
-            'bernoulli_laplace_eb_sigma_prior_cap': args.cal_sigma_prior_cap,
-            'bernoulli_laplace_eb_sigma_prior_cap_min_d': args.cal_sigma_prior_cap_min_d,
+            'bernoulli_laplace_eb_sigma_prior_cap': args.bernoulli_eb_sigma_prior_cap,
+            'bernoulli_laplace_eb_sigma_prior_cap_min_d': (args.bernoulli_eb_sigma_prior_cap_min_d),
         }
     return {}
 
@@ -284,8 +286,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--max-batches',type=int,  default=None)
     parser.add_argument('--max-datasets', type=int, default=None)
     parser.add_argument('--combos',     nargs='+', default=None)
-    parser.add_argument('--cal-sigma-prior-cap', type=float, default=2.5)
-    parser.add_argument('--cal-sigma-prior-cap-min-d', type=int, default=5)
+    parser.add_argument('--bernoulli-eb-sigma-prior-cap', type=float, default=2.5)
+    parser.add_argument('--bernoulli-eb-sigma-prior-cap-min-d', type=int, default=5)
     parser.add_argument('--normal-eb-mode', default='moment', choices=['moment', 'gradient'])
     parser.add_argument('--normal-eb-steps', type=int, default=3)
     parser.add_argument('--normal-eb-lr', type=float, default=0.08)

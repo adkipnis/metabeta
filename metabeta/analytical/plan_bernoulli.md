@@ -1,7 +1,7 @@
 Bernoulli GLMM Plan
 ===================
 
-Last updated: 2026-05-16
+Last updated: 2026-05-17
 
 Goal
 ----
@@ -16,7 +16,7 @@ target.
 Default Path
 ------------
 
-**P14-cal** is now the default Bernoulli analytical path in `glmm()`:
+**Bernoulli EB** is now the default Bernoulli analytical path in `glmm()`:
 
 - Laplace-EB refinement over β and diagonal log σ with nested per-group random-effect modes.
 - Objective acceptance gate against the incoming PQL/IRLS path.
@@ -29,7 +29,7 @@ The explicit preset remains available for benchmarks and diagnostics:
 ```python
 glmm(
     ...,
-    bernoulli_laplace_eb='p14_cal',
+    bernoulli_laplace_eb='bernoulli_eb',
 )
 ```
 
@@ -42,7 +42,7 @@ Performance Snapshot
 Matched first-1000 per comparison row, 8k datasets total. CPU ms/dataset. Lower NRMSE is
 better.
 
-| Dataset | part | Current FFX | Default FFX | Current σ | Default σ | Current BLUP | Default BLUP | INLA FFX | INLA σ | INLA BLUP | ms/ds |
+| Dataset | part | Legacy FFX | EB FFX | Legacy σ | EB σ | Legacy BLUP | EB BLUP | INLA FFX | INLA σ | INLA BLUP | ms/ds |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | small-b-mixed | train | 0.2710 | 0.2683 | 0.5712 | 0.5119 | 0.6176 | 0.6127 | 0.451 | 0.567 | 0.618 | 17.20 |
 | small-b-sampled | test | 0.2973 | 0.2925 | 0.5744 | 0.5041 | 0.6177 | 0.6089 | 0.447 | 0.556 | 0.625 | 16.83 |
@@ -59,13 +59,13 @@ Mixed/train INLA cells were refreshed from the completed 1k-per-dataset R-INLA r
 Takeaways
 ---------
 
-- Default P14-cal improves over current on every comparison row for FFX and σ.
-- Default P14-cal improves BLUP on 7/8 rows; the only regression is tiny on medium-b-sampled/test
+- Bernoulli EB improves over the legacy analytical path on every comparison row for FFX and σ.
+- Bernoulli EB improves BLUP on 7/8 rows; the only regression is tiny on medium-b-sampled/test
   (`0.7057 -> 0.7069`).
 - FFX is effectively closed relative to INLA.
 - Remaining INLA gaps are mostly σ/BLUP: about `0.02-0.05` σ NRMSE and
   `0.01-0.025` BLUP NRMSE on medium/large/huge rows.
-- P14-cal closes the previous mixed BLUP failure: medium `1.1051 -> 0.6865`,
+- Bernoulli EB closes the previous mixed BLUP failure: medium `1.1051 -> 0.6865`,
   large `0.8719 -> 0.6853`, huge `1.0147 -> 0.7367`.
 - The sigma cap fires on about `2-4%` of medium/large/huge rows and zero small rows.
 - The cap sweep favored `2.5` as the best balanced setting: `1.75-2.0` slightly helps
@@ -77,7 +77,7 @@ Takeaways
 Next Steps
 ----------
 
-1. **Freeze the analytical Bernoulli estimator around the default P14-cal path.**
+1. **Freeze the analytical Bernoulli estimator around the default Bernoulli EB path.**
    Future changes should be regression fixes or clearly benchmarked simplifications.
 
 2. **Use the full 8k benchmark as the promotion gate.**
@@ -92,7 +92,7 @@ Commands
 
 ```bash
 uv run python experiments/analytical/glmm_required_benchmark.py \
-    --family b --methods current default p14_cal \
+    --family b --methods raw current bernoulli_eb \
     --combos small-b-mixed:train:2 small-b-sampled:test \
         medium-b-mixed:train:2 medium-b-sampled:test \
         large-b-mixed:train:2 large-b-sampled:test \
@@ -108,8 +108,8 @@ Retired Lines
 -------------
 
 - R-INLA backend and full PyTorch INLA: incompatible with the throughput target.
-- P11 σ grid integration: worsened FFX by pulling β toward low-σ/OLS regimes.
-- P13 cold starts and nAGQ outer loops: unstable FE/RE confounding or too slow.
+- σ grid integration: worsened FFX by pulling β toward low-σ/OLS regimes.
+- Cold starts and nAGQ outer loops: unstable FE/RE confounding or too slow.
 - Extra β-only Newton and multi-starts: lower expected value after the β output guard.
 - Conditional sigma cap requiring β/BLUP instability: reduced cap fires but worsened the
   full 8k benchmark, especially medium/huge mixed rows.

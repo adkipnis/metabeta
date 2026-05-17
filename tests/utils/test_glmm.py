@@ -451,7 +451,7 @@ def test_glmm_recovers_nonzero_rfx(likelihood_family):
 
 
 def test_refine_bernoulli_laplace_eb_smoke_q1():
-    """P14a diagonal Laplace-EB path is finite and shape-compatible."""
+    """Bernoulli diagonal Laplace-EB path is finite and shape-compatible."""
     rng = np.random.default_rng(SEED + 13)
     B, d, q, m, n_per_group = 4, 2, 1, 8, 18
     datasets = [
@@ -515,7 +515,7 @@ def test_refine_bernoulli_laplace_eb_smoke_q1():
 
 
 def test_refine_bernoulli_laplace_eb_blup_fallback():
-    """P14 can keep incoming BLUPs when the β jump trips the fallback."""
+    """Bernoulli EB can keep incoming BLUPs when the β jump trips the fallback."""
     rng = np.random.default_rng(SEED + 16)
     B, d, q, m, n_per_group = 3, 3, 1, 6, 12
     datasets = [
@@ -556,7 +556,7 @@ def test_refine_bernoulli_laplace_eb_blup_fallback():
 
 
 def test_refine_bernoulli_laplace_eb_beta_output_cap_trigger():
-    """P14 can cap only separation-scale β summaries while leaving ordinary β untouched."""
+    """Bernoulli EB caps only separation-scale β summaries while leaving ordinary β untouched."""
     rng = np.random.default_rng(SEED + 17)
     B, d, q, m, n_per_group = 2, 2, 1, 5, 10
     datasets = [
@@ -598,7 +598,7 @@ def test_refine_bernoulli_laplace_eb_beta_output_cap_trigger():
 
 
 def test_refine_bernoulli_laplace_eb_sigma_prior_cap_recomputes_blup():
-    """P14 can cap sigma against the prior scale and keep BLUP outputs finite."""
+    """Bernoulli EB can cap sigma against the prior scale and keep BLUP outputs finite."""
     rng = np.random.default_rng(SEED + 18)
     B, d, q, m, n_per_group = 2, 2, 1, 5, 10
     datasets = [
@@ -648,7 +648,7 @@ def test_refine_bernoulli_laplace_eb_sigma_prior_cap_recomputes_blup():
 
 
 def test_glmm_bernoulli_laplace_eb_flag_smoke():
-    """P14c is available through glmm() behind an explicit flag."""
+    """Bernoulli EB is available through glmm() behind an explicit flag."""
     rng = np.random.default_rng(SEED + 14)
     B, d, q, m, n_per_group = 2, 2, 1, 6, 12
     datasets = [
@@ -693,8 +693,8 @@ def test_glmm_bernoulli_laplace_eb_flag_smoke():
     assert result['laplace_eb_steps'].min().item() >= 1.0
 
 
-def test_glmm_bernoulli_laplace_eb_cal_preset_matches_explicit_kwargs():
-    """The retained P14-cal preset and Bernoulli default match explicit kwargs."""
+def test_glmm_bernoulli_laplace_eb_default_preset_matches_explicit_kwargs():
+    """The retained Bernoulli EB preset and Bernoulli default match explicit kwargs."""
     rng = np.random.default_rng(SEED + 19)
     B, d, q, m, n_per_group = 1, 2, 1, 4, 8
     datasets = [
@@ -733,7 +733,7 @@ def test_glmm_bernoulli_laplace_eb_cal_preset_matches_explicit_kwargs():
         bt['mask_m'],
         bt['ns'],
         bt['n_total'],
-        bernoulli_laplace_eb='p14_cal',
+        bernoulli_laplace_eb='bernoulli_eb',
         **common,
     )
     explicit = glmm(
@@ -764,7 +764,7 @@ def test_glmm_bernoulli_laplace_eb_cal_preset_matches_explicit_kwargs():
 
 
 def test_glmm_bernoulli_laplace_eb_auto_gate_smoke():
-    """P15 routes only gated Bernoulli datasets through P14."""
+    """Bernoulli EB auto mode routes only gated datasets through the EB refinement."""
     rng = np.random.default_rng(SEED + 15)
     B, d, q, m, n_per_group = 2, 4, 1, 5, 10
     datasets = [

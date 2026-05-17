@@ -2,18 +2,18 @@ R-INLA vs Analytical GLMM Comparison Results
 =============================================
 
 `glmm_inla_comparison.py` — full analytical pipeline (`glmm()`, `map_refine=True`) vs
-R-INLA. For Bernoulli, the analytical column is the current default P14-cal path. Results
+R-INLA. For Bernoulli, the analytical column is the current default Bernoulli EB path. Results
 are reported on the matched subset used for INLA where available. mixed=train/ep2,
 sampled=test.
 
 NRMSE Summary
 -------------
 
-Bold = better method per column. The mixed rows were rerun after P14-cal became the
-default Bernoulli path. The sampled rows combine the current P14-cal benchmark with the
+Bold = better method per column. The mixed rows were rerun after Bernoulli EB became the
+default Bernoulli path. The sampled rows combine the current Bernoulli EB benchmark with the
 existing R-INLA reference run.
 
-| Dataset           | part  | P14 FFX   | INLA FFX  | P14 σ     | INLA σ    | P14 BLUP  | INLA BLUP | INLA s/ds |
+| Dataset           | part  | EB FFX    | INLA FFX  | EB σ      | INLA σ    | EB BLUP   | INLA BLUP | INLA s/ds |
 | ---               | ---   | ---:      | ---:      | ---:      | ---:      | ---:      | ---:      | ---:      |
 | small-b-mixed     | train | **0.267** | 0.451     | **0.510** | 0.567     | **0.614** | 0.618     | n/a       |
 | small-b-sampled   | test  | **0.293** | 0.447     | **0.504** | 0.556     | **0.609** | 0.625     | 2.129     |
@@ -31,18 +31,18 @@ existing R-INLA reference run.
 Key Findings
 -------------
 
-**FFX**: P14-cal closes the old medium/large/huge Bernoulli fixed-effect failure. It is
+**FFX**: Bernoulli EB closes the old medium/large/huge Bernoulli fixed-effect failure. It is
 now better than INLA on small/medium and sampled rows, and essentially tied on
 large/huge mixed rows.
 
-**σ_rfx**: The remaining consistent INLA edge is variance scale on medium+ rows. P14-cal is
+**σ_rfx**: The remaining consistent INLA edge is variance scale on medium+ rows. Bernoulli EB is
 close on large mixed and sampled rows, but still over-shrinks high-σ cases more than INLA.
 The medium-sampled INLA σ cell remains a numerical outlier and should not drive decisions.
 
-**BLUP**: P14-cal is tied or slightly better at small scale; INLA keeps a small but
+**BLUP**: Bernoulli EB is tied or slightly better at small scale; INLA keeps a small but
 consistent edge on medium+ rows, mostly tracking the remaining σ_rfx gap.
 
-**Speed**: P14-cal remains in the tens of milliseconds per dataset; R-INLA is seconds per
+**Speed**: Bernoulli EB remains in the tens of milliseconds per dataset; R-INLA is seconds per
 dataset, roughly two orders of magnitude slower on these benchmarks.
 
 Normal Diagonal R-INLA Snapshot
