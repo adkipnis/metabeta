@@ -174,7 +174,11 @@ def _sigma_from_marginal(marg_hyper: object, name: str) -> float:
     return float(np.trapezoid(den_v / np.sqrt(np.maximum(tau_v, 1e-12)), tau_v))
 
 
-def _inla_estimate(ds_flat: dict, likelihood_family: int) -> dict | None:
+def _inla_estimate(
+    ds_flat: dict,
+    likelihood_family: int,
+    normal_re_correlation: str = 'auto',
+) -> dict | None:
     """Run R-INLA on a flat dataset using the simulation's true priors.
 
     Uncorrelated (eta_rfx == 0 or q == 1): one iid term per RE dimension with
@@ -205,6 +209,8 @@ def _inla_estimate(ds_flat: dict, likelihood_family: int) -> dict | None:
 
     family_str = 'binomial' if likelihood_family == 1 else 'gaussian'
     correlated = eta_rfx is not None and float(eta_rfx) > 0 and q == 2
+    if likelihood_family == 0 and normal_re_correlation == 'diagonal':
+        correlated = False
 
     try:
         with warnings.catch_warnings():
@@ -400,6 +406,7 @@ def run_one_dataset(
     n_total: int = 0,
     n_epochs: int = 1,
     analytical_methods: list[str] | None = None,
+    normal_re_correlation: str = 'auto',
     device: torch.device | None = None,
 ) -> dict:
     """Run analytical GLMM methods vs R-INLA on one dataset, return metrics dict."""
@@ -526,6 +533,14 @@ def run_one_dataset(
                         continue
 
                     inla_n_tried += 1
+                    ds_flat = _flatten(batch, b, active_d, active_q)
+                    t_i = time.perf_counter()
+                    est = _inla_estimate(ds_flat, likelihood_family, normal_re_correlation)
+                    inla_metrics['wall'].append(time.perf_counter() - t_i)
+
+                    if est is None:
+                        continue
+                    inla_n_ok += 1
                     for method in analytical_methods:
                         store = matched_metrics[method]
                         store['be'].append(per_method_errors[method]['be'])
@@ -534,15 +549,6 @@ def run_one_dataset(
                         store['st'].append(srfx_true[b, active_q])
                         store['re'].append(per_method_errors[method]['re'])
                         store['rt'].append(re_t)
-
-                    ds_flat = _flatten(batch, b, active_d, active_q)
-                    t_i = time.perf_counter()
-                    est = _inla_estimate(ds_flat, likelihood_family)
-                    inla_metrics['wall'].append(time.perf_counter() - t_i)
-
-                    if est is None:
-                        continue
-                    inla_n_ok += 1
                     inla_metrics['be'].append(est['beta'] - ffx_true[b, active_d])
                     inla_metrics['bt'].append(ffx_true[b, active_d])
                     inla_metrics['se'].append(est['sigma_rfx'] - srfx_true[b, active_q])
@@ -577,6 +583,10 @@ def run_one_dataset(
         metrics[f'{method}_ffx'] = _nrmse(vals['be'], vals['bt'])
         metrics[f'{method}_srfx'] = _nrmse(vals['se'], vals['st'])
         metrics[f'{method}_blup'] = _nrmse(vals['re'], vals['rt'])
+        method_wall = np.array(all_metrics[method]['wall'])
+        metrics[f'{method}_wall_ms'] = float(method_wall.mean() * 1000.0)
+    inla_wall = np.array(inla_metrics['wall'])
+    metrics['inla_wall_s'] = float(inla_wall.mean()) if inla_wall.size else float('nan')
 
     sep = '=' * 70
     print(sep)
@@ -682,6 +692,7 @@ def main(
     n_inla: int = 100,
     n_total: int = 0,
     analytical_methods: list[str] | None = None,
+    normal_re_correlation: str = 'auto',
 ) -> None:
     if analytical_methods is None:
         analytical_methods = ['raw', 'map']
@@ -690,6 +701,7 @@ def main(
         + (f'   n_total={n_total}' if n_total > 0 else '')
     )
     print(f'Analytical methods: {", ".join(analytical_methods)}')
+    print(f'Normal R-INLA random-effects correlation: {normal_re_correlation}')
     print()
 
     all_metrics = []
@@ -702,6 +714,7 @@ def main(
                 n_total=n_total,
                 n_epochs=n_epochs,
                 analytical_methods=analytical_methods,
+                normal_re_correlation=normal_re_correlation,
             )
         )
 
@@ -736,6 +749,23 @@ def main(
                 tablefmt='simple',
             )
         )
+        time_rows = []
+        for m in all_metrics:
+            time_rows.append(
+                [m['data_id']]
+                + [f'{m[f"{method}_wall_ms"]:.2f}' for method in analytical_methods]
+                + [fmt(m['inla_wall_s'])]
+            )
+        print()
+        print('  SUMMARY — wall time per dataset')
+        print(
+            tabulate(
+                time_rows,
+                headers=['Dataset'] + [f'{method.upper()} ms' for method in analytical_methods]
+                + ['INLA s'],
+                tablefmt='simple',
+            )
+        )
 
 
 if __name__ == '__main__':
@@ -749,6 +779,9 @@ if __name__ == '__main__':
     parser.add_argument('--n-total',   default=0,   type=int, help='cap total datasets per data_id (0=all)')
     parser.add_argument('--analytical-methods', default='raw,map',
                         help='comma-separated analytical methods: raw,map')
+    parser.add_argument('--normal-re-correlation', default='auto',
+                        choices=['auto', 'diagonal'],
+                        help='R-INLA RE correlation for normal datasets')
     # fmt: on
     a = parser.parse_args()
     main(
@@ -758,4 +791,5 @@ if __name__ == '__main__':
         n_inla=a.n_inla,
         n_total=a.n_total,
         analytical_methods=_parseAnalyticalMethods(a.analytical_methods),
+        normal_re_correlation=a.normal_re_correlation,
     )
