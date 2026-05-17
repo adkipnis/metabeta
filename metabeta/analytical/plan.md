@@ -1,8 +1,8 @@
 Analytical GLMM Plan
 ====================
 
-- [plan_normal.md](plan_normal.md) — Normal GLMM: production MAP path, active priority is a
-  fast diagonal Laplace-EB variance calibration benchmarked against raw, MAP, and R-INLA.
+- [plan_normal.md](plan_normal.md) — Normal GLMM: production MAP path now carries MAP β
+  for `d > 4`; active priority is validating `normal_eb` and the remaining R-INLA gap.
 - [plan_bernoulli.md](plan_bernoulli.md) — Bernoulli GLMM: default P14-cal Laplace-EB path;
   no full INLA or separate amortized-correction branch.
 

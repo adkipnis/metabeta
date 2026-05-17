@@ -196,6 +196,8 @@ def _recomputeNormalFinalDiagMap(
     mask_q: torch.Tensor | None,
     beta_alpha_low: float = 0.65,
     beta_alpha_high: float = 0.75,
+    beta_override: torch.Tensor | None = None,
+    beta_for_blup_override: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     """Recompute final Gaussian GLS/BLUP using diagonal MAP Psi."""
     q = Zm.shape[-1]
@@ -240,18 +242,27 @@ def _recomputeNormalFinalDiagMap(
         beta_fallback,
     )
 
-    beta_ols = _safeSolve(XtX + _adaptiveRidge(XtX), Xty)
-    active_d_count = (XtX.diagonal(dim1=-2, dim2=-1).abs() > 1e-8).sum(dim=-1)
-    alpha = torch.where(
-        active_d_count <= 8,
-        se2.new_full(se2.shape, beta_alpha_low),
-        se2.new_full(se2.shape, beta_alpha_high),
-    )
-    beta_for_blup = ((1.0 - alpha[:, None]) * gls.beta + alpha[:, None] * beta_ols).nan_to_num(
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0,
-    )
+    if beta_override is None:
+        beta_ols = _safeSolve(XtX + _adaptiveRidge(XtX), Xty)
+        active_d_count = (XtX.diagonal(dim1=-2, dim2=-1).abs() > 1e-8).sum(dim=-1)
+        alpha = torch.where(
+            active_d_count <= 8,
+            se2.new_full(se2.shape, beta_alpha_low),
+            se2.new_full(se2.shape, beta_alpha_high),
+        )
+        beta_final = gls.beta
+        beta_for_blup = ((1.0 - alpha[:, None]) * gls.beta + alpha[:, None] * beta_ols).nan_to_num(
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+    else:
+        beta_final = beta_override.detach().to(device=device, dtype=dtype)
+        if beta_for_blup_override is None:
+            beta_for_blup = beta_final
+        else:
+            beta_for_blup = beta_for_blup_override.detach().to(device=device, dtype=dtype)
+        beta_for_blup = beta_for_blup.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
     resid = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_for_blup)) * mask_n
     Ztr = torch.einsum('bmnq,bmn->bmq', Zm, resid)
     blups = torch.einsum('bmqp,bmp->bmq', gls.W_g, Ztr)
@@ -290,7 +301,7 @@ def _recomputeNormalFinalDiagMap(
     blup_var = blup_var.clamp(min=blup_var_floor)
 
     out = dict(stats)
-    out['beta_est'] = gls.beta
+    out['beta_est'] = beta_final
     out['sigma_rfx_est'] = sigma_rfx
     out['blup_est'] = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
     out['blup_var'] = blup_var
@@ -322,6 +333,7 @@ def refineNormalMapSrfx(
     optimize: str = 'all',
     beta_alpha_low: float = 0.65,
     beta_alpha_high: float = 0.75,
+    beta_prior_cap: float | None = 4.0,
 ) -> dict[str, torch.Tensor]:
     """Return stats with sigma(RFX) refined by marginal MAP.
 
@@ -392,6 +404,30 @@ def refineNormalMapSrfx(
     if mask_q is not None:
         sigma_rfx = torch.where(mask_q[..., :q].bool(), sigma_rfx, stats['sigma_rfx_est'][..., :q])
     out = dict(stats)
+    # MAP beta overfits the low-d normal sets; keep the older GLS/OLS blend there.
+    beta_for_blup_override = beta.detach() if opt_beta and beta.shape[-1] > 4 else None
+    beta_override = beta_for_blup_override
+    if beta_override is not None:
+        beta_capped = torch.zeros(
+            beta_override.shape[0], device=beta_override.device, dtype=beta_override.dtype
+        )
+        if beta_prior_cap is not None and beta_prior_cap > 0:
+            d = beta_override.shape[-1]
+            cap_scale = float(beta_prior_cap)
+            cap_lo = nu_ffx[..., :d] - cap_scale * tau_ffx[..., :d].clamp(min=1e-4)
+            cap_hi = nu_ffx[..., :d] + cap_scale * tau_ffx[..., :d].clamp(min=1e-4)
+            beta_capped = (
+                ((beta_override < cap_lo) | (beta_override > cap_hi))
+                .any(dim=-1)
+                .to(beta_override.dtype)
+            )
+            beta_override = beta_override.clamp(min=cap_lo, max=cap_hi)
+            if mask_d is not None:
+                active_d = mask_d[..., :d].bool()
+                beta_override = torch.where(active_d, beta_override, beta.detach())
+        out['beta_est'] = beta_override
+        out['normal_map_beta_for_blup'] = beta_for_blup_override
+        out['normal_map_beta_prior_capped'] = beta_capped
     out['sigma_rfx_est'] = sigma_rfx
     if 'Psi' in stats:
         if recompute_blup:
@@ -407,6 +443,8 @@ def refineNormalMapSrfx(
                 mask_q,
                 beta_alpha_low=beta_alpha_low,
                 beta_alpha_high=beta_alpha_high,
+                beta_override=beta_override,
+                beta_for_blup_override=beta_for_blup_override,
             )
         out['Psi'] = _replacePsiDiag(stats['Psi'], sigma_rfx, mask_q)
     return out
@@ -455,7 +493,8 @@ def refineNormalLaplaceEb(
 
     B = Xm.shape[0]
     device, dtype = Xm.device, Xm.dtype
-    beta = stats['beta_est'].detach()
+    beta = stats.get('normal_map_beta_for_blup', stats['beta_est']).detach()
+    beta_output = stats['beta_est'].detach()
     sigma_rfx_base = stats['sigma_rfx_est'][..., :q].detach().clamp(min=1e-4, max=20.0)
     log_sigma_eps_base = stats['sigma_eps_est'].squeeze(-1).detach().clamp(min=1e-4, max=20.0).log()
     corr = torch.eye(q, device=device, dtype=dtype).expand(B, q, q)
@@ -546,6 +585,8 @@ def refineNormalLaplaceEb(
                     mask_q,
                     beta_alpha_low=beta_alpha_low,
                     beta_alpha_high=beta_alpha_high,
+                    beta_override=beta_output if beta.shape[-1] > 4 else None,
+                    beta_for_blup_override=beta if beta.shape[-1] > 4 else None,
                 )
             out['Psi'] = torch.diag_embed(sigma_rfx.square())
         return out
@@ -655,6 +696,8 @@ def refineNormalLaplaceEb(
                 mask_q,
                 beta_alpha_low=beta_alpha_low,
                 beta_alpha_high=beta_alpha_high,
+                beta_override=beta_output if beta.shape[-1] > 4 else None,
+                beta_for_blup_override=beta if beta.shape[-1] > 4 else None,
             )
         out['Psi'] = torch.diag_embed(sigma_rfx.square())
     return out

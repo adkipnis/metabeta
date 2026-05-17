@@ -213,6 +213,7 @@ def glmm(
     normal_laplace_eb_prior_weight = kwargs.pop('normal_laplace_eb_prior_weight', 4.0)
     normal_laplace_eb_optimize_eps = kwargs.pop('normal_laplace_eb_optimize_eps', False)
     normal_laplace_eb_recompute_blup = kwargs.pop('normal_laplace_eb_recompute_blup', True)
+    normal_map_beta_prior_cap = kwargs.pop('normal_map_beta_prior_cap', 4.0)
     beta_alpha_low = kwargs.pop('beta_alpha_low', 0.65)
     beta_alpha_high = kwargs.pop('beta_alpha_high', 0.75)
     bernoulli_laplace_eb_default = 'p14_cal' if likelihood_family == 1 else False
@@ -304,6 +305,7 @@ def glmm(
                 optimize=map_optimize,
                 beta_alpha_low=beta_alpha_low,
                 beta_alpha_high=beta_alpha_high,
+                beta_prior_cap=normal_map_beta_prior_cap,
             )
         if (
             normal_laplace_eb

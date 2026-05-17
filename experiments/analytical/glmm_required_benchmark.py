@@ -160,6 +160,8 @@ class _MetricStore:
             self.blup_fallback.append(stats['laplace_eb_blup_fallback'].detach().cpu().numpy())
         if 'laplace_eb_beta_output_capped' in stats:
             self.beta_capped.append(stats['laplace_eb_beta_output_capped'].detach().cpu().numpy())
+        if 'normal_map_beta_prior_capped' in stats:
+            self.beta_capped.append(stats['normal_map_beta_prior_capped'].detach().cpu().numpy())
         if 'laplace_eb_sigma_prior_capped' in stats:
             self.sigma_capped.append(stats['laplace_eb_sigma_prior_capped'].detach().cpu().numpy())
         self.n_total += B

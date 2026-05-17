@@ -85,22 +85,25 @@ The exact correlated Gaussian INLA specification has shown numerical failures on
 some datasets, so the comparison uses a diagonal random-effects INLA reference to
 match the production final covariance assumption.
 
-The first retained prototype is a normal-specific diagonal Laplace-EB calibration,
-available behind `glmm(..., normal_laplace_eb=True)` and benchmarked as
-`normal_eb`:
+The retained normal path now carries the optimized MAP β for `d > 4`; `d <= 4` keeps the
+older GLS/OLS final β because direct MAP β overfits those small rows. The reported
+medium+ β is prior-capped at `ν_ffx ± 4τ_ffx`, while BLUP residuals continue to use the
+uncapped MAP β to preserve BLUP accuracy. The variance-scale add-on is a normal-specific
+diagonal Laplace-EB calibration, available behind `glmm(..., normal_laplace_eb=True)` and
+benchmarked as `normal_eb`:
 
 - use the exact Gaussian marginal likelihood rather than a Bernoulli-style nested
   random-effect optimizer;
 - update only diagonal `sigma_rfx` with a posterior-moment EB update plus prior
   pseudo-count;
-- keep β out of the optimizer and recompute final β/BLUPs with the existing
-  diagonal final pass;
+- keep the EB σ update one-shot; β comes from the existing MAP pass for `d > 4`, with a
+  prior-aware reporting cap for rare FFX tail failures;
 - accept only objective-improving, finite updates, otherwise return current MAP;
 - promote only if the required-suite BLUP improves without FFX/σ(Eps) regressions.
 
-First-1000 required-suite result: `normal_eb` improves σ(RFX) and BLUP in all 12
-normal rows while keeping σ(Eps) unchanged. Runtime remains single-digit
-milliseconds per dataset, usually about 0.2-1.1 ms slower than current MAP.
+First-1000 required-suite result after the β cap patch: MAP FFX improves sharply on every
+medium/large/huge row, and `normal_eb` improves σ(RFX) and BLUP in all 12 normal rows
+while keeping σ(Eps) unchanged. Runtime remains single-digit milliseconds per dataset.
 Detailed row table is in `metabeta/analytical/plan_normal.md`.
 
 Retired REML Diagnostics
