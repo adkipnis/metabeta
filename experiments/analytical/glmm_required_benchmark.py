@@ -19,7 +19,7 @@ from metabeta.utils.experiments import dataFilePath
 
 
 SIZES = ['small', 'medium', 'large', 'huge']
-METHODS = ['default', 'current', 'raw', 'p14_cal']
+METHODS = ['default', 'current', 'raw', 'p14_cal', 'normal_eb']
 FAMILIES = ['n', 'b']
 
 
@@ -91,6 +91,7 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                             **_methodKwargs(method),
                             bernoulli_laplace_eb_diagnostics=method in {'default', 'p14_cal'},
                             **_p14CalKwargs(method, args),
+                            **_normalEbKwargs(method, args),
                             **common,
                         )
                         stores[method].add(stats, batch, max_q, time.perf_counter() - t0)
@@ -153,6 +154,8 @@ class _MetricStore:
             self.gate.append(stats['laplace_eb_gate'].detach().cpu().numpy())
         if 'laplace_eb_accept' in stats:
             self.accept.append(stats['laplace_eb_accept'].detach().cpu().numpy())
+        if 'normal_laplace_eb_accept' in stats:
+            self.accept.append(stats['normal_laplace_eb_accept'].detach().cpu().numpy())
         if 'laplace_eb_blup_fallback' in stats:
             self.blup_fallback.append(stats['laplace_eb_blup_fallback'].detach().cpu().numpy())
         if 'laplace_eb_beta_output_capped' in stats:
@@ -236,6 +239,8 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
         return {}
     if method == 'p14_cal':
         return {'bernoulli_laplace_eb': 'p14_cal'}
+    if method == 'normal_eb':
+        return {'bernoulli_laplace_eb': False, 'normal_laplace_eb': True}
     return {'bernoulli_laplace_eb': False}
 
 
@@ -253,6 +258,18 @@ def _p14CalKwargs(method: str, args: argparse.Namespace) -> dict[str, int | floa
     return {}
 
 
+def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, int | float | str]:
+    if method != 'normal_eb':
+        return {}
+    return {
+        'normal_laplace_eb_mode': args.normal_eb_mode,
+        'normal_laplace_eb_steps': args.normal_eb_steps,
+        'normal_laplace_eb_lr': args.normal_eb_lr,
+        'normal_laplace_eb_moment_blend': args.normal_eb_moment_blend,
+        'normal_laplace_eb_prior_weight': args.normal_eb_prior_weight,
+    }
+
+
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -265,6 +282,11 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--combos',     nargs='+', default=None)
     parser.add_argument('--cal-sigma-prior-cap', type=float, default=2.5)
     parser.add_argument('--cal-sigma-prior-cap-min-d', type=int, default=5)
+    parser.add_argument('--normal-eb-mode', default='moment', choices=['moment', 'gradient'])
+    parser.add_argument('--normal-eb-steps', type=int, default=3)
+    parser.add_argument('--normal-eb-lr', type=float, default=0.08)
+    parser.add_argument('--normal-eb-moment-blend', type=float, default=1.0)
+    parser.add_argument('--normal-eb-prior-weight', type=float, default=4.0)
     return parser.parse_args()
 # fmt: on
 

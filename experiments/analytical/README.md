@@ -25,8 +25,9 @@ Active scripts
 
 - `glmm_inla_comparison.py` — R-INLA reference baseline. Compares the full
   analytical pipeline against R-INLA on Bernoulli or Normal datasets. Supports
-  `--analytical-methods raw,map` so normal datasets can compare `lmmNormal`
-  against the prior-aware MAP-refined normal path and R-INLA.
+  `--analytical-methods raw,map,normal_eb` so normal datasets can compare
+  `lmmNormal` against the prior-aware MAP-refined normal path, the normal EB
+  prototype, and R-INLA.
   Uncorrelated datasets (eta_rfx=0) use independent iid terms with PC priors
   matching HalfNormal(tau_rfx). Correlated datasets (eta_rfx>0, q=2) use the
   iid2d model with a Wishart prior. Reports matched NRMSE and wall time.

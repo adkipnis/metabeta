@@ -45,11 +45,11 @@ Open Priorities
    numerically unstable on these data; diagonal INLA matches the production final
    covariance assumption and gives a useful reference for variance-scale calibration.
 
-2. **Implement a normal-specific diagonal Laplace-EB calibration candidate.**
+2. **Validate the normal-specific diagonal Laplace-EB calibration candidate.**
    Gaussian random-effect integration is analytically exact, so this should not copy the
-   Bernoulli nested mode optimizer. The candidate should optimize only diagonal
-   `sigma_rfx` and optionally `sigma_eps`, keep β fixed or update it through the existing
-   final GLS recompute, and then reuse `_recomputeNormalFinalDiagMap`.
+   Bernoulli nested mode optimizer. The current prototype is `normal_laplace_eb=True`:
+   a posterior-moment diagonal σ update with prior pseudo-weight `4`, objective acceptance,
+   and the existing `_recomputeNormalFinalDiagMap` pass.
 
 3. **Promote only if it is simpler or faster than current MAP, or closes a measured
    INLA gap.** Current MAP is an Adam loop over marginal Gaussian likelihood parameters.
@@ -75,14 +75,14 @@ Laplace-EB Candidate Plan
 
 **N2. Fast diagonal EB update.**
 
-- Add an experiment-only refinement, e.g. `normal_laplace_eb`, gated behind a kwarg.
-- Start from raw or current MAP diagonal `sigma_rfx`.
+- Current prototype is implemented as `normal_laplace_eb=True`, with benchmark method
+  `normal_eb`.
+- Start from current MAP diagonal `sigma_rfx`.
 - Use the exact Gaussian marginal likelihood with diagonal Ψ and existing priors.
-- Update log variances with a small fixed number of damped Newton/Fisher or coordinate
-  steps. Keep β out of the optimizer; recompute β/BLUP once at the end through the
-  existing diagonal final pass.
-- Include objective acceptance against current MAP and finite-value fallback to the
-  incoming stats.
+- Use posterior BLUP moments `E[b_j^2] ≈ bhat_j^2 + Var(b_j)`, blend with the prior
+  scale as a pseudo-count, and accept only finite objective-nondecreasing updates.
+- Keep β out of the optimizer; recompute β/BLUP once at the end through the existing
+  diagonal final pass.
 
 **N3. Speed-first approximation.**
 
@@ -99,6 +99,30 @@ Laplace-EB Candidate Plan
   FFX/σ(Eps) regression.
 - Retire the branch if it only improves σ_rfx without moving BLUP, or if it adds another
   optimizer with MAP-like runtime and similar accuracy.
+
+Prototype Snapshot
+------------------
+
+First 1000 datasets per row, current MAP vs `normal_eb`. Lower NRMSE is better.
+
+| Dataset | part | MAP FFX | EB FFX | MAP σ | EB σ | MAP σ_eps | EB σ_eps | MAP BLUP | EB BLUP | MAP ms | EB ms |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | train | 0.1096 | 0.1095 | 0.4814 | 0.4203 | 0.2151 | 0.2151 | 0.4192 | 0.4173 | 3.09 | 2.53 |
+| small-n-sampled | valid | 0.2587 | 0.2588 | 0.5654 | 0.5646 | 0.2169 | 0.2169 | 0.5130 | 0.5125 | 2.28 | 2.53 |
+| small-n-sampled | test | 0.2828 | 0.2827 | 0.4864 | 0.4684 | 0.2169 | 0.2169 | 0.4926 | 0.4924 | 2.25 | 2.50 |
+| medium-n-mixed | train | 0.5489 | 0.5486 | 0.3798 | 0.3628 | 0.1655 | 0.1655 | 0.4409 | 0.4395 | 3.06 | 3.43 |
+| medium-n-sampled | valid | 0.5305 | 0.5285 | 0.5709 | 0.4142 | 0.1891 | 0.1891 | 0.5426 | 0.5417 | 3.76 | 4.21 |
+| medium-n-sampled | test | 0.4155 | 0.4127 | 0.4505 | 0.3980 | 0.1949 | 0.1949 | 0.4668 | 0.4640 | 3.69 | 4.05 |
+| large-n-mixed | train | 1.8207 | 1.8169 | 0.4148 | 0.3718 | 0.1268 | 0.1268 | 0.4361 | 0.4359 | 4.14 | 4.70 |
+| large-n-sampled | valid | 1.0820 | 1.0813 | 0.4982 | 0.4321 | 0.1563 | 0.1563 | 0.5347 | 0.5290 | 4.34 | 4.87 |
+| large-n-sampled | test | 0.8186 | 0.7408 | 0.8721 | 0.4421 | 0.1513 | 0.1513 | 0.5261 | 0.5224 | 4.60 | 5.14 |
+| huge-n-mixed | train | 1.3100 | 0.9413 | 0.4280 | 0.3782 | 0.1161 | 0.1161 | 0.4742 | 0.4716 | 5.24 | 5.90 |
+| huge-n-sampled | valid | 1.0284 | 1.0359 | 0.4100 | 0.3698 | 0.1375 | 0.1375 | 0.4836 | 0.4818 | 6.19 | 7.07 |
+| huge-n-sampled | test | 0.8872 | 0.8953 | 0.4092 | 0.3850 | 0.1438 | 0.1438 | 0.4823 | 0.4813 | 6.46 | 7.31 |
+
+Takeaway: the prototype improves σ_rfx and BLUP in every row while keeping σ_eps fixed.
+FFX is mostly neutral, with meaningful improvements on large/huge mixed/test and small
+regressions on huge sampled rows. Runtime remains single-digit milliseconds per dataset.
 
 Acceptance Criteria
 -------------------
@@ -119,6 +143,8 @@ Commands
 ```bash
 uv run python experiments/analytical/glmm_required_benchmark.py
 uv run python experiments/analytical/glmm_required_benchmark.py --methods current raw
+uv run python experiments/analytical/glmm_required_benchmark.py \
+    --family n --methods current normal_eb --max-datasets 1000 --batch-size 32
 uv run python experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-n-mixed,medium-n-mixed,large-n-mixed,huge-n-mixed \
     --partition train --n-epochs 2 --n-inla 1000 --n-total 1000 \

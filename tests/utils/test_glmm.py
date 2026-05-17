@@ -371,6 +371,49 @@ def test_glmm_normal_blups_use_beta_for_blup_without_changing_beta_est():
     )
 
 
+def test_glmm_normal_laplace_eb_flag_smoke():
+    rng = np.random.default_rng(SEED + 21)
+    B, d, q, m, n_per_group = 3, 3, 2, 10, 16
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=0, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+
+    result = glmm(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+        likelihood_family=0,
+        nu_ffx=torch.as_tensor(np.stack([ds['nu_ffx'] for ds in datasets]), dtype=torch.float32),
+        tau_ffx=torch.as_tensor(np.stack([ds['tau_ffx'] for ds in datasets]), dtype=torch.float32),
+        family_ffx=torch.as_tensor([int(ds['family_ffx']) for ds in datasets], dtype=torch.long),
+        tau_rfx=torch.as_tensor(np.stack([ds['tau_rfx'] for ds in datasets]), dtype=torch.float32),
+        family_sigma_rfx=torch.as_tensor(
+            [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
+        ),
+        tau_eps=torch.as_tensor([float(ds['tau_eps']) for ds in datasets], dtype=torch.float32),
+        family_sigma_eps=torch.as_tensor(
+            [int(ds['family_sigma_eps']) for ds in datasets], dtype=torch.long
+        ),
+        mask_d=torch.ones(B, d, dtype=torch.bool),
+        mask_q=torch.ones(B, q, dtype=torch.bool),
+        normal_laplace_eb=True,
+        normal_laplace_eb_steps=2,
+    )
+
+    assert result['beta_est'].shape == (B, d)
+    assert result['sigma_rfx_est'].shape == (B, q)
+    assert result['blup_est'].shape == (B, m, q)
+    assert torch.isfinite(result['sigma_rfx_est']).all()
+    assert torch.isfinite(result['blup_est']).all()
+    assert torch.isfinite(result['normal_laplace_eb_accept']).all()
+    assert torch.isfinite(result['normal_laplace_eb_steps']).all()
+
+
 # ---------------------------------------------------------------------------
 # 4. Recovery test: nonzero rfx → sigma_rfx_est should be positive
 # ---------------------------------------------------------------------------

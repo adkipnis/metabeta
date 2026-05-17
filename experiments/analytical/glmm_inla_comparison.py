@@ -1,7 +1,8 @@
 """Experiment: analytical GLMM vs R-INLA on Bernoulli/Normal GLMM datasets.
 
 Compares analytical GLMM summaries against R-INLA on Bernoulli or Normal datasets.
-The analytical side can run the raw estimator, the MAP/default estimator, or both.
+The analytical side can run the raw estimator, the MAP/default estimator, and the
+normal Laplace-EB prototype.
 
 RE prior: PC prior P(σ_j > τ_rfx_j) = 0.317 per dimension for uncorrelated
 datasets (eta_rfx=0, or q=1).  For correlated datasets (eta_rfx>0, q=2):
@@ -16,7 +17,7 @@ Usage (from repo root):
         --data-ids small-b-sampled,small-n-sampled --n-inla 100
     uv run python experiments/analytical/glmm_inla_comparison.py \\
         --data-ids small-n-sampled --n-inla 200 --partition test \\
-        --analytical-methods raw,map
+        --analytical-methods raw,map,normal_eb
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.experiments import dataFilePath
 
 
-ANALYTICAL_METHODS = ('raw', 'map')
+ANALYTICAL_METHODS = ('raw', 'map', 'normal_eb')
 
 try:
     import rpy2.robjects as ro
@@ -73,6 +74,8 @@ def _parseAnalyticalMethods(value: str) -> list[str]:
 def _methodLabel(method: str, likelihood_family: int) -> str:
     if method == 'raw':
         return 'RAW'
+    if method == 'normal_eb':
+        return 'NORMAL-EB'
     if likelihood_family == 1:
         return 'MAP/P14'
     return 'MAP'
@@ -458,6 +461,10 @@ def run_one_dataset(
                     method_kwargs = {'map_refine': method == 'map'}
                     if method == 'raw':
                         method_kwargs['bernoulli_laplace_eb'] = False
+                    if method == 'normal_eb':
+                        method_kwargs['map_refine'] = True
+                        method_kwargs['bernoulli_laplace_eb'] = False
+                        method_kwargs['normal_laplace_eb'] = True
                     t0 = time.perf_counter()
                     stats = glmm(
                         batch['X'],
@@ -761,7 +768,8 @@ def main(
         print(
             tabulate(
                 time_rows,
-                headers=['Dataset'] + [f'{method.upper()} ms' for method in analytical_methods]
+                headers=['Dataset']
+                + [f'{method.upper()} ms' for method in analytical_methods]
                 + ['INLA s'],
                 tablefmt='simple',
             )
@@ -778,7 +786,7 @@ if __name__ == '__main__':
     parser.add_argument('--n-inla',    default=100, type=int, help='max datasets for INLA per data_id')
     parser.add_argument('--n-total',   default=0,   type=int, help='cap total datasets per data_id (0=all)')
     parser.add_argument('--analytical-methods', default='raw,map',
-                        help='comma-separated analytical methods: raw,map')
+                        help='comma-separated analytical methods: raw,map,normal_eb')
     parser.add_argument('--normal-re-correlation', default='auto',
                         choices=['auto', 'diagonal'],
                         help='R-INLA RE correlation for normal datasets')

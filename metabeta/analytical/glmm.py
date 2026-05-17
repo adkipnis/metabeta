@@ -8,6 +8,7 @@ from metabeta.analytical.map import (
     refineBernoulliMapBeta,
     refineBernoulliNagqSrfx,
     refineBernoulliNestedBeta,
+    refineNormalLaplaceEb,
     refineNormalMapSrfx,
 )
 from metabeta.analytical.normal import lmmNormal
@@ -204,6 +205,14 @@ def glmm(
     map_lr = kwargs.pop('map_lr', 0.03)
     map_recompute_blup = kwargs.pop('map_recompute_blup', True)
     map_optimize = kwargs.pop('map_optimize', 'all')
+    normal_laplace_eb = kwargs.pop('normal_laplace_eb', False)
+    normal_laplace_eb_steps = kwargs.pop('normal_laplace_eb_steps', 3)
+    normal_laplace_eb_lr = kwargs.pop('normal_laplace_eb_lr', 0.08)
+    normal_laplace_eb_mode = kwargs.pop('normal_laplace_eb_mode', 'moment')
+    normal_laplace_eb_moment_blend = kwargs.pop('normal_laplace_eb_moment_blend', 1.0)
+    normal_laplace_eb_prior_weight = kwargs.pop('normal_laplace_eb_prior_weight', 4.0)
+    normal_laplace_eb_optimize_eps = kwargs.pop('normal_laplace_eb_optimize_eps', False)
+    normal_laplace_eb_recompute_blup = kwargs.pop('normal_laplace_eb_recompute_blup', True)
     beta_alpha_low = kwargs.pop('beta_alpha_low', 0.65)
     beta_alpha_high = kwargs.pop('beta_alpha_high', 0.75)
     bernoulli_laplace_eb_default = 'p14_cal' if likelihood_family == 1 else False
@@ -293,6 +302,38 @@ def glmm(
                 lr=map_lr,
                 recompute_blup=map_recompute_blup,
                 optimize=map_optimize,
+                beta_alpha_low=beta_alpha_low,
+                beta_alpha_high=beta_alpha_high,
+            )
+        if (
+            normal_laplace_eb
+            and Zm.shape[-1] > 0
+            and all(v is not None for v in map_priors.values())
+        ):
+            stats = refineNormalLaplaceEb(
+                stats,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                ns,
+                map_priors['nu_ffx'],
+                map_priors['tau_ffx'],
+                map_priors['family_ffx'],
+                map_priors['tau_rfx'],
+                map_priors['family_sigma_rfx'],
+                map_priors['tau_eps'],
+                map_priors['family_sigma_eps'],
+                mask_d=mask_d,
+                mask_q=mask_q,
+                n_steps=normal_laplace_eb_steps,
+                lr=normal_laplace_eb_lr,
+                mode=normal_laplace_eb_mode,
+                moment_blend=normal_laplace_eb_moment_blend,
+                prior_weight=normal_laplace_eb_prior_weight,
+                optimize_eps=normal_laplace_eb_optimize_eps,
+                recompute_blup=normal_laplace_eb_recompute_blup,
                 beta_alpha_low=beta_alpha_low,
                 beta_alpha_high=beta_alpha_high,
             )

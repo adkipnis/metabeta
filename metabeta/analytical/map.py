@@ -23,6 +23,7 @@ __all__ = [
     'refineBernoulliMapBeta',
     'refineBernoulliNagqSrfx',
     'refineBernoulliNestedBeta',
+    'refineNormalLaplaceEb',
     'refineNormalMapSrfx',
 ]
 
@@ -408,6 +409,254 @@ def refineNormalMapSrfx(
                 beta_alpha_high=beta_alpha_high,
             )
         out['Psi'] = _replacePsiDiag(stats['Psi'], sigma_rfx, mask_q)
+    return out
+
+
+def refineNormalLaplaceEb(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    ns: torch.Tensor,
+    nu_ffx: torch.Tensor,
+    tau_ffx: torch.Tensor,
+    family_ffx: torch.Tensor,
+    tau_rfx: torch.Tensor,
+    family_sigma_rfx: torch.Tensor,
+    tau_eps: torch.Tensor,
+    family_sigma_eps: torch.Tensor,
+    mask_d: torch.Tensor | None = None,
+    mask_q: torch.Tensor | None = None,
+    n_steps: int = 3,
+    lr: float = 0.08,
+    mode: str = 'moment',
+    moment_blend: float = 1.0,
+    prior_weight: float = 4.0,
+    optimize_eps: bool = False,
+    recompute_blup: bool = True,
+    beta_alpha_low: float = 0.65,
+    beta_alpha_high: float = 0.75,
+    accept_tol: float = 1e-6,
+) -> dict[str, torch.Tensor]:
+    """Prototype diagonal Laplace-EB calibration for Gaussian GLMMs.
+
+    Gaussian random-effect integration is exact, so this only adjusts diagonal variance
+    scales under the exact marginal likelihood and priors. β stays fixed; final β/BLUPs
+    are recomputed once through the existing diagonal Gaussian pass.
+    """
+    q = Zm.shape[-1]
+    if q == 0 or n_steps <= 0:
+        return stats
+
+    if mask_q is not None:
+        Zm = Zm * mask_q[..., :q].to(device=Zm.device, dtype=Zm.dtype)[:, None, None, :]
+
+    B = Xm.shape[0]
+    device, dtype = Xm.device, Xm.dtype
+    beta = stats['beta_est'].detach()
+    sigma_rfx_base = stats['sigma_rfx_est'][..., :q].detach().clamp(min=1e-4, max=20.0)
+    log_sigma_eps_base = stats['sigma_eps_est'].squeeze(-1).detach().clamp(min=1e-4, max=20.0).log()
+    corr = torch.eye(q, device=device, dtype=dtype).expand(B, q, q)
+
+    def target_for(sigma_rfx: torch.Tensor, log_sigma_eps_value: torch.Tensor) -> torch.Tensor:
+        return _logMarginalTarget(
+            beta.unsqueeze(1),
+            sigma_rfx.clamp(min=1e-4, max=20.0).log().unsqueeze(1),
+            log_sigma_eps_value.unsqueeze(1),
+            corr,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            nu_ffx,
+            tau_ffx,
+            family_ffx,
+            tau_rfx,
+            family_sigma_rfx,
+            tau_eps,
+            family_sigma_eps,
+            mask_d,
+            mask_q,
+        ).squeeze(1)
+
+    if mode == 'moment':
+        with torch.no_grad():
+            base_target = target_for(sigma_rfx_base, log_sigma_eps_base)
+            sigma2_base = sigma_rfx_base.square().clamp(min=1e-8)
+            se2 = stats['sigma_eps_est'].squeeze(-1).detach().clamp(min=1e-6).square()
+            active = mask_m.bool()
+            eye_q = torch.eye(q, device=device, dtype=dtype)
+            eye_q_bm = eye_q.expand(B, Xm.shape[1], q, q)
+            ZtZ = torch.einsum('bmnq,bmnr->bmqr', Zm, Zm)
+            inner = ZtZ + torch.diag_embed(se2[:, None, None] / sigma2_base[:, None, :])
+            inner = torch.where(active[:, :, None, None], inner, eye_q)
+            W_g = _safeSolve(inner + _adaptiveRidgeBm(inner), eye_q_bm)
+
+            XtX = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)
+            Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)
+            beta_ols = _safeSolve(XtX + _adaptiveRidge(XtX), Xty)
+            active_d_count = (XtX.diagonal(dim1=-2, dim2=-1).abs() > 1e-8).sum(dim=-1)
+            alpha = torch.where(
+                active_d_count <= 8,
+                se2.new_full(se2.shape, beta_alpha_low),
+                se2.new_full(se2.shape, beta_alpha_high),
+            )
+            beta_for_blup = (1.0 - alpha[:, None]) * beta + alpha[:, None] * beta_ols
+            resid = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_for_blup)) * mask_n
+            Ztr = torch.einsum('bmnq,bmn->bmq', Zm, resid)
+            blup = torch.einsum('bmqp,bmp->bmq', W_g, Ztr).clamp(-20.0, 20.0)
+            post_var = se2[:, None, None] * W_g.diagonal(dim1=-2, dim2=-1).clamp(min=0.0)
+            active_f = active.to(dtype)
+            G = active_f.sum(dim=-1).clamp(min=1.0)
+            moment2 = ((blup.square() + post_var) * active_f[:, :, None]).sum(dim=1)
+            tau2 = tau_rfx[..., :q].to(device=device, dtype=dtype).clamp(min=1e-4).square()
+            moment2 = (moment2 + prior_weight * tau2) / (G[:, None] + prior_weight)
+            sigma_moment = moment2.clamp(min=1e-8, max=400.0).sqrt()
+            blend = max(0.0, min(1.0, float(moment_blend)))
+            sigma_candidate = (
+                (1.0 - blend) * sigma_rfx_base.log() + blend * sigma_moment.log()
+            ).exp()
+            final_target = target_for(sigma_candidate, log_sigma_eps_base)
+            accept = torch.isfinite(final_target) & (final_target >= base_target - accept_tol)
+            sigma_rfx = torch.where(accept[:, None], sigma_candidate, sigma_rfx_base)
+            if mask_q is not None:
+                active_q = mask_q[..., :q].bool()
+                sigma_rfx = torch.where(active_q, sigma_rfx, sigma_rfx_base)
+
+        out = dict(stats)
+        out['sigma_rfx_est'] = sigma_rfx
+        out['normal_laplace_eb_accept'] = accept.to(dtype)
+        out['normal_laplace_eb_steps'] = torch.zeros((B,), device=device, dtype=dtype)
+        out['normal_laplace_eb_target'] = final_target.detach()
+        out['normal_laplace_eb_base_target'] = base_target.detach()
+        if 'Psi' in stats:
+            if recompute_blup:
+                return _recomputeNormalFinalDiagMap(
+                    out,
+                    Xm,
+                    ym,
+                    Zm,
+                    mask_n,
+                    mask_m,
+                    ns,
+                    sigma_rfx,
+                    mask_q,
+                    beta_alpha_low=beta_alpha_low,
+                    beta_alpha_high=beta_alpha_high,
+                )
+            out['Psi'] = torch.diag_embed(sigma_rfx.square())
+        return out
+
+    if mode != 'gradient':
+        raise ValueError("normal_laplace_eb mode must be 'moment' or 'gradient'")
+
+    log_sigma_rfx = (sigma_rfx_base.log().clone()).requires_grad_(True)
+    log_sigma_eps = log_sigma_eps_base.clone().requires_grad_(optimize_eps)
+
+    with torch.no_grad():
+        base_target = target_for(sigma_rfx_base, log_sigma_eps.detach())
+
+    opt_params = [log_sigma_rfx]
+    if optimize_eps:
+        opt_params.append(log_sigma_eps)
+    optimizer = torch.optim.Adam(opt_params, lr=lr)
+    n_steps_run = 0
+    with torch.enable_grad():
+        for _ in range(n_steps):
+            optimizer.zero_grad(set_to_none=True)
+            target = _logMarginalTarget(
+                beta.unsqueeze(1),
+                log_sigma_rfx.unsqueeze(1),
+                log_sigma_eps.unsqueeze(1),
+                corr,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                tau_rfx,
+                family_sigma_rfx,
+                tau_eps,
+                family_sigma_eps,
+                mask_d,
+                mask_q,
+            ).squeeze(1)
+            finite = torch.isfinite(target)
+            if not finite.any():
+                break
+            loss = -target[finite].sum()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(opt_params, max_norm=10.0)
+            optimizer.step()
+            n_steps_run += 1
+            with torch.no_grad():
+                log_sigma_rfx.clamp_(math.log(1e-4), math.log(20.0))
+                log_sigma_eps.clamp_(math.log(1e-4), math.log(20.0))
+
+    with torch.no_grad():
+        final_target = _logMarginalTarget(
+            beta.unsqueeze(1),
+            log_sigma_rfx.detach().unsqueeze(1),
+            log_sigma_eps.detach().unsqueeze(1),
+            corr,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            nu_ffx,
+            tau_ffx,
+            family_ffx,
+            tau_rfx,
+            family_sigma_rfx,
+            tau_eps,
+            family_sigma_eps,
+            mask_d,
+            mask_q,
+        ).squeeze(1)
+        accept = torch.isfinite(final_target) & (final_target >= base_target - accept_tol)
+
+    sigma_rfx_new = log_sigma_rfx.detach().exp()
+    sigma_rfx = torch.where(accept[:, None], sigma_rfx_new, sigma_rfx_base)
+    if mask_q is not None:
+        active_q = mask_q[..., :q].bool()
+        sigma_rfx = torch.where(active_q, sigma_rfx, sigma_rfx_base)
+
+    out = dict(stats)
+    if optimize_eps:
+        sigma_eps_new = log_sigma_eps.detach().exp()
+        sigma_eps_base = stats['sigma_eps_est'].squeeze(-1)
+        out['sigma_eps_est'] = torch.where(accept, sigma_eps_new, sigma_eps_base).unsqueeze(-1)
+    out['sigma_rfx_est'] = sigma_rfx
+    out['normal_laplace_eb_accept'] = accept.to(dtype)
+    out['normal_laplace_eb_steps'] = torch.full(
+        (B,), float(n_steps_run), device=device, dtype=dtype
+    )
+    out['normal_laplace_eb_target'] = final_target.detach()
+    out['normal_laplace_eb_base_target'] = base_target.detach()
+
+    if 'Psi' in stats:
+        if recompute_blup:
+            return _recomputeNormalFinalDiagMap(
+                out,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                ns,
+                sigma_rfx,
+                mask_q,
+                beta_alpha_low=beta_alpha_low,
+                beta_alpha_high=beta_alpha_high,
+            )
+        out['Psi'] = torch.diag_embed(sigma_rfx.square())
     return out
 
 

@@ -77,26 +77,31 @@ The production path therefore uses the MAP sigma(RFX) diagonal as the final
 Gaussian covariance for beta/BLUP recompute. The legacy output-local behavior is
 still available for diagnostics via `glmm(..., map_recompute_blup=False)`.
 
-Planned Laplace-EB Diagnostic
------------------------------
+Normal Laplace-EB Prototype
+---------------------------
 
 R-INLA is being used as a slow reference for the normal path, but not as a backend.
 The exact correlated Gaussian INLA specification has shown numerical failures on
 some datasets, so the comparison uses a diagonal random-effects INLA reference to
 match the production final covariance assumption.
 
-If diagonal R-INLA keeps a meaningful σ(RFX)/BLUP edge over current MAP, the next
-candidate is a normal-specific diagonal Laplace-EB calibration:
+The first retained prototype is a normal-specific diagonal Laplace-EB calibration,
+available behind `glmm(..., normal_laplace_eb=True)` and benchmarked as
+`normal_eb`:
 
 - use the exact Gaussian marginal likelihood rather than a Bernoulli-style nested
   random-effect optimizer;
-- update only diagonal `sigma_rfx`, and possibly `sigma_eps`, with a closed-form,
-  Newton/Fisher, or one-shot posterior-moment update;
+- update only diagonal `sigma_rfx` with a posterior-moment EB update plus prior
+  pseudo-count;
 - keep β out of the optimizer and recompute final β/BLUPs with the existing
   diagonal final pass;
 - accept only objective-improving, finite updates, otherwise return current MAP;
-- promote only if the required-suite BLUP improves or runtime falls materially
-  relative to current MAP without FFX/σ(Eps) regressions.
+- promote only if the required-suite BLUP improves without FFX/σ(Eps) regressions.
+
+First-1000 required-suite result: `normal_eb` improves σ(RFX) and BLUP in all 12
+normal rows while keeping σ(Eps) unchanged. Runtime remains single-digit
+milliseconds per dataset, usually about 0.2-1.1 ms slower than current MAP.
+Detailed row table is in `metabeta/analytical/plan_normal.md`.
 
 Retired REML Diagnostics
 ------------------------
