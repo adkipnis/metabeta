@@ -24,6 +24,13 @@ from metabeta.utils.experiments import dataFilePath
 
 DATA_IDS = ['small-n-mixed', 'medium-n-mixed', 'large-n-mixed', 'huge-n-mixed']
 METHODS = ['normal_eb']
+TAIL_METRICS = [
+    'ffx_eb_rmse',
+    'sigma_eb_rmse',
+    'blup_eb_rmse',
+    'beta_abs_err_max',
+    'cap_ffx_eb_rmse',
+]
 
 
 def _sliceBatch(batch: dict[str, torch.Tensor], n: int) -> dict[str, torch.Tensor]:
@@ -117,6 +124,45 @@ def _methodKwargs(method: str) -> dict[str, bool]:
     raise ValueError(f'unsupported analytical method: {method}')
 
 
+def _pathsForArgs(cfg: dict, partition: str, n_epochs: int) -> list[Path]:
+    if partition == 'train':
+        return [dataFilePath(cfg['data_id'], 'train', ep) for ep in range(1, n_epochs + 1)]
+    return [dataFilePath(cfg['data_id'], partition)]
+
+
+def _normalCommon(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor | None]:
+    return {
+        'eta_rfx': batch.get('eta_rfx'),
+        'mask_q': batch.get('mask_q'),
+        'nu_ffx': batch.get('nu_ffx'),
+        'tau_ffx': batch.get('tau_ffx'),
+        'family_ffx': batch.get('family_ffx'),
+        'tau_rfx': batch.get('tau_rfx'),
+        'family_sigma_rfx': batch.get('family_sigma_rfx'),
+        'tau_eps': batch.get('tau_eps'),
+        'family_sigma_eps': batch.get('family_sigma_eps'),
+        'mask_d': batch.get('mask_d'),
+    }
+
+
+def _normalStats(batch: dict[str, torch.Tensor], Zm: torch.Tensor) -> dict[str, dict]:
+    return {
+        method: glmm(
+            batch['X'],
+            batch['y'],
+            Zm,
+            batch['mask_n'].float(),
+            batch['mask_m'].float(),
+            batch['ns'].clamp(min=1).float(),
+            batch['n'].float(),
+            likelihood_family=0,
+            **_methodKwargs(method),
+            **_normalCommon(batch),
+        )
+        for method in METHODS
+    }
+
+
 def _designDiagnostics(ds_flat: dict) -> dict[str, float | np.ndarray]:
     x = np.asarray(ds_flat['X'], dtype=float)
     z = np.asarray(ds_flat['Z'], dtype=float)
@@ -157,6 +203,189 @@ def _designDiagnostics(ds_flat: dict) -> dict[str, float | np.ndarray]:
         'mean_slope_fe_re_r2': (float(np.nanmean(slope_r2)) if slope_r2.size else float('nan')),
         'fe_re_r2': fe_re_r2,
     }
+
+
+def _candidateFromBatch(
+    data_id: str,
+    dataset_idx: int,
+    batch: dict[str, torch.Tensor],
+    stats: dict[str, dict],
+    b: int,
+    active_d: np.ndarray,
+    active_q: np.ndarray,
+) -> dict:
+    ffx_true = batch['ffx'].cpu().numpy()
+    srfx_true = batch['sigma_rfx'].cpu().numpy()
+    rfx_true = batch['rfx'].cpu().numpy()
+    ns_arr = batch['ns'].cpu().numpy()
+    m = int(batch['m'][b].item())
+    n = int(batch['n'][b].item())
+    flat = _flatten(batch, b, active_d, active_q)
+    design = _designDiagnostics(flat)
+    ns_b = ns_arr[b, :m].astype(float)
+    ns_mean = float(np.mean(ns_b)) if ns_b.size else float('nan')
+    ns_cv = float(np.std(ns_b) / max(ns_mean, 1e-8)) if ns_b.size else float('nan')
+
+    method = METHODS[0]
+    beta_est = stats[method]['beta_est'][b, active_d].detach().cpu().numpy()
+    sigma_est = stats[method]['sigma_rfx_est'][b, active_q].detach().cpu().numpy()
+    blup_est = stats[method]['blup_est'][b, :m][:, active_q].detach().cpu().numpy()
+    beta_err = beta_est - ffx_true[b, active_d]
+    sigma_err = sigma_est - srfx_true[b, active_q]
+    blup_err = (blup_est - rfx_true[b, :m][:, active_q]).reshape(-1)
+    cap_default = torch.zeros(batch['X'].shape[0], dtype=torch.float32)
+    cap_hit = float(
+        stats[method].get('normal_map_beta_prior_capped', cap_default)[b].detach().cpu().item()
+    )
+    beta_abs_err = np.abs(beta_err)
+    fe_re_r2 = design['fe_re_r2']
+    diag = {
+        'data_id': data_id,
+        'dataset_idx': dataset_idx,
+        'method': method,
+        'd': len(active_d),
+        'q': len(active_q),
+        'm': m,
+        'n': n,
+        'ns_min': float(np.min(ns_b)) if ns_b.size else float('nan'),
+        'ns_max': float(np.max(ns_b)) if ns_b.size else float('nan'),
+        'ns_cv': ns_cv,
+        'x_cond': design['x_cond'],
+        'rx_cond': design['rx_cond'],
+        'max_fe_re_r2': design['max_fe_re_r2'],
+        'max_slope_fe_re_r2': design['max_slope_fe_re_r2'],
+        'mean_slope_fe_re_r2': design['mean_slope_fe_re_r2'],
+        'beta_r2_corr': _corr(beta_abs_err, fe_re_r2[: len(active_d)]),
+        'beta_prior_cap': cap_hit,
+        'beta_abs_err_mean': float(np.mean(beta_abs_err)),
+        'beta_abs_err_max': float(np.max(beta_abs_err)),
+        'sigma_true_mean': float(np.mean(srfx_true[b, active_q])),
+        'sigma_eb_mean': float(np.mean(sigma_est)),
+        'sigma_eb_bias_mean': float(np.mean(sigma_err)),
+        'sigma_eps_true': float(batch['sigma_eps'][b].cpu().item()),
+        'sigma_eps_eb': float(stats[method]['sigma_eps_est'][b, 0].detach().cpu().item()),
+        'ffx_eb_rmse': _rmse(beta_err),
+        'sigma_eb_rmse': _rmse(sigma_err),
+        'blup_eb_rmse': _rmse(blup_err),
+        'ffx_inla_rmse': float('nan'),
+        'sigma_inla_rmse': float('nan'),
+        'blup_inla_rmse': float('nan'),
+        'ffx_gap': float('nan'),
+        'sigma_gap': float('nan'),
+        'blup_gap': float('nan'),
+        'sigma_inla_mean': float('nan'),
+        'sigma_inla_bias_mean': float('nan'),
+    }
+    return {
+        'diag': diag,
+        'flat': flat,
+        'ffx_true': ffx_true[b, active_d],
+        'srfx_true': srfx_true[b, active_q],
+        'rfx_true': rfx_true[b, :m][:, active_q],
+    }
+
+
+def _candidateScore(candidate: dict, metric: str) -> float:
+    diag = candidate['diag']
+    if metric == 'cap_ffx_eb_rmse':
+        return diag['ffx_eb_rmse'] + 1000.0 * diag['beta_prior_cap']
+    return diag[metric]
+
+
+def _appendInlaRows(rows: list[dict], diag: dict) -> None:
+    for metric, value in [
+        ('ffx', diag['ffx_eb_rmse']),
+        ('sigma', diag['sigma_eb_rmse']),
+        ('blup', diag['blup_eb_rmse']),
+    ]:
+        rows.append(
+            {
+                'data_id': diag['data_id'],
+                'method': diag['method'],
+                'metric': metric,
+                'method_rmse': value,
+                'inla_rmse': diag[f'{metric}_inla_rmse'],
+                'd_bin': _binByD(diag['d']),
+                'm_bin': _binByM(diag['m']),
+                'rx_cond_bin': _binByCond(float(diag['rx_cond'])),
+                'slope_r2_bin': _binByR2(float(diag['max_slope_fe_re_r2'])),
+                'cap_bin': 'cap' if diag['beta_prior_cap'] else 'no_cap',
+                'q': diag['q'],
+            }
+        )
+
+
+def runTailDiagnostic(args: argparse.Namespace) -> None:
+    rows = []
+    gap_rows = []
+    t0 = time.perf_counter()
+    scanned_total = 0
+    for data_id in args.data_ids:
+        cfg = loadDataConfig(data_id)
+        max_q = cfg['max_q']
+        candidates = []
+        seen = 0
+        for path in _pathsForArgs(cfg, args.partition, args.n_epochs):
+            if seen >= args.tail_scan:
+                break
+            for batch in Dataloader(path, batch_size=args.batch_size, shuffle=False):
+                if seen >= args.tail_scan:
+                    break
+                if seen + batch['X'].shape[0] > args.tail_scan:
+                    batch = _sliceBatch(batch, args.tail_scan - seen)
+                batch = toDevice(batch, torch.device('cpu'))
+                B = batch['X'].shape[0]
+                stats = _normalStats(batch, batch['Z'][..., :max_q])
+                mask_d = batch['mask_d'].cpu().numpy().astype(bool)
+                mask_q = batch['mask_q'].cpu().numpy().astype(bool)
+                for b in range(B):
+                    active_d = np.flatnonzero(mask_d[b])
+                    active_q = np.flatnonzero(mask_q[b])
+                    candidates.append(
+                        _candidateFromBatch(data_id, seen, batch, stats, b, active_d, active_q)
+                    )
+                    seen += 1
+        scanned_total += seen
+        selected = sorted(
+            candidates,
+            key=lambda candidate: _candidateScore(candidate, args.tail_metric),
+            reverse=True,
+        )[: args.tail_k]
+        for candidate in selected:
+            diag = candidate['diag']
+            est = _inla_estimate(
+                candidate['flat'],
+                likelihood_family=0,
+                normal_re_correlation='diagonal',
+            )
+            if est is None:
+                continue
+            m = diag['m']
+            diag['ffx_inla_rmse'] = _rmse(est['beta'] - candidate['ffx_true'])
+            diag['sigma_inla_rmse'] = _rmse(est['sigma_rfx'] - candidate['srfx_true'])
+            diag['blup_inla_rmse'] = _rmse((est['blups'][:m] - candidate['rfx_true']).reshape(-1))
+            diag['ffx_gap'] = diag['ffx_eb_rmse'] - diag['ffx_inla_rmse']
+            diag['sigma_gap'] = diag['sigma_eb_rmse'] - diag['sigma_inla_rmse']
+            diag['blup_gap'] = diag['blup_eb_rmse'] - diag['blup_inla_rmse']
+            diag['sigma_inla_mean'] = float(np.mean(est['sigma_rfx']))
+            diag['sigma_inla_bias_mean'] = float(np.mean(est['sigma_rfx'] - candidate['srfx_true']))
+            gap_rows.append(diag)
+            _appendInlaRows(rows, diag)
+
+    print(
+        f'scanned {scanned_total} rows, ran INLA on {len(gap_rows)} selected tail rows '
+        f'in {time.perf_counter() - t0:.1f}s'
+    )
+    _printSummary(rows, 'data_id')
+    _printSummary(rows, 'd_bin')
+    _printSummary(rows, 'rx_cond_bin')
+    _printSummary(rows, 'slope_r2_bin')
+    _printSummary(rows, 'cap_bin')
+    _printRanked(gap_rows, 'ffx_gap', args.top_k)
+    _printRanked(gap_rows, 'sigma_gap', args.top_k)
+    _printRanked(gap_rows, 'blup_gap', args.top_k)
+    if args.output_csv:
+        _writeCsv(gap_rows, Path(args.output_csv))
 
 
 def runDiagnostic(args: argparse.Namespace) -> None:
@@ -467,9 +696,18 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--batch-size', type=int,  default=16)
     parser.add_argument('--top-k',      type=int,  default=10)
     parser.add_argument('--output-csv',           default='')
+    parser.add_argument('--tail-scan',  type=int,  default=0,
+                        help='scan this many rows per dataset analytically before tail INLA')
+    parser.add_argument('--tail-k',     type=int,  default=12,
+                        help='run INLA on this many selected tail rows per dataset')
+    parser.add_argument('--tail-metric',          choices=TAIL_METRICS, default='cap_ffx_eb_rmse')
     return parser.parse_args()
 # fmt: on
 
 
 if __name__ == '__main__':
-    runDiagnostic(setup())
+    args = setup()
+    if args.tail_scan > 0:
+        runTailDiagnostic(args)
+    else:
+        runDiagnostic(args)
