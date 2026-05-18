@@ -76,6 +76,39 @@ def _corr(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.corrcoef(x_sel, y_sel)[0, 1])
 
 
+def _cosine(x: np.ndarray, y: np.ndarray) -> float:
+    finite = np.isfinite(x) & np.isfinite(y)
+    if finite.sum() < 1:
+        return float('nan')
+    x_sel = x[finite]
+    y_sel = y[finite]
+    denom = float(np.linalg.norm(x_sel) * np.linalg.norm(y_sel))
+    if denom <= 1e-12:
+        return float('nan')
+    return float(np.dot(x_sel, y_sel) / denom)
+
+
+def _betaShiftDiagnostics(
+    beta_est: np.ndarray,
+    beta_true: np.ndarray,
+    beta_inla: np.ndarray,
+) -> dict[str, float]:
+    beta_err = beta_est - beta_true
+    inla_err = beta_inla - beta_true
+    shift = beta_inla - beta_est
+    target_shift = -beta_err
+    eb_rmse = _rmse(beta_err)
+    inla_rmse = _rmse(inla_err)
+    return {
+        'beta_mean_corr': _corr(beta_est, beta_inla),
+        'beta_error_corr': _corr(beta_err, inla_err),
+        'beta_shift_error_corr': _corr(shift, target_shift),
+        'beta_shift_error_cos': _cosine(shift, target_shift),
+        'beta_shift_fraction': float(np.linalg.norm(shift) / max(np.linalg.norm(beta_err), 1e-8)),
+        'beta_shift_gain': (eb_rmse - inla_rmse) / max(eb_rmse, 1e-8),
+    }
+
+
 def _nanStat(x: np.ndarray, fn) -> float:
     finite = x[np.isfinite(x)]
     return float(fn(finite)) if finite.size else float('nan')
@@ -125,12 +158,19 @@ def _binByR2(value: float) -> str:
 
 def _methodKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
     if method == 'normal_eb':
-        return {'map_refine': True, 'bernoulli_laplace_eb': False, 'normal_laplace_eb': True}
+        return {
+            'map_refine': True,
+            'bernoulli_laplace_eb': False,
+            'normal_laplace_eb': True,
+            'normal_laplace_eb_sigma_grid_refine': False,
+            'normal_beta_sigma_grid': False,
+        }
     if method == 'normal_sigma_grid':
         return {
             'map_refine': True,
             'bernoulli_laplace_eb': False,
             'normal_laplace_eb': True,
+            'normal_laplace_eb_sigma_grid_refine': False,
             'normal_beta_sigma_grid': True,
             'normal_beta_sigma_grid_scales': args.normal_beta_sigma_grid_scales,
             'normal_beta_sigma_grid_min_d': args.normal_beta_sigma_grid_min_d,
@@ -308,6 +348,7 @@ def _candidateFromBatch(
                 'z_cond_median': design['z_cond_median'],
                 'z_cond_max': design['z_cond_max'],
                 'beta_r2_corr': _corr(beta_abs_err, fe_re_r2[: len(active_d)]),
+                '_beta_est': beta_est,
                 'beta_prior_cap': cap_hit,
                 'beta_abs_err_mean': float(np.mean(beta_abs_err)),
                 'beta_abs_err_max': float(np.max(beta_abs_err)),
@@ -428,6 +469,9 @@ def runTailDiagnostic(args: argparse.Namespace) -> None:
                 continue
             for diag in candidate['diags']:
                 m = diag['m']
+                diag.update(
+                    _betaShiftDiagnostics(diag['_beta_est'], candidate['ffx_true'], est['beta'])
+                )
                 diag['ffx_inla_rmse'] = _rmse(est['beta'] - candidate['ffx_true'])
                 diag['sigma_inla_rmse'] = _rmse(est['sigma_rfx'] - candidate['srfx_true'])
                 diag['blup_inla_rmse'] = _rmse(
@@ -452,6 +496,9 @@ def runTailDiagnostic(args: argparse.Namespace) -> None:
     _printSummary(rows, 'rx_cond_bin')
     _printSummary(rows, 'slope_r2_bin')
     _printSummary(rows, 'cap_bin')
+    _printBetaShiftSummary(gap_rows, 'method')
+    _printBetaShiftSummary(gap_rows, 'd_bin')
+    _printBetaShiftSummary(gap_rows, 'rx_cond_bin')
     _printRanked(gap_rows, 'ffx_gap', args.top_k)
     _printRanked(gap_rows, 'sigma_gap', args.top_k)
     _printRanked(gap_rows, 'blup_gap', args.top_k)
@@ -572,6 +619,11 @@ def runDiagnostic(args: argparse.Namespace) -> None:
                         beta_abs_err = np.abs(beta_err)
                         fe_re_r2 = design['fe_re_r2']
                         beta_r2_corr = _corr(beta_abs_err, fe_re_r2[: len(active_d)])
+                        beta_shift = _betaShiftDiagnostics(
+                            beta_est,
+                            ffx_true[b, active_d],
+                            est['beta'],
+                        )
                         diag = {
                             'data_id': data_id,
                             'dataset_idx': seen - 1,
@@ -593,6 +645,7 @@ def runDiagnostic(args: argparse.Namespace) -> None:
                             'z_cond_median': design['z_cond_median'],
                             'z_cond_max': design['z_cond_max'],
                             'beta_r2_corr': beta_r2_corr,
+                            **beta_shift,
                             'beta_prior_cap': cap_hit,
                             'beta_abs_err_mean': float(np.mean(beta_abs_err)),
                             'beta_abs_err_max': float(np.max(beta_abs_err)),
@@ -646,6 +699,9 @@ def runDiagnostic(args: argparse.Namespace) -> None:
     _printSummary(rows, 'rx_cond_bin')
     _printSummary(rows, 'slope_r2_bin')
     _printSummary(rows, 'cap_bin')
+    _printBetaShiftSummary(gap_rows, 'method')
+    _printBetaShiftSummary(gap_rows, 'd_bin')
+    _printBetaShiftSummary(gap_rows, 'rx_cond_bin')
     _printRanked(gap_rows, 'ffx_gap', args.top_k)
     _printRanked(gap_rows, 'sigma_gap', args.top_k)
     _printRanked(gap_rows, 'blup_gap', args.top_k)
@@ -690,6 +746,58 @@ def _printSummary(rows: list[dict], by: str) -> None:
             tablefmt='github',
         )
     )
+
+
+def _printBetaShiftSummary(rows: list[dict], by: str) -> None:
+    table = []
+    keys = sorted({_summaryKey(row, by) for row in rows})
+    methods = [method for method in METHODS if any(row['method'] == method for row in rows)]
+    for key in keys:
+        for method in methods:
+            selected = [
+                row for row in rows if _summaryKey(row, by) == key and row['method'] == method
+            ]
+            if not selected:
+                continue
+            table.append(
+                [
+                    key,
+                    method,
+                    len(selected),
+                    f'{float(np.mean([row["ffx_gap"] for row in selected])):+.4f}',
+                    f'{float(np.nanmean([row["beta_mean_corr"] for row in selected])):.4f}',
+                    f'{float(np.nanmean([row["beta_shift_error_corr"] for row in selected])):.4f}',
+                    f'{float(np.nanmean([row["beta_shift_error_cos"] for row in selected])):.4f}',
+                    f'{float(np.nanmean([row["beta_shift_fraction"] for row in selected])):.4f}',
+                    f'{float(np.nanmean([row["beta_shift_gain"] for row in selected])):+.4f}',
+                ]
+            )
+    print(f'\nFFX posterior-mean shift grouped by {by}')
+    print(
+        tabulate(
+            table,
+            headers=[
+                'bin',
+                'method',
+                'N',
+                'FFX Δ',
+                'mean corr',
+                'shift corr',
+                'shift cos',
+                'shift frac',
+                'gain',
+            ],
+            tablefmt='github',
+        )
+    )
+
+
+def _summaryKey(row: dict, by: str) -> str:
+    if by == 'd_bin':
+        return _binByD(row['d'])
+    if by == 'rx_cond_bin':
+        return _binByCond(float(row['rx_cond']))
+    return str(row[by])
 
 
 def _fmt(value: float) -> str:
@@ -769,8 +877,9 @@ def _writeCsv(rows: list[dict], path: Path) -> None:
     if not rows:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [key for key in rows[0].keys() if not key.startswith('_')]
     with path.open('w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(rows)
     print(f'\nwrote per-dataset diagnostics to {path}')

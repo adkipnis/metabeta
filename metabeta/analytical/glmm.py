@@ -215,12 +215,14 @@ def glmm(
     normal_laplace_eb_prior_weight = kwargs.pop('normal_laplace_eb_prior_weight', 4.0)
     normal_laplace_eb_optimize_eps = kwargs.pop('normal_laplace_eb_optimize_eps', False)
     normal_laplace_eb_recompute_blup = kwargs.pop('normal_laplace_eb_recompute_blup', True)
-    normal_laplace_eb_sigma_grid_refine = kwargs.pop('normal_laplace_eb_sigma_grid_refine', False)
+    normal_laplace_eb_sigma_grid_refine = kwargs.pop(
+        'normal_laplace_eb_sigma_grid_refine', likelihood_family == 0
+    )
     normal_laplace_eb_sigma_grid_scales = kwargs.pop(
         'normal_laplace_eb_sigma_grid_scales', (0.75, 1.0, 1.3333333)
     )
     normal_map_beta_prior_cap = kwargs.pop('normal_map_beta_prior_cap', 4.0)
-    normal_beta_sigma_grid = kwargs.pop('normal_beta_sigma_grid', False)
+    normal_beta_sigma_grid = kwargs.pop('normal_beta_sigma_grid', likelihood_family == 0)
     normal_beta_sigma_grid_scales = kwargs.pop(
         'normal_beta_sigma_grid_scales', (0.75, 1.0, 1.3333333)
     )

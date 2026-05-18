@@ -48,9 +48,10 @@ dataset, roughly two orders of magnitude slower on these benchmarks.
 Normal Diagonal R-INLA Snapshot
 -------------------------------
 
-The retained Normal path is EB: MAP β/σ/σ_eps refinement, reporting-only prior cap for
-`d > 4`, uncapped MAP β for BLUP residuals, diagonal final Ψ, and one-shot posterior-moment
-σ_rfx EB calibration.
+The retained Normal path is now guarded EB by default: MAP β/σ/σ_eps refinement,
+reporting-only prior cap for `d > 4`, scalar β sigma-grid reporting, one-shot
+posterior-moment σ_rfx EB calibration, direct σ_rfx coordinate grid, diagonal final Ψ,
+and the rare BLUP/sigma guard for high-d aliased rows.
 
 Mixed/train diagonal R-INLA reference, first 1000 datasets per row:
 
@@ -63,14 +64,19 @@ Mixed/train diagonal R-INLA reference, first 1000 datasets per row:
 
 Takeaways:
 
-- σ-grid closes much of the large/huge FFX gap but still trails INLA in the hardest rows.
+- guarded EB closes much of the large/huge FFX gap but still trails INLA in the hardest
+  rows.
 - INLA keeps the best σ_rfx accuracy; analytical BLUP is already tied on medium+ rows.
 - R-INLA remains seconds per dataset, while analytical EB/σ-grid is milliseconds.
+- A 2026-05-18 FFX-tail diagnostic scanned 8000 medium/large/huge mixed rows and ran
+  INLA on the 16 worst FFX rows per size. The remaining large/huge gap is rare and
+  concentrated in high-d or ill-conditioned rows; INLA's β posterior-mean shift is
+  strongly aligned with the analytical β error in those tail rows.
 - Sampled-set INLA rows are still pending. Run them with unbuffered output:
 
 ```bash
 uv run python -u experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-n-sampled,medium-n-sampled,large-n-sampled,huge-n-sampled \
     --partition valid --n-inla 1000 --n-total 1000 \
-    --analytical-methods normal_eb,normal_sigma_grid --re-correlation diagonal
+    --analytical-methods normal_eb,current --re-correlation diagonal
 ```

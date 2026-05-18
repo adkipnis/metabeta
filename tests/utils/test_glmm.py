@@ -402,7 +402,6 @@ def test_glmm_normal_laplace_eb_default_smoke():
         mask_d=torch.ones(B, d, dtype=torch.bool),
         mask_q=torch.ones(B, q, dtype=torch.bool),
         normal_laplace_eb_steps=2,
-        normal_laplace_eb_sigma_grid_refine=True,
     )
 
     assert result['beta_est'].shape == (B, d)

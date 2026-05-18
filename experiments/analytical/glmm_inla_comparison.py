@@ -75,10 +75,12 @@ def _methodLabel(method: str, likelihood_family: int) -> str:
         return 'RAW'
     if method in {'current', 'normal_eb'} and likelihood_family == 1:
         return 'BERNOULLI-EB'
-    if method in {'current', 'normal_eb'} and likelihood_family == 0:
+    if method == 'current' and likelihood_family == 0:
+        return 'NORMAL-EB-GUARDED'
+    if method == 'normal_eb' and likelihood_family == 0:
         return 'NORMAL-EB'
     if method == 'normal_sigma_grid' and likelihood_family == 0:
-        return 'NORMAL-EB-SIGMA-GRID'
+        return 'NORMAL-EB-GUARDED'
     if method == 'normal_eb':
         return 'NORMAL-EB'
     if method == 'current' and likelihood_family == 2:
@@ -474,12 +476,15 @@ def run_one_dataset(
                             'map_refine': True,
                             'bernoulli_laplace_eb': False,
                             'normal_laplace_eb': True,
+                            'normal_laplace_eb_sigma_grid_refine': False,
+                            'normal_beta_sigma_grid': False,
                         }
                     elif method == 'normal_sigma_grid' and likelihood_family == 0:
                         method_kwargs = {
                             'map_refine': True,
                             'bernoulli_laplace_eb': False,
                             'normal_laplace_eb': True,
+                            'normal_laplace_eb_sigma_grid_refine': True,
                             'normal_beta_sigma_grid': True,
                             'normal_beta_sigma_grid_scales': (0.75, 1.0, 1.3333333),
                         }

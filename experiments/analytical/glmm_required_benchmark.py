@@ -269,18 +269,20 @@ def _bernoulliEbKwargs(method: str, args: argparse.Namespace) -> dict[str, int |
 def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
     if method not in {'default', 'current', 'normal_eb'}:
         return {}
-    return {
+    out = {
         'normal_laplace_eb_mode': args.normal_eb_mode,
         'normal_laplace_eb_steps': args.normal_eb_steps,
         'normal_laplace_eb_lr': args.normal_eb_lr,
         'normal_laplace_eb_moment_blend': args.normal_eb_moment_blend,
         'normal_laplace_eb_prior_weight': args.normal_eb_prior_weight,
-        'normal_laplace_eb_sigma_grid_refine': args.normal_eb_sigma_grid_refine,
         'normal_laplace_eb_sigma_grid_scales': args.normal_eb_sigma_grid_scales,
-        'normal_beta_sigma_grid': args.normal_beta_sigma_grid,
         'normal_beta_sigma_grid_scales': args.normal_beta_sigma_grid_scales,
         'normal_beta_sigma_grid_min_d': args.normal_beta_sigma_grid_min_d,
     }
+    if method == 'normal_eb':
+        out['normal_laplace_eb_sigma_grid_refine'] = args.normal_eb_sigma_grid_refine
+        out['normal_beta_sigma_grid'] = args.normal_beta_sigma_grid
+    return out
 
 
 # fmt: off
