@@ -73,14 +73,38 @@ Takeaways:
   INLA on the 16 worst FFX rows per size. The remaining large/huge gap is rare and
   concentrated in high-d or ill-conditioned rows; INLA's β posterior-mean shift is
   strongly aligned with the analytical β error in those tail rows.
+- A sampled FFX-tail diagnostic on large/huge valid/test shows the same signature:
+  high-d rows, frequent singular or near-singular fixed/random design, many β prior-cap
+  hits, and no material BLUP gap. The worst valid tails remain behind INLA, but this is a
+  narrow tail rather than a broad sampled-set failure.
 - The retained tail β correction is scalar-grid-only and damped (`25%` toward the grid
   posterior mean). It improved the saved large/huge INLA FFX tail rows while leaving
   medium unchanged.
-- Sampled-set INLA rows are still pending. Run them with unbuffered output:
+- Sampled-set INLA rows were completed on 2026-05-18 with one saved unbuffered block per
+  size/partition under `experiments/analytical/inla_runs/`.
 
-```bash
-uv run python -u experiments/analytical/glmm_inla_comparison.py \
-    --data-ids small-n-sampled,medium-n-sampled,large-n-sampled,huge-n-sampled \
-    --partition valid --n-inla 1000 --n-total 1000 \
-    --analytical-methods normal_eb,current --re-correlation diagonal
-```
+Normal sampled first-1000 rows with diagonal R-INLA:
+
+| Dataset | part | current FFX | INLA FFX | current σ | INLA σ | current BLUP | INLA BLUP | current ms | INLA s |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-sampled | valid | 0.2608 | 0.2023 | 0.5695 | 0.4450 | 0.5119 | 0.4988 | 2.87 | 2.377 |
+| small-n-sampled | test | 0.2828 | 0.2008 | 0.4759 | 0.4357 | 0.4931 | 0.4756 | 2.73 | 2.382 |
+| medium-n-sampled | valid | 0.2626 | 0.2490 | 0.4186 | 0.4048 | 0.5145 | 0.5201 | 4.81 | 3.032 |
+| medium-n-sampled | test | 0.2594 | 0.2594 | 0.3825 | 0.3419 | 0.4403 | 0.4506 | 5.35 | 3.020 |
+| large-n-sampled | valid | 0.2970 | 0.2527 | 0.4159 | 0.3428 | 0.5045 | 0.5069 | 6.21 | 3.430 |
+| large-n-sampled | test | 0.2872 | 0.2710 | 0.4346 | 0.3984 | 0.5126 | 0.5052 | 6.65 | 3.431 |
+| huge-n-sampled | valid | 0.4240 | 0.3110 | 0.3562 | 4.4979 † | 0.4555 | 0.4598 | 10.27 | 3.784 |
+| huge-n-sampled | test | 0.2947 | 0.2732 | 0.3689 | 0.3122 | 0.4604 | 0.4639 | 9.63 | 3.768 |
+
+† `huge-n-sampled valid` INLA σ_rfx is a numerical outlier: the second true-σ quartile
+has RMSE `2.1247`, while the other quartiles are around `0.07-0.12`.
+
+Sampled FFX-tail diagnostic, 8000-row scan with diagonal R-INLA on the 16 worst current
+FFX rows per size/partition:
+
+| Tail set | part | current β RMSE | INLA β RMSE | Δβ | cap rows | singular/near-singular rows |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| large-n-sampled | valid | 0.6766 | 0.3425 | +0.3341 | 8/16 | 11/16 |
+| huge-n-sampled | valid | 0.7014 | 0.2925 | +0.4089 | 12/16 | 16/16 |
+| large-n-sampled | test | 0.6440 | 0.3715 | +0.2725 | 10/16 | 12/16 |
+| huge-n-sampled | test | 0.4434 | 0.2185 | +0.2249 | 8/16 | 13/16 |

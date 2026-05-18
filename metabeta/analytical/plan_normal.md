@@ -51,22 +51,22 @@ First 1000 datasets per row with the default path. Lower NRMSE is better.
 | huge-n-sampled | valid | 0.4240 | 0.3562 | 0.1375 | 0.4555 | 9.50 | 0.000 |
 | huge-n-sampled | test | 0.2947 | 0.3689 | 0.1438 | 0.4604 | 9.90 | 0.002 |
 
-Full 8k required benchmark before the tail β correction was enabled:
+Full 8k required benchmark with the current tail β default:
 
-| Dataset | part | FFX | σ | BLUP | ms | guard |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.1859 | 0.3593 | 0.3745 | 3.44 | 0.000 |
-| small-n-sampled | valid | 0.1486 | 0.4950 | 0.4614 | 3.21 | 0.000 |
-| small-n-sampled | test | 0.2315 | 0.4772 | 0.4609 | 3.34 | 0.000 |
-| medium-n-mixed | train | 0.2190 | 0.3062 | 0.4023 | 5.52 | 0.000 |
-| medium-n-sampled | valid | 0.2510 | 0.4000 | 0.4823 | 5.67 | 0.000 |
-| medium-n-sampled | test | 0.2530 | 0.4412 | 0.5030 | 5.76 | 0.000 |
-| large-n-mixed | train | 0.2149 | 0.3162 | 0.4072 | 7.18 | 0.000 |
-| large-n-sampled | valid | 0.2870 | 0.3781 | 0.5190 | 7.40 | 0.000 |
-| large-n-sampled | test | 0.2721 | 0.3602 | 0.5022 | 7.70 | 0.000 |
-| huge-n-mixed | train | 0.2404 | 0.3029 | 0.4263 | 9.99 | 0.003 |
-| huge-n-sampled | valid | 0.3026 | 0.3631 | 0.4906 | 11.67 | 0.002 |
-| huge-n-sampled | test | 0.2704 | 0.3630 | 0.4898 | 11.49 | 0.003 |
+| Dataset | part | FFX | σ | σ_eps | BLUP | ms | β-tail | guard |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | train | 0.2243 | 0.3740 | 0.1661 | 0.3974 | 3.68 | 0.000 | 0.000 |
+| small-n-sampled | valid | 0.1507 | 0.4962 | 0.2043 | 0.4637 | 3.06 | 0.000 | 0.000 |
+| small-n-sampled | test | 0.2313 | 0.4758 | 0.2031 | 0.4607 | 3.20 | 0.000 | 0.000 |
+| medium-n-mixed | train | 0.2184 | 0.3275 | 0.1295 | 0.4195 | 5.47 | 0.000 | 0.000 |
+| medium-n-sampled | valid | 0.2509 | 0.3993 | 0.1752 | 0.4826 | 5.71 | 0.000 | 0.000 |
+| medium-n-sampled | test | 0.2524 | 0.4399 | 0.1735 | 0.5023 | 5.81 | 0.000 | 0.000 |
+| large-n-mixed | train | 0.2114 | 0.3133 | 0.1117 | 0.4066 | 7.79 | 0.682 | 0.000 |
+| large-n-sampled | valid | 0.2779 | 0.3781 | 0.1409 | 0.5178 | 7.90 | 0.648 | 0.000 |
+| large-n-sampled | test | 0.2672 | 0.3590 | 0.1354 | 0.5009 | 8.14 | 0.642 | 0.000 |
+| huge-n-mixed | train | 0.2299 | 0.3126 | 0.0935 | 0.4261 | 10.65 | 0.724 | 0.003 |
+| huge-n-sampled | valid | 0.2920 | 0.3620 | 0.1187 | 0.4897 | 11.48 | 0.719 | 0.002 |
+| huge-n-sampled | test | 0.2668 | 0.3627 | 0.1201 | 0.4890 | 11.25 | 0.716 | 0.003 |
 
 R-INLA Reference
 ----------------
@@ -87,6 +87,22 @@ Interpretation:
 - The remaining FFX gap is concentrated in rare high-d or ill-conditioned tails.
 - R-INLA is seconds per dataset, while the analytical path is milliseconds.
 
+Sampled first-1000 rows with diagonal R-INLA:
+
+| Dataset | part | current FFX | INLA FFX | current σ | INLA σ | current BLUP | INLA BLUP | current ms | INLA s |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-sampled | valid | 0.2608 | 0.2023 | 0.5695 | 0.4450 | 0.5119 | 0.4988 | 2.87 | 2.377 |
+| small-n-sampled | test | 0.2828 | 0.2008 | 0.4759 | 0.4357 | 0.4931 | 0.4756 | 2.73 | 2.382 |
+| medium-n-sampled | valid | 0.2626 | 0.2490 | 0.4186 | 0.4048 | 0.5145 | 0.5201 | 4.81 | 3.032 |
+| medium-n-sampled | test | 0.2594 | 0.2594 | 0.3825 | 0.3419 | 0.4403 | 0.4506 | 5.35 | 3.020 |
+| large-n-sampled | valid | 0.2970 | 0.2527 | 0.4159 | 0.3428 | 0.5045 | 0.5069 | 6.21 | 3.430 |
+| large-n-sampled | test | 0.2872 | 0.2710 | 0.4346 | 0.3984 | 0.5126 | 0.5052 | 6.65 | 3.431 |
+| huge-n-sampled | valid | 0.4240 | 0.3110 | 0.3562 | 4.4979 † | 0.4555 | 0.4598 | 10.27 | 3.784 |
+| huge-n-sampled | test | 0.2947 | 0.2732 | 0.3689 | 0.3122 | 0.4604 | 0.4639 | 9.63 | 3.768 |
+
+† `huge-n-sampled valid` has an INLA σ_rfx outlier in the second true-σ quartile. Do not
+use that cell as evidence against the analytical σ path.
+
 Tail Diagnostics
 ----------------
 
@@ -103,6 +119,23 @@ The large/huge tail signal is real but narrow: INLA's β posterior-mean shift is
 with the analytical β error, while broad replacement worsened population accuracy. Keep
 the damped scalar gate; do not reintroduce axis, ratio, curvature, or hard-shrink variants
 without a new diagnostic showing a stable failure signature.
+
+The 2026-05-18 sampled diagnostic scanned 8000 large/huge sampled rows per partition
+and ran diagonal R-INLA on the 16 worst analytical FFX rows per size/partition.
+
+| Tail set | part | N | current β RMSE | INLA β RMSE | Δβ | cap rows | singular/near-singular rows |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| large-n-sampled | valid | 16 | 0.6766 | 0.3425 | +0.3341 | 8 | 11 |
+| huge-n-sampled | valid | 16 | 0.7014 | 0.2925 | +0.4089 | 12 | 16 |
+| large-n-sampled | test | 16 | 0.6440 | 0.3715 | +0.2725 | 10 | 12 |
+| huge-n-sampled | test | 16 | 0.4434 | 0.2185 | +0.2249 | 8 | 13 |
+
+The sampled residual FFX gap is the same kind of tail as mixed: high-dimensional rows
+with aliased fixed/random design, frequent β prior-cap hits, and INLA posterior-mean
+shifts aligned with the analytical β error. BLUP is still tied in these rows. The tail
+is real, but the earlier broad β corrections were harmful on population metrics, so do
+not add another production correction unless a future candidate can improve this tail
+without moving the 8k benchmark backward.
 
 Commands
 --------
@@ -123,6 +156,12 @@ uv run python -u experiments/analytical/glmm_normal_inla_diagnostic.py \
     --n-epochs 2 --tail-scan 8000 --tail-k 16 --tail-metric ffx_eb_rmse \
     --methods current --batch-size 32 \
     --output-csv experiments/analytical/normal_ffx_tail_posterior_shift.csv
+
+uv run python -u experiments/analytical/glmm_normal_inla_diagnostic.py \
+    --data-ids large-n-sampled huge-n-sampled --partition valid \
+    --tail-scan 8000 --tail-k 16 --tail-metric ffx_eb_rmse \
+    --methods current --batch-size 32 \
+    --output-csv experiments/analytical/normal_sampled_valid_ffx_tail_diagnostic.csv
 
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical tests
