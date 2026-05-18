@@ -94,14 +94,50 @@ Decision: keep σ-grid opt-in until the full 8k comparison is run. Remove tail-g
 direct cap-shrink heuristics from the implementation; they were diagnostics, not retained
 paths.
 
+Sigma-Grid Variant Sweep
+------------------------
+
+Tested 2026-05-18 on first-1000 required normal rows and on the 32 saved INLA tail rows
+selected from the mixed/train diagnostic. Lower FFX is better; `ms/ds` is from the
+first-1000 required benchmark.
+
+Mixed/train first-1000 rows:
+
+| Variant | small FFX | medium FFX | large FFX | huge FFX | small ms | medium ms | large ms | huge ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| map scalar | 0.1095 | 0.2283 | 0.2630 | 0.2799 | 3.34 | 3.96 | 5.52 | 6.96 |
+| post-EB scalar | 0.1095 | 0.2284 | 0.2630 | 0.2799 | 3.37 | 3.82 | 5.41 | 6.57 |
+| post-EB axis | 0.1095 | 0.2283 | 0.2630 | 0.2799 | 7.15 | 4.02 | 5.54 | 7.07 |
+| post-EB ratio | 0.1095 | 0.2283 | 0.2630 | 0.2799 | 3.38 | 3.61 | 5.03 | 6.31 |
+
+Saved INLA tail rows:
+
+| Variant | rows | N | FFX | FFX-INLA | σ | σ-INLA | BLUP | BLUP-INLA |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| map scalar | all | 32 | 0.3892 | +0.1214 | 0.1385 | +0.0292 | 0.2707 | +0.0130 |
+| map scalar | cap-hit | 23 | 0.2494 | +0.1352 | 0.0996 | +0.0158 | 0.1689 | +0.0036 |
+| post-EB scalar | all | 32 | 0.3892 | +0.1214 | 0.1385 | +0.0292 | 0.2707 | +0.0130 |
+| post-EB axis | all | 32 | 0.3892 | +0.1213 | 0.1385 | +0.0292 | 0.2707 | +0.0130 |
+| post-EB ratio | all | 32 | 0.3892 | +0.1214 | 0.1385 | +0.0292 | 0.2707 | +0.0130 |
+
+Result: none of the post-EB, axis, or ratio variants closes the residual INLA gap. The
+axis grid adds cost without accuracy benefit. The ratio grid is slightly worse on
+`huge-n-sampled valid` (`0.4631` vs `0.4448` FFX). Do not promote axis or ratio. If we
+keep a sigma-grid path, the scalar grid is still the best accuracy/complexity tradeoff;
+post-EB scalar is tied but does not reduce the INLA gap. The failed variant branches were
+removed from code; keep only the map-stage scalar sigma-grid candidate.
+
 Next Steps
 ----------
 
-1. Run the full 8k Normal benchmark with `normal_beta_sigma_grid=True`.
-2. Run sampled-set diagonal R-INLA only when needed, using unbuffered output.
-3. Promote σ-grid only if the 8k result improves FFX without sampled-row regressions.
+1. Run the full 8k Normal benchmark with the scalar sigma-grid before promoting it.
+2. Do not reintroduce axis, ratio, or post-EB grid branches unless a later diagnostic finds
+   a new tail pattern where scalar averaging is not enough.
+3. The remaining INLA gap is likely not solved by more sigma-grid points. Investigate
+   fixed-effect posterior regularization directly: e.g. a cheap diagonal/low-rank
+   posterior mean correction for cap-hit, ill-conditioned rows.
 4. Avoid broad posterior machinery, multi-starts, EP, or full PyTorch INLA unless a new
-   benchmark shows a systematic failure not covered by the retained path.
+   benchmark shows a systematic failure not covered by targeted β regularization.
 
 Commands
 --------
