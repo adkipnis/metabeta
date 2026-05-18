@@ -13,7 +13,7 @@ Current Production EB Benchmark
 Command:
 
 ```bash
-uv run python experiments/analytical/glmm_required_benchmark.py --methods current raw
+uv run python -u experiments/analytical/glmm_required_benchmark.py --methods current raw
 ```
 
 Required suite: mixed train epochs 1-2 and sampled valid/test for

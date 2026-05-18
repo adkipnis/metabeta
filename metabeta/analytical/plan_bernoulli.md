@@ -91,7 +91,7 @@ Commands
 --------
 
 ```bash
-uv run python experiments/analytical/glmm_required_benchmark.py \
+uv run python -u experiments/analytical/glmm_required_benchmark.py \
     --family b --methods raw current bernoulli_eb \
     --combos small-b-mixed:train:2 small-b-sampled:test \
         medium-b-mixed:train:2 medium-b-sampled:test \
