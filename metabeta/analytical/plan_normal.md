@@ -132,6 +132,83 @@ boundary value, whereas INLA reports a posterior mean that shrinks continuously 
 the local curvature and hyperparameter uncertainty. Because BLUP uses the uncapped MAP β,
 BLUP accuracy remains good; the failure is mostly the reported β summary.
 
+β σ-grid prototype:
+
+An opt-in reporting-only σ-grid stabilizer is available through `glmm(...,
+normal_beta_stabilizer=True)`. It keeps the existing prior cap and cap-hit gate, but
+replaces cap-hit reported β components with a small hyperparameter average:
+
+`β_report = Σ_s w_s β(σ_rfx * scale_s)`, with `w_s` from the marginal target.
+
+The default remains off. BLUP still uses `normal_map_beta_for_blup`, i.e. the uncapped MAP
+β, so this only changes reported fixed effects. The cap-based shrinkage modes
+(`fixed`, `severity`, `curvature`) were removed from code after benchmarking because they
+were either too weak or regressed sampled rows.
+
+Implemented modes:
+
+- `sigma_grid`: default candidate, scales `{0.75, 1.0, 1.3333333}`.
+- `tail_grid`: diagnostic fallback, wider grid `{0.5, 0.75, 1.0, 1.3333333, 2.0}`,
+  applied only to rows whose max cap excess is at least `2.0`.
+
+First-1000 required normal rows, all sizes and dataset types:
+
+| Dataset | Part | sigma FFX | tail FFX | Δ tail-sigma | sigma ms | tail ms |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | train | 0.1095 | 0.1095 | 0.0000 | 3.50 | 3.25 |
+| small-n-sampled | valid | 0.2588 | 0.2588 | 0.0000 | 2.66 | 2.48 |
+| small-n-sampled | test | 0.2827 | 0.2827 | 0.0000 | 2.62 | 2.46 |
+| medium-n-mixed | train | 0.2283 | 0.2270 | -0.0013 | 4.02 | 3.59 |
+| medium-n-sampled | valid | 0.2626 | 0.2677 | +0.0051 | 4.84 | 4.27 |
+| medium-n-sampled | test | 0.2594 | 0.2592 | -0.0002 | 4.86 | 4.18 |
+| large-n-mixed | train | 0.2630 | 0.2634 | +0.0004 | 5.55 | 5.27 |
+| large-n-sampled | valid | 0.2994 | 0.2969 | -0.0025 | 6.06 | 5.08 |
+| large-n-sampled | test | 0.2878 | 0.2869 | -0.0009 | 6.41 | 5.49 |
+| huge-n-mixed | train | 0.2799 | 0.2807 | +0.0008 | 7.03 | 6.14 |
+| huge-n-sampled | valid | 0.4448 | 0.4440 | -0.0008 | 8.34 | 7.35 |
+| huge-n-sampled | test | 0.3037 | 0.3104 | +0.0067 | 8.56 | 7.68 |
+
+Interpretation: accuracy is effectively tied. Tail-grid is a little faster in this run
+because it leaves non-tail cap-hit rows unchanged, but it is also slightly worse on huge
+sampled test. Prefer the simpler three-point `sigma_grid` as the main path; keep
+`tail_grid` only as a diagnostic fallback for larger comparisons.
+
+Approximating INLA Behavior
+---------------------------
+
+INLA's useful advantage here is not the conditional Gaussian β approximation itself. For
+fixed variance components, β is cheap: a penalized GLS/Laplace mean is essentially the MAP
+mean. The advantage is the hyperparameter averaging
+
+`E[β | y] = ∫ E[β | θ, y] p(θ | y) dθ`
+
+where `θ` contains σ_rfx and σ_eps. In weak FE/RE directions, plausible θ values imply
+different β shrinkage; INLA averages those means, while our path uses one plug-in θ plus a
+hard reporting cap.
+
+Ranked approximations to this behavior after the first-1000 benchmark:
+
+1. **Three-point σ perturbation averaging.**
+   Recompute penalized β at `σ * {0.75, 1.0, 1.33}` and average with marginal-target
+   weights. This is the closest cheap analogue to INLA's hyperparameter averaging and is
+   now the best default candidate among tested options.
+2. **Tail-only mini quadrature over log σ.**
+   Use a wider grid such as `σ * {0.5, 0.75, 1.0, 1.33, 2.0}` only on severe cap-excess
+   rows. Current results are close to the three-point grid, not clearly better.
+3. **Retired direct shrinkage.**
+   Fixed, severity-aware, and curvature-aware cap shrinkers were useful diagnostics, but
+   they do not approximate INLA's hyperparameter averaging well enough to keep in the
+   implementation.
+
+Avoid for now:
+
+- Full PyTorch INLA or broad hyperparameter grids: likely too complex for the accuracy
+  gain and not aligned with the low-millisecond target.
+- Applying shrink to BLUP β by default: the tail diagnostic shows BLUP is already tied or
+  better on medium/large/huge; changing BLUP residuals would create unnecessary risk.
+- Global σ multipliers: tail σ behavior is mixed, while the largest actionable gap is
+  reported β.
+
 Next Steps
 ----------
 
@@ -139,17 +216,18 @@ Next Steps
    sparse, and directly fixes the observed β tail failures.
 2. **Use EB as the retained normal answer.** It is a one-shot posterior-moment update,
    not another optimizer, and improves σ/BLUP broadly.
-3. **Prototype a conditional β posterior-mean stabilizer for reporting only.** Trigger on
-   `normal_map_beta_prior_capped` or large residualized-X condition for `d > 4`. Replace
-   hard boundary clipping with a smooth shrinkage toward `ν_ffx` using a cheap diagonal
-   or low-rank approximation to the local β curvature. BLUP should continue to use the
-   uncapped MAP β unless a benchmark shows otherwise.
-4. **Benchmark the stabilizer against the first-1000 required normal rows before any INLA
-   rerun.** The target is to reduce large/huge FFX without moving σ/BLUP backward.
-5. **Next sampled-set R-INLA only if needed.** The mixed/train R-INLA rerun and tail
+3. **Use three-point σ-grid averaging as the main experimental candidate.** Keep it
+   reporting-only and cap-hit gated.
+4. **Run the 8k normal comparison before making it default.** The 1k run favors
+   `sigma_grid`, but the final decision should use all rows.
+5. **Keep tail-grid as fallback only.** It is slightly faster here, but accuracy is not
+   better enough to justify the wider-grid branch as the main path.
+6. **Do not continue tuning direct shrinkage.** The cap-based shrinkage code has been
+   removed to avoid carrying non-competitive heuristics.
+7. **Next sampled-set R-INLA only if needed.** The mixed/train R-INLA rerun and tail
    diagnostic are enough to guide the next patch; sampled R-INLA is expensive and should
    be used only if analytical sampled rows regress.
-6. **Avoid broad new machinery.** Do not add multi-starts, EP, or full posterior
+8. **Avoid broad new machinery.** Do not add multi-starts, EP, or full posterior
    integration unless a new benchmark shows a systematic, not tail-only, Gaussian FFX gap.
 
 Commands
@@ -158,6 +236,17 @@ Commands
 ```bash
 uv run python experiments/analytical/glmm_required_benchmark.py \
     --family n --methods current raw --max-datasets 1000 --batch-size 32
+
+uv run python experiments/analytical/glmm_required_benchmark.py \
+    --family n --methods current --max-datasets 1000 --batch-size 32 \
+    --normal-beta-stabilizer --normal-beta-stabilizer-mode sigma_grid \
+    --normal-beta-stabilizer-sigma-scales 0.75 1.0 1.3333333
+
+uv run python experiments/analytical/glmm_required_benchmark.py \
+    --family n --methods current --max-datasets 1000 --batch-size 32 \
+    --normal-beta-stabilizer --normal-beta-stabilizer-mode tail_grid \
+    --normal-beta-stabilizer-sigma-scales 0.5 0.75 1.0 1.3333333 2.0 \
+    --normal-beta-stabilizer-tail-excess 2.0
 
 uv run python experiments/analytical/glmm_normal_inla_diagnostic.py --n-inla 8 --batch-size 8
 

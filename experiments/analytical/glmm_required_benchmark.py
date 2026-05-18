@@ -264,7 +264,7 @@ def _bernoulliEbKwargs(method: str, args: argparse.Namespace) -> dict[str, int |
     return {}
 
 
-def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, int | float | str]:
+def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
     if method not in {'default', 'current', 'normal_eb'}:
         return {}
     return {
@@ -273,6 +273,11 @@ def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, int | fl
         'normal_laplace_eb_lr': args.normal_eb_lr,
         'normal_laplace_eb_moment_blend': args.normal_eb_moment_blend,
         'normal_laplace_eb_prior_weight': args.normal_eb_prior_weight,
+        'normal_beta_stabilizer': args.normal_beta_stabilizer,
+        'normal_beta_stabilizer_mode': args.normal_beta_stabilizer_mode,
+        'normal_beta_stabilizer_sigma_scales': args.normal_beta_stabilizer_sigma_scales,
+        'normal_beta_stabilizer_tail_excess': args.normal_beta_stabilizer_tail_excess,
+        'normal_beta_stabilizer_min_d': args.normal_beta_stabilizer_min_d,
     }
 
 
@@ -293,6 +298,11 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--normal-eb-lr', type=float, default=0.08)
     parser.add_argument('--normal-eb-moment-blend', type=float, default=1.0)
     parser.add_argument('--normal-eb-prior-weight', type=float, default=4.0)
+    parser.add_argument('--normal-beta-stabilizer', action='store_true')
+    parser.add_argument('--normal-beta-stabilizer-mode', default='sigma_grid', choices=['sigma_grid', 'tail_grid'])
+    parser.add_argument('--normal-beta-stabilizer-sigma-scales', type=float, nargs='+', default=[0.75, 1.0, 1.3333333])
+    parser.add_argument('--normal-beta-stabilizer-tail-excess', type=float, default=2.0)
+    parser.add_argument('--normal-beta-stabilizer-min-d', type=int, default=5)
     return parser.parse_args()
 # fmt: on
 

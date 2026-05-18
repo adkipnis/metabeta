@@ -184,6 +184,106 @@ def _replacePsiDiag(
     return Psi + F.pad(refined - Psi_q, (0, Psi.shape[-1] - q, 0, Psi.shape[-2] - q))
 
 
+def _normalSigmaGridBetaAverage(
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    sigma_rfx_base: torch.Tensor,
+    sigma_eps: torch.Tensor,
+    nu_ffx: torch.Tensor,
+    tau_ffx: torch.Tensor,
+    family_ffx: torch.Tensor,
+    tau_rfx: torch.Tensor,
+    family_sigma_rfx: torch.Tensor,
+    tau_eps: torch.Tensor,
+    family_sigma_eps: torch.Tensor,
+    mask_d: torch.Tensor | None,
+    mask_q: torch.Tensor | None,
+    scales: tuple[float, ...] | list[float],
+) -> torch.Tensor:
+    """Approximate hyperparameter-averaged β over a small diagonal-σ grid."""
+    q = Zm.shape[-1]
+    d = Xm.shape[-1]
+    if mask_q is not None:
+        Zm = Zm * mask_q[..., :q].to(device=Zm.device, dtype=Zm.dtype)[:, None, None, :]
+
+    clean_scales = [float(scale) for scale in scales if float(scale) > 0.0]
+    if not clean_scales:
+        clean_scales = [1.0]
+
+    B, m = Xm.shape[:2]
+    device, dtype = Xm.device, Xm.dtype
+    S = len(clean_scales)
+    scale_tensor = torch.tensor(clean_scales, device=device, dtype=dtype)
+    sigma_grid = (sigma_rfx_base[:, None, :] * scale_tensor[None, :, None]).clamp(
+        min=1e-4, max=20.0
+    )
+    se2 = sigma_eps.clamp(min=1e-6).square()
+
+    mask4 = mask_n[:, :, :, None]
+    Xm_masked = Xm * mask4
+    Zm_masked = Zm * mask4
+    active = mask_m.bool()
+    eye_q = torch.eye(q, device=device, dtype=dtype)
+
+    ZtZ = torch.einsum('bmnq,bmnr->bmqr', Zm_masked, Zm_masked)
+    ZtZ_safe = torch.where(active[:, :, None, None], ZtZ, eye_q)
+    Zty = torch.einsum('bmnq,bmn->bmq', Zm_masked, ym)
+    ZtX = torch.einsum('bmnq,bmnd->bmqd', Zm_masked, Xm_masked)
+    XtZ = ZtX.mT
+    XtX = torch.einsum('bmnd,bmnk->bdk', Xm_masked, Xm_masked)
+    Xty = torch.einsum('bmnd,bmn->bd', Xm_masked, ym)
+
+    sigma2_grid = sigma_grid.square().clamp(min=1e-8)
+    inner = ZtZ_safe[:, None] + torch.diag_embed(
+        se2[:, None, None, None] / sigma2_grid[:, :, None, :]
+    )
+    eye_q_bsm = eye_q.expand(B, S, m, q, q)
+    W_g = _safeSolve(inner + _adaptiveRidgeBm(inner), eye_q_bsm)
+    W_ZtX = torch.einsum('bsmqp,bmpd->bsmqd', W_g, ZtX)
+    correction_XX = torch.einsum('bmdq,bsmqk->bsdk', XtZ, W_ZtX)
+    W_Zty = torch.einsum('bsmqp,bmp->bsmq', W_g, Zty)
+    correction_Xy = torch.einsum('bmdq,bsmq->bsd', XtZ, W_Zty)
+
+    A = (XtX[:, None] - correction_XX) / se2[:, None, None, None]
+    b = (Xty[:, None] - correction_Xy) / se2[:, None, None]
+    prior_prec = 1.0 / tau_ffx[..., :d].clamp(min=1e-4).square()
+    A = A + torch.diag_embed(prior_prec[:, None, :])
+    b = b + prior_prec[:, None, :] * nu_ffx[..., :d][:, None, :]
+    beta_grid = _safeSolve(A + _adaptiveRidge(A), b).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    beta_grid = beta_grid.clamp(-20.0, 20.0)
+
+    corr = torch.eye(q, device=device, dtype=dtype).expand(B, q, q)
+    target = _logMarginalTarget(
+        beta_grid,
+        sigma_grid.log(),
+        sigma_eps.clamp(min=1e-4, max=20.0).log()[:, None].expand(B, S),
+        corr,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        nu_ffx,
+        tau_ffx,
+        family_ffx,
+        tau_rfx,
+        family_sigma_rfx,
+        tau_eps,
+        family_sigma_eps,
+        mask_d,
+        mask_q,
+    )
+    weights = torch.softmax(target.nan_to_num(nan=-1e30, posinf=1e30, neginf=-1e30), dim=1)
+    beta_avg = (weights[:, :, None] * beta_grid).sum(dim=1)
+    if mask_d is not None:
+        active_d = mask_d[..., :d].bool()
+        beta_avg = torch.where(active_d, beta_avg, beta_grid[:, 0, :])
+    return beta_avg
+
+
 def _recomputeNormalFinalDiagMap(
     stats: dict[str, torch.Tensor],
     Xm: torch.Tensor,
@@ -334,6 +434,11 @@ def refineNormalMapSrfx(
     beta_alpha_low: float = 0.65,
     beta_alpha_high: float = 0.75,
     beta_prior_cap: float | None = 4.0,
+    beta_stabilizer: bool = False,
+    beta_stabilizer_mode: str = 'sigma_grid',
+    beta_stabilizer_sigma_scales: tuple[float, ...] | list[float] = (0.75, 1.0, 1.3333333),
+    beta_stabilizer_tail_excess: float = 2.0,
+    beta_stabilizer_min_d: int = 5,
 ) -> dict[str, torch.Tensor]:
     """Return stats with sigma(RFX) refined by marginal MAP.
 
@@ -411,23 +516,67 @@ def refineNormalMapSrfx(
         beta_capped = torch.zeros(
             beta_override.shape[0], device=beta_override.device, dtype=beta_override.dtype
         )
+        beta_stabilized = torch.zeros_like(beta_capped)
         if beta_prior_cap is not None and beta_prior_cap > 0:
             d = beta_override.shape[-1]
             cap_scale = float(beta_prior_cap)
-            cap_lo = nu_ffx[..., :d] - cap_scale * tau_ffx[..., :d].clamp(min=1e-4)
-            cap_hi = nu_ffx[..., :d] + cap_scale * tau_ffx[..., :d].clamp(min=1e-4)
-            beta_capped = (
-                ((beta_override < cap_lo) | (beta_override > cap_hi))
-                .any(dim=-1)
-                .to(beta_override.dtype)
-            )
+            nu_d = nu_ffx[..., :d]
+            tau_d = tau_ffx[..., :d].clamp(min=1e-4)
+            cap_lo = nu_d - cap_scale * tau_d
+            cap_hi = nu_d + cap_scale * tau_d
+            cap_components = (beta_override < cap_lo) | (beta_override > cap_hi)
+            beta_capped = cap_components.any(dim=-1).to(beta_override.dtype)
             beta_override = beta_override.clamp(min=cap_lo, max=cap_hi)
             if mask_d is not None:
                 active_d = mask_d[..., :d].bool()
                 beta_override = torch.where(active_d, beta_override, beta.detach())
+                cap_components = cap_components & active_d
+                d_count = active_d.sum(dim=-1)
+            else:
+                d_count = torch.full(
+                    (beta_override.shape[0],), d, device=beta_override.device, dtype=torch.long
+                )
+            if beta_stabilizer:
+                stabilize = cap_components & (d_count >= int(beta_stabilizer_min_d))[:, None]
+                mode = str(beta_stabilizer_mode).lower()
+                if mode in {'sigma_grid', 'tail_grid'}:
+                    z_abs = ((beta.detach()[..., :d] - nu_d).abs() / tau_d).nan_to_num(
+                        nan=0.0,
+                        posinf=0.0,
+                        neginf=0.0,
+                    )
+                    if mode == 'tail_grid':
+                        excess = (z_abs - cap_scale).clamp(min=0.0)
+                        tail_gate = excess.amax(dim=-1) >= float(beta_stabilizer_tail_excess)
+                        stabilize = stabilize & tail_gate[:, None]
+                    beta_grid = _normalSigmaGridBetaAverage(
+                        Xm,
+                        ym,
+                        Zm,
+                        mask_n,
+                        mask_m,
+                        sigma_rfx,
+                        stats['sigma_eps_est'].squeeze(-1).detach(),
+                        nu_ffx,
+                        tau_ffx,
+                        family_ffx,
+                        tau_rfx,
+                        family_sigma_rfx,
+                        tau_eps,
+                        family_sigma_eps,
+                        mask_d,
+                        mask_q,
+                        beta_stabilizer_sigma_scales,
+                    )
+                    beta_grid = beta_grid.clamp(min=cap_lo, max=cap_hi)
+                    beta_override = torch.where(stabilize, beta_grid, beta_override)
+                    beta_stabilized = stabilize.any(dim=-1).to(beta_override.dtype)
+                else:
+                    raise ValueError("beta_stabilizer_mode must be 'sigma_grid' or 'tail_grid'")
         out['beta_est'] = beta_override
         out['normal_map_beta_for_blup'] = beta_for_blup_override
         out['normal_map_beta_prior_capped'] = beta_capped
+        out['normal_map_beta_stabilized'] = beta_stabilized
     out['sigma_rfx_est'] = sigma_rfx
     if 'Psi' in stats:
         if recompute_blup:

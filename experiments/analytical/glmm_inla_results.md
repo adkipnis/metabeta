@@ -120,7 +120,31 @@ Tail takeaways:
 - Worst large rows have high residualized-X condition numbers (`~200-2000`) and prior-cap
   hits. This points to weakly identified β directions where hard output clipping is too
   crude compared with INLA posterior means.
-- The most promising next patch is a conditional reporting-only β stabilizer for cap-hit
-  or ill-conditioned `d > 4` rows: smooth shrinkage toward the prior mean using a cheap
-  local-curvature approximation, while leaving uncapped MAP β for BLUP unless benchmarks
-  show otherwise.
+- The most promising patch is now reporting-only σ-grid averaging for cap-hit `d > 4`
+  rows. It keeps uncapped MAP β for BLUP and replaces only reported cap-hit fixed effects
+  with a small marginal-target-weighted average over nearby σ_rfx values.
+
+The old direct cap-shrinkage modes were removed after benchmarking. They were useful
+diagnostics, but the σ-grid approximation is the better match to INLA's hyperparameter
+averaging behavior.
+
+First-1000 required normal rows, all sizes and dataset types:
+
+| Dataset | Part | sigma FFX | tail FFX | sigma ms | tail ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| small-n-mixed | train | 0.1095 | 0.1095 | 3.50 | 3.25 |
+| small-n-sampled | valid | 0.2588 | 0.2588 | 2.66 | 2.48 |
+| small-n-sampled | test | 0.2827 | 0.2827 | 2.62 | 2.46 |
+| medium-n-mixed | train | 0.2283 | 0.2270 | 4.02 | 3.59 |
+| medium-n-sampled | valid | 0.2626 | 0.2677 | 4.84 | 4.27 |
+| medium-n-sampled | test | 0.2594 | 0.2592 | 4.86 | 4.18 |
+| large-n-mixed | train | 0.2630 | 0.2634 | 5.55 | 5.27 |
+| large-n-sampled | valid | 0.2994 | 0.2969 | 6.06 | 5.08 |
+| large-n-sampled | test | 0.2878 | 0.2869 | 6.41 | 5.49 |
+| huge-n-mixed | train | 0.2799 | 0.2807 | 7.03 | 6.14 |
+| huge-n-sampled | valid | 0.4448 | 0.4440 | 8.34 | 7.35 |
+| huge-n-sampled | test | 0.3037 | 0.3104 | 8.56 | 7.68 |
+
+Accuracy is effectively tied. Tail-grid is slightly faster here because it only changes
+the severe cap-excess rows, but it is slightly worse on huge sampled test. Keep
+three-point `sigma_grid` as the main candidate and `tail_grid` as a fallback diagnostic.
