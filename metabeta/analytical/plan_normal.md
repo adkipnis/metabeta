@@ -90,6 +90,48 @@ dominated by a small number of ill-conditioned FE/RE confounding cases. INLA lik
 there by posterior averaging and stronger hyperparameter uncertainty propagation, while
 our analytical path is still a plug-in MAP plus final GLS/BLUP recompute.
 
+Tail-targeted INLA diagnostic, first 1000 mixed/train rows per size:
+
+```bash
+uv run python experiments/analytical/glmm_normal_inla_diagnostic.py \
+    --tail-scan 1000 --tail-k 12 --batch-size 32 --top-k 16 \
+    --output-csv /private/tmp/normal_inla_tail_1k_top12.csv
+```
+
+This scans 4000 rows analytically and runs INLA only on the 12 selected tail rows per
+dataset. Selection is cap-prioritized FFX error (`cap_ffx_eb_rmse`).
+
+| Tail subset | N | EB FFX | INLA FFX | EB σ | INLA σ | EB BLUP | INLA BLUP |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | 12 | 0.7367 | 0.6962 | 0.2593 | 0.1929 | 0.5497 | 0.5180 |
+| medium-n-mixed | 12 | 0.2645 | 0.0931 | 0.1143 | 0.1278 | 0.1777 | 0.1791 |
+| large-n-mixed | 12 | 0.6927 | 0.0950 | 0.0531 | 0.0546 | 0.1045 | 0.1066 |
+| huge-n-mixed | 12 | 0.4109 | 0.1063 | 0.1131 | 0.0877 | 0.1808 | 0.1755 |
+
+Tail interpretation:
+
+- Cap-hit rows are the actionable failure mode. Across the selected tail rows, cap-hit
+  rows have EB FFX `0.4559` versus INLA `0.0984`; INLA is better on `34/35` cap-hit
+  rows. Non-cap rows are mostly small low-d rows where INLA is not consistently better.
+- Large/huge FFX failures are not caused by BLUP reconstruction. On large tail rows BLUP
+  is essentially tied (`0.1045` EB versus `0.1066` INLA), while FFX differs by `0.5977`.
+- The worst large rows are high-d, usually q=1, and have residualized-X condition numbers
+  in the hundreds to thousands. Examples: large idx `341` has EB FFX `1.4337` versus
+  INLA `0.1283` with `rx_cond=1227`; large idx `344` has EB FFX `0.9448` versus
+  INLA `0.1319` with `rx_cond=1235`.
+- FE/RE explainability alone is not a sufficient trigger. Some tail rows have low measured
+  max slope RE R² but still enormous residualized-X condition. The robust trigger should
+  combine prior-cap hit and residualized-X conditioning, not only FE/RE R².
+
+Likely implementation cause:
+
+The current normal path optimizes a plug-in marginal MAP β and then hard-clips reported β
+to `ν_ffx ± 4τ_ffx`. In ill-conditioned high-d rows, MAP can move far along weakly
+identified fixed-effect directions. The output cap prevents explosions but still reports a
+boundary value, whereas INLA reports a posterior mean that shrinks continuously through
+the local curvature and hyperparameter uncertainty. Because BLUP uses the uncapped MAP β,
+BLUP accuracy remains good; the failure is mostly the reported β summary.
+
 Next Steps
 ----------
 
@@ -97,10 +139,17 @@ Next Steps
    sparse, and directly fixes the observed β tail failures.
 2. **Use EB as the retained normal answer.** It is a one-shot posterior-moment update,
    not another optimizer, and improves σ/BLUP broadly.
-3. **Next validation should be sampled-set R-INLA only if needed.** The mixed/train R-INLA
-   rerun is enough to justify the patch direction; sampled R-INLA is expensive and should
+3. **Prototype a conditional β posterior-mean stabilizer for reporting only.** Trigger on
+   `normal_map_beta_prior_capped` or large residualized-X condition for `d > 4`. Replace
+   hard boundary clipping with a smooth shrinkage toward `ν_ffx` using a cheap diagonal
+   or low-rank approximation to the local β curvature. BLUP should continue to use the
+   uncapped MAP β unless a benchmark shows otherwise.
+4. **Benchmark the stabilizer against the first-1000 required normal rows before any INLA
+   rerun.** The target is to reduce large/huge FFX without moving σ/BLUP backward.
+5. **Next sampled-set R-INLA only if needed.** The mixed/train R-INLA rerun and tail
+   diagnostic are enough to guide the next patch; sampled R-INLA is expensive and should
    be used only if analytical sampled rows regress.
-4. **Avoid broad new machinery.** Do not add multi-starts, EP, or full posterior
+6. **Avoid broad new machinery.** Do not add multi-starts, EP, or full posterior
    integration unless a new benchmark shows a systematic, not tail-only, Gaussian FFX gap.
 
 Commands
@@ -111,6 +160,10 @@ uv run python experiments/analytical/glmm_required_benchmark.py \
     --family n --methods current raw --max-datasets 1000 --batch-size 32
 
 uv run python experiments/analytical/glmm_normal_inla_diagnostic.py --n-inla 8 --batch-size 8
+
+uv run python experiments/analytical/glmm_normal_inla_diagnostic.py \
+    --tail-scan 1000 --tail-k 12 --batch-size 32 --top-k 16 \
+    --output-csv /private/tmp/normal_inla_tail_1k_top12.csv
 
 uv run python experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-n-mixed,medium-n-mixed,large-n-mixed,huge-n-mixed \

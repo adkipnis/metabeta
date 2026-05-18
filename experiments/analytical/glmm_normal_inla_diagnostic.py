@@ -76,6 +76,11 @@ def _corr(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.corrcoef(x_sel, y_sel)[0, 1])
 
 
+def _nanStat(x: np.ndarray, fn) -> float:
+    finite = x[np.isfinite(x)]
+    return float(fn(finite)) if finite.size else float('nan')
+
+
 def _binByD(d: int) -> str:
     if d <= 4:
         return 'd<=4'
@@ -198,9 +203,9 @@ def _designDiagnostics(ds_flat: dict) -> dict[str, float | np.ndarray]:
     return {
         'x_cond': _safeCond(x_slope),
         'rx_cond': _safeCond(rx_slope),
-        'max_fe_re_r2': float(np.nanmax(fe_re_r2)) if fe_re_r2.size else float('nan'),
-        'max_slope_fe_re_r2': float(np.nanmax(slope_r2)) if slope_r2.size else float('nan'),
-        'mean_slope_fe_re_r2': (float(np.nanmean(slope_r2)) if slope_r2.size else float('nan')),
+        'max_fe_re_r2': _nanStat(fe_re_r2, np.max),
+        'max_slope_fe_re_r2': _nanStat(slope_r2, np.max),
+        'mean_slope_fe_re_r2': _nanStat(slope_r2, np.mean),
         'fe_re_r2': fe_re_r2,
     }
 

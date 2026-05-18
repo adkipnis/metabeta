@@ -91,3 +91,36 @@ Normal takeaways:
   mixed/train have mean per-dataset β RMSE around `0.06-0.09`, but rare maxima above
   `5-10` drove aggregate NRMSE before the prior cap.
 - INLA remains about seconds per dataset; analytical EB is milliseconds per dataset.
+
+Normal tail diagnostic, first 1000 mixed/train rows per size:
+
+The diagnostic scanned 4000 rows with Normal EB, selected the 12 highest
+cap-prioritized FFX-error rows per size, and ran diagonal R-INLA only on those selected
+tail rows.
+
+```bash
+uv run python experiments/analytical/glmm_normal_inla_diagnostic.py \
+    --tail-scan 1000 --tail-k 12 --batch-size 32 --top-k 16 \
+    --output-csv /private/tmp/normal_inla_tail_1k_top12.csv
+```
+
+| Tail subset | N | EB FFX | INLA FFX | EB σ | INLA σ | EB BLUP | INLA BLUP |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | 12 | 0.7367 | 0.6962 | 0.2593 | 0.1929 | 0.5497 | 0.5180 |
+| medium-n-mixed | 12 | 0.2645 | 0.0931 | 0.1143 | 0.1278 | 0.1777 | 0.1791 |
+| large-n-mixed | 12 | 0.6927 | 0.0950 | 0.0531 | 0.0546 | 0.1045 | 0.1066 |
+| huge-n-mixed | 12 | 0.4109 | 0.1063 | 0.1131 | 0.0877 | 0.1808 | 0.1755 |
+
+Tail takeaways:
+
+- Cap-hit rows dominate the remaining medium/large/huge FFX gap: selected cap-hit rows
+  have EB FFX `0.4559` versus INLA `0.0984`, and INLA is better on `34/35` of them.
+- The large tail is almost pure fixed-effect reporting error: EB and INLA BLUP are tied
+  (`0.1045` versus `0.1066`), while FFX differs by `0.5977`.
+- Worst large rows have high residualized-X condition numbers (`~200-2000`) and prior-cap
+  hits. This points to weakly identified β directions where hard output clipping is too
+  crude compared with INLA posterior means.
+- The most promising next patch is a conditional reporting-only β stabilizer for cap-hit
+  or ill-conditioned `d > 4` rows: smooth shrinkage toward the prior mean using a cheap
+  local-curvature approximation, while leaving uncapped MAP β for BLUP unless benchmarks
+  show otherwise.
