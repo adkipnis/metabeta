@@ -48,30 +48,34 @@ dataset, roughly two orders of magnitude slower on these benchmarks.
 Normal Diagonal R-INLA Snapshot
 -------------------------------
 
-The retained Normal path is now guarded EB by default: MAP β/σ/σ_eps refinement,
-reporting-only prior cap for `d > 4`, scalar β sigma-grid reporting, one-shot
-posterior-moment σ_rfx EB calibration, direct σ_rfx coordinate grid, diagonal final Ψ,
-and the rare BLUP/sigma guard for high-d aliased rows.
+The retained Normal path is now guarded EB plus tail β correction by default: MAP
+β/σ/σ_eps refinement, reporting-only prior cap for `d > 4`, scalar β sigma-grid reporting,
+damped tail-gated β posterior-mean correction, one-shot posterior-moment σ_rfx EB
+calibration, direct σ_rfx coordinate grid, diagonal final Ψ, and the rare BLUP/sigma guard
+for high-d aliased rows.
 
 Mixed/train diagonal R-INLA reference, first 1000 datasets per row:
 
-| Dataset | EB FFX | σ-grid FFX | INLA FFX | EB σ | INLA σ | EB BLUP | INLA BLUP | EB ms | INLA s |
+| Dataset | EB FFX | current FFX | INLA FFX | EB σ | INLA σ | EB BLUP | INLA BLUP | current ms | INLA s |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | 0.1095 | 0.1095 | 0.0985 | 0.4203 | 0.3665 | 0.4173 | 0.4081 | 2.52 | 2.406 |
+| small-n-mixed | 0.1095 | 0.1089 | 0.0985 | 0.4203 | 0.3665 | 0.4173 | 0.4081 | 3.42 | 2.406 |
 | medium-n-mixed | 0.2515 | 0.2283 | 0.2301 | 0.3619 | 0.3419 | 0.4198 | 0.4289 | 3.05 | 2.604 |
-| large-n-mixed | 0.4075 | 0.2630 | 0.2377 | 0.3711 | 0.3393 | 0.4148 | 0.4185 | 4.23 | 2.786 |
-| huge-n-mixed | 0.3314 | 0.2799 | 0.2413 | 0.3776 | 0.2808 | 0.4545 | 0.4548 | 5.34 | 2.965 |
+| large-n-mixed | 0.4075 | 0.2582 | 0.2377 | 0.3711 | 0.3393 | 0.4148 | 0.4185 | 6.20 | 2.786 |
+| huge-n-mixed | 0.3314 | 0.2677 | 0.2413 | 0.3776 | 0.2808 | 0.4545 | 0.4548 | 7.89 | 2.965 |
 
 Takeaways:
 
-- guarded EB closes much of the large/huge FFX gap but still trails INLA in the hardest
-  rows.
+- guarded EB plus damped tail β correction closes more of the large/huge FFX gap but
+  still trails INLA in the hardest rows.
 - INLA keeps the best σ_rfx accuracy; analytical BLUP is already tied on medium+ rows.
 - R-INLA remains seconds per dataset, while analytical EB/σ-grid is milliseconds.
 - A 2026-05-18 FFX-tail diagnostic scanned 8000 medium/large/huge mixed rows and ran
   INLA on the 16 worst FFX rows per size. The remaining large/huge gap is rare and
   concentrated in high-d or ill-conditioned rows; INLA's β posterior-mean shift is
   strongly aligned with the analytical β error in those tail rows.
+- The retained tail β correction is scalar-grid-only and damped (`25%` toward the grid
+  posterior mean). It improved the saved large/huge INLA FFX tail rows while leaving
+  medium unchanged.
 - Sampled-set INLA rows are still pending. Run them with unbuffered output:
 
 ```bash

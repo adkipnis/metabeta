@@ -22,6 +22,8 @@ Retained Path
 - one-shot posterior-moment EB update for diagonal σ_rfx;
 - scalar β sigma-grid reporting over σ_rfx scales `{0.75, 1.0, 1.3333333}`;
 - one-pass direct coordinate σ_rfx EB grid over the same scales;
+- tail-gated β posterior-mean correction for `d >= 9` rows: reuse the scalar β
+  sigma-grid mean, apply only on cap/ill-condition gates, and blend `25%` toward it;
 - rare BLUP/sigma guard for high-d aliased rows with inflated BLUP norm.
 
 The `d > 4` gate is intentional: MAP β carry-forward improves medium/large/huge rows but
@@ -35,36 +37,37 @@ First 1000 datasets per row with the default guarded EB path. Lower NRMSE is bet
 
 | Dataset | part | FFX | σ | σ_eps | BLUP | ms | guard |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.1089 | 0.4002 | 0.2151 | 0.4156 | 5.41 | 0.000 |
-| small-n-sampled | valid | 0.2608 | 0.5695 | 0.2169 | 0.5119 | 4.61 | 0.000 |
-| small-n-sampled | test | 0.2828 | 0.4759 | 0.2169 | 0.4931 | 4.32 | 0.000 |
-| medium-n-mixed | train | 0.2283 | 0.3617 | 0.1655 | 0.4197 | 7.32 | 0.000 |
-| medium-n-sampled | valid | 0.2626 | 0.4186 | 0.1891 | 0.5145 | 15.22 | 0.000 |
-| medium-n-sampled | test | 0.2594 | 0.3825 | 0.1949 | 0.4403 | 12.25 | 0.000 |
-| large-n-mixed | train | 0.2630 | 0.3643 | 0.1268 | 0.4135 | 10.23 | 0.000 |
-| large-n-sampled | valid | 0.2994 | 0.4159 | 0.1563 | 0.5045 | 9.91 | 0.000 |
-| large-n-sampled | test | 0.2878 | 0.4346 | 0.1513 | 0.5126 | 10.54 | 0.000 |
-| huge-n-mixed | train | 0.2799 | 0.3484 | 0.1161 | 0.4528 | 12.47 | 0.004 |
-| huge-n-sampled | valid | 0.4448 | 0.3562 | 0.1375 | 0.4555 | 19.63 | 0.000 |
-| huge-n-sampled | test | 0.3037 | 0.3689 | 0.1438 | 0.4604 | 11.11 | 0.002 |
+| small-n-mixed | train | 0.1089 | 0.4002 | 0.2151 | 0.4156 | 3.42 | 0.000 |
+| small-n-sampled | valid | 0.2608 | 0.5695 | 0.2169 | 0.5119 | 2.75 | 0.000 |
+| small-n-sampled | test | 0.2828 | 0.4759 | 0.2169 | 0.4931 | 2.74 | 0.000 |
+| medium-n-mixed | train | 0.2283 | 0.3617 | 0.1655 | 0.4197 | 4.17 | 0.000 |
+| medium-n-sampled | valid | 0.2626 | 0.4186 | 0.1891 | 0.5145 | 5.09 | 0.000 |
+| medium-n-sampled | test | 0.2594 | 0.3825 | 0.1949 | 0.4403 | 4.96 | 0.000 |
+| large-n-mixed | train | 0.2582 | 0.3643 | 0.1268 | 0.4135 | 6.20 | 0.000 |
+| large-n-sampled | valid | 0.2970 | 0.4159 | 0.1563 | 0.5045 | 6.52 | 0.000 |
+| large-n-sampled | test | 0.2872 | 0.4346 | 0.1513 | 0.5126 | 6.95 | 0.000 |
+| huge-n-mixed | train | 0.2677 | 0.3484 | 0.1161 | 0.4528 | 7.89 | 0.004 |
+| huge-n-sampled | valid | 0.4240 | 0.3562 | 0.1375 | 0.4555 | 9.50 | 0.000 |
+| huge-n-sampled | test | 0.2947 | 0.3689 | 0.1438 | 0.4604 | 9.90 | 0.002 |
 
 R-INLA Reference
 ----------------
 
 Mixed/train first-1000 rows with diagonal R-INLA:
 
-| Dataset | EB FFX | σ-grid FFX | INLA FFX | EB σ | INLA σ | EB BLUP | INLA BLUP | EB ms | INLA s |
+| Dataset | EB FFX | current FFX | INLA FFX | EB σ | INLA σ | EB BLUP | INLA BLUP | current ms | INLA s |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | 0.1095 | 0.1095 | 0.0985 | 0.4203 | 0.3665 | 0.4173 | 0.4081 | 2.52 | 2.406 |
+| small-n-mixed | 0.1095 | 0.1089 | 0.0985 | 0.4203 | 0.3665 | 0.4173 | 0.4081 | 3.42 | 2.406 |
 | medium-n-mixed | 0.2515 | 0.2283 | 0.2301 | 0.3619 | 0.3419 | 0.4198 | 0.4289 | 3.05 | 2.604 |
-| large-n-mixed | 0.4075 | 0.2630 | 0.2377 | 0.3711 | 0.3393 | 0.4148 | 0.4185 | 4.23 | 2.786 |
-| huge-n-mixed | 0.3314 | 0.2799 | 0.2413 | 0.3776 | 0.2808 | 0.4545 | 0.4548 | 5.34 | 2.965 |
+| large-n-mixed | 0.4075 | 0.2582 | 0.2377 | 0.3711 | 0.3393 | 0.4148 | 0.4185 | 6.20 | 2.786 |
+| huge-n-mixed | 0.3314 | 0.2677 | 0.2413 | 0.3776 | 0.2808 | 0.4545 | 0.4548 | 7.89 | 2.965 |
 
 Interpretation:
 
 - INLA still has the strongest σ_rfx estimates, especially huge mixed.
 - BLUP is already tied or slightly better analytically on medium/large/huge rows.
-- The remaining actionable gap is reported FFX in rare ill-conditioned high-d rows.
+- The tail-gated β correction narrows the large/huge FFX gap but does not eliminate the
+  rare ill-conditioned tail.
 - R-INLA is roughly hundreds of times slower, so it remains a reference only.
 
 β Sigma-Grid Candidate
@@ -178,6 +181,40 @@ Interpretation:
   huge tail rows. This suggests a real posterior-mean correction signal, but it is
   tail-specific and should not be implemented as broad prior shrinkage.
 
+Tail-Gated β Correction
+-----------------------
+
+Implemented as `normal_beta_tail_grid=True` and now enabled by default for Normal GLMMs.
+It is deliberately narrow:
+
+- only eligible for `d >= 9`;
+- uses the already retained scalar β sigma-grid scales `{0.75, 1.0, 1.3333333}`;
+- gates on β cap/stabilization or conditional β precision condition `>= 1000`;
+- moves only `25%` from the current reported β toward the grid posterior mean;
+- leaves the BLUP residual β path unchanged.
+
+The first broader prototype replaced β with a wide scalar+axis grid mean. It was rejected:
+medium/large/huge FFX worsened substantially. The retained damped scalar gate improved the
+first-1000 large/huge rows without moving small/medium rows:
+
+| Dataset | part | previous FFX | tail β FFX | Δ | previous ms | tail β ms |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| large-n-mixed | train | 0.2630 | 0.2582 | -0.0048 | 5.47 | 6.20 |
+| large-n-sampled | valid | 0.2994 | 0.2970 | -0.0024 | 5.84 | 6.52 |
+| large-n-sampled | test | 0.2878 | 0.2872 | -0.0006 | 6.15 | 6.95 |
+| huge-n-mixed | train | 0.2799 | 0.2677 | -0.0122 | 7.01 | 7.89 |
+| huge-n-sampled | valid | 0.4448 | 0.4240 | -0.0208 | 8.47 | 9.50 |
+| huge-n-sampled | test | 0.3037 | 0.2947 | -0.0090 | 8.89 | 9.90 |
+
+Saved mixed/train INLA tail rows also moved in the right direction for the large/huge
+tails:
+
+| Tail set | N | previous β RMSE | tail β RMSE | INLA row RMSE |
+| --- | ---: | ---: | ---: | ---: |
+| medium-n-mixed | 16 | 0.7870 | 0.7870 | 0.5426 |
+| large-n-mixed | 16 | 0.4441 | 0.3790 | 0.1956 |
+| huge-n-mixed | 16 | 0.5304 | 0.4462 | 0.2310 |
+
 Sigma-Grid Variant Sweep
 ------------------------
 
@@ -241,8 +278,8 @@ unchanged. On the two known pathologies:
 Next Steps
 ----------
 
-1. Keep scalar β sigma-grid plus direct σ_rfx grid plus the BLUP guard as the default
-   Normal EB path.
+1. Keep scalar β sigma-grid plus the damped tail β correction plus direct σ_rfx grid plus
+   the BLUP guard as the default Normal EB path.
 2. Refresh the Normal R-INLA comparison with default `current`, especially sampled
    valid/test rows, to check whether the `huge-n-sampled valid` INLA gap is now mostly
    closed after the BLUP guard.
@@ -257,12 +294,8 @@ Next Steps
    - scalar sigma-grid reference: large mixed `0.2630`, huge mixed `0.2799`.
 5. Direct σ_rfx grid passed the 8k benchmark as a variance-scale companion to the β
    reporting grid, but it does not solve the FFX tail gap by itself.
-6. The next plausible FFX extension is a tail-gated posterior-mean correction for
-   ill-conditioned rows. The diagnostic signal to mimic is INLA's β shift, which is
-   strongly aligned with the analytical β error in large/huge tails. Do not implement
-   this as broad shrink-to-prior; the failed curvature shrink suggests the missing
-   behavior is a design/hyperparameter-averaging correction, not a simple reliability
-   scalar.
+6. Remaining FFX work should be diagnostic-first: find tail rows still worse than INLA
+   after the damped correction and only extend the gate if the failure signature is stable.
 7. Avoid broad posterior machinery, multi-starts, EP, full PyTorch INLA, or NPE-context
    ablations for this analytical phase.
 
