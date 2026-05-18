@@ -361,7 +361,7 @@ def runTailDiagnostic(args: argparse.Namespace) -> None:
             est = _inla_estimate(
                 candidate['flat'],
                 likelihood_family=0,
-                normal_re_correlation='diagonal',
+                re_correlation='diagonal',
             )
             if est is None:
                 continue
@@ -464,7 +464,7 @@ def runDiagnostic(args: argparse.Namespace) -> None:
                     est = _inla_estimate(
                         flat,
                         likelihood_family=0,
-                        normal_re_correlation='diagonal',
+                        re_correlation='diagonal',
                     )
                     seen += 1
                     if est is None:
