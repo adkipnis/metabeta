@@ -180,27 +180,55 @@ keep a sigma-grid path, the scalar grid is still the best accuracy/complexity tr
 post-EB scalar is tied but does not reduce the INLA gap. The failed variant branches were
 removed from code; keep only the map-stage scalar sigma-grid candidate.
 
+Huge Sampled BLUP Tail
+----------------------
+
+Diagnostic run on all 8192 `huge-n-sampled valid` rows with the combined β-grid plus
+direct σ_rfx grid path, selecting the 16 largest analytical BLUP RMSE rows and running
+diagonal R-INLA on those rows:
+
+- overall analytical BLUP NRMSE is dominated by a tiny tail: dropping dataset `1550`
+  alone reduces NRMSE from `0.669` to `0.495`; dropping the top 16 reduces it to `0.447`;
+- the top failure is not caused by the direct σ_rfx grid. β-grid only already has BLUP
+  RMSE `6.52`; direct σ_rfx grid changes it to `6.52`;
+- `σ_eps` is accurate in the top rows, but one or two `σ_rfx` dimensions inflate sharply;
+  dataset `1550` has true σ `[0.119, 0.606, 0.017, 0.400]`, analytical
+  `[0.153, 2.614, 0.120, 0.445]`, and INLA `[0.136, 0.624, 0.040, 0.397]`;
+- BLUP norm inflation is the direct symptom: dataset `1550` true/analytical/INLA BLUP
+  RMS is `0.353 / 6.530 / 0.349`; dataset `7580` is `0.344 / 1.693 / 0.292`;
+- the common signature is high-d sampled design aliasing: `d >= 13`, max fixed/random
+  design R2 `1.0`, and singular residual fixed-effect design after projecting out `Z`.
+
+Next patch candidate: add a targeted Normal BLUP/sigma guard for aliased sampled rows.
+Use design aliasing plus BLUP norm inflation, not a broad cap. The likely fallback is to
+recompute BLUPs and the posterior-moment σ update from a more conservative β residual
+source, or reject σ candidates that imply implausible BLUP RMS relative to prior/σ scale.
+Any guard must be tested first on `huge-n-sampled valid` and then on the full 8k suite.
+
 Next Steps
 ----------
 
 1. Treat scalar β sigma-grid plus direct σ_rfx grid as the current best Normal candidate.
    Keep flags explicit until the next R-INLA comparison is refreshed, then consider making
    this the default Normal EB path.
-2. Do not reintroduce axis, ratio, or post-EB grid branches unless a later diagnostic finds
+2. Investigate the targeted BLUP/sigma guard above before broader INLA-style machinery;
+   the row outlier is a small high-leverage tail, so a narrow fallback is the lowest-risk
+   next move.
+3. Do not reintroduce axis, ratio, or post-EB grid branches unless a later diagnostic finds
    a new tail pattern where scalar averaging is not enough.
-3. Curvature-aware β shrinkage was tested and removed. It shrank cap-hit, high-d rows
+4. Curvature-aware β shrinkage was tested and removed. It shrank cap-hit, high-d rows
    toward `nu_ffx` based on conditional Gaussian posterior variance, but it was slower and
    did not improve over scalar sigma-grid:
    - curvature only: large mixed FFX `0.3699`, huge mixed `0.3214`;
    - sigma-grid + curvature, power `1.0`: large mixed `0.2637`, huge mixed `0.2807`;
    - sigma-grid + curvature, power `0.5`: large mixed `0.2633`, huge mixed `0.2804`;
    - scalar sigma-grid reference: large mixed `0.2630`, huge mixed `0.2799`.
-4. Direct σ_rfx grid passed the 8k benchmark as a variance-scale companion to the β
+5. Direct σ_rfx grid passed the 8k benchmark as a variance-scale companion to the β
    reporting grid, but it does not solve the FFX tail gap by itself.
-5. If more FFX improvement is needed after the next INLA comparison, revisit fixed-effect
+6. If more FFX improvement is needed after the next INLA comparison, revisit fixed-effect
    posterior mean correction, but not as direct shrink-to-prior; the failed curvature
    shrink suggests that the missing behavior is not a simple reliability scalar.
-6. Avoid broad posterior machinery, multi-starts, EP, full PyTorch INLA, or NPE-context
+7. Avoid broad posterior machinery, multi-starts, EP, full PyTorch INLA, or NPE-context
    ablations for this analytical phase.
 
 Commands
@@ -230,6 +258,10 @@ uv run python -u experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-n-sampled,medium-n-sampled,large-n-sampled,huge-n-sampled \
     --partition valid --n-inla 1000 --n-total 1000 \
     --analytical-methods normal_eb,normal_sigma_grid --re-correlation diagonal
+
+uv run python -u experiments/analytical/glmm_normal_inla_diagnostic.py \
+    --data-ids huge-n-sampled --partition valid --tail-scan 8000 --tail-k 16 \
+    --tail-metric blup_eb_rmse --methods normal_sigma_grid_srfx --batch-size 32
 
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical tests

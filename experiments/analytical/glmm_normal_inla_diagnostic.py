@@ -23,7 +23,7 @@ from metabeta.utils.experiments import dataFilePath
 
 
 DATA_IDS = ['small-n-mixed', 'medium-n-mixed', 'large-n-mixed', 'huge-n-mixed']
-METHODS = ['normal_eb', 'normal_sigma_grid']
+METHODS = ['normal_eb', 'normal_sigma_grid', 'normal_sigma_grid_srfx']
 TAIL_METRICS = [
     'ffx_eb_rmse',
     'sigma_eb_rmse',
@@ -135,6 +135,17 @@ def _methodKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
             'normal_beta_sigma_grid_scales': args.normal_beta_sigma_grid_scales,
             'normal_beta_sigma_grid_min_d': args.normal_beta_sigma_grid_min_d,
         }
+    if method == 'normal_sigma_grid_srfx':
+        return {
+            'map_refine': True,
+            'bernoulli_laplace_eb': False,
+            'normal_laplace_eb': True,
+            'normal_laplace_eb_sigma_grid_refine': True,
+            'normal_laplace_eb_sigma_grid_scales': args.normal_eb_sigma_grid_scales,
+            'normal_beta_sigma_grid': True,
+            'normal_beta_sigma_grid_scales': args.normal_beta_sigma_grid_scales,
+            'normal_beta_sigma_grid_min_d': args.normal_beta_sigma_grid_min_d,
+        }
     raise ValueError(f'unsupported analytical method: {method}')
 
 
@@ -189,12 +200,20 @@ def _designDiagnostics(ds_flat: dict) -> dict[str, float | np.ndarray]:
     m = int(ds_flat['m'])
 
     resid_parts = []
+    z_ranks = []
+    z_conds = []
     for g in range(m):
         sel = groups == g
         if not np.any(sel):
             continue
         x_g = x[sel]
         z_g = z[sel]
+        if z_g.shape[1] > 0:
+            try:
+                z_ranks.append(float(np.linalg.matrix_rank(z_g)))
+            except np.linalg.LinAlgError:
+                z_ranks.append(0.0)
+            z_conds.append(_safeCond(z_g))
         if z_g.shape[1] == 0:
             resid_parts.append(x_g)
             continue
@@ -219,6 +238,13 @@ def _designDiagnostics(ds_flat: dict) -> dict[str, float | np.ndarray]:
         'max_fe_re_r2': _nanStat(fe_re_r2, np.max),
         'max_slope_fe_re_r2': _nanStat(slope_r2, np.max),
         'mean_slope_fe_re_r2': _nanStat(slope_r2, np.mean),
+        'z_rank_min': _nanStat(np.asarray(z_ranks, dtype=float), np.min),
+        'z_rank_deficient_frac': _nanStat(
+            np.asarray(z_ranks, dtype=float) < z.shape[1],
+            np.mean,
+        ),
+        'z_cond_median': _nanStat(np.asarray(z_conds, dtype=float), np.median),
+        'z_cond_max': _nanStat(np.asarray(z_conds, dtype=float), np.max),
         'fe_re_r2': fe_re_r2,
     }
 
@@ -254,7 +280,8 @@ def _candidateFromBatch(
         blup_est = stats[method]['blup_est'][b, :m][:, active_q].detach().cpu().numpy()
         beta_err = beta_est - ffx_true[b, active_d]
         sigma_err = sigma_est - srfx_true[b, active_q]
-        blup_err = (blup_est - rfx_true[b, :m][:, active_q]).reshape(-1)
+        rfx_active = rfx_true[b, :m][:, active_q]
+        blup_err = (blup_est - rfx_active).reshape(-1)
         cap_hit = float(
             stats[method].get('normal_map_beta_prior_capped', cap_default)[b].detach().cpu().item()
         )
@@ -276,6 +303,10 @@ def _candidateFromBatch(
                 'max_fe_re_r2': design['max_fe_re_r2'],
                 'max_slope_fe_re_r2': design['max_slope_fe_re_r2'],
                 'mean_slope_fe_re_r2': design['mean_slope_fe_re_r2'],
+                'z_rank_min': design['z_rank_min'],
+                'z_rank_deficient_frac': design['z_rank_deficient_frac'],
+                'z_cond_median': design['z_cond_median'],
+                'z_cond_max': design['z_cond_max'],
                 'beta_r2_corr': _corr(beta_abs_err, fe_re_r2[: len(active_d)]),
                 'beta_prior_cap': cap_hit,
                 'beta_abs_err_mean': float(np.mean(beta_abs_err)),
@@ -285,6 +316,10 @@ def _candidateFromBatch(
                 'sigma_eb_bias_mean': float(np.mean(sigma_err)),
                 'sigma_eps_true': float(batch['sigma_eps'][b].cpu().item()),
                 'sigma_eps_eb': float(stats[method]['sigma_eps_est'][b, 0].detach().cpu().item()),
+                'blup_true_rmse': _rmse(rfx_active.reshape(-1)),
+                'blup_est_rmse': _rmse(blup_est.reshape(-1)),
+                'blup_norm_ratio': _rmse(blup_est.reshape(-1))
+                / max(_rmse(rfx_active.reshape(-1)), 1e-8),
                 'ffx_eb_rmse': _rmse(beta_err),
                 'sigma_eb_rmse': _rmse(sigma_err),
                 'blup_eb_rmse': _rmse(blup_err),
@@ -553,6 +588,10 @@ def runDiagnostic(args: argparse.Namespace) -> None:
                             'max_fe_re_r2': design['max_fe_re_r2'],
                             'max_slope_fe_re_r2': design['max_slope_fe_re_r2'],
                             'mean_slope_fe_re_r2': design['mean_slope_fe_re_r2'],
+                            'z_rank_min': design['z_rank_min'],
+                            'z_rank_deficient_frac': design['z_rank_deficient_frac'],
+                            'z_cond_median': design['z_cond_median'],
+                            'z_cond_max': design['z_cond_max'],
                             'beta_r2_corr': beta_r2_corr,
                             'beta_prior_cap': cap_hit,
                             'beta_abs_err_mean': float(np.mean(beta_abs_err)),
@@ -568,6 +607,10 @@ def runDiagnostic(args: argparse.Namespace) -> None:
                             'sigma_eps_eb': float(
                                 stats[method]['sigma_eps_est'][b, 0].detach().cpu().item()
                             ),
+                            'blup_true_rmse': _rmse(rfx_true[b, :m][:, active_q].reshape(-1)),
+                            'blup_est_rmse': _rmse(blup_est.reshape(-1)),
+                            'blup_norm_ratio': _rmse(blup_est.reshape(-1))
+                            / max(_rmse(rfx_true[b, :m][:, active_q].reshape(-1)), 1e-8),
                             'ffx_eb_rmse': method_err['ffx'],
                             'ffx_inla_rmse': inla_err['ffx'],
                             'ffx_gap': method_err['ffx'] - inla_err['ffx'],
@@ -676,10 +719,15 @@ def _printRanked(rows: list[dict], metric: str, top_k: int) -> None:
                 _fmt(row['ns_cv']),
                 _fmt(row['rx_cond']),
                 _fmt(row['max_slope_fe_re_r2']),
+                _fmt(row['z_rank_deficient_frac']),
+                _fmt(row['z_cond_median']),
                 int(row['beta_prior_cap']),
                 _fmt(row['sigma_true_mean']),
                 _fmt(row['sigma_eb_mean']),
                 _fmt(row['sigma_inla_mean']),
+                _fmt(row['sigma_eps_true']),
+                _fmt(row['sigma_eps_eb']),
+                _fmt(row['blup_norm_ratio']),
             ]
         )
     print(f'\nTop {len(selected)} by {metric} (positive means Normal EB worse than INLA)')
@@ -702,10 +750,15 @@ def _printRanked(rows: list[dict], metric: str, top_k: int) -> None:
                 'ns_cv',
                 'rx_cond',
                 'max RE R2',
+                'Z rank def',
+                'Z cond med',
                 'cap',
                 'sig true',
                 'sig EB',
                 'sig INLA',
+                'eps true',
+                'eps EB',
+                'BLUP norm',
             ],
             tablefmt='github',
         )
@@ -742,6 +795,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--normal-beta-sigma-grid-scales', type=float, nargs='+',
                         default=[0.75, 1.0, 1.3333333])
     parser.add_argument('--normal-beta-sigma-grid-min-d', type=int, default=5)
+    parser.add_argument('--normal-eb-sigma-grid-scales', type=float, nargs='+',
+                        default=[0.75, 1.0, 1.3333333])
     return parser.parse_args()
 # fmt: on
 
