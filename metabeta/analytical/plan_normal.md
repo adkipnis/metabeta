@@ -137,6 +137,13 @@ is real, but the earlier broad β corrections were harmful on population metrics
 not add another production correction unless a future candidate can improve this tail
 without moving the 8k benchmark backward.
 
+Low-priority future work: test a very narrow β-only safeguard for the sampled/mixed
+FFX tail, adapted from the existing BLUP/σ guard. It should trigger only on high-d,
+prior-capped or weak-precision, singular/near-singular rows, and apply at most a small
+extra blend toward the prior/scalar-grid posterior mean. This is not an active plan
+because previous broader β shrinkage variants improved selected tails but hurt full
+population metrics.
+
 Commands
 --------
 
