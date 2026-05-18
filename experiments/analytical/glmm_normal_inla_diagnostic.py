@@ -23,7 +23,7 @@ from metabeta.utils.experiments import dataFilePath
 
 
 DATA_IDS = ['small-n-mixed', 'medium-n-mixed', 'large-n-mixed', 'huge-n-mixed']
-METHODS = ['normal_eb', 'normal_sigma_grid', 'normal_sigma_grid_srfx']
+METHODS = ['normal_eb', 'normal_sigma_grid', 'normal_sigma_grid_srfx', 'normal_tail_beta']
 TAIL_METRICS = [
     'ffx_eb_rmse',
     'sigma_eb_rmse',
@@ -164,6 +164,7 @@ def _methodKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
             'normal_laplace_eb': True,
             'normal_laplace_eb_sigma_grid_refine': False,
             'normal_beta_sigma_grid': False,
+            'normal_beta_tail_grid': False,
         }
     if method == 'normal_sigma_grid':
         return {
@@ -172,6 +173,7 @@ def _methodKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
             'normal_laplace_eb': True,
             'normal_laplace_eb_sigma_grid_refine': False,
             'normal_beta_sigma_grid': True,
+            'normal_beta_tail_grid': False,
             'normal_beta_sigma_grid_scales': args.normal_beta_sigma_grid_scales,
             'normal_beta_sigma_grid_min_d': args.normal_beta_sigma_grid_min_d,
         }
@@ -183,8 +185,26 @@ def _methodKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
             'normal_laplace_eb_sigma_grid_refine': True,
             'normal_laplace_eb_sigma_grid_scales': args.normal_eb_sigma_grid_scales,
             'normal_beta_sigma_grid': True,
+            'normal_beta_tail_grid': False,
             'normal_beta_sigma_grid_scales': args.normal_beta_sigma_grid_scales,
             'normal_beta_sigma_grid_min_d': args.normal_beta_sigma_grid_min_d,
+        }
+    if method == 'normal_tail_beta':
+        return {
+            'map_refine': True,
+            'bernoulli_laplace_eb': False,
+            'normal_laplace_eb': True,
+            'normal_laplace_eb_sigma_grid_refine': True,
+            'normal_laplace_eb_sigma_grid_scales': args.normal_eb_sigma_grid_scales,
+            'normal_beta_sigma_grid': True,
+            'normal_beta_sigma_grid_scales': args.normal_beta_sigma_grid_scales,
+            'normal_beta_sigma_grid_min_d': args.normal_beta_sigma_grid_min_d,
+            'normal_beta_tail_grid': True,
+            'normal_beta_tail_grid_scales': args.normal_beta_tail_grid_scales,
+            'normal_beta_tail_grid_axis_scales': args.normal_beta_tail_grid_axis_scales,
+            'normal_beta_tail_grid_min_d': args.normal_beta_tail_grid_min_d,
+            'normal_beta_tail_grid_min_cond': args.normal_beta_tail_grid_min_cond,
+            'normal_beta_tail_grid_blend': args.normal_beta_tail_grid_blend,
         }
     raise ValueError(f'unsupported analytical method: {method}')
 
@@ -906,6 +926,13 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--normal-beta-sigma-grid-min-d', type=int, default=5)
     parser.add_argument('--normal-eb-sigma-grid-scales', type=float, nargs='+',
                         default=[0.75, 1.0, 1.3333333])
+    parser.add_argument('--normal-beta-tail-grid-scales', type=float, nargs='+',
+                        default=[0.75, 1.0, 1.3333333])
+    parser.add_argument('--normal-beta-tail-grid-axis-scales', type=float, nargs='*',
+                        default=[])
+    parser.add_argument('--normal-beta-tail-grid-min-d', type=int, default=9)
+    parser.add_argument('--normal-beta-tail-grid-min-cond', type=float, default=1000.0)
+    parser.add_argument('--normal-beta-tail-grid-blend', type=float, default=0.25)
     return parser.parse_args()
 # fmt: on
 

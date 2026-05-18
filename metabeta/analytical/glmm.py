@@ -227,6 +227,14 @@ def glmm(
         'normal_beta_sigma_grid_scales', (0.75, 1.0, 1.3333333)
     )
     normal_beta_sigma_grid_min_d = kwargs.pop('normal_beta_sigma_grid_min_d', 5)
+    normal_beta_tail_grid = kwargs.pop('normal_beta_tail_grid', likelihood_family == 0)
+    normal_beta_tail_grid_scales = kwargs.pop(
+        'normal_beta_tail_grid_scales', (0.75, 1.0, 1.3333333)
+    )
+    normal_beta_tail_grid_axis_scales = kwargs.pop('normal_beta_tail_grid_axis_scales', ())
+    normal_beta_tail_grid_min_d = kwargs.pop('normal_beta_tail_grid_min_d', 9)
+    normal_beta_tail_grid_min_cond = kwargs.pop('normal_beta_tail_grid_min_cond', 1000.0)
+    normal_beta_tail_grid_blend = kwargs.pop('normal_beta_tail_grid_blend', 0.25)
     beta_alpha_low = kwargs.pop('beta_alpha_low', 0.65)
     beta_alpha_high = kwargs.pop('beta_alpha_high', 0.75)
     bernoulli_laplace_eb_default = 'bernoulli_eb' if likelihood_family == 1 else False
@@ -357,6 +365,12 @@ def glmm(
                 beta_alpha_high=beta_alpha_high,
                 sigma_grid_refine=normal_laplace_eb_sigma_grid_refine,
                 sigma_grid_scales=normal_laplace_eb_sigma_grid_scales,
+                beta_tail_grid=normal_beta_tail_grid,
+                beta_tail_grid_scales=normal_beta_tail_grid_scales,
+                beta_tail_grid_axis_scales=normal_beta_tail_grid_axis_scales,
+                beta_tail_grid_min_d=normal_beta_tail_grid_min_d,
+                beta_tail_grid_min_cond=normal_beta_tail_grid_min_cond,
+                beta_tail_grid_blend=normal_beta_tail_grid_blend,
             )
     elif likelihood_family == 1:
         stats = lmmBernoulli(

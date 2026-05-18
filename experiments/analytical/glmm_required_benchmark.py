@@ -19,7 +19,7 @@ from metabeta.utils.experiments import dataFilePath
 
 
 SIZES = ['small', 'medium', 'large', 'huge']
-METHODS = ['default', 'current', 'raw', 'bernoulli_eb', 'normal_eb']
+METHODS = ['default', 'current', 'raw', 'bernoulli_eb', 'normal_eb', 'normal_tail_beta']
 FAMILIES = ['n', 'b', 'p']
 
 
@@ -38,7 +38,7 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
     family = args.family
     print(
         'method,dataset,partition,N,FFX,sRFX,sEps,BLUP,ms_per_ds,gate,accept,'
-        'blup_fallback,beta_capped,sigma_capped',
+        'blup_fallback,beta_capped,beta_tail,sigma_capped',
         flush=True,
     )
     combos = _combos(args, family)
@@ -137,6 +137,7 @@ class _MetricStore:
         self.accept: list[np.ndarray] = []
         self.blup_fallback: list[np.ndarray] = []
         self.beta_capped: list[np.ndarray] = []
+        self.beta_tail: list[np.ndarray] = []
         self.sigma_capped: list[np.ndarray] = []
         self.n_total = 0
 
@@ -166,6 +167,8 @@ class _MetricStore:
             self.beta_capped.append(stats['laplace_eb_beta_output_capped'].detach().cpu().numpy())
         if 'normal_map_beta_prior_capped' in stats:
             self.beta_capped.append(stats['normal_map_beta_prior_capped'].detach().cpu().numpy())
+        if 'normal_beta_tail_grid_gate' in stats:
+            self.beta_tail.append(stats['normal_beta_tail_grid_gate'].detach().cpu().numpy())
         if 'laplace_eb_sigma_prior_capped' in stats:
             self.sigma_capped.append(stats['laplace_eb_sigma_prior_capped'].detach().cpu().numpy())
         self.n_total += B
@@ -201,6 +204,9 @@ class _MetricStore:
         beta_capped = (
             float(np.mean(np.concatenate(self.beta_capped))) if self.beta_capped else float('nan')
         )
+        beta_tail = (
+            float(np.mean(np.concatenate(self.beta_tail))) if self.beta_tail else float('nan')
+        )
         sigma_capped = (
             float(np.mean(np.concatenate(self.sigma_capped))) if self.sigma_capped else float('nan')
         )
@@ -224,6 +230,7 @@ class _MetricStore:
                 f'{accept:.3f}',
                 f'{blup_fallback:.3f}',
                 f'{beta_capped:.3f}',
+                f'{beta_tail:.3f}',
                 f'{sigma_capped:.3f}',
             ]
         )
@@ -249,6 +256,8 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
         return {'bernoulli_laplace_eb': 'bernoulli_eb', 'normal_laplace_eb': False}
     if method == 'normal_eb':
         return {'bernoulli_laplace_eb': False, 'normal_laplace_eb': True}
+    if method == 'normal_tail_beta':
+        return {'bernoulli_laplace_eb': False, 'normal_laplace_eb': True}
     return {'bernoulli_laplace_eb': False}
 
 
@@ -267,7 +276,7 @@ def _bernoulliEbKwargs(method: str, args: argparse.Namespace) -> dict[str, int |
 
 
 def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
-    if method not in {'default', 'current', 'normal_eb'}:
+    if method not in {'default', 'current', 'normal_eb', 'normal_tail_beta'}:
         return {}
     out = {
         'normal_laplace_eb_mode': args.normal_eb_mode,
@@ -278,10 +287,20 @@ def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
         'normal_laplace_eb_sigma_grid_scales': args.normal_eb_sigma_grid_scales,
         'normal_beta_sigma_grid_scales': args.normal_beta_sigma_grid_scales,
         'normal_beta_sigma_grid_min_d': args.normal_beta_sigma_grid_min_d,
+        'normal_beta_tail_grid_scales': args.normal_beta_tail_grid_scales,
+        'normal_beta_tail_grid_axis_scales': args.normal_beta_tail_grid_axis_scales,
+        'normal_beta_tail_grid_min_d': args.normal_beta_tail_grid_min_d,
+        'normal_beta_tail_grid_min_cond': args.normal_beta_tail_grid_min_cond,
+        'normal_beta_tail_grid_blend': args.normal_beta_tail_grid_blend,
     }
     if method == 'normal_eb':
         out['normal_laplace_eb_sigma_grid_refine'] = args.normal_eb_sigma_grid_refine
         out['normal_beta_sigma_grid'] = args.normal_beta_sigma_grid
+        out['normal_beta_tail_grid'] = False
+    if method == 'normal_tail_beta':
+        out['normal_laplace_eb_sigma_grid_refine'] = True
+        out['normal_beta_sigma_grid'] = True
+        out['normal_beta_tail_grid'] = True
     return out
 
 
@@ -307,6 +326,11 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--normal-beta-sigma-grid', action='store_true')
     parser.add_argument('--normal-beta-sigma-grid-scales', type=float, nargs='+', default=[0.75, 1.0, 1.3333333])
     parser.add_argument('--normal-beta-sigma-grid-min-d', type=int, default=5)
+    parser.add_argument('--normal-beta-tail-grid-scales', type=float, nargs='+', default=[0.75, 1.0, 1.3333333])
+    parser.add_argument('--normal-beta-tail-grid-axis-scales', type=float, nargs='*', default=[])
+    parser.add_argument('--normal-beta-tail-grid-min-d', type=int, default=9)
+    parser.add_argument('--normal-beta-tail-grid-min-cond', type=float, default=1000.0)
+    parser.add_argument('--normal-beta-tail-grid-blend', type=float, default=0.25)
     return parser.parse_args()
 # fmt: on
 
