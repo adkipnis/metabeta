@@ -124,28 +124,28 @@ First-1000 required normal rows:
 Combined with `normal_beta_sigma_grid=True`, FFX remains equal to the β-grid path while
 the σ/BLUP gains above are retained.
 
-Full 8k required benchmark, β sigma-grid vs β sigma-grid plus direct σ_rfx grid:
+Full 8k required benchmark, β sigma-grid vs current β sigma-grid plus direct σ_rfx grid
+and BLUP guard:
 
-| Dataset | part | β-grid FFX | +σ-grid FFX | β-grid σ | +σ-grid σ | β-grid BLUP | +σ-grid BLUP | β-grid ms | +σ-grid ms |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.1860 | 0.1859 | 0.3688 | 0.3593 | 0.3756 | 0.3745 | 3.60 | 3.48 |
-| small-n-sampled | valid | 0.1485 | 0.1486 | 0.5212 | 0.4950 | 0.4617 | 0.4614 | 3.34 | 3.36 |
-| small-n-sampled | test | 0.2316 | 0.2315 | 0.4724 | 0.4772 | 0.4608 | 0.4609 | 3.42 | 3.33 |
-| medium-n-mixed | train | 0.2190 | 0.2190 | 0.3106 | 0.3062 | 0.4025 | 0.4023 | 5.85 | 5.65 |
-| medium-n-sampled | valid | 0.2510 | 0.2510 | 0.4081 | 0.4000 | 0.4828 | 0.4823 | 5.85 | 5.75 |
-| medium-n-sampled | test | 0.2530 | 0.2530 | 0.5073 | 0.4412 | 0.5049 | 0.5030 | 5.91 | 5.84 |
-| large-n-mixed | train | 0.2149 | 0.2149 | 0.3400 | 0.3162 | 0.4091 | 0.4072 | 7.46 | 7.38 |
-| large-n-sampled | valid | 0.2870 | 0.2870 | 0.3980 | 0.3781 | 0.5203 | 0.5190 | 7.50 | 7.61 |
-| large-n-sampled | test | 0.2721 | 0.2721 | 0.3772 | 0.3602 | 0.5030 | 0.5022 | 7.83 | 7.83 |
-| huge-n-mixed | train | 0.2404 | 0.2404 | 0.3205 | 0.3015 | 0.4272 | 0.4262 | 10.21 | 10.17 |
-| huge-n-sampled | valid | 0.3026 | 0.3026 | 0.4041 | 0.3984 | 0.6752 | 0.6735 | 11.05 | 11.25 |
-| huge-n-sampled | test | 0.2704 | 0.2704 | 0.3865 | 0.3617 | 0.4917 | 0.4899 | 10.89 | 11.12 |
+| Dataset | part | β-grid FFX | current FFX | β-grid σ | current σ | β-grid BLUP | current BLUP | β-grid ms | current ms | guard |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | train | 0.1860 | 0.1859 | 0.3688 | 0.3593 | 0.3756 | 0.3745 | 3.60 | 3.44 | 0.000 |
+| small-n-sampled | valid | 0.1485 | 0.1486 | 0.5212 | 0.4950 | 0.4617 | 0.4614 | 3.34 | 3.21 | 0.000 |
+| small-n-sampled | test | 0.2316 | 0.2315 | 0.4724 | 0.4772 | 0.4608 | 0.4609 | 3.42 | 3.34 | 0.000 |
+| medium-n-mixed | train | 0.2190 | 0.2190 | 0.3106 | 0.3062 | 0.4025 | 0.4023 | 5.85 | 5.52 | 0.000 |
+| medium-n-sampled | valid | 0.2510 | 0.2510 | 0.4081 | 0.4000 | 0.4828 | 0.4823 | 5.85 | 5.67 | 0.000 |
+| medium-n-sampled | test | 0.2530 | 0.2530 | 0.5073 | 0.4412 | 0.5049 | 0.5030 | 5.91 | 5.76 | 0.000 |
+| large-n-mixed | train | 0.2149 | 0.2149 | 0.3400 | 0.3162 | 0.4091 | 0.4072 | 7.46 | 7.18 | 0.000 |
+| large-n-sampled | valid | 0.2870 | 0.2870 | 0.3980 | 0.3781 | 0.5203 | 0.5190 | 7.50 | 7.40 | 0.000 |
+| large-n-sampled | test | 0.2721 | 0.2721 | 0.3772 | 0.3602 | 0.5030 | 0.5022 | 7.83 | 7.70 | 0.000 |
+| huge-n-mixed | train | 0.2404 | 0.2404 | 0.3205 | 0.3029 | 0.4272 | 0.4263 | 10.21 | 9.99 | 0.003 |
+| huge-n-sampled | valid | 0.3026 | 0.3026 | 0.4041 | 0.3631 | 0.6752 | 0.4906 | 11.05 | 11.67 | 0.002 |
+| huge-n-sampled | test | 0.2704 | 0.2704 | 0.3865 | 0.3630 | 0.4917 | 0.4898 | 10.89 | 11.49 | 0.003 |
 
-Decision: keep the combined opt-in path as the strongest current Normal analytical
-candidate. The direct σ_rfx grid improves σ NRMSE on 11/12 rows, has negligible FFX
-impact, slightly improves BLUP on 11/12 rows, and has no meaningful runtime penalty in
-the 8k CPU benchmark. The one σ regression is `small-n-sampled test`
-(`0.4724 -> 0.4772`), too small and isolated to justify dropping the patch.
+Decision: keep the combined path as the strongest current Normal analytical candidate.
+The direct σ_rfx grid improves σ NRMSE on 11/12 rows, and the BLUP guard fixes the
+`huge-n-sampled valid` tail without affecting smaller rows. The guard fires only on huge
+rows (`0.2-0.3%`), so the added logic is narrow.
 
 Sigma-Grid Variant Sweep
 ------------------------
@@ -199,21 +199,23 @@ diagonal R-INLA on those rows:
 - the common signature is high-d sampled design aliasing: `d >= 13`, max fixed/random
   design R2 `1.0`, and singular residual fixed-effect design after projecting out `Z`.
 
-Next patch candidate: add a targeted Normal BLUP/sigma guard for aliased sampled rows.
-Use design aliasing plus BLUP norm inflation, not a broad cap. The likely fallback is to
-recompute BLUPs and the posterior-moment σ update from a more conservative β residual
-source, or reject σ candidates that imply implausible BLUP RMS relative to prior/σ scale.
-Any guard must be tested first on `huge-n-sampled valid` and then on the full 8k suite.
+Implemented guard: for rare high-d rows where the final BLUP RMS and at least one σ_rfx
+dimension exceed the random-effect prior scale by a large margin, cap only inflated
+σ_rfx dimensions at `4 * tau_rfx` and recompute BLUPs using OLS residuals. Reported β is
+unchanged. On the two known pathologies:
+
+- dataset `1550`: BLUP RMSE `6.525 -> 0.088`;
+- dataset `7580`: BLUP RMSE `1.744 -> 0.528`.
 
 Next Steps
 ----------
 
-1. Treat scalar β sigma-grid plus direct σ_rfx grid as the current best Normal candidate.
-   Keep flags explicit until the next R-INLA comparison is refreshed, then consider making
-   this the default Normal EB path.
-2. Investigate the targeted BLUP/sigma guard above before broader INLA-style machinery;
-   the row outlier is a small high-leverage tail, so a narrow fallback is the lowest-risk
-   next move.
+1. Treat scalar β sigma-grid plus direct σ_rfx grid plus the BLUP guard as the current
+   best Normal candidate. Keep flags explicit until the next R-INLA comparison is
+   refreshed, then consider making this the default Normal EB path.
+2. Refresh the Normal R-INLA comparison with the guarded current path, especially sampled
+   valid/test rows, to check whether the `huge-n-sampled valid` INLA gap is now mostly
+   closed.
 3. Do not reintroduce axis, ratio, or post-EB grid branches unless a later diagnostic finds
    a new tail pattern where scalar averaging is not enough.
 4. Curvature-aware β shrinkage was tested and removed. It shrank cap-hit, high-d rows

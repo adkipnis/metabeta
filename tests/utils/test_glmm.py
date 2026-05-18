@@ -412,6 +412,7 @@ def test_glmm_normal_laplace_eb_default_smoke():
     assert torch.isfinite(result['blup_est']).all()
     assert torch.isfinite(result['normal_laplace_eb_accept']).all()
     assert torch.isfinite(result['normal_laplace_eb_sigma_grid_accept']).all()
+    assert torch.isfinite(result['normal_laplace_eb_blup_guard']).all()
     assert torch.isfinite(result['normal_laplace_eb_steps']).all()
 
 

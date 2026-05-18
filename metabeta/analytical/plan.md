@@ -6,8 +6,8 @@ Analytical GLMM Plan
   Post-EB, axis, and variance-ratio beta-grid variants were tested; none improved accuracy
   over the current scalar sigma-grid. Curvature-aware β shrinkage was also tested and
   removed. The current best Normal candidate is scalar β sigma-grid plus direct σ_rfx EB
-  coordinate grid; the full 8k required benchmark includes mixed/train and sampled
-  valid/test rows.
+  coordinate grid plus a rare BLUP/sigma guard for high-d aliased rows; the full 8k
+  required benchmark includes mixed/train and sampled valid/test rows.
 - [plan_bernoulli.md](plan_bernoulli.md) — Bernoulli GLMM: default Bernoulli EB path;
   no full INLA or separate amortized-correction branch.
 

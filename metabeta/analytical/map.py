@@ -494,6 +494,87 @@ def _recomputeNormalFinalDiagMap(
     return out
 
 
+def _guardNormalAliasedBlups(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    ns: torch.Tensor,
+    sigma_rfx: torch.Tensor,
+    tau_rfx: torch.Tensor,
+    mask_d: torch.Tensor | None,
+    mask_q: torch.Tensor | None,
+    beta_base: torch.Tensor,
+    beta_output: torch.Tensor,
+    sigma_prior_cap: float = 4.0,
+    blup_prior_ratio: float = 4.0,
+    min_d: int = 13,
+) -> dict[str, torch.Tensor]:
+    """Fallback for rare high-d aliased rows with implausibly large BLUPs."""
+    q = Zm.shape[-1]
+    B = Xm.shape[0]
+    device, dtype = Xm.device, Xm.dtype
+    active_m = mask_m.bool()
+    active_q = (
+        mask_q[..., :q].bool()
+        if mask_q is not None
+        else torch.ones((B, q), device=device, dtype=torch.bool)
+    )
+    active = active_m[:, :, None] & active_q[:, None, :]
+    denom = active.to(dtype).sum(dim=(1, 2)).clamp(min=1.0)
+    blup = stats['blup_est'][..., :q]
+    blup_rms = ((blup.square() * active.to(dtype)).sum(dim=(1, 2)) / denom).sqrt()
+
+    tau = tau_rfx[..., :q].to(device=device, dtype=dtype).clamp(min=1e-4)
+    tau_rms = (
+        (tau.square() * active_q.to(dtype)).sum(dim=-1) / active_q.sum(dim=-1).clamp(min=1)
+    ).sqrt()
+    sigma_active = sigma_rfx[..., :q].to(device=device, dtype=dtype).clamp(min=1e-4)
+    sigma_inflated = (sigma_active > float(sigma_prior_cap) * tau) & active_q
+
+    if mask_d is not None:
+        d_count = mask_d.bool().sum(dim=-1)
+    else:
+        d_count = torch.full((B,), Xm.shape[-1], device=device, dtype=torch.long)
+    guard = (
+        (d_count >= int(min_d))
+        & sigma_inflated.any(dim=-1)
+        & (blup_rms > float(blup_prior_ratio) * tau_rms.clamp(min=1e-4))
+    )
+    if not guard.any():
+        out = dict(stats)
+        out['normal_laplace_eb_blup_guard'] = torch.zeros((B,), device=device, dtype=dtype)
+        return out
+
+    sigma_guard = torch.minimum(sigma_active, float(sigma_prior_cap) * tau)
+    sigma_guard = torch.where(active_q, sigma_guard, sigma_active)
+    sigma_next = torch.where(guard[:, None], sigma_guard, sigma_active)
+
+    XtX = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)
+    Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)
+    beta_ols = _safeSolve(XtX + _adaptiveRidge(XtX), Xty)
+    beta_ols = beta_ols.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    beta_for_blup = torch.where(guard[:, None], beta_ols, beta_base)
+
+    out = _recomputeNormalFinalDiagMap(
+        stats,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        ns,
+        sigma_next,
+        mask_q,
+        beta_override=beta_output,
+        beta_for_blup_override=beta_for_blup,
+    )
+    out['normal_laplace_eb_blup_guard'] = guard.to(dtype)
+    return out
+
+
 def refineNormalMapSrfx(
     stats: dict[str, torch.Tensor],
     Xm: torch.Tensor,
@@ -820,7 +901,7 @@ def refineNormalLaplaceEb(
         out['normal_laplace_eb_base_target'] = base_target.detach()
         if 'Psi' in stats:
             if recompute_blup:
-                return _recomputeNormalFinalDiagMap(
+                out = _recomputeNormalFinalDiagMap(
                     out,
                     Xm,
                     ym,
@@ -834,6 +915,21 @@ def refineNormalLaplaceEb(
                     beta_alpha_high=beta_alpha_high,
                     beta_override=beta_output if beta.shape[-1] > 4 else None,
                     beta_for_blup_override=beta if beta.shape[-1] > 4 else None,
+                )
+                return _guardNormalAliasedBlups(
+                    out,
+                    Xm,
+                    ym,
+                    Zm,
+                    mask_n,
+                    mask_m,
+                    ns,
+                    sigma_rfx,
+                    tau_rfx,
+                    mask_d,
+                    mask_q,
+                    beta,
+                    beta_output,
                 )
             out['Psi'] = torch.diag_embed(sigma_rfx.square())
         return out
@@ -958,7 +1054,7 @@ def refineNormalLaplaceEb(
 
     if 'Psi' in stats:
         if recompute_blup:
-            return _recomputeNormalFinalDiagMap(
+            out = _recomputeNormalFinalDiagMap(
                 out,
                 Xm,
                 ym,
@@ -972,6 +1068,21 @@ def refineNormalLaplaceEb(
                 beta_alpha_high=beta_alpha_high,
                 beta_override=beta_output if beta.shape[-1] > 4 else None,
                 beta_for_blup_override=beta if beta.shape[-1] > 4 else None,
+            )
+            return _guardNormalAliasedBlups(
+                out,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                ns,
+                sigma_rfx,
+                tau_rfx,
+                mask_d,
+                mask_q,
+                beta,
+                beta_output,
             )
         out['Psi'] = torch.diag_embed(sigma_rfx.square())
     return out
