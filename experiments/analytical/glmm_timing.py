@@ -30,6 +30,10 @@ Usage
   uv run python experiments/analytical/glmm_timing.py
   uv run python experiments/analytical/glmm_timing.py --device cuda --data-id medium-n-sampled
   uv run python experiments/analytical/glmm_timing.py --data-id medium-n-sampled --batches 30
+
+When --device cuda, a CPU vs CUDA comparison section is appended automatically.
+The CPU batches are the same data re-pinned to CPU, so the comparison is apples-to-apples.
+A ratio > 1.0 means CUDA is slower (kernel launch overhead dominates at this problem size).
 """
 
 from __future__ import annotations
@@ -225,6 +229,35 @@ def run(args: argparse.Namespace) -> None:
     print(f'\nLaplaceEB overhead on top of map_20  (no_grad): {eb_overhead:.2f} ms/ds')
     print(f'LaplaceEB alone (eb_only - raw)                : {ng_meds["eb_only"] - raw_t:.2f} ms/ds')
     print(f'\ndefault vs raw  speedup factor: {ng_meds["default"] / raw_t:.1f}x')
+
+    # CPU vs CUDA comparison (only when running on CUDA)
+    if device.type != 'cuda':
+        return
+
+    print('\n' + '=' * 60)
+    print('CPU vs CUDA comparison  (no_grad, same batches re-pinned to CPU)')
+    print('ratio = CUDA_med / CPU_med  (> 1.0 means CUDA is slower)')
+    print('=' * 60 + '\n')
+
+    cpu_device = torch.device('cpu')
+    cpu_batches = [toDevice(b, cpu_device) for b in batches]
+    cpu_warmup = 2
+
+    cmp_rows = []
+    for v_name, v_kwargs in VARIANTS:
+        cuda_med = ng_meds[v_name]
+        cpu_med, cpu_std = _time_variant(
+            cpu_batches, max_q, likelihood_family, v_kwargs,
+            'no_grad', cpu_device, cpu_warmup,
+        )
+        ratio = cuda_med / cpu_med if cpu_med > 0 else float('nan')
+        cmp_rows.append([v_name, f'{cpu_med:.2f}', f'{cuda_med:.2f}', f'{ratio:.2f}'])
+
+    print(tabulate(
+        cmp_rows,
+        headers=['variant', 'CPU ms/ds', 'CUDA ms/ds', 'CUDA/CPU ratio'],
+        tablefmt='simple',
+    ))
 
 
 # fmt: off
