@@ -12,14 +12,17 @@ not a backend. Keep the production path batched, simple, and in the low-millisec
 Retained Path
 -------------
 
-`glmm()` currently uses:
+`glmm()` now defaults to guarded Normal EB:
 
 - raw Gaussian LMM initialization;
 - marginal MAP refinement of β, diagonal σ_rfx, and σ_eps;
 - reported β cap for `d > 4`: `β_report = clamp(β_MAP, ν_ffx ± 4τ_ffx)`;
 - uncapped MAP β for BLUP residuals;
 - diagonal final Ψ for GLS/BLUP recompute;
-- one-shot posterior-moment EB update for diagonal σ_rfx.
+- one-shot posterior-moment EB update for diagonal σ_rfx;
+- scalar β sigma-grid reporting over σ_rfx scales `{0.75, 1.0, 1.3333333}`;
+- one-pass direct coordinate σ_rfx EB grid over the same scales;
+- rare BLUP/sigma guard for high-d aliased rows with inflated BLUP norm.
 
 The `d > 4` gate is intentional: MAP β carry-forward improves medium/large/huge rows but
 overfits small low-d rows. The β cap is reporting-only; BLUP accuracy is protected by
@@ -28,22 +31,22 @@ continuing to use the uncapped MAP β internally.
 Current Performance
 -------------------
 
-First 1000 datasets per row. Lower NRMSE is better.
+First 1000 datasets per row with the default guarded EB path. Lower NRMSE is better.
 
-| Dataset | part | EB FFX | EB σ | EB σ_eps | EB BLUP | EB ms |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.1095 | 0.4203 | 0.2151 | 0.4173 | 2.52 |
-| small-n-sampled | valid | 0.2588 | 0.5646 | 0.2169 | 0.5125 | 2.50 |
-| small-n-sampled | test | 0.2827 | 0.4684 | 0.2169 | 0.4924 | 2.54 |
-| medium-n-mixed | train | 0.2515 | 0.3619 | 0.1655 | 0.4198 | 3.05 |
-| medium-n-sampled | valid | 0.2766 | 0.4131 | 0.1891 | 0.5151 | 3.71 |
-| medium-n-sampled | test | 0.2623 | 0.3964 | 0.1949 | 0.4417 | 3.63 |
-| large-n-mixed | train | 0.4075 | 0.3711 | 0.1268 | 0.4148 | 4.23 |
-| large-n-sampled | valid | 0.3009 | 0.4316 | 0.1563 | 0.5069 | 4.39 |
-| large-n-sampled | test | 0.3579 | 0.4415 | 0.1513 | 0.5126 | 4.66 |
-| huge-n-mixed | train | 0.3314 | 0.3776 | 0.1161 | 0.4545 | 5.34 |
-| huge-n-sampled | valid | 0.4485 | 0.3694 | 0.1375 | 0.4574 | 6.43 |
-| huge-n-sampled | test | 0.3398 | 0.3870 | 0.1438 | 0.4619 | 6.63 |
+| Dataset | part | FFX | σ | σ_eps | BLUP | ms | guard |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | train | 0.1089 | 0.4002 | 0.2151 | 0.4156 | 5.41 | 0.000 |
+| small-n-sampled | valid | 0.2608 | 0.5695 | 0.2169 | 0.5119 | 4.61 | 0.000 |
+| small-n-sampled | test | 0.2828 | 0.4759 | 0.2169 | 0.4931 | 4.32 | 0.000 |
+| medium-n-mixed | train | 0.2283 | 0.3617 | 0.1655 | 0.4197 | 7.32 | 0.000 |
+| medium-n-sampled | valid | 0.2626 | 0.4186 | 0.1891 | 0.5145 | 15.22 | 0.000 |
+| medium-n-sampled | test | 0.2594 | 0.3825 | 0.1949 | 0.4403 | 12.25 | 0.000 |
+| large-n-mixed | train | 0.2630 | 0.3643 | 0.1268 | 0.4135 | 10.23 | 0.000 |
+| large-n-sampled | valid | 0.2994 | 0.4159 | 0.1563 | 0.5045 | 9.91 | 0.000 |
+| large-n-sampled | test | 0.2878 | 0.4346 | 0.1513 | 0.5126 | 10.54 | 0.000 |
+| huge-n-mixed | train | 0.2799 | 0.3484 | 0.1161 | 0.4528 | 12.47 | 0.004 |
+| huge-n-sampled | valid | 0.4448 | 0.3562 | 0.1375 | 0.4555 | 19.63 | 0.000 |
+| huge-n-sampled | test | 0.3037 | 0.3689 | 0.1438 | 0.4604 | 11.11 | 0.002 |
 
 R-INLA Reference
 ----------------
@@ -142,10 +145,38 @@ and BLUP guard:
 | huge-n-sampled | valid | 0.3026 | 0.3026 | 0.4041 | 0.3631 | 0.6752 | 0.4906 | 11.05 | 11.67 | 0.002 |
 | huge-n-sampled | test | 0.2704 | 0.2704 | 0.3865 | 0.3630 | 0.4917 | 0.4898 | 10.89 | 11.49 | 0.003 |
 
-Decision: keep the combined path as the strongest current Normal analytical candidate.
+Decision: keep the combined path as the default Normal analytical path.
 The direct σ_rfx grid improves σ NRMSE on 11/12 rows, and the BLUP guard fixes the
 `huge-n-sampled valid` tail without affecting smaller rows. The guard fires only on huge
 rows (`0.2-0.3%`), so the added logic is narrow.
+
+FFX Tail Diagnostic
+-------------------
+
+Run 2026-05-18 with the default guarded method, scanning 8000 mixed/train rows each for
+medium/large/huge and running diagonal R-INLA on the 16 largest analytical FFX-RMSE rows
+per size. This is a tail attribution diagnostic, not a population average.
+
+| Bin | N | EB FFX | INLA FFX | Δ | worse% |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| medium tail, d=5-8 | 16 | 0.7009 | 0.5426 | +0.1582 | 0.75 |
+| large tail, d=9-12 | 16 | 0.4315 | 0.1956 | +0.2358 | 0.94 |
+| huge tail, d>=13 | 16 | 0.5211 | 0.2310 | +0.2901 | 0.94 |
+| cap-hit tail | 24 | 0.5337 | 0.2163 | +0.3174 | 0.96 |
+| no-cap tail | 24 | 0.5686 | 0.4299 | +0.1387 | 0.79 |
+
+Interpretation:
+
+- the remaining large/huge FFX gap is concentrated in the rare worst tail
+  (`16 / 8000` rows per size) and is mostly high-d for the size;
+- many top rows have singular or very high residual fixed-effect condition after
+  projecting random effects, often with fixed/random design aliasing;
+- BLUP is mostly no longer the problem after the guard; in the selected FFX tail,
+  average BLUP differences are small except one huge high-alias outlier;
+- INLA's β posterior-mean shift is strongly aligned with the analytical β error:
+  overall shift/error cosine `0.7068`, with `0.8234` for large and `0.8388` for
+  huge tail rows. This suggests a real posterior-mean correction signal, but it is
+  tail-specific and should not be implemented as broad prior shrinkage.
 
 Sigma-Grid Variant Sweep
 ------------------------
@@ -210,12 +241,11 @@ unchanged. On the two known pathologies:
 Next Steps
 ----------
 
-1. Treat scalar β sigma-grid plus direct σ_rfx grid plus the BLUP guard as the current
-   best Normal candidate. Keep flags explicit until the next R-INLA comparison is
-   refreshed, then consider making this the default Normal EB path.
-2. Refresh the Normal R-INLA comparison with the guarded current path, especially sampled
+1. Keep scalar β sigma-grid plus direct σ_rfx grid plus the BLUP guard as the default
+   Normal EB path.
+2. Refresh the Normal R-INLA comparison with default `current`, especially sampled
    valid/test rows, to check whether the `huge-n-sampled valid` INLA gap is now mostly
-   closed.
+   closed after the BLUP guard.
 3. Do not reintroduce axis, ratio, or post-EB grid branches unless a later diagnostic finds
    a new tail pattern where scalar averaging is not enough.
 4. Curvature-aware β shrinkage was tested and removed. It shrank cap-hit, high-d rows
@@ -227,9 +257,12 @@ Next Steps
    - scalar sigma-grid reference: large mixed `0.2630`, huge mixed `0.2799`.
 5. Direct σ_rfx grid passed the 8k benchmark as a variance-scale companion to the β
    reporting grid, but it does not solve the FFX tail gap by itself.
-6. If more FFX improvement is needed after the next INLA comparison, revisit fixed-effect
-   posterior mean correction, but not as direct shrink-to-prior; the failed curvature
-   shrink suggests that the missing behavior is not a simple reliability scalar.
+6. The next plausible FFX extension is a tail-gated posterior-mean correction for
+   ill-conditioned rows. The diagnostic signal to mimic is INLA's β shift, which is
+   strongly aligned with the analytical β error in large/huge tails. Do not implement
+   this as broad shrink-to-prior; the failed curvature shrink suggests the missing
+   behavior is a design/hyperparameter-averaging correction, not a simple reliability
+   scalar.
 7. Avoid broad posterior machinery, multi-starts, EP, full PyTorch INLA, or NPE-context
    ablations for this analytical phase.
 
@@ -242,28 +275,25 @@ Use `python -u` for all long analytical runs so completed blocks stream immediat
 uv run python -u experiments/analytical/glmm_required_benchmark.py \
     --family n --methods current raw --max-datasets 1000 --batch-size 32
 
-uv run python -u experiments/analytical/glmm_required_benchmark.py \
-    --family n --methods current --max-datasets 1000 --batch-size 32 \
-    --normal-beta-sigma-grid \
-    --normal-beta-sigma-grid-scales 0.75 1.0 1.3333333
-
-uv run python -u experiments/analytical/glmm_required_benchmark.py \
-    --family n --methods current --max-datasets 1000 --batch-size 32 \
-    --normal-eb-sigma-grid-refine --normal-beta-sigma-grid
-
 uv run python -u experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-n-mixed,medium-n-mixed,large-n-mixed,huge-n-mixed \
     --partition train --n-epochs 2 --n-inla 1000 --n-total 1000 \
-    --analytical-methods normal_eb,normal_sigma_grid --re-correlation diagonal
+    --analytical-methods normal_eb,current --re-correlation diagonal
 
 uv run python -u experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-n-sampled,medium-n-sampled,large-n-sampled,huge-n-sampled \
     --partition valid --n-inla 1000 --n-total 1000 \
-    --analytical-methods normal_eb,normal_sigma_grid --re-correlation diagonal
+    --analytical-methods normal_eb,current --re-correlation diagonal
 
 uv run python -u experiments/analytical/glmm_normal_inla_diagnostic.py \
     --data-ids huge-n-sampled --partition valid --tail-scan 8000 --tail-k 16 \
     --tail-metric blup_eb_rmse --methods normal_sigma_grid_srfx --batch-size 32
+
+uv run python -u experiments/analytical/glmm_normal_inla_diagnostic.py \
+    --data-ids medium-n-mixed large-n-mixed huge-n-mixed --partition train \
+    --n-epochs 2 --tail-scan 8000 --tail-k 16 --tail-metric ffx_eb_rmse \
+    --methods normal_sigma_grid_srfx --batch-size 32 \
+    --output-csv experiments/analytical/normal_ffx_tail_posterior_shift.csv
 
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical tests
