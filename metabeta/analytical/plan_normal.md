@@ -90,9 +90,10 @@ First-1000 required normal rows:
 | huge-n-sampled | valid | 0.4485 | 0.4448 | 8.34 |
 | huge-n-sampled | test | 0.3398 | 0.3037 | 8.56 |
 
-Decision: keep σ-grid opt-in until the full 8k comparison is run. Remove tail-grid and
-direct cap-shrink heuristics from the implementation; they were diagnostics, not retained
-paths.
+Decision: scalar β sigma-grid remains the best fixed-effect reporting patch. The full 8k
+comparison below confirms it is the right companion for direct σ_rfx grid. Remove
+tail-grid and direct cap-shrink heuristics from the implementation; they were diagnostics,
+not retained paths.
 
 Direct σ_rfx Grid Candidate
 ---------------------------
@@ -121,9 +122,30 @@ First-1000 required normal rows:
 | huge-n-sampled | test | 0.3398 | 0.3398 | 0.3870 | 0.3680 | 0.4619 | 0.4604 | 9.19 |
 
 Combined with `normal_beta_sigma_grid=True`, FFX remains equal to the β-grid path while
-the σ/BLUP gains above are retained. This is the best current opt-in combination, but do
-not promote it to default until the full 8k benchmark confirms that the small-sampled
-σ regressions are not material.
+the σ/BLUP gains above are retained.
+
+Full 8k required benchmark, β sigma-grid vs β sigma-grid plus direct σ_rfx grid:
+
+| Dataset | part | β-grid FFX | +σ-grid FFX | β-grid σ | +σ-grid σ | β-grid BLUP | +σ-grid BLUP | β-grid ms | +σ-grid ms |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | train | 0.1860 | 0.1859 | 0.3688 | 0.3593 | 0.3756 | 0.3745 | 3.60 | 3.48 |
+| small-n-sampled | valid | 0.1485 | 0.1486 | 0.5212 | 0.4950 | 0.4617 | 0.4614 | 3.34 | 3.36 |
+| small-n-sampled | test | 0.2316 | 0.2315 | 0.4724 | 0.4772 | 0.4608 | 0.4609 | 3.42 | 3.33 |
+| medium-n-mixed | train | 0.2190 | 0.2190 | 0.3106 | 0.3062 | 0.4025 | 0.4023 | 5.85 | 5.65 |
+| medium-n-sampled | valid | 0.2510 | 0.2510 | 0.4081 | 0.4000 | 0.4828 | 0.4823 | 5.85 | 5.75 |
+| medium-n-sampled | test | 0.2530 | 0.2530 | 0.5073 | 0.4412 | 0.5049 | 0.5030 | 5.91 | 5.84 |
+| large-n-mixed | train | 0.2149 | 0.2149 | 0.3400 | 0.3162 | 0.4091 | 0.4072 | 7.46 | 7.38 |
+| large-n-sampled | valid | 0.2870 | 0.2870 | 0.3980 | 0.3781 | 0.5203 | 0.5190 | 7.50 | 7.61 |
+| large-n-sampled | test | 0.2721 | 0.2721 | 0.3772 | 0.3602 | 0.5030 | 0.5022 | 7.83 | 7.83 |
+| huge-n-mixed | train | 0.2404 | 0.2404 | 0.3205 | 0.3015 | 0.4272 | 0.4262 | 10.21 | 10.17 |
+| huge-n-sampled | valid | 0.3026 | 0.3026 | 0.4041 | 0.3984 | 0.6752 | 0.6735 | 11.05 | 11.25 |
+| huge-n-sampled | test | 0.2704 | 0.2704 | 0.3865 | 0.3617 | 0.4917 | 0.4899 | 10.89 | 11.12 |
+
+Decision: keep the combined opt-in path as the strongest current Normal analytical
+candidate. The direct σ_rfx grid improves σ NRMSE on 11/12 rows, has negligible FFX
+impact, slightly improves BLUP on 11/12 rows, and has no meaningful runtime penalty in
+the 8k CPU benchmark. The one σ regression is `small-n-sampled test`
+(`0.4724 -> 0.4772`), too small and isolated to justify dropping the patch.
 
 Sigma-Grid Variant Sweep
 ------------------------
@@ -161,8 +183,9 @@ removed from code; keep only the map-stage scalar sigma-grid candidate.
 Next Steps
 ----------
 
-1. Run the full 8k Normal benchmark with scalar β sigma-grid plus direct σ_rfx grid before
-   promoting either experimental flag.
+1. Treat scalar β sigma-grid plus direct σ_rfx grid as the current best Normal candidate.
+   Keep flags explicit until the next R-INLA comparison is refreshed, then consider making
+   this the default Normal EB path.
 2. Do not reintroduce axis, ratio, or post-EB grid branches unless a later diagnostic finds
    a new tail pattern where scalar averaging is not enough.
 3. Curvature-aware β shrinkage was tested and removed. It shrank cap-hit, high-d rows
@@ -172,11 +195,11 @@ Next Steps
    - sigma-grid + curvature, power `1.0`: large mixed `0.2637`, huge mixed `0.2807`;
    - sigma-grid + curvature, power `0.5`: large mixed `0.2633`, huge mixed `0.2804`;
    - scalar sigma-grid reference: large mixed `0.2630`, huge mixed `0.2799`.
-4. Direct σ_rfx grid is promising for σ and BLUP but does not solve the FFX tail gap by
-   itself. If it passes 8k, keep it as the variance-scale companion to the β reporting grid.
-5. If direct σ_rfx grid does not pass 8k, revisit fixed-effect posterior mean correction, but
-   not as direct shrink-to-prior; the failed curvature shrink suggests that the missing
-   behavior is not a simple reliability scalar.
+4. Direct σ_rfx grid passed the 8k benchmark as a variance-scale companion to the β
+   reporting grid, but it does not solve the FFX tail gap by itself.
+5. If more FFX improvement is needed after the next INLA comparison, revisit fixed-effect
+   posterior mean correction, but not as direct shrink-to-prior; the failed curvature
+   shrink suggests that the missing behavior is not a simple reliability scalar.
 6. Avoid broad posterior machinery, multi-starts, EP, full PyTorch INLA, or NPE-context
    ablations for this analytical phase.
 
