@@ -94,6 +94,37 @@ Decision: keep σ-grid opt-in until the full 8k comparison is run. Remove tail-g
 direct cap-shrink heuristics from the implementation; they were diagnostics, not retained
 paths.
 
+Direct σ_rfx Grid Candidate
+---------------------------
+
+Implemented as `normal_laplace_eb_sigma_grid_refine=True`. After the current Normal EB
+moment update accepts or rejects its candidate, this runs a one-pass coordinate grid over
+diagonal `σ_rfx` scales `{0.75, 1.0, 1.3333333}`. Each coordinate update is accepted only
+when the exact Gaussian marginal target plus priors improves. β and σ_eps are fixed; final
+GLS/BLUP is recomputed through the existing diagonal path.
+
+First-1000 required normal rows:
+
+| Dataset | part | EB FFX | σ-refine FFX | EB σ | σ-refine σ | EB BLUP | σ-refine BLUP | σ-refine ms |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | train | 0.1095 | 0.1089 | 0.4203 | 0.4002 | 0.4173 | 0.4156 | 3.80 |
+| small-n-sampled | valid | 0.2588 | 0.2608 | 0.5646 | 0.5695 | 0.5125 | 0.5119 | 2.97 |
+| small-n-sampled | test | 0.2827 | 0.2828 | 0.4684 | 0.4759 | 0.4924 | 0.4931 | 2.85 |
+| medium-n-mixed | train | 0.2515 | 0.2515 | 0.3619 | 0.3617 | 0.4198 | 0.4197 | 4.12 |
+| medium-n-sampled | valid | 0.2766 | 0.2766 | 0.4131 | 0.4186 | 0.5151 | 0.5145 | 4.90 |
+| medium-n-sampled | test | 0.2623 | 0.2623 | 0.3964 | 0.3825 | 0.4417 | 0.4403 | 4.79 |
+| large-n-mixed | train | 0.4075 | 0.4075 | 0.3711 | 0.3643 | 0.4148 | 0.4135 | 5.53 |
+| large-n-sampled | valid | 0.3009 | 0.3009 | 0.4316 | 0.4159 | 0.5069 | 0.5045 | 6.02 |
+| large-n-sampled | test | 0.3579 | 0.3579 | 0.4415 | 0.4346 | 0.5126 | 0.5126 | 6.32 |
+| huge-n-mixed | train | 0.3314 | 0.3314 | 0.3776 | 0.3481 | 0.4545 | 0.4526 | 7.13 |
+| huge-n-sampled | valid | 0.4485 | 0.4485 | 0.3694 | 0.3562 | 0.4574 | 0.4555 | 8.76 |
+| huge-n-sampled | test | 0.3398 | 0.3398 | 0.3870 | 0.3680 | 0.4619 | 0.4604 | 9.19 |
+
+Combined with `normal_beta_sigma_grid=True`, FFX remains equal to the β-grid path while
+the σ/BLUP gains above are retained. This is the best current opt-in combination, but do
+not promote it to default until the full 8k benchmark confirms that the small-sampled
+σ regressions are not material.
+
 Sigma-Grid Variant Sweep
 ------------------------
 
@@ -130,7 +161,8 @@ removed from code; keep only the map-stage scalar sigma-grid candidate.
 Next Steps
 ----------
 
-1. Run the full 8k Normal benchmark with the scalar sigma-grid before promoting it.
+1. Run the full 8k Normal benchmark with scalar β sigma-grid plus direct σ_rfx grid before
+   promoting either experimental flag.
 2. Do not reintroduce axis, ratio, or post-EB grid branches unless a later diagnostic finds
    a new tail pattern where scalar averaging is not enough.
 3. Curvature-aware β shrinkage was tested and removed. It shrank cap-hit, high-d rows
@@ -140,10 +172,9 @@ Next Steps
    - sigma-grid + curvature, power `1.0`: large mixed `0.2637`, huge mixed `0.2807`;
    - sigma-grid + curvature, power `0.5`: large mixed `0.2633`, huge mixed `0.2804`;
    - scalar sigma-grid reference: large mixed `0.2630`, huge mixed `0.2799`.
-4. Next candidate: improve σ_rfx EB directly. INLA's most stable remaining advantage is
-   variance-scale accuracy, so test a small per-dimension log-σ refinement around the
-   current EB moment estimate before attempting any richer β posterior correction.
-5. If σ_rfx refinement does not help, revisit fixed-effect posterior mean correction, but
+4. Direct σ_rfx grid is promising for σ and BLUP but does not solve the FFX tail gap by
+   itself. If it passes 8k, keep it as the variance-scale companion to the β reporting grid.
+5. If direct σ_rfx grid does not pass 8k, revisit fixed-effect posterior mean correction, but
    not as direct shrink-to-prior; the failed curvature shrink suggests that the missing
    behavior is not a simple reliability scalar.
 6. Avoid broad posterior machinery, multi-starts, EP, full PyTorch INLA, or NPE-context
@@ -162,6 +193,10 @@ uv run python -u experiments/analytical/glmm_required_benchmark.py \
     --family n --methods current --max-datasets 1000 --batch-size 32 \
     --normal-beta-sigma-grid \
     --normal-beta-sigma-grid-scales 0.75 1.0 1.3333333
+
+uv run python -u experiments/analytical/glmm_required_benchmark.py \
+    --family n --methods current --max-datasets 1000 --batch-size 32 \
+    --normal-eb-sigma-grid-refine --normal-beta-sigma-grid
 
 uv run python -u experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-n-mixed,medium-n-mixed,large-n-mixed,huge-n-mixed \

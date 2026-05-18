@@ -284,6 +284,91 @@ def _normalSigmaGridBetaAverage(
     return beta_avg
 
 
+def _normalSigmaRfxGridRefine(
+    beta: torch.Tensor,
+    sigma_rfx_base: torch.Tensor,
+    log_sigma_eps: torch.Tensor,
+    current_target: torch.Tensor,
+    corr: torch.Tensor,
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor,
+    tau_ffx: torch.Tensor,
+    family_ffx: torch.Tensor,
+    tau_rfx: torch.Tensor,
+    family_sigma_rfx: torch.Tensor,
+    tau_eps: torch.Tensor,
+    family_sigma_eps: torch.Tensor,
+    mask_d: torch.Tensor | None,
+    mask_q: torch.Tensor | None,
+    scales: tuple[float, ...] | list[float],
+    accept_tol: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Coordinate grid refinement of diagonal σ_rfx under the marginal target."""
+    q = sigma_rfx_base.shape[-1]
+    clean_scales = sorted({float(scale) for scale in scales if float(scale) > 0.0})
+    if not clean_scales:
+        clean_scales = [1.0]
+    if all(abs(scale - 1.0) <= 1e-8 for scale in clean_scales):
+        return sigma_rfx_base, current_target, torch.zeros_like(current_target, dtype=torch.bool)
+
+    B = sigma_rfx_base.shape[0]
+    device, dtype = sigma_rfx_base.device, sigma_rfx_base.dtype
+    scale_tensor = torch.tensor(clean_scales, device=device, dtype=dtype)
+    S = scale_tensor.numel()
+    active_q = (
+        mask_q[..., :q].to(device=device).bool()
+        if mask_q is not None
+        else torch.ones(B, q, device=device, dtype=torch.bool)
+    )
+
+    sigma_rfx = sigma_rfx_base.clamp(min=1e-4, max=20.0).clone()
+    target = current_target.clone()
+    changed = torch.zeros(B, device=device, dtype=torch.bool)
+
+    for j in range(q):
+        active_j = active_q[:, j]
+        if not bool(active_j.any()):
+            continue
+        candidates = sigma_rfx[:, None, :].expand(B, S, q).clone()
+        candidates[:, :, j] = (sigma_rfx[:, j, None] * scale_tensor[None]).clamp(min=1e-4, max=20.0)
+        candidate_target = _logMarginalTarget(
+            beta[:, None, :].expand(B, S, beta.shape[-1]),
+            candidates.log(),
+            log_sigma_eps[:, None].expand(B, S),
+            corr,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            nu_ffx,
+            tau_ffx,
+            family_ffx,
+            tau_rfx,
+            family_sigma_rfx,
+            tau_eps,
+            family_sigma_eps,
+            mask_d,
+            mask_q,
+        )
+        candidate_target = candidate_target.nan_to_num(
+            nan=-torch.inf, posinf=torch.inf, neginf=-torch.inf
+        )
+        best_target, best_idx = candidate_target.max(dim=1)
+        improve = active_j & torch.isfinite(best_target) & (best_target > target + accept_tol)
+        sigma_j = candidates[torch.arange(B, device=device), best_idx, j]
+        sigma_rfx[:, j] = torch.where(improve, sigma_j, sigma_rfx[:, j])
+        target = torch.where(improve, best_target, target)
+        changed |= improve
+
+    sigma_rfx = torch.where(active_q, sigma_rfx, sigma_rfx_base)
+    return sigma_rfx, target, changed
+
+
 def _recomputeNormalFinalDiagMap(
     stats: dict[str, torch.Tensor],
     Xm: torch.Tensor,
@@ -611,6 +696,8 @@ def refineNormalLaplaceEb(
     beta_alpha_low: float = 0.65,
     beta_alpha_high: float = 0.75,
     accept_tol: float = 1e-6,
+    sigma_grid_refine: bool = False,
+    sigma_grid_scales: tuple[float, ...] | list[float] = (0.75, 1.0, 1.3333333),
 ) -> dict[str, torch.Tensor]:
     """Prototype diagonal Laplace-EB calibration for Gaussian GLMMs.
 
@@ -698,10 +785,36 @@ def refineNormalLaplaceEb(
             if mask_q is not None:
                 active_q = mask_q[..., :q].bool()
                 sigma_rfx = torch.where(active_q, sigma_rfx, sigma_rfx_base)
+            grid_changed = torch.zeros(B, device=device, dtype=torch.bool)
+            if sigma_grid_refine:
+                sigma_rfx, final_target, grid_changed = _normalSigmaRfxGridRefine(
+                    beta,
+                    sigma_rfx,
+                    log_sigma_eps_base,
+                    torch.where(accept, final_target, base_target),
+                    corr,
+                    Xm,
+                    ym,
+                    Zm,
+                    mask_n,
+                    mask_m,
+                    nu_ffx,
+                    tau_ffx,
+                    family_ffx,
+                    tau_rfx,
+                    family_sigma_rfx,
+                    tau_eps,
+                    family_sigma_eps,
+                    mask_d,
+                    mask_q,
+                    sigma_grid_scales,
+                    accept_tol=accept_tol,
+                )
 
         out = dict(stats)
         out['sigma_rfx_est'] = sigma_rfx
         out['normal_laplace_eb_accept'] = accept.to(dtype)
+        out['normal_laplace_eb_sigma_grid_accept'] = grid_changed.to(dtype)
         out['normal_laplace_eb_steps'] = torch.zeros((B,), device=device, dtype=dtype)
         out['normal_laplace_eb_target'] = final_target.detach()
         out['normal_laplace_eb_base_target'] = base_target.detach()
@@ -802,6 +915,32 @@ def refineNormalLaplaceEb(
     if mask_q is not None:
         active_q = mask_q[..., :q].bool()
         sigma_rfx = torch.where(active_q, sigma_rfx, sigma_rfx_base)
+    grid_changed = torch.zeros(B, device=device, dtype=torch.bool)
+    if sigma_grid_refine:
+        log_sigma_eps_grid = torch.where(accept, log_sigma_eps.detach(), log_sigma_eps_base)
+        sigma_rfx, final_target, grid_changed = _normalSigmaRfxGridRefine(
+            beta,
+            sigma_rfx,
+            log_sigma_eps_grid,
+            torch.where(accept, final_target, base_target),
+            corr,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            nu_ffx,
+            tau_ffx,
+            family_ffx,
+            tau_rfx,
+            family_sigma_rfx,
+            tau_eps,
+            family_sigma_eps,
+            mask_d,
+            mask_q,
+            sigma_grid_scales,
+            accept_tol=accept_tol,
+        )
 
     out = dict(stats)
     if optimize_eps:
@@ -810,6 +949,7 @@ def refineNormalLaplaceEb(
         out['sigma_eps_est'] = torch.where(accept, sigma_eps_new, sigma_eps_base).unsqueeze(-1)
     out['sigma_rfx_est'] = sigma_rfx
     out['normal_laplace_eb_accept'] = accept.to(dtype)
+    out['normal_laplace_eb_sigma_grid_accept'] = grid_changed.to(dtype)
     out['normal_laplace_eb_steps'] = torch.full(
         (B,), float(n_steps_run), device=device, dtype=dtype
     )

@@ -273,6 +273,8 @@ def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
         'normal_laplace_eb_lr': args.normal_eb_lr,
         'normal_laplace_eb_moment_blend': args.normal_eb_moment_blend,
         'normal_laplace_eb_prior_weight': args.normal_eb_prior_weight,
+        'normal_laplace_eb_sigma_grid_refine': args.normal_eb_sigma_grid_refine,
+        'normal_laplace_eb_sigma_grid_scales': args.normal_eb_sigma_grid_scales,
         'normal_beta_sigma_grid': args.normal_beta_sigma_grid,
         'normal_beta_sigma_grid_scales': args.normal_beta_sigma_grid_scales,
         'normal_beta_sigma_grid_min_d': args.normal_beta_sigma_grid_min_d,
@@ -296,6 +298,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--normal-eb-lr', type=float, default=0.08)
     parser.add_argument('--normal-eb-moment-blend', type=float, default=1.0)
     parser.add_argument('--normal-eb-prior-weight', type=float, default=4.0)
+    parser.add_argument('--normal-eb-sigma-grid-refine', action='store_true')
+    parser.add_argument('--normal-eb-sigma-grid-scales', type=float, nargs='+', default=[0.75, 1.0, 1.3333333])
     parser.add_argument('--normal-beta-sigma-grid', action='store_true')
     parser.add_argument('--normal-beta-sigma-grid-scales', type=float, nargs='+', default=[0.75, 1.0, 1.3333333])
     parser.add_argument('--normal-beta-sigma-grid-min-d', type=int, default=5)

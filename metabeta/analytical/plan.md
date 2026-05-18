@@ -5,7 +5,8 @@ Analytical GLMM Plan
   internally, carries MAP β for `d > 4`, and reports prior-capped β for tail control.
   Post-EB, axis, and variance-ratio beta-grid variants were tested; none improved accuracy
   over the current scalar sigma-grid. Curvature-aware β shrinkage was also tested and
-  removed; the next candidate is direct σ_rfx EB refinement.
+  removed. Direct σ_rfx EB refinement is now implemented as an opt-in coordinate grid and
+  improves variance-scale accuracy on most first-1000 rows.
 - [plan_bernoulli.md](plan_bernoulli.md) — Bernoulli GLMM: default Bernoulli EB path;
   no full INLA or separate amortized-correction branch.
 
