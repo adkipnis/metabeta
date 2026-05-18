@@ -207,33 +207,54 @@ class Approximator(nn.Module):
         return torch.cat(masks, dim=-1)
 
     def _dataStatistics(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """Compute sufficient statistics: GLS/GLMM β̂, σ̂, BLUPs."""
+        """Compute sufficient statistics: GLS/GLMM β̂, σ̂, BLUPs.
+
+        When map_refine is enabled on CUDA, all GLMM inputs are moved to CPU
+        before the call and outputs are moved back afterward.  The inner
+        optimizer loops (backward() × N_steps) are ~1.4x slower on GPU than
+        CPU due to kernel-launch overhead on small tensors; the closed-form
+        base estimator is device-neutral, so we only pay the transfer cost
+        when the expensive refinement path is actually active.
+        """
+        device = data['X'].device
+        run_on_cpu = device.type == 'cuda' and self.cfg.map_refine
+
+        def _c(t: torch.Tensor | None) -> torch.Tensor | None:
+            return t.cpu() if (run_on_cpu and t is not None) else t
+
         Zm = data['Z'][..., : self.d_rfx]
         map_kwargs: dict = {
-            'nu_ffx': data['nu_ffx'],
-            'tau_ffx': data['tau_ffx'],
-            'family_ffx': data['family_ffx'],
-            'tau_rfx': data['tau_rfx'],
-            'family_sigma_rfx': data['family_sigma_rfx'],
-            'mask_d': data.get('mask_d'),
+            'nu_ffx': _c(data['nu_ffx']),
+            'tau_ffx': _c(data['tau_ffx']),
+            'family_ffx': _c(data['family_ffx']),
+            'tau_rfx': _c(data['tau_rfx']),
+            'family_sigma_rfx': _c(data['family_sigma_rfx']),
+            'mask_d': _c(data.get('mask_d')),
         }
         if self.likelihood_family == 0:
-            map_kwargs['tau_eps'] = data['tau_eps']
-            map_kwargs['family_sigma_eps'] = data['family_sigma_eps']
-        return glmm(
-            data['X'],
-            data['y'],
-            Zm,
-            data['mask_n'].float(),
-            data['mask_m'].float(),
-            data['ns'].clamp(min=1).float(),
-            data['n'].float(),
+            map_kwargs['tau_eps'] = _c(data['tau_eps'])
+            map_kwargs['family_sigma_eps'] = _c(data['family_sigma_eps'])
+
+        stats = glmm(
+            _c(data['X']),
+            _c(data['y']),
+            _c(Zm),
+            _c(data['mask_n']).float(),
+            _c(data['mask_m']).float(),
+            _c(data['ns']).clamp(min=1).float(),
+            _c(data['n']).float(),
             likelihood_family=self.likelihood_family,
-            eta_rfx=data.get('eta_rfx'),
-            mask_q=data.get('mask_q', None),
+            eta_rfx=_c(data.get('eta_rfx')),
+            mask_q=_c(data.get('mask_q')),
             map_refine=self.cfg.map_refine,
             **map_kwargs,
         )
+
+        if run_on_cpu:
+            stats = {
+                k: v.to(device) if torch.is_tensor(v) else v for k, v in stats.items()
+            }
+        return stats
 
     def _addMetadata(
         self,

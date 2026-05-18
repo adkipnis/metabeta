@@ -34,6 +34,9 @@ Usage
 When --device cuda, a CPU vs CUDA comparison section is appended automatically.
 The CPU batches are the same data re-pinned to CPU, so the comparison is apples-to-apples.
 A ratio > 1.0 means CUDA is slower (kernel launch overhead dominates at this problem size).
+
+A third section measures the transfer overhead of the approximator.py fix: GLMM inputs
+moved to CPU, outputs moved back to CUDA.  This is the actual cost paid during training.
 """
 
 from __future__ import annotations
@@ -65,9 +68,6 @@ VARIANTS: list[tuple[str, dict]] = [
                      normal_laplace_eb_mode='moment')),
 ]
 
-CONTEXTS = ['no_grad', 'grad']
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -92,34 +92,56 @@ def _sync(device: torch.device) -> None:
         torch.cuda.synchronize(device)
 
 
+def _batch_to(
+    batch: dict[str, torch.Tensor], device: torch.device
+) -> dict[str, torch.Tensor]:
+    return {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
+
+
 def _run_batch(
     batch: dict[str, torch.Tensor],
     max_q: int,
     likelihood_family: int,
     variant_kwargs: dict,
     device: torch.device,
+    glmm_on_cpu: bool = False,
 ) -> float:
     """Run glmm on one batch, return wall seconds.
 
     CUDA operations are asynchronous: without synchronize() the clock would
     only capture kernel dispatch time, not actual execution time.
+
+    glmm_on_cpu: move inputs to CPU, run glmm, move stats back to device —
+    mirrors the approximator.py fix so the transfer overhead is included.
     """
     Zm = batch['Z'][..., :max_q]
     common = _build_common(batch, max_q)
+
+    if glmm_on_cpu:
+        cpu = torch.device('cpu')
+        Zm = Zm.cpu()
+        common = _batch_to(common, cpu)
+        X  = batch['X'].cpu()
+        y  = batch['y'].cpu()
+        mn = batch['mask_n'].cpu().float()
+        mm = batch['mask_m'].cpu().float()
+        ns = batch['ns'].cpu().clamp(min=1).float()
+        n  = batch['n'].cpu().float()
+    else:
+        X  = batch['X']
+        y  = batch['y']
+        mn = batch['mask_n'].float()
+        mm = batch['mask_m'].float()
+        ns = batch['ns'].clamp(min=1).float()
+        n  = batch['n'].float()
+
     _sync(device)
     t0 = time.perf_counter()
-    glmm(
-        batch['X'],
-        batch['y'],
-        Zm,
-        batch['mask_n'].float(),
-        batch['mask_m'].float(),
-        batch['ns'].clamp(min=1).float(),
-        batch['n'].float(),
-        likelihood_family=likelihood_family,
-        **common,
-        **variant_kwargs,
-    )
+    stats = glmm(X, y, Zm, mn, mm, ns, n,
+                 likelihood_family=likelihood_family, **common, **variant_kwargs)
+    if glmm_on_cpu:
+        # move outputs back — this is part of the cost paid during training
+        _ = {k: v.to(device) if torch.is_tensor(v) else v for k, v in stats.items()}
     _sync(device)
     return time.perf_counter() - t0
 
@@ -129,23 +151,18 @@ def _time_variant(
     max_q: int,
     likelihood_family: int,
     variant_kwargs: dict,
-    context: str,
     device: torch.device,
     warmup: int,
+    glmm_on_cpu: bool = False,
 ) -> tuple[float, float]:
     """Return (median_ms_per_ds, std_ms_per_ds) over batches."""
     times_ms: list[float] = []
 
-    def _step(b: dict) -> float:
-        return _run_batch(b, max_q, likelihood_family, variant_kwargs, device)
-
     for i, batch in enumerate(batches):
-        if context == 'no_grad':
-            with torch.no_grad():
-                elapsed = _step(batch)
-        else:
-            elapsed = _step(batch)
-
+        with torch.no_grad():
+            elapsed = _run_batch(
+                batch, max_q, likelihood_family, variant_kwargs, device, glmm_on_cpu
+            )
         if i < warmup:
             continue
         n_ds = batch['X'].shape[0]
@@ -184,80 +201,88 @@ def run(args: argparse.Namespace) -> None:
     print(f'Batches : {n_actual} timed  (+{warmup} warmup)  batch_size={args.batch_size}')
     print(f'Likelihood family: {likelihood_family}\n')
 
-    # collect results
+    # --- section 1: on-device timing
+    meds: dict[str, float] = {}
     rows = []
     for v_name, v_kwargs in VARIANTS:
-        row = [v_name]
-        for ctx in CONTEXTS:
-            med, std = _time_variant(
-                batches, max_q, likelihood_family, v_kwargs, ctx, device, warmup,
-            )
-            row += [f'{med:.2f}', f'{std:.2f}']
-        rows.append(row)
+        med, std = _time_variant(
+            batches, max_q, likelihood_family, v_kwargs, device, warmup,
+        )
+        meds[v_name] = med
+        rows.append([v_name, f'{med:.2f}', f'{std:.2f}'])
 
-    headers = ['variant', 'no_grad med', 'no_grad std', 'grad med', 'grad std',]
-    print(tabulate(rows, headers=headers, tablefmt='simple'))
+    print(tabulate(rows, headers=['variant', 'med ms/ds', 'std ms/ds'], tablefmt='simple'))
 
-    # ratio table: grad / no_grad median
-    print('\ngrad / no_grad ratio  (1.0 = outer grad context adds no overhead):')
-    ratio_rows = []
-    for row in rows:
-        v_name = row[0]
-        ng_med = float(row[1])
-        g_med  = float(row[3])
-        ratio  = g_med / ng_med if ng_med > 0 else float('nan')
-        ratio_rows.append([v_name, f'{ng_med:.2f}', f'{g_med:.2f}', f'{ratio:.3f}'])
-    print(tabulate(ratio_rows, headers=['variant', 'no_grad ms/ds', 'grad ms/ds', 'ratio'],
-                   tablefmt='simple'))
-
-    # step-count scaling
-    print('\nIncremental cost per MAP step  (no_grad context):')
-    ng_meds = {row[0]: float(row[1]) for row in rows}
-    raw_t  = ng_meds['raw']
-    m5_t   = ng_meds['map_5']
-    m10_t  = ng_meds['map_10']
-    m20_t  = ng_meds['map_20']
+    raw_t = meds['raw']
+    print('\nIncremental cost per MAP step:')
     inc_rows = [
-        ['raw → map_5  (+5 steps)',  f'{m5_t  - raw_t:.2f}', f'{(m5_t  - raw_t)/5:.3f}'],
-        ['map_5 → map_10 (+5)',      f'{m10_t - m5_t:.2f}',  f'{(m10_t - m5_t)/5:.3f}'],
-        ['map_10 → map_20 (+10)',    f'{m20_t - m10_t:.2f}', f'{(m20_t - m10_t)/10:.3f}'],
+        ['raw → map_5  (+5)',  f'{meds["map_5"]  - raw_t:.2f}', f'{(meds["map_5"]  - raw_t)/5:.3f}'],
+        ['map_5 → map_10 (+5)', f'{meds["map_10"] - meds["map_5"]:.2f}',
+         f'{(meds["map_10"] - meds["map_5"])/5:.3f}'],
+        ['map_10 → map_20 (+10)', f'{meds["map_20"] - meds["map_10"]:.2f}',
+         f'{(meds["map_20"] - meds["map_10"])/10:.3f}'],
     ]
     print(tabulate(inc_rows, headers=['interval', 'delta ms/ds', 'ms/ds per step'],
                    tablefmt='simple'))
+    print(f'\ndefault vs raw: {meds["default"] / raw_t:.1f}x')
 
-    eb_overhead = ng_meds['default'] - ng_meds['map_20']
-    print(f'\nLaplaceEB overhead on top of map_20  (no_grad): {eb_overhead:.2f} ms/ds')
-    print(f'LaplaceEB alone (eb_only - raw)                : {ng_meds["eb_only"] - raw_t:.2f} ms/ds')
-    print(f'\ndefault vs raw  speedup factor: {ng_meds["default"] / raw_t:.1f}x')
-
-    # CPU vs CUDA comparison (only when running on CUDA)
     if device.type != 'cuda':
         return
 
+    # --- section 2: CPU vs CUDA (no transfer overhead)
     print('\n' + '=' * 60)
-    print('CPU vs CUDA comparison  (no_grad, same batches re-pinned to CPU)')
-    print('ratio = CUDA_med / CPU_med  (> 1.0 means CUDA is slower)')
+    print('CPU vs CUDA  (pure compute, no transfer)')
+    print('CUDA/CPU ratio > 1.0 means CUDA is slower')
     print('=' * 60 + '\n')
 
     cpu_device = torch.device('cpu')
-    cpu_batches = [toDevice(b, cpu_device) for b in batches]
-    cpu_warmup = 2
-
+    cpu_batches = [_batch_to(b, cpu_device) for b in batches]
+    cpu_meds: dict[str, float] = {}
     cmp_rows = []
     for v_name, v_kwargs in VARIANTS:
-        cuda_med = ng_meds[v_name]
         cpu_med, cpu_std = _time_variant(
             cpu_batches, max_q, likelihood_family, v_kwargs,
-            'no_grad', cpu_device, cpu_warmup,
+            cpu_device, warmup=2,
         )
-        ratio = cuda_med / cpu_med if cpu_med > 0 else float('nan')
-        cmp_rows.append([v_name, f'{cpu_med:.2f}', f'{cuda_med:.2f}', f'{ratio:.2f}'])
+        cpu_meds[v_name] = cpu_med
+        ratio = meds[v_name] / cpu_med if cpu_med > 0 else float('nan')
+        cmp_rows.append([v_name, f'{cpu_med:.2f}', f'{meds[v_name]:.2f}', f'{ratio:.2f}'])
+
+    print(tabulate(cmp_rows,
+                   headers=['variant', 'CPU ms/ds', 'CUDA ms/ds', 'CUDA/CPU'],
+                   tablefmt='simple'))
+
+    # --- section 3: CUDA with inputs pinned to CPU (mirrors the approximator fix)
+    print('\n' + '=' * 60)
+    print('CUDA training step cost: GLMM on CPU + transfer outputs back to GPU')
+    print('(mirrors the map_refine fix in approximator.py)')
+    print('ratio = (CPU compute + transfer) / pure CUDA')
+    print('=' * 60 + '\n')
+
+    fix_rows = []
+    for v_name, v_kwargs in VARIANTS:
+        fix_med, fix_std = _time_variant(
+            batches, max_q, likelihood_family, v_kwargs,
+            device, warmup, glmm_on_cpu=True,
+        )
+        ratio_vs_cuda = fix_med / meds[v_name] if meds[v_name] > 0 else float('nan')
+        ratio_vs_cpu  = fix_med / cpu_meds[v_name] if cpu_meds[v_name] > 0 else float('nan')
+        fix_rows.append([
+            v_name,
+            f'{cpu_meds[v_name]:.2f}',
+            f'{fix_med:.2f}',
+            f'{meds[v_name]:.2f}',
+            f'{ratio_vs_cpu:.2f}',
+            f'{ratio_vs_cuda:.2f}',
+        ])
 
     print(tabulate(
-        cmp_rows,
-        headers=['variant', 'CPU ms/ds', 'CUDA ms/ds', 'CUDA/CPU ratio'],
+        fix_rows,
+        headers=['variant', 'CPU', 'CPU+xfer', 'CUDA', 'vs CPU', 'vs CUDA'],
         tablefmt='simple',
     ))
+    print('\n  vs CPU  = transfer overhead on top of CPU compute  (ideally near 1.0)')
+    print('  vs CUDA = speedup of the fix vs. running GLMM on CUDA  (ideally < 1.0)')
 
 
 # fmt: off
