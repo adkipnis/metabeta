@@ -202,7 +202,6 @@ def _normalSigmaGridBetaAverage(
     mask_d: torch.Tensor | None,
     mask_q: torch.Tensor | None,
     scales: tuple[float, ...] | list[float],
-    axis_scales: tuple[float, ...] | list[float] | None = None,
     return_condition: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     """Approximate hyperparameter-averaged β over a small diagonal-σ grid."""
@@ -221,19 +220,6 @@ def _normalSigmaGridBetaAverage(
         (sigma_rfx_base * float(scale)).clamp(min=1e-4, max=20.0) for scale in clean_scales
     ]
     base_idx = next(i for i, scale in enumerate(clean_scales) if abs(scale - 1.0) <= 1e-8)
-    if axis_scales is not None:
-        clean_axis_scales = sorted(
-            {
-                float(scale)
-                for scale in axis_scales
-                if float(scale) > 0.0 and abs(scale - 1.0) > 1e-8
-            }
-        )
-        for j in range(q):
-            for scale in clean_axis_scales:
-                candidate = sigma_rfx_base.clone()
-                candidate[:, j] = (candidate[:, j] * scale).clamp(min=1e-4, max=20.0)
-                candidates.append(candidate)
     sigma_grid = torch.stack(candidates, dim=1)
     S = sigma_grid.shape[1]
     se2 = sigma_eps.clamp(min=1e-6).square()
@@ -826,16 +812,16 @@ def refineNormalLaplaceEb(
     sigma_grid_scales: tuple[float, ...] | list[float] = (0.75, 1.0, 1.3333333),
     beta_tail_grid: bool = False,
     beta_tail_grid_scales: tuple[float, ...] | list[float] = (0.75, 1.0, 1.3333333),
-    beta_tail_grid_axis_scales: tuple[float, ...] | list[float] = (),
     beta_tail_grid_min_d: int = 9,
     beta_tail_grid_min_cond: float = 1000.0,
     beta_tail_grid_blend: float = 0.25,
 ) -> dict[str, torch.Tensor]:
-    """Prototype diagonal Laplace-EB calibration for Gaussian GLMMs.
+    """Diagonal Laplace-EB calibration for Gaussian GLMMs.
 
     Gaussian random-effect integration is exact, so this only adjusts diagonal variance
-    scales under the exact marginal likelihood and priors. β stays fixed; final β/BLUPs
-    are recomputed once through the existing diagonal Gaussian pass.
+    scales under the exact marginal likelihood and priors. Reported β can receive the
+    narrow tail correction, while BLUP residuals keep the uncapped MAP β except for the
+    rare aliasing guard.
     """
     q = Zm.shape[-1]
     if q == 0 or n_steps <= 0:
@@ -882,7 +868,6 @@ def refineNormalLaplaceEb(
             mask_d,
             mask_q,
             beta_tail_grid_scales,
-            axis_scales=beta_tail_grid_axis_scales,
             return_condition=True,
         )
         cap_hit = (

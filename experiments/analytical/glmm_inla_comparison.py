@@ -35,7 +35,7 @@ from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.experiments import dataFilePath
 
 
-ANALYTICAL_METHODS = ('raw', 'current', 'normal_eb', 'normal_sigma_grid', 'normal_tail_beta')
+ANALYTICAL_METHODS = ('raw', 'current', 'normal_eb', 'normal_beta_grid')
 
 try:
     import rpy2.robjects as ro
@@ -79,10 +79,8 @@ def _methodLabel(method: str, likelihood_family: int) -> str:
         return 'NORMAL-EB-TAIL-BETA'
     if method == 'normal_eb' and likelihood_family == 0:
         return 'NORMAL-EB'
-    if method == 'normal_sigma_grid' and likelihood_family == 0:
-        return 'NORMAL-EB-GUARDED'
-    if method == 'normal_tail_beta' and likelihood_family == 0:
-        return 'NORMAL-EB-TAIL-BETA'
+    if method == 'normal_beta_grid' and likelihood_family == 0:
+        return 'NORMAL-EB-BETA-GRID'
     if method == 'normal_eb':
         return 'NORMAL-EB'
     if method == 'current' and likelihood_family == 2:
@@ -482,25 +480,15 @@ def run_one_dataset(
                             'normal_beta_sigma_grid': False,
                             'normal_beta_tail_grid': False,
                         }
-                    elif method == 'normal_sigma_grid' and likelihood_family == 0:
+                    elif method == 'normal_beta_grid' and likelihood_family == 0:
                         method_kwargs = {
                             'map_refine': True,
                             'bernoulli_laplace_eb': False,
                             'normal_laplace_eb': True,
-                            'normal_laplace_eb_sigma_grid_refine': True,
+                            'normal_laplace_eb_sigma_grid_refine': False,
                             'normal_beta_sigma_grid': True,
                             'normal_beta_sigma_grid_scales': (0.75, 1.0, 1.3333333),
                             'normal_beta_tail_grid': False,
-                        }
-                    elif method == 'normal_tail_beta' and likelihood_family == 0:
-                        method_kwargs = {
-                            'map_refine': True,
-                            'bernoulli_laplace_eb': False,
-                            'normal_laplace_eb': True,
-                            'normal_laplace_eb_sigma_grid_refine': True,
-                            'normal_beta_sigma_grid': True,
-                            'normal_beta_sigma_grid_scales': (0.75, 1.0, 1.3333333),
-                            'normal_beta_tail_grid': True,
                         }
                     else:
                         method_kwargs = {'map_refine': True}
@@ -825,7 +813,7 @@ if __name__ == '__main__':
     parser.add_argument('--n-inla',    default=100, type=int, help='max datasets for INLA per data_id')
     parser.add_argument('--n-total',   default=0,   type=int, help='cap total datasets per data_id (0=all)')
     parser.add_argument('--analytical-methods', default='raw,current',
-                        help='comma-separated analytical methods: raw,current,normal_eb,normal_sigma_grid,normal_tail_beta')
+                        help='comma-separated analytical methods: raw,current,normal_eb,normal_beta_grid')
     parser.add_argument('--re-correlation', default='diagonal',
                         choices=['auto', 'diagonal'],
                         help='R-INLA RE correlation: diagonal forces iid per dim for all families')

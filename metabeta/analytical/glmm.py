@@ -231,7 +231,6 @@ def glmm(
     normal_beta_tail_grid_scales = kwargs.pop(
         'normal_beta_tail_grid_scales', (0.75, 1.0, 1.3333333)
     )
-    normal_beta_tail_grid_axis_scales = kwargs.pop('normal_beta_tail_grid_axis_scales', ())
     normal_beta_tail_grid_min_d = kwargs.pop('normal_beta_tail_grid_min_d', 9)
     normal_beta_tail_grid_min_cond = kwargs.pop('normal_beta_tail_grid_min_cond', 1000.0)
     normal_beta_tail_grid_blend = kwargs.pop('normal_beta_tail_grid_blend', 0.25)
@@ -367,7 +366,6 @@ def glmm(
                 sigma_grid_scales=normal_laplace_eb_sigma_grid_scales,
                 beta_tail_grid=normal_beta_tail_grid,
                 beta_tail_grid_scales=normal_beta_tail_grid_scales,
-                beta_tail_grid_axis_scales=normal_beta_tail_grid_axis_scales,
                 beta_tail_grid_min_d=normal_beta_tail_grid_min_d,
                 beta_tail_grid_min_cond=normal_beta_tail_grid_min_cond,
                 beta_tail_grid_blend=normal_beta_tail_grid_blend,
