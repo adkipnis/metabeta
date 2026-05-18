@@ -4,7 +4,8 @@ Analytical GLMM Plan
 - [plan_normal.md](plan_normal.md) — Normal GLMM: production EB path uses the MAP stage
   internally, carries MAP β for `d > 4`, and reports prior-capped β for tail control.
   Post-EB, axis, and variance-ratio beta-grid variants were tested; none improved accuracy
-  over the current scalar sigma-grid.
+  over the current scalar sigma-grid. Curvature-aware β shrinkage was also tested and
+  removed; the next candidate is direct σ_rfx EB refinement.
 - [plan_bernoulli.md](plan_bernoulli.md) — Bernoulli GLMM: default Bernoulli EB path;
   no full INLA or separate amortized-correction branch.
 

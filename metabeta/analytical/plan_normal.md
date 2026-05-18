@@ -133,11 +133,21 @@ Next Steps
 1. Run the full 8k Normal benchmark with the scalar sigma-grid before promoting it.
 2. Do not reintroduce axis, ratio, or post-EB grid branches unless a later diagnostic finds
    a new tail pattern where scalar averaging is not enough.
-3. The remaining INLA gap is likely not solved by more sigma-grid points. Investigate
-   fixed-effect posterior regularization directly: e.g. a cheap diagonal/low-rank
-   posterior mean correction for cap-hit, ill-conditioned rows.
-4. Avoid broad posterior machinery, multi-starts, EP, or full PyTorch INLA unless a new
-   benchmark shows a systematic failure not covered by targeted β regularization.
+3. Curvature-aware β shrinkage was tested and removed. It shrank cap-hit, high-d rows
+   toward `nu_ffx` based on conditional Gaussian posterior variance, but it was slower and
+   did not improve over scalar sigma-grid:
+   - curvature only: large mixed FFX `0.3699`, huge mixed `0.3214`;
+   - sigma-grid + curvature, power `1.0`: large mixed `0.2637`, huge mixed `0.2807`;
+   - sigma-grid + curvature, power `0.5`: large mixed `0.2633`, huge mixed `0.2804`;
+   - scalar sigma-grid reference: large mixed `0.2630`, huge mixed `0.2799`.
+4. Next candidate: improve σ_rfx EB directly. INLA's most stable remaining advantage is
+   variance-scale accuracy, so test a small per-dimension log-σ refinement around the
+   current EB moment estimate before attempting any richer β posterior correction.
+5. If σ_rfx refinement does not help, revisit fixed-effect posterior mean correction, but
+   not as direct shrink-to-prior; the failed curvature shrink suggests that the missing
+   behavior is not a simple reliability scalar.
+6. Avoid broad posterior machinery, multi-starts, EP, full PyTorch INLA, or NPE-context
+   ablations for this analytical phase.
 
 Commands
 --------
