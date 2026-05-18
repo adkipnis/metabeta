@@ -11,10 +11,10 @@ FE prior: N(ν_ffx_j, τ_ffx_j²) via control.fixed.
 Normal family residual prior: PC prior P(σ_eps > τ_eps) = 0.317.
 
 Usage (from repo root):
-    uv run python experiments/analytical/glmm_inla_comparison.py
-    uv run python experiments/analytical/glmm_inla_comparison.py \\
+    uv run python -u experiments/analytical/glmm_inla_comparison.py
+    uv run python -u experiments/analytical/glmm_inla_comparison.py \\
         --data-ids small-b-sampled,small-n-sampled --n-inla 100
-    uv run python experiments/analytical/glmm_inla_comparison.py \\
+    uv run python -u experiments/analytical/glmm_inla_comparison.py \\
         --data-ids small-n-sampled --n-inla 200 --partition test \\
         --analytical-methods raw,current
 """
@@ -35,7 +35,7 @@ from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.experiments import dataFilePath
 
 
-ANALYTICAL_METHODS = ('raw', 'current', 'normal_eb')
+ANALYTICAL_METHODS = ('raw', 'current', 'normal_eb', 'normal_sigma_grid')
 
 try:
     import rpy2.robjects as ro
@@ -77,6 +77,8 @@ def _methodLabel(method: str, likelihood_family: int) -> str:
         return 'BERNOULLI-EB'
     if method in {'current', 'normal_eb'} and likelihood_family == 0:
         return 'NORMAL-EB'
+    if method == 'normal_sigma_grid' and likelihood_family == 0:
+        return 'NORMAL-EB-SIGMA-GRID'
     if method == 'normal_eb':
         return 'NORMAL-EB'
     if method == 'current' and likelihood_family == 2:
@@ -473,6 +475,14 @@ def run_one_dataset(
                             'bernoulli_laplace_eb': False,
                             'normal_laplace_eb': True,
                         }
+                    elif method == 'normal_sigma_grid' and likelihood_family == 0:
+                        method_kwargs = {
+                            'map_refine': True,
+                            'bernoulli_laplace_eb': False,
+                            'normal_laplace_eb': True,
+                            'normal_beta_sigma_grid': True,
+                            'normal_beta_sigma_grid_scales': (0.75, 1.0, 1.3333333),
+                        }
                     else:
                         method_kwargs = {'map_refine': True}
                     t0 = time.perf_counter()
@@ -796,7 +806,7 @@ if __name__ == '__main__':
     parser.add_argument('--n-inla',    default=100, type=int, help='max datasets for INLA per data_id')
     parser.add_argument('--n-total',   default=0,   type=int, help='cap total datasets per data_id (0=all)')
     parser.add_argument('--analytical-methods', default='raw,current',
-                        help='comma-separated analytical methods: raw,current,normal_eb')
+                        help='comma-separated analytical methods: raw,current,normal_eb,normal_sigma_grid')
     parser.add_argument('--re-correlation', default='diagonal',
                         choices=['auto', 'diagonal'],
                         help='R-INLA RE correlation: diagonal forces iid per dim for all families')

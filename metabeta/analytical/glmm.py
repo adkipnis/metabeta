@@ -216,13 +216,11 @@ def glmm(
     normal_laplace_eb_optimize_eps = kwargs.pop('normal_laplace_eb_optimize_eps', False)
     normal_laplace_eb_recompute_blup = kwargs.pop('normal_laplace_eb_recompute_blup', True)
     normal_map_beta_prior_cap = kwargs.pop('normal_map_beta_prior_cap', 4.0)
-    normal_beta_stabilizer = kwargs.pop('normal_beta_stabilizer', False)
-    normal_beta_stabilizer_mode = kwargs.pop('normal_beta_stabilizer_mode', 'sigma_grid')
-    normal_beta_stabilizer_sigma_scales = kwargs.pop(
-        'normal_beta_stabilizer_sigma_scales', (0.75, 1.0, 1.3333333)
+    normal_beta_sigma_grid = kwargs.pop('normal_beta_sigma_grid', False)
+    normal_beta_sigma_grid_scales = kwargs.pop(
+        'normal_beta_sigma_grid_scales', (0.75, 1.0, 1.3333333)
     )
-    normal_beta_stabilizer_tail_excess = kwargs.pop('normal_beta_stabilizer_tail_excess', 2.0)
-    normal_beta_stabilizer_min_d = kwargs.pop('normal_beta_stabilizer_min_d', 5)
+    normal_beta_sigma_grid_min_d = kwargs.pop('normal_beta_sigma_grid_min_d', 5)
     beta_alpha_low = kwargs.pop('beta_alpha_low', 0.65)
     beta_alpha_high = kwargs.pop('beta_alpha_high', 0.75)
     bernoulli_laplace_eb_default = 'bernoulli_eb' if likelihood_family == 1 else False
@@ -315,11 +313,9 @@ def glmm(
                 beta_alpha_low=beta_alpha_low,
                 beta_alpha_high=beta_alpha_high,
                 beta_prior_cap=normal_map_beta_prior_cap,
-                beta_stabilizer=normal_beta_stabilizer,
-                beta_stabilizer_mode=normal_beta_stabilizer_mode,
-                beta_stabilizer_sigma_scales=normal_beta_stabilizer_sigma_scales,
-                beta_stabilizer_tail_excess=normal_beta_stabilizer_tail_excess,
-                beta_stabilizer_min_d=normal_beta_stabilizer_min_d,
+                beta_sigma_grid=normal_beta_sigma_grid,
+                beta_sigma_grid_scales=normal_beta_sigma_grid_scales,
+                beta_sigma_grid_min_d=normal_beta_sigma_grid_min_d,
             )
         if (
             map_refine

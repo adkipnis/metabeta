@@ -7,6 +7,9 @@ estimator in `metabeta/analytical/`.
 Active scripts
 --------------
 
+Use `uv run python -u ...` for analytical benchmarks and R-INLA comparisons. Several runs
+take minutes to hours, and unbuffered output keeps completed dataset blocks visible.
+
 - `glmm_required_benchmark.py` — canonical regression gate. Run before any
   analytical code commit. Prints FFX/sRFX/sEps/BLUP NRMSE CSV for the full
   required suite (mixed-train ×2 + sampled valid/test, all four sizes). Use

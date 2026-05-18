@@ -15,10 +15,10 @@ we use HalfNormal(τ_rfx) on σ.  The comparison is frequentist — accuracy rel
 to the simulated ground truth — not a matched-prior Bayesian comparison.
 
 Usage (from repo root):
-    uv run python experiments/analytical/glmm_reference_comparison.py
-    uv run python experiments/analytical/glmm_reference_comparison.py \\
+    uv run python -u experiments/analytical/glmm_reference_comparison.py
+    uv run python -u experiments/analytical/glmm_reference_comparison.py \\
         --data-ids small-b-sampled,small-b-mixed --n-cavi 200
-    uv run python experiments/analytical/glmm_reference_comparison.py \\
+    uv run python -u experiments/analytical/glmm_reference_comparison.py \\
         --data-ids small-b-sampled,small-b-mixed,medium-b-sampled,medium-b-mixed \\
         --n-cavi 200
 """
@@ -532,20 +532,44 @@ def run_one_dataset(
         vs_label = 'PQL vs P6' + (' vs CAVI' if cavi_n_ok > 0 else '')
         print(f'\n{vs_label} — matched (N={len(pql_cv_be)}{cavi_info})')
         rows_matched = [
-            ['PQL', 'FFX (β)', f'{_nrmse(pql_cv["be"],pql_cv["bt"]):.4f}', f'{_bias(pql_cv["be"]):+.4f}'],
-            ['PQL', 'σ_rfx',   f'{_nrmse(pql_cv["se"],pql_cv["st"]):.4f}', f'{_bias(pql_cv["se"]):+.4f}'],
-            ['PQL', 'BLUP',    f'{_nrmse(pql_cv["re"],pql_cv["rt"]):.4f}', f'{_bias(pql_cv["re"]):+.4f}'],
-            ['P6',  'FFX (β)', f'{_nrmse(p6_cv["be"],p6_cv["bt"]):.4f}',  f'{_bias(p6_cv["be"]):+.4f}'],
-            ['P6',  'σ_rfx',   f'{_nrmse(p6_cv["se"],p6_cv["st"]):.4f}',  f'{_bias(p6_cv["se"]):+.4f}'],
-            ['P6',  'BLUP',    f'{_nrmse(p6_cv["re"],p6_cv["rt"]):.4f}',  f'{_bias(p6_cv["re"]):+.4f}'],
+            [
+                'PQL',
+                'FFX (β)',
+                f'{_nrmse(pql_cv["be"],pql_cv["bt"]):.4f}',
+                f'{_bias(pql_cv["be"]):+.4f}',
+            ],
+            [
+                'PQL',
+                'σ_rfx',
+                f'{_nrmse(pql_cv["se"],pql_cv["st"]):.4f}',
+                f'{_bias(pql_cv["se"]):+.4f}',
+            ],
+            [
+                'PQL',
+                'BLUP',
+                f'{_nrmse(pql_cv["re"],pql_cv["rt"]):.4f}',
+                f'{_bias(pql_cv["re"]):+.4f}',
+            ],
+            [
+                'P6',
+                'FFX (β)',
+                f'{_nrmse(p6_cv["be"],p6_cv["bt"]):.4f}',
+                f'{_bias(p6_cv["be"]):+.4f}',
+            ],
+            ['P6', 'σ_rfx', f'{_nrmse(p6_cv["se"],p6_cv["st"]):.4f}', f'{_bias(p6_cv["se"]):+.4f}'],
+            ['P6', 'BLUP', f'{_nrmse(p6_cv["re"],p6_cv["rt"]):.4f}', f'{_bias(p6_cv["re"]):+.4f}'],
         ]
         if cavi_n_ok > 0:
             rows_matched += [
                 ['CAVI', 'FFX (β)', f'{metrics["cavi_ffx"]:.4f}', f'{_bias(cavi["be"]):+.4f}'],
-                ['CAVI', 'σ_rfx',   f'{metrics["cavi_srfx"]:.4f}', f'{_bias(cavi["se"]):+.4f}'],
-                ['CAVI', 'BLUP',    f'{metrics["cavi_blup"]:.4f}', f'{_bias(cavi["re"]):+.4f}'],
+                ['CAVI', 'σ_rfx', f'{metrics["cavi_srfx"]:.4f}', f'{_bias(cavi["se"]):+.4f}'],
+                ['CAVI', 'BLUP', f'{metrics["cavi_blup"]:.4f}', f'{_bias(cavi["re"]):+.4f}'],
             ]
-        print(tabulate(rows_matched, headers=['Method', 'Parameter', 'NRMSE', 'Bias'], tablefmt='simple'))
+        print(
+            tabulate(
+                rows_matched, headers=['Method', 'Parameter', 'NRMSE', 'Bias'], tablefmt='simple'
+            )
+        )
 
     print('\nσ_rfx bias by true σ_rfx bin — PQL')
     print(_breakdown_srfx(pql_a['se'], pql_a['st'], 'PQL'))

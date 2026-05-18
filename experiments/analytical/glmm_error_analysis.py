@@ -11,9 +11,9 @@ and reports:
   6. Worst-case examples
 
 Usage:
-    uv run python experiments/analytical/glmm_error_analysis.py --data-id small-n-mixed
-    uv run python experiments/analytical/glmm_error_analysis.py --data-id small-b-mixed
-    uv run python experiments/analytical/glmm_error_analysis.py --data-id small-b-mixed --partition valid
+    uv run python -u experiments/analytical/glmm_error_analysis.py --data-id small-n-mixed
+    uv run python -u experiments/analytical/glmm_error_analysis.py --data-id small-b-mixed
+    uv run python -u experiments/analytical/glmm_error_analysis.py --data-id small-b-mixed --partition valid
 """
 
 from __future__ import annotations

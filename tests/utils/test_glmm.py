@@ -451,68 +451,12 @@ def test_refine_normal_map_beta_sigma_grid_replaces_capped_report_only():
         lr=0.0,
         recompute_blup=False,
         beta_prior_cap=4.0,
-        beta_stabilizer=True,
-        beta_stabilizer_mode='sigma_grid',
-        beta_stabilizer_sigma_scales=(0.75, 1.0, 1.3333333),
+        beta_sigma_grid=True,
+        beta_sigma_grid_scales=(0.75, 1.0, 1.3333333),
     )
 
     assert torch.equal(result['normal_map_beta_stabilized'], torch.ones(B))
     assert torch.all(result['beta_est'].abs() < 4.0)
-    assert torch.allclose(result['normal_map_beta_for_blup'], beta_start)
-
-
-def test_refine_normal_map_beta_tail_grid_only_replaces_large_excess_rows():
-    B, m, n_per_group, d, q = 2, 6, 5, 6, 1
-    Xm = torch.zeros(B, m, n_per_group, d)
-    Xm[..., 0] = 1.0
-    Zm = torch.zeros(B, m, n_per_group, q)
-    ym = torch.zeros(B, m, n_per_group)
-    mask_n = torch.ones(B, m, n_per_group)
-    mask_m = torch.ones(B, m)
-    ns = torch.full((B, m), float(n_per_group))
-    beta_start = torch.tensor(
-        [
-            [4.1, 0.0, 0.0, 0.0, 0.0, 0.0],
-            [10.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        ]
-    )
-    stats = {
-        'beta_est': beta_start,
-        'sigma_rfx_est': torch.full((B, q), 0.5),
-        'sigma_eps_est': torch.full((B, 1), 1.0),
-        'Psi': torch.eye(q).expand(B, q, q).clone() * 0.25,
-    }
-
-    result = refineNormalMapSrfx(
-        stats,
-        Xm,
-        ym,
-        Zm,
-        mask_n,
-        mask_m,
-        ns,
-        nu_ffx=torch.zeros(B, d),
-        tau_ffx=torch.ones(B, d),
-        family_ffx=torch.zeros(B, dtype=torch.long),
-        tau_rfx=torch.ones(B, q),
-        family_sigma_rfx=torch.zeros(B, dtype=torch.long),
-        tau_eps=torch.ones(B),
-        family_sigma_eps=torch.zeros(B, dtype=torch.long),
-        mask_d=torch.ones(B, d, dtype=torch.bool),
-        mask_q=torch.ones(B, q, dtype=torch.bool),
-        n_steps=1,
-        lr=0.0,
-        recompute_blup=False,
-        beta_prior_cap=4.0,
-        beta_stabilizer=True,
-        beta_stabilizer_mode='tail_grid',
-        beta_stabilizer_sigma_scales=(0.5, 0.75, 1.0, 1.3333333, 2.0),
-        beta_stabilizer_tail_excess=1.0,
-    )
-
-    assert torch.equal(result['normal_map_beta_stabilized'], torch.tensor([0.0, 1.0]))
-    assert float(result['beta_est'][0, 0]) == pytest.approx(4.0)
-    assert result['beta_est'][1, 0] < 4.0
     assert torch.allclose(result['normal_map_beta_for_blup'], beta_start)
 
 

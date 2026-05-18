@@ -434,11 +434,9 @@ def refineNormalMapSrfx(
     beta_alpha_low: float = 0.65,
     beta_alpha_high: float = 0.75,
     beta_prior_cap: float | None = 4.0,
-    beta_stabilizer: bool = False,
-    beta_stabilizer_mode: str = 'sigma_grid',
-    beta_stabilizer_sigma_scales: tuple[float, ...] | list[float] = (0.75, 1.0, 1.3333333),
-    beta_stabilizer_tail_excess: float = 2.0,
-    beta_stabilizer_min_d: int = 5,
+    beta_sigma_grid: bool = False,
+    beta_sigma_grid_scales: tuple[float, ...] | list[float] = (0.75, 1.0, 1.3333333),
+    beta_sigma_grid_min_d: int = 5,
 ) -> dict[str, torch.Tensor]:
     """Return stats with sigma(RFX) refined by marginal MAP.
 
@@ -536,43 +534,30 @@ def refineNormalMapSrfx(
                 d_count = torch.full(
                     (beta_override.shape[0],), d, device=beta_override.device, dtype=torch.long
                 )
-            if beta_stabilizer:
-                stabilize = cap_components & (d_count >= int(beta_stabilizer_min_d))[:, None]
-                mode = str(beta_stabilizer_mode).lower()
-                if mode in {'sigma_grid', 'tail_grid'}:
-                    z_abs = ((beta.detach()[..., :d] - nu_d).abs() / tau_d).nan_to_num(
-                        nan=0.0,
-                        posinf=0.0,
-                        neginf=0.0,
-                    )
-                    if mode == 'tail_grid':
-                        excess = (z_abs - cap_scale).clamp(min=0.0)
-                        tail_gate = excess.amax(dim=-1) >= float(beta_stabilizer_tail_excess)
-                        stabilize = stabilize & tail_gate[:, None]
-                    beta_grid = _normalSigmaGridBetaAverage(
-                        Xm,
-                        ym,
-                        Zm,
-                        mask_n,
-                        mask_m,
-                        sigma_rfx,
-                        stats['sigma_eps_est'].squeeze(-1).detach(),
-                        nu_ffx,
-                        tau_ffx,
-                        family_ffx,
-                        tau_rfx,
-                        family_sigma_rfx,
-                        tau_eps,
-                        family_sigma_eps,
-                        mask_d,
-                        mask_q,
-                        beta_stabilizer_sigma_scales,
-                    )
-                    beta_grid = beta_grid.clamp(min=cap_lo, max=cap_hi)
-                    beta_override = torch.where(stabilize, beta_grid, beta_override)
-                    beta_stabilized = stabilize.any(dim=-1).to(beta_override.dtype)
-                else:
-                    raise ValueError("beta_stabilizer_mode must be 'sigma_grid' or 'tail_grid'")
+            if beta_sigma_grid:
+                stabilize = cap_components & (d_count >= int(beta_sigma_grid_min_d))[:, None]
+                beta_grid = _normalSigmaGridBetaAverage(
+                    Xm,
+                    ym,
+                    Zm,
+                    mask_n,
+                    mask_m,
+                    sigma_rfx,
+                    stats['sigma_eps_est'].squeeze(-1).detach(),
+                    nu_ffx,
+                    tau_ffx,
+                    family_ffx,
+                    tau_rfx,
+                    family_sigma_rfx,
+                    tau_eps,
+                    family_sigma_eps,
+                    mask_d,
+                    mask_q,
+                    beta_sigma_grid_scales,
+                )
+                beta_grid = beta_grid.clamp(min=cap_lo, max=cap_hi)
+                beta_override = torch.where(stabilize, beta_grid, beta_override)
+                beta_stabilized = stabilize.any(dim=-1).to(beta_override.dtype)
         out['beta_est'] = beta_override
         out['normal_map_beta_for_blup'] = beta_for_blup_override
         out['normal_map_beta_prior_capped'] = beta_capped
