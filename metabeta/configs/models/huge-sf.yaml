@@ -36,5 +36,5 @@ posterior_g:
 posterior_l:
     n_blocks: 3
 
-analytical_context: true
+analytical_refinement: 'full'
 analytical_local_at_inference: true

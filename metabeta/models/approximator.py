@@ -71,7 +71,7 @@ class Approximator(nn.Module):
 
     @property
     def analytical_context(self) -> bool:
-        return self.cfg.analytical_context
+        return self.cfg.analytical_refinement != 'none'
 
     @property
     def analytical_local_at_inference(self) -> bool:
@@ -217,7 +217,8 @@ class Approximator(nn.Module):
         when the expensive refinement path is actually active.
         """
         device = data['X'].device
-        run_on_cpu = device.type == 'cuda' and self.cfg.map_refine
+        map_refine = self.cfg.analytical_refinement == 'full'
+        run_on_cpu = device.type == 'cuda' and map_refine
 
         def _c(t: torch.Tensor | None) -> torch.Tensor | None:
             return t.cpu() if (run_on_cpu and t is not None) else t
@@ -246,7 +247,7 @@ class Approximator(nn.Module):
             likelihood_family=self.likelihood_family,
             eta_rfx=_c(data.get('eta_rfx')),
             mask_q=_c(data.get('mask_q')),
-            map_refine=self.cfg.map_refine,
+            map_refine=map_refine,
             **map_kwargs,
         )
 

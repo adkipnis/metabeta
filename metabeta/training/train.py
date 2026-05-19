@@ -260,9 +260,9 @@ class Trainer:
                 likelihood_family=self.cfg.likelihood_family,
             )
 
-        if analytical_context := getattr(self.cfg, 'analytical_context', None):
+        if analytical_refinement := getattr(self.cfg, 'analytical_refinement', None):
             self.model_cfg = self.model_cfg.model_copy(
-                update={'analytical_context': analytical_context}
+                update={'analytical_refinement': analytical_refinement}
             )
 
         # init model
