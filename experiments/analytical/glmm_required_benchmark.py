@@ -339,10 +339,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--normal-beta-tail-grid-min-d', type=int, default=9)
     parser.add_argument('--normal-beta-tail-grid-min-cond', type=float, default=1000.0)
     parser.add_argument('--normal-beta-tail-grid-blend', type=float, default=0.25)
-    parser.add_argument('--poisson-eb-steps', type=int, default=12)
+    parser.add_argument('--poisson-eb-steps', type=int, default=24)
     parser.add_argument('--poisson-eb-inner', type=int, default=4)
     parser.add_argument('--poisson-eb-final', type=int, default=6)
-    parser.add_argument('--poisson-eb-lr', type=float, default=0.03)
+    parser.add_argument('--poisson-eb-lr', type=float, default=0.05)
     parser.add_argument('--poisson-eb-blup-fallback-beta-jump', type=float, default=0.0)
     return parser.parse_args()
 # fmt: on
