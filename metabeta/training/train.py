@@ -188,6 +188,9 @@ class Trainer:
         # init data, model and optimizer
         self._initData()
         self._initModel()
+        self._valid_stats_cache: list[dict] = []
+        if self.model.analytical_context:
+            self._precomputeValidStats()
 
         # checkpoint dir
         self.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -272,6 +275,19 @@ class Trainer:
 
         # init optimizer
         self.optimizer = schedulefree.AdamWScheduleFree(self.model.parameters(), lr=self.cfg.lr)
+
+    @torch.no_grad()
+    def _precomputeValidStats(self) -> None:
+        """Precompute GLMM statistics for all validation batches.
+
+        GLMM outputs depend only on the data, not on model parameters, so they
+        are identical every epoch.  Computing them once and caching avoids
+        redundant MAP/EB solves on the (fixed) validation set.  Stats are stored
+        on the training device so injection into each batch is copy-free.
+        """
+        for batch in self.dl_valid:
+            batch = toDevice(batch, self.device)
+            self._valid_stats_cache.append(self.model._dataStatistics(batch))
 
     def _initWandb(self) -> None:
         output_dir = Path(self.dir, '..', 'outputs')
@@ -582,9 +598,11 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         total_count = 0
         self.model.eval()
         self.optimizer.eval()
-        for batch in iterator:
+        for i, batch in enumerate(iterator):
             batch = toDevice(batch, self.device)
-            loss = self.loss(batch)
+            cached = self._valid_stats_cache[i] if self._valid_stats_cache else None
+            summaries = self.model.summarize(batch, stats=cached)
+            loss = self.loss(batch, summaries=summaries)
             batch_size = batch['X'].shape[0]
             total_weighted_loss += loss.item() * batch_size
             total_count += batch_size
@@ -603,9 +621,11 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         proposals = []
         n_datasets = 0
         t0 = time.perf_counter()
-        for batch in iterator:
+        for i, batch in enumerate(iterator):
             batch = toDevice(batch, self.device)
-            proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+            cached = self._valid_stats_cache[i] if self._valid_stats_cache else None
+            summaries = self.model.summarize(batch, stats=cached)
+            proposal = self.model.estimate(batch, summaries=summaries, n_samples=self.cfg.n_samples)
             if self.cfg.rescale and self.cfg.likelihood_family == 0:
                 proposal.rescale(batch['sd_y'])
             proposal.to('cpu')

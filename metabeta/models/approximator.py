@@ -216,6 +216,7 @@ class Approximator(nn.Module):
         uses larger per-group matrix ops that GPU parallelizes well; on H100 the
         pure-CUDA path is ~14% faster than CPU and ~9% faster than CPU+transfer,
         so Bernoulli stays on-device.
+
         """
         device = data['X'].device
         map_refine = self.cfg.analytical_refinement == 'full'
@@ -472,10 +473,15 @@ class Approximator(nn.Module):
         proposal.debug_stats = _debug_corr  # DEBUG
         return proposal
 
-    def summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+    def summarize(
+        self,
+        data: dict[str, torch.Tensor],
+        stats: dict[str, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)
         summary_l_raw = self.summarizer_l(inputs, mask=data['mask_n'])
-        stats = self._dataStatistics(data) if self.analytical_context else None
+        if stats is None and self.analytical_context:
+            stats = self._dataStatistics(data)
 
         # Global path: augment per-group summaries with REML point estimates before pooling.
         summary_l_with_stats = self._addMetadata(summary_l_raw, data, local=True, stats=stats)
