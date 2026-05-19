@@ -17,6 +17,10 @@ Usage (from repo root):
     uv run python -u experiments/analytical/glmm_inla_comparison.py \\
         --data-ids small-n-sampled --n-inla 200 --partition test \\
         --analytical-methods raw,current
+    uv run python -u experiments/analytical/glmm_inla_comparison.py \\
+        --data-ids large-p-sampled --partition valid \\
+        --n-inla 1000 --n-total 1000 --analytical-methods raw,current \\
+        --save-inla-rows-dir experiments/analytical/inla_runs/poisson_rows
 """
 
 from __future__ import annotations
@@ -58,6 +62,7 @@ except Exception:
 # ---------------------------------------------------------------------------
 
 INLA_DEFAULT_TIMEOUT_S = 120
+INLA_ROW_OUTPUT_DIR = 'experiments/analytical/inla_runs/row_estimates'
 
 
 def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
@@ -1036,7 +1041,7 @@ def main(
     analytical_methods: list[str] | None = None,
     re_correlation: str = 'auto',
     inla_timeout_s: int = INLA_DEFAULT_TIMEOUT_S,
-    save_inla_rows_dir: str = '',
+    save_inla_rows_dir: str = INLA_ROW_OUTPUT_DIR,
 ) -> None:
     if analytical_methods is None:
         analytical_methods = ['raw', 'current']
@@ -1135,8 +1140,10 @@ if __name__ == '__main__':
                         help='R-INLA RE correlation: diagonal forces iid per dim for all families')
     parser.add_argument('--inla-timeout', default=INLA_DEFAULT_TIMEOUT_S, type=int,
                         help=f'per-dataset INLA timeout in seconds (default: {INLA_DEFAULT_TIMEOUT_S})')
-    parser.add_argument('--save-inla-rows-dir', default='',
-                        help='optional directory for compressed per-row INLA estimate .npz files')
+    parser.add_argument('--save-inla-rows-dir', default=INLA_ROW_OUTPUT_DIR,
+                        help='directory for compressed per-row INLA estimate .npz files')
+    parser.add_argument('--no-save-inla-rows', action='store_true',
+                        help='disable per-row INLA estimate saving')
     # fmt: on
     a = parser.parse_args()
     main(
@@ -1148,5 +1155,5 @@ if __name__ == '__main__':
         analytical_methods=_parseAnalyticalMethods(a.analytical_methods),
         re_correlation=a.re_correlation,
         inla_timeout_s=a.inla_timeout,
-        save_inla_rows_dir=a.save_inla_rows_dir,
+        save_inla_rows_dir='' if a.no_save_inla_rows else a.save_inla_rows_dir,
     )
