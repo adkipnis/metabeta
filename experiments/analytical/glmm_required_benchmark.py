@@ -312,6 +312,8 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_eb_final': args.poisson_eb_final,
         'poisson_laplace_eb_lr': args.poisson_eb_lr,
         'poisson_laplace_eb_blup_fallback_beta_jump': args.poisson_eb_blup_fallback_beta_jump,
+        'poisson_laplace_eb_sigma_prior_cap': args.poisson_eb_sigma_prior_cap,
+        'poisson_laplace_eb_sigma_prior_cap_min_d': args.poisson_eb_sigma_prior_cap_min_d,
     }
 
 
@@ -344,6 +346,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-eb-final', type=int, default=6)
     parser.add_argument('--poisson-eb-lr', type=float, default=0.05)
     parser.add_argument('--poisson-eb-blup-fallback-beta-jump', type=float, default=0.0)
+    parser.add_argument('--poisson-eb-sigma-prior-cap', type=float, default=None)
+    parser.add_argument('--poisson-eb-sigma-prior-cap-min-d', type=int, default=None)
     return parser.parse_args()
 # fmt: on
 
