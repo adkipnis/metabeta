@@ -22,6 +22,7 @@ Usage (from repo root):
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
 import time
 import warnings
@@ -53,6 +54,16 @@ except Exception:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+INLA_DEFAULT_TIMEOUT_S = 120
+
+
+class _InlaTimeout(Exception):
+    pass
+
+
+def _inla_timeout_handler(signum, frame):
+    raise _InlaTimeout()
 
 
 def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
@@ -86,7 +97,7 @@ def _methodLabel(method: str, likelihood_family: int) -> str:
     if method == 'normal_eb':
         return 'NORMAL-EB'
     if method == 'current' and likelihood_family == 2:
-        return 'POISSON-EB'
+        return 'POISSON-EB-MARGINAL-BETA'
     return method.upper()
 
 
@@ -190,6 +201,7 @@ def _inla_estimate(
     ds_flat: dict,
     likelihood_family: int,
     re_correlation: str = 'auto',
+    timeout_s: int = INLA_DEFAULT_TIMEOUT_S,
 ) -> dict | None:
     """Run R-INLA on a flat dataset using the simulation's true priors.
 
@@ -224,6 +236,8 @@ def _inla_estimate(
     if re_correlation == 'diagonal':
         correlated = False
 
+    old_handler = signal.signal(signal.SIGALRM, _inla_timeout_handler)
+    signal.alarm(timeout_s)
     try:
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
@@ -379,8 +393,19 @@ def _inla_estimate(
 
         return {'beta': beta, 'sigma_rfx': sigma_rfx, 'blups': blups}
 
+    except _InlaTimeout:
+        print(
+            f'\nINLA timeout after {timeout_s}s (d={ds_flat["d"]}, q={ds_flat["q"]},'
+            f' m={ds_flat["m"]}, n={len(ds_flat["y"])}) — skipping dataset',
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
     except Exception:
         return None
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 def _breakdown_srfx(err: np.ndarray, truth: np.ndarray, label: str) -> str:
@@ -419,6 +444,7 @@ def run_one_dataset(
     n_epochs: int = 1,
     analytical_methods: list[str] | None = None,
     re_correlation: str = 'auto',
+    inla_timeout_s: int = INLA_DEFAULT_TIMEOUT_S,
     device: torch.device | None = None,
 ) -> dict:
     """Run analytical GLMM methods vs R-INLA on one dataset, return metrics dict."""
@@ -588,7 +614,7 @@ def run_one_dataset(
                     inla_n_tried += 1
                     ds_flat = _flatten(batch, b, active_d, active_q)
                     t_i = time.perf_counter()
-                    est = _inla_estimate(ds_flat, likelihood_family, re_correlation)
+                    est = _inla_estimate(ds_flat, likelihood_family, re_correlation, inla_timeout_s)
                     inla_elapsed = time.perf_counter() - t_i
                     inla_metrics['wall'].append(inla_elapsed)
                     inla_bar.set_postfix(ok=inla_n_ok, s=f'{inla_elapsed:.1f}')
@@ -751,6 +777,7 @@ def main(
     n_total: int = 0,
     analytical_methods: list[str] | None = None,
     re_correlation: str = 'auto',
+    inla_timeout_s: int = INLA_DEFAULT_TIMEOUT_S,
 ) -> None:
     if analytical_methods is None:
         analytical_methods = ['raw', 'current']
@@ -760,6 +787,7 @@ def main(
     )
     print(f'Analytical methods: {", ".join(analytical_methods)}')
     print(f'R-INLA random-effects correlation: {re_correlation}')
+    print(f'R-INLA per-dataset timeout: {inla_timeout_s}s')
     print()
 
     all_metrics = []
@@ -773,6 +801,7 @@ def main(
                 n_epochs=n_epochs,
                 analytical_methods=analytical_methods,
                 re_correlation=re_correlation,
+                inla_timeout_s=inla_timeout_s,
             )
         )
 
@@ -841,6 +870,8 @@ if __name__ == '__main__':
     parser.add_argument('--re-correlation', default='diagonal',
                         choices=['auto', 'diagonal'],
                         help='R-INLA RE correlation: diagonal forces iid per dim for all families')
+    parser.add_argument('--inla-timeout', default=INLA_DEFAULT_TIMEOUT_S, type=int,
+                        help=f'per-dataset INLA timeout in seconds (default: {INLA_DEFAULT_TIMEOUT_S})')
     # fmt: on
     a = parser.parse_args()
     main(
@@ -851,4 +882,5 @@ if __name__ == '__main__':
         n_total=a.n_total,
         analytical_methods=_parseAnalyticalMethods(a.analytical_methods),
         re_correlation=a.re_correlation,
+        inla_timeout_s=a.inla_timeout,
     )
