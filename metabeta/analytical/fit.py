@@ -8,6 +8,7 @@ from metabeta.analytical.glmm.map import (
     refineBernoulliMapBeta,
     refineBernoulliNagqSrfx,
     refineBernoulliNestedBeta,
+    refinePoissonLaplaceEb,
 )
 from metabeta.analytical.lmm.map import refineNormalLaplaceEb, refineNormalMapSrfx
 from metabeta.analytical.lmm.lmm import lmmNormal
@@ -32,6 +33,14 @@ _BERNOULLI_LAPLACE_EB_DEFAULTS = {
     'bernoulli_laplace_eb_beta_output_cap_trigger': 8.0,
     'bernoulli_laplace_eb_sigma_prior_cap': 2.5,
     'bernoulli_laplace_eb_sigma_prior_cap_min_d': 5,
+}
+
+_POISSON_LAPLACE_EB_DEFAULTS = {
+    'poisson_laplace_eb_steps': 24,
+    'poisson_laplace_eb_inner': 4,
+    'poisson_laplace_eb_final': 6,
+    'poisson_laplace_eb_lr': 0.05,
+    'poisson_laplace_eb_blup_fallback_beta_jump': 0.0,
 }
 
 
@@ -60,6 +69,20 @@ def _bernoulliLaplaceEbKwarg(
     preset: dict[str, int | float],
 ):
     return kwargs.pop(key, preset.get(key, default))
+
+
+def _poissonLaplaceEbMode(value: bool | str) -> str:
+    if isinstance(value, bool):
+        return 'all' if value else 'off'
+    if isinstance(value, str):
+        value = value.lower()
+        if value in {'poisson_eb', 'calibrated', 'cal', 'default'}:
+            return 'cal'
+        if value in {'all', 'true', 'yes', 'on'}:
+            return 'all'
+        if value in {'off', 'false', 'no'}:
+            return 'off'
+    raise ValueError("poisson_laplace_eb must be bool, 'poisson_eb', 'calibrated', or 'off'")
 
 
 def _sliceBatch(
@@ -278,6 +301,41 @@ def glmm(
     bernoulli_laplace_eb_gate_min_d = kwargs.pop('bernoulli_laplace_eb_gate_min_d', 4)
     bernoulli_laplace_eb_gate_min_sigma = kwargs.pop('bernoulli_laplace_eb_gate_min_sigma', 0.75)
     bernoulli_laplace_eb_gate_eta_abs = kwargs.pop('bernoulli_laplace_eb_gate_eta_abs', 8.0)
+    poisson_laplace_eb = kwargs.pop('poisson_laplace_eb', False)
+    poisson_laplace_eb_mode = _poissonLaplaceEbMode(poisson_laplace_eb)
+    poisson_laplace_eb_preset = (
+        _POISSON_LAPLACE_EB_DEFAULTS if poisson_laplace_eb_mode == 'cal' else {}
+    )
+    if poisson_laplace_eb_mode == 'cal':
+        poisson_laplace_eb_mode = 'all'
+    poisson_laplace_eb_diagnostics = kwargs.pop('poisson_laplace_eb_diagnostics', False)
+    poisson_laplace_eb_steps = _bernoulliLaplaceEbKwarg(
+        kwargs, 'poisson_laplace_eb_steps', 12, poisson_laplace_eb_preset
+    )
+    poisson_laplace_eb_inner = _bernoulliLaplaceEbKwarg(
+        kwargs, 'poisson_laplace_eb_inner', 4, poisson_laplace_eb_preset
+    )
+    poisson_laplace_eb_final = _bernoulliLaplaceEbKwarg(
+        kwargs, 'poisson_laplace_eb_final', 6, poisson_laplace_eb_preset
+    )
+    poisson_laplace_eb_lr = _bernoulliLaplaceEbKwarg(
+        kwargs, 'poisson_laplace_eb_lr', 0.03, poisson_laplace_eb_preset
+    )
+    poisson_laplace_eb_blup_fallback_beta_jump = _bernoulliLaplaceEbKwarg(
+        kwargs,
+        'poisson_laplace_eb_blup_fallback_beta_jump',
+        None,
+        poisson_laplace_eb_preset,
+    )
+    poisson_laplace_eb_sigma_prior_cap = _bernoulliLaplaceEbKwarg(
+        kwargs, 'poisson_laplace_eb_sigma_prior_cap', None, poisson_laplace_eb_preset
+    )
+    poisson_laplace_eb_sigma_prior_cap_min_d = _bernoulliLaplaceEbKwarg(
+        kwargs,
+        'poisson_laplace_eb_sigma_prior_cap_min_d',
+        None,
+        poisson_laplace_eb_preset,
+    )
     mask_d = kwargs.pop('mask_d', None)
     uncorr = (eta_rfx == 0) if eta_rfx is not None else None  # (B,) bool or None
     if likelihood_family == 0:
@@ -474,6 +532,33 @@ def glmm(
                 _addLaplaceEbSkippedDiagnostics(stats, gate, Xm.dtype)
     elif likelihood_family == 2:
         stats = lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
+        if map_refine and poisson_laplace_eb_mode != 'off' and Zm.shape[-1] > 0:
+            gate = torch.ones(Xm.shape[0], device=Xm.device, dtype=torch.bool)
+            stats = refinePoissonLaplaceEb(
+                stats,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx=map_priors['nu_ffx'],
+                tau_ffx=map_priors['tau_ffx'],
+                family_ffx=map_priors['family_ffx'],
+                tau_rfx=map_priors['tau_rfx'],
+                family_sigma_rfx=map_priors['family_sigma_rfx'],
+                mask_d=mask_d,
+                mask_q=mask_q,
+                n_steps=poisson_laplace_eb_steps,
+                n_inner=poisson_laplace_eb_inner,
+                n_final=poisson_laplace_eb_final,
+                lr=poisson_laplace_eb_lr,
+                blup_fallback_beta_jump=poisson_laplace_eb_blup_fallback_beta_jump,
+                sigma_prior_cap=poisson_laplace_eb_sigma_prior_cap,
+                sigma_prior_cap_min_d=poisson_laplace_eb_sigma_prior_cap_min_d,
+                return_diagnostics=poisson_laplace_eb_diagnostics,
+            )
+            if poisson_laplace_eb_diagnostics:
+                _addLaplaceEbSkippedDiagnostics(stats, gate, Xm.dtype)
     else:
         raise ValueError(f'unsupported likelihood_family={likelihood_family}')
 
@@ -491,4 +576,5 @@ __all__ = [
     'refineBernoulliNestedBeta',
     'refineNormalLaplaceEb',
     'refineNormalMapSrfx',
+    'refinePoissonLaplaceEb',
 ]
