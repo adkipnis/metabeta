@@ -22,7 +22,8 @@ Usage (from repo root):
 from __future__ import annotations
 
 import argparse
-import signal
+import multiprocessing as mp
+import queue as _queue
 import sys
 import time
 import warnings
@@ -58,14 +59,6 @@ except Exception:
 INLA_DEFAULT_TIMEOUT_S = 120
 
 
-class _InlaTimeout(Exception):
-    pass
-
-
-def _inla_timeout_handler(signum, frame):
-    raise _InlaTimeout()
-
-
 def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
     denom = float(np.std(truth))
     return float(np.sqrt(np.mean(err**2))) / max(denom, 1e-8)
@@ -97,7 +90,7 @@ def _methodLabel(method: str, likelihood_family: int) -> str:
     if method == 'normal_eb':
         return 'NORMAL-EB'
     if method == 'current' and likelihood_family == 2:
-        return 'POISSON-EB-MARGINAL-BETA'
+        return 'POISSON-EB-SIGMA-GRID'
     return method.upper()
 
 
@@ -201,7 +194,6 @@ def _inla_estimate(
     ds_flat: dict,
     likelihood_family: int,
     re_correlation: str = 'auto',
-    timeout_s: int = INLA_DEFAULT_TIMEOUT_S,
 ) -> dict | None:
     """Run R-INLA on a flat dataset using the simulation's true priors.
 
@@ -236,8 +228,6 @@ def _inla_estimate(
     if re_correlation == 'diagonal':
         correlated = False
 
-    old_handler = signal.signal(signal.SIGALRM, _inla_timeout_handler)
-    signal.alarm(timeout_s)
     try:
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
@@ -393,19 +383,83 @@ def _inla_estimate(
 
         return {'beta': beta, 'sigma_rfx': sigma_rfx, 'blups': blups}
 
-    except _InlaTimeout:
-        print(
-            f'\nINLA timeout after {timeout_s}s (d={ds_flat["d"]}, q={ds_flat["q"]},'
-            f' m={ds_flat["m"]}, n={len(ds_flat["y"])}) — skipping dataset',
-            file=sys.stderr,
-            flush=True,
-        )
-        return None
     except Exception:
         return None
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old_handler)
+
+
+def _inla_worker_loop(task_q: mp.Queue, result_q: mp.Queue) -> None:
+    """Run in a child process: receive tasks, run INLA, put results back."""
+    while True:
+        task = task_q.get()
+        if task is None:
+            break
+        ds_flat, likelihood_family, re_correlation = task
+        result = _inla_estimate(ds_flat, likelihood_family, re_correlation)
+        result_q.put(result)
+
+
+class _InlaWorker:
+    """Persistent subprocess for R-INLA with process-level timeout.
+
+    SIGALRM cannot interrupt blocking rpy2/R C calls, so we fork a worker
+    process and use result_q.get(timeout=...) to enforce the deadline.
+    On timeout, we terminate/kill the worker and spawn a fresh one.
+    """
+
+    def __init__(self, timeout_s: int = INLA_DEFAULT_TIMEOUT_S) -> None:
+        self.timeout_s = timeout_s
+        self._ctx = mp.get_context('fork')
+        self._task_q: mp.Queue | None = None
+        self._result_q: mp.Queue | None = None
+        self._proc: mp.Process | None = None
+        self._spawn()
+
+    def _spawn(self) -> None:
+        self._task_q = self._ctx.Queue()
+        self._result_q = self._ctx.Queue()
+        self._proc = self._ctx.Process(
+            target=_inla_worker_loop,
+            args=(self._task_q, self._result_q),
+            daemon=True,
+        )
+        self._proc.start()
+
+    def _kill(self) -> None:
+        if self._proc and self._proc.is_alive():
+            self._proc.terminate()
+            self._proc.join(2)
+            if self._proc.is_alive():
+                self._proc.kill()
+                self._proc.join(1)
+
+    def estimate(
+        self,
+        ds_flat: dict,
+        likelihood_family: int,
+        re_correlation: str = 'auto',
+    ) -> dict | None:
+        self._task_q.put((ds_flat, likelihood_family, re_correlation))
+        try:
+            return self._result_q.get(timeout=self.timeout_s)
+        except _queue.Empty:
+            print(
+                f'\nINLA timeout after {self.timeout_s}s'
+                f' (d={ds_flat["d"]}, q={ds_flat["q"]},'
+                f' m={ds_flat["m"]}, n={len(ds_flat["y"])}) — skipping, restarting worker',
+                file=sys.stderr,
+                flush=True,
+            )
+            self._kill()
+            self._spawn()
+            return None
+
+    def close(self) -> None:
+        try:
+            self._task_q.put(None)
+            self._proc.join(5)
+        except Exception:
+            pass
+        self._kill()
 
 
 def _breakdown_srfx(err: np.ndarray, truth: np.ndarray, label: str) -> str:
@@ -471,6 +525,8 @@ def run_one_dataset(
     matched_metrics = {method: _metricLists() for method in analytical_methods}
     inla_metrics = _metricLists()
     inla_n_tried = inla_n_ok = 0
+
+    inla_worker = _InlaWorker(inla_timeout_s) if _HAS_INLA else None
 
     ds_bar = tqdm(
         total=n_total if n_total > 0 else None,
@@ -614,7 +670,7 @@ def run_one_dataset(
                     inla_n_tried += 1
                     ds_flat = _flatten(batch, b, active_d, active_q)
                     t_i = time.perf_counter()
-                    est = _inla_estimate(ds_flat, likelihood_family, re_correlation, inla_timeout_s)
+                    est = inla_worker.estimate(ds_flat, likelihood_family, re_correlation)
                     inla_elapsed = time.perf_counter() - t_i
                     inla_metrics['wall'].append(inla_elapsed)
                     inla_bar.set_postfix(ok=inla_n_ok, s=f'{inla_elapsed:.1f}')
@@ -642,6 +698,8 @@ def run_one_dataset(
 
     ds_bar.close()
     inla_bar.close()
+    if inla_worker:
+        inla_worker.close()
     all_flat = {
         method: {key: _flat(values) for key, values in store.items() if key != 'wall'}
         for method, store in all_metrics.items()
