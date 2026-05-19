@@ -22,12 +22,14 @@ Usage (from repo root):
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 import warnings
 
 import numpy as np
 import torch
 from tabulate import tabulate
+from tqdm import tqdm
 
 from metabeta.analytical.fit import glmm
 from metabeta.utils.config import loadDataConfig
@@ -444,6 +446,21 @@ def run_one_dataset(
     inla_metrics = _metricLists()
     inla_n_tried = inla_n_ok = 0
 
+    ds_bar = tqdm(
+        total=n_total if n_total > 0 else None,
+        desc=f'{data_id}/{partition} datasets',
+        unit='ds',
+        file=sys.stderr,
+        leave=False,
+    )
+    inla_bar = tqdm(
+        total=n_inla if _HAS_INLA else 0,
+        desc='INLA',
+        unit='ds',
+        file=sys.stderr,
+        leave=True,
+    )
+
     with torch.no_grad():
         n_seen = 0
         done = False
@@ -562,6 +579,7 @@ def run_one_dataset(
                         store['wall'].append(stats_np[method]['wall'])
 
                     n_seen += 1
+                    ds_bar.update(1)
 
                     if not _HAS_INLA or inla_n_tried >= n_inla:
                         continue
@@ -570,7 +588,10 @@ def run_one_dataset(
                     ds_flat = _flatten(batch, b, active_d, active_q)
                     t_i = time.perf_counter()
                     est = _inla_estimate(ds_flat, likelihood_family, re_correlation)
-                    inla_metrics['wall'].append(time.perf_counter() - t_i)
+                    inla_elapsed = time.perf_counter() - t_i
+                    inla_metrics['wall'].append(inla_elapsed)
+                    inla_bar.set_postfix(ok=inla_n_ok, s=f'{inla_elapsed:.1f}')
+                    inla_bar.update(1)
 
                     if est is None:
                         continue
@@ -592,6 +613,8 @@ def run_one_dataset(
                     )
                     inla_metrics['rt'].append(re_t)
 
+    ds_bar.close()
+    inla_bar.close()
     all_flat = {
         method: {key: _flat(values) for key, values in store.items() if key != 'wall'}
         for method, store in all_metrics.items()
