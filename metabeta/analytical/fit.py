@@ -303,7 +303,8 @@ def glmm(
     bernoulli_laplace_eb_gate_min_d = kwargs.pop('bernoulli_laplace_eb_gate_min_d', 4)
     bernoulli_laplace_eb_gate_min_sigma = kwargs.pop('bernoulli_laplace_eb_gate_min_sigma', 0.75)
     bernoulli_laplace_eb_gate_eta_abs = kwargs.pop('bernoulli_laplace_eb_gate_eta_abs', 8.0)
-    poisson_laplace_eb = kwargs.pop('poisson_laplace_eb', False)
+    poisson_laplace_eb_default = 'poisson_eb' if likelihood_family == 2 else False
+    poisson_laplace_eb = kwargs.pop('poisson_laplace_eb', poisson_laplace_eb_default)
     poisson_laplace_eb_mode = _poissonLaplaceEbMode(poisson_laplace_eb)
     poisson_laplace_eb_preset = (
         _POISSON_LAPLACE_EB_DEFAULTS if poisson_laplace_eb_mode == 'cal' else {}

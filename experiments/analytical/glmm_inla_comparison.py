@@ -86,7 +86,7 @@ def _methodLabel(method: str, likelihood_family: int) -> str:
     if method == 'normal_eb':
         return 'NORMAL-EB'
     if method == 'current' and likelihood_family == 2:
-        return 'POISSON-PQL'
+        return 'POISSON-EB'
     return method.upper()
 
 
@@ -487,6 +487,7 @@ def run_one_dataset(
                             'map_refine': False,
                             'bernoulli_laplace_eb': False,
                             'normal_laplace_eb': False,
+                            'poisson_laplace_eb': False,
                         }
                     elif method == 'normal_eb' and likelihood_family == 0:
                         method_kwargs = {

@@ -92,7 +92,9 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                             bernoulli_laplace_eb_diagnostics=(
                                 method in {'default', 'current', 'bernoulli_eb'}
                             ),
-                            poisson_laplace_eb_diagnostics=(method == 'poisson_eb'),
+                            poisson_laplace_eb_diagnostics=(
+                                method in {'default', 'current', 'poisson_eb'}
+                            ),
                             **_bernoulliEbKwargs(method, args),
                             **_normalEbKwargs(method, args),
                             **_poissonEbKwargs(method, args),
@@ -253,7 +255,11 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
     if method in {'default', 'current'}:
         return {}
     if method == 'raw':
-        return {'bernoulli_laplace_eb': False, 'normal_laplace_eb': False}
+        return {
+            'bernoulli_laplace_eb': False,
+            'normal_laplace_eb': False,
+            'poisson_laplace_eb': False,
+        }
     if method == 'bernoulli_eb':
         return {'bernoulli_laplace_eb': 'bernoulli_eb', 'normal_laplace_eb': False}
     if method == 'normal_eb':
@@ -304,7 +310,7 @@ def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
 
 
 def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
-    if method != 'poisson_eb':
+    if method not in {'default', 'current', 'poisson_eb'}:
         return {}
     return {
         'poisson_laplace_eb_steps': args.poisson_eb_steps,
