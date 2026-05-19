@@ -27,6 +27,7 @@ import queue as _queue
 import sys
 import time
 import warnings
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -119,6 +120,168 @@ def _sliceBatch(batch: dict[str, torch.Tensor], n: int) -> dict[str, torch.Tenso
         else:
             out[key] = value
     return out
+
+
+def _pad1d(values: np.ndarray, size: int, fill: float = np.nan) -> np.ndarray:
+    out = np.full(size, fill, dtype=float)
+    n = min(size, len(values))
+    if n > 0:
+        out[:n] = values[:n]
+    return out
+
+
+def _pad2d(values: np.ndarray, rows: int, cols: int, fill: float = np.nan) -> np.ndarray:
+    out = np.full((rows, cols), fill, dtype=float)
+    r = min(rows, values.shape[0])
+    c = min(cols, values.shape[1]) if values.ndim == 2 else 0
+    if r > 0 and c > 0:
+        out[:r, :c] = values[:r, :c]
+    return out
+
+
+def _rowScalar(stats: dict, key: str, b: int) -> float:
+    value = stats.get(key)
+    if value is None or not torch.is_tensor(value) or value.ndim == 0 or b >= value.shape[0]:
+        return float('nan')
+    return float(value[b].detach().cpu().item())
+
+
+def _rowCountStats(batch: dict[str, torch.Tensor], b: int) -> dict[str, float]:
+    m = int(batch['m'][b].item())
+    y = batch['y'][b, :m].detach().cpu().numpy()
+    mask = batch['mask_n'][b, :m].detach().cpu().numpy().astype(bool)
+    y_active = y[mask]
+    if not y_active.size:
+        return {
+            'y_mean': float('nan'),
+            'y_var': float('nan'),
+            'y_max': float('nan'),
+            'y_zero_frac': float('nan'),
+            'y_tail_frac': float('nan'),
+        }
+    mean = float(np.mean(y_active))
+    std = float(np.std(y_active))
+    tail_cut = mean + 2.0 * std
+    return {
+        'y_mean': mean,
+        'y_var': float(np.var(y_active)),
+        'y_max': float(np.max(y_active)),
+        'y_zero_frac': float(np.mean(y_active == 0.0)),
+        'y_tail_frac': float(np.mean(y_active > tail_cut)) if std > 0.0 else 0.0,
+    }
+
+
+def _batchVectorOrNan(
+    batch: dict[str, torch.Tensor],
+    key: str,
+    b: int,
+    size: int,
+) -> np.ndarray:
+    value = batch.get(key)
+    if value is None or not torch.is_tensor(value):
+        return np.full(size, np.nan, dtype=float)
+    return value[b, :size].detach().cpu().numpy().astype(float)
+
+
+def _appendInlaRowRecord(
+    records: list[dict],
+    *,
+    data_id: str,
+    partition: str,
+    dataset_idx: int,
+    batch: dict[str, torch.Tensor],
+    b: int,
+    active_d: np.ndarray,
+    active_q: np.ndarray,
+    stats_np: dict[str, dict],
+    stats_torch: dict[str, dict],
+    analytical_methods: list[str],
+    est: dict,
+    inla_wall_s: float,
+    max_d: int,
+    max_q: int,
+) -> None:
+    m_b = int(batch['m'][b].item())
+    max_m = batch['rfx'].shape[1]
+    record = {
+        'data_id': data_id,
+        'partition': partition,
+        'dataset_idx': dataset_idx,
+        'n': int(batch['n'][b].item()),
+        'm': m_b,
+        'd': int(active_d.size),
+        'q': int(active_q.size),
+        'mask_d': _pad1d(np.isin(np.arange(max_d), active_d).astype(float), max_d, fill=0.0),
+        'mask_q': _pad1d(np.isin(np.arange(max_q), active_q).astype(float), max_q, fill=0.0),
+        'beta_true': batch['ffx'][b, :max_d].detach().cpu().numpy().astype(float),
+        'sigma_rfx_true': batch['sigma_rfx'][b, :max_q].detach().cpu().numpy().astype(float),
+        'blup_true': batch['rfx'][b, :max_m, :max_q].detach().cpu().numpy().astype(float),
+        'nu_ffx': _batchVectorOrNan(batch, 'nu_ffx', b, max_d),
+        'tau_ffx': _batchVectorOrNan(batch, 'tau_ffx', b, max_d),
+        'tau_rfx': _batchVectorOrNan(batch, 'tau_rfx', b, max_q),
+        'eta_rfx': (
+            float(batch['eta_rfx'][b].detach().cpu().item())
+            if torch.is_tensor(batch.get('eta_rfx'))
+            else float('nan')
+        ),
+        'beta_inla': _pad1d(est['beta'], max_d),
+        'sigma_rfx_inla': _pad1d(est['sigma_rfx'], max_q),
+        'blup_inla': _pad2d(est['blups'], max_m, max_q),
+        'inla_wall_s': float(inla_wall_s),
+        **_rowCountStats(batch, b),
+    }
+    for method in analytical_methods:
+        record[f'beta_{method}'] = stats_np[method]['beta'][b, :max_d].astype(float)
+        record[f'sigma_rfx_{method}'] = stats_np[method]['srfx'][b, :max_q].astype(float)
+        record[f'blup_{method}'] = stats_np[method]['blup'][b, :max_m, :max_q].astype(float)
+        record[f'wall_ms_{method}'] = float(stats_np[method]['wall'] * 1000.0)
+
+    current_stats = stats_torch.get('current')
+    if current_stats is not None:
+        for key in (
+            'laplace_eb_accept',
+            'laplace_eb_sigma_prior_capped',
+            'laplace_eb_blup_fallback',
+            'laplace_eb_beta_jump',
+            'poisson_marginal_beta_gate',
+            'poisson_marginal_beta_accept',
+            'poisson_marginal_beta_jump',
+            'poisson_sigma_grid_gate',
+            'poisson_sigma_grid_accept',
+            'poisson_sigma_grid_scale',
+        ):
+            record[key] = _rowScalar(current_stats, key, b)
+    records.append(record)
+
+
+def _saveInlaRowRecords(
+    records: list[dict],
+    output_dir: Path,
+    *,
+    data_id: str,
+    partition: str,
+    analytical_methods: list[str],
+    likelihood_family: int,
+) -> None:
+    if not records:
+        return
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f'{data_id}_{partition}_inla_rows.npz'
+    keys = sorted(records[0].keys())
+    payload = {
+        'data_id': np.array(data_id),
+        'partition': np.array(partition),
+        'likelihood_family': np.array(likelihood_family, dtype=np.int64),
+        'analytical_methods': np.array(analytical_methods),
+    }
+    for key in keys:
+        values = [row[key] for row in records]
+        if isinstance(values[0], str):
+            payload[key] = np.array(values)
+        else:
+            payload[key] = np.stack(values) if np.ndim(values[0]) > 0 else np.array(values)
+    np.savez_compressed(path, **payload)
+    print(f'Wrote INLA row estimates: {path} ({len(records)} rows)', flush=True)
 
 
 def _flatten(batch: dict, b: int, active_d: np.ndarray, active_q: np.ndarray) -> dict:
@@ -499,6 +662,7 @@ def run_one_dataset(
     analytical_methods: list[str] | None = None,
     re_correlation: str = 'auto',
     inla_timeout_s: int = INLA_DEFAULT_TIMEOUT_S,
+    save_inla_rows_dir: Path | None = None,
     device: torch.device | None = None,
 ) -> dict:
     """Run analytical GLMM methods vs R-INLA on one dataset, return metrics dict."""
@@ -525,6 +689,7 @@ def run_one_dataset(
     matched_metrics = {method: _metricLists() for method in analytical_methods}
     inla_metrics = _metricLists()
     inla_n_tried = inla_n_ok = 0
+    inla_row_records: list[dict] = []
 
     inla_worker = _InlaWorker(inla_timeout_s) if _HAS_INLA else None
 
@@ -563,6 +728,7 @@ def run_one_dataset(
                 Zm = batch['Z'][..., :max_q]
 
                 stats_np = {}
+                stats_torch = {}
                 for method in analytical_methods:
                     if method == 'raw':
                         method_kwargs = {
@@ -592,6 +758,12 @@ def run_one_dataset(
                         }
                     else:
                         method_kwargs = {'map_refine': True}
+                    if (
+                        save_inla_rows_dir is not None
+                        and method == 'current'
+                        and likelihood_family == 2
+                    ):
+                        method_kwargs['poisson_laplace_eb_diagnostics'] = True
                     t0 = time.perf_counter()
                     stats = glmm(
                         batch['X'],
@@ -615,6 +787,7 @@ def run_one_dataset(
                         **method_kwargs,
                     )
                     elapsed = time.perf_counter() - t0
+                    stats_torch[method] = stats
                     stats_np[method] = {
                         'beta': stats['beta_est'].cpu().numpy(),
                         'srfx': stats['sigma_rfx_est'].cpu().numpy(),
@@ -695,11 +868,38 @@ def run_one_dataset(
                         (est['blups'][:m_b] - rfx_true[b, :m_b][:, active_q]).reshape(-1)
                     )
                     inla_metrics['rt'].append(re_t)
+                    if save_inla_rows_dir is not None:
+                        _appendInlaRowRecord(
+                            inla_row_records,
+                            data_id=data_id,
+                            partition=partition,
+                            dataset_idx=n_seen - 1,
+                            batch=batch,
+                            b=b,
+                            active_d=active_d,
+                            active_q=active_q,
+                            stats_np=stats_np,
+                            stats_torch=stats_torch,
+                            analytical_methods=analytical_methods,
+                            est=est,
+                            inla_wall_s=inla_elapsed,
+                            max_d=max_d,
+                            max_q=max_q,
+                        )
 
     ds_bar.close()
     inla_bar.close()
     if inla_worker:
         inla_worker.close()
+    if save_inla_rows_dir is not None:
+        _saveInlaRowRecords(
+            inla_row_records,
+            save_inla_rows_dir,
+            data_id=data_id,
+            partition=partition,
+            analytical_methods=analytical_methods,
+            likelihood_family=likelihood_family,
+        )
     all_flat = {
         method: {key: _flat(values) for key, values in store.items() if key != 'wall'}
         for method, store in all_metrics.items()
@@ -836,6 +1036,7 @@ def main(
     analytical_methods: list[str] | None = None,
     re_correlation: str = 'auto',
     inla_timeout_s: int = INLA_DEFAULT_TIMEOUT_S,
+    save_inla_rows_dir: str = '',
 ) -> None:
     if analytical_methods is None:
         analytical_methods = ['raw', 'current']
@@ -846,6 +1047,9 @@ def main(
     print(f'Analytical methods: {", ".join(analytical_methods)}')
     print(f'R-INLA random-effects correlation: {re_correlation}')
     print(f'R-INLA per-dataset timeout: {inla_timeout_s}s')
+    row_output_dir = Path(save_inla_rows_dir) if save_inla_rows_dir else None
+    if row_output_dir is not None:
+        print(f'INLA row estimates: {row_output_dir}')
     print()
 
     all_metrics = []
@@ -860,6 +1064,7 @@ def main(
                 analytical_methods=analytical_methods,
                 re_correlation=re_correlation,
                 inla_timeout_s=inla_timeout_s,
+                save_inla_rows_dir=row_output_dir,
             )
         )
 
@@ -930,6 +1135,8 @@ if __name__ == '__main__':
                         help='R-INLA RE correlation: diagonal forces iid per dim for all families')
     parser.add_argument('--inla-timeout', default=INLA_DEFAULT_TIMEOUT_S, type=int,
                         help=f'per-dataset INLA timeout in seconds (default: {INLA_DEFAULT_TIMEOUT_S})')
+    parser.add_argument('--save-inla-rows-dir', default='',
+                        help='optional directory for compressed per-row INLA estimate .npz files')
     # fmt: on
     a = parser.parse_args()
     main(
@@ -941,4 +1148,5 @@ if __name__ == '__main__':
         analytical_methods=_parseAnalyticalMethods(a.analytical_methods),
         re_correlation=a.re_correlation,
         inla_timeout_s=a.inla_timeout,
+        save_inla_rows_dir=a.save_inla_rows_dir,
     )
