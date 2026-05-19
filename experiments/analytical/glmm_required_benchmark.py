@@ -346,8 +346,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-eb-final', type=int, default=6)
     parser.add_argument('--poisson-eb-lr', type=float, default=0.05)
     parser.add_argument('--poisson-eb-blup-fallback-beta-jump', type=float, default=0.0)
-    parser.add_argument('--poisson-eb-sigma-prior-cap', type=float, default=None)
-    parser.add_argument('--poisson-eb-sigma-prior-cap-min-d', type=int, default=None)
+    parser.add_argument('--poisson-eb-sigma-prior-cap', type=float, default=2.5)
+    parser.add_argument('--poisson-eb-sigma-prior-cap-min-d', type=int, default=5)
     return parser.parse_args()
 # fmt: on
 

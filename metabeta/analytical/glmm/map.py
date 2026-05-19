@@ -1087,7 +1087,7 @@ def refinePoissonLaplaceEb(
         if sigma_prior_cap is not None and tau_rfx is not None:
             sigma_cap = float(sigma_prior_cap) * tau_rfx[:, :q].to(device=device).clamp(min=1e-4)
             sigma_capped = torch.minimum(sigma, sigma_cap)
-            cap_active = active_q & (sigma_capped < sigma)
+            cap_active = active_q & accept[:, None] & (sigma_capped < sigma)
             if sigma_prior_cap_min_d is not None:
                 if mask_d is None:
                     d_count = torch.full((B,), d, device=device, dtype=torch.long)
@@ -1117,6 +1117,13 @@ def refinePoissonLaplaceEb(
                 blup_var_new = blup_var_new * mask_m[:, :, None] * active_q[:, None, :].to(dtype)
                 blups = torch.where(sigma_prior_capped[:, None, None], blups_new, blups)
                 blup_var = torch.where(sigma_prior_capped[:, None, None], blup_var_new, blup_var)
+                if blup_fallback.any() and 'blup_var' in stats:
+                    blups = torch.where(
+                        blup_fallback[:, None, None], stats['blup_est'][:, :, :q], blups
+                    )
+                    blup_var = torch.where(
+                        blup_fallback[:, None, None], stats['blup_var'][:, :, :q], blup_var
+                    )
 
     out = dict(stats)
     out['beta_est'] = beta_final

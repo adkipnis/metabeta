@@ -17,18 +17,26 @@ Default Path
 ------------
 
 **RAW / POISSON-PQL** is the current Poisson analytical path in `glmm()`. It uses PQL/IRLS
-with Laplace-linearised working responses. No EB refinement has been developed for Poisson
-yet — RAW and POISSON-PQL produce identical output.
+with Laplace-linearised working responses.
 
-A default-off **Poisson EB** path analogous to Bernoulli EB is the primary development target.
-Promote it only after it beats RAW on the full mixed + sampled benchmark without material
-σ/BLUP regressions.
+A default-off **Poisson EB** prototype now exists behind
+`glmm(..., poisson_laplace_eb='poisson_eb')` and the benchmark method `poisson_eb`.
+It reuses the Bernoulli diagonal Laplace-EB structure with a Poisson log-link target:
+
+- Adam over β and diagonal log σ_rfx, with nested per-group random-effect mode solves;
+- fixed-effect and σ_rfx priors in the Laplace target;
+- per-row accept gate against incoming RAW/PQL;
+- accepted-row BLUP fallback to RAW/PQL, because Poisson EB modes currently regress BLUP on
+  most small/medium cells;
+- accepted-row-only σ cap at `2.5 * tau_rfx` for effective `d >= 5`.
+
+Do not make this the default until it clears the full 8k mixed + sampled benchmark.
 
 Performance Snapshot
 --------------------
 
 Matched first-1000 per comparison row. CPU ms/dataset refers to the analytical (RAW) method.
-Lower NRMSE is better. Medium/large/huge rows pending (INLA runs in progress as of 2026-05-19).
+Lower NRMSE is better. Large/huge rows pending (INLA runs in progress as of 2026-05-19).
 
 | Dataset          | part  | RAW FFX   | INLA FFX  | RAW σ     | INLA σ    | RAW BLUP  | INLA BLUP | INLA s/ds |
 | ---              | ---   | ---:      | ---:      | ---:      | ---:      | ---:      | ---:      | ---:      |
@@ -49,10 +57,37 @@ INLA logs are under `experiments/analytical/inla_runs/poisson_sampled/` and
 `experiments/analytical/inla_runs/poisson_mixed/`. All runs use data regenerated on
 2026-05-19 with the Poisson LP scale calibration (`_calibratePoissonEtaScale`, caps [1.0, 2.0]).
 
+Poisson EB Prototype Snapshot
+-----------------------------
+
+Expanded quick gate: first 1000 rows for small and medium mixed train (`n_epochs=2`) plus
+sampled valid/test. Lower NRMSE is better.
+
+| Dataset | part | RAW FFX | EB FFX | RAW σ | EB σ | RAW BLUP | EB BLUP | EB ms/ds | accept | σ cap |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-p-mixed | train | 0.4806 | **0.4269** | 0.7185 | **0.5272** | 0.5713 | 0.5713 | 29.13 | 0.879 | 0.000 |
+| small-p-sampled | valid | 0.7351 | **0.6375** | 0.7369 | **0.5645** | 0.5823 | 0.5823 | 24.05 | 0.897 | 0.000 |
+| small-p-sampled | test | 0.6525 | **0.5429** | 0.7524 | **0.6323** | 0.6708 | 0.6708 | 24.34 | 0.894 | 0.000 |
+| medium-p-mixed | train | 0.5185 | **0.4525** | 0.9753 | **0.5695** | 0.6445 | 0.6445 | 43.48 | 0.813 | 0.069 |
+| medium-p-sampled | valid | 0.8220 | **0.7291** | 1.2083 | **0.5646** | 0.7509 | 0.7509 | 44.61 | 0.896 | 0.074 |
+| medium-p-sampled | test | 0.6852 | **0.5963** | 0.9222 | **0.5979** | 0.6261 | 0.6261 | 41.81 | 0.837 | 0.083 |
+
+Incremental findings:
+
+- The first direct Poisson EB module improved FFX/σ but regressed BLUP on small mixed and
+  valid rows. The accepted-row BLUP fallback fixes this without giving up FFX/σ gains.
+- The `24` step, `lr=0.05` preset was clearly better than the initial `12` step,
+  `lr=0.03` prototype on all small FFX/σ cells, with runtime still below the 100 ms/dataset
+  target.
+- A relaxed BLUP fallback threshold (`β jump >= 1.0`) was rejected: it improved only
+  medium sampled valid BLUP and regressed four of the other five small/medium cells.
+- The `2.5 * tau_rfx` σ cap improves all medium σ rows while leaving small rows unchanged.
+  A tighter `2.0` cap fired more often and was slightly worse on all medium σ rows.
+
 Takeaways
 ---------
 
-From small rows only — medium+ pending.
+From small and medium rows; large/huge pending.
 
 - RAW has a large FFX gap vs INLA at small scale (~2.5–3× worse NRMSE). This mirrors the
   Bernoulli pattern before Bernoulli EB: PQL/IRLS fixed effects are biased relative to
@@ -100,25 +135,21 @@ Skip these initially:
 Next Steps
 ----------
 
-1. **Implement `poisson_eb` as a default-off prototype.** Add Poisson-specific Laplace mode
-   and target helpers next to the Bernoulli EB helpers, but avoid refactoring the Bernoulli
-   production path during the prototype. The target should use the same stabilized Poisson
-   mean convention as PQL (`_poissonMeanDerivative`, η cap/taper) and omit only constants
-   independent of β/σ.
+1. **Keep `poisson_eb` default-off until the full benchmark clears.** The prototype is
+   promising on small/medium, but promotion requires large/huge first-1000 and then 8k
+   mixed + sampled results.
 
-2. **Start with the minimal Bernoulli EB subset.** Optimize β and diagonal log σ with Adam,
-   re-solve group modes each step, include fixed-effect and σ_rfx priors, compute final
-   BLUPs/variances from the final Hessian, and accept only rows whose Poisson Laplace target
-   beats the RAW/PQL baseline.
+2. **Run the expanded quick gate for any further patch.** Use small + medium mixed train and
+   sampled valid/test, first 1000 rows each. A patch must improve FFX/σ without BLUP
+   regressions before moving to large/huge.
 
-3. **Benchmark sequentially.** First run small mixed + sampled first-1000 against RAW. If
-   FFX improves without σ/BLUP regressions, run all sizes first-1000. Only then run the 8k
-   analytical comparison and the matched INLA table as available.
+3. **Next candidate: diagnose whether EB BLUPs can be selectively trusted.** The safe
+   default is RAW/PQL BLUP fallback, but medium sampled valid suggests some rows benefit from
+   EB modes. Only keep a selector if it improves the expanded gate without mixed-row BLUP
+   regressions.
 
-4. **Add stabilizers conditionally.** If σ remains the main gap, test a Bernoulli-style
-   `sigma_prior_cap` plus BLUP recomputation. If FFX outliers appear, diagnose η/beta tails
-   before adding any β output cap or BLUP fallback. Keep each stabilizer separately
-   benchmarked and remove it if it fails the full-table criterion.
+4. **Then run all sizes first-1000, followed by the 8k analytical benchmark.** If large/huge
+   follow the medium pattern, consider promoting `poisson_eb` to the default Poisson path.
 
 5. **Complete the INLA comparison baseline in parallel.** Fill in medium/large/huge rows as
    logs finish. Do not wait for the full INLA table before prototyping EB, because the small
@@ -129,7 +160,7 @@ Commands
 
 ```bash
 uv run python -u experiments/analytical/glmm_required_benchmark.py \
-    --family p --methods raw current \
+    --family p --methods raw current poisson_eb \
     --combos small-p-mixed:train:2 small-p-sampled:valid small-p-sampled:test \
         medium-p-mixed:train:2 medium-p-sampled:valid medium-p-sampled:test \
         large-p-mixed:train:2 large-p-sampled:valid large-p-sampled:test \
@@ -155,3 +186,5 @@ Retired Lines
   clearly diagnosed way.
 - Unconditional Bernoulli-style β output cap: not justified for Poisson without a
   high-count tail diagnostic.
+- Relaxed BLUP fallback at `β jump >= 1.0`: regresses most small/medium BLUP rows.
+- Poisson σ cap `2.0 * tau_rfx`: slightly worse than `2.5` on all medium σ rows.

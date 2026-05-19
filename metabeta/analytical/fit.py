@@ -41,6 +41,8 @@ _POISSON_LAPLACE_EB_DEFAULTS = {
     'poisson_laplace_eb_final': 6,
     'poisson_laplace_eb_lr': 0.05,
     'poisson_laplace_eb_blup_fallback_beta_jump': 0.0,
+    'poisson_laplace_eb_sigma_prior_cap': 2.5,
+    'poisson_laplace_eb_sigma_prior_cap_min_d': 5,
 }
 
 
