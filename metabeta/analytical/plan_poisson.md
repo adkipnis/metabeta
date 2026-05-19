@@ -41,7 +41,7 @@ Performance Snapshot
 --------------------
 
 Matched first-1000 per comparison row. CPU ms/dataset refers to the analytical (RAW) method.
-Lower NRMSE is better. Large/huge rows pending (INLA runs in progress as of 2026-05-19).
+Lower NRMSE is better. Large rows are refreshed; huge rows are running as of 2026-05-19.
 
 | Dataset          | part  | RAW FFX   | INLA FFX  | RAW σ     | INLA σ    | RAW BLUP  | INLA BLUP | INLA s/ds |
 | ---              | ---   | ---:      | ---:      | ---:      | ---:      | ---:      | ---:      | ---:      |
@@ -111,6 +111,10 @@ From first-1000 rows across all sizes:
   sampled rows. The biggest gain is σ on medium+ rows.
 - BLUP is deliberately neutral at this stage. Direct EB BLUP modes regressed most cells, so
   the retained default feeds RAW/PQL BLUPs through while using EB β and σ.
+- The current Bernoulli-style EB transplant is not enough for Poisson FFX. The likely
+  missing piece is Poisson log-link marginalization: random-effect variance changes the
+  marginal mean via an `exp(0.5 * zΨz)` factor, so β and σ need a correction that directly
+  targets marginal mean calibration rather than only the conditional mode target.
 - No separation analogue for Poisson, but heavy-tailed count overdispersion may introduce
   analogous instabilities at higher d.
 - The INLA ms/ds (~3 s) vs RAW (~4 ms) ratio is ~750× — consistent with the Bernoulli gap.
@@ -139,39 +143,47 @@ Reuse these pieces:
 Skip these initially:
 
 - **Bernoulli nAGQ and nested-β pre-refiners.** They were useful stepping stones before the
-  retained EB path, but adding them to Poisson would create extra branches before we know
-  whether direct EB closes the RAW gap.
+  retained EB path, but Poisson now needs a Poisson-specific β correction before adding
+  more Bernoulli-derived optimizer branches.
 - **Separation-specific β output cap.** Poisson has no Bernoulli separation analogue. Keep
   the existing Poisson η/beta clamps for numerical stability; add a Poisson-specific cap
   only if diagnostics show high-count tails causing β explosions.
 - **Broad sigma grids, multi-starts, EP, or full PyTorch INLA.** These add moving parts and
-  target the expensive part of INLA. Start with one diagonal Laplace mode and one optimizer.
+  target the expensive part of INLA. Consider only a tiny targeted quadrature/grid if the
+  INLA diagnostic shows the remaining gap is concentrated in low-q or high-σ rows.
 - **BLUP variance inflation changes.** First improve point estimates. Coverage calibration
   can follow if `glmm_error_analysis.py` shows Poisson interval undercoverage.
 
 Next Steps
 ----------
 
-1. **Run the full 8k analytical benchmark with Poisson EB as current.** Promotion is done
-   based on the first-1000 all-size gate; the next check is that the full generated suite
-   keeps the same FFX/σ gains without BLUP regressions.
+1. **Diagnose movement toward INLA.** On rows with INLA references, measure whether Poisson
+   EB moves β from RAW toward INLA, away from INLA, or mostly changes σ. Include row-level
+   summaries by `d`, `q`, σ magnitude, count scale, β jump, EB accept, and σ cap. If β
+   movement is small or poorly aligned with INLA, further tuning of the current optimizer is
+   unlikely to close the main gap.
 
-2. **Run the expanded quick gate for any further patch.** Use small + medium mixed train and
-   sampled valid/test, first 1000 rows each. A patch must improve FFX/σ without BLUP
-   regressions before moving to large/huge.
+2. **Prototype a Poisson marginal-mean β correction.** Use the current Ψ estimate to add a
+   cheap marginalization correction,
+   `η_marg ≈ Xβ + 0.5 * diag(ZΨZ')`, then re-fit or adjust β so the Poisson marginal mean is
+   calibrated. This directly targets the log-link bias that the Bernoulli-derived EB path
+   does not address.
 
-3. **Next candidate: diagnose whether EB BLUPs can be selectively trusted.** The safe
-   default is RAW/PQL BLUP fallback, but medium sampled valid suggests some rows benefit from
-   EB modes. Only keep a selector if it improves the expanded gate without mixed-row BLUP
-   regressions.
+3. **Try a variance-aware β refinement before touching BLUPs.** Build a batched β update
+   using Poisson weights/offsets from the current random-effect variance and fitted μ. Keep
+   RAW/PQL BLUP fallback unless this β-focused path first improves FFX/σ on the quick gate.
 
-4. **After 8k, decide whether to investigate selective EB BLUP trust.** Keep this lower
-   priority than FFX/σ unless the full benchmark shows a material BLUP gap that RAW/PQL
-   cannot carry.
+4. **Use tiny targeted quadrature/grid only if diagnostics justify it.** If the INLA gap is
+   concentrated in `q <= 2`, high-σ, or high-count-tail rows, test a narrow adaptive
+   correction for those rows. Skip broad grids, multi-starts, and full PyTorch INLA unless a
+   targeted diagnostic shows that the simpler marginal correction cannot move the gap.
 
-5. **Complete the INLA comparison baseline in parallel.** Fill in medium/large/huge rows as
-   logs finish. Do not wait for the full INLA table before prototyping EB, because the small
-   rows already show a large and actionable RAW gap.
+5. **Postpone the full 8k analytical benchmark.** Run it only after a more serious
+   Poisson-specific improvement beats the current EB path on the first-1000 quick gate.
+
+6. **Complete the INLA comparison baseline in parallel.** Large rows are now refreshed for
+   first-1000 comparisons and huge rows are running. Integrate huge values once the logs
+   finish, but do not block the Poisson-specific prototypes on the full INLA table.
 
 Commands
 --------
@@ -184,6 +196,9 @@ uv run python -u experiments/analytical/glmm_required_benchmark.py \
         large-p-mixed:train:2 large-p-sampled:valid large-p-sampled:test \
         huge-p-mixed:train:2 huge-p-sampled:valid huge-p-sampled:test \
     --batch-size 32 --max-datasets 1000
+
+# Postpone the full 8k run until a Poisson-specific patch beats the current EB default on
+# the first-1000 quick gate.
 
 uv run python -u experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-p-sampled --partition valid \
