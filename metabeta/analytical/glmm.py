@@ -3,14 +3,13 @@
 import torch
 
 from metabeta.analytical.blup import analyticalBLUPContext
-from metabeta.analytical.map import (
+from metabeta.analytical.bernoulli_map import (
     refineBernoulliLaplaceEb,
     refineBernoulliMapBeta,
     refineBernoulliNagqSrfx,
     refineBernoulliNestedBeta,
-    refineNormalLaplaceEb,
-    refineNormalMapSrfx,
 )
+from metabeta.analytical.normal_map import refineNormalLaplaceEb, refineNormalMapSrfx
 from metabeta.analytical.normal import lmmNormal
 from metabeta.analytical.pql import lmmBernoulli, lmmPoisson
 
