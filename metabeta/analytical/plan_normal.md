@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-19
+Last updated: 2026-05-19 (three σ_rfx candidates tested, all retired — see Retired Lines)
 
 Goal
 ----
@@ -166,3 +166,10 @@ Retired Lines
   output-local MAP and full Ψ recompute for BLUP accuracy.
 - Axis, ratio, post-EB, curvature, hard-shrink, and broad tail-grid β variants.
 - Final correlated Ψ for BLUP: estimated correlations are noisy and harmful here.
+- Wider σ_rfx grid (2.0× scale, G-gated): 8k showed no improvement on large/huge; the
+  standard EB + 1.333 grid already captures available marginal-target improvement.
+  G-eligibility gate (sigma_grid_min_g_hi) and the 2.0 scale remain as no-op kwargs.
+- Per-dimension moment EB (moment_per_dim): too liberal — accepts individual-dim updates
+  where the joint posterior is not improving; regressed small-n-sampled σ by +0.013.
+- τ_rfx floor for W_g (moment_sigma_tau_floor): no material improvement; moment EB is
+  already robust to poor initialization via the prior regularizer.
