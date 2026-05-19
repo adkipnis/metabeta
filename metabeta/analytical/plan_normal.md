@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-18
+Last updated: 2026-05-19
 
 Goal
 ----
@@ -106,43 +106,26 @@ use that cell as evidence against the analytical σ path.
 Tail Diagnostics
 ----------------
 
-The 2026-05-18 mixed/train diagnostic scanned 8000 medium/large/huge rows and ran
-diagonal R-INLA on the 16 worst analytical FFX rows per size.
+Tail scans (2026-05-18) on 8000 medium/large/huge rows confirm the remaining FFX gap is
+concentrated in rare high-d, ill-conditioned rows with frequent β prior-cap hits and
+frequent singular/near-singular fixed/random design, where INLA's posterior-mean shift is
+aligned with the analytical β error. BLUP is tied in these rows. The retained damped scalar
+gate handles the actionable portion; previous broader β corrections improved selected tails
+while moving full-population metrics backward. Low-priority future work: a very narrow β-only
+safeguard gated on high-d, prior-capped, singular/near-singular rows, blending at most 25%
+toward the prior/scalar-grid posterior mean. Full tail diagnostic tables are in
+`experiments/analytical/glmm_inla_results.md`.
 
-| Tail set | N | previous β RMSE | tail β RMSE | INLA row RMSE |
-| --- | ---: | ---: | ---: | ---: |
-| medium-n-mixed | 16 | 0.7870 | 0.7870 | 0.5426 |
-| large-n-mixed | 16 | 0.4441 | 0.3790 | 0.1956 |
-| huge-n-mixed | 16 | 0.5304 | 0.4462 | 0.2310 |
+Known Structural Limits
+-----------------------
 
-The large/huge tail signal is real but narrow: INLA's β posterior-mean shift is aligned
-with the analytical β error, while broad replacement worsened population accuracy. Keep
-the damped scalar gate; do not reintroduce axis, ratio, curvature, or hard-shrink variants
-without a new diagnostic showing a stable failure signature.
+- σ_eps df denominator is biased upward when many predictors are near-collinear with Z
+  (active df drops, remaining directions over-absorb cross-group variance).
+- z_rank can be underestimated when a group has n_g ≤ q (jittered inverse applied but
+  rank counter may still inflate the df denominator, biasing σ_eps downward).
 
-The 2026-05-18 sampled diagnostic scanned 8000 large/huge sampled rows per partition
-and ran diagonal R-INLA on the 16 worst analytical FFX rows per size/partition.
-
-| Tail set | part | N | current β RMSE | INLA β RMSE | Δβ | cap rows | singular/near-singular rows |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| large-n-sampled | valid | 16 | 0.6766 | 0.3425 | +0.3341 | 8 | 11 |
-| huge-n-sampled | valid | 16 | 0.7014 | 0.2925 | +0.4089 | 12 | 16 |
-| large-n-sampled | test | 16 | 0.6440 | 0.3715 | +0.2725 | 10 | 12 |
-| huge-n-sampled | test | 16 | 0.4434 | 0.2185 | +0.2249 | 8 | 13 |
-
-The sampled residual FFX gap is the same kind of tail as mixed: high-dimensional rows
-with aliased fixed/random design, frequent β prior-cap hits, and INLA posterior-mean
-shifts aligned with the analytical β error. BLUP is still tied in these rows. The tail
-is real, but the earlier broad β corrections were harmful on population metrics, so do
-not add another production correction unless a future candidate can improve this tail
-without moving the 8k benchmark backward.
-
-Low-priority future work: test a very narrow β-only safeguard for the sampled/mixed
-FFX tail, adapted from the existing BLUP/σ guard. It should trigger only on high-d,
-prior-capped or weak-precision, singular/near-singular rows, and apply at most a small
-extra blend toward the prior/scalar-grid posterior mean. This is not an active plan
-because previous broader β shrinkage variants improved selected tails but hurt full
-population metrics.
+No correction is implemented; both are structural constraints of the one-pass projection
+estimator.
 
 Commands
 --------
@@ -179,5 +162,7 @@ Retired Lines
 
 - R-INLA backend or full PyTorch INLA: incompatible with the throughput target.
 - Standalone MAP option: EB is the retained Normal answer; MAP is only an internal stage.
+- Output-local MAP for final BLUP: oracle tests confirmed diagonal Ψ from MAP σ_rfx beats
+  output-local MAP and full Ψ recompute for BLUP accuracy.
 - Axis, ratio, post-EB, curvature, hard-shrink, and broad tail-grid β variants.
 - Final correlated Ψ for BLUP: estimated correlations are noisy and harmful here.

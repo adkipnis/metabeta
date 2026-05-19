@@ -19,6 +19,6 @@ Testing Scheme
 2. `ds_type=mixed` — use the first two training epochs (`--n-epochs 2`).
 3. `ds_type=sampled` — run both `valid` and `test` partitions separately.
 
-### Competitor comparisons (CAVI, R-INLA, or any slower reference)
+### Competitor comparisons (R-INLA or any slower reference)
 
 - Use the first 1000 dataset indices of each set for both the reference method and our method.
