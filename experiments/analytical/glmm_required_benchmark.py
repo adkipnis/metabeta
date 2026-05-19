@@ -19,7 +19,7 @@ from metabeta.utils.experiments import dataFilePath
 
 
 SIZES = ['small', 'medium', 'large', 'huge']
-METHODS = ['default', 'current', 'raw', 'bernoulli_eb', 'normal_eb']
+METHODS = ['default', 'current', 'raw', 'bernoulli_eb', 'normal_eb', 'poisson_eb']
 FAMILIES = ['n', 'b', 'p']
 
 
@@ -92,8 +92,10 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                             bernoulli_laplace_eb_diagnostics=(
                                 method in {'default', 'current', 'bernoulli_eb'}
                             ),
+                            poisson_laplace_eb_diagnostics=(method == 'poisson_eb'),
                             **_bernoulliEbKwargs(method, args),
                             **_normalEbKwargs(method, args),
+                            **_poissonEbKwargs(method, args),
                             **common,
                         )
                         stores[method].add(stats, batch, max_q, time.perf_counter() - t0)
@@ -256,6 +258,12 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
         return {'bernoulli_laplace_eb': 'bernoulli_eb', 'normal_laplace_eb': False}
     if method == 'normal_eb':
         return {'bernoulli_laplace_eb': False, 'normal_laplace_eb': True}
+    if method == 'poisson_eb':
+        return {
+            'bernoulli_laplace_eb': False,
+            'normal_laplace_eb': False,
+            'poisson_laplace_eb': 'poisson_eb',
+        }
     return {'bernoulli_laplace_eb': False}
 
 
@@ -295,6 +303,18 @@ def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
     return out
 
 
+def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
+    if method != 'poisson_eb':
+        return {}
+    return {
+        'poisson_laplace_eb_steps': args.poisson_eb_steps,
+        'poisson_laplace_eb_inner': args.poisson_eb_inner,
+        'poisson_laplace_eb_final': args.poisson_eb_final,
+        'poisson_laplace_eb_lr': args.poisson_eb_lr,
+        'poisson_laplace_eb_blup_fallback_beta_jump': args.poisson_eb_blup_fallback_beta_jump,
+    }
+
+
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -319,6 +339,11 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--normal-beta-tail-grid-min-d', type=int, default=9)
     parser.add_argument('--normal-beta-tail-grid-min-cond', type=float, default=1000.0)
     parser.add_argument('--normal-beta-tail-grid-blend', type=float, default=0.25)
+    parser.add_argument('--poisson-eb-steps', type=int, default=12)
+    parser.add_argument('--poisson-eb-inner', type=int, default=4)
+    parser.add_argument('--poisson-eb-final', type=int, default=6)
+    parser.add_argument('--poisson-eb-lr', type=float, default=0.03)
+    parser.add_argument('--poisson-eb-blup-fallback-beta-jump', type=float, default=0.0)
     return parser.parse_args()
 # fmt: on
 
