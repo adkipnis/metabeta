@@ -277,9 +277,7 @@ def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
     if method not in {'default', 'current', 'normal_eb'}:
         return {}
     out = {
-        'normal_laplace_eb_mode': args.normal_eb_mode,
         'normal_laplace_eb_steps': args.normal_eb_steps,
-        'normal_laplace_eb_lr': args.normal_eb_lr,
         'normal_laplace_eb_moment_blend': args.normal_eb_moment_blend,
         'normal_laplace_eb_prior_weight': args.normal_eb_prior_weight,
         'normal_laplace_eb_sigma_grid_scales': args.normal_eb_sigma_grid_scales,
@@ -309,9 +307,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--combos',     nargs='+', default=None)
     parser.add_argument('--bernoulli-eb-sigma-prior-cap', type=float, default=2.5)
     parser.add_argument('--bernoulli-eb-sigma-prior-cap-min-d', type=int, default=5)
-    parser.add_argument('--normal-eb-mode', default='moment', choices=['moment', 'gradient'])
     parser.add_argument('--normal-eb-steps', type=int, default=3)
-    parser.add_argument('--normal-eb-lr', type=float, default=0.08)
     parser.add_argument('--normal-eb-moment-blend', type=float, default=1.0)
     parser.add_argument('--normal-eb-prior-weight', type=float, default=4.0)
     parser.add_argument('--normal-eb-sigma-grid-refine', action='store_true')

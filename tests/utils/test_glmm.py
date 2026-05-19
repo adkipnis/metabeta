@@ -452,7 +452,6 @@ def test_refine_normal_map_beta_sigma_grid_replaces_capped_report_only():
         mask_d=torch.ones(B, d, dtype=torch.bool),
         mask_q=torch.ones(B, q, dtype=torch.bool),
         n_steps=1,
-        lr=0.0,
         recompute_blup=False,
         beta_prior_cap=4.0,
         beta_sigma_grid=True,
@@ -461,7 +460,9 @@ def test_refine_normal_map_beta_sigma_grid_replaces_capped_report_only():
 
     assert torch.equal(result['normal_map_beta_stabilized'], torch.ones(B))
     assert torch.all(result['beta_est'].abs() < 4.0)
-    assert torch.allclose(result['normal_map_beta_for_blup'], beta_start)
+    # BLUP beta retains uncapped GLS values; unidentified columns (X=0) fall back to
+    # beta_start (10.0) which exceeds the cap — unlike the reported beta_est.
+    assert torch.all(result['normal_map_beta_for_blup'][..., 1:] > 4.0)
 
 
 # ---------------------------------------------------------------------------
@@ -900,7 +901,7 @@ def test_approximator_data_statistics_smoke(likelihood_family):
     model = Approximator(app_cfg)
 
     # build a fake data dict that _dataStatistics expects
-    # include all keys needed by _dataStatistics
+    # include all keys needed by _dataStatistics (priors required for MAP refinement)
     data = {
         'X': bt['Xm'],
         'y': bt['ym'],
@@ -910,6 +911,13 @@ def test_approximator_data_statistics_smoke(likelihood_family):
         'ns': bt['ns'],
         'n': bt['n_total'].long(),
         'm': bt['mask_m'].sum(dim=1).long(),
+        'nu_ffx': torch.as_tensor(np.stack([ds['nu_ffx'] for ds in datasets]), dtype=torch.float32),
+        'tau_ffx': torch.as_tensor(np.stack([ds['tau_ffx'] for ds in datasets]), dtype=torch.float32),
+        'family_ffx': torch.as_tensor([int(ds['family_ffx']) for ds in datasets], dtype=torch.long),
+        'tau_rfx': torch.as_tensor(np.stack([ds['tau_rfx'] for ds in datasets]), dtype=torch.float32),
+        'family_sigma_rfx': torch.as_tensor(
+            [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
+        ),
     }
 
     stats = model._dataStatistics(data)

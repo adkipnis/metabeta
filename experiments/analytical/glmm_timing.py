@@ -62,10 +62,8 @@ VARIANTS: list[tuple[str, dict]] = [
     ('map_5',   dict(map_refine=True,  normal_laplace_eb=False, map_steps=5)),
     ('map_10',  dict(map_refine=True,  normal_laplace_eb=False, map_steps=10)),
     ('map_20',  dict(map_refine=True,  normal_laplace_eb=False, map_steps=20)),
-    ('eb_only', dict(map_refine=True,  normal_laplace_eb=True,  map_steps=1,
-                     normal_laplace_eb_mode='moment')),
-    ('default', dict(map_refine=True,  normal_laplace_eb=True,  map_steps=20,
-                     normal_laplace_eb_mode='moment')),
+    ('eb_only', dict(map_refine=True,  normal_laplace_eb=True,  map_steps=1)),
+    ('default', dict(map_refine=True,  normal_laplace_eb=True,  map_steps=20)),
 ]
 
 # ---------------------------------------------------------------------------

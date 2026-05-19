@@ -204,16 +204,11 @@ def glmm(
     map_priors = {key: kwargs.pop(key, None) for key in _MAP_PRIOR_KEYS}
     map_refine = kwargs.pop('map_refine', True)
     map_steps = kwargs.pop('map_steps', 20)
-    map_lr = kwargs.pop('map_lr', 0.03)
     map_recompute_blup = kwargs.pop('map_recompute_blup', True)
-    map_optimize = kwargs.pop('map_optimize', 'all')
     normal_laplace_eb = kwargs.pop('normal_laplace_eb', likelihood_family == 0)
     normal_laplace_eb_steps = kwargs.pop('normal_laplace_eb_steps', 3)
-    normal_laplace_eb_lr = kwargs.pop('normal_laplace_eb_lr', 0.08)
-    normal_laplace_eb_mode = kwargs.pop('normal_laplace_eb_mode', 'moment')
     normal_laplace_eb_moment_blend = kwargs.pop('normal_laplace_eb_moment_blend', 1.0)
     normal_laplace_eb_prior_weight = kwargs.pop('normal_laplace_eb_prior_weight', 4.0)
-    normal_laplace_eb_optimize_eps = kwargs.pop('normal_laplace_eb_optimize_eps', False)
     normal_laplace_eb_recompute_blup = kwargs.pop('normal_laplace_eb_recompute_blup', True)
     normal_laplace_eb_sigma_grid_refine = kwargs.pop(
         'normal_laplace_eb_sigma_grid_refine', likelihood_family == 0
@@ -320,9 +315,7 @@ def glmm(
                 mask_d=mask_d,
                 mask_q=mask_q,
                 n_steps=map_steps,
-                lr=map_lr,
                 recompute_blup=map_recompute_blup,
-                optimize=map_optimize,
                 beta_alpha_low=beta_alpha_low,
                 beta_alpha_high=beta_alpha_high,
                 beta_prior_cap=normal_map_beta_prior_cap,
@@ -354,11 +347,8 @@ def glmm(
                 mask_d=mask_d,
                 mask_q=mask_q,
                 n_steps=normal_laplace_eb_steps,
-                lr=normal_laplace_eb_lr,
-                mode=normal_laplace_eb_mode,
                 moment_blend=normal_laplace_eb_moment_blend,
                 prior_weight=normal_laplace_eb_prior_weight,
-                optimize_eps=normal_laplace_eb_optimize_eps,
                 recompute_blup=normal_laplace_eb_recompute_blup,
                 beta_alpha_low=beta_alpha_low,
                 beta_alpha_high=beta_alpha_high,
