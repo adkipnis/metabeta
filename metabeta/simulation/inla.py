@@ -464,11 +464,14 @@ class InlaFitter:
         self.likelihood_family = int(
             np.asarray(self.batch.get('likelihood_family', [0])).ravel()[0]
         )
-        assert 0 <= cfg.idx < len(self), 'idx out of bounds'
+        _full = len(self.batch['y'])
+        _n = getattr(cfg, 'n', None)
+        self.n_fit = min(_n, _full) if _n is not None else _full
+        assert 0 <= cfg.idx < self.n_fit, 'idx out of bounds'
         self.outpath = self.outdir / self._outname(cfg.idx)
 
     def __len__(self) -> int:
-        return len(self.batch['y'])
+        return self.n_fit
 
     def _outname(self, idx: int) -> str:
         return f'{self.batch_path.stem}_inla_{idx:03d}.npz'
