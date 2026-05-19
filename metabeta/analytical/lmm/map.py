@@ -10,7 +10,7 @@ from metabeta.analytical.linalg import (
     _adaptiveRidgeBm,
     _safeSolve,
 )
-from metabeta.analytical.normal import _normalGlsAndBlups
+from metabeta.analytical.lmm.lmm import _normalGlsAndBlups
 from metabeta.utils.families import logProbFfx, logProbSigma
 
 __all__ = [

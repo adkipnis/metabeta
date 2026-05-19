@@ -2,16 +2,16 @@
 
 import torch
 
-from metabeta.analytical.blup import analyticalBLUPContext
-from metabeta.analytical.bernoulli_map import (
+from metabeta.analytical.lmm.blup import analyticalBLUPContext
+from metabeta.analytical.glmm.map import (
     refineBernoulliLaplaceEb,
     refineBernoulliMapBeta,
     refineBernoulliNagqSrfx,
     refineBernoulliNestedBeta,
 )
-from metabeta.analytical.normal_map import refineNormalLaplaceEb, refineNormalMapSrfx
-from metabeta.analytical.normal import lmmNormal
-from metabeta.analytical.pql import lmmBernoulli, lmmPoisson
+from metabeta.analytical.lmm.map import refineNormalLaplaceEb, refineNormalMapSrfx
+from metabeta.analytical.lmm.lmm import lmmNormal
+from metabeta.analytical.glmm.pql import lmmBernoulli, lmmPoisson
 
 _MAP_PRIOR_KEYS = (
     'nu_ffx',

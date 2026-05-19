@@ -689,6 +689,26 @@ def _lmmNormalFull(
     }
 
 
+def olsNormal(
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    mask: torch.Tensor,
+    n_total: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Pooled OLS via normal equations (X'X + ridge)^{-1} X'y, plus residual SD."""
+    d = Xm.shape[-1]
+    XtX = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)
+    Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)
+    beta = _safeSolve(XtX + _adaptiveRidge(XtX), Xty)
+
+    yhat = torch.einsum('bmnd,bd->bmn', Xm, beta)
+    resid = ym - yhat * mask
+    ss_resid = resid.square().sum(dim=(1, 2))
+    df = (n_total - d).clamp(min=1)
+    sigma_eps_ols = (ss_resid / df).sqrt().unsqueeze(-1)
+    return beta, sigma_eps_ols
+
+
 def lmmNormal(
     Xm: torch.Tensor,  # (B, m, n, d)
     ym: torch.Tensor,  # (B, m, n)

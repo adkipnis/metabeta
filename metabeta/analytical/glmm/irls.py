@@ -2,28 +2,21 @@
 
 import torch
 
+from metabeta.analytical.constants import (
+    _POISSON_ETA_CLIP_MAX,
+    _POISSON_ETA_TAPER_WIDTH,
+)
 from metabeta.analytical.linalg import _adaptiveRidge, _safeSolve
-from metabeta.analytical.working import _poissonMeanDerivative
 
 
-def olsNormal(
-    Xm: torch.Tensor,
-    ym: torch.Tensor,
-    mask: torch.Tensor,
-    n_total: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Pooled OLS via normal equations (X'X + ridge)^{-1} X'y, plus residual SD."""
-    d = Xm.shape[-1]
-    XtX = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)
-    Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)
-    beta = _safeSolve(XtX + _adaptiveRidge(XtX), Xty)
-
-    yhat = torch.einsum('bmnd,bd->bmn', Xm, beta)
-    resid = ym - yhat * mask
-    ss_resid = resid.square().sum(dim=(1, 2))
-    df = (n_total - d).clamp(min=1)
-    sigma_eps_ols = (ss_resid / df).sqrt().unsqueeze(-1)
-    return beta, sigma_eps_ols
+def _poissonMeanDerivative(eta: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Poisson mean and d min(eta, cap) / d eta with a short taper near the cap."""
+    eta_eff = eta.clamp(max=_POISSON_ETA_CLIP_MAX)
+    mu = torch.exp(eta_eff)
+    taper_start = _POISSON_ETA_CLIP_MAX - _POISSON_ETA_TAPER_WIDTH
+    deriv = ((_POISSON_ETA_CLIP_MAX - eta) / _POISSON_ETA_TAPER_WIDTH).clamp(0.0, 1.0)
+    deriv = torch.where(eta <= taper_start, torch.ones_like(deriv), deriv)
+    return mu, deriv
 
 
 def irlsBernoulli(

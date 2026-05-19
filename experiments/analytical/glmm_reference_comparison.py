@@ -34,8 +34,8 @@ import pandas as pd
 import torch
 from tabulate import tabulate
 
-from metabeta.analytical.glmm import glmm
-from metabeta.analytical.bernoulli_map import refineBernoulliMapBeta, refineBernoulliNagqSrfx
+from metabeta.analytical.fit import glmm
+from metabeta.analytical.glmm.map import refineBernoulliMapBeta, refineBernoulliNagqSrfx
 from metabeta.utils.config import loadDataConfig
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.experiments import dataFilePath

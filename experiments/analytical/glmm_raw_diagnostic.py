@@ -13,9 +13,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from metabeta.analytical.glmm import glmm
+from metabeta.analytical.fit import glmm
 from metabeta.analytical.linalg import _adaptiveRidge, _safeSolve
-from metabeta.analytical.normal import _normalGlsAndBlups
+from metabeta.analytical.lmm.lmm import _normalGlsAndBlups
 from metabeta.utils.config import loadDataConfig
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.experiments import dataFilePath

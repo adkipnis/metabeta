@@ -9,10 +9,11 @@ import pytest
 import torch
 
 from metabeta.simulation import Prior, Synthesizer, Simulator, hypersample
-from metabeta.analytical.glmm import lmmBernoulli, lmmPoisson, glmm
+from metabeta.analytical.glmm.pql import lmmBernoulli, lmmPoisson
+from metabeta.analytical.fit import glmm
 from metabeta.analytical.linalg import _adaptiveRidge, _adaptiveRidgeBm, _eighWithJitter, _safeSolve
-from metabeta.analytical.bernoulli_map import refineBernoulliLaplaceEb
-from metabeta.analytical.normal_map import refineNormalMapSrfx
+from metabeta.analytical.glmm.map import refineBernoulliLaplaceEb
+from metabeta.analytical.lmm.map import refineNormalMapSrfx
 
 
 DEVICE = torch.device('cpu')
