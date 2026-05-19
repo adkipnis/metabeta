@@ -35,9 +35,9 @@ Lower NRMSE is better. Medium/large/huge rows pending (INLA runs in progress as 
 | small-p-mixed    | train | 0.4806    | **0.2261** | 0.7185   | **0.4242** | 0.5713   | **0.521** | 2.932     |
 | small-p-sampled  | valid | 0.7351    | **0.2589** | 0.7369   | **0.4597** | 0.5823   | **0.5364** | 3.042    |
 | small-p-sampled  | test  | 0.6525    | **0.2369** | 0.7524   | **0.4375** | 0.6708   | **0.5326** | 3.058    |
-| medium-p-mixed   | train | —         | —         | —         | —         | —         | —         | —         |
-| medium-p-sampled | valid | —         | —         | —         | —         | —         | —         | —         |
-| medium-p-sampled | test  | —         | —         | —         | —         | —         | —         | —         |
+| medium-p-mixed   | train | 0.5185    | **0.1901** | 0.9753   | **0.3706** | 0.6445   | **0.5113** | 3.429     |
+| medium-p-sampled | valid | 0.822     | **0.2394** | 1.2083   | **0.4556** | 0.7509   | **0.5568** | 3.409     |
+| medium-p-sampled | test  | 0.6852    | **0.2446** | 0.9222   | **0.3592** | 0.6261   | **0.5491** | 3.406     |
 | large-p-mixed    | train | —         | —         | —         | —         | —         | —         | —         |
 | large-p-sampled  | valid | —         | —         | —         | —         | —         | —         | —         |
 | large-p-sampled  | test  | —         | —         | —         | —         | —         | —         | —         |
