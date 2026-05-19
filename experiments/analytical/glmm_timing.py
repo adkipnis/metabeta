@@ -201,7 +201,8 @@ def run(args: argparse.Namespace) -> None:
     cfg = loadDataConfig(args.data_id)
     max_q = cfg['max_q']
     likelihood_family = int(cfg.get('likelihood_family', 0))
-    path = dataFilePath(cfg['data_id'], args.partition)
+    epoch = args.epoch if args.partition == 'train' else 0
+    path = dataFilePath(cfg['data_id'], args.partition, epoch)
 
     dl = Dataloader(path, batch_size=args.batch_size, shuffle=False)
     batches: list[dict[str, torch.Tensor]] = []
@@ -216,7 +217,8 @@ def run(args: argparse.Namespace) -> None:
         device_label = f'cuda ({torch.cuda.get_device_name(device)})'
     family_label = {0: 'normal', 1: 'bernoulli', 2: 'poisson'}.get(likelihood_family, str(likelihood_family))
     print(f'\nDevice  : {device_label}')
-    print(f'Dataset : {args.data_id}  partition={args.partition}')
+    ep_label = f'  epoch={epoch}' if args.partition == 'train' else ''
+    print(f'Dataset : {args.data_id}  partition={args.partition}{ep_label}')
     print(f'Batches : {n_actual} timed  (+{warmup} warmup)  batch_size={args.batch_size}')
     print(f'Family  : {likelihood_family} ({family_label})\n')
 
@@ -329,6 +331,8 @@ def setup() -> argparse.Namespace:
                         help='data_id (e.g. small-n-sampled or small-b-sampled); '
                              'family is auto-detected from config')
     parser.add_argument('--partition',  default='valid')
+    parser.add_argument('--epoch',      type=int, default=1,
+                        help='training episode index (only used when --partition train, default = 1)')
     parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--batches',    type=int, default=20,
                         help='number of batches to time (excl. warmup)')
