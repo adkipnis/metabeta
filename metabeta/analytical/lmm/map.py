@@ -346,7 +346,6 @@ def _normalSigmaRfxGridRefine(
         if mask_q is not None
         else torch.ones(B, q, device=device, dtype=torch.bool)
     )
-
     sigma_rfx = sigma_rfx_base.clamp(min=1e-4, max=20.0).clone()
     target = current_target.clone()
     changed = torch.zeros(B, device=device, dtype=torch.bool)
@@ -857,12 +856,15 @@ def refineNormalLaplaceEb(
             sigma_candidate = (
                 (1.0 - blend) * sigma_rfx_base.log() + blend * sigma_moment.log()
             ).exp()
+            active_q = (
+                mask_q[..., :q].to(device=device).bool()
+                if mask_q is not None
+                else torch.ones(B, q, device=device, dtype=torch.bool)
+            )
             final_target = target_for(sigma_candidate, log_sigma_eps_base)
             accept = torch.isfinite(final_target) & (final_target >= base_target - accept_tol)
             sigma_rfx = torch.where(accept[:, None], sigma_candidate, sigma_rfx_base)
-            if mask_q is not None:
-                active_q = mask_q[..., :q].bool()
-                sigma_rfx = torch.where(active_q, sigma_rfx, sigma_rfx_base)
+            sigma_rfx = torch.where(active_q, sigma_rfx, sigma_rfx_base)
             grid_changed = torch.zeros(B, device=device, dtype=torch.bool)
             if sigma_grid_refine:
                 sigma_rfx, final_target, grid_changed = _normalSigmaRfxGridRefine(
