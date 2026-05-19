@@ -9,6 +9,7 @@ from metabeta.analytical.glmm.map import (
     refineBernoulliNagqSrfx,
     refineBernoulliNestedBeta,
     refinePoissonLaplaceEb,
+    refinePoissonMarginalMeanBeta,
 )
 from metabeta.analytical.lmm.map import refineNormalLaplaceEb, refineNormalMapSrfx
 from metabeta.analytical.lmm.lmm import lmmNormal
@@ -339,6 +340,11 @@ def glmm(
         None,
         poisson_laplace_eb_preset,
     )
+    poisson_marginal_beta = kwargs.pop('poisson_marginal_beta', likelihood_family == 2)
+    poisson_marginal_beta_steps = kwargs.pop('poisson_marginal_beta_steps', 4)
+    poisson_marginal_beta_damping = kwargs.pop('poisson_marginal_beta_damping', 0.7)
+    poisson_marginal_beta_min_d = kwargs.pop('poisson_marginal_beta_min_d', 5)
+    poisson_marginal_beta_max_step = kwargs.pop('poisson_marginal_beta_max_step', 1.0)
     mask_d = kwargs.pop('mask_d', None)
     uncorr = (eta_rfx == 0) if eta_rfx is not None else None  # (B,) bool or None
     if likelihood_family == 0:
@@ -562,6 +568,25 @@ def glmm(
             )
             if poisson_laplace_eb_diagnostics:
                 _addLaplaceEbSkippedDiagnostics(stats, gate, Xm.dtype)
+        if map_refine and poisson_marginal_beta and Zm.shape[-1] > 0:
+            stats = refinePoissonMarginalMeanBeta(
+                stats,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx=map_priors['nu_ffx'],
+                tau_ffx=map_priors['tau_ffx'],
+                family_ffx=map_priors['family_ffx'],
+                mask_d=mask_d,
+                mask_q=mask_q,
+                n_steps=poisson_marginal_beta_steps,
+                damping=poisson_marginal_beta_damping,
+                min_d=poisson_marginal_beta_min_d,
+                max_step=poisson_marginal_beta_max_step,
+                return_diagnostics=poisson_laplace_eb_diagnostics,
+            )
     else:
         raise ValueError(f'unsupported likelihood_family={likelihood_family}')
 
@@ -580,4 +605,5 @@ __all__ = [
     'refineNormalLaplaceEb',
     'refineNormalMapSrfx',
     'refinePoissonLaplaceEb',
+    'refinePoissonMarginalMeanBeta',
 ]

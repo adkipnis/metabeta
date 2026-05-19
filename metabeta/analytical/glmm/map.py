@@ -30,6 +30,7 @@ __all__ = [
     'refineBernoulliNagqSrfx',
     'refineBernoulliNestedBeta',
     'refinePoissonLaplaceEb',
+    'refinePoissonMarginalMeanBeta',
 ]
 
 
@@ -857,6 +858,179 @@ def _poissonLaplaceEbTargetDiag(
         target = target + (log_sigma_rfx * active_q_f).sum(dim=-1)
 
     return target
+
+
+def _poissonMarginalMeanOffset(
+    sigma_rfx: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_q: torch.Tensor | None,
+) -> torch.Tensor:
+    """Approximate log-link marginalization offset 0.5 * diag(Z Ψ Z')."""
+    B, _, _, q = Zm.shape
+    if mask_q is None:
+        active_q = torch.ones(B, q, device=Zm.device, dtype=torch.bool)
+    else:
+        active_q = mask_q[:, :q].to(device=Zm.device).bool()
+    sigma2 = sigma_rfx[:, :q].to(device=Zm.device, dtype=Zm.dtype).square()
+    sigma2 = sigma2 * active_q.to(Zm.dtype)
+    return 0.5 * torch.einsum('bmnq,bq->bmn', Zm.square(), sigma2)
+
+
+def _poissonMarginalMeanBetaTarget(
+    beta: torch.Tensor,
+    offset: torch.Tensor,
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    mask_n: torch.Tensor,
+    nu_ffx: torch.Tensor | None,
+    tau_ffx: torch.Tensor | None,
+    family_ffx: torch.Tensor | None,
+    mask_d: torch.Tensor | None,
+) -> torch.Tensor:
+    """Pseudo marginal Poisson log posterior for β at fixed diagonal Ψ."""
+    B, _, _, d = Xm.shape
+    dtype = Xm.dtype
+    eta = torch.einsum('bmnd,bd->bmn', Xm, beta) + offset
+    eta_eff = eta.clamp(max=_POISSON_ETA_CLIP_MAX)
+    target = ((ym * eta_eff - torch.exp(eta_eff)) * mask_n).sum(dim=(1, 2))
+
+    if nu_ffx is not None and tau_ffx is not None and family_ffx is not None:
+        if mask_d is None:
+            mask_d_lp = torch.ones(B, 1, d, device=beta.device, dtype=dtype)
+        else:
+            mask_d_lp = mask_d[:, :d].to(device=beta.device, dtype=dtype).unsqueeze(1)
+        target = target + logProbFfx(
+            beta.unsqueeze(1),
+            nu_ffx[:, :d].unsqueeze(1),
+            tau_ffx[:, :d].clamp(min=1e-8).unsqueeze(1),
+            family_ffx,
+            mask_d_lp,
+        ).squeeze(1)
+    return target
+
+
+def refinePoissonMarginalMeanBeta(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor | None = None,
+    tau_ffx: torch.Tensor | None = None,
+    family_ffx: torch.Tensor | None = None,
+    mask_d: torch.Tensor | None = None,
+    mask_q: torch.Tensor | None = None,
+    n_steps: int = 4,
+    damping: float = 0.7,
+    min_d: int = 5,
+    max_step: float = 1.0,
+    accept_only_improved: bool = True,
+    return_diagnostics: bool = False,
+) -> dict[str, torch.Tensor]:
+    """Gated β update for Poisson marginal means at fixed diagonal Ψ.
+
+    The pseudo target uses E[y|β,Ψ] ≈ exp(Xβ + 0.5 diag(ZΨZ')).  This is not a full
+    marginal likelihood; it is a cheap fixed-Ψ correction for rows where conditional
+    PQL/EB β is visibly too extreme relative to INLA.
+    """
+    d = Xm.shape[-1]
+    q = Zm.shape[-1]
+    if d == 0 or q == 0 or n_steps <= 0 or 'sigma_rfx_est' not in stats:
+        return stats
+
+    B = Xm.shape[0]
+    device, dtype = Xm.device, Xm.dtype
+    if mask_d is None:
+        active_d = torch.ones(B, d, device=device, dtype=torch.bool)
+    else:
+        active_d = mask_d[:, :d].to(device=device).bool()
+    if mask_q is None:
+        active_q = torch.ones(B, q, device=device, dtype=torch.bool)
+    else:
+        active_q = mask_q[:, :q].to(device=device).bool()
+    d_count = active_d.to(dtype).sum(dim=1)
+    gate = (d_count >= float(min_d)) & active_q.any(dim=1)
+    if not gate.any():
+        out = dict(stats)
+        if return_diagnostics:
+            out['poisson_marginal_beta_gate'] = gate.to(dtype)
+            out['poisson_marginal_beta_accept'] = torch.zeros(B, device=device, dtype=dtype)
+            out['poisson_marginal_beta_jump'] = torch.full(
+                (B,), float('nan'), device=device, dtype=dtype
+            )
+        return out
+
+    base_beta = stats['beta_est'][:, :d].detach()
+    beta = base_beta.clone().nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    beta = beta.clamp(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
+    offset = _poissonMarginalMeanOffset(stats['sigma_rfx_est'][:, :q].detach(), Zm, mask_q)
+
+    zeros_d = Xm.new_zeros(B, d)
+    normal_prec = prior_prec = is_student = None
+    if nu_ffx is not None and tau_ffx is not None:
+        tau = tau_ffx[:, :d].to(device=device, dtype=dtype)
+        active_prior = (tau > 0) & active_d
+        normal_prec = torch.where(active_prior, 1.0 / tau.clamp(min=1e-4).square(), zeros_d)
+        is_student = (family_ffx == 1).unsqueeze(-1) if family_ffx is not None else None
+
+    inactive_prec = (~active_d).to(dtype)
+    for _ in range(n_steps):
+        eta = torch.einsum('bmnd,bd->bmn', Xm, beta) + offset
+        mu, deriv = _poissonMeanDerivative(eta)
+        score = torch.einsum('bmnd,bmn->bd', Xm, (ym - mu) * deriv * mask_n)
+        w = (mu * deriv.square()).clamp(min=1e-8) * mask_n
+        XtWX = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)
+
+        if normal_prec is not None:
+            if is_student is not None:
+                tau = tau_ffx[:, :d].to(device=device, dtype=dtype)
+                nu = nu_ffx[:, :d].to(device=device, dtype=dtype)
+                active_prior = (tau > 0) & active_d
+                student_prec = torch.where(
+                    active_prior,
+                    6.0
+                    / (5.0 * tau.clamp(min=1e-8).square() + (beta - nu).square()).clamp(min=1e-8),
+                    zeros_d,
+                )
+                prior_prec = torch.where(is_student, student_prec, normal_prec)
+            else:
+                nu = nu_ffx[:, :d].to(device=device, dtype=dtype)
+                prior_prec = normal_prec
+            XtWX = XtWX + torch.diag_embed(prior_prec)
+            score = score + prior_prec * (nu - beta)
+
+        XtWX = XtWX + torch.diag_embed(inactive_prec)
+        score = score * active_d.to(dtype) * gate[:, None].to(dtype)
+        delta = _safeSolve(XtWX + _adaptiveRidge(XtWX), score)
+        delta = delta.clamp(-float(max_step), float(max_step))
+        beta = beta + float(damping) * delta
+        beta = beta.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+        beta = beta.clamp(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
+        beta = torch.where(active_d & gate[:, None], beta, base_beta)
+
+    final_target = _poissonMarginalMeanBetaTarget(
+        beta, offset, Xm, ym, mask_n, nu_ffx, tau_ffx, family_ffx, mask_d
+    )
+    base_target = _poissonMarginalMeanBetaTarget(
+        base_beta, offset, Xm, ym, mask_n, nu_ffx, tau_ffx, family_ffx, mask_d
+    )
+    accept = gate
+    if accept_only_improved:
+        accept = accept & (final_target >= base_target - 1e-5)
+    beta_final = torch.where(accept[:, None], beta, base_beta)
+
+    out = dict(stats)
+    out['beta_est'] = beta_final
+    if return_diagnostics:
+        jump = ((beta_final - base_beta).square() * active_d.to(dtype)).sum(dim=1)
+        jump = (jump / d_count.clamp(min=1.0)).sqrt()
+        out['poisson_marginal_beta_gate'] = gate.to(dtype)
+        out['poisson_marginal_beta_accept'] = accept.to(dtype)
+        out['poisson_marginal_beta_jump'] = jump
+        out['poisson_marginal_beta_target'] = final_target
+        out['poisson_marginal_beta_base_target'] = base_target
+    return out
 
 
 def refinePoissonLaplaceEb(

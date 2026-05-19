@@ -19,7 +19,15 @@ from metabeta.utils.experiments import dataFilePath
 
 
 SIZES = ['small', 'medium', 'large', 'huge']
-METHODS = ['default', 'current', 'raw', 'bernoulli_eb', 'normal_eb', 'poisson_eb']
+METHODS = [
+    'default',
+    'current',
+    'raw',
+    'bernoulli_eb',
+    'normal_eb',
+    'poisson_eb',
+    'poisson_marginal_beta',
+]
 FAMILIES = ['n', 'b', 'p']
 
 
@@ -38,7 +46,8 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
     family = args.family
     print(
         'method,dataset,partition,N,FFX,sRFX,sEps,BLUP,ms_per_ds,gate,accept,'
-        'blup_fallback,beta_capped,beta_tail,sigma_capped',
+        'blup_fallback,beta_capped,beta_tail,sigma_capped,poisson_beta_gate,'
+        'poisson_beta_accept',
         flush=True,
     )
     combos = _combos(args, family)
@@ -93,7 +102,13 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                                 method in {'default', 'current', 'bernoulli_eb'}
                             ),
                             poisson_laplace_eb_diagnostics=(
-                                method in {'default', 'current', 'poisson_eb'}
+                                method
+                                in {
+                                    'default',
+                                    'current',
+                                    'poisson_eb',
+                                    'poisson_marginal_beta',
+                                }
                             ),
                             **_bernoulliEbKwargs(method, args),
                             **_normalEbKwargs(method, args),
@@ -143,6 +158,8 @@ class _MetricStore:
         self.beta_capped: list[np.ndarray] = []
         self.beta_tail: list[np.ndarray] = []
         self.sigma_capped: list[np.ndarray] = []
+        self.poisson_beta_gate: list[np.ndarray] = []
+        self.poisson_beta_accept: list[np.ndarray] = []
         self.n_total = 0
 
     def add(
@@ -175,6 +192,14 @@ class _MetricStore:
             self.beta_tail.append(stats['normal_beta_tail_grid_gate'].detach().cpu().numpy())
         if 'laplace_eb_sigma_prior_capped' in stats:
             self.sigma_capped.append(stats['laplace_eb_sigma_prior_capped'].detach().cpu().numpy())
+        if 'poisson_marginal_beta_gate' in stats:
+            self.poisson_beta_gate.append(
+                stats['poisson_marginal_beta_gate'].detach().cpu().numpy()
+            )
+        if 'poisson_marginal_beta_accept' in stats:
+            self.poisson_beta_accept.append(
+                stats['poisson_marginal_beta_accept'].detach().cpu().numpy()
+            )
         self.n_total += B
         for b in range(B):
             self.beta_errs.append(
@@ -214,6 +239,16 @@ class _MetricStore:
         sigma_capped = (
             float(np.mean(np.concatenate(self.sigma_capped))) if self.sigma_capped else float('nan')
         )
+        poisson_beta_gate = (
+            float(np.mean(np.concatenate(self.poisson_beta_gate)))
+            if self.poisson_beta_gate
+            else float('nan')
+        )
+        poisson_beta_accept = (
+            float(np.mean(np.concatenate(self.poisson_beta_accept)))
+            if self.poisson_beta_accept
+            else float('nan')
+        )
         seps_str = (
             f'{_nrmse(np.concatenate(self.seps_errs), np.concatenate(self.seps_truths)):.4f}'
             if self.likelihood_family == 0
@@ -236,6 +271,8 @@ class _MetricStore:
                 f'{beta_capped:.3f}',
                 f'{beta_tail:.3f}',
                 f'{sigma_capped:.3f}',
+                f'{poisson_beta_gate:.3f}',
+                f'{poisson_beta_accept:.3f}',
             ]
         )
 
@@ -264,11 +301,12 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
         return {'bernoulli_laplace_eb': 'bernoulli_eb', 'normal_laplace_eb': False}
     if method == 'normal_eb':
         return {'bernoulli_laplace_eb': False, 'normal_laplace_eb': True}
-    if method == 'poisson_eb':
+    if method in {'poisson_eb', 'poisson_marginal_beta'}:
         return {
             'bernoulli_laplace_eb': False,
             'normal_laplace_eb': False,
             'poisson_laplace_eb': 'poisson_eb',
+            'poisson_marginal_beta': method == 'poisson_marginal_beta',
         }
     return {'bernoulli_laplace_eb': False}
 
@@ -310,9 +348,9 @@ def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
 
 
 def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
-    if method not in {'default', 'current', 'poisson_eb'}:
+    if method not in {'default', 'current', 'poisson_eb', 'poisson_marginal_beta'}:
         return {}
-    return {
+    out = {
         'poisson_laplace_eb_steps': args.poisson_eb_steps,
         'poisson_laplace_eb_inner': args.poisson_eb_inner,
         'poisson_laplace_eb_final': args.poisson_eb_final,
@@ -321,6 +359,16 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_eb_sigma_prior_cap': args.poisson_eb_sigma_prior_cap,
         'poisson_laplace_eb_sigma_prior_cap_min_d': args.poisson_eb_sigma_prior_cap_min_d,
     }
+    if method in {'default', 'current', 'poisson_marginal_beta'}:
+        out.update(
+            {
+                'poisson_marginal_beta_steps': args.poisson_marginal_beta_steps,
+                'poisson_marginal_beta_damping': args.poisson_marginal_beta_damping,
+                'poisson_marginal_beta_min_d': args.poisson_marginal_beta_min_d,
+                'poisson_marginal_beta_max_step': args.poisson_marginal_beta_max_step,
+            }
+        )
+    return out
 
 
 # fmt: off
@@ -354,6 +402,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-eb-blup-fallback-beta-jump', type=float, default=0.0)
     parser.add_argument('--poisson-eb-sigma-prior-cap', type=float, default=2.5)
     parser.add_argument('--poisson-eb-sigma-prior-cap-min-d', type=int, default=5)
+    parser.add_argument('--poisson-marginal-beta-steps', type=int, default=4)
+    parser.add_argument('--poisson-marginal-beta-damping', type=float, default=0.7)
+    parser.add_argument('--poisson-marginal-beta-min-d', type=int, default=5)
+    parser.add_argument('--poisson-marginal-beta-max-step', type=float, default=1.0)
     return parser.parse_args()
 # fmt: on
 
