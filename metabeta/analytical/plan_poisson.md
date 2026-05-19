@@ -16,8 +16,9 @@ target.
 Default Path
 ------------
 
-**Poisson EB** is now the default Poisson analytical path in `glmm()`. It starts from
-RAW/PQL, then applies a diagonal Laplace-EB refinement with a Poisson log-link target:
+**Poisson EB + marginal β** is now the default Poisson analytical path in `glmm()`. It
+starts from RAW/PQL, then applies a diagonal Laplace-EB refinement with a Poisson log-link
+target:
 
 - Adam over β and diagonal log σ_rfx, with nested per-group random-effect mode solves;
 - fixed-effect and σ_rfx priors in the Laplace target;
@@ -25,15 +26,20 @@ RAW/PQL, then applies a diagonal Laplace-EB refinement with a Poisson log-link t
 - accepted-row BLUP fallback to RAW/PQL, because Poisson EB modes currently regress BLUP on
   most benchmark cells;
 - accepted-row-only σ cap at `2.5 * tau_rfx` for effective `d >= 5`.
+- gated marginal-mean β correction for effective `d >= 5`, using
+  `η_marg ≈ Xβ + 0.5 * diag(ZΨZ')` at fixed Ψ. This directly addresses the main
+  INLA-direction diagnostic finding: medium+ rows need stronger marginal fixed-effect
+  shrinkage, while low-d small/sampled rows should be left alone.
 
 The old RAW/PQL path remains available with `map_refine=False` or
-`poisson_laplace_eb=False`. The explicit EB preset remains available for benchmark
-equivalence checks:
+`poisson_laplace_eb=False`. The EB-only path remains available as a benchmark comparator
+with `poisson_marginal_beta=False`:
 
 ```python
 glmm(
     ...,
     poisson_laplace_eb='poisson_eb',
+    poisson_marginal_beta=False,
 )
 ```
 
@@ -55,8 +61,8 @@ Lower NRMSE is better. Large rows are refreshed; huge rows are running as of 202
 | large-p-sampled  | valid | 1.0474    | **0.2716** | 1.5415   | **0.4563** | 0.7538   | **0.6062** | 4.754     |
 | large-p-sampled  | test  | 0.893     | **0.234**  | 1.3776   | **0.3713** | 0.9427   | **0.5447** | 4.743     |
 | huge-p-mixed     | train | —         | —         | —         | —         | —         | —         | —         |
-| huge-p-sampled   | valid | —         | —         | —         | —         | —         | —         | —         |
-| huge-p-sampled   | test  | —         | —         | —         | —         | —         | —         | —         |
+| huge-p-sampled   | valid | 1.4947    | **0.272**  | 2.1001   | **0.4048** | 1.8398   | **0.6035** | 5.605     |
+| huge-p-sampled   | test  | 1.4947    | **0.2579** | 1.7253   | **0.3961** | 1.2842   | **0.6051** | 5.552     |
 
 INLA logs are under `experiments/analytical/inla_runs/poisson_sampled/` and
 `experiments/analytical/inla_runs/poisson_mixed/`. All runs use data regenerated on
@@ -66,22 +72,23 @@ Poisson EB Default Snapshot
 ---------------------------
 
 First 1000 rows for mixed train (`n_epochs=2`) plus sampled valid/test. Lower NRMSE is
-better. `current` and explicit `poisson_eb` were verified to match.
+better. `current` now matches the explicit `poisson_marginal_beta` benchmark method;
+`poisson_eb` is retained as the EB-only comparator.
 
-| Dataset | part | RAW FFX | EB FFX | RAW σ | EB σ | RAW BLUP | EB BLUP | EB ms/ds | accept | σ cap |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-p-mixed | train | 0.4806 | **0.4269** | 0.7185 | **0.5272** | 0.5713 | 0.5713 | 29.13 | 0.879 | 0.000 |
-| small-p-sampled | valid | 0.7351 | **0.6375** | 0.7369 | **0.5645** | 0.5823 | 0.5823 | 24.05 | 0.897 | 0.000 |
-| small-p-sampled | test | 0.6525 | **0.5429** | 0.7524 | **0.6323** | 0.6708 | 0.6708 | 24.34 | 0.894 | 0.000 |
-| medium-p-mixed | train | 0.5185 | **0.4525** | 0.9753 | **0.5695** | 0.6445 | 0.6445 | 43.48 | 0.813 | 0.069 |
-| medium-p-sampled | valid | 0.8220 | **0.7291** | 1.2083 | **0.5646** | 0.7509 | 0.7509 | 44.61 | 0.896 | 0.074 |
-| medium-p-sampled | test | 0.6852 | **0.5963** | 0.9222 | **0.5979** | 0.6261 | 0.6261 | 41.81 | 0.837 | 0.083 |
-| large-p-mixed | train | 0.8690 | **0.7710** | 1.1677 | **0.6788** | 0.9667 | 0.9667 | 56.33 | 0.756 | 0.105 |
-| large-p-sampled | valid | 1.0474 | **0.9243** | 1.5415 | **0.7873** | 0.7538 | 0.7538 | 53.25 | 0.783 | 0.100 |
-| large-p-sampled | test | 0.8930 | **0.7968** | 1.3776 | **0.6296** | 0.9427 | 0.9427 | 58.99 | 0.790 | 0.112 |
-| huge-p-mixed | train | 0.9756 | **0.9225** | 1.3812 | **0.7202** | 1.3458 | 1.3458 | 67.33 | 0.750 | 0.139 |
-| huge-p-sampled | valid | 1.4947 | **1.3965** | 2.1001 | **1.1463** | 1.8398 | 1.8398 | 86.01 | 0.748 | 0.150 |
-| huge-p-sampled | test | 1.4947 | **1.4128** | 1.7253 | **0.8989** | 1.2842 | 1.2842 | 79.12 | 0.786 | 0.174 |
+| Dataset | part | RAW FFX | default FFX | RAW σ | default σ | RAW BLUP | default BLUP | default ms/ds | EB accept | β gate | β accept | σ cap |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-p-mixed | train | 0.4806 | **0.4269** | 0.7185 | **0.5272** | 0.5713 | 0.5713 | 25.48 | 0.879 | 0.000 | 0.000 | 0.000 |
+| small-p-sampled | valid | 0.7351 | **0.6375** | 0.7369 | **0.5645** | 0.5823 | 0.5823 | 23.34 | 0.897 | 0.000 | 0.000 | 0.000 |
+| small-p-sampled | test | 0.6525 | **0.5429** | 0.7524 | **0.6323** | 0.6708 | 0.6708 | 24.01 | 0.894 | 0.000 | 0.000 | 0.000 |
+| medium-p-mixed | train | 0.5185 | **0.3833** | 0.9753 | **0.5695** | 0.6445 | 0.6445 | 45.78 | 0.813 | 1.000 | 0.998 | 0.069 |
+| medium-p-sampled | valid | 0.8220 | **0.4860** | 1.2083 | **0.5646** | 0.7509 | 0.7509 | 49.72 | 0.896 | 1.000 | 1.000 | 0.074 |
+| medium-p-sampled | test | 0.6852 | **0.4223** | 0.9222 | **0.5979** | 0.6261 | 0.6261 | 48.57 | 0.837 | 1.000 | 0.999 | 0.083 |
+| large-p-mixed | train | 0.8690 | **0.5458** | 1.1677 | **0.6788** | 0.9667 | 0.9667 | 51.92 | 0.756 | 1.000 | 0.996 | 0.105 |
+| large-p-sampled | valid | 1.0474 | **0.6485** | 1.5415 | **0.7873** | 0.7538 | 0.7538 | 54.26 | 0.783 | 1.000 | 0.996 | 0.100 |
+| large-p-sampled | test | 0.8930 | **0.5990** | 1.3776 | **0.6296** | 0.9427 | 0.9427 | 60.65 | 0.790 | 1.000 | 0.996 | 0.112 |
+| huge-p-mixed | train | 0.9756 | **0.7692** | 1.3812 | **0.7202** | 1.3458 | 1.3458 | 64.88 | 0.750 | 1.000 | 0.996 | 0.139 |
+| huge-p-sampled | valid | 1.4947 | **1.1055** | 2.1001 | **1.1463** | 1.8398 | 1.8398 | 84.08 | 0.748 | 1.000 | 0.996 | 0.150 |
+| huge-p-sampled | test | 1.4947 | **1.0546** | 1.7253 | **0.8989** | 1.2842 | 1.2842 | 76.68 | 0.786 | 1.000 | 0.996 | 0.174 |
 
 Incremental findings:
 
@@ -96,6 +103,10 @@ Incremental findings:
   A tighter `2.0` cap fired more often and was slightly worse on all medium σ rows.
 - Large and huge first-1000 rows have the same pattern as small/medium: FFX and σ improve,
   BLUP is neutral, and runtime remains below the `~100 ms/dataset` target.
+- The gated marginal-mean β correction is a clear FFX win on every medium/large/huge row
+  while leaving small rows unchanged. Relative to EB-only, FFX improves by roughly
+  `15–36%` on medium+ rows with σ and BLUP unchanged. The extra cost is small because it is
+  a fixed-Ψ β-only Newton correction.
 
 INLA-direction diagnostic:
 
@@ -133,11 +144,11 @@ From first-1000 rows across all sizes:
   show that medium rows usually move toward INLA, but low-d small/sampled rows need a guard.
 - BLUP is deliberately neutral at this stage. Direct EB BLUP modes regressed most cells, so
   the retained default feeds RAW/PQL BLUPs through while using EB β and σ.
-- The current Bernoulli-style EB transplant is not enough for Poisson FFX. The likely
-  missing piece is Poisson log-link marginalization: random-effect variance changes the
-  marginal mean via an `exp(0.5 * zΨz)` factor, so β needs a correction that directly
-  targets marginal mean calibration rather than only the conditional mode target. This
-  should be gated; low-d sampled rows can move away from INLA under the current EB shift.
+- The Bernoulli-style EB transplant was not enough for Poisson FFX. The retained
+  Poisson-specific addition is log-link marginalization: random-effect variance changes
+  the marginal mean via an `exp(0.5 * zΨz)` factor, so β needs a correction that directly
+  targets marginal mean calibration rather than only the conditional mode target. This is
+  gated to medium+ rows because low-d sampled rows can move away from INLA.
 - No separation analogue for Poisson, but heavy-tailed count overdispersion may introduce
   analogous instabilities at higher d.
 - The INLA ms/ds (~3 s) vs RAW (~4 ms) ratio is ~750× — consistent with the Bernoulli gap.
@@ -180,28 +191,20 @@ Skip these initially:
 Next Steps
 ----------
 
-1. **Prototype a gated Poisson marginal-mean β correction.** Use the current Ψ estimate to add a
-   cheap marginalization correction,
-   `η_marg ≈ Xβ + 0.5 * diag(ZΨZ')`, then re-fit or adjust β so the Poisson marginal mean is
-   calibrated. Gate it first to medium/high-severity rows, because the INLA-direction
-   diagnostic shows medium rows move toward INLA while low-d sampled rows can move away.
-   Candidate gates: `d >= 5`, large prior-standardized β magnitude, large β jump, or a
-   count-tail/zero-fraction severity score.
+1. **Re-check against INLA with the new default.** The marginal β correction should close a
+   meaningful part of the FFX gap on medium+ rows. Refresh the current-vs-INLA table after
+   the remaining huge INLA jobs finish.
 
-2. **Try a variance-aware β refinement before touching BLUPs.** Build a batched β update
-   using Poisson weights/offsets from the current random-effect variance and fitted μ. Keep
-   RAW/PQL BLUP fallback unless this β-focused path first improves FFX/σ on the quick gate.
-
-3. **Use tiny targeted quadrature/grid only if marginal β correction is insufficient.** If
+2. **Use tiny targeted quadrature/grid only if marginal β correction is insufficient.** If
    the remaining INLA gap is concentrated in `q <= 2`, high-σ, or high-count-tail rows, test
    a narrow adaptive correction for those rows. Skip broad grids, multi-starts, and full
    PyTorch INLA unless a targeted diagnostic shows that the simpler marginal correction
    cannot move the gap.
 
-4. **Postpone the full 8k analytical benchmark.** Run it only after a more serious
+3. **Postpone the full 8k analytical benchmark.** Run it only after a more serious
    Poisson-specific improvement beats the current EB path on the first-1000 quick gate.
 
-5. **Complete the INLA comparison baseline in parallel.** Large rows are now refreshed for
+4. **Complete the INLA comparison baseline in parallel.** Large rows are now refreshed for
    first-1000 comparisons and huge rows are running. Integrate huge values once the logs
    finish, but do not block the Poisson-specific prototypes on the full INLA table.
 
@@ -210,7 +213,7 @@ Commands
 
 ```bash
 uv run python -u experiments/analytical/glmm_required_benchmark.py \
-    --family p --methods raw current poisson_eb \
+    --family p --methods raw current poisson_eb poisson_marginal_beta \
     --combos small-p-mixed:train:2 small-p-sampled:valid small-p-sampled:test \
         medium-p-mixed:train:2 medium-p-sampled:valid medium-p-sampled:test \
         large-p-mixed:train:2 large-p-sampled:valid large-p-sampled:test \
