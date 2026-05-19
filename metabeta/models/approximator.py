@@ -209,16 +209,17 @@ class Approximator(nn.Module):
     def _dataStatistics(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Compute sufficient statistics: GLS/GLMM β̂, σ̂, BLUPs.
 
-        When map_refine is enabled on CUDA, all GLMM inputs are moved to CPU
-        before the call and outputs are moved back afterward.  The inner
-        optimizer loops (backward() × N_steps) are ~1.4x slower on GPU than
-        CPU due to kernel-launch overhead on small tensors; the closed-form
-        base estimator is device-neutral, so we only pay the transfer cost
-        when the expensive refinement path is actually active.
+        When map_refine is enabled on CUDA, normal GLMM inputs are moved to CPU
+        before the call and outputs are moved back afterward.  Normal MAP steps
+        (scalar Adam loops, small tensors) run ~1.4x slower on GPU than CPU due
+        to kernel-launch overhead, so CPU+transfer wins by ~29%.  Bernoulli EB
+        uses larger per-group matrix ops that GPU parallelizes well; on H100 the
+        pure-CUDA path is ~14% faster than CPU and ~9% faster than CPU+transfer,
+        so Bernoulli stays on-device.
         """
         device = data['X'].device
         map_refine = self.cfg.analytical_refinement == 'full'
-        run_on_cpu = device.type == 'cuda' and map_refine
+        run_on_cpu = device.type == 'cuda' and map_refine and self.likelihood_family == 0
 
         def _c(t: torch.Tensor | None) -> torch.Tensor | None:
             return t.cpu() if (run_on_cpu and t is not None) else t
