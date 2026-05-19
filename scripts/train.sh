@@ -7,7 +7,7 @@
 #SBATCH --partition gpu_p
 #SBATCH --qos gpu_normal
 #SBATCH --gres=gpu:1
-#SBATCH --constraint=[a100_40gb|a100_80gb|h100_80gb]
+#SBATCH --constraint=h100_80gb
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
