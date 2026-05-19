@@ -10,6 +10,11 @@ Per-dataset output (<data_id>/fits/<partition>_inla_<idx:03d>.npz):
     inla_wall_s     scalar — wall time in seconds
     inla_failed     bool   — True if INLA failed or timed out
 
+    When --samples S > 0 (joint posterior samples via inla.posterior.sample):
+    inla_ffx_samples        (d, S)    — samples follow (dim, S) convention of nuts/advi
+    inla_sigma_rfx_samples  (q, S)
+    inla_rfx_samples        (q, m, S)
+
 Batch fit file (<data_id>/<partition>.fit.npz) adds inla_* keys to the batch:
     inla_ffx        (n_ds, d_max)
     inla_sigma_rfx  (n_ds, q_max)
@@ -17,10 +22,16 @@ Batch fit file (<data_id>/<partition>.fit.npz) adds inla_* keys to the batch:
     inla_wall_s     (n_ds,)
     inla_failed     (n_ds,)  dtype bool
 
+    When --samples S > 0:
+    inla_ffx_samples        (n_ds, d_max, S)
+    inla_sigma_rfx_samples  (n_ds, q_max, S)
+    inla_rfx_samples        (n_ds, q_max, m_max, S)
+
 Usage (from repo root):
     uv run python -m metabeta.simulation.inla --data-id small-b-sampled --idx 0
     uv run python -m metabeta.simulation.inla --data-id small-b-sampled --reintegrate
     uv run python -m metabeta.simulation.inla --data-id small-b-sampled --all
+    uv run python -m metabeta.simulation.inla --data-id small-b-sampled --all --samples 1000
 """
 
 from __future__ import annotations
@@ -66,10 +77,81 @@ def _sigma_from_marginal(marg_hyper: object, name: str) -> float:
     return float(np.trapezoid(den_v / np.sqrt(np.maximum(tau_v, 1e-12)), tau_v))
 
 
+def _draw_posterior_samples(
+    result: object,
+    n_samples: int,
+    d: int,
+    q: int,
+    m: int,
+    correlated: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Draw joint posterior samples via inla.posterior.sample.
+
+    Returns (ffx_s, sigma_s, rfx_s) with shapes (S, d), (S, q), (S, q, m),
+    or None if sampling fails.
+    """
+    try:
+        r_ips = ro.r['inla.posterior.sample']
+        samps = r_ips(n_samples, result)
+
+        first = samps.rx2(1)
+        latent_names = list(first.rx2('latent').names)
+        hyper_names = list(first.rx2('hyperpar').names)
+        n_latent = len(latent_names)
+        n_hyper = len(hyper_names)
+
+        latent_mat = np.empty((n_samples, n_latent))
+        hyper_mat = np.empty((n_samples, n_hyper))
+        for i in range(n_samples):
+            samp = samps.rx2(i + 1)
+            latent_mat[i] = np.asarray(samp.rx2('latent')).ravel()
+            hyper_mat[i] = np.asarray(samp.rx2('hyperpar')).ravel()
+
+        fe_names = ['(Intercept):1'] + [f'x{j}:1' for j in range(1, d)]
+        fe_idx = [latent_names.index(nm) for nm in fe_names if nm in latent_names]
+        ffx_s = np.zeros((n_samples, d))
+        ffx_s[:, : len(fe_idx)] = latent_mat[:, fe_idx]
+
+        sigma_s = np.zeros((n_samples, q))
+        rfx_s = np.zeros((n_samples, q, m))
+
+        if correlated:
+            for j in range(q):
+                for k in range(m):
+                    nm = f'idx0:{j * m + k + 1}'
+                    if nm in latent_names:
+                        rfx_s[:, j, k] = latent_mat[:, latent_names.index(nm)]
+                prec_nms = [
+                    nm for nm in hyper_names
+                    if 'idx0' in nm and f'component {j + 1}' in nm and 'Precision' in nm
+                ]
+                if prec_nms:
+                    prec = hyper_mat[:, hyper_names.index(prec_nms[0])]
+                    sigma_s[:, j] = 1.0 / np.sqrt(np.maximum(prec, 1e-12))
+        else:
+            for j in range(q):
+                for k in range(m):
+                    nm = f'group{j}:{k + 1}'
+                    if nm in latent_names:
+                        rfx_s[:, j, k] = latent_mat[:, latent_names.index(nm)]
+                prec_nms = [
+                    nm for nm in hyper_names
+                    if f'group{j}' in nm and 'Precision' in nm
+                ]
+                if prec_nms:
+                    prec = hyper_mat[:, hyper_names.index(prec_nms[0])]
+                    sigma_s[:, j] = 1.0 / np.sqrt(np.maximum(prec, 1e-12))
+
+        return ffx_s, sigma_s, rfx_s
+    except Exception:
+        return None
+
+
 def estimate(
     ds: dict,
     likelihood_family: int,
     re_correlation: str = 'auto',
+    n_samples: int = 0,
 ) -> dict | None:
     """Run R-INLA on a flat (unpadded) dataset using the simulation's true priors.
 
@@ -190,7 +272,7 @@ def estimate(
                 'formula': formula,
                 'family': family_str,
                 'data': df,
-                'control.compute': ro.ListVector({'config': False, 'return.marginals': True}),
+                'control.compute': ro.ListVector({'config': bool(n_samples > 0), 'return.marginals': True}),
                 'control.predictor': ro.ListVector({'compute': False}),
                 'control.fixed': ctrl_fixed,
                 'verbose': False,
@@ -255,7 +337,15 @@ def estimate(
                 means_j = np.array(re_j.rx(True, 'mean')).ravel()
                 blups[: len(means_j), j] = means_j[:m]
 
-        return {'beta': beta, 'sigma_rfx': sigma_rfx, 'blups': blups}
+        out = {'beta': beta, 'sigma_rfx': sigma_rfx, 'blups': blups}
+        if n_samples > 0:
+            drawn = _draw_posterior_samples(result, n_samples, d, q, m, correlated)
+            if drawn is not None:
+                ffx_s, sigma_s, rfx_s = drawn
+                out['ffx_samples'] = ffx_s      # (S, d)
+                out['sigma_rfx_samples'] = sigma_s  # (S, q)
+                out['rfx_samples'] = rfx_s      # (S, q, m)
+        return out
 
     except Exception:
         return None
@@ -272,8 +362,8 @@ def _worker_loop(task_q: mp.Queue, result_q: mp.Queue) -> None:
         task = task_q.get()
         if task is None:
             break
-        ds, likelihood_family, re_correlation = task
-        result_q.put(estimate(ds, likelihood_family, re_correlation))
+        ds, likelihood_family, re_correlation, n_samples = task
+        result_q.put(estimate(ds, likelihood_family, re_correlation, n_samples))
 
 
 class Worker:
@@ -315,8 +405,9 @@ class Worker:
         ds: dict,
         likelihood_family: int,
         re_correlation: str = 'auto',
+        n_samples: int = 0,
     ) -> dict | None:
-        self._task_q.put((ds, likelihood_family, re_correlation))
+        self._task_q.put((ds, likelihood_family, re_correlation, n_samples))
         try:
             return self._result_q.get(timeout=self.timeout_s)
         except _queue.Empty:
@@ -396,10 +487,11 @@ class InlaFitter:
         ds = self._getSingle(self.cfg.idx)
         re_correlation = getattr(self.cfg, 're_correlation', 'auto')
         timeout_s = getattr(self.cfg, 'timeout_s', INLA_DEFAULT_TIMEOUT_S)
+        n_samples = getattr(self.cfg, 'n_samples', 0)
 
         worker = Worker(timeout_s)
         t0 = time.perf_counter()
-        result = worker.estimate(ds, self.likelihood_family, re_correlation)
+        result = worker.estimate(ds, self.likelihood_family, re_correlation, n_samples)
         wall_s = time.perf_counter() - t0
         worker.close()
 
@@ -412,6 +504,16 @@ class InlaFitter:
                 'inla_wall_s': np.array(wall_s, dtype=np.float64),
                 'inla_failed': np.array(False),
             }
+            if n_samples > 0:
+                if 'ffx_samples' in result:
+                    # transpose to (dim, S) convention matching nuts/advi storage
+                    out['inla_ffx_samples'] = result['ffx_samples'].T.astype(np.float64)
+                    out['inla_sigma_rfx_samples'] = result['sigma_rfx_samples'].T.astype(np.float64)
+                    out['inla_rfx_samples'] = result['rfx_samples'].transpose(1, 2, 0).astype(np.float64)
+                else:
+                    out['inla_ffx_samples'] = np.full((d, n_samples), np.nan, dtype=np.float64)
+                    out['inla_sigma_rfx_samples'] = np.full((q, n_samples), np.nan, dtype=np.float64)
+                    out['inla_rfx_samples'] = np.full((q, m, n_samples), np.nan, dtype=np.float64)
         else:
             out = {
                 'inla_ffx': np.full(d, np.nan, dtype=np.float64),
@@ -420,6 +522,10 @@ class InlaFitter:
                 'inla_wall_s': np.array(wall_s, dtype=np.float64),
                 'inla_failed': np.array(True),
             }
+            if n_samples > 0:
+                out['inla_ffx_samples'] = np.full((d, n_samples), np.nan, dtype=np.float64)
+                out['inla_sigma_rfx_samples'] = np.full((q, n_samples), np.nan, dtype=np.float64)
+                out['inla_rfx_samples'] = np.full((q, m, n_samples), np.nan, dtype=np.float64)
 
         np.savez_compressed(self.outpath, **out)
         status = 'OK' if result is not None else 'FAILED'
@@ -467,6 +573,8 @@ def setup() -> argparse.Namespace:
                         help='Train epoch number (only used for --partition train, default=1)')
     parser.add_argument('--n', dest='n_datasets', type=int, default=-1,
                         help='Max datasets to fit/aggregate; -1 = all (default=-1)')
+    parser.add_argument('--samples', dest='n_samples', type=int, default=0,
+                        help='Draw S joint posterior samples via inla.posterior.sample (default: 0 = point estimates only)')
     parser.add_argument('--all', action='store_true', help='Fit all (or --n) datasets in the partition')
     parser.add_argument('--reintegrate', action='store_true',
                         help='Aggregate individual fit files back into the batch .fit.npz')
