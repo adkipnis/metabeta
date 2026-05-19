@@ -28,10 +28,10 @@ Batch fit file (<data_id>/<partition>.fit.npz) adds inla_* keys to the batch:
     inla_rfx_samples        (n_ds, q_max, m_max, S)
 
 Usage (from repo root):
-    uv run python -m metabeta.simulation.inla --data-id small-b-sampled --idx 0
-    uv run python -m metabeta.simulation.inla --data-id small-b-sampled --reintegrate
-    uv run python -m metabeta.simulation.inla --data-id small-b-sampled --all
-    uv run python -m metabeta.simulation.inla --data-id small-b-sampled --all --samples 1000
+    uv run python -m metabeta.simulation.inla --size small --family 1 --ds_type sampled --idx 0
+    uv run python -m metabeta.simulation.inla --size small --family 1 --ds_type sampled --reintegrate
+    uv run python -m metabeta.simulation.inla --size small --family 1 --ds_type sampled --idx 0 --samples 1000
+    uv run python -m metabeta.simulation.fit  --method inla --size small --family 1 --ds_type sampled --idx 0
 """
 
 from __future__ import annotations
@@ -48,6 +48,7 @@ import numpy as np
 
 from metabeta.utils.io import datasetFilename
 from metabeta.utils.padding import aggregate, unpad
+from metabeta.utils.templates import setupConfigParser, generateSimulationConfig
 
 INLA_DEFAULT_TIMEOUT_S = 120
 
@@ -468,8 +469,6 @@ class InlaFitter:
         self.likelihood_family = int(
             np.asarray(self.batch.get('likelihood_family', [0])).ravel()[0]
         )
-        n_cap = getattr(cfg, 'n_datasets', -1)
-        self.n_fit = min(n_cap, len(self)) if n_cap > 0 else len(self)
         assert 0 <= cfg.idx < len(self), 'idx out of bounds'
         self.outpath = self.outdir / self._outname(cfg.idx)
 
@@ -533,7 +532,7 @@ class InlaFitter:
         print(f'[{status}] idx={self.cfg.idx}  wall={wall_s:.1f}s  → {self.outpath}')
 
     def _aggregate(self) -> dict:
-        paths = [self.outdir / self._outname(i) for i in range(self.n_fit)]
+        paths = [self.outdir / self._outname(i) for i in range(len(self))]
         missing = [p for p in paths if not p.exists()]
         if missing:
             raise FileNotFoundError(
@@ -556,7 +555,7 @@ class InlaFitter:
         merged.update(inla_data)
         np.savez_compressed(fit_path, **merged, allow_pickle=True)
         n_ok = int(np.sum(~inla_data['inla_failed'].astype(bool)))
-        print(f'Reintegrated INLA fits into {fit_path}  ({n_ok}/{self.n_fit} OK)')
+        print(f'Reintegrated INLA fits into {fit_path}  ({n_ok}/{len(self)} OK)')
 
 
 # ---------------------------------------------------------------------------
@@ -566,17 +565,20 @@ class InlaFitter:
 
 # fmt: off
 def setup() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Fit hierarchical datasets with R-INLA.')
-    parser.add_argument('--data-id', required=True, help='Data config id (e.g. small-b-sampled)')
+    parser = argparse.ArgumentParser()
+
+    # data (template-based, matching fit.py)
+    parser.add_argument('--size', type=str, default='small', help='Size preset: tiny|small|medium|large|huge')
+    parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
+    parser.add_argument('--ds_type', type=str, default='sampled', help='Dataset type: toy|flat|scm|mixed|sampled|observed')
+    parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
+
     parser.add_argument('--idx', type=int, default=0, help='Dataset index to fit (default=0)')
     parser.add_argument('--partition', default='test', choices=['train', 'valid', 'test'])
-    parser.add_argument('--epoch', type=int, default=1,
-                        help='Train epoch number (only used for --partition train, default=1)')
-    parser.add_argument('--n', dest='n_datasets', type=int, default=-1,
-                        help='Max datasets to fit/aggregate; -1 = all (default=-1)')
+    parser.add_argument('--epoch', type=int, default=None,
+                        help='Epoch number (required when --partition train)')
     parser.add_argument('--samples', dest='n_samples', type=int, default=0,
                         help='Draw S joint posterior samples via inla.posterior.sample (default: 0 = point estimates only)')
-    parser.add_argument('--all', action='store_true', help='Fit all (or --n) datasets in the partition')
     parser.add_argument('--reintegrate', action='store_true',
                         help='Aggregate individual fit files back into the batch .fit.npz')
     parser.add_argument('--re-correlation', dest='re_correlation', default='diagonal',
@@ -584,33 +586,30 @@ def setup() -> argparse.Namespace:
                         help='RE correlation: diagonal forces iid per dim (default: diagonal)')
     parser.add_argument('--timeout', dest='timeout_s', type=int, default=INLA_DEFAULT_TIMEOUT_S,
                         help=f'Per-dataset timeout in seconds (default: {INLA_DEFAULT_TIMEOUT_S})')
-    parser.add_argument('--force', action='store_true',
-                        help='Refit datasets even when an individual fit file exists')
-    return parser.parse_args()
+    return setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets with R-INLA.')
 # fmt: on
 
 
 if __name__ == '__main__':
     cfg = setup()
+    for _k, _v in [
+        ('idx', 0), ('reintegrate', False), ('partition', 'test'),
+        ('epoch', None), ('n_samples', 0), ('re_correlation', 'diagonal'),
+        ('timeout_s', INLA_DEFAULT_TIMEOUT_S),
+    ]:
+        if not hasattr(cfg, _k):
+            setattr(cfg, _k, _v)
+
+    if cfg.partition == 'train' and cfg.epoch is None:
+        print('error: --epoch is required when --partition train', file=sys.stderr)
+        sys.exit(1)
 
     if not _HAS_INLA:
         print('R-INLA not available (rpy2 or INLA package missing).', file=sys.stderr)
         sys.exit(1)
 
     fitter = InlaFitter(cfg)
-
     if cfg.reintegrate:
         fitter.reintegrate()
-    elif cfg.all:
-        for i in range(fitter.n_fit):
-            fitter.cfg.idx = i
-            fitter.outpath = fitter.outdir / fitter._outname(i)
-            if fitter.outpath.exists() and not cfg.force:
-                print(f'Skipping existing fit {fitter.outpath}')
-                continue
-            fitter.go()
     else:
-        if fitter.outpath.exists() and not cfg.force:
-            print(f'Skipping existing fit {fitter.outpath}')
-        else:
-            fitter.go()
+        fitter.go()
