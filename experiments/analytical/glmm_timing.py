@@ -13,13 +13,19 @@ For each (variant, context) pair, time K batches and report median ms/dataset.
 On CUDA, torch.cuda.synchronize() is called around each timed call so that
 async kernel dispatch time is not measured instead of actual execution time.
 
-Variants
+Normal variants  (likelihood_family=0)
   raw          lmmNormal only          (map_refine=False)
   map_5        +refineNormalMapSrfx    (map_steps=5,  no EB)
   map_10       +refineNormalMapSrfx    (map_steps=10, no EB)
   map_20       +refineNormalMapSrfx    (map_steps=20, no EB)   ← default steps
   eb_only      +refineNormalLaplaceEb  only (map_steps=0 via 1-step map skipped)
   default      map_steps=20 + EB                               ← full default
+
+Bernoulli variants  (likelihood_family=1)
+  raw          lmmBernoulli (PQL) only (map_refine=False)
+  nagq_beta    +refineBernoulliNagqSrfx + refineBernoulliNestedBeta
+  eb_12        +refineBernoulliLaplaceEb (12 outer steps)
+  default      +refineBernoulliLaplaceEb (24 steps, cal preset) ← full default
 
 Contexts
   no_grad      torch.no_grad()    simulates inference / pre-computation
@@ -28,6 +34,7 @@ Contexts
 Usage
 -----
   uv run python experiments/analytical/glmm_timing.py
+  uv run python experiments/analytical/glmm_timing.py --data-id small-b-sampled
   uv run python experiments/analytical/glmm_timing.py --device cuda --data-id medium-n-sampled
   uv run python experiments/analytical/glmm_timing.py --data-id medium-n-sampled --batches 30
 
@@ -57,7 +64,7 @@ from metabeta.utils.experiments import dataFilePath
 # Variant definitions
 # ---------------------------------------------------------------------------
 
-VARIANTS: list[tuple[str, dict]] = [
+NORMAL_VARIANTS: list[tuple[str, dict]] = [
     ('raw',     dict(map_refine=False)),
     ('map_5',   dict(map_refine=True,  normal_laplace_eb=False, map_steps=5)),
     ('map_10',  dict(map_refine=True,  normal_laplace_eb=False, map_steps=10)),
@@ -65,6 +72,19 @@ VARIANTS: list[tuple[str, dict]] = [
     ('eb_only', dict(map_refine=True,  normal_laplace_eb=True,  map_steps=1)),
     ('default', dict(map_refine=True,  normal_laplace_eb=True,  map_steps=20)),
 ]
+
+# bernoulli_laplace_eb=True → mode 'all': every dataset in the batch goes through EB
+# bernoulli_laplace_eb='cal' → same as 'all' but with the calibrated 24-step preset
+BERNOULLI_VARIANTS: list[tuple[str, dict]] = [
+    ('raw',       dict(map_refine=False)),
+    ('nagq_beta', dict(map_refine=True, bernoulli_laplace_eb=False)),
+    ('eb_12',     dict(map_refine=True, bernoulli_laplace_eb=True,  bernoulli_laplace_eb_steps=12)),
+    ('default',   dict(map_refine=True, bernoulli_laplace_eb='cal')),
+]
+
+
+def _variants(likelihood_family: int) -> list[tuple[str, dict]]:
+    return BERNOULLI_VARIANTS if likelihood_family == 1 else NORMAL_VARIANTS
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -77,8 +97,8 @@ def _build_common(batch: dict[str, torch.Tensor], max_q: int) -> dict:
         family_ffx=batch['family_ffx'],
         tau_rfx=batch['tau_rfx'],
         family_sigma_rfx=batch['family_sigma_rfx'],
-        tau_eps=batch['tau_eps'],
-        family_sigma_eps=batch['family_sigma_eps'],
+        tau_eps=batch.get('tau_eps'),
+        family_sigma_eps=batch.get('family_sigma_eps'),
         mask_d=batch.get('mask_d'),
         eta_rfx=batch.get('eta_rfx'),
         mask_q=batch.get('mask_q'),
@@ -194,15 +214,18 @@ def run(args: argparse.Namespace) -> None:
     device_label = args.device
     if device.type == 'cuda':
         device_label = f'cuda ({torch.cuda.get_device_name(device)})'
+    family_label = {0: 'normal', 1: 'bernoulli', 2: 'poisson'}.get(likelihood_family, str(likelihood_family))
     print(f'\nDevice  : {device_label}')
     print(f'Dataset : {args.data_id}  partition={args.partition}')
     print(f'Batches : {n_actual} timed  (+{warmup} warmup)  batch_size={args.batch_size}')
-    print(f'Likelihood family: {likelihood_family}\n')
+    print(f'Family  : {likelihood_family} ({family_label})\n')
+
+    variants = _variants(likelihood_family)
 
     # --- section 1: on-device timing
     meds: dict[str, float] = {}
     rows = []
-    for v_name, v_kwargs in VARIANTS:
+    for v_name, v_kwargs in variants:
         med, std = _time_variant(
             batches, max_q, likelihood_family, v_kwargs, device, warmup,
         )
@@ -212,16 +235,32 @@ def run(args: argparse.Namespace) -> None:
     print(tabulate(rows, headers=['variant', 'med ms/ds', 'std ms/ds'], tablefmt='simple'))
 
     raw_t = meds['raw']
-    print('\nIncremental cost per MAP step:')
-    inc_rows = [
-        ['raw → map_5  (+5)',  f'{meds["map_5"]  - raw_t:.2f}', f'{(meds["map_5"]  - raw_t)/5:.3f}'],
-        ['map_5 → map_10 (+5)', f'{meds["map_10"] - meds["map_5"]:.2f}',
-         f'{(meds["map_10"] - meds["map_5"])/5:.3f}'],
-        ['map_10 → map_20 (+10)', f'{meds["map_20"] - meds["map_10"]:.2f}',
-         f'{(meds["map_20"] - meds["map_10"])/10:.3f}'],
-    ]
-    print(tabulate(inc_rows, headers=['interval', 'delta ms/ds', 'ms/ds per step'],
-                   tablefmt='simple'))
+    if likelihood_family == 0:
+        print('\nIncremental cost per MAP step:')
+        inc_rows = [
+            ['raw → map_5  (+5)',  f'{meds["map_5"]  - raw_t:.2f}',
+             f'{(meds["map_5"]  - raw_t)/5:.3f}'],
+            ['map_5 → map_10 (+5)', f'{meds["map_10"] - meds["map_5"]:.2f}',
+             f'{(meds["map_10"] - meds["map_5"])/5:.3f}'],
+            ['map_10 → map_20 (+10)', f'{meds["map_20"] - meds["map_10"]:.2f}',
+             f'{(meds["map_20"] - meds["map_10"])/10:.3f}'],
+        ]
+        print(tabulate(inc_rows, headers=['interval', 'delta ms/ds', 'ms/ds per step'],
+                       tablefmt='simple'))
+    elif likelihood_family == 1:
+        print('\nIncremental cost (Bernoulli):')
+        inc_rows = [
+            ['raw → nagq_beta',
+             f'{meds["nagq_beta"] - raw_t:.2f}', ''],
+            ['nagq_beta → eb_12  (+12 steps)',
+             f'{meds["eb_12"] - meds["nagq_beta"]:.2f}',
+             f'{(meds["eb_12"] - meds["nagq_beta"])/12:.3f}'],
+            ['eb_12 → default  (+12 steps)',
+             f'{meds["default"] - meds["eb_12"]:.2f}',
+             f'{(meds["default"] - meds["eb_12"])/12:.3f}'],
+        ]
+        print(tabulate(inc_rows, headers=['interval', 'delta ms/ds', 'ms/ds per EB step'],
+                       tablefmt='simple'))
     print(f'\ndefault vs raw: {meds["default"] / raw_t:.1f}x')
 
     if device.type != 'cuda':
@@ -237,7 +276,7 @@ def run(args: argparse.Namespace) -> None:
     cpu_batches = [_batch_to(b, cpu_device) for b in batches]
     cpu_meds: dict[str, float] = {}
     cmp_rows = []
-    for v_name, v_kwargs in VARIANTS:
+    for v_name, v_kwargs in variants:
         cpu_med, cpu_std = _time_variant(
             cpu_batches, max_q, likelihood_family, v_kwargs,
             cpu_device, warmup=2,
@@ -258,7 +297,7 @@ def run(args: argparse.Namespace) -> None:
     print('=' * 60 + '\n')
 
     fix_rows = []
-    for v_name, v_kwargs in VARIANTS:
+    for v_name, v_kwargs in variants:
         fix_med, fix_std = _time_variant(
             batches, max_q, likelihood_family, v_kwargs,
             device, warmup, glmm_on_cpu=True,
@@ -286,7 +325,9 @@ def run(args: argparse.Namespace) -> None:
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--data-id',    default='small-n-sampled')
+    parser.add_argument('--data-id',    default='small-n-sampled',
+                        help='data_id (e.g. small-n-sampled or small-b-sampled); '
+                             'family is auto-detected from config')
     parser.add_argument('--partition',  default='valid')
     parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--batches',    type=int, default=20,
