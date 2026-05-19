@@ -365,7 +365,8 @@ class InlaFitter:
         self.outdir = self.srcdir / cfg.data_id / 'fits'
         self.outdir.mkdir(parents=True, exist_ok=True)
 
-        self.fname = datasetFilename(partition=cfg.partition)
+        epoch = getattr(cfg, 'epoch', 1)
+        self.fname = datasetFilename(partition=cfg.partition, epoch=epoch)
         self.batch_path = self.srcdir / cfg.data_id / self.fname
         assert self.batch_path.exists(), f'{self.batch_path} does not exist'
 
@@ -375,6 +376,8 @@ class InlaFitter:
         self.likelihood_family = int(
             np.asarray(self.batch.get('likelihood_family', [0])).ravel()[0]
         )
+        n_cap = getattr(cfg, 'n_datasets', -1)
+        self.n_fit = min(n_cap, len(self)) if n_cap > 0 else len(self)
         assert 0 <= cfg.idx < len(self), 'idx out of bounds'
         self.outpath = self.outdir / self._outname(cfg.idx)
 
@@ -423,7 +426,7 @@ class InlaFitter:
         print(f'[{status}] idx={self.cfg.idx}  wall={wall_s:.1f}s  → {self.outpath}')
 
     def _aggregate(self) -> dict:
-        paths = [self.outdir / self._outname(i) for i in range(len(self))]
+        paths = [self.outdir / self._outname(i) for i in range(self.n_fit)]
         missing = [p for p in paths if not p.exists()]
         if missing:
             raise FileNotFoundError(
@@ -446,7 +449,7 @@ class InlaFitter:
         merged.update(inla_data)
         np.savez_compressed(fit_path, **merged, allow_pickle=True)
         n_ok = int(np.sum(~inla_data['inla_failed'].astype(bool)))
-        print(f'Reintegrated INLA fits into {fit_path}  ({n_ok}/{len(self)} OK)')
+        print(f'Reintegrated INLA fits into {fit_path}  ({n_ok}/{self.n_fit} OK)')
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +463,11 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--data-id', required=True, help='Data config id (e.g. small-b-sampled)')
     parser.add_argument('--idx', type=int, default=0, help='Dataset index to fit (default=0)')
     parser.add_argument('--partition', default='test', choices=['train', 'valid', 'test'])
-    parser.add_argument('--all', action='store_true', help='Fit all datasets in the partition')
+    parser.add_argument('--epoch', type=int, default=1,
+                        help='Train epoch number (only used for --partition train, default=1)')
+    parser.add_argument('--n', dest='n_datasets', type=int, default=-1,
+                        help='Max datasets to fit/aggregate; -1 = all (default=-1)')
+    parser.add_argument('--all', action='store_true', help='Fit all (or --n) datasets in the partition')
     parser.add_argument('--reintegrate', action='store_true',
                         help='Aggregate individual fit files back into the batch .fit.npz')
     parser.add_argument('--re-correlation', dest='re_correlation', default='diagonal',
@@ -486,7 +493,7 @@ if __name__ == '__main__':
     if cfg.reintegrate:
         fitter.reintegrate()
     elif cfg.all:
-        for i in range(len(fitter)):
+        for i in range(fitter.n_fit):
             fitter.cfg.idx = i
             fitter.outpath = fitter.outdir / fitter._outname(i)
             if fitter.outpath.exists() and not cfg.force:
