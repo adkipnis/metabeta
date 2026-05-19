@@ -35,7 +35,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--diagonal', action='store_true')
 
     # INLA args
-    parser.add_argument('--samples', dest='n_samples', type=int, default=0)
     parser.add_argument('--re-correlation', dest='re_correlation', default='diagonal', choices=['auto', 'diagonal'])
     parser.add_argument('--timeout', dest='timeout_s', type=int, default=120)
 
@@ -50,7 +49,7 @@ if __name__ == '__main__':
         ('epoch', None), ('seed', 42), ('tune', 2000), ('target_accept', 0.8),
         ('max_treedepth', 10), ('draws', 1000), ('chains', 4), ('loop', False),
         ('mp_ctx', 'forkserver'), ('viter', 100_000), ('lr', 1e-3), ('diagonal', False),
-        ('n_samples', 0), ('re_correlation', 'diagonal'), ('timeout_s', 120),
+        ('re_correlation', 'diagonal'), ('timeout_s', 120),
     ]:
         if not hasattr(cfg, _k):
             setattr(cfg, _k, _v)

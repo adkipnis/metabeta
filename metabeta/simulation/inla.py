@@ -10,7 +10,7 @@ Per-dataset output (<data_id>/fits/<partition>_inla_<idx:03d>.npz):
     inla_wall_s     scalar — wall time in seconds
     inla_failed     bool   — True if INLA failed or timed out
 
-    When --samples S > 0 (joint posterior samples via inla.posterior.sample):
+    Joint posterior samples (via inla.posterior.sample, S = draws * chains):
     inla_ffx_samples        (d, S)    — samples follow (dim, S) convention of nuts/advi
     inla_sigma_rfx_samples  (q, S)
     inla_rfx_samples        (q, m, S)
@@ -21,8 +21,6 @@ Batch fit file (<data_id>/<partition>.fit.npz) adds inla_* keys to the batch:
     inla_rfx        (n_ds, m_max, q_max)
     inla_wall_s     (n_ds,)
     inla_failed     (n_ds,)  dtype bool
-
-    When --samples S > 0:
     inla_ffx_samples        (n_ds, d_max, S)
     inla_sigma_rfx_samples  (n_ds, q_max, S)
     inla_rfx_samples        (n_ds, q_max, m_max, S)
@@ -487,7 +485,7 @@ class InlaFitter:
         ds = self._getSingle(self.cfg.idx)
         re_correlation = getattr(self.cfg, 're_correlation', 'auto')
         timeout_s = getattr(self.cfg, 'timeout_s', INLA_DEFAULT_TIMEOUT_S)
-        n_samples = getattr(self.cfg, 'n_samples', 0)
+        n_samples = getattr(self.cfg, 'draws', 1000) * getattr(self.cfg, 'chains', 4)
 
         worker = Worker(timeout_s)
         t0 = time.perf_counter()
@@ -577,8 +575,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--partition', default='test', choices=['train', 'valid', 'test'])
     parser.add_argument('--epoch', type=int, default=None,
                         help='Epoch number (required when --partition train)')
-    parser.add_argument('--samples', dest='n_samples', type=int, default=0,
-                        help='Draw S joint posterior samples via inla.posterior.sample (default: 0 = point estimates only)')
     parser.add_argument('--reintegrate', action='store_true',
                         help='Aggregate individual fit files back into the batch .fit.npz')
     parser.add_argument('--re-correlation', dest='re_correlation', default='diagonal',
@@ -594,7 +590,7 @@ if __name__ == '__main__':
     cfg = setup()
     for _k, _v in [
         ('idx', 0), ('reintegrate', False), ('partition', 'test'),
-        ('epoch', None), ('n_samples', 0), ('re_correlation', 'diagonal'),
+        ('epoch', None), ('re_correlation', 'diagonal'),
         ('timeout_s', INLA_DEFAULT_TIMEOUT_S),
     ]:
         if not hasattr(cfg, _k):
