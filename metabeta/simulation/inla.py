@@ -95,8 +95,9 @@ def _draw_posterior_samples(
         samps = r_ips(n_samples, result)
 
         first = samps.rx2(1)
-        latent_names = list(first.rx2('latent').names)
-        hyper_names = list(first.rx2('hyperpar').names)
+        # $latent is a FloatMatrix (n_latent, 1); rownames hold the parameter names
+        latent_names = list(ro.r['rownames'](first.rx2('latent')))
+        hyper_names = list(ro.r['names'](first.rx2('hyperpar')))
         n_latent = len(latent_names)
         n_hyper = len(hyper_names)
 
