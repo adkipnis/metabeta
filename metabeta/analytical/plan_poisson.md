@@ -97,6 +97,27 @@ Incremental findings:
 - Large and huge first-1000 rows have the same pattern as small/medium: FFX and σ improve,
   BLUP is neutral, and runtime remains below the `~100 ms/dataset` target.
 
+INLA-direction diagnostic:
+
+- Script:
+  `experiments/analytical/glmm_poisson_inla_direction_diagnostic.py`.
+- Saved row diagnostics:
+  `experiments/analytical/inla_runs/poisson_direction/mixed_train_20.csv` and
+  `experiments/analytical/inla_runs/poisson_direction/sampled_valid_20.csv`.
+- On 20 small + 20 medium mixed train rows, current EB improved mean FFX RMSE from
+  `0.4307` to `0.3736`, but INLA was `0.1461`. Medium rows moved strongly toward INLA
+  (median β distance gain `0.6729`, mean shift cosine `0.9213`); small rows were mostly
+  neutral and had unstable distance-gain means because some RAW rows were already close to
+  INLA.
+- On 20 small + 20 medium sampled-valid rows, current EB improved mean FFX RMSE from
+  `0.3634` to `0.2875`, while INLA was `0.1618`. Medium sampled rows again moved toward
+  INLA (median β distance gain `0.8137`, mean shift cosine `0.9497`). Small sampled rows
+  were the weak spot: median β distance gain `-1.8049` and mean shift cosine `-0.4000`.
+- The largest FFX gaps are not solved by σ cap tuning alone. Typical outliers have RAW and
+  EB β RMSE in the `2–5` range while INLA is around `0.1–0.5`; EB usually moves in the INLA
+  direction but not far enough. Some low-d (`d=1`) sampled rows move away from INLA despite
+  small absolute errors, so a broad stronger β update is likely unsafe.
+
 Takeaways
 ---------
 
@@ -108,13 +129,15 @@ From first-1000 rows across all sizes:
 - RAW σ_rfx is similarly ~1.7× worse than INLA. BLUP is closer (~1.1× worse), consistent
   with BLUPs being mainly driven by the within-group signal once σ is roughly in range.
 - Poisson EB consistently improves FFX and σ over RAW/PQL on all first-1000 mixed and
-  sampled rows. The biggest gain is σ on medium+ rows.
+  sampled rows. The biggest gain is σ on medium+ rows. Row-level INLA-direction diagnostics
+  show that medium rows usually move toward INLA, but low-d small/sampled rows need a guard.
 - BLUP is deliberately neutral at this stage. Direct EB BLUP modes regressed most cells, so
   the retained default feeds RAW/PQL BLUPs through while using EB β and σ.
 - The current Bernoulli-style EB transplant is not enough for Poisson FFX. The likely
   missing piece is Poisson log-link marginalization: random-effect variance changes the
-  marginal mean via an `exp(0.5 * zΨz)` factor, so β and σ need a correction that directly
-  targets marginal mean calibration rather than only the conditional mode target.
+  marginal mean via an `exp(0.5 * zΨz)` factor, so β needs a correction that directly
+  targets marginal mean calibration rather than only the conditional mode target. This
+  should be gated; low-d sampled rows can move away from INLA under the current EB shift.
 - No separation analogue for Poisson, but heavy-tailed count overdispersion may introduce
   analogous instabilities at higher d.
 - The INLA ms/ds (~3 s) vs RAW (~4 ms) ratio is ~750× — consistent with the Bernoulli gap.
@@ -157,31 +180,28 @@ Skip these initially:
 Next Steps
 ----------
 
-1. **Diagnose movement toward INLA.** On rows with INLA references, measure whether Poisson
-   EB moves β from RAW toward INLA, away from INLA, or mostly changes σ. Include row-level
-   summaries by `d`, `q`, σ magnitude, count scale, β jump, EB accept, and σ cap. If β
-   movement is small or poorly aligned with INLA, further tuning of the current optimizer is
-   unlikely to close the main gap.
-
-2. **Prototype a Poisson marginal-mean β correction.** Use the current Ψ estimate to add a
+1. **Prototype a gated Poisson marginal-mean β correction.** Use the current Ψ estimate to add a
    cheap marginalization correction,
    `η_marg ≈ Xβ + 0.5 * diag(ZΨZ')`, then re-fit or adjust β so the Poisson marginal mean is
-   calibrated. This directly targets the log-link bias that the Bernoulli-derived EB path
-   does not address.
+   calibrated. Gate it first to medium/high-severity rows, because the INLA-direction
+   diagnostic shows medium rows move toward INLA while low-d sampled rows can move away.
+   Candidate gates: `d >= 5`, large prior-standardized β magnitude, large β jump, or a
+   count-tail/zero-fraction severity score.
 
-3. **Try a variance-aware β refinement before touching BLUPs.** Build a batched β update
+2. **Try a variance-aware β refinement before touching BLUPs.** Build a batched β update
    using Poisson weights/offsets from the current random-effect variance and fitted μ. Keep
    RAW/PQL BLUP fallback unless this β-focused path first improves FFX/σ on the quick gate.
 
-4. **Use tiny targeted quadrature/grid only if diagnostics justify it.** If the INLA gap is
-   concentrated in `q <= 2`, high-σ, or high-count-tail rows, test a narrow adaptive
-   correction for those rows. Skip broad grids, multi-starts, and full PyTorch INLA unless a
-   targeted diagnostic shows that the simpler marginal correction cannot move the gap.
+3. **Use tiny targeted quadrature/grid only if marginal β correction is insufficient.** If
+   the remaining INLA gap is concentrated in `q <= 2`, high-σ, or high-count-tail rows, test
+   a narrow adaptive correction for those rows. Skip broad grids, multi-starts, and full
+   PyTorch INLA unless a targeted diagnostic shows that the simpler marginal correction
+   cannot move the gap.
 
-5. **Postpone the full 8k analytical benchmark.** Run it only after a more serious
+4. **Postpone the full 8k analytical benchmark.** Run it only after a more serious
    Poisson-specific improvement beats the current EB path on the first-1000 quick gate.
 
-6. **Complete the INLA comparison baseline in parallel.** Large rows are now refreshed for
+5. **Complete the INLA comparison baseline in parallel.** Large rows are now refreshed for
    first-1000 comparisons and huge rows are running. Integrate huge values once the logs
    finish, but do not block the Poisson-specific prototypes on the full INLA table.
 
@@ -205,6 +225,16 @@ uv run python -u experiments/analytical/glmm_inla_comparison.py \
     --n-inla 1000 --n-total 1000 --analytical-methods raw,current
 # Repeat the INLA command for each sampled size and valid/test partition.
 # For mixed/train: add --partition train --n-epochs 2 and use -p-mixed data-ids.
+
+uv run python -u experiments/analytical/glmm_poisson_inla_direction_diagnostic.py \
+    --data-ids small-p-mixed medium-p-mixed --partition train \
+    --n-inla 20 --n-epochs 1 --batch-size 16 \
+    --output-csv experiments/analytical/inla_runs/poisson_direction/mixed_train_20.csv
+
+uv run python -u experiments/analytical/glmm_poisson_inla_direction_diagnostic.py \
+    --data-ids small-p-sampled medium-p-sampled --partition valid \
+    --n-inla 20 --batch-size 16 \
+    --output-csv experiments/analytical/inla_runs/poisson_direction/sampled_valid_20.csv
 
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical/fit.py metabeta/analytical/glmm \
