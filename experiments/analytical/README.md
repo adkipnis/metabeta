@@ -40,5 +40,5 @@ Reference files
 - `glmm_perf_baseline.md` — current production benchmark numbers and retired REML
   summary with per-cell comparison tables.
 - `estimator_analysis.md` — archived per-stage weakpoint analysis.
-- `metabeta/analytical/plan_normal.md` and `plan_bernoulli.md` — current decisions
-  and next steps.
+- `metabeta/analytical/plan_normal.md`, `plan_bernoulli.md`, and `plan_poisson.md` —
+  current decisions and next steps.

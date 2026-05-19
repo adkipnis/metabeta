@@ -9,6 +9,10 @@ Analytical GLMM Plan
   σ_rfx scale accuracy, not another broad inference branch.
 - [plan_bernoulli.md](plan_bernoulli.md) — Bernoulli GLMM: default Bernoulli EB path;
   no full INLA or separate amortized-correction branch.
+- [plan_poisson.md](plan_poisson.md) — Poisson GLMM: RAW/PQL is current production;
+  next work is a default-off Poisson EB prototype reusing the retained Bernoulli diagonal
+  Laplace-EB structure, with Poisson-specific likelihood stabilization and promotion only
+  after the full mixed + sampled benchmark.
 
 Testing Scheme
 --------------
