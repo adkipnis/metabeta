@@ -14,6 +14,8 @@ from metabeta.utils.families import (
     POISSON_X_CLIP_ABS,
     POISSON_REROLL_CLIP_FRACTION_MAX,
     POISSON_REROLL_MAX_ATTEMPTS,
+    POISSON_LP_SD_CAP_LOW,
+    POISSON_LP_SD_CAP_HIGH,
 )
 from metabeta.simulation import Prior, Synthesizer, Scammer, Emulator
 from metabeta.plotting import plotDataset
@@ -123,6 +125,34 @@ class Simulator:
         }
         return params, hyperparams
 
+    def _samplePoissonLpCap(self) -> float:
+        return float(self.rng.uniform(POISSON_LP_SD_CAP_LOW, POISSON_LP_SD_CAP_HIGH))
+
+    def _calibratePoissonEtaScale(
+        self,
+        params: dict[str, np.ndarray],
+        hyperparams: dict[str, np.ndarray],
+        observations: dict[str, np.ndarray],
+    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+        """Scale Poisson params down if sd(eta) exceeds a sampled cap.
+
+        Keeps stored hyperparams coherent with the rescaled parameters so that
+        the NPE sees a consistent prior context after calibration.
+        """
+        eta = linearPredictor(params, observations)
+        eta_sd = float(np.std(eta))
+        if eta_sd <= 1e-12:
+            return params, hyperparams
+        cap = self._samplePoissonLpCap()
+        if eta_sd <= cap:
+            return params, hyperparams
+        scale = cap / eta_sd
+        params = {k: v * scale if k in SCALE_PARAMS else v for k, v in params.items()}
+        hyperparams = {
+            k: v * scale if k in SCALE_HYPERPARAMS else v for k, v in hyperparams.items()
+        }
+        return params, hyperparams
+
     def _sampleNormalR2Cap(self) -> float:
         ffx_covariates = max(self.d - 1, 0)
         rfx_slopes = max(self.q - 1, 0)
@@ -192,13 +222,14 @@ class Simulator:
                 logger.warning(
                     (
                         'Poisson eta clipping remained high after rerolls: %.2f%% > %.2f%% '
-                        '(attempts=%d/%d). Accepting dataset.'
+                        '(attempts=%d/%d). Applying LP scale calibration.'
                     ),
                     100.0 * clip_fraction,
                     100.0 * POISSON_REROLL_CLIP_FRACTION_MAX,
                     attempts,
                     POISSON_REROLL_MAX_ATTEMPTS,
                 )
+            params, hyperparams = self._calibratePoissonEtaScale(params, hyperparams, obs)
         elif likelihood_family == 1:
             extreme_fraction = self._bernoulliExtremeEtaFraction(params, obs)
             attempts = 1
