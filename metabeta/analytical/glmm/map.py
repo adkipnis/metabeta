@@ -31,6 +31,7 @@ __all__ = [
     'refineBernoulliNestedBeta',
     'refinePoissonLaplaceEb',
     'refinePoissonMarginalMeanBeta',
+    'refinePoissonSigmaGrid',
 ]
 
 
@@ -1030,6 +1031,265 @@ def refinePoissonMarginalMeanBeta(
         out['poisson_marginal_beta_jump'] = jump
         out['poisson_marginal_beta_target'] = final_target
         out['poisson_marginal_beta_base_target'] = base_target
+    return out
+
+
+def _poissonAgqTargetDiag(
+    beta: torch.Tensor,
+    sigma_rfx: torch.Tensor,
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor | None,
+    tau_ffx: torch.Tensor | None,
+    family_ffx: torch.Tensor | None,
+    tau_rfx: torch.Tensor | None,
+    family_sigma_rfx: torch.Tensor | None,
+    mask_d: torch.Tensor | None,
+    mask_q: torch.Tensor | None,
+    k: int,
+    n_inner: int,
+) -> torch.Tensor:
+    """Small-q adaptive GH marginal log posterior for candidate β and diagonal σ."""
+    B, m, _, d = Xm.shape
+    q = Zm.shape[-1]
+    device, dtype = Xm.device, Xm.dtype
+    active_q = (
+        mask_q[:, :q].to(device=device).bool()
+        if mask_q is not None
+        else torch.ones(B, q, device=device, dtype=torch.bool)
+    )
+    q_count = active_q.long().sum(dim=1)
+    target = torch.full((B,), -float('inf'), device=device, dtype=dtype)
+
+    for q_act in range(1, min(q, 2) + 1):
+        rows = (q_count == q_act).nonzero(as_tuple=True)[0].tolist()
+        if not rows:
+            continue
+        z_grid, log_w_grid = _ghProductGrid([k] * q_act, dtype, device)
+        lz2 = z_grid.square().sum(dim=-1)
+        for b in rows:
+            idx = active_q[b].nonzero(as_tuple=True)[0]
+            beta_b = beta[b]
+            sigma_b = sigma_rfx[b, idx].clamp(min=1e-4, max=math.sqrt(_POISSON_PSI_EIG_CAP))
+            log_sigma_b = sigma_b.log().view(1, q_act)
+            Xm_b = Xm[b : b + 1, :, :, :d]
+            ym_b = ym[b : b + 1]
+            Zm_b = Zm[b : b + 1, :, :, idx]
+            mask_n_b = mask_n[b : b + 1]
+            mask_m_b = mask_m[b : b + 1]
+            blups_b, H_b, _ = _poissonLaplaceModeDiag(
+                beta_b.view(1, d),
+                log_sigma_b,
+                Xm_b,
+                ym_b,
+                Zm_b,
+                mask_n_b,
+                mask_m_b,
+                None,
+                n_inner=n_inner,
+                damping=0.5,
+            )
+            eye = torch.eye(q_act, device=device, dtype=dtype).expand(1, m, q_act, q_act)
+            H_inv = _safeSolve(H_b + _adaptiveRidgeBm(H_b), eye)
+            L = torch.linalg.cholesky(_psdClampEigenvalues(H_inv, _POISSON_PSI_EIG_CAP))
+            b_nodes = blups_b[:, :, :, None] + math.sqrt(2.0) * torch.einsum(
+                'bmqr,Kr->bmqK', L, z_grid
+            )
+            eta = torch.einsum('bmnd,d->bmn', Xm_b, beta_b)
+            eta_nodes = eta[:, :, :, None] + torch.einsum('bmnq,bmqK->bmnK', Zm_b, b_nodes)
+            eta_eff = eta_nodes.clamp(max=_POISSON_ETA_CLIP_MAX)
+            ll = (ym_b[:, :, :, None] * eta_eff - torch.exp(eta_eff)) * mask_n_b[:, :, :, None]
+            ll_g = ll.sum(dim=2)
+            lp_g = (
+                -0.5 * q_act * math.log(2.0 * math.pi)
+                - sigma_b.log().sum()
+                - 0.5 * (b_nodes.square() / sigma_b.view(1, 1, q_act, 1).square()).sum(dim=2)
+            )
+            sign, log_det_H = torch.linalg.slogdet(H_b)
+            log_det_H = torch.where(sign > 0, log_det_H, log_det_H.new_zeros(()))
+            lml_g = (
+                torch.logsumexp(log_w_grid.view(1, 1, -1) + ll_g + lp_g + lz2.view(1, 1, -1), -1)
+                + 0.5 * q_act * math.log(2.0)
+                - 0.5 * log_det_H
+            )
+            target_b = (lml_g * mask_m_b).sum()
+            if nu_ffx is not None and tau_ffx is not None and family_ffx is not None:
+                if mask_d is None:
+                    mask_d_b = torch.ones(1, 1, d, device=device, dtype=dtype)
+                else:
+                    mask_d_b = mask_d[b : b + 1, :d].to(device=device, dtype=dtype).unsqueeze(1)
+                target_b = (
+                    target_b
+                    + logProbFfx(
+                        beta_b.view(1, 1, d),
+                        nu_ffx[b : b + 1, :d].unsqueeze(1),
+                        tau_ffx[b : b + 1, :d].clamp(min=1e-8).unsqueeze(1),
+                        family_ffx[b : b + 1],
+                        mask_d_b,
+                    ).squeeze()
+                )
+            if tau_rfx is not None and family_sigma_rfx is not None:
+                target_b = (
+                    target_b
+                    + logProbSigma(
+                        sigma_b.view(1, 1, q_act),
+                        tau_rfx[b : b + 1, idx].clamp(min=1e-8).unsqueeze(1),
+                        family_sigma_rfx[b : b + 1],
+                        torch.ones(1, 1, q_act, device=device, dtype=dtype),
+                    ).squeeze()
+                )
+            target[b] = target_b
+    return target
+
+
+def refinePoissonSigmaGrid(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor | None = None,
+    tau_ffx: torch.Tensor | None = None,
+    family_ffx: torch.Tensor | None = None,
+    tau_rfx: torch.Tensor | None = None,
+    family_sigma_rfx: torch.Tensor | None = None,
+    mask_d: torch.Tensor | None = None,
+    mask_q: torch.Tensor | None = None,
+    scales: tuple[float, ...] = (0.35, 0.5, 0.75, 1.0, 1.3333333),
+    min_d: int = 5,
+    max_q: int = 2,
+    beta_steps: int = 4,
+    beta_damping: float = 0.7,
+    beta_max_step: float = 1.0,
+    agq_k: int = 3,
+    agq_inner: int = 6,
+    update_sigma: bool = False,
+    return_diagnostics: bool = False,
+) -> dict[str, torch.Tensor]:
+    """Targeted σ-offset grid with AGQ acceptance for Poisson rows where q is tiny."""
+    d = Xm.shape[-1]
+    q = Zm.shape[-1]
+    if d == 0 or q == 0 or 'sigma_rfx_est' not in stats:
+        return stats
+
+    B = Xm.shape[0]
+    device, dtype = Xm.device, Xm.dtype
+    if mask_d is None:
+        active_d = torch.ones(B, d, device=device, dtype=torch.bool)
+    else:
+        active_d = mask_d[:, :d].to(device=device).bool()
+    if mask_q is None:
+        active_q = torch.ones(B, q, device=device, dtype=torch.bool)
+    else:
+        active_q = mask_q[:, :q].to(device=device).bool()
+    d_count = active_d.long().sum(dim=1)
+    q_count = active_q.long().sum(dim=1)
+    gate = (d_count >= int(min_d)) & (q_count >= 1) & (q_count <= int(max_q))
+    if not gate.any():
+        out = dict(stats)
+        if return_diagnostics:
+            out['poisson_sigma_grid_gate'] = gate.to(dtype)
+            out['poisson_sigma_grid_accept'] = torch.zeros(B, device=device, dtype=dtype)
+            out['poisson_sigma_grid_scale'] = torch.ones(B, device=device, dtype=dtype)
+        return out
+
+    sigma_base = (
+        stats['sigma_rfx_est'][:, :q].detach().clamp(min=1e-4, max=math.sqrt(_POISSON_PSI_EIG_CAP))
+    )
+    beta_base = stats['beta_est'][:, :d].detach()
+    best_beta = beta_base.clone()
+    best_sigma = sigma_base.clone()
+    best_target = _poissonAgqTargetDiag(
+        beta_base,
+        sigma_base,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        nu_ffx,
+        tau_ffx,
+        family_ffx,
+        tau_rfx,
+        family_sigma_rfx,
+        mask_d,
+        mask_q,
+        k=agq_k,
+        n_inner=agq_inner,
+    )
+    best_scale = torch.ones(B, device=device, dtype=dtype)
+
+    for scale in scales:
+        scale_f = float(scale)
+        if abs(scale_f - 1.0) < 1e-8:
+            continue
+        sigma_try = sigma_base.clone()
+        sigma_try = torch.where(
+            gate[:, None] & active_q,
+            (sigma_base * scale_f).clamp(min=1e-4, max=math.sqrt(_POISSON_PSI_EIG_CAP)),
+            sigma_try,
+        )
+        candidate_stats = dict(stats)
+        candidate_stats['sigma_rfx_est'] = sigma_try
+        candidate_stats = refinePoissonMarginalMeanBeta(
+            candidate_stats,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            nu_ffx=nu_ffx,
+            tau_ffx=tau_ffx,
+            family_ffx=family_ffx,
+            mask_d=mask_d,
+            mask_q=mask_q,
+            n_steps=beta_steps,
+            damping=beta_damping,
+            min_d=min_d,
+            max_step=beta_max_step,
+            accept_only_improved=False,
+            return_diagnostics=False,
+        )
+        beta_try = candidate_stats['beta_est'][:, :d].detach()
+        target_try = _poissonAgqTargetDiag(
+            beta_try,
+            sigma_try,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            nu_ffx,
+            tau_ffx,
+            family_ffx,
+            tau_rfx,
+            family_sigma_rfx,
+            mask_d,
+            mask_q,
+            k=agq_k,
+            n_inner=agq_inner,
+        )
+        improve = gate & (target_try > best_target + 1e-5)
+        best_target = torch.where(improve, target_try, best_target)
+        best_beta = torch.where(improve[:, None], beta_try, best_beta)
+        best_sigma = torch.where(improve[:, None], sigma_try, best_sigma)
+        best_scale = torch.where(improve, torch.full_like(best_scale, scale_f), best_scale)
+
+    accept = gate & (best_scale != 1.0)
+    out = dict(stats)
+    out['beta_est'] = torch.where(accept[:, None], best_beta, beta_base)
+    if update_sigma:
+        out['sigma_rfx_est'] = torch.where(accept[:, None], best_sigma, sigma_base)
+        out['Psi_lap'] = torch.diag_embed(out['sigma_rfx_est'].square())
+    if return_diagnostics:
+        out['poisson_sigma_grid_gate'] = gate.to(dtype)
+        out['poisson_sigma_grid_accept'] = accept.to(dtype)
+        out['poisson_sigma_grid_scale'] = best_scale
+        out['poisson_sigma_grid_target'] = best_target
     return out
 
 

@@ -27,6 +27,7 @@ METHODS = [
     'normal_eb',
     'poisson_eb',
     'poisson_marginal_beta',
+    'poisson_sigma_grid',
 ]
 FAMILIES = ['n', 'b', 'p']
 
@@ -47,7 +48,7 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
     print(
         'method,dataset,partition,N,FFX,sRFX,sEps,BLUP,ms_per_ds,gate,accept,'
         'blup_fallback,beta_capped,beta_tail,sigma_capped,poisson_beta_gate,'
-        'poisson_beta_accept',
+        'poisson_beta_accept,poisson_sigma_grid_gate,poisson_sigma_grid_accept',
         flush=True,
     )
     combos = _combos(args, family)
@@ -108,6 +109,7 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                                     'current',
                                     'poisson_eb',
                                     'poisson_marginal_beta',
+                                    'poisson_sigma_grid',
                                 }
                             ),
                             **_bernoulliEbKwargs(method, args),
@@ -160,6 +162,8 @@ class _MetricStore:
         self.sigma_capped: list[np.ndarray] = []
         self.poisson_beta_gate: list[np.ndarray] = []
         self.poisson_beta_accept: list[np.ndarray] = []
+        self.poisson_sigma_grid_gate: list[np.ndarray] = []
+        self.poisson_sigma_grid_accept: list[np.ndarray] = []
         self.n_total = 0
 
     def add(
@@ -199,6 +203,14 @@ class _MetricStore:
         if 'poisson_marginal_beta_accept' in stats:
             self.poisson_beta_accept.append(
                 stats['poisson_marginal_beta_accept'].detach().cpu().numpy()
+            )
+        if 'poisson_sigma_grid_gate' in stats:
+            self.poisson_sigma_grid_gate.append(
+                stats['poisson_sigma_grid_gate'].detach().cpu().numpy()
+            )
+        if 'poisson_sigma_grid_accept' in stats:
+            self.poisson_sigma_grid_accept.append(
+                stats['poisson_sigma_grid_accept'].detach().cpu().numpy()
             )
         self.n_total += B
         for b in range(B):
@@ -249,6 +261,16 @@ class _MetricStore:
             if self.poisson_beta_accept
             else float('nan')
         )
+        poisson_sigma_grid_gate = (
+            float(np.mean(np.concatenate(self.poisson_sigma_grid_gate)))
+            if self.poisson_sigma_grid_gate
+            else float('nan')
+        )
+        poisson_sigma_grid_accept = (
+            float(np.mean(np.concatenate(self.poisson_sigma_grid_accept)))
+            if self.poisson_sigma_grid_accept
+            else float('nan')
+        )
         seps_str = (
             f'{_nrmse(np.concatenate(self.seps_errs), np.concatenate(self.seps_truths)):.4f}'
             if self.likelihood_family == 0
@@ -273,6 +295,8 @@ class _MetricStore:
                 f'{sigma_capped:.3f}',
                 f'{poisson_beta_gate:.3f}',
                 f'{poisson_beta_accept:.3f}',
+                f'{poisson_sigma_grid_gate:.3f}',
+                f'{poisson_sigma_grid_accept:.3f}',
             ]
         )
 
@@ -301,12 +325,13 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
         return {'bernoulli_laplace_eb': 'bernoulli_eb', 'normal_laplace_eb': False}
     if method == 'normal_eb':
         return {'bernoulli_laplace_eb': False, 'normal_laplace_eb': True}
-    if method in {'poisson_eb', 'poisson_marginal_beta'}:
+    if method in {'poisson_eb', 'poisson_marginal_beta', 'poisson_sigma_grid'}:
         return {
             'bernoulli_laplace_eb': False,
             'normal_laplace_eb': False,
             'poisson_laplace_eb': 'poisson_eb',
-            'poisson_marginal_beta': method == 'poisson_marginal_beta',
+            'poisson_marginal_beta': method in {'poisson_marginal_beta', 'poisson_sigma_grid'},
+            'poisson_sigma_grid': method == 'poisson_sigma_grid',
         }
     return {'bernoulli_laplace_eb': False}
 
@@ -348,7 +373,13 @@ def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
 
 
 def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
-    if method not in {'default', 'current', 'poisson_eb', 'poisson_marginal_beta'}:
+    if method not in {
+        'default',
+        'current',
+        'poisson_eb',
+        'poisson_marginal_beta',
+        'poisson_sigma_grid',
+    }:
         return {}
     out = {
         'poisson_laplace_eb_steps': args.poisson_eb_steps,
@@ -359,13 +390,22 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_eb_sigma_prior_cap': args.poisson_eb_sigma_prior_cap,
         'poisson_laplace_eb_sigma_prior_cap_min_d': args.poisson_eb_sigma_prior_cap_min_d,
     }
-    if method in {'default', 'current', 'poisson_marginal_beta'}:
+    if method in {'default', 'current', 'poisson_marginal_beta', 'poisson_sigma_grid'}:
         out.update(
             {
                 'poisson_marginal_beta_steps': args.poisson_marginal_beta_steps,
                 'poisson_marginal_beta_damping': args.poisson_marginal_beta_damping,
                 'poisson_marginal_beta_min_d': args.poisson_marginal_beta_min_d,
                 'poisson_marginal_beta_max_step': args.poisson_marginal_beta_max_step,
+            }
+        )
+    if method in {'default', 'current', 'poisson_sigma_grid'}:
+        out.update(
+            {
+                'poisson_sigma_grid_scales': args.poisson_sigma_grid_scales,
+                'poisson_sigma_grid_min_d': args.poisson_sigma_grid_min_d,
+                'poisson_sigma_grid_max_q': args.poisson_sigma_grid_max_q,
+                'poisson_sigma_grid_agq_k': args.poisson_sigma_grid_agq_k,
             }
         )
     return out
@@ -406,6 +446,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-marginal-beta-damping', type=float, default=0.7)
     parser.add_argument('--poisson-marginal-beta-min-d', type=int, default=5)
     parser.add_argument('--poisson-marginal-beta-max-step', type=float, default=1.0)
+    parser.add_argument('--poisson-sigma-grid-scales', type=float, nargs='+', default=[0.35, 0.5, 0.75, 1.0, 1.3333333])
+    parser.add_argument('--poisson-sigma-grid-min-d', type=int, default=5)
+    parser.add_argument('--poisson-sigma-grid-max-q', type=int, default=2)
+    parser.add_argument('--poisson-sigma-grid-agq-k', type=int, default=3)
     return parser.parse_args()
 # fmt: on
 

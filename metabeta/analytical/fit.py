@@ -10,6 +10,7 @@ from metabeta.analytical.glmm.map import (
     refineBernoulliNestedBeta,
     refinePoissonLaplaceEb,
     refinePoissonMarginalMeanBeta,
+    refinePoissonSigmaGrid,
 )
 from metabeta.analytical.lmm.map import refineNormalLaplaceEb, refineNormalMapSrfx
 from metabeta.analytical.lmm.lmm import lmmNormal
@@ -345,6 +346,13 @@ def glmm(
     poisson_marginal_beta_damping = kwargs.pop('poisson_marginal_beta_damping', 0.7)
     poisson_marginal_beta_min_d = kwargs.pop('poisson_marginal_beta_min_d', 5)
     poisson_marginal_beta_max_step = kwargs.pop('poisson_marginal_beta_max_step', 1.0)
+    poisson_sigma_grid = kwargs.pop('poisson_sigma_grid', likelihood_family == 2)
+    poisson_sigma_grid_scales = kwargs.pop(
+        'poisson_sigma_grid_scales', (0.35, 0.5, 0.75, 1.0, 1.3333333)
+    )
+    poisson_sigma_grid_min_d = kwargs.pop('poisson_sigma_grid_min_d', 5)
+    poisson_sigma_grid_max_q = kwargs.pop('poisson_sigma_grid_max_q', 2)
+    poisson_sigma_grid_agq_k = kwargs.pop('poisson_sigma_grid_agq_k', 3)
     mask_d = kwargs.pop('mask_d', None)
     uncorr = (eta_rfx == 0) if eta_rfx is not None else None  # (B,) bool or None
     if likelihood_family == 0:
@@ -587,6 +595,30 @@ def glmm(
                 max_step=poisson_marginal_beta_max_step,
                 return_diagnostics=poisson_laplace_eb_diagnostics,
             )
+        if map_refine and poisson_sigma_grid and Zm.shape[-1] > 0:
+            stats = refinePoissonSigmaGrid(
+                stats,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx=map_priors['nu_ffx'],
+                tau_ffx=map_priors['tau_ffx'],
+                family_ffx=map_priors['family_ffx'],
+                tau_rfx=map_priors['tau_rfx'],
+                family_sigma_rfx=map_priors['family_sigma_rfx'],
+                mask_d=mask_d,
+                mask_q=mask_q,
+                scales=tuple(float(x) for x in poisson_sigma_grid_scales),
+                min_d=poisson_sigma_grid_min_d,
+                max_q=poisson_sigma_grid_max_q,
+                beta_steps=poisson_marginal_beta_steps,
+                beta_damping=poisson_marginal_beta_damping,
+                beta_max_step=poisson_marginal_beta_max_step,
+                agq_k=poisson_sigma_grid_agq_k,
+                return_diagnostics=poisson_laplace_eb_diagnostics,
+            )
     else:
         raise ValueError(f'unsupported likelihood_family={likelihood_family}')
 
@@ -606,4 +638,5 @@ __all__ = [
     'refineNormalMapSrfx',
     'refinePoissonLaplaceEb',
     'refinePoissonMarginalMeanBeta',
+    'refinePoissonSigmaGrid',
 ]
