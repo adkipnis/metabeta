@@ -1,8 +1,5 @@
 """R-INLA fitting for hierarchical datasets.
 
-Saves point estimates in the same per-dataset / batch .fit.npz format as
-fit.py (PyMC/NUTS/ADVI), enabling downstream comparison with NUTS reference fits.
-
 Per-dataset output (<data_id>/fits/<partition>_inla_<idx:03d>.npz):
     inla_ffx        (d,)   — posterior means for fixed effects
     inla_sigma_rfx  (q,)   — E[1/sqrt(τ)] for each RE variance
@@ -15,7 +12,7 @@ Per-dataset output (<data_id>/fits/<partition>_inla_<idx:03d>.npz):
     inla_sigma_rfx_samples  (q, S)
     inla_rfx_samples        (q, m, S)
 
-Batch fit file (<data_id>/<partition>.fit.npz) adds inla_* keys to the batch:
+Batch output (<data_id>/<partition>.inla.npz) — INLA keys only, separate from .fit.npz:
     inla_ffx        (n_ds, d_max)
     inla_sigma_rfx  (n_ds, q_max)
     inla_rfx        (n_ds, m_max, q_max)
@@ -443,7 +440,7 @@ class InlaFitter:
     """Fit a batch of datasets with R-INLA, mirroring the Fitter API in fit.py.
 
     Individual per-dataset fits are saved to <data_id>/fits/ and then aggregated
-    back into <data_id>/<partition>.fit.npz via reintegrate().
+    into <data_id>/<partition>.inla.npz via reintegrate().
     """
 
     def __init__(
@@ -544,16 +541,10 @@ class InlaFitter:
 
     def reintegrate(self) -> None:
         inla_data = self._aggregate()
-        fit_path = self.batch_path.with_suffix('.fit.npz')
-        if fit_path.exists():
-            with np.load(fit_path, allow_pickle=True) as f:
-                merged = dict(f)
-        else:
-            merged = dict(self.batch)
-        merged.update(inla_data)
-        np.savez_compressed(fit_path, **merged, allow_pickle=True)
+        inla_path = self.batch_path.with_suffix('.inla.npz')
+        np.savez_compressed(inla_path, **inla_data)
         n_ok = int(np.sum(~inla_data['inla_failed'].astype(bool)))
-        print(f'Reintegrated INLA fits into {fit_path}  ({n_ok}/{len(self)} OK)')
+        print(f'Reintegrated INLA fits into {inla_path}  ({n_ok}/{len(self)} OK)')
 
 
 # ---------------------------------------------------------------------------
