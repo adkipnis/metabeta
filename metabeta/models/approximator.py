@@ -1,3 +1,5 @@
+import warnings
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -482,6 +484,17 @@ class Approximator(nn.Module):
         summary_l_raw = self.summarizer_l(inputs, mask=data['mask_n'])
         if stats is None and self.analytical_context:
             if 'stats' in data and not getattr(self, 'live_compute_fits', False):
+                if self.cfg.analytical_refinement == 'light' and not getattr(
+                    self, '_refinement_upgraded', False
+                ):
+                    warnings.warn(
+                        "Model config has analytical_refinement='light' but precomputed stats "
+                        "(full MAP+EB) were found in the batch. Upgrading to 'full' in memory "
+                        "and in the exported model config.",
+                        stacklevel=2,
+                    )
+                    self.cfg.analytical_refinement = 'full'
+                    self._refinement_upgraded = True
                 stats = data['stats']
             else:
                 stats = self._dataStatistics(data)
