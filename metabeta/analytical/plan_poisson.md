@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-20 (fresh small/medium/large 1k benchmark)
+Last updated: 2026-05-20 (pivot to fixed-budget Laplace-PIRLS)
 
 Goal
 ----
@@ -10,6 +10,11 @@ Build a fast, prior-aware analytical Poisson GLMM estimator for `glmm()`. R-INLA
 reference implementation only; R-INLA-as-backend and full PyTorch INLA remain out of
 scope. The next retained path should be simple enough to trust and useful as context for
 downstream models.
+
+The current EB/grid path improved strongly over RAW/PQL, but the remaining INLA gap looks
+like missing joint β/u/σ geometry rather than a missing scalar correction. The next main
+Poisson experiment is therefore a fixed-budget diagonal-Σ Laplace-PIRLS solver. The
+existing EB/grid estimator should remain as initializer, fallback, and diagnostic baseline.
 
 Current Working Model
 ---------------------
@@ -40,6 +45,10 @@ glmm(
 
 This relaxes the two `d >= 5` gates. It substantially improves small rows and leaves
 medium/large unchanged because those gates already fired.
+
+Status: keep this path, but do not keep stacking posthoc β-only corrections as the primary
+route. Its main value now is as a strong cheap baseline and a stable initializer/fallback
+for a joint Poisson solver.
 
 Current Evidence
 ----------------
@@ -78,29 +87,56 @@ Assessment
   INLA is better in the current table, especially large mixed/test rows.
 - The remaining gap likely reflects Poisson-specific β/σ/u coupling under the log link.
   More β-only optimization is unlikely to close it.
+- Wrong σ directly distorts the marginal mean through the log link. If σ is too small or
+  too large, β-only marginal corrections tend to under- or over-correct.
+- The current σ grid is especially limited because it uses σ candidates to improve β, then
+  writes back β only. This does not let β, BLUPs, and σ repeatedly adapt to each other.
 
 Next Directions
 ---------------
 
-1. **Promote or keep testing the relaxed small-row gates.**
-   `poisson_marginal_beta_min_d=1` and `poisson_sigma_grid_min_d=1` give the only large
-   small-row gain so far without σ/BLUP changes. If no hidden regression appears, make this
-   the default.
+1. **Implement opt-in diagonal fixed-budget Laplace-PIRLS.**
+   This is the decisive next prototype. For fixed diagonal Σ, jointly update β and group
+   modes `u_g` with Schur-complement PIRLS/Newton steps, then update σ from posterior
+   second moments:
 
-2. **Prototype joint small-q σ+β candidates.**
-   The σ grid helps more than β-only AGQ, which suggests σ/β coupling matters. Try a tiny
-   candidate set that updates σ and β together under the AGQ target. Initially write back β
-   only; write back σ only if σ accuracy improves cleanly.
+   ```text
+   sigma_j^2 <- (sum_g (u_gj^2 + diag(A_g^-1)_j) + nu0 * sigma0_j^2) / (m + nu0)
+   ```
 
-3. **Revisit q > 2 covariance-aware marginal β.**
-   Medium/large failures are partly rows outside the current `q <= 2` σ grid. Full-`Ψ_lap`
-   marginal offsets are implemented as an opt-in path; test them only after small-row
-   behavior is stable.
+   Use a small fixed budget first: 3-4 outer σ updates, 1-2 PIRLS steps per outer, and 1-2
+   final β/u steps with σ fixed. Start diagonal only.
 
-4. **Keep fixed-budget Laplace-PIRLS as a comparator, not a default.**
-   A specialized joint β/u/Σ Newton + moment update could be the right Poisson-specific
-   direction, but it is a larger implementation. Build it behind a method flag only if
-   smaller joint σ+β patches fail.
+2. **Accept/reject by one coherent cheap Laplace target.**
+   Compare the joint candidate against the current EB/grid path with the same approximate
+   Laplace objective:
+
+   ```text
+   J = poisson_nll(y | beta, u)
+       + 0.5 * sum_g u_g' Sigma^-1 u_g
+       + 0.5 * m * log|Sigma|
+       + 0.5 * sum_g log|Z_g' W_g Z_g + Sigma^-1|
+       + priors
+   ```
+
+   Keep sanity guards for finite values, bounded η/μ, σ floors/caps, and catastrophic β
+   jumps. Do not use RAW/PQL BLUP fallback inside the joint candidate; fallback only if the
+   whole candidate fails or loses.
+
+3. **Benchmark the new method as a separate method flag.**
+   Compare `raw`, `current`, `poisson_laplace_pirls_diag`, and INLA on first 1k
+   small/medium/large rows. Track FFX, σ, BLUP, runtime, finite/fallback rate, and Laplace
+   target deltas. The key success criterion is reducing the medium/large FFX gap without
+   major σ or BLUP regression.
+
+4. **Only after diagonal works, test full Σ.**
+   Full covariance is cheap for `q <= 5`, but it adds instability risk. Test it inside the
+   joint Laplace-PIRLS solver, not as another posthoc marginal β correction.
+
+5. **Use sigma-grid rescue only after the joint prototype.**
+   If the diagonal solver helps but has identifiable failure rows, test a targeted rescue
+   that writes back the full candidate: β, σ, and BLUPs. Do not prioritize the old β-only
+   grid as the main route.
 
 Low-Priority Or Rejected
 ------------------------
@@ -109,8 +145,13 @@ Low-Priority Or Rejected
   the target analytical path.
 - Bernoulli separation logic: not applicable.
 - Direct broad BLUP replacement: previously regressed most cells.
-- Direct σ writeback from the existing σ grid: improved FFX but regressed σ.
+- Direct σ writeback from the existing σ grid: improved FFX but regressed σ when used as a
+  posthoc patch. Revisit only as full-candidate rescue after joint PIRLS.
 - β-only AGQ optimizer: small accuracy gain for much higher runtime.
+- More relaxed gates and more β-only marginal correction tuning: useful as ablations, but
+  unlikely to close the INLA gap.
+- Full-`Ψ_lap` marginal β correction as posthoc default: lower priority than testing full
+  covariance inside a joint solver.
 - Full 8k Poisson benchmark: postpone until one more meaningful accuracy patch lands.
 
 Commands
@@ -125,6 +166,11 @@ uv run python -u experiments/analytical/glmm_required_benchmark.py \
     --family p --methods current --sizes small medium large \
     --batch-size 32 --max-datasets 1000 \
     --poisson-marginal-beta-min-d 1 --poisson-sigma-grid-min-d 1
+
+# Intended next benchmark once the Laplace-PIRLS method is wired in:
+uv run python -u experiments/analytical/glmm_required_benchmark.py \
+    --family p --methods raw current poisson_laplace_pirls_diag \
+    --sizes small medium large --batch-size 32 --max-datasets 1000
 
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical/fit.py metabeta/analytical/glmm \
