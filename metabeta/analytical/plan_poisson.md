@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-20 (pivot to fixed-budget Laplace-PIRLS)
+Last updated: 2026-05-20 (diagonal Laplace-PIRLS prototype tested on small rows)
 
 Goal
 ----
@@ -12,9 +12,11 @@ scope. The next retained path should be simple enough to trust and useful as con
 downstream models.
 
 The current EB/grid path improved strongly over RAW/PQL, but the remaining INLA gap looks
-like missing joint β/u/σ geometry rather than a missing scalar correction. The next main
-Poisson experiment is therefore a fixed-budget diagonal-Σ Laplace-PIRLS solver. The
-existing EB/grid estimator should remain as initializer, fallback, and diagnostic baseline.
+like missing joint β/u/σ geometry rather than a missing scalar correction. A first
+fixed-budget diagonal-Σ Laplace-PIRLS prototype now exists as an opt-in method. It improves
+small-row σ and BLUP relative to the relaxed EB/grid prototype, but the relaxed posthoc
+β/grid path still wins FFX on small rows. The next direction is therefore a hybrid test:
+use PIRLS for σ/BLUP geometry, then apply the marginal-mean β correction on top.
 
 Current Working Model
 ---------------------
@@ -46,21 +48,37 @@ glmm(
 This relaxes the two `d >= 5` gates. It substantially improves small rows and leaves
 medium/large unchanged because those gates already fired.
 
-Status: keep this path, but do not keep stacking posthoc β-only corrections as the primary
-route. Its main value now is as a strong cheap baseline and a stable initializer/fallback
-for a joint Poisson solver.
+Opt-in joint prototype:
+
+```python
+glmm(..., poisson_laplace_pirls_diag=True)
+```
+
+This runs fixed-budget joint β/u PIRLS steps with diagonal σ, updates σ from posterior
+second moments, and accepts/rejects the full β/σ/BLUP candidate by the diagonal Laplace
+target.
+
+Status: keep the EB/grid path as the FFX-strong baseline and initializer/fallback. Keep
+the PIRLS path as the σ/BLUP-strong joint-geometry candidate. The next patch should combine
+their strengths rather than tune either one in isolation.
 
 Current Evidence
 ----------------
 
-First 1000 rows per cell, sequential CPU run on 2026-05-20. Lower NRMSE is better.
-INLA values are the current first-1000 diagonal R-INLA references.
+First 1000 rows per cell, sequential CPU runs on 2026-05-20. Lower NRMSE is better.
+INLA values are the current first-1000 diagonal R-INLA references. "Relaxed current" means
+`current` with `poisson_marginal_beta_min_d=1` and `poisson_sigma_grid_min_d=1`.
 
-| Dataset | part | RAW FFX | default FFX | best proto FFX | INLA FFX | best σ | INLA σ | best BLUP | INLA BLUP | best ms/ds |
+| Dataset | part | RAW FFX | default FFX | relaxed FFX | PIRLS FFX | INLA FFX | relaxed σ | PIRLS σ | INLA σ | relaxed BLUP | PIRLS BLUP | INLA BLUP | PIRLS ms/ds |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-p-mixed | train | 0.4806 | 0.4269 | 0.2839 | 0.3054 | 0.1835 | 0.5272 | 0.4465 | 0.3404 | 0.5713 | 0.5413 | 0.4936 | 29.2 |
+| small-p-sampled | valid | 0.7351 | 0.6375 | 0.3277 | 0.4354 | 0.2276 | 0.5645 | 0.4955 | 0.4356 | 0.5823 | 0.5539 | 0.5309 | 28.4 |
+| small-p-sampled | test | 0.6525 | 0.5429 | 0.2982 | 0.3684 | 0.1997 | 0.6323 | 0.4841 | 0.3966 | 0.6708 | 0.5533 | 0.5281 | 28.7 |
+
+Medium/large rows have not yet been rerun with PIRLS. Current pre-PIRLS evidence:
+
+| Dataset | part | RAW FFX | default FFX | relaxed FFX | INLA FFX | relaxed σ | INLA σ | relaxed BLUP | INLA BLUP | relaxed ms/ds |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-p-mixed | train | 0.4806 | 0.4269 | 0.2839 | 0.1835 | 0.5272 | 0.3404 | 0.5713 | 0.4936 | 53.3 |
-| small-p-sampled | valid | 0.7351 | 0.6375 | 0.3277 | 0.2276 | 0.5645 | 0.4356 | 0.5823 | 0.5309 | 46.4 |
-| small-p-sampled | test | 0.6525 | 0.5429 | 0.2982 | 0.1997 | 0.6323 | 0.3966 | 0.6708 | 0.5281 | 45.9 |
 | medium-p-mixed | train | 0.5185 | 0.3587 | 0.3587 | 0.1675 | 0.5695 | 0.3214 | 0.6445 | 0.4789 | 66.6 |
 | medium-p-sampled | valid | 0.8220 | 0.4333 | 0.4333 | 0.2146 | 0.5646 | 0.4209 | 0.7509 | 0.5618 | 71.6 |
 | medium-p-sampled | test | 0.6852 | 0.3779 | 0.3779 | 0.2267 | 0.5979 | 0.3883 | 0.6261 | 0.5849 | 66.8 |
@@ -74,13 +92,18 @@ Useful comparator ladder from the same run:
 - `poisson_marginal_beta` provides most of the medium/large FFX gain.
 - `poisson_sigma_grid` adds a smaller but consistent FFX gain and matches `current`.
 - Relaxing `min_d=1` only changes small rows under the current gate structure.
+- `poisson_laplace_pirls_diag` improves small-row σ and BLUP versus relaxed current, and
+  is faster than the relaxed grid path in these runs. It does not yet match relaxed
+  current on small-row FFX.
 
 Assessment
 ----------
 
 - Poisson is clearly improved over RAW, but it is not yet INLA-competitive.
-- FFX is the main gap. The best prototype remains about `0.10` NRMSE behind INLA on small
+- FFX is the main gap. Relaxed current remains about `0.10` NRMSE behind INLA on small
   rows, `0.15-0.22` behind on medium, and `0.26-0.35` behind on large.
+- The first PIRLS prototype confirms the joint-geometry hypothesis for σ/BLUP, but its
+  conditional-mode β is weaker than the posthoc marginal-mean β correction.
 - σ is better than RAW after EB, but still materially worse than INLA. The current grid
   does not close this because it writes back β only.
 - BLUP is conservative by design. RAW/PQL BLUP fallback avoids previous regressions, but
@@ -95,21 +118,30 @@ Assessment
 Next Directions
 ---------------
 
-1. **Implement opt-in diagonal fixed-budget Laplace-PIRLS.**
-   This is the decisive next prototype. For fixed diagonal Σ, jointly update β and group
-   modes `u_g` with Schur-complement PIRLS/Newton steps, then update σ from posterior
-   second moments:
+1. **Test a PIRLS + marginal-mean β hybrid.**
+   Use `poisson_laplace_pirls_diag` to write back σ and BLUPs, then run the existing
+   marginal-mean β correction with relaxed small-row gates. Compare against relaxed
+   current and PIRLS alone on all first-1k small rows. This directly tests whether PIRLS's
+   better σ/u geometry can feed the FFX-winning β correction.
+
+2. **Run PIRLS on medium/large only after the hybrid result.**
+   If the hybrid closes small-row FFX without losing the PIRLS σ/BLUP gains, benchmark
+   `raw`, `current`, relaxed current, PIRLS, and hybrid on first-1k medium/large rows.
+   If the hybrid fails on small rows, do not spend more benchmark time on broad PIRLS
+   sweeps.
+
+3. **Tune the PIRLS covariance update only if needed.**
+   The current diagonal update is:
 
    ```text
    sigma_j^2 <- (sum_g (u_gj^2 + diag(A_g^-1)_j) + nu0 * sigma0_j^2) / (m + nu0)
    ```
 
-   Use a small fixed budget first: 3-4 outer σ updates, 1-2 PIRLS steps per outer, and 1-2
-   final β/u steps with σ fixed. Start diagonal only.
+   Useful knobs are `nu0`, log-σ blend, PIRLS damping, and final fixed-σ PIRLS steps. Tune
+   only against a clear failure pattern, not as a broad grid.
 
-2. **Accept/reject by one coherent cheap Laplace target.**
-   Compare the joint candidate against the current EB/grid path with the same approximate
-   Laplace objective:
+4. **Keep accept/reject by one coherent cheap Laplace target.**
+   Compare joint candidates with the same approximate Laplace objective:
 
    ```text
    J = poisson_nll(y | beta, u)
@@ -123,17 +155,11 @@ Next Directions
    jumps. Do not use RAW/PQL BLUP fallback inside the joint candidate; fallback only if the
    whole candidate fails or loses.
 
-3. **Benchmark the new method as a separate method flag.**
-   Compare `raw`, `current`, `poisson_laplace_pirls_diag`, and INLA on first 1k
-   small/medium/large rows. Track FFX, σ, BLUP, runtime, finite/fallback rate, and Laplace
-   target deltas. The key success criterion is reducing the medium/large FFX gap without
-   major σ or BLUP regression.
-
-4. **Only after diagonal works, test full Σ.**
+5. **Only after diagonal/hybrid works, test full Σ.**
    Full covariance is cheap for `q <= 5`, but it adds instability risk. Test it inside the
    joint Laplace-PIRLS solver, not as another posthoc marginal β correction.
 
-5. **Use sigma-grid rescue only after the joint prototype.**
+6. **Use sigma-grid rescue only after the joint prototype.**
    If the diagonal solver helps but has identifiable failure rows, test a targeted rescue
    that writes back the full candidate: β, σ, and BLUPs. Do not prioritize the old β-only
    grid as the main route.
@@ -171,6 +197,13 @@ uv run python -u experiments/analytical/glmm_required_benchmark.py \
 uv run python -u experiments/analytical/glmm_required_benchmark.py \
     --family p --methods raw current poisson_laplace_pirls_diag \
     --sizes small medium large --batch-size 32 --max-datasets 1000
+
+# Small-row relaxed-current versus diagonal PIRLS check:
+uv run python -u experiments/analytical/glmm_required_benchmark.py \
+    --family p --methods raw current poisson_laplace_pirls_diag \
+    --combos small-p-mixed:train:1 small-p-sampled:valid small-p-sampled:test \
+    --batch-size 32 --max-datasets 1000 \
+    --poisson-marginal-beta-min-d 1 --poisson-sigma-grid-min-d 1
 
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical/fit.py metabeta/analytical/glmm \
