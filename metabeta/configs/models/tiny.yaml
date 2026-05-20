@@ -32,6 +32,6 @@ posterior_g:
 posterior_l:
     n_blocks: 2
 
-posterior_correlation: false
+posterior_correlation: true
 analytical_refinement: 'full'
 analytical_local_at_inference: true
