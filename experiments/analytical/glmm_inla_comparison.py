@@ -36,7 +36,6 @@ from tabulate import tabulate
 from tqdm import tqdm
 
 from metabeta.analytical.fit import glmm
-from metabeta.simulation.inla import Worker as _InlaWorker, _HAS_INLA, INLA_DEFAULT_TIMEOUT_S
 from metabeta.utils.config import loadDataConfig
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.experiments import dataFilePath
@@ -44,6 +43,46 @@ from metabeta.utils.experiments import dataFilePath
 
 ANALYTICAL_METHODS = ('raw', 'current', 'normal_eb', 'normal_beta_grid')
 INLA_ROW_OUTPUT_DIR = 'experiments/analytical/inla_runs/row_estimates'
+
+
+def _inlaPath(data_path: Path) -> Path:
+    return data_path.with_suffix('.inla.npz')
+
+
+def _checkInlaFits(paths: list[Path], data_id: str) -> None:
+    missing = [_inlaPath(p) for p in paths if not _inlaPath(p).exists()]
+    if not missing:
+        return
+    parts = data_id.split('-')
+    size, fam = parts[0], parts[1]
+    ds_type = '-'.join(parts[2:])
+    fam_int = {'n': 0, 'b': 1, 'p': 2}.get(fam, '?')
+    lines = [
+        f'Missing INLA fit file(s) for {data_id}:',
+        *(f'  {p}' for p in missing),
+        '',
+        'Generate with:',
+        f'  uv run python -m metabeta.simulation.fit --method inla \\',
+        f'      --size {size} --family {fam_int} --ds_type {ds_type} \\',
+        f'      --partition <partition> [--epoch <epoch>] --idx <idx>',
+        '  # then reintegrate:',
+        f'  uv run python -m metabeta.simulation.fit --method inla \\',
+        f'      --size {size} --family {fam_int} --ds_type {ds_type} \\',
+        f'      --partition <partition> [--epoch <epoch>] --reintegrate',
+    ]
+    print('ERROR: ' + '\n'.join(lines), file=sys.stderr)
+    sys.exit(1)
+
+
+def _loadInlaFits(path: Path) -> dict[str, np.ndarray]:
+    with np.load(_inlaPath(path)) as f:
+        return {
+            'beta':      f['inla_ffx'].copy(),
+            'sigma_rfx': f['inla_sigma_rfx'].copy(),
+            'blups':     f['inla_rfx'].copy(),
+            'wall_s':    f['inla_wall_s'].copy(),
+            'failed':    f['inla_failed'].copy().astype(bool),
+        }
 
 
 def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
@@ -270,67 +309,6 @@ def _saveInlaRowRecords(
     print(f'Wrote INLA row estimates: {path} ({len(records)} rows)', flush=True)
 
 
-def _flatten(batch: dict, b: int, active_d: np.ndarray, active_q: np.ndarray) -> dict:
-    """Reconstruct flat (n, d) + (n, q) dataset from item b in a grouped batch."""
-    m = int(batch['m'][b].item())
-    d = len(active_d)
-    q = len(active_q)
-    X_parts, y_parts, g_parts, Z_parts = [], [], [], []
-    for g in range(m):
-        ng = int(batch['ns'][b, g].item())
-        if ng == 0:
-            continue
-        X_g = batch['X'][b, g, :ng].cpu().numpy()[:, active_d]
-        y_g = batch['y'][b, g, :ng].cpu().numpy()
-        Z_g = batch['Z'][b, g, :ng].cpu().numpy()[:, active_q]
-        X_parts.append(X_g)
-        y_parts.append(y_g)
-        g_parts.append(np.full(ng, g, dtype=int))
-        Z_parts.append(Z_g)
-
-    # Prior parameters for this dataset.
-    tau_rfx_np = batch['tau_rfx'][b, active_q].cpu().numpy() if 'tau_rfx' in batch else None
-    tau_ffx_np = batch['tau_ffx'][b, active_d].cpu().numpy() if 'tau_ffx' in batch else None
-    nu_ffx_np = batch['nu_ffx'][b, active_d].cpu().numpy() if 'nu_ffx' in batch else None
-    tau_eps_np = (
-        float(batch['tau_eps'][b].item())
-        if 'tau_eps' in batch and batch['tau_eps'] is not None
-        else None
-    )
-    # eta_rfx > 0 means Ψ is full (correlated); == 0 means diagonal.
-    eta_rfx_b = (
-        float(batch['eta_rfx'][b].item())
-        if 'eta_rfx' in batch and batch['eta_rfx'] is not None
-        else 0.0
-    )
-
-    base = {
-        'm': m,
-        'd': d,
-        'q': q,
-        'tau_rfx': tau_rfx_np,
-        'tau_ffx': tau_ffx_np,
-        'nu_ffx': nu_ffx_np,
-        'tau_eps': tau_eps_np,
-        'eta_rfx': eta_rfx_b,
-    }
-    if not X_parts:
-        return {
-            **base,
-            'X': np.zeros((0, d)),
-            'Z': np.zeros((0, q)),
-            'y': np.zeros(0),
-            'groups': np.zeros(0, dtype=int),
-        }
-    return {
-        **base,
-        'X': np.vstack(X_parts),
-        'Z': np.vstack(Z_parts),
-        'y': np.concatenate(y_parts),
-        'groups': np.concatenate(g_parts),
-    }
-
-
 def _breakdown_srfx(err: np.ndarray, truth: np.ndarray, label: str) -> str:
     """Bias/RMSE breakdown by true σ_rfx in four quantile bins."""
     finite = np.isfinite(truth) & np.isfinite(err)
@@ -362,12 +340,9 @@ def _breakdown_srfx(err: np.ndarray, truth: np.ndarray, label: str) -> str:
 def run_one_dataset(
     data_id: str,
     partition: str = 'test',
-    n_inla: int = 100,
     n_total: int = 0,
     n_epochs: int = 1,
     analytical_methods: list[str] | None = None,
-    re_correlation: str = 'auto',
-    inla_timeout_s: int = INLA_DEFAULT_TIMEOUT_S,
     save_inla_rows_dir: Path | None = None,
     device: torch.device | None = None,
 ) -> dict:
@@ -391,13 +366,13 @@ def run_one_dataset(
 
     assert paths and paths[0].exists(), f'No data at {paths[0] if paths else data_id}/{partition}'
 
+    _checkInlaFits(paths, data_id)
+
     all_metrics = {method: _metricLists() for method in analytical_methods}
     matched_metrics = {method: _metricLists() for method in analytical_methods}
     inla_metrics = _metricLists()
-    inla_n_tried = inla_n_ok = 0
+    inla_n_ok = 0
     inla_row_records: list[dict] = []
-
-    inla_worker = _InlaWorker(inla_timeout_s) if _HAS_INLA else None
 
     ds_bar = tqdm(
         total=n_total if n_total > 0 else None,
@@ -406,13 +381,6 @@ def run_one_dataset(
         file=sys.stderr,
         leave=False,
     )
-    inla_bar = tqdm(
-        total=n_inla if _HAS_INLA else 0,
-        desc='INLA',
-        unit='ds',
-        file=sys.stderr,
-        leave=True,
-    )
 
     with torch.no_grad():
         n_seen = 0
@@ -420,7 +388,9 @@ def run_one_dataset(
         for path in paths:
             if done:
                 break
+            inla_data = _loadInlaFits(path)
             dl = Dataloader(path, batch_size=32, shuffle=False)
+            file_n_seen = 0
             for batch in dl:
                 if n_total > 0 and n_seen >= n_total:
                     done = True
@@ -540,23 +510,21 @@ def run_one_dataset(
                         store['rt'].append(re_t)
                         store['wall'].append(stats_np[method]['wall'])
 
+                    inla_idx = file_n_seen
                     n_seen += 1
+                    file_n_seen += 1
                     ds_bar.update(1)
 
-                    if not _HAS_INLA or inla_n_tried >= n_inla:
+                    if inla_data['failed'][inla_idx]:
                         continue
 
-                    inla_n_tried += 1
-                    ds_flat = _flatten(batch, b, active_d, active_q)
-                    t_i = time.perf_counter()
-                    est = inla_worker.estimate(ds_flat, likelihood_family, re_correlation)
-                    inla_elapsed = time.perf_counter() - t_i
+                    inla_elapsed = float(inla_data['wall_s'][inla_idx])
+                    est = {
+                        'beta':      inla_data['beta'][inla_idx, active_d],
+                        'sigma_rfx': inla_data['sigma_rfx'][inla_idx, active_q],
+                        'blups':     inla_data['blups'][inla_idx, :m_b, :][:, active_q],
+                    }
                     inla_metrics['wall'].append(inla_elapsed)
-                    inla_bar.set_postfix(ok=inla_n_ok, s=f'{inla_elapsed:.1f}')
-                    inla_bar.update(1)
-
-                    if est is None:
-                        continue
                     inla_n_ok += 1
                     for method in analytical_methods:
                         store = matched_metrics[method]
@@ -594,9 +562,6 @@ def run_one_dataset(
                         )
 
     ds_bar.close()
-    inla_bar.close()
-    if inla_worker:
-        inla_worker.close()
     if save_inla_rows_dir is not None:
         _saveInlaRowRecords(
             inla_row_records,
@@ -666,7 +631,7 @@ def run_one_dataset(
         print(
             f'\nAnalytical vs R-INLA — matched'
             f' (N={len(matched_metrics[analytical_methods[0]]["be"])},'
-            f' INLA {inla_n_ok}/{inla_n_tried})'
+            f' INLA ok={inla_n_ok})'
         )
         rows = []
         for method in analytical_methods:
@@ -737,22 +702,15 @@ def main(
     data_ids: list[str],
     partition: str = 'test',
     n_epochs: int = 1,
-    n_inla: int = 100,
     n_total: int = 0,
     analytical_methods: list[str] | None = None,
-    re_correlation: str = 'auto',
-    inla_timeout_s: int = INLA_DEFAULT_TIMEOUT_S,
     save_inla_rows_dir: str = INLA_ROW_OUTPUT_DIR,
 ) -> None:
     if analytical_methods is None:
         analytical_methods = ['raw', 'current']
-    print(
-        f'R-INLA: {"enabled" if _HAS_INLA else "DISABLED"}   limit={n_inla}'
-        + (f'   n_total={n_total}' if n_total > 0 else '')
-    )
     print(f'Analytical methods: {", ".join(analytical_methods)}')
-    print(f'R-INLA random-effects correlation: {re_correlation}')
-    print(f'R-INLA per-dataset timeout: {inla_timeout_s}s')
+    if n_total > 0:
+        print(f'n_total={n_total}')
     row_output_dir = Path(save_inla_rows_dir) if save_inla_rows_dir else None
     if row_output_dir is not None:
         print(f'INLA row estimates: {row_output_dir}')
@@ -764,12 +722,9 @@ def main(
             run_one_dataset(
                 data_id=data_id,
                 partition=partition,
-                n_inla=n_inla,
                 n_total=n_total,
                 n_epochs=n_epochs,
                 analytical_methods=analytical_methods,
-                re_correlation=re_correlation,
-                inla_timeout_s=inla_timeout_s,
                 save_inla_rows_dir=row_output_dir,
             )
         )
@@ -832,15 +787,9 @@ if __name__ == '__main__':
                         help='comma-separated data config ids (default: small-b-sampled)')
     parser.add_argument('--partition', default='test', choices=['train', 'valid', 'test'])
     parser.add_argument('--n-epochs',  default=1,   type=int)
-    parser.add_argument('--n-inla',    default=100, type=int, help='max datasets for INLA per data_id')
     parser.add_argument('--n-total',   default=0,   type=int, help='cap total datasets per data_id (0=all)')
     parser.add_argument('--analytical-methods', default='raw,current',
                         help='comma-separated analytical methods: raw,current,normal_eb,normal_beta_grid')
-    parser.add_argument('--re-correlation', default='diagonal',
-                        choices=['auto', 'diagonal'],
-                        help='R-INLA RE correlation: diagonal forces iid per dim for all families')
-    parser.add_argument('--inla-timeout', default=INLA_DEFAULT_TIMEOUT_S, type=int,
-                        help=f'per-dataset INLA timeout in seconds (default: {INLA_DEFAULT_TIMEOUT_S})')
     parser.add_argument('--save-inla-rows-dir', default=INLA_ROW_OUTPUT_DIR,
                         help='directory for compressed per-row INLA estimate .npz files')
     parser.add_argument('--no-save-inla-rows', action='store_true',
@@ -851,10 +800,7 @@ if __name__ == '__main__':
         data_ids=[x.strip() for x in a.data_ids.split(',')],
         partition=a.partition,
         n_epochs=a.n_epochs,
-        n_inla=a.n_inla,
         n_total=a.n_total,
         analytical_methods=_parseAnalyticalMethods(a.analytical_methods),
-        re_correlation=a.re_correlation,
-        inla_timeout_s=a.inla_timeout,
         save_inla_rows_dir='' if a.no_save_inla_rows else a.save_inla_rows_dir,
     )
