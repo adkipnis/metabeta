@@ -28,6 +28,7 @@ METHODS = [
     'poisson_eb',
     'poisson_marginal_beta',
     'poisson_sigma_grid',
+    'poisson_laplace_pirls_diag',
 ]
 FAMILIES = ['n', 'b', 'p']
 
@@ -110,6 +111,7 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                                     'poisson_eb',
                                     'poisson_marginal_beta',
                                     'poisson_sigma_grid',
+                                    'poisson_laplace_pirls_diag',
                                 }
                             ),
                             **_bernoulliEbKwargs(method, args),
@@ -325,13 +327,19 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
         return {'bernoulli_laplace_eb': 'bernoulli_eb', 'normal_laplace_eb': False}
     if method == 'normal_eb':
         return {'bernoulli_laplace_eb': False, 'normal_laplace_eb': True}
-    if method in {'poisson_eb', 'poisson_marginal_beta', 'poisson_sigma_grid'}:
+    if method in {
+        'poisson_eb',
+        'poisson_marginal_beta',
+        'poisson_sigma_grid',
+        'poisson_laplace_pirls_diag',
+    }:
         return {
             'bernoulli_laplace_eb': False,
             'normal_laplace_eb': False,
             'poisson_laplace_eb': 'poisson_eb',
             'poisson_marginal_beta': method in {'poisson_marginal_beta', 'poisson_sigma_grid'},
             'poisson_sigma_grid': method == 'poisson_sigma_grid',
+            'poisson_laplace_pirls_diag': method == 'poisson_laplace_pirls_diag',
         }
     return {'bernoulli_laplace_eb': False}
 
@@ -379,6 +387,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_eb',
         'poisson_marginal_beta',
         'poisson_sigma_grid',
+        'poisson_laplace_pirls_diag',
     }:
         return {}
     out = {
@@ -396,6 +405,12 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_agq_beta_max_q': args.poisson_agq_beta_max_q,
         'poisson_agq_beta_max_step': args.poisson_agq_beta_max_step,
         'poisson_agq_beta_agq_k': args.poisson_agq_beta_agq_k,
+        'poisson_laplace_pirls_diag_outer': args.poisson_laplace_pirls_diag_outer,
+        'poisson_laplace_pirls_diag_inner': args.poisson_laplace_pirls_diag_inner,
+        'poisson_laplace_pirls_diag_final': args.poisson_laplace_pirls_diag_final,
+        'poisson_laplace_pirls_diag_damping': args.poisson_laplace_pirls_diag_damping,
+        'poisson_laplace_pirls_diag_sigma_blend': args.poisson_laplace_pirls_diag_sigma_blend,
+        'poisson_laplace_pirls_diag_prior_weight': (args.poisson_laplace_pirls_diag_prior_weight),
     }
     if method in {'default', 'current', 'poisson_marginal_beta', 'poisson_sigma_grid'}:
         out.update(
@@ -468,6 +483,12 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-agq-beta-max-q', type=int, default=2)
     parser.add_argument('--poisson-agq-beta-max-step', type=float, default=0.75)
     parser.add_argument('--poisson-agq-beta-agq-k', type=int, default=5)
+    parser.add_argument('--poisson-laplace-pirls-diag-outer', type=int, default=4)
+    parser.add_argument('--poisson-laplace-pirls-diag-inner', type=int, default=1)
+    parser.add_argument('--poisson-laplace-pirls-diag-final', type=int, default=2)
+    parser.add_argument('--poisson-laplace-pirls-diag-damping', type=float, default=0.5)
+    parser.add_argument('--poisson-laplace-pirls-diag-sigma-blend', type=float, default=0.5)
+    parser.add_argument('--poisson-laplace-pirls-diag-prior-weight', type=float, default=4.0)
     return parser.parse_args()
 # fmt: on
 
