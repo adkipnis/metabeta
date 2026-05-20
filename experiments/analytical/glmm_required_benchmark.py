@@ -389,6 +389,13 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_eb_blup_fallback_beta_jump': args.poisson_eb_blup_fallback_beta_jump,
         'poisson_laplace_eb_sigma_prior_cap': args.poisson_eb_sigma_prior_cap,
         'poisson_laplace_eb_sigma_prior_cap_min_d': args.poisson_eb_sigma_prior_cap_min_d,
+        'poisson_agq_beta': args.poisson_agq_beta,
+        'poisson_agq_beta_steps': args.poisson_agq_beta_steps,
+        'poisson_agq_beta_lr': args.poisson_agq_beta_lr,
+        'poisson_agq_beta_min_d': args.poisson_agq_beta_min_d,
+        'poisson_agq_beta_max_q': args.poisson_agq_beta_max_q,
+        'poisson_agq_beta_max_step': args.poisson_agq_beta_max_step,
+        'poisson_agq_beta_agq_k': args.poisson_agq_beta_agq_k,
     }
     if method in {'default', 'current', 'poisson_marginal_beta', 'poisson_sigma_grid'}:
         out.update(
@@ -396,7 +403,9 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
                 'poisson_marginal_beta_steps': args.poisson_marginal_beta_steps,
                 'poisson_marginal_beta_damping': args.poisson_marginal_beta_damping,
                 'poisson_marginal_beta_min_d': args.poisson_marginal_beta_min_d,
+                'poisson_marginal_beta_max_q': args.poisson_marginal_beta_max_q,
                 'poisson_marginal_beta_max_step': args.poisson_marginal_beta_max_step,
+                'poisson_marginal_beta_full_psi_min_q': (args.poisson_marginal_beta_full_psi_min_q),
             }
         )
     if method in {'default', 'current', 'poisson_sigma_grid'}:
@@ -445,11 +454,20 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-marginal-beta-steps', type=int, default=4)
     parser.add_argument('--poisson-marginal-beta-damping', type=float, default=0.7)
     parser.add_argument('--poisson-marginal-beta-min-d', type=int, default=5)
+    parser.add_argument('--poisson-marginal-beta-max-q', type=int, default=None)
     parser.add_argument('--poisson-marginal-beta-max-step', type=float, default=1.0)
+    parser.add_argument('--poisson-marginal-beta-full-psi-min-q', type=int, default=3)
     parser.add_argument('--poisson-sigma-grid-scales', type=float, nargs='+', default=[0.35, 0.5, 0.75, 1.0, 1.3333333])
     parser.add_argument('--poisson-sigma-grid-min-d', type=int, default=5)
     parser.add_argument('--poisson-sigma-grid-max-q', type=int, default=2)
     parser.add_argument('--poisson-sigma-grid-agq-k', type=int, default=3)
+    parser.add_argument('--poisson-agq-beta', action='store_true')
+    parser.add_argument('--poisson-agq-beta-steps', type=int, default=8)
+    parser.add_argument('--poisson-agq-beta-lr', type=float, default=0.03)
+    parser.add_argument('--poisson-agq-beta-min-d', type=int, default=1)
+    parser.add_argument('--poisson-agq-beta-max-q', type=int, default=2)
+    parser.add_argument('--poisson-agq-beta-max-step', type=float, default=0.75)
+    parser.add_argument('--poisson-agq-beta-agq-k', type=int, default=5)
     return parser.parse_args()
 # fmt: on
 

@@ -8,6 +8,7 @@ from metabeta.analytical.glmm.map import (
     refineBernoulliMapBeta,
     refineBernoulliNagqSrfx,
     refineBernoulliNestedBeta,
+    refinePoissonAgqBeta,
     refinePoissonLaplaceEb,
     refinePoissonMarginalMeanBeta,
     refinePoissonSigmaGrid,
@@ -342,9 +343,12 @@ def glmm(
         poisson_laplace_eb_preset,
     )
     poisson_marginal_beta = kwargs.pop('poisson_marginal_beta', likelihood_family == 2)
+    poisson_marginal_beta_full_psi = kwargs.pop('poisson_marginal_beta_full_psi', False)
+    poisson_marginal_beta_full_psi_min_q = kwargs.pop('poisson_marginal_beta_full_psi_min_q', 3)
     poisson_marginal_beta_steps = kwargs.pop('poisson_marginal_beta_steps', 4)
     poisson_marginal_beta_damping = kwargs.pop('poisson_marginal_beta_damping', 0.7)
     poisson_marginal_beta_min_d = kwargs.pop('poisson_marginal_beta_min_d', 5)
+    poisson_marginal_beta_max_q = kwargs.pop('poisson_marginal_beta_max_q', None)
     poisson_marginal_beta_max_step = kwargs.pop('poisson_marginal_beta_max_step', 1.0)
     poisson_sigma_grid = kwargs.pop('poisson_sigma_grid', likelihood_family == 2)
     poisson_sigma_grid_scales = kwargs.pop(
@@ -353,6 +357,13 @@ def glmm(
     poisson_sigma_grid_min_d = kwargs.pop('poisson_sigma_grid_min_d', 5)
     poisson_sigma_grid_max_q = kwargs.pop('poisson_sigma_grid_max_q', 2)
     poisson_sigma_grid_agq_k = kwargs.pop('poisson_sigma_grid_agq_k', 3)
+    poisson_agq_beta = kwargs.pop('poisson_agq_beta', False)
+    poisson_agq_beta_steps = kwargs.pop('poisson_agq_beta_steps', 8)
+    poisson_agq_beta_lr = kwargs.pop('poisson_agq_beta_lr', 0.03)
+    poisson_agq_beta_min_d = kwargs.pop('poisson_agq_beta_min_d', 1)
+    poisson_agq_beta_max_q = kwargs.pop('poisson_agq_beta_max_q', 2)
+    poisson_agq_beta_max_step = kwargs.pop('poisson_agq_beta_max_step', 0.75)
+    poisson_agq_beta_agq_k = kwargs.pop('poisson_agq_beta_agq_k', 5)
     mask_d = kwargs.pop('mask_d', None)
     uncorr = (eta_rfx == 0) if eta_rfx is not None else None  # (B,) bool or None
     if likelihood_family == 0:
@@ -549,6 +560,7 @@ def glmm(
                 _addLaplaceEbSkippedDiagnostics(stats, gate, Xm.dtype)
     elif likelihood_family == 2:
         stats = lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
+        poisson_pql_Psi_lap = stats['Psi_lap'].detach() if poisson_marginal_beta_full_psi else None
         if map_refine and poisson_laplace_eb_mode != 'off' and Zm.shape[-1] > 0:
             gate = torch.ones(Xm.shape[0], device=Xm.device, dtype=torch.bool)
             stats = refinePoissonLaplaceEb(
@@ -592,7 +604,10 @@ def glmm(
                 n_steps=poisson_marginal_beta_steps,
                 damping=poisson_marginal_beta_damping,
                 min_d=poisson_marginal_beta_min_d,
+                max_q=poisson_marginal_beta_max_q,
                 max_step=poisson_marginal_beta_max_step,
+                marginal_psi_lap=poisson_pql_Psi_lap,
+                full_psi_min_q=poisson_marginal_beta_full_psi_min_q,
                 return_diagnostics=poisson_laplace_eb_diagnostics,
             )
         if map_refine and poisson_sigma_grid and Zm.shape[-1] > 0:
@@ -619,6 +634,29 @@ def glmm(
                 agq_k=poisson_sigma_grid_agq_k,
                 return_diagnostics=poisson_laplace_eb_diagnostics,
             )
+        if map_refine and poisson_agq_beta and Zm.shape[-1] > 0:
+            stats = refinePoissonAgqBeta(
+                stats,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx=map_priors['nu_ffx'],
+                tau_ffx=map_priors['tau_ffx'],
+                family_ffx=map_priors['family_ffx'],
+                tau_rfx=map_priors['tau_rfx'],
+                family_sigma_rfx=map_priors['family_sigma_rfx'],
+                mask_d=mask_d,
+                mask_q=mask_q,
+                min_d=poisson_agq_beta_min_d,
+                max_q=poisson_agq_beta_max_q,
+                n_steps=poisson_agq_beta_steps,
+                lr=poisson_agq_beta_lr,
+                max_step=poisson_agq_beta_max_step,
+                agq_k=poisson_agq_beta_agq_k,
+                return_diagnostics=poisson_laplace_eb_diagnostics,
+            )
     else:
         raise ValueError(f'unsupported likelihood_family={likelihood_family}')
 
@@ -637,6 +675,7 @@ __all__ = [
     'refineNormalLaplaceEb',
     'refineNormalMapSrfx',
     'refinePoissonLaplaceEb',
+    'refinePoissonAgqBeta',
     'refinePoissonMarginalMeanBeta',
     'refinePoissonSigmaGrid',
 ]

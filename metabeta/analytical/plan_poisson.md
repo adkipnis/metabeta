@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-20 (Laplace-PIRLS proposal reviewed)
+Last updated: 2026-05-20 (small-q AGQ beta prototype tested)
 
 Goal
 ----
@@ -68,11 +68,35 @@ What This Means
   groupwise Newton modes, a moment covariance update, and a Schur β solve in RAW/PQL,
   followed by diagonal Laplace-EB. A full rewrite is therefore a comparator, not the next
   default path.
-- The largest remaining gap is likely covariance-aware Poisson marginalization. The current
-  marginal β correction uses only diagonal `σ_rfx`; this is weakest on `q > 2` rows where
-  full `Ψ_lap` correlations may matter.
+- The largest remaining gap is deeper than covariance-aware mean offsets. Full-`Ψ_lap`
+  offsets are implemented as an opt-in prototype, but they do not address small rows
+  (`q <= 2`) and relaxed gate tests regressed medium rows.
 - BLUP remains intentionally conservative. Changing Poisson BLUPs should be postponed
   until FFX/σ diagnostics show a clear, contained failure mode.
+
+Prototype Results (2026-05-20)
+------------------------------
+
+All rows below use first 1000 datasets per cell. Existing default remains unchanged unless
+explicit flags are passed.
+
+| Prototype | small mixed FFX | small valid FFX | small test FFX | ms/ds | Judgment |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Default before prototype | 0.4269 | 0.6375 | 0.5429 | ~35 | Too far from INLA |
+| Relax marginal β only (`min_d=1`) | 0.3250 | 0.4471 | 0.3924 | ~41-43 | Good FFX gain, still far from INLA |
+| Relax marginal β + σ grid (`min_d=1`) | 0.2839 | 0.3277 | 0.2982 | ~68-72 | Best simple prototype; still above INLA |
+| Add β-only AGQ target step | 0.2800 | 0.3118 | 0.2781 | ~158-171 | Accuracy gain too small for runtime |
+
+Reference INLA FFX on the same small cells: `0.1835`, `0.2276`, `0.1997`.
+
+Key implications:
+
+- The old `d >= 5` gate hid useful small-set improvements. Relaxing the marginal β and
+  σ-grid gates to `min_d=1` is the first patch that substantially moves small Poisson FFX.
+- The remaining small-set gap is not solved by a β-only AGQ optimizer. Optimizing β against
+  the current diagonal-σ AGQ target adds large runtime and only modest extra accuracy.
+- σ and BLUP did not change in these prototypes; the FFX gains are coming from better β
+  calibration only.
 
 Rejected Or Low-Priority Work
 -----------------------------
@@ -148,22 +172,26 @@ concentrated in `q > 2` rows that the current diagonal sigma grid does not cover
 Next Directions
 ---------------
 
-1. **Full-Ψ marginal β correction.**
-   Replace/extend the current offset `0.5 * sum_j z_j² σ_j²` with
-   `0.5 * zᵀ Ψ_lap z`, using RAW/PQL full covariance when `q > 2`. Gate to `d >= 5` and
-   write back β only; keep EB σ and RAW/PQL BLUP unchanged.
+1. **Re-center on small-set INLA gap.**
+   Before more large/medium gating, diagnose why even the best small-q prototype remains
+   above INLA. Compare row-level β moves for RAW, EB, relaxed marginal β, relaxed σ grid,
+   AGQ β, and INLA on the same first-1000 rows.
 
-2. **Structured q > 2 covariance candidates.**
-   If full-Ψ marginal β helps, add a small β-only candidate set for `q > 2`: diagonal EB,
-   full RAW/PQL Ψ, off-diagonal-shrunk Ψ, and one downscaled variance candidate. Accept by
-   a cheap Laplace/AGQ-style target where feasible; do not write σ/BLUP.
+2. **Try a joint small-q covariance/β update, not β-only AGQ.**
+   The σ grid helps more than AGQ β, suggesting σ/β coupling matters. Next prototype should
+   update the σ candidate and β together under the small-q AGQ target, still writing back β
+   only at first. Keep the candidate set tiny.
 
-3. **Fixed-budget Laplace-PIRLS comparator.**
+3. **Full-Ψ marginal β correction for q > 2 remains opt-in.**
+   The helper now supports `0.5 * zᵀ Ψ_lap z`, but it is not a default. Revisit only after
+   the small-q path is competitive, because otherwise medium/large work is premature.
+
+4. **Fixed-budget Laplace-PIRLS comparator.**
    Prototype only as a method flag, not a default: 3-5 joint β/u Newton passes plus moment
    Ψ update and Schur solve. Keep it if it clearly beats current on small+medium without
    BLUP/σ regressions.
 
-4. **Prior-aware Poisson initialization.**
+5. **Prior-aware Poisson initialization.**
    Add fixed-effect prior penalties to Poisson IRLS/PQL β solves if the above leaves a
    consistent β gap. This is low-risk but probably modest.
 

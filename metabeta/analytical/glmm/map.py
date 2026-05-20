@@ -30,6 +30,7 @@ __all__ = [
     'refineBernoulliNagqSrfx',
     'refineBernoulliNestedBeta',
     'refinePoissonLaplaceEb',
+    'refinePoissonAgqBeta',
     'refinePoissonMarginalMeanBeta',
     'refinePoissonSigmaGrid',
 ]
@@ -865,6 +866,8 @@ def _poissonMarginalMeanOffset(
     sigma_rfx: torch.Tensor,
     Zm: torch.Tensor,
     mask_q: torch.Tensor | None,
+    Psi_lap: torch.Tensor | None = None,
+    full_psi_min_q: int = 3,
 ) -> torch.Tensor:
     """Approximate log-link marginalization offset 0.5 * diag(Z Ψ Z')."""
     B, _, _, q = Zm.shape
@@ -874,7 +877,24 @@ def _poissonMarginalMeanOffset(
         active_q = mask_q[:, :q].to(device=Zm.device).bool()
     sigma2 = sigma_rfx[:, :q].to(device=Zm.device, dtype=Zm.dtype).square()
     sigma2 = sigma2 * active_q.to(Zm.dtype)
-    return 0.5 * torch.einsum('bmnq,bq->bmn', Zm.square(), sigma2)
+    offset_diag = 0.5 * torch.einsum('bmnq,bq->bmn', Zm.square(), sigma2)
+
+    if Psi_lap is None:
+        return offset_diag
+
+    q_count = active_q.long().sum(dim=1)
+    full_gate = q_count >= int(full_psi_min_q)
+    if not full_gate.any():
+        return offset_diag
+
+    Psi = Psi_lap[:, :q, :q].detach().to(device=Zm.device, dtype=Zm.dtype)
+    active_q_f = active_q.to(Zm.dtype)
+    Psi = Psi * active_q_f[:, :, None] * active_q_f[:, None, :]
+    Psi = _psdClampEigenvalues(
+        Psi.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0), _POISSON_PSI_EIG_CAP
+    )
+    offset_full = 0.5 * torch.einsum('bmnq,bqr,bmnr->bmn', Zm, Psi, Zm).clamp(min=0.0)
+    return torch.where(full_gate[:, None, None], offset_full, offset_diag)
 
 
 def _poissonMarginalMeanBetaTarget(
@@ -925,15 +945,20 @@ def refinePoissonMarginalMeanBeta(
     n_steps: int = 4,
     damping: float = 0.7,
     min_d: int = 5,
+    max_q: int | None = None,
     max_step: float = 1.0,
     accept_only_improved: bool = True,
+    marginal_psi_lap: torch.Tensor | None = None,
+    full_psi_min_q: int = 3,
     return_diagnostics: bool = False,
 ) -> dict[str, torch.Tensor]:
-    """Gated β update for Poisson marginal means at fixed diagonal Ψ.
+    """Gated β update for Poisson marginal means at fixed Ψ.
 
-    The pseudo target uses E[y|β,Ψ] ≈ exp(Xβ + 0.5 diag(ZΨZ')).  This is not a full
-    marginal likelihood; it is a cheap fixed-Ψ correction for rows where conditional
-    PQL/EB β is visibly too extreme relative to INLA.
+    The pseudo target uses E[y|β,Ψ] ≈ exp(Xβ + 0.5 diag(ZΨZ')).  By default it uses the
+    diagonal EB Ψ; passing ``marginal_psi_lap`` lets high-q rows use the full PQL covariance
+    in the offset without writing covariance, σ, or BLUP changes back to the output.  This is
+    not a full marginal likelihood; it is a cheap fixed-Ψ correction for rows where
+    conditional PQL/EB β is visibly too extreme relative to INLA.
     """
     d = Xm.shape[-1]
     q = Zm.shape[-1]
@@ -951,7 +976,10 @@ def refinePoissonMarginalMeanBeta(
     else:
         active_q = mask_q[:, :q].to(device=device).bool()
     d_count = active_d.to(dtype).sum(dim=1)
-    gate = (d_count >= float(min_d)) & active_q.any(dim=1)
+    q_count = active_q.long().sum(dim=1)
+    gate = (d_count >= float(min_d)) & (q_count >= 1)
+    if max_q is not None:
+        gate = gate & (q_count <= int(max_q))
     if not gate.any():
         out = dict(stats)
         if return_diagnostics:
@@ -965,7 +993,13 @@ def refinePoissonMarginalMeanBeta(
     base_beta = stats['beta_est'][:, :d].detach()
     beta = base_beta.clone().nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
     beta = beta.clamp(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
-    offset = _poissonMarginalMeanOffset(stats['sigma_rfx_est'][:, :q].detach(), Zm, mask_q)
+    offset = _poissonMarginalMeanOffset(
+        stats['sigma_rfx_est'][:, :q].detach(),
+        Zm,
+        mask_q,
+        Psi_lap=marginal_psi_lap,
+        full_psi_min_q=full_psi_min_q,
+    )
 
     zeros_d = Xm.new_zeros(B, d)
     normal_prec = prior_prec = is_student = None
@@ -1143,6 +1177,151 @@ def _poissonAgqTargetDiag(
                 )
             target[b] = target_b
     return target
+
+
+def refinePoissonAgqBeta(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor | None = None,
+    tau_ffx: torch.Tensor | None = None,
+    family_ffx: torch.Tensor | None = None,
+    tau_rfx: torch.Tensor | None = None,
+    family_sigma_rfx: torch.Tensor | None = None,
+    mask_d: torch.Tensor | None = None,
+    mask_q: torch.Tensor | None = None,
+    min_d: int = 1,
+    max_q: int = 2,
+    n_steps: int = 8,
+    lr: float = 0.03,
+    max_step: float = 0.75,
+    agq_k: int = 5,
+    agq_inner: int = 6,
+    accept_only_improved: bool = True,
+    return_diagnostics: bool = False,
+) -> dict[str, torch.Tensor]:
+    """β-only refinement against the small-q adaptive GH marginal target."""
+    d = Xm.shape[-1]
+    q = Zm.shape[-1]
+    if d == 0 or q == 0 or n_steps <= 0 or 'sigma_rfx_est' not in stats:
+        return stats
+
+    B = Xm.shape[0]
+    device, dtype = Xm.device, Xm.dtype
+    if mask_d is None:
+        active_d = torch.ones(B, d, device=device, dtype=torch.bool)
+    else:
+        active_d = mask_d[:, :d].to(device=device).bool()
+    if mask_q is None:
+        active_q = torch.ones(B, q, device=device, dtype=torch.bool)
+    else:
+        active_q = mask_q[:, :q].to(device=device).bool()
+    d_count = active_d.long().sum(dim=1)
+    q_count = active_q.long().sum(dim=1)
+    gate = (d_count >= int(min_d)) & (q_count >= 1) & (q_count <= int(max_q))
+    if not gate.any():
+        out = dict(stats)
+        if return_diagnostics:
+            out['poisson_agq_beta_gate'] = gate.to(dtype)
+            out['poisson_agq_beta_accept'] = torch.zeros(B, device=device, dtype=dtype)
+        return out
+
+    base_beta = stats['beta_est'][:, :d].detach().clamp(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
+    sigma = (
+        stats['sigma_rfx_est'][:, :q].detach().clamp(min=1e-4, max=math.sqrt(_POISSON_PSI_EIG_CAP))
+    )
+    base_target = _poissonAgqTargetDiag(
+        base_beta,
+        sigma,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        nu_ffx,
+        tau_ffx,
+        family_ffx,
+        tau_rfx,
+        family_sigma_rfx,
+        mask_d,
+        mask_q,
+        k=agq_k,
+        n_inner=agq_inner,
+    )
+
+    beta = base_beta.clone().requires_grad_(True)
+    optimizer = torch.optim.Adam([beta], lr=float(lr))
+    min_beta = base_beta - float(max_step)
+    max_beta = base_beta + float(max_step)
+
+    with torch.enable_grad():
+        for _ in range(n_steps):
+            optimizer.zero_grad(set_to_none=True)
+            target = _poissonAgqTargetDiag(
+                beta,
+                sigma,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                tau_rfx,
+                family_sigma_rfx,
+                mask_d,
+                mask_q,
+                k=agq_k,
+                n_inner=agq_inner,
+            )
+            loss = -target[gate].sum()
+            if not torch.isfinite(loss):
+                break
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_([beta], max_norm=10.0)
+            optimizer.step()
+            with torch.no_grad():
+                beta.copy_(
+                    beta.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+                    .clamp(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
+                    .clamp(min=min_beta, max=max_beta)
+                )
+                beta.copy_(torch.where((active_d & gate[:, None]), beta, base_beta))
+
+    beta_final = beta.detach()
+    final_target = _poissonAgqTargetDiag(
+        beta_final,
+        sigma,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        nu_ffx,
+        tau_ffx,
+        family_ffx,
+        tau_rfx,
+        family_sigma_rfx,
+        mask_d,
+        mask_q,
+        k=agq_k,
+        n_inner=agq_inner,
+    )
+    accept = gate
+    if accept_only_improved:
+        accept = accept & (final_target >= base_target - 1e-5)
+    out = dict(stats)
+    out['beta_est'] = torch.where(accept[:, None], beta_final, base_beta)
+    if return_diagnostics:
+        out['poisson_agq_beta_gate'] = gate.to(dtype)
+        out['poisson_agq_beta_accept'] = accept.to(dtype)
+        out['poisson_agq_beta_target'] = final_target
+        out['poisson_agq_beta_base_target'] = base_target
+    return out
 
 
 def refinePoissonSigmaGrid(
