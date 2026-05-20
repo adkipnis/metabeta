@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-20 (conservative PIRLS sigma-grid guard enabled)
+Last updated: 2026-05-20 (conservative PIRLS sigma-grid validated on large rows)
 
 Goal
 ----
@@ -77,7 +77,8 @@ diagonal σ grid with scales `(0.5, 0.75, 1.0)`. Each σ candidate gets a few fi
 β/u PIRLS steps and is accepted by the same diagonal Laplace target. Unlike the older σ
 grid, it writes back the full candidate. The grid deliberately allows shrinkage or fixed-σ
 β/u re-synchronization only; inflation scales are disabled by default after producing rare
-large σ outliers. It should remain opt-in until large rows are checked.
+large σ outliers. It remains opt-in while the remaining INLA gap is investigated, but the
+large-row validation did not show a regression versus the adjacent Poisson baselines.
 
 Current Evidence
 ----------------
@@ -99,9 +100,9 @@ Medium/large first-1000 validation:
 | medium-p-mixed | train | 0.3587 | 0.3391 | 0.2670 | 0.1675 | 0.5695 | 0.4798 | 0.4360 | 0.3214 | 0.6445 | 0.5392 | 0.5199 | 0.4789 | 69.1 | 66.7 |
 | medium-p-sampled | valid | 0.4333 | 0.3989 | 0.3385 | 0.2146 | 0.5646 | 0.5274 | 0.5229 | 0.4209 | 0.7509 | 0.6896 | 0.6334 | 0.5618 | 72.3 | 68.8 |
 | medium-p-sampled | test | 0.3779 | 0.3565 | 0.2968 | 0.2267 | 0.5979 | 0.5056 | 0.5016 | 0.3883 | 0.6261 | 0.5848 | 0.5603 | 0.5849 | 67.6 | 64.6 |
-| large-p-mixed | train | 0.4962 | 0.4723 | n/t | 0.1778 | 0.6788 | 0.7117 | n/t | 0.3076 | 0.9667 | 0.7726 | n/t | 0.5001 | 79.9 | n/t |
-| large-p-sampled | valid | 0.5042 | 0.5161 | n/t | 0.2467 | 0.7873 | 0.5977 | n/t | 0.4232 | 0.7538 | 0.7006 | n/t | 0.5870 | 78.0 | n/t |
-| large-p-sampled | test | 0.5673 | 0.5386 | n/t | 0.2186 | 0.6296 | 0.7846 | n/t | 0.3439 | 0.9427 | 0.8512 | n/t | 0.5618 | 83.1 | n/t |
+| large-p-mixed | train | 0.4962 | 0.4723 | 0.3821 | 0.1778 | 0.6788 | 0.7117 | 0.6401 | 0.3076 | 0.9667 | 0.7726 | 0.6980 | 0.5001 | 86.0 | 73.0 |
+| large-p-sampled | valid | 0.5042 | 0.5161 | 0.4422 | 0.2467 | 0.7873 | 0.5977 | 0.5475 | 0.4232 | 0.7538 | 0.7006 | 0.6414 | 0.5870 | 83.1 | 69.1 |
+| large-p-sampled | test | 0.5673 | 0.5386 | 0.4608 | 0.2186 | 0.6296 | 0.7846 | 0.6215 | 0.3439 | 0.9427 | 0.8512 | 0.8082 | 0.5618 | 92.9 | 78.3 |
 
 Useful comparator ladder from the same run:
 
@@ -119,9 +120,9 @@ Useful comparator ladder from the same run:
   the remaining small/medium FFX gap. It improves FFX on every small and medium row and
   improves BLUP on every small and medium row. σ improves on small-test and medium-mixed,
   is roughly neutral on medium-test, and regresses on small-mixed/small-valid/medium-valid.
-- On large rows, `poisson_laplace_pirls_beta` improves FFX in mixed/test and BLUP in all
-  cells, but regresses FFX slightly on sampled-valid and regresses σ on mixed/test. The
-  full-grid path has not been checked on large rows yet.
+- On large rows, `poisson_laplace_pirls_full_grid` improves FFX, σ, BLUP, and runtime in
+  all three cells versus both relaxed `current` and PIRLS+β. The conservative grid
+  therefore validates cleanly on large rows without tuning.
 
 Full-candidate sigma-grid diagnostic:
 
@@ -165,14 +166,14 @@ Assessment
 
 - Poisson is clearly improved over RAW, but it is not yet INLA-competitive.
 - FFX is the main gap. The full-candidate grid reduces the residual small-row FFX gap to
-  about `0.020-0.038` NRMSE and the medium-row gap to about `0.070-0.116`. Large rows are
-  still represented by the older PIRLS+β numbers and remain about `0.29-0.32` behind INLA.
+  about `0.020-0.038` NRMSE, the medium-row gap to about `0.070-0.124`, and the large-row
+  gap to about `0.196-0.242`.
 - The first PIRLS prototype confirms the joint-geometry hypothesis for σ/BLUP. The hybrid
   result confirms that PIRLS geometry feeds the marginal-mean β correction better than the
   old EB/grid geometry.
 - σ is better than RAW after EB, but still materially worse than INLA. The conservative
-  full-candidate grid avoids broad σ inflation and improved σ versus the first full-grid
-  diagnostic, but it still trails INLA.
+  full-candidate grid avoids broad σ inflation, improves σ versus current on large rows,
+  and improved σ versus the first full-grid diagnostic, but it still trails INLA.
 - BLUP is conservative by design. RAW/PQL BLUP fallback avoids previous regressions, but
   INLA is better in the current table, especially large mixed/test rows.
 - The remaining gap likely reflects Poisson-specific β/σ/u coupling under the log link.
@@ -186,12 +187,7 @@ Assessment
 Next Directions
 ---------------
 
-1. **Validate the conservative full-candidate grid on large rows without tuning.**
-   Do not tune against large yet. First run the same opt-in method with conservative
-   scales `(0.5, 0.75, 1.0)` to see whether the small/medium FFX gain survives and whether
-   the known large-row σ regressions worsen.
-
-2. **Tune the PIRLS covariance update only after full-grid validation.**
+1. **Tune the PIRLS covariance update cautiously.**
    The current diagonal update is:
 
    ```text
@@ -199,9 +195,10 @@ Next Directions
    ```
 
    Useful knobs are stronger `nu0`, lower log-σ blend, smaller PIRLS damping, and final
-   fixed-σ PIRLS steps. Tune only against the large σ regressions, not as a broad grid.
+   fixed-σ PIRLS steps. Tune against the residual σ gap to INLA, not by adding broad
+   inflation scales.
 
-3. **Keep accept/reject by one coherent cheap Laplace target.**
+2. **Keep accept/reject by one coherent cheap Laplace target.**
    Compare joint candidates with the same approximate Laplace objective:
 
    ```text
@@ -216,11 +213,11 @@ Next Directions
    jumps. Do not use RAW/PQL BLUP fallback inside the joint candidate; fallback only if the
    whole candidate fails or loses.
 
-4. **Only after guarded diagonal PIRLS+full-grid is stable, test full Σ.**
+3. **Only after guarded diagonal PIRLS+full-grid is stable, test full Σ.**
    Full covariance is cheap for `q <= 5`, but it adds instability risk. Test it inside the
    joint Laplace-PIRLS solver, not as another posthoc marginal β correction.
 
-5. **Retire the old β-only sigma grid if full-candidate grid holds up.**
+4. **Retire the old β-only sigma grid if full-candidate grid holds up on huge rows.**
    The older grid is slower than PIRLS+β and less coherent than full-candidate writeback.
 
 Low-Priority Or Rejected
