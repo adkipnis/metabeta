@@ -20,10 +20,12 @@ def toDevice(batch: dict[str, torch.Tensor], device: torch.device | str) -> dict
     if (current_device is None) or (current_device == device):
         return batch
 
-    # cast each tensor to the desired device
+    # cast each tensor to the desired device (including nested stats dict)
     for k, v in batch.items():
         if torch.is_tensor(v):
             batch[k] = v.to(device)
+        elif isinstance(v, dict):
+            batch[k] = {sk: sv.to(device) if torch.is_tensor(sv) else sv for sk, sv in v.items()}
     return batch
 
 
@@ -63,6 +65,7 @@ class Collection(torch.utils.data.Dataset):
         self.has_params = 'ffx' in self.raw
         self.has_nuts = 'nuts_ffx' in self.raw
         self.has_advi = 'advi_ffx' in self.raw
+        self.has_stats = 'beta_est' in self.raw
 
         # quickly assert that group indices are ascending from 0 to m-1
         self._groupCheck(len(self))
@@ -111,7 +114,7 @@ class Collection(torch.utils.data.Dataset):
         assert checks.all(), 'group indices are not structured correctly'
 
     def __repr__(self) -> str:
-        return f'Collection({len(self)} datasets, max(fixed)={self.d}, max(random)={self.q}, fits={self.has_nuts or self.has_advi})'
+        return f'Collection({len(self)} datasets, max(fixed)={self.d}, max(random)={self.q}, fits={self.has_nuts or self.has_advi}, stats={self.has_stats})'
 
     def __getitem__(self, idx: int) -> dict[str, np.ndarray]:
         # get dataset (without fit statistics)
@@ -155,6 +158,16 @@ class Collection(torch.utils.data.Dataset):
                         ds[f'{method}_corr_rfx'] = ds[f'{method}_corr_rfx'][..., qperm, :][
                             ..., qperm
                         ]
+
+            # permute analytical stats consistently
+            if self.has_stats:
+                ds['beta_est'] = ds['beta_est'][dperm]
+                ds['sigma_rfx_est'] = ds['sigma_rfx_est'][qperm]
+                for key in ('blup_est', 'blup_var'):
+                    if key in ds:
+                        ds[key] = ds[key][:, qperm]
+                if 'Psi' in ds:
+                    ds['Psi'] = ds['Psi'][np.ix_(qperm, qperm)]
 
         return ds
 
@@ -269,6 +282,10 @@ def collateGrouped(
         if f'{method}_ffx' in batch[0]:
             out.update(collateFits(batch, method, d, q, m, dtype))
 
+    # pack precomputed analytical stats into a sub-dict
+    if 'beta_est' in batch[0]:
+        out['stats'] = collateStats(batch, d, q, m, dtype)
+
     return out
 
 
@@ -336,6 +353,35 @@ def collateFits(
             out[diag_key] = quickCollate(batch, diag_key)
 
     return out
+
+
+def collateStats(
+    batch: list[dict[str, np.ndarray]],
+    d: int,
+    q: int,
+    m: int,
+    dtype=torch.float32,
+) -> dict[str, torch.Tensor]:
+    B = len(batch)
+    stats: dict[str, torch.Tensor] = {
+        'beta_est': quickCollate(batch, 'beta_est', dtype),            # (B, d)
+        'sigma_rfx_est': quickCollate(batch, 'sigma_rfx_est', dtype),  # (B, q)
+    }
+    blup_est = torch.zeros((B, m, q), dtype=dtype)
+    blup_var = torch.zeros((B, m, q), dtype=dtype)
+    for b, ds in enumerate(batch):
+        idx = np.arange(m) < int(ds['m'])
+        blup_est[b, idx] = torch.as_tensor(ds['blup_est'], dtype=dtype)
+        blup_var[b, idx] = torch.as_tensor(ds['blup_var'], dtype=dtype)
+    stats['blup_est'] = blup_est
+    stats['blup_var'] = blup_var
+    if 'sigma_eps_est' in batch[0]:
+        stats['sigma_eps_est'] = quickCollate(batch, 'sigma_eps_est', dtype)  # (B, 1)
+    if 'phi_pearson' in batch[0]:
+        stats['phi_pearson'] = quickCollate(batch, 'phi_pearson', dtype)       # (B,)
+    if 'Psi' in batch[0]:
+        stats['Psi'] = quickCollate(batch, 'Psi', dtype)                       # (B, q, q)
+    return stats
 
 
 def subsetBatch(batch: dict[str, torch.Tensor], mask: np.ndarray) -> dict[str, torch.Tensor]:
