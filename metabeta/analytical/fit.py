@@ -380,6 +380,15 @@ def glmm(
     poisson_laplace_pirls_sigma_average_scales = kwargs.pop(
         'poisson_laplace_pirls_sigma_average_scales', (0.5, 0.75, 1.0, 1.3333333, 2.0)
     )
+    poisson_laplace_pirls_sigma_average_scale_mode = kwargs.pop(
+        'poisson_laplace_pirls_sigma_average_scale_mode', 'scalar'
+    )
+    poisson_laplace_pirls_sigma_average_intercept_scales = kwargs.pop(
+        'poisson_laplace_pirls_sigma_average_intercept_scales', (0.75, 1.0, 1.3333333)
+    )
+    poisson_laplace_pirls_sigma_average_slope_scales = kwargs.pop(
+        'poisson_laplace_pirls_sigma_average_slope_scales', (0.5, 1.0, 1.5)
+    )
     poisson_laplace_pirls_sigma_average_steps = kwargs.pop(
         'poisson_laplace_pirls_sigma_average_steps', 2
     )
@@ -754,6 +763,13 @@ def glmm(
                 mask_d=mask_d,
                 mask_q=mask_q,
                 scales=tuple(float(x) for x in poisson_laplace_pirls_sigma_average_scales),
+                scale_mode=poisson_laplace_pirls_sigma_average_scale_mode,
+                intercept_scales=tuple(
+                    float(x) for x in poisson_laplace_pirls_sigma_average_intercept_scales
+                ),
+                slope_scales=tuple(
+                    float(x) for x in poisson_laplace_pirls_sigma_average_slope_scales
+                ),
                 n_steps=poisson_laplace_pirls_sigma_average_steps,
                 damping=poisson_laplace_pirls_diag_damping,
                 temperature=poisson_laplace_pirls_sigma_average_temperature,

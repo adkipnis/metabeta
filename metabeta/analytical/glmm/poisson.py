@@ -1160,6 +1160,9 @@ def refinePoissonLaplacePirlsSigmaAverage(
     mask_d: torch.Tensor | None = None,
     mask_q: torch.Tensor | None = None,
     scales: tuple[float, ...] = (0.5, 0.75, 1.0, 1.3333333, 2.0),
+    scale_mode: str = 'scalar',
+    intercept_scales: tuple[float, ...] = (0.75, 1.0, 1.3333333),
+    slope_scales: tuple[float, ...] = (0.5, 1.0, 1.5),
     n_steps: int = 2,
     damping: float = 0.5,
     temperature: float = 2.0,
@@ -1180,6 +1183,10 @@ def refinePoissonLaplacePirlsSigmaAverage(
     - ``'beta'``: write back weighted β only.
     - ``'beta_best'``: weighted β plus σ/BLUPs from the best-scoring candidate.
     - ``'beta_sigma'``: weighted β/σ plus BLUPs from the best-scoring candidate.
+
+    ``scale_mode='scalar'`` applies one multiplier to every active random-effect
+    dimension.  ``scale_mode='intercept_slope'`` applies one multiplier to dimension 0
+    and one shared multiplier to all remaining dimensions.
     """
     d = Xm.shape[-1]
     q = Zm.shape[-1]
@@ -1187,6 +1194,8 @@ def refinePoissonLaplacePirlsSigmaAverage(
         return stats
     if output_mode not in {'beta', 'beta_best', 'beta_sigma'}:
         raise ValueError("output_mode must be 'beta', 'beta_best', or 'beta_sigma'")
+    if scale_mode not in {'scalar', 'intercept_slope'}:
+        raise ValueError("scale_mode must be 'scalar' or 'intercept_slope'")
 
     B = Xm.shape[0]
     device, dtype = Xm.device, Xm.dtype
@@ -1249,12 +1258,30 @@ def refinePoissonLaplacePirlsSigmaAverage(
     A_candidates = [base_A]
     target_candidates = [base_target]
     scale_candidates = [torch.ones(B, device=device, dtype=dtype)]
+    intercept_scale_candidates = [torch.ones(B, device=device, dtype=dtype)]
+    slope_scale_candidates = [torch.ones(B, device=device, dtype=dtype)]
 
-    for scale in scales:
-        scale_f = float(scale)
+    scale_vectors: list[tuple[float, ...]] = []
+    if scale_mode == 'scalar':
+        for scale in scales:
+            scale_f = float(scale)
+            scale_vectors.append((scale_f,) * q)
+    else:
+        for intercept_scale in intercept_scales:
+            for slope_scale in slope_scales:
+                intercept_f = float(intercept_scale)
+                slope_f = float(slope_scale)
+                if q == 1:
+                    scale_vectors.append((intercept_f,))
+                else:
+                    scale_vectors.append((intercept_f, *((slope_f,) * (q - 1))))
+    scale_vectors = list(dict.fromkeys(scale_vectors))
+
+    for scale_vector in scale_vectors:
+        scale_tensor = torch.tensor(scale_vector, device=device, dtype=dtype).expand(B, q)
         sigma_try = torch.where(
             gate[:, None] & active_q,
-            (sigma_base * scale_f).clamp(min=1e-4, max=sigma_max),
+            (sigma_base * scale_tensor).clamp(min=1e-4, max=sigma_max),
             sigma_base,
         )
         beta_try = beta_base.clone()
@@ -1303,7 +1330,12 @@ def refinePoissonLaplacePirlsSigmaAverage(
         blup_candidates.append(blups_try)
         A_candidates.append(A_try)
         target_candidates.append(target_try)
-        scale_candidates.append(torch.full((B,), scale_f, device=device, dtype=dtype))
+        scale_candidates.append(scale_tensor.mean(dim=1))
+        intercept_scale_candidates.append(
+            torch.full((B,), scale_vector[0], device=device, dtype=dtype)
+        )
+        slope_scale = scale_vector[1] if len(scale_vector) > 1 else scale_vector[0]
+        slope_scale_candidates.append(torch.full((B,), slope_scale, device=device, dtype=dtype))
 
     beta_stack = torch.stack(beta_candidates, dim=1)
     sigma_stack = torch.stack(sigma_candidates, dim=1)
@@ -1311,6 +1343,8 @@ def refinePoissonLaplacePirlsSigmaAverage(
     A_stack = torch.stack(A_candidates, dim=1)
     target_stack = torch.stack(target_candidates, dim=1)
     scale_stack = torch.stack(scale_candidates, dim=1)
+    intercept_scale_stack = torch.stack(intercept_scale_candidates, dim=1)
+    slope_scale_stack = torch.stack(slope_scale_candidates, dim=1)
 
     finite_target = torch.isfinite(target_stack)
     score = torch.where(finite_target, target_stack, target_stack.new_full((), -1e30))
@@ -1330,6 +1364,8 @@ def refinePoissonLaplacePirlsSigmaAverage(
     best_blups = blup_stack.gather(1, gather_blup).squeeze(1)
     best_A = A_stack.gather(1, gather_A).squeeze(1)
     best_scale = scale_stack.gather(1, best_idx[:, None]).squeeze(1)
+    best_intercept_scale = intercept_scale_stack.gather(1, best_idx[:, None]).squeeze(1)
+    best_slope_scale = slope_scale_stack.gather(1, best_idx[:, None]).squeeze(1)
 
     sigma_out = sigma_base
     blups_out = blups_base
@@ -1368,6 +1404,8 @@ def refinePoissonLaplacePirlsSigmaAverage(
         out['poisson_sigma_average_gate'] = gate.to(dtype)
         out['poisson_sigma_average_neff'] = neff
         out['poisson_sigma_average_best_scale'] = best_scale
+        out['poisson_sigma_average_best_intercept_scale'] = best_intercept_scale
+        out['poisson_sigma_average_best_slope_scale'] = best_slope_scale
         out['poisson_sigma_average_best_target'] = best_target
         out['poisson_sigma_average_base_target'] = base_target
     return out

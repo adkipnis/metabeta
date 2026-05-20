@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-20 (scalar Laplace-weighted σ averaging prototype tested)
+Last updated: 2026-05-20 (sampled/large σ averaging and intercept-vs-slope grid tested)
 
 Goal
 ----
@@ -34,6 +34,8 @@ Benchmark method names:
 - `poisson_laplace_pirls_beta`: ablation without the final full-candidate grid.
 - `poisson_laplace_pirls_diag`: ablation without marginal β and final grid.
 - `poisson_laplace_pirls_sigma_avg`: retained full-grid path plus scalar
+  Laplace-weighted σ averaging prototype.
+- `poisson_laplace_pirls_sigma_avg_is`: retained full-grid path plus intercept-vs-slope
   Laplace-weighted σ averaging prototype.
 - `poisson_marginal_beta` and `poisson_eb`: historical ablations only.
 
@@ -129,8 +131,8 @@ Interpretation:
   missing off-diagonal covariance; the posterior/hyperparameter averaging gap to INLA is
   still present.
 
-Laplace-Weighted σ Averaging Prototype
---------------------------------------
+Laplace-Weighted σ Averaging Prototypes
+---------------------------------------
 
 Implemented as a separate non-default path on 2026-05-20:
 
@@ -141,6 +143,9 @@ poisson_laplace_pirls_sigma_avg
     -> fixed-σ β/u PIRLS refresh for each candidate
     -> diagonal Laplace target weights
     -> weighted β and weighted σ writeback, BLUPs from best candidate
+
+poisson_laplace_pirls_sigma_avg_is
+    same path, but grid directions are intercept-vs-slope scales
 ```
 
 Default prototype settings:
@@ -152,13 +157,26 @@ n_steps = 2
 output_mode = beta_sigma
 ```
 
-First 1000 mixed/train rows:
+The intercept-vs-slope grid uses:
 
-| method | small FFX | small σ | small BLUP | medium FFX | medium σ | medium BLUP | ms/ds |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `current` | 0.2214 | 0.4529 | 0.5245 | 0.2670 | 0.4360 | 0.5199 | 34.6-61.2 |
-| scalar avg, β only, T=2 | 0.2151 | 0.4529 | 0.5245 | not run | not run | not run | 35.8 |
-| scalar avg, β/σ, T=2 | 0.2151 | 0.4287 | 0.5222 | 0.2438 | 0.4198 | 0.5129 | 37.2-64.7 |
+```text
+intercept scales = (0.75, 1.0, 1.3333333)
+slope scales = (0.5, 1.0, 1.5)
+```
+
+First 1000 rows, sequential CPU runs:
+
+| Dataset | part | current FFX | scalar avg FFX | int/slope avg FFX | current σ | scalar avg σ | int/slope avg σ | current BLUP | scalar avg BLUP | int/slope avg BLUP |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-p-mixed | train | 0.2214 | 0.2151 | 0.2150 | 0.4529 | 0.4287 | 0.4260 | 0.5245 | 0.5222 | 0.5200 |
+| small-p-sampled | valid | 0.2523 | 0.2378 | 0.2370 | 0.4919 | 0.4756 | 0.4649 | 0.5384 | 0.5355 | 0.5325 |
+| small-p-sampled | test | 0.2205 | 0.2119 | 0.2121 | 0.4618 | 0.4421 | 0.4353 | 0.5270 | 0.5232 | 0.5208 |
+| medium-p-mixed | train | 0.2670 | 0.2438 | 0.2433 | 0.4360 | 0.4198 | 0.4039 | 0.5199 | 0.5129 | 0.5115 |
+| medium-p-sampled | valid | 0.3385 | 0.3057 | 0.3062 | 0.5229 | 0.5654 | 0.4910 | 0.6334 | 0.6115 | 0.6078 |
+| medium-p-sampled | test | 0.2968 | 0.2831 | 0.2821 | 0.5016 | 0.4723 | 0.4624 | 0.5603 | 0.5560 | 0.5512 |
+| large-p-mixed | train | 0.3821 | 0.3436 | 0.3427 | 0.6401 | 0.5536 | 0.5373 | 0.6980 | 0.6472 | 0.6452 |
+| large-p-sampled | valid | 0.4422 | 0.4131 | 0.4127 | 0.5475 | 0.5261 | 0.5109 | 0.6414 | 0.6318 | 0.6272 |
+| large-p-sampled | test | 0.4608 | 0.4358 | 0.4353 | 0.6215 | 0.5124 | 0.5242 | 0.8082 | 0.7651 | 0.7614 |
 
 Temperature sensitivity on small mixed was weak: β-only FFX was `0.2150` at `T=1`,
 `0.2151` at `T=2`, and `0.2153` at `T=4`. Writing back σ from the weighted posterior
@@ -166,12 +184,13 @@ improved σ materially on small mixed and improved all reported metrics on mediu
 
 Interpretation:
 
-- This is the first Poisson patch in the current round that clearly moves FFX and σ in the
-  right direction on both small and medium mixed rows.
-- The result supports the colleague's hypothesis that the remaining INLA gap is partly
-  hyperparameter averaging rather than missing full covariance.
-- It is still a prototype: sampled rows, large rows, and richer variance directions are not
-  validated yet.
+- Scalar σ averaging improves FFX, σ, and BLUP on every sampled and large row tested
+  except medium sampled valid σ, where scalar averaging improves FFX/BLUP but worsens σ.
+- Intercept-vs-slope averaging is a small FFX tie/slight win over scalar averaging on most
+  rows and usually improves σ/BLUP. The main exception is large sampled test σ, where it
+  regresses from `0.5124` to `0.5242` while still improving FFX/BLUP slightly.
+- This supports the hyperparameter-averaging direction. It does not yet prove that the
+  richer grid should replace scalar averaging as default.
 
 Grid Diagnostic
 ---------------
@@ -236,19 +255,15 @@ Next Directions
    The same target should score current EB/full-grid candidates and future full-Σ PIRLS
    candidates, so we can compare architectures rather than gate heuristics.
 
-4. **Extend hyperparameter averaging before adding more posthoc gates.**
+4. **Continue hyperparameter averaging, but avoid more scalar gate tuning.**
 
-   Scalar Laplace-weighted averaging has positive signal. Next ablations, in order:
-
-   - validate `poisson_laplace_pirls_sigma_avg` on sampled and large rows;
-   - test intercept-vs-slope variance directions:
-
-     ```text
-     intercept scale: (0.75, 1.0, 1.3333333)
-     slope scale: (0.5, 1.0, 1.5)
-     ```
+   Scalar averaging is robustly positive. Intercept-vs-slope averaging gives slightly
+   better FFX and usually better σ/BLUP, but the gain is modest and not uniform. Next
+   ablations:
 
    - test whether one Laplace-target β/u refresh after weighted σ improves the candidate;
+   - compare `output_mode=beta`, `beta_best`, and `beta_sigma` for the intercept-vs-slope
+     grid on medium/large sampled rows;
    - only then consider direct autograd β optimization under the Laplace marginal target.
 
 5. **Run huge-row validation before 8k.**
@@ -264,7 +279,8 @@ uv run python -u experiments/analytical/glmm_required_benchmark.py \
     --family p --methods raw poisson_eb poisson_marginal_beta \
     poisson_laplace_pirls_diag poisson_laplace_pirls_full_beta \
     poisson_laplace_pirls_beta current poisson_laplace_pirls_sigma_avg \
-    --sizes small medium large --batch-size 32 --max-datasets 1000
+    poisson_laplace_pirls_sigma_avg_is --sizes small medium large \
+    --batch-size 32 --max-datasets 1000
 
 uv run python -u experiments/analytical/glmm_poisson_pirls_grid_diagnostic.py \
     --sizes small medium --max-datasets 1000 --batch-size 32
