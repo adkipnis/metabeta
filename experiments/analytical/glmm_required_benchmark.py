@@ -29,6 +29,7 @@ METHODS = [
     'poisson_marginal_beta',
     'poisson_sigma_grid',
     'poisson_laplace_pirls_diag',
+    'poisson_laplace_pirls_beta',
 ]
 FAMILIES = ['n', 'b', 'p']
 
@@ -112,6 +113,7 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                                     'poisson_marginal_beta',
                                     'poisson_sigma_grid',
                                     'poisson_laplace_pirls_diag',
+                                    'poisson_laplace_pirls_beta',
                                 }
                             ),
                             **_bernoulliEbKwargs(method, args),
@@ -332,14 +334,17 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
         'poisson_marginal_beta',
         'poisson_sigma_grid',
         'poisson_laplace_pirls_diag',
+        'poisson_laplace_pirls_beta',
     }:
         return {
             'bernoulli_laplace_eb': False,
             'normal_laplace_eb': False,
             'poisson_laplace_eb': 'poisson_eb',
-            'poisson_marginal_beta': method in {'poisson_marginal_beta', 'poisson_sigma_grid'},
+            'poisson_marginal_beta': method
+            in {'poisson_marginal_beta', 'poisson_sigma_grid', 'poisson_laplace_pirls_beta'},
             'poisson_sigma_grid': method == 'poisson_sigma_grid',
-            'poisson_laplace_pirls_diag': method == 'poisson_laplace_pirls_diag',
+            'poisson_laplace_pirls_diag': method
+            in {'poisson_laplace_pirls_diag', 'poisson_laplace_pirls_beta'},
         }
     return {'bernoulli_laplace_eb': False}
 
@@ -388,6 +393,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_marginal_beta',
         'poisson_sigma_grid',
         'poisson_laplace_pirls_diag',
+        'poisson_laplace_pirls_beta',
     }:
         return {}
     out = {
@@ -412,7 +418,13 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_pirls_diag_sigma_blend': args.poisson_laplace_pirls_diag_sigma_blend,
         'poisson_laplace_pirls_diag_prior_weight': (args.poisson_laplace_pirls_diag_prior_weight),
     }
-    if method in {'default', 'current', 'poisson_marginal_beta', 'poisson_sigma_grid'}:
+    if method in {
+        'default',
+        'current',
+        'poisson_marginal_beta',
+        'poisson_sigma_grid',
+        'poisson_laplace_pirls_beta',
+    }:
         out.update(
             {
                 'poisson_marginal_beta_steps': args.poisson_marginal_beta_steps,
