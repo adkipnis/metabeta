@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-20 (full-Σ PIRLS prototype tested)
+Last updated: 2026-05-20 (scalar Laplace-weighted σ averaging prototype tested)
 
 Goal
 ----
@@ -33,6 +33,8 @@ Benchmark method names:
 - `poisson_laplace_pirls_full_beta`: full-Σ joint PIRLS plus full-Ψ marginal β.
 - `poisson_laplace_pirls_beta`: ablation without the final full-candidate grid.
 - `poisson_laplace_pirls_diag`: ablation without marginal β and final grid.
+- `poisson_laplace_pirls_sigma_avg`: retained full-grid path plus scalar
+  Laplace-weighted σ averaging prototype.
 - `poisson_marginal_beta` and `poisson_eb`: historical ablations only.
 
 Current Evidence
@@ -127,6 +129,50 @@ Interpretation:
   missing off-diagonal covariance; the posterior/hyperparameter averaging gap to INLA is
   still present.
 
+Laplace-Weighted σ Averaging Prototype
+--------------------------------------
+
+Implemented as a separate non-default path on 2026-05-20:
+
+```text
+poisson_laplace_pirls_sigma_avg
+    current retained full-grid path
+    -> scalar log-σ candidate grid around current σ
+    -> fixed-σ β/u PIRLS refresh for each candidate
+    -> diagonal Laplace target weights
+    -> weighted β and weighted σ writeback, BLUPs from best candidate
+```
+
+Default prototype settings:
+
+```text
+scales = (0.5, 0.75, 1.0, 1.3333333, 2.0)
+temperature = 2.0
+n_steps = 2
+output_mode = beta_sigma
+```
+
+First 1000 mixed/train rows:
+
+| method | small FFX | small σ | small BLUP | medium FFX | medium σ | medium BLUP | ms/ds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `current` | 0.2214 | 0.4529 | 0.5245 | 0.2670 | 0.4360 | 0.5199 | 34.6-61.2 |
+| scalar avg, β only, T=2 | 0.2151 | 0.4529 | 0.5245 | not run | not run | not run | 35.8 |
+| scalar avg, β/σ, T=2 | 0.2151 | 0.4287 | 0.5222 | 0.2438 | 0.4198 | 0.5129 | 37.2-64.7 |
+
+Temperature sensitivity on small mixed was weak: β-only FFX was `0.2150` at `T=1`,
+`0.2151` at `T=2`, and `0.2153` at `T=4`. Writing back σ from the weighted posterior
+improved σ materially on small mixed and improved all reported metrics on medium mixed.
+
+Interpretation:
+
+- This is the first Poisson patch in the current round that clearly moves FFX and σ in the
+  right direction on both small and medium mixed rows.
+- The result supports the colleague's hypothesis that the remaining INLA gap is partly
+  hyperparameter averaging rather than missing full covariance.
+- It is still a prototype: sampled rows, large rows, and richer variance directions are not
+  validated yet.
+
 Grid Diagnostic
 ---------------
 
@@ -190,12 +236,20 @@ Next Directions
    The same target should score current EB/full-grid candidates and future full-Σ PIRLS
    candidates, so we can compare architectures rather than gate heuristics.
 
-4. **Try architectural alternatives around hyperparameter uncertainty.**
+4. **Extend hyperparameter averaging before adding more posthoc gates.**
 
-   Full-Σ PIRLS still leaves a large FFX gap, so the next candidates are cheap
-   hyperparameter averaging around the PIRLS mode, Laplace-target β optimization with
-   curvature terms, or a limited multi-candidate solver selected by one coherent Laplace
-   target. Avoid broad posthoc gates unless they are selected by that target.
+   Scalar Laplace-weighted averaging has positive signal. Next ablations, in order:
+
+   - validate `poisson_laplace_pirls_sigma_avg` on sampled and large rows;
+   - test intercept-vs-slope variance directions:
+
+     ```text
+     intercept scale: (0.75, 1.0, 1.3333333)
+     slope scale: (0.5, 1.0, 1.5)
+     ```
+
+   - test whether one Laplace-target β/u refresh after weighted σ improves the candidate;
+   - only then consider direct autograd β optimization under the Laplace marginal target.
 
 5. **Run huge-row validation before 8k.**
 
@@ -209,7 +263,7 @@ Commands
 uv run python -u experiments/analytical/glmm_required_benchmark.py \
     --family p --methods raw poisson_eb poisson_marginal_beta \
     poisson_laplace_pirls_diag poisson_laplace_pirls_full_beta \
-    poisson_laplace_pirls_beta current \
+    poisson_laplace_pirls_beta current poisson_laplace_pirls_sigma_avg \
     --sizes small medium large --batch-size 32 --max-datasets 1000
 
 uv run python -u experiments/analytical/glmm_poisson_pirls_grid_diagnostic.py \

@@ -13,6 +13,7 @@ from metabeta.analytical.glmm.poisson import (
     refinePoissonLaplaceEb,
     refinePoissonLaplacePirlsDiag,
     refinePoissonLaplacePirlsFull,
+    refinePoissonLaplacePirlsSigmaAverage,
     refinePoissonLaplacePirlsSigmaGrid,
     refinePoissonMarginalMeanBeta,
 )
@@ -375,6 +376,25 @@ def glmm(
     poisson_laplace_pirls_sigma_grid_max_q = kwargs.pop(
         'poisson_laplace_pirls_sigma_grid_max_q', None
     )
+    poisson_laplace_pirls_sigma_average = kwargs.pop('poisson_laplace_pirls_sigma_average', False)
+    poisson_laplace_pirls_sigma_average_scales = kwargs.pop(
+        'poisson_laplace_pirls_sigma_average_scales', (0.5, 0.75, 1.0, 1.3333333, 2.0)
+    )
+    poisson_laplace_pirls_sigma_average_steps = kwargs.pop(
+        'poisson_laplace_pirls_sigma_average_steps', 2
+    )
+    poisson_laplace_pirls_sigma_average_temperature = kwargs.pop(
+        'poisson_laplace_pirls_sigma_average_temperature', 2.0
+    )
+    poisson_laplace_pirls_sigma_average_min_d = kwargs.pop(
+        'poisson_laplace_pirls_sigma_average_min_d', 1
+    )
+    poisson_laplace_pirls_sigma_average_max_q = kwargs.pop(
+        'poisson_laplace_pirls_sigma_average_max_q', None
+    )
+    poisson_laplace_pirls_sigma_average_output_mode = kwargs.pop(
+        'poisson_laplace_pirls_sigma_average_output_mode', 'beta_sigma'
+    )
     poisson_marginal_beta = kwargs.pop('poisson_marginal_beta', likelihood_family == 2)
     poisson_marginal_beta_full_psi = kwargs.pop('poisson_marginal_beta_full_psi', False)
     poisson_marginal_beta_full_psi_min_q = kwargs.pop('poisson_marginal_beta_full_psi_min_q', 3)
@@ -718,6 +738,30 @@ def glmm(
                 max_q=poisson_laplace_pirls_sigma_grid_max_q,
                 return_diagnostics=poisson_laplace_eb_diagnostics,
             )
+        if map_refine and poisson_laplace_pirls_sigma_average and Zm.shape[-1] > 0:
+            stats = refinePoissonLaplacePirlsSigmaAverage(
+                stats,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx=map_priors['nu_ffx'],
+                tau_ffx=map_priors['tau_ffx'],
+                family_ffx=map_priors['family_ffx'],
+                tau_rfx=map_priors['tau_rfx'],
+                family_sigma_rfx=map_priors['family_sigma_rfx'],
+                mask_d=mask_d,
+                mask_q=mask_q,
+                scales=tuple(float(x) for x in poisson_laplace_pirls_sigma_average_scales),
+                n_steps=poisson_laplace_pirls_sigma_average_steps,
+                damping=poisson_laplace_pirls_diag_damping,
+                temperature=poisson_laplace_pirls_sigma_average_temperature,
+                min_d=poisson_laplace_pirls_sigma_average_min_d,
+                max_q=poisson_laplace_pirls_sigma_average_max_q,
+                output_mode=poisson_laplace_pirls_sigma_average_output_mode,
+                return_diagnostics=poisson_laplace_eb_diagnostics,
+            )
     else:
         raise ValueError(f'unsupported likelihood_family={likelihood_family}')
 
@@ -738,5 +782,6 @@ __all__ = [
     'refinePoissonLaplaceEb',
     'refinePoissonLaplacePirlsDiag',
     'refinePoissonLaplacePirlsFull',
+    'refinePoissonLaplacePirlsSigmaAverage',
     'refinePoissonMarginalMeanBeta',
 ]
