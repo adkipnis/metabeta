@@ -345,12 +345,15 @@ def run_one_dataset(
     analytical_methods: list[str] | None = None,
     save_inla_rows_dir: Path | None = None,
     device: torch.device | None = None,
+    skip_analytical: bool = False,
 ) -> dict:
     """Run analytical GLMM methods vs R-INLA on one dataset, return metrics dict."""
     if device is None:
         device = torch.device('cpu')
     if analytical_methods is None:
         analytical_methods = ['raw', 'current']
+    if skip_analytical:
+        analytical_methods = []
     data_cfg = loadDataConfig(data_id)
     max_d = data_cfg['max_d']
     max_q = data_cfg['max_q']
@@ -389,7 +392,7 @@ def run_one_dataset(
             if done:
                 break
             inla_data = _loadInlaFits(path)
-            dl = Dataloader(path, batch_size=32, shuffle=False)
+            dl = Dataloader(path, batch_size=32, sortish=False, shuffle=False)
             file_n_seen = 0
             for batch in dl:
                 if n_total > 0 and n_seen >= n_total:
@@ -581,7 +584,7 @@ def run_one_dataset(
     }
     inla = {key: _flat(values) for key, values in inla_metrics.items() if key != 'wall'}
 
-    n_all = len(all_metrics[analytical_methods[0]]['be']) if analytical_methods else 0
+    n_all = len(all_metrics[analytical_methods[0]]['be']) if analytical_methods else n_seen
     metrics = {
         'data_id': data_id,
         'n_analytical': n_all,
@@ -628,10 +631,11 @@ def run_one_dataset(
         )
 
     if inla_n_ok > 0:
+        n_matched = len(matched_metrics[analytical_methods[0]]['be']) if analytical_methods else inla_n_ok
         print(
-            f'\nAnalytical vs R-INLA — matched'
-            f' (N={len(matched_metrics[analytical_methods[0]]["be"])},'
-            f' INLA ok={inla_n_ok})'
+            f'\nR-INLA — matched (N={n_matched}, INLA ok={inla_n_ok})'
+            if not analytical_methods
+            else f'\nAnalytical vs R-INLA — matched (N={n_matched}, INLA ok={inla_n_ok})'
         )
         rows = []
         for method in analytical_methods:
@@ -705,10 +709,14 @@ def main(
     n_total: int = 0,
     analytical_methods: list[str] | None = None,
     save_inla_rows_dir: str = INLA_ROW_OUTPUT_DIR,
+    skip_analytical: bool = False,
 ) -> None:
     if analytical_methods is None:
         analytical_methods = ['raw', 'current']
-    print(f'Analytical methods: {", ".join(analytical_methods)}')
+    if skip_analytical:
+        print('Analytical methods: (skipped)')
+    else:
+        print(f'Analytical methods: {", ".join(analytical_methods)}')
     if n_total > 0:
         print(f'n_total={n_total}')
     row_output_dir = Path(save_inla_rows_dir) if save_inla_rows_dir else None
@@ -726,6 +734,7 @@ def main(
                 n_epochs=n_epochs,
                 analytical_methods=analytical_methods,
                 save_inla_rows_dir=row_output_dir,
+                skip_analytical=skip_analytical,
             )
         )
 
@@ -794,6 +803,8 @@ if __name__ == '__main__':
                         help='directory for compressed per-row INLA estimate .npz files')
     parser.add_argument('--no-save-inla-rows', action='store_true',
                         help='disable per-row INLA estimate saving')
+    parser.add_argument('--no-analytical', action='store_true',
+                        help='skip all glmm() calls; only evaluate precomputed INLA fits')
     # fmt: on
     a = parser.parse_args()
     main(
@@ -803,4 +814,5 @@ if __name__ == '__main__':
         n_total=a.n_total,
         analytical_methods=_parseAnalyticalMethods(a.analytical_methods),
         save_inla_rows_dir='' if a.no_save_inla_rows else a.save_inla_rows_dir,
+        skip_analytical=a.no_analytical,
     )
