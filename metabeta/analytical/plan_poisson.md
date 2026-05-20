@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-20
+Last updated: 2026-05-20 (diagnostic complete)
 
 Goal
 ----
@@ -82,35 +82,76 @@ Rejected Or Low-Priority Work
 - Full 8k Poisson benchmark: postpone until the residual INLA gap has been diagnosed and
   one more targeted patch has either passed or been rejected.
 
-Next Diagnostic
----------------
+Diagnostic Findings (2026-05-20)
+--------------------------------
 
-Run a row-level residual-gap diagnostic on the first-1000 rows with INLA references. The
-diagnostic should compare current default vs INLA and bucket rows by:
+Row-level direction diagnostic run on first-1000 INLA-matched rows per cell using
+`glmm_poisson_inla_direction_diagnostic.py` with `sortish=False` (bug fix: the old
+diagnostic used `sortish=True` which scrambled the INLA index mapping and inflated INLA
+RMSE; the plan table from `glmm_inla_comparison.py` was unaffected as it already used
+`sortish=False`).
 
-- `d`, `q`, `n`, `m`, and `q > 2`;
-- count shape: `y_mean`, `y_var`, `y_max`, zero fraction, high-count tail fraction;
-- EB/grid diagnostics: EB accept, β accept, grid gate, grid accept, selected grid scale,
-  σ cap;
-- error source: β RMSE, σ RMSE, BLUP RMSE, and whether INLA mainly differs by β, σ, or both.
+Summary of raw RMSE and direction metrics per cell:
 
-Primary question: are the large/huge INLA gaps concentrated in rows the current grid does
-not cover or accept?
+| Dataset | part | RAW β | EB β | INLA β | β gain | RAW σ | EB σ | INLA σ | σ gain | BLUP gap |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-p-mixed | train | 0.095 | 0.104 | 0.078 | −0.009 | 0.135 | 0.084 | 0.067 | +0.052 | +0.021 |
+| small-p-sampled | valid | 0.143 | 0.133 | 0.101 | +0.010 | 0.153 | 0.099 | 0.083 | +0.055 | +0.022 |
+| small-p-sampled | test | 0.123 | 0.118 | 0.091 | +0.005 | 0.148 | 0.094 | 0.080 | +0.054 | +0.023 |
+| medium-p-mixed | train | 0.105 | 0.113 | 0.072 | −0.007 | 0.157 | 0.088 | 0.058 | +0.069 | +0.032 |
+| medium-p-sampled | valid | 0.167 | 0.137 | 0.095 | +0.030 | 0.180 | 0.099 | 0.073 | +0.081 | +0.034 |
+| medium-p-sampled | test | 0.162 | 0.141 | 0.096 | +0.022 | 0.190 | 0.103 | 0.071 | +0.088 | +0.037 |
 
-Candidate Patch
----------------
+Key findings:
 
-Choose the patch only after the diagnostic:
+**1. q > 2 rows are the primary failure mode on medium datasets.**
+The sigma grid only fires for `d >= 5` and `q <= 2` (sg_gate). On medium (d=5–8), the
+q > 2 bucket (20–28% of rows) has FFX gap 2–5× worse than q ≤ 2, EB moves β strongly
+*away* from INLA (toward% < 50%), and sigma cap rate is 14–19% vs 5–6% for q ≤ 2.
+The marginal beta gate fires for all medium rows (mb_gate=1), but without the sigma grid,
+the β-only correction has no alternative σ scales to work with for q > 2.
 
-- If `q > 2` rows dominate: add a guarded `q == 3` grid with fewer σ candidates and the
-  same AGQ accept target. Keep it β-only first.
-- If high-count tails dominate: add a tail-gated β correction using stronger marginal
-  mean shrinkage or additional downward σ-offset candidates, again β-only.
-- If non-accepted grid rows dominate but INLA is better: inspect the AGQ target and add a
-  stricter INLA-direction diagnostic before changing the default accept rule.
-- If σ error explains the residual gap: prototype a guarded σ write-back path only for
-  rows where the AGQ target and σ prior both support it. This is lower priority because
-  direct σ write-back already regressed aggregate σ.
+| Group (medium) | N% | FFX gain | FFX gap | toward% | σ cap% |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| sg_gate=1 (q≤2) | ~75% | +0.003 to +0.033 | 0.022–0.035 | 44–50% | 5–6% |
+| sg_gate=0 (q>2) | ~25% | −0.017 to −0.038 | 0.075–0.118 | — | 14–19% |
+
+**2. Small datasets (d≤4): no grids fire, σ improves, β is near-neutral.**
+All small-p rows have d≤4, so both mb_gate and sg_gate are 0. EB consistently improves σ
+(+0.052–0.055 true gain). FFX effect is near zero (−0.009 to +0.010 true gain). The
+remaining small-p INLA gap is not grid-related; it is a general EB β bias, mostly on
+high-count rows (mean_y ≥ 2, gain −0.011 to −0.025).
+
+**3. High-count rows (mean_y ≥ 2) are a secondary failure mode across all datasets.**
+On all six cells, mean_y ≥ 2 shows the worst FFX gains (most negative) and lowest accept
+rates (~80–87%). For medium, this bucket overlaps heavily with q > 2 rows.
+
+**4. BLUP is unchanged and slightly better than INLA.** The fallback is active on all
+rows (gain = 0, gain% = 0). The BLUP gap is positive (EB slightly closer to truth than
+INLA) across all cells, confirming the fallback is the right call.
+
+**5. σ improvement is consistent and moves toward INLA.** On all six cells, sigma toward%
+is 69–78% and median dist gain is 0.59–0.69. The EB σ improvement is real and should not
+be disrupted by any new patch.
+
+Answer to the primary diagnostic question: the INLA gap on medium-p datasets is
+concentrated in `q > 2` rows that the current sigma grid does not cover (sg_gate=0). This
+unambiguously selects the first candidate patch.
+
+Next Patch
+----------
+
+Add a guarded `q > 2` marginal-beta correction, β-only, modelled on the existing
+`q <= 2` sigma-offset grid:
+
+- Gate: `d >= 5` and `q > 2` (i.e., where mb_gate=1 and sg_gate=0).
+- Try a small set of σ scales (e.g., 3–4 candidates: 0.5×, 0.75×, 1.0×, 1.25× EB σ).
+- Accept by AGQ marginal posterior, write back β only; keep EB σ and RAW/PQL BLUP.
+- Do not touch q ≤ 2 rows; their path is already better and σ-grid-covered.
+
+Prototype the patch, run the required benchmark on small+medium cells, and run the
+direction diagnostic on medium-p-mixed/train to confirm β moves toward INLA without
+regressing σ.
 
 Commands
 --------
@@ -127,6 +168,25 @@ uv run python -u experiments/analytical/glmm_required_benchmark.py \
 uv run python -u experiments/analytical/glmm_inla_comparison.py \
     --data-ids medium-p-sampled --partition valid \
     --n-inla 1000 --n-total 1000 --analytical-methods raw,current
+
+# Poisson direction diagnostic (precomputed INLA fits; --n-epochs 1 for all partitions)
+uv run python -u experiments/analytical/glmm_poisson_inla_direction_diagnostic.py \
+    --data-ids small-p-mixed --partition train --n-inla 1000 --n-epochs 1
+
+uv run python -u experiments/analytical/glmm_poisson_inla_direction_diagnostic.py \
+    --data-ids small-p-sampled --partition valid --n-inla 1000 --n-epochs 1
+
+uv run python -u experiments/analytical/glmm_poisson_inla_direction_diagnostic.py \
+    --data-ids small-p-sampled --partition test --n-inla 1000 --n-epochs 1
+
+uv run python -u experiments/analytical/glmm_poisson_inla_direction_diagnostic.py \
+    --data-ids medium-p-mixed --partition train --n-inla 1000 --n-epochs 1
+
+uv run python -u experiments/analytical/glmm_poisson_inla_direction_diagnostic.py \
+    --data-ids medium-p-sampled --partition valid --n-inla 1000 --n-epochs 1
+
+uv run python -u experiments/analytical/glmm_poisson_inla_direction_diagnostic.py \
+    --data-ids medium-p-sampled --partition test --n-inla 1000 --n-epochs 1
 
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical/fit.py metabeta/analytical/glmm \
