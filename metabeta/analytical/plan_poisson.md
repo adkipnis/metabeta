@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-20 (PIRLS full-grid is the retained Poisson path)
+Last updated: 2026-05-20 (full-Σ PIRLS prototype tested)
 
 Goal
 ----
@@ -29,6 +29,8 @@ Benchmark method names:
 
 - `current` / `default`: retained full-grid path.
 - `poisson_laplace_pirls_full_grid`: explicit retained path.
+- `poisson_laplace_pirls_full`: full-Σ joint PIRLS prototype without marginal β.
+- `poisson_laplace_pirls_full_beta`: full-Σ joint PIRLS plus full-Ψ marginal β.
 - `poisson_laplace_pirls_beta`: ablation without the final full-candidate grid.
 - `poisson_laplace_pirls_diag`: ablation without marginal β and final grid.
 - `poisson_marginal_beta` and `poisson_eb`: historical ablations only.
@@ -86,6 +88,45 @@ Interpretation:
   research path.
 - Further scalar tuning of the diagonal covariance update is low expected value.
 
+Full-Σ PIRLS Prototype
+----------------------
+
+Implemented as a separate non-default path on 2026-05-20:
+
+```text
+poisson_laplace_pirls_full
+    EB initializer -> full-Σ joint β/u/Σ PIRLS
+
+poisson_laplace_pirls_full_beta
+    EB initializer -> full-Σ joint β/u/Σ PIRLS -> full-Ψ marginal β correction
+```
+
+The full-Σ covariance update uses posterior second moments:
+
+```text
+Σ <- (sum_g (u_g u_g' + A_g^-1) + nu0 * Σ0) / (m + nu0)
+```
+
+with eigenvalue clipping and a diagonal prior anchor. The candidate is accepted by the same
+full Laplace target shape used for the diagonal solver.
+
+First 1000 mixed/train rows:
+
+| method | small FFX | small σ | small BLUP | medium FFX | medium σ | medium BLUP | ms/ds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `poisson_laplace_pirls_full` | 0.3039 | 0.4677 | 0.5263 | not run | not run | not run | 34.6 |
+| `poisson_laplace_pirls_full_beta` | 0.2582 | 0.4677 | 0.5263 | 0.3284 | 0.5060 | 0.5178 | 33.2-56.4 |
+| `current` | 0.2214 | 0.4529 | 0.5245 | 0.2670 | 0.4360 | 0.5199 | 34.2-57.8 |
+
+Interpretation:
+
+- Full-Σ PIRLS is numerically stable and similar in speed to the diagonal path.
+- Full-Ψ marginal β helps the full-Σ candidate, but not enough to beat the retained
+  diagonal full-grid path.
+- The prototype does not support making full-Σ the default. The likely issue is not merely
+  missing off-diagonal covariance; the posterior/hyperparameter averaging gap to INLA is
+  still present.
+
 Grid Diagnostic
 ---------------
 
@@ -127,13 +168,12 @@ Next Directions
    convincing σ/BLUP improvement. Leave defaults unchanged for now; `final=4` or `final=6`
    can be retested later if a larger architecture change makes convergence the bottleneck.
 
-2. **Move the next serious patch to full-Σ joint PIRLS.**
+2. **Do not promote full-Σ PIRLS without a stronger scoring/averaging change.**
 
-   The current diagonal-Σ solver is still substantially behind INLA on FFX and σ,
-   especially from medium upward. If covariance tuning is weak, the likely missing piece is
-   latent covariance geometry, not another scalar correction. Full `Σ` is cheap for
-   `q <= 5`, but it should be estimated inside the joint β/u/Σ PIRLS loop, not as a
-   posthoc marginal β correction.
+   Full covariance alone was stable but worse than the retained diagonal full-grid path on
+   small and medium mixed rows. Keep it as a prototype/diagnostic path. The next serious
+   improvement should change the approximation target, not only the covariance
+   parameterization.
 
 3. **Keep one accept/reject target.**
 
@@ -150,12 +190,12 @@ Next Directions
    The same target should score current EB/full-grid candidates and future full-Σ PIRLS
    candidates, so we can compare architectures rather than gate heuristics.
 
-4. **If full-Σ PIRLS still leaves a large FFX gap, ask for/try architectural alternatives.**
+4. **Try architectural alternatives around hyperparameter uncertainty.**
 
-   The main alternatives to discuss or prototype are cheap hyperparameter averaging around
-   the PIRLS mode, Laplace-target β optimization with curvature terms, or a limited
-   multi-candidate solver. Avoid broad posthoc gates unless they are selected by the same
-   coherent objective.
+   Full-Σ PIRLS still leaves a large FFX gap, so the next candidates are cheap
+   hyperparameter averaging around the PIRLS mode, Laplace-target β optimization with
+   curvature terms, or a limited multi-candidate solver selected by one coherent Laplace
+   target. Avoid broad posthoc gates unless they are selected by that target.
 
 5. **Run huge-row validation before 8k.**
 
@@ -168,7 +208,8 @@ Commands
 ```bash
 uv run python -u experiments/analytical/glmm_required_benchmark.py \
     --family p --methods raw poisson_eb poisson_marginal_beta \
-    poisson_laplace_pirls_diag poisson_laplace_pirls_beta current \
+    poisson_laplace_pirls_diag poisson_laplace_pirls_full_beta \
+    poisson_laplace_pirls_beta current \
     --sizes small medium large --batch-size 32 --max-datasets 1000
 
 uv run python -u experiments/analytical/glmm_poisson_pirls_grid_diagnostic.py \

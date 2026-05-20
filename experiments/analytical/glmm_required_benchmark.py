@@ -28,6 +28,8 @@ METHODS = [
     'poisson_eb',
     'poisson_marginal_beta',
     'poisson_laplace_pirls_diag',
+    'poisson_laplace_pirls_full',
+    'poisson_laplace_pirls_full_beta',
     'poisson_laplace_pirls_beta',
     'poisson_laplace_pirls_full_grid',
 ]
@@ -112,6 +114,8 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                                     'poisson_eb',
                                     'poisson_marginal_beta',
                                     'poisson_laplace_pirls_diag',
+                                    'poisson_laplace_pirls_full',
+                                    'poisson_laplace_pirls_full_beta',
                                     'poisson_laplace_pirls_beta',
                                     'poisson_laplace_pirls_full_grid',
                                 }
@@ -333,6 +337,8 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
         'poisson_eb',
         'poisson_marginal_beta',
         'poisson_laplace_pirls_diag',
+        'poisson_laplace_pirls_full',
+        'poisson_laplace_pirls_full_beta',
         'poisson_laplace_pirls_beta',
         'poisson_laplace_pirls_full_grid',
     }:
@@ -343,6 +349,7 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
             'poisson_marginal_beta': method
             in {
                 'poisson_marginal_beta',
+                'poisson_laplace_pirls_full_beta',
                 'poisson_laplace_pirls_beta',
                 'poisson_laplace_pirls_full_grid',
             },
@@ -352,6 +359,9 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
                 'poisson_laplace_pirls_beta',
                 'poisson_laplace_pirls_full_grid',
             },
+            'poisson_laplace_pirls_full': method
+            in {'poisson_laplace_pirls_full', 'poisson_laplace_pirls_full_beta'},
+            'poisson_marginal_beta_full_psi': method == 'poisson_laplace_pirls_full_beta',
             'poisson_laplace_pirls_sigma_grid': method == 'poisson_laplace_pirls_full_grid',
         }
     return {'bernoulli_laplace_eb': False}
@@ -400,6 +410,8 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_eb',
         'poisson_marginal_beta',
         'poisson_laplace_pirls_diag',
+        'poisson_laplace_pirls_full',
+        'poisson_laplace_pirls_full_beta',
         'poisson_laplace_pirls_beta',
         'poisson_laplace_pirls_full_grid',
     }:
@@ -418,11 +430,17 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_pirls_diag_damping': args.poisson_laplace_pirls_diag_damping,
         'poisson_laplace_pirls_diag_sigma_blend': args.poisson_laplace_pirls_diag_sigma_blend,
         'poisson_laplace_pirls_diag_prior_weight': (args.poisson_laplace_pirls_diag_prior_weight),
+        'poisson_laplace_pirls_full_psi_blend': args.poisson_laplace_pirls_full_psi_blend,
+        'poisson_laplace_pirls_full_prior_weight': (args.poisson_laplace_pirls_full_prior_weight),
+        'poisson_laplace_pirls_full_offdiag_shrink': (
+            args.poisson_laplace_pirls_full_offdiag_shrink
+        ),
     }
     if method in {
         'default',
         'current',
         'poisson_marginal_beta',
+        'poisson_laplace_pirls_full_beta',
         'poisson_laplace_pirls_beta',
         'poisson_laplace_pirls_full_grid',
     }:
@@ -499,6 +517,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-laplace-pirls-diag-damping', type=float, default=0.5)
     parser.add_argument('--poisson-laplace-pirls-diag-sigma-blend', type=float, default=0.5)
     parser.add_argument('--poisson-laplace-pirls-diag-prior-weight', type=float, default=4.0)
+    parser.add_argument('--poisson-laplace-pirls-full-psi-blend', type=float, default=0.5)
+    parser.add_argument('--poisson-laplace-pirls-full-prior-weight', type=float, default=4.0)
+    parser.add_argument('--poisson-laplace-pirls-full-offdiag-shrink', type=float, default=0.0)
     parser.add_argument('--poisson-laplace-pirls-sigma-grid-scales', type=float, nargs='+', default=[0.5, 0.75, 1.0])
     parser.add_argument('--poisson-laplace-pirls-sigma-grid-steps', type=int, default=2)
     parser.add_argument('--poisson-laplace-pirls-sigma-grid-min-d', type=int, default=1)

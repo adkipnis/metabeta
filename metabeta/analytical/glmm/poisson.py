@@ -22,6 +22,7 @@ from metabeta.utils.families import logProbFfx, logProbSigma
 __all__ = [
     'refinePoissonLaplaceEb',
     'refinePoissonLaplacePirlsDiag',
+    'refinePoissonLaplacePirlsFull',
     'refinePoissonLaplacePirlsSigmaGrid',
     'refinePoissonMarginalMeanBeta',
 ]
@@ -285,6 +286,226 @@ def _poissonJointHessianDiag(
     return torch.where(active_m[:, :, None, None], A, eye_q)
 
 
+def _poissonPreparePsiFull(
+    Psi: torch.Tensor,
+    active_q: torch.Tensor,
+    psi_max: float = _POISSON_PSI_EIG_CAP,
+    psi_floor: float = 1e-6,
+) -> torch.Tensor:
+    """Return a masked positive-definite Ψ with inactive dimensions set to identity."""
+    dtype = Psi.dtype
+    q = Psi.shape[-1]
+    eye_q = torch.eye(q, device=Psi.device, dtype=dtype)
+    active_q_f = active_q.to(dtype)
+    active_qq = active_q_f[:, :, None] * active_q_f[:, None, :]
+    inactive_diag = (~active_q).to(dtype)
+
+    Psi = 0.5 * (Psi + Psi.mT)
+    Psi = Psi * active_qq + torch.diag_embed(inactive_diag)
+    Psi = _psdClampEigenvalues(Psi, psi_max)
+    Psi = Psi * active_qq + torch.diag_embed(inactive_diag)
+    Psi = Psi + float(psi_floor) * torch.diag_embed(active_q_f)
+    return 0.5 * (Psi + Psi.mT) + 0.0 * eye_q
+
+
+def _poissonPsiPrecisionFull(
+    Psi: torch.Tensor,
+    active_q: torch.Tensor,
+    psi_max: float = _POISSON_PSI_EIG_CAP,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return stabilized full Ψ and Ψ⁻¹ for active random-effect dimensions."""
+    q = Psi.shape[-1]
+    eye_q = torch.eye(q, device=Psi.device, dtype=Psi.dtype).expand(Psi.shape[0], q, q)
+    Psi_safe = _poissonPreparePsiFull(Psi, active_q, psi_max=psi_max)
+    Psi_inv = _safeSolve(Psi_safe + _adaptiveRidge(Psi_safe), eye_q)
+    return Psi_safe, 0.5 * (Psi_inv + Psi_inv.mT)
+
+
+def _poissonJointPirlsStepFull(
+    beta: torch.Tensor,
+    blups: torch.Tensor,
+    Psi: torch.Tensor,
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    active_d: torch.Tensor,
+    active_q: torch.Tensor,
+    nu_ffx: torch.Tensor | None,
+    tau_ffx: torch.Tensor | None,
+    family_ffx: torch.Tensor | None,
+    damping: float,
+    max_beta_step: float,
+    max_blup_step: float,
+    psi_max: float = _POISSON_PSI_EIG_CAP,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """One Schur-complement Newton/PIRLS step for β and modes under full Ψ."""
+    B, m, _, d = Xm.shape
+    q = Zm.shape[-1]
+    device, dtype = Xm.device, Xm.dtype
+    active_m = mask_m.bool()
+    active_q_f = active_q.to(dtype)
+    active_qq = active_q_f[:, :, None] * active_q_f[:, None, :]
+    Z_eff = Zm * active_q_f[:, None, None, :]
+    Psi_safe, Psi_inv = _poissonPsiPrecisionFull(Psi, active_q, psi_max=psi_max)
+
+    eta = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Z_eff, blups)
+    mu, deriv = _poissonMeanDerivative(eta)
+    resid_eff = (ym - mu) * deriv * mask_n
+    w = (mu * deriv.square()).clamp(min=1e-8) * mask_n
+
+    prior_prec, prior_center = _poissonBetaPriorPrecision(
+        beta, active_d, nu_ffx, tau_ffx, family_ffx
+    )
+    inactive_d_prec = (~active_d).to(dtype)
+
+    score_b = torch.einsum('bmnd,bmn->bd', Xm, resid_eff)
+    score_b = score_b + prior_prec * (prior_center - beta)
+    Hbb = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)
+    Hbb = Hbb + torch.diag_embed(prior_prec + inactive_d_prec)
+
+    score_u = torch.einsum('bmnq,bmn->bmq', Z_eff, resid_eff)
+    score_u = score_u - torch.einsum('bqr,bmr->bmq', Psi_inv, blups)
+    score_u = score_u * active_m[:, :, None] * active_q_f[:, None, :]
+    A = torch.einsum('bmnq,bmn,bmnr->bmqr', Z_eff, w, Z_eff)
+    A = A + Psi_inv[:, None]
+    A = A * active_qq[:, None] + torch.diag_embed((~active_q).to(dtype))[:, None]
+    eye_q = torch.eye(q, device=device, dtype=dtype).expand(B, m, q, q)
+    A = torch.where(active_m[:, :, None, None], A, eye_q)
+    A_safe = A + _adaptiveRidgeBm(A)
+
+    Bmat = torch.einsum('bmnd,bmn,bmnq->bmdq', Xm, w, Z_eff)
+    Ainv_score_u = _safeSolve(A_safe, score_u)
+    Ainv_BT = _safeSolve(A_safe, Bmat.transpose(-1, -2))
+
+    schur = Hbb - torch.einsum('bmdq,bmqr->bdr', Bmat, Ainv_BT)
+    rhs_b = score_b - torch.einsum('bmdq,bmq->bd', Bmat, Ainv_score_u)
+    rhs_b = rhs_b * active_d.to(dtype)
+    delta_beta = _safeSolve(schur + _adaptiveRidge(schur), rhs_b)
+    delta_beta = delta_beta.clamp(-float(max_beta_step), float(max_beta_step))
+    delta_beta = delta_beta * active_d.to(dtype)
+
+    Bt_delta = torch.einsum('bmqd,bd->bmq', Bmat.transpose(-1, -2), delta_beta)
+    delta_u = Ainv_score_u - _safeSolve(A_safe, Bt_delta)
+    delta_u = delta_u.clamp(-float(max_blup_step), float(max_blup_step))
+    delta_u = delta_u * active_m[:, :, None] * active_q_f[:, None, :]
+
+    beta_new = beta + float(damping) * delta_beta
+    beta_new = beta_new.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    beta_new = beta_new.clamp(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
+    beta_new = torch.where(active_d, beta_new, beta)
+    blups_new = blups + float(damping) * delta_u
+    blups_new = blups_new.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    blups_new = blups_new.clamp(-_POISSON_BLUP_CLAMP, _POISSON_BLUP_CLAMP)
+    blups_new = blups_new * active_m[:, :, None] * active_q_f[:, None, :]
+    return beta_new, blups_new, A, Psi_safe
+
+
+def _poissonJointHessianFull(
+    beta: torch.Tensor,
+    blups: torch.Tensor,
+    Psi: torch.Tensor,
+    Zm: torch.Tensor,
+    Xm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    active_q: torch.Tensor,
+    psi_max: float = _POISSON_PSI_EIG_CAP,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return random-effect block Hessians for a full-Ψ joint candidate."""
+    B, m, _, q = Zm.shape
+    device, dtype = Zm.device, Zm.dtype
+    active_m = mask_m.bool()
+    active_q_f = active_q.to(dtype)
+    active_qq = active_q_f[:, :, None] * active_q_f[:, None, :]
+    Z_eff = Zm * active_q_f[:, None, None, :]
+    Psi_safe, Psi_inv = _poissonPsiPrecisionFull(Psi, active_q, psi_max=psi_max)
+
+    eta = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Z_eff, blups)
+    mu, deriv = _poissonMeanDerivative(eta)
+    w = (mu * deriv.square()).clamp(min=1e-8) * mask_n
+    A = torch.einsum('bmnq,bmn,bmnr->bmqr', Z_eff, w, Z_eff)
+    A = A + Psi_inv[:, None]
+    A = A * active_qq[:, None] + torch.diag_embed((~active_q).to(dtype))[:, None]
+    eye_q = torch.eye(q, device=device, dtype=dtype).expand(B, m, q, q)
+    A = torch.where(active_m[:, :, None, None], A, eye_q)
+    return A, Psi_safe
+
+
+def _poissonLaplaceEbTargetFull(
+    beta: torch.Tensor,
+    Psi_lap: torch.Tensor,
+    blups: torch.Tensor,
+    H: torch.Tensor,
+    active_q: torch.Tensor,
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor | None,
+    tau_ffx: torch.Tensor | None,
+    family_ffx: torch.Tensor | None,
+    tau_rfx: torch.Tensor | None,
+    family_sigma_rfx: torch.Tensor | None,
+    mask_d: torch.Tensor | None,
+    sigma_log_jacobian: bool,
+    psi_max: float = _POISSON_PSI_EIG_CAP,
+) -> torch.Tensor:
+    """Laplace-approximated log posterior target for full-Ψ Poisson GLMMs."""
+    B, _, _, d = Xm.shape
+    q = Zm.shape[-1]
+    dtype = Xm.dtype
+    active_q_f = active_q.to(dtype)
+    Z_eff = Zm * active_q_f[:, None, None, :]
+    Psi_safe, Psi_inv = _poissonPsiPrecisionFull(Psi_lap, active_q, psi_max=psi_max)
+
+    eta = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Z_eff, blups)
+    eta_eff = eta.clamp(max=_POISSON_ETA_CLIP_MAX)
+    ll_g = ((ym * eta_eff - torch.exp(eta_eff)) * mask_n).sum(dim=-1)
+
+    q_count = active_q_f.sum(dim=-1)
+    sign_psi, log_det_psi = torch.linalg.slogdet(Psi_safe)
+    log_det_psi = torch.where(sign_psi > 0, log_det_psi, log_det_psi.new_zeros(()))
+    quad_u = torch.einsum('bmq,bqr,bmr->bm', blups, Psi_inv, blups)
+    log_prior_b = -0.5 * (
+        q_count[:, None] * math.log(2.0 * math.pi) + log_det_psi[:, None] + quad_u
+    )
+
+    sign_h, log_det_H = torch.linalg.slogdet(H)
+    log_det_H = torch.where(sign_h > 0, log_det_H, log_det_H.new_zeros(()))
+    laplace_g = ll_g + log_prior_b + 0.5 * q_count[:, None] * math.log(2.0 * math.pi)
+    laplace_g = laplace_g - 0.5 * log_det_H
+    target = (laplace_g * mask_m).sum(dim=-1)
+
+    if nu_ffx is not None and tau_ffx is not None and family_ffx is not None:
+        if mask_d is None:
+            mask_d_lp = torch.ones(B, 1, d, device=beta.device, dtype=dtype)
+        else:
+            mask_d_lp = mask_d[:, :d].to(device=beta.device, dtype=dtype).unsqueeze(1)
+        target = target + logProbFfx(
+            beta.unsqueeze(1),
+            nu_ffx[:, :d].unsqueeze(1),
+            tau_ffx[:, :d].clamp(min=1e-8).unsqueeze(1),
+            family_ffx,
+            mask_d_lp,
+        ).squeeze(1)
+
+    sigma_diag = Psi_safe.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()
+    if tau_rfx is not None and family_sigma_rfx is not None:
+        target = target + logProbSigma(
+            sigma_diag.unsqueeze(1),
+            tau_rfx[:, :q].clamp(min=1e-8).unsqueeze(1),
+            family_sigma_rfx,
+            active_q_f.unsqueeze(1),
+        ).squeeze(1)
+    if sigma_log_jacobian:
+        target = target + (sigma_diag.clamp(min=1e-4).log() * active_q_f).sum(dim=-1)
+
+    return target
+
+
 def refinePoissonLaplacePirlsDiag(
     stats: dict[str, torch.Tensor],
     Xm: torch.Tensor,
@@ -502,6 +723,239 @@ def refinePoissonLaplacePirlsDiag(
         out['poisson_laplace_pirls_accept'] = accept.to(dtype)
         out['poisson_laplace_pirls_target'] = final_target
         out['poisson_laplace_pirls_base_target'] = base_target
+    return out
+
+
+def refinePoissonLaplacePirlsFull(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor | None = None,
+    tau_ffx: torch.Tensor | None = None,
+    family_ffx: torch.Tensor | None = None,
+    tau_rfx: torch.Tensor | None = None,
+    family_sigma_rfx: torch.Tensor | None = None,
+    mask_d: torch.Tensor | None = None,
+    mask_q: torch.Tensor | None = None,
+    n_outer: int = 4,
+    n_pirls: int = 1,
+    n_final: int = 2,
+    damping: float = 0.5,
+    psi_blend: float = 0.5,
+    psi_prior_weight: float = 4.0,
+    psi_max: float = _POISSON_PSI_EIG_CAP,
+    offdiag_shrink: float = 0.0,
+    max_beta_step: float = 0.75,
+    max_blup_step: float = 1.0,
+    accept_only_improved: bool = True,
+    return_diagnostics: bool = False,
+) -> dict[str, torch.Tensor]:
+    """Fixed-budget full-Σ Laplace-PIRLS with EB covariance updates.
+
+    This variant keeps the same joint β/u PIRLS geometry as the diagonal path, but estimates
+    the full random-effect covariance from posterior second moments inside the outer loop.
+    It is intentionally a separate candidate path until its accuracy/stability is known.
+    """
+    d = Xm.shape[-1]
+    q = Zm.shape[-1]
+    if d == 0 or q == 0 or n_outer <= 0:
+        return stats
+
+    B = Xm.shape[0]
+    device, dtype = Xm.device, Xm.dtype
+    active_d = (
+        mask_d[:, :d].to(device=device).bool()
+        if mask_d is not None
+        else torch.ones(B, d, device=device, dtype=torch.bool)
+    )
+    active_q = (
+        mask_q[:, :q].to(device=device).bool()
+        if mask_q is not None
+        else torch.ones(B, q, device=device, dtype=torch.bool)
+    )
+    active_q_f = active_q.to(dtype)
+    active_qq = active_q_f[:, :, None] * active_q_f[:, None, :]
+    active_m = mask_m.bool()
+    m_active = mask_m.to(dtype).sum(dim=1, keepdim=True).clamp(min=1.0)
+
+    beta_base = stats['beta_est'][:, :d].detach()
+    beta = beta_base.clone().nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    beta = beta.clamp(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
+    if 'blup_est' in stats:
+        blups = stats['blup_est'][:, :, :q].detach().clone()
+    else:
+        blups = Zm.new_zeros(B, Zm.shape[1], q)
+    blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    blups = blups.clamp(-_POISSON_BLUP_CLAMP, _POISSON_BLUP_CLAMP)
+    blups = blups * mask_m[:, :, None] * active_q_f[:, None, :]
+
+    if 'Psi_lap' in stats:
+        Psi_base = stats['Psi_lap'][:, :q, :q].detach()
+    elif 'sigma_rfx_est' in stats:
+        Psi_base = torch.diag_embed(stats['sigma_rfx_est'][:, :q].detach().square())
+    else:
+        Psi_base = torch.eye(q, device=device, dtype=dtype).expand(B, q, q) * 0.01
+    Psi_base = _poissonPreparePsiFull(Psi_base, active_q, psi_max=psi_max)
+    Psi = Psi_base.clone()
+
+    if tau_rfx is not None:
+        sigma0 = (
+            tau_rfx[:, :q].to(device=device, dtype=dtype).clamp(min=1e-4, max=math.sqrt(psi_max))
+        )
+        Psi0 = torch.diag_embed(sigma0.square())
+    else:
+        Psi0 = Psi_base
+    Psi0 = _poissonPreparePsiFull(Psi0, active_q, psi_max=psi_max)
+
+    A = None
+    for _ in range(n_outer):
+        for _ in range(max(int(n_pirls), 1)):
+            beta, blups, A, Psi = _poissonJointPirlsStepFull(
+                beta,
+                blups,
+                Psi,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                active_d,
+                active_q,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                damping=damping,
+                max_beta_step=max_beta_step,
+                max_blup_step=max_blup_step,
+                psi_max=psi_max,
+            )
+        eye_q = torch.eye(q, device=device, dtype=dtype).expand(B, Zm.shape[1], q, q)
+        A_inv = _safeSolve(A + _adaptiveRidgeBm(A), eye_q) * mask_m[:, :, None, None]
+        second_moment = torch.einsum('bmq,bmr->bmqr', blups, blups) + A_inv
+        second_moment = second_moment * mask_m[:, :, None, None] * active_qq[:, None]
+        Psi_moment = (second_moment.sum(dim=1) + float(psi_prior_weight) * Psi0) / (
+            m_active[:, :, None] + float(psi_prior_weight)
+        )
+        if offdiag_shrink > 0.0:
+            diag_moment = torch.diag_embed(Psi_moment.diagonal(dim1=-2, dim2=-1))
+            Psi_moment = (1.0 - float(offdiag_shrink)) * Psi_moment
+            Psi_moment = Psi_moment + float(offdiag_shrink) * diag_moment
+        Psi = (1.0 - float(psi_blend)) * Psi + float(psi_blend) * Psi_moment
+        Psi = _poissonPreparePsiFull(Psi, active_q, psi_max=psi_max)
+
+    for _ in range(max(int(n_final), 0)):
+        beta, blups, A, Psi = _poissonJointPirlsStepFull(
+            beta,
+            blups,
+            Psi,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            active_d,
+            active_q,
+            nu_ffx,
+            tau_ffx,
+            family_ffx,
+            damping=damping,
+            max_beta_step=max_beta_step,
+            max_blup_step=max_blup_step,
+            psi_max=psi_max,
+        )
+
+    if A is None:
+        A, Psi = _poissonJointHessianFull(
+            beta, blups, Psi, Zm, Xm, mask_n, mask_m, active_q, psi_max=psi_max
+        )
+
+    eye_q = torch.eye(q, device=device, dtype=dtype).expand(B, Zm.shape[1], q, q)
+    H_inv = _safeSolve(A + _adaptiveRidgeBm(A), eye_q) * mask_m[:, :, None, None]
+    blup_var = H_inv.diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
+    blup_var = blup_var * mask_m[:, :, None] * active_q_f[:, None, :]
+    sigma = Psi.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()
+    sigma_base = Psi_base.diagonal(dim1=-2, dim2=-1).clamp(min=0.0).sqrt()
+
+    final_target = _poissonLaplaceEbTargetFull(
+        beta,
+        Psi,
+        blups,
+        A,
+        active_q,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        nu_ffx,
+        tau_ffx,
+        family_ffx,
+        tau_rfx,
+        family_sigma_rfx,
+        mask_d,
+        sigma_log_jacobian=True,
+        psi_max=psi_max,
+    )
+    base_A, base_Psi = _poissonJointHessianFull(
+        beta_base,
+        stats.get('blup_est', blups)[:, :, :q]
+        .detach()
+        .clamp(-_POISSON_BLUP_CLAMP, _POISSON_BLUP_CLAMP)
+        * mask_m[:, :, None]
+        * active_q_f[:, None, :],
+        Psi_base,
+        Zm,
+        Xm,
+        mask_n,
+        mask_m,
+        active_q,
+        psi_max=psi_max,
+    )
+    base_target = _poissonLaplaceEbTargetFull(
+        beta_base,
+        base_Psi,
+        stats.get('blup_est', blups)[:, :, :q]
+        .detach()
+        .clamp(-_POISSON_BLUP_CLAMP, _POISSON_BLUP_CLAMP)
+        * mask_m[:, :, None]
+        * active_q_f[:, None, :],
+        base_A,
+        active_q,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        nu_ffx,
+        tau_ffx,
+        family_ffx,
+        tau_rfx,
+        family_sigma_rfx,
+        mask_d,
+        sigma_log_jacobian=True,
+        psi_max=psi_max,
+    )
+    accept = torch.isfinite(final_target)
+    if accept_only_improved:
+        accept = accept & (final_target >= base_target - 1e-5)
+
+    out = dict(stats)
+    out['beta_est'] = torch.where(accept[:, None], beta, beta_base)
+    out['sigma_rfx_est'] = torch.where(accept[:, None], sigma, sigma_base)
+    out['blup_est'] = torch.where(accept[:, None, None], blups, stats['blup_est'][:, :, :q])
+    if 'blup_var' in stats:
+        out['blup_var'] = torch.where(accept[:, None, None], blup_var, stats['blup_var'][:, :, :q])
+    else:
+        out['blup_var'] = blup_var
+    out['Psi_lap'] = torch.where(accept[:, None, None], Psi, Psi_base)
+    out['Psi_lap'] = _poissonPreparePsiFull(out['Psi_lap'], active_q, psi_max=psi_max)
+    if return_diagnostics:
+        out['poisson_laplace_pirls_full_accept'] = accept.to(dtype)
+        out['poisson_laplace_pirls_full_target'] = final_target
+        out['poisson_laplace_pirls_full_base_target'] = base_target
     return out
 
 

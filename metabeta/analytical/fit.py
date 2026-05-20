@@ -12,6 +12,7 @@ from metabeta.analytical.glmm.bernoulli import (
 from metabeta.analytical.glmm.poisson import (
     refinePoissonLaplaceEb,
     refinePoissonLaplacePirlsDiag,
+    refinePoissonLaplacePirlsFull,
     refinePoissonLaplacePirlsSigmaGrid,
     refinePoissonMarginalMeanBeta,
 )
@@ -355,6 +356,14 @@ def glmm(
     poisson_laplace_pirls_diag_prior_weight = kwargs.pop(
         'poisson_laplace_pirls_diag_prior_weight', 4.0
     )
+    poisson_laplace_pirls_full = kwargs.pop('poisson_laplace_pirls_full', False)
+    poisson_laplace_pirls_full_psi_blend = kwargs.pop('poisson_laplace_pirls_full_psi_blend', 0.5)
+    poisson_laplace_pirls_full_prior_weight = kwargs.pop(
+        'poisson_laplace_pirls_full_prior_weight', 4.0
+    )
+    poisson_laplace_pirls_full_offdiag_shrink = kwargs.pop(
+        'poisson_laplace_pirls_full_offdiag_shrink', 0.0
+    )
     poisson_laplace_pirls_sigma_grid = kwargs.pop(
         'poisson_laplace_pirls_sigma_grid', bool(poisson_laplace_pirls_diag)
     )
@@ -588,7 +597,6 @@ def glmm(
                 _addLaplaceEbSkippedDiagnostics(stats, gate, Xm.dtype)
     elif likelihood_family == 2:
         stats = lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
-        poisson_pql_Psi_lap = stats['Psi_lap'].detach() if poisson_marginal_beta_full_psi else None
         if map_refine and poisson_laplace_eb_mode != 'off' and Zm.shape[-1] > 0:
             gate = torch.ones(Xm.shape[0], device=Xm.device, dtype=torch.bool)
             stats = refinePoissonLaplaceEb(
@@ -639,7 +647,34 @@ def glmm(
                 sigma_prior_weight=poisson_laplace_pirls_diag_prior_weight,
                 return_diagnostics=poisson_laplace_eb_diagnostics,
             )
+        if map_refine and poisson_laplace_pirls_full and Zm.shape[-1] > 0:
+            stats = refinePoissonLaplacePirlsFull(
+                stats,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx=map_priors['nu_ffx'],
+                tau_ffx=map_priors['tau_ffx'],
+                family_ffx=map_priors['family_ffx'],
+                tau_rfx=map_priors['tau_rfx'],
+                family_sigma_rfx=map_priors['family_sigma_rfx'],
+                mask_d=mask_d,
+                mask_q=mask_q,
+                n_outer=poisson_laplace_pirls_diag_outer,
+                n_pirls=poisson_laplace_pirls_diag_inner,
+                n_final=poisson_laplace_pirls_diag_final,
+                damping=poisson_laplace_pirls_diag_damping,
+                psi_blend=poisson_laplace_pirls_full_psi_blend,
+                psi_prior_weight=poisson_laplace_pirls_full_prior_weight,
+                offdiag_shrink=poisson_laplace_pirls_full_offdiag_shrink,
+                return_diagnostics=poisson_laplace_eb_diagnostics,
+            )
         if map_refine and poisson_marginal_beta and Zm.shape[-1] > 0:
+            poisson_marginal_Psi_lap = (
+                stats['Psi_lap'].detach() if poisson_marginal_beta_full_psi else None
+            )
             stats = refinePoissonMarginalMeanBeta(
                 stats,
                 Xm,
@@ -657,7 +692,7 @@ def glmm(
                 min_d=poisson_marginal_beta_min_d,
                 max_q=poisson_marginal_beta_max_q,
                 max_step=poisson_marginal_beta_max_step,
-                marginal_psi_lap=poisson_pql_Psi_lap,
+                marginal_psi_lap=poisson_marginal_Psi_lap,
                 full_psi_min_q=poisson_marginal_beta_full_psi_min_q,
                 return_diagnostics=poisson_laplace_eb_diagnostics,
             )
@@ -702,5 +737,6 @@ __all__ = [
     'refineNormalMapSrfx',
     'refinePoissonLaplaceEb',
     'refinePoissonLaplacePirlsDiag',
+    'refinePoissonLaplacePirlsFull',
     'refinePoissonMarginalMeanBeta',
 ]
