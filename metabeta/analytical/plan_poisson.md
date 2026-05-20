@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-20 (diagnostic complete)
+Last updated: 2026-05-20 (Laplace-PIRLS proposal reviewed)
 
 Goal
 ----
@@ -64,9 +64,13 @@ What This Means
   log-link-specific marginal mean calibration.
 - Marginal β and the σ-offset grid are the retained Poisson-specific fixes. They improve
   medium/large/huge FFX while leaving σ and BLUP unchanged.
-- The largest remaining gaps are now not a reason to add broad machinery. They should be
-  localized first: likely candidates are `q > 2`, high-count tails, non-accepted grid rows,
-  or cases where the β-only grid cannot compensate for a materially wrong σ.
+- The current path already contains much of a fixed-budget Laplace-PIRLS estimator:
+  groupwise Newton modes, a moment covariance update, and a Schur β solve in RAW/PQL,
+  followed by diagonal Laplace-EB. A full rewrite is therefore a comparator, not the next
+  default path.
+- The largest remaining gap is likely covariance-aware Poisson marginalization. The current
+  marginal β correction uses only diagonal `σ_rfx`; this is weakest on `q > 2` rows where
+  full `Ψ_lap` correlations may matter.
 - BLUP remains intentionally conservative. Changing Poisson BLUPs should be postponed
   until FFX/σ diagnostics show a clear, contained failure mode.
 
@@ -79,6 +83,9 @@ Rejected Or Low-Priority Work
 - Directly writing σ-grid candidates back to output: tested and rejected because FFX
   improved but σ regressed.
 - Broad BLUP mode replacement: tested and rejected because it regressed most cells.
+- Full Laplace-PIRLS replacement as default: postpone. It is statistically plausible, but
+  overlaps heavily with the current RAW/PQL machinery and adds risk before we test the
+  smaller covariance-aware fixes.
 - Full 8k Poisson benchmark: postpone until the residual INLA gap has been diagnosed and
   one more targeted patch has either passed or been rejected.
 
@@ -135,23 +142,34 @@ is 69–78% and median dist gain is 0.59–0.69. The EB σ improvement is real a
 be disrupted by any new patch.
 
 Answer to the primary diagnostic question: the INLA gap on medium-p datasets is
-concentrated in `q > 2` rows that the current sigma grid does not cover (sg_gate=0). This
-unambiguously selects the first candidate patch.
+concentrated in `q > 2` rows that the current diagonal sigma grid does not cover
+(sg_gate=0). This selects a covariance-aware marginal β patch before broader machinery.
 
-Next Patch
-----------
+Next Directions
+---------------
 
-Add a guarded `q > 2` marginal-beta correction, β-only, modelled on the existing
-`q <= 2` sigma-offset grid:
+1. **Full-Ψ marginal β correction.**
+   Replace/extend the current offset `0.5 * sum_j z_j² σ_j²` with
+   `0.5 * zᵀ Ψ_lap z`, using RAW/PQL full covariance when `q > 2`. Gate to `d >= 5` and
+   write back β only; keep EB σ and RAW/PQL BLUP unchanged.
 
-- Gate: `d >= 5` and `q > 2` (i.e., where mb_gate=1 and sg_gate=0).
-- Try a small set of σ scales (e.g., 3–4 candidates: 0.5×, 0.75×, 1.0×, 1.25× EB σ).
-- Accept by AGQ marginal posterior, write back β only; keep EB σ and RAW/PQL BLUP.
-- Do not touch q ≤ 2 rows; their path is already better and σ-grid-covered.
+2. **Structured q > 2 covariance candidates.**
+   If full-Ψ marginal β helps, add a small β-only candidate set for `q > 2`: diagonal EB,
+   full RAW/PQL Ψ, off-diagonal-shrunk Ψ, and one downscaled variance candidate. Accept by
+   a cheap Laplace/AGQ-style target where feasible; do not write σ/BLUP.
 
-Prototype the patch, run the required benchmark on small+medium cells, and run the
-direction diagnostic on medium-p-mixed/train to confirm β moves toward INLA without
-regressing σ.
+3. **Fixed-budget Laplace-PIRLS comparator.**
+   Prototype only as a method flag, not a default: 3-5 joint β/u Newton passes plus moment
+   Ψ update and Schur solve. Keep it if it clearly beats current on small+medium without
+   BLUP/σ regressions.
+
+4. **Prior-aware Poisson initialization.**
+   Add fixed-effect prior penalties to Poisson IRLS/PQL β solves if the above leaves a
+   consistent β gap. This is low-risk but probably modest.
+
+Run each patch on small+medium 1k first, then large/huge 1k only if there is no regression.
+Use row-level INLA diagnostics to confirm β moves toward INLA without disrupting the
+existing σ gains.
 
 Commands
 --------
