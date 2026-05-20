@@ -1,4 +1,4 @@
-import warnings
+import logging
 
 import torch
 from torch import nn
@@ -28,6 +28,8 @@ from metabeta.posthoc.gaussian_local import (
     analyticalBLUPStats,
     gaussianHybrid,
 )
+
+logger = logging.getLogger(__name__)
 
 constrainSigma, unconstrainSigma, logDetJacobian = getConstrainers(method='softplus')
 CLAMP = 20.0
@@ -487,11 +489,10 @@ class Approximator(nn.Module):
                 if self.cfg.analytical_refinement == 'light' and not getattr(
                     self, '_refinement_upgraded', False
                 ):
-                    warnings.warn(
+                    logger.warning(
                         "Model config has analytical_refinement='light' but precomputed stats "
                         "(full MAP+EB) were found in the batch. Upgrading to 'full' in memory "
-                        "and in the exported model config.",
-                        stacklevel=2,
+                        "and in the exported model config."
                     )
                     self.cfg.analytical_refinement = 'full'
                     self._refinement_upgraded = True
