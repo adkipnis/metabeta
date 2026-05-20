@@ -12,7 +12,7 @@ from metabeta.simulation import Prior, Synthesizer, Simulator, hypersample
 from metabeta.analytical.glmm.pql import lmmBernoulli, lmmPoisson
 from metabeta.analytical.fit import glmm
 from metabeta.analytical.linalg import _adaptiveRidge, _adaptiveRidgeBm, _eighWithJitter, _safeSolve
-from metabeta.analytical.glmm.map import refineBernoulliLaplaceEb
+from metabeta.analytical.glmm.bernoulli import refineBernoulliLaplaceEb
 from metabeta.analytical.lmm.map import refineNormalMapSrfx
 
 
@@ -914,9 +914,13 @@ def test_approximator_data_statistics_smoke(likelihood_family):
         'n': bt['n_total'].long(),
         'm': bt['mask_m'].sum(dim=1).long(),
         'nu_ffx': torch.as_tensor(np.stack([ds['nu_ffx'] for ds in datasets]), dtype=torch.float32),
-        'tau_ffx': torch.as_tensor(np.stack([ds['tau_ffx'] for ds in datasets]), dtype=torch.float32),
+        'tau_ffx': torch.as_tensor(
+            np.stack([ds['tau_ffx'] for ds in datasets]), dtype=torch.float32
+        ),
         'family_ffx': torch.as_tensor([int(ds['family_ffx']) for ds in datasets], dtype=torch.long),
-        'tau_rfx': torch.as_tensor(np.stack([ds['tau_rfx'] for ds in datasets]), dtype=torch.float32),
+        'tau_rfx': torch.as_tensor(
+            np.stack([ds['tau_rfx'] for ds in datasets]), dtype=torch.float32
+        ),
         'family_sigma_rfx': torch.as_tensor(
             [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
         ),
