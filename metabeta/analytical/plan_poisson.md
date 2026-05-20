@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-20 (PIRLS + marginal-mean β hybrid tested through large rows)
+Last updated: 2026-05-20 (full-candidate PIRLS sigma grid tested on small/medium rows)
 
 Goal
 ----
@@ -14,8 +14,9 @@ downstream models.
 The current EB/grid path improved strongly over RAW/PQL, but the remaining INLA gap looks
 like missing joint β/u/σ geometry rather than a missing scalar correction. A fixed-budget
 diagonal-Σ Laplace-PIRLS prototype improves small-row σ and BLUP relative to the relaxed
-EB/grid prototype. Adding the marginal-mean β correction on top also improves small-row
-FFX beyond relaxed current while avoiding the slower σ grid.
+EB/grid prototype. Adding marginal-mean β correction helps FFX, and a full-candidate sigma
+grid around PIRLS closes a substantial part of the remaining small/medium FFX gap by
+writing back β, σ, and BLUPs together.
 
 Current Working Model
 ---------------------
@@ -65,13 +66,16 @@ glmm(
     poisson_laplace_pirls_diag=True,
     poisson_marginal_beta=True,
     poisson_marginal_beta_min_d=1,
+    poisson_laplace_pirls_sigma_grid=True,
     poisson_sigma_grid=False,
 )
 ```
 
-In the benchmark this is exposed as `poisson_laplace_pirls_beta`. It uses PIRLS for
-σ/BLUP geometry and then applies the marginal-mean β correction. It should remain opt-in
-until medium/large rows are checked.
+In the benchmark this is exposed as `poisson_laplace_pirls_full_grid`. It uses PIRLS for
+σ/BLUP geometry, applies the marginal-mean β correction, then evaluates a small diagonal σ
+grid. Each σ candidate gets a few fixed-σ joint β/u PIRLS steps and is accepted by the
+same diagonal Laplace target. Unlike the older σ grid, it writes back the full candidate.
+It should remain opt-in until large rows and scale-choice diagnostics are checked.
 
 Current Evidence
 ----------------
@@ -80,22 +84,22 @@ First 1000 rows per cell, sequential CPU runs on 2026-05-20. Lower NRMSE is bett
 INLA values are the current first-1000 diagonal R-INLA references. "Relaxed current" means
 `current` with `poisson_marginal_beta_min_d=1` and `poisson_sigma_grid_min_d=1`.
 
-| Dataset | part | RAW FFX | default FFX | relaxed FFX | PIRLS FFX | PIRLS+β FFX | INLA FFX | relaxed σ | PIRLS+β σ | INLA σ | relaxed BLUP | PIRLS+β BLUP | INLA BLUP | PIRLS+β ms/ds |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-p-mixed | train | 0.4806 | 0.4269 | 0.2839 | 0.3054 | 0.2585 | 0.1835 | 0.5272 | 0.4465 | 0.3404 | 0.5713 | 0.5413 | 0.4936 | 31.4 |
-| small-p-sampled | valid | 0.7351 | 0.6375 | 0.3277 | 0.4354 | 0.3182 | 0.2276 | 0.5645 | 0.4955 | 0.4356 | 0.5823 | 0.5539 | 0.5309 | 28.9 |
-| small-p-sampled | test | 0.6525 | 0.5429 | 0.2982 | 0.3684 | 0.2797 | 0.1997 | 0.6323 | 0.4841 | 0.3966 | 0.6708 | 0.5533 | 0.5281 | 30.4 |
+| Dataset | part | RAW FFX | default FFX | relaxed FFX | PIRLS+β FFX | full-grid FFX | INLA FFX | relaxed σ | PIRLS+β σ | full-grid σ | INLA σ | relaxed BLUP | PIRLS+β BLUP | full-grid BLUP | INLA BLUP | full-grid ms/ds |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-p-mixed | train | 0.4806 | 0.4269 | 0.2839 | 0.2585 | 0.2218 | 0.1835 | 0.5272 | 0.4465 | 0.4939 | 0.3404 | 0.5713 | 0.5413 | 0.5272 | 0.4936 | 32.2 |
+| small-p-sampled | valid | 0.7351 | 0.6375 | 0.3277 | 0.3182 | 0.2518 | 0.2276 | 0.5645 | 0.4955 | 0.5028 | 0.4356 | 0.5823 | 0.5539 | 0.5394 | 0.5309 | 30.6 |
+| small-p-sampled | test | 0.6525 | 0.5429 | 0.2982 | 0.2797 | 0.2201 | 0.1997 | 0.6323 | 0.4841 | 0.4661 | 0.3966 | 0.6708 | 0.5533 | 0.5275 | 0.5281 | 31.6 |
 
 Medium/large first-1000 validation:
 
-| Dataset | part | current FFX | PIRLS FFX | PIRLS+β FFX | INLA FFX | current σ | PIRLS+β σ | INLA σ | current BLUP | PIRLS+β BLUP | INLA BLUP | current ms/ds | PIRLS+β ms/ds |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| medium-p-mixed | train | 0.3587 | 0.3529 | 0.3391 | 0.1675 | 0.5695 | 0.4798 | 0.3214 | 0.6445 | 0.5392 | 0.4789 | 73.8 | 59.2 |
-| medium-p-sampled | valid | 0.4333 | 0.5457 | 0.3989 | 0.2146 | 0.5646 | 0.5274 | 0.4209 | 0.7509 | 0.6896 | 0.5618 | 73.1 | 57.7 |
-| medium-p-sampled | test | 0.3779 | 0.4247 | 0.3565 | 0.2267 | 0.5979 | 0.5056 | 0.3883 | 0.6261 | 0.5848 | 0.5849 | 72.5 | 56.8 |
-| large-p-mixed | train | 0.4962 | 0.5757 | 0.4723 | 0.1778 | 0.6788 | 0.7117 | 0.3076 | 0.9667 | 0.7726 | 0.5001 | 79.9 | 66.9 |
-| large-p-sampled | valid | 0.5042 | 0.7046 | 0.5161 | 0.2467 | 0.7873 | 0.5977 | 0.4232 | 0.7538 | 0.7006 | 0.5870 | 78.0 | 65.3 |
-| large-p-sampled | test | 0.5673 | 0.6226 | 0.5386 | 0.2186 | 0.6296 | 0.7846 | 0.3439 | 0.9427 | 0.8512 | 0.5618 | 83.1 | 72.2 |
+| Dataset | part | current FFX | PIRLS+β FFX | full-grid FFX | INLA FFX | current σ | PIRLS+β σ | full-grid σ | INLA σ | current BLUP | PIRLS+β BLUP | full-grid BLUP | INLA BLUP | current ms/ds | full-grid ms/ds |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| medium-p-mixed | train | 0.3587 | 0.3391 | 0.2674 | 0.1675 | 0.5695 | 0.4798 | 0.4555 | 0.3214 | 0.6445 | 0.5392 | 0.5231 | 0.4789 | 69.1 | 59.5 |
+| medium-p-sampled | valid | 0.4333 | 0.3989 | 0.3309 | 0.2146 | 0.5646 | 0.5274 | 0.5982 | 0.4209 | 0.7509 | 0.6896 | 0.6370 | 0.5618 | 72.3 | 61.1 |
+| medium-p-sampled | test | 0.3779 | 0.3565 | 0.2966 | 0.2267 | 0.5979 | 0.5056 | 0.5056 | 0.3883 | 0.6261 | 0.5848 | 0.5607 | 0.5849 | 67.6 | 58.3 |
+| large-p-mixed | train | 0.4962 | 0.4723 | n/t | 0.1778 | 0.6788 | 0.7117 | n/t | 0.3076 | 0.9667 | 0.7726 | n/t | 0.5001 | 79.9 | n/t |
+| large-p-sampled | valid | 0.5042 | 0.5161 | n/t | 0.2467 | 0.7873 | 0.5977 | n/t | 0.4232 | 0.7538 | 0.7006 | n/t | 0.5870 | 78.0 | n/t |
+| large-p-sampled | test | 0.5673 | 0.5386 | n/t | 0.2186 | 0.6296 | 0.7846 | n/t | 0.3439 | 0.9427 | 0.8512 | n/t | 0.5618 | 83.1 | n/t |
 
 Useful comparator ladder from the same run:
 
@@ -109,41 +113,56 @@ Useful comparator ladder from the same run:
   on all small rows without invoking the σ grid.
 - On medium rows, `poisson_laplace_pirls_beta` improves FFX, σ, BLUP, and runtime versus
   current in all three cells.
+- `poisson_laplace_pirls_full_grid` is the first Poisson patch that substantially closes
+  the remaining small/medium FFX gap. It improves FFX on every small and medium row and
+  improves BLUP on every small and medium row. σ improves on small-test and medium-mixed,
+  is roughly neutral on medium-test, and regresses on small-mixed/small-valid/medium-valid.
 - On large rows, `poisson_laplace_pirls_beta` improves FFX in mixed/test and BLUP in all
-  cells, but regresses FFX slightly on sampled-valid and regresses σ on mixed/test.
+  cells, but regresses FFX slightly on sampled-valid and regresses σ on mixed/test. The
+  full-grid path has not been checked on large rows yet.
 
 Assessment
 ----------
 
 - Poisson is clearly improved over RAW, but it is not yet INLA-competitive.
-- FFX is the main gap. The PIRLS+β hybrid remains about `0.075-0.105` NRMSE behind INLA
-  on small rows, `0.13-0.18` behind on medium, and `0.29-0.32` behind on large.
+- FFX is the main gap. The full-candidate grid reduces the residual small-row FFX gap to
+  about `0.020-0.038` NRMSE and the medium-row gap to about `0.070-0.116`. Large rows are
+  still represented by the older PIRLS+β numbers and remain about `0.29-0.32` behind INLA.
 - The first PIRLS prototype confirms the joint-geometry hypothesis for σ/BLUP. The hybrid
   result confirms that PIRLS geometry feeds the marginal-mean β correction better than the
   old EB/grid geometry.
-- σ is better than RAW after EB, but still materially worse than INLA. PIRLS+β helps σ on
-  small and medium rows, but large mixed/test show σ regressions, so a broad default needs
-  either a σ guard or a tuned covariance update.
+- σ is better than RAW after EB, but still materially worse than INLA. The full-candidate
+  grid can trade σ accuracy for better β/BLUP under the Laplace target, so we need scale
+  diagnostics before treating it as a universal default.
 - BLUP is conservative by design. RAW/PQL BLUP fallback avoids previous regressions, but
   INLA is better in the current table, especially large mixed/test rows.
 - The remaining gap likely reflects Poisson-specific β/σ/u coupling under the log link.
   More β-only optimization is unlikely to close it.
 - Wrong σ directly distorts the marginal mean through the log link. If σ is too small or
   too large, β-only marginal corrections tend to under- or over-correct.
-- The current σ grid is especially limited because it uses σ candidates to improve β, then
-  writes back β only. This does not let β, BLUPs, and σ repeatedly adapt to each other.
+- The old σ grid is especially limited because it uses σ candidates to improve β, then
+  writes back β only. The new full-candidate grid directly addresses this by writing back
+  β, σ, and BLUPs from the winning Laplace-scored candidate.
 
 Next Directions
 ---------------
 
-1. **Add a lightweight PIRLS+β guard before defaulting.**
-   PIRLS+β is clearly better on small/medium, but large rows are not uniformly safe. Use
-   cheap internal diagnostics to reject the PIRLS σ/BLUP writeback when the diagonal
-   covariance update looks unreliable, while still allowing the marginal β correction when
-   it improves the existing target. Candidate guards: large σ ratio to EB/current,
-   Laplace-target loss, or excessive marginal correction magnitude.
+1. **Diagnose full-grid scale choices and σ tradeoffs.**
+   The full-candidate grid is now the most promising patch. Before making it default,
+   inspect accepted scales by row type and by error deltas. The key question is whether σ
+   regressions are acceptable because β/BLUP improve, or whether the Laplace target is
+   over-preferring high-variance candidates in some rows.
 
-2. **Tune the PIRLS covariance update against the large-row pattern.**
+2. **Validate the full-candidate grid on large rows without tuning.**
+   Do not tune against large yet. First run the same opt-in method on large to see whether
+   the small/medium FFX gain survives and whether the known σ regressions worsen.
+
+3. **If σ regressions matter, try a conservative full-grid guard.**
+   Candidate guards: reject extreme accepted scale factors, require bounded marginal-mean
+   offset changes, or add a small σ-distance penalty to the candidate target. Prefer one
+   simple guard over multiple row-specific gates.
+
+4. **Tune the PIRLS covariance update only after full-grid validation.**
    The current diagonal update is:
 
    ```text
@@ -153,7 +172,7 @@ Next Directions
    Useful knobs are stronger `nu0`, lower log-σ blend, smaller PIRLS damping, and final
    fixed-σ PIRLS steps. Tune only against the large σ regressions, not as a broad grid.
 
-3. **Keep accept/reject by one coherent cheap Laplace target.**
+5. **Keep accept/reject by one coherent cheap Laplace target.**
    Compare joint candidates with the same approximate Laplace objective:
 
    ```text
@@ -168,14 +187,12 @@ Next Directions
    jumps. Do not use RAW/PQL BLUP fallback inside the joint candidate; fallback only if the
    whole candidate fails or loses.
 
-4. **Only after guarded diagonal PIRLS+β is stable, test full Σ.**
+6. **Only after guarded diagonal PIRLS+full-grid is stable, test full Σ.**
    Full covariance is cheap for `q <= 5`, but it adds instability risk. Test it inside the
    joint Laplace-PIRLS solver, not as another posthoc marginal β correction.
 
-5. **Use sigma-grid rescue only after the joint prototype.**
-   If the diagonal solver helps but has identifiable failure rows, test a targeted rescue
-   that writes back the full candidate: β, σ, and BLUPs. Do not prioritize the old β-only
-   grid as the main route.
+7. **Retire the old β-only sigma grid if full-candidate grid holds up.**
+   The older grid is slower than PIRLS+β and less coherent than full-candidate writeback.
 
 Low-Priority Or Rejected
 ------------------------
