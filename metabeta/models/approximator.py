@@ -481,7 +481,10 @@ class Approximator(nn.Module):
         inputs = self._inputs(data)
         summary_l_raw = self.summarizer_l(inputs, mask=data['mask_n'])
         if stats is None and self.analytical_context:
-            stats = self._dataStatistics(data)
+            if 'stats' in data and not getattr(self, 'live_compute_fits', False):
+                stats = data['stats']
+            else:
+                stats = self._dataStatistics(data)
 
         # Global path: augment per-group summaries with REML point estimates before pooling.
         summary_l_with_stats = self._addMetadata(summary_l_raw, data, local=True, stats=stats)
