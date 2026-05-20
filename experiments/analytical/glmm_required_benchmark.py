@@ -34,6 +34,7 @@ METHODS = [
     'poisson_laplace_pirls_full_grid',
     'poisson_laplace_pirls_sigma_avg',
     'poisson_laplace_pirls_sigma_avg_is',
+    'poisson_laplace_target_refine',
 ]
 FAMILIES = ['n', 'b', 'p']
 
@@ -332,6 +333,12 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
             'bernoulli_laplace_eb': False,
             'normal_laplace_eb': False,
             'poisson_laplace_eb': False,
+            'poisson_marginal_beta': False,
+            'poisson_laplace_pirls_diag': False,
+            'poisson_laplace_pirls_full': False,
+            'poisson_laplace_pirls_sigma_grid': False,
+            'poisson_laplace_pirls_sigma_average': False,
+            'poisson_laplace_target_refine': False,
         }
     if method == 'bernoulli_eb':
         return {'bernoulli_laplace_eb': 'bernoulli_eb', 'normal_laplace_eb': False}
@@ -347,6 +354,7 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
         'poisson_laplace_pirls_full_grid',
         'poisson_laplace_pirls_sigma_avg',
         'poisson_laplace_pirls_sigma_avg_is',
+        'poisson_laplace_target_refine',
     }:
         return {
             'bernoulli_laplace_eb': False,
@@ -360,6 +368,7 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
                 'poisson_laplace_pirls_full_grid',
                 'poisson_laplace_pirls_sigma_avg',
                 'poisson_laplace_pirls_sigma_avg_is',
+                'poisson_laplace_target_refine',
             },
             'poisson_laplace_pirls_diag': method
             in {
@@ -368,6 +377,7 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
                 'poisson_laplace_pirls_full_grid',
                 'poisson_laplace_pirls_sigma_avg',
                 'poisson_laplace_pirls_sigma_avg_is',
+                'poisson_laplace_target_refine',
             },
             'poisson_laplace_pirls_full': method
             in {'poisson_laplace_pirls_full', 'poisson_laplace_pirls_full_beta'},
@@ -377,9 +387,15 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
                 'poisson_laplace_pirls_full_grid',
                 'poisson_laplace_pirls_sigma_avg',
                 'poisson_laplace_pirls_sigma_avg_is',
+                'poisson_laplace_target_refine',
             },
             'poisson_laplace_pirls_sigma_average': method
-            in {'poisson_laplace_pirls_sigma_avg', 'poisson_laplace_pirls_sigma_avg_is'},
+            in {
+                'poisson_laplace_pirls_sigma_avg',
+                'poisson_laplace_pirls_sigma_avg_is',
+                'poisson_laplace_target_refine',
+            },
+            'poisson_laplace_target_refine': method == 'poisson_laplace_target_refine',
         }
     return {'bernoulli_laplace_eb': False}
 
@@ -433,6 +449,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_pirls_full_grid',
         'poisson_laplace_pirls_sigma_avg',
         'poisson_laplace_pirls_sigma_avg_is',
+        'poisson_laplace_target_refine',
     }:
         return {}
     out = {
@@ -464,6 +481,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_pirls_full_grid',
         'poisson_laplace_pirls_sigma_avg',
         'poisson_laplace_pirls_sigma_avg_is',
+        'poisson_laplace_target_refine',
     }:
         out.update(
             {
@@ -481,6 +499,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_pirls_full_grid',
         'poisson_laplace_pirls_sigma_avg',
         'poisson_laplace_pirls_sigma_avg_is',
+        'poisson_laplace_target_refine',
     }:
         out.update(
             {
@@ -498,7 +517,13 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
                 ),
             }
         )
-    if method in {'poisson_laplace_pirls_sigma_avg', 'poisson_laplace_pirls_sigma_avg_is'}:
+    if method in {
+        'default',
+        'current',
+        'poisson_laplace_pirls_sigma_avg',
+        'poisson_laplace_pirls_sigma_avg_is',
+        'poisson_laplace_target_refine',
+    }:
         out.update(
             {
                 'poisson_laplace_pirls_sigma_average_scales': (
@@ -530,6 +555,15 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
                 'poisson_laplace_pirls_sigma_average_output_mode': (
                     args.poisson_laplace_pirls_sigma_average_output_mode
                 ),
+            }
+        )
+    if method == 'poisson_laplace_target_refine':
+        out.update(
+            {
+                'poisson_laplace_target_refine_steps': args.poisson_laplace_target_refine_steps,
+                'poisson_laplace_target_refine_lr': args.poisson_laplace_target_refine_lr,
+                'poisson_laplace_target_refine_min_d': args.poisson_laplace_target_refine_min_d,
+                'poisson_laplace_target_refine_max_q': args.poisson_laplace_target_refine_max_q,
             }
         )
     return out
@@ -594,6 +628,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-laplace-pirls-sigma-average-min-d', type=int, default=1)
     parser.add_argument('--poisson-laplace-pirls-sigma-average-max-q', type=int, default=None)
     parser.add_argument('--poisson-laplace-pirls-sigma-average-output-mode', default='beta_sigma', choices=['beta', 'beta_best', 'beta_sigma'])
+    parser.add_argument('--poisson-laplace-target-refine-steps', type=int, default=1)
+    parser.add_argument('--poisson-laplace-target-refine-lr', type=float, default=0.02)
+    parser.add_argument('--poisson-laplace-target-refine-min-d', type=int, default=1)
+    parser.add_argument('--poisson-laplace-target-refine-max-q', type=int, default=None)
     return parser.parse_args()
 # fmt: on
 

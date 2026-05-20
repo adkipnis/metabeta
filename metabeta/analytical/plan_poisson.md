@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-20 (sampled/large σ averaging and intercept-vs-slope grid tested)
+Last updated: 2026-05-21 (scalar σ averaging promoted; Laplace-target refinement prototype)
 
 Goal
 ----
@@ -19,24 +19,27 @@ The default Poisson analytical path is now:
 3. Fixed-budget diagonal-Σ joint Laplace-PIRLS over β/u/σ.
 4. Marginal-mean β correction with `min_d=1`.
 5. Conservative full-candidate PIRLS σ grid with scales `(0.5, 0.75, 1.0)`.
+6. Scalar Laplace-weighted σ averaging with local fixed-σ β/u PIRLS refresh.
 
-The final grid scores and writes back the full candidate: β, σ, BLUPs, BLUP variances, and
-`Psi_lap`. It deliberately allows only shrinkage or fixed-σ β/u re-synchronization. Broad
-inflation scales and the older β-only σ grid were retired after producing worse σ
-tradeoffs without meaningful FFX gain.
+The conservative grid scores and writes back the full candidate: β, σ, BLUPs, BLUP
+variances, and `Psi_lap`. The scalar averaging pass then approximates local
+hyperparameter integration over diagonal σ scales and writes back weighted β/σ plus BLUPs
+from the best-scoring candidate. Intercept-vs-slope σ averaging remains an opt-in
+prototype because its gains are small and not uniformly better than scalar averaging.
 
 Benchmark method names:
 
-- `current` / `default`: retained full-grid path.
+- `current` / `default`: retained full-grid path plus scalar σ averaging.
 - `poisson_laplace_pirls_full_grid`: explicit retained path.
 - `poisson_laplace_pirls_full`: full-Σ joint PIRLS prototype without marginal β.
 - `poisson_laplace_pirls_full_beta`: full-Σ joint PIRLS plus full-Ψ marginal β.
 - `poisson_laplace_pirls_beta`: ablation without the final full-candidate grid.
 - `poisson_laplace_pirls_diag`: ablation without marginal β and final grid.
-- `poisson_laplace_pirls_sigma_avg`: retained full-grid path plus scalar
-  Laplace-weighted σ averaging prototype.
+- `poisson_laplace_pirls_sigma_avg`: explicit scalar Laplace-weighted σ averaging path.
 - `poisson_laplace_pirls_sigma_avg_is`: retained full-grid path plus intercept-vs-slope
   Laplace-weighted σ averaging prototype.
+- `poisson_laplace_target_refine`: current default plus 1-2 direct β/u autograd steps
+  under the diagonal Laplace target.
 - `poisson_marginal_beta` and `poisson_eb`: historical ablations only.
 
 Current Evidence
@@ -45,25 +48,24 @@ Current Evidence
 First 1000 rows per cell, sequential CPU runs on 2026-05-20. Lower NRMSE is better.
 INLA values are the current first-1000 diagonal R-INLA references.
 
-| Dataset | part | full-grid FFX | INLA FFX | full-grid σ | INLA σ | full-grid BLUP | INLA BLUP | ms/ds |
+| Dataset | part | default FFX | INLA FFX | default σ | INLA σ | default BLUP | INLA BLUP | ms/ds |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-p-mixed | train | 0.2214 | 0.1835 | 0.4529 | 0.3404 | 0.5245 | 0.4936 | 37.9 |
-| small-p-sampled | valid | 0.2523 | 0.2276 | 0.4919 | 0.4356 | 0.5384 | 0.5309 | 34.2 |
-| small-p-sampled | test | 0.2205 | 0.1997 | 0.4618 | 0.3966 | 0.5270 | 0.5281 | 36.4 |
-| medium-p-mixed | train | 0.2670 | 0.1675 | 0.4360 | 0.3214 | 0.5199 | 0.4789 | 66.7 |
-| medium-p-sampled | valid | 0.3385 | 0.2146 | 0.5229 | 0.4209 | 0.6334 | 0.5618 | 68.8 |
-| medium-p-sampled | test | 0.2968 | 0.2267 | 0.5016 | 0.3883 | 0.5603 | 0.5849 | 64.6 |
-| large-p-mixed | train | 0.3821 | 0.1778 | 0.6401 | 0.3076 | 0.6980 | 0.5001 | 73.0 |
-| large-p-sampled | valid | 0.4422 | 0.2467 | 0.5475 | 0.4232 | 0.6414 | 0.5870 | 69.1 |
-| large-p-sampled | test | 0.4608 | 0.2186 | 0.6215 | 0.3439 | 0.8082 | 0.5618 | 78.3 |
+| small-p-mixed | train | 0.2151 | 0.1835 | 0.4287 | 0.3404 | 0.5222 | 0.4936 | 33.5 |
+| small-p-sampled | valid | 0.2378 | 0.2276 | 0.4756 | 0.4356 | 0.5355 | 0.5309 | 36.7 |
+| small-p-sampled | test | 0.2119 | 0.1997 | 0.4421 | 0.3966 | 0.5232 | 0.5281 | 33.8 |
+| medium-p-mixed | train | 0.2438 | 0.1675 | 0.4198 | 0.3214 | 0.5129 | 0.4789 | 64.1 |
+| medium-p-sampled | valid | 0.3057 | 0.2146 | 0.5654 | 0.4209 | 0.6115 | 0.5618 | 77.6 |
+| medium-p-sampled | test | 0.2831 | 0.2267 | 0.4723 | 0.3883 | 0.5560 | 0.5849 | 71.6 |
+| large-p-mixed | train | 0.3436 | 0.1778 | 0.5536 | 0.3076 | 0.6472 | 0.5001 | 82.4 |
+| large-p-sampled | valid | 0.4131 | 0.2467 | 0.5261 | 0.4232 | 0.6318 | 0.5870 | 85.2 |
+| large-p-sampled | test | 0.4358 | 0.2186 | 0.5124 | 0.3439 | 0.7651 | 0.5618 | 86.7 |
 
 Validation summary:
 
-- Full-grid beats the previous Poisson path and PIRLS+β on FFX and BLUP across small,
-  medium, and large rows.
-- On large rows it also improves σ and runtime versus both adjacent baselines.
-- The residual FFX gap to INLA is about `0.020-0.038` on small rows, `0.070-0.124` on
-  medium rows, and `0.196-0.242` on large rows.
+- Scalar σ averaging beats the retained full-grid path on FFX for every sampled and large
+  row tested, and usually improves σ/BLUP as well.
+- The residual FFX gap to INLA is about `0.010-0.032` on small rows, `0.056-0.091` on
+  medium rows, and `0.166-0.217` on large rows.
 - σ remains materially worse than INLA, especially on large rows. This is now the most
   plausible source of the remaining FFX gap through the Poisson log-link marginal mean.
 
@@ -189,8 +191,38 @@ Interpretation:
 - Intercept-vs-slope averaging is a small FFX tie/slight win over scalar averaging on most
   rows and usually improves σ/BLUP. The main exception is large sampled test σ, where it
   regresses from `0.5124` to `0.5242` while still improving FFX/BLUP slightly.
-- This supports the hyperparameter-averaging direction. It does not yet prove that the
-  richer grid should replace scalar averaging as default.
+- This supports promoting scalar averaging to default. It does not yet prove that the
+  richer grid should replace scalar averaging.
+
+Direct Laplace-Target β/u Refinement Prototype
+----------------------------------------------
+
+Implemented as a separate non-default path on 2026-05-21:
+
+```text
+poisson_laplace_target_refine
+    current default
+    -> hold σ fixed
+    -> take 1-2 small autograd Adam steps on β and BLUP modes
+       against the diagonal Laplace target including the logdet curvature term
+    -> accept per row only if that Laplace target improves
+```
+
+Quick 1k validation:
+
+| Dataset | part | current FFX | target refine FFX | current σ | target refine σ | current BLUP | target refine BLUP |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-p-mixed | train | 0.2151 | 0.2131 | 0.4287 | 0.4287 | 0.5222 | 0.5224 |
+| small-p-sampled | valid | 0.2378 | 0.2365 | 0.4756 | 0.4756 | 0.5355 | 0.5344 |
+| small-p-sampled | test | 0.2119 | 0.2106 | 0.4421 | 0.4421 | 0.5232 | 0.5222 |
+| medium-p-mixed | train | 0.2438 | 0.2427 | 0.4198 | 0.4198 | 0.5129 | 0.5128 |
+
+Interpretation:
+
+- The signal is directionally positive but small: `~0.001-0.002` absolute FFX NRMSE gain.
+- σ is unchanged by design; BLUPs are flat to slightly better.
+- This supports testing the architecture further, but it is not enough to make the
+  autograd target refinement default yet.
 
 Grid Diagnostic
 ---------------
@@ -221,7 +253,21 @@ Rejected
 Next Directions
 ---------------
 
-1. **Do not spend more effort on scalar diagonal covariance tuning.**
+1. **Run targeted diagnostics before adding more gates.**
+
+   Needed diagnostics:
+
+   - row-level INLA FFX/σ/BLUP gap versus `poisson_sigma_average_neff`;
+   - best σ scale and effective candidate count distribution by size/partition;
+   - Laplace target winner quality versus weighted posterior-mean quality;
+   - marginal variance correction size `0.5 * z'Σz`, especially q95/max per row;
+   - residual high-FFX rows where σ remains biased after scalar averaging.
+
+   Interpretation rule: diffuse σ weights or large marginal variance corrections support
+   more hyperparameter averaging; sharp σ weights with bad β point toward stronger
+   Laplace-target β/u optimization or a variational Gaussian update.
+
+2. **Do not spend more effort on scalar diagonal covariance tuning.**
 
    Current update:
 
@@ -233,14 +279,14 @@ Next Directions
    convincing σ/BLUP improvement. Leave defaults unchanged for now; `final=4` or `final=6`
    can be retested later if a larger architecture change makes convergence the bottleneck.
 
-2. **Do not promote full-Σ PIRLS without a stronger scoring/averaging change.**
+3. **Do not promote full-Σ PIRLS without a stronger scoring/averaging change.**
 
    Full covariance alone was stable but worse than the retained diagonal full-grid path on
    small and medium mixed rows. Keep it as a prototype/diagnostic path. The next serious
    improvement should change the approximation target, not only the covariance
    parameterization.
 
-3. **Keep one accept/reject target.**
+4. **Keep one accept/reject target.**
 
    Use the diagonal Laplace target for joint candidates:
 
@@ -255,18 +301,18 @@ Next Directions
    The same target should score current EB/full-grid candidates and future full-Σ PIRLS
    candidates, so we can compare architectures rather than gate heuristics.
 
-4. **Continue hyperparameter averaging, but avoid more scalar gate tuning.**
+5. **Continue hyperparameter averaging, but avoid more scalar gate tuning.**
 
-   Scalar averaging is robustly positive. Intercept-vs-slope averaging gives slightly
-   better FFX and usually better σ/BLUP, but the gain is modest and not uniform. Next
-   ablations:
+   Scalar averaging is the default. Intercept-vs-slope averaging gives slightly better FFX
+   and usually better σ/BLUP, but the gain is modest and not uniform. Next ablations:
 
-   - test whether one Laplace-target β/u refresh after weighted σ improves the candidate;
+   - validate 2-step direct Laplace-target β/u refinement on medium/large sampled rows;
    - compare `output_mode=beta`, `beta_best`, and `beta_sigma` for the intercept-vs-slope
      grid on medium/large sampled rows;
-   - only then consider direct autograd β optimization under the Laplace marginal target.
+   - if direct target refinement remains positive, test moving it inside each σ candidate
+     rather than only after weighted σ output.
 
-5. **Run huge-row validation before 8k.**
+6. **Run huge-row validation before 8k.**
 
    Full 8k Poisson benchmarks remain postponed until one more meaningful accuracy patch or
    complete huge-row validation lands.
@@ -279,7 +325,8 @@ uv run python -u experiments/analytical/glmm_required_benchmark.py \
     --family p --methods raw poisson_eb poisson_marginal_beta \
     poisson_laplace_pirls_diag poisson_laplace_pirls_full_beta \
     poisson_laplace_pirls_beta current poisson_laplace_pirls_sigma_avg \
-    poisson_laplace_pirls_sigma_avg_is --sizes small medium large \
+    poisson_laplace_pirls_sigma_avg_is poisson_laplace_target_refine \
+    --sizes small medium large \
     --batch-size 32 --max-datasets 1000
 
 uv run python -u experiments/analytical/glmm_poisson_pirls_grid_diagnostic.py \

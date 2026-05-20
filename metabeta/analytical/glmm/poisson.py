@@ -25,6 +25,7 @@ __all__ = [
     'refinePoissonLaplacePirlsFull',
     'refinePoissonLaplacePirlsSigmaAverage',
     'refinePoissonLaplacePirlsSigmaGrid',
+    'refinePoissonLaplaceTargetRefine',
     'refinePoissonMarginalMeanBeta',
 ]
 
@@ -1408,6 +1409,176 @@ def refinePoissonLaplacePirlsSigmaAverage(
         out['poisson_sigma_average_best_slope_scale'] = best_slope_scale
         out['poisson_sigma_average_best_target'] = best_target
         out['poisson_sigma_average_base_target'] = base_target
+    return out
+
+
+def refinePoissonLaplaceTargetRefine(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor | None = None,
+    tau_ffx: torch.Tensor | None = None,
+    family_ffx: torch.Tensor | None = None,
+    tau_rfx: torch.Tensor | None = None,
+    family_sigma_rfx: torch.Tensor | None = None,
+    mask_d: torch.Tensor | None = None,
+    mask_q: torch.Tensor | None = None,
+    n_steps: int = 1,
+    lr: float = 0.02,
+    min_d: int = 1,
+    max_q: int | None = None,
+    sigma_max: float = math.sqrt(_POISSON_PSI_EIG_CAP),
+    return_diagnostics: bool = False,
+) -> dict[str, torch.Tensor]:
+    """Prototype direct β/u refinement under the diagonal Laplace target.
+
+    σ is held fixed. β and group modes are nudged by a tiny autograd Adam pass against the
+    same Laplace target used to score PIRLS/grid candidates, then accepted per dataset only
+    if the target improves. This is intentionally a prototype path, not a broad optimizer.
+    """
+    d = Xm.shape[-1]
+    q = Zm.shape[-1]
+    if d == 0 or q == 0 or n_steps <= 0 or 'sigma_rfx_est' not in stats:
+        return stats
+
+    B = Xm.shape[0]
+    device, dtype = Xm.device, Xm.dtype
+    active_d = (
+        mask_d[:, :d].to(device=device).bool()
+        if mask_d is not None
+        else torch.ones(B, d, device=device, dtype=torch.bool)
+    )
+    active_q = (
+        mask_q[:, :q].to(device=device).bool()
+        if mask_q is not None
+        else torch.ones(B, q, device=device, dtype=torch.bool)
+    )
+    d_count = active_d.long().sum(dim=1)
+    q_count = active_q.long().sum(dim=1)
+    gate = (d_count >= int(min_d)) & (q_count >= 1)
+    if max_q is not None:
+        gate = gate & (q_count <= int(max_q))
+    if not gate.any():
+        out = dict(stats)
+        if return_diagnostics:
+            out['poisson_laplace_target_refine_gate'] = gate.to(dtype)
+            out['poisson_laplace_target_refine_accept'] = torch.zeros(B, device=device, dtype=dtype)
+        return out
+
+    beta_base = stats['beta_est'][:, :d].detach().clamp(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
+    sigma = stats['sigma_rfx_est'][:, :q].detach().clamp(min=1e-4, max=sigma_max)
+    blups_base = stats.get('blup_est', Zm.new_zeros(B, Zm.shape[1], q))[:, :, :q].detach()
+    blups_base = blups_base.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    blups_base = blups_base.clamp(-_POISSON_BLUP_CLAMP, _POISSON_BLUP_CLAMP)
+    blups_base = blups_base * mask_m[:, :, None] * active_q.to(dtype)[:, None, :]
+
+    base_A = _poissonJointHessianDiag(
+        beta_base, blups_base, sigma, Zm, Xm, mask_n, mask_m, active_q
+    )
+    base_target = _poissonLaplaceEbTargetDiag(
+        beta_base,
+        sigma.log(),
+        blups_base,
+        base_A,
+        active_q,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        nu_ffx,
+        tau_ffx,
+        family_ffx,
+        tau_rfx,
+        family_sigma_rfx,
+        mask_d,
+        sigma_log_jacobian=True,
+    )
+
+    with torch.enable_grad():
+        beta = beta_base.clone().detach().requires_grad_(True)
+        blups = blups_base.clone().detach().requires_grad_(True)
+        optimizer = torch.optim.Adam((beta, blups), lr=float(lr))
+        for _ in range(max(int(n_steps), 1)):
+            optimizer.zero_grad(set_to_none=True)
+            H = _poissonJointHessianDiag(beta, blups, sigma, Zm, Xm, mask_n, mask_m, active_q)
+            target = _poissonLaplaceEbTargetDiag(
+                beta,
+                sigma.log(),
+                blups,
+                H,
+                active_q,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                tau_rfx,
+                family_sigma_rfx,
+                mask_d,
+                sigma_log_jacobian=True,
+            )
+            loss = -(target[gate]).sum()
+            loss.backward()
+            optimizer.step()
+            with torch.no_grad():
+                beta.copy_(beta.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0))
+                beta.clamp_(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
+                beta.copy_(torch.where(active_d, beta, beta_base))
+                blups.copy_(blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0))
+                blups.clamp_(-_POISSON_BLUP_CLAMP, _POISSON_BLUP_CLAMP)
+                blups.mul_(mask_m[:, :, None] * active_q.to(dtype)[:, None, :])
+
+    beta_refined = beta.detach()
+    blups_refined = blups.detach()
+    H_refined = _poissonJointHessianDiag(
+        beta_refined, blups_refined, sigma, Zm, Xm, mask_n, mask_m, active_q
+    )
+    final_target = _poissonLaplaceEbTargetDiag(
+        beta_refined,
+        sigma.log(),
+        blups_refined,
+        H_refined,
+        active_q,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        nu_ffx,
+        tau_ffx,
+        family_ffx,
+        tau_rfx,
+        family_sigma_rfx,
+        mask_d,
+        sigma_log_jacobian=True,
+    )
+    accept = gate & torch.isfinite(final_target) & (final_target > base_target + 1e-5)
+
+    eye_q = torch.eye(q, device=device, dtype=dtype).expand(B, Zm.shape[1], q, q)
+    H_inv = _safeSolve(H_refined + _adaptiveRidgeBm(H_refined), eye_q)
+    H_inv = H_inv * mask_m[:, :, None, None]
+    blup_var = H_inv.diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
+    blup_var = blup_var * mask_m[:, :, None] * active_q.to(dtype)[:, None, :]
+
+    out = dict(stats)
+    out['beta_est'] = torch.where(accept[:, None], beta_refined, beta_base)
+    out['blup_est'] = torch.where(accept[:, None, None], blups_refined, blups_base)
+    if 'blup_var' in stats:
+        out['blup_var'] = torch.where(accept[:, None, None], blup_var, stats['blup_var'][:, :, :q])
+    else:
+        out['blup_var'] = blup_var
+    if return_diagnostics:
+        out['poisson_laplace_target_refine_gate'] = gate.to(dtype)
+        out['poisson_laplace_target_refine_accept'] = accept.to(dtype)
+        out['poisson_laplace_target_refine_target'] = final_target
+        out['poisson_laplace_target_refine_base_target'] = base_target
     return out
 
 
