@@ -27,7 +27,6 @@ METHODS = [
     'normal_eb',
     'poisson_eb',
     'poisson_marginal_beta',
-    'poisson_sigma_grid',
     'poisson_laplace_pirls_diag',
     'poisson_laplace_pirls_beta',
     'poisson_laplace_pirls_full_grid',
@@ -51,7 +50,7 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
     print(
         'method,dataset,partition,N,FFX,sRFX,sEps,BLUP,ms_per_ds,gate,accept,'
         'blup_fallback,beta_capped,beta_tail,sigma_capped,poisson_beta_gate,'
-        'poisson_beta_accept,poisson_sigma_grid_gate,poisson_sigma_grid_accept',
+        'poisson_beta_accept,poisson_grid_gate,poisson_grid_accept',
         flush=True,
     )
     combos = _combos(args, family)
@@ -112,7 +111,6 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                                     'current',
                                     'poisson_eb',
                                     'poisson_marginal_beta',
-                                    'poisson_sigma_grid',
                                     'poisson_laplace_pirls_diag',
                                     'poisson_laplace_pirls_beta',
                                     'poisson_laplace_pirls_full_grid',
@@ -168,8 +166,8 @@ class _MetricStore:
         self.sigma_capped: list[np.ndarray] = []
         self.poisson_beta_gate: list[np.ndarray] = []
         self.poisson_beta_accept: list[np.ndarray] = []
-        self.poisson_sigma_grid_gate: list[np.ndarray] = []
-        self.poisson_sigma_grid_accept: list[np.ndarray] = []
+        self.poisson_grid_gate: list[np.ndarray] = []
+        self.poisson_grid_accept: list[np.ndarray] = []
         self.n_total = 0
 
     def add(
@@ -210,20 +208,12 @@ class _MetricStore:
             self.poisson_beta_accept.append(
                 stats['poisson_marginal_beta_accept'].detach().cpu().numpy()
             )
-        if 'poisson_sigma_grid_gate' in stats:
-            self.poisson_sigma_grid_gate.append(
-                stats['poisson_sigma_grid_gate'].detach().cpu().numpy()
-            )
-        if 'poisson_sigma_grid_accept' in stats:
-            self.poisson_sigma_grid_accept.append(
-                stats['poisson_sigma_grid_accept'].detach().cpu().numpy()
-            )
         if 'poisson_pirls_sigma_grid_gate' in stats:
-            self.poisson_sigma_grid_gate.append(
+            self.poisson_grid_gate.append(
                 stats['poisson_pirls_sigma_grid_gate'].detach().cpu().numpy()
             )
         if 'poisson_pirls_sigma_grid_accept' in stats:
-            self.poisson_sigma_grid_accept.append(
+            self.poisson_grid_accept.append(
                 stats['poisson_pirls_sigma_grid_accept'].detach().cpu().numpy()
             )
         self.n_total += B
@@ -275,14 +265,14 @@ class _MetricStore:
             if self.poisson_beta_accept
             else float('nan')
         )
-        poisson_sigma_grid_gate = (
-            float(np.mean(np.concatenate(self.poisson_sigma_grid_gate)))
-            if self.poisson_sigma_grid_gate
+        poisson_grid_gate = (
+            float(np.mean(np.concatenate(self.poisson_grid_gate)))
+            if self.poisson_grid_gate
             else float('nan')
         )
-        poisson_sigma_grid_accept = (
-            float(np.mean(np.concatenate(self.poisson_sigma_grid_accept)))
-            if self.poisson_sigma_grid_accept
+        poisson_grid_accept = (
+            float(np.mean(np.concatenate(self.poisson_grid_accept)))
+            if self.poisson_grid_accept
             else float('nan')
         )
         seps_str = (
@@ -309,8 +299,8 @@ class _MetricStore:
                 f'{sigma_capped:.3f}',
                 f'{poisson_beta_gate:.3f}',
                 f'{poisson_beta_accept:.3f}',
-                f'{poisson_sigma_grid_gate:.3f}',
-                f'{poisson_sigma_grid_accept:.3f}',
+                f'{poisson_grid_gate:.3f}',
+                f'{poisson_grid_accept:.3f}',
             ]
         )
 
@@ -342,7 +332,6 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
     if method in {
         'poisson_eb',
         'poisson_marginal_beta',
-        'poisson_sigma_grid',
         'poisson_laplace_pirls_diag',
         'poisson_laplace_pirls_beta',
         'poisson_laplace_pirls_full_grid',
@@ -354,11 +343,9 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
             'poisson_marginal_beta': method
             in {
                 'poisson_marginal_beta',
-                'poisson_sigma_grid',
                 'poisson_laplace_pirls_beta',
                 'poisson_laplace_pirls_full_grid',
             },
-            'poisson_sigma_grid': method == 'poisson_sigma_grid',
             'poisson_laplace_pirls_diag': method
             in {
                 'poisson_laplace_pirls_diag',
@@ -412,7 +399,6 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'current',
         'poisson_eb',
         'poisson_marginal_beta',
-        'poisson_sigma_grid',
         'poisson_laplace_pirls_diag',
         'poisson_laplace_pirls_beta',
         'poisson_laplace_pirls_full_grid',
@@ -426,13 +412,6 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_eb_blup_fallback_beta_jump': args.poisson_eb_blup_fallback_beta_jump,
         'poisson_laplace_eb_sigma_prior_cap': args.poisson_eb_sigma_prior_cap,
         'poisson_laplace_eb_sigma_prior_cap_min_d': args.poisson_eb_sigma_prior_cap_min_d,
-        'poisson_agq_beta': args.poisson_agq_beta,
-        'poisson_agq_beta_steps': args.poisson_agq_beta_steps,
-        'poisson_agq_beta_lr': args.poisson_agq_beta_lr,
-        'poisson_agq_beta_min_d': args.poisson_agq_beta_min_d,
-        'poisson_agq_beta_max_q': args.poisson_agq_beta_max_q,
-        'poisson_agq_beta_max_step': args.poisson_agq_beta_max_step,
-        'poisson_agq_beta_agq_k': args.poisson_agq_beta_agq_k,
         'poisson_laplace_pirls_diag_outer': args.poisson_laplace_pirls_diag_outer,
         'poisson_laplace_pirls_diag_inner': args.poisson_laplace_pirls_diag_inner,
         'poisson_laplace_pirls_diag_final': args.poisson_laplace_pirls_diag_final,
@@ -444,7 +423,6 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'default',
         'current',
         'poisson_marginal_beta',
-        'poisson_sigma_grid',
         'poisson_laplace_pirls_beta',
         'poisson_laplace_pirls_full_grid',
     }:
@@ -458,7 +436,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
                 'poisson_marginal_beta_full_psi_min_q': (args.poisson_marginal_beta_full_psi_min_q),
             }
         )
-    if method == 'poisson_laplace_pirls_full_grid':
+    if method in {'default', 'current', 'poisson_laplace_pirls_full_grid'}:
         out.update(
             {
                 'poisson_laplace_pirls_sigma_grid_scales': (
@@ -473,15 +451,6 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
                 'poisson_laplace_pirls_sigma_grid_max_q': (
                     args.poisson_laplace_pirls_sigma_grid_max_q
                 ),
-            }
-        )
-    if method in {'default', 'current', 'poisson_sigma_grid'}:
-        out.update(
-            {
-                'poisson_sigma_grid_scales': args.poisson_sigma_grid_scales,
-                'poisson_sigma_grid_min_d': args.poisson_sigma_grid_min_d,
-                'poisson_sigma_grid_max_q': args.poisson_sigma_grid_max_q,
-                'poisson_sigma_grid_agq_k': args.poisson_sigma_grid_agq_k,
             }
         )
     return out
@@ -520,21 +489,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-eb-sigma-prior-cap-min-d', type=int, default=5)
     parser.add_argument('--poisson-marginal-beta-steps', type=int, default=4)
     parser.add_argument('--poisson-marginal-beta-damping', type=float, default=0.7)
-    parser.add_argument('--poisson-marginal-beta-min-d', type=int, default=5)
+    parser.add_argument('--poisson-marginal-beta-min-d', type=int, default=1)
     parser.add_argument('--poisson-marginal-beta-max-q', type=int, default=None)
     parser.add_argument('--poisson-marginal-beta-max-step', type=float, default=1.0)
     parser.add_argument('--poisson-marginal-beta-full-psi-min-q', type=int, default=3)
-    parser.add_argument('--poisson-sigma-grid-scales', type=float, nargs='+', default=[0.35, 0.5, 0.75, 1.0, 1.3333333])
-    parser.add_argument('--poisson-sigma-grid-min-d', type=int, default=5)
-    parser.add_argument('--poisson-sigma-grid-max-q', type=int, default=2)
-    parser.add_argument('--poisson-sigma-grid-agq-k', type=int, default=3)
-    parser.add_argument('--poisson-agq-beta', action='store_true')
-    parser.add_argument('--poisson-agq-beta-steps', type=int, default=8)
-    parser.add_argument('--poisson-agq-beta-lr', type=float, default=0.03)
-    parser.add_argument('--poisson-agq-beta-min-d', type=int, default=1)
-    parser.add_argument('--poisson-agq-beta-max-q', type=int, default=2)
-    parser.add_argument('--poisson-agq-beta-max-step', type=float, default=0.75)
-    parser.add_argument('--poisson-agq-beta-agq-k', type=int, default=5)
     parser.add_argument('--poisson-laplace-pirls-diag-outer', type=int, default=4)
     parser.add_argument('--poisson-laplace-pirls-diag-inner', type=int, default=1)
     parser.add_argument('--poisson-laplace-pirls-diag-final', type=int, default=2)

@@ -77,11 +77,11 @@ def _checkInlaFits(paths: list[Path], data_id: str) -> None:
 def _loadInlaFits(path: Path) -> dict[str, np.ndarray]:
     with np.load(_inlaPath(path)) as f:
         return {
-            'beta':      f['inla_ffx'].copy(),
+            'beta': f['inla_ffx'].copy(),
             'sigma_rfx': f['inla_sigma_rfx'].copy(),
-            'blups':     f['inla_rfx'].copy(),
-            'wall_s':    f['inla_wall_s'].copy(),
-            'failed':    f['inla_failed'].copy().astype(bool),
+            'blups': f['inla_rfx'].copy(),
+            'wall_s': f['inla_wall_s'].copy(),
+            'failed': f['inla_failed'].copy().astype(bool),
         }
 
 
@@ -271,9 +271,9 @@ def _appendInlaRowRecord(
             'poisson_marginal_beta_gate',
             'poisson_marginal_beta_accept',
             'poisson_marginal_beta_jump',
-            'poisson_sigma_grid_gate',
-            'poisson_sigma_grid_accept',
-            'poisson_sigma_grid_scale',
+            'poisson_pirls_sigma_grid_gate',
+            'poisson_pirls_sigma_grid_accept',
+            'poisson_pirls_sigma_grid_scale',
         ):
             record[key] = _rowScalar(current_stats, key, b)
     records.append(record)
@@ -523,9 +523,9 @@ def run_one_dataset(
 
                     inla_elapsed = float(inla_data['wall_s'][inla_idx])
                     est = {
-                        'beta':      inla_data['beta'][inla_idx, active_d],
+                        'beta': inla_data['beta'][inla_idx, active_d],
                         'sigma_rfx': inla_data['sigma_rfx'][inla_idx, active_q],
-                        'blups':     inla_data['blups'][inla_idx, :m_b, :][:, active_q],
+                        'blups': inla_data['blups'][inla_idx, :m_b, :][:, active_q],
                     }
                     inla_metrics['wall'].append(inla_elapsed)
                     inla_n_ok += 1
@@ -631,7 +631,9 @@ def run_one_dataset(
         )
 
     if inla_n_ok > 0:
-        n_matched = len(matched_metrics[analytical_methods[0]]['be']) if analytical_methods else inla_n_ok
+        n_matched = (
+            len(matched_metrics[analytical_methods[0]]['be']) if analytical_methods else inla_n_ok
+        )
         print(
             f'\nR-INLA — matched (N={n_matched}, INLA ok={inla_n_ok})'
             if not analytical_methods

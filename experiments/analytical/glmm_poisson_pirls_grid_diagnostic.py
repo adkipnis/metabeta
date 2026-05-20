@@ -149,7 +149,6 @@ def _fitPirls(
         poisson_laplace_pirls_sigma_grid_steps=args.poisson_laplace_pirls_sigma_grid_steps,
         poisson_laplace_pirls_sigma_grid_min_d=args.poisson_laplace_pirls_sigma_grid_min_d,
         poisson_laplace_pirls_sigma_grid_max_q=args.poisson_laplace_pirls_sigma_grid_max_q,
-        poisson_sigma_grid=False,
         **_commonKwargs(batch),
     )
 

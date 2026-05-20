@@ -233,9 +233,9 @@ def _extractRow(
         'marginal_beta_gate': _rowScalar(current_stats, 'poisson_marginal_beta_gate', b),
         'marginal_beta_accept': _rowScalar(current_stats, 'poisson_marginal_beta_accept', b),
         'marginal_beta_jump': _rowScalar(current_stats, 'poisson_marginal_beta_jump', b),
-        'sigma_grid_gate': _rowScalar(current_stats, 'poisson_sigma_grid_gate', b),
-        'sigma_grid_accept': _rowScalar(current_stats, 'poisson_sigma_grid_accept', b),
-        'sigma_grid_scale': _rowScalar(current_stats, 'poisson_sigma_grid_scale', b),
+        'sigma_grid_gate': _rowScalar(current_stats, 'poisson_pirls_sigma_grid_gate', b),
+        'sigma_grid_accept': _rowScalar(current_stats, 'poisson_pirls_sigma_grid_accept', b),
+        'sigma_grid_scale': _rowScalar(current_stats, 'poisson_pirls_sigma_grid_scale', b),
         'raw_ffx_rmse': raw_ffx,
         'current_ffx_rmse': current_ffx,
         'inla_ffx_rmse': inla_ffx,
@@ -295,10 +295,14 @@ def _summaryKey(row: dict, by: str) -> str:
         return _binByMeanY(float(row['y_mean']))
     if by == 'sigma_grid_gate':
         val = row['sigma_grid_gate']
-        return 'sg_gate=nan' if not np.isfinite(val) else ('sg_gate=1' if val > 0.5 else 'sg_gate=0')
+        return (
+            'sg_gate=nan' if not np.isfinite(val) else ('sg_gate=1' if val > 0.5 else 'sg_gate=0')
+        )
     if by == 'marginal_beta_gate':
         val = row['marginal_beta_gate']
-        return 'mb_gate=nan' if not np.isfinite(val) else ('mb_gate=1' if val > 0.5 else 'mb_gate=0')
+        return (
+            'mb_gate=nan' if not np.isfinite(val) else ('mb_gate=1' if val > 0.5 else 'mb_gate=0')
+        )
     return str(row[by])
 
 
@@ -395,7 +399,16 @@ def _printOverall(rows: list[dict]) -> None:
     print(
         tabulate(
             table,
-            headers=['N', 'RAW RMSE', 'EB RMSE', 'INLA RMSE', 'true gain', 'med gain', 'gain%', 'INLA gap'],
+            headers=[
+                'N',
+                'RAW RMSE',
+                'EB RMSE',
+                'INLA RMSE',
+                'true gain',
+                'med gain',
+                'gain%',
+                'INLA gap',
+            ],
             tablefmt='github',
         )
     )
@@ -588,7 +601,15 @@ def runDiagnostic(args: argparse.Namespace) -> None:
         print('No matched rows available. Check that .inla.npz files are present.')
         return
     _printOverall(rows)
-    for by in ['data_id', 'd_bin', 'q_bin', 'zero_bin', 'mean_y_bin', 'marginal_beta_gate', 'sigma_grid_gate']:
+    for by in [
+        'data_id',
+        'd_bin',
+        'q_bin',
+        'zero_bin',
+        'mean_y_bin',
+        'marginal_beta_gate',
+        'sigma_grid_gate',
+    ]:
         _printGrouped(rows, by)
     _printWorst(rows, 'ffx_inla_gap', args.top_k)
     _printWorst(rows, 'sigma_inla_gap', args.top_k)
