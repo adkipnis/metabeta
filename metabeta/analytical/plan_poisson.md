@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-20 (full-candidate PIRLS sigma grid tested on small/medium rows)
+Last updated: 2026-05-20 (full-candidate PIRLS sigma-grid diagnostics added)
 
 Goal
 ----
@@ -121,6 +121,45 @@ Useful comparator ladder from the same run:
   cells, but regresses FFX slightly on sampled-valid and regresses σ on mixed/test. The
   full-grid path has not been checked on large rows yet.
 
+Full-candidate sigma-grid diagnostic:
+
+```bash
+uv run python -u experiments/analytical/glmm_poisson_pirls_grid_diagnostic.py \
+    --sizes small medium --max-datasets 1000 --batch-size 32
+```
+
+Across the 6000 small/medium diagnostic rows, full-grid acceptance is `0.982-0.999` by
+cell. About 71% of rows select scale `1.0`, meaning the grid mostly accepts a fixed-σ
+β/u re-sync after the marginal β correction. True σ scaling is less common:
+
+| scale | rows | base FFX | grid FFX | base σ | grid σ | base BLUP | grid BLUP | comment |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 0.5 | 179 | 0.4058 | 0.2918 | 0.8973 | 0.7484 | 0.7020 | 0.6804 | large gains, σ improves |
+| 0.75 | 854 | 0.2953 | 0.2188 | 0.6484 | 0.5966 | 0.6813 | 0.6441 | useful shrinkage |
+| 1.0 | 4268 | 0.3084 | 0.2442 | 0.4642 | 0.4642 | 0.5385 | 0.5193 | β/u re-sync only |
+| 1.333 | 640 | 0.3082 | 0.2438 | 0.5382 | 0.6132 | 0.7953 | 0.7053 | helps β/BLUP, often hurts σ |
+| 2.0 | 16 | 1.5100 | 1.3978 | 0.7740 | 1.8110 | 1.5257 | 1.4001 | rare, severe σ outliers |
+| rejected | 43 | 1.4224 | 1.4224 | 0.4753 | 0.4753 | 0.5760 | 0.5760 | unchanged |
+
+Row-level tradeoff rates:
+
+| cell | FFX win | σ loss | FFX win + σ loss | mean ΔFFX | mean Δσ | mean ΔBLUP |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-p-mixed train | 0.566 | 0.135 | 0.069 | -0.0108 | +0.0012 | -0.0101 |
+| small-p-sampled valid | 0.582 | 0.120 | 0.064 | -0.0195 | +0.0006 | -0.0095 |
+| small-p-sampled test | 0.600 | 0.129 | 0.079 | -0.0172 | -0.0007 | -0.0117 |
+| medium-p-mixed train | 0.683 | 0.118 | 0.070 | -0.0249 | -0.0050 | -0.0118 |
+| medium-p-sampled valid | 0.691 | 0.128 | 0.080 | -0.0286 | +0.0001 | -0.0175 |
+| medium-p-sampled test | 0.690 | 0.110 | 0.070 | -0.0250 | -0.0048 | -0.0137 |
+| all | 0.635 | 0.123 | 0.072 | -0.0210 | -0.0014 | -0.0124 |
+
+Interpretation: the new grid is primarily a β/u re-synchronization device, not a broad σ
+inflation strategy. Scale `2.0` is almost never chosen but dominates the worst σ tradeoffs.
+Scale `1.333` is a smaller version of the same pattern: β and BLUP often improve, while σ
+often worsens. Shrinking scales (`0.5`, `0.75`) are clearly useful. The next guard should
+therefore be simple: either remove `2.0`, or keep it only behind a conservative σ-distance
+or marginal-offset sanity check.
+
 Assessment
 ----------
 
@@ -147,22 +186,18 @@ Assessment
 Next Directions
 ---------------
 
-1. **Diagnose full-grid scale choices and σ tradeoffs.**
-   The full-candidate grid is now the most promising patch. Before making it default,
-   inspect accepted scales by row type and by error deltas. The key question is whether σ
-   regressions are acceptable because β/BLUP improve, or whether the Laplace target is
-   over-preferring high-variance candidates in some rows.
+1. **Test a conservative full-grid guard.**
+   The scale diagnostic shows that most benefit comes from scale `1.0` β/u re-sync and
+   shrinkage scales. Scale `2.0` is rare but creates the largest σ outliers; scale `1.333`
+   can also trade σ for β/BLUP. First test dropping `2.0`. If that loses meaningful FFX,
+   keep `2.0` only when a simple sanity check passes, such as bounded σ-distance from the
+   PIRLS+β baseline or bounded marginal-mean offset change.
 
 2. **Validate the full-candidate grid on large rows without tuning.**
    Do not tune against large yet. First run the same opt-in method on large to see whether
    the small/medium FFX gain survives and whether the known σ regressions worsen.
 
-3. **If σ regressions matter, try a conservative full-grid guard.**
-   Candidate guards: reject extreme accepted scale factors, require bounded marginal-mean
-   offset changes, or add a small σ-distance penalty to the candidate target. Prefer one
-   simple guard over multiple row-specific gates.
-
-4. **Tune the PIRLS covariance update only after full-grid validation.**
+3. **Tune the PIRLS covariance update only after full-grid validation.**
    The current diagonal update is:
 
    ```text
@@ -172,7 +207,7 @@ Next Directions
    Useful knobs are stronger `nu0`, lower log-σ blend, smaller PIRLS damping, and final
    fixed-σ PIRLS steps. Tune only against the large σ regressions, not as a broad grid.
 
-5. **Keep accept/reject by one coherent cheap Laplace target.**
+4. **Keep accept/reject by one coherent cheap Laplace target.**
    Compare joint candidates with the same approximate Laplace objective:
 
    ```text
@@ -187,11 +222,11 @@ Next Directions
    jumps. Do not use RAW/PQL BLUP fallback inside the joint candidate; fallback only if the
    whole candidate fails or loses.
 
-6. **Only after guarded diagonal PIRLS+full-grid is stable, test full Σ.**
+5. **Only after guarded diagonal PIRLS+full-grid is stable, test full Σ.**
    Full covariance is cheap for `q <= 5`, but it adds instability risk. Test it inside the
    joint Laplace-PIRLS solver, not as another posthoc marginal β correction.
 
-7. **Retire the old β-only sigma grid if full-candidate grid holds up.**
+6. **Retire the old β-only sigma grid if full-candidate grid holds up.**
    The older grid is slower than PIRLS+β and less coherent than full-candidate writeback.
 
 Low-Priority Or Rejected
@@ -235,6 +270,10 @@ uv run python -u experiments/analytical/glmm_required_benchmark.py \
     --combos small-p-mixed:train:1 small-p-sampled:valid small-p-sampled:test \
     --batch-size 32 --max-datasets 1000 \
     --poisson-marginal-beta-min-d 1 --poisson-sigma-grid-min-d 1
+
+# Full-candidate PIRLS sigma-grid scale and tradeoff diagnostic:
+uv run python -u experiments/analytical/glmm_poisson_pirls_grid_diagnostic.py \
+    --sizes small medium --max-datasets 1000 --batch-size 32
 
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical/fit.py metabeta/analytical/glmm \
