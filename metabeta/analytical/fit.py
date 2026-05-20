@@ -12,6 +12,7 @@ from metabeta.analytical.glmm.bernoulli import (
 from metabeta.analytical.glmm.poisson import (
     refinePoissonAgqBeta,
     refinePoissonLaplaceEb,
+    refinePoissonLaplacePirlsDiag,
     refinePoissonMarginalMeanBeta,
     refinePoissonSigmaGrid,
 )
@@ -344,6 +345,17 @@ def glmm(
         None,
         poisson_laplace_eb_preset,
     )
+    poisson_laplace_pirls_diag = kwargs.pop('poisson_laplace_pirls_diag', False)
+    poisson_laplace_pirls_diag_outer = kwargs.pop('poisson_laplace_pirls_diag_outer', 4)
+    poisson_laplace_pirls_diag_inner = kwargs.pop('poisson_laplace_pirls_diag_inner', 1)
+    poisson_laplace_pirls_diag_final = kwargs.pop('poisson_laplace_pirls_diag_final', 2)
+    poisson_laplace_pirls_diag_damping = kwargs.pop('poisson_laplace_pirls_diag_damping', 0.5)
+    poisson_laplace_pirls_diag_sigma_blend = kwargs.pop(
+        'poisson_laplace_pirls_diag_sigma_blend', 0.5
+    )
+    poisson_laplace_pirls_diag_prior_weight = kwargs.pop(
+        'poisson_laplace_pirls_diag_prior_weight', 4.0
+    )
     poisson_marginal_beta = kwargs.pop('poisson_marginal_beta', likelihood_family == 2)
     poisson_marginal_beta_full_psi = kwargs.pop('poisson_marginal_beta_full_psi', False)
     poisson_marginal_beta_full_psi_min_q = kwargs.pop('poisson_marginal_beta_full_psi_min_q', 3)
@@ -590,6 +602,29 @@ def glmm(
             )
             if poisson_laplace_eb_diagnostics:
                 _addLaplaceEbSkippedDiagnostics(stats, gate, Xm.dtype)
+        if map_refine and poisson_laplace_pirls_diag and Zm.shape[-1] > 0:
+            stats = refinePoissonLaplacePirlsDiag(
+                stats,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx=map_priors['nu_ffx'],
+                tau_ffx=map_priors['tau_ffx'],
+                family_ffx=map_priors['family_ffx'],
+                tau_rfx=map_priors['tau_rfx'],
+                family_sigma_rfx=map_priors['family_sigma_rfx'],
+                mask_d=mask_d,
+                mask_q=mask_q,
+                n_outer=poisson_laplace_pirls_diag_outer,
+                n_pirls=poisson_laplace_pirls_diag_inner,
+                n_final=poisson_laplace_pirls_diag_final,
+                damping=poisson_laplace_pirls_diag_damping,
+                sigma_blend=poisson_laplace_pirls_diag_sigma_blend,
+                sigma_prior_weight=poisson_laplace_pirls_diag_prior_weight,
+                return_diagnostics=poisson_laplace_eb_diagnostics,
+            )
         if map_refine and poisson_marginal_beta and Zm.shape[-1] > 0:
             stats = refinePoissonMarginalMeanBeta(
                 stats,
@@ -677,6 +712,7 @@ __all__ = [
     'refineNormalLaplaceEb',
     'refineNormalMapSrfx',
     'refinePoissonLaplaceEb',
+    'refinePoissonLaplacePirlsDiag',
     'refinePoissonAgqBeta',
     'refinePoissonMarginalMeanBeta',
     'refinePoissonSigmaGrid',
