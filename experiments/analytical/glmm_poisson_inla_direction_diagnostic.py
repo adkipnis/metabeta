@@ -20,7 +20,13 @@ import numpy as np
 import torch
 from tabulate import tabulate
 
-from experiments.analytical.glmm_inla_comparison import _flatten, _inla_estimate, _sliceBatch
+from experiments.analytical.glmm_inla_comparison import (
+    _checkInlaFits,
+    _loadInlaFits,
+    _rowCountStats,
+    _rowScalar,
+    _sliceBatch,
+)
 from metabeta.analytical.fit import glmm
 from metabeta.utils.config import loadDataConfig
 from metabeta.utils.dataloader import Dataloader, toDevice
@@ -177,9 +183,7 @@ def _extractRow(
 ) -> dict[str, float | int | str]:
     m = int(batch['m'][b].item())
     n = int(batch['n'][b].item())
-    y = batch['y'][b, :m].detach().cpu().numpy()
-    mask_n = batch['mask_n'][b, :m].detach().cpu().numpy().astype(bool)
-    y_active = y[mask_n]
+    count_stats = _rowCountStats(batch, b)
 
     beta_true = batch['ffx'][b, active_d].detach().cpu().numpy()
     sigma_true = batch['sigma_rfx'][b, active_q].detach().cpu().numpy()
@@ -194,7 +198,7 @@ def _extractRow(
 
     beta_inla = est['beta']
     sigma_inla = est['sigma_rfx']
-    blup_inla = est['blups'][:m]
+    blup_inla = est['blups']
 
     raw_ffx = _rmse(beta_raw - beta_true)
     current_ffx = _rmse(beta_current - beta_true)
@@ -212,8 +216,6 @@ def _extractRow(
     current_to_inla_sigma = _rmse(sigma_current - sigma_inla)
 
     current_stats = stats['current']
-    default_diag = torch.zeros(batch['X'].shape[0], dtype=batch['X'].dtype)
-    beta_jump_default = torch.full((batch['X'].shape[0],), float('nan'), dtype=batch['X'].dtype)
 
     return {
         'data_id': data_id,
@@ -223,24 +225,17 @@ def _extractRow(
         'q': int(active_q.size),
         'm': m,
         'n': n,
-        'y_mean': float(np.mean(y_active)) if y_active.size else float('nan'),
-        'y_zero_frac': float(np.mean(y_active == 0.0)) if y_active.size else float('nan'),
-        'y_max': float(np.max(y_active)) if y_active.size else float('nan'),
-        'accept': float(
-            current_stats.get('laplace_eb_accept', default_diag)[b].detach().cpu().item()
-        ),
-        'sigma_capped': float(
-            current_stats.get('laplace_eb_sigma_prior_capped', default_diag)[b]
-            .detach()
-            .cpu()
-            .item()
-        ),
-        'blup_fallback': float(
-            current_stats.get('laplace_eb_blup_fallback', default_diag)[b].detach().cpu().item()
-        ),
-        'beta_jump': float(
-            current_stats.get('laplace_eb_beta_jump', beta_jump_default)[b].detach().cpu().item()
-        ),
+        **count_stats,
+        'accept': _rowScalar(current_stats, 'laplace_eb_accept', b),
+        'sigma_capped': _rowScalar(current_stats, 'laplace_eb_sigma_prior_capped', b),
+        'blup_fallback': _rowScalar(current_stats, 'laplace_eb_blup_fallback', b),
+        'beta_jump': _rowScalar(current_stats, 'laplace_eb_beta_jump', b),
+        'marginal_beta_gate': _rowScalar(current_stats, 'poisson_marginal_beta_gate', b),
+        'marginal_beta_accept': _rowScalar(current_stats, 'poisson_marginal_beta_accept', b),
+        'marginal_beta_jump': _rowScalar(current_stats, 'poisson_marginal_beta_jump', b),
+        'sigma_grid_gate': _rowScalar(current_stats, 'poisson_sigma_grid_gate', b),
+        'sigma_grid_accept': _rowScalar(current_stats, 'poisson_sigma_grid_accept', b),
+        'sigma_grid_scale': _rowScalar(current_stats, 'poisson_sigma_grid_scale', b),
         'raw_ffx_rmse': raw_ffx,
         'current_ffx_rmse': current_ffx,
         'inla_ffx_rmse': inla_ffx,
@@ -298,6 +293,12 @@ def _summaryKey(row: dict, by: str) -> str:
         return _binByZeroFrac(float(row['y_zero_frac']))
     if by == 'mean_y_bin':
         return _binByMeanY(float(row['y_mean']))
+    if by == 'sigma_grid_gate':
+        val = row['sigma_grid_gate']
+        return 'sg_gate=nan' if not np.isfinite(val) else ('sg_gate=1' if val > 0.5 else 'sg_gate=0')
+    if by == 'marginal_beta_gate':
+        val = row['marginal_beta_gate']
+        return 'mb_gate=nan' if not np.isfinite(val) else ('mb_gate=1' if val > 0.5 else 'mb_gate=0')
     return str(row[by])
 
 
@@ -378,6 +379,27 @@ def _printOverall(rows: list[dict]) -> None:
         )
     )
 
+    table = [
+        [
+            len(rows),
+            f'{_mean(rows, "raw_blup_rmse"):.4f}',
+            f'{_mean(rows, "current_blup_rmse"):.4f}',
+            f'{_mean(rows, "inla_blup_rmse"):.4f}',
+            f'{_mean(rows, "blup_true_gain"):+.4f}',
+            f'{_median(rows, "blup_true_gain"):+.4f}',
+            f'{_frac(rows, "blup_true_gain"):.2f}',
+            f'{_mean(rows, "blup_inla_gap"):+.4f}',
+        ]
+    ]
+    print('\nBLUP direction summary')
+    print(
+        tabulate(
+            table,
+            headers=['N', 'RAW RMSE', 'EB RMSE', 'INLA RMSE', 'true gain', 'med gain', 'gain%', 'INLA gap'],
+            tablefmt='github',
+        )
+    )
+
 
 def _printGrouped(rows: list[dict], by: str) -> None:
     table = []
@@ -396,6 +418,7 @@ def _printGrouped(rows: list[dict], by: str) -> None:
                 f'{_mean(selected, "sigma_inla_gap"):+.4f}',
                 f'{_mean(selected, "sigma_distance_gain"):+.4f}',
                 f'{_median(selected, "sigma_distance_gain"):+.4f}',
+                f'{_mean(selected, "blup_inla_gap"):+.4f}',
                 f'{_mean(selected, "accept"):.3f}',
                 f'{_mean(selected, "sigma_capped"):.3f}',
             ]
@@ -416,6 +439,7 @@ def _printGrouped(rows: list[dict], by: str) -> None:
                 'sigma gap',
                 'sigma dist gain',
                 'sigma med dist',
+                'blup gap',
                 'accept',
                 'cap',
             ],
@@ -449,6 +473,9 @@ def _printWorst(rows: list[dict], metric: str, top_k: int, *, reverse: bool = Tr
                 f'{row["sigma_inla_mean"]:.3f}',
                 f'{row["accept"]:.0f}',
                 f'{row["sigma_capped"]:.0f}',
+                f'{row["sigma_grid_gate"]:.0f}',
+                f'{row["sigma_grid_accept"]:.0f}',
+                f'{row["marginal_beta_gate"]:.0f}',
             ]
         )
     direction = 'Top' if reverse else 'Bottom'
@@ -476,6 +503,9 @@ def _printWorst(rows: list[dict], metric: str, top_k: int, *, reverse: bool = Tr
                 'sig INLA',
                 'acc',
                 'cap',
+                'sg_gate',
+                'sg_acc',
+                'mb_gate',
             ],
             tablefmt='github',
         )
@@ -503,11 +533,15 @@ def runDiagnostic(args: argparse.Namespace) -> None:
             raise ValueError(f'{data_id} is not a Poisson dataset')
         max_d = cfg['max_d']
         max_q = cfg['max_q']
+        paths = [p for p in _pathsForArgs(cfg, args.partition, args.n_epochs) if p.exists()]
+        _checkInlaFits(paths, data_id)
         seen = 0
         ok = 0
-        for path in _pathsForArgs(cfg, args.partition, args.n_epochs):
+        for path in paths:
             if seen >= args.n_inla:
                 break
+            inla_data = _loadInlaFits(path)
+            file_n_seen = 0
             for batch in Dataloader(path, batch_size=args.batch_size, shuffle=False):
                 if seen >= args.n_inla:
                     break
@@ -522,20 +556,23 @@ def runDiagnostic(args: argparse.Namespace) -> None:
                         break
                     active_d = np.flatnonzero(mask_d[b])
                     active_q = np.flatnonzero(mask_q[b])
-                    flat = _flatten(batch, b, active_d, active_q)
-                    est = _inla_estimate(
-                        flat, likelihood_family=2, re_correlation=args.re_correlation
-                    )
-                    dataset_idx = seen
+                    inla_idx = file_n_seen
+                    file_n_seen += 1
                     seen += 1
-                    if est is None:
+                    if inla_data['failed'][inla_idx]:
                         continue
+                    m_b = int(batch['m'][b].item())
+                    est = {
+                        'beta': inla_data['beta'][inla_idx, active_d],
+                        'sigma_rfx': inla_data['sigma_rfx'][inla_idx, active_q],
+                        'blups': inla_data['blups'][inla_idx, :m_b, :][:, active_q],
+                    }
                     ok += 1
                     rows.append(
                         _extractRow(
                             data_id,
                             args.partition,
-                            dataset_idx,
+                            seen - 1,
                             batch,
                             stats,
                             b,
@@ -548,10 +585,10 @@ def runDiagnostic(args: argparse.Namespace) -> None:
 
     print(f'\ncompleted {len(rows)} matched rows in {time.perf_counter() - t0:.1f}s')
     if not rows:
-        print('No INLA rows were available. Check that R-INLA/rpy2 is installed.')
+        print('No matched rows available. Check that .inla.npz files are present.')
         return
     _printOverall(rows)
-    for by in ['data_id', 'd_bin', 'q_bin', 'zero_bin', 'mean_y_bin']:
+    for by in ['data_id', 'd_bin', 'q_bin', 'zero_bin', 'mean_y_bin', 'marginal_beta_gate', 'sigma_grid_gate']:
         _printGrouped(rows, by)
     _printWorst(rows, 'ffx_inla_gap', args.top_k)
     _printWorst(rows, 'sigma_inla_gap', args.top_k)
@@ -570,7 +607,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--n-inla', type=int, default=20)
     parser.add_argument('--batch-size', type=int, default=16)
     parser.add_argument('--top-k', type=int, default=10)
-    parser.add_argument('--re-correlation', default='diagonal', choices=['auto', 'diagonal'])
     parser.add_argument('--output-csv', default='')
     return parser.parse_args()
 # fmt: on
