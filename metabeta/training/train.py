@@ -85,7 +85,7 @@ def setup() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(
         argument_default=argparse.SUPPRESS,
-        epilog='Advanced options (max_grad_norm, rescale, skip_ref, save_latest, save_best) can be set via --config.',
+        epilog='Advanced options (max_grad_norm, rescale, save_latest, save_best) can be set via --config.',
     )
 
     # Template-based config generation (primary interface)
@@ -127,6 +127,7 @@ def setup() -> argparse.Namespace:
 
     # Evaluation settings
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction, help='Generate evaluation plots after each epoch')
+    parser.add_argument('--skip_ref', action=argparse.BooleanOptionalAction, help='Skip the pre-training reference evaluation (valid + sample at epoch 0)')
     parser.add_argument('--live_compute', action=argparse.BooleanOptionalAction, default=False, help='Recompute analytical fits live, ignoring precomputed stats in the dataset')
 
     # Saving & loading
