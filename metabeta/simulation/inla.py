@@ -482,6 +482,9 @@ class InlaFitter:
         return unpad(ds, sizes)
 
     def go(self) -> None:
+        if self.outpath.exists() and not getattr(self.cfg, 'force', False):
+            print(f'[SKIP] idx={self.cfg.idx}  → {self.outpath}')
+            return
         ds = self._getSingle(self.cfg.idx)
         re_correlation = getattr(self.cfg, 're_correlation', 'auto')
         timeout_s = getattr(self.cfg, 'timeout_s', INLA_DEFAULT_TIMEOUT_S)
