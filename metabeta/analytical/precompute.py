@@ -11,7 +11,7 @@ Usage (from any directory):
         --path outputs/data/toy/train_epoch0.npz
 
     uv run python metabeta/analytical/precompute.py \\
-        --path outputs/data/toy/valid.npz --refinement full --device cuda
+        --path outputs/data/toy/valid.npz --device cuda
 """
 
 import argparse
@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.analytical.fit import glmm
@@ -31,8 +32,6 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Pre-compute analytical fits for a dataset npz file.')
     parser.add_argument('--path', required=True,
                         help='npz file path to process')
-    parser.add_argument('--refinement', default='full', choices=['light', 'full'],
-                        help='Analytical refinement: light (EB only) or full (MAP+EB) (default: light)')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='Datasets per batch (default: 32)')
     parser.add_argument('--device', default='cpu',
@@ -43,7 +42,7 @@ def setup() -> argparse.Namespace:
 # fmt: on
 
 
-def run(path: Path, refinement: str, batch_size: int, device: torch.device) -> int:
+def run(path: Path, batch_size: int, device: torch.device) -> int:
     """Compute and save stats for one npz file. Returns number of datasets processed."""
     with np.load(path, allow_pickle=True) as f:
         raw = dict(f)
@@ -55,7 +54,6 @@ def run(path: Path, refinement: str, batch_size: int, device: torch.device) -> i
 
     lf = int(np.asarray(raw['likelihood_family']).flat[0])
     has_eps = lf == 0
-    map_refine = refinement == 'full'
 
     out: dict[str, np.ndarray] = {
         'beta_est':      np.zeros((N, d_file),        dtype=np.float32),
@@ -72,7 +70,7 @@ def run(path: Path, refinement: str, batch_size: int, device: torch.device) -> i
 
     dl = Dataloader(path, batch_size=batch_size, sortish=False, shuffle=False)
     idx = 0
-    for batch in dl:
+    for batch in tqdm(dl, desc='batches', unit='batch'):
         batch = toDevice(batch, device)
         B = int(batch['X'].shape[0])
         ms = batch['m'].cpu().numpy().astype(int)
@@ -100,7 +98,7 @@ def run(path: Path, refinement: str, batch_size: int, device: torch.device) -> i
             likelihood_family=lf,
             eta_rfx=batch.get('eta_rfx'),
             mask_q=batch.get('mask_q'),
-            map_refine=map_refine,
+            map_refine=True,
             **map_kwargs,
         )
 
@@ -153,7 +151,7 @@ def main() -> None:
     device = torch.device(cfg.device)
     print(f'Processing {path} ...', end=' ', flush=True)
     t0 = time.perf_counter()
-    n = run(path, cfg.refinement, cfg.batch_size, device)
+    n = run(path, cfg.batch_size, device)
     dt = time.perf_counter() - t0
     print(f'{n} datasets  {dt:.1f}s  ({dt / n * 1000:.1f} ms/ds)')
 
