@@ -61,6 +61,31 @@ Validation summary:
 - σ remains materially worse than INLA, especially on large rows. This is now the most
   plausible source of the remaining FFX gap through the Poisson log-link marginal mean.
 
+Covariance-Update Sanity Sweep
+------------------------------
+
+First 1000 mixed/train rows on 2026-05-20, using the retained full-grid path and changing
+one PIRLS covariance/update knob at a time:
+
+| setting | small FFX | small σ | small BLUP | medium FFX | medium σ | medium BLUP | ms/ds range |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| default | 0.2214 | 0.4529 | 0.5245 | 0.2670 | 0.4360 | 0.5199 | 35.7-58.2 |
+| `sigma_prior_weight=8` | 0.2182 | 0.4651 | 0.5263 | 0.2700 | 0.4454 | 0.5206 | 39.0-64.4 |
+| `sigma_blend=0.25` | 0.2178 | 0.4586 | 0.5248 | 0.2891 | 0.4612 | 0.5198 | 35.0-58.7 |
+| `damping=0.35` | 0.2344 | 0.4460 | 0.5275 | 0.3060 | 0.4498 | 0.5247 | 37.8-65.7 |
+| `final=4` | 0.2166 | 0.4608 | 0.5257 | 0.2631 | 0.4341 | 0.5212 | 37.6-61.2 |
+| `final=6` | 0.2160 | 0.4607 | 0.5261 | 0.2602 | 0.4468 | 0.5216 | 38.1-65.8 |
+
+Interpretation:
+
+- Stronger covariance shrinkage or slower covariance blending does not close the medium
+  FFX gap and usually worsens σ.
+- Lower damping hurts FFX, so the main issue is not obvious PIRLS overshoot.
+- More final fixed-σ PIRLS steps give a small FFX gain, but the gain is much smaller than
+  the INLA gap and trades against σ/BLUP/runtime. Keep this as a low-risk knob, not a main
+  research path.
+- Further scalar tuning of the diagonal covariance update is low expected value.
+
 Grid Diagnostic
 ---------------
 
@@ -90,7 +115,7 @@ Rejected
 Next Directions
 ---------------
 
-1. **Tune the diagonal PIRLS covariance update cautiously.**
+1. **Do not spend more effort on scalar diagonal covariance tuning.**
 
    Current update:
 
@@ -98,10 +123,19 @@ Next Directions
    sigma_j^2 <- (sum_g (u_gj^2 + diag(A_g^-1)_j) + nu0 * sigma0_j^2) / (m + nu0)
    ```
 
-   Test stronger `nu0`, lower log-σ blend, smaller PIRLS damping, and final fixed-σ PIRLS
-   steps. Optimize against the residual σ/FFX gap, not by adding broad inflation scales.
+   The sanity sweep found only small FFX gains from extra final fixed-σ PIRLS steps and no
+   convincing σ/BLUP improvement. Leave defaults unchanged for now; `final=4` or `final=6`
+   can be retested later if a larger architecture change makes convergence the bottleneck.
 
-2. **Keep one accept/reject target.**
+2. **Move the next serious patch to full-Σ joint PIRLS.**
+
+   The current diagonal-Σ solver is still substantially behind INLA on FFX and σ,
+   especially from medium upward. If covariance tuning is weak, the likely missing piece is
+   latent covariance geometry, not another scalar correction. Full `Σ` is cheap for
+   `q <= 5`, but it should be estimated inside the joint β/u/Σ PIRLS loop, not as a
+   posthoc marginal β correction.
+
+3. **Keep one accept/reject target.**
 
    Use the diagonal Laplace target for joint candidates:
 
@@ -113,12 +147,17 @@ Next Directions
        + priors
    ```
 
-3. **Then test full Σ inside the joint PIRLS solver.**
+   The same target should score current EB/full-grid candidates and future full-Σ PIRLS
+   candidates, so we can compare architectures rather than gate heuristics.
 
-   Full covariance is cheap for `q <= 5`, but it should be tested inside the joint solver,
-   not as a posthoc marginal β correction.
+4. **If full-Σ PIRLS still leaves a large FFX gap, ask for/try architectural alternatives.**
 
-4. **Run huge-row validation before 8k.**
+   The main alternatives to discuss or prototype are cheap hyperparameter averaging around
+   the PIRLS mode, Laplace-target β optimization with curvature terms, or a limited
+   multi-candidate solver. Avoid broad posthoc gates unless they are selected by the same
+   coherent objective.
+
+5. **Run huge-row validation before 8k.**
 
    Full 8k Poisson benchmarks remain postponed until one more meaningful accuracy patch or
    complete huge-row validation lands.
