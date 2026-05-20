@@ -6,12 +6,10 @@ directly from the batch instead of running glmm() live.
 
 The file is skipped if it already contains beta_est unless --overwrite is given.
 
-Usage (from any directory):
-    uv run python metabeta/analytical/precompute.py \\
-        --path outputs/data/toy/train_epoch0.npz
-
-    uv run python metabeta/analytical/precompute.py \\
-        --path outputs/data/toy/valid.npz --device cuda
+Usage (from metabeta/analytical/):
+    python precompute.py --size small --family 0 --ds_type mixed --partition valid
+    python precompute.py --size small --family 0 --ds_type mixed --partition train --epoch 1
+    python precompute.py --size small --family 1 --ds_type mixed --partition train --epoch 42 --overwrite
 """
 
 import argparse
@@ -24,22 +22,31 @@ import torch
 from tqdm import tqdm
 
 from metabeta.utils.dataloader import Dataloader, toDevice
+from metabeta.utils.io import datasetFilename
+from metabeta.utils.templates import FAMILY_NAMES
 from metabeta.analytical.fit import glmm
+
+OUTDIR = Path(__file__).resolve().parent / '..' / 'outputs' / 'data'
 
 
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Pre-compute analytical fits for a dataset npz file.')
-    parser.add_argument('--path', required=True,
-                        help='npz file path to process')
-    parser.add_argument('--batch_size', type=int, default=32,
-                        help='Datasets per batch (default: 32)')
-    parser.add_argument('--device', default='cpu',
-                        help='Compute device: cpu|cuda (default: cpu)')
-    parser.add_argument('--overwrite', action='store_true',
-                        help='Recompute even if stats are already present')
+    parser.add_argument('--size',      required=True,           help='Dataset size: tiny|small|medium|large|huge')
+    parser.add_argument('--family',    type=int, required=True, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
+    parser.add_argument('--ds_type',   type=str, default='mixed', help='Dataset type: toy|flat|scm|mixed|sampled|real (default: mixed)')
+    parser.add_argument('--partition', type=str, default='valid', help='Partition: train|valid|test|eval (default: valid)')
+    parser.add_argument('--epoch',     type=int, default=1,     help='Training epoch, only used for partition=train (default: 1)')
+    parser.add_argument('--batch_size', type=int, default=32,   help='Datasets per batch (default: 32)')
+    parser.add_argument('--device',    default='cpu',           help='Compute device: cpu|cuda (default: cpu)')
+    parser.add_argument('--overwrite', action='store_true',     help='Recompute even if stats are already present')
     return parser.parse_args()
 # fmt: on
+
+
+def buildPath(size: str, family: int, ds_type: str, partition: str, epoch: int) -> Path:
+    data_id = f'{size}-{FAMILY_NAMES[family]}-{ds_type}'
+    return OUTDIR / data_id / datasetFilename(partition, epoch)
 
 
 def run(path: Path, batch_size: int, device: torch.device) -> int:
@@ -137,7 +144,7 @@ def run(path: Path, batch_size: int, device: torch.device) -> int:
 
 def main() -> None:
     cfg = setup()
-    path = Path(cfg.path)
+    path = buildPath(cfg.size, cfg.family, cfg.ds_type, cfg.partition, cfg.epoch)
 
     if not path.exists():
         raise FileNotFoundError(path)
