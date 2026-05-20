@@ -24,4 +24,4 @@ Testing Scheme
 
 ### Competitor comparisons (R-INLA or any slower reference)
 
-- Use the first 1000 dataset indices of each set for both the reference method and our method.
+- Use the first 1000 dataset indices of each set for both the reference method and our method. Skip epoch 2, just use the first 1000 datasets of epoch 1.
