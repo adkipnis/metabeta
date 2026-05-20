@@ -1,17 +1,17 @@
-"""Pre-compute analytical GLMM statistics and save into dataset npz files.
+"""Pre-compute analytical GLMM statistics and save into a dataset npz file.
 
 Adds beta_est, sigma_rfx_est, blup_est, blup_var, Psi, and sigma_eps_est /
-phi_pearson to each npz so that during training data['stats'] is populated
+phi_pearson to the npz so that during training data['stats'] is populated
 directly from the batch instead of running glmm() live.
 
-Files that already contain beta_est are skipped unless --overwrite is given.
+The file is skipped if it already contains beta_est unless --overwrite is given.
 
 Usage (from any directory):
-    uv run python metabeta/simulation/precompute_fits.py \\
-        --paths outputs/data/toy/train_epoch0.npz outputs/data/toy/valid.npz
+    uv run python metabeta/analytical/precompute.py \\
+        --path outputs/data/toy/train_epoch0.npz
 
-    uv run python metabeta/simulation/precompute_fits.py \\
-        --paths outputs/data/toy/*.npz --refinement full --device cuda
+    uv run python metabeta/analytical/precompute.py \\
+        --path outputs/data/toy/valid.npz --refinement full --device cuda
 """
 
 import argparse
@@ -28,10 +28,10 @@ from metabeta.analytical.fit import glmm
 
 # fmt: off
 def setup() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Pre-compute analytical fits for dataset npz files.')
-    parser.add_argument('--paths', nargs='+', required=True,
-                        help='npz file paths to process')
-    parser.add_argument('--refinement', default='light', choices=['light', 'full'],
+    parser = argparse.ArgumentParser(description='Pre-compute analytical fits for a dataset npz file.')
+    parser.add_argument('--path', required=True,
+                        help='npz file path to process')
+    parser.add_argument('--refinement', default='full', choices=['light', 'full'],
                         help='Analytical refinement: light (EB only) or full (MAP+EB) (default: light)')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='Datasets per batch (default: 32)')
@@ -43,7 +43,7 @@ def setup() -> argparse.Namespace:
 # fmt: on
 
 
-def _compute_file(path: Path, refinement: str, batch_size: int, device: torch.device) -> int:
+def run(path: Path, refinement: str, batch_size: int, device: torch.device) -> int:
     """Compute and save stats for one npz file. Returns number of datasets processed."""
     with np.load(path, allow_pickle=True) as f:
         raw = dict(f)
@@ -139,25 +139,23 @@ def _compute_file(path: Path, refinement: str, batch_size: int, device: torch.de
 
 def main() -> None:
     cfg = setup()
+    path = Path(cfg.path)
+
+    if not path.exists():
+        raise FileNotFoundError(path)
+
+    with np.load(path, allow_pickle=True) as f:
+        already_done = 'beta_est' in f
+    if already_done and not cfg.overwrite:
+        print(f'SKIP (already done): {path}')
+        return
+
     device = torch.device(cfg.device)
-
-    for path_str in cfg.paths:
-        path = Path(path_str)
-        if not path.exists():
-            print(f'SKIP (not found):    {path}')
-            continue
-
-        with np.load(path, allow_pickle=True) as f:
-            already_done = 'beta_est' in f
-        if already_done and not cfg.overwrite:
-            print(f'SKIP (already done): {path}')
-            continue
-
-        print(f'Processing {path} ...', end=' ', flush=True)
-        t0 = time.perf_counter()
-        n = _compute_file(path, cfg.refinement, cfg.batch_size, device)
-        dt = time.perf_counter() - t0
-        print(f'{n} datasets  {dt:.1f}s  ({dt / n * 1000:.1f} ms/ds)')
+    print(f'Processing {path} ...', end=' ', flush=True)
+    t0 = time.perf_counter()
+    n = run(path, cfg.refinement, cfg.batch_size, device)
+    dt = time.perf_counter() - t0
+    print(f'{n} datasets  {dt:.1f}s  ({dt / n * 1000:.1f} ms/ds)')
 
 
 if __name__ == '__main__':
