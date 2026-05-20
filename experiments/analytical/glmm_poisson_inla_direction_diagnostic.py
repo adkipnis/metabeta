@@ -542,7 +542,7 @@ def runDiagnostic(args: argparse.Namespace) -> None:
                 break
             inla_data = _loadInlaFits(path)
             file_n_seen = 0
-            for batch in Dataloader(path, batch_size=args.batch_size, shuffle=False):
+            for batch in Dataloader(path, batch_size=args.batch_size, sortish=False, shuffle=False):
                 if seen >= args.n_inla:
                     break
                 if seen + batch['X'].shape[0] > args.n_inla:
@@ -603,7 +603,7 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-ids', nargs='+', default=DATA_IDS)
     parser.add_argument('--partition', default='train', choices=['train', 'valid', 'test'])
-    parser.add_argument('--n-epochs', type=int, default=2)
+    parser.add_argument('--n-epochs', type=int, default=1)
     parser.add_argument('--n-inla', type=int, default=20)
     parser.add_argument('--batch-size', type=int, default=16)
     parser.add_argument('--top-k', type=int, default=10)
