@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-20 (full-candidate PIRLS sigma-grid diagnostics added)
+Last updated: 2026-05-20 (conservative PIRLS sigma-grid guard enabled)
 
 Goal
 ----
@@ -72,10 +72,12 @@ glmm(
 ```
 
 In the benchmark this is exposed as `poisson_laplace_pirls_full_grid`. It uses PIRLS for
-σ/BLUP geometry, applies the marginal-mean β correction, then evaluates a small diagonal σ
-grid. Each σ candidate gets a few fixed-σ joint β/u PIRLS steps and is accepted by the
-same diagonal Laplace target. Unlike the older σ grid, it writes back the full candidate.
-It should remain opt-in until large rows and scale-choice diagnostics are checked.
+σ/BLUP geometry, applies the marginal-mean β correction, then evaluates a conservative
+diagonal σ grid with scales `(0.5, 0.75, 1.0)`. Each σ candidate gets a few fixed-σ joint
+β/u PIRLS steps and is accepted by the same diagonal Laplace target. Unlike the older σ
+grid, it writes back the full candidate. The grid deliberately allows shrinkage or fixed-σ
+β/u re-synchronization only; inflation scales are disabled by default after producing rare
+large σ outliers. It should remain opt-in until large rows are checked.
 
 Current Evidence
 ----------------
@@ -86,17 +88,17 @@ INLA values are the current first-1000 diagonal R-INLA references. "Relaxed curr
 
 | Dataset | part | RAW FFX | default FFX | relaxed FFX | PIRLS+β FFX | full-grid FFX | INLA FFX | relaxed σ | PIRLS+β σ | full-grid σ | INLA σ | relaxed BLUP | PIRLS+β BLUP | full-grid BLUP | INLA BLUP | full-grid ms/ds |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-p-mixed | train | 0.4806 | 0.4269 | 0.2839 | 0.2585 | 0.2218 | 0.1835 | 0.5272 | 0.4465 | 0.4939 | 0.3404 | 0.5713 | 0.5413 | 0.5272 | 0.4936 | 32.2 |
-| small-p-sampled | valid | 0.7351 | 0.6375 | 0.3277 | 0.3182 | 0.2518 | 0.2276 | 0.5645 | 0.4955 | 0.5028 | 0.4356 | 0.5823 | 0.5539 | 0.5394 | 0.5309 | 30.6 |
-| small-p-sampled | test | 0.6525 | 0.5429 | 0.2982 | 0.2797 | 0.2201 | 0.1997 | 0.6323 | 0.4841 | 0.4661 | 0.3966 | 0.6708 | 0.5533 | 0.5275 | 0.5281 | 31.6 |
+| small-p-mixed | train | 0.4806 | 0.4269 | 0.2839 | 0.2585 | 0.2214 | 0.1835 | 0.5272 | 0.4465 | 0.4529 | 0.3404 | 0.5713 | 0.5413 | 0.5245 | 0.4936 | 37.9 |
+| small-p-sampled | valid | 0.7351 | 0.6375 | 0.3277 | 0.3182 | 0.2523 | 0.2276 | 0.5645 | 0.4955 | 0.4919 | 0.4356 | 0.5823 | 0.5539 | 0.5384 | 0.5309 | 34.2 |
+| small-p-sampled | test | 0.6525 | 0.5429 | 0.2982 | 0.2797 | 0.2205 | 0.1997 | 0.6323 | 0.4841 | 0.4618 | 0.3966 | 0.6708 | 0.5533 | 0.5270 | 0.5281 | 36.4 |
 
 Medium/large first-1000 validation:
 
 | Dataset | part | current FFX | PIRLS+β FFX | full-grid FFX | INLA FFX | current σ | PIRLS+β σ | full-grid σ | INLA σ | current BLUP | PIRLS+β BLUP | full-grid BLUP | INLA BLUP | current ms/ds | full-grid ms/ds |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| medium-p-mixed | train | 0.3587 | 0.3391 | 0.2674 | 0.1675 | 0.5695 | 0.4798 | 0.4555 | 0.3214 | 0.6445 | 0.5392 | 0.5231 | 0.4789 | 69.1 | 59.5 |
-| medium-p-sampled | valid | 0.4333 | 0.3989 | 0.3309 | 0.2146 | 0.5646 | 0.5274 | 0.5982 | 0.4209 | 0.7509 | 0.6896 | 0.6370 | 0.5618 | 72.3 | 61.1 |
-| medium-p-sampled | test | 0.3779 | 0.3565 | 0.2966 | 0.2267 | 0.5979 | 0.5056 | 0.5056 | 0.3883 | 0.6261 | 0.5848 | 0.5607 | 0.5849 | 67.6 | 58.3 |
+| medium-p-mixed | train | 0.3587 | 0.3391 | 0.2670 | 0.1675 | 0.5695 | 0.4798 | 0.4360 | 0.3214 | 0.6445 | 0.5392 | 0.5199 | 0.4789 | 69.1 | 66.7 |
+| medium-p-sampled | valid | 0.4333 | 0.3989 | 0.3385 | 0.2146 | 0.5646 | 0.5274 | 0.5229 | 0.4209 | 0.7509 | 0.6896 | 0.6334 | 0.5618 | 72.3 | 68.8 |
+| medium-p-sampled | test | 0.3779 | 0.3565 | 0.2968 | 0.2267 | 0.5979 | 0.5056 | 0.5016 | 0.3883 | 0.6261 | 0.5848 | 0.5603 | 0.5849 | 67.6 | 64.6 |
 | large-p-mixed | train | 0.4962 | 0.4723 | n/t | 0.1778 | 0.6788 | 0.7117 | n/t | 0.3076 | 0.9667 | 0.7726 | n/t | 0.5001 | 79.9 | n/t |
 | large-p-sampled | valid | 0.5042 | 0.5161 | n/t | 0.2467 | 0.7873 | 0.5977 | n/t | 0.4232 | 0.7538 | 0.7006 | n/t | 0.5870 | 78.0 | n/t |
 | large-p-sampled | test | 0.5673 | 0.5386 | n/t | 0.2186 | 0.6296 | 0.7846 | n/t | 0.3439 | 0.9427 | 0.8512 | n/t | 0.5618 | 83.1 | n/t |
@@ -128,37 +130,35 @@ uv run python -u experiments/analytical/glmm_poisson_pirls_grid_diagnostic.py \
     --sizes small medium --max-datasets 1000 --batch-size 32
 ```
 
-Across the 6000 small/medium diagnostic rows, full-grid acceptance is `0.982-0.999` by
-cell. About 71% of rows select scale `1.0`, meaning the grid mostly accepts a fixed-σ
-β/u re-sync after the marginal β correction. True σ scaling is less common:
+The default diagnostic now uses conservative scales `(0.5, 0.75, 1.0)`. Across the 6000
+small/medium diagnostic rows, full-grid acceptance is `0.982-0.999` by cell. About 82% of
+accepted rows select scale `1.0`, meaning the grid mostly accepts a fixed-σ β/u re-sync
+after the marginal β correction. True σ scaling is less common and only shrinks σ:
 
 | scale | rows | base FFX | grid FFX | base σ | grid σ | base BLUP | grid BLUP | comment |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | 0.5 | 179 | 0.4058 | 0.2918 | 0.8973 | 0.7484 | 0.7020 | 0.6804 | large gains, σ improves |
-| 0.75 | 854 | 0.2953 | 0.2188 | 0.6484 | 0.5966 | 0.6813 | 0.6441 | useful shrinkage |
-| 1.0 | 4268 | 0.3084 | 0.2442 | 0.4642 | 0.4642 | 0.5385 | 0.5193 | β/u re-sync only |
-| 1.333 | 640 | 0.3082 | 0.2438 | 0.5382 | 0.6132 | 0.7953 | 0.7053 | helps β/BLUP, often hurts σ |
-| 2.0 | 16 | 1.5100 | 1.3978 | 0.7740 | 1.8110 | 1.5257 | 1.4001 | rare, severe σ outliers |
+| 0.75 | 856 | 0.3024 | 0.2218 | 0.6413 | 0.5946 | 0.6741 | 0.6398 | useful shrinkage |
+| 1.0 | 4922 | 0.3321 | 0.2736 | 0.4642 | 0.4642 | 0.5714 | 0.5431 | β/u re-sync only |
 | rejected | 43 | 1.4224 | 1.4224 | 0.4753 | 0.4753 | 0.5760 | 0.5760 | unchanged |
 
 Row-level tradeoff rates:
 
 | cell | FFX win | σ loss | FFX win + σ loss | mean ΔFFX | mean Δσ | mean ΔBLUP |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-p-mixed train | 0.566 | 0.135 | 0.069 | -0.0108 | +0.0012 | -0.0101 |
-| small-p-sampled valid | 0.582 | 0.120 | 0.064 | -0.0195 | +0.0006 | -0.0095 |
-| small-p-sampled test | 0.600 | 0.129 | 0.079 | -0.0172 | -0.0007 | -0.0117 |
-| medium-p-mixed train | 0.683 | 0.118 | 0.070 | -0.0249 | -0.0050 | -0.0118 |
-| medium-p-sampled valid | 0.691 | 0.128 | 0.080 | -0.0286 | +0.0001 | -0.0175 |
-| medium-p-sampled test | 0.690 | 0.110 | 0.070 | -0.0250 | -0.0048 | -0.0137 |
-| all | 0.635 | 0.123 | 0.072 | -0.0210 | -0.0014 | -0.0124 |
+| small-p-mixed train | 0.565 | 0.043 | 0.025 | -0.0110 | -0.0026 | -0.0112 |
+| small-p-sampled valid | 0.576 | 0.047 | 0.027 | -0.0193 | -0.0024 | -0.0103 |
+| small-p-sampled test | 0.599 | 0.042 | 0.028 | -0.0171 | -0.0030 | -0.0124 |
+| medium-p-mixed train | 0.684 | 0.057 | 0.041 | -0.0250 | -0.0066 | -0.0125 |
+| medium-p-sampled valid | 0.689 | 0.051 | 0.042 | -0.0284 | -0.0032 | -0.0181 |
+| medium-p-sampled test | 0.692 | 0.057 | 0.046 | -0.0249 | -0.0055 | -0.0141 |
+| all | 0.634 | 0.050 | 0.035 | -0.0209 | -0.0039 | -0.0131 |
 
-Interpretation: the new grid is primarily a β/u re-synchronization device, not a broad σ
-inflation strategy. Scale `2.0` is almost never chosen but dominates the worst σ tradeoffs.
-Scale `1.333` is a smaller version of the same pattern: β and BLUP often improve, while σ
-often worsens. Shrinking scales (`0.5`, `0.75`) are clearly useful. The next guard should
-therefore be simple: either remove `2.0`, or keep it only behind a conservative σ-distance
-or marginal-offset sanity check.
+Interpretation: the grid is primarily a β/u re-synchronization device, not a broad σ
+inflation strategy. Exploratory inflation scales showed that `2.0` was almost never chosen
+but dominated the worst σ tradeoffs, while `1.333` preserved FFX but doubled the σ-loss
+row rate. Dropping both inflation scales leaves FFX essentially unchanged, improves mean σ,
+and cuts σ-loss rows from about `12.3%` to `5.0%`.
 
 Assessment
 ----------
@@ -170,9 +170,9 @@ Assessment
 - The first PIRLS prototype confirms the joint-geometry hypothesis for σ/BLUP. The hybrid
   result confirms that PIRLS geometry feeds the marginal-mean β correction better than the
   old EB/grid geometry.
-- σ is better than RAW after EB, but still materially worse than INLA. The full-candidate
-  grid can trade σ accuracy for better β/BLUP under the Laplace target, so we need scale
-  diagnostics before treating it as a universal default.
+- σ is better than RAW after EB, but still materially worse than INLA. The conservative
+  full-candidate grid avoids broad σ inflation and improved σ versus the first full-grid
+  diagnostic, but it still trails INLA.
 - BLUP is conservative by design. RAW/PQL BLUP fallback avoids previous regressions, but
   INLA is better in the current table, especially large mixed/test rows.
 - The remaining gap likely reflects Poisson-specific β/σ/u coupling under the log link.
@@ -186,18 +186,12 @@ Assessment
 Next Directions
 ---------------
 
-1. **Test a conservative full-grid guard.**
-   The scale diagnostic shows that most benefit comes from scale `1.0` β/u re-sync and
-   shrinkage scales. Scale `2.0` is rare but creates the largest σ outliers; scale `1.333`
-   can also trade σ for β/BLUP. First test dropping `2.0`. If that loses meaningful FFX,
-   keep `2.0` only when a simple sanity check passes, such as bounded σ-distance from the
-   PIRLS+β baseline or bounded marginal-mean offset change.
+1. **Validate the conservative full-candidate grid on large rows without tuning.**
+   Do not tune against large yet. First run the same opt-in method with conservative
+   scales `(0.5, 0.75, 1.0)` to see whether the small/medium FFX gain survives and whether
+   the known large-row σ regressions worsen.
 
-2. **Validate the full-candidate grid on large rows without tuning.**
-   Do not tune against large yet. First run the same opt-in method on large to see whether
-   the small/medium FFX gain survives and whether the known σ regressions worsen.
-
-3. **Tune the PIRLS covariance update only after full-grid validation.**
+2. **Tune the PIRLS covariance update only after full-grid validation.**
    The current diagonal update is:
 
    ```text
@@ -207,7 +201,7 @@ Next Directions
    Useful knobs are stronger `nu0`, lower log-σ blend, smaller PIRLS damping, and final
    fixed-σ PIRLS steps. Tune only against the large σ regressions, not as a broad grid.
 
-4. **Keep accept/reject by one coherent cheap Laplace target.**
+3. **Keep accept/reject by one coherent cheap Laplace target.**
    Compare joint candidates with the same approximate Laplace objective:
 
    ```text
@@ -222,11 +216,11 @@ Next Directions
    jumps. Do not use RAW/PQL BLUP fallback inside the joint candidate; fallback only if the
    whole candidate fails or loses.
 
-5. **Only after guarded diagonal PIRLS+full-grid is stable, test full Σ.**
+4. **Only after guarded diagonal PIRLS+full-grid is stable, test full Σ.**
    Full covariance is cheap for `q <= 5`, but it adds instability risk. Test it inside the
    joint Laplace-PIRLS solver, not as another posthoc marginal β correction.
 
-6. **Retire the old β-only sigma grid if full-candidate grid holds up.**
+5. **Retire the old β-only sigma grid if full-candidate grid holds up.**
    The older grid is slower than PIRLS+β and less coherent than full-candidate writeback.
 
 Low-Priority Or Rejected
@@ -263,6 +257,12 @@ uv run python -u experiments/analytical/glmm_required_benchmark.py \
     --family p --methods current poisson_laplace_pirls_diag poisson_laplace_pirls_beta \
     --sizes medium large --batch-size 32 --max-datasets 1000 \
     --poisson-marginal-beta-min-d 1 --poisson-sigma-grid-min-d 1
+
+# Conservative full-candidate PIRLS grid:
+uv run python -u experiments/analytical/glmm_required_benchmark.py \
+    --family p --methods poisson_laplace_pirls_full_grid \
+    --sizes small medium large --batch-size 32 --max-datasets 1000 \
+    --poisson-marginal-beta-min-d 1
 
 # Small-row relaxed-current versus diagonal PIRLS+β check:
 uv run python -u experiments/analytical/glmm_required_benchmark.py \

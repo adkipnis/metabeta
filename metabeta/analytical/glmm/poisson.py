@@ -522,7 +522,7 @@ def refinePoissonLaplacePirlsSigmaGrid(
     family_sigma_rfx: torch.Tensor | None = None,
     mask_d: torch.Tensor | None = None,
     mask_q: torch.Tensor | None = None,
-    scales: tuple[float, ...] = (0.5, 0.75, 1.0, 1.3333333, 2.0),
+    scales: tuple[float, ...] = (0.5, 0.75, 1.0),
     n_steps: int = 2,
     damping: float = 0.5,
     min_d: int = 1,
@@ -538,6 +538,8 @@ def refinePoissonLaplacePirlsSigmaGrid(
     Unlike ``refinePoissonSigmaGrid``, this pass scores and writes back the whole candidate:
     β, diagonal σ, BLUPs, and BLUP variances. Each σ scale is followed by a few joint PIRLS
     β/u steps at fixed σ, then accepted by the same diagonal Laplace target used by PIRLS.
+    The default grid is conservative: it allows shrinkage or fixed-σ re-synchronization,
+    but avoids σ-inflation candidates that created rare large σ outliers in diagnostics.
     """
     d = Xm.shape[-1]
     q = Zm.shape[-1]

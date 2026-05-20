@@ -541,7 +541,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-laplace-pirls-diag-damping', type=float, default=0.5)
     parser.add_argument('--poisson-laplace-pirls-diag-sigma-blend', type=float, default=0.5)
     parser.add_argument('--poisson-laplace-pirls-diag-prior-weight', type=float, default=4.0)
-    parser.add_argument('--poisson-laplace-pirls-sigma-grid-scales', type=float, nargs='+', default=[0.5, 0.75, 1.0, 1.3333333, 2.0])
+    parser.add_argument('--poisson-laplace-pirls-sigma-grid-scales', type=float, nargs='+', default=[0.5, 0.75, 1.0])
     parser.add_argument('--poisson-laplace-pirls-sigma-grid-steps', type=int, default=2)
     parser.add_argument('--poisson-laplace-pirls-sigma-grid-min-d', type=int, default=1)
     parser.add_argument('--poisson-laplace-pirls-sigma-grid-max-q', type=int, default=None)

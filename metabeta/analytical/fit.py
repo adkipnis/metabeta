@@ -359,7 +359,7 @@ def glmm(
     )
     poisson_laplace_pirls_sigma_grid = kwargs.pop('poisson_laplace_pirls_sigma_grid', False)
     poisson_laplace_pirls_sigma_grid_scales = kwargs.pop(
-        'poisson_laplace_pirls_sigma_grid_scales', (0.5, 0.75, 1.0, 1.3333333, 2.0)
+        'poisson_laplace_pirls_sigma_grid_scales', (0.5, 0.75, 1.0)
     )
     poisson_laplace_pirls_sigma_grid_steps = kwargs.pop('poisson_laplace_pirls_sigma_grid_steps', 2)
     poisson_laplace_pirls_sigma_grid_min_d = kwargs.pop('poisson_laplace_pirls_sigma_grid_min_d', 1)
