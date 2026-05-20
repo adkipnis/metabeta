@@ -127,6 +127,7 @@ def setup() -> argparse.Namespace:
 
     # Evaluation settings
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction, help='Generate evaluation plots after each epoch')
+    parser.add_argument('--live_compute', action=argparse.BooleanOptionalAction, default=False, help='Recompute analytical fits live, ignoring precomputed stats in the dataset')
 
     # Saving & loading
     parser.add_argument('--r_tag', type=str, help='Run tag suffix appended to the checkpoint directory name')
@@ -188,6 +189,7 @@ class Trainer:
         # init data, model and optimizer
         self._initData()
         self._initModel()
+        self.model.live_compute_fits = getattr(self.cfg, 'live_compute', False)
         self._valid_stats_cache: list[dict] = []
         if self.model.analytical_context:
             self._precomputeValidStats()
@@ -287,7 +289,10 @@ class Trainer:
         """
         for batch in self.dl_valid:
             batch = toDevice(batch, self.device)
-            self._valid_stats_cache.append(self.model._dataStatistics(batch))
+            if 'stats' in batch and not self.model.live_compute_fits:
+                self._valid_stats_cache.append(batch['stats'])
+            else:
+                self._valid_stats_cache.append(self.model._dataStatistics(batch))
 
     def _initWandb(self) -> None:
         output_dir = Path(self.dir, '..', 'outputs')
