@@ -20,15 +20,17 @@ OVERWRITE=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --data_id)  TAG="$2";         shift 2 ;;
-        --start)    START_EPOCH="$2"; shift 2 ;;
+        --family)    FAM_NAME="$2";    shift 2 ;;
+        --size)      SIZE="$2";        shift 2 ;;
+        --start)     START_EPOCH="$2"; shift 2 ;;
         --overwrite) OVERWRITE="--overwrite"; shift ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
-[[ -z "$TAG" ]] && { echo "Usage: $0 --data_id <size-family-ds_type> [--start <epoch>] [--overwrite]"; exit 1; }
+[[ -z "${FAM_NAME:-}" || -z "${SIZE:-}" ]] && {
+    echo "Usage: $0 --family <n|b|p> --size <size> [--start <epoch>] [--overwrite]"; exit 1
+}
 
-IFS='-' read -r SIZE FAM_NAME DS_TYPE <<< "$TAG"
 case $FAM_NAME in
     n) FAMILY=0 ;;
     b) FAMILY=1 ;;
@@ -45,8 +47,8 @@ cd $HOME/metabeta/metabeta/analytical
 
 if [[ $SLURM_ARRAY_TASK_ID -lt $N_NON_TRAIN ]]; then
     PARTITION="${NON_TRAIN[$SLURM_ARRAY_TASK_ID]}"
-    python precompute.py --size "${SIZE}" --family ${FAMILY} --ds_type "${DS_TYPE}" --partition "${PARTITION}" ${OVERWRITE}
+    python precompute.py --size "${SIZE}" --family ${FAMILY} --ds_type sampled --partition "${PARTITION}" ${OVERWRITE}
 else
     EPOCH=$(( START_EPOCH + (SLURM_ARRAY_TASK_ID - N_NON_TRAIN) * CHUNK_SIZE ))
-    python precompute.py --size "${SIZE}" --family ${FAMILY} --ds_type "${DS_TYPE}" --partition train --epoch ${EPOCH} ${OVERWRITE}
+    python precompute.py --size "${SIZE}" --family ${FAMILY} --ds_type mixed --partition train --epoch ${EPOCH} ${OVERWRITE}
 fi
