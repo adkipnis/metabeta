@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-19
+Last updated: 2026-05-20
 
 Goal
 ----
@@ -50,18 +50,12 @@ not treated as decisive while background INLA jobs are consuming CPU.
 
 | Dataset | part | default FFX | INLA FFX | default σ | INLA σ | default BLUP | INLA BLUP |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-p-mixed | train | 0.4269 | 0.2261 | 0.5272 | 0.4242 | 0.5713 | 0.5210 |
-| small-p-sampled | valid | 0.6375 | 0.2589 | 0.5645 | 0.4597 | 0.5823 | 0.5364 |
-| small-p-sampled | test | 0.5429 | 0.2369 | 0.6323 | 0.4375 | 0.6708 | 0.5326 |
-| medium-p-mixed | train | 0.3587 | 0.1901 | 0.5695 | 0.3706 | 0.6445 | 0.5113 |
-| medium-p-sampled | valid | 0.4333 | 0.2394 | 0.5646 | 0.4556 | 0.7509 | 0.5568 |
-| medium-p-sampled | test | 0.3779 | 0.2446 | 0.5979 | 0.3592 | 0.6261 | 0.5491 |
-| large-p-mixed | train | 0.4962 | 0.1974 | 0.6788 | 0.3416 | 0.9667 | 0.5316 |
-| large-p-sampled | valid | 0.5042 | 0.2716 | 0.7873 | 0.4563 | 0.7538 | 0.6062 |
-| large-p-sampled | test | 0.5673 | 0.2340 | 0.6296 | 0.3713 | 0.9427 | 0.5447 |
-| huge-p-mixed | train | 0.7143 | pending | 0.7202 | pending | 1.3458 | pending |
-| huge-p-sampled | valid | 1.0549 | 0.2720 | 1.1463 | 0.4048 | 1.8398 | 0.6035 |
-| huge-p-sampled | test | 0.7928 | 0.2579 | 0.8989 | 0.3961 | 1.2842 | 0.6051 |
+| small-p-mixed | train | 0.4269 | 0.1835 | 0.5272 | 0.3404 | 0.5713 | 0.4936 |
+| small-p-sampled | valid | 0.6375 | 0.2276 | 0.5645 | 0.4356 | 0.5823 | 0.5309 |
+| small-p-sampled | test | 0.5429 | 0.1997 | 0.6323 | 0.3966 | 0.6708 | 0.5281 |
+| medium-p-mixed | train | 0.3587 | 0.1675 | 0.5695 | 0.3214 | 0.6445 | 0.4789 |
+| medium-p-sampled | valid | 0.4333 | 0.2146 | 0.5646 | 0.4209 | 0.7509 | 0.5618 |
+| medium-p-sampled | test | 0.3779 | 0.2267 | 0.5979 | 0.3883 | 0.6261 | 0.5849 |
 
 What This Means
 ---------------
