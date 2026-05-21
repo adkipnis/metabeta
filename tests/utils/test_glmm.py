@@ -417,6 +417,9 @@ def test_glmm_normal_laplace_eb_default_smoke():
     assert torch.isfinite(result['normal_laplace_eb_blup_guard']).all()
     assert torch.isfinite(result['normal_laplace_eb_steps']).all()
     assert torch.isfinite(result['normal_beta_tail_grid_gate']).all()
+    assert 'normal_map_sigma_rfx' in result, 'pre-EB sigma key must survive through full glmm() Normal path'
+    assert result['normal_map_sigma_rfx'].shape == (B, q)
+    assert torch.isfinite(result['normal_map_sigma_rfx']).all()
 
 
 def test_refine_normal_map_beta_sigma_grid_replaces_capped_report_only():
@@ -465,6 +468,9 @@ def test_refine_normal_map_beta_sigma_grid_replaces_capped_report_only():
     # BLUP beta retains uncapped GLS values; unidentified columns (X=0) fall back to
     # beta_start (10.0) which exceeds the cap — unlike the reported beta_est.
     assert torch.all(result['normal_map_beta_for_blup'][..., 1:] > 4.0)
+    assert 'normal_map_sigma_rfx' in result, 'pre-EB diagnostic key must be saved by refineNormalMapSrfx'
+    assert result['normal_map_sigma_rfx'].shape == (B, q)
+    assert torch.isfinite(result['normal_map_sigma_rfx']).all()
 
 
 # ---------------------------------------------------------------------------
