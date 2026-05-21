@@ -10,6 +10,7 @@ from metabeta.analytical.glmm.bernoulli import (
     refineBernoulliNestedBeta,
 )
 from metabeta.analytical.glmm.poisson import (
+    popPoissonRefinementOptions,
     refinePoissonLaplaceEb,
     refinePoissonLaplacePirlsDiag,
     refinePoissonLaplacePirlsFull,
@@ -17,6 +18,7 @@ from metabeta.analytical.glmm.poisson import (
     refinePoissonLaplacePirlsSigmaGrid,
     refinePoissonLaplaceTargetRefine,
     refinePoissonMarginalMeanBeta,
+    refinePoissonPath,
     refinePoissonVariationalGaussian,
     refinePoissonVariationalGaussianSigmaAverage,
 )
@@ -45,16 +47,6 @@ _BERNOULLI_LAPLACE_EB_DEFAULTS = {
     'bernoulli_laplace_eb_sigma_prior_cap_min_d': 5,
 }
 
-_POISSON_LAPLACE_EB_DEFAULTS = {
-    'poisson_laplace_eb_steps': 24,
-    'poisson_laplace_eb_inner': 4,
-    'poisson_laplace_eb_final': 6,
-    'poisson_laplace_eb_lr': 0.05,
-    'poisson_laplace_eb_blup_fallback_beta_jump': 0.0,
-    'poisson_laplace_eb_sigma_prior_cap': 2.5,
-    'poisson_laplace_eb_sigma_prior_cap_min_d': 5,
-}
-
 
 def _bernoulliLaplaceEbMode(value: bool | str) -> str:
     if isinstance(value, bool):
@@ -81,20 +73,6 @@ def _bernoulliLaplaceEbKwarg(
     preset: dict[str, int | float],
 ):
     return kwargs.pop(key, preset.get(key, default))
-
-
-def _poissonLaplaceEbMode(value: bool | str) -> str:
-    if isinstance(value, bool):
-        return 'all' if value else 'off'
-    if isinstance(value, str):
-        value = value.lower()
-        if value in {'poisson_eb', 'calibrated', 'cal', 'default'}:
-            return 'cal'
-        if value in {'all', 'true', 'yes', 'on'}:
-            return 'all'
-        if value in {'off', 'false', 'no'}:
-            return 'off'
-    raise ValueError("poisson_laplace_eb must be bool, 'poisson_eb', 'calibrated', or 'off'")
 
 
 def _sliceBatch(
@@ -313,172 +291,7 @@ def glmm(
     bernoulli_laplace_eb_gate_min_d = kwargs.pop('bernoulli_laplace_eb_gate_min_d', 4)
     bernoulli_laplace_eb_gate_min_sigma = kwargs.pop('bernoulli_laplace_eb_gate_min_sigma', 0.75)
     bernoulli_laplace_eb_gate_eta_abs = kwargs.pop('bernoulli_laplace_eb_gate_eta_abs', 8.0)
-    poisson_laplace_eb_default = 'poisson_eb' if likelihood_family == 2 else False
-    poisson_laplace_eb = kwargs.pop('poisson_laplace_eb', poisson_laplace_eb_default)
-    poisson_laplace_eb_mode = _poissonLaplaceEbMode(poisson_laplace_eb)
-    poisson_laplace_eb_preset = (
-        _POISSON_LAPLACE_EB_DEFAULTS if poisson_laplace_eb_mode == 'cal' else {}
-    )
-    if poisson_laplace_eb_mode == 'cal':
-        poisson_laplace_eb_mode = 'all'
-    poisson_laplace_eb_diagnostics = kwargs.pop('poisson_laplace_eb_diagnostics', False)
-    poisson_laplace_eb_steps = _bernoulliLaplaceEbKwarg(
-        kwargs, 'poisson_laplace_eb_steps', 12, poisson_laplace_eb_preset
-    )
-    poisson_laplace_eb_inner = _bernoulliLaplaceEbKwarg(
-        kwargs, 'poisson_laplace_eb_inner', 4, poisson_laplace_eb_preset
-    )
-    poisson_laplace_eb_final = _bernoulliLaplaceEbKwarg(
-        kwargs, 'poisson_laplace_eb_final', 6, poisson_laplace_eb_preset
-    )
-    poisson_laplace_eb_lr = _bernoulliLaplaceEbKwarg(
-        kwargs, 'poisson_laplace_eb_lr', 0.03, poisson_laplace_eb_preset
-    )
-    poisson_laplace_eb_blup_fallback_beta_jump = _bernoulliLaplaceEbKwarg(
-        kwargs,
-        'poisson_laplace_eb_blup_fallback_beta_jump',
-        None,
-        poisson_laplace_eb_preset,
-    )
-    poisson_laplace_eb_sigma_prior_cap = _bernoulliLaplaceEbKwarg(
-        kwargs, 'poisson_laplace_eb_sigma_prior_cap', None, poisson_laplace_eb_preset
-    )
-    poisson_laplace_eb_sigma_prior_cap_min_d = _bernoulliLaplaceEbKwarg(
-        kwargs,
-        'poisson_laplace_eb_sigma_prior_cap_min_d',
-        None,
-        poisson_laplace_eb_preset,
-    )
-    poisson_laplace_pirls_diag = kwargs.pop('poisson_laplace_pirls_diag', likelihood_family == 2)
-    poisson_laplace_pirls_diag_outer = kwargs.pop('poisson_laplace_pirls_diag_outer', 4)
-    poisson_laplace_pirls_diag_inner = kwargs.pop('poisson_laplace_pirls_diag_inner', 1)
-    poisson_laplace_pirls_diag_final = kwargs.pop('poisson_laplace_pirls_diag_final', 2)
-    poisson_laplace_pirls_diag_damping = kwargs.pop('poisson_laplace_pirls_diag_damping', 0.5)
-    poisson_laplace_pirls_diag_sigma_blend = kwargs.pop(
-        'poisson_laplace_pirls_diag_sigma_blend', 0.5
-    )
-    poisson_laplace_pirls_diag_prior_weight = kwargs.pop(
-        'poisson_laplace_pirls_diag_prior_weight', 4.0
-    )
-    poisson_laplace_pirls_full = kwargs.pop('poisson_laplace_pirls_full', False)
-    poisson_laplace_pirls_full_psi_blend = kwargs.pop('poisson_laplace_pirls_full_psi_blend', 0.5)
-    poisson_laplace_pirls_full_prior_weight = kwargs.pop(
-        'poisson_laplace_pirls_full_prior_weight', 4.0
-    )
-    poisson_laplace_pirls_full_offdiag_shrink = kwargs.pop(
-        'poisson_laplace_pirls_full_offdiag_shrink', 0.0
-    )
-    poisson_laplace_pirls_sigma_grid = kwargs.pop(
-        'poisson_laplace_pirls_sigma_grid', bool(poisson_laplace_pirls_diag)
-    )
-    poisson_laplace_pirls_sigma_grid_scales = kwargs.pop(
-        'poisson_laplace_pirls_sigma_grid_scales', (0.5, 0.75, 1.0)
-    )
-    poisson_laplace_pirls_sigma_grid_steps = kwargs.pop('poisson_laplace_pirls_sigma_grid_steps', 2)
-    poisson_laplace_pirls_sigma_grid_min_d = kwargs.pop('poisson_laplace_pirls_sigma_grid_min_d', 1)
-    poisson_laplace_pirls_sigma_grid_max_q = kwargs.pop(
-        'poisson_laplace_pirls_sigma_grid_max_q', None
-    )
-    poisson_laplace_pirls_sigma_average = kwargs.pop(
-        'poisson_laplace_pirls_sigma_average', bool(poisson_laplace_pirls_diag)
-    )
-    poisson_laplace_pirls_sigma_average_scales = kwargs.pop(
-        'poisson_laplace_pirls_sigma_average_scales', (0.5, 0.75, 1.0, 1.3333333, 2.0)
-    )
-    poisson_laplace_pirls_sigma_average_scale_mode = kwargs.pop(
-        'poisson_laplace_pirls_sigma_average_scale_mode', 'scalar'
-    )
-    poisson_laplace_pirls_sigma_average_intercept_scales = kwargs.pop(
-        'poisson_laplace_pirls_sigma_average_intercept_scales', (0.75, 1.0, 1.3333333)
-    )
-    poisson_laplace_pirls_sigma_average_slope_scales = kwargs.pop(
-        'poisson_laplace_pirls_sigma_average_slope_scales', (0.5, 1.0, 1.5)
-    )
-    poisson_laplace_pirls_sigma_average_steps = kwargs.pop(
-        'poisson_laplace_pirls_sigma_average_steps', 2
-    )
-    poisson_laplace_pirls_sigma_average_temperature = kwargs.pop(
-        'poisson_laplace_pirls_sigma_average_temperature', 2.0
-    )
-    poisson_laplace_pirls_sigma_average_min_d = kwargs.pop(
-        'poisson_laplace_pirls_sigma_average_min_d', 1
-    )
-    poisson_laplace_pirls_sigma_average_max_q = kwargs.pop(
-        'poisson_laplace_pirls_sigma_average_max_q', None
-    )
-    poisson_laplace_pirls_sigma_average_output_mode = kwargs.pop(
-        'poisson_laplace_pirls_sigma_average_output_mode', 'beta_sigma'
-    )
-    poisson_laplace_target_refine = kwargs.pop('poisson_laplace_target_refine', False)
-    poisson_laplace_target_refine_steps = kwargs.pop('poisson_laplace_target_refine_steps', 1)
-    poisson_laplace_target_refine_lr = kwargs.pop('poisson_laplace_target_refine_lr', 0.02)
-    poisson_laplace_target_refine_min_d = kwargs.pop('poisson_laplace_target_refine_min_d', 1)
-    poisson_laplace_target_refine_max_q = kwargs.pop('poisson_laplace_target_refine_max_q', None)
-    poisson_variational_gaussian = kwargs.pop('poisson_variational_gaussian', False)
-    poisson_variational_gaussian_outer = kwargs.pop('poisson_variational_gaussian_outer', 5)
-    poisson_variational_gaussian_inner = kwargs.pop('poisson_variational_gaussian_inner', 2)
-    poisson_variational_gaussian_final = kwargs.pop('poisson_variational_gaussian_final', 1)
-    poisson_variational_gaussian_damping = kwargs.pop('poisson_variational_gaussian_damping', 0.5)
-    poisson_variational_gaussian_sigma_blend = kwargs.pop(
-        'poisson_variational_gaussian_sigma_blend', 0.25
-    )
-    poisson_variational_gaussian_prior_weight = kwargs.pop(
-        'poisson_variational_gaussian_prior_weight', 4.0
-    )
-    poisson_variational_gaussian_sigma_average = kwargs.pop(
-        'poisson_variational_gaussian_sigma_average', False
-    )
-    poisson_variational_gaussian_sigma_average_scales = kwargs.pop(
-        'poisson_variational_gaussian_sigma_average_scales',
-        poisson_laplace_pirls_sigma_average_scales,
-    )
-    poisson_variational_gaussian_sigma_average_scale_mode = kwargs.pop(
-        'poisson_variational_gaussian_sigma_average_scale_mode',
-        poisson_laplace_pirls_sigma_average_scale_mode,
-    )
-    poisson_variational_gaussian_sigma_average_intercept_scales = kwargs.pop(
-        'poisson_variational_gaussian_sigma_average_intercept_scales',
-        poisson_laplace_pirls_sigma_average_intercept_scales,
-    )
-    poisson_variational_gaussian_sigma_average_slope_scales = kwargs.pop(
-        'poisson_variational_gaussian_sigma_average_slope_scales',
-        poisson_laplace_pirls_sigma_average_slope_scales,
-    )
-    poisson_variational_gaussian_sigma_average_steps = kwargs.pop(
-        'poisson_variational_gaussian_sigma_average_steps', 2
-    )
-    poisson_variational_gaussian_sigma_average_temperature = kwargs.pop(
-        'poisson_variational_gaussian_sigma_average_temperature', 2.0
-    )
-    poisson_variational_gaussian_sigma_average_output_mode = kwargs.pop(
-        'poisson_variational_gaussian_sigma_average_output_mode', 'beta'
-    )
-    poisson_marginal_beta = kwargs.pop('poisson_marginal_beta', likelihood_family == 2)
-    poisson_marginal_beta_full_psi = kwargs.pop('poisson_marginal_beta_full_psi', False)
-    poisson_marginal_beta_full_psi_min_q = kwargs.pop('poisson_marginal_beta_full_psi_min_q', 3)
-    poisson_marginal_beta_steps = kwargs.pop('poisson_marginal_beta_steps', 4)
-    poisson_marginal_beta_damping = kwargs.pop('poisson_marginal_beta_damping', 0.7)
-    poisson_marginal_beta_min_d = kwargs.pop('poisson_marginal_beta_min_d', 1)
-    poisson_marginal_beta_max_q = kwargs.pop('poisson_marginal_beta_max_q', None)
-    poisson_marginal_beta_max_step = kwargs.pop('poisson_marginal_beta_max_step', 1.0)
-    poisson_sigma_grid = kwargs.pop('poisson_sigma_grid', False)
-    kwargs.pop('poisson_sigma_grid_scales', None)
-    kwargs.pop('poisson_sigma_grid_min_d', None)
-    kwargs.pop('poisson_sigma_grid_max_q', None)
-    kwargs.pop('poisson_sigma_grid_agq_k', None)
-    poisson_agq_beta = kwargs.pop('poisson_agq_beta', False)
-    kwargs.pop('poisson_agq_beta_steps', None)
-    kwargs.pop('poisson_agq_beta_lr', None)
-    kwargs.pop('poisson_agq_beta_min_d', None)
-    kwargs.pop('poisson_agq_beta_max_q', None)
-    kwargs.pop('poisson_agq_beta_max_step', None)
-    kwargs.pop('poisson_agq_beta_agq_k', None)
-    if poisson_sigma_grid:
-        raise ValueError(
-            'poisson_sigma_grid was retired; use poisson_laplace_pirls_sigma_grid instead'
-        )
-    if poisson_agq_beta:
-        raise ValueError('poisson_agq_beta was retired; use poisson_laplace_pirls_sigma_grid')
+    poisson_refinement_options = popPoissonRefinementOptions(kwargs, likelihood_family)
     mask_d = kwargs.pop('mask_d', None)
     uncorr = (eta_rfx == 0) if eta_rfx is not None else None  # (B,) bool or None
     if likelihood_family == 0:
@@ -675,231 +488,19 @@ def glmm(
                 _addLaplaceEbSkippedDiagnostics(stats, gate, Xm.dtype)
     elif likelihood_family == 2:
         stats = lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)
-        if map_refine and poisson_laplace_eb_mode != 'off' and Zm.shape[-1] > 0:
-            gate = torch.ones(Xm.shape[0], device=Xm.device, dtype=torch.bool)
-            stats = refinePoissonLaplaceEb(
-                stats,
-                Xm,
-                ym,
-                Zm,
-                mask_n,
-                mask_m,
-                nu_ffx=map_priors['nu_ffx'],
-                tau_ffx=map_priors['tau_ffx'],
-                family_ffx=map_priors['family_ffx'],
-                tau_rfx=map_priors['tau_rfx'],
-                family_sigma_rfx=map_priors['family_sigma_rfx'],
-                mask_d=mask_d,
-                mask_q=mask_q,
-                n_steps=poisson_laplace_eb_steps,
-                n_inner=poisson_laplace_eb_inner,
-                n_final=poisson_laplace_eb_final,
-                lr=poisson_laplace_eb_lr,
-                blup_fallback_beta_jump=poisson_laplace_eb_blup_fallback_beta_jump,
-                sigma_prior_cap=poisson_laplace_eb_sigma_prior_cap,
-                sigma_prior_cap_min_d=poisson_laplace_eb_sigma_prior_cap_min_d,
-                return_diagnostics=poisson_laplace_eb_diagnostics,
-            )
-            if poisson_laplace_eb_diagnostics:
-                _addLaplaceEbSkippedDiagnostics(stats, gate, Xm.dtype)
-        if map_refine and poisson_laplace_pirls_diag and Zm.shape[-1] > 0:
-            stats = refinePoissonLaplacePirlsDiag(
-                stats,
-                Xm,
-                ym,
-                Zm,
-                mask_n,
-                mask_m,
-                nu_ffx=map_priors['nu_ffx'],
-                tau_ffx=map_priors['tau_ffx'],
-                family_ffx=map_priors['family_ffx'],
-                tau_rfx=map_priors['tau_rfx'],
-                family_sigma_rfx=map_priors['family_sigma_rfx'],
-                mask_d=mask_d,
-                mask_q=mask_q,
-                n_outer=poisson_laplace_pirls_diag_outer,
-                n_pirls=poisson_laplace_pirls_diag_inner,
-                n_final=poisson_laplace_pirls_diag_final,
-                damping=poisson_laplace_pirls_diag_damping,
-                sigma_blend=poisson_laplace_pirls_diag_sigma_blend,
-                sigma_prior_weight=poisson_laplace_pirls_diag_prior_weight,
-                return_diagnostics=poisson_laplace_eb_diagnostics,
-            )
-        if map_refine and poisson_laplace_pirls_full and Zm.shape[-1] > 0:
-            stats = refinePoissonLaplacePirlsFull(
-                stats,
-                Xm,
-                ym,
-                Zm,
-                mask_n,
-                mask_m,
-                nu_ffx=map_priors['nu_ffx'],
-                tau_ffx=map_priors['tau_ffx'],
-                family_ffx=map_priors['family_ffx'],
-                tau_rfx=map_priors['tau_rfx'],
-                family_sigma_rfx=map_priors['family_sigma_rfx'],
-                mask_d=mask_d,
-                mask_q=mask_q,
-                n_outer=poisson_laplace_pirls_diag_outer,
-                n_pirls=poisson_laplace_pirls_diag_inner,
-                n_final=poisson_laplace_pirls_diag_final,
-                damping=poisson_laplace_pirls_diag_damping,
-                psi_blend=poisson_laplace_pirls_full_psi_blend,
-                psi_prior_weight=poisson_laplace_pirls_full_prior_weight,
-                offdiag_shrink=poisson_laplace_pirls_full_offdiag_shrink,
-                return_diagnostics=poisson_laplace_eb_diagnostics,
-            )
-        if map_refine and poisson_marginal_beta and Zm.shape[-1] > 0:
-            poisson_marginal_Psi_lap = (
-                stats['Psi_lap'].detach() if poisson_marginal_beta_full_psi else None
-            )
-            stats = refinePoissonMarginalMeanBeta(
-                stats,
-                Xm,
-                ym,
-                Zm,
-                mask_n,
-                mask_m,
-                nu_ffx=map_priors['nu_ffx'],
-                tau_ffx=map_priors['tau_ffx'],
-                family_ffx=map_priors['family_ffx'],
-                mask_d=mask_d,
-                mask_q=mask_q,
-                n_steps=poisson_marginal_beta_steps,
-                damping=poisson_marginal_beta_damping,
-                min_d=poisson_marginal_beta_min_d,
-                max_q=poisson_marginal_beta_max_q,
-                max_step=poisson_marginal_beta_max_step,
-                marginal_psi_lap=poisson_marginal_Psi_lap,
-                full_psi_min_q=poisson_marginal_beta_full_psi_min_q,
-                return_diagnostics=poisson_laplace_eb_diagnostics,
-            )
-        if map_refine and poisson_laplace_pirls_sigma_grid and Zm.shape[-1] > 0:
-            stats = refinePoissonLaplacePirlsSigmaGrid(
-                stats,
-                Xm,
-                ym,
-                Zm,
-                mask_n,
-                mask_m,
-                nu_ffx=map_priors['nu_ffx'],
-                tau_ffx=map_priors['tau_ffx'],
-                family_ffx=map_priors['family_ffx'],
-                tau_rfx=map_priors['tau_rfx'],
-                family_sigma_rfx=map_priors['family_sigma_rfx'],
-                mask_d=mask_d,
-                mask_q=mask_q,
-                scales=tuple(float(x) for x in poisson_laplace_pirls_sigma_grid_scales),
-                n_steps=poisson_laplace_pirls_sigma_grid_steps,
-                damping=poisson_laplace_pirls_diag_damping,
-                min_d=poisson_laplace_pirls_sigma_grid_min_d,
-                max_q=poisson_laplace_pirls_sigma_grid_max_q,
-                return_diagnostics=poisson_laplace_eb_diagnostics,
-            )
-        if map_refine and poisson_laplace_pirls_sigma_average and Zm.shape[-1] > 0:
-            stats = refinePoissonLaplacePirlsSigmaAverage(
-                stats,
-                Xm,
-                ym,
-                Zm,
-                mask_n,
-                mask_m,
-                nu_ffx=map_priors['nu_ffx'],
-                tau_ffx=map_priors['tau_ffx'],
-                family_ffx=map_priors['family_ffx'],
-                tau_rfx=map_priors['tau_rfx'],
-                family_sigma_rfx=map_priors['family_sigma_rfx'],
-                mask_d=mask_d,
-                mask_q=mask_q,
-                scales=tuple(float(x) for x in poisson_laplace_pirls_sigma_average_scales),
-                scale_mode=poisson_laplace_pirls_sigma_average_scale_mode,
-                intercept_scales=tuple(
-                    float(x) for x in poisson_laplace_pirls_sigma_average_intercept_scales
-                ),
-                slope_scales=tuple(
-                    float(x) for x in poisson_laplace_pirls_sigma_average_slope_scales
-                ),
-                n_steps=poisson_laplace_pirls_sigma_average_steps,
-                damping=poisson_laplace_pirls_diag_damping,
-                temperature=poisson_laplace_pirls_sigma_average_temperature,
-                min_d=poisson_laplace_pirls_sigma_average_min_d,
-                max_q=poisson_laplace_pirls_sigma_average_max_q,
-                output_mode=poisson_laplace_pirls_sigma_average_output_mode,
-                return_diagnostics=poisson_laplace_eb_diagnostics,
-            )
-        if map_refine and poisson_variational_gaussian and Zm.shape[-1] > 0:
-            stats = refinePoissonVariationalGaussian(
-                stats,
-                Xm,
-                ym,
-                Zm,
-                mask_n,
-                mask_m,
-                nu_ffx=map_priors['nu_ffx'],
-                tau_ffx=map_priors['tau_ffx'],
-                family_ffx=map_priors['family_ffx'],
-                tau_rfx=map_priors['tau_rfx'],
-                family_sigma_rfx=map_priors['family_sigma_rfx'],
-                mask_d=mask_d,
-                mask_q=mask_q,
-                n_outer=poisson_variational_gaussian_outer,
-                n_inner=poisson_variational_gaussian_inner,
-                n_final=poisson_variational_gaussian_final,
-                damping=poisson_variational_gaussian_damping,
-                sigma_blend=poisson_variational_gaussian_sigma_blend,
-                sigma_prior_weight=poisson_variational_gaussian_prior_weight,
-                return_diagnostics=poisson_laplace_eb_diagnostics,
-            )
-        if map_refine and poisson_variational_gaussian_sigma_average and Zm.shape[-1] > 0:
-            stats = refinePoissonVariationalGaussianSigmaAverage(
-                stats,
-                Xm,
-                ym,
-                Zm,
-                mask_n,
-                mask_m,
-                nu_ffx=map_priors['nu_ffx'],
-                tau_ffx=map_priors['tau_ffx'],
-                family_ffx=map_priors['family_ffx'],
-                tau_rfx=map_priors['tau_rfx'],
-                family_sigma_rfx=map_priors['family_sigma_rfx'],
-                mask_d=mask_d,
-                mask_q=mask_q,
-                scales=tuple(float(x) for x in poisson_variational_gaussian_sigma_average_scales),
-                scale_mode=poisson_variational_gaussian_sigma_average_scale_mode,
-                intercept_scales=tuple(
-                    float(x) for x in poisson_variational_gaussian_sigma_average_intercept_scales
-                ),
-                slope_scales=tuple(
-                    float(x) for x in poisson_variational_gaussian_sigma_average_slope_scales
-                ),
-                n_steps=poisson_variational_gaussian_sigma_average_steps,
-                damping=poisson_variational_gaussian_damping,
-                temperature=poisson_variational_gaussian_sigma_average_temperature,
-                output_mode=poisson_variational_gaussian_sigma_average_output_mode,
-                return_diagnostics=poisson_laplace_eb_diagnostics,
-            )
-        if map_refine and poisson_laplace_target_refine and Zm.shape[-1] > 0:
-            stats = refinePoissonLaplaceTargetRefine(
-                stats,
-                Xm,
-                ym,
-                Zm,
-                mask_n,
-                mask_m,
-                nu_ffx=map_priors['nu_ffx'],
-                tau_ffx=map_priors['tau_ffx'],
-                family_ffx=map_priors['family_ffx'],
-                tau_rfx=map_priors['tau_rfx'],
-                family_sigma_rfx=map_priors['family_sigma_rfx'],
-                mask_d=mask_d,
-                mask_q=mask_q,
-                n_steps=poisson_laplace_target_refine_steps,
-                lr=poisson_laplace_target_refine_lr,
-                min_d=poisson_laplace_target_refine_min_d,
-                max_q=poisson_laplace_target_refine_max_q,
-                return_diagnostics=poisson_laplace_eb_diagnostics,
-            )
+        stats = refinePoissonPath(
+            stats,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            map_priors,
+            mask_d=mask_d,
+            mask_q=mask_q,
+            map_refine=map_refine,
+            options=poisson_refinement_options,
+        )
     else:
         raise ValueError(f'unsupported likelihood_family={likelihood_family}')
 

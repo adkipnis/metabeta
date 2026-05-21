@@ -20,6 +20,7 @@ from metabeta.analytical.linalg import (
 from metabeta.utils.families import logProbFfx, logProbSigma
 
 __all__ = [
+    'popPoissonRefinementOptions',
     'refinePoissonLaplaceEb',
     'refinePoissonLaplacePirlsDiag',
     'refinePoissonLaplacePirlsFull',
@@ -27,9 +28,280 @@ __all__ = [
     'refinePoissonLaplacePirlsSigmaGrid',
     'refinePoissonLaplaceTargetRefine',
     'refinePoissonMarginalMeanBeta',
+    'refinePoissonPath',
     'refinePoissonVariationalGaussian',
     'refinePoissonVariationalGaussianSigmaAverage',
 ]
+
+_POISSON_LAPLACE_EB_DEFAULTS = {
+    'poisson_laplace_eb_steps': 24,
+    'poisson_laplace_eb_inner': 4,
+    'poisson_laplace_eb_final': 6,
+    'poisson_laplace_eb_lr': 0.05,
+    'poisson_laplace_eb_blup_fallback_beta_jump': 0.0,
+    'poisson_laplace_eb_sigma_prior_cap': 2.5,
+    'poisson_laplace_eb_sigma_prior_cap_min_d': 5,
+}
+
+
+def _poissonLaplaceEbMode(value: bool | str) -> str:
+    if isinstance(value, bool):
+        return 'all' if value else 'off'
+    if isinstance(value, str):
+        value = value.lower()
+        if value in {'poisson_eb', 'calibrated', 'cal', 'default'}:
+            return 'cal'
+        if value in {'all', 'true', 'yes', 'on'}:
+            return 'all'
+        if value in {'off', 'false', 'no'}:
+            return 'off'
+    raise ValueError("poisson_laplace_eb must be bool, 'poisson_eb', 'calibrated', or 'off'")
+
+
+def _poissonRefinementKwarg(
+    kwargs: dict,
+    key: str,
+    default,
+    preset: dict[str, int | float],
+):
+    return kwargs.pop(key, preset.get(key, default))
+
+
+def popPoissonRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
+    """Pop Poisson refinement options from ``kwargs`` for the public GLMM dispatcher."""
+    poisson_laplace_eb_default = 'poisson_eb' if likelihood_family == 2 else False
+    poisson_laplace_eb = kwargs.pop('poisson_laplace_eb', poisson_laplace_eb_default)
+    poisson_laplace_eb_mode = _poissonLaplaceEbMode(poisson_laplace_eb)
+    poisson_laplace_eb_preset = (
+        _POISSON_LAPLACE_EB_DEFAULTS if poisson_laplace_eb_mode == 'cal' else {}
+    )
+    if poisson_laplace_eb_mode == 'cal':
+        poisson_laplace_eb_mode = 'all'
+
+    poisson_laplace_pirls_diag = kwargs.pop('poisson_laplace_pirls_diag', likelihood_family == 2)
+    poisson_laplace_pirls_sigma_average_scales = kwargs.pop(
+        'poisson_laplace_pirls_sigma_average_scales',
+        (0.5, 0.75, 1.0, 1.3333333, 2.0),
+    )
+    poisson_laplace_pirls_sigma_average_scale_mode = kwargs.pop(
+        'poisson_laplace_pirls_sigma_average_scale_mode',
+        'scalar',
+    )
+    poisson_laplace_pirls_sigma_average_intercept_scales = kwargs.pop(
+        'poisson_laplace_pirls_sigma_average_intercept_scales',
+        (0.75, 1.0, 1.3333333),
+    )
+    poisson_laplace_pirls_sigma_average_slope_scales = kwargs.pop(
+        'poisson_laplace_pirls_sigma_average_slope_scales',
+        (0.5, 1.0, 1.5),
+    )
+
+    poisson_sigma_grid = kwargs.pop('poisson_sigma_grid', False)
+    kwargs.pop('poisson_sigma_grid_scales', None)
+    kwargs.pop('poisson_sigma_grid_min_d', None)
+    kwargs.pop('poisson_sigma_grid_max_q', None)
+    kwargs.pop('poisson_sigma_grid_agq_k', None)
+    poisson_agq_beta = kwargs.pop('poisson_agq_beta', False)
+    kwargs.pop('poisson_agq_beta_steps', None)
+    kwargs.pop('poisson_agq_beta_lr', None)
+    kwargs.pop('poisson_agq_beta_min_d', None)
+    kwargs.pop('poisson_agq_beta_max_q', None)
+    kwargs.pop('poisson_agq_beta_max_step', None)
+    kwargs.pop('poisson_agq_beta_agq_k', None)
+    if poisson_sigma_grid:
+        raise ValueError(
+            'poisson_sigma_grid was retired; use poisson_laplace_pirls_sigma_grid instead'
+        )
+    if poisson_agq_beta:
+        raise ValueError('poisson_agq_beta was retired; use poisson_laplace_pirls_sigma_grid')
+
+    return {
+        'poisson_laplace_eb_mode': poisson_laplace_eb_mode,
+        'poisson_laplace_eb_diagnostics': kwargs.pop('poisson_laplace_eb_diagnostics', False),
+        'poisson_laplace_eb_steps': _poissonRefinementKwarg(
+            kwargs, 'poisson_laplace_eb_steps', 12, poisson_laplace_eb_preset
+        ),
+        'poisson_laplace_eb_inner': _poissonRefinementKwarg(
+            kwargs, 'poisson_laplace_eb_inner', 4, poisson_laplace_eb_preset
+        ),
+        'poisson_laplace_eb_final': _poissonRefinementKwarg(
+            kwargs, 'poisson_laplace_eb_final', 6, poisson_laplace_eb_preset
+        ),
+        'poisson_laplace_eb_lr': _poissonRefinementKwarg(
+            kwargs, 'poisson_laplace_eb_lr', 0.03, poisson_laplace_eb_preset
+        ),
+        'poisson_laplace_eb_blup_fallback_beta_jump': _poissonRefinementKwarg(
+            kwargs,
+            'poisson_laplace_eb_blup_fallback_beta_jump',
+            None,
+            poisson_laplace_eb_preset,
+        ),
+        'poisson_laplace_eb_sigma_prior_cap': _poissonRefinementKwarg(
+            kwargs, 'poisson_laplace_eb_sigma_prior_cap', None, poisson_laplace_eb_preset
+        ),
+        'poisson_laplace_eb_sigma_prior_cap_min_d': _poissonRefinementKwarg(
+            kwargs,
+            'poisson_laplace_eb_sigma_prior_cap_min_d',
+            None,
+            poisson_laplace_eb_preset,
+        ),
+        'poisson_laplace_pirls_diag': poisson_laplace_pirls_diag,
+        'poisson_laplace_pirls_diag_outer': kwargs.pop('poisson_laplace_pirls_diag_outer', 4),
+        'poisson_laplace_pirls_diag_inner': kwargs.pop('poisson_laplace_pirls_diag_inner', 1),
+        'poisson_laplace_pirls_diag_final': kwargs.pop('poisson_laplace_pirls_diag_final', 2),
+        'poisson_laplace_pirls_diag_damping': kwargs.pop(
+            'poisson_laplace_pirls_diag_damping',
+            0.5,
+        ),
+        'poisson_laplace_pirls_diag_sigma_blend': kwargs.pop(
+            'poisson_laplace_pirls_diag_sigma_blend',
+            0.5,
+        ),
+        'poisson_laplace_pirls_diag_prior_weight': kwargs.pop(
+            'poisson_laplace_pirls_diag_prior_weight',
+            4.0,
+        ),
+        'poisson_laplace_pirls_full': kwargs.pop('poisson_laplace_pirls_full', False),
+        'poisson_laplace_pirls_full_psi_blend': kwargs.pop(
+            'poisson_laplace_pirls_full_psi_blend',
+            0.5,
+        ),
+        'poisson_laplace_pirls_full_prior_weight': kwargs.pop(
+            'poisson_laplace_pirls_full_prior_weight',
+            4.0,
+        ),
+        'poisson_laplace_pirls_full_offdiag_shrink': kwargs.pop(
+            'poisson_laplace_pirls_full_offdiag_shrink',
+            0.0,
+        ),
+        'poisson_laplace_pirls_sigma_grid': kwargs.pop(
+            'poisson_laplace_pirls_sigma_grid',
+            bool(poisson_laplace_pirls_diag),
+        ),
+        'poisson_laplace_pirls_sigma_grid_scales': kwargs.pop(
+            'poisson_laplace_pirls_sigma_grid_scales',
+            (0.5, 0.75, 1.0),
+        ),
+        'poisson_laplace_pirls_sigma_grid_steps': kwargs.pop(
+            'poisson_laplace_pirls_sigma_grid_steps',
+            2,
+        ),
+        'poisson_laplace_pirls_sigma_grid_min_d': kwargs.pop(
+            'poisson_laplace_pirls_sigma_grid_min_d',
+            1,
+        ),
+        'poisson_laplace_pirls_sigma_grid_max_q': kwargs.pop(
+            'poisson_laplace_pirls_sigma_grid_max_q',
+            None,
+        ),
+        'poisson_laplace_pirls_sigma_average': kwargs.pop(
+            'poisson_laplace_pirls_sigma_average',
+            bool(poisson_laplace_pirls_diag),
+        ),
+        'poisson_laplace_pirls_sigma_average_scales': (poisson_laplace_pirls_sigma_average_scales),
+        'poisson_laplace_pirls_sigma_average_scale_mode': (
+            poisson_laplace_pirls_sigma_average_scale_mode
+        ),
+        'poisson_laplace_pirls_sigma_average_intercept_scales': (
+            poisson_laplace_pirls_sigma_average_intercept_scales
+        ),
+        'poisson_laplace_pirls_sigma_average_slope_scales': (
+            poisson_laplace_pirls_sigma_average_slope_scales
+        ),
+        'poisson_laplace_pirls_sigma_average_steps': kwargs.pop(
+            'poisson_laplace_pirls_sigma_average_steps',
+            2,
+        ),
+        'poisson_laplace_pirls_sigma_average_temperature': kwargs.pop(
+            'poisson_laplace_pirls_sigma_average_temperature',
+            2.0,
+        ),
+        'poisson_laplace_pirls_sigma_average_min_d': kwargs.pop(
+            'poisson_laplace_pirls_sigma_average_min_d',
+            1,
+        ),
+        'poisson_laplace_pirls_sigma_average_max_q': kwargs.pop(
+            'poisson_laplace_pirls_sigma_average_max_q',
+            None,
+        ),
+        'poisson_laplace_pirls_sigma_average_output_mode': kwargs.pop(
+            'poisson_laplace_pirls_sigma_average_output_mode',
+            'beta_sigma',
+        ),
+        'poisson_laplace_target_refine': kwargs.pop('poisson_laplace_target_refine', False),
+        'poisson_laplace_target_refine_steps': kwargs.pop(
+            'poisson_laplace_target_refine_steps',
+            1,
+        ),
+        'poisson_laplace_target_refine_lr': kwargs.pop('poisson_laplace_target_refine_lr', 0.02),
+        'poisson_laplace_target_refine_min_d': kwargs.pop(
+            'poisson_laplace_target_refine_min_d',
+            1,
+        ),
+        'poisson_laplace_target_refine_max_q': kwargs.pop(
+            'poisson_laplace_target_refine_max_q',
+            None,
+        ),
+        'poisson_variational_gaussian': kwargs.pop('poisson_variational_gaussian', False),
+        'poisson_variational_gaussian_outer': kwargs.pop('poisson_variational_gaussian_outer', 5),
+        'poisson_variational_gaussian_inner': kwargs.pop('poisson_variational_gaussian_inner', 2),
+        'poisson_variational_gaussian_final': kwargs.pop('poisson_variational_gaussian_final', 1),
+        'poisson_variational_gaussian_damping': kwargs.pop(
+            'poisson_variational_gaussian_damping',
+            0.5,
+        ),
+        'poisson_variational_gaussian_sigma_blend': kwargs.pop(
+            'poisson_variational_gaussian_sigma_blend',
+            0.25,
+        ),
+        'poisson_variational_gaussian_prior_weight': kwargs.pop(
+            'poisson_variational_gaussian_prior_weight',
+            4.0,
+        ),
+        'poisson_variational_gaussian_sigma_average': kwargs.pop(
+            'poisson_variational_gaussian_sigma_average',
+            False,
+        ),
+        'poisson_variational_gaussian_sigma_average_scales': kwargs.pop(
+            'poisson_variational_gaussian_sigma_average_scales',
+            poisson_laplace_pirls_sigma_average_scales,
+        ),
+        'poisson_variational_gaussian_sigma_average_scale_mode': kwargs.pop(
+            'poisson_variational_gaussian_sigma_average_scale_mode',
+            poisson_laplace_pirls_sigma_average_scale_mode,
+        ),
+        'poisson_variational_gaussian_sigma_average_intercept_scales': kwargs.pop(
+            'poisson_variational_gaussian_sigma_average_intercept_scales',
+            poisson_laplace_pirls_sigma_average_intercept_scales,
+        ),
+        'poisson_variational_gaussian_sigma_average_slope_scales': kwargs.pop(
+            'poisson_variational_gaussian_sigma_average_slope_scales',
+            poisson_laplace_pirls_sigma_average_slope_scales,
+        ),
+        'poisson_variational_gaussian_sigma_average_steps': kwargs.pop(
+            'poisson_variational_gaussian_sigma_average_steps',
+            2,
+        ),
+        'poisson_variational_gaussian_sigma_average_temperature': kwargs.pop(
+            'poisson_variational_gaussian_sigma_average_temperature',
+            2.0,
+        ),
+        'poisson_variational_gaussian_sigma_average_output_mode': kwargs.pop(
+            'poisson_variational_gaussian_sigma_average_output_mode',
+            'beta',
+        ),
+        'poisson_marginal_beta': kwargs.pop('poisson_marginal_beta', likelihood_family == 2),
+        'poisson_marginal_beta_full_psi': kwargs.pop('poisson_marginal_beta_full_psi', False),
+        'poisson_marginal_beta_full_psi_min_q': kwargs.pop(
+            'poisson_marginal_beta_full_psi_min_q',
+            3,
+        ),
+        'poisson_marginal_beta_steps': kwargs.pop('poisson_marginal_beta_steps', 4),
+        'poisson_marginal_beta_damping': kwargs.pop('poisson_marginal_beta_damping', 0.7),
+        'poisson_marginal_beta_min_d': kwargs.pop('poisson_marginal_beta_min_d', 1),
+        'poisson_marginal_beta_max_q': kwargs.pop('poisson_marginal_beta_max_q', None),
+        'poisson_marginal_beta_max_step': kwargs.pop('poisson_marginal_beta_max_step', 1.0),
+    }
 
 
 def _poissonLaplaceModeDiag(
@@ -2149,6 +2421,205 @@ def refinePoissonVariationalGaussianSigmaAverage(
         out['poisson_vg_sigma_average_best_target'] = best_target
         out['poisson_vg_sigma_average_base_target'] = base_target
     return out
+
+
+def _addPoissonLaplaceEbSkippedDiagnostics(
+    stats: dict[str, torch.Tensor],
+    gate: torch.Tensor,
+    dtype: torch.dtype,
+) -> None:
+    B = gate.shape[0]
+    device = gate.device
+    if 'laplace_eb_accept' not in stats:
+        stats['laplace_eb_accept'] = torch.zeros(B, device=device, dtype=dtype)
+    if 'laplace_eb_steps' not in stats:
+        stats['laplace_eb_steps'] = torch.zeros(B, device=device, dtype=dtype)
+    if 'laplace_eb_target' not in stats:
+        stats['laplace_eb_target'] = torch.full((B,), float('nan'), device=device, dtype=dtype)
+    if 'laplace_eb_base_target' not in stats:
+        stats['laplace_eb_base_target'] = torch.full((B,), float('nan'), device=device, dtype=dtype)
+    if 'laplace_eb_blup_fallback' not in stats:
+        stats['laplace_eb_blup_fallback'] = torch.zeros(B, device=device, dtype=dtype)
+    if 'laplace_eb_beta_jump' not in stats:
+        stats['laplace_eb_beta_jump'] = torch.full((B,), float('nan'), device=device, dtype=dtype)
+    stats['laplace_eb_gate'] = gate.to(dtype=dtype)
+
+
+def refinePoissonPath(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    map_priors: dict[str, torch.Tensor | None],
+    mask_d: torch.Tensor | None = None,
+    mask_q: torch.Tensor | None = None,
+    map_refine: bool = True,
+    options: dict | None = None,
+) -> dict[str, torch.Tensor]:
+    """Apply the configured Poisson refinement chain after the PQL initializer."""
+    if not map_refine or Zm.shape[-1] == 0:
+        return stats
+
+    options = {} if options is None else options
+    diagnostics = options.get('poisson_laplace_eb_diagnostics', False)
+    prior_kwargs = {
+        'nu_ffx': map_priors['nu_ffx'],
+        'tau_ffx': map_priors['tau_ffx'],
+        'family_ffx': map_priors['family_ffx'],
+        'tau_rfx': map_priors['tau_rfx'],
+        'family_sigma_rfx': map_priors['family_sigma_rfx'],
+    }
+
+    def _run(refiner, include_sigma_prior: bool = True, **kwargs):
+        selected_priors = (
+            prior_kwargs
+            if include_sigma_prior
+            else {
+                'nu_ffx': map_priors['nu_ffx'],
+                'tau_ffx': map_priors['tau_ffx'],
+                'family_ffx': map_priors['family_ffx'],
+            }
+        )
+        return refiner(
+            stats,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            **selected_priors,
+            mask_d=mask_d,
+            mask_q=mask_q,
+            return_diagnostics=diagnostics,
+            **kwargs,
+        )
+
+    if options.get('poisson_laplace_eb_mode', 'off') != 'off':
+        gate = torch.ones(Xm.shape[0], device=Xm.device, dtype=torch.bool)
+        stats = _run(
+            refinePoissonLaplaceEb,
+            n_steps=options['poisson_laplace_eb_steps'],
+            n_inner=options['poisson_laplace_eb_inner'],
+            n_final=options['poisson_laplace_eb_final'],
+            lr=options['poisson_laplace_eb_lr'],
+            blup_fallback_beta_jump=options['poisson_laplace_eb_blup_fallback_beta_jump'],
+            sigma_prior_cap=options['poisson_laplace_eb_sigma_prior_cap'],
+            sigma_prior_cap_min_d=options['poisson_laplace_eb_sigma_prior_cap_min_d'],
+        )
+        if diagnostics:
+            _addPoissonLaplaceEbSkippedDiagnostics(stats, gate, Xm.dtype)
+
+    if options.get('poisson_laplace_pirls_diag', False):
+        stats = _run(
+            refinePoissonLaplacePirlsDiag,
+            n_outer=options['poisson_laplace_pirls_diag_outer'],
+            n_pirls=options['poisson_laplace_pirls_diag_inner'],
+            n_final=options['poisson_laplace_pirls_diag_final'],
+            damping=options['poisson_laplace_pirls_diag_damping'],
+            sigma_blend=options['poisson_laplace_pirls_diag_sigma_blend'],
+            sigma_prior_weight=options['poisson_laplace_pirls_diag_prior_weight'],
+        )
+
+    if options.get('poisson_laplace_pirls_full', False):
+        stats = _run(
+            refinePoissonLaplacePirlsFull,
+            n_outer=options['poisson_laplace_pirls_diag_outer'],
+            n_pirls=options['poisson_laplace_pirls_diag_inner'],
+            n_final=options['poisson_laplace_pirls_diag_final'],
+            damping=options['poisson_laplace_pirls_diag_damping'],
+            psi_blend=options['poisson_laplace_pirls_full_psi_blend'],
+            psi_prior_weight=options['poisson_laplace_pirls_full_prior_weight'],
+            offdiag_shrink=options['poisson_laplace_pirls_full_offdiag_shrink'],
+        )
+
+    if options.get('poisson_marginal_beta', False):
+        poisson_marginal_Psi_lap = (
+            stats['Psi_lap'].detach() if options['poisson_marginal_beta_full_psi'] else None
+        )
+        stats = _run(
+            refinePoissonMarginalMeanBeta,
+            include_sigma_prior=False,
+            n_steps=options['poisson_marginal_beta_steps'],
+            damping=options['poisson_marginal_beta_damping'],
+            min_d=options['poisson_marginal_beta_min_d'],
+            max_q=options['poisson_marginal_beta_max_q'],
+            max_step=options['poisson_marginal_beta_max_step'],
+            marginal_psi_lap=poisson_marginal_Psi_lap,
+            full_psi_min_q=options['poisson_marginal_beta_full_psi_min_q'],
+        )
+
+    if options.get('poisson_laplace_pirls_sigma_grid', False):
+        stats = _run(
+            refinePoissonLaplacePirlsSigmaGrid,
+            scales=tuple(float(x) for x in options['poisson_laplace_pirls_sigma_grid_scales']),
+            n_steps=options['poisson_laplace_pirls_sigma_grid_steps'],
+            damping=options['poisson_laplace_pirls_diag_damping'],
+            min_d=options['poisson_laplace_pirls_sigma_grid_min_d'],
+            max_q=options['poisson_laplace_pirls_sigma_grid_max_q'],
+        )
+
+    if options.get('poisson_laplace_pirls_sigma_average', False):
+        stats = _run(
+            refinePoissonLaplacePirlsSigmaAverage,
+            scales=tuple(float(x) for x in options['poisson_laplace_pirls_sigma_average_scales']),
+            scale_mode=options['poisson_laplace_pirls_sigma_average_scale_mode'],
+            intercept_scales=tuple(
+                float(x) for x in options['poisson_laplace_pirls_sigma_average_intercept_scales']
+            ),
+            slope_scales=tuple(
+                float(x) for x in options['poisson_laplace_pirls_sigma_average_slope_scales']
+            ),
+            n_steps=options['poisson_laplace_pirls_sigma_average_steps'],
+            damping=options['poisson_laplace_pirls_diag_damping'],
+            temperature=options['poisson_laplace_pirls_sigma_average_temperature'],
+            min_d=options['poisson_laplace_pirls_sigma_average_min_d'],
+            max_q=options['poisson_laplace_pirls_sigma_average_max_q'],
+            output_mode=options['poisson_laplace_pirls_sigma_average_output_mode'],
+        )
+
+    if options.get('poisson_variational_gaussian', False):
+        stats = _run(
+            refinePoissonVariationalGaussian,
+            n_outer=options['poisson_variational_gaussian_outer'],
+            n_inner=options['poisson_variational_gaussian_inner'],
+            n_final=options['poisson_variational_gaussian_final'],
+            damping=options['poisson_variational_gaussian_damping'],
+            sigma_blend=options['poisson_variational_gaussian_sigma_blend'],
+            sigma_prior_weight=options['poisson_variational_gaussian_prior_weight'],
+        )
+
+    if options.get('poisson_variational_gaussian_sigma_average', False):
+        stats = _run(
+            refinePoissonVariationalGaussianSigmaAverage,
+            scales=tuple(
+                float(x) for x in options['poisson_variational_gaussian_sigma_average_scales']
+            ),
+            scale_mode=options['poisson_variational_gaussian_sigma_average_scale_mode'],
+            intercept_scales=tuple(
+                float(x)
+                for x in options['poisson_variational_gaussian_sigma_average_intercept_scales']
+            ),
+            slope_scales=tuple(
+                float(x) for x in options['poisson_variational_gaussian_sigma_average_slope_scales']
+            ),
+            n_steps=options['poisson_variational_gaussian_sigma_average_steps'],
+            damping=options['poisson_variational_gaussian_damping'],
+            temperature=options['poisson_variational_gaussian_sigma_average_temperature'],
+            output_mode=options['poisson_variational_gaussian_sigma_average_output_mode'],
+        )
+
+    if options.get('poisson_laplace_target_refine', False):
+        stats = _run(
+            refinePoissonLaplaceTargetRefine,
+            n_steps=options['poisson_laplace_target_refine_steps'],
+            lr=options['poisson_laplace_target_refine_lr'],
+            min_d=options['poisson_laplace_target_refine_min_d'],
+            max_q=options['poisson_laplace_target_refine_max_q'],
+        )
+
+    return stats
 
 
 def refinePoissonLaplaceTargetRefine(
