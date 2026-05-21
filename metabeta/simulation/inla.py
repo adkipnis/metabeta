@@ -1,11 +1,12 @@
 """R-INLA fitting for hierarchical datasets.
 
 Per-dataset output (<data_id>/fits/<partition>_inla_<idx:03d>.npz):
-    inla_ffx        (d,)   — posterior means for fixed effects
-    inla_sigma_rfx  (q,)   — E[1/sqrt(τ)] for each RE variance
-    inla_rfx        (m, q) — group-level BLUPs
-    inla_wall_s     scalar — wall time in seconds
-    inla_failed     bool   — True if INLA failed or timed out
+    inla_ffx             (d,)   — posterior means for fixed effects
+    inla_sigma_rfx       (q,)   — E[sigma_j | y] = E[1/sqrt(τ_j)] via numerical integration
+    inla_sigma_rfx_mode  (q,)   — mode of p(sigma_j | y) via change-of-variables on precision marginal
+    inla_rfx             (m, q) — group-level BLUPs
+    inla_wall_s          scalar — wall time in seconds
+    inla_failed          bool   — True if INLA failed or timed out
 
     Joint posterior samples (via inla.posterior.sample, S = draws * chains):
     inla_ffx_samples        (d, S)    — samples follow (dim, S) convention of nuts/advi
@@ -13,11 +14,12 @@ Per-dataset output (<data_id>/fits/<partition>_inla_<idx:03d>.npz):
     inla_rfx_samples        (q, m, S)
 
 Batch output (<data_id>/<partition>.inla.npz) — INLA keys only, separate from .fit.npz:
-    inla_ffx        (n_ds, d_max)
-    inla_sigma_rfx  (n_ds, q_max)
-    inla_rfx        (n_ds, m_max, q_max)
-    inla_wall_s     (n_ds,)
-    inla_failed     (n_ds,)  dtype bool
+    inla_ffx             (n_ds, d_max)
+    inla_sigma_rfx       (n_ds, q_max)
+    inla_sigma_rfx_mode  (n_ds, q_max)
+    inla_rfx             (n_ds, m_max, q_max)
+    inla_wall_s          (n_ds,)
+    inla_failed          (n_ds,)  dtype bool
     inla_ffx_samples        (n_ds, d_max, S)
     inla_sigma_rfx_samples  (n_ds, q_max, S)
     inla_rfx_samples        (n_ds, q_max, m_max, S)
@@ -85,6 +87,20 @@ def _sigma_from_marginal(marg_hyper: object, name: str) -> float:
     return float(np.trapezoid(den_v / np.sqrt(np.maximum(tau_v, 1e-12)), tau_v))
 
 
+def _sigma_mode_from_marginal(marg_hyper: object, name: str) -> float:
+    """Compute mode of p(sigma|y) via change-of-variables on an INLA precision marginal.
+
+    INLA stores marginals in precision (τ) space. The mode of p(σ|y) with σ=1/sqrt(τ)
+    is found by transforming: p(σ|y) ∝ p(τ|y) · |dτ/dσ| = p(τ|y) · 2/σ³.
+    """
+    marg = marg_hyper.rx2(name)
+    tau_v = np.array(marg.rx(True, 1)).ravel()
+    den_v = np.array(marg.rx(True, 2)).ravel()
+    sigma_v = 1.0 / np.sqrt(np.maximum(tau_v, 1e-12))
+    sigma_den = den_v * 2.0 / np.maximum(sigma_v**3, 1e-12)
+    return float(sigma_v[np.argmax(sigma_den)])
+
+
 def _draw_posterior_samples(
     result: object,
     n_samples: int,
@@ -131,7 +147,8 @@ def _draw_posterior_samples(
                     if nm in latent_names:
                         rfx_s[:, j, k] = latent_mat[:, latent_names.index(nm)]
                 prec_nms = [
-                    nm for nm in hyper_names
+                    nm
+                    for nm in hyper_names
                     if 'idx0' in nm and f'component {j + 1}' in nm and 'Precision' in nm
                 ]
                 if prec_nms:
@@ -143,10 +160,7 @@ def _draw_posterior_samples(
                     nm = f'group{j}:{k + 1}'
                     if nm in latent_names:
                         rfx_s[:, j, k] = latent_mat[:, latent_names.index(nm)]
-                prec_nms = [
-                    nm for nm in hyper_names
-                    if f'group{j}' in nm and 'Precision' in nm
-                ]
+                prec_nms = [nm for nm in hyper_names if f'group{j}' in nm and 'Precision' in nm]
                 if prec_nms:
                     prec = hyper_mat[:, hyper_names.index(prec_nms[0])]
                     sigma_s[:, j] = 1.0 / np.sqrt(np.maximum(prec, 1e-12))
@@ -281,7 +295,9 @@ def estimate(
                 'formula': formula,
                 'family': family_str,
                 'data': df,
-                'control.compute': ro.ListVector({'config': bool(n_samples > 0), 'return.marginals': True}),
+                'control.compute': ro.ListVector(
+                    {'config': bool(n_samples > 0), 'return.marginals': True}
+                ),
                 'control.predictor': ro.ListVector({'compute': False}),
                 'control.fixed': ctrl_fixed,
                 'verbose': False,
@@ -316,6 +332,7 @@ def estimate(
         sr = result.rx2('summary.random')
 
         sigma_rfx = np.zeros(q)
+        sigma_rfx_mode = np.zeros(q)
         blups = np.zeros((m, q))
 
         if correlated:
@@ -327,9 +344,11 @@ def estimate(
                 ]
                 if comp_nm:
                     sigma_rfx[j] = _sigma_from_marginal(marg_hyper, comp_nm[0])
+                    sigma_rfx_mode[j] = _sigma_mode_from_marginal(marg_hyper, comp_nm[0])
                 else:
                     sh = result.rx2('summary.hyperpar')
                     sigma_rfx[j] = 1.0 / np.sqrt(max(float(sh.rx(j + 1, 'mean')[0]), 1e-12))
+                    sigma_rfx_mode[j] = sigma_rfx[j]
             re_all = sr.rx2('idx0')
             means_all = np.array(re_all.rx(True, 'mean')).ravel()
             blups[:, 0] = means_all[:m]
@@ -339,14 +358,21 @@ def estimate(
                 matched = [nm for nm in hyper_names if f'group{j}' in nm and 'Precision' in nm]
                 if matched:
                     sigma_rfx[j] = _sigma_from_marginal(marg_hyper, matched[0])
+                    sigma_rfx_mode[j] = _sigma_mode_from_marginal(marg_hyper, matched[0])
                 else:
                     sh = result.rx2('summary.hyperpar')
                     sigma_rfx[j] = 1.0 / np.sqrt(max(float(sh.rx(j + 1, 'mean')[0]), 1e-12))
+                    sigma_rfx_mode[j] = sigma_rfx[j]
                 re_j = sr.rx2(f'group{j}')
                 means_j = np.array(re_j.rx(True, 'mean')).ravel()
                 blups[: len(means_j), j] = means_j[:m]
 
-        out = {'beta': beta, 'sigma_rfx': sigma_rfx, 'blups': blups}
+        out = {
+            'beta': beta,
+            'sigma_rfx': sigma_rfx,
+            'sigma_rfx_mode': sigma_rfx_mode,
+            'blups': blups,
+        }
         if n_samples > 0:
             drawn = _draw_posterior_samples(result, n_samples, d, q, m, correlated)
             if drawn is not None:
@@ -521,6 +547,7 @@ class InlaFitter:
             out = {
                 'inla_ffx': result['beta'].astype(np.float64),
                 'inla_sigma_rfx': result['sigma_rfx'].astype(np.float64),
+                'inla_sigma_rfx_mode': result['sigma_rfx_mode'].astype(np.float64),
                 'inla_rfx': result['blups'].astype(np.float64),
                 'inla_wall_s': np.array(wall_s, dtype=np.float64),
                 'inla_failed': np.array(False),
@@ -530,15 +557,20 @@ class InlaFitter:
                     # transpose to (dim, S) convention matching nuts/advi storage
                     out['inla_ffx_samples'] = result['ffx_samples'].T.astype(np.float64)
                     out['inla_sigma_rfx_samples'] = result['sigma_rfx_samples'].T.astype(np.float64)
-                    out['inla_rfx_samples'] = result['rfx_samples'].transpose(1, 2, 0).astype(np.float64)
+                    out['inla_rfx_samples'] = (
+                        result['rfx_samples'].transpose(1, 2, 0).astype(np.float64)
+                    )
                 else:
                     out['inla_ffx_samples'] = np.full((d, n_samples), np.nan, dtype=np.float64)
-                    out['inla_sigma_rfx_samples'] = np.full((q, n_samples), np.nan, dtype=np.float64)
+                    out['inla_sigma_rfx_samples'] = np.full(
+                        (q, n_samples), np.nan, dtype=np.float64
+                    )
                     out['inla_rfx_samples'] = np.full((q, m, n_samples), np.nan, dtype=np.float64)
         else:
             out = {
                 'inla_ffx': np.full(d, np.nan, dtype=np.float64),
                 'inla_sigma_rfx': np.full(q, np.nan, dtype=np.float64),
+                'inla_sigma_rfx_mode': np.full(q, np.nan, dtype=np.float64),
                 'inla_rfx': np.full((m, q), np.nan, dtype=np.float64),
                 'inla_wall_s': np.array(wall_s, dtype=np.float64),
                 'inla_failed': np.array(True),
@@ -606,8 +638,11 @@ def setup() -> argparse.Namespace:
 if __name__ == '__main__':
     cfg = setup()
     for _k, _v in [
-        ('idx', 0), ('reintegrate', False), ('partition', 'test'),
-        ('epoch', None), ('re_correlation', 'diagonal'),
+        ('idx', 0),
+        ('reintegrate', False),
+        ('partition', 'test'),
+        ('epoch', None),
+        ('re_correlation', 'diagonal'),
         ('timeout_s', INLA_DEFAULT_TIMEOUT_S),
     ]:
         if not hasattr(cfg, _k):
