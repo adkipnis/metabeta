@@ -35,6 +35,7 @@ METHODS = [
     'poisson_laplace_pirls_sigma_avg',
     'poisson_laplace_pirls_sigma_avg_is',
     'poisson_laplace_target_refine',
+    'poisson_variational_gaussian',
 ]
 FAMILIES = ['n', 'b', 'p']
 
@@ -123,6 +124,7 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                                     'poisson_laplace_pirls_full_grid',
                                     'poisson_laplace_pirls_sigma_avg',
                                     'poisson_laplace_pirls_sigma_avg_is',
+                                    'poisson_variational_gaussian',
                                 }
                             ),
                             **_bernoulliEbKwargs(method, args),
@@ -339,6 +341,7 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
             'poisson_laplace_pirls_sigma_grid': False,
             'poisson_laplace_pirls_sigma_average': False,
             'poisson_laplace_target_refine': False,
+            'poisson_variational_gaussian': False,
         }
     if method == 'bernoulli_eb':
         return {'bernoulli_laplace_eb': 'bernoulli_eb', 'normal_laplace_eb': False}
@@ -355,6 +358,7 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
         'poisson_laplace_pirls_sigma_avg',
         'poisson_laplace_pirls_sigma_avg_is',
         'poisson_laplace_target_refine',
+        'poisson_variational_gaussian',
     }:
         return {
             'bernoulli_laplace_eb': False,
@@ -369,6 +373,7 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
                 'poisson_laplace_pirls_sigma_avg',
                 'poisson_laplace_pirls_sigma_avg_is',
                 'poisson_laplace_target_refine',
+                'poisson_variational_gaussian',
             },
             'poisson_laplace_pirls_diag': method
             in {
@@ -378,6 +383,7 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
                 'poisson_laplace_pirls_sigma_avg',
                 'poisson_laplace_pirls_sigma_avg_is',
                 'poisson_laplace_target_refine',
+                'poisson_variational_gaussian',
             },
             'poisson_laplace_pirls_full': method
             in {'poisson_laplace_pirls_full', 'poisson_laplace_pirls_full_beta'},
@@ -388,14 +394,17 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
                 'poisson_laplace_pirls_sigma_avg',
                 'poisson_laplace_pirls_sigma_avg_is',
                 'poisson_laplace_target_refine',
+                'poisson_variational_gaussian',
             },
             'poisson_laplace_pirls_sigma_average': method
             in {
                 'poisson_laplace_pirls_sigma_avg',
                 'poisson_laplace_pirls_sigma_avg_is',
                 'poisson_laplace_target_refine',
+                'poisson_variational_gaussian',
             },
             'poisson_laplace_target_refine': method == 'poisson_laplace_target_refine',
+            'poisson_variational_gaussian': method == 'poisson_variational_gaussian',
         }
     return {'bernoulli_laplace_eb': False}
 
@@ -450,6 +459,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_pirls_sigma_avg',
         'poisson_laplace_pirls_sigma_avg_is',
         'poisson_laplace_target_refine',
+        'poisson_variational_gaussian',
     }:
         return {}
     out = {
@@ -482,6 +492,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_pirls_sigma_avg',
         'poisson_laplace_pirls_sigma_avg_is',
         'poisson_laplace_target_refine',
+        'poisson_variational_gaussian',
     }:
         out.update(
             {
@@ -500,6 +511,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_pirls_sigma_avg',
         'poisson_laplace_pirls_sigma_avg_is',
         'poisson_laplace_target_refine',
+        'poisson_variational_gaussian',
     }:
         out.update(
             {
@@ -523,6 +535,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_pirls_sigma_avg',
         'poisson_laplace_pirls_sigma_avg_is',
         'poisson_laplace_target_refine',
+        'poisson_variational_gaussian',
     }:
         out.update(
             {
@@ -564,6 +577,21 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
                 'poisson_laplace_target_refine_lr': args.poisson_laplace_target_refine_lr,
                 'poisson_laplace_target_refine_min_d': args.poisson_laplace_target_refine_min_d,
                 'poisson_laplace_target_refine_max_q': args.poisson_laplace_target_refine_max_q,
+            }
+        )
+    if method == 'poisson_variational_gaussian':
+        out.update(
+            {
+                'poisson_variational_gaussian_outer': args.poisson_variational_gaussian_outer,
+                'poisson_variational_gaussian_inner': args.poisson_variational_gaussian_inner,
+                'poisson_variational_gaussian_final': args.poisson_variational_gaussian_final,
+                'poisson_variational_gaussian_damping': args.poisson_variational_gaussian_damping,
+                'poisson_variational_gaussian_sigma_blend': (
+                    args.poisson_variational_gaussian_sigma_blend
+                ),
+                'poisson_variational_gaussian_prior_weight': (
+                    args.poisson_variational_gaussian_prior_weight
+                ),
             }
         )
     return out
@@ -632,6 +660,12 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-laplace-target-refine-lr', type=float, default=0.02)
     parser.add_argument('--poisson-laplace-target-refine-min-d', type=int, default=1)
     parser.add_argument('--poisson-laplace-target-refine-max-q', type=int, default=None)
+    parser.add_argument('--poisson-variational-gaussian-outer', type=int, default=3)
+    parser.add_argument('--poisson-variational-gaussian-inner', type=int, default=1)
+    parser.add_argument('--poisson-variational-gaussian-final', type=int, default=1)
+    parser.add_argument('--poisson-variational-gaussian-damping', type=float, default=0.5)
+    parser.add_argument('--poisson-variational-gaussian-sigma-blend', type=float, default=0.5)
+    parser.add_argument('--poisson-variational-gaussian-prior-weight', type=float, default=4.0)
     return parser.parse_args()
 # fmt: on
 

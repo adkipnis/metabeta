@@ -17,6 +17,7 @@ from metabeta.analytical.glmm.poisson import (
     refinePoissonLaplacePirlsSigmaGrid,
     refinePoissonLaplaceTargetRefine,
     refinePoissonMarginalMeanBeta,
+    refinePoissonVariationalGaussian,
 )
 from metabeta.analytical.lmm.map import refineNormalLaplaceEb, refineNormalMapSrfx
 from metabeta.analytical.lmm.lmm import lmmNormal
@@ -412,6 +413,17 @@ def glmm(
     poisson_laplace_target_refine_lr = kwargs.pop('poisson_laplace_target_refine_lr', 0.02)
     poisson_laplace_target_refine_min_d = kwargs.pop('poisson_laplace_target_refine_min_d', 1)
     poisson_laplace_target_refine_max_q = kwargs.pop('poisson_laplace_target_refine_max_q', None)
+    poisson_variational_gaussian = kwargs.pop('poisson_variational_gaussian', False)
+    poisson_variational_gaussian_outer = kwargs.pop('poisson_variational_gaussian_outer', 3)
+    poisson_variational_gaussian_inner = kwargs.pop('poisson_variational_gaussian_inner', 1)
+    poisson_variational_gaussian_final = kwargs.pop('poisson_variational_gaussian_final', 1)
+    poisson_variational_gaussian_damping = kwargs.pop('poisson_variational_gaussian_damping', 0.5)
+    poisson_variational_gaussian_sigma_blend = kwargs.pop(
+        'poisson_variational_gaussian_sigma_blend', 0.5
+    )
+    poisson_variational_gaussian_prior_weight = kwargs.pop(
+        'poisson_variational_gaussian_prior_weight', 4.0
+    )
     poisson_marginal_beta = kwargs.pop('poisson_marginal_beta', likelihood_family == 2)
     poisson_marginal_beta_full_psi = kwargs.pop('poisson_marginal_beta_full_psi', False)
     poisson_marginal_beta_full_psi_min_q = kwargs.pop('poisson_marginal_beta_full_psi_min_q', 3)
@@ -786,6 +798,29 @@ def glmm(
                 output_mode=poisson_laplace_pirls_sigma_average_output_mode,
                 return_diagnostics=poisson_laplace_eb_diagnostics,
             )
+        if map_refine and poisson_variational_gaussian and Zm.shape[-1] > 0:
+            stats = refinePoissonVariationalGaussian(
+                stats,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx=map_priors['nu_ffx'],
+                tau_ffx=map_priors['tau_ffx'],
+                family_ffx=map_priors['family_ffx'],
+                tau_rfx=map_priors['tau_rfx'],
+                family_sigma_rfx=map_priors['family_sigma_rfx'],
+                mask_d=mask_d,
+                mask_q=mask_q,
+                n_outer=poisson_variational_gaussian_outer,
+                n_inner=poisson_variational_gaussian_inner,
+                n_final=poisson_variational_gaussian_final,
+                damping=poisson_variational_gaussian_damping,
+                sigma_blend=poisson_variational_gaussian_sigma_blend,
+                sigma_prior_weight=poisson_variational_gaussian_prior_weight,
+                return_diagnostics=poisson_laplace_eb_diagnostics,
+            )
         if map_refine and poisson_laplace_target_refine and Zm.shape[-1] > 0:
             stats = refinePoissonLaplaceTargetRefine(
                 stats,
@@ -830,4 +865,5 @@ __all__ = [
     'refinePoissonLaplacePirlsSigmaAverage',
     'refinePoissonLaplaceTargetRefine',
     'refinePoissonMarginalMeanBeta',
+    'refinePoissonVariationalGaussian',
 ]

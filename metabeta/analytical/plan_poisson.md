@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-21 (debloated after scalar σ averaging default)
+Last updated: 2026-05-21 (variational Gaussian prototype)
 
 Goal
 ----
@@ -32,6 +32,8 @@ Important method names:
 - `poisson_laplace_pirls_sigma_avg_is`: intercept-vs-slope σ averaging prototype.
 - `poisson_laplace_target_refine`: default plus 1-2 direct β/u autograd steps under the
   diagonal Laplace target; promising but not default.
+- `poisson_variational_gaussian`: default plus Gaussian variational posterior-mean update;
+  current leading prototype, not default.
 - `poisson_laplace_pirls_full` / `poisson_laplace_pirls_full_beta`: full-Σ prototypes;
   stable but worse than the diagonal default in the tested rows.
 
@@ -74,6 +76,38 @@ What We Retired
 
 Active Prototypes
 -----------------
+
+### Gaussian Variational Posterior-Mean Update
+
+`poisson_variational_gaussian` starts from the default path, then updates
+`q(u_g)=N(m_g,V_g)` using the expected Poisson mean
+`exp(Xβ + Zm_g + 0.5 * diag(Z V_g Z'))`. Diagonal σ is updated from
+`m_g² + diag(V_g)`, and the candidate is accepted only if its ELBO-style target improves.
+
+First 1000 rows. Small mixed and medium sampled valid were rechecked after the inactive-q
+entropy fix; remaining rows are from the initial prototype run.
+
+| Dataset | part | default FFX | var-Gauss FFX | default σ | var-Gauss σ | default BLUP | var-Gauss BLUP | var-Gauss ms/ds |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-p-mixed | train | 0.2151 | 0.2129 | 0.4287 | 0.4294 | 0.5222 | 0.5208 | 36.2 |
+| small-p-sampled | valid | 0.2378 | 0.2338 | 0.4756 | 0.4785 | 0.5355 | 0.5328 | 44.9 |
+| small-p-sampled | test | 0.2119 | 0.2094 | 0.4421 | 0.4418 | 0.5232 | 0.5211 | 36.4 |
+| medium-p-mixed | train | 0.2438 | 0.2347 | 0.4198 | 0.4039 | 0.5129 | 0.5078 | 69.7 |
+| medium-p-sampled | valid | 0.3057 | 0.2757 | 0.5654 | 0.5265 | 0.6115 | 0.5890 | 66.4 |
+| medium-p-sampled | test | 0.2831 | 0.2750 | 0.4723 | 0.4472 | 0.5560 | 0.5517 | 60.2 |
+| large-p-mixed | train | 0.3436 | 0.3085 | 0.5536 | 0.5166 | 0.6472 | 0.5926 | 70.8 |
+| large-p-sampled | valid | 0.4131 | 0.3890 | 0.5261 | 0.5040 | 0.6318 | 0.6262 | 70.7 |
+| large-p-sampled | test | 0.4358 | 0.4141 | 0.5124 | 0.5380 | 0.7651 | 0.7274 | 80.4 |
+
+Interpretation:
+
+- This is the first Poisson prototype that improves FFX on every tested small/medium/large
+  row while usually improving σ and BLUP too.
+- Gains are materially larger than direct fixed-σ Laplace target refinement, especially on
+  medium/large rows.
+- It still does not reach INLA territory on large rows, and large sampled test σ regresses.
+- Treat this as the leading architecture to tune or extend, but not as the default until
+  sampled/huge rows and σ behavior are better understood.
 
 ### Intercept-vs-Slope σ Averaging
 
@@ -122,9 +156,10 @@ Interpretation rule:
 Most Promising Architectural Change
 -----------------------------------
 
-The most plausible route to FFX around `~0.20` is a posterior-mean-oriented Poisson
-Laplace/variational Gaussian update, not another posthoc correction around the current
-conditional mode.
+The most plausible route to FFX around `~0.20` remains a posterior-mean-oriented
+Poisson variational/Laplace update, not another posthoc correction around the current
+conditional mode. The first `poisson_variational_gaussian` prototype validates the
+direction, but the gap is still too large on large rows.
 
 Prototype target:
 
@@ -152,9 +187,15 @@ Why this is the next serious candidate:
 - Direct fixed-σ Laplace target refinement helps only marginally, so optimizing the same
   conditional mode harder is unlikely to reach INLA territory.
 
-This should be tested as a separate path first, with diagonal `V_g` or full `q x q` `V_g`
-depending on implementation cost. For `q <= 5`, full `V_g` is computationally feasible;
-the main risk is stability and target calibration, not FLOPs.
+Next refinements for this path:
+
+- Diagnose large-row residuals by σ error, `0.5 * diag(Z V_g Z')`, and ELBO acceptance.
+- Compare σ update variants: lower `sigma_blend`, stronger prior weight, and not writing
+  back σ when the ELBO improves mainly through β.
+- Test whether the variational update should replace the scalar σ averaging stage or run
+  after it. The current prototype runs after the default path.
+- If σ remains unstable, add scalar/intercept-vs-slope hyperparameter averaging around the
+  variational candidate rather than around the conditional-mode candidate.
 
 Secondary direction:
 
@@ -167,8 +208,7 @@ Commands
 
 ```bash
 uv run python -u experiments/analytical/glmm_required_benchmark.py \
-    --family p --methods current poisson_laplace_target_refine \
-    --poisson-laplace-target-refine-steps 2 \
+    --family p --methods current poisson_variational_gaussian \
     --sizes small medium large \
     --batch-size 32 --max-datasets 1000
 
