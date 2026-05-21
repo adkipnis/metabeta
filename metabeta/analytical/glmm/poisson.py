@@ -331,6 +331,56 @@ def _poissonVariationalHessianDiag(
     return torch.where(active_m[:, :, None, None], A, eye_q)
 
 
+def _poissonVariationalCovarianceDiag(
+    beta: torch.Tensor,
+    means: torch.Tensor,
+    V_g: torch.Tensor,
+    sigma: torch.Tensor,
+    Zm: torch.Tensor,
+    Xm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    active_q: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Refresh q(u) covariance at the current variational state."""
+    B, m, _, q = Zm.shape
+    device, dtype = Zm.device, Zm.dtype
+    active_q_f = active_q.to(dtype)
+    A = _poissonVariationalHessianDiag(beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q)
+    eye_q = torch.eye(q, device=device, dtype=dtype).expand(B, m, q, q)
+    V_new = _safeSolve(A + _adaptiveRidgeBm(A), eye_q)
+    V_new = V_new * mask_m[:, :, None, None]
+    V_new = V_new * active_q_f[:, None, :, None] * active_q_f[:, None, None, :]
+    return A, V_new
+
+
+def _poissonVariationalSigmaMomentDiag(
+    means: torch.Tensor,
+    V_g: torch.Tensor,
+    sigma: torch.Tensor,
+    sigma0: torch.Tensor,
+    mask_m: torch.Tensor,
+    active_q: torch.Tensor,
+    sigma_blend: float,
+    sigma_prior_weight: float,
+    sigma_max: float,
+) -> torch.Tensor:
+    """Moment/prior update for diagonal random-effect σ in log space."""
+    dtype = means.dtype
+    active_q_f = active_q.to(dtype)
+    m_active = mask_m.to(dtype).sum(dim=1, keepdim=True).clamp(min=1.0)
+    second_moment = means.square() + V_g.diagonal(dim1=-2, dim2=-1).clamp(min=0.0)
+    second_moment = second_moment * mask_m[:, :, None] * active_q_f[:, None, :]
+    sigma2_moment = (second_moment.sum(dim=1) + float(sigma_prior_weight) * sigma0.square()) / (
+        m_active + float(sigma_prior_weight)
+    )
+    sigma_moment = sigma2_moment.clamp(min=1e-8, max=sigma_max**2).sqrt()
+    log_sigma = (1.0 - float(sigma_blend)) * sigma.clamp(min=1e-4).log()
+    log_sigma = log_sigma + float(sigma_blend) * sigma_moment.clamp(min=1e-4).log()
+    sigma_new = log_sigma.exp().clamp(min=1e-4, max=sigma_max)
+    return torch.where(active_q, sigma_new, sigma)
+
+
 def _poissonVariationalStepDiag(
     beta: torch.Tensor,
     means: torch.Tensor,
@@ -1668,7 +1718,6 @@ def refinePoissonVariationalGaussian(
         else torch.ones(B, q, device=device, dtype=torch.bool)
     )
     active_q_f = active_q.to(dtype)
-    m_active = mask_m.to(dtype).sum(dim=1, keepdim=True).clamp(min=1.0)
 
     beta_base = stats['beta_est'][:, :d].detach().clamp(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
     means_base = stats.get('blup_est', Zm.new_zeros(B, Zm.shape[1], q))[:, :, :q].detach()
@@ -1696,7 +1745,7 @@ def refinePoissonVariationalGaussian(
     A = base_A
     for _ in range(max(int(n_outer), 1)):
         for _ in range(max(int(n_inner), 1)):
-            beta, means, A = _poissonVariationalStepDiag(
+            beta, means, _ = _poissonVariationalStepDiag(
                 beta,
                 means,
                 V_g,
@@ -1715,23 +1764,27 @@ def refinePoissonVariationalGaussian(
                 max_beta_step=max_beta_step,
                 max_blup_step=max_blup_step,
             )
-            V_g = _safeSolve(A + _adaptiveRidgeBm(A), eye_q)
-            V_g = V_g * mask_m[:, :, None, None]
-            V_g = V_g * active_q_f[:, None, :, None] * active_q_f[:, None, None, :]
+            A, V_g = _poissonVariationalCovarianceDiag(
+                beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q
+            )
 
-        second_moment = means.square() + V_g.diagonal(dim1=-2, dim2=-1).clamp(min=0.0)
-        second_moment = second_moment * mask_m[:, :, None] * active_q_f[:, None, :]
-        sigma2_moment = (second_moment.sum(dim=1) + float(sigma_prior_weight) * sigma0.square()) / (
-            m_active + float(sigma_prior_weight)
+        sigma = _poissonVariationalSigmaMomentDiag(
+            means,
+            V_g,
+            sigma,
+            sigma0,
+            mask_m,
+            active_q,
+            sigma_blend,
+            sigma_prior_weight,
+            sigma_max,
         )
-        sigma_moment = sigma2_moment.clamp(min=1e-8, max=sigma_max**2).sqrt()
-        log_sigma = (1.0 - float(sigma_blend)) * sigma.clamp(min=1e-4).log()
-        log_sigma = log_sigma + float(sigma_blend) * sigma_moment.clamp(min=1e-4).log()
-        sigma = log_sigma.exp().clamp(min=1e-4, max=sigma_max)
-        sigma = torch.where(active_q, sigma, sigma_base)
+        A, V_g = _poissonVariationalCovarianceDiag(
+            beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q
+        )
 
     for _ in range(max(int(n_final), 0)):
-        beta, means, A = _poissonVariationalStepDiag(
+        beta, means, _ = _poissonVariationalStepDiag(
             beta,
             means,
             V_g,
@@ -1750,9 +1803,25 @@ def refinePoissonVariationalGaussian(
             max_beta_step=max_beta_step,
             max_blup_step=max_blup_step,
         )
-        V_g = _safeSolve(A + _adaptiveRidgeBm(A), eye_q)
-        V_g = V_g * mask_m[:, :, None, None]
-        V_g = V_g * active_q_f[:, None, :, None] * active_q_f[:, None, None, :]
+        A, V_g = _poissonVariationalCovarianceDiag(
+            beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q
+        )
+
+    if n_final > 0:
+        sigma = _poissonVariationalSigmaMomentDiag(
+            means,
+            V_g,
+            sigma,
+            sigma0,
+            mask_m,
+            active_q,
+            sigma_blend,
+            sigma_prior_weight,
+            sigma_max,
+        )
+        A, V_g = _poissonVariationalCovarianceDiag(
+            beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q
+        )
 
     final_target = _poissonVariationalTargetDiag(
         beta,

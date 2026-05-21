@@ -414,8 +414,8 @@ def glmm(
     poisson_laplace_target_refine_min_d = kwargs.pop('poisson_laplace_target_refine_min_d', 1)
     poisson_laplace_target_refine_max_q = kwargs.pop('poisson_laplace_target_refine_max_q', None)
     poisson_variational_gaussian = kwargs.pop('poisson_variational_gaussian', False)
-    poisson_variational_gaussian_outer = kwargs.pop('poisson_variational_gaussian_outer', 3)
-    poisson_variational_gaussian_inner = kwargs.pop('poisson_variational_gaussian_inner', 1)
+    poisson_variational_gaussian_outer = kwargs.pop('poisson_variational_gaussian_outer', 5)
+    poisson_variational_gaussian_inner = kwargs.pop('poisson_variational_gaussian_inner', 2)
     poisson_variational_gaussian_final = kwargs.pop('poisson_variational_gaussian_final', 1)
     poisson_variational_gaussian_damping = kwargs.pop('poisson_variational_gaussian_damping', 0.5)
     poisson_variational_gaussian_sigma_blend = kwargs.pop(

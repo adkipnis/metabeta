@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-21 (variational Gaussian diagnostic + σ-blend patch)
+Last updated: 2026-05-21 (iterated variational Gaussian prototype)
 
 Goal
 ----
@@ -32,8 +32,9 @@ Important method names:
 - `poisson_laplace_pirls_sigma_avg_is`: intercept-vs-slope σ averaging prototype.
 - `poisson_laplace_target_refine`: default plus 1-2 direct β/u autograd steps under the
   diagonal Laplace target; promising but not default.
-- `poisson_variational_gaussian`: default plus Gaussian variational posterior-mean update
-  with conservative σ blending; current leading prototype, not default.
+- `poisson_variational_gaussian`: default plus an iterated Gaussian variational
+  posterior-mean solver with conservative σ blending; current leading prototype, not
+  default.
 - `poisson_laplace_pirls_full` / `poisson_laplace_pirls_full_beta`: full-Σ prototypes;
   stable but worse than the diagonal default in the tested rows.
 
@@ -77,39 +78,41 @@ What We Retired
 Active Prototypes
 -----------------
 
-### Gaussian Variational Posterior-Mean Update
+### Iterated Gaussian Variational Posterior-Mean Solver
 
-`poisson_variational_gaussian` starts from the default path, then updates
-`q(u_g)=N(m_g,V_g)` using the expected Poisson mean
-`exp(Xβ + Zm_g + 0.5 * diag(Z V_g Z'))`. Diagonal σ is updated from
-`m_g² + diag(V_g)`, blended conservatively with the previous σ estimate
-(`sigma_blend=0.25`). The candidate is accepted only if its ELBO-style target improves.
+`poisson_variational_gaussian` starts from the default path, then runs an iterated
+variational-EM style solver for `q(u_g)=N(m_g,V_g)`. Each cycle updates β/m against the
+expected Poisson mean `exp(Xβ + Zm_g + 0.5 * diag(Z V_g Z'))`, refreshes `V_g` at the
+updated state, updates diagonal σ from `m_g² + diag(V_g)`, and refreshes `V_g` again after
+the σ move. Diagonal σ is blended conservatively with the previous σ estimate
+(`sigma_blend=0.25`). The current fixed budget is `outer=5, inner=2, final=1`.
 
-First 1000 rows, sequential CPU run after the conservative σ-blend patch.
+First 1000 rows, sequential CPU run after the coherent V/σ refresh patch.
 
 | Dataset | part | default FFX | var-Gauss FFX | default σ | var-Gauss σ | default BLUP | var-Gauss BLUP | var-Gauss ms/ds |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-p-mixed | train | 0.2151 | 0.2129 | 0.4287 | 0.4289 | 0.5222 | 0.5208 | 39.3 |
-| small-p-sampled | valid | 0.2378 | 0.2336 | 0.4756 | 0.4779 | 0.5355 | 0.5330 | 36.3 |
-| small-p-sampled | test | 0.2119 | 0.2111 | 0.4421 | 0.4407 | 0.5232 | 0.5211 | 36.7 |
-| medium-p-mixed | train | 0.2438 | 0.2314 | 0.4198 | 0.4086 | 0.5129 | 0.5084 | 70.3 |
-| medium-p-sampled | valid | 0.3057 | 0.2753 | 0.5654 | 0.5315 | 0.6115 | 0.5901 | 83.3 |
-| medium-p-sampled | test | 0.2831 | 0.2745 | 0.4723 | 0.4570 | 0.5560 | 0.5519 | 77.1 |
-| large-p-mixed | train | 0.3436 | 0.3074 | 0.5536 | 0.5315 | 0.6472 | 0.5938 | 84.4 |
-| large-p-sampled | valid | 0.4131 | 0.3843 | 0.5261 | 0.5112 | 0.6318 | 0.6261 | 77.7 |
-| large-p-sampled | test | 0.4358 | 0.4130 | 0.5124 | 0.5195 | 0.7651 | 0.7286 | 89.1 |
+| small-p-mixed | train | 0.2151 | 0.2079 | 0.4287 | 0.4273 | 0.5222 | 0.5205 | 38.0 |
+| small-p-sampled | valid | 0.2378 | 0.2335 | 0.4756 | 0.4785 | 0.5355 | 0.5325 | 35.3 |
+| small-p-sampled | test | 0.2119 | 0.2111 | 0.4421 | 0.4393 | 0.5232 | 0.5208 | 35.9 |
+| medium-p-mixed | train | 0.2438 | 0.2334 | 0.4198 | 0.4008 | 0.5129 | 0.5073 | 69.0 |
+| medium-p-sampled | valid | 0.3057 | 0.2450 | 0.5654 | 0.4930 | 0.6115 | 0.5723 | 72.6 |
+| medium-p-sampled | test | 0.2831 | 0.2740 | 0.4723 | 0.4448 | 0.5560 | 0.5510 | 68.8 |
+| large-p-mixed | train | 0.3436 | 0.2432 | 0.5536 | 0.4549 | 0.6472 | 0.5512 | 79.6 |
+| large-p-sampled | valid | 0.4131 | 0.3026 | 0.5261 | 0.4996 | 0.6318 | 0.6211 | 79.5 |
+| large-p-sampled | test | 0.4358 | 0.2889 | 0.5124 | 0.4714 | 0.7651 | 0.7213 | 90.5 |
 
 Interpretation:
 
-- This is the first Poisson prototype that improves FFX on every tested small/medium/large
-  row while usually improving σ and BLUP too.
-- Gains are materially larger than direct fixed-σ Laplace target refinement, especially on
-  medium/large rows.
-- The conservative σ blend improves FFX on every row and usually improves σ/BLUP.
-- The only remaining σ regression in this table is `large-p-sampled test`; it is much
-  smaller than with the earlier `sigma_blend=0.5` prototype.
-- Treat this as the leading architecture to tune or extend, but not as the default until
-  sampled/huge rows and σ writeback behavior are better understood.
+- Stronger fixed-budget iteration is the first large FFX improvement since scalar σ
+  averaging. The largest gains are on the high-dimensional rows that were farthest from
+  INLA.
+- The prototype improves FFX on every tested small/medium/large row and usually improves
+  σ/BLUP too. σ is no longer the main decision criterion.
+- Runtime stays inside the target envelope for these first-1000 CPU rows. The path should
+  be validated on huge rows before becoming the retained default.
+- Remaining gap to INLA is still meaningful on large sampled rows, so the next improvement
+  should extend posterior/hyperparameter averaging around the variational state rather
+  than tune old gates.
 
 ### Intercept-vs-Slope σ Averaging
 
@@ -184,8 +187,9 @@ Most Promising Architectural Change
 
 The most plausible route to FFX around `~0.20` remains a posterior-mean-oriented
 Poisson variational/Laplace update, not another posthoc correction around the current
-conditional mode. The first `poisson_variational_gaussian` prototype validates the
-direction, but the gap is still too large on large rows.
+conditional mode. The iterated `poisson_variational_gaussian` prototype validates this:
+large-row FFX drops from `0.34-0.44` to `0.24-0.30`, much closer to INLA but not yet
+matching it.
 
 Prototype target:
 
@@ -215,12 +219,13 @@ Why this is the next serious candidate:
 
 Next refinements for this path:
 
-- Add a principled σ-writeback guard only for extreme rows where VG improves β but the
-  random-effect marginal correction is already very large or sharply selected.
-- Test one richer posterior-mean update: scalar/intercept-vs-slope σ averaging around the
-  variational candidate rather than around the conditional-mode candidate.
-- If large-row FFX remains far from INLA after that, prototype a more ELBO-consistent
-  update of `V_g` instead of setting it only from local curvature after each mean step.
+- Validate the iterated VG budget on huge rows and the sampled INLA reference cells.
+- Test scalar/intercept-vs-slope σ averaging around the variational candidate rather than
+  around the conditional-mode candidate.
+- If large-row FFX remains above `~0.25`, prototype richer hyperparameter averaging over
+  variance directions using VG candidate refreshes.
+- Keep σ-writeback guards low priority unless FFX gains start trading off against severe
+  BLUP regressions.
 
 Secondary direction:
 
