@@ -41,7 +41,7 @@ from pathlib import Path
 
 import numpy as np
 
-from metabeta.utils.io import datasetFilename
+from metabeta.utils.names import datasetFilename
 from metabeta.utils.padding import aggregate, unpad
 from metabeta.utils.templates import setupConfigParser, generateSimulationConfig
 
@@ -49,15 +49,27 @@ INLA_DEFAULT_TIMEOUT_S = 120
 
 _DEFAULT_SRCDIR = Path(__file__).resolve().parent.parent / 'outputs' / 'data'
 
-try:
-    import rpy2.robjects as ro
-    from rpy2.robjects.packages import importr
+_HAS_INLA: bool | None = None
+ro = None
+_rinla = None
+_rbase = None
 
-    _rinla = importr('INLA')
-    _rbase = importr('base')
-    _HAS_INLA = True
-except Exception:
-    _HAS_INLA = False
+
+def _load_inla() -> bool:
+    global _HAS_INLA, ro, _rinla, _rbase
+    if _HAS_INLA is not None:
+        return _HAS_INLA
+    try:
+        import rpy2.robjects as _ro
+        from rpy2.robjects.packages import importr
+
+        ro = _ro
+        _rinla = importr('INLA')
+        _rbase = importr('base')
+        _HAS_INLA = True
+    except Exception:
+        _HAS_INLA = False
+    return _HAS_INLA
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +180,7 @@ def estimate(
 
     Returns dict with 'beta' (d,), 'sigma_rfx' (q,), 'blups' (m, q), or None.
     """
-    if not _HAS_INLA:
+    if not _load_inla():
         return None
 
     d, m, q = int(ds['d']), int(ds['m']), int(ds['q'])
@@ -605,7 +617,7 @@ if __name__ == '__main__':
         print('error: --epoch is required when --partition train', file=sys.stderr)
         sys.exit(1)
 
-    if not _HAS_INLA:
+    if not _load_inla():
         print('R-INLA not available (rpy2 or INLA package missing).', file=sys.stderr)
         sys.exit(1)
 
