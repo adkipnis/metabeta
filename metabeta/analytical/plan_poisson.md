@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-21 (VG-centered σ averaging prototype)
+Last updated: 2026-05-21 (hard-row oracle/VG diagnostic)
 
 Goal
 ----
@@ -222,6 +222,61 @@ Implication:
 - The next likely useful guard is targeted σ writeback suppression for extreme marginal
   variance rows, not more generic gate tuning.
 
+### Hard-Row Oracle/VG Diagnostic
+
+Focused script:
+
+```bash
+uv run python -u experiments/analytical/glmm_poisson_hard_row_diagnostic.py \
+    --combos medium-p-sampled:valid large-p-sampled:test \
+    --max-datasets 1000 --top-k 64 --batch-size 32 --rank-by vg_rmse
+```
+
+This ranks the first 1000 rows of each hard sampled cell by row-level FFX RMSE under
+`poisson_variational_gaussian_sigma_avg`, then reruns the same selected rows with true-σ,
+INLA-σ, wider σ averaging, and high-budget VG variants. Aggregate over the 64 selected
+hard rows:
+
+| variant | FFX | σ | BLUP | ms/ds | N_eff | best scale |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| current | 1.2441 | 1.4276 | 1.7256 | 211.2 | n/a | n/a |
+| VG σ-avg | 0.6285 | 0.9487 | 0.9049 | 261.8 | 4.50 | 0.99 |
+| wider VG σ-avg | 0.6302 | 0.9487 | 0.9049 | 291.2 | 5.90 | 0.98 |
+| high-budget VG | 0.5377 | 0.5517 | 0.6489 | 311.1 | n/a | n/a |
+| high-budget VG + wider σ-avg | 0.5352 | 0.5517 | 0.6489 | 355.1 | 6.04 | 0.94 |
+| true-σ fixed refresh | 0.6380 | 0.0000 | 0.9049 | 261.8 | 1.49 | 1.00 |
+| INLA-σ fixed refresh | 0.6839 | 1.3958 | 0.9049 | 261.8 | 1.18 | 1.00 |
+| INLA | 1.2598 | 1.3958 | 1.1538 | n/a | n/a | n/a |
+
+Additional check with `--rank-by gap_to_inla` produced the same qualitative result:
+wider σ averaging and σ plug-ins were not the useful lever; high-budget VG refinement was.
+
+Findings:
+
+- The remaining β failures are not mostly caused by the diagonal σ point estimate.
+  Replacing σ by true σ and locally refreshing β does not improve FFX on the selected
+  hard rows (`0.6285 -> 0.6380`).
+- INLA σ plug-in is worse for our local VG refresh (`0.6839` FFX), so INLA's advantage is
+  not transferable as a standalone σ estimate.
+- Wider VG σ averaging increases effective candidate count but does not improve FFX
+  (`0.6285 -> 0.6302`). The current scalar grid is not the bottleneck.
+- More fixed-budget VG iteration is the only tested lever with a material hard-row gain:
+  `0.6285 -> 0.5377`, while also improving σ and BLUP. The extra wider σ averaging on top
+  is negligible (`0.5377 -> 0.5352`).
+- Only about 5% of the top VG-error rows have row-level VG error above INLA error. The
+  aggregate INLA gap is therefore probably broad distributional calibration, not a small
+  set of obvious β outliers.
+
+Implication:
+
+- Stop prioritizing wider σ grids, INLA/true-σ plug-ins, and scalar hyperparameter-grid
+  tuning for FFX. They are useful diagnostics but not the main path.
+- The next serious Poisson patch should improve the posterior-mean/VG update itself:
+  better β/m/V convergence, target calibration, or a more coherent variational-EM loop.
+- High-budget VG is a useful oracle for direction, but it is too slow to promote as-is.
+  Use it to identify which additional iterations matter, then compress that behavior into
+  a smaller update.
+
 Most Promising Architectural Change
 -----------------------------------
 
@@ -247,25 +302,29 @@ repeat fixed budget:
 
 Why this is the next serious candidate:
 
-- INLA likely wins by posterior/hyperparameter averaging, while our current path is still
-  mostly a corrected mode.
+- INLA likely wins through posterior-mean geometry and target calibration, while our
+  current path is still a shallow approximation to that geometry.
 - The Poisson log link makes β highly sensitive to uncertainty in random effects through
   `exp(0.5 * z'Σz)`.
-- Scalar σ averaging helps, which is direct evidence that posterior averaging is useful.
-- Full-Σ covariance did not help, so the missing piece is more likely uncertainty
-  propagation than covariance shape.
+- Scalar σ averaging helps modestly, but the hard-row oracle diagnostic shows that simple
+  σ-scale integration is no longer the bottleneck.
+- Full-Σ covariance and true/INLA σ plug-ins did not help, so the missing piece is more
+  likely the β/m/V posterior-mean update and objective calibration than covariance shape.
 - Direct fixed-σ Laplace target refinement helps only marginally, so optimizing the same
   conditional mode harder is unlikely to reach INLA territory.
 
 Next refinements for this path:
 
-- Validate VG-centered scalar averaging on huge rows and the sampled INLA reference cells.
-- Test whether higher temperature or fewer/more scalar σ scales can improve large sampled
-  FFX without increasing the `medium-p-sampled valid` regression.
-- If large-row FFX remains above `~0.25`, prototype a true variational-EM update over β
-  and σ jointly rather than local averaging around the final point.
-- Keep σ-writeback guards low priority unless FFX gains start trading off against severe
-  BLUP regressions.
+- Diagnose high-budget VG iteration trajectories on hard rows: which outer cycles reduce
+  β error, whether β or m updates dominate, and whether σ movement is necessary.
+- Prototype a compressed VG update that reuses the effective high-budget sequence without
+  running all 10 outer / 4 inner steps, e.g. two stronger β/m refreshes plus one coherent
+  V/σ refresh and acceptance by the variational target.
+- Test objective calibration variants for the VG target: prior strength, variance
+  correction clipping, and damping schedules. Keep the test row set fixed to the hard-row
+  diagnostic above.
+- Keep σ-grid expansion and σ-writeback guards low priority unless future variants start
+  trading FFX gains against severe σ/BLUP regressions.
 
 Secondary direction:
 
