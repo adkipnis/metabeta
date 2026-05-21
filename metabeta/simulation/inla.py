@@ -644,6 +644,22 @@ class InlaFitter:
         for p in paths:
             with np.load(p, allow_pickle=True) as f:
                 fits.append(dict(f))
+        # Backfill optional keys absent in older fits (e.g. inla_sigma_rfx_mode
+        # added after some datasets were already fitted).  For q-shaped keys
+        # use the fit's own inla_sigma_rfx to get the correct q, not the ref's.
+        _Q_SHAPED_KEYS = {'inla_sigma_rfx_mode'}
+        all_keys = set().union(*fits)
+        for fit in fits:
+            for key in all_keys - fit.keys():
+                if key in _Q_SHAPED_KEYS:
+                    q = fit['inla_sigma_rfx'].shape[0]
+                    fit[key] = np.full(q, np.nan, dtype=np.float64)
+                else:
+                    ref = next(f[key] for f in fits if key in f)
+                    if np.issubdtype(ref.dtype, np.floating):
+                        fit[key] = np.full(ref.shape, np.nan, dtype=ref.dtype)
+                    else:
+                        fit[key] = np.zeros(ref.shape, dtype=ref.dtype)
         return aggregate(fits)
 
     def reintegrate(self) -> None:
