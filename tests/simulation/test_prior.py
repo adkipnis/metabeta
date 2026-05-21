@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 from metabeta.simulation import hypersample, Prior
-from metabeta.utils.families import (
+from metabeta.utils.constants import (
     FFX_FAMILY_PROBS,
     SIGMA_EPS_FAMILY_PROBS,
     SIGMA_RFX_FAMILY_PROBS,

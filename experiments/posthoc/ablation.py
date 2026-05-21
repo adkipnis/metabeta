@@ -47,7 +47,7 @@ from metabeta.posthoc.warmnuts import _stackProposals
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped
 from metabeta.utils.evaluation import Proposal, concatProposalsBatch
-from metabeta.utils.families import hasSigmaEps
+from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.padding import unpad
 from metabeta.utils.preprocessing import rescaleData
 

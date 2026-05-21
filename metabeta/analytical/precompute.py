@@ -23,7 +23,7 @@ from tqdm import tqdm
 
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.names import datasetFilename
-from metabeta.utils.templates import FAMILY_NAMES
+from metabeta.utils.constants import FAMILY_NAMES
 from metabeta.analytical.fit import glmm
 
 OUTDIR = Path(__file__).resolve().parent / '..' / 'outputs' / 'data'

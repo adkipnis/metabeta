@@ -3,16 +3,15 @@ import numpy as np
 from scipy.stats import multivariate_normal
 
 from metabeta.utils.sampling import lkjCorrelation, spikeAndSlab, skewedBeta
-from metabeta.utils.families import (
+from metabeta.utils.constants import (
     FFX_FAMILIES,
     SIGMA_FAMILIES,
     FFX_FAMILY_PROBS,
     SIGMA_RFX_FAMILY_PROBS,
     SIGMA_EPS_FAMILY_PROBS,
     hasSigmaEps,
-    sampleFfxNp,
-    sampleSigmaNp,
 )
+from metabeta.utils.families import sampleFfxNp, sampleSigmaNp
 
 MIN_STD = 1e-3
 

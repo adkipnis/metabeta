@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 import bambi as bmb
 
-from metabeta.utils.families import bambiFamilyName, FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
+from metabeta.utils.constants import bambiFamilyName, FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
 from metabeta.utils.padding import unpad
 from metabeta.simulation.fit import Fitter
 from metabeta.utils.experiments import DATA_DIR

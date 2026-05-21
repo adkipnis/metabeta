@@ -37,8 +37,8 @@ import torch
 from torch import Tensor
 
 from metabeta.utils.evaluation import Proposal
+from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.families import (
-    hasSigmaEps,
     logLikelihood,
     logProbCorrRfx,
     logProbFfx,

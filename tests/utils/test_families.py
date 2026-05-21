@@ -3,14 +3,16 @@ import pytest
 import torch
 from torch import distributions as D
 
-from metabeta.utils.families import (
+from metabeta.utils.constants import (
     FFX_FAMILIES,
     LIKELIHOOD_FAMILIES,
     LIKELIHOOD_HAS_SIGMA_EPS,
     SIGMA_FAMILIES,
     STUDENT_DF,
-    FamilyEncoder,
     hasSigmaEps,
+)
+from metabeta.utils.families import (
+    FamilyEncoder,
     logLikelihood,
     logProbFfx,
     logProbSigma,

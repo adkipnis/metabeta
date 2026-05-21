@@ -52,8 +52,8 @@ from torch import Tensor
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.utils.evaluation import Proposal
+from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.families import (
-    hasSigmaEps,
     logMarginalLikelihoodNormal,
     logProbFfx,
     logProbSigma,

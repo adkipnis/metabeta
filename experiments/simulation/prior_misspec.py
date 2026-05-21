@@ -60,7 +60,7 @@ from metabeta.utils.config import (
 )
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.evaluation import Proposal, concatProposalsBatch, dictMean
-from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES
+from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES
 from metabeta.posthoc.importance import ImportanceSampler, runIS
 from metabeta.utils.device import setDevice
 from metabeta.utils.names import datasetFilename, runName

@@ -56,7 +56,7 @@ from metabeta.simulation.fit import buildPymc, extractAll
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped
 from metabeta.utils.evaluation import Proposal
-from metabeta.utils.families import hasSigmaEps
+from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.padding import padToModel, unpad
 from metabeta.utils.warmfit import cachePath, loadFit, saveFit
 from metabeta.utils.experiments import EXPERIMENTS_DIR, OUTPUTS_DIR

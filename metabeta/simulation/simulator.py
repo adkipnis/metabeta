@@ -2,8 +2,8 @@ import logging
 from dataclasses import dataclass
 import numpy as np
 from metabeta.utils.preprocessing import transformPredictors
+from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.families import (
-    hasSigmaEps,
     simulateYNp,
     BERNOULLI_ETA_ABS_MAX,
     BERNOULLI_REROLL_EXTREME_FRACTION_MAX,

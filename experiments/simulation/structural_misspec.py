@@ -57,7 +57,7 @@ from metabeta.utils.config import (
     loadDataConfig,
 )
 from metabeta.utils.dataloader import collateGrouped, toDevice
-from metabeta.utils.families import (
+from metabeta.utils.constants import (
     bambiFamilyName,
     hasSigmaEps,
     FFX_FAMILIES,

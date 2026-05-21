@@ -51,7 +51,7 @@ from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.simulation.fit import buildPymc, extractAll
 from metabeta.utils.evaluation import Proposal
-from metabeta.utils.families import hasSigmaEps
+from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.preprocessing import rescaleData
 
 

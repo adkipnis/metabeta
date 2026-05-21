@@ -13,11 +13,8 @@ import yaml
 from pydantic import BaseModel, Field
 
 from metabeta.utils.names import datasetFilename
-from metabeta.utils.templates import (
-    generateSimulationConfig,
-    PRESETS,
-    FAMILY_NAMES_REVERSE,
-)
+from metabeta.utils.constants import FAMILY_NAMES_REVERSE
+from metabeta.utils.templates import generateSimulationConfig, PRESETS
 
 
 class SummarizerConfig(BaseModel):

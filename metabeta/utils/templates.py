@@ -36,9 +36,7 @@ with open(_PRESETS_PATH) as f:
 
 CLI_ONLY = set(PRESETS['cli_only'])
 
-# Family integer to short name mapping
-FAMILY_NAMES = {0: 'n', 1: 'b', 2: 'p'}  # normal, bernoulli, poisson
-FAMILY_NAMES_REVERSE = {'n': 0, 'b': 1, 'p': 2}
+from metabeta.utils.constants import FAMILY_NAMES, FAMILY_NAMES_REVERSE  # noqa: F401
 
 
 class SimulationConfig(BaseModel):

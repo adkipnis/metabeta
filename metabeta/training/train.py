@@ -17,7 +17,7 @@ import schedulefree
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.device import setDevice
 from metabeta.utils.names import datasetFilename, runName
-from metabeta.utils.families import LIKELIHOOD_FAMILIES
+from metabeta.utils.constants import LIKELIHOOD_FAMILIES
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import (
     modelFromYaml,

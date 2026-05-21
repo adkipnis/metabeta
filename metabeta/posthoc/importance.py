@@ -4,8 +4,8 @@ import torch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import Proposal, joinProposals
 from metabeta.utils.regularization import dampen, corrLowerToUnconstrained, unconstrainedToCholesky
+from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.families import (
-    hasSigmaEps,
     logProbFfx,
     logProbSigma,
     logProbRfx,

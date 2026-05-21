@@ -17,12 +17,8 @@ from metabeta.utils.regularization import (
 from metabeta.utils.config import ApproximatorConfig, SummarizerConfig, PosteriorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
 from metabeta.analytical.fit import glmm
-from metabeta.utils.families import (
-    FFX_FAMILIES,
-    SIGMA_FAMILIES,
-    FamilyEncoder,
-    hasSigmaEps,
-)
+from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, hasSigmaEps
+from metabeta.utils.families import FamilyEncoder
 from metabeta.posthoc.gaussian_local import (
     _correlationPrecision,
     analyticalBLUPStats,
