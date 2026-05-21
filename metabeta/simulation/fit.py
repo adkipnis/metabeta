@@ -39,6 +39,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--force', action='store_true', help='Overwrite existing per-index fit files (INLA only)')
     parser.add_argument('--re-correlation', dest='re_correlation', default='diagonal', choices=['auto', 'diagonal'])
     parser.add_argument('--timeout', dest='timeout_s', type=int, default=120)
+    parser.add_argument('--idx-range', dest='idx_range', type=int, nargs=2, default=None,
+                        metavar=('START', 'END'),
+                        help='INLA only: fit indices [START, END) in one process, reusing one worker (overrides --idx)')
 
     return setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets (NUTS, ADVI, or INLA).')
 # fmt: on
@@ -47,11 +50,27 @@ def setup() -> argparse.Namespace:
 if __name__ == '__main__':
     cfg = setup()
     for _k, _v in [
-        ('method', 'nuts'), ('idx', 0), ('reintegrate', False), ('partition', 'test'),
-        ('epoch', None), ('seed', 42), ('tune', 2000), ('target_accept', 0.8),
-        ('max_treedepth', 10), ('draws', 1000), ('chains', 4), ('loop', False),
-        ('mp_ctx', 'forkserver'), ('viter', 100_000), ('lr', 1e-3), ('diagonal', False),
-        ('re_correlation', 'diagonal'), ('timeout_s', 120), ('n', None), ('force', False),
+        ('method', 'nuts'),
+        ('idx', 0),
+        ('reintegrate', False),
+        ('partition', 'test'),
+        ('epoch', None),
+        ('seed', 42),
+        ('tune', 2000),
+        ('target_accept', 0.8),
+        ('max_treedepth', 10),
+        ('draws', 1000),
+        ('chains', 4),
+        ('loop', False),
+        ('mp_ctx', 'forkserver'),
+        ('viter', 100_000),
+        ('lr', 1e-3),
+        ('diagonal', False),
+        ('re_correlation', 'diagonal'),
+        ('timeout_s', 120),
+        ('n', None),
+        ('force', False),
+        ('idx_range', None),
     ]:
         if not hasattr(cfg, _k):
             setattr(cfg, _k, _v)
@@ -62,13 +81,17 @@ if __name__ == '__main__':
 
     if cfg.method == 'inla':
         from metabeta.simulation.inla import InlaFitter
+
         fitter = InlaFitter(cfg)
         if cfg.reintegrate:
             fitter.reintegrate()
+        elif cfg.idx_range is not None:
+            fitter.go_range(cfg.idx_range[0], cfg.idx_range[1])
         else:
             fitter.go()
     else:
         from metabeta.simulation.nutsadvi import Fitter
+
         fitter = Fitter(cfg)
         if cfg.reintegrate:
             fitter.reintegrate(methods=[cfg.method])

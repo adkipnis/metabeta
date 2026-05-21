@@ -526,22 +526,13 @@ class InlaFitter:
         sizes = {'d': int(ds['d']), 'q': int(ds['q']), 'm': int(ds['m']), 'n': int(ds['n'])}
         return unpad(ds, sizes)
 
-    def go(self) -> None:
-        if self.outpath.exists() and not getattr(self.cfg, 'force', False):
-            print(f'[SKIP] idx={self.cfg.idx}  → {self.outpath}')
-            return
-        self._load_batch()
-        ds = self._getSingle(self.cfg.idx)
-        re_correlation = getattr(self.cfg, 're_correlation', 'auto')
-        timeout_s = getattr(self.cfg, 'timeout_s', INLA_DEFAULT_TIMEOUT_S)
-        n_samples = getattr(self.cfg, 'draws', 1000) * getattr(self.cfg, 'chains', 4)
-
-        worker = Worker(timeout_s)
-        t0 = time.perf_counter()
-        result = worker.estimate(ds, self.likelihood_family, re_correlation, n_samples)
-        wall_s = time.perf_counter() - t0
-        worker.close()
-
+    def _buildOut(
+        self,
+        result: dict | None,
+        ds: dict,
+        wall_s: float,
+        n_samples: int,
+    ) -> dict:
         d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
         if result is not None:
             out = {
@@ -579,10 +570,68 @@ class InlaFitter:
                 out['inla_ffx_samples'] = np.full((d, n_samples), np.nan, dtype=np.float64)
                 out['inla_sigma_rfx_samples'] = np.full((q, n_samples), np.nan, dtype=np.float64)
                 out['inla_rfx_samples'] = np.full((q, m, n_samples), np.nan, dtype=np.float64)
+        return out
 
+    def go(self) -> None:
+        if self.outpath.exists() and not getattr(self.cfg, 'force', False):
+            print(f'[SKIP] idx={self.cfg.idx}  → {self.outpath}')
+            return
+        self._load_batch()
+        ds = self._getSingle(self.cfg.idx)
+        re_correlation = getattr(self.cfg, 're_correlation', 'auto')
+        timeout_s = getattr(self.cfg, 'timeout_s', INLA_DEFAULT_TIMEOUT_S)
+        n_samples = getattr(self.cfg, 'draws', 0) * getattr(self.cfg, 'chains', 1)
+
+        worker = Worker(timeout_s)
+        t0 = time.perf_counter()
+        result = worker.estimate(ds, self.likelihood_family, re_correlation, n_samples)
+        wall_s = time.perf_counter() - t0
+        worker.close()
+
+        out = self._buildOut(result, ds, wall_s, n_samples)
         np.savez_compressed(self.outpath, **out)
         status = 'OK' if result is not None else 'FAILED'
-        print(f'[{status}] idx={self.cfg.idx}  wall={wall_s:.1f}s  → {self.outpath}')
+        print(f'[{status}] idx={self.cfg.idx}  wall={wall_s:.1f}s  → {self.outpath}', flush=True)
+
+    def go_range(self, start: int, end: int | None = None) -> None:
+        """Fit all indices in [start, end) reusing a single Worker subprocess.
+
+        Avoids per-index Python startup, batch-file load, and worker-fork overhead.
+        All existing per-index output files are skipped unless --force is set.
+        """
+        self._load_batch()
+        if end is None:
+            end = self.n_fit
+        re_correlation = getattr(self.cfg, 're_correlation', 'auto')
+        timeout_s = getattr(self.cfg, 'timeout_s', INLA_DEFAULT_TIMEOUT_S)
+        n_samples = getattr(self.cfg, 'draws', 0) * getattr(self.cfg, 'chains', 1)
+        force = getattr(self.cfg, 'force', False)
+
+        n_total = end - start
+        n_done = 0
+        worker = Worker(timeout_s)
+        try:
+            for idx in range(start, end):
+                outpath = self.outdir / self._outname(idx)
+                if outpath.exists() and not force:
+                    n_done += 1
+                    print(f'[SKIP] idx={idx}  → {outpath}', flush=True)
+                    continue
+                ds = self._getSingle(idx)
+                t0 = time.perf_counter()
+                result = worker.estimate(ds, self.likelihood_family, re_correlation, n_samples)
+                wall_s = time.perf_counter() - t0
+                out = self._buildOut(result, ds, wall_s, n_samples)
+                np.savez_compressed(outpath, **out)
+                n_done += 1
+                status = 'OK' if result is not None else 'FAILED'
+                print(
+                    f'[{status}] idx={idx}  wall={wall_s:.1f}s'
+                    f'  ({n_done}/{n_total})  → {outpath}',
+                    flush=True,
+                )
+        finally:
+            worker.close()
 
     def _aggregate(self) -> dict:
         paths = [self.outdir / self._outname(i) for i in range(len(self))]
@@ -621,6 +670,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
 
     parser.add_argument('--idx', type=int, default=0, help='Dataset index to fit (default=0)')
+    parser.add_argument('--idx-range', dest='idx_range', type=int, nargs=2, default=None,
+                        metavar=('START', 'END'),
+                        help='Fit indices [START, END) in one process, reusing one worker (overrides --idx)')
     parser.add_argument('--partition', default='test', choices=['train', 'valid', 'test'])
     parser.add_argument('--epoch', type=int, default=None,
                         help='Epoch number (required when --partition train)')
@@ -631,6 +683,10 @@ def setup() -> argparse.Namespace:
                         help='RE correlation: diagonal forces iid per dim (default: diagonal)')
     parser.add_argument('--timeout', dest='timeout_s', type=int, default=INLA_DEFAULT_TIMEOUT_S,
                         help=f'Per-dataset timeout in seconds (default: {INLA_DEFAULT_TIMEOUT_S})')
+    parser.add_argument('--draws', type=int, default=0,
+                        help='Posterior samples per chain (0 = point estimates only; default: 0)')
+    parser.add_argument('--chains', type=int, default=1,
+                        help='Number of chains for posterior sampling (default: 1)')
     return setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets with R-INLA.')
 # fmt: on
 
@@ -639,11 +695,14 @@ if __name__ == '__main__':
     cfg = setup()
     for _k, _v in [
         ('idx', 0),
+        ('idx_range', None),
         ('reintegrate', False),
         ('partition', 'test'),
         ('epoch', None),
         ('re_correlation', 'diagonal'),
         ('timeout_s', INLA_DEFAULT_TIMEOUT_S),
+        ('draws', 0),
+        ('chains', 1),
     ]:
         if not hasattr(cfg, _k):
             setattr(cfg, _k, _v)
@@ -659,5 +718,7 @@ if __name__ == '__main__':
     fitter = InlaFitter(cfg)
     if cfg.reintegrate:
         fitter.reintegrate()
+    elif cfg.idx_range is not None:
+        fitter.go_range(cfg.idx_range[0], cfg.idx_range[1])
     else:
         fitter.go()
