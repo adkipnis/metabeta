@@ -68,7 +68,7 @@ if __name__ == '__main__':
         else:
             fitter.go()
     else:
-        from metabeta.simulation.pymc import Fitter
+        from metabeta.simulation.nutsadvi import Fitter
         fitter = Fitter(cfg)
         if cfg.reintegrate:
             fitter.reintegrate(methods=[cfg.method])
