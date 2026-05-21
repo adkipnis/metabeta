@@ -7,7 +7,7 @@ variants:
 - true-σ fixed VG refresh;
 - INLA-σ fixed VG refresh, when INLA estimates are available;
 - wider VG-centered σ averaging;
-- higher-budget VG refinement.
+- VG budget ladder and target-calibration variants.
 
 Example:
 
@@ -80,6 +80,61 @@ VARIANTS = [
             ),
             'poisson_variational_gaussian_sigma_average_steps': 3,
             'poisson_variational_gaussian_sigma_average_temperature': 4.0,
+        },
+    ),
+    Variant(
+        'vg_outer7',
+        {
+            'poisson_variational_gaussian': True,
+            'poisson_variational_gaussian_outer': 7,
+            'poisson_variational_gaussian_inner': 3,
+            'poisson_variational_gaussian_final': 2,
+        },
+    ),
+    Variant(
+        'vg_inner3_legacy',
+        {
+            'poisson_variational_gaussian': True,
+            'poisson_variational_gaussian_outer': 5,
+            'poisson_variational_gaussian_inner': 3,
+            'poisson_variational_gaussian_final': 2,
+        },
+    ),
+    Variant(
+        'vg_final5',
+        {
+            'poisson_variational_gaussian': True,
+            'poisson_variational_gaussian_outer': 5,
+            'poisson_variational_gaussian_inner': 3,
+            'poisson_variational_gaussian_final': 5,
+        },
+    ),
+    Variant(
+        'vg_sigma_blend_010',
+        {
+            'poisson_variational_gaussian': True,
+            'poisson_variational_gaussian_sigma_blend': 0.1,
+        },
+    ),
+    Variant(
+        'vg_sigma_blend_050',
+        {
+            'poisson_variational_gaussian': True,
+            'poisson_variational_gaussian_sigma_blend': 0.5,
+        },
+    ),
+    Variant(
+        'vg_prior_2',
+        {
+            'poisson_variational_gaussian': True,
+            'poisson_variational_gaussian_prior_weight': 2.0,
+        },
+    ),
+    Variant(
+        'vg_prior_8',
+        {
+            'poisson_variational_gaussian': True,
+            'poisson_variational_gaussian_prior_weight': 8.0,
         },
     ),
     Variant(
@@ -525,6 +580,13 @@ def _evaluateSelected(args: argparse.Namespace, selected: list[RankedRow]) -> No
         'current',
         'vg_sigma_avg',
         'vg_wide_sigma_avg',
+        'vg_outer7',
+        'vg_inner3_legacy',
+        'vg_final5',
+        'vg_sigma_blend_010',
+        'vg_sigma_blend_050',
+        'vg_prior_2',
+        'vg_prior_8',
         'vg_high_budget',
         'vg_high_budget_sigma_avg',
         'true_sigma_refresh',

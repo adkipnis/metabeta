@@ -643,7 +643,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-laplace-pirls-sigma-average-max-q', type=int, default=None)
     parser.add_argument('--poisson-laplace-pirls-sigma-average-output-mode', default='beta_sigma', choices=['beta', 'beta_best', 'beta_sigma'])
     parser.add_argument('--poisson-variational-gaussian-outer', type=int, default=5)
-    parser.add_argument('--poisson-variational-gaussian-inner', type=int, default=3)
+    parser.add_argument('--poisson-variational-gaussian-inner', type=int, default=5)
     parser.add_argument('--poisson-variational-gaussian-final', type=int, default=2)
     parser.add_argument('--poisson-variational-gaussian-damping', type=float, default=0.5)
     parser.add_argument('--poisson-variational-gaussian-sigma-blend', type=float, default=0.25)

@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-21 (debloated Poisson path)
+Last updated: 2026-05-21 (VG inner-budget default)
 
 Goal
 ----
@@ -21,7 +21,7 @@ The retained Poisson path is:
 4. Marginal-mean β correction with `min_d=1`.
 5. Conservative full-candidate diagonal σ grid with scales `(0.5, 0.75, 1.0)`.
 6. Scalar Laplace-weighted σ averaging with local fixed-σ β/u PIRLS refresh.
-7. Variational-Gaussian posterior-mean refinement with `outer=5, inner=3, final=2`.
+7. Variational-Gaussian posterior-mean refinement with `outer=5, inner=5, final=2`.
 8. VG-centered scalar σ averaging with β-only weighted output.
 
 The final two stages are now the main useful architecture: they move β toward a
@@ -44,8 +44,9 @@ Useful benchmark methods:
 Current Evidence
 ----------------
 
-First 1000 rows per selected cell, sequential CPU rerun on 2026-05-21. Lower NRMSE is
-better. INLA values are current first-1000 diagonal R-INLA references.
+First 1000 rows per selected cell, sequential CPU rerun on 2026-05-21 before the
+`inner=5` default change. Lower NRMSE is better. INLA values are current first-1000
+diagonal R-INLA references.
 
 | Dataset | part | current FFX | INLA FFX | FFX gap | current σ | INLA σ | current BLUP | INLA BLUP | ms/ds |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -98,17 +99,28 @@ Key findings:
 - Therefore the remaining gap is more likely β/m/V posterior-mean convergence or target
   calibration than covariance scale, covariance shape, or a small set of outlier rows.
 
+VG budget follow-up:
+
+- A hard-row budget ladder showed that `outer=7` and `inner=5` both recover most of the
+  high-budget VG FFX gain (`0.5748 -> ~0.545` on the selected high-FFX rows).
+- Broader first-1000 sampled checks favored `inner=5`: it improved medium sampled valid
+  FFX (`0.2363 -> 0.2305`) and large sampled valid FFX (`0.2924 -> 0.2572`) while staying
+  neutral on small mixed/sampled and medium sampled test.
+- `outer=7` was cheaper in update count but regressed small mixed FFX
+  (`0.2076 -> 0.2127`), so it is not a safe blanket default.
+- The default VG inner budget is therefore now `5`. Timing from these runs should be
+  rerun cleanly because a background process was active.
+
 Next Directions
 ---------------
 
 Primary:
 
-- Diagnose high-budget VG trajectories on the same hard rows: identify which outer cycles
-  reduce β error, whether β or random-effect mean updates dominate, and whether σ movement
-  is necessary.
-- Compress the useful high-budget behavior into a smaller update. Candidate designs:
-  stronger β/m refreshes, one coherent V/σ refresh at the right point, or an adaptive extra
-  VG pass only for rows with large predicted FFX benefit.
+- Re-run the current default with clean timing and update the evidence table for
+  small/medium/large mixed and sampled rows.
+- Diagnose why additional β/m inner steps help sampled high-d rows: compare β step norm,
+  random-effect mean step norm, V offset change, σ movement, and variational target change
+  between `inner=3` and `inner=5`.
 - Test VG target calibration variants with the row set fixed: prior strength, variance
   offset clipping, damping schedule, and acceptance by the variational target.
 
