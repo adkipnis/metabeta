@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-21 (adaptive VG default)
+Last updated: 2026-05-21 (VG averaging/polish prototypes tested)
 
 Goal
 ----
@@ -41,6 +41,8 @@ Useful benchmark methods:
 - `poisson_laplace_pirls_sigma_avg`: default path through pre-VG σ averaging.
 - `poisson_variational_gaussian`: default initializer plus VG posterior-mean refinement.
 - `poisson_variational_gaussian_sigma_avg`: VG plus scalar σ averaging; matches current.
+- `poisson_variational_gaussian_state_avg`: current plus multi-state VG averaging prototype.
+- `poisson_variational_gaussian_polish`: current plus target-accepted VG polish prototype.
 
 Current Evidence
 ----------------
@@ -74,8 +76,8 @@ Interpretation:
   not the primary next optimization target unless it changes β/m posterior means.
 - BLUP is mixed: current is better than INLA on several sampled rows but remains behind on
   mixed rows and large sampled valid. Further BLUP work is secondary until FFX moves.
-- CPU runtime is acceptable for now. Future patches should prioritize FFX movement; speed
-  work is secondary until the estimator is closer to INLA.
+- CPU runtime is acceptable for this phase. The next patches should prioritize FFX
+  movement; speed work is explicitly deferred until the accuracy ceiling is clearer.
 
 Retired Directions
 ------------------
@@ -146,29 +148,53 @@ Current diagnosis:
   β/m/V updates. Patches should make that signal row-adaptive or better calibrated instead
   of blindly increasing global iteration count.
 
+Accuracy prototype results:
+
+- Multi-state VG covariance-temperature averaging is safe but tiny. On first-1000
+  small/medium rows it moved FFX only by about `-0.0006` to `+0.0001`:
+  `small-mixed 0.2076 -> 0.2075`, `small-valid 0.2326 -> 0.2324`,
+  `small-test 0.2107 -> 0.2108`, `medium-mixed 0.1807 -> 0.1801`,
+  `medium-valid 0.2304 -> 0.2304`, `medium-test 0.2383 -> 0.2382`. Keep it
+  opt-in; it is not enough to justify default complexity.
+- Current-path row diagnostics over 2k representative rows found weak direct
+  correlation between FFX RMSE and `d`/`q` (`+0.005`/`+0.046`) but stronger
+  correlation with BLUP and σ RMSE (`+0.382`/`+0.276`). Many worst FFX rows had
+  zero adaptive VG acceptances and high σ-average effective candidate counts, so the
+  remaining failures are not a simple high-dimensional gate or scalar-σ uncertainty
+  problem.
+- VG line-search polish over dampings `(0.25, 0.5, 0.75, 1.0)` is also FFX-neutral:
+  first-1000 small/medium rows moved from `0.2076 -> 0.2075`,
+  `0.2326 -> 0.2323`, `0.2107 -> 0.2110`, `0.1807 -> 0.1807`,
+  `0.2304 -> 0.2304`, `0.2383 -> 0.2382`. It improved medium σ/BLUP
+  (`medium-valid σ 0.4500 -> 0.4460`, BLUP `0.5497 -> 0.5490`; `medium-test σ
+  0.4388 -> 0.4343`, BLUP `0.5504 -> 0.5499`) but does not materially close the
+  INLA FFX gap.
+
 Next Directions
 ---------------
 
 Primary patch candidates:
 
-1. **Multi-start / multi-temperature VG posterior averaging.**
-   Run a tiny set of VG continuations from deliberately perturbed β/m/V states or ELBO
-   temperatures, then average β under the same variational target. The failed local β skew
-   correction suggests that posterior-mean movement is not captured by a one-shot β-only
-   formula; high-budget VG still improves hard rows, so averaging nearby fixed points is
-   the next coherent approximation to INLA-style latent posterior averaging.
+1. **Hard-row targeted high-budget VG / convergence probe.**
+   Extra VG budget was the only clear hard-row lever, while cheap state averaging and
+   line-search polish were nearly flat. The next informative test is to apply high-budget
+   VG only to rows flagged by poor BLUP/σ fit, large FFX row RMSE proxy, or no adaptive
+   acceptances, then check whether the global FFX gap can move without making every row
+   expensive.
 
-2. **Row-type diagnostic before any wider architecture.**
-   Compare remaining bad rows by `d`, `q`, random-intercept/slope composition, marginal
-   variance correction `0.5 z'Vz`, VG effective candidate count, and final target
-   residual. If bad rows are strongly structured, specialize the adaptive continuation or
-   multi-state averaging to those rows; otherwise treat the issue as a global approximation
-   mismatch.
+2. **Better q(u) posterior approximation.**
+   The remaining FFX error tracks BLUP/σ quality more than dimension or scalar σ
+   uncertainty. A serious next architecture is a richer latent Gaussian update, for
+   example low-rank/full per-group `V_g` handling already exists but may need better
+   calibration, or a local variational/Laplace update that targets posterior means rather
+   than conditional modes.
 
-3. **Natural-gradient / damped ELBO polish for β and q(u).**
-   Prototype one or two target-accepted updates that optimize the actual VG objective
-   more directly than the current block Newton surrogate. This is heavier than the current
-   path, but it targets the same failure mode as high-budget VG without more σ grids.
+3. **Revisit objective calibration against INLA means.**
+   Target improvements do not reliably move FFX, and one-shot β posterior-mean corrections
+   failed. If high-budget targeted VG still leaves the FFX gap, test whether the VG/ELBO
+   target is systematically miscalibrated relative to INLA posterior means by comparing
+   hard-row target ranks, posterior variance correction, and INLA β deltas where fitted
+   rows are available.
 
 4. **Adaptive VG refinement cleanup.**
    Keep the adaptive continuation diagnostics (`accept_count`, β/m/offset/σ movement) and

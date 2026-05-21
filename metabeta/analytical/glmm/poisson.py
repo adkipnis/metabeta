@@ -28,7 +28,9 @@ __all__ = [
     'refinePoissonMarginalMeanBeta',
     'refinePoissonPath',
     'refinePoissonVariationalGaussian',
+    'refinePoissonVariationalGaussianPolish',
     'refinePoissonVariationalGaussianSigmaAverage',
+    'refinePoissonVariationalGaussianStateAverage',
 ]
 
 _POISSON_LAPLACE_EB_DEFAULTS = {
@@ -272,6 +274,42 @@ def popPoissonRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         'poisson_variational_gaussian_sigma_average_output_mode': kwargs.pop(
             'poisson_variational_gaussian_sigma_average_output_mode',
             'beta',
+        ),
+        'poisson_variational_gaussian_state_average': kwargs.pop(
+            'poisson_variational_gaussian_state_average',
+            False,
+        ),
+        'poisson_variational_gaussian_state_average_v_scales': kwargs.pop(
+            'poisson_variational_gaussian_state_average_v_scales',
+            (0.75, 1.0, 1.3333333),
+        ),
+        'poisson_variational_gaussian_state_average_steps': kwargs.pop(
+            'poisson_variational_gaussian_state_average_steps',
+            2,
+        ),
+        'poisson_variational_gaussian_state_average_temperature': kwargs.pop(
+            'poisson_variational_gaussian_state_average_temperature',
+            2.0,
+        ),
+        'poisson_variational_gaussian_state_average_output_mode': kwargs.pop(
+            'poisson_variational_gaussian_state_average_output_mode',
+            'beta',
+        ),
+        'poisson_variational_gaussian_polish': kwargs.pop(
+            'poisson_variational_gaussian_polish',
+            False,
+        ),
+        'poisson_variational_gaussian_polish_steps': kwargs.pop(
+            'poisson_variational_gaussian_polish_steps',
+            2,
+        ),
+        'poisson_variational_gaussian_polish_dampings': kwargs.pop(
+            'poisson_variational_gaussian_polish_dampings',
+            (0.25, 0.5, 0.75, 1.0),
+        ),
+        'poisson_variational_gaussian_polish_target_gain': kwargs.pop(
+            'poisson_variational_gaussian_polish_target_gain',
+            1e-4,
         ),
         'poisson_marginal_beta': kwargs.pop('poisson_marginal_beta', likelihood_family == 2),
         'poisson_marginal_beta_steps': kwargs.pop('poisson_marginal_beta_steps', 4),
@@ -2112,6 +2150,462 @@ def refinePoissonVariationalGaussianSigmaAverage(
     return out
 
 
+def refinePoissonVariationalGaussianStateAverage(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor | None = None,
+    tau_ffx: torch.Tensor | None = None,
+    family_ffx: torch.Tensor | None = None,
+    tau_rfx: torch.Tensor | None = None,
+    family_sigma_rfx: torch.Tensor | None = None,
+    mask_d: torch.Tensor | None = None,
+    mask_q: torch.Tensor | None = None,
+    v_scales: tuple[float, ...] = (0.75, 1.0, 1.3333333),
+    n_steps: int = 2,
+    damping: float = 0.7,
+    temperature: float = 2.0,
+    output_mode: str = 'beta',
+    offset_clip: float | None = None,
+    sigma_blend: float = 0.25,
+    sigma_prior_weight: float = 4.0,
+    sigma_max: float = math.sqrt(_POISSON_PSI_EIG_CAP),
+    max_beta_step: float = 0.75,
+    max_blup_step: float = 1.0,
+    return_diagnostics: bool = False,
+) -> dict[str, torch.Tensor]:
+    """Average nearby VG fixed points induced by local covariance-temperature scales."""
+    d = Xm.shape[-1]
+    q = Zm.shape[-1]
+    if d == 0 or q == 0 or n_steps <= 0 or 'sigma_rfx_est' not in stats:
+        return stats
+    if output_mode not in {'beta', 'beta_best', 'beta_sigma'}:
+        raise ValueError("output_mode must be 'beta', 'beta_best', or 'beta_sigma'")
+
+    B = Xm.shape[0]
+    device, dtype = Xm.device, Xm.dtype
+    active_d = (
+        mask_d[:, :d].to(device=device).bool()
+        if mask_d is not None
+        else torch.ones(B, d, device=device, dtype=torch.bool)
+    )
+    active_q = (
+        mask_q[:, :q].to(device=device).bool()
+        if mask_q is not None
+        else torch.ones(B, q, device=device, dtype=torch.bool)
+    )
+    active_q_f = active_q.to(dtype)
+
+    beta_base = stats['beta_est'][:, :d].detach().clamp(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
+    means_base = stats.get('blup_est', Zm.new_zeros(B, Zm.shape[1], q))[:, :, :q].detach()
+    means_base = means_base.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    means_base = means_base.clamp(-_POISSON_BLUP_CLAMP, _POISSON_BLUP_CLAMP)
+    means_base = means_base * mask_m[:, :, None] * active_q_f[:, None, :]
+    sigma_base = stats['sigma_rfx_est'][:, :q].detach().clamp(min=1e-4, max=sigma_max)
+    sigma0 = sigma_base
+    if tau_rfx is not None:
+        sigma0 = tau_rfx[:, :q].to(device=device, dtype=dtype).clamp(min=1e-4, max=sigma_max)
+
+    if 'blup_var' in stats:
+        V_base = torch.diag_embed(stats['blup_var'][:, :, :q].detach().clamp(min=0.0, max=25.0))
+        V_base = V_base * mask_m[:, :, None, None]
+        V_base = V_base * active_q_f[:, None, :, None] * active_q_f[:, None, None, :]
+        base_A, V_base = _poissonVariationalCovarianceDiag(
+            beta_base, means_base, V_base, sigma_base, Zm, Xm, mask_n, mask_m, active_q, offset_clip
+        )
+    else:
+        base_A = _poissonJointHessianDiag(
+            beta_base, means_base, sigma_base, Zm, Xm, mask_n, mask_m, active_q
+        )
+        eye_q = torch.eye(q, device=device, dtype=dtype).expand(B, Zm.shape[1], q, q)
+        V_base = _safeSolve(base_A + _adaptiveRidgeBm(base_A), eye_q)
+        V_base = V_base * mask_m[:, :, None, None]
+        V_base = V_base * active_q_f[:, None, :, None] * active_q_f[:, None, None, :]
+
+    base_target = _poissonVariationalTargetDiag(
+        beta_base,
+        means_base,
+        V_base,
+        sigma_base,
+        active_q,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        nu_ffx,
+        tau_ffx,
+        family_ffx,
+        tau_rfx,
+        family_sigma_rfx,
+        mask_d,
+        sigma_log_jacobian=True,
+        offset_clip=offset_clip,
+    )
+
+    beta_candidates = [beta_base]
+    sigma_candidates = [sigma_base]
+    mean_candidates = [means_base]
+    V_candidates = [V_base]
+    A_candidates = [base_A]
+    target_candidates = [base_target]
+    scale_candidates = [torch.ones(B, device=device, dtype=dtype)]
+
+    for v_scale in dict.fromkeys(float(scale) for scale in v_scales):
+        if abs(v_scale - 1.0) < 1e-8:
+            continue
+        beta_try = beta_base.clone()
+        means_try = means_base.clone()
+        sigma_try = sigma_base.clone()
+        V_try = V_base * float(v_scale)
+        V_try = V_try * mask_m[:, :, None, None]
+        V_try = V_try * active_q_f[:, None, :, None] * active_q_f[:, None, None, :]
+        A_try = base_A
+        for _ in range(max(int(n_steps), 1)):
+            beta_try, means_try, _ = _poissonVariationalStepDiag(
+                beta_try,
+                means_try,
+                V_try,
+                sigma_try,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                active_d,
+                active_q,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                damping=damping,
+                max_beta_step=max_beta_step,
+                max_blup_step=max_blup_step,
+                offset_clip=offset_clip,
+            )
+            A_try, V_try = _poissonVariationalCovarianceDiag(
+                beta_try, means_try, V_try, sigma_try, Zm, Xm, mask_n, mask_m, active_q, offset_clip
+            )
+            sigma_try = _poissonVariationalSigmaMomentDiag(
+                means_try,
+                V_try,
+                sigma_try,
+                sigma0,
+                mask_m,
+                active_q,
+                sigma_blend,
+                sigma_prior_weight,
+                sigma_max,
+            )
+            A_try, V_try = _poissonVariationalCovarianceDiag(
+                beta_try, means_try, V_try, sigma_try, Zm, Xm, mask_n, mask_m, active_q, offset_clip
+            )
+
+        target_try = _poissonVariationalTargetDiag(
+            beta_try,
+            means_try,
+            V_try,
+            sigma_try,
+            active_q,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            nu_ffx,
+            tau_ffx,
+            family_ffx,
+            tau_rfx,
+            family_sigma_rfx,
+            mask_d,
+            sigma_log_jacobian=True,
+            offset_clip=offset_clip,
+        )
+        beta_candidates.append(beta_try)
+        sigma_candidates.append(sigma_try)
+        mean_candidates.append(means_try)
+        V_candidates.append(V_try)
+        A_candidates.append(A_try)
+        target_candidates.append(target_try)
+        scale_candidates.append(torch.full((B,), v_scale, device=device, dtype=dtype))
+
+    beta_stack = torch.stack(beta_candidates, dim=1)
+    sigma_stack = torch.stack(sigma_candidates, dim=1)
+    mean_stack = torch.stack(mean_candidates, dim=1)
+    V_stack = torch.stack(V_candidates, dim=1)
+    A_stack = torch.stack(A_candidates, dim=1)
+    target_stack = torch.stack(target_candidates, dim=1)
+    scale_stack = torch.stack(scale_candidates, dim=1)
+
+    finite_target = torch.isfinite(target_stack)
+    score = torch.where(finite_target, target_stack, target_stack.new_full((), -1e30))
+    best_idx = score.argmax(dim=1)
+    best_target = score.gather(1, best_idx[:, None]).squeeze(1)
+    weights = torch.softmax((score - best_target[:, None]) / max(float(temperature), 1e-6), dim=1)
+    neff = 1.0 / weights.square().sum(dim=1).clamp(min=1e-8)
+
+    beta_avg = torch.einsum('bk,bkd->bd', weights, beta_stack)
+    sigma_avg = torch.einsum('bk,bkq->bq', weights, sigma_stack).clamp(min=1e-4, max=sigma_max)
+    gather_mean = best_idx[:, None, None, None].expand(B, 1, Zm.shape[1], q)
+    gather_V = best_idx[:, None, None, None, None].expand(B, 1, Zm.shape[1], q, q)
+    best_sigma = sigma_stack.gather(1, best_idx[:, None, None].expand(B, 1, q)).squeeze(1)
+    best_means = mean_stack.gather(1, gather_mean).squeeze(1)
+    best_V = V_stack.gather(1, gather_V).squeeze(1)
+    best_A = A_stack.gather(1, gather_V).squeeze(1)
+    best_scale = scale_stack.gather(1, best_idx[:, None]).squeeze(1)
+
+    sigma_out = sigma_base
+    means_out = means_base
+    V_out = V_base
+    A_out = base_A
+    if output_mode == 'beta_best':
+        sigma_out = best_sigma
+        means_out = best_means
+        V_out = best_V
+        A_out = best_A
+    elif output_mode == 'beta_sigma':
+        sigma_out = torch.where(active_q, sigma_avg, sigma_base)
+        means_out = best_means
+        A_out, V_out = _poissonVariationalCovarianceDiag(
+            beta_avg, means_out, best_V, sigma_out, Zm, Xm, mask_n, mask_m, active_q, offset_clip
+        )
+
+    blup_var = V_out.diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
+    blup_var = blup_var * mask_m[:, :, None] * active_q_f[:, None, :]
+    Psi_lap = torch.diag_embed(sigma_out.square())
+
+    out = dict(stats)
+    out['beta_est'] = beta_avg
+    if output_mode != 'beta':
+        out['sigma_rfx_est'] = sigma_out
+        out['blup_est'] = means_out
+        out['blup_var'] = blup_var
+        out['Psi_lap'] = _psdClampEigenvalues(Psi_lap, _POISSON_PSI_EIG_CAP)
+    if return_diagnostics:
+        out['poisson_vg_state_average_neff'] = neff
+        out['poisson_vg_state_average_best_scale'] = best_scale
+        out['poisson_vg_state_average_best_target'] = best_target
+        out['poisson_vg_state_average_base_target'] = base_target
+    return out
+
+
+def refinePoissonVariationalGaussianPolish(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor | None = None,
+    tau_ffx: torch.Tensor | None = None,
+    family_ffx: torch.Tensor | None = None,
+    tau_rfx: torch.Tensor | None = None,
+    family_sigma_rfx: torch.Tensor | None = None,
+    mask_d: torch.Tensor | None = None,
+    mask_q: torch.Tensor | None = None,
+    n_steps: int = 2,
+    dampings: tuple[float, ...] = (0.25, 0.5, 0.75, 1.0),
+    target_gain: float = 1e-4,
+    offset_clip: float | None = None,
+    sigma_blend: float = 0.25,
+    sigma_prior_weight: float = 4.0,
+    sigma_max: float = math.sqrt(_POISSON_PSI_EIG_CAP),
+    max_beta_step: float = 0.75,
+    max_blup_step: float = 1.0,
+    return_diagnostics: bool = False,
+) -> dict[str, torch.Tensor]:
+    """Target-accepted VG line-search polish over damped β/q(u) Newton steps."""
+    d = Xm.shape[-1]
+    q = Zm.shape[-1]
+    if d == 0 or q == 0 or n_steps <= 0 or 'sigma_rfx_est' not in stats:
+        return stats
+
+    B = Xm.shape[0]
+    device, dtype = Xm.device, Xm.dtype
+    active_d = (
+        mask_d[:, :d].to(device=device).bool()
+        if mask_d is not None
+        else torch.ones(B, d, device=device, dtype=torch.bool)
+    )
+    active_q = (
+        mask_q[:, :q].to(device=device).bool()
+        if mask_q is not None
+        else torch.ones(B, q, device=device, dtype=torch.bool)
+    )
+    active_q_f = active_q.to(dtype)
+
+    beta = stats['beta_est'][:, :d].detach().clamp(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
+    means = stats.get('blup_est', Zm.new_zeros(B, Zm.shape[1], q))[:, :, :q].detach()
+    means = means.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    means = means.clamp(-_POISSON_BLUP_CLAMP, _POISSON_BLUP_CLAMP)
+    means = means * mask_m[:, :, None] * active_q_f[:, None, :]
+    sigma = stats['sigma_rfx_est'][:, :q].detach().clamp(min=1e-4, max=sigma_max)
+    sigma0 = sigma
+    if tau_rfx is not None:
+        sigma0 = tau_rfx[:, :q].to(device=device, dtype=dtype).clamp(min=1e-4, max=sigma_max)
+
+    if 'blup_var' in stats:
+        V_g = torch.diag_embed(stats['blup_var'][:, :, :q].detach().clamp(min=0.0, max=25.0))
+        V_g = V_g * mask_m[:, :, None, None]
+        V_g = V_g * active_q_f[:, None, :, None] * active_q_f[:, None, None, :]
+        _, V_g = _poissonVariationalCovarianceDiag(
+            beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q, offset_clip
+        )
+    else:
+        A = _poissonJointHessianDiag(beta, means, sigma, Zm, Xm, mask_n, mask_m, active_q)
+        eye_q = torch.eye(q, device=device, dtype=dtype).expand(B, Zm.shape[1], q, q)
+        V_g = _safeSolve(A + _adaptiveRidgeBm(A), eye_q)
+        V_g = V_g * mask_m[:, :, None, None]
+        V_g = V_g * active_q_f[:, None, :, None] * active_q_f[:, None, None, :]
+
+    current_target = _poissonVariationalTargetDiag(
+        beta,
+        means,
+        V_g,
+        sigma,
+        active_q,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        nu_ffx,
+        tau_ffx,
+        family_ffx,
+        tau_rfx,
+        family_sigma_rfx,
+        mask_d,
+        sigma_log_jacobian=True,
+        offset_clip=offset_clip,
+    )
+    base_target = current_target
+    accept_count = torch.zeros(B, device=device, dtype=dtype)
+    best_damping_out = torch.zeros(B, device=device, dtype=dtype)
+
+    for _ in range(max(int(n_steps), 1)):
+        beta_candidates = [beta]
+        mean_candidates = [means]
+        sigma_candidates = [sigma]
+        V_candidates = [V_g]
+        target_candidates = [current_target]
+        damping_candidates = [torch.zeros(B, device=device, dtype=dtype)]
+
+        for damping in dict.fromkeys(float(value) for value in dampings):
+            if damping <= 0.0:
+                continue
+            beta_try, means_try, _ = _poissonVariationalStepDiag(
+                beta,
+                means,
+                V_g,
+                sigma,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                active_d,
+                active_q,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                damping=damping,
+                max_beta_step=max_beta_step,
+                max_blup_step=max_blup_step,
+                offset_clip=offset_clip,
+            )
+            _, V_try = _poissonVariationalCovarianceDiag(
+                beta_try, means_try, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q, offset_clip
+            )
+            sigma_try = _poissonVariationalSigmaMomentDiag(
+                means_try,
+                V_try,
+                sigma,
+                sigma0,
+                mask_m,
+                active_q,
+                sigma_blend,
+                sigma_prior_weight,
+                sigma_max,
+            )
+            _, V_try = _poissonVariationalCovarianceDiag(
+                beta_try, means_try, V_try, sigma_try, Zm, Xm, mask_n, mask_m, active_q, offset_clip
+            )
+            target_try = _poissonVariationalTargetDiag(
+                beta_try,
+                means_try,
+                V_try,
+                sigma_try,
+                active_q,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                tau_rfx,
+                family_sigma_rfx,
+                mask_d,
+                sigma_log_jacobian=True,
+                offset_clip=offset_clip,
+            )
+            beta_candidates.append(beta_try)
+            mean_candidates.append(means_try)
+            sigma_candidates.append(sigma_try)
+            V_candidates.append(V_try)
+            target_candidates.append(target_try)
+            damping_candidates.append(torch.full((B,), damping, device=device, dtype=dtype))
+
+        target_stack = torch.stack(target_candidates, dim=1)
+        finite_target = torch.isfinite(target_stack)
+        score = torch.where(finite_target, target_stack, target_stack.new_full((), -1e30))
+        best_idx = score.argmax(dim=1)
+        best_target = score.gather(1, best_idx[:, None]).squeeze(1)
+        improved = best_target >= current_target + float(target_gain)
+        gather_beta = best_idx[:, None, None].expand(B, 1, d)
+        gather_mean = best_idx[:, None, None, None].expand(B, 1, Zm.shape[1], q)
+        gather_V = best_idx[:, None, None, None, None].expand(B, 1, Zm.shape[1], q, q)
+        beta_best = torch.stack(beta_candidates, dim=1).gather(1, gather_beta).squeeze(1)
+        mean_best = torch.stack(mean_candidates, dim=1).gather(1, gather_mean).squeeze(1)
+        sigma_best = (
+            torch.stack(sigma_candidates, dim=1)
+            .gather(1, best_idx[:, None, None].expand(B, 1, q))
+            .squeeze(1)
+        )
+        V_best = torch.stack(V_candidates, dim=1).gather(1, gather_V).squeeze(1)
+        damping_best = (
+            torch.stack(damping_candidates, dim=1).gather(1, best_idx[:, None]).squeeze(1)
+        )
+
+        beta = torch.where(improved[:, None], beta_best, beta)
+        means = torch.where(improved[:, None, None], mean_best, means)
+        sigma = torch.where(improved[:, None], sigma_best, sigma)
+        V_g = torch.where(improved[:, None, None, None], V_best, V_g)
+        current_target = torch.where(improved, best_target, current_target)
+        accept_count = accept_count + improved.to(dtype)
+        best_damping_out = torch.where(improved, damping_best, best_damping_out)
+
+    blup_var = V_g.diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
+    blup_var = blup_var * mask_m[:, :, None] * active_q_f[:, None, :]
+    Psi_lap = torch.diag_embed(sigma.square())
+
+    out = dict(stats)
+    out['beta_est'] = beta
+    out['sigma_rfx_est'] = sigma
+    out['blup_est'] = means
+    out['blup_var'] = blup_var
+    out['Psi_lap'] = _psdClampEigenvalues(Psi_lap, _POISSON_PSI_EIG_CAP)
+    if return_diagnostics:
+        out['poisson_vg_polish_accept_count'] = accept_count
+        out['poisson_vg_polish_best_damping'] = best_damping_out
+        out['poisson_vg_polish_target'] = current_target
+        out['poisson_vg_polish_base_target'] = base_target
+    return out
+
+
 def _addPoissonLaplaceEbSkippedDiagnostics(
     stats: dict[str, torch.Tensor],
     gate: torch.Tensor,
@@ -2289,6 +2783,34 @@ def refinePoissonPath(
             damping=options['poisson_variational_gaussian_damping'],
             temperature=options['poisson_variational_gaussian_sigma_average_temperature'],
             output_mode=options['poisson_variational_gaussian_sigma_average_output_mode'],
+            offset_clip=options['poisson_variational_gaussian_offset_clip'],
+        )
+
+    if options.get('poisson_variational_gaussian_state_average', False):
+        stats = _run(
+            refinePoissonVariationalGaussianStateAverage,
+            v_scales=tuple(
+                float(x) for x in options['poisson_variational_gaussian_state_average_v_scales']
+            ),
+            n_steps=options['poisson_variational_gaussian_state_average_steps'],
+            damping=options['poisson_variational_gaussian_damping'],
+            temperature=options['poisson_variational_gaussian_state_average_temperature'],
+            output_mode=options['poisson_variational_gaussian_state_average_output_mode'],
+            sigma_blend=options['poisson_variational_gaussian_sigma_blend'],
+            sigma_prior_weight=options['poisson_variational_gaussian_prior_weight'],
+            offset_clip=options['poisson_variational_gaussian_offset_clip'],
+        )
+
+    if options.get('poisson_variational_gaussian_polish', False):
+        stats = _run(
+            refinePoissonVariationalGaussianPolish,
+            n_steps=options['poisson_variational_gaussian_polish_steps'],
+            dampings=tuple(
+                float(x) for x in options['poisson_variational_gaussian_polish_dampings']
+            ),
+            target_gain=options['poisson_variational_gaussian_polish_target_gain'],
+            sigma_blend=options['poisson_variational_gaussian_sigma_blend'],
+            sigma_prior_weight=options['poisson_variational_gaussian_prior_weight'],
             offset_clip=options['poisson_variational_gaussian_offset_clip'],
         )
 
