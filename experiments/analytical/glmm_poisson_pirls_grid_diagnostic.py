@@ -143,7 +143,6 @@ def _fitPirls(
         poisson_marginal_beta_min_d=args.poisson_marginal_beta_min_d,
         poisson_marginal_beta_max_q=args.poisson_marginal_beta_max_q,
         poisson_marginal_beta_max_step=args.poisson_marginal_beta_max_step,
-        poisson_marginal_beta_full_psi_min_q=args.poisson_marginal_beta_full_psi_min_q,
         poisson_laplace_pirls_sigma_grid=sigma_grid,
         poisson_laplace_pirls_sigma_grid_scales=tuple(args.poisson_laplace_pirls_sigma_grid_scales),
         poisson_laplace_pirls_sigma_grid_steps=args.poisson_laplace_pirls_sigma_grid_steps,
@@ -526,7 +525,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-marginal-beta-min-d', type=int, default=1)
     parser.add_argument('--poisson-marginal-beta-max-q', type=int, default=None)
     parser.add_argument('--poisson-marginal-beta-max-step', type=float, default=1.0)
-    parser.add_argument('--poisson-marginal-beta-full-psi-min-q', type=int, default=3)
     parser.add_argument('--poisson-laplace-pirls-diag-outer', type=int, default=4)
     parser.add_argument('--poisson-laplace-pirls-diag-inner', type=int, default=1)
     parser.add_argument('--poisson-laplace-pirls-diag-final', type=int, default=2)
