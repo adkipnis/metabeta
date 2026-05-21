@@ -64,7 +64,8 @@ from metabeta.utils.families import (
     SIGMA_FAMILIES,
     STUDENT_DF,
 )
-from metabeta.utils.io import datasetFilename, runName, setDevice
+from metabeta.utils.device import setDevice
+from metabeta.utils.names import datasetFilename, runName
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.padding import padToModel, unpad
 from metabeta.posthoc.importance import ImportanceSampler

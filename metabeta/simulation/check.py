@@ -6,7 +6,7 @@ import numpy as np
 from tqdm import tqdm
 
 from metabeta.simulation.fit import Fitter
-from metabeta.utils.io import datasetFilename
+from metabeta.utils.names import datasetFilename
 
 # fmt: off
 def setup() -> argparse.Namespace:

@@ -22,7 +22,7 @@ import torch
 from tqdm import tqdm
 
 from metabeta.utils.dataloader import Dataloader, toDevice
-from metabeta.utils.io import datasetFilename
+from metabeta.utils.names import datasetFilename
 from metabeta.utils.templates import FAMILY_NAMES
 from metabeta.analytical.fit import glmm
 

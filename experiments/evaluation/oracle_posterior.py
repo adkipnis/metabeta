@@ -30,7 +30,7 @@ from metabeta.utils.evaluation import (
     nutsConvergeMask,
     subsetProposal,
 )
-from metabeta.utils.io import setDevice
+from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed

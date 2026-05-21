@@ -8,7 +8,7 @@ from pymc import adam
 import arviz as az
 import pytensor
 
-from metabeta.utils.io import datasetFilename
+from metabeta.utils.names import datasetFilename
 from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF, hasSigmaEps
 from metabeta.utils.padding import aggregate, unpad
 from metabeta.utils.templates import setupConfigParser, generateSimulationConfig

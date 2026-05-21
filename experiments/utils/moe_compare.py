@@ -29,7 +29,8 @@ from metabeta.utils.config import (
 )
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.evaluation import Proposal, concatProposalsBatch, dictMean
-from metabeta.utils.io import datasetFilename, setDevice
+from metabeta.utils.device import setDevice
+from metabeta.utils.names import datasetFilename
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.moe import moeEstimate, multiCheckpointEstimate
 from metabeta.utils.preprocessing import rescaleData

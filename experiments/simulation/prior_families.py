@@ -28,7 +28,7 @@ from matplotlib import pyplot as plt
 from metabeta.models.approximator import Approximator
 from metabeta.utils.config import assimilateConfig, loadDataConfig
 from metabeta.utils.dataloader import Dataloader
-from metabeta.utils.io import runName
+from metabeta.utils.names import runName
 from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES
 from metabeta.utils.plot import PALETTE, niceify
 from metabeta.utils.experiments import (

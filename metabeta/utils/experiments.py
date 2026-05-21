@@ -44,7 +44,7 @@ def dataFilePath(
     fit: bool = False,
 ) -> Path:
     """Return a generated dataset file path."""
-    from metabeta.utils.io import datasetFilename
+    from metabeta.utils.names import datasetFilename
 
     path = dataDir(data_id) / datasetFilename(partition, epoch)
     return path.with_suffix('.fit.npz') if fit else path

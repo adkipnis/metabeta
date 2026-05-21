@@ -62,7 +62,8 @@ from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.evaluation import Proposal, concatProposalsBatch, dictMean
 from metabeta.utils.families import FFX_FAMILIES, SIGMA_FAMILIES
 from metabeta.posthoc.importance import ImportanceSampler, runIS
-from metabeta.utils.io import datasetFilename, runName, setDevice
+from metabeta.utils.device import setDevice
+from metabeta.utils.names import datasetFilename, runName
 from metabeta.utils.moe import moeEstimate
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData

@@ -12,7 +12,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field
 
-from metabeta.utils.io import datasetFilename
+from metabeta.utils.names import datasetFilename
 from metabeta.utils.templates import (
     generateSimulationConfig,
     PRESETS,

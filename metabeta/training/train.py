@@ -15,7 +15,8 @@ import wandb
 import schedulefree
 
 from metabeta.utils.logger import setupLogging
-from metabeta.utils.io import setDevice, datasetFilename, runName
+from metabeta.utils.device import setDevice
+from metabeta.utils.names import datasetFilename, runName
 from metabeta.utils.families import LIKELIHOOD_FAMILIES
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import (

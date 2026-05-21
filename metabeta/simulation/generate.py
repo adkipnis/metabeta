@@ -19,7 +19,7 @@ from metabeta.simulation import (
 )
 from metabeta.simulation.emulator import Subsampler
 from metabeta.utils.families import hasSigmaEps, LIKELIHOOD_FAMILIES
-from metabeta.utils.io import datasetFilename
+from metabeta.utils.names import datasetFilename
 from metabeta.utils.sampling import truncLogUni
 from metabeta.utils.padding import aggregate
 from metabeta.utils.templates import setupConfigParser, generateSimulationConfig

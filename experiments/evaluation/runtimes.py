@@ -35,7 +35,8 @@ from metabeta.utils.config import (
     loadDataConfig,
 )
 from metabeta.utils.dataloader import collateGrouped, toDevice
-from metabeta.utils.io import runName, setDevice
+from metabeta.utils.device import setDevice
+from metabeta.utils.names import runName
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.moe import moeEstimate
 from metabeta.utils.padding import padToModel, unpad
