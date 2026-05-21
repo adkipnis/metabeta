@@ -430,8 +430,22 @@ def _recomputeNormalFinalDiagMap(
     beta_fallback = stats.get('beta_wg', stats['beta_est'])
 
     gls = _normalGlsAndBlups(
-        Xm, ym, Zm, mask_n, ZtZ_safe, Zty, ZtX, XtX, Xty, XtZ,
-        Psi, se2, eye_q, eye_q_bm, mask4, beta_fallback,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        ZtZ_safe,
+        Zty,
+        ZtX,
+        XtX,
+        Xty,
+        XtZ,
+        Psi,
+        se2,
+        eye_q,
+        eye_q_bm,
+        mask4,
+        beta_fallback,
     )
 
     if beta_override is None:
@@ -444,7 +458,9 @@ def _recomputeNormalFinalDiagMap(
         )
         beta_final = gls.beta
         beta_for_blup = ((1.0 - alpha[:, None]) * gls.beta + alpha[:, None] * beta_ols).nan_to_num(
-            nan=0.0, posinf=0.0, neginf=0.0,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
         )
     else:
         beta_final = beta_override.detach().to(device=device, dtype=dtype)
@@ -558,8 +574,17 @@ def _guardNormalAliasedBlups(
     beta_for_blup = torch.where(guard[:, None], beta_ols, beta_base)
 
     out = _recomputeNormalFinalDiagMap(
-        stats, Xm, ym, Zm, mask_n, mask_m, ns, sigma_next, mask_q,
-        beta_override=beta_output, beta_for_blup_override=beta_for_blup,
+        stats,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        ns,
+        sigma_next,
+        mask_q,
+        beta_override=beta_output,
+        beta_for_blup_override=beta_for_blup,
     )
     out['normal_laplace_eb_blup_guard'] = guard.to(dtype)
     return out
@@ -625,11 +650,20 @@ def refineNormalMapSrfx(
                 log_sigma_rfx.unsqueeze(1),
                 log_sigma_eps.unsqueeze(1),
                 corr,
-                Xm, ym, Zm, mask_n, mask_m,
-                nu_ffx, tau_ffx, family_ffx,
-                tau_rfx, family_sigma_rfx,
-                tau_eps, family_sigma_eps,
-                mask_d, mask_q,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                tau_rfx,
+                family_sigma_rfx,
+                tau_eps,
+                family_sigma_eps,
+                mask_d,
+                mask_q,
             ).squeeze(1)
             loss = -target.sum()
             if not torch.isfinite(loss):
@@ -676,13 +710,22 @@ def refineNormalMapSrfx(
             if beta_sigma_grid:
                 stabilize = cap_components & (d_count >= int(beta_sigma_grid_min_d))[:, None]
                 beta_grid = _normalSigmaGridBetaAverage(
-                    Xm, ym, Zm, mask_n, mask_m,
+                    Xm,
+                    ym,
+                    Zm,
+                    mask_n,
+                    mask_m,
                     sigma_rfx,
                     stats['sigma_eps_est'].squeeze(-1).detach(),
-                    nu_ffx, tau_ffx, family_ffx,
-                    tau_rfx, family_sigma_rfx,
-                    tau_eps, family_sigma_eps,
-                    mask_d, mask_q,
+                    nu_ffx,
+                    tau_ffx,
+                    family_ffx,
+                    tau_rfx,
+                    family_sigma_rfx,
+                    tau_eps,
+                    family_sigma_eps,
+                    mask_d,
+                    mask_q,
                     beta_sigma_grid_scales,
                 )
                 beta_grid = beta_grid.clamp(min=cap_lo, max=cap_hi)
@@ -693,10 +736,19 @@ def refineNormalMapSrfx(
         out['normal_map_beta_prior_capped'] = beta_capped
         out['normal_map_beta_stabilized'] = beta_stabilized
     out['sigma_rfx_est'] = sigma_rfx
+    out['normal_map_sigma_rfx'] = sigma_rfx
     if 'Psi' in stats:
         if recompute_blup:
             return _recomputeNormalFinalDiagMap(
-                out, Xm, ym, Zm, mask_n, mask_m, ns, sigma_rfx, mask_q,
+                out,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                ns,
+                sigma_rfx,
+                mask_q,
                 beta_alpha_low=beta_alpha_low,
                 beta_alpha_high=beta_alpha_high,
                 beta_override=beta_override,
@@ -770,13 +822,22 @@ def refineNormalLaplaceEb(
         if not bool(eligible_d.any()):
             return beta_output, torch.zeros((B,), device=device, dtype=dtype)
         beta_grid, beta_cond = _normalSigmaGridBetaAverage(
-            Xm, ym, Zm, mask_n, mask_m,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
             sigma_rfx,
             stats['sigma_eps_est'].squeeze(-1).detach(),
-            nu_ffx, tau_ffx, family_ffx,
-            tau_rfx, family_sigma_rfx,
-            tau_eps, family_sigma_eps,
-            mask_d, mask_q,
+            nu_ffx,
+            tau_ffx,
+            family_ffx,
+            tau_rfx,
+            family_sigma_rfx,
+            tau_eps,
+            family_sigma_eps,
+            mask_d,
+            mask_q,
             beta_tail_grid_scales,
             return_condition=True,
         )
@@ -812,11 +873,20 @@ def refineNormalLaplaceEb(
             sigma_rfx.clamp(min=1e-4, max=20.0).log().unsqueeze(1),
             log_sigma_eps_value.unsqueeze(1),
             corr,
-            Xm, ym, Zm, mask_n, mask_m,
-            nu_ffx, tau_ffx, family_ffx,
-            tau_rfx, family_sigma_rfx,
-            tau_eps, family_sigma_eps,
-            mask_d, mask_q,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            nu_ffx,
+            tau_ffx,
+            family_ffx,
+            tau_rfx,
+            family_sigma_rfx,
+            tau_eps,
+            family_sigma_eps,
+            mask_d,
+            mask_q,
         ).squeeze(1)
 
     if mode == 'moment':
@@ -868,13 +938,26 @@ def refineNormalLaplaceEb(
             grid_changed = torch.zeros(B, device=device, dtype=torch.bool)
             if sigma_grid_refine:
                 sigma_rfx, final_target, grid_changed = _normalSigmaRfxGridRefine(
-                    beta, sigma_rfx, log_sigma_eps_base,
+                    beta,
+                    sigma_rfx,
+                    log_sigma_eps_base,
                     torch.where(accept, final_target, base_target),
-                    corr, Xm, ym, Zm, mask_n, mask_m,
-                    nu_ffx, tau_ffx, family_ffx,
-                    tau_rfx, family_sigma_rfx,
-                    tau_eps, family_sigma_eps,
-                    mask_d, mask_q, sigma_grid_scales,
+                    corr,
+                    Xm,
+                    ym,
+                    Zm,
+                    mask_n,
+                    mask_m,
+                    nu_ffx,
+                    tau_ffx,
+                    family_ffx,
+                    tau_rfx,
+                    family_sigma_rfx,
+                    tau_eps,
+                    family_sigma_eps,
+                    mask_d,
+                    mask_q,
+                    sigma_grid_scales,
                     accept_tol=accept_tol,
                 )
 
@@ -891,15 +974,34 @@ def refineNormalLaplaceEb(
         if 'Psi' in stats:
             if recompute_blup:
                 out = _recomputeNormalFinalDiagMap(
-                    out, Xm, ym, Zm, mask_n, mask_m, ns, sigma_rfx, mask_q,
+                    out,
+                    Xm,
+                    ym,
+                    Zm,
+                    mask_n,
+                    mask_m,
+                    ns,
+                    sigma_rfx,
+                    mask_q,
                     beta_alpha_low=beta_alpha_low,
                     beta_alpha_high=beta_alpha_high,
                     beta_override=beta_output_next if beta.shape[-1] > 4 else None,
                     beta_for_blup_override=beta if beta.shape[-1] > 4 else None,
                 )
                 return _guardNormalAliasedBlups(
-                    out, Xm, ym, Zm, mask_n, mask_m, ns, sigma_rfx, tau_rfx,
-                    mask_d, mask_q, beta, beta_output_next,
+                    out,
+                    Xm,
+                    ym,
+                    Zm,
+                    mask_n,
+                    mask_m,
+                    ns,
+                    sigma_rfx,
+                    tau_rfx,
+                    mask_d,
+                    mask_q,
+                    beta,
+                    beta_output_next,
                 )
             out['Psi'] = torch.diag_embed(sigma_rfx.square())
         return out
@@ -926,11 +1028,20 @@ def refineNormalLaplaceEb(
                 log_sigma_rfx.unsqueeze(1),
                 log_sigma_eps.unsqueeze(1),
                 corr,
-                Xm, ym, Zm, mask_n, mask_m,
-                nu_ffx, tau_ffx, family_ffx,
-                tau_rfx, family_sigma_rfx,
-                tau_eps, family_sigma_eps,
-                mask_d, mask_q,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                tau_rfx,
+                family_sigma_rfx,
+                tau_eps,
+                family_sigma_eps,
+                mask_d,
+                mask_q,
             ).squeeze(1)
             finite = torch.isfinite(target)
             if not finite.any():
@@ -950,11 +1061,20 @@ def refineNormalLaplaceEb(
             log_sigma_rfx.detach().unsqueeze(1),
             log_sigma_eps.detach().unsqueeze(1),
             corr,
-            Xm, ym, Zm, mask_n, mask_m,
-            nu_ffx, tau_ffx, family_ffx,
-            tau_rfx, family_sigma_rfx,
-            tau_eps, family_sigma_eps,
-            mask_d, mask_q,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            nu_ffx,
+            tau_ffx,
+            family_ffx,
+            tau_rfx,
+            family_sigma_rfx,
+            tau_eps,
+            family_sigma_eps,
+            mask_d,
+            mask_q,
         ).squeeze(1)
         accept = torch.isfinite(final_target) & (final_target >= base_target - accept_tol)
 
@@ -967,13 +1087,26 @@ def refineNormalLaplaceEb(
     if sigma_grid_refine:
         log_sigma_eps_grid = torch.where(accept, log_sigma_eps.detach(), log_sigma_eps_base)
         sigma_rfx, final_target, grid_changed = _normalSigmaRfxGridRefine(
-            beta, sigma_rfx, log_sigma_eps_grid,
+            beta,
+            sigma_rfx,
+            log_sigma_eps_grid,
             torch.where(accept, final_target, base_target),
-            corr, Xm, ym, Zm, mask_n, mask_m,
-            nu_ffx, tau_ffx, family_ffx,
-            tau_rfx, family_sigma_rfx,
-            tau_eps, family_sigma_eps,
-            mask_d, mask_q, sigma_grid_scales,
+            corr,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            nu_ffx,
+            tau_ffx,
+            family_ffx,
+            tau_rfx,
+            family_sigma_rfx,
+            tau_eps,
+            family_sigma_eps,
+            mask_d,
+            mask_q,
+            sigma_grid_scales,
             accept_tol=accept_tol,
         )
 
@@ -997,15 +1130,34 @@ def refineNormalLaplaceEb(
     if 'Psi' in stats:
         if recompute_blup:
             out = _recomputeNormalFinalDiagMap(
-                out, Xm, ym, Zm, mask_n, mask_m, ns, sigma_rfx, mask_q,
+                out,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                ns,
+                sigma_rfx,
+                mask_q,
                 beta_alpha_low=beta_alpha_low,
                 beta_alpha_high=beta_alpha_high,
                 beta_override=beta_output_next if beta.shape[-1] > 4 else None,
                 beta_for_blup_override=beta if beta.shape[-1] > 4 else None,
             )
             return _guardNormalAliasedBlups(
-                out, Xm, ym, Zm, mask_n, mask_m, ns, sigma_rfx, tau_rfx,
-                mask_d, mask_q, beta, beta_output_next,
+                out,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                ns,
+                sigma_rfx,
+                tau_rfx,
+                mask_d,
+                mask_q,
+                beta,
+                beta_output_next,
             )
         out['Psi'] = torch.diag_embed(sigma_rfx.square())
     return out
