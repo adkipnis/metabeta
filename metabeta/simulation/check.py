@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
-from metabeta.simulation.fit import Fitter
+from metabeta.simulation.pymc import Fitter
 from metabeta.utils.names import datasetFilename
 
 # fmt: off
