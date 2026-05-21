@@ -127,6 +127,63 @@ Known Structural Limits
 No correction is implemented; both are structural constraints of the one-pass projection
 estimator.
 
+Pending Architecture Directions
+--------------------------------
+
+Reviewed 2026-05-21 against colleague suggestions. Three directions assessed; one requires
+diagnostic confirmation before implementation.
+
+**Priority 0 — Diagnostic (run first, determines which of A or B to prioritise)**
+
+Run Normal INLA comparison with `--save-inla-rows-dir` to obtain per-dataset σ_rfx. Add
+`normal_map_sigma_rfx` (post-MAP, pre-EB) as a saved diagnostic key in
+`glmm_inla_comparison.py`. Then compare:
+
+  analytical MAP σ_rfx  →  analytical EB σ_rfx  →  INLA posterior mean σ_rfx
+
+If MAP σ ≈ INLA mean but EB σ < INLA mean: the mode is fine, the mean-correction is too
+weak → pursue direction A.
+If MAP σ itself undershoots INLA mean by a lot: the mode is too low → pursue direction B
+in addition.
+
+No Normal-family per-dataset row files exist yet (`inla_runs/row_estimates/` contains only
+Poisson). Run with `--family n` to generate them. INLA posterior mode is not directly
+available from saved files (R-INLA reports posterior means in `summary.hyperpar`); the
+mean comparison is sufficient for this diagnostic.
+
+**Direction A — Softmax-weighted σ_rfx posterior mean (highest priority, pending diagnostic)**
+
+`_normalSigmaRfxGridRefine` currently takes argmax over the per-dimension scale grid.
+Replacing this with a softmax-weighted average (as `_normalSigmaGridBetaAverage` already
+does for β) reports the posterior mean rather than mode. σ distributions are right-skewed
+so mean > mode; this is the main reason INLA outperforms on σ_rfx. Low effort — the grid
+and marginal-target infrastructure already exist. Also worth including σ_eps as a grid
+dimension to capture the σ_rfx / σ_eps cross-dependence.
+
+**Direction B — Analytical β-profiling (defer until diagnostic; only if MAP mode is low)**
+
+The current `refineNormalMapSrfx` does prior-aware marginal MAP over log-σ (integrating
+out u analytically), but jointly optimises β and σ via Adam. True REML profiles β out of
+the marginal likelihood analytically, adding the `log|X'V⁻¹X + Λ_β|` correction and
+decoupling the β-σ gradient surface. For Gaussian β priors this is tractable (completing
+the square). Implement only if the diagnostic shows MAP σ itself undershoots INLA mean,
+not just the EB posterior mean.
+
+**Direction C — Trace-based df for final σ_eps (low priority)**
+
+The EM loop already computes the correct `T = Σ_g tr[W_g Z_g'Z_g]` trace (= colleague's
+df_u). The final σ_eps deliberately reverts to the projection estimate because EM σ_eps
+was noisy on high-d rows. A targeted fix: apply the trace df to the projection denominator
+directly as a one-shot correction (`df_eff = mx_rank + T` at initial σ_eps), avoiding EM
+noise while correcting the collinearity bias. Modest value; do not attempt before A.
+
+**What the colleague's review clarified as already implemented:**
+
+- Per-dimension coordinate σ_rfx grid: `_normalSigmaRfxGridRefine` already does this.
+- Marginal MAP over log-σ: `refineNormalMapSrfx` Adam loop already does this.
+- Trace-based df_u: already in the EM loop (`T = Σ_g tr[ZtZ_W]`); not exposed in final
+  output by deliberate choice (EM σ_eps reversion).
+
 Commands
 --------
 
@@ -140,6 +197,13 @@ uv run python -u experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-n-mixed,medium-n-mixed,large-n-mixed,huge-n-mixed \
     --partition train --n-epochs 2 --n-inla 1000 --n-total 1000 \
     --analytical-methods normal_eb,current --re-correlation diagonal
+
+# Save per-dataset row estimates for σ_rfx diagnostic (Normal family):
+uv run python -u experiments/analytical/glmm_inla_comparison.py \
+    --data-ids medium-n-mixed,large-n-mixed,huge-n-mixed \
+    --partition train --n-epochs 2 --n-inla 1000 --n-total 1000 \
+    --analytical-methods normal_eb,current --re-correlation diagonal \
+    --family n --save-inla-rows-dir experiments/analytical/inla_runs/normal_rows
 
 uv run python -u experiments/analytical/glmm_normal_inla_diagnostic.py \
     --data-ids medium-n-mixed large-n-mixed huge-n-mixed --partition train \
