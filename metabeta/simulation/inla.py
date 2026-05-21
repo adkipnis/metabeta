@@ -458,25 +458,32 @@ class InlaFitter:
         self.batch_path = self.srcdir / cfg.data_id / self.fname
         assert self.batch_path.exists(), f'{self.batch_path} does not exist'
 
+        self.outpath = self.outdir / self._outname(cfg.idx)
+        self._batch_loaded = False
+
+    def _load_batch(self) -> None:
+        if self._batch_loaded:
+            return
         with np.load(self.batch_path, allow_pickle=True) as raw:
             self.batch = dict(raw)
-
         self.likelihood_family = int(
             np.asarray(self.batch.get('likelihood_family', [0])).ravel()[0]
         )
         _full = len(self.batch['y'])
-        _n = getattr(cfg, 'n', None)
+        _n = getattr(self.cfg, 'n', None)
         self.n_fit = min(_n, _full) if _n is not None else _full
-        assert 0 <= cfg.idx < self.n_fit, 'idx out of bounds'
-        self.outpath = self.outdir / self._outname(cfg.idx)
+        assert 0 <= self.cfg.idx < self.n_fit, 'idx out of bounds'
+        self._batch_loaded = True
 
     def __len__(self) -> int:
+        self._load_batch()
         return self.n_fit
 
     def _outname(self, idx: int) -> str:
         return f'{self.batch_path.stem}_inla_{idx:03d}.npz'
 
     def _getSingle(self, idx: int) -> dict:
+        self._load_batch()
         ds = {k: v[idx] for k, v in self.batch.items()}
         sizes = {'d': int(ds['d']), 'q': int(ds['q']), 'm': int(ds['m']), 'n': int(ds['n'])}
         return unpad(ds, sizes)
@@ -485,6 +492,7 @@ class InlaFitter:
         if self.outpath.exists() and not getattr(self.cfg, 'force', False):
             print(f'[SKIP] idx={self.cfg.idx}  → {self.outpath}')
             return
+        self._load_batch()
         ds = self._getSingle(self.cfg.idx)
         re_correlation = getattr(self.cfg, 're_correlation', 'auto')
         timeout_s = getattr(self.cfg, 'timeout_s', INLA_DEFAULT_TIMEOUT_S)
