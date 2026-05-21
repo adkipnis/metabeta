@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-21 (hard-row oracle/VG diagnostic)
+Last updated: 2026-05-21 (sequential Poisson patch tests)
 
 Goal
 ----
@@ -20,24 +20,28 @@ The retained Poisson path is:
 4. Marginal-mean β correction with `min_d=1`.
 5. Conservative full-candidate PIRLS σ grid with scales `(0.5, 0.75, 1.0)`.
 6. Scalar Laplace-weighted σ averaging with local fixed-σ β/u PIRLS refresh.
+7. Variational-Gaussian posterior-mean refinement with compressed budget
+   `outer=5, inner=3, final=2`.
+8. VG-centered scalar σ averaging with β-only weighted output.
 
-The final scalar averaging pass approximates local hyperparameter integration over
-diagonal σ scales and writes back weighted β/σ plus BLUPs from the best-scoring candidate.
-This is now the default because it improved FFX on every sampled and large row tested.
+The final VG-centered averaging pass approximates local hyperparameter integration over
+diagonal σ scales and writes back weighted β only. This is now the default because the
+compressed VG schedule materially improved medium/large mixed rows and modestly improved
+sampled rows without a broad regression.
 
 Important method names:
 
-- `current` / `default`: current retained path with scalar σ averaging.
+- `current` / `default`: retained path with compressed VG plus VG-centered scalar σ
+  averaging.
 - `poisson_laplace_pirls_sigma_avg`: explicit scalar σ averaging path.
 - `poisson_laplace_pirls_sigma_avg_is`: intercept-vs-slope σ averaging prototype.
-- `poisson_laplace_target_refine`: default plus 1-2 direct β/u autograd steps under the
-  diagonal Laplace target; promising but not default.
-- `poisson_variational_gaussian`: default plus an iterated Gaussian variational
-  posterior-mean solver with conservative σ blending; current leading prototype, not
-  default.
+- `poisson_laplace_target_refine`: older fixed-σ β/u autograd ablation under the diagonal
+  Laplace target; kept for diagnostics only.
+- `poisson_variational_gaussian`: explicit iterated Gaussian variational posterior-mean
+  solver with conservative σ blending.
 - `poisson_variational_gaussian_sigma_avg`: `poisson_variational_gaussian` plus
   ELBO-weighted scalar σ averaging around the VG state; writes back weighted β only by
-  default.
+  default. This now matches the default Poisson path.
 - `poisson_variational_gaussian_sigma_avg_is`: intercept-vs-slope version of the same
   VG-centered averaging prototype; slightly stronger but slower.
 - `poisson_laplace_pirls_full` / `poisson_laplace_pirls_full_beta`: full-Σ prototypes;
@@ -46,33 +50,36 @@ Important method names:
 Current Evidence
 ----------------
 
-First 1000 rows per cell, sequential CPU runs on 2026-05-20/21. Lower NRMSE is better.
-INLA values are the current first-1000 diagonal R-INLA references.
+First 1000 rows per cell, sequential CPU rerun on 2026-05-21 for the selected mixed/valid
+rows. Lower NRMSE is better. INLA values are the current first-1000 diagonal R-INLA
+references.
 
 | Dataset | part | default FFX | INLA FFX | FFX gap | default σ | INLA σ | default BLUP | INLA BLUP | ms/ds |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-p-mixed | train | 0.2151 | 0.1835 | +0.0316 | 0.4287 | 0.3404 | 0.5222 | 0.4936 | 33.5 |
-| small-p-sampled | valid | 0.2378 | 0.2276 | +0.0102 | 0.4756 | 0.4356 | 0.5355 | 0.5309 | 36.7 |
-| small-p-sampled | test | 0.2119 | 0.1997 | +0.0122 | 0.4421 | 0.3966 | 0.5232 | 0.5281 | 33.8 |
-| medium-p-mixed | train | 0.2438 | 0.1675 | +0.0763 | 0.4198 | 0.3214 | 0.5129 | 0.4789 | 64.1 |
-| medium-p-sampled | valid | 0.3057 | 0.2146 | +0.0911 | 0.5654 | 0.4209 | 0.6115 | 0.5618 | 77.6 |
-| medium-p-sampled | test | 0.2831 | 0.2267 | +0.0564 | 0.4723 | 0.3883 | 0.5560 | 0.5849 | 71.6 |
-| large-p-mixed | train | 0.3436 | 0.1778 | +0.1658 | 0.5536 | 0.3076 | 0.6472 | 0.5001 | 82.4 |
-| large-p-sampled | valid | 0.4131 | 0.2467 | +0.1664 | 0.5261 | 0.4232 | 0.6318 | 0.5870 | 85.2 |
-| large-p-sampled | test | 0.4358 | 0.2186 | +0.2172 | 0.5124 | 0.3439 | 0.7651 | 0.5618 | 86.7 |
+| small-p-mixed | train | 0.2076 | 0.1835 | +0.0241 | 0.4272 | 0.3404 | 0.5205 | 0.4936 | 69.2 |
+| small-p-sampled | valid | 0.2327 | 0.2276 | +0.0051 | 0.4784 | 0.4356 | 0.5325 | 0.5309 | 83.8 |
+| medium-p-mixed | train | 0.1815 | 0.1675 | +0.0140 | 0.4003 | 0.3214 | 0.5072 | 0.4789 | 121.1 |
+| medium-p-sampled | valid | 0.2363 | 0.2146 | +0.0217 | 0.4827 | 0.4209 | 0.5576 | 0.5618 | 124.7 |
+| large-p-mixed | train | 0.1955 | 0.1778 | +0.0177 | 0.4365 | 0.3076 | 0.5425 | 0.5001 | 138.4 |
+| large-p-sampled | valid | 0.2924 | 0.2467 | +0.0457 | 0.4990 | 0.4232 | 0.6204 | 0.5870 | 134.1 |
 
 Interpretation:
 
-- Small rows are near INLA for FFX, but σ remains worse.
-- Medium and large rows are still substantially behind INLA, especially for FFX and σ.
-- The remaining FFX gap is likely driven by imperfect σ/hyperparameter integration through
-  the Poisson log-link marginal mean, not by a missing scalar gate.
-- Runtime is already near the intended range, so the next serious patch can spend more
-  compute if it materially reduces FFX.
+- The compressed VG default makes mixed medium/large rows much closer to INLA for FFX.
+- Sampled large rows remain the clearest FFX gap (`~0.046` NRMSE on valid), while σ is
+  still consistently worse than INLA.
+- Runtime is now above the original ideal on CPU for medium/large rows, so further
+  patches need a clear FFX gain or a cheaper approximation to the same VG behavior.
 
 What We Retired
 ---------------
 
+- Direct VG from PQL: fast but much worse than using the older EB/PIRLS/grid path as the
+  initializer. On sampled-valid rows, FFX regressed to `0.320/0.351/0.415` for
+  small/medium/large after σ averaging.
+- VG-target autograd polish: tiny small-row FFX gain but medium/large regressions
+  (`0.2453 -> 0.2423` medium valid was not enough, large valid `0.2975 -> 0.2977`; with
+  compressed VG, medium valid regressed to `0.2625`). Removed from the production path.
 - β-only σ grid: replaced by full-candidate grid and scalar weighted σ averaging.
 - β-only AGQ optimizer: slower and did not close the main gap.
 - More gate tuning around the old EB/grid path: low expected value.
@@ -90,7 +97,7 @@ variational-EM style solver for `q(u_g)=N(m_g,V_g)`. Each cycle updates β/m aga
 expected Poisson mean `exp(Xβ + Zm_g + 0.5 * diag(Z V_g Z'))`, refreshes `V_g` at the
 updated state, updates diagonal σ from `m_g² + diag(V_g)`, and refreshes `V_g` again after
 the σ move. Diagonal σ is blended conservatively with the previous σ estimate
-(`sigma_blend=0.25`). The current fixed budget is `outer=5, inner=2, final=1`.
+(`sigma_blend=0.25`). The current fixed budget is `outer=5, inner=3, final=2`.
 
 First 1000 rows, sequential CPU run after the coherent V/σ refresh patch.
 
@@ -165,7 +172,7 @@ case where separate intercept/slope hyperparameter uncertainty matters.
 `poisson_laplace_target_refine` holds σ fixed and takes small autograd Adam steps on β/u
 against the diagonal Laplace target, accepting per row only if the target improves.
 
-Quick 1k validation:
+Older quick 1k validation:
 
 | Dataset | part | default FFX | target refine FFX | default σ | target refine σ | default BLUP | target refine BLUP |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -174,8 +181,9 @@ Quick 1k validation:
 | small-p-sampled | test | 0.2119 | 0.2106 | 0.4421 | 0.4421 | 0.5232 | 0.5222 |
 | medium-p-mixed | train | 0.2438 | 0.2427 | 0.4198 | 0.4198 | 0.5129 | 0.5128 |
 
-The signal is positive but too small to close the INLA gap. This argues against making
-posthoc fixed-σ β/u refinement the main architecture.
+The signal was positive but too small to close the INLA gap. A VG-target polish tested
+after the current VG σ-average did not improve the medium/large rows, so posthoc fixed-σ
+β/u polishing remains low priority.
 
 Targeted Diagnostic
 -------------------

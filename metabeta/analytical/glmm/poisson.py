@@ -242,10 +242,13 @@ def popPoissonRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
             'poisson_laplace_target_refine_max_q',
             None,
         ),
-        'poisson_variational_gaussian': kwargs.pop('poisson_variational_gaussian', False),
+        'poisson_variational_gaussian': kwargs.pop(
+            'poisson_variational_gaussian',
+            likelihood_family == 2,
+        ),
         'poisson_variational_gaussian_outer': kwargs.pop('poisson_variational_gaussian_outer', 5),
-        'poisson_variational_gaussian_inner': kwargs.pop('poisson_variational_gaussian_inner', 2),
-        'poisson_variational_gaussian_final': kwargs.pop('poisson_variational_gaussian_final', 1),
+        'poisson_variational_gaussian_inner': kwargs.pop('poisson_variational_gaussian_inner', 3),
+        'poisson_variational_gaussian_final': kwargs.pop('poisson_variational_gaussian_final', 2),
         'poisson_variational_gaussian_damping': kwargs.pop(
             'poisson_variational_gaussian_damping',
             0.5,
@@ -260,7 +263,7 @@ def popPoissonRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         ),
         'poisson_variational_gaussian_sigma_average': kwargs.pop(
             'poisson_variational_gaussian_sigma_average',
-            False,
+            likelihood_family == 2,
         ),
         'poisson_variational_gaussian_sigma_average_scales': kwargs.pop(
             'poisson_variational_gaussian_sigma_average_scales',
