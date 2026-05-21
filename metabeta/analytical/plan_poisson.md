@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-21 (Poisson next-step re-evaluation)
+Last updated: 2026-05-21 (adaptive VG default)
 
 Goal
 ----
@@ -21,7 +21,8 @@ The retained Poisson path is:
 4. Marginal-mean β correction with `min_d=1`.
 5. Conservative full-candidate diagonal σ grid with scales `(0.5, 0.75, 1.0)`.
 6. Scalar Laplace-weighted σ averaging with local fixed-σ β/u PIRLS refresh.
-7. Variational-Gaussian posterior-mean refinement with `outer=5, inner=5, final=2`.
+7. Variational-Gaussian posterior-mean refinement with
+   `outer=5, inner=5, final=2, damping=0.7`, plus two adaptive continuation steps.
 8. VG-centered scalar σ averaging with β-only weighted output.
 
 The final two stages are now the main useful architecture: they move β toward a
@@ -46,8 +47,8 @@ Current Evidence
 
 First 1000 rows per selected cell, sequential CPU rerun on 2026-05-21. Lower NRMSE is
 better. INLA values are current first-1000 diagonal R-INLA references. The first table is
-the last full INLA comparison snapshot before the `inner=5` VG default change; the second
-table records the measured `inner=5` deltas that are now part of the default path. The
+the last full INLA comparison snapshot before the VG budget/calibration patches; the
+second table records the measured deltas that are now part of the default path. The
 timings from these runs are considered unbiased.
 
 | Dataset | part | current FFX | INLA FFX | FFX gap | current σ | INLA σ | current BLUP | INLA BLUP | ms/ds |
@@ -59,20 +60,24 @@ timings from these runs are considered unbiased.
 | large-p-mixed | train | 0.1955 | 0.1778 | +0.0177 | 0.4365 | 0.3076 | 0.5425 | 0.5001 | 138.4 |
 | large-p-sampled | valid | 0.2924 | 0.2467 | +0.0457 | 0.4990 | 0.4232 | 0.6204 | 0.5870 | 134.1 |
 
-Known `inner=5` default deltas:
+Known VG default deltas:
 
-| Dataset | part | old FFX | inner=5 FFX | INLA FFX | new FFX gap | σ change | BLUP change |
+| Dataset | part | old FFX | new FFX | INLA FFX | new FFX gap | σ change | BLUP change |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-p-mixed | train | 0.2076 | 0.2076 | 0.1835 | +0.0241 | 0.4272 -> 0.4271 | 0.5205 -> 0.5206 |
-| small-p-sampled | valid | 0.2327 | 0.2328 | 0.2276 | +0.0052 | flat | flat |
-| medium-p-sampled | valid | 0.2363 | 0.2305 | 0.2146 | +0.0159 | 0.4827 -> 0.4619 | 0.5576 -> 0.5508 |
-| medium-p-sampled | test | 0.2383 | 0.2383 | TBD | TBD | 0.4442 -> 0.4440 | 0.5509 -> 0.5508 |
-| large-p-sampled | valid | 0.2924 | 0.2572 | 0.2467 | +0.0105 | 0.4990 -> 0.5086 | 0.6204 -> 0.6176 |
-| large-p-sampled | test | 0.2304 | 0.2279 | TBD | TBD | 0.4519 -> 0.4375 | 0.5552 -> 0.5499 |
+| small-p-mixed | train | 0.2076 | 0.2076 | 0.1835 | +0.0241 | 0.4272 -> 0.4260 | 0.5205 -> 0.5204 |
+| small-p-sampled | valid | 0.2327 | 0.2326 | 0.2276 | +0.0050 | 0.4784 -> 0.4779 | 0.5325 -> 0.5324 |
+| small-p-sampled | test | 0.2108 | 0.2107 | TBD | TBD | 0.4389 -> 0.4389 | 0.5206 -> 0.5206 |
+| medium-p-mixed | train | 0.1815 | 0.1807 | 0.1675 | +0.0132 | 0.4003 -> 0.3976 | 0.5072 -> 0.5068 |
+| medium-p-sampled | valid | 0.2363 | 0.2304 | 0.2146 | +0.0158 | 0.4827 -> 0.4500 | 0.5576 -> 0.5497 |
+| medium-p-sampled | test | 0.2383 | 0.2383 | TBD | TBD | 0.4442 -> 0.4388 | 0.5509 -> 0.5504 |
+| large-p-mixed | train | 0.1955 | 0.1935 | 0.1778 | +0.0157 | 0.4365 -> 0.4215 | 0.5425 -> 0.5405 |
+| large-p-sampled | valid | 0.2924 | 0.2551 | 0.2467 | +0.0084 | 0.4990 -> 0.4958 | 0.6204 -> 0.6123 |
+| large-p-sampled | test | 0.2304 | 0.2278 | TBD | TBD | 0.4519 -> 0.4249 | 0.5552 -> 0.5485 |
 
 Interpretation:
 
-- FFX is now close to INLA on small sampled and large sampled valid after `inner=5`.
+- FFX is now close to INLA on small sampled and large sampled valid after the VG
+  budget/calibration patches.
 - The remaining FFX gaps are concentrated in mixed rows and medium sampled rows, with
   small mixed still roughly `+0.024` and medium sampled valid roughly `+0.016`.
 - σ remains consistently worse than INLA, especially on mixed rows, but recent diagnostics
@@ -117,7 +122,7 @@ Key findings:
 - Therefore the remaining gap is more likely β/m/V posterior-mean convergence or target
   calibration than covariance scale, covariance shape, or a small set of outlier rows.
 
-VG budget follow-up:
+VG budget and calibration follow-up:
 
 - A hard-row budget ladder showed that `outer=7` and `inner=5` both recover most of the
   high-budget VG FFX gain (`0.5748 -> ~0.545` on the selected high-FFX rows).
@@ -126,12 +131,18 @@ VG budget follow-up:
   neutral on small mixed/sampled and medium sampled test.
 - `outer=7` was cheaper in update count but regressed small mixed FFX
   (`0.2076 -> 0.2127`), so it is not a safe blanket default.
-- The default VG inner budget is therefore now `5`.
+- Adaptive VG continuation with two target-accepted extra steps was flat or better on all
+  small/medium/large 1k rows and improved σ/BLUP on sampled rows. It is now default.
+- VG damping `0.7` was flat or better than `0.5` on all small/medium/large 1k rows, with
+  the clearest gains on large sampled valid (`0.2565 -> 0.2551`) and medium/large mixed.
+  It is now default.
+- VG prior strength (`2` or `8`) and offset clipping (`0.5`) did not materially improve
+  FFX; keep them as opt-in diagnostics rather than defaults.
 
 Current diagnosis:
 
-- The old remaining large-sampled FFX gap was mostly a VG convergence-budget issue, and
-  `inner=5` captured a large part of it without a broad regression.
+- The old large-sampled FFX gap was mostly a VG convergence/calibration issue; `inner=5`,
+  adaptive continuation, and damping `0.7` reduced valid from `0.2924` to `0.2551`.
 - The remaining FFX gap is probably not explained by diagonal σ scale, full covariance, or
   scalar hyperparameter averaging. Those were tested and either failed to move FFX or
   regressed stability.
@@ -148,32 +159,25 @@ Next Directions
 
 Primary patch candidates:
 
-1. **Adaptive VG continuation.**
-   Add a cheap diagnostic after the default VG pass: β step norm, random-effect mean step
-   norm, V offset movement, σ movement, and variational target improvement between the last
-   two inner steps. Run 1-2 extra inner blocks only for rows with unresolved movement. This
-   directly targets the high-budget VG win while avoiding the small-mixed regression seen
-   with blanket `outer=7`.
-
-2. **VG target calibration.**
-   With the diagnostic row set fixed, test prior strength, variance-offset clipping,
-   damping schedule, and target-based acceptance. The goal is to reduce mixed-row FFX gaps
-   where extra iteration alone is not enough. This is more plausible than more σ grids
-   because true/INLA σ refreshes did not improve FFX.
-
-3. **β posterior-mean correction on top of VG.**
+1. **β posterior-mean correction on top of VG.**
    Prototype a small final correction that uses the VG/Laplace β curvature to move from a
    conditional/variational mode toward an approximate β posterior mean. INLA reports
    posterior means, while our path is still mostly a deterministic fixed point plus σ
    averaging. This is the most likely architectural patch if calibration does not close the
    small-mixed and medium-sampled FFX gaps.
 
-4. **Row-type diagnostic before any wider architecture.**
+2. **Row-type diagnostic before any wider architecture.**
    Compare remaining bad rows by `d`, `q`, random-intercept/slope composition, marginal
    variance correction `0.5 z'Vz`, VG effective candidate count, and final target
    residual. If bad rows are strongly structured, specialize the adaptive continuation or
    β-mean correction to those rows; otherwise treat the issue as a global approximation
    mismatch.
+
+3. **Adaptive VG refinement cleanup.**
+   Keep the adaptive continuation diagnostics (`accept_count`, β/m/offset/σ movement) and
+   use them to decide whether future extra work should be row-gated more aggressively. Do
+   not increase global VG iteration count unless a new diagnostic shows a broad unresolved
+   movement pattern.
 
 Secondary:
 

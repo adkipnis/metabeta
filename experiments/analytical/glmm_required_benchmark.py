@@ -546,6 +546,8 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
             }
         )
     if method in {
+        'default',
+        'current',
         'poisson_variational_gaussian',
         'poisson_variational_gaussian_sigma_avg',
     }:
@@ -560,6 +562,27 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
                 ),
                 'poisson_variational_gaussian_prior_weight': (
                     args.poisson_variational_gaussian_prior_weight
+                ),
+                'poisson_variational_gaussian_adaptive_steps': (
+                    args.poisson_variational_gaussian_adaptive_steps
+                ),
+                'poisson_variational_gaussian_adaptive_target_gain': (
+                    args.poisson_variational_gaussian_adaptive_target_gain
+                ),
+                'poisson_variational_gaussian_adaptive_min_beta_step': (
+                    args.poisson_variational_gaussian_adaptive_min_beta_step
+                ),
+                'poisson_variational_gaussian_adaptive_min_mean_step': (
+                    args.poisson_variational_gaussian_adaptive_min_mean_step
+                ),
+                'poisson_variational_gaussian_adaptive_min_offset_step': (
+                    args.poisson_variational_gaussian_adaptive_min_offset_step
+                ),
+                'poisson_variational_gaussian_adaptive_min_sigma_step': (
+                    args.poisson_variational_gaussian_adaptive_min_sigma_step
+                ),
+                'poisson_variational_gaussian_offset_clip': (
+                    args.poisson_variational_gaussian_offset_clip
                 ),
                 'poisson_variational_gaussian_sigma_average_scales': (
                     args.poisson_variational_gaussian_sigma_average_scales
@@ -645,9 +668,16 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-variational-gaussian-outer', type=int, default=5)
     parser.add_argument('--poisson-variational-gaussian-inner', type=int, default=5)
     parser.add_argument('--poisson-variational-gaussian-final', type=int, default=2)
-    parser.add_argument('--poisson-variational-gaussian-damping', type=float, default=0.5)
+    parser.add_argument('--poisson-variational-gaussian-damping', type=float, default=0.7)
     parser.add_argument('--poisson-variational-gaussian-sigma-blend', type=float, default=0.25)
     parser.add_argument('--poisson-variational-gaussian-prior-weight', type=float, default=4.0)
+    parser.add_argument('--poisson-variational-gaussian-adaptive-steps', type=int, default=2)
+    parser.add_argument('--poisson-variational-gaussian-adaptive-target-gain', type=float, default=1e-4)
+    parser.add_argument('--poisson-variational-gaussian-adaptive-min-beta-step', type=float, default=0.01)
+    parser.add_argument('--poisson-variational-gaussian-adaptive-min-mean-step', type=float, default=0.01)
+    parser.add_argument('--poisson-variational-gaussian-adaptive-min-offset-step', type=float, default=0.01)
+    parser.add_argument('--poisson-variational-gaussian-adaptive-min-sigma-step', type=float, default=0.005)
+    parser.add_argument('--poisson-variational-gaussian-offset-clip', type=float, default=None)
     parser.add_argument('--poisson-variational-gaussian-sigma-average-scales', type=float, nargs='+', default=[0.5, 0.75, 1.0, 1.3333333, 2.0])
     parser.add_argument('--poisson-variational-gaussian-sigma-average-scale-mode', default='scalar', choices=['scalar', 'intercept_slope'])
     parser.add_argument('--poisson-variational-gaussian-sigma-average-intercept-scales', type=float, nargs='+', default=[0.75, 1.0, 1.3333333])

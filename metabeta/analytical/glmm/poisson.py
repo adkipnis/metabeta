@@ -203,7 +203,7 @@ def popPoissonRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         'poisson_variational_gaussian_final': kwargs.pop('poisson_variational_gaussian_final', 2),
         'poisson_variational_gaussian_damping': kwargs.pop(
             'poisson_variational_gaussian_damping',
-            0.5,
+            0.7,
         ),
         'poisson_variational_gaussian_sigma_blend': kwargs.pop(
             'poisson_variational_gaussian_sigma_blend',
@@ -212,6 +212,34 @@ def popPoissonRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         'poisson_variational_gaussian_prior_weight': kwargs.pop(
             'poisson_variational_gaussian_prior_weight',
             4.0,
+        ),
+        'poisson_variational_gaussian_adaptive_steps': kwargs.pop(
+            'poisson_variational_gaussian_adaptive_steps',
+            2,
+        ),
+        'poisson_variational_gaussian_adaptive_target_gain': kwargs.pop(
+            'poisson_variational_gaussian_adaptive_target_gain',
+            1e-4,
+        ),
+        'poisson_variational_gaussian_adaptive_min_beta_step': kwargs.pop(
+            'poisson_variational_gaussian_adaptive_min_beta_step',
+            0.01,
+        ),
+        'poisson_variational_gaussian_adaptive_min_mean_step': kwargs.pop(
+            'poisson_variational_gaussian_adaptive_min_mean_step',
+            0.01,
+        ),
+        'poisson_variational_gaussian_adaptive_min_offset_step': kwargs.pop(
+            'poisson_variational_gaussian_adaptive_min_offset_step',
+            0.01,
+        ),
+        'poisson_variational_gaussian_adaptive_min_sigma_step': kwargs.pop(
+            'poisson_variational_gaussian_adaptive_min_sigma_step',
+            0.005,
+        ),
+        'poisson_variational_gaussian_offset_clip': kwargs.pop(
+            'poisson_variational_gaussian_offset_clip',
+            None,
         ),
         'poisson_variational_gaussian_sigma_average': kwargs.pop(
             'poisson_variational_gaussian_sigma_average',
@@ -516,11 +544,15 @@ def _poissonVariationalOffset(
     V_g: torch.Tensor,
     Zm: torch.Tensor,
     active_q: torch.Tensor,
+    max_offset: float | None = None,
 ) -> torch.Tensor:
     """Return 0.5 * diag(Z V_g Z') for q(u_g)=N(m_g,V_g)."""
     active_q_f = active_q.to(Zm.dtype)
     Z_eff = Zm * active_q_f[:, None, None, :]
-    return 0.5 * torch.einsum('bmnq,bmqr,bmnr->bmn', Z_eff, V_g, Z_eff).clamp(min=0.0)
+    offset = 0.5 * torch.einsum('bmnq,bmqr,bmnr->bmn', Z_eff, V_g, Z_eff).clamp(min=0.0)
+    if max_offset is not None:
+        offset = offset.clamp(max=float(max_offset))
+    return offset
 
 
 def _poissonVariationalHessianDiag(
@@ -533,6 +565,7 @@ def _poissonVariationalHessianDiag(
     mask_n: torch.Tensor,
     mask_m: torch.Tensor,
     active_q: torch.Tensor,
+    offset_clip: float | None = None,
 ) -> torch.Tensor:
     """Return local random-effect precision under the Gaussian variational mean."""
     B, m, _, q = Zm.shape
@@ -545,7 +578,7 @@ def _poissonVariationalHessianDiag(
 
     eta = torch.einsum('bmnd,bd->bmn', Xm, beta)
     eta = eta + torch.einsum('bmnq,bmq->bmn', Z_eff, means)
-    eta = eta + _poissonVariationalOffset(V_g, Zm, active_q)
+    eta = eta + _poissonVariationalOffset(V_g, Zm, active_q, offset_clip)
     mu, deriv = _poissonMeanDerivative(eta)
     w = (mu * deriv.square()).clamp(min=1e-8) * mask_n
     A = torch.einsum('bmnq,bmn,bmnr->bmqr', Z_eff, w, Z_eff)
@@ -564,12 +597,15 @@ def _poissonVariationalCovarianceDiag(
     mask_n: torch.Tensor,
     mask_m: torch.Tensor,
     active_q: torch.Tensor,
+    offset_clip: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Refresh q(u) covariance at the current variational state."""
     B, m, _, q = Zm.shape
     device, dtype = Zm.device, Zm.dtype
     active_q_f = active_q.to(dtype)
-    A = _poissonVariationalHessianDiag(beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q)
+    A = _poissonVariationalHessianDiag(
+        beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q, offset_clip
+    )
     eye_q = torch.eye(q, device=device, dtype=dtype).expand(B, m, q, q)
     V_new = _safeSolve(A + _adaptiveRidgeBm(A), eye_q)
     V_new = V_new * mask_m[:, :, None, None]
@@ -604,6 +640,18 @@ def _poissonVariationalSigmaMomentDiag(
     return torch.where(active_q, sigma_new, sigma)
 
 
+def _rowRmsMasked(delta: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Return per-row RMS under a broadcast-compatible mask."""
+    mask_f = mask.to(delta.dtype)
+    while mask_f.ndim < delta.ndim:
+        mask_f = mask_f.unsqueeze(-1)
+    mask_f = mask_f.expand_as(delta)
+    axes = tuple(range(1, delta.ndim))
+    denom = mask_f.sum(dim=axes).clamp(min=1.0)
+    numer = delta.square().mul(mask_f).sum(dim=axes)
+    return (numer / denom).clamp(min=0.0).sqrt()
+
+
 def _poissonVariationalStepDiag(
     beta: torch.Tensor,
     means: torch.Tensor,
@@ -622,6 +670,7 @@ def _poissonVariationalStepDiag(
     damping: float,
     max_beta_step: float,
     max_blup_step: float,
+    offset_clip: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """One Newton step for β and variational means with fixed V and diagonal Σ."""
     B, m, _, d = Xm.shape
@@ -634,7 +683,7 @@ def _poissonVariationalStepDiag(
 
     eta = torch.einsum('bmnd,bd->bmn', Xm, beta)
     eta = eta + torch.einsum('bmnq,bmq->bmn', Z_eff, means)
-    eta = eta + _poissonVariationalOffset(V_g, Zm, active_q)
+    eta = eta + _poissonVariationalOffset(V_g, Zm, active_q, offset_clip)
     mu, deriv = _poissonMeanDerivative(eta)
     resid_eff = (ym - mu) * deriv * mask_n
     w = (mu * deriv.square()).clamp(min=1e-8) * mask_n
@@ -704,6 +753,7 @@ def _poissonVariationalTargetDiag(
     family_sigma_rfx: torch.Tensor | None,
     mask_d: torch.Tensor | None,
     sigma_log_jacobian: bool,
+    offset_clip: float | None = None,
 ) -> torch.Tensor:
     """ELBO-style target for q(u_g)=N(m_g,V_g) with diagonal random-effect Σ."""
     B, _, _, d = Xm.shape
@@ -716,7 +766,7 @@ def _poissonVariationalTargetDiag(
 
     eta_linear = torch.einsum('bmnd,bd->bmn', Xm, beta)
     eta_linear = eta_linear + torch.einsum('bmnq,bmq->bmn', Z_eff, means)
-    eta_mean = eta_linear + _poissonVariationalOffset(V_g, Zm, active_q)
+    eta_mean = eta_linear + _poissonVariationalOffset(V_g, Zm, active_q, offset_clip)
     eta_mean_eff = eta_mean.clamp(max=_POISSON_ETA_CLIP_MAX)
     ll = ym * eta_linear.clamp(min=-30.0, max=_POISSON_ETA_CLIP_MAX) - torch.exp(eta_mean_eff)
     target = (ll * mask_n).sum(dim=(1, 2))
@@ -1454,9 +1504,16 @@ def refinePoissonVariationalGaussian(
     n_outer: int = 5,
     n_inner: int = 5,
     n_final: int = 2,
-    damping: float = 0.5,
+    damping: float = 0.7,
     sigma_blend: float = 0.25,
     sigma_prior_weight: float = 4.0,
+    adaptive_steps: int = 2,
+    adaptive_target_gain: float = 1e-4,
+    adaptive_min_beta_step: float = 0.01,
+    adaptive_min_mean_step: float = 0.01,
+    adaptive_min_offset_step: float = 0.01,
+    adaptive_min_sigma_step: float = 0.005,
+    offset_clip: float | None = None,
     sigma_max: float = math.sqrt(_POISSON_PSI_EIG_CAP),
     max_beta_step: float = 0.75,
     max_blup_step: float = 1.0,
@@ -1533,9 +1590,10 @@ def refinePoissonVariationalGaussian(
                 damping=damping,
                 max_beta_step=max_beta_step,
                 max_blup_step=max_blup_step,
+                offset_clip=offset_clip,
             )
             A, V_g = _poissonVariationalCovarianceDiag(
-                beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q
+                beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q, offset_clip
             )
 
         sigma = _poissonVariationalSigmaMomentDiag(
@@ -1550,7 +1608,7 @@ def refinePoissonVariationalGaussian(
             sigma_max,
         )
         A, V_g = _poissonVariationalCovarianceDiag(
-            beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q
+            beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q, offset_clip
         )
 
     for _ in range(max(int(n_final), 0)):
@@ -1572,9 +1630,10 @@ def refinePoissonVariationalGaussian(
             damping=damping,
             max_beta_step=max_beta_step,
             max_blup_step=max_blup_step,
+            offset_clip=offset_clip,
         )
         A, V_g = _poissonVariationalCovarianceDiag(
-            beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q
+            beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q, offset_clip
         )
 
     if n_final > 0:
@@ -1590,8 +1649,130 @@ def refinePoissonVariationalGaussian(
             sigma_max,
         )
         A, V_g = _poissonVariationalCovarianceDiag(
-            beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q
+            beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q, offset_clip
         )
+
+    adaptive_accept_count = torch.zeros(B, device=device, dtype=dtype)
+    adaptive_beta_step = torch.zeros(B, device=device, dtype=dtype)
+    adaptive_mean_step = torch.zeros(B, device=device, dtype=dtype)
+    adaptive_offset_step = torch.zeros(B, device=device, dtype=dtype)
+    adaptive_sigma_step = torch.zeros(B, device=device, dtype=dtype)
+    if adaptive_steps > 0:
+        current_target = _poissonVariationalTargetDiag(
+            beta,
+            means,
+            V_g,
+            sigma,
+            active_q,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            nu_ffx,
+            tau_ffx,
+            family_ffx,
+            tau_rfx,
+            family_sigma_rfx,
+            mask_d,
+            sigma_log_jacobian=True,
+            offset_clip=offset_clip,
+        )
+        for _ in range(max(int(adaptive_steps), 0)):
+            beta_try, means_try, _ = _poissonVariationalStepDiag(
+                beta,
+                means,
+                V_g,
+                sigma,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                active_d,
+                active_q,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                damping=damping,
+                max_beta_step=max_beta_step,
+                max_blup_step=max_blup_step,
+                offset_clip=offset_clip,
+            )
+            A_try, V_try = _poissonVariationalCovarianceDiag(
+                beta_try, means_try, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q, offset_clip
+            )
+            sigma_try = _poissonVariationalSigmaMomentDiag(
+                means_try,
+                V_try,
+                sigma,
+                sigma0,
+                mask_m,
+                active_q,
+                sigma_blend,
+                sigma_prior_weight,
+                sigma_max,
+            )
+            A_try, V_try = _poissonVariationalCovarianceDiag(
+                beta_try, means_try, V_try, sigma_try, Zm, Xm, mask_n, mask_m, active_q, offset_clip
+            )
+            target_try = _poissonVariationalTargetDiag(
+                beta_try,
+                means_try,
+                V_try,
+                sigma_try,
+                active_q,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                tau_rfx,
+                family_sigma_rfx,
+                mask_d,
+                sigma_log_jacobian=True,
+                offset_clip=offset_clip,
+            )
+
+            beta_step = _rowRmsMasked(beta_try - beta, active_d)
+            mean_step = _rowRmsMasked(
+                means_try - means,
+                mask_m[:, :, None].bool() & active_q[:, None, :],
+            )
+            offset_step = _rowRmsMasked(
+                _poissonVariationalOffset(V_try, Zm, active_q, offset_clip)
+                - _poissonVariationalOffset(V_g, Zm, active_q, offset_clip),
+                mask_n.bool(),
+            )
+            sigma_step = _rowRmsMasked(
+                sigma_try.clamp(min=1e-4).log() - sigma.clamp(min=1e-4).log(),
+                active_q,
+            )
+            moving = (
+                (beta_step > float(adaptive_min_beta_step))
+                | (mean_step > float(adaptive_min_mean_step))
+                | (offset_step > float(adaptive_min_offset_step))
+                | (sigma_step > float(adaptive_min_sigma_step))
+            )
+            improved = torch.isfinite(target_try) & (
+                target_try >= current_target + float(adaptive_target_gain)
+            )
+            accept_adaptive = moving & improved
+
+            beta = torch.where(accept_adaptive[:, None], beta_try, beta)
+            means = torch.where(accept_adaptive[:, None, None], means_try, means)
+            sigma = torch.where(accept_adaptive[:, None], sigma_try, sigma)
+            V_g = torch.where(accept_adaptive[:, None, None, None], V_try, V_g)
+            A = torch.where(accept_adaptive[:, None, None, None], A_try, A)
+            current_target = torch.where(accept_adaptive, target_try, current_target)
+            adaptive_accept_count = adaptive_accept_count + accept_adaptive.to(dtype)
+            adaptive_beta_step = torch.where(accept_adaptive, beta_step, adaptive_beta_step)
+            adaptive_mean_step = torch.where(accept_adaptive, mean_step, adaptive_mean_step)
+            adaptive_offset_step = torch.where(accept_adaptive, offset_step, adaptive_offset_step)
+            adaptive_sigma_step = torch.where(accept_adaptive, sigma_step, adaptive_sigma_step)
 
     final_target = _poissonVariationalTargetDiag(
         beta,
@@ -1611,6 +1792,7 @@ def refinePoissonVariationalGaussian(
         family_sigma_rfx,
         mask_d,
         sigma_log_jacobian=True,
+        offset_clip=offset_clip,
     )
     base_target = _poissonVariationalTargetDiag(
         beta_base,
@@ -1630,6 +1812,7 @@ def refinePoissonVariationalGaussian(
         family_sigma_rfx,
         mask_d,
         sigma_log_jacobian=True,
+        offset_clip=offset_clip,
     )
     accept = torch.isfinite(final_target)
     if accept_only_improved:
@@ -1653,6 +1836,11 @@ def refinePoissonVariationalGaussian(
         out['poisson_variational_gaussian_accept'] = accept.to(dtype)
         out['poisson_variational_gaussian_target'] = final_target
         out['poisson_variational_gaussian_base_target'] = base_target
+        out['poisson_variational_gaussian_adaptive_accept_count'] = adaptive_accept_count
+        out['poisson_variational_gaussian_adaptive_beta_step'] = adaptive_beta_step
+        out['poisson_variational_gaussian_adaptive_mean_step'] = adaptive_mean_step
+        out['poisson_variational_gaussian_adaptive_offset_step'] = adaptive_offset_step
+        out['poisson_variational_gaussian_adaptive_sigma_step'] = adaptive_sigma_step
     return out
 
 
@@ -1675,9 +1863,10 @@ def refinePoissonVariationalGaussianSigmaAverage(
     intercept_scales: tuple[float, ...] = (0.75, 1.0, 1.3333333),
     slope_scales: tuple[float, ...] = (0.5, 1.0, 1.5),
     n_steps: int = 2,
-    damping: float = 0.5,
+    damping: float = 0.7,
     temperature: float = 2.0,
     output_mode: str = 'beta_sigma',
+    offset_clip: float | None = None,
     sigma_max: float = math.sqrt(_POISSON_PSI_EIG_CAP),
     max_beta_step: float = 0.75,
     max_blup_step: float = 1.0,
@@ -1725,7 +1914,7 @@ def refinePoissonVariationalGaussianSigmaAverage(
         V_base = V_base * mask_m[:, :, None, None]
         V_base = V_base * active_q_f[:, None, :, None] * active_q_f[:, None, None, :]
         base_A, V_base = _poissonVariationalCovarianceDiag(
-            beta_base, means_base, V_base, sigma_base, Zm, Xm, mask_n, mask_m, active_q
+            beta_base, means_base, V_base, sigma_base, Zm, Xm, mask_n, mask_m, active_q, offset_clip
         )
     else:
         base_A = _poissonJointHessianDiag(
@@ -1754,6 +1943,7 @@ def refinePoissonVariationalGaussianSigmaAverage(
         family_sigma_rfx,
         mask_d,
         sigma_log_jacobian=True,
+        offset_clip=offset_clip,
     )
 
     beta_candidates = [beta_base]
@@ -1811,9 +2001,10 @@ def refinePoissonVariationalGaussianSigmaAverage(
                 damping=damping,
                 max_beta_step=max_beta_step,
                 max_blup_step=max_blup_step,
+                offset_clip=offset_clip,
             )
             A_try, V_try = _poissonVariationalCovarianceDiag(
-                beta_try, means_try, V_try, sigma_try, Zm, Xm, mask_n, mask_m, active_q
+                beta_try, means_try, V_try, sigma_try, Zm, Xm, mask_n, mask_m, active_q, offset_clip
             )
 
         target_try = _poissonVariationalTargetDiag(
@@ -1834,6 +2025,7 @@ def refinePoissonVariationalGaussianSigmaAverage(
             family_sigma_rfx,
             mask_d,
             sigma_log_jacobian=True,
+            offset_clip=offset_clip,
         )
         beta_candidates.append(beta_try)
         sigma_candidates.append(sigma_try)
@@ -1890,10 +2082,10 @@ def refinePoissonVariationalGaussianSigmaAverage(
         sigma_out = torch.where(active_q, sigma_avg, sigma_base)
         means_out = best_means
         _, V_out = _poissonVariationalCovarianceDiag(
-            beta_avg, means_out, best_V, sigma_out, Zm, Xm, mask_n, mask_m, active_q
+            beta_avg, means_out, best_V, sigma_out, Zm, Xm, mask_n, mask_m, active_q, offset_clip
         )
         A_out, V_out = _poissonVariationalCovarianceDiag(
-            beta_avg, means_out, V_out, sigma_out, Zm, Xm, mask_n, mask_m, active_q
+            beta_avg, means_out, V_out, sigma_out, Zm, Xm, mask_n, mask_m, active_q, offset_clip
         )
 
     blup_var = V_out.diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)
@@ -2068,6 +2260,15 @@ def refinePoissonPath(
             damping=options['poisson_variational_gaussian_damping'],
             sigma_blend=options['poisson_variational_gaussian_sigma_blend'],
             sigma_prior_weight=options['poisson_variational_gaussian_prior_weight'],
+            adaptive_steps=options['poisson_variational_gaussian_adaptive_steps'],
+            adaptive_target_gain=options['poisson_variational_gaussian_adaptive_target_gain'],
+            adaptive_min_beta_step=options['poisson_variational_gaussian_adaptive_min_beta_step'],
+            adaptive_min_mean_step=options['poisson_variational_gaussian_adaptive_min_mean_step'],
+            adaptive_min_offset_step=(
+                options['poisson_variational_gaussian_adaptive_min_offset_step']
+            ),
+            adaptive_min_sigma_step=options['poisson_variational_gaussian_adaptive_min_sigma_step'],
+            offset_clip=options['poisson_variational_gaussian_offset_clip'],
         )
 
     if options.get('poisson_variational_gaussian_sigma_average', False):
@@ -2088,6 +2289,7 @@ def refinePoissonPath(
             damping=options['poisson_variational_gaussian_damping'],
             temperature=options['poisson_variational_gaussian_sigma_average_temperature'],
             output_mode=options['poisson_variational_gaussian_sigma_average_output_mode'],
+            offset_clip=options['poisson_variational_gaussian_offset_clip'],
         )
 
     return stats
