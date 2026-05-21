@@ -419,7 +419,7 @@ def glmm(
     poisson_variational_gaussian_final = kwargs.pop('poisson_variational_gaussian_final', 1)
     poisson_variational_gaussian_damping = kwargs.pop('poisson_variational_gaussian_damping', 0.5)
     poisson_variational_gaussian_sigma_blend = kwargs.pop(
-        'poisson_variational_gaussian_sigma_blend', 0.5
+        'poisson_variational_gaussian_sigma_blend', 0.25
     )
     poisson_variational_gaussian_prior_weight = kwargs.pop(
         'poisson_variational_gaussian_prior_weight', 4.0

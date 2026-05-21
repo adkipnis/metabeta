@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-21 (variational Gaussian prototype)
+Last updated: 2026-05-21 (variational Gaussian diagnostic + σ-blend patch)
 
 Goal
 ----
@@ -32,8 +32,8 @@ Important method names:
 - `poisson_laplace_pirls_sigma_avg_is`: intercept-vs-slope σ averaging prototype.
 - `poisson_laplace_target_refine`: default plus 1-2 direct β/u autograd steps under the
   diagonal Laplace target; promising but not default.
-- `poisson_variational_gaussian`: default plus Gaussian variational posterior-mean update;
-  current leading prototype, not default.
+- `poisson_variational_gaussian`: default plus Gaussian variational posterior-mean update
+  with conservative σ blending; current leading prototype, not default.
 - `poisson_laplace_pirls_full` / `poisson_laplace_pirls_full_beta`: full-Σ prototypes;
   stable but worse than the diagonal default in the tested rows.
 
@@ -82,22 +82,22 @@ Active Prototypes
 `poisson_variational_gaussian` starts from the default path, then updates
 `q(u_g)=N(m_g,V_g)` using the expected Poisson mean
 `exp(Xβ + Zm_g + 0.5 * diag(Z V_g Z'))`. Diagonal σ is updated from
-`m_g² + diag(V_g)`, and the candidate is accepted only if its ELBO-style target improves.
+`m_g² + diag(V_g)`, blended conservatively with the previous σ estimate
+(`sigma_blend=0.25`). The candidate is accepted only if its ELBO-style target improves.
 
-First 1000 rows. Small mixed and medium sampled valid were rechecked after the inactive-q
-entropy fix; remaining rows are from the initial prototype run.
+First 1000 rows, sequential CPU run after the conservative σ-blend patch.
 
 | Dataset | part | default FFX | var-Gauss FFX | default σ | var-Gauss σ | default BLUP | var-Gauss BLUP | var-Gauss ms/ds |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-p-mixed | train | 0.2151 | 0.2129 | 0.4287 | 0.4294 | 0.5222 | 0.5208 | 36.2 |
-| small-p-sampled | valid | 0.2378 | 0.2338 | 0.4756 | 0.4785 | 0.5355 | 0.5328 | 44.9 |
-| small-p-sampled | test | 0.2119 | 0.2094 | 0.4421 | 0.4418 | 0.5232 | 0.5211 | 36.4 |
-| medium-p-mixed | train | 0.2438 | 0.2347 | 0.4198 | 0.4039 | 0.5129 | 0.5078 | 69.7 |
-| medium-p-sampled | valid | 0.3057 | 0.2757 | 0.5654 | 0.5265 | 0.6115 | 0.5890 | 66.4 |
-| medium-p-sampled | test | 0.2831 | 0.2750 | 0.4723 | 0.4472 | 0.5560 | 0.5517 | 60.2 |
-| large-p-mixed | train | 0.3436 | 0.3085 | 0.5536 | 0.5166 | 0.6472 | 0.5926 | 70.8 |
-| large-p-sampled | valid | 0.4131 | 0.3890 | 0.5261 | 0.5040 | 0.6318 | 0.6262 | 70.7 |
-| large-p-sampled | test | 0.4358 | 0.4141 | 0.5124 | 0.5380 | 0.7651 | 0.7274 | 80.4 |
+| small-p-mixed | train | 0.2151 | 0.2129 | 0.4287 | 0.4289 | 0.5222 | 0.5208 | 39.3 |
+| small-p-sampled | valid | 0.2378 | 0.2336 | 0.4756 | 0.4779 | 0.5355 | 0.5330 | 36.3 |
+| small-p-sampled | test | 0.2119 | 0.2111 | 0.4421 | 0.4407 | 0.5232 | 0.5211 | 36.7 |
+| medium-p-mixed | train | 0.2438 | 0.2314 | 0.4198 | 0.4086 | 0.5129 | 0.5084 | 70.3 |
+| medium-p-sampled | valid | 0.3057 | 0.2753 | 0.5654 | 0.5315 | 0.6115 | 0.5901 | 83.3 |
+| medium-p-sampled | test | 0.2831 | 0.2745 | 0.4723 | 0.4570 | 0.5560 | 0.5519 | 77.1 |
+| large-p-mixed | train | 0.3436 | 0.3074 | 0.5536 | 0.5315 | 0.6472 | 0.5938 | 84.4 |
+| large-p-sampled | valid | 0.4131 | 0.3843 | 0.5261 | 0.5112 | 0.6318 | 0.6261 | 77.7 |
+| large-p-sampled | test | 0.4358 | 0.4130 | 0.5124 | 0.5195 | 0.7651 | 0.7286 | 89.1 |
 
 Interpretation:
 
@@ -105,9 +105,11 @@ Interpretation:
   row while usually improving σ and BLUP too.
 - Gains are materially larger than direct fixed-σ Laplace target refinement, especially on
   medium/large rows.
-- It still does not reach INLA territory on large rows, and large sampled test σ regresses.
+- The conservative σ blend improves FFX on every row and usually improves σ/BLUP.
+- The only remaining σ regression in this table is `large-p-sampled test`; it is much
+  smaller than with the earlier `sigma_blend=0.5` prototype.
 - Treat this as the leading architecture to tune or extend, but not as the default until
-  sampled/huge rows and σ behavior are better understood.
+  sampled/huge rows and σ writeback behavior are better understood.
 
 ### Intercept-vs-Slope σ Averaging
 
@@ -132,26 +134,50 @@ Quick 1k validation:
 The signal is positive but too small to close the INLA gap. This argues against making
 posthoc fixed-σ β/u refinement the main architecture.
 
-Next Diagnostics
-----------------
+Targeted Diagnostic
+-------------------
 
-Run these before adding more gates:
+Focused script:
 
-- Row-level INLA FFX/σ/BLUP gap versus `poisson_sigma_average_neff`.
-- Best σ scale and effective candidate count distribution by size/partition.
-- Laplace target winner quality versus weighted posterior-mean quality.
-- Marginal variance correction size `0.5 * z'Σz`, especially q95/max per row.
-- Residual high-FFX rows where σ remains biased after scalar averaging.
-- Whether large-row failures are concentrated in high `d`, high `q`, high marginal
-  variance correction, diffuse σ weights, or sharp-but-wrong σ weights.
+```bash
+uv run python -u experiments/analytical/glmm_poisson_variational_diagnostic.py \
+    --combos medium-p-sampled:valid large-p-sampled:test \
+    --max-datasets 1000 --batch-size 32
+```
 
-Interpretation rule:
+Representative aggregate over the two hard sampled rows:
 
-- Diffuse σ weights or large marginal variance corrections support richer hyperparameter
-  averaging.
-- Sharp σ weights with bad β point toward a better objective/optimization target.
-- Persistently biased σ after averaging points toward changing the approximation class,
-  not retuning the current diagonal EB update.
+| variant | FFX | σ | BLUP | ms/ds |
+| --- | ---: | ---: | ---: | ---: |
+| current | 0.3830 | 0.5390 | 0.7025 | 70.0 |
+| var-Gauss, old σ blend 0.5 | 0.3580 | 0.5316 | 0.6707 | 73.8 |
+| offline β-only var-Gauss | 0.3580 | 0.5390 | 0.7025 | 73.8 |
+| offline β+σ var-Gauss | 0.3580 | 0.5316 | 0.7025 | 73.8 |
+| var-Gauss, σ blend 0.25 | 0.3578 | 0.5248 | 0.6719 | 72.9 |
+| var-Gauss, stronger σ prior | 0.3580 | 0.5262 | 0.6714 | 72.6 |
+| var-Gauss without scalar σ averaging | 0.3633 | 0.6264 | 0.6586 | 66.9 |
+
+Findings:
+
+- β-only writeback captures the FFX gain, confirming that posterior-mean β geometry is
+  the main useful component of the variational update.
+- Full writeback is still preferable in aggregate because it also improves σ/BLUP versus
+  current.
+- Lower σ blending (`0.25`) is the best tested compromise: same or slightly better FFX,
+  better σ than the old blend, and still better BLUP than current.
+- Running the variational update without the scalar σ-averaging stage is worse for FFX/σ,
+  so the current default remains a useful initializer.
+- Row-level FFX gains correlate with larger existing marginal variance correction
+  (`corr(delta_ffx, current_sigma_q95)=-0.54`) and with ELBO target improvement
+  (`corr(delta_ffx, target_delta)=-0.42`).
+
+Implication:
+
+- Continue the variational/posterior-mean architecture.
+- Do not make β-only output the default yet; keep it as the fallback idea if future rows
+  show unacceptable σ/BLUP regressions.
+- The next likely useful guard is targeted σ writeback suppression for extreme marginal
+  variance rows, not more generic gate tuning.
 
 Most Promising Architectural Change
 -----------------------------------
@@ -189,13 +215,12 @@ Why this is the next serious candidate:
 
 Next refinements for this path:
 
-- Diagnose large-row residuals by σ error, `0.5 * diag(Z V_g Z')`, and ELBO acceptance.
-- Compare σ update variants: lower `sigma_blend`, stronger prior weight, and not writing
-  back σ when the ELBO improves mainly through β.
-- Test whether the variational update should replace the scalar σ averaging stage or run
-  after it. The current prototype runs after the default path.
-- If σ remains unstable, add scalar/intercept-vs-slope hyperparameter averaging around the
+- Add a principled σ-writeback guard only for extreme rows where VG improves β but the
+  random-effect marginal correction is already very large or sharply selected.
+- Test one richer posterior-mean update: scalar/intercept-vs-slope σ averaging around the
   variational candidate rather than around the conditional-mode candidate.
+- If large-row FFX remains far from INLA after that, prototype a more ELBO-consistent
+  update of `V_g` instead of setting it only from local curvature after each mean step.
 
 Secondary direction:
 

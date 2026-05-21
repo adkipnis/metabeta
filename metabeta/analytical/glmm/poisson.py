@@ -1635,7 +1635,7 @@ def refinePoissonVariationalGaussian(
     n_inner: int = 1,
     n_final: int = 1,
     damping: float = 0.5,
-    sigma_blend: float = 0.5,
+    sigma_blend: float = 0.25,
     sigma_prior_weight: float = 4.0,
     sigma_max: float = math.sqrt(_POISSON_PSI_EIG_CAP),
     max_beta_step: float = 0.75,
