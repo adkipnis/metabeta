@@ -76,13 +76,16 @@ def _checkInlaFits(paths: list[Path], data_id: str) -> None:
 
 def _loadInlaFits(path: Path) -> dict[str, np.ndarray]:
     with np.load(_inlaPath(path)) as f:
-        return {
+        out = {
             'beta': f['inla_ffx'].copy(),
             'sigma_rfx': f['inla_sigma_rfx'].copy(),
             'blups': f['inla_rfx'].copy(),
             'wall_s': f['inla_wall_s'].copy(),
             'failed': f['inla_failed'].copy().astype(bool),
         }
+        if 'inla_sigma_rfx_mode' in f:
+            out['sigma_rfx_mode'] = f['inla_sigma_rfx_mode'].copy()
+        return out
 
 
 def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
@@ -251,6 +254,9 @@ def _appendInlaRowRecord(
         ),
         'beta_inla': _pad1d(est['beta'], max_d),
         'sigma_rfx_inla': _pad1d(est['sigma_rfx'], max_q),
+        'sigma_rfx_mode_inla': _pad1d(
+            est.get('sigma_rfx_mode', np.full(len(active_q), np.nan)), max_q
+        ),
         'blup_inla': _pad2d(est['blups'], max_m, max_q),
         'inla_wall_s': float(inla_wall_s),
         **_rowCountStats(batch, b),
@@ -260,6 +266,10 @@ def _appendInlaRowRecord(
         record[f'sigma_rfx_{method}'] = stats_np[method]['srfx'][b, :max_q].astype(float)
         record[f'blup_{method}'] = stats_np[method]['blup'][b, :max_m, :max_q].astype(float)
         record[f'wall_ms_{method}'] = float(stats_np[method]['wall'] * 1000.0)
+        if 'map_srfx' in stats_np[method]:
+            record[f'sigma_rfx_map_{method}'] = stats_np[method]['map_srfx'][b, :max_q].astype(
+                float
+            )
 
     current_stats = stats_torch.get('current')
     if current_stats is not None:
@@ -467,12 +477,15 @@ def run_one_dataset(
                     )
                     elapsed = time.perf_counter() - t0
                     stats_torch[method] = stats
-                    stats_np[method] = {
+                    snp: dict = {
                         'beta': stats['beta_est'].cpu().numpy(),
                         'srfx': stats['sigma_rfx_est'].cpu().numpy(),
                         'blup': stats['blup_est'].cpu().numpy(),
                         'wall': elapsed / B,
                     }
+                    if 'normal_map_sigma_rfx' in stats:
+                        snp['map_srfx'] = stats['normal_map_sigma_rfx'].cpu().numpy()
+                    stats_np[method] = snp
 
                 ffx_true = batch['ffx'].cpu().numpy()
                 srfx_true = batch['sigma_rfx'].cpu().numpy()
@@ -527,6 +540,8 @@ def run_one_dataset(
                         'sigma_rfx': inla_data['sigma_rfx'][inla_idx, active_q],
                         'blups': inla_data['blups'][inla_idx, :m_b, :][:, active_q],
                     }
+                    if 'sigma_rfx_mode' in inla_data:
+                        est['sigma_rfx_mode'] = inla_data['sigma_rfx_mode'][inla_idx, active_q]
                     inla_metrics['wall'].append(inla_elapsed)
                     inla_n_ok += 1
                     for method in analytical_methods:
