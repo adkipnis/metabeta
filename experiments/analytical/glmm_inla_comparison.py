@@ -731,6 +731,7 @@ def main(
     if analytical_methods is None:
         analytical_methods = ['raw', 'current']
     if skip_analytical:
+        analytical_methods = []
         print('Analytical methods: (skipped)')
     else:
         print(f'Analytical methods: {", ".join(analytical_methods)}')
