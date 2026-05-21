@@ -18,6 +18,7 @@ from metabeta.analytical.glmm.poisson import (
     refinePoissonLaplaceTargetRefine,
     refinePoissonMarginalMeanBeta,
     refinePoissonVariationalGaussian,
+    refinePoissonVariationalGaussianSigmaAverage,
 )
 from metabeta.analytical.lmm.map import refineNormalLaplaceEb, refineNormalMapSrfx
 from metabeta.analytical.lmm.lmm import lmmNormal
@@ -424,6 +425,34 @@ def glmm(
     poisson_variational_gaussian_prior_weight = kwargs.pop(
         'poisson_variational_gaussian_prior_weight', 4.0
     )
+    poisson_variational_gaussian_sigma_average = kwargs.pop(
+        'poisson_variational_gaussian_sigma_average', False
+    )
+    poisson_variational_gaussian_sigma_average_scales = kwargs.pop(
+        'poisson_variational_gaussian_sigma_average_scales',
+        poisson_laplace_pirls_sigma_average_scales,
+    )
+    poisson_variational_gaussian_sigma_average_scale_mode = kwargs.pop(
+        'poisson_variational_gaussian_sigma_average_scale_mode',
+        poisson_laplace_pirls_sigma_average_scale_mode,
+    )
+    poisson_variational_gaussian_sigma_average_intercept_scales = kwargs.pop(
+        'poisson_variational_gaussian_sigma_average_intercept_scales',
+        poisson_laplace_pirls_sigma_average_intercept_scales,
+    )
+    poisson_variational_gaussian_sigma_average_slope_scales = kwargs.pop(
+        'poisson_variational_gaussian_sigma_average_slope_scales',
+        poisson_laplace_pirls_sigma_average_slope_scales,
+    )
+    poisson_variational_gaussian_sigma_average_steps = kwargs.pop(
+        'poisson_variational_gaussian_sigma_average_steps', 2
+    )
+    poisson_variational_gaussian_sigma_average_temperature = kwargs.pop(
+        'poisson_variational_gaussian_sigma_average_temperature', 2.0
+    )
+    poisson_variational_gaussian_sigma_average_output_mode = kwargs.pop(
+        'poisson_variational_gaussian_sigma_average_output_mode', 'beta'
+    )
     poisson_marginal_beta = kwargs.pop('poisson_marginal_beta', likelihood_family == 2)
     poisson_marginal_beta_full_psi = kwargs.pop('poisson_marginal_beta_full_psi', False)
     poisson_marginal_beta_full_psi_min_q = kwargs.pop('poisson_marginal_beta_full_psi_min_q', 3)
@@ -821,6 +850,35 @@ def glmm(
                 sigma_prior_weight=poisson_variational_gaussian_prior_weight,
                 return_diagnostics=poisson_laplace_eb_diagnostics,
             )
+        if map_refine and poisson_variational_gaussian_sigma_average and Zm.shape[-1] > 0:
+            stats = refinePoissonVariationalGaussianSigmaAverage(
+                stats,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx=map_priors['nu_ffx'],
+                tau_ffx=map_priors['tau_ffx'],
+                family_ffx=map_priors['family_ffx'],
+                tau_rfx=map_priors['tau_rfx'],
+                family_sigma_rfx=map_priors['family_sigma_rfx'],
+                mask_d=mask_d,
+                mask_q=mask_q,
+                scales=tuple(float(x) for x in poisson_variational_gaussian_sigma_average_scales),
+                scale_mode=poisson_variational_gaussian_sigma_average_scale_mode,
+                intercept_scales=tuple(
+                    float(x) for x in poisson_variational_gaussian_sigma_average_intercept_scales
+                ),
+                slope_scales=tuple(
+                    float(x) for x in poisson_variational_gaussian_sigma_average_slope_scales
+                ),
+                n_steps=poisson_variational_gaussian_sigma_average_steps,
+                damping=poisson_variational_gaussian_damping,
+                temperature=poisson_variational_gaussian_sigma_average_temperature,
+                output_mode=poisson_variational_gaussian_sigma_average_output_mode,
+                return_diagnostics=poisson_laplace_eb_diagnostics,
+            )
         if map_refine and poisson_laplace_target_refine and Zm.shape[-1] > 0:
             stats = refinePoissonLaplaceTargetRefine(
                 stats,
@@ -866,4 +924,5 @@ __all__ = [
     'refinePoissonLaplaceTargetRefine',
     'refinePoissonMarginalMeanBeta',
     'refinePoissonVariationalGaussian',
+    'refinePoissonVariationalGaussianSigmaAverage',
 ]

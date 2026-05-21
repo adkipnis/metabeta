@@ -36,6 +36,8 @@ METHODS = [
     'poisson_laplace_pirls_sigma_avg_is',
     'poisson_laplace_target_refine',
     'poisson_variational_gaussian',
+    'poisson_variational_gaussian_sigma_avg',
+    'poisson_variational_gaussian_sigma_avg_is',
 ]
 FAMILIES = ['n', 'b', 'p']
 
@@ -124,7 +126,10 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                                     'poisson_laplace_pirls_full_grid',
                                     'poisson_laplace_pirls_sigma_avg',
                                     'poisson_laplace_pirls_sigma_avg_is',
+                                    'poisson_laplace_target_refine',
                                     'poisson_variational_gaussian',
+                                    'poisson_variational_gaussian_sigma_avg',
+                                    'poisson_variational_gaussian_sigma_avg_is',
                                 }
                             ),
                             **_bernoulliEbKwargs(method, args),
@@ -342,6 +347,7 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
             'poisson_laplace_pirls_sigma_average': False,
             'poisson_laplace_target_refine': False,
             'poisson_variational_gaussian': False,
+            'poisson_variational_gaussian_sigma_average': False,
         }
     if method == 'bernoulli_eb':
         return {'bernoulli_laplace_eb': 'bernoulli_eb', 'normal_laplace_eb': False}
@@ -359,6 +365,8 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
         'poisson_laplace_pirls_sigma_avg_is',
         'poisson_laplace_target_refine',
         'poisson_variational_gaussian',
+        'poisson_variational_gaussian_sigma_avg',
+        'poisson_variational_gaussian_sigma_avg_is',
     }:
         return {
             'bernoulli_laplace_eb': False,
@@ -374,6 +382,8 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
                 'poisson_laplace_pirls_sigma_avg_is',
                 'poisson_laplace_target_refine',
                 'poisson_variational_gaussian',
+                'poisson_variational_gaussian_sigma_avg',
+                'poisson_variational_gaussian_sigma_avg_is',
             },
             'poisson_laplace_pirls_diag': method
             in {
@@ -384,6 +394,8 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
                 'poisson_laplace_pirls_sigma_avg_is',
                 'poisson_laplace_target_refine',
                 'poisson_variational_gaussian',
+                'poisson_variational_gaussian_sigma_avg',
+                'poisson_variational_gaussian_sigma_avg_is',
             },
             'poisson_laplace_pirls_full': method
             in {'poisson_laplace_pirls_full', 'poisson_laplace_pirls_full_beta'},
@@ -395,6 +407,8 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
                 'poisson_laplace_pirls_sigma_avg_is',
                 'poisson_laplace_target_refine',
                 'poisson_variational_gaussian',
+                'poisson_variational_gaussian_sigma_avg',
+                'poisson_variational_gaussian_sigma_avg_is',
             },
             'poisson_laplace_pirls_sigma_average': method
             in {
@@ -402,9 +416,21 @@ def _methodKwargs(method: str) -> dict[str, str | bool]:
                 'poisson_laplace_pirls_sigma_avg_is',
                 'poisson_laplace_target_refine',
                 'poisson_variational_gaussian',
+                'poisson_variational_gaussian_sigma_avg',
+                'poisson_variational_gaussian_sigma_avg_is',
             },
             'poisson_laplace_target_refine': method == 'poisson_laplace_target_refine',
-            'poisson_variational_gaussian': method == 'poisson_variational_gaussian',
+            'poisson_variational_gaussian': method
+            in {
+                'poisson_variational_gaussian',
+                'poisson_variational_gaussian_sigma_avg',
+                'poisson_variational_gaussian_sigma_avg_is',
+            },
+            'poisson_variational_gaussian_sigma_average': method
+            in {
+                'poisson_variational_gaussian_sigma_avg',
+                'poisson_variational_gaussian_sigma_avg_is',
+            },
         }
     return {'bernoulli_laplace_eb': False}
 
@@ -460,6 +486,8 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_pirls_sigma_avg_is',
         'poisson_laplace_target_refine',
         'poisson_variational_gaussian',
+        'poisson_variational_gaussian_sigma_avg',
+        'poisson_variational_gaussian_sigma_avg_is',
     }:
         return {}
     out = {
@@ -493,6 +521,8 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_pirls_sigma_avg_is',
         'poisson_laplace_target_refine',
         'poisson_variational_gaussian',
+        'poisson_variational_gaussian_sigma_avg',
+        'poisson_variational_gaussian_sigma_avg_is',
     }:
         out.update(
             {
@@ -512,6 +542,8 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_pirls_sigma_avg_is',
         'poisson_laplace_target_refine',
         'poisson_variational_gaussian',
+        'poisson_variational_gaussian_sigma_avg',
+        'poisson_variational_gaussian_sigma_avg_is',
     }:
         out.update(
             {
@@ -536,6 +568,8 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_pirls_sigma_avg_is',
         'poisson_laplace_target_refine',
         'poisson_variational_gaussian',
+        'poisson_variational_gaussian_sigma_avg',
+        'poisson_variational_gaussian_sigma_avg_is',
     }:
         out.update(
             {
@@ -545,6 +579,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
                 'poisson_laplace_pirls_sigma_average_scale_mode': (
                     'intercept_slope'
                     if method == 'poisson_laplace_pirls_sigma_avg_is'
+                    or method == 'poisson_variational_gaussian_sigma_avg_is'
                     else args.poisson_laplace_pirls_sigma_average_scale_mode
                 ),
                 'poisson_laplace_pirls_sigma_average_intercept_scales': (
@@ -579,7 +614,11 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
                 'poisson_laplace_target_refine_max_q': args.poisson_laplace_target_refine_max_q,
             }
         )
-    if method == 'poisson_variational_gaussian':
+    if method in {
+        'poisson_variational_gaussian',
+        'poisson_variational_gaussian_sigma_avg',
+        'poisson_variational_gaussian_sigma_avg_is',
+    }:
         out.update(
             {
                 'poisson_variational_gaussian_outer': args.poisson_variational_gaussian_outer,
@@ -591,6 +630,29 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
                 ),
                 'poisson_variational_gaussian_prior_weight': (
                     args.poisson_variational_gaussian_prior_weight
+                ),
+                'poisson_variational_gaussian_sigma_average_scales': (
+                    args.poisson_variational_gaussian_sigma_average_scales
+                ),
+                'poisson_variational_gaussian_sigma_average_scale_mode': (
+                    'intercept_slope'
+                    if method == 'poisson_variational_gaussian_sigma_avg_is'
+                    else args.poisson_variational_gaussian_sigma_average_scale_mode
+                ),
+                'poisson_variational_gaussian_sigma_average_intercept_scales': (
+                    args.poisson_variational_gaussian_sigma_average_intercept_scales
+                ),
+                'poisson_variational_gaussian_sigma_average_slope_scales': (
+                    args.poisson_variational_gaussian_sigma_average_slope_scales
+                ),
+                'poisson_variational_gaussian_sigma_average_steps': (
+                    args.poisson_variational_gaussian_sigma_average_steps
+                ),
+                'poisson_variational_gaussian_sigma_average_temperature': (
+                    args.poisson_variational_gaussian_sigma_average_temperature
+                ),
+                'poisson_variational_gaussian_sigma_average_output_mode': (
+                    args.poisson_variational_gaussian_sigma_average_output_mode
                 ),
             }
         )
@@ -666,6 +728,13 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-variational-gaussian-damping', type=float, default=0.5)
     parser.add_argument('--poisson-variational-gaussian-sigma-blend', type=float, default=0.25)
     parser.add_argument('--poisson-variational-gaussian-prior-weight', type=float, default=4.0)
+    parser.add_argument('--poisson-variational-gaussian-sigma-average-scales', type=float, nargs='+', default=[0.5, 0.75, 1.0, 1.3333333, 2.0])
+    parser.add_argument('--poisson-variational-gaussian-sigma-average-scale-mode', default='scalar', choices=['scalar', 'intercept_slope'])
+    parser.add_argument('--poisson-variational-gaussian-sigma-average-intercept-scales', type=float, nargs='+', default=[0.75, 1.0, 1.3333333])
+    parser.add_argument('--poisson-variational-gaussian-sigma-average-slope-scales', type=float, nargs='+', default=[0.5, 1.0, 1.5])
+    parser.add_argument('--poisson-variational-gaussian-sigma-average-steps', type=int, default=2)
+    parser.add_argument('--poisson-variational-gaussian-sigma-average-temperature', type=float, default=2.0)
+    parser.add_argument('--poisson-variational-gaussian-sigma-average-output-mode', default='beta', choices=['beta', 'beta_best', 'beta_sigma'])
     return parser.parse_args()
 # fmt: on
 

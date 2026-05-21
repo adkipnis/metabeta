@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-21 (iterated variational Gaussian prototype)
+Last updated: 2026-05-21 (VG-centered σ averaging prototype)
 
 Goal
 ----
@@ -35,6 +35,11 @@ Important method names:
 - `poisson_variational_gaussian`: default plus an iterated Gaussian variational
   posterior-mean solver with conservative σ blending; current leading prototype, not
   default.
+- `poisson_variational_gaussian_sigma_avg`: `poisson_variational_gaussian` plus
+  ELBO-weighted scalar σ averaging around the VG state; writes back weighted β only by
+  default.
+- `poisson_variational_gaussian_sigma_avg_is`: intercept-vs-slope version of the same
+  VG-centered averaging prototype; slightly stronger but slower.
 - `poisson_laplace_pirls_full` / `poisson_laplace_pirls_full_beta`: full-Σ prototypes;
   stable but worse than the diagonal default in the tested rows.
 
@@ -114,6 +119,41 @@ Interpretation:
   should extend posterior/hyperparameter averaging around the variational state rather
   than tune old gates.
 
+### VG-Centered σ/Hyperparameter Averaging
+
+`poisson_variational_gaussian_sigma_avg` starts from the iterated VG state, evaluates a
+small log-σ grid, runs local VG β/m/V refreshes under each candidate σ, scores candidates
+by the variational target, and returns the weighted β mean. The default output mode is now
+β-only because it preserves the FFX gains while avoiding σ/BLUP churn from averaged σ
+writeback.
+
+First 1000 rows, sequential CPU run. The VG-centered σ average uses scalar scales
+`(0.5, 0.75, 1.0, 1.3333, 2.0)` and `temperature=2.0`.
+
+| Dataset | part | var-Gauss FFX | VG σ-avg FFX | var-Gauss σ | VG σ-avg σ | var-Gauss BLUP | VG σ-avg BLUP | VG σ-avg ms/ds |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-p-mixed | train | 0.2079 | 0.2076 | 0.4273 | 0.4273 | 0.5205 | 0.5205 | 52.3 |
+| small-p-sampled | valid | 0.2335 | 0.2327 | 0.4785 | 0.4785 | 0.5325 | 0.5325 | 51.3 |
+| small-p-sampled | test | 0.2111 | 0.2108 | 0.4393 | 0.4393 | 0.5208 | 0.5208 | 46.6 |
+| medium-p-mixed | train | 0.2334 | 0.2308 | 0.4008 | 0.4008 | 0.5073 | 0.5073 | 84.1 |
+| medium-p-sampled | valid | 0.2450 | 0.2453 | 0.4930 | 0.4930 | 0.5723 | 0.5723 | 86.3 |
+| medium-p-sampled | test | 0.2740 | 0.2738 | 0.4448 | 0.4448 | 0.5510 | 0.5510 | 83.6 |
+| large-p-mixed | train | 0.2432 | 0.2374 | 0.4549 | 0.4549 | 0.5512 | 0.5512 | 99.4 |
+| large-p-sampled | valid | 0.3026 | 0.2975 | 0.4996 | 0.4996 | 0.6211 | 0.6211 | 99.5 |
+| large-p-sampled | test | 0.2889 | 0.2796 | 0.4714 | 0.4714 | 0.7213 | 0.7213 | 107.2 |
+
+Interpretation:
+
+- The scalar VG-centered average gives consistent but modest additional FFX gains on large
+  rows, small gains on small rows, and no useful gain on `medium-p-sampled valid`.
+- β-only output is the clean setting: `beta_sigma` output produced a severe σ regression
+  on `medium-p-sampled valid` (`0.4930 -> 0.6561`) without FFX benefit.
+- Intercept-vs-slope averaging is slightly better on representative large rows but slower:
+  `large-p-mixed` FFX `0.2374 -> 0.2371`, `large-p-sampled test` `0.2796 -> 0.2788`.
+  Keep it as an ablation rather than a default.
+- This is a useful incremental patch, not a full answer to the INLA gap. Large sampled FFX
+  remains around `0.28-0.30`, still materially worse than INLA `~0.22-0.25`.
+
 ### Intercept-vs-Slope σ Averaging
 
 This usually ties or slightly beats scalar σ averaging for FFX and often improves σ/BLUP,
@@ -177,8 +217,8 @@ Findings:
 Implication:
 
 - Continue the variational/posterior-mean architecture.
-- Do not make β-only output the default yet; keep it as the fallback idea if future rows
-  show unacceptable σ/BLUP regressions.
+- β-only writeback is the preferred setting for post-VG σ averaging; it captures the FFX
+  gain without causing σ/BLUP regressions.
 - The next likely useful guard is targeted σ writeback suppression for extreme marginal
   variance rows, not more generic gate tuning.
 
@@ -219,11 +259,11 @@ Why this is the next serious candidate:
 
 Next refinements for this path:
 
-- Validate the iterated VG budget on huge rows and the sampled INLA reference cells.
-- Test scalar/intercept-vs-slope σ averaging around the variational candidate rather than
-  around the conditional-mode candidate.
-- If large-row FFX remains above `~0.25`, prototype richer hyperparameter averaging over
-  variance directions using VG candidate refreshes.
+- Validate VG-centered scalar averaging on huge rows and the sampled INLA reference cells.
+- Test whether higher temperature or fewer/more scalar σ scales can improve large sampled
+  FFX without increasing the `medium-p-sampled valid` regression.
+- If large-row FFX remains above `~0.25`, prototype a true variational-EM update over β
+  and σ jointly rather than local averaging around the final point.
 - Keep σ-writeback guards low priority unless FFX gains start trading off against severe
   BLUP regressions.
 
@@ -238,7 +278,7 @@ Commands
 
 ```bash
 uv run python -u experiments/analytical/glmm_required_benchmark.py \
-    --family p --methods current poisson_variational_gaussian \
+    --family p --methods current poisson_variational_gaussian poisson_variational_gaussian_sigma_avg \
     --sizes small medium large \
     --batch-size 32 --max-datasets 1000
 
