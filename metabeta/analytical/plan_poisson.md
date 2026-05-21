@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-21 (VG averaging/polish prototypes tested)
+Last updated: 2026-05-21 (huge-p INLA fits added)
 
 Goal
 ----
@@ -48,8 +48,7 @@ Current Evidence
 ----------------
 
 First 1000 rows per cell, sequential CPU rerun on 2026-05-21. Lower NRMSE is better.
-INLA values are current first-1000 diagonal R-INLA references. Huge INLA fits are not
-integrated yet, so those cells are deliberately left blank. Timings from these runs are
+INLA values are current first-1000 diagonal R-INLA references. Timings from these runs are
 considered unbiased.
 
 | Dataset | part | current FFX | INLA FFX | FFX gap | current σ | INLA σ | current BLUP | INLA BLUP | ms/ds |
@@ -63,19 +62,21 @@ considered unbiased.
 | large-p-mixed | train | 0.1935 | 0.1778 | +0.0157 | 0.4215 | 0.3076 | 0.5405 | 0.5001 | 111.3 |
 | large-p-sampled | valid | 0.2551 | 0.2467 | +0.0084 | 0.4958 | 0.4232 | 0.6123 | 0.5870 | 112.9 |
 | large-p-sampled | test | 0.2278 | 0.2186 | +0.0092 | 0.4249 | 0.3439 | 0.5485 | 0.5618 | 124.3 |
-| huge-p-mixed | train | 0.2026 | — | — | 0.4549 | — | 0.5710 | — | 141.7 |
-| huge-p-sampled | valid | 0.2646 | — | — | 0.5703 | — | 0.6195 | — | 181.0 |
-| huge-p-sampled | test | 0.2549 | — | — | 0.5052 | — | 0.6154 | — | 168.8 |
+| huge-p-mixed | train | 0.2026 | 0.2080 | -0.0054 | 0.4549 | 0.3428 | 0.5710 | 0.5453 | 141.7 |
+| huge-p-sampled | valid | 0.2646 | 0.2582 | +0.0064 | 0.5703 | 0.3944 | 0.6195 | 0.6223 | 181.0 |
+| huge-p-sampled | test | 0.2549 | 0.2238 | +0.0311 | 0.5052 | 0.3560 | 0.6154 | 0.5956 | 168.8 |
 
 Interpretation:
 
-- FFX is now within about `+0.005` to `+0.016` of INLA on sampled small/medium/large rows
-  and around `+0.013` to `+0.024` behind on mixed rows.
-- σ remains consistently worse than INLA, especially on mixed rows, but recent diagnostics
-  show that simply plugging in true σ or INLA σ does not close the FFX gap. σ is therefore
-  not the primary next optimization target unless it changes β/m posterior means.
-- BLUP is mixed: current is better than INLA on several sampled rows but remains behind on
-  mixed rows and large sampled valid. Further BLUP work is secondary until FFX moves.
+- FFX gaps are heterogeneous across sizes. Small/medium/large sampled rows: `+0.005`
+  to `+0.016`. Large/huge sampled test: `+0.009` to `+0.031` — the huge sampled test gap
+  (`+0.031`) is notably larger than the rest. Mixed rows: `+0.013` to `+0.024` for
+  small/medium/large; huge mixed train is **−0.0054** (current beats INLA on FFX).
+- σ remains consistently worse than INLA across all sizes and partitions, especially on
+  sampled rows. Recent diagnostics show that plugging in true σ or INLA σ does not close
+  the FFX gap, so σ is not the primary next optimization target.
+- BLUP is mixed: current beats INLA slightly on huge sampled valid (`0.6195 vs 0.6223`)
+  and several smaller sampled rows, but lags on mixed rows and huge sampled test.
 - CPU runtime is acceptable for this phase. The next patches should prioritize FFX
   movement; speed work is explicitly deferred until the accuracy ceiling is clearer.
 
