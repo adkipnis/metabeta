@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-21 (huge-p INLA fits added)
+Last updated: 2026-05-22 (8192-row current benchmark added)
 
 Goal
 ----
@@ -79,6 +79,43 @@ Interpretation:
   and several smaller sampled rows, but lags on mixed rows and huge sampled test.
 - CPU runtime is acceptable for this phase. The next patches should prioritize FFX
   movement; speed work is explicitly deferred until the accuracy ceiling is clearer.
+
+Full 8192-Row Current Benchmark
+-------------------------------
+
+Full available Poisson rows per cell (`8192` indices), mixed train over two training
+epochs and sampled valid/test. These are current-method results only; the INLA reference
+table above remains the first-1000 comparison because the R-INLA fits were produced on
+that subset.
+
+| Dataset | part | N | FFX | σ | BLUP | ms/ds | EB accept | σ cap | grid accept |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-p-mixed | train | 8192 | 0.1668 | 0.3592 | 0.5104 | 74.3 | 0.883 | 0.000 | 0.974 |
+| small-p-sampled | valid | 8192 | 0.2024 | 0.4225 | 0.5149 | 71.0 | 0.892 | 0.000 | 0.984 |
+| small-p-sampled | test | 8192 | 0.1970 | 0.4195 | 0.5169 | 72.7 | 0.878 | 0.000 | 0.985 |
+| medium-p-mixed | train | 8192 | 0.1706 | 0.4184 | 0.4967 | 128.2 | 0.781 | 0.086 | 0.997 |
+| medium-p-sampled | valid | 8192 | 0.2078 | 0.4436 | 0.5516 | 127.2 | 0.819 | 0.077 | 0.998 |
+| medium-p-sampled | test | 8192 | 0.2062 | 0.4517 | 0.5631 | 132.9 | 0.799 | 0.078 | 0.998 |
+| large-p-mixed | train | 8192 | 0.2076 | 0.5085 | 0.7335 | 152.5 | 0.757 | 0.116 | 0.996 |
+| large-p-sampled | valid | 8192 | 0.2224 | 0.5151 | 0.6077 | 148.0 | 0.755 | 0.122 | 0.997 |
+| large-p-sampled | test | 8192 | 0.2254 | 0.5228 | 0.6482 | 160.0 | 0.770 | 0.113 | 0.997 |
+| huge-p-mixed | train | 8192 | 0.2109 | 0.5435 | 0.5904 | 204.6 | 0.707 | 0.157 | 0.996 |
+| huge-p-sampled | valid | 8192 | 0.2387 | 0.5910 | 0.6774 | 226.8 | 0.743 | 0.159 | 0.995 |
+| huge-p-sampled | test | 8192 | 0.2650 | 0.5890 | 0.7061 | 208.0 | 0.751 | 0.164 | 0.996 |
+
+Notes:
+
+- The 8192-row aggregate numbers do not show a single cell-level collapse. FFX remains
+  strongest on small/medium and weakest on huge sampled test; σ and BLUP degrade with
+  size, especially large/huge sampled and large mixed BLUP.
+- Index-level outlier logging was not captured during this aggregate run. Do not rerun a
+  separate full 12-cell row diagnostic just to recover indices; instead add row-level
+  logging to the benchmark path when the next full pass is needed, or run targeted
+  row-index diagnostics only on suspicious cells such as `huge-p-sampled:test` and
+  `large-p-mixed:train`.
+- Stage-level profiling can start after either targeted suspicious-cell row checks or an
+  integrated benchmark+row-log pass confirms there is no small set of dominating outlier
+  indices.
 
 Retired Directions
 ------------------
@@ -175,6 +212,12 @@ Next Directions
 ---------------
 
 Primary patch candidates:
+
+0. **Speed profiling and ablation, once outliers are cleared.**
+   The 8192-row current benchmark is accuracy-stable at the cell level but currently runs
+   around `70-227 ms/ds` on CPU. The next production-relevant step is stage-level timing
+   and accuracy-preserving ablations, but only after targeted row-index checks rule out a
+   small number of problematic rows driving the remaining large/huge errors.
 
 1. **Hard-row targeted high-budget VG / convergence probe.**
    Extra VG budget was the only clear hard-row lever, while cheap state averaging and
