@@ -1,6 +1,7 @@
 """MAP/EB refinements for Poisson GLMMs."""
 
 import math
+import time
 
 import torch
 
@@ -265,7 +266,7 @@ def popPoissonRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         ),
         'poisson_variational_gaussian_sigma_average_steps': kwargs.pop(
             'poisson_variational_gaussian_sigma_average_steps',
-            2,
+            1,
         ),
         'poisson_variational_gaussian_sigma_average_temperature': kwargs.pop(
             'poisson_variational_gaussian_sigma_average_temperature',
@@ -317,6 +318,7 @@ def popPoissonRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         'poisson_marginal_beta_min_d': kwargs.pop('poisson_marginal_beta_min_d', 1),
         'poisson_marginal_beta_max_q': kwargs.pop('poisson_marginal_beta_max_q', None),
         'poisson_marginal_beta_max_step': kwargs.pop('poisson_marginal_beta_max_step', 1.0),
+        'poisson_stage_timing': kwargs.pop('poisson_stage_timing', False),
     }
 
 
@@ -688,6 +690,10 @@ def _rowRmsMasked(delta: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     denom = mask_f.sum(dim=axes).clamp(min=1.0)
     numer = delta.square().mul(mask_f).sum(dim=axes)
     return (numer / denom).clamp(min=0.0).sqrt()
+
+
+def _isUnitScaleVector(scale_vector: tuple[float, ...]) -> bool:
+    return all(abs(float(scale) - 1.0) < 1e-7 for scale in scale_vector)
 
 
 def _poissonVariationalStepDiag(
@@ -1389,7 +1395,11 @@ def refinePoissonLaplacePirlsSigmaAverage(
                     scale_vectors.append((intercept_f,))
                 else:
                     scale_vectors.append((intercept_f, *((slope_f,) * (q - 1))))
-    scale_vectors = list(dict.fromkeys(scale_vectors))
+    scale_vectors = [
+        scale_vector
+        for scale_vector in dict.fromkeys(scale_vectors)
+        if not _isUnitScaleVector(scale_vector)
+    ]
 
     for scale_vector in scale_vectors:
         scale_tensor = torch.tensor(scale_vector, device=device, dtype=dtype).expand(B, q)
@@ -2007,7 +2017,11 @@ def refinePoissonVariationalGaussianSigmaAverage(
                     scale_vectors.append(
                         (float(intercept_scale), *((float(slope_scale),) * (q - 1)))
                     )
-    scale_vectors = list(dict.fromkeys(scale_vectors))
+    scale_vectors = [
+        scale_vector
+        for scale_vector in dict.fromkeys(scale_vectors)
+        if not _isUnitScaleVector(scale_vector)
+    ]
 
     for scale_vector in scale_vectors:
         scale_tensor = torch.tensor(scale_vector, device=device, dtype=dtype).expand(B, q)
@@ -2647,6 +2661,7 @@ def refinePoissonPath(
 
     options = {} if options is None else options
     diagnostics = options.get('poisson_laplace_eb_diagnostics', False)
+    stage_timing = bool(options.get('poisson_stage_timing', False))
     prior_kwargs = {
         'nu_ffx': map_priors['nu_ffx'],
         'tau_ffx': map_priors['tau_ffx'],
@@ -2655,7 +2670,7 @@ def refinePoissonPath(
         'family_sigma_rfx': map_priors['family_sigma_rfx'],
     }
 
-    def _run(refiner, include_sigma_prior: bool = True, **kwargs):
+    def _run(refiner, include_sigma_prior: bool = True, stage_name: str | None = None, **kwargs):
         selected_priors = (
             prior_kwargs
             if include_sigma_prior
@@ -2665,7 +2680,8 @@ def refinePoissonPath(
                 'family_ffx': map_priors['family_ffx'],
             }
         )
-        return refiner(
+        start = time.perf_counter() if stage_timing and stage_name is not None else None
+        refined = refiner(
             stats,
             Xm,
             ym,
@@ -2678,11 +2694,17 @@ def refinePoissonPath(
             return_diagnostics=diagnostics,
             **kwargs,
         )
+        if start is not None:
+            elapsed_ms = (time.perf_counter() - start) * 1000.0 / max(int(Xm.shape[0]), 1)
+            refined = dict(refined)
+            refined[f'poisson_stage_ms_{stage_name}'] = Xm.new_full((Xm.shape[0],), elapsed_ms)
+        return refined
 
     if options.get('poisson_laplace_eb_mode', 'off') != 'off':
         gate = torch.ones(Xm.shape[0], device=Xm.device, dtype=torch.bool)
         stats = _run(
             refinePoissonLaplaceEb,
+            stage_name='eb',
             n_steps=options['poisson_laplace_eb_steps'],
             n_inner=options['poisson_laplace_eb_inner'],
             n_final=options['poisson_laplace_eb_final'],
@@ -2697,6 +2719,7 @@ def refinePoissonPath(
     if options.get('poisson_laplace_pirls_diag', False):
         stats = _run(
             refinePoissonLaplacePirlsDiag,
+            stage_name='pirls',
             n_outer=options['poisson_laplace_pirls_diag_outer'],
             n_pirls=options['poisson_laplace_pirls_diag_inner'],
             n_final=options['poisson_laplace_pirls_diag_final'],
@@ -2709,6 +2732,7 @@ def refinePoissonPath(
         stats = _run(
             refinePoissonMarginalMeanBeta,
             include_sigma_prior=False,
+            stage_name='marginal_beta',
             n_steps=options['poisson_marginal_beta_steps'],
             damping=options['poisson_marginal_beta_damping'],
             min_d=options['poisson_marginal_beta_min_d'],
@@ -2719,6 +2743,7 @@ def refinePoissonPath(
     if options.get('poisson_laplace_pirls_sigma_grid', False):
         stats = _run(
             refinePoissonLaplacePirlsSigmaGrid,
+            stage_name='sigma_grid',
             scales=tuple(float(x) for x in options['poisson_laplace_pirls_sigma_grid_scales']),
             n_steps=options['poisson_laplace_pirls_sigma_grid_steps'],
             damping=options['poisson_laplace_pirls_diag_damping'],
@@ -2729,6 +2754,7 @@ def refinePoissonPath(
     if options.get('poisson_laplace_pirls_sigma_average', False):
         stats = _run(
             refinePoissonLaplacePirlsSigmaAverage,
+            stage_name='sigma_average',
             scales=tuple(float(x) for x in options['poisson_laplace_pirls_sigma_average_scales']),
             scale_mode=options['poisson_laplace_pirls_sigma_average_scale_mode'],
             intercept_scales=tuple(
@@ -2748,6 +2774,7 @@ def refinePoissonPath(
     if options.get('poisson_variational_gaussian', False):
         stats = _run(
             refinePoissonVariationalGaussian,
+            stage_name='vg',
             n_outer=options['poisson_variational_gaussian_outer'],
             n_inner=options['poisson_variational_gaussian_inner'],
             n_final=options['poisson_variational_gaussian_final'],
@@ -2768,6 +2795,7 @@ def refinePoissonPath(
     if options.get('poisson_variational_gaussian_sigma_average', False):
         stats = _run(
             refinePoissonVariationalGaussianSigmaAverage,
+            stage_name='vg_sigma_average',
             scales=tuple(
                 float(x) for x in options['poisson_variational_gaussian_sigma_average_scales']
             ),
@@ -2789,6 +2817,7 @@ def refinePoissonPath(
     if options.get('poisson_variational_gaussian_state_average', False):
         stats = _run(
             refinePoissonVariationalGaussianStateAverage,
+            stage_name='vg_state_average',
             v_scales=tuple(
                 float(x) for x in options['poisson_variational_gaussian_state_average_v_scales']
             ),
@@ -2804,6 +2833,7 @@ def refinePoissonPath(
     if options.get('poisson_variational_gaussian_polish', False):
         stats = _run(
             refinePoissonVariationalGaussianPolish,
+            stage_name='vg_polish',
             n_steps=options['poisson_variational_gaussian_polish_steps'],
             dampings=tuple(
                 float(x) for x in options['poisson_variational_gaussian_polish_dampings']

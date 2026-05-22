@@ -47,24 +47,24 @@ Useful benchmark methods:
 Current Evidence
 ----------------
 
-First 1000 rows per cell, sequential CPU rerun on 2026-05-21. Lower NRMSE is better.
+First 1000 rows per cell, sequential CPU rerun on 2026-05-22. Lower NRMSE is better.
 INLA values are current first-1000 diagonal R-INLA references. Timings from these runs are
 considered unbiased.
 
 | Dataset | part | current FFX | INLA FFX | FFX gap | current σ | INLA σ | current BLUP | INLA BLUP | ms/ds |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-p-mixed | train | 0.2076 | 0.1835 | +0.0241 | 0.4260 | 0.3404 | 0.5204 | 0.4936 | 59.2 |
-| small-p-sampled | valid | 0.2326 | 0.2276 | +0.0050 | 0.4779 | 0.4356 | 0.5324 | 0.5309 | 53.9 |
-| small-p-sampled | test | 0.2107 | 0.1997 | +0.0110 | 0.4389 | 0.3966 | 0.5206 | 0.5281 | 55.1 |
-| medium-p-mixed | train | 0.1807 | 0.1675 | +0.0132 | 0.3976 | 0.3214 | 0.5068 | 0.4789 | 102.9 |
-| medium-p-sampled | valid | 0.2304 | 0.2146 | +0.0158 | 0.4500 | 0.4209 | 0.5497 | 0.5618 | 103.7 |
-| medium-p-sampled | test | 0.2383 | 0.2267 | +0.0116 | 0.4388 | 0.3883 | 0.5504 | 0.5849 | 97.1 |
-| large-p-mixed | train | 0.1935 | 0.1778 | +0.0157 | 0.4215 | 0.3076 | 0.5405 | 0.5001 | 111.3 |
-| large-p-sampled | valid | 0.2551 | 0.2467 | +0.0084 | 0.4958 | 0.4232 | 0.6123 | 0.5870 | 112.9 |
-| large-p-sampled | test | 0.2278 | 0.2186 | +0.0092 | 0.4249 | 0.3439 | 0.5485 | 0.5618 | 124.3 |
-| huge-p-mixed | train | 0.2026 | 0.2080 | -0.0054 | 0.4549 | 0.3428 | 0.5710 | 0.5453 | 141.7 |
-| huge-p-sampled | valid | 0.2646 | 0.2582 | +0.0064 | 0.5703 | 0.3944 | 0.6195 | 0.6223 | 181.0 |
-| huge-p-sampled | test | 0.2549 | 0.2238 | +0.0311 | 0.5052 | 0.3560 | 0.6154 | 0.5956 | 168.8 |
+| small-p-mixed | train | 0.2077 | 0.1835 | +0.0242 | 0.4268 | 0.3404 | 0.5208 | 0.4936 | 55.6 |
+| small-p-sampled | valid | 0.2330 | 0.2276 | +0.0054 | 0.4783 | 0.4356 | 0.5327 | 0.5309 | 50.6 |
+| small-p-sampled | test | 0.2108 | 0.1997 | +0.0111 | 0.4388 | 0.3966 | 0.5211 | 0.5281 | 51.2 |
+| medium-p-mixed | train | 0.1800 | 0.1675 | +0.0125 | 0.4003 | 0.3214 | 0.5075 | 0.4789 | 93.9 |
+| medium-p-sampled | valid | 0.2305 | 0.2146 | +0.0159 | 0.4556 | 0.4209 | 0.5504 | 0.5618 | 97.6 |
+| medium-p-sampled | test | 0.2384 | 0.2267 | +0.0117 | 0.4354 | 0.3883 | 0.5504 | 0.5849 | 94.7 |
+| large-p-mixed | train | 0.1935 | 0.1778 | +0.0157 | 0.4239 | 0.3076 | 0.5410 | 0.5001 | 106.7 |
+| large-p-sampled | valid | 0.2552 | 0.2467 | +0.0085 | 0.4999 | 0.4232 | 0.6132 | 0.5870 | 108.3 |
+| large-p-sampled | test | 0.2279 | 0.2186 | +0.0093 | 0.4286 | 0.3439 | 0.5491 | 0.5618 | 116.7 |
+| huge-p-mixed | train | 0.2026 | 0.2080 | -0.0054 | 0.4591 | 0.3428 | 0.5717 | 0.5453 | 128.6 |
+| huge-p-sampled | valid | 0.2648 | 0.2582 | +0.0066 | 0.5956 | 0.3944 | 0.6223 | 0.6223 | 165.6 |
+| huge-p-sampled | test | 0.2553 | 0.2238 | +0.0315 | 0.5203 | 0.3560 | 0.6171 | 0.5956 | 152.8 |
 
 Interpretation:
 
@@ -75,11 +75,12 @@ Interpretation:
 - σ remains consistently worse than INLA across all sizes and partitions, especially on
   sampled rows. Recent diagnostics show that plugging in true σ or INLA σ does not close
   the FFX gap, so σ is not the primary next optimization target.
-- BLUP is mixed: current beats INLA slightly on huge sampled valid (`0.6195 vs 0.6223`)
+- BLUP is mixed: current ties INLA on huge sampled valid (`0.6223 vs 0.6223`)
   and several smaller sampled rows, but lags on mixed rows and huge sampled test.
 - Accuracy is now close enough to INLA that speed work is the active priority. The first
-  safe production cut is reducing VG adaptive continuation from two steps to one; broader
-  stage removal is not yet robust enough for the default.
+  safe production cuts are reducing VG adaptive continuation from two steps to one,
+  reducing final VG σ averaging from two refresh steps to one, and removing duplicate
+  all-ones σ candidates. Broader stage removal is not yet robust enough for the default.
 
 Full 8192-Row Current Benchmark
 -------------------------------
@@ -155,6 +156,12 @@ Efficiency ablations:
   across first-1000 rows, with FFX changes usually `+0.0001` to `+0.0009`; however
   `medium-p-mixed:train` worsened by `+0.0037`. Keep it in the accuracy default for now;
   it remains the cleanest optional speed-mode cut.
+- Reducing final VG σ averaging refresh steps from `2` to `1` is accepted as the new
+  default. It roughly halves that final stage while preserving FFX across all first-1000
+  rows. Representative rows: `small-p-mixed 0.2077 / 55.6 ms`, `medium-p-mixed 0.1800 /
+  93.9 ms`, `large-p-mixed 0.1935 / 106.7 ms`, `huge-p-sampled-valid 0.2648 /
+  165.6 ms`. The final averaging stage itself drops to about `2.5-7.7 ms/ds` depending
+  on row size.
 - Reducing VG inner iterations from `5` to `3` regressed small mixed FFX
   (`0.2076 -> 0.2126`), so it is rejected.
 - Skipping pre-VG PIRLS σ averaging is FFX-tolerable on many rows, but consistently
@@ -162,12 +169,24 @@ Efficiency ablations:
 - Reducing adaptive VG continuation from `2` to `1` preserved FFX on checked rows
   (`small-p-mixed 0.2076`, `small-p-valid 0.2326`, `huge-p-test 0.2551`) while removing
   one global continuation attempt. This is now the default.
+- Reducing the Poisson EB initializer from `24` to `8` steps is the largest speed-mode
+  candidate. It preserved or slightly improved FFX on all first-1000 rows tested
+  (`small-p-mixed 0.2077`, `medium-p-mixed 0.1798`, `huge-p-test 0.2551`) and cut
+  `~10-35 ms/ds`, but σ/BLUP regressions are material on huge sampled rows
+  (`huge-p-valid σ 0.5956 -> 0.6522`, BLUP `0.6223 -> 0.6338` versus the new default).
+  Keep `24` as the accuracy default; expose `--poisson-eb-steps 8` as an explicit speed
+  setting if FFX latency matters more than σ/BLUP.
+- The σ-averaging code no longer evaluates the duplicate all-ones scale candidate; the
+  base candidate already covers that point. This is a pure implementation cleanup and
+  does not change the estimator.
 - A tiny `cProfile` smoke run is dominated by import/data-loader overhead, but within the
   retained Poisson path the visible hot functions are `refinePoissonVariationalGaussian`,
   `_poissonLaplaceModeDiag`, `_poissonVariationalStepDiag`,
   `_poissonVariationalCovarianceDiag`, `_poissonVariationalHessianDiag`, and the final
-  VG σ averaging refiner. The next useful profiler should be an in-process warm run with
-  stage timers, not another cold-start `cProfile` command.
+  VG σ averaging refiner. The benchmark now has `--poisson-stage-timings` for warm
+  in-process timing. On `small-p-mixed:train` first 1000, current retained-stage costs are
+  roughly: EB `25 ms`, PIRLS `1.7 ms`, marginal β `0.3 ms`, σ grid `1.6 ms`, PIRLS σ
+  averaging `2.2 ms`, VG `14 ms`, final VG σ averaging `2.7 ms`.
 
 Retired Directions
 ------------------
@@ -272,11 +291,15 @@ Next Directions
 Primary patch candidates:
 
 0. **Low-level hotspot profiling and kernel cleanup.**
-   Stage ablations identified VG refinement and VG σ averaging as the main late-stage
-   costs. Next profile tensor hotspots inside `refinePoissonVariationalGaussian` and
-   `refinePoissonVariationalGaussianSigmaAverage`: repeated target/Hessian construction,
-   Cholesky solves, and duplicated μ/offset recomputation are the likely bottlenecks.
-   Optimize only retained default stages.
+   Warm stage timings show EB and VG are now the dominant costs. Next profile tensor
+   hotspots inside the retained EB initializer and `refinePoissonVariationalGaussian`:
+   repeated target/Hessian construction, Cholesky solves, and duplicated μ/offset
+   recomputation are the likely bottlenecks. Optimize only retained default stages.
+
+0a. **Optional FFX-first speed mode.**
+   If latency becomes the priority, test `--poisson-eb-steps 8` plus the new default final
+   VG averaging step on downstream/validation metrics. It is the most effective speed cut
+   found so far, but not the accuracy default because it gives back too much σ/BLUP.
 
 1. **Compare INLA β deltas against our likelihood geometry on the hardest rows.**
    The latest hard-row run shows that neither stronger VG convergence nor local

@@ -37,6 +37,17 @@ METHODS = [
     'poisson_variational_gaussian_polish',
 ]
 FAMILIES = ['n', 'b', 'p']
+POISSON_STAGE_COLUMNS = [
+    'poisson_stage_ms_eb',
+    'poisson_stage_ms_pirls',
+    'poisson_stage_ms_marginal_beta',
+    'poisson_stage_ms_sigma_grid',
+    'poisson_stage_ms_sigma_average',
+    'poisson_stage_ms_vg',
+    'poisson_stage_ms_vg_sigma_average',
+    'poisson_stage_ms_vg_state_average',
+    'poisson_stage_ms_vg_polish',
+]
 
 
 def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
@@ -52,12 +63,14 @@ def _paths(data_id: str, partition: str, n_epochs: int) -> list[Path]:
 
 def run_required_benchmark(args: argparse.Namespace) -> None:
     family = args.family
-    print(
+    header = (
         'method,dataset,partition,N,FFX,sRFX,sEps,BLUP,ms_per_ds,gate,accept,'
         'blup_fallback,beta_capped,beta_tail,sigma_capped,poisson_beta_gate,'
-        'poisson_beta_accept,poisson_grid_gate,poisson_grid_accept',
-        flush=True,
+        'poisson_beta_accept,poisson_grid_gate,poisson_grid_accept'
     )
+    if args.poisson_stage_timings:
+        header = f'{header},' + ','.join(POISSON_STAGE_COLUMNS)
+    print(header, flush=True)
     combos = _combos(args, family)
     for data_id, partition, n_epochs in combos:
         cfg = loadDataConfig(data_id)
@@ -129,13 +142,22 @@ def run_required_benchmark(args: argparse.Namespace) -> None:
                             **_bernoulliEbKwargs(method, args),
                             **_normalEbKwargs(method, args),
                             **_poissonEbKwargs(method, args),
+                            poisson_stage_timing=args.poisson_stage_timings,
                             **common,
                         )
                         stores[method].add(stats, batch, max_q, time.perf_counter() - t0)
                     n_seen += batch['X'].shape[0]
 
         for method in args.methods:
-            print(stores[method].row(method, data_id, partition), flush=True)
+            print(
+                stores[method].row(
+                    method,
+                    data_id,
+                    partition,
+                    include_poisson_stages=args.poisson_stage_timings,
+                ),
+                flush=True,
+            )
 
 
 def _combos(args: argparse.Namespace, family: str) -> list[tuple[str, str, int]]:
@@ -178,6 +200,9 @@ class _MetricStore:
         self.poisson_beta_accept: list[np.ndarray] = []
         self.poisson_grid_gate: list[np.ndarray] = []
         self.poisson_grid_accept: list[np.ndarray] = []
+        self.poisson_stage_times: dict[str, list[np.ndarray]] = {
+            name: [] for name in POISSON_STAGE_COLUMNS
+        }
         self.n_total = 0
 
     def add(
@@ -226,6 +251,9 @@ class _MetricStore:
             self.poisson_grid_accept.append(
                 stats['poisson_pirls_sigma_grid_accept'].detach().cpu().numpy()
             )
+        for name in POISSON_STAGE_COLUMNS:
+            if name in stats:
+                self.poisson_stage_times[name].append(stats[name].detach().cpu().numpy())
         self.n_total += B
         for b in range(B):
             self.beta_errs.append(
@@ -248,7 +276,13 @@ class _MetricStore:
             self.blup_errs.append((blup_est - blup_true).reshape(-1).cpu().numpy())
             self.blup_truths.append(blup_true.reshape(-1).cpu().numpy())
 
-    def row(self, method: str, data_id: str, partition: str) -> str:
+    def row(
+        self,
+        method: str,
+        data_id: str,
+        partition: str,
+        include_poisson_stages: bool = False,
+    ) -> str:
         gate = float(np.mean(np.concatenate(self.gate))) if self.gate else float('nan')
         accept = float(np.mean(np.concatenate(self.accept))) if self.accept else float('nan')
         blup_fallback = (
@@ -290,29 +324,32 @@ class _MetricStore:
             if self.likelihood_family == 0
             else 'n/a'
         )
-        return ','.join(
-            [
-                method,
-                data_id,
-                partition,
-                str(self.n_total),
-                f'{_nrmse(np.concatenate(self.beta_errs), np.concatenate(self.beta_truths)):.4f}',
-                f'{_nrmse(np.concatenate(self.srfx_errs), np.concatenate(self.srfx_truths)):.4f}',
-                seps_str,
-                f'{_nrmse(np.concatenate(self.blup_errs), np.concatenate(self.blup_truths)):.4f}',
-                f'{1000.0 * float(np.mean(self.wall)):.2f}',
-                f'{gate:.3f}',
-                f'{accept:.3f}',
-                f'{blup_fallback:.3f}',
-                f'{beta_capped:.3f}',
-                f'{beta_tail:.3f}',
-                f'{sigma_capped:.3f}',
-                f'{poisson_beta_gate:.3f}',
-                f'{poisson_beta_accept:.3f}',
-                f'{poisson_grid_gate:.3f}',
-                f'{poisson_grid_accept:.3f}',
-            ]
-        )
+        row = [
+            method,
+            data_id,
+            partition,
+            str(self.n_total),
+            f'{_nrmse(np.concatenate(self.beta_errs), np.concatenate(self.beta_truths)):.4f}',
+            f'{_nrmse(np.concatenate(self.srfx_errs), np.concatenate(self.srfx_truths)):.4f}',
+            seps_str,
+            f'{_nrmse(np.concatenate(self.blup_errs), np.concatenate(self.blup_truths)):.4f}',
+            f'{1000.0 * float(np.mean(self.wall)):.2f}',
+            f'{gate:.3f}',
+            f'{accept:.3f}',
+            f'{blup_fallback:.3f}',
+            f'{beta_capped:.3f}',
+            f'{beta_tail:.3f}',
+            f'{sigma_capped:.3f}',
+            f'{poisson_beta_gate:.3f}',
+            f'{poisson_beta_accept:.3f}',
+            f'{poisson_grid_gate:.3f}',
+            f'{poisson_grid_accept:.3f}',
+        ]
+        if include_poisson_stages:
+            for name in POISSON_STAGE_COLUMNS:
+                values = self.poisson_stage_times[name]
+                row.append(f'{float(np.mean(np.concatenate(values))):.2f}' if values else 'nan')
+        return ','.join(row)
 
 
 def _sliceBatch(batch: dict[str, torch.Tensor], n: int) -> dict[str, torch.Tensor]:
@@ -677,6 +714,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--max-batches',type=int,  default=None)
     parser.add_argument('--max-datasets', type=int, default=None)
     parser.add_argument('--combos',     nargs='+', default=None)
+    parser.add_argument('--poisson-stage-timings', action='store_true')
     parser.add_argument('--bernoulli-eb-sigma-prior-cap', type=float, default=2.5)
     parser.add_argument('--bernoulli-eb-sigma-prior-cap-min-d', type=int, default=5)
     parser.add_argument('--normal-eb-steps', type=int, default=3)
@@ -739,7 +777,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-variational-gaussian-sigma-average-scale-mode', default='scalar', choices=['scalar', 'intercept_slope'])
     parser.add_argument('--poisson-variational-gaussian-sigma-average-intercept-scales', type=float, nargs='+', default=[0.75, 1.0, 1.3333333])
     parser.add_argument('--poisson-variational-gaussian-sigma-average-slope-scales', type=float, nargs='+', default=[0.5, 1.0, 1.5])
-    parser.add_argument('--poisson-variational-gaussian-sigma-average-steps', type=int, default=2)
+    parser.add_argument('--poisson-variational-gaussian-sigma-average-steps', type=int, default=1)
     parser.add_argument('--poisson-variational-gaussian-sigma-average-temperature', type=float, default=2.0)
     parser.add_argument('--poisson-variational-gaussian-sigma-average-output-mode', default='beta', choices=['beta', 'beta_best', 'beta_sigma'])
     parser.add_argument('--poisson-variational-gaussian-state-average-v-scales', type=float, nargs='+', default=[0.75, 1.0, 1.3333333])
