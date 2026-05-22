@@ -83,6 +83,31 @@ VARIANTS = [
         },
     ),
     Variant(
+        'vg_sigma_avg_beta_sigma',
+        {
+            'poisson_variational_gaussian': True,
+            'poisson_variational_gaussian_sigma_average': True,
+            'poisson_variational_gaussian_sigma_average_output_mode': 'beta_sigma',
+        },
+    ),
+    Variant(
+        'vg_state_avg',
+        {
+            'poisson_variational_gaussian': True,
+            'poisson_variational_gaussian_sigma_average': True,
+            'poisson_variational_gaussian_state_average': True,
+        },
+    ),
+    Variant(
+        'vg_state_avg_beta_sigma',
+        {
+            'poisson_variational_gaussian': True,
+            'poisson_variational_gaussian_sigma_average': True,
+            'poisson_variational_gaussian_state_average': True,
+            'poisson_variational_gaussian_state_average_output_mode': 'beta_sigma',
+        },
+    ),
+    Variant(
         'vg_outer7',
         {
             'poisson_variational_gaussian': True,
@@ -580,6 +605,9 @@ def _evaluateSelected(args: argparse.Namespace, selected: list[RankedRow]) -> No
         'current',
         'vg_sigma_avg',
         'vg_wide_sigma_avg',
+        'vg_sigma_avg_beta_sigma',
+        'vg_state_avg',
+        'vg_state_avg_beta_sigma',
         'vg_outer7',
         'vg_inner3_legacy',
         'vg_final5',

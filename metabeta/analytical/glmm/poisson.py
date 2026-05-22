@@ -217,7 +217,7 @@ def popPoissonRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         ),
         'poisson_variational_gaussian_adaptive_steps': kwargs.pop(
             'poisson_variational_gaussian_adaptive_steps',
-            2,
+            1,
         ),
         'poisson_variational_gaussian_adaptive_target_gain': kwargs.pop(
             'poisson_variational_gaussian_adaptive_target_gain',

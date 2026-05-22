@@ -728,7 +728,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--poisson-variational-gaussian-damping', type=float, default=0.7)
     parser.add_argument('--poisson-variational-gaussian-sigma-blend', type=float, default=0.25)
     parser.add_argument('--poisson-variational-gaussian-prior-weight', type=float, default=4.0)
-    parser.add_argument('--poisson-variational-gaussian-adaptive-steps', type=int, default=2)
+    parser.add_argument('--poisson-variational-gaussian-adaptive-steps', type=int, default=1)
     parser.add_argument('--poisson-variational-gaussian-adaptive-target-gain', type=float, default=1e-4)
     parser.add_argument('--poisson-variational-gaussian-adaptive-min-beta-step', type=float, default=0.01)
     parser.add_argument('--poisson-variational-gaussian-adaptive-min-mean-step', type=float, default=0.01)

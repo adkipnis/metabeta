@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-22 (8192-row current benchmark added)
+Last updated: 2026-05-22 (efficiency profiling pass)
 
 Goal
 ----
@@ -22,7 +22,7 @@ The retained Poisson path is:
 5. Conservative full-candidate diagonal σ grid with scales `(0.5, 0.75, 1.0)`.
 6. Scalar Laplace-weighted σ averaging with local fixed-σ β/u PIRLS refresh.
 7. Variational-Gaussian posterior-mean refinement with
-   `outer=5, inner=5, final=2, damping=0.7`, plus two adaptive continuation steps.
+   `outer=5, inner=5, final=2, damping=0.7`, plus one adaptive continuation step.
 8. VG-centered scalar σ averaging with β-only weighted output.
 
 The final two stages are now the main useful architecture: they move β toward a
@@ -77,8 +77,9 @@ Interpretation:
   the FFX gap, so σ is not the primary next optimization target.
 - BLUP is mixed: current beats INLA slightly on huge sampled valid (`0.6195 vs 0.6223`)
   and several smaller sampled rows, but lags on mixed rows and huge sampled test.
-- CPU runtime is acceptable for this phase. The next patches should prioritize FFX
-  movement; speed work is explicitly deferred until the accuracy ceiling is clearer.
+- Accuracy is now close enough to INLA that speed work is the active priority. The first
+  safe production cut is reducing VG adaptive continuation from two steps to one; broader
+  stage removal is not yet robust enough for the default.
 
 Full 8192-Row Current Benchmark
 -------------------------------
@@ -113,9 +114,60 @@ Notes:
   logging to the benchmark path when the next full pass is needed, or run targeted
   row-index diagnostics only on suspicious cells such as `huge-p-sampled:test` and
   `large-p-mixed:train`.
+- First-1000 INLA-gap diagnostic (`poisson_1k_inla_gap_outliers_20260522.log`) should be
+  the current outlier reference. The largest FFX-gap cells vs INLA are
+  `huge-p-sampled:test` (`+0.0311`), `small-p-mixed:train` (`+0.0241`), and
+  `medium-p-sampled:valid` (`+0.0158`). Across these 3000 rows, FFX row error correlates
+  most with BLUP error (`+0.421`) and σ error (`+0.326`), weakly with marginal/VG
+  correction size, and not meaningfully with `d`/`q`. The worst 50 rows split across
+  `small-p-mixed:train` (20), `medium-p-sampled:valid` (19), and `huge-p-sampled:test`
+  (11), so the remaining INLA gap is not isolated to a single huge sampled failure mode.
+- The follow-up hard-row test ranked by row-level VG gap to INLA on those same three 1k
+  cells (`poisson_1k_inla_gap_hard_vg_state_20260522.log`). On the worst 64 rows,
+  stronger VG budget, wider VG σ averaging, true-σ refresh, β/σ writeback, and VG-state
+  averaging did not materially improve FFX (`current 0.6156`, best tested
+  `vg_wide_sigma_avg 0.6153`; INLA `0.5764`). Do not promote these variants or run
+  broad 1k/8192 benchmarks for them.
 - Stage-level profiling can start after either targeted suspicious-cell row checks or an
   integrated benchmark+row-log pass confirms there is no small set of dominating outlier
   indices.
+
+Efficiency Profiling
+--------------------
+
+First-pass CPU profiling used cumulative methods on `small-p-mixed:train`, first 1000
+rows:
+
+| method | FFX | σ | BLUP | ms/ds |
+| --- | ---: | ---: | ---: | ---: |
+| raw | 0.4806 | 0.7185 | 0.5713 | 7.9 |
+| poisson_eb | 0.4269 | 0.5272 | 0.5713 | 35.4 |
+| poisson_marginal_beta | 0.3250 | 0.5272 | 0.5713 | 31.5 |
+| poisson_laplace_pirls_diag | 0.3054 | 0.4465 | 0.5413 | 32.8 |
+| poisson_laplace_pirls_sigma_grid | 0.2214 | 0.4529 | 0.5245 | 35.1 |
+| poisson_laplace_pirls_sigma_avg | 0.2151 | 0.4287 | 0.5222 | 38.7 |
+| poisson_variational_gaussian | 0.2078 | 0.4260 | 0.5204 | 55.2 |
+| current | 0.2076 | 0.4260 | 0.5204 | 60.4 |
+
+Efficiency ablations:
+
+- Dropping final VG σ averaging (`poisson_variational_gaussian`) saved about `3-15 ms/ds`
+  across first-1000 rows, with FFX changes usually `+0.0001` to `+0.0009`; however
+  `medium-p-mixed:train` worsened by `+0.0037`. Keep it in the accuracy default for now;
+  it remains the cleanest optional speed-mode cut.
+- Reducing VG inner iterations from `5` to `3` regressed small mixed FFX
+  (`0.2076 -> 0.2126`), so it is rejected.
+- Skipping pre-VG PIRLS σ averaging is FFX-tolerable on many rows, but consistently
+  worsens σ/BLUP and regressed huge sampled valid FFX (`0.2646 -> 0.2678`). Keep it.
+- Reducing adaptive VG continuation from `2` to `1` preserved FFX on checked rows
+  (`small-p-mixed 0.2076`, `small-p-valid 0.2326`, `huge-p-test 0.2551`) while removing
+  one global continuation attempt. This is now the default.
+- A tiny `cProfile` smoke run is dominated by import/data-loader overhead, but within the
+  retained Poisson path the visible hot functions are `refinePoissonVariationalGaussian`,
+  `_poissonLaplaceModeDiag`, `_poissonVariationalStepDiag`,
+  `_poissonVariationalCovarianceDiag`, `_poissonVariationalHessianDiag`, and the final
+  VG σ averaging refiner. The next useful profiler should be an in-process warm run with
+  stage timers, not another cold-start `cProfile` command.
 
 Retired Directions
 ------------------
@@ -163,8 +215,9 @@ VG budget and calibration follow-up:
   neutral on small mixed/sampled and medium sampled test.
 - `outer=7` was cheaper in update count but regressed small mixed FFX
   (`0.2076 -> 0.2127`), so it is not a safe blanket default.
-- Adaptive VG continuation with two target-accepted extra steps was flat or better on all
-  small/medium/large 1k rows and improved σ/BLUP on sampled rows. It is now default.
+- Adaptive VG continuation with target-accepted extra steps was flat or better on all
+  small/medium/large 1k rows and improved σ/BLUP on sampled rows. The default is now one
+  adaptive step after the speed pass; two steps remain an opt-in accuracy diagnostic.
 - VG damping `0.7` was flat or better than `0.5` on all small/medium/large 1k rows, with
   the clearest gains on large sampled valid (`0.2565 -> 0.2551`) and medium/large mixed.
   It is now default.
@@ -185,6 +238,11 @@ Current diagnosis:
 - Hard-row improvements from extra VG budget suggest there is still useful signal in
   β/m/V updates. Patches should make that signal row-adaptive or better calibrated instead
   of blindly increasing global iteration count.
+- For the current first-1000 INLA-gap rows specifically, extra VG budget and VG-state
+  averaging are no longer useful levers. Their failure implies the residual gap is less
+  likely to be fixed-point convergence and more likely an approximation/target mismatch
+  relative to INLA posterior means, especially in sparse `q=1` small mixed rows where INLA
+  sometimes estimates β much closer to truth.
 
 Accuracy prototype results:
 
@@ -213,18 +271,21 @@ Next Directions
 
 Primary patch candidates:
 
-0. **Speed profiling and ablation, once outliers are cleared.**
-   The 8192-row current benchmark is accuracy-stable at the cell level but currently runs
-   around `70-227 ms/ds` on CPU. The next production-relevant step is stage-level timing
-   and accuracy-preserving ablations, but only after targeted row-index checks rule out a
-   small number of problematic rows driving the remaining large/huge errors.
+0. **Low-level hotspot profiling and kernel cleanup.**
+   Stage ablations identified VG refinement and VG σ averaging as the main late-stage
+   costs. Next profile tensor hotspots inside `refinePoissonVariationalGaussian` and
+   `refinePoissonVariationalGaussianSigmaAverage`: repeated target/Hessian construction,
+   Cholesky solves, and duplicated μ/offset recomputation are the likely bottlenecks.
+   Optimize only retained default stages.
 
-1. **Hard-row targeted high-budget VG / convergence probe.**
-   Extra VG budget was the only clear hard-row lever, while cheap state averaging and
-   line-search polish were nearly flat. The next informative test is to apply high-budget
-   VG only to rows flagged by poor BLUP/σ fit, large FFX row RMSE proxy, or no adaptive
-   acceptances, then check whether the global FFX gap can move without making every row
-   expensive.
+1. **Compare INLA β deltas against our likelihood geometry on the hardest rows.**
+   The latest hard-row run shows that neither stronger VG convergence nor local
+   hyperparameter/state averaging closes the INLA-gap rows. The next informative
+   diagnostic is not another refinement pass; it is to inspect whether INLA's β direction
+   improves our own VG/Laplace target or only the true-parameter metric. If INLA β worsens
+   our target while improving truth, the objective is biased for these sparse rows and
+   needs a posterior-mean calibration term or prior adjustment rather than more Newton/VG
+   steps.
 
 2. **Better q(u) posterior approximation.**
    The remaining FFX error tracks BLUP/σ quality more than dimension or scalar σ
@@ -242,15 +303,18 @@ Primary patch candidates:
 
 4. **Adaptive VG refinement cleanup.**
    Keep the adaptive continuation diagnostics (`accept_count`, β/m/offset/σ movement) and
-   use them to decide whether future extra work should be row-gated more aggressively. Do
-   not increase global VG iteration count unless a new diagnostic shows a broad unresolved
-   movement pattern.
+   use them to decide whether future extra work should be row-gated more aggressively.
+   Two adaptive steps should remain opt-in unless a new benchmark shows a clear FFX gain
+   that justifies the extra runtime.
 
 Secondary:
 
 - Keep scalar/intercept-slope σ averaging as a low-cost ablation through the existing
   `scale_mode` options, but do not expand grids unless a new VG variant starts trading FFX
   gains against severe σ/BLUP regressions.
+- If runtime must move below `100 ms/ds` before low-level optimization is complete, expose
+  a speed mode that disables final VG σ averaging. Do not make that the accuracy default
+  unless the medium mixed FFX regression is resolved or accepted.
 - Revisit full covariance only if a future diagnostic shows correlation-specific failures;
   current evidence does not justify carrying the full-Σ branch in production code.
 - Do not spend more effort on old EB/grid gates unless they are needed as robust
