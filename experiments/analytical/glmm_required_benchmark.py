@@ -488,6 +488,8 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_eb_steps': args.poisson_eb_steps,
         'poisson_laplace_eb_inner': args.poisson_eb_inner,
         'poisson_laplace_eb_final': args.poisson_eb_final,
+        'poisson_laplace_eb_fast_steps': args.poisson_eb_fast_steps,
+        'poisson_laplace_eb_fast_max_d': args.poisson_eb_fast_max_d,
         'poisson_laplace_eb_lr': args.poisson_eb_lr,
         'poisson_laplace_eb_blup_fallback_beta_jump': args.poisson_eb_blup_fallback_beta_jump,
         'poisson_laplace_eb_sigma_prior_cap': args.poisson_eb_sigma_prior_cap,
@@ -653,6 +655,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--normal-beta-tail-grid-min-cond', type=float, default=1000.0)
     parser.add_argument('--normal-beta-tail-grid-blend', type=float, default=0.25)
     parser.add_argument('--poisson-eb-steps', type=int, default=24)
+    parser.add_argument('--poisson-eb-fast-steps', type=int, default=None)
+    parser.add_argument('--poisson-eb-fast-max-d', type=int, default=None)
     parser.add_argument('--poisson-eb-inner', type=int, default=4)
     parser.add_argument('--poisson-eb-final', type=int, default=6)
     parser.add_argument('--poisson-eb-lr', type=float, default=0.05)

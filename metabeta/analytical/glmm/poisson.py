@@ -89,6 +89,8 @@ def popPoissonRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         'poisson_laplace_eb_steps': _poissonRefinementKwarg(
             kwargs, 'poisson_laplace_eb_steps', 12, poisson_laplace_eb_preset
         ),
+        'poisson_laplace_eb_fast_steps': kwargs.pop('poisson_laplace_eb_fast_steps', None),
+        'poisson_laplace_eb_fast_max_d': kwargs.pop('poisson_laplace_eb_fast_max_d', None),
         'poisson_laplace_eb_inner': _poissonRefinementKwarg(
             kwargs, 'poisson_laplace_eb_inner', 4, poisson_laplace_eb_preset
         ),
@@ -223,7 +225,7 @@ def popPoissonRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         ),
         'poisson_variational_gaussian_sigma_average': kwargs.pop(
             'poisson_variational_gaussian_sigma_average',
-            likelihood_family == 2,
+            False,
         ),
         'poisson_variational_gaussian_sigma_average_scales': kwargs.pop(
             'poisson_variational_gaussian_sigma_average_scales',
@@ -2124,6 +2126,8 @@ def refinePoissonPath(
             refinePoissonLaplaceEb,
             stage_name='eb',
             n_steps=options['poisson_laplace_eb_steps'],
+            n_steps_fast=options['poisson_laplace_eb_fast_steps'],
+            n_steps_fast_max_d=options['poisson_laplace_eb_fast_max_d'],
             n_inner=options['poisson_laplace_eb_inner'],
             n_final=options['poisson_laplace_eb_final'],
             lr=options['poisson_laplace_eb_lr'],
@@ -2416,6 +2420,8 @@ def refinePoissonLaplaceEb(
     mask_d: torch.Tensor | None = None,
     mask_q: torch.Tensor | None = None,
     n_steps: int = 12,
+    n_steps_fast: int | None = None,
+    n_steps_fast_max_d: int | None = None,
     n_inner: int = 4,
     n_final: int = 6,
     lr: float = 0.03,
@@ -2460,9 +2466,31 @@ def refinePoissonLaplaceEb(
     best_loss = float('inf')
     stale_steps = 0
     n_steps_run = 0
+    if n_steps_fast is not None and n_steps_fast_max_d is not None:
+        if mask_d is None:
+            d_count = torch.full((B,), d, device=device, dtype=torch.long)
+        else:
+            d_count = mask_d[:, :d].to(device=device).bool().sum(dim=1)
+        step_budget = torch.full((B,), int(n_steps), device=device, dtype=torch.long)
+        fast_budget = max(1, min(int(n_steps_fast), int(n_steps)))
+        step_budget = torch.where(
+            d_count <= int(n_steps_fast_max_d),
+            torch.full_like(step_budget, fast_budget),
+            step_budget,
+        )
+    else:
+        step_budget = None
 
     with torch.enable_grad():
         for step in range(n_steps):
+            active_step = None
+            if step_budget is not None:
+                active_step = step < step_budget
+                if not bool(active_step.any()):
+                    break
+                beta_prev = beta.detach().clone()
+                log_sigma_prev = log_sigma.detach().clone()
+
             optimizer.zero_grad(set_to_none=True)
             log_sigma_step = log_sigma.clamp(min=min_log_sigma, max=final_log_cap)
             blups, H, active_q_step = _poissonLaplaceModeDiag(
@@ -2496,7 +2524,10 @@ def refinePoissonLaplaceEb(
                 mask_d,
                 sigma_log_jacobian,
             )
-            loss = -target.sum()
+            if active_step is None:
+                loss = -target.sum()
+            else:
+                loss = -(target * active_step.to(dtype)).sum()
             if not torch.isfinite(loss):
                 break
             loss.backward()
@@ -2513,6 +2544,9 @@ def refinePoissonLaplaceEb(
                 beta.clamp_(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
                 log_sigma.clamp_(min_log_sigma, final_log_cap)
                 log_sigma.masked_fill_(~active_q, min_log_sigma)
+                if active_step is not None:
+                    beta.copy_(torch.where(active_step[:, None], beta, beta_prev))
+                    log_sigma.copy_(torch.where(active_step[:, None], log_sigma, log_sigma_prev))
             if step >= max(n_steps // 2, 1) and stale_steps >= 3:
                 break
 
@@ -2675,7 +2709,11 @@ def refinePoissonLaplaceEb(
     out['Psi_lap'] = _psdClampEigenvalues(Psi_lap, _POISSON_PSI_EIG_CAP)
     if return_diagnostics:
         out['laplace_eb_accept'] = accept.to(dtype)
-        out['laplace_eb_steps'] = torch.full((B,), float(n_steps_run), device=device, dtype=dtype)
+        if step_budget is None:
+            eb_steps = torch.full((B,), float(n_steps_run), device=device, dtype=dtype)
+        else:
+            eb_steps = step_budget.clamp(max=n_steps_run).to(dtype)
+        out['laplace_eb_steps'] = eb_steps
         out['laplace_eb_target'] = final_target
         out['laplace_eb_base_target'] = base_target
         out['laplace_eb_blup_fallback'] = blup_fallback.to(dtype)

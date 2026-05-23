@@ -1,7 +1,7 @@
 Poisson GLMM Plan
 =================
 
-Last updated: 2026-05-22 (Poisson cleanup pass)
+Last updated: 2026-05-22 (Poisson efficiency pass)
 
 Goal
 ----
@@ -22,7 +22,10 @@ The retained Poisson path is:
 6. Scalar Laplace-weighted σ averaging with local fixed-σ β/u PIRLS refresh.
 7. Variational-Gaussian posterior-mean refinement with
    `outer=5, inner=5, final=2, damping=0.7`, plus one adaptive continuation step.
-8. VG-centered scalar σ averaging with β-only weighted output and one refresh step.
+
+The final VG-centered σ averaging stage is no longer part of the default. It is retained as
+an explicit ablation because it was FFX-neutral on all first-1000 rows and cost roughly
+`2-7 ms/ds`.
 
 Useful benchmark methods:
 
@@ -33,8 +36,8 @@ Useful benchmark methods:
 - `poisson_laplace_pirls_diag`: EB plus diagonal joint PIRLS.
 - `poisson_laplace_pirls_sigma_grid`: default path through σ grid.
 - `poisson_laplace_pirls_sigma_avg`: default path through pre-VG σ averaging.
-- `poisson_variational_gaussian`: default initializer plus VG refinement.
-- `poisson_variational_gaussian_sigma_avg`: VG plus scalar σ averaging; matches current.
+- `poisson_variational_gaussian`: default initializer plus VG refinement; matches current.
+- `poisson_variational_gaussian_sigma_avg`: VG plus scalar σ averaging ablation.
 
 First-1000 INLA Comparison
 --------------------------
@@ -44,18 +47,18 @@ diagonal R-INLA references.
 
 | Dataset | part | current FFX | INLA FFX | gap | current σ | INLA σ | current BLUP | INLA BLUP | ms/ds |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-p-mixed | train | 0.2077 | 0.1835 | +0.0242 | 0.4268 | 0.3404 | 0.5208 | 0.4936 | 55.6 |
-| small-p-sampled | valid | 0.2330 | 0.2276 | +0.0054 | 0.4783 | 0.4356 | 0.5327 | 0.5309 | 50.6 |
-| small-p-sampled | test | 0.2108 | 0.1997 | +0.0111 | 0.4388 | 0.3966 | 0.5211 | 0.5281 | 51.2 |
-| medium-p-mixed | train | 0.1800 | 0.1675 | +0.0125 | 0.4003 | 0.3214 | 0.5075 | 0.4789 | 93.9 |
-| medium-p-sampled | valid | 0.2305 | 0.2146 | +0.0159 | 0.4556 | 0.4209 | 0.5504 | 0.5618 | 97.6 |
-| medium-p-sampled | test | 0.2384 | 0.2267 | +0.0117 | 0.4354 | 0.3883 | 0.5504 | 0.5849 | 94.7 |
-| large-p-mixed | train | 0.1935 | 0.1778 | +0.0157 | 0.4239 | 0.3076 | 0.5410 | 0.5001 | 106.7 |
-| large-p-sampled | valid | 0.2552 | 0.2467 | +0.0085 | 0.4999 | 0.4232 | 0.6132 | 0.5870 | 108.3 |
-| large-p-sampled | test | 0.2279 | 0.2186 | +0.0093 | 0.4286 | 0.3439 | 0.5491 | 0.5618 | 116.7 |
-| huge-p-mixed | train | 0.2026 | 0.2080 | -0.0054 | 0.4591 | 0.3428 | 0.5717 | 0.5453 | 128.6 |
-| huge-p-sampled | valid | 0.2648 | 0.2582 | +0.0066 | 0.5956 | 0.3944 | 0.6223 | 0.6223 | 165.6 |
-| huge-p-sampled | test | 0.2553 | 0.2238 | +0.0315 | 0.5203 | 0.3560 | 0.6171 | 0.5956 | 152.8 |
+| small-p-mixed | train | 0.2077 | 0.1835 | +0.0242 | 0.4268 | 0.3404 | 0.5208 | 0.4936 | 48.7 |
+| small-p-sampled | valid | 0.2338 | 0.2276 | +0.0062 | 0.4783 | 0.4356 | 0.5327 | 0.5309 | 43.3 |
+| small-p-sampled | test | 0.2112 | 0.1997 | +0.0115 | 0.4388 | 0.3966 | 0.5211 | 0.5281 | 44.7 |
+| medium-p-mixed | train | 0.1807 | 0.1675 | +0.0132 | 0.4003 | 0.3214 | 0.5075 | 0.4789 | 83.7 |
+| medium-p-sampled | valid | 0.2310 | 0.2146 | +0.0164 | 0.4556 | 0.4209 | 0.5504 | 0.5618 | 88.3 |
+| medium-p-sampled | test | 0.2385 | 0.2267 | +0.0118 | 0.4354 | 0.3883 | 0.5504 | 0.5849 | 83.3 |
+| large-p-mixed | train | 0.1936 | 0.1778 | +0.0158 | 0.4239 | 0.3076 | 0.5410 | 0.5001 | 96.1 |
+| large-p-sampled | valid | 0.2553 | 0.2467 | +0.0086 | 0.4999 | 0.4232 | 0.6132 | 0.5870 | 97.3 |
+| large-p-sampled | test | 0.2280 | 0.2186 | +0.0094 | 0.4286 | 0.3439 | 0.5491 | 0.5618 | 107.4 |
+| huge-p-mixed | train | 0.2028 | 0.2080 | -0.0052 | 0.4591 | 0.3428 | 0.5717 | 0.5453 | 122.5 |
+| huge-p-sampled | valid | 0.2650 | 0.2582 | +0.0068 | 0.5956 | 0.3944 | 0.6223 | 0.6223 | 156.0 |
+| huge-p-sampled | test | 0.2555 | 0.2238 | +0.0317 | 0.5203 | 0.3560 | 0.6171 | 0.5956 | 144.5 |
 
 Interpretation:
 
@@ -71,7 +74,9 @@ Full 8192-Row Current Benchmark
 -------------------------------
 
 Full available Poisson rows per cell (`8192` indices), mixed train over two training
-epochs and sampled valid/test. These are current-method results only.
+epochs and sampled valid/test. These were run before dropping final VG σ averaging from
+the default; FFX/sigma/BLUP should be effectively unchanged, with expected runtime lower
+by about `2-7 ms/ds`.
 
 | Dataset | part | N | FFX | σ | BLUP | ms/ds |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
@@ -101,12 +106,15 @@ Warm stage timings show the retained hot stages are EB and VG:
 | σ grid | ~1.6 |
 | pre-VG σ averaging | ~2.2 |
 | VG | ~14 |
-| final VG σ averaging | ~2.7 |
+| final VG σ averaging | retired from default |
 
 Accepted speed cleanups:
 
 - Final VG σ averaging refresh steps reduced from `2` to `1`. This saved roughly
   `7%` overall on the first-1000 table while preserving FFX.
+- Final VG σ averaging was then removed from the default entirely. Across all 12
+  first-1000 rows, dropping it changed FFX by at most about `0.0008` and saved roughly
+  `2-7 ms/ds`.
 - VG adaptive continuation reduced to one target-accepted step.
 - Duplicate all-ones σ candidates are no longer evaluated.
 - VG offset computation now reuses already masked `Z` inside retained VG steps.
@@ -115,6 +123,11 @@ Optional speed mode:
 
 - `--poisson-eb-steps 8` cuts roughly `10-35 ms/ds` and preserves FFX on tested first-1000
   rows, but materially regresses σ/BLUP on huge sampled rows. Keep it opt-in, not default.
+- `--poisson-eb-fast-steps 8 --poisson-eb-fast-max-d 8` applies the same shortcut only to
+  small/medium rows (`d <= 8`) and leaves large/huge rows on the full EB budget. This is a
+  better latency-mode candidate than globally lowering EB steps.
+- Reduced VG budget (`outer=4, inner=4, final=1`) is not a default candidate: it is nearly
+  neutral on small/medium but materially regresses huge sampled rows.
 
 Retired Directions
 ------------------
@@ -127,8 +140,9 @@ These are summarized here only to avoid repeating them:
 - Wider scalar σ grids, true-σ and INLA-σ plug-ins, and β-only AGQ/grid variants did not
   close the FFX gap.
 - Local β skew correction worsened FFX on representative rows.
-- Multi-state VG averaging and VG line-search polish were FFX-neutral and have been
-  removed from the live Poisson path and benchmark method surface.
+- Multi-state VG averaging, final VG σ averaging, and VG line-search polish were
+  FFX-neutral or too fragile for default use. Final VG σ averaging remains as an explicit
+  benchmark ablation; the other two were removed from the live method surface.
 - Further gate tuning around the old EB/grid path has low expected value.
 
 Next Directions
@@ -141,8 +155,10 @@ Next Directions
    diagnostic branches.
 
 2. **Explicit latency/accuracy modes.**
-   Keep the current default as the accuracy mode. Add a documented FFX-first latency mode
-   only if downstream evaluation tolerates the σ/BLUP regression from fewer EB steps.
+   Keep the current default as the accuracy mode. The best candidate latency mode is
+   d-gated EB (`fast_steps=8, fast_max_d=8`), which preserves large/huge behavior while
+   speeding up small/medium rows. Do not globally reduce EB steps unless downstream
+   evaluation tolerates σ/BLUP regression.
 
 3. **Architecture only if FFX becomes limiting again.**
    The remaining INLA FFX gap appears more like posterior-mean/target mismatch than σ
