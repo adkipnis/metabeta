@@ -192,6 +192,129 @@ def _bernoulliLaplaceEbGate(
     return gate & has_rfx
 
 
+def _popNormalRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
+    """Pop Normal-path refinement options from ``kwargs``."""
+    return {
+        'normal_laplace_eb': kwargs.pop('normal_laplace_eb', likelihood_family == 0),
+        'normal_laplace_eb_steps': kwargs.pop('normal_laplace_eb_steps', 3),
+        'normal_laplace_eb_moment_blend': kwargs.pop('normal_laplace_eb_moment_blend', 1.0),
+        'normal_laplace_eb_prior_weight': kwargs.pop('normal_laplace_eb_prior_weight', 4.0),
+        'normal_laplace_eb_recompute_blup': kwargs.pop('normal_laplace_eb_recompute_blup', True),
+        'normal_laplace_eb_sigma_grid_refine': kwargs.pop(
+            'normal_laplace_eb_sigma_grid_refine', likelihood_family == 0
+        ),
+        'normal_laplace_eb_sigma_grid_scales': kwargs.pop(
+            'normal_laplace_eb_sigma_grid_scales', (0.75, 1.0, 1.3333333)
+        ),
+        'normal_map_beta_prior_cap': kwargs.pop('normal_map_beta_prior_cap', 4.0),
+        'normal_beta_sigma_grid': kwargs.pop('normal_beta_sigma_grid', likelihood_family == 0),
+        'normal_beta_sigma_grid_scales': kwargs.pop(
+            'normal_beta_sigma_grid_scales', (0.75, 1.0, 1.3333333)
+        ),
+        'normal_beta_sigma_grid_min_d': kwargs.pop('normal_beta_sigma_grid_min_d', 5),
+        'normal_beta_tail_grid': kwargs.pop('normal_beta_tail_grid', likelihood_family == 0),
+        'normal_beta_tail_grid_scales': kwargs.pop(
+            'normal_beta_tail_grid_scales', (0.75, 1.0, 1.3333333)
+        ),
+        'normal_beta_tail_grid_min_d': kwargs.pop('normal_beta_tail_grid_min_d', 9),
+        'normal_beta_tail_grid_min_cond': kwargs.pop('normal_beta_tail_grid_min_cond', 1000.0),
+        'normal_beta_tail_grid_blend': kwargs.pop('normal_beta_tail_grid_blend', 0.25),
+        'beta_alpha_low': kwargs.pop('beta_alpha_low', 0.65),
+        'beta_alpha_high': kwargs.pop('beta_alpha_high', 0.75),
+    }
+
+
+def _popBernoulliRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
+    """Pop Bernoulli-path refinement options from ``kwargs``."""
+    bernoulli_laplace_eb_default = 'bernoulli_eb' if likelihood_family == 1 else False
+    bernoulli_laplace_eb = kwargs.pop('bernoulli_laplace_eb', bernoulli_laplace_eb_default)
+    mode = _bernoulliLaplaceEbMode(bernoulli_laplace_eb)
+    preset = _BERNOULLI_LAPLACE_EB_DEFAULTS if mode == 'cal' else {}
+    if mode == 'cal':
+        mode = 'all'
+    return {
+        'bernoulli_laplace_eb_mode': mode,
+        'bernoulli_laplace_eb_diagnostics': kwargs.pop('bernoulli_laplace_eb_diagnostics', False),
+        'bernoulli_laplace_eb_blup_fallback_beta_jump': kwargs.pop(
+            'bernoulli_laplace_eb_blup_fallback_beta_jump', 1.0
+        ),
+        'bernoulli_laplace_eb_steps': _bernoulliLaplaceEbKwarg(
+            kwargs, 'bernoulli_laplace_eb_steps', 12, preset
+        ),
+        'bernoulli_laplace_eb_inner': _bernoulliLaplaceEbKwarg(
+            kwargs, 'bernoulli_laplace_eb_inner', 4, preset
+        ),
+        'bernoulli_laplace_eb_final': _bernoulliLaplaceEbKwarg(
+            kwargs, 'bernoulli_laplace_eb_final', 6, preset
+        ),
+        'bernoulli_laplace_eb_lr': _bernoulliLaplaceEbKwarg(
+            kwargs, 'bernoulli_laplace_eb_lr', 0.05, preset
+        ),
+        'bernoulli_laplace_eb_beta_output_cap': _bernoulliLaplaceEbKwarg(
+            kwargs, 'bernoulli_laplace_eb_beta_output_cap', None, preset
+        ),
+        'bernoulli_laplace_eb_beta_output_cap_trigger': _bernoulliLaplaceEbKwarg(
+            kwargs, 'bernoulli_laplace_eb_beta_output_cap_trigger', None, preset
+        ),
+        'bernoulli_laplace_eb_sigma_prior_cap': _bernoulliLaplaceEbKwarg(
+            kwargs, 'bernoulli_laplace_eb_sigma_prior_cap', None, preset
+        ),
+        'bernoulli_laplace_eb_sigma_prior_cap_min_d': _bernoulliLaplaceEbKwarg(
+            kwargs, 'bernoulli_laplace_eb_sigma_prior_cap_min_d', None, preset
+        ),
+        'bernoulli_laplace_eb_recompute_blup_after_calibration': kwargs.pop(
+            'bernoulli_laplace_eb_recompute_blup_after_calibration', True
+        ),
+        'bernoulli_laplace_eb_gate_min_d': kwargs.pop('bernoulli_laplace_eb_gate_min_d', 4),
+        'bernoulli_laplace_eb_gate_min_sigma': kwargs.pop(
+            'bernoulli_laplace_eb_gate_min_sigma', 0.75
+        ),
+        'bernoulli_laplace_eb_gate_eta_abs': kwargs.pop('bernoulli_laplace_eb_gate_eta_abs', 8.0),
+    }
+
+
+def _callBernoulliLaplaceEb(
+    stats: dict[str, torch.Tensor],
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    map_priors: dict,
+    mask_d: torch.Tensor | None,
+    mask_q: torch.Tensor | None,
+    beb: dict,
+) -> dict[str, torch.Tensor]:
+    return refineBernoulliLaplaceEb(
+        stats,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        nu_ffx=map_priors['nu_ffx'],
+        tau_ffx=map_priors['tau_ffx'],
+        family_ffx=map_priors['family_ffx'],
+        tau_rfx=map_priors['tau_rfx'],
+        family_sigma_rfx=map_priors['family_sigma_rfx'],
+        mask_d=mask_d,
+        mask_q=mask_q,
+        n_steps=beb['bernoulli_laplace_eb_steps'],
+        n_inner=beb['bernoulli_laplace_eb_inner'],
+        n_final=beb['bernoulli_laplace_eb_final'],
+        lr=beb['bernoulli_laplace_eb_lr'],
+        blup_fallback_beta_jump=beb['bernoulli_laplace_eb_blup_fallback_beta_jump'],
+        beta_output_cap=beb['bernoulli_laplace_eb_beta_output_cap'],
+        beta_output_cap_trigger=beb['bernoulli_laplace_eb_beta_output_cap_trigger'],
+        sigma_prior_cap=beb['bernoulli_laplace_eb_sigma_prior_cap'],
+        sigma_prior_cap_min_d=beb['bernoulli_laplace_eb_sigma_prior_cap_min_d'],
+        recompute_blup_after_calibration=beb[
+            'bernoulli_laplace_eb_recompute_blup_after_calibration'
+        ],
+        return_diagnostics=beb['bernoulli_laplace_eb_diagnostics'],
+    )
+
+
 def glmm(
     Xm: torch.Tensor,
     ym: torch.Tensor,
@@ -215,80 +338,8 @@ def glmm(
     map_refine = kwargs.pop('map_refine', True)
     map_steps = kwargs.pop('map_steps', 20)
     map_recompute_blup = kwargs.pop('map_recompute_blup', True)
-    normal_laplace_eb = kwargs.pop('normal_laplace_eb', likelihood_family == 0)
-    normal_laplace_eb_steps = kwargs.pop('normal_laplace_eb_steps', 3)
-    normal_laplace_eb_moment_blend = kwargs.pop('normal_laplace_eb_moment_blend', 1.0)
-    normal_laplace_eb_prior_weight = kwargs.pop('normal_laplace_eb_prior_weight', 4.0)
-    normal_laplace_eb_recompute_blup = kwargs.pop('normal_laplace_eb_recompute_blup', True)
-    normal_laplace_eb_sigma_grid_refine = kwargs.pop(
-        'normal_laplace_eb_sigma_grid_refine', likelihood_family == 0
-    )
-    normal_laplace_eb_sigma_grid_scales = kwargs.pop(
-        'normal_laplace_eb_sigma_grid_scales', (0.75, 1.0, 1.3333333)
-    )
-    normal_map_beta_prior_cap = kwargs.pop('normal_map_beta_prior_cap', 4.0)
-    normal_beta_sigma_grid = kwargs.pop('normal_beta_sigma_grid', likelihood_family == 0)
-    normal_beta_sigma_grid_scales = kwargs.pop(
-        'normal_beta_sigma_grid_scales', (0.75, 1.0, 1.3333333)
-    )
-    normal_beta_sigma_grid_min_d = kwargs.pop('normal_beta_sigma_grid_min_d', 5)
-    normal_beta_tail_grid = kwargs.pop('normal_beta_tail_grid', likelihood_family == 0)
-    normal_beta_tail_grid_scales = kwargs.pop(
-        'normal_beta_tail_grid_scales', (0.75, 1.0, 1.3333333)
-    )
-    normal_beta_tail_grid_min_d = kwargs.pop('normal_beta_tail_grid_min_d', 9)
-    normal_beta_tail_grid_min_cond = kwargs.pop('normal_beta_tail_grid_min_cond', 1000.0)
-    normal_beta_tail_grid_blend = kwargs.pop('normal_beta_tail_grid_blend', 0.25)
-    beta_alpha_low = kwargs.pop('beta_alpha_low', 0.65)
-    beta_alpha_high = kwargs.pop('beta_alpha_high', 0.75)
-    bernoulli_laplace_eb_default = 'bernoulli_eb' if likelihood_family == 1 else False
-    bernoulli_laplace_eb = kwargs.pop('bernoulli_laplace_eb', bernoulli_laplace_eb_default)
-    bernoulli_laplace_eb_mode = _bernoulliLaplaceEbMode(bernoulli_laplace_eb)
-    bernoulli_laplace_eb_preset = (
-        _BERNOULLI_LAPLACE_EB_DEFAULTS if bernoulli_laplace_eb_mode == 'cal' else {}
-    )
-    if bernoulli_laplace_eb_mode == 'cal':
-        bernoulli_laplace_eb_mode = 'all'
-    bernoulli_laplace_eb_diagnostics = kwargs.pop('bernoulli_laplace_eb_diagnostics', False)
-    bernoulli_laplace_eb_blup_fallback_beta_jump = kwargs.pop(
-        'bernoulli_laplace_eb_blup_fallback_beta_jump', 1.0
-    )
-    bernoulli_laplace_eb_steps = _bernoulliLaplaceEbKwarg(
-        kwargs, 'bernoulli_laplace_eb_steps', 12, bernoulli_laplace_eb_preset
-    )
-    bernoulli_laplace_eb_inner = _bernoulliLaplaceEbKwarg(
-        kwargs, 'bernoulli_laplace_eb_inner', 4, bernoulli_laplace_eb_preset
-    )
-    bernoulli_laplace_eb_final = _bernoulliLaplaceEbKwarg(
-        kwargs, 'bernoulli_laplace_eb_final', 6, bernoulli_laplace_eb_preset
-    )
-    bernoulli_laplace_eb_lr = _bernoulliLaplaceEbKwarg(
-        kwargs, 'bernoulli_laplace_eb_lr', 0.05, bernoulli_laplace_eb_preset
-    )
-    bernoulli_laplace_eb_beta_output_cap = _bernoulliLaplaceEbKwarg(
-        kwargs, 'bernoulli_laplace_eb_beta_output_cap', None, bernoulli_laplace_eb_preset
-    )
-    bernoulli_laplace_eb_beta_output_cap_trigger = _bernoulliLaplaceEbKwarg(
-        kwargs,
-        'bernoulli_laplace_eb_beta_output_cap_trigger',
-        None,
-        bernoulli_laplace_eb_preset,
-    )
-    bernoulli_laplace_eb_sigma_prior_cap = _bernoulliLaplaceEbKwarg(
-        kwargs, 'bernoulli_laplace_eb_sigma_prior_cap', None, bernoulli_laplace_eb_preset
-    )
-    bernoulli_laplace_eb_sigma_prior_cap_min_d = _bernoulliLaplaceEbKwarg(
-        kwargs,
-        'bernoulli_laplace_eb_sigma_prior_cap_min_d',
-        None,
-        bernoulli_laplace_eb_preset,
-    )
-    bernoulli_laplace_eb_recompute_blup_after_calibration = kwargs.pop(
-        'bernoulli_laplace_eb_recompute_blup_after_calibration', True
-    )
-    bernoulli_laplace_eb_gate_min_d = kwargs.pop('bernoulli_laplace_eb_gate_min_d', 4)
-    bernoulli_laplace_eb_gate_min_sigma = kwargs.pop('bernoulli_laplace_eb_gate_min_sigma', 0.75)
-    bernoulli_laplace_eb_gate_eta_abs = kwargs.pop('bernoulli_laplace_eb_gate_eta_abs', 8.0)
+    normal_opts = _popNormalRefinementOptions(kwargs, likelihood_family)
+    beb = _popBernoulliRefinementOptions(kwargs, likelihood_family)
     poisson_refinement_options = popPoissonRefinementOptions(kwargs, likelihood_family)
     mask_d = kwargs.pop('mask_d', None)
     uncorr = (eta_rfx == 0) if eta_rfx is not None else None  # (B,) bool or None
@@ -303,8 +354,8 @@ def glmm(
             n_total,
             uncorr=uncorr,
             mask_q=mask_q,
-            beta_alpha_low=beta_alpha_low,
-            beta_alpha_high=beta_alpha_high,
+            beta_alpha_low=normal_opts['beta_alpha_low'],
+            beta_alpha_high=normal_opts['beta_alpha_high'],
         )
         if map_refine and Zm.shape[-1] > 0 and all(v is not None for v in map_priors.values()):
             stats = refineNormalMapSrfx(
@@ -327,16 +378,16 @@ def glmm(
                 mask_q=mask_q,
                 n_steps=map_steps,
                 recompute_blup=map_recompute_blup,
-                beta_alpha_low=beta_alpha_low,
-                beta_alpha_high=beta_alpha_high,
-                beta_prior_cap=normal_map_beta_prior_cap,
-                beta_sigma_grid=normal_beta_sigma_grid,
-                beta_sigma_grid_scales=normal_beta_sigma_grid_scales,
-                beta_sigma_grid_min_d=normal_beta_sigma_grid_min_d,
+                beta_alpha_low=normal_opts['beta_alpha_low'],
+                beta_alpha_high=normal_opts['beta_alpha_high'],
+                beta_prior_cap=normal_opts['normal_map_beta_prior_cap'],
+                beta_sigma_grid=normal_opts['normal_beta_sigma_grid'],
+                beta_sigma_grid_scales=normal_opts['normal_beta_sigma_grid_scales'],
+                beta_sigma_grid_min_d=normal_opts['normal_beta_sigma_grid_min_d'],
             )
         if (
             map_refine
-            and normal_laplace_eb
+            and normal_opts['normal_laplace_eb']
             and Zm.shape[-1] > 0
             and all(v is not None for v in map_priors.values())
         ):
@@ -357,19 +408,19 @@ def glmm(
                 map_priors['family_sigma_eps'],
                 mask_d=mask_d,
                 mask_q=mask_q,
-                n_steps=normal_laplace_eb_steps,
-                moment_blend=normal_laplace_eb_moment_blend,
-                prior_weight=normal_laplace_eb_prior_weight,
-                recompute_blup=normal_laplace_eb_recompute_blup,
-                beta_alpha_low=beta_alpha_low,
-                beta_alpha_high=beta_alpha_high,
-                sigma_grid_refine=normal_laplace_eb_sigma_grid_refine,
-                sigma_grid_scales=normal_laplace_eb_sigma_grid_scales,
-                beta_tail_grid=normal_beta_tail_grid,
-                beta_tail_grid_scales=normal_beta_tail_grid_scales,
-                beta_tail_grid_min_d=normal_beta_tail_grid_min_d,
-                beta_tail_grid_min_cond=normal_beta_tail_grid_min_cond,
-                beta_tail_grid_blend=normal_beta_tail_grid_blend,
+                n_steps=normal_opts['normal_laplace_eb_steps'],
+                moment_blend=normal_opts['normal_laplace_eb_moment_blend'],
+                prior_weight=normal_opts['normal_laplace_eb_prior_weight'],
+                recompute_blup=normal_opts['normal_laplace_eb_recompute_blup'],
+                beta_alpha_low=normal_opts['beta_alpha_low'],
+                beta_alpha_high=normal_opts['beta_alpha_high'],
+                sigma_grid_refine=normal_opts['normal_laplace_eb_sigma_grid_refine'],
+                sigma_grid_scales=normal_opts['normal_laplace_eb_sigma_grid_scales'],
+                beta_tail_grid=normal_opts['normal_beta_tail_grid'],
+                beta_tail_grid_scales=normal_opts['normal_beta_tail_grid_scales'],
+                beta_tail_grid_min_d=normal_opts['normal_beta_tail_grid_min_d'],
+                beta_tail_grid_min_cond=normal_opts['normal_beta_tail_grid_min_cond'],
+                beta_tail_grid_blend=normal_opts['normal_beta_tail_grid_blend'],
             )
     elif likelihood_family == 1:
         stats = lmmBernoulli(
@@ -409,36 +460,11 @@ def glmm(
                 tau_ffx=map_priors['tau_ffx'],
                 family_ffx=map_priors['family_ffx'],
             )
-        if map_refine and bernoulli_laplace_eb_mode != 'off' and Zm.shape[-1] > 0:
-            if bernoulli_laplace_eb_mode == 'all':
+        if map_refine and beb['bernoulli_laplace_eb_mode'] != 'off' and Zm.shape[-1] > 0:
+            if beb['bernoulli_laplace_eb_mode'] == 'all':
                 gate = torch.ones(Xm.shape[0], device=Xm.device, dtype=torch.bool)
-                stats = refineBernoulliLaplaceEb(
-                    stats,
-                    Xm,
-                    ym,
-                    Zm,
-                    mask_n,
-                    mask_m,
-                    nu_ffx=map_priors['nu_ffx'],
-                    tau_ffx=map_priors['tau_ffx'],
-                    family_ffx=map_priors['family_ffx'],
-                    tau_rfx=map_priors['tau_rfx'],
-                    family_sigma_rfx=map_priors['family_sigma_rfx'],
-                    mask_d=mask_d,
-                    mask_q=mask_q,
-                    n_steps=bernoulli_laplace_eb_steps,
-                    n_inner=bernoulli_laplace_eb_inner,
-                    n_final=bernoulli_laplace_eb_final,
-                    lr=bernoulli_laplace_eb_lr,
-                    blup_fallback_beta_jump=bernoulli_laplace_eb_blup_fallback_beta_jump,
-                    beta_output_cap=bernoulli_laplace_eb_beta_output_cap,
-                    beta_output_cap_trigger=bernoulli_laplace_eb_beta_output_cap_trigger,
-                    sigma_prior_cap=bernoulli_laplace_eb_sigma_prior_cap,
-                    sigma_prior_cap_min_d=bernoulli_laplace_eb_sigma_prior_cap_min_d,
-                    recompute_blup_after_calibration=(
-                        bernoulli_laplace_eb_recompute_blup_after_calibration
-                    ),
-                    return_diagnostics=bernoulli_laplace_eb_diagnostics,
+                stats = _callBernoulliLaplaceEb(
+                    stats, Xm, ym, Zm, mask_n, mask_m, map_priors, mask_d, mask_q, beb
                 )
             else:
                 gate = _bernoulliLaplaceEbGate(
@@ -448,41 +474,26 @@ def glmm(
                     mask_n,
                     mask_q,
                     mask_d,
-                    bernoulli_laplace_eb_gate_min_d,
-                    bernoulli_laplace_eb_gate_min_sigma,
-                    bernoulli_laplace_eb_gate_eta_abs,
+                    beb['bernoulli_laplace_eb_gate_min_d'],
+                    beb['bernoulli_laplace_eb_gate_min_sigma'],
+                    beb['bernoulli_laplace_eb_gate_eta_abs'],
                 )
                 if gate.any():
-                    refined = refineBernoulliLaplaceEb(
+                    sliced_priors = {k: _sliceBatch(v, gate) for k, v in map_priors.items()}
+                    refined = _callBernoulliLaplaceEb(
                         _sliceStatsBatch(stats, gate, Xm.shape[0]),
                         Xm[gate],
                         ym[gate],
                         Zm[gate],
                         mask_n[gate],
                         mask_m[gate],
-                        nu_ffx=_sliceBatch(map_priors['nu_ffx'], gate),
-                        tau_ffx=_sliceBatch(map_priors['tau_ffx'], gate),
-                        family_ffx=_sliceBatch(map_priors['family_ffx'], gate),
-                        tau_rfx=_sliceBatch(map_priors['tau_rfx'], gate),
-                        family_sigma_rfx=_sliceBatch(map_priors['family_sigma_rfx'], gate),
-                        mask_d=_sliceBatch(mask_d, gate),
-                        mask_q=_sliceBatch(mask_q, gate),
-                        n_steps=bernoulli_laplace_eb_steps,
-                        n_inner=bernoulli_laplace_eb_inner,
-                        n_final=bernoulli_laplace_eb_final,
-                        lr=bernoulli_laplace_eb_lr,
-                        blup_fallback_beta_jump=bernoulli_laplace_eb_blup_fallback_beta_jump,
-                        beta_output_cap=bernoulli_laplace_eb_beta_output_cap,
-                        beta_output_cap_trigger=bernoulli_laplace_eb_beta_output_cap_trigger,
-                        sigma_prior_cap=bernoulli_laplace_eb_sigma_prior_cap,
-                        sigma_prior_cap_min_d=bernoulli_laplace_eb_sigma_prior_cap_min_d,
-                        recompute_blup_after_calibration=(
-                            bernoulli_laplace_eb_recompute_blup_after_calibration
-                        ),
-                        return_diagnostics=bernoulli_laplace_eb_diagnostics,
+                        sliced_priors,
+                        _sliceBatch(mask_d, gate),
+                        _sliceBatch(mask_q, gate),
+                        beb,
                     )
                     stats = _mergeStatsBatch(stats, refined, gate, Xm.shape[0])
-            if bernoulli_laplace_eb_diagnostics:
+            if beb['bernoulli_laplace_eb_diagnostics']:
                 _addLaplaceEbSkippedDiagnostics(stats, gate, Xm.dtype)
     elif likelihood_family == 2:
         stats = lmmPoisson(Xm, ym, Zm, mask_n, mask_m, ns, n_total, uncorr=uncorr, **kwargs)

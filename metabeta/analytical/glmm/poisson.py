@@ -66,6 +66,17 @@ def _poissonRefinementKwarg(
     return kwargs.pop(key, preset.get(key, default))
 
 
+def _activeMask(
+    mask: torch.Tensor | None,
+    size: int,
+    B: int,
+    device: torch.device,
+) -> torch.Tensor:
+    if mask is not None:
+        return mask[:, :size].to(device=device).bool()
+    return torch.ones(B, size, device=device, dtype=torch.bool)
+
+
 def popPoissonRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
     """Pop Poisson refinement options from ``kwargs`` for the public GLMM dispatcher."""
     poisson_laplace_eb_default = 'poisson_eb' if likelihood_family == 2 else False
@@ -268,11 +279,7 @@ def _poissonLaplaceModeDiag(
     """Approximate b_g MAP modes and Hessians for diagonal-Ψ Poisson GLMMs."""
     B, m, _, q = Zm.shape
     device, dtype = Zm.device, Zm.dtype
-    active_q = (
-        mask_q[:, :q].to(device=device).bool()
-        if mask_q is not None
-        else torch.ones(B, q, device=device, dtype=torch.bool)
-    )
+    active_q = _activeMask(mask_q, q, B, device)
     active = mask_m.bool()
     Z_eff = Zm * active_q[:, None, None, :].to(dtype)
     prec = torch.where(active_q, torch.exp(-2.0 * log_sigma_rfx).clamp(max=1e8), 1.0)
@@ -946,16 +953,8 @@ def refinePoissonLaplacePirlsDiag(
 
     B = Xm.shape[0]
     device, dtype = Xm.device, Xm.dtype
-    active_d = (
-        mask_d[:, :d].to(device=device).bool()
-        if mask_d is not None
-        else torch.ones(B, d, device=device, dtype=torch.bool)
-    )
-    active_q = (
-        mask_q[:, :q].to(device=device).bool()
-        if mask_q is not None
-        else torch.ones(B, q, device=device, dtype=torch.bool)
-    )
+    active_d = _activeMask(mask_d, d, B, device)
+    active_q = _activeMask(mask_q, q, B, device)
     active_q_f = active_q.to(dtype)
     active_m = mask_m.bool()
     m_active = mask_m.to(dtype).sum(dim=1, keepdim=True).clamp(min=1.0)
@@ -1167,16 +1166,8 @@ def refinePoissonLaplacePirlsSigmaGrid(
 
     B = Xm.shape[0]
     device, dtype = Xm.device, Xm.dtype
-    active_d = (
-        mask_d[:, :d].to(device=device).bool()
-        if mask_d is not None
-        else torch.ones(B, d, device=device, dtype=torch.bool)
-    )
-    active_q = (
-        mask_q[:, :q].to(device=device).bool()
-        if mask_q is not None
-        else torch.ones(B, q, device=device, dtype=torch.bool)
-    )
+    active_d = _activeMask(mask_d, d, B, device)
+    active_q = _activeMask(mask_q, q, B, device)
     d_count = active_d.long().sum(dim=1)
     q_count = active_q.long().sum(dim=1)
     gate = (d_count >= int(min_d)) & (q_count >= 1)
@@ -1358,16 +1349,8 @@ def refinePoissonLaplacePirlsSigmaAverage(
         raise ValueError("output_mode must be 'beta', 'beta_best', or 'beta_sigma'")
     B = Xm.shape[0]
     device, dtype = Xm.device, Xm.dtype
-    active_d = (
-        mask_d[:, :d].to(device=device).bool()
-        if mask_d is not None
-        else torch.ones(B, d, device=device, dtype=torch.bool)
-    )
-    active_q = (
-        mask_q[:, :q].to(device=device).bool()
-        if mask_q is not None
-        else torch.ones(B, q, device=device, dtype=torch.bool)
-    )
+    active_d = _activeMask(mask_d, d, B, device)
+    active_q = _activeMask(mask_q, q, B, device)
     d_count = active_d.long().sum(dim=1)
     q_count = active_q.long().sum(dim=1)
     gate = (d_count >= int(min_d)) & (q_count >= 1)
@@ -1595,16 +1578,8 @@ def refinePoissonVariationalGaussian(
 
     B = Xm.shape[0]
     device, dtype = Xm.device, Xm.dtype
-    active_d = (
-        mask_d[:, :d].to(device=device).bool()
-        if mask_d is not None
-        else torch.ones(B, d, device=device, dtype=torch.bool)
-    )
-    active_q = (
-        mask_q[:, :q].to(device=device).bool()
-        if mask_q is not None
-        else torch.ones(B, q, device=device, dtype=torch.bool)
-    )
+    active_d = _activeMask(mask_d, d, B, device)
+    active_q = _activeMask(mask_q, q, B, device)
     active_q_f = active_q.to(dtype)
 
     beta_base = stats['beta_est'][:, :d].detach().clamp(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
@@ -1937,16 +1912,8 @@ def refinePoissonVariationalGaussianSigmaAverage(
 
     B = Xm.shape[0]
     device, dtype = Xm.device, Xm.dtype
-    active_d = (
-        mask_d[:, :d].to(device=device).bool()
-        if mask_d is not None
-        else torch.ones(B, d, device=device, dtype=torch.bool)
-    )
-    active_q = (
-        mask_q[:, :q].to(device=device).bool()
-        if mask_q is not None
-        else torch.ones(B, q, device=device, dtype=torch.bool)
-    )
+    active_d = _activeMask(mask_d, d, B, device)
+    active_q = _activeMask(mask_q, q, B, device)
     active_q_f = active_q.to(dtype)
 
     beta_base = stats['beta_est'][:, :d].detach().clamp(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
@@ -2125,10 +2092,7 @@ def refinePoissonVariationalGaussianSigmaAverage(
     if output_mode != 'beta':
         out['sigma_rfx_est'] = sigma_out
         out['blup_est'] = means_out
-        if 'blup_var' in stats:
-            out['blup_var'] = blup_var
-        else:
-            out['blup_var'] = blup_var
+        out['blup_var'] = blup_var
         out['Psi_lap'] = _psdClampEigenvalues(Psi_lap, _POISSON_PSI_EIG_CAP)
     if return_diagnostics:
         out['poisson_vg_sigma_average_neff'] = neff
@@ -2329,10 +2293,7 @@ def _poissonMarginalMeanOffset(
 ) -> torch.Tensor:
     """Approximate log-link marginalization offset 0.5 * diag(Z Ψ Z')."""
     B, _, _, q = Zm.shape
-    if mask_q is None:
-        active_q = torch.ones(B, q, device=Zm.device, dtype=torch.bool)
-    else:
-        active_q = mask_q[:, :q].to(device=Zm.device).bool()
+    active_q = _activeMask(mask_q, q, B, Zm.device)
     sigma2 = sigma_rfx[:, :q].to(device=Zm.device, dtype=Zm.dtype).square()
     sigma2 = sigma2 * active_q.to(Zm.dtype)
     return 0.5 * torch.einsum('bmnq,bq->bmn', Zm.square(), sigma2)
@@ -2404,14 +2365,8 @@ def refinePoissonMarginalMeanBeta(
 
     B = Xm.shape[0]
     device, dtype = Xm.device, Xm.dtype
-    if mask_d is None:
-        active_d = torch.ones(B, d, device=device, dtype=torch.bool)
-    else:
-        active_d = mask_d[:, :d].to(device=device).bool()
-    if mask_q is None:
-        active_q = torch.ones(B, q, device=device, dtype=torch.bool)
-    else:
-        active_q = mask_q[:, :q].to(device=device).bool()
+    active_d = _activeMask(mask_d, d, B, device)
+    active_q = _activeMask(mask_q, q, B, device)
     d_count = active_d.to(dtype).sum(dim=1)
     q_count = active_q.long().sum(dim=1)
     gate = (d_count >= float(min_d)) & (q_count >= 1)
@@ -2542,11 +2497,7 @@ def refinePoissonLaplaceEb(
 
     B = Xm.shape[0]
     device, dtype = Xm.device, Xm.dtype
-    active_q = (
-        mask_q[:, :q].to(device=device).bool()
-        if mask_q is not None
-        else torch.ones(B, q, device=device, dtype=torch.bool)
-    )
+    active_q = _activeMask(mask_q, q, B, device)
 
     beta = stats['beta_est'][:, :d].detach().clone()
     beta = beta.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
