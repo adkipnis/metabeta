@@ -63,7 +63,7 @@ JOB9=$(sbatch --parsable --array=0-1 --dependency=afterok:"$JOB7":"$JOB8" \
 echo "Submitted precompute sampled valid+test (after $JOB7,$JOB8): $JOB9"
 
 # Precompute mixed train: after both generation jobs (valid/test not generated here)
-JOB10=$(sbatch --parsable --array=2-8001 --dependency=afterok:"$JOB2":"$JOB4" \
+JOB10=$(sbatch --parsable --array=2-8001 --dependency=afterany:"$JOB2":"$JOB4" \
     precompute.sh --family "$FAMILY" --size "$SIZE")
 echo "Submitted precompute mixed train        (after $JOB2,$JOB4): $JOB10"
 
