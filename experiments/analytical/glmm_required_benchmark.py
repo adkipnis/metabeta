@@ -22,6 +22,7 @@ SIZES = ['small', 'medium', 'large', 'huge']
 METHODS = [
     'default',
     'current',
+    'poisson_latency',
     'raw',
     'bernoulli_eb',
     'normal_eb',
@@ -358,7 +359,7 @@ def _sliceBatch(batch: dict[str, torch.Tensor], n: int) -> dict[str, torch.Tenso
 
 
 def _methodKwargs(method: str) -> dict[str, str | bool]:
-    if method in {'default', 'current'}:
+    if method in {'default', 'current', 'poisson_latency'}:
         return {}
     if method == 'raw':
         return {
@@ -474,6 +475,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
     if method not in {
         'default',
         'current',
+        'poisson_latency',
         'poisson_eb',
         'poisson_marginal_beta',
         'poisson_laplace_pirls_diag',
@@ -501,9 +503,17 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
         'poisson_laplace_pirls_diag_sigma_blend': args.poisson_laplace_pirls_diag_sigma_blend,
         'poisson_laplace_pirls_diag_prior_weight': (args.poisson_laplace_pirls_diag_prior_weight),
     }
+    if method == 'poisson_latency':
+        out['poisson_laplace_eb_fast_steps'] = (
+            args.poisson_eb_fast_steps if args.poisson_eb_fast_steps is not None else 8
+        )
+        out['poisson_laplace_eb_fast_max_d'] = (
+            args.poisson_eb_fast_max_d if args.poisson_eb_fast_max_d is not None else 8
+        )
     if method in {
         'default',
         'current',
+        'poisson_latency',
         'poisson_marginal_beta',
         'poisson_laplace_pirls_beta',
         'poisson_laplace_pirls_sigma_grid',
@@ -523,6 +533,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
     if method in {
         'default',
         'current',
+        'poisson_latency',
         'poisson_laplace_pirls_sigma_grid',
         'poisson_laplace_pirls_sigma_avg',
         'poisson_variational_gaussian',
@@ -547,6 +558,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
     if method in {
         'default',
         'current',
+        'poisson_latency',
         'poisson_laplace_pirls_sigma_avg',
         'poisson_variational_gaussian',
         'poisson_variational_gaussian_sigma_avg',
@@ -576,6 +588,7 @@ def _poissonEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]
     if method in {
         'default',
         'current',
+        'poisson_latency',
         'poisson_variational_gaussian',
         'poisson_variational_gaussian_sigma_avg',
     }:

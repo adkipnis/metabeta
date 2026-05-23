@@ -719,6 +719,113 @@ def _poissonVariationalStepDiag(
     return beta_new, means_new, A
 
 
+def _poissonVariationalStepAndCovDiag(
+    beta: torch.Tensor,
+    means: torch.Tensor,
+    V_g: torch.Tensor,
+    sigma: torch.Tensor,
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    active_d: torch.Tensor,
+    active_q: torch.Tensor,
+    nu_ffx: torch.Tensor | None,
+    tau_ffx: torch.Tensor | None,
+    family_ffx: torch.Tensor | None,
+    damping: float,
+    max_beta_step: float,
+    max_blup_step: float,
+    offset_clip: float | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """One Newton step for β/means then covariance refresh at the new state.
+
+    Fuses _poissonVariationalStepDiag + _poissonVariationalCovarianceDiag so that
+    Z_eff, the variational offset, and the precision diagonal are computed once and
+    shared across both sub-computations.  V_g is unchanged; the returned A_new and
+    V_new are evaluated at (beta_new, means_new) with the same V_g and sigma.
+    """
+    B, m, _, d = Xm.shape
+    q = Zm.shape[-1]
+    device, dtype = Xm.device, Xm.dtype
+    active_m = mask_m.bool()
+    active_q_f = active_q.to(dtype)
+    Z_eff = Zm * active_q_f[:, None, None, :]
+    prec_q = torch.where(active_q, 1.0 / sigma.clamp(min=1e-4).square(), torch.ones_like(sigma))
+
+    # Offset is constant for this step (V_g unchanged) — compute once for both eta_old and eta_new.
+    offset = _poissonVariationalOffsetFromZeff(V_g, Z_eff, offset_clip)
+    eta = torch.einsum('bmnd,bd->bmn', Xm, beta)
+    eta = eta + torch.einsum('bmnq,bmq->bmn', Z_eff, means)
+    eta = eta + offset
+    mu, deriv = _poissonMeanDerivative(eta)
+    resid_eff = (ym - mu) * deriv * mask_n
+    w = (mu * deriv.square()).clamp(min=1e-8) * mask_n
+
+    prior_prec, prior_center = _poissonBetaPriorPrecision(
+        beta, active_d, nu_ffx, tau_ffx, family_ffx
+    )
+    inactive_d_prec = (~active_d).to(dtype)
+    inactive_q_prec = (~active_q).to(dtype)
+    prec_total = prec_q + inactive_q_prec
+
+    score_b = torch.einsum('bmnd,bmn->bd', Xm, resid_eff)
+    score_b = score_b + prior_prec * (prior_center - beta)
+    Hbb = torch.einsum('bmnd,bmn,bmnk->bdk', Xm, w, Xm)
+    Hbb = Hbb + torch.diag_embed(prior_prec + inactive_d_prec)
+
+    score_u = torch.einsum('bmnq,bmn->bmq', Z_eff, resid_eff)
+    score_u = score_u - prec_q[:, None, :] * means
+    score_u = score_u * active_m[:, :, None] * active_q_f[:, None, :]
+    A = torch.einsum('bmnq,bmn,bmnr->bmqr', Z_eff, w, Z_eff)
+    A = A + torch.diag_embed(prec_total)[:, None]
+    eye_q = torch.eye(q, device=device, dtype=dtype).expand(B, m, q, q)
+    A = torch.where(active_m[:, :, None, None], A, eye_q)
+    A_safe = A + _adaptiveRidgeBm(A)
+
+    Bmat = torch.einsum('bmnd,bmn,bmnq->bmdq', Xm, w, Z_eff)
+    Ainv_score_u = _safeSolve(A_safe, score_u)
+    Ainv_BT = _safeSolve(A_safe, Bmat.transpose(-1, -2))
+
+    schur = Hbb - torch.einsum('bmdq,bmqr->bdr', Bmat, Ainv_BT)
+    rhs_b = score_b - torch.einsum('bmdq,bmq->bd', Bmat, Ainv_score_u)
+    rhs_b = rhs_b * active_d.to(dtype)
+    delta_beta = _safeSolve(schur + _adaptiveRidge(schur), rhs_b)
+    delta_beta = delta_beta.clamp(-float(max_beta_step), float(max_beta_step))
+    delta_beta = delta_beta * active_d.to(dtype)
+
+    Bt_delta = torch.einsum('bmqd,bd->bmq', Bmat.transpose(-1, -2), delta_beta)
+    delta_u = Ainv_score_u - _safeSolve(A_safe, Bt_delta)
+    delta_u = delta_u.clamp(-float(max_blup_step), float(max_blup_step))
+    delta_u = delta_u * active_m[:, :, None] * active_q_f[:, None, :]
+
+    beta_new = beta + float(damping) * delta_beta
+    beta_new = beta_new.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    beta_new = beta_new.clamp(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
+    beta_new = torch.where(active_d, beta_new, beta)
+    means_new = means + float(damping) * delta_u
+    means_new = means_new.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+    means_new = means_new.clamp(-_POISSON_BLUP_CLAMP, _POISSON_BLUP_CLAMP)
+    means_new = means_new * active_m[:, :, None] * active_q_f[:, None, :]
+
+    # Covariance at (beta_new, means_new) — reuse Z_eff, offset, prec_total, eye_q.
+    eta_new = torch.einsum('bmnd,bd->bmn', Xm, beta_new)
+    eta_new = eta_new + torch.einsum('bmnq,bmq->bmn', Z_eff, means_new)
+    eta_new = eta_new + offset
+    mu_new, deriv_new = _poissonMeanDerivative(eta_new)
+    w_new = (mu_new * deriv_new.square()).clamp(min=1e-8) * mask_n
+    A_new = torch.einsum('bmnq,bmn,bmnr->bmqr', Z_eff, w_new, Z_eff)
+    A_new = A_new + torch.diag_embed(prec_total)[:, None]
+    A_new = torch.where(active_m[:, :, None, None], A_new, eye_q)
+    A_new_safe = A_new + _adaptiveRidgeBm(A_new)
+    V_new = _safeSolve(A_new_safe, eye_q)
+    V_new = V_new * mask_m[:, :, None, None]
+    V_new = V_new * active_q_f[:, None, :, None] * active_q_f[:, None, None, :]
+
+    return beta_new, means_new, A_new, V_new
+
+
 def _poissonVariationalTargetDiag(
     beta: torch.Tensor,
     means: torch.Tensor,
@@ -1526,7 +1633,7 @@ def refinePoissonVariationalGaussian(
     A = base_A
     for _ in range(max(int(n_outer), 1)):
         for _ in range(max(int(n_inner), 1)):
-            beta, means, _ = _poissonVariationalStepDiag(
+            beta, means, A, V_g = _poissonVariationalStepAndCovDiag(
                 beta,
                 means,
                 V_g,
@@ -1546,9 +1653,6 @@ def refinePoissonVariationalGaussian(
                 max_blup_step=max_blup_step,
                 offset_clip=offset_clip,
             )
-            A, V_g = _poissonVariationalCovarianceDiag(
-                beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q, offset_clip
-            )
 
         sigma = _poissonVariationalSigmaMomentDiag(
             means,
@@ -1566,7 +1670,7 @@ def refinePoissonVariationalGaussian(
         )
 
     for _ in range(max(int(n_final), 0)):
-        beta, means, _ = _poissonVariationalStepDiag(
+        beta, means, A, V_g = _poissonVariationalStepAndCovDiag(
             beta,
             means,
             V_g,
@@ -1585,9 +1689,6 @@ def refinePoissonVariationalGaussian(
             max_beta_step=max_beta_step,
             max_blup_step=max_blup_step,
             offset_clip=offset_clip,
-        )
-        A, V_g = _poissonVariationalCovarianceDiag(
-            beta, means, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q, offset_clip
         )
 
     if n_final > 0:
@@ -1633,7 +1734,7 @@ def refinePoissonVariationalGaussian(
             offset_clip=offset_clip,
         )
         for _ in range(max(int(adaptive_steps), 0)):
-            beta_try, means_try, _ = _poissonVariationalStepDiag(
+            beta_try, means_try, A_try, V_try = _poissonVariationalStepAndCovDiag(
                 beta,
                 means,
                 V_g,
@@ -1652,9 +1753,6 @@ def refinePoissonVariationalGaussian(
                 max_beta_step=max_beta_step,
                 max_blup_step=max_blup_step,
                 offset_clip=offset_clip,
-            )
-            A_try, V_try = _poissonVariationalCovarianceDiag(
-                beta_try, means_try, V_g, sigma, Zm, Xm, mask_n, mask_m, active_q, offset_clip
             )
             sigma_try = _poissonVariationalSigmaMomentDiag(
                 means_try,

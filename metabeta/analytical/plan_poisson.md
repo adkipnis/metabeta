@@ -96,7 +96,7 @@ by about `2-7 ms/ds`.
 Efficiency State
 ----------------
 
-Warm stage timings show the retained hot stages are EB and VG:
+Current warm stage timings after the VG fusion patch (2026-05-23):
 
 | stage | small-p-mixed first-1000 ms/ds |
 | --- | ---: |
@@ -105,7 +105,7 @@ Warm stage timings show the retained hot stages are EB and VG:
 | marginal β | ~0.3 |
 | σ grid | ~1.6 |
 | pre-VG σ averaging | ~2.2 |
-| VG | ~14 |
+| VG | ~11 (was ~14 before fusion) |
 | final VG σ averaging | retired from default |
 
 Accepted speed cleanups:
@@ -118,14 +118,49 @@ Accepted speed cleanups:
 - VG adaptive continuation reduced to one target-accepted step.
 - Duplicate all-ones σ candidates are no longer evaluated.
 - VG offset computation now reuses already masked `Z` inside retained VG steps.
+- **VG step+covariance fusion** (`_poissonVariationalStepAndCovDiag`): inner loop now
+  fuses `_poissonVariationalStepDiag` + `_poissonVariationalCovarianceDiag` into one
+  call, sharing `Z_eff`, the variational offset, and the precision diagonal. Eliminates
+  one full Hessian evaluation per inner step (25 inner + 2 final + 1 adaptive = ~28
+  fewer per VG call). Reduces VG from ~14 → ~11 ms/ds on small-p-mixed (~21% VG
+  reduction). FFX change ≤ 0.0001 across all sizes. Post-sigma-update covariance
+  refreshes are kept as-is since σ changed.
+
+Latency mode (`poisson_latency` benchmark method, 2026-05-23):
+
+- Registered `poisson_latency` as a named benchmark method: identical pipeline to
+  `current` (EB+PIRLS+marginal β+σ grid+VG) but with d-gated EB `fast_steps=8,
+  fast_max_d=8`. Wired through `_poissonEbKwargs`.
+
+First-1000 latency-mode comparison (2026-05-23):
+
+| Dataset | part | current FFX | latency FFX | Δ FFX | current ms/ds | latency ms/ds | Δ ms/ds |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-p-mixed | train | 0.2077 | 0.2076 | -0.0001 | 49.4 | 33.9 | -31% |
+| small-p-sampled | valid | 0.2338 | 0.2326 | -0.0012 | 45.2 | 32.9 | -27% |
+| small-p-sampled | test | 0.2112 | 0.2120 | +0.0008 | 44.1 | 31.9 | -28% |
+| medium-p-mixed | train | 0.1807 | 0.1800 | -0.0007 | 78.8 | 58.6 | -26% |
+| medium-p-sampled | valid | 0.2310 | 0.2307 | -0.0003 | 82.1 | 61.3 | -25% |
+| medium-p-sampled | test | 0.2385 | 0.2386 | +0.0001 | 78.0 | 59.2 | -24% |
+| large-p-mixed | train | 0.1936 | 0.1936 | 0.0000 | 89.2 | 89.3 | ~0% |
+| large-p-sampled | valid | 0.2553 | 0.2553 | 0.0000 | 90.8 | 91.0 | ~0% |
+| large-p-sampled | test | 0.2280 | 0.2280 | 0.0000 | 102.0 | 102.1 | ~0% |
+| huge-p-mixed | train | 0.2028 | 0.2028 | 0.0000 | 130.2 | 129.2 | ~0% |
+| huge-p-sampled | valid | 0.2650 | 0.2650 | 0.0000 | 164.3 | 164.4 | ~0% |
+| huge-p-sampled | test | 0.2555 | 0.2555 | 0.0000 | 147.0 | 146.0 | ~0% |
+
+Large/huge are identical because their `d > 8` so the full EB budget runs. Latency σ/BLUP
+slightly worse on small/medium only (Δσ ≤ 0.022, ΔBLUP ≤ 0.003). No FFX regression on
+any size at 4 decimal precision.
 
 Optional speed mode:
 
 - `--poisson-eb-steps 8` cuts roughly `10-35 ms/ds` and preserves FFX on tested first-1000
   rows, but materially regresses σ/BLUP on huge sampled rows. Keep it opt-in, not default.
-- `--poisson-eb-fast-steps 8 --poisson-eb-fast-max-d 8` applies the same shortcut only to
-  small/medium rows (`d <= 8`) and leaves large/huge rows on the full EB budget. This is a
-  better latency-mode candidate than globally lowering EB steps.
+- `--poisson-eb-fast-steps 8 --poisson-eb-fast-max-d 8` (the `poisson_latency` method)
+  applies the shortcut only to small/medium rows (`d <= 8`), leaving large/huge on the full
+  EB budget. Saves 24-31% on small/medium with no FFX regression. This is now the
+  registered latency mode.
 - Reduced VG budget (`outer=4, inner=4, final=1`) is not a default candidate: it is nearly
   neutral on small/medium but materially regresses huge sampled rows.
 
@@ -148,17 +183,18 @@ These are summarized here only to avoid repeating them:
 Next Directions
 ---------------
 
-1. **Low-level retained-stage profiling.**
-   If more speed is needed, profile inside `refinePoissonLaplaceEb` and
-   `refinePoissonVariationalGaussian`. Focus on repeated target/Hessian construction,
-   Cholesky solves, and duplicate `mu`/offset recomputation. Avoid optimizing retired
-   diagnostic branches.
+1. ~~**Low-level retained-stage profiling.**~~ **Done (2026-05-23).**
+   VG: fused `_poissonVariationalStepAndCovDiag` eliminates ~28 redundant Hessian
+   evaluations per VG call by sharing `Z_eff`, offset, and precision diagonal. Saves
+   ~3 ms/ds on small (~21% VG reduction); EB inner loop has no equivalent shortcut
+   (post-loop H recomputation is necessary because H is needed at the final IRLS state).
+   Further EB speedup would require reducing `n_inner` or `n_steps`, both of which
+   regress σ/BLUP.
 
-2. **Explicit latency/accuracy modes.**
-   Keep the current default as the accuracy mode. The best candidate latency mode is
-   d-gated EB (`fast_steps=8, fast_max_d=8`), which preserves large/huge behavior while
-   speeding up small/medium rows. Do not globally reduce EB steps unless downstream
-   evaluation tolerates σ/BLUP regression.
+2. ~~**Explicit latency/accuracy modes.**~~ **Done (2026-05-23).**
+   `poisson_latency` benchmark method registered: full current pipeline with d-gated EB
+   (`fast_steps=8, fast_max_d=8`). Saves 24-31% on small/medium, zero impact on
+   large/huge. No FFX regression at any size. See latency-mode table above.
 
 3. **Architecture only if FFX becomes limiting again.**
    The remaining INLA FFX gap appears more like posterior-mean/target mismatch than σ
@@ -169,10 +205,15 @@ Commands
 --------
 
 ```bash
+# Accuracy + stage timing (one size at a time for clean walltime):
 uv run python -u experiments/analytical/glmm_required_benchmark.py \
     --family p --methods current poisson_variational_gaussian poisson_variational_gaussian_sigma_avg \
-    --sizes small medium large huge --batch-size 32 --max-datasets 1000 \
-    --poisson-stage-timings
+    --sizes small --batch-size 32 --max-datasets 1000 --poisson-stage-timings
+
+# Latency-mode comparison (one size at a time):
+uv run python -u experiments/analytical/glmm_required_benchmark.py \
+    --family p --methods current poisson_latency \
+    --sizes small --batch-size 32 --max-datasets 1000 --poisson-stage-timings
 
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical/glmm experiments/analytical
