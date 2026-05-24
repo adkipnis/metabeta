@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-24 (Direction E adopted; D/F/G diagnosed and retired; H adopted)
+Last updated: 2026-05-24 (Direction E adopted; D/F/G diagnosed and retired; H adopted; I/J diagnosed and retired)
 
 Goal
 ----
@@ -82,6 +82,40 @@ estimator.
 
 Closed Directions (historical)
 ------------------------------
+
+**Direction I — Skew-corrected β marginal mean (DIAGNOSED and RETIRED 2026-05-24)**
+
+Implemented 3rd-moment skewness correction in `_normalSigmaGridBetaAverage`: after computing
+the softmax-weighted mean `mu = Σ_k w_k β_k`, add `0.25 * m3 / m2` where m3 and m2 are the
+3rd and 2nd central moments of the grid β values under the posterior weights.
+
+Result: null — zero effect on all sizes. Root cause: the scale grid
+`{0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0}` is symmetric in log space, so for a
+well-centered σ posterior (which EB ensures), the weights are approximately symmetric and
+m3 ≈ 0 by construction. The correction is structurally zero whenever the EB σ is near the
+posterior mode, which is exactly when the tail grid runs.
+
+Infrastructure retained as `skew_correct=True` flag in `_normalSigmaGridBetaAverage` and
+`normal_beta_tail_grid_skew_correct` kwarg, and `normal_direction_i` benchmark method.
+
+**Direction J — σ-only REML-Newton polish after Adam (DIAGNOSED and RETIRED 2026-05-24)**
+
+Implemented σ-only REML-Newton polish: after Adam's 20 steps, run 5 REML-Newton steps
+for σ_rfx while holding β frozen at Adam's output (`freeze_beta=True`, `step_clamp=0.3`).
+The goal was to tighten σ convergence without touching β (avoiding G's β-jump failure mode).
+
+Result: universal regression — σ_rfx +7–55% worse across all sizes. Root cause: profile
+REML-Newton at fixed β converges to the σ that maximises the marginal likelihood for
+*that specific β*, not the joint MAP σ. The two objectives diverge because the marginal
+REML accounts for β uncertainty via the `A^{-1}` precision term, whereas the profile REML
+treats β as known. For small-n where β uncertainty is large, this mismatch is severe (+55%
+σ, +41% FFX on small-n-sampled-test). For large-n the mismatch is smaller (+7–25% σ) but
+still regresses consistently. The accept rate for the subsequent EB step jumps from ~3% to
+~68% — the Newton-displaced σ triggers spurious EB "improvements".
+
+Same structural failure mode as Direction G: β and σ objectives are coupled and cannot be
+optimized independently. The retained infrastructure (`freeze_beta`, `step_clamp` in
+`_normalBlockCoordMap`) is available for future experiments but defaults remain False/0.5.
 
 **Direction H — Iterated MAP→EB loop (DONE 2026-05-24)**
 
@@ -207,34 +241,7 @@ roughly **10× headroom** to spend on accuracy.
 Pending Architecture Directions
 --------------------------------
 
-Directions D, E, F, G, H investigated and resolved (2026-05-24). Direction I and J remain
-speculative.
-
-**Direction I — Skew-corrected β marginal mean (priority 1; speculative)**
-
-The β marginal posterior π(β | y) integrated over σ can be skewed: the right tail of σ
-inflates one β tail more than the other. INLA explicitly approximates this skew with a
-Simpson-rule integration along each β coordinate. For Normal LMM the skew is small but
-nonzero on diffuse-σ rows.
-
-- Implementation: at each σ grid point, compute β posterior mean *and* a 3-point Simpson
-  approximation of the β skewness contribution.
-- Expected: small additional FFX improvement on small-n-mixed (highest-skew rows).
-- Cost: `+1–2 ms/ds`. Speculative — implement only if H leaves residual gap.
-
-**Direction J — Block Newton joint update for (β, σ) (priority 2; speculative)**
-
-For Normal LMM, the joint posterior is closed-form Gaussian conditional on σ. The Adam
-joint update over (β, log σ_rfx, log σ_eps) couples optimization across blocks; a block
-alternation with exact β-GLS step + Newton-σ step would converge faster per step. Same
-flavor as Direction G but applied jointly.
-
-- Implementation: alternate (1) exact `_normalGlsAndBlups` for β given σ; (2) Newton step
-  on σ given β using REML score and Fisher info (already implemented for diagonal σ in
-  `_remlNewtonStep`).
-- Expected: tighter MAP convergence + cleaner downstream grids.
-- Cost: comparable to current Adam; possibly faster if convergence is 3–5 iterations.
-- Risk: large refactor of `refineNormalMapSrfx` interior.
+Directions D, E, F, G, H, I, J investigated and resolved (2026-05-24). No open directions remain.
 
 Bernoulli/Poisson lessons that inform priorities
 -------------------------------------------------
@@ -243,7 +250,8 @@ Bernoulli/Poisson lessons that inform priorities
   Laplace-EB refined β over diagonal σ. For Normal, the analogous move (Direction D:
   σ-grid β average) was diagnosed and retired — it regresses on ill-conditioned rows where
   GLS collapses to the prior. The self-consistent MAP approach (Direction H: iterated
-  MAP→EB — adopted; J: block Newton) is the Normal-appropriate analogue.
+  MAP→EB — adopted) is the Normal-appropriate analogue. Direction J (block Newton) was
+  diagnosed and retired: β and σ cannot be optimized with separate objectives.
 - **Poisson VG refinement on a wider σ grid** is the Poisson equivalent of E. The
   Poisson plan reports VG = `~11 ms/ds` per dataset on top of EB; Normal's analogue
   (Direction E) is much cheaper because the conditional posterior is closed-form Gaussian.

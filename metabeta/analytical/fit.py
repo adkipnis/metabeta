@@ -208,6 +208,9 @@ def _popNormalRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         ),
         'normal_map_beta_prior_cap': kwargs.pop('normal_map_beta_prior_cap', 4.0),
         'normal_map_use_newton': kwargs.pop('normal_map_use_newton', False),
+        'normal_map_newton_n_steps': kwargs.pop('normal_map_newton_n_steps', 3),
+        'normal_map_newton_step_clamp': kwargs.pop('normal_map_newton_step_clamp', 0.5),
+        'normal_map_newton_freeze_beta': kwargs.pop('normal_map_newton_freeze_beta', False),
         'normal_map_outer_iterations': kwargs.pop('normal_map_outer_iterations', 2),
         'normal_beta_sigma_grid': kwargs.pop('normal_beta_sigma_grid', likelihood_family == 0),
         'normal_beta_sigma_grid_scales': kwargs.pop(
@@ -229,6 +232,7 @@ def _popNormalRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
             'normal_beta_tail_grid_unconditional', False
         ),
         'normal_beta_tail_grid_cartesian': kwargs.pop('normal_beta_tail_grid_cartesian', False),
+        'normal_beta_tail_grid_skew_correct': kwargs.pop('normal_beta_tail_grid_skew_correct', False),
         'beta_alpha_low': kwargs.pop('beta_alpha_low', 0.65),
         'beta_alpha_high': kwargs.pop('beta_alpha_high', 0.75),
     }
@@ -402,6 +406,9 @@ def glmm(
                     beta_sigma_grid_unconditional=normal_opts['normal_beta_sigma_grid_unconditional'],
                     beta_sigma_grid_cartesian=normal_opts['normal_beta_sigma_grid_cartesian'],
                     use_newton=normal_opts['normal_map_use_newton'],
+                    newton_n_steps=normal_opts['normal_map_newton_n_steps'],
+                    newton_step_clamp=normal_opts['normal_map_newton_step_clamp'],
+                    newton_freeze_beta=normal_opts['normal_map_newton_freeze_beta'],
                 )
                 # Freeze BLUP beta after first MAP step so subsequent MAP warm-starts
                 # (which drift further from OLS) don't degrade BLUP accuracy.
@@ -443,6 +450,7 @@ def glmm(
                     beta_tail_grid_blend=normal_opts['normal_beta_tail_grid_blend'],
                     beta_tail_grid_unconditional=normal_opts['normal_beta_tail_grid_unconditional'],
                     beta_tail_grid_cartesian=normal_opts['normal_beta_tail_grid_cartesian'],
+                    beta_tail_grid_skew_correct=normal_opts['normal_beta_tail_grid_skew_correct'],
                 )
     elif likelihood_family == 1:
         stats = lmmBernoulli(

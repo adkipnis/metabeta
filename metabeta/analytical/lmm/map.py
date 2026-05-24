@@ -197,6 +197,7 @@ def _normalSigmaGridBetaAverage(
     scales: tuple[float, ...] | list[float],
     return_condition: bool = False,
     cartesian: bool = False,
+    skew_correct: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     """Approximate hyperparameter-averaged β over a small diagonal-σ grid."""
     q = Zm.shape[-1]
@@ -298,6 +299,17 @@ def _normalSigmaGridBetaAverage(
     if mask_d is not None:
         active_d = mask_d[..., :d].bool()
         beta_avg = torch.where(active_d, beta_avg, beta_grid[:, 0, :])
+    if skew_correct and not cartesian:
+        # 3rd-moment skewness correction: shift mean by m3/m2 * blend.
+        # Corrects for asymmetric grid coverage when the σ posterior is skewed.
+        delta = beta_grid - beta_avg[:, None, :]  # (B, S, d)
+        m2 = (weights[:, :, None] * delta.square()).sum(1).clamp(min=1e-12)  # (B, d)
+        m3 = (weights[:, :, None] * delta.pow(3)).sum(1)  # (B, d)
+        beta_avg = (beta_avg + 0.25 * m3 / m2).nan_to_num(
+            nan=0.0, posinf=0.0, neginf=0.0
+        ).clamp(-20.0, 20.0)
+        if mask_d is not None:
+            beta_avg = torch.where(active_d, beta_avg, beta_grid[:, 0, :])
     if return_condition:
         beta_cond = _normalBetaPrecisionCondition(A_data[:, base_idx], mask_d)
         return beta_avg, beta_cond
@@ -633,12 +645,14 @@ def _normalBlockCoordMap(
     mask_d: torch.Tensor | None,
     mask_q: torch.Tensor | None,
     n_steps: int = 5,
+    step_clamp: float = 0.5,
+    freeze_beta: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Block-coordinate Newton MAP for (β, σ_rfx, σ_eps) in the Normal LMM.
 
-    Each step: (1) prior-regularised GLS β exact given (σ_rfx, σ_eps);
-    (2) REML-Newton σ_rfx step with MAP prior correction via autograd;
-    (3) profile σ_eps update via EM formula.  Converges in 3–5 steps.
+    Each step: (1) prior-regularised GLS β exact given (σ_rfx, σ_eps) — skipped
+    when freeze_beta=True; (2) REML-Newton σ_rfx step with MAP prior correction
+    via autograd; (3) profile σ_eps update via EM formula.
     """
     B, m, _, d = Xm.shape
     q = Zm.shape[-1]
@@ -688,32 +702,35 @@ def _normalBlockCoordMap(
         inner = ZtZ_safe + torch.diag_embed(se2[:, None, None] / sigma_rfx.square()[:, None, :])
         W_g = _safeSolve(inner + _adaptiveRidgeBm(inner), eye_q_bm) * mask4
 
-        # MAP β: prior-regularised GLS system
-        W_ZtX = torch.einsum('bmqp,bmpd->bmqd', W_g, ZtX)
-        correction_XX = torch.einsum('bmdq,bmqk->bdk', XtZ, W_ZtX)
-        W_Zty = torch.einsum('bmqp,bmp->bmq', W_g, Zty)
-        correction_Xy = torch.einsum('bmdq,bmq->bd', XtZ, W_Zty)
+        if not freeze_beta:
+            # MAP β: prior-regularised GLS system
+            W_ZtX = torch.einsum('bmqp,bmpd->bmqd', W_g, ZtX)
+            correction_XX = torch.einsum('bmdq,bmqk->bdk', XtZ, W_ZtX)
+            W_Zty = torch.einsum('bmqp,bmp->bmq', W_g, Zty)
+            correction_Xy = torch.einsum('bmdq,bmq->bd', XtZ, W_Zty)
 
-        A_data = (XtX - correction_XX) / se2[:, None, None]
-        b_data = (Xty - correction_Xy) / se2[:, None]
+            A_data = (XtX - correction_XX) / se2[:, None, None]
+            b_data = (Xty - correction_Xy) / se2[:, None]
 
-        # Prior precision: Normal exact; Student-t one IRLS step
-        normal_prec = 1.0 / tau_d.square()
-        if has_student:
-            nu_df = float(STUDENT_DF)
-            delta = (beta - nu_d) / tau_d
-            student_wt = (nu_df + 1.0) / (nu_df + delta.square().clamp(max=1e6))
-            prec = torch.where((family_ffx == 1)[:, None], student_wt / tau_d.square(), normal_prec)
-        else:
-            prec = normal_prec
-        if active_d is not None:
-            prec = prec * active_d.to(dtype)
+            # Prior precision: Normal exact; Student-t one IRLS step
+            normal_prec = 1.0 / tau_d.square()
+            if has_student:
+                nu_df = float(STUDENT_DF)
+                delta = (beta - nu_d) / tau_d
+                student_wt = (nu_df + 1.0) / (nu_df + delta.square().clamp(max=1e6))
+                prec = torch.where(
+                    (family_ffx == 1)[:, None], student_wt / tau_d.square(), normal_prec
+                )
+            else:
+                prec = normal_prec
+            if active_d is not None:
+                prec = prec * active_d.to(dtype)
 
-        A_map = A_data + torch.diag_embed(prec)
-        b_map = b_data + prec * nu_d
-        beta = _safeSolve(A_map + _adaptiveRidge(A_map), b_map).nan_to_num(0.0).clamp(-20.0, 20.0)
-        if active_d is not None:
-            beta = torch.where(active_d, beta, beta_init.to(device=device, dtype=dtype))
+            A_map = A_data + torch.diag_embed(prec)
+            b_map = b_data + prec * nu_d
+            beta = _safeSolve(A_map + _adaptiveRidge(A_map), b_map).nan_to_num(0.0).clamp(-20.0, 20.0)
+            if active_d is not None:
+                beta = torch.where(active_d, beta, beta_init.to(device=device, dtype=dtype))
 
         # REML score for ψ_k = σ²_rfx_k; reuses W_g (no extra Woodbury)
         se2_4d = se2[:, None, None, None]
@@ -746,9 +763,9 @@ def _normalBlockCoordMap(
 
         S_map = S_reml + prior_grad_psi
         # Newton step in log σ space to avoid overshooting far from the optimum.
-        # Δlog(σ) = Δψ / (2ψ) = 0.5 * S_map / (F_reml * ψ), clamped to ±0.5 per step.
+        # Δlog(σ) = Δψ / (2ψ) = 0.5 * S_map / (F_reml * ψ), clamped to ±step_clamp per step.
         psi = sigma_rfx.square().clamp(min=1e-8)
-        log_sigma_step = (0.5 * S_map / (F_reml * psi)).clamp(-0.5, 0.5)
+        log_sigma_step = (0.5 * S_map / (F_reml * psi)).clamp(-step_clamp, step_clamp)
         sigma_rfx_new = (sigma_rfx.log() + log_sigma_step).exp().clamp(min=1e-4, max=20.0)
         sigma_rfx = torch.where(active_q, sigma_rfx_new, sigma_rfx)
 
@@ -797,11 +814,16 @@ def refineNormalMapSrfx(
     beta_sigma_grid_unconditional: bool = False,
     beta_sigma_grid_cartesian: bool = False,
     use_newton: bool = False,
+    newton_n_steps: int = 3,
+    newton_step_clamp: float = 0.5,
+    newton_freeze_beta: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Refine (β, σ_rfx, σ_eps) via marginal MAP; recompute GLS/BLUP under diagonal MAP Ψ.
 
     By default uses Adam (autograd).  With use_newton=True uses the block-coordinate Newton
-    path: exact GLS β + REML-Newton σ_rfx + EM σ_eps, converging in 3–5 steps (Direction G).
+    path after Adam: exact GLS β + REML-Newton σ_rfx + EM σ_eps (Direction G).
+    With newton_freeze_beta=True, β is held fixed at Adam's output and only σ is refined
+    via REML-Newton (Direction J).
     """
     q = Zm.shape[-1]
     if q == 0 or n_steps <= 0:
@@ -855,8 +877,9 @@ def refineNormalMapSrfx(
     beta_det = beta.detach()
 
     if use_newton:
-        # Newton polish: 3 block-coordinate steps starting from Adam's near-MAP output.
-        # Adam gets close; Newton tightens β and σ_rfx to the true MAP without oscillation.
+        # Newton polish starting from Adam's near-MAP output.
+        # freeze_beta=False (G): joint block-coord Newton for β and σ.
+        # freeze_beta=True (J): σ-only REML-Newton with β frozen at Adam output.
         with torch.no_grad():
             beta_det, sigma_rfx, sigma_eps_map = _normalBlockCoordMap(
                 beta_det,
@@ -866,7 +889,9 @@ def refineNormalMapSrfx(
                 nu_ffx, tau_ffx, family_ffx,
                 tau_rfx, family_sigma_rfx,
                 mask_d, mask_q,
-                n_steps=3,
+                n_steps=newton_n_steps,
+                step_clamp=newton_step_clamp,
+                freeze_beta=newton_freeze_beta,
             )
 
     if mask_q is not None:
@@ -990,6 +1015,7 @@ def refineNormalLaplaceEb(
     beta_tail_grid_blend: float = 0.25,
     beta_tail_grid_unconditional: bool = False,
     beta_tail_grid_cartesian: bool = False,
+    beta_tail_grid_skew_correct: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Moment-based EB update for diagonal σ_rfx under the exact Gaussian marginal, optionally followed by a coordinate grid pass and tail β correction."""
     q = Zm.shape[-1]
@@ -1042,6 +1068,7 @@ def refineNormalLaplaceEb(
             beta_tail_grid_scales,
             return_condition=True,
             cartesian=beta_tail_grid_cartesian,
+            skew_correct=beta_tail_grid_skew_correct,
         )
         if beta_tail_grid_unconditional:
             gate = eligible_d

@@ -34,6 +34,8 @@ METHODS = [
     'normal_direction_g',
     'normal_direction_h',
     'normal_direction_gh',
+    'normal_direction_i',
+    'normal_direction_j',
     'poisson_eb',
     'poisson_marginal_beta',
     'poisson_laplace_pirls_diag',
@@ -375,6 +377,8 @@ _NORMAL_DIRECTION_METHODS = {
     'normal_direction_g',
     'normal_direction_h',
     'normal_direction_gh',
+    'normal_direction_i',
+    'normal_direction_j',
 }
 
 
@@ -516,6 +520,15 @@ def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
     if method in {'normal_direction_h', 'normal_direction_gh'}:
         # Direction H: iterated MAP→EB→MAP (2 outer iterations)
         out['normal_map_outer_iterations'] = 2
+    if method == 'normal_direction_i':
+        # Direction I: 3rd-moment skewness correction in the tail-grid β averaging
+        out['normal_beta_tail_grid_skew_correct'] = True
+    if method == 'normal_direction_j':
+        # Direction J: σ-only REML-Newton polish after Adam (β frozen); avoids G's β-jump overshoot
+        out['normal_map_use_newton'] = True
+        out['normal_map_newton_freeze_beta'] = True
+        out['normal_map_newton_step_clamp'] = 0.3
+        out['normal_map_newton_n_steps'] = 5
     return out
 
 
