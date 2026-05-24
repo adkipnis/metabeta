@@ -93,11 +93,13 @@ closed most of the INLA gap on σ_rfx.
 Diagnostic confirmed MAP σ already matches INLA mode; the gap was purely mean-vs-mode.
 Direction B not needed.
 
-**Direction C — Trace-based df for final σ_eps (low priority)**
+**Direction C — Trace-based df for final σ_eps (tried 2026-05-24; reverted)**
 
-The EM loop computes `T = Σ_g tr[W_g Z_g'Z_g]`; applying it as a one-shot df correction
-to the projection denominator (`df_eff = mx_rank + T`) would correct the collinearity bias
-in σ_eps without EM noise. Modest value; not attempted.
+Attempted: replace `z_rank` with `T = Σ_g tr[W_g Z_g'Z_g]` in the projection df
+denominator. Since T ≤ z_rank, corrected denominator is larger → σ_eps_corrected smaller.
+Result: σ_eps NRMSE increased +19–117% across all configurations (FFX/σ_rfx/BLUP flat).
+The correction reduces σ_eps for all datasets even when there is no collinearity, which
+outweighs any benefit in the rare high-collinearity case. No further attempts planned.
 
 Commands
 --------
