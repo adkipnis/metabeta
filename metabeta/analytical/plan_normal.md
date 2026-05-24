@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-19 (three σ_rfx candidates tested, all retired — see Retired Lines)
+Last updated: 2026-05-24 (Priority 0 diagnostic unblocked; all Normal INLA npz files generated)
 
 Goal
 ----
@@ -146,12 +146,24 @@ weak → pursue direction A.
 If MAP σ itself undershoots INLA mean by a lot: the mode is too low → pursue direction B
 in addition.
 
-No Normal-family per-dataset row files exist yet (`inla_runs/row_estimates/` contains only
-Poisson). Run with `--family n` to generate them. INLA posterior mode is not directly
-available from saved files (R-INLA reports posterior means in `summary.hyperpar`); the
-mean comparison is sufficient for this diagnostic.
+**Status (2026-05-24): COMPLETE.** Row estimates written to
+`experiments/analytical/inla_runs/normal_rows/`. Diagnostic verdict:
 
-**Direction A — Softmax-weighted σ_rfx posterior mean (highest priority, pending diagnostic)**
+- **MAP ≈ INLA mode** (MAP − INLA mode mean < 0.002; RMSE 0.04–0.06): the optimizer
+  finds the correct posterior mode.
+- **EB ≈ MAP**: moment-EB shifts σ ~3% further downward (wrong direction).
+- **INLA mean wins by 12–36% NRMSE** over EB on active (non-tiny) σ dimensions:
+
+  | Dataset | MAP NRMSE | EB NRMSE | INLA mode | INLA mean |
+  | --- | ---: | ---: | ---: | ---: |
+  | medium | 0.222 | 0.208 | 0.212 | **0.190** |
+  | large | 0.187 | 0.177 | 0.181 | **0.172** |
+  | huge | 0.245 | 0.206 | 0.173 | **0.156** |
+
+Conclusion: the mode is correct; the gap is purely a mean-vs-mode reporting problem.
+**Pursue Direction A only. Direction B is not warranted.**
+
+**Direction A — Softmax-weighted σ_rfx posterior mean (highest priority, diagnostic done)**
 
 `_normalSigmaRfxGridRefine` currently takes argmax over the per-dimension scale grid.
 Replacing this with a softmax-weighted average (as `_normalSigmaGridBetaAverage` already
@@ -160,7 +172,7 @@ so mean > mode; this is the main reason INLA outperforms on σ_rfx. Low effort �
 and marginal-target infrastructure already exist. Also worth including σ_eps as a grid
 dimension to capture the σ_rfx / σ_eps cross-dependence.
 
-**Direction B — Analytical β-profiling (defer until diagnostic; only if MAP mode is low)**
+**Direction B — Analytical β-profiling (deferred; diagnostic ruled it out)**
 
 The current `refineNormalMapSrfx` does prior-aware marginal MAP over log-σ (integrating
 out u analytically), but jointly optimises β and σ via Adam. True REML profiles β out of

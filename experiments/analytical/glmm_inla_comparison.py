@@ -228,9 +228,9 @@ def _appendInlaRowRecord(
     inla_wall_s: float,
     max_d: int,
     max_q: int,
+    max_m: int,
 ) -> None:
     m_b = int(batch['m'][b].item())
-    max_m = batch['rfx'].shape[1]
     record = {
         'data_id': data_id,
         'partition': partition,
@@ -243,7 +243,7 @@ def _appendInlaRowRecord(
         'mask_q': _pad1d(np.isin(np.arange(max_q), active_q).astype(float), max_q, fill=0.0),
         'beta_true': batch['ffx'][b, :max_d].detach().cpu().numpy().astype(float),
         'sigma_rfx_true': batch['sigma_rfx'][b, :max_q].detach().cpu().numpy().astype(float),
-        'blup_true': batch['rfx'][b, :max_m, :max_q].detach().cpu().numpy().astype(float),
+        'blup_true': _pad2d(batch['rfx'][b, :, :max_q].detach().cpu().numpy().astype(float), max_m, max_q),
         'nu_ffx': _batchVectorOrNan(batch, 'nu_ffx', b, max_d),
         'tau_ffx': _batchVectorOrNan(batch, 'tau_ffx', b, max_d),
         'tau_rfx': _batchVectorOrNan(batch, 'tau_rfx', b, max_q),
@@ -264,7 +264,7 @@ def _appendInlaRowRecord(
     for method in analytical_methods:
         record[f'beta_{method}'] = stats_np[method]['beta'][b, :max_d].astype(float)
         record[f'sigma_rfx_{method}'] = stats_np[method]['srfx'][b, :max_q].astype(float)
-        record[f'blup_{method}'] = stats_np[method]['blup'][b, :max_m, :max_q].astype(float)
+        record[f'blup_{method}'] = _pad2d(stats_np[method]['blup'][b, :, :max_q].astype(float), max_m, max_q)
         record[f'wall_ms_{method}'] = float(stats_np[method]['wall'] * 1000.0)
         if 'map_srfx' in stats_np[method]:
             record[f'sigma_rfx_map_{method}'] = stats_np[method]['map_srfx'][b, :max_q].astype(
@@ -367,6 +367,7 @@ def run_one_dataset(
     data_cfg = loadDataConfig(data_id)
     max_d = data_cfg['max_d']
     max_q = data_cfg['max_q']
+    max_m = data_cfg['max_m']
     likelihood_family = data_cfg.get('likelihood_family', 0)
 
     if partition == 'train':
@@ -577,6 +578,7 @@ def run_one_dataset(
                             inla_wall_s=inla_elapsed,
                             max_d=max_d,
                             max_q=max_q,
+                            max_m=max_m,
                         )
 
     ds_bar.close()
