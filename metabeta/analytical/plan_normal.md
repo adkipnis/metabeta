@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-24 (directions D–J investigated; E and H adopted; all others retired; tables merged and plan debloated)
+Last updated: 2026-05-25 (per-dataset gap analysis: gaps are outlier-driven, not systematic; ~2% prior-cap/stabilized outliers drive aggregate NRMSE gap)
 
 Goal
 ----
@@ -61,7 +61,7 @@ N=1000 datasets with diagonal R-INLA. Mixed rows are train; sampled rows are val
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | small-n-mixed | train | 0.0913 | 0.0774 | 0.3401 | 0.3102 | 0.3850 | 0.3818 | 12.97 | 9.903 |
 | medium-n-mixed | train | 0.2424 | 0.2352 | 0.3156 | 0.2975 | 0.4127 | 0.4157 | 11.75 | 8.379 |
-| large-n-mixed | train | 0.2216 | 0.2015 | **0.2674** | 0.2713 | 0.3930 | 0.3962 | 15.50 | 8.858 |
+| large-n-mixed | train | 0.2141 | 0.2015 | **0.2620** | 0.2713 | 0.3927 | 0.3962 | 30.07 | 8.858 |
 | huge-n-mixed | train | 0.2381 | 0.2156 | 0.3014 | 0.2398 | 0.4057 | 0.4071 | 16.83 | 10.165 |
 | small-n-sampled | valid | 0.2746 | 0.2151 | 0.5398 | 0.5313 | 0.4814 | 0.4755 | 59.54 | 9.853 |
 | small-n-sampled | test | 0.2393 | 0.1675 | 0.4144 | 0.4119 | 0.4230 | 0.4156 | 58.47 | 9.910 |
@@ -72,7 +72,7 @@ N=1000 datasets with diagonal R-INLA. Mixed rows are train; sampled rows are val
 | huge-n-sampled | valid | 0.3981 | 0.2907 | **0.3511** | 0.5085 | 0.4871 | 0.4897 | 138.55 | 10.143 |
 | huge-n-sampled | test | 0.2554 | 0.2491 | 0.3259 | 0.2895 | 0.5531 | 0.5554 | 132.61 | 10.135 |
 
-Bolded cells: current beats INLA (large-train σ_rfx; medium-test FFX by −6%; huge-valid σ_rfx by −31%). BLUP is tied everywhere (< 1% gap). R-INLA is 8–10 s/dataset; analytical path is milliseconds (~70–100× faster).
+Bolded cells: current beats INLA on medium-test FFX (−6%) and huge-valid σ_rfx (−31%). BLUP is tied everywhere (< 1% gap). R-INLA is 8–10 s/dataset; analytical path is milliseconds (~70–100× faster). Large-n-mixed row refreshed 2026-05-25; other rows may be from an earlier code version.
 
 Known Structural Limits
 -----------------------
@@ -151,8 +151,8 @@ Gap = current − INLA; positive = current worse. Mixed rows are train; sampled 
 | --- | --- | ---: | ---: | --- |
 | small-n-mixed | train | +0.031 (+40%) | +0.076 (+25%) | low-N; β cap and tail-grid fire 0% |
 | medium-n-mixed | train | −0.007 (−3%) | +0.048 (+16%) | FFX parity; σ improved with E |
-| large-n-mixed | train | +0.056 (+28%) | +0.083 (+31%) | tail-grid gate fires 69% |
-| huge-n-mixed | train | +0.051 (+24%) | +0.081 (+38%) | tail-grid gate fires 76% |
+| large-n-mixed | train | +0.013 (+6%) | +0.083 (+31%) | |
+| huge-n-mixed | train | +0.026 (+12%) | +0.081 (+38%) | |
 | small-n-sampled | valid | +0.060 (+28%) | +0.009 (+2%) | σ_rfx nearly tied |
 | small-n-sampled | test | +0.072 (+43%) | +0.003 (+1%) | σ_rfx tied |
 | medium-n-sampled | valid | +0.008 (+3%) | +0.123 (+38%) | FFX near-parity; σ_rfx gap reappears |
@@ -162,26 +162,41 @@ Gap = current − INLA; positive = current worse. Mixed rows are train; sampled 
 | huge-n-sampled | valid | +0.107 (+37%) | **−0.157 (−31%)** | current beats INLA on σ_rfx |
 | huge-n-sampled | test | +0.006 (+2%) | +0.036 (+13%) | near-parity on FFX |
 
-Direction E reduced σ_rfx gap by ~20–25% across all sizes. FFX gap unchanged.
-The FFX gap is driven by high-condition rows (65%+ of large/huge train data) where the
-GLS β collapses toward the prior — existing 25%-blended tail correction is already optimal.
+Per-Dataset Gap Structure (2026-05-25 analysis via `glmm_normal_ffx_gap_analysis.py`)
+--------------------------------------------------------------------------------------
 
-Two structural observations:
+**FFX gaps are outlier-driven, not systematic.**
 
-1. **σ_rfx mean-vs-mode is closed by Direction A only when the grid hits the right scale.**
-   The default 3-point scalar grid `{0.75, 1.0, 1.333}` (i.e. ±33%) is too narrow to capture
-   the right tail of π(σ_rfx | y) on diffuse posteriors. INLA typically uses 9–13 quadrature
-   points along each axis. The remaining σ_rfx mean-vs-mode gap is a *grid resolution* issue,
-   not a method-of-estimation issue.
+Per-dataset analysis on 1000 datasets each (large + huge mixed/train, small + large + huge
+sampled/valid) using precomputed INLA:
 
-2. **β posterior averaging (Direction D) cannot unconditionally replace MAP-Adam β.**
-   `_normalSigmaGridBetaAverage` computes the INLA-style β posterior mean
-   `β̂ = Σ_k w_k β̂_GLS(σ_k)`. Unconditional use regressed FFX on medium rows (+3–50%)
-   because ~65% of large/huge rows are ill-conditioned: `A_data` condition ≥ 1000, causing
-   GLS to collapse toward the prior mean — Adam's trajectory-aware β is structurally better
-   there. The existing 25%-blended cap-gated tail correction is already the sweet spot.
-   The remaining FFX gap requires a *self-consistent (β, σ)* MAP estimate (Direction H/J),
-   not just better σ averaging.
+| Observation | large + huge train | small + med train | sampled valid (3 sizes) |
+| --- | --- | --- | --- |
+| fraction tied (\|gap\| < 0.01) | **86%** | **83%** | **80%** |
+| fraction mild gap (0.01–0.05) | 6% | 7% | 8% |
+| fraction large gap (> 0.05) | 1% | 3% | 3% |
+| top 5% share of aggregate gap | **>155%** | >135% | >106% |
+
+"Top 5% share > 100%" means the worst 5% of datasets more than fully explain the total
+aggregate NRMSE gap — the remaining 95% collectively *favor* the current method.
+
+**Two distinct outlier regimes:**
+
+1. **High-d, prior-cap/stabilized rows (large/huge)**: ~2% of datasets (42/2000 for
+   large+huge) where `normal_map_beta_prior_capped` and `normal_map_beta_stabilized` both
+   fire. Mean gap +0.038; 79% worse; 21% with gap > 0.05 (some with gap > 0.4). These are
+   rank-deficient Z_g rows where our GLS β collapses to the prior while INLA's quadrature
+   does not. The existing tail correction (25% blend, d≥9, cond≥1000) already targets a
+   superset of these rows but a 25% blend is insufficient when both cap and stab fire.
+
+2. **Low-d (d≤4), small-n rows**: no corrective mechanism available (tail gate requires d≥9,
+   cap requires d>4). Worst outliers have gaps > 0.3–0.7 on very sparse designs (m=8–15).
+   INLA's Laplace quadrature advantage is largest in this low-data regime. Not addressable
+   without full quadrature or MCMC.
+
+**Implication:** The aggregate NRMSE gap is not a broad floor affecting all datasets; it is
+caused by ~1–5% of extreme outliers. For the majority of datasets the current method is
+essentially tied with or better than INLA.
 
 Latency budget: current default is `3–10 ms/ds`; budget ceiling is `~100 ms/ds`. There is
 roughly **10× headroom** to spend on accuracy.
@@ -222,6 +237,10 @@ uv run python -u experiments/analytical/glmm_required_benchmark.py \
 uv run python -u experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-n-mixed --partition train --n-total 1000 \
     --analytical-methods current --no-save-inla-rows
+
+# per-dataset gap analysis (uses precomputed INLA, no live INLA calls)
+uv run python -u experiments/analytical/glmm_normal_ffx_gap_analysis.py \
+    --data-ids large-n-mixed huge-n-mixed --partition train --max-datasets 1000
 
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical tests
