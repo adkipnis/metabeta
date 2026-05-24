@@ -369,6 +369,7 @@ def glmm(
         )
         n_outer = int(normal_opts['normal_map_outer_iterations'])
         _priors_ok = Zm.shape[-1] > 0 and all(v is not None for v in map_priors.values())
+        _blup_beta_anchor: torch.Tensor | None = None
         for _outer_i in range(n_outer):
             _is_last = _outer_i == n_outer - 1
             if map_refine and _priors_ok:
@@ -402,7 +403,14 @@ def glmm(
                     beta_sigma_grid_cartesian=normal_opts['normal_beta_sigma_grid_cartesian'],
                     use_newton=normal_opts['normal_map_use_newton'],
                 )
+                # Freeze BLUP beta after first MAP step so subsequent MAP warm-starts
+                # (which drift further from OLS) don't degrade BLUP accuracy.
+                if _outer_i == 0 and n_outer > 1 and 'normal_map_beta_for_blup' in stats:
+                    _blup_beta_anchor = stats['normal_map_beta_for_blup']
             if map_refine and normal_opts['normal_laplace_eb'] and _priors_ok:
+                if _is_last and _blup_beta_anchor is not None:
+                    stats = dict(stats)
+                    stats['normal_map_beta_for_blup'] = _blup_beta_anchor
                 stats = refineNormalLaplaceEb(
                     stats,
                     Xm,

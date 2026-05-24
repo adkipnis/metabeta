@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-24 (Direction E adopted; D/F/G diagnosed and retired; H tested; σ_eps_map fix)
+Last updated: 2026-05-24 (Direction E adopted; D/F/G diagnosed and retired; H BLUP fix and ready for adoption)
 
 Goal
 ----
@@ -195,8 +195,8 @@ Pending Architecture Directions
 
 Directions D, E, F, G investigated and resolved (2026-05-24). The FFX gap vs INLA is structural:
 it requires a self-consistent (β, σ) MAP estimate, not just better σ averaging. Direction H
-(iterated MAP→EB) tested and shows 3–5% FFX improvement with a BLUP regression on
-huge-n-mixed that needs resolution before adoption. Direction J remains speculative.
+(iterated MAP→EB) BLUP regression diagnosed and fixed (2026-05-24); ready for adoption.
+Direction J remains speculative.
 
 **Direction H — Iterated MAP→EB→MAP refinement loop (priority 1)**
 
@@ -207,13 +207,18 @@ grid β.
 
 - Proposed: 2 outer iterations of `MAP-Adam(20) → moment-EB → grid-refine`. Tail β
   correction fires only in the last iteration.
-- Tested (2026-05-24): FFX improved 3–5% across medium/large/huge sizes. BLUP neutral
-  except huge-n-mixed-train (+5% regression: second Adam pass uses less OLS-anchored β for
-  BLUPs than the first). σ_rfx neutral to slightly worse.
-- Cost: `+3–7 ms/ds` (1.7× total; budget has 5–8× headroom).
-- Status: promising but BLUP regression on huge-n-mixed needs resolution before adoption.
-  Infrastructure in `fit.py` (kwarg `normal_map_outer_iterations=2`); benchmark method
-  `normal_direction_h`.
+- Tested (2026-05-24): FFX improved 3–7% across all sizes; BLUP regressed +5% on huge-n-mixed
+  (second Adam pass's warm-started β drifted further from OLS, worsening BLUP residuals).
+- BLUP fix (2026-05-24): anchor `normal_map_beta_for_blup` to iteration 1's MAP value before
+  the final EB; iteration 2's MAP still refines σ_rfx but the BLUP β stays pinned to the
+  first-pass MAP. After fix: BLUP neutral (±0.2%) across all sizes, FFX improves 1–7%.
+  - small-mixed: FFX −0.7%, BLUP 0%
+  - medium-mixed: FFX −1.1% to −5.5%, BLUP 0%
+  - large-mixed: FFX −6.5%, BLUP 0%
+  - huge-mixed: FFX −5.6%, BLUP 0% (was +5.3% before fix)
+- Cost: `+4–8 ms/ds` (~1.7× total; budget has 5–8× headroom).
+- Status: BLUP regression resolved; ready for adoption. Infrastructure in `fit.py` (kwarg
+  `normal_map_outer_iterations=2`); benchmark method `normal_direction_h`.
 
 **Direction I — Skew-corrected β marginal mean (priority 2; speculative)**
 
