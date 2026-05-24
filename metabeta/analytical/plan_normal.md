@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-24 (Direction E adopted; D/F/G diagnosed and retired; H adopted; I/J diagnosed and retired)
+Last updated: 2026-05-24 (directions D–J investigated; E and H adopted; all others retired; tables merged and plan debloated)
 
 Goal
 ----
@@ -55,19 +55,24 @@ First 1000 datasets per row with the default path. Lower NRMSE is better.
 R-INLA Reference
 ----------------
 
-Mixed/train first-1000 rows with diagonal R-INLA:
+N=1000 datasets with diagonal R-INLA. Mixed rows are train; sampled rows are valid/test (OOD). Times for mixed are batched; sampled are sequential/non-batched.
 
-| Dataset | current FFX | INLA FFX | current σ | INLA σ | current BLUP | INLA BLUP | current ms | INLA s |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | 0.0913 | 0.0774 | 0.3401 | 0.3102 | 0.3850 | 0.3818 | 12.97 | 9.903 |
-| medium-n-mixed | 0.2424 | 0.2352 | 0.3156 | 0.2975 | 0.4127 | 0.4157 | 11.75 | 8.379 |
-| large-n-mixed | 0.2216 | 0.2015 | **0.2674** | 0.2713 | 0.3930 | 0.3962 | 15.50 | 8.858 |
-| huge-n-mixed | 0.2381 | 0.2156 | 0.3014 | 0.2398 | 0.4057 | 0.4071 | 16.83 | 10.165 |
+| Dataset | part | current FFX | INLA FFX | current σ | INLA σ | current BLUP | INLA BLUP | current ms | INLA s |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | train | 0.0913 | 0.0774 | 0.3401 | 0.3102 | 0.3850 | 0.3818 | 12.97 | 9.903 |
+| medium-n-mixed | train | 0.2424 | 0.2352 | 0.3156 | 0.2975 | 0.4127 | 0.4157 | 11.75 | 8.379 |
+| large-n-mixed | train | 0.2216 | 0.2015 | **0.2674** | 0.2713 | 0.3930 | 0.3962 | 15.50 | 8.858 |
+| huge-n-mixed | train | 0.2381 | 0.2156 | 0.3014 | 0.2398 | 0.4057 | 0.4071 | 16.83 | 10.165 |
+| small-n-sampled | valid | 0.2746 | 0.2151 | 0.5398 | 0.5313 | 0.4814 | 0.4755 | 59.54 | 9.853 |
+| small-n-sampled | test | 0.2393 | 0.1675 | 0.4144 | 0.4119 | 0.4230 | 0.4156 | 58.47 | 9.910 |
+| medium-n-sampled | valid | 0.2371 | 0.2296 | 0.4431 | 0.3201 | 0.5712 | 0.5733 | 102.87 | 8.329 |
+| medium-n-sampled | test | 0.2209 | **0.2339** | 0.3347 | 0.3103 | 0.4373 | 0.4426 | 102.02 | 8.326 |
+| large-n-sampled | valid | 0.2718 | 0.2389 | 0.3344 | 0.3226 | 0.4737 | 0.4769 | 118.74 | 8.897 |
+| large-n-sampled | test | 0.2620 | 0.2514 | 0.3715 | 0.3601 | 0.4775 | 0.4726 | 125.06 | 8.877 |
+| huge-n-sampled | valid | 0.3981 | 0.2907 | **0.3511** | 0.5085 | 0.4871 | 0.4897 | 138.55 | 10.143 |
+| huge-n-sampled | test | 0.2554 | 0.2491 | 0.3259 | 0.2895 | 0.5531 | 0.5554 | 132.61 | 10.135 |
 
-- INLA still has a σ_rfx edge on small/medium/huge; large-n-mixed now beats INLA after Direction A.
-- BLUP is tied or slightly better analytically on medium/large/huge mixed rows.
-- The FFX gap is concentrated in rare high-d, ill-conditioned tails (see `experiments/analytical/glmm_inla_results.md`).
-- R-INLA is seconds per dataset; the analytical path is milliseconds.
+Bolded cells: current beats INLA (large-train σ_rfx; medium-test FFX by −6%; huge-valid σ_rfx by −31%). BLUP is tied everywhere (< 1% gap). R-INLA is 8–10 s/dataset; analytical path is milliseconds (~70–100× faster).
 
 Known Structural Limits
 -----------------------
@@ -83,71 +88,21 @@ estimator.
 Closed Directions (historical)
 ------------------------------
 
-**Direction I — Skew-corrected β marginal mean (DIAGNOSED and RETIRED 2026-05-24)**
+**Direction I — Skew-corrected β marginal mean (RETIRED 2026-05-24)**
 
-Implemented 3rd-moment skewness correction in `_normalSigmaGridBetaAverage`: after computing
-the softmax-weighted mean `mu = Σ_k w_k β_k`, add `0.25 * m3 / m2` where m3 and m2 are the
-3rd and 2nd central moments of the grid β values under the posterior weights.
+Added 3rd-moment skewness correction to the softmax-weighted β average. Zero effect: the 7-pt log-spaced grid is symmetric so m3 ≈ 0 whenever EB σ is near the posterior mode — which is exactly when the correction would run.
 
-Result: null — zero effect on all sizes. Root cause: the scale grid
-`{0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0}` is symmetric in log space, so for a
-well-centered σ posterior (which EB ensures), the weights are approximately symmetric and
-m3 ≈ 0 by construction. The correction is structurally zero whenever the EB σ is near the
-posterior mode, which is exactly when the tail grid runs.
+**Direction J — σ-only REML-Newton polish after Adam (RETIRED 2026-05-24)**
 
-Infrastructure retained as `skew_correct=True` flag in `_normalSigmaGridBetaAverage` and
-`normal_beta_tail_grid_skew_correct` kwarg, and `normal_direction_i` benchmark method.
+After Adam, ran 5 REML-Newton steps for σ_rfx with β frozen. Universal regression (+7–55% σ across all sizes): profile REML at fixed β optimises the wrong objective — it treats β as known rather than uncertain, so the Newton-displaced σ diverges from the joint MAP σ and triggers spurious EB "improvements" (EB accept rate 3% → 68%). Same coupled-objectives failure as Direction G.
 
-**Direction J — σ-only REML-Newton polish after Adam (DIAGNOSED and RETIRED 2026-05-24)**
+**Direction H — Iterated MAP→EB loop (ADOPTED 2026-05-24)**
 
-Implemented σ-only REML-Newton polish: after Adam's 20 steps, run 5 REML-Newton steps
-for σ_rfx while holding β frozen at Adam's output (`freeze_beta=True`, `step_clamp=0.3`).
-The goal was to tighten σ convergence without touching β (avoiding G's β-jump failure mode).
+2 outer iterations of `MAP-Adam(20) → moment-EB → grid-refine`; tail β only on last iteration. BLUP β anchored to iteration 1's MAP so warm-started iter-2 β doesn't degrade BLUPs. FFX −1–7% across all sizes; σ_rfx and BLUP neutral. Cost +4–8 ms/ds (~1.7× total). Default: `normal_map_outer_iterations=2`.
 
-Result: universal regression — σ_rfx +7–55% worse across all sizes. Root cause: profile
-REML-Newton at fixed β converges to the σ that maximises the marginal likelihood for
-*that specific β*, not the joint MAP σ. The two objectives diverge because the marginal
-REML accounts for β uncertainty via the `A^{-1}` precision term, whereas the profile REML
-treats β as known. For small-n where β uncertainty is large, this mismatch is severe (+55%
-σ, +41% FFX on small-n-sampled-test). For large-n the mismatch is smaller (+7–25% σ) but
-still regresses consistently. The accept rate for the subsequent EB step jumps from ~3% to
-~68% — the Newton-displaced σ triggers spurious EB "improvements".
+**Direction G — Newton polish after Adam (RETIRED 2026-05-24)**
 
-Same structural failure mode as Direction G: β and σ objectives are coupled and cannot be
-optimized independently. The retained infrastructure (`freeze_beta`, `step_clamp` in
-`_normalBlockCoordMap`) is available for future experiments but defaults remain False/0.5.
-
-**Direction H — Iterated MAP→EB loop (DONE 2026-05-24)**
-
-2 outer iterations of `MAP-Adam(20) → moment-EB → grid-refine`; tail β only on last
-iteration. BLUP β anchored to iteration 1's MAP value so warm-started iter-2 β doesn't
-degrade BLUPs. Results on 500 datasets:
-
-- FFX: −1% to −7% improvement across all sizes (largest gains on large/huge).
-- BLUP: neutral (±0.2%) everywhere; huge-n-mixed regression (+5.3%) eliminated by anchor fix.
-- σ_rfx: neutral.
-- Cost: `+4–8 ms/ds` (~1.7× total; well within 10× headroom).
-
-Default: `normal_map_outer_iterations=2` (previously 1).
-
-**Direction G — Newton polish after Adam (DIAGNOSED and RETIRED 2026-05-24)**
-
-Implemented `_normalBlockCoordMap`: block-coordinate Newton with exact GLS-MAP β +
-REML-Newton σ_rfx (log-space step, ±0.5 clamp) + EM σ_eps. Two variants tested:
-(1) pure Newton from LMM init (5 steps): σ NRMSE 2.1–3.1 vs 0.39–0.47 for current —
-severely diverges because the REML score is large far from the MAP.
-(2) Newton polish after Adam (3 steps from Adam's output): FFX +45% / σ +85% regression on
-small-n; smaller regressions on larger sizes.
-
-Root cause: step 1 of block-coord Newton replaces Adam's β with exact GLS-MAP β. This
-changes residuals substantially, causing the REML score to be nonzero and the Newton σ
-step to overshoot — same structural mechanism as Direction D (ill-conditioned rows collapse
-GLS β toward prior mean, changing residuals). The warm-started Newton from Adam does not
-converge in 3 steps.
-
-Infrastructure retained in `map.py` (`_normalBlockCoordMap`, `use_newton` flag in
-`refineNormalMapSrfx`) and benchmark method `normal_direction_g`, but defaults remain
-False.
+Block-coordinate Newton (exact GLS-MAP β + REML-Newton σ_rfx + EM σ_eps) after Adam. Pure Newton from LMM init severely diverges; polish-after-Adam regresses FFX +45% / σ +85% on small-n. Step 1 replaces Adam's β with GLS β, which changes residuals substantially and causes the Newton σ step to overshoot via the same collapse-toward-prior mechanism as Direction D.
 
 **Direction E — Wider 7-pt σ grid (DONE 2026-05-24)**
 
@@ -160,28 +115,13 @@ Also added a `σ_eps_map` fix: `refineNormalMapSrfx` now stores Adam's MAP σ_ep
 `stats['normal_map_sigma_eps']`, and the tail-grid GLS uses it instead of the initial
 projection σ_eps. Slight additional FFX improvement for gated-row tail corrections.
 
-**Direction D — Unconditional β averaging (DIAGNOSED and RETIRED 2026-05-24)**
+**Direction D — Unconditional β averaging (RETIRED 2026-05-24)**
 
-Attempted two implementations: (1) unconditional `_normalSigmaGridBetaAverage` in
-`refineNormalMapSrfx`, (2) unconditional `maybe_correct_beta_tail` in `refineNormalLaplaceEb`
-(lowering `beta_tail_grid_min_d` to 4 with `blend=0.25` and `blend=1.0`).
-
-All variants regressed FFX on medium rows (+3–50%) while being neutral on large/huge.
-Root cause: the GLS β at EB σ is worse than the Adam MAP β for the dominant gate group
-(high-condition rows, ~65% of large/huge). For these rows, `A_data` is ill-conditioned
-and the GLS collapses toward the prior mean; Adam's trajectory-aware β is better.
-The existing `blend=0.25` cap-gated tail correction was already the sweet spot.
-
-Direction D infrastructure code is retained in `refineNormalMapSrfx`/`refineNormalLaplaceEb`
-as opt-in flags (`beta_sigma_grid_unconditional`, `beta_tail_grid_unconditional`) but
-defaults remain False.
+Unconditional σ-grid β averaging at both MAP and EB stages. All variants regressed FFX on medium (+3–50%) while neutral on large/huge. Root cause: ~65% of large/huge rows are ill-conditioned — GLS β collapses toward the prior mean there, and Adam's β is better. The existing 25%-blended cap-gated tail correction is already the sweet spot.
 
 **Direction F — Cartesian σ_rfx grid for q=2 β averaging (RETIRED 2026-05-24)**
 
-Not applicable: Cartesian β averaging is hampered by the same high-condition-row
-mechanism as Direction D. No benefit without a working unconditional β averaging path.
-Infrastructure code (`cartesian` flag in `_normalSigmaGridBetaAverage`) retained but
-defaults False.
+Cartesian σ-grid β averaging for q=2. Not applicable: hampered by the same ill-conditioned-row mechanism as Direction D. No benefit without a working unconditional β averaging path.
 
 **Direction A — Softmax-weighted σ_rfx posterior mean (DONE 2026-05-24)**
 
@@ -205,16 +145,24 @@ outweighs any benefit in the rare high-collinearity case. No further attempts pl
 Gap Diagnosis vs INLA (2026-05-24 review)
 -----------------------------------------
 
-INLA still wins on mixed rows for both FFX and σ_rfx:
+Gap = current − INLA; positive = current worse. Mixed rows are train; sampled are valid/test.
 
-| Row | FFX gap | σ_rfx gap | notes |
-| --- | ---: | ---: | --- |
-| small-n-mixed | +0.031 (+40%) | +0.076 (+25%) | low-N rows, β cap fires 0%; tail-grid fires 0% |
-| medium-n-mixed | -0.007 (-3%) | +0.048 (+16%) | already at parity on FFX; σ improved with E |
-| large-n-mixed | +0.056 (+28%) | +0.083 (+31%) | β tail-grid gate fires 69.2% of rows |
-| huge-n-mixed | +0.051 (+24%) | +0.081 (+38%) | tail-grid gate fires 76.1% of rows |
+| Row | part | FFX gap | σ_rfx gap | notes |
+| --- | --- | ---: | ---: | --- |
+| small-n-mixed | train | +0.031 (+40%) | +0.076 (+25%) | low-N; β cap and tail-grid fire 0% |
+| medium-n-mixed | train | −0.007 (−3%) | +0.048 (+16%) | FFX parity; σ improved with E |
+| large-n-mixed | train | +0.056 (+28%) | +0.083 (+31%) | tail-grid gate fires 69% |
+| huge-n-mixed | train | +0.051 (+24%) | +0.081 (+38%) | tail-grid gate fires 76% |
+| small-n-sampled | valid | +0.060 (+28%) | +0.009 (+2%) | σ_rfx nearly tied |
+| small-n-sampled | test | +0.072 (+43%) | +0.003 (+1%) | σ_rfx tied |
+| medium-n-sampled | valid | +0.008 (+3%) | +0.123 (+38%) | FFX near-parity; σ_rfx gap reappears |
+| medium-n-sampled | test | **−0.013 (−6%)** | +0.024 (+8%) | current beats INLA on FFX |
+| large-n-sampled | valid | +0.033 (+14%) | +0.012 (+4%) | small gaps on both |
+| large-n-sampled | test | +0.011 (+4%) | +0.011 (+3%) | near-parity on both |
+| huge-n-sampled | valid | +0.107 (+37%) | **−0.157 (−31%)** | current beats INLA on σ_rfx |
+| huge-n-sampled | test | +0.006 (+2%) | +0.036 (+13%) | near-parity on FFX |
 
-Direction E reduced the σ_rfx gap by ~20–25% vs INLA across all sizes. FFX gap unchanged.
+Direction E reduced σ_rfx gap by ~20–25% across all sizes. FFX gap unchanged.
 The FFX gap is driven by high-condition rows (65%+ of large/huge train data) where the
 GLS β collapses toward the prior — existing 25%-blended tail correction is already optimal.
 
@@ -272,16 +220,8 @@ uv run python -u experiments/analytical/glmm_required_benchmark.py \
     --family n --methods current raw --max-datasets 1000 --batch-size 32
 
 uv run python -u experiments/analytical/glmm_inla_comparison.py \
-    --data-ids small-n-mixed,medium-n-mixed,large-n-mixed,huge-n-mixed \
-    --partition train --n-epochs 2 --n-inla 1000 --n-total 1000 \
-    --analytical-methods normal_eb,current --re-correlation diagonal
-
-# Save per-dataset row estimates for σ_rfx diagnostic (Normal family):
-uv run python -u experiments/analytical/glmm_inla_comparison.py \
-    --data-ids medium-n-mixed,large-n-mixed,huge-n-mixed \
-    --partition train --n-epochs 2 --n-inla 1000 --n-total 1000 \
-    --analytical-methods normal_eb,current --re-correlation diagonal \
-    --family n --save-inla-rows-dir experiments/analytical/inla_runs/normal_rows
+    --data-ids small-n-mixed --partition train --n-total 1000 \
+    --analytical-methods current --no-save-inla-rows
 
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical tests
