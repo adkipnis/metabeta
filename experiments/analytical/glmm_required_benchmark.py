@@ -26,6 +26,11 @@ METHODS = [
     'raw',
     'bernoulli_eb',
     'normal_eb',
+    'normal_direction_d',
+    'normal_direction_e',
+    'normal_direction_e_b1',
+    'normal_direction_de',
+    'normal_direction_def',
     'poisson_eb',
     'poisson_marginal_beta',
     'poisson_laplace_pirls_diag',
@@ -358,8 +363,17 @@ def _sliceBatch(batch: dict[str, torch.Tensor], n: int) -> dict[str, torch.Tenso
     return out
 
 
+_NORMAL_DIRECTION_METHODS = {
+    'normal_direction_d',
+    'normal_direction_e',
+    'normal_direction_e_b1',
+    'normal_direction_de',
+    'normal_direction_def',
+}
+
+
 def _methodKwargs(method: str) -> dict[str, str | bool]:
-    if method in {'default', 'current', 'poisson_latency'}:
+    if method in {'default', 'current', 'poisson_latency'} | _NORMAL_DIRECTION_METHODS:
         return {}
     if method == 'raw':
         return {
@@ -449,8 +463,11 @@ def _bernoulliEbKwargs(method: str, args: argparse.Namespace) -> dict[str, int |
     return {}
 
 
+_WIDE_SCALES = (0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0)
+
+
 def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
-    if method not in {'default', 'current', 'normal_eb'}:
+    if method not in {'default', 'current', 'normal_eb'} | _NORMAL_DIRECTION_METHODS:
         return {}
     out = {
         'normal_laplace_eb_steps': args.normal_eb_steps,
@@ -468,6 +485,25 @@ def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
         out['normal_laplace_eb_sigma_grid_refine'] = args.normal_eb_sigma_grid_refine
         out['normal_beta_sigma_grid'] = args.normal_beta_sigma_grid
         out['normal_beta_tail_grid'] = False
+    if method in {'normal_direction_d', 'normal_direction_de', 'normal_direction_def'}:
+        # Direction D: always-on β averaging at EB σ, lowered d threshold, conservative blend
+        out['normal_beta_tail_grid_unconditional'] = True
+        out['normal_beta_tail_grid_min_d'] = 4
+        out['normal_beta_tail_grid_blend'] = 0.25
+    if method in {'normal_direction_e', 'normal_direction_e_b1', 'normal_direction_de', 'normal_direction_def'}:
+        # Direction E: wider 7-pt log-spaced σ grid for all averaging stages
+        out['normal_beta_sigma_grid_scales'] = _WIDE_SCALES
+        out['normal_laplace_eb_sigma_grid_scales'] = _WIDE_SCALES
+        out['normal_beta_tail_grid_scales'] = _WIDE_SCALES
+    if method == 'normal_direction_e_b1':
+        # E with blend=1.0 for gated tail correction (test higher blend without unconditional)
+        out['normal_beta_tail_grid_blend'] = 1.0
+    if method == 'normal_direction_def':
+        # Direction F: Cartesian σ grid for q=2 β averaging at EB σ
+        out['normal_beta_tail_grid_cartesian'] = True
+        # D+F combined: also uncond with wider scales and cartesian for tail grid
+        out['normal_beta_tail_grid_unconditional'] = True
+        out['normal_beta_tail_grid_min_d'] = 4
     return out
 
 
@@ -659,11 +695,11 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--normal-eb-moment-blend', type=float, default=1.0)
     parser.add_argument('--normal-eb-prior-weight', type=float, default=4.0)
     parser.add_argument('--normal-eb-sigma-grid-refine', action='store_true')
-    parser.add_argument('--normal-eb-sigma-grid-scales', type=float, nargs='+', default=[0.75, 1.0, 1.3333333])
+    parser.add_argument('--normal-eb-sigma-grid-scales', type=float, nargs='+', default=[0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0])
     parser.add_argument('--normal-beta-sigma-grid', action='store_true')
-    parser.add_argument('--normal-beta-sigma-grid-scales', type=float, nargs='+', default=[0.75, 1.0, 1.3333333])
+    parser.add_argument('--normal-beta-sigma-grid-scales', type=float, nargs='+', default=[0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0])
     parser.add_argument('--normal-beta-sigma-grid-min-d', type=int, default=5)
-    parser.add_argument('--normal-beta-tail-grid-scales', type=float, nargs='+', default=[0.75, 1.0, 1.3333333])
+    parser.add_argument('--normal-beta-tail-grid-scales', type=float, nargs='+', default=[0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0])
     parser.add_argument('--normal-beta-tail-grid-min-d', type=int, default=9)
     parser.add_argument('--normal-beta-tail-grid-min-cond', type=float, default=1000.0)
     parser.add_argument('--normal-beta-tail-grid-blend', type=float, default=0.25)

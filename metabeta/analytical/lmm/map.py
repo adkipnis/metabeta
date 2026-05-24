@@ -194,6 +194,7 @@ def _normalSigmaGridBetaAverage(
     mask_q: torch.Tensor | None,
     scales: tuple[float, ...] | list[float],
     return_condition: bool = False,
+    cartesian: bool = False,
 ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     """Approximate hyperparameter-averaged β over a small diagonal-σ grid."""
     q = Zm.shape[-1]
@@ -207,11 +208,31 @@ def _normalSigmaGridBetaAverage(
     if not any(abs(scale - 1.0) <= 1e-8 for scale in clean_scales):
         clean_scales.append(1.0)
     clean_scales = sorted(set(clean_scales))
-    candidates = [
-        (sigma_rfx_base * float(scale)).clamp(min=1e-4, max=20.0) for scale in clean_scales
-    ]
-    base_idx = next(i for i, scale in enumerate(clean_scales) if abs(scale - 1.0) <= 1e-8)
-    sigma_grid = torch.stack(candidates, dim=1)
+
+    if cartesian and q == 2:
+        pairs = [(si, sj) for si in clean_scales for sj in clean_scales]
+        sigma_cands = []
+        for si, sj in pairs:
+            c = torch.stack(
+                [
+                    (sigma_rfx_base[:, 0] * si).clamp(min=1e-4, max=20.0),
+                    (sigma_rfx_base[:, 1] * sj).clamp(min=1e-4, max=20.0),
+                ],
+                dim=-1,
+            )
+            sigma_cands.append(c)
+        sigma_grid = torch.stack(sigma_cands, dim=1)  # (B, S*S, 2)
+        base_idx = next(
+            i
+            for i, (si, sj) in enumerate(pairs)
+            if abs(si - 1.0) <= 1e-8 and abs(sj - 1.0) <= 1e-8
+        )
+    else:
+        candidates = [
+            (sigma_rfx_base * float(scale)).clamp(min=1e-4, max=20.0) for scale in clean_scales
+        ]
+        base_idx = next(i for i, scale in enumerate(clean_scales) if abs(scale - 1.0) <= 1e-8)
+        sigma_grid = torch.stack(candidates, dim=1)
     S = sigma_grid.shape[1]
     se2 = sigma_eps.clamp(min=1e-6).square()
 
@@ -620,6 +641,8 @@ def refineNormalMapSrfx(
     beta_sigma_grid: bool = False,
     beta_sigma_grid_scales: tuple[float, ...] | list[float] = (0.75, 1.0, 1.3333333),
     beta_sigma_grid_min_d: int = 5,
+    beta_sigma_grid_unconditional: bool = False,
+    beta_sigma_grid_cartesian: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Refine (β, σ_rfx, σ_eps) via marginal MAP with autograd Adam; recompute GLS/BLUP under diagonal MAP Ψ."""
     q = Zm.shape[-1]
@@ -670,6 +693,7 @@ def refineNormalMapSrfx(
                 log_sigma_eps.clamp_(math.log(1e-4), math.log(20.0))
 
     sigma_rfx = log_sigma_rfx.detach().exp()
+    sigma_eps_map = log_sigma_eps.detach().exp()
     if mask_q is not None:
         sigma_rfx = torch.where(mask_q[..., :q].bool(), sigma_rfx, stats['sigma_rfx_est'][..., :q])
     out = dict(stats)
@@ -701,7 +725,11 @@ def refineNormalMapSrfx(
                     (beta_override.shape[0],), d, device=beta_override.device, dtype=torch.long
                 )
             if beta_sigma_grid:
-                stabilize = cap_components & (d_count >= int(beta_sigma_grid_min_d))[:, None]
+                eligible_d = (d_count >= int(beta_sigma_grid_min_d))[:, None]
+                if beta_sigma_grid_unconditional:
+                    stabilize = eligible_d
+                else:
+                    stabilize = cap_components & eligible_d
                 beta_grid = _normalSigmaGridBetaAverage(
                     Xm,
                     ym,
@@ -709,7 +737,7 @@ def refineNormalMapSrfx(
                     mask_n,
                     mask_m,
                     sigma_rfx,
-                    stats['sigma_eps_est'].squeeze(-1).detach(),
+                    sigma_eps_map,
                     nu_ffx,
                     tau_ffx,
                     family_ffx,
@@ -720,6 +748,7 @@ def refineNormalMapSrfx(
                     mask_d,
                     mask_q,
                     beta_sigma_grid_scales,
+                    cartesian=beta_sigma_grid_cartesian,
                 )
                 beta_grid = beta_grid.clamp(min=cap_lo, max=cap_hi)
                 beta_override = torch.where(stabilize, beta_grid, beta_override)
@@ -730,6 +759,7 @@ def refineNormalMapSrfx(
         out['normal_map_beta_stabilized'] = beta_stabilized
     out['sigma_rfx_est'] = sigma_rfx
     out['normal_map_sigma_rfx'] = sigma_rfx
+    out['normal_map_sigma_eps'] = sigma_eps_map.unsqueeze(-1)
     if 'Psi' in stats:
         if recompute_blup:
             return _recomputeNormalFinalDiagMap(
@@ -782,6 +812,8 @@ def refineNormalLaplaceEb(
     beta_tail_grid_min_d: int = 9,
     beta_tail_grid_min_cond: float = 1000.0,
     beta_tail_grid_blend: float = 0.25,
+    beta_tail_grid_unconditional: bool = False,
+    beta_tail_grid_cartesian: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Moment-based EB update for diagonal σ_rfx under the exact Gaussian marginal, optionally followed by a coordinate grid pass and tail β correction."""
     q = Zm.shape[-1]
@@ -811,6 +843,9 @@ def refineNormalLaplaceEb(
         eligible_d = d_count >= int(beta_tail_grid_min_d)
         if not bool(eligible_d.any()):
             return beta_output, torch.zeros((B,), device=device, dtype=dtype)
+        sigma_eps_for_grid = stats.get(
+            'normal_map_sigma_eps', stats['sigma_eps_est']
+        ).squeeze(-1).detach()
         beta_grid, beta_cond = _normalSigmaGridBetaAverage(
             Xm,
             ym,
@@ -818,7 +853,7 @@ def refineNormalLaplaceEb(
             mask_n,
             mask_m,
             sigma_rfx,
-            stats['sigma_eps_est'].squeeze(-1).detach(),
+            sigma_eps_for_grid,
             nu_ffx,
             tau_ffx,
             family_ffx,
@@ -830,21 +865,25 @@ def refineNormalLaplaceEb(
             mask_q,
             beta_tail_grid_scales,
             return_condition=True,
+            cartesian=beta_tail_grid_cartesian,
         )
-        cap_hit = (
-            stats.get(
-                'normal_map_beta_prior_capped', torch.zeros((B,), device=device, dtype=dtype)
-            ).to(device=device)
-            > 0
-        )
-        stabilized = (
-            stats.get(
-                'normal_map_beta_stabilized', torch.zeros((B,), device=device, dtype=dtype)
-            ).to(device=device)
-            > 0
-        )
-        high_cond = beta_cond >= float(beta_tail_grid_min_cond)
-        gate = eligible_d & (cap_hit | stabilized | high_cond)
+        if beta_tail_grid_unconditional:
+            gate = eligible_d
+        else:
+            cap_hit = (
+                stats.get(
+                    'normal_map_beta_prior_capped', torch.zeros((B,), device=device, dtype=dtype)
+                ).to(device=device)
+                > 0
+            )
+            stabilized = (
+                stats.get(
+                    'normal_map_beta_stabilized', torch.zeros((B,), device=device, dtype=dtype)
+                ).to(device=device)
+                > 0
+            )
+            high_cond = beta_cond >= float(beta_tail_grid_min_cond)
+            gate = eligible_d & (cap_hit | stabilized | high_cond)
         cap_lo = nu_ffx[..., : beta_grid.shape[-1]] - 4.0 * tau_ffx[
             ..., : beta_grid.shape[-1]
         ].clamp(min=1e-4)

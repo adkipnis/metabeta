@@ -204,21 +204,29 @@ def _popNormalRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
             'normal_laplace_eb_sigma_grid_refine', likelihood_family == 0
         ),
         'normal_laplace_eb_sigma_grid_scales': kwargs.pop(
-            'normal_laplace_eb_sigma_grid_scales', (0.75, 1.0, 1.3333333)
+            'normal_laplace_eb_sigma_grid_scales', (0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0)
         ),
         'normal_map_beta_prior_cap': kwargs.pop('normal_map_beta_prior_cap', 4.0),
         'normal_beta_sigma_grid': kwargs.pop('normal_beta_sigma_grid', likelihood_family == 0),
         'normal_beta_sigma_grid_scales': kwargs.pop(
-            'normal_beta_sigma_grid_scales', (0.75, 1.0, 1.3333333)
+            'normal_beta_sigma_grid_scales', (0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0)
         ),
         'normal_beta_sigma_grid_min_d': kwargs.pop('normal_beta_sigma_grid_min_d', 5),
+        'normal_beta_sigma_grid_unconditional': kwargs.pop(
+            'normal_beta_sigma_grid_unconditional', False
+        ),
+        'normal_beta_sigma_grid_cartesian': kwargs.pop('normal_beta_sigma_grid_cartesian', False),
         'normal_beta_tail_grid': kwargs.pop('normal_beta_tail_grid', likelihood_family == 0),
         'normal_beta_tail_grid_scales': kwargs.pop(
-            'normal_beta_tail_grid_scales', (0.75, 1.0, 1.3333333)
+            'normal_beta_tail_grid_scales', (0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0)
         ),
         'normal_beta_tail_grid_min_d': kwargs.pop('normal_beta_tail_grid_min_d', 9),
         'normal_beta_tail_grid_min_cond': kwargs.pop('normal_beta_tail_grid_min_cond', 1000.0),
         'normal_beta_tail_grid_blend': kwargs.pop('normal_beta_tail_grid_blend', 0.25),
+        'normal_beta_tail_grid_unconditional': kwargs.pop(
+            'normal_beta_tail_grid_unconditional', False
+        ),
+        'normal_beta_tail_grid_cartesian': kwargs.pop('normal_beta_tail_grid_cartesian', False),
         'beta_alpha_low': kwargs.pop('beta_alpha_low', 0.65),
         'beta_alpha_high': kwargs.pop('beta_alpha_high', 0.75),
     }
@@ -384,6 +392,8 @@ def glmm(
                 beta_sigma_grid=normal_opts['normal_beta_sigma_grid'],
                 beta_sigma_grid_scales=normal_opts['normal_beta_sigma_grid_scales'],
                 beta_sigma_grid_min_d=normal_opts['normal_beta_sigma_grid_min_d'],
+                beta_sigma_grid_unconditional=normal_opts['normal_beta_sigma_grid_unconditional'],
+                beta_sigma_grid_cartesian=normal_opts['normal_beta_sigma_grid_cartesian'],
             )
         if (
             map_refine
@@ -421,6 +431,8 @@ def glmm(
                 beta_tail_grid_min_d=normal_opts['normal_beta_tail_grid_min_d'],
                 beta_tail_grid_min_cond=normal_opts['normal_beta_tail_grid_min_cond'],
                 beta_tail_grid_blend=normal_opts['normal_beta_tail_grid_blend'],
+                beta_tail_grid_unconditional=normal_opts['normal_beta_tail_grid_unconditional'],
+                beta_tail_grid_cartesian=normal_opts['normal_beta_tail_grid_cartesian'],
             )
     elif likelihood_family == 1:
         stats = lmmBernoulli(

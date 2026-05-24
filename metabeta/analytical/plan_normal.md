@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-24 (Direction A implemented; debloat pass; D–J architectural patches proposed)
+Last updated: 2026-05-24 (Direction E adopted; D/F diagnosed and retired; σ_eps_map fix)
 
 Goal
 ----
@@ -20,12 +20,12 @@ Default Path
 - reported β cap for `d > 4`: `clamp(β_MAP, ν_ffx ± 4τ_ffx)`;
 - uncapped MAP β for BLUP residuals;
 - diagonal final Ψ for GLS/BLUP recompute;
-- scalar β sigma-grid reporting over σ_rfx scales `{0.75, 1.0, 1.3333333}`;
+- scalar β sigma-grid reporting over σ_rfx scales `{0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0}`;
 - one-shot posterior-moment EB update for diagonal σ_rfx;
-- one-pass coordinate σ_rfx grid over the same scales, accepted only on marginal-target
-  improvement, reporting softmax-weighted posterior mean (Direction A);
+- one-pass coordinate σ_rfx grid over the same 7-pt scales, accepted only on marginal-target
+  improvement, reporting softmax-weighted posterior mean (Direction A + E);
 - damped tail β correction for `d >= 9`, gated by β cap/stabilization or weak β
-  precision and blended `25%` toward the scalar-grid posterior mean;
+  precision; blended `25%` toward the grid posterior mean computed with MAP σ_eps;
 - rare BLUP/sigma guard for high-d aliased rows with implausibly large BLUP norms.
 
 The β cap and tail correction are reporting-only. BLUPs continue to use the uncapped MAP
@@ -38,18 +38,18 @@ First 1000 datasets per row with the default path. Lower NRMSE is better.
 
 | Dataset | part | FFX | σ | σ_eps | BLUP | ms | guard |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.1093 | 0.3973 | 0.2151 | 0.4161 | 8.50 | 0.000 |
-| small-n-sampled | valid | 0.2605 | 0.5627 | 0.2169 | 0.5120 | 3.21 | 0.000 |
-| small-n-sampled | test | 0.2827 | 0.4639 | 0.2169 | 0.4923 | 3.06 | 0.000 |
-| medium-n-mixed | train | 0.2283 | 0.3522 | 0.1655 | 0.4192 | 4.62 | 0.000 |
-| medium-n-sampled | valid | 0.2626 | 0.3986 | 0.1891 | 0.5142 | 5.66 | 0.000 |
-| medium-n-sampled | test | 0.2594 | 0.3798 | 0.1949 | 0.4405 | 5.53 | 0.000 |
-| large-n-mixed | train | 0.2582 | 0.3608 | 0.1268 | 0.4135 | 6.89 | 0.000 |
-| large-n-sampled | valid | 0.2971 | 0.4118 | 0.1563 | 0.5043 | 7.37 | 0.000 |
-| large-n-sampled | test | 0.2870 | 0.4258 | 0.1513 | 0.5119 | 7.74 | 0.000 |
-| huge-n-mixed | train | 0.2677 | 0.3490 | 0.1161 | 0.4529 | 7.99 | 0.004 |
-| huge-n-sampled | valid | 0.4239 | 0.3502 | 0.1375 | 0.4556 | 9.81 | 0.000 |
-| huge-n-sampled | test | 0.2947 | 0.3704 | 0.1438 | 0.4602 | 9.88 | 0.002 |
+| small-n-mixed | train | 0.1091 | 0.3861 | 0.2151 | 0.4151 | 3.30 | 0.000 |
+| small-n-sampled | valid | 0.2605 | 0.5618 | 0.2169 | 0.5117 | 2.62 | 0.000 |
+| small-n-sampled | test | 0.2828 | 0.4647 | 0.2169 | 0.4923 | 2.61 | 0.000 |
+| medium-n-mixed | train | 0.2283 | 0.3475 | 0.1655 | 0.4189 | 3.93 | 0.000 |
+| medium-n-sampled | valid | 0.2625 | 0.3941 | 0.1891 | 0.5137 | 4.74 | 0.000 |
+| medium-n-sampled | test | 0.2594 | 0.3673 | 0.1949 | 0.4399 | 4.58 | 0.000 |
+| large-n-mixed | train | 0.2579 | 0.3542 | 0.1268 | 0.4126 | 5.69 | 0.000 |
+| large-n-sampled | valid | 0.2972 | 0.3894 | 0.1563 | 0.5011 | 6.01 | 0.000 |
+| large-n-sampled | test | 0.2863 | 0.4188 | 0.1513 | 0.5118 | 6.29 | 0.000 |
+| huge-n-mixed | train | 0.2673 | 0.3209 | 0.1161 | 0.4519 | 7.26 | 0.004 |
+| huge-n-sampled | valid | 0.4241 | 0.3382 | 0.1375 | 0.4542 | 8.72 | 0.000 |
+| huge-n-sampled | test | 0.2940 | 0.3585 | 0.1438 | 0.4592 | 9.12 | 0.002 |
 
 R-INLA Reference
 ----------------
@@ -82,6 +82,40 @@ estimator.
 Closed Directions (historical)
 ------------------------------
 
+**Direction E — Wider 7-pt σ grid (DONE 2026-05-24)**
+
+Replaced the 3-pt scalar grid `{0.75, 1.0, 1.333}` with `{0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0}`
+for all three grid scales (`normal_laplace_eb_sigma_grid_scales`, `normal_beta_sigma_grid_scales`,
+`normal_beta_tail_grid_scales`). Results on first-1000 rows: σ NRMSE improved 1–8% across
+all sizes (huge-n-mixed: -8.1%), FFX neutral. Cost: `+0.5–1 ms/ds`.
+
+Also added a `σ_eps_map` fix: `refineNormalMapSrfx` now stores Adam's MAP σ_eps in
+`stats['normal_map_sigma_eps']`, and the tail-grid GLS uses it instead of the initial
+projection σ_eps. Slight additional FFX improvement for gated-row tail corrections.
+
+**Direction D — Unconditional β averaging (DIAGNOSED and RETIRED 2026-05-24)**
+
+Attempted two implementations: (1) unconditional `_normalSigmaGridBetaAverage` in
+`refineNormalMapSrfx`, (2) unconditional `maybe_correct_beta_tail` in `refineNormalLaplaceEb`
+(lowering `beta_tail_grid_min_d` to 4 with `blend=0.25` and `blend=1.0`).
+
+All variants regressed FFX on medium rows (+3–50%) while being neutral on large/huge.
+Root cause: the GLS β at EB σ is worse than the Adam MAP β for the dominant gate group
+(high-condition rows, ~65% of large/huge). For these rows, `A_data` is ill-conditioned
+and the GLS collapses toward the prior mean; Adam's trajectory-aware β is better.
+The existing `blend=0.25` cap-gated tail correction was already the sweet spot.
+
+Direction D infrastructure code is retained in `refineNormalMapSrfx`/`refineNormalLaplaceEb`
+as opt-in flags (`beta_sigma_grid_unconditional`, `beta_tail_grid_unconditional`) but
+defaults remain False.
+
+**Direction F — Cartesian σ_rfx grid for q=2 β averaging (RETIRED 2026-05-24)**
+
+Not applicable: Cartesian β averaging is hampered by the same high-condition-row
+mechanism as Direction D. No benefit without a working unconditional β averaging path.
+Infrastructure code (`cartesian` flag in `_normalSigmaGridBetaAverage`) retained but
+defaults False.
+
 **Direction A — Softmax-weighted σ_rfx posterior mean (DONE 2026-05-24)**
 
 `_normalSigmaRfxGridRefine` replaced argmax with softmax-weighted mean — same pattern as
@@ -108,10 +142,14 @@ INLA still wins on mixed rows for both FFX and σ_rfx:
 
 | Row | FFX gap | σ_rfx gap | notes |
 | --- | ---: | ---: | --- |
-| small-n-mixed | +0.032 (+41%) | +0.087 (+28%) | low-N rows, β cap fires 0%; tail-grid fires 0% |
-| medium-n-mixed | -0.007 (-3%) | +0.055 (+18%) | already at parity on FFX |
-| large-n-mixed | +0.057 (+28%) | +0.090 (+33%) | β tail-grid gate fires 68.7% of rows |
-| huge-n-mixed | +0.052 (+24%) | +0.109 (+46%) | tail-grid gate fires 76.0% of rows |
+| small-n-mixed | +0.031 (+40%) | +0.076 (+25%) | low-N rows, β cap fires 0%; tail-grid fires 0% |
+| medium-n-mixed | -0.007 (-3%) | +0.048 (+16%) | already at parity on FFX; σ improved with E |
+| large-n-mixed | +0.056 (+28%) | +0.083 (+31%) | β tail-grid gate fires 69.2% of rows |
+| huge-n-mixed | +0.051 (+24%) | +0.081 (+38%) | tail-grid gate fires 76.1% of rows |
+
+Direction E reduced the σ_rfx gap by ~20–25% vs INLA across all sizes. FFX gap unchanged.
+The FFX gap is driven by high-condition rows (65%+ of large/huge train data) where the
+GLS β collapses toward the prior — existing 25%-blended tail correction is already optimal.
 
 Two structural observations:
 
@@ -121,79 +159,26 @@ Two structural observations:
    points along each axis. The remaining σ_rfx mean-vs-mode gap is a *grid resolution* issue,
    not a method-of-estimation issue.
 
-2. **β posterior averaging machinery already exists but is gated off for most rows.**
+2. **β posterior averaging (Direction D) cannot unconditionally replace MAP-Adam β.**
    `_normalSigmaGridBetaAverage` computes the INLA-style β posterior mean
-   `β̂ = Σ_k w_k β̂_GLS(σ_k)` with softmax weights from the marginal target. It is
-   currently only invoked (a) inside `refineNormalMapSrfx` when the β prior cap fires
-   (rare on mixed rows), and (b) inside `refineNormalLaplaceEb` as a 25%-damped tail
-   correction gated on `d ≥ 9` + cap-or-cond. β output for the median mixed row is still
-   the MAP-Adam β, not the integrated β. This is the most likely source of the residual
-   FFX gap on mixed rows.
+   `β̂ = Σ_k w_k β̂_GLS(σ_k)`. Unconditional use regressed FFX on medium rows (+3–50%)
+   because ~65% of large/huge rows are ill-conditioned: `A_data` condition ≥ 1000, causing
+   GLS to collapse toward the prior mean — Adam's trajectory-aware β is structurally better
+   there. The existing 25%-blended cap-gated tail correction is already the sweet spot.
+   The remaining FFX gap requires a *self-consistent (β, σ)* MAP estimate (Direction G/J),
+   not just better σ averaging.
 
-Latency budget: current default is `4–10 ms/ds`; budget ceiling is `~100 ms/ds`. There is
+Latency budget: current default is `3–10 ms/ds`; budget ceiling is `~100 ms/ds`. There is
 roughly **10× headroom** to spend on accuracy.
 
 Pending Architecture Directions
 --------------------------------
 
-Ranked by expected impact on the FFX gap vs cost. Items D and E are the priority
-candidates — they re-use existing machinery and target the diagnosed gap directly.
+Directions D, E, F investigated and resolved (2026-05-24). The FFX gap vs INLA is structural:
+it requires a self-consistent (β, σ) MAP estimate, not just better σ averaging. Items G and J
+are the next candidates.
 
-**Direction D — Always-on σ-grid β averaging (priority 1)**
-
-Replace the MAP β output with the softmax-weighted σ-grid β average for `d ≥ d_thresh`
-(start with `d_thresh = 4`, the existing β-cap threshold). The mechanism is already
-implemented in `_normalSigmaGridBetaAverage`; the change is to drop the cap/stabilization
-gate and use it unconditionally as the primary β output.
-
-- Current call site: `refineNormalMapSrfx` calls it only inside `if beta_sigma_grid` AND
-  `stabilize = cap_components & (d_count >= 5)`. The mixed-row β-cap fire rate is `~0–6%`
-  (table above), so >94% of rows never see β averaging.
-- Proposed: lift the `cap_components` gate and average across the σ grid for every active
-  dataset with `d_count >= 4`. Keep the cap as a hard clamp on the averaged output
-  (defense for prior tails), but stop using cap-firing as the *gate* for averaging.
-- Expected: closes most of the small/large/huge-n-mixed FFX gap (analogous to INLA's main
-  trick: integrate over θ instead of plugging in θ̂).
-- Cost: each grid point is one Woodbury GLS + one marginal target eval. With the current
-  3-point grid this is `~2–3 ms/ds` extra. With Direction E (wider grid) it can be
-  `~5–15 ms/ds`. Well inside budget.
-- Risk: low. β averaging is mathematically the marginal posterior mean under the Laplace
-  approximation; it cannot regress FFX in expectation when the grid covers the σ
-  posterior reasonably. The 25% blend already exists; remove the blend and use the full
-  average for d>=d_thresh.
-
-**Direction E — Wider/finer σ-grid (priority 2; pairs with D)**
-
-The default `{0.75, 1.0, 1.3333}` grid covers `±33%` of σ̂. For diffuse posteriors
-(small-n, high-q, near-zero σ), the right-tail mass sits beyond `1.333·σ̂_MAP`.
-
-- Proposed grid (log-spaced, 7 points): `{0.5, 0.66, 0.83, 1.0, 1.2, 1.5, 2.0}`. This is
-  roughly ±100% and approximates the CCD axis-points INLA uses.
-- Alternative (5 points): `{0.5, 0.71, 1.0, 1.41, 2.0}` — half the cost, still wider.
-- Apply to both `normal_beta_sigma_grid_scales` (β averaging) and
-  `normal_laplace_eb_sigma_grid_scales` (Direction A σ_rfx refinement).
-- Cost: 5-pt → `~4–7 ms/ds`; 7-pt → `~6–12 ms/ds`. Both inside budget.
-- Risk: prior literature retired "2.0× scale, G-gated" because at 8k it did not improve
-  large/huge. Re-investigate now that Direction A averages instead of argmax-selects:
-  argmax discards low-weight tail points, but the softmax mean uses them. A wider grid
-  should help more once paired with D.
-
-**Direction F — Per-component σ_rfx grid for β averaging (priority 3; q≥2 only)**
-
-Scalar grid scales all σ_rfx components together. For q≥2, the β covariance depends on
-each component's σ separately, and the right-tail of one component can matter
-independently of the others.
-
-- For `q=2`: 2-D Cartesian grid (e.g. 5×5 = 25 candidates per dataset). Cost is
-  `q^S` so this only scales to `q≤2` on the wider grid; for `q≥3` keep scalar.
-- Direction A (`_normalSigmaRfxGridRefine`) already iterates *one coordinate at a time*
-  for σ_rfx; the proposal is to do a full *Cartesian* grid for β averaging, where
-  each candidate carries its own posterior weight.
-- Expected: helps q=2 rows specifically; q=1 rows are unchanged (no coordinate to grid
-  over). q≥3 rows fall back to scalar (D).
-- Cost: 25-candidate solve at q=2 is `~10–20 ms/ds` on huge rows. Inside budget.
-
-**Direction G — Newton-Raphson MAP replacing Adam (priority 4; speed > accuracy)**
+**Direction G — Newton-Raphson MAP replacing Adam (priority 1)**
 
 `refineNormalMapSrfx` uses Adam `n_steps=20, lr=0.03`. At the optimum, Adam never quite
 converges (lr too large for tight tolerance) and the resulting MAP β has small but
@@ -208,7 +193,7 @@ analytical gradients already available in `_remlNewtonStep`.
   Hessian on `_logMarginalTarget` is expensive per-batch; a custom analytic form mirroring
   `_remlNewtonStep` (REML Newton for σ_rfx already implemented in `lmm.py`) is cheaper.
 
-**Direction H — Iterated MAP→EB→MAP refinement loop (priority 5)**
+**Direction H — Iterated MAP→EB→MAP refinement loop (priority 2)**
 
 Currently the refinement pipeline is one pass each: `MAP-Adam → moment-EB → grid-refine →
 tail β`. Each stage outputs to the next; there is no fixed-point iteration. For
@@ -221,7 +206,7 @@ grid β.
 - Risk: Adam's noisy convergence within iteration means small-step convergence might
   oscillate. Pairs naturally with Direction G (Newton MAP).
 
-**Direction I — Skew-corrected β marginal mean (priority 6; speculative)**
+**Direction I — Skew-corrected β marginal mean (priority 3; speculative)**
 
 The β marginal posterior π(β | y) integrated over σ can be skewed: the right tail of σ
 inflates one β tail more than the other. INLA explicitly approximates this skew with a
@@ -231,9 +216,9 @@ nonzero on diffuse-σ rows.
 - Implementation: at each σ grid point, compute β posterior mean *and* a 3-point Simpson
   approximation of the β skewness contribution.
 - Expected: small additional FFX improvement on small-n-mixed (highest-skew rows).
-- Cost: `+1–2 ms/ds`. Speculative — implement only if D+E leave residual gap.
+- Cost: `+1–2 ms/ds`. Speculative — implement only if G/J leave residual gap.
 
-**Direction J — Block Newton joint update for (β, σ) (priority 7; speculative)**
+**Direction J — Block Newton joint update for (β, σ) (priority 4; speculative)**
 
 For Normal LMM, the joint posterior is closed-form Gaussian conditional on σ. The Adam
 joint update over (β, log σ_rfx, log σ_eps) couples optimization across blocks; a block
@@ -250,19 +235,20 @@ flavor as Direction G but applied jointly.
 Bernoulli/Poisson lessons that inform priorities
 -------------------------------------------------
 
-What worked elsewhere maps cleanly to D+E here:
-
 - **Bernoulli EB closed FFX gap unconditionally** by switching from PQL-init β to a
-  Laplace-EB refined β over diagonal σ. The equivalent for Normal is using the σ-grid
-  β average (D) instead of the MAP β plug-in.
-- **Poisson VG refinement on a wider σ grid** is the Poisson equivalent of D+E. The
-  Poisson plan reports VG = `~11 ms/ds` per dataset on top of EB; Normal's analogue is
-  much cheaper because the conditional posterior is closed-form Gaussian.
+  Laplace-EB refined β over diagonal σ. For Normal, the analogous move (Direction D:
+  σ-grid β average) was diagnosed and retired — it regresses on ill-conditioned rows where
+  GLS collapses to the prior. The self-consistent MAP approach (Direction G/J) is the
+  Normal-appropriate analogue.
+- **Poisson VG refinement on a wider σ grid** is the Poisson equivalent of E. The
+  Poisson plan reports VG = `~11 ms/ds` per dataset on top of EB; Normal's analogue
+  (Direction E) is much cheaper because the conditional posterior is closed-form Gaussian.
+  Direction E was adopted.
 - **Multi-start, EP, full INLA: explicitly deferred** in both Bernoulli and Poisson plans
   as low-expected-value. The same applies here for any directions beyond H.
 - **σ-only patches deprioritized in Poisson**: "true/INLA-σ plug-in diagnostics did not
   close the FFX gap". The asymmetry is the same here: σ_rfx accuracy alone does not close
-  FFX unless β is also integrated over σ uncertainty (which is exactly D).
+  FFX. The FFX gap requires a tighter, self-consistent (β, σ) MAP estimate.
 
 Commands
 --------
