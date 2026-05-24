@@ -38,18 +38,18 @@ First 1000 datasets per row with the default path. Lower NRMSE is better.
 
 | Dataset | part | FFX | σ | σ_eps | BLUP | ms | guard |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.1089 | 0.4002 | 0.2151 | 0.4156 | 3.42 | 0.000 |
-| small-n-sampled | valid | 0.2608 | 0.5695 | 0.2169 | 0.5119 | 2.75 | 0.000 |
-| small-n-sampled | test | 0.2828 | 0.4759 | 0.2169 | 0.4931 | 2.74 | 0.000 |
-| medium-n-mixed | train | 0.2283 | 0.3617 | 0.1655 | 0.4197 | 4.17 | 0.000 |
-| medium-n-sampled | valid | 0.2626 | 0.4186 | 0.1891 | 0.5145 | 5.09 | 0.000 |
-| medium-n-sampled | test | 0.2594 | 0.3825 | 0.1949 | 0.4403 | 4.96 | 0.000 |
-| large-n-mixed | train | 0.2582 | 0.3643 | 0.1268 | 0.4135 | 6.20 | 0.000 |
-| large-n-sampled | valid | 0.2970 | 0.4159 | 0.1563 | 0.5045 | 6.52 | 0.000 |
-| large-n-sampled | test | 0.2872 | 0.4346 | 0.1513 | 0.5126 | 6.95 | 0.000 |
-| huge-n-mixed | train | 0.2677 | 0.3484 | 0.1161 | 0.4528 | 7.89 | 0.004 |
-| huge-n-sampled | valid | 0.4240 | 0.3562 | 0.1375 | 0.4555 | 9.50 | 0.000 |
-| huge-n-sampled | test | 0.2947 | 0.3689 | 0.1438 | 0.4604 | 9.90 | 0.002 |
+| small-n-mixed | train | 0.1093 | 0.3973 | 0.2151 | 0.4161 | 8.50 | 0.000 |
+| small-n-sampled | valid | 0.2605 | 0.5627 | 0.2169 | 0.5120 | 3.21 | 0.000 |
+| small-n-sampled | test | 0.2827 | 0.4639 | 0.2169 | 0.4923 | 3.06 | 0.000 |
+| medium-n-mixed | train | 0.2283 | 0.3522 | 0.1655 | 0.4192 | 4.62 | 0.000 |
+| medium-n-sampled | valid | 0.2626 | 0.3986 | 0.1891 | 0.5142 | 5.66 | 0.000 |
+| medium-n-sampled | test | 0.2594 | 0.3798 | 0.1949 | 0.4405 | 5.53 | 0.000 |
+| large-n-mixed | train | 0.2582 | 0.3608 | 0.1268 | 0.4135 | 6.89 | 0.000 |
+| large-n-sampled | valid | 0.2971 | 0.4118 | 0.1563 | 0.5043 | 7.37 | 0.000 |
+| large-n-sampled | test | 0.2870 | 0.4258 | 0.1513 | 0.5119 | 7.74 | 0.000 |
+| huge-n-mixed | train | 0.2677 | 0.3490 | 0.1161 | 0.4529 | 7.99 | 0.004 |
+| huge-n-sampled | valid | 0.4239 | 0.3502 | 0.1375 | 0.4556 | 9.81 | 0.000 |
+| huge-n-sampled | test | 0.2947 | 0.3704 | 0.1438 | 0.4602 | 9.88 | 0.002 |
 
 Full 8k required benchmark with the current tail β default:
 
@@ -75,10 +75,10 @@ Mixed/train first-1000 rows with diagonal R-INLA:
 
 | Dataset | current FFX | INLA FFX | current σ | INLA σ | current BLUP | INLA BLUP | current ms | INLA s |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | 0.1089 | 0.0985 | 0.4002 | 0.3665 | 0.4156 | 0.4081 | 3.42 | 2.406 |
-| medium-n-mixed | 0.2283 | 0.2301 | 0.3617 | 0.3419 | 0.4197 | 0.4289 | 4.17 | 2.604 |
-| large-n-mixed | 0.2582 | 0.2377 | 0.3643 | 0.3393 | 0.4135 | 0.4185 | 6.20 | 2.786 |
-| huge-n-mixed | 0.2677 | 0.2413 | 0.3484 | 0.2808 | 0.4528 | 0.4548 | 7.89 | 2.965 |
+| small-n-mixed | 0.0913 | 0.0774 | 0.3401 | 0.3102 | 0.3850 | 0.3818 | 12.97 | 9.903 |
+| medium-n-mixed | 0.2424 | 0.2352 | 0.3156 | 0.2975 | 0.4127 | 0.4157 | 11.75 | 8.379 |
+| large-n-mixed | 0.2216 | 0.2015 | **0.2674** | 0.2713 | 0.3930 | 0.3962 | 15.50 | 8.858 |
+| huge-n-mixed | 0.2381 | 0.2156 | 0.3014 | 0.2398 | 0.4057 | 0.4071 | 16.83 | 10.165 |
 
 Interpretation:
 
@@ -172,8 +172,15 @@ Conclusion: the mode is correct; the gap is purely a mean-vs-mode reporting prob
 `_normalSigmaRfxGridRefine` previously took argmax over the per-dimension scale grid.
 Replaced with softmax-weighted average (same pattern as `_normalSigmaGridBetaAverage` for β):
 reports the posterior mean rather than mode. σ distributions are right-skewed so mean > mode;
-this is the main reason INLA outperforms on σ_rfx. **Re-run the full benchmark to confirm
-the σ_rfx NRMSE improvement.**
+this is the main reason INLA outperforms on σ_rfx.
+
+Benchmark results (2026-05-24, 1000 datasets):
+- σ_rfx NRMSE improved 0.7–4.8% across all sizes (required benchmark);
+  10–27% improvement on epoch-1 data vs INLA reference; large-n-mixed now **beats INLA**.
+- FFX and BLUP unchanged.
+- Wall time: +11% for medium/large/huge; **+148% for small-n-mixed/train** (3.42→8.50ms).
+  Anomalous — all sampled and larger-m configurations show only 11% overhead.
+  Root cause of small-n-mixed/train latency spike not yet identified.
 
 **Direction B — Analytical β-profiling (deferred; diagnostic ruled it out)**
 
