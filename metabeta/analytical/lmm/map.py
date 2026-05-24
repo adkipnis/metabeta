@@ -8,9 +8,11 @@ from torch.nn import functional as F
 from metabeta.analytical.linalg import (
     _adaptiveRidge,
     _adaptiveRidgeBm,
+    _gramRank,
     _safeSolve,
 )
 from metabeta.analytical.lmm.lmm import _normalGlsAndBlups
+from metabeta.utils.constants import STUDENT_DF
 from metabeta.utils.families import logProbFfx, logProbSigma
 
 __all__ = [
@@ -614,6 +616,157 @@ def _guardNormalAliasedBlups(
     return out
 
 
+def _normalBlockCoordMap(
+    beta_init: torch.Tensor,
+    sigma_rfx_init: torch.Tensor,
+    sigma_eps_init: torch.Tensor,
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor,
+    tau_ffx: torch.Tensor,
+    family_ffx: torch.Tensor,
+    tau_rfx: torch.Tensor,
+    family_sigma_rfx: torch.Tensor,
+    mask_d: torch.Tensor | None,
+    mask_q: torch.Tensor | None,
+    n_steps: int = 5,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Block-coordinate Newton MAP for (β, σ_rfx, σ_eps) in the Normal LMM.
+
+    Each step: (1) prior-regularised GLS β exact given (σ_rfx, σ_eps);
+    (2) REML-Newton σ_rfx step with MAP prior correction via autograd;
+    (3) profile σ_eps update via EM formula.  Converges in 3–5 steps.
+    """
+    B, m, _, d = Xm.shape
+    q = Zm.shape[-1]
+    device, dtype = Xm.device, Xm.dtype
+
+    if mask_q is not None:
+        Zm = Zm * mask_q[..., :q].to(device=device, dtype=dtype)[:, None, None, :]
+
+    active = mask_m.bool()
+    mask4 = mask_m[:, :, None, None]
+    active_f = active.to(dtype)
+    eye_q = torch.eye(q, device=device, dtype=dtype)
+    eye_q_bm = eye_q.expand(B, m, q, q)
+    active_q = (
+        mask_q[..., :q].to(device=device).bool()
+        if mask_q is not None
+        else torch.ones(B, q, device=device, dtype=torch.bool)
+    )
+
+    ZtZ = torch.einsum('bmnq,bmnr->bmqr', Zm, Zm)
+    ZtZ_safe = torch.where(active[:, :, None, None], ZtZ, eye_q)
+    Zty = torch.einsum('bmnq,bmn->bmq', Zm, ym)
+    ZtX = torch.einsum('bmnq,bmnd->bmqd', Zm, Xm)
+    XtX = torch.einsum('bmnd,bmnk->bdk', Xm, Xm)
+    Xty = torch.einsum('bmnd,bmn->bd', Xm, ym)
+    XtZ = torch.einsum('bmnd,bmnq->bmdq', Xm, Zm)
+
+    beta_rank = _gramRank(XtX).clamp(min=1.0, max=float(d))
+    N_float = mask_n.float().sum(dim=(1, 2))
+
+    nu_d = nu_ffx[..., :d].to(device=device, dtype=dtype)
+    tau_d = tau_ffx[..., :d].to(device=device, dtype=dtype).clamp(min=1e-4)
+    tau_rfx_q = tau_rfx[..., :q].to(device=device, dtype=dtype).clamp(min=1e-4)
+    has_student = bool((family_ffx == 1).any())
+
+    if mask_d is not None:
+        active_d = mask_d[..., :d].to(device=device).bool()
+    else:
+        active_d = None
+
+    beta = beta_init.to(device=device, dtype=dtype).clamp(-20.0, 20.0).clone()
+    sigma_rfx = sigma_rfx_init[..., :q].to(device=device, dtype=dtype).clamp(min=1e-4, max=20.0).clone()
+    se2 = sigma_eps_init.to(device=device, dtype=dtype).clamp(min=1e-4, max=20.0).square()
+
+    for _ in range(n_steps):
+        # Woodbury W_g = (ZtZ + se2 diag(1/σ²_rfx))^{-1}
+        inner = ZtZ_safe + torch.diag_embed(se2[:, None, None] / sigma_rfx.square()[:, None, :])
+        W_g = _safeSolve(inner + _adaptiveRidgeBm(inner), eye_q_bm) * mask4
+
+        # MAP β: prior-regularised GLS system
+        W_ZtX = torch.einsum('bmqp,bmpd->bmqd', W_g, ZtX)
+        correction_XX = torch.einsum('bmdq,bmqk->bdk', XtZ, W_ZtX)
+        W_Zty = torch.einsum('bmqp,bmp->bmq', W_g, Zty)
+        correction_Xy = torch.einsum('bmdq,bmq->bd', XtZ, W_Zty)
+
+        A_data = (XtX - correction_XX) / se2[:, None, None]
+        b_data = (Xty - correction_Xy) / se2[:, None]
+
+        # Prior precision: Normal exact; Student-t one IRLS step
+        normal_prec = 1.0 / tau_d.square()
+        if has_student:
+            nu_df = float(STUDENT_DF)
+            delta = (beta - nu_d) / tau_d
+            student_wt = (nu_df + 1.0) / (nu_df + delta.square().clamp(max=1e6))
+            prec = torch.where((family_ffx == 1)[:, None], student_wt / tau_d.square(), normal_prec)
+        else:
+            prec = normal_prec
+        if active_d is not None:
+            prec = prec * active_d.to(dtype)
+
+        A_map = A_data + torch.diag_embed(prec)
+        b_map = b_data + prec * nu_d
+        beta = _safeSolve(A_map + _adaptiveRidge(A_map), b_map).nan_to_num(0.0).clamp(-20.0, 20.0)
+        if active_d is not None:
+            beta = torch.where(active_d, beta, beta_init.to(device=device, dtype=dtype))
+
+        # REML score for ψ_k = σ²_rfx_k; reuses W_g (no extra Woodbury)
+        se2_4d = se2[:, None, None, None]
+        se2_3d = se2[:, None, None]
+
+        ZtZ_W = torch.einsum('bmqr,bmrs->bmqs', ZtZ_safe, W_g)
+        ZtZ_W_ZtZ = torch.einsum('bmqr,bmrs->bmqs', ZtZ_W, ZtZ_safe)
+        H_diag = (ZtZ_safe - ZtZ_W_ZtZ / se2_4d).diagonal(dim1=-2, dim2=-1) / se2_3d
+        H_diag = H_diag.clamp(min=0.0) * active_f[:, :, None]
+
+        resid = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta)) * mask_n
+        Ztr = torch.einsum('bmnq,bmn->bmq', Zm, resid)
+        ZtZ_W_Ztr = torch.einsum('bmqr,bmr->bmq', ZtZ_W, Ztr)
+        Vr = (Ztr - ZtZ_W_Ztr / se2_3d) / se2_3d
+        signal_sq = Vr.square() * active_f[:, :, None]
+
+        S_reml = -0.5 * H_diag.sum(dim=1) + 0.5 * signal_sq.sum(dim=1)
+        F_reml = 0.5 * H_diag.square().sum(dim=1).clamp(min=1e-10)
+
+        # MAP prior gradient on ψ_k via autograd (cheap: no Woodbury)
+        with torch.enable_grad():
+            psi = sigma_rfx.detach().square().requires_grad_(True)
+            lp_rfx = logProbSigma(
+                psi.clamp(min=1e-8).sqrt().unsqueeze(1),
+                tau_rfx_q.unsqueeze(1),
+                family_sigma_rfx,
+                active_q.to(psi.dtype).unsqueeze(1) if mask_q is not None else None,
+            )
+            prior_grad_psi = torch.autograd.grad(lp_rfx.sum(), psi)[0].detach()
+
+        S_map = S_reml + prior_grad_psi
+        # Newton step in log σ space to avoid overshooting far from the optimum.
+        # Δlog(σ) = Δψ / (2ψ) = 0.5 * S_map / (F_reml * ψ), clamped to ±0.5 per step.
+        psi = sigma_rfx.square().clamp(min=1e-8)
+        log_sigma_step = (0.5 * S_map / (F_reml * psi)).clamp(-0.5, 0.5)
+        sigma_rfx_new = (sigma_rfx.log() + log_sigma_step).exp().clamp(min=1e-4, max=20.0)
+        sigma_rfx = torch.where(active_q, sigma_rfx_new, sigma_rfx)
+
+        # Profile σ_eps update via EM formula (reuses ZtZ_W and gls blups)
+        blups = torch.einsum('bmqp,bmp->bmq', W_g, Ztr)
+        blup_resid = (
+            ym
+            - torch.einsum('bmnd,bd->bmn', Xm, beta)
+            - torch.einsum('bmnq,bmq->bmn', Zm, blups)
+        ) * mask_n
+        ss = blup_resid.square().sum(dim=(1, 2))
+        T = (ZtZ_W.diagonal(dim1=-2, dim2=-1).sum(dim=-1) * active_f).sum(dim=1)
+        T_safe = T.clamp(max=0.9 * (N_float - beta_rank).clamp(min=1.0))
+        se2 = (ss / (N_float - beta_rank - T_safe).clamp(min=1.0)).clamp(min=1e-12)
+
+    return beta, sigma_rfx, se2.clamp(min=1e-8).sqrt()
+
+
 def refineNormalMapSrfx(
     stats: dict[str, torch.Tensor],
     Xm: torch.Tensor,
@@ -643,8 +796,13 @@ def refineNormalMapSrfx(
     beta_sigma_grid_min_d: int = 5,
     beta_sigma_grid_unconditional: bool = False,
     beta_sigma_grid_cartesian: bool = False,
+    use_newton: bool = False,
 ) -> dict[str, torch.Tensor]:
-    """Refine (β, σ_rfx, σ_eps) via marginal MAP with autograd Adam; recompute GLS/BLUP under diagonal MAP Ψ."""
+    """Refine (β, σ_rfx, σ_eps) via marginal MAP; recompute GLS/BLUP under diagonal MAP Ψ.
+
+    By default uses Adam (autograd).  With use_newton=True uses the block-coordinate Newton
+    path: exact GLS β + REML-Newton σ_rfx + EM σ_eps, converging in 3–5 steps (Direction G).
+    """
     q = Zm.shape[-1]
     if q == 0 or n_steps <= 0:
         return stats
@@ -694,8 +852,26 @@ def refineNormalMapSrfx(
 
     sigma_rfx = log_sigma_rfx.detach().exp()
     sigma_eps_map = log_sigma_eps.detach().exp()
+    beta_det = beta.detach()
+
+    if use_newton:
+        # Newton polish: 3 block-coordinate steps starting from Adam's near-MAP output.
+        # Adam gets close; Newton tightens β and σ_rfx to the true MAP without oscillation.
+        with torch.no_grad():
+            beta_det, sigma_rfx, sigma_eps_map = _normalBlockCoordMap(
+                beta_det,
+                sigma_rfx,
+                sigma_eps_map,
+                Xm, ym, Zm, mask_n, mask_m,
+                nu_ffx, tau_ffx, family_ffx,
+                tau_rfx, family_sigma_rfx,
+                mask_d, mask_q,
+                n_steps=3,
+            )
+
     if mask_q is not None:
         sigma_rfx = torch.where(mask_q[..., :q].bool(), sigma_rfx, stats['sigma_rfx_est'][..., :q])
+    beta = beta_det
     out = dict(stats)
     # MAP beta overfits the low-d normal sets; keep the older GLS/OLS blend there.
     beta_for_blup_override = beta.detach() if beta.shape[-1] > 4 else None

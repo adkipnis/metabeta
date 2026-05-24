@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-24 (Direction E adopted; D/F diagnosed and retired; σ_eps_map fix)
+Last updated: 2026-05-24 (Direction E adopted; D/F/G diagnosed and retired; H tested; σ_eps_map fix)
 
 Goal
 ----
@@ -81,6 +81,25 @@ estimator.
 
 Closed Directions (historical)
 ------------------------------
+
+**Direction G — Newton polish after Adam (DIAGNOSED and RETIRED 2026-05-24)**
+
+Implemented `_normalBlockCoordMap`: block-coordinate Newton with exact GLS-MAP β +
+REML-Newton σ_rfx (log-space step, ±0.5 clamp) + EM σ_eps. Two variants tested:
+(1) pure Newton from LMM init (5 steps): σ NRMSE 2.1–3.1 vs 0.39–0.47 for current —
+severely diverges because the REML score is large far from the MAP.
+(2) Newton polish after Adam (3 steps from Adam's output): FFX +45% / σ +85% regression on
+small-n; smaller regressions on larger sizes.
+
+Root cause: step 1 of block-coord Newton replaces Adam's β with exact GLS-MAP β. This
+changes residuals substantially, causing the REML score to be nonzero and the Newton σ
+step to overshoot — same structural mechanism as Direction D (ill-conditioned rows collapse
+GLS β toward prior mean, changing residuals). The warm-started Newton from Adam does not
+converge in 3 steps.
+
+Infrastructure retained in `map.py` (`_normalBlockCoordMap`, `use_newton` flag in
+`refineNormalMapSrfx`) and benchmark method `normal_direction_g`, but defaults remain
+False.
 
 **Direction E — Wider 7-pt σ grid (DONE 2026-05-24)**
 
@@ -165,7 +184,7 @@ Two structural observations:
    because ~65% of large/huge rows are ill-conditioned: `A_data` condition ≥ 1000, causing
    GLS to collapse toward the prior mean — Adam's trajectory-aware β is structurally better
    there. The existing 25%-blended cap-gated tail correction is already the sweet spot.
-   The remaining FFX gap requires a *self-consistent (β, σ)* MAP estimate (Direction G/J),
+   The remaining FFX gap requires a *self-consistent (β, σ)* MAP estimate (Direction H/J),
    not just better σ averaging.
 
 Latency budget: current default is `3–10 ms/ds`; budget ceiling is `~100 ms/ds`. There is
@@ -174,39 +193,29 @@ roughly **10× headroom** to spend on accuracy.
 Pending Architecture Directions
 --------------------------------
 
-Directions D, E, F investigated and resolved (2026-05-24). The FFX gap vs INLA is structural:
-it requires a self-consistent (β, σ) MAP estimate, not just better σ averaging. Items G and J
-are the next candidates.
+Directions D, E, F, G investigated and resolved (2026-05-24). The FFX gap vs INLA is structural:
+it requires a self-consistent (β, σ) MAP estimate, not just better σ averaging. Direction H
+(iterated MAP→EB) tested and shows 3–5% FFX improvement with a BLUP regression on
+huge-n-mixed that needs resolution before adoption. Direction J remains speculative.
 
-**Direction G — Newton-Raphson MAP replacing Adam (priority 1)**
-
-`refineNormalMapSrfx` uses Adam `n_steps=20, lr=0.03`. At the optimum, Adam never quite
-converges (lr too large for tight tolerance) and the resulting MAP β has small but
-non-zero error vs the true MAP. Replace with Newton-Raphson using the same Woodbury
-analytical gradients already available in `_remlNewtonStep`.
-
-- Expected: 3–5 Newton steps to tight convergence. Better-anchored σ-grid because the
-  grid is centered at the actual MAP.
-- Cost: each Newton step builds the same Woodbury inner system as Adam; total cost
-  comparable or slightly less. Net speed-up of `~1–3 ms/ds`.
-- Risk: requires Hessian-vector products or block-explicit Hessians. `torch.autograd`
-  Hessian on `_logMarginalTarget` is expensive per-batch; a custom analytic form mirroring
-  `_remlNewtonStep` (REML Newton for σ_rfx already implemented in `lmm.py`) is cheaper.
-
-**Direction H — Iterated MAP→EB→MAP refinement loop (priority 2)**
+**Direction H — Iterated MAP→EB→MAP refinement loop (priority 1)**
 
 Currently the refinement pipeline is one pass each: `MAP-Adam → moment-EB → grid-refine →
 tail β`. Each stage outputs to the next; there is no fixed-point iteration. For
 ill-conditioned high-d rows the first MAP solution biases the EB σ which then biases the
 grid β.
 
-- Proposed: 2–3 outer iterations of `(MAP β | σ) ↔ (EB σ | β)` until ‖Δ‖ < tol. Each
-  outer iteration is one MAP and one EB.
-- Cost: `+3–6 ms/ds` per extra outer.
-- Risk: Adam's noisy convergence within iteration means small-step convergence might
-  oscillate. Pairs naturally with Direction G (Newton MAP).
+- Proposed: 2 outer iterations of `MAP-Adam(20) → moment-EB → grid-refine`. Tail β
+  correction fires only in the last iteration.
+- Tested (2026-05-24): FFX improved 3–5% across medium/large/huge sizes. BLUP neutral
+  except huge-n-mixed-train (+5% regression: second Adam pass uses less OLS-anchored β for
+  BLUPs than the first). σ_rfx neutral to slightly worse.
+- Cost: `+3–7 ms/ds` (1.7× total; budget has 5–8× headroom).
+- Status: promising but BLUP regression on huge-n-mixed needs resolution before adoption.
+  Infrastructure in `fit.py` (kwarg `normal_map_outer_iterations=2`); benchmark method
+  `normal_direction_h`.
 
-**Direction I — Skew-corrected β marginal mean (priority 3; speculative)**
+**Direction I — Skew-corrected β marginal mean (priority 2; speculative)**
 
 The β marginal posterior π(β | y) integrated over σ can be skewed: the right tail of σ
 inflates one β tail more than the other. INLA explicitly approximates this skew with a
@@ -216,9 +225,9 @@ nonzero on diffuse-σ rows.
 - Implementation: at each σ grid point, compute β posterior mean *and* a 3-point Simpson
   approximation of the β skewness contribution.
 - Expected: small additional FFX improvement on small-n-mixed (highest-skew rows).
-- Cost: `+1–2 ms/ds`. Speculative — implement only if G/J leave residual gap.
+- Cost: `+1–2 ms/ds`. Speculative — implement only if H leaves residual gap.
 
-**Direction J — Block Newton joint update for (β, σ) (priority 4; speculative)**
+**Direction J — Block Newton joint update for (β, σ) (priority 3; speculative)**
 
 For Normal LMM, the joint posterior is closed-form Gaussian conditional on σ. The Adam
 joint update over (β, log σ_rfx, log σ_eps) couples optimization across blocks; a block
@@ -238,8 +247,8 @@ Bernoulli/Poisson lessons that inform priorities
 - **Bernoulli EB closed FFX gap unconditionally** by switching from PQL-init β to a
   Laplace-EB refined β over diagonal σ. For Normal, the analogous move (Direction D:
   σ-grid β average) was diagnosed and retired — it regresses on ill-conditioned rows where
-  GLS collapses to the prior. The self-consistent MAP approach (Direction G/J) is the
-  Normal-appropriate analogue.
+  GLS collapses to the prior. The self-consistent MAP approach (Direction H: iterated
+  MAP→EB, J: block Newton) is the Normal-appropriate analogue.
 - **Poisson VG refinement on a wider σ grid** is the Poisson equivalent of E. The
   Poisson plan reports VG = `~11 ms/ds` per dataset on top of EB; Normal's analogue
   (Direction E) is much cheaper because the conditional posterior is closed-form Gaussian.

@@ -31,6 +31,9 @@ METHODS = [
     'normal_direction_e_b1',
     'normal_direction_de',
     'normal_direction_def',
+    'normal_direction_g',
+    'normal_direction_h',
+    'normal_direction_gh',
     'poisson_eb',
     'poisson_marginal_beta',
     'poisson_laplace_pirls_diag',
@@ -369,6 +372,9 @@ _NORMAL_DIRECTION_METHODS = {
     'normal_direction_e_b1',
     'normal_direction_de',
     'normal_direction_def',
+    'normal_direction_g',
+    'normal_direction_h',
+    'normal_direction_gh',
 }
 
 
@@ -504,6 +510,12 @@ def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
         # D+F combined: also uncond with wider scales and cartesian for tail grid
         out['normal_beta_tail_grid_unconditional'] = True
         out['normal_beta_tail_grid_min_d'] = 4
+    if method in {'normal_direction_g', 'normal_direction_gh'}:
+        # Direction G: 3 Newton polish steps after Adam, tightening MAP convergence
+        out['normal_map_use_newton'] = True
+    if method in {'normal_direction_h', 'normal_direction_gh'}:
+        # Direction H: iterated MAP→EB→MAP (2 outer iterations)
+        out['normal_map_outer_iterations'] = 2
     return out
 
 
