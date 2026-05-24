@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-24 (Priority 0 diagnostic done; Direction A implemented)
+Last updated: 2026-05-24 (Direction A implemented; debloat pass)
 
 Goal
 ----
@@ -23,7 +23,7 @@ Default Path
 - scalar β sigma-grid reporting over σ_rfx scales `{0.75, 1.0, 1.3333333}`;
 - one-shot posterior-moment EB update for diagonal σ_rfx;
 - one-pass coordinate σ_rfx grid over the same scales, accepted only on marginal-target
-  improvement;
+  improvement, reporting softmax-weighted posterior mean (Direction A);
 - damped tail β correction for `d >= 9`, gated by β cap/stabilization or weak β
   precision and blended `25%` toward the scalar-grid posterior mean;
 - rare BLUP/sigma guard for high-d aliased rows with implausibly large BLUP norms.
@@ -51,23 +51,6 @@ First 1000 datasets per row with the default path. Lower NRMSE is better.
 | huge-n-sampled | valid | 0.4239 | 0.3502 | 0.1375 | 0.4556 | 9.81 | 0.000 |
 | huge-n-sampled | test | 0.2947 | 0.3704 | 0.1438 | 0.4602 | 9.88 | 0.002 |
 
-Full 8k required benchmark with the current tail β default:
-
-| Dataset | part | FFX | σ | σ_eps | BLUP | ms | β-tail | guard |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.2243 | 0.3740 | 0.1661 | 0.3974 | 3.68 | 0.000 | 0.000 |
-| small-n-sampled | valid | 0.1507 | 0.4962 | 0.2043 | 0.4637 | 3.06 | 0.000 | 0.000 |
-| small-n-sampled | test | 0.2313 | 0.4758 | 0.2031 | 0.4607 | 3.20 | 0.000 | 0.000 |
-| medium-n-mixed | train | 0.2184 | 0.3275 | 0.1295 | 0.4195 | 5.47 | 0.000 | 0.000 |
-| medium-n-sampled | valid | 0.2509 | 0.3993 | 0.1752 | 0.4826 | 5.71 | 0.000 | 0.000 |
-| medium-n-sampled | test | 0.2524 | 0.4399 | 0.1735 | 0.5023 | 5.81 | 0.000 | 0.000 |
-| large-n-mixed | train | 0.2114 | 0.3133 | 0.1117 | 0.4066 | 7.79 | 0.682 | 0.000 |
-| large-n-sampled | valid | 0.2779 | 0.3781 | 0.1409 | 0.5178 | 7.90 | 0.648 | 0.000 |
-| large-n-sampled | test | 0.2672 | 0.3590 | 0.1354 | 0.5009 | 8.14 | 0.642 | 0.000 |
-| huge-n-mixed | train | 0.2299 | 0.3126 | 0.0935 | 0.4261 | 10.65 | 0.724 | 0.003 |
-| huge-n-sampled | valid | 0.2920 | 0.3620 | 0.1187 | 0.4897 | 11.48 | 0.719 | 0.002 |
-| huge-n-sampled | test | 0.2668 | 0.3627 | 0.1201 | 0.4890 | 11.25 | 0.716 | 0.003 |
-
 R-INLA Reference
 ----------------
 
@@ -80,41 +63,10 @@ Mixed/train first-1000 rows with diagonal R-INLA:
 | large-n-mixed | 0.2216 | 0.2015 | **0.2674** | 0.2713 | 0.3930 | 0.3962 | 15.50 | 8.858 |
 | huge-n-mixed | 0.2381 | 0.2156 | 0.3014 | 0.2398 | 0.4057 | 0.4071 | 16.83 | 10.165 |
 
-Interpretation:
-
-- INLA still has the clearest σ_rfx edge, especially huge mixed.
-- BLUP is already tied or slightly better analytically on medium/large/huge mixed rows.
-- The remaining FFX gap is concentrated in rare high-d or ill-conditioned tails.
-- R-INLA is seconds per dataset, while the analytical path is milliseconds.
-
-Sampled first-1000 rows with diagonal R-INLA:
-
-| Dataset | part | current FFX | INLA FFX | current σ | INLA σ | current BLUP | INLA BLUP | current ms | INLA s |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-sampled | valid | 0.2608 | 0.2023 | 0.5695 | 0.4450 | 0.5119 | 0.4988 | 2.87 | 2.377 |
-| small-n-sampled | test | 0.2828 | 0.2008 | 0.4759 | 0.4357 | 0.4931 | 0.4756 | 2.73 | 2.382 |
-| medium-n-sampled | valid | 0.2626 | 0.2490 | 0.4186 | 0.4048 | 0.5145 | 0.5201 | 4.81 | 3.032 |
-| medium-n-sampled | test | 0.2594 | 0.2594 | 0.3825 | 0.3419 | 0.4403 | 0.4506 | 5.35 | 3.020 |
-| large-n-sampled | valid | 0.2970 | 0.2527 | 0.4159 | 0.3428 | 0.5045 | 0.5069 | 6.21 | 3.430 |
-| large-n-sampled | test | 0.2872 | 0.2710 | 0.4346 | 0.3984 | 0.5126 | 0.5052 | 6.65 | 3.431 |
-| huge-n-sampled | valid | 0.4240 | 0.3110 | 0.3562 | 4.4979 † | 0.4555 | 0.4598 | 10.27 | 3.784 |
-| huge-n-sampled | test | 0.2947 | 0.2732 | 0.3689 | 0.3122 | 0.4604 | 0.4639 | 9.63 | 3.768 |
-
-† `huge-n-sampled valid` has an INLA σ_rfx outlier in the second true-σ quartile. Do not
-use that cell as evidence against the analytical σ path.
-
-Tail Diagnostics
-----------------
-
-Tail scans (2026-05-18) on 8000 medium/large/huge rows confirm the remaining FFX gap is
-concentrated in rare high-d, ill-conditioned rows with frequent β prior-cap hits and
-frequent singular/near-singular fixed/random design, where INLA's posterior-mean shift is
-aligned with the analytical β error. BLUP is tied in these rows. The retained damped scalar
-gate handles the actionable portion; previous broader β corrections improved selected tails
-while moving full-population metrics backward. Low-priority future work: a very narrow β-only
-safeguard gated on high-d, prior-capped, singular/near-singular rows, blending at most 25%
-toward the prior/scalar-grid posterior mean. Full tail diagnostic tables are in
-`experiments/analytical/glmm_inla_results.md`.
+- INLA still has a σ_rfx edge on small/medium/huge; large-n-mixed now beats INLA after Direction A.
+- BLUP is tied or slightly better analytically on medium/large/huge mixed rows.
+- The FFX gap is concentrated in rare high-d, ill-conditioned tails (see `experiments/analytical/glmm_inla_results.md`).
+- R-INLA is seconds per dataset; the analytical path is milliseconds.
 
 Known Structural Limits
 -----------------------
@@ -130,81 +82,22 @@ estimator.
 Pending Architecture Directions
 --------------------------------
 
-Reviewed 2026-05-21 against colleague suggestions. Three directions assessed; one requires
-diagnostic confirmation before implementation.
+**Direction A — Softmax-weighted σ_rfx posterior mean (DONE 2026-05-24)**
 
-**Priority 0 — Diagnostic (run first, determines which of A or B to prioritise)**
+`_normalSigmaRfxGridRefine` replaced argmax with softmax-weighted mean — same pattern as
+`_normalSigmaGridBetaAverage` for β. σ posteriors are right-skewed so mean > mode; this
+closed most of the INLA gap on σ_rfx.
 
-Run Normal INLA comparison with `--save-inla-rows-dir` to obtain per-dataset σ_rfx. Add
-`normal_map_sigma_rfx` (post-MAP, pre-EB) as a saved diagnostic key in
-`glmm_inla_comparison.py`. Then compare:
+**Direction B — Analytical β-profiling (not warranted)**
 
-  analytical MAP σ_rfx  →  analytical EB σ_rfx  →  INLA posterior mean σ_rfx
-
-If MAP σ ≈ INLA mean but EB σ < INLA mean: the mode is fine, the mean-correction is too
-weak → pursue direction A.
-If MAP σ itself undershoots INLA mean by a lot: the mode is too low → pursue direction B
-in addition.
-
-**Status (2026-05-24): COMPLETE.** Row estimates written to
-`experiments/analytical/inla_runs/normal_rows/`. Diagnostic verdict:
-
-- **MAP ≈ INLA mode** (MAP − INLA mode mean < 0.002; RMSE 0.04–0.06): the optimizer
-  finds the correct posterior mode.
-- **EB ≈ MAP**: moment-EB shifts σ ~3% further downward (wrong direction).
-- **INLA mean wins by 12–36% NRMSE** over EB on active (non-tiny) σ dimensions:
-
-  Pooled NRMSE over active (mask_q & true > 0.25) (row, dim) pairs. "EB" = `current`
-  method final estimate (post-EB + grid); "MAP" = `sigma_rfx_map_current` (pre-EB stage).
-
-  | Dataset | MAP NRMSE | EB NRMSE | INLA mode | INLA mean |
-  | --- | ---: | ---: | ---: | ---: |
-  | small | 0.293 | 0.229 | 0.221 | **0.204** |
-  | medium | 0.224 | 0.214 | 0.215 | **0.189** |
-  | large | 0.191 | 0.177 | 0.178 | **0.167** |
-  | huge | 0.260 | 0.215 | 0.167 | **0.153** |
-
-Conclusion: the mode is correct; the gap is purely a mean-vs-mode reporting problem.
-**Pursue Direction A only. Direction B is not warranted.**
-
-**Direction A — Softmax-weighted σ_rfx posterior mean (IMPLEMENTED 2026-05-24)**
-
-`_normalSigmaRfxGridRefine` previously took argmax over the per-dimension scale grid.
-Replaced with softmax-weighted average (same pattern as `_normalSigmaGridBetaAverage` for β):
-reports the posterior mean rather than mode. σ distributions are right-skewed so mean > mode;
-this is the main reason INLA outperforms on σ_rfx.
-
-Benchmark results (2026-05-24, 1000 datasets):
-- σ_rfx NRMSE improved 0.7–4.8% across all sizes (required benchmark);
-  10–27% improvement on epoch-1 data vs INLA reference; large-n-mixed now **beats INLA**.
-- FFX and BLUP unchanged.
-- Wall time: +11% for medium/large/huge; **+148% for small-n-mixed/train** (3.42→8.50ms).
-  Anomalous — all sampled and larger-m configurations show only 11% overhead.
-  Root cause of small-n-mixed/train latency spike not yet identified.
-
-**Direction B — Analytical β-profiling (deferred; diagnostic ruled it out)**
-
-The current `refineNormalMapSrfx` does prior-aware marginal MAP over log-σ (integrating
-out u analytically), but jointly optimises β and σ via Adam. True REML profiles β out of
-the marginal likelihood analytically, adding the `log|X'V⁻¹X + Λ_β|` correction and
-decoupling the β-σ gradient surface. For Gaussian β priors this is tractable (completing
-the square). Implement only if the diagnostic shows MAP σ itself undershoots INLA mean,
-not just the EB posterior mean.
+Diagnostic confirmed MAP σ already matches INLA mode; the gap was purely mean-vs-mode.
+Direction B not needed.
 
 **Direction C — Trace-based df for final σ_eps (low priority)**
 
-The EM loop already computes the correct `T = Σ_g tr[W_g Z_g'Z_g]` trace (= colleague's
-df_u). The final σ_eps deliberately reverts to the projection estimate because EM σ_eps
-was noisy on high-d rows. A targeted fix: apply the trace df to the projection denominator
-directly as a one-shot correction (`df_eff = mx_rank + T` at initial σ_eps), avoiding EM
-noise while correcting the collinearity bias. Modest value; do not attempt before A.
-
-**What the colleague's review clarified as already implemented:**
-
-- Per-dimension coordinate σ_rfx grid: `_normalSigmaRfxGridRefine` already does this.
-- Marginal MAP over log-σ: `refineNormalMapSrfx` Adam loop already does this.
-- Trace-based df_u: already in the EM loop (`T = Σ_g tr[ZtZ_W]`); not exposed in final
-  output by deliberate choice (EM σ_eps reversion).
+The EM loop computes `T = Σ_g tr[W_g Z_g'Z_g]`; applying it as a one-shot df correction
+to the projection denominator (`df_eff = mx_rank + T`) would correct the collinearity bias
+in σ_eps without EM noise. Modest value; not attempted.
 
 Commands
 --------
@@ -227,18 +120,6 @@ uv run python -u experiments/analytical/glmm_inla_comparison.py \
     --analytical-methods normal_eb,current --re-correlation diagonal \
     --family n --save-inla-rows-dir experiments/analytical/inla_runs/normal_rows
 
-uv run python -u experiments/analytical/glmm_normal_inla_diagnostic.py \
-    --data-ids medium-n-mixed large-n-mixed huge-n-mixed --partition train \
-    --n-epochs 2 --tail-scan 8000 --tail-k 16 --tail-metric ffx_eb_rmse \
-    --methods current --batch-size 32 \
-    --output-csv experiments/analytical/normal_ffx_tail_posterior_shift.csv
-
-uv run python -u experiments/analytical/glmm_normal_inla_diagnostic.py \
-    --data-ids large-n-sampled huge-n-sampled --partition valid \
-    --tail-scan 8000 --tail-k 16 --tail-metric ffx_eb_rmse \
-    --methods current --batch-size 32 \
-    --output-csv experiments/analytical/normal_sampled_valid_ffx_tail_diagnostic.csv
-
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical tests
 ```
@@ -248,13 +129,14 @@ Retired Lines
 
 - R-INLA backend or full PyTorch INLA: incompatible with the throughput target.
 - Standalone MAP option: EB is the retained Normal answer; MAP is only an internal stage.
+- `mode='gradient'` in `refineNormalLaplaceEb`: gradient Adam loop for σ_rfx — removed
+  in 2026-05-24 debloat pass; moment EB is the only retained mode.
 - Output-local MAP for final BLUP: oracle tests confirmed diagonal Ψ from MAP σ_rfx beats
   output-local MAP and full Ψ recompute for BLUP accuracy.
 - Axis, ratio, post-EB, curvature, hard-shrink, and broad tail-grid β variants.
 - Final correlated Ψ for BLUP: estimated correlations are noisy and harmful here.
 - Wider σ_rfx grid (2.0× scale, G-gated): 8k showed no improvement on large/huge; the
   standard EB + 1.333 grid already captures available marginal-target improvement.
-  G-eligibility gate (sigma_grid_min_g_hi) and the 2.0 scale remain as no-op kwargs.
 - Per-dimension moment EB (moment_per_dim): too liberal — accepts individual-dim updates
   where the joint posterior is not improving; regressed small-n-sampled σ by +0.013.
 - τ_rfx floor for W_g (moment_sigma_tau_floor): no material improvement; moment EB is
