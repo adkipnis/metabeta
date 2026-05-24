@@ -26,16 +26,6 @@ METHODS = [
     'raw',
     'bernoulli_eb',
     'normal_eb',
-    'normal_direction_d',
-    'normal_direction_e',
-    'normal_direction_e_b1',
-    'normal_direction_de',
-    'normal_direction_def',
-    'normal_direction_g',
-    'normal_direction_h',
-    'normal_direction_gh',
-    'normal_direction_i',
-    'normal_direction_j',
     'poisson_eb',
     'poisson_marginal_beta',
     'poisson_laplace_pirls_diag',
@@ -368,22 +358,8 @@ def _sliceBatch(batch: dict[str, torch.Tensor], n: int) -> dict[str, torch.Tenso
     return out
 
 
-_NORMAL_DIRECTION_METHODS = {
-    'normal_direction_d',
-    'normal_direction_e',
-    'normal_direction_e_b1',
-    'normal_direction_de',
-    'normal_direction_def',
-    'normal_direction_g',
-    'normal_direction_h',
-    'normal_direction_gh',
-    'normal_direction_i',
-    'normal_direction_j',
-}
-
-
 def _methodKwargs(method: str) -> dict[str, str | bool]:
-    if method in {'default', 'current', 'poisson_latency'} | _NORMAL_DIRECTION_METHODS:
+    if method in {'default', 'current', 'poisson_latency'}:
         return {}
     if method == 'raw':
         return {
@@ -473,11 +449,8 @@ def _bernoulliEbKwargs(method: str, args: argparse.Namespace) -> dict[str, int |
     return {}
 
 
-_WIDE_SCALES = (0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0)
-
-
 def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
-    if method not in {'default', 'current', 'normal_eb'} | _NORMAL_DIRECTION_METHODS:
+    if method not in {'default', 'current', 'normal_eb'}:
         return {}
     out = {
         'normal_laplace_eb_steps': args.normal_eb_steps,
@@ -495,40 +468,6 @@ def _normalEbKwargs(method: str, args: argparse.Namespace) -> dict[str, object]:
         out['normal_laplace_eb_sigma_grid_refine'] = args.normal_eb_sigma_grid_refine
         out['normal_beta_sigma_grid'] = args.normal_beta_sigma_grid
         out['normal_beta_tail_grid'] = False
-    if method in {'normal_direction_d', 'normal_direction_de', 'normal_direction_def'}:
-        # Direction D: always-on β averaging at EB σ, lowered d threshold, conservative blend
-        out['normal_beta_tail_grid_unconditional'] = True
-        out['normal_beta_tail_grid_min_d'] = 4
-        out['normal_beta_tail_grid_blend'] = 0.25
-    if method in {'normal_direction_e', 'normal_direction_e_b1', 'normal_direction_de', 'normal_direction_def'}:
-        # Direction E: wider 7-pt log-spaced σ grid for all averaging stages
-        out['normal_beta_sigma_grid_scales'] = _WIDE_SCALES
-        out['normal_laplace_eb_sigma_grid_scales'] = _WIDE_SCALES
-        out['normal_beta_tail_grid_scales'] = _WIDE_SCALES
-    if method == 'normal_direction_e_b1':
-        # E with blend=1.0 for gated tail correction (test higher blend without unconditional)
-        out['normal_beta_tail_grid_blend'] = 1.0
-    if method == 'normal_direction_def':
-        # Direction F: Cartesian σ grid for q=2 β averaging at EB σ
-        out['normal_beta_tail_grid_cartesian'] = True
-        # D+F combined: also uncond with wider scales and cartesian for tail grid
-        out['normal_beta_tail_grid_unconditional'] = True
-        out['normal_beta_tail_grid_min_d'] = 4
-    if method in {'normal_direction_g', 'normal_direction_gh'}:
-        # Direction G: 3 Newton polish steps after Adam, tightening MAP convergence
-        out['normal_map_use_newton'] = True
-    if method in {'normal_direction_h', 'normal_direction_gh'}:
-        # Direction H: iterated MAP→EB→MAP (2 outer iterations)
-        out['normal_map_outer_iterations'] = 2
-    if method == 'normal_direction_i':
-        # Direction I: 3rd-moment skewness correction in the tail-grid β averaging
-        out['normal_beta_tail_grid_skew_correct'] = True
-    if method == 'normal_direction_j':
-        # Direction J: σ-only REML-Newton polish after Adam (β frozen); avoids G's β-jump overshoot
-        out['normal_map_use_newton'] = True
-        out['normal_map_newton_freeze_beta'] = True
-        out['normal_map_newton_step_clamp'] = 0.3
-        out['normal_map_newton_n_steps'] = 5
     return out
 
 
