@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-24 (Direction E adopted; D/F/G diagnosed and retired; H BLUP fix and ready for adoption)
+Last updated: 2026-05-24 (Direction E adopted; D/F/G diagnosed and retired; H adopted)
 
 Goal
 ----
@@ -13,23 +13,24 @@ millisecond-scale, and simple enough to trust.
 Default Path
 ------------
 
-`glmm(..., likelihood_family=0)` now runs Normal EB by default:
+`glmm(..., likelihood_family=0)` now runs Normal EB by default with 2 outer iterations:
 
-- raw Gaussian LMM initialization;
-- marginal MAP refinement of β, diagonal σ_rfx, and σ_eps;
+**Outer loop × 2** (`normal_map_outer_iterations=2`; tail β only on last iteration):
+- marginal MAP refinement of β, diagonal σ_rfx, and σ_eps (Adam, 20 steps);
 - reported β cap for `d > 4`: `clamp(β_MAP, ν_ffx ± 4τ_ffx)`;
-- uncapped MAP β for BLUP residuals;
-- diagonal final Ψ for GLS/BLUP recompute;
 - scalar β sigma-grid reporting over σ_rfx scales `{0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0}`;
 - one-shot posterior-moment EB update for diagonal σ_rfx;
 - one-pass coordinate σ_rfx grid over the same 7-pt scales, accepted only on marginal-target
   improvement, reporting softmax-weighted posterior mean (Direction A + E);
+
+**Final pass only:**
 - damped tail β correction for `d >= 9`, gated by β cap/stabilization or weak β
   precision; blended `25%` toward the grid posterior mean computed with MAP σ_eps;
 - rare BLUP/sigma guard for high-d aliased rows with implausibly large BLUP norms.
 
-The β cap and tail correction are reporting-only. BLUPs continue to use the uncapped MAP
-β unless the rare high-alias guard fires.
+BLUP β is anchored to iteration 1's uncapped MAP β across both outer iterations, preventing
+the warm-started second-pass β from drifting further from OLS. The β cap and tail correction
+are reporting-only.
 
 Current Performance
 -------------------
@@ -81,6 +82,19 @@ estimator.
 
 Closed Directions (historical)
 ------------------------------
+
+**Direction H — Iterated MAP→EB loop (DONE 2026-05-24)**
+
+2 outer iterations of `MAP-Adam(20) → moment-EB → grid-refine`; tail β only on last
+iteration. BLUP β anchored to iteration 1's MAP value so warm-started iter-2 β doesn't
+degrade BLUPs. Results on 500 datasets:
+
+- FFX: −1% to −7% improvement across all sizes (largest gains on large/huge).
+- BLUP: neutral (±0.2%) everywhere; huge-n-mixed regression (+5.3%) eliminated by anchor fix.
+- σ_rfx: neutral.
+- Cost: `+4–8 ms/ds` (~1.7× total; well within 10× headroom).
+
+Default: `normal_map_outer_iterations=2` (previously 1).
 
 **Direction G — Newton polish after Adam (DIAGNOSED and RETIRED 2026-05-24)**
 
@@ -193,34 +207,10 @@ roughly **10× headroom** to spend on accuracy.
 Pending Architecture Directions
 --------------------------------
 
-Directions D, E, F, G investigated and resolved (2026-05-24). The FFX gap vs INLA is structural:
-it requires a self-consistent (β, σ) MAP estimate, not just better σ averaging. Direction H
-(iterated MAP→EB) BLUP regression diagnosed and fixed (2026-05-24); ready for adoption.
-Direction J remains speculative.
+Directions D, E, F, G, H investigated and resolved (2026-05-24). Direction I and J remain
+speculative.
 
-**Direction H — Iterated MAP→EB→MAP refinement loop (priority 1)**
-
-Currently the refinement pipeline is one pass each: `MAP-Adam → moment-EB → grid-refine →
-tail β`. Each stage outputs to the next; there is no fixed-point iteration. For
-ill-conditioned high-d rows the first MAP solution biases the EB σ which then biases the
-grid β.
-
-- Proposed: 2 outer iterations of `MAP-Adam(20) → moment-EB → grid-refine`. Tail β
-  correction fires only in the last iteration.
-- Tested (2026-05-24): FFX improved 3–7% across all sizes; BLUP regressed +5% on huge-n-mixed
-  (second Adam pass's warm-started β drifted further from OLS, worsening BLUP residuals).
-- BLUP fix (2026-05-24): anchor `normal_map_beta_for_blup` to iteration 1's MAP value before
-  the final EB; iteration 2's MAP still refines σ_rfx but the BLUP β stays pinned to the
-  first-pass MAP. After fix: BLUP neutral (±0.2%) across all sizes, FFX improves 1–7%.
-  - small-mixed: FFX −0.7%, BLUP 0%
-  - medium-mixed: FFX −1.1% to −5.5%, BLUP 0%
-  - large-mixed: FFX −6.5%, BLUP 0%
-  - huge-mixed: FFX −5.6%, BLUP 0% (was +5.3% before fix)
-- Cost: `+4–8 ms/ds` (~1.7× total; budget has 5–8× headroom).
-- Status: BLUP regression resolved; ready for adoption. Infrastructure in `fit.py` (kwarg
-  `normal_map_outer_iterations=2`); benchmark method `normal_direction_h`.
-
-**Direction I — Skew-corrected β marginal mean (priority 2; speculative)**
+**Direction I — Skew-corrected β marginal mean (priority 1; speculative)**
 
 The β marginal posterior π(β | y) integrated over σ can be skewed: the right tail of σ
 inflates one β tail more than the other. INLA explicitly approximates this skew with a
@@ -232,7 +222,7 @@ nonzero on diffuse-σ rows.
 - Expected: small additional FFX improvement on small-n-mixed (highest-skew rows).
 - Cost: `+1–2 ms/ds`. Speculative — implement only if H leaves residual gap.
 
-**Direction J — Block Newton joint update for (β, σ) (priority 3; speculative)**
+**Direction J — Block Newton joint update for (β, σ) (priority 2; speculative)**
 
 For Normal LMM, the joint posterior is closed-form Gaussian conditional on σ. The Adam
 joint update over (β, log σ_rfx, log σ_eps) couples optimization across blocks; a block
@@ -253,7 +243,7 @@ Bernoulli/Poisson lessons that inform priorities
   Laplace-EB refined β over diagonal σ. For Normal, the analogous move (Direction D:
   σ-grid β average) was diagnosed and retired — it regresses on ill-conditioned rows where
   GLS collapses to the prior. The self-consistent MAP approach (Direction H: iterated
-  MAP→EB, J: block Newton) is the Normal-appropriate analogue.
+  MAP→EB — adopted; J: block Newton) is the Normal-appropriate analogue.
 - **Poisson VG refinement on a wider σ grid** is the Poisson equivalent of E. The
   Poisson plan reports VG = `~11 ms/ds` per dataset on top of EB; Normal's analogue
   (Direction E) is much cheaper because the conditional posterior is closed-form Gaussian.

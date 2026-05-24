@@ -208,7 +208,7 @@ def _popNormalRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         ),
         'normal_map_beta_prior_cap': kwargs.pop('normal_map_beta_prior_cap', 4.0),
         'normal_map_use_newton': kwargs.pop('normal_map_use_newton', False),
-        'normal_map_outer_iterations': kwargs.pop('normal_map_outer_iterations', 1),
+        'normal_map_outer_iterations': kwargs.pop('normal_map_outer_iterations', 2),
         'normal_beta_sigma_grid': kwargs.pop('normal_beta_sigma_grid', likelihood_family == 0),
         'normal_beta_sigma_grid_scales': kwargs.pop(
             'normal_beta_sigma_grid_scales', (0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0)
