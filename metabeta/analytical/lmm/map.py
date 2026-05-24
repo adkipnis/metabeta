@@ -379,10 +379,13 @@ def _normalSigmaRfxGridRefine(
         candidate_target = candidate_target.nan_to_num(
             nan=-torch.inf, posinf=torch.inf, neginf=-torch.inf
         )
-        best_target, best_idx = candidate_target.max(dim=1)
+        weights = torch.softmax(
+            candidate_target.nan_to_num(nan=-1e30, posinf=1e30, neginf=-1e30), dim=1
+        )
+        sigma_j_mean = (candidates[:, :, j] * weights).sum(dim=1).clamp(min=1e-4, max=20.0)
+        best_target, _ = candidate_target.max(dim=1)
         improve = active_j & torch.isfinite(best_target) & (best_target > target + accept_tol)
-        sigma_j = candidates[torch.arange(B, device=device), best_idx, j]
-        sigma_rfx[:, j] = torch.where(improve, sigma_j, sigma_rfx[:, j])
+        sigma_rfx[:, j] = torch.where(improve, sigma_j_mean, sigma_rfx[:, j])
         target = torch.where(improve, best_target, target)
         changed |= improve
 

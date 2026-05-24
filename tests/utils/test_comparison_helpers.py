@@ -130,6 +130,7 @@ def test_append_row_includes_sigma_rfx_mode_inla_when_present(_cmp):
         inla_wall_s=1.0,
         max_d=d,
         max_q=q,
+        max_m=m,
     )
 
     assert len(records) == 1
@@ -176,6 +177,7 @@ def test_append_row_sigma_rfx_mode_inla_nan_when_absent(_cmp):
         inla_wall_s=1.0,
         max_d=d,
         max_q=q,
+        max_m=m,
     )
 
     rec = records[0]
@@ -221,6 +223,7 @@ def test_append_row_includes_sigma_rfx_map_when_present(_cmp):
         inla_wall_s=1.0,
         max_d=d,
         max_q=q,
+        max_m=m,
     )
 
     rec = records[0]
@@ -266,6 +269,7 @@ def test_append_row_no_sigma_rfx_map_when_absent(_cmp):
         inla_wall_s=1.0,
         max_d=d,
         max_q=q,
+        max_m=m,
     )
 
     rec = records[0]

@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-24 (Priority 0 diagnostic unblocked; all Normal INLA npz files generated)
+Last updated: 2026-05-24 (Priority 0 diagnostic done; Direction A implemented)
 
 Goal
 ----
@@ -154,23 +154,26 @@ in addition.
 - **EB ≈ MAP**: moment-EB shifts σ ~3% further downward (wrong direction).
 - **INLA mean wins by 12–36% NRMSE** over EB on active (non-tiny) σ dimensions:
 
+  Pooled NRMSE over active (mask_q & true > 0.25) (row, dim) pairs. "EB" = `current`
+  method final estimate (post-EB + grid); "MAP" = `sigma_rfx_map_current` (pre-EB stage).
+
   | Dataset | MAP NRMSE | EB NRMSE | INLA mode | INLA mean |
   | --- | ---: | ---: | ---: | ---: |
-  | medium | 0.222 | 0.208 | 0.212 | **0.190** |
-  | large | 0.187 | 0.177 | 0.181 | **0.172** |
-  | huge | 0.245 | 0.206 | 0.173 | **0.156** |
+  | small | 0.293 | 0.229 | 0.221 | **0.204** |
+  | medium | 0.224 | 0.214 | 0.215 | **0.189** |
+  | large | 0.191 | 0.177 | 0.178 | **0.167** |
+  | huge | 0.260 | 0.215 | 0.167 | **0.153** |
 
 Conclusion: the mode is correct; the gap is purely a mean-vs-mode reporting problem.
 **Pursue Direction A only. Direction B is not warranted.**
 
-**Direction A — Softmax-weighted σ_rfx posterior mean (highest priority, diagnostic done)**
+**Direction A — Softmax-weighted σ_rfx posterior mean (IMPLEMENTED 2026-05-24)**
 
-`_normalSigmaRfxGridRefine` currently takes argmax over the per-dimension scale grid.
-Replacing this with a softmax-weighted average (as `_normalSigmaGridBetaAverage` already
-does for β) reports the posterior mean rather than mode. σ distributions are right-skewed
-so mean > mode; this is the main reason INLA outperforms on σ_rfx. Low effort — the grid
-and marginal-target infrastructure already exist. Also worth including σ_eps as a grid
-dimension to capture the σ_rfx / σ_eps cross-dependence.
+`_normalSigmaRfxGridRefine` previously took argmax over the per-dimension scale grid.
+Replaced with softmax-weighted average (same pattern as `_normalSigmaGridBetaAverage` for β):
+reports the posterior mean rather than mode. σ distributions are right-skewed so mean > mode;
+this is the main reason INLA outperforms on σ_rfx. **Re-run the full benchmark to confirm
+the σ_rfx NRMSE improvement.**
 
 **Direction B — Analytical β-profiling (deferred; diagnostic ruled it out)**
 
