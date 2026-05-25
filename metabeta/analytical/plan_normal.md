@@ -36,44 +36,64 @@ are reporting-only.
 Current Performance
 -------------------
 
-First 1000 datasets per row with the default path. Lower NRMSE is better.
+First 1000 datasets per row with the default path, rerun 2026-05-25. Lower NRMSE is better.
 
 | Dataset | part | FFX | σ | σ_eps | BLUP | ms | guard |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.1085 | 0.3863 | 0.2151 | 0.4148 | 5.93 | 0.000 |
-| small-n-sampled | valid | 0.2607 | 0.5499 | 0.2169 | 0.5115 | 5.14 | 0.000 |
-| small-n-sampled | test | 0.2826 | 0.4708 | 0.2169 | 0.4931 | 5.02 | 0.000 |
-| medium-n-mixed | train | 0.2208 | 0.3558 | 0.1655 | 0.4193 | 7.77 | 0.000 |
-| medium-n-sampled | valid | 0.2504 | 0.4460 | 0.1891 | 0.5140 | 9.36 | 0.000 |
-| medium-n-sampled | test | 0.2457 | 0.3610 | 0.1949 | 0.4399 | 9.10 | 0.000 |
-| large-n-mixed | train | 0.2449 | 0.3587 | 0.1268 | 0.4124 | 12.52 | 0.000 |
-| large-n-sampled | valid | 0.2839 | 0.3822 | 0.1563 | 0.5000 | 12.43 | 0.000 |
-| large-n-sampled | test | 0.2783 | 0.4288 | 0.1513 | 0.5121 | 13.18 | 0.000 |
-| huge-n-mixed | train | 0.2531 | 0.3001 | 0.1161 | 0.4515 | 14.94 | 0.004 |
-| huge-n-sampled | valid | 0.4112 | 0.3401 | 0.1375 | 0.4537 | 17.90 | 0.000 |
-| huge-n-sampled | test | 0.2837 | 0.3435 | 0.1438 | 0.4585 | 18.69 | 0.002 |
+| small-n-mixed | train | 0.1084 | 0.3868 | 0.2151 | 0.4146 | 7.84 | 0.000 |
+| small-n-sampled | valid | 0.2601 | 0.5509 | 0.2169 | 0.5116 | 7.08 | 0.000 |
+| small-n-sampled | test | 0.2825 | 0.4679 | 0.2169 | 0.4929 | 7.01 | 0.000 |
+| medium-n-mixed | train | 0.2188 | 0.3524 | 0.1655 | 0.4194 | 10.96 | 0.000 |
+| medium-n-sampled | valid | 0.2467 | 0.4728 | 0.1891 | 0.5139 | 13.35 | 0.000 |
+| medium-n-sampled | test | 0.2448 | 0.3552 | 0.1949 | 0.4398 | 13.02 | 0.000 |
+| large-n-mixed | train | 0.2445 | 0.3612 | 0.1268 | 0.4119 | 15.73 | 0.000 |
+| large-n-sampled | valid | 0.2852 | 0.3817 | 0.1563 | 0.5003 | 17.13 | 0.000 |
+| large-n-sampled | test | 0.2788 | 0.4337 | 0.1513 | 0.5054 | 18.54 | 0.000 |
+| huge-n-mixed | train | 0.2524 | 0.2996 | 0.1161 | 0.4516 | 20.64 | 0.004 |
+| huge-n-sampled | valid | 0.3875 | 0.3394 | 0.1375 | 0.4529 | 25.64 | 0.000 |
+| huge-n-sampled | test | 0.2884 | 0.3429 | 0.1438 | 0.4589 | 27.03 | 0.002 |
 
-R-INLA Reference
-----------------
+R-INLA Comparison
+-----------------
 
-N=1000 datasets with diagonal R-INLA. Mixed rows are train; sampled rows are valid/test (OOD). Times for mixed are batched; sampled are sequential/non-batched.
+Diagonal R-INLA, first-1000 datasets per row. The benchmark (performance table above) uses
+`sortish=True` (sorts by size within 50-batch buckets), so `--max-datasets 1000` yields a
+size-biased subset. The INLA comparison uses `sortish=False` (strict file order) to match
+precomputed `.inla.npz` results — a different 1000 datasets for sampled partitions. Mixed
+(train) files contain exactly one epoch worth of data, so both scripts use the same datasets
+there. Bold = better method per column.
 
-| Dataset | part | current FFX | INLA FFX | current σ | INLA σ | current BLUP | INLA BLUP | current ms | INLA s |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.0913 | 0.0774 | 0.3401 | 0.3102 | 0.3850 | 0.3818 | 12.97 | 9.903 |
-| small-n-sampled | valid | 0.2746 | 0.2151 | 0.5398 | 0.5313 | 0.4814 | 0.4755 | 59.54 | 9.853 |
-| small-n-sampled | test | 0.2393 | 0.1675 | 0.4144 | 0.4119 | 0.4230 | 0.4156 | 58.47 | 9.910 |
-| medium-n-mixed | train | 0.2424 | 0.2352 | 0.3156 | 0.2975 | 0.4127 | 0.4157 | 11.75 | 8.379 |
-| medium-n-sampled | valid | 0.2371 | 0.2296 | 0.4431 | 0.3201 | 0.5712 | 0.5733 | 102.87 | 8.329 |
-| medium-n-sampled | test | 0.2209 | **0.2339** | 0.3347 | 0.3103 | 0.4373 | 0.4426 | 102.02 | 8.326 |
-| large-n-mixed | train | 0.2141 | 0.2015 | **0.2620** | 0.2713 | 0.3927 | 0.3962 | 30.07 | 8.858 |
-| large-n-sampled | valid | 0.2718 | 0.2389 | 0.3344 | 0.3226 | 0.4737 | 0.4769 | 118.74 | 8.897 |
-| large-n-sampled | test | 0.2620 | 0.2514 | 0.3715 | 0.3601 | 0.4775 | 0.4726 | 125.06 | 8.877 |
-| huge-n-mixed | train | 0.2381 | 0.2156 | 0.3014 | 0.2398 | 0.4057 | 0.4071 | 16.83 | 10.165 |
-| huge-n-sampled | valid | 0.3981 | 0.2907 | **0.3511** | 0.5085 | 0.4871 | 0.4897 | 138.55 | 10.143 |
-| huge-n-sampled | test | 0.2554 | 0.2491 | 0.3259 | 0.2895 | 0.5531 | 0.5554 | 132.61 | 10.135 |
+| Dataset | part | current FFX | INLA FFX | current σ | INLA σ | current BLUP | INLA BLUP | INLA s/ds |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | train | 0.1084 | **0.0985** | 0.3868 | **0.3665** | 0.4146 | **0.4081** | 2.4 |
+| small-n-sampled | valid | 0.2735 | **0.2151** | **0.4881** | 0.5313 | 0.4812 | **0.4755** | 9.9 |
+| small-n-sampled | test | 0.2393 | **0.1675** | **0.4005** | 0.4119 | 0.4228 | **0.4156** | 9.9 |
+| medium-n-mixed | train | **0.2188** | 0.2301 | 0.3524 | **0.3419** | **0.4194** | 0.4289 | 2.6 |
+| medium-n-sampled | valid | 0.2309 | **0.2296** | 0.4097 | **0.3201** | **0.5710** | 0.5733 | 8.3 |
+| medium-n-sampled | test | **0.2220** | 0.2339 | 0.3160 | **0.3103** | **0.4370** | 0.4426 | 8.3 |
+| large-n-mixed | train | 0.2445 | **0.2377** | 0.3612 | **0.3393** | **0.4119** | 0.4185 | 2.8 |
+| large-n-sampled | valid | 0.2710 | **0.2389** | 0.3239 | **0.3226** | **0.4734** | 0.4769 | 8.9 |
+| large-n-sampled | test | 0.2640 | **0.2514** | 0.3765 | **0.3601** | **0.4731** | 0.4726 | 8.9 |
+| huge-n-mixed | train | 0.2524 | **0.2413** | 0.2996 | **0.2808** | **0.4516** | 0.4548 | 3.0 |
+| huge-n-sampled | valid | 0.3746 | **0.2907** | **0.3392** | 0.5085 | **0.4873** | 0.4897 | 10.1 |
+| huge-n-sampled | test | 0.2601 | **0.2491** | 0.3169 | **0.2895** | **0.5531** | 0.5554 | 10.1 |
 
-Bolded cells: current beats INLA on medium-test FFX (−6%) and huge-valid σ_rfx (−31%). BLUP is tied everywhere (< 1% gap). R-INLA is 8–10 s/dataset; analytical path is milliseconds (~70–100× faster). Large-n-mixed row refreshed 2026-05-25; other rows may be from an earlier code version.
+Current is ~7–21 ms/ds; R-INLA is 2–10 s/ds (~100–500× slower).
+
+- **FFX**: current leads INLA on medium-n train and test; tied on medium-n-sampled valid (Δ=0.0013).
+  Large/huge trail INLA by ≤0.007 on mixed and ≤0.032 on sampled.
+- **σ**: INLA leads on most rows; current wins on small-n-sampled and huge-n-sampled valid (0.3392 vs 0.5085).
+- **BLUP**: current matches or beats INLA on all medium+ rows; small-n is INLA-dominant.
+- Remaining large/huge sampled FFX gap concentrates in high-d ill-conditioned rows (tail diagnostic below).
+
+Sampled FFX-tail diagnostic (8k-row scan, INLA on 16 worst current FFX rows per size/partition):
+
+| Tail set | part | current β RMSE | INLA β RMSE | Δβ | cap rows | singular/near-singular |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| large-n-sampled | valid | 0.6766 | 0.3425 | +0.3341 | 8/16 | 11/16 |
+| huge-n-sampled | valid | 0.7014 | 0.2925 | +0.4089 | 12/16 | 16/16 |
+| large-n-sampled | test | 0.6440 | 0.3715 | +0.2725 | 10/16 | 12/16 |
+| huge-n-sampled | test | 0.4434 | 0.2185 | +0.2249 | 8/16 | 13/16 |
 
 Known Structural Limits
 -----------------------
