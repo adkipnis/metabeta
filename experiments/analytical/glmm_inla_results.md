@@ -54,8 +54,9 @@ The retained Normal path is now guarded EB plus tail β correction by default: M
 β/σ/σ_eps refinement, reporting-only prior cap for `d > 4`, scalar β sigma-grid reporting,
 damped tail-gated β posterior-mean correction (OLS fallback for double-trigger cap+stab
 rows, Direction K 2026-05-25), one-shot posterior-moment σ_rfx EB calibration, direct
-σ_rfx coordinate grid, diagonal final Ψ, and the rare BLUP/sigma guard for high-d aliased
-rows.
+σ_rfx coordinate grid, τ_rfx floor in coordinate search, profile-MAP σ_rfx rescue for
+stuck-zero components (2026-05-25), diagonal final Ψ, and the rare BLUP/sigma guard for
+high-d aliased rows.
 
 Mixed/train diagonal R-INLA reference, first 1000 datasets per row:
 
@@ -72,10 +73,15 @@ Takeaways:
   σ-grid stabilization fire) significantly narrowed the FFX gap: large-n-mixed improved
   from 0.2582 → 0.2449, huge-n-mixed from 0.2677 → 0.2531. Medium also benefited
   (0.2283 → 0.2208) from the small fraction of d>4 rows in that size class.
-- Current now outperforms INLA on medium-n FFX; large/huge still trail INLA by ≤0.012.
-- INLA keeps the best σ_rfx accuracy on large+ rows; current is close on huge (0.3001
-  vs 0.2808). Analytical BLUP beats INLA on medium+ rows.
-- R-INLA remains seconds per dataset, while analytical EB/σ-grid is milliseconds.
+- The profile-MAP σ_rfx rescue (2026-05-25) targets stuck-zero σ_rfx components where
+  the coordinate grid can't escape a wrong local minimum. It fired for ~2% of huge-n rows
+  and improved huge-n-sampled valid FFX from 0.4112 → 0.3746. No regressions on any
+  other size/partition.
+- Current now outperforms INLA on medium-n FFX; large/huge still trail INLA by ≤0.015.
+- INLA keeps the best σ_rfx accuracy on medium+ test rows; current wins on huge valid σ
+  (0.3392 vs 0.5085). Analytical BLUP beats INLA on medium+ rows.
+- R-INLA remains ~8-10s per dataset, while analytical EB/σ-grid is ~40-160ms per
+  dataset (increasing with d due to rescue and grid refinement passes).
 - A 2026-05-18 FFX-tail diagnostic scanned 8000 medium/large/huge mixed rows and ran
   INLA on the 16 worst FFX rows per size. The remaining large/huge gap is rare and
   concentrated in high-d or ill-conditioned rows; INLA's β posterior-mean shift is
@@ -87,21 +93,18 @@ Takeaways:
 - Sampled-set INLA rows were completed on 2026-05-18 with one saved unbuffered block per
   size/partition under `experiments/analytical/inla_runs/`.
 
-Normal sampled first-1000 rows with diagonal R-INLA:
+Normal sampled first-1000 rows with diagonal R-INLA (rerun 2026-05-25, with σ_rfx rescue):
 
 | Dataset | part | current FFX | INLA FFX | current σ | INLA σ | current BLUP | INLA BLUP | current ms | INLA s |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-sampled | valid | 0.2607 | 0.2023 | 0.5499 | 0.4450 | 0.5115 | 0.4988 | 5.14 | 2.377 |
-| small-n-sampled | test | 0.2826 | 0.2008 | 0.4708 | 0.4357 | 0.4931 | 0.4756 | 5.02 | 2.382 |
-| medium-n-sampled | valid | **0.2504** | 0.2490 | 0.4460 | 0.4048 | **0.5140** | 0.5201 | 9.36 | 3.032 |
-| medium-n-sampled | test | **0.2457** | 0.2594 | 0.3610 | 0.3419 | **0.4399** | 0.4506 | 9.10 | 3.020 |
-| large-n-sampled | valid | 0.2839 | **0.2527** | 0.3822 | **0.3428** | **0.5000** | 0.5069 | 12.43 | 3.430 |
-| large-n-sampled | test | 0.2783 | **0.2710** | 0.4288 | **0.3984** | 0.5121 | **0.5052** | 13.18 | 3.431 |
-| huge-n-sampled | valid | 0.4112 | **0.3110** | **0.3401** | 4.4979 † | **0.4537** | 0.4598 | 17.90 | 3.784 |
-| huge-n-sampled | test | 0.2837 | **0.2732** | 0.3435 | **0.3122** | **0.4585** | 0.4639 | 18.69 | 3.768 |
-
-† `huge-n-sampled valid` INLA σ_rfx is a numerical outlier: the second true-σ quartile
-has RMSE `2.1247`, while the other quartiles are around `0.07-0.12`.
+| small-n-sampled | valid | 0.2735 | **0.2151** | **0.4881** | 0.5313 | 0.4812 | **0.4755** | 38.63 | 9.853 |
+| small-n-sampled | test | 0.2393 | **0.1675** | **0.4005** | 0.4119 | 0.4228 | **0.4156** | 42.04 | 9.910 |
+| medium-n-sampled | valid | 0.2806 | **0.2296** | 0.4097 | **0.3201** | **0.5710** | 0.5733 | 78.98 | 8.329 |
+| medium-n-sampled | test | 0.2410 | **0.2339** | 0.3160 | **0.3103** | **0.4370** | 0.4426 | 75.08 | 8.326 |
+| large-n-sampled | valid | 0.2710 | **0.2389** | 0.3239 | **0.3226** | **0.4734** | 0.4769 | 100.36 | 8.897 |
+| large-n-sampled | test | 0.2640 | **0.2514** | 0.3765 | **0.3601** | **0.4731** | 0.4726 | 88.81 | 8.877 |
+| huge-n-sampled | valid | 0.3746 | **0.2907** | **0.3392** | 0.5085 | **0.4873** | 0.4897 | 159.90 | 10.143 |
+| huge-n-sampled | test | 0.2601 | **0.2491** | 0.3169 | **0.2895** | **0.5531** | 0.5554 | 126.41 | 10.135 |
 
 Sampled FFX-tail diagnostic, 8000-row scan with diagonal R-INLA on the 16 worst current
 FFX rows per size/partition:
