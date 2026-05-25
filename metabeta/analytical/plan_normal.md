@@ -176,10 +176,6 @@ uv run python -u experiments/analytical/glmm_inla_comparison.py \
     --data-ids small-n-mixed --partition train --n-total 1000 \
     --analytical-methods current --no-save-inla-rows
 
-# per-dataset gap analysis (uses precomputed INLA, no live INLA calls)
-uv run python -u experiments/analytical/glmm_normal_ffx_gap_analysis.py \
-    --data-ids large-n-mixed huge-n-mixed --partition train --max-datasets 1000
-
 uv run pytest tests/utils/test_glmm.py
 uv run blue --check --diff metabeta/analytical experiments/analytical tests
 ```
