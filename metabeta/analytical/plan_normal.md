@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-25 (Direction K: OLS fallback for double-trigger cap+stab outlier rows)
+Last updated: 2026-05-25 (Direction L: remaining outlier investigation — high-cond OLS regresses, 100% double-trigger OLS regresses; Direction K 75% blend confirmed optimal)
 
 Goal
 ----
@@ -109,6 +109,27 @@ Current now outperforms INLA on medium-n FFX across both mixed and sampled sets.
 
 Regime 2 (low-d d≤4, small-n sparse designs) remains un-addressed — no tail gate
 mechanism available for d≤4 and INLA's advantage is irreducible in that regime.
+
+**Direction L — Stronger OLS blend for outlier rows (RETIRED 2026-05-25)**
+
+After confirming Direction K, two further changes were tested:
+
+1. **100% OLS for double-trigger rows** (increase from 75%): regressed huge-n-mixed FFX
+   0.2531 → 0.2565 and huge-n-sampled test 0.2837 → 0.2876. For huge-n datasets the
+   stabilized MAP β still carries useful random-effects signal; fully replacing it with OLS
+   loses that. The 75% blend is the right trade-off.
+
+2. **50% OLS for high-cond-only rows** (cap=0, stab=0, tail=1): large regression —
+   large-n-mixed idx 315 went from gap 0.072 → 0.188 (curr RMSE 0.237 → 0.353), and the
+   overall no-cap mean gap jumped from −0.0001 → +0.0026. OLS ignores random effects;
+   for high-d, moderate-m datasets where the high condition comes from σ_rfx sensitivity
+   (not X'X singularity), OLS discards the GLS demeaning that matters and is worse than
+   the existing 25% σ-grid GLS blend.
+
+Remaining outliers: the top-20 worst large/huge rows are split ~evenly between
+double-trigger (mean gap ≈ 0.029, Direction K already near-optimal at 75%) and
+high-cond-only (INLA's advantage is structural — full posterior integration over β and
+σ_rfx; not addressable analytically without a more expensive computational path).
 
 **Direction I — Skew-corrected β marginal mean (RETIRED 2026-05-24)**
 
