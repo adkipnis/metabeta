@@ -398,6 +398,234 @@ def _normalSigmaRfxGridRefine(
     return sigma_rfx, target, changed
 
 
+@torch.no_grad()
+def _normalTailBetaCorrection(
+    sigma_rfx: torch.Tensor,
+    beta_output: torch.Tensor,
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor,
+    tau_ffx: torch.Tensor,
+    family_ffx: torch.Tensor,
+    tau_rfx: torch.Tensor,
+    family_sigma_rfx: torch.Tensor,
+    tau_eps: torch.Tensor,
+    family_sigma_eps: torch.Tensor,
+    mask_d: torch.Tensor | None,
+    mask_q: torch.Tensor | None,
+    prior_capped: torch.Tensor,
+    prior_stabilized: torch.Tensor,
+    sigma_eps_for_grid: torch.Tensor,
+    beta_tail_grid: bool,
+    beta_tail_grid_min_d: int,
+    beta_tail_grid_min_cond: float,
+    beta_tail_grid_blend: float,
+    beta_tail_grid_both_trigger_blend: float,
+    beta_tail_grid_scales: tuple[float, ...] | list[float],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Tail β correction: sigma-grid posterior mean, with OLS for double-trigger rows."""
+    B = Xm.shape[0]
+    device, dtype = Xm.device, Xm.dtype
+    if not beta_tail_grid:
+        return beta_output, torch.zeros((B,), device=device, dtype=dtype)
+    if mask_d is None:
+        active_d = torch.ones_like(beta_output, dtype=torch.bool)
+        d_count = torch.full((B,), beta_output.shape[-1], device=device, dtype=torch.long)
+    else:
+        active_d = mask_d[..., : beta_output.shape[-1]].to(device=device).bool()
+        d_count = active_d.sum(dim=-1)
+    eligible_d = d_count >= int(beta_tail_grid_min_d)
+    if not bool(eligible_d.any()):
+        return beta_output, torch.zeros((B,), device=device, dtype=dtype)
+    beta_next = beta_output
+    gate_out = torch.zeros((B,), device=device, dtype=dtype)
+    if bool(eligible_d.any()):
+        beta_grid, beta_cond = _normalSigmaGridBetaAverage(
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            sigma_rfx,
+            sigma_eps_for_grid,
+            nu_ffx,
+            tau_ffx,
+            family_ffx,
+            tau_rfx,
+            family_sigma_rfx,
+            tau_eps,
+            family_sigma_eps,
+            mask_d,
+            mask_q,
+            beta_tail_grid_scales,
+            return_condition=True,
+        )
+        cap_hit = prior_capped.to(device=device) > 0
+        stabilized = prior_stabilized.to(device=device) > 0
+        high_cond = beta_cond >= float(beta_tail_grid_min_cond)
+        gate = eligible_d & (cap_hit | stabilized | high_cond)
+        cap_lo = nu_ffx[..., : beta_grid.shape[-1]] - 4.0 * tau_ffx[
+            ..., : beta_grid.shape[-1]
+        ].clamp(min=1e-4)
+        cap_hi = nu_ffx[..., : beta_grid.shape[-1]] + 4.0 * tau_ffx[
+            ..., : beta_grid.shape[-1]
+        ].clamp(min=1e-4)
+        beta_grid = beta_grid.clamp(min=cap_lo, max=cap_hi)
+        blend = min(max(float(beta_tail_grid_blend), 0.0), 1.0)
+        both_trigger = cap_hit & stabilized
+        if bool((both_trigger & eligible_d).any()):
+            # Both MAP β-cap AND in-MAP σ-grid stabilization fired → σ_rfx is inflated
+            # and GLS collapses toward the prior. The σ-grid GLS is also collapsed in this
+            # regime. Use prior-regularized OLS (no σ_rfx dependence) as the blend target.
+            d_ols = beta_output.shape[-1]
+            mask4_ols = mask_n[:, :, :, None]
+            Xm_masked_ols = Xm * mask4_ols
+            XtX_ols = torch.einsum('bmnd,bmnk->bdk', Xm_masked_ols, Xm_masked_ols)
+            Xty_ols = torch.einsum('bmnd,bmn->bd', Xm_masked_ols, ym)
+            se2_ols = sigma_eps_for_grid.to(device=device, dtype=dtype).clamp(min=1e-6).square()
+            prior_prec_ols = (
+                1.0 / tau_ffx[..., :d_ols].to(device=device, dtype=dtype).clamp(min=1e-4).square()
+            )
+            A_ols = XtX_ols / se2_ols[:, None, None] + torch.diag_embed(prior_prec_ols)
+            b_ols = Xty_ols / se2_ols[:, None] + prior_prec_ols * nu_ffx[..., :d_ols].to(
+                device=device, dtype=dtype
+            )
+            beta_ols = _safeSolve(A_ols + _adaptiveRidge(A_ols), b_ols).nan_to_num(
+                nan=0.0, posinf=0.0, neginf=0.0
+            )
+            beta_ols = beta_ols.clamp(min=cap_lo, max=cap_hi)
+            both_blend = min(max(float(beta_tail_grid_both_trigger_blend), 0.0), 1.0)
+            beta_grid = torch.where(
+                (both_trigger & eligible_d)[:, None] & active_d,
+                beta_output + both_blend * (beta_ols - beta_output),
+                beta_output + blend * (beta_grid - beta_output),
+            )
+        else:
+            beta_grid = beta_output + blend * (beta_grid - beta_output)
+        beta_next = torch.where(gate[:, None] & active_d, beta_grid, beta_output)
+        gate_out = gate.to(dtype)
+    return beta_next, gate_out
+
+
+@torch.no_grad()
+def _normalSigmaRfxRescue(
+    sigma_rfx: torch.Tensor,
+    beta_output: torch.Tensor,
+    final_target: torch.Tensor,
+    active_q: torch.Tensor,
+    Xm: torch.Tensor,
+    ym: torch.Tensor,
+    Zm: torch.Tensor,
+    mask_n: torch.Tensor,
+    mask_m: torch.Tensor,
+    nu_ffx: torch.Tensor,
+    tau_ffx: torch.Tensor,
+    family_ffx: torch.Tensor,
+    tau_rfx: torch.Tensor,
+    family_sigma_rfx: torch.Tensor,
+    tau_eps: torch.Tensor,
+    family_sigma_eps: torch.Tensor,
+    mask_d: torch.Tensor | None,
+    mask_q: torch.Tensor | None,
+    sigma_eps: torch.Tensor,
+    log_sigma_eps: torch.Tensor,
+    corr: torch.Tensor,
+    stuck_ratio: float,
+    tau_scales: tuple[float, ...] | list[float],
+    accept_tol: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Profile-MAP rescue for σ_rfx components stuck far below the prior scale."""
+    B = Xm.shape[0]
+    q = sigma_rfx.shape[-1]
+    device, dtype = Xm.device, Xm.dtype
+    rescue_accept = torch.zeros(B, device=device, dtype=torch.bool)
+    tau_q = tau_rfx[..., :q].to(device=device, dtype=dtype).clamp(min=1e-4)
+    stuck_j = (sigma_rfx < tau_q * float(stuck_ratio)) & active_q
+    stuck_rows = stuck_j.any(dim=-1)
+    if not bool(stuck_rows.any()):
+        return sigma_rfx, beta_output, final_target, rescue_accept
+    _mask4_r = mask_m[:, :, None, None]
+    _active_r = mask_m.bool()
+    _eye_q_r = torch.eye(q, device=device, dtype=dtype)
+    _eye_q_bm_r = _eye_q_r.expand(B, Xm.shape[1], q, q)
+    _Xm_s = Xm * _mask4_r
+    _Zm_s = Zm * _mask4_r
+    _ZtZ_r = torch.einsum('bmnq,bmnr->bmqr', _Zm_s, _Zm_s)
+    _ZtZ_safe_r = torch.where(_active_r[:, :, None, None], _ZtZ_r, _eye_q_bm_r)
+    _Zty_r = torch.einsum('bmnq,bmn->bmq', _Zm_s, ym)
+    _ZtX_r = torch.einsum('bmnq,bmnd->bmqd', _Zm_s, _Xm_s)
+    _XtZ_r = _ZtX_r.mT
+    _XtX_r = torch.einsum('bmnd,bmnk->bdk', _Xm_s, _Xm_s)
+    _Xty_r = torch.einsum('bmnd,bmn->bd', _Xm_s, ym)
+    _se2_r = sigma_eps.square()
+    _d_r = Xm.shape[-1]
+    _pprec = 1.0 / tau_ffx[..., :_d_r].to(device=device, dtype=dtype).clamp(min=1e-4).square()
+    _pnu = nu_ffx[..., :_d_r].to(device=device, dtype=dtype)
+
+    def _prof_target(sig_v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        _sig2 = sig_v.square().clamp(min=1e-8)
+        _inner = _ZtZ_safe_r + torch.diag_embed(_se2_r[:, None, None] / _sig2[:, None, :])
+        _W_g = _safeSolve(_inner + _adaptiveRidgeBm(_inner), _eye_q_bm_r)
+        _W_ZtX = torch.einsum('bmqp,bmpd->bmqd', _W_g, _ZtX_r)
+        _corr_XX = torch.einsum('bmdq,bmqk->bdk', _XtZ_r, _W_ZtX)
+        _W_Zty = torch.einsum('bmqp,bmp->bmq', _W_g, _Zty_r)
+        _corr_Xy = torch.einsum('bmdq,bmq->bd', _XtZ_r, _W_Zty)
+        _A = (_XtX_r - _corr_XX) / _se2_r[:, None, None] + torch.diag_embed(_pprec)
+        _b = (_Xty_r - _corr_Xy) / _se2_r[:, None] + _pprec * _pnu
+        _beta = (
+            _safeSolve(_A + _adaptiveRidge(_A), _b)
+            .nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+            .clamp(-20.0, 20.0)
+        )
+        _t = _logMarginalTarget(
+            _beta[:, None, :],
+            sig_v.clamp(min=1e-4, max=20.0).log()[:, None, :],
+            log_sigma_eps[:, None],
+            corr,
+            Xm,
+            ym,
+            Zm,
+            mask_n,
+            mask_m,
+            nu_ffx,
+            tau_ffx,
+            family_ffx,
+            tau_rfx,
+            family_sigma_rfx,
+            tau_eps,
+            family_sigma_eps,
+            mask_d,
+            mask_q,
+        ).squeeze(1)
+        return _beta, _t
+
+    _beta_base_r, _t_base_r = _prof_target(sigma_rfx)
+    best_sigma_r = sigma_rfx.clone()
+    best_beta_r = torch.where(stuck_rows[:, None], _beta_base_r, beta_output)
+    best_target_r = torch.where(stuck_rows, _t_base_r, final_target)
+    for _s in tau_scales:
+        _sig_cand = torch.where(
+            stuck_j,
+            (tau_q * float(_s)).clamp(min=1e-4, max=20.0),
+            sigma_rfx,
+        )
+        _beta_c, _t_c = _prof_target(_sig_cand)
+        _better = stuck_rows & torch.isfinite(_t_c) & (_t_c > best_target_r + accept_tol)
+        best_sigma_r = torch.where(_better[:, None], _sig_cand, best_sigma_r)
+        best_beta_r = torch.where(_better[:, None], _beta_c, best_beta_r)
+        best_target_r = torch.where(_better, _t_c, best_target_r)
+    _new_rescue = (best_target_r > final_target + accept_tol) & stuck_rows
+    if bool(_new_rescue.any()):
+        sigma_rfx = torch.where(_new_rescue[:, None], best_sigma_r, sigma_rfx)
+        beta_output = torch.where(_new_rescue[:, None], best_beta_r, beta_output)
+        final_target = torch.where(_new_rescue, best_target_r, final_target)
+        rescue_accept = rescue_accept | _new_rescue
+    return sigma_rfx, beta_output, final_target, rescue_accept
+
+
 def _recomputeNormalFinalDiagMap(
     stats: dict[str, torch.Tensor],
     Xm: torch.Tensor,
@@ -795,22 +1023,6 @@ def refineNormalLaplaceEb(
     beta_tail_grid_blend: float = 0.25,
     beta_tail_grid_both_trigger_blend: float = 0.75,
     sigma_grid_max_rounds: int = 1,
-    small_m_threshold: int = 0,
-    small_m_blend: float = 0.5,
-    small_m_grid_scales: tuple[float, ...]
-    | list[float] = (
-        0.5,
-        0.667,
-        0.833,
-        1.0,
-        1.2,
-        1.5,
-        2.0,
-        3.0,
-        5.0,
-        8.0,
-        15.0,
-    ),
     sigma_grid_rescue: bool = False,
     sigma_grid_rescue_stuck_ratio: float = 0.5,
     sigma_grid_rescue_tau_scales: tuple[float, ...] | list[float] = (0.25, 0.5, 1.0, 2.0, 4.0),
@@ -830,138 +1042,6 @@ def refineNormalLaplaceEb(
     sigma_rfx_base = stats['sigma_rfx_est'][..., :q].detach().clamp(min=1e-4, max=20.0)
     log_sigma_eps_base = stats['sigma_eps_est'].squeeze(-1).detach().clamp(min=1e-4, max=20.0).log()
     corr = torch.eye(q, device=device, dtype=dtype).expand(B, q, q)
-    _rescue_accept = torch.zeros(B, device=device, dtype=torch.bool)
-
-    def maybe_correct_beta_tail(sigma_rfx: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        if not beta_tail_grid:
-            return beta_output, torch.zeros((B,), device=device, dtype=dtype)
-        if mask_d is None:
-            active_d = torch.ones_like(beta_output, dtype=torch.bool)
-            d_count = torch.full((B,), beta_output.shape[-1], device=device, dtype=torch.long)
-        else:
-            active_d = mask_d[..., : beta_output.shape[-1]].to(device=device).bool()
-            d_count = active_d.sum(dim=-1)
-        eligible_d = d_count >= int(beta_tail_grid_min_d)
-        m_arr = mask_m.bool().sum(dim=-1).to(device=device)
-        sm_active = (
-            (~eligible_d) & (m_arr <= int(small_m_threshold))
-            if int(small_m_threshold) > 0 and float(small_m_blend) > 0.0
-            else torch.zeros((B,), device=device, dtype=torch.bool)
-        )
-        if not bool(eligible_d.any()) and not bool(sm_active.any()):
-            return beta_output, torch.zeros((B,), device=device, dtype=dtype)
-        sigma_eps_for_grid = (
-            stats.get('normal_map_sigma_eps', stats['sigma_eps_est']).squeeze(-1).detach()
-        )
-        beta_next = beta_output
-        gate_out = torch.zeros((B,), device=device, dtype=dtype)
-        if bool(eligible_d.any()):
-            beta_grid, beta_cond = _normalSigmaGridBetaAverage(
-                Xm,
-                ym,
-                Zm,
-                mask_n,
-                mask_m,
-                sigma_rfx,
-                sigma_eps_for_grid,
-                nu_ffx,
-                tau_ffx,
-                family_ffx,
-                tau_rfx,
-                family_sigma_rfx,
-                tau_eps,
-                family_sigma_eps,
-                mask_d,
-                mask_q,
-                beta_tail_grid_scales,
-                return_condition=True,
-            )
-            cap_hit = (
-                stats.get(
-                    'normal_map_beta_prior_capped', torch.zeros((B,), device=device, dtype=dtype)
-                ).to(device=device)
-                > 0
-            )
-            stabilized = (
-                stats.get(
-                    'normal_map_beta_stabilized', torch.zeros((B,), device=device, dtype=dtype)
-                ).to(device=device)
-                > 0
-            )
-            high_cond = beta_cond >= float(beta_tail_grid_min_cond)
-            gate = eligible_d & (cap_hit | stabilized | high_cond)
-            cap_lo = nu_ffx[..., : beta_grid.shape[-1]] - 4.0 * tau_ffx[
-                ..., : beta_grid.shape[-1]
-            ].clamp(min=1e-4)
-            cap_hi = nu_ffx[..., : beta_grid.shape[-1]] + 4.0 * tau_ffx[
-                ..., : beta_grid.shape[-1]
-            ].clamp(min=1e-4)
-            beta_grid = beta_grid.clamp(min=cap_lo, max=cap_hi)
-            blend = min(max(float(beta_tail_grid_blend), 0.0), 1.0)
-            both_trigger = cap_hit & stabilized
-            if bool((both_trigger & eligible_d).any()):
-                # Both MAP β-cap AND in-MAP σ-grid stabilization fired → σ_rfx is inflated
-                # and GLS collapses toward the prior. The σ-grid GLS is also collapsed in this
-                # regime. Use prior-regularized OLS (no σ_rfx dependence) as the blend target.
-                d_ols = beta_output.shape[-1]
-                mask4_ols = mask_n[:, :, :, None]
-                Xm_masked_ols = Xm * mask4_ols
-                XtX_ols = torch.einsum('bmnd,bmnk->bdk', Xm_masked_ols, Xm_masked_ols)
-                Xty_ols = torch.einsum('bmnd,bmn->bd', Xm_masked_ols, ym)
-                se2_ols = sigma_eps_for_grid.to(device=device, dtype=dtype).clamp(min=1e-6).square()
-                prior_prec_ols = (
-                    1.0
-                    / tau_ffx[..., :d_ols].to(device=device, dtype=dtype).clamp(min=1e-4).square()
-                )
-                A_ols = XtX_ols / se2_ols[:, None, None] + torch.diag_embed(prior_prec_ols)
-                b_ols = Xty_ols / se2_ols[:, None] + prior_prec_ols * nu_ffx[..., :d_ols].to(
-                    device=device, dtype=dtype
-                )
-                beta_ols = _safeSolve(A_ols + _adaptiveRidge(A_ols), b_ols).nan_to_num(
-                    nan=0.0, posinf=0.0, neginf=0.0
-                )
-                beta_ols = beta_ols.clamp(min=cap_lo, max=cap_hi)
-                both_blend = min(max(float(beta_tail_grid_both_trigger_blend), 0.0), 1.0)
-                beta_grid = torch.where(
-                    (both_trigger & eligible_d)[:, None] & active_d,
-                    beta_output + both_blend * (beta_ols - beta_output),
-                    beta_output + blend * (beta_grid - beta_output),
-                )
-            else:
-                beta_grid = beta_output + blend * (beta_grid - beta_output)
-            beta_next = torch.where(gate[:, None] & active_d, beta_grid, beta_output)
-            gate_out = gate.to(dtype)
-        # Low-d, sparse-m path: average over σ_rfx uncertainty for d < min_d AND m ≤ threshold.
-        # Approximates INLA shrinkage in poorly-identified small-group designs without a tail gate.
-        if bool(sm_active.any()):
-            sm_grid = _normalSigmaGridBetaAverage(
-                Xm,
-                ym,
-                Zm,
-                mask_n,
-                mask_m,
-                sigma_rfx,
-                sigma_eps_for_grid,
-                nu_ffx,
-                tau_ffx,
-                family_ffx,
-                tau_rfx,
-                family_sigma_rfx,
-                tau_eps,
-                family_sigma_eps,
-                mask_d,
-                mask_q,
-                small_m_grid_scales,
-            )
-            d_sm = sm_grid.shape[-1]
-            cap_lo_sm = nu_ffx[..., :d_sm] - 4.0 * tau_ffx[..., :d_sm].clamp(min=1e-4)
-            cap_hi_sm = nu_ffx[..., :d_sm] + 4.0 * tau_ffx[..., :d_sm].clamp(min=1e-4)
-            sm_grid = sm_grid.clamp(min=cap_lo_sm, max=cap_hi_sm)
-            sm_w = min(max(float(small_m_blend), 0.0), 1.0)
-            beta_sm = beta_output + sm_w * (sm_grid - beta_output)
-            beta_next = torch.where(sm_active[:, None] & active_d, beta_sm, beta_next)
-            gate_out = torch.where(sm_active, torch.ones_like(gate_out), gate_out)
-        return beta_next, gate_out
 
     def target_for(sigma_rfx: torch.Tensor, log_sigma_eps_value: torch.Tensor) -> torch.Tensor:
         return _logMarginalTarget(
@@ -1069,100 +1149,73 @@ def refineNormalLaplaceEb(
                     _running_target = _round_best_target
             final_target = _running_target
 
-        # Profile-MAP rescue: for components stuck below τ_rfx/2, evaluate
-        # P*(σ_rescue) = max_β P(β, σ_rescue) at τ_rfx × {scales}.  Safe for
-        # well-converged rows — their profile MAP is already at the maximum.
         if sigma_grid_rescue:
-            tau_q = tau_rfx[..., :q].to(device=device, dtype=dtype).clamp(min=1e-4)
-            stuck_j = (sigma_rfx < tau_q * float(sigma_grid_rescue_stuck_ratio)) & active_q
-            stuck_rows = stuck_j.any(dim=-1)
-            if bool(stuck_rows.any()):
-                _mask4_r = mask_m[:, :, None, None]
-                _active_r = mask_m.bool()
-                _eye_q_r = torch.eye(q, device=device, dtype=dtype)
-                _eye_q_bm_r = _eye_q_r.expand(B, Xm.shape[1], q, q)
-                _Xm_s = Xm * _mask4_r
-                _Zm_s = Zm * _mask4_r
-                _ZtZ_r = torch.einsum('bmnq,bmnr->bmqr', _Zm_s, _Zm_s)
-                _ZtZ_safe_r = torch.where(_active_r[:, :, None, None], _ZtZ_r, _eye_q_bm_r)
-                _Zty_r = torch.einsum('bmnq,bmn->bmq', _Zm_s, ym)
-                _ZtX_r = torch.einsum('bmnq,bmnd->bmqd', _Zm_s, _Xm_s)
-                _XtZ_r = _ZtX_r.mT
-                _XtX_r = torch.einsum('bmnd,bmnk->bdk', _Xm_s, _Xm_s)
-                _Xty_r = torch.einsum('bmnd,bmn->bd', _Xm_s, ym)
-                _se2_r = stats['sigma_eps_est'].squeeze(-1).detach().clamp(min=1e-6).square()
-                _d_r = Xm.shape[-1]
-                _pprec = (
-                    1.0
-                    / tau_ffx[..., :_d_r].to(device=device, dtype=dtype).clamp(min=1e-4).square()
-                )
-                _pnu = nu_ffx[..., :_d_r].to(device=device, dtype=dtype)
-
-                def _prof_target(sig_v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-                    _sig2 = sig_v.square().clamp(min=1e-8)
-                    _inner = _ZtZ_safe_r + torch.diag_embed(
-                        _se2_r[:, None, None] / _sig2[:, None, :]
-                    )
-                    _W_g = _safeSolve(_inner + _adaptiveRidgeBm(_inner), _eye_q_bm_r)
-                    _W_ZtX = torch.einsum('bmqp,bmpd->bmqd', _W_g, _ZtX_r)
-                    _corr_XX = torch.einsum('bmdq,bmqk->bdk', _XtZ_r, _W_ZtX)
-                    _W_Zty = torch.einsum('bmqp,bmp->bmq', _W_g, _Zty_r)
-                    _corr_Xy = torch.einsum('bmdq,bmq->bd', _XtZ_r, _W_Zty)
-                    _A = (_XtX_r - _corr_XX) / _se2_r[:, None, None] + torch.diag_embed(_pprec)
-                    _b = (_Xty_r - _corr_Xy) / _se2_r[:, None] + _pprec * _pnu
-                    _beta = (
-                        _safeSolve(_A + _adaptiveRidge(_A), _b)
-                        .nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
-                        .clamp(-20.0, 20.0)
-                    )
-                    _t = _logMarginalTarget(
-                        _beta[:, None, :],
-                        sig_v.clamp(min=1e-4, max=20.0).log()[:, None, :],
-                        log_sigma_eps_base[:, None],
-                        corr,
-                        Xm,
-                        ym,
-                        Zm,
-                        mask_n,
-                        mask_m,
-                        nu_ffx,
-                        tau_ffx,
-                        family_ffx,
-                        tau_rfx,
-                        family_sigma_rfx,
-                        tau_eps,
-                        family_sigma_eps,
-                        mask_d,
-                        mask_q,
-                    ).squeeze(1)
-                    return _beta, _t
-
-                _beta_base_r, _t_base_r = _prof_target(sigma_rfx)
-                best_sigma_r = sigma_rfx.clone()
-                best_beta_r = torch.where(stuck_rows[:, None], _beta_base_r, beta_output)
-                best_target_r = torch.where(stuck_rows, _t_base_r, final_target)
-                for _s in sigma_grid_rescue_tau_scales:
-                    _sig_cand = torch.where(
-                        stuck_j,
-                        (tau_q * float(_s)).clamp(min=1e-4, max=20.0),
-                        sigma_rfx,
-                    )
-                    _beta_c, _t_c = _prof_target(_sig_cand)
-                    _better = (
-                        stuck_rows & torch.isfinite(_t_c) & (_t_c > best_target_r + accept_tol)
-                    )
-                    best_sigma_r = torch.where(_better[:, None], _sig_cand, best_sigma_r)
-                    best_beta_r = torch.where(_better[:, None], _beta_c, best_beta_r)
-                    best_target_r = torch.where(_better, _t_c, best_target_r)
-                _new_rescue = (best_target_r > final_target + accept_tol) & stuck_rows
-                if bool(_new_rescue.any()):
-                    sigma_rfx = torch.where(_new_rescue[:, None], best_sigma_r, sigma_rfx)
-                    beta_output = torch.where(_new_rescue[:, None], best_beta_r, beta_output)
-                    final_target = torch.where(_new_rescue, best_target_r, final_target)
-                    _rescue_accept = _rescue_accept | _new_rescue
+            sigma_rfx, beta_output, final_target, _rescue_accept = _normalSigmaRfxRescue(
+                sigma_rfx,
+                beta_output,
+                final_target,
+                active_q,
+                Xm,
+                ym,
+                Zm,
+                mask_n,
+                mask_m,
+                nu_ffx,
+                tau_ffx,
+                family_ffx,
+                tau_rfx,
+                family_sigma_rfx,
+                tau_eps,
+                family_sigma_eps,
+                mask_d,
+                mask_q,
+                sigma_eps=stats['sigma_eps_est'].squeeze(-1).detach().clamp(min=1e-6),
+                log_sigma_eps=log_sigma_eps_base,
+                corr=corr,
+                stuck_ratio=sigma_grid_rescue_stuck_ratio,
+                tau_scales=sigma_grid_rescue_tau_scales,
+                accept_tol=accept_tol,
+            )
+        else:
+            _rescue_accept = torch.zeros(B, device=device, dtype=torch.bool)
 
     out = dict(stats)
-    beta_output_next, beta_tail_gate = maybe_correct_beta_tail(sigma_rfx)
+    _prior_capped = stats.get(
+        'normal_map_beta_prior_capped', torch.zeros((B,), device=device, dtype=dtype)
+    ).to(device=device)
+    _prior_stabilized = stats.get(
+        'normal_map_beta_stabilized', torch.zeros((B,), device=device, dtype=dtype)
+    ).to(device=device)
+    _sigma_eps_for_grid = (
+        stats.get('normal_map_sigma_eps', stats['sigma_eps_est']).squeeze(-1).detach()
+    )
+    beta_output_next, beta_tail_gate = _normalTailBetaCorrection(
+        sigma_rfx,
+        beta_output,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        nu_ffx,
+        tau_ffx,
+        family_ffx,
+        tau_rfx,
+        family_sigma_rfx,
+        tau_eps,
+        family_sigma_eps,
+        mask_d,
+        mask_q,
+        prior_capped=_prior_capped,
+        prior_stabilized=_prior_stabilized,
+        sigma_eps_for_grid=_sigma_eps_for_grid,
+        beta_tail_grid=beta_tail_grid,
+        beta_tail_grid_min_d=beta_tail_grid_min_d,
+        beta_tail_grid_min_cond=beta_tail_grid_min_cond,
+        beta_tail_grid_blend=beta_tail_grid_blend,
+        beta_tail_grid_both_trigger_blend=beta_tail_grid_both_trigger_blend,
+        beta_tail_grid_scales=beta_tail_grid_scales,
+    )
     out['sigma_rfx_est'] = sigma_rfx
     out['beta_est'] = beta_output_next
     out['normal_beta_tail_grid_gate'] = beta_tail_gate

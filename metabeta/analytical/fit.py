@@ -227,12 +227,6 @@ def _popNormalRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         'normal_beta_tail_grid_both_trigger_blend': kwargs.pop(
             'normal_beta_tail_grid_both_trigger_blend', 0.75
         ),
-        'normal_small_m_threshold': kwargs.pop('normal_small_m_threshold', 20),
-        'normal_small_m_blend': kwargs.pop('normal_small_m_blend', 0.5),
-        'normal_small_m_grid_scales': kwargs.pop(
-            'normal_small_m_grid_scales',
-            (0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0, 3.0, 5.0, 8.0, 15.0),
-        ),
         'normal_laplace_eb_sigma_grid_rescue': kwargs.pop(
             'normal_laplace_eb_sigma_grid_rescue', likelihood_family == 0
         ),
@@ -456,9 +450,6 @@ def glmm(
                     beta_tail_grid_both_trigger_blend=normal_opts[
                         'normal_beta_tail_grid_both_trigger_blend'
                     ],
-                    small_m_threshold=normal_opts['normal_small_m_threshold'],
-                    small_m_blend=normal_opts['normal_small_m_blend'],
-                    small_m_grid_scales=normal_opts['normal_small_m_grid_scales'],
                     sigma_grid_rescue=normal_opts['normal_laplace_eb_sigma_grid_rescue']
                     and _is_last,
                     sigma_grid_rescue_stuck_ratio=normal_opts[
