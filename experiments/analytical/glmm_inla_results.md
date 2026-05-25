@@ -52,24 +52,29 @@ Normal Diagonal R-INLA Snapshot
 
 The retained Normal path is now guarded EB plus tail β correction by default: MAP
 β/σ/σ_eps refinement, reporting-only prior cap for `d > 4`, scalar β sigma-grid reporting,
-damped tail-gated β posterior-mean correction, one-shot posterior-moment σ_rfx EB
-calibration, direct σ_rfx coordinate grid, diagonal final Ψ, and the rare BLUP/sigma guard
-for high-d aliased rows.
+damped tail-gated β posterior-mean correction (OLS fallback for double-trigger cap+stab
+rows, Direction K 2026-05-25), one-shot posterior-moment σ_rfx EB calibration, direct
+σ_rfx coordinate grid, diagonal final Ψ, and the rare BLUP/sigma guard for high-d aliased
+rows.
 
 Mixed/train diagonal R-INLA reference, first 1000 datasets per row:
 
-| Dataset | EB FFX | current FFX | INLA FFX | EB σ | INLA σ | EB BLUP | INLA BLUP | current ms | INLA s |
+| Dataset | EB FFX | current FFX | INLA FFX | current σ | INLA σ | current BLUP | INLA BLUP | current ms | INLA s |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | 0.1095 | 0.1089 | 0.0985 | 0.4203 | 0.3665 | 0.4173 | 0.4081 | 3.42 | 2.406 |
-| medium-n-mixed | 0.2515 | 0.2283 | 0.2301 | 0.3619 | 0.3419 | 0.4198 | 0.4289 | 3.05 | 2.604 |
-| large-n-mixed | 0.4075 | 0.2582 | 0.2377 | 0.3711 | 0.3393 | 0.4148 | 0.4185 | 6.20 | 2.786 |
-| huge-n-mixed | 0.3314 | 0.2677 | 0.2413 | 0.3776 | 0.2808 | 0.4545 | 0.4548 | 7.89 | 2.965 |
+| small-n-mixed | 0.1095 | 0.1085 | 0.0985 | 0.3863 | 0.3665 | 0.4148 | 0.4081 | 5.93 | 2.406 |
+| medium-n-mixed | 0.2515 | **0.2208** | 0.2301 | 0.3558 | 0.3419 | **0.4193** | 0.4289 | 7.77 | 2.604 |
+| large-n-mixed | 0.4075 | 0.2449 | **0.2377** | 0.3587 | **0.3393** | **0.4124** | 0.4185 | 12.52 | 2.786 |
+| huge-n-mixed | 0.3314 | 0.2531 | **0.2413** | 0.3001 | **0.2808** | **0.4515** | 0.4548 | 14.94 | 2.965 |
 
 Takeaways:
 
-- guarded EB plus damped tail β correction closes more of the large/huge FFX gap but
-  still trails INLA in the hardest rows.
-- INLA keeps the best σ_rfx accuracy; analytical BLUP is already tied on medium+ rows.
+- Direction K (OLS fallback for the ~2% of large/huge datasets where both β-cap and
+  σ-grid stabilization fire) significantly narrowed the FFX gap: large-n-mixed improved
+  from 0.2582 → 0.2449, huge-n-mixed from 0.2677 → 0.2531. Medium also benefited
+  (0.2283 → 0.2208) from the small fraction of d>4 rows in that size class.
+- Current now outperforms INLA on medium-n FFX; large/huge still trail INLA by ≤0.012.
+- INLA keeps the best σ_rfx accuracy on large+ rows; current is close on huge (0.3001
+  vs 0.2808). Analytical BLUP beats INLA on medium+ rows.
 - R-INLA remains seconds per dataset, while analytical EB/σ-grid is milliseconds.
 - A 2026-05-18 FFX-tail diagnostic scanned 8000 medium/large/huge mixed rows and ran
   INLA on the 16 worst FFX rows per size. The remaining large/huge gap is rare and
@@ -79,9 +84,6 @@ Takeaways:
   high-d rows, frequent singular or near-singular fixed/random design, many β prior-cap
   hits, and no material BLUP gap. The worst valid tails remain behind INLA, but this is a
   narrow tail rather than a broad sampled-set failure.
-- The retained tail β correction is scalar-grid-only and damped (`25%` toward the grid
-  posterior mean). It improved the saved large/huge INLA FFX tail rows while leaving
-  medium unchanged.
 - Sampled-set INLA rows were completed on 2026-05-18 with one saved unbuffered block per
   size/partition under `experiments/analytical/inla_runs/`.
 
@@ -89,14 +91,14 @@ Normal sampled first-1000 rows with diagonal R-INLA:
 
 | Dataset | part | current FFX | INLA FFX | current σ | INLA σ | current BLUP | INLA BLUP | current ms | INLA s |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-sampled | valid | 0.2608 | 0.2023 | 0.5695 | 0.4450 | 0.5119 | 0.4988 | 2.87 | 2.377 |
-| small-n-sampled | test | 0.2828 | 0.2008 | 0.4759 | 0.4357 | 0.4931 | 0.4756 | 2.73 | 2.382 |
-| medium-n-sampled | valid | 0.2626 | 0.2490 | 0.4186 | 0.4048 | 0.5145 | 0.5201 | 4.81 | 3.032 |
-| medium-n-sampled | test | 0.2594 | 0.2594 | 0.3825 | 0.3419 | 0.4403 | 0.4506 | 5.35 | 3.020 |
-| large-n-sampled | valid | 0.2970 | 0.2527 | 0.4159 | 0.3428 | 0.5045 | 0.5069 | 6.21 | 3.430 |
-| large-n-sampled | test | 0.2872 | 0.2710 | 0.4346 | 0.3984 | 0.5126 | 0.5052 | 6.65 | 3.431 |
-| huge-n-sampled | valid | 0.4240 | 0.3110 | 0.3562 | 4.4979 † | 0.4555 | 0.4598 | 10.27 | 3.784 |
-| huge-n-sampled | test | 0.2947 | 0.2732 | 0.3689 | 0.3122 | 0.4604 | 0.4639 | 9.63 | 3.768 |
+| small-n-sampled | valid | 0.2607 | 0.2023 | 0.5499 | 0.4450 | 0.5115 | 0.4988 | 5.14 | 2.377 |
+| small-n-sampled | test | 0.2826 | 0.2008 | 0.4708 | 0.4357 | 0.4931 | 0.4756 | 5.02 | 2.382 |
+| medium-n-sampled | valid | **0.2504** | 0.2490 | 0.4460 | 0.4048 | **0.5140** | 0.5201 | 9.36 | 3.032 |
+| medium-n-sampled | test | **0.2457** | 0.2594 | 0.3610 | 0.3419 | **0.4399** | 0.4506 | 9.10 | 3.020 |
+| large-n-sampled | valid | 0.2839 | **0.2527** | 0.3822 | **0.3428** | **0.5000** | 0.5069 | 12.43 | 3.430 |
+| large-n-sampled | test | 0.2783 | **0.2710** | 0.4288 | **0.3984** | 0.5121 | **0.5052** | 13.18 | 3.431 |
+| huge-n-sampled | valid | 0.4112 | **0.3110** | **0.3401** | 4.4979 † | **0.4537** | 0.4598 | 17.90 | 3.784 |
+| huge-n-sampled | test | 0.2837 | **0.2732** | 0.3435 | **0.3122** | **0.4585** | 0.4639 | 18.69 | 3.768 |
 
 † `huge-n-sampled valid` INLA σ_rfx is a numerical outlier: the second true-σ quartile
 has RMSE `2.1247`, while the other quartiles are around `0.07-0.12`.

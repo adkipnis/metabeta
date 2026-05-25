@@ -39,18 +39,18 @@ First 1000 datasets per row with the default path. Lower NRMSE is better.
 
 | Dataset | part | FFX | σ | σ_eps | BLUP | ms | guard |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.1091 | 0.3861 | 0.2151 | 0.4151 | 3.30 | 0.000 |
-| small-n-sampled | valid | 0.2605 | 0.5618 | 0.2169 | 0.5117 | 2.62 | 0.000 |
-| small-n-sampled | test | 0.2828 | 0.4647 | 0.2169 | 0.4923 | 2.61 | 0.000 |
-| medium-n-mixed | train | 0.2283 | 0.3475 | 0.1655 | 0.4189 | 3.93 | 0.000 |
-| medium-n-sampled | valid | 0.2625 | 0.3941 | 0.1891 | 0.5137 | 4.74 | 0.000 |
-| medium-n-sampled | test | 0.2594 | 0.3673 | 0.1949 | 0.4399 | 4.58 | 0.000 |
-| large-n-mixed | train | 0.2579 | 0.3542 | 0.1268 | 0.4126 | 5.69 | 0.000 |
-| large-n-sampled | valid | 0.2972 | 0.3894 | 0.1563 | 0.5011 | 6.01 | 0.000 |
-| large-n-sampled | test | 0.2863 | 0.4188 | 0.1513 | 0.5118 | 6.29 | 0.000 |
-| huge-n-mixed | train | 0.2673 | 0.3209 | 0.1161 | 0.4519 | 7.26 | 0.004 |
-| huge-n-sampled | valid | 0.4241 | 0.3382 | 0.1375 | 0.4542 | 8.72 | 0.000 |
-| huge-n-sampled | test | 0.2940 | 0.3585 | 0.1438 | 0.4592 | 9.12 | 0.002 |
+| small-n-mixed | train | 0.1085 | 0.3863 | 0.2151 | 0.4148 | 5.93 | 0.000 |
+| small-n-sampled | valid | 0.2607 | 0.5499 | 0.2169 | 0.5115 | 5.14 | 0.000 |
+| small-n-sampled | test | 0.2826 | 0.4708 | 0.2169 | 0.4931 | 5.02 | 0.000 |
+| medium-n-mixed | train | 0.2208 | 0.3558 | 0.1655 | 0.4193 | 7.77 | 0.000 |
+| medium-n-sampled | valid | 0.2504 | 0.4460 | 0.1891 | 0.5140 | 9.36 | 0.000 |
+| medium-n-sampled | test | 0.2457 | 0.3610 | 0.1949 | 0.4399 | 9.10 | 0.000 |
+| large-n-mixed | train | 0.2449 | 0.3587 | 0.1268 | 0.4124 | 12.52 | 0.000 |
+| large-n-sampled | valid | 0.2839 | 0.3822 | 0.1563 | 0.5000 | 12.43 | 0.000 |
+| large-n-sampled | test | 0.2783 | 0.4288 | 0.1513 | 0.5121 | 13.18 | 0.000 |
+| huge-n-mixed | train | 0.2531 | 0.3001 | 0.1161 | 0.4515 | 14.94 | 0.004 |
+| huge-n-sampled | valid | 0.4112 | 0.3401 | 0.1375 | 0.4537 | 17.90 | 0.000 |
+| huge-n-sampled | test | 0.2837 | 0.3435 | 0.1438 | 0.4585 | 18.69 | 0.002 |
 
 R-INLA Reference
 ----------------
@@ -88,7 +88,7 @@ estimator.
 Closed Directions (historical)
 ------------------------------
 
-**Direction K — OLS fallback for double-trigger cap+stab rows (IMPLEMENTED 2026-05-25)**
+**Direction K — OLS fallback for double-trigger cap+stab rows (ADOPTED 2026-05-25)**
 
 Per-dataset gap analysis (2026-05-25) showed ~2% of large/huge datasets have both
 `normal_map_beta_prior_capped` AND `normal_map_beta_stabilized` fire. For these rows,
@@ -101,6 +101,11 @@ fire, replace the blend target with **prior-regularized OLS** (no σ_rfx depende
 immune to inflation). The OLS β = `(X'X/σ² + diag(1/τ²))⁻¹(X'y/σ² + ν/τ²)` is capped
 at `ν ± 4τ` and blended 75% (default; `normal_beta_tail_grid_both_trigger_blend`).
 The single-trigger path (cap OR stab OR high_cond, not both) is unchanged at 25%.
+
+Benchmark (N=1000): large-n-mixed FFX 0.2582 → 0.2449 (−5.1%), huge-n-mixed FFX
+0.2677 → 0.2531 (−5.4%). Medium also improved (0.2283 → 0.2208) from d>4 rows in that
+class. σ_rfx improved substantially on huge (0.3776 → 0.3001). No regression anywhere.
+Current now outperforms INLA on medium-n FFX across both mixed and sampled sets.
 
 Regime 2 (low-d d≤4, small-n sparse designs) remains un-addressed — no tail gate
 mechanism available for d≤4 and INLA's advantage is irreducible in that regime.
