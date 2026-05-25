@@ -789,6 +789,7 @@ def refineNormalLaplaceEb(
     beta_tail_grid_min_d: int = 9,
     beta_tail_grid_min_cond: float = 1000.0,
     beta_tail_grid_blend: float = 0.25,
+    beta_tail_grid_both_trigger_blend: float = 0.75,
 ) -> dict[str, torch.Tensor]:
     """Moment-based EB update for diagonal σ_rfx under the exact Gaussian marginal, optionally followed by a coordinate grid pass and tail β correction."""
     q = Zm.shape[-1]
@@ -863,7 +864,36 @@ def refineNormalLaplaceEb(
         ].clamp(min=1e-4)
         beta_grid = beta_grid.clamp(min=cap_lo, max=cap_hi)
         blend = min(max(float(beta_tail_grid_blend), 0.0), 1.0)
-        beta_grid = beta_output + blend * (beta_grid - beta_output)
+        both_trigger = cap_hit & stabilized
+        if bool((both_trigger & eligible_d).any()):
+            # Both MAP β-cap AND in-MAP σ-grid stabilization fired → σ_rfx is inflated
+            # and GLS collapses toward the prior. The σ-grid GLS is also collapsed in this
+            # regime. Use prior-regularized OLS (no σ_rfx dependence) as the blend target.
+            d_ols = beta_output.shape[-1]
+            mask4_ols = mask_n[:, :, :, None]
+            Xm_masked_ols = Xm * mask4_ols
+            XtX_ols = torch.einsum('bmnd,bmnk->bdk', Xm_masked_ols, Xm_masked_ols)
+            Xty_ols = torch.einsum('bmnd,bmn->bd', Xm_masked_ols, ym)
+            se2_ols = sigma_eps_for_grid.to(device=device, dtype=dtype).clamp(min=1e-6).square()
+            prior_prec_ols = (
+                1.0 / tau_ffx[..., :d_ols].to(device=device, dtype=dtype).clamp(min=1e-4).square()
+            )
+            A_ols = XtX_ols / se2_ols[:, None, None] + torch.diag_embed(prior_prec_ols)
+            b_ols = Xty_ols / se2_ols[:, None] + prior_prec_ols * nu_ffx[..., :d_ols].to(
+                device=device, dtype=dtype
+            )
+            beta_ols = _safeSolve(A_ols + _adaptiveRidge(A_ols), b_ols).nan_to_num(
+                nan=0.0, posinf=0.0, neginf=0.0
+            )
+            beta_ols = beta_ols.clamp(min=cap_lo, max=cap_hi)
+            both_blend = min(max(float(beta_tail_grid_both_trigger_blend), 0.0), 1.0)
+            beta_grid = torch.where(
+                (both_trigger & eligible_d)[:, None] & active_d,
+                beta_output + both_blend * (beta_ols - beta_output),
+                beta_output + blend * (beta_grid - beta_output),
+            )
+        else:
+            beta_grid = beta_output + blend * (beta_grid - beta_output)
         beta_next = torch.where(gate[:, None] & active_d, beta_grid, beta_output)
         return beta_next, gate.to(dtype)
 

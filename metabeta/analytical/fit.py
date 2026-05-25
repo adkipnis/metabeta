@@ -220,6 +220,9 @@ def _popNormalRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         'normal_beta_tail_grid_min_d': kwargs.pop('normal_beta_tail_grid_min_d', 9),
         'normal_beta_tail_grid_min_cond': kwargs.pop('normal_beta_tail_grid_min_cond', 1000.0),
         'normal_beta_tail_grid_blend': kwargs.pop('normal_beta_tail_grid_blend', 0.25),
+        'normal_beta_tail_grid_both_trigger_blend': kwargs.pop(
+            'normal_beta_tail_grid_both_trigger_blend', 0.75
+        ),
         'beta_alpha_low': kwargs.pop('beta_alpha_low', 0.65),
         'beta_alpha_high': kwargs.pop('beta_alpha_high', 0.75),
     }
@@ -429,6 +432,9 @@ def glmm(
                     beta_tail_grid_min_d=normal_opts['normal_beta_tail_grid_min_d'],
                     beta_tail_grid_min_cond=normal_opts['normal_beta_tail_grid_min_cond'],
                     beta_tail_grid_blend=normal_opts['normal_beta_tail_grid_blend'],
+                    beta_tail_grid_both_trigger_blend=normal_opts[
+                        'normal_beta_tail_grid_both_trigger_blend'
+                    ],
                 )
     elif likelihood_family == 1:
         stats = lmmBernoulli(

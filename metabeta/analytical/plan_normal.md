@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-25 (per-dataset gap analysis: gaps are outlier-driven, not systematic; ~2% prior-cap/stabilized outliers drive aggregate NRMSE gap)
+Last updated: 2026-05-25 (Direction K: OLS fallback for double-trigger cap+stab outlier rows)
 
 Goal
 ----
@@ -87,6 +87,23 @@ estimator.
 
 Closed Directions (historical)
 ------------------------------
+
+**Direction K — OLS fallback for double-trigger cap+stab rows (IMPLEMENTED 2026-05-25)**
+
+Per-dataset gap analysis (2026-05-25) showed ~2% of large/huge datasets have both
+`normal_map_beta_prior_capped` AND `normal_map_beta_stabilized` fire. For these rows,
+Adam MAP drove β outside the prior bounds AND the in-MAP σ-grid stabilization ran —
+indicating inflated σ_rfx and collapsed GLS. The existing 25%-blend toward the tail-grid
+σ-grid GLS is insufficient because the σ-grid GLS is also collapsed in this regime.
+
+Fix: in `maybe_correct_beta_tail` (inside `refineNormalLaplaceEb`), when both triggers
+fire, replace the blend target with **prior-regularized OLS** (no σ_rfx dependence, so
+immune to inflation). The OLS β = `(X'X/σ² + diag(1/τ²))⁻¹(X'y/σ² + ν/τ²)` is capped
+at `ν ± 4τ` and blended 75% (default; `normal_beta_tail_grid_both_trigger_blend`).
+The single-trigger path (cap OR stab OR high_cond, not both) is unchanged at 25%.
+
+Regime 2 (low-d d≤4, small-n sparse designs) remains un-addressed — no tail gate
+mechanism available for d≤4 and INLA's advantage is irreducible in that regime.
 
 **Direction I — Skew-corrected β marginal mean (RETIRED 2026-05-24)**
 
@@ -204,7 +221,8 @@ roughly **10× headroom** to spend on accuracy.
 Pending Architecture Directions
 --------------------------------
 
-Directions D, E, F, G, H, I, J investigated and resolved (2026-05-24). No open directions remain.
+Directions D, E, F, G, H, I, J investigated and resolved (2026-05-24). Direction K implemented
+2026-05-25 (pending benchmark confirmation). No further directions open.
 
 Bernoulli/Poisson lessons that inform priorities
 -------------------------------------------------
