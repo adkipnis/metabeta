@@ -203,8 +203,12 @@ def _popNormalRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         'normal_laplace_eb_sigma_grid_refine': kwargs.pop(
             'normal_laplace_eb_sigma_grid_refine', likelihood_family == 0
         ),
+        'normal_laplace_eb_sigma_grid_max_rounds': kwargs.pop(
+            'normal_laplace_eb_sigma_grid_max_rounds', 3
+        ),
         'normal_laplace_eb_sigma_grid_scales': kwargs.pop(
-            'normal_laplace_eb_sigma_grid_scales', (0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0)
+            'normal_laplace_eb_sigma_grid_scales',
+            (0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0, 3.0, 5.0, 10.0, 20.0),
         ),
         'normal_map_beta_prior_cap': kwargs.pop('normal_map_beta_prior_cap', 4.0),
         'normal_map_outer_iterations': kwargs.pop('normal_map_outer_iterations', 2),
@@ -222,6 +226,22 @@ def _popNormalRefinementOptions(kwargs: dict, likelihood_family: int) -> dict:
         'normal_beta_tail_grid_blend': kwargs.pop('normal_beta_tail_grid_blend', 0.25),
         'normal_beta_tail_grid_both_trigger_blend': kwargs.pop(
             'normal_beta_tail_grid_both_trigger_blend', 0.75
+        ),
+        'normal_small_m_threshold': kwargs.pop('normal_small_m_threshold', 20),
+        'normal_small_m_blend': kwargs.pop('normal_small_m_blend', 0.5),
+        'normal_small_m_grid_scales': kwargs.pop(
+            'normal_small_m_grid_scales',
+            (0.5, 0.667, 0.833, 1.0, 1.2, 1.5, 2.0, 3.0, 5.0, 8.0, 15.0),
+        ),
+        'normal_laplace_eb_sigma_grid_rescue': kwargs.pop(
+            'normal_laplace_eb_sigma_grid_rescue', likelihood_family == 0
+        ),
+        'normal_laplace_eb_sigma_grid_rescue_stuck_ratio': kwargs.pop(
+            'normal_laplace_eb_sigma_grid_rescue_stuck_ratio', 0.5
+        ),
+        'normal_laplace_eb_sigma_grid_rescue_tau_scales': kwargs.pop(
+            'normal_laplace_eb_sigma_grid_rescue_tau_scales',
+            (0.25, 0.5, 1.0, 2.0, 4.0),
         ),
         'beta_alpha_low': kwargs.pop('beta_alpha_low', 0.65),
         'beta_alpha_high': kwargs.pop('beta_alpha_high', 0.75),
@@ -427,6 +447,7 @@ def glmm(
                     beta_alpha_high=normal_opts['beta_alpha_high'],
                     sigma_grid_refine=normal_opts['normal_laplace_eb_sigma_grid_refine'],
                     sigma_grid_scales=normal_opts['normal_laplace_eb_sigma_grid_scales'],
+                    sigma_grid_max_rounds=normal_opts['normal_laplace_eb_sigma_grid_max_rounds'],
                     beta_tail_grid=normal_opts['normal_beta_tail_grid'] and _is_last,
                     beta_tail_grid_scales=normal_opts['normal_beta_tail_grid_scales'],
                     beta_tail_grid_min_d=normal_opts['normal_beta_tail_grid_min_d'],
@@ -434,6 +455,17 @@ def glmm(
                     beta_tail_grid_blend=normal_opts['normal_beta_tail_grid_blend'],
                     beta_tail_grid_both_trigger_blend=normal_opts[
                         'normal_beta_tail_grid_both_trigger_blend'
+                    ],
+                    small_m_threshold=normal_opts['normal_small_m_threshold'],
+                    small_m_blend=normal_opts['normal_small_m_blend'],
+                    small_m_grid_scales=normal_opts['normal_small_m_grid_scales'],
+                    sigma_grid_rescue=normal_opts['normal_laplace_eb_sigma_grid_rescue']
+                    and _is_last,
+                    sigma_grid_rescue_stuck_ratio=normal_opts[
+                        'normal_laplace_eb_sigma_grid_rescue_stuck_ratio'
+                    ],
+                    sigma_grid_rescue_tau_scales=normal_opts[
+                        'normal_laplace_eb_sigma_grid_rescue_tau_scales'
                     ],
                 )
     elif likelihood_family == 1:

@@ -1,7 +1,7 @@
 Normal GLMM Plan
 ================
 
-Last updated: 2026-05-25 (Direction L: remaining outlier investigation — high-cond OLS regresses, 100% double-trigger OLS regresses; Direction K 75% blend confirmed optimal)
+Last updated: 2026-05-25 (Direction K adopted; profile-MAP σ_rfx rescue added; debloated)
 
 Goal
 ----
@@ -25,7 +25,8 @@ Default Path
 
 **Final pass only:**
 - damped tail β correction for `d >= 9`, gated by β cap/stabilization or weak β
-  precision; blended `25%` toward the grid posterior mean computed with MAP σ_eps;
+  precision; 25% blend toward the grid posterior mean (75% toward prior-regularized OLS
+  when both cap AND stabilization fire — Direction K);
 - rare BLUP/sigma guard for high-d aliased rows with implausibly large BLUP norms.
 
 BLUP β is anchored to iteration 1's uncapped MAP β across both outer iterations, preventing
@@ -110,27 +111,6 @@ Current now outperforms INLA on medium-n FFX across both mixed and sampled sets.
 Regime 2 (low-d d≤4, small-n sparse designs) remains un-addressed — no tail gate
 mechanism available for d≤4 and INLA's advantage is irreducible in that regime.
 
-**Direction L — Stronger OLS blend for outlier rows (RETIRED 2026-05-25)**
-
-After confirming Direction K, two further changes were tested:
-
-1. **100% OLS for double-trigger rows** (increase from 75%): regressed huge-n-mixed FFX
-   0.2531 → 0.2565 and huge-n-sampled test 0.2837 → 0.2876. For huge-n datasets the
-   stabilized MAP β still carries useful random-effects signal; fully replacing it with OLS
-   loses that. The 75% blend is the right trade-off.
-
-2. **50% OLS for high-cond-only rows** (cap=0, stab=0, tail=1): large regression —
-   large-n-mixed idx 315 went from gap 0.072 → 0.188 (curr RMSE 0.237 → 0.353), and the
-   overall no-cap mean gap jumped from −0.0001 → +0.0026. OLS ignores random effects;
-   for high-d, moderate-m datasets where the high condition comes from σ_rfx sensitivity
-   (not X'X singularity), OLS discards the GLS demeaning that matters and is worse than
-   the existing 25% σ-grid GLS blend.
-
-Remaining outliers: the top-20 worst large/huge rows are split ~evenly between
-double-trigger (mean gap ≈ 0.029, Direction K already near-optimal at 75%) and
-high-cond-only (INLA's advantage is structural — full posterior integration over β and
-σ_rfx; not addressable analytically without a more expensive computational path).
-
 **Direction I — Skew-corrected β marginal mean (RETIRED 2026-05-24)**
 
 Added 3rd-moment skewness correction to the softmax-weighted β average. Zero effect: the 7-pt log-spaced grid is symmetric so m3 ≈ 0 whenever EB σ is near the posterior mode — which is exactly when the correction would run.
@@ -184,90 +164,6 @@ denominator. Since T ≤ z_rank, corrected denominator is larger → σ_eps_corr
 Result: σ_eps NRMSE increased +19–117% across all configurations (FFX/σ_rfx/BLUP flat).
 The correction reduces σ_eps for all datasets even when there is no collinearity, which
 outweighs any benefit in the rare high-collinearity case. No further attempts planned.
-
-Gap Diagnosis vs INLA (2026-05-24 review)
------------------------------------------
-
-Gap = current − INLA; positive = current worse. Mixed rows are train; sampled are valid/test.
-
-| Row | part | FFX gap | σ_rfx gap | notes |
-| --- | --- | ---: | ---: | --- |
-| small-n-mixed | train | +0.031 (+40%) | +0.076 (+25%) | low-N; β cap and tail-grid fire 0% |
-| medium-n-mixed | train | −0.007 (−3%) | +0.048 (+16%) | FFX parity; σ improved with E |
-| large-n-mixed | train | +0.013 (+6%) | +0.083 (+31%) | |
-| huge-n-mixed | train | +0.026 (+12%) | +0.081 (+38%) | |
-| small-n-sampled | valid | +0.060 (+28%) | +0.009 (+2%) | σ_rfx nearly tied |
-| small-n-sampled | test | +0.072 (+43%) | +0.003 (+1%) | σ_rfx tied |
-| medium-n-sampled | valid | +0.008 (+3%) | +0.123 (+38%) | FFX near-parity; σ_rfx gap reappears |
-| medium-n-sampled | test | **−0.013 (−6%)** | +0.024 (+8%) | current beats INLA on FFX |
-| large-n-sampled | valid | +0.033 (+14%) | +0.012 (+4%) | small gaps on both |
-| large-n-sampled | test | +0.011 (+4%) | +0.011 (+3%) | near-parity on both |
-| huge-n-sampled | valid | +0.107 (+37%) | **−0.157 (−31%)** | current beats INLA on σ_rfx |
-| huge-n-sampled | test | +0.006 (+2%) | +0.036 (+13%) | near-parity on FFX |
-
-Per-Dataset Gap Structure (2026-05-25 analysis via `glmm_normal_ffx_gap_analysis.py`)
---------------------------------------------------------------------------------------
-
-**FFX gaps are outlier-driven, not systematic.**
-
-Per-dataset analysis on 1000 datasets each (large + huge mixed/train, small + large + huge
-sampled/valid) using precomputed INLA:
-
-| Observation | large + huge train | small + med train | sampled valid (3 sizes) |
-| --- | --- | --- | --- |
-| fraction tied (\|gap\| < 0.01) | **86%** | **83%** | **80%** |
-| fraction mild gap (0.01–0.05) | 6% | 7% | 8% |
-| fraction large gap (> 0.05) | 1% | 3% | 3% |
-| top 5% share of aggregate gap | **>155%** | >135% | >106% |
-
-"Top 5% share > 100%" means the worst 5% of datasets more than fully explain the total
-aggregate NRMSE gap — the remaining 95% collectively *favor* the current method.
-
-**Two distinct outlier regimes:**
-
-1. **High-d, prior-cap/stabilized rows (large/huge)**: ~2% of datasets (42/2000 for
-   large+huge) where `normal_map_beta_prior_capped` and `normal_map_beta_stabilized` both
-   fire. Mean gap +0.038; 79% worse; 21% with gap > 0.05 (some with gap > 0.4). These are
-   rank-deficient Z_g rows where our GLS β collapses to the prior while INLA's quadrature
-   does not. The existing tail correction (25% blend, d≥9, cond≥1000) already targets a
-   superset of these rows but a 25% blend is insufficient when both cap and stab fire.
-
-2. **Low-d (d≤4), small-n rows**: no corrective mechanism available (tail gate requires d≥9,
-   cap requires d>4). Worst outliers have gaps > 0.3–0.7 on very sparse designs (m=8–15).
-   INLA's Laplace quadrature advantage is largest in this low-data regime. Not addressable
-   without full quadrature or MCMC.
-
-**Implication:** The aggregate NRMSE gap is not a broad floor affecting all datasets; it is
-caused by ~1–5% of extreme outliers. For the majority of datasets the current method is
-essentially tied with or better than INLA.
-
-Latency budget: current default is `3–10 ms/ds`; budget ceiling is `~100 ms/ds`. There is
-roughly **10× headroom** to spend on accuracy.
-
-Pending Architecture Directions
---------------------------------
-
-Directions D, E, F, G, H, I, J investigated and resolved (2026-05-24). Direction K implemented
-2026-05-25 (pending benchmark confirmation). No further directions open.
-
-Bernoulli/Poisson lessons that inform priorities
--------------------------------------------------
-
-- **Bernoulli EB closed FFX gap unconditionally** by switching from PQL-init β to a
-  Laplace-EB refined β over diagonal σ. For Normal, the analogous move (Direction D:
-  σ-grid β average) was diagnosed and retired — it regresses on ill-conditioned rows where
-  GLS collapses to the prior. The self-consistent MAP approach (Direction H: iterated
-  MAP→EB — adopted) is the Normal-appropriate analogue. Direction J (block Newton) was
-  diagnosed and retired: β and σ cannot be optimized with separate objectives.
-- **Poisson VG refinement on a wider σ grid** is the Poisson equivalent of E. The
-  Poisson plan reports VG = `~11 ms/ds` per dataset on top of EB; Normal's analogue
-  (Direction E) is much cheaper because the conditional posterior is closed-form Gaussian.
-  Direction E was adopted.
-- **Multi-start, EP, full INLA: explicitly deferred** in both Bernoulli and Poisson plans
-  as low-expected-value. The same applies here for any directions beyond H.
-- **σ-only patches deprioritized in Poisson**: "true/INLA-σ plug-in diagnostics did not
-  close the FFX gap". The asymmetry is the same here: σ_rfx accuracy alone does not close
-  FFX. The FFX gap requires a tighter, self-consistent (β, σ) MAP estimate.
 
 Commands
 --------
