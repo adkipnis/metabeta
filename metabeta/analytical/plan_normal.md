@@ -33,50 +33,28 @@ BLUP β is anchored to iteration 1's uncapped MAP β across both outer iteration
 the warm-started second-pass β from drifting further from OLS. The β cap and tail correction
 are reporting-only.
 
-Current Performance
--------------------
-
-First 1000 datasets per row with the default path, rerun 2026-05-25. Lower NRMSE is better.
-
-| Dataset | part | FFX | σ | σ_eps | BLUP | ms | guard |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.1084 | 0.3868 | 0.2151 | 0.4146 | 7.84 | 0.000 |
-| small-n-sampled | valid | 0.2601 | 0.5509 | 0.2169 | 0.5116 | 7.08 | 0.000 |
-| small-n-sampled | test | 0.2825 | 0.4679 | 0.2169 | 0.4929 | 7.01 | 0.000 |
-| medium-n-mixed | train | 0.2188 | 0.3524 | 0.1655 | 0.4194 | 10.96 | 0.000 |
-| medium-n-sampled | valid | 0.2467 | 0.4728 | 0.1891 | 0.5139 | 13.35 | 0.000 |
-| medium-n-sampled | test | 0.2448 | 0.3552 | 0.1949 | 0.4398 | 13.02 | 0.000 |
-| large-n-mixed | train | 0.2445 | 0.3612 | 0.1268 | 0.4119 | 15.73 | 0.000 |
-| large-n-sampled | valid | 0.2852 | 0.3817 | 0.1563 | 0.5003 | 17.13 | 0.000 |
-| large-n-sampled | test | 0.2788 | 0.4337 | 0.1513 | 0.5054 | 18.54 | 0.000 |
-| huge-n-mixed | train | 0.2524 | 0.2996 | 0.1161 | 0.4516 | 20.64 | 0.004 |
-| huge-n-sampled | valid | 0.3875 | 0.3394 | 0.1375 | 0.4529 | 25.64 | 0.000 |
-| huge-n-sampled | test | 0.2884 | 0.3429 | 0.1438 | 0.4589 | 27.03 | 0.002 |
-
 R-INLA Comparison
 -----------------
 
-Diagonal R-INLA, first-1000 datasets per row. The benchmark (performance table above) uses
-`sortish=True` (sorts by size within 50-batch buckets), so `--max-datasets 1000` yields a
-size-biased subset. The INLA comparison uses `sortish=False` (strict file order) to match
-precomputed `.inla.npz` results — a different 1000 datasets for sampled partitions. Mixed
-(train) files contain exactly one epoch worth of data, so both scripts use the same datasets
-there. Bold = better method per column.
+Diagonal R-INLA, first-1000 datasets per row. FFX/σ_rfx/BLUP for sampled rows are from the
+INLA comparison run (sortish=False, file order, matched to precomputed INLA results); σ_eps
+and ms are from the batch-32 benchmark (sortish=True). Mixed rows use the same datasets in
+both. Bold = better method per column.
 
-| Dataset | part | current FFX | INLA FFX | current σ | INLA σ | current BLUP | INLA BLUP | INLA s/ds |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| small-n-mixed | train | 0.1084 | **0.0985** | 0.3868 | **0.3665** | 0.4146 | **0.4081** | 2.4 |
-| small-n-sampled | valid | 0.2735 | **0.2151** | **0.4881** | 0.5313 | 0.4812 | **0.4755** | 9.9 |
-| small-n-sampled | test | 0.2393 | **0.1675** | **0.4005** | 0.4119 | 0.4228 | **0.4156** | 9.9 |
-| medium-n-mixed | train | **0.2188** | 0.2301 | 0.3524 | **0.3419** | **0.4194** | 0.4289 | 2.6 |
-| medium-n-sampled | valid | 0.2309 | **0.2296** | 0.4097 | **0.3201** | **0.5710** | 0.5733 | 8.3 |
-| medium-n-sampled | test | **0.2220** | 0.2339 | 0.3160 | **0.3103** | **0.4370** | 0.4426 | 8.3 |
-| large-n-mixed | train | 0.2445 | **0.2377** | 0.3612 | **0.3393** | **0.4119** | 0.4185 | 2.8 |
-| large-n-sampled | valid | 0.2710 | **0.2389** | 0.3239 | **0.3226** | **0.4734** | 0.4769 | 8.9 |
-| large-n-sampled | test | 0.2640 | **0.2514** | 0.3765 | **0.3601** | **0.4731** | 0.4726 | 8.9 |
-| huge-n-mixed | train | 0.2524 | **0.2413** | 0.2996 | **0.2808** | **0.4516** | 0.4548 | 3.0 |
-| huge-n-sampled | valid | 0.3746 | **0.2907** | **0.3392** | 0.5085 | **0.4873** | 0.4897 | 10.1 |
-| huge-n-sampled | test | 0.2601 | **0.2491** | 0.3169 | **0.2895** | **0.5531** | 0.5554 | 10.1 |
+| Dataset | part | current FFX | INLA FFX | current σ_rfx | INLA σ_rfx | current σ_eps | current BLUP | INLA BLUP | ms | INLA s |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| small-n-mixed | train | 0.1084 | **0.0985** | 0.3868 | **0.3665** | 0.2151 | 0.4146 | **0.4081** | 7.84 | 2.4 |
+| small-n-sampled | valid | 0.2735 | **0.2151** | **0.4881** | 0.5313 | 0.2169 | 0.4812 | **0.4755** | 7.08 | 9.9 |
+| small-n-sampled | test | 0.2393 | **0.1675** | **0.4005** | 0.4119 | 0.2169 | 0.4228 | **0.4156** | 7.01 | 9.9 |
+| medium-n-mixed | train | **0.2188** | 0.2301 | 0.3524 | **0.3419** | 0.1655 | **0.4194** | 0.4289 | 10.96 | 2.6 |
+| medium-n-sampled | valid | 0.2309 | **0.2296** | 0.4097 | **0.3201** | 0.1891 | **0.5710** | 0.5733 | 13.35 | 8.3 |
+| medium-n-sampled | test | **0.2220** | 0.2339 | 0.3160 | **0.3103** | 0.1949 | **0.4370** | 0.4426 | 13.02 | 8.3 |
+| large-n-mixed | train | 0.2445 | **0.2377** | 0.3612 | **0.3393** | 0.1268 | **0.4119** | 0.4185 | 15.73 | 2.8 |
+| large-n-sampled | valid | 0.2710 | **0.2389** | 0.3239 | **0.3226** | 0.1563 | **0.4734** | 0.4769 | 17.13 | 8.9 |
+| large-n-sampled | test | 0.2640 | **0.2514** | 0.3765 | **0.3601** | 0.1513 | 0.4731 | **0.4726** | 18.54 | 8.9 |
+| huge-n-mixed | train | 0.2524 | **0.2413** | 0.2996 | **0.2808** | 0.1161 | **0.4516** | 0.4548 | 20.64 | 3.0 |
+| huge-n-sampled | valid | 0.3746 | **0.2907** | **0.3392** | 0.5085 | 0.1375 | **0.4873** | 0.4897 | 25.64 | 10.1 |
+| huge-n-sampled | test | 0.2601 | **0.2491** | 0.3169 | **0.2895** | 0.1438 | **0.5531** | 0.5554 | 27.03 | 10.1 |
 
 Current is ~7–21 ms/ds; R-INLA is 2–10 s/ds (~100–500× slower).
 
