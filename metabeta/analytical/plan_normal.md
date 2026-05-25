@@ -203,3 +203,5 @@ Retired Lines
   where the joint posterior is not improving; regressed small-n-sampled σ by +0.013.
 - τ_rfx floor for W_g (moment_sigma_tau_floor): no material improvement; moment EB is
   already robust to poor initialization via the prior regularizer.
+- Low-d sparse-m σ-grid blend (small_m_threshold): fired for d<9 and m≤20 but sm_grid≈beta_output
+  on small-n (zero effect) and regressed medium-n FFX by +0.019–0.050. Retired 2026-05-25.

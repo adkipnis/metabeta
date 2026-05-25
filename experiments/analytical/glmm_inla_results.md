@@ -77,7 +77,10 @@ Takeaways:
   the coordinate grid can't escape a wrong local minimum. It fired for ~2% of huge-n rows
   and improved huge-n-sampled valid FFX from 0.4112 → 0.3746. No regressions on any
   other size/partition.
-- Current now outperforms INLA on medium-n FFX; large/huge still trail INLA by ≤0.015.
+- Retiring small_m (low-d sparse-m σ-grid blending, 2026-05-25) improved medium-n-sampled
+  valid FFX by −0.050 (0.2806 → 0.2309) and test by −0.019 (0.2410 → 0.2220); no change on
+  other partitions.
+- Current now outperforms INLA on medium-n FFX (both partitions); large/huge still trail INLA by ≤0.015.
 - INLA keeps the best σ_rfx accuracy on medium+ test rows; current wins on huge valid σ
   (0.3392 vs 0.5085). Analytical BLUP beats INLA on medium+ rows.
 - R-INLA remains ~8-10s per dataset, while analytical EB/σ-grid is ~40-160ms per
@@ -93,14 +96,14 @@ Takeaways:
 - Sampled-set INLA rows were completed on 2026-05-18 with one saved unbuffered block per
   size/partition under `experiments/analytical/inla_runs/`.
 
-Normal sampled first-1000 rows with diagonal R-INLA (rerun 2026-05-25, with σ_rfx rescue):
+Normal sampled first-1000 rows with diagonal R-INLA (rerun 2026-05-25, with σ_rfx rescue; small_m retired):
 
 | Dataset | part | current FFX | INLA FFX | current σ | INLA σ | current BLUP | INLA BLUP | current ms | INLA s |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | small-n-sampled | valid | 0.2735 | **0.2151** | **0.4881** | 0.5313 | 0.4812 | **0.4755** | 38.63 | 9.853 |
 | small-n-sampled | test | 0.2393 | **0.1675** | **0.4005** | 0.4119 | 0.4228 | **0.4156** | 42.04 | 9.910 |
-| medium-n-sampled | valid | 0.2806 | **0.2296** | 0.4097 | **0.3201** | **0.5710** | 0.5733 | 78.98 | 8.329 |
-| medium-n-sampled | test | 0.2410 | **0.2339** | 0.3160 | **0.3103** | **0.4370** | 0.4426 | 75.08 | 8.326 |
+| medium-n-sampled | valid | **0.2309** | 0.2296 | 0.4097 | **0.3201** | **0.5710** | 0.5733 | 78.98 | 8.329 |
+| medium-n-sampled | test | **0.2220** | 0.2339 | 0.3160 | **0.3103** | **0.4370** | 0.4426 | 75.08 | 8.326 |
 | large-n-sampled | valid | 0.2710 | **0.2389** | 0.3239 | **0.3226** | **0.4734** | 0.4769 | 100.36 | 8.897 |
 | large-n-sampled | test | 0.2640 | **0.2514** | 0.3765 | **0.3601** | **0.4731** | 0.4726 | 88.81 | 8.877 |
 | huge-n-sampled | valid | 0.3746 | **0.2907** | **0.3392** | 0.5085 | **0.4873** | 0.4897 | 159.90 | 10.143 |
