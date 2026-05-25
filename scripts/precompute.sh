@@ -11,7 +11,7 @@
 #SBATCH --qos cpu_normal
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=12G
+#SBATCH --mem=8G
 #SBATCH --time=24:00:00
 
 CHUNK_SIZE=1
