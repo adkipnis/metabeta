@@ -6,15 +6,20 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Any
 import warnings
 
+import numpy as np
+import pandas as pd
 import torch
 
+from metabeta.datasets.preprocessor import DataPreprocessor, PreprocessReport
 from metabeta.models.approximator import Approximator
+from metabeta.simulation.prior import bambiDefaultPriors
 from metabeta.utils.config import ApproximatorConfig
-from metabeta.utils.constants import LIKELIHOOD_FAMILIES
-from metabeta.utils.dataloader import toDevice
+from metabeta.utils.constants import LIKELIHOOD_FAMILIES, hasSigmaEps
+from metabeta.utils.dataloader import Dataloader, collateGrouped, toDevice
 from metabeta.utils.evaluation import Proposal
 from metabeta.utils.experiments import CHECKPOINT_DIR
 
@@ -62,6 +67,15 @@ REQUIRED_BATCH_KEYS = (
 )
 
 
+Y_TYPE_TO_LIKELIHOOD = {
+    'continuous': 0,
+    'binary': 1,
+    'count': 2,
+}
+
+LIKELIHOOD_NAME_TO_ID = {name: i for i, name in enumerate(LIKELIHOOD_FAMILIES)}
+
+
 @dataclass
 class RouterResult:
     """Inference output and routing metadata."""
@@ -72,16 +86,26 @@ class RouterResult:
     log_probs: dict[str, torch.Tensor] | None = None
 
 
+@dataclass(frozen=True)
+class FormulaSpec:
+    """Minimal formula representation for router-side design construction."""
+
+    target: str | None
+    fixed_terms: tuple[str, ...]
+    random_terms: tuple[str, ...]
+    group_name: str | None
+    intercept: bool = True
+
+
 class Router:
     """Route dataloader-formatted datasets through a joint checkpoint.
 
     Models are instantiated lazily when their first compatible batch is run.
 
-    TODO: accept raw pandas DataFrames, optional single/multiple prior
-    specifications using default Bambi-style priors when absent, and an lme4- or
-    Bambi-like formula string identifying y, fixed predictors, random-effect
-    terms, and grouping variables. The current implementation expects data that
-    is already preprocessed or path-backed by the existing metabeta dataloader.
+    Tabular inputs are normalized through explicit stages: dataframe/parquet,
+    preprocessed numpy dict, model dataset dict, then collated dataloader batch.
+    Formula support is intentionally narrow and currently covers additive fixed
+    terms plus one lme4-style random-effect term.
     """
 
     def __init__(
@@ -127,32 +151,113 @@ class Router:
         self._models[submodel_id] = model
         return model
 
-    def prepareData(self, data: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """Validate and return a collated dataloader-style batch."""
+    def prepareData(
+        self,
+        data: Any,
+        *,
+        formula: str | None = None,
+        priors: Mapping[str, Any] | None = None,
+        preprocessor: DataPreprocessor | str | Path | None = None,
+        fit_preprocessor: bool = False,
+        group_name: str | None = None,
+        likelihood_family: int | str | None = None,
+        q: int | None = None,
+        stage: str = 'batch',
+        dry_run: bool = False,
+    ) -> dict[str, torch.Tensor] | dict[str, np.ndarray] | PreprocessReport:
+        """Normalize supported input stages to a collated dataloader-style batch.
+
+        Stages are intentionally layered:
+
+        - DataFrames/parquet paths are tabular inputs.
+        - ``DataPreprocessor`` turns tabular inputs into numpy dictionaries.
+        - Formula/prior handling turns numpy dictionaries into model datasets.
+        - ``collateGrouped`` turns model datasets into the tensor batch consumed
+          by the router and approximator.
+        """
+
+        if stage not in {'preprocessed', 'dataset', 'batch'}:
+            raise ValueError(f'unknown prepareData stage: {stage}')
+
+        if isinstance(data, Dataloader):
+            batch = data.fullBatch()
+            return self._returnPreparedStage(batch, stage)
+
+        if isinstance(data, (str, Path)):
+            path = Path(data)
+            if path.suffix == '.npz':
+                loader = Dataloader(path, batch_size=self.batch_size)
+                batch = loader.fullBatch()
+                return self._returnPreparedStage(batch, stage)
+            if path.suffix == '.parquet':
+                data = pd.read_parquet(path)
+            else:
+                raise ValueError(f'unsupported router input path suffix: {path.suffix}')
+
+        if isinstance(data, pd.DataFrame):
+            preprocessed = self._preprocessTabular(
+                data,
+                formula=formula,
+                preprocessor=preprocessor,
+                fit_preprocessor=fit_preprocessor,
+                group_name=group_name,
+                dry_run=dry_run,
+            )
+            if dry_run or stage == 'preprocessed':
+                return preprocessed
+            data = preprocessed
+
+        if isinstance(data, Mapping) and self._isCollatedBatch(data):
+            return self._returnPreparedStage(dict(data), stage)
+
+        if isinstance(data, Mapping) and self._isModelDataset(data):
+            dataset = {str(k): v for k, v in data.items()}
+            if stage == 'dataset':
+                return dataset
+            batch = collateGrouped([dataset])
+            return self._returnPreparedStage(batch, stage)
+
+        if isinstance(data, Mapping) and self._isPreprocessedDict(data):
+            if stage == 'preprocessed':
+                return {str(k): v for k, v in data.items()}
+            dataset = self._buildModelDataset(
+                data,
+                formula=formula,
+                priors=priors,
+                likelihood_family=likelihood_family,
+                q=q,
+            )
+            if stage == 'dataset':
+                return dataset
+            batch = self._collateForSelectedSubmodel(dataset)
+            return self._returnPreparedStage(batch, stage)
 
         if not isinstance(data, Mapping):
-            raise TypeError('router input must be a collated dataloader batch dict')
-        if not self._isCollatedBatch(data):
-            raise TypeError('router input must match the dataloader collated batch format')
-        return dict(data)
+            raise TypeError('router input must be tabular, path-backed, preprocessed, or collated')
+        raise TypeError('router input mapping does not match a supported data stage')
 
-    def route(self, data: Mapping[str, torch.Tensor]) -> list[str]:
+    def route(self, data: Any, **prepare_kwargs: Any) -> list[str]:
         """Return the selected submodel id for each dataset in ``data``."""
 
-        batch = self.prepareData(data)
+        batch = self.prepareData(data, **prepare_kwargs)
+        if not isinstance(batch, dict) or not self._isCollatedBatch(batch):
+            raise TypeError('route requires data prepared to batch stage')
         routes, _ = self._routeBatch(batch)
         return routes
 
     @torch.no_grad()
     def sample(
         self,
-        data: Mapping[str, torch.Tensor],
+        data: Any,
         *,
         n_samples: int = 1,
+        **prepare_kwargs: Any,
     ) -> RouterResult:
         """Sample from the posterior through the routed submodel."""
 
-        batch = self.prepareData(data)
+        batch = self.prepareData(data, **prepare_kwargs)
+        if not isinstance(batch, dict) or not self._isCollatedBatch(batch):
+            raise TypeError('sample requires data prepared to batch stage')
         self._validateBatchFormat(batch)
         routes, validation = self._routeBatch(batch)
         submodel_ids = set(routes)
@@ -170,10 +275,12 @@ class Router:
         return RouterResult(proposal=proposal, routes=routes, validation=validation)
 
     @torch.no_grad()
-    def forward(self, data: Mapping[str, torch.Tensor]) -> RouterResult:
+    def forward(self, data: Any, **prepare_kwargs: Any) -> RouterResult:
         """Evaluate the forward log-probability path for batches with parameters."""
 
-        batch = self.prepareData(data)
+        batch = self.prepareData(data, **prepare_kwargs)
+        if not isinstance(batch, dict) or not self._isCollatedBatch(batch):
+            raise TypeError('forward requires data prepared to batch stage')
         self._validateBatchFormat(batch)
         routes, validation = self._routeBatch(batch)
         submodel_ids = set(routes)
@@ -194,6 +301,173 @@ class Router:
             validation=validation,
             log_probs=log_probs,
         )
+
+    def _preprocessTabular(
+        self,
+        df: pd.DataFrame,
+        *,
+        formula: str | None,
+        preprocessor: DataPreprocessor | str | Path | None,
+        fit_preprocessor: bool,
+        group_name: str | None,
+        dry_run: bool,
+    ) -> dict[str, np.ndarray] | PreprocessReport:
+        spec = self._parseFormula(formula)
+        df = df.copy()
+        df.columns = df.columns.str.lower()
+
+        target = spec.target.lower() if spec.target is not None else 'y'
+        if target != 'y':
+            if target not in df.columns:
+                raise KeyError(f'formula target column not found: {target}')
+            df = df.rename(columns={target: 'y'})
+
+        group_name = (group_name or spec.group_name or '').lower()
+        if preprocessor is not None:
+            prep = (
+                DataPreprocessor.load(preprocessor)
+                if isinstance(preprocessor, (str, Path))
+                else preprocessor
+            )
+            if dry_run:
+                return prep.audit(df)
+            return self._attachPreprocessorMetadata(prep.transform(df), prep)
+
+        prep = DataPreprocessor(group_name=group_name)
+        if dry_run:
+            return prep.audit(df)
+        if not fit_preprocessor:
+            raise ValueError(
+                'tabular router input requires a fitted preprocessor or fit_preprocessor=True'
+            )
+        return self._attachPreprocessorMetadata(prep.fit_transform(df), prep)
+
+    @staticmethod
+    def _attachPreprocessorMetadata(
+        data: dict[str, np.ndarray],
+        preprocessor: DataPreprocessor,
+    ) -> dict[str, np.ndarray]:
+        if 'sd_y' not in data and hasattr(preprocessor, '_y_std'):
+            data = dict(data)
+            data['sd_y'] = np.array(float(preprocessor._y_std))
+        return data
+
+    def _buildModelDataset(
+        self,
+        preprocessed: Mapping[str, Any],
+        *,
+        formula: str | None,
+        priors: Mapping[str, Any] | None,
+        likelihood_family: int | str | None,
+        q: int | None,
+    ) -> dict[str, np.ndarray]:
+        required = ('X', 'y', 'groups', 'columns', 'd', 'n', 'ns', 'm', 'y_type')
+        missing = [key for key in required if key not in preprocessed]
+        if missing:
+            raise KeyError(f'preprocessed data is missing keys: {missing}')
+
+        y_type = str(np.asarray(preprocessed['y_type']).item())
+        if y_type == 'multiclass':
+            raise ValueError('multiclass targets are not supported by the router')
+        likelihood = self._resolveLikelihoodFamily(likelihood_family, y_type)
+
+        X_pre = np.asarray(preprocessed['X'], dtype=float)
+        y = np.asarray(preprocessed['y'])
+        groups = np.asarray(preprocessed['groups'])
+        columns = tuple(str(c) for c in np.asarray(preprocessed['columns']).tolist())
+        if groups.ndim != 1 or len(groups) != len(y):
+            raise ValueError('preprocessed groups must be a 1D array aligned with y')
+        if X_pre.ndim != 2 or X_pre.shape[0] != len(y):
+            raise ValueError('preprocessed X must have shape (n, d) aligned with y')
+
+        spec = self._parseFormula(formula)
+        fixed_indices = self._resolveFixedIndices(spec.fixed_terms, columns)
+        if spec.intercept:
+            X_parts = [np.ones((X_pre.shape[0], 1), dtype=float)]
+        else:
+            X_parts = []
+        X_parts += [X_pre[:, idx : idx + 1] for idx in fixed_indices]
+        X = np.concatenate(X_parts, axis=1) if X_parts else np.empty((X_pre.shape[0], 0))
+
+        random_terms = spec.random_terms
+        if not random_terms:
+            if q is None:
+                random_terms = ('1',)
+            else:
+                if q < 1:
+                    raise ValueError('q must be positive')
+                random_terms = tuple(['1', *[columns[i] for i in range(min(q - 1, len(columns)))]])
+                if len(random_terms) != q:
+                    raise ValueError(f'q={q} requires {q - 1} non-intercept predictor columns')
+        Z = self._buildRandomDesign(X_pre, columns, random_terms)
+
+        actual_d = int(X.shape[-1])
+        actual_q = int(Z.shape[-1])
+        if actual_d < 1:
+            raise ValueError('fixed-effect design must include at least one column')
+        if actual_q < 1:
+            raise ValueError('random-effect design must include at least one column')
+
+        prior_values = self._coercePriors(
+            priors,
+            d=actual_d,
+            q=actual_q,
+            likelihood_family=likelihood,
+        )
+
+        groups = groups.astype(np.int64, copy=False)
+        if np.any(groups < 0):
+            raise ValueError('group indices must be non-negative')
+        unique_groups = np.unique(groups)
+        if not np.array_equal(unique_groups, np.arange(len(unique_groups))):
+            raise ValueError('group indices must be contiguous integers starting at 0')
+        ns = np.asarray(preprocessed['ns'], dtype=np.int64)
+        m = int(np.asarray(preprocessed['m']).item())
+        n = int(np.asarray(preprocessed['n']).item())
+
+        dataset = {
+            'X': X.astype(np.float64),
+            'Z': Z.astype(np.float64),
+            'y': y.astype(np.float64),
+            'groups': groups,
+            'd': np.array(actual_d),
+            'q': np.array(actual_q),
+            'n': np.array(n),
+            'm': np.array(m),
+            'ns': ns,
+            'sd_y': np.array(self._preprocessedSdY(preprocessed)),
+            'ffx': np.zeros(actual_d, dtype=np.float64),
+            'sigma_rfx': np.ones(actual_q, dtype=np.float64),
+            'corr_rfx': np.eye(actual_q, dtype=np.float64),
+            'rfx': np.zeros((m, actual_q), dtype=np.float64),
+            **prior_values,
+        }
+        if hasSigmaEps(likelihood):
+            dataset['sigma_eps'] = np.array(1.0)
+        return dataset
+
+    def _collateForSelectedSubmodel(
+        self, dataset: dict[str, np.ndarray]
+    ) -> dict[str, torch.Tensor]:
+        tentative = collateGrouped([dataset])
+        routes, _ = self._routeBatch(tentative)
+        selected = self._submodel_by_id[routes[0]]
+        max_d = self._routeValue(selected, 'max_d')
+        max_q = self._routeValue(selected, 'max_q')
+        if max_d is None or max_q is None:
+            raise ValueError(f'selected submodel {routes[0]} is missing max_d/max_q')
+
+        padded = self._padModelDataset(dataset, max_d=int(max_d), max_q=int(max_q))
+        return collateGrouped([padded])
+
+    @staticmethod
+    def _returnPreparedStage(
+        batch: dict[str, torch.Tensor],
+        stage: str,
+    ) -> dict[str, torch.Tensor]:
+        if stage != 'batch':
+            raise ValueError(f'cannot return stage={stage!r} from already-collated input')
+        return batch
 
     def _routeBatch(
         self, batch: Mapping[str, torch.Tensor]
@@ -378,6 +652,245 @@ class Router:
         # max_d. If that changes, sort by those routing markers here too.
         value = cls._routeValue(entry, 'max_d')
         return (float('inf') if value is None else float(value), str(entry['id']))
+
+    @staticmethod
+    def _parseFormula(formula: str | None) -> FormulaSpec:
+        if formula is None:
+            return FormulaSpec(
+                target=None,
+                fixed_terms=(),
+                random_terms=(),
+                group_name=None,
+            )
+
+        if '~' not in formula:
+            raise ValueError('formula must contain "~"')
+        lhs, rhs = formula.split('~', 1)
+        target = lhs.strip().lower()
+        if not target:
+            raise ValueError('formula target is empty')
+
+        random_matches = re.findall(r'\(([^|]+)\|([^)]+)\)', rhs)
+        if len(random_matches) > 1:
+            raise NotImplementedError('router formula support currently accepts one random term')
+
+        random_terms: tuple[str, ...] = ()
+        group_name = None
+        if random_matches:
+            random_rhs, group_name = random_matches[0]
+            random_terms = tuple(
+                term.strip().lower()
+                for term in random_rhs.split('+')
+                if term.strip() and term.strip() != '0'
+            )
+            group_name = group_name.strip().lower()
+
+        fixed_rhs = re.sub(r'\([^|]+\|[^)]+\)', '', rhs)
+        fixed_terms = []
+        intercept = True
+        for term in fixed_rhs.split('+'):
+            term = term.strip().lower()
+            if not term:
+                continue
+            if term in {'1'}:
+                intercept = True
+                continue
+            if term in {'0', '-1'}:
+                intercept = False
+                continue
+            fixed_terms.append(term)
+
+        return FormulaSpec(
+            target=target,
+            fixed_terms=tuple(fixed_terms),
+            random_terms=random_terms,
+            group_name=group_name,
+            intercept=intercept,
+        )
+
+    @staticmethod
+    def _resolveFixedIndices(terms: Sequence[str], columns: Sequence[str]) -> list[int]:
+        if not terms:
+            return list(range(len(columns)))
+
+        out: list[int] = []
+        seen: set[int] = set()
+        for term in terms:
+            for idx in Router._resolveColumnTerm(term, columns):
+                if idx not in seen:
+                    out.append(idx)
+                    seen.add(idx)
+        return out
+
+    @staticmethod
+    def _resolveColumnTerm(term: str, columns: Sequence[str]) -> list[int]:
+        term = term.strip().lower()
+        lower_columns = [column.lower() for column in columns]
+        exact = [i for i, column in enumerate(lower_columns) if column == term]
+        if exact:
+            return exact
+
+        prefix = f'{term}_'
+        prefixed = [i for i, column in enumerate(lower_columns) if column.startswith(prefix)]
+        if prefixed:
+            return prefixed
+
+        raise KeyError(f'formula term not found in preprocessed columns: {term}')
+
+    @staticmethod
+    def _buildRandomDesign(
+        X_pre: np.ndarray,
+        columns: Sequence[str],
+        random_terms: Sequence[str],
+    ) -> np.ndarray:
+        parts = []
+        for term in random_terms:
+            term = term.strip().lower()
+            if term == '1':
+                parts.append(np.ones((X_pre.shape[0], 1), dtype=float))
+                continue
+            for idx in Router._resolveColumnTerm(term, columns):
+                parts.append(X_pre[:, idx : idx + 1])
+        if not parts:
+            return np.empty((X_pre.shape[0], 0), dtype=float)
+        return np.concatenate(parts, axis=1)
+
+    @staticmethod
+    def _resolveLikelihoodFamily(likelihood_family: int | str | None, y_type: str) -> int:
+        if likelihood_family is None:
+            try:
+                return Y_TYPE_TO_LIKELIHOOD[y_type]
+            except KeyError as exc:
+                raise ValueError(f'unsupported y_type for router inference: {y_type}') from exc
+
+        if isinstance(likelihood_family, str):
+            key = likelihood_family.lower()
+            try:
+                return LIKELIHOOD_NAME_TO_ID[key]
+            except KeyError as exc:
+                raise ValueError(f'unknown likelihood family: {likelihood_family}') from exc
+        return int(likelihood_family)
+
+    @staticmethod
+    def _coercePriors(
+        priors: Mapping[str, Any] | None,
+        *,
+        d: int,
+        q: int,
+        likelihood_family: int,
+    ) -> dict[str, np.ndarray]:
+        values = bambiDefaultPriors(d, q, likelihood_family=likelihood_family)
+        if priors is not None:
+            values.update({str(key): np.asarray(value) for key, value in priors.items()})
+
+        required = ['nu_ffx', 'tau_ffx', 'tau_rfx', 'eta_rfx', 'family_ffx', 'family_sigma_rfx']
+        if hasSigmaEps(likelihood_family):
+            required += ['tau_eps', 'family_sigma_eps']
+        missing = [key for key in required if key not in values]
+        if missing:
+            raise KeyError(f'priors are missing required keys: {missing}')
+
+        values['likelihood_family'] = np.array(likelihood_family)
+        values['nu_ffx'] = np.asarray(values['nu_ffx'], dtype=float)
+        values['tau_ffx'] = np.asarray(values['tau_ffx'], dtype=float)
+        values['tau_rfx'] = np.asarray(values['tau_rfx'], dtype=float)
+        values['eta_rfx'] = np.asarray(values['eta_rfx'], dtype=float)
+        values['family_ffx'] = np.asarray(values['family_ffx'], dtype=np.int64)
+        values['family_sigma_rfx'] = np.asarray(values['family_sigma_rfx'], dtype=np.int64)
+        if hasSigmaEps(likelihood_family):
+            values['tau_eps'] = np.asarray(values['tau_eps'], dtype=float)
+            values['family_sigma_eps'] = np.asarray(values['family_sigma_eps'], dtype=np.int64)
+
+        if values['nu_ffx'].shape != (d,):
+            raise ValueError(f'nu_ffx must have shape ({d},), got {values["nu_ffx"].shape}')
+        if values['tau_ffx'].shape != (d,):
+            raise ValueError(f'tau_ffx must have shape ({d},), got {values["tau_ffx"].shape}')
+        if values['tau_rfx'].shape != (q,):
+            raise ValueError(f'tau_rfx must have shape ({q},), got {values["tau_rfx"].shape}')
+        return values
+
+    @staticmethod
+    def _preprocessedSdY(preprocessed: Mapping[str, Any]) -> float:
+        if 'sd_y' in preprocessed:
+            return float(np.asarray(preprocessed['sd_y']).item())
+        return 1.0
+
+    @staticmethod
+    def _padVector(values: np.ndarray, size: int, fill: float = 0.0) -> np.ndarray:
+        values = np.asarray(values)
+        if values.shape == ():
+            return values
+        if values.shape[0] > size:
+            raise ValueError(f'cannot pad vector with leading shape {values.shape[0]} to {size}')
+        out = np.full((size, *values.shape[1:]), fill, dtype=values.dtype)
+        out[: values.shape[0]] = values
+        return out
+
+    @staticmethod
+    def _padModelDataset(
+        dataset: Mapping[str, np.ndarray],
+        *,
+        max_d: int,
+        max_q: int,
+    ) -> dict[str, np.ndarray]:
+        d = int(np.asarray(dataset['d']).item())
+        q = int(np.asarray(dataset['q']).item())
+        if d > max_d:
+            raise ValueError(f'd={d} exceeds selected model max_d={max_d}')
+        if q > max_q:
+            raise ValueError(f'q={q} exceeds selected model max_q={max_q}')
+
+        out = {key: np.array(value, copy=True) for key, value in dataset.items()}
+        n = out['X'].shape[0]
+        if out['X'].shape[-1] < max_d:
+            X = np.zeros((n, max_d), dtype=out['X'].dtype)
+            X[:, :d] = out['X'][:, :d]
+            out['X'] = X
+            for key in ('ffx', 'nu_ffx', 'tau_ffx'):
+                out[key] = Router._padVector(out[key], max_d)
+
+        if out['Z'].shape[-1] < max_q:
+            Z = np.zeros((n, max_q), dtype=out['Z'].dtype)
+            Z[:, :q] = out['Z'][:, :q]
+            out['Z'] = Z
+            for key in ('sigma_rfx', 'tau_rfx'):
+                out[key] = Router._padVector(out[key], max_q)
+
+            m = int(np.asarray(out['m']).item())
+            rfx = np.zeros((m, max_q), dtype=out['rfx'].dtype)
+            rfx[:, :q] = out['rfx'][:, :q]
+            out['rfx'] = rfx
+
+            corr = np.eye(max_q, dtype=out['corr_rfx'].dtype)
+            corr[:q, :q] = out['corr_rfx'][:q, :q]
+            out['corr_rfx'] = corr
+
+        return out
+
+    @staticmethod
+    def _isPreprocessedDict(data: Mapping[str, Any]) -> bool:
+        return (
+            'X' in data
+            and isinstance(data['X'], np.ndarray)
+            and data['X'].ndim == 2
+            and 'groups' in data
+            and 'columns' in data
+            and 'mask_n' not in data
+            and 'Z' not in data
+        )
+
+    @staticmethod
+    def _isModelDataset(data: Mapping[str, Any]) -> bool:
+        return (
+            'X' in data
+            and 'Z' in data
+            and isinstance(data['X'], np.ndarray)
+            and isinstance(data['Z'], np.ndarray)
+            and data['X'].ndim == 2
+            and data['Z'].ndim == 2
+            and 'nu_ffx' in data
+            and 'tau_rfx' in data
+        )
 
     @staticmethod
     def _isCollatedBatch(data: Mapping[str, Any]) -> bool:
