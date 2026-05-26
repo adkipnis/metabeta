@@ -6,7 +6,8 @@ import pandas as pd
 import pytest
 import torch
 
-from metabeta.models.router import Router, joinCheckpoints
+from metabeta.models.router import Router
+from metabeta.utils.router import joinCheckpoints
 
 
 def _write_checkpoint(path: Path, *, max_d: int, max_q: int, seed: int) -> None:
@@ -224,6 +225,25 @@ def _write_math_joint_checkpoint(path: Path) -> None:
                     'model_cfg': {'d_ffx': 6, 'd_rfx': 3, 'likelihood_family': 0},
                     'model_state': {},
                 },
+                {
+                    'id': 'math-q5',
+                    'routing': {
+                        'likelihood_family': 0,
+                        'min_d': 1,
+                        'max_d': 6,
+                        'min_q': 4,
+                        'max_q': 5,
+                        'min_m': 5,
+                        'max_m': 300,
+                        'min_n': 5,
+                        'max_n': 200,
+                        'max_n_total': 10_000,
+                        'min_bg_df': 0,
+                        'min_within_df': 0,
+                    },
+                    'model_cfg': {'d_ffx': 6, 'd_rfx': 5, 'likelihood_family': 0},
+                    'model_state': {},
+                },
             ],
         },
         path,
@@ -345,6 +365,23 @@ def test_router_prepares_parquet_through_preprocessor(tmp_path: Path):
     assert batch['mask_d'].sum().item() == 5
     assert batch['mask_q'].sum().item() == 1
     assert batch['likelihood_family'].item() == 0
+
+
+def test_router_supports_formula_random_effects_up_to_q5(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    parquet_path = Path('metabeta/datasets/from-r/parquet/math.parquet')
+    batch = router.prepareData(
+        parquet_path,
+        formula='y ~ meanses + ses + minority + sex + (1 + ses + meanses + minority + sex | group)',
+        fit_preprocessor=True,
+    )
+
+    assert router.route(batch) == ['math-q5']
+    assert batch['Z'].shape == (1, 160, 67, 5)
+    assert batch['mask_q'].sum().item() == 5
 
 
 def test_router_rejects_tabular_input_without_preprocessor_or_fit_flag(tmp_path: Path):
