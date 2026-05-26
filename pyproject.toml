@@ -38,6 +38,12 @@ metabeta-generate = "metabeta.simulation.generate:main"
 metabeta-train = "metabeta.training.train:main"
 metabeta-evaluate = "metabeta.evaluation.evaluate:main"
 
+[tool.pytest.ini_options]
+addopts = "-m 'not slow'"
+markers = [
+    "slow: requires local checkpoint and data files; skipped by default",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 

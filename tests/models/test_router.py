@@ -741,6 +741,7 @@ _HAS_REAL_DATA = (
 )
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not _HAS_REAL_DATA, reason='local checkpoint + data not present')
 def test_router_sample_small_partition_returns_valid_proposal_shapes():
     from metabeta.utils.dataloader import Dataloader
@@ -756,6 +757,7 @@ def test_router_sample_small_partition_returns_valid_proposal_shapes():
     assert len(result.validation) == B
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not _HAS_REAL_DATA, reason='local checkpoint + data not present')
 def test_router_sample_medium_partition_routes_correctly():
     router = Router(_JOINT_CHECKPOINT, batch_size=4)
@@ -770,6 +772,7 @@ def test_router_sample_medium_partition_routes_correctly():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not _HAS_REAL_DATA, reason='local checkpoint + data not present')
 def test_router_npz_path_wraps_in_dataloader():
     router = Router(_JOINT_CHECKPOINT, batch_size=4)
@@ -778,6 +781,7 @@ def test_router_npz_path_wraps_in_dataloader():
     assert batch['X'].dim() == 4
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(not _HAS_REAL_DATA, reason='local checkpoint + data not present')
 def test_router_existing_dataloader_is_consumed_directly():
     loader = Dataloader(_SMALL_B_SAMPLED, batch_size=4)
