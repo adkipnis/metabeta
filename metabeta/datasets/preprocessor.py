@@ -36,6 +36,44 @@ class GroupCandidate:
     score: float
 
 
+@dataclass(frozen=True)
+class PreprocessReport:
+    """Dry-run report for the raw-data preprocessing pipeline."""
+
+    y_type: str
+    group_name: str | None
+    dropped_heavy_missing: list[str]
+    dropped_near_constant: list[str]
+    dropped_correlated: list[str]
+    imputed_columns: dict[str, int]
+    winsorized_columns: dict[str, int]
+    count_transformed_columns: list[str]
+    lumped_categories: dict[str, list[str]]
+    dropped_rare_category_rows: int
+    dropped_nonfinite_y_rows: int
+    dropped_missing_group_rows: int
+    n_before: int
+    n_after: int
+    d_after: int
+    m_after: int | None
+    warnings: list[str]
+
+    @property
+    def requires_preprocessing(self) -> bool:
+        return bool(
+            self.dropped_heavy_missing
+            or self.dropped_near_constant
+            or self.dropped_correlated
+            or self.imputed_columns
+            or self.winsorized_columns
+            or self.count_transformed_columns
+            or self.lumped_categories
+            or self.dropped_rare_category_rows
+            or self.dropped_nonfinite_y_rows
+            or self.dropped_missing_group_rows
+        )
+
+
 def categorical(df: pd.DataFrame) -> pd.Index:
     return df.select_dtypes(include=['object', 'category', 'string']).columns
 
@@ -352,9 +390,16 @@ def _corrFilter(df: pd.DataFrame, threshold: float = 0.95) -> tuple[pd.DataFrame
     Greedy: at each step, remove the column with the higher mean absolute
     correlation to all remaining columns.
     """
+    dropped = _correlatedColumnsToDrop(df, threshold=threshold)
+    if dropped:
+        logger.warning(f'Dropping correlated columns {sorted(dropped)}.')
+    return df.drop(columns=list(dropped)), dropped
+
+
+def _correlatedColumnsToDrop(df: pd.DataFrame, threshold: float = 0.95) -> set[str]:
     num_cols = numerical(df).tolist()
     if len(num_cols) < 2:
-        return df, set()
+        return set()
 
     corr = df[num_cols].corr().abs()
     corr_vals = corr.to_numpy(copy=True)
@@ -379,9 +424,7 @@ def _corrFilter(df: pd.DataFrame, threshold: float = 0.95) -> tuple[pd.DataFrame
         active.remove(drop)
         dropped.add(drop)
 
-    if dropped:
-        logger.warning(f'Dropping correlated columns {sorted(dropped)}.')
-    return df.drop(columns=list(dropped)), dropped
+    return dropped
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +529,16 @@ class DataPreprocessor:
 
     def fit_transform(self, df: pd.DataFrame) -> dict:
         return self._fit_core(df)
+
+    def audit(self, df: pd.DataFrame) -> PreprocessReport:
+        """Report what ``fit_transform`` would do without fitting this instance."""
+
+        return self._audit_core(df)
+
+    def dry_run(self, df: pd.DataFrame) -> PreprocessReport:
+        """Alias for ``audit``."""
+
+        return self.audit(df)
 
     def transform(self, df: pd.DataFrame) -> dict:
         """Apply the fitted pipeline to new data (deployment path).
@@ -610,6 +663,196 @@ class DataPreprocessor:
     # ------------------------------------------------------------------
     # Core fit logic (single pass)
     # ------------------------------------------------------------------
+
+    def _audit_core(self, df: pd.DataFrame) -> PreprocessReport:
+        df = df.copy()
+        df.columns = df.columns.str.lower()
+        df = df.reset_index(drop=True)
+        df = _sentinelReplace(df, self.sentinels)
+
+        n_before = len(df)
+        warnings_: list[str] = []
+
+        if 'y' not in df.columns:
+            raise ValueError("DataFrame must contain a 'y' column.")
+        y_col = df.pop('y')
+
+        miss_frac = df.isnull().mean()
+        dropped_heavy = sorted(miss_frac[miss_frac > self.col_miss_threshold].index.tolist())
+        if dropped_heavy:
+            warnings_.append(
+                f'would drop columns with >{self.col_miss_threshold:.0%} missing: '
+                f'{dropped_heavy}'
+            )
+            df = df.drop(columns=dropped_heavy)
+
+        dropped_nonfinite_y = 0
+        if y_col.isna().all():
+            y_type = 'unobserved'
+            y = None
+            warnings_.append('target y is entirely missing')
+        else:
+            y_is_multiclass = detectMulticlassY(y_col)
+            if y_is_multiclass:
+                codes, _ = pd.factorize(y_col)
+                y = codes.astype(float)
+                y_is_binary = False
+            else:
+                y, y_is_binary = coerceTargetToNumeric(y_col)
+            y_type = detectYType(y, y_is_binary, y_is_multiclass)
+
+            y_valid = np.isfinite(y)
+            if not np.all(y_valid):
+                dropped_nonfinite_y = int((~y_valid).sum())
+                warnings_.append(f'would remove {dropped_nonfinite_y} rows with non-finite y')
+                keep = np.where(y_valid)[0]
+                df = df.iloc[keep].reset_index(drop=True)
+                y = y[keep]
+
+        group_name = self.group_name
+        if not group_name:
+            candidates = detectGroupCandidates(df)
+            if candidates and candidates[0].score > 0:
+                group_name = candidates[0].name
+
+        if not group_name:
+            hi_card = [c for c in categorical(df).tolist() if df[c].nunique() > self.max_categories]
+            if hi_card:
+                best_hi = max(hi_card, key=lambda c: df[c].nunique())
+                if len(df) / df[best_hi].nunique() >= 2:
+                    group_name = best_hi
+
+        groups: np.ndarray | None = None
+        dropped_missing_group = 0
+        if group_name and group_name in df.columns:
+            df = df.sort_values(by=group_name)
+            sort_idx = df.index.values
+            if y is not None:
+                y = y[sort_idx]
+            df = df.reset_index(drop=True)
+            groups_raw = df.pop(group_name)
+            groups, _ = pd.factorize(groups_raw)
+            if np.any(groups == -1):
+                dropped_missing_group = int((groups == -1).sum())
+                warnings_.append(
+                    f'would drop {dropped_missing_group} rows with missing group membership'
+                )
+                keep = groups != -1
+                df = df.iloc[keep].reset_index(drop=True)
+                if y is not None:
+                    y = y[keep]
+                groups = groups[keep]
+
+        imputed_columns = {
+            col: int(count) for col, count in df.isnull().sum().items() if int(count) > 0
+        }
+        num_cols_for_imp = numerical(df).tolist()
+        cat_cols_for_imp = categorical(df).tolist()
+        num_stats, cat_stats = _computeImputeStats(df, groups, num_cols_for_imp, cat_cols_for_imp)
+        df = _applyImputation(df, groups, num_stats, cat_stats)
+        if imputed_columns:
+            warnings_.append(f'would impute missing values in: {sorted(imputed_columns)}')
+
+        winsor_bounds = _computeWinsorBounds(df[numerical(df)], threshold=self.outlier_threshold)
+        winsorized_columns: dict[str, int] = {}
+        for col, (lo, hi) in winsor_bounds.items():
+            clipped = int(((df[col] < lo) | (df[col] > hi)).sum())
+            if clipped > 0:
+                winsorized_columns[col] = clipped
+        df = _applyWinsor(df, winsor_bounds)
+        if winsorized_columns:
+            warnings_.append(f'would winsorize numeric columns: {sorted(winsorized_columns)}')
+
+        bad_const = sorted(
+            [
+                c
+                for c in numerical(df).tolist()
+                if df[c].value_counts(normalize=True).max() > self.constant_threshold
+            ]
+        )
+        if bad_const:
+            warnings_.append(f'would drop near-constant columns: {bad_const}')
+            df = df.drop(columns=bad_const)
+
+        corr_dropped = sorted(_correlatedColumnsToDrop(df, threshold=self.corr_threshold))
+        if corr_dropped:
+            warnings_.append(f'would drop correlated columns: {corr_dropped}')
+            df = df.drop(columns=corr_dropped)
+
+        lumped_categories: dict[str, list[str]] = {}
+        cat_cols = categorical(df).tolist()
+        for col in cat_cols:
+            series = df[col].astype(object) if hasattr(df[col], 'cat') else df[col]
+            counts = series.value_counts(dropna=True)
+            if len(counts) <= self.max_categories:
+                continue
+            keep_levels = set(counts.index[: self.max_categories])
+            rare_mask = ~series.isin(keep_levels) & series.notna()
+            lump_levels = sorted(map(str, series[rare_mask].unique()))
+            if not lump_levels:
+                continue
+            lumped_categories[col] = lump_levels
+            if rare_mask.mean() >= self.min_prevalence:
+                df[col] = series.where(~rare_mask, 'other')
+            else:
+                df[col] = series.where(~rare_mask, np.nan)
+
+        dropped_rare_category_rows = 0
+        if cat_cols:
+            still_missing = df[cat_cols].isnull().any(axis=1)
+            if still_missing.any():
+                dropped_rare_category_rows = int(still_missing.sum())
+                warnings_.append(
+                    f'would drop {dropped_rare_category_rows} rows with rare categories'
+                )
+                keep = np.where(~still_missing)[0]
+                df = df.iloc[keep].reset_index(drop=True)
+                if y is not None:
+                    y = y[keep]
+                if groups is not None:
+                    groups = groups[keep]
+                    groups, _ = pd.factorize(pd.Series(groups))
+
+        if lumped_categories:
+            warnings_.append(f'would lump rare categories in: {sorted(lumped_categories)}')
+
+        numeric_cols = numerical(df).tolist()
+        categorical_cols = categorical(df).tolist()
+        count_transformed_columns: list[str] = []
+        if numeric_cols:
+            transformer = NumericTransformer(exclude_binary=True, transform_counts=True)
+            transformer.fit(df[numeric_cols].to_numpy(dtype=float))
+            count_transformed_columns = [
+                col for col, is_log in zip(numeric_cols, transformer.is_log1p_) if is_log
+            ]
+        if count_transformed_columns:
+            warnings_.append(
+                f'would log1p-transform count-like columns: {count_transformed_columns}'
+            )
+
+        dummies = sum(max(int(df[col].nunique(dropna=True)) - 1, 0) for col in categorical_cols)
+        d_after = len(numeric_cols) + dummies + 1
+        m_after = int(len(np.unique(groups))) if groups is not None else None
+
+        return PreprocessReport(
+            y_type=y_type,
+            group_name=group_name or None,
+            dropped_heavy_missing=dropped_heavy,
+            dropped_near_constant=bad_const,
+            dropped_correlated=corr_dropped,
+            imputed_columns=imputed_columns,
+            winsorized_columns=winsorized_columns,
+            count_transformed_columns=count_transformed_columns,
+            lumped_categories=lumped_categories,
+            dropped_rare_category_rows=dropped_rare_category_rows,
+            dropped_nonfinite_y_rows=dropped_nonfinite_y,
+            dropped_missing_group_rows=dropped_missing_group,
+            n_before=n_before,
+            n_after=len(df),
+            d_after=d_after,
+            m_after=m_after,
+            warnings=warnings_,
+        )
 
     def _fit_core(self, df: pd.DataFrame) -> dict:
         """Fit all statistics and transform training data in one pass.
