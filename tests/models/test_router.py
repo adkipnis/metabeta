@@ -1,6 +1,8 @@
 from collections import OrderedDict
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 import torch
 
@@ -179,6 +181,55 @@ def _write_joint_checkpoint(path: Path) -> None:
     )
 
 
+def _write_math_joint_checkpoint(path: Path) -> None:
+    torch.save(
+        {
+            '_version': 1,
+            'submodels': [
+                {
+                    'id': 'math-small',
+                    'routing': {
+                        'likelihood_family': 0,
+                        'min_d': 1,
+                        'max_d': 3,
+                        'min_q': 1,
+                        'max_q': 2,
+                        'min_m': 5,
+                        'max_m': 300,
+                        'min_n': 5,
+                        'max_n': 200,
+                        'max_n_total': 10_000,
+                        'min_bg_df': 0,
+                        'min_within_df': 0,
+                    },
+                    'model_cfg': {'d_ffx': 3, 'd_rfx': 2, 'likelihood_family': 0},
+                    'model_state': {},
+                },
+                {
+                    'id': 'math-large',
+                    'routing': {
+                        'likelihood_family': 0,
+                        'min_d': 1,
+                        'max_d': 6,
+                        'min_q': 1,
+                        'max_q': 3,
+                        'min_m': 5,
+                        'max_m': 300,
+                        'min_n': 5,
+                        'max_n': 200,
+                        'max_n_total': 10_000,
+                        'min_bg_df': 0,
+                        'min_within_df': 0,
+                    },
+                    'model_cfg': {'d_ffx': 6, 'd_rfx': 3, 'likelihood_family': 0},
+                    'model_state': {},
+                },
+            ],
+        },
+        path,
+    )
+
+
 def _batch(*, d: int, q: int, m: int = 12, n_i: int = 10, family: int = 1):
     max_d, max_q = max(8, d), max(3, q)
     ns = torch.zeros((1, m), dtype=torch.int64)
@@ -236,3 +287,71 @@ def test_router_checks_between_and_within_group_degrees_of_freedom(tmp_path: Pat
     with pytest.warns(RuntimeWarning, match='incompatible'):
         with pytest.raises(ValueError, match='min_within_df'):
             router._routeBatch(_batch(d=4, q=2, m=12, n_i=3))
+
+
+def test_router_prepares_preprocessed_numpy_dict_with_formula_and_default_priors(
+    tmp_path: Path,
+):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    with np.load(
+        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
+        allow_pickle=True,
+    ) as raw:
+        preprocessed = dict(raw)
+
+    batch = router.prepareData(
+        preprocessed,
+        formula='y ~ meanses + ses + (1 + ses | group)',
+    )
+
+    assert router.route(batch) == ['math-small']
+    assert batch['X'].shape == (1, 160, 67, 3)
+    assert batch['Z'].shape == (1, 160, 67, 2)
+    assert torch.equal(batch['mask_d'], torch.tensor([[True, True, True]]))
+    assert torch.equal(batch['mask_q'], torch.tensor([[True, True]]))
+    assert batch['likelihood_family'].item() == 0
+    assert batch['tau_ffx'].shape == (1, 3)
+    assert batch['tau_rfx'].shape == (1, 2)
+
+    first = preprocessed['X'][0]
+    assert torch.allclose(
+        batch['X'][0, 0, 0, :3],
+        torch.tensor([1.0, first[1], first[0]], dtype=batch['X'].dtype),
+    )
+    assert torch.allclose(
+        batch['Z'][0, 0, 0, :2],
+        torch.tensor([1.0, first[0]], dtype=batch['Z'].dtype),
+    )
+
+
+def test_router_prepares_parquet_through_preprocessor(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    parquet_path = Path('metabeta/datasets/from-r/parquet/math.parquet')
+    batch = router.prepareData(
+        parquet_path,
+        formula='y ~ meanses + ses + minority + sex + (1 | group)',
+        fit_preprocessor=True,
+    )
+
+    assert router.route(batch) == ['math-large']
+    assert batch['X'].shape == (1, 160, 67, 6)
+    assert batch['Z'].shape == (1, 160, 67, 3)
+    assert batch['mask_d'].sum().item() == 5
+    assert batch['mask_q'].sum().item() == 1
+    assert batch['likelihood_family'].item() == 0
+
+
+def test_router_rejects_tabular_input_without_preprocessor_or_fit_flag(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+    df = pd.read_parquet('metabeta/datasets/from-r/parquet/math.parquet')
+
+    with pytest.raises(ValueError, match='requires a fitted preprocessor'):
+        router.prepareData(df, formula='y ~ ses + (1 | group)')
