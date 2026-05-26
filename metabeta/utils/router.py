@@ -301,12 +301,17 @@ def _priorVariants(priors: Any) -> list[tuple[str | None, Mapping[str, Any] | No
     if isinstance(priors, Sequence) and not isinstance(priors, (str, bytes, bytearray, Mapping)):
         if len(priors) == 0:
             raise ValueError('priors sequence cannot be empty')
-        return [(_priorName(prior, i), _priorMapping(prior)) for i, prior in enumerate(priors)]
+        out = []
+        for prior in priors:
+            if not isinstance(prior, Mapping):
+                raise TypeError('each prior specification must be a mapping')
+            out.append((str(prior['name']) if 'name' in prior else None, prior))
+        return out
 
     if isinstance(priors, Mapping):
         if _isNamedPriorCollection(priors):
-            return [(str(name), _priorMapping(prior)) for name, prior in priors.items()]
-        return [(_priorName(priors, 0), priors)]
+            return [(str(name), prior) for name, prior in priors.items()]
+        return [(str(priors['name']) if 'name' in priors else None, priors)]
 
     raise TypeError('priors must be None, a mapping, a sequence of mappings, or a named mapping')
 
@@ -316,18 +321,6 @@ def _isNamedPriorCollection(priors: Mapping[str, Any]) -> bool:
     if keys & (CANONICAL_PRIOR_KEYS | TERM_PRIOR_KEYS):
         return False
     return all(isinstance(value, Mapping) for value in priors.values())
-
-
-def _priorMapping(prior: Any) -> Mapping[str, Any]:
-    if not isinstance(prior, Mapping):
-        raise TypeError('each prior specification must be a mapping')
-    return prior
-
-
-def _priorName(prior: Any, i: int) -> str | None:
-    if isinstance(prior, Mapping) and 'name' in prior:
-        return str(prior['name'])
-    return None
 
 
 def _resolveSinglePrior(
@@ -438,18 +431,10 @@ def _requireMapping(value: Any, label: str) -> Mapping[str, Any]:
 
 
 def _termIndices(term: str, names: Sequence[str]) -> list[int]:
-    term_lower = term.lower()
-    names_lower = [name.lower() for name in names]
-    exact = [i for i, name in enumerate(names_lower) if name == term_lower]
-    if exact:
-        return exact
-
-    prefix = f'{term_lower}_'
-    prefixed = [i for i, name in enumerate(names_lower) if name.startswith(prefix)]
-    if prefixed:
-        return prefixed
-
-    raise KeyError(f'prior term not found in model design: {term}')
+    try:
+        return resolveColumnTerm(term, names)
+    except KeyError:
+        raise KeyError(f'prior term not found in model design: {term}')
 
 
 def _ffxFamilyId(value: Any) -> int:
