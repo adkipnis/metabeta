@@ -207,8 +207,11 @@ def test_router_selects_smallest_compatible_submodel(tmp_path: Path):
     _write_joint_checkpoint(joint_path)
     router = Router(joint_path)
 
-    assert router.route(_batch(d=4, q=2)) == ['small']
-    assert router.route(_batch(d=5, q=3)) == ['medium']
+    routes, _ = router._routeBatch(_batch(d=4, q=2))
+    assert routes == ['small']
+
+    routes, _ = router._routeBatch(_batch(d=5, q=3))
+    assert routes == ['medium']
 
 
 def test_router_rejects_dataset_outside_training_dimensions(tmp_path: Path):
@@ -216,8 +219,9 @@ def test_router_rejects_dataset_outside_training_dimensions(tmp_path: Path):
     _write_joint_checkpoint(joint_path)
     router = Router(joint_path)
 
-    with pytest.raises(ValueError, match='outside every routed submodel'):
-        router.route(_batch(d=9, q=3))
+    with pytest.warns(RuntimeWarning, match='incompatible'):
+        with pytest.raises(ValueError, match='outside every routed submodel'):
+            router._routeBatch(_batch(d=9, q=3))
 
 
 def test_router_checks_between_and_within_group_degrees_of_freedom(tmp_path: Path):
@@ -225,8 +229,10 @@ def test_router_checks_between_and_within_group_degrees_of_freedom(tmp_path: Pat
     _write_joint_checkpoint(joint_path)
     router = Router(joint_path)
 
-    with pytest.raises(ValueError, match='min_bg_df'):
-        router.route(_batch(d=4, q=2, m=6, n_i=10))
+    with pytest.warns(RuntimeWarning, match='incompatible'):
+        with pytest.raises(ValueError, match='min_bg_df'):
+            router._routeBatch(_batch(d=4, q=2, m=6, n_i=10))
 
-    with pytest.raises(ValueError, match='min_within_df'):
-        router.route(_batch(d=4, q=2, m=12, n_i=3))
+    with pytest.warns(RuntimeWarning, match='incompatible'):
+        with pytest.raises(ValueError, match='min_within_df'):
+            router._routeBatch(_batch(d=4, q=2, m=12, n_i=3))

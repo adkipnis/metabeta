@@ -7,13 +7,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import warnings
 
 import torch
 
 from metabeta.models.approximator import Approximator
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.constants import LIKELIHOOD_FAMILIES
-from metabeta.utils.dataloader import Dataloader, collateGrouped, toDevice
+from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.evaluation import Proposal
 from metabeta.utils.experiments import CHECKPOINT_DIR
 
@@ -89,36 +90,26 @@ class Router:
         *,
         device: str | torch.device = 'cpu',
         batch_size: int | None = None,
-        compile_model: bool = False,
     ) -> None:
         self.joint_checkpoint = Path(joint_checkpoint)
         self.device = torch.device(device)
         self.batch_size = batch_size
-        self.compile_model = compile_model
 
         payload = torch.load(self.joint_checkpoint, map_location='cpu', weights_only=True)
         if payload.get('_version') != JOINT_CHECKPOINT_VERSION:
             raise ValueError(f'unsupported joint checkpoint version: {payload.get("_version")!r}')
         if 'submodels' not in payload:
             raise KeyError('joint checkpoint is missing submodels')
-
         self.submodels = list(payload['submodels'])
         if not self.submodels:
             raise ValueError('joint checkpoint contains no submodels')
-
         self.submodels.sort(key=self._routingSortKey)
         self._submodel_by_id = {str(entry['id']): entry for entry in self.submodels}
         if len(self._submodel_by_id) != len(self.submodels):
             raise ValueError('joint checkpoint contains duplicate submodel ids')
         self._models: dict[str, Approximator] = {}
-
-    @property
-    def max_d(self) -> int:
-        return max(int(self._routeValue(entry, 'max_d')) for entry in self.submodels)
-
-    @property
-    def max_q(self) -> int:
-        return max(int(self._routeValue(entry, 'max_q')) for entry in self.submodels)
+        self._joint_max_d = self._maxRouteValue('max_d')
+        self._joint_max_q = self._maxRouteValue('max_q')
 
     def model(self, submodel_id: str) -> Approximator:
         """Return the lazily instantiated model for ``submodel_id``."""
@@ -135,51 +126,30 @@ class Router:
         model = Approximator(model_cfg).to(self.device)
         model.load_state_dict(entry['model_state'])
         model.eval()
-        if self.compile_model and self.device.type != 'mps':
-            model.compile()
         self._models[submodel_id] = model
         return model
 
-    def prepareData(
-        self,
-        data: str | Path | Dataloader | Mapping[str, Any] | Sequence[Mapping[str, Any]],
-    ) -> dict[str, torch.Tensor]:
+    def prepareData(self, data: str | Path | Dataloader) -> dict[str, torch.Tensor]:
         """Return a collated dataloader-style batch."""
 
         if isinstance(data, Dataloader):
             return data.fullBatch()
 
         if isinstance(data, (str, Path)):
-            loader = Dataloader(
+            # Initial path loads use the joint maxima because the selected submodel
+            # is not known until after we inspect active dimensions.
+            dl = Dataloader(
                 Path(data),
                 batch_size=self.batch_size,
                 shuffle=False,
-                max_d=self.max_d,
-                max_q=self.max_q,
+                max_d=self._joint_max_d,
+                max_q=self._joint_max_q,
             )
-            return loader.fullBatch()
+            return dl.fullBatch()
 
-        if isinstance(data, Mapping):
-            if self._isCollatedBatch(data):
-                return dict(data)
-            if 'groups' in data:
-                return collateGrouped([dict(data)])
-            raise TypeError(
-                'mapping input must be a collated dataloader batch or one raw '
-                'preprocessed dataset with groups'
-            )
+        raise TypeError('router input must be a Dataloader or .npz path')
 
-        if isinstance(data, Sequence) and not isinstance(data, (str, bytes)):
-            datasets = [dict(dataset) for dataset in data]
-            if datasets:
-                return collateGrouped(datasets)
-
-        raise TypeError('unsupported router input type')
-
-    def route(
-        self,
-        data: str | Path | Dataloader | Mapping[str, Any] | Sequence[Mapping[str, Any]],
-    ) -> list[str]:
+    def route(self, data: str | Path | Dataloader) -> list[str]:
         """Return the selected submodel id for each dataset in ``data``."""
 
         batch = self.prepareData(data)
@@ -189,7 +159,7 @@ class Router:
     @torch.no_grad()
     def sample(
         self,
-        data: str | Path | Dataloader | Mapping[str, Any] | Sequence[Mapping[str, Any]],
+        data: str | Path | Dataloader,
         *,
         n_samples: int = 1,
     ) -> RouterResult:
@@ -213,10 +183,7 @@ class Router:
         return RouterResult(proposal=proposal, routes=routes, validation=validation)
 
     @torch.no_grad()
-    def forward(
-        self,
-        data: str | Path | Dataloader | Mapping[str, Any] | Sequence[Mapping[str, Any]],
-    ) -> RouterResult:
+    def forward(self, data: str | Path | Dataloader) -> RouterResult:
         """Evaluate the forward log-probability path for batches with parameters."""
 
         batch = self.prepareData(data)
@@ -249,32 +216,36 @@ class Router:
         validation = []
         batch_size = int(batch['X'].shape[0])
         for i in range(batch_size):
-            failures_by_submodel = {}
-            compatible = []
-            for entry in self.submodels:
-                failures = self._compatibilityFailures(batch, i, entry)
-                if failures:
-                    failures_by_submodel[str(entry['id'])] = failures
-                else:
-                    compatible.append(entry)
-
-            if not compatible:
-                raise ValueError(
-                    f'dataset {i} is outside every routed submodel: {failures_by_submodel}'
-                )
-
-            selected = compatible[0]
-            routes.append(str(selected['id']))
+            selected, failures = self._selectSubmodel(batch, i)
+            submodel_id = str(selected['id'])
+            routes.append(submodel_id)
             validation.append(
                 {
                     'index': i,
-                    'submodel_id': str(selected['id']),
+                    'submodel_id': submodel_id,
                     'dimensions': self._datasetDimensions(batch, i),
                     'online_stats': 'stats' not in batch,
-                    'failures_by_submodel': failures_by_submodel,
+                    'failures_by_submodel': failures,
                 }
             )
         return routes, validation
+
+    def _selectSubmodel(
+        self, batch: Mapping[str, torch.Tensor], i: int
+    ) -> tuple[Mapping[str, Any], dict[str, list[str]]]:
+        failures_by_submodel = {}
+        for entry in self.submodels:
+            failures = self._compatibilityFailures(batch, i, entry)
+            if not failures:
+                return entry, failures_by_submodel
+            failures_by_submodel[str(entry['id'])] = failures
+
+        warnings.warn(
+            f'dataset {i} is incompatible with every routed submodel',
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        raise ValueError(f'dataset {i} is outside every routed submodel: {failures_by_submodel}')
 
     def _compatibilityFailures(
         self, batch: Mapping[str, torch.Tensor], i: int, entry: Mapping[str, Any]
@@ -448,26 +419,17 @@ class Router:
         return None
 
     @classmethod
-    def _routingSortKey(cls, entry: Mapping[str, Any]) -> tuple[float, float, float, float, str]:
-        routing = entry.get('routing', {})
+    def _routingSortKey(cls, entry: Mapping[str, Any]) -> tuple[float, str]:
+        # For current checkpoint families, max_q and the n/m bounds are tied to
+        # max_d. If that changes, sort by those routing markers here too.
+        value = cls._routeValue(entry, 'max_d')
+        return (float('inf') if value is None else float(value), str(entry['id']))
 
-        def value(key: str) -> float:
-            v = cls._routeValue(entry, key)
-            return float('inf') if v is None else float(v)
-
-        return (
-            value('max_d'),
-            value('max_q'),
-            float('inf') if routing.get('max_m') is None else float(routing['max_m']),
-            float('inf') if routing.get('max_n_total') is None else float(routing['max_n_total']),
-            str(entry['id']),
-        )
-
-    @staticmethod
-    def _isCollatedBatch(data: Mapping[str, Any]) -> bool:
-        return (
-            'X' in data and torch.is_tensor(data['X']) and data['X'].dim() == 4 and 'mask_n' in data
-        )
+    def _maxRouteValue(self, key: str) -> int:
+        values = [self._routeValue(entry, key) for entry in self.submodels]
+        if any(value is None for value in values):
+            raise ValueError(f'joint checkpoint is missing required routing key: {key}')
+        return max(int(value) for value in values)
 
 
 CheckpointRouter = Router
