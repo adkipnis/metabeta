@@ -7,6 +7,7 @@ import pytest
 import torch
 
 from metabeta.models.router import Router
+from metabeta.utils.dataloader import Dataloader
 from metabeta.utils.router import joinCheckpoints
 
 
@@ -560,11 +561,12 @@ def test_router_rejects_sigma_eps_prior_for_non_gaussian(tmp_path: Path):
     }
 
     with pytest.raises(ValueError, match='sigma_eps prior is only valid'):
-        router.prepareData(
-            preprocessed,
-            formula='y ~ x1 + x2 + (1 + x1 | group)',
-            priors={'sigma_eps': {'sigma': 1.0}},
-        )
+        with pytest.warns(RuntimeWarning, match='near-constant'):
+            router.prepareData(
+                preprocessed,
+                formula='y ~ x1 + x2 + (1 + x1 | group)',
+                priors={'sigma_eps': {'sigma': 1.0}},
+            )
 
 
 def test_router_rejects_empty_prior_list(tmp_path: Path):
@@ -763,3 +765,388 @@ def test_router_sample_medium_partition_routes_correctly():
     assert all(r == 'medium' for r in result.routes)
 
 
+# ---------------------------------------------------------------------------
+# Dataloader input handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _HAS_REAL_DATA, reason='local checkpoint + data not present')
+def test_router_npz_path_wraps_in_dataloader():
+    router = Router(_JOINT_CHECKPOINT, batch_size=4)
+    batch = router.prepareData(_SMALL_B_SAMPLED)
+    assert isinstance(batch, dict)
+    assert batch['X'].dim() == 4
+
+
+@pytest.mark.skipif(not _HAS_REAL_DATA, reason='local checkpoint + data not present')
+def test_router_existing_dataloader_is_consumed_directly():
+    loader = Dataloader(_SMALL_B_SAMPLED, batch_size=4)
+    router = Router(_JOINT_CHECKPOINT, batch_size=4)
+    batch = router.prepareData(loader)
+    assert isinstance(batch, dict)
+    assert batch['X'].dim() == 4
+
+
+# ---------------------------------------------------------------------------
+# New validation checks
+# ---------------------------------------------------------------------------
+
+
+def test_router_validates_active_group_ns_positive(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    bad = _full_batch(d=4, q=2, m=12)
+    # Active group with ns=0 (mask_m says active but ns is zero)
+    ns = bad['ns'].clone()
+    ns[0, 5] = 0
+    bad['ns'] = ns
+    bad['n'] = bad['ns'][bad['mask_m']].sum().unsqueeze(0)
+
+    with pytest.raises(ValueError, match='active groups must have ns > 0'):
+        router._validateBatchFormat(bad)
+
+
+def test_router_validates_inactive_group_ns_zero(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    # Build from scratch: 10 active groups + 2 padding slots
+    m_active = 10
+    m_pad = 12
+    n_i = 10
+    max_d, max_q = 8, 3
+    ns = torch.zeros(1, m_pad, dtype=torch.int64)
+    ns[0, :m_active] = n_i
+    ns[0, m_active] = 5  # padding group with non-zero ns (should be 0)
+    mask_m = torch.zeros(1, m_pad, dtype=torch.bool)
+    mask_m[0, :m_active] = True  # mark only the first 10 as active
+    mask_q = torch.arange(max_q).unsqueeze(0) < 2
+    bad = {
+        'X': torch.zeros((1, m_pad, n_i, max_d)),
+        'Z': torch.zeros((1, m_pad, n_i, max_q)),
+        'y': torch.zeros((1, m_pad, n_i)),
+        'ns': ns,
+        'm': torch.tensor([m_active]),
+        'n': torch.tensor([m_active * n_i]),
+        'mask_d': torch.arange(max_d).unsqueeze(0) < 4,
+        'mask_q': mask_q,
+        'mask_n': torch.ones((1, m_pad, n_i), dtype=torch.bool),
+        'mask_m': mask_m,
+        'mask_mq': mask_m.unsqueeze(-1) & mask_q.unsqueeze(-2),
+        'mask_corr': mask_q.new_zeros(1, 1),
+        'likelihood_family': torch.tensor([1]),
+        'nu_ffx': torch.zeros(1, max_d),
+        'tau_ffx': torch.ones(1, max_d) * 2.5,
+        'tau_rfx': torch.ones(1, max_q) * 2.5,
+        'eta_rfx': torch.zeros(1),
+        'family_ffx': torch.zeros(1, dtype=torch.long),
+        'family_sigma_rfx': torch.zeros(1, dtype=torch.long),
+        'sd_y': torch.ones(1),
+    }
+
+    with pytest.raises(ValueError, match='inactive groups must have ns == 0'):
+        router._validateBatchFormat(bad)
+
+
+def test_router_validates_mask_mq_agreement(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    bad = _full_batch(d=4, q=2)
+    # Corrupt mask_mq so it disagrees with mask_m & mask_q
+    bad['mask_mq'] = bad['mask_mq'].clone()
+    bad['mask_mq'][0, 0, 0] = not bad['mask_mq'][0, 0, 0].item()
+
+    with pytest.raises(ValueError, match='mask_mq must equal'):
+        router._validateBatchFormat(bad)
+
+
+def test_router_validates_stats_non_finite(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    bad = _full_batch(d=4, q=2)
+    bad['stats'] = {'beta_est': torch.full((1, 8), float('nan'))}
+
+    with pytest.raises(ValueError, match='stats.beta_est contains non-finite'):
+        router._validateBatchFormat(bad)
+
+
+def test_router_warns_unstandardized_continuous_y(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    bad = _full_batch(d=3, q=2, m=12, family=0)
+    bad['likelihood_family'] = torch.tensor([0])
+    bad['sd_y'] = torch.ones(1)
+    # y with large mean → unstandardized
+    bad['y'] = bad['y'] + 100.0
+
+    with pytest.warns(RuntimeWarning, match='unstandardized'):
+        router._validateBatchFormat(bad)
+
+
+def test_router_warns_near_constant_columns(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    n = 120
+    near_const = np.full(n, 5.0)
+    near_const[0] = 5.001  # std ≈ 0.0001, well below threshold
+    preprocessed = {
+        'X': np.column_stack([np.random.randn(n), near_const]),
+        'y': np.random.randn(n),
+        'groups': np.repeat(np.arange(12), 10),
+        'columns': np.array(['x1', 'x_const']),
+        'd': np.array(2),
+        'n': np.array(n),
+        'ns': np.full(12, 10, dtype=np.int64),
+        'm': np.array(12),
+        'y_type': np.array('continuous'),
+    }
+
+    with pytest.warns(RuntimeWarning, match='near-constant'):
+        router.prepareData(preprocessed, formula='y ~ x1 + x_const + (1 | group)')
+
+
+def test_router_warns_high_correlation_columns(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    n = 120
+    x1 = np.random.randn(n)
+    x2 = x1 + np.random.randn(n) * 0.001  # near-perfect correlation
+    preprocessed = {
+        'X': np.column_stack([x1, x2]),
+        'y': np.random.randn(n),
+        'groups': np.repeat(np.arange(12), 10),
+        'columns': np.array(['x1', 'x2']),
+        'd': np.array(2),
+        'n': np.array(n),
+        'ns': np.full(12, 10, dtype=np.int64),
+        'm': np.array(12),
+        'y_type': np.array('continuous'),
+    }
+
+    with pytest.warns(RuntimeWarning, match='highly correlated'):
+        router.prepareData(preprocessed, formula='y ~ x1 + x2 + (1 | group)')
+
+
+# ---------------------------------------------------------------------------
+# Real-model inference tests (tiny Approximator, no fixture data required)
+# ---------------------------------------------------------------------------
+
+
+def _write_tiny_approximator_checkpoint(
+    path: Path,
+    *,
+    max_d: int,
+    max_q: int,
+    likelihood_family: int = 1,
+) -> None:
+    from metabeta.models.approximator import Approximator
+    from metabeta.utils.config import (
+        ApproximatorConfig,
+        PosteriorConfig,
+        SummarizerConfig,
+    )
+
+    scfg = SummarizerConfig(d_model=8, d_ff=16, d_output=8, n_blocks=1, dropout=0.0)
+    pcfg = PosteriorConfig(n_blocks=1)
+    model_cfg = ApproximatorConfig(
+        d_ffx=max_d,
+        d_rfx=max_q,
+        likelihood_family=likelihood_family,
+        summarizer_l=scfg,
+        summarizer_g=scfg,
+        posterior_l=pcfg,
+        posterior_g=pcfg,
+        posterior_correlation=max_q >= 2,
+        analytical_refinement='none',
+        analytical_local_at_inference=False,
+    )
+    model = Approximator(model_cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            '_version': 1,
+            'submodels': [
+                {
+                    'id': 'tiny',
+                    'routing': {
+                        'likelihood_family': likelihood_family,
+                        'min_d': 1,
+                        'max_d': max_d,
+                        'min_q': 1,
+                        'max_q': max_q,
+                        'min_m': 5,
+                        'max_m': 200,
+                        'min_n': 5,
+                        'max_n': 150,
+                        'max_n_total': 3000,
+                        'min_bg_df': 0,
+                        'min_within_df': 0,
+                    },
+                    'model_cfg': model_cfg.to_dict(),
+                    'model_state': model.state_dict(),
+                },
+            ],
+        },
+        path,
+    )
+
+
+def _exact_batch(
+    *,
+    d: int,
+    q: int,
+    m: int = 12,
+    n_i: int = 10,
+    family: int = 1,
+    with_params: bool = False,
+):
+    """Create a batch padded to exactly (d, q) — for tiny-model inference tests."""
+    ns = torch.full((1, m), n_i, dtype=torch.int64)
+    mask_d = torch.ones(1, d, dtype=torch.bool)
+    mask_q = torch.ones(1, q, dtype=torch.bool)
+    mask_m = ns > 0
+    mask_n = torch.ones((1, m, n_i), dtype=torch.bool)
+    b: dict = {
+        'X': torch.zeros((1, m, n_i, d)),
+        'Z': torch.zeros((1, m, n_i, q)),
+        'y': torch.zeros((1, m, n_i)),
+        'ns': ns,
+        'm': torch.tensor([m]),
+        'n': torch.tensor([m * n_i]),
+        'mask_d': mask_d,
+        'mask_q': mask_q,
+        'mask_n': mask_n,
+        'mask_m': mask_m,
+        'likelihood_family': torch.tensor([family]),
+        'nu_ffx': torch.zeros(1, d),
+        'tau_ffx': torch.ones(1, d) * 2.5,
+        'tau_rfx': torch.ones(1, q) * 2.5,
+        'eta_rfx': torch.zeros(1),
+        'family_ffx': torch.zeros(1, dtype=torch.long),
+        'family_sigma_rfx': torch.zeros(1, dtype=torch.long),
+        'sd_y': torch.ones(1),
+        'mask_mq': mask_m.unsqueeze(-1) & mask_q.unsqueeze(-2),
+    }
+    if q >= 2:
+        b['mask_corr'] = torch.stack(
+            [mask_q[..., i] & mask_q[..., j] for i in range(1, q) for j in range(i)], dim=-1
+        )
+    else:
+        b['mask_corr'] = mask_q.new_zeros(1, 0)
+    if with_params:
+        b['ffx'] = torch.zeros(1, d)
+        b['sigma_rfx'] = torch.ones(1, q) * 0.5
+        b['rfx'] = torch.zeros(1, m, q)
+        b['corr_rfx'] = torch.eye(q).unsqueeze(0)
+    return b
+
+
+def _full_batch_with_params(*, d: int, q: int, m: int = 12, n_i: int = 10, family: int = 1):
+    """Like _full_batch but includes placeholder parameter tensors for log_prob."""
+    b = _full_batch(d=d, q=q, m=m, n_i=n_i, family=family)
+    max_d, max_q = b['X'].shape[-1], b['Z'].shape[-1]
+    b['ffx'] = torch.zeros(1, max_d)
+    b['sigma_rfx'] = torch.ones(1, max_q) * 0.5
+    b['rfx'] = torch.zeros(1, m, max_q)
+    b['corr_rfx'] = torch.eye(max_q).unsqueeze(0)
+    return b
+
+
+def test_router_sample_returns_valid_proposal(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
+    router = Router(joint_path)
+
+    batch = _exact_batch(d=4, q=2)
+    result = router.sample(batch, n_samples=5)
+
+    assert result.proposal is not None
+    assert result.routes == ['tiny']
+    assert len(result.validation) == 1
+    assert result.proposal.samples_g.shape[0] == 1
+    assert result.proposal.n_samples == 5
+    assert result.diagnostics is None
+
+
+def test_router_sample_with_precomputed_stats_runs(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
+    router = Router(joint_path)
+
+    batch = _exact_batch(d=4, q=2)
+    batch['stats'] = {
+        'beta_est': torch.zeros(1, 4),
+        'sigma_rfx_est': torch.ones(1, 2) * 0.5,
+    }
+    result = router.sample(batch, n_samples=3)
+
+    assert result.proposal is not None
+    assert result.proposal.n_samples == 3
+
+
+def test_router_sample_returns_diagnostics_when_requested(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
+    router = Router(joint_path)
+
+    batch = _exact_batch(d=4, q=2)
+    result = router.sample(batch, n_samples=10, diagnostics=True)
+
+    assert result.diagnostics is not None
+    assert 'ppc_nll' in result.diagnostics
+    assert 'param_summary' in result.diagnostics
+    assert 'ffx' in result.diagnostics['param_summary']
+    assert 'sigma_rfx' in result.diagnostics['param_summary']
+    assert result.diagnostics['ppc_nll'].shape == (1,)
+
+
+def test_router_log_prob_accepts_valid_parameters(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
+    router = Router(joint_path)
+
+    batch = _exact_batch(d=4, q=2, with_params=True)
+    result = router.log_prob(batch)
+
+    assert result.proposal is None
+    assert result.routes == ['tiny']
+    assert result.log_probs is not None
+    assert 'global' in result.log_probs
+    assert 'local' in result.log_probs
+    assert result.log_probs['global'].shape[0] == 1
+
+
+def test_router_log_prob_rejects_missing_parameter_keys(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
+    router = Router(joint_path)
+
+    batch = _exact_batch(d=4, q=2)  # no ffx/sigma_rfx/rfx keys
+
+    with pytest.raises(KeyError, match='missing parameter keys'):
+        router.log_prob(batch)
+
+
+def test_router_log_prob_rejects_malformed_ffx_shape(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
+    router = Router(joint_path)
+
+    batch = _exact_batch(d=4, q=2, with_params=True)
+    batch['ffx'] = torch.zeros(1, 3)  # wrong d (3 instead of 4)
+
+    with pytest.raises(ValueError, match='ffx must have shape'):
+        router.log_prob(batch)

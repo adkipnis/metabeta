@@ -31,20 +31,20 @@ Current status:
   - Maintain a routing table derived from stored training/data config metadata.
   - TODO: add `compile_model` support if needed.
 
-- `[partial] Router.sample(data, *, n_samples, **prepare_kwargs)`
+- `[done] Router.sample(data, *, n_samples, diagnostics=False, **prepare_kwargs)`
   - Normalize input data.
   - Validate dimensions and batch schema.
   - Route each dataset/prior row to the smallest compatible submodel.
   - Run posterior sampling via `Approximator.estimate`.
-  - Return `RouterResult(proposal, routes, validation)`.
-  - TODO: diagnostics.
+  - Return `RouterResult(proposal, routes, validation, diagnostics)`.
+  - `diagnostics=True` attaches `ppc_nll` and `param_summary` (mean/median/95% CI).
   - TODO: mixed-submodel reassembly.
 
-- `[partial] Router.forward(data, **prepare_kwargs)`
-  - Run the forward/evaluation path for supplied parameters.
-  - Validate parameter shape against the selected submodel and active masks.
-  - TODO: add a clearer public `log_prob()` wrapper if this should be exposed as
-    inference API rather than training-style `forward()`.
+- `[done] Router.forward(data, **prepare_kwargs)` / `Router.log_prob(data, **prepare_kwargs)`
+  - `log_prob()` is the public inference API; `forward()` is the legacy alias.
+  - Both validate parameter keys (`ffx`, `sigma_rfx`, `rfx`) and shapes before
+    calling `Approximator.forward()`.
+  - Return `RouterResult(log_probs={'global': ..., 'local': ...})`.
 
 ## Joint Checkpoint Format
 
@@ -180,6 +180,19 @@ Current prior limitations:
   `family_ffx` and one `family_sigma_rfx` per batch row.
 - Multiple datasets with dataset-specific prior sets are not implemented yet.
 
+Multiple-formula batching TODO:
+
+- Accept a list (or named mapping) of `(formula, priors)` pairs for a single
+  dataset, producing one `(d, q)` variant per formula entry.
+- Route each variant to the smallest compatible submodel.
+- Group variants that share a selected submodel and batch them together for a
+  single `Approximator.estimate` call (e.g. `d=3, q=1` and `d=4, q=2` routing
+  to the same submodel are collated; `d=5, q=1` routing to a different submodel
+  is run separately).
+- Return results keyed by formula index or formula label so the caller can
+  distinguish which samples correspond to which formula.
+- Save each submodel's results separately before reassembly.
+
 ## Validation And Routing
 
 `[partial]` Validation runs before inference and produces a structured report. Raise
@@ -210,21 +223,29 @@ Implemented schema checks:
 Still TODO:
 
 - Group indices are contiguous and ordered for all path-backed collections.
-- Masks agree with active dimensions and counts beyond the current basic checks.
+
+Implemented validation checks (beyond the existing basic checks):
+
+- `[done]` Active group `ns > 0`; inactive group `ns == 0`.
+- `[done]` `mask_mq` agrees with `mask_m[..., None] & mask_q[:, None, :]`.
+- `[done]` Continuous target `y` is approximately standardized (warning when not).
+- `[done]` Near-constant predictor columns warn when `std < 0.01` (design-time).
+- `[done]` High-correlation predictor pairs warn when `|r| > 0.95` (design-time).
+- `[done]` Stats values are finite before sampling; malformed stats raise.
+
+Still TODO:
+
 - Continuous targets are standardized only when the dataset metadata indicates a
   continuous likelihood; binary/count targets must remain on their natural scale.
 - Predictor preprocessing should be consistent with `DataPreprocessor` constraints:
-  no heavy missingness after preprocessing, no active constant columns, no active
-  high-correlation columns beyond the configured threshold, rare categorical
-  levels already handled, and count-like numeric predictors transformed according
-  to the fitted preprocessing state.
+  rare categorical levels already handled, and count-like numeric predictors
+  transformed according to the fitted preprocessing state.
 
 Analytical stats checks:
 
 - If `batch['stats']` exists, use it.
 - If stats are absent and the selected model uses analytical context, let
   `Approximator.summarize()` compute stats online.
-- TODO: If stats are malformed or dimensionally incompatible, raise before sampling.
 
 Routing policy:
 
@@ -287,10 +308,13 @@ dataset order.
 - `[done]` Negative tests cover invalid formula terms, multiple random-effect blocks,
   `q > 5`, malformed canonical prior shapes, unknown prior terms, per-term family
   mismatch, invalid `sigma_eps` priors, and empty prior lists.
-- `[todo]` `.npz` input is wrapped in `Dataloader`; existing `Dataloader` is reused.
-- `[todo]` Batches with precomputed `stats` and batches without `stats` both run.
-- `[todo]` `sample()` returns valid `Proposal` shapes and restores original dataset order.
-- `[todo]` `log_prob()` accepts correctly shaped parameter inputs and rejects malformed ones.
+- `[done]` `.npz` input is wrapped in `Dataloader`; existing `Dataloader` is reused
+  (integration, requires `_HAS_REAL_DATA`).
+- `[done]` Batches with precomputed `stats` and batches without `stats` both run.
+- `[done]` `sample()` returns valid `Proposal` shapes.
+- `[done]` `sample(diagnostics=True)` returns `ppc_nll` and `param_summary`.
+- `[done]` `log_prob()` accepts correctly shaped parameter inputs and rejects malformed ones.
+- `[todo]` `sample()` restores original dataset order (mixed-submodel path).
 - `[todo]` Broader test run once required local fixture data exists.
 
 ## Assumptions

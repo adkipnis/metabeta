@@ -69,6 +69,7 @@ class RouterResult:
     routes: list[str]
     validation: list[dict[str, Any]]
     log_probs: dict[str, torch.Tensor] | None = None
+    diagnostics: dict[str, Any] | None = None
 
 
 class Router:
@@ -227,6 +228,7 @@ class Router:
         data: Any,
         *,
         n_samples: int = 1,
+        diagnostics: bool = False,
         **prepare_kwargs: Any,
     ) -> RouterResult:
         """Sample from the posterior, routing each dataset to the smallest compatible submodel."""
@@ -238,7 +240,10 @@ class Router:
         routes, validation = self._routeBatch(batch)
         batch = toDevice(batch, self.device)
         proposal = self._runRouted(batch, routes, n_samples=n_samples)
-        return RouterResult(proposal=proposal, routes=routes, validation=validation)
+        diags = self._computeDiagnostics(proposal, batch) if diagnostics else None
+        return RouterResult(
+            proposal=proposal, routes=routes, validation=validation, diagnostics=diags
+        )
 
     @torch.no_grad()
     def forward(self, data: Any, **prepare_kwargs: Any) -> RouterResult:
@@ -265,6 +270,85 @@ class Router:
         self._validateBatchMatchesModel(batch, model)
         log_probs = model(batch)
         return RouterResult(proposal=None, routes=routes, validation=validation, log_probs=log_probs)
+
+    @torch.no_grad()
+    def log_prob(self, data: Any, **prepare_kwargs: Any) -> RouterResult:
+        """Compute log-probability of parameters in ``data`` under the routed posterior.
+
+        The batch must contain target parameter arrays (``ffx``, ``sigma_rfx``,
+        ``rfx``).  These are included automatically when data enters through the
+        formula/prior path; callers passing a raw collated batch must supply them.
+
+        Returns a ``RouterResult`` with ``log_probs`` set to a dict containing
+        ``'global'`` and ``'local'`` log-probability tensors, shape ``(B,)`` and
+        ``(B, m)`` respectively.
+
+        Mixed-submodel batches are not yet supported.
+        """
+        batch = self.prepareData(data, **prepare_kwargs)
+        if not isinstance(batch, dict) or not isCollatedBatch(batch):
+            raise TypeError('log_prob requires data prepared to batch stage')
+        self._validateBatchFormat(batch)
+        self._validateParameterKeys(batch)
+        routes, validation = self._routeBatch(batch)
+
+        unique_ids = list(dict.fromkeys(routes))
+        if len(unique_ids) != 1:
+            raise NotImplementedError(
+                'mixed-submodel log_prob is not yet supported; route one compatible '
+                'dataset family at a time'
+            )
+        submodel_id = unique_ids[0]
+        batch = toDevice(batch, self.device)
+        model = self.model(submodel_id)
+        self._validateBatchMatchesModel(batch, model)
+        log_probs = model(batch)
+        return RouterResult(proposal=None, routes=routes, validation=validation, log_probs=log_probs)
+
+    def _computeDiagnostics(
+        self, proposal: Proposal, batch: dict[str, torch.Tensor]
+    ) -> dict[str, Any]:
+        from metabeta.evaluation.predictive import getPosteriorPredictive, posteriorPredictiveNLL
+
+        lf = int(batch['likelihood_family'].flatten()[0].item())
+        pp = getPosteriorPredictive(proposal, batch, likelihood_family=lf)
+        ppc_nll = posteriorPredictiveNLL(pp, batch, mode='mixture')
+
+        def _summarize(samples: torch.Tensor, dim: int) -> dict[str, torch.Tensor]:
+            s = samples.float()
+            return {
+                'mean': s.mean(dim=dim),
+                'median': torch.quantile(s, 0.5, dim=dim),
+                'lower': torch.quantile(s, 0.025, dim=dim),
+                'upper': torch.quantile(s, 0.975, dim=dim),
+            }
+
+        param_summary: dict[str, Any] = {
+            'ffx': _summarize(proposal.ffx, dim=-2),
+            'sigma_rfx': _summarize(proposal.sigma_rfx, dim=-2),
+        }
+        if proposal.has_sigma_eps:
+            param_summary['sigma_eps'] = _summarize(proposal.sigma_eps, dim=-1)
+
+        return {'ppc_nll': ppc_nll, 'param_summary': param_summary}
+
+    def _validateParameterKeys(self, batch: Mapping[str, Any]) -> None:
+        missing = [k for k in ('ffx', 'sigma_rfx', 'rfx') if k not in batch]
+        if missing:
+            raise KeyError(f'batch is missing parameter keys for log_prob: {missing}')
+
+        B, M, _, d = batch['X'].shape
+        q = batch['Z'].shape[-1]
+        if tuple(batch['ffx'].shape) != (B, d):
+            raise ValueError(f'ffx must have shape ({B}, {d}), got {tuple(batch["ffx"].shape)}')
+        if tuple(batch['sigma_rfx'].shape) != (B, q):
+            raise ValueError(
+                f'sigma_rfx must have shape ({B}, {q}), got {tuple(batch["sigma_rfx"].shape)}'
+            )
+        if batch['rfx'].ndim != 3 or batch['rfx'].shape[0] != B or batch['rfx'].shape[-1] != q:
+            raise ValueError(
+                f'rfx must have shape (B={B}, m, q={q}), got {tuple(batch["rfx"].shape)}'
+            )
 
     @torch.no_grad()
     def _runRouted(
@@ -367,6 +451,7 @@ class Router:
 
         spec = parseFormula(formula)
         fixed_indices = resolveFixedIndices(spec.fixed_terms, columns)
+        self._warnInconsistentColumns(X_pre, columns, fixed_indices)
         fixed_names = []
         if spec.intercept:
             X_parts = [np.ones((X_pre.shape[0], 1), dtype=float)]
@@ -465,6 +550,43 @@ class Router:
         batch = collateGrouped(padded)
         self._attachRouterMetadata(batch, padded)
         return batch
+
+    @staticmethod
+    def _warnInconsistentColumns(
+        X_pre: np.ndarray,
+        columns: tuple[str, ...],
+        fixed_indices: list[int],
+    ) -> None:
+        if not fixed_indices or X_pre.shape[0] < 2:
+            return
+        X_active = X_pre[:, fixed_indices]
+
+        stds = X_active.std(axis=0)
+        near_constant = [columns[idx] for idx, s in zip(fixed_indices, stds) if s < 0.01]
+        if near_constant:
+            warnings.warn(
+                f'near-constant predictor columns in design (std < 0.01): {near_constant}. '
+                'Verify DataPreprocessor was fitted before routing.',
+                RuntimeWarning,
+                stacklevel=4,
+            )
+
+        if X_active.shape[1] >= 2 and len(near_constant) == 0:
+            corr = np.corrcoef(X_active.T)
+            high_corr = [
+                (columns[fixed_indices[i]], columns[fixed_indices[j]], float(corr[i, j]))
+                for i in range(corr.shape[0])
+                for j in range(i + 1, corr.shape[0])
+                if abs(corr[i, j]) > 0.95
+            ]
+            if high_corr:
+                pairs_str = ', '.join(f'{a}/{b} ({c:.2f})' for a, b, c in high_corr)
+                warnings.warn(
+                    f'highly correlated predictor columns in design (|r| > 0.95): {pairs_str}. '
+                    'Consider dropping one from the formula or re-fitting DataPreprocessor.',
+                    RuntimeWarning,
+                    stacklevel=4,
+                )
 
     @staticmethod
     def _randomNames(random_terms: tuple[str, ...], columns: tuple[str, ...]) -> list[str]:
@@ -650,6 +772,19 @@ class Router:
         if not torch.equal(ns_sum, batch['n']):
             raise ValueError('n must equal ns.sum() over active groups')
 
+        for i in range(batch['ns'].shape[0]):
+            mask_m_i = batch['mask_m'][i].bool()
+            ns_i = batch['ns'][i]
+            if mask_m_i.any() and (ns_i[mask_m_i] <= 0).any():
+                raise ValueError(f'active groups must have ns > 0 (dataset {i})')
+            if (~mask_m_i).any() and (ns_i[~mask_m_i] != 0).any():
+                raise ValueError(f'inactive groups must have ns == 0 (dataset {i})')
+
+        if 'mask_mq' in batch:
+            expected_mq = batch['mask_m'].unsqueeze(-1) & batch['mask_q'].unsqueeze(-2)
+            if not torch.equal(batch['mask_mq'].bool(), expected_mq):
+                raise ValueError('mask_mq must equal mask_m[..., None] & mask_q[:, None, :]')
+
         if 'stats' in batch and isinstance(batch['stats'], dict):
             stats = batch['stats']
             d_batch = batch['X'].shape[-1]
@@ -664,6 +799,26 @@ class Router:
                     f'stats.sigma_rfx_est last dim {stats["sigma_rfx_est"].shape[-1]} must match '
                     f'Z feature dim {q_batch}'
                 )
+            for key, val in stats.items():
+                if torch.is_tensor(val) and not torch.isfinite(val).all():
+                    raise ValueError(f'stats.{key} contains non-finite values')
+
+        if 'likelihood_family' in batch:
+            lf = int(batch['likelihood_family'].flatten()[0].item())
+            if lf == 0 and 'sd_y' in batch:
+                mask_n = batch['mask_n']
+                if mask_n.any():
+                    active_y = batch['y'][mask_n].float()
+                    y_mean = active_y.mean().item()
+                    y_std = active_y.std().item() if active_y.numel() > 1 else 1.0
+                    if abs(y_mean) > 0.5 or abs(y_std - 1.0) > 0.5:
+                        warnings.warn(
+                            f'continuous target y appears unstandardized '
+                            f'(mean={y_mean:.2f}, std={y_std:.2f}); '
+                            'verify DataPreprocessor was applied before routing',
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
 
     def _validateRoutingInputs(self, batch: Mapping[str, Any]) -> None:
         missing = [
