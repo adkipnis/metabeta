@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import torch
 
+from metabeta.models.approximator import Approximator
+from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.constants import LIKELIHOOD_FAMILIES
+from metabeta.utils.dataloader import Dataloader, collateGrouped, toDevice
+from metabeta.utils.evaluation import Proposal
 from metabeta.utils.experiments import CHECKPOINT_DIR
 
 
@@ -33,6 +38,439 @@ ROUTING_KEYS = (
     'model_id',
     'data_id',
 )
+
+REQUIRED_BATCH_KEYS = (
+    'X',
+    'Z',
+    'y',
+    'ns',
+    'm',
+    'n',
+    'mask_d',
+    'mask_q',
+    'mask_n',
+    'mask_m',
+    'mask_mq',
+    'mask_corr',
+    'nu_ffx',
+    'tau_ffx',
+    'tau_rfx',
+    'eta_rfx',
+    'family_ffx',
+    'family_sigma_rfx',
+)
+
+
+@dataclass
+class RouterResult:
+    """Inference output and routing metadata."""
+
+    proposal: Proposal | None
+    routes: list[str]
+    validation: list[dict[str, Any]]
+    log_probs: dict[str, torch.Tensor] | None = None
+
+
+class Router:
+    """Route dataloader-formatted datasets through a joint checkpoint.
+
+    Models are instantiated lazily when their first compatible batch is run.
+
+    TODO: accept raw pandas DataFrames, optional single/multiple prior
+    specifications using default Bambi-style priors when absent, and an lme4- or
+    Bambi-like formula string identifying y, fixed predictors, random-effect
+    terms, and grouping variables. The current implementation expects data that
+    is already preprocessed or path-backed by the existing metabeta dataloader.
+    """
+
+    def __init__(
+        self,
+        joint_checkpoint: str | Path,
+        *,
+        device: str | torch.device = 'cpu',
+        batch_size: int | None = None,
+        compile_model: bool = False,
+    ) -> None:
+        self.joint_checkpoint = Path(joint_checkpoint)
+        self.device = torch.device(device)
+        self.batch_size = batch_size
+        self.compile_model = compile_model
+
+        payload = torch.load(self.joint_checkpoint, map_location='cpu', weights_only=True)
+        if payload.get('_version') != JOINT_CHECKPOINT_VERSION:
+            raise ValueError(f'unsupported joint checkpoint version: {payload.get("_version")!r}')
+        if 'submodels' not in payload:
+            raise KeyError('joint checkpoint is missing submodels')
+
+        self.submodels = list(payload['submodels'])
+        if not self.submodels:
+            raise ValueError('joint checkpoint contains no submodels')
+
+        self.submodels.sort(key=self._routingSortKey)
+        self._submodel_by_id = {str(entry['id']): entry for entry in self.submodels}
+        if len(self._submodel_by_id) != len(self.submodels):
+            raise ValueError('joint checkpoint contains duplicate submodel ids')
+        self._models: dict[str, Approximator] = {}
+
+    @property
+    def max_d(self) -> int:
+        return max(int(self._routeValue(entry, 'max_d')) for entry in self.submodels)
+
+    @property
+    def max_q(self) -> int:
+        return max(int(self._routeValue(entry, 'max_q')) for entry in self.submodels)
+
+    def model(self, submodel_id: str) -> Approximator:
+        """Return the lazily instantiated model for ``submodel_id``."""
+
+        if submodel_id in self._models:
+            return self._models[submodel_id]
+
+        try:
+            entry = self._submodel_by_id[submodel_id]
+        except KeyError as exc:
+            raise KeyError(f'unknown submodel id: {submodel_id}') from exc
+
+        model_cfg = ApproximatorConfig(**entry['model_cfg'])
+        model = Approximator(model_cfg).to(self.device)
+        model.load_state_dict(entry['model_state'])
+        model.eval()
+        if self.compile_model and self.device.type != 'mps':
+            model.compile()
+        self._models[submodel_id] = model
+        return model
+
+    def prepareData(
+        self,
+        data: str | Path | Dataloader | Mapping[str, Any] | Sequence[Mapping[str, Any]],
+    ) -> dict[str, torch.Tensor]:
+        """Return a collated dataloader-style batch."""
+
+        if isinstance(data, Dataloader):
+            return data.fullBatch()
+
+        if isinstance(data, (str, Path)):
+            loader = Dataloader(
+                Path(data),
+                batch_size=self.batch_size,
+                shuffle=False,
+                max_d=self.max_d,
+                max_q=self.max_q,
+            )
+            return loader.fullBatch()
+
+        if isinstance(data, Mapping):
+            if self._isCollatedBatch(data):
+                return dict(data)
+            if 'groups' in data:
+                return collateGrouped([dict(data)])
+            raise TypeError(
+                'mapping input must be a collated dataloader batch or one raw '
+                'preprocessed dataset with groups'
+            )
+
+        if isinstance(data, Sequence) and not isinstance(data, (str, bytes)):
+            datasets = [dict(dataset) for dataset in data]
+            if datasets:
+                return collateGrouped(datasets)
+
+        raise TypeError('unsupported router input type')
+
+    def route(
+        self,
+        data: str | Path | Dataloader | Mapping[str, Any] | Sequence[Mapping[str, Any]],
+    ) -> list[str]:
+        """Return the selected submodel id for each dataset in ``data``."""
+
+        batch = self.prepareData(data)
+        routes, _ = self._routeBatch(batch)
+        return routes
+
+    @torch.no_grad()
+    def sample(
+        self,
+        data: str | Path | Dataloader | Mapping[str, Any] | Sequence[Mapping[str, Any]],
+        *,
+        n_samples: int = 1,
+    ) -> RouterResult:
+        """Sample from the posterior through the routed submodel."""
+
+        batch = self.prepareData(data)
+        self._validateBatchFormat(batch)
+        routes, validation = self._routeBatch(batch)
+        submodel_ids = set(routes)
+        if len(submodel_ids) != 1:
+            raise NotImplementedError(
+                'mixed-submodel batches are not reassembled yet; route one compatible '
+                'dataset family at a time'
+            )
+
+        submodel_id = routes[0]
+        model = self.model(submodel_id)
+        routed_batch = self._resizeBatchForModel(batch, model)
+        routed_batch = toDevice(routed_batch, self.device)
+        proposal = model.estimate(routed_batch, n_samples=n_samples)
+        return RouterResult(proposal=proposal, routes=routes, validation=validation)
+
+    @torch.no_grad()
+    def forward(
+        self,
+        data: str | Path | Dataloader | Mapping[str, Any] | Sequence[Mapping[str, Any]],
+    ) -> RouterResult:
+        """Evaluate the forward log-probability path for batches with parameters."""
+
+        batch = self.prepareData(data)
+        self._validateBatchFormat(batch)
+        routes, validation = self._routeBatch(batch)
+        submodel_ids = set(routes)
+        if len(submodel_ids) != 1:
+            raise NotImplementedError(
+                'mixed-submodel batches are not reassembled yet; route one compatible '
+                'dataset family at a time'
+            )
+
+        submodel_id = routes[0]
+        model = self.model(submodel_id)
+        routed_batch = self._resizeBatchForModel(batch, model)
+        routed_batch = toDevice(routed_batch, self.device)
+        log_probs = model(routed_batch)
+        return RouterResult(
+            proposal=None,
+            routes=routes,
+            validation=validation,
+            log_probs=log_probs,
+        )
+
+    def _routeBatch(
+        self, batch: Mapping[str, torch.Tensor]
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        self._validateRoutingInputs(batch)
+        routes = []
+        validation = []
+        batch_size = int(batch['X'].shape[0])
+        for i in range(batch_size):
+            failures_by_submodel = {}
+            compatible = []
+            for entry in self.submodels:
+                failures = self._compatibilityFailures(batch, i, entry)
+                if failures:
+                    failures_by_submodel[str(entry['id'])] = failures
+                else:
+                    compatible.append(entry)
+
+            if not compatible:
+                raise ValueError(
+                    f'dataset {i} is outside every routed submodel: {failures_by_submodel}'
+                )
+
+            selected = compatible[0]
+            routes.append(str(selected['id']))
+            validation.append(
+                {
+                    'index': i,
+                    'submodel_id': str(selected['id']),
+                    'dimensions': self._datasetDimensions(batch, i),
+                    'online_stats': 'stats' not in batch,
+                    'failures_by_submodel': failures_by_submodel,
+                }
+            )
+        return routes, validation
+
+    def _compatibilityFailures(
+        self, batch: Mapping[str, torch.Tensor], i: int, entry: Mapping[str, Any]
+    ) -> list[str]:
+        routing = entry.get('routing', {})
+        dims = self._datasetDimensions(batch, i)
+        failures = []
+
+        for dim_key, route_key in (
+            ('d', 'max_d'),
+            ('q', 'max_q'),
+            ('m', 'max_m'),
+            ('n', 'max_n_total'),
+        ):
+            value = dims[dim_key]
+            bound = routing.get(route_key)
+            if bound is not None and value > int(bound):
+                failures.append(f'{dim_key}={value} > {route_key}={bound}')
+
+        for dim_key, route_key in (
+            ('d', 'min_d'),
+            ('q', 'min_q'),
+            ('m', 'min_m'),
+        ):
+            value = dims[dim_key]
+            bound = routing.get(route_key)
+            if bound is not None and value < int(bound):
+                failures.append(f'{dim_key}={value} < {route_key}={bound}')
+
+        min_n = routing.get('min_n')
+        if min_n is not None and dims['min_n_i'] < int(min_n):
+            failures.append(f'min_n_i={dims["min_n_i"]} < min_n={min_n}')
+
+        max_n = routing.get('max_n')
+        if max_n is not None and dims['max_n_i'] > int(max_n):
+            failures.append(f'max_n_i={dims["max_n_i"]} > max_n={max_n}')
+
+        min_bg_df = routing.get('min_bg_df')
+        if min_bg_df is not None:
+            min_groups = max(dims['d'], dims['q'] * (dims['q'] + 1) // 2) + int(min_bg_df)
+            if dims['m'] < min_groups:
+                failures.append(f'm={dims["m"]} < min groups required by min_bg_df={min_groups}')
+
+        min_within_df = routing.get('min_within_df')
+        if min_within_df is not None:
+            min_group_n = dims['q'] + int(min_within_df)
+            if dims['min_n_i'] < min_group_n:
+                failures.append(f'min_n_i={dims["min_n_i"]} < q + min_within_df={min_group_n}')
+
+        likelihood_family = routing.get('likelihood_family')
+        if likelihood_family is not None and dims['likelihood_family'] is not None:
+            if dims['likelihood_family'] != int(likelihood_family):
+                failures.append(
+                    f'likelihood_family={dims["likelihood_family"]} != {likelihood_family}'
+                )
+
+        if 'max_d' not in routing and entry.get('model_cfg', {}).get('d_ffx') is None:
+            failures.append('missing hard max_d routing metadata')
+        if 'max_q' not in routing and entry.get('model_cfg', {}).get('d_rfx') is None:
+            failures.append('missing hard max_q routing metadata')
+
+        return failures
+
+    def _datasetDimensions(
+        self, batch: Mapping[str, torch.Tensor], i: int
+    ) -> dict[str, int | None]:
+        mask_m = batch['mask_m'][i].bool()
+        ns = batch['ns'][i]
+        active_ns = ns[mask_m]
+        likelihood_family = None
+        if 'likelihood_family' in batch:
+            family = batch['likelihood_family'][i]
+            likelihood_family = int(family.item() if torch.is_tensor(family) else family)
+        return {
+            'd': int(batch['mask_d'][i].sum().item()),
+            'q': int(batch['mask_q'][i].sum().item()),
+            'm': int(batch['m'][i].item()),
+            'n': int(batch['n'][i].item()),
+            'min_n_i': int(active_ns.min().item()) if active_ns.numel() else 0,
+            'max_n_i': int(active_ns.max().item()) if active_ns.numel() else 0,
+            'likelihood_family': likelihood_family,
+        }
+
+    def _validateBatchFormat(self, batch: Mapping[str, Any]) -> None:
+        missing = [key for key in REQUIRED_BATCH_KEYS if key not in batch]
+        if missing:
+            raise KeyError(f'batch is missing dataloader keys: {missing}')
+
+        if batch['X'].dim() != 4:
+            raise ValueError('X must have shape (B, m, n_i, d)')
+        if batch['Z'].dim() != 4:
+            raise ValueError('Z must have shape (B, m, n_i, q)')
+        if batch['y'].dim() != 3:
+            raise ValueError('y must have shape (B, m, n_i)')
+        if batch['mask_n'].shape != batch['y'].shape:
+            raise ValueError('mask_n must match y shape')
+
+        finite_keys = ('X', 'Z', 'y', 'nu_ffx', 'tau_ffx', 'tau_rfx', 'eta_rfx')
+        for key in finite_keys:
+            if not torch.isfinite(batch[key]).all():
+                raise ValueError(f'batch contains non-finite values in {key}')
+
+        ns_sum = (batch['ns'] * batch['mask_m'].to(batch['ns'].dtype)).sum(dim=-1)
+        if not torch.equal(ns_sum, batch['n']):
+            raise ValueError('n must equal ns.sum() over active groups')
+
+    def _validateRoutingInputs(self, batch: Mapping[str, Any]) -> None:
+        missing = [
+            key
+            for key in ('X', 'Z', 'ns', 'm', 'n', 'mask_d', 'mask_q', 'mask_m')
+            if key not in batch
+        ]
+        if missing:
+            raise KeyError(f'batch is missing routing keys: {missing}')
+
+    def _resizeBatchForModel(
+        self, batch: Mapping[str, torch.Tensor], model: Approximator
+    ) -> dict[str, torch.Tensor]:
+        out = dict(batch)
+        d, q = model.d_ffx, model.d_rfx
+        d_corr = model.d_corr
+
+        for key in ('X',):
+            out[key] = _resizeLastDim(out[key], d)
+        for key in ('Z',):
+            out[key] = _resizeLastDim(out[key], q)
+        for key in ('mask_d', 'ffx', 'nu_ffx', 'tau_ffx'):
+            if key in out:
+                out[key] = _resizeLastDim(out[key], d)
+        for key in ('mask_q', 'sigma_rfx', 'tau_rfx'):
+            if key in out:
+                out[key] = _resizeLastDim(out[key], q)
+        if 'rfx' in out:
+            out['rfx'] = _resizeLastDim(out['rfx'], q)
+        if 'corr_rfx' in out:
+            out['corr_rfx'] = _resizeCorr(out['corr_rfx'], q)
+
+        out['mask_mq'] = out['mask_m'].unsqueeze(-1) & out['mask_q'].bool().unsqueeze(-2)
+        out['mask_corr'] = _buildCorrMask(out['mask_q'].bool(), d_corr)
+
+        if 'stats' in out:
+            out['stats'] = self._resizeStats(out['stats'], d=d, q=q)
+
+        return out
+
+    def _resizeStats(self, stats: Mapping[str, torch.Tensor], *, d: int, q: int):
+        out = dict(stats)
+        for key in ('beta_est',):
+            if key in out:
+                out[key] = _resizeLastDim(out[key], d)
+        for key in ('sigma_rfx_est',):
+            if key in out:
+                out[key] = _resizeLastDim(out[key], q)
+        for key in ('blup_est', 'blup_var'):
+            if key in out:
+                out[key] = _resizeLastDim(out[key], q)
+        if 'Psi' in out:
+            out['Psi'] = _resizeCorr(out['Psi'], q)
+        return out
+
+    @staticmethod
+    def _routeValue(entry: Mapping[str, Any], key: str) -> Any:
+        routing = entry.get('routing', {})
+        if key in routing:
+            return routing[key]
+        model_cfg = entry.get('model_cfg', {})
+        if key == 'max_d':
+            return model_cfg.get('d_ffx')
+        if key == 'max_q':
+            return model_cfg.get('d_rfx')
+        return None
+
+    @classmethod
+    def _routingSortKey(cls, entry: Mapping[str, Any]) -> tuple[float, float, float, float, str]:
+        routing = entry.get('routing', {})
+
+        def value(key: str) -> float:
+            v = cls._routeValue(entry, key)
+            return float('inf') if v is None else float(v)
+
+        return (
+            value('max_d'),
+            value('max_q'),
+            float('inf') if routing.get('max_m') is None else float(routing['max_m']),
+            float('inf') if routing.get('max_n_total') is None else float(routing['max_n_total']),
+            str(entry['id']),
+        )
+
+    @staticmethod
+    def _isCollatedBatch(data: Mapping[str, Any]) -> bool:
+        return (
+            'X' in data and torch.is_tensor(data['X']) and data['X'].dim() == 4 and 'mask_n' in data
+        )
+
+
+CheckpointRouter = Router
 
 
 def joinCheckpoints(
@@ -263,3 +701,42 @@ def _sanitizeConfig(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     return str(value)
+
+
+def _resizeLastDim(x: torch.Tensor, size: int) -> torch.Tensor:
+    current = x.shape[-1]
+    if current == size:
+        return x
+    if current > size:
+        return x[..., :size]
+
+    out = x.new_zeros(*x.shape[:-1], size)
+    out[..., :current] = x
+    return out
+
+
+def _resizeCorr(x: torch.Tensor, size: int) -> torch.Tensor:
+    current = x.shape[-1]
+    if current == size:
+        return x
+    if current > size:
+        return x[..., :size, :size]
+
+    out = x.new_zeros(*x.shape[:-2], size, size)
+    out[..., :current, :current] = x
+    eye = torch.eye(size, dtype=x.dtype, device=x.device)
+    missing = torch.ones(size, dtype=torch.bool, device=x.device)
+    missing[:current] = False
+    out[..., missing, missing] = eye[missing, missing]
+    return out
+
+
+def _buildCorrMask(mask_q: torch.Tensor, d_corr: int) -> torch.Tensor:
+    q = mask_q.shape[-1]
+    if d_corr == 0:
+        return mask_q.new_zeros(*mask_q.shape[:-1], 0)
+    mask = torch.stack(
+        [mask_q[..., i] & mask_q[..., j] for i in range(1, q) for j in range(i)],
+        dim=-1,
+    )
+    return _resizeLastDim(mask, d_corr)
