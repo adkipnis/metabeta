@@ -221,23 +221,6 @@ class Router:
         routes, _ = self._routeBatch(batch)
         return routes
 
-    def _prepareAndRoute(
-        self, data: Any, **prepare_kwargs: Any
-    ) -> tuple[dict[str, torch.Tensor], list[str], list[dict[str, Any]], Approximator]:
-        batch = self.prepareData(data, **prepare_kwargs)
-        if not isinstance(batch, dict) or not isCollatedBatch(batch):
-            raise TypeError('requires data prepared to batch stage')
-        self._validateBatchFormat(batch)
-        routes, validation = self._routeBatch(batch)
-        if len(set(routes)) != 1:
-            raise NotImplementedError(
-                'mixed-submodel batches are not reassembled yet; route one compatible '
-                'dataset family at a time'
-            )
-        model = self.model(routes[0])
-        self._validateBatchMatchesModel(batch, model)
-        return toDevice(batch, self.device), routes, validation, model
-
     @torch.no_grad()
     def sample(
         self,
@@ -246,19 +229,73 @@ class Router:
         n_samples: int = 1,
         **prepare_kwargs: Any,
     ) -> RouterResult:
-        """Sample from the posterior through the routed submodel."""
+        """Sample from the posterior, routing each dataset to the smallest compatible submodel."""
 
-        batch, routes, validation, model = self._prepareAndRoute(data, **prepare_kwargs)
-        proposal = model.estimate(batch, n_samples=n_samples)
+        batch = self.prepareData(data, **prepare_kwargs)
+        if not isinstance(batch, dict) or not isCollatedBatch(batch):
+            raise TypeError('sample requires data prepared to batch stage')
+        self._validateBatchFormat(batch)
+        routes, validation = self._routeBatch(batch)
+        batch = toDevice(batch, self.device)
+        proposal = self._runRouted(batch, routes, n_samples=n_samples)
         return RouterResult(proposal=proposal, routes=routes, validation=validation)
 
     @torch.no_grad()
     def forward(self, data: Any, **prepare_kwargs: Any) -> RouterResult:
-        """Evaluate the forward log-probability path for batches with parameters."""
+        """Evaluate the forward log-probability path for batches with parameters.
 
-        batch, routes, validation, model = self._prepareAndRoute(data, **prepare_kwargs)
+        Mixed-submodel batches are not yet supported for forward passes.
+        """
+
+        batch = self.prepareData(data, **prepare_kwargs)
+        if not isinstance(batch, dict) or not isCollatedBatch(batch):
+            raise TypeError('forward requires data prepared to batch stage')
+        self._validateBatchFormat(batch)
+        routes, validation = self._routeBatch(batch)
+
+        unique_ids = list(dict.fromkeys(routes))
+        if len(unique_ids) != 1:
+            raise NotImplementedError(
+                'mixed-submodel forward pass is not yet supported; route one compatible '
+                'dataset family at a time'
+            )
+        submodel_id = unique_ids[0]
+        batch = toDevice(batch, self.device)
+        model = self.model(submodel_id)
+        self._validateBatchMatchesModel(batch, model)
         log_probs = model(batch)
         return RouterResult(proposal=None, routes=routes, validation=validation, log_probs=log_probs)
+
+    @torch.no_grad()
+    def _runRouted(
+        self,
+        batch: dict[str, torch.Tensor],
+        routes: list[str],
+        *,
+        n_samples: int,
+    ) -> Proposal:
+        """Run inference for a single-submodel batch."""
+        unique_ids = list(dict.fromkeys(routes))
+        if len(unique_ids) != 1:
+            raise NotImplementedError(
+                'mixed-submodel sample is not yet supported; route one compatible '
+                'dataset family at a time'
+            )
+        submodel_id = unique_ids[0]
+        model = self.model(submodel_id)
+        self._validateBatchMatchesModel(batch, model)
+        proposal = model.estimate(batch, n_samples=n_samples)
+        self._rescaleProposal(proposal, batch)
+        return proposal
+
+    def _rescaleProposal(
+        self, proposal: Proposal, batch: dict[str, torch.Tensor]
+    ) -> None:
+        if 'sd_y' not in batch or 'likelihood_family' not in batch:
+            return
+        lf = int(batch['likelihood_family'].flatten()[0].item())
+        if hasSigmaEps(lf):
+            proposal.rescale(batch['sd_y'])
 
     def _preprocessTabular(
         self,
@@ -358,6 +395,7 @@ class Router:
         if len(random_names) != actual_q:
             raise ValueError('random-effect names must align with Z columns')
 
+        sd_y = preprocessedSdY(preprocessed)
         prior_variants = resolvePriors(
             priors,
             fixed_names=fixed_names,
@@ -385,7 +423,7 @@ class Router:
             'n': np.array(n),
             'm': np.array(m),
             'ns': ns,
-            'sd_y': np.array(preprocessedSdY(preprocessed)),
+            'sd_y': np.array(sd_y),
             'ffx': np.zeros(actual_d, dtype=np.float64),
             'sigma_rfx': np.ones(actual_q, dtype=np.float64),
             'corr_rfx': np.eye(actual_q, dtype=np.float64),
@@ -591,6 +629,18 @@ class Router:
         if batch['mask_n'].shape != batch['y'].shape:
             raise ValueError('mask_n must match y shape')
 
+        if batch['mask_d'].shape[-1] != batch['X'].shape[-1]:
+            raise ValueError(
+                f'mask_d width {batch["mask_d"].shape[-1]} must match X feature dim {batch["X"].shape[-1]}'
+            )
+        if batch['mask_q'].shape[-1] != batch['Z'].shape[-1]:
+            raise ValueError(
+                f'mask_q width {batch["mask_q"].shape[-1]} must match Z feature dim {batch["Z"].shape[-1]}'
+            )
+        active_m = batch['mask_m'].sum(dim=-1)
+        if not torch.equal(active_m.to(batch['m'].dtype), batch['m']):
+            raise ValueError('mask_m active count must equal m for each batch row')
+
         finite_keys = ('X', 'Z', 'y', 'nu_ffx', 'tau_ffx', 'tau_rfx', 'eta_rfx')
         for key in finite_keys:
             if not torch.isfinite(batch[key]).all():
@@ -599,6 +649,21 @@ class Router:
         ns_sum = (batch['ns'] * batch['mask_m'].to(batch['ns'].dtype)).sum(dim=-1)
         if not torch.equal(ns_sum, batch['n']):
             raise ValueError('n must equal ns.sum() over active groups')
+
+        if 'stats' in batch and isinstance(batch['stats'], dict):
+            stats = batch['stats']
+            d_batch = batch['X'].shape[-1]
+            q_batch = batch['Z'].shape[-1]
+            if 'beta_est' in stats and stats['beta_est'].shape[-1] != d_batch:
+                raise ValueError(
+                    f'stats.beta_est last dim {stats["beta_est"].shape[-1]} must match '
+                    f'X feature dim {d_batch}'
+                )
+            if 'sigma_rfx_est' in stats and stats['sigma_rfx_est'].shape[-1] != q_batch:
+                raise ValueError(
+                    f'stats.sigma_rfx_est last dim {stats["sigma_rfx_est"].shape[-1]} must match '
+                    f'Z feature dim {q_batch}'
+                )
 
     def _validateRoutingInputs(self, batch: Mapping[str, Any]) -> None:
         missing = [

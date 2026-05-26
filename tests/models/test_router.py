@@ -631,3 +631,135 @@ def test_router_rejects_tabular_input_without_preprocessor_or_fit_flag(tmp_path:
 
     with pytest.raises(ValueError, match='requires a fitted preprocessor'):
         router.prepareData(df, formula='y ~ ses + (1 | group)')
+
+
+# ---------------------------------------------------------------------------
+# Validation gap tests
+# ---------------------------------------------------------------------------
+
+
+def _full_batch(*, d: int, q: int, m: int = 12, n_i: int = 10, family: int = 1):
+    """Like _batch but includes all keys required by _validateBatchFormat."""
+    b = _batch(d=d, q=q, m=m, n_i=n_i, family=family)
+    max_d, max_q = b['X'].shape[-1], b['Z'].shape[-1]
+    b['nu_ffx'] = torch.zeros(1, max_d)
+    b['tau_ffx'] = torch.ones(1, max_d) * 2.5
+    b['tau_rfx'] = torch.ones(1, max_q) * 2.5
+    b['eta_rfx'] = torch.zeros(1)
+    b['family_ffx'] = torch.zeros(1, dtype=torch.long)
+    b['family_sigma_rfx'] = torch.zeros(1, dtype=torch.long)
+    b['sd_y'] = torch.ones(1)
+    b['mask_mq'] = b['mask_m'].unsqueeze(-1) & b['mask_q'].unsqueeze(-2)
+    q_val = max_q
+    b['mask_corr'] = (
+        torch.stack(
+            [b['mask_q'][..., i] & b['mask_q'][..., j] for i in range(1, q_val) for j in range(i)],
+            dim=-1,
+        )
+        if q_val >= 2
+        else b['mask_q'].new_zeros(1, 0)
+    )
+    return b
+
+
+def test_router_validates_mask_d_width(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    bad = _full_batch(d=4, q=2)
+    bad['mask_d'] = bad['mask_d'][..., :3]  # wrong width (3 instead of 8)
+
+    with pytest.raises(ValueError, match='mask_d width'):
+        router._validateBatchFormat(bad)
+
+
+def test_router_validates_mask_q_width(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    bad = _full_batch(d=4, q=2)
+    bad['mask_q'] = bad['mask_q'][..., :2]  # wrong width (2 instead of 3)
+
+    with pytest.raises(ValueError, match='mask_q width'):
+        router._validateBatchFormat(bad)
+
+
+def test_router_validates_mask_m_active_count(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    bad = _full_batch(d=4, q=2, m=12)
+    # Report m=12 but mask_m has only 10 active groups
+    mask_m = bad['mask_m'].clone()
+    mask_m[0, 10] = False
+    mask_m[0, 11] = False
+    bad['mask_m'] = mask_m
+
+    with pytest.raises(ValueError, match='mask_m active count'):
+        router._validateBatchFormat(bad)
+
+
+def test_router_validates_stats_beta_est_dim(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    bad = _full_batch(d=4, q=2)
+    bad['stats'] = {'beta_est': torch.zeros(1, 6)}  # wrong d (6 instead of 8)
+
+    with pytest.raises(ValueError, match='stats.beta_est'):
+        router._validateBatchFormat(bad)
+
+
+def test_router_validates_stats_sigma_rfx_est_dim(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    bad = _full_batch(d=4, q=2)
+    bad['stats'] = {'sigma_rfx_est': torch.zeros(1, 5)}  # wrong q (5 instead of 3)
+
+    with pytest.raises(ValueError, match='stats.sigma_rfx_est'):
+        router._validateBatchFormat(bad)
+
+
+# ---------------------------------------------------------------------------
+# Integration tests (require local checkpoint and data files)
+# ---------------------------------------------------------------------------
+
+_JOINT_CHECKPOINT = Path('metabeta/outputs/checkpoints/joint_bernoulli_v1.pt')
+_SMALL_B_SAMPLED = Path('metabeta/outputs/data/small-b-sampled/test.npz')
+_MEDIUM_B_SAMPLED = Path('metabeta/outputs/data/medium-b-sampled/test.npz')
+
+_HAS_REAL_DATA = (
+    _JOINT_CHECKPOINT.exists() and _SMALL_B_SAMPLED.exists() and _MEDIUM_B_SAMPLED.exists()
+)
+
+
+@pytest.mark.skipif(not _HAS_REAL_DATA, reason='local checkpoint + data not present')
+def test_router_sample_small_partition_returns_valid_proposal_shapes():
+    from metabeta.utils.dataloader import Dataloader
+
+    router = Router(_JOINT_CHECKPOINT, batch_size=4)
+    result = router.sample(_SMALL_B_SAMPLED, n_samples=10)
+
+    assert result.proposal is not None
+    B = result.proposal.samples_g.shape[0]
+    assert B == 4
+    assert result.proposal.samples_g.shape[-2] == 10  # n_samples
+    assert all(r == 'small' for r in result.routes)
+    assert len(result.validation) == B
+
+
+@pytest.mark.skipif(not _HAS_REAL_DATA, reason='local checkpoint + data not present')
+def test_router_sample_medium_partition_routes_correctly():
+    router = Router(_JOINT_CHECKPOINT, batch_size=4)
+    result = router.sample(_MEDIUM_B_SAMPLED, n_samples=10)
+
+    assert result.proposal is not None
+    assert all(r == 'medium' for r in result.routes)
+
+
