@@ -102,10 +102,14 @@ Implemented `prepareData(..., stage=...)` stages:
 
 TODO:
 
-- Support multiple raw/preprocessed datasets in one call while preserving
-  `source_index`.
 - Consider a first-class data-stage result object instead of returning different
   types by `stage`.
+
+Out of scope:
+
+- Multiple raw `DataFrame`, `.parquet`, or preprocessed-dict datasets in one call.
+  Multi-dataset support is planned only for dataloader/`.npz` inputs where the
+  schema, padding, masks, and optional stats are already explicit.
 
 ## Formula And Priors
 
@@ -126,6 +130,21 @@ Formula effects:
 - Fixed terms select and reorder columns in `X`.
 - Random terms select and reorder columns in `Z`.
 - Categorical term names can match all dummy columns by prefix.
+
+Formula TODO:
+
+- Interactions, e.g. `x1:x2` and `x1 * x2`.
+- Transforms, e.g. `log(x)`, `scale(x)`, or similar pre-design operations.
+- Correlated vs uncorrelated random-effect syntax, e.g. `(1 + x | group)` versus
+  `(1 + x || group)`.
+
+Formula out of scope:
+
+- Multiple grouping factors.
+- Nested or crossed random effects.
+- Offsets, weights, and exposure terms.
+- Formula-native categorical contrast handling beyond matching existing
+  preprocessed dummy-column prefixes.
 
 `[done]` Priors are resolved after formula construction, so they validate against
 the final ordered `X/Z` names.
@@ -265,11 +284,13 @@ dataset order.
 - `[done]` Formula random effects work up to `q=5`.
 - `[done]` Canonical fit-style priors are accepted.
 - `[done]` Multiple named term-based priors expand one dataset into multiple batch rows.
+- `[done]` Negative tests cover invalid formula terms, multiple random-effect blocks,
+  `q > 5`, malformed canonical prior shapes, unknown prior terms, per-term family
+  mismatch, invalid `sigma_eps` priors, and empty prior lists.
 - `[todo]` `.npz` input is wrapped in `Dataloader`; existing `Dataloader` is reused.
 - `[todo]` Batches with precomputed `stats` and batches without `stats` both run.
 - `[todo]` `sample()` returns valid `Proposal` shapes and restores original dataset order.
 - `[todo]` `log_prob()` accepts correctly shaped parameter inputs and rejects malformed ones.
-- `[todo]` Invalid priors, named prior collections, `q > 5`, and term-family mismatch errors.
 - `[todo]` Broader test run once required local fixture data exists.
 
 ## Assumptions
