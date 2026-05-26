@@ -22,7 +22,6 @@ from metabeta.utils.router import (
     JOINT_CHECKPOINT_VERSION,
     attachPreprocessorMetadata,
     buildRandomDesign,
-    coercePriors,
     defaultRandomTerms,
     isCollatedBatch,
     isModelDataset,
@@ -33,6 +32,7 @@ from metabeta.utils.router import (
     preprocessedSdY,
     resolveFixedIndices,
     resolveLikelihoodFamily,
+    resolvePriors,
     routeValue,
     routingSortKey,
     returnPreparedStage,
@@ -129,7 +129,7 @@ class Router:
         data: Any,
         *,
         formula: str | None = None,
-        priors: Mapping[str, Any] | None = None,
+        priors: Any = None,
         preprocessor: DataPreprocessor | str | Path | None = None,
         fit_preprocessor: bool = False,
         group_name: str | None = None,
@@ -137,7 +137,9 @@ class Router:
         q: int | None = None,
         stage: str = 'batch',
         dry_run: bool = False,
-    ) -> dict[str, torch.Tensor] | dict[str, np.ndarray] | PreprocessReport:
+    ) -> dict[str, torch.Tensor] | dict[str, np.ndarray] | list[
+        dict[str, np.ndarray]
+    ] | PreprocessReport:
         """Normalize supported input stages to a collated dataloader-style batch.
 
         Stages are intentionally layered:
@@ -193,7 +195,7 @@ class Router:
         if isinstance(data, Mapping) and isPreprocessedDict(data):
             if stage == 'preprocessed':
                 return {str(k): v for k, v in data.items()}
-            dataset = self._buildModelDataset(
+            datasets = self._buildModelDatasets(
                 data,
                 formula=formula,
                 priors=priors,
@@ -201,8 +203,8 @@ class Router:
                 q=q,
             )
             if stage == 'dataset':
-                return dataset
-            batch = self._collateForSelectedSubmodel(dataset)
+                return datasets[0] if len(datasets) == 1 else datasets
+            batch = self._collateForSelectedSubmodel(datasets)
             return returnPreparedStage(batch, stage)
 
         if not isinstance(data, Mapping):
@@ -315,15 +317,15 @@ class Router:
             )
         return attachPreprocessorMetadata(prep.fit_transform(df), prep)
 
-    def _buildModelDataset(
+    def _buildModelDatasets(
         self,
         preprocessed: Mapping[str, Any],
         *,
         formula: str | None,
-        priors: Mapping[str, Any] | None,
+        priors: Any,
         likelihood_family: int | str | None,
         q: int | None,
-    ) -> dict[str, np.ndarray]:
+    ) -> list[dict[str, np.ndarray]]:
         required = ('X', 'y', 'groups', 'columns', 'd', 'n', 'ns', 'm', 'y_type')
         missing = [key for key in required if key not in preprocessed]
         if missing:
@@ -345,11 +347,14 @@ class Router:
 
         spec = parseFormula(formula)
         fixed_indices = resolveFixedIndices(spec.fixed_terms, columns)
+        fixed_names = []
         if spec.intercept:
             X_parts = [np.ones((X_pre.shape[0], 1), dtype=float)]
+            fixed_names.append('Intercept')
         else:
             X_parts = []
         X_parts += [X_pre[:, idx : idx + 1] for idx in fixed_indices]
+        fixed_names += [columns[idx] for idx in fixed_indices]
         X = np.concatenate(X_parts, axis=1) if X_parts else np.empty((X_pre.shape[0], 0))
 
         random_terms = spec.random_terms
@@ -359,6 +364,7 @@ class Router:
             else:
                 random_terms = defaultRandomTerms(q, columns)
         Z = buildRandomDesign(X_pre, columns, random_terms)
+        random_names = self._randomNames(random_terms, columns)
 
         actual_d = int(X.shape[-1])
         actual_q = int(Z.shape[-1])
@@ -366,11 +372,13 @@ class Router:
             raise ValueError('fixed-effect design must include at least one column')
         if actual_q < 1:
             raise ValueError('random-effect design must include at least one column')
+        if len(random_names) != actual_q:
+            raise ValueError('random-effect names must align with Z columns')
 
-        prior_values = coercePriors(
+        prior_variants = resolvePriors(
             priors,
-            d=actual_d,
-            q=actual_q,
+            fixed_names=fixed_names,
+            random_names=random_names,
             likelihood_family=likelihood,
         )
 
@@ -384,7 +392,7 @@ class Router:
         m = int(np.asarray(preprocessed['m']).item())
         n = int(np.asarray(preprocessed['n']).item())
 
-        dataset = {
+        base = {
             'X': X.astype(np.float64),
             'Z': Z.astype(np.float64),
             'y': y.astype(np.float64),
@@ -399,25 +407,73 @@ class Router:
             'sigma_rfx': np.ones(actual_q, dtype=np.float64),
             'corr_rfx': np.eye(actual_q, dtype=np.float64),
             'rfx': np.zeros((m, actual_q), dtype=np.float64),
-            **prior_values,
         }
         if hasSigmaEps(likelihood):
-            dataset['sigma_eps'] = np.array(1.0)
-        return dataset
+            base['sigma_eps'] = np.array(1.0)
+
+        datasets = []
+        for prior_index, (prior_name, prior_values) in enumerate(prior_variants):
+            dataset = {**base, **prior_values}
+            dataset['_router_prior_index'] = np.array(prior_index, dtype=np.int64)
+            dataset['_router_source_index'] = np.array(0, dtype=np.int64)
+            if prior_name is not None:
+                dataset['_router_prior_name'] = np.array(prior_name)
+            datasets.append(dataset)
+        return datasets
 
     def _collateForSelectedSubmodel(
-        self, dataset: dict[str, np.ndarray]
+        self, datasets: list[dict[str, np.ndarray]]
     ) -> dict[str, torch.Tensor]:
-        tentative = collateGrouped([dataset])
+        tentative = collateGrouped(datasets)
         routes, _ = self._routeBatch(tentative)
+        if len(set(routes)) != 1:
+            raise NotImplementedError(
+                'mixed-submodel prior batches are not reassembled yet; use one compatible '
+                'dataset family at a time'
+            )
+
         selected = self._submodel_by_id[routes[0]]
         max_d = routeValue(selected, 'max_d')
         max_q = routeValue(selected, 'max_q')
         if max_d is None or max_q is None:
             raise ValueError(f'selected submodel {routes[0]} is missing max_d/max_q')
 
-        padded = padModelDataset(dataset, max_d=int(max_d), max_q=int(max_q))
-        return collateGrouped([padded])
+        padded = [
+            padModelDataset(dataset, max_d=int(max_d), max_q=int(max_q)) for dataset in datasets
+        ]
+        batch = collateGrouped(padded)
+        self._attachRouterMetadata(batch, padded)
+        return batch
+
+    @staticmethod
+    def _randomNames(random_terms: tuple[str, ...], columns: tuple[str, ...]) -> list[str]:
+        names = []
+        for term in random_terms:
+            if term == '1':
+                names.append('Intercept')
+            else:
+                names.extend(columns[idx] for idx in resolveFixedIndices([term], columns))
+        return names
+
+    @staticmethod
+    def _attachRouterMetadata(
+        batch: dict[str, Any],
+        datasets: list[dict[str, np.ndarray]],
+    ) -> None:
+        batch['_router_prior_index'] = torch.as_tensor(
+            [int(np.asarray(dataset['_router_prior_index']).item()) for dataset in datasets],
+            dtype=torch.int64,
+        )
+        batch['_router_source_index'] = torch.as_tensor(
+            [int(np.asarray(dataset['_router_source_index']).item()) for dataset in datasets],
+            dtype=torch.int64,
+        )
+        batch['_router_prior_name'] = [
+            str(np.asarray(dataset['_router_prior_name']).item())
+            if '_router_prior_name' in dataset
+            else None
+            for dataset in datasets
+        ]
 
     def _routeBatch(
         self, batch: Mapping[str, torch.Tensor]
@@ -430,15 +486,20 @@ class Router:
             selected, failures = self._selectSubmodel(batch, i)
             submodel_id = str(selected['id'])
             routes.append(submodel_id)
-            validation.append(
-                {
-                    'index': i,
-                    'submodel_id': submodel_id,
-                    'dimensions': self._datasetDimensions(batch, i),
-                    'online_stats': 'stats' not in batch,
-                    'failures_by_submodel': failures,
-                }
-            )
+            report = {
+                'index': i,
+                'submodel_id': submodel_id,
+                'dimensions': self._datasetDimensions(batch, i),
+                'online_stats': 'stats' not in batch,
+                'failures_by_submodel': failures,
+            }
+            if '_router_prior_index' in batch:
+                report['prior_index'] = int(batch['_router_prior_index'][i].item())
+            if '_router_source_index' in batch:
+                report['source_index'] = int(batch['_router_source_index'][i].item())
+            if '_router_prior_name' in batch:
+                report['prior_name'] = batch['_router_prior_name'][i]
+            validation.append(report)
         return routes, validation
 
     def _selectSubmodel(

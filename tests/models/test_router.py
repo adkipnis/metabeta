@@ -347,6 +347,91 @@ def test_router_prepares_preprocessed_numpy_dict_with_formula_and_default_priors
     )
 
 
+def test_router_accepts_canonical_fit_style_priors(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    with np.load(
+        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
+        allow_pickle=True,
+    ) as raw:
+        preprocessed = dict(raw)
+
+    batch = router.prepareData(
+        preprocessed,
+        formula='y ~ meanses + ses + (1 + ses | group)',
+        priors={
+            'nu_ffx': np.array([1.0, 2.0, 3.0]),
+            'tau_ffx': np.array([3.0, 2.0, 1.0]),
+            'family_ffx': 0,
+            'tau_rfx': np.array([1.5, 0.5]),
+            'family_sigma_rfx': 0,
+            'tau_eps': 1.2,
+            'family_sigma_eps': 1,
+            'eta_rfx': 0.0,
+        },
+    )
+
+    assert router.route(batch) == ['math-small']
+    assert torch.allclose(batch['nu_ffx'], torch.tensor([[1.0, 2.0, 3.0]]))
+    assert torch.allclose(batch['tau_ffx'], torch.tensor([[3.0, 2.0, 1.0]]))
+    assert torch.allclose(batch['tau_rfx'], torch.tensor([[1.5, 0.5]]))
+    assert torch.allclose(batch['tau_eps'], torch.tensor([1.2]))
+    assert torch.equal(batch['family_ffx'], torch.tensor([0]))
+    assert torch.equal(batch['family_sigma_eps'], torch.tensor([1]))
+    assert torch.allclose(batch['eta_rfx'], torch.tensor([0.0]))
+
+
+def test_router_expands_multiple_named_term_priors_per_dataset(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    with np.load(
+        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
+        allow_pickle=True,
+    ) as raw:
+        preprocessed = dict(raw)
+
+    batch = router.prepareData(
+        preprocessed,
+        formula='y ~ meanses + ses + (1 + ses | group)',
+        priors={
+            'weak': {
+                'fixed': {
+                    'Intercept': {'mu': 1.0, 'sigma': 3.0},
+                    'ses': {'sigma': 0.5},
+                },
+                'random_sd': {'ses': {'sigma': 0.7}},
+                'sigma_eps': {'sigma': 1.2},
+                'corr_rfx': {'eta': 0.0},
+            },
+            'tight': {
+                'fixed': {'meanses': {'sigma': 0.1}},
+                'random_sd': {'Intercept': {'sigma': 0.3}},
+            },
+        },
+    )
+
+    assert router.route(batch) == ['math-small', 'math-small']
+    assert batch['X'].shape[0] == 2
+    assert torch.allclose(batch['nu_ffx'][0], torch.tensor([1.0, 0.0, 0.0]))
+    assert torch.allclose(batch['tau_ffx'][0], torch.tensor([3.0, 2.5, 0.5]))
+    assert torch.allclose(batch['tau_rfx'][0], torch.tensor([2.5, 0.7]))
+    assert torch.allclose(batch['tau_eps'][0], torch.tensor(1.2))
+    assert torch.allclose(batch['eta_rfx'][0], torch.tensor(0.0))
+    assert torch.allclose(batch['tau_ffx'][1], torch.tensor([2.5, 0.1, 2.5]))
+    assert torch.allclose(batch['tau_rfx'][1], torch.tensor([0.3, 2.5]))
+    assert torch.equal(batch['_router_prior_index'], torch.tensor([0, 1]))
+    assert torch.equal(batch['_router_source_index'], torch.tensor([0, 0]))
+    assert batch['_router_prior_name'] == ['weak', 'tight']
+
+    _, validation = router._routeBatch(batch)
+    assert [row['prior_name'] for row in validation] == ['weak', 'tight']
+    assert [row['prior_index'] for row in validation] == [0, 1]
+
+
 def test_router_prepares_parquet_through_preprocessor(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)

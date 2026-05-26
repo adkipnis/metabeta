@@ -13,7 +13,7 @@ import numpy as np
 import torch
 
 from metabeta.simulation.prior import bambiDefaultPriors
-from metabeta.utils.constants import LIKELIHOOD_FAMILIES, hasSigmaEps
+from metabeta.utils.constants import FFX_FAMILIES, LIKELIHOOD_FAMILIES, SIGMA_FAMILIES, hasSigmaEps
 from metabeta.utils.experiments import CHECKPOINT_DIR
 
 
@@ -46,6 +46,20 @@ Y_TYPE_TO_LIKELIHOOD = {
 }
 
 LIKELIHOOD_NAME_TO_ID = {name: i for i, name in enumerate(LIKELIHOOD_FAMILIES)}
+FFX_FAMILY_NAME_TO_ID = {name: i for i, name in enumerate(FFX_FAMILIES)}
+SIGMA_FAMILY_NAME_TO_ID = {name: i for i, name in enumerate(SIGMA_FAMILIES)}
+
+CANONICAL_PRIOR_KEYS = {
+    'nu_ffx',
+    'tau_ffx',
+    'family_ffx',
+    'tau_rfx',
+    'family_sigma_rfx',
+    'tau_eps',
+    'family_sigma_eps',
+    'eta_rfx',
+}
+TERM_PRIOR_KEYS = {'fixed', 'random_sd', 'sigma_eps', 'corr_rfx', 'name'}
 
 
 @dataclass(frozen=True)
@@ -250,6 +264,210 @@ def coercePriors(
     if values['tau_rfx'].shape != (q,):
         raise ValueError(f'tau_rfx must have shape ({q},), got {values["tau_rfx"].shape}')
     return values
+
+
+def resolvePriors(
+    priors: Any,
+    *,
+    fixed_names: Sequence[str],
+    random_names: Sequence[str],
+    likelihood_family: int,
+) -> list[tuple[str | None, dict[str, np.ndarray]]]:
+    """Resolve one or more prior specifications to canonical model prior arrays."""
+
+    d = len(fixed_names)
+    q = len(random_names)
+    variants = _priorVariants(priors)
+    return [
+        (
+            name,
+            _resolveSinglePrior(
+                prior,
+                fixed_names=fixed_names,
+                random_names=random_names,
+                d=d,
+                q=q,
+                likelihood_family=likelihood_family,
+            ),
+        )
+        for name, prior in variants
+    ]
+
+
+def _priorVariants(priors: Any) -> list[tuple[str | None, Mapping[str, Any] | None]]:
+    if priors is None:
+        return [(None, None)]
+
+    if isinstance(priors, Sequence) and not isinstance(priors, (str, bytes, bytearray, Mapping)):
+        if len(priors) == 0:
+            raise ValueError('priors sequence cannot be empty')
+        return [(_priorName(prior, i), _priorMapping(prior)) for i, prior in enumerate(priors)]
+
+    if isinstance(priors, Mapping):
+        if _isNamedPriorCollection(priors):
+            return [(str(name), _priorMapping(prior)) for name, prior in priors.items()]
+        return [(_priorName(priors, 0), priors)]
+
+    raise TypeError('priors must be None, a mapping, a sequence of mappings, or a named mapping')
+
+
+def _isNamedPriorCollection(priors: Mapping[str, Any]) -> bool:
+    keys = {str(key) for key in priors}
+    if keys & (CANONICAL_PRIOR_KEYS | TERM_PRIOR_KEYS):
+        return False
+    return all(isinstance(value, Mapping) for value in priors.values())
+
+
+def _priorMapping(prior: Any) -> Mapping[str, Any]:
+    if not isinstance(prior, Mapping):
+        raise TypeError('each prior specification must be a mapping')
+    return prior
+
+
+def _priorName(prior: Any, i: int) -> str | None:
+    if isinstance(prior, Mapping) and 'name' in prior:
+        return str(prior['name'])
+    return None
+
+
+def _resolveSinglePrior(
+    prior: Mapping[str, Any] | None,
+    *,
+    fixed_names: Sequence[str],
+    random_names: Sequence[str],
+    d: int,
+    q: int,
+    likelihood_family: int,
+) -> dict[str, np.ndarray]:
+    if prior is None:
+        return coercePriors(None, d=d, q=q, likelihood_family=likelihood_family)
+
+    canonical = {key: value for key, value in prior.items() if key in CANONICAL_PRIOR_KEYS}
+    values = coercePriors(canonical, d=d, q=q, likelihood_family=likelihood_family)
+
+    if 'fixed' in prior:
+        _applyFixedTermPriors(values, prior['fixed'], fixed_names)
+    if 'random_sd' in prior:
+        _applyRandomSdTermPriors(values, prior['random_sd'], random_names)
+    if 'sigma_eps' in prior:
+        if not hasSigmaEps(likelihood_family):
+            raise ValueError('sigma_eps prior is only valid for likelihood_family=normal')
+        _applySigmaEpsPrior(values, prior['sigma_eps'])
+    if 'corr_rfx' in prior:
+        _applyCorrelationPrior(values, prior['corr_rfx'])
+
+    return coercePriors(values, d=d, q=q, likelihood_family=likelihood_family)
+
+
+def _applyFixedTermPriors(
+    values: dict[str, np.ndarray],
+    spec: Any,
+    fixed_names: Sequence[str],
+) -> None:
+    if not isinstance(spec, Mapping):
+        raise TypeError('fixed priors must be a mapping from term name to prior spec')
+
+    family_id: int | None = None
+    for term, term_spec in spec.items():
+        idxs = _termIndices(str(term), fixed_names)
+        term_spec = _requireMapping(term_spec, f'fixed prior for {term}')
+        if 'family' in term_spec:
+            term_family = _ffxFamilyId(term_spec['family'])
+            family_id = term_family if family_id is None else family_id
+            if term_family != family_id:
+                raise ValueError('per-term fixed-effect prior families are not supported')
+        if 'mu' in term_spec:
+            values['nu_ffx'][idxs] = float(term_spec['mu'])
+        if 'nu' in term_spec:
+            values['nu_ffx'][idxs] = float(term_spec['nu'])
+        if 'sigma' in term_spec:
+            values['tau_ffx'][idxs] = float(term_spec['sigma'])
+        if 'tau' in term_spec:
+            values['tau_ffx'][idxs] = float(term_spec['tau'])
+
+    if family_id is not None:
+        values['family_ffx'] = np.array(family_id)
+
+
+def _applyRandomSdTermPriors(
+    values: dict[str, np.ndarray],
+    spec: Any,
+    random_names: Sequence[str],
+) -> None:
+    if not isinstance(spec, Mapping):
+        raise TypeError('random_sd priors must be a mapping from term name to prior spec')
+
+    family_id: int | None = None
+    for term, term_spec in spec.items():
+        idxs = _termIndices(str(term), random_names)
+        term_spec = _requireMapping(term_spec, f'random_sd prior for {term}')
+        if 'family' in term_spec:
+            term_family = _sigmaFamilyId(term_spec['family'])
+            family_id = term_family if family_id is None else family_id
+            if term_family != family_id:
+                raise ValueError('per-term random-effect SD prior families are not supported')
+        if 'sigma' in term_spec:
+            values['tau_rfx'][idxs] = float(term_spec['sigma'])
+        if 'tau' in term_spec:
+            values['tau_rfx'][idxs] = float(term_spec['tau'])
+
+    if family_id is not None:
+        values['family_sigma_rfx'] = np.array(family_id)
+
+
+def _applySigmaEpsPrior(values: dict[str, np.ndarray], spec: Any) -> None:
+    spec = _requireMapping(spec, 'sigma_eps prior')
+    if 'family' in spec:
+        values['family_sigma_eps'] = np.array(_sigmaFamilyId(spec['family']))
+    if 'sigma' in spec:
+        values['tau_eps'] = np.asarray(float(spec['sigma']))
+    if 'tau' in spec:
+        values['tau_eps'] = np.asarray(float(spec['tau']))
+
+
+def _applyCorrelationPrior(values: dict[str, np.ndarray], spec: Any) -> None:
+    spec = _requireMapping(spec, 'corr_rfx prior')
+    if 'eta' in spec:
+        values['eta_rfx'] = np.asarray(float(spec['eta']))
+
+
+def _requireMapping(value: Any, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f'{label} must be a mapping')
+    return value
+
+
+def _termIndices(term: str, names: Sequence[str]) -> list[int]:
+    term_lower = term.lower()
+    names_lower = [name.lower() for name in names]
+    exact = [i for i, name in enumerate(names_lower) if name == term_lower]
+    if exact:
+        return exact
+
+    prefix = f'{term_lower}_'
+    prefixed = [i for i, name in enumerate(names_lower) if name.startswith(prefix)]
+    if prefixed:
+        return prefixed
+
+    raise KeyError(f'prior term not found in model design: {term}')
+
+
+def _ffxFamilyId(value: Any) -> int:
+    if isinstance(value, str):
+        try:
+            return FFX_FAMILY_NAME_TO_ID[value.lower()]
+        except KeyError as exc:
+            raise ValueError(f'unknown fixed-effect prior family: {value}') from exc
+    return int(value)
+
+
+def _sigmaFamilyId(value: Any) -> int:
+    if isinstance(value, str):
+        try:
+            return SIGMA_FAMILY_NAME_TO_ID[value.lower()]
+        except KeyError as exc:
+            raise ValueError(f'unknown sigma prior family: {value}') from exc
+    return int(value)
 
 
 def preprocessedSdY(preprocessed: Mapping[str, Any]) -> float:
