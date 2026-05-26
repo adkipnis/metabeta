@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import operator
 import warnings
 
 import numpy as np
@@ -220,6 +221,23 @@ class Router:
         routes, _ = self._routeBatch(batch)
         return routes
 
+    def _prepareAndRoute(
+        self, data: Any, **prepare_kwargs: Any
+    ) -> tuple[dict[str, torch.Tensor], list[str], list[dict[str, Any]], Approximator]:
+        batch = self.prepareData(data, **prepare_kwargs)
+        if not isinstance(batch, dict) or not isCollatedBatch(batch):
+            raise TypeError('requires data prepared to batch stage')
+        self._validateBatchFormat(batch)
+        routes, validation = self._routeBatch(batch)
+        if len(set(routes)) != 1:
+            raise NotImplementedError(
+                'mixed-submodel batches are not reassembled yet; route one compatible '
+                'dataset family at a time'
+            )
+        model = self.model(routes[0])
+        self._validateBatchMatchesModel(batch, model)
+        return toDevice(batch, self.device), routes, validation, model
+
     @torch.no_grad()
     def sample(
         self,
@@ -230,22 +248,7 @@ class Router:
     ) -> RouterResult:
         """Sample from the posterior through the routed submodel."""
 
-        batch = self.prepareData(data, **prepare_kwargs)
-        if not isinstance(batch, dict) or not isCollatedBatch(batch):
-            raise TypeError('sample requires data prepared to batch stage')
-        self._validateBatchFormat(batch)
-        routes, validation = self._routeBatch(batch)
-        submodel_ids = set(routes)
-        if len(submodel_ids) != 1:
-            raise NotImplementedError(
-                'mixed-submodel batches are not reassembled yet; route one compatible '
-                'dataset family at a time'
-            )
-
-        submodel_id = routes[0]
-        model = self.model(submodel_id)
-        self._validateBatchMatchesModel(batch, model)
-        batch = toDevice(batch, self.device)
+        batch, routes, validation, model = self._prepareAndRoute(data, **prepare_kwargs)
         proposal = model.estimate(batch, n_samples=n_samples)
         return RouterResult(proposal=proposal, routes=routes, validation=validation)
 
@@ -253,29 +256,9 @@ class Router:
     def forward(self, data: Any, **prepare_kwargs: Any) -> RouterResult:
         """Evaluate the forward log-probability path for batches with parameters."""
 
-        batch = self.prepareData(data, **prepare_kwargs)
-        if not isinstance(batch, dict) or not isCollatedBatch(batch):
-            raise TypeError('forward requires data prepared to batch stage')
-        self._validateBatchFormat(batch)
-        routes, validation = self._routeBatch(batch)
-        submodel_ids = set(routes)
-        if len(submodel_ids) != 1:
-            raise NotImplementedError(
-                'mixed-submodel batches are not reassembled yet; route one compatible '
-                'dataset family at a time'
-            )
-
-        submodel_id = routes[0]
-        model = self.model(submodel_id)
-        self._validateBatchMatchesModel(batch, model)
-        batch = toDevice(batch, self.device)
+        batch, routes, validation, model = self._prepareAndRoute(data, **prepare_kwargs)
         log_probs = model(batch)
-        return RouterResult(
-            proposal=None,
-            routes=routes,
-            validation=validation,
-            log_probs=log_probs,
-        )
+        return RouterResult(proposal=None, routes=routes, validation=validation, log_probs=log_probs)
 
     def _preprocessTabular(
         self,
@@ -526,26 +509,19 @@ class Router:
         dims = self._datasetDimensions(batch, i)
         failures = []
 
-        for dim_key, route_key in (
-            ('d', 'max_d'),
-            ('q', 'max_q'),
-            ('m', 'max_m'),
-            ('n', 'max_n_total'),
+        for dim_key, route_key, cmp, sym in (
+            ('d', 'max_d', operator.gt, '>'),
+            ('q', 'max_q', operator.gt, '>'),
+            ('m', 'max_m', operator.gt, '>'),
+            ('n', 'max_n_total', operator.gt, '>'),
+            ('d', 'min_d', operator.lt, '<'),
+            ('q', 'min_q', operator.lt, '<'),
+            ('m', 'min_m', operator.lt, '<'),
         ):
             value = dims[dim_key]
             bound = routing.get(route_key)
-            if bound is not None and value > int(bound):
-                failures.append(f'{dim_key}={value} > {route_key}={bound}')
-
-        for dim_key, route_key in (
-            ('d', 'min_d'),
-            ('q', 'min_q'),
-            ('m', 'min_m'),
-        ):
-            value = dims[dim_key]
-            bound = routing.get(route_key)
-            if bound is not None and value < int(bound):
-                failures.append(f'{dim_key}={value} < {route_key}={bound}')
+            if bound is not None and cmp(value, int(bound)):
+                failures.append(f'{dim_key}={value} {sym} {route_key}={bound}')
 
         min_n = routing.get('min_n')
         if min_n is not None and dims['min_n_i'] < int(min_n):
