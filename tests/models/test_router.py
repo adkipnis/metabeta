@@ -432,6 +432,160 @@ def test_router_expands_multiple_named_term_priors_per_dataset(tmp_path: Path):
     assert [row['prior_index'] for row in validation] == [0, 1]
 
 
+def test_router_rejects_q_above_formula_limit(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    with np.load(
+        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
+        allow_pickle=True,
+    ) as raw:
+        preprocessed = dict(raw)
+
+    with pytest.raises(ValueError, match='q must be <= 5'):
+        router.prepareData(preprocessed, formula='y ~ meanses + ses', q=6)
+
+
+def test_router_rejects_multiple_random_effect_blocks(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    with np.load(
+        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
+        allow_pickle=True,
+    ) as raw:
+        preprocessed = dict(raw)
+
+    with pytest.raises(NotImplementedError, match='one random term'):
+        router.prepareData(
+            preprocessed,
+            formula='y ~ meanses + ses + (1 | group) + (1 | school)',
+        )
+
+
+def test_router_rejects_missing_formula_term(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    with np.load(
+        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
+        allow_pickle=True,
+    ) as raw:
+        preprocessed = dict(raw)
+
+    with pytest.raises(KeyError, match='formula term not found'):
+        router.prepareData(preprocessed, formula='y ~ definitely_missing + (1 | group)')
+
+
+def test_router_rejects_missing_prior_term(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    with np.load(
+        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
+        allow_pickle=True,
+    ) as raw:
+        preprocessed = dict(raw)
+
+    with pytest.raises(KeyError, match='prior term not found'):
+        router.prepareData(
+            preprocessed,
+            formula='y ~ meanses + ses + (1 + ses | group)',
+            priors={'fixed': {'definitely_missing': {'sigma': 1.0}}},
+        )
+
+
+def test_router_rejects_malformed_canonical_prior_shapes(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    with np.load(
+        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
+        allow_pickle=True,
+    ) as raw:
+        preprocessed = dict(raw)
+
+    with pytest.raises(ValueError, match='tau_ffx must have shape'):
+        router.prepareData(
+            preprocessed,
+            formula='y ~ meanses + ses + (1 + ses | group)',
+            priors={'tau_ffx': np.array([1.0, 2.0])},
+        )
+
+
+def test_router_rejects_per_term_family_mismatch(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    with np.load(
+        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
+        allow_pickle=True,
+    ) as raw:
+        preprocessed = dict(raw)
+
+    with pytest.raises(ValueError, match='per-term fixed-effect prior families'):
+        router.prepareData(
+            preprocessed,
+            formula='y ~ meanses + ses + (1 + ses | group)',
+            priors={
+                'fixed': {
+                    'meanses': {'family': 'normal', 'sigma': 1.0},
+                    'ses': {'family': 'student', 'sigma': 1.0},
+                }
+            },
+        )
+
+
+def test_router_rejects_sigma_eps_prior_for_non_gaussian(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    preprocessed = {
+        'X': np.zeros((120, 2), dtype=float),
+        'y': np.tile(np.array([0.0, 1.0]), 60),
+        'groups': np.repeat(np.arange(12), 10),
+        'columns': np.array(['x1', 'x2']),
+        'd': np.array(3),
+        'n': np.array(120),
+        'ns': np.full(12, 10),
+        'm': np.array(12),
+        'y_type': np.array('binary'),
+    }
+
+    with pytest.raises(ValueError, match='sigma_eps prior is only valid'):
+        router.prepareData(
+            preprocessed,
+            formula='y ~ x1 + x2 + (1 + x1 | group)',
+            priors={'sigma_eps': {'sigma': 1.0}},
+        )
+
+
+def test_router_rejects_empty_prior_list(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_math_joint_checkpoint(joint_path)
+    router = Router(joint_path)
+
+    with np.load(
+        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
+        allow_pickle=True,
+    ) as raw:
+        preprocessed = dict(raw)
+
+    with pytest.raises(ValueError, match='priors sequence cannot be empty'):
+        router.prepareData(
+            preprocessed,
+            formula='y ~ meanses + ses + (1 + ses | group)',
+            priors=[],
+        )
+
+
 def test_router_prepares_parquet_through_preprocessor(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
