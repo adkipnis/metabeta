@@ -64,6 +64,7 @@ apptainer exec \
     export OPENBLAS_NUM_THREADS=1
     export NUMEXPR_NUM_THREADS=1
 
+    export TMPDIR="$JOB_TMPDIR"
     export PYTENSOR_FLAGS='base_compiledir=$JOB_TMPDIR,cxx=/usr/bin/g++'
 
     echo 'hostname:' \$(hostname)
