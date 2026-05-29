@@ -49,6 +49,7 @@ VENV="$HOME/metabeta/.venv-apptainer"
 mkdir -p logs/advi
 JOB_TMPDIR="$HOME/tmp/pytensor_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
 mkdir -p "$JOB_TMPDIR"
+trap 'rm -rf "$JOB_TMPDIR"' EXIT
 
 apptainer exec \
   --bind "$HOME:$HOME" \
@@ -85,5 +86,3 @@ apptainer exec \
       --method advi \
       --partition '$PARTITION'
   "
-
-rm -rf "$JOB_TMPDIR"
