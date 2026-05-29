@@ -18,9 +18,9 @@ The "double stochasticity" framing is partially correct but mis-localizes the ga
 
 So the real lever is replacing the amortized conditional with an exact (or very accurate) one. The same lever exists for Bernoulli if we accept a fast approximation.
 
-### Why this is feasible for Bernoulli
+### Why this is feasible for Bernoulli — and why it ultimately fails
 
-The conditional $p(b_i \mid y_i, \theta_g)$ for a Bernoulli GLMM with logit link is log-concave and well-approximated by a Gaussian centered at the conditional MAP (Laplace approximation / Fisher scoring). This is what `lme4::glmer` (PQL, AGQ) and INLA (nested Laplace) use internally. Per-group, per-global-sample Laplace gives moments accurate to $O(n_i^{-1})$ — a strong improvement over an amortized flow at typical $n_i$.
+The conditional $p(b_i \mid y_i, \theta_g)$ for a Bernoulli GLMM with logit link is log-concave and well-approximated by a Gaussian centered at the conditional MAP (Laplace approximation / Fisher scoring). This is what `lme4::glmer` (PQL, AGQ) and INLA (nested Laplace) use internally. The $O(n_i^{-1})$ accuracy argument holds asymptotically, but in practice the Bernoulli RFX posterior is skewed — especially at small-to-moderate $n_i$ — and a Gaussian mode approximation misrepresents the shape. The trained local flow has implicitly learned this non-Gaussian shape from many examples and outperforms Laplace empirically (see Empirical results below).
 
 ## Approach: per-group, per-global-sample Laplace
 
@@ -89,13 +89,46 @@ Public surface mirroring `gaussian_local.py`:
 
 ## Verification
 
-1. **Newton convergence (unit)**: synthesize a small Bernoulli batch (B=2, m=4, S=8, n_i=20, q=2), run `laplaceRFX`, assert max gradient norm < 1e-4 within 10 steps.
-2. **Oracle agreement (unit)**: for a synthetic batch, evaluate `HierarchicalModel.logJoint` w.r.t. `u` reparameterised from the Laplace mode `b̂`; gradient should be ≈0 and Hessian eigenvalues all negative.
-3. **Brute-force quadrature (q=1)**: for a Bernoulli toy batch with `q=1`, compare Laplace marginal log-likelihood per group against a 256-point trapezoidal integration of $\int p(y_i \mid b)\,p(b)\,\mathrm{d}b$ — relative error should be < 2% when $n_i \geq 5$.
-4. **End-to-end LOO-NLL**: load a trained Bernoulli checkpoint, run inference twice on the test partition — once with `analytical_local_at_inference=False` (flow path) and once `True` (Laplace path). Expect lower mean LOO-NLL on groups with $n_i \geq 5$.
-5. **Timing**: time `bernoulliHybrid` on the largest standard Bernoulli partition; assert per-batch < 500 ms on the target GPU.
+1. **Newton convergence (unit)**: synthesize a small Bernoulli batch (B=2, m=4, S=8, n_i=20, q=2), run `laplaceRFX`, assert max gradient norm < 1e-4 within 10 steps. ✓
+2. **Oracle agreement (unit)**: for a synthetic batch, evaluate `HierarchicalModel.logJoint` w.r.t. `u` reparameterised from the Laplace mode `b̂`; gradient should be ≈0 and Hessian eigenvalues all negative. ✓
+3. **Brute-force quadrature (q=1)**: for a Bernoulli toy batch with `q=1`, compare Laplace marginal log-likelihood per group against a 256-point trapezoidal integration of $\int p(y_i \mid b)\,p(b)\,\mathrm{d}b$ — relative error should be < 2% when $n_i \geq 5$. ✓
+4. **End-to-end LOO-NLL**: run `experiments/posthoc/bernoulli_local.py` on a trained checkpoint. Result below.
+5. **Timing**: not benchmarked separately; per-batch wall time was ~8 s on CPU for B=8, S=512, m≈30, q=2.
+
+## Empirical results — Bernoulli, medium-b-mixed seed=15, valid, n=256
+
+Checkpoint: `data=medium-b-mixed_model=large_seed=15`, 512 samples, 256 validation datasets.  
+NUTS reference (same dataset): NRMSE=0.513, LOO-NLL=0.451.
+
+```
+         Method    NRMSE    NRMSE_rfx       R     ECE    LOO-NLL
+---------------  -------  -----------  ------  ------  ---------
+MB (flow local)   0.4981       0.7082  0.8081  0.0229     0.4666
+     LapLoc(MB)   0.6059       1.3187  0.7588  0.0228     0.4873
+   LapLoc(true)   0.2166       1.2272  0.9189  0.2257     0.4496
+```
+
+### Interpretation
+
+**The Laplace local approximation hurts for Bernoulli.** Unlike the Gaussian case, replacing the flow's local posterior with Laplace increases both NRMSE (+22%) and LOO-NLL (+4.5%). This holds even for `LapLoc(true)`, which uses the *true* global parameters: NRMSE_rfx=1.23 vs the flow's 0.71, showing the Laplace approximation itself is the problem, not global posterior error.
+
+The trained local flow outperforms Laplace because:
+- Binary outcomes produce skewed, non-Gaussian RFX posteriors that Laplace (a Gaussian centered at the mode) misrepresents.
+- The flow has been trained on many examples and has learned the true posterior shape, including non-Gaussian features of the Bernoulli likelihood.
+
+**LapLoc(true) as noise ceiling**: removing all global posterior error collapses overall NRMSE to 0.22 (from 0.50), confirming that the global flow is the dominant bottleneck for parameter recovery. LOO-NLL improves only marginally (0.467 → 0.450), suggesting predictive performance is near the irreducible limit once the global posterior is good.
+
+**MB flow vs NUTS**: the MB flow (LOO-NLL=0.467, NRMSE=0.498) is within ~3% of the NUTS ceiling (0.451 / 0.513) on both metrics. The global NPE posterior is **not** the bottleneck: on every NRMSE sub-metric MB matches or slightly beats NUTS (FFX: 0.288 vs 0.291, Σ(RFX): 0.502 vs 0.509, RFX: 0.709 vs 0.707). The residual LOO-NLL gap therefore reflects **distributional quality** rather than point-estimate accuracy — likely a combination of slightly miscalibrated posterior spread/shape (the higher Pareto k: 0.224 vs 0.164 signals worse IS efficiency) and the local flow's approximate conditional not perfectly capturing uncertainty around the correct conditional mean.
+
+### What to try instead of Laplace
+
+Laplace is the wrong approximation for the Bernoulli local posterior due to posterior asymmetry. Better alternatives, roughly in order of expected accuracy:
+
+- **Gauss-Hermite (GH) quadrature**: for small $q$ (1–2), numerically integrate out $b_i$ on a fixed grid; exact up to quadrature error. Already in use for `sigma_rfx` refinement (`nAGQ`, see `metabeta/posthoc/gaussian_local.py`). Extension to $q > 2$ is expensive ($k^q$ nodes).
+- **Variational Bayes (mean-field or full-covariance)**: maximise a Gaussian ELBO w.r.t. $(b, \Sigma_b)$; captures asymmetry better than Laplace if the ELBO geometry is well-behaved, at similar cost.
+- **Improved training of the local flow**: the flow-based local posterior is already competitive with NUTS and outperforms Laplace. Capacity/training improvements (more flow steps, better conditioning) may close the residual gap more directly.
 
 ## Notes
 
 - **Newton fallback**: if Newton diverges (e.g., highly separated Bernoulli group), cap at `n_newton=10` steps and accept the current iterate. Divergence is rare for the logit-link GLMM with a proper Gaussian prior on $b$; add Levenberg-style damping later only if it surfaces in practice.
-- **Poisson follow-up**: once the Bernoulli path is validated, the same module can absorb a `poissonHybrid` and `poissonCeiling` by swapping `mu` and `W` and clipping `eta` to avoid `exp` overflow (see `POISSON_ETA_CLIP_MAX` in `metabeta/utils/families.py`).
+- **Poisson follow-up**: the same module can absorb a `poissonHybrid` and `poissonCeiling` by swapping `mu` and `W` and clipping `eta` to avoid `exp` overflow (see `POISSON_ETA_CLIP_MAX` in `metabeta/utils/families.py`). Given the Bernoulli result, expect a similar story: the trained flow likely beats Laplace for Poisson too.
