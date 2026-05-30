@@ -176,7 +176,10 @@ class NumericTransformer:
 
 
 def rescaleData(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    data = {k: v.clone() for k, v in data.items()}  # avoids side effects
+    data = {
+        k: {sk: sv.clone() for sk, sv in v.items()} if isinstance(v, dict) else v.clone()
+        for k, v in data.items()
+    }
     for key in (
         'y',
         # params
