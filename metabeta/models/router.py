@@ -12,6 +12,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import torch
+from tabulate import tabulate
 
 from metabeta.datasets.preprocessor import DataPreprocessor, PreprocessReport
 from metabeta.models.approximator import Approximator
@@ -70,6 +71,7 @@ class RouterResult:
     validation: list[dict[str, Any]]
     log_probs: dict[str, torch.Tensor] | None = None
     diagnostics: dict[str, Any] | None = None
+    param_names: dict[str, list[str]] | None = None
 
 
 class Router:
@@ -233,6 +235,7 @@ class Router:
     ) -> RouterResult:
         """Sample from the posterior, routing each dataset to the smallest compatible submodel."""
 
+        self._param_names: dict[str, list[str]] | None = None
         batch = self.prepareData(data, **prepare_kwargs)
         if not isinstance(batch, dict) or not isCollatedBatch(batch):
             raise TypeError('sample requires data prepared to batch stage')
@@ -242,7 +245,11 @@ class Router:
         proposal = self._runRouted(batch, routes, n_samples=n_samples)
         diags = self._computeDiagnostics(proposal, batch) if diagnostics else None
         return RouterResult(
-            proposal=proposal, routes=routes, validation=validation, diagnostics=diags
+            proposal=proposal,
+            routes=routes,
+            validation=validation,
+            diagnostics=diags,
+            param_names=self._param_names,
         )
 
     @torch.no_grad()
@@ -269,7 +276,9 @@ class Router:
         model = self.model(submodel_id)
         self._validateBatchMatchesModel(batch, model)
         log_probs = model(batch)
-        return RouterResult(proposal=None, routes=routes, validation=validation, log_probs=log_probs)
+        return RouterResult(
+            proposal=None, routes=routes, validation=validation, log_probs=log_probs
+        )
 
     @torch.no_grad()
     def log_prob(self, data: Any, **prepare_kwargs: Any) -> RouterResult:
@@ -303,7 +312,9 @@ class Router:
         model = self.model(submodel_id)
         self._validateBatchMatchesModel(batch, model)
         log_probs = model(batch)
-        return RouterResult(proposal=None, routes=routes, validation=validation, log_probs=log_probs)
+        return RouterResult(
+            proposal=None, routes=routes, validation=validation, log_probs=log_probs
+        )
 
     def _computeDiagnostics(
         self, proposal: Proposal, batch: dict[str, torch.Tensor]
@@ -372,9 +383,7 @@ class Router:
         self._rescaleProposal(proposal, batch)
         return proposal
 
-    def _rescaleProposal(
-        self, proposal: Proposal, batch: dict[str, torch.Tensor]
-    ) -> None:
+    def _rescaleProposal(self, proposal: Proposal, batch: dict[str, torch.Tensor]) -> None:
         if 'sd_y' not in batch or 'likelihood_family' not in batch:
             return
         lf = int(batch['likelihood_family'].flatten()[0].item())
@@ -470,6 +479,7 @@ class Router:
                 random_terms = defaultRandomTerms(q, columns)
         Z = buildRandomDesign(X_pre, columns, random_terms)
         random_names = self._randomNames(random_terms, columns)
+        self._param_names = {'ffx': list(fixed_names), 'sigma_rfx': list(random_names)}
 
         actual_d = int(X.shape[-1])
         actual_q = int(Z.shape[-1])
@@ -840,6 +850,127 @@ class Router:
                 f'batch has d={d_file}, q={q_file}; '
                 f'{model.cfg.d_ffx=}, {model.cfg.d_rfx=}'
             )
+
+    def posteriorSummary(
+        self,
+        result: RouterResult,
+        *,
+        ci: float = 0.95,
+        batch_index: int = 0,
+    ) -> str:
+        """Return a formatted posterior summary table for a sampled RouterResult."""
+        if result.proposal is None:
+            raise ValueError('RouterResult has no proposal; call sample() first')
+        return posteriorTable(result.proposal, result.param_names, ci=ci, batch_index=batch_index)
+
+
+def posteriorTable(
+    proposal: 'Proposal',
+    param_names: dict[str, list[str]] | None = None,
+    *,
+    ci: float = 0.95,
+    batch_index: int = 0,
+) -> str:
+    """Format a posterior summary table in the style of lme4 summaries.
+
+    Columns: posterior mean, SD, credible interval bounds, and P(>0) for fixed effects.
+    Includes random effect SDs, residual SD (if applicable), and posterior mean
+    correlation matrix when q > 1.
+    """
+    alpha = (1 - ci) / 2
+    lo_pct = f'{alpha * 100:g}%'
+    hi_pct = f'{(1 - alpha) * 100:g}%'
+
+    ffx = proposal.ffx[batch_index].float()   # (S, d)
+    srfx = proposal.sigma_rfx[batch_index].float()  # (S, q)
+    d, q, S = ffx.shape[-1], srfx.shape[-1], ffx.shape[0]
+
+    names = param_names or {}
+    ffx_names = names.get('ffx') or [f'ffx_{i}' for i in range(d)]
+    srfx_names = names.get('sigma_rfx') or [f'rfx_{i}' for i in range(q)]
+
+    def _col_stats(samples: torch.Tensor, j: int) -> tuple[float, float, float, float]:
+        col = samples[:, j]
+        return (
+            col.mean().item(),
+            col.std().item(),
+            col.quantile(alpha).item(),
+            col.quantile(1 - alpha).item(),
+        )
+
+    # Fixed effects: mean, SD, CI, P(>0)
+    ffx_rows = []
+    for j, name in enumerate(ffx_names):
+        mean, sd, lo, hi = _col_stats(ffx, j)
+        p_pos = (ffx[:, j] > 0).float().mean().item()
+        ffx_rows.append([name, mean, sd, lo, hi, p_pos])
+
+    ffx_table = tabulate(
+        ffx_rows,
+        headers=['', 'Mean', 'SD', lo_pct, hi_pct, 'P(>0)'],
+        floatfmt='.3f',
+        tablefmt='simple',
+    )
+
+    # Random effect SDs (+residual SD)
+    srfx_rows = []
+    for j, name in enumerate(srfx_names):
+        mean, sd, lo, hi = _col_stats(srfx, j)
+        srfx_rows.append([name, mean, sd, lo, hi])
+
+    if proposal.has_sigma_eps:
+        seps = proposal.sigma_eps[batch_index].float()  # (S,)
+        srfx_rows.append(
+            [
+                'Residual',
+                seps.mean().item(),
+                seps.std().item(),
+                seps.quantile(alpha).item(),
+                seps.quantile(1 - alpha).item(),
+            ]
+        )
+
+    srfx_table = tabulate(
+        srfx_rows,
+        headers=['', 'Mean', 'SD', lo_pct, hi_pct],
+        floatfmt='.3f',
+        tablefmt='simple',
+    )
+
+    parts = [
+        'Fixed effects:',
+        ffx_table,
+        '',
+        'Random effect SDs:',
+        srfx_table,
+    ]
+
+    # Posterior mean correlation matrix (only when q > 1)
+    if q > 1:
+        corr = proposal.corr_rfx
+        if corr is not None:
+            corr_b = corr[batch_index].float()  # (S, q, q) or (q, q)
+            corr_mean = corr_b.mean(0) if corr_b.dim() == 3 else corr_b  # (q, q)
+            corr_rows = [
+                [srfx_names[j]] + [corr_mean[j, k].item() for k in range(q)] for j in range(q)
+            ]
+            corr_table = tabulate(
+                corr_rows,
+                headers=[''] + srfx_names,
+                floatfmt='.3f',
+                tablefmt='simple',
+            )
+            parts += ['', 'Random effect correlations (posterior mean):', corr_table]
+
+    # Sample efficiency diagnostic
+    eff = proposal.efficiency
+    if eff is not None:
+        eff_val = float(eff[batch_index].item() if torch.is_tensor(eff) else eff)
+        parts.append(f'\nn_samples={S}  sample_efficiency={eff_val * 100:.1f}%')
+    else:
+        parts.append(f'\nn_samples={S}')
+
+    return '\n'.join(parts)
 
 
 CheckpointRouter = Router
