@@ -79,3 +79,8 @@ scamd = { git = "https://github.com/adkipnis/scamd.git" }
 torch = [
     { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
 ]
+
+[dependency-groups]
+dev = [
+    "jupyterlab>=4.5.7",
+]
