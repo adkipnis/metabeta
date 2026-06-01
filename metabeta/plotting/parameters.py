@@ -43,6 +43,21 @@ def _prior_pdf_on(ax, x_grid, pdf, **kwargs):
     ax2.set_yticklabels([])
 
 
+def _credible_levels(
+    Z: np.ndarray, dx: float, dy: float, probs: tuple[float, ...] = (0.50, 0.90)
+) -> list[float]:
+    """Density thresholds enclosing the given probability masses in a 2D density grid."""
+    z_flat = Z.ravel()
+    z_sorted = np.sort(z_flat)[::-1]
+    cumprob = np.cumsum(z_sorted) * dx * dy
+    levels = []
+    for p in sorted(probs):
+        idx = np.searchsorted(cumprob, p)
+        if idx < len(z_sorted) and z_sorted[idx] > 0:
+            levels.append(float(z_sorted[idx]))
+    return sorted(set(levels))
+
+
 def _histplot(x, **kwargs):
     ax2 = plt.gca().twinx()
     sns.histplot(x, **kwargs, ax=ax2)
@@ -142,6 +157,33 @@ def plotParameters(
 
     # 2d posterior KDE contours
     g.map_lower(sns.kdeplot, color=color, alpha=alpha, fill=True, warn_singular=False)
+
+    # 2d prior analytical contours (product of independent marginals)
+    if prior_pdfs is not None:
+        _n2d = 150
+        for i in range(d):
+            for j in range(i):
+                ax = g.axes[i, j]
+                xlim, ylim = ax.get_xlim(), ax.get_ylim()
+
+                xg_j, pdf_j = prior_pdfs[j]
+                xg_i, pdf_i = prior_pdfs[i]
+                xg_j2 = np.linspace(xg_j[0], xg_j[-1], _n2d)
+                xg_i2 = np.linspace(xg_i[0], xg_i[-1], _n2d)
+                pdf_j2 = np.interp(xg_j2, xg_j, pdf_j)
+                pdf_i2 = np.interp(xg_i2, xg_i, pdf_i)
+
+                Z = pdf_j2[np.newaxis, :] * pdf_i2[:, np.newaxis]  # (n_i, n_j)
+                dx_2d = xg_j2[1] - xg_j2[0]
+                dy_2d = xg_i2[1] - xg_i2[0]
+                levels = _credible_levels(Z, dx_2d, dy_2d)
+
+                if levels:
+                    X, Y = np.meshgrid(xg_j2, xg_i2)
+                    ax.contour(X, Y, Z, levels=levels,
+                               colors=[prior_color], alpha=0.30, linewidths=1.0)
+                ax.set_xlim(xlim)
+                ax.set_ylim(ylim)
 
     # ground truth: vertical line on diagonal, x marker on off-diagonal
     if truth is not None:
