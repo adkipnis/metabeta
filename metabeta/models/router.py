@@ -249,6 +249,7 @@ class Router:
         batch = toDevice(batch, self.device)
         proposal = self._runRouted(batch, routes, n_samples=n_samples)
         diags = self._computeDiagnostics(proposal, batch) if diagnostics else None
+        self._rescaleProposal(proposal, batch)
         prior_params: dict[str, np.ndarray] = {
             key: batch[key].float().cpu().numpy() for key in ('tau_ffx', 'nu_ffx') if key in batch
         }
@@ -428,7 +429,6 @@ class Router:
         model = self.model(submodel_id)
         self._validateBatchMatchesModel(batch, model)
         proposal = model.estimate(batch, n_samples=n_samples)
-        self._rescaleProposal(proposal, batch)
         return proposal
 
     def _rescaleProposal(self, proposal: Proposal, batch: dict[str, torch.Tensor]) -> None:
@@ -971,10 +971,7 @@ class Router:
                 ]
             rows.append(row)
 
-        parts = ['Random Effects:']
-        if result.formula:
-            parts = [f'Formula:  {result.formula}', '', 'Random Effects:']
-        parts.append(tabulate(rows, headers=headers, floatfmt='.3f', tablefmt=fmt))
+        parts = ['Random Effects:', tabulate(rows, headers=headers, floatfmt='.3f', tablefmt=fmt)]
         return '\n'.join(parts)
 
 
