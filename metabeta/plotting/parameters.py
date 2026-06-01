@@ -33,7 +33,12 @@ def _kdeplot_on(ax, x, **kwargs):
 
 
 def _prior_pdf_on(ax, x_grid, pdf, **kwargs):
-    """Plot an analytical prior PDF on a detached twin y-axis."""
+    """Plot an analytical prior PDF on a detached twin y-axis.
+
+    Saves and restores the shared x-axis limits so that the prior's wide domain
+    (±6σ) does not expand the column's axis range beyond the posterior window.
+    """
+    xlim = ax.get_xlim()
     ax2 = ax.twinx()
     ax2.plot(x_grid, pdf, **kwargs)
     ax2.spines['right'].set_visible(False)
@@ -41,21 +46,8 @@ def _prior_pdf_on(ax, x_grid, pdf, **kwargs):
     ax2.set_ylabel('')
     ax2.set_yticks([])
     ax2.set_yticklabels([])
+    ax.set_xlim(xlim)
 
-
-def _credible_levels(
-    Z: np.ndarray, dx: float, dy: float, probs: tuple[float, ...] = (0.50, 0.90)
-) -> list[float]:
-    """Density thresholds enclosing the given probability masses in a 2D density grid."""
-    z_flat = Z.ravel()
-    z_sorted = np.sort(z_flat)[::-1]
-    cumprob = np.cumsum(z_sorted) * dx * dy
-    levels = []
-    for p in sorted(probs):
-        idx = np.searchsorted(cumprob, p)
-        if idx < len(z_sorted) and z_sorted[idx] > 0:
-            levels.append(float(z_sorted[idx]))
-    return sorted(set(levels))
 
 
 def _histplot(x, **kwargs):
@@ -83,6 +75,7 @@ def plotParameters(
     d_active: int | None = None,
     q_active: int | None = None,
     height: float = 2.5,
+    prior_xlim: bool = True,
 ):
     """Pair-grid of parameter samples for a single dataset at batch {index}.
 
@@ -90,6 +83,11 @@ def plotParameters(
       prior_pdfs is given (one (x_grid, density) pair per parameter, in display order).
     - Upper triangle: posterior scatter.
     - Lower triangle: posterior density contours.
+
+    prior_xlim controls axis scaling:
+      True  — axes show the prior range, capped at posterior_mean ± 40·posterior_SD
+              so the posterior remains clearly visible (default).
+      False — axes are set by the posterior data range (tight).
 
     d_active and q_active trim padded proposals to the active FFX and RFX dims.
     samples_g layout: ffx[0:proposal.d] | sigma_rfx[proposal.d:proposal.d+proposal.q] | sigma_eps
@@ -143,14 +141,6 @@ def plotParameters(
             ax2.set_yticks([])
             ax2.set_yticklabels([])
 
-    # marginal prior — analytical PDF line
-    if prior_pdfs is not None:
-        for i, (x_grid, pdf) in enumerate(prior_pdfs[:d]):
-            _prior_pdf_on(
-                g.axes[i, i], x_grid, pdf,
-                color=prior_color, lw=1.5, alpha=0.6,
-            )
-
     # 2d posterior scatter
     alpha_point = 1 / np.log(s)
     g.map_upper(sns.scatterplot, color=color, alpha=alpha_point, s=40, edgecolor='k', lw=0)
@@ -158,9 +148,32 @@ def plotParameters(
     # 2d posterior KDE contours
     g.map_lower(sns.kdeplot, color=color, alpha=alpha, fill=True, warn_singular=False)
 
-    # 2d prior analytical contours (product of independent marginals)
+    # axis scaling — prior mode widens each parameter's axis to the prior range,
+    # capped at posterior_mean ± 6·posterior_SD so the posterior stays readable
+    if prior_xlim and prior_pdfs is not None:
+        for i in range(d):
+            prior_lo = float(prior_pdfs[i][0][0])
+            prior_hi = float(prior_pdfs[i][0][-1])
+            post_mean = float(x[:, i].mean())
+            post_sd = float(x[:, i].std())
+            lo = max(prior_lo, post_mean - 40.0 * post_sd)
+            hi = min(prior_hi, post_mean + 40.0 * post_sd)
+            # shared axes: setting any cell in the column/row propagates to all
+            g.axes[0, i].set_xlim(lo, hi)
+            g.axes[i, 0].set_ylim(lo, hi)
+
+    # marginal prior — analytical PDF line, drawn after map_upper/lower so that the
+    # posterior has already set the axis limits before we save/restore them
     if prior_pdfs is not None:
-        _n2d = 150
+        for i, (x_grid, pdf) in enumerate(prior_pdfs[:d]):
+            _prior_pdf_on(
+                g.axes[i, i], x_grid, pdf,
+                color=prior_color, lw=1.5, alpha=0.6,
+            )
+
+    # 2d prior analytical contours — evaluated on the axis-range grid so that levels
+    # are chosen relative to the density variation *within the visible window*
+    if prior_pdfs is not None:
         for i in range(d):
             for j in range(i):
                 ax = g.axes[i, j]
@@ -168,20 +181,17 @@ def plotParameters(
 
                 xg_j, pdf_j = prior_pdfs[j]
                 xg_i, pdf_i = prior_pdfs[i]
-                xg_j2 = np.linspace(xg_j[0], xg_j[-1], _n2d)
-                xg_i2 = np.linspace(xg_i[0], xg_i[-1], _n2d)
-                pdf_j2 = np.interp(xg_j2, xg_j, pdf_j)
-                pdf_i2 = np.interp(xg_i2, xg_i, pdf_i)
+                xg = np.linspace(xlim[0], xlim[1], 100)
+                yg = np.linspace(ylim[0], ylim[1], 100)
+                # left/right=0 handles half-distributions that start at 0
+                pj = np.interp(xg, xg_j, pdf_j, left=0.0, right=0.0)
+                pi = np.interp(yg, xg_i, pdf_i, left=0.0, right=0.0)
 
-                Z = pdf_j2[np.newaxis, :] * pdf_i2[:, np.newaxis]  # (n_i, n_j)
-                dx_2d = xg_j2[1] - xg_j2[0]
-                dy_2d = xg_i2[1] - xg_i2[0]
-                levels = _credible_levels(Z, dx_2d, dy_2d)
+                Z = pi[:, np.newaxis] * pj[np.newaxis, :]  # (100, 100)
+                X, Y = np.meshgrid(xg, yg)
 
-                if levels:
-                    X, Y = np.meshgrid(xg_j2, xg_i2)
-                    ax.contour(X, Y, Z, levels=levels,
-                               colors=[prior_color], alpha=0.30, linewidths=1.0)
+                if Z.max() > 0:
+                    ax.contour(X, Y, Z, colors=[prior_color], alpha=0.30, linewidths=1.0)
                 ax.set_xlim(xlim)
                 ax.set_ylim(ylim)
 
