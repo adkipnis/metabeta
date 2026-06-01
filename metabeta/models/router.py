@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -78,6 +78,7 @@ class RouterResult:
     group_names: list[str] | None = None
     prior_params: dict[str, np.ndarray] | None = None
     scale_info: 'ScaleInfo | None' = None
+    batch: 'dict[str, torch.Tensor] | None' = None
 
 
 class Router:
@@ -272,6 +273,7 @@ class Router:
             group_names=self._group_labels,
             prior_params=prior_params or None,
             scale_info=self._scale_info,
+            batch=batch if diagnostics else None,
         )
 
     @torch.no_grad()
@@ -399,6 +401,7 @@ class Router:
             'fit_label': fit_label,
             'loo_nll': loo_nll,
             'pareto_k': pareto_k,
+            'pp': pp,
         }
 
     def _validateParameterKeys(self, batch: Mapping[str, Any]) -> None:
@@ -938,6 +941,29 @@ class Router:
                 f'batch has d={d_file}, q={q_file}; '
                 f'{model.cfg.d_ffx=}, {model.cfg.d_rfx=}'
             )
+
+    def plotPPD(
+        self,
+        result: RouterResult,
+        indices: Sequence[int] | None = None,
+        plot_dir: Path | None = None,
+    ) -> None:
+        """Plot posterior predictive densities for datasets in result.
+
+        Requires ``sample()`` to have been called with ``diagnostics=True``.
+        y is shown on the standardized scale used internally by the model.
+        """
+        from metabeta.plotting.predictive import plotPPD as _plotPPD
+
+        if result.diagnostics is None or result.batch is None:
+            raise ValueError('call sample() with diagnostics=True first')
+        pp = result.diagnostics.get('pp')
+        if pp is None:
+            raise ValueError('pp not found in diagnostics')
+        b = int(result.batch['y'].shape[0])
+        if indices is None:
+            indices = list(range(b))
+        _plotPPD(pp, result.batch, indices=indices, plot_dir=plot_dir)
 
     def posteriorSummary(
         self,
