@@ -45,6 +45,8 @@ def plotParameters(
     kde: bool = True,
     prior: Proposal | None = None,
     truth: np.ndarray | None = None,
+    d_active: int | None = None,
+    q_active: int | None = None,
 ):
     """pair grid of parameter samples for a single dataset at batch {index}
     - histograms / KDEs along diagonal
@@ -56,10 +58,26 @@ def plotParameters(
     triangle.
     If truth is given (1-D array of length d), draws a vertical line on each
     diagonal cell and an x marker on each off-diagonal cell.
+
+    d_active and q_active trim padded proposals to the active FFX and RFX dims.
+    samples_g layout: ffx[0:proposal.d] | sigma_rfx[proposal.d:proposal.d+proposal.q] | sigma_eps
     """
 
+    def _active_samples(prop: Proposal, idx: int) -> np.ndarray:
+        x = prop.samples_g[idx].numpy()
+        if d_active is None and q_active is None:
+            return x
+        _d = d_active if d_active is not None else prop.d
+        _q = q_active if q_active is not None else prop.q
+        parts = [x[:, :_d]]
+        if _q > 0:
+            parts.append(x[:, prop.d : prop.d + _q])
+        if prop.has_sigma_eps:
+            parts.append(x[:, prop.d + prop.q : prop.d + prop.q + 1])
+        return np.concatenate(parts, axis=-1)
+
     # init
-    x = proposal.samples_g[index].numpy()
+    x = _active_samples(proposal, index)
     s, d = x.shape
     g = sns.PairGrid(pd.DataFrame(x), height=2.5)
 
@@ -68,7 +86,9 @@ def plotParameters(
     if names is not None:
         _names = names
     else:
-        name_dict = getAllNames(proposal.d, proposal.q)
+        _d_n = d_active if d_active is not None else proposal.d
+        _q_n = q_active if q_active is not None else proposal.q
+        name_dict = getAllNames(_d_n, _q_n)
         name_dict.pop('rfx')
         _names = np.concat(list(name_dict.values()))
 
@@ -94,7 +114,7 @@ def plotParameters(
 
     # marginal prior
     if prior is not None:
-        x_prior = prior.samples_g[index].numpy()
+        x_prior = _active_samples(prior, index)
         for i in range(d):
             _kdeplot_on(
                 g.axes[i, i],
@@ -115,7 +135,7 @@ def plotParameters(
 
     # 2d prior KDE contours
     if prior is not None:
-        x_prior = prior.samples_g[index].numpy()
+        x_prior = _active_samples(prior, index)
         x_prior_df = pd.DataFrame(x_prior)
         for i in range(d):
             for j in range(i):
