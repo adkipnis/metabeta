@@ -133,6 +133,8 @@ def plotParameters(
         x_prior_df = pd.DataFrame(x_prior)
         for i in range(d):
             for j in range(i):
+                clip_x = (0, None) if j >= _d_sigma else (None, None)
+                clip_y = (0, None) if i >= _d_sigma else (None, None)
                 sns.kdeplot(
                     data=x_prior_df,
                     x=j,
@@ -142,6 +144,7 @@ def plotParameters(
                     fill=False,
                     alpha=0.30,
                     warn_singular=False,
+                    clip=(clip_x, clip_y),
                 )
 
     # ground truth: vertical line on diagonal, x marker on off-diagonal
