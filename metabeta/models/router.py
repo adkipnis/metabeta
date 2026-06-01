@@ -75,6 +75,7 @@ class RouterResult:
     formula: str | None = None
     priors_str: str | None = None
     group_names: list[str] | None = None
+    prior_params: dict[str, np.ndarray] | None = None
 
 
 class Router:
@@ -248,6 +249,9 @@ class Router:
         batch = toDevice(batch, self.device)
         proposal = self._runRouted(batch, routes, n_samples=n_samples)
         diags = self._computeDiagnostics(proposal, batch) if diagnostics else None
+        prior_params: dict[str, np.ndarray] = {
+            key: batch[key].float().cpu().numpy() for key in ('tau_ffx', 'nu_ffx') if key in batch
+        }
         return RouterResult(
             proposal=proposal,
             routes=routes,
@@ -257,6 +261,7 @@ class Router:
             formula=prepare_kwargs.get('formula'),
             priors_str=_priorStr(prepare_kwargs.get('priors')),
             group_names=self._group_labels,
+            prior_params=prior_params or None,
         )
 
     @torch.no_grad()
@@ -332,13 +337,22 @@ class Router:
             posteriorPredictiveDeviance,
             posteriorPredictiveNLL,
             posteriorPredictiveR2,
+            psisLooNLL,
         )
 
         lf = int(batch['likelihood_family'].flatten()[0].item())
         pp = getPosteriorPredictive(proposal, batch, likelihood_family=lf)
-        ppc_nll = posteriorPredictiveNLL(pp, batch, mode='mixture')
+        log_p = pp.log_prob(batch['y'].unsqueeze(-1))  # (B, m, n, S)
+        ppc_nll = posteriorPredictiveNLL(pp, batch, mode='mixture', log_p=log_p)
+        loo_nll_vals, pareto_k_vals = psisLooNLL(
+            pp, batch, w=proposal.weights, reff=proposal.reff, log_p=log_p
+        )
 
         b = int(batch['X'].shape[0])
+        agg = (lambda t: t.item()) if b == 1 else (lambda t: t.mean().item())
+        loo_nll = agg(loo_nll_vals)
+        pareto_k = agg(pareto_k_vals)
+
         if lf == 0:
             vals = posteriorPredictiveR2(pp, batch, w=proposal.weights)
             fit = vals.item() if b == 1 else vals.mean().item()
@@ -373,6 +387,8 @@ class Router:
             'param_summary': param_summary,
             'fit': fit,
             'fit_label': fit_label,
+            'loo_nll': loo_nll,
+            'pareto_k': pareto_k,
         }
 
     def _validateParameterKeys(self, batch: Mapping[str, Any]) -> None:
@@ -893,30 +909,73 @@ class Router:
         *,
         ci: float = 0.95,
         batch_index: int = 0,
-        show_rfx: bool = False,
     ) -> str:
         """Return a formatted posterior summary table for a sampled RouterResult.
 
-        Pass ``show_rfx=True`` to append a per-group random effects table.
-        Fit metrics (R²/AUC/Deviance) are shown when ``sample()`` was called
-        with ``diagnostics=True``.
+        Fit metrics (R²/AUC/Deviance), LOO-NLL, and Pareto k are shown when
+        ``sample()`` was called with ``diagnostics=True``.  For per-group random
+        effects use ``rfxTable()``.
         """
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
-        fit = result.diagnostics.get('fit') if result.diagnostics else None
-        fit_label = result.diagnostics.get('fit_label', 'fit') if result.diagnostics else None
+        d = result.diagnostics or {}
         return posteriorTable(
             result.proposal,
             result.param_names,
             formula=result.formula,
             priors_str=result.priors_str,
-            group_names=result.group_names,
-            fit=fit,
-            fit_label=fit_label,
+            prior_params=result.prior_params,
+            fit=d.get('fit'),
+            fit_label=d.get('fit_label', 'fit'),
+            loo_nll=d.get('loo_nll'),
+            pareto_k=d.get('pareto_k'),
             ci=ci,
             batch_index=batch_index,
-            show_rfx=show_rfx,
         )
+
+    def rfxTable(
+        self,
+        result: RouterResult,
+        *,
+        ci: float = 0.95,
+        batch_index: int = 0,
+    ) -> str:
+        """Return a formatted per-group random effects table for a sampled RouterResult."""
+        if result.proposal is None:
+            raise ValueError('RouterResult has no proposal; call sample() first')
+        fmt = 'github'
+        alpha = (1 - ci) / 2
+        lo_pct = f'{alpha * 100:g}%'
+        hi_pct = f'{(1 - alpha) * 100:g}%'
+
+        names = result.param_names or {}
+        rfx = result.proposal.rfx[batch_index].float()  # (m, S, q)
+        m, _, q_model = rfx.shape
+        srfx_names = names.get('sigma_rfx') or [f'rfx_{i}' for i in range(q_model)]
+        n_rfx = len(srfx_names)
+        g_names = result.group_names or [str(i) for i in range(m)]
+
+        headers = ['Group']
+        for name in srfx_names:
+            headers += [f'{name} Mean', f'{name} {lo_pct}', f'{name} {hi_pct}']
+
+        rows = []
+        for gi in range(m):
+            row: list[Any] = [g_names[gi] if gi < len(g_names) else str(gi)]
+            for qi in range(n_rfx):
+                col = rfx[gi, :, qi]
+                row += [
+                    col.mean().item(),
+                    col.quantile(alpha).item(),
+                    col.quantile(1 - alpha).item(),
+                ]
+            rows.append(row)
+
+        parts = ['Random Effects:']
+        if result.formula:
+            parts = [f'Formula:  {result.formula}', '', 'Random Effects:']
+        parts.append(tabulate(rows, headers=headers, floatfmt='.3f', tablefmt=fmt))
+        return '\n'.join(parts)
 
 
 def _priorStr(priors: Any) -> str:
@@ -937,18 +996,21 @@ def posteriorTable(
     *,
     formula: str | None = None,
     priors_str: str | None = None,
-    group_names: list[str] | None = None,
+    prior_params: dict[str, np.ndarray] | None = None,
     fit: float | None = None,
     fit_label: str = 'fit',
+    loo_nll: float | None = None,
+    pareto_k: float | None = None,
     ci: float = 0.95,
     batch_index: int = 0,
-    show_rfx: bool = False,
 ) -> str:
     """Format a posterior summary table in the style of lme4 summaries.
 
-    Sections: Fixed Effects (mean, SD, CI, P(>0)), Standard Deviations (sigma_rfx
-    + residual), and Correlations (posterior mean, when q > 1).  Optionally appends
-    a per-group Random Effects table when ``show_rfx=True``.
+    Sections: Fixed Effects (mean, SD, CI, P(>0), contraction), Standard
+    Deviations (sigma_rfx + residual), and Correlations (posterior mean, when
+    q > 1).  For per-group random effects use ``Router.rfxTable()``.
+    Contraction requires ``prior_params`` (populated automatically by
+    ``Router.sample()``).  Fit metrics require ``diagnostics=True``.
     """
     fmt = 'pipe'
     alpha = (1 - ci) / 2
@@ -957,10 +1019,10 @@ def posteriorTable(
 
     ffx = proposal.ffx[batch_index].float()   # (S, d)
     srfx = proposal.sigma_rfx[batch_index].float()  # (S, q)
-    d, S = ffx.shape[-1], ffx.shape[0]
+    S = ffx.shape[0]
 
     names = param_names or {}
-    ffx_names = names.get('ffx') or [f'ffx_{i}' for i in range(d)]
+    ffx_names = names.get('ffx') or [f'ffx_{i}' for i in range(ffx.shape[-1])]
     srfx_names = names.get('sigma_rfx') or [f'rfx_{i}' for i in range(srfx.shape[-1])]
 
     def _col_stats(samples: torch.Tensor, j: int) -> tuple[float, float, float, float]:
@@ -972,6 +1034,20 @@ def posteriorTable(
             col.quantile(1 - alpha).item(),
         )
 
+    # prior SD per ffx parameter for contraction = 1 - Var(post) / Var(prior)
+    tau_arr = nu_arr = None
+    if prior_params is not None and 'tau_ffx' in prior_params and 'nu_ffx' in prior_params:
+        n = len(ffx_names)
+        tau_arr = prior_params['tau_ffx'][batch_index, :n]
+        nu_arr = prior_params['nu_ffx'][batch_index, :n]
+
+    def _contraction(post_sd: float, j: int) -> float | None:
+        if tau_arr is None:
+            return None
+        tau, nu = float(tau_arr[j]), float(nu_arr[j])
+        prior_var = tau**2 * nu / (nu - 2) if nu > 2 else float('inf')
+        return float(np.clip(1.0 - post_sd**2 / prior_var, 0.0, 1.0))
+
     # ── header ────────────────────────────────────────────────────────────────
     parts: list[str] = []
     if formula:
@@ -982,20 +1058,22 @@ def posteriorTable(
         parts.append('')
 
     # ── Fixed Effects ─────────────────────────────────────────────────────────
+    show_contr = tau_arr is not None
+    ffx_headers = ['', 'Mean', 'SD', lo_pct, hi_pct, 'P(>0)']
+    if show_contr:
+        ffx_headers.append('Contr.')
     ffx_rows = []
     for j, name in enumerate(ffx_names):
         mean, sd, lo, hi = _col_stats(ffx, j)
         p_pos = (ffx[:, j] > 0).float().mean().item()
-        ffx_rows.append([name, mean, sd, lo, hi, p_pos])
+        row: list[Any] = [name, mean, sd, lo, hi, p_pos]
+        if show_contr:
+            row.append(_contraction(sd, j))
+        ffx_rows.append(row)
 
     parts += [
         'Fixed Effects:',
-        tabulate(
-            ffx_rows,
-            headers=['', 'Mean', 'SD', lo_pct, hi_pct, 'P(>0)'],
-            floatfmt='.3f',
-            tablefmt=fmt,
-        ),
+        tabulate(ffx_rows, headers=ffx_headers, floatfmt='.3f', tablefmt=fmt),
         '',
     ]
 
@@ -1049,39 +1127,15 @@ def posteriorTable(
                 ),
             ]
 
-    # ── footer: fit metric + sample info ──────────────────────────────────────
+    # ── footer ────────────────────────────────────────────────────────────────
     footer_parts = [f'n_samples = {S}']
     if fit is not None:
         footer_parts.append(f'{fit_label} = {fit:.3f}')
+    if loo_nll is not None:
+        footer_parts.append(f'LOO-NLL = {loo_nll:.3f}')
+    if pareto_k is not None:
+        footer_parts.append(f'Pareto k = {pareto_k:.3f}')
     parts += ['', '   '.join(footer_parts)]
-
-    # ── Random Effects (optional) ─────────────────────────────────────────────
-    if show_rfx:
-        rfx = proposal.rfx[batch_index].float()  # (m, S, q)
-        m = rfx.shape[0]
-        g_names = group_names or [str(i) for i in range(m)]
-
-        rfx_headers = ['Group']
-        for name in srfx_names:
-            rfx_headers += [f'{name} Mean', f'{name} {lo_pct}', f'{name} {hi_pct}']
-
-        rfx_rows = []
-        for gi in range(m):
-            row: list[Any] = [g_names[gi] if gi < len(g_names) else str(gi)]
-            for qi in range(n_rfx):
-                col = rfx[gi, :, qi]
-                row += [
-                    col.mean().item(),
-                    col.quantile(alpha).item(),
-                    col.quantile(1 - alpha).item(),
-                ]
-            rfx_rows.append(row)
-
-        parts += [
-            '',
-            'Random Effects:',
-            tabulate(rfx_rows, headers=rfx_headers, floatfmt='.3f', tablefmt=fmt),
-        ]
 
     return '\n'.join(parts)
 
