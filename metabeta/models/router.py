@@ -968,6 +968,68 @@ class Router:
             indices = list(range(b))
         _plotPPD(pp, result.batch, indices=indices, plot_dir=plot_dir)
 
+    def plotParameters(
+        self,
+        result: RouterResult,
+        index: int = 0,
+        with_prior: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        """Pair-grid of posterior parameter samples in original-scale units.
+
+        Builds the original-scale posterior proposal from result and delegates
+        to plotParameters.  If with_prior=True and prior_params are available,
+        overlays prior marginal KDEs.
+        """
+        from metabeta.plotting.parameters import plotParameters as _plotParameters
+        from metabeta.utils.evaluation import Proposal, makePriorProposal
+
+        if result.proposal is None:
+            raise ValueError('RouterResult has no proposal; call sample() first')
+        if result.scale_info is None:
+            raise ValueError('RouterResult has no scale_info')
+
+        prop = result.proposal
+        si = result.scale_info
+        has_eps = prop.has_sigma_eps
+
+        ffx_orig = si.to_original_scale(prop.ffx[index])       # (S, d)
+        srfx = prop.sigma_rfx[index]                            # (S, q)
+        parts = [ffx_orig, srfx]
+        if has_eps:
+            parts.append(prop.sigma_eps[index].unsqueeze(-1))  # (S, 1)
+        samples_g = torch.cat(parts, dim=-1).unsqueeze(0)      # (1, S, D)
+
+        post_orig = Proposal(
+            proposed={
+                'global': {'samples': samples_g, 'log_prob': prop.log_prob_g[index : index + 1]},
+                'local': {k: v[index : index + 1] for k, v in prop.data['local'].items()},
+            },
+            has_sigma_eps=has_eps,
+        )
+
+        param_names = result.param_names or {}
+        n_ffx = len(param_names.get('ffx', []))
+        n_srfx = len(param_names.get('sigma_rfx', []))
+        names = (
+            param_names.get('ffx', [])
+            + [f'σ_{n}' for n in param_names.get('sigma_rfx', [])]
+            + (['σ_ε'] if has_eps else [])
+        )
+
+        prior = (
+            makePriorProposal(result) if with_prior and result.prior_params is not None else None
+        )
+
+        return _plotParameters(
+            post_orig,
+            prior=prior,
+            names=names,
+            d_active=n_ffx,
+            q_active=n_srfx,
+            **kwargs,
+        )
+
     def posteriorSummary(
         self,
         result: RouterResult,
@@ -1054,7 +1116,11 @@ class Router:
             for qi in range(n_rfx):
                 col = rfx[gi, :, qi]
                 mean_val = col.mean().item()
-                z = mean_val / sigma_rfx_mean[qi].item() if sigma_rfx_mean[qi].item() != 0 else float('nan')
+                z = (
+                    mean_val / sigma_rfx_mean[qi].item()
+                    if sigma_rfx_mean[qi].item() != 0
+                    else float('nan')
+                )
                 row += [
                     mean_val,
                     col.quantile(alpha).item(),
