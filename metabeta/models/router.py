@@ -1010,7 +1010,16 @@ class Router:
                 ]
             rows.append(row)
 
-        parts = ['Random Effects:', tabulate(rows, headers=headers, floatfmt='.3f', tablefmt=fmt)]
+        scale_note = f'Scale:    original y units' + (
+            f'  (intercept deviations from population intercept β₀)'
+            if any('intercept' in n.lower() for n in srfx_names)
+            else ''
+        )
+        parts = [
+            'Random Effects:',
+            scale_note,
+            tabulate(rows, headers=headers, floatfmt='.3f', tablefmt=fmt),
+        ]
         return '\n'.join(parts)
 
 
@@ -1031,12 +1040,33 @@ def _buildPriorLines(
     srfx_names: list[str],
     prior_params: dict[str, np.ndarray],
     batch_index: int,
+    scale_info: 'ScaleInfo | None' = None,
+    x_scale: str = 'standardized',
 ) -> list[str]:
-    """Build per-parameter prior description lines for the summary header."""
+    """Build per-parameter prior description lines for the summary header.
+
+    Priors are stored on the fully-standardized (★) scale inside the model.
+    This function rescales them to match whatever scale is being displayed:
+
+    - Default (standardized X, original y): multiply τ by σ_y.
+      This gives the effective prior on β★_k × σ_y (Δy per SD of predictor).
+      Intercept location remains 0 (model is centred at mean y).
+
+    - Original (x_scale='original'): multiply τ by σ_y/σ_{x_k}.
+      This gives the effective prior on β_k (Δy per unit of predictor).
+      Intercept location shifts to μ_y (since E[β_0] = μ_y when all priors
+      are centred and predictors are mean-zero after standardization).
+
+    σ_rfx are always displayed in original y units (rescaled by σ_y in the
+    proposal), so τ_rfx is always multiplied by σ_y regardless of x_scale.
+    """
     from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
 
     lines: list[str] = []
     n_ffx, n_rfx = len(ffx_names), len(srfx_names)
+
+    y_std = scale_info.y_std if scale_info is not None else 1.0
+    y_mean = scale_info.y_mean if scale_info is not None else 0.0
 
     if 'tau_ffx' in prior_params and 'nu_ffx' in prior_params:
         tau = prior_params['tau_ffx'][batch_index, :n_ffx]
@@ -1044,12 +1074,24 @@ def _buildPriorLines(
         fam_id = int(prior_params['family_ffx'][batch_index]) if 'family_ffx' in prior_params else 0
         fam = FFX_FAMILIES[fam_id] if fam_id < len(FFX_FAMILIES) else 'normal'
         for j, name in enumerate(ffx_names):
-            mu_j, tau_j = float(mu[j]), float(tau[j])
-            loc = '0' if mu_j == 0 else f'{mu_j:.2g}'
+            # Rescale τ from standardized space to displayed space
+            tau_j = float(tau[j]) * y_std
+            mu_j = float(mu[j]) * y_std
+            if scale_info is not None and x_scale == 'original' and j < len(scale_info.x_stds):
+                x_std_j = float(scale_info.x_stds[j])
+                if x_std_j > 0:
+                    tau_j /= x_std_j
+                # For the intercept (j=0, x_stds[0]=1), the effective prior
+                # location in original space is μ_y when ν★=0 and predictors
+                # are mean-zero (the centring correction exactly equals μ_y).
+                if scale_info.has_intercept and j == 0:
+                    mu_j += y_mean
+
+            loc = f'{mu_j:.4g}' if abs(mu_j) > 1e-9 else '0'
             if fam == 'normal':
-                lines.append(f'  {name} ~ N({loc}, {tau_j:.2g})')
+                lines.append(f'  {name} ~ N({loc}, {tau_j:.4g})')
             else:
-                lines.append(f'  {name} ~ t₅({loc}, {tau_j:.2g})')
+                lines.append(f'  {name} ~ t₅({loc}, {tau_j:.4g})')
 
     if 'tau_rfx' in prior_params and n_rfx > 0:
         tau_r = prior_params['tau_rfx'][batch_index, :n_rfx]
@@ -1060,13 +1102,14 @@ def _buildPriorLines(
         )
         fam = SIGMA_FAMILIES[fam_id] if fam_id < len(SIGMA_FAMILIES) else 'halfnormal'
         for j, name in enumerate(srfx_names):
-            tau_j = float(tau_r[j])
+            # σ_rfx is always in original y units → always rescale τ by σ_y
+            tau_j = float(tau_r[j]) * y_std
             if fam == 'halfnormal':
-                lines.append(f'  σ_{name} ~ HN({tau_j:.2g})')
+                lines.append(f'  σ_{name} ~ HN({tau_j:.4g})')
             elif fam == 'halfstudent':
-                lines.append(f'  σ_{name} ~ HT₅({tau_j:.2g})')
+                lines.append(f'  σ_{name} ~ HT₅({tau_j:.4g})')
             else:
-                lines.append(f'  σ_{name} ~ Exp({tau_j:.2g})')
+                lines.append(f'  σ_{name} ~ Exp({tau_j:.4g})')
         if 'eta_rfx' in prior_params and n_rfx > 1:
             eta = float(prior_params['eta_rfx'][batch_index])
             if eta > 0:
@@ -1135,17 +1178,32 @@ def posteriorTable(
         )
 
     # prior SD per ffx parameter for contraction = 1 - Var(post) / Var(prior)
-    tau_arr = nu_arr = None
+    # τ is stored in standardized (★) space; rescale to match the displayed units.
+    from metabeta.utils.constants import FFX_FAMILIES, STUDENT_DF
+
+    tau_arr = None
+    _ffx_prior_var_multiplier = 1.0  # 1.0 for Normal; df/(df-2) for Student-t
     if prior_params is not None and 'tau_ffx' in prior_params and 'nu_ffx' in prior_params:
         n = len(ffx_names)
-        tau_arr = prior_params['tau_ffx'][batch_index, :n]
-        nu_arr = prior_params['nu_ffx'][batch_index, :n]
+        tau_arr = prior_params['tau_ffx'][batch_index, :n].copy().astype(float)
+        if scale_info is not None:
+            for j in range(n):
+                x_std_j = float(scale_info.x_stds[j]) if j < len(scale_info.x_stds) else 1.0
+                denom = x_std_j if x_scale == 'original' else 1.0
+                tau_arr[j] *= scale_info.y_std / max(denom, 1e-12)
+        if 'family_ffx' in prior_params:
+            fam_id = int(prior_params['family_ffx'][batch_index])
+            fam = FFX_FAMILIES[fam_id] if fam_id < len(FFX_FAMILIES) else 'normal'
+            if fam == 'student' and STUDENT_DF > 2:
+                _ffx_prior_var_multiplier = STUDENT_DF / (STUDENT_DF - 2)
 
     def _contraction(post_sd: float, j: int) -> float | None:
         if tau_arr is None:
             return None
-        tau, nu = float(tau_arr[j]), float(nu_arr[j])
-        prior_var = tau**2 * nu / (nu - 2) if nu > 2 else float('inf')
+        tau_j = float(tau_arr[j])
+        if tau_j <= 0:
+            return None
+        prior_var = tau_j**2 * _ffx_prior_var_multiplier
         return float(np.clip(1.0 - post_sd**2 / prior_var, 0.0, 1.0))
 
     # ── header ────────────────────────────────────────────────────────────────
@@ -1153,13 +1211,20 @@ def posteriorTable(
     if formula:
         parts.append(f'Formula:  {formula}')
     scale_label = (
-        'standardized X, original y  (Δy per SD of predictor)'
+        'standardized X, original y  (slopes: Δy per SD predictor; σ and rfx: y units)'
         if x_scale == 'standardized'
-        else 'original  (Δy per unit of predictor)'
+        else 'original  (slopes: Δy per unit predictor; σ and rfx: y units)'
     )
     parts.append(f'Scale:    {scale_label}')
     prior_lines = (
-        _buildPriorLines(ffx_names, srfx_names, prior_params, batch_index)
+        _buildPriorLines(
+            ffx_names,
+            srfx_names,
+            prior_params,
+            batch_index,
+            scale_info=scale_info,
+            x_scale=x_scale,
+        )
         if prior_params is not None
         else []
     )
