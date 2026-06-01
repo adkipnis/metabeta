@@ -1154,6 +1154,7 @@ class Router:
             'Random Effects:',
             scale_note,
             tabulate(rows, headers=headers, floatfmt=floatfmt, tablefmt=fmt),
+            '',
             '   '.join(sd_ratio_parts),
         ]
         return '\n'.join(parts)
