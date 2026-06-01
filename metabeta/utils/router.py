@@ -73,6 +73,53 @@ class FormulaSpec:
     intercept: bool = True
 
 
+@dataclass
+class ScaleInfo:
+    """Scale metadata for back-transforming standardized coefficient samples.
+
+    Produced by the router when a fitted DataPreprocessor is used.  Stored on
+    RouterResult so that display and plot functions can opt into original-X units.
+
+    After _rescaleProposal the proposal stores:
+      ffx[0] (intercept): sd_y * alpha_z     (Δy from y_mean at mean(X))
+      ffx[j] (slope):     sd_y * beta_z_j    (Δy per one SD of predictor j)
+
+    to_original_scale() converts to:
+      ffx[0]: expected y at X=0  (comparable to lme4/statsmodels intercept)
+      ffx[j]: Δy per one unit of predictor j
+    """
+
+    y_mean: float
+    y_std: float
+    x_means: np.ndarray  # shape (d,) — 0.0 for intercept column
+    x_stds: np.ndarray  # shape (d,) — 1.0 for intercept and dummy columns
+    param_names: list[str]
+    has_intercept: bool = True
+
+    def to_original_scale(self, ffx: torch.Tensor) -> torch.Tensor:
+        """Back-transform ffx (..., d_padded) to original y/X units.
+
+        Only the first len(x_stds) columns are transformed; any padding columns
+        beyond that are returned unchanged.
+        """
+        d = len(self.x_stds)
+        if d == 0:
+            return ffx
+        x_stds_t = torch.tensor(self.x_stds, dtype=ffx.dtype, device=ffx.device)
+        x_means_t = torch.tensor(self.x_means, dtype=ffx.dtype, device=ffx.device)
+        active = ffx[..., :d]
+        slopes_orig = active / x_stds_t
+        if self.has_intercept:
+            correction = (slopes_orig * x_means_t).sum(dim=-1, keepdim=True)
+            intercept_orig = slopes_orig[..., :1] + self.y_mean - correction
+            active_orig = torch.cat([intercept_orig, slopes_orig[..., 1:]], dim=-1)
+        else:
+            active_orig = slopes_orig
+        if ffx.shape[-1] > d:
+            return torch.cat([active_orig, ffx[..., d:]], dim=-1)
+        return active_orig
+
+
 def routeValue(entry: Mapping[str, Any], key: str) -> Any:
     routing = entry.get('routing', {})
     if key in routing:
@@ -555,9 +602,23 @@ def attachPreprocessorMetadata(
     data: dict[str, np.ndarray],
     preprocessor: Any,
 ) -> dict[str, np.ndarray]:
+    data = dict(data)
     if 'sd_y' not in data and hasattr(preprocessor, '_y_std'):
-        data = dict(data)
         data['sd_y'] = np.array(float(preprocessor._y_std))
+    if 'y_mean' not in data and hasattr(preprocessor, '_y_mean'):
+        data['y_mean'] = np.array(float(preprocessor._y_mean))
+    if 'x_means' not in data and hasattr(preprocessor, '_num_transformer'):
+        n_num = len(getattr(preprocessor, '_numeric_cols', []))
+        n_dum = max(0, len(data.get('columns', [])) - n_num)
+        nt = preprocessor._num_transformer
+        if nt is not None and nt.mean_ is not None:
+            x_means_num = nt.mean_.copy()
+            x_stds_num = nt.std_.copy()
+        else:
+            x_means_num = np.zeros(n_num)
+            x_stds_num = np.ones(n_num)
+        data['x_means'] = np.concatenate([x_means_num, np.zeros(n_dum)])
+        data['x_stds'] = np.concatenate([x_stds_num, np.ones(n_dum)])
     return data
 
 

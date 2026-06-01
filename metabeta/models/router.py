@@ -22,6 +22,7 @@ from metabeta.utils.dataloader import Dataloader, collateGrouped, toDevice
 from metabeta.utils.evaluation import Proposal
 from metabeta.utils.router import (
     JOINT_CHECKPOINT_VERSION,
+    ScaleInfo,
     attachPreprocessorMetadata,
     buildRandomDesign,
     defaultRandomTerms,
@@ -76,6 +77,7 @@ class RouterResult:
     priors_str: str | None = None
     group_names: list[str] | None = None
     prior_params: dict[str, np.ndarray] | None = None
+    scale_info: 'ScaleInfo | None' = None
 
 
 class Router:
@@ -240,6 +242,7 @@ class Router:
         """Sample from the posterior, routing each dataset to the smallest compatible submodel."""
 
         self._param_names: dict[str, list[str]] | None = None
+        self._scale_info: 'ScaleInfo | None' = None
         self._group_labels: list[str] | None = None
         batch = self.prepareData(data, **prepare_kwargs)
         if not isinstance(batch, dict) or not isCollatedBatch(batch):
@@ -268,6 +271,7 @@ class Router:
             priors_str=_priorStr(prepare_kwargs.get('priors')),
             group_names=self._group_labels,
             prior_params=prior_params or None,
+            scale_info=self._scale_info,
         )
 
     @torch.no_grad()
@@ -537,6 +541,33 @@ class Router:
         Z = buildRandomDesign(X_pre, columns, random_terms)
         random_names = self._randomNames(random_terms, columns)
         self._param_names = {'ffx': list(fixed_names), 'sigma_rfx': list(random_names)}
+
+        # Build scale info for optional back-transformation to original X units
+        x_means_meta = np.asarray(
+            preprocessed.get('x_means', np.zeros(X_pre.shape[1])), dtype=float
+        )
+        x_stds_meta = np.asarray(preprocessed.get('x_stds', np.ones(X_pre.shape[1])), dtype=float)
+        y_mean_meta = float(np.asarray(preprocessed.get('y_mean', 0.0)).item())
+        y_std_meta = float(np.asarray(preprocessed.get('sd_y', 1.0)).item())
+
+        si_means = (
+            [0.0] + [float(x_means_meta[idx]) for idx in fixed_indices]
+            if spec.intercept
+            else [float(x_means_meta[idx]) for idx in fixed_indices]
+        )
+        si_stds = (
+            [1.0] + [float(x_stds_meta[idx]) for idx in fixed_indices]
+            if spec.intercept
+            else [float(x_stds_meta[idx]) for idx in fixed_indices]
+        )
+        self._scale_info = ScaleInfo(
+            y_mean=y_mean_meta,
+            y_std=y_std_meta,
+            x_means=np.array(si_means),
+            x_stds=np.array(si_stds),
+            param_names=list(fixed_names),
+            has_intercept=spec.intercept,
+        )
 
         actual_d = int(X.shape[-1])
         actual_q = int(Z.shape[-1])
@@ -914,6 +945,7 @@ class Router:
         *,
         ci: float = 0.95,
         batch_index: int = 0,
+        x_scale: str = 'standardized',
     ) -> str:
         """Return a formatted posterior summary table for a sampled RouterResult.
 
@@ -936,6 +968,8 @@ class Router:
             pareto_k=d.get('pareto_k'),
             ci=ci,
             batch_index=batch_index,
+            scale_info=result.scale_info,
+            x_scale=x_scale,
         )
 
     def rfxTable(
@@ -1054,6 +1088,8 @@ def posteriorTable(
     pareto_k: float | None = None,
     ci: float = 0.95,
     batch_index: int = 0,
+    scale_info: 'ScaleInfo | None' = None,
+    x_scale: str = 'standardized',
 ) -> str:
     """Format a posterior summary table in the style of lme4 summaries.
 
@@ -1068,7 +1104,20 @@ def posteriorTable(
     lo_pct = f'{alpha * 100:g}%'
     hi_pct = f'{(1 - alpha) * 100:g}%'
 
-    ffx = proposal.ffx[batch_index].float()   # (S, d)
+    ffx = proposal.ffx[batch_index].float()  # (S, d)
+    if x_scale == 'original':
+        if scale_info is None:
+            import warnings
+
+            warnings.warn(
+                'x_scale="original" requires scale_info; falling back to standardized. '
+                'Call router.sample() with fit_preprocessor=True to enable back-transformation.',
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            x_scale = 'standardized'
+        else:
+            ffx = scale_info.to_original_scale(ffx)
     srfx = proposal.sigma_rfx[batch_index].float()  # (S, q)
     S = ffx.shape[0]
 
@@ -1103,6 +1152,12 @@ def posteriorTable(
     parts: list[str] = []
     if formula:
         parts.append(f'Formula:  {formula}')
+    scale_label = (
+        'standardized X, original y  (Δy per SD of predictor)'
+        if x_scale == 'standardized'
+        else 'original  (Δy per unit of predictor)'
+    )
+    parts.append(f'Scale:    {scale_label}')
     prior_lines = (
         _buildPriorLines(ffx_names, srfx_names, prior_params, batch_index)
         if prior_params is not None
