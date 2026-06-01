@@ -251,8 +251,13 @@ class Router:
         diags = self._computeDiagnostics(proposal, batch) if diagnostics else None
         self._rescaleProposal(proposal, batch)
         prior_params: dict[str, np.ndarray] = {
-            key: batch[key].float().cpu().numpy() for key in ('tau_ffx', 'nu_ffx') if key in batch
+            key: batch[key].float().cpu().numpy()
+            for key in ('tau_ffx', 'nu_ffx', 'tau_rfx', 'eta_rfx')
+            if key in batch
         }
+        for key in ('family_ffx', 'family_sigma_rfx'):
+            if key in batch:
+                prior_params[key] = batch[key].long().cpu().numpy()
         return RouterResult(
             proposal=proposal,
             routes=routes,
@@ -987,6 +992,55 @@ def _priorStr(priors: Any) -> str:
     return 'custom'
 
 
+def _buildPriorLines(
+    ffx_names: list[str],
+    srfx_names: list[str],
+    prior_params: dict[str, np.ndarray],
+    batch_index: int,
+) -> list[str]:
+    """Build per-parameter prior description lines for the summary header."""
+    from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
+
+    lines: list[str] = []
+    n_ffx, n_rfx = len(ffx_names), len(srfx_names)
+
+    if 'tau_ffx' in prior_params and 'nu_ffx' in prior_params:
+        tau = prior_params['tau_ffx'][batch_index, :n_ffx]
+        mu = prior_params['nu_ffx'][batch_index, :n_ffx]
+        fam_id = int(prior_params['family_ffx'][batch_index]) if 'family_ffx' in prior_params else 0
+        fam = FFX_FAMILIES[fam_id] if fam_id < len(FFX_FAMILIES) else 'normal'
+        for j, name in enumerate(ffx_names):
+            mu_j, tau_j = float(mu[j]), float(tau[j])
+            loc = '0' if mu_j == 0 else f'{mu_j:.2g}'
+            if fam == 'normal':
+                lines.append(f'  {name} ~ N({loc}, {tau_j:.2g})')
+            else:
+                lines.append(f'  {name} ~ t₅({loc}, {tau_j:.2g})')
+
+    if 'tau_rfx' in prior_params and n_rfx > 0:
+        tau_r = prior_params['tau_rfx'][batch_index, :n_rfx]
+        fam_id = (
+            int(prior_params['family_sigma_rfx'][batch_index])
+            if 'family_sigma_rfx' in prior_params
+            else 0
+        )
+        fam = SIGMA_FAMILIES[fam_id] if fam_id < len(SIGMA_FAMILIES) else 'halfnormal'
+        for j, name in enumerate(srfx_names):
+            tau_j = float(tau_r[j])
+            if fam == 'halfnormal':
+                lines.append(f'  σ_{name} ~ HN({tau_j:.2g})')
+            elif fam == 'halfstudent':
+                lines.append(f'  σ_{name} ~ HT₅({tau_j:.2g})')
+            else:
+                lines.append(f'  σ_{name} ~ Exp({tau_j:.2g})')
+        if 'eta_rfx' in prior_params and n_rfx > 1:
+            eta = float(prior_params['eta_rfx'][batch_index])
+            if eta > 0:
+                lines.append(f'  Corr ~ LKJ({eta:.2g})')
+
+    return lines
+
+
 def posteriorTable(
     proposal: 'Proposal',
     param_names: dict[str, list[str]] | None = None,
@@ -1049,7 +1103,15 @@ def posteriorTable(
     parts: list[str] = []
     if formula:
         parts.append(f'Formula:  {formula}')
-    if priors_str:
+    prior_lines = (
+        _buildPriorLines(ffx_names, srfx_names, prior_params, batch_index)
+        if prior_params is not None
+        else []
+    )
+    if prior_lines:
+        parts.append('Priors:')
+        parts.extend(prior_lines)
+    elif priors_str:
         parts.append(f'Priors:   {priors_str}')
     if parts:
         parts.append('')
