@@ -81,6 +81,9 @@ def plotParameters(
     s, d = x.shape
     g = sns.PairGrid(pd.DataFrame(x), height=2.5)
 
+    # first column index that is a sigma parameter (strictly non-negative)
+    _d_sigma = d_active if d_active is not None else proposal.d
+
     # setup names
     _names = []
     if names is not None:
@@ -92,39 +95,30 @@ def plotParameters(
         name_dict.pop('rfx')
         _names = np.concat(list(name_dict.values()))
 
-    # marginal posterior
-    if kde:
-        g.map_diag(
-            func=_kdeplot,
-            color=color,
-            alpha=alpha**2,
-            fill=True,
-            common_norm=False,
-        )
-    else:
-        g.map_diag(
-            func=_histplot,
-            color=color,
-            alpha=alpha,
-            kde=False,
-            fill=True,
-            stat='density',
-            common_norm=False,
-        )
+    # marginal posterior — loop instead of map_diag to allow per-column KDE clipping
+    for i in range(d):
+        kw: dict = dict(color=color, common_norm=False)
+        if i >= _d_sigma:
+            kw['clip'] = (0, None)
+        if kde:
+            _kdeplot_on(g.axes[i, i], x[:, i], alpha=alpha**2, fill=True, **kw)
+        else:
+            ax2 = g.axes[i, i].twinx()
+            sns.histplot(x[:, i], alpha=alpha, kde=False, fill=True, stat='density', ax=ax2, **kw)
+            ax2.spines['right'].set_visible(False)
+            ax2.spines['top'].set_visible(False)
+            ax2.set_ylabel('')
+            ax2.set_yticks([])
+            ax2.set_yticklabels([])
 
     # marginal prior
     if prior is not None:
         x_prior = _active_samples(prior, index)
         for i in range(d):
-            _kdeplot_on(
-                g.axes[i, i],
-                x_prior[:, i],
-                color=prior_color,
-                alpha=0.50,
-                fill=False,
-                common_norm=False,
-                lw=1.5,
-            )
+            kw = dict(color=prior_color, alpha=0.50, fill=False, common_norm=False, lw=1.5)
+            if i >= _d_sigma:
+                kw['clip'] = (0, None)
+            _kdeplot_on(g.axes[i, i], x_prior[:, i], **kw)
 
     # 2d posterior scatter
     alpha_point = 1 / np.log(s)
