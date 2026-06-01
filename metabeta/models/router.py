@@ -256,10 +256,10 @@ class Router:
         self._rescaleProposal(proposal, batch)
         prior_params: dict[str, np.ndarray] = {
             key: batch[key].float().cpu().numpy()
-            for key in ('tau_ffx', 'nu_ffx', 'tau_rfx', 'eta_rfx')
+            for key in ('tau_ffx', 'nu_ffx', 'tau_rfx', 'eta_rfx', 'tau_eps')
             if key in batch
         }
-        for key in ('family_ffx', 'family_sigma_rfx'):
+        for key in ('family_ffx', 'family_sigma_rfx', 'family_sigma_eps'):
             if key in batch:
                 prior_params[key] = batch[key].long().cpu().numpy()
         return RouterResult(
@@ -982,6 +982,11 @@ class Router:
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
         d = result.diagnostics or {}
+        dims = (
+            result.validation[batch_index]['dimensions']
+            if result.validation and batch_index < len(result.validation)
+            else {}
+        )
         return posteriorTable(
             result.proposal,
             result.param_names,
@@ -996,6 +1001,8 @@ class Router:
             batch_index=batch_index,
             scale_info=result.scale_info,
             x_scale=x_scale,
+            n=dims.get('n'),
+            m=dims.get('m'),
         )
 
     def rfxTable(
@@ -1143,6 +1150,21 @@ def _buildPriorLines(
             if eta > 0:
                 lines.append(f'  Corr ~ LKJ({eta:.2g})')
 
+    if 'tau_eps' in prior_params:
+        tau_e = float(np.asarray(prior_params['tau_eps']).ravel()[batch_index]) * y_std
+        fam_id = (
+            int(np.asarray(prior_params['family_sigma_eps']).ravel()[batch_index])
+            if 'family_sigma_eps' in prior_params
+            else 1
+        )
+        fam = SIGMA_FAMILIES[fam_id] if fam_id < len(SIGMA_FAMILIES) else 'halfstudent'
+        if fam == 'halfnormal':
+            lines.append(f'  σ_Residual ~ HN({tau_e:.4g})')
+        elif fam == 'halfstudent':
+            lines.append(f'  σ_Residual ~ HT₅({tau_e:.4g})')
+        else:
+            lines.append(f'  σ_Residual ~ Exp({tau_e:.4g})')
+
     return lines
 
 
@@ -1161,6 +1183,8 @@ def posteriorTable(
     batch_index: int = 0,
     scale_info: 'ScaleInfo | None' = None,
     x_scale: str = 'standardized',
+    n: int | None = None,
+    m: int | None = None,
 ) -> str:
     """Format a posterior summary table in the style of lme4 summaries.
 
@@ -1212,10 +1236,10 @@ def posteriorTable(
     tau_arr = None
     _ffx_prior_var_multiplier = 1.0  # 1.0 for Normal; df/(df-2) for Student-t
     if prior_params is not None and 'tau_ffx' in prior_params and 'nu_ffx' in prior_params:
-        n = len(ffx_names)
-        tau_arr = prior_params['tau_ffx'][batch_index, :n].copy().astype(float)
+        n_ffx_active = len(ffx_names)
+        tau_arr = prior_params['tau_ffx'][batch_index, :n_ffx_active].copy().astype(float)
         if scale_info is not None:
-            for j in range(n):
+            for j in range(n_ffx_active):
                 x_std_j = float(scale_info.x_stds[j]) if j < len(scale_info.x_stds) else 1.0
                 denom = x_std_j if x_scale == 'original' else 1.0
                 tau_arr[j] *= scale_info.y_std / max(denom, 1e-12)
@@ -1336,7 +1360,12 @@ def posteriorTable(
             ]
 
     # ── footer ────────────────────────────────────────────────────────────────
-    footer_parts = [f'n_samples = {S}']
+    footer_parts = []
+    if n is not None:
+        footer_parts.append(f'n = {n}')
+    if m is not None:
+        footer_parts.append(f'm = {m}')
+    footer_parts.append(f'draws = {S}')
     if fit is not None:
         footer_parts.append(f'{fit_label} = {fit:.3f}')
     if loo_nll is not None:
