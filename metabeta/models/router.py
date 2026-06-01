@@ -1065,8 +1065,12 @@ def _buildPriorLines(
     lines: list[str] = []
     n_ffx, n_rfx = len(ffx_names), len(srfx_names)
 
-    y_std = scale_info.y_std if scale_info is not None else 1.0
-    y_mean = scale_info.y_mean if scale_info is not None else 0.0
+    # In default mode priors stay in the fully standardized (★) space where the
+    # model operates.  In original mode they are rescaled to match the original
+    # y/X units shown for the estimates.
+    rescale = x_scale == 'original' and scale_info is not None
+    y_std = scale_info.y_std if rescale else 1.0
+    y_mean = scale_info.y_mean if rescale else 0.0
 
     if 'tau_ffx' in prior_params and 'nu_ffx' in prior_params:
         tau = prior_params['tau_ffx'][batch_index, :n_ffx]
@@ -1074,16 +1078,14 @@ def _buildPriorLines(
         fam_id = int(prior_params['family_ffx'][batch_index]) if 'family_ffx' in prior_params else 0
         fam = FFX_FAMILIES[fam_id] if fam_id < len(FFX_FAMILIES) else 'normal'
         for j, name in enumerate(ffx_names):
-            # Rescale τ from standardized space to displayed space
             tau_j = float(tau[j]) * y_std
             mu_j = float(mu[j]) * y_std
-            if scale_info is not None and x_scale == 'original' and j < len(scale_info.x_stds):
+            if rescale and j < len(scale_info.x_stds):
                 x_std_j = float(scale_info.x_stds[j])
                 if x_std_j > 0:
                     tau_j /= x_std_j
-                # For the intercept (j=0, x_stds[0]=1), the effective prior
-                # location in original space is μ_y when ν★=0 and predictors
-                # are mean-zero (the centring correction exactly equals μ_y).
+                # Intercept prior location shifts to μ_y in original space when
+                # ν★=0 and predictors are mean-zero after standardization.
                 if scale_info.has_intercept and j == 0:
                     mu_j += y_mean
 
@@ -1102,7 +1104,7 @@ def _buildPriorLines(
         )
         fam = SIGMA_FAMILIES[fam_id] if fam_id < len(SIGMA_FAMILIES) else 'halfnormal'
         for j, name in enumerate(srfx_names):
-            # σ_rfx is always in original y units → always rescale τ by σ_y
+            # σ_rfx is always displayed in y units; rescale τ_rfx in original mode
             tau_j = float(tau_r[j]) * y_std
             if fam == 'halfnormal':
                 lines.append(f'  σ_{name} ~ HN({tau_j:.4g})')
@@ -1228,11 +1230,12 @@ def posteriorTable(
         if prior_params is not None
         else []
     )
+    prior_header = 'Priors:' if x_scale == 'original' else 'Priors (★):'
     if prior_lines:
-        parts.append('Priors:')
+        parts.append(prior_header)
         parts.extend(prior_lines)
     elif priors_str:
-        parts.append(f'Priors:   {priors_str}')
+        parts.append(f'{prior_header}   {priors_str}')
     if parts:
         parts.append('')
 
@@ -1275,7 +1278,7 @@ def posteriorTable(
         )
 
     parts += [
-        'Standard Deviations:',
+        'Standard Deviations (y units):',
         tabulate(
             srfx_rows,
             headers=['', 'Mean', 'SD', lo_pct, hi_pct],
