@@ -47,6 +47,7 @@ def plotParameters(
     truth: np.ndarray | None = None,
     d_active: int | None = None,
     q_active: int | None = None,
+    height: float = 2.5,
 ):
     """pair grid of parameter samples for a single dataset at batch {index}
     - histograms / KDEs along diagonal
@@ -79,7 +80,7 @@ def plotParameters(
     # init
     x = _active_samples(proposal, index)
     s, d = x.shape
-    g = sns.PairGrid(pd.DataFrame(x), height=2.5)
+    g = sns.PairGrid(pd.DataFrame(x), height=height)
 
     # first column index that is a sigma parameter (strictly non-negative)
     _d_sigma = d_active if d_active is not None else proposal.d
