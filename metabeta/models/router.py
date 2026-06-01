@@ -945,14 +945,16 @@ def posteriorTable(
         srfx_table,
     ]
 
-    # Posterior mean correlation matrix (only when q > 1)
-    if q > 1:
+    # Posterior mean correlation matrix (only when more than one active rfx)
+    n_rfx = len(srfx_names)
+    if n_rfx > 1:
         corr = proposal.corr_rfx
         if corr is not None:
             corr_b = corr[batch_index].float()  # (S, q, q) or (q, q)
             corr_mean = corr_b.mean(0) if corr_b.dim() == 3 else corr_b  # (q, q)
             corr_rows = [
-                [srfx_names[j]] + [corr_mean[j, k].item() for k in range(q)] for j in range(q)
+                [srfx_names[j]] + [corr_mean[j, k].item() for k in range(n_rfx)]
+                for j in range(n_rfx)
             ]
             corr_table = tabulate(
                 corr_rows,
