@@ -5,6 +5,21 @@ import seaborn as sns
 
 from metabeta.utils.evaluation import Proposal, getAllNames
 
+_GREEK_LATEX = {'σ': r'\sigma', 'ε': r'\varepsilon', 'μ': r'\mu', 'τ': r'\tau'}
+
+
+def _formatName(name: str) -> str:
+    # 'σ_Intercept' -> r'$\sigma_{\mathrm{Intercept}}$',  'σ_ε' -> r'$\sigma_\varepsilon$'
+    if '_' not in name:
+        return name
+    base, sub = name.split('_', 1)
+    for ch, latex in _GREEK_LATEX.items():
+        base = base.replace(ch, latex)
+        sub = sub.replace(ch, latex)
+    if sub.startswith('\\'):  # single Greek letter — no \mathrm wrapper
+        return rf'${base}_{sub}$'
+    return rf'${base}_{{\mathrm{{{sub}}}}}$'
+
 
 def _kdeplot_on(ax, x, **kwargs):
     """KDE overlay on a given axis using a detached twin y-axis."""
@@ -17,13 +32,18 @@ def _kdeplot_on(ax, x, **kwargs):
     ax2.set_yticklabels([])
 
 
-def _kdeplot(x, **kwargs):
-    # sns kdeplot but with detached axes
-    _kdeplot_on(plt.gca(), x, **kwargs)
+def _prior_pdf_on(ax, x_grid, pdf, **kwargs):
+    """Plot an analytical prior PDF on a detached twin y-axis."""
+    ax2 = ax.twinx()
+    ax2.plot(x_grid, pdf, **kwargs)
+    ax2.spines['right'].set_visible(False)
+    ax2.spines['top'].set_visible(False)
+    ax2.set_ylabel('')
+    ax2.set_yticks([])
+    ax2.set_yticklabels([])
 
 
 def _histplot(x, **kwargs):
-    # sns histplot but with detached axes
     ax2 = plt.gca().twinx()
     sns.histplot(x, **kwargs, ax=ax2)
     plt.gca().spines['right'].set_visible(False)
@@ -43,22 +63,18 @@ def plotParameters(
     alpha: float = 0.75,
     title: str = '',
     kde: bool = True,
-    prior: Proposal | None = None,
+    prior_pdfs: list[tuple[np.ndarray, np.ndarray]] | None = None,
     truth: np.ndarray | None = None,
     d_active: int | None = None,
     q_active: int | None = None,
     height: float = 2.5,
 ):
-    """pair grid of parameter samples for a single dataset at batch {index}
-    - histograms / KDEs along diagonal
-    - scatter in the upper triangular
-    - KDE contours in the lower triangular
+    """Pair-grid of parameter samples for a single dataset at batch {index}.
 
-    If prior is given, overlays prior marginal KDEs on the diagonal (independent
-    twin y-axis, non-intrusive) and light unfilled prior contours on the lower
-    triangle.
-    If truth is given (1-D array of length d), draws a vertical line on each
-    diagonal cell and an x marker on each off-diagonal cell.
+    - Diagonal: marginal posterior KDE/histogram, with analytical prior PDF overlaid if
+      prior_pdfs is given (one (x_grid, density) pair per parameter, in display order).
+    - Upper triangle: posterior scatter.
+    - Lower triangle: posterior density contours.
 
     d_active and q_active trim padded proposals to the active FFX and RFX dims.
     samples_g layout: ffx[0:proposal.d] | sigma_rfx[proposal.d:proposal.d+proposal.q] | sigma_eps
@@ -86,15 +102,15 @@ def plotParameters(
     _d_sigma = d_active if d_active is not None else proposal.d
 
     # setup names
-    _names = []
+    _names: list[str]
     if names is not None:
-        _names = names
+        _names = [_formatName(n) for n in names]
     else:
         _d_n = d_active if d_active is not None else proposal.d
         _q_n = q_active if q_active is not None else proposal.q
         name_dict = getAllNames(_d_n, _q_n)
         name_dict.pop('rfx')
-        _names = np.concat(list(name_dict.values()))
+        _names = [_formatName(n) for n in np.concat(list(name_dict.values()))]
 
     # marginal posterior — loop instead of map_diag to allow per-column KDE clipping
     for i in range(d):
@@ -112,14 +128,13 @@ def plotParameters(
             ax2.set_yticks([])
             ax2.set_yticklabels([])
 
-    # marginal prior
-    if prior is not None:
-        x_prior = _active_samples(prior, index)
-        for i in range(d):
-            kw = dict(color=prior_color, alpha=0.50, fill=False, common_norm=False, lw=1.5)
-            if i >= _d_sigma:
-                kw['clip'] = (0, None)
-            _kdeplot_on(g.axes[i, i], x_prior[:, i], **kw)
+    # marginal prior — analytical PDF line
+    if prior_pdfs is not None:
+        for i, (x_grid, pdf) in enumerate(prior_pdfs[:d]):
+            _prior_pdf_on(
+                g.axes[i, i], x_grid, pdf,
+                color=prior_color, lw=1.5, alpha=0.6,
+            )
 
     # 2d posterior scatter
     alpha_point = 1 / np.log(s)
@@ -127,26 +142,6 @@ def plotParameters(
 
     # 2d posterior KDE contours
     g.map_lower(sns.kdeplot, color=color, alpha=alpha, fill=True, warn_singular=False)
-
-    # 2d prior KDE contours
-    if prior is not None:
-        x_prior = _active_samples(prior, index)
-        x_prior_df = pd.DataFrame(x_prior)
-        for i in range(d):
-            for j in range(i):
-                clip_x = (0, None) if j >= _d_sigma else (None, None)
-                clip_y = (0, None) if i >= _d_sigma else (None, None)
-                sns.kdeplot(
-                    data=x_prior_df,
-                    x=j,
-                    y=i,
-                    ax=g.axes[i, j],
-                    color=prior_color,
-                    fill=False,
-                    alpha=0.30,
-                    warn_singular=False,
-                    clip=(clip_x, clip_y),
-                )
 
     # ground truth: vertical line on diagonal, x marker on off-diagonal
     if truth is not None:

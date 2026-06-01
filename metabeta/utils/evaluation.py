@@ -638,6 +638,78 @@ def makePriorProposal(result: object, n_samples: int = 1000) -> Proposal:
     )
 
 
+def makePriorPDFs(
+    result: object, n_grid: int = 500
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Compute analytical prior PDFs in original-scale units, one per global parameter.
+
+    Returns (x_grid, density) pairs ordered as: ffx[0..d-1], sigma_rfx[0..q-1], sigma_eps.
+    The transform to original scale is applied analytically so the curves are exact
+    (no sampling noise), matching the distributions described in posteriorSummary.
+    """
+    from scipy.stats import norm, halfnorm, t as student_t
+    from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
+
+    pp, si = result.prior_params, result.scale_info  # type: ignore[attr-defined]
+    sd_y = float(si.y_std)
+    d = len(result.param_names['ffx'])  # type: ignore[attr-defined]
+    q = len(result.param_names['sigma_rfx'])  # type: ignore[attr-defined]
+
+    tau_f = np.asarray(pp['tau_ffx'][0, :d], dtype=float) * sd_y
+    nu_f = np.asarray(pp['nu_ffx'][0, :d], dtype=float) * sd_y
+    tau_r = np.asarray(pp['tau_rfx'][0, :q], dtype=float) * sd_y
+    tau_e = float(np.asarray(pp['tau_eps']).ravel()[0]) * sd_y
+
+    fam_ffx_id = int(pp['family_ffx'][0]) if 'family_ffx' in pp else 0
+    fam_rfx_id = int(pp['family_sigma_rfx'][0]) if 'family_sigma_rfx' in pp else 0
+    fam_eps_id = int(np.asarray(pp['family_sigma_eps']).ravel()[0]) if 'family_sigma_eps' in pp else 0
+    fam_ffx = FFX_FAMILIES[fam_ffx_id] if fam_ffx_id < len(FFX_FAMILIES) else 'normal'
+    fam_rfx = SIGMA_FAMILIES[fam_rfx_id] if fam_rfx_id < len(SIGMA_FAMILIES) else 'halfnormal'
+    fam_eps = SIGMA_FAMILIES[fam_eps_id] if fam_eps_id < len(SIGMA_FAMILIES) else 'halfstudent'
+
+    x_stds = np.asarray(si.x_stds, dtype=float)
+    x_means = np.asarray(si.x_means, dtype=float)
+
+    def _sym_pdf(mu: float, sigma: float, fam: str) -> tuple[np.ndarray, np.ndarray]:
+        span = max(sigma * 6, 1e-9)
+        xg = np.linspace(mu - span, mu + span, n_grid)
+        if fam == 'normal':
+            return xg, norm.pdf(xg, loc=mu, scale=sigma)
+        return xg, student_t.pdf(xg, df=STUDENT_DF, loc=mu, scale=sigma)
+
+    def _half_pdf(tau: float, fam: str) -> tuple[np.ndarray, np.ndarray]:
+        span = max(tau * 6, 1e-9)
+        xg = np.linspace(0.0, span, n_grid)
+        if fam == 'halfnormal':
+            return xg, halfnorm.pdf(xg, scale=tau)
+        return xg, np.where(xg >= 0, 2 * student_t.pdf(xg, df=STUDENT_DF, loc=0, scale=tau), 0.0)
+
+    pdfs: list[tuple[np.ndarray, np.ndarray]] = []
+
+    # FFX: back-transform to original scale analytically.
+    # After to_original_scale (linear map):
+    #   slope_orig[j] = ffx[j] / x_stds[j]   for j ≥ 1
+    #   intercept_orig = ffx[0] + y_mean − Σ_{j≥1}(ffx[j] / x_stds[j] * x_means[j])
+    # → slope_orig[j] ~ N(nu_f[j]/x_stds[j], tau_f[j]/x_stds[j])
+    # → intercept_orig is Gaussian with mean/var computed below
+    mu_int = float(nu_f[0] + si.y_mean - sum(nu_f[j] / x_stds[j] * x_means[j] for j in range(1, d)))
+    var_int = float(tau_f[0] ** 2 + sum((tau_f[j] * x_means[j] / x_stds[j]) ** 2 for j in range(1, d)))
+    pdfs.append(_sym_pdf(mu_int, float(np.sqrt(var_int)), fam_ffx))
+
+    for j in range(1, d):
+        pdfs.append(_sym_pdf(float(nu_f[j] / x_stds[j]), float(tau_f[j] / x_stds[j]), fam_ffx))
+
+    # sigma_rfx
+    for j in range(q):
+        pdfs.append(_half_pdf(float(tau_r[j]), fam_rfx))
+
+    # sigma_eps
+    if result.proposal.has_sigma_eps:  # type: ignore[attr-defined]
+        pdfs.append(_half_pdf(tau_e, fam_eps))
+
+    return pdfs
+
+
 def dictMean(td: dict[str, torch.Tensor]) -> float:
     values = list(td.values())
     if not values:

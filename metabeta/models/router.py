@@ -982,7 +982,7 @@ class Router:
         overlays prior marginal KDEs.
         """
         from metabeta.plotting.parameters import plotParameters as _plotParameters
-        from metabeta.utils.evaluation import Proposal, makePriorProposal
+        from metabeta.utils.evaluation import Proposal, makePriorPDFs
 
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
@@ -1017,13 +1017,13 @@ class Router:
             + (['σ_ε'] if has_eps else [])
         )
 
-        prior = (
-            makePriorProposal(result) if with_prior and result.prior_params is not None else None
+        prior_pdfs = (
+            makePriorPDFs(result) if with_prior and result.prior_params is not None else None
         )
 
         return _plotParameters(
             post_orig,
-            prior=prior,
+            prior_pdfs=prior_pdfs,
             names=names,
             d_active=n_ffx,
             q_active=n_srfx,
