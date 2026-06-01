@@ -79,6 +79,7 @@ class RouterResult:
     prior_params: dict[str, np.ndarray] | None = None
     scale_info: 'ScaleInfo | None' = None
     batch: 'dict[str, torch.Tensor] | None' = None
+    ns: np.ndarray | None = None
 
 
 class Router:
@@ -262,6 +263,7 @@ class Router:
         for key in ('family_ffx', 'family_sigma_rfx', 'family_sigma_eps'):
             if key in batch:
                 prior_params[key] = batch[key].long().cpu().numpy()
+        ns_arr = batch['ns'].cpu().numpy() if 'ns' in batch else None
         return RouterResult(
             proposal=proposal,
             routes=routes,
@@ -274,6 +276,7 @@ class Router:
             prior_params=prior_params or None,
             scale_info=self._scale_info,
             batch=batch if diagnostics else None,
+            ns=ns_arr,
         )
 
     @torch.no_grad()
@@ -1005,7 +1008,7 @@ class Router:
             m=dims.get('m'),
         )
 
-    def rfxTable(
+    def rfxSummary(
         self,
         result: RouterResult,
         *,
@@ -1021,37 +1024,71 @@ class Router:
         hi_pct = f'{(1 - alpha) * 100:g}%'
 
         names = result.param_names or {}
-        rfx = result.proposal.rfx[batch_index].float()  # (m, S, q)
+        rfx = result.proposal.rfx[batch_index].float()          # (m, S, q)
+        sigma_rfx = result.proposal.sigma_rfx[batch_index].float()  # (S, q)
         m, _, q_model = rfx.shape
         srfx_names = names.get('sigma_rfx') or [f'rfx_{i}' for i in range(q_model)]
         n_rfx = len(srfx_names)
         g_names = result.group_names or [str(i) for i in range(m)]
 
+        # per-group observation counts from the stored ns array
+        ns_row: list[int | str] | None = None
+        if result.ns is not None:
+            ns_batch = result.ns[batch_index]  # (max_m,)
+            ns_row = [int(ns_batch[gi]) for gi in range(m)]
+
+        # posterior mean σ_rfx per component, used for z-scores
+        sigma_rfx_mean = sigma_rfx.mean(dim=0)  # (q,)
+
         headers = ['Group']
+        if ns_row is not None:
+            headers.append('n')
         for name in srfx_names:
-            headers += [f'{name} Mean', f'{name} {lo_pct}', f'{name} {hi_pct}']
+            headers += [f'{name} Mean', f'{name} {lo_pct}', f'{name} {hi_pct}', f'{name} z']
 
         rows = []
         for gi in range(m):
             row: list[Any] = [g_names[gi] if gi < len(g_names) else str(gi)]
+            if ns_row is not None:
+                row.append(ns_row[gi])
             for qi in range(n_rfx):
                 col = rfx[gi, :, qi]
+                mean_val = col.mean().item()
+                z = mean_val / sigma_rfx_mean[qi].item() if sigma_rfx_mean[qi].item() != 0 else float('nan')
                 row += [
-                    col.mean().item(),
+                    mean_val,
                     col.quantile(alpha).item(),
                     col.quantile(1 - alpha).item(),
+                    z,
                 ]
             rows.append(row)
 
-        scale_note = f'Scale:    original y units' + (
-            f'  (intercept deviations from population intercept β₀)'
-            if any('intercept' in n.lower() for n in srfx_names)
+        # mixed floatfmt: n column is integer, rest are floats
+        floatfmt: list[str] | str
+        if ns_row is not None:
+            floatfmt = [''] + ['g'] + ['.3f', '.3f', '.3f', '.2f'] * n_rfx
+        else:
+            floatfmt = ['.3f', '.3f', '.3f', '.2f'] * n_rfx
+
+        scale_note = 'Scale:    original y units' + (
+            '  (intercept deviations from population intercept β₀)'
+            if any('intercept' in sn.lower() for sn in srfx_names)
             else ''
         )
+        # empirical SD of posterior rfx means across groups / σ_rfx_mean (should be ≈ 1)
+        rfx_means = rfx[:, :, :].mean(dim=1)  # (m, q) — posterior mean per group per component
+        sd_ratio_parts = []
+        for qi, name in enumerate(srfx_names):
+            emp_sd = rfx_means[:, qi].std().item()
+            est_sd = sigma_rfx_mean[qi].item()
+            ratio = emp_sd / est_sd if est_sd > 0 else float('nan')
+            sd_ratio_parts.append(f'SD ratio ({name}) = {ratio:.2f}')
+
         parts = [
             'Random Effects:',
             scale_note,
-            tabulate(rows, headers=headers, floatfmt='.3f', tablefmt=fmt),
+            tabulate(rows, headers=headers, floatfmt=floatfmt, tablefmt=fmt),
+            '   '.join(sd_ratio_parts),
         ]
         return '\n'.join(parts)
 
@@ -1262,6 +1299,13 @@ def posteriorTable(
     parts: list[str] = []
     if formula:
         parts.append(f'Formula:  {formula}')
+    if n is not None or m is not None:
+        size_parts = []
+        if n is not None:
+            size_parts.append(f'n = {n}')
+        if m is not None:
+            size_parts.append(f'm = {m}')
+        parts.append('   '.join(size_parts))
     scale_label = (
         'standardized X, original y  (slopes: Δy per SD predictor; σ and rfx: y units)'
         if x_scale == 'standardized'
@@ -1360,12 +1404,7 @@ def posteriorTable(
             ]
 
     # ── footer ────────────────────────────────────────────────────────────────
-    footer_parts = []
-    if n is not None:
-        footer_parts.append(f'n = {n}')
-    if m is not None:
-        footer_parts.append(f'm = {m}')
-    footer_parts.append(f'draws = {S}')
+    footer_parts = [f'draws = {S}']
     if fit is not None:
         footer_parts.append(f'{fit_label} = {fit:.3f}')
     if loo_nll is not None:
