@@ -72,6 +72,9 @@ class RouterResult:
     log_probs: dict[str, torch.Tensor] | None = None
     diagnostics: dict[str, Any] | None = None
     param_names: dict[str, list[str]] | None = None
+    formula: str | None = None
+    priors_str: str | None = None
+    group_names: list[str] | None = None
 
 
 class Router:
@@ -236,6 +239,7 @@ class Router:
         """Sample from the posterior, routing each dataset to the smallest compatible submodel."""
 
         self._param_names: dict[str, list[str]] | None = None
+        self._group_labels: list[str] | None = None
         batch = self.prepareData(data, **prepare_kwargs)
         if not isinstance(batch, dict) or not isCollatedBatch(batch):
             raise TypeError('sample requires data prepared to batch stage')
@@ -250,6 +254,9 @@ class Router:
             validation=validation,
             diagnostics=diags,
             param_names=self._param_names,
+            formula=prepare_kwargs.get('formula'),
+            priors_str=_priorStr(prepare_kwargs.get('priors')),
+            group_names=self._group_labels,
         )
 
     @torch.no_grad()
@@ -319,11 +326,31 @@ class Router:
     def _computeDiagnostics(
         self, proposal: Proposal, batch: dict[str, torch.Tensor]
     ) -> dict[str, Any]:
-        from metabeta.evaluation.predictive import getPosteriorPredictive, posteriorPredictiveNLL
+        from metabeta.evaluation.predictive import (
+            getPosteriorPredictive,
+            posteriorPredictiveAUC,
+            posteriorPredictiveDeviance,
+            posteriorPredictiveNLL,
+            posteriorPredictiveR2,
+        )
 
         lf = int(batch['likelihood_family'].flatten()[0].item())
         pp = getPosteriorPredictive(proposal, batch, likelihood_family=lf)
         ppc_nll = posteriorPredictiveNLL(pp, batch, mode='mixture')
+
+        b = int(batch['X'].shape[0])
+        if lf == 0:
+            vals = posteriorPredictiveR2(pp, batch, w=proposal.weights)
+            fit = vals.item() if b == 1 else vals.mean().item()
+            fit_label = 'R²' if b == 1 else 'Mean R²'
+        elif lf == 1:
+            vals = posteriorPredictiveAUC(pp, batch, w=proposal.weights)
+            fit = vals.item() if b == 1 else vals.mean().item()
+            fit_label = 'AUC' if b == 1 else 'Mean AUC'
+        else:
+            vals = posteriorPredictiveDeviance(pp, batch, w=proposal.weights)
+            fit = vals.item() if b == 1 else vals.mean().item()
+            fit_label = 'Deviance' if b == 1 else 'Mean Deviance'
 
         def _summarize(samples: torch.Tensor, dim: int) -> dict[str, torch.Tensor]:
             s = samples.float()
@@ -341,7 +368,12 @@ class Router:
         if proposal.has_sigma_eps:
             param_summary['sigma_eps'] = _summarize(proposal.sigma_eps, dim=-1)
 
-        return {'ppc_nll': ppc_nll, 'param_summary': param_summary}
+        return {
+            'ppc_nll': ppc_nll,
+            'param_summary': param_summary,
+            'fit': fit,
+            'fit_label': fit_label,
+        }
 
     def _validateParameterKeys(self, batch: Mapping[str, Any]) -> None:
         missing = [k for k in ('ffx', 'sigma_rfx', 'rfx') if k not in batch]
@@ -411,6 +443,10 @@ class Router:
             df = df.rename(columns={target: 'y'})
 
         group_name = (group_name or spec.group_name or '').lower()
+        if group_name and group_name in df.columns:
+            self._group_labels = sorted(str(v) for v in df[group_name].dropna().unique())
+        else:
+            self._group_labels = None
         if preprocessor is not None:
             prep = (
                 DataPreprocessor.load(preprocessor)
@@ -857,37 +893,75 @@ class Router:
         *,
         ci: float = 0.95,
         batch_index: int = 0,
+        show_rfx: bool = False,
     ) -> str:
-        """Return a formatted posterior summary table for a sampled RouterResult."""
+        """Return a formatted posterior summary table for a sampled RouterResult.
+
+        Pass ``show_rfx=True`` to append a per-group random effects table.
+        Fit metrics (R²/AUC/Deviance) are shown when ``sample()`` was called
+        with ``diagnostics=True``.
+        """
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
-        return posteriorTable(result.proposal, result.param_names, ci=ci, batch_index=batch_index)
+        fit = result.diagnostics.get('fit') if result.diagnostics else None
+        fit_label = result.diagnostics.get('fit_label', 'fit') if result.diagnostics else None
+        return posteriorTable(
+            result.proposal,
+            result.param_names,
+            formula=result.formula,
+            priors_str=result.priors_str,
+            group_names=result.group_names,
+            fit=fit,
+            fit_label=fit_label,
+            ci=ci,
+            batch_index=batch_index,
+            show_rfx=show_rfx,
+        )
+
+
+def _priorStr(priors: Any) -> str:
+    if priors is None:
+        return 'default'
+    if isinstance(priors, str):
+        return priors
+    if isinstance(priors, dict):
+        keys = list(priors.keys())
+        suffix = '…' if len(keys) > 3 else ''
+        return f'custom ({", ".join(keys[:3])}{suffix})'
+    return 'custom'
 
 
 def posteriorTable(
     proposal: 'Proposal',
     param_names: dict[str, list[str]] | None = None,
     *,
+    formula: str | None = None,
+    priors_str: str | None = None,
+    group_names: list[str] | None = None,
+    fit: float | None = None,
+    fit_label: str = 'fit',
     ci: float = 0.95,
     batch_index: int = 0,
+    show_rfx: bool = False,
 ) -> str:
     """Format a posterior summary table in the style of lme4 summaries.
 
-    Columns: posterior mean, SD, credible interval bounds, and P(>0) for fixed effects.
-    Includes random effect SDs, residual SD (if applicable), and posterior mean
-    correlation matrix when q > 1.
+    Sections: Fixed Effects (mean, SD, CI, P(>0)), Standard Deviations (sigma_rfx
+    + residual), and Correlations (posterior mean, when q > 1).  Optionally appends
+    a per-group Random Effects table when ``show_rfx=True``.
     """
+    fmt = 'pipe'
     alpha = (1 - ci) / 2
     lo_pct = f'{alpha * 100:g}%'
     hi_pct = f'{(1 - alpha) * 100:g}%'
 
     ffx = proposal.ffx[batch_index].float()   # (S, d)
     srfx = proposal.sigma_rfx[batch_index].float()  # (S, q)
-    d, q, S = ffx.shape[-1], srfx.shape[-1], ffx.shape[0]
+    d, S = ffx.shape[-1], ffx.shape[0]
 
     names = param_names or {}
     ffx_names = names.get('ffx') or [f'ffx_{i}' for i in range(d)]
-    srfx_names = names.get('sigma_rfx') or [f'rfx_{i}' for i in range(q)]
+    srfx_names = names.get('sigma_rfx') or [f'rfx_{i}' for i in range(srfx.shape[-1])]
 
     def _col_stats(samples: torch.Tensor, j: int) -> tuple[float, float, float, float]:
         col = samples[:, j]
@@ -898,21 +972,34 @@ def posteriorTable(
             col.quantile(1 - alpha).item(),
         )
 
-    # Fixed effects: mean, SD, CI, P(>0)
+    # ── header ────────────────────────────────────────────────────────────────
+    parts: list[str] = []
+    if formula:
+        parts.append(f'Formula:  {formula}')
+    if priors_str:
+        parts.append(f'Priors:   {priors_str}')
+    if parts:
+        parts.append('')
+
+    # ── Fixed Effects ─────────────────────────────────────────────────────────
     ffx_rows = []
     for j, name in enumerate(ffx_names):
         mean, sd, lo, hi = _col_stats(ffx, j)
         p_pos = (ffx[:, j] > 0).float().mean().item()
         ffx_rows.append([name, mean, sd, lo, hi, p_pos])
 
-    ffx_table = tabulate(
-        ffx_rows,
-        headers=['', 'Mean', 'SD', lo_pct, hi_pct, 'P(>0)'],
-        floatfmt='.3f',
-        tablefmt='simple',
-    )
+    parts += [
+        'Fixed Effects:',
+        tabulate(
+            ffx_rows,
+            headers=['', 'Mean', 'SD', lo_pct, hi_pct, 'P(>0)'],
+            floatfmt='.3f',
+            tablefmt=fmt,
+        ),
+        '',
+    ]
 
-    # Random effect SDs (+residual SD)
+    # ── Standard Deviations ───────────────────────────────────────────────────
     srfx_rows = []
     for j, name in enumerate(srfx_names):
         mean, sd, lo, hi = _col_stats(srfx, j)
@@ -930,47 +1017,71 @@ def posteriorTable(
             ]
         )
 
-    srfx_table = tabulate(
-        srfx_rows,
-        headers=['', 'Mean', 'SD', lo_pct, hi_pct],
-        floatfmt='.3f',
-        tablefmt='simple',
-    )
-
-    parts = [
-        'Fixed effects:',
-        ffx_table,
-        '',
-        'Random effect SDs:',
-        srfx_table,
+    parts += [
+        'Standard Deviations:',
+        tabulate(
+            srfx_rows,
+            headers=['', 'Mean', 'SD', lo_pct, hi_pct],
+            floatfmt='.3f',
+            tablefmt=fmt,
+        ),
     ]
 
-    # Posterior mean correlation matrix (only when more than one active rfx)
+    # ── Correlations ──────────────────────────────────────────────────────────
     n_rfx = len(srfx_names)
     if n_rfx > 1:
         corr = proposal.corr_rfx
         if corr is not None:
             corr_b = corr[batch_index].float()  # (S, q, q) or (q, q)
-            corr_mean = corr_b.mean(0) if corr_b.dim() == 3 else corr_b  # (q, q)
+            corr_mean = corr_b.mean(0) if corr_b.dim() == 3 else corr_b
             corr_rows = [
                 [srfx_names[j]] + [corr_mean[j, k].item() for k in range(n_rfx)]
                 for j in range(n_rfx)
             ]
-            corr_table = tabulate(
-                corr_rows,
-                headers=[''] + srfx_names,
-                floatfmt='.3f',
-                tablefmt='simple',
-            )
-            parts += ['', 'Random effect correlations (posterior mean):', corr_table]
+            parts += [
+                '',
+                'Correlations:',
+                tabulate(
+                    corr_rows,
+                    headers=[''] + srfx_names,
+                    floatfmt='.3f',
+                    tablefmt=fmt,
+                ),
+            ]
 
-    # Sample efficiency diagnostic
-    eff = proposal.efficiency
-    if eff is not None:
-        eff_val = float(eff[batch_index].item() if torch.is_tensor(eff) else eff)
-        parts.append(f'\nn_samples={S}  sample_efficiency={eff_val * 100:.1f}%')
-    else:
-        parts.append(f'\nn_samples={S}')
+    # ── footer: fit metric + sample info ──────────────────────────────────────
+    footer_parts = [f'n_samples = {S}']
+    if fit is not None:
+        footer_parts.append(f'{fit_label} = {fit:.3f}')
+    parts += ['', '   '.join(footer_parts)]
+
+    # ── Random Effects (optional) ─────────────────────────────────────────────
+    if show_rfx:
+        rfx = proposal.rfx[batch_index].float()  # (m, S, q)
+        m = rfx.shape[0]
+        g_names = group_names or [str(i) for i in range(m)]
+
+        rfx_headers = ['Group']
+        for name in srfx_names:
+            rfx_headers += [f'{name} Mean', f'{name} {lo_pct}', f'{name} {hi_pct}']
+
+        rfx_rows = []
+        for gi in range(m):
+            row: list[Any] = [g_names[gi] if gi < len(g_names) else str(gi)]
+            for qi in range(n_rfx):
+                col = rfx[gi, :, qi]
+                row += [
+                    col.mean().item(),
+                    col.quantile(alpha).item(),
+                    col.quantile(1 - alpha).item(),
+                ]
+            rfx_rows.append(row)
+
+        parts += [
+            '',
+            'Random Effects:',
+            tabulate(rfx_rows, headers=rfx_headers, floatfmt='.3f', tablefmt=fmt),
+        ]
 
     return '\n'.join(parts)
 
