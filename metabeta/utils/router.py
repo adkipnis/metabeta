@@ -163,11 +163,13 @@ def parseFormula(formula: str | None) -> FormulaSpec:
     group_name = None
     if random_matches:
         random_rhs, group_name = random_matches[0]
-        random_terms = tuple(
-            term.strip().lower()
-            for term in random_rhs.split('+')
-            if term.strip() and term.strip() != '0'
-        )
+        raw_rfx = [t.strip().lower() for t in random_rhs.split('+') if t.strip()]
+        suppress_rfx_intercept = any(t in {'0', '-1'} for t in raw_rfx)
+        explicit_rfx = [t for t in raw_rfx if t not in {'0', '-1', '1'}]
+        if suppress_rfx_intercept:
+            random_terms = tuple(explicit_rfx)
+        else:
+            random_terms = tuple(['1'] + explicit_rfx)
         if len(random_terms) > MAX_ROUTER_Q:
             raise ValueError(f'random-effect dimension q must be <= {MAX_ROUTER_Q}')
         group_name = group_name.strip().lower()

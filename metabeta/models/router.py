@@ -1077,7 +1077,11 @@ class Router:
         ci: float = 0.95,
         batch_index: int = 0,
     ) -> str:
-        """Return a formatted per-group random effects table for a sampled RouterResult."""
+        """Return a formatted per-group random effects summary for a sampled RouterResult.
+
+        Produces one table per random-effect component (intercept, slope, …), each under
+        its own header, rather than a single wide table with repeated column groups.
+        """
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
         fmt = 'github'
@@ -1086,7 +1090,7 @@ class Router:
         hi_pct = f'{(1 - alpha) * 100:g}%'
 
         names = result.param_names or {}
-        rfx = result.proposal.rfx[batch_index].float()          # (m, S, q)
+        rfx = result.proposal.rfx[batch_index].float()              # (m, S, q)
         sigma_rfx = result.proposal.sigma_rfx[batch_index].float()  # (S, q)
         m, _, q_model = rfx.shape
         srfx_names = names.get('sigma_rfx') or [f'rfx_{i}' for i in range(q_model)]
@@ -1094,7 +1098,7 @@ class Router:
         g_names = result.group_names or [str(i) for i in range(m)]
 
         # per-group observation counts from the stored ns array
-        ns_row: list[int | str] | None = None
+        ns_row: list[int] | None = None
         if result.ns is not None:
             ns_batch = result.ns[batch_index]  # (max_m,)
             ns_row = [int(ns_batch[gi]) for gi in range(m)]
@@ -1102,18 +1106,22 @@ class Router:
         # posterior mean σ_rfx per component, used for z-scores
         sigma_rfx_mean = sigma_rfx.mean(dim=0)  # (q,)
 
+        # posterior means per group per component — used for SD ratio
+        rfx_means = rfx.mean(dim=1)  # (m, q)
+
         headers = ['Group']
         if ns_row is not None:
-            headers.append('n')
-        for name in srfx_names:
-            headers += [f'{name} Mean', f'{name} {lo_pct}', f'{name} {hi_pct}', f'{name} z']
+            headers += ['n']
+        headers += ['Mean', lo_pct, hi_pct, 'z']
+        floatfmt: list[str] = ['', 'g', '.3f', '.3f', '.3f', '.2f'] if ns_row is not None \
+            else ['', '.3f', '.3f', '.3f', '.2f']
 
-        rows = []
-        for gi in range(m):
-            row: list[Any] = [g_names[gi] if gi < len(g_names) else str(gi)]
-            if ns_row is not None:
-                row.append(ns_row[gi])
-            for qi in range(n_rfx):
+        parts = ['Random Effects:']
+        parts.append('Scale:    original y units')
+
+        for qi, name in enumerate(srfx_names):
+            rows = []
+            for gi in range(m):
                 col = rfx[gi, :, qi]
                 mean_val = col.mean().item()
                 z = (
@@ -1121,42 +1129,23 @@ class Router:
                     if sigma_rfx_mean[qi].item() != 0
                     else float('nan')
                 )
-                row += [
-                    mean_val,
-                    col.quantile(alpha).item(),
-                    col.quantile(1 - alpha).item(),
-                    z,
-                ]
-            rows.append(row)
+                row: list[Any] = [g_names[gi] if gi < len(g_names) else str(gi)]
+                if ns_row is not None:
+                    row.append(ns_row[gi])
+                row += [mean_val, col.quantile(alpha).item(), col.quantile(1 - alpha).item(), z]
+                rows.append(row)
 
-        # mixed floatfmt: n column is integer, rest are floats
-        floatfmt: list[str] | str
-        if ns_row is not None:
-            floatfmt = [''] + ['g'] + ['.3f', '.3f', '.3f', '.2f'] * n_rfx
-        else:
-            floatfmt = ['.3f', '.3f', '.3f', '.2f'] * n_rfx
-
-        scale_note = 'Scale:    original y units' + (
-            '  (intercept deviations from population intercept β₀)'
-            if any('intercept' in sn.lower() for sn in srfx_names)
-            else ''
-        )
-        # empirical SD of posterior rfx means across groups / σ_rfx_mean (should be ≈ 1)
-        rfx_means = rfx[:, :, :].mean(dim=1)  # (m, q) — posterior mean per group per component
-        sd_ratio_parts = []
-        for qi, name in enumerate(srfx_names):
             emp_sd = rfx_means[:, qi].std().item()
             est_sd = sigma_rfx_mean[qi].item()
             ratio = emp_sd / est_sd if est_sd > 0 else float('nan')
-            sd_ratio_parts.append(f'SD ratio ({name}) = {ratio:.2f}')
 
-        parts = [
-            'Random Effects:',
-            scale_note,
-            tabulate(rows, headers=headers, floatfmt=floatfmt, tablefmt=fmt),
-            '',
-            '   '.join(sd_ratio_parts),
-        ]
+            parts += [
+                '',
+                f'{name}:',
+                tabulate(rows, headers=headers, floatfmt=floatfmt, tablefmt=fmt),
+                f'SD ratio = {ratio:.2f}',
+            ]
+
         return '\n'.join(parts)
 
 
