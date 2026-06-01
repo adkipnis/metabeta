@@ -609,6 +609,35 @@ def subsetProposal(proposal: 'Proposal', mask: np.ndarray) -> 'Proposal':
     return sub
 
 
+def makePriorProposal(result: object, n_samples: int = 1000) -> Proposal:
+    """Sample from the prior distributions stored in result, in original-scale units."""
+    pp, si = result.prior_params, result.scale_info  # type: ignore[attr-defined]
+    sd_y = si.y_std
+    d = len(result.param_names['ffx'])  # type: ignore[attr-defined]
+    q = len(result.param_names['sigma_rfx'])  # type: ignore[attr-defined]
+
+    tau_f = torch.tensor(pp['tau_ffx'][0, :d], dtype=torch.float32) * sd_y
+    nu_f = torch.tensor(pp['nu_ffx'][0, :d], dtype=torch.float32) * sd_y
+    tau_r = torch.tensor(pp['tau_rfx'][0, :q], dtype=torch.float32) * sd_y
+
+    ffx = torch.distributions.Normal(nu_f, tau_f).sample((n_samples,))
+    srfx = torch.distributions.HalfNormal(tau_r).sample((n_samples,))
+    seps = torch.distributions.HalfNormal(torch.tensor([2.5 * sd_y])).sample((n_samples,))
+
+    ffx_orig = si.to_original_scale(ffx)
+    samples_g = torch.cat([ffx_orig, srfx, seps], dim=-1).unsqueeze(0)  # (1, S, d+q+1)
+    return Proposal(
+        proposed={
+            'global': {'samples': samples_g, 'log_prob': torch.zeros(1, n_samples)},
+            'local': {
+                'samples': torch.zeros(1, 1, n_samples, q),
+                'log_prob': torch.zeros(1, 1, n_samples),
+            },
+        },
+        has_sigma_eps=True,
+    )
+
+
 def dictMean(td: dict[str, torch.Tensor]) -> float:
     values = list(td.values())
     if not values:
