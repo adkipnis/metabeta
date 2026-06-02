@@ -121,6 +121,7 @@ class Api:
         if warmup:
             for entry in self.submodels:
                 self._warmupSubmodel(entry)
+            import metabeta.evaluation.predictive  # noqa: F401 — primes arviz/scipy import
 
     def model(self, submodel_id: str) -> Approximator:
         """Return the lazily instantiated model for ``submodel_id``."""
