@@ -81,7 +81,7 @@ class RouterResult:
     ns: np.ndarray | None = None
 
 
-class Router:
+class Api:
     """Route dataloader-formatted datasets through a joint checkpoint.
 
     Models are instantiated lazily when their first compatible batch is run.
@@ -1283,9 +1283,9 @@ def posteriorTable(
 
     Sections: Fixed Effects (mean, SD, CI, P(>0), contraction), Standard
     Deviations (sigma_rfx + residual), and Correlations (posterior mean, when
-    q > 1).  For per-group random effects use ``Router.rfxTable()``.
+    q > 1).  For per-group random effects use ``Api.rfxTable()``.
     Contraction requires ``prior_params`` (populated automatically by
-    ``Router.sample()``).  Fit metrics require ``diagnostics=True``.
+    ``Api.sample()``).  Fit metrics require ``diagnostics=True``.
     """
     fmt = 'github'
     alpha = (1 - ci) / 2
@@ -1470,4 +1470,4 @@ def posteriorTable(
     return '\n'.join(parts)
 
 
-CheckpointRouter = Router
+CheckpointRouter = Api
