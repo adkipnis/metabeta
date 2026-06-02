@@ -278,6 +278,61 @@ class Api:
             ns=ns_arr,
         )
 
+    def warmup(self, data: Any = None, **prepare_kwargs: Any) -> None:
+        """Prime PyTorch's kernel cache with a single-sample forward pass.
+
+        The first call to ``sample()`` incurs ~1 s of one-time overhead as
+        PyTorch traces the computation graph and allocates memory layouts.
+        Call ``warmup()`` once after loading the checkpoint to move that cost
+        to an explicit setup step.
+
+        ``data`` is optional when ``formula`` is passed as a keyword argument:
+        a minimal dummy DataFrame is generated automatically from the formula
+        so no real data is required.  Pass real data if the formula alone is
+        not available or if you want to warm up with the exact input shape.
+        """
+        if data is None:
+            formula = prepare_kwargs.get('formula')
+            if not formula:
+                raise ValueError('warmup requires either data or a formula= kwarg')
+            import pandas as pd
+            from metabeta.utils.api import parseFormula
+
+            spec = parseFormula(formula)
+            d = len(spec.fixed_terms) + (1 if spec.intercept else 0)
+            q = len(spec.random_terms)
+
+            # compute minimum group count that satisfies all submodel routing gates;
+            # also collect the likelihood_family for generating matching dummy targets
+            min_m, min_n = 5, 4
+            fam: int | None = None
+            for entry in self.submodels:
+                r = entry.get('routing', {})
+                if r.get('min_d', 0) <= d <= r.get('max_d', 9999):
+                    bg_df = int(r.get('min_bg_df', 0))
+                    within_df = int(r.get('min_within_df', 0))
+                    min_m = max(min_m, int(r.get('min_m', 0)) + 1,
+                                max(d, q * (q + 1) // 2) + bg_df + 1)
+                    min_n = max(min_n, int(r.get('min_n', 0)) + 1, q + within_df + 1)
+                    if fam is None and 'likelihood_family' in r:
+                        fam = int(r['likelihood_family'])
+
+            rng = np.random.default_rng(0)
+            n = min_m * min_n
+            dummy: dict[str, Any] = {}
+            if spec.target:
+                # fam=1 → Bernoulli (binary target); all others → continuous
+                if fam == 1:
+                    dummy[spec.target] = rng.integers(0, 2, size=n).astype(float)
+                else:
+                    dummy[spec.target] = rng.standard_normal(n)
+            for term in spec.fixed_terms:
+                dummy[term] = rng.standard_normal(n)
+            if spec.group_name:
+                dummy[spec.group_name] = np.repeat(np.arange(min_m), min_n)
+            data = pd.DataFrame(dummy)
+        self.sample(data, n_samples=1, diagnostics=False, **prepare_kwargs)
+
     @torch.no_grad()
     def forward(self, data: Any, **prepare_kwargs: Any) -> RouterResult:
         """Evaluate the forward log-probability path for batches with parameters.
