@@ -1019,7 +1019,9 @@ class Api:
         )
 
         prior_pdfs = (
-            makePriorPDFs(result) if with_prior and result.prior_params is not None else None
+            makePriorPDFs(result, batch_index=index)
+            if with_prior and result.prior_params is not None
+            else None
         )
 
         return _plotParameters(

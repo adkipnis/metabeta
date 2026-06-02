@@ -639,13 +639,16 @@ def makePriorProposal(result: object, n_samples: int = 1000) -> Proposal:
 
 
 def makePriorPDFs(
-    result: object, n_grid: int = 500
+    result: object, n_grid: int = 500, batch_index: int = 0
 ) -> list[tuple[np.ndarray, np.ndarray]]:
     """Compute analytical prior PDFs in original-scale units, one per global parameter.
 
     Returns (x_grid, density) pairs ordered as: ffx[0..d-1], sigma_rfx[0..q-1], sigma_eps.
     The transform to original scale is applied analytically so the curves are exact
     (no sampling noise), matching the distributions described in posteriorSummary.
+
+    batch_index selects which prior variant to use when prior_params has multiple rows
+    (e.g. from a batched-priors sample() call).
     """
     from scipy.stats import norm, halfnorm, t as student_t
     from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
@@ -654,15 +657,16 @@ def makePriorPDFs(
     sd_y = float(si.y_std)
     d = len(result.param_names['ffx'])  # type: ignore[attr-defined]
     q = len(result.param_names['sigma_rfx'])  # type: ignore[attr-defined]
+    bi = batch_index
 
-    tau_f = np.asarray(pp['tau_ffx'][0, :d], dtype=float) * sd_y
-    nu_f = np.asarray(pp['nu_ffx'][0, :d], dtype=float) * sd_y
-    tau_r = np.asarray(pp['tau_rfx'][0, :q], dtype=float) * sd_y
-    tau_e = float(np.asarray(pp['tau_eps']).ravel()[0]) * sd_y
+    tau_f = np.asarray(pp['tau_ffx'][bi, :d], dtype=float) * sd_y
+    nu_f = np.asarray(pp['nu_ffx'][bi, :d], dtype=float) * sd_y
+    tau_r = np.asarray(pp['tau_rfx'][bi, :q], dtype=float) * sd_y
+    tau_e = float(np.asarray(pp['tau_eps']).ravel()[bi]) * sd_y
 
-    fam_ffx_id = int(pp['family_ffx'][0]) if 'family_ffx' in pp else 0
-    fam_rfx_id = int(pp['family_sigma_rfx'][0]) if 'family_sigma_rfx' in pp else 0
-    fam_eps_id = int(np.asarray(pp['family_sigma_eps']).ravel()[0]) if 'family_sigma_eps' in pp else 0
+    fam_ffx_id = int(pp['family_ffx'][bi]) if 'family_ffx' in pp else 0
+    fam_rfx_id = int(pp['family_sigma_rfx'][bi]) if 'family_sigma_rfx' in pp else 0
+    fam_eps_id = int(np.asarray(pp['family_sigma_eps']).ravel()[bi]) if 'family_sigma_eps' in pp else 0
     fam_ffx = FFX_FAMILIES[fam_ffx_id] if fam_ffx_id < len(FFX_FAMILIES) else 'normal'
     fam_rfx = SIGMA_FAMILIES[fam_rfx_id] if fam_rfx_id < len(SIGMA_FAMILIES) else 'halfnormal'
     fam_eps = SIGMA_FAMILIES[fam_eps_id] if fam_eps_id < len(SIGMA_FAMILIES) else 'halfstudent'
@@ -714,7 +718,7 @@ def makePriorPDFs(
     if d_corr > 0 and 'eta_rfx' in pp:
         from scipy.stats import beta as beta_dist
 
-        eta = float(np.asarray(pp['eta_rfx']).ravel()[0])
+        eta = float(np.asarray(pp['eta_rfx']).ravel()[bi])
         alpha = eta + (q - 2) / 2
         xg = np.linspace(-1.0, 1.0, n_grid)
         pdf_lkj = beta_dist.pdf((1 + xg) / 2, alpha, alpha) / 2
