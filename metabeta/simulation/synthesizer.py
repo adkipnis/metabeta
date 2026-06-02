@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from dataclasses import dataclass
 from metabeta.utils.preprocessing import checkContinuous
 from metabeta.utils.sampling import counts2groups, wishartCorrelation
@@ -44,7 +45,9 @@ class Scammer:
         """Try up to MAX_RETRIES hyperparameter draws to get a valid SCM dataset."""
         for _ in range(MAX_RETRIES):
             hp = self._sampleHyperparams(d)
-            scamd_rng = np.random.default_rng(int(self.rng.integers(0, 2**31)))
+            scamd_seed = int(self.rng.integers(0, 2**31))
+            scamd_rng = np.random.default_rng(scamd_seed)
+            torch.manual_seed(scamd_seed)
             try:
                 features = generateDataset(
                     n_samples=n,
