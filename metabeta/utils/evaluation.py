@@ -662,14 +662,11 @@ def makePriorPDFs(
     tau_f = np.asarray(pp['tau_ffx'][bi, :d], dtype=float) * sd_y
     nu_f = np.asarray(pp['nu_ffx'][bi, :d], dtype=float) * sd_y
     tau_r = np.asarray(pp['tau_rfx'][bi, :q], dtype=float) * sd_y
-    tau_e = float(np.asarray(pp['tau_eps']).ravel()[bi]) * sd_y
 
     fam_ffx_id = int(pp['family_ffx'][bi]) if 'family_ffx' in pp else 0
     fam_rfx_id = int(pp['family_sigma_rfx'][bi]) if 'family_sigma_rfx' in pp else 0
-    fam_eps_id = int(np.asarray(pp['family_sigma_eps']).ravel()[bi]) if 'family_sigma_eps' in pp else 0
     fam_ffx = FFX_FAMILIES[fam_ffx_id] if fam_ffx_id < len(FFX_FAMILIES) else 'normal'
     fam_rfx = SIGMA_FAMILIES[fam_rfx_id] if fam_rfx_id < len(SIGMA_FAMILIES) else 'halfnormal'
-    fam_eps = SIGMA_FAMILIES[fam_eps_id] if fam_eps_id < len(SIGMA_FAMILIES) else 'halfstudent'
 
     x_stds = np.asarray(si.x_stds, dtype=float)
     x_means = np.asarray(si.x_means, dtype=float)
@@ -709,6 +706,9 @@ def makePriorPDFs(
 
     # sigma_eps
     if result.proposal.has_sigma_eps:  # type: ignore[attr-defined]
+        tau_e = float(np.asarray(pp['tau_eps']).ravel()[bi]) * sd_y
+        fam_eps_id = int(np.asarray(pp['family_sigma_eps']).ravel()[bi]) if 'family_sigma_eps' in pp else 0
+        fam_eps = SIGMA_FAMILIES[fam_eps_id] if fam_eps_id < len(SIGMA_FAMILIES) else 'halfstudent'
         pdfs.append(_half_pdf(tau_e, fam_eps))
 
     # LKJ marginals for correlation parameters

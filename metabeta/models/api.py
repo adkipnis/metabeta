@@ -400,9 +400,12 @@ class Api:
             'ppc_nll': ppc_nll,
             'param_summary': param_summary,
             'fit': fit,
+            'fit_vals': vals,
             'fit_label': fit_label,
             'loo_nll': loo_nll,
+            'loo_nll_vals': loo_nll_vals,
             'pareto_k': pareto_k,
+            'pareto_k_vals': pareto_k_vals,
             'pp': pp,
         }
 
@@ -1055,16 +1058,26 @@ class Api:
             if result.validation and batch_index < len(result.validation)
             else {}
         )
+        bi = batch_index
+        fit_vals = d.get('fit_vals')
+        fit = fit_vals[bi].item() if fit_vals is not None and bi < len(fit_vals) else d.get('fit')
+        loo_nll_vals = d.get('loo_nll_vals')
+        loo_nll = loo_nll_vals[bi].item() if loo_nll_vals is not None and bi < len(loo_nll_vals) else d.get('loo_nll')
+        pareto_k_vals = d.get('pareto_k_vals')
+        pareto_k = pareto_k_vals[bi].item() if pareto_k_vals is not None and bi < len(pareto_k_vals) else d.get('pareto_k')
+        fit_label = d.get('fit_label', 'fit')
+        if fit_vals is not None and fit_label.startswith('Mean '):
+            fit_label = fit_label[5:]
         return posteriorTable(
             result.proposal,
             result.param_names,
             formula=result.formula,
             priors_str=result.priors_str,
             prior_params=result.prior_params,
-            fit=d.get('fit'),
-            fit_label=d.get('fit_label', 'fit'),
-            loo_nll=d.get('loo_nll'),
-            pareto_k=d.get('pareto_k'),
+            fit=fit,
+            fit_label=fit_label,
+            loo_nll=loo_nll,
+            pareto_k=pareto_k,
             ci=ci,
             batch_index=batch_index,
             scale_info=result.scale_info,
@@ -1379,7 +1392,7 @@ def posteriorTable(
         if prior_params is not None
         else []
     )
-    prior_header = 'Priors:' if x_scale == 'original' else 'Priors (★):'
+    prior_header = 'Priors:'
     if prior_lines:
         parts.append(prior_header)
         parts.extend(prior_lines)
