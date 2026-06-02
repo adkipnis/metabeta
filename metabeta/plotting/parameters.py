@@ -41,6 +41,9 @@ def _prior_pdf_on(ax, x_grid, pdf, **kwargs):
     xlim = ax.get_xlim()
     ax2 = ax.twinx()
     ax2.plot(x_grid, pdf, **kwargs)
+    # Explicitly set ylim to avoid degenerate zero-range axis when pdf is constant
+    # (e.g. LKJ(1) uniform prior); also clips negative y for cleanliness.
+    ax2.set_ylim(0, float(np.max(pdf)) * 1.1)
     ax2.spines['right'].set_visible(False)
     ax2.spines['top'].set_visible(False)
     ax2.set_ylabel('')
@@ -196,12 +199,19 @@ def plotParameters(
             )
 
     # 2d prior analytical contours — evaluated on the axis-range grid so that levels
-    # are chosen relative to the density variation *within the visible window*
+    # are chosen relative to the density variation *within the visible window*.
+    # Skip cells where either marginal is essentially flat (e.g. uniform LKJ prior):
+    # the product-of-marginals density would vary only along the other axis, producing
+    # uninformative vertical/horizontal lines rather than 2D contours.
     if prior_pdfs is not None:
         n_prior = len(prior_pdfs)
         for i in range(d):
             for j in range(i):
                 if i >= n_prior or j >= n_prior:
+                    continue
+                pi_flat = float(prior_pdfs[i][1].max()) - float(prior_pdfs[i][1].min()) < 1e-8
+                pj_flat = float(prior_pdfs[j][1].max()) - float(prior_pdfs[j][1].min()) < 1e-8
+                if pi_flat or pj_flat:
                     continue
                 ax = g.axes[i, j]
                 xlim, ylim = ax.get_xlim(), ax.get_ylim()
