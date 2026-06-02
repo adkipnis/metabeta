@@ -20,7 +20,7 @@ from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.dataloader import Dataloader, collateGrouped, toDevice
 from metabeta.utils.evaluation import Proposal
-from metabeta.utils.router import (
+from metabeta.utils.api import (
     JOINT_CHECKPOINT_VERSION,
     ScaleInfo,
     attachPreprocessorMetadata,
@@ -29,7 +29,6 @@ from metabeta.utils.router import (
     isCollatedBatch,
     isModelDataset,
     isPreprocessedDict,
-    joinCheckpoints,
     padModelDataset,
     parseFormula,
     preprocessedSdY,
@@ -1000,12 +999,14 @@ class Router:
             parts.append(prop.sigma_eps[index].unsqueeze(-1))  # (S, 1)
         samples_g = torch.cat(parts, dim=-1).unsqueeze(0)      # (1, S, D)
 
+        corr_rfx = prop.corr_rfx
         post_orig = Proposal(
             proposed={
                 'global': {'samples': samples_g, 'log_prob': prop.log_prob_g[index : index + 1]},
                 'local': {k: v[index : index + 1] for k, v in prop.data['local'].items()},
             },
             has_sigma_eps=has_eps,
+            corr_rfx=corr_rfx[index : index + 1] if corr_rfx is not None else None,
         )
 
         param_names = result.param_names or {}
