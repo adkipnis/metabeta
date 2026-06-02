@@ -707,6 +707,20 @@ def makePriorPDFs(
     if result.proposal.has_sigma_eps:  # type: ignore[attr-defined]
         pdfs.append(_half_pdf(tau_e, fam_eps))
 
+    # LKJ marginals for correlation parameters
+    # Under LKJ(eta), each off-diagonal rho has marginal (1+rho)/2 ~ Beta(alpha, alpha)
+    # where alpha = eta + (q-2)/2.  Jacobian of rho = 2x-1 gives p(rho) = p_Beta(x) / 2.
+    d_corr = result.proposal.d_corr  # type: ignore[attr-defined]
+    if d_corr > 0 and 'eta_rfx' in pp:
+        from scipy.stats import beta as beta_dist
+
+        eta = float(np.asarray(pp['eta_rfx']).ravel()[0])
+        alpha = eta + (q - 2) / 2
+        xg = np.linspace(-1.0, 1.0, n_grid)
+        pdf_lkj = beta_dist.pdf((1 + xg) / 2, alpha, alpha) / 2
+        for _ in range(d_corr):
+            pdfs.append((xg, pdf_lkj))
+
     return pdfs
 
 
