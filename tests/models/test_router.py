@@ -6,9 +6,9 @@ import pandas as pd
 import pytest
 import torch
 
-from metabeta.models.router import Router
+from metabeta.models.api import Router
 from metabeta.utils.dataloader import Dataloader
-from metabeta.utils.router import joinCheckpoints
+from metabeta.utils.api import joinCheckpoints
 
 
 def _write_checkpoint(path: Path, *, max_d: int, max_q: int, seed: int) -> None:
