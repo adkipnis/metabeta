@@ -369,7 +369,7 @@ def _isNamedPriorCollection(priors: Mapping[str, Any]) -> bool:
     keys = {str(key) for key in priors}
     if keys & (CANONICAL_PRIOR_KEYS | TERM_PRIOR_KEYS):
         return False
-    return all(isinstance(value, Mapping) for value in priors.values())
+    return all(isinstance(value, Mapping) or value is None for value in priors.values())
 
 
 def _resolveSinglePrior(
@@ -409,8 +409,19 @@ def _applyFixedTermPriors(
     if not isinstance(spec, Mapping):
         raise TypeError('fixed priors must be a mapping from term name to prior spec')
 
+    _GLOBAL_FIXED_KEYS = {'nu', 'mu', 'tau', 'sigma', 'family'}
+
     family_id: int | None = None
     for term, term_spec in spec.items():
+        if str(term) in _GLOBAL_FIXED_KEYS and not isinstance(term_spec, Mapping):
+            # global shorthand: {'nu': 0.5} or {'tau': 0.8} applies to all fixed effects
+            if term in ('nu', 'mu'):
+                values['nu_ffx'][:] = float(term_spec)
+            elif term in ('tau', 'sigma'):
+                values['tau_ffx'][:] = float(term_spec)
+            elif term == 'family':
+                family_id = _ffxFamilyId(term_spec)
+            continue
         idxs = _termIndices(str(term), fixed_names)
         term_spec = _requireMapping(term_spec, f'fixed prior for {term}')
         if 'family' in term_spec:
