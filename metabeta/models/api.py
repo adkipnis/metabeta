@@ -98,6 +98,7 @@ class Api:
         *,
         device: str | torch.device = 'cpu',
         batch_size: int | None = None,
+        warmup: bool = True,
     ) -> None:
         self.joint_checkpoint = Path(joint_checkpoint)
         self.device = torch.device(device)
@@ -116,6 +117,10 @@ class Api:
         if len(self._submodel_by_id) != len(self.submodels):
             raise ValueError('joint checkpoint contains duplicate submodel ids')
         self._models: dict[str, Approximator] = {}
+
+        if warmup:
+            for entry in self.submodels:
+                self._warmupSubmodel(entry)
 
     def model(self, submodel_id: str) -> Approximator:
         """Return the lazily instantiated model for ``submodel_id``."""
@@ -278,32 +283,52 @@ class Api:
             ns=ns_arr,
         )
 
+    def _warmupSubmodel(self, entry: dict) -> None:
+        """Run one forward pass through a specific submodel using minimal dummy data."""
+        r = entry.get('routing', {})
+        d = max(int(r.get('min_d', 1)), 2)  # at least intercept + one covariate
+        q = int(r.get('min_q', 1))
+        fam = int(r.get('likelihood_family', 0))
+        min_m = max(5, int(r.get('min_m', 0)) + 1,
+                    max(d, q * (q + 1) // 2) + int(r.get('min_bg_df', 0)) + 1)
+        min_n = max(4, int(r.get('min_n', 0)) + 1,
+                    q + int(r.get('min_within_df', 0)) + 1)
+        n = min_m * min_n
+
+        rng = np.random.default_rng(0)
+        dummy: dict[str, Any] = {}
+        dummy['_y'] = rng.integers(0, 2, size=n).astype(float) if fam == 1 else rng.standard_normal(n)
+        for j in range(d - 1):
+            dummy[f'_x{j}'] = rng.standard_normal(n)
+        dummy['_g'] = np.repeat(np.arange(min_m), min_n)
+
+        fixed = ' + '.join(f'_x{j}' for j in range(d - 1))
+        rfx_slopes = (' + ' + ' + '.join(f'_x{j}' for j in range(q - 1))) if q > 1 else ''
+        formula = f'_y ~ {fixed} + (1{rfx_slopes} | _g)'
+
+        self.sample(pd.DataFrame(dummy), formula=formula, n_samples=1, diagnostics=False)
+
     def warmup(self, data: Any = None, **prepare_kwargs: Any) -> None:
         """Prime PyTorch's kernel cache with a single-sample forward pass.
 
-        The first call to ``sample()`` incurs ~1 s of one-time overhead as
-        PyTorch traces the computation graph and allocates memory layouts.
-        Call ``warmup()`` once after loading the checkpoint to move that cost
-        to an explicit setup step.
+        By default all submodels are warmed automatically at ``__init__`` time
+        (``warmup=True``).  Call this explicitly only if ``warmup=False`` was
+        passed or you want to warm a specific submodel with a real DataFrame.
 
         ``data`` is optional when ``formula`` is passed as a keyword argument:
         a minimal dummy DataFrame is generated automatically from the formula
-        so no real data is required.  Pass real data if the formula alone is
-        not available or if you want to warm up with the exact input shape.
+        so no real data is required.
         """
         if data is None:
             formula = prepare_kwargs.get('formula')
             if not formula:
                 raise ValueError('warmup requires either data or a formula= kwarg')
-            import pandas as pd
             from metabeta.utils.api import parseFormula
 
             spec = parseFormula(formula)
             d = len(spec.fixed_terms) + (1 if spec.intercept else 0)
             q = len(spec.random_terms)
 
-            # compute minimum group count that satisfies all submodel routing gates;
-            # also collect the likelihood_family for generating matching dummy targets
             min_m, min_n = 5, 4
             fam: int | None = None
             for entry in self.submodels:
@@ -321,11 +346,7 @@ class Api:
             n = min_m * min_n
             dummy: dict[str, Any] = {}
             if spec.target:
-                # fam=1 → Bernoulli (binary target); all others → continuous
-                if fam == 1:
-                    dummy[spec.target] = rng.integers(0, 2, size=n).astype(float)
-                else:
-                    dummy[spec.target] = rng.standard_normal(n)
+                dummy[spec.target] = rng.integers(0, 2, size=n).astype(float) if fam == 1 else rng.standard_normal(n)
             for term in spec.fixed_terms:
                 dummy[term] = rng.standard_normal(n)
             if spec.group_name:
