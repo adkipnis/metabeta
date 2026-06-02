@@ -45,10 +45,10 @@ DEFAULT_KS = [0, 3, 7]
 
 # (display name, extractor, higher_is_better)
 METRICS = [
-    ('R', lambda s: dictMean(s.corr), True),
-    ('NRMSE', lambda s: dictMean(s.nrmse), False),
-    ('ECE', lambda s: dictMean(s.ece), 'abs'),
-    ('ppNLL', lambda s: s.mnll, False),
+    ('R', lambda s: dictMean(s.aggregated.corr), True),
+    ('NRMSE', lambda s: dictMean(s.aggregated.nrmse), False),
+    ('ECE', lambda s: dictMean(s.aggregated.ece), 'abs'),
+    ('ppNLL', lambda s: s.per_dataset.mnll, False),
 ]
 
 
