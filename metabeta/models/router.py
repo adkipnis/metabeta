@@ -143,7 +143,7 @@ class Router:
         formula: str | None = None,
         priors: Any = None,
         preprocessor: DataPreprocessor | str | Path | None = None,
-        fit_preprocessor: bool = False,
+        fit_preprocessor: bool = True,
         group_name: str | None = None,
         likelihood_family: int | str | None = None,
         q: int | None = None,
