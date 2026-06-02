@@ -3,7 +3,7 @@ import pandas as pd
 from matplotlib import pyplot as plt
 import seaborn as sns
 
-from metabeta.utils.evaluation import Proposal, getAllNames
+from metabeta.utils.evaluation import Proposal, getAllNames, getCorrRfxNames
 
 _GREEK_LATEX = {'σ': r'\sigma', 'ε': r'\varepsilon', 'μ': r'\mu', 'τ': r'\tau'}
 
@@ -76,6 +76,7 @@ def plotParameters(
     q_active: int | None = None,
     height: float = 2.5,
     prior_xlim: bool = True,
+    show_corr: bool = True,
 ):
     """Pair-grid of parameter samples for a single dataset at batch {index}.
 
@@ -108,28 +109,48 @@ def plotParameters(
 
     # init
     x = _active_samples(proposal, index)
+
+    # optionally append lower-triangle correlation columns
+    _q_c = q_active if q_active is not None else proposal.q
+    _n_corr = 0
+    if show_corr and proposal.corr_rfx is not None and _q_c >= 2:
+        corr_mat = proposal.corr_rfx[index].numpy()  # (S, q, q)
+        corr_cols = np.stack(
+            [corr_mat[:, i, j] for i in range(_q_c) for j in range(i)], axis=1
+        )
+        x = np.concatenate([x, corr_cols], axis=1)
+        _n_corr = _q_c * (_q_c - 1) // 2
+
     s, d = x.shape
     g = sns.PairGrid(pd.DataFrame(x), height=height)
 
     # first column index that is a sigma parameter (strictly non-negative)
     _d_sigma = d_active if d_active is not None else proposal.d
+    # first column index that is a correlation parameter (bounded [-1, 1])
+    _d_corr_start = d - _n_corr
 
     # setup names
     _names: list[str]
     if names is not None:
         _names = [_formatName(n) for n in names]
+        if _n_corr > 0:
+            _names += getCorrRfxNames(_q_c)
     else:
         _d_n = d_active if d_active is not None else proposal.d
         _q_n = q_active if q_active is not None else proposal.q
         name_dict = getAllNames(_d_n, _q_n)
         name_dict.pop('rfx')
         _names = [_formatName(n) for n in np.concat(list(name_dict.values()))]
+        if _n_corr > 0:
+            _names += getCorrRfxNames(_q_c)  # already LaTeX, no _formatName needed
 
     # marginal posterior — loop instead of map_diag to allow per-column KDE clipping
     for i in range(d):
         kw: dict = dict(color=color, common_norm=False)
-        if i >= _d_sigma:
+        if _d_sigma <= i < _d_corr_start:
             kw['clip'] = (0, None)
+        elif i >= _d_corr_start:
+            kw['clip'] = (-1, 1)
         if kde:
             _kdeplot_on(g.axes[i, i], x[:, i], alpha=alpha**2, fill=True, **kw)
         else:
@@ -151,7 +172,10 @@ def plotParameters(
     # axis scaling — prior mode widens each parameter's axis to the prior range,
     # capped at posterior_mean ± 6·posterior_SD so the posterior stays readable
     if prior_xlim and prior_pdfs is not None:
+        n_prior = len(prior_pdfs)
         for i in range(d):
+            if i >= n_prior:
+                continue
             prior_lo = float(prior_pdfs[i][0][0])
             prior_hi = float(prior_pdfs[i][0][-1])
             post_mean = float(x[:, i].mean())
@@ -174,8 +198,11 @@ def plotParameters(
     # 2d prior analytical contours — evaluated on the axis-range grid so that levels
     # are chosen relative to the density variation *within the visible window*
     if prior_pdfs is not None:
+        n_prior = len(prior_pdfs)
         for i in range(d):
             for j in range(i):
+                if i >= n_prior or j >= n_prior:
+                    continue
                 ax = g.axes[i, j]
                 xlim, ylim = ax.get_xlim(), ax.get_ylim()
 
