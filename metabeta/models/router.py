@@ -1112,12 +1112,11 @@ class Router:
         headers = ['Group']
         if ns_row is not None:
             headers += ['n']
-        headers += ['Mean', lo_pct, hi_pct, 'z']
-        floatfmt: list[str] = ['', 'g', '.3f', '.3f', '.3f', '.2f'] if ns_row is not None \
-            else ['', '.3f', '.3f', '.3f', '.2f']
+        headers += ['Mean', 'SD', lo_pct, '50.0%', hi_pct, 'z']
+        floatfmt: list[str] = ['', 'g', '.3f', '.3f', '.3f', '.3f', '.3f', '.2f'] if ns_row is not None \
+            else ['', '.3f', '.3f', '.3f', '.3f', '.3f', '.2f']
 
         parts = ['Random Effects:']
-        parts.append('Scale:    original y units')
 
         for qi, name in enumerate(srfx_names):
             rows = []
@@ -1132,7 +1131,7 @@ class Router:
                 row: list[Any] = [g_names[gi] if gi < len(g_names) else str(gi)]
                 if ns_row is not None:
                     row.append(ns_row[gi])
-                row += [mean_val, col.quantile(alpha).item(), col.quantile(1 - alpha).item(), z]
+                row += [mean_val, col.std().item(), col.quantile(alpha).item(), col.quantile(0.5).item(), col.quantile(1 - alpha).item(), z]
                 rows.append(row)
 
             emp_sd = rfx_means[:, qi].std().item()
@@ -1287,7 +1286,7 @@ def posteriorTable(
     Contraction requires ``prior_params`` (populated automatically by
     ``Router.sample()``).  Fit metrics require ``diagnostics=True``.
     """
-    fmt = 'pipe'
+    fmt = 'github'
     alpha = (1 - ci) / 2
     lo_pct = f'{alpha * 100:g}%'
     hi_pct = f'{(1 - alpha) * 100:g}%'
@@ -1313,12 +1312,13 @@ def posteriorTable(
     ffx_names = names.get('ffx') or [f'ffx_{i}' for i in range(ffx.shape[-1])]
     srfx_names = names.get('sigma_rfx') or [f'rfx_{i}' for i in range(srfx.shape[-1])]
 
-    def _col_stats(samples: torch.Tensor, j: int) -> tuple[float, float, float, float]:
+    def _col_stats(samples: torch.Tensor, j: int) -> tuple[float, float, float, float, float]:
         col = samples[:, j]
         return (
             col.mean().item(),
             col.std().item(),
             col.quantile(alpha).item(),
+            col.quantile(0.5).item(),
             col.quantile(1 - alpha).item(),
         )
 
@@ -1362,12 +1362,8 @@ def posteriorTable(
         if m is not None:
             size_parts.append(f'm = {m}')
         parts.append('   '.join(size_parts))
-    scale_label = (
-        'standardized X, original y  (slopes: Δy per SD predictor; σ and rfx: y units)'
-        if x_scale == 'standardized'
-        else 'original  (slopes: Δy per unit predictor; σ and rfx: y units)'
-    )
-    parts.append(f'Scale:    {scale_label}')
+    if x_scale == 'standardized':
+        parts.append('Scale:    standardized covariates')
     prior_lines = (
         _buildPriorLines(
             ffx_names,
@@ -1391,14 +1387,14 @@ def posteriorTable(
 
     # ── Fixed Effects ─────────────────────────────────────────────────────────
     show_contr = tau_arr is not None
-    ffx_headers = ['', 'Mean', 'SD', lo_pct, hi_pct, 'P(>0)']
+    ffx_headers = ['', 'Mean', 'SD', lo_pct, '50.0%', hi_pct, 'P(>0)']
     if show_contr:
         ffx_headers.append('Contr.')
     ffx_rows = []
     for j, name in enumerate(ffx_names):
-        mean, sd, lo, hi = _col_stats(ffx, j)
+        mean, sd, lo, med, hi = _col_stats(ffx, j)
         p_pos = (ffx[:, j] > 0).float().mean().item()
-        row: list[Any] = [name, mean, sd, lo, hi, p_pos]
+        row: list[Any] = [name, mean, sd, lo, med, hi, p_pos]
         if show_contr:
             row.append(_contraction(sd, j))
         ffx_rows.append(row)
@@ -1412,8 +1408,8 @@ def posteriorTable(
     # ── Standard Deviations ───────────────────────────────────────────────────
     srfx_rows = []
     for j, name in enumerate(srfx_names):
-        mean, sd, lo, hi = _col_stats(srfx, j)
-        srfx_rows.append([name, mean, sd, lo, hi])
+        mean, sd, lo, med, hi = _col_stats(srfx, j)
+        srfx_rows.append([name, mean, sd, lo, med, hi])
 
     if proposal.has_sigma_eps:
         seps = proposal.sigma_eps[batch_index].float()  # (S,)
@@ -1423,15 +1419,16 @@ def posteriorTable(
                 seps.mean().item(),
                 seps.std().item(),
                 seps.quantile(alpha).item(),
+                seps.quantile(0.5).item(),
                 seps.quantile(1 - alpha).item(),
             ]
         )
 
     parts += [
-        'Standard Deviations (y units):',
+        'Standard Deviations:',
         tabulate(
             srfx_rows,
-            headers=['', 'Mean', 'SD', lo_pct, hi_pct],
+            headers=['', 'Mean', 'SD', lo_pct, '50.0%', hi_pct],
             floatfmt='.3f',
             tablefmt=fmt,
         ),
