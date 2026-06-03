@@ -59,7 +59,7 @@ BEST_SEEDS: dict[tuple[str, str], int | None] = {
 
 FAMILY_INITIAL = {'normal': 'n', 'bernoulli': 'b', 'poisson': 'p'}
 FAMILIES = ('normal', 'bernoulli', 'poisson')
-SIZES = ('small', 'medium', 'large')
+SIZES = ('small', 'medium', 'large', 'huge')
 
 
 def _ckpt_dir(family: str, size: str, seed: int) -> Path:
