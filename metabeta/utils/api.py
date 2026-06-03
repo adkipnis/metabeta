@@ -450,8 +450,14 @@ def _applyRandomSdTermPriors(
     if not isinstance(spec, Mapping):
         raise TypeError('random_sd priors must be a mapping from term name to prior spec')
 
+    _GLOBAL_RFXSD_KEYS = {'family'}
+
     family_id: int | None = None
     for term, term_spec in spec.items():
+        if str(term) in _GLOBAL_RFXSD_KEYS and not isinstance(term_spec, Mapping):
+            if term == 'family':
+                family_id = _sigmaFamilyId(term_spec)
+            continue
         idxs = _termIndices(str(term), random_names)
         term_spec = _requireMapping(term_spec, f'random_sd prior for {term}')
         if 'family' in term_spec:
