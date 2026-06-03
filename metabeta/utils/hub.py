@@ -6,7 +6,7 @@ from pathlib import Path
 
 from metabeta.utils.constants import LIKELIHOOD_FAMILIES
 
-HF_REPO_ID = "your-org/metabeta"
+HF_REPO_ID = "adkipnis/metabeta"
 
 # Architecture version tag on HF Hub. Bump only when model architecture changes
 # make existing checkpoints incompatible. Weight-only hotfixes move this tag to a
