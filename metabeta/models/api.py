@@ -92,6 +92,36 @@ class Api:
     terms plus one lme4-style random-effect term.
     """
 
+    @classmethod
+    def from_pretrained(
+        cls,
+        family: str,
+        *,
+        cache_dir: str | Path | None = None,
+        force_download: bool = False,
+        device: str | torch.device = 'cpu',
+        batch_size: int | None = None,
+        warmup: bool = True,
+    ) -> 'Api':
+        """Load a pretrained checkpoint for ``family`` from Hugging Face Hub.
+
+        Downloads and caches the checkpoint automatically on first call.
+        Subsequent calls reuse the cache unless the upstream tag has moved.
+
+        Parameters
+        ----------
+        family:
+            Likelihood family — ``"normal"``, ``"bernoulli"``, or ``"poisson"``.
+        cache_dir:
+            Override the default HF Hub cache (``~/.cache/huggingface/hub``).
+        force_download:
+            Re-download even if a cached copy exists.
+        """
+        from metabeta.utils.hub import download_checkpoint
+
+        path = download_checkpoint(family, cache_dir=cache_dir, force_download=force_download)
+        return cls(path, device=device, batch_size=batch_size, warmup=warmup)
+
     def __init__(
         self,
         joint_checkpoint: str | Path,
