@@ -84,4 +84,5 @@ torch = [
 [dependency-groups]
 dev = [
     "jupyterlab>=4.5.7",
+    "ipywidgets>=8.0",
 ]
