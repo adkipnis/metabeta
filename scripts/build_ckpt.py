@@ -31,37 +31,40 @@ from pathlib import Path
 # Configuration — edit before running
 # ---------------------------------------------------------------------------
 
-CKPT_BASE = Path(__file__).parent.parent / "metabeta" / "outputs" / "checkpoints"
-OUTPUT_DIR = Path(__file__).parent.parent / "metabeta" / "outputs" / "joint"
+CKPT_BASE = Path(__file__).parent.parent / 'metabeta' / 'outputs' / 'checkpoints'
+OUTPUT_DIR = Path(__file__).parent.parent / 'metabeta' / 'outputs' / 'joint'
 
-HF_REPO_ID = "adkipnis/metabeta"
-CHECKPOINT_VERSION = "v1"  # HF Hub git tag — bump only on architecture changes
+HF_REPO_ID = 'adkipnis/metabeta'
+CHECKPOINT_VERSION = 'v1'  # HF Hub git tag — bump only on architecture changes
 
 # Map (family, size) → best seed.  Set to None to skip that combo.
 BEST_SEEDS: dict[tuple[str, str], int | None] = {
-    ("normal",    "small"):  None,
-    ("normal",    "medium"): None,
-    ("normal",    "large"):  None,
-    ("bernoulli", "small"):  None,
-    ("bernoulli", "medium"): None,
-    ("bernoulli", "large"):  None,
-    ("poisson",   "small"):  None,
-    ("poisson",   "medium"): None,
-    ("poisson",   "large"):  None,
+    ('normal', 'small'): 13,
+    ('normal', 'medium'): 11, # cont.
+    ('normal', 'large'): None,
+    ('normal', 'huge'): None,
+    ('bernoulli', 'small'): 6,
+    ('bernoulli', 'medium'): 15, # cont.
+    ('bernoulli', 'large'): 12, # cont.
+    ('bernoulli', 'huge'): None,
+    ('poisson', 'small'): 4,
+    ('poisson', 'medium'): None,
+    ('poisson', 'large'): None,
+    ('poisson', 'huge'): None,
 }
 
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
 
-FAMILY_INITIAL = {"normal": "n", "bernoulli": "b", "poisson": "p"}
-FAMILIES = ("normal", "bernoulli", "poisson")
-SIZES = ("small", "medium", "large")
+FAMILY_INITIAL = {'normal': 'n', 'bernoulli': 'b', 'poisson': 'p'}
+FAMILIES = ('normal', 'bernoulli', 'poisson')
+SIZES = ('small', 'medium', 'large')
 
 
 def _ckpt_dir(family: str, size: str, seed: int) -> Path:
     initial = FAMILY_INITIAL[family]
-    return CKPT_BASE / f"data={size}-{initial}-mixed_model=large_seed={seed}"
+    return CKPT_BASE / f'data={size}-{initial}-mixed_model=large_seed={seed}'
 
 
 def build(dry_run: bool = False) -> list[Path]:
@@ -78,16 +81,16 @@ def build(dry_run: bool = False) -> list[Path]:
                 continue
             path = _ckpt_dir(family, size, seed)
             if not path.exists():
-                print(f"[ERROR] checkpoint not found: {path}", file=sys.stderr)
+                print(f'[ERROR] checkpoint not found: {path}', file=sys.stderr)
                 sys.exit(1)
-            checkpoints[f"{family}-{size}"] = path
+            checkpoints[f'{family}-{size}'] = path
 
         if not checkpoints:
-            print(f"[SKIP]  {family} — no seeds configured")
+            print(f'[SKIP]  {family} — no seeds configured')
             continue
 
-        output_path = OUTPUT_DIR / f"metabeta-{family}.pt"
-        print(f"[BUILD] {family}: {list(checkpoints)} → {output_path}")
+        output_path = OUTPUT_DIR / f'metabeta-{family}.pt'
+        print(f'[BUILD] {family}: {list(checkpoints)} → {output_path}')
         if not dry_run:
             joinCheckpoints(checkpoints, output_path=output_path)
         built.append(output_path)
@@ -100,32 +103,32 @@ def upload(dry_run: bool = False) -> None:
 
     api = HfApi()
 
-    model_card = Path(__file__).parent / "hf_model_card.md"
+    model_card = Path(__file__).parent / 'hf_model_card.md'
     if model_card.exists():
-        print(f"[UPLOAD] {model_card.name}  → {HF_REPO_ID}")
+        print(f'[UPLOAD] {model_card.name}  → {HF_REPO_ID}')
         if not dry_run:
             api.upload_file(
                 path_or_fileobj=str(model_card),
-                path_in_repo="README.md",
+                path_in_repo='README.md',
                 repo_id=HF_REPO_ID,
-                repo_type="model",
-                commit_message="update model card",
+                repo_type='model',
+                commit_message='update model card',
             )
 
     for family in FAMILIES:
-        path = OUTPUT_DIR / f"metabeta-{family}.pt"
+        path = OUTPUT_DIR / f'metabeta-{family}.pt'
         if not path.exists():
-            print(f"[SKIP]  {path.name} not found — run --build first")
+            print(f'[SKIP]  {path.name} not found — run --build first')
             continue
         size_mb = path.stat().st_size / 1e6
-        print(f"[UPLOAD] {path.name}  ({size_mb:.0f} MB)  → {HF_REPO_ID}")
+        print(f'[UPLOAD] {path.name}  ({size_mb:.0f} MB)  → {HF_REPO_ID}')
         if not dry_run:
             api.upload_file(
                 path_or_fileobj=str(path),
                 path_in_repo=path.name,
                 repo_id=HF_REPO_ID,
-                repo_type="model",
-                commit_message=f"update {path.name}",
+                repo_type='model',
+                commit_message=f'update {path.name}',
             )
 
 
@@ -134,24 +137,25 @@ def tag(dry_run: bool = False) -> None:
     from huggingface_hub.utils import HfHubHTTPError
 
     api = HfApi()
-    print(f"[TAG]   moving {CHECKPOINT_VERSION!r} → HEAD on {HF_REPO_ID}")
+    print(f'[TAG]   moving {CHECKPOINT_VERSION!r} → HEAD on {HF_REPO_ID}')
     if not dry_run:
         try:
-            api.delete_tag(HF_REPO_ID, tag=CHECKPOINT_VERSION, repo_type="model")
+            api.delete_tag(HF_REPO_ID, tag=CHECKPOINT_VERSION, repo_type='model')
         except HfHubHTTPError:
             pass  # tag did not exist yet
         api.create_tag(
             HF_REPO_ID,
             tag=CHECKPOINT_VERSION,
-            revision="main",
-            repo_type="model",
+            revision='main',
+            repo_type='model',
         )
-    print(f"[TAG]   done — {CHECKPOINT_VERSION} points to HEAD")
+    print(f'[TAG]   done — {CHECKPOINT_VERSION} points to HEAD')
 
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
 
 def setup() -> argparse.Namespace:
     # fmt: off
@@ -168,7 +172,7 @@ def main() -> None:
     args = setup()
 
     if not (args.build or args.upload or args.tag):
-        print("nothing to do — pass --build, --upload, and/or --tag", file=sys.stderr)
+        print('nothing to do — pass --build, --upload, and/or --tag', file=sys.stderr)
         sys.exit(1)
 
     if args.build:
@@ -179,5 +183,5 @@ def main() -> None:
         tag(dry_run=args.dry_run)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
