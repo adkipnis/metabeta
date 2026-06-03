@@ -328,7 +328,12 @@ class Api:
 
         rng = np.random.default_rng(0)
         dummy: dict[str, Any] = {}
-        dummy['_y'] = rng.integers(0, 2, size=n).astype(float) if fam == 1 else rng.standard_normal(n)
+        if fam == 1:
+            dummy['_y'] = rng.integers(0, 2, size=n).astype(float)
+        elif fam == 2:
+            dummy['_y'] = rng.integers(0, 10, size=n).astype(float)
+        else:
+            dummy['_y'] = rng.standard_normal(n)
         for j in range(d - 1):
             dummy[f'_x{j}'] = rng.standard_normal(n)
         dummy['_g'] = np.repeat(np.arange(min_m), min_n)
@@ -337,7 +342,7 @@ class Api:
         rfx_slopes = (' + ' + ' + '.join(f'_x{j}' for j in range(q - 1))) if q > 1 else ''
         formula = f'_y ~ {fixed} + (1{rfx_slopes} | _g)'
 
-        self.sample(pd.DataFrame(dummy), formula=formula, n_samples=1, diagnostics=False)
+        self.sample(pd.DataFrame(dummy), formula=formula, n_samples=1, diagnostics=False, likelihood_family=fam)
 
     def warmup(self, data: Any = None, **prepare_kwargs: Any) -> None:
         """Prime PyTorch's kernel cache with a single-sample forward pass.
