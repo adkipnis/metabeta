@@ -5,8 +5,8 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
-from metabeta.simulation.fit import Fitter
-from metabeta.utils.io import datasetFilename
+from metabeta.simulation.nutsadvi import Fitter
+from metabeta.utils.names import datasetFilename
 
 # fmt: off
 def setup() -> argparse.Namespace:
@@ -15,17 +15,17 @@ def setup() -> argparse.Namespace:
     )
     parser.add_argument('--data_id', type=str, nargs='+', required=True,
                         help='one or more data config tags')
-    parser.add_argument('--mode', choices=['train', 'test'], required=True,
-                        help='check training partitions (train) or test fits (test)')
-    parser.add_argument('-b', type=int, default=5000,
-                        help='batch size: expected number of train partitions (default: 5000)')
+    parser.add_argument('--partition', choices=['train', 'test', 'valid'], required=True,
+                        help='check training epochs (train), test fits (test), or valid fits (valid)')
+    parser.add_argument('-b', type=int, default=8000,
+                        help='batch size: expected number of train epochs (default: 8000)')
     parser.add_argument('--n_fits', type=int, default=512,
                         help='expected fit files per method (default: 512)')
     parser.add_argument('--srcdir', type=str,
                         default=str(Path(__file__).resolve().parent / '..' / 'outputs' / 'data'),
                         help='root data directory')
     parser.add_argument('--no_reintegrate', action='store_true',
-                        help='skip reintegration even when all fits are present (test mode only)')
+                        help='skip reintegration even when all fits are present (test partition only)')
     parser.add_argument('--inspect', action='store_true',
                         help='load each npz file to verify readability')
     return parser.parse_args()
@@ -69,12 +69,18 @@ def _failedFitIndices(missing: list[Path], broken: list[tuple[Path, str]]) -> li
     return sorted(set(indices))
 
 
-def _printRefitCommand(data_id: str, method: str, failed_idx: list[int]) -> None:
+def _printRefitCommand(
+    data_id: str, method: str, failed_idx: list[int], partition: str = 'test'
+) -> None:
     if not failed_idx:
         return
     idx_args = ' '.join(str(idx) for idx in failed_idx)
+    partition_flag = f' --partition {partition}' if partition != 'test' else ''
     print('  rerun with:')
-    print(f'    scripts/fit-selected.sh --method {method} --data_id {data_id} --idx {idx_args}')
+    print(
+        f'    scripts/fit-selected.sh --method {method} --data_id {data_id}'
+        f'{partition_flag} --idx {idx_args}'
+    )
 
 
 def _checkTrain(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
@@ -90,6 +96,10 @@ def _checkTrain(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
 
 def _checkTest(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
     fits_dir = srcdir / data_id / 'fits'
+    fit_path = srcdir / data_id / 'test.fit.npz'
+    if fit_path.exists() and not fits_dir.exists():
+        print('test.fit.npz present, fits/ absent — already reintegrated.')
+        return True
     stem = Path(datasetFilename(partition='test')).stem
 
     pymc_paths = [fits_dir / f'{stem}_nuts_{i:03d}.npz' for i in range(cfg.n_fits)]
@@ -116,14 +126,43 @@ def _checkTest(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
 
     fits_ok = not any([pymc_missing, pymc_broken, advi_missing, advi_broken])
     if fits_ok and not cfg.no_reintegrate:
-        _reintegrate(data_id, srcdir)
+        _reintegrate(data_id, srcdir, partition='test')
     return fits_ok
 
 
-def _reintegrate(data_id: str, srcdir: Path) -> None:
-    fit_cfg = argparse.Namespace(data_id=data_id, idx=0, method='nuts')
+def _checkValid(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
+    fits_dir = srcdir / data_id / 'fits'
+    fit_path = srcdir / data_id / 'valid.fit.npz'
+    if fit_path.exists() and not fits_dir.exists():
+        print('valid.fit.npz present, fits/ absent — already reintegrated.')
+        return True
+    stem = Path(datasetFilename(partition='valid')).stem
+
+    nuts_paths = [fits_dir / f'{stem}_nuts_{i:03d}.npz' for i in range(cfg.n_fits)]
+    nuts_missing, nuts_broken = _check(nuts_paths, 'nuts fits (valid)', inspect=cfg.inspect)
+    _report(
+        'nuts fits (valid)',
+        len(nuts_paths) - len(nuts_missing) - len(nuts_broken),
+        len(nuts_paths),
+        nuts_missing,
+        nuts_broken,
+    )
+    _printRefitCommand(
+        data_id, 'nuts', _failedFitIndices(nuts_missing, nuts_broken), partition='valid'
+    )
+
+    fits_ok = not any([nuts_missing, nuts_broken])
+    if fits_ok and not cfg.no_reintegrate:
+        _reintegrate(data_id, srcdir, partition='valid', methods=['nuts'])
+    return fits_ok
+
+
+def _reintegrate(
+    data_id: str, srcdir: Path, partition: str = 'test', methods: list[str] | None = None
+) -> None:
+    fit_cfg = argparse.Namespace(data_id=data_id, idx=0, method='nuts', partition=partition)
     try:
-        Fitter(fit_cfg, srcdir=srcdir).reintegrate()
+        Fitter(fit_cfg, srcdir=srcdir).reintegrate(methods=methods)
     except Exception as exc:
         print(f'reintegration failed: {exc}')
 
@@ -131,7 +170,7 @@ def _reintegrate(data_id: str, srcdir: Path) -> None:
 def main() -> int:
     cfg = setup()
     srcdir = Path(cfg.srcdir).resolve()
-    check_fn = _checkTrain if cfg.mode == 'train' else _checkTest
+    check_fn = {'train': _checkTrain, 'test': _checkTest, 'valid': _checkValid}[cfg.partition]
 
     results = {}
     for i, data_id in enumerate(cfg.data_id):

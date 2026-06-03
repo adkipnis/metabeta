@@ -1,0 +1,600 @@
+"""
+Oracle evaluation: given a model checkpoint, evaluate on tiny/small/medium/large test sets.
+
+Filters datasets that exceed the model's d/q capacity, loads NUTS/ADVI fits from the
+test.fit.npz batch, and produces a LaTeX + Markdown table with mean ± std over
+parameter dimensions (for NRMSE/ECE/EACE/R) and over datasets (for LOO-NLL).
+
+Usage (from repo root):
+    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH
+    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --n_samples 100 --batch_size 4
+    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --data_ids small-n-sampled large-n-sampled
+"""
+
+import argparse
+import gc
+import logging
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+from tabulate import tabulate
+from tqdm import tqdm
+
+from metabeta.models.approximator import Approximator
+from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch, toDevice
+from metabeta.utils.evaluation import (
+    Proposal,
+    concatProposalsBatch,
+    nutsConvergeMask,
+    subsetProposal,
+)
+from metabeta.utils.device import setDevice
+from metabeta.utils.logger import setupLogging
+from metabeta.utils.preprocessing import rescaleData
+from metabeta.utils.sampling import setSeed
+from metabeta.utils.templates import loadConfigFromCheckpoint
+from metabeta.evaluation.summary import getSummary
+from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, loadApproximator
+
+OUT_DIR = RESULTS_DIR
+
+DEFAULT_DATA_IDS = [
+    'tiny-n-sampled',
+    'small-n-sampled',
+    'medium-n-sampled',
+    'large-n-sampled',
+]
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+
+
+def setup() -> argparse.Namespace:
+    # fmt: off
+    parser = argparse.ArgumentParser(
+        description='Oracle cross-size evaluation', argument_default=argparse.SUPPRESS
+    )
+    parser.add_argument('--checkpoint', type=str, required=True)
+    parser.add_argument('--prefix',     type=str, default='latest')
+    parser.add_argument('--device',     type=str, default='cpu')
+    parser.add_argument('--n_samples',  type=int, default=1000)
+    parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--summary_batch_size', type=int, default=1,
+                        help='Datasets per chunk for posterior predictive / LOO summaries')
+    parser.add_argument('--seed',       type=int, default=0)
+    parser.add_argument('--data_ids',   type=str, nargs='+', default=DEFAULT_DATA_IDS)
+    parser.add_argument('--outdir',     type=str, default=str(OUT_DIR))
+    parser.add_argument('--verbosity',  type=int, default=1)
+    parser.add_argument('--decimals',         type=int, default=2,
+                        help='Decimal places in table cells (default: 2)')
+    parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--convergence_mode', type=str, default='liberal',
+                        choices=['liberal', 'strict'])
+    # fmt: on
+    return parser.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# Model loading
+
+
+def loadModel(
+    ckpt_dir: Path,
+    prefix: str,
+    device: torch.device,
+) -> tuple[Approximator, argparse.Namespace]:
+    cfg_dict = loadConfigFromCheckpoint(ckpt_dir)
+    cfg = argparse.Namespace(**cfg_dict)
+
+    model = loadApproximator(cfg, device, ckpt_dir, prefix)
+
+    return model, cfg
+
+
+# ---------------------------------------------------------------------------
+# Batch helpers
+
+
+def capacityMask(batch: dict[str, torch.Tensor], max_d: int, max_q: int) -> np.ndarray:
+    d_active = batch['mask_d'].sum(-1).numpy()
+    q_active = batch['mask_q'].sum(-1).numpy()
+    return (d_active <= max_d) & (q_active <= max_q)
+
+
+def trimBatch(batch: dict[str, torch.Tensor], max_d: int, max_q: int) -> dict[str, torch.Tensor]:
+    """Slice all relevant tensors to model's max_d/max_q and recompute derived masks.
+
+    Safe because permute=False ensures features are in natural (ascending) order,
+    so slicing to max_d preserves exactly the active dimensions.
+    """
+    out = dict(batch)
+
+    for key in ('X', 'ffx', 'nu_ffx', 'tau_ffx', 'mask_d'):
+        if key in out:
+            out[key] = out[key][..., :max_d]
+
+    for key in ('Z', 'sigma_rfx', 'tau_rfx', 'mask_q'):
+        if key in out:
+            out[key] = out[key][..., :max_q]
+
+    if 'rfx' in out:
+        out['rfx'] = out['rfx'][..., :max_q]
+
+    if 'corr_rfx' in out:
+        out['corr_rfx'] = out['corr_rfx'][..., :max_q, :max_q]
+
+    for method in ('nuts', 'advi'):
+        if f'{method}_ffx' in out:
+            out[f'{method}_ffx'] = out[f'{method}_ffx'][..., :max_d]
+        if f'{method}_sigma_rfx' in out:
+            out[f'{method}_sigma_rfx'] = out[f'{method}_sigma_rfx'][..., :max_q]
+        if f'{method}_rfx' in out:
+            out[f'{method}_rfx'] = out[f'{method}_rfx'][..., :max_q]
+        if f'{method}_corr_rfx' in out:
+            out[f'{method}_corr_rfx'] = out[f'{method}_corr_rfx'][..., :max_q, :max_q]
+
+    # recompute masks that depend on mask_q
+    B = out['mask_q'].shape[0]
+    out['mask_mq'] = out['mask_m'].unsqueeze(-1) & out['mask_q'].unsqueeze(-2)
+    q = max_q
+    out['mask_corr'] = (
+        torch.stack(
+            [out['mask_q'][..., i] & out['mask_q'][..., j] for i in range(1, q) for j in range(i)],
+            dim=-1,
+        )
+        if q >= 2
+        else out['mask_q'].new_zeros(B, 0)
+    )
+
+    return out
+
+
+def dropFitKeys(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Return a view-like dict excluding large cached NUTS/ADVI fit tensors."""
+    return {k: v for k, v in batch.items() if not (k.startswith('nuts_') or k.startswith('advi_'))}
+
+
+def methodFitBatch(batch: dict[str, torch.Tensor], prefix: str) -> dict[str, torch.Tensor]:
+    """Return only cached fit tensors for one method."""
+    stem = f'{prefix}_'
+    return {k: v for k, v in batch.items() if k.startswith(stem)}
+
+
+def loadRegimeBatch(
+    data_path: Path,
+    max_d: int,
+    max_q: int,
+) -> tuple[dict[str, torch.Tensor], int, int]:
+    """Load test batch, filtering and padding/trimming to model capacity.
+
+    When the test set fits within the model (d_file ≤ max_d, q_file ≤ max_q),
+    loads with max_d/max_q so the model receives correctly-padded inputs.
+    Otherwise loads natively, filters datasets by capacity, and trims to max_d/max_q.
+
+    Returns (batch, n_total, n_kept).
+    """
+    col = Collection(data_path, permute=False)
+    d_file, q_file = col.d, col.q
+    n_total = len(col)
+
+    if d_file <= max_d and q_file <= max_q:
+        col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q)
+        batch = collateGrouped([col[i] for i in range(n_total)])
+        return batch, n_total, n_total
+
+    # Some datasets exceed capacity: load natively, filter, trim
+    batch = collateGrouped([col[i] for i in range(n_total)])
+    cap_mask = capacityMask(batch, max_d, max_q)
+    n_kept = int(cap_mask.sum())
+    batch = subsetBatch(batch, cap_mask)
+    batch = trimBatch(batch, max_d, max_q)
+    return batch, n_total, n_kept
+
+
+# ---------------------------------------------------------------------------
+# Inference helpers
+
+
+def fitBatchMask(batch: dict[str, torch.Tensor], prefix: str) -> np.ndarray:
+    failed_key = f'{prefix}_failed'
+    if failed_key not in batch:
+        return np.ones(batch['X'].shape[0], dtype=bool)
+    return ~batch[failed_key].cpu().numpy().astype(bool)
+
+
+def fit2proposal(batch: dict[str, torch.Tensor], prefix: str) -> Proposal:
+    samples_g = [batch[f'{prefix}_ffx'], batch[f'{prefix}_sigma_rfx']]
+    has_sigma_eps = False
+    if f'{prefix}_sigma_eps' in batch:
+        samples_g.append(batch[f'{prefix}_sigma_eps'].unsqueeze(-1))
+        has_sigma_eps = True
+    proposed = {
+        'global': {'samples': torch.cat(samples_g, dim=-1)},
+        'local': {'samples': batch[f'{prefix}_rfx']},
+    }
+    corr_rfx = batch.get(f'{prefix}_corr_rfx', None)
+    proposal = Proposal(proposed, has_sigma_eps=has_sigma_eps, corr_rfx=corr_rfx)
+    proposal.tpd = batch[f'{prefix}_duration'].mean().item()
+    return proposal
+
+
+@torch.inference_mode()
+def sampleMB(
+    model: Approximator,
+    batch: dict[str, torch.Tensor],
+    n_samples: int,
+    batch_size: int,
+    device: torch.device,
+) -> tuple[Proposal, torch.Tensor]:
+    """Returns (proposal, tpd_arr) where tpd_arr is per-dataset time (s), shape (B,)."""
+    B = batch['X'].shape[0]
+    proposals: list[Proposal] = []
+    tpd_list: list[float] = []
+    for start in tqdm(range(0, B, batch_size), desc='  MB', leave=False):
+        end = min(start + batch_size, B)
+        b_chunk = {
+            k: v[start:end] if (torch.is_tensor(v) and v.shape[0] == B) else v
+            for k, v in batch.items()
+        }
+        b_chunk = toDevice(b_chunk, device)
+        t0_chunk = time.perf_counter()
+        p_chunk = model.estimate(b_chunk, n_samples=n_samples)
+        tpd_chunk = (time.perf_counter() - t0_chunk) / (end - start)
+        tpd_list.extend([tpd_chunk] * (end - start))
+        p_chunk.to('cpu')
+        proposals.append(p_chunk)
+        del b_chunk
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+    merged = concatProposalsBatch(proposals)
+    tpd_arr = torch.tensor(tpd_list, dtype=torch.float64)
+    merged.tpd = tpd_arr.mean().item()
+    return merged, tpd_arr
+
+
+# ---------------------------------------------------------------------------
+# Metric helpers
+
+
+def flattenActiveParams(
+    metric_dict: dict[str, torch.Tensor],
+    active_d: torch.Tensor,
+    active_q: torch.Tensor,
+    has_eps: bool,
+) -> torch.Tensor:
+    """Flatten per-parameter-dimension metrics to a 1-D tensor over active dims only.
+
+    Handles ffx (d,), sigma_rfx (q,), rfx (q,), sigma_eps (scalar).
+    Excludes corr_rfx.
+    """
+    parts: list[torch.Tensor] = []
+    if 'ffx' in metric_dict:
+        parts.append(metric_dict['ffx'][active_d].float())
+    if 'sigma_rfx' in metric_dict:
+        parts.append(metric_dict['sigma_rfx'][active_q].float())
+    if 'rfx' in metric_dict:
+        parts.append(metric_dict['rfx'][active_q].float())
+    if has_eps and 'sigma_eps' in metric_dict:
+        val = metric_dict['sigma_eps'].float()
+        parts.append(val.reshape(1))
+    if not parts:
+        return torch.zeros(0)
+    return torch.cat(parts)
+
+
+def _ms(t: torch.Tensor) -> tuple[float, float]:
+    """Mean and Bessel-corrected std, ignoring NaNs."""
+    t = t[~torch.isnan(t)]
+    if len(t) == 0:
+        return float('nan'), float('nan')
+    mean = t.mean().item()
+    std = t.std(correction=1).item() if len(t) > 1 else 0.0
+    return mean, std
+
+
+def _medianMad(t: torch.Tensor) -> tuple[float, float]:
+    """Median and MAD, ignoring NaNs."""
+    t = t[~torch.isnan(t)].double()
+    if len(t) == 0:
+        return float('nan'), float('nan')
+    med = t.median().item()
+    mad = (t - med).abs().median().item()
+    return med, mad
+
+
+def buildRow(
+    label: str,
+    regime: str,
+    corr_vals: torch.Tensor,
+    nrmse_vals: torch.Tensor,
+    ece_vals: torch.Tensor,
+    eace_vals: torch.Tensor,
+    loo_nll: torch.Tensor | None,
+    tpd_arr: torch.Tensor | None,
+) -> dict:
+    row: dict = {'regime': regime, 'method': label}
+    row['r'] = _ms(corr_vals)
+    row['NRMSE'] = _ms(nrmse_vals)
+    row['ECE'] = _ms(ece_vals)
+    row['EACE'] = _ms(eace_vals)
+    row['LOO-NLL'] = _medianMad(loo_nll) if loo_nll is not None else None
+    row['time'] = _ms(tpd_arr.float()) if tpd_arr is not None else None
+    return row
+
+
+# ---------------------------------------------------------------------------
+# Regime evaluation
+
+
+def _evalGroup(
+    quads: list[tuple[str, Proposal, dict, torch.Tensor | None]],
+    regime: str,
+    likelihood_family: int,
+    rescale: bool,
+    summary_batch_size: int,
+) -> list[dict]:
+    """Evaluate a list of (label, proposal, batch, tpd_arr) tuples and return rows."""
+    rows = []
+    for label, proposal, batch, tpd_arr in quads:
+        if proposal is None:
+            continue
+        proposal.to('cpu')
+        if rescale:
+            proposal.rescale(batch['sd_y'])
+            batch = rescaleData(batch)
+        summary = getSummary(
+            proposal,
+            batch,
+            likelihood_family=likelihood_family,
+            compute_pred_coverage=False,
+            dataset_chunk_size=summary_batch_size,
+        )
+        active_d = batch['mask_d'].any(0)
+        active_q = batch['mask_q'].any(0)
+        has_eps = 'sigma_eps' in summary.nrmse
+        rows.append(
+            buildRow(
+                label,
+                regime,
+                corr_vals=flattenActiveParams(summary.corr, active_d, active_q, has_eps),
+                nrmse_vals=flattenActiveParams(summary.nrmse, active_d, active_q, has_eps),
+                ece_vals=flattenActiveParams(summary.ece, active_d, active_q, has_eps),
+                eace_vals=flattenActiveParams(summary.eace, active_d, active_q, has_eps),
+                loo_nll=summary.loo_nll,
+                tpd_arr=tpd_arr,
+            )
+        )
+    return rows
+
+
+def evaluateRegime(
+    model: Approximator,
+    data_path: Path,
+    max_d: int,
+    max_q: int,
+    likelihood_family: int,
+    n_samples: int,
+    batch_size: int,
+    device: torch.device,
+    regime: str,
+    rescale: bool = True,
+    convergence_mode: str = 'liberal',
+    summary_batch_size: int = 1,
+) -> tuple[list[dict], list[dict] | None]:
+    """Returns (rows_full, rows_conv) — rows_conv is None if no convergence data."""
+    logger.info('\n--- Regime: %s ---', regime)
+
+    cap_batch, n_total, n_kept = loadRegimeBatch(data_path, max_d, max_q)
+    logger.info('  Capacity filter: %d / %d (d≤%d, q≤%d)', n_kept, n_total, max_d, max_q)
+    if n_kept == 0:
+        logger.warning('  No datasets pass capacity filter — skipping.')
+        return [], None
+
+    advi_mask = fitBatchMask(cap_batch, 'advi')
+    n_advi = int(advi_mask.sum())
+    logger.info('  ADVI success: %d / %d', n_advi, n_kept)
+
+    data_batch = dropFitKeys(cap_batch)
+    advi_data_batch = subsetBatch(data_batch, advi_mask)
+
+    proposal_mb, mb_tpd_arr = sampleMB(model, data_batch, n_samples, batch_size, device)
+    proposal_nuts = fit2proposal(cap_batch, 'nuts')
+    advi_fit_batch = (
+        subsetBatch(methodFitBatch(cap_batch, 'advi'), advi_mask) if n_advi > 0 else None
+    )
+    proposal_advi = fit2proposal(advi_fit_batch, 'advi') if advi_fit_batch is not None else None
+
+    nuts_tpd = cap_batch.get('nuts_duration')
+    advi_tpd = advi_fit_batch.get('advi_duration') if advi_fit_batch is not None else None
+    for key in list(cap_batch):
+        if key.startswith('advi_'):
+            del cap_batch[key]
+    gc.collect()
+
+    # Build convergence subsets BEFORE the eval loop (rescale is in-place on proposals)
+    conv_quads: list[tuple[str, Proposal, dict, torch.Tensor | None]] | None = None
+    conv_mask = nutsConvergeMask(cap_batch, mode=convergence_mode)
+    if conv_mask is not None:
+        n_conv = int(conv_mask.sum())
+        logger.info('  NUTS convergence (%s): %d / %d', convergence_mode, n_conv, n_kept)
+        if 0 < n_conv < n_kept:
+            conv_batch = subsetBatch(data_batch, conv_mask)
+            conv_mb = subsetProposal(proposal_mb, conv_mask)
+            conv_nuts = subsetProposal(proposal_nuts, conv_mask)
+            conv_advi_mask = advi_mask & conv_mask
+            n_conv_advi = int(conv_advi_mask.sum())
+            conv_advi_batch = subsetBatch(data_batch, conv_advi_mask)
+            conv_advi = (
+                subsetProposal(proposal_advi, conv_mask[advi_mask])
+                if n_advi > 0 and n_conv_advi > 0
+                else None
+            )
+            idx = torch.from_numpy(conv_mask)
+            advi_idx = torch.from_numpy(conv_mask[advi_mask])
+            conv_quads = [
+                ('MB', conv_mb, conv_batch, mb_tpd_arr[idx]),
+                ('NUTS', conv_nuts, conv_batch, nuts_tpd[idx] if nuts_tpd is not None else None),
+                (
+                    'ADVI',
+                    conv_advi,
+                    conv_advi_batch,
+                    advi_tpd[advi_idx] if advi_tpd is not None else None,
+                ),
+            ]
+
+    full_quads = [
+        ('MB', proposal_mb, data_batch, mb_tpd_arr),
+        ('NUTS', proposal_nuts, data_batch, nuts_tpd),
+        ('ADVI', proposal_advi, advi_data_batch, advi_tpd),
+    ]
+    rows = _evalGroup(full_quads, regime, likelihood_family, rescale, summary_batch_size)
+    rows_conv = (
+        _evalGroup(conv_quads, regime, likelihood_family, rescale, summary_batch_size)
+        if conv_quads
+        else None
+    )
+
+    return rows, rows_conv
+
+
+# ---------------------------------------------------------------------------
+# Table output
+
+METRICS = ['r', 'NRMSE', 'ECE', 'EACE', 'LOO-NLL', 'time']
+
+
+def _fmtMd(val: tuple[float, float] | float | None, dp: int = 2) -> str:
+    if val is None:
+        return 'NA'
+    if isinstance(val, tuple):
+        m, s = val
+        if m != m:  # NaN check
+            return 'NA'
+        return f'{m:.{dp}f} ± {s:.{dp}f}'
+    return f'{val:.{dp}f}'
+
+
+def _fmtTex(val: tuple[float, float] | float | None, dp: int = 2) -> str:
+    if val is None:
+        return 'NA'
+    if isinstance(val, tuple):
+        m, s = val
+        if m != m:  # NaN check
+            return 'NA'
+        return f'${m:.{dp}f} \\pm {s:.{dp}f}$'
+    return f'${val:.{dp}f}$'
+
+
+def saveTables(
+    rows_by_regime: dict[str, list[dict]],
+    outdir: Path,
+    run_name: str,
+    dp: int = 2,
+) -> None:
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    fmt_md = lambda v: _fmtMd(v, dp)
+    fmt_tex = lambda v: _fmtTex(v, dp)
+
+    # --- Markdown ---
+    md_rows = []
+    for regime, rows in rows_by_regime.items():
+        for r in rows:
+            md_rows.append([regime, r['method']] + [fmt_md(r[c]) for c in METRICS])
+    md_table = tabulate(
+        md_rows,
+        headers=['regime', 'method'] + METRICS,
+        tablefmt='pipe',
+        stralign='right',
+    )
+    md_path = outdir / f'oracle_{run_name}.md'
+    md_path.write_text(f'# Oracle Evaluation: {run_name}\n\n{md_table}\n')
+    logger.info('Saved Markdown → %s', md_path)
+
+    # --- LaTeX ---
+    header_cols = (
+        r'$r$ & $\mathrm{NRMSE}$ & $\mathrm{ECE}$ & '
+        r'$\mathrm{EACE}$ & $\mathrm{LOO\text{-}NLL}$ & $\mathrm{time}$'
+    )
+    lines: list[str] = [
+        r'\begin{tabular}{cc|cccccc}',
+        r'    \toprule',
+        rf'    $\mathrm{{regime}}$ & $\mathrm{{model}}$ & {header_cols} \\',
+    ]
+    for regime, rows in rows_by_regime.items():
+        lines.append(r'    \midrule')
+        for j, row in enumerate(rows):
+            regime_cell = rf'\texttt{{{regime}}}' if j == 0 else ''
+            method_cell = rf'\texttt{{{row["method"]}}}'
+            cells = ' & '.join(fmt_tex(row[c]) for c in METRICS)
+            lines.append(rf'      {regime_cell} & {method_cell} & {cells} \\')
+    lines += [r'    \bottomrule', r'\end{tabular}', '']
+
+    tex_path = outdir / f'oracle_{run_name}.tex'
+    tex_path.write_text('\n'.join(lines))
+    logger.info('Saved LaTeX → %s', tex_path)
+
+
+# ---------------------------------------------------------------------------
+# Main
+
+
+def main() -> None:
+    cfg = setup()
+    setupLogging(cfg.verbosity)
+    setSeed(cfg.seed)
+    device = setDevice(cfg.device)
+
+    ckpt_dir = Path(cfg.checkpoint)
+    model, model_cfg_ns = loadModel(ckpt_dir, cfg.prefix, device)
+    max_d: int = model_cfg_ns.max_d
+    max_q: int = model_cfg_ns.max_q
+    lf: int = model_cfg_ns.likelihood_family
+    run_name = ckpt_dir.name
+
+    logger.info('Model: %s  max_d=%d  max_q=%d  likelihood=%d', run_name, max_d, max_q, lf)
+
+    rows_by_regime: dict[str, list[dict]] = {}
+    rows_by_regime_conv: dict[str, list[dict]] = {}
+    for data_id in cfg.data_ids:
+        data_path = DATA_DIR / data_id / 'test.fit.npz'
+        if not data_path.exists():
+            logger.warning('Skipping %s: test.fit.npz not found', data_id)
+            continue
+        regime = data_id.split('-')[0]
+        rows, rows_conv = evaluateRegime(
+            model,
+            data_path,
+            max_d,
+            max_q,
+            lf,
+            n_samples=cfg.n_samples,
+            batch_size=cfg.batch_size,
+            device=device,
+            regime=regime,
+            rescale=cfg.rescale,
+            convergence_mode=cfg.convergence_mode,
+            summary_batch_size=cfg.summary_batch_size,
+        )
+        if rows:
+            rows_by_regime[regime] = rows
+        if rows_conv:
+            rows_by_regime_conv[regime] = rows_conv
+
+    if not rows_by_regime:
+        logger.error('No regimes evaluated — check data_ids and checkpoint.')
+        return
+
+    dp = getattr(cfg, 'decimals', 2)
+    saveTables(rows_by_regime, Path(cfg.outdir), run_name, dp=dp)
+    if rows_by_regime_conv:
+        saveTables(rows_by_regime_conv, Path(cfg.outdir), f'{run_name}_conv', dp=dp)
+
+
+if __name__ == '__main__':
+    main()

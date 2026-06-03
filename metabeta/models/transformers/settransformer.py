@@ -27,6 +27,7 @@ class SetTransformer(nn.Module):
         use_bias: bool = True,
         pre_norm: bool = True,
         activation: str = 'GELU',
+        proj_nonlinear: bool = True,
         dropout: float = 0.01,
         weight_init: tuple[str, str] | None = ('xavier', 'normal'),
         eps: float = 1e-3,
@@ -45,11 +46,11 @@ class SetTransformer(nn.Module):
         # input projector: GeGLU is a FFN-bottleneck activation and doesn't fit
         # a single embedding linear, so fall back to GELU for proj_in.
         proj_activation = 'GELU' if activation == 'GeGLU' else activation
-        self.proj_in = nn.Sequential(
-            nn.Linear(d_input, d_model),
-            getActivation(proj_activation),
-            nn.Dropout(dropout),
-        )
+        proj_in_layers: list[nn.Module] = [nn.Linear(d_input, d_model)]
+        if proj_nonlinear:
+            proj_in_layers.append(getActivation(proj_activation))
+        proj_in_layers.append(nn.Dropout(dropout))
+        self.proj_in = nn.Sequential(*proj_in_layers)
 
         # pool token (only used when pooling='cls')
         if pooling == 'cls':

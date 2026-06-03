@@ -111,16 +111,12 @@ def getCorrelation(
             gt = corrToLower(data['corr_rfx'])  # (b, d_corr)
             q = data['mask_q'].shape[-1]
             pair_masks = [
-                data['mask_q'][:, i] & data['mask_q'][:, j]
-                for i in range(q)
-                for j in range(i)
+                data['mask_q'][:, i] & data['mask_q'][:, j] for i in range(q) for j in range(i)
             ]
             corr = np.array(
                 [
                     cast(np.float32, pearsonr(gt[pm, k].numpy(), est[pm, k].numpy())[0])
-                    if pm.sum() >= 2
-                    and gt[pm, k].std().item() > 0
-                    and est[pm, k].std().item() > 0
+                    if pm.sum() >= 2 and gt[pm, k].std().item() > 0 and est[pm, k].std().item() > 0
                     else float('nan')
                     for k, pm in enumerate(pair_masks)
                 ],

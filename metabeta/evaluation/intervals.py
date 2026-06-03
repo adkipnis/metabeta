@@ -86,7 +86,7 @@ def getAtomicCoverage(
         inside = inside & mask
         n = mask.sum(0)
         coverage = inside.float().sum(0) / n.clamp_min(1.0)
-        return torch.where(n > 0, coverage, torch.full_like(coverage, float('nan')))
+        return torch.where(n > 0, coverage, torch.zeros_like(coverage))
     return inside.float().mean(0)
 
 

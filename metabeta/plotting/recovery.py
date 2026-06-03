@@ -148,8 +148,8 @@ def _prepareRecoveryData(
 ) -> tuple[list, list, list, list, list]:
     has_eps = 'sigma_eps' in data
     allMasks = getMasks(data, has_sigma_eps=has_eps)
-    est: dict[str, torch.Tensor] = summary.estimates
-    stats = {'corr': summary.corr, 'nrmse': summary.nrmse}
+    est: dict[str, torch.Tensor] = summary.aggregated.estimates
+    stats = {'corr': summary.aggregated.corr, 'nrmse': summary.aggregated.nrmse}
 
     targets, estimates, masks, names, metrics = [], [], [], [], []
 

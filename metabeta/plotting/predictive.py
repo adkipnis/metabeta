@@ -108,16 +108,21 @@ def plotPPD(
     y_prior_rep = posteriorPredictiveSample(pp_prior, data) if pp_prior is not None else None
     mask_n = data['mask_n']
     fig, axs = plt.subplots(figsize=(6 * len(indices), 6), ncols=len(indices), dpi=DPI)
+    # subplots(ncols=1) returns a bare Axes, not an array
+    if len(indices) == 1:
+        axs = [axs]
     first = True
 
     # plot posterior predictive densities for {indices} datasets
-    for i in indices:
+    for plot_idx, i in enumerate(indices):
         y_prior_i = y_prior_rep[i] if y_prior_rep is not None else None
-        _ppDensity(axs[i], y_obs[i], y_rep[i], mask_n[i], left=first, y_prior_tensor=y_prior_i)
+        _ppDensity(
+            axs[plot_idx], y_obs[i], y_rep[i], mask_n[i], left=first, y_prior_tensor=y_prior_i
+        )
         first = False
 
     # format
-    for ax in axs.flat:
+    for ax in axs:
         ax.set_box_aspect(1)
     fig.tight_layout()
 

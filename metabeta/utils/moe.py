@@ -11,7 +11,7 @@ import torch
 
 from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import Proposal, joinProposals
-from metabeta.utils.sampling import samplePermutation
+from metabeta.utils.sampling import sampleGroupedPermutation
 
 
 def _invertPermutation(perm: torch.Tensor) -> torch.Tensor:
@@ -171,8 +171,7 @@ def moeEstimate(
     q = int(batch['mask_q'].shape[-1])
 
     # generate k permutations
-    dperms = [samplePermutation(rng, d) for _ in range(k)]
-    qperms = [samplePermutation(rng, q) for _ in range(k)]
+    dperms, qperms = zip(*[sampleGroupedPermutation(rng, d, q) for _ in range(k)])
 
     # build 1+k batch: original + k permuted copies
     batches = [batch]

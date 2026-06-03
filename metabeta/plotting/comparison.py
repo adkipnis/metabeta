@@ -7,7 +7,7 @@ from metabeta.utils.evaluation import (
     getNames,
     getCorrRfxNames,
     Proposal,
-    dictMeanExcl,
+    dictMean,
 )
 from metabeta.utils.plot import DPI, savePlot
 from metabeta.plotting.recovery import _prepareRecoveryData, _plotRecoveryGrouped
@@ -78,12 +78,12 @@ def plotComparison(
             + getNames('rfx', proposal.q)
         )
         stats_cov = {
-            'ECE': 100 * dictMeanExcl(summary.ece),
-            'EACE': 100 * dictMeanExcl(summary.eace),
+            'ECE': 100 * dictMean(summary.aggregated.ece),
+            'EACE': 100 * dictMean(summary.aggregated.eace),
         }
         _plotCoverage(
             axs[i, n_rec],
-            summary.coverage,
+            summary.aggregated.coverage,
             names_cov,
             stats_cov,
             title=col_titles[n_rec] if upper else None,

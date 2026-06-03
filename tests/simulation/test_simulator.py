@@ -101,6 +101,35 @@ def test_simulator_synthesizer_end_to_end(rng, prior, ns, dims):
     assert 0.0 <= float(dataset['r_squared']) <= 1.0
 
 
+def test_normal_residual_share_calibration_scales_sigma_and_tau(rng):
+    hyperparams = hypersample(rng, d=2, q=1, likelihood_family=0)
+    hyperparams['tau_eps'] = np.array(0.1)
+    prior = Prior(rng, hyperparams)
+    sim = Simulator(rng=rng, prior=prior, design=Synthesizer(rng), ns=np.array([10, 10]))
+    sim._sampleNormalR2Cap = lambda: 0.70  # type: ignore[method-assign]
+
+    obs = {
+        'X': np.column_stack([np.ones(20), np.linspace(-2.0, 2.0, 20)]),
+        'groups': np.repeat([0, 1], 10),
+    }
+    params = {
+        'ffx': np.array([0.0, 10.0]),
+        'sigma_rfx': np.array([0.1]),
+        'sigma_eps': np.array(0.1),
+        'corr_rfx': np.eye(1),
+        'rfx': np.zeros((2, 1)),
+    }
+
+    calibrated, calibrated_hyper = sim._calibrateNormalResidualShare(params, dict(hyperparams), obs)
+
+    assert float(calibrated['sigma_eps']) > float(params['sigma_eps'])
+    assert float(calibrated_hyper['tau_eps']) > float(hyperparams['tau_eps'])
+    assert np.isclose(
+        float(calibrated_hyper['tau_eps']) / float(hyperparams['tau_eps']),
+        float(calibrated['sigma_eps']) / float(params['sigma_eps']),
+    )
+
+
 def test_simulator_reproducible_given_seed(dims, ns):
     # two identical pipelines -> identical outputs
     _, _, d, q = dims

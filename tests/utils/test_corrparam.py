@@ -39,9 +39,7 @@ def test_round_trip_batch(q: int):
 def test_round_trip_with_sample_dim():
     """Test that (..., q, q) -> (..., d_corr) -> (..., q, q) works for (B, S, q, q) input."""
     B, S, q = 3, 5, 2
-    corr = torch.stack(
-        [_lkj_corr(q, seed=i) for i in range(B * S)]
-    ).reshape(B, S, q, q)
+    corr = torch.stack([_lkj_corr(q, seed=i) for i in range(B * S)]).reshape(B, S, q, q)
     z = corrToUnconstrained(corr)  # (B, S, d_corr)
     assert z.shape == (B, S, q * (q - 1) // 2)
     L = unconstrainedToCholesky(z, q)  # (B, S, q, q)
@@ -61,9 +59,9 @@ def test_identity_maps_to_zero():
         corr = torch.eye(q).unsqueeze(0)
         z = corrToUnconstrained(corr)
         assert z.shape == (1, d_corr)
-        assert torch.allclose(z, torch.zeros(1, d_corr), atol=1e-5), (
-            f'identity should map to z=0 for q={q}, got {z}'
-        )
+        assert torch.allclose(
+            z, torch.zeros(1, d_corr), atol=1e-5
+        ), f'identity should map to z=0 for q={q}, got {z}'
 
 
 def test_q1_returns_empty():

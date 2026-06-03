@@ -1,71 +1,81 @@
 # Configuration presets for template-based config generation
 # Used by metabeta/utils/templates.py
 
-# Size presets for simulation/training configs
+# Effect-size presets for simulation/training configs
 # min_d / min_q define non-overlapping bands used for test-set generation,
 # so that each regime exercises a clearly distinct slice of problem space.
 # Training on the full range always uses min_d=2, min_q=1 (huge preset or CLI override).
 sizes:
-  tiny:
+  tiny: # just for prototyping
     max_d: 2
+    min_d: 1
     max_q: 1
+
+  small:
+    max_d: 4
+    min_d: 1
+    max_q: 2
+
+  medium:
+    max_d: 8
+    min_d: 5
+    max_q: 3
+
+  large:
+    max_d: 12
+    min_d: 9
+    max_q: 4
+
+  huge:
+    max_d: 16
+    min_d: 13
+    max_q: 5
+
+# Dataset-shape presets are independent of effect-size presets.  The default
+# keeps the existing memory envelope but samples m/n jointly so high-m datasets
+# also receive realistic total-n budgets.
+shape_profiles:
+  tiny:
     min_m: 5
     max_m: 25
     min_n: 5
     max_n: 25
     max_n_total: 250
+    m_wide_prob: 0.0
+    m_wide_min: 20
+    mean_n_log_frac: 0.45
+    mean_n_log_m_slope: 0.10
+    mean_n_log_noise: 0.20
 
-  small:
-    max_d: 4
-    max_q: 2
-    min_m: 5
-    max_m: 50
-    min_n: 5
-    max_n: 50
-    max_n_total: 500
-
-  medium:
-    max_d: 8
-    max_q: 3
-    min_m: 5
-    max_m: 100
-    min_n: 5
-    max_n: 100
-    max_n_total: 1000
-
-  large:
-    max_d: 16
-    max_q: 4
-    min_m: 5
-    max_m: 150
-    min_n: 5
-    max_n: 150
-    max_n_total: 2000
-
-  huge:
-    max_d: 32
-    max_q: 5
+  standard:
     min_m: 5
     max_m: 200
     min_n: 5
-    max_n: 200
-    max_n_total: 4000
+    max_n: 150
+    max_n_total: 3000
+    m_wide_prob: 0.20
+    m_wide_min: 60
+    mean_n_log_frac: 0.15
+    mean_n_log_m_slope: 0.65
+    mean_n_log_noise: 0.25
 
 # Likelihood family presets
 # Use integer IDs: 0=normal, 1=bernoulli, 2=poisson
+# min_bg_df = minimal between group degree of freedom:
+# buffer above max(d, q(q+1)/2); m_low = max(d, q(q+1)/2) + min_bg_df
 families:
   0:
     likelihood_family: 0
     name: normal
-    min_bg_df: 4  # buffer above max(d, q(q+1)/2); m_low = max(d, q(q+1)/2) + min_bg_df
+    min_bg_df: 4
   1:
     likelihood_family: 1
     name: bernoulli
-    min_bg_df: 4  # buffer above max(d, q(q+1)/2); m_low = max(d, q(q+1)/2) + min_bg_df
+    min_bg_df: 4
   2:
     likelihood_family: 2
     name: poisson
-    min_bg_df: 4  # buffer above max(d, q(q+1)/2); m_low = max(d, q(q+1)/2) + min_bg_df
+    min_bg_df: 4
 
 # CLI-only parameters (never have defaults in YAML configs)
 cli_only:

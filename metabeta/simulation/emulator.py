@@ -371,7 +371,7 @@ class Emulator:
             groups = counts2groups(ns)
 
             # add intercept
-            ones = np.ones_like(x[:, 0:1])
+            ones = np.ones((len(x), 1), dtype=x.dtype)
             x = np.concatenate([ones, x], axis=-1)
             return {'X': x, 'ns': ns, 'groups': groups}
 
@@ -613,7 +613,7 @@ class Subsampler:
             x = transformPredictors(x, axis=0, exclude_binary=True, transform_counts=True)
 
             # add intercept
-            ones = np.ones_like(x[:, 0:1])
+            ones = np.ones((len(x), 1), dtype=x.dtype)
             x = np.concatenate([ones, x], axis=-1)
 
             # normalize y to unit sd for normal likelihood

@@ -13,7 +13,7 @@ import pytest
 from metabeta.models.approximator import Approximator
 from metabeta.utils.config import ApproximatorConfig, SummarizerConfig, PosteriorConfig
 from metabeta.utils.evaluation import Proposal, joinProposals, concatProposalsBatch
-from metabeta.utils.families import hasSigmaEps
+from metabeta.utils.constants import hasSigmaEps
 
 
 # ---------------------------------------------------------------------------
@@ -26,7 +26,7 @@ def make_cfg(
     d_rfx: int = 2,
     posterior_correlation: bool = True,
     likelihood_family: int = 0,
-    analytical_context: bool = True,
+    analytical_refinement: str = 'light',
     analytical_local_at_inference: bool = True,
 ) -> ApproximatorConfig:
     s_cfg = SummarizerConfig(d_model=16, d_ff=16, d_output=16, n_blocks=1)
@@ -37,7 +37,7 @@ def make_cfg(
         d_rfx=d_rfx,
         likelihood_family=likelihood_family,
         posterior_correlation=posterior_correlation,
-        analytical_context=analytical_context,
+        analytical_refinement=analytical_refinement,
         analytical_local_at_inference=analytical_local_at_inference,
         summarizer_l=s_cfg,
         summarizer_g=s_cfg,
@@ -203,7 +203,7 @@ def test_model_from_yaml_reads_analytical_context_flags(tmp_path):
                 "  type: 'coupling'",
                 '  n_blocks: 2',
                 'posterior_correlation: false',
-                'analytical_context: false',
+                'analytical_refinement: none',
                 'analytical_local_at_inference: false',
             ]
         )
@@ -212,7 +212,7 @@ def test_model_from_yaml_reads_analytical_context_flags(tmp_path):
     from metabeta.utils.config import modelFromYaml
 
     cfg = modelFromYaml(cfg_path, d_ffx=2, d_rfx=1)
-    assert cfg.analytical_context is False
+    assert cfg.analytical_refinement == 'none'
     assert cfg.analytical_local_at_inference is False
 
 
@@ -220,7 +220,7 @@ def test_model_from_yaml_reads_analytical_inference_flag():
     from metabeta.utils.config import modelFromYaml
 
     cfg_path = (
-        Path(__file__).resolve().parents[2] / 'metabeta' / 'configs' / 'models' / 'large-r.yaml'
+        Path(__file__).resolve().parents[2] / 'metabeta' / 'configs' / 'models' / 'large.yaml'
     )
     cfg = modelFromYaml(cfg_path, d_ffx=2, d_rfx=2, likelihood_family=0)
 

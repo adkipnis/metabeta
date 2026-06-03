@@ -1,3 +1,5 @@
+import logging
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -14,18 +16,16 @@ from metabeta.utils.regularization import (
 )
 from metabeta.utils.config import ApproximatorConfig, SummarizerConfig, PosteriorConfig
 from metabeta.utils.evaluation import Proposal, joinGlobals
-from metabeta.utils.glmm import glmm
-from metabeta.utils.families import (
-    FFX_FAMILIES,
-    SIGMA_FAMILIES,
-    FamilyEncoder,
-    hasSigmaEps,
-)
+from metabeta.analytical.fit import glmm
+from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, hasSigmaEps
+from metabeta.utils.families import FamilyEncoder
 from metabeta.posthoc.gaussian_local import (
     _correlationPrecision,
     analyticalBLUPStats,
     gaussianHybrid,
 )
+
+logger = logging.getLogger(__name__)
 
 constrainSigma, unconstrainSigma, logDetJacobian = getConstrainers(method='softplus')
 CLAMP = 20.0
@@ -71,7 +71,7 @@ class Approximator(nn.Module):
 
     @property
     def analytical_context(self) -> bool:
-        return self.cfg.analytical_context
+        return self.cfg.analytical_refinement != 'none'
 
     @property
     def analytical_local_at_inference(self) -> bool:
@@ -207,20 +207,57 @@ class Approximator(nn.Module):
         return torch.cat(masks, dim=-1)
 
     def _dataStatistics(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """Compute sufficient statistics: GLS/GLMM β̂, σ̂, BLUPs."""
+        """Compute sufficient statistics: GLS/GLMM β̂, σ̂, BLUPs.
+
+        When map_refine is enabled on CUDA, normal GLMM inputs are moved to CPU
+        before the call and outputs are moved back afterward.  Normal MAP steps
+        (scalar Adam loops, small tensors) run ~1.4x slower on GPU than CPU due
+        to kernel-launch overhead, so CPU+transfer wins by ~29%.  Bernoulli EB
+        uses larger per-group matrix ops that GPU parallelizes well; on H100 the
+        pure-CUDA path is ~14% faster than CPU and ~9% faster than CPU+transfer,
+        so Bernoulli stays on-device.
+
+        """
+        device = data['X'].device
+        map_refine = self.cfg.analytical_refinement == 'full'
+        run_on_cpu = device.type == 'cuda' and map_refine and self.likelihood_family == 0
+
+        def _c(t: torch.Tensor | None) -> torch.Tensor | None:
+            return t.cpu() if (run_on_cpu and t is not None) else t
+
         Zm = data['Z'][..., : self.d_rfx]
-        return glmm(
-            data['X'],
-            data['y'],
-            Zm,
-            data['mask_n'].float(),
-            data['mask_m'].float(),
-            data['ns'].clamp(min=1).float(),
-            data['n'].float(),
+        map_kwargs: dict = {
+            'nu_ffx': _c(data['nu_ffx']),
+            'tau_ffx': _c(data['tau_ffx']),
+            'family_ffx': _c(data['family_ffx']),
+            'tau_rfx': _c(data['tau_rfx']),
+            'family_sigma_rfx': _c(data['family_sigma_rfx']),
+            'mask_d': _c(data.get('mask_d')),
+        }
+        if self.likelihood_family == 0:
+            map_kwargs['tau_eps'] = _c(data['tau_eps'])
+            map_kwargs['family_sigma_eps'] = _c(data['family_sigma_eps'])
+
+        stats = glmm(
+            _c(data['X']),
+            _c(data['y']),
+            _c(Zm),
+            _c(data['mask_n']).float(),
+            _c(data['mask_m']).float(),
+            _c(data['ns']).clamp(min=1).float(),
+            _c(data['n']).float(),
             likelihood_family=self.likelihood_family,
-            eta_rfx=data.get('eta_rfx'),
-            mask_q=data.get('mask_q', None),
+            eta_rfx=_c(data.get('eta_rfx')),
+            mask_q=_c(data.get('mask_q')),
+            map_refine=map_refine,
+            **map_kwargs,
         )
+
+        if run_on_cpu:
+            stats = {
+                k: v.to(device) if torch.is_tensor(v) else v for k, v in stats.items()
+            }
+        return stats
 
     def _addMetadata(
         self,
@@ -436,10 +473,28 @@ class Approximator(nn.Module):
         proposal.debug_stats = _debug_corr  # DEBUG
         return proposal
 
-    def summarize(self, data: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+    def summarize(
+        self,
+        data: dict[str, torch.Tensor],
+        stats: dict[str, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)
         summary_l_raw = self.summarizer_l(inputs, mask=data['mask_n'])
-        stats = self._dataStatistics(data) if self.analytical_context else None
+        if stats is None and self.analytical_context:
+            if 'stats' in data and not getattr(self, 'live_compute_fits', False):
+                if self.cfg.analytical_refinement == 'light' and not getattr(
+                    self, '_refinement_upgraded', False
+                ):
+                    logger.warning(
+                        "Model config has analytical_refinement='light' but precomputed stats "
+                        "(full MAP+EB) were found in the batch. Upgrading to 'full' in memory "
+                        "and in the exported model config."
+                    )
+                    self.cfg.analytical_refinement = 'full'
+                    self._refinement_upgraded = True
+                stats = data['stats']
+            else:
+                stats = self._dataStatistics(data)
 
         # Global path: augment per-group summaries with REML point estimates before pooling.
         summary_l_with_stats = self._addMetadata(summary_l_raw, data, local=True, stats=stats)

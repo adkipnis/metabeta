@@ -17,3 +17,5 @@ results
 /metabeta/datasets/*/*.json
 /benchmarks
 /paper
+/4.6
+/experiments/analytical/inla_runs

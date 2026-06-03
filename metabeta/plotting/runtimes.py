@@ -214,17 +214,31 @@ def plotRuntimeRecords(
     fig, axes = plt.subplots(1, 2, figsize=(12, 5), dpi=DPI)
 
     plotWarmPanel(
-        axes[0], plot_records, 'wall_s', conds, COND_STYLE,
-        'Wall time (s)', '', n_bins,
-        x_metric='n_params', xlabel='# parameters',
+        axes[0],
+        plot_records,
+        'wall_s',
+        conds,
+        COND_STYLE,
+        'Wall time (s)',
+        '',
+        n_bins,
+        x_metric='n_params',
+        xlabel='# parameters',
         x_range=(0, max_params),
         show_legend=False,
         **shared_kw,
     )
     plotWarmPanel(
-        axes[1], plot_records, 'wall_s', conds, COND_STYLE,
-        '', '', n_bins,
-        x_metric='n', xlabel='# observations',
+        axes[1],
+        plot_records,
+        'wall_s',
+        conds,
+        COND_STYLE,
+        '',
+        '',
+        n_bins,
+        x_metric='n',
+        xlabel='# observations',
         x_range=(0, max_n),
         show_legend=False,
         **shared_kw,
@@ -232,7 +246,8 @@ def plotRuntimeRecords(
 
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(
-        handles, labels,
+        handles,
+        labels,
         loc='center left',
         bbox_to_anchor=(1.01, 0.5),
         fontsize=16,

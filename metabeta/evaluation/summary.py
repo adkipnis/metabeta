@@ -2,10 +2,17 @@ import time
 import logging
 import numpy as np
 import torch
+from tqdm import tqdm
 from tabulate import tabulate
 
 from metabeta.posthoc.conformal import Calibrator
-from metabeta.utils.evaluation import Proposal, EvaluationSummary, dictMean, dictMeanExcl
+from metabeta.utils.evaluation import (
+    Proposal,
+    EvaluationSummary,
+    PerDatasetMetrics,
+    AggregatedMetrics,
+    dictMean,
+)
 from metabeta.evaluation.point import getPointEstimates, getRMSE, getCorrelation
 from metabeta.evaluation.intervals import (
     ALPHAS,
@@ -27,6 +34,19 @@ from metabeta.evaluation.predictive import (
 logger = logging.getLogger(__name__)
 
 EST_TYPE = 'mean'
+
+
+def _averageOverAlpha(
+    nested: dict[float, dict[str, torch.Tensor]],
+    absolute: bool = False,
+) -> dict[str, torch.Tensor]:
+    alphas = list(nested.keys())
+    params = list(nested[alphas[0]].keys())
+    out = {}
+    for param in params:
+        vals = torch.cat([nested[a][param].unsqueeze(0) for a in alphas])
+        out[param] = torch.nanmean(vals.abs() if absolute else vals, 0)
+    return out
 
 
 def _t(label: str, t0: float) -> float:
@@ -86,6 +106,7 @@ def getSummary(
 
     for start in range(0, b, chunk):
         end = min(start + chunk, b)
+        tqdm.write(f'  predictive checks: {end}/{b} datasets', end='\r')
         p_c = proposal.slice_b(start, end)
         d_c = _sliceData(data, start, end)
 
@@ -124,6 +145,7 @@ def getSummary(
             pp_widths.append(wid_c)
             t_cov += time.perf_counter() - tc
 
+    tqdm.write(f'  predictive checks: {b}/{b} datasets — done')
     logger.debug('  %-30s %.2fs', 'linear predictor (eta)', t_pp)
     logger.debug('  %-30s %.2fs', 'log_prob', t_logp)
     logger.debug('  %-30s %.2fs', 'posterior NLL', t_nll)
@@ -132,27 +154,49 @@ def getSummary(
     if compute_pred_coverage:
         logger.debug('  %-30s %.2fs', 'predictive coverage/width', t_cov)
 
-    out['posterior_nll'] = torch.cat(posterior_nlls)
-    out['loo_nll'] = torch.cat(loo_nlls)
-    out['loo_pareto_k'] = torch.cat(loo_ks)
-    out['pp_fit'] = torch.cat(pp_fits) if pp_fits else None
-    out['pp_cov_coverage'] = torch.cat(pp_covs, dim=-1) if pp_covs else None
-    out['pp_cov_width'] = torch.cat(pp_widths, dim=-1) if pp_widths else None
-    out['sample_efficiency'] = proposal.efficiency
-    out['pareto_k'] = proposal.pareto_k
-    out['tpd'] = proposal.tpd
+    coverage_error = getCoverageErrors(out['coverage'], log_ratio=False)
+    log_coverage_ratio = getCoverageErrors(out['coverage'], log_ratio=True)
 
-    return EvaluationSummary(**out)
+    per_dataset = PerDatasetMetrics(
+        posterior_nll=torch.cat(posterior_nlls),
+        loo_nll=torch.cat(loo_nlls),
+        loo_pareto_k=torch.cat(loo_ks),
+        pp_fit=torch.cat(pp_fits) if pp_fits else None,
+        pp_cov_coverage=torch.cat(pp_covs, dim=-1) if pp_covs else None,
+        pp_cov_width=torch.cat(pp_widths, dim=-1) if pp_widths else None,
+        sample_efficiency=proposal.efficiency,
+        pareto_k=proposal.pareto_k,
+        prior_nll=out.get('prior_nll'),
+    )
+    rfx_joint_ece, rfx_joint_eace = out['rfx_joint_ece'], out['rfx_joint_eace']
+    aggregated = AggregatedMetrics(
+        corr=out['corr'],
+        nrmse=out['nrmse'],
+        coverage=out['coverage'],
+        ece=_averageOverAlpha(coverage_error),
+        eace=_averageOverAlpha(coverage_error, absolute=True),
+        lcr=_averageOverAlpha(log_coverage_ratio),
+        abs_lcr=_averageOverAlpha(log_coverage_ratio, absolute=True),
+        estimates=out['estimates'],
+        rfx_joint_ece=rfx_joint_ece,
+        rfx_joint_eace=rfx_joint_eace,
+    )
+    return EvaluationSummary(per_dataset=per_dataset, aggregated=aggregated, tpd=proposal.tpd)
 
 
-def _rfxJointCalibration(
+def _rfxJointRanks(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
-) -> tuple[float | None, float | None]:
-    """Joint calibration for random effects via Mahalanobis fractional ranks."""
+) -> list[float]:
+    """Mahalanobis fractional ranks for random effects (one per active group).
+
+    Returns an empty list when joint calibration is not applicable (q < 2 for
+    all datasets, or rfx_samples is not 4-D).  Callers can accumulate across
+    batches and reduce with _rfxRanksToCalibration.
+    """
     rfx_samples = proposal.rfx
     if rfx_samples.dim() != 4:
-        return None, None
+        return []
 
     mask_q = data['mask_q']
     mask_m = data['mask_m']
@@ -199,16 +243,15 @@ def _rfxJointCalibration(
             delta = truth[i, j, :q_i] - mu
             d2_truth = (delta @ cov_inv @ delta).item()
             inside = (d2_samples <= d2_truth).float()
-            if w_i is None:
-                rank = float(inside.mean().item())
-            else:
-                rank = float((inside * w_i).sum().item())
+            rank = float((inside * w_i).sum().item()) if w_i is not None else float(inside.mean().item())
             if np.isfinite(rank):
                 ranks.append(rank)
 
-    if not ranks:
-        return None, None
+    return ranks
 
+
+def _rfxRanksToCalibration(ranks: list[float]) -> tuple[float, float]:
+    """Reduce accumulated ranks to (ece, eace)."""
     r = np.asarray(ranks, dtype=np.float64)
     ece = 0.0
     eace = 0.0
@@ -221,22 +264,33 @@ def _rfxJointCalibration(
     return ece / len(ALPHAS), eace / len(ALPHAS)
 
 
+def _rfxJointCalibration(
+    proposal: Proposal,
+    data: dict[str, torch.Tensor],
+) -> tuple[float | None, float | None]:
+    """Joint calibration for random effects via Mahalanobis fractional ranks."""
+    ranks = _rfxJointRanks(proposal, data)
+    if not ranks:
+        return None, None
+    return _rfxRanksToCalibration(ranks)
+
+
 def summaryTable(s: EvaluationSummary, likelihood_family: int = 0) -> str:
-    long_table = longTable(s.corr, s.nrmse, s.ece, s.eace)
+    ag, pd = s.aggregated, s.per_dataset
+    long_table = longTable(ag.corr, ag.nrmse, ag.ece, ag.eace)
     fit_labels = {0: 'Median pp R²', 1: 'Median pp AUC', 2: 'Median pp Deviance'}
-    fit_label = fit_labels.get(likelihood_family, 'Median pp R²')
     flat_table = flatTable(
         s.tpd,
-        s.mloonll,
-        s.mfit,
-        fit_label,
-        s.meff,
-        s.mk,
-        s.mloo_k,
-        s.rfx_joint_ece,
-        s.rfx_joint_eace,
-        s.pp_eace,
-        s.pp_width_90,
+        pd.mloonll,
+        pd.mfit,
+        fit_labels.get(likelihood_family, 'Median pp R²'),
+        pd.meff,
+        pd.mk,
+        pd.mloo_k,
+        ag.rfx_joint_ece,
+        ag.rfx_joint_eace,
+        pd.pp_eace,
+        pd.pp_width_90,
     )
     return long_table + '\n' + flat_table
 
@@ -265,10 +319,10 @@ def longTable(
     rows.append(
         [
             'Average',
-            dictMeanExcl(corr),
-            dictMeanExcl(nrmse),
-            dictMeanExcl(ece),
-            dictMeanExcl(eace),
+            dictMean(corr),
+            dictMean(nrmse),
+            dictMean(ece),
+            dictMean(eace),
         ]
     )
     return (

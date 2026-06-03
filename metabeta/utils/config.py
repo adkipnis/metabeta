@@ -12,12 +12,9 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field
 
-from metabeta.utils.io import datasetFilename
-from metabeta.utils.templates import (
-    generateSimulationConfig,
-    PRESETS,
-    FAMILY_NAMES_REVERSE,
-)
+from metabeta.utils.names import datasetFilename
+from metabeta.utils.constants import FAMILY_NAMES_REVERSE
+from metabeta.utils.templates import generateSimulationConfig, PRESETS
 
 
 class SummarizerConfig(BaseModel):
@@ -29,6 +26,7 @@ class SummarizerConfig(BaseModel):
     n_inducing: int = Field(gt=0, default=32)
     pooling: str = 'cls'
     activation: str = 'GELU'
+    proj_nonlinear: bool = True
     dropout: float = Field(ge=0.0, default=0.01)
     type: Literal['set-transformer'] = 'set-transformer'
 
@@ -61,7 +59,7 @@ class ApproximatorConfig(BaseModel):
     posterior_g: PosteriorConfig
     likelihood_family: int = Field(ge=0, default=0)
     posterior_correlation: bool = True
-    analytical_context: bool = True
+    analytical_refinement: Literal['none', 'light', 'full'] = 'light'
     analytical_local_at_inference: bool = True
     model_config = {'extra': 'allow'}
 
@@ -78,7 +76,7 @@ class ApproximatorConfig(BaseModel):
             'd_rfx': self.d_rfx,
             'likelihood_family': self.likelihood_family,
             'posterior_correlation': self.posterior_correlation,
-            'analytical_context': self.analytical_context,
+            'analytical_refinement': self.analytical_refinement,
             'analytical_local_at_inference': self.analytical_local_at_inference,
             'summarizer_l': self.summarizer_l.model_dump(),
             'summarizer_g': self.summarizer_g.model_dump(),
@@ -101,12 +99,20 @@ def modelFromYaml(
         'analytical_local_at_inference',
         model_cfg.get('analytical_blup_from_globals', True),
     )
+    if 'analytical_refinement' in model_cfg:
+        analytical_refinement = model_cfg['analytical_refinement']
+    elif not model_cfg.get('analytical_context', True):
+        analytical_refinement = 'none'
+    elif model_cfg.get('map_refine', False):
+        analytical_refinement = 'full'
+    else:
+        analytical_refinement = 'light'
     return ApproximatorConfig(
         d_ffx=d_ffx,
         d_rfx=d_rfx,
         likelihood_family=likelihood_family,
-        posterior_correlation=model_cfg['posterior_correlation'],
-        analytical_context=model_cfg.get('analytical_context', True),
+        posterior_correlation=model_cfg.get('posterior_correlation', True),
+        analytical_refinement=analytical_refinement,
         analytical_local_at_inference=analytical_local_at_inference,
         summarizer_g=SummarizerConfig(**s_g),
         summarizer_l=SummarizerConfig(**{**s_g, **model_cfg.get('summarizer_l', {})}),
@@ -136,7 +142,12 @@ def loadDataConfig(data_id: str) -> dict:
     if len(parts) >= 3:
         size = parts[0]
         family_str = parts[1]
-        ds_type = '-'.join(parts[2:])  # Handle types with hyphens
+        ds_parts = parts[2:]  # Handle types with hyphens
+        shape_profile = 'standard'
+        if ds_parts and ds_parts[-1] in PRESETS.get('shape_profiles', {}):
+            shape_profile = ds_parts[-1]
+            ds_parts = ds_parts[:-1]
+        ds_type = '-'.join(ds_parts)
 
         # Check if it's a valid template combination
         if size in PRESETS['sizes']:
@@ -152,7 +163,12 @@ def loadDataConfig(data_id: str) -> dict:
 
             if family is not None and family in PRESETS['families']:
                 # Generate from template
-                return generateSimulationConfig(size=size, family=family, ds_type=ds_type)
+                return generateSimulationConfig(
+                    size=size,
+                    family=family,
+                    ds_type=ds_type,
+                    shape_profile=shape_profile,
+                )
 
     # Fallback: try loading from dataset directory (new location)
     root = Path(__file__).resolve().parent

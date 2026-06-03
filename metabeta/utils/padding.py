@@ -88,6 +88,26 @@ def padToModel(
     # Z is first max_q columns of (now padded) X
     ds['Z'] = ds['X'][:, :max_q].copy()
 
+    # --- analytical stats ---
+    if d < max_d and 'beta_est' in ds:
+        padded = np.zeros(max_d, dtype=ds['beta_est'].dtype)
+        padded[:d] = ds['beta_est']
+        ds['beta_est'] = padded
+    if q < max_q:
+        if 'sigma_rfx_est' in ds:
+            padded = np.zeros(max_q, dtype=ds['sigma_rfx_est'].dtype)
+            padded[:q] = ds['sigma_rfx_est']
+            ds['sigma_rfx_est'] = padded
+        for key in ('blup_est', 'blup_var'):
+            if key in ds:
+                padded = np.zeros((int(ds['m']), max_q), dtype=ds[key].dtype)
+                padded[:, :q] = ds[key]
+                ds[key] = padded
+        if 'Psi' in ds:
+            padded = np.zeros((max_q, max_q), dtype=ds['Psi'].dtype)
+            padded[:q, :q] = ds['Psi']
+            ds['Psi'] = padded
+
     # --- pad fit samples (nuts_* / advi_*) ---
     # Fit arrays may be stored at the file-wide max d/q (larger than this
     # dataset's actual d/q), so we trim first, then re-pad to model dims.
@@ -155,6 +175,19 @@ def unpad(ds: dict[str, np.ndarray], sizes: dict[str, int]) -> dict[str, np.ndar
     ds['rfx'] = ds['rfx'][:m, :q]
     if 'corr_rfx' in ds:
         ds['corr_rfx'] = ds['corr_rfx'][:q, :q]
+
+    # analytical stats (mirrored shapes: beta_est~ffx, sigma_rfx_est~sigma_rfx,
+    # blup_est/blup_var~rfx, Psi~corr_rfx; sigma_eps_est/phi_pearson are scalars)
+    if 'beta_est' in ds:
+        ds['beta_est'] = ds['beta_est'][:d]
+    if 'sigma_rfx_est' in ds:
+        ds['sigma_rfx_est'] = ds['sigma_rfx_est'][:q]
+    for key in ('blup_est', 'blup_var'):
+        if key in ds:
+            ds[key] = ds[key][:m, :q]
+    if 'Psi' in ds:
+        ds['Psi'] = ds['Psi'][:q, :q]
+
     return ds
 
 

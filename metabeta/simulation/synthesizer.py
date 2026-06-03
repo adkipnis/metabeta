@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from dataclasses import dataclass
 from metabeta.utils.preprocessing import checkContinuous
 from metabeta.utils.sampling import counts2groups, wishartCorrelation
@@ -44,7 +45,9 @@ class Scammer:
         """Try up to MAX_RETRIES hyperparameter draws to get a valid SCM dataset."""
         for _ in range(MAX_RETRIES):
             hp = self._sampleHyperparams(d)
-            scamd_rng = np.random.default_rng(int(self.rng.integers(0, 2**31)))
+            scamd_seed = int(self.rng.integers(0, 2**31))
+            scamd_rng = np.random.default_rng(scamd_seed)
+            torch.manual_seed(scamd_seed)
             try:
                 features = generateDataset(
                     n_samples=n,
@@ -69,11 +72,9 @@ class Scammer:
 
     def sample(self, d: int, ns: np.ndarray) -> dict[str, np.ndarray]:
         n = int(ns.sum())
-        features = self._generate(n, d)
-
-        # prepend intercept column
         X = np.ones((n, d))
-        X[:, 1:] = features
+        if d > 1:
+            X[:, 1:] = self._generate(n, d)
 
         groups = counts2groups(ns)
         return {'X': X, 'groups': groups}
@@ -146,6 +147,10 @@ class Synthesizer:
         # toy samples
         if self.toy:
             x[..., 1:] = self.rng.normal(size=(n, d - 1))
+            return x
+
+        # intercept-only model — nothing more to sample
+        if d == 1:
             return x
 
         # choose distributions

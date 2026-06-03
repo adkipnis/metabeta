@@ -36,9 +36,7 @@ with open(_PRESETS_PATH) as f:
 
 CLI_ONLY = set(PRESETS['cli_only'])
 
-# Family integer to short name mapping
-FAMILY_NAMES = {0: 'n', 1: 'b', 2: 'p'}  # normal, bernoulli, poisson
-FAMILY_NAMES_REVERSE = {'n': 0, 'b': 1, 'p': 2}
+from metabeta.utils.constants import FAMILY_NAMES, FAMILY_NAMES_REVERSE  # noqa: F401
 
 
 class SimulationConfig(BaseModel):
@@ -46,6 +44,7 @@ class SimulationConfig(BaseModel):
 
     ds_type: str
     source: str = 'all'
+    shape_profile: str = 'standard'
     likelihood_family: Literal[0, 1, 2]
     min_d: int = Field(ge=1, default=2)  # lower bound for d; defines non-overlapping test band
     max_d: int = Field(gt=0)
@@ -56,6 +55,11 @@ class SimulationConfig(BaseModel):
     min_n: int = Field(gt=0)
     max_n: int = Field(gt=0)
     max_n_total: int = Field(gt=0)
+    m_wide_prob: float = Field(ge=0.0, le=1.0, default=0.0)
+    m_wide_min: int = Field(gt=0, default=60)
+    mean_n_log_frac: float = Field(ge=0.0, le=1.0, default=0.15)
+    mean_n_log_m_slope: float = Field(ge=0.0, le=1.0, default=0.65)
+    mean_n_log_noise: float = Field(ge=0.0, default=0.25)
     min_bg_df: int = Field(ge=0, default=0)  # minimum between-group df (m − q); 0 = unconstrained
     min_within_df: int = Field(
         ge=0, default=2
@@ -134,13 +138,15 @@ class TrainingConfig(BaseModel):
     pred_nll_weight: float = 0.1
     kl_mix_weight: float = Field(gt=0, default=0.05)
     patience: int = Field(ge=0, default=0)
-    sample_interval: int = Field(gt=0, default=20)
+    valid_interval: int = Field(gt=0, default=5)
+    sample_interval: int = Field(gt=0, default=25)
     skip_ref: bool = False
 
     # Runtime settings (will be overridden by CLI-only params)
     cores: int = Field(gt=0, default=8)
     reproducible: bool = True
     compile: bool = False
+    permute: bool = False
 
     # Evaluation settings
     n_samples: int = Field(gt=0, default=512)
@@ -157,7 +163,13 @@ class TrainingConfig(BaseModel):
     model_config = {'extra': 'allow'}
 
 
-def generateSimulationConfig(size: str, family: int, ds_type: str, **overrides) -> dict[str, Any]:
+def generateSimulationConfig(
+    size: str,
+    family: int,
+    ds_type: str,
+    shape_profile: str = 'standard',
+    **overrides,
+) -> dict[str, Any]:
     """
     Generate simulation config from size/family presets with specified ds_type.
 
@@ -165,6 +177,7 @@ def generateSimulationConfig(size: str, family: int, ds_type: str, **overrides) 
         size: One of tiny/small/medium/large/huge
         family: Likelihood family integer (0=normal, 1=bernoulli, 2=poisson)
         ds_type: Dataset type (toy/flat/scm/mixed/sampled/observed)
+        shape_profile: Dataset shape profile controlling m/n/n_i independently of d/q
         **overrides: Additional overrides from CLI (excluding CLI-only params)
 
     Returns:
@@ -180,12 +193,19 @@ def generateSimulationConfig(size: str, family: int, ds_type: str, **overrides) 
         raise ValueError(
             f"Invalid family {family}. Choose from: {list(PRESETS['families'].keys())}"
         )
+    if shape_profile not in PRESETS['shape_profiles']:
+        raise ValueError(
+            f"Invalid shape_profile '{shape_profile}'. "
+            f"Choose from: {list(PRESETS['shape_profiles'].keys())}"
+        )
 
     # Merge presets
     cfg = {}
     cfg.update(PRESETS['sizes'][size])
+    cfg.update(PRESETS['shape_profiles'][shape_profile])
     cfg.update(PRESETS['families'][family])
     cfg['ds_type'] = ds_type
+    cfg['shape_profile'] = shape_profile
 
     # Apply overrides (excluding CLI-only params)
     for k, v in overrides.items():
@@ -195,7 +215,8 @@ def generateSimulationConfig(size: str, family: int, ds_type: str, **overrides) 
     # Auto-generate data_id if not provided
     if 'data_id' not in cfg:
         family_name = FAMILY_NAMES[family]
-        cfg['data_id'] = f'{size}-{family_name}-{ds_type}'
+        suffix = '' if shape_profile == 'standard' else f'-{shape_profile}'
+        cfg['data_id'] = f'{size}-{family_name}-{ds_type}{suffix}'
 
     # Validate
     validated = SimulationConfig(**cfg)
@@ -368,7 +389,7 @@ def setupConfigParser(
         overrides = {}
 
         for k, v in args_dict.items():
-            if k in ['size', 'family', 'ds_type', 'valid_ds_type']:
+            if k in ['size', 'family', 'ds_type', 'valid_ds_type', 'shape_profile']:
                 template_args[k] = v
             elif k not in ['config'] and k not in CLI_ONLY:
                 if v is not None:  # Only include non-None values

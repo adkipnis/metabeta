@@ -15,8 +15,9 @@ import wandb
 import schedulefree
 
 from metabeta.utils.logger import setupLogging
-from metabeta.utils.io import setDevice, datasetFilename, runName
-from metabeta.utils.families import LIKELIHOOD_FAMILIES
+from metabeta.utils.device import setDevice
+from metabeta.utils.names import datasetFilename, runName
+from metabeta.utils.constants import LIKELIHOOD_FAMILIES
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import (
     modelFromYaml,
@@ -35,7 +36,7 @@ from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import (
     EvaluationSummary,
     Proposal,
-    dictMeanExcl,
+    dictMean,
     concatProposalsBatch,
 )
 from metabeta.models.approximator import Approximator
@@ -46,7 +47,6 @@ from metabeta.plotting import (
     plotRecovery,
     plotCoverage,
     plotSBC,
-    # plotRfxCorrelationRecovery,
 )
 
 logger = logging.getLogger('train.py')
@@ -86,14 +86,14 @@ def setup() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(
         argument_default=argparse.SUPPRESS,
-        epilog='Advanced options (max_grad_norm, rescale, skip_ref, save_latest, save_best) can be set via --config.',
+        epilog='Advanced options (max_grad_norm, rescale, save_latest, save_best) can be set via --config.',
     )
 
     # Template-based config generation (primary interface)
-    parser.add_argument('--size', type=str, default='small', help='Size preset: tiny|small|medium|large|huge')
+    parser.add_argument('--size', type=str, default='tiny', help='Size preset: tiny|small|medium|large|huge')
     parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
-    parser.add_argument('--ds_type', type=str, default='mixed', help='Training dataset type: toy|flat|scm|mixed|sampled|observed')
-    parser.add_argument('--valid_ds_type', type=str, default='sampled', help='Validation dataset type: toy|flat|scm|mixed|sampled|observed')
+    parser.add_argument('--ds_type', type=str, default='toy', help='Training dataset type: toy|flat|scm|mixed|sampled|observed')
+    parser.add_argument('--valid_ds_type', type=str, default='toy', help='Validation dataset type: toy|flat|scm|mixed|sampled|observed')
 
     # Alternative: load config from a saved YAML (e.g. a checkpoint config.yaml)
     parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
@@ -114,19 +114,22 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--lr', type=float, help='Learning rate')
     parser.add_argument('--accum_steps', type=int, help='Gradient accumulation steps; effective batch size = bs × accum_steps (default = 1)')
     parser.add_argument('--loss_type', type=str, help='Loss type: forward|backward|mixed|predictive (default = forward)')
-    parser.add_argument('--ancestral', action=argparse.BooleanOptionalAction, help='Enable ancestral curriculum: ramp local posterior conditioning from true to sampled globals as training converges (default = False)')
     parser.add_argument('--n_loss_samples', type=int, help='Posterior samples for backward KL and predictive NLL loss modes (default = 64)')
     parser.add_argument('--pred_nll_weight', type=float, help='Weight for predictive NLL auxiliary term when loss_type=predictive (default = 0.1)')
     parser.add_argument('--kl_mix_weight', type=float, help='Backward KL coefficient in mixed loss: total = fkl + kl_mix_weight * alpha * bkl (default = 0.05)')
     parser.add_argument('--n_samples', type=int, help='Posterior samples drawn per evaluation dataset (default = 512)')
     parser.add_argument('--patience', type=int, help='Early stopping patience in epochs; 0 = disabled (default = 0)')
-    parser.add_argument('--sample_interval', type=int, help='Run full posterior evaluation every N epochs (default = 20)')
+    parser.add_argument('--valid_interval', type=int, help='Run validation loss every N epochs (default = 5)')
+    parser.add_argument('--sample_interval', type=int, help='Run full posterior evaluation every N epochs (default = 25)')
     parser.add_argument('--cores', type=int, help='CPU thread count passed to torch.set_num_threads (default = 8)')
     parser.add_argument('--compile', action=argparse.BooleanOptionalAction, help='Compile model with torch.compile (default = False)')
     parser.add_argument('--reproducible', action=argparse.BooleanOptionalAction, help='Enable deterministic algorithms for reproducibility (default = True)')
+    parser.add_argument('--permute', action=argparse.BooleanOptionalAction, help='Permute feature columns per epoch during training (default = False)')
 
     # Evaluation settings
     parser.add_argument('--plot', action=argparse.BooleanOptionalAction, help='Generate evaluation plots after each epoch')
+    parser.add_argument('--skip_ref', action=argparse.BooleanOptionalAction, help='Skip the pre-training reference evaluation (valid + sample at epoch 0)')
+    parser.add_argument('--live_compute', action=argparse.BooleanOptionalAction, default=False, help='Recompute analytical fits live, ignoring precomputed stats in the dataset')
 
     # Saving & loading
     parser.add_argument('--r_tag', type=str, help='Run tag suffix appended to the checkpoint directory name')
@@ -134,19 +137,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--load_best', action=argparse.BooleanOptionalAction, help='Resume training from best.pt in the checkpoint directory')
     return setupConfigParser(parser, generateTrainingConfig, 'Train neural approximators.')
 # fmt: on
-
-
-# -----------------------------------------------------------------------------
-# Cap on reference LOO-NLL: prevents inflated starting values from compressing the useful range
-# and causing the ancestral rate to surge prematurely once the model exits the "garbage" phase.
-_LOO_NLL_0_CAP = 5.0
-
-
-def _ancestralRate(
-    loo_nll: float, loo_nll_0: float, p_max: float = 0.5, loo_floor: float = 1.75
-) -> float:
-    """Ancestral conditioning rate: ramps from 0 to p_max as LOO-NLL improves from loo_nll_0 to loo_floor."""
-    return p_max * float(np.clip((loo_nll_0 - loo_nll) / (loo_nll_0 - loo_floor), 0.0, 1.0))
 
 
 def _coerce_rng_state_byte_tensor(state: object) -> torch.Tensor:
@@ -169,43 +159,29 @@ def _coerce_cuda_rng_states(states: object) -> list[torch.Tensor]:
 
 # -----------------------------------------------------------------------------
 class EarlyStopping:
-    def __init__(self, patience: int = 0, delta: float = 1e-3) -> None:
+    def __init__(self, patience: int = 0) -> None:
         self.patience = patience
-        self.delta = delta
-        self.best_nrmse = float('inf')
-        self.best_median_nll = float('inf')
         self.counter = 0
         self.stop = False
 
-    def update(self, mean_nrmse: float, median_nll: float) -> bool:
-        improved_nrmse = (self.best_nrmse - mean_nrmse) > self.delta
-        improved_nll = (self.best_median_nll - median_nll) > self.delta
-        improved = improved_nrmse or improved_nll
-
-        if improved_nrmse:
-            self.best_nrmse = mean_nrmse
-        if improved_nll:
-            self.best_median_nll = median_nll
-
+    def update(self, improved: bool) -> None:
         if improved:
             self.counter = 0
         else:
             self.counter += 1
             if self.counter >= self.patience:
                 self.stop = True
-        return improved
 
 
 # -----------------------------------------------------------------------------
 class Trainer:
     def __init__(self, cfg: argparse.Namespace) -> None:
         self.cfg = cfg
-        # self.cfg.load_latest = True
         self.dir = Path(__file__).resolve().parent
 
-        # reproducibility
         if cfg.reproducible:
-            self._reproducible()
+            torch.use_deterministic_algorithms(True)
+            torch.backends.cudnn.deterministic = True
         setSeed(cfg.seed)
 
         # misc setup
@@ -215,6 +191,10 @@ class Trainer:
         # init data, model and optimizer
         self._initData()
         self._initModel()
+        self.model.live_compute_fits = getattr(self.cfg, 'live_compute', False)
+        self._valid_stats_cache: list[dict] = []
+        if self.model.analytical_context:
+            self._precomputeValidStats()
 
         # checkpoint dir
         self.timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -237,35 +217,20 @@ class Trainer:
         self.best_median_nll = float('inf')
         self.best_epoch = 0
         self.global_step = 0
-        self.ancestral_rate = 0.0
-        self.loo_nll_0: float | None = None
         self.wandb_run = None
         self.wandb_run_id = None
-        self.stopper = None
-        if self.cfg.patience > 0:
-            self.stopper = EarlyStopping(self.cfg.patience)
-            if not getattr(self.cfg, 'save_best', True):
-                logger.warning('early stopping enabled without saving best checkpoints!')
-
-    def _reproducible(self) -> None:
-        torch.use_deterministic_algorithms(True)
-        torch.backends.cudnn.deterministic = True
+        self.stopper = EarlyStopping(self.cfg.patience) if self.cfg.patience > 0 else None
+        if self.stopper is not None and not getattr(self.cfg, 'save_best', True):
+            logger.warning('early stopping enabled without saving best checkpoints!')
 
     def _initData(self) -> None:
-        # assimilate data config
         self.data_cfg_train = loadDataConfig(self.cfg.data_id)
         assimilateConfig(self.cfg, self.data_cfg_train)
 
-        # allow overriding validation data id independently from training
         self.cfg.data_id_valid = getattr(self.cfg, 'data_id_valid', self.cfg.data_id)
         self.data_cfg_valid = loadDataConfig(self.cfg.data_id_valid)
 
-        # keep legacy attr names for checkpoint compatibility
-        self.data_cfg = self.data_cfg_train
-
-        # load validation data
         self.dl_valid = self._getDataLoader('valid', batch_size=8)
-        # self.dl_test = self._getDataLoader('test')
 
     def _getDataLoader(
         self, partition: str, epoch: int = 0, batch_size: int | None = None
@@ -275,35 +240,25 @@ class Trainer:
         data_subdir = data_cfg['data_id']
         data_path = Path(self.dir, '..', 'outputs', 'data', data_subdir, data_fname)
         sortish = batch_size is not None
+        do_permute = getattr(self.cfg, 'permute', False) and partition == 'train'
         return Dataloader(
             data_path,
             batch_size=batch_size,
             sortish=sortish,
             shuffle=partition == 'train',
+            permute=do_permute,
+            permute_seed=epoch,
             bucket_mult=50,
             sort_seed=epoch,
             max_d=data_cfg.get('max_d'),
             max_q=data_cfg.get('max_q'),
-            # num_workers=0,
-            # persistent_workers=(partition != 'train'),
         )
-
-    def _trainingDataAvailable(self, start_epoch: int) -> bool:
-        for epoch in range(start_epoch, self.cfg.max_epochs + 1):
-            data_fname = datasetFilename('train', epoch)
-            data_subdir = self.data_cfg_train['data_id']
-            data_path = Path(self.dir, '..', 'outputs', 'data', data_subdir, data_fname)
-            if not data_path.exists():
-                logger.warning(f'{data_path} does not exist')
-                return False
-        return True
 
     def _initModel(self) -> None:
         if hasattr(self.cfg, 'model_cfg'):
             assert isinstance(self.cfg.model_cfg, ApproximatorConfig), 'wrong model cfg class'
             self.model_cfg = self.cfg.model_cfg
         else:
-            # load model config from new location
             model_cfg_path = Path(self.dir, '..', 'configs', 'models', f'{self.cfg.model_id}.yaml')
             self.model_cfg = modelFromYaml(
                 model_cfg_path,
@@ -312,9 +267,9 @@ class Trainer:
                 likelihood_family=self.cfg.likelihood_family,
             )
 
-        if analytical_context := getattr(self.cfg, 'analytical_context', None):
+        if analytical_refinement := getattr(self.cfg, 'analytical_refinement', None):
             self.model_cfg = self.model_cfg.model_copy(
-                update={'analytical_context': analytical_context}
+                update={'analytical_refinement': analytical_refinement}
             )
 
         # init model
@@ -324,6 +279,22 @@ class Trainer:
 
         # init optimizer
         self.optimizer = schedulefree.AdamWScheduleFree(self.model.parameters(), lr=self.cfg.lr)
+
+    @torch.no_grad()
+    def _precomputeValidStats(self) -> None:
+        """Precompute GLMM statistics for all validation batches.
+
+        GLMM outputs depend only on the data, not on model parameters, so they
+        are identical every epoch.  Computing them once and caching avoids
+        redundant MAP/EB solves on the (fixed) validation set.  Stats are stored
+        on the training device so injection into each batch is copy-free.
+        """
+        for batch in self.dl_valid:
+            batch = toDevice(batch, self.device)
+            if 'stats' in batch and not self.model.live_compute_fits:
+                self._valid_stats_cache.append(batch['stats'])
+            else:
+                self._valid_stats_cache.append(self.model._dataStatistics(batch))
 
     def _initWandb(self) -> None:
         output_dir = Path(self.dir, '..', 'outputs')
@@ -345,19 +316,71 @@ class Trainer:
             print(f'WARNING: Could not resume wandb run {self.wandb_run_id!r}; starting a new run.')
             init_kwargs.update(id=None, resume=None)
             self.wandb_run = wandb.init(**init_kwargs)
-        wandb.config.update({'data_cfg': self.data_cfg, 'model_cfg': self.model_cfg.to_dict()})
+        wandb.config.update(
+            {'data_cfg': self.data_cfg_train, 'model_cfg': self.model_cfg.to_dict()}
+        )
         wandb.define_metric('train/loss_step', step_metric='step/global')
         wandb.define_metric('train/grad_norm', step_metric='step/global')
         wandb.define_metric('train/loss_epoch', step_metric='step/epoch')
-        wandb.define_metric('train/ancestral_rate', step_metric='step/epoch')
         wandb.define_metric('valid/loss_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/mean_nrmse_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/mean_eace_epoch', step_metric='step/epoch')
         wandb.define_metric('valid/median_nll_epoch', step_metric='step/epoch')
+        for _metric in ('mean_nrmse', 'mean_eace', 'median_nll'):
+            wandb.define_metric(f'ref/nuts/{_metric}', step_metric='step/epoch')
 
     def close(self) -> None:
         if self.wandb_run is not None:
             wandb.finish()
+
+    def _logFitReference(self) -> None:
+        """Load NUTS valid summary from cache; print it and optionally log to WandB."""
+        data_dir = Path(self.dir, '..', 'outputs', 'data', self.cfg.data_id_valid)
+        fit_path = data_dir / 'valid.fit.npz'
+        cache_path = data_dir / 'summary_valid_nuts.pt'
+        cache_cmd = f'uv run python metabeta/evaluation/cache.py --data_id {self.cfg.data_id_valid} --partition valid'
+
+        if not cache_path.exists():
+            logger.warning(
+                'NUTS reference cache not found: %s\n  Build it with: %s',
+                cache_path,
+                cache_cmd,
+            )
+            return
+
+        ref_mtime = fit_path.stat().st_mtime if fit_path.exists() else 0.0
+        if cache_path.stat().st_mtime < ref_mtime:
+            logger.warning(
+                'NUTS reference cache is stale (older than %s).\n  Refresh it with: %s',
+                fit_path.name,
+                cache_cmd,
+            )
+            return
+
+        try:
+            ref_summary = EvaluationSummary.load(cache_path)
+        except Exception as e:
+            logger.warning(
+                'Could not load NUTS reference cache (%s).\n  Rebuild with: %s',
+                e,
+                cache_cmd,
+            )
+            return
+
+        summary_table = summaryTable(ref_summary, self.cfg.likelihood_family)
+        print(f'\nNUTS reference (validation):\n{summary_table}')
+
+        if self.wandb_run is not None:
+            mean_nrmse, mean_eace, median_nll = self.getTrackingMetrics(ref_summary)
+            wandb.log(
+                {
+                    'ref/nuts/table': wandb.Html(f'<pre>{summary_table}</pre>'),
+                    'ref/nuts/mean_nrmse': float(mean_nrmse),
+                    'ref/nuts/mean_eace': float(mean_eace),
+                    'ref/nuts/median_nll': float(median_nll),
+                    'step/epoch': 0,
+                }
+            )
 
     def save(self, prefix: str = 'latest') -> None:
         path = Path(self.ckpt_dir, prefix + '.pt')
@@ -368,9 +391,8 @@ class Trainer:
             'best_epoch': self.best_epoch,
             'best_nrmse': self.best_nrmse,
             'best_median_nll': self.best_median_nll,
-            'loo_nll_0': self.loo_nll_0,
             'trainer_cfg': {k: v for k, v in vars(self.cfg).items() if k not in CLI_ONLY_PARAMS},
-            'data_cfg': self.data_cfg.copy(),
+            'data_cfg': self.data_cfg_train.copy(),
             'model_cfg': self.model_cfg.to_dict(),
             'model_state': self.model.state_dict(),
             'optimizer_state': self.optimizer.state_dict(),
@@ -393,7 +415,7 @@ class Trainer:
         payload = torch.load(path, map_location=self.device, weights_only=False)
 
         # compare configs
-        if self.data_cfg != payload['data_cfg']:
+        if self.data_cfg_train != payload['data_cfg']:
             logger.warning('data config mismatch between current and checkpoint')
         if self.model_cfg.to_dict() != payload['model_cfg']:
             logger.warning('model config mismatch between current and checkpoint')
@@ -406,11 +428,7 @@ class Trainer:
         self.best_epoch = payload['best_epoch']
         self.best_nrmse = payload['best_nrmse']
         self.best_median_nll = payload['best_median_nll']
-        self.loo_nll_0 = payload.get('loo_nll_0', None)
         self.wandb_run_id = payload.get('wandb_run_id')
-        if self.stopper is not None:
-            self.stopper.best_nrmse = self.best_nrmse
-            self.stopper.best_median_nll = self.best_median_nll
 
         # restore RNG states for reproducibility
         if 'rng_torch' in payload:
@@ -425,9 +443,9 @@ class Trainer:
         return int(payload.get('epoch', 0))  # last completed epoch
 
     def getTrackingMetrics(self, eval_summary: EvaluationSummary) -> tuple[float, float, float]:
-        mean_nrmse = dictMeanExcl(eval_summary.nrmse)
-        mean_eace = dictMeanExcl(eval_summary.eace)
-        median_nll = eval_summary.mloonll if eval_summary.mloonll else 0.0
+        mean_nrmse = dictMean(eval_summary.aggregated.nrmse)
+        mean_eace = dictMean(eval_summary.aggregated.eace)
+        median_nll = eval_summary.per_dataset.mloonll or 0.0
         return mean_nrmse, mean_eace, median_nll
 
     @property
@@ -458,17 +476,13 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         batch: dict[str, torch.Tensor],
         summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
         mode: str = '',
-        ancestral_rate: float = 0.0,
     ) -> torch.Tensor:
         if not mode:
             mode = self.cfg.loss_type
 
-        #  init group variables
         m = batch['m']  # number of groups
         mask = batch['mask_m']  # group mask
-        if mode in [
-            'backward',
-        ]:
+        if mode == 'backward':
             m = m.unsqueeze(-1)
             mask = mask.unsqueeze(-1)
 
@@ -478,7 +492,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
 
         # forward KL loss
         if mode == 'forward':
-            log_probs = self.model.forward(batch, summaries, ancestral_rate=ancestral_rate)
+            log_probs = self.model.forward(batch, summaries)
             lq_g = log_probs['global']
             lq_l = log_probs['local'] * mask
             lq = lq_g + lq_l.sum(1) / m
@@ -509,7 +523,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
 
         # mixed KL loss
         elif mode == 'mixed':
-            fkl = self.loss(batch, summaries, mode='forward', ancestral_rate=ancestral_rate)
+            fkl = self.loss(batch, summaries, mode='forward')
             bkl = self.loss(batch, summaries, mode='backward')
             w = getattr(self.cfg, 'kl_mix_weight', 0.05)
             alpha = (fkl.detach().abs() / (bkl.detach().abs() + 1e-8)).clamp(max=1.0)
@@ -517,7 +531,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
 
         # forward KL + predictive NLL auxiliary (globals detached: posterior_g trained by L_fkl)
         elif mode == 'predictive':
-            fkl = self.loss(batch, summaries, mode='forward', ancestral_rate=ancestral_rate)
+            fkl = self.loss(batch, summaries, mode='forward')
             proposal = self.model.backward(
                 batch,
                 summaries,
@@ -526,7 +540,6 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             )
             pp = getPosteriorPredictive(proposal, batch, self.cfg.likelihood_family)
             L_pred = posteriorPredictiveNLL(pp, batch, w=proposal.weights).mean()
-            # L_pred = posteriorPredictiveNLL(pp, batch, w=proposal.weights, mode='loo_proxy').mean()
             pred_nll_weight = getattr(self.cfg, 'pred_nll_weight', 0.1)
             return fkl + pred_nll_weight * L_pred
 
@@ -553,7 +566,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             # trailing window: correct divisor so its effective lr matches full windows
             in_trailing = i >= n_batches - trailing
             window_size = trailing if in_trailing else accum_steps
-            raw_loss = self.loss(batch, ancestral_rate=self.ancestral_rate)
+            raw_loss = self.loss(batch)
             (raw_loss / window_size).backward()
 
             # write loss (track unscaled value so it's comparable to valid loss)
@@ -582,7 +595,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                     )
         return float(loss_train)
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def valid(self) -> float:
         iterator = tqdm(
             self.dl_valid,
@@ -594,7 +607,9 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         self.optimizer.eval()
         for i, batch in enumerate(iterator):
             batch = toDevice(batch, self.device)
-            loss = self.loss(batch)
+            cached = self._valid_stats_cache[i] if self._valid_stats_cache else None
+            summaries = self.model.summarize(batch, stats=cached)
+            loss = self.loss(batch, summaries=summaries)
             batch_size = batch['X'].shape[0]
             total_weighted_loss += loss.item() * batch_size
             total_count += batch_size
@@ -602,44 +617,36 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             iterator.set_postfix_str(f'Loss: {loss_valid:.3f}')
         return float(loss_valid)
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def sample(self) -> EvaluationSummary:
         iterator = tqdm(
             self.dl_valid,
             desc=f'Epoch {self.current_epoch:02d}/{self.cfg.max_epochs:02d} [S]',
         )
-        # batch = next(iter(self.dl_valid_full))
         self.model.eval()
         self.optimizer.eval()
         proposals = []
         n_datasets = 0
-
-        # sample from proposal distribution over all validation minibatches
         t0 = time.perf_counter()
-        for batch in iterator:
+        for i, batch in enumerate(iterator):
             batch = toDevice(batch, self.device)
-            proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+            cached = self._valid_stats_cache[i] if self._valid_stats_cache else None
+            summaries = self.model.summarize(batch, stats=cached)
+            proposal = self.model.estimate(batch, summaries=summaries, n_samples=self.cfg.n_samples)
             if self.cfg.rescale and self.cfg.likelihood_family == 0:
                 proposal.rescale(batch['sd_y'])
             proposal.to('cpu')
-            batch = toDevice(batch, 'cpu')
-            if self.cfg.rescale and self.cfg.likelihood_family == 0:
-                batch = rescaleData(batch)
             proposals.append(proposal)
             n_datasets += batch['X'].shape[0]
         t1 = time.perf_counter()
 
-        # merge proposals over minibatches, but evaluate on canonical full-batch collate
         proposal = concatProposalsBatch(proposals)
         batch = self.dl_valid.fullBatch()
         batch = toDevice(batch, 'cpu')
         if self.cfg.rescale and self.cfg.likelihood_family == 0:
             batch = rescaleData(batch)
 
-        # post-process
-        proposal.tpd = (t1 - t0) / max(n_datasets, 1)  # time per dataset
-
-        # get evaluation summary
+        proposal.tpd = (t1 - t0) / max(n_datasets, 1)
         eval_summary = getSummary(
             proposal,
             batch,
@@ -648,14 +655,12 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         summary_table = summaryTable(eval_summary, self.cfg.likelihood_family)
         logger.info(summary_table)
         if self.cfg.wandb:
-            sample_logs: dict = {
-                'summary/table': wandb.Html(f'<pre>{summary_table}</pre>'),
-                'step/epoch': self.current_epoch,
-            }
-            # DEBUG: log correlation Jacobian diagnostics
-            if proposal.debug_stats is not None:
-                sample_logs.update({'debug/' + k: v for k, v in proposal.debug_stats.items()})
-            wandb.log(sample_logs)
+            wandb.log(
+                {
+                    'summary/table': wandb.Html(f'<pre>{summary_table}</pre>'),
+                    'step/epoch': self.current_epoch,
+                }
+            )
 
         # make plots
         if getattr(self.cfg, 'plot', False):
@@ -694,25 +699,15 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             show=show,
             show_corr_rfx=show_corr_rfx,
         )
-        # path_rc = None
-        # if proposal.q >= 2:
-        #     path_rc = plotRfxCorrelationRecovery(
-        #         proposal,
-        #         batch,
-        #         plot_dir=self.plot_dir,
-        #         epoch=self.current_epoch,
-        #         show=show,
-        #     )
         if self.cfg.wandb:
-            image_logs = {
-                'plot/recovery': wandb.Image(str(path_r)),
-                'plot/coverage': wandb.Image(str(path_c)),
-                'plot/sbc': wandb.Image(str(path_s)),
-                'step/epoch': self.current_epoch,
-            }
-            # if path_rc is not None:
-            #     image_logs['plot/rfx_correlation_recovery'] = wandb.Image(str(path_rc))
-            wandb.log(image_logs)
+            wandb.log(
+                {
+                    'plot/recovery': wandb.Image(str(path_r)),
+                    'plot/coverage': wandb.Image(str(path_c)),
+                    'plot/sbc': wandb.Image(str(path_s)),
+                    'step/epoch': self.current_epoch,
+                }
+            )
 
     def go(self) -> None:
         # optionally load previous checkpoint
@@ -723,12 +718,12 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             self.current_epoch = self.load('latest')
             print(f'Resumed latest checkpoint at epoch {self.current_epoch}.')
 
-        # check if training data is complete
-        # assert self._trainingDataAvailable(self.current_epoch + 1), 'training data incomplete'
-
         # optionally init wandb (after potential loading and reference run)
         if self.cfg.wandb:
             self._initWandb()
+
+        # print NUTS reference baseline; also logs to wandb if enabled
+        self._logFitReference()
 
         # optionally get performance before (resumed) training
         if not self.cfg.skip_ref:
@@ -737,50 +732,33 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             self.sample()
 
         print(f'\nTraining for {self.cfg.max_epochs - self.current_epoch} epochs...')
-        should_stop = False
         for epoch in range(self.current_epoch + 1, self.cfg.max_epochs + 1):
             self.current_epoch = epoch
             loss_train = self.train()
-            loss_valid = self.valid()
-            mean_nrmse = None
-            mean_eace = None
-            median_nll = None
+            loss_valid = self.valid() if epoch % self.cfg.valid_interval == 0 else None
+            mean_nrmse = mean_eace = median_nll = None
 
-            # sample on test set
             if epoch % self.cfg.sample_interval == 0:
                 eval_summary = self.sample()
                 mean_nrmse, mean_eace, median_nll = self.getTrackingMetrics(eval_summary)
 
-                # update curriculum: ramp ancestral rate as global NRMSE approaches floor
-                if getattr(self.cfg, 'ancestral', False) and median_nll is not None:
-                    if self.loo_nll_0 is None:
-                        self.loo_nll_0 = min(float(median_nll), _LOO_NLL_0_CAP)
-                    self.ancestral_rate = _ancestralRate(float(median_nll), self.loo_nll_0)
-                    logger.info(
-                        f'Curriculum: LOO-NLL={median_nll:.3f} (ref={self.loo_nll_0:.3f})'
-                        f' → ancestral_rate={self.ancestral_rate:.3f}'
-                    )
-
-            # log epoch
             if self.wandb_run is not None:
                 logs = {
                     'train/loss_epoch': float(loss_train),
-                    'train/ancestral_rate': float(self.ancestral_rate),
-                    'valid/loss_epoch': float(loss_valid),
                     'step/epoch': self.current_epoch,
                 }
+                if loss_valid is not None:
+                    logs['valid/loss_epoch'] = float(loss_valid)
                 if mean_nrmse is not None:
                     logs['valid/mean_nrmse_epoch'] = float(mean_nrmse)
                     logs['valid/mean_eace_epoch'] = float(mean_eace)  # type: ignore
                     logs['valid/median_nll_epoch'] = float(median_nll)  # type: ignore
                 wandb.log(logs)
 
-            # update tracked metrics and optional early stopping on sample epochs
             if mean_nrmse is not None:
                 improved_nrmse = mean_nrmse < (self.best_nrmse - 1e-6)
                 improved_nll = median_nll < (self.best_median_nll - 1e-6)  # type: ignore
                 improved = improved_nrmse or improved_nll
-
                 if improved_nrmse:
                     self.best_nrmse = mean_nrmse
                 if improved_nll:
@@ -789,19 +767,16 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                     self.best_epoch = self.current_epoch
                     if getattr(self.cfg, 'save_best', True):
                         self.save('best')
-
                 if self.stopper is not None:
-                    self.stopper.update(float(mean_nrmse), float(median_nll))  # type: ignore
+                    self.stopper.update(improved)
                     if self.stopper.stop:
                         logger.info(f'early stopping at epoch {self.current_epoch}.')
-                        should_stop = True
+                        if getattr(self.cfg, 'save_latest', True):
+                            self.save('latest')
+                        break
 
-            # save latest ckpt after all epoch-level training state has been updated
             if getattr(self.cfg, 'save_latest', True):
                 self.save('latest')
-
-            if should_stop:
-                break
 
 
 # =============================================================================

@@ -8,7 +8,7 @@ from metabeta.utils.evaluation import (
     getNames,
     getCorrRfxNames,
     Proposal,
-    dictMeanExcl,
+    dictMean,
 )
 from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
 
@@ -94,12 +94,12 @@ def plotCoverage(
             + getNames('rfx', proposal.q)
         )
         stats = {
-            'ECE': 100 * dictMeanExcl(summary.ece),
-            'EACE': 100 * dictMeanExcl(summary.eace),
+            'ECE': 100 * dictMean(summary.aggregated.ece),
+            'EACE': 100 * dictMean(summary.aggregated.eace),
         }
         _plotCoverage(
             axs[i],
-            summary.coverage,
+            summary.aggregated.coverage,
             names,
             stats,
             title=label,

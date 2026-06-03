@@ -31,11 +31,10 @@ posterior_g:
     rq_kwargs:
         adaptive_domain: true
         adaptive_tails: true
-        alpha: 2.0
+        alpha: 1.5
 
 posterior_l:
     n_blocks: 2
 
-posterior_correlation: false
-analytical_context: true
+analytical_refinement: 'full'
 analytical_local_at_inference: true

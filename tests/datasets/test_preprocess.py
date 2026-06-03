@@ -314,11 +314,13 @@ def test_hi_card_cat_routed_as_random_effect():
     rng = np.random.default_rng(0)
     n, m = 200, 20  # 20 levels > max_categories=10 → should become random effect
     group = np.repeat(np.arange(m), n // m).astype(str)
-    df = pd.DataFrame({
-        'school': group,
-        'x': rng.normal(size=n),
-        'y': rng.normal(size=n),
-    })
+    df = pd.DataFrame(
+        {
+            'school': group,
+            'x': rng.normal(size=n),
+            'y': rng.normal(size=n),
+        }
+    )
     result = DataPreprocessor().fit_transform(df)
     # 'school' should be the grouping variable, not a dummy column
     assert result['groups'] is not None
@@ -399,6 +401,59 @@ def test_preprocessor_corr_filter_applied():
     result = DataPreprocessor().fit_transform(df)
     # one of {a, b} should be dropped
     assert result['X'].shape[1] == 1
+
+
+def test_preprocessor_audit_reports_changes_without_fitting():
+    rng = np.random.default_rng(0)
+    n = 120
+    groups = np.repeat(np.arange(12), 10)
+    a = rng.normal(size=n)
+    x_missing = rng.normal(size=n)
+    x_missing[:12] = np.nan
+    heavy = rng.normal(size=n)
+    heavy[:40] = np.nan
+    count_skewed = np.concatenate([np.zeros(100), rng.integers(10, 500, size=20)]).astype(float)
+    cat = np.array(['a'] * 60 + ['b'] * 40 + ['c'] * 20, dtype=object)
+    df = pd.DataFrame(
+        {
+            'group': groups,
+            'x_missing': x_missing,
+            'heavy': heavy,
+            'const': 1.0,
+            'a': a,
+            'b': a * 1.001,
+            'count_skewed': count_skewed,
+            'cat': cat,
+            'y': rng.normal(size=n),
+        }
+    )
+    before = df.copy(deep=True)
+    prep = DataPreprocessor(group_name='group', max_categories=2, outlier_threshold=100.0)
+
+    report = prep.audit(df)
+
+    assert not prep._fitted
+    pd.testing.assert_frame_equal(df, before)
+    assert report.requires_preprocessing
+    assert report.group_name == 'group'
+    assert report.dropped_heavy_missing == ['heavy']
+    assert report.dropped_near_constant == ['const']
+    assert set(report.dropped_correlated).issubset({'a', 'b'})
+    assert len(report.dropped_correlated) == 1
+    assert report.imputed_columns == {'x_missing': 12}
+    assert report.count_transformed_columns == ['count_skewed']
+    assert report.lumped_categories == {'cat': ['c']}
+
+    transformed = prep.fit_transform(df)
+    assert report.n_after == transformed['n']
+    assert report.d_after == transformed['d']
+    assert report.m_after == transformed['m']
+
+
+def test_preprocessor_dry_run_alias():
+    df = _make_df()
+    prep = DataPreprocessor()
+    assert prep.dry_run(df) == prep.audit(df)
 
 
 # ---------------------------------------------------------------------------

@@ -18,13 +18,16 @@ from metabeta.simulation import (
     Simulator,
 )
 from metabeta.simulation.emulator import Subsampler
-from metabeta.utils.families import hasSigmaEps, LIKELIHOOD_FAMILIES
-from metabeta.utils.io import datasetFilename
+from metabeta.utils.constants import hasSigmaEps, LIKELIHOOD_FAMILIES
+from metabeta.utils.names import datasetFilename
 from metabeta.utils.sampling import truncLogUni
 from metabeta.utils.padding import aggregate
 from metabeta.utils.templates import setupConfigParser, generateSimulationConfig
 
 logger = logging.getLogger(__name__)
+
+# Seeds for non-training partitions; training uses the epoch number directly.
+_PARTITION_SEEDS: dict[str, int] = {'valid': 10_000, 'test': 20_000}
 
 
 # -----------------------------------------------------------------------------
@@ -64,14 +67,15 @@ def setup() -> argparse.Namespace:
     # Template-based config generation (primary interface)
     parser.add_argument('--size', type=str, default='small', help='Size preset: tiny|small|medium|large|huge')
     parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
-    parser.add_argument('--ds_type', type=str, default='sampled', help='Dataset type: toy|flat|scm|mixed|sampled|real')
+    parser.add_argument('--ds_type', type=str, default='mixed', help='Dataset type: toy|flat|scm|mixed|sampled|real')
+    parser.add_argument('--shape_profile', type=str, default='standard', help='Dataset-shape preset controlling m/n/n_i independently of d/q')
 
     # Alternative: load config from a saved YAML (e.g. outputs/data/{data_id}/config.yaml)
     parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
 
     # Batch dimensions
     parser.add_argument('--bs_train', type=int, default=4096, help='Number of datasets per training epoch file (default = 4096)')
-    parser.add_argument('--bs_valid', type=int, default=256, help='Number of datasets in the validation file (default = 256)')
+    parser.add_argument('--bs_valid', type=int, default=512, help='Number of datasets in the validation file (default = 512)')
     parser.add_argument('--bs_test', type=int, default=512, help='Number of datasets in the test file (default = 512); split into equal chunks for uncertainty estimates')
     parser.add_argument('--bs_mini', type=int, default=32, help='Mini-batch size for grouping m/q/d across datasets (default = 32)')
 
@@ -81,7 +85,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('-e', '--epochs', type=int, default=20, help='Last training epoch to generate (default = 20)')
     parser.add_argument('--source', type=str, default='all', help='Dataset source key for sampled/real ds_type (default = all)')
     parser.add_argument('--sgld', action='store_true', help='Use SGLD sampler when ds_type=sampled (default = False)')
-    parser.add_argument('--loop', action='store_false', help='Generate datasets sequentially instead of in parallel with joblib (default = True)')
+    parser.add_argument('--loop', action='store_true', help='Generate datasets sequentially instead of in parallel with joblib (default = False)')
 
     return setupConfigParser(parser, generateSimulationConfig, 'Generate hierarchical datasets.')
 # fmt: on
@@ -118,7 +122,7 @@ class Generator:
                 max_n=self.cfg.max_n,
             )
             self.max_d_feasible = min(self.cfg.max_d, subsampler.maxCompatibleD())
-            min_d = 2 if getattr(self.cfg, 'partition', 'train') == 'train' else self.cfg.min_d
+            min_d = getattr(self.cfg, 'min_d', 2)
             if self.max_d_feasible < min_d:
                 raise ValueError(
                     f'real source pool only supports max_d={self.max_d_feasible}, '
@@ -126,11 +130,85 @@ class Generator:
                 )
             self.cfg.max_d = self.max_d_feasible
 
+    @staticmethod
+    def _sampleSkewedBetaInt(
+        rng: np.random.Generator,
+        low: np.ndarray,
+        max_val: int,
+        mode_frac: float,
+        mode_cap: float,
+        concentration: int,
+    ) -> np.ndarray:
+        """Sample integers from a left-skewed Beta(a, b) vectorised over low.
+
+        The mode is placed at low + min(mode_frac * (max_val - low), mode_cap),
+        and concentration controls how tightly mass is gathered around the mode.
+        """
+        high = float(max_val + 1)  # exclusive upper bound for np.floor(uniform)
+        excess = (max_val - low).astype(float)
+        mode = np.clip(
+            low + np.minimum(mode_frac * excess, mode_cap),
+            low + 1e-3,
+            max_val - 1e-3,
+        ).astype(float)
+        t = (mode - low) / (high - low)
+        a = 1.0 + t * (concentration - 1)
+        b = 1.0 + (1.0 - t) * (concentration - 1)
+        return np.floor(low + (high - low) * rng.beta(a, b)).astype(int).clip(low, max_val)
+
+    @staticmethod
+    def _sampleWideM(
+        rng: np.random.Generator,
+        low: np.ndarray,
+        max_val: int,
+        wide_min: int,
+    ) -> np.ndarray:
+        """Sample a high-m coverage regime without tying it to d/q size presets."""
+        wide_low = np.minimum(np.maximum(low, wide_min), max_val)
+        draw = np.empty_like(wide_low)
+        fixed = wide_low >= max_val
+        draw[fixed] = wide_low[fixed]
+        if np.any(~fixed):
+            draw[~fixed] = rng.integers(wide_low[~fixed], max_val + 1)
+        return draw
+
+    def _sampleMeanGroupN(
+        self,
+        rng: np.random.Generator,
+        m: np.ndarray,
+    ) -> np.ndarray:
+        """Sample mean group size with weak positive m/n coupling."""
+        m = m.astype(float)
+        min_n = float(self.cfg.min_n)
+        max_mean_n = np.minimum(float(self.cfg.max_n), float(self.cfg.max_n_total) / m)
+        max_mean_n = np.maximum(max_mean_n, min_n)
+
+        log_low = np.log(min_n)
+        log_high = np.log(max_mean_n)
+        log_span = np.maximum(log_high - log_low, 0.0)
+
+        m_log_low = np.log(float(self.cfg.min_m))
+        m_log_high = np.log(float(self.max_m_feasible))
+        m_span = max(m_log_high - m_log_low, 1e-12)
+        m_frac = np.clip((np.log(m) - m_log_low) / m_span, 0.0, 1.0)
+
+        center_frac = np.clip(
+            getattr(self.cfg, 'mean_n_log_frac', 0.15)
+            + getattr(self.cfg, 'mean_n_log_m_slope', 0.65) * m_frac,
+            0.0,
+            1.0,
+        )
+        noise_sd = getattr(self.cfg, 'mean_n_log_noise', 0.25) * log_span
+        log_mean_n = log_low + center_frac * log_span + rng.normal(0.0, noise_sd)
+        mean_n = np.round(np.exp(np.clip(log_mean_n, log_low, log_high))).astype(int)
+        return mean_n.clip(self.cfg.min_n, self.cfg.max_n)
+
     def _genDims(
         self,
         rng: np.random.Generator,
         n_datasets: int,
         mini_batch_size: int,
+        partition: str | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Sample mini-batch-uniform d, q, m arrays."""
         assert (
@@ -138,23 +216,20 @@ class Generator:
         ), 'number of datasets must be divisible by mini batch size'
         n_mini = n_datasets // mini_batch_size
 
-        # min_d/min_q define non-overlapping test bands; ignored during training
-        # so that the single training run covers the full (d, q) space.
-        # d and q are drawn log-uniformly over their bounded integer ranges.
-        is_train = getattr(self.cfg, 'partition', 'train') == 'train'
-        min_d = 2 if is_train else getattr(self.cfg, 'min_d', 2)
+        if partition is None:
+            partition = getattr(self.cfg, 'partition', 'train')
+
+        # d is drawn uniformly; q is drawn log-uniformly (favouring small q).
+        min_d = getattr(self.cfg, 'min_d', 2)
         max_d = self.max_d_feasible if self.cfg.ds_type == 'real' else self.cfg.max_d
-        low_d, high_d = float(min_d), float(max_d + 1)
-        d_uniq = truncLogUni(rng, low=low_d, high=high_d, size=n_mini, round=True).astype(int)
-        d_uniq = d_uniq.clip(min_d, max_d)
+        d_uniq = rng.integers(min_d, max_d + 1, size=n_mini)
         d = np.repeat(d_uniq, mini_batch_size)
 
-        min_q = 1 if is_train else getattr(self.cfg, 'min_q', 1)
+        # min_q respects the preset band for non-training partitions so each
+        # test/valid regime exercises a clearly distinct slice of problem space.
+        min_q = getattr(self.cfg, 'min_q', 1) if partition != 'train' else 1
         q_max_i = np.minimum(self.cfg.max_q, d_uniq).astype(float)  # (n_mini,) upper bound
-        q_hi = q_max_i + 1.0
-        q_uniq = np.floor(
-            np.exp(rng.uniform(np.log(float(min_q)), np.log(q_hi), size=n_mini))
-        ).astype(int)
+        q_uniq = truncLogUni(rng, low=float(min_q), high=q_max_i + 1.0, round=True)
         q_uniq = q_uniq.clip(min_q, np.minimum(self.cfg.max_q, d_uniq))
         q = np.repeat(q_uniq, mini_batch_size)
 
@@ -175,24 +250,33 @@ class Generator:
             np.maximum(self.cfg.min_m, np.maximum(d_uniq, psi_df) + min_bg_df),
             self.max_m_feasible,
         )
-        # Inline skewedBeta(low=m_low, high=max_m+1, mode=m_low+min(0.08*excess,20), c=8)
-        # vectorised over per-element m_low; mode is clamped so low < mode < high
-        # even for the degenerate edge case m_low == max_m_feasible.
-        high_m = float(self.max_m_feasible + 1)
-        excess_m = (self.max_m_feasible - m_low).astype(float)
-        m_mode = np.clip(
-            m_low + np.minimum(0.08 * excess_m, 20.0),
-            m_low + 1e-3,
-            self.max_m_feasible - 1e-3,
-        ).astype(float)
-        t = (m_mode - m_low) / (high_m - m_low)   # fraction in (0, 1)
-        a_beta = 1.0 + t * 7                        # concentration=8 → (c-1)=7
-        b_beta = 1.0 + (1.0 - t) * 7
-        m = np.floor(m_low + (high_m - m_low) * rng.beta(a_beta, b_beta)).astype(int)
-        m = m.clip(m_low, self.max_m_feasible)
+        m = self._sampleSkewedBetaInt(
+            rng, m_low, self.max_m_feasible, mode_frac=0.08, mode_cap=20.0, concentration=8
+        )
+        m_wide_prob = getattr(self.cfg, 'm_wide_prob', 0.0)
+        if m_wide_prob > 0:
+            wide = rng.random(n_mini) < m_wide_prob
+            if np.any(wide):
+                m[wide] = self._sampleWideM(
+                    rng,
+                    m_low[wide],
+                    self.max_m_feasible,
+                    wide_min=getattr(self.cfg, 'm_wide_min', 60),
+                )
         m = np.repeat(m, mini_batch_size)
 
         return d, q, m
+
+    # Fraction of datasets that get perfectly balanced group sizes (all n_g equal).
+    # Real grouped benchmark datasets are mostly near-balanced; keep imbalance as
+    # robustness coverage, but make balanced/near-balanced panels the default regime.
+    _P_BALANCED = 0.65
+    # Dirichlet concentration α ~ LogUniform(low, high) for the variable regime.
+    # α=40 is nearly balanced; α=8 still gives mild variation.  This keeps the
+    # synthetic group-size entropy closer to the continuous real test pool, whose
+    # lower quartile is already very close to one.
+    _ALPHA_LOW = 8.0
+    _ALPHA_HIGH = 40.0
 
     def _genNs(
         self,
@@ -201,22 +285,57 @@ class Generator:
         m: np.ndarray,
         min_ng: np.ndarray | None = None,
     ) -> np.ndarray:
-        """Sample per-group observation counts with masking and max_n_total cap.
+        """Sample per-group observation counts with per-dataset entropy variation.
+
+        Each dataset independently draws a regime:
+          - balanced  (p=_P_BALANCED): all active groups get the same n → H_ratio=1.
+          - variable  (p=1-_P_BALANCED): group sizes drawn from Dirichlet(α·1_m)
+            where α ~ LogUniform(_ALPHA_LOW, _ALPHA_HIGH) controls spread.
 
         min_ng: optional (n_datasets,) int array of per-dataset minimum group
                 sizes.  When provided (e.g. from min_within_df), each group in
                 dataset i gets at least min_ng[i] observations before capping.
         """
-        effective_min_n = self.cfg.min_n if min_ng is None else int(np.max(min_ng))
-        ns = truncLogUni(
-            rng,
-            low=self.cfg.min_n,
-            high=self.cfg.max_n + 1,
-            size=(n_datasets, self.cfg.max_m),
-            round=True,
+        # Per-dataset regime: True = balanced panel
+        is_balanced = rng.random(n_datasets) < self._P_BALANCED  # (n_datasets,)
+
+        # Mean n per dataset: used as fixed n for balanced panels and as the
+        # total-budget basis for variable panels.  It is sampled conditionally
+        # on m so total n grows with group count within the memory envelope.
+        mean_n = self._sampleMeanGroupN(rng, m).astype(float)
+
+        # Active-group mask: (n_datasets, max_m)
+        active = np.arange(self.cfg.max_m)[None, :] < m[:, None]
+
+        # --- balanced path: broadcast single n to all active columns ---
+        ns_bal = np.where(active, mean_n[:, None], 0.0)
+
+        # --- variable path: Dirichlet-proportioned allocation ---
+        alpha = np.exp(
+            rng.uniform(np.log(self._ALPHA_LOW), np.log(self._ALPHA_HIGH), size=n_datasets)
+        )  # (n_datasets,)
+        # Gamma(α_i) draws; inactive groups zeroed before normalising so proportions
+        # sum to 1 over active groups only.
+        gamma_raw = rng.standard_gamma(
+            np.where(active, alpha[:, None], 1.0)  # dummy shape=1 for inactive; zeroed next
+        )  # (n_datasets, max_m)
+        gamma_raw = np.where(active, gamma_raw, 0.0)
+        props = gamma_raw / np.maximum(gamma_raw.sum(axis=1, keepdims=True), 1e-12)
+
+        n_budget = np.clip(
+            mean_n * m,
+            m * self.cfg.min_n,
+            np.minimum(m * self.cfg.max_n, self.cfg.max_n_total),
         )
+        ns_var = np.round(props * n_budget[:, None]).clip(self.cfg.min_n, self.cfg.max_n)
+
+        # --- merge regimes ---
+        ns = np.where(is_balanced[:, None], ns_bal, ns_var).astype(int)
+
         if min_ng is not None:
-            ns = np.maximum(ns, min_ng[:, None])  # (n_datasets, max_m) per-dataset floor
+            ns = np.maximum(ns, min_ng[:, None])
+
+        effective_min_n = self.cfg.min_n if min_ng is None else int(np.max(min_ng))
         return self._maskAndCapNs(
             ns=ns,
             m=m,
@@ -275,6 +394,64 @@ class Generator:
             ns[over] = base + extra_scaled
 
         return ns
+
+    def _genNsSlices(
+        self,
+        rng: np.random.Generator,
+        n_datasets: int,
+        d: np.ndarray,
+        q: np.ndarray,
+        m: np.ndarray,
+    ) -> tuple[list[np.ndarray], list[int]]:
+        """Pre-sample per-dataset group-size arrays and effective minimum group sizes.
+
+        Returns (ns_slices, min_n_effs) where ns_slices[i] has shape (m[i],) and
+        min_n_effs[i] is the per-dataset effective minimum group size (0 = use cfg.min_n).
+        """
+        if self.cfg.ds_type in ('sampled', 'real'):
+            min_ng = np.full(n_datasets, self.cfg.min_n)
+            if self.cfg.ds_type == 'sampled':
+                min_within_df = getattr(self.cfg, 'min_within_df', 0)
+                if min_within_df:
+                    min_ng = np.maximum(self.cfg.min_n, q + min_within_df)
+
+            # Emulator/Subsampler override ns internally based on source dataset constraints;
+            # only req_m = len(ns_i) and req_n = sum(ns_i) survive as loose hints.
+            # Draw req_n the same way the flat/scm path does: sample a per-group n
+            # conditional on m and multiply by m.  This aligns the req_n scale with
+            # what _genNs produces, so the Emulator receives a similar total-n
+            # budget regardless of which sub-type mixed resolves to.
+            n_hint_pg = np.maximum(self._sampleMeanGroupN(rng, m), min_ng)
+            n_hint = np.clip(
+                n_hint_pg * m,
+                m * min_ng,
+                np.minimum(m * self.cfg.max_n, self.cfg.max_n_total),
+            )
+            ns_slices = [
+                np.full(int(m[i]), int(n_hint[i]) // int(m[i]), dtype=int)
+                for i in range(n_datasets)
+            ]
+            min_n_effs = (
+                [int(min_ng[i]) for i in range(n_datasets)]
+                if self.cfg.ds_type == 'sampled'
+                else [0] * n_datasets
+            )
+            return ns_slices, min_n_effs
+        else:
+            # toy, flat, scm, mixed: ns is used directly by Synthesizer/Scammer/Emulator.
+            # Enforce within-group df floor: n_g >= q + min_within_df so that ZtZ_g
+            # has at least min_within_df residual df for per-group variance estimation.
+            # Mirrors min_bg_df (between-group floor) but applied within each group.
+            min_within_df = getattr(self.cfg, 'min_within_df', 0)
+            min_ng = np.maximum(self.cfg.min_n, q + min_within_df) if min_within_df else None
+            ns = self._genNs(rng, n_datasets, m, min_ng=min_ng)
+            ns_slices = [ns[i][: m[i]] for i in range(n_datasets)]
+            min_n_effs = (
+                [int(min_ng[i]) for i in range(n_datasets)]
+                if min_ng is not None
+                else [0] * n_datasets
+            )
+            return ns_slices, min_n_effs
 
     @staticmethod
     def _genDataset(
@@ -341,11 +518,14 @@ class Generator:
         elif ds_type == 'scm':
             design = Scammer(rng)
         elif ds_type == 'sampled':
+            min_bg_df = getattr(cfg, 'min_bg_df', 0)
             design = Emulator(
                 rng,
                 source=cfg.source,
                 use_sgld=getattr(cfg, 'sgld', False),
-                min_m=cfg.min_m,
+                min_m=max(
+                    cfg.min_m, d + min_bg_df
+                ),  # ensure m >= d+min_bg_df for GLS identifiability
                 min_n=max(cfg.min_n, min_n_eff),  # respect per-dataset min_within_df floor
                 max_n=cfg.max_n,
             )
@@ -357,66 +537,25 @@ class Generator:
         return sim.sample()
 
     def _genBatch(
-        self, n_datasets: int, mini_batch_size: int, epoch: int = 0
+        self,
+        n_datasets: int,
+        mini_batch_size: int,
+        partition: str,
+        epoch: int = 0,
     ) -> list[dict[str, np.ndarray]]:
-        """generate list of {n_datasets} and keep m, d, q constant per minibatch"""
-        # --- init seeding
-        main_seed = {'train': epoch, 'valid': 10_000, 'test': 20_000}[self.cfg.partition]
+        """Generate list of n_datasets keeping m, d, q constant per mini-batch."""
+        main_seed = epoch if partition == 'train' else _PARTITION_SEEDS[partition]
         rng = np.random.default_rng(main_seed)
         seedseqs = np.random.SeedSequence(main_seed).spawn(n_datasets)
-        desc = ''
-        if self.cfg.partition == 'train':
-            desc = f'{epoch:02d}/{self.cfg.epochs:02d}'
+        desc = f'{epoch:02d}/{self.cfg.epochs:02d}' if partition == 'train' else ''
 
-        # --- presample dimensions (always mini-batch-uniform)
-        d, q, m = self._genDims(rng, n_datasets, mini_batch_size)
-
-        # --- presample per-group counts
-        min_ng = None  # may be set in else branch
-        if self.cfg.ds_type in ('sampled', 'real'):
-            # Emulator/Subsampler override ns internally based on source dataset constraints;
-            # only req_m = len(ns_i) and req_n = sum(ns_i) survive as loose hints.
-            # Draw req_n the same way the flat/scm path does: sample a per-group n
-            # log-uniformly from [min_n, max_n] and multiply by m.  This aligns the
-            # req_n scale with what _genNs produces, so the Emulator receives a similar
-            # total-n budget regardless of which sub-type mixed resolves to.
-            n_hint_pg = truncLogUni(
-                rng,
-                low=self.cfg.min_n,
-                high=self.cfg.max_n + 1,
-                size=n_datasets,
-                round=True,
-            )
-            n_hint = n_hint_pg * m
-            n_hint = np.clip(
-                n_hint, m * self.cfg.min_n, np.minimum(m * self.cfg.max_n, self.cfg.max_n_total)
-            )
-            ns_slices = [
-                np.full(int(m[i]), int(n_hint[i]) // int(m[i]), dtype=int)
-                for i in range(n_datasets)
-            ]
-        else:
-            # toy, flat, scm, mixed: ns is used directly by Synthesizer/Scammer/Emulator
-            # Enforce within-group df floor: n_g >= q + min_within_df so that ZtZ_g
-            # has at least min_within_df residual df for per-group variance estimation.
-            # Mirrors min_bg_df (between-group floor) but applied within each group.
-            min_within_df = getattr(self.cfg, 'min_within_df', 0)
-            min_ng = np.maximum(self.cfg.min_n, q + min_within_df) if min_within_df else None
-            ns = self._genNs(rng, n_datasets, m, min_ng=min_ng)
-            ns_slices = [ns[i][: m[i]] for i in range(n_datasets)]
-
-        # --- sample batch of single datasets
-        min_n_effs = (
-            [int(min_ng[i]) for i in range(n_datasets)] if min_ng is not None else [0] * n_datasets
-        )
+        d, q, m = self._genDims(rng, n_datasets, mini_batch_size, partition=partition)
+        ns_slices, min_n_effs = self._genNsSlices(rng, n_datasets, d, q, m)
 
         min_bg_df = getattr(self.cfg, 'min_bg_df', 0)
         _max_retries = 20
 
-        if getattr(self.cfg, 'loop', False) or self.cfg.ds_type in [
-            'scm',
-            'mixed',
-        ]:  # Option A: loop
+        if getattr(self.cfg, 'loop', False) or self.cfg.ds_type in ('scm', 'mixed'):
             datasets = []
             for i in tqdm(range(n_datasets), desc=desc):
                 # If min_bg_df is set, retry until m − d ≥ min_bg_df.  Trimming X
@@ -438,7 +577,7 @@ class Generator:
                     if min_bg_df == 0 or m_i - d_i >= min_bg_df:
                         break
                 datasets.append(dataset)
-        else:  # Option B: parallelize
+        else:
             datasets = Parallel(n_jobs=-1, backend='loky', batch_size='auto')(
                 delayed(Generator._genDataset)(
                     self.cfg,
@@ -531,49 +670,41 @@ class Generator:
             yaml.dump(cfg_dict, f, sort_keys=False, default_flow_style=False)
         logger.info(f'Saved config to {config_path}')
 
-    def genTest(self):
-        logger.info('Generating test set...')
-        ds_test = self._genBatch(n_datasets=self.cfg.bs_test, mini_batch_size=1)
-        ds_test = aggregate(ds_test)
-        ds_test = self._castCompactTypes(ds_test)
+    def _saveBatch(
+        self, partition: str, n_datasets: int, mini_batch_size: int, epoch: int = 0
+    ) -> None:
+        """Generate one batch, aggregate, compact-cast, and save to disk."""
+        datasets = self._genBatch(
+            n_datasets=n_datasets,
+            mini_batch_size=mini_batch_size,
+            partition=partition,
+            epoch=epoch,
+        )
+        datasets = aggregate(datasets)
+        datasets = self._castCompactTypes(datasets)
         dataset_dir = self.outdir / self.cfg.data_id
         dataset_dir.mkdir(parents=True, exist_ok=True)
-        fn = dataset_dir / datasetFilename('test')
-        np.savez_compressed(fn, **ds_test, allow_pickle=True)
-        logger.info(f'Saved test set to {fn}')
+        fn = dataset_dir / datasetFilename(partition, epoch)
+        np.savez_compressed(fn, **datasets, allow_pickle=True)
+        logger.info(f'Saved {partition} set to {fn}')
+
+    def genTest(self):
+        logger.info('Generating test set...')
+        self._saveBatch('test', self.cfg.bs_test, mini_batch_size=1)
 
     def genValid(self):
         logger.info('Generating validation set...')
-        ds_valid = self._genBatch(n_datasets=self.cfg.bs_valid, mini_batch_size=1)
-        ds_valid = aggregate(ds_valid)
-        ds_valid = self._castCompactTypes(ds_valid)
-        dataset_dir = self.outdir / self.cfg.data_id
-        dataset_dir.mkdir(parents=True, exist_ok=True)
-        fn = dataset_dir / datasetFilename('valid')
-        np.savez_compressed(fn, **ds_valid, allow_pickle=True)
-        logger.info(f'Saved validation set to {fn}')
+        self._saveBatch('valid', self.cfg.bs_valid, mini_batch_size=1)
 
     def genTrain(self):
         assert self.cfg.begin > 0, 'starting training partition must be a positive integer'
         assert self.cfg.begin <= self.cfg.epochs, 'starting epoch larger than goal epoch'
         assert self.cfg.epochs < 10_000, 'maximum number of epochs exceeded'
-        # assert self.cfg.ds_type != 'sampled', 'training data must be synthetic'
         logger.info(
             f'Generating {self.cfg.epochs} training partitions of {self.cfg.bs_train} datasets each...'
         )
-        dataset_dir = self.outdir / self.cfg.data_id
-        dataset_dir.mkdir(parents=True, exist_ok=True)
         for epoch in range(self.cfg.begin, self.cfg.epochs + 1):
-            ds_train = self._genBatch(
-                n_datasets=self.cfg.bs_train,
-                mini_batch_size=self.cfg.bs_mini,
-                epoch=epoch,
-            )
-            ds_train = aggregate(ds_train)
-            ds_train = self._castCompactTypes(ds_train)
-            fn = dataset_dir / datasetFilename('train', epoch)
-            np.savez_compressed(fn, **ds_train, allow_pickle=True)
-            logger.info(f'Saved training set to {fn}')
+            self._saveBatch('train', self.cfg.bs_train, self.cfg.bs_mini, epoch=epoch)
 
     @property
     def info(self) -> str:
@@ -586,7 +717,7 @@ likelihood: {LIKELIHOOD_FAMILIES[cfg.likelihood_family]}
 ds type:    {cfg.ds_type}
 partition:  {cfg.partition}
 epochs:     {epoch_range}
-d:          1–{cfg.max_d}
+d:          {cfg.min_d}–{cfg.max_d}
 q:          1–{cfg.max_q}
 m:          {cfg.min_m}–{self.max_m_feasible}
 n:          {cfg.min_n}–{cfg.max_n}
@@ -597,30 +728,24 @@ bs_test:    {cfg.bs_test}
 ===================="""
 
     def go(self):
-        # Save config before generation
         self.saveConfig()
-
-        if self.cfg.partition == 'test':
+        partition = self.cfg.partition
+        if partition == 'test':
             self.genTest()
-        elif self.cfg.partition == 'valid':
+        elif partition == 'valid':
             self.genValid()
-        elif self.cfg.partition == 'train':
+        elif partition == 'train':
             self.genTrain()
-        elif self.cfg.partition == 'eval':
-            self.cfg.partition = 'valid'
+        elif partition == 'eval':
             self.genValid()
-            self.cfg.partition = 'test'
             self.genTest()
-        elif self.cfg.partition == 'all':
-            self.cfg.partition = 'valid'
+        elif partition == 'all':
             self.genValid()
-            self.cfg.partition = 'test'
             self.genTest()
-            self.cfg.partition = 'train'
             self.genTrain()
         else:
             raise NotImplementedError(
-                f'the partition type must be in [train, valid, test], but is {self.cfg.partition}'
+                f'the partition type must be in [train, valid, test], but is {partition}'
             )
 
 

@@ -1,4 +1,4 @@
-"""Tests for metabeta.utils.glmm.glmmFull.
+"""Tests for metabeta.analytical.glmm.glmmFull.
 
 Tests cover shape correctness, numerical validity, trivial-case recovery,
 signal-detection, and integration with Approximator._dataStatistics.
@@ -9,7 +9,11 @@ import pytest
 import torch
 
 from metabeta.simulation import Prior, Synthesizer, Simulator, hypersample
-from metabeta.utils.glmm import lmmBernoulli, lmmPoisson, glmm
+from metabeta.analytical.glmm.pql import lmmBernoulli, lmmPoisson
+from metabeta.analytical.fit import glmm
+from metabeta.analytical.linalg import _adaptiveRidge, _adaptiveRidgeBm, _eighWithJitter, _safeSolve
+from metabeta.analytical.glmm.bernoulli import refineBernoulliLaplaceEb
+from metabeta.analytical.lmm.map import refineNormalMapSrfx
 
 
 DEVICE = torch.device('cpu')
@@ -307,6 +311,171 @@ def test_glmm_normal_mixed_rank_z_groups_keep_sigma_bounded():
     assert result['sigma_rfx_est'].amax().item() < 1.5
 
 
+def test_glmm_normal_blups_use_beta_for_blup_without_changing_beta_est():
+    B, m, n_per_group, d, q = 1, 20, 12, 4, 1
+    Xm = torch.zeros(B, m, n_per_group, d)
+    Zm = torch.zeros(B, m, n_per_group, q)
+    mask_n = torch.ones(B, m, n_per_group)
+    mask_m = torch.ones(B, m)
+    ns = torch.full((B, m), float(n_per_group))
+    n_total = torch.full((B,), m * n_per_group)
+
+    x = torch.linspace(-1.0, 1.0, n_per_group)
+    group_x = torch.linspace(-1.0, 1.0, m)
+    beta = torch.tensor([0.5, 0.8, -0.4, 0.3])
+    rfx = torch.zeros(B, m, q)
+    for g in range(m):
+        Xm[:, g, :, 0] = 1.0
+        Xm[:, g, :, 1] = x
+        Xm[:, g, :, 2] = group_x[g]
+        Xm[:, g, :, 3] = group_x[g] * x
+        Zm[:, g, :, 0] = x
+        rfx[:, g, 0] = 0.7 * torch.sin(torch.tensor(float(g)))
+
+    ym = torch.einsum('bmnd,d->bmn', Xm, beta)
+    ym = ym + torch.einsum('bmnq,bmq->bmn', Zm, rfx)
+    ym = ym + 0.02 * torch.sin(torch.arange(m * n_per_group).reshape(1, m, n_per_group))
+
+    result = glmm(
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        ns,
+        n_total,
+        likelihood_family=0,
+    )
+
+    X_masked = Xm * mask_n[..., None]
+    XtX = torch.einsum('bmnd,bmnk->bdk', X_masked, Xm)
+    Xty = torch.einsum('bmnd,bmn->bd', X_masked, ym)
+    beta_ols = _safeSolve(XtX + _adaptiveRidge(XtX), Xty)
+    beta_for_blup = 0.35 * result['beta_est'] + 0.65 * beta_ols
+
+    def blup_for(beta_value):
+        ZtZ = torch.einsum('bmnq,bmnr->bmqr', Zm, Zm)
+        eye_q = torch.eye(q)
+        vals, vecs = _eighWithJitter(
+            result['Psi'] + result['sigma_eps_est'].square()[:, :, None] * 1e-4 * eye_q
+        )
+        psi_inv = vecs @ torch.diag_embed(1.0 / vals.clamp(min=1e-30)) @ vecs.mT
+        inner = result['sigma_eps_est'].square()[:, :, None, None] * psi_inv[:, None] + ZtZ
+        W_g = _safeSolve(inner + _adaptiveRidgeBm(inner), eye_q.expand(B, m, q, q))
+        resid = (ym - torch.einsum('bmnd,bd->bmn', Xm, beta_value)) * mask_n
+        ztr = torch.einsum('bmnq,bmn->bmq', Zm, resid)
+        return torch.einsum('bmqr,bmr->bmq', W_g, ztr).clamp(-20.0, 20.0)
+
+    assert torch.linalg.vector_norm(beta_ols - result['beta_est']).item() > 1e-3
+    assert torch.allclose(result['blup_est'], blup_for(beta_for_blup), atol=1e-5, rtol=1e-5)
+    assert not torch.allclose(
+        result['blup_est'], blup_for(result['beta_est']), atol=1e-4, rtol=1e-4
+    )
+
+
+def test_glmm_normal_laplace_eb_default_smoke():
+    rng = np.random.default_rng(SEED + 21)
+    B, d, q, m, n_per_group = 3, 3, 2, 10, 16
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=0, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+
+    result = glmm(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+        likelihood_family=0,
+        nu_ffx=torch.as_tensor(np.stack([ds['nu_ffx'] for ds in datasets]), dtype=torch.float32),
+        tau_ffx=torch.as_tensor(np.stack([ds['tau_ffx'] for ds in datasets]), dtype=torch.float32),
+        family_ffx=torch.as_tensor([int(ds['family_ffx']) for ds in datasets], dtype=torch.long),
+        tau_rfx=torch.as_tensor(np.stack([ds['tau_rfx'] for ds in datasets]), dtype=torch.float32),
+        family_sigma_rfx=torch.as_tensor(
+            [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
+        ),
+        tau_eps=torch.as_tensor([float(ds['tau_eps']) for ds in datasets], dtype=torch.float32),
+        family_sigma_eps=torch.as_tensor(
+            [int(ds['family_sigma_eps']) for ds in datasets], dtype=torch.long
+        ),
+        mask_d=torch.ones(B, d, dtype=torch.bool),
+        mask_q=torch.ones(B, q, dtype=torch.bool),
+        normal_laplace_eb_steps=2,
+        normal_beta_tail_grid=True,
+    )
+
+    assert result['beta_est'].shape == (B, d)
+    assert result['sigma_rfx_est'].shape == (B, q)
+    assert result['blup_est'].shape == (B, m, q)
+    assert torch.isfinite(result['sigma_rfx_est']).all()
+    assert torch.isfinite(result['blup_est']).all()
+    assert torch.isfinite(result['normal_laplace_eb_accept']).all()
+    assert torch.isfinite(result['normal_laplace_eb_sigma_grid_accept']).all()
+    assert torch.isfinite(result['normal_laplace_eb_blup_guard']).all()
+    assert torch.isfinite(result['normal_beta_tail_grid_gate']).all()
+    assert (
+        'normal_map_sigma_rfx' in result
+    ), 'pre-EB sigma key must survive through full glmm() Normal path'
+    assert result['normal_map_sigma_rfx'].shape == (B, q)
+    assert torch.isfinite(result['normal_map_sigma_rfx']).all()
+
+
+def test_refine_normal_map_beta_sigma_grid_replaces_capped_report_only():
+    B, m, n_per_group, d, q = 1, 6, 5, 6, 1
+    Xm = torch.zeros(B, m, n_per_group, d)
+    Xm[..., 0] = 1.0
+    Zm = torch.zeros(B, m, n_per_group, q)
+    ym = torch.zeros(B, m, n_per_group)
+    mask_n = torch.ones(B, m, n_per_group)
+    mask_m = torch.ones(B, m)
+    ns = torch.full((B, m), float(n_per_group))
+    beta_start = torch.full((B, d), 10.0)
+    stats = {
+        'beta_est': beta_start,
+        'sigma_rfx_est': torch.full((B, q), 0.5),
+        'sigma_eps_est': torch.full((B, 1), 1.0),
+        'Psi': torch.eye(q).expand(B, q, q).clone() * 0.25,
+    }
+
+    result = refineNormalMapSrfx(
+        stats,
+        Xm,
+        ym,
+        Zm,
+        mask_n,
+        mask_m,
+        ns,
+        nu_ffx=torch.zeros(B, d),
+        tau_ffx=torch.ones(B, d),
+        family_ffx=torch.zeros(B, dtype=torch.long),
+        tau_rfx=torch.ones(B, q),
+        family_sigma_rfx=torch.zeros(B, dtype=torch.long),
+        tau_eps=torch.ones(B),
+        family_sigma_eps=torch.zeros(B, dtype=torch.long),
+        mask_d=torch.ones(B, d, dtype=torch.bool),
+        mask_q=torch.ones(B, q, dtype=torch.bool),
+        n_steps=1,
+        recompute_blup=False,
+        beta_prior_cap=4.0,
+        beta_sigma_grid=True,
+        beta_sigma_grid_scales=(0.75, 1.0, 1.3333333),
+    )
+
+    assert torch.equal(result['normal_map_beta_stabilized'], torch.ones(B))
+    assert torch.all(result['beta_est'].abs() < 4.0)
+    # BLUP beta retains uncapped GLS values; unidentified columns (X=0) fall back to
+    # beta_start (10.0) which exceeds the cap — unlike the reported beta_est.
+    assert torch.all(result['normal_map_beta_for_blup'][..., 1:] > 4.0)
+    assert (
+        'normal_map_sigma_rfx' in result
+    ), 'pre-EB diagnostic key must be saved by refineNormalMapSrfx'
+    assert result['normal_map_sigma_rfx'].shape == (B, q)
+    assert torch.isfinite(result['normal_map_sigma_rfx']).all()
+
+
 # ---------------------------------------------------------------------------
 # 4. Recovery test: nonzero rfx → sigma_rfx_est should be positive
 # ---------------------------------------------------------------------------
@@ -342,6 +511,364 @@ def test_glmm_recovers_nonzero_rfx(likelihood_family):
     assert (
         mean_sigma_rfx_est > 0.01
     ), f'sigma_rfx_est should be positive when true rfx is large, got {mean_sigma_rfx_est:.4f}'
+
+
+def test_refine_bernoulli_laplace_eb_smoke_q1():
+    """Bernoulli diagonal Laplace-EB path is finite and shape-compatible."""
+    rng = np.random.default_rng(SEED + 13)
+    B, d, q, m, n_per_group = 4, 2, 1, 8, 18
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=1, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+    stats = lmmBernoulli(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+    )
+
+    nu_ffx = torch.as_tensor(np.stack([ds['nu_ffx'] for ds in datasets]), dtype=torch.float32)
+    tau_ffx = torch.as_tensor(np.stack([ds['tau_ffx'] for ds in datasets]), dtype=torch.float32)
+    family_ffx = torch.as_tensor([int(ds['family_ffx']) for ds in datasets], dtype=torch.long)
+    tau_rfx = torch.as_tensor(np.stack([ds['tau_rfx'] for ds in datasets]), dtype=torch.float32)
+    family_sigma_rfx = torch.as_tensor(
+        [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
+    )
+    mask_d = torch.ones(B, d, dtype=torch.bool)
+    mask_q = torch.ones(B, q, dtype=torch.bool)
+
+    result = refineBernoulliLaplaceEb(
+        stats,
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        nu_ffx=nu_ffx,
+        tau_ffx=tau_ffx,
+        family_ffx=family_ffx,
+        tau_rfx=tau_rfx,
+        family_sigma_rfx=family_sigma_rfx,
+        mask_d=mask_d,
+        mask_q=mask_q,
+        n_steps=3,
+        n_inner=2,
+        n_final=2,
+    )
+
+    assert result['beta_est'].shape == (B, d)
+    assert result['sigma_rfx_est'].shape == (B, q)
+    assert result['blup_est'].shape == stats['blup_est'].shape
+    assert result['blup_var'].shape == stats['blup_var'].shape
+    assert torch.isfinite(result['beta_est']).all()
+    assert torch.isfinite(result['sigma_rfx_est']).all()
+    assert torch.isfinite(result['blup_est']).all()
+    assert torch.isfinite(result['blup_var']).all()
+    assert (result['sigma_rfx_est'] >= 0).all()
+    assert torch.allclose(
+        result['Psi_lap'].diagonal(dim1=-2, dim2=-1),
+        result['sigma_rfx_est'].square(),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
+def test_refine_bernoulli_laplace_eb_blup_fallback():
+    """Bernoulli EB can keep incoming BLUPs when the β jump trips the fallback."""
+    rng = np.random.default_rng(SEED + 16)
+    B, d, q, m, n_per_group = 3, 3, 1, 6, 12
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=1, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+    stats = lmmBernoulli(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+    )
+
+    result = refineBernoulliLaplaceEb(
+        stats,
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        mask_d=torch.ones(B, d, dtype=torch.bool),
+        mask_q=torch.ones(B, q, dtype=torch.bool),
+        n_steps=1,
+        n_inner=1,
+        n_final=1,
+        accept_only_improved=False,
+        blup_fallback_beta_jump=0.0,
+        return_diagnostics=True,
+    )
+
+    assert torch.allclose(result['blup_est'], stats['blup_est'])
+    assert torch.allclose(result['blup_var'], stats['blup_var'])
+    assert torch.equal(result['laplace_eb_blup_fallback'], torch.ones(B))
+    assert torch.isfinite(result['laplace_eb_beta_jump']).all()
+
+
+def test_refine_bernoulli_laplace_eb_beta_output_cap_trigger():
+    """Bernoulli EB caps only separation-scale β summaries while leaving ordinary β untouched."""
+    rng = np.random.default_rng(SEED + 17)
+    B, d, q, m, n_per_group = 2, 2, 1, 5, 10
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=1, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+    stats = lmmBernoulli(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+    )
+    stats = dict(stats)
+    stats['beta_est'] = torch.tensor([[12.0, -2.0], [5.0, -5.0]])
+
+    result = refineBernoulliLaplaceEb(
+        stats,
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        mask_d=torch.ones(B, d, dtype=torch.bool),
+        mask_q=torch.ones(B, q, dtype=torch.bool),
+        n_steps=1,
+        n_inner=1,
+        n_final=1,
+        lr=0.0,
+        accept_only_improved=False,
+        beta_output_cap=3.0,
+        beta_output_cap_trigger=8.0,
+    )
+
+    assert torch.all(result['beta_est'][0].abs() <= 3.0)
+    assert torch.allclose(result['beta_est'][1], stats['beta_est'][1])
+
+
+def test_refine_bernoulli_laplace_eb_sigma_prior_cap_recomputes_blup():
+    """Bernoulli EB can cap sigma against the prior scale and keep BLUP outputs finite."""
+    rng = np.random.default_rng(SEED + 18)
+    B, d, q, m, n_per_group = 2, 2, 1, 5, 10
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=1, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+    stats = lmmBernoulli(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+    )
+    stats = dict(stats)
+    stats['sigma_rfx_est'] = torch.full((B, q), 10.0)
+    stats['Psi_lap'] = torch.diag_embed(stats['sigma_rfx_est'].square())
+    tau_rfx = torch.ones(B, q)
+
+    result = refineBernoulliLaplaceEb(
+        stats,
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        tau_rfx=tau_rfx,
+        family_sigma_rfx=torch.as_tensor(
+            [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
+        ),
+        mask_d=torch.ones(B, d, dtype=torch.bool),
+        mask_q=torch.ones(B, q, dtype=torch.bool),
+        n_steps=1,
+        n_inner=1,
+        n_final=1,
+        lr=0.0,
+        accept_only_improved=False,
+        sigma_prior_cap=2.0,
+        recompute_blup_after_calibration=True,
+        return_diagnostics=True,
+    )
+
+    assert torch.all(result['sigma_rfx_est'] <= 2.0)
+    assert torch.isfinite(result['blup_est']).all()
+    assert torch.equal(result['laplace_eb_sigma_prior_capped'], torch.ones(B))
+
+
+def test_glmm_bernoulli_laplace_eb_flag_smoke():
+    """Bernoulli EB is available through glmm() behind an explicit flag."""
+    rng = np.random.default_rng(SEED + 14)
+    B, d, q, m, n_per_group = 2, 2, 1, 6, 12
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=1, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+
+    result = glmm(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+        likelihood_family=1,
+        nu_ffx=torch.as_tensor(np.stack([ds['nu_ffx'] for ds in datasets]), dtype=torch.float32),
+        tau_ffx=torch.as_tensor(np.stack([ds['tau_ffx'] for ds in datasets]), dtype=torch.float32),
+        family_ffx=torch.as_tensor([int(ds['family_ffx']) for ds in datasets], dtype=torch.long),
+        tau_rfx=torch.as_tensor(np.stack([ds['tau_rfx'] for ds in datasets]), dtype=torch.float32),
+        family_sigma_rfx=torch.as_tensor(
+            [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
+        ),
+        mask_d=torch.ones(B, d, dtype=torch.bool),
+        mask_q=torch.ones(B, q, dtype=torch.bool),
+        bernoulli_laplace_eb=True,
+        bernoulli_laplace_eb_diagnostics=True,
+    )
+
+    assert result['beta_est'].shape == (B, d)
+    assert result['sigma_rfx_est'].shape == (B, q)
+    assert result['blup_est'].shape == (B, m, q)
+    assert torch.isfinite(result['beta_est']).all()
+    assert torch.isfinite(result['sigma_rfx_est']).all()
+    assert torch.isfinite(result['blup_est']).all()
+    assert torch.isfinite(result['laplace_eb_accept']).all()
+    assert torch.isfinite(result['laplace_eb_steps']).all()
+    assert torch.isfinite(result['laplace_eb_blup_fallback']).all()
+    assert torch.isfinite(result['laplace_eb_beta_jump']).all()
+    assert torch.isfinite(result['laplace_eb_beta_output_capped']).all()
+    assert torch.isfinite(result['laplace_eb_sigma_prior_capped']).all()
+    assert result['laplace_eb_steps'].min().item() >= 1.0
+
+
+def test_glmm_bernoulli_laplace_eb_default_preset_matches_explicit_kwargs():
+    """The retained Bernoulli EB preset and Bernoulli default match explicit kwargs."""
+    rng = np.random.default_rng(SEED + 19)
+    B, d, q, m, n_per_group = 1, 2, 1, 4, 8
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=1, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+    common = dict(
+        likelihood_family=1,
+        nu_ffx=torch.as_tensor(np.stack([ds['nu_ffx'] for ds in datasets]), dtype=torch.float32),
+        tau_ffx=torch.as_tensor(np.stack([ds['tau_ffx'] for ds in datasets]), dtype=torch.float32),
+        family_ffx=torch.as_tensor([int(ds['family_ffx']) for ds in datasets], dtype=torch.long),
+        tau_rfx=torch.as_tensor(np.stack([ds['tau_rfx'] for ds in datasets]), dtype=torch.float32),
+        family_sigma_rfx=torch.as_tensor(
+            [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
+        ),
+        mask_d=torch.ones(B, d, dtype=torch.bool),
+        mask_q=torch.ones(B, q, dtype=torch.bool),
+        bernoulli_laplace_eb_diagnostics=True,
+    )
+
+    default = glmm(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+        **common,
+    )
+    preset = glmm(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+        bernoulli_laplace_eb='bernoulli_eb',
+        **common,
+    )
+    explicit = glmm(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+        bernoulli_laplace_eb=True,
+        bernoulli_laplace_eb_steps=24,
+        bernoulli_laplace_eb_inner=4,
+        bernoulli_laplace_eb_final=8,
+        bernoulli_laplace_eb_lr=0.05,
+        bernoulli_laplace_eb_beta_output_cap=3.0,
+        bernoulli_laplace_eb_beta_output_cap_trigger=8.0,
+        bernoulli_laplace_eb_sigma_prior_cap=2.5,
+        bernoulli_laplace_eb_sigma_prior_cap_min_d=5,
+        **common,
+    )
+
+    for result in (default, preset):
+        assert torch.allclose(result['beta_est'], explicit['beta_est'])
+        assert torch.allclose(result['sigma_rfx_est'], explicit['sigma_rfx_est'])
+        assert torch.allclose(result['blup_est'], explicit['blup_est'])
+        assert torch.equal(result['laplace_eb_steps'], explicit['laplace_eb_steps'])
+
+
+def test_glmm_bernoulli_laplace_eb_auto_gate_smoke():
+    """Bernoulli EB auto mode routes only gated datasets through the EB refinement."""
+    rng = np.random.default_rng(SEED + 15)
+    B, d, q, m, n_per_group = 2, 4, 1, 5, 10
+    datasets = [
+        _gen_dataset(rng, d, q, likelihood_family=1, m=m, n_per_group=n_per_group) for _ in range(B)
+    ]
+    bt = _collate(datasets, d, q)
+    mask_d = torch.tensor([[True, True, False, False], [True, True, True, True]])
+
+    result = glmm(
+        bt['Xm'],
+        bt['ym'],
+        bt['Zm'],
+        bt['mask_n'],
+        bt['mask_m'],
+        bt['ns'],
+        bt['n_total'],
+        likelihood_family=1,
+        nu_ffx=torch.as_tensor(np.stack([ds['nu_ffx'] for ds in datasets]), dtype=torch.float32),
+        tau_ffx=torch.as_tensor(np.stack([ds['tau_ffx'] for ds in datasets]), dtype=torch.float32),
+        family_ffx=torch.as_tensor([int(ds['family_ffx']) for ds in datasets], dtype=torch.long),
+        tau_rfx=torch.as_tensor(np.stack([ds['tau_rfx'] for ds in datasets]), dtype=torch.float32),
+        family_sigma_rfx=torch.as_tensor(
+            [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
+        ),
+        mask_d=mask_d,
+        mask_q=torch.ones(B, q, dtype=torch.bool),
+        bernoulli_laplace_eb='auto',
+        bernoulli_laplace_eb_diagnostics=True,
+        bernoulli_laplace_eb_gate_min_d=4,
+        bernoulli_laplace_eb_gate_min_sigma=None,
+        bernoulli_laplace_eb_gate_eta_abs=None,
+    )
+
+    assert result['beta_est'].shape == (B, d)
+    assert result['sigma_rfx_est'].shape == (B, q)
+    assert torch.equal(result['laplace_eb_gate'], torch.tensor([0.0, 1.0]))
+    assert result['laplace_eb_steps'][0].item() == 0.0
+    assert result['laplace_eb_steps'][1].item() >= 1.0
+    assert torch.isfinite(result['beta_est']).all()
+    assert torch.isfinite(result['sigma_rfx_est']).all()
+    assert torch.isfinite(result['blup_est']).all()
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +912,7 @@ def test_approximator_data_statistics_smoke(likelihood_family):
     model = Approximator(app_cfg)
 
     # build a fake data dict that _dataStatistics expects
-    # include all keys needed by _dataStatistics
+    # include all keys needed by _dataStatistics (priors required for MAP refinement)
     data = {
         'X': bt['Xm'],
         'y': bt['ym'],
@@ -395,6 +922,17 @@ def test_approximator_data_statistics_smoke(likelihood_family):
         'ns': bt['ns'],
         'n': bt['n_total'].long(),
         'm': bt['mask_m'].sum(dim=1).long(),
+        'nu_ffx': torch.as_tensor(np.stack([ds['nu_ffx'] for ds in datasets]), dtype=torch.float32),
+        'tau_ffx': torch.as_tensor(
+            np.stack([ds['tau_ffx'] for ds in datasets]), dtype=torch.float32
+        ),
+        'family_ffx': torch.as_tensor([int(ds['family_ffx']) for ds in datasets], dtype=torch.long),
+        'tau_rfx': torch.as_tensor(
+            np.stack([ds['tau_rfx'] for ds in datasets]), dtype=torch.float32
+        ),
+        'family_sigma_rfx': torch.as_tensor(
+            [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
+        ),
     }
 
     stats = model._dataStatistics(data)
