@@ -25,7 +25,7 @@ unpacking step is needed.
 
 ## Versioning
 
-The HF repo (`your-org/metabeta`) uses **git tags** to version checkpoints.
+The HF repo (`adkipnis/metabeta`) uses **git tags** to version checkpoints.
 The tag represents the **architecture version** — it changes only when model
 architecture changes make old weights incompatible with the current code.
 
