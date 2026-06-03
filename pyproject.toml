@@ -12,6 +12,7 @@ dependencies = [
     "bambi>=0.17.2",
     "blue>=0.9.1",
     "datasets>=4.4.1",
+    "huggingface-hub>=1.14.0",
     "ipykernel>=6.31.0",
     "joblib>=1.5.2",
     "matplotlib>=3.10.7",
