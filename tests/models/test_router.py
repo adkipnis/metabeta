@@ -277,7 +277,7 @@ def _batch(*, d: int, q: int, m: int = 12, n_i: int = 10, family: int = 1):
 def test_router_selects_smallest_compatible_submodel(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     routes, _ = router._routeBatch(_batch(d=4, q=2))
     assert routes == ['small']
@@ -289,7 +289,7 @@ def test_router_selects_smallest_compatible_submodel(tmp_path: Path):
 def test_router_rejects_dataset_outside_training_dimensions(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     with pytest.warns(RuntimeWarning, match='incompatible'):
         with pytest.raises(ValueError, match='outside every routed submodel'):
@@ -299,7 +299,7 @@ def test_router_rejects_dataset_outside_training_dimensions(tmp_path: Path):
 def test_router_checks_between_and_within_group_degrees_of_freedom(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     with pytest.warns(RuntimeWarning, match='incompatible'):
         with pytest.raises(ValueError, match='min_bg_df'):
@@ -315,7 +315,7 @@ def test_router_prepares_preprocessed_numpy_dict_with_formula_and_default_priors
 ):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     with np.load(
         Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
@@ -351,7 +351,7 @@ def test_router_prepares_preprocessed_numpy_dict_with_formula_and_default_priors
 def test_router_accepts_canonical_fit_style_priors(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     with np.load(
         Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
@@ -387,7 +387,7 @@ def test_router_accepts_canonical_fit_style_priors(tmp_path: Path):
 def test_router_expands_multiple_named_term_priors_per_dataset(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     with np.load(
         Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
@@ -436,7 +436,7 @@ def test_router_expands_multiple_named_term_priors_per_dataset(tmp_path: Path):
 def test_router_rejects_q_above_formula_limit(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     with np.load(
         Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
@@ -451,7 +451,7 @@ def test_router_rejects_q_above_formula_limit(tmp_path: Path):
 def test_router_rejects_multiple_random_effect_blocks(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     with np.load(
         Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
@@ -469,7 +469,7 @@ def test_router_rejects_multiple_random_effect_blocks(tmp_path: Path):
 def test_router_rejects_missing_formula_term(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     with np.load(
         Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
@@ -484,7 +484,7 @@ def test_router_rejects_missing_formula_term(tmp_path: Path):
 def test_router_rejects_missing_prior_term(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     with np.load(
         Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
@@ -503,7 +503,7 @@ def test_router_rejects_missing_prior_term(tmp_path: Path):
 def test_router_rejects_malformed_canonical_prior_shapes(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     with np.load(
         Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
@@ -522,7 +522,7 @@ def test_router_rejects_malformed_canonical_prior_shapes(tmp_path: Path):
 def test_router_rejects_per_term_family_mismatch(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     with np.load(
         Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
@@ -546,7 +546,7 @@ def test_router_rejects_per_term_family_mismatch(tmp_path: Path):
 def test_router_rejects_sigma_eps_prior_for_non_gaussian(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     preprocessed = {
         'X': np.zeros((120, 2), dtype=float),
@@ -572,7 +572,7 @@ def test_router_rejects_sigma_eps_prior_for_non_gaussian(tmp_path: Path):
 def test_router_rejects_empty_prior_list(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     with np.load(
         Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
@@ -591,7 +591,7 @@ def test_router_rejects_empty_prior_list(tmp_path: Path):
 def test_router_prepares_parquet_through_preprocessor(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     parquet_path = Path('metabeta/datasets/from-r/parquet/math.parquet')
     batch = router.prepareData(
@@ -611,7 +611,7 @@ def test_router_prepares_parquet_through_preprocessor(tmp_path: Path):
 def test_router_supports_formula_random_effects_up_to_q5(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     parquet_path = Path('metabeta/datasets/from-r/parquet/math.parquet')
     batch = router.prepareData(
@@ -628,11 +628,11 @@ def test_router_supports_formula_random_effects_up_to_q5(tmp_path: Path):
 def test_router_rejects_tabular_input_without_preprocessor_or_fit_flag(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
     df = pd.read_parquet('metabeta/datasets/from-r/parquet/math.parquet')
 
     with pytest.raises(ValueError, match='requires a fitted preprocessor'):
-        router.prepareData(df, formula='y ~ ses + (1 | group)')
+        router.prepareData(df, formula='y ~ ses + (1 | group)', fit_preprocessor=False)
 
 
 # ---------------------------------------------------------------------------
@@ -667,7 +667,7 @@ def _full_batch(*, d: int, q: int, m: int = 12, n_i: int = 10, family: int = 1):
 def test_router_validates_mask_d_width(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     bad = _full_batch(d=4, q=2)
     bad['mask_d'] = bad['mask_d'][..., :3]  # wrong width (3 instead of 8)
@@ -679,7 +679,7 @@ def test_router_validates_mask_d_width(tmp_path: Path):
 def test_router_validates_mask_q_width(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     bad = _full_batch(d=4, q=2)
     bad['mask_q'] = bad['mask_q'][..., :2]  # wrong width (2 instead of 3)
@@ -691,7 +691,7 @@ def test_router_validates_mask_q_width(tmp_path: Path):
 def test_router_validates_mask_m_active_count(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     bad = _full_batch(d=4, q=2, m=12)
     # Report m=12 but mask_m has only 10 active groups
@@ -707,7 +707,7 @@ def test_router_validates_mask_m_active_count(tmp_path: Path):
 def test_router_validates_stats_beta_est_dim(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     bad = _full_batch(d=4, q=2)
     bad['stats'] = {'beta_est': torch.zeros(1, 6)}  # wrong d (6 instead of 8)
@@ -719,7 +719,7 @@ def test_router_validates_stats_beta_est_dim(tmp_path: Path):
 def test_router_validates_stats_sigma_rfx_est_dim(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     bad = _full_batch(d=4, q=2)
     bad['stats'] = {'sigma_rfx_est': torch.zeros(1, 5)}  # wrong q (5 instead of 3)
@@ -799,7 +799,7 @@ def test_router_existing_dataloader_is_consumed_directly():
 def test_router_validates_active_group_ns_positive(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     bad = _full_batch(d=4, q=2, m=12)
     # Active group with ns=0 (mask_m says active but ns is zero)
@@ -815,7 +815,7 @@ def test_router_validates_active_group_ns_positive(tmp_path: Path):
 def test_router_validates_inactive_group_ns_zero(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     # Build from scratch: 10 active groups + 2 padding slots
     m_active = 10
@@ -858,7 +858,7 @@ def test_router_validates_inactive_group_ns_zero(tmp_path: Path):
 def test_router_validates_mask_mq_agreement(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     bad = _full_batch(d=4, q=2)
     # Corrupt mask_mq so it disagrees with mask_m & mask_q
@@ -872,7 +872,7 @@ def test_router_validates_mask_mq_agreement(tmp_path: Path):
 def test_router_validates_stats_non_finite(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     bad = _full_batch(d=4, q=2)
     bad['stats'] = {'beta_est': torch.full((1, 8), float('nan'))}
@@ -884,7 +884,7 @@ def test_router_validates_stats_non_finite(tmp_path: Path):
 def test_router_warns_unstandardized_continuous_y(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     bad = _full_batch(d=3, q=2, m=12, family=0)
     bad['likelihood_family'] = torch.tensor([0])
@@ -899,7 +899,7 @@ def test_router_warns_unstandardized_continuous_y(tmp_path: Path):
 def test_router_warns_near_constant_columns(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     n = 120
     near_const = np.full(n, 5.0)
@@ -923,7 +923,7 @@ def test_router_warns_near_constant_columns(tmp_path: Path):
 def test_router_warns_high_correlation_columns(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     n = 120
     x1 = np.random.randn(n)
@@ -1072,7 +1072,7 @@ def _full_batch_with_params(*, d: int, q: int, m: int = 12, n_i: int = 10, famil
 def test_router_sample_returns_valid_proposal(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     batch = _exact_batch(d=4, q=2)
     result = router.sample(batch, n_samples=5)
@@ -1088,7 +1088,7 @@ def test_router_sample_returns_valid_proposal(tmp_path: Path):
 def test_router_sample_with_precomputed_stats_runs(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     batch = _exact_batch(d=4, q=2)
     batch['stats'] = {
@@ -1104,7 +1104,7 @@ def test_router_sample_with_precomputed_stats_runs(tmp_path: Path):
 def test_router_sample_returns_diagnostics_when_requested(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     batch = _exact_batch(d=4, q=2)
     result = router.sample(batch, n_samples=10, diagnostics=True)
@@ -1120,7 +1120,7 @@ def test_router_sample_returns_diagnostics_when_requested(tmp_path: Path):
 def test_router_log_prob_accepts_valid_parameters(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     batch = _exact_batch(d=4, q=2, with_params=True)
     result = router.log_prob(batch)
@@ -1136,7 +1136,7 @@ def test_router_log_prob_accepts_valid_parameters(tmp_path: Path):
 def test_router_log_prob_rejects_missing_parameter_keys(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     batch = _exact_batch(d=4, q=2)  # no ffx/sigma_rfx/rfx keys
 
@@ -1147,7 +1147,7 @@ def test_router_log_prob_rejects_missing_parameter_keys(tmp_path: Path):
 def test_router_log_prob_rejects_malformed_ffx_shape(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
-    router = Api(joint_path)
+    router = Api(joint_path, warmup=False)
 
     batch = _exact_batch(d=4, q=2, with_params=True)
     batch['ffx'] = torch.zeros(1, 3)  # wrong d (3 instead of 4)
