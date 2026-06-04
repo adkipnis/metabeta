@@ -28,6 +28,10 @@
 - Added explicit setuptools package discovery with regular packages only.
 - Added package marker files for the public package surface.
 - Kept `metabeta.plotting` and predictive/evaluation diagnostics in the base package.
+- Moved Gaussian local refinement to `metabeta.analytical.lmm.gaussian_local`.
+- Removed conformal calibration support from `metabeta.evaluation.summary`.
+- Archived `posthoc.conformal`, `posthoc.coordinate`, and `posthoc.laplace`.
+- Marked the remaining `metabeta.posthoc` package as experimental research code.
 - Moved research-only dependencies out of base metadata. `scamd` is now only in the
   `research` extra.
 - Added `MANIFEST.in` pruning so sdists omit training/simulation/output/test/research
@@ -36,10 +40,9 @@
 
 ## Remaining Risk
 
-The wheel is now focused on runtime packages, but some included runtime packages still contain
-research-adjacent modules. In particular, `metabeta.posthoc` remains included because
-`metabeta.evaluation.summary` imports `metabeta.posthoc.conformal.Calibrator`, while other
-posthoc modules reference research dependencies such as PyMC when imported directly.
+The wheel is now focused on runtime packages. `metabeta.posthoc` remains included for
+experimental research workflows (`warmnuts`, `svgd`, `metropolis`, `importance`, and
+`generative`) and is explicitly marked as not production-ready.
 
 ## Next Steps
 
@@ -57,8 +60,9 @@ posthoc modules reference research dependencies such as PyMC when imported direc
 3. Decide how to handle research-adjacent modules inside included packages.
 
    The inference-required Gaussian local refinement now lives in `metabeta.analytical.lmm`.
-   The next cleanup is moving or isolating `posthoc.conformal` so PyPI can exclude
-   research-only posthoc modules that depend on PyMC.
+   `posthoc.conformal`, `posthoc.coordinate`, and `posthoc.laplace` have been archived.
+   Summary evaluation no longer accepts calibrators. The remaining posthoc modules are
+   intentionally shipped as experimental research code.
 
 4. Review the evaluation console script.
 

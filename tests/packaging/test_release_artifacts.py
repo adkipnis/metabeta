@@ -16,7 +16,10 @@ SDIST = DIST / 'metabeta-0.4.tar.gz'
 
 WHEEL_EXCLUDED_PREFIXES = (
     'metabeta/analytical/gaussian_local.py',
+    'metabeta/posthoc/conformal.py',
+    'metabeta/posthoc/coordinate.py',
     'metabeta/posthoc/gaussian_local.py',
+    'metabeta/posthoc/laplace.py',
     'metabeta/simulation/',
     'metabeta/training/',
     'metabeta/outputs/',
@@ -30,7 +33,10 @@ WHEEL_EXCLUDED_PREFIXES = (
 
 SDIST_EXCLUDED_PREFIXES = (
     'metabeta-0.4/metabeta/analytical/gaussian_local.py',
+    'metabeta-0.4/metabeta/posthoc/conformal.py',
+    'metabeta-0.4/metabeta/posthoc/coordinate.py',
     'metabeta-0.4/metabeta/posthoc/gaussian_local.py',
+    'metabeta-0.4/metabeta/posthoc/laplace.py',
     'metabeta-0.4/metabeta/simulation/',
     'metabeta-0.4/metabeta/training/',
     'metabeta-0.4/metabeta/outputs/',
