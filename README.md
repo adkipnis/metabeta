@@ -41,7 +41,7 @@ from metabeta.models.api import Api
 mb = Api.from_pretrained("normal")
 df = sm.datasets.get_rdataset("sleepstudy", "lme4")
 result = mb.sample(df, formula="Reaction ~ Days + (Days | Subject)", n_samples=1000)
-print(mb.posteriorSummary(result, x_scale="original"))
+print(mb.posteriorSummary(result))
 ```
 
 See [demos/intro.ipynb](demos/intro.ipynb) for the full `sleepstudy`
