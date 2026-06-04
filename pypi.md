@@ -37,9 +37,9 @@
 ## Remaining Risk
 
 The wheel is now focused on runtime packages, but some included runtime packages still contain
-research-adjacent modules. In particular, `metabeta.posthoc` is included because current
-checkpoints import `metabeta.posthoc.gaussian_local`, while other posthoc modules reference
-research dependencies such as PyMC when imported directly.
+research-adjacent modules. In particular, `metabeta.posthoc` remains included because
+`metabeta.evaluation.summary` imports `metabeta.posthoc.conformal.Calibrator`, while other
+posthoc modules reference research dependencies such as PyMC when imported directly.
 
 ## Next Steps
 
@@ -56,9 +56,9 @@ research dependencies such as PyMC when imported directly.
 
 3. Decide how to handle research-adjacent modules inside included packages.
 
-   The highest-value cleanup is moving the inference-required Gaussian local refinement out
-   of `metabeta.posthoc`, so PyPI can exclude research-only posthoc modules that depend on
-   PyMC.
+   The inference-required Gaussian local refinement now lives in `metabeta.analytical.lmm`.
+   The next cleanup is moving or isolating `posthoc.conformal` so PyPI can exclude
+   research-only posthoc modules that depend on PyMC.
 
 4. Review the evaluation console script.
 
