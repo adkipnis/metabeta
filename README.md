@@ -40,7 +40,7 @@ import statsmodels.api as sm
 from metabeta.models.api import Api
 
 mb = Api.from_pretrained("normal")
-df = sm.datasets.get_rdataset("sleepstudy", "lme4")
+df = sm.datasets.get_rdataset("sleepstudy", "lme4").data
 result = mb.sample(df, formula="Reaction ~ Days + (Days | Subject)", n_samples=1000)
 print(mb.posteriorSummary(result))
 ```
