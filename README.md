@@ -68,18 +68,15 @@ analysis.
 
 | Path | Contents |
 |---|---|
-| [metabeta/](metabeta/) | Python package root |
 | [metabeta/analytical/](metabeta/analytical/) | GLMM analytical fits and helpers |
 | [metabeta/configs/](metabeta/configs/) | model and preset configuration files |
 | [metabeta/datasets/](metabeta/datasets/) | preprocessing and source-specific dataset fetchers |
-| [metabeta/evaluation/](metabeta/evaluation/) | posterior quality, predictive, coverage, SBC, and summary metrics |
-| [metabeta/models/](metabeta/models/) | approximator API, set transformers, normalizing flows |
-| [metabeta/plotting/](metabeta/plotting/) | plot functions for posterior, calibration, recovery, and runtime |
-| [metabeta/posthoc/](metabeta/posthoc/) | optional post-hoc refinement methods |
+| [metabeta/evaluation/](metabeta/evaluation/) | parameter recovery, coverage, SBC, posterior predictive checks and summary metrics |
+| [metabeta/models/](metabeta/models/) | model API, set transformers, normalizing flows |
+| [metabeta/plotting/](metabeta/plotting/) | plot functions for posterior samples, recovery, calibration, and runtime |
 | [metabeta/simulation/](metabeta/simulation/) | synthetic hierarchical data generation and reference fitting with PyMC |
 | [metabeta/training/](metabeta/training/) | training entry point and checkpoint loop |
 | [metabeta/utils/](metabeta/utils/) | config, dataloading, routing, IO, and shared helper code |
 | [experiments/](experiments/) | reproducible experiment scripts grouped by package area |
-| [scripts/](scripts/) | shell and Python scripts for data, fitting, training, and checkpoint packaging |
-| [tests/](tests/) | pytest coverage for models, simulation, evaluation, datasets, and utils |
-| [demos/](demos/) | notebooks for introductory usage and prior sensitivity |
+| [tests/](tests/) | pytest suite for models, simulation, evaluation, datasets, and utils |
+| [demos/](demos/) | demo notebooks |
