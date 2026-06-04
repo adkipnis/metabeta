@@ -18,6 +18,9 @@ correlations with the speed and batching capabilities of a PyTorch forward pass.
 - Provides the data simulator, neural architecture, training loop, evaluation code, demos, and
   experiment scripts.
 
+Pretrained checkpoints are hosted on [Hugging Face](https://huggingface.co/adkipnis/metabeta)
+and are downloaded automatically on first use.
+
 ## Quick start
 
 Install from source with [`uv`](https://docs.astral.sh/uv/):
@@ -31,54 +34,22 @@ uv pip install -e .
 
 Run posterior inference on a grouped dataframe:
 
-See [demos/intro.ipynb](demos/intro.ipynb) for a complete walkthrough on the
-classic `sleepstudy` dataset. It loads a pretrained Normal checkpoint, fits an
-lme4-style random-slope model, prints population-level and per-subject posterior
-summaries, visualizes the parameter posterior with prior overlays, and checks the
-fit against the observed trajectories.
-
-## Modeling interface
-
-The high-level API accepts several input stages:
-
-- pandas dataframes and parquet files
-- preprocessed and batched numpy and pytorch dictionaries
-
-Formulas are supported in lme4-style, for example:
-
-```text
-y ~ x1 + x2 + (1 + x1 | group)
-```
-
-Prior specifications can be left as `None` to use the model defaults, passed as
-explicit canonical arrays, or written as per-term dictionaries for fixed effects,
-random-effect standard deviations, residual scale, and random-effect correlations.
-Named dictionaries are batched automatically, so several prior choices can be
-compared in one `sample()` call:
-
 ```python
-priors = {
-    "default": None,
-    "conservative": {
-        "fixed": {
-            "family": "student",
-            "Intercept": {"tau": 0.5},
-            "x1": {"tau": 0.3},
-        },
-        "random_sd": {
-            "family": "exponential",
-            "Intercept": {"tau": 0.3},
-            "x1": {"tau": 0.3},
-        },
-        "corr_rfx": {"eta": 2.0},
-    },
-}
+import statsmodels.api as sm
 
-result = mb.sample(df, formula="y ~ x1 + (1 + x1 | group)", priors=priors)
+from metabeta.models.api import Api
+
+df = sm.datasets.get_rdataset("sleepstudy", "lme4").data.rename(columns={"Reaction": "y"})
+
+mb = Api.from_pretrained("normal")
+result = mb.sample(df, formula="y ~ Days + (Days | Subject)", n_samples=1000)
+
+print(mb.posteriorSummary(result, x_scale="original"))
 ```
 
-See [demos/priors.ipynb](demos/priors.ipynb) for a prior-sensitivity workflow
-with simulated ground truth and posterior plots with analytical prior overlays.
+For more, see [demos/intro.ipynb](demos/intro.ipynb) for the full `sleepstudy`
+walkthrough and [demos/priors.ipynb](demos/priors.ipynb) for prior-sensitivity
+analysis.
 
 ## How the model was built
 
