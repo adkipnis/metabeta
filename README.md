@@ -36,14 +36,11 @@ Run posterior inference on a grouped dataframe:
 
 ```python
 import statsmodels.api as sm
-
 from metabeta.models.api import Api
 
 df = sm.datasets.get_rdataset("sleepstudy", "lme4").data.rename(columns={"Reaction": "y"})
-
 mb = Api.from_pretrained("normal")
 result = mb.sample(df, formula="y ~ Days + (Days | Subject)", n_samples=1000)
-
 print(mb.posteriorSummary(result, x_scale="original"))
 ```
 
