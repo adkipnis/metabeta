@@ -47,8 +47,8 @@ result = mb.sample(df, formula="y ~ Days + (Days | Subject)", n_samples=1000)
 print(mb.posteriorSummary(result, x_scale="original"))
 ```
 
-For more, see [demos/intro.ipynb](demos/intro.ipynb) for the full `sleepstudy`
-walkthrough and [demos/priors.ipynb](demos/priors.ipynb) for prior-sensitivity
+See [demos/intro.ipynb](demos/intro.ipynb) for the full `sleepstudy`
+walkthrough and [demos/priors.ipynb](demos/priors.ipynb) for an exemplary prior-sensitivity
 analysis.
 
 ## How the model was built
