@@ -3,7 +3,7 @@
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-ee4c2c)](https://pytorch.org/)
 [![uv](https://img.shields.io/badge/env-uv-6b47ff)](https://docs.astral.sh/uv/)
-[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-checkpoints-yellow)](https://huggingface.co/adkipnis/metabeta)
+[![🤗](https://img.shields.io/badge/Hugging%20Face-checkpoints-yellow)](https://huggingface.co/adkipnis/metabeta)
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey)](LICENSE)
 
 `metabeta` is an amortized model for Bayesian generalized linear mixed-effects models (GLMMs).
