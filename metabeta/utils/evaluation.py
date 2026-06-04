@@ -1,9 +1,11 @@
+from typing import TYPE_CHECKING
 from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 import torch
 
-from metabeta.utils import results as _results
+if TYPE_CHECKING:
+    from metabeta.utils.results import Proposal
 
 
 @dataclass
@@ -248,12 +250,14 @@ def nutsConvergeMask(
     return ~(f_rhat | f_div | f_tree | f_ess | f_ess_tail)
 
 
-def subsetProposal(proposal: _results.Proposal, mask: np.ndarray) -> _results.Proposal:
+def subsetProposal(proposal: 'Proposal', mask: np.ndarray) -> 'Proposal':
     """Return a new Proposal restricted to datasets selected by a boolean mask."""
+    from metabeta.utils.results import Proposal
+
     idx = torch.from_numpy(mask)
     new_data = {src: {k: v[idx] for k, v in inner.items()} for src, inner in proposal.data.items()}
     corr = proposal._corr_rfx[idx] if proposal._corr_rfx is not None else None
-    sub = _results.Proposal(
+    sub = Proposal(
         new_data,
         has_sigma_eps=proposal.has_sigma_eps,
         d_corr=proposal.d_corr,
@@ -267,8 +271,10 @@ def subsetProposal(proposal: _results.Proposal, mask: np.ndarray) -> _results.Pr
     return sub
 
 
-def makePriorProposal(result: object, n_samples: int = 1000) -> _results.Proposal:
+def makePriorProposal(result: object, n_samples: int = 1000) -> 'Proposal':
     """Sample from the prior distributions stored in result, in original-scale units."""
+    from metabeta.utils.results import Proposal
+
     pp, si = result.prior_params, result.scale_info  # type: ignore[attr-defined]
     sd_y = si.y_std
     d = len(result.param_names['ffx'])  # type: ignore[attr-defined]
@@ -284,7 +290,7 @@ def makePriorProposal(result: object, n_samples: int = 1000) -> _results.Proposa
 
     ffx_orig = si.to_original_scale(ffx)
     samples_g = torch.cat([ffx_orig, srfx, seps], dim=-1).unsqueeze(0)  # (1, S, d+q+1)
-    return _results.Proposal(
+    return Proposal(
         proposed={
             'global': {'samples': samples_g, 'log_prob': torch.zeros(1, n_samples)},
             'local': {
