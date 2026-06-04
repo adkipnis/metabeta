@@ -69,7 +69,7 @@ selection are acceptable in a fresh environment.
 
 2. Test installation from the built wheel.
 
-   In a fresh Python 3.12 environment, install `dist/metabeta-0.4-py3-none-any.whl`, then
+   In a fresh Python 3.12 environment, install the built `dist/metabeta-*.whl`, then
    run `from metabeta import Api`, `Api.from_pretrained("normal", warmup=False)`, a small
    `sample()` call, and the demo notebooks if practical.
 

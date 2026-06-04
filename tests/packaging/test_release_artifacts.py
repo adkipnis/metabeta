@@ -6,13 +6,16 @@ from pathlib import Path
 import subprocess
 import sys
 import tarfile
+import tomllib
 import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / 'dist'
-WHEEL = DIST / 'metabeta-0.4-py3-none-any.whl'
-SDIST = DIST / 'metabeta-0.4.tar.gz'
+VERSION = tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['version']
+SDIST_ROOT = f'metabeta-{VERSION}'
+WHEEL = DIST / f'metabeta-{VERSION}-py3-none-any.whl'
+SDIST = DIST / f'metabeta-{VERSION}.tar.gz'
 
 WHEEL_EXCLUDED_PREFIXES = (
     'metabeta/analytical/gaussian_local.py',
@@ -32,19 +35,19 @@ WHEEL_EXCLUDED_PREFIXES = (
 )
 
 SDIST_EXCLUDED_PREFIXES = (
-    'metabeta-0.4/metabeta/analytical/gaussian_local.py',
-    'metabeta-0.4/metabeta/posthoc/conformal.py',
-    'metabeta-0.4/metabeta/posthoc/coordinate.py',
-    'metabeta-0.4/metabeta/posthoc/gaussian_local.py',
-    'metabeta-0.4/metabeta/posthoc/laplace.py',
-    'metabeta-0.4/metabeta/simulation/',
-    'metabeta-0.4/metabeta/training/',
-    'metabeta-0.4/metabeta/outputs/',
-    'metabeta-0.4/tests/',
-    'metabeta-0.4/experiments/',
-    'metabeta-0.4/archive/',
-    'metabeta-0.4/benchmarks/',
-    'metabeta-0.4/scripts/',
+    f'{SDIST_ROOT}/metabeta/analytical/gaussian_local.py',
+    f'{SDIST_ROOT}/metabeta/posthoc/conformal.py',
+    f'{SDIST_ROOT}/metabeta/posthoc/coordinate.py',
+    f'{SDIST_ROOT}/metabeta/posthoc/gaussian_local.py',
+    f'{SDIST_ROOT}/metabeta/posthoc/laplace.py',
+    f'{SDIST_ROOT}/metabeta/simulation/',
+    f'{SDIST_ROOT}/metabeta/training/',
+    f'{SDIST_ROOT}/metabeta/outputs/',
+    f'{SDIST_ROOT}/tests/',
+    f'{SDIST_ROOT}/experiments/',
+    f'{SDIST_ROOT}/archive/',
+    f'{SDIST_ROOT}/benchmarks/',
+    f'{SDIST_ROOT}/scripts/',
 )
 
 RESEARCH_ONLY_DEPS = {
@@ -85,8 +88,8 @@ def test_release_artifact_contents() -> None:
         sdist_names = sdist.getnames()
     for prefix in SDIST_EXCLUDED_PREFIXES:
         assert not any(name.startswith(prefix) for name in sdist_names), prefix
-    assert 'metabeta-0.4/demos/intro.ipynb' in sdist_names
-    assert 'metabeta-0.4/demos/priors.ipynb' in sdist_names
+    assert f'{SDIST_ROOT}/demos/intro.ipynb' in sdist_names
+    assert f'{SDIST_ROOT}/demos/priors.ipynb' in sdist_names
 
 
 def test_release_metadata_dependencies() -> None:

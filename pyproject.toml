@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "metabeta"
-version = "0.4"
+version = "0.4.1"
 description = "Amortized inference for Bayesian GLMMs"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
