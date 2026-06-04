@@ -7,42 +7,19 @@
 
 **Amortized Bayesian inference for hierarchical regression models.**
 
-`metabeta` learns to approximate posterior distributions for generalized linear mixed
-models (GLMMs). Instead of fitting a new Markov chain or variational approximation from
-scratch for every dataset, it trains neural posterior estimators on many simulated
-hierarchical datasets and then reuses the learned inference procedure at test time.
+`metabeta` is a PyTorch implementation and set of pretrained checkpoints for
+prior-amortized Bayesian inference in generalized linear mixed-effects models (GLMMs).
+Given a grouped dataset, a model formula, and optional prior hyperparameters, it returns
+posterior samples for fixed effects, random effects, variance components, and
+correlations with a forward pass instead of a fresh MCMC run.
 
-The project sits between statistical modeling and foundation-model-style amortization:
-it exposes a practical API for tabular grouped data, while keeping the simulator,
-architecture, training loop, and evaluation code available for inspection and research.
-
-## Why it exists
-
-Hierarchical models are expressive and widely used, but posterior inference can be slow,
-sensitive to geometry, and hard to scale across many similar analyses. `metabeta` targets
-the repeated-analysis setting: train once over a broad prior and data-generating process,
-then produce posterior samples for new grouped datasets with a neural forward pass.
-
-The repository is designed to support three use cases:
-
-- **Fast applied modeling** for users who want approximate Bayesian GLMM posteriors from
-  a dataframe and a formula-like specification.
-- **Research on amortized inference** for reviewers and researchers who want to inspect
-  the simulator, priors, architectures, calibration diagnostics, and benchmark scripts.
-- **Reusable engineering components** for synthetic data generation, routed checkpoint
-  packaging, posterior evaluation, and post-hoc refinement.
-
-## At a glance
-
-- Supports normal, Bernoulli, and Poisson hierarchical likelihood families.
-- Handles fixed effects, random effects, group-level scales, correlations, and Gaussian
-  residual scale parameters where applicable.
-- Uses permutation-aware set summaries over observations and groups.
-- Uses conditional normalizing flows for global and local posterior factors.
-- Can condition on weakly informative prior choices for fixed effects and variance terms.
-- Includes simulation, training, evaluation, plotting, analytical GLMM baselines, and
-  post-hoc correction utilities.
-- Provides routed Hugging Face checkpoint loading via `Api.from_pretrained(...)`.
+- Supports Normal, Bernoulli, and Poisson outcomes.
+- Accepts lme4-style formulas with one grouping factor.
+- Conditions on prior family and hyperparameters at inference time.
+- Supports batched prior-sensitivity analysis in one `sample()` call.
+- Includes diagnostics for calibration, prediction, and comparison against NUTS or ADVI.
+- Provides the simulator, neural architecture, training loop, evaluation code, demos, and
+  experiment scripts.
 
 ## Quick start
 
@@ -57,7 +34,11 @@ uv pip install -e .
 
 Run posterior inference on a grouped dataframe:
 
-TODO: point to intro ipynb  
+See [demos/intro.ipynb](demos/intro.ipynb) for a complete walkthrough on the
+classic `sleepstudy` dataset. It loads a pretrained Normal checkpoint, fits an
+lme4-style random-slope model, prints population-level and per-subject posterior
+summaries, visualizes the parameter posterior with prior overlays, and checks the
+fit against the observed trajectories.
 
 ## Modeling interface
 
@@ -72,7 +53,35 @@ Formulas are supported in lme4-style, for example:
 y ~ x1 + x2 + (1 + x1 | group)
 ```
 
-TODO: elaborate on the options for Prior specification
+Prior specifications can be left as `None` to use the model defaults, passed as
+explicit canonical arrays, or written as per-term dictionaries for fixed effects,
+random-effect standard deviations, residual scale, and random-effect correlations.
+Named dictionaries are batched automatically, so several prior choices can be
+compared in one `sample()` call:
+
+```python
+priors = {
+    "default": None,
+    "conservative": {
+        "fixed": {
+            "family": "student",
+            "Intercept": {"tau": 0.5},
+            "x1": {"tau": 0.3},
+        },
+        "random_sd": {
+            "family": "exponential",
+            "Intercept": {"tau": 0.3},
+            "x1": {"tau": 0.3},
+        },
+        "corr_rfx": {"eta": 2.0},
+    },
+}
+
+result = mb.sample(df, formula="y ~ x1 + (1 + x1 | group)", priors=priors)
+```
+
+See [demos/priors.ipynb](demos/priors.ipynb) for a prior-sensitivity workflow
+with simulated ground truth and posterior plots with analytical prior overlays.
 
 ## How the model was built
 
@@ -84,22 +93,25 @@ TODO: elaborate on the options for Prior specification
 3. **Estimate posterior factors.** Conditional coupling flows model global parameters
    and per-group random effects, with masks for variable GLMM dimensions.
 4. **Evaluate calibration and prediction.** Evaluation modules compute parameter recovery,
-   credible interval coverage, simulation-based calibration checks, posterior predictive metrics, LOO
-   diagnostics, and comparison plots against NUTS or ADVI fits.
+   credible interval coverage, simulation-based calibration checks, posterior predictive
+   metrics, LOO diagnostics, and comparison plots against NUTS or ADVI fits.
 
 ## Repository map
 
-```text
-metabeta/
-  analytical/     GLMM analytical fits and helpers
-  datasets/       preprocessing and source-specific dataset fetchers
-  evaluation/     posterior quality, predictive, coverage, SBC, and summary metrics
-  models/         approximator API, set transformers, normalizing flows
-  plotting/       plot functions for posterior, calibration, recovery, and runtime
-  posthoc/        optional post-hoc refinement methods
-  simulation/     synthetic hierarchical data generation and reference fitting with PyMC
-  training/       training entry point and checkpoint loop
-experiments/      reproducible experiment scripts grouped by package area
-tests/            pytest coverage for models, simulation, evaluation, datasets, and utils
-demos/            notebooks for introductory usage and prior sensitivity
-```
+| Path | Contents |
+|---|---|
+| [metabeta/](metabeta/) | Python package root |
+| [metabeta/analytical/](metabeta/analytical/) | GLMM analytical fits and helpers |
+| [metabeta/configs/](metabeta/configs/) | model and preset configuration files |
+| [metabeta/datasets/](metabeta/datasets/) | preprocessing and source-specific dataset fetchers |
+| [metabeta/evaluation/](metabeta/evaluation/) | posterior quality, predictive, coverage, SBC, and summary metrics |
+| [metabeta/models/](metabeta/models/) | approximator API, set transformers, normalizing flows |
+| [metabeta/plotting/](metabeta/plotting/) | plot functions for posterior, calibration, recovery, and runtime |
+| [metabeta/posthoc/](metabeta/posthoc/) | optional post-hoc refinement methods |
+| [metabeta/simulation/](metabeta/simulation/) | synthetic hierarchical data generation and reference fitting with PyMC |
+| [metabeta/training/](metabeta/training/) | training entry point and checkpoint loop |
+| [metabeta/utils/](metabeta/utils/) | config, dataloading, routing, IO, and shared helper code |
+| [experiments/](experiments/) | reproducible experiment scripts grouped by package area |
+| [scripts/](scripts/) | shell and Python scripts for data, fitting, training, and checkpoint packaging |
+| [tests/](tests/) | pytest coverage for models, simulation, evaluation, datasets, and utils |
+| [demos/](demos/) | notebooks for introductory usage and prior sensitivity |
