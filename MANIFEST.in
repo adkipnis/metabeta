@@ -1,0 +1,20 @@
+prune archive
+prune benchmarks
+prune experiments
+prune scripts
+prune tests
+prune metabeta/outputs
+prune metabeta/datasets/from-r
+prune metabeta/datasets/pmlb
+prune metabeta/datasets/preprocessed
+prune metabeta/datasets/srm
+prune metabeta/datasets/ucimlr
+
+recursive-exclude . *.py[cod]
+recursive-exclude . __pycache__
+recursive-exclude . .DS_Store
+
+graft demos
+prune demos/.ipynb_checkpoints
+
+recursive-include metabeta/configs *.yaml

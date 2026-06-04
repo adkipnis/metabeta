@@ -1,0 +1,1 @@
+"""Packaged model architecture presets."""
