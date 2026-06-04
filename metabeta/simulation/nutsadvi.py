@@ -203,7 +203,9 @@ class Fitter:
         self.outdir = Path(srcdir, self.cfg.data_id, 'fits')
         self.outdir.mkdir(parents=True, exist_ok=True)
 
-        self.fname = datasetFilename(partition=cfg.partition, epoch=getattr(cfg, 'epoch', None) or 1)
+        self.fname = datasetFilename(
+            partition=cfg.partition, epoch=getattr(cfg, 'epoch', None) or 1
+        )
         self.batch_path = Path(self.srcdir, self.cfg.data_id, self.fname)
         assert self.batch_path.exists(), f'{self.batch_path} does not exist'
 
@@ -408,6 +410,7 @@ class Fitter:
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
     import sys
+
     print(f'PyTensor tmp directory: {pytensor.config.base_compiledir}')  # type: ignore
     cfg = setup()
     # Provide defaults for fit-specific keys missing when loading from --config YAML
