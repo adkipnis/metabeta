@@ -6,12 +6,12 @@ from pathlib import Path
 
 from metabeta.utils.constants import LIKELIHOOD_FAMILIES
 
-HF_REPO_ID = "adkipnis/metabeta"
+HF_REPO_ID = 'adkipnis/metabeta'
 
 # Architecture version tag on HF Hub. Bump only when model architecture changes
 # make existing checkpoints incompatible. Weight-only hotfixes move this tag to a
 # new commit without changing its name or requiring a package release.
-CHECKPOINT_VERSION = "v1"
+CHECKPOINT_VERSION = 'v1'
 
 
 def download_checkpoint(
@@ -35,19 +35,19 @@ def download_checkpoint(
         Re-download even if a cached copy exists.
     """
     if family not in LIKELIHOOD_FAMILIES:
-        raise ValueError(f"family must be one of {LIKELIHOOD_FAMILIES}, got {family!r}")
+        raise ValueError(f'family must be one of {LIKELIHOOD_FAMILIES}, got {family!r}')
 
     try:
         from huggingface_hub import hf_hub_download
     except ImportError as exc:
         raise ImportError(
-            "huggingface_hub is required for automatic checkpoint download. "
-            "Install it with:  pip install huggingface_hub"
+            'huggingface_hub is required for automatic checkpoint download. '
+            'Install it with:  pip install huggingface_hub'
         ) from exc
 
     local_path = hf_hub_download(
         repo_id=HF_REPO_ID,
-        filename=f"metabeta-{family}.pt",
+        filename=f'metabeta-{family}.pt',
         revision=CHECKPOINT_VERSION,
         cache_dir=str(cache_dir) if cache_dir is not None else None,
         force_download=force_download,
