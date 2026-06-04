@@ -15,10 +15,10 @@ correlations with the speed and batching capabilities of a PyTorch forward pass.
 - Accepts convenient lme4-style formulas.
 - Conditions on prior family and hyperparameters at inference time.
 - Supports batched prior-sensitivity analysis in one `sample()` call.
-- Includes diagnostics for posterior prediction, LOO-NLL, and comparison against reference fits.
-- Ships the pretrained inference API, plotting helpers, diagnostics, and demo notebooks in the
-  release artifacts. Data generation, training, benchmarks, and experiment scripts remain
-  repository/research workflows.
+- Includes diagnostics for posterior contraction and prediction accuracy.
+- Ships the pretrained inference API, plotting helpers, diagnostics, and demo notebooks.
+- Keeps simulation, training, reference-method evaluation, and experiment scripts in the
+  source repository for research workflows.
 
 Pretrained checkpoints are hosted on [Hugging Face](https://huggingface.co/adkipnis/metabeta)
 and are downloaded automatically on first use.
@@ -55,6 +55,25 @@ print(mb.posteriorSummary(result))
 See [demos/intro.ipynb](demos/intro.ipynb) for the full `sleepstudy`
 walkthrough and [demos/priors.ipynb](demos/priors.ipynb) for an exemplary prior-sensitivity
 analysis.
+
+## Development and research workflows
+
+The default PyPI install is for pretrained-model inference. To reproduce training runs,
+generate synthetic datasets, benchmark against reference methods, or extend the package,
+clone the repository and install the optional research dependencies:
+
+```bash
+git clone https://github.com/adkipnis/metabeta.git
+cd metabeta
+uv sync --extra research --dev
+uv pip install -e ".[research]"
+```
+
+This enables the repository-only paths for synthetic data generation, model training,
+benchmarking against reference methods, simulation-based calibration studies, and experiment
+scripts. The `metabeta.posthoc` package is included for experimental posterior refinement,
+but it is not part of the production pretrained API and may change without a deprecation
+window.
 
 ## From simulation to deployment
 
