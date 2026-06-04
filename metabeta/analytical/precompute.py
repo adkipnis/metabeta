@@ -63,10 +63,10 @@ def run(path: Path, batch_size: int, device: torch.device) -> int:
     has_eps = lf == 0
 
     out: dict[str, np.ndarray] = {
-        'beta_est':      np.zeros((N, d_file),        dtype=np.float32),
-        'sigma_rfx_est': np.zeros((N, q_file),        dtype=np.float32),
-        'blup_est':      np.zeros((N, m_max, q_file), dtype=np.float32),
-        'blup_var':      np.zeros((N, m_max, q_file), dtype=np.float32),
+        'beta_est': np.zeros((N, d_file), dtype=np.float32),
+        'sigma_rfx_est': np.zeros((N, q_file), dtype=np.float32),
+        'blup_est': np.zeros((N, m_max, q_file), dtype=np.float32),
+        'blup_var': np.zeros((N, m_max, q_file), dtype=np.float32),
     }
     if has_eps:
         out['sigma_eps_est'] = np.zeros((N, 1), dtype=np.float32)
@@ -83,15 +83,15 @@ def run(path: Path, batch_size: int, device: torch.device) -> int:
         ms = batch['m'].cpu().numpy().astype(int)
 
         map_kwargs: dict = {
-            'nu_ffx':           batch['nu_ffx'],
-            'tau_ffx':          batch['tau_ffx'],
-            'family_ffx':       batch['family_ffx'],
-            'tau_rfx':          batch['tau_rfx'],
+            'nu_ffx': batch['nu_ffx'],
+            'tau_ffx': batch['tau_ffx'],
+            'family_ffx': batch['family_ffx'],
+            'tau_rfx': batch['tau_rfx'],
             'family_sigma_rfx': batch['family_sigma_rfx'],
-            'mask_d':           batch.get('mask_d'),
+            'mask_d': batch.get('mask_d'),
         }
         if has_eps:
-            map_kwargs['tau_eps']          = batch['tau_eps']
+            map_kwargs['tau_eps'] = batch['tau_eps']
             map_kwargs['family_sigma_eps'] = batch['family_sigma_eps']
 
         stats = glmm(
@@ -112,23 +112,23 @@ def run(path: Path, batch_size: int, device: torch.device) -> int:
         if 'Psi_lap' in stats and 'Psi' not in stats:
             stats['Psi'] = stats['Psi_lap']
 
-        out['beta_est'][idx:idx+B]      = stats['beta_est'].cpu().numpy()[:, :d_file]
-        out['sigma_rfx_est'][idx:idx+B] = stats['sigma_rfx_est'].cpu().numpy()[:, :q_file]
+        out['beta_est'][idx : idx + B] = stats['beta_est'].cpu().numpy()[:, :d_file]
+        out['sigma_rfx_est'][idx : idx + B] = stats['sigma_rfx_est'].cpu().numpy()[:, :q_file]
         if has_eps:
-            out['sigma_eps_est'][idx:idx+B] = stats['sigma_eps_est'].cpu().numpy()[:B, :1]
+            out['sigma_eps_est'][idx : idx + B] = stats['sigma_eps_est'].cpu().numpy()[:B, :1]
         else:
-            out['phi_pearson'][idx:idx+B] = stats['phi_pearson'].cpu().numpy()[:B]
+            out['phi_pearson'][idx : idx + B] = stats['phi_pearson'].cpu().numpy()[:B]
 
-        blup  = stats['blup_est'].cpu().numpy()
+        blup = stats['blup_est'].cpu().numpy()
         blupv = stats['blup_var'].cpu().numpy()
         for b in range(B):
             m_b = ms[b]
-            out['blup_est'][idx+b, :m_b] = blup[b,  :m_b, :q_file]
-            out['blup_var'][idx+b, :m_b] = blupv[b, :m_b, :q_file]
+            out['blup_est'][idx + b, :m_b] = blup[b, :m_b, :q_file]
+            out['blup_var'][idx + b, :m_b] = blupv[b, :m_b, :q_file]
 
         if psi_buf is not None and 'Psi' in stats:
             has_psi = True
-            psi_buf[idx:idx+B] = stats['Psi'].cpu().numpy()[:B, :q_file, :q_file]
+            psi_buf[idx : idx + B] = stats['Psi'].cpu().numpy()[:B, :q_file, :q_file]
 
         idx += B
 
