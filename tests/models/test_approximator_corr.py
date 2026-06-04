@@ -12,8 +12,8 @@ import pytest
 
 from metabeta.models.approximator import Approximator
 from metabeta.utils.config import ApproximatorConfig, SummarizerConfig, PosteriorConfig
-from metabeta.utils.evaluation import Proposal, joinProposals, concatProposalsBatch
 from metabeta.utils.constants import hasSigmaEps
+from metabeta.utils.results import Proposal, joinProposals, concatProposalsBatch
 
 
 # ---------------------------------------------------------------------------

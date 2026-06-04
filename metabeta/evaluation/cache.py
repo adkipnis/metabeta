@@ -24,7 +24,8 @@ from tqdm import tqdm
 
 from metabeta.utils.config import loadDataConfig
 from metabeta.utils.dataloader import Dataloader
-from metabeta.utils.evaluation import AggregatedMetrics, EvaluationSummary, PerDatasetMetrics, Proposal
+from metabeta.utils.evaluation import AggregatedMetrics, EvaluationSummary, PerDatasetMetrics
+from metabeta.utils.results import Proposal
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.regularization import corrToLower
 from metabeta.evaluation.point import getCorrelation, getRMSE
@@ -88,8 +89,19 @@ def _buildProposal(
 
 def _smallData(data: dict) -> dict:
     """Extract only the parameter + mask tensors needed for corr/nrmse (no X/y/Z)."""
-    keep = ('ffx', 'rfx', 'sigma_rfx', 'sigma_eps', 'corr_rfx',
-            'mask_d', 'mask_q', 'mask_m', 'mask_mq', 'mask_corr', 'ns')
+    keep = (
+        'ffx',
+        'rfx',
+        'sigma_rfx',
+        'sigma_eps',
+        'corr_rfx',
+        'mask_d',
+        'mask_q',
+        'mask_m',
+        'mask_mq',
+        'mask_corr',
+        'ns',
+    )
     return {k: data[k] for k in keep if k in data}
 
 
@@ -290,7 +302,9 @@ def _cache(
             pbar.update(b)
 
     print(f'  [{method}] merging ...')
-    summary = _mergeSummaries(partials, small_data_list, batch_sizes, likelihood_family, all_rfx_ranks)
+    summary = _mergeSummaries(
+        partials, small_data_list, batch_sizes, likelihood_family, all_rfx_ranks
+    )
     summary.save(cache_path)
     logger.info('Saved: %s', cache_path)
     print(f'\n{method} ({fit_path.stem}):\n{summaryTable(summary, likelihood_family)}')

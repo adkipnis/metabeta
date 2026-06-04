@@ -2,7 +2,8 @@ import torch
 import pytest
 
 from metabeta.plotting.coverage import plotCoverage
-from metabeta.utils.evaluation import Proposal, AggregatedMetrics, dictMean
+from metabeta.utils.evaluation import AggregatedMetrics, dictMean
+from metabeta.utils.results import Proposal
 
 
 def _make_proposal() -> Proposal:

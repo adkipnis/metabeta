@@ -7,12 +7,12 @@ from tabulate import tabulate
 
 from metabeta.posthoc.conformal import Calibrator
 from metabeta.utils.evaluation import (
-    Proposal,
     EvaluationSummary,
     PerDatasetMetrics,
     AggregatedMetrics,
     dictMean,
 )
+from metabeta.utils.results import Proposal
 from metabeta.evaluation.point import getPointEstimates, getRMSE, getCorrelation
 from metabeta.evaluation.intervals import (
     ALPHAS,
@@ -243,7 +243,11 @@ def _rfxJointRanks(
             delta = truth[i, j, :q_i] - mu
             d2_truth = (delta @ cov_inv @ delta).item()
             inside = (d2_samples <= d2_truth).float()
-            rank = float((inside * w_i).sum().item()) if w_i is not None else float(inside.mean().item())
+            rank = (
+                float((inside * w_i).sum().item())
+                if w_i is not None
+                else float(inside.mean().item())
+            )
             if np.isfinite(rank):
                 ranks.append(rank)
 

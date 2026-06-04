@@ -36,7 +36,6 @@ from typing import NamedTuple
 import torch
 from torch import Tensor
 
-from metabeta.utils.evaluation import Proposal
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.families import (
     logLikelihood,
@@ -44,6 +43,7 @@ from metabeta.utils.families import (
     logProbFfx,
     logProbSigma,
 )
+from metabeta.utils.results import Proposal
 from metabeta.utils.regularization import (
     unconstrainedToCholesky,
     corrLowerToUnconstrained,

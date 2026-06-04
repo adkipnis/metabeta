@@ -1,5 +1,5 @@
 import torch
-from metabeta.utils.evaluation import Proposal, getMasks, weightedQuantile
+from metabeta.utils.results import Proposal, getMasks, weightedQuantile
 from metabeta.utils.regularization import corrToLower
 
 EPS = 1e-6

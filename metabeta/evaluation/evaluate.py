@@ -23,12 +23,11 @@ from metabeta.utils.dataloader import Dataloader, toDevice, subsetBatch
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import (
     EvaluationSummary,
-    Proposal,
-    concatProposalsBatch,
     dictMean,
     nutsConvergeMask,
     subsetProposal,
 )
+from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.moe import moeEstimate
 from metabeta.evaluation.summary import getSummary, summaryTable

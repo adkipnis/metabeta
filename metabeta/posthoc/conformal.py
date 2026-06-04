@@ -3,7 +3,7 @@ import torch
 from pathlib import Path
 
 from metabeta.evaluation.intervals import ALPHAS, getCredibleIntervals
-from metabeta.utils.evaluation import Proposal, getMasks
+from metabeta.utils.results import Proposal, getMasks
 
 CIDict = dict[str, torch.Tensor]
 Corrections = dict[float, CIDict]

@@ -7,13 +7,10 @@ from matplotlib.ticker import MultipleLocator
 
 from metabeta.utils.evaluation import (
     EvaluationSummary,
-    getMasks,
-    getNames,
-    getCorrRfxNames,
-    joinSigmas,
 )
 from metabeta.utils.regularization import corrToLower
 from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
+from metabeta.utils.results import getMasks, getNames, getCorrRfxNames, joinSigmas
 
 
 def _nanMean(x: torch.Tensor) -> float:

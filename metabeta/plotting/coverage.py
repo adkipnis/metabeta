@@ -5,12 +5,10 @@ from matplotlib.axes import Axes
 
 from metabeta.utils.evaluation import (
     EvaluationSummary,
-    getNames,
-    getCorrRfxNames,
-    Proposal,
     dictMean,
 )
 from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
+from metabeta.utils.results import getNames, getCorrRfxNames, Proposal
 
 
 def _plotCoverage(

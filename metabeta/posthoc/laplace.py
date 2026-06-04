@@ -36,9 +36,9 @@ from torch import Tensor
 
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.generative import HierarchicalModel, NCPParams
-from metabeta.utils.evaluation import Proposal
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.regularization import corrLowerToUnconstrained
+from metabeta.utils.results import Proposal
 
 
 class LaplaceRefiner:

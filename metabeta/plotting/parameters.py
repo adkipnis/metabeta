@@ -3,7 +3,7 @@ import pandas as pd
 from matplotlib import pyplot as plt
 import seaborn as sns
 
-from metabeta.utils.evaluation import Proposal, getAllNames, getCorrRfxNames
+from metabeta.utils.results import Proposal, getAllNames, getCorrRfxNames
 
 _GREEK_LATEX = {'σ': r'\sigma', 'ε': r'\varepsilon', 'μ': r'\mu', 'τ': r'\tau'}
 
@@ -50,7 +50,6 @@ def _prior_pdf_on(ax, x_grid, pdf, **kwargs):
     ax2.set_yticks([])
     ax2.set_yticklabels([])
     ax.set_xlim(xlim)
-
 
 
 def _histplot(x, **kwargs):
@@ -118,9 +117,7 @@ def plotParameters(
     _n_corr = 0
     if show_corr and proposal.corr_rfx is not None and _q_c >= 2:
         corr_mat = proposal.corr_rfx[index].numpy()  # (S, q, q)
-        corr_cols = np.stack(
-            [corr_mat[:, i, j] for i in range(_q_c) for j in range(i)], axis=1
-        )
+        corr_cols = np.stack([corr_mat[:, i, j] for i in range(_q_c) for j in range(i)], axis=1)
         x = np.concatenate([x, corr_cols], axis=1)
         _n_corr = _q_c * (_q_c - 1) // 2
 
@@ -194,8 +191,12 @@ def plotParameters(
     if prior_pdfs is not None:
         for i, (x_grid, pdf) in enumerate(prior_pdfs[:d]):
             _prior_pdf_on(
-                g.axes[i, i], x_grid, pdf,
-                color=prior_color, lw=1.5, alpha=0.6,
+                g.axes[i, i],
+                x_grid,
+                pdf,
+                color=prior_color,
+                lw=1.5,
+                alpha=0.6,
             )
 
     # 2d prior analytical contours — evaluated on the axis-range grid so that levels

@@ -3,7 +3,7 @@ import torch
 from scipy.stats import pearsonr
 import numpy as np
 
-from metabeta.utils.evaluation import Proposal, getMasks, weightedQuantile
+from metabeta.utils.results import Proposal, getMasks, weightedQuantile
 from metabeta.utils.regularization import corrToLower
 
 

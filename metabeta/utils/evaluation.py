@@ -3,20 +3,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from metabeta.utils.results import (  # noqa: F401
-    Proposal,
-    Proposed,
-    Source,
-    concatProposalsBatch,
-    getAllNames,
-    getCorrRfxNames,
-    getMasks,
-    getNames,
-    joinGlobals,
-    joinProposals,
-    joinSigmas,
-    weightedQuantile,
-)
+from metabeta.utils import results as _results
 
 
 @dataclass
@@ -261,12 +248,12 @@ def nutsConvergeMask(
     return ~(f_rhat | f_div | f_tree | f_ess | f_ess_tail)
 
 
-def subsetProposal(proposal: 'Proposal', mask: np.ndarray) -> 'Proposal':
+def subsetProposal(proposal: _results.Proposal, mask: np.ndarray) -> _results.Proposal:
     """Return a new Proposal restricted to datasets selected by a boolean mask."""
     idx = torch.from_numpy(mask)
     new_data = {src: {k: v[idx] for k, v in inner.items()} for src, inner in proposal.data.items()}
     corr = proposal._corr_rfx[idx] if proposal._corr_rfx is not None else None
-    sub = Proposal(
+    sub = _results.Proposal(
         new_data,
         has_sigma_eps=proposal.has_sigma_eps,
         d_corr=proposal.d_corr,
@@ -280,7 +267,7 @@ def subsetProposal(proposal: 'Proposal', mask: np.ndarray) -> 'Proposal':
     return sub
 
 
-def makePriorProposal(result: object, n_samples: int = 1000) -> Proposal:
+def makePriorProposal(result: object, n_samples: int = 1000) -> _results.Proposal:
     """Sample from the prior distributions stored in result, in original-scale units."""
     pp, si = result.prior_params, result.scale_info  # type: ignore[attr-defined]
     sd_y = si.y_std
@@ -297,7 +284,7 @@ def makePriorProposal(result: object, n_samples: int = 1000) -> Proposal:
 
     ffx_orig = si.to_original_scale(ffx)
     samples_g = torch.cat([ffx_orig, srfx, seps], dim=-1).unsqueeze(0)  # (1, S, d+q+1)
-    return Proposal(
+    return _results.Proposal(
         proposed={
             'global': {'samples': samples_g, 'log_prob': torch.zeros(1, n_samples)},
             'local': {

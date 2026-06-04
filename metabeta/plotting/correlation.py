@@ -6,8 +6,8 @@ from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 
 from metabeta.evaluation.correlation import evaluateCorrelation
-from metabeta.utils.evaluation import Proposal
 from metabeta.utils.plot import DPI, niceify, savePlot
+from metabeta.utils.results import Proposal
 
 
 def plotCorrelation(

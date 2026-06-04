@@ -51,7 +51,7 @@ from torch import Tensor
 
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.generative import HierarchicalModel
-from metabeta.utils.evaluation import Proposal
+from metabeta.utils.results import Proposal
 from metabeta.utils.families import (
     logMarginalLikelihoodNormal,
     logProbFfx,

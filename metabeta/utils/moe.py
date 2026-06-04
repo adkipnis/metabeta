@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from metabeta.models.approximator import Approximator
-from metabeta.utils.evaluation import Proposal, joinProposals
+from metabeta.utils.results import Proposal, joinProposals
 from metabeta.utils.sampling import sampleGroupedPermutation
 
 

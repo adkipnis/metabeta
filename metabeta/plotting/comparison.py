@@ -4,12 +4,10 @@ from matplotlib import pyplot as plt
 
 from metabeta.utils.evaluation import (
     EvaluationSummary,
-    getNames,
-    getCorrRfxNames,
-    Proposal,
     dictMean,
 )
 from metabeta.utils.plot import DPI, savePlot
+from metabeta.utils.results import getNames, getCorrRfxNames, Proposal
 from metabeta.plotting.recovery import _prepareRecoveryData, _plotRecoveryGrouped
 from metabeta.plotting.coverage import _plotCoverage
 from metabeta.plotting.sbc import _plotSbcRow

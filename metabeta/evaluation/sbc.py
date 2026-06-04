@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from scipy.stats import binom, beta as beta_dist
 
-from metabeta.utils.evaluation import Proposal
+from metabeta.utils.results import Proposal
 from metabeta.utils.regularization import corrToLower
 
 

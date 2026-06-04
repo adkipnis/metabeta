@@ -51,7 +51,6 @@ from torch import Tensor
 
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
-from metabeta.utils.evaluation import Proposal
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.families import (
     logMarginalLikelihoodNormal,
@@ -60,6 +59,7 @@ from metabeta.utils.families import (
 )
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.regularization import unconstrainedToCholesky
+from metabeta.utils.results import Proposal
 
 Mode = Literal['global', 'marginal', 'joint']
 

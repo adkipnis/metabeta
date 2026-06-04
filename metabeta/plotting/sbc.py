@@ -5,8 +5,8 @@ from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 
 from metabeta.evaluation.sbc import getFractionalRanks, simultaneousBands
-from metabeta.utils.evaluation import getAllNames, getCorrRfxNames, getMasks, Proposal, joinSigmas
 from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
+from metabeta.utils.results import getAllNames, getCorrRfxNames, getMasks, Proposal, joinSigmas
 
 
 def _plotSbcEcdf(
