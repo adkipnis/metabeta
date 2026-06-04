@@ -56,7 +56,7 @@ See [demos/intro.ipynb](demos/intro.ipynb) for the full `sleepstudy`
 walkthrough and [demos/priors.ipynb](demos/priors.ipynb) for an exemplary prior-sensitivity
 analysis.
 
-## How the model was built
+## From simulation to deployment
 
 1. **Simulate hierarchical datasets.** `metabeta/simulation/` generates GLMM datasets
    across likelihood families, GLMM dimensions, group counts, group sizes, prior families,
