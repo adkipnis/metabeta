@@ -15,11 +15,12 @@ import torch
 from tabulate import tabulate
 
 from metabeta.datasets.preprocessor import DataPreprocessor, PreprocessReport
+from metabeta.evaluation import predictive as _predictive
 from metabeta.models.approximator import Approximator
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.dataloader import Dataloader, collateGrouped, toDevice
-from metabeta.utils.evaluation import Proposal
+from metabeta.utils.results import Proposal
 from metabeta.utils.api import (
     JOINT_CHECKPOINT_VERSION,
     ScaleInfo,
@@ -151,7 +152,6 @@ class Api:
         if warmup:
             for entry in self.submodels:
                 self._warmupSubmodel(entry)
-            import metabeta.evaluation.predictive  # noqa: F401 — primes arviz/scipy import
 
     def model(self, submodel_id: str) -> Approximator:
         """Return the lazily instantiated model for ``submodel_id``."""
@@ -320,10 +320,10 @@ class Api:
         d = max(int(r.get('min_d', 1)), 2)  # at least intercept + one covariate
         q = int(r.get('min_q', 1))
         fam = int(r.get('likelihood_family', 0))
-        min_m = max(5, int(r.get('min_m', 0)) + 1,
-                    max(d, q * (q + 1) // 2) + int(r.get('min_bg_df', 0)) + 1)
-        min_n = max(4, int(r.get('min_n', 0)) + 1,
-                    q + int(r.get('min_within_df', 0)) + 1)
+        min_m = max(
+            5, int(r.get('min_m', 0)) + 1, max(d, q * (q + 1) // 2) + int(r.get('min_bg_df', 0)) + 1
+        )
+        min_n = max(4, int(r.get('min_n', 0)) + 1, q + int(r.get('min_within_df', 0)) + 1)
         n = min_m * min_n
 
         rng = np.random.default_rng(0)
@@ -342,7 +342,13 @@ class Api:
         rfx_slopes = (' + ' + ' + '.join(f'_x{j}' for j in range(q - 1))) if q > 1 else ''
         formula = f'_y ~ {fixed} + (1{rfx_slopes} | _g)'
 
-        self.sample(pd.DataFrame(dummy), formula=formula, n_samples=1, diagnostics=False, likelihood_family=fam)
+        self.sample(
+            pd.DataFrame(dummy),
+            formula=formula,
+            n_samples=1,
+            diagnostics=False,
+            likelihood_family=fam,
+        )
 
     def warmup(self, data: Any = None, **prepare_kwargs: Any) -> None:
         """Prime PyTorch's kernel cache with a single-sample forward pass.
@@ -372,8 +378,9 @@ class Api:
                 if r.get('min_d', 0) <= d <= r.get('max_d', 9999):
                     bg_df = int(r.get('min_bg_df', 0))
                     within_df = int(r.get('min_within_df', 0))
-                    min_m = max(min_m, int(r.get('min_m', 0)) + 1,
-                                max(d, q * (q + 1) // 2) + bg_df + 1)
+                    min_m = max(
+                        min_m, int(r.get('min_m', 0)) + 1, max(d, q * (q + 1) // 2) + bg_df + 1
+                    )
                     min_n = max(min_n, int(r.get('min_n', 0)) + 1, q + within_df + 1)
                     if fam is None and 'likelihood_family' in r:
                         fam = int(r['likelihood_family'])
@@ -382,7 +389,9 @@ class Api:
             n = min_m * min_n
             dummy: dict[str, Any] = {}
             if spec.target:
-                dummy[spec.target] = rng.integers(0, 2, size=n).astype(float) if fam == 1 else rng.standard_normal(n)
+                dummy[spec.target] = (
+                    rng.integers(0, 2, size=n).astype(float) if fam == 1 else rng.standard_normal(n)
+                )
             for term in spec.fixed_terms:
                 dummy[term] = rng.standard_normal(n)
             if spec.group_name:
@@ -457,20 +466,11 @@ class Api:
     def _computeDiagnostics(
         self, proposal: Proposal, batch: dict[str, torch.Tensor]
     ) -> dict[str, Any]:
-        from metabeta.evaluation.predictive import (
-            getPosteriorPredictive,
-            posteriorPredictiveAUC,
-            posteriorPredictiveDeviance,
-            posteriorPredictiveNLL,
-            posteriorPredictiveR2,
-            psisLooNLL,
-        )
-
         lf = int(batch['likelihood_family'].flatten()[0].item())
-        pp = getPosteriorPredictive(proposal, batch, likelihood_family=lf)
+        pp = _predictive.getPosteriorPredictive(proposal, batch, likelihood_family=lf)
         log_p = pp.log_prob(batch['y'].unsqueeze(-1))  # (B, m, n, S)
-        ppc_nll = posteriorPredictiveNLL(pp, batch, mode='mixture', log_p=log_p)
-        loo_nll_vals, pareto_k_vals = psisLooNLL(
+        ppc_nll = _predictive.posteriorPredictiveNLL(pp, batch, mode='mixture', log_p=log_p)
+        loo_nll_vals, pareto_k_vals = _predictive.psisLooNLL(
             pp, batch, w=proposal.weights, reff=proposal.reff, log_p=log_p
         )
 
@@ -480,15 +480,15 @@ class Api:
         pareto_k = agg(pareto_k_vals)
 
         if lf == 0:
-            vals = posteriorPredictiveR2(pp, batch, w=proposal.weights)
+            vals = _predictive.posteriorPredictiveR2(pp, batch, w=proposal.weights)
             fit = vals.item() if b == 1 else vals.mean().item()
             fit_label = 'R²' if b == 1 else 'Mean R²'
         elif lf == 1:
-            vals = posteriorPredictiveAUC(pp, batch, w=proposal.weights)
+            vals = _predictive.posteriorPredictiveAUC(pp, batch, w=proposal.weights)
             fit = vals.item() if b == 1 else vals.mean().item()
             fit_label = 'AUC' if b == 1 else 'Mean AUC'
         else:
-            vals = posteriorPredictiveDeviance(pp, batch, w=proposal.weights)
+            vals = _predictive.posteriorPredictiveDeviance(pp, batch, w=proposal.weights)
             fit = vals.item() if b == 1 else vals.mean().item()
             fit_label = 'Deviance' if b == 1 else 'Mean Deviance'
 
@@ -1096,7 +1096,8 @@ class Api:
         overlays prior marginal KDEs.
         """
         from metabeta.plotting.parameters import plotParameters as _plotParameters
-        from metabeta.utils.evaluation import Proposal, makePriorPDFs
+        from metabeta.utils.evaluation import makePriorPDFs
+        from metabeta.utils.results import Proposal
 
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
@@ -1174,9 +1175,17 @@ class Api:
         fit_vals = d.get('fit_vals')
         fit = fit_vals[bi].item() if fit_vals is not None and bi < len(fit_vals) else d.get('fit')
         loo_nll_vals = d.get('loo_nll_vals')
-        loo_nll = loo_nll_vals[bi].item() if loo_nll_vals is not None and bi < len(loo_nll_vals) else d.get('loo_nll')
+        loo_nll = (
+            loo_nll_vals[bi].item()
+            if loo_nll_vals is not None and bi < len(loo_nll_vals)
+            else d.get('loo_nll')
+        )
         pareto_k_vals = d.get('pareto_k_vals')
-        pareto_k = pareto_k_vals[bi].item() if pareto_k_vals is not None and bi < len(pareto_k_vals) else d.get('pareto_k')
+        pareto_k = (
+            pareto_k_vals[bi].item()
+            if pareto_k_vals is not None and bi < len(pareto_k_vals)
+            else d.get('pareto_k')
+        )
         fit_label = d.get('fit_label', 'fit')
         if fit_vals is not None and fit_label.startswith('Mean '):
             fit_label = fit_label[5:]
@@ -1241,8 +1250,11 @@ class Api:
         if ns_row is not None:
             headers += ['n']
         headers += ['Mean', 'SD', lo_pct, '50.0%', hi_pct, 'z']
-        floatfmt: list[str] = ['', 'g', '.3f', '.3f', '.3f', '.3f', '.3f', '.2f'] if ns_row is not None \
+        floatfmt: list[str] = (
+            ['', 'g', '.3f', '.3f', '.3f', '.3f', '.3f', '.2f']
+            if ns_row is not None
             else ['', '.3f', '.3f', '.3f', '.3f', '.3f', '.2f']
+        )
 
         parts = ['Random Effects:']
 
@@ -1259,7 +1271,14 @@ class Api:
                 row: list[Any] = [g_names[gi] if gi < len(g_names) else str(gi)]
                 if ns_row is not None:
                     row.append(ns_row[gi])
-                row += [mean_val, col.std().item(), col.quantile(alpha).item(), col.quantile(0.5).item(), col.quantile(1 - alpha).item(), z]
+                row += [
+                    mean_val,
+                    col.std().item(),
+                    col.quantile(alpha).item(),
+                    col.quantile(0.5).item(),
+                    col.quantile(1 - alpha).item(),
+                    z,
+                ]
                 rows.append(row)
 
             emp_sd = rfx_means[:, qi].std().item()

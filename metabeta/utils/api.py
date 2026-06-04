@@ -12,9 +12,9 @@ from typing import Any
 import numpy as np
 import torch
 
-from metabeta.simulation.prior import bambiDefaultPriors
 from metabeta.utils.constants import FFX_FAMILIES, LIKELIHOOD_FAMILIES, SIGMA_FAMILIES, hasSigmaEps
 from metabeta.utils.experiments import CHECKPOINT_DIR
+from metabeta.utils.priors import bambiDefaultPriors
 
 
 JOINT_CHECKPOINT_VERSION = 1

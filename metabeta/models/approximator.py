@@ -15,7 +15,7 @@ from metabeta.utils.regularization import (
     unconstrainedToCholesky,
 )
 from metabeta.utils.config import ApproximatorConfig, SummarizerConfig, PosteriorConfig
-from metabeta.utils.evaluation import Proposal, joinGlobals
+from metabeta.utils.results import Proposal, joinGlobals
 from metabeta.analytical.fit import glmm
 from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, hasSigmaEps
 from metabeta.utils.families import FamilyEncoder
@@ -254,9 +254,7 @@ class Approximator(nn.Module):
         )
 
         if run_on_cpu:
-            stats = {
-                k: v.to(device) if torch.is_tensor(v) else v for k, v in stats.items()
-            }
+            stats = {k: v.to(device) if torch.is_tensor(v) else v for k, v in stats.items()}
         return stats
 
     def _addMetadata(
@@ -488,7 +486,7 @@ class Approximator(nn.Module):
                     logger.warning(
                         "Model config has analytical_refinement='light' but precomputed stats "
                         "(full MAP+EB) were found in the batch. Upgrading to 'full' in memory "
-                        "and in the exported model config."
+                        'and in the exported model config.'
                     )
                     self.cfg.analytical_refinement = 'full'
                     self._refinement_upgraded = True

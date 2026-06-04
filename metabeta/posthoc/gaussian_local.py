@@ -20,7 +20,7 @@ import torch
 from torch import Tensor
 
 from metabeta.analytical.linalg import _safeSolve
-from metabeta.utils.evaluation import Proposal
+from metabeta.utils.results import Proposal
 from metabeta.utils.regularization import corrToLower
 
 _SIGMA_MIN = 1e-6
