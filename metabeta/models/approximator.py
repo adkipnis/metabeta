@@ -19,7 +19,7 @@ from metabeta.utils.results import Proposal, joinGlobals
 from metabeta.analytical.fit import glmm
 from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, hasSigmaEps
 from metabeta.utils.families import FamilyEncoder
-from metabeta.posthoc.gaussian_local import (
+from metabeta.analytical.lmm.gaussian_local import (
     _correlationPrecision,
     analyticalBLUPStats,
     gaussianHybrid,

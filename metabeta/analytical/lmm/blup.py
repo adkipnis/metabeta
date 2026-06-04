@@ -20,7 +20,7 @@ def analyticalBLUPContext(
     rather than a closed form, so they currently use the fixed PQL BLUP stats.
     Returns (B, m, S, 3*q).
     """
-    from metabeta.posthoc.gaussian_local import analyticalBLUPStats
+    from metabeta.analytical.lmm.gaussian_local import analyticalBLUPStats
 
     q = sigma_rfx.shape[-1]
     d = beta.shape[-1]

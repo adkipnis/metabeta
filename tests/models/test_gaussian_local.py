@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from metabeta.posthoc.gaussian_local import (
+from metabeta.analytical.lmm.gaussian_local import (
     analyticalRFX,
     analyticalRFXMoments,
     _correlationPrecision,

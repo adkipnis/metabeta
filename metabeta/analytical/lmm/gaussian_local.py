@@ -1,5 +1,5 @@
 """
-posthoc/gaussian_local.py — Analytical Gaussian local posterior for LMMs (family == 0).
+analytical/lmm/gaussian_local.py — Analytical Gaussian local posterior for LMMs (family == 0).
 
 For y_i | β, b_i, σ_ε ~ N(X_i β + Z_i b_i, σ_ε² I) and
 b_i | σ_rfx, R ~ N(0, D R D), where D = diag(σ_rfx):
