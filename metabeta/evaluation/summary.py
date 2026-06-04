@@ -5,7 +5,6 @@ import torch
 from tqdm import tqdm
 from tabulate import tabulate
 
-from metabeta.posthoc.conformal import Calibrator
 from metabeta.utils.evaluation import (
     EvaluationSummary,
     PerDatasetMetrics,
@@ -62,7 +61,6 @@ def _sliceData(data: dict[str, torch.Tensor], start: int, end: int) -> dict[str,
 def getSummary(
     proposal: Proposal,
     data: dict[str, torch.Tensor],
-    calibrator: Calibrator | None = None,
     likelihood_family: int = 0,
     compute_prior: bool = False,
     compute_pred_coverage: bool = True,
@@ -79,8 +77,6 @@ def getSummary(
 
     ci_dicts = getCredibleIntervals(proposal)
     t0 = _t('credible intervals (quantiles)', t0)
-    if calibrator is not None:
-        ci_dicts = calibrator.apply(ci_dicts)
     out['credible_intervals'] = ci_dicts
     out['coverage'] = cvrg_dicts = getCoverages(ci_dicts, data)
     out['coverage_error'] = getCoverageErrors(cvrg_dicts, log_ratio=False)
