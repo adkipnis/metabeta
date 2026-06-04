@@ -7,18 +7,17 @@
 
 **Amortized Bayesian inference for hierarchical regression models.**
 
-`metabeta` is a PyTorch implementation and set of pretrained checkpoints for
-prior-amortized Bayesian inference in generalized linear mixed-effects models (GLMMs).
-Given a grouped dataset, a model formula, and optional prior hyperparameters, it returns
+`metabeta` is an amortized model for Bayesian generalized linear mixed-effects models (GLMMs).
+Given a grouped dataset, a model formula, and an optional prior specification, it returns
 posterior samples for fixed effects, random effects, variance components, and
-correlations with a forward pass instead of a fresh MCMC run.
+correlations with the speed and batching capabilities of a PyTorch forward pass.
 
 - Supports Normal, Bernoulli, and Poisson outcomes.
-- Accepts lme4-style formulas with one grouping factor.
+- Accepts convenient lme4-style formulas.
 - Conditions on prior family and hyperparameters at inference time.
 - Supports batched prior-sensitivity analysis in one `sample()` call.
-- Includes diagnostics for calibration, prediction, and comparison against NUTS or ADVI.
-- Provides the simulator, neural architecture, training loop, evaluation code, demos, and
+- Includes diagnostics for calibration, posterior prediction, and comparison against NUTS or ADVI.
+- Provides the data simulator, neural architecture, training loop, evaluation code, demos, and
   experiment scripts.
 
 ## Quick start
