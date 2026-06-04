@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 import operator
+import sys
 import warnings
 
 import numpy as np
@@ -103,6 +104,7 @@ class Api:
         device: str | torch.device = 'cpu',
         batch_size: int | None = None,
         warmup: bool = True,
+        verbose: bool = True,
     ) -> 'Api':
         """Load a pretrained checkpoint for ``family`` from Hugging Face Hub.
 
@@ -117,11 +119,23 @@ class Api:
             Override the default HF Hub cache (``~/.cache/huggingface/hub``).
         force_download:
             Re-download even if a cached copy exists.
+        verbose:
+            Print concise checkpoint download/load status messages.
         """
         from metabeta.utils.hub import download_checkpoint
 
-        path = download_checkpoint(family, cache_dir=cache_dir, force_download=force_download)
-        return cls(path, device=device, batch_size=batch_size, warmup=warmup)
+        path = download_checkpoint(
+            family,
+            cache_dir=cache_dir,
+            force_download=force_download,
+            verbose=verbose,
+        )
+        if verbose:
+            print(f'Loading metabeta checkpoint on {device}...', file=sys.stderr, flush=True)
+        api = cls(path, device=device, batch_size=batch_size, warmup=warmup)
+        if verbose:
+            print('Metabeta checkpoint ready.', file=sys.stderr, flush=True)
+        return api
 
     def __init__(
         self,

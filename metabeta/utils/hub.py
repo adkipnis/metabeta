@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 from metabeta.utils.constants import LIKELIHOOD_FAMILIES
 
@@ -19,6 +20,7 @@ def download_checkpoint(
     *,
     cache_dir: str | Path | None = None,
     force_download: bool = False,
+    verbose: bool = True,
 ) -> Path:
     """Return the local path to the cached pretrained checkpoint for ``family``.
 
@@ -33,6 +35,8 @@ def download_checkpoint(
         Override the default HF Hub cache (``~/.cache/huggingface/hub``).
     force_download:
         Re-download even if a cached copy exists.
+    verbose:
+        Print concise checkpoint resolution status messages.
     """
     if family not in LIKELIHOOD_FAMILIES:
         raise ValueError(f'family must be one of {LIKELIHOOD_FAMILIES}, got {family!r}')
@@ -45,6 +49,14 @@ def download_checkpoint(
             'Install it with:  pip install huggingface_hub'
         ) from exc
 
+    if verbose:
+        print(
+            f'Resolving metabeta {family!r} checkpoint from '
+            f'Hugging Face ({HF_REPO_ID}@{CHECKPOINT_VERSION})...',
+            file=sys.stderr,
+            flush=True,
+        )
+
     local_path = hf_hub_download(
         repo_id=HF_REPO_ID,
         filename=f'metabeta-{family}.pt',
@@ -52,4 +64,6 @@ def download_checkpoint(
         cache_dir=str(cache_dir) if cache_dir is not None else None,
         force_download=force_download,
     )
+    if verbose:
+        print(f'Using checkpoint: {local_path}', file=sys.stderr, flush=True)
     return Path(local_path)
