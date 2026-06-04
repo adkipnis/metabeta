@@ -5,8 +5,6 @@
 [![uv](https://img.shields.io/badge/env-uv-6b47ff)](https://docs.astral.sh/uv/)
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey)](LICENSE)
 
-**Amortized Bayesian inference for hierarchical regression models.**
-
 `metabeta` is an amortized model for Bayesian generalized linear mixed-effects models (GLMMs).
 Given a grouped dataset, a model formula, and an optional prior specification, it returns
 posterior samples for fixed effects, random effects, variance components, and
