@@ -58,23 +58,21 @@ analysis.
 
 ## From simulation to deployment
 
-Each pretrained model is built through the same pipeline, from synthetic GLMM design to a
-routed checkpoint that can be loaded by the public API.
+Each pretrained model is built through the same pipeline, from a dataset simulator to a checkpoint that can be loaded by the public API.
 
 1. **Define the model family.** Choose the likelihood, GLMM dimensions, group structure,
    covariate styles, and prior families covered by a checkpoint.
 2. **Generate training data.** Simulate hierarchical datasets and posterior reference targets
    across the configured design space.
-3. **Normalize inputs.** Convert grouped tabular data into padded tensors, masks, parameter
-   names, and prior encodings shared by training and inference.
-4. **Train amortized posteriors.** Use set-transformer summaries and conditional coupling
-   flows to model fixed effects, random effects, variances, and correlations.
-5. **Validate behavior.** Check parameter recovery, interval coverage, SBC, posterior
-   prediction, LOO-NLL, and comparisons against reference fits.
-6. **Package checkpoints.** Bundle compatible submodels, configs, routing metadata, and
+3. **Format inputs.** Convert grouped tabular data into padded tensors, masks, and prior encodings shared by training and inference.
+4. **Train amortized posteriors.** Use set-transformers (to learn low-dimensional permutation-invariant summaries of the datasets) and conditional coupling
+   flows to approximate posteriors for fixed effects, variance parameters, correlations, and group-wise random effects.
+5. **Validate behavior.** Check parameter recovery, credible interval coverage, simulation-based calibration, posterior
+   predictive accuracy and run comparisons against reference methods.
+6. **Package checkpoints.** Bundle weights, configs, routing metadata, and
    preprocessing expectations into a joint checkpoint.
-7. **Deploy through the API.** Publish checkpoints on Hugging Face and load them with
-   `Api.from_pretrained(...)` for batched posterior sampling and diagnostics.
+7. **Deploy through the API.** Load joint checkpoints with
+   `Api.from_pretrained(...)` for convenient posterior estimation and diagnostics.
 
 ## Repository map
 
