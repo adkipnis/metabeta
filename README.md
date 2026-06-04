@@ -58,16 +58,23 @@ analysis.
 
 ## From simulation to deployment
 
-1. **Simulate hierarchical datasets.** `metabeta/simulation/` generates GLMM datasets
-   across likelihood families, GLMM dimensions, group counts, group sizes, prior families,
-   and data-source styles.
-2. **Summarize locally and globally.** Set-transformer modules summarize observations
-   within groups and then summarize groups across the dataset.
-3. **Estimate posterior factors.** Conditional coupling flows model global parameters
-   and per-group random effects, with masks for variable GLMM dimensions.
-4. **Evaluate calibration and prediction.** Evaluation modules compute parameter recovery,
-   credible interval coverage, simulation-based calibration checks, posterior predictive
-   metrics, LOO diagnostics, and comparison plots against NUTS or ADVI fits.
+Each pretrained model is built through the same pipeline, from synthetic GLMM design to a
+routed checkpoint that can be loaded by the public API.
+
+1. **Define the model family.** Choose the likelihood, GLMM dimensions, group structure,
+   covariate styles, and prior families covered by a checkpoint.
+2. **Generate training data.** Simulate hierarchical datasets and posterior reference targets
+   across the configured design space.
+3. **Normalize inputs.** Convert grouped tabular data into padded tensors, masks, parameter
+   names, and prior encodings shared by training and inference.
+4. **Train amortized posteriors.** Use set-transformer summaries and conditional coupling
+   flows to model fixed effects, random effects, variances, and correlations.
+5. **Validate behavior.** Check parameter recovery, interval coverage, SBC, posterior
+   prediction, LOO-NLL, and comparisons against reference fits.
+6. **Package checkpoints.** Bundle compatible submodels, configs, routing metadata, and
+   preprocessing expectations into a joint checkpoint.
+7. **Deploy through the API.** Publish checkpoints on Hugging Face and load them with
+   `Api.from_pretrained(...)` for batched posterior sampling and diagnostics.
 
 ## Repository map
 
