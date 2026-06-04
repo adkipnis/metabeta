@@ -15,16 +15,23 @@ correlations with the speed and batching capabilities of a PyTorch forward pass.
 - Accepts convenient lme4-style formulas.
 - Conditions on prior family and hyperparameters at inference time.
 - Supports batched prior-sensitivity analysis in one `sample()` call.
-- Includes diagnostics for calibration, posterior prediction, and comparison against NUTS or ADVI.
-- Provides the data simulator, neural architecture, training loop, evaluation code, demos, and
-  experiment scripts.
+- Includes diagnostics for posterior prediction, LOO-NLL, and comparison against reference fits.
+- Ships the pretrained inference API, plotting helpers, diagnostics, and demo notebooks in the
+  release artifacts. Data generation, training, benchmarks, and experiment scripts remain
+  repository/research workflows.
 
 Pretrained checkpoints are hosted on [Hugging Face](https://huggingface.co/adkipnis/metabeta)
 and are downloaded automatically on first use.
 
 ## Quick start
 
-Install from source with [`uv`](https://docs.astral.sh/uv/):
+Install the package:
+
+```bash
+pip install metabeta
+```
+
+For local development, install from source with [`uv`](https://docs.astral.sh/uv/):
 
 ```bash
 git clone https://github.com/adkipnis/metabeta.git
@@ -72,6 +79,7 @@ analysis.
 | [metabeta/evaluation/](metabeta/evaluation/) | parameter recovery, coverage, SBC, posterior predictive checks and summary metrics |
 | [metabeta/models/](metabeta/models/) | model API, set transformers, normalizing flows |
 | [metabeta/plotting/](metabeta/plotting/) | plot functions for posterior samples, recovery, calibration, and runtime |
+| [metabeta/posthoc/](metabeta/posthoc/) | experimental post-hoc posterior refinement helpers |
 | [metabeta/simulation/](metabeta/simulation/) | synthetic hierarchical data generation and reference fitting with PyMC |
 | [metabeta/training/](metabeta/training/) | training entry point and checkpoint loop |
 | [metabeta/utils/](metabeta/utils/) | config, dataloading, routing, IO, and shared helper code |

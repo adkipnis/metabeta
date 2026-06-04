@@ -106,6 +106,18 @@ def test_release_metadata_dependencies() -> None:
     assert any(req.startswith('scamd') for req in research_requirements)
 
 
+def test_release_metadata_public_surface() -> None:
+    _require_artifacts()
+
+    with zipfile.ZipFile(WHEEL) as wheel:
+        entrypoint_names = [
+            name for name in wheel.namelist() if name.endswith('.dist-info/entry_points.txt')
+        ]
+        entrypoints = wheel.read(entrypoint_names[0]).decode() if entrypoint_names else ''
+
+    assert 'metabeta-evaluate' not in entrypoints
+
+
 def test_installed_wheel_import_smoke(tmp_path: Path) -> None:
     _require_artifacts()
 

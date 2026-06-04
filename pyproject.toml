@@ -8,6 +8,17 @@ version = "0.4"
 description = "Amortized inference for Bayesian GLMMs"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
+license = "CC-BY-NC-SA-4.0"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
 dependencies = [
     "arviz>=0.23.4",
     "huggingface-hub>=1.14.0",
@@ -39,8 +50,10 @@ research = [
     "wandb>=0.25.0",
 ]
 
-[project.scripts]
-metabeta-evaluate = "metabeta.evaluation.evaluate:main"
+[project.urls]
+Homepage = "https://github.com/adkipnis/metabeta"
+Repository = "https://github.com/adkipnis/metabeta"
+Checkpoints = "https://huggingface.co/adkipnis/metabeta"
 
 [tool.pytest.ini_options]
 addopts = "-m 'not slow'"

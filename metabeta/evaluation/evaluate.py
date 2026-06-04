@@ -57,7 +57,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--verbosity', type=int, default=1)
     parser.add_argument('--n_samples', type=int, default=1000)
-    parser.add_argument('--conformal', action=argparse.BooleanOptionalAction)
     parser.add_argument('--k', type=int, default=0, help='pseudo-MoE permuted views (0=off)')
     parser.add_argument('--batch_size', type=int)
     parser.add_argument('--save_tables', action=argparse.BooleanOptionalAction, default=None)

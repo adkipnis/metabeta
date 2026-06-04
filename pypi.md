@@ -2,14 +2,17 @@
 
 ## Current State
 
-- `uv build` succeeds, but the wheel is not inference-only.
-- The built wheel currently includes `archive/`, `benchmarks/`, `experiments/`, `tests/`,
-  `scripts/`, and every `metabeta` subpackage.
-- `pyproject.toml` uses broad setuptools discovery with `where = ["."]` and no package
-  include/exclude rules.
+- `uv build` succeeds with explicit setuptools package discovery.
+- The wheel is scoped to runtime packages for pretrained-model use: `metabeta.models`,
+  `metabeta.analytical`, `metabeta.configs`, `metabeta.datasets`, `metabeta.evaluation`,
+  `metabeta.plotting`, `metabeta.posthoc`, and `metabeta.utils`.
+- The wheel excludes `archive/`, `benchmarks/`, `demos/`, `experiments/`, `scripts/`,
+  `tests/`, `metabeta.outputs`, `metabeta.simulation`, and `metabeta.training`.
+- The sdist excludes research/runtime-output directories but keeps demo notebooks.
 - Base dependencies intentionally include plotting support, LOO diagnostics via ArviZ,
-  SciPy, and pytest. Research/data-generation dependencies should stay optional.
-- The user-facing pretrained API is centered on `metabeta.models.api.Api`.
+  SciPy, and pytest. Research/data-generation dependencies stay optional under the
+  `research` extra.
+- The public pretrained API is centered on `metabeta.Api` and `metabeta.models.api.Api`.
 - Diagnostics should stay eager so the first diagnostic sampling call does not pay import
   latency. This means `metabeta.evaluation.predictive` remains part of the API import path.
 - `Approximator` imports analytical GLMM and Gaussian local refinement code at import time.
@@ -36,6 +39,15 @@
   `research` extra.
 - Added `MANIFEST.in` pruning so sdists omit training/simulation/output/test/research
   directories while retaining demo notebooks.
+- Added packaging tests for wheel/sdist content, dependency metadata, and import smoke checks.
+- Added a GitHub Actions release-check workflow for Blue, pytest, `uv build`, and artifact tests.
+- Added a manual TestPyPI publish workflow that uses PyPI trusted publishing once the
+  TestPyPI project/environment is configured.
+- Removed the `metabeta-evaluate` console script from package metadata for the first PyPI
+  release; evaluation remains available as importable library code.
+- Made `archive/posthoc/*.py` trackable while keeping the rest of `archive/` ignored.
+- Current PyPI search results do not show an exact `metabeta` project name, but final
+  availability can only be confirmed by the upload flow.
 - Ran Blue across `metabeta tests`.
 
 ## Remaining Risk
@@ -44,32 +56,33 @@ The wheel is now focused on runtime packages. `metabeta.posthoc` remains include
 experimental research workflows (`warmnuts`, `svgd`, `metropolis`, `importance`, and
 `generative`) and is explicitly marked as not production-ready.
 
+The package still depends on large scientific/runtime libraries, especially PyTorch. This is
+intentional for the first release, but TestPyPI should verify that resolver behavior and wheel
+selection are acceptable in a fresh environment.
+
 ## Next Steps
 
-1. Add release smoke tests.
+1. Run the full local release gate.
 
-   Add a wheel-content test that fails if excluded directories are present. Add a clean-env
-   install smoke test for `from metabeta import Api` and
-   `Api.from_pretrained(..., warmup=False)`.
+   Run `uv run blue --check --diff metabeta tests`, `uv run pytest`, `uv build`, and
+   `uv run pytest tests/packaging/test_release_artifacts.py`.
 
-2. Rebuild and inspect artifacts in CI.
+2. Test installation from the built wheel.
 
-   Run `uv build`, inspect `dist/*.whl` and `dist/*.tar.gz`, and verify `METADATA`
-   contains only intended base dependencies and extras.
+   In a fresh Python 3.12 environment, install `dist/metabeta-0.4-py3-none-any.whl`, then
+   run `from metabeta import Api`, `Api.from_pretrained("normal", warmup=False)`, a small
+   `sample()` call, and the demo notebooks if practical.
 
-3. Decide how to handle research-adjacent modules inside included packages.
+3. Publish to TestPyPI.
 
-   The inference-required Gaussian local refinement now lives in `metabeta.analytical.lmm`.
-   `posthoc.conformal`, `posthoc.coordinate`, and `posthoc.laplace` have been archived.
-   Summary evaluation no longer accepts calibrators. The remaining posthoc modules are
-   intentionally shipped as experimental research code.
+   Upload the same built artifacts to TestPyPI, install from TestPyPI in a fresh environment,
+   and repeat the import/checkpoint/sample smoke test.
 
-4. Review the evaluation console script.
+4. Final metadata review before real PyPI.
 
-   `metabeta-evaluate` currently remains in package metadata because evaluation is in base.
-   Decide whether PyPI should expose it or only expose the programmatic API.
+   Confirm version, README rendering, license/classifier metadata, dependency metadata, and
+   whether the PyPI package name is available.
 
-5. Publish to TestPyPI first.
+5. Publish to PyPI.
 
-   Install from TestPyPI in a fresh environment, run the import smoke test, checkpoint
-   download, a small `sample()` call, and both demo notebooks if practical.
+   Upload only after the TestPyPI install and smoke tests pass.
