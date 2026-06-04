@@ -364,7 +364,7 @@ def collateStats(
 ) -> dict[str, torch.Tensor]:
     B = len(batch)
     stats: dict[str, torch.Tensor] = {
-        'beta_est': quickCollate(batch, 'beta_est', dtype),            # (B, d)
+        'beta_est': quickCollate(batch, 'beta_est', dtype),  # (B, d)
         'sigma_rfx_est': quickCollate(batch, 'sigma_rfx_est', dtype),  # (B, q)
     }
     blup_est = torch.zeros((B, m, q), dtype=dtype)
