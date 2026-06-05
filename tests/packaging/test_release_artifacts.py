@@ -57,7 +57,6 @@ RESEARCH_ONLY_DEPS = {
     'pymc',
     'rpy2',
     'schedulefree',
-    'scamd',
     'statsmodels',
     'ucimlrepo',
     'wandb',
@@ -65,6 +64,10 @@ RESEARCH_ONLY_DEPS = {
 
 DEV_ONLY_DEPS = {
     'pytest',
+}
+
+REPO_ONLY_DEPS = {
+    'scamd',
 }
 
 
@@ -111,11 +114,12 @@ def test_release_metadata_dependencies() -> None:
         assert not any(req.lower().startswith(dep) for req in base_requirements), dep
     for dep in DEV_ONLY_DEPS:
         assert not any(req.lower().startswith(dep) for req in base_requirements), dep
+    for dep in REPO_ONLY_DEPS:
+        assert not any(req.lower().startswith(dep) for req in requirements), dep
 
     assert not metadata.get_all('Provides-Extra') or 'simulation' not in metadata.get_all(
         'Provides-Extra'
     )
-    assert any(req.startswith('scamd') for req in research_requirements)
     assert any(req.startswith('pymc') for req in research_requirements)
 
 

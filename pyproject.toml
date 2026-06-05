@@ -44,7 +44,6 @@ research = [
     "pymc>=5.28.5",
     "rpy2>=3.6.7",
     "schedulefree>=1.4.1",
-    "scamd",
     "statsmodels>=0.14.6",
     "ucimlrepo>=0.0.7",
     "wandb>=0.25.0",
@@ -147,6 +146,9 @@ torch = [
 ]
 
 [dependency-groups]
+simulation = [
+    "scamd",
+]
 dev = [
     "blue>=0.9.1",
     "ipykernel>=6.31.0",

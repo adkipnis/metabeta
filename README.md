@@ -66,15 +66,16 @@ clone the repository and install the optional research dependencies:
 ```bash
 git clone https://github.com/adkipnis/metabeta.git
 cd metabeta
-uv sync --extra research --dev
+uv sync --extra research --group simulation --dev
 uv pip install -e ".[research]"
 ```
 
 This enables the repository-only paths for synthetic data generation, model training,
 benchmarking against reference methods, simulation-based calibration studies, and experiment
-scripts. The `metabeta.posthoc` package is included for experimental posterior refinement,
-but it is not part of the production pretrained API and may change without a deprecation
-window.
+scripts. The `simulation` dependency group installs the GitHub-only `scamd` dependency used
+by SCM dataset generation. The `metabeta.posthoc` package is included for experimental
+posterior refinement, but it is not part of the production pretrained API and may change
+without a deprecation window.
 
 ## From simulation to deployment
 
