@@ -13,6 +13,6 @@ raw
 *.Rhistory
 *.csv
 *.json
-/AGENTS.md
-/CLAUDE.md
-/pypi.md
+AGENTS.md
+CLAUDE.md
+pypi.md
