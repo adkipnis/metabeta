@@ -3,6 +3,7 @@
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-ee4c2c)](https://pytorch.org/)
 [![uv](https://img.shields.io/badge/env-uv-6b47ff)](https://docs.astral.sh/uv/)
+[![Release checks](https://github.com/adkipnis/metabeta/actions/workflows/release-checks.yml/badge.svg)](https://github.com/adkipnis/metabeta/actions/workflows/release-checks.yml)
 [![Hugging Face](https://img.shields.io/badge/🤗-checkpoints-yellow)](https://huggingface.co/adkipnis/metabeta)
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey)](LICENSE)
 
