@@ -123,6 +123,8 @@ def test_sample_counts_basic():
 
 
 def test_scammer_shapes_and_intercept():
+    pytest.importorskip('scamd')
+
     rng = np.random.default_rng(42)
     d = 5
     ns = np.array([20, 30, 50], dtype=int)
@@ -141,6 +143,8 @@ def test_scammer_shapes_and_intercept():
 
 
 def test_scammer_accepts_seedsequence():
+    pytest.importorskip('scamd')
+
     ss = np.random.SeedSequence(2024)
     d = 4
     ns = np.array([10, 15], dtype=int)

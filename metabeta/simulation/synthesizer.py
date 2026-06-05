@@ -12,7 +12,6 @@ from metabeta.simulation.distributions import (
     Bernoulli,
     NegativeBinomial,
 )
-from scamd import generateDataset
 
 PRESETS = ('smooth_stable', 'balanced_realistic', 'high_variability')
 MAX_RETRIES = 8
@@ -43,6 +42,14 @@ class Scammer:
 
     def _generate(self, n: int, d: int) -> np.ndarray:
         """Try up to MAX_RETRIES hyperparameter draws to get a valid SCM dataset."""
+        try:
+            from scamd import generateDataset
+        except ModuleNotFoundError as err:
+            raise ModuleNotFoundError(
+                'Scammer requires the optional research dependency `scamd`; '
+                'install with `uv sync --extra research`.'
+            ) from err
+
         for _ in range(MAX_RETRIES):
             hp = self._sampleHyperparams(d)
             scamd_seed = int(self.rng.integers(0, 2**31))
