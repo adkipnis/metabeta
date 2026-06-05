@@ -63,6 +63,10 @@ RESEARCH_ONLY_DEPS = {
     'wandb',
 }
 
+DEV_ONLY_DEPS = {
+    'pytest',
+}
+
 
 def _require_artifacts() -> None:
     missing = [str(path.relative_to(ROOT)) for path in (WHEEL, SDIST) if not path.exists()]
@@ -104,6 +108,8 @@ def test_release_metadata_dependencies() -> None:
     research_requirements = [req for req in requirements if 'extra == "research"' in req]
 
     for dep in RESEARCH_ONLY_DEPS:
+        assert not any(req.lower().startswith(dep) for req in base_requirements), dep
+    for dep in DEV_ONLY_DEPS:
         assert not any(req.lower().startswith(dep) for req in base_requirements), dep
 
     assert not metadata.get_all('Provides-Extra') or 'simulation' not in metadata.get_all(

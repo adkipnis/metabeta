@@ -1351,7 +1351,6 @@ dependencies = [
     { name = "numpy", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pandas", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pydantic", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "pytest", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pyyaml", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "scikit-learn", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "scipy", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -1382,6 +1381,7 @@ dev = [
     { name = "ipykernel", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "ipywidgets", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "jupyterlab", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "pytest", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "spyder-kernels", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 
@@ -1398,7 +1398,6 @@ requires-dist = [
     { name = "pmlb", marker = "extra == 'research'", specifier = ">=1.0.1.post3" },
     { name = "pymc", marker = "extra == 'research'", specifier = ">=5.28.5" },
     { name = "pydantic", specifier = ">=2.13.4" },
-    { name = "pytest", specifier = ">=9.0.2" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rpy2", marker = "extra == 'research'", specifier = ">=3.6.7" },
     { name = "scamd", marker = "extra == 'research'", git = "https://github.com/adkipnis/scamd.git" },
@@ -1422,6 +1421,7 @@ dev = [
     { name = "ipykernel", specifier = ">=6.31.0" },
     { name = "ipywidgets", specifier = ">=8.0" },
     { name = "jupyterlab", specifier = ">=4.5.7" },
+    { name = "pytest", specifier = ">=9.0.2" },
     { name = "spyder-kernels", specifier = ">=3.1.3" },
 ]
 

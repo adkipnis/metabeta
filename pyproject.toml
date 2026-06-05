@@ -27,7 +27,6 @@ dependencies = [
     "numpy>=2.0.2",
     "pandas>=3.0.3",
     "pydantic>=2.13.4",
-    "pytest>=9.0.2",
     "pyyaml>=6.0.3",
     "scikit-learn>=1.8.0",
     "scipy>=1.16.3",
@@ -153,5 +152,6 @@ dev = [
     "ipykernel>=6.31.0",
     "ipywidgets>=8.0",
     "jupyterlab>=4.5.7",
+    "pytest>=9.0.2",
     "spyder-kernels>=3.1.3",
 ]
