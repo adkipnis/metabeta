@@ -43,14 +43,13 @@ import argparse
 
 import arviz as az
 import numpy as np
-import pymc as pm
 import torch
 from torch import Tensor
 
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
-from metabeta.simulation.fit import buildPymc, extractAll
 from metabeta.utils.constants import hasSigmaEps
+from metabeta.utils.pymc import buildPymc, extractAll
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.results import Proposal
 
@@ -254,6 +253,8 @@ class WarmNuts:
         diag : dict with keys 'n_divergences' (int) and 'max_rhat' (float).
         """
         initvals = self._initVals(proposal, b_idx)
+        import pymc as pm
+
         with self.model:
             trace = pm.sample(
                 tune=self.tune,

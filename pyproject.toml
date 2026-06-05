@@ -42,6 +42,7 @@ research = [
     "bambi>=0.17.2",
     "datasets>=4.4.1",
     "pmlb>=1.0.1.post3",
+    "pymc>=5.28.5",
     "rpy2>=3.6.7",
     "schedulefree>=1.4.1",
     "scamd",

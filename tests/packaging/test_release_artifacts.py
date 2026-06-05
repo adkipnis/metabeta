@@ -54,6 +54,7 @@ RESEARCH_ONLY_DEPS = {
     'bambi',
     'datasets',
     'pmlb',
+    'pymc',
     'rpy2',
     'schedulefree',
     'scamd',
@@ -83,6 +84,8 @@ def test_release_artifact_contents() -> None:
         wheel_names = wheel.namelist()
     for prefix in WHEEL_EXCLUDED_PREFIXES:
         assert not any(name.startswith(prefix) for name in wheel_names), prefix
+    assert 'metabeta/posthoc/warmnuts.py' in wheel_names
+    assert 'metabeta/utils/pymc.py' in wheel_names
 
     with tarfile.open(SDIST) as sdist:
         sdist_names = sdist.getnames()
@@ -107,6 +110,7 @@ def test_release_metadata_dependencies() -> None:
         'Provides-Extra'
     )
     assert any(req.startswith('scamd') for req in research_requirements)
+    assert any(req.startswith('pymc') for req in research_requirements)
 
 
 def test_release_metadata_public_surface() -> None:
@@ -137,6 +141,8 @@ def test_installed_wheel_import_smoke(tmp_path: Path) -> None:
                 'from metabeta import Api; '
                 'from metabeta.models.api import Api as Api2; '
                 'import metabeta.evaluation.predictive; '
+                'import metabeta.posthoc.warmnuts; '
+                'import metabeta.utils.pymc; '
                 'assert Api is Api2'
             ),
         ],

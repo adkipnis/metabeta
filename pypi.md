@@ -13,6 +13,9 @@
   and SciPy. Research/data-generation dependencies stay optional under the `research` extra.
 - `pytest` is still present in base dependencies, but no runtime import under `metabeta/`
   currently requires it. Decide whether to move it to the dev group before upload.
+- `metabeta.posthoc.warmnuts` remains part of the experimental posthoc surface. Its shared
+  PyMC model/extraction helpers now live in shipped base-package code at
+  `metabeta.utils.pymc`, while PyMC itself is imported only when the WarmNuts path is used.
 - The public pretrained API is centered on `metabeta.Api` and `metabeta.models.api.Api`.
 - Diagnostics should stay eager so the first diagnostic sampling call does not pay import
   latency. This means `metabeta.evaluation.predictive` remains part of the API import path.
@@ -41,12 +44,14 @@
 - Moved Gaussian local refinement to `metabeta.analytical.lmm.gaussian_local`.
 - Removed conformal calibration support from `metabeta.evaluation.summary`.
 - Archived `posthoc.conformal`, `posthoc.coordinate`, and `posthoc.laplace`.
-- Archived `posthoc.warmnuts` for the first PyPI release. It depends on PyMC-backed
-  simulation code that is deliberately excluded from the wheel and was failing import in
-  the source tree.
+- Moved the PyMC GLMM builder and trace extraction helpers from
+  `metabeta.simulation.nutsadvi` to `metabeta.utils.pymc`, so `posthoc.warmnuts` no longer
+  imports the excluded `metabeta.simulation` package.
 - Marked the remaining `metabeta.posthoc` package as experimental research code.
 - Moved research-only dependencies out of base metadata. `scamd` is now only in the
   `research` extra.
+- Added PyMC as a direct `research` extra dependency for `posthoc.warmnuts`; it was already
+  present transitively through Bambi, but WarmNuts should not rely on a transitive install.
 - Added `MANIFEST.in` pruning so sdists omit training/simulation/output/test/research
   directories while retaining demo notebooks.
 - Added packaging tests for wheel/sdist content, dependency metadata, and import smoke checks.
@@ -63,24 +68,26 @@
 ## Remaining Risk
 
 The wheel is now focused on runtime packages. `metabeta.posthoc` remains included for
-experimental research workflows (`svgd`, `metropolis`, `importance`, and `generative`) and
-is explicitly marked as not production-ready.
+experimental research workflows (`warmnuts`, `svgd`, `metropolis`, `importance`, and
+`generative`) and is explicitly marked as not production-ready.
 
 The package still depends on large scientific/runtime libraries, especially PyTorch. This is
 intentional for the first release, but TestPyPI should verify that resolver behavior and wheel
 selection are acceptable in a fresh environment.
+
+`warmnuts` requires PyMC when used. The module itself is importable without importing PyMC,
+and PyMC is a direct `research` extra dependency for the scientific path.
 
 `pytest` appears unused at runtime and should probably move out of base dependencies unless
 there is a deliberate reason to install it for end users.
 
 ## Next Steps
 
-1. Finish posthoc packaging cleanup.
+1. Verify posthoc packaging cleanup.
 
-   `metabeta.posthoc.warmnuts` has been moved to `archive/posthoc/warmnuts.py`. Rebuild the
-   artifacts and keep the packaging tests asserting that it is absent from both wheel and
-   sdist. The remaining shipped posthoc modules should continue to import from an extracted
-   wheel.
+   Rebuild the artifacts and keep the packaging tests asserting that
+   `metabeta.posthoc.warmnuts` and `metabeta.utils.pymc` are present in the wheel and that
+   `warmnuts` imports from an extracted wheel without depending on `metabeta.simulation`.
 
 2. Revisit dependency metadata.
 

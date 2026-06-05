@@ -14,7 +14,7 @@ NCP vs centered
 The centered parameterization couples rfx_j tightly to σ_rfx when σ_rfx is small,
 creating funnel geometry that makes gradient-based optimization ill-conditioned.
 NCP decouples them: u_j and σ_rfx have approximately independent gradients.
-This is the same reparameterization that buildPymc uses for NUTS (see simulation/fit.py).
+This is the same reparameterization that buildPymc uses for NUTS (see metabeta.utils.pymc).
 
 NPE posteriors are expressed in the centered parameterization (rfx as local flow
 output).  init_from_proposal handles the one-shot transform to NCP.  to_proposal
