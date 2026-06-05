@@ -10,13 +10,20 @@
   `tests/`, `metabeta.outputs`, `metabeta.simulation`, and `metabeta.training`.
 - The sdist excludes research/runtime-output directories but keeps demo notebooks.
 - Base dependencies intentionally include plotting support, LOO diagnostics via ArviZ,
-  SciPy, and pytest. Research/data-generation dependencies stay optional under the
-  `research` extra.
+  and SciPy. Research/data-generation dependencies stay optional under the `research` extra.
+- `pytest` is still present in base dependencies, but no runtime import under `metabeta/`
+  currently requires it. Decide whether to move it to the dev group before upload.
 - The public pretrained API is centered on `metabeta.Api` and `metabeta.models.api.Api`.
 - Diagnostics should stay eager so the first diagnostic sampling call does not pay import
   latency. This means `metabeta.evaluation.predictive` remains part of the API import path.
 - `Approximator` imports analytical GLMM and Gaussian local refinement code at import time.
   This may be required for current checkpoint compatibility.
+- Local release gate on 2026-06-05:
+  - `uv run blue --check --diff metabeta tests` passed.
+  - `uv build` passed and produced `dist/metabeta-0.4.1.tar.gz` and
+    `dist/metabeta-0.4.1-py3-none-any.whl`.
+  - `uv run pytest tests/packaging/test_release_artifacts.py` passed.
+  - `uv run pytest` passed with 472 passed, 2 skipped, and 4 deselected.
 
 ## Completed Debloat Work
 
@@ -34,6 +41,9 @@
 - Moved Gaussian local refinement to `metabeta.analytical.lmm.gaussian_local`.
 - Removed conformal calibration support from `metabeta.evaluation.summary`.
 - Archived `posthoc.conformal`, `posthoc.coordinate`, and `posthoc.laplace`.
+- Archived `posthoc.warmnuts` for the first PyPI release. It depends on PyMC-backed
+  simulation code that is deliberately excluded from the wheel and was failing import in
+  the source tree.
 - Marked the remaining `metabeta.posthoc` package as experimental research code.
 - Moved research-only dependencies out of base metadata. `scamd` is now only in the
   `research` extra.
@@ -53,36 +63,47 @@
 ## Remaining Risk
 
 The wheel is now focused on runtime packages. `metabeta.posthoc` remains included for
-experimental research workflows (`warmnuts`, `svgd`, `metropolis`, `importance`, and
-`generative`) and is explicitly marked as not production-ready.
+experimental research workflows (`svgd`, `metropolis`, `importance`, and `generative`) and
+is explicitly marked as not production-ready.
 
 The package still depends on large scientific/runtime libraries, especially PyTorch. This is
 intentional for the first release, but TestPyPI should verify that resolver behavior and wheel
 selection are acceptable in a fresh environment.
 
+`pytest` appears unused at runtime and should probably move out of base dependencies unless
+there is a deliberate reason to install it for end users.
+
 ## Next Steps
 
-1. Run the full local release gate.
+1. Finish posthoc packaging cleanup.
 
-   Run `uv run blue --check --diff metabeta tests`, `uv run pytest`, `uv build`, and
-   `uv run pytest tests/packaging/test_release_artifacts.py`.
+   `metabeta.posthoc.warmnuts` has been moved to `archive/posthoc/warmnuts.py`. Rebuild the
+   artifacts and keep the packaging tests asserting that it is absent from both wheel and
+   sdist. The remaining shipped posthoc modules should continue to import from an extracted
+   wheel.
 
-2. Test installation from the built wheel.
+2. Revisit dependency metadata.
+
+   Decide whether to move `pytest` from base dependencies to the dev dependency group. Review
+   the large base runtime stack once more, especially PyTorch resolver behavior on Linux and
+   macOS.
+
+3. Test installation from the built wheel.
 
    In a fresh Python 3.12 environment, install the built `dist/metabeta-*.whl`, then
    run `from metabeta import Api`, `Api.from_pretrained("normal", warmup=False)`, a small
    `sample()` call, and the demo notebooks if practical.
 
-3. Publish to TestPyPI.
+4. Publish to TestPyPI.
 
    Upload the same built artifacts to TestPyPI, install from TestPyPI in a fresh environment,
    and repeat the import/checkpoint/sample smoke test.
 
-4. Final metadata review before real PyPI.
+5. Final metadata review before real PyPI.
 
    Confirm version, README rendering, license/classifier metadata, dependency metadata, and
    whether the PyPI package name is available.
 
-5. Publish to PyPI.
+6. Publish to PyPI.
 
    Upload only after the TestPyPI install and smoke tests pass.
