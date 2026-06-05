@@ -251,6 +251,58 @@ def _write_math_joint_checkpoint(path: Path) -> None:
     )
 
 
+def _math_group_counts() -> np.ndarray:
+    ns = np.full(160, 40, dtype=np.int64)
+    ns[0] = 67
+    return ns
+
+
+def _math_preprocessed_data() -> dict[str, np.ndarray]:
+    rng = np.random.default_rng(123)
+    ns = _math_group_counts()
+    n = int(ns.sum())
+    groups = np.repeat(np.arange(len(ns)), ns)
+    ses = rng.normal(size=n)
+    meanses = np.repeat(rng.normal(size=len(ns)), ns)
+    minority_yes = (rng.random(n) < 0.35).astype(float)
+    sex_male = (rng.random(n) < 0.50).astype(float)
+    y = 0.4 * ses + 0.6 * meanses + rng.normal(scale=0.5, size=n)
+    X = np.column_stack([ses, meanses, minority_yes, sex_male])
+
+    return {
+        'X': X,
+        'y': y,
+        'groups': groups,
+        'columns': np.array(['ses', 'meanses', 'minority_yes', 'sex_male']),
+        'd': np.array(5),
+        'n': np.array(n),
+        'ns': ns,
+        'm': np.array(len(ns)),
+        'y_type': np.array('continuous'),
+    }
+
+
+@pytest.fixture
+def math_preprocessed() -> dict[str, np.ndarray]:
+    return _math_preprocessed_data()
+
+
+@pytest.fixture
+def math_dataframe(math_preprocessed: dict[str, np.ndarray]) -> pd.DataFrame:
+    preprocessed = math_preprocessed
+    X = preprocessed['X']
+    return pd.DataFrame(
+        {
+            'group': pd.Categorical(preprocessed['groups'].astype(str)),
+            'Minority': pd.Categorical(np.where(X[:, 2] > 0.5, 'Yes', 'No')),
+            'Sex': pd.Categorical(np.where(X[:, 3] > 0.5, 'Male', 'Female')),
+            'SES': X[:, 0],
+            'y': preprocessed['y'],
+            'MEANSES': X[:, 1],
+        }
+    )
+
+
 def _batch(*, d: int, q: int, m: int = 12, n_i: int = 10, family: int = 1):
     max_d, max_q = max(8, d), max(3, q)
     ns = torch.zeros((1, m), dtype=torch.int64)
@@ -312,19 +364,14 @@ def test_router_checks_between_and_within_group_degrees_of_freedom(tmp_path: Pat
 
 def test_router_prepares_preprocessed_numpy_dict_with_formula_and_default_priors(
     tmp_path: Path,
+    math_preprocessed: dict[str, np.ndarray],
 ):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
 
-    with np.load(
-        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
-        allow_pickle=True,
-    ) as raw:
-        preprocessed = dict(raw)
-
     batch = router.prepareData(
-        preprocessed,
+        math_preprocessed,
         formula='y ~ meanses + ses + (1 + ses | group)',
     )
 
@@ -337,7 +384,7 @@ def test_router_prepares_preprocessed_numpy_dict_with_formula_and_default_priors
     assert batch['tau_ffx'].shape == (1, 3)
     assert batch['tau_rfx'].shape == (1, 2)
 
-    first = preprocessed['X'][0]
+    first = math_preprocessed['X'][0]
     assert torch.allclose(
         batch['X'][0, 0, 0, :3],
         torch.tensor([1.0, first[1], first[0]], dtype=batch['X'].dtype),
@@ -348,19 +395,16 @@ def test_router_prepares_preprocessed_numpy_dict_with_formula_and_default_priors
     )
 
 
-def test_router_accepts_canonical_fit_style_priors(tmp_path: Path):
+def test_router_accepts_canonical_fit_style_priors(
+    tmp_path: Path,
+    math_preprocessed: dict[str, np.ndarray],
+):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
 
-    with np.load(
-        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
-        allow_pickle=True,
-    ) as raw:
-        preprocessed = dict(raw)
-
     batch = router.prepareData(
-        preprocessed,
+        math_preprocessed,
         formula='y ~ meanses + ses + (1 + ses | group)',
         priors={
             'nu_ffx': np.array([1.0, 2.0, 3.0]),
@@ -384,19 +428,16 @@ def test_router_accepts_canonical_fit_style_priors(tmp_path: Path):
     assert torch.allclose(batch['eta_rfx'], torch.tensor([0.0]))
 
 
-def test_router_expands_multiple_named_term_priors_per_dataset(tmp_path: Path):
+def test_router_expands_multiple_named_term_priors_per_dataset(
+    tmp_path: Path,
+    math_preprocessed: dict[str, np.ndarray],
+):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
 
-    with np.load(
-        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
-        allow_pickle=True,
-    ) as raw:
-        preprocessed = dict(raw)
-
     batch = router.prepareData(
-        preprocessed,
+        math_preprocessed,
         formula='y ~ meanses + ses + (1 + ses | group)',
         priors={
             'weak': {
@@ -433,106 +474,88 @@ def test_router_expands_multiple_named_term_priors_per_dataset(tmp_path: Path):
     assert [row['prior_index'] for row in validation] == [0, 1]
 
 
-def test_router_rejects_q_above_formula_limit(tmp_path: Path):
+def test_router_rejects_q_above_formula_limit(
+    tmp_path: Path,
+    math_preprocessed: dict[str, np.ndarray],
+):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
-
-    with np.load(
-        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
-        allow_pickle=True,
-    ) as raw:
-        preprocessed = dict(raw)
 
     with pytest.raises(ValueError, match='q must be <= 5'):
-        router.prepareData(preprocessed, formula='y ~ meanses + ses', q=6)
+        router.prepareData(math_preprocessed, formula='y ~ meanses + ses', q=6)
 
 
-def test_router_rejects_multiple_random_effect_blocks(tmp_path: Path):
+def test_router_rejects_multiple_random_effect_blocks(
+    tmp_path: Path,
+    math_preprocessed: dict[str, np.ndarray],
+):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
-
-    with np.load(
-        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
-        allow_pickle=True,
-    ) as raw:
-        preprocessed = dict(raw)
 
     with pytest.raises(NotImplementedError, match='one random term'):
         router.prepareData(
-            preprocessed,
+            math_preprocessed,
             formula='y ~ meanses + ses + (1 | group) + (1 | school)',
         )
 
 
-def test_router_rejects_missing_formula_term(tmp_path: Path):
+def test_router_rejects_missing_formula_term(
+    tmp_path: Path,
+    math_preprocessed: dict[str, np.ndarray],
+):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
-
-    with np.load(
-        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
-        allow_pickle=True,
-    ) as raw:
-        preprocessed = dict(raw)
 
     with pytest.raises(KeyError, match='formula term not found'):
-        router.prepareData(preprocessed, formula='y ~ definitely_missing + (1 | group)')
+        router.prepareData(math_preprocessed, formula='y ~ definitely_missing + (1 | group)')
 
 
-def test_router_rejects_missing_prior_term(tmp_path: Path):
+def test_router_rejects_missing_prior_term(
+    tmp_path: Path,
+    math_preprocessed: dict[str, np.ndarray],
+):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
-
-    with np.load(
-        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
-        allow_pickle=True,
-    ) as raw:
-        preprocessed = dict(raw)
 
     with pytest.raises(KeyError, match='prior term not found'):
         router.prepareData(
-            preprocessed,
+            math_preprocessed,
             formula='y ~ meanses + ses + (1 + ses | group)',
             priors={'fixed': {'definitely_missing': {'sigma': 1.0}}},
         )
 
 
-def test_router_rejects_malformed_canonical_prior_shapes(tmp_path: Path):
+def test_router_rejects_malformed_canonical_prior_shapes(
+    tmp_path: Path,
+    math_preprocessed: dict[str, np.ndarray],
+):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
 
-    with np.load(
-        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
-        allow_pickle=True,
-    ) as raw:
-        preprocessed = dict(raw)
-
     with pytest.raises(ValueError, match='tau_ffx must have shape'):
         router.prepareData(
-            preprocessed,
+            math_preprocessed,
             formula='y ~ meanses + ses + (1 + ses | group)',
             priors={'tau_ffx': np.array([1.0, 2.0])},
         )
 
 
-def test_router_rejects_per_term_family_mismatch(tmp_path: Path):
+def test_router_rejects_per_term_family_mismatch(
+    tmp_path: Path,
+    math_preprocessed: dict[str, np.ndarray],
+):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
 
-    with np.load(
-        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
-        allow_pickle=True,
-    ) as raw:
-        preprocessed = dict(raw)
-
     with pytest.raises(ValueError, match='per-term fixed-effect prior families'):
         router.prepareData(
-            preprocessed,
+            math_preprocessed,
             formula='y ~ meanses + ses + (1 + ses | group)',
             priors={
                 'fixed': {
@@ -569,33 +592,32 @@ def test_router_rejects_sigma_eps_prior_for_non_gaussian(tmp_path: Path):
             )
 
 
-def test_router_rejects_empty_prior_list(tmp_path: Path):
+def test_router_rejects_empty_prior_list(
+    tmp_path: Path,
+    math_preprocessed: dict[str, np.ndarray],
+):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
 
-    with np.load(
-        Path('metabeta/datasets/preprocessed/test/math__grp_group.npz'),
-        allow_pickle=True,
-    ) as raw:
-        preprocessed = dict(raw)
-
     with pytest.raises(ValueError, match='priors sequence cannot be empty'):
         router.prepareData(
-            preprocessed,
+            math_preprocessed,
             formula='y ~ meanses + ses + (1 + ses | group)',
             priors=[],
         )
 
 
-def test_router_prepares_parquet_through_preprocessor(tmp_path: Path):
+def test_router_prepares_tabular_data_through_preprocessor(
+    tmp_path: Path,
+    math_dataframe: pd.DataFrame,
+):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
 
-    parquet_path = Path('metabeta/datasets/from-r/parquet/math.parquet')
     batch = router.prepareData(
-        parquet_path,
+        math_dataframe,
         formula='y ~ meanses + ses + minority + sex + (1 | group)',
         fit_preprocessor=True,
     )
@@ -608,14 +630,16 @@ def test_router_prepares_parquet_through_preprocessor(tmp_path: Path):
     assert batch['likelihood_family'].item() == 0
 
 
-def test_router_supports_formula_random_effects_up_to_q5(tmp_path: Path):
+def test_router_supports_formula_random_effects_up_to_q5(
+    tmp_path: Path,
+    math_dataframe: pd.DataFrame,
+):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
 
-    parquet_path = Path('metabeta/datasets/from-r/parquet/math.parquet')
     batch = router.prepareData(
-        parquet_path,
+        math_dataframe,
         formula='y ~ meanses + ses + minority + sex + (1 + ses + meanses + minority + sex | group)',
         fit_preprocessor=True,
     )
@@ -625,14 +649,19 @@ def test_router_supports_formula_random_effects_up_to_q5(tmp_path: Path):
     assert batch['mask_q'].sum().item() == 5
 
 
-def test_router_rejects_tabular_input_without_preprocessor_or_fit_flag(tmp_path: Path):
+def test_router_rejects_tabular_input_without_preprocessor_or_fit_flag(
+    tmp_path: Path,
+    math_dataframe: pd.DataFrame,
+):
     joint_path = tmp_path / 'joint.pt'
     _write_math_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
-    df = pd.read_parquet('metabeta/datasets/from-r/parquet/math.parquet')
-
     with pytest.raises(ValueError, match='requires a fitted preprocessor'):
-        router.prepareData(df, formula='y ~ ses + (1 | group)', fit_preprocessor=False)
+        router.prepareData(
+            math_dataframe,
+            formula='y ~ ses + (1 | group)',
+            fit_preprocessor=False,
+        )
 
 
 # ---------------------------------------------------------------------------

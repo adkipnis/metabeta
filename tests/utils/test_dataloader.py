@@ -10,9 +10,61 @@ from metabeta.utils.dataloader import Collection, Dataloader
 
 
 @pytest.fixture(scope='session')
-def dataset_path() -> Path:
-    path = Path('metabeta', 'outputs', 'data', 'tiny-n-toy', 'test.npz')
-    assert path.exists(), f'{path} does not exist (tests expect the demo file to be present)'
+def dataset_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp('dataloader-data') / 'test.npz'
+    rng = np.random.default_rng(42)
+
+    n_datasets = 8
+    max_d = 4
+    max_q = 2
+    max_m = 5
+    max_n = 32
+    d_vals = np.array([2, 3, 4, 2, 3, 4, 2, 4], dtype=np.int64)
+    q_vals = np.array([1, 1, 2, 1, 2, 2, 1, 2], dtype=np.int64)
+    m_vals = np.array([3, 4, 5, 3, 4, 5, 3, 4], dtype=np.int64)
+
+    X = np.zeros((n_datasets, max_n, max_d), dtype=np.float32)
+    y = np.zeros((n_datasets, max_n), dtype=np.float32)
+    groups = np.zeros((n_datasets, max_n), dtype=np.int64)
+    ns = np.zeros((n_datasets, max_m), dtype=np.int64)
+
+    for i in range(n_datasets):
+        m_i = int(m_vals[i])
+        counts = rng.integers(2, 8, size=m_i, dtype=np.int64)
+        n_i = int(counts.sum())
+        ns[i, :m_i] = counts
+        groups[i, :n_i] = np.repeat(np.arange(m_i), counts)
+        X[i, :n_i, 0] = 1.0
+        X[i, :n_i, 1 : d_vals[i]] = rng.normal(size=(n_i, int(d_vals[i]) - 1))
+        y[i, :n_i] = rng.normal(size=n_i)
+
+    n = ns.sum(axis=1).astype(np.int64)
+    np.savez(
+        path,
+        ffx=np.zeros((n_datasets, max_d), dtype=np.float32),
+        sigma_rfx=np.ones((n_datasets, max_q), dtype=np.float32),
+        sigma_eps=np.ones(n_datasets, dtype=np.float32),
+        corr_rfx=np.repeat(np.eye(max_q, dtype=np.float32)[None, :, :], n_datasets, axis=0),
+        rfx=np.zeros((n_datasets, max_m, max_q), dtype=np.float32),
+        likelihood_family=np.zeros(n_datasets, dtype=np.int64),
+        nu_ffx=np.zeros((n_datasets, max_d), dtype=np.float32),
+        tau_ffx=np.ones((n_datasets, max_d), dtype=np.float32),
+        tau_rfx=np.ones((n_datasets, max_q), dtype=np.float32),
+        tau_eps=np.ones(n_datasets, dtype=np.float32),
+        eta_rfx=np.zeros(n_datasets, dtype=np.float32),
+        family_ffx=np.zeros(n_datasets, dtype=np.int64),
+        family_sigma_rfx=np.zeros(n_datasets, dtype=np.int64),
+        family_sigma_eps=np.zeros(n_datasets, dtype=np.int64),
+        y=y,
+        X=X,
+        groups=groups,
+        m=m_vals,
+        n=n,
+        ns=ns,
+        d=d_vals,
+        q=q_vals,
+        sd_y=np.ones(n_datasets, dtype=np.float32),
+    )
     return path
 
 
@@ -124,7 +176,7 @@ def test_mask_dq_are_rowwise_permuted(dataset_path: Path):
     batch_np = [col[i] for i in range(min(4, len(col)))]
 
     # use the public wrapper to collate (through iteration)
-    dl = Dataloader(dataset_path, batch_size=len(batch_np), sortish=False)
+    dl = Dataloader(dataset_path, batch_size=len(batch_np), sortish=False, permute=True)
     batch = next(iter(dl))
 
     d_max = batch['mask_d'].shape[-1]
@@ -157,8 +209,7 @@ def test_mask_dq_are_rowwise_permuted(dataset_path: Path):
     # qperm must equal the first q elements of dperm (within-group invariant)
     for ds in batch_np:
         if 'dperm' in ds:
-            q_i = int(ds['q'])
-            np.testing.assert_array_equal(ds['dperm'][:q_i], ds['qperm'])
+            np.testing.assert_array_equal(ds['dperm'][: len(ds['qperm'])], ds['qperm'])
 
     # mask_mq and mask_corr must be derived from the final (possibly permuted) mask_q.
     expected_mq = batch['mask_m'].unsqueeze(-1) & batch['mask_q'].unsqueeze(-2)
