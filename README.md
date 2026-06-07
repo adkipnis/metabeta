@@ -26,12 +26,6 @@ and are downloaded automatically on first use.
 
 ## Quick start
 
-Install the package:
-
-```bash
-pip install metabeta
-```
-
 For local development, install from source with [`uv`](https://docs.astral.sh/uv/):
 
 ```bash
