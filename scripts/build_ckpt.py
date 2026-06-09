@@ -40,8 +40,8 @@ CHECKPOINT_VERSION = 'v1'  # HF Hub git tag — bump only on architecture change
 # Map (family, size) → best seed.  Set to None to skip that combo.
 BEST_SEEDS: dict[tuple[str, str], int | None] = {
     ('normal', 'small'): 13,
-    ('normal', 'medium'): 11, # cont.
-    ('normal', 'large'): None,
+    ('normal', 'medium'): 14,
+    ('normal', 'large'): 9, # cont.
     ('normal', 'huge'): None,
     ('bernoulli', 'small'): 6,
     ('bernoulli', 'medium'): 15, # cont.
