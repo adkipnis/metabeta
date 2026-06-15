@@ -41,14 +41,14 @@ CHECKPOINT_VERSION = 'v1'  # HF Hub git tag — bump only on architecture change
 BEST_SEEDS: dict[tuple[str, str], int | None] = {
     ('normal', 'small'): 13,
     ('normal', 'medium'): 14,
-    ('normal', 'large'): 9, # cont.
+    ('normal', 'large'): 9, # cont. (pred.)
     ('normal', 'huge'): None,
     ('bernoulli', 'small'): 6,
     ('bernoulli', 'medium'): 3,
-    ('bernoulli', 'large'): 4, # cont.
+    ('bernoulli', 'large'): 4, # cont. (inf.)
     ('bernoulli', 'huge'): None,
     ('poisson', 'small'): 4,
-    ('poisson', 'medium'): 11, # cont.
+    ('poisson', 'medium'): 11, # cont. (pred.)
     ('poisson', 'large'): None,
     ('poisson', 'huge'): None,
 }
