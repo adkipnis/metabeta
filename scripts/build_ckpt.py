@@ -45,7 +45,7 @@ BEST_SEEDS: dict[tuple[str, str], int | None] = {
     ('normal', 'huge'): None,
     ('bernoulli', 'small'): 6,
     ('bernoulli', 'medium'): 3,
-    ('bernoulli', 'large'): 14, # cont.
+    ('bernoulli', 'large'): 4, # cont.
     ('bernoulli', 'huge'): None,
     ('poisson', 'small'): 4,
     ('poisson', 'medium'): 11, # cont.
