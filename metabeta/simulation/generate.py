@@ -28,6 +28,15 @@ logger = logging.getLogger(__name__)
 
 # Seeds for non-training partitions; training uses the epoch number directly.
 _PARTITION_SEEDS: dict[str, int] = {'valid': 10_000, 'test': 20_000}
+_TRAIN_SEED_EXTENSION_OFFSET = 20_000
+
+
+def _generationSeed(partition: str, epoch: int = 0) -> int:
+    if partition == 'train':
+        # Keep legacy train/valid/test seeds fixed; shift only new high epochs away from
+        # the already-generated valid/test seed values.
+        return epoch if epoch < 10_000 else epoch + _TRAIN_SEED_EXTENSION_OFFSET
+    return _PARTITION_SEEDS[partition]
 
 
 # -----------------------------------------------------------------------------
@@ -544,7 +553,7 @@ class Generator:
         epoch: int = 0,
     ) -> list[dict[str, np.ndarray]]:
         """Generate list of n_datasets keeping m, d, q constant per mini-batch."""
-        main_seed = epoch if partition == 'train' else _PARTITION_SEEDS[partition]
+        main_seed = _generationSeed(partition, epoch)
         rng = np.random.default_rng(main_seed)
         seedseqs = np.random.SeedSequence(main_seed).spawn(n_datasets)
         desc = f'{epoch:02d}/{self.cfg.epochs:02d}' if partition == 'train' else ''
@@ -697,9 +706,10 @@ class Generator:
         self._saveBatch('valid', self.cfg.bs_valid, mini_batch_size=1)
 
     def genTrain(self):
-        assert self.cfg.begin > 0, 'starting training partition must be a positive integer'
-        assert self.cfg.begin <= self.cfg.epochs, 'starting epoch larger than goal epoch'
-        assert self.cfg.epochs < 10_000, 'maximum number of epochs exceeded'
+        if self.cfg.begin <= 0:
+            raise ValueError('starting training partition must be a positive integer')
+        if self.cfg.begin > self.cfg.epochs:
+            raise ValueError('starting epoch larger than goal epoch')
         logger.info(
             f'Generating {self.cfg.epochs} training partitions of {self.cfg.bs_train} datasets each...'
         )
