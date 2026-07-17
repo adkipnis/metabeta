@@ -3,7 +3,7 @@
 #SBATCH --job-name=bulk
 #SBATCH --output=logs/bulk/%A_%a.out
 #SBATCH --error=logs/bulk/%A_%a.err
-#SBATCH --array=0-7899
+#SBATCH --array=0-7999
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
