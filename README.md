@@ -33,13 +33,6 @@ Install the pretrained-model inference package from PyPI:
 pip install metabeta
 ```
 
-The `sleepstudy` example below uses `statsmodels` to fetch the demo dataset. Install the
-research extra if you want to run the demo directly:
-
-```bash
-pip install "metabeta[research]"
-```
-
 For local development, install from source with [`uv`](https://docs.astral.sh/uv/):
 
 ```bash
