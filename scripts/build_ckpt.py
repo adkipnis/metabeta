@@ -42,14 +42,14 @@ BEST_SEEDS: dict[tuple[str, str], int | None] = {
     ('normal', 'small'): 13,
     ('normal', 'medium'): 14,
     ('normal', 'large'): 9, # cont. (pred.)
-    ('normal', 'huge'): None,
+    ('normal', 'huge'): 11, # cont. (inf.)
     ('bernoulli', 'small'): 6,
     ('bernoulli', 'medium'): 3,
     ('bernoulli', 'large'): 4, # cont. (inf.)
-    ('bernoulli', 'huge'): None,
+    ('bernoulli', 'huge'): 11, # cont. (inf.)
     ('poisson', 'small'): 4,
     ('poisson', 'medium'): 11, # cont. (pred.)
-    ('poisson', 'large'): 12, # cont. (pred.)
+    ('poisson', 'large'): 13, # cont. (pred.)
     ('poisson', 'huge'): None,
 }
 
