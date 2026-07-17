@@ -3,6 +3,7 @@
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-ee4c2c)](https://pytorch.org/)
 [![uv](https://img.shields.io/badge/env-uv-6b47ff)](https://docs.astral.sh/uv/)
+[![PyPI](https://img.shields.io/pypi/v/metabeta)](https://pypi.org/project/metabeta/)
 [![Release checks](https://github.com/adkipnis/metabeta/actions/workflows/release-checks.yml/badge.svg)](https://github.com/adkipnis/metabeta/actions/workflows/release-checks.yml)
 [![Hugging Face](https://img.shields.io/badge/🤗-checkpoints-yellow)](https://huggingface.co/adkipnis/metabeta)
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey)](LICENSE)
@@ -25,6 +26,19 @@ Pretrained checkpoints are hosted on [Hugging Face](https://huggingface.co/adkip
 and are downloaded automatically on first use.
 
 ## Quick start
+
+Install the pretrained-model inference package from PyPI:
+
+```bash
+pip install metabeta
+```
+
+The `sleepstudy` example below uses `statsmodels` to fetch the demo dataset. Install the
+research extra if you want to run the demo directly:
+
+```bash
+pip install "metabeta[research]"
+```
 
 For local development, install from source with [`uv`](https://docs.astral.sh/uv/):
 
