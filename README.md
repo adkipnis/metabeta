@@ -42,6 +42,17 @@ uv sync
 uv pip install -e .
 ```
 
+The default PyPI install is for pretrained-model inference. To reproduce training runs,
+generate synthetic datasets, benchmark against reference methods, or extend the package,
+clone the repository and install the optional research dependencies:
+
+```bash
+git clone https://github.com/adkipnis/metabeta.git
+cd metabeta
+uv sync --extra research --group simulation --dev
+uv pip install -e ".[research]"
+```
+
 Run posterior inference on a grouped dataframe:
 
 ```python
@@ -58,25 +69,6 @@ See [demos/intro.ipynb](demos/intro.ipynb) for the full `sleepstudy`
 walkthrough and [demos/priors.ipynb](demos/priors.ipynb) for an exemplary prior-sensitivity
 analysis.
 
-## Development and research workflows
-
-The default PyPI install is for pretrained-model inference. To reproduce training runs,
-generate synthetic datasets, benchmark against reference methods, or extend the package,
-clone the repository and install the optional research dependencies:
-
-```bash
-git clone https://github.com/adkipnis/metabeta.git
-cd metabeta
-uv sync --extra research --group simulation --dev
-uv pip install -e ".[research]"
-```
-
-This enables the repository-only paths for synthetic data generation, model training,
-benchmarking against reference methods, simulation-based calibration studies, and experiment
-scripts. The `simulation` dependency group installs the GitHub-only `scamd` dependency used
-by SCM dataset generation. The `metabeta.posthoc` package is included for experimental
-posterior refinement, but it is not part of the production pretrained API and may change
-without a deprecation window.
 
 ## From simulation to deployment
 
