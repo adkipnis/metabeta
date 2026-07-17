@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=quick
-#SBATCH --output=logs/quick/%A_%a.out
-#SBATCH --error=logs/quick/%A_%a.err
+#SBATCH --job-name=more
+#SBATCH --output=logs/more/%A_%a.out
+#SBATCH --error=logs/more/%A_%a.err
 #SBATCH --array=0-3999
 
 #SBATCH --partition cpu_p
