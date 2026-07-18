@@ -1,10 +1,10 @@
 #!/bin/bash
-# Array layout: each task ID is the training epoch to precompute.
+# Array layout: task ID 0 maps to training epoch 8001.
 
 #SBATCH --job-name=precompute
 #SBATCH --output=logs/precompute/%A_%a.out
 #SBATCH --error=logs/precompute/%A_%a.err
-#SBATCH --array=8001-12000
+#SBATCH --array=0-3999
 
 #SBATCH --partition cpu_p
 #SBATCH --qos cpu_normal
@@ -13,6 +13,8 @@
 #SBATCH --mem=8G
 #SBATCH --time=24:00:00
 
+CHUNK_SIZE=1
+START_EPOCH=8001
 OVERWRITE=""
 
 while [[ $# -gt 0 ]]; do
@@ -38,4 +40,6 @@ source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta/metabeta/analytical
 
-python precompute.py --size "${SIZE}" --family ${FAMILY} --ds_type mixed --partition train --epoch ${SLURM_ARRAY_TASK_ID} ${OVERWRITE}
+EPOCH=$(( START_EPOCH + SLURM_ARRAY_TASK_ID * CHUNK_SIZE ))
+
+python precompute.py --size "${SIZE}" --family ${FAMILY} --ds_type mixed --partition train --epoch ${EPOCH} ${OVERWRITE}
