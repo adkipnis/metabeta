@@ -1,7 +1,7 @@
 def datasetFilename(partition: str, epoch: int = 0) -> str:
     parts = [partition]
     if partition == 'train':
-        parts.append(f'ep{epoch:04d}')
+        parts.append(f'ep{epoch:05d}')
     return '_'.join(parts) + '.npz'
 
 
