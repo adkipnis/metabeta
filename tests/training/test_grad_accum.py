@@ -21,9 +21,10 @@ from metabeta.models.approximator import Approximator
 from metabeta.training.train import _coerce_cuda_rng_states, _coerce_rng_state_byte_tensor
 from metabeta.utils.config import modelFromYaml
 from metabeta.utils.dataloader import Dataloader
+from metabeta.utils.names import datasetFilename
 
 
-DATA_PATH = Path('metabeta', 'outputs', 'data', 'tiny-n-mixed', 'train_ep0001.npz')
+DATA_PATH = Path('metabeta', 'outputs', 'data', 'tiny-n-mixed', datasetFilename('train', 1))
 if not DATA_PATH.exists():
     pytest.skip('tiny-n-mixed training data not found', allow_module_level=True)
 
