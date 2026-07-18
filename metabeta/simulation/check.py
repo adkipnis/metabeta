@@ -17,8 +17,8 @@ def setup() -> argparse.Namespace:
                         help='one or more data config tags')
     parser.add_argument('--partition', choices=['train', 'test', 'valid'], required=True,
                         help='check training epochs (train), test fits (test), or valid fits (valid)')
-    parser.add_argument('-b', type=int, default=8000,
-                        help='batch size: expected number of train epochs (default: 8000)')
+    parser.add_argument('-b', type=int, default=12000,
+                        help='batch size: expected number of train epochs (default: 12000)')
     parser.add_argument('--n_fits', type=int, default=512,
                         help='expected fit files per method (default: 512)')
     parser.add_argument('--srcdir', type=str,
