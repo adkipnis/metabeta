@@ -43,7 +43,7 @@ _RUNTIME_DEFAULTS = {
     'draws': 1000,
     'chains': 4,
     'seed': 42,
-    'maxeval': 100,
+    'maxeval': 200,
     'optimizer': 'LBFGS',
     'diagonal': False,
     'force': False,
@@ -124,10 +124,10 @@ def _unpack(
     for k, (i, j) in enumerate(_lowerIndices(q, diagonal)):
         L[i, j] = torch.exp(cov_raw[k]) if i == j else cov_raw[k]
 
-    b = theta[pos : pos + m * q].reshape(m, q)
+    rfx_offset = theta[pos : pos + m * q].reshape(m, q)
     pos += m * q
     log_sigma_eps = theta[pos] if has_sigma_eps else None
-    return beta, L, b, log_sigma_eps
+    return beta, L, rfx_offset, log_sigma_eps
 
 
 def _packInitial(ds: dict[str, np.ndarray], diagonal: bool) -> np.ndarray:
@@ -217,7 +217,10 @@ def _sigmaPriorNlp(log_sigma: torch.Tensor, scale: torch.Tensor, family_idx: int
 
 def _objective(theta: torch.Tensor, data: dict) -> torch.Tensor:
     d, q, m = data['d'], data['q'], data['m']
-    beta, L, b, log_sigma_eps = _unpack(theta, d, q, m, data['has_sigma_eps'], data['diagonal'])
+    beta, L, rfx_offset, log_sigma_eps = _unpack(
+        theta, d, q, m, data['has_sigma_eps'], data['diagonal']
+    )
+    b = rfx_offset.matmul(L.T)
 
     eta = data['X'].matmul(beta) + (data['Z'] * b[data['groups']]).sum(dim=-1)
     y = data['y']
@@ -236,8 +239,7 @@ def _objective(theta: torch.Tensor, data: dict) -> torch.Tensor:
     prior = _fixedPriorNlp(beta, data)
     diag = torch.diagonal(L)
     log_diag = torch.log(diag)
-    z = torch.linalg.solve_triangular(L, b.T, upper=False).T
-    prior = prior + m * torch.sum(log_diag) + 0.5 * torch.sum(z.square())
+    prior = prior + 0.5 * torch.sum(rfx_offset.square())
 
     log_tau = torch.log(data['tau_rfx'])
     prior = prior + 0.5 * torch.sum((log_diag - log_tau).square())
@@ -313,8 +315,9 @@ def _naturalSamples(
     sigma = np.sqrt(np.maximum(np.diagonal(cov, axis1=1, axis2=2), 1e-12))
     corr = cov / np.maximum(sigma[:, :, None] * sigma[:, None, :], 1e-12)
 
-    b = flat_samples[:, pos : pos + m * q].reshape(s, m, q)
+    rfx_offset = flat_samples[:, pos : pos + m * q].reshape(s, m, q)
     pos += m * q
+    b = rfx_offset @ np.swapaxes(L, -1, -2)
     out = {
         'laplace_ffx': ffx,
         'laplace_sigma_rfx': sigma.T.astype(np.float64),
@@ -539,7 +542,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--draws', type=int, default=1000, help='Posterior samples per chain (default=1000)')
     parser.add_argument('--chains', type=int, default=4, help='Number of chains to match sample count semantics (default=4)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed (default=42)')
-    parser.add_argument('--maxeval', type=int, default=100, help='Maximum LBFGS iterations (default=100)')
+    parser.add_argument('--maxeval', type=int, default=200, help='Maximum LBFGS iterations (default=200)')
     parser.add_argument('--optimizer', type=str, default='LBFGS', help='Accepted for fit.py compatibility; scratch backend uses LBFGS')
     parser.add_argument('--diagonal', action='store_true', help='Force diagonal RFX covariance (default=False)')
     parser.add_argument('--force', action='store_true', help='Overwrite existing <partition>.laplace.npz (default=False)')

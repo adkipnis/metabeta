@@ -35,8 +35,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--diagonal', action='store_true')
 
     # Laplace args
-    parser.add_argument('--maxeval', type=int, default=100,
-                        help='Maximum LBFGS iterations (Laplace only; default=100)')
+    parser.add_argument('--maxeval', type=int, default=200,
+                        help='Maximum LBFGS iterations (Laplace only; default=200)')
     parser.add_argument('--optimizer', type=str, default='LBFGS',
                         help='Accepted for Laplace compatibility; scratch backend uses LBFGS')
 
@@ -73,7 +73,7 @@ if __name__ == '__main__':
         ('viter', 100_000),
         ('lr', 1e-3),
         ('diagonal', False),
-        ('maxeval', 100),
+        ('maxeval', 200),
         ('optimizer', 'LBFGS'),
         ('re_correlation', 'diagonal'),
         ('timeout_s', 120),

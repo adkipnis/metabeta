@@ -135,7 +135,7 @@ def test_natural_samples_reconstructs_full_covariance_values():
     out = _naturalSamples(flat, d=2, q=2, m=2, has_sigma_eps=True, diagonal=False)
 
     np.testing.assert_allclose(out['laplace_ffx'], np.array([[0.1, 0.3], [0.2, 0.4]]))
-    np.testing.assert_allclose(out['laplace_rfx'][:, :, 0], np.array([[1.0, 3.0], [2.0, 4.0]]))
+    np.testing.assert_allclose(out['laplace_rfx'][:, :, 0], np.array([[2.0, 6.0], [6.5, 13.5]]))
     np.testing.assert_allclose(out['laplace_rfx'][:, :, 1], np.array([[5.0, 7.0], [6.0, 8.0]]))
     np.testing.assert_allclose(out['laplace_sigma_eps'], np.array([[0.7, 0.9]]))
 
@@ -266,6 +266,6 @@ def test_setup_backfills_runtime_defaults_for_config(tmp_path, monkeypatch):
     assert cfg.partition == 'test'
     assert cfg.draws == 1000
     assert cfg.chains == 4
-    assert cfg.maxeval == 100
+    assert cfg.maxeval == 200
     assert cfg.optimizer == 'LBFGS'
     assert cfg.force is False
