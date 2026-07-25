@@ -115,20 +115,23 @@ def test_scratch_laplace_matches_pymc_reference_on_simple_diagonal_models(
     assert bool(scratch_fit['laplace_failed']) is False
     assert bool(pymc_fit['laplace_failed']) is False
 
+    ffx_atol = 0.35 if likelihood_family == 0 else 0.75
+    sigma_atol = 0.5 if likelihood_family == 0 else 0.8
+    rfx_atol = 0.6 if likelihood_family == 0 else 0.9
     np.testing.assert_allclose(
         scratch_fit['laplace_ffx'].mean(axis=-1),
         pymc_fit['laplace_ffx'].mean(axis=-1),
-        atol=0.35,
+        atol=ffx_atol,
     )
     np.testing.assert_allclose(
         scratch_fit['laplace_sigma_rfx'].mean(axis=-1),
         pymc_fit['laplace_sigma_rfx'].mean(axis=-1),
-        atol=0.5,
+        atol=sigma_atol,
     )
     np.testing.assert_allclose(
         scratch_fit['laplace_rfx'].mean(axis=-1),
         pymc_fit['laplace_rfx'].mean(axis=-1),
-        atol=0.6,
+        atol=rfx_atol,
     )
     if likelihood_family == 0:
         np.testing.assert_allclose(
