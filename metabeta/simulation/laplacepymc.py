@@ -108,7 +108,7 @@ def _drawFromPrecision(
 ) -> np.ndarray:
     """Draw rows from ``N(mean, precision^-1)``."""
     z = rng.standard_normal((mean.shape[0], n_samples))
-    noise = solve_triangular(chol_precision, z, lower=True, check_finite=False)
+    noise = solve_triangular(chol_precision.T, z, lower=False, check_finite=False)
     return (mean[:, None] + noise).T
 
 
