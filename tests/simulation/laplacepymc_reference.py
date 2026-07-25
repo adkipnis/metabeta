@@ -1,4 +1,9 @@
-"""Laplace approximation using PyMC model specification
+"""Optional PyMC reference implementation for Laplace parity tests.
+
+This module is intentionally kept under ``tests/`` rather than
+``metabeta/simulation``.  The maintained rebuttal baseline is the fast scratch
+implementation in ``metabeta.simulation.laplace``; this PyMC version is a slow,
+partial reference used only by opt-in tests.
 
 Batch output (<data_id>/<partition>.laplace.npz) contains only Laplace keys:
     laplace_ffx             (n_ds, d_max, S)
@@ -12,9 +17,7 @@ Batch output (<data_id>/<partition>.laplace.npz) contains only Laplace keys:
     laplace_hessian_repaired (n_ds,)
     laplace_hessian_min_eig (n_ds,)
 
-Usage (from repo root):
-    uv run python -m metabeta.simulation.laplace --size small --family 0 --ds_type sampled
-    uv run python -m metabeta.simulation.fit --method laplace --size small --family 0 --ds_type sampled
+It is not intended as a command-line entry point.
 """
 
 from __future__ import annotations
@@ -34,7 +37,6 @@ from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.names import datasetFilename
 from metabeta.utils.padding import unpad
 from metabeta.utils.pymc import buildPymc
-from metabeta.utils.templates import setupConfigParser, generateSimulationConfig
 
 _DEFAULT_SRCDIR = Path(__file__).resolve().parent.parent / 'outputs' / 'data'
 _DIAGNOSTIC_KEYS = (
@@ -44,17 +46,6 @@ _DIAGNOSTIC_KEYS = (
     'laplace_hessian_repaired',
     'laplace_hessian_min_eig',
 )
-_RUNTIME_DEFAULTS = {
-    'partition': 'test',
-    'epoch': None,
-    'draws': 1000,
-    'chains': 4,
-    'seed': 42,
-    'maxeval': 5000,
-    'optimizer': 'L-BFGS-B',
-    'diagonal': False,
-    'force': False,
-}
 
 
 def _rfxLabel(j: int, suffix: str = '') -> str:
@@ -410,50 +401,3 @@ class LaplaceFitter:
         np.savez_compressed(self.outpath, **out)
         n_ok = int(np.sum(~out['laplace_failed']))
         print(f'Saved Laplace fits to {self.outpath}  ({n_ok}/{len(self)} OK)')
-
-
-# fmt: off
-def setup() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-
-    # data (template-based, matching fit.py)
-    parser.add_argument('--size', type=str, default='small', help='Size preset: tiny|small|medium|large|huge')
-    parser.add_argument('--family', type=int, default=0, help='Likelihood family: 0=normal, 1=bernoulli, 2=poisson')
-    parser.add_argument('--ds_type', type=str, default='sampled', help='Dataset type: toy|flat|scm|mixed|sampled|observed')
-    parser.add_argument('--config', type=str, help='Path to a saved config.yaml; explicit CLI args override its values')
-    parser.add_argument('--partition', default='test', choices=['train', 'valid', 'test'])
-    parser.add_argument('--epoch', type=int, default=None, help='Unused by Laplace; train partition is unsupported')
-
-    # Laplace args
-    parser.add_argument('--draws', type=int, default=1000, help='Posterior samples per chain (default=1000)')
-    parser.add_argument('--chains', type=int, default=4, help='Number of chains to match sample count semantics (default=4)')
-    parser.add_argument('--seed', type=int, default=42, help='Random seed (default=42)')
-    parser.add_argument('--maxeval', type=int, default=5000, help='Maximum MAP optimizer evaluations (default=5000)')
-    parser.add_argument('--optimizer', type=str, default='L-BFGS-B', help='MAP optimizer passed to PyMC find_MAP (default=L-BFGS-B)')
-    parser.add_argument('--diagonal', action='store_true', help='Force diagonal RFX covariance even when eta_rfx > 0 (default=False)')
-    parser.add_argument('--force', action='store_true', help='Overwrite existing <partition>.laplace.npz (default=False)')
-    cfg = setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets with Laplace approximation.')
-    for key, value in _RUNTIME_DEFAULTS.items():
-        if not hasattr(cfg, key):
-            setattr(cfg, key, value)
-    if cfg.partition == 'all':
-        cfg.partition = 'test'
-    return cfg
-# fmt: on
-
-
-def main() -> int:
-    cfg = setup()
-    if cfg.partition == 'train':
-        print('error: Laplace fitting supports only test/valid partitions', file=sys.stderr)
-        return 1
-    try:
-        LaplaceFitter(cfg).go()
-    except ValueError as exc:
-        print(f'error: {exc}', file=sys.stderr)
-        return 1
-    return 0
-
-
-if __name__ == '__main__':
-    sys.exit(main())
