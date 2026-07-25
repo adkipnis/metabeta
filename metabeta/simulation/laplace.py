@@ -188,6 +188,7 @@ def _asTorchData(ds: dict[str, np.ndarray], diagonal: bool) -> dict:
         'likelihood_family': likelihood_family,
         'has_sigma_eps': hasSigmaEps(likelihood_family),
         'family_ffx': int(ds.get('family_ffx', 0)),
+        'family_sigma_rfx': int(ds.get('family_sigma_rfx', 0)),
         'family_sigma_eps': int(ds.get('family_sigma_eps', 0)),
         'diagonal': diagonal,
     }
@@ -233,7 +234,10 @@ def _objective(theta: torch.Tensor, data: dict) -> torch.Tensor:
     elif family == 1:
         ll_nlp = torch.sum(torch.nn.functional.softplus(eta) - y * eta)
     elif family == 2:
-        rate = torch.exp(torch.clamp(eta, max=30.0))
+        eta_cap = eta.new_tensor(30.0)
+        rate_cap = torch.exp(eta_cap)
+        eta_capped = torch.minimum(eta, eta_cap)
+        rate = torch.exp(eta_capped) + rate_cap * torch.clamp(eta - eta_cap, min=0.0)
         ll_nlp = torch.sum(rate - y * eta)
     else:
         raise ValueError(f'unsupported likelihood_family: {family}')
@@ -243,8 +247,7 @@ def _objective(theta: torch.Tensor, data: dict) -> torch.Tensor:
     log_diag = torch.log(diag)
     prior = prior + 0.5 * torch.sum(rfx_offset.square())
 
-    log_tau = torch.log(data['tau_rfx'])
-    prior = prior + 0.5 * torch.sum((log_diag - log_tau).square())
+    prior = prior + torch.sum(_sigmaPriorNlp(log_diag, data['tau_rfx'], data['family_sigma_rfx']))
     if not data['diagonal'] and q > 1:
         offdiag = L[torch.tril_indices(q, q, offset=-1).unbind()]
         off_scale = torch.clamp(data['tau_rfx'].mean(), min=0.1)
@@ -574,6 +577,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--optimizer', type=str, default='LBFGS', help='Accepted for fit.py compatibility; scratch backend uses LBFGS')
     parser.add_argument('--diagonal', action='store_true', help='Force diagonal RFX covariance (default=False)')
     parser.add_argument('--force', action='store_true', help='Overwrite existing <partition>.laplace.npz (default=False)')
+    parser.add_argument('--reintegrate', action='store_true', help='Merge <partition>.laplace.npz into <partition>.fit.npz')
     cfg = setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets with scratch Laplace approximation.')
     for key, value in _RUNTIME_DEFAULTS.items():
         if not hasattr(cfg, key):
@@ -590,8 +594,12 @@ def main() -> int:
         print('error: Laplace fitting supports only test/valid partitions', file=sys.stderr)
         return 1
     try:
-        LaplaceFitter(cfg).go()
-    except ValueError as exc:
+        fitter = LaplaceFitter(cfg)
+        if cfg.reintegrate:
+            fitter.reintegrate()
+        else:
+            fitter.go()
+    except (FileNotFoundError, ValueError) as exc:
         print(f'error: {exc}', file=sys.stderr)
         return 1
     return 0
