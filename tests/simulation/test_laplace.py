@@ -75,6 +75,7 @@ def _cfg(data_id: str = 'test-n-laplace', **kwargs) -> argparse.Namespace:
         'optimizer': 'LBFGS',
         'diagonal': False,
         'force': False,
+        'reintegrate': False,
     }
     values.update(kwargs)
     return argparse.Namespace(**values)
@@ -221,6 +222,46 @@ def test_go_writes_standalone_batch_file(tmp_path, monkeypatch):
         np.testing.assert_array_equal(raw['laplace_iterations'], np.array([3, 3]))
 
 
+def test_reintegrate_merges_sidecar_into_fit_file(tmp_path, monkeypatch):
+    _write_batch(tmp_path)
+    fitter = LaplaceFitter(_cfg(force=True), srcdir=tmp_path)
+
+    def fake_fit_single(self, ds, rng):
+        d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
+        s = int(self.cfg.draws * self.cfg.chains)
+        return {
+            'laplace_ffx': np.full((d, s), 1.0),
+            'laplace_sigma_rfx': np.full((q, s), 2.0),
+            'laplace_sigma_eps': np.full((1, s), 3.0),
+            'laplace_rfx': np.full((q, m, s), 4.0),
+            'laplace_corr_rfx': np.tile(np.eye(q)[None, None], (1, s, 1, 1)),
+            'laplace_duration': np.array(0.25),
+            'laplace_failed': np.array(False),
+            'laplace_hessian_jitter': np.array(0.0),
+            'laplace_hessian_repaired': np.array(False),
+            'laplace_hessian_min_eig': np.array(1.0),
+            'laplace_objective': np.array(2.0),
+            'laplace_iterations': np.array(3),
+        }
+
+    monkeypatch.setattr(LaplaceFitter, '_fitSingle', fake_fit_single)
+    fitter.go()
+
+    fit_path = tmp_path / 'test-n-laplace' / 'test.fit.npz'
+    with np.load(tmp_path / 'test-n-laplace' / 'test.npz', allow_pickle=True) as raw:
+        base = dict(raw)
+    base['nuts_duration'] = np.array([10.0, 20.0])
+    np.savez(fit_path, **base)
+
+    fitter.reintegrate()
+
+    with np.load(fit_path, allow_pickle=True) as raw:
+        assert 'nuts_duration' in raw.files
+        assert 'laplace_ffx' in raw.files
+        assert raw['laplace_ffx'].shape == (2, 3, 6)
+        np.testing.assert_array_equal(raw['laplace_failed'], np.array([False, False]))
+
+
 def test_go_refuses_existing_output_without_force(tmp_path):
     _write_batch(tmp_path)
     outpath = tmp_path / 'test-n-laplace' / 'test.laplace.npz'
@@ -269,3 +310,4 @@ def test_setup_backfills_runtime_defaults_for_config(tmp_path, monkeypatch):
     assert cfg.maxeval == 200
     assert cfg.optimizer == 'LBFGS'
     assert cfg.force is False
+    assert cfg.reintegrate is False
