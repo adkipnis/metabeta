@@ -15,7 +15,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--config', type=str)
 
     # common
-    parser.add_argument('--method', type=str, default='nuts', help='nuts|advi|inla')
+    parser.add_argument('--method', type=str, default='nuts', help='nuts|advi|inla|laplace')
     parser.add_argument('--idx', type=int, default=0)
     parser.add_argument('--reintegrate', action='store_true')
     parser.add_argument('--partition', type=str, default='test', choices=['train', 'test', 'valid'])
@@ -34,16 +34,23 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--diagonal', action='store_true')
 
+    # Laplace args
+    parser.add_argument('--maxeval', type=int, default=5000,
+                        help='Maximum MAP optimizer evaluations (Laplace only; default=5000)')
+    parser.add_argument('--optimizer', type=str, default='L-BFGS-B',
+                        help='MAP optimizer passed to PyMC find_MAP (Laplace only; default=L-BFGS-B)')
+
     # INLA args
     parser.add_argument('--n', type=int, default=None, help='Number of datasets to fit/reintegrate (INLA only; default: full batch)')
-    parser.add_argument('--force', action='store_true', help='Overwrite existing per-index fit files (INLA only)')
+    parser.add_argument('--force', action='store_true',
+                        help='Overwrite existing fit output files (INLA/Laplace only)')
     parser.add_argument('--re-correlation', dest='re_correlation', default='diagonal', choices=['auto', 'diagonal'])
     parser.add_argument('--timeout', dest='timeout_s', type=int, default=120)
     parser.add_argument('--idx-range', dest='idx_range', type=int, nargs=2, default=None,
                         metavar=('START', 'END'),
                         help='INLA only: fit indices [START, END) in one process, reusing one worker (overrides --idx)')
 
-    return setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets (NUTS, ADVI, or INLA).')
+    return setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets (NUTS, ADVI, INLA, or Laplace).')
 # fmt: on
 
 
@@ -66,6 +73,8 @@ if __name__ == '__main__':
         ('viter', 100_000),
         ('lr', 1e-3),
         ('diagonal', False),
+        ('maxeval', 5000),
+        ('optimizer', 'L-BFGS-B'),
         ('re_correlation', 'diagonal'),
         ('timeout_s', 120),
         ('n', None),
@@ -74,6 +83,10 @@ if __name__ == '__main__':
     ]:
         if not hasattr(cfg, _k):
             setattr(cfg, _k, _v)
+
+    if cfg.method == 'laplace' and cfg.partition == 'train':
+        print('error: Laplace fitting supports only test/valid partitions', file=sys.stderr)
+        sys.exit(1)
 
     if cfg.partition == 'train' and cfg.epoch is None:
         print('error: --epoch is required when --partition train', file=sys.stderr)
@@ -89,6 +102,16 @@ if __name__ == '__main__':
             fitter.go_range(cfg.idx_range[0], cfg.idx_range[1])
         else:
             fitter.go()
+    elif cfg.method == 'laplace':
+        from metabeta.simulation.laplace import LaplaceFitter
+
+        if cfg.reintegrate:
+            print(
+                'error: laplace writes <partition>.laplace.npz directly; no reintegration step',
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        LaplaceFitter(cfg).go()
     else:
         from metabeta.simulation.nutsadvi import Fitter
 
