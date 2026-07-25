@@ -26,11 +26,9 @@ from pathlib import Path
 from typing import Any
 import warnings
 
-from tqdm import tqdm
 import numpy as np
 from scipy.linalg import solve_triangular
-import pymc as pm
-from pymc.blocking import DictToArrayBijection, RaveledVars
+from tqdm import tqdm
 
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.names import datasetFilename
@@ -39,6 +37,13 @@ from metabeta.utils.pymc import buildPymc
 from metabeta.utils.templates import setupConfigParser, generateSimulationConfig
 
 _DEFAULT_SRCDIR = Path(__file__).resolve().parent.parent / 'outputs' / 'data'
+_DIAGNOSTIC_KEYS = (
+    'laplace_duration',
+    'laplace_failed',
+    'laplace_hessian_jitter',
+    'laplace_hessian_repaired',
+    'laplace_hessian_min_eig',
+)
 _RUNTIME_DEFAULTS = {
     'partition': 'test',
     'epoch': None,
@@ -206,6 +211,7 @@ class LaplaceFitter:
         start_point: dict[str, np.ndarray],
         ds: dict[str, np.ndarray],
     ) -> dict[str, np.ndarray]:
+        from pymc.blocking import DictToArrayBijection, RaveledVars
 
         d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
         s = flat_samples.shape[0]
@@ -226,29 +232,31 @@ class LaplaceFitter:
         rfx = np.empty((q, m, s), dtype=np.float64)
         corr_rfx = np.empty((1, s, q, q), dtype=np.float64)
         sigma_eps = np.empty((1, s), dtype=np.float64) if hasSigmaEps(likelihood_family) else None
+        value_names = [v.name for v in model.value_vars]
+        ffx_names = ['Intercept', *(f'x{j}' for j in range(1, d))]
+        rfx_names = [_rfxLabel(j) for j in range(q)]
+        sigma_rfx_names = [_rfxLabel(j, '_sigma') for j in range(q)]
+        identity_corr = np.eye(q, dtype=np.float64)
 
         for sample_idx, flat_sample in enumerate(flat_samples):
             point = DictToArrayBijection.rmap(
                 RaveledVars(flat_sample, point_map_info),
                 start_point=start_point,
             )
-            values = eval_fn(*[point[v.name] for v in model.value_vars])
+            values = eval_fn(*[point[name] for name in value_names])
             sample = dict(zip(output_names, values, strict=True))
 
-            for j in range(d):
-                name = 'Intercept' if j == 0 else f'x{j}'
+            for j, name in enumerate(ffx_names):
                 ffx[j, sample_idx] = np.asarray(sample[name], dtype=np.float64)
             for j in range(q):
-                sigma_rfx[j, sample_idx] = np.asarray(
-                    sample[_rfxLabel(j, '_sigma')], dtype=np.float64
-                )
-                rfx[j, :, sample_idx] = np.asarray(sample[_rfxLabel(j)], dtype=np.float64)[:m]
+                sigma_rfx[j, sample_idx] = np.asarray(sample[sigma_rfx_names[j]], dtype=np.float64)
+                rfx[j, :, sample_idx] = np.asarray(sample[rfx_names[j]], dtype=np.float64)[:m]
             if sigma_eps is not None:
                 sigma_eps[0, sample_idx] = np.asarray(sample['sigma'], dtype=np.float64)
             if correlated:
                 corr_rfx[0, sample_idx] = np.asarray(sample['_lkj_rfx_corr'], dtype=np.float64)
             else:
-                corr_rfx[0, sample_idx] = np.eye(q, dtype=np.float64)
+                corr_rfx[0, sample_idx] = identity_corr
 
         out = {
             'laplace_ffx': ffx,
@@ -265,6 +273,8 @@ class LaplaceFitter:
         ds: dict[str, np.ndarray],
         rng: np.random.Generator,
     ) -> dict[str, np.ndarray]:
+        import pymc as pm
+        from pymc.blocking import DictToArrayBijection
 
         t0 = time.perf_counter()
         jitter = np.nan
@@ -283,7 +293,7 @@ class LaplaceFitter:
                     warnings.simplefilter('ignore', FutureWarning)
                     precision = pm.find_hessian(map_point, model=model)
 
-            precision, chol, jitter, repaired, min_eig = _stabilizePrecision(precision)
+            _, chol, jitter, repaired, min_eig = _stabilizePrecision(precision)
             start_point = model.initial_point()
             map_value_point = {k: map_point[k] for k in start_point}
             raveled = DictToArrayBijection.map(map_value_point)
@@ -310,8 +320,13 @@ class LaplaceFitter:
                 min_eig=min_eig,
             )
 
-    def _insertFit(self, out: dict[str, np.ndarray], idx: int, fit: dict[str, np.ndarray]) -> None:
-        ds = self._getSingle(idx)
+    def _insertFit(
+        self,
+        out: dict[str, np.ndarray],
+        idx: int,
+        ds: dict[str, np.ndarray],
+        fit: dict[str, np.ndarray],
+    ) -> None:
         d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
         out['laplace_ffx'][idx, :d] = fit['laplace_ffx']
         out['laplace_sigma_rfx'][idx, :q] = fit['laplace_sigma_rfx']
@@ -319,13 +334,7 @@ class LaplaceFitter:
         out['laplace_corr_rfx'][idx, :, :, :q, :q] = fit['laplace_corr_rfx']
         if 'laplace_sigma_eps' in out and 'laplace_sigma_eps' in fit:
             out['laplace_sigma_eps'][idx] = fit['laplace_sigma_eps']
-        for key in (
-            'laplace_duration',
-            'laplace_failed',
-            'laplace_hessian_jitter',
-            'laplace_hessian_repaired',
-            'laplace_hessian_min_eig',
-        ):
+        for key in _DIAGNOSTIC_KEYS:
             out[key][idx] = fit[key]
 
     def go(self) -> None:
@@ -340,7 +349,7 @@ class LaplaceFitter:
         for idx in tqdm(range(len(self)), desc='laplace fits', unit='dataset'):
             ds = self._getSingle(idx)
             fit = self._fitSingle(ds, np.random.default_rng(int(seeds[idx])))
-            self._insertFit(out, idx, fit)
+            self._insertFit(out, idx, ds, fit)
 
         np.savez_compressed(self.outpath, **out)
         n_ok = int(np.sum(~out['laplace_failed']))
