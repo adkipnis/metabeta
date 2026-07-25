@@ -8,7 +8,7 @@ The sidecar can be merged into ``<partition>.fit.npz`` for evaluation.
 
 The random-effect covariance uses a simple unconstrained Cholesky
 parameterization and prior.  This is not exact PyMC/LKJ prior parity; the PyMC
-implementation is kept in ``laplacepymc.py`` as a reference backend.
+prototype is kept as opt-in test reference code under ``tests/simulation``.
 """
 
 from __future__ import annotations
