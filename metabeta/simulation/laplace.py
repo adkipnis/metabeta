@@ -112,6 +112,18 @@ def _drawFromPrecision(
     return (mean[:, None] + noise).T
 
 
+def _unravelSamples(flat_samples: np.ndarray, point_map_info: tuple) -> dict[str, np.ndarray]:
+    """Map flat transformed samples to arrays keyed by PyMC value-variable name."""
+    samples = {}
+    last_idx = 0
+    for name, shape, size, dtype in point_map_info:
+        end = last_idx + size
+        samples[name] = flat_samples[:, last_idx:end].reshape((flat_samples.shape[0], *shape))
+        samples[name] = samples[name].astype(dtype, copy=False)
+        last_idx = end
+    return samples
+
+
 class LaplaceFitter:
     """Fit all datasets in a partition with a transformed-space Laplace approximation."""
 
@@ -199,7 +211,10 @@ class LaplaceFitter:
             'laplace_hessian_repaired': np.array(repaired, dtype=bool),
             'laplace_hessian_min_eig': np.array(min_eig, dtype=np.float64),
         }
-        if hasSigmaEps(int(ds.get('likelihood_family', self.likelihood_family))):
+        likelihood_family = (
+            int(ds['likelihood_family']) if 'likelihood_family' in ds else self.likelihood_family
+        )
+        if hasSigmaEps(likelihood_family):
             out['laplace_sigma_eps'] = np.full((1, s), np.nan, dtype=np.float64)
         return out
 
@@ -211,12 +226,19 @@ class LaplaceFitter:
         start_point: dict[str, np.ndarray],
         ds: dict[str, np.ndarray],
     ) -> dict[str, np.ndarray]:
-        from pymc.blocking import DictToArrayBijection, RaveledVars
 
         d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
         s = flat_samples.shape[0]
-        likelihood_family = int(ds.get('likelihood_family', self.likelihood_family))
+        likelihood_family = (
+            int(ds['likelihood_family']) if 'likelihood_family' in ds else self.likelihood_family
+        )
         correlated = float(ds.get('eta_rfx', 0)) > 0 and q >= 2 and not self.cfg.diagonal
+        if not correlated:
+            return self._extractDiagonalSamples(
+                flat_samples, point_map_info, d, q, m, likelihood_family
+            )
+
+        from pymc.blocking import DictToArrayBijection, RaveledVars
 
         outputs = list(model.deterministics) + list(model.free_RVs)
         output_names = [v.name for v in outputs]
@@ -266,6 +288,40 @@ class LaplaceFitter:
         }
         if sigma_eps is not None:
             out['laplace_sigma_eps'] = sigma_eps
+        return out
+
+    def _extractDiagonalSamples(
+        self,
+        flat_samples: np.ndarray,
+        point_map_info: tuple,
+        d: int,
+        q: int,
+        m: int,
+        likelihood_family: int,
+    ) -> dict[str, np.ndarray]:
+        samples = _unravelSamples(flat_samples, point_map_info)
+        s = flat_samples.shape[0]
+        ffx_names = ['Intercept', *(f'x{j}' for j in range(1, d))]
+
+        ffx = np.stack([samples[name] for name in ffx_names], axis=0).astype(np.float64)
+        sigma_rfx = np.empty((q, s), dtype=np.float64)
+        rfx = np.empty((q, m, s), dtype=np.float64)
+
+        for j in range(q):
+            sigma = np.exp(samples[_rfxLabel(j, '_sigma_log__')]).astype(np.float64)
+            offset = samples[_rfxLabel(j, '_offset')][:, :m].astype(np.float64)
+            sigma_rfx[j] = sigma
+            rfx[j] = (offset * sigma[:, None]).T
+
+        corr_rfx = np.tile(np.eye(q, dtype=np.float64), (1, s, 1, 1))
+        out = {
+            'laplace_ffx': ffx,
+            'laplace_sigma_rfx': sigma_rfx,
+            'laplace_rfx': rfx,
+            'laplace_corr_rfx': corr_rfx,
+        }
+        if hasSigmaEps(likelihood_family):
+            out['laplace_sigma_eps'] = np.exp(samples['sigma_log__'])[None].astype(np.float64)
         return out
 
     def _fitSingle(
