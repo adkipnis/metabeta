@@ -1,4 +1,4 @@
-"""Pre-compute and cache analytical fit summaries (NUTS / ADVI).
+"""Pre-compute and cache analytical fit summaries (NUTS / ADVI / Laplace).
 
 Run once after fitting is complete, before submitting training jobs.
 All training runs on the same validation dataset will then load the cache
@@ -58,8 +58,21 @@ def setup() -> argparse.Namespace:
                         help='Partition to cache: valid or test')
     parser.add_argument('--force', action='store_true',
                         help='Recompute even if a valid cache already exists')
+    parser.add_argument('--methods', type=str, default='nuts,advi',
+                        help='Comma-separated methods to cache: nuts,advi,laplace (default: nuts,advi)')
     return parser.parse_args()
 # fmt: on
+
+
+def _parseMethods(methods: str) -> tuple[str, ...]:
+    valid = {'nuts', 'advi', 'laplace'}
+    parsed = tuple(method.strip().lower() for method in methods.split(',') if method.strip())
+    unknown = sorted(set(parsed) - valid)
+    if unknown:
+        raise ValueError(f'unknown cache method(s): {unknown}; valid: {sorted(valid)}')
+    if not parsed:
+        raise ValueError('at least one cache method is required')
+    return parsed
 
 
 def _buildProposal(
@@ -355,7 +368,7 @@ def main() -> None:
     dl = Dataloader(fit_path, batch_size=_BATCH_SIZE, sortish=True, max_d=max_d, max_q=max_q)
     logger.info('Datasets: %d', len(dl.dataset))
 
-    for method in ('nuts', 'advi'):
+    for method in _parseMethods(args.methods):
         cache_path = data_dir / f'summary_{args.partition}_{method}.pt'
         _cache(dl, method, cache_path, likelihood_family, rescale, d_corr, args.force, fit_path)
 

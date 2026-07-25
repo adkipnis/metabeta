@@ -1,6 +1,16 @@
 import torch
+import pytest
 
-from metabeta.evaluation.cache import _fitBatchMask, _subsetBatch
+from metabeta.evaluation.cache import _fitBatchMask, _parseMethods, _subsetBatch
+
+
+def test_parse_methods_accepts_comma_separated_methods():
+    assert _parseMethods('nuts, advi,laplace') == ('nuts', 'advi', 'laplace')
+
+
+def test_parse_methods_rejects_unknown_method():
+    with pytest.raises(ValueError, match='unknown cache method'):
+        _parseMethods('nuts,bogus')
 
 
 def test_fit_batch_mask_keeps_all_without_failed_key():
