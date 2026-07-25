@@ -1,20 +1,13 @@
-"""Laplace approximation using PyMC model specification
+"""Fast scratch Laplace approximation for hierarchical datasets.
 
-Batch output (<data_id>/<partition>.laplace.npz) contains only Laplace keys:
-    laplace_ffx             (n_ds, d_max, S)
-    laplace_sigma_rfx       (n_ds, q_max, S)
-    laplace_sigma_eps       (n_ds, 1, S)              gaussian likelihood only
-    laplace_rfx             (n_ds, q_max, m_max, S)
-    laplace_corr_rfx        (n_ds, 1, S, q_max, q_max)
-    laplace_duration        (n_ds,)
-    laplace_failed          (n_ds,)
-    laplace_hessian_jitter  (n_ds,)
-    laplace_hessian_repaired (n_ds,)
-    laplace_hessian_min_eig (n_ds,)
+This module intentionally does not use PyMC.  It fits a pragmatic GLMM posterior
+with a direct torch objective, computes a dense transformed-space Hessian at the
+MAP, samples the Gaussian Laplace approximation, and writes method-only batch
+outputs to ``<partition>.laplace.npz``.
 
-Usage (from repo root):
-    uv run python -m metabeta.simulation.laplace --size small --family 0 --ds_type sampled
-    uv run python -m metabeta.simulation.fit --method laplace --size small --family 0 --ds_type sampled
+The random-effect covariance uses a simple unconstrained Cholesky
+parameterization and prior.  This is not exact PyMC/LKJ prior parity; the PyMC
+implementation is kept in ``laplacepymc.py`` as a reference backend.
 """
 
 from __future__ import annotations
@@ -23,17 +16,15 @@ import argparse
 import sys
 import time
 from pathlib import Path
-from typing import Any
-import warnings
 
 import numpy as np
 from scipy.linalg import solve_triangular
 from tqdm import tqdm
+import torch
 
-from metabeta.utils.constants import hasSigmaEps
+from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF, hasSigmaEps
 from metabeta.utils.names import datasetFilename
 from metabeta.utils.padding import unpad
-from metabeta.utils.pymc import buildPymc
 from metabeta.utils.templates import setupConfigParser, generateSimulationConfig
 
 _DEFAULT_SRCDIR = Path(__file__).resolve().parent.parent / 'outputs' / 'data'
@@ -43,6 +34,8 @@ _DIAGNOSTIC_KEYS = (
     'laplace_hessian_jitter',
     'laplace_hessian_repaired',
     'laplace_hessian_min_eig',
+    'laplace_objective',
+    'laplace_iterations',
 )
 _RUNTIME_DEFAULTS = {
     'partition': 'test',
@@ -50,15 +43,21 @@ _RUNTIME_DEFAULTS = {
     'draws': 1000,
     'chains': 4,
     'seed': 42,
-    'maxeval': 5000,
-    'optimizer': 'L-BFGS-B',
+    'maxeval': 100,
+    'optimizer': 'LBFGS',
     'diagonal': False,
     'force': False,
 }
 
 
-def _rfxLabel(j: int, suffix: str = '') -> str:
-    return ('1|i' if j == 0 else f'x{j}|i') + suffix
+def _numCovParams(q: int, diagonal: bool) -> int:
+    return q if diagonal else q * (q + 1) // 2
+
+
+def _lowerIndices(q: int, diagonal: bool) -> list[tuple[int, int]]:
+    if diagonal:
+        return [(j, j) for j in range(q)]
+    return [(i, j) for i in range(q) for j in range(i + 1)]
 
 
 def _stabilizePrecision(
@@ -67,11 +66,7 @@ def _stabilizePrecision(
     max_tries: int = 8,
     eig_floor: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, float, bool, float]:
-    """Return positive-definite precision and its Cholesky factor.
-
-    The input is expected to be the negative Hessian of log posterior at the MAP.
-    The returned Cholesky factor ``chol`` satisfies ``precision = chol @ chol.T``.
-    """
+    """Return positive-definite precision and its Cholesky factor."""
     H = np.asarray(precision, dtype=np.float64)
     H = 0.5 * (H + H.T)
     if H.ndim != 2 or H.shape[0] != H.shape[1]:
@@ -112,20 +107,227 @@ def _drawFromPrecision(
     return (mean[:, None] + noise).T
 
 
-def _unravelSamples(flat_samples: np.ndarray, point_map_info: tuple) -> dict[str, np.ndarray]:
-    """Map flat transformed samples to arrays keyed by PyMC value-variable name."""
-    samples = {}
-    last_idx = 0
-    for name, shape, size, dtype in point_map_info:
-        end = last_idx + size
-        samples[name] = flat_samples[:, last_idx:end].reshape((flat_samples.shape[0], *shape))
-        samples[name] = samples[name].astype(dtype, copy=False)
-        last_idx = end
-    return samples
+def _unpack(
+    theta: torch.Tensor,
+    d: int,
+    q: int,
+    m: int,
+    has_sigma_eps: bool,
+    diagonal: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    beta = theta[:d]
+    pos = d
+    cov_raw = theta[pos : pos + _numCovParams(q, diagonal)]
+    pos += cov_raw.numel()
+
+    L = theta.new_zeros((q, q))
+    for k, (i, j) in enumerate(_lowerIndices(q, diagonal)):
+        L[i, j] = torch.exp(cov_raw[k]) if i == j else cov_raw[k]
+
+    b = theta[pos : pos + m * q].reshape(m, q)
+    pos += m * q
+    log_sigma_eps = theta[pos] if has_sigma_eps else None
+    return beta, L, b, log_sigma_eps
+
+
+def _packInitial(ds: dict[str, np.ndarray], diagonal: bool) -> np.ndarray:
+    d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
+    likelihood_family = int(ds.get('likelihood_family', 0))
+    has_eps = hasSigmaEps(likelihood_family)
+    y = ds['y'].astype(np.float64)
+    X = ds['X'].astype(np.float64)
+    nu_ffx = ds.get('nu_ffx', np.zeros(d, dtype=np.float64)).astype(np.float64)
+    tau_rfx = np.maximum(ds.get('tau_rfx', np.ones(q, dtype=np.float64)).astype(np.float64), 1e-3)
+
+    if likelihood_family == 0:
+        try:
+            beta = np.linalg.lstsq(X, y, rcond=None)[0]
+        except np.linalg.LinAlgError:
+            beta = nu_ffx.copy()
+    else:
+        beta = nu_ffx.copy()
+
+    cov = []
+    for i, j in _lowerIndices(q, diagonal):
+        cov.append(np.log(tau_rfx[i]) if i == j else 0.0)
+    b = np.zeros(m * q, dtype=np.float64)
+
+    parts = [beta, np.asarray(cov, dtype=np.float64), b]
+    if has_eps:
+        resid = y - X @ beta
+        sigma0 = max(float(np.std(resid)), float(ds.get('tau_eps', 1.0)) * 0.25, 1e-3)
+        parts.append(np.array([np.log(sigma0)], dtype=np.float64))
+    return np.concatenate(parts)
+
+
+def _asTorchData(ds: dict[str, np.ndarray], diagonal: bool) -> dict:
+    d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
+    likelihood_family = int(ds.get('likelihood_family', 0))
+    return {
+        'X': torch.as_tensor(ds['X'].astype(np.float64), dtype=torch.float64),
+        'Z': torch.as_tensor(ds.get('Z', ds['X'][:, :q]).astype(np.float64), dtype=torch.float64),
+        'y': torch.as_tensor(ds['y'].astype(np.float64), dtype=torch.float64),
+        'groups': torch.as_tensor(ds['groups'].astype(np.int64), dtype=torch.long),
+        'nu_ffx': torch.as_tensor(
+            ds.get('nu_ffx', np.zeros(d)).astype(np.float64), dtype=torch.float64
+        ),
+        'tau_ffx': torch.as_tensor(
+            np.maximum(ds.get('tau_ffx', np.ones(d)).astype(np.float64), 1e-6),
+            dtype=torch.float64,
+        ),
+        'tau_rfx': torch.as_tensor(
+            np.maximum(ds.get('tau_rfx', np.ones(q)).astype(np.float64), 1e-6),
+            dtype=torch.float64,
+        ),
+        'tau_eps': torch.as_tensor(float(ds.get('tau_eps', 1.0)), dtype=torch.float64),
+        'd': d,
+        'q': q,
+        'm': m,
+        'likelihood_family': likelihood_family,
+        'has_sigma_eps': hasSigmaEps(likelihood_family),
+        'family_ffx': int(ds.get('family_ffx', 0)),
+        'family_sigma_eps': int(ds.get('family_sigma_eps', 0)),
+        'diagonal': diagonal,
+    }
+
+
+def _fixedPriorNlp(beta: torch.Tensor, data: dict) -> torch.Tensor:
+    z = (beta - data['nu_ffx']) / data['tau_ffx']
+    family = FFX_FAMILIES[data['family_ffx']]
+    if family == 'normal':
+        return 0.5 * torch.sum(z.square())
+    if family == 'student':
+        return 0.5 * (STUDENT_DF + 1.0) * torch.sum(torch.log1p(z.square() / STUDENT_DF))
+    raise ValueError(f'unsupported fixed-effect prior family: {family}')
+
+
+def _sigmaPriorNlp(log_sigma: torch.Tensor, scale: torch.Tensor, family_idx: int) -> torch.Tensor:
+    sigma = torch.exp(log_sigma)
+    family = SIGMA_FAMILIES[family_idx]
+    if family == 'halfnormal':
+        nlp = 0.5 * (sigma / scale).square()
+    elif family == 'halfstudent':
+        nlp = 0.5 * (STUDENT_DF + 1.0) * torch.log1p((sigma / scale).square() / STUDENT_DF)
+    elif family == 'exponential':
+        nlp = sigma / scale
+    else:
+        raise ValueError(f'unsupported sigma prior family: {family}')
+    return nlp - log_sigma
+
+
+def _objective(theta: torch.Tensor, data: dict) -> torch.Tensor:
+    d, q, m = data['d'], data['q'], data['m']
+    beta, L, b, log_sigma_eps = _unpack(theta, d, q, m, data['has_sigma_eps'], data['diagonal'])
+
+    eta = data['X'].matmul(beta) + (data['Z'] * b[data['groups']]).sum(dim=-1)
+    y = data['y']
+    family = data['likelihood_family']
+    if family == 0:
+        sigma_eps = torch.exp(log_sigma_eps)
+        ll_nlp = 0.5 * torch.sum(((y - eta) / sigma_eps).square() + 2.0 * log_sigma_eps)
+    elif family == 1:
+        ll_nlp = torch.sum(torch.nn.functional.softplus(eta) - y * eta)
+    elif family == 2:
+        rate = torch.exp(torch.clamp(eta, max=30.0))
+        ll_nlp = torch.sum(rate - y * eta)
+    else:
+        raise ValueError(f'unsupported likelihood_family: {family}')
+
+    prior = _fixedPriorNlp(beta, data)
+    diag = torch.diagonal(L)
+    log_diag = torch.log(diag)
+    z = torch.linalg.solve_triangular(L, b.T, upper=False).T
+    prior = prior + m * torch.sum(log_diag) + 0.5 * torch.sum(z.square())
+
+    log_tau = torch.log(data['tau_rfx'])
+    prior = prior + 0.5 * torch.sum((log_diag - log_tau).square())
+    if not data['diagonal'] and q > 1:
+        offdiag = L[torch.tril_indices(q, q, offset=-1).unbind()]
+        off_scale = torch.clamp(data['tau_rfx'].mean(), min=0.1)
+        prior = prior + 0.5 * torch.sum((offdiag / off_scale).square())
+
+    if data['has_sigma_eps']:
+        prior = prior + _sigmaPriorNlp(log_sigma_eps, data['tau_eps'], data['family_sigma_eps'])
+    return ll_nlp + prior
+
+
+def _fitMap(
+    init: np.ndarray,
+    data: dict,
+    max_iter: int,
+) -> tuple[np.ndarray, float, int]:
+    theta = torch.tensor(init, dtype=torch.float64, requires_grad=True)
+    optimizer = torch.optim.LBFGS(
+        [theta],
+        lr=1.0,
+        max_iter=max_iter,
+        max_eval=max(1, max_iter * 2),
+        tolerance_grad=1e-5,
+        tolerance_change=1e-8,
+        line_search_fn='strong_wolfe',
+    )
+    iterations = 0
+
+    def closure():
+        nonlocal iterations
+        optimizer.zero_grad()
+        loss = _objective(theta, data)
+        loss.backward()
+        iterations += 1
+        return loss
+
+    optimizer.step(closure)
+    final_loss = _objective(theta, data)
+    return theta.detach().numpy().copy(), float(final_loss.detach()), iterations
+
+
+def _hessian(theta_map: np.ndarray, data: dict) -> np.ndarray:
+    theta = torch.tensor(theta_map, dtype=torch.float64)
+
+    def fn(x: torch.Tensor) -> torch.Tensor:
+        return _objective(x, data)
+
+    H = torch.autograd.functional.hessian(fn, theta, vectorize=True)
+    return H.detach().numpy()
+
+
+def _naturalSamples(
+    flat_samples: np.ndarray,
+    d: int,
+    q: int,
+    m: int,
+    has_sigma_eps: bool,
+    diagonal: bool,
+) -> dict[str, np.ndarray]:
+    s = flat_samples.shape[0]
+    pos = 0
+    ffx = flat_samples[:, pos : pos + d].T.astype(np.float64)
+    pos += d
+
+    cov_raw = flat_samples[:, pos : pos + _numCovParams(q, diagonal)]
+    pos += cov_raw.shape[1]
+    L = np.zeros((s, q, q), dtype=np.float64)
+    for k, (i, j) in enumerate(_lowerIndices(q, diagonal)):
+        L[:, i, j] = np.exp(cov_raw[:, k]) if i == j else cov_raw[:, k]
+    cov = L @ np.swapaxes(L, -1, -2)
+    sigma = np.sqrt(np.maximum(np.diagonal(cov, axis1=1, axis2=2), 1e-12))
+    corr = cov / np.maximum(sigma[:, :, None] * sigma[:, None, :], 1e-12)
+
+    b = flat_samples[:, pos : pos + m * q].reshape(s, m, q)
+    pos += m * q
+    out = {
+        'laplace_ffx': ffx,
+        'laplace_sigma_rfx': sigma.T.astype(np.float64),
+        'laplace_rfx': b.transpose(2, 1, 0).astype(np.float64),
+        'laplace_corr_rfx': corr[None].astype(np.float64),
+    }
+    if has_sigma_eps:
+        out['laplace_sigma_eps'] = np.exp(flat_samples[:, pos])[None].astype(np.float64)
+    return out
 
 
 class LaplaceFitter:
-    """Fit all datasets in a partition with a transformed-space Laplace approximation."""
+    """Fit all datasets in a partition with a scratch Laplace approximation."""
 
     def __init__(
         self,
@@ -168,7 +370,10 @@ class LaplaceFitter:
         self._loadBatch()
         ds = {k: v[idx] for k, v in self.batch.items()}
         sizes = {'d': int(ds['d']), 'q': int(ds['q']), 'm': int(ds['m']), 'n': int(ds['n'])}
-        return unpad(ds, sizes)
+        ds = unpad(ds, sizes)
+        if 'Z' in ds:
+            ds['Z'] = ds['Z'][: sizes['n'], : sizes['q']]
+        return ds
 
     def _emptyFit(self) -> dict[str, np.ndarray]:
         self._loadBatch()
@@ -185,6 +390,8 @@ class LaplaceFitter:
             'laplace_hessian_jitter': np.full(self.n_fit, np.nan, dtype=np.float64),
             'laplace_hessian_repaired': np.zeros(self.n_fit, dtype=bool),
             'laplace_hessian_min_eig': np.full(self.n_fit, np.nan, dtype=np.float64),
+            'laplace_objective': np.full(self.n_fit, np.nan, dtype=np.float64),
+            'laplace_iterations': np.zeros(self.n_fit, dtype=np.int64),
         }
         if self.has_sigma_eps:
             out['laplace_sigma_eps'] = np.zeros((self.n_fit, 1, s), dtype=np.float64)
@@ -197,6 +404,8 @@ class LaplaceFitter:
         jitter: float = np.nan,
         repaired: bool = False,
         min_eig: float = np.nan,
+        objective: float = np.nan,
+        iterations: int = 0,
     ) -> dict[str, np.ndarray]:
         d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
         s = int(self.cfg.draws * self.cfg.chains)
@@ -210,6 +419,8 @@ class LaplaceFitter:
             'laplace_hessian_jitter': np.array(jitter, dtype=np.float64),
             'laplace_hessian_repaired': np.array(repaired, dtype=bool),
             'laplace_hessian_min_eig': np.array(min_eig, dtype=np.float64),
+            'laplace_objective': np.array(objective, dtype=np.float64),
+            'laplace_iterations': np.array(iterations, dtype=np.int64),
         }
         likelihood_family = (
             int(ds['likelihood_family']) if 'likelihood_family' in ds else self.likelihood_family
@@ -218,153 +429,51 @@ class LaplaceFitter:
             out['laplace_sigma_eps'] = np.full((1, s), np.nan, dtype=np.float64)
         return out
 
-    def _extractSamples(
-        self,
-        model: Any,
-        flat_samples: np.ndarray,
-        point_map_info: tuple,
-        start_point: dict[str, np.ndarray],
-        ds: dict[str, np.ndarray],
-    ) -> dict[str, np.ndarray]:
-
-        d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
-        s = flat_samples.shape[0]
-        likelihood_family = (
-            int(ds['likelihood_family']) if 'likelihood_family' in ds else self.likelihood_family
-        )
-        correlated = float(ds.get('eta_rfx', 0)) > 0 and q >= 2 and not self.cfg.diagonal
-        if not correlated:
-            return self._extractDiagonalSamples(
-                flat_samples, point_map_info, d, q, m, likelihood_family
-            )
-
-        from pymc.blocking import DictToArrayBijection, RaveledVars
-
-        outputs = list(model.deterministics) + list(model.free_RVs)
-        output_names = [v.name for v in outputs]
-        eval_fn = model.compile_fn(
-            outputs,
-            inputs=model.value_vars,
-            point_fn=False,
-            on_unused_input='ignore',
-        )
-
-        ffx = np.empty((d, s), dtype=np.float64)
-        sigma_rfx = np.empty((q, s), dtype=np.float64)
-        rfx = np.empty((q, m, s), dtype=np.float64)
-        corr_rfx = np.empty((1, s, q, q), dtype=np.float64)
-        sigma_eps = np.empty((1, s), dtype=np.float64) if hasSigmaEps(likelihood_family) else None
-        value_names = [v.name for v in model.value_vars]
-        ffx_names = ['Intercept', *(f'x{j}' for j in range(1, d))]
-        rfx_names = [_rfxLabel(j) for j in range(q)]
-        sigma_rfx_names = [_rfxLabel(j, '_sigma') for j in range(q)]
-        identity_corr = np.eye(q, dtype=np.float64)
-
-        for sample_idx, flat_sample in enumerate(flat_samples):
-            point = DictToArrayBijection.rmap(
-                RaveledVars(flat_sample, point_map_info),
-                start_point=start_point,
-            )
-            values = eval_fn(*[point[name] for name in value_names])
-            sample = dict(zip(output_names, values, strict=True))
-
-            for j, name in enumerate(ffx_names):
-                ffx[j, sample_idx] = np.asarray(sample[name], dtype=np.float64)
-            for j in range(q):
-                sigma_rfx[j, sample_idx] = np.asarray(sample[sigma_rfx_names[j]], dtype=np.float64)
-                rfx[j, :, sample_idx] = np.asarray(sample[rfx_names[j]], dtype=np.float64)[:m]
-            if sigma_eps is not None:
-                sigma_eps[0, sample_idx] = np.asarray(sample['sigma'], dtype=np.float64)
-            if correlated:
-                corr_rfx[0, sample_idx] = np.asarray(sample['_lkj_rfx_corr'], dtype=np.float64)
-            else:
-                corr_rfx[0, sample_idx] = identity_corr
-
-        out = {
-            'laplace_ffx': ffx,
-            'laplace_sigma_rfx': sigma_rfx,
-            'laplace_rfx': rfx,
-            'laplace_corr_rfx': corr_rfx,
-        }
-        if sigma_eps is not None:
-            out['laplace_sigma_eps'] = sigma_eps
-        return out
-
-    def _extractDiagonalSamples(
-        self,
-        flat_samples: np.ndarray,
-        point_map_info: tuple,
-        d: int,
-        q: int,
-        m: int,
-        likelihood_family: int,
-    ) -> dict[str, np.ndarray]:
-        samples = _unravelSamples(flat_samples, point_map_info)
-        s = flat_samples.shape[0]
-        ffx_names = ['Intercept', *(f'x{j}' for j in range(1, d))]
-
-        ffx = np.stack([samples[name] for name in ffx_names], axis=0).astype(np.float64)
-        sigma_rfx = np.empty((q, s), dtype=np.float64)
-        rfx = np.empty((q, m, s), dtype=np.float64)
-
-        for j in range(q):
-            sigma = np.exp(samples[_rfxLabel(j, '_sigma_log__')]).astype(np.float64)
-            offset = samples[_rfxLabel(j, '_offset')][:, :m].astype(np.float64)
-            sigma_rfx[j] = sigma
-            rfx[j] = (offset * sigma[:, None]).T
-
-        corr_rfx = np.tile(np.eye(q, dtype=np.float64), (1, s, 1, 1))
-        out = {
-            'laplace_ffx': ffx,
-            'laplace_sigma_rfx': sigma_rfx,
-            'laplace_rfx': rfx,
-            'laplace_corr_rfx': corr_rfx,
-        }
-        if hasSigmaEps(likelihood_family):
-            out['laplace_sigma_eps'] = np.exp(samples['sigma_log__'])[None].astype(np.float64)
-        return out
-
     def _fitSingle(
         self,
         ds: dict[str, np.ndarray],
         rng: np.random.Generator,
     ) -> dict[str, np.ndarray]:
-        import pymc as pm
-        from pymc.blocking import DictToArrayBijection
-
         t0 = time.perf_counter()
         jitter = np.nan
         repaired = False
         min_eig = np.nan
+        objective = np.nan
+        iterations = 0
         try:
-            model = buildPymc(ds, force_diagonal=getattr(self.cfg, 'diagonal', False))
-            with model:
-                map_point = pm.find_MAP(
-                    method=self.cfg.optimizer,
-                    maxeval=self.cfg.maxeval,
-                    include_transformed=True,
-                    progressbar=False,
-                )
-                with warnings.catch_warnings():
-                    warnings.simplefilter('ignore', FutureWarning)
-                    precision = pm.find_hessian(map_point, model=model)
-
+            diagonal = bool(getattr(self.cfg, 'diagonal', False))
+            init = _packInitial(ds, diagonal)
+            data = _asTorchData(ds, diagonal)
+            theta_map, objective, iterations = _fitMap(init, data, int(self.cfg.maxeval))
+            precision = _hessian(theta_map, data)
             _, chol, jitter, repaired, min_eig = _stabilizePrecision(precision)
-            start_point = model.initial_point()
-            map_value_point = {k: map_point[k] for k in start_point}
-            raveled = DictToArrayBijection.map(map_value_point)
             flat_samples = _drawFromPrecision(
                 rng,
-                raveled.data.astype(np.float64),
+                theta_map,
                 chol,
                 int(self.cfg.draws * self.cfg.chains),
             )
-            out = self._extractSamples(model, flat_samples, raveled.point_map_info, start_point, ds)
+            d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
+            likelihood_family = (
+                int(ds['likelihood_family'])
+                if 'likelihood_family' in ds
+                else self.likelihood_family
+            )
+            out = _naturalSamples(
+                flat_samples,
+                d,
+                q,
+                m,
+                hasSigmaEps(likelihood_family),
+                diagonal,
+            )
             out['laplace_duration'] = np.array(time.perf_counter() - t0, dtype=np.float64)
             out['laplace_failed'] = np.array(False)
             out['laplace_hessian_jitter'] = np.array(jitter, dtype=np.float64)
             out['laplace_hessian_repaired'] = np.array(repaired, dtype=bool)
             out['laplace_hessian_min_eig'] = np.array(min_eig, dtype=np.float64)
+            out['laplace_objective'] = np.array(objective, dtype=np.float64)
+            out['laplace_iterations'] = np.array(iterations, dtype=np.int64)
             return out
         except Exception as exc:
             print(f'Laplace failed: {exc}', file=sys.stderr, flush=True)
@@ -374,6 +483,8 @@ class LaplaceFitter:
                 jitter=jitter,
                 repaired=repaired,
                 min_eig=min_eig,
+                objective=objective,
+                iterations=iterations,
             )
 
     def _insertFit(
@@ -428,11 +539,11 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--draws', type=int, default=1000, help='Posterior samples per chain (default=1000)')
     parser.add_argument('--chains', type=int, default=4, help='Number of chains to match sample count semantics (default=4)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed (default=42)')
-    parser.add_argument('--maxeval', type=int, default=5000, help='Maximum MAP optimizer evaluations (default=5000)')
-    parser.add_argument('--optimizer', type=str, default='L-BFGS-B', help='MAP optimizer passed to PyMC find_MAP (default=L-BFGS-B)')
-    parser.add_argument('--diagonal', action='store_true', help='Force diagonal RFX covariance even when eta_rfx > 0 (default=False)')
+    parser.add_argument('--maxeval', type=int, default=100, help='Maximum LBFGS iterations (default=100)')
+    parser.add_argument('--optimizer', type=str, default='LBFGS', help='Accepted for fit.py compatibility; scratch backend uses LBFGS')
+    parser.add_argument('--diagonal', action='store_true', help='Force diagonal RFX covariance (default=False)')
     parser.add_argument('--force', action='store_true', help='Overwrite existing <partition>.laplace.npz (default=False)')
-    cfg = setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets with Laplace approximation.')
+    cfg = setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets with scratch Laplace approximation.')
     for key, value in _RUNTIME_DEFAULTS.items():
         if not hasattr(cfg, key):
             setattr(cfg, key, value)

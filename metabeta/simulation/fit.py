@@ -35,10 +35,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--diagonal', action='store_true')
 
     # Laplace args
-    parser.add_argument('--maxeval', type=int, default=5000,
-                        help='Maximum MAP optimizer evaluations (Laplace only; default=5000)')
-    parser.add_argument('--optimizer', type=str, default='L-BFGS-B',
-                        help='MAP optimizer passed to PyMC find_MAP (Laplace only; default=L-BFGS-B)')
+    parser.add_argument('--maxeval', type=int, default=100,
+                        help='Maximum LBFGS iterations (Laplace only; default=100)')
+    parser.add_argument('--optimizer', type=str, default='LBFGS',
+                        help='Accepted for Laplace compatibility; scratch backend uses LBFGS')
 
     # INLA args
     parser.add_argument('--n', type=int, default=None, help='Number of datasets to fit/reintegrate (INLA only; default: full batch)')
@@ -73,8 +73,8 @@ if __name__ == '__main__':
         ('viter', 100_000),
         ('lr', 1e-3),
         ('diagonal', False),
-        ('maxeval', 5000),
-        ('optimizer', 'L-BFGS-B'),
+        ('maxeval', 100),
+        ('optimizer', 'LBFGS'),
         ('re_correlation', 'diagonal'),
         ('timeout_s', 120),
         ('n', None),
