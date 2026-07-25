@@ -7,6 +7,7 @@ import pytest
 
 from metabeta.simulation.laplace import (
     LaplaceFitter,
+    _drawFromPrecision,
     _lowerIndices,
     _naturalSamples,
     _numCovParams,
@@ -105,6 +106,20 @@ def test_stabilize_precision_repairs_indefinite():
     assert jitter == pytest.approx(1e-4)
     assert used_repair is True
     assert min_eig < 0.0
+
+
+def test_draw_from_precision_uses_inverse_precision_cholesky():
+    class FakeRng:
+        def standard_normal(self, shape):
+            assert shape == (2, 2)
+            return np.eye(2)
+
+    precision = np.array([[4.0, 1.0], [1.0, 2.0]])
+    chol = np.linalg.cholesky(precision)
+    samples = _drawFromPrecision(FakeRng(), np.zeros(2), chol, n_samples=2)
+
+    expected = np.linalg.solve(chol.T, np.eye(2)).T
+    np.testing.assert_allclose(samples, expected)
 
 
 def test_covariance_parameter_layouts():
