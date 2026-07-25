@@ -1,12 +1,19 @@
 import argparse
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from metabeta.simulation.laplace import LaplaceFitter, _stabilizePrecision, _unravelSamples, setup
+from metabeta.simulation.laplace import (
+    LaplaceFitter,
+    _lowerIndices,
+    _naturalSamples,
+    _numCovParams,
+    _packInitial,
+    _stabilizePrecision,
+    setup,
+)
 
 
 def _write_batch(root: Path, data_id: str = 'test-n-laplace') -> None:
@@ -17,6 +24,7 @@ def _write_batch(root: Path, data_id: str = 'test-n-laplace') -> None:
     y = np.zeros((B, n_max), dtype=np.float64)
     X = np.zeros((B, n_max, d_max), dtype=np.float64)
     X[..., 0] = 1.0
+    Z = X[..., :q_max].copy()
     groups = np.zeros((B, n_max), dtype=np.int64)
     ns = np.zeros((B, m_max), dtype=np.int64)
 
@@ -27,11 +35,13 @@ def _write_batch(root: Path, data_id: str = 'test-n-laplace') -> None:
     for i in range(B):
         groups[i, : n[i]] = np.repeat(np.arange(m[i]), [2, 2, 1][: m[i]])[: n[i]]
         ns[i, : m[i]] = np.bincount(groups[i, : n[i]], minlength=m[i])
+        y[i, : n[i]] = np.linspace(-0.5, 0.7, n[i])
 
     np.savez(
         data_dir / 'test.npz',
         y=y,
         X=X,
+        Z=Z,
         groups=groups,
         ns=ns,
         d=d,
@@ -41,8 +51,12 @@ def _write_batch(root: Path, data_id: str = 'test-n-laplace') -> None:
         nu_ffx=np.zeros((B, d_max), dtype=np.float64),
         tau_ffx=np.ones((B, d_max), dtype=np.float64),
         tau_rfx=np.ones((B, q_max), dtype=np.float64),
+        tau_eps=np.ones(B, dtype=np.float64),
+        family_ffx=np.zeros(B, dtype=np.int64),
+        family_sigma_eps=np.zeros(B, dtype=np.int64),
         ffx=np.zeros((B, d_max), dtype=np.float64),
         sigma_rfx=np.ones((B, q_max), dtype=np.float64),
+        sigma_eps=np.ones(B, dtype=np.float64),
         rfx=np.zeros((B, m_max, q_max), dtype=np.float64),
         corr_rfx=np.tile(np.eye(q_max), (B, 1, 1)),
         likelihood_family=np.zeros(B, dtype=np.int64),
@@ -58,7 +72,7 @@ def _cfg(data_id: str = 'test-n-laplace', **kwargs) -> argparse.Namespace:
         'chains': 2,
         'seed': 7,
         'maxeval': 10,
-        'optimizer': 'L-BFGS-B',
+        'optimizer': 'LBFGS',
         'diagonal': False,
         'force': False,
     }
@@ -92,97 +106,49 @@ def test_stabilize_precision_repairs_indefinite():
     assert min_eig < 0.0
 
 
-def test_unravel_samples_reconstructs_value_variables():
-    flat = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-    info = (
-        ('beta', (), 1, np.dtype('float64')),
-        ('offset', (2,), 2, np.dtype('float64')),
-    )
-
-    samples = _unravelSamples(flat, info)
-
-    np.testing.assert_array_equal(samples['beta'], np.array([1.0, 4.0]))
-    np.testing.assert_array_equal(samples['offset'], np.array([[2.0, 3.0], [5.0, 6.0]]))
+def test_covariance_parameter_layouts():
+    assert _numCovParams(3, diagonal=False) == 6
+    assert _numCovParams(3, diagonal=True) == 3
+    assert _lowerIndices(3, diagonal=False) == [(0, 0), (1, 0), (1, 1), (2, 0), (2, 1), (2, 2)]
+    assert _lowerIndices(3, diagonal=True) == [(0, 0), (1, 1), (2, 2)]
 
 
-def test_extract_diagonal_samples_uses_transformed_values(tmp_path):
+def test_pack_initial_uses_scratch_parameter_length(tmp_path):
     _write_batch(tmp_path)
     fitter = LaplaceFitter(_cfg(), srcdir=tmp_path)
+    ds = fitter._getSingle(1)
+
+    init = _packInitial(ds, diagonal=False)
+
+    assert init.shape == (3 + 3 + 3 * 2 + 1,)
+
+
+def test_natural_samples_reconstructs_full_covariance_values():
     flat = np.array(
         [
-            [0.1, 0.2, np.log(2.0), 1.0, -1.0, np.log(0.5)],
-            [0.3, 0.4, np.log(3.0), 2.0, -2.0, np.log(0.7)],
+            [0.1, 0.2, np.log(2.0), 0.5, np.log(3.0), 1.0, 2.0, 3.0, 4.0, np.log(0.7)],
+            [0.3, 0.4, np.log(1.0), 0.0, np.log(1.0), 5.0, 6.0, 7.0, 8.0, np.log(0.9)],
         ],
         dtype=np.float64,
     )
-    info = (
-        ('Intercept', (), 1, np.dtype('float64')),
-        ('x1', (), 1, np.dtype('float64')),
-        ('1|i_sigma_log__', (), 1, np.dtype('float64')),
-        ('1|i_offset', (2,), 2, np.dtype('float64')),
-        ('sigma_log__', (), 1, np.dtype('float64')),
-    )
 
-    out = fitter._extractDiagonalSamples(flat, info, d=2, q=1, m=2, likelihood_family=0)
+    out = _naturalSamples(flat, d=2, q=2, m=2, has_sigma_eps=True, diagonal=False)
 
     np.testing.assert_allclose(out['laplace_ffx'], np.array([[0.1, 0.3], [0.2, 0.4]]))
-    np.testing.assert_allclose(out['laplace_sigma_rfx'], np.array([[2.0, 3.0]]))
-    np.testing.assert_allclose(out['laplace_rfx'][0], np.array([[2.0, 6.0], [-2.0, -6.0]]))
-    np.testing.assert_allclose(out['laplace_sigma_eps'], np.array([[0.5, 0.7]]))
-    np.testing.assert_allclose(out['laplace_corr_rfx'][0], np.eye(1)[None].repeat(2, axis=0))
+    np.testing.assert_allclose(out['laplace_rfx'][:, :, 0], np.array([[1.0, 3.0], [2.0, 4.0]]))
+    np.testing.assert_allclose(out['laplace_rfx'][:, :, 1], np.array([[5.0, 7.0], [6.0, 8.0]]))
+    np.testing.assert_allclose(out['laplace_sigma_eps'], np.array([[0.7, 0.9]]))
 
-
-def test_extract_correlated_samples_uses_model_transform_path(tmp_path):
-    pytest.importorskip('pymc')
-    _write_batch(tmp_path)
-    fitter = LaplaceFitter(_cfg(), srcdir=tmp_path)
-    ds = {
-        'd': np.array(2),
-        'q': np.array(2),
-        'm': np.array(2),
-        'likelihood_family': np.array(1),
-        'eta_rfx': np.array(1.5),
-    }
-    output_names = [
-        '_lkj_rfx_corr',
-        '1|i_sigma',
-        'x1|i_sigma',
-        '1|i',
-        'x1|i',
-        'Intercept',
-        'x1',
-    ]
-
-    class _Model:
-        deterministics = [SimpleNamespace(name=name) for name in output_names[:5]]
-        free_RVs = [SimpleNamespace(name=name) for name in output_names[5:]]
-        value_vars = [SimpleNamespace(name='packed')]
-
-        def compile_fn(self, *args, **kwargs):
-            def _eval(packed):
-                scale = float(packed)
-                return [
-                    np.eye(2) * scale,
-                    np.array(2.0),
-                    np.array(3.0),
-                    np.array([1.0, 2.0]),
-                    np.array([3.0, 4.0]),
-                    np.array(0.1),
-                    np.array(0.2),
-                ]
-
-            return _eval
-
-    flat = np.array([[1.0], [2.0]])
-    info = (('packed', (), 1, np.dtype('float64')),)
-
-    out = fitter._extractSamples(_Model(), flat, info, {}, ds)
-
-    np.testing.assert_allclose(out['laplace_ffx'], np.array([[0.1, 0.1], [0.2, 0.2]]))
-    np.testing.assert_allclose(out['laplace_sigma_rfx'], np.array([[2.0, 2.0], [3.0, 3.0]]))
-    assert out['laplace_rfx'].shape == (2, 2, 2)
-    np.testing.assert_allclose(out['laplace_corr_rfx'][0, 0], np.eye(2))
-    np.testing.assert_allclose(out['laplace_corr_rfx'][0, 1], np.eye(2) * 2.0)
+    std_1 = np.sqrt(0.5**2 + 3.0**2)
+    expected_sigma = np.array([[2.0, 1.0], [std_1, 1.0]])
+    expected_corr = np.array(
+        [
+            [[1.0, 1.0 / (2.0 * std_1)], [1.0 / (2.0 * std_1), 1.0]],
+            np.eye(2),
+        ]
+    )
+    np.testing.assert_allclose(out['laplace_sigma_rfx'], expected_sigma)
+    np.testing.assert_allclose(out['laplace_corr_rfx'][0], expected_corr)
 
 
 def test_failure_result_shapes_gaussian(tmp_path):
@@ -199,6 +165,22 @@ def test_failure_result_shapes_gaussian(tmp_path):
     assert out['laplace_corr_rfx'].shape == (1, 6, 2, 2)
     assert bool(out['laplace_failed'])
     assert float(out['laplace_duration']) == pytest.approx(0.5)
+
+
+def test_fit_single_smoke_gaussian(tmp_path):
+    _write_batch(tmp_path)
+    fitter = LaplaceFitter(_cfg(draws=2, chains=1, maxeval=5), srcdir=tmp_path)
+    ds = fitter._getSingle(0)
+
+    out = fitter._fitSingle(ds, np.random.default_rng(123))
+
+    assert out['laplace_ffx'].shape == (2, 2)
+    assert out['laplace_sigma_rfx'].shape == (1, 2)
+    assert out['laplace_sigma_eps'].shape == (1, 2)
+    assert out['laplace_rfx'].shape == (1, 2, 2)
+    assert out['laplace_corr_rfx'].shape == (1, 2, 1, 1)
+    assert bool(out['laplace_failed']) is False
+    assert np.isfinite(out['laplace_objective'])
 
 
 def test_go_writes_standalone_batch_file(tmp_path, monkeypatch):
@@ -219,6 +201,8 @@ def test_go_writes_standalone_batch_file(tmp_path, monkeypatch):
             'laplace_hessian_jitter': np.array(0.0),
             'laplace_hessian_repaired': np.array(False),
             'laplace_hessian_min_eig': np.array(1.0),
+            'laplace_objective': np.array(2.0),
+            'laplace_iterations': np.array(3),
         }
 
     monkeypatch.setattr(LaplaceFitter, '_fitSingle', fake_fit_single)
@@ -234,6 +218,7 @@ def test_go_writes_standalone_batch_file(tmp_path, monkeypatch):
         assert raw['laplace_corr_rfx'].shape == (2, 1, 6, 2, 2)
         assert np.all(raw['laplace_sigma_rfx'][0, 1] == 0.0)
         np.testing.assert_array_equal(raw['laplace_failed'], np.array([False, False]))
+        np.testing.assert_array_equal(raw['laplace_iterations'], np.array([3, 3]))
 
 
 def test_go_refuses_existing_output_without_force(tmp_path):
@@ -281,5 +266,6 @@ def test_setup_backfills_runtime_defaults_for_config(tmp_path, monkeypatch):
     assert cfg.partition == 'test'
     assert cfg.draws == 1000
     assert cfg.chains == 4
-    assert cfg.optimizer == 'L-BFGS-B'
+    assert cfg.maxeval == 100
+    assert cfg.optimizer == 'LBFGS'
     assert cfg.force is False
