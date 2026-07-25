@@ -13,7 +13,7 @@
 #SBATCH --time=24:00:00
 
 CHUNK_SIZE=1
-START_EPOCH=8001 # ends at START_EPOCH + N_ARRAYS
+START_EPOCH=12001 # ends at START_EPOCH + N_ARRAYS
 
 while [[ $# -gt 0 ]]; do
     case $1 in
