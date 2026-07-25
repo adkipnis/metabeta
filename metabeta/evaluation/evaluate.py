@@ -35,8 +35,8 @@ from metabeta.plotting import plotComparison
 
 logger = logging.getLogger('evaluate.py')
 
-_ALL_MODELS = ('MB', 'NUTS', 'ADVI')
-_FIT_MODELS = frozenset(('NUTS', 'ADVI'))
+_ALL_MODELS = ('MB', 'NUTS', 'ADVI', 'LAPLACE')
+_FIT_MODELS = frozenset(('NUTS', 'ADVI', 'LAPLACE'))
 
 
 def setup() -> argparse.Namespace:
@@ -46,7 +46,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--checkpoint', type=str, help='Path to checkpoint directory')
     parser.add_argument('--prefix', type=str, default='latest', help='Checkpoint prefix: best or latest')
     # Data-direct: evaluate fit-only models without a checkpoint
-    parser.add_argument('--data_path_test', type=str, help='Direct path to test.fit.npz (no checkpoint needed for NUTS/ADVI)')
+    parser.add_argument('--data_path_test', type=str, help='Direct path to test.fit.npz (no checkpoint needed for fit models)')
     parser.add_argument('--data_path_valid', type=str, help='Direct path to valid.fit.npz')
     parser.add_argument('--model_id', type=str)
     parser.add_argument('--r_tag', type=str)
@@ -111,7 +111,7 @@ def setup() -> argparse.Namespace:
         ]
         if 'MB' in active:
             raise ValueError(
-                '--data_path_test/--data_path_valid mode: use --models NUTS,ADVI (no MB without --checkpoint)'
+                '--data_path_test/--data_path_valid mode: use fit models only (no MB without --checkpoint)'
             )
     else:
         raise ValueError(
@@ -547,6 +547,9 @@ class Evaluator:
         elif model == 'ADVI':
             mask = self._fitBatchMask(full_batch, prefix='advi')
             return self._fit2proposal(subsetBatch(full_batch, mask), prefix='advi'), mask
+        elif model == 'LAPLACE':
+            mask = self._fitBatchMask(full_batch, prefix='laplace')
+            return self._fit2proposal(subsetBatch(full_batch, mask), prefix='laplace'), mask
         raise ValueError(f'unknown model: {model}')
 
     @staticmethod
@@ -606,7 +609,7 @@ class Evaluator:
         rows: list[dict] = []
         for model in active:
             native_batch = model in _FIT_MODELS and (
-                model == 'ADVI' or (model == 'NUTS' and common_mask is None)
+                model in ('ADVI', 'LAPLACE') or (model == 'NUTS' and common_mask is None)
             )
             if native_batch:
                 s = self._loadOrComputeSummary(
