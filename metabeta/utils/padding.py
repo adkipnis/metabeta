@@ -108,10 +108,10 @@ def padToModel(
             padded[:q, :q] = ds['Psi']
             ds['Psi'] = padded
 
-    # --- pad fit samples (nuts_* / advi_*) ---
+    # --- pad fit samples (nuts_* / advi_* / laplace_*) ---
     # Fit arrays may be stored at the file-wide max d/q (larger than this
     # dataset's actual d/q), so we trim first, then re-pad to model dims.
-    for method in ('nuts', 'advi'):
+    for method in ('nuts', 'advi', 'laplace'):
         ffx_key = f'{method}_ffx'
         if ffx_key not in ds:
             continue

@@ -149,7 +149,7 @@ class Collection(torch.utils.data.Dataset):
             ds['qperm'] = qperm
 
             # permute fit samples consistently with ground truth
-            for method in ('nuts', 'advi'):
+            for method in ('nuts', 'advi', 'laplace'):
                 if f'{method}_ffx' in ds:
                     ds[f'{method}_ffx'] = ds[f'{method}_ffx'][dperm]
                     ds[f'{method}_sigma_rfx'] = ds[f'{method}_sigma_rfx'][qperm]
@@ -278,7 +278,7 @@ def collateGrouped(
     )
 
     # collate fit samples if present
-    for method in ('nuts', 'advi'):
+    for method in ('nuts', 'advi', 'laplace'):
         if f'{method}_ffx' in batch[0]:
             out.update(collateFits(batch, method, d, q, m, dtype))
 
