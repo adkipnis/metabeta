@@ -105,13 +105,11 @@ if __name__ == '__main__':
     elif cfg.method == 'laplace':
         from metabeta.simulation.laplace import LaplaceFitter
 
+        fitter = LaplaceFitter(cfg)
         if cfg.reintegrate:
-            print(
-                'error: laplace writes <partition>.laplace.npz directly; no reintegration step',
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        LaplaceFitter(cfg).go()
+            fitter.reintegrate()
+        else:
+            fitter.go()
     else:
         from metabeta.simulation.nutsadvi import Fitter
 

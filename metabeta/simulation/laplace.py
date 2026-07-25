@@ -4,6 +4,7 @@ This module intentionally does not use PyMC.  It fits a pragmatic GLMM posterior
 with a direct torch objective, computes a dense transformed-space Hessian at the
 MAP, samples the Gaussian Laplace approximation, and writes method-only batch
 outputs to ``<partition>.laplace.npz``.
+The sidecar can be merged into ``<partition>.fit.npz`` for evaluation.
 
 The random-effect covariance uses a simple unconstrained Cholesky
 parameterization and prior.  This is not exact PyMC/LKJ prior parity; the PyMC
@@ -47,6 +48,7 @@ _RUNTIME_DEFAULTS = {
     'optimizer': 'LBFGS',
     'diagonal': False,
     'force': False,
+    'reintegrate': False,
 }
 
 
@@ -524,6 +526,32 @@ class LaplaceFitter:
         np.savez_compressed(self.outpath, **out)
         n_ok = int(np.sum(~out['laplace_failed']))
         print(f'Saved Laplace fits to {self.outpath}  ({n_ok}/{len(self)} OK)')
+
+    def reintegrate(self) -> None:
+        """Merge ``<partition>.laplace.npz`` sidecar keys into ``<partition>.fit.npz``."""
+        if not self.outpath.exists():
+            raise FileNotFoundError(f'cannot merge: {self.outpath} does not exist')
+
+        fit_path = self.batch_path.with_suffix('.fit.npz')
+        base_path = fit_path if fit_path.exists() else self.batch_path
+        with np.load(base_path, allow_pickle=True) as raw:
+            merged = dict(raw)
+        with np.load(self.outpath, allow_pickle=True) as raw:
+            laplace = {key: raw[key] for key in raw.files if key.startswith('laplace_')}
+
+        if not laplace:
+            raise ValueError(f'{self.outpath} contains no laplace_* keys')
+        n_laplace = len(next(iter(laplace.values())))
+        n_data = len(merged['y'])
+        if n_laplace != n_data:
+            raise ValueError(
+                f'{self.outpath} has {n_laplace} fits, but {base_path} has {n_data} datasets'
+            )
+
+        merged.update(laplace)
+        np.savez_compressed(fit_path, **merged)
+        n_ok = int(np.sum(~laplace['laplace_failed'].astype(bool)))
+        print(f'Merged Laplace fits into {fit_path}  ({n_ok}/{n_data} OK)')
 
 
 # fmt: off
