@@ -87,6 +87,21 @@ def _buildProposal(
     )
 
 
+def _fitBatchMask(batch: dict[str, torch.Tensor], method: str) -> torch.Tensor:
+    failed_key = f'{method}_failed'
+    if failed_key not in batch:
+        return torch.ones(batch['y'].shape[0], dtype=torch.bool, device=batch['y'].device)
+    return ~batch[failed_key].bool()
+
+
+def _subsetBatch(batch: dict[str, torch.Tensor], mask: torch.Tensor) -> dict[str, torch.Tensor]:
+    batch_size = batch['y'].shape[0]
+    return {
+        key: value[mask] if torch.is_tensor(value) and value.shape[:1] == (batch_size,) else value
+        for key, value in batch.items()
+    }
+
+
 def _smallData(data: dict) -> dict:
     """Extract only the parameter + mask tensors needed for corr/nrmse (no X/y/Z)."""
     keep = (
@@ -285,6 +300,12 @@ def _cache(
     with tqdm(total=n_total, desc=method, unit='ds') as pbar:
         for batch in dl:
             b = batch['y'].shape[0]
+            mask = _fitBatchMask(batch, method)
+            n_ok = int(mask.sum().item())
+            if n_ok == 0:
+                pbar.update(b)
+                continue
+            batch = _subsetBatch(batch, mask)
 
             proposal = _buildProposal(batch, method, d_corr)
             batch_for_summary = batch
@@ -296,10 +317,14 @@ def _cache(
             all_rfx_ranks.extend(_rfxJointRanks(proposal, batch_for_summary))
             partials.append(partial)
             small_data_list.append(_smallData(batch_for_summary))
-            batch_sizes.append(b)
+            batch_sizes.append(n_ok)
 
             del batch, proposal, batch_for_summary, partial
             pbar.update(b)
+
+    if not partials:
+        logger.warning('%s: no successful fits in %s, skipping.', method, fit_path.name)
+        return
 
     print(f'  [{method}] merging ...')
     summary = _mergeSummaries(
