@@ -1,11 +1,12 @@
 import argparse
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from metabeta.simulation.laplace import LaplaceFitter, _stabilizePrecision, setup
+from metabeta.simulation.laplace import LaplaceFitter, _stabilizePrecision, _unravelSamples, setup
 
 
 def _write_batch(root: Path, data_id: str = 'test-n-laplace') -> None:
@@ -89,6 +90,99 @@ def test_stabilize_precision_repairs_indefinite():
     assert jitter == pytest.approx(1e-4)
     assert used_repair is True
     assert min_eig < 0.0
+
+
+def test_unravel_samples_reconstructs_value_variables():
+    flat = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    info = (
+        ('beta', (), 1, np.dtype('float64')),
+        ('offset', (2,), 2, np.dtype('float64')),
+    )
+
+    samples = _unravelSamples(flat, info)
+
+    np.testing.assert_array_equal(samples['beta'], np.array([1.0, 4.0]))
+    np.testing.assert_array_equal(samples['offset'], np.array([[2.0, 3.0], [5.0, 6.0]]))
+
+
+def test_extract_diagonal_samples_uses_transformed_values(tmp_path):
+    _write_batch(tmp_path)
+    fitter = LaplaceFitter(_cfg(), srcdir=tmp_path)
+    flat = np.array(
+        [
+            [0.1, 0.2, np.log(2.0), 1.0, -1.0, np.log(0.5)],
+            [0.3, 0.4, np.log(3.0), 2.0, -2.0, np.log(0.7)],
+        ],
+        dtype=np.float64,
+    )
+    info = (
+        ('Intercept', (), 1, np.dtype('float64')),
+        ('x1', (), 1, np.dtype('float64')),
+        ('1|i_sigma_log__', (), 1, np.dtype('float64')),
+        ('1|i_offset', (2,), 2, np.dtype('float64')),
+        ('sigma_log__', (), 1, np.dtype('float64')),
+    )
+
+    out = fitter._extractDiagonalSamples(flat, info, d=2, q=1, m=2, likelihood_family=0)
+
+    np.testing.assert_allclose(out['laplace_ffx'], np.array([[0.1, 0.3], [0.2, 0.4]]))
+    np.testing.assert_allclose(out['laplace_sigma_rfx'], np.array([[2.0, 3.0]]))
+    np.testing.assert_allclose(out['laplace_rfx'][0], np.array([[2.0, 6.0], [-2.0, -6.0]]))
+    np.testing.assert_allclose(out['laplace_sigma_eps'], np.array([[0.5, 0.7]]))
+    np.testing.assert_allclose(out['laplace_corr_rfx'][0], np.eye(1)[None].repeat(2, axis=0))
+
+
+def test_extract_correlated_samples_uses_model_transform_path(tmp_path):
+    pytest.importorskip('pymc')
+    _write_batch(tmp_path)
+    fitter = LaplaceFitter(_cfg(), srcdir=tmp_path)
+    ds = {
+        'd': np.array(2),
+        'q': np.array(2),
+        'm': np.array(2),
+        'likelihood_family': np.array(1),
+        'eta_rfx': np.array(1.5),
+    }
+    output_names = [
+        '_lkj_rfx_corr',
+        '1|i_sigma',
+        'x1|i_sigma',
+        '1|i',
+        'x1|i',
+        'Intercept',
+        'x1',
+    ]
+
+    class _Model:
+        deterministics = [SimpleNamespace(name=name) for name in output_names[:5]]
+        free_RVs = [SimpleNamespace(name=name) for name in output_names[5:]]
+        value_vars = [SimpleNamespace(name='packed')]
+
+        def compile_fn(self, *args, **kwargs):
+            def _eval(packed):
+                scale = float(packed)
+                return [
+                    np.eye(2) * scale,
+                    np.array(2.0),
+                    np.array(3.0),
+                    np.array([1.0, 2.0]),
+                    np.array([3.0, 4.0]),
+                    np.array(0.1),
+                    np.array(0.2),
+                ]
+
+            return _eval
+
+    flat = np.array([[1.0], [2.0]])
+    info = (('packed', (), 1, np.dtype('float64')),)
+
+    out = fitter._extractSamples(_Model(), flat, info, {}, ds)
+
+    np.testing.assert_allclose(out['laplace_ffx'], np.array([[0.1, 0.1], [0.2, 0.2]]))
+    np.testing.assert_allclose(out['laplace_sigma_rfx'], np.array([[2.0, 2.0], [3.0, 3.0]]))
+    assert out['laplace_rfx'].shape == (2, 2, 2)
+    np.testing.assert_allclose(out['laplace_corr_rfx'][0, 0], np.eye(2))
+    np.testing.assert_allclose(out['laplace_corr_rfx'][0, 1], np.eye(2) * 2.0)
 
 
 def test_failure_result_shapes_gaussian(tmp_path):
