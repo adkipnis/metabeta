@@ -79,6 +79,12 @@ MODELS = [
         data_dir=DATA_DIR / 'small-b-sampled',
         likelihood_family=1,
     ),
+    dict(
+        label='Poisson',
+        ckpt=_ckpt_dir('poisson', 'small', BEST_SEEDS[('poisson', 'small')]) / 'best.pt',
+        data_dir=DATA_DIR / 'small-p-sampled',
+        likelihood_family=2,
+    ),
 ]
 
 
