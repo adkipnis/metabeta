@@ -26,7 +26,7 @@ from metabeta.utils.names import datasetFilename
 from metabeta.utils.constants import FAMILY_NAMES
 from metabeta.analytical.fit import glmm
 
-OUTDIR = Path(__file__).resolve().parent / '..' / 'outputs' / 'data'
+OUTDIR = Path(__file__).resolve().parent / '..' / 'outputs' / 'data_real'
 
 
 # fmt: off
