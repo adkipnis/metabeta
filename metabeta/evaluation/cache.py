@@ -90,7 +90,7 @@ def _buildProposal(
     elif d_corr > 0:
         logger.warning('%s: corr_rfx missing, padding zeros for d_corr=%d', method, d_corr)
         samples_g.append(samples_g[0].new_zeros(*samples_g[0].shape[:-1], d_corr))
-    return Proposal(
+    proposal = Proposal(
         {
             'global': {'samples': torch.cat(samples_g, dim=-1)},
             'local': {'samples': batch[f'{method}_rfx']},
@@ -98,6 +98,9 @@ def _buildProposal(
         has_sigma_eps=has_sigma_eps,
         d_corr=d_corr,
     )
+    if f'{method}_duration' in batch:
+        proposal.tpd = batch[f'{method}_duration'].mean().item()
+    return proposal
 
 
 def _fitBatchMask(batch: dict[str, torch.Tensor], method: str) -> torch.Tensor:
