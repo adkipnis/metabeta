@@ -48,6 +48,27 @@ def test_plot_name_suffix_is_sanitized(suffix, expected):
     assert Evaluator._plotName(suffix) == expected
 
 
+def test_plot_batch_strips_fit_sample_arrays():
+    evaluator = Evaluator.__new__(Evaluator)
+    batch = {
+        'X': torch.zeros(2, 3),
+        'ffx': torch.zeros(2, 1),
+        'sigma_rfx': torch.ones(2, 1),
+        'rfx': torch.zeros(2, 4, 1),
+        'mask_d': torch.ones(2, 1, dtype=torch.bool),
+        'mask_q': torch.ones(2, 1, dtype=torch.bool),
+        'mask_mq': torch.ones(2, 4, 1, dtype=torch.bool),
+        'nuts_ffx': torch.zeros(2, 1000, 1),
+        'advi_rfx': torch.zeros(2, 4, 1000, 1),
+    }
+
+    plot_batch = evaluator._plotBatch(batch)
+
+    assert 'nuts_ffx' not in plot_batch
+    assert 'advi_rfx' not in plot_batch
+    assert plot_batch['ffx'] is batch['ffx']
+
+
 def test_common_mask_intersects_failed_fit_masks():
     mask_a = np.array([True, False, True, True])
     mask_b = np.array([True, True, False, True])
