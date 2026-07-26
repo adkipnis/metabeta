@@ -61,3 +61,29 @@ def test_mb_summary_cache_path_includes_run_options_and_mask(tmp_path):
     assert '_s1000_seed7_k0_predcov1_all.pt' in path_all.name
     assert path_masked != path_all
     assert path_masked.name.endswith('.pt')
+
+
+def test_mb_summary_cache_candidates_include_legacy_checkpoint_name(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(
+        n_samples=1000,
+        seed=0,
+        k=0,
+        pred_coverage=True,
+    )
+    evaluator.run_name = 'data=small-n-mixed_model=large_seed=13'
+    evaluator.legacy_run_name = 'data=small-n-mixed_model=large_seed=0'
+    evaluator.checkpoint_prefix = 'best'
+    evaluator.data_path_test = tmp_path / 'small-n-sampled' / 'test.fit.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+
+    candidates = evaluator._summaryCacheCandidates(
+        'test',
+        'mb',
+        mask=np.array([True, True, True]),
+    )
+
+    names = [path.name for path in candidates]
+    assert any('large_seed=13_best' in name for name in names)
+    assert any('large_seed=0_best' in name for name in names)
+    assert any('large_seed=0_latest' in name for name in names)
