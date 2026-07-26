@@ -1,3 +1,26 @@
+"""
+posthoc/importance.py — self-normalized importance sampling (SNIS) correction for flow posteriors.
+
+`getImportanceWeights` already implements standard SNIS: log_w = log_likelihood + log_prior -
+log_q, softmax-normalized (optionally PSIS-smoothed via `pareto`, dampened, temperature-scaled).
+Current diagnostics returned: `pareto_k` (PSIS shape, when `pareto=True`) and `n_eff` /
+`sample_efficiency` (effective sample size).
+
+TODO
+----
+Additional weight-stability diagnostics worth adding to `getImportanceWeights`'s output dict
+(see Ko & Domke, "Amortized Factor Inference Networks", arXiv:2605.26419, Section D.3/D.6,
+whose AFIN+SNIS is the same weight/normalization scheme used here):
+- max normalized weight (`w.max(-1)`) — flags a single sample dominating the estimate.
+- entropy ratio of normalized weights (`-sum(w*log(w)) / log(n_samples)`, in [0, 1]) — near 1
+  means diffuse weights, near 0 means concentrated.
+- target energy gap: mean weighted `-log p̃(theta)` under the corrected samples minus the same
+  quantity under a reference (e.g. NUTS) sample, when a reference is available — flags whether
+  corrected samples land in the right density region, not just whether weights are stable.
+These are cheap scalars and would give earlier warning of silent SNIS degeneracy (e.g. in the
+hard high-d/low-n regime) than pareto_k/sample_efficiency alone.
+"""
+
 import argparse
 import arviz as az
 import torch
