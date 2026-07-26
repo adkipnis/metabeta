@@ -163,6 +163,7 @@ def test_make_row_includes_loo_nll_and_predictive_width():
     assert row['ppNLL'] == pytest.approx(1.0)
     assert row['ppWidth90'] == pytest.approx(5.0)
     assert row['tpd'] == pytest.approx(0.25)
+    assert row['EACE'] == pytest.approx(0.1)
 
 
 def test_save_tables_accepts_loo_nll(tmp_path):
@@ -176,6 +177,7 @@ def test_save_tables_accepts_loo_nll(tmp_path):
             'R': 0.9,
             'NRMSE': 0.2,
             'ECE': 0.01,
+            'EACE': 0.02,
             'RFX_joint_ECE': 0.01,
             'RFX_joint_EACE': 0.02,
             'LOO-NLL': 1.5,
@@ -192,6 +194,7 @@ def test_save_tables_accepts_loo_nll(tmp_path):
             'R': 0.8,
             'NRMSE': 0.3,
             'ECE': 0.02,
+            'EACE': 0.01,
             'RFX_joint_ECE': 0.02,
             'RFX_joint_EACE': 0.03,
             'LOO-NLL': 1.3,
@@ -208,6 +211,7 @@ def test_save_tables_accepts_loo_nll(tmp_path):
     evaluator.saveTables(rows)
 
     table = (tmp_path / 'evaluate.md').read_text()
+    assert 'EACE' in table
     assert 'LOO-NLL' in table
     assert '**1.3000**' in table
     assert '**3.0000**' in table
