@@ -157,9 +157,7 @@ def test_plot_with_fit_models_uses_light_path(monkeypatch, tmp_path):
     evaluator.data_path_valid = evaluator.data_path_test
     calls = []
 
-    monkeypatch.setattr(
-        evaluator, '_evalPartitionPlotLight', lambda *args: calls.append(args) or []
-    )
+    monkeypatch.setattr(evaluator, '_evalPartitionLight', lambda *args: calls.append(args) or [])
     monkeypatch.setattr(
         evaluator,
         '_getPartitionData',
@@ -374,7 +372,35 @@ def test_mb_warmup_uses_one_sample_and_restores_torch_rng():
     torch.testing.assert_close(actual, expected)
 
 
-def test_table_only_cache_miss_raises_before_full_evaluation(tmp_path):
+def test_table_only_cache_miss_uses_light_path_before_full_evaluation(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(
+        save_tables=True,
+        plot=False,
+        converged_subset=False,
+        partition='test',
+        models='MB,NUTS',
+        likelihood_family=0,
+    )
+    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_valid = tmp_path / 'valid.fit.npz'
+    evaluator.results_dir = None
+    evaluator._cachedRowsForPartition = lambda *args, **kwargs: None
+    evaluator._directDataMode = lambda: False
+    calls = []
+
+    def fail_eval(*args, **kwargs):
+        raise AssertionError('full evaluation should not be reached in table-only mode')
+
+    evaluator._evalPartitionLight = lambda *args, **kwargs: calls.append(args) or []
+    evaluator._getPartitionData = fail_eval
+
+    evaluator.go()
+
+    assert calls
+
+
+def test_table_only_cache_miss_raises_when_light_path_unavailable(tmp_path):
     evaluator = Evaluator.__new__(Evaluator)
     evaluator.cfg = argparse.Namespace(
         save_tables=True,
@@ -387,11 +413,7 @@ def test_table_only_cache_miss_raises_before_full_evaluation(tmp_path):
     evaluator.data_path_test = tmp_path / 'test.fit.npz'
     evaluator.data_path_valid = tmp_path / 'valid.fit.npz'
     evaluator._cachedRowsForPartition = lambda *args, **kwargs: None
-
-    def fail_eval(*args, **kwargs):
-        raise AssertionError('full evaluation should not be reached in table-only mode')
-
-    evaluator._evalPartition = fail_eval
+    evaluator._directDataMode = lambda: True
 
     with pytest.raises(RuntimeError, match='Refusing to fall back to full evaluation'):
         evaluator.go()

@@ -824,6 +824,16 @@ class Evaluator:
         active = self._activeModels(partition, models)
         return bool(active) and all(model == 'MB' for model in active)
 
+    def _canLightEvaluateFromTableOnly(self, partition: str, models: list[str]) -> bool:
+        active = self._activeModels(partition, models)
+        need_fits = any(model in _FIT_MODELS for model in active)
+        return (
+            bool(active)
+            and need_fits
+            and not self.cfg.converged_subset
+            and not self._directDataMode()
+        )
+
     # -------------------------------------------------------------------------
     # Output
     # -------------------------------------------------------------------------
@@ -1059,10 +1069,10 @@ class Evaluator:
     ) -> torch.Tensor:
         return tensor if mask is None else tensor[torch.from_numpy(mask)]
 
-    def _evalPartitionPlotLight(
+    def _evalPartitionLight(
         self, partition: str, active: list[str], fit_label: str, multi: bool
     ) -> list[dict]:
-        """Plot fit comparisons without loading all arrays in ``*.fit.npz`` via Collection."""
+        """Evaluate fit comparisons without loading all arrays in ``*.fit.npz`` via Collection."""
         fit_path = self._fitDataPath(partition)
         dl, full_batch, _ = self._getPartitionData(partition, need_fits=False)
         n = full_batch['X'].shape[0]
@@ -1114,21 +1124,22 @@ class Evaluator:
             label = f'{model}_{partition}' if multi else model
             rows.append(self._makeRow(label, s, fit_label))
 
-        plot_batch = self._plotBatch(common_batch)
-        del common_batch, full_batch
-        gc.collect()
-        self._logMemory('Released full base batch before plotting partition=%s', partition)
+        if self.cfg.plot:
+            plot_batch = self._plotBatch(common_batch)
+            del common_batch, full_batch
+            gc.collect()
+            self._logMemory('Released full base batch before plotting partition=%s', partition)
 
-        plot_dir = self.plot_dir if partition == 'test' else self.plot_dir / partition
-        plot_dir.mkdir(parents=True, exist_ok=True)
-        plot_models = [model for model in active if model in aligned and model in summaries]
-        self.plot(
-            [aligned[model] for model in plot_models],
-            [summaries[model] for model in plot_models],
-            plot_models,
-            plot_batch,
-            plot_dir=plot_dir,
-        )
+            plot_dir = self.plot_dir if partition == 'test' else self.plot_dir / partition
+            plot_dir.mkdir(parents=True, exist_ok=True)
+            plot_models = [model for model in active if model in aligned and model in summaries]
+            self.plot(
+                [aligned[model] for model in plot_models],
+                [summaries[model] for model in plot_models],
+                plot_models,
+                plot_batch,
+                plot_dir=plot_dir,
+            )
         return rows
 
     def _evalPartition(
@@ -1141,12 +1152,17 @@ class Evaluator:
 
         need_fits = any(model in _FIT_MODELS for model in active)
         if (
-            self.cfg.plot
+            (self.cfg.plot or self._tableOnlyMode())
             and need_fits
             and not self.cfg.converged_subset
             and not self._directDataMode()
         ):
-            return self._evalPartitionPlotLight(partition, active, fit_label, multi)
+            logger.info(
+                'Using light fit evaluation path for partition=%s; fit arrays are loaded '
+                'directly from npz by requested method.',
+                partition,
+            )
+            return self._evalPartitionLight(partition, active, fit_label, multi)
 
         dl, full_batch, _ = self._getPartitionData(partition, need_fits=need_fits)
 
@@ -1444,7 +1460,11 @@ class Evaluator:
             cached_rows = None
             if self._tableOnlyMode():
                 cached_rows = self._cachedRowsForPartition(partition, models, fit_label, multi)
-                if cached_rows is None and not self._canFallbackFromTableOnly(partition, models):
+                if (
+                    cached_rows is None
+                    and not self._canFallbackFromTableOnly(partition, models)
+                    and not self._canLightEvaluateFromTableOnly(partition, models)
+                ):
                     raise self._tableOnlyCacheError(partition)
             if cached_rows is not None:
                 rows.extend(cached_rows)
