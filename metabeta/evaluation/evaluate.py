@@ -87,8 +87,8 @@ def setup() -> argparse.Namespace:
         help='Compute predictive interval coverage/width',
     )
     parser.add_argument(
-        '--summary_chunk_size', type=int, default=16,
-        help='Datasets per predictive-summary chunk (default: 16)',
+        '--summary_chunk_size', type=int, default=4,
+        help='Datasets per predictive-summary chunk (default: 4)',
     )
     parser.add_argument(
         '--plot', action=argparse.BooleanOptionalAction, default=True,
