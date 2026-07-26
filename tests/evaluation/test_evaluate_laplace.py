@@ -59,6 +59,29 @@ def test_native_summary_cache_requires_same_mask(src_mask, comparison_mask, expe
     assert np.array_equal(native_mask, comparison_mask) is expected
 
 
+@pytest.mark.parametrize(
+    ('src_mask', 'common_mask', 'expected'),
+    [
+        (None, None, None),
+        (np.array([True, True, True]), None, None),
+        (np.array([True, False, True]), np.array([True, False, True]), None),
+        (None, np.array([True, False, True]), np.array([True, False, True])),
+        (
+            np.array([True, True, False]),
+            np.array([True, False, False]),
+            np.array([True, False, False]),
+        ),
+    ],
+)
+def test_fit_summary_mask_uses_native_cache_when_possible(src_mask, common_mask, expected):
+    result = Evaluator._fitSummaryMask(src_mask, common_mask, n=3)
+
+    if expected is None:
+        assert result is None
+    else:
+        np.testing.assert_array_equal(result, expected)
+
+
 def test_mb_summary_cache_path_includes_run_options_and_mask(tmp_path):
     evaluator = Evaluator.__new__(Evaluator)
     evaluator.cfg = argparse.Namespace(
