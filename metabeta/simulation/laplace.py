@@ -40,6 +40,7 @@ _DIAGNOSTIC_KEYS = (
     'laplace_iterations',
 )
 _LBFGS_RETRY_LR = 0.2
+_SUSPICIOUS_BETA_ABS = 100.0
 _ERROR_DTYPE = '<U256'
 _RUNTIME_DEFAULTS = {
     'partition': 'test',
@@ -338,6 +339,12 @@ def _fitMapAndPrecision(
         try:
             theta_map, objective, iterations = _fitMap(init, data, maxeval, lr=lr)
             total_iterations += iterations
+            beta_abs = float(np.max(np.abs(theta_map[: data['d']]))) if data['d'] else 0.0
+            if beta_abs > _SUSPICIOUS_BETA_ABS:
+                errors.append(
+                    f'lr={lr:g}: suspicious fixed-effect MAP ' f'max|beta|={beta_abs:.3g}; retrying'
+                )
+                continue
             precision = _hessian(theta_map, data)
             _, chol, jitter, repaired, min_eig = _stabilizePrecision(precision)
             return theta_map, objective, total_iterations, chol, jitter, repaired, min_eig

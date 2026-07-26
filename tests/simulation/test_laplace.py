@@ -8,6 +8,7 @@ import pytest
 from metabeta.simulation.laplace import (
     LaplaceFitter,
     _drawFromPrecision,
+    _fitMapAndPrecision,
     _lowerIndices,
     _naturalSamples,
     _numCovParams,
@@ -162,6 +163,38 @@ def test_pack_initial_regularizes_rank_deficient_gaussian_design():
 
     assert np.isfinite(init).all()
     assert np.max(np.abs(init[:d])) < 10.0
+
+
+def test_fit_map_and_precision_retries_suspicious_beta(monkeypatch):
+    calls = []
+
+    def fake_fit_map(init, data, max_iter, lr=1.0):
+        calls.append(lr)
+        if lr == 1.0:
+            return np.array([1e5, 0.0]), 10.0, 3
+        return np.array([0.5, -0.2]), 1.0, 4
+
+    def fake_hessian(theta_map, data):
+        np.testing.assert_allclose(theta_map, np.array([0.5, -0.2]))
+        return np.eye(2)
+
+    monkeypatch.setattr('metabeta.simulation.laplace._fitMap', fake_fit_map)
+    monkeypatch.setattr('metabeta.simulation.laplace._hessian', fake_hessian)
+
+    theta_map, objective, iterations, chol, jitter, repaired, min_eig = _fitMapAndPrecision(
+        np.zeros(2),
+        {'d': 2},
+        maxeval=10,
+    )
+
+    np.testing.assert_allclose(theta_map, np.array([0.5, -0.2]))
+    assert objective == pytest.approx(1.0)
+    assert iterations == 7
+    np.testing.assert_allclose(chol, np.eye(2))
+    assert jitter == 0.0
+    assert repaired is False
+    assert min_eig == pytest.approx(1.0)
+    assert calls == [1.0, 0.2]
 
 
 def test_natural_samples_reconstructs_full_covariance_values():
