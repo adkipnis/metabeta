@@ -63,7 +63,7 @@ class Fitter:
     def __init__(
         self,
         cfg: argparse.Namespace,
-        srcdir: Path = Path(__file__).resolve().parent / '..' / 'outputs' / 'data',
+        srcdir: Path = Path(__file__).resolve().parent / '..' / 'outputs' / 'data_real',
     ) -> None:
         assert cfg.method in ['nuts', 'advi'], 'fit method must be in [nuts, advi]'
         self.cfg = cfg
