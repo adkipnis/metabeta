@@ -50,7 +50,16 @@ def test_summary_for_plot_recomputes_estimates_from_live_proposal():
         has_sigma_eps=False,
     )
 
-    plot_summary = Evaluator._summaryForPlot(summary, proposal)
+    data = {
+        'ffx': torch.tensor([[1.5], [6.5]]),
+        'sigma_rfx': torch.ones(2, 1),
+        'rfx': torch.zeros(2, 1, 1),
+        'mask_d': torch.ones(2, 1, dtype=torch.bool),
+        'mask_q': torch.ones(2, 1, dtype=torch.bool),
+        'mask_mq': torch.ones(2, 1, 1, dtype=torch.bool),
+    }
+
+    plot_summary = Evaluator._summaryForPlot(summary, proposal, data)
 
     torch.testing.assert_close(
         plot_summary.aggregated.estimates['ffx'], torch.tensor([[2.0], [6.0]])
@@ -97,6 +106,11 @@ def test_comparison_legend_defaults_to_right(monkeypatch):
         return None
 
     monkeypatch.setattr('metabeta.evaluation.evaluate.plotComparison', fake_plot_comparison)
+    monkeypatch.setattr(
+        Evaluator,
+        '_summaryForPlot',
+        staticmethod(lambda summary, proposal, batch: summary),
+    )
 
     evaluator.plot([proposal], [_summary()], ['MB'], {'X': torch.zeros(1, 1)})
 

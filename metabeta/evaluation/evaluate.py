@@ -37,8 +37,9 @@ from metabeta.utils.evaluation import (
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.moe import moeEstimate
-from metabeta.evaluation.point import getPointEstimates
-from metabeta.evaluation.summary import EST_TYPE, getSummary, summaryTable
+from metabeta.evaluation.intervals import getCoverageErrors, getCoverages, getCredibleIntervals
+from metabeta.evaluation.point import getCorrelation, getPointEstimates, getRMSE
+from metabeta.evaluation.summary import EST_TYPE, _averageOverAlpha, getSummary, summaryTable
 from metabeta.plotting import plotComparison
 
 logger = logging.getLogger('evaluate.py')
@@ -857,7 +858,7 @@ class Evaluator:
         if self.cfg.rescale:
             batch = rescaleData(batch)
         summaries = [
-            self._summaryForPlot(summary, proposal)
+            self._summaryForPlot(summary, proposal, batch)
             for summary, proposal in zip(summaries, proposals)
         ]
         target_dir = plot_dir if plot_dir is not None else self.plot_dir
@@ -911,8 +912,26 @@ class Evaluator:
         return {key: batch[key] for key in keys if key in batch}
 
     @staticmethod
-    def _summaryForPlot(summary: EvaluationSummary, proposal: Proposal) -> EvaluationSummary:
-        aggregated = replace(summary.aggregated, estimates=getPointEstimates(proposal, EST_TYPE))
+    def _summaryForPlot(
+        summary: EvaluationSummary,
+        proposal: Proposal,
+        data: dict[str, torch.Tensor],
+    ) -> EvaluationSummary:
+        estimates = getPointEstimates(proposal, EST_TYPE)
+        coverage = getCoverages(getCredibleIntervals(proposal), data)
+        coverage_error = getCoverageErrors(coverage, log_ratio=False)
+        log_coverage_ratio = getCoverageErrors(coverage, log_ratio=True)
+        aggregated = replace(
+            summary.aggregated,
+            corr=getCorrelation(estimates, data),
+            nrmse=getRMSE(estimates, data, normalize=True),
+            coverage=coverage,
+            ece=_averageOverAlpha(coverage_error),
+            eace=_averageOverAlpha(coverage_error, absolute=True),
+            lcr=_averageOverAlpha(log_coverage_ratio),
+            abs_lcr=_averageOverAlpha(log_coverage_ratio, absolute=True),
+            estimates=estimates,
+        )
         return replace(summary, aggregated=aggregated)
 
     def _makeRow(self, label: str, summary: EvaluationSummary, fit_label: str) -> dict:
