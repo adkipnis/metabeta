@@ -4,6 +4,7 @@ import resource
 import logging
 import argparse
 import hashlib
+import re
 from itertools import chain
 from pathlib import Path
 
@@ -105,6 +106,10 @@ def setup() -> argparse.Namespace:
         '--comparison_legend', type=str, choices=['panel', 'right'], default='panel',
         help='Comparison plot legend placement (default: panel)',
     )
+    parser.add_argument(
+        '--plot_suffix', type=str, default='',
+        help='Optional suffix for comparison plot filenames, e.g. "with_laplace"',
+    )
     # fmt: on
     args = parser.parse_args()
 
@@ -158,6 +163,7 @@ class Evaluator:
         self.cfg.pareto_k_thr = getattr(cfg, 'pareto_k_thr', 0.7)
         self.cfg.plot = getattr(cfg, 'plot', True)
         self.cfg.warmup = getattr(cfg, 'warmup', True)
+        self.cfg.plot_suffix = getattr(cfg, 'plot_suffix', '')
         self.cfg.summary_chunk_size = getattr(cfg, 'summary_chunk_size', 16)
         self.cfg.outdir = getattr(cfg, 'outdir', str(Path(self.dir, '..', 'outputs', 'results')))
 
@@ -796,6 +802,7 @@ class Evaluator:
             labels,
             batch,
             plot_dir=target_dir,
+            plot_name=self._plotName(self.cfg.plot_suffix),
             show=True,
             legend_right=getattr(self.cfg, 'comparison_legend', 'panel') == 'right',
         )
@@ -804,6 +811,15 @@ class Evaluator:
 
     def _fitLabel(self) -> str:
         return {0: 'ppR2', 1: 'ppAUC', 2: 'ppDev'}.get(self.cfg.likelihood_family, 'ppR2')
+
+    @staticmethod
+    def _plotName(suffix: str = '') -> str:
+        suffix = suffix.strip().strip('_-')
+        if not suffix:
+            return 'comparison'
+        safe = re.sub(r'[^A-Za-z0-9_.-]+', '_', suffix)
+        safe = safe.strip('._-')
+        return f'comparison_{safe}' if safe else 'comparison'
 
     def _makeRow(self, label: str, summary: EvaluationSummary, fit_label: str) -> dict:
         ag, pd = summary.aggregated, summary.per_dataset
