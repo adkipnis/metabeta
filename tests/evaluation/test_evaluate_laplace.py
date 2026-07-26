@@ -119,3 +119,51 @@ def test_make_row_includes_loo_nll_and_predictive_width():
     assert row['ppNLL'] == pytest.approx(1.0)
     assert row['ppWidth90'] == pytest.approx(5.0)
     assert row['tpd'] == pytest.approx(0.25)
+
+
+def test_save_tables_accepts_loo_nll(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(likelihood_family=0)
+    evaluator.results_dir = tmp_path
+
+    rows = [
+        {
+            'method': 'MB',
+            'R': 0.9,
+            'NRMSE': 0.2,
+            'ECE': 0.01,
+            'RFX_joint_ECE': 0.01,
+            'RFX_joint_EACE': 0.02,
+            'LOO-NLL': 1.5,
+            'ppNLL': 1.4,
+            'ppR2': 0.3,
+            'tpd': 0.1,
+            'IS_eff': None,
+            'Pareto_k': None,
+            'ppEACE': 0.02,
+            'ppWidth90': 4.0,
+        },
+        {
+            'method': 'LAPLACE',
+            'R': 0.8,
+            'NRMSE': 0.3,
+            'ECE': 0.02,
+            'RFX_joint_ECE': 0.02,
+            'RFX_joint_EACE': 0.03,
+            'LOO-NLL': 1.3,
+            'ppNLL': 1.2,
+            'ppR2': 0.2,
+            'tpd': 0.01,
+            'IS_eff': None,
+            'Pareto_k': None,
+            'ppEACE': 0.03,
+            'ppWidth90': 3.0,
+        },
+    ]
+
+    evaluator.saveTables(rows)
+
+    table = (tmp_path / 'evaluate.md').read_text()
+    assert 'LOO-NLL' in table
+    assert '**1.3000**' in table
+    assert '**3.0000**' in table
