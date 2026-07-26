@@ -5,6 +5,7 @@ import torch
 
 from metabeta.evaluation.evaluate import Evaluator
 from metabeta.utils.evaluation import AggregatedMetrics, EvaluationSummary, PerDatasetMetrics
+from metabeta.utils.results import Proposal
 
 
 def _summary(tpd=None):
@@ -33,6 +34,27 @@ def test_evaluator_resolves_laplace_fit_model():
     evaluator.cfg = argparse.Namespace(models='LAPLACE')
 
     assert evaluator._resolveModels() == ['LAPLACE']
+
+
+def test_summary_for_plot_recomputes_estimates_from_live_proposal():
+    summary = _summary()
+    summary.aggregated.estimates = {'ffx': torch.full((2, 1), -99.0)}
+    proposal = Proposal(
+        {
+            'global': {
+                'samples': torch.tensor([[[1.0, 10.0], [3.0, 12.0]], [[5.0, 14.0], [7.0, 16.0]]])
+            },
+            'local': {'samples': torch.zeros(2, 1, 2, 1)},
+        },
+        has_sigma_eps=False,
+    )
+
+    plot_summary = Evaluator._summaryForPlot(summary, proposal)
+
+    torch.testing.assert_close(
+        plot_summary.aggregated.estimates['ffx'], torch.tensor([[2.0], [6.0]])
+    )
+    torch.testing.assert_close(summary.aggregated.estimates['ffx'], torch.full((2, 1), -99.0))
 
 
 def test_laplace_display_label_is_la():

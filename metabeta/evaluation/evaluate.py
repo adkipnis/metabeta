@@ -6,6 +6,7 @@ import logging
 import argparse
 import hashlib
 import re
+from dataclasses import replace
 from itertools import chain
 from pathlib import Path
 
@@ -36,7 +37,8 @@ from metabeta.utils.evaluation import (
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.moe import moeEstimate
-from metabeta.evaluation.summary import getSummary, summaryTable
+from metabeta.evaluation.point import getPointEstimates
+from metabeta.evaluation.summary import EST_TYPE, getSummary, summaryTable
 from metabeta.plotting import plotComparison
 
 logger = logging.getLogger('evaluate.py')
@@ -854,6 +856,10 @@ class Evaluator:
     ) -> None:
         if self.cfg.rescale:
             batch = rescaleData(batch)
+        summaries = [
+            self._summaryForPlot(summary, proposal)
+            for summary, proposal in zip(summaries, proposals)
+        ]
         target_dir = plot_dir if plot_dir is not None else self.plot_dir
         saved_path = plotComparison(
             summaries,
@@ -903,6 +909,11 @@ class Evaluator:
             'sd_y',
         )
         return {key: batch[key] for key in keys if key in batch}
+
+    @staticmethod
+    def _summaryForPlot(summary: EvaluationSummary, proposal: Proposal) -> EvaluationSummary:
+        aggregated = replace(summary.aggregated, estimates=getPointEstimates(proposal, EST_TYPE))
+        return replace(summary, aggregated=aggregated)
 
     def _makeRow(self, label: str, summary: EvaluationSummary, fit_label: str) -> dict:
         ag, pd = summary.aggregated, summary.per_dataset
