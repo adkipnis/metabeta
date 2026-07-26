@@ -281,24 +281,24 @@ class Evaluator:
             if not hasattr(self.cfg, 'rescale'):
                 self.cfg.rescale = False
 
-    def _getDataPath(self, partition: str) -> Path:
+    def _getDataPath(self, partition: str, prefer_fit: bool = True) -> Path:
         data_cfg = self.data_cfg_test if partition == 'test' else self.data_cfg_valid
         data_fname = datasetFilename(partition)
         data_subdir = data_cfg['data_id']
         data_path = Path(self.dir, '..', 'outputs', 'data', data_subdir, data_fname)
         fit_path = data_path.with_suffix('.fit.npz')
-        if fit_path.exists():
+        if prefer_fit and fit_path.exists():
             data_path = fit_path
         assert data_path.exists(), f'data file not found: {data_path}'
         return data_path
 
     def _getDataLoader(
-        self, partition: str, batch_size: int | None = None
+        self, partition: str, batch_size: int | None = None, prefer_fit: bool = True
     ) -> tuple[Dataloader, Path]:
         if hasattr(self.cfg, 'data_path_test') or hasattr(self.cfg, 'data_path_valid'):
             data_path = self._partitionDataPath(partition)
         else:
-            data_path = self._getDataPath(partition)
+            data_path = self._getDataPath(partition, prefer_fit=prefer_fit)
         sortish = batch_size is not None
         self._logMemory(
             'Loading %s dataloader from %s; this loads the full npz collection',
@@ -313,6 +313,13 @@ class Evaluator:
             max_q=getattr(self.cfg, 'max_q', None),
         )
         return dl, data_path
+
+    def _baseDataLoader(self, partition: str) -> tuple[Dataloader, Path]:
+        return self._getDataLoader(
+            partition,
+            batch_size=self.cfg.batch_size,
+            prefer_fit=False,
+        )
 
     def _ensureDataloader(self, partition: str) -> None:
         if partition == 'valid' and self.dl_valid is None:
@@ -754,6 +761,20 @@ class Evaluator:
         )
         return rows
 
+    def _tableOnlyCacheError(self, partition: str) -> RuntimeError:
+        data_path = self._partitionDataPath(partition)
+        return RuntimeError(
+            f'Table-only evaluation for partition={partition!r} cannot continue because at least '
+            'one requested summary cache is missing or stale. Refusing to fall back to full '
+            f'evaluation of {data_path}, which can materialize very large fit arrays. '
+            'Recompute stale fit summaries with cache.py, rerun MB separately with --models MB, '
+            'or run without --no-plot if full evaluation is intentional.'
+        )
+
+    def _canFallbackFromTableOnly(self, partition: str, models: list[str]) -> bool:
+        active = self._activeModels(partition, models)
+        return bool(active) and all(model == 'MB' for model in active)
+
     # -------------------------------------------------------------------------
     # Output
     # -------------------------------------------------------------------------
@@ -896,13 +917,20 @@ class Evaluator:
         path = self._partitionDataPath(partition)
         return path.name.endswith('.fit.npz')
 
-    def _getPartitionData(self, partition: str) -> tuple[Dataloader, dict, Path]:
-        self._ensureDataloader(partition)
+    def _getPartitionData(
+        self, partition: str, need_fits: bool = True
+    ) -> tuple[Dataloader, dict, Path]:
+        if need_fits or hasattr(self.cfg, 'data_path_test') or hasattr(self.cfg, 'data_path_valid'):
+            self._ensureDataloader(partition)
+            dl = self.dl_test if partition == 'test' else self.dl_valid
+            path = self._partitionDataPath(partition)
+        else:
+            dl, path = self._baseDataLoader(partition)
         if partition == 'test':
             self._logMemory('Materializing full batch for partition=%s', partition)
-            return self.dl_test, self.dl_test.fullBatch(), self.data_path_test
+            return dl, dl.fullBatch(), path
         self._logMemory('Materializing full batch for partition=%s', partition)
-        return self.dl_valid, self.dl_valid.fullBatch(), self.data_path_valid
+        return dl, dl.fullBatch(), path
 
     def _getProposalAndMask(
         self, model: str, partition: str, full_batch: dict, dl: Dataloader
@@ -948,11 +976,13 @@ class Evaluator:
     def _evalPartition(
         self, partition: str, models: list[str], fit_label: str, multi: bool
     ) -> list[dict]:
-        dl, full_batch, _ = self._getPartitionData(partition)
         active = self._activeModels(partition, models)
 
         if not active:
             return []
+
+        need_fits = any(model in _FIT_MODELS for model in active)
+        dl, full_batch, _ = self._getPartitionData(partition, need_fits=need_fits)
 
         # Collect fit-model proposals first. MB can be skipped entirely when its
         # summary cache is available and no plot/subset proposal is needed.
@@ -1242,6 +1272,8 @@ class Evaluator:
             cached_rows = None
             if self._tableOnlyMode():
                 cached_rows = self._cachedRowsForPartition(partition, models, fit_label, multi)
+                if cached_rows is None and not self._canFallbackFromTableOnly(partition, models):
+                    raise self._tableOnlyCacheError(partition)
             if cached_rows is not None:
                 rows.extend(cached_rows)
                 continue
