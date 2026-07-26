@@ -139,6 +139,31 @@ def test_pack_initial_uses_scratch_parameter_length(tmp_path):
     assert init.shape == (3 + 3 + 3 * 2 + 1,)
 
 
+def test_pack_initial_regularizes_rank_deficient_gaussian_design():
+    d, q, m, n = 3, 1, 1, 4
+    X = np.ones((n, d), dtype=np.float64)
+    ds = {
+        'd': d,
+        'q': q,
+        'm': m,
+        'n': n,
+        'y': np.array([1.0, 2.0, 3.0, 4.0]),
+        'X': X,
+        'Z': X[:, :q],
+        'groups': np.zeros(n, dtype=np.int64),
+        'nu_ffx': np.zeros(d, dtype=np.float64),
+        'tau_ffx': np.ones(d, dtype=np.float64),
+        'tau_rfx': np.ones(q, dtype=np.float64),
+        'tau_eps': np.array(1.0),
+        'likelihood_family': np.array(0),
+    }
+
+    init = _packInitial(ds, diagonal=False)
+
+    assert np.isfinite(init).all()
+    assert np.max(np.abs(init[:d])) < 10.0
+
+
 def test_natural_samples_reconstructs_full_covariance_values():
     flat = np.array(
         [
@@ -180,6 +205,7 @@ def test_failure_result_shapes_gaussian(tmp_path):
     assert out['laplace_rfx'].shape == (2, 3, 6)
     assert out['laplace_corr_rfx'].shape == (1, 6, 2, 2)
     assert bool(out['laplace_failed'])
+    assert out['laplace_error'].shape == ()
     assert float(out['laplace_duration']) == pytest.approx(0.5)
 
 
@@ -214,6 +240,7 @@ def test_go_writes_standalone_batch_file(tmp_path, monkeypatch):
             'laplace_corr_rfx': np.tile(np.eye(q)[None, None], (1, s, 1, 1)),
             'laplace_duration': np.array(0.25),
             'laplace_failed': np.array(False),
+            'laplace_error': np.array(''),
             'laplace_hessian_jitter': np.array(0.0),
             'laplace_hessian_repaired': np.array(False),
             'laplace_hessian_min_eig': np.array(1.0),
@@ -234,6 +261,7 @@ def test_go_writes_standalone_batch_file(tmp_path, monkeypatch):
         assert raw['laplace_corr_rfx'].shape == (2, 1, 6, 2, 2)
         assert np.all(raw['laplace_sigma_rfx'][0, 1] == 0.0)
         np.testing.assert_array_equal(raw['laplace_failed'], np.array([False, False]))
+        np.testing.assert_array_equal(raw['laplace_error'], np.array(['', '']))
         np.testing.assert_array_equal(raw['laplace_iterations'], np.array([3, 3]))
 
 
@@ -252,6 +280,7 @@ def test_reintegrate_merges_sidecar_into_fit_file(tmp_path, monkeypatch):
             'laplace_corr_rfx': np.tile(np.eye(q)[None, None], (1, s, 1, 1)),
             'laplace_duration': np.array(0.25),
             'laplace_failed': np.array(False),
+            'laplace_error': np.array(''),
             'laplace_hessian_jitter': np.array(0.0),
             'laplace_hessian_repaired': np.array(False),
             'laplace_hessian_min_eig': np.array(1.0),
