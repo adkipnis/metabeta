@@ -1,5 +1,6 @@
 import time
 import sys
+import gc
 import resource
 import logging
 import argparse
@@ -793,6 +794,22 @@ class Evaluator:
         safe = safe.strip('._-')
         return f'comparison_{safe}' if safe else 'comparison'
 
+    def _plotBatch(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        keys = (
+            'X',
+            'y',
+            'ffx',
+            'sigma_rfx',
+            'sigma_eps',
+            'corr_rfx',
+            'rfx',
+            'mask_d',
+            'mask_q',
+            'mask_mq',
+            'sd_y',
+        )
+        return {key: batch[key] for key in keys if key in batch}
+
     def _makeRow(self, label: str, summary: EvaluationSummary, fit_label: str) -> dict:
         ag, pd = summary.aggregated, summary.per_dataset
         return {
@@ -1030,12 +1047,18 @@ class Evaluator:
             if 'MB' in active and 'MB' not in aligned:
                 raw['MB'] = self._getProposalAndMask('MB', partition, full_batch, dl)
                 aligned['MB'] = self._alignToCommon(raw['MB'][0], raw['MB'][1], common_mask)
+            plot_batch = self._plotBatch(common_batch)
+            if not self.cfg.converged_subset:
+                del common_batch, full_batch
+                gc.collect()
+                self._logMemory('Released full fit batch before plotting partition=%s', partition)
+            plot_models = [model for model in active if model in aligned and model in summaries]
             plot_dir.mkdir(parents=True, exist_ok=True)
             self.plot(
-                list(aligned.values()),
-                list(summaries.values()),
-                list(aligned.keys()),
-                common_batch,
+                [aligned[model] for model in plot_models],
+                [summaries[model] for model in plot_models],
+                plot_models,
+                plot_batch,
                 plot_dir=plot_dir,
             )
 
