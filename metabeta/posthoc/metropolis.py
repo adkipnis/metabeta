@@ -40,6 +40,20 @@ Call MetropolisSampler with each mode in turn and evaluate the resulting Proposa
 Evaluator.summary() / plotComparison to choose the best mode for a given dataset type.
 The diagnostics dict returned by __call__ contains per-chain acceptance rates as a quick
 quality indicator before running the full evaluation.
+
+TODO
+----
+- Chain init at the per-chain pool-wide argmax (`_runChains`: `best_t = lw_ct.argmax(-1)`)
+  front-loads convergence but may understate posterior spread: since a step only replaces
+  the state when it beats the best sample already seen anywhere in that chain's pool, chains
+  with a low acceptance rate could sit at that single point through the whole post-burnin
+  phase. Check `accept_rate` on real runs; if it's low, try initialising from an arbitrary
+  draw (e.g. t=0) instead.
+- 'global' mode never MH-corrects rfx — accepted global samples keep the flow's raw,
+  uncorrected rfx draw from the same proposal. This is the default for non-Normal
+  likelihoods, so local/group-level calibration there is still bounded by flow error.
+  Consider a Laplace-approximated conditional rfx correction (analogous to
+  `_sampleRfxConditional`, but for non-conjugate likelihoods) if per-group accuracy matters.
 """
 
 import argparse
