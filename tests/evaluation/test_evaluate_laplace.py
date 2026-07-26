@@ -229,3 +229,27 @@ def test_cached_rows_do_not_require_dataloader(tmp_path):
     assert [row['method'] for row in rows] == ['MB', 'NUTS', 'LAPLACE']
     assert rows[2]['tpd'] == pytest.approx(0.2)
     assert evaluator.dl_test is None
+
+
+def test_mb_warmup_uses_one_sample_and_restores_torch_rng():
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(warmup=True, k=0, n_samples=100, rescale=False)
+    evaluator.device = torch.device('cpu')
+    calls = []
+
+    def sample_batch(batch, n_samples=None):
+        calls.append(n_samples)
+        torch.rand(1)
+        return object()
+
+    evaluator._sampleBatch = sample_batch
+    batch = {'X': torch.zeros(2, 3)}
+
+    torch.manual_seed(123)
+    expected = torch.rand(3)
+    torch.manual_seed(123)
+    evaluator._warmupMbBatch(batch, 'test')
+    actual = torch.rand(3)
+
+    assert calls == [1]
+    torch.testing.assert_close(actual, expected)
