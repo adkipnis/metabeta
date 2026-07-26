@@ -19,6 +19,7 @@ def _plotSbcEcdf(
     title: str | None = 'Uniform ECDF',
     show_legend: bool = True,
     show_x: bool = True,
+    line_alpha: float = 1.0,
 ) -> None:
     assert len(names) == ranks.shape[-1], 'shape mismatch'
     assert len(colors) == len(names), 'shape mismatch'
@@ -35,7 +36,7 @@ def _plotSbcEcdf(
         y = np.linspace(0, 1, num=x.shape[-1])
         if diff:
             y = y - x
-        ax.plot(x, y, label=name, lw=3, color=colors[i])
+        ax.plot(x, y, label=name, lw=3, color=colors[i], alpha=line_alpha)
     xlim = (0, 1)
     ylim = (0, 0) if diff else xlim
     ax.plot(xlim, ylim, '--', lw=2, zorder=1, color='grey', alpha=0.2)
@@ -79,6 +80,7 @@ def _plotSbcRow(
     show_band_legend: bool = False,
     smooth: bool = False,
     draw_legend: bool = True,
+    line_alpha: float = 1.0,
 ) -> None:
     ranks = getFractionalRanks(proposal, data)
     ranks['sigmas'] = joinSigmas(ranks)
@@ -109,6 +111,7 @@ def _plotSbcRow(
             title=title,
             show_legend=show_legend,
             show_x=show_x,
+            line_alpha=line_alpha,
         )
         n_eff_global = min(n_eff_global, _nEff(masks[k], n_datasets))
     if show_corr_rfx and 'corr_rfx' in ranks:
@@ -122,6 +125,7 @@ def _plotSbcRow(
             title=title,
             show_legend=show_legend,
             show_x=show_x,
+            line_alpha=line_alpha,
         )
         # corr_rfx only present for q > 1 datasets; no per-entry mask
         n_eff_global = min(n_eff_global, n_datasets)
@@ -140,6 +144,7 @@ def _plotSbcRow(
         title=title,
         show_legend=show_legend,
         show_x=show_x,
+        line_alpha=line_alpha,
     )
     n_eff_local = _nEff(masks['rfx'], n_datasets)
     p, low, high = simultaneousBands(n_eff=n_eff_local, diff=diff, smooth=smooth)
