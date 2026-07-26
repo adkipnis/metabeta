@@ -233,13 +233,7 @@ class Evaluator:
         self.data_path_test = self._getDataPath('test')
         self.dl_valid = None
         self.dl_test = None
-        if self._tableOnlyMode():
-            logger.info(
-                'Table-only mode: delaying dataloader construction so cached summaries can be '
-                'used without loading full fit files.'
-            )
-            return
-        self._ensureDataloaders()
+        logger.info('Dataloaders will be constructed lazily for requested partitions only.')
 
     def _initDataDirect(self) -> None:
         """Initialise data from explicit file paths; infers config fields from the npz."""
@@ -249,31 +243,9 @@ class Evaluator:
         self.data_path_valid = valid_p or test_p
         self.dl_test = None
         self.dl_valid = None
-
-        if self._tableOnlyMode():
-            self._inferConfigFromNpz(self.data_path_test)
-            self.data_cfg = {}
-            logger.info(
-                'Table-only mode: delaying dataloader construction so cached summaries can be '
-                'used without loading full fit files.'
-            )
-            return
-
-        self._ensureDataloaders()
-
-        # Infer missing config fields from the collection
-        col = self.dl_test.dataset
-        if not hasattr(self.cfg, 'max_d'):
-            self.cfg.max_d = col.d
-        if not hasattr(self.cfg, 'max_q'):
-            self.cfg.max_q = col.q
-        if not hasattr(self.cfg, 'likelihood_family'):
-            raw_lf = col.raw.get('likelihood_family')
-            self.cfg.likelihood_family = int(raw_lf[0]) if raw_lf is not None else 0
-        if not hasattr(self.cfg, 'rescale'):
-            self.cfg.rescale = False
-
+        self._inferConfigFromNpz(self.data_path_test)
         self.data_cfg = {}
+        logger.info('Dataloaders will be constructed lazily for requested partitions only.')
 
     def _inferConfigFromNpz(self, path: Path) -> None:
         with np.load(path, allow_pickle=True) as raw:
