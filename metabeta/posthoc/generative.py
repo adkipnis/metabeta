@@ -183,7 +183,12 @@ class HierarchicalModel:
             return rfx / sigma_rfx.unsqueeze(1).clamp(min=self.eps)
 
         L_corr = unconstrainedToCholesky(z_corr, self.q)  # (b, s, q, q)
-        L_full = sigma_rfx.unsqueeze(-1) * L_corr             # (b, s, q, q)
+        # Clamp away from 0: a padded/masked rfx dim has sigma_rfx == 0, which would
+        # zero out a diagonal entry of L_full and make the triangular solve below
+        # divide 0/0 -> NaN (and that NaN then leaks into real dims via rfxFromU's
+        # matrix multiply, since NaN * 0 == NaN, not 0).
+        sigma_rfx_c = sigma_rfx.clamp(min=1e-6)
+        L_full = sigma_rfx_c.unsqueeze(-1) * L_corr             # (b, s, q, q)
 
         # Solve L_full @ u_j = rfx_j  per group (lower-triangular)
         b, m, s, q = rfx.shape

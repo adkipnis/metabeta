@@ -113,20 +113,32 @@ def unconstrainedToCholesky(z: torch.Tensor, q: int) -> torch.Tensor:
     """Unconstrained vector (..., q*(q-1)//2) → lower-triangular Cholesky (..., q, q).
 
     Correlation matrix is L @ L.mT. Inverse of corrToUnconstrained.
+
+    Built with stack/cat only (no indexed in-place writes): writing rows into a
+    shared `zeros` tensor via `L[..., i, j] = ...` bumps that tensor's autograd
+    version counter on every write, which invalidates the saved view from an
+    earlier read (`L[..., i, j].pow(2)`) in the same row once q >= 2 — safe for
+    plain forward evaluation, but it breaks `.backward()` through this function
+    (e.g. gradient-based posthoc refinement like SVGD).
     """
     batch = z.shape[:-1]
-    L = z.new_zeros(*batch, q, q)
-    L[..., 0, 0] = 1.0
+    rows = [torch.cat([z.new_ones(*batch, 1), z.new_zeros(*batch, q - 1)], dim=-1)]
     cursor = 0
     for i in range(1, q):
         w = torch.tanh(z[..., cursor : cursor + i])
         cursor += i
-        remaining = torch.ones(*batch, dtype=z.dtype, device=z.device)
+        entries: list[torch.Tensor] = []
+        remaining = z.new_ones(*batch)
         for j in range(i):
-            L[..., i, j] = w[..., j] * remaining.clamp(min=1e-8).sqrt()
-            remaining = remaining - L[..., i, j].pow(2)
-        L[..., i, i] = remaining.clamp(min=1e-8).sqrt()
-    return L
+            entry = w[..., j] * remaining.clamp(min=1e-8).sqrt()
+            entries.append(entry)
+            remaining = remaining - entry.pow(2)
+        entries.append(remaining.clamp(min=1e-8).sqrt())
+        row = torch.stack(entries, dim=-1)
+        if i + 1 < q:
+            row = torch.cat([row, z.new_zeros(*batch, q - i - 1)], dim=-1)
+        rows.append(row)
+    return torch.stack(rows, dim=-2)
 
 
 def corrLowerToCorr(r: torch.Tensor, q: int) -> torch.Tensor:
