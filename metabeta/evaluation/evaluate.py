@@ -577,6 +577,7 @@ class Evaluator:
             'ECE': 'abs',
             'RFX_joint_ECE': 'abs',
             'RFX_joint_EACE': False,
+            'LOO-NLL': False,
             'ppNLL': False,
             self._fitLabel(): True,
             'tpd': False,
