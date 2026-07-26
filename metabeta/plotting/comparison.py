@@ -27,6 +27,8 @@ _COL_TITLES_CORR = [
     'Empirical Coverage',
     'Δ Uniform ECDF',
 ]
+_RECOVERY_ALPHA = 0.35
+_LINE_ALPHA = 0.75
 
 
 def plotComparison(
@@ -66,6 +68,7 @@ def plotComparison(
             ylabel=label,
             upper=upper,
             lower=lower,
+            alpha=_RECOVERY_ALPHA,
             show_legend=False if legend_right else None,
         )
 
@@ -89,6 +92,7 @@ def plotComparison(
             show_legend=False,
             show_x=lower,
             show_corr_rfx=show_corr_rfx,
+            line_alpha=_LINE_ALPHA,
         )
         axs[i, n_rec].set_ylabel('')
 
@@ -104,6 +108,7 @@ def plotComparison(
             show_x=lower,
             show_corr_rfx=show_corr_rfx,
             draw_legend=not legend_right,
+            line_alpha=_LINE_ALPHA,
         )
         axs[i, n_rec + 1].set_ylabel('')
 
