@@ -489,6 +489,10 @@ class Evaluator:
         cache_path = self._summaryCachePath(partition, method, mask=mask)
         cached = self._loadCachedSummary(partition, method, mask=mask)
         if cached is not None:
+            if cached.tpd is None and proposal.tpd is not None:
+                cached.tpd = proposal.tpd
+                cached.save(cache_path)
+                logger.info('Updated cached %s/%s summary tpd in %s', partition, method, cache_path)
             return cached
         result = self.summary(proposal, batch)
         result.save(cache_path)
@@ -532,6 +536,7 @@ class Evaluator:
             'ECE': dictMean(ag.ece),
             'RFX_joint_ECE': ag.rfx_joint_ece,
             'RFX_joint_EACE': ag.rfx_joint_eace,
+            'LOO-NLL': pd.mloonll,
             'ppNLL': pd.mnll,
             fit_label: pd.mfit,
             'tpd': summary.tpd,
@@ -712,6 +717,9 @@ class Evaluator:
             model: self._alignToCommon(proposal, mask, common_mask)
             for model, (proposal, mask) in raw.items()
         }
+        for model in active:
+            if model in _FIT_MODELS:
+                aligned[model] = self._fit2proposal(common_batch, prefix=model.lower())
 
         # Compute summaries; cache data-derived methods when they are on their native batch
         summaries: dict[str, EvaluationSummary] = {}
