@@ -35,6 +35,14 @@ def test_evaluator_resolves_laplace_fit_model():
     assert evaluator._resolveModels() == ['LAPLACE']
 
 
+def test_laplace_display_label_is_la():
+    evaluator = Evaluator.__new__(Evaluator)
+
+    assert evaluator._displayModel('LAPLACE') == 'LA'
+    assert evaluator._displayLabel('LAPLACE', 'test', multi=False) == 'LA'
+    assert evaluator._displayLabel('LAPLACE', 'test', multi=True) == 'LA_test'
+
+
 @pytest.mark.parametrize(
     ('suffix', 'expected'),
     [
@@ -170,6 +178,64 @@ def test_plot_with_fit_models_uses_light_path(monkeypatch, tmp_path):
 
     assert rows == []
     assert calls
+
+
+def test_light_plot_uses_requested_display_order(monkeypatch, tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(
+        plot=True,
+        converged_subset=False,
+        rescale=False,
+        n_samples=1000,
+        seed=0,
+        k=0,
+        warmup=False,
+        pred_coverage=False,
+        summary_chunk_size=2,
+        likelihood_family=0,
+    )
+    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+    evaluator.plot_dir = tmp_path / 'plots'
+    evaluator.results_dir = None
+    batch = {
+        'X': torch.zeros(1, 1),
+        'y': torch.zeros(1, 1),
+        'ffx': torch.zeros(1, 1),
+        'sigma_rfx': torch.ones(1, 1),
+        'rfx': torch.zeros(1, 1, 1),
+        'mask_d': torch.ones(1, 1, dtype=torch.bool),
+        'mask_q': torch.ones(1, 1, dtype=torch.bool),
+        'mask_mq': torch.ones(1, 1, 1, dtype=torch.bool),
+        'sd_y': torch.ones(1),
+    }
+    labels_seen = []
+
+    monkeypatch.setattr(
+        evaluator,
+        '_getPartitionData',
+        lambda *args, **kwargs: (object(), batch, tmp_path / 'test.npz'),
+    )
+    monkeypatch.setattr(evaluator, '_fitMaskFromPath', lambda *args, **kwargs: None)
+    monkeypatch.setattr(evaluator, '_fitProposalFromNpz', lambda *args, **kwargs: object())
+    monkeypatch.setattr(evaluator, '_getProposalAndMask', lambda *args, **kwargs: (object(), None))
+    monkeypatch.setattr(evaluator, '_loadOrComputeSummary', lambda *args, **kwargs: _summary())
+    monkeypatch.setattr(evaluator, '_loadCachedSummary', lambda *args, **kwargs: _summary())
+    monkeypatch.setattr(evaluator, '_alignToCommon', lambda proposal, *args: proposal)
+    monkeypatch.setattr(
+        evaluator,
+        'plot',
+        lambda proposals, summaries, labels, batch, plot_dir=None: labels_seen.extend(labels),
+    )
+
+    evaluator._evalPartitionLight(
+        'test',
+        ['MB', 'NUTS', 'ADVI', 'LAPLACE'],
+        fit_label='ppR2',
+        multi=False,
+    )
+
+    assert labels_seen == ['MB', 'NUTS', 'ADVI', 'LA']
 
 
 def test_mb_summary_cache_path_includes_run_options_and_mask(tmp_path):
@@ -343,7 +409,7 @@ def test_cached_rows_do_not_require_dataloader(tmp_path):
     )
 
     assert rows is not None
-    assert [row['method'] for row in rows] == ['MB', 'NUTS', 'LAPLACE']
+    assert [row['method'] for row in rows] == ['MB', 'NUTS', 'LA']
     assert rows[2]['tpd'] == pytest.approx(0.2)
     assert evaluator.dl_test is None
 

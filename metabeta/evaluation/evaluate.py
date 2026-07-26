@@ -793,7 +793,7 @@ class Evaluator:
                         method,
                         method,
                     )
-            label = f'{model}_{partition}' if multi else model
+            label = self._displayLabel(model, partition, multi)
             rows.append(self._makeRow(label, summary, fit_label))
 
         if missing:
@@ -864,6 +864,14 @@ class Evaluator:
 
     def _fitLabel(self) -> str:
         return {0: 'ppR2', 1: 'ppAUC', 2: 'ppDev'}.get(self.cfg.likelihood_family, 'ppR2')
+
+    @staticmethod
+    def _displayModel(model: str) -> str:
+        return 'LA' if model == 'LAPLACE' else model
+
+    def _displayLabel(self, model: str, partition: str, multi: bool) -> str:
+        label = self._displayModel(model)
+        return f'{label}_{partition}' if multi else label
 
     @staticmethod
     def _plotName(suffix: str = '') -> str:
@@ -1121,7 +1129,7 @@ class Evaluator:
             else:
                 raise ValueError(f'unknown model: {model}')
             summaries[model] = s
-            label = f'{model}_{partition}' if multi else model
+            label = self._displayLabel(model, partition, multi)
             rows.append(self._makeRow(label, s, fit_label))
 
         if self.cfg.plot:
@@ -1136,7 +1144,7 @@ class Evaluator:
             self.plot(
                 [aligned[model] for model in plot_models],
                 [summaries[model] for model in plot_models],
-                plot_models,
+                [self._displayModel(model) for model in plot_models],
                 plot_batch,
                 plot_dir=plot_dir,
             )
@@ -1211,7 +1219,7 @@ class Evaluator:
             else:
                 s = self.summary(aligned[model], common_batch)
             summaries[model] = s
-            label = f'{model}_{partition}' if multi else model
+            label = self._displayLabel(model, partition, multi)
             rows.append(self._makeRow(label, s, fit_label))
 
         # Comparison plot
@@ -1230,7 +1238,7 @@ class Evaluator:
             self.plot(
                 [aligned[model] for model in plot_models],
                 [summaries[model] for model in plot_models],
-                plot_models,
+                [self._displayModel(model) for model in plot_models],
                 plot_batch,
                 plot_dir=plot_dir,
             )
@@ -1334,7 +1342,7 @@ class Evaluator:
         for model in active:
             s = self.summary(sub_aligned[model], sub_common_batch)
             summaries[model] = s
-            rows.append(self._makeRow(f'{model}_{tag}', s, fit_label))
+            rows.append(self._makeRow(f'{self._displayModel(model)}_{tag}', s, fit_label))
 
         if do_plot and len(active) > 1:
             plot_dir = (base_plot_dir or self.plot_dir) / tag
@@ -1342,7 +1350,7 @@ class Evaluator:
             self.plot(
                 list(sub_aligned.values()),
                 list(summaries.values()),
-                active,
+                [self._displayModel(model) for model in active],
                 sub_common_batch,
                 plot_dir=plot_dir,
             )
