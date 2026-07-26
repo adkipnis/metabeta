@@ -32,12 +32,15 @@ _DEFAULT_SRCDIR = Path(__file__).resolve().parent.parent / 'outputs' / 'data'
 _DIAGNOSTIC_KEYS = (
     'laplace_duration',
     'laplace_failed',
+    'laplace_error',
     'laplace_hessian_jitter',
     'laplace_hessian_repaired',
     'laplace_hessian_min_eig',
     'laplace_objective',
     'laplace_iterations',
 )
+_LBFGS_RETRY_LR = 0.2
+_ERROR_DTYPE = '<U256'
 _RUNTIME_DEFAULTS = {
     'partition': 'test',
     'epoch': None,
@@ -132,6 +135,27 @@ def _unpack(
     return beta, L, rfx_offset, log_sigma_eps
 
 
+def _ridgeBetaInitial(
+    X: np.ndarray,
+    y: np.ndarray,
+    nu_ffx: np.ndarray,
+    tau_ffx: np.ndarray,
+) -> np.ndarray:
+    """Stable fixed-effect initializer for Gaussian models."""
+    prior_precision = 1.0 / np.square(np.maximum(tau_ffx, 1e-6))
+    xtx = X.T @ X
+    rhs = X.T @ y + prior_precision * nu_ffx
+    scale = max(float(np.mean(np.diag(xtx))) if xtx.size else 1.0, 1.0)
+    system = xtx + np.diag(prior_precision + 1e-8 * scale)
+    try:
+        beta = np.linalg.solve(system, rhs)
+    except np.linalg.LinAlgError:
+        beta = np.linalg.lstsq(system, rhs, rcond=None)[0]
+    if not np.isfinite(beta).all():
+        return nu_ffx.copy()
+    return beta
+
+
 def _packInitial(ds: dict[str, np.ndarray], diagonal: bool) -> np.ndarray:
     d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
     likelihood_family = int(ds.get('likelihood_family', 0))
@@ -142,10 +166,10 @@ def _packInitial(ds: dict[str, np.ndarray], diagonal: bool) -> np.ndarray:
     tau_rfx = np.maximum(ds.get('tau_rfx', np.ones(q, dtype=np.float64)).astype(np.float64), 1e-3)
 
     if likelihood_family == 0:
-        try:
-            beta = np.linalg.lstsq(X, y, rcond=None)[0]
-        except np.linalg.LinAlgError:
-            beta = nu_ffx.copy()
+        tau_ffx = np.maximum(
+            ds.get('tau_ffx', np.ones(d, dtype=np.float64)).astype(np.float64), 1e-6
+        )
+        beta = _ridgeBetaInitial(X, y, nu_ffx, tau_ffx)
     else:
         beta = nu_ffx.copy()
 
@@ -262,11 +286,12 @@ def _fitMap(
     init: np.ndarray,
     data: dict,
     max_iter: int,
+    lr: float = 1.0,
 ) -> tuple[np.ndarray, float, int]:
     theta = torch.tensor(init, dtype=torch.float64, requires_grad=True)
     optimizer = torch.optim.LBFGS(
         [theta],
-        lr=1.0,
+        lr=lr,
         max_iter=max_iter,
         max_eval=max(1, max_iter * 2),
         tolerance_grad=1e-5,
@@ -285,7 +310,11 @@ def _fitMap(
 
     optimizer.step(closure)
     final_loss = _objective(theta, data)
-    return theta.detach().numpy().copy(), float(final_loss.detach()), iterations
+    theta_map = theta.detach().numpy().copy()
+    objective = float(final_loss.detach())
+    if not np.isfinite(theta_map).all() or not np.isfinite(objective):
+        raise ValueError('MAP optimization produced non-finite objective or parameters')
+    return theta_map, objective, iterations
 
 
 def _hessian(theta_map: np.ndarray, data: dict) -> np.ndarray:
@@ -296,6 +325,25 @@ def _hessian(theta_map: np.ndarray, data: dict) -> np.ndarray:
 
     H = torch.autograd.functional.hessian(fn, theta, vectorize=True)
     return H.detach().numpy()
+
+
+def _fitMapAndPrecision(
+    init: np.ndarray,
+    data: dict,
+    maxeval: int,
+) -> tuple[np.ndarray, float, int, np.ndarray, float, bool, float]:
+    errors = []
+    total_iterations = 0
+    for lr in (1.0, _LBFGS_RETRY_LR):
+        try:
+            theta_map, objective, iterations = _fitMap(init, data, maxeval, lr=lr)
+            total_iterations += iterations
+            precision = _hessian(theta_map, data)
+            _, chol, jitter, repaired, min_eig = _stabilizePrecision(precision)
+            return theta_map, objective, total_iterations, chol, jitter, repaired, min_eig
+        except Exception as exc:
+            errors.append(f'lr={lr:g}: {exc}')
+    raise ValueError('; '.join(errors))
 
 
 def _naturalSamples(
@@ -395,6 +443,7 @@ class LaplaceFitter:
             ),
             'laplace_duration': np.full(self.n_fit, np.nan, dtype=np.float64),
             'laplace_failed': np.ones(self.n_fit, dtype=bool),
+            'laplace_error': np.full(self.n_fit, '', dtype=_ERROR_DTYPE),
             'laplace_hessian_jitter': np.full(self.n_fit, np.nan, dtype=np.float64),
             'laplace_hessian_repaired': np.zeros(self.n_fit, dtype=bool),
             'laplace_hessian_min_eig': np.full(self.n_fit, np.nan, dtype=np.float64),
@@ -414,6 +463,7 @@ class LaplaceFitter:
         min_eig: float = np.nan,
         objective: float = np.nan,
         iterations: int = 0,
+        error: str = '',
     ) -> dict[str, np.ndarray]:
         d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
         s = int(self.cfg.draws * self.cfg.chains)
@@ -424,6 +474,7 @@ class LaplaceFitter:
             'laplace_corr_rfx': np.full((1, s, q, q), np.nan, dtype=np.float64),
             'laplace_duration': np.array(duration, dtype=np.float64),
             'laplace_failed': np.array(True),
+            'laplace_error': np.array(str(error)[:255], dtype=_ERROR_DTYPE),
             'laplace_hessian_jitter': np.array(jitter, dtype=np.float64),
             'laplace_hessian_repaired': np.array(repaired, dtype=bool),
             'laplace_hessian_min_eig': np.array(min_eig, dtype=np.float64),
@@ -452,9 +503,9 @@ class LaplaceFitter:
             diagonal = bool(getattr(self.cfg, 'diagonal', False))
             init = _packInitial(ds, diagonal)
             data = _asTorchData(ds, diagonal)
-            theta_map, objective, iterations = _fitMap(init, data, int(self.cfg.maxeval))
-            precision = _hessian(theta_map, data)
-            _, chol, jitter, repaired, min_eig = _stabilizePrecision(precision)
+            theta_map, objective, iterations, chol, jitter, repaired, min_eig = _fitMapAndPrecision(
+                init, data, int(self.cfg.maxeval)
+            )
             flat_samples = _drawFromPrecision(
                 rng,
                 theta_map,
@@ -477,6 +528,7 @@ class LaplaceFitter:
             )
             out['laplace_duration'] = np.array(time.perf_counter() - t0, dtype=np.float64)
             out['laplace_failed'] = np.array(False)
+            out['laplace_error'] = np.array('', dtype=_ERROR_DTYPE)
             out['laplace_hessian_jitter'] = np.array(jitter, dtype=np.float64)
             out['laplace_hessian_repaired'] = np.array(repaired, dtype=bool)
             out['laplace_hessian_min_eig'] = np.array(min_eig, dtype=np.float64)
@@ -493,6 +545,7 @@ class LaplaceFitter:
                 min_eig=min_eig,
                 objective=objective,
                 iterations=iterations,
+                error=str(exc),
             )
 
     def _insertFit(
