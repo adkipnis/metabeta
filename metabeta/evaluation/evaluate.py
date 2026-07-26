@@ -219,6 +219,9 @@ class Evaluator:
     def _tableOnlyMode(self) -> bool:
         return self.cfg.save_tables and not self.cfg.plot and not self.cfg.converged_subset
 
+    def _directDataMode(self) -> bool:
+        return hasattr(self.cfg, 'data_path_test') or hasattr(self.cfg, 'data_path_valid')
+
     def _partitionDataPath(self, partition: str) -> Path:
         return self.data_path_test if partition == 'test' else self.data_path_valid
 
@@ -300,6 +303,14 @@ class Evaluator:
             prefer_fit=False,
         )
 
+    def _fitDataPath(self, partition: str) -> Path:
+        data_path = self._partitionDataPath(partition)
+        if data_path.name.endswith('.fit.npz'):
+            return data_path
+        fit_path = data_path.with_suffix('.fit.npz')
+        assert fit_path.exists(), f'fit data file not found: {fit_path}'
+        return fit_path
+
     def _ensureDataloader(self, partition: str) -> None:
         if partition == 'valid' and self.dl_valid is None:
             self.dl_valid, self.data_path_valid = self._getDataLoader(
@@ -370,6 +381,64 @@ class Evaluator:
         if self.cfg.rescale:
             proposal.rescale(batch['sd_y'])
         proposal.tpd = batch[f'{prefix}_duration'].mean().item()
+        return proposal
+
+    @staticmethod
+    def _npzArray(
+        raw: np.lib.npyio.NpzFile,
+        key: str,
+        mask: np.ndarray | None = None,
+        dtype=np.float32,
+    ) -> np.ndarray:
+        arr = raw[key]
+        if mask is not None:
+            arr = arr[mask]
+        return np.asarray(arr, dtype=dtype)
+
+    def _fitProposalFromNpz(
+        self,
+        fit_path: Path,
+        method: str,
+        mask: np.ndarray | None = None,
+        scale: torch.Tensor | None = None,
+    ) -> Proposal:
+        prefix = method.lower()
+        self._logMemory('Loading %s samples directly from %s', prefix, fit_path)
+        with np.load(fit_path, allow_pickle=True) as raw:
+            ffx = torch.as_tensor(self._npzArray(raw, f'{prefix}_ffx', mask)).permute(0, 2, 1)
+            sigma_rfx = torch.as_tensor(self._npzArray(raw, f'{prefix}_sigma_rfx', mask)).permute(
+                0, 2, 1
+            )
+            samples_g = [ffx.contiguous(), sigma_rfx.contiguous()]
+
+            has_sigma_eps = f'{prefix}_sigma_eps' in raw.files
+            if has_sigma_eps:
+                sigma_eps = self._npzArray(raw, f'{prefix}_sigma_eps', mask)
+                sigma_eps = np.squeeze(sigma_eps, axis=1) if sigma_eps.ndim == 3 else sigma_eps
+                samples_g.append(torch.as_tensor(sigma_eps).unsqueeze(-1).contiguous())
+
+            rfx = torch.as_tensor(self._npzArray(raw, f'{prefix}_rfx', mask))
+            rfx = rfx.permute(0, 2, 3, 1).contiguous()
+
+            corr_rfx = None
+            if f'{prefix}_corr_rfx' in raw.files:
+                corr = self._npzArray(raw, f'{prefix}_corr_rfx', mask)
+                corr = np.squeeze(corr, axis=1) if corr.ndim == 5 and corr.shape[1] == 1 else corr
+                corr_rfx = torch.as_tensor(corr).contiguous()
+
+            duration = self._npzArray(raw, f'{prefix}_duration', mask, dtype=np.float64)
+
+        proposed = {
+            'global': {'samples': torch.cat(samples_g, dim=-1)},
+            'local': {'samples': rfx},
+        }
+        proposal = Proposal(proposed, has_sigma_eps=has_sigma_eps, corr_rfx=corr_rfx)
+        proposal.tpd = float(np.nanmean(duration))
+        if self.cfg.rescale:
+            if scale is None:
+                raise ValueError('scale is required to rescale fit proposals loaded from npz')
+            proposal.rescale(scale)
+        self._logMemory('Loaded %s proposal directly from npz', prefix)
         return proposal
 
     def _fitBatchMask(self, batch: dict[str, torch.Tensor], prefix: str) -> np.ndarray:
@@ -640,7 +709,8 @@ class Evaluator:
         with np.load(path, allow_pickle=True) as raw:
             if failed_key not in raw.files:
                 return None
-            return ~raw[failed_key].astype(bool)
+            mask = ~raw[failed_key].astype(bool)
+            return None if mask.all() else mask
 
     def _durationMeanFromPath(
         self,
@@ -982,6 +1052,85 @@ class Evaluator:
         # common_mask[src_mask]: which of the src positions survive in the common set
         return subsetProposal(proposal, common_mask[src_mask])
 
+    @staticmethod
+    def _maskTensor(
+        tensor: torch.Tensor,
+        mask: np.ndarray | None,
+    ) -> torch.Tensor:
+        return tensor if mask is None else tensor[torch.from_numpy(mask)]
+
+    def _evalPartitionPlotLight(
+        self, partition: str, active: list[str], fit_label: str, multi: bool
+    ) -> list[dict]:
+        """Plot fit comparisons without loading all arrays in ``*.fit.npz`` via Collection."""
+        fit_path = self._fitDataPath(partition)
+        dl, full_batch, _ = self._getPartitionData(partition, need_fits=False)
+        n = full_batch['X'].shape[0]
+
+        masks = {
+            model: self._fitMaskFromPath(fit_path, model)
+            for model in active
+            if model in _FIT_MODELS
+        }
+        common_mask = self._commonMask(list(masks.values()), n)
+        common_batch = (
+            subsetBatch(full_batch, common_mask) if common_mask is not None else full_batch
+        )
+
+        raw: dict[str, tuple[Proposal, np.ndarray | None]] = {}
+        aligned: dict[str, Proposal] = {}
+        summaries: dict[str, EvaluationSummary] = {}
+        rows: list[dict] = []
+
+        for model in active:
+            if model not in _FIT_MODELS:
+                continue
+            src_mask = masks[model]
+            scale = self._maskTensor(full_batch['sd_y'], src_mask) if self.cfg.rescale else None
+            proposal = self._fitProposalFromNpz(fit_path, model, mask=src_mask, scale=scale)
+            raw[model] = (proposal, src_mask)
+            aligned[model] = self._alignToCommon(proposal, src_mask, common_mask)
+
+        for model in active:
+            if model in _FIT_MODELS:
+                s = self._loadOrComputeSummary(
+                    aligned[model],
+                    common_batch,
+                    partition,
+                    model.lower(),
+                    mask=self._fitSummaryMask(raw[model][1], common_mask, n),
+                )
+            elif model == 'MB':
+                s = self._loadCachedSummary(partition, 'mb', mask=common_mask)
+                raw[model] = self._getProposalAndMask(model, partition, full_batch, dl)
+                aligned[model] = self._alignToCommon(raw[model][0], raw[model][1], common_mask)
+                if s is None:
+                    s = self._loadOrComputeSummary(
+                        aligned[model], common_batch, partition, 'mb', mask=common_mask
+                    )
+            else:
+                raise ValueError(f'unknown model: {model}')
+            summaries[model] = s
+            label = f'{model}_{partition}' if multi else model
+            rows.append(self._makeRow(label, s, fit_label))
+
+        plot_batch = self._plotBatch(common_batch)
+        del common_batch, full_batch
+        gc.collect()
+        self._logMemory('Released full base batch before plotting partition=%s', partition)
+
+        plot_dir = self.plot_dir if partition == 'test' else self.plot_dir / partition
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        plot_models = [model for model in active if model in aligned and model in summaries]
+        self.plot(
+            [aligned[model] for model in plot_models],
+            [summaries[model] for model in plot_models],
+            plot_models,
+            plot_batch,
+            plot_dir=plot_dir,
+        )
+        return rows
+
     def _evalPartition(
         self, partition: str, models: list[str], fit_label: str, multi: bool
     ) -> list[dict]:
@@ -991,6 +1140,14 @@ class Evaluator:
             return []
 
         need_fits = any(model in _FIT_MODELS for model in active)
+        if (
+            self.cfg.plot
+            and need_fits
+            and not self.cfg.converged_subset
+            and not self._directDataMode()
+        ):
+            return self._evalPartitionPlotLight(partition, active, fit_label, multi)
+
         dl, full_batch, _ = self._getPartitionData(partition, need_fits=need_fits)
 
         # Collect fit-model proposals first. MB can be skipped entirely when its
