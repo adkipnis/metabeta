@@ -7,6 +7,27 @@ from metabeta.evaluation.evaluate import Evaluator
 from metabeta.utils.evaluation import AggregatedMetrics, EvaluationSummary, PerDatasetMetrics
 
 
+def _summary(tpd=None):
+    return EvaluationSummary(
+        per_dataset=PerDatasetMetrics(
+            posterior_nll=torch.tensor([1.0, 2.0, 3.0]),
+            loo_nll=torch.tensor([1.5, 2.5, 3.5]),
+            pp_fit=torch.tensor([0.1, 0.2, 0.3]),
+        ),
+        aggregated=AggregatedMetrics(
+            corr={'ffx': torch.tensor([0.5])},
+            nrmse={'ffx': torch.tensor([0.6])},
+            coverage={},
+            ece={'ffx': torch.tensor([0.0])},
+            eace={'ffx': torch.tensor([0.1])},
+            lcr={},
+            abs_lcr={},
+            estimates={},
+        ),
+        tpd=tpd,
+    )
+
+
 def test_evaluator_resolves_laplace_fit_model():
     evaluator = Evaluator.__new__(Evaluator)
     evaluator.cfg = argparse.Namespace(models='LAPLACE')
@@ -167,3 +188,44 @@ def test_save_tables_accepts_loo_nll(tmp_path):
     assert 'LOO-NLL' in table
     assert '**1.3000**' in table
     assert '**3.0000**' in table
+
+
+def test_cached_rows_do_not_require_dataloader(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(
+        n_samples=1000,
+        seed=0,
+        k=0,
+        pred_coverage=False,
+        likelihood_family=0,
+    )
+    evaluator.run_name = 'run'
+    evaluator.legacy_run_name = 'run'
+    evaluator.checkpoint_prefix = 'best'
+    evaluator.ckpt_dir = None
+    evaluator.dl_test = None
+    evaluator.dl_valid = None
+    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+
+    np.savez(
+        evaluator.data_path_test,
+        y=np.zeros((3, 4), dtype=np.float32),
+        laplace_failed=np.array([False, False, False]),
+        laplace_duration=np.array([0.1, 0.2, 0.3], dtype=np.float32),
+    )
+    _summary(tpd=1.0).save(evaluator._summaryCachePath('test', 'mb'))
+    _summary(tpd=2.0).save(evaluator._summaryCachePath('test', 'nuts'))
+    _summary(tpd=None).save(evaluator._summaryCachePath('test', 'laplace'))
+
+    rows = evaluator._cachedRowsForPartition(
+        'test',
+        ['MB', 'NUTS', 'LAPLACE'],
+        fit_label='ppR2',
+        multi=False,
+    )
+
+    assert rows is not None
+    assert [row['method'] for row in rows] == ['MB', 'NUTS', 'LAPLACE']
+    assert rows[2]['tpd'] == pytest.approx(0.2)
+    assert evaluator.dl_test is None

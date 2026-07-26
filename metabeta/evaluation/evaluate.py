@@ -1,4 +1,6 @@
 import time
+import sys
+import resource
 import logging
 import argparse
 import hashlib
@@ -191,6 +193,19 @@ class Evaluator:
         else:
             self._initDataFromConfig()
 
+    @staticmethod
+    def _maxRssMb() -> float:
+        """Maximum resident set size reported by the OS, in MiB."""
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # macOS reports bytes; Linux reports KiB.
+        return rss / (1024 * 1024) if sys.platform == 'darwin' else rss / 1024
+
+    def _logMemory(self, msg: str, *args) -> None:
+        logger.info('%s [max RSS %.1f MiB]', msg % args if args else msg, self._maxRssMb())
+
+    def _tableOnlyMode(self) -> bool:
+        return self.cfg.save_tables and not self.cfg.plot and not self.cfg.converged_subset
+
     def _initDataFromConfig(self) -> None:
         self.data_cfg_train = loadDataConfig(self.cfg.data_id)
         assimilateConfig(self.cfg, self.data_cfg_train)
@@ -199,12 +214,17 @@ class Evaluator:
         self.data_cfg_valid = loadDataConfig(self.cfg.data_id_valid)
         self.data_cfg_test = loadDataConfig(self.cfg.data_id_test)
         self.data_cfg = self.data_cfg_train
-        self.dl_valid, self.data_path_valid = self._getDataLoader(
-            'valid', batch_size=self.cfg.batch_size
-        )
-        self.dl_test, self.data_path_test = self._getDataLoader(
-            'test', batch_size=self.cfg.batch_size
-        )
+        self.data_path_valid = self._getDataPath('valid')
+        self.data_path_test = self._getDataPath('test')
+        self.dl_valid = None
+        self.dl_test = None
+        if self._tableOnlyMode():
+            logger.info(
+                'Table-only mode: delaying dataloader construction so cached summaries can be '
+                'used without loading full fit files.'
+            )
+            return
+        self._ensureDataloaders()
 
     def _initDataDirect(self) -> None:
         """Initialise data from explicit file paths; infers config fields from the npz."""
@@ -212,10 +232,19 @@ class Evaluator:
         valid_p = Path(self.cfg.data_path_valid) if hasattr(self.cfg, 'data_path_valid') else None
         self.data_path_test = test_p or valid_p
         self.data_path_valid = valid_p or test_p
+        self.dl_test = None
+        self.dl_valid = None
 
-        bs = self.cfg.batch_size
-        self.dl_test = Dataloader(self.data_path_test, batch_size=bs, sortish=True)
-        self.dl_valid = Dataloader(self.data_path_valid, batch_size=bs, sortish=True)
+        if self._tableOnlyMode():
+            self._inferConfigFromNpz(self.data_path_test)
+            self.data_cfg = {}
+            logger.info(
+                'Table-only mode: delaying dataloader construction so cached summaries can be '
+                'used without loading full fit files.'
+            )
+            return
+
+        self._ensureDataloaders()
 
         # Infer missing config fields from the collection
         col = self.dl_test.dataset
@@ -231,9 +260,19 @@ class Evaluator:
 
         self.data_cfg = {}
 
-    def _getDataLoader(
-        self, partition: str, batch_size: int | None = None
-    ) -> tuple[Dataloader, Path]:
+    def _inferConfigFromNpz(self, path: Path) -> None:
+        with np.load(path, allow_pickle=True) as raw:
+            if not hasattr(self.cfg, 'max_d'):
+                self.cfg.max_d = int(raw['d'].max())
+            if not hasattr(self.cfg, 'max_q'):
+                self.cfg.max_q = int(raw['q'].max())
+            if not hasattr(self.cfg, 'likelihood_family'):
+                raw_lf = raw['likelihood_family'] if 'likelihood_family' in raw.files else None
+                self.cfg.likelihood_family = int(raw_lf[0]) if raw_lf is not None else 0
+            if not hasattr(self.cfg, 'rescale'):
+                self.cfg.rescale = False
+
+    def _getDataPath(self, partition: str) -> Path:
         data_cfg = self.data_cfg_test if partition == 'test' else self.data_cfg_valid
         data_fname = datasetFilename(partition)
         data_subdir = data_cfg['data_id']
@@ -242,15 +281,43 @@ class Evaluator:
         if fit_path.exists():
             data_path = fit_path
         assert data_path.exists(), f'data file not found: {data_path}'
+        return data_path
+
+    def _getDataLoader(
+        self, partition: str, batch_size: int | None = None
+    ) -> tuple[Dataloader, Path]:
+        if hasattr(self.cfg, 'data_path_test') or hasattr(self.cfg, 'data_path_valid'):
+            data_path = self.data_path_test if partition == 'test' else self.data_path_valid
+        else:
+            data_path = self._getDataPath(partition)
         sortish = batch_size is not None
+        self._logMemory(
+            'Loading %s dataloader from %s; this loads the full npz collection',
+            partition,
+            data_path,
+        )
         dl = Dataloader(
             data_path,
             batch_size=batch_size,
             sortish=sortish,
-            max_d=self.cfg.max_d,
-            max_q=self.cfg.max_q,
+            max_d=getattr(self.cfg, 'max_d', None),
+            max_q=getattr(self.cfg, 'max_q', None),
         )
         return dl, data_path
+
+    def _ensureDataloader(self, partition: str) -> None:
+        if partition == 'valid' and self.dl_valid is None:
+            self.dl_valid, self.data_path_valid = self._getDataLoader(
+                'valid', batch_size=self.cfg.batch_size
+            )
+        elif partition == 'test' and self.dl_test is None:
+            self.dl_test, self.data_path_test = self._getDataLoader(
+                'test', batch_size=self.cfg.batch_size
+            )
+
+    def _ensureDataloaders(self) -> None:
+        self._ensureDataloader('valid')
+        self._ensureDataloader('test')
 
     def _initModel(self) -> None:
         if hasattr(self.cfg, 'model_cfg') and isinstance(self.cfg.model_cfg, ApproximatorConfig):
@@ -468,6 +535,7 @@ class Evaluator:
     ) -> EvaluationSummary | None:
         ref_mtime = self._summaryRefMtime(partition, method)
         preferred = self._summaryCachePath(partition, method, mask=mask)
+        stale: list[Path] = []
         for cache_path in self._summaryCacheCandidates(partition, method, mask=mask):
             if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
                 logger.info('Loading cached %s/%s summary from %s', partition, method, cache_path)
@@ -476,6 +544,15 @@ class Evaluator:
                     summary.save(preferred)
                     logger.info('Copied cached %s/%s summary to %s', partition, method, preferred)
                 return summary
+            if cache_path.exists():
+                stale.append(cache_path)
+        if stale:
+            logger.info(
+                'Cached %s/%s summary exists but is older than its data/checkpoint reference: %s',
+                partition,
+                method,
+                '; '.join(str(path) for path in stale),
+            )
         return None
 
     def _loadOrComputeSummary(
@@ -498,6 +575,109 @@ class Evaluator:
         result.save(cache_path)
         logger.info('Saved %s/%s summary to %s', partition, method, cache_path)
         return result
+
+    def _datasetCountFromPath(self, path: Path) -> int:
+        with np.load(path, allow_pickle=True) as raw:
+            return int(raw['y'].shape[0])
+
+    def _fitMaskFromPath(self, path: Path, method: str) -> np.ndarray | None:
+        failed_key = f'{method.lower()}_failed'
+        with np.load(path, allow_pickle=True) as raw:
+            if failed_key not in raw.files:
+                return None
+            return ~raw[failed_key].astype(bool)
+
+    def _durationMeanFromPath(
+        self,
+        path: Path,
+        method: str,
+        mask: np.ndarray | None = None,
+    ) -> float | None:
+        duration_key = f'{method.lower()}_duration'
+        with np.load(path, allow_pickle=True) as raw:
+            if duration_key not in raw.files:
+                return None
+            durations = np.asarray(raw[duration_key], dtype=np.float64).reshape(-1)
+        if mask is not None:
+            durations = durations[mask]
+        durations = durations[np.isfinite(durations)]
+        return float(durations.mean()) if durations.size else None
+
+    def _activeModels(self, partition: str, models: list[str]) -> list[str]:
+        has_fits = self._hasFits(partition)
+        active = [m for m in models if m == 'MB' or (has_fits and m in _FIT_MODELS)]
+        if not active:
+            logger.warning('No active models for partition=%s (no fit file found)', partition)
+        return active
+
+    def _cachedRowsForPartition(
+        self,
+        partition: str,
+        models: list[str],
+        fit_label: str,
+        multi: bool,
+    ) -> list[dict] | None:
+        """Return rows from existing summary caches without loading a Dataloader.
+
+        This is intentionally conservative. If any required cache is missing, or if common-subset
+        comparison would require a cache that does not exist, the caller should fall back to the
+        normal evaluation path.
+        """
+        data_path = self.data_path_test if partition == 'test' else self.data_path_valid
+        active = self._activeModels(partition, models)
+        if not active:
+            return []
+
+        n = self._datasetCountFromPath(data_path)
+        masks = {
+            model: self._fitMaskFromPath(data_path, model)
+            for model in active
+            if model in _FIT_MODELS
+        }
+        common_mask = self._commonMask(list(masks.values()), n)
+        comparison_mask = np.ones(n, dtype=bool) if common_mask is None else common_mask
+
+        rows: list[dict] = []
+        missing: list[str] = []
+        for model in active:
+            method = model.lower()
+            mask = common_mask
+            if model in _FIT_MODELS:
+                src_mask = masks[model]
+                native_mask = np.ones(n, dtype=bool) if src_mask is None else src_mask
+                native_batch = np.array_equal(native_mask, comparison_mask)
+                mask = None if native_batch else common_mask
+            summary = self._loadCachedSummary(partition, method, mask=mask)
+            if summary is None:
+                missing.append(f'{model}({self._summaryCachePath(partition, method, mask=mask)})')
+                continue
+            if model in _FIT_MODELS and summary.tpd is None:
+                duration = self._durationMeanFromPath(data_path, method, comparison_mask)
+                if duration is not None:
+                    summary.tpd = duration
+                    summary.save(self._summaryCachePath(partition, method, mask=mask))
+                    logger.info(
+                        'Updated cached %s/%s summary tpd from %s_duration',
+                        partition,
+                        method,
+                        method,
+                    )
+            label = f'{model}_{partition}' if multi else model
+            rows.append(self._makeRow(label, summary, fit_label))
+
+        if missing:
+            logger.info(
+                'Cached table fast path unavailable for partition=%s; unusable summaries: %s',
+                partition,
+                '; '.join(missing),
+            )
+            return None
+        logger.info(
+            'Loaded %d cached table rows for partition=%s without materializing full batches.',
+            len(rows),
+            partition,
+        )
+        return rows
 
     # -------------------------------------------------------------------------
     # Output
@@ -644,8 +824,11 @@ class Evaluator:
         return path.name.endswith('.fit.npz')
 
     def _getPartitionData(self, partition: str) -> tuple[Dataloader, dict, Path]:
+        self._ensureDataloader(partition)
         if partition == 'test':
+            self._logMemory('Materializing full batch for partition=%s', partition)
             return self.dl_test, self.dl_test.fullBatch(), self.data_path_test
+        self._logMemory('Materializing full batch for partition=%s', partition)
         return self.dl_valid, self.dl_valid.fullBatch(), self.data_path_valid
 
     def _getProposalAndMask(
@@ -673,7 +856,7 @@ class Evaluator:
             if m is not None:
                 result &= m
                 any_mask = True
-        return result if any_mask else None
+        return result if any_mask and not result.all() else None
 
     @staticmethod
     def _alignToCommon(
@@ -693,11 +876,9 @@ class Evaluator:
         self, partition: str, models: list[str], fit_label: str, multi: bool
     ) -> list[dict]:
         dl, full_batch, _ = self._getPartitionData(partition)
-        has_fits = self._hasFits(partition)
-        active = [m for m in models if m == 'MB' or (has_fits and m in _FIT_MODELS)]
+        active = self._activeModels(partition, models)
 
         if not active:
-            logger.warning('No active models for partition=%s (no fit file found)', partition)
             return []
 
         # Collect fit-model proposals first. MB can be skipped entirely when its
@@ -976,6 +1157,7 @@ class Evaluator:
     # -------------------------------------------------------------------------
 
     def testrun(self) -> None:
+        self._ensureDataloader('valid')
         full_batch = self.dl_valid.fullBatch()
         proposal_mb = self.sampleMinibatched(self.dl_valid, 'MB')
         summary_mb = self.summary(proposal_mb, full_batch)
@@ -988,8 +1170,14 @@ class Evaluator:
         multi = len(partitions) > 1
         rows: list[dict] = []
         for partition in partitions:
+            cached_rows = None
+            if self._tableOnlyMode():
+                cached_rows = self._cachedRowsForPartition(partition, models, fit_label, multi)
+            if cached_rows is not None:
+                rows.extend(cached_rows)
+                continue
             rows.extend(self._evalPartition(partition, models, fit_label, multi))
-        if self.cfg.save_tables:
+        if self.cfg.save_tables and rows:
             self.saveTables(rows)
 
 
@@ -997,8 +1185,27 @@ class Evaluator:
 def main() -> None:
     cfg = setup()
     setupLogging(cfg.verbosity)
-    evaluator = Evaluator(cfg)
-    evaluator.go()
+    try:
+        evaluator = Evaluator(cfg)
+        evaluator.go()
+    except MemoryError:
+        logger.exception(
+            'Evaluation failed with Python MemoryError [max RSS %.1f MiB]. '
+            'For cached table generation, use --no-plot --save_tables so evaluate.py can avoid '
+            'loading full fit files. For uncached summaries, lower --batch_size, --n_samples, or '
+            '--summary_chunk_size.',
+            Evaluator._maxRssMb(),
+        )
+        raise
+    except RuntimeError as exc:
+        if 'out of memory' in str(exc).lower():
+            logger.exception(
+                'Evaluation failed with RuntimeError out-of-memory [max RSS %.1f MiB]. '
+                'Try --summary_chunk_size 1 for predictive coverage, reduce --batch_size or '
+                '--n_samples, or generate tables from cached summaries with --no-plot.',
+                Evaluator._maxRssMb(),
+            )
+        raise
 
 
 if __name__ == '__main__':
