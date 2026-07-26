@@ -516,8 +516,8 @@ def test_mb_only_partition_data_uses_base_file(monkeypatch):
     evaluator.dl_valid = None
     calls = []
 
-    def fake_loader(partition, batch_size=None, prefer_fit=True):
-        calls.append((partition, batch_size, prefer_fit))
+    def fake_loader(partition, batch_size=None, prefer_fit=True, sortish=None):
+        calls.append((partition, batch_size, prefer_fit, sortish))
         suffix = 'fit.npz' if prefer_fit else 'npz'
         return DummyLoader(), f'{partition}.{suffix}'
 
@@ -526,4 +526,4 @@ def test_mb_only_partition_data_uses_base_file(monkeypatch):
     _, _, path = evaluator._getPartitionData('test', need_fits=False)
 
     assert path == 'test.npz'
-    assert calls == [('test', 16, False)]
+    assert calls == [('test', 16, False, False)]

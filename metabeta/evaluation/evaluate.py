@@ -275,13 +275,18 @@ class Evaluator:
         return data_path
 
     def _getDataLoader(
-        self, partition: str, batch_size: int | None = None, prefer_fit: bool = True
+        self,
+        partition: str,
+        batch_size: int | None = None,
+        prefer_fit: bool = True,
+        sortish: bool | None = None,
     ) -> tuple[Dataloader, Path]:
         if hasattr(self.cfg, 'data_path_test') or hasattr(self.cfg, 'data_path_valid'):
             data_path = self._partitionDataPath(partition)
         else:
             data_path = self._getDataPath(partition, prefer_fit=prefer_fit)
-        sortish = batch_size is not None
+        if sortish is None:
+            sortish = batch_size is not None
         self._logMemory(
             'Loading %s dataloader from %s; this loads the full npz collection',
             partition,
@@ -301,6 +306,7 @@ class Evaluator:
             partition,
             batch_size=self.cfg.batch_size,
             prefer_fit=False,
+            sortish=False,
         )
 
     def _fitDataPath(self, partition: str) -> Path:
