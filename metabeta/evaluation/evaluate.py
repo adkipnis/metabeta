@@ -1,6 +1,7 @@
 import time
 import logging
 import argparse
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -86,6 +87,10 @@ def setup() -> argparse.Namespace:
         help='Compute predictive interval coverage/width',
     )
     parser.add_argument(
+        '--plot', action=argparse.BooleanOptionalAction, default=True,
+        help='Save comparison plots (default: true)',
+    )
+    parser.add_argument(
         '--comparison_legend', type=str, choices=['panel', 'right'], default='panel',
         help='Comparison plot legend placement (default: panel)',
     )
@@ -140,6 +145,7 @@ class Evaluator:
         self.cfg.converged_subset = getattr(cfg, 'converged_subset', False)
         self.cfg.convergence_mode = getattr(cfg, 'convergence_mode', 'liberal')
         self.cfg.pareto_k_thr = getattr(cfg, 'pareto_k_thr', 0.7)
+        self.cfg.plot = getattr(cfg, 'plot', True)
         self.cfg.outdir = getattr(cfg, 'outdir', str(Path(self.dir, '..', 'outputs', 'results')))
 
         if hasattr(cfg, 'data_path_test') or hasattr(cfg, 'data_path_valid'):
@@ -367,8 +373,31 @@ class Evaluator:
         logger.info(summaryTable(eval_summary, lf))
         return eval_summary
 
-    def _summaryCachePath(self, partition: str, method: str) -> Path:
+    @staticmethod
+    def _maskTag(mask: np.ndarray | None) -> str:
+        if mask is None:
+            return 'all'
+        packed = np.packbits(mask.astype(np.uint8)).tobytes()
+        return hashlib.sha1(packed).hexdigest()[:12]
+
+    def _summaryCachePath(
+        self,
+        partition: str,
+        method: str,
+        mask: np.ndarray | None = None,
+    ) -> Path:
         data_path = self.data_path_test if partition == 'test' else self.data_path_valid
+        if method == 'mb':
+            prefix = getattr(self, 'checkpoint_prefix', getattr(self.cfg, 'prefix', 'best'))
+            cache_name = (
+                f'summary_{partition}_mb_{self.run_name}_{prefix}'
+                f'_s{self.cfg.n_samples}_seed{self.cfg.seed}_k{self.cfg.k}'
+                f'_predcov{int(getattr(self.cfg, "pred_coverage", False))}'
+                f'_{self._maskTag(mask)}.pt'
+            )
+            return data_path.parent / cache_name
+        if mask is not None:
+            return data_path.parent / f'summary_{partition}_{method}_{self._maskTag(mask)}.pt'
         return data_path.parent / f'summary_{partition}_{method}.pt'
 
     def _loadOrComputeSummary(
@@ -377,10 +406,15 @@ class Evaluator:
         batch: dict[str, torch.Tensor],
         partition: str,
         method: str,
+        mask: np.ndarray | None = None,
     ) -> EvaluationSummary:
-        cache_path = self._summaryCachePath(partition, method)
+        cache_path = self._summaryCachePath(partition, method, mask=mask)
         data_path = self.data_path_test if partition == 'test' else self.data_path_valid
         ref_mtime = data_path.stat().st_mtime if data_path.exists() else 0.0
+        if method == 'mb' and self.ckpt_dir is not None:
+            ckpt_path = self.ckpt_dir / f'{self.checkpoint_prefix}.pt'
+            if ckpt_path.exists():
+                ref_mtime = max(ref_mtime, ckpt_path.stat().st_mtime)
         if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
             logger.info('Loading cached %s/%s summary from %s', partition, method, cache_path)
             return EvaluationSummary.load(cache_path)
@@ -612,9 +646,17 @@ class Evaluator:
             src_mask = raw[model][1]
             native_mask = np.ones(n, dtype=bool) if src_mask is None else src_mask
             native_batch = model in _FIT_MODELS and np.array_equal(native_mask, comparison_mask)
-            if native_batch:
+            if model in _FIT_MODELS:
                 s = self._loadOrComputeSummary(
-                    aligned[model], common_batch, partition, model.lower()
+                    aligned[model],
+                    common_batch,
+                    partition,
+                    model.lower(),
+                    mask=None if native_batch else common_mask,
+                )
+            elif model == 'MB':
+                s = self._loadOrComputeSummary(
+                    aligned[model], common_batch, partition, 'mb', mask=common_mask
                 )
             else:
                 s = self.summary(aligned[model], common_batch)
@@ -624,14 +666,15 @@ class Evaluator:
 
         # Comparison plot
         plot_dir = self.plot_dir if partition == 'test' else self.plot_dir / partition
-        plot_dir.mkdir(parents=True, exist_ok=True)
-        self.plot(
-            list(aligned.values()),
-            list(summaries.values()),
-            active,
-            common_batch,
-            plot_dir=plot_dir,
-        )
+        if self.cfg.plot:
+            plot_dir.mkdir(parents=True, exist_ok=True)
+            self.plot(
+                list(aligned.values()),
+                list(summaries.values()),
+                active,
+                common_batch,
+                plot_dir=plot_dir,
+            )
 
         # NUTS convergence diagnostics and sub-population rows
         if self.cfg.converged_subset and has_fits and 'NUTS' in active:
