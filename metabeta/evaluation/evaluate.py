@@ -607,10 +607,11 @@ class Evaluator:
         # Compute summaries; cache data-derived methods when they are on their native batch
         summaries: dict[str, EvaluationSummary] = {}
         rows: list[dict] = []
+        comparison_mask = np.ones(n, dtype=bool) if common_mask is None else common_mask
         for model in active:
-            native_batch = model in _FIT_MODELS and (
-                model in ('ADVI', 'LAPLACE') or (model == 'NUTS' and common_mask is None)
-            )
+            src_mask = raw[model][1]
+            native_mask = np.ones(n, dtype=bool) if src_mask is None else src_mask
+            native_batch = model in _FIT_MODELS and np.array_equal(native_mask, comparison_mask)
             if native_batch:
                 s = self._loadOrComputeSummary(
                     aligned[model], common_batch, partition, model.lower()
