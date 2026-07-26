@@ -35,6 +35,7 @@ def plotComparison(
     labels: list[str],
     data: dict[str, torch.Tensor],
     plot_dir: Path | None = None,
+    plot_name: str = 'comparison',
     epoch: int | None = None,
     show: bool = False,
     show_corr_rfx: bool = False,
@@ -131,8 +132,8 @@ def plotComparison(
 
     saved_path = None
     if plot_dir is not None:
-        savePlot(plot_dir, 'comparison', epoch=epoch, ending='pdf')
-        saved_path = savePlot(plot_dir, 'comparison', epoch=epoch, ending='png')
+        savePlot(plot_dir, plot_name, epoch=epoch, ending='pdf')
+        saved_path = savePlot(plot_dir, plot_name, epoch=epoch, ending='png')
     if show:
         plt.show()
     plt.close(fig)
