@@ -4,6 +4,7 @@ import resource
 import logging
 import argparse
 import hashlib
+from itertools import chain
 from pathlib import Path
 
 import numpy as np
@@ -97,6 +98,10 @@ def setup() -> argparse.Namespace:
         help='Save comparison plots (default: true)',
     )
     parser.add_argument(
+        '--warmup', action=argparse.BooleanOptionalAction, default=True,
+        help='Run an untimed one-sample MB warm-up before timing model evaluation (default: true)',
+    )
+    parser.add_argument(
         '--comparison_legend', type=str, choices=['panel', 'right'], default='panel',
         help='Comparison plot legend placement (default: panel)',
     )
@@ -152,6 +157,7 @@ class Evaluator:
         self.cfg.convergence_mode = getattr(cfg, 'convergence_mode', 'liberal')
         self.cfg.pareto_k_thr = getattr(cfg, 'pareto_k_thr', 0.7)
         self.cfg.plot = getattr(cfg, 'plot', True)
+        self.cfg.warmup = getattr(cfg, 'warmup', True)
         self.cfg.summary_chunk_size = getattr(cfg, 'summary_chunk_size', 16)
         self.cfg.outdir = getattr(cfg, 'outdir', str(Path(self.dir, '..', 'outputs', 'results')))
 
@@ -383,34 +389,85 @@ class Evaluator:
             return np.ones(batch['X'].shape[0], dtype=bool)
         return ~batch[failed_key].cpu().numpy().astype(bool)
 
-    def _sampleBatch(self, batch: dict[str, torch.Tensor]) -> Proposal:
-        proposal = self.model.estimate(batch, n_samples=self.cfg.n_samples)
+    def _sampleBatch(
+        self, batch: dict[str, torch.Tensor], n_samples: int | None = None
+    ) -> Proposal:
+        proposal = self.model.estimate(batch, n_samples=n_samples or self.cfg.n_samples)
         if self.cfg.rescale:
             proposal.rescale(batch['sd_y'])
         return proposal
 
-    def _sampleMoe(self, batch: dict[str, torch.Tensor], n_datasets_seen: int) -> list[Proposal]:
+    def _sampleMoe(
+        self,
+        batch: dict[str, torch.Tensor],
+        n_datasets_seen: int,
+        n_samples: int | None = None,
+    ) -> list[Proposal]:
         B = batch['X'].shape[0]
         proposals = []
         for i in range(B):
             single = {k: v[i : i + 1] if torch.is_tensor(v) else v for k, v in batch.items()}
             rng = np.random.default_rng(self.cfg.seed + n_datasets_seen + i)
-            proposal = moeEstimate(self.model, single, self.cfg.n_samples, self.cfg.k, rng=rng)
+            proposal = moeEstimate(
+                self.model,
+                single,
+                n_samples or self.cfg.n_samples,
+                self.cfg.k,
+                rng=rng,
+            )
             if self.cfg.rescale:
                 proposal.rescale(single['sd_y'])
             proposals.append(proposal)
         return proposals
 
+    def _synchronizeDevice(self) -> None:
+        if self.device.type == 'cuda' and torch.cuda.is_available():
+            torch.cuda.synchronize(self.device)
+        elif self.device.type == 'mps' and hasattr(torch, 'mps'):
+            torch.mps.synchronize()
+
+    def _firstDatasetBatch(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        batch_size = batch['X'].shape[0]
+        return {
+            k: v[:1] if torch.is_tensor(v) and v.shape[:1] == (batch_size,) else v
+            for k, v in batch.items()
+        }
+
+    def _warmupMbBatch(self, batch: dict[str, torch.Tensor], label: str) -> None:
+        if not self.cfg.warmup:
+            return
+
+        cpu_rng = torch.random.get_rng_state()
+        cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        self._synchronizeDevice()
+        logger.info('Warming MB model on one %s batch with n_samples=1', label)
+        try:
+            if self.cfg.k > 0:
+                warm_batch = self._firstDatasetBatch(batch)
+                proposals = self._sampleMoe(warm_batch, 0, n_samples=1)
+                del proposals
+            else:
+                proposal = self._sampleBatch(batch, n_samples=1)
+                del proposal
+            self._synchronizeDevice()
+        finally:
+            torch.random.set_rng_state(cpu_rng)
+            if cuda_rng is not None:
+                torch.cuda.set_rng_state_all(cuda_rng)
+
     @torch.no_grad()
     def sample(self, batch: dict[str, torch.Tensor]) -> Proposal:
         self._ensureModelLoaded()
         batch = toDevice(batch, self.device)
+        self._warmupMbBatch(batch, 'full')
+        self._synchronizeDevice()
         t0 = time.perf_counter()
         if self.cfg.k > 0:
             proposals = self._sampleMoe(batch, 0)
             proposal = concatProposalsBatch(proposals)
         else:
             proposal = self._sampleBatch(batch)
+        self._synchronizeDevice()
         t1 = time.perf_counter()
         proposal.tpd = (t1 - t0) / batch['X'].shape[0]
         return proposal
@@ -420,9 +477,17 @@ class Evaluator:
         self._ensureModelLoaded()
         proposals = []
         n_datasets = 0
+        iterator = iter(dl)
+        try:
+            first_batch = toDevice(next(iterator), self.device)
+        except StopIteration:
+            raise ValueError(f'cannot sample empty dataloader for {label}')
+        self._warmupMbBatch(first_batch, label)
+        self._synchronizeDevice()
         t0 = time.perf_counter()
-        for batch in tqdm(dl, desc=f'  {label}'):
-            batch = toDevice(batch, self.device)
+        for batch in tqdm(chain([first_batch], iterator), total=len(dl), desc=f'  {label}'):
+            if batch is not first_batch:
+                batch = toDevice(batch, self.device)
             if self.cfg.k > 0:
                 batch_proposals = self._sampleMoe(batch, n_datasets)
                 for p in batch_proposals:
@@ -433,6 +498,7 @@ class Evaluator:
                 proposal.to('cpu')
                 proposals.append(proposal)
             n_datasets += batch['X'].shape[0]
+        self._synchronizeDevice()
         t1 = time.perf_counter()
         merged = concatProposalsBatch(proposals)
         merged.tpd = (t1 - t0) / max(n_datasets, 1)
@@ -795,11 +861,13 @@ class Evaluator:
             + tabulate(md_rows, headers=headers, tablefmt='pipe', stralign='right')
             + '\n'
         )
+        logger.info('Saved markdown evaluation table to %s', md_path)
 
         tex_path = self.results_dir / 'evaluate.tex'
         tex_path.write_text(
             tabulate(tex_rows, headers=headers, tablefmt='latex_booktabs', stralign='right') + '\n'
         )
+        logger.info('Saved LaTeX evaluation table to %s', tex_path)
 
     # -------------------------------------------------------------------------
     # Partition-level evaluation
