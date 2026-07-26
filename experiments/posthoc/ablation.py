@@ -4,13 +4,14 @@ Conditions (Normal)
 -------------------
 raw          : raw flow samples
 is           : global IS with PSIS
-laplace      : MAP (Adam, NCP) + Laplace Gaussian approximation
-laplaceIS    : laplace → full IS correction (PSIS)
 imhMarginal  : IMH mode='marginal' (Normal) or 'joint' (other) — Rao-Blackwellised where possible
-cd           : coordinate descent — marginal MAP θ_g + Gibbs rfx sample
 svgd         : SVGD with per-dim bandwidth + cosine LR decay
 coldNuts     : NUTS results extracted from test.fit.npz (pre-computed, no rerun)
 warmNuts     : warm-started NUTS (flow samples initialise PyMC chains)
+
+Note: 'laplace'/'laplaceIS' and 'cd' (coordinate descent) conditions were removed
+along with metabeta/posthoc/laplace.py and metabeta/posthoc/coordinate.py, which
+were deprecated in 3c5b7af2.
 
 All methods are evaluated on the same N_DATASETS datasets.
 Run functions are imported from the individual eval scripts; see those files
@@ -20,7 +21,7 @@ Data loading uses Collection + collateGrouped so that per-dataset unpadded
 dicts are available for NUTS-based methods.
 
 Run from repo root:
-    uv run python experiments/posthoc/methods.py
+    uv run python experiments/posthoc/ablation.py
 """
 
 import sys
@@ -29,16 +30,17 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from metabeta.utils.experiments import DATA_DIR, CHECKPOINT_DIR, REPO_ROOT
+from metabeta.utils.experiments import DATA_DIR, REPO_ROOT
 
 # Make benchmark method wrappers importable without installing benchmarks as a package.
 sys.path.insert(0, str(REPO_ROOT / 'benchmarks'))
+# Reuse the checkpoint-seed mapping maintained for published joint checkpoints.
+sys.path.insert(0, str(REPO_ROOT / 'scripts'))
 
-from eval_coordinate import runCD                                      # noqa: E402
 from eval_imh import runIMH, N_SAMPLES as IMH_N_SAMPLES               # noqa: E402
-from eval_laplace import runLaplace, runLaplaceIS                      # noqa: E402
 from eval_svgd import runSVGD                                          # noqa: E402
 from eval_warmnuts import runWarmNuts                                  # noqa: E402
+from build_ckpt import BEST_SEEDS, _ckpt_dir                           # noqa: E402
 
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.models.approximator import Approximator
@@ -46,7 +48,7 @@ from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.warmnuts import _stackProposals
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped
-from metabeta.utils.evaluation import Proposal, concatProposalsBatch
+from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.padding import unpad
 from metabeta.utils.preprocessing import rescaleData
@@ -57,7 +59,7 @@ from metabeta.utils.preprocessing import rescaleData
 N_DATASETS = 128
 BATCH_SIZE = 4   # sub-batch size for torch-based methods
 
-# Flow samples for torch-based methods (laplace / cd / svgd / imh / is / raw).
+# Flow samples for torch-based methods (svgd / imh / is / raw).
 # IMH requires exactly N_CHAINS × N_STEPS samples (imported as IMH_N_SAMPLES).
 N_SAMPLES = 500
 
@@ -67,13 +69,13 @@ N_SAMPLES = 500
 MODELS = [
     dict(
         label='Normal',
-        ckpt=CHECKPOINT_DIR / 'normal_dsmall-n-mixed_msmall_s42' / 'best.pt',
+        ckpt=_ckpt_dir('normal', 'small', BEST_SEEDS[('normal', 'small')]) / 'best.pt',
         data_dir=DATA_DIR / 'small-n-sampled',
         likelihood_family=0,
     ),
     dict(
         label='Bernoulli',
-        ckpt=CHECKPOINT_DIR / 'bernoulli_dsmall-b-mixed_msmall_s42' / 'best.pt',
+        ckpt=_ckpt_dir('bernoulli', 'small', BEST_SEEDS[('bernoulli', 'small')]) / 'best.pt',
         data_dir=DATA_DIR / 'small-b-sampled',
         likelihood_family=1,
     ),
@@ -86,7 +88,7 @@ MODELS = [
 
 
 def loadModel(ckpt: Path) -> tuple[Approximator, int]:
-    payload = torch.load(ckpt, map_location='cpu')
+    payload = torch.load(ckpt, map_location='cpu', weights_only=False)
     model_cfg = ApproximatorConfig(**payload['model_cfg'])
     model = Approximator(model_cfg)
     model.load_state_dict(payload['model_state'])
@@ -235,14 +237,10 @@ for cfg in MODELS:
     # IMH requires exactly N_CHAINS × N_STEPS samples — draw a dedicated set.
     imh_proposals, imh_batches = collectProposals(model, items, IMH_N_SAMPLES)
 
-    laplace_out = None
     conditions = (
         'raw',
         'is',
-        'laplace',
-        'laplaceIS',
         'imhMarginal',
-        'cd',
         'svgd',
         'coldNuts',
         'warmNuts',
@@ -257,15 +255,9 @@ for cfg in MODELS:
             runRaw(proposals, full_batch, lf)
         elif cond == 'is':
             runIS(proposals, batches, full_batch, lf)
-        elif cond == 'laplace':
-            laplace_out = runLaplace(proposals, batches, full_batch, lf)
-        elif cond == 'laplaceIS':
-            runLaplaceIS(laplace_out, batches, full_batch, lf)
         elif cond == 'imhMarginal':
             imh_mode = 'marginal' if lf == 0 else 'joint'
             runIMH(imh_mode, imh_proposals, imh_batches, full_batch, lf)
-        elif cond == 'cd':
-            runCD(proposals, batches, full_batch, lf)
         elif cond == 'svgd':
             runSVGD(proposals, batches, full_batch, lf)
         elif cond == 'coldNuts':
