@@ -276,3 +276,70 @@ def test_mb_warmup_uses_one_sample_and_restores_torch_rng():
 
     assert calls == [1]
     torch.testing.assert_close(actual, expected)
+
+
+def test_table_only_cache_miss_raises_before_full_evaluation(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(
+        save_tables=True,
+        plot=False,
+        converged_subset=False,
+        partition='test',
+        models='MB,NUTS',
+        likelihood_family=0,
+    )
+    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_valid = tmp_path / 'valid.fit.npz'
+    evaluator._cachedRowsForPartition = lambda *args, **kwargs: None
+
+    def fail_eval(*args, **kwargs):
+        raise AssertionError('full evaluation should not be reached in table-only mode')
+
+    evaluator._evalPartition = fail_eval
+
+    with pytest.raises(RuntimeError, match='Refusing to fall back to full evaluation'):
+        evaluator.go()
+
+
+def test_table_only_cache_miss_can_fallback_for_mb_only():
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(
+        save_tables=True,
+        plot=False,
+        converged_subset=False,
+        partition='test',
+        models='MB',
+        likelihood_family=0,
+    )
+    evaluator.data_path_test = 'test.fit.npz'
+    evaluator.data_path_valid = 'valid.fit.npz'
+    evaluator.results_dir = None
+    evaluator._cachedRowsForPartition = lambda *args, **kwargs: None
+    evaluator._hasFits = lambda partition: True
+    evaluator._evalPartition = lambda *args, **kwargs: [{'method': 'MB'}]
+
+    evaluator.go()
+
+
+def test_mb_only_partition_data_uses_base_file(monkeypatch):
+    class DummyLoader:
+        def fullBatch(self):
+            return {'X': torch.zeros(1, 2)}
+
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(batch_size=16)
+    evaluator.dl_test = None
+    evaluator.dl_valid = None
+    calls = []
+
+    def fake_loader(partition, batch_size=None, prefer_fit=True):
+        calls.append((partition, batch_size, prefer_fit))
+        suffix = 'fit.npz' if prefer_fit else 'npz'
+        return DummyLoader(), f'{partition}.{suffix}'
+
+    monkeypatch.setattr(evaluator, '_getDataLoader', fake_loader)
+
+    _, _, path = evaluator._getPartitionData('test', need_fits=False)
+
+    assert path == 'test.npz'
+    assert calls == [('test', 16, False)]
