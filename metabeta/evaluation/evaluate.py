@@ -790,7 +790,7 @@ class Evaluator:
         if self.cfg.rescale:
             batch = rescaleData(batch)
         target_dir = plot_dir if plot_dir is not None else self.plot_dir
-        plotComparison(
+        saved_path = plotComparison(
             summaries,
             proposals,
             labels,
@@ -799,6 +799,8 @@ class Evaluator:
             show=True,
             legend_right=getattr(self.cfg, 'comparison_legend', 'panel') == 'right',
         )
+        if saved_path is not None:
+            logger.info('Saved comparison plot to %s', saved_path)
 
     def _fitLabel(self) -> str:
         return {0: 'ppR2', 1: 'ppAUC', 2: 'ppDev'}.get(self.cfg.likelihood_family, 'ppR2')
@@ -1291,6 +1293,7 @@ def main() -> None:
     try:
         evaluator = Evaluator(cfg)
         evaluator.go()
+        logger.info('Evaluation finished successfully.')
     except MemoryError:
         logger.exception(
             'Evaluation failed with Python MemoryError [max RSS %.1f MiB]. '
