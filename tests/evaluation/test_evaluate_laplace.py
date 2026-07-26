@@ -35,6 +35,19 @@ def test_evaluator_resolves_laplace_fit_model():
     assert evaluator._resolveModels() == ['LAPLACE']
 
 
+@pytest.mark.parametrize(
+    ('suffix', 'expected'),
+    [
+        ('', 'comparison'),
+        ('mb_nuts_advi', 'comparison_mb_nuts_advi'),
+        ('--with LA--', 'comparison_with_LA'),
+        (' ! ', 'comparison'),
+    ],
+)
+def test_plot_name_suffix_is_sanitized(suffix, expected):
+    assert Evaluator._plotName(suffix) == expected
+
+
 def test_common_mask_intersects_failed_fit_masks():
     mask_a = np.array([True, False, True, True])
     mask_b = np.array([True, True, False, True])
