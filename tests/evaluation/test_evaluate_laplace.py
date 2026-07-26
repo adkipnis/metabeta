@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from metabeta.evaluation.evaluate import Evaluator
+from metabeta.plotting.comparison import _rightLegendHandles
 from metabeta.utils.evaluation import AggregatedMetrics, EvaluationSummary, PerDatasetMetrics
 from metabeta.utils.results import Proposal
 
@@ -100,6 +101,19 @@ def test_comparison_legend_defaults_to_right(monkeypatch):
     evaluator.plot([proposal], [_summary()], ['MB'], {'X': torch.zeros(1, 1)})
 
     assert seen['legend_right'] is True
+
+
+def test_right_comparison_legend_excludes_sbc_bands():
+    class FakeAxis:
+        def get_legend_handles_labels(self):
+            return (
+                ['handle_beta', 'handle_global_band', 'handle_local_band', 'handle_duplicate'],
+                ['beta0', '95% CB (global)', '95% CB (local)', 'beta0'],
+            )
+
+    handles = _rightLegendHandles(np.array([[FakeAxis()]], dtype=object))
+
+    assert handles == {'beta0': 'handle_beta'}
 
 
 def test_plot_batch_strips_fit_sample_arrays():
