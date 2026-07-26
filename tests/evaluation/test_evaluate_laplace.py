@@ -1,8 +1,10 @@
 import argparse
 import numpy as np
 import pytest
+import torch
 
 from metabeta.evaluation.evaluate import Evaluator
+from metabeta.utils.evaluation import AggregatedMetrics, EvaluationSummary, PerDatasetMetrics
 
 
 def test_evaluator_resolves_laplace_fit_model():
@@ -87,3 +89,33 @@ def test_mb_summary_cache_candidates_include_legacy_checkpoint_name(tmp_path):
     assert any('large_seed=13_best' in name for name in names)
     assert any('large_seed=0_best' in name for name in names)
     assert any('large_seed=0_latest' in name for name in names)
+
+
+def test_make_row_includes_loo_nll_and_predictive_width():
+    evaluator = Evaluator.__new__(Evaluator)
+    summary = EvaluationSummary(
+        per_dataset=PerDatasetMetrics(
+            posterior_nll=torch.tensor([1.0, 3.0]),
+            loo_nll=torch.tensor([2.0, 4.0]),
+            pp_fit=torch.tensor([0.1, 0.2]),
+            pp_cov_width=torch.tensor([[9.0, 11.0], [5.0, 7.0]]),
+        ),
+        aggregated=AggregatedMetrics(
+            corr={'ffx': torch.tensor([0.5])},
+            nrmse={'ffx': torch.tensor([0.6])},
+            coverage={},
+            ece={'ffx': torch.tensor([0.0])},
+            eace={'ffx': torch.tensor([0.1])},
+            lcr={},
+            abs_lcr={},
+            estimates={},
+        ),
+        tpd=0.25,
+    )
+
+    row = evaluator._makeRow('LAPLACE', summary, 'ppR2')
+
+    assert row['LOO-NLL'] == pytest.approx(2.0)
+    assert row['ppNLL'] == pytest.approx(1.0)
+    assert row['ppWidth90'] == pytest.approx(5.0)
+    assert row['tpd'] == pytest.approx(0.25)

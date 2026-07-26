@@ -1,7 +1,7 @@
 import torch
 import pytest
 
-from metabeta.evaluation.cache import _fitBatchMask, _parseMethods, _subsetBatch
+from metabeta.evaluation.cache import _buildProposal, _fitBatchMask, _parseMethods, _subsetBatch
 
 
 def test_parse_methods_accepts_comma_separated_methods():
@@ -49,3 +49,16 @@ def test_subset_batch_only_indexes_dataset_axis_tensors():
     assert out['mask_d'].shape == (2, 2)
     assert torch.equal(out['constant'], batch['constant'])
     assert out['label'] == 'unchanged'
+
+
+def test_build_proposal_sets_time_per_dataset_from_duration():
+    batch = {
+        'laplace_ffx': torch.zeros(2, 3, 1),
+        'laplace_sigma_rfx': torch.ones(2, 3, 1),
+        'laplace_rfx': torch.zeros(2, 4, 3, 1),
+        'laplace_duration': torch.tensor([0.1, 0.3]),
+    }
+
+    proposal = _buildProposal(batch, 'laplace', d_corr=0)
+
+    assert proposal.tpd == pytest.approx(0.2)
