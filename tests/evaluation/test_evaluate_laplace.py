@@ -116,6 +116,64 @@ def test_fit_summary_mask_uses_native_cache_when_possible(src_mask, common_mask,
         np.testing.assert_array_equal(result, expected)
 
 
+def test_fit_mask_from_path_treats_all_success_as_unmasked(tmp_path):
+    path = tmp_path / 'test.fit.npz'
+    np.savez(path, y=np.zeros((3, 2)), advi_failed=np.array([False, False, False]))
+    evaluator = Evaluator.__new__(Evaluator)
+
+    assert evaluator._fitMaskFromPath(path, 'advi') is None
+
+
+def test_fit_proposal_from_npz_matches_collated_orientation(tmp_path):
+    path = tmp_path / 'test.fit.npz'
+    np.savez(
+        path,
+        nuts_ffx=np.arange(2 * 3 * 5, dtype=np.float64).reshape(2, 3, 5),
+        nuts_sigma_rfx=np.arange(2 * 2 * 5, dtype=np.float64).reshape(2, 2, 5),
+        nuts_sigma_eps=np.arange(2 * 1 * 5, dtype=np.float64).reshape(2, 1, 5),
+        nuts_rfx=np.arange(2 * 2 * 4 * 5, dtype=np.float64).reshape(2, 2, 4, 5),
+        nuts_corr_rfx=np.zeros((2, 1, 5, 2, 2), dtype=np.float64),
+        nuts_duration=np.array([10.0, 20.0]),
+    )
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(rescale=False)
+
+    proposal = evaluator._fitProposalFromNpz(path, 'NUTS')
+
+    assert proposal.samples_g.shape == (2, 5, 6)
+    assert proposal.rfx.shape == (2, 4, 5, 2)
+    assert proposal.corr_rfx.shape == (2, 5, 2, 2)
+    assert proposal.tpd == pytest.approx(15.0)
+    torch.testing.assert_close(
+        proposal.ffx,
+        torch.as_tensor(np.load(path)['nuts_ffx'].astype(np.float32)).permute(0, 2, 1),
+    )
+
+
+def test_plot_with_fit_models_uses_light_path(monkeypatch, tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(plot=True, converged_subset=False)
+    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+    calls = []
+
+    monkeypatch.setattr(
+        evaluator, '_evalPartitionPlotLight', lambda *args: calls.append(args) or []
+    )
+    monkeypatch.setattr(
+        evaluator,
+        '_getPartitionData',
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError('fit dataloader should not be loaded for plot light path')
+        ),
+    )
+
+    rows = evaluator._evalPartition('test', ['MB', 'NUTS'], 'ppR2', False)
+
+    assert rows == []
+    assert calls
+
+
 def test_mb_summary_cache_path_includes_run_options_and_mask(tmp_path):
     evaluator = Evaluator.__new__(Evaluator)
     evaluator.cfg = argparse.Namespace(
