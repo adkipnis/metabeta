@@ -34,3 +34,30 @@ def test_native_summary_cache_requires_same_mask(src_mask, comparison_mask, expe
     native_mask = np.ones(3, dtype=bool) if src_mask is None else src_mask
 
     assert np.array_equal(native_mask, comparison_mask) is expected
+
+
+def test_mb_summary_cache_path_includes_run_options_and_mask(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(
+        n_samples=1000,
+        seed=7,
+        k=0,
+        pred_coverage=True,
+    )
+    evaluator.run_name = 'data=small-n-mixed_model=large_seed=13'
+    evaluator.checkpoint_prefix = 'best'
+    evaluator.data_path_test = tmp_path / 'small-n-sampled' / 'test.fit.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+
+    path_all = evaluator._summaryCachePath('test', 'mb', mask=None)
+    path_masked = evaluator._summaryCachePath(
+        'test',
+        'mb',
+        mask=np.array([True, False, True]),
+    )
+
+    assert path_all.parent == evaluator.data_path_test.parent
+    assert 'summary_test_mb_data=small-n-mixed_model=large_seed=13_best' in path_all.name
+    assert '_s1000_seed7_k0_predcov1_all.pt' in path_all.name
+    assert path_masked != path_all
+    assert path_masked.name.endswith('.pt')
