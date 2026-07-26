@@ -212,6 +212,9 @@ class Evaluator:
     def _tableOnlyMode(self) -> bool:
         return self.cfg.save_tables and not self.cfg.plot and not self.cfg.converged_subset
 
+    def _partitionDataPath(self, partition: str) -> Path:
+        return self.data_path_test if partition == 'test' else self.data_path_valid
+
     def _initDataFromConfig(self) -> None:
         self.data_cfg_train = loadDataConfig(self.cfg.data_id)
         assimilateConfig(self.cfg, self.data_cfg_train)
@@ -293,7 +296,7 @@ class Evaluator:
         self, partition: str, batch_size: int | None = None
     ) -> tuple[Dataloader, Path]:
         if hasattr(self.cfg, 'data_path_test') or hasattr(self.cfg, 'data_path_valid'):
-            data_path = self.data_path_test if partition == 'test' else self.data_path_valid
+            data_path = self._partitionDataPath(partition)
         else:
             data_path = self._getDataPath(partition)
         sortish = batch_size is not None
@@ -544,7 +547,7 @@ class Evaluator:
         run_name: str | None = None,
         prefix: str | None = None,
     ) -> Path:
-        data_path = self.data_path_test if partition == 'test' else self.data_path_valid
+        data_path = self._partitionDataPath(partition)
         if method == 'mb':
             run_name = run_name or self.run_name
             prefix = prefix or getattr(
@@ -564,7 +567,7 @@ class Evaluator:
         return data_path.parent / f'summary_{partition}_{method}.pt'
 
     def _summaryRefMtime(self, partition: str, method: str) -> float:
-        data_path = self.data_path_test if partition == 'test' else self.data_path_valid
+        data_path = self._partitionDataPath(partition)
         ref_mtime = data_path.stat().st_mtime if data_path.exists() else 0.0
         if method == 'mb' and getattr(self, 'ckpt_dir', None) is not None:
             ckpt_path = self.ckpt_dir / f'{self.checkpoint_prefix}.pt'
@@ -676,6 +679,16 @@ class Evaluator:
             logger.warning('No active models for partition=%s (no fit file found)', partition)
         return active
 
+    @staticmethod
+    def _fitSummaryMask(
+        src_mask: np.ndarray | None,
+        common_mask: np.ndarray | None,
+        n: int,
+    ) -> np.ndarray | None:
+        comparison_mask = np.ones(n, dtype=bool) if common_mask is None else common_mask
+        native_mask = np.ones(n, dtype=bool) if src_mask is None else src_mask
+        return None if np.array_equal(native_mask, comparison_mask) else common_mask
+
     def _cachedRowsForPartition(
         self,
         partition: str,
@@ -689,7 +702,7 @@ class Evaluator:
         comparison would require a cache that does not exist, the caller should fall back to the
         normal evaluation path.
         """
-        data_path = self.data_path_test if partition == 'test' else self.data_path_valid
+        data_path = self._partitionDataPath(partition)
         active = self._activeModels(partition, models)
         if not active:
             return []
@@ -701,7 +714,6 @@ class Evaluator:
             if model in _FIT_MODELS
         }
         common_mask = self._commonMask(list(masks.values()), n)
-        comparison_mask = np.ones(n, dtype=bool) if common_mask is None else common_mask
 
         rows: list[dict] = []
         missing: list[str] = []
@@ -709,16 +721,13 @@ class Evaluator:
             method = model.lower()
             mask = common_mask
             if model in _FIT_MODELS:
-                src_mask = masks[model]
-                native_mask = np.ones(n, dtype=bool) if src_mask is None else src_mask
-                native_batch = np.array_equal(native_mask, comparison_mask)
-                mask = None if native_batch else common_mask
+                mask = self._fitSummaryMask(masks[model], common_mask, n)
             summary = self._loadCachedSummary(partition, method, mask=mask)
             if summary is None:
                 missing.append(f'{model}({self._summaryCachePath(partition, method, mask=mask)})')
                 continue
             if model in _FIT_MODELS and summary.tpd is None:
-                duration = self._durationMeanFromPath(data_path, method, comparison_mask)
+                duration = self._durationMeanFromPath(data_path, method, common_mask)
                 if duration is not None:
                     summary.tpd = duration
                     summary.save(self._summaryCachePath(partition, method, mask=mask))
@@ -835,24 +844,20 @@ class Evaluator:
         direction = {k: v for k, v in direction.items() if k in metric_names}
         best = self._bestIndices(rows, metric_names, direction)
 
-        def _fmt(val: float | None, i: int, metric: str) -> str:
+        def _fmt(val: float | None, i: int, metric: str, bold: tuple[str, str]) -> str:
             if val is None:
                 return 'NA'
             cell = f'{val:.4f}'
-            return f'**{cell}**' if i in best.get(metric, set()) else cell
-
-        def _fmt_tex(val: float | None, i: int, metric: str) -> str:
-            if val is None:
-                return 'NA'
-            cell = f'{val:.4f}'
-            return f'\\textbf{{{cell}}}' if i in best.get(metric, set()) else cell
+            return f'{bold[0]}{cell}{bold[1]}' if i in best.get(metric, set()) else cell
 
         headers = ['Method'] + metric_names
         md_rows = [
-            [r['method']] + [_fmt(r[m], i, m) for m in metric_names] for i, r in enumerate(rows)
+            [r['method']] + [_fmt(r[m], i, m, ('**', '**')) for m in metric_names]
+            for i, r in enumerate(rows)
         ]
         tex_rows = [
-            [r['method']] + [_fmt_tex(r[m], i, m) for m in metric_names] for i, r in enumerate(rows)
+            [r['method']] + [_fmt(r[m], i, m, ('\\textbf{', '}')) for m in metric_names]
+            for i, r in enumerate(rows)
         ]
 
         md_path = self.results_dir / 'evaluate.md'
@@ -888,7 +893,7 @@ class Evaluator:
         return models
 
     def _hasFits(self, partition: str) -> bool:
-        path = self.data_path_test if partition == 'test' else self.data_path_valid
+        path = self._partitionDataPath(partition)
         return path.name.endswith('.fit.npz')
 
     def _getPartitionData(self, partition: str) -> tuple[Dataloader, dict, Path]:
@@ -974,18 +979,14 @@ class Evaluator:
         # Compute summaries; cache data-derived methods when they are on their native batch
         summaries: dict[str, EvaluationSummary] = {}
         rows: list[dict] = []
-        comparison_mask = np.ones(n, dtype=bool) if common_mask is None else common_mask
         for model in active:
             if model in _FIT_MODELS:
-                src_mask = raw[model][1]
-                native_mask = np.ones(n, dtype=bool) if src_mask is None else src_mask
-                native_batch = np.array_equal(native_mask, comparison_mask)
                 s = self._loadOrComputeSummary(
                     aligned[model],
                     common_batch,
                     partition,
                     model.lower(),
-                    mask=None if native_batch else common_mask,
+                    mask=self._fitSummaryMask(raw[model][1], common_mask, n),
                 )
             elif model == 'MB':
                 s = self._loadCachedSummary(partition, 'mb', mask=common_mask)
@@ -1017,7 +1018,7 @@ class Evaluator:
             )
 
         # NUTS convergence diagnostics and sub-population rows
-        if self.cfg.converged_subset and has_fits and 'NUTS' in active:
+        if self.cfg.converged_subset and 'NUTS' in active:
             if 'MB' in active and 'MB' not in raw:
                 raw['MB'] = self._getProposalAndMask('MB', partition, full_batch, dl)
             rows += self._convergedRows(partition, active, raw, full_batch, fit_label, plot_dir)
