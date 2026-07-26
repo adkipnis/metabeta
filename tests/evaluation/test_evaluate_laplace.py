@@ -78,6 +78,30 @@ def test_plot_name_suffix_is_sanitized(suffix, expected):
     assert Evaluator._plotName(suffix) == expected
 
 
+def test_comparison_legend_defaults_to_right(monkeypatch):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(rescale=False, plot_suffix='')
+    evaluator.plot_dir = None
+    proposal = Proposal(
+        {
+            'global': {'samples': torch.zeros(1, 2, 2)},
+            'local': {'samples': torch.zeros(1, 1, 2, 1)},
+        },
+        has_sigma_eps=False,
+    )
+    seen = {}
+
+    def fake_plot_comparison(*args, **kwargs):
+        seen['legend_right'] = kwargs['legend_right']
+        return None
+
+    monkeypatch.setattr('metabeta.evaluation.evaluate.plotComparison', fake_plot_comparison)
+
+    evaluator.plot([proposal], [_summary()], ['MB'], {'X': torch.zeros(1, 1)})
+
+    assert seen['legend_right'] is True
+
+
 def test_plot_batch_strips_fit_sample_arrays():
     evaluator = Evaluator.__new__(Evaluator)
     batch = {

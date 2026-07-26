@@ -106,8 +106,8 @@ def setup() -> argparse.Namespace:
         help='Run an untimed one-sample MB warm-up before timing model evaluation (default: true)',
     )
     parser.add_argument(
-        '--comparison_legend', type=str, choices=['panel', 'right'], default='panel',
-        help='Comparison plot legend placement (default: panel)',
+        '--comparison_legend', type=str, choices=['panel', 'right'], default='right',
+        help='Comparison plot legend placement (default: right)',
     )
     parser.add_argument(
         '--plot_suffix', type=str, default='',
@@ -869,7 +869,7 @@ class Evaluator:
             plot_dir=target_dir,
             plot_name=self._plotName(self.cfg.plot_suffix),
             show=True,
-            legend_right=getattr(self.cfg, 'comparison_legend', 'panel') == 'right',
+            legend_right=getattr(self.cfg, 'comparison_legend', 'right') == 'right',
         )
         if saved_path is not None:
             logger.info('Saved comparison plot to %s', saved_path)
