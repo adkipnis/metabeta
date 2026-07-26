@@ -6,24 +6,35 @@ raw          : raw flow samples
 is           : global IS with PSIS
 imhMarginal  : IMH mode='marginal' (Normal) or 'joint' (other) — Rao-Blackwellised where possible
 svgd         : SVGD with per-dim bandwidth + cosine LR decay
-coldNuts     : NUTS results extracted from test.fit.npz (pre-computed, no rerun)
-warmNuts     : warm-started NUTS (flow samples initialise PyMC chains)
+coldNuts     : NUTS results extracted from test.fit.npz (pre-computed, no rerun) — only
+               available with --split=test
+warmNuts     : warm-started NUTS (flow samples initialise PyMC chains) — opt in with
+               --include-warmnuts, off by default (slow)
 
 Note: 'laplace'/'laplaceIS' and 'cd' (coordinate descent) conditions were removed
 along with metabeta/posthoc/laplace.py and metabeta/posthoc/coordinate.py, which
 were deprecated in 3c5b7af2.
 
-All methods are evaluated on the same N_DATASETS datasets.
-Run functions are imported from the individual eval scripts; see those files
-for per-method settings (e.g. IMH chains/steps, NUTS tune/draws).
+By default this evaluates every (family, size) combination in BEST_SEEDS on the
+*entire* validation split (valid.npz), capped by --n-datasets if given. Run
+functions are imported from the individual eval scripts; see those files for
+per-method settings (e.g. IMH chains/steps, NUTS tune/draws).
 
 Data loading uses Collection + collateGrouped so that per-dataset unpadded
 dicts are available for NUTS-based methods.
 
+Results are printed to stdout and also written as markdown to
+metabeta/outputs/results/ablation/{family}_{size}.md (one file per model).
+
 Run from repo root:
     uv run python experiments/posthoc/ablation.py
+    uv run python experiments/posthoc/ablation.py --sizes small --families normal bernoulli
+    uv run python experiments/posthoc/ablation.py --n-datasets 32 --include-warmnuts
 """
 
+import argparse
+import contextlib
+import io
 import sys
 from pathlib import Path
 
@@ -54,38 +65,51 @@ from metabeta.utils.padding import unpad
 from metabeta.utils.preprocessing import rescaleData
 
 # ---------------------------------------------------------------------------
-# Dataset limit — all methods evaluated on the same N_DATASETS datasets.
+# CLI
 # ---------------------------------------------------------------------------
-N_DATASETS = 128
+FAMILY_INITIAL = {'normal': 'n', 'bernoulli': 'b', 'poisson': 'p'}
+LIKELIHOOD_FAMILY = {'normal': 0, 'bernoulli': 1, 'poisson': 2}
+RESULTS_DIR = REPO_ROOT / 'metabeta' / 'outputs' / 'results' / 'ablation'
+
+
+# fmt: off
+def setup() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('--sizes', nargs='+', default=['small', 'medium'], choices=['small', 'medium', 'large', 'huge'], help='data/model sizes to evaluate')
+    p.add_argument('--families', nargs='+', default=['normal', 'bernoulli', 'poisson'], choices=['normal', 'bernoulli', 'poisson'], help='likelihood families to evaluate')
+    p.add_argument('--split', choices=['valid', 'test'], default='valid', help='npz split to evaluate on; only "test" has coldNuts fits')
+    p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
+    p.add_argument('--include-warmnuts', action='store_true', help='also run the (slow) warm-started NUTS condition')
+    return p.parse_args()
+# fmt: on
+
+
+def buildModels(families: list[str], sizes: list[str]) -> list[dict]:
+    models = []
+    for family in families:
+        for size in sizes:
+            seed = BEST_SEEDS.get((family, size))
+            if seed is None:
+                print(f'[SKIP] no BEST_SEEDS entry for ({family}, {size})')
+                continue
+            models.append(
+                dict(
+                    label=f'{family.capitalize()} ({size})',
+                    family=family,
+                    size=size,
+                    ckpt=_ckpt_dir(family, size, seed) / 'best.pt',
+                    data_dir=DATA_DIR / f'{size}-{FAMILY_INITIAL[family]}-sampled',
+                    likelihood_family=LIKELIHOOD_FAMILY[family],
+                )
+            )
+    return models
+
+
 BATCH_SIZE = 4   # sub-batch size for torch-based methods
 
 # Flow samples for torch-based methods (svgd / imh / is / raw).
 # IMH requires exactly N_CHAINS × N_STEPS samples (imported as IMH_N_SAMPLES).
 N_SAMPLES = 500
-
-# ---------------------------------------------------------------------------
-# Per-model config
-# ---------------------------------------------------------------------------
-MODELS = [
-    dict(
-        label='Normal',
-        ckpt=_ckpt_dir('normal', 'small', BEST_SEEDS[('normal', 'small')]) / 'best.pt',
-        data_dir=DATA_DIR / 'small-n-sampled',
-        likelihood_family=0,
-    ),
-    dict(
-        label='Bernoulli',
-        ckpt=_ckpt_dir('bernoulli', 'small', BEST_SEEDS[('bernoulli', 'small')]) / 'best.pt',
-        data_dir=DATA_DIR / 'small-b-sampled',
-        likelihood_family=1,
-    ),
-    dict(
-        label='Poisson',
-        ckpt=_ckpt_dir('poisson', 'small', BEST_SEEDS[('poisson', 'small')]) / 'best.pt',
-        data_dir=DATA_DIR / 'small-p-sampled',
-        likelihood_family=2,
-    ),
-]
 
 
 # ---------------------------------------------------------------------------
@@ -102,8 +126,8 @@ def loadModel(ckpt: Path) -> tuple[Approximator, int]:
     return model, payload['epoch']
 
 
-def loadData(path: Path, n_limit: int) -> tuple[list, list[dict], dict, dict]:
-    """Load up to n_limit datasets.
+def loadData(path: Path, n_limit: int | None) -> tuple[list, list[dict], dict, dict]:
+    """Load up to n_limit datasets (or the entire split if n_limit is None).
 
     Returns
     -------
@@ -113,7 +137,7 @@ def loadData(path: Path, n_limit: int) -> tuple[list, list[dict], dict, dict]:
     full_batch   : rescaled tensor_batch (ground truth for evaluation)
     """
     col = Collection(path, permute=False)
-    n = min(n_limit, len(col))
+    n = len(col) if n_limit is None else min(n_limit, len(col))
     items = [col[i] for i in range(n)]
     tensor_batch = collateGrouped(items)
 
@@ -219,55 +243,89 @@ def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch
     print(summaryTable(getSummary(merged, full_batch, likelihood_family=lf), lf))
 
 
-# ---------------------------------------------------------------------------
-# Main loop
-# ---------------------------------------------------------------------------
-for cfg in MODELS:
-    lf = cfg['likelihood_family']
-    model, epoch = loadModel(cfg['ckpt'])
-    print(f'\n{"#" * 70}')
-    print(
-        f'#  {cfg["label"]}  (epoch={epoch}  params={model.n_params:,}  '
-        f'd_ffx={model.d_ffx}  d_rfx={model.d_rfx})'
-    )
-    print(f'{"#" * 70}')
+class _Tee:
+    """Write to multiple streams at once (used to mirror stdout into a buffer)."""
 
-    fit_npz = cfg['data_dir'] / 'test.fit.npz'
-    data_path = fit_npz if fit_npz.exists() else cfg['data_dir'] / 'valid.npz'
-    items, ds_list, tensor_batch, full_batch = loadData(data_path, N_DATASETS)
-    n_ds = len(ds_list)
-    print(f'Datasets: {n_ds}  |  n_samples (flow-based): {N_SAMPLES}  |  data: {data_path.name}')
-    print('(per-method settings: see individual eval_*.py benchmarks)\n')
+    def __init__(self, *streams):
+        self.streams = streams
 
-    proposals, batches = collectProposals(model, items, N_SAMPLES)
-    # IMH requires exactly N_CHAINS × N_STEPS samples — draw a dedicated set.
-    imh_proposals, imh_batches = collectProposals(model, items, IMH_N_SAMPLES)
+    def write(self, data: str) -> None:
+        for s in self.streams:
+            s.write(data)
 
-    conditions = (
-        'raw',
-        'is',
-        'imhMarginal',
-        'svgd',
-        'coldNuts',
-        'warmNuts',
-    )
-    for cond in conditions:
-        if cond == 'coldNuts' and not fit_npz.exists():
-            continue
-        print('=' * 65)
-        print(f'  {cond}')
-        print('=' * 65)
-        if cond == 'raw':
-            runRaw(proposals, full_batch, lf)
-        elif cond == 'is':
-            runIS(proposals, batches, full_batch, lf)
-        elif cond == 'imhMarginal':
-            imh_mode = 'marginal' if lf == 0 else 'joint'
-            runIMH(imh_mode, imh_proposals, imh_batches, full_batch, lf)
-        elif cond == 'svgd':
-            runSVGD(proposals, batches, full_batch, lf)
-        elif cond == 'coldNuts':
-            runNutsFromNpz(fit_npz, ds_list, tensor_batch, full_batch, lf)
-        elif cond == 'warmNuts':
-            runWarmNuts(model, tensor_batch, ds_list, lf)
-        print()
+    def flush(self) -> None:
+        for s in self.streams:
+            s.flush()
+
+
+def _renderTerminal(text: str) -> str:
+    """Collapse '\\r'-based progress overwrites (tqdm.write) to their final state."""
+    return '\n'.join(line.split('\r')[-1] for line in text.split('\n'))
+
+
+def main() -> None:
+    args = setup()
+    models = buildModels(args.families, args.sizes)
+
+    conditions = ['raw', 'is', 'imhMarginal', 'svgd']
+    if args.split == 'test':
+        conditions.append('coldNuts')
+    if args.include_warmnuts:
+        conditions.append('warmNuts')
+
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    for cfg in models:
+        lf = cfg['likelihood_family']
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(_Tee(sys.stdout, buf)):
+            model, epoch = loadModel(cfg['ckpt'])
+            print(f'\n{"#" * 70}')
+            print(
+                f'#  {cfg["label"]}  (epoch={epoch}  params={model.n_params:,}  '
+                f'd_ffx={model.d_ffx}  d_rfx={model.d_rfx})'
+            )
+            print(f'{"#" * 70}')
+
+            fit_npz = cfg['data_dir'] / 'test.fit.npz'
+            split_name = 'test.fit.npz' if args.split == 'test' else 'valid.npz'
+            data_path = cfg['data_dir'] / split_name
+            items, ds_list, tensor_batch, full_batch = loadData(data_path, args.n_datasets)
+            n_ds = len(ds_list)
+            print(
+                f'Datasets: {n_ds}  |  n_samples (flow-based): {N_SAMPLES}  |  data: {data_path.name}'
+            )
+            print('(per-method settings: see individual eval_*.py benchmarks)\n')
+
+            proposals, batches = collectProposals(model, items, N_SAMPLES)
+            # IMH requires exactly N_CHAINS × N_STEPS samples — draw a dedicated set.
+            imh_proposals, imh_batches = collectProposals(model, items, IMH_N_SAMPLES)
+
+            for cond in conditions:
+                print('=' * 65)
+                print(f'  {cond}')
+                print('=' * 65)
+                if cond == 'raw':
+                    runRaw(proposals, full_batch, lf)
+                elif cond == 'is':
+                    runIS(proposals, batches, full_batch, lf)
+                elif cond == 'imhMarginal':
+                    imh_mode = 'marginal' if lf == 0 else 'joint'
+                    runIMH(imh_mode, imh_proposals, imh_batches, full_batch, lf)
+                elif cond == 'svgd':
+                    runSVGD(proposals, batches, full_batch, lf)
+                elif cond == 'coldNuts':
+                    runNutsFromNpz(fit_npz, ds_list, tensor_batch, full_batch, lf)
+                elif cond == 'warmNuts':
+                    runWarmNuts(model, tensor_batch, ds_list, lf)
+                print()
+
+        md_path = RESULTS_DIR / f'{cfg["family"]}_{cfg["size"]}.md'
+        md_path.write_text(
+            f'# {cfg["label"]} posthoc ablation\n\n```\n{_renderTerminal(buf.getvalue())}\n```\n'
+        )
+        print(f'[saved] {md_path}')
+
+
+if __name__ == '__main__':
+    main()
