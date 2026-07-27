@@ -159,6 +159,13 @@ def test_dataloader_wrapper_shapes_and_dtypes(dataset_path: Path):
     assert batch['mask_q'].dtype == torch.bool
 
 
+def test_full_batch_exposes_original_dataset_indices(dataset_path: Path):
+    dl = Dataloader(dataset_path, batch_size=3, sortish=False)
+    batch = dl.fullBatch()
+
+    torch.testing.assert_close(batch['_idx'], torch.arange(len(dl.dataset)))
+
+
 def test_dataloader_collates_laplace_fit_samples(dataset_path: Path):
     bs = 4
     dl = Dataloader(dataset_path, batch_size=bs, sortish=False)

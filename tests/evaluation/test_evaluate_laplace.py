@@ -444,6 +444,16 @@ def test_make_row_includes_loo_nll_and_predictive_width():
     assert row['EACE'] == pytest.approx(0.1)
 
 
+def test_make_row_uses_finite_loo_nll_median():
+    evaluator = Evaluator.__new__(Evaluator)
+    summary = _summary()
+    summary.per_dataset.loo_nll = torch.tensor([1.0, float('nan'), 3.0])
+
+    row = evaluator._makeRow('ADVI', summary, 'ppAUC')
+
+    assert row['LOO-NLL'] == pytest.approx(1.0)
+
+
 def test_save_tables_accepts_loo_nll(tmp_path):
     evaluator = Evaluator.__new__(Evaluator)
     evaluator.cfg = argparse.Namespace(likelihood_family=0)
@@ -649,3 +659,29 @@ def test_mb_only_partition_data_uses_base_file(monkeypatch):
 
     assert path == 'test.npz'
     assert calls == [('test', 16, False, False)]
+
+
+def test_fit_partition_data_preserves_file_order(monkeypatch):
+    class DummyLoader:
+        _sortish = False
+
+        def fullBatch(self):
+            return {'X': torch.zeros(1, 2)}
+
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(batch_size=16)
+    evaluator.dl_test = None
+    evaluator.dl_valid = None
+    evaluator.data_path_test = 'test.fit.npz'
+    calls = []
+
+    def fake_loader(partition, batch_size=None, prefer_fit=True, sortish=None):
+        calls.append((partition, batch_size, prefer_fit, sortish))
+        return DummyLoader(), 'test.fit.npz'
+
+    monkeypatch.setattr(evaluator, '_getDataLoader', fake_loader)
+
+    _, _, path = evaluator._getPartitionData('test', need_fits=True)
+
+    assert path == 'test.fit.npz'
+    assert calls == [('test', 16, True, False)]
