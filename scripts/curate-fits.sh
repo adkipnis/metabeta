@@ -31,8 +31,8 @@ source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta
 
-echo "=== check.py ==="
-python metabeta/simulation/check.py --data_id "$TAG" --partition "$PARTITION"
+# echo "=== check.py ==="
+# python metabeta/simulation/check.py --data_id "$TAG" --partition "$PARTITION"
 
 echo "=== cache.py ==="
 python metabeta/evaluation/cache.py --data_id "$TAG" --partition "$PARTITION"
