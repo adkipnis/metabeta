@@ -300,7 +300,10 @@ def loadOrSampleProposals(
     return collectProposals(model, items, n_samples, batch_size)
 
 
-def runRaw(proposals, full_batch, lf):
+def runRaw(proposals, full_batch, lf, summary_cache=None):
+    if summary_cache is not None:
+        print(summaryTable(summary_cache, lf))
+        return
     proposal = concatProposalsBatch(proposals)
     print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
 
@@ -376,6 +379,38 @@ def _nutsSummaryCache(npz_path: Path, n_ds: int) -> EvaluationSummary | None:
         return None
     print(f'  [cached summary] loaded {cache_path.name}')
     return summary
+
+
+def _mbSummaryCache(
+    data_dir: Path,
+    split: str,
+    run_name: str,
+    prefix: str,
+    n_samples: int,
+    n_ds: int,
+    ckpt: Path,
+) -> EvaluationSummary | None:
+    """Cached MB (raw-flow) summary written by evaluate.py, if fresh and matching n_ds.
+
+    The raw condition is just the MB checkpoint's flow samples, which evaluate.py already
+    summarised — so reuse that summary instead of recomputing getSummary. Matched by
+    checkpoint/prefix/n_samples (seed, k, and pred-coverage flag are globbed since ablation
+    does not fix them); only returned for the full uncapped split (n_ds match).
+    """
+    pattern = f'summary_{split}_mb_{run_name}_{prefix}_s{n_samples}_seed*_k*_predcov*_all.pt'
+    ref_mtime = ckpt.stat().st_mtime if ckpt.exists() else 0.0
+    for cache_path in sorted(data_dir.glob(pattern)):
+        if cache_path.stat().st_mtime < ref_mtime:
+            continue
+        try:
+            summary = EvaluationSummary.load(cache_path)
+        except (KeyError, ValueError, RuntimeError):
+            continue
+        if summary.per_dataset.posterior_nll.shape[0] != n_ds:
+            continue
+        print(f'  [cached summary] loaded {cache_path.name}')
+        return summary
+    return None
 
 
 def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch: dict, lf: int):
@@ -554,7 +589,16 @@ def main() -> None:
                 print(f'  {cond}')
                 print('=' * 65)
                 if cond == 'raw':
-                    runRaw(proposals, full_batch, lf)
+                    mb_summary = _mbSummaryCache(
+                        cfg['data_dir'],
+                        args.split,
+                        run_name,
+                        args.prefix,
+                        args.n_samples,
+                        n_ds,
+                        cfg['ckpt'],
+                    )
+                    runRaw(proposals, full_batch, lf, summary_cache=mb_summary)
                 elif cond == 'is':
                     runIS(proposals, batches, full_batch, lf)
                 elif cond == 'isMarginal':
