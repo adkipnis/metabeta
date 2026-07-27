@@ -37,6 +37,11 @@ from metabeta.utils.evaluation import (
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.moe import moeEstimate
+from metabeta.utils.posterior_cache import (
+    loadProposalCache,
+    posteriorSampleCacheName,
+    saveProposalCache,
+)
 from metabeta.evaluation.intervals import getCoverageErrors, getCoverages, getCredibleIntervals
 from metabeta.evaluation.point import getCorrelation, getPointEstimates, getRMSE
 from metabeta.evaluation.summary import EST_TYPE, _averageOverAlpha, getSummary, summaryTable
@@ -630,6 +635,104 @@ class Evaluator:
             return data_path.parent / f'summary_{partition}_{method}_{self._maskTag(mask)}.pt'
         return data_path.parent / f'summary_{partition}_{method}.pt'
 
+    def _mbSampleCachePath(
+        self,
+        partition: str,
+        run_name: str | None = None,
+        prefix: str | None = None,
+    ) -> Path:
+        data_path = self._partitionDataPath(partition)
+        run_name = run_name or self.run_name
+        prefix = prefix or getattr(
+            self,
+            'checkpoint_prefix',
+            getattr(self.cfg, 'prefix', 'best'),
+        )
+        cache_name = posteriorSampleCacheName(
+            partition=partition,
+            method='mb',
+            checkpoint_name=run_name,
+            checkpoint_prefix=prefix,
+            n_samples=self.cfg.n_samples,
+            seed=self.cfg.seed,
+            k=self.cfg.k,
+        )
+        return data_path.parent / cache_name
+
+    def _mbSampleCacheCandidates(self, partition: str) -> list[Path]:
+        paths = [self._mbSampleCachePath(partition)]
+        legacy_run_name = getattr(self, 'legacy_run_name', self.run_name)
+        if legacy_run_name != self.run_name:
+            for prefix in (self.checkpoint_prefix, 'latest'):
+                paths.append(
+                    self._mbSampleCachePath(partition, run_name=legacy_run_name, prefix=prefix)
+                )
+        return list(dict.fromkeys(paths))
+
+    def _mbSampleRefMtime(self, partition: str) -> float:
+        data_path = (
+            self._getDataPath(partition, prefer_fit=False)
+            if not self._directDataMode()
+            else self._partitionDataPath(partition)
+        )
+        ref_mtime = data_path.stat().st_mtime if data_path.exists() else 0.0
+        if getattr(self, 'ckpt_dir', None) is not None:
+            ckpt_path = self.ckpt_dir / f'{self.checkpoint_prefix}.pt'
+            if ckpt_path.exists():
+                ref_mtime = max(ref_mtime, ckpt_path.stat().st_mtime)
+        return ref_mtime
+
+    def _saveMbSampleCache(self, partition: str, proposal: Proposal) -> Path:
+        cache_path = self._mbSampleCachePath(partition)
+        saveProposalCache(
+            cache_path,
+            proposal,
+            metadata={
+                'n_samples': self.cfg.n_samples,
+                'seed': self.cfg.seed,
+                'k': self.cfg.k,
+                'checkpoint_prefix': self.checkpoint_prefix,
+                'run_name': self.run_name,
+            },
+        )
+        logger.info('Saved MB posterior samples to %s', cache_path)
+        return cache_path
+
+    def _loadMbSampleCache(self, partition: str) -> Proposal | None:
+        ref_mtime = self._mbSampleRefMtime(partition)
+        preferred = self._mbSampleCachePath(partition)
+        stale: list[Path] = []
+        for cache_path in self._mbSampleCacheCandidates(partition):
+            if not cache_path.exists():
+                continue
+            if cache_path.stat().st_mtime < ref_mtime:
+                stale.append(cache_path)
+                continue
+            try:
+                proposal, _ = loadProposalCache(cache_path)
+            except (KeyError, ValueError) as exc:
+                logger.warning('Ignoring invalid MB sample cache %s: %s', cache_path, exc)
+                continue
+            if cache_path != preferred and not preferred.exists():
+                self._saveMbSampleCache(partition, proposal)
+                logger.info('Copied cached MB posterior samples to %s', preferred)
+            logger.info('Loading cached MB posterior samples from %s', cache_path)
+            return proposal
+        if stale:
+            logger.info(
+                'Cached MB posterior samples exist but are older than data/checkpoint reference: %s',
+                '; '.join(str(path) for path in stale),
+            )
+        return None
+
+    def _loadOrSampleMb(self, partition: str, dl: Dataloader) -> Proposal:
+        cached = self._loadMbSampleCache(partition)
+        if cached is not None:
+            return cached
+        proposal = self.sampleMinibatched(dl, f'MB ({partition})')
+        self._saveMbSampleCache(partition, proposal)
+        return proposal
+
     def _summaryRefMtime(self, partition: str, method: str) -> float:
         data_path = self._partitionDataPath(partition)
         ref_mtime = data_path.stat().st_mtime if data_path.exists() else 0.0
@@ -1070,7 +1173,7 @@ class Evaluator:
     ) -> tuple[Proposal, np.ndarray | None]:
         """Return (proposal, full-batch mask) — mask is None when model covers all datasets."""
         if model == 'MB':
-            return self.sampleMinibatched(dl, f'MB ({partition})'), None
+            return self._loadOrSampleMb(partition, dl), None
         elif model == 'NUTS':
             return self._fit2proposal(full_batch, prefix='nuts'), None
         elif model == 'ADVI':
