@@ -9,6 +9,8 @@ Usage (from repo root):
     uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH
     uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --n_samples 100 --batch_size 4
     uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --data_ids small-n-sampled large-n-sampled
+
+TODO: apply changes from evaluate.py here
 """
 
 import argparse
@@ -23,13 +25,9 @@ from tabulate import tabulate
 from tqdm import tqdm
 
 from metabeta.models.approximator import Approximator
-from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch, toDevice
-from metabeta.utils.evaluation import (
-    Proposal,
-    concatProposalsBatch,
-    nutsConvergeMask,
-    subsetProposal,
-)
+from metabeta.utils.dataloader import Collection, collateGrouped, sliceBatch, subsetBatch, toDevice
+from metabeta.utils.evaluation import nutsConvergeMask, subsetProposal
+from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
@@ -237,10 +235,7 @@ def sampleMB(
     tpd_list: list[float] = []
     for start in tqdm(range(0, B, batch_size), desc='  MB', leave=False):
         end = min(start + batch_size, B)
-        b_chunk = {
-            k: v[start:end] if (torch.is_tensor(v) and v.shape[0] == B) else v
-            for k, v in batch.items()
-        }
+        b_chunk = sliceBatch(batch, start, end)
         b_chunk = toDevice(b_chunk, device)
         t0_chunk = time.perf_counter()
         p_chunk = model.estimate(b_chunk, n_samples=n_samples)
