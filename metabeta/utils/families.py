@@ -455,6 +455,7 @@ def logMarginalLikelihoodNormal(
     Z: torch.Tensor,  # (b, m, n, q)
     mask_n: torch.Tensor,  # (b, m, n, 1)
     mask_m: torch.Tensor,  # (b, m, 1)
+    L_corr: torch.Tensor | None = None,  # (b, s, q, q) Cholesky of the rfx correlation matrix
 ) -> torch.Tensor:
     """Marginal log-likelihood for Normal, with rfx integrated out analytically.
 
@@ -468,9 +469,17 @@ def logMarginalLikelihoodNormal(
 
     where r_i = y_i − X_i β and h_i = Z_i^T r_i.
 
+    Σ_rfx is diag(σ_rfx²) by default; pass L_corr (from unconstrainedToCholesky)
+    for the correlated case Σ_rfx = D L_corr L_corrᵀ D with D = diag(σ_rfx).
+    Omitting L_corr for correlated-rfx samples silently targets the wrong
+    (independent-rfx) marginal — the cause of the Corr(RFX) degradation seen in
+    the 2026-07 posthoc ablation.
+
     Padded q-dimensions (inactive rfx) contribute zero net log-det because the
     Z_i column is zero, making the padded diagonal of M_i equal to 1/σ²_rfx,
-    which exactly cancels the corresponding term in log det Σ_rfx.
+    which exactly cancels the corresponding term in log det Σ_rfx. This holds
+    in the correlated case too: masked z_corr entries make the padded rows of
+    L_corr identity rows.
 
     Returns (b, s).
     """
@@ -491,11 +500,22 @@ def logMarginalLikelihoodNormal(
     # both Sigma_inv and log(sigma_rfx) numerically degenerate.
     sigma_rfx = sigma_rfx.clamp(min=1e-6)
 
-    # M_i = Σ_rfx^{-1} + Z_i^T Z_i / σ²_eps  →  (b, m, s, q, q)
+    # Σ_rfx^{-1} and log det Σ_rfx  →  (b, s, q, q), (b, s)
     s2e = sigma_eps.pow(2)                                          # (b, s)
-    s2r_inv = 1.0 / sigma_rfx.pow(2)                               # (b, s, q)
-    Sigma_inv = torch.diag_embed(s2r_inv).unsqueeze(1)             # (b, 1, s, q, q)
-    M = Sigma_inv + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]  # (b, m, s, q, q)
+    if L_corr is None:
+        s2r_inv = 1.0 / sigma_rfx.pow(2)                            # (b, s, q)
+        Sigma_inv = torch.diag_embed(s2r_inv)                       # (b, s, q, q)
+        log_det_Sigma = 2.0 * sigma_rfx.log().sum(-1)               # (b, s)
+    else:
+        q = L_corr.shape[-1]
+        L_Sigma = sigma_rfx.unsqueeze(-1) * L_corr                  # (b, s, q, q): D @ L_corr
+        eye = torch.eye(q, dtype=L_Sigma.dtype, device=L_Sigma.device)
+        Sigma_inv = torch.cholesky_solve(eye.expand_as(L_Sigma), L_Sigma)
+        diag_corr = L_corr.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8)
+        log_det_Sigma = 2.0 * (sigma_rfx.log() + diag_corr.log()).sum(-1)
+
+    # M_i = Σ_rfx^{-1} + Z_i^T Z_i / σ²_eps  →  (b, m, s, q, q)
+    M = Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]
 
     # Cholesky factorisation of M — jitter diagonal for numerical stability.
     # Use cholesky_ex to avoid hard failures; bad elements get -inf log-likelihood.
@@ -511,7 +531,7 @@ def logMarginalLikelihoodNormal(
     hMh = (h * M_inv_h).sum(-1)                                    # (b, m, s)
 
     # log det V_i = log det M_i + log det Σ_rfx + n_i log σ²_eps
-    log_det_Sigma = 2.0 * sigma_rfx.log().sum(-1)   # (b, s); padded dims cancel with M
+    # (padded dims of log_det_Sigma cancel with M's padded diagonal)
     log_s2e = s2e.log()                              # (b, s)
     log_det_V = (
         log_det_M + log_det_Sigma[:, None, :] + n_i[:, :, None] * log_s2e[:, None, :]
@@ -526,6 +546,71 @@ def logMarginalLikelihoodNormal(
 
     # sum over valid groups
     return (ll_i * mask_m).sum(dim=1)  # (b, s)
+
+
+def sampleRfxConditionalNormal(
+    ffx: torch.Tensor,  # (b, s, d)
+    sigma_rfx: torch.Tensor,  # (b, s, q)
+    sigma_eps: torch.Tensor,  # (b, s)
+    y: torch.Tensor,  # (b, m, n, 1)
+    X: torch.Tensor,  # (b, m, n, d)
+    Z: torch.Tensor,  # (b, m, n, q)
+    mask_n: torch.Tensor,  # (b, m, n, 1)
+    mask_m: torch.Tensor,  # (b, m, 1)
+    L_corr: torch.Tensor | None = None,  # (b, s, q, q) Cholesky of the rfx correlation matrix
+) -> torch.Tensor:
+    """Draw rfx ~ p(rfx | θ_g, y) using Normal-Normal conjugacy.
+
+    For each global sample and each group j:
+        V_j⁻¹ = Σ_rfx⁻¹ + Zⱼᵀ Zⱼ / σ²_eps
+        μ_j   = V_j (Zⱼᵀ rⱼ / σ²_eps)     where rⱼ = yⱼ − Xⱼ β
+        rfx_j ~ N(μ_j, V_j)
+
+    Σ_rfx = diag(σ_rfx²) by default, or D L_corr L_corrᵀ D when L_corr is given.
+    This is the exact conditional dual to logMarginalLikelihoodNormal — pass the
+    same L_corr to both so weights and rfx draws share one target (the mismatch
+    documented in posthoc/metropolis.py's Findings section).
+
+    Returns (b, m, s, q).
+    """
+    # Residuals: r = y - X @ ffx  (b, m, n, s)
+    mu_ffx = torch.einsum('bmnd,bsd->bmns', X, ffx)
+    r = (y - mu_ffx) * mask_n
+
+    # Group-level sufficient statistics
+    Z_m = Z * mask_n  # zero out padded observations
+    ZtZ = torch.einsum('bmnq,bmnr->bmqr', Z_m, Z_m)  # (b, m, q, q)
+    Ztr = torch.einsum('bmnq,bmns->bmsq', Z_m, r)    # (b, m, s, q)
+
+    # Σ_rfx Cholesky factor L such that Σ_rfx = L @ Lᵀ
+    sigma_rfx_c = sigma_rfx.clamp(min=1e-6)
+    if L_corr is not None:
+        L_rfx = sigma_rfx_c.unsqueeze(-1) * L_corr  # (b, s, q, q): D @ L_corr
+    else:
+        L_rfx = torch.diag_embed(sigma_rfx_c)       # (b, s, q, q) diagonal
+
+    # Σ_rfx⁻¹ via Cholesky solve
+    q = L_rfx.shape[-1]
+    eye = torch.eye(q, device=L_rfx.device, dtype=L_rfx.dtype)
+    Sigma_inv = torch.cholesky_solve(eye.expand_as(L_rfx), L_rfx)  # (b, s, q, q)
+
+    # M = Σ_rfx⁻¹ + ZᵀZ / σ²_eps  (b, m, s, q, q) — posterior precision
+    s2e = sigma_eps.pow(2)  # (b, s)
+    M = Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]
+    chol_M = torch.linalg.cholesky(M + 1e-6 * eye)  # (b, m, s, q, q)
+
+    # Posterior mean: μ = M⁻¹ (Zᵀr / σ²_eps)
+    rhs = Ztr / s2e[:, None, :, None]  # (b, m, s, q)
+    post_mean = torch.cholesky_solve(rhs.unsqueeze(-1), chol_M).squeeze(-1)  # (b, m, s, q)
+
+    # Sample: rfx = μ + chol_M⁻ᵀ z  where z ~ N(0, I)
+    # chol_M is Chol(V⁻¹), so Chol(V) = chol_M⁻ᵀ (upper-triangular solve)
+    z = torch.randn_like(post_mean)
+    rfx_centered = torch.linalg.solve_triangular(chol_M.mT, z.unsqueeze(-1), upper=True).squeeze(
+        -1
+    )  # (b, m, s, q)
+
+    return (post_mean + rfx_centered) * mask_m.unsqueeze(-1).float()  # (b, m, s, q)
 
 
 def logLikelihood(
