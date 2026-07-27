@@ -391,12 +391,33 @@ def collateStats(
     return stats
 
 
+def _selectValue(value, selector, n: int):
+    if torch.is_tensor(value):
+        return value[selector] if value.shape[0] == n else value
+    if isinstance(value, dict):
+        return {k: _selectValue(v, selector, n) for k, v in value.items()}
+    return value
+
+
 def subsetBatch(batch: dict[str, torch.Tensor], mask: np.ndarray) -> dict[str, torch.Tensor]:
-    """Filter a collated batch dict to the datasets selected by a boolean mask."""
+    """Filter a collated batch dict to the datasets selected by a boolean mask.
+
+    Recurses into dict-valued entries (e.g. 'stats' from collateStats) so their inner
+    per-dataset tensors stay aligned with the rest of the batch.
+    """
     idx = torch.from_numpy(mask)
-    return {
-        k: v[idx] if torch.is_tensor(v) and v.shape[0] == len(mask) else v for k, v in batch.items()
-    }
+    n = len(mask)
+    return {k: _selectValue(v, idx, n) for k, v in batch.items()}
+
+
+def sliceBatch(batch: dict[str, torch.Tensor], start: int, end: int) -> dict[str, torch.Tensor]:
+    """Slice a collated batch dict to datasets [start:end).
+
+    Recurses into dict-valued entries (e.g. 'stats' from collateStats) so their inner
+    per-dataset tensors stay aligned with the rest of the batch.
+    """
+    n = batch['X'].shape[0]
+    return {k: _selectValue(v, slice(start, end), n) for k, v in batch.items()}
 
 
 class SortishBatchSampler(torch.utils.data.Sampler[list[int]]):

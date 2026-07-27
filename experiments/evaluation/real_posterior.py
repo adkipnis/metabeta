@@ -19,6 +19,7 @@ Usage (from repo root):
 """
 
 import argparse
+import hashlib
 import logging
 import time
 from pathlib import Path
@@ -30,15 +31,16 @@ from tqdm import tqdm
 
 from metabeta.evaluation.summary import getSummary
 from metabeta.models.approximator import Approximator
-from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch, toDevice
-from metabeta.utils.evaluation import (
-    Proposal,
-    concatProposalsBatch,
-    nutsConvergeMask,
-    subsetProposal,
-)
+from metabeta.utils.dataloader import Collection, collateGrouped, sliceBatch, subsetBatch, toDevice
+from metabeta.utils.evaluation import EvaluationSummary, nutsConvergeMask, subsetProposal
+from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
+from metabeta.utils.posterior_cache import (
+    loadProposalCache,
+    posteriorSampleCacheName,
+    saveProposalCache,
+)
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.templates import loadConfigFromCheckpoint
@@ -141,10 +143,7 @@ def sampleMB(
     tpd_list: list[float] = []
     for start in tqdm(range(0, B, batch_size), desc='  MB', leave=False):
         end = min(start + batch_size, B)
-        b_chunk = {
-            k: v[start:end] if (torch.is_tensor(v) and v.shape[0] == B) else v
-            for k, v in batch.items()
-        }
+        b_chunk = sliceBatch(batch, start, end)
         b_chunk = toDevice(b_chunk, device)
         t0 = time.perf_counter()
         p_chunk = model.estimate(b_chunk, n_samples=n_samples)
@@ -155,6 +154,153 @@ def sampleMB(
     tpd_arr = torch.tensor(tpd_list, dtype=torch.float64)
     merged.tpd = tpd_arr.mean().item()
     return merged, tpd_arr
+
+
+def _maskTag(mask: np.ndarray | None) -> str:
+    """Short hash identifying which datasets (of the full test file) survived filtering."""
+    if mask is None:
+        return 'all'
+    packed = np.packbits(mask.astype(np.uint8)).tobytes()
+    return hashlib.sha1(packed).hexdigest()[:12]
+
+
+def _mbSampleCachePath(
+    data_path: Path,
+    ckpt_dir: Path,
+    prefix: str,
+    n_samples: int,
+    seed: int,
+    mask: np.ndarray | None,
+) -> Path:
+    cache_name = posteriorSampleCacheName(
+        partition=f'test-{_maskTag(mask)}',
+        method='mb',
+        checkpoint_name=ckpt_dir.name,
+        checkpoint_prefix=prefix,
+        n_samples=n_samples,
+        seed=seed,
+    )
+    return data_path.parent / cache_name
+
+
+def _refMtime(data_path: Path, ckpt_dir: Path | None = None, prefix: str | None = None) -> float:
+    """Freshness reference: cache is stale if older than the data (and, for MB, the checkpoint)."""
+    ref_mtime = data_path.stat().st_mtime if data_path.exists() else 0.0
+    if ckpt_dir is not None and prefix is not None:
+        ckpt_path = ckpt_dir / f'{prefix}.pt'
+        if ckpt_path.exists():
+            ref_mtime = max(ref_mtime, ckpt_path.stat().st_mtime)
+    return ref_mtime
+
+
+def loadOrSampleMB(
+    model: Approximator,
+    batch: dict[str, torch.Tensor],
+    data_path: Path,
+    ckpt_dir: Path,
+    prefix: str,
+    n_samples: int,
+    batch_size: int,
+    seed: int,
+    device: torch.device,
+    mask: np.ndarray | None,
+) -> tuple[Proposal, torch.Tensor]:
+    """Cached wrapper around sampleMB; cache lives next to the data as test.fit.npz's sibling.
+
+    ``mask`` identifies which datasets of the full test file are in ``batch`` (e.g. the
+    NUTS-converged subset); it is folded into the cache key since it changes the batch contents.
+    Alignment with the freshly built NUTS/ADVI proposals relies on ``Collection`` yielding
+    datasets in a stable natural order (no sortish/shuffle) and on the mtime freshness check.
+    """
+    cache_path = _mbSampleCachePath(data_path, ckpt_dir, prefix, n_samples, seed, mask)
+    ref_mtime = _refMtime(data_path, ckpt_dir, prefix)
+    if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
+        try:
+            proposal, metadata = loadProposalCache(cache_path)
+            tpd_arr = torch.as_tensor(metadata['tpd_arr'], dtype=torch.float64)
+            logger.info('Loaded cached MB posterior samples from %s', cache_path)
+            return proposal, tpd_arr
+        except (KeyError, ValueError) as exc:
+            logger.warning('Ignoring invalid MB sample cache %s: %s', cache_path, exc)
+    else:
+        logger.info('No usable MB sample cache at %s; sampling.', cache_path)
+
+    proposal, tpd_arr = sampleMB(model, batch, n_samples, batch_size, device)
+    saveProposalCache(
+        cache_path,
+        proposal,
+        metadata={
+            'tpd_arr': tpd_arr.numpy(),
+            'n_samples': n_samples,
+            'seed': seed,
+            'checkpoint_prefix': prefix,
+            'checkpoint_name': ckpt_dir.name,
+        },
+    )
+    logger.info('Saved MB posterior samples to %s', cache_path)
+    return proposal, tpd_arr
+
+
+def _summaryCachePath(
+    data_path: Path,
+    method: str,
+    mask: np.ndarray | None,
+    lf: int,
+    rescale: bool,
+    ckpt_dir: Path | None = None,
+    prefix: str | None = None,
+    n_samples: int | None = None,
+    seed: int | None = None,
+) -> Path:
+    tag = _maskTag(mask)
+    if method == 'mb':
+        name = (
+            f'summary_test_mb_{ckpt_dir.name}_{prefix}'
+            f'_s{n_samples}_seed{seed}_lf{lf}_rs{int(rescale)}_{tag}.pt'
+        )
+    else:
+        name = f'summary_test_{method}_lf{lf}_rs{int(rescale)}_{tag}.pt'
+    return data_path.parent / name
+
+
+def loadOrComputeSummary(
+    proposal: Proposal,
+    batch: dict[str, torch.Tensor],
+    data_path: Path,
+    method: str,
+    mask: np.ndarray | None,
+    lf: int,
+    rescale: bool,
+    ckpt_dir: Path | None = None,
+    prefix: str | None = None,
+    n_samples: int | None = None,
+    seed: int | None = None,
+) -> EvaluationSummary:
+    """Cached wrapper around getSummary; cache lives next to the data (sibling of test.fit.npz).
+
+    ``mask`` identifies which datasets of the full test file this summary covers, so the
+    NUTS-converged (and, for ADVI, additionally fit-succeeded) subset is folded into the key.
+    MB additionally keys on checkpoint/prefix/n_samples/seed and invalidates on the checkpoint.
+    """
+    is_mb = method == 'mb'
+    cache_path = _summaryCachePath(
+        data_path, method, mask, lf, rescale, ckpt_dir, prefix, n_samples, seed
+    )
+    ref_mtime = _refMtime(data_path, ckpt_dir if is_mb else None, prefix if is_mb else None)
+    if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
+        try:
+            summary = EvaluationSummary.load(cache_path)
+            logger.info('Loaded cached %s summary from %s', method, cache_path)
+            return summary
+        except (KeyError, ValueError, RuntimeError) as exc:
+            logger.warning('Ignoring invalid %s summary cache %s: %s', method, cache_path, exc)
+    else:
+        logger.info('No usable %s summary cache at %s; computing.', method, cache_path)
+
+    summary = getSummary(proposal, batch, likelihood_family=lf, compute_pred_coverage=False)
+    summary.save(cache_path)
+    logger.info('Saved %s summary to %s', method, cache_path)
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +537,9 @@ def evaluateReal(
     device: torch.device,
     rescale: bool,
     convergence_mode: str,
+    ckpt_dir: Path,
+    prefix: str,
+    seed: int,
 ) -> list[dict]:
     col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q)
     B_total = len(col)
@@ -410,14 +559,22 @@ def evaluateReal(
 
     B = batch['X'].shape[0]
 
+    # Full-test-file masks used to key the per-method summary caches:
+    #   MB/NUTS cover the converged subset; ADVI additionally requires a successful fit.
+    conv_full = conv_mask if conv_mask is not None else np.ones(B_total, dtype=bool)
+
     # ADVI subset (some fits may have failed)
     advi_mask = fitBatchMask(batch, 'advi')
     n_advi = int(advi_mask.sum())
     logger.info('ADVI available: %d / %d', n_advi, B)
     advi_batch: dict | None = subsetBatch(batch, advi_mask) if n_advi > 0 else None
+    advi_full = conv_full.copy()
+    advi_full[conv_full] = advi_mask
 
     # Inference
-    proposal_mb, mb_tpd_arr = sampleMB(model, batch, n_samples, batch_size, device)
+    proposal_mb, mb_tpd_arr = loadOrSampleMB(
+        model, batch, data_path, ckpt_dir, prefix, n_samples, batch_size, seed, device, conv_mask
+    )
     proposal_nuts = fit2proposal(batch, 'nuts')
     proposal_advi = fit2proposal(advi_batch, 'advi') if advi_batch is not None else None
 
@@ -431,13 +588,25 @@ def evaluateReal(
         if advi_batch is not None:
             advi_batch = rescaleData(advi_batch)
 
-    # LOO-NLL via getSummary; NRMSE/corr will be NaN since real data has no ground truth
-    summary_mb = getSummary(proposal_mb, batch, likelihood_family=lf, compute_pred_coverage=False)
-    summary_nuts = getSummary(
-        proposal_nuts, batch, likelihood_family=lf, compute_pred_coverage=False
+    # LOO-NLL via getSummary (cached); NRMSE/corr will be NaN since real data has no ground truth
+    summary_mb = loadOrComputeSummary(
+        proposal_mb,
+        batch,
+        data_path,
+        'mb',
+        conv_full,
+        lf,
+        rescale,
+        ckpt_dir=ckpt_dir,
+        prefix=prefix,
+        n_samples=n_samples,
+        seed=seed,
+    )
+    summary_nuts = loadOrComputeSummary(
+        proposal_nuts, batch, data_path, 'nuts', conv_full, lf, rescale
     )
     summary_advi = (
-        getSummary(proposal_advi, advi_batch, likelihood_family=lf, compute_pred_coverage=False)
+        loadOrComputeSummary(proposal_advi, advi_batch, data_path, 'advi', advi_full, lf, rescale)
         if proposal_advi is not None
         else None
     )
@@ -470,7 +639,8 @@ def evaluateReal(
 
         # NUTS references restricted to this method's subset
         p_nuts_ref = subsetProposal(proposal_nuts, advi_mask) if is_advi else proposal_nuts
-        nuts_nll = summary_nuts.loo_nll[advi_mask_t] if is_advi else summary_nuts.loo_nll
+        nuts_loo = summary_nuts.per_dataset.loo_nll
+        nuts_nll = nuts_loo[advi_mask_t] if is_advi else nuts_loo
         nuts_tpd = (
             nuts_tpd_arr[advi_mask_t] if (nuts_tpd_arr is not None and is_advi) else nuts_tpd_arr
         )
@@ -485,7 +655,7 @@ def evaluateReal(
                 r=computeCorr(p_method, p_nuts_ref, batch_sub),
                 sigma_ratio=computeSigmaRatio(p_method, p_nuts_ref, batch_sub),
                 rank_mad=computeRankMAD(p_method, p_nuts_ref, batch_sub),
-                delta_nll=(summary.loo_nll - nuts_nll).float().numpy(),
+                delta_nll=(summary.per_dataset.loo_nll - nuts_nll).float().numpy(),
                 delta_tpd=delta_tpd,
             )
         )
@@ -625,6 +795,9 @@ def main() -> None:
             device=device,
             rescale=cfg.rescale,
             convergence_mode=cfg.convergence_mode,
+            ckpt_dir=ckpt_dir,
+            prefix=cfg.prefix,
+            seed=cfg.seed,
         )
         if rows:
             rows_by_regime[regime] = rows
