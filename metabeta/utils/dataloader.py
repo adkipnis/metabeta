@@ -173,6 +173,7 @@ class Collection(torch.utils.data.Dataset):
                 if 'Psi' in ds:
                     ds['Psi'] = ds['Psi'][np.ix_(qperm, qperm)]
 
+        ds['_idx'] = np.array(idx, dtype=np.int64)
         return ds
 
 
@@ -256,6 +257,8 @@ def collateGrouped(
     # likelihood and prior family indices
     if 'likelihood_family' in batch[0]:
         out['likelihood_family'] = quickCollate(batch, 'likelihood_family', torch.long)
+    if '_idx' in batch[0]:
+        out['_idx'] = quickCollate(batch, '_idx', torch.long)
     for key in ('family_ffx', 'family_sigma_rfx', 'family_sigma_eps'):
         if key in batch[0]:
             out[key] = quickCollate(batch, key, torch.long)

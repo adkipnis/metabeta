@@ -28,7 +28,7 @@ class PerDatasetMetrics:
 
     @property
     def mloonll(self) -> float | None:
-        return float(self.loo_nll.median()) if self.loo_nll is not None else None
+        return _finiteMedian(self.loo_nll) if self.loo_nll is not None else None
 
     @property
     def mloo_k(self) -> float | None:
@@ -104,7 +104,14 @@ class AggregatedMetrics:
     rfx_joint_eace: float | None = None
 
 
-_SUMMARY_VERSION = 1
+_SUMMARY_VERSION = 2
+
+
+def _finiteMedian(tensor: torch.Tensor) -> float | None:
+    finite = tensor[torch.isfinite(tensor)]
+    if finite.numel() == 0:
+        return None
+    return float(finite.median())
 
 
 @dataclass

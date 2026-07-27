@@ -335,6 +335,30 @@ class Evaluator:
                 'test', batch_size=self.cfg.batch_size
             )
 
+    def _setDataloader(
+        self,
+        partition: str,
+        dl: Dataloader,
+        path: Path,
+    ) -> None:
+        if partition == 'test':
+            self.dl_test = dl
+            self.data_path_test = path
+        else:
+            self.dl_valid = dl
+            self.data_path_valid = path
+
+    def _ensureFitDataloader(self, partition: str) -> None:
+        current = self.dl_test if partition == 'test' else self.dl_valid
+        if current is not None and not getattr(current, '_sortish', True):
+            return
+        dl, path = self._getDataLoader(
+            partition,
+            batch_size=self.cfg.batch_size,
+            sortish=False,
+        )
+        self._setDataloader(partition, dl, path)
+
     def _ensureDataloaders(self) -> None:
         self._ensureDataloader('valid')
         self._ensureDataloader('test')
@@ -775,7 +799,17 @@ class Evaluator:
         for cache_path in self._summaryCacheCandidates(partition, method, mask=mask):
             if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
                 logger.info('Loading cached %s/%s summary from %s', partition, method, cache_path)
-                summary = EvaluationSummary.load(cache_path)
+                try:
+                    summary = EvaluationSummary.load(cache_path)
+                except (KeyError, ValueError, RuntimeError) as exc:
+                    logger.warning(
+                        'Ignoring invalid %s/%s summary cache %s: %s',
+                        partition,
+                        method,
+                        cache_path,
+                        exc,
+                    )
+                    continue
                 if cache_path != preferred and not preferred.exists():
                     summary.save(preferred)
                     logger.info('Copied cached %s/%s summary to %s', partition, method, preferred)
@@ -1157,7 +1191,7 @@ class Evaluator:
         self, partition: str, need_fits: bool = True
     ) -> tuple[Dataloader, dict, Path]:
         if need_fits or hasattr(self.cfg, 'data_path_test') or hasattr(self.cfg, 'data_path_valid'):
-            self._ensureDataloader(partition)
+            self._ensureFitDataloader(partition)
             dl = self.dl_test if partition == 'test' else self.dl_valid
             path = self._partitionDataPath(partition)
         else:
