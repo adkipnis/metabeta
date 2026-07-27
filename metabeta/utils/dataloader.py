@@ -37,13 +37,17 @@ class Collection(torch.utils.data.Dataset):
         permute_seed: int = 0,
         max_d: int | None = None,
         max_q: int | None = None,
+        exclude_prefixes: tuple[str, ...] = (),
     ):
         super().__init__()
 
-        # load data
+        # load data; exclude_prefixes skips keys entirely (never decompressed) —
+        # e.g. ('nuts_', 'advi_', 'laplace_') to keep a *.fit.npz's multi-GB
+        # posterior-sample arrays out of memory when only the datasets are needed
         assert path.exists(), f'{path} does not exist'
         with np.load(path, allow_pickle=True) as raw:
-            self.raw = dict(raw)
+            keys = [k for k in raw.files if not k.startswith(tuple(exclude_prefixes))]
+            self.raw = {k: raw[k] for k in keys}
 
         # reduce host-memory footprint for training/validation collections
         # by storing floating arrays in float32 and large integers in int32.

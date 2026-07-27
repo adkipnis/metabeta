@@ -4,11 +4,18 @@ Conditions (Normal)
 -------------------
 raw          : raw flow samples
 is           : global IS with PSIS
+isMarginal   : Rao-Blackwellised marginal SNIS (Normal only) — exact marginal weights with
+               correlated Σ_rfx + LKJ prior, rfx redrawn from the exact conditional
+isLaplace    : Laplace analog of isMarginal (Bernoulli/Poisson only) — nAGQ=1-style
+               approximate marginal weights + Laplace-Gaussian conditional rfx redraw
+rbAttach     : rfx attachment only (Bernoulli/Poisson only) — uniform weights, flow rfx
+               replaced by Laplace conditional draws (zero weight bias)
 imhMarginal  : IMH mode='marginal' (Normal, Rao-Blackwellised) or 'global' (other). Note:
                'global' still degrades calibration vs raw/is on non-Normal likelihoods (it
                never MH-corrects rfx — see metabeta/posthoc/metropolis.py's TODO); 'joint'
                was tried too and was worse (acceptance collapses with many groups). Neither
-               is a real fix — see that module's TODO for the actual proposed correction.
+               is a real fix — see metropolis.py's "Findings" docstring section for the
+               root-cause analysis (argmax chain init, inconsistent marginal target).
 svgd         : SVGD with per-dim bandwidth + cosine LR decay — opt in with --include-svgd,
                off by default (too slow to be practically useful: ~40s/dataset, and gives
                a fraction of a nat of marginal-log-p improvement over the flow samples it starts
@@ -63,6 +70,7 @@ from build_ckpt import BEST_SEEDS, _ckpt_dir                           # noqa: E
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
+from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.warmnuts import _stackProposals
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped
@@ -144,7 +152,10 @@ def loadData(path: Path, n_limit: int | None) -> tuple[list, list[dict], dict, d
     tensor_batch : single collated tensor dict, un-rescaled (for NUTS flow init)
     full_batch   : rescaled tensor_batch (ground truth for evaluation)
     """
-    col = Collection(path, permute=False)
+    # exclude the fitted posterior-sample arrays: a *.fit.npz decompresses to ~20 GB
+    # (nuts_/advi_/laplace_ rfx are ~6.5 GB each); only runNutsFromNpz needs the nuts
+    # arrays and it re-opens the file lazily itself
+    col = Collection(path, permute=False, exclude_prefixes=('nuts_', 'advi_', 'laplace_'))
     n = len(col) if n_limit is None else min(n_limit, len(col))
     items = [col[i] for i in range(n)]
     tensor_batch = collateGrouped(items)
@@ -181,7 +192,21 @@ def runRaw(proposals, full_batch, lf):
     print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
 
 
-def runIS(proposals, batches, full_batch, lf):
+def _printWeightHealth(proposal):
+    k = proposal.pareto_k
+    if k is None:
+        return
+    fallback = proposal.is_results.get('fallback')
+    frac = fallback.float().mean().item() if fallback is not None else 0.0
+    eff = proposal.efficiency
+    eff_str = f'{eff.mean():.2f}' if eff is not None else 'n/a'
+    print(
+        f'  pareto_k mean={k.mean():.2f}  max={k.max():.2f}  '
+        f'fallback={frac:.0%}  efficiency mean={eff_str}'
+    )
+
+
+def runIS(proposals, batches, full_batch, lf, marginal=False, rb_redraw=False):
     out = []
     with torch.no_grad():
         for p, batch in zip(proposals, batches):
@@ -189,55 +214,87 @@ def runIS(proposals, batches, full_batch, lf):
                 batch,
                 full=False,
                 corr_prior=True,
+                marginal=marginal,
+                rb_redraw=rb_redraw,
                 pareto=True,
                 likelihood_family=lf,
             )
-            out.append(sampler(p))
+            # slice-copy so is_results / redrawn rfx don't mutate the shared proposals
+            out.append(sampler(p.slice_b(0, p.samples_g.shape[0])))
     proposal = concatProposalsBatch(out)
+    _printWeightHealth(proposal)
+    print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
+
+
+def runISLaplace(proposals, batches, full_batch, lf, attach_only=False):
+    out = []
+    with torch.no_grad():
+        for p, batch in zip(proposals, batches):
+            sampler = LaplaceImportanceSampler(
+                batch,
+                attach_only=attach_only,
+                corr_prior=True,
+                pareto=True,
+                likelihood_family=lf,
+            )
+            out.append(sampler(p.slice_b(0, p.samples_g.shape[0])))
+    proposal = concatProposalsBatch(out)
+    _printWeightHealth(proposal)
     print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
 
 
 def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch: dict, lf: int):
     """Extract pre-computed NUTS results from test.fit.npz and evaluate."""
-    data = np.load(npz_path, allow_pickle=True)
     n_ds = len(ds_list)
     has_se = hasSigmaEps(lf)
+
+    # hoist each npz member once: NpzFile decompresses the *entire* member on every
+    # [] access (nuts_rfx alone is ~6.5 GB), so per-iteration indexing re-decompresses
+    # it n_ds times; slice to n_ds and downcast to float32 immediately
+    with np.load(npz_path, allow_pickle=True) as data:
+        nuts_ffx = data['nuts_ffx'][:n_ds].astype(np.float32)
+        nuts_sigma_rfx = data['nuts_sigma_rfx'][:n_ds].astype(np.float32)
+        nuts_sigma_eps = data['nuts_sigma_eps'][:n_ds].astype(np.float32) if has_se else None
+        nuts_rfx = data['nuts_rfx'][:n_ds].astype(np.float32)
+        nuts_corr_rfx = data['nuts_corr_rfx'][:n_ds].astype(np.float32)
+        nuts_divergences = data['nuts_divergences'][:n_ds]
+        nuts_duration = data['nuts_duration'][:n_ds]
+        nuts_ess = data['nuts_ess'][:n_ds]
 
     proposals = []
     total_divs = 0
     total_time = 0.0
 
+    n_s = nuts_ffx.shape[-1]
     for i, ds in enumerate(ds_list):
         d_i = int(ds['d'])
         q_i = int(ds['q'])
         m_i = int(ds['m'])
-        n_s = data['nuts_ffx'].shape[-1]
 
-        ffx = torch.as_tensor(data['nuts_ffx'][i, :d_i, :]).float().T          # (n_s, d_i)
-        sigma_rfx = torch.as_tensor(data['nuts_sigma_rfx'][i, :q_i, :]).float().T  # (n_s, q_i)
+        ffx = torch.as_tensor(nuts_ffx[i, :d_i, :]).T                          # (n_s, d_i)
+        sigma_rfx = torch.as_tensor(nuts_sigma_rfx[i, :q_i, :]).T              # (n_s, q_i)
         parts = [ffx, sigma_rfx]
         if has_se:
-            sigma_eps = torch.as_tensor(data['nuts_sigma_eps'][i, 0, :]).float()
+            sigma_eps = torch.as_tensor(nuts_sigma_eps[i, 0, :])
             parts.append(sigma_eps.unsqueeze(-1))                               # (n_s, 1)
         samples_g = torch.cat(parts, dim=-1).unsqueeze(0)                      # (1, n_s, D)
 
-        rfx_raw = torch.as_tensor(data['nuts_rfx'][i, :q_i, :m_i, :]).float()  # (q_i, m_i, n_s)
+        rfx_raw = torch.as_tensor(nuts_rfx[i, :q_i, :m_i, :])                  # (q_i, m_i, n_s)
         samples_l = rfx_raw.permute(1, 2, 0).unsqueeze(0)                      # (1, m_i, n_s, q_i)
 
         corr_rfx = torch.as_tensor(
-            data['nuts_corr_rfx'][i, :, :, :q_i, :q_i]
-        ).float()                                                                # (1, n_s, q_i, q_i)
+            nuts_corr_rfx[i, :, :, :q_i, :q_i]
+        )                                                                        # (1, n_s, q_i, q_i)
 
         proposed = {
             'global': {'samples': samples_g, 'log_prob': torch.zeros(1, n_s)},
             'local': {'samples': samples_l, 'log_prob': torch.zeros(1, m_i, n_s)},
         }
         proposals.append(Proposal(proposed, has_sigma_eps=has_se, corr_rfx=corr_rfx))
-        total_divs += int(data['nuts_divergences'][i].sum())
-        total_time += float(data['nuts_duration'][i])
+        total_divs += int(nuts_divergences[i].sum())
+        total_time += float(nuts_duration[i])
 
-    n_s = data['nuts_ffx'].shape[-1]
-    reff = float(data['nuts_ess'][:n_ds].mean() / n_s)
+    reff = float(nuts_ess.mean() / n_s)
     print(
         f'  divergences={total_divs}  reff={reff:.3f}  time/ds={total_time / n_ds:.1f}s  '
         f'(total={total_time:.0f}s)'
@@ -275,7 +332,7 @@ def main() -> None:
     args = setup()
     models = buildModels(args.families, args.sizes)
 
-    conditions = ['raw', 'is', 'imhMarginal']
+    conditions = ['raw', 'is', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal']
     if args.include_svgd:
         conditions.append('svgd')
     if args.split == 'test':
@@ -312,6 +369,10 @@ def main() -> None:
             imh_proposals, imh_batches = collectProposals(model, items, IMH_N_SAMPLES)
 
             for cond in conditions:
+                if cond == 'isMarginal' and lf != 0:
+                    continue  # exact marginal requires the Normal likelihood
+                if cond in ('isLaplace', 'rbAttach') and lf == 0:
+                    continue  # Normal has the exact marginal — Laplace is for GLMMs
                 print('=' * 65)
                 print(f'  {cond}')
                 print('=' * 65)
@@ -319,6 +380,12 @@ def main() -> None:
                     runRaw(proposals, full_batch, lf)
                 elif cond == 'is':
                     runIS(proposals, batches, full_batch, lf)
+                elif cond == 'isMarginal':
+                    runIS(proposals, batches, full_batch, lf, marginal=True, rb_redraw=True)
+                elif cond == 'isLaplace':
+                    runISLaplace(proposals, batches, full_batch, lf)
+                elif cond == 'rbAttach':
+                    runISLaplace(proposals, batches, full_batch, lf, attach_only=True)
                 elif cond == 'imhMarginal':
                     imh_mode = 'marginal' if lf == 0 else 'global'
                     runIMH(imh_mode, imh_proposals, imh_batches, full_batch, lf)
