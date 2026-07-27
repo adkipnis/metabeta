@@ -22,7 +22,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--n_fits', type=int, default=512,
                         help='expected fit files per method (default: 512)')
     parser.add_argument('--srcdir', type=str,
-                        default=str(Path(__file__).resolve().parent / '..' / 'outputs' / 'data_real'),
+                        default=str(Path(__file__).resolve().parent / '..' / 'outputs' / 'data'),
                         help='root data directory')
     parser.add_argument('--no_reintegrate', action='store_true',
                         help='skip reintegration even when all fits are present (test partition only)')
