@@ -41,14 +41,36 @@ Evaluator.summary() / plotComparison to choose the best mode for a given dataset
 The diagnostics dict returned by __call__ contains per-chain acceptance rates as a quick
 quality indicator before running the full evaluation.
 
+Findings (2026-07 posthoc ablation, 128 validation datasets per family, small models)
+-------------------------------------------------------------------------------------
+Every IMH mode was measurably *worse* than raw flow samples on recovery, calibration, and
+LOO-NLL. Root causes (the first two are fixed in this module; the third is open):
+
+1. Argmax chain init (fixed). Chains were initialised at the pool-wide argmax of the
+   log-weights of the very pool they then iterate over, so every later proposal had
+   log_alpha = lw_prop − lw_argmax ≤ 0 by construction; at low acceptance a chain sat at
+   that single point through the whole post-burnin phase. This produced the severe
+   under-dispersion signature (RFX joint ECE ≈ −0.65, median LOO Pareto k of −1 to −3.5
+   for 'joint' on Bernoulli/Poisson, acceptance 4–6%). Chains now initialise at t=0 of
+   their block — a fair draw from the proposal.
+2. Inconsistent marginal target (fixed). The 'marginal' branch computed its own weight
+   with a diagonal-Σ_rfx marginal likelihood and *no* LKJ prior on z_corr, while
+   `_sampleRfxConditional` conditioned rfx on those very z_corr dims — the chain targeted
+   one distribution and drew rfx from another. Explains Corr(RFX) R dropping 0.812 → 0.650
+   and σ_eps miscalibration under 'marginal' on Normal. Weights are now delegated to
+   ImportanceSampler.unnormalizedPosterior (single source of truth with IS), which
+   includes the correlated marginal likelihood and the LKJ prior term.
+3. 'joint' mode degenerates structurally: one accept/reject decision for the full
+   (global + all-groups rfx) block means acceptance collapses as m grows — this is not
+   fixable by init or target corrections; prefer 'marginal' (Normal) or 'global' with a
+   conditional rfx redraw (non-Normal, see TODO).
+
+Note that marginal-IMH and marginal-SNIS (ImportanceSampler(marginal=True)) use identical
+log-weights; SNIS uses all samples with smooth weights instead of a rejection chain and is
+generally preferable — keep IMH as a diagnostic baseline.
+
 TODO
 ----
-- Chain init at the per-chain pool-wide argmax (`_runChains`: `best_t = lw_ct.argmax(-1)`)
-  front-loads convergence but may understate posterior spread: since a step only replaces
-  the state when it beats the best sample already seen anywhere in that chain's pool, chains
-  with a low acceptance rate could sit at that single point through the whole post-burnin
-  phase. Check `accept_rate` on real runs; if it's low, try initialising from an arbitrary
-  draw (e.g. t=0) instead.
 - 'global' mode never MH-corrects rfx — accepted global samples keep the flow's raw,
   uncorrected rfx draw from the same proposal. This is the default for non-Normal
   likelihoods, so local/group-level calibration there is still bounded by flow error.
@@ -66,13 +88,9 @@ from torch import Tensor
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.utils.constants import hasSigmaEps
-from metabeta.utils.families import (
-    logMarginalLikelihoodNormal,
-    logProbFfx,
-    logProbSigma,
-)
+from metabeta.utils.families import sampleRfxConditionalNormal
 from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.regularization import unconstrainedToCholesky
+from metabeta.utils.regularization import corrLowerToUnconstrained, unconstrainedToCholesky
 from metabeta.utils.results import Proposal
 
 Mode = Literal['global', 'marginal', 'joint']
@@ -84,7 +102,7 @@ class MetropolisSampler:
         data: dict[str, Tensor],
         n_chains: int = 4,
         n_steps: int = 250,
-        burnin: int = 50,
+        burnin: int = 25,
         mode: Mode = 'marginal',
         likelihood_family: int = 0,
         eps: float = 1e-12,
@@ -102,10 +120,16 @@ class MetropolisSampler:
         self.has_sigma_eps = hasSigmaEps(likelihood_family)
         self.eps = eps
 
-        # Reuse ImportanceSampler for prior log-prob computation and unnormalizedPosterior.
-        # 'joint' needs full=True (includes rfx prior and local log-prob).
+        # Delegate all weight computation to ImportanceSampler.unnormalizedPosterior —
+        # single source of truth shared with SNIS. 'marginal' uses the (correlated)
+        # marginal likelihood + LKJ prior; 'joint' needs full=True (rfx prior + local
+        # log-prob).
         self._is = ImportanceSampler(
-            data, full=(mode == 'joint'), likelihood_family=likelihood_family, eps=eps
+            data,
+            full=(mode == 'joint'),
+            marginal=(mode == 'marginal'),
+            likelihood_family=likelihood_family,
+            eps=eps,
         )
 
         # Data tensors for the Normal-Normal conditional (marginal mode).
@@ -121,39 +145,18 @@ class MetropolisSampler:
     # ------------------------------------------------------------------
 
     def _logWeights(self, proposal: Proposal) -> Tensor:
-        """Compute unnormalised log IS weights (b, s) according to self.mode."""
+        """Compute unnormalised log IS weights (b, s) according to self.mode.
+
+        Fully delegated to ImportanceSampler.unnormalizedPosterior: 'marginal' gets
+        the correlated marginal likelihood + LKJ prior there (the old hand-rolled
+        branch used a diagonal-Σ marginal and no z_corr prior — see Findings).
+        """
         log_q_g = proposal.log_prob_g  # (b, s)
-
-        if self.mode == 'marginal':
-            ffx = proposal.ffx         # (b, s, d)
-            sigma_rfx = proposal.sigma_rfx   # (b, s, q)
-            sigma_eps = proposal.sigma_eps   # (b, s)
-            ll = logMarginalLikelihoodNormal(
-                ffx,
-                sigma_rfx,
-                sigma_eps,
-                self._y,
-                self._X,
-                self._Z,
-                self._mask_n,
-                self._mask_m,
-            )
-            lp = logProbFfx(
-                ffx, self._is.nu_ffx, self._is.tau_ffx, self._is.family_ffx, self._is.mask_d
-            )
-            lp = lp + logProbSigma(
-                sigma_rfx, self._is.tau_rfx, self._is.family_sigma_rfx, self._is.mask_q
-            )
-            lp = lp + logProbSigma(sigma_eps, self._is.tau_eps, self._is.family_sigma_eps)
-            return ll + lp - log_q_g
-
-        # 'global' or 'joint': delegate to ImportanceSampler
         ll, lp = self._is.unnormalizedPosterior(proposal)
         if self.mode == 'joint':
             log_q_l = proposal.log_prob_l   # (b, m, s)
             lq = log_q_g + (log_q_l * self._is.mask_m).sum(1)
             return ll + lp - lq
-
         return ll + lp - log_q_g
 
     # ------------------------------------------------------------------
@@ -184,17 +187,16 @@ class MetropolisSampler:
             m, q = sl.shape[1], sl.shape[-1]
             sl_ct = sl.permute(0, 2, 1, 3).reshape(b, C, T, m, q)
 
-        # Initialise at the best-weight sample in each chain's block.
-        # This prevents chains from getting permanently stuck when the first
-        # proposal has very high weight and subsequent ones never beat it.
-        best_t = lw_ct.argmax(dim=-1)                          # (b, C)
-        bt_g = best_t.unsqueeze(-1).unsqueeze(-1).expand(b, C, 1, D_g)
-        cur_g = sg_ct.gather(2, bt_g).squeeze(2).clone()       # (b, C, D_g)
-        bt_lw = best_t.unsqueeze(-1)
-        cur_lw = lw_ct.gather(2, bt_lw).squeeze(-1).clone()    # (b, C)
+        # Initialise at each chain's first draw — a fair sample from the proposal.
+        # Initialising at the pool-wide argmax (as done previously) guarantees
+        # under-dispersion: every later proposal in the pool then has
+        # log_alpha = lw − lw_max ≤ 0, so low-acceptance chains sit at that single
+        # point through the whole post-burnin phase (see Findings in the module
+        # docstring).
+        cur_g = sg_ct[:, :, 0].clone()   # (b, C, D_g)
+        cur_lw = lw_ct[:, :, 0].clone()  # (b, C)
         if sl is not None:
-            bt_l = best_t.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(b, C, 1, m, q)
-            cur_l = sl_ct.gather(2, bt_l).squeeze(2).clone()   # (b, C, m, q)
+            cur_l = sl_ct[:, :, 0].clone()   # (b, C, m, q)
 
         keep_g: list[Tensor] = []
         keep_l: list[Tensor] = []
@@ -243,72 +245,34 @@ class MetropolisSampler:
         q: int,
         d_corr: int,
     ) -> Tensor:
-        """Draw rfx ~ p(rfx | θ_g, y) using Normal-Normal conjugacy.
+        """Draw rfx ~ p(rfx | θ_g, y); delegates to sampleRfxConditionalNormal.
 
-        For each accepted global sample and each group j:
-            V_j⁻¹ = Σ_rfx⁻¹ + Zⱼᵀ Zⱼ / σ²_eps
-            μ_j   = V_j (Zⱼᵀ rⱼ / σ²_eps)     where rⱼ = yⱼ − Xⱼ β
-            rfx_j ~ N(μ_j, V_j)
-
-        Σ_rfx = diag(σ_rfx²) for independent rfx, or D R Dᵀ for correlated
-        (D = diag(σ_rfx), R reconstructed from the unconstrained z_corr dims).
+        The corr dims of sg_out store *constrained* lower-triangle correlations
+        (like Proposal.samples_g), so they are mapped back to unconstrained space
+        before building the Cholesky factor. (The previous inline implementation
+        applied unconstrainedToCholesky to the constrained values directly —
+        approximately right for small correlations, wrong in general.)
 
         Returns (b, m, s_out, q).
         """
-        b, s_out, _ = sg_out.shape
-        m = self._X.shape[1]
-
-        # Extract global parameter components from sg_out
-        ffx = sg_out[..., :d]                     # (b, s_out, d)
-        sigma_rfx = sg_out[..., d : d + q]          # (b, s_out, q)
-        sigma_eps = sg_out[..., d + q]             # (b, s_out)
-
-        # Residuals: r = y - X @ ffx  (b, m, n, s_out)
-        mu_ffx = torch.einsum('bmnd,bsd->bmns', self._X, ffx)
-        r = (self._y - mu_ffx) * self._mask_n     # (b, m, n, s_out)
-
-        # Group-level sufficient statistics
-        Z_m = self._Z * self._mask_n              # (b, m, n, q) — zero out padded obs
-        ZtZ = torch.einsum('bmnq,bmnr->bmqr', Z_m, Z_m)              # (b, m, q, q)
-        Ztr = torch.einsum('bmnq,bmns->bmsq', Z_m, r)                # (b, m, s_out, q)
-
-        # Σ_rfx Cholesky factor L such that Σ_rfx = L @ Lᵀ
-        sigma_rfx_c = sigma_rfx.clamp(min=1e-6)
+        ffx = sg_out[..., :d]                # (b, s_out, d)
+        sigma_rfx = sg_out[..., d : d + q]   # (b, s_out, q)
+        sigma_eps = sg_out[..., d + q]       # (b, s_out)
+        L_corr = None
         if d_corr > 0:
-            L_corr = unconstrainedToCholesky(sg_out[..., -d_corr:], q)  # (b, s_out, q, q)
-            L_rfx = L_corr * sigma_rfx_c.unsqueeze(-1)                      # (b, s_out, q, q)
-        else:
-            L_rfx = torch.diag_embed(sigma_rfx_c)   # (b, s_out, q, q) diagonal
-
-        # Σ_rfx⁻¹ via Cholesky solve: solve L Lᵀ x = I
-        eye = torch.eye(q, device=sg_out.device, dtype=sg_out.dtype).expand(b, s_out, q, q)
-        Sigma_inv = torch.cholesky_solve(eye, L_rfx)   # (b, s_out, q, q)
-
-        # M = Σ_rfx⁻¹ + ZᵀZ / σ²_eps  (b, m, s_out, q, q)
-        s2e = sigma_eps.pow(2)  # (b, s_out)
-        M = Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]
-
-        # Cholesky of M (posterior precision)
-        jitter = 1e-6 * torch.eye(q, device=M.device, dtype=M.dtype)
-        chol_M = torch.linalg.cholesky(M + jitter)   # (b, m, s_out, q, q)
-
-        # Posterior mean: μ = M⁻¹ (Zᵀr / σ²_eps)
-        rhs = Ztr / s2e[:, None, :, None]             # (b, m, s_out, q)
-        post_mean = torch.cholesky_solve(rhs.unsqueeze(-1), chol_M).squeeze(
-            -1
-        )                                  # (b, m, s_out, q)
-
-        # Sample: rfx = μ + chol_M⁻ᵀ z  where z ~ N(0, I)
-        # chol_M is Chol(M) = Chol(V⁻¹), so Chol(V) = chol_M⁻ᵀ (upper-triangular solve)
-        z = torch.randn_like(post_mean)
-        rfx_centered = torch.linalg.solve_triangular(
-            chol_M.mT, z.unsqueeze(-1), upper=True
-        ).squeeze(
-            -1
-        )                                  # (b, m, s_out, q)
-
-        rfx = (post_mean + rfx_centered) * self._mask_m.unsqueeze(-1).float()
-        return rfx   # (b, m, s_out, q)
+            z_corr = corrLowerToUnconstrained(sg_out[..., -d_corr:], q)
+            L_corr = unconstrainedToCholesky(z_corr, q)  # (b, s_out, q, q)
+        return sampleRfxConditionalNormal(
+            ffx,
+            sigma_rfx,
+            sigma_eps,
+            self._y,
+            self._X,
+            self._Z,
+            self._mask_n,
+            self._mask_m,
+            L_corr=L_corr,
+        )
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -379,7 +343,7 @@ def runIMH(
     ----------
     n_chains       : int  — number of independent chains (default 4)
     n_steps        : int  — steps per chain including burnin (default 250)
-    imh_burnin     : int  — burnin steps to discard (default 50)
+    imh_burnin     : int  — burnin steps to discard (default 25)
     imh_mode       : str  — 'global' | 'marginal' | 'joint'
                      defaults to 'marginal' for Normal, 'global' otherwise
     rescale        : bool
@@ -388,7 +352,7 @@ def runIMH(
     lf = getattr(cfg, 'likelihood_family', 0)
     n_chains = getattr(cfg, 'n_chains', 4)
     n_steps = getattr(cfg, 'n_steps', 250)
-    burnin = getattr(cfg, 'imh_burnin', 50)
+    burnin = getattr(cfg, 'imh_burnin', 25)
     default_mode = 'marginal' if lf == 0 else 'global'
     mode: Mode = getattr(cfg, 'imh_mode', default_mode)
 
