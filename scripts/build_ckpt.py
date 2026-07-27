@@ -50,7 +50,7 @@ BEST_SEEDS: dict[tuple[str, str], int | None] = {
     ('poisson', 'small'): 4,
     ('poisson', 'medium'): 11,
     ('poisson', 'large'): 6, # cont. (pred.)
-    ('poisson', 'huge'): 9, # cont. (inf.)
+    ('poisson', 'huge'): 9,
 }
 
 # ---------------------------------------------------------------------------
