@@ -64,7 +64,6 @@ def getSummary(
     likelihood_family: int = 0,
     compute_prior: bool = False,
     compute_pred_coverage: bool = True,
-    compute_loo: bool = True,
     dataset_chunk_size: int = 16,
 ) -> EvaluationSummary:
     out = {}
@@ -119,13 +118,12 @@ def getSummary(
         posterior_nlls.append(posteriorPredictiveNLL(pp_c, d_c, w=p_c.weights, log_p=log_p_c))
         t_nll += time.perf_counter() - tc
 
-        if compute_loo:
-            tc = time.perf_counter()
-            loo_nll_c, loo_k_c = psisLooNLL(pp_c, d_c, w=p_c.weights, reff=p_c.reff, log_p=log_p_c)
-            t_loo += time.perf_counter() - tc
-            loo_nlls.append(loo_nll_c)
-            loo_ks.append(loo_k_c)
+        tc = time.perf_counter()
+        loo_nll_c, loo_k_c = psisLooNLL(pp_c, d_c, w=p_c.weights, reff=p_c.reff, log_p=log_p_c)
         del log_p_c   # free before next chunk
+        t_loo += time.perf_counter() - tc
+        loo_nlls.append(loo_nll_c)
+        loo_ks.append(loo_k_c)
 
         tc = time.perf_counter()
         if likelihood_family == 0:
@@ -157,8 +155,8 @@ def getSummary(
 
     per_dataset = PerDatasetMetrics(
         posterior_nll=torch.cat(posterior_nlls),
-        loo_nll=torch.cat(loo_nlls) if loo_nlls else None,
-        loo_pareto_k=torch.cat(loo_ks) if loo_ks else None,
+        loo_nll=torch.cat(loo_nlls),
+        loo_pareto_k=torch.cat(loo_ks),
         pp_fit=torch.cat(pp_fits) if pp_fits else None,
         pp_cov_coverage=torch.cat(pp_covs, dim=-1) if pp_covs else None,
         pp_cov_width=torch.cat(pp_widths, dim=-1) if pp_widths else None,
