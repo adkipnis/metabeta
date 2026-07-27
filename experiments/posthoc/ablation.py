@@ -99,6 +99,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--batch-size', type=int, default=4, help='sub-batch size for torch-based methods')
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
     p.add_argument('--n-samples', type=int, default=1000, help='flow samples for torch-based methods (raw/is/svgd); IMH uses its own fixed count')
+    p.add_argument('--loo-nll', action='store_true', help='compute PSIS-LOO-NLL in summaries (off by default; it dominates getSummary runtime)')
     p.add_argument('--include-svgd', action='store_true', help='also run the (slow) SVGD condition')
     p.add_argument('--include-warmnuts', action='store_true', help='also run the (slow) warm-started NUTS condition')
     return p.parse_args()
@@ -299,9 +300,13 @@ def loadOrSampleProposals(
     return collectProposals(model, items, n_samples, batch_size)
 
 
-def runRaw(proposals, full_batch, lf):
+def runRaw(proposals, full_batch, lf, compute_loo=False):
     proposal = concatProposalsBatch(proposals)
-    print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
+    print(
+        summaryTable(
+            getSummary(proposal, full_batch, likelihood_family=lf, compute_loo=compute_loo), lf
+        )
+    )
 
 
 def _printWeightHealth(proposal):
@@ -318,7 +323,7 @@ def _printWeightHealth(proposal):
     )
 
 
-def runIS(proposals, batches, full_batch, lf, marginal=False, rb_redraw=False):
+def runIS(proposals, batches, full_batch, lf, marginal=False, rb_redraw=False, compute_loo=False):
     out = []
     with torch.no_grad():
         for p, batch in zip(proposals, batches):
@@ -335,10 +340,14 @@ def runIS(proposals, batches, full_batch, lf, marginal=False, rb_redraw=False):
             out.append(sampler(p.slice_b(0, p.samples_g.shape[0])))
     proposal = concatProposalsBatch(out)
     _printWeightHealth(proposal)
-    print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
+    print(
+        summaryTable(
+            getSummary(proposal, full_batch, likelihood_family=lf, compute_loo=compute_loo), lf
+        )
+    )
 
 
-def runISLaplace(proposals, batches, full_batch, lf, attach_only=False):
+def runISLaplace(proposals, batches, full_batch, lf, attach_only=False, compute_loo=False):
     out = []
     with torch.no_grad():
         for p, batch in zip(proposals, batches):
@@ -352,10 +361,21 @@ def runISLaplace(proposals, batches, full_batch, lf, attach_only=False):
             out.append(sampler(p.slice_b(0, p.samples_g.shape[0])))
     proposal = concatProposalsBatch(out)
     _printWeightHealth(proposal)
-    print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
+    print(
+        summaryTable(
+            getSummary(proposal, full_batch, likelihood_family=lf, compute_loo=compute_loo), lf
+        )
+    )
 
 
-def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch: dict, lf: int):
+def runNutsFromNpz(
+    npz_path: Path,
+    ds_list: list,
+    tensor_batch: dict,
+    full_batch: dict,
+    lf: int,
+    compute_loo: bool = False,
+):
     """Extract pre-computed NUTS results from test.fit.npz and evaluate."""
     n_ds = len(ds_list)
     has_se = hasSigmaEps(lf)
@@ -417,7 +437,11 @@ def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch
     merged = _stackProposals(proposals, target_d=target_d, target_q=target_q)
     merged.rescale(tensor_batch['sd_y'][:n_ds])
     merged.reff = reff
-    print(summaryTable(getSummary(merged, full_batch, likelihood_family=lf), lf))
+    print(
+        summaryTable(
+            getSummary(merged, full_batch, likelihood_family=lf, compute_loo=compute_loo), lf
+        )
+    )
 
 
 class _Tee:
@@ -513,24 +537,48 @@ def main() -> None:
                 print(f'  {cond}')
                 print('=' * 65)
                 if cond == 'raw':
-                    runRaw(proposals, full_batch, lf)
+                    runRaw(proposals, full_batch, lf, compute_loo=args.loo_nll)
                 elif cond == 'is':
-                    runIS(proposals, batches, full_batch, lf)
+                    runIS(proposals, batches, full_batch, lf, compute_loo=args.loo_nll)
                 elif cond == 'isMarginal':
-                    runIS(proposals, batches, full_batch, lf, marginal=True, rb_redraw=True)
+                    runIS(
+                        proposals,
+                        batches,
+                        full_batch,
+                        lf,
+                        marginal=True,
+                        rb_redraw=True,
+                        compute_loo=args.loo_nll,
+                    )
                 elif cond == 'isLaplace':
-                    runISLaplace(proposals, batches, full_batch, lf)
+                    runISLaplace(proposals, batches, full_batch, lf, compute_loo=args.loo_nll)
                 elif cond == 'rbAttach':
-                    runISLaplace(proposals, batches, full_batch, lf, attach_only=True)
+                    runISLaplace(
+                        proposals,
+                        batches,
+                        full_batch,
+                        lf,
+                        attach_only=True,
+                        compute_loo=args.loo_nll,
+                    )
                 elif cond == 'imhMarginal':
                     imh_mode = 'marginal' if lf == 0 else 'global'
-                    runIMH(imh_mode, imh_proposals, imh_batches, full_batch, lf)
+                    runIMH(
+                        imh_mode,
+                        imh_proposals,
+                        imh_batches,
+                        full_batch,
+                        lf,
+                        compute_loo=args.loo_nll,
+                    )
                 elif cond == 'svgd':
-                    runSVGD(proposals, batches, full_batch, lf)
+                    runSVGD(proposals, batches, full_batch, lf, compute_loo=args.loo_nll)
                 elif cond == 'coldNuts':
-                    runNutsFromNpz(fit_npz, ds_list, tensor_batch, full_batch, lf)
+                    runNutsFromNpz(
+                        fit_npz, ds_list, tensor_batch, full_batch, lf, compute_loo=args.loo_nll
+                    )
                 elif cond == 'warmNuts':
-                    runWarmNuts(model, tensor_batch, ds_list, lf)
+                    runWarmNuts(model, tensor_batch, ds_list, lf, compute_loo=args.loo_nll)
                 print()
 
         md_path = RESULTS_DIR / f'{cfg["family"]}_{cfg["size"]}.md'
