@@ -4,8 +4,15 @@ Conditions (Normal)
 -------------------
 raw          : raw flow samples
 is           : global IS with PSIS
-imhMarginal  : IMH mode='marginal' (Normal) or 'joint' (other) — Rao-Blackwellised where possible
-svgd         : SVGD with per-dim bandwidth + cosine LR decay
+imhMarginal  : IMH mode='marginal' (Normal, Rao-Blackwellised) or 'global' (other). Note:
+               'global' still degrades calibration vs raw/is on non-Normal likelihoods (it
+               never MH-corrects rfx — see metabeta/posthoc/metropolis.py's TODO); 'joint'
+               was tried too and was worse (acceptance collapses with many groups). Neither
+               is a real fix — see that module's TODO for the actual proposed correction.
+svgd         : SVGD with per-dim bandwidth + cosine LR decay — opt in with --include-svgd,
+               off by default (too slow to be practically useful: ~40s/dataset, and gives
+               a fraction of a nat of marginal-log-p improvement over the flow samples it starts
+               from — see metabeta/outputs/results/ablation/*.md for reference numbers)
 coldNuts     : NUTS results extracted from test.fit.npz (pre-computed, no rerun) — only
                available with --split=test
 warmNuts     : warm-started NUTS (flow samples initialise PyMC chains) — opt in with
@@ -29,7 +36,7 @@ metabeta/outputs/results/ablation/{family}_{size}.md (one file per model).
 Run from repo root:
     uv run python experiments/posthoc/ablation.py
     uv run python experiments/posthoc/ablation.py --sizes small --families normal bernoulli
-    uv run python experiments/posthoc/ablation.py --n-datasets 32 --include-warmnuts
+    uv run python experiments/posthoc/ablation.py --n-datasets 32 --include-svgd --include-warmnuts
 """
 
 import argparse
@@ -79,6 +86,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--families', nargs='+', default=['normal', 'bernoulli', 'poisson'], choices=['normal', 'bernoulli', 'poisson'], help='likelihood families to evaluate')
     p.add_argument('--split', choices=['valid', 'test'], default='valid', help='npz split to evaluate on; only "test" has coldNuts fits')
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
+    p.add_argument('--include-svgd', action='store_true', help='also run the (slow) SVGD condition')
     p.add_argument('--include-warmnuts', action='store_true', help='also run the (slow) warm-started NUTS condition')
     return p.parse_args()
 # fmt: on
@@ -267,7 +275,9 @@ def main() -> None:
     args = setup()
     models = buildModels(args.families, args.sizes)
 
-    conditions = ['raw', 'is', 'imhMarginal', 'svgd']
+    conditions = ['raw', 'is', 'imhMarginal']
+    if args.include_svgd:
+        conditions.append('svgd')
     if args.split == 'test':
         conditions.append('coldNuts')
     if args.include_warmnuts:
@@ -310,7 +320,7 @@ def main() -> None:
                 elif cond == 'is':
                     runIS(proposals, batches, full_batch, lf)
                 elif cond == 'imhMarginal':
-                    imh_mode = 'marginal' if lf == 0 else 'joint'
+                    imh_mode = 'marginal' if lf == 0 else 'global'
                     runIMH(imh_mode, imh_proposals, imh_batches, full_batch, lf)
                 elif cond == 'svgd':
                     runSVGD(proposals, batches, full_batch, lf)
