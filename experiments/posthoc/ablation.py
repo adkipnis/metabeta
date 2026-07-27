@@ -49,6 +49,7 @@ Run from repo root:
 import argparse
 import contextlib
 import io
+import re
 import sys
 from pathlib import Path
 
@@ -77,6 +78,7 @@ from metabeta.utils.dataloader import Collection, collateGrouped
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.padding import unpad
+from metabeta.utils.posterior_cache import loadProposalCache
 from metabeta.utils.preprocessing import rescaleData
 
 # ---------------------------------------------------------------------------
@@ -126,6 +128,10 @@ BATCH_SIZE = 4   # sub-batch size for torch-based methods
 # Flow samples for torch-based methods (svgd / imh / is / raw).
 # IMH requires exactly N_CHAINS × N_STEPS samples (imported as IMH_N_SAMPLES).
 N_SAMPLES = 500
+
+# Checkpoint prefix used for the published joint checkpoints (evaluate.py caches MB
+# posterior samples under this prefix); ablation reuses those caches when present.
+PREFIX = 'best'
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +191,115 @@ def collectProposals(
             proposals.append(proposal)
             batches.append(batch)
     return proposals, batches
+
+
+# ---------------------------------------------------------------------------
+# Cached MB posterior samples (reuse evaluate.py's cache when available)
+# ---------------------------------------------------------------------------
+
+
+def buildBatches(items: list) -> list:
+    """Rescaled data sub-batches (model-independent), aligned with the proposal sub-batches."""
+    batches = []
+    for i in range(0, len(items), BATCH_SIZE):
+        batches.append(rescaleData(collateGrouped(items[i : i + BATCH_SIZE])))
+    return batches
+
+
+def findMbCache(data_dir: Path, split: str, run_name: str, n_needed: int) -> Path | None:
+    """Smallest MB posterior-sample cache with >= n_needed samples for this checkpoint/split.
+
+    Matches the full-split caches written by evaluate.py (partition.mb.{run}_{prefix}
+    _s{n}_seed{s}_k{k}.npz); ignores masked-subset caches (e.g. real_posterior.py's
+    ``test-<hash>.mb.*``) since those never match the ``{split}.mb.`` prefix.
+    """
+    best, best_s = None, None
+    for path in data_dir.glob(f'{split}.mb.{run_name}_{PREFIX}_s*.npz'):
+        match = re.search(r'_s(\d+)_seed\d+_k\d+\.npz$', path.name)
+        if match is None:
+            continue
+        s = int(match.group(1))
+        if s >= n_needed and (best_s is None or s < best_s):
+            best, best_s = path, s
+    return best
+
+
+def _cacheFresh(cache: Path, data_path: Path, ckpt: Path) -> bool:
+    """True if the cache is at least as new as the data file and the checkpoint."""
+    ref_mtime = 0.0
+    for ref in (data_path, ckpt):
+        if ref.exists():
+            ref_mtime = max(ref_mtime, ref.stat().st_mtime)
+    return cache.stat().st_mtime >= ref_mtime
+
+
+def _trimProposal(p: Proposal, n_samples: int, m: int) -> Proposal:
+    """Trim a batch-sliced cached proposal to n_samples draws and m local groups.
+
+    The merged cache pads local groups to the split-wide max_m; ``m`` is the sub-batch's
+    own padding (from collateGrouped), so [:, :m] keeps every real group and drops only
+    the extra split-wide padding. Flow draws are i.i.d., so the first n_samples are a
+    valid subsample when the cache holds more than requested.
+    """
+    global_data = {'samples': p.samples_g[:, :n_samples, :].contiguous()}
+    local_data = {'samples': p.samples_l[:, :m, :n_samples, :].contiguous()}
+    if 'log_prob' in p.data['global']:
+        global_data['log_prob'] = p.data['global']['log_prob'][:, :n_samples].contiguous()
+    if 'log_prob' in p.data['local']:
+        local_data['log_prob'] = p.data['local']['log_prob'][:, :m, :n_samples].contiguous()
+    corr = p._corr_rfx
+    if corr is not None:
+        corr = corr[:, :n_samples].contiguous()
+    trimmed = Proposal(
+        {'global': global_data, 'local': local_data},
+        has_sigma_eps=p.has_sigma_eps,
+        d_corr=p.d_corr,
+        corr_rfx=corr,
+    )
+    trimmed.reff = p.reff
+    return trimmed
+
+
+def splitMergedProposal(merged: Proposal, batches: list, n_samples: int) -> list:
+    """Split a merged full-split cache into per-sub-batch proposals aligned with ``batches``."""
+    proposals = []
+    start = 0
+    for batch in batches:
+        b = batch['X'].shape[0]
+        m = batch['rfx'].shape[1]
+        sliced = merged.slice_b(start, start + b)
+        proposals.append(_trimProposal(sliced, n_samples, m))
+        start += b
+    return proposals
+
+
+def loadOrSampleProposals(
+    model: Approximator,
+    items: list,
+    n_samples: int,
+    data_dir: Path,
+    split: str,
+    run_name: str,
+    data_path: Path,
+    ckpt: Path,
+) -> tuple[list, list]:
+    """Reuse evaluate.py's cached MB samples when a fresh, large-enough cache exists."""
+    cache = findMbCache(data_dir, split, run_name, n_samples)
+    if cache is not None and _cacheFresh(cache, data_path, ckpt):
+        merged, _ = loadProposalCache(cache)
+        if merged.samples_g.shape[0] >= len(items):
+            batches = buildBatches(items)
+            proposals = splitMergedProposal(merged, batches, n_samples)
+            print(f'  MB samples (n={n_samples}): loaded cache {cache.name}')
+            return proposals, batches
+        print(
+            f'  MB samples (n={n_samples}): cache {cache.name} has too few datasets '
+            f'({merged.samples_g.shape[0]} < {len(items)}); sampling from model'
+        )
+    else:
+        reason = 'no matching cache' if cache is None else f'stale cache {cache.name}'
+        print(f'  MB samples (n={n_samples}): {reason}; sampling from model')
+    return collectProposals(model, items, n_samples)
 
 
 def runRaw(proposals, full_batch, lf):
@@ -364,9 +479,28 @@ def main() -> None:
             )
             print('(per-method settings: see individual eval_*.py benchmarks)\n')
 
-            proposals, batches = collectProposals(model, items, N_SAMPLES)
+            run_name = cfg['ckpt'].parent.name
+            proposals, batches = loadOrSampleProposals(
+                model,
+                items,
+                N_SAMPLES,
+                cfg['data_dir'],
+                args.split,
+                run_name,
+                data_path,
+                cfg['ckpt'],
+            )
             # IMH requires exactly N_CHAINS × N_STEPS samples — draw a dedicated set.
-            imh_proposals, imh_batches = collectProposals(model, items, IMH_N_SAMPLES)
+            imh_proposals, imh_batches = loadOrSampleProposals(
+                model,
+                items,
+                IMH_N_SAMPLES,
+                cfg['data_dir'],
+                args.split,
+                run_name,
+                data_path,
+                cfg['ckpt'],
+            )
 
             for cond in conditions:
                 if cond == 'isMarginal' and lf != 0:
