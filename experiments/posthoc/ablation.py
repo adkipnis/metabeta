@@ -95,14 +95,17 @@ def setup() -> argparse.Namespace:
     p.add_argument('--sizes', nargs='+', default=['small', 'medium'], choices=['small', 'medium', 'large', 'huge'], help='data/model sizes to evaluate')
     p.add_argument('--families', nargs='+', default=['normal', 'bernoulli', 'poisson'], choices=['normal', 'bernoulli', 'poisson'], help='likelihood families to evaluate')
     p.add_argument('--split', choices=['valid', 'test'], default='valid', help='npz split to evaluate on; only "test" has coldNuts fits')
+    p.add_argument('--prefix', type=str, default='best', help='checkpoint prefix to load and to match evaluate.py MB caches against')
+    p.add_argument('--batch-size', type=int, default=4, help='sub-batch size for torch-based methods')
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
+    p.add_argument('--n-samples', type=int, default=1000, help='flow samples for torch-based methods (raw/is/svgd); IMH uses its own fixed count')
     p.add_argument('--include-svgd', action='store_true', help='also run the (slow) SVGD condition')
     p.add_argument('--include-warmnuts', action='store_true', help='also run the (slow) warm-started NUTS condition')
     return p.parse_args()
 # fmt: on
 
 
-def buildModels(families: list[str], sizes: list[str]) -> list[dict]:
+def buildModels(families: list[str], sizes: list[str], prefix: str) -> list[dict]:
     models = []
     for family in families:
         for size in sizes:
@@ -115,23 +118,12 @@ def buildModels(families: list[str], sizes: list[str]) -> list[dict]:
                     label=f'{family.capitalize()} ({size})',
                     family=family,
                     size=size,
-                    ckpt=_ckpt_dir(family, size, seed) / 'best.pt',
+                    ckpt=_ckpt_dir(family, size, seed) / f'{prefix}.pt',
                     data_dir=DATA_DIR / f'{size}-{FAMILY_INITIAL[family]}-sampled',
                     likelihood_family=LIKELIHOOD_FAMILY[family],
                 )
             )
     return models
-
-
-BATCH_SIZE = 4   # sub-batch size for torch-based methods
-
-# Flow samples for torch-based methods (svgd / imh / is / raw).
-# IMH requires exactly N_CHAINS × N_STEPS samples (imported as IMH_N_SAMPLES).
-N_SAMPLES = 500
-
-# Checkpoint prefix used for the published joint checkpoints (evaluate.py caches MB
-# posterior samples under this prefix); ablation reuses those caches when present.
-PREFIX = 'best'
 
 
 # ---------------------------------------------------------------------------
@@ -179,12 +171,13 @@ def collectProposals(
     model: Approximator,
     items: list,
     n_samples: int,
+    batch_size: int,
 ) -> tuple[list, list]:
     """Draw rescaled flow proposals in sub-batches; return (proposals, batches)."""
     proposals, batches = [], []
     with torch.no_grad():
-        for i in range(0, len(items), BATCH_SIZE):
-            batch = collateGrouped(items[i : i + BATCH_SIZE])
+        for i in range(0, len(items), batch_size):
+            batch = collateGrouped(items[i : i + batch_size])
             proposal = model.estimate(batch, n_samples=n_samples)
             proposal.rescale(batch['sd_y'])
             batch = rescaleData(batch)
@@ -198,15 +191,17 @@ def collectProposals(
 # ---------------------------------------------------------------------------
 
 
-def buildBatches(items: list) -> list:
+def buildBatches(items: list, batch_size: int) -> list:
     """Rescaled data sub-batches (model-independent), aligned with the proposal sub-batches."""
     batches = []
-    for i in range(0, len(items), BATCH_SIZE):
-        batches.append(rescaleData(collateGrouped(items[i : i + BATCH_SIZE])))
+    for i in range(0, len(items), batch_size):
+        batches.append(rescaleData(collateGrouped(items[i : i + batch_size])))
     return batches
 
 
-def findMbCache(data_dir: Path, split: str, run_name: str, n_needed: int) -> Path | None:
+def findMbCache(
+    data_dir: Path, split: str, run_name: str, n_needed: int, prefix: str
+) -> Path | None:
     """Smallest MB posterior-sample cache with >= n_needed samples for this checkpoint/split.
 
     Matches the full-split caches written by evaluate.py (partition.mb.{run}_{prefix}
@@ -214,7 +209,7 @@ def findMbCache(data_dir: Path, split: str, run_name: str, n_needed: int) -> Pat
     ``test-<hash>.mb.*``) since those never match the ``{split}.mb.`` prefix.
     """
     best, best_s = None, None
-    for path in data_dir.glob(f'{split}.mb.{run_name}_{PREFIX}_s*.npz'):
+    for path in data_dir.glob(f'{split}.mb.{run_name}_{prefix}_s*.npz'):
         match = re.search(r'_s(\d+)_seed\d+_k\d+\.npz$', path.name)
         if match is None:
             continue
@@ -282,13 +277,15 @@ def loadOrSampleProposals(
     run_name: str,
     data_path: Path,
     ckpt: Path,
+    prefix: str,
+    batch_size: int,
 ) -> tuple[list, list]:
     """Reuse evaluate.py's cached MB samples when a fresh, large-enough cache exists."""
-    cache = findMbCache(data_dir, split, run_name, n_samples)
+    cache = findMbCache(data_dir, split, run_name, n_samples, prefix)
     if cache is not None and _cacheFresh(cache, data_path, ckpt):
         merged, _ = loadProposalCache(cache)
         if merged.samples_g.shape[0] >= len(items):
-            batches = buildBatches(items)
+            batches = buildBatches(items, batch_size)
             proposals = splitMergedProposal(merged, batches, n_samples)
             print(f'  MB samples (n={n_samples}): loaded cache {cache.name}')
             return proposals, batches
@@ -299,7 +296,7 @@ def loadOrSampleProposals(
     else:
         reason = 'no matching cache' if cache is None else f'stale cache {cache.name}'
         print(f'  MB samples (n={n_samples}): {reason}; sampling from model')
-    return collectProposals(model, items, n_samples)
+    return collectProposals(model, items, n_samples, batch_size)
 
 
 def runRaw(proposals, full_batch, lf):
@@ -445,7 +442,7 @@ def _renderTerminal(text: str) -> str:
 
 def main() -> None:
     args = setup()
-    models = buildModels(args.families, args.sizes)
+    models = buildModels(args.families, args.sizes, args.prefix)
 
     conditions = ['raw', 'is', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal']
     if args.include_svgd:
@@ -475,7 +472,8 @@ def main() -> None:
             items, ds_list, tensor_batch, full_batch = loadData(data_path, args.n_datasets)
             n_ds = len(ds_list)
             print(
-                f'Datasets: {n_ds}  |  n_samples (flow-based): {N_SAMPLES}  |  data: {data_path.name}'
+                f'Datasets: {n_ds}  |  n_samples (flow-based): {args.n_samples}  |  '
+                f'data: {data_path.name}'
             )
             print('(per-method settings: see individual eval_*.py benchmarks)\n')
 
@@ -483,12 +481,14 @@ def main() -> None:
             proposals, batches = loadOrSampleProposals(
                 model,
                 items,
-                N_SAMPLES,
+                args.n_samples,
                 cfg['data_dir'],
                 args.split,
                 run_name,
                 data_path,
                 cfg['ckpt'],
+                args.prefix,
+                args.batch_size,
             )
             # IMH requires exactly N_CHAINS × N_STEPS samples — draw a dedicated set.
             imh_proposals, imh_batches = loadOrSampleProposals(
@@ -500,6 +500,8 @@ def main() -> None:
                 run_name,
                 data_path,
                 cfg['ckpt'],
+                args.prefix,
+                args.batch_size,
             )
 
             for cond in conditions:
