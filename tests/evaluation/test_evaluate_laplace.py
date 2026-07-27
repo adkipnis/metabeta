@@ -6,6 +6,7 @@ import torch
 from metabeta.evaluation.evaluate import Evaluator
 from metabeta.plotting.comparison import _rightLegendHandles
 from metabeta.utils.evaluation import AggregatedMetrics, EvaluationSummary, PerDatasetMetrics
+from metabeta.utils.posterior_cache import saveProposalCache
 from metabeta.utils.results import Proposal
 
 
@@ -363,6 +364,53 @@ def test_mb_summary_cache_candidates_include_legacy_checkpoint_name(tmp_path):
     assert any('large_seed=13_best' in name for name in names)
     assert any('large_seed=0_best' in name for name in names)
     assert any('large_seed=0_latest' in name for name in names)
+
+
+def test_mb_sample_cache_path_includes_checkpoint_name_and_seed(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(n_samples=1000, seed=7, k=2)
+    evaluator.run_name = 'data=small-n-mixed_model=large_seed=13'
+    evaluator.checkpoint_prefix = 'best'
+    evaluator.data_path_test = tmp_path / 'small-n-sampled' / 'test.fit.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+
+    path = evaluator._mbSampleCachePath('test')
+
+    assert path.parent == evaluator.data_path_test.parent
+    assert path.name == ('test.mb.data=small-n-mixed_model=large_seed=13_best_s1000_seed7_k2.npz')
+
+
+def test_load_or_sample_mb_uses_cached_posterior_samples(monkeypatch, tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(n_samples=3, seed=7, k=0)
+    evaluator.run_name = 'run'
+    evaluator.legacy_run_name = 'run'
+    evaluator.checkpoint_prefix = 'best'
+    evaluator.data_path_test = tmp_path / 'test.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+
+    proposal = Proposal(
+        {
+            'global': {'samples': torch.ones(2, 3, 2), 'log_prob': torch.zeros(2, 3)},
+            'local': {'samples': torch.ones(2, 1, 3, 1), 'log_prob': torch.zeros(2, 1, 3)},
+        },
+        has_sigma_eps=False,
+    )
+    proposal.tpd = 0.4
+    saveProposalCache(evaluator._mbSampleCachePath('test'), proposal)
+
+    monkeypatch.setattr(evaluator, '_mbSampleRefMtime', lambda partition: 0.0)
+    monkeypatch.setattr(
+        evaluator,
+        'sampleMinibatched',
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('should use cache')),
+    )
+
+    loaded = evaluator._loadOrSampleMb('test', object())
+
+    torch.testing.assert_close(loaded.samples_g, proposal.samples_g)
+    torch.testing.assert_close(loaded.samples_l, proposal.samples_l)
+    assert loaded.tpd == 0.4
 
 
 def test_make_row_includes_loo_nll_and_predictive_width():
