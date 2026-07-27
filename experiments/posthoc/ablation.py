@@ -70,6 +70,7 @@ from build_ckpt import BEST_SEEDS, _ckpt_dir                           # noqa: E
 
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.models.approximator import Approximator
+from metabeta.utils.evaluation import EvaluationSummary
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.warmnuts import _stackProposals
@@ -355,10 +356,50 @@ def runISLaplace(proposals, batches, full_batch, lf, attach_only=False):
     print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
 
 
+def _nutsSummaryCache(npz_path: Path, n_ds: int) -> EvaluationSummary | None:
+    """Cached full-split NUTS summary written by evaluate.py, if fresh and matching n_ds.
+
+    Loading it skips the ~6.5 GB nuts_rfx materialization and the getSummary pass over
+    NUTS's ~4000 draws, which otherwise dominates coldNuts runtime. Only returned when the
+    cache covers exactly n_ds datasets (i.e. ablation runs the whole split, uncapped), so it
+    stays comparable with the other conditions.
+    """
+    partition = npz_path.name.split('.')[0]
+    cache_path = npz_path.parent / f'summary_{partition}_nuts.pt'
+    if not cache_path.exists() or cache_path.stat().st_mtime < npz_path.stat().st_mtime:
+        return None
+    try:
+        summary = EvaluationSummary.load(cache_path)
+    except (KeyError, ValueError, RuntimeError):
+        return None
+    if summary.per_dataset.posterior_nll.shape[0] != n_ds:
+        return None
+    print(f'  [cached summary] loaded {cache_path.name}')
+    return summary
+
+
 def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch: dict, lf: int):
     """Extract pre-computed NUTS results from test.fit.npz and evaluate."""
     n_ds = len(ds_list)
     has_se = hasSigmaEps(lf)
+
+    cached = _nutsSummaryCache(npz_path, n_ds)
+    if cached is not None:
+        # only the tiny diagnostic arrays are needed; skip the ~6.5 GB nuts_rfx load entirely
+        with np.load(npz_path, allow_pickle=True) as data:
+            nuts_divergences = data['nuts_divergences'][:n_ds]
+            nuts_duration = data['nuts_duration'][:n_ds]
+            nuts_ess = data['nuts_ess'][:n_ds]
+            n_s = data['nuts_sigma_rfx'].shape[-1]
+        total_divs = int(np.asarray(nuts_divergences).sum())
+        total_time = float(np.asarray(nuts_duration, dtype=np.float64).sum())
+        reff = float(nuts_ess.mean() / n_s)
+        print(
+            f'  divergences={total_divs}  reff={reff:.3f}  time/ds={total_time / n_ds:.1f}s  '
+            f'(total={total_time:.0f}s)'
+        )
+        print(summaryTable(cached, lf))
+        return
 
     # hoist each npz member once: NpzFile decompresses the *entire* member on every
     # [] access (nuts_rfx alone is ~6.5 GB), so per-iteration indexing re-decompresses
