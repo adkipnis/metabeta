@@ -27,12 +27,18 @@ case "$PARTITION" in
     *) echo "Unknown partition: $PARTITION (use valid or test)"; exit 1 ;;
 esac
 
+IFS='-' read -r _SIZE _FAM_NAME DS_TYPE _REST <<< "$TAG"
+
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
 cd $HOME/metabeta
 
-# echo "=== check.py ==="
-# python metabeta/simulation/check.py --data_id "$TAG" --partition "$PARTITION"
+echo "=== check.py ==="
+python metabeta/simulation/check.py --data_id "$TAG" --partition "$PARTITION"
 
-echo "=== cache.py ==="
-python metabeta/evaluation/cache.py --data_id "$TAG" --partition "$PARTITION"
+if [[ "$DS_TYPE" == "real" ]]; then
+    echo "=== cache.py skipped for real data ==="
+else
+    echo "=== cache.py ==="
+    python metabeta/evaluation/cache.py --data_id "$TAG" --partition "$PARTITION"
+fi
