@@ -555,14 +555,8 @@ class Approximator(nn.Module):
         summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
         n_samples: int = 1,
         detach_global: bool = False,
-        temperature_g: float = 1.0,
     ) -> Proposal:
-        """inference method: sample and apply conditional backward pass
-
-        temperature_g > 1 widens the global flow's base distribution (tempered proposal
-        for importance sampling); log_prob_g is the density of the tempered proposal, so
-        downstream IS weights p/q stay exact.
-        """
+        """inference method: sample and apply conditional backward pass"""
         assert n_samples > 0, 'n_samples must be positive'
         proposed = {}
 
@@ -577,12 +571,12 @@ class Approximator(nn.Module):
         if detach_global:
             with torch.no_grad():
                 samples_g, log_prob_g = self.posterior_g.sample(  # type: ignore
-                    n_samples, context=summary_g, mask=mask_g, temperature=temperature_g
+                    n_samples, context=summary_g, mask=mask_g
                 )
             samples_g = samples_g.detach()
         else:
             samples_g, log_prob_g = self.posterior_g.sample(  # type: ignore
-                n_samples, context=summary_g, mask=mask_g, temperature=temperature_g
+                n_samples, context=summary_g, mask=mask_g
             )
         proposed['global'] = {'samples': samples_g, 'log_prob': log_prob_g}
         if self.analytical_local_posterior:
@@ -619,11 +613,8 @@ class Approximator(nn.Module):
         data,
         summaries=None,
         n_samples=1,
-        temperature_g: float = 1.0,
     ) -> Proposal:
-        return self.backward(
-            data, summaries=summaries, n_samples=n_samples, temperature_g=temperature_g
-        )
+        return self.backward(data, summaries=summaries, n_samples=n_samples)
 
 
 # =============================================================================

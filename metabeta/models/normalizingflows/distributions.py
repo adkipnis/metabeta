@@ -64,27 +64,16 @@ class BaseDist(nn.Module):
             log_scale = log_scale + delta[..., self.d_data :]
         return loc, F.softplus(log_scale) + 1e-6
 
-    def _dist(
-        self, context: torch.Tensor | None = None, temperature: float = 1.0
-    ) -> D.Distribution:
+    def _dist(self, context: torch.Tensor | None = None) -> D.Distribution:
         loc, scale = self._params(context)
-        if temperature != 1.0:
-            scale = scale * temperature
         if self.family == 'student':
             return D.StudentT(F.softplus(self._log_df) + 3.0, loc, scale)
         return D.Normal(loc, scale)
 
-    def sample(
-        self,
-        shape: tuple[int, ...],
-        context: torch.Tensor | None = None,
-        temperature: float = 1.0,
-    ) -> torch.Tensor:
+    def sample(self, shape: tuple[int, ...], context: torch.Tensor | None = None) -> torch.Tensor:
         # shape = (*batch_dims, d_data)
         # Sample a zero-mean unit variate and apply loc/scale so loc/scale broadcast correctly
         # regardless of whether they have context-induced batch dims.
-        # temperature > 1 widens the base (tempered proposal for importance sampling);
-        # pair with logProb(..., temperature=...) so reported densities match.
         with torch.no_grad():
             loc, scale = self._params(context)
             if self.family == 'student':
@@ -92,15 +81,10 @@ class BaseDist(nn.Module):
                 z = D.StudentT(df).sample(shape[:-1])  # (*batch_dims, d_data), df broadcasts
             else:
                 z = torch.randn(shape, device=loc.device, dtype=loc.dtype)
-            return loc + scale * temperature * z
+            return loc + scale * z
 
-    def logProb(
-        self,
-        x: torch.Tensor,
-        context: torch.Tensor | None = None,
-        temperature: float = 1.0,
-    ) -> torch.Tensor:
-        return self._dist(context, temperature=temperature).log_prob(x)
+    def logProb(self, x: torch.Tensor, context: torch.Tensor | None = None) -> torch.Tensor:
+        return self._dist(context).log_prob(x)
 
 
 # --------------------------------------------------------

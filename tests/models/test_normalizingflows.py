@@ -233,15 +233,14 @@ def test_coupling_flow(batch, context, subnet_kwargs, transform_cfg, n_blocks):
     assert torch.isfinite(log_prob).all(), 'anomaly in log_prob'
 
 
-@pytest.mark.parametrize('temperature', [1.0, 2.0])
-def test_sample_logprob_consistency(batch, context, subnet_kwargs, transform_cfg, temperature):
+def test_sample_logprob_consistency(batch, context, subnet_kwargs, transform_cfg):
     """sample()'s reported log-prob must equal logProb() re-evaluated at the samples.
 
     Regression test for the log-det sign bug fixed 2026-07-28: sample() assembled the
     density with the inverse-direction log-det un-negated, so its log-prob differed from
     the true (forward-pass) density by -2*log|det dz/dx| — the older tests validated the
     forward log-det numerically and inverse() only via reconstruction, so this path was
-    uncovered. Also covers the tempered-proposal path (temperature > 1).
+    uncovered.
     """
     transform, rq_kwargs = transform_cfg
     x, mask = random_mask(batch)
@@ -262,12 +261,10 @@ def test_sample_logprob_consistency(batch, context, subnet_kwargs, transform_cfg
 
     n_samples = 16
     with torch.no_grad():
-        x_samp, log_prob = model.sample(
-            n_samples, context=context, mask=mask, temperature=temperature
-        )
+        x_samp, log_prob = model.sample(n_samples, context=context, mask=mask)
         ctx = context.unsqueeze(-2).expand(*context.shape[:-1], n_samples, context.shape[-1])
         m = mask.unsqueeze(-2).expand(*x_samp.shape)
-        log_prob_re = model.logProb(x_samp, context=ctx, mask=m, temperature=temperature)
+        log_prob_re = model.logProb(x_samp, context=ctx, mask=m)
 
     assert torch.isfinite(x_samp).all(), 'anomaly in samples'
     # rows whose mask is fully empty are skipped by sample() (log_prob 0); compare the rest

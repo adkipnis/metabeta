@@ -203,10 +203,9 @@ class CouplingFlow(nn.Module):
         log_det: torch.Tensor,
         mask: torch.Tensor | None = None,
         context: torch.Tensor | None = None,
-        temperature: float = 1.0,
     ) -> torch.Tensor:
         """joint log density of normalized target"""
-        log_prob = self.base_dist.logProb(z, context=context, temperature=temperature)
+        log_prob = self.base_dist.logProb(z, context=context)
         if mask is not None:
             log_prob *= mask
         return log_prob.sum(dim=-1) + log_det
@@ -216,19 +215,15 @@ class CouplingFlow(nn.Module):
         x: torch.Tensor,
         context: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
-        temperature: float = 1.0,
     ) -> torch.Tensor:
-        """used for forward KL Loss (aka NLL); temperature evaluates the tempered density"""
-        return self._logProb(
-            *self.forward(x, context, mask), context=context, temperature=temperature
-        )
+        """used for forward KL Loss (aka NLL)"""
+        return self._logProb(*self.forward(x, context, mask), context=context)
 
     def sample(
         self,
         n_samples: int,
         context: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
-        temperature: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
 
         # determine shape
@@ -250,9 +245,7 @@ class CouplingFlow(nn.Module):
             mask_z = None
 
         # sample from base
-        z = self.base_dist.sample(shape, context=context, temperature=temperature).to(
-            device=self.device, dtype=self.dtype
-        )
+        z = self.base_dist.sample(shape, context=context).to(device=self.device, dtype=self.dtype)
 
         if mask_z is None or torch.compiler.is_compiling():
             # compiled path: full-tensor ops, no dynamic shapes from nonzero
@@ -260,7 +253,7 @@ class CouplingFlow(nn.Module):
                 z = z * mask_z
             x, log_det, _ = self.inverse(z, context, mask_z)
             # inverse() returns log|det dx/dz|; the density of x needs log|det dz/dx| = -log_det
-            return x, self._logProb(z, -log_det, mask_z, context=context, temperature=temperature)
+            return x, self._logProb(z, -log_det, mask_z, context=context)
 
         # eager path: skip fully-empty rows to avoid wasted compute on padding
         x = torch.zeros_like(z)
@@ -271,7 +264,5 @@ class CouplingFlow(nn.Module):
         mask_s = mask_z[non_empty]
         x[non_empty], log_det_s, _ = self.inverse(z_s, ctx_s, mask_s)
         # inverse() returns log|det dx/dz|; the density of x needs log|det dz/dx| = -log_det
-        log_prob[non_empty] = self._logProb(
-            z_s, -log_det_s, mask_s, context=ctx_s, temperature=temperature
-        )
+        log_prob[non_empty] = self._logProb(z_s, -log_det_s, mask_s, context=ctx_s)
         return x, log_prob
