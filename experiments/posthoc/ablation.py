@@ -4,6 +4,10 @@ Conditions (Normal)
 -------------------
 raw          : raw flow samples
 is           : global IS with PSIS
+isFull       : joint IS with PSIS — full=True adds the rfx prior and local log q to the
+               weight, so it targets the exact joint posterior; expected to degenerate as
+               the rfx dimension (m × q) grows, but is a valid candidate now that the
+               2026-07-28 log-det fix makes log q_l trustworthy
 isMarginal   : Rao-Blackwellised marginal SNIS (Normal only) — exact marginal weights with
                correlated Σ_rfx + LKJ prior, rfx redrawn from the exact conditional
 isLaplace    : Laplace analog of isMarginal (Bernoulli/Poisson only) — nAGQ=1-style
@@ -16,6 +20,11 @@ imhMarginal  : IMH mode='marginal' (Normal, Rao-Blackwellised) or 'global' (othe
                was tried too and was worse (acceptance collapses with many groups). Neither
                is a real fix — see metropolis.py's "Findings" docstring section for the
                root-cause analysis (argmax chain init, inconsistent marginal target).
+               NB: those findings predate the 2026-07-28 log-det fix (log q entered every
+               IMH weight), so IMH is being re-evaluated in the post-fix ablation.
+imhGlobal    : IMH mode='global' on Normal (same biased pseudo-target as 'is'); for
+               non-Normal families this is already what imhMarginal falls back to, so the
+               condition is Normal-only.
 svgd         : SVGD with per-dim bandwidth + cosine LR decay — opt in with --include-svgd,
                off by default (too slow to be practically useful: ~40s/dataset, and gives
                a fraction of a nat of marginal-log-p improvement over the flow samples it starts
@@ -101,7 +110,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--batch-size', type=int, default=4, help='sub-batch size for torch-based methods')
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
     p.add_argument('--n-samples', type=int, default=1000, help='flow samples for torch-based methods (raw/is/svgd); IMH uses its own fixed count')
-    p.add_argument('--skip', nargs='+', default=[], choices=['raw', 'is', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'svgd', 'coldNuts', 'warmNuts'], help='conditions to skip (e.g. --skip is)')
+    p.add_argument('--skip', nargs='+', default=[], choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'svgd', 'coldNuts', 'warmNuts'], help='conditions to skip (e.g. --skip is)')
     p.add_argument('--include-svgd', action='store_true', help='also run the (slow) SVGD condition')
     p.add_argument('--include-warmnuts', action='store_true', help='also run the (slow) warm-started NUTS condition')
     return p.parse_args()
@@ -336,13 +345,13 @@ def _printWeightHealth(proposal):
     )
 
 
-def runIS(proposals, batches, full_batch, lf, marginal=False, rb_redraw=False):
+def runIS(proposals, batches, full_batch, lf, full=False, marginal=False, rb_redraw=False):
     out = []
     with torch.no_grad():
         for p, batch in zip(proposals, batches):
             sampler = ImportanceSampler(
                 batch,
-                full=False,
+                full=full,
                 corr_prior=True,
                 marginal=marginal,
                 rb_redraw=rb_redraw,
@@ -534,7 +543,16 @@ def main() -> None:
     args = setup()
     models = buildModels(args.families, args.sizes, args.prefix)
 
-    conditions = ['raw', 'is', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal']
+    conditions = [
+        'raw',
+        'is',
+        'isFull',
+        'isMarginal',
+        'isLaplace',
+        'rbAttach',
+        'imhMarginal',
+        'imhGlobal',
+    ]
     if args.include_svgd:
         conditions.append('svgd')
     if args.split == 'test':
@@ -603,6 +621,8 @@ def main() -> None:
                     continue  # exact marginal requires the Normal likelihood
                 if cond in ('isLaplace', 'rbAttach') and lf == 0:
                     continue  # Normal has the exact marginal — Laplace is for GLMMs
+                if cond == 'imhGlobal' and lf != 0:
+                    continue  # non-Normal imhMarginal already runs mode='global'
                 print('=' * 65)
                 print(f'  {cond}')
                 print('=' * 65)
@@ -619,6 +639,8 @@ def main() -> None:
                     runRaw(proposals, full_batch, lf, summary_cache=mb_summary)
                 elif cond == 'is':
                     runIS(proposals, batches, full_batch, lf)
+                elif cond == 'isFull':
+                    runIS(proposals, batches, full_batch, lf, full=True)
                 elif cond == 'isMarginal':
                     runIS(proposals, batches, full_batch, lf, marginal=True, rb_redraw=True)
                 elif cond == 'isLaplace':
@@ -628,6 +650,8 @@ def main() -> None:
                 elif cond == 'imhMarginal':
                     imh_mode = 'marginal' if lf == 0 else 'global'
                     runIMH(imh_mode, imh_proposals, imh_batches, full_batch, lf)
+                elif cond == 'imhGlobal':
+                    runIMH('global', imh_proposals, imh_batches, full_batch, lf)
                 elif cond == 'svgd':
                     runSVGD(proposals, batches, full_batch, lf)
                 elif cond == 'coldNuts':
