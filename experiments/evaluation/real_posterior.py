@@ -323,20 +323,13 @@ def _sliceSamples(p: Proposal, s: int) -> Proposal:
     return out
 
 
-def refineProposal(
+def _refineChunk(
     method: str,
     base: Proposal,
     batch: dict[str, torch.Tensor],
     lf: int,
 ) -> Proposal:
-    """Refine the (rescaled) MB proposal ``base`` in the (rescaled) ``batch`` space.
-
-    The SNIS/Laplace families return PSIS-smoothed IS weights on proposal.is_results;
-    the IMH family returns an equal-weight chain. Both are handled by the weight-aware
-    comparison metrics (computeCorr / computeSigmaRatio / computeRankMAD default to
-    uniform weights, so raw MB / ADVI / NUTS / IMH rows are unchanged). Mirrors the
-    sampler wiring in experiments/posthoc/ablation.py.
-    """
+    """Refine a single sub-batch of datasets (see refineProposal for the chunking wrapper)."""
     B = base.samples_g.shape[0]
 
     if method in SNIS_METHODS:
@@ -390,6 +383,39 @@ def refineProposal(
     raise ValueError(f'unknown refinement method: {method}')
 
 
+def refineProposal(
+    method: str,
+    base: Proposal,
+    batch: dict[str, torch.Tensor],
+    lf: int,
+    batch_size: int,
+) -> Proposal:
+    """Refine the (rescaled) MB proposal ``base`` in the (rescaled) ``batch`` space.
+
+    The SNIS/Laplace families return PSIS-smoothed IS weights on proposal.is_results;
+    the IMH family returns an equal-weight chain. Both are handled by the weight-aware
+    comparison metrics (computeCorr / computeSigmaRatio / computeRankMAD default to
+    uniform weights, so raw MB / ADVI / NUTS / IMH rows are unchanged). Mirrors the
+    sampler wiring in experiments/posthoc/ablation.py.
+
+    Refinement is sub-batched over datasets in chunks of ``batch_size``: the marginal
+    likelihood materialises a (b, max_m, max_n, s) tensor, so processing the whole batch
+    at once OOMs on large (m, n) regimes. Each dataset's PSIS/softmax normalisation and MH
+    chain are per-dataset independent, so chunking is exact.
+    """
+    B = base.samples_g.shape[0]
+    if batch_size >= B:
+        return _refineChunk(method, base, batch, lf)
+
+    chunks: list[Proposal] = []
+    for start in range(0, B, batch_size):
+        end = min(start + batch_size, B)
+        chunks.append(
+            _refineChunk(method, base.slice_b(start, end), sliceBatch(batch, start, end), lf)
+        )
+    return concatProposalsBatch(chunks)
+
+
 def loadOrRefine(
     method: str,
     base_proposal: Proposal,
@@ -402,6 +428,7 @@ def loadOrRefine(
     lf: int,
     rescale: bool,
     mask: np.ndarray | None,
+    batch_size: int,
 ) -> tuple[Proposal, float]:
     """Cached wrapper around refineProposal; cache is keyed by method/checkpoint/rescale.
 
@@ -424,7 +451,7 @@ def loadOrRefine(
         logger.info('No usable %s sample cache at %s; refining.', method, cache_path)
 
     t0 = time.perf_counter()
-    proposal = refineProposal(method, base_proposal, batch, lf)
+    proposal = refineProposal(method, base_proposal, batch, lf, batch_size)
     refine_seconds = time.perf_counter() - t0
     saveProposalCache(
         cache_path,
@@ -945,6 +972,7 @@ def evaluateReal(
             lf,
             rescale,
             conv_mask,
+            batch_size,
         )
         summary_ref = loadOrComputeSummary(
             p_ref,
