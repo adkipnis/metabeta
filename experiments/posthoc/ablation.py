@@ -75,7 +75,7 @@ from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.warmnuts import _stackProposals
 from metabeta.utils.config import ApproximatorConfig
-from metabeta.utils.dataloader import Collection, collateGrouped
+from metabeta.utils.dataloader import Collection, collateGrouped, toDevice
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.padding import unpad
@@ -97,6 +97,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--families', nargs='+', default=['normal', 'bernoulli', 'poisson'], choices=['normal', 'bernoulli', 'poisson'], help='likelihood families to evaluate')
     p.add_argument('--split', choices=['valid', 'test'], default='valid', help='npz split to evaluate on; only "test" has coldNuts fits')
     p.add_argument('--prefix', type=str, default='best', help='checkpoint prefix to load and to match evaluate.py MB caches against')
+    p.add_argument('--device', type=str, default='cpu', help='device for flow sampling (posthoc methods and summaries stay on cpu)')
     p.add_argument('--batch-size', type=int, default=4, help='sub-batch size for torch-based methods')
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
     p.add_argument('--n-samples', type=int, default=1000, help='flow samples for torch-based methods (raw/is/svgd); IMH uses its own fixed count')
@@ -174,13 +175,19 @@ def collectProposals(
     items: list,
     n_samples: int,
     batch_size: int,
+    device: str = 'cpu',
 ) -> tuple[list, list]:
-    """Draw rescaled flow proposals in sub-batches; return (proposals, batches)."""
+    """Draw rescaled flow proposals in sub-batches; return (proposals, batches).
+
+    Sampling runs on ``device``; proposals and batches are returned on cpu, where the
+    posthoc methods and summaries run.
+    """
     proposals, batches = [], []
     with torch.no_grad():
         for i in range(0, len(items), batch_size):
             batch = collateGrouped(items[i : i + batch_size])
-            proposal = model.estimate(batch, n_samples=n_samples)
+            proposal = model.estimate(toDevice(batch, device), n_samples=n_samples)
+            proposal.to('cpu')
             proposal.rescale(batch['sd_y'])
             batch = rescaleData(batch)
             proposals.append(proposal)
@@ -281,6 +288,7 @@ def loadOrSampleProposals(
     ckpt: Path,
     prefix: str,
     batch_size: int,
+    device: str = 'cpu',
 ) -> tuple[list, list]:
     """Reuse evaluate.py's cached MB samples when a fresh, large-enough cache exists."""
     cache = findMbCache(data_dir, split, run_name, n_samples, prefix)
@@ -290,7 +298,7 @@ def loadOrSampleProposals(
         except (KeyError, ValueError) as exc:
             # e.g. version-1 caches written before the 2026-07-28 log-det fix
             print(f'  MB samples (n={n_samples}): invalid cache {cache.name} ({exc}); sampling')
-            return collectProposals(model, items, n_samples, batch_size)
+            return collectProposals(model, items, n_samples, batch_size, device)
         if merged.samples_g.shape[0] >= len(items):
             batches = buildBatches(items, batch_size)
             proposals = splitMergedProposal(merged, batches, n_samples)
@@ -303,7 +311,7 @@ def loadOrSampleProposals(
     else:
         reason = 'no matching cache' if cache is None else f'stale cache {cache.name}'
         print(f'  MB samples (n={n_samples}): {reason}; sampling from model')
-    return collectProposals(model, items, n_samples, batch_size)
+    return collectProposals(model, items, n_samples, batch_size, device)
 
 
 def runRaw(proposals, full_batch, lf, summary_cache=None):
@@ -542,6 +550,7 @@ def main() -> None:
         buf = io.StringIO()
         with contextlib.redirect_stdout(_Tee(sys.stdout, buf)):
             model, epoch = loadModel(cfg['ckpt'])
+            model.to(args.device)
             print(f'\n{"#" * 70}')
             print(
                 f'#  {cfg["label"]}  (epoch={epoch}  params={model.n_params:,}  '
@@ -572,6 +581,7 @@ def main() -> None:
                 cfg['ckpt'],
                 args.prefix,
                 args.batch_size,
+                args.device,
             )
             # IMH requires exactly N_CHAINS × N_STEPS samples — draw a dedicated set.
             imh_proposals, imh_batches = loadOrSampleProposals(
@@ -585,6 +595,7 @@ def main() -> None:
                 cfg['ckpt'],
                 args.prefix,
                 args.batch_size,
+                args.device,
             )
 
             for cond in conditions:
@@ -622,6 +633,7 @@ def main() -> None:
                 elif cond == 'coldNuts':
                     runNutsFromNpz(fit_npz, ds_list, tensor_batch, full_batch, lf)
                 elif cond == 'warmNuts':
+                    model.to('cpu')  # runWarmNuts feeds the cpu tensor_batch to model.estimate
                     runWarmNuts(model, tensor_batch, ds_list, lf)
                 print()
 
