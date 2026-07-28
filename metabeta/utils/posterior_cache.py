@@ -6,7 +6,9 @@ import torch
 
 from metabeta.utils.results import Proposal
 
-POSTERIOR_SAMPLE_CACHE_VERSION = 1
+# v2: caches written before the 2026-07-28 CouplingFlow.sample() log-det sign fix carry
+# corrupted log_prob_g/log_prob_l; bumping the version rejects them everywhere at load.
+POSTERIOR_SAMPLE_CACHE_VERSION = 2
 
 
 def posteriorSampleCacheName(
