@@ -80,22 +80,15 @@ families:
 # Default post-hoc posterior-refinement method per likelihood family.
 # Applied on top of the raw MB flow posterior by
 # experiments/evaluation/real_posterior.py (used when --methods is not given).
-# `default` is the recommended production choice; `alt` lists recommended
-# alternatives. Methods must produce equal-weight samples for real_posterior's
-# comparison metrics — the SNIS-family (is/isFull/isMarginal/isLaplace) are
-# resampled via SIR to equal weight, and the IMH-family return an equal-weight
-# chain. Keyed by likelihood_family id (0=normal, 1=bernoulli, 2=poisson).
+# Keyed by likelihood_family id (0=normal, 1=bernoulli, 2=poisson).
 # Use `null` to disable (only the raw MB posterior is evaluated).
 posthoc:
   0:
-    default: isMarginal   # Rao-Blackwellised marginal SNIS ≈ NUTS on Normal
-    alt: [imhMarginal]
+    default: imhMarginal  # matches NUTS on all metrics/sizes on real data (see experiments/results)
   1:
     default: null         # TODO: choose Bernoulli default (e.g. isFull / isLaplace / imhGlobal)
-    alt: []
   2:
     default: null         # TODO: choose Poisson default
-    alt: []
 
 # CLI-only parameters (never have defaults in YAML configs)
 cli_only:
