@@ -285,7 +285,12 @@ def loadOrSampleProposals(
     """Reuse evaluate.py's cached MB samples when a fresh, large-enough cache exists."""
     cache = findMbCache(data_dir, split, run_name, n_samples, prefix)
     if cache is not None and _cacheFresh(cache, data_path, ckpt):
-        merged, _ = loadProposalCache(cache)
+        try:
+            merged, _ = loadProposalCache(cache)
+        except (KeyError, ValueError) as exc:
+            # e.g. version-1 caches written before the 2026-07-28 log-det fix
+            print(f'  MB samples (n={n_samples}): invalid cache {cache.name} ({exc}); sampling')
+            return collectProposals(model, items, n_samples, batch_size)
         if merged.samples_g.shape[0] >= len(items):
             batches = buildBatches(items, batch_size)
             proposals = splitMergedProposal(merged, batches, n_samples)
