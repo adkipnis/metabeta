@@ -548,6 +548,53 @@ def logMarginalLikelihoodNormal(
     return (ll_i * mask_m).sum(dim=1)  # (b, s)
 
 
+def safeCholesky(
+    M: torch.Tensor,  # (..., q, q)
+    jitter: float = 1e-6,
+    max_tries: int = 3,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Batched Cholesky that never raises: jitter escalation, then eigh repair.
+
+    Torch analog of the numpy fallback in simulation/laplace.py: symmetrize,
+    retry with scale-aware jitter (×10 per round), eigenvalue-floor repair via
+    eigh, and as a last resort the identity. Non-finite or identity-fallback
+    elements are flagged in the returned ``degenerate`` mask (..., ) — callers
+    must treat their factors as placeholders, not approximations of M.
+    """
+    q = M.shape[-1]
+    eye = torch.eye(q, dtype=M.dtype, device=M.device)
+    finite = torch.isfinite(M).all(-1).all(-1)  # (...,)
+    M = torch.where(finite[..., None, None], 0.5 * (M + M.mT), eye)
+    scale = M.diagonal(dim1=-2, dim2=-1).abs().mean(-1).clamp(min=1.0)  # (...,)
+
+    attempt = M + jitter * eye
+    chol, info = torch.linalg.cholesky_ex(attempt)
+    bad = info != 0
+    for i in range(max_tries):
+        if not bad.any():
+            break
+        jit = (jitter * scale * 10.0**i)[..., None, None] * eye
+        attempt = torch.where(bad[..., None, None], attempt + jit, attempt)
+        chol, info = torch.linalg.cholesky_ex(attempt)
+        bad = info != 0
+
+    if bad.any():
+        # eigenvalue-floor repair, only on the still-failing elements
+        flat = attempt.reshape(-1, q, q)
+        idx = bad.reshape(-1).nonzero().squeeze(-1)
+        sub = flat[idx]
+        vals, vecs = torch.linalg.eigh(0.5 * (sub + sub.mT))
+        floor = (jitter * scale.reshape(-1)[idx]).unsqueeze(-1)
+        repaired = vecs @ torch.diag_embed(vals.clamp(min=floor)) @ vecs.mT
+        flat[idx] = 0.5 * (repaired + repaired.mT)
+        chol, info = torch.linalg.cholesky_ex(flat.reshape(M.shape))
+        bad = info != 0
+        if bad.any():
+            chol = torch.where(bad[..., None, None], eye.expand_as(chol), chol)
+
+    return chol, bad | ~finite
+
+
 def sampleRfxConditionalNormal(
     ffx: torch.Tensor,  # (b, s, d)
     sigma_rfx: torch.Tensor,  # (b, s, q)
@@ -597,10 +644,16 @@ def sampleRfxConditionalNormal(
     # M = Σ_rfx⁻¹ + ZᵀZ / σ²_eps  (b, m, s, q, q) — posterior precision
     s2e = sigma_eps.pow(2)  # (b, s)
     M = Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]
-    chol_M = torch.linalg.cholesky(M + 1e-6 * eye)  # (b, m, s, q, q)
+    # extreme flow samples (σ_eps ≈ 0 / huge σ_rfx) can make M numerically non-PD
+    # or non-finite in float32; those samples carry zero IS weight anyway
+    # (logMarginalLikelihoodNormal fails the same factorisation → -inf ll), so a
+    # placeholder N(0, I) draw for them never influences downstream results.
+    chol_M, degenerate = safeCholesky(M)  # (b, m, s, q, q), (b, m, s)
 
     # Posterior mean: μ = M⁻¹ (Zᵀr / σ²_eps)
     rhs = Ztr / s2e[:, None, :, None]  # (b, m, s, q)
+    if degenerate.any():
+        rhs = torch.where(degenerate[..., None], torch.zeros_like(rhs), rhs)
     post_mean = torch.cholesky_solve(rhs.unsqueeze(-1), chol_M).squeeze(-1)  # (b, m, s, q)
 
     # Sample: rfx = μ + chol_M⁻ᵀ z  where z ~ N(0, I)
