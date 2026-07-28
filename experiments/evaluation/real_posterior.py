@@ -1054,9 +1054,13 @@ def saveTables(
     rows_by_regime: dict[str, list[dict]],
     outdir: Path,
     run_name: str,
+    prefix: str,
     dp: int = 2,
 ) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
+
+    # include the checkpoint prefix so latest/best runs of the same checkpoint don't clobber
+    stem = f'{run_name}_{prefix}'
 
     fmt_md = lambda v: _fmtMd(v, dp)
     fmt_tex = lambda v: _fmtTex(v, dp)
@@ -1072,8 +1076,8 @@ def saveTables(
         tablefmt='pipe',
         stralign='right',
     )
-    md_path = outdir / f'real_{run_name}.md'
-    md_path.write_text(f'# Real-data evaluation: {run_name}\n\n{md_table}\n')
+    md_path = outdir / f'real_{stem}.md'
+    md_path.write_text(f'# Real-data evaluation: {stem}\n\n{md_table}\n')
     logger.info('Saved Markdown → %s', md_path)
 
     # --- LaTeX ---
@@ -1096,7 +1100,7 @@ def saveTables(
             )
             lines.append(rf'      {regime_cell} & {cells} \\')
     lines += [r'    \bottomrule', r'\end{tabular}', '']
-    tex_path = outdir / f'real_{run_name}.tex'
+    tex_path = outdir / f'real_{stem}.tex'
     tex_path.write_text('\n'.join(lines))
     logger.info('Saved LaTeX → %s', tex_path)
 
@@ -1173,7 +1177,7 @@ def main() -> None:
         '\n' + tabulate(md_rows, headers=['regime', 'method'] + HEADERS_MD[1:], tablefmt='simple')
     )
 
-    saveTables(rows_by_regime, Path(cfg.outdir), ckpt_dir.name, dp=dp)
+    saveTables(rows_by_regime, Path(cfg.outdir), ckpt_dir.name, cfg.prefix, dp=dp)
 
 
 if __name__ == '__main__':
