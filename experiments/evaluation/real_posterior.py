@@ -68,6 +68,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--device',           type=str, default='cpu')
     parser.add_argument('--n_samples',        type=int, default=1000)
     parser.add_argument('--batch_size',       type=int, default=8)
+    parser.add_argument('--summary_chunk_size', type=int, default=4,
+                        help='Datasets per predictive/LOO summary chunk; lower to bound peak '
+                             'memory (NUTS s=4000 tensors are large). Try 1-2 for large/huge.')
     parser.add_argument('--seed',             type=int, default=0)
     parser.add_argument('--outdir',           type=str, default=str(OUT_DIR))
     parser.add_argument('--verbosity',        type=int, default=1)
@@ -275,12 +278,15 @@ def loadOrComputeSummary(
     prefix: str | None = None,
     n_samples: int | None = None,
     seed: int | None = None,
+    summary_chunk_size: int = 4,
 ) -> EvaluationSummary:
     """Cached wrapper around getSummary; cache lives next to the data (sibling of test.fit.npz).
 
     ``mask`` identifies which datasets of the full test file this summary covers, so the
     NUTS-converged (and, for ADVI, additionally fit-succeeded) subset is folded into the key.
     MB additionally keys on checkpoint/prefix/n_samples/seed and invalidates on the checkpoint.
+    ``summary_chunk_size`` bounds peak memory of the predictive/LOO block (does not affect the
+    result, so it is not part of the cache key).
     """
     is_mb = method == 'mb'
     cache_path = _summaryCachePath(
@@ -297,7 +303,13 @@ def loadOrComputeSummary(
     else:
         logger.info('No usable %s summary cache at %s; computing.', method, cache_path)
 
-    summary = getSummary(proposal, batch, likelihood_family=lf, compute_pred_coverage=False)
+    summary = getSummary(
+        proposal,
+        batch,
+        likelihood_family=lf,
+        compute_pred_coverage=False,
+        dataset_chunk_size=summary_chunk_size,
+    )
     summary.save(cache_path)
     logger.info('Saved %s summary to %s', method, cache_path)
     return summary
@@ -540,6 +552,7 @@ def evaluateReal(
     ckpt_dir: Path,
     prefix: str,
     seed: int,
+    summary_chunk_size: int = 4,
 ) -> list[dict]:
     col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q)
     B_total = len(col)
@@ -601,12 +614,29 @@ def evaluateReal(
         prefix=prefix,
         n_samples=n_samples,
         seed=seed,
+        summary_chunk_size=summary_chunk_size,
     )
     summary_nuts = loadOrComputeSummary(
-        proposal_nuts, batch, data_path, 'nuts', conv_full, lf, rescale
+        proposal_nuts,
+        batch,
+        data_path,
+        'nuts',
+        conv_full,
+        lf,
+        rescale,
+        summary_chunk_size=summary_chunk_size,
     )
     summary_advi = (
-        loadOrComputeSummary(proposal_advi, advi_batch, data_path, 'advi', advi_full, lf, rescale)
+        loadOrComputeSummary(
+            proposal_advi,
+            advi_batch,
+            data_path,
+            'advi',
+            advi_full,
+            lf,
+            rescale,
+            summary_chunk_size=summary_chunk_size,
+        )
         if proposal_advi is not None
         else None
     )
@@ -798,6 +828,7 @@ def main() -> None:
             ckpt_dir=ckpt_dir,
             prefix=cfg.prefix,
             seed=cfg.seed,
+            summary_chunk_size=cfg.summary_chunk_size,
         )
         if rows:
             rows_by_regime[regime] = rows
