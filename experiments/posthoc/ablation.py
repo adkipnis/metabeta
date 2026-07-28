@@ -100,6 +100,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--batch-size', type=int, default=4, help='sub-batch size for torch-based methods')
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
     p.add_argument('--n-samples', type=int, default=1000, help='flow samples for torch-based methods (raw/is/svgd); IMH uses its own fixed count')
+    p.add_argument('--skip', nargs='+', default=[], choices=['raw', 'is', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'svgd', 'coldNuts', 'warmNuts'], help='conditions to skip (e.g. --skip is)')
     p.add_argument('--include-svgd', action='store_true', help='also run the (slow) SVGD condition')
     p.add_argument('--include-warmnuts', action='store_true', help='also run the (slow) warm-started NUTS condition')
     return p.parse_args()
@@ -527,6 +528,7 @@ def main() -> None:
         conditions.append('coldNuts')
     if args.include_warmnuts:
         conditions.append('warmNuts')
+    conditions = [c for c in conditions if c not in args.skip]
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
