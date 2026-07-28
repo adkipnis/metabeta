@@ -39,9 +39,10 @@ along with metabeta/posthoc/laplace.py and metabeta/posthoc/coordinate.py, which
 were deprecated in 3c5b7af2.
 
 By default this evaluates every (family, size) combination in BEST_SEEDS on the
-*entire* validation split (valid.npz), capped by --n-datasets if given. Run
-functions are imported from the individual eval scripts; see those files for
-per-method settings (e.g. IMH chains/steps, NUTS tune/draws).
+*entire* validation split (valid.npz), capped by --n-datasets if given. IMH is
+self-contained (settings below); the opt-in svgd/warmNuts conditions import their
+run functions from benchmarks/ lazily, since that directory is gitignored and
+absent on cluster clones.
 
 Data loading uses Collection + collateGrouped so that per-dataset unpadded
 dicts are available for NUTS-based methods.
@@ -60,6 +61,7 @@ import contextlib
 import io
 import re
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -67,14 +69,13 @@ import torch
 
 from metabeta.utils.experiments import DATA_DIR, REPO_ROOT
 
-# Make benchmark method wrappers importable without installing benchmarks as a package.
+# Make the opt-in benchmark wrappers (svgd/warmNuts) importable without installing
+# benchmarks as a package; imported lazily in main() since benchmarks/ is gitignored
+# and absent on cluster clones.
 sys.path.insert(0, str(REPO_ROOT / 'benchmarks'))
 # Reuse the checkpoint-seed mapping maintained for published joint checkpoints.
 sys.path.insert(0, str(REPO_ROOT / 'scripts'))
 
-from eval_imh import runIMH, N_SAMPLES as IMH_N_SAMPLES               # noqa: E402
-from eval_svgd import runSVGD                                          # noqa: E402
-from eval_warmnuts import runWarmNuts                                  # noqa: E402
 from build_ckpt import BEST_SEEDS, _ckpt_dir                           # noqa: E402
 
 from metabeta.evaluation.summary import getSummary, summaryTable
@@ -82,6 +83,7 @@ from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import EvaluationSummary
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
+from metabeta.posthoc.metropolis import MetropolisSampler
 from metabeta.posthoc.warmnuts import _stackProposals
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice
@@ -365,6 +367,42 @@ def runIS(proposals, batches, full_batch, lf, full=False, marginal=False, rb_red
     print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
 
 
+# IMH settings: 4 × 250 = 1000 samples so IMH reuses the same cached 1000-sample
+# flow pool as the SNIS conditions (evaluate.py's *.mb.*_s1000_* caches); burnin
+# follows the MetropolisSampler default.
+IMH_N_CHAINS = 4
+IMH_N_STEPS = 250
+IMH_BURNIN = 25
+IMH_N_SAMPLES = IMH_N_CHAINS * IMH_N_STEPS
+
+
+def runIMH(mode, proposals, batches, full_batch, lf):
+    imh_proposals, accept_rates = [], []
+    t0 = time.perf_counter()
+    for p, batch in zip(proposals, batches):
+        sampler = MetropolisSampler(
+            batch,
+            n_chains=IMH_N_CHAINS,
+            n_steps=IMH_N_STEPS,
+            burnin=IMH_BURNIN,
+            mode=mode,
+            likelihood_family=lf,
+        )
+        p_out, diag = sampler(p)
+        imh_proposals.append(p_out)
+        accept_rates.append(diag['accept_rate'])
+    t1 = time.perf_counter()
+
+    accept = torch.cat(accept_rates, dim=0)
+    print(
+        f'  Acceptance  mean={accept.mean():.3f}  '
+        f'min={accept.min():.3f}  max={accept.max():.3f}  '
+        f'time={t1 - t0:.1f}s ({(t1 - t0) / full_batch["y"].shape[0]:.1f}s/dataset)'
+    )
+    proposal = concatProposalsBatch(imh_proposals)
+    print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
+
+
 def runISLaplace(proposals, batches, full_batch, lf, attach_only=False):
     out = []
     with torch.no_grad():
@@ -542,6 +580,13 @@ def _renderTerminal(text: str) -> str:
 def main() -> None:
     args = setup()
     models = buildModels(args.families, args.sizes, args.prefix)
+
+    # benchmarks/ is gitignored (absent on cluster clones) — only require it for
+    # the opt-in conditions that live there
+    if args.include_svgd:
+        from eval_svgd import runSVGD
+    if args.include_warmnuts:
+        from eval_warmnuts import runWarmNuts
 
     conditions = [
         'raw',
