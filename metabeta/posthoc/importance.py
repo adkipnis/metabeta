@@ -27,25 +27,29 @@ prior via corr_prior), `rb_redraw=True` re-draws rfx from the exact Normal-Norma
 conditional per weighted global sample (Rao-Blackwellisation), and dampening is no longer
 applied in the pareto branch.
 
+Resample-move (ResampleMoveSampler, added for the 2026-07 post-log-det-fix ablation):
+systematic resampling on the PSIS-smoothed marginal weights followed by K vectorized
+independence-MH rejuvenation sweeps with fresh flow proposals — converts weight
+degeneracy into actual correction instead of a uniform-weight fallback. Implemented
+because the huge model keeps tripping the pareto_k guardrail on ~42% of test datasets
+(and IMH's duplicate-heavy chains under-disperse the globals there).
+
 TODO
 ----
 - Target energy gap diagnostic: mean weighted `-log p̃(theta)` under the corrected samples
   minus the same quantity under a reference (e.g. NUTS) sample, when a reference is
   available — flags whether corrected samples land in the right density region, not just
   whether weights are stable (see Ko & Domke, arXiv:2605.26419, Section D.3/D.6).
-- Resample-move (postponed): systematic resampling on the marginal weights followed by
-  K = 2–4 vectorized independence-MH rejuvenation sweeps with fresh flow proposals —
-  converts weight degeneracy into actual correction instead of a uniform-weight fallback.
-  Only worth implementing if a meaningful fraction of datasets keeps tripping the
-  pareto_k guardrail after the marginal-SNIS fixes.
 """
 
 import argparse
 import math
+import time
 
 import arviz as az
 import torch
 from metabeta.models.approximator import Approximator
+from metabeta.utils.dataloader import toDevice
 from metabeta.utils.results import Proposal, joinProposals
 from metabeta.utils.regularization import dampen, corrLowerToUnconstrained, unconstrainedToCholesky
 from metabeta.utils.constants import hasSigmaEps
@@ -306,6 +310,105 @@ class ImportanceSampler:
         # get indices of these quantiles, drawing proportionally from w
         idx = torch.searchsorted(cdf, u, right=True).clamp(max=s - 1)
         return idx
+
+
+class ResampleMoveSampler:
+    """Resample-move correction: marginal SNIS → systematic resampling → K
+    independence-MH rejuvenation sweeps with fresh flow proposals.
+
+    Where plain marginal SNIS falls back to uniform weights when PSIS k exceeds
+    its threshold (i.e. applies no correction), this resamples from the
+    PSIS-smoothed weights and rejuvenates every particle with fresh flow
+    proposals: weight degeneracy becomes particle duplication, and the MH sweeps
+    (which leave the marginal posterior invariant) restore diversity. Unlike
+    IMH — whose low-acceptance chains duplicate samples and under-disperse the
+    globals — every rejuvenation proposal here is fresh, so K sweeps at
+    acceptance rate a leave only ≈ (1 − a)^K of particles unmoved.
+
+    Normal likelihood only (exact marginal weights); rfx are drawn from the
+    exact Normal-Normal conditional after the final sweep, as in rb_redraw.
+    """
+
+    def __init__(
+        self,
+        model: Approximator,
+        data_raw: dict[str, torch.Tensor],  # unrescaled batch, fed to model.estimate
+        data: dict[str, torch.Tensor],  # rescaled batch, target space of the weights
+        n_sweeps: int = 15,
+        likelihood_family: int = 0,
+        device: str = 'cpu',
+        eps: float = 1e-12,
+    ) -> None:
+        if likelihood_family != 0:
+            raise ValueError('resample-move requires the Normal likelihood (marginal weights)')
+        self.model = model
+        self.n_sweeps = n_sweeps
+        self.device = device
+        self.sd_y = data_raw['sd_y']
+        self.data_dev = toDevice(data_raw, device)
+        self._is = ImportanceSampler(
+            data, marginal=True, corr_prior=True, pareto=True, likelihood_family=0, eps=eps
+        )
+
+    def _logWeights(self, proposal: Proposal) -> torch.Tensor:
+        """Raw (unsmoothed) marginal log IS weights (b, s) — the MH target ratio."""
+        ll, lp = self._is.unnormalizedPosterior(proposal)
+        return ll + lp - proposal.log_prob_g
+
+    def _freshProposal(self, n_samples: int) -> Proposal:
+        with torch.no_grad():
+            fresh = self.model.estimate(self.data_dev, n_samples=n_samples)
+        fresh.to('cpu')
+        fresh.rescale(self.sd_y)
+        return fresh
+
+    def __call__(self, proposal: Proposal) -> tuple[Proposal, dict]:
+        t0 = time.perf_counter()
+        b, s = proposal.samples_g.shape[:2]
+
+        # initial resample from the PSIS-smoothed weights (raw weights drive the
+        # MH ratio below; smoothing only stabilises the resampling step)
+        lw = self._logWeights(proposal)  # (b, s)
+        log_w_np, pareto_k_np = az.psislw(lw)
+        w = torch.softmax(lw.new_tensor(log_w_np), dim=-1)
+        w = torch.where(torch.isfinite(w), w, 0)
+        self._is.n_sir = s
+        idx = self._is.getSirIndices(w)  # (b, s)
+        cur_g = torch.gather(
+            proposal.samples_g, 1, idx.unsqueeze(-1).expand(-1, -1, proposal.samples_g.shape[-1])
+        ).clone()
+        cur_lw = torch.gather(lw, 1, idx).clone()
+
+        # rejuvenation sweeps: one fresh independent proposal per particle
+        moved = torch.zeros_like(cur_lw, dtype=torch.bool)
+        acc_hist = []
+        for _ in range(self.n_sweeps):
+            fresh = self._freshProposal(s)
+            fresh_lw = self._logWeights(fresh)  # (b, s)
+            log_alpha = (fresh_lw - cur_lw).clamp(max=0.0)
+            accept = torch.rand_like(log_alpha).log() < log_alpha  # (b, s)
+            cur_g = torch.where(accept.unsqueeze(-1), fresh.samples_g, cur_g)
+            cur_lw = torch.where(accept, fresh_lw, cur_lw)
+            moved |= accept
+            acc_hist.append(accept.float().mean(-1))  # (b,)
+
+        # final rfx from the exact conditional given the rejuvenated globals
+        m = self._is.X.shape[1]
+        q = self._is.Z.shape[-1]
+        proposed = {
+            'global': {'samples': cur_g, 'log_prob': cur_g.new_zeros(b, s)},
+            'local': {'samples': cur_g.new_zeros(b, m, s, q), 'log_prob': cur_g.new_zeros(b, m, s)},
+        }
+        out = Proposal(proposed, has_sigma_eps=self._is.has_sigma_eps, d_corr=proposal.d_corr)
+        self._is._redrawRfx(out)
+
+        out.tpd = (proposal.tpd or 0.0) + (time.perf_counter() - t0)
+        diagnostics = {
+            'accept_rate': torch.stack(acc_hist, dim=-1),  # (b, n_sweeps)
+            'moved_frac': moved.float().mean(-1),  # (b,)
+            'pareto_k': lw.new_tensor(pareto_k_np),  # (b,)
+        }
+        return out, diagnostics
 
 
 def runIS(
