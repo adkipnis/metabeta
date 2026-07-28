@@ -6,6 +6,13 @@ outputs/data/{size}-{fam}-real/test.fit.npz, comparing MB and ADVI posteriors
 against NUTS as reference.  Since there are no ground-truth parameters, all
 metrics are relative to NUTS; only NUTS-converged datasets are included.
 
+Optionally layers post-hoc refinements on the raw MB flow posterior (extra
+``MB+<method>`` rows), using the same samplers as experiments/posthoc/ablation.py.
+Refined proposals are resampled/chained to equal weight so the unweighted
+comparison metrics stay valid (see refineProposal). The method(s) come from
+``--methods`` or, if omitted, the per-family default in metabeta/configs/presets.yaml
+(isMarginal for Normal); pass ``--methods`` with no values for raw MB only.
+
 Metrics (median ± MAD over datasets):
   r          — Pearson r of posterior means (method vs NUTS), pooled active params
   σ-ratio    — per-dataset median(std_method / std_NUTS) across active params
@@ -31,6 +38,9 @@ from tqdm import tqdm
 
 from metabeta.evaluation.summary import getSummary
 from metabeta.models.approximator import Approximator
+from metabeta.posthoc.importance import ImportanceSampler
+from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
+from metabeta.posthoc.metropolis import MetropolisSampler
 from metabeta.utils.dataloader import Collection, collateGrouped, sliceBatch, subsetBatch, toDevice
 from metabeta.utils.evaluation import EvaluationSummary, nutsConvergeMask, subsetProposal
 from metabeta.utils.results import Proposal, concatProposalsBatch
@@ -43,7 +53,7 @@ from metabeta.utils.posterior_cache import (
 )
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
-from metabeta.utils.templates import loadConfigFromCheckpoint
+from metabeta.utils.templates import PRESETS, loadConfigFromCheckpoint
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, loadApproximator
 
 OUT_DIR = RESULTS_DIR
@@ -51,6 +61,31 @@ OUT_DIR = RESULTS_DIR
 logger = logging.getLogger(__name__)
 
 _FAM_LETTER = {0: 'n', 1: 'b', 2: 'p'}
+
+# Post-hoc refinement methods that can be layered on the raw MB flow posterior.
+# The SNIS family is resampled (SIR) to equal weight; the IMH family returns an
+# equal-weight chain — both required because real_posterior's comparison metrics
+# compute unweighted sample statistics (see refineProposal).
+SNIS_METHODS = ('is', 'isFull', 'isMarginal')          # ImportanceSampler
+LAPLACE_METHODS = ('isLaplace', 'rbAttach')            # LaplaceImportanceSampler (GLMM only)
+IMH_METHODS = ('imhMarginal', 'imhGlobal')             # MetropolisSampler
+SUPPORTED_METHODS = SNIS_METHODS + LAPLACE_METHODS + IMH_METHODS
+
+# IMH pool geometry: n_chains × (n_samples // n_chains) proposals, mirroring
+# experiments/posthoc/ablation.py's runIMH settings.
+IMH_N_CHAINS = 4
+IMH_BURNIN = 25
+
+
+def posthocDefaults(lf: int) -> list[str]:
+    """Default refinement method(s) for a likelihood family, from presets.yaml.
+
+    Returns the ``default`` method (empty list if null / unset). Alternatives are
+    documented in presets but not run automatically; pass them via --methods.
+    """
+    entry = PRESETS.get('posthoc', {}).get(lf, {})
+    default = entry.get('default')
+    return [default] if default else []
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +116,11 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--convergence_mode', type=str, default='strict',
                         choices=['liberal', 'strict'])
+    parser.add_argument('--methods',          type=str, nargs='*', default=None,
+                        choices=list(SUPPORTED_METHODS),
+                        help='Post-hoc refinement methods to run on top of raw MB, evaluated '
+                             'as extra rows vs NUTS. Default: the family preset in presets.yaml '
+                             '(isMarginal for Normal). Pass an empty list to run raw MB only.')
     # fmt: on
     return parser.parse_args()
 
@@ -167,17 +207,26 @@ def _maskTag(mask: np.ndarray | None) -> str:
     return hashlib.sha1(packed).hexdigest()[:12]
 
 
-def _mbSampleCachePath(
+def _sampleCachePath(
     data_path: Path,
+    method: str,
     ckpt_dir: Path,
     prefix: str,
     n_samples: int,
     seed: int,
     mask: np.ndarray | None,
+    rescale: bool | None = None,
 ) -> Path:
+    """Cache path for a model-derived posterior-sample set (mb or a refined method).
+
+    ``rescale`` is folded into the key for refined methods (whose weights live in a
+    specific data space); the raw ``mb`` cache passes ``None`` to keep its historical
+    filename unchanged.
+    """
+    method_tag = method if rescale is None else f'{method}-rs{int(rescale)}'
     cache_name = posteriorSampleCacheName(
         partition=f'test-{_maskTag(mask)}',
-        method='mb',
+        method=method_tag,
         checkpoint_name=ckpt_dir.name,
         checkpoint_prefix=prefix,
         n_samples=n_samples,
@@ -215,7 +264,7 @@ def loadOrSampleMB(
     Alignment with the freshly built NUTS/ADVI proposals relies on ``Collection`` yielding
     datasets in a stable natural order (no sortish/shuffle) and on the mtime freshness check.
     """
-    cache_path = _mbSampleCachePath(data_path, ckpt_dir, prefix, n_samples, seed, mask)
+    cache_path = _sampleCachePath(data_path, 'mb', ckpt_dir, prefix, n_samples, seed, mask)
     ref_mtime = _refMtime(data_path, ckpt_dir, prefix)
     if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
         try:
@@ -244,6 +293,155 @@ def loadOrSampleMB(
     return proposal, tpd_arr
 
 
+# ---------------------------------------------------------------------------
+# Post-hoc refinement of the raw MB posterior
+
+
+def _sliceSamples(p: Proposal, s: int) -> Proposal:
+    """Copy of ``p`` restricted to its first ``s`` draws (flow draws are i.i.d.).
+
+    Used to hand IMH a pool whose sample count is exactly n_chains × n_steps.
+    """
+    global_data = {
+        'samples': p.samples_g[:, :s].contiguous(),
+        'log_prob': p.log_prob_g[:, :s].contiguous(),
+    }
+    local_data = {
+        'samples': p.samples_l[:, :, :s].contiguous(),
+        'log_prob': p.log_prob_l[:, :, :s].contiguous(),
+    }
+    corr = p._corr_rfx[:, :s].contiguous() if p._corr_rfx is not None else None
+    out = Proposal(
+        {'global': global_data, 'local': local_data},
+        has_sigma_eps=p.has_sigma_eps,
+        d_corr=p.d_corr,
+        corr_rfx=corr,
+    )
+    out.reff = p.reff
+    return out
+
+
+def refineProposal(
+    method: str,
+    base: Proposal,
+    batch: dict[str, torch.Tensor],
+    lf: int,
+    n_samples: int,
+) -> Proposal:
+    """Refine the (rescaled) MB proposal ``base`` in the (rescaled) ``batch`` space.
+
+    Every branch returns an *equal-weight* proposal so real_posterior's unweighted
+    comparison metrics (computeCorr / computeSigmaRatio / computeRankMAD) are valid:
+    the SNIS/Laplace families resample via SIR, the IMH family returns a chain.
+    Mirrors the sampler wiring in experiments/posthoc/ablation.py.
+    """
+    B = base.samples_g.shape[0]
+
+    if method in SNIS_METHODS:
+        if method == 'isMarginal' and lf != 0:
+            raise ValueError('isMarginal requires the Normal likelihood (lf=0)')
+        sampler = ImportanceSampler(
+            batch,
+            full=(method == 'isFull'),
+            marginal=(method == 'isMarginal'),
+            rb_redraw=(method == 'isMarginal'),
+            corr_prior=True,
+            pareto=True,
+            sir=True,  # resample to equal weight
+            n_sir=n_samples,
+            likelihood_family=lf,
+        )
+        return sampler(base.slice_b(0, B))
+
+    if method in LAPLACE_METHODS:
+        if lf == 0:
+            raise ValueError('isLaplace / rbAttach are for GLMMs (lf != 0); use isMarginal')
+        attach_only = method == 'rbAttach'
+        sampler = LaplaceImportanceSampler(
+            batch,
+            attach_only=attach_only,
+            corr_prior=True,
+            pareto=True,
+            sir=not attach_only,  # rbAttach already yields uniform weights
+            n_sir=n_samples,
+            likelihood_family=lf,
+        )
+        return sampler(base.slice_b(0, B))
+
+    if method in IMH_METHODS:
+        if method == 'imhGlobal' and lf != 0:
+            raise ValueError('imhGlobal is Normal-only; non-Normal imhMarginal already uses global')
+        mode = 'global' if method == 'imhGlobal' else ('marginal' if lf == 0 else 'global')
+        n_steps = base.samples_g.shape[1] // IMH_N_CHAINS
+        if n_steps <= IMH_BURNIN:
+            raise ValueError(
+                f'IMH needs n_samples > {IMH_N_CHAINS * IMH_BURNIN} '
+                f'(got {base.samples_g.shape[1]})'
+            )
+        pool = _sliceSamples(base, IMH_N_CHAINS * n_steps)
+        sampler = MetropolisSampler(
+            batch,
+            n_chains=IMH_N_CHAINS,
+            n_steps=n_steps,
+            burnin=IMH_BURNIN,
+            mode=mode,
+            likelihood_family=lf,
+        )
+        p_out, _ = sampler(pool)
+        return p_out
+
+    raise ValueError(f'unknown refinement method: {method}')
+
+
+def loadOrRefine(
+    method: str,
+    base_proposal: Proposal,
+    batch: dict[str, torch.Tensor],
+    data_path: Path,
+    ckpt_dir: Path,
+    prefix: str,
+    n_samples: int,
+    seed: int,
+    lf: int,
+    rescale: bool,
+    mask: np.ndarray | None,
+) -> tuple[Proposal, float]:
+    """Cached wrapper around refineProposal; cache is keyed by method/checkpoint/rescale.
+
+    Returns ``(proposal, refine_seconds)`` where refine_seconds is the total wall time
+    of the refinement over the batch (0 on cache hit's stored value), used to offset
+    the MB per-dataset timing for the Δtime metric.
+    """
+    cache_path = _sampleCachePath(
+        data_path, method, ckpt_dir, prefix, n_samples, seed, mask, rescale
+    )
+    ref_mtime = _refMtime(data_path, ckpt_dir, prefix)
+    if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
+        try:
+            proposal, metadata = loadProposalCache(cache_path)
+            logger.info('Loaded cached %s posterior samples from %s', method, cache_path)
+            return proposal, float(metadata.get('refine_seconds', 0.0))
+        except (KeyError, ValueError) as exc:
+            logger.warning('Ignoring invalid %s sample cache %s: %s', method, cache_path, exc)
+    else:
+        logger.info('No usable %s sample cache at %s; refining.', method, cache_path)
+
+    t0 = time.perf_counter()
+    proposal = refineProposal(method, base_proposal, batch, lf, n_samples)
+    refine_seconds = time.perf_counter() - t0
+    saveProposalCache(
+        cache_path,
+        proposal,
+        metadata={
+            'refine_seconds': refine_seconds,
+            'n_samples': n_samples,
+            'seed': seed,
+        },
+    )
+    logger.info('Saved %s posterior samples to %s', method, cache_path)
+    return proposal, refine_seconds
+
+
 def _summaryCachePath(
     data_path: Path,
     method: str,
@@ -256,9 +454,10 @@ def _summaryCachePath(
     seed: int | None = None,
 ) -> Path:
     tag = _maskTag(mask)
-    if method == 'mb':
+    # model-derived methods (mb + refined) additionally key on checkpoint/prefix/n_samples/seed
+    if ckpt_dir is not None:
         name = (
-            f'summary_test_mb_{ckpt_dir.name}_{prefix}'
+            f'summary_test_{method}_{ckpt_dir.name}_{prefix}'
             f'_s{n_samples}_seed{seed}_lf{lf}_rs{int(rescale)}_{tag}.pt'
         )
     else:
@@ -284,15 +483,19 @@ def loadOrComputeSummary(
 
     ``mask`` identifies which datasets of the full test file this summary covers, so the
     NUTS-converged (and, for ADVI, additionally fit-succeeded) subset is folded into the key.
-    MB additionally keys on checkpoint/prefix/n_samples/seed and invalidates on the checkpoint.
-    ``summary_chunk_size`` bounds peak memory of the predictive/LOO block (does not affect the
-    result, so it is not part of the cache key).
+    Model-derived methods (mb + refined) additionally key on checkpoint/prefix/n_samples/seed
+    and invalidate on the checkpoint. ``summary_chunk_size`` bounds peak memory of the
+    predictive/LOO block (does not affect the result, so it is not part of the cache key).
     """
-    is_mb = method == 'mb'
+    is_model_derived = ckpt_dir is not None
     cache_path = _summaryCachePath(
         data_path, method, mask, lf, rescale, ckpt_dir, prefix, n_samples, seed
     )
-    ref_mtime = _refMtime(data_path, ckpt_dir if is_mb else None, prefix if is_mb else None)
+    ref_mtime = _refMtime(
+        data_path,
+        ckpt_dir if is_model_derived else None,
+        prefix if is_model_derived else None,
+    )
     if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
         try:
             summary = EvaluationSummary.load(cache_path)
@@ -538,6 +741,19 @@ def _buildRow(
 # Main evaluation
 
 
+def _validMethods(methods: list[str], lf: int) -> list[str]:
+    """Drop refinement methods that are incompatible with the likelihood family (warns)."""
+    valid: list[str] = []
+    for m in methods:
+        if m in ('isMarginal', 'imhGlobal') and lf != 0:
+            logger.warning('Skipping %s: Normal-only (lf=%d)', m, lf)
+        elif m in LAPLACE_METHODS and lf == 0:
+            logger.warning('Skipping %s: GLMM-only, Normal uses the exact marginal', m)
+        else:
+            valid.append(m)
+    return valid
+
+
 def evaluateReal(
     model: Approximator,
     data_path: Path,
@@ -552,6 +768,7 @@ def evaluateReal(
     ckpt_dir: Path,
     prefix: str,
     seed: int,
+    methods: list[str],
     summary_chunk_size: int = 4,
 ) -> list[dict]:
     col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q)
@@ -641,27 +858,62 @@ def evaluateReal(
         else None
     )
 
+    # Post-hoc refinements layered on the raw MB posterior (evaluated vs the full NUTS ref).
+    # (label, proposal, batch, tpd_arr, summary) tuples appended between MB and ADVI.
+    refined_specs: list[tuple] = []
+    for method in _validMethods(methods, lf):
+        logger.info('Refining MB with %s', method)
+        p_ref, refine_s = loadOrRefine(
+            method,
+            proposal_mb,
+            batch,
+            data_path,
+            ckpt_dir,
+            prefix,
+            n_samples,
+            seed,
+            lf,
+            rescale,
+            conv_mask,
+        )
+        summary_ref = loadOrComputeSummary(
+            p_ref,
+            batch,
+            data_path,
+            method,
+            conv_full,
+            lf,
+            rescale,
+            ckpt_dir=ckpt_dir,
+            prefix=prefix,
+            n_samples=n_samples,
+            seed=seed,
+            summary_chunk_size=summary_chunk_size,
+        )
+        # refinement runs on top of MB, so its cost adds to the MB per-dataset time
+        tpd_ref = mb_tpd_arr + refine_s / B
+        refined_specs.append((f'MB+{method}', p_ref, batch, tpd_ref, summary_ref))
+
     nuts_tpd_arr = batch.get('nuts_duration')            # (B,) tensor or None
     advi_mask_t = torch.from_numpy(advi_mask)           # bool tensor for indexing
 
     rows: list[dict] = []
 
-    for label, p_method, batch_sub, tpd_arr, summary in [
-        (
-            'MB',
-            proposal_mb,
-            batch,
-            mb_tpd_arr,
-            summary_mb,
-        ),
-        (
-            'ADVI',
-            proposal_advi,
-            advi_batch,
-            advi_batch.get('advi_duration') if advi_batch is not None else None,
-            summary_advi,
-        ),
-    ]:
+    method_specs = (
+        [('MB', proposal_mb, batch, mb_tpd_arr, summary_mb)]
+        + refined_specs
+        + [
+            (
+                'ADVI',
+                proposal_advi,
+                advi_batch,
+                advi_batch.get('advi_duration') if advi_batch is not None else None,
+                summary_advi,
+            )
+        ]
+    )
+
+    for label, p_method, batch_sub, tpd_arr, summary in method_specs:
         if p_method is None or summary is None:
             continue
 
@@ -802,9 +1054,13 @@ def main() -> None:
         f'{s}-{fam}-real' for s in DEFAULT_SIZES
     ]
 
+    # --methods: explicit list (possibly empty for raw MB only) overrides the family preset.
+    methods = cfg.methods if cfg.methods is not None else posthocDefaults(lf)
+
     logger.info('Checkpoint: %s  (prefix=%s)', ckpt_dir.name, cfg.prefix)
     logger.info('max_d=%d  max_q=%d  family=%d', model_cfg.max_d, model_cfg.max_q, lf)
     logger.info('Evaluating: %s', data_ids)
+    logger.info('Refinement methods: %s', methods or '(none — raw MB only)')
 
     rows_by_regime: dict[str, list[dict]] = {}
     for data_id in data_ids:
@@ -828,6 +1084,7 @@ def main() -> None:
             ckpt_dir=ckpt_dir,
             prefix=cfg.prefix,
             seed=cfg.seed,
+            methods=methods,
             summary_chunk_size=cfg.summary_chunk_size,
         )
         if rows:
