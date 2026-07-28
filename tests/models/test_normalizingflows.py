@@ -233,6 +233,56 @@ def test_coupling_flow(batch, context, subnet_kwargs, transform_cfg, n_blocks):
     assert torch.isfinite(log_prob).all(), 'anomaly in log_prob'
 
 
+@pytest.mark.parametrize('temperature', [1.0, 2.0])
+def test_sample_logprob_consistency(batch, context, subnet_kwargs, transform_cfg, temperature):
+    """sample()'s reported log-prob must equal logProb() re-evaluated at the samples.
+
+    Regression test for the log-det sign bug fixed 2026-07-28: sample() assembled the
+    density with the inverse-direction log-det un-negated, so its log-prob differed from
+    the true (forward-pass) density by -2*log|det dz/dx| — the older tests validated the
+    forward log-det numerically and inverse() only via reconstruction, so this path was
+    uncovered. Also covers the tempered-proposal path (temperature > 1).
+    """
+    transform, rq_kwargs = transform_cfg
+    x, mask = random_mask(batch)
+    model = CouplingFlow(
+        d_target=x.shape[-1],
+        d_context=context.shape[-1],
+        n_blocks=3,
+        use_actnorm=True,
+        use_permute=False,
+        transform=transform,
+        subnet_kwargs=subnet_kwargs,
+        rq_kwargs=rq_kwargs,
+    )
+    model.eval()
+    # trigger ActNorm's data-dependent init once so parameters are fixed across calls
+    with torch.no_grad():
+        model.forward(x, context=context, mask=mask)
+
+    n_samples = 16
+    with torch.no_grad():
+        x_samp, log_prob = model.sample(
+            n_samples, context=context, mask=mask, temperature=temperature
+        )
+        ctx = context.unsqueeze(-2).expand(*context.shape[:-1], n_samples, context.shape[-1])
+        m = mask.unsqueeze(-2).expand(*x_samp.shape)
+        log_prob_re = model.logProb(x_samp, context=ctx, mask=m, temperature=temperature)
+
+    assert torch.isfinite(x_samp).all(), 'anomaly in samples'
+    # rows whose mask is fully empty are skipped by sample() (log_prob 0); compare the rest
+    non_empty = mask.any(-1)
+    lp, lp_re = log_prob[non_empty], log_prob_re[non_empty]
+    assert torch.isfinite(lp).all(), 'anomaly in log_prob'
+    # adaptive tails with random weights compound roundtrip error across blocks;
+    # tight comparison only meaningful for zero_init or non-adaptive (as in test_coupling_flow)
+    adaptive_tails = rq_kwargs.get('adaptive_tails', False)
+    if not adaptive_tails or subnet_kwargs.get('zero_init', False):
+        assert torch.allclose(
+            lp, lp_re, atol=1e-3
+        ), f'sample() log-prob disagrees with logProb() recompute: max diff {(lp - lp_re).abs().max()}'
+
+
 # -----------------------
 # Spline stability: fixed vs adaptive domain, 6 blocks, no zero-init
 # -----------------------
