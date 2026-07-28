@@ -11,7 +11,7 @@ Optionally layers post-hoc refinements on the raw MB flow posterior (extra
 The SNIS/Laplace families keep their PSIS-smoothed IS weights and the comparison
 metrics are weight-aware (IMH returns an equal-weight chain); see refineProposal.
 The method(s) come from ``--methods`` or, if omitted, the per-family default in
-metabeta/configs/presets.yaml (isMarginal for Normal); pass ``--methods`` with no
+metabeta/configs/presets.yaml (imhMarginal for Normal); pass ``--methods`` with no
 values for raw MB only.
 
 Metrics (median ± MAD over datasets):
@@ -80,10 +80,9 @@ IMH_BURNIN = 25
 
 
 def posthocDefaults(lf: int) -> list[str]:
-    """Default refinement method(s) for a likelihood family, from presets.yaml.
+    """Default refinement method for a likelihood family, from presets.yaml.
 
-    Returns the ``default`` method (empty list if null / unset). Alternatives are
-    documented in presets but not run automatically; pass them via --methods.
+    Returns ``[default]`` (empty list if null / unset). Override with --methods.
     """
     entry = PRESETS.get('posthoc', {}).get(lf, {})
     default = entry.get('default')
