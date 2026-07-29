@@ -1,5 +1,5 @@
 """
-Oracle evaluation: given a model checkpoint, evaluate on tiny/small/medium/large test sets.
+Oracle evaluation: given a model checkpoint, evaluate on small/medium/large/huge test sets.
 
 Filters datasets that exceed the model's d/q capacity, loads NUTS/ADVI/Laplace fits from
 the test.fit.npz batch, and produces a LaTeX + Markdown table with mean ± std over

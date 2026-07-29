@@ -84,7 +84,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--outdir',           type=str, default=str(OUT_DIR))
     parser.add_argument('--verbosity',        type=int, default=1)
     parser.add_argument('--data_ids',         type=str, nargs='+', default=None,
-                        help='Data IDs to evaluate (default: tiny/small/medium/large-{fam}-real)')
+                        help='Data IDs to evaluate (default: small/medium/large/huge-{fam}-real)')
     parser.add_argument('--decimals',         type=int, default=2,
                         help='Decimal places in table cells (default: 2)')
     parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
