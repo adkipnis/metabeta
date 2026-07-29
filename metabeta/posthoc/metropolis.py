@@ -27,6 +27,16 @@ Three modes differ in how rfx (local params) are handled:
       Full joint target; rfx are subject to acceptance alongside globals.  Correct for GLMMs
       but degenerates with many groups (high rfx dimension).
 
+  'laplace'  [GLMMs only; requires likelihood_family != 0]
+      log_w = log p̂_laplace(y|θ_g) + log p(θ_g) − log q_g
+      The GLMM analog of 'marginal': rfx are integrated out via the Laplace (nAGQ=1)
+      approximation (posthoc/laplace_glmm.py), so the chain operates in the global space;
+      after acceptance, fresh rfx are drawn from the Laplace-Gaussian conditional
+      N(b*, H⁻¹). Mirrors the recipe that fixed the huge-Normal regime — added because
+      isLaplace's PSIS guardrail falls back on 13–50% of large/huge GLMM datasets
+      (2026-07-29 ablation), and rejection-based correction has no fallback mode.
+      Targets the same Laplace pseudo-posterior as isLaplace (shares its O(Laplace) bias).
+
 Chain mechanics
 ---------------
 A pool of s = n_chains × n_steps proposals is drawn upfront.  All log weights are computed in
@@ -87,13 +97,14 @@ from torch import Tensor
 
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
+from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.families import sampleRfxConditionalNormal
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.regularization import corrLowerToUnconstrained, unconstrainedToCholesky
 from metabeta.utils.results import Proposal
 
-Mode = Literal['global', 'marginal', 'joint']
+Mode = Literal['global', 'marginal', 'joint', 'laplace']
 
 
 class MetropolisSampler:
@@ -109,6 +120,8 @@ class MetropolisSampler:
     ) -> None:
         if mode == 'marginal' and likelihood_family != 0:
             raise ValueError("mode='marginal' requires likelihood_family=0 (Normal)")
+        if mode == 'laplace' and likelihood_family == 0:
+            raise ValueError("mode='laplace' is for GLMMs; Normal has the exact 'marginal'")
         if burnin >= n_steps:
             raise ValueError('burnin must be < n_steps')
 
@@ -122,15 +135,21 @@ class MetropolisSampler:
 
         # Delegate all weight computation to ImportanceSampler.unnormalizedPosterior —
         # single source of truth shared with SNIS. 'marginal' uses the (correlated)
-        # marginal likelihood + LKJ prior; 'joint' needs full=True (rfx prior + local
+        # marginal likelihood + LKJ prior; 'laplace' the Laplace-approximated marginal
+        # (same weights as isLaplace); 'joint' needs full=True (rfx prior + local
         # log-prob).
-        self._is = ImportanceSampler(
-            data,
-            full=(mode == 'joint'),
-            marginal=(mode == 'marginal'),
-            likelihood_family=likelihood_family,
-            eps=eps,
-        )
+        if mode == 'laplace':
+            self._is: ImportanceSampler = LaplaceImportanceSampler(
+                data, likelihood_family=likelihood_family, eps=eps
+            )
+        else:
+            self._is = ImportanceSampler(
+                data,
+                full=(mode == 'joint'),
+                marginal=(mode == 'marginal'),
+                likelihood_family=likelihood_family,
+                eps=eps,
+            )
 
         # Data tensors for the Normal-Normal conditional (marginal mode).
         # These mirror what ImportanceSampler stores but are kept as direct references.
@@ -274,6 +293,27 @@ class MetropolisSampler:
             L_corr=L_corr,
         )
 
+    def _sampleRfxLaplace(self, sg_out: Tensor, sl_init: Tensor, d_corr: int) -> Tensor:
+        """Laplace analog of _sampleRfxConditional (mode='laplace').
+
+        Re-runs the delegate's Laplace pass at the accepted globals to refresh its
+        cached modes/Hessians (the pool-pass cache indexes the wrong samples after
+        acceptance), then draws rfx ~ N(b*, H⁻¹) via the delegate's _redrawRfx.
+        ``sl_init`` — the flow rfx that travelled with each accepted global — warm-starts
+        the Newton mode search exactly as in isLaplace (a zero init under-converges the
+        modes within n_newton steps, degrading rfx recovery). Returns (b, m, s_out, q).
+        """
+        b, s_out = sg_out.shape[:2]
+        m = self._X.shape[1]
+        proposed = {
+            'global': {'samples': sg_out, 'log_prob': sg_out.new_zeros(b, s_out)},
+            'local': {'samples': sl_init, 'log_prob': sg_out.new_zeros(b, m, s_out)},
+        }
+        tmp = Proposal(proposed, has_sigma_eps=self.has_sigma_eps, d_corr=d_corr)
+        self._is.unnormalizedPosterior(tmp)
+        self._is._redrawRfx(tmp)
+        return tmp.samples_l
+
     # ------------------------------------------------------------------
     # Main entry point
     # ------------------------------------------------------------------
@@ -306,13 +346,16 @@ class MetropolisSampler:
 
         log_w = self._logWeights(proposal)   # (b, s)
 
-        # Run chain — rfx travels with globals for 'global' and 'joint' modes
+        # Run chain — rfx travels with globals for all modes but 'marginal' ('laplace'
+        # uses the travelling flow rfx only as the Newton warm-start of the redraw)
         sl_in = proposal.samples_l if self.mode != 'marginal' else None
         sg_out, sl_out, accept_rate = self._runChains(log_w, proposal.samples_g, sl_in)
 
         # Attach rfx
         if self.mode == 'marginal':
             sl_out = self._sampleRfxConditional(sg_out, d, q, d_corr)
+        elif self.mode == 'laplace':
+            sl_out = self._sampleRfxLaplace(sg_out, sl_out, d_corr)
         # 'global' and 'joint': sl_out already set by _runChains
 
         b, s_out = sg_out.shape[0], sg_out.shape[1]
@@ -344,7 +387,7 @@ def runIMH(
     n_chains       : int  — number of independent chains (default 4)
     n_steps        : int  — steps per chain including burnin (default 250)
     imh_burnin     : int  — burnin steps to discard (default 25)
-    imh_mode       : str  — 'global' | 'marginal' | 'joint'
+    imh_mode       : str  — 'global' | 'marginal' | 'joint' | 'laplace'
                      defaults to 'marginal' for Normal, 'global' otherwise
     rescale        : bool
     likelihood_family : int
