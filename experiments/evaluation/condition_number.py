@@ -22,6 +22,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from scipy.stats import spearmanr
 from tabulate import tabulate
 
 from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch
@@ -37,6 +38,7 @@ from metabeta.utils.posterior_eval import (
     loadOrComputeSummary,
     loadOrRefine,
     loadOrSampleMB,
+    posthocDefaults,
     validMethods,
 )
 
@@ -47,21 +49,41 @@ logger = logging.getLogger(__name__)
 
 OUT_DIR = RESULTS_DIR
 
-# Regime-matched Normal checkpoints (prefix=latest, n_samples=1000, seed=0), keyed to hit
+# Regime-matched checkpoints per family (prefix=latest, n_samples=1000, seed=0), keyed to hit
 # the existing MB-sample / summary caches rather than resampling.
-SIZE_MODELS: dict[str, str] = {
-    'small': 'data=small-n-mixed_model=large_seed=13',
-    'medium': 'data=medium-n-mixed_model=large_seed=14',
-    'large': 'data=large-n-mixed_model=large_seed=9',
-    'huge': 'data=huge-n-mixed_model=large_seed=16',
+SIZE_MODELS: dict[str, dict[str, str]] = {
+    'n': {
+        'small': 'data=small-n-mixed_model=large_seed=13',
+        'medium': 'data=medium-n-mixed_model=large_seed=14',
+        'large': 'data=large-n-mixed_model=large_seed=9',
+        'huge': 'data=huge-n-mixed_model=large_seed=16',
+    },
+    'b': {
+        'small': 'data=small-b-mixed_model=large_seed=6',
+        'medium': 'data=medium-b-mixed_model=large_seed=3',
+        'large': 'data=large-b-mixed_model=large_seed=4',
+        'huge': 'data=huge-b-mixed_model=large_seed=8',
+    },
+    'p': {
+        'small': 'data=small-p-mixed_model=large_seed=4',
+        'medium': 'data=medium-p-mixed_model=large_seed=11',
+        'large': 'data=large-p-mixed_model=large_seed=6',
+    },
 }
-DEFAULT_SIZES = list(SIZE_MODELS)
+DEFAULT_SIZES = ['small', 'medium', 'large', 'huge']
+LF_FROM_FAM = {'n': 0, 'b': 1, 'p': 2}
 
 # κ bin edges; last bin is the effectively-singular (rank-deficient) bucket.
 KAPPA_EDGES = [1.0, 3.0, 6.0, 10.0, 1e6, np.inf]
 
-# imhMarginal is the Normal (lf=0) presets default: IMH on the marginal posterior, MB-initialised.
-METHOD_LABELS = {'mb': 'MB', 'imhMarginal': 'MB+IMH', 'isMarginal': 'MB+SNIS'}
+# Refinement labels. Presets defaults: imhMarginal (Normal), imhLaplace (Bernoulli/Poisson).
+METHOD_LABELS = {
+    'mb': 'MB',
+    'imhMarginal': 'MB+IMH',
+    'imhLaplace': 'MB+IMH',
+    'isMarginal': 'MB+SNIS',
+    'isLaplace': 'MB+SNIS',
+}
 
 METRIC_KEYS = ('r', 'sigma_ratio', 'rank_mad', 'delta_nll')
 AGREE_METRICS = [
@@ -143,6 +165,7 @@ def _agreementArrays(
 
 def collectSizeRecords(
     size: str,
+    family: str,
     device: torch.device,
     n_samples: int,
     batch_size: int,
@@ -153,13 +176,13 @@ def collectSizeRecords(
     standardize: bool,
     methods: list[str],
 ) -> dict[str, np.ndarray] | None:
-    """Per-dataset arrays for one real-n size, aligned over the full test file.
+    """Per-dataset arrays for one real size, aligned over the full test file.
 
     Keys: kappa, converged, size, and ``{method}:{metric}`` for method in ('mb', *methods).
     Agreement metrics are NaN for non-converged datasets (no trustworthy NUTS reference).
     """
-    data_id = f'{size}-n-real'
-    ckpt_dir = CHECKPOINT_DIR / SIZE_MODELS[size]
+    data_id = f'{size}-{family}-real'
+    ckpt_dir = CHECKPOINT_DIR / SIZE_MODELS[family][size]
     data_path = DATA_DIR / data_id / 'test.fit.npz'
     if not data_path.exists() or not ckpt_dir.exists():
         logger.warning('%s: data or checkpoint missing — skipping', data_id)
@@ -391,6 +414,47 @@ def renderBinnedTex(rows: list[dict], dp: int = 3) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Bins-free robustness: Spearman ρ(κ, metric)
+
+
+def spearmanTable(records: dict[str, np.ndarray], methods: list[str]) -> list[dict]:
+    """Rank correlation of κ with each agreement metric over all converged datasets (no bins).
+
+    Sign gives the direction of degradation: for r (→1) negative ρ is degradation; for
+    σ-ratio, rank-MAD, ΔLOO-NLL, positive ρ is degradation (or, for σ-ratio, growing
+    over-dispersion). Rank-based, so the singular (κ=∞) datasets contribute as the top ranks.
+    """
+    kappa, conv = records['kappa'], records['converged']
+    rows = []
+    for m in methods:
+        row = {'method': METHOD_LABELS.get(m, m)}
+        for key, _ in AGREE_METRICS:
+            vals = records[f'{m}:{key}']
+            mask = conv & ~np.isnan(vals) & ~np.isnan(kappa)
+            if int(mask.sum()) < 3:
+                row[key] = None
+            else:
+                rho, p = spearmanr(kappa[mask], vals[mask])
+                row[key] = (float(rho), float(p), int(mask.sum()))
+        rows.append(row)
+    return rows
+
+
+def _fmtRho(cell) -> str:
+    if cell is None:
+        return 'NA'
+    rho, p, _ = cell
+    star = '***' if p < 1e-3 else '**' if p < 1e-2 else '*' if p < 5e-2 else ''
+    return f'{rho:+.2f}{star}'
+
+
+def renderSpearmanMd(rows: list[dict]) -> str:
+    headers = ['method'] + [f'ρ(κ, {k})' for k, _ in AGREE_METRICS]
+    md = [[r['method']] + [_fmtRho(r[k]) for k, _ in AGREE_METRICS] for r in rows]
+    return tabulate(md, headers=headers, tablefmt='pipe', stralign='right')
+
+
+# ---------------------------------------------------------------------------
 # CLI / main
 
 
@@ -400,7 +464,9 @@ def setup() -> argparse.Namespace:
         description='MB↔NUTS agreement vs design-matrix condition number on real-n data.',
     )
     parser.add_argument('--sizes', type=str, nargs='+', default=DEFAULT_SIZES,
-                        choices=DEFAULT_SIZES, help='Real-n sizes to pool (default: all).')
+                        choices=DEFAULT_SIZES, help='Real sizes to pool (default: all).')
+    parser.add_argument('--family', type=str, default='n', choices=list(SIZE_MODELS),
+                        help='Likelihood family: n (Normal) or b (Bernoulli).')
     parser.add_argument('--prefix', type=str, default='latest')
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--n_samples', type=int, default=1000)
@@ -409,9 +475,9 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--convergence_mode', type=str, default='strict',
                         choices=['liberal', 'strict'])
-    parser.add_argument('--methods', type=str, nargs='*', default=['imhMarginal'],
-                        choices=list(METHOD_LABELS)[1:],
-                        help='Refinements added as extra rows (default: imhMarginal); MB is always included.')
+    parser.add_argument('--methods', type=str, nargs='*', default=None,
+                        choices=[m for m in METHOD_LABELS if m != 'mb'],
+                        help='Refinements added as extra rows (default: family preset); MB always included.')
     parser.add_argument('--standardize', action='store_true',
                         help='κ on column-standardized designs (pure collinearity); off by default '
                              '(continuous cols already standardized, singular tail is scale-invariant).')
@@ -424,9 +490,9 @@ def setup() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _distributionOnly(size: str, standardize: bool) -> dict[str, np.ndarray] | None:
+def _distributionOnly(size: str, family: str, standardize: bool) -> dict[str, np.ndarray] | None:
     """Phase-1-only: κ per dataset, no model / fit proposal loaded."""
-    data_path = DATA_DIR / f'{size}-n-real' / 'test.npz'
+    data_path = DATA_DIR / f'{size}-{family}-real' / 'test.npz'
     if not data_path.exists():
         logger.warning('%s: test.npz not found — skipping', size)
         return None
@@ -451,16 +517,18 @@ def main() -> None:
     device = setDevice(cfg.device)
     outdir = Path(cfg.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    tag = 'std' if cfg.standardize else 'raw'
-    methods = cfg.methods or []
+    family = cfg.family
+    tag = f'{family}_{"std" if cfg.standardize else "raw"}'
+    methods = cfg.methods if cfg.methods is not None else posthocDefaults(LF_FROM_FAM[family])
 
     per_size = []
     for size in cfg.sizes:
         rec = (
-            _distributionOnly(size, cfg.standardize)
+            _distributionOnly(size, family, cfg.standardize)
             if cfg.distribution_only
             else collectSizeRecords(
                 size,
+                family,
                 device,
                 cfg.n_samples,
                 cfg.batch_size,
@@ -488,16 +556,28 @@ def main() -> None:
     if cfg.distribution_only:
         return
 
-    rows = binnedTable(records, KAPPA_EDGES, ['mb'] + methods)
+    table_methods = ['mb'] + methods
+    rows = binnedTable(records, KAPPA_EDGES, table_methods)
     binned_md = renderBinnedMd(rows, dp=cfg.decimals)
     print('\n=== MB↔NUTS agreement by κ₂(X) bin (median ± MAD over converged datasets) ===\n')
     print(binned_md)
 
+    # Bins-free robustness check: Spearman ρ(κ, metric) over all converged datasets.
+    spearman_md = renderSpearmanMd(spearmanTable(records, table_methods))
+    print(
+        '\n=== Spearman ρ(κ, metric), bins-free (over converged datasets; *p<.05 **<.01 ***<.001) ===\n'
+    )
+    print(spearman_md)
+
     stem = f'condition_number_agreement_{tag}'
     (outdir / f'{stem}.md').write_text(
         f'# MB↔NUTS agreement vs κ₂(X) ({tag})\n\n'
-        f'Sizes: {", ".join(cfg.sizes)} (real-n). Reference: NUTS ({cfg.convergence_mode}).\n\n'
-        f'{binned_md}\n'
+        f'Sizes: {", ".join(cfg.sizes)} (real-{family}). Reference: NUTS ({cfg.convergence_mode}).\n\n'
+        f'{binned_md}\n\n'
+        f'## Bins-free robustness: Spearman ρ(κ, metric)\n\n'
+        f'Rank correlation over all converged datasets (no binning). '
+        f'*p<.05, **p<.01, ***p<.001.\n\n'
+        f'{spearman_md}\n'
     )
     (outdir / f'{stem}.tex').write_text(renderBinnedTex(rows, dp=cfg.decimals))
     logger.info('Saved tables to %s', outdir)
