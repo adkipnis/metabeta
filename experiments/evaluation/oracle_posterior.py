@@ -1,11 +1,15 @@
 """
-Oracle evaluation: given a model checkpoint, evaluate on small/medium/large/huge test sets.
+Oracle evaluation: evaluate one model checkpoint on one sampled test set (``--data_id``).
 
-Filters datasets that exceed the model's d/q capacity, loads NUTS/ADVI/Laplace fits from
-the test.fit.npz batch, and produces a LaTeX + Markdown table with mean ± std over
-parameter dimensions (for NRMSE/ECE/EACE/R) and over datasets (for LOO-NLL). Unlike
-real_posterior.py, the sampled test sets carry ground-truth parameters, so the metrics are
-absolute (vs the true values) rather than relative to NUTS.
+Both the checkpoint and the single test set are required; pick a ``--data_id`` whose d/q fit
+the checkpoint's capacity (datasets beyond max_d/max_q are dropped by the capacity filter, so
+a small-capacity model on a larger regime yields few or no rows). To sweep sizes, launch one
+process per (checkpoint, data_id) pair.
+
+Loads NUTS/ADVI/Laplace fits from the test.fit.npz batch and produces a LaTeX + Markdown table
+with mean ± std over parameter dimensions (for NRMSE/ECE/EACE/R) and over datasets (for
+LOO-NLL). Unlike real_posterior.py, the sampled test sets carry ground-truth parameters, so
+the metrics are absolute (vs the true values) rather than relative to NUTS.
 
 MB posterior samples, per-method summaries, and post-hoc refinements are cached next to the
 data (siblings of test.fit.npz), keyed by checkpoint/prefix/n_samples/seed and by the
@@ -17,10 +21,9 @@ rows). The method(s) come from ``--methods`` or, if omitted, the per-family defa
 metabeta/configs/presets.yaml; pass ``--methods`` with no values for raw MB only.
 
 Usage (from repo root):
-    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH
-    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --n_samples 100 --batch_size 4
-    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --data_ids small-n-sampled large-n-sampled
-    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --methods   # raw MB only
+    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --data_id small-n-sampled
+    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --data_id small-n-sampled --n_samples 100 --batch_size 4
+    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --data_id small-n-sampled --methods   # raw MB only
 """
 
 import argparse
@@ -42,7 +45,6 @@ from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
 from metabeta.utils.posterior_eval import (
-    FAM_LETTER,
     SUPPORTED_METHODS,
     fit2proposal,
     fitBatchMask,
@@ -56,8 +58,6 @@ from metabeta.utils.posterior_eval import (
 
 OUT_DIR = RESULTS_DIR
 
-DEFAULT_SIZES = ['small', 'medium', 'large', 'huge']
-
 logger = logging.getLogger(__name__)
 
 
@@ -68,9 +68,14 @@ logger = logging.getLogger(__name__)
 def setup() -> argparse.Namespace:
     # fmt: off
     parser = argparse.ArgumentParser(
-        description='Oracle cross-size evaluation', argument_default=argparse.SUPPRESS
+        description='Oracle evaluation of one checkpoint on one sampled test set',
+        argument_default=argparse.SUPPRESS,
     )
     parser.add_argument('--checkpoint', type=str, required=True)
+    parser.add_argument('--data_id',    type=str, required=True,
+                        help='Single sampled data id to evaluate, e.g. small-n-sampled. Pick one '
+                             'whose d/q fit the checkpoint capacity (datasets beyond it are '
+                             'dropped by the capacity filter).')
     parser.add_argument('--prefix',     type=str, default='latest')
     parser.add_argument('--device',     type=str, default='cpu')
     parser.add_argument('--n_samples',  type=int, default=1000)
@@ -78,8 +83,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--summary_chunk_size', type=int, default=1,
                         help='Datasets per chunk for posterior predictive / LOO summaries')
     parser.add_argument('--seed',       type=int, default=0)
-    parser.add_argument('--data_ids',   type=str, nargs='+', default=None,
-                        help='Data IDs to evaluate (default: small/medium/large/huge-{fam}-sampled)')
     parser.add_argument('--outdir',     type=str, default=str(OUT_DIR))
     parser.add_argument('--verbosity',  type=int, default=1)
     parser.add_argument('--decimals',         type=int, default=2,
@@ -711,67 +714,55 @@ def main() -> None:
     max_d: int = model_cfg_ns.max_d
     max_q: int = model_cfg_ns.max_q
     lf: int = model_cfg_ns.likelihood_family
-    fam = FAM_LETTER[lf]
-    run_name = ckpt_dir.name
 
-    data_ids: list[str] = getattr(cfg, 'data_ids', None) or [
-        f'{s}-{fam}-sampled' for s in DEFAULT_SIZES
-    ]
+    data_id = cfg.data_id
+    regime = data_id.split('-')[0]
+    # stem includes the data id so evaluating one checkpoint on several test sets never clobbers
+    stem = f'{ckpt_dir.name}_{data_id}'
 
     # --methods: explicit list (possibly empty for raw MB only) overrides the family preset.
     methods = cfg.methods if cfg.methods is not None else posthocDefaults(lf)
 
-    logger.info('Model: %s  max_d=%d  max_q=%d  likelihood=%d', run_name, max_d, max_q, lf)
-    logger.info('Evaluating: %s', data_ids)
+    logger.info('Model: %s  max_d=%d  max_q=%d  likelihood=%d', ckpt_dir.name, max_d, max_q, lf)
+    logger.info('Evaluating: %s', data_id)
     logger.info('Refinement methods: %s', methods or '(none — raw MB only)')
 
-    rows_by_regime: dict[str, list[dict]] = {}
-    rows_by_regime_conv: dict[str, list[dict]] = {}
-    for data_id in data_ids:
-        data_path = DATA_DIR / data_id / 'test.fit.npz'
-        if not data_path.exists():
-            logger.warning('Skipping %s: test.fit.npz not found', data_id)
-            continue
-        regime = data_id.split('-')[0]
-        rows, rows_conv = evaluateRegime(
-            model,
-            data_path,
-            max_d,
-            max_q,
-            lf,
-            n_samples=cfg.n_samples,
-            batch_size=cfg.batch_size,
-            device=device,
-            regime=regime,
-            ckpt_dir=ckpt_dir,
-            prefix=cfg.prefix,
-            seed=cfg.seed,
-            methods=methods,
-            rescale=cfg.rescale,
-            convergence_mode=cfg.convergence_mode,
-            summary_chunk_size=cfg.summary_chunk_size,
-        )
-        if rows:
-            rows_by_regime[regime] = rows
-        if rows_conv:
-            rows_by_regime_conv[regime] = rows_conv
+    data_path = DATA_DIR / data_id / 'test.fit.npz'
+    if not data_path.exists():
+        logger.error('%s: test.fit.npz not found', data_id)
+        return
 
-    if not rows_by_regime:
-        logger.error('No regimes evaluated — check data_ids and checkpoint.')
+    rows, rows_conv = evaluateRegime(
+        model,
+        data_path,
+        max_d,
+        max_q,
+        lf,
+        n_samples=cfg.n_samples,
+        batch_size=cfg.batch_size,
+        device=device,
+        regime=regime,
+        ckpt_dir=ckpt_dir,
+        prefix=cfg.prefix,
+        seed=cfg.seed,
+        methods=methods,
+        rescale=cfg.rescale,
+        convergence_mode=cfg.convergence_mode,
+        summary_chunk_size=cfg.summary_chunk_size,
+    )
+    if not rows:
+        logger.error('No datasets evaluated — check that %s fits the checkpoint capacity.', data_id)
         return
 
     dp = getattr(cfg, 'decimals', 2)
 
     # Console summary
-    md_rows = []
-    for regime, rows in rows_by_regime.items():
-        for r in rows:
-            md_rows.append([regime, r['method']] + [_fmtMd(r[c], dp) for c in METRICS])
+    md_rows = [[regime, r['method']] + [_fmtMd(r[c], dp) for c in METRICS] for r in rows]
     print('\n' + tabulate(md_rows, headers=['regime', 'method'] + METRICS, tablefmt='simple'))
 
-    saveTables(rows_by_regime, Path(cfg.outdir), run_name, dp=dp)
-    if rows_by_regime_conv:
-        saveTables(rows_by_regime_conv, Path(cfg.outdir), f'{run_name}_conv', dp=dp)
+    saveTables({regime: rows}, Path(cfg.outdir), stem, dp=dp)
+    if rows_conv:
+        saveTables({regime: rows_conv}, Path(cfg.outdir), f'{stem}_conv', dp=dp)
 
 
 if __name__ == '__main__':
