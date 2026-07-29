@@ -70,7 +70,7 @@ _FAM_LETTER = {0: 'n', 1: 'b', 2: 'p'}
 # weight-aware (uniform when proposal.weights is None), so no resampling is needed.
 SNIS_METHODS = ('is', 'isFull', 'isMarginal')          # ImportanceSampler
 LAPLACE_METHODS = ('isLaplace', 'rbAttach')            # LaplaceImportanceSampler (GLMM only)
-IMH_METHODS = ('imhMarginal', 'imhGlobal')             # MetropolisSampler
+IMH_METHODS = ('imhMarginal', 'imhGlobal', 'imhLaplace')   # MetropolisSampler
 SUPPORTED_METHODS = SNIS_METHODS + LAPLACE_METHODS + IMH_METHODS
 
 # IMH pool geometry: n_chains × (n_samples // n_chains) proposals, mirroring
@@ -360,7 +360,14 @@ def _refineChunk(
     if method in IMH_METHODS:
         if method == 'imhGlobal' and lf != 0:
             raise ValueError('imhGlobal is Normal-only; non-Normal imhMarginal already uses global')
-        mode = 'global' if method == 'imhGlobal' else ('marginal' if lf == 0 else 'global')
+        if method == 'imhLaplace' and lf == 0:
+            raise ValueError('imhLaplace is for GLMMs (lf != 0); use imhMarginal')
+        if method == 'imhLaplace':
+            mode = 'laplace'
+        elif method == 'imhGlobal':
+            mode = 'global'
+        else:
+            mode = 'marginal' if lf == 0 else 'global'
         n_steps = base.samples_g.shape[1] // IMH_N_CHAINS
         if n_steps <= IMH_BURNIN:
             raise ValueError(
@@ -843,7 +850,7 @@ def _validMethods(methods: list[str], lf: int) -> list[str]:
     for m in methods:
         if m in ('isMarginal', 'imhGlobal') and lf != 0:
             logger.warning('Skipping %s: Normal-only (lf=%d)', m, lf)
-        elif m in LAPLACE_METHODS and lf == 0:
+        elif m in LAPLACE_METHODS + ('imhLaplace',) and lf == 0:
             logger.warning('Skipping %s: GLMM-only, Normal uses the exact marginal', m)
         else:
             valid.append(m)

@@ -31,6 +31,11 @@ imhMarginal  : IMH mode='marginal' (Normal, Rao-Blackwellised) or 'global' (othe
 imhGlobal    : IMH mode='global' on Normal (same biased pseudo-target as 'is'); for
                non-Normal families this is already what imhMarginal falls back to, so the
                condition is Normal-only.
+imhLaplace   : IMH mode='laplace' (Bernoulli/Poisson only) — Laplace-marginal weights
+               (same pseudo-target as isLaplace) with a Laplace conditional rfx redraw
+               after acceptance; the GLMM analog of Normal's imhMarginal. Added
+               2026-07-29 for the large/huge regimes where isLaplace's PSIS guardrail
+               falls back on 13-50% of datasets (rejection has no fallback mode).
 svgd         : SVGD with per-dim bandwidth + cosine LR decay — opt in with --include-svgd,
                off by default (too slow to be practically useful: ~40s/dataset, and gives
                a fraction of a nat of marginal-log-p improvement over the flow samples it starts
@@ -118,7 +123,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--batch-size', type=int, default=4, help='sub-batch size for torch-based methods')
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
     p.add_argument('--n-samples', type=int, default=1000, help='flow samples for torch-based methods (raw/is/svgd); IMH uses its own fixed count')
-    p.add_argument('--skip', nargs='+', default=[], choices=['raw', 'is', 'isFull', 'isMarginal', 'isRM', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'svgd', 'coldNuts', 'warmNuts'], help='conditions to skip (e.g. --skip is)')
+    p.add_argument('--skip', nargs='+', default=[], choices=['raw', 'is', 'isFull', 'isMarginal', 'isRM', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'svgd', 'coldNuts', 'warmNuts'], help='conditions to skip (e.g. --skip is)')
     p.add_argument('--rm-sweeps', type=int, default=15, help='rejuvenation sweeps for the isRM condition; ~(1-acceptance)^K particles stay unmoved')
     p.add_argument('--include-svgd', action='store_true', help='also run the (slow) SVGD condition')
     p.add_argument('--include-warmnuts', action='store_true', help='also run the (slow) warm-started NUTS condition')
@@ -539,6 +544,7 @@ def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch
     # [] access (nuts_rfx alone is ~6.5 GB), so per-iteration indexing re-decompresses
     # it n_ds times; slice to n_ds and downcast to float32 immediately
     with np.load(npz_path, allow_pickle=True) as data:
+        n_total = data['nuts_divergences'].shape[0]
         nuts_ffx = data['nuts_ffx'][:n_ds].astype(np.float32)
         nuts_sigma_rfx = data['nuts_sigma_rfx'][:n_ds].astype(np.float32)
         nuts_sigma_eps = data['nuts_sigma_eps'][:n_ds].astype(np.float32) if has_se else None
@@ -592,7 +598,18 @@ def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch
     merged = _stackProposals(proposals, target_d=target_d, target_q=target_q)
     merged.rescale(tensor_batch['sd_y'][:n_ds])
     merged.reff = reff
-    print(summaryTable(getSummary(merged, full_batch, likelihood_family=lf), lf))
+    summary = getSummary(merged, full_batch, likelihood_family=lf)
+
+    # write the full-split summary back under the plain name evaluate.py and
+    # _nutsSummaryCache use, so the inline recompute only ever happens once per
+    # data dir (evaluate.py's multi-model runs only write masked-subset caches)
+    if n_ds == n_total:
+        partition = npz_path.name.split('.')[0]
+        cache_path = npz_path.parent / f'summary_{partition}_nuts.pt'
+        summary.save(cache_path)
+        print(f'  [cached summary] saved {cache_path.name}')
+
+    print(summaryTable(summary, lf))
 
 
 class _Tee:
@@ -636,6 +653,7 @@ def main() -> None:
         'rbAttach',
         'imhMarginal',
         'imhGlobal',
+        'imhLaplace',
     ]
     if args.include_svgd:
         conditions.append('svgd')
@@ -703,7 +721,7 @@ def main() -> None:
             for cond in conditions:
                 if cond in ('isMarginal', 'isRM') and lf != 0:
                     continue  # exact marginal requires the Normal likelihood
-                if cond in ('isLaplace', 'rbAttach') and lf == 0:
+                if cond in ('isLaplace', 'rbAttach', 'imhLaplace') and lf == 0:
                     continue  # Normal has the exact marginal — Laplace is for GLMMs
                 if cond == 'imhGlobal' and lf != 0:
                     continue  # non-Normal imhMarginal already runs mode='global'
@@ -748,6 +766,8 @@ def main() -> None:
                     runIMH(imh_mode, imh_proposals, imh_batches, full_batch, lf)
                 elif cond == 'imhGlobal':
                     runIMH('global', imh_proposals, imh_batches, full_batch, lf)
+                elif cond == 'imhLaplace':
+                    runIMH('laplace', imh_proposals, imh_batches, full_batch, lf)
                 elif cond == 'svgd':
                     runSVGD(proposals, batches, full_batch, lf)
                 elif cond == 'coldNuts':
