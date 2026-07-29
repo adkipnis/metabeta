@@ -88,6 +88,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--decimals',         type=int, default=2,
                         help='Decimal places in table cells (default: 2)')
     parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--warmup',           action=argparse.BooleanOptionalAction, default=True,
+                        help='Untimed 1-sample MB warm-up before timed sampling (default: true)')
     parser.add_argument('--convergence_mode', type=str, default='liberal',
                         choices=['liberal', 'strict'])
     parser.add_argument('--methods',          type=str, nargs='*', default=None,
@@ -408,6 +410,7 @@ def evaluateRegime(
     rescale: bool = True,
     convergence_mode: str = 'liberal',
     summary_chunk_size: int = 1,
+    warmup: bool = True,
 ) -> tuple[list[dict], list[dict] | None]:
     """Returns (rows_full, rows_conv) — rows_conv is None if no convergence data.
 
@@ -458,6 +461,7 @@ def evaluateRegime(
         seed,
         device,
         cap_mask,
+        warmup=warmup,
     )
 
     # Rescale MB + data ONCE, before conv subsetting (rescale is in-place on the proposal).
@@ -722,6 +726,7 @@ def main() -> None:
         rescale=cfg.rescale,
         convergence_mode=cfg.convergence_mode,
         summary_chunk_size=cfg.summary_chunk_size,
+        warmup=getattr(cfg, 'warmup', True),
     )
     if not rows:
         logger.error('No datasets evaluated — check that %s fits the checkpoint capacity.', data_id)

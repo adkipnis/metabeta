@@ -88,6 +88,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--decimals',         type=int, default=2,
                         help='Decimal places in table cells (default: 2)')
     parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--warmup',           action=argparse.BooleanOptionalAction, default=True,
+                        help='Untimed 1-sample MB warm-up before timed sampling (default: true)')
     parser.add_argument('--convergence_mode', type=str, default='strict',
                         choices=['liberal', 'strict'])
     parser.add_argument('--methods',          type=str, nargs='*', default=None,
@@ -411,10 +413,31 @@ def evaluateReal(
     seed: int,
     methods: list[str],
     summary_chunk_size: int = 4,
+    warmup: bool = True,
 ) -> list[dict]:
     col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q)
     B_total = len(col)
     batch = collateGrouped([col[i] for i in range(B_total)])
+
+    # Precomputed analytical stats (beta_est/BLUPs from precompute.py) live in the sibling
+    # {partition}.npz, not the .fit.npz; inject them so MB sampling reuses the MAP statistics
+    # instead of recomputing glmm() live (matching evaluate.py / oracle_posterior.py).
+    if 'stats' not in batch:
+        base_path = data_path.with_name(data_path.name.replace('.fit.npz', '.npz'))
+        if base_path.exists() and base_path != data_path:
+            base_col = Collection(base_path, permute=False, max_d=max_d, max_q=max_q)
+            if len(base_col) == B_total:
+                base_batch = collateGrouped([base_col[i] for i in range(B_total)])
+                if 'stats' in base_batch:
+                    batch['stats'] = base_batch['stats']
+                del base_batch
+            del base_col
+        if 'stats' not in batch:
+            logger.warning(
+                'No precomputed stats for %s — MB sampling recomputes glmm() live (slower). '
+                'Run metabeta/analytical/precompute.py for this data_id/partition.',
+                data_path.parent.name,
+            )
 
     # Restrict to NUTS-converged datasets
     conv_mask = nutsConvergeMask(batch, mode=convergence_mode)
@@ -444,7 +467,17 @@ def evaluateReal(
 
     # Inference
     proposal_mb, mb_tpd_arr = loadOrSampleMB(
-        model, batch, data_path, ckpt_dir, prefix, n_samples, batch_size, seed, device, conv_mask
+        model,
+        batch,
+        data_path,
+        ckpt_dir,
+        prefix,
+        n_samples,
+        batch_size,
+        seed,
+        device,
+        conv_mask,
+        warmup=warmup,
     )
     proposal_nuts = fit2proposal(batch, 'nuts')
     proposal_advi = fit2proposal(advi_batch, 'advi') if advi_batch is not None else None
@@ -732,6 +765,7 @@ def main() -> None:
             seed=cfg.seed,
             methods=methods,
             summary_chunk_size=cfg.summary_chunk_size,
+            warmup=getattr(cfg, 'warmup', True),
         )
         if rows:
             rows_by_regime[regime] = rows

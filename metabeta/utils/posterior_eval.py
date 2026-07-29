@@ -128,6 +128,42 @@ def fit2proposal(batch: dict[str, torch.Tensor], prefix: str) -> Proposal:
     return proposal
 
 
+def _synchronizeDevice(device: torch.device) -> None:
+    """Block until queued device work finishes (no-op on CPU) so timings are accurate."""
+    if device.type == 'cuda' and torch.cuda.is_available():
+        torch.cuda.synchronize(device)
+    elif device.type == 'mps' and hasattr(torch, 'mps'):
+        torch.mps.synchronize()
+
+
+def _warmupModel(
+    model: Approximator,
+    batch: dict[str, torch.Tensor],
+    batch_size: int,
+    device: torch.device,
+) -> None:
+    """Untimed 1-sample forward pass to absorb one-time init (lazy alloc, cudnn autotune, the
+    first analytical fit) before timing begins, mirroring evaluate.py.
+
+    The CPU/CUDA RNG state is saved and restored around the pass, so the subsequent real draws
+    are identical whether or not warm-up ran — keeping posterior-sample caches reproducible.
+    """
+    cpu_rng = torch.random.get_rng_state()
+    cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    _synchronizeDevice(device)
+    logger.info('Warming MB model on one batch with n_samples=1')
+    try:
+        end = min(batch_size, batch['X'].shape[0])
+        warm = toDevice(sliceBatch(batch, 0, end), device)
+        _ = model.estimate(warm, n_samples=1)
+        del warm, _
+        _synchronizeDevice(device)
+    finally:
+        torch.random.set_rng_state(cpu_rng)
+        if cuda_rng is not None:
+            torch.cuda.set_rng_state_all(cuda_rng)
+
+
 @torch.no_grad()
 def sampleMB(
     model: Approximator,
@@ -135,21 +171,29 @@ def sampleMB(
     n_samples: int,
     batch_size: int,
     device: torch.device,
+    warmup: bool = True,
 ) -> tuple[Proposal, torch.Tensor]:
     """Sample from the model; returns (proposal, tpd_arr) with per-dataset time (s), shape (B,).
 
     ``no_grad`` rather than ``inference_mode``: the analytical MAP fit inside the model runs
     ``loss.backward()`` under ``torch.enable_grad()``, which inference-mode forbids.
+
+    With ``warmup`` (default), an untimed 1-sample pass runs first so one-time init doesn't
+    inflate the first chunk's per-dataset timing.
     """
     B = batch['X'].shape[0]
+    if warmup:
+        _warmupModel(model, batch, batch_size, device)
     proposals: list[Proposal] = []
     tpd_list: list[float] = []
     for start in tqdm(range(0, B, batch_size), desc='  MB', leave=False):
         end = min(start + batch_size, B)
         b_chunk = sliceBatch(batch, start, end)
         b_chunk = toDevice(b_chunk, device)
+        _synchronizeDevice(device)
         t0_chunk = time.perf_counter()
         p_chunk = model.estimate(b_chunk, n_samples=n_samples)
+        _synchronizeDevice(device)
         tpd_chunk = (time.perf_counter() - t0_chunk) / (end - start)
         tpd_list.extend([tpd_chunk] * (end - start))
         p_chunk.to('cpu')
@@ -223,12 +267,13 @@ def loadOrSampleMB(
     seed: int,
     device: torch.device,
     mask: np.ndarray | None,
+    warmup: bool = True,
 ) -> tuple[Proposal, torch.Tensor]:
     """Cached wrapper around sampleMB; cache lives next to the data as test.fit.npz's sibling.
 
     ``mask`` identifies which datasets of the full test file are in ``batch`` (e.g. the
     capacity-kept or NUTS-converged subset); it is folded into the cache key since it changes
-    the batch contents.
+    the batch contents. ``warmup`` only matters on a cache miss (see sampleMB).
     """
     cache_path = _sampleCachePath(data_path, 'mb', ckpt_dir, prefix, n_samples, seed, mask)
     ref_mtime = _refMtime(data_path, ckpt_dir, prefix)
@@ -243,7 +288,7 @@ def loadOrSampleMB(
     else:
         logger.info('No usable MB sample cache at %s; sampling.', cache_path)
 
-    proposal, tpd_arr = sampleMB(model, batch, n_samples, batch_size, device)
+    proposal, tpd_arr = sampleMB(model, batch, n_samples, batch_size, device, warmup=warmup)
     saveProposalCache(
         cache_path,
         proposal,
