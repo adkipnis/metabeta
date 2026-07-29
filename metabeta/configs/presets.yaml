@@ -86,9 +86,9 @@ posthoc:
   0:
     default: imhMarginal  # matches NUTS on all metrics/sizes on real data (see experiments/results)
   1:
-    default: isLaplace         # TODO: choose Bernoulli default (e.g. isFull / isLaplace / imhGlobal)
+    default: isLaplace    # only method that closes the huge-b LOO gap; isFull ≈ raw MB there
   2:
-    default: isLaplace         # TODO: choose Poisson default
+    default: isLaplace    # rescues MB's growing under-dispersion (large-p 0.86→0.97, ΔLOO 0.57→0.06)
 
 # CLI-only parameters (never have defaults in YAML configs)
 cli_only:
