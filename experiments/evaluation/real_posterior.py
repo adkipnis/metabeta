@@ -173,7 +173,7 @@ def fit2proposal(batch: dict[str, torch.Tensor], prefix: str) -> Proposal:
     return proposal
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def sampleMB(
     model: Approximator,
     batch: dict[str, torch.Tensor],
