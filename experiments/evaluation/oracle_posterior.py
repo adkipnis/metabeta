@@ -393,6 +393,7 @@ def _summaryRow(
 def evaluateRegime(
     model: Approximator,
     data_path: Path,
+    base_path: Path,
     max_d: int,
     max_q: int,
     lf: int,
@@ -410,14 +411,27 @@ def evaluateRegime(
 ) -> tuple[list[dict], list[dict] | None]:
     """Returns (rows_full, rows_conv) — rows_conv is None if no convergence data.
 
-    Memory is bounded by streaming: the base batch excludes all fit tensors, and each
-    reference method (NUTS/ADVI/Laplace) is loaded, summarized, and freed one at a time, so
-    at most one method's multi-GB fit samples are resident at once (plus MB + refinements).
+    ``base_path`` is the base ``{partition}.npz`` (data + precomputed analytical ``stats``);
+    ``data_path`` is the ``{partition}.fit.npz`` (NUTS/ADVI/Laplace fits + diagnostics).
+    Loading the base data from ``base_path`` populates ``data['stats']`` so MB sampling reuses
+    the precomputed MAP statistics instead of recomputing glmm() live (matching evaluate.py and
+    how the model was trained). Fits/diagnostics/caches use ``data_path``.
+
+    Memory is bounded by streaming: the base batch carries no fit tensors, and each reference
+    method (NUTS/ADVI/Laplace) is loaded, summarized, and freed one at a time, so at most one
+    method's multi-GB fit samples are resident at once (plus MB + refinements).
     """
     logger.info('\n--- Regime: %s ---', regime)
 
-    # Base data-only batch (fit tensors excluded → light); capacity filter.
-    data_batch, n_total, n_kept, cap_mask = loadRegimeBatch(data_path, max_d, max_q)
+    # Base data batch from {partition}.npz — carries precomputed analytical stats (beta_est,
+    # BLUPs), so collateGrouped populates data['stats'] and the model skips the live MAP fit.
+    data_batch, n_total, n_kept, cap_mask = loadRegimeBatch(base_path, max_d, max_q)
+    if 'stats' not in data_batch:
+        logger.warning(
+            '  No precomputed stats in %s — MB sampling will recompute glmm() live (slow). '
+            'Run metabeta/analytical/precompute.py for this data_id/partition.',
+            base_path.name,
+        )
     logger.info('  Capacity filter: %d / %d (d≤%d, q≤%d)', n_kept, n_total, max_d, max_q)
     if n_kept == 0:
         logger.warning('  No datasets pass capacity filter — skipping.')
@@ -680,9 +694,20 @@ def main() -> None:
         logger.error('%s: test.fit.npz not found', data_id)
         return
 
+    # Base data (+ precomputed analytical stats from precompute.py) lives in test.npz; the
+    # fits live in test.fit.npz. Fall back to the fit file if the base is absent (no stats →
+    # live glmm, slower).
+    base_path = DATA_DIR / data_id / 'test.npz'
+    if not base_path.exists():
+        logger.warning(
+            '%s: test.npz not found — using test.fit.npz for base data (no stats)', data_id
+        )
+        base_path = data_path
+
     rows, rows_conv = evaluateRegime(
         model,
         data_path,
+        base_path,
         max_d,
         max_q,
         lf,
