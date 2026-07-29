@@ -124,6 +124,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
     p.add_argument('--n-samples', type=int, default=1000, help='flow samples for torch-based methods (raw/is/svgd); IMH uses its own fixed count')
     p.add_argument('--skip', nargs='+', default=[], choices=['raw', 'is', 'isFull', 'isMarginal', 'isRM', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'svgd', 'coldNuts', 'warmNuts'], help='conditions to skip (e.g. --skip is)')
+    p.add_argument('--only', nargs='+', default=None, choices=['raw', 'is', 'isFull', 'isMarginal', 'isRM', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'svgd', 'coldNuts', 'warmNuts'], help='run only these conditions; results go to {family}_{size}_{only}.md so existing full-run mds are not overwritten')
     p.add_argument('--rm-sweeps', type=int, default=15, help='rejuvenation sweeps for the isRM condition; ~(1-acceptance)^K particles stay unmoved')
     p.add_argument('--include-svgd', action='store_true', help='also run the (slow) SVGD condition')
     p.add_argument('--include-warmnuts', action='store_true', help='also run the (slow) warm-started NUTS condition')
@@ -662,6 +663,8 @@ def main() -> None:
     if args.include_warmnuts:
         conditions.append('warmNuts')
     conditions = [c for c in conditions if c not in args.skip]
+    if args.only is not None:
+        conditions = [c for c in conditions if c in args.only]
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -777,7 +780,9 @@ def main() -> None:
                     runWarmNuts(model, tensor_batch, ds_list, lf)
                 print()
 
-        md_path = RESULTS_DIR / f'{cfg["family"]}_{cfg["size"]}.md'
+        # --only runs get their own file so partial passes never clobber a full-run md
+        tag = '' if args.only is None else '_' + '-'.join(args.only)
+        md_path = RESULTS_DIR / f'{cfg["family"]}_{cfg["size"]}{tag}.md'
         md_path.write_text(
             f'# {cfg["label"]} posthoc ablation\n\n```\n{_renderTerminal(buf.getvalue())}\n```\n'
         )
