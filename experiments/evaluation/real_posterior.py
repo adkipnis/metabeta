@@ -680,7 +680,7 @@ def saveTables(
 # ---------------------------------------------------------------------------
 # Main
 
-DEFAULT_SIZES = ['tiny', 'small', 'medium', 'large']
+DEFAULT_SIZES = ['small', 'medium', 'large', 'huge']
 
 
 def main() -> None:

@@ -56,7 +56,7 @@ from metabeta.utils.posterior_eval import (
 
 OUT_DIR = RESULTS_DIR
 
-DEFAULT_SIZES = ['tiny', 'small', 'medium', 'large']
+DEFAULT_SIZES = ['small', 'medium', 'large', 'huge']
 
 logger = logging.getLogger(__name__)
 
