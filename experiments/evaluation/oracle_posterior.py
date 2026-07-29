@@ -79,7 +79,7 @@ def setup() -> argparse.Namespace:
                         help='Datasets per chunk for posterior predictive / LOO summaries')
     parser.add_argument('--seed',       type=int, default=0)
     parser.add_argument('--data_ids',   type=str, nargs='+', default=None,
-                        help='Data IDs to evaluate (default: tiny/small/medium/large-{fam}-sampled)')
+                        help='Data IDs to evaluate (default: small/medium/large/huge-{fam}-sampled)')
     parser.add_argument('--outdir',     type=str, default=str(OUT_DIR))
     parser.add_argument('--verbosity',  type=int, default=1)
     parser.add_argument('--decimals',         type=int, default=2,
