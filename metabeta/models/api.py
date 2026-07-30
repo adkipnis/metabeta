@@ -18,10 +18,12 @@ from tabulate import tabulate
 from metabeta.datasets.preprocessor import DataPreprocessor, PreprocessReport
 from metabeta.evaluation import predictive as _predictive
 from metabeta.models.approximator import Approximator
+from metabeta.posthoc.importance import ImportanceSampler
+from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.constants import hasSigmaEps
-from metabeta.utils.dataloader import Dataloader, collateGrouped, toDevice
-from metabeta.utils.results import Proposal
+from metabeta.utils.dataloader import Dataloader, collateGrouped, sliceBatch, toDevice
+from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.api import (
     JOINT_CHECKPOINT_VERSION,
     ScaleInfo,
@@ -63,6 +65,49 @@ REQUIRED_BATCH_KEYS = (
     'family_sigma_rfx',
 )
 
+# Safeguard defaults. PSIS_K_THRESHOLD follows Yao et al. (2018): k̂ < 0.7 certifies the
+# flow posterior as a usable importance proposal; above it the correction is unreliable
+# and exact MCMC is recommended. MAP_Z_THRESHOLD flags posteriors whose mean drifts too
+# far (in posterior SDs) from the flow-independent analytical MAP anchor; calibrate with
+# experiments/evaluation/map_z_calibration.py on cached validation samples.
+PSIS_K_THRESHOLD = 0.7
+MAP_Z_THRESHOLD = 5.0
+MIN_SAFEGUARD_SAMPLES = 64
+
+
+def mapZScores(
+    proposal: 'Proposal',
+    stats: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+) -> np.ndarray:
+    """Per-dataset max |posterior mean − MAP| / posterior SD over valid parameter dims.
+
+    The MAP estimates come from the (flow-independent) analytical GLMM fit that already
+    conditions the summarizer, so a large max-z means the flow posterior drifted away
+    from a likelihood-based anchor on this dataset — a symptom of data outside the
+    training distribution.  Proposal and stats must live in the same (standardized)
+    outcome scale.
+    """
+    eps = 1e-8
+
+    def _z(samples: torch.Tensor, est: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        mean = samples.float().mean(dim=-2)
+        sd = samples.float().std(dim=-2).clamp_min(eps)
+        return ((mean - est.float()).abs() / sd) * mask.float()
+
+    z_parts = [_z(proposal.ffx, stats['beta_est'], batch['mask_d'])]
+    if 'sigma_rfx_est' in stats:
+        z_parts.append(_z(proposal.sigma_rfx, stats['sigma_rfx_est'], batch['mask_q']))
+    if proposal.has_sigma_eps and 'sigma_eps_est' in stats:
+        z_parts.append(
+            _z(
+                proposal.sigma_eps.unsqueeze(-1),
+                stats['sigma_eps_est'],
+                torch.ones_like(stats['sigma_eps_est']),
+            )
+        )
+    return torch.cat(z_parts, dim=-1).max(dim=-1).values.cpu().numpy()
+
 
 @dataclass
 class RouterResult:
@@ -81,6 +126,7 @@ class RouterResult:
     scale_info: 'ScaleInfo | None' = None
     batch: 'dict[str, torch.Tensor] | None' = None
     ns: np.ndarray | None = None
+    safeguards: dict[str, Any] | None = None
 
 
 class Api:
@@ -288,9 +334,27 @@ class Api:
         *,
         n_samples: int = 1,
         diagnostics: bool = False,
+        refine: bool = False,
+        k_threshold: float = PSIS_K_THRESHOLD,
+        map_z_threshold: float = MAP_Z_THRESHOLD,
         **prepare_kwargs: Any,
     ) -> RouterResult:
-        """Sample from the posterior, routing each dataset to the smallest compatible submodel."""
+        """Sample from the posterior, routing each dataset to the smallest compatible submodel.
+
+        With ``refine=True`` the flow posterior is corrected by self-normalized importance
+        sampling (exact marginal weights for the Normal family, Laplace-marginal weights for
+        GLMMs) and resampled back to ``n_samples`` equally weighted draws.  The PSIS shape
+        diagnostic k̂ (Yao et al., 2018) is computed per dataset as a byproduct: datasets
+        with k̂ ≤ ``k_threshold`` receive the correction, datasets above it keep the raw
+        flow posterior and trigger a warning recommending exact MCMC.  Requires
+        ``n_samples >= MIN_SAFEGUARD_SAMPLES``.
+
+        Independently of ``refine``, posterior means are cross-checked against the
+        analytical MAP estimates that condition the model (a flow-independent anchor);
+        datasets whose maximum |posterior mean − MAP| / posterior SD exceeds
+        ``map_z_threshold`` trigger a warning.  Both checks are reported in
+        ``RouterResult.safeguards``.
+        """
 
         self._param_names: dict[str, list[str]] | None = None
         self._scale_info: 'ScaleInfo | None' = None
@@ -301,7 +365,20 @@ class Api:
         self._validateBatchFormat(batch)
         routes, validation = self._routeBatch(batch)
         batch = toDevice(batch, self.device)
-        proposal = self._runRouted(batch, routes, n_samples=n_samples)
+        proposal, stats = self._runRouted(batch, routes, n_samples=n_samples)
+        safeguards: dict[str, Any] | None = None
+        if refine:
+            if n_samples < MIN_SAFEGUARD_SAMPLES:
+                raise ValueError(
+                    f'refine=True requires n_samples >= {MIN_SAFEGUARD_SAMPLES} '
+                    f'(got {n_samples})'
+                )
+            proposal, safeguards = self._refineAndCheck(
+                proposal, batch, k_threshold=k_threshold, n_samples=n_samples
+            )
+        if stats is not None and n_samples >= MIN_SAFEGUARD_SAMPLES:
+            map_check = self._mapConsistency(proposal, stats, batch, threshold=map_z_threshold)
+            safeguards = {**(safeguards or {}), **map_check}
         diags = self._computeDiagnostics(proposal, batch) if diagnostics else None
         self._rescaleProposal(proposal, batch)
         prior_params: dict[str, np.ndarray] = {
@@ -326,6 +403,7 @@ class Api:
             scale_info=self._scale_info,
             batch=batch if diagnostics else None,
             ns=ns_arr,
+            safeguards=safeguards,
         )
 
     def _warmupSubmodel(self, entry: dict) -> None:
@@ -560,8 +638,13 @@ class Api:
         routes: list[str],
         *,
         n_samples: int,
-    ) -> Proposal:
-        """Run inference for a single-submodel batch."""
+    ) -> tuple[Proposal, dict[str, torch.Tensor] | None]:
+        """Run inference for a single-submodel batch; returns (proposal, analytical stats).
+
+        The analytical GLMM statistics that condition the summarizer are computed here
+        once and threaded through ``estimate`` so the MAP consistency safeguard can reuse
+        them without a second fit.
+        """
         unique_ids = list(dict.fromkeys(routes))
         if len(unique_ids) != 1:
             raise NotImplementedError(
@@ -571,8 +654,131 @@ class Api:
         submodel_id = unique_ids[0]
         model = self.model(submodel_id)
         self._validateBatchMatchesModel(batch, model)
-        proposal = model.estimate(batch, n_samples=n_samples)
-        return proposal
+        stats = model._dataStatistics(batch) if model.analytical_context else None
+        proposal = model.estimate(batch, n_samples=n_samples, stats=stats)
+        return proposal, stats
+
+    def _refineAndCheck(
+        self,
+        proposal: Proposal,
+        batch: dict[str, torch.Tensor],
+        *,
+        k_threshold: float,
+        n_samples: int,
+    ) -> tuple[Proposal, dict[str, Any]]:
+        """SNIS-correct the flow posterior and run the PSIS k̂ reliability check.
+
+        Weights target the exact rfx-marginalized posterior (Normal) or its Laplace
+        approximation (GLMMs); rfx are redrawn from the matching conditional so the
+        delivered draws form a consistent joint sample.  PSIS smoothing yields the
+        per-dataset shape diagnostic k̂; datasets with k̂ > ``k_threshold`` fall back to
+        uniform weights (raw flow posterior) inside the sampler and are reported.  The
+        weighted sample is systematically resampled back to ``n_samples`` equal-weight
+        draws (an exact pass-through for fallback datasets).
+
+        Datasets are processed in chunks of ``self.batch_size`` (when set): the marginal
+        likelihood materialises a (b, m, n, s) tensor, so full batches OOM on large data.
+        """
+        lf = int(batch['likelihood_family'].flatten()[0].item())
+
+        def _refineChunk(chunk_proposal: Proposal, chunk: dict[str, torch.Tensor]) -> Proposal:
+            if lf == 0:
+                sampler = ImportanceSampler(
+                    chunk,
+                    marginal=True,
+                    rb_redraw=True,
+                    corr_prior=True,
+                    pareto=True,
+                    k_threshold=k_threshold,
+                    likelihood_family=lf,
+                )
+            else:
+                sampler = LaplaceImportanceSampler(
+                    chunk,
+                    corr_prior=True,
+                    pareto=True,
+                    k_threshold=k_threshold,
+                    likelihood_family=lf,
+                )
+            return sampler(chunk_proposal)
+
+        B = proposal.samples_g.shape[0]
+        chunk_size = self.batch_size or B
+        if chunk_size >= B:
+            proposal = _refineChunk(proposal, batch)
+        else:
+            chunks = []
+            for start in range(0, B, chunk_size):
+                end = min(start + chunk_size, B)
+                chunks.append(
+                    _refineChunk(proposal.slice_b(start, end), sliceBatch(batch, start, end))
+                )
+            proposal = concatProposalsBatch(chunks)
+
+        psis_k = proposal.is_results['pareto_k'].detach().float().cpu().numpy().copy()
+        fallback = proposal.is_results['fallback'].detach().cpu().numpy().copy()
+
+        # systematic resampling back to equal weights; uniform weights map to identity
+        idx = torch.searchsorted(
+            torch.cumsum(proposal.is_results['weights'], dim=-1),
+            (
+                torch.rand(B, 1, device=proposal.samples_g.device) / n_samples
+                + torch.arange(n_samples, device=proposal.samples_g.device).view(1, -1) / n_samples
+            ),
+            right=True,
+        ).clamp(max=proposal.samples_g.shape[-2] - 1)
+        proposal.subset(idx)
+        proposal.is_results = {}
+
+        if fallback.any():
+            flagged = np.flatnonzero(fallback)
+            k_vals = ', '.join(f'{psis_k[i]:.2f}' for i in flagged)
+            warnings.warn(
+                f'PSIS reliability check failed for dataset(s) {flagged.tolist()} '
+                f'(k̂ = {k_vals} > {k_threshold:g}): the posterior approximation may be '
+                'inaccurate and the importance correction is not applicable, so the raw '
+                'posterior was returned there. Treat those results with caution and '
+                'consider exact MCMC (e.g. NUTS) instead.',
+                stacklevel=3,
+            )
+        return proposal, {
+            'refine_method': 'isMarginal' if lf == 0 else 'isLaplace',
+            'psis_k': psis_k,
+            'psis_k_threshold': k_threshold,
+            'psis_fallback': fallback,
+        }
+
+    def _mapConsistency(
+        self,
+        proposal: Proposal,
+        stats: dict[str, torch.Tensor],
+        batch: dict[str, torch.Tensor],
+        *,
+        threshold: float,
+    ) -> dict[str, Any]:
+        """Cross-check posterior means against the analytical MAP anchor.
+
+        See ``mapZScores`` for the statistic.  Datasets whose max-z exceeds
+        ``threshold`` trigger a warning recommending exact MCMC.
+        """
+        map_z = mapZScores(proposal, stats, batch)
+        flag = map_z > threshold
+        if flag.any():
+            flagged = np.flatnonzero(flag)
+            z_vals = ', '.join(f'{map_z[i]:.1f}' for i in flagged)
+            warnings.warn(
+                f'MAP consistency check failed for dataset(s) {flagged.tolist()} '
+                f'(max |posterior mean − MAP| / posterior SD = {z_vals} > {threshold:g}): '
+                'the posterior disagrees with the analytical point estimates, which can '
+                'indicate data outside the training distribution. Treat those results '
+                'with caution and consider exact MCMC (e.g. NUTS) instead.',
+                stacklevel=3,
+            )
+        return {
+            'map_z': map_z,
+            'map_z_threshold': threshold,
+            'map_z_flag': flag,
+        }
 
     def _rescaleProposal(self, proposal: Proposal, batch: dict[str, torch.Tensor]) -> None:
         if 'sd_y' not in batch or 'likelihood_family' not in batch:
@@ -1203,6 +1409,13 @@ class Api:
         fit_label = d.get('fit_label', 'fit')
         if fit_vals is not None and fit_label.startswith('Mean '):
             fit_label = fit_label[5:]
+        sg = result.safeguards or {}
+        psis_k_vals = sg.get('psis_k')
+        psis_k = (
+            float(psis_k_vals[bi]) if psis_k_vals is not None and bi < len(psis_k_vals) else None
+        )
+        map_z_vals = sg.get('map_z')
+        map_z = float(map_z_vals[bi]) if map_z_vals is not None and bi < len(map_z_vals) else None
         return posteriorTable(
             result.proposal,
             result.param_names,
@@ -1213,6 +1426,10 @@ class Api:
             fit_label=fit_label,
             loo_nll=loo_nll,
             pareto_k=pareto_k,
+            psis_k=psis_k,
+            psis_k_threshold=sg.get('psis_k_threshold', PSIS_K_THRESHOLD),
+            map_z=map_z,
+            map_z_threshold=sg.get('map_z_threshold', MAP_Z_THRESHOLD),
             ci=ci,
             batch_index=batch_index,
             scale_info=result.scale_info,
@@ -1432,6 +1649,10 @@ def posteriorTable(
     fit_label: str = 'fit',
     loo_nll: float | None = None,
     pareto_k: float | None = None,
+    psis_k: float | None = None,
+    psis_k_threshold: float = PSIS_K_THRESHOLD,
+    map_z: float | None = None,
+    map_z_threshold: float = MAP_Z_THRESHOLD,
     ci: float = 0.95,
     batch_index: int = 0,
     scale_info: 'ScaleInfo | None' = None,
@@ -1625,6 +1846,12 @@ def posteriorTable(
         footer_parts.append(f'LOO-NLL = {loo_nll:.3f}')
     if pareto_k is not None:
         footer_parts.append(f'Pareto k = {pareto_k:.3f}')
+    if psis_k is not None:
+        note = 'refined' if psis_k <= psis_k_threshold else '⚠ unreliable — consider MCMC'
+        footer_parts.append(f'PSIS k̂ = {psis_k:.3f} ({note})')
+    if map_z is not None:
+        note = '' if map_z <= map_z_threshold else ' (⚠ disagrees with MAP — consider MCMC)'
+        footer_parts.append(f'MAP z = {map_z:.1f}{note}')
     parts += ['', '   '.join(footer_parts)]
 
     return '\n'.join(parts)
