@@ -196,6 +196,8 @@ esac
 
 SIF="$HOME/containers/python312.sif"
 VENV="$HOME/metabeta/.venv-apptainer"
+# outputs/data is symlinked to workspace storage; bind it so the link resolves in-container
+DATA_ROOT="/lustre/groups/hcai/workspace/alexander.kipnis/datasets"
 
 mkdir -p "$LOG_DIR"
 JOB_TMPDIR="$HOME/tmp/pytensor_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
@@ -204,6 +206,7 @@ trap 'rm -rf "$JOB_TMPDIR"' EXIT
 
 apptainer exec \
   --bind "$HOME:$HOME" \
+  --bind "$DATA_ROOT:$DATA_ROOT" \
   "$SIF" \
   bash -lc "
     set -euo pipefail
