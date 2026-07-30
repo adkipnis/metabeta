@@ -555,6 +555,7 @@ class Approximator(nn.Module):
         summaries: tuple[torch.Tensor, torch.Tensor] | None = None,
         n_samples: int = 1,
         detach_global: bool = False,
+        stats: dict[str, torch.Tensor] | None = None,
     ) -> Proposal:
         """inference method: sample and apply conditional backward pass"""
         assert n_samples > 0, 'n_samples must be positive'
@@ -562,7 +563,7 @@ class Approximator(nn.Module):
 
         # summaries
         if summaries is None:
-            summary_g, summary_l = self.summarize(data)
+            summary_g, summary_l = self.summarize(data, stats=stats)
         else:
             summary_g, summary_l = summaries
 
@@ -613,8 +614,9 @@ class Approximator(nn.Module):
         data,
         summaries=None,
         n_samples=1,
+        stats=None,
     ) -> Proposal:
-        return self.backward(data, summaries=summaries, n_samples=n_samples)
+        return self.backward(data, summaries=summaries, n_samples=n_samples, stats=stats)
 
 
 # =============================================================================
