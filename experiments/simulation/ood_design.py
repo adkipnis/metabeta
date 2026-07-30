@@ -10,12 +10,12 @@ divergence isolates the amortization gap on out-of-distribution designs.
 
 Conditions (family-independent, with a severity dial where applicable):
 
-    Heavy-tailed marginals   X_ij ~ t_ν i.i.d., ν ∈ {2, 1.5, 1}.  Training designs have
-        finite variance by construction (scamd draws Student-t causes with ν ≥ 2.5, clamps
-        them to ±10 and standardizes; all other cause families are lighter-tailed), so
-        ν ≤ 2 (infinite variance; ν = 1 is Cauchy) lies outside the training support.
+    Heavy-tailed marginals   X_ij ~ t_ν i.i.d., ν ∈ {2, 1}.  Training designs have finite
+        variance by construction (scamd draws Student-t causes with ν ≥ 2.5, clamps them
+        to ±10 and standardizes; all other cause families are lighter-tailed), so ν ≤ 2
+        (infinite variance; ν = 1 is Cauchy) lies outside the training support.
     Tail dependence          Clayton copula over the predictors with standard-normal
-        marginals, Kendall τ ∈ {0.3, 0.6, 0.9}.  The training copula is Gaussian, which has
+        marginals, Kendall τ ∈ {0.5, 0.9}.  The training copula is Gaussian, which has
         zero tail dependence at any correlation strength; Clayton has λ_L = 2^{-1/θ} > 0.
     Longitudinal design      the first predictor is a centered within-group time index
         (growth-curve design, deterministic and repeated across groups); remaining
@@ -83,10 +83,8 @@ ALL_FAMILIES = ['n', 'b', 'p']
 # (ds_type tag, kind, severity); severity is df / Kendall τ / unused.
 CONDITIONS: list[tuple[str, str, float]] = [
     ('xt2', 'xtail', 2.0),
-    ('xt15', 'xtail', 1.5),
     ('xt1', 'xtail', 1.0),
-    ('clay3', 'clayton', 0.3),
-    ('clay6', 'clayton', 0.6),
+    ('clay5', 'clayton', 0.5),
     ('clay9', 'clayton', 0.9),
     ('xlong', 'longitudinal', 0.0),
 ]

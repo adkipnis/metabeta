@@ -2,7 +2,7 @@
 
 Companion to experiments/simulation/ood_design.py, which replaces test designs with
 draws from sources outside the training simulator — heavy-tailed marginals (Student-t,
-ν ∈ {2, 1.5, 1}), Clayton tail dependence (Kendall τ ∈ {0.3, 0.6, 0.9}), and longitudinal
+ν ∈ {2, 1}), Clayton tail dependence (Kendall τ ∈ {0.5, 0.9}), and longitudinal
 growth-curve designs — and regenerates y under the ORIGINAL likelihood.  Unlike likelihood
 misspecification, the fitted model remains correctly specified, so NUTS is an exact
 reference and the generating parameters are the true ones: any metabeta↔NUTS divergence or
@@ -61,10 +61,8 @@ OUT_DIR = RESULTS_DIR
 CONDITIONS: list[tuple[str, str]] = [
     ('misbase', 'baseline'),
     ('xt2', 'X~t(ν=2)'),
-    ('xt15', 'X~t(ν=1.5)'),
     ('xt1', 'X~Cauchy'),
-    ('clay3', 'Clayton τ=0.3'),
-    ('clay6', 'Clayton τ=0.6'),
+    ('clay5', 'Clayton τ=0.5'),
     ('clay9', 'Clayton τ=0.9'),
     ('xlong', 'longitudinal'),
 ]
@@ -78,7 +76,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--family', type=str, default='n', choices=list(FAMILY_NAMES))
     parser.add_argument('--sizes', type=str, nargs='+', default=DEFAULT_SIZES, choices=DEFAULT_SIZES)
     parser.add_argument('--conditions', type=str, nargs='+', default=None,
-                        help='ds_type tags to evaluate (default: all eight)')
+                        help='ds_type tags to evaluate (default: all six)')
     parser.add_argument('--prefix', type=str, default='latest')
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--n_samples', type=int, default=1000)
