@@ -177,7 +177,7 @@ def main() -> None:
         'misspecified ds_types show the detection power at that threshold.'
     )
 
-    out_path = outdir / 'map_z_calibration.md'
+    out_path = outdir / f"map_z_calibration_{'_'.join(cfg.families)}.md"
     out_path.write_text(
         '# MAP z-score calibration\n\n'
         f'Partition: {cfg.partition}. Sizes pooled: {", ".join(cfg.sizes)}. '
