@@ -27,6 +27,26 @@ _COL_TITLES_CORR = [
     'Empirical Coverage',
     'Δ Uniform ECDF',
 ]
+_RECOVERY_ALPHA = 0.35
+_LINE_ALPHA = 0.75
+_RIGHT_LEGEND_FONTSIZE = 24
+_RIGHT_LEGEND_X = 0.90
+_PLOT_RIGHT_MARGIN = 0.89
+
+
+def _rightLegendHandles(axs) -> dict[str, object]:
+    handles_by_label: dict[str, object] = {}
+    for ax in axs.flat:
+        handles, axis_labels = ax.get_legend_handles_labels()
+        for handle, axis_label in zip(handles, axis_labels):
+            if (
+                axis_label.startswith('_')
+                or axis_label.startswith('95% CB')
+                or axis_label in handles_by_label
+            ):
+                continue
+            handles_by_label[axis_label] = handle
+    return handles_by_label
 
 
 def plotComparison(
@@ -35,6 +55,7 @@ def plotComparison(
     labels: list[str],
     data: dict[str, torch.Tensor],
     plot_dir: Path | None = None,
+    plot_name: str = 'comparison',
     epoch: int | None = None,
     show: bool = False,
     show_corr_rfx: bool = False,
@@ -65,6 +86,7 @@ def plotComparison(
             ylabel=label,
             upper=upper,
             lower=lower,
+            alpha=_RECOVERY_ALPHA,
             show_legend=False if legend_right else None,
         )
 
@@ -88,6 +110,7 @@ def plotComparison(
             show_legend=False,
             show_x=lower,
             show_corr_rfx=show_corr_rfx,
+            line_alpha=_LINE_ALPHA,
         )
         axs[i, n_rec].set_ylabel('')
 
@@ -102,37 +125,32 @@ def plotComparison(
             show_band_legend=upper,
             show_x=lower,
             show_corr_rfx=show_corr_rfx,
-            draw_legend=not legend_right,
+            draw_legend=True,
+            line_alpha=_LINE_ALPHA,
         )
         axs[i, n_rec + 1].set_ylabel('')
 
     for ax in axs.flat:
         ax.set_box_aspect(1)
     if legend_right:
-        handles_by_label = {}
-        for ax in axs.flat:
-            handles, axis_labels = ax.get_legend_handles_labels()
-            for handle, axis_label in zip(handles, axis_labels):
-                if axis_label.startswith('_') or axis_label in handles_by_label:
-                    continue
-                handles_by_label[axis_label] = handle
+        handles_by_label = _rightLegendHandles(axs)
         if handles_by_label:
             fig.legend(
                 handles_by_label.values(),
                 handles_by_label.keys(),
                 loc='center left',
-                bbox_to_anchor=(1.0, 0.5),
-                fontsize=18,
+                bbox_to_anchor=(_RIGHT_LEGEND_X, 0.5),
+                fontsize=_RIGHT_LEGEND_FONTSIZE,
                 markerscale=2.5,
             )
-        fig.tight_layout(rect=(0.0, 0.0, 0.86, 1.0))
+        fig.tight_layout(rect=(0.0, 0.0, _PLOT_RIGHT_MARGIN, 1.0))
     else:
         fig.tight_layout()
 
     saved_path = None
     if plot_dir is not None:
-        savePlot(plot_dir, 'comparison', epoch=epoch, ending='pdf')
-        saved_path = savePlot(plot_dir, 'comparison', epoch=epoch, ending='png')
+        savePlot(plot_dir, plot_name, epoch=epoch, ending='pdf')
+        saved_path = savePlot(plot_dir, plot_name, epoch=epoch, ending='png')
     if show:
         plt.show()
     plt.close(fig)

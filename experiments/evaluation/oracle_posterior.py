@@ -1,51 +1,62 @@
 """
-Oracle evaluation: given a model checkpoint, evaluate on tiny/small/medium/large test sets.
+Oracle evaluation: evaluate one model checkpoint on one sampled test set (``--data_id``).
 
-Filters datasets that exceed the model's d/q capacity, loads NUTS/ADVI fits from the
-test.fit.npz batch, and produces a LaTeX + Markdown table with mean ± std over
-parameter dimensions (for NRMSE/ECE/EACE/R) and over datasets (for LOO-NLL).
+Both the checkpoint and the single test set are required; pick a ``--data_id`` whose d/q fit
+the checkpoint's capacity (datasets beyond max_d/max_q are dropped by the capacity filter, so
+a small-capacity model on a larger regime yields few or no rows). To sweep sizes, launch one
+process per (checkpoint, data_id) pair.
+
+Loads NUTS/ADVI/Laplace fits from the test.fit.npz batch and produces a LaTeX + Markdown table
+with mean ± std over parameter dimensions (for NRMSE/ECE/EACE/R) and over datasets (for
+LOO-NLL). Unlike real_posterior.py, the sampled test sets carry ground-truth parameters, so
+the metrics are absolute (vs the true values) rather than relative to NUTS.
+
+MB posterior samples, per-method summaries, and post-hoc refinements are cached next to the
+data (siblings of test.fit.npz), keyed by checkpoint/prefix/n_samples/seed and by the
+capacity/convergence subset, mirroring experiments/evaluation/real_posterior.py and
+metabeta/evaluation/evaluate.py.
+
+Optionally layers post-hoc refinements on the raw MB flow posterior (extra ``MB+<method>``
+rows). The method(s) come from ``--methods`` or, if omitted, the per-family default in
+metabeta/configs/presets.yaml; pass ``--methods`` with no values for raw MB only.
 
 Usage (from repo root):
-    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH
-    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --n_samples 100 --batch_size 4
-    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --data_ids small-n-sampled large-n-sampled
+    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --data_id small-n-sampled
+    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --data_id small-n-sampled --n_samples 100 --batch_size 4
+    uv run python experiments/evaluation/oracle_posterior.py --checkpoint PATH --data_id small-n-sampled --methods   # raw MB only
 """
 
 import argparse
 import gc
 import logging
-import time
 from pathlib import Path
 
 import numpy as np
 import torch
 from tabulate import tabulate
-from tqdm import tqdm
 
 from metabeta.models.approximator import Approximator
-from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch, toDevice
-from metabeta.utils.evaluation import (
-    Proposal,
-    concatProposalsBatch,
-    nutsConvergeMask,
-    subsetProposal,
-)
+from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch
+from metabeta.utils.evaluation import nutsConvergeMask, subsetProposal
+from metabeta.utils.results import Proposal
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
-from metabeta.utils.templates import loadConfigFromCheckpoint
-from metabeta.evaluation.summary import getSummary
-from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, loadApproximator
+from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
+from metabeta.utils.posterior_eval import (
+    SUPPORTED_METHODS,
+    fit2proposal,
+    fitBatchMask,
+    loadModel,
+    loadOrComputeSummary,
+    loadOrRefine,
+    loadOrSampleMB,
+    posthocDefaults,
+    validMethods,
+)
 
 OUT_DIR = RESULTS_DIR
-
-DEFAULT_DATA_IDS = [
-    'tiny-n-sampled',
-    'small-n-sampled',
-    'medium-n-sampled',
-    'large-n-sampled',
-]
 
 logger = logging.getLogger(__name__)
 
@@ -57,43 +68,37 @@ logger = logging.getLogger(__name__)
 def setup() -> argparse.Namespace:
     # fmt: off
     parser = argparse.ArgumentParser(
-        description='Oracle cross-size evaluation', argument_default=argparse.SUPPRESS
+        description='Oracle evaluation of one checkpoint on one sampled test set',
+        argument_default=argparse.SUPPRESS,
     )
     parser.add_argument('--checkpoint', type=str, required=True)
+    parser.add_argument('--data_id',    type=str, required=True,
+                        help='Single sampled data id to evaluate, e.g. small-n-sampled. Pick one '
+                             'whose d/q fit the checkpoint capacity (datasets beyond it are '
+                             'dropped by the capacity filter).')
     parser.add_argument('--prefix',     type=str, default='latest')
     parser.add_argument('--device',     type=str, default='cpu')
     parser.add_argument('--n_samples',  type=int, default=1000)
     parser.add_argument('--batch_size', type=int, default=8)
-    parser.add_argument('--summary_batch_size', type=int, default=1,
+    parser.add_argument('--summary_chunk_size', type=int, default=1,
                         help='Datasets per chunk for posterior predictive / LOO summaries')
     parser.add_argument('--seed',       type=int, default=0)
-    parser.add_argument('--data_ids',   type=str, nargs='+', default=DEFAULT_DATA_IDS)
     parser.add_argument('--outdir',     type=str, default=str(OUT_DIR))
     parser.add_argument('--verbosity',  type=int, default=1)
     parser.add_argument('--decimals',         type=int, default=2,
                         help='Decimal places in table cells (default: 2)')
     parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--warmup',           action=argparse.BooleanOptionalAction, default=True,
+                        help='Untimed 1-sample MB warm-up before timed sampling (default: true)')
     parser.add_argument('--convergence_mode', type=str, default='liberal',
                         choices=['liberal', 'strict'])
+    parser.add_argument('--methods',          type=str, nargs='*', default=None,
+                        choices=list(SUPPORTED_METHODS),
+                        help='Post-hoc refinement methods to run on top of raw MB, evaluated '
+                             'as extra rows. Default: the family preset in presets.yaml. '
+                             'Pass an empty list to run raw MB only.')
     # fmt: on
     return parser.parse_args()
-
-
-# ---------------------------------------------------------------------------
-# Model loading
-
-
-def loadModel(
-    ckpt_dir: Path,
-    prefix: str,
-    device: torch.device,
-) -> tuple[Approximator, argparse.Namespace]:
-    cfg_dict = loadConfigFromCheckpoint(ckpt_dir)
-    cfg = argparse.Namespace(**cfg_dict)
-
-    model = loadApproximator(cfg, device, ckpt_dir, prefix)
-
-    return model, cfg
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +133,7 @@ def trimBatch(batch: dict[str, torch.Tensor], max_d: int, max_q: int) -> dict[st
     if 'corr_rfx' in out:
         out['corr_rfx'] = out['corr_rfx'][..., :max_q, :max_q]
 
-    for method in ('nuts', 'advi'):
+    for method in ('nuts', 'advi', 'laplace'):
         if f'{method}_ffx' in out:
             out[f'{method}_ffx'] = out[f'{method}_ffx'][..., :max_d]
         if f'{method}_sigma_rfx' in out:
@@ -154,9 +159,16 @@ def trimBatch(batch: dict[str, torch.Tensor], max_d: int, max_q: int) -> dict[st
     return out
 
 
-def dropFitKeys(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Return a view-like dict excluding large cached NUTS/ADVI fit tensors."""
-    return {k: v for k, v in batch.items() if not (k.startswith('nuts_') or k.startswith('advi_'))}
+# All cached-fit prefixes; the multi-GB ``*_rfx`` sample tensors live under these. The base
+# (data-only) batch and each single-method fit batch are loaded with the complementary set
+# excluded, so at most one method's fit tensors are ever materialized at a time (see
+# evaluateRegime). Collection.exclude_prefixes drops matching keys without decompressing them.
+FIT_PREFIXES = ('nuts_', 'advi_', 'laplace_')
+
+
+def fitExcludePrefixes(keep: str | None) -> tuple[str, ...]:
+    """Prefixes to exclude so a Collection loads only ``keep``'s fits (all fits if keep is None)."""
+    return tuple(p for p in FIT_PREFIXES if p != f'{keep}_')
 
 
 def methodFitBatch(batch: dict[str, torch.Tensor], prefix: str) -> dict[str, torch.Tensor]:
@@ -165,96 +177,91 @@ def methodFitBatch(batch: dict[str, torch.Tensor], prefix: str) -> dict[str, tor
     return {k: v for k, v in batch.items() if k.startswith(stem)}
 
 
+def _probeShapes(data_path: Path) -> tuple[int, int, int]:
+    """Read (d_file, q_file, n_total) from the npz cheaply (small top-level arrays only)."""
+    with np.load(data_path, allow_pickle=True) as raw:
+        d_arr = raw['d']
+        q_arr = raw['q']
+        return int(d_arr.max()), int(q_arr.max()), int(d_arr.shape[0])
+
+
 def loadRegimeBatch(
     data_path: Path,
     max_d: int,
     max_q: int,
-) -> tuple[dict[str, torch.Tensor], int, int]:
-    """Load test batch, filtering and padding/trimming to model capacity.
+    exclude_prefixes: tuple[str, ...] = FIT_PREFIXES,
+) -> tuple[dict[str, torch.Tensor], int, int, np.ndarray]:
+    """Load a test batch, filtering/padding/trimming to model capacity.
 
-    When the test set fits within the model (d_file ≤ max_d, q_file ≤ max_q),
-    loads with max_d/max_q so the model receives correctly-padded inputs.
-    Otherwise loads natively, filters datasets by capacity, and trims to max_d/max_q.
+    ``exclude_prefixes`` is forwarded to Collection; it defaults to all fit prefixes so the
+    base batch stays data-only (the multi-GB fit tensors are never materialized). Pass
+    ``fitExcludePrefixes('nuts')`` etc. to load exactly one method's fits.
 
-    Returns (batch, n_total, n_kept).
+    When the test set fits within the model (d_file ≤ max_d, q_file ≤ max_q), loads with
+    max_d/max_q so the model receives correctly-padded inputs. Otherwise loads natively,
+    filters datasets by capacity, and trims to max_d/max_q.
+
+    Returns (batch, n_total, n_kept, cap_mask) where cap_mask is a full-test-file boolean
+    (length n_total) marking which datasets survive the capacity filter — folded into the
+    posterior-sample / summary cache keys so subsets get distinct caches.
     """
-    col = Collection(data_path, permute=False)
-    d_file, q_file = col.d, col.q
-    n_total = len(col)
+    d_file, q_file, n_total = _probeShapes(data_path)
 
     if d_file <= max_d and q_file <= max_q:
-        col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q)
+        col = Collection(
+            data_path, permute=False, max_d=max_d, max_q=max_q, exclude_prefixes=exclude_prefixes
+        )
         batch = collateGrouped([col[i] for i in range(n_total)])
-        return batch, n_total, n_total
+        return batch, n_total, n_total, np.ones(n_total, dtype=bool)
 
     # Some datasets exceed capacity: load natively, filter, trim
+    col = Collection(data_path, permute=False, exclude_prefixes=exclude_prefixes)
     batch = collateGrouped([col[i] for i in range(n_total)])
     cap_mask = capacityMask(batch, max_d, max_q)
     n_kept = int(cap_mask.sum())
     batch = subsetBatch(batch, cap_mask)
     batch = trimBatch(batch, max_d, max_q)
-    return batch, n_total, n_kept
+    return batch, n_total, n_kept, cap_mask
 
 
-# ---------------------------------------------------------------------------
-# Inference helpers
+def nutsConvergeMaskFromNpz(
+    data_path: Path,
+    cap_mask: np.ndarray,
+    mode: str,
+) -> np.ndarray | None:
+    """NUTS convergence mask over the capacity-kept datasets, read from the small nuts_* diagnostics.
 
-
-def fitBatchMask(batch: dict[str, torch.Tensor], prefix: str) -> np.ndarray:
-    failed_key = f'{prefix}_failed'
-    if failed_key not in batch:
-        return np.ones(batch['X'].shape[0], dtype=bool)
-    return ~batch[failed_key].cpu().numpy().astype(bool)
-
-
-def fit2proposal(batch: dict[str, torch.Tensor], prefix: str) -> Proposal:
-    samples_g = [batch[f'{prefix}_ffx'], batch[f'{prefix}_sigma_rfx']]
-    has_sigma_eps = False
-    if f'{prefix}_sigma_eps' in batch:
-        samples_g.append(batch[f'{prefix}_sigma_eps'].unsqueeze(-1))
-        has_sigma_eps = True
-    proposed = {
-        'global': {'samples': torch.cat(samples_g, dim=-1)},
-        'local': {'samples': batch[f'{prefix}_rfx']},
+    Loads only the tiny diagnostic arrays (divergences/rhat/ess/…) — never the multi-GB
+    nuts_rfx samples — so it can run before any fit proposal is materialized.
+    """
+    diag_keys = (
+        'nuts_divergences',
+        'nuts_draws',
+        'nuts_rhat',
+        'nuts_ess',
+        'nuts_ess_tail',
+        'nuts_max_treedepth',
+    )
+    with np.load(data_path, allow_pickle=True) as raw:
+        diag = {k: torch.as_tensor(raw[k]) for k in diag_keys if k in raw.files}
+    if 'nuts_divergences' not in diag:
+        return None
+    idx = torch.from_numpy(cap_mask)
+    diag = {
+        k: (v[idx] if torch.is_tensor(v) and v.shape[:1] == (cap_mask.shape[0],) else v)
+        for k, v in diag.items()
     }
-    corr_rfx = batch.get(f'{prefix}_corr_rfx', None)
-    proposal = Proposal(proposed, has_sigma_eps=has_sigma_eps, corr_rfx=corr_rfx)
-    proposal.tpd = batch[f'{prefix}_duration'].mean().item()
-    return proposal
+    # nuts_draws is stored per-dataset (uniform); nutsConvergeMask wants a scalar draw count.
+    if 'nuts_draws' in diag:
+        diag['nuts_draws'] = torch.as_tensor(int(diag['nuts_draws'].reshape(-1)[0].item()))
+    return nutsConvergeMask(diag, mode=mode)
 
 
-@torch.inference_mode()
-def sampleMB(
-    model: Approximator,
-    batch: dict[str, torch.Tensor],
-    n_samples: int,
-    batch_size: int,
-    device: torch.device,
-) -> tuple[Proposal, torch.Tensor]:
-    """Returns (proposal, tpd_arr) where tpd_arr is per-dataset time (s), shape (B,)."""
-    B = batch['X'].shape[0]
-    proposals: list[Proposal] = []
-    tpd_list: list[float] = []
-    for start in tqdm(range(0, B, batch_size), desc='  MB', leave=False):
-        end = min(start + batch_size, B)
-        b_chunk = {
-            k: v[start:end] if (torch.is_tensor(v) and v.shape[0] == B) else v
-            for k, v in batch.items()
-        }
-        b_chunk = toDevice(b_chunk, device)
-        t0_chunk = time.perf_counter()
-        p_chunk = model.estimate(b_chunk, n_samples=n_samples)
-        tpd_chunk = (time.perf_counter() - t0_chunk) / (end - start)
-        tpd_list.extend([tpd_chunk] * (end - start))
-        p_chunk.to('cpu')
-        proposals.append(p_chunk)
-        del b_chunk
-        if device.type == 'cuda':
-            torch.cuda.empty_cache()
-    merged = concatProposalsBatch(proposals)
-    tpd_arr = torch.tensor(tpd_list, dtype=torch.float64)
-    merged.tpd = tpd_arr.mean().item()
-    return merged, tpd_arr
+def _capFull(cap_mask: np.ndarray, sub: np.ndarray) -> np.ndarray:
+    """Lift a boolean mask defined over the capacity-kept datasets to the full test file."""
+    full = cap_mask.copy()
+    full[cap_mask] = sub
+    return full
 
 
 # ---------------------------------------------------------------------------
@@ -331,133 +338,251 @@ def buildRow(
 # Regime evaluation
 
 
-def _evalGroup(
-    quads: list[tuple[str, Proposal, dict, torch.Tensor | None]],
+def _summaryRow(
+    label: str,
+    method: str,
+    proposal: Proposal,
+    batch: dict[str, torch.Tensor],
+    mask: np.ndarray,
+    tpd: torch.Tensor | None,
+    model_derived: bool,
     regime: str,
-    likelihood_family: int,
+    lf: int,
     rescale: bool,
-    summary_batch_size: int,
-) -> list[dict]:
-    """Evaluate a list of (label, proposal, batch, tpd_arr) tuples and return rows."""
-    rows = []
-    for label, proposal, batch, tpd_arr in quads:
-        if proposal is None:
-            continue
-        proposal.to('cpu')
-        if rescale:
-            proposal.rescale(batch['sd_y'])
-            batch = rescaleData(batch)
-        summary = getSummary(
-            proposal,
-            batch,
-            likelihood_family=likelihood_family,
-            compute_pred_coverage=False,
-            dataset_chunk_size=summary_batch_size,
-        )
-        active_d = batch['mask_d'].any(0)
-        active_q = batch['mask_q'].any(0)
-        has_eps = 'sigma_eps' in summary.nrmse
-        rows.append(
-            buildRow(
-                label,
-                regime,
-                corr_vals=flattenActiveParams(summary.corr, active_d, active_q, has_eps),
-                nrmse_vals=flattenActiveParams(summary.nrmse, active_d, active_q, has_eps),
-                ece_vals=flattenActiveParams(summary.ece, active_d, active_q, has_eps),
-                eace_vals=flattenActiveParams(summary.eace, active_d, active_q, has_eps),
-                loo_nll=summary.loo_nll,
-                tpd_arr=tpd_arr,
-            )
-        )
-    return rows
+    data_path: Path,
+    ckpt_dir: Path,
+    prefix: str,
+    n_samples: int,
+    seed: int,
+    summary_chunk_size: int,
+) -> dict:
+    """Summarize one (proposal, batch) — cached per method/mask — and build its metric row.
+
+    ``proposal``/``batch`` are assumed already rescaled. Fit methods (model_derived=False)
+    cache without the checkpoint in the key; mb/refined key on checkpoint/n_samples/seed.
+    """
+    proposal.to('cpu')
+    summary = loadOrComputeSummary(
+        proposal,
+        batch,
+        data_path,
+        method,
+        mask,
+        lf,
+        rescale,
+        ckpt_dir=ckpt_dir if model_derived else None,
+        prefix=prefix if model_derived else None,
+        n_samples=n_samples if model_derived else None,
+        seed=seed if model_derived else None,
+        summary_chunk_size=summary_chunk_size,
+    )
+    ag = summary.aggregated
+    active_d = batch['mask_d'].any(0)
+    active_q = batch['mask_q'].any(0)
+    has_eps = 'sigma_eps' in ag.nrmse
+    return buildRow(
+        label,
+        regime,
+        corr_vals=flattenActiveParams(ag.corr, active_d, active_q, has_eps),
+        nrmse_vals=flattenActiveParams(ag.nrmse, active_d, active_q, has_eps),
+        ece_vals=flattenActiveParams(ag.ece, active_d, active_q, has_eps),
+        eace_vals=flattenActiveParams(ag.eace, active_d, active_q, has_eps),
+        loo_nll=summary.per_dataset.loo_nll,
+        tpd_arr=tpd,
+    )
 
 
 def evaluateRegime(
     model: Approximator,
     data_path: Path,
+    base_path: Path,
     max_d: int,
     max_q: int,
-    likelihood_family: int,
+    lf: int,
     n_samples: int,
     batch_size: int,
     device: torch.device,
     regime: str,
+    ckpt_dir: Path,
+    prefix: str,
+    seed: int,
+    methods: list[str],
     rescale: bool = True,
     convergence_mode: str = 'liberal',
-    summary_batch_size: int = 1,
+    summary_chunk_size: int = 1,
+    warmup: bool = True,
 ) -> tuple[list[dict], list[dict] | None]:
-    """Returns (rows_full, rows_conv) — rows_conv is None if no convergence data."""
+    """Returns (rows_full, rows_conv) — rows_conv is None if no convergence data.
+
+    ``base_path`` is the base ``{partition}.npz`` (data + precomputed analytical ``stats``);
+    ``data_path`` is the ``{partition}.fit.npz`` (NUTS/ADVI/Laplace fits + diagnostics).
+    Loading the base data from ``base_path`` populates ``data['stats']`` so MB sampling reuses
+    the precomputed MAP statistics instead of recomputing glmm() live (matching evaluate.py and
+    how the model was trained). Fits/diagnostics/caches use ``data_path``.
+
+    Memory is bounded by streaming: the base batch carries no fit tensors, and each reference
+    method (NUTS/ADVI/Laplace) is loaded, summarized, and freed one at a time, so at most one
+    method's multi-GB fit samples are resident at once (plus MB + refinements).
+    """
     logger.info('\n--- Regime: %s ---', regime)
 
-    cap_batch, n_total, n_kept = loadRegimeBatch(data_path, max_d, max_q)
+    # Base data batch from {partition}.npz — carries precomputed analytical stats (beta_est,
+    # BLUPs), so collateGrouped populates data['stats'] and the model skips the live MAP fit.
+    data_batch, n_total, n_kept, cap_mask = loadRegimeBatch(base_path, max_d, max_q)
+    if 'stats' not in data_batch:
+        logger.warning(
+            '  No precomputed stats in %s — MB sampling will recompute glmm() live (slow). '
+            'Run metabeta/analytical/precompute.py for this data_id/partition.',
+            base_path.name,
+        )
     logger.info('  Capacity filter: %d / %d (d≤%d, q≤%d)', n_kept, n_total, max_d, max_q)
     if n_kept == 0:
         logger.warning('  No datasets pass capacity filter — skipping.')
         return [], None
 
-    advi_mask = fitBatchMask(cap_batch, 'advi')
-    n_advi = int(advi_mask.sum())
-    logger.info('  ADVI success: %d / %d', n_advi, n_kept)
-
-    data_batch = dropFitKeys(cap_batch)
-    advi_data_batch = subsetBatch(data_batch, advi_mask)
-
-    proposal_mb, mb_tpd_arr = sampleMB(model, data_batch, n_samples, batch_size, device)
-    proposal_nuts = fit2proposal(cap_batch, 'nuts')
-    advi_fit_batch = (
-        subsetBatch(methodFitBatch(cap_batch, 'advi'), advi_mask) if n_advi > 0 else None
-    )
-    proposal_advi = fit2proposal(advi_fit_batch, 'advi') if advi_fit_batch is not None else None
-
-    nuts_tpd = cap_batch.get('nuts_duration')
-    advi_tpd = advi_fit_batch.get('advi_duration') if advi_fit_batch is not None else None
-    for key in list(cap_batch):
-        if key.startswith('advi_'):
-            del cap_batch[key]
-    gc.collect()
-
-    # Build convergence subsets BEFORE the eval loop (rescale is in-place on proposals)
-    conv_quads: list[tuple[str, Proposal, dict, torch.Tensor | None]] | None = None
-    conv_mask = nutsConvergeMask(cap_batch, mode=convergence_mode)
+    # NUTS convergence from the small diagnostic arrays (no fit samples materialized).
+    conv_mask = nutsConvergeMaskFromNpz(data_path, cap_mask, convergence_mode)
+    have_conv = False
+    conv_idx = conv_batch = conv_full = None
     if conv_mask is not None:
         n_conv = int(conv_mask.sum())
         logger.info('  NUTS convergence (%s): %d / %d', convergence_mode, n_conv, n_kept)
-        if 0 < n_conv < n_kept:
-            conv_batch = subsetBatch(data_batch, conv_mask)
-            conv_mb = subsetProposal(proposal_mb, conv_mask)
-            conv_nuts = subsetProposal(proposal_nuts, conv_mask)
-            conv_advi_mask = advi_mask & conv_mask
-            n_conv_advi = int(conv_advi_mask.sum())
-            conv_advi_batch = subsetBatch(data_batch, conv_advi_mask)
-            conv_advi = (
-                subsetProposal(proposal_advi, conv_mask[advi_mask])
-                if n_advi > 0 and n_conv_advi > 0
-                else None
-            )
-            idx = torch.from_numpy(conv_mask)
-            advi_idx = torch.from_numpy(conv_mask[advi_mask])
-            conv_quads = [
-                ('MB', conv_mb, conv_batch, mb_tpd_arr[idx]),
-                ('NUTS', conv_nuts, conv_batch, nuts_tpd[idx] if nuts_tpd is not None else None),
-                (
-                    'ADVI',
-                    conv_advi,
-                    conv_advi_batch,
-                    advi_tpd[advi_idx] if advi_tpd is not None else None,
-                ),
-            ]
+        have_conv = 0 < n_conv < n_kept
 
-    full_quads = [
-        ('MB', proposal_mb, data_batch, mb_tpd_arr),
-        ('NUTS', proposal_nuts, data_batch, nuts_tpd),
-        ('ADVI', proposal_advi, advi_data_batch, advi_tpd),
-    ]
-    rows = _evalGroup(full_quads, regime, likelihood_family, rescale, summary_batch_size)
-    rows_conv = (
-        _evalGroup(conv_quads, regime, likelihood_family, rescale, summary_batch_size)
-        if conv_quads
-        else None
+    # MB samples over the capacity-kept batch (cached, keyed by cap_mask).
+    proposal_mb, mb_tpd_arr = loadOrSampleMB(
+        model,
+        data_batch,
+        data_path,
+        ckpt_dir,
+        prefix,
+        n_samples,
+        batch_size,
+        seed,
+        device,
+        cap_mask,
+        warmup=warmup,
     )
+
+    # Rescale MB + data ONCE, before conv subsetting (rescale is in-place on the proposal).
+    if rescale:
+        proposal_mb.rescale(data_batch['sd_y'])
+        data_batch = rescaleData(data_batch)
+
+    if have_conv:
+        conv_idx = torch.from_numpy(conv_mask)
+        conv_batch = subsetBatch(data_batch, conv_mask)
+        conv_full = _capFull(cap_mask, conv_mask)
+
+    # Post-hoc refinements on the (rescaled) raw MB posterior (cached, keyed by cap_mask).
+    refined: list[tuple[str, Proposal, float]] = []
+    for method in validMethods(methods, lf):
+        logger.info('  Refining MB with %s', method)
+        p_ref, refine_s = loadOrRefine(
+            method,
+            proposal_mb,
+            data_batch,
+            data_path,
+            ckpt_dir,
+            prefix,
+            n_samples,
+            seed,
+            lf,
+            rescale,
+            cap_mask,
+            batch_size,
+        )
+        refined.append((method, p_ref, refine_s))
+
+    def _mrow(label, method, proposal, batch, mask, tpd, model_derived):
+        return _summaryRow(
+            label,
+            method,
+            proposal,
+            batch,
+            mask,
+            tpd,
+            model_derived,
+            regime,
+            lf,
+            rescale,
+            data_path,
+            ckpt_dir,
+            prefix,
+            n_samples,
+            seed,
+            summary_chunk_size,
+        )
+
+    rows: list[dict] = []
+    rows_conv: list[dict] | None = [] if have_conv else None
+
+    # ---- MB + refined (model-derived; small, reused for both groups) ----
+    mb_specs = [('MB', 'mb', proposal_mb, mb_tpd_arr)]
+    mb_specs += [(f'MB+{m}', m, p, mb_tpd_arr + s / n_kept) for (m, p, s) in refined]
+    for label, method, proposal, tpd in mb_specs:
+        rows.append(_mrow(label, method, proposal, data_batch, cap_mask, tpd, True))
+        if have_conv:
+            rows_conv.append(
+                _mrow(
+                    label,
+                    method,
+                    subsetProposal(proposal, conv_mask),
+                    conv_batch,
+                    conv_full,
+                    tpd[conv_idx],
+                    True,
+                )
+            )
+
+    del refined
+    gc.collect()
+
+    # ---- Reference methods, STREAMED one at a time (only one fit-tensor set resident) ----
+    for label, method in (('NUTS', 'nuts'), ('ADVI', 'advi'), ('LA', 'laplace')):
+        fit_batch, _, _, _ = loadRegimeBatch(
+            data_path, max_d, max_q, exclude_prefixes=fitExcludePrefixes(method)
+        )
+        if f'{method}_ffx' not in fit_batch:            # method absent from this test file
+            logger.info('  %s: no fits in file — skipping.', label)
+            del fit_batch
+            gc.collect()
+            continue
+        success = fitBatchMask(fit_batch, method)        # (n_kept,)
+        logger.info('  %s success: %d / %d', label, int(success.sum()), n_kept)
+        if not success.any():
+            del fit_batch
+            gc.collect()
+            continue
+
+        method_batch = subsetBatch(methodFitBatch(fit_batch, method), success)
+        del fit_batch
+        proposal = fit2proposal(method_batch, method)
+        tpd = method_batch.get(f'{method}_duration')     # (n_success,)
+        data_sub = subsetBatch(data_batch, success)      # already rescaled
+        if rescale:
+            proposal.rescale(data_sub['sd_y'])
+
+        rows.append(
+            _mrow(label, method, proposal, data_sub, _capFull(cap_mask, success), tpd, False)
+        )
+        if have_conv:
+            sel = conv_mask[success]                     # conv status within the success subset
+            if sel.any():
+                sel_idx = torch.from_numpy(sel)
+                rows_conv.append(
+                    _mrow(
+                        label,
+                        method,
+                        subsetProposal(proposal, sel),
+                        subsetBatch(data_sub, sel),
+                        _capFull(cap_mask, success & conv_mask),
+                        tpd[sel_idx] if tpd is not None else None,
+                        False,
+                    )
+                )
+        del proposal, method_batch, data_sub
+        gc.collect()
 
     return rows, rows_conv
 
@@ -555,45 +680,67 @@ def main() -> None:
     max_d: int = model_cfg_ns.max_d
     max_q: int = model_cfg_ns.max_q
     lf: int = model_cfg_ns.likelihood_family
-    run_name = ckpt_dir.name
 
-    logger.info('Model: %s  max_d=%d  max_q=%d  likelihood=%d', run_name, max_d, max_q, lf)
+    data_id = cfg.data_id
+    regime = data_id.split('-')[0]
+    # stem includes the data id so evaluating one checkpoint on several test sets never clobbers
+    stem = f'{ckpt_dir.name}_{data_id}'
 
-    rows_by_regime: dict[str, list[dict]] = {}
-    rows_by_regime_conv: dict[str, list[dict]] = {}
-    for data_id in cfg.data_ids:
-        data_path = DATA_DIR / data_id / 'test.fit.npz'
-        if not data_path.exists():
-            logger.warning('Skipping %s: test.fit.npz not found', data_id)
-            continue
-        regime = data_id.split('-')[0]
-        rows, rows_conv = evaluateRegime(
-            model,
-            data_path,
-            max_d,
-            max_q,
-            lf,
-            n_samples=cfg.n_samples,
-            batch_size=cfg.batch_size,
-            device=device,
-            regime=regime,
-            rescale=cfg.rescale,
-            convergence_mode=cfg.convergence_mode,
-            summary_batch_size=cfg.summary_batch_size,
+    # --methods: explicit list (possibly empty for raw MB only) overrides the family preset.
+    methods = cfg.methods if cfg.methods is not None else posthocDefaults(lf)
+
+    logger.info('Model: %s  max_d=%d  max_q=%d  likelihood=%d', ckpt_dir.name, max_d, max_q, lf)
+    logger.info('Evaluating: %s', data_id)
+    logger.info('Refinement methods: %s', methods or '(none — raw MB only)')
+
+    data_path = DATA_DIR / data_id / 'test.fit.npz'
+    if not data_path.exists():
+        logger.error('%s: test.fit.npz not found', data_id)
+        return
+
+    # Base data (+ precomputed analytical stats from precompute.py) lives in test.npz; the
+    # fits live in test.fit.npz. Fall back to the fit file if the base is absent (no stats →
+    # live glmm, slower).
+    base_path = DATA_DIR / data_id / 'test.npz'
+    if not base_path.exists():
+        logger.warning(
+            '%s: test.npz not found — using test.fit.npz for base data (no stats)', data_id
         )
-        if rows:
-            rows_by_regime[regime] = rows
-        if rows_conv:
-            rows_by_regime_conv[regime] = rows_conv
+        base_path = data_path
 
-    if not rows_by_regime:
-        logger.error('No regimes evaluated — check data_ids and checkpoint.')
+    rows, rows_conv = evaluateRegime(
+        model,
+        data_path,
+        base_path,
+        max_d,
+        max_q,
+        lf,
+        n_samples=cfg.n_samples,
+        batch_size=cfg.batch_size,
+        device=device,
+        regime=regime,
+        ckpt_dir=ckpt_dir,
+        prefix=cfg.prefix,
+        seed=cfg.seed,
+        methods=methods,
+        rescale=cfg.rescale,
+        convergence_mode=cfg.convergence_mode,
+        summary_chunk_size=cfg.summary_chunk_size,
+        warmup=getattr(cfg, 'warmup', True),
+    )
+    if not rows:
+        logger.error('No datasets evaluated — check that %s fits the checkpoint capacity.', data_id)
         return
 
     dp = getattr(cfg, 'decimals', 2)
-    saveTables(rows_by_regime, Path(cfg.outdir), run_name, dp=dp)
-    if rows_by_regime_conv:
-        saveTables(rows_by_regime_conv, Path(cfg.outdir), f'{run_name}_conv', dp=dp)
+
+    # Console summary
+    md_rows = [[regime, r['method']] + [_fmtMd(r[c], dp) for c in METRICS] for r in rows]
+    print('\n' + tabulate(md_rows, headers=['regime', 'method'] + METRICS, tablefmt='simple'))
+
+    saveTables({regime: rows}, Path(cfg.outdir), stem, dp=dp)
+    if rows_conv:
+        saveTables({regime: rows_conv}, Path(cfg.outdir), f'{stem}_conv', dp=dp)
 
 
 if __name__ == '__main__':

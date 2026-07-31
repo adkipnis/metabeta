@@ -39,6 +39,7 @@ def dataset_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
         y[i, :n_i] = rng.normal(size=n_i)
 
     n = ns.sum(axis=1).astype(np.int64)
+    s_fit = 3
     np.savez(
         path,
         ffx=np.zeros((n_datasets, max_d), dtype=np.float32),
@@ -64,6 +65,17 @@ def dataset_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
         d=d_vals,
         q=q_vals,
         sd_y=np.ones(n_datasets, dtype=np.float32),
+        laplace_ffx=np.zeros((n_datasets, max_d, s_fit), dtype=np.float32),
+        laplace_sigma_rfx=np.ones((n_datasets, max_q, s_fit), dtype=np.float32),
+        laplace_sigma_eps=np.ones((n_datasets, 1, s_fit), dtype=np.float32),
+        laplace_rfx=np.zeros((n_datasets, max_q, max_m, s_fit), dtype=np.float32),
+        laplace_corr_rfx=np.repeat(
+            np.eye(max_q, dtype=np.float32)[None, None, None, :, :],
+            n_datasets,
+            axis=0,
+        ).repeat(s_fit, axis=2),
+        laplace_duration=np.ones(n_datasets, dtype=np.float32),
+        laplace_failed=np.zeros(n_datasets, dtype=bool),
     )
     return path
 
@@ -145,6 +157,27 @@ def test_dataloader_wrapper_shapes_and_dtypes(dataset_path: Path):
     assert batch['mask_m'].dtype == torch.bool
     assert batch['mask_d'].dtype == torch.bool
     assert batch['mask_q'].dtype == torch.bool
+
+
+def test_full_batch_exposes_original_dataset_indices(dataset_path: Path):
+    dl = Dataloader(dataset_path, batch_size=3, sortish=False)
+    batch = dl.fullBatch()
+
+    torch.testing.assert_close(batch['_idx'], torch.arange(len(dl.dataset)))
+
+
+def test_dataloader_collates_laplace_fit_samples(dataset_path: Path):
+    bs = 4
+    dl = Dataloader(dataset_path, batch_size=bs, sortish=False)
+    batch = next(iter(dl))
+
+    assert batch['laplace_ffx'].shape == (bs, 3, 4)
+    assert batch['laplace_sigma_rfx'].shape == (bs, 3, 2)
+    assert batch['laplace_sigma_eps'].shape == (bs, 3)
+    assert batch['laplace_rfx'].shape == (bs, 5, 3, 2)
+    assert batch['laplace_corr_rfx'].shape == (bs, 3, 2, 2)
+    assert batch['laplace_duration'].shape == (bs,)
+    assert batch['laplace_failed'].shape == (bs,)
 
 
 def test_mask_n_matches_ns(dataset_path: Path):

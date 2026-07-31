@@ -14,7 +14,7 @@
 #SBATCH --time=24:00:00
 
 CHUNK_SIZE=1
-START_EPOCH=8001
+START_EPOCH=12001
 OVERWRITE=""
 
 while [[ $# -gt 0 ]]; do

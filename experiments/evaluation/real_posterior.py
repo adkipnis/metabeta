@@ -6,6 +6,14 @@ outputs/data/{size}-{fam}-real/test.fit.npz, comparing MB and ADVI posteriors
 against NUTS as reference.  Since there are no ground-truth parameters, all
 metrics are relative to NUTS; only NUTS-converged datasets are included.
 
+Optionally layers post-hoc refinements on the raw MB flow posterior (extra
+``MB+<method>`` rows), using the same samplers as experiments/posthoc/ablation.py.
+The SNIS/Laplace families keep their PSIS-smoothed IS weights and the comparison
+metrics are weight-aware (IMH returns an equal-weight chain); see refineProposal.
+The method(s) come from ``--methods`` or, if omitted, the per-family default in
+metabeta/configs/presets.yaml (imhMarginal for Normal); pass ``--methods`` with no
+values for raw MB only.
+
 Metrics (median ± MAD over datasets):
   r          — Pearson r of posterior means (method vs NUTS), pooled active params
   σ-ratio    — per-dataset median(std_method / std_NUTS) across active params
@@ -20,35 +28,38 @@ Usage (from repo root):
 
 import argparse
 import logging
-import time
 from pathlib import Path
 
 import numpy as np
 import torch
 from tabulate import tabulate
-from tqdm import tqdm
 
-from metabeta.evaluation.summary import getSummary
+from metabeta.evaluation.point import pointEstimate
 from metabeta.models.approximator import Approximator
-from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch, toDevice
-from metabeta.utils.evaluation import (
-    Proposal,
-    concatProposalsBatch,
-    nutsConvergeMask,
-    subsetProposal,
-)
+from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch
+from metabeta.utils.evaluation import nutsConvergeMask, subsetProposal
+from metabeta.utils.results import Proposal
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
-from metabeta.utils.templates import loadConfigFromCheckpoint
-from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, loadApproximator
+from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
+from metabeta.utils.posterior_eval import (
+    FAM_LETTER,
+    SUPPORTED_METHODS,
+    fit2proposal,
+    fitBatchMask,
+    loadModel,
+    loadOrComputeSummary,
+    loadOrRefine,
+    loadOrSampleMB,
+    posthocDefaults,
+    validMethods,
+)
 
 OUT_DIR = RESULTS_DIR
 
 logger = logging.getLogger(__name__)
-
-_FAM_LETTER = {0: 'n', 1: 'b', 2: 'p'}
 
 
 # ---------------------------------------------------------------------------
@@ -66,95 +77,28 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--device',           type=str, default='cpu')
     parser.add_argument('--n_samples',        type=int, default=1000)
     parser.add_argument('--batch_size',       type=int, default=8)
+    parser.add_argument('--summary_chunk_size', type=int, default=4,
+                        help='Datasets per predictive/LOO summary chunk; lower to bound peak '
+                             'memory (NUTS s=4000 tensors are large). Try 1-2 for large/huge.')
     parser.add_argument('--seed',             type=int, default=0)
     parser.add_argument('--outdir',           type=str, default=str(OUT_DIR))
     parser.add_argument('--verbosity',        type=int, default=1)
     parser.add_argument('--data_ids',         type=str, nargs='+', default=None,
-                        help='Data IDs to evaluate (default: tiny/small/medium/large-{fam}-real)')
+                        help='Data IDs to evaluate (default: small/medium/large/huge-{fam}-real)')
     parser.add_argument('--decimals',         type=int, default=2,
                         help='Decimal places in table cells (default: 2)')
     parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--warmup',           action=argparse.BooleanOptionalAction, default=True,
+                        help='Untimed 1-sample MB warm-up before timed sampling (default: true)')
     parser.add_argument('--convergence_mode', type=str, default='strict',
                         choices=['liberal', 'strict'])
+    parser.add_argument('--methods',          type=str, nargs='*', default=None,
+                        choices=list(SUPPORTED_METHODS),
+                        help='Post-hoc refinement methods to run on top of raw MB, evaluated '
+                             'as extra rows vs NUTS. Default: the family preset in presets.yaml '
+                             '(isMarginal for Normal). Pass an empty list to run raw MB only.')
     # fmt: on
     return parser.parse_args()
-
-
-# ---------------------------------------------------------------------------
-# Model loading
-
-
-def loadModel(
-    ckpt_dir: Path,
-    prefix: str,
-    device: torch.device,
-) -> tuple[Approximator, argparse.Namespace]:
-    cfg_dict = loadConfigFromCheckpoint(ckpt_dir)
-    cfg = argparse.Namespace(**cfg_dict)
-
-    model = loadApproximator(cfg, device, ckpt_dir, prefix)
-    logger.info('Loaded %s/%s.pt', ckpt_dir.name, prefix)
-    return model, cfg
-
-
-# ---------------------------------------------------------------------------
-# Batch / proposal helpers shared with oracle_posterior.py.
-
-
-def fitBatchMask(batch: dict[str, torch.Tensor], prefix: str) -> np.ndarray:
-    failed_key = f'{prefix}_failed'
-    if failed_key not in batch:
-        return np.ones(batch['X'].shape[0], dtype=bool)
-    return ~batch[failed_key].cpu().numpy().astype(bool)
-
-
-def fit2proposal(batch: dict[str, torch.Tensor], prefix: str) -> Proposal:
-    samples_g = [batch[f'{prefix}_ffx'], batch[f'{prefix}_sigma_rfx']]
-    has_sigma_eps = False
-    if f'{prefix}_sigma_eps' in batch:
-        samples_g.append(batch[f'{prefix}_sigma_eps'].unsqueeze(-1))
-        has_sigma_eps = True
-    proposed = {
-        'global': {'samples': torch.cat(samples_g, dim=-1)},
-        'local': {'samples': batch[f'{prefix}_rfx']},
-    }
-    proposal = Proposal(
-        proposed,
-        has_sigma_eps=has_sigma_eps,
-        corr_rfx=batch.get(f'{prefix}_corr_rfx'),
-    )
-    proposal.tpd = batch[f'{prefix}_duration'].mean().item()
-    return proposal
-
-
-@torch.inference_mode()
-def sampleMB(
-    model: Approximator,
-    batch: dict[str, torch.Tensor],
-    n_samples: int,
-    batch_size: int,
-    device: torch.device,
-) -> tuple[Proposal, torch.Tensor]:
-    """Sample from model; returns (proposal, tpd_arr) with tpd_arr shape (B,)."""
-    B = batch['X'].shape[0]
-    proposals: list[Proposal] = []
-    tpd_list: list[float] = []
-    for start in tqdm(range(0, B, batch_size), desc='  MB', leave=False):
-        end = min(start + batch_size, B)
-        b_chunk = {
-            k: v[start:end] if (torch.is_tensor(v) and v.shape[0] == B) else v
-            for k, v in batch.items()
-        }
-        b_chunk = toDevice(b_chunk, device)
-        t0 = time.perf_counter()
-        p_chunk = model.estimate(b_chunk, n_samples=n_samples)
-        tpd_list.extend([(time.perf_counter() - t0) / (end - start)] * (end - start))
-        p_chunk.to('cpu')
-        proposals.append(p_chunk)
-    merged = concatProposalsBatch(proposals)
-    tpd_arr = torch.tensor(tpd_list, dtype=torch.float64)
-    merged.tpd = tpd_arr.mean().item()
-    return merged, tpd_arr
 
 
 # ---------------------------------------------------------------------------
@@ -172,27 +116,74 @@ def _masks(
     )
 
 
+def _wmean1d(x: torch.Tensor, w: torch.Tensor | None) -> torch.Tensor:
+    """Weighted mean of a (B, S) tensor over the sample axis (uniform if w is None)."""
+    return x.mean(-1) if w is None else (x * w).sum(-1)
+
+
+def _weightedMean(p: Proposal) -> dict[str, torch.Tensor]:
+    """Per-param posterior means for the whole batch, honouring p.weights.
+
+    Reuses evaluation.point.pointEstimate (softmax IS weights sum to 1; falls back to a
+    plain mean when p.weights is None, so raw MB / ADVI / NUTS / IMH rows are unchanged).
+    """
+    w = p.weights
+    out = {
+        'ffx': pointEstimate(p.ffx, w, 'mean'),  # (B, d)
+        'sigma_rfx': pointEstimate(p.sigma_rfx, w, 'mean'),  # (B, q)
+        'rfx': pointEstimate(p.rfx, w, 'mean'),  # (B, m, q)
+    }
+    if p.has_sigma_eps:
+        out['sigma_eps'] = _wmean1d(p.sigma_eps, w)  # (B,)
+    return out
+
+
+def _weightedStd(p: Proposal) -> dict[str, torch.Tensor]:
+    """Per-param posterior std for the whole batch, honouring p.weights.
+
+    Reuses evaluation.point.pointEstimate(..., 'std') (uniform → population std, so raw
+    MB / ADVI / NUTS / IMH rows are unchanged).
+    """
+    w = p.weights
+    out = {
+        'ffx': pointEstimate(p.ffx, w, 'std'),
+        'sigma_rfx': pointEstimate(p.sigma_rfx, w, 'std'),
+        'rfx': pointEstimate(p.rfx, w, 'std'),
+    }
+    if p.has_sigma_eps:
+        m1 = _wmean1d(p.sigma_eps, w)
+        m2 = _wmean1d(p.sigma_eps.square(), w)
+        out['sigma_eps'] = (m2 - m1.square()).clamp_min(0.0).sqrt()  # (B,)
+    return out
+
+
 def _pooledMeans(
-    p: Proposal,
+    mean: dict[str, torch.Tensor],
     b: int,
     mask_d: torch.Tensor | None,
     mask_q: torch.Tensor | None,
     group_mask: torch.Tensor,
 ) -> np.ndarray:
     """Posterior means for all active params of dataset b as a flat numpy array."""
-    d_mask = mask_d[b] if mask_d is not None else torch.ones(p.d, dtype=torch.bool)
-    q_mask = mask_q[b] if mask_q is not None else torch.ones(p.q, dtype=torch.bool)
+    d_mask = (
+        mask_d[b] if mask_d is not None else torch.ones(mean['ffx'].shape[-1], dtype=torch.bool)
+    )
+    q_mask = (
+        mask_q[b]
+        if mask_q is not None
+        else torch.ones(mean['sigma_rfx'].shape[-1], dtype=torch.bool)
+    )
 
-    # rfx[b]: (max_m, S, max_q) — mean over S (dim 1) → (max_m, max_q)
-    mean_rfx = p.rfx[b].mean(1)[group_mask[b]][:, q_mask].ravel()
+    # rfx mean[b]: (max_m, max_q) — select active groups then active columns
+    mean_rfx = mean['rfx'][b][group_mask[b]][:, q_mask].ravel()
 
     parts = [
-        p.ffx[b].mean(0)[d_mask].numpy(),
-        p.sigma_rfx[b].mean(0)[q_mask].numpy(),
+        mean['ffx'][b][d_mask].numpy(),
+        mean['sigma_rfx'][b][q_mask].numpy(),
         mean_rfx.numpy(),
     ]
-    if p.has_sigma_eps:
-        parts.append(p.sigma_eps[b].mean().reshape(1).numpy())
+    if 'sigma_eps' in mean:
+        parts.append(mean['sigma_eps'][b].reshape(1).numpy())
     return np.concatenate(parts)
 
 
@@ -207,45 +198,48 @@ def computeCorr(
     """
     B = p_method.ffx.shape[0]
     mask_d, mask_q, group_mask = _masks(batch)
+    mean_m = _weightedMean(p_method)
+    mean_n = _weightedMean(p_nuts)
     r_vals = np.empty(B)
     for b in range(B):
-        v_m = _pooledMeans(p_method, b, mask_d, mask_q, group_mask)
-        v_n = _pooledMeans(p_nuts, b, mask_d, mask_q, group_mask)
+        v_m = _pooledMeans(mean_m, b, mask_d, mask_q, group_mask)
+        v_n = _pooledMeans(mean_n, b, mask_d, mask_q, group_mask)
         r_vals[b] = np.corrcoef(v_m, v_n)[0, 1] if len(v_m) >= 2 else np.nan
     return r_vals
 
 
 def _stdRatios(
-    p_method: Proposal,
-    p_nuts: Proposal,
+    std_m: dict[str, torch.Tensor],
+    std_n: dict[str, torch.Tensor],
     b: int,
     mask_d: torch.Tensor | None,
     mask_q: torch.Tensor | None,
     group_mask: torch.Tensor,
 ) -> torch.Tensor:
     """Per-active-entry std_method / std_nuts for dataset b as a flat tensor."""
-    d_mask = mask_d[b] if mask_d is not None else torch.ones(p_method.d, dtype=torch.bool)
-    q_mask = mask_q[b] if mask_q is not None else torch.ones(p_method.q, dtype=torch.bool)
+    d_mask = (
+        mask_d[b] if mask_d is not None else torch.ones(std_m['ffx'].shape[-1], dtype=torch.bool)
+    )
+    q_mask = (
+        mask_q[b]
+        if mask_q is not None
+        else torch.ones(std_m['sigma_rfx'].shape[-1], dtype=torch.bool)
+    )
 
     def _ratio(a: torch.Tensor, b_: torch.Tensor) -> torch.Tensor:
         return a / b_.clamp(min=1e-8)
 
-    # rfx[b]: (max_m, S, max_q) — std over S (dim 1) → (max_m, max_q), then select active
-    rfx_std_m = p_method.rfx[b][group_mask[b]].std(1)[:, q_mask]
-    rfx_std_n = p_nuts.rfx[b][group_mask[b]].std(1)[:, q_mask]
+    # rfx std[b]: (max_m, max_q) — select active groups then active columns
+    rfx_std_m = std_m['rfx'][b][group_mask[b]][:, q_mask]
+    rfx_std_n = std_n['rfx'][b][group_mask[b]][:, q_mask]
 
     parts: list[torch.Tensor] = [
-        _ratio(p_method.ffx[b].std(0)[d_mask], p_nuts.ffx[b].std(0)[d_mask]),
-        _ratio(p_method.sigma_rfx[b].std(0)[q_mask], p_nuts.sigma_rfx[b].std(0)[q_mask]),
+        _ratio(std_m['ffx'][b][d_mask], std_n['ffx'][b][d_mask]),
+        _ratio(std_m['sigma_rfx'][b][q_mask], std_n['sigma_rfx'][b][q_mask]),
         _ratio(rfx_std_m, rfx_std_n).reshape(-1),
     ]
-    if p_method.has_sigma_eps:
-        parts.append(
-            _ratio(
-                p_method.sigma_eps[b].std(dim=0, keepdim=True),
-                p_nuts.sigma_eps[b].std(dim=0, keepdim=True),
-            )
-        )
+    if 'sigma_eps' in std_m:
+        parts.append(_ratio(std_m['sigma_eps'][b].reshape(1), std_n['sigma_eps'][b].reshape(1)))
     return torch.cat(parts)
 
 
@@ -257,22 +251,36 @@ def computeSigmaRatio(
     """Per-dataset median(std_method / std_nuts) across all active params. Returns (B,)."""
     B = p_method.ffx.shape[0]
     mask_d, mask_q, group_mask = _masks(batch)
+    std_m = _weightedStd(p_method)
+    std_n = _weightedStd(p_nuts)
     ratios = np.empty(B)
     for b in range(B):
-        vals = _stdRatios(p_method, p_nuts, b, mask_d, mask_q, group_mask)
+        vals = _stdRatios(std_m, std_n, b, mask_d, mask_q, group_mask)
         ratios[b] = float(vals.median()) if vals.numel() > 0 else np.nan
     return ratios
 
 
-def _rankFracs(mb: np.ndarray, nuts: np.ndarray) -> np.ndarray:
-    """Rank of each NUTS sample within the corresponding MB marginal, as a fraction.
+def _rankFracs(mb: np.ndarray, nuts: np.ndarray, w: np.ndarray | None = None) -> np.ndarray:
+    """Weighted rank of each NUTS sample within the MB marginal (weighted ECDF at nuts points).
 
-    mb, nuts: (N, S) — N active entries, S samples.  Returns all fracs flattened.
+    mb, nuts: (N, S) — N active entries, S samples each. w: (N, S) MB sample weights (rows
+    sum to 1) or None for uniform. The unweighted path (w=None) is exactly searchsorted / S;
+    the weighted path replaces the sample count with the cumulative weight below each value.
+    Returns all fracs flattened.
     """
-    mb_sorted = np.sort(mb, axis=1)
-    S = mb_sorted.shape[1]
+    order = np.argsort(mb, axis=1)
+    mb_sorted = np.take_along_axis(mb, order, axis=1)
+    if w is None:
+        S = mb_sorted.shape[1]
+        return np.concatenate(
+            [np.searchsorted(mb_sorted[i], nuts[i]) / S for i in range(len(mb_sorted))]
+        )
+    w_sorted = np.take_along_axis(w, order, axis=1)
+    N = mb_sorted.shape[0]
+    # cdf0[i, k] = cumulative weight of the k smallest MB samples (cdf0[:, 0] = 0)
+    cdf0 = np.concatenate([np.zeros((N, 1)), np.cumsum(w_sorted, axis=1)], axis=1)
     return np.concatenate(
-        [np.searchsorted(mb_sorted[i], nuts[i]) / S for i in range(len(mb_sorted))]
+        [cdf0[i][np.searchsorted(mb_sorted[i], nuts[i], side='left')] for i in range(N)]
     )
 
 
@@ -296,6 +304,8 @@ def computeRankMAD(
     mask_d, mask_q, group_mask = _masks(batch)
     B = p_method.ffx.shape[0]
     mads = np.empty(B)
+    # only the method's marginal carries IS weights; NUTS draws are equal-weight targets
+    w_all = p_method.weights   # (B, S) or None
 
     def _add_global(
         all_fracs: list[np.ndarray],
@@ -303,19 +313,22 @@ def computeRankMAD(
         nu_v: torch.Tensor,
         b: int,
         mask: torch.Tensor | None,
+        w_b: np.ndarray | None,
     ) -> None:
         mb_np, nu_np = mb_v[b].numpy(), nu_v[b].numpy()   # (S, D)
         D = mb_np.shape[-1]
         for di in range(D):
             if mask is not None and not bool(mask[b, di]):
                 continue
-            all_fracs.append(_rankFracs(mb_np[:, di][None, :], nu_np[:, di][None, :]))
+            w = None if w_b is None else w_b[None, :]
+            all_fracs.append(_rankFracs(mb_np[:, di][None, :], nu_np[:, di][None, :], w))
 
     for b in range(B):
         all_fracs: list[np.ndarray] = []
+        w_b = w_all[b].numpy() if w_all is not None else None
 
-        _add_global(all_fracs, p_method.ffx, p_nuts.ffx, b, mask_d)
-        _add_global(all_fracs, p_method.sigma_rfx, p_nuts.sigma_rfx, b, mask_q)
+        _add_global(all_fracs, p_method.ffx, p_nuts.ffx, b, mask_d, w_b)
+        _add_global(all_fracs, p_method.sigma_rfx, p_nuts.sigma_rfx, b, mask_q, w_b)
         if p_method.has_sigma_eps:
             _add_global(
                 all_fracs,
@@ -323,6 +336,7 @@ def computeRankMAD(
                 p_nuts.sigma_eps.unsqueeze(-1),
                 b,
                 None,
+                w_b,
             )
 
         q_mask = (
@@ -334,8 +348,11 @@ def computeRankMAD(
         if active_groups.any() and q_mask.any():
             mb_rfx = p_method.rfx[b][active_groups].numpy()   # (m_active, S, q)
             nu_rfx = p_nuts.rfx[b][active_groups].numpy()
+            m_active = mb_rfx.shape[0]
+            # same per-sample weights apply to every group of this dataset
+            w_rfx = None if w_b is None else np.broadcast_to(w_b[None, :], (m_active, w_b.shape[0]))
             for k in np.flatnonzero(q_mask):
-                all_fracs.append(_rankFracs(mb_rfx[:, :, k], nu_rfx[:, :, k]))
+                all_fracs.append(_rankFracs(mb_rfx[:, :, k], nu_rfx[:, :, k], w_rfx))
 
         mads[b] = _rankMADFromFracs(np.concatenate(all_fracs)) if all_fracs else np.nan
 
@@ -391,10 +408,36 @@ def evaluateReal(
     device: torch.device,
     rescale: bool,
     convergence_mode: str,
+    ckpt_dir: Path,
+    prefix: str,
+    seed: int,
+    methods: list[str],
+    summary_chunk_size: int = 4,
+    warmup: bool = True,
 ) -> list[dict]:
     col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q)
     B_total = len(col)
     batch = collateGrouped([col[i] for i in range(B_total)])
+
+    # Precomputed analytical stats (beta_est/BLUPs from precompute.py) live in the sibling
+    # {partition}.npz, not the .fit.npz; inject them so MB sampling reuses the MAP statistics
+    # instead of recomputing glmm() live (matching evaluate.py / oracle_posterior.py).
+    if 'stats' not in batch:
+        base_path = data_path.with_name(data_path.name.replace('.fit.npz', '.npz'))
+        if base_path.exists() and base_path != data_path:
+            base_col = Collection(base_path, permute=False, max_d=max_d, max_q=max_q)
+            if len(base_col) == B_total:
+                base_batch = collateGrouped([base_col[i] for i in range(B_total)])
+                if 'stats' in base_batch:
+                    batch['stats'] = base_batch['stats']
+                del base_batch
+            del base_col
+        if 'stats' not in batch:
+            logger.warning(
+                'No precomputed stats for %s — MB sampling recomputes glmm() live (slower). '
+                'Run metabeta/analytical/precompute.py for this data_id/partition.',
+                data_path.parent.name,
+            )
 
     # Restrict to NUTS-converged datasets
     conv_mask = nutsConvergeMask(batch, mode=convergence_mode)
@@ -410,14 +453,32 @@ def evaluateReal(
 
     B = batch['X'].shape[0]
 
+    # Full-test-file masks used to key the per-method summary caches:
+    #   MB/NUTS cover the converged subset; ADVI additionally requires a successful fit.
+    conv_full = conv_mask if conv_mask is not None else np.ones(B_total, dtype=bool)
+
     # ADVI subset (some fits may have failed)
     advi_mask = fitBatchMask(batch, 'advi')
     n_advi = int(advi_mask.sum())
     logger.info('ADVI available: %d / %d', n_advi, B)
     advi_batch: dict | None = subsetBatch(batch, advi_mask) if n_advi > 0 else None
+    advi_full = conv_full.copy()
+    advi_full[conv_full] = advi_mask
 
     # Inference
-    proposal_mb, mb_tpd_arr = sampleMB(model, batch, n_samples, batch_size, device)
+    proposal_mb, mb_tpd_arr = loadOrSampleMB(
+        model,
+        batch,
+        data_path,
+        ckpt_dir,
+        prefix,
+        n_samples,
+        batch_size,
+        seed,
+        device,
+        conv_mask,
+        warmup=warmup,
+    )
     proposal_nuts = fit2proposal(batch, 'nuts')
     proposal_advi = fit2proposal(advi_batch, 'advi') if advi_batch is not None else None
 
@@ -431,38 +492,103 @@ def evaluateReal(
         if advi_batch is not None:
             advi_batch = rescaleData(advi_batch)
 
-    # LOO-NLL via getSummary; NRMSE/corr will be NaN since real data has no ground truth
-    summary_mb = getSummary(proposal_mb, batch, likelihood_family=lf, compute_pred_coverage=False)
-    summary_nuts = getSummary(
-        proposal_nuts, batch, likelihood_family=lf, compute_pred_coverage=False
+    # LOO-NLL via getSummary (cached); NRMSE/corr will be NaN since real data has no ground truth
+    summary_mb = loadOrComputeSummary(
+        proposal_mb,
+        batch,
+        data_path,
+        'mb',
+        conv_full,
+        lf,
+        rescale,
+        ckpt_dir=ckpt_dir,
+        prefix=prefix,
+        n_samples=n_samples,
+        seed=seed,
+        summary_chunk_size=summary_chunk_size,
+    )
+    summary_nuts = loadOrComputeSummary(
+        proposal_nuts,
+        batch,
+        data_path,
+        'nuts',
+        conv_full,
+        lf,
+        rescale,
+        summary_chunk_size=summary_chunk_size,
     )
     summary_advi = (
-        getSummary(proposal_advi, advi_batch, likelihood_family=lf, compute_pred_coverage=False)
+        loadOrComputeSummary(
+            proposal_advi,
+            advi_batch,
+            data_path,
+            'advi',
+            advi_full,
+            lf,
+            rescale,
+            summary_chunk_size=summary_chunk_size,
+        )
         if proposal_advi is not None
         else None
     )
+
+    # Post-hoc refinements layered on the raw MB posterior (evaluated vs the full NUTS ref).
+    # (label, proposal, batch, tpd_arr, summary) tuples appended between MB and ADVI.
+    refined_specs: list[tuple] = []
+    for method in validMethods(methods, lf):
+        logger.info('Refining MB with %s', method)
+        p_ref, refine_s = loadOrRefine(
+            method,
+            proposal_mb,
+            batch,
+            data_path,
+            ckpt_dir,
+            prefix,
+            n_samples,
+            seed,
+            lf,
+            rescale,
+            conv_mask,
+            batch_size,
+        )
+        summary_ref = loadOrComputeSummary(
+            p_ref,
+            batch,
+            data_path,
+            method,
+            conv_full,
+            lf,
+            rescale,
+            ckpt_dir=ckpt_dir,
+            prefix=prefix,
+            n_samples=n_samples,
+            seed=seed,
+            summary_chunk_size=summary_chunk_size,
+        )
+        # refinement runs on top of MB, so its cost adds to the MB per-dataset time
+        tpd_ref = mb_tpd_arr + refine_s / B
+        refined_specs.append((f'MB+{method}', p_ref, batch, tpd_ref, summary_ref))
 
     nuts_tpd_arr = batch.get('nuts_duration')            # (B,) tensor or None
     advi_mask_t = torch.from_numpy(advi_mask)           # bool tensor for indexing
 
     rows: list[dict] = []
 
-    for label, p_method, batch_sub, tpd_arr, summary in [
-        (
-            'MB',
-            proposal_mb,
-            batch,
-            mb_tpd_arr,
-            summary_mb,
-        ),
-        (
-            'ADVI',
-            proposal_advi,
-            advi_batch,
-            advi_batch.get('advi_duration') if advi_batch is not None else None,
-            summary_advi,
-        ),
-    ]:
+    method_specs = (
+        [('MB', proposal_mb, batch, mb_tpd_arr, summary_mb)]
+        + refined_specs
+        + [
+            (
+                'ADVI',
+                proposal_advi,
+                advi_batch,
+                advi_batch.get('advi_duration') if advi_batch is not None else None,
+                summary_advi,
+            )
+        ]
+    )
+
+    for label, p_method, batch_sub, tpd_arr, summary in method_specs:
         if p_method is None or summary is None:
             continue
 
@@ -470,7 +596,8 @@ def evaluateReal(
 
         # NUTS references restricted to this method's subset
         p_nuts_ref = subsetProposal(proposal_nuts, advi_mask) if is_advi else proposal_nuts
-        nuts_nll = summary_nuts.loo_nll[advi_mask_t] if is_advi else summary_nuts.loo_nll
+        nuts_loo = summary_nuts.per_dataset.loo_nll
+        nuts_nll = nuts_loo[advi_mask_t] if is_advi else nuts_loo
         nuts_tpd = (
             nuts_tpd_arr[advi_mask_t] if (nuts_tpd_arr is not None and is_advi) else nuts_tpd_arr
         )
@@ -485,7 +612,7 @@ def evaluateReal(
                 r=computeCorr(p_method, p_nuts_ref, batch_sub),
                 sigma_ratio=computeSigmaRatio(p_method, p_nuts_ref, batch_sub),
                 rank_mad=computeRankMAD(p_method, p_nuts_ref, batch_sub),
-                delta_nll=(summary.loo_nll - nuts_nll).float().numpy(),
+                delta_nll=(summary.per_dataset.loo_nll - nuts_nll).float().numpy(),
                 delta_tpd=delta_tpd,
             )
         )
@@ -532,9 +659,13 @@ def saveTables(
     rows_by_regime: dict[str, list[dict]],
     outdir: Path,
     run_name: str,
+    prefix: str,
     dp: int = 2,
 ) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
+
+    # include the checkpoint prefix so latest/best runs of the same checkpoint don't clobber
+    stem = f'{run_name}_{prefix}'
 
     fmt_md = lambda v: _fmtMd(v, dp)
     fmt_tex = lambda v: _fmtTex(v, dp)
@@ -550,8 +681,8 @@ def saveTables(
         tablefmt='pipe',
         stralign='right',
     )
-    md_path = outdir / f'real_{run_name}.md'
-    md_path.write_text(f'# Real-data evaluation: {run_name}\n\n{md_table}\n')
+    md_path = outdir / f'real_{stem}.md'
+    md_path.write_text(f'# Real-data evaluation: {stem}\n\n{md_table}\n')
     logger.info('Saved Markdown → %s', md_path)
 
     # --- LaTeX ---
@@ -574,7 +705,7 @@ def saveTables(
             )
             lines.append(rf'      {regime_cell} & {cells} \\')
     lines += [r'    \bottomrule', r'\end{tabular}', '']
-    tex_path = outdir / f'real_{run_name}.tex'
+    tex_path = outdir / f'real_{stem}.tex'
     tex_path.write_text('\n'.join(lines))
     logger.info('Saved LaTeX → %s', tex_path)
 
@@ -582,7 +713,7 @@ def saveTables(
 # ---------------------------------------------------------------------------
 # Main
 
-DEFAULT_SIZES = ['tiny', 'small', 'medium', 'large']
+DEFAULT_SIZES = ['small', 'medium', 'large', 'huge']
 
 
 def main() -> None:
@@ -595,16 +726,20 @@ def main() -> None:
     model, model_cfg = loadModel(ckpt_dir, cfg.prefix, device)
 
     lf = model_cfg.likelihood_family
-    fam = _FAM_LETTER[lf]
+    fam = FAM_LETTER[lf]
     dp = getattr(cfg, 'decimals', 2)
 
     data_ids: list[str] = getattr(cfg, 'data_ids', None) or [
         f'{s}-{fam}-real' for s in DEFAULT_SIZES
     ]
 
+    # --methods: explicit list (possibly empty for raw MB only) overrides the family preset.
+    methods = cfg.methods if cfg.methods is not None else posthocDefaults(lf)
+
     logger.info('Checkpoint: %s  (prefix=%s)', ckpt_dir.name, cfg.prefix)
     logger.info('max_d=%d  max_q=%d  family=%d', model_cfg.max_d, model_cfg.max_q, lf)
     logger.info('Evaluating: %s', data_ids)
+    logger.info('Refinement methods: %s', methods or '(none — raw MB only)')
 
     rows_by_regime: dict[str, list[dict]] = {}
     for data_id in data_ids:
@@ -625,6 +760,12 @@ def main() -> None:
             device=device,
             rescale=cfg.rescale,
             convergence_mode=cfg.convergence_mode,
+            ckpt_dir=ckpt_dir,
+            prefix=cfg.prefix,
+            seed=cfg.seed,
+            methods=methods,
+            summary_chunk_size=cfg.summary_chunk_size,
+            warmup=getattr(cfg, 'warmup', True),
         )
         if rows:
             rows_by_regime[regime] = rows
@@ -642,7 +783,7 @@ def main() -> None:
         '\n' + tabulate(md_rows, headers=['regime', 'method'] + HEADERS_MD[1:], tablefmt='simple')
     )
 
-    saveTables(rows_by_regime, Path(cfg.outdir), ckpt_dir.name, dp=dp)
+    saveTables(rows_by_regime, Path(cfg.outdir), ckpt_dir.name, cfg.prefix, dp=dp)
 
 
 if __name__ == '__main__':

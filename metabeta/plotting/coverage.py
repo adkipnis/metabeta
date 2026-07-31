@@ -20,6 +20,7 @@ def _plotCoverage(
     show_legend: bool = True,
     show_x: bool = True,
     show_corr_rfx: bool = False,
+    line_alpha: float = 0.8,
 ) -> None:
     # prepare data
     if not show_corr_rfx:
@@ -38,7 +39,14 @@ def _plotCoverage(
     n_colors = len(PALETTE)
     for i, values in enumerate(matrix):
         coverage_i = 100.0 * values
-        ax.plot(nominal, coverage_i, label=names[i], color=PALETTE[i % n_colors], alpha=0.8, lw=3)
+        ax.plot(
+            nominal,
+            coverage_i,
+            label=names[i],
+            color=PALETTE[i % n_colors],
+            alpha=line_alpha,
+            lw=3,
+        )
 
     # final touches
     limits = (min(nominal), max(nominal))

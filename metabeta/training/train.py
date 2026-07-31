@@ -498,6 +498,9 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
             return -lq.mean()
 
         # backward KL loss (globals-only for Normal; joint for other families)
+        # TODO: runs trained with this loss before the 2026-07-28 CouplingFlow.sample()
+        # log-det sign fix consumed a corrupted lq (proposal log-prob off by -2*log|det|),
+        # i.e. a biased objective — re-evaluate any pre-fix conclusions about this mode.
         elif mode == 'backward':
             proposal = self.model.backward(
                 batch, summaries, n_samples=getattr(self.cfg, 'n_loss_samples', 64)
@@ -521,6 +524,8 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
                 return (lq - lp - ll).mean()
 
         # mixed KL loss
+        # TODO: inherits the pre-2026-07-28 contamination via its backward term (see above);
+        # pre-fix results for this mode should also be re-evaluated.
         elif mode == 'mixed':
             fkl = self.loss(batch, summaries, mode='forward')
             bkl = self.loss(batch, summaries, mode='backward')

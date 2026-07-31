@@ -37,13 +37,17 @@ class Collection(torch.utils.data.Dataset):
         permute_seed: int = 0,
         max_d: int | None = None,
         max_q: int | None = None,
+        exclude_prefixes: tuple[str, ...] = (),
     ):
         super().__init__()
 
-        # load data
+        # load data; exclude_prefixes skips keys entirely (never decompressed) —
+        # e.g. ('nuts_', 'advi_', 'laplace_') to keep a *.fit.npz's multi-GB
+        # posterior-sample arrays out of memory when only the datasets are needed
         assert path.exists(), f'{path} does not exist'
         with np.load(path, allow_pickle=True) as raw:
-            self.raw = dict(raw)
+            keys = [k for k in raw.files if not k.startswith(tuple(exclude_prefixes))]
+            self.raw = {k: raw[k] for k in keys}
 
         # reduce host-memory footprint for training/validation collections
         # by storing floating arrays in float32 and large integers in int32.
@@ -149,7 +153,7 @@ class Collection(torch.utils.data.Dataset):
             ds['qperm'] = qperm
 
             # permute fit samples consistently with ground truth
-            for method in ('nuts', 'advi'):
+            for method in ('nuts', 'advi', 'laplace'):
                 if f'{method}_ffx' in ds:
                     ds[f'{method}_ffx'] = ds[f'{method}_ffx'][dperm]
                     ds[f'{method}_sigma_rfx'] = ds[f'{method}_sigma_rfx'][qperm]
@@ -169,6 +173,7 @@ class Collection(torch.utils.data.Dataset):
                 if 'Psi' in ds:
                     ds['Psi'] = ds['Psi'][np.ix_(qperm, qperm)]
 
+        ds['_idx'] = np.array(idx, dtype=np.int64)
         return ds
 
 
@@ -252,6 +257,8 @@ def collateGrouped(
     # likelihood and prior family indices
     if 'likelihood_family' in batch[0]:
         out['likelihood_family'] = quickCollate(batch, 'likelihood_family', torch.long)
+    if '_idx' in batch[0]:
+        out['_idx'] = quickCollate(batch, '_idx', torch.long)
     for key in ('family_ffx', 'family_sigma_rfx', 'family_sigma_eps'):
         if key in batch[0]:
             out[key] = quickCollate(batch, key, torch.long)
@@ -278,7 +285,7 @@ def collateGrouped(
     )
 
     # collate fit samples if present
-    for method in ('nuts', 'advi'):
+    for method in ('nuts', 'advi', 'laplace'):
         if f'{method}_ffx' in batch[0]:
             out.update(collateFits(batch, method, d, q, m, dtype))
 
@@ -384,12 +391,33 @@ def collateStats(
     return stats
 
 
+def _selectValue(value, selector, n: int):
+    if torch.is_tensor(value):
+        return value[selector] if value.shape[0] == n else value
+    if isinstance(value, dict):
+        return {k: _selectValue(v, selector, n) for k, v in value.items()}
+    return value
+
+
 def subsetBatch(batch: dict[str, torch.Tensor], mask: np.ndarray) -> dict[str, torch.Tensor]:
-    """Filter a collated batch dict to the datasets selected by a boolean mask."""
+    """Filter a collated batch dict to the datasets selected by a boolean mask.
+
+    Recurses into dict-valued entries (e.g. 'stats' from collateStats) so their inner
+    per-dataset tensors stay aligned with the rest of the batch.
+    """
     idx = torch.from_numpy(mask)
-    return {
-        k: v[idx] if torch.is_tensor(v) and v.shape[0] == len(mask) else v for k, v in batch.items()
-    }
+    n = len(mask)
+    return {k: _selectValue(v, idx, n) for k, v in batch.items()}
+
+
+def sliceBatch(batch: dict[str, torch.Tensor], start: int, end: int) -> dict[str, torch.Tensor]:
+    """Slice a collated batch dict to datasets [start:end).
+
+    Recurses into dict-valued entries (e.g. 'stats' from collateStats) so their inner
+    per-dataset tensors stay aligned with the rest of the batch.
+    """
+    n = batch['X'].shape[0]
+    return {k: _selectValue(v, slice(start, end), n) for k, v in batch.items()}
 
 
 class SortishBatchSampler(torch.utils.data.Sampler[list[int]]):

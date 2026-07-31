@@ -77,6 +77,19 @@ families:
     name: poisson
     min_bg_df: 4
 
+# Default post-hoc posterior-refinement method per likelihood family.
+# Applied on top of the raw MB flow posterior by
+# experiments/evaluation/real_posterior.py (used when --methods is not given).
+# Keyed by likelihood_family id (0=normal, 1=bernoulli, 2=poisson).
+# Use `null` to disable (only the raw MB posterior is evaluated).
+posthoc:
+  0:
+    default: imhMarginal
+  1:
+    default: imhLaplace
+  2:
+    default: imhLaplace
+
 # CLI-only parameters (never have defaults in YAML configs)
 cli_only:
   - device

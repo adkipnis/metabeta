@@ -5,22 +5,34 @@ from scipy.stats import binom, beta as beta_dist
 from metabeta.utils.results import Proposal
 from metabeta.utils.regularization import corrToLower
 
+_RANK_CHUNK_ELEMS = 20_000_000
+
 
 def fractionalRanks(
     samples: torch.Tensor,  # (b, ..., s, d)
     targets: torch.Tensor,  # (b, ..., d)
     weights: torch.Tensor | None = None,  # (b, s)
 ) -> torch.Tensor:
+    if samples.numel() > _RANK_CHUNK_ELEMS and samples.shape[0] > 1:
+        per_dataset = max(1, samples[:1].numel())
+        chunk_size = max(1, _RANK_CHUNK_ELEMS // per_dataset)
+        chunks = []
+        for start in range(0, samples.shape[0], chunk_size):
+            end = min(start + chunk_size, samples.shape[0])
+            weights_i = weights[start:end] if weights is not None else None
+            chunks.append(fractionalRanks(samples[start:end], targets[start:end], weights_i))
+        return torch.cat(chunks, dim=0)
+
     sample_dim = -1 if targets.dim() == 1 else -2
     targets = targets.unsqueeze(sample_dim)
-    smaller = (samples < targets).float()
+    smaller = samples < targets
     if weights is None:
-        return smaller.mean(sample_dim)
+        return smaller.sum(sample_dim, dtype=torch.float32) / samples.shape[sample_dim]
     if sample_dim == -2:
         weights = weights.unsqueeze(-1)
     if targets.dim() == 4:
         weights = weights.unsqueeze(1)
-    return (smaller * weights).sum(sample_dim)
+    return (smaller.to(weights.dtype) * weights).sum(sample_dim)
 
 
 def getFractionalRanks(

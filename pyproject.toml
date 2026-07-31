@@ -129,6 +129,9 @@ extend-exclude = '''
 
 [tool.uv]
 package = true
+# make every sync (incl. the implicit one in `uv run`) install the research extra and
+# scamd, so venv recreation on the cluster cannot silently drop pymc/rpy2/bambi again
+default-groups = ["dev", "simulation", "research"]
 environments = [
     "sys_platform == 'linux' and python_version == '3.12'",
     "sys_platform == 'darwin' and python_version == '3.12'",
@@ -148,6 +151,11 @@ torch = [
 [dependency-groups]
 simulation = [
     "scamd",
+]
+# mirrors the published `research` extra so it can be a default group (uv has
+# default-groups but no default-extras); external users keep `pip install metabeta[research]`
+research = [
+    "metabeta[research]",
 ]
 dev = [
     "blue>=0.9.1",

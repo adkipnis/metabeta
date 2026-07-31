@@ -1,4 +1,4 @@
-"""Pre-compute and cache analytical fit summaries (NUTS / ADVI).
+"""Pre-compute and cache analytical fit summaries (NUTS / ADVI / Laplace).
 
 Run once after fitting is complete, before submitting training jobs.
 All training runs on the same validation dataset will then load the cache
@@ -58,8 +58,21 @@ def setup() -> argparse.Namespace:
                         help='Partition to cache: valid or test')
     parser.add_argument('--force', action='store_true',
                         help='Recompute even if a valid cache already exists')
+    parser.add_argument('--methods', type=str, default='nuts,advi',
+                        help='Comma-separated methods to cache: nuts,advi,laplace (default: nuts,advi)')
     return parser.parse_args()
 # fmt: on
+
+
+def _parseMethods(methods: str) -> tuple[str, ...]:
+    valid = {'nuts', 'advi', 'laplace'}
+    parsed = tuple(method.strip().lower() for method in methods.split(',') if method.strip())
+    unknown = sorted(set(parsed) - valid)
+    if unknown:
+        raise ValueError(f'unknown cache method(s): {unknown}; valid: {sorted(valid)}')
+    if not parsed:
+        raise ValueError('at least one cache method is required')
+    return parsed
 
 
 def _buildProposal(
@@ -77,7 +90,7 @@ def _buildProposal(
     elif d_corr > 0:
         logger.warning('%s: corr_rfx missing, padding zeros for d_corr=%d', method, d_corr)
         samples_g.append(samples_g[0].new_zeros(*samples_g[0].shape[:-1], d_corr))
-    return Proposal(
+    proposal = Proposal(
         {
             'global': {'samples': torch.cat(samples_g, dim=-1)},
             'local': {'samples': batch[f'{method}_rfx']},
@@ -85,6 +98,24 @@ def _buildProposal(
         has_sigma_eps=has_sigma_eps,
         d_corr=d_corr,
     )
+    if f'{method}_duration' in batch:
+        proposal.tpd = batch[f'{method}_duration'].mean().item()
+    return proposal
+
+
+def _fitBatchMask(batch: dict[str, torch.Tensor], method: str) -> torch.Tensor:
+    failed_key = f'{method}_failed'
+    if failed_key not in batch:
+        return torch.ones(batch['y'].shape[0], dtype=torch.bool, device=batch['y'].device)
+    return ~batch[failed_key].bool()
+
+
+def _subsetBatch(batch: dict[str, torch.Tensor], mask: torch.Tensor) -> dict[str, torch.Tensor]:
+    batch_size = batch['y'].shape[0]
+    return {
+        key: value[mask] if torch.is_tensor(value) and value.shape[:1] == (batch_size,) else value
+        for key, value in batch.items()
+    }
 
 
 def _smallData(data: dict) -> dict:
@@ -190,22 +221,27 @@ def _mergeSummaries(
     partials: list[EvaluationSummary],
     small_data_list: list[dict],
     batch_sizes: list[int],
+    dataset_indices: list[torch.Tensor],
     likelihood_family: int,
     all_rfx_ranks: list[float],
 ) -> EvaluationSummary:
     total = sum(batch_sizes)
+    order_idx = torch.cat(dataset_indices).long()
+    if order_idx.numel() != total:
+        raise ValueError('dataset index count does not match merged summary size')
+    restore_idx = torch.argsort(order_idx)
 
     # --- per-dataset fields: concatenate ---
     def _cat1(fn):
         parts = [fn(p.per_dataset) for p in partials]
-        return None if parts[0] is None else torch.cat(parts)
+        return None if parts[0] is None else torch.cat(parts)[restore_idx]
 
     def _cat2(fn):
         parts = [fn(p.per_dataset) for p in partials]
-        return None if parts[0] is None else torch.cat(parts, dim=-1)
+        return None if parts[0] is None else torch.cat(parts, dim=-1)[:, restore_idx]
 
     per_dataset = PerDatasetMetrics(
-        posterior_nll=torch.cat([p.per_dataset.posterior_nll for p in partials]),
+        posterior_nll=torch.cat([p.per_dataset.posterior_nll for p in partials])[restore_idx],
         loo_nll=_cat1(lambda p: p.loo_nll),
         loo_pareto_k=_cat1(lambda p: p.loo_pareto_k),
         pp_fit=_cat1(lambda p: p.pp_fit),
@@ -219,6 +255,11 @@ def _mergeSummaries(
     # --- aggregated: recompute corr/nrmse from pooled data; average the rest ---
     all_estimates = _catEstimates([p.aggregated.estimates for p in partials])
     all_small = _catSmallData(small_data_list)
+    all_estimates = {key: value[restore_idx] for key, value in all_estimates.items()}
+    all_small = {
+        key: value[restore_idx] if torch.is_tensor(value) and value.shape[0] == total else value
+        for key, value in all_small.items()
+    }
     corr = getCorrelation(all_estimates, all_small)
     nrmse = getRMSE(all_estimates, all_small, normalize=True)
 
@@ -280,11 +321,19 @@ def _cache(
     partials: list[EvaluationSummary] = []
     small_data_list: list[dict] = []
     batch_sizes: list[int] = []
+    dataset_indices: list[torch.Tensor] = []
     all_rfx_ranks: list[float] = []
 
     with tqdm(total=n_total, desc=method, unit='ds') as pbar:
         for batch in dl:
             b = batch['y'].shape[0]
+            mask = _fitBatchMask(batch, method)
+            n_ok = int(mask.sum().item())
+            if n_ok == 0:
+                pbar.update(b)
+                continue
+            batch = _subsetBatch(batch, mask)
+            dataset_indices.append(batch['_idx'].cpu())
 
             proposal = _buildProposal(batch, method, d_corr)
             batch_for_summary = batch
@@ -296,14 +345,18 @@ def _cache(
             all_rfx_ranks.extend(_rfxJointRanks(proposal, batch_for_summary))
             partials.append(partial)
             small_data_list.append(_smallData(batch_for_summary))
-            batch_sizes.append(b)
+            batch_sizes.append(n_ok)
 
             del batch, proposal, batch_for_summary, partial
             pbar.update(b)
 
+    if not partials:
+        logger.warning('%s: no successful fits in %s, skipping.', method, fit_path.name)
+        return
+
     print(f'  [{method}] merging ...')
     summary = _mergeSummaries(
-        partials, small_data_list, batch_sizes, likelihood_family, all_rfx_ranks
+        partials, small_data_list, batch_sizes, dataset_indices, likelihood_family, all_rfx_ranks
     )
     summary.save(cache_path)
     logger.info('Saved: %s', cache_path)
@@ -330,7 +383,7 @@ def main() -> None:
     dl = Dataloader(fit_path, batch_size=_BATCH_SIZE, sortish=True, max_d=max_d, max_q=max_q)
     logger.info('Datasets: %d', len(dl.dataset))
 
-    for method in ('nuts', 'advi'):
+    for method in _parseMethods(args.methods):
         cache_path = data_dir / f'summary_{args.partition}_{method}.pt'
         _cache(dl, method, cache_path, likelihood_family, rescale, d_corr, args.force, fit_path)
 

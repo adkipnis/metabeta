@@ -252,7 +252,8 @@ class CouplingFlow(nn.Module):
             if mask_z is not None:
                 z = z * mask_z
             x, log_det, _ = self.inverse(z, context, mask_z)
-            return x, self._logProb(z, log_det, mask_z, context=context)
+            # inverse() returns log|det dx/dz|; the density of x needs log|det dz/dx| = -log_det
+            return x, self._logProb(z, -log_det, mask_z, context=context)
 
         # eager path: skip fully-empty rows to avoid wasted compute on padding
         x = torch.zeros_like(z)
@@ -262,5 +263,6 @@ class CouplingFlow(nn.Module):
         ctx_s = context[non_empty] if context is not None else None
         mask_s = mask_z[non_empty]
         x[non_empty], log_det_s, _ = self.inverse(z_s, ctx_s, mask_s)
-        log_prob[non_empty] = self._logProb(z_s, log_det_s, mask_s, context=ctx_s)
+        # inverse() returns log|det dx/dz|; the density of x needs log|det dz/dx| = -log_det
+        log_prob[non_empty] = self._logProb(z_s, -log_det_s, mask_s, context=ctx_s)
         return x, log_prob

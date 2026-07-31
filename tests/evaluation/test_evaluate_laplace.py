@@ -1,0 +1,687 @@
+import argparse
+import numpy as np
+import pytest
+import torch
+
+from metabeta.evaluation.evaluate import Evaluator
+from metabeta.plotting.comparison import _rightLegendHandles
+from metabeta.utils.evaluation import AggregatedMetrics, EvaluationSummary, PerDatasetMetrics
+from metabeta.utils.posterior_cache import saveProposalCache
+from metabeta.utils.results import Proposal
+
+
+def _summary(tpd=None):
+    return EvaluationSummary(
+        per_dataset=PerDatasetMetrics(
+            posterior_nll=torch.tensor([1.0, 2.0, 3.0]),
+            loo_nll=torch.tensor([1.5, 2.5, 3.5]),
+            pp_fit=torch.tensor([0.1, 0.2, 0.3]),
+        ),
+        aggregated=AggregatedMetrics(
+            corr={'ffx': torch.tensor([0.5])},
+            nrmse={'ffx': torch.tensor([0.6])},
+            coverage={},
+            ece={'ffx': torch.tensor([0.0])},
+            eace={'ffx': torch.tensor([0.1])},
+            lcr={},
+            abs_lcr={},
+            estimates={},
+        ),
+        tpd=tpd,
+    )
+
+
+def test_evaluator_resolves_laplace_fit_model():
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(models='LAPLACE')
+
+    assert evaluator._resolveModels() == ['LAPLACE']
+
+
+def test_summary_for_plot_recomputes_estimates_from_live_proposal():
+    summary = _summary()
+    summary.aggregated.estimates = {'ffx': torch.full((2, 1), -99.0)}
+    proposal = Proposal(
+        {
+            'global': {
+                'samples': torch.tensor([[[1.0, 10.0], [3.0, 12.0]], [[5.0, 14.0], [7.0, 16.0]]])
+            },
+            'local': {'samples': torch.zeros(2, 1, 2, 1)},
+        },
+        has_sigma_eps=False,
+    )
+
+    data = {
+        'ffx': torch.tensor([[1.5], [6.5]]),
+        'sigma_rfx': torch.ones(2, 1),
+        'rfx': torch.zeros(2, 1, 1),
+        'mask_d': torch.ones(2, 1, dtype=torch.bool),
+        'mask_q': torch.ones(2, 1, dtype=torch.bool),
+        'mask_mq': torch.ones(2, 1, 1, dtype=torch.bool),
+    }
+
+    plot_summary = Evaluator._summaryForPlot(summary, proposal, data)
+
+    torch.testing.assert_close(
+        plot_summary.aggregated.estimates['ffx'], torch.tensor([[2.0], [6.0]])
+    )
+    torch.testing.assert_close(summary.aggregated.estimates['ffx'], torch.full((2, 1), -99.0))
+
+
+def test_laplace_display_label_is_la():
+    evaluator = Evaluator.__new__(Evaluator)
+
+    assert evaluator._displayModel('LAPLACE') == 'LA'
+    assert evaluator._displayLabel('LAPLACE', 'test', multi=False) == 'LA'
+    assert evaluator._displayLabel('LAPLACE', 'test', multi=True) == 'LA_test'
+
+
+@pytest.mark.parametrize(
+    ('suffix', 'expected'),
+    [
+        ('', 'comparison'),
+        ('mb_nuts_advi', 'comparison_mb_nuts_advi'),
+        ('--with LA--', 'comparison_with_LA'),
+        (' ! ', 'comparison'),
+    ],
+)
+def test_plot_name_suffix_is_sanitized(suffix, expected):
+    assert Evaluator._plotName(suffix) == expected
+
+
+def test_comparison_legend_defaults_to_right(monkeypatch):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(rescale=False, plot_suffix='')
+    evaluator.plot_dir = None
+    proposal = Proposal(
+        {
+            'global': {'samples': torch.zeros(1, 2, 2)},
+            'local': {'samples': torch.zeros(1, 1, 2, 1)},
+        },
+        has_sigma_eps=False,
+    )
+    seen = {}
+
+    def fake_plot_comparison(*args, **kwargs):
+        seen['legend_right'] = kwargs['legend_right']
+        return None
+
+    monkeypatch.setattr('metabeta.evaluation.evaluate.plotComparison', fake_plot_comparison)
+    monkeypatch.setattr(
+        Evaluator,
+        '_summaryForPlot',
+        staticmethod(lambda summary, proposal, batch: summary),
+    )
+
+    evaluator.plot([proposal], [_summary()], ['MB'], {'X': torch.zeros(1, 1)})
+
+    assert seen['legend_right'] is True
+
+
+def test_right_comparison_legend_excludes_sbc_bands():
+    class FakeAxis:
+        def get_legend_handles_labels(self):
+            return (
+                ['handle_beta', 'handle_global_band', 'handle_local_band', 'handle_duplicate'],
+                ['beta0', '95% CB (global)', '95% CB (local)', 'beta0'],
+            )
+
+    handles = _rightLegendHandles(np.array([[FakeAxis()]], dtype=object))
+
+    assert handles == {'beta0': 'handle_beta'}
+
+
+def test_plot_batch_strips_fit_sample_arrays():
+    evaluator = Evaluator.__new__(Evaluator)
+    batch = {
+        'X': torch.zeros(2, 3),
+        'ffx': torch.zeros(2, 1),
+        'sigma_rfx': torch.ones(2, 1),
+        'rfx': torch.zeros(2, 4, 1),
+        'mask_d': torch.ones(2, 1, dtype=torch.bool),
+        'mask_q': torch.ones(2, 1, dtype=torch.bool),
+        'mask_mq': torch.ones(2, 4, 1, dtype=torch.bool),
+        'nuts_ffx': torch.zeros(2, 1000, 1),
+        'advi_rfx': torch.zeros(2, 4, 1000, 1),
+    }
+
+    plot_batch = evaluator._plotBatch(batch)
+
+    assert 'nuts_ffx' not in plot_batch
+    assert 'advi_rfx' not in plot_batch
+    assert plot_batch['ffx'] is batch['ffx']
+
+
+def test_common_mask_intersects_failed_fit_masks():
+    mask_a = np.array([True, False, True, True])
+    mask_b = np.array([True, True, False, True])
+
+    common = Evaluator._commonMask([None, mask_a, mask_b], n=4)
+
+    np.testing.assert_array_equal(common, np.array([True, False, False, True]))
+
+
+@pytest.mark.parametrize(
+    ('src_mask', 'comparison_mask', 'expected'),
+    [
+        (None, np.ones(3, dtype=bool), True),
+        (np.array([True, False, True]), np.array([True, False, True]), True),
+        (None, np.array([True, False, True]), False),
+        (np.array([True, True, True]), np.array([True, False, True]), False),
+    ],
+)
+def test_native_summary_cache_requires_same_mask(src_mask, comparison_mask, expected):
+    native_mask = np.ones(3, dtype=bool) if src_mask is None else src_mask
+
+    assert np.array_equal(native_mask, comparison_mask) is expected
+
+
+@pytest.mark.parametrize(
+    ('src_mask', 'common_mask', 'expected'),
+    [
+        (None, None, None),
+        (np.array([True, True, True]), None, None),
+        (np.array([True, False, True]), np.array([True, False, True]), None),
+        (None, np.array([True, False, True]), np.array([True, False, True])),
+        (
+            np.array([True, True, False]),
+            np.array([True, False, False]),
+            np.array([True, False, False]),
+        ),
+    ],
+)
+def test_fit_summary_mask_uses_native_cache_when_possible(src_mask, common_mask, expected):
+    result = Evaluator._fitSummaryMask(src_mask, common_mask, n=3)
+
+    if expected is None:
+        assert result is None
+    else:
+        np.testing.assert_array_equal(result, expected)
+
+
+def test_fit_mask_from_path_treats_all_success_as_unmasked(tmp_path):
+    path = tmp_path / 'test.fit.npz'
+    np.savez(path, y=np.zeros((3, 2)), advi_failed=np.array([False, False, False]))
+    evaluator = Evaluator.__new__(Evaluator)
+
+    assert evaluator._fitMaskFromPath(path, 'advi') is None
+
+
+def test_fit_proposal_from_npz_matches_collated_orientation(tmp_path):
+    path = tmp_path / 'test.fit.npz'
+    np.savez(
+        path,
+        nuts_ffx=np.arange(2 * 3 * 5, dtype=np.float64).reshape(2, 3, 5),
+        nuts_sigma_rfx=np.arange(2 * 2 * 5, dtype=np.float64).reshape(2, 2, 5),
+        nuts_sigma_eps=np.arange(2 * 1 * 5, dtype=np.float64).reshape(2, 1, 5),
+        nuts_rfx=np.arange(2 * 2 * 4 * 5, dtype=np.float64).reshape(2, 2, 4, 5),
+        nuts_corr_rfx=np.zeros((2, 1, 5, 2, 2), dtype=np.float64),
+        nuts_duration=np.array([10.0, 20.0]),
+    )
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(rescale=False)
+
+    proposal = evaluator._fitProposalFromNpz(path, 'NUTS')
+
+    assert proposal.samples_g.shape == (2, 5, 6)
+    assert proposal.rfx.shape == (2, 4, 5, 2)
+    assert proposal.corr_rfx.shape == (2, 5, 2, 2)
+    assert proposal.tpd == pytest.approx(15.0)
+    torch.testing.assert_close(
+        proposal.ffx,
+        torch.as_tensor(np.load(path)['nuts_ffx'].astype(np.float32)).permute(0, 2, 1),
+    )
+
+
+def test_plot_with_fit_models_uses_light_path(monkeypatch, tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(plot=True, converged_subset=False)
+    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+    calls = []
+
+    monkeypatch.setattr(evaluator, '_evalPartitionLight', lambda *args: calls.append(args) or [])
+    monkeypatch.setattr(
+        evaluator,
+        '_getPartitionData',
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError('fit dataloader should not be loaded for plot light path')
+        ),
+    )
+
+    rows = evaluator._evalPartition('test', ['MB', 'NUTS'], 'ppR2', False)
+
+    assert rows == []
+    assert calls
+
+
+def test_light_plot_uses_requested_display_order(monkeypatch, tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(
+        plot=True,
+        converged_subset=False,
+        rescale=False,
+        n_samples=1000,
+        seed=0,
+        k=0,
+        warmup=False,
+        pred_coverage=False,
+        summary_chunk_size=2,
+        likelihood_family=0,
+    )
+    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+    evaluator.plot_dir = tmp_path / 'plots'
+    evaluator.results_dir = None
+    batch = {
+        'X': torch.zeros(1, 1),
+        'y': torch.zeros(1, 1),
+        'ffx': torch.zeros(1, 1),
+        'sigma_rfx': torch.ones(1, 1),
+        'rfx': torch.zeros(1, 1, 1),
+        'mask_d': torch.ones(1, 1, dtype=torch.bool),
+        'mask_q': torch.ones(1, 1, dtype=torch.bool),
+        'mask_mq': torch.ones(1, 1, 1, dtype=torch.bool),
+        'sd_y': torch.ones(1),
+    }
+    labels_seen = []
+
+    monkeypatch.setattr(
+        evaluator,
+        '_getPartitionData',
+        lambda *args, **kwargs: (object(), batch, tmp_path / 'test.npz'),
+    )
+    monkeypatch.setattr(evaluator, '_fitMaskFromPath', lambda *args, **kwargs: None)
+    monkeypatch.setattr(evaluator, '_fitProposalFromNpz', lambda *args, **kwargs: object())
+    monkeypatch.setattr(evaluator, '_getProposalAndMask', lambda *args, **kwargs: (object(), None))
+    monkeypatch.setattr(evaluator, '_loadOrComputeSummary', lambda *args, **kwargs: _summary())
+    monkeypatch.setattr(evaluator, '_loadCachedSummary', lambda *args, **kwargs: _summary())
+    monkeypatch.setattr(evaluator, '_alignToCommon', lambda proposal, *args: proposal)
+    monkeypatch.setattr(
+        evaluator,
+        'plot',
+        lambda proposals, summaries, labels, batch, plot_dir=None: labels_seen.extend(labels),
+    )
+
+    evaluator._evalPartitionLight(
+        'test',
+        ['MB', 'NUTS', 'ADVI', 'LAPLACE'],
+        fit_label='ppR2',
+        multi=False,
+    )
+
+    assert labels_seen == ['MB', 'NUTS', 'ADVI', 'LA']
+
+
+def test_mb_summary_cache_path_includes_run_options_and_mask(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(
+        n_samples=1000,
+        seed=7,
+        k=0,
+        pred_coverage=True,
+    )
+    evaluator.run_name = 'data=small-n-mixed_model=large_seed=13'
+    evaluator.checkpoint_prefix = 'best'
+    evaluator.data_path_test = tmp_path / 'small-n-sampled' / 'test.fit.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+
+    path_all = evaluator._summaryCachePath('test', 'mb', mask=None)
+    path_masked = evaluator._summaryCachePath(
+        'test',
+        'mb',
+        mask=np.array([True, False, True]),
+    )
+
+    assert path_all.parent == evaluator.data_path_test.parent
+    assert 'summary_test_mb_data=small-n-mixed_model=large_seed=13_best' in path_all.name
+    assert '_s1000_seed7_k0_predcov1_all.pt' in path_all.name
+    assert path_masked != path_all
+    assert path_masked.name.endswith('.pt')
+
+
+def test_mb_summary_cache_candidates_include_legacy_checkpoint_name(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(
+        n_samples=1000,
+        seed=0,
+        k=0,
+        pred_coverage=True,
+    )
+    evaluator.run_name = 'data=small-n-mixed_model=large_seed=13'
+    evaluator.legacy_run_name = 'data=small-n-mixed_model=large_seed=0'
+    evaluator.checkpoint_prefix = 'best'
+    evaluator.data_path_test = tmp_path / 'small-n-sampled' / 'test.fit.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+
+    candidates = evaluator._summaryCacheCandidates(
+        'test',
+        'mb',
+        mask=np.array([True, True, True]),
+    )
+
+    names = [path.name for path in candidates]
+    assert any('large_seed=13_best' in name for name in names)
+    assert any('large_seed=0_best' in name for name in names)
+    assert any('large_seed=0_latest' in name for name in names)
+
+
+def test_mb_sample_cache_path_includes_checkpoint_name_and_seed(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(n_samples=1000, seed=7, k=2)
+    evaluator.run_name = 'data=small-n-mixed_model=large_seed=13'
+    evaluator.checkpoint_prefix = 'best'
+    evaluator.data_path_test = tmp_path / 'small-n-sampled' / 'test.fit.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+
+    path = evaluator._mbSampleCachePath('test')
+
+    assert path.parent == evaluator.data_path_test.parent
+    assert path.name == ('test.mb.data=small-n-mixed_model=large_seed=13_best_s1000_seed7_k2.npz')
+
+
+def test_load_or_sample_mb_uses_cached_posterior_samples(monkeypatch, tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(n_samples=3, seed=7, k=0)
+    evaluator.run_name = 'run'
+    evaluator.legacy_run_name = 'run'
+    evaluator.checkpoint_prefix = 'best'
+    evaluator.data_path_test = tmp_path / 'test.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+
+    proposal = Proposal(
+        {
+            'global': {'samples': torch.ones(2, 3, 2), 'log_prob': torch.zeros(2, 3)},
+            'local': {'samples': torch.ones(2, 1, 3, 1), 'log_prob': torch.zeros(2, 1, 3)},
+        },
+        has_sigma_eps=False,
+    )
+    proposal.tpd = 0.4
+    saveProposalCache(evaluator._mbSampleCachePath('test'), proposal)
+
+    monkeypatch.setattr(evaluator, '_mbSampleRefMtime', lambda partition: 0.0)
+    monkeypatch.setattr(
+        evaluator,
+        'sampleMinibatched',
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('should use cache')),
+    )
+
+    loaded = evaluator._loadOrSampleMb('test', object())
+
+    torch.testing.assert_close(loaded.samples_g, proposal.samples_g)
+    torch.testing.assert_close(loaded.samples_l, proposal.samples_l)
+    assert loaded.tpd == 0.4
+
+
+def test_make_row_includes_loo_nll_and_predictive_width():
+    evaluator = Evaluator.__new__(Evaluator)
+    summary = EvaluationSummary(
+        per_dataset=PerDatasetMetrics(
+            posterior_nll=torch.tensor([1.0, 3.0]),
+            loo_nll=torch.tensor([2.0, 4.0]),
+            pp_fit=torch.tensor([0.1, 0.2]),
+            pp_cov_width=torch.tensor([[9.0, 11.0], [5.0, 7.0]]),
+        ),
+        aggregated=AggregatedMetrics(
+            corr={'ffx': torch.tensor([0.5])},
+            nrmse={'ffx': torch.tensor([0.6])},
+            coverage={},
+            ece={'ffx': torch.tensor([0.0])},
+            eace={'ffx': torch.tensor([0.1])},
+            lcr={},
+            abs_lcr={},
+            estimates={},
+        ),
+        tpd=0.25,
+    )
+
+    row = evaluator._makeRow('LAPLACE', summary, 'ppR2')
+
+    assert row['LOO-NLL'] == pytest.approx(2.0)
+    assert row['ppNLL'] == pytest.approx(1.0)
+    assert row['ppWidth90'] == pytest.approx(5.0)
+    assert row['tpd'] == pytest.approx(0.25)
+    assert row['EACE'] == pytest.approx(0.1)
+
+
+def test_make_row_uses_finite_loo_nll_median():
+    evaluator = Evaluator.__new__(Evaluator)
+    summary = _summary()
+    summary.per_dataset.loo_nll = torch.tensor([1.0, float('nan'), 3.0])
+
+    row = evaluator._makeRow('ADVI', summary, 'ppAUC')
+
+    assert row['LOO-NLL'] == pytest.approx(1.0)
+
+
+def test_save_tables_accepts_loo_nll(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(likelihood_family=0)
+    evaluator.results_dir = tmp_path
+
+    rows = [
+        {
+            'method': 'MB',
+            'R': 0.9,
+            'NRMSE': 0.2,
+            'ECE': 0.01,
+            'EACE': 0.02,
+            'RFX_joint_ECE': 0.01,
+            'RFX_joint_EACE': 0.02,
+            'LOO-NLL': 1.5,
+            'ppNLL': 1.4,
+            'ppR2': 0.3,
+            'tpd': 0.1,
+            'IS_eff': None,
+            'Pareto_k': None,
+            'ppEACE': 0.02,
+            'ppWidth90': 4.0,
+        },
+        {
+            'method': 'LAPLACE',
+            'R': 0.8,
+            'NRMSE': 0.3,
+            'ECE': 0.02,
+            'EACE': 0.01,
+            'RFX_joint_ECE': 0.02,
+            'RFX_joint_EACE': 0.03,
+            'LOO-NLL': 1.3,
+            'ppNLL': 1.2,
+            'ppR2': 0.2,
+            'tpd': 0.01,
+            'IS_eff': None,
+            'Pareto_k': None,
+            'ppEACE': 0.03,
+            'ppWidth90': 3.0,
+        },
+    ]
+
+    evaluator.saveTables(rows)
+
+    table = (tmp_path / 'evaluate.md').read_text()
+    assert 'EACE' in table
+    assert 'LOO-NLL' in table
+    assert '**1.3000**' in table
+    assert '**3.0000**' in table
+
+
+def test_cached_rows_do_not_require_dataloader(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(
+        n_samples=1000,
+        seed=0,
+        k=0,
+        pred_coverage=False,
+        likelihood_family=0,
+    )
+    evaluator.run_name = 'run'
+    evaluator.legacy_run_name = 'run'
+    evaluator.checkpoint_prefix = 'best'
+    evaluator.ckpt_dir = None
+    evaluator.dl_test = None
+    evaluator.dl_valid = None
+    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+
+    np.savez(
+        evaluator.data_path_test,
+        y=np.zeros((3, 4), dtype=np.float32),
+        laplace_failed=np.array([False, False, False]),
+        laplace_duration=np.array([0.1, 0.2, 0.3], dtype=np.float32),
+    )
+    _summary(tpd=1.0).save(evaluator._summaryCachePath('test', 'mb'))
+    _summary(tpd=2.0).save(evaluator._summaryCachePath('test', 'nuts'))
+    _summary(tpd=None).save(evaluator._summaryCachePath('test', 'laplace'))
+
+    rows = evaluator._cachedRowsForPartition(
+        'test',
+        ['MB', 'NUTS', 'LAPLACE'],
+        fit_label='ppR2',
+        multi=False,
+    )
+
+    assert rows is not None
+    assert [row['method'] for row in rows] == ['MB', 'NUTS', 'LA']
+    assert rows[2]['tpd'] == pytest.approx(0.2)
+    assert evaluator.dl_test is None
+
+
+def test_mb_warmup_uses_one_sample_and_restores_torch_rng():
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(warmup=True, k=0, n_samples=100, rescale=False)
+    evaluator.device = torch.device('cpu')
+    calls = []
+
+    def sample_batch(batch, n_samples=None):
+        calls.append(n_samples)
+        torch.rand(1)
+        return object()
+
+    evaluator._sampleBatch = sample_batch
+    batch = {'X': torch.zeros(2, 3)}
+
+    torch.manual_seed(123)
+    expected = torch.rand(3)
+    torch.manual_seed(123)
+    evaluator._warmupMbBatch(batch, 'test')
+    actual = torch.rand(3)
+
+    assert calls == [1]
+    torch.testing.assert_close(actual, expected)
+
+
+def test_table_only_cache_miss_uses_light_path_before_full_evaluation(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(
+        save_tables=True,
+        plot=False,
+        converged_subset=False,
+        partition='test',
+        models='MB,NUTS',
+        likelihood_family=0,
+    )
+    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_valid = tmp_path / 'valid.fit.npz'
+    evaluator.results_dir = None
+    evaluator._cachedRowsForPartition = lambda *args, **kwargs: None
+    evaluator._directDataMode = lambda: False
+    calls = []
+
+    def fail_eval(*args, **kwargs):
+        raise AssertionError('full evaluation should not be reached in table-only mode')
+
+    evaluator._evalPartitionLight = lambda *args, **kwargs: calls.append(args) or []
+    evaluator._getPartitionData = fail_eval
+
+    evaluator.go()
+
+    assert calls
+
+
+def test_table_only_cache_miss_raises_when_light_path_unavailable(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(
+        save_tables=True,
+        plot=False,
+        converged_subset=False,
+        partition='test',
+        models='MB,NUTS',
+        likelihood_family=0,
+    )
+    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_valid = tmp_path / 'valid.fit.npz'
+    evaluator._cachedRowsForPartition = lambda *args, **kwargs: None
+    evaluator._directDataMode = lambda: True
+
+    with pytest.raises(RuntimeError, match='Refusing to fall back to full evaluation'):
+        evaluator.go()
+
+
+def test_table_only_cache_miss_can_fallback_for_mb_only():
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(
+        save_tables=True,
+        plot=False,
+        converged_subset=False,
+        partition='test',
+        models='MB',
+        likelihood_family=0,
+    )
+    evaluator.data_path_test = 'test.fit.npz'
+    evaluator.data_path_valid = 'valid.fit.npz'
+    evaluator.results_dir = None
+    evaluator._cachedRowsForPartition = lambda *args, **kwargs: None
+    evaluator._hasFits = lambda partition: True
+    evaluator._evalPartition = lambda *args, **kwargs: [{'method': 'MB'}]
+
+    evaluator.go()
+
+
+def test_mb_only_partition_data_uses_base_file(monkeypatch):
+    class DummyLoader:
+        def fullBatch(self):
+            return {'X': torch.zeros(1, 2)}
+
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(batch_size=16)
+    evaluator.dl_test = None
+    evaluator.dl_valid = None
+    calls = []
+
+    def fake_loader(partition, batch_size=None, prefer_fit=True, sortish=None):
+        calls.append((partition, batch_size, prefer_fit, sortish))
+        suffix = 'fit.npz' if prefer_fit else 'npz'
+        return DummyLoader(), f'{partition}.{suffix}'
+
+    monkeypatch.setattr(evaluator, '_getDataLoader', fake_loader)
+
+    _, _, path = evaluator._getPartitionData('test', need_fits=False)
+
+    assert path == 'test.npz'
+    assert calls == [('test', 16, False, False)]
+
+
+def test_fit_partition_data_preserves_file_order(monkeypatch):
+    class DummyLoader:
+        _sortish = False
+
+        def fullBatch(self):
+            return {'X': torch.zeros(1, 2)}
+
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(batch_size=16)
+    evaluator.dl_test = None
+    evaluator.dl_valid = None
+    evaluator.data_path_test = 'test.fit.npz'
+    calls = []
+
+    def fake_loader(partition, batch_size=None, prefer_fit=True, sortish=None):
+        calls.append((partition, batch_size, prefer_fit, sortish))
+        return DummyLoader(), 'test.fit.npz'
+
+    monkeypatch.setattr(evaluator, '_getDataLoader', fake_loader)
+
+    _, _, path = evaluator._getPartitionData('test', need_fits=True)
+
+    assert path == 'test.fit.npz'
+    assert calls == [('test', 16, True, False)]

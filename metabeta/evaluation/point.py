@@ -31,6 +31,13 @@ def pointEstimate(
         if x.dim() == 4:   # handle groups in rfx
             w = w.unsqueeze(1)
         return (x * w.unsqueeze(-1)).sum(-2)
+    elif method == 'std':
+        # weighted std via the two moments; falls back to the population std when unweighted
+        if w is None:
+            return torch.std(x, dim=-2, unbiased=False)
+        mean = pointEstimate(x, w, 'mean')
+        mean_sq = pointEstimate(x.square(), w, 'mean')
+        return (mean_sq - mean.square()).clamp_min(0.0).sqrt()
     elif method == 'median':
         if w is None:
             return torch.median(x, dim=-2)[0]
