@@ -1,466 +1,300 @@
-"""
-Misspecification study: evaluate trained models under prior misspecification.
+"""Prior misspecification: rewrite the stored prior of existing test sets.
 
-For each evaluation config:
-    1. Load model from checkpoint
-    2. Load test set (or validation set under --valid flag)
-    3. For each condition (baseline + misspecified):
-        - Perturb prior context in the batch (scale, location, family)
-        - Sample from the model
-        - Evaluate metrics against the same ground truth
-    4. Summarize absolute metrics and changes from baseline
-    5. Save table in markdown and LaTeX format
+The prior counterpart of experiments/simulation/likelihood_misspec.py.  That script keeps the
+prior and contaminates the outcomes; this one keeps the outcomes and contaminates the prior.
+Predictors, groups, outcomes and every generating parameter are copied over untouched — only
+the stored hyperparameters that define the fitted model are rewritten:
 
-Perturbation types:
-    - Wrong variance: scale tau hyperparameters (multiple factors supported)
-    - Wrong mean: shift nu_ffx by k × tau_ffx (relative to prior width)
-    - Wrong family: rotate prior family indices (+1 mod n_families)
+    τ×c         all prior scales (τ_ffx, τ_rfx, τ_ε) multiplied by c ∈ {1/3, 3}
+    ν+kτ        ν_ffx shifted by k prior SDs, k ∈ {1, 2} (location, not scale)
+    family+1    prior families rotated (Normal↔Student-t, Half-Normal→Half-Student-t→Exp.)
+
+Because metabeta reads those fields as posterior context and ``utils/pymc.buildPymc`` reads
+them to construct the PyMC model, writing them into a data dir is enough to make *both*
+inference paths fit the same misspecified prior — no changes to fit.py or fit-nuts.sh.  That
+is the whole point of doing this at generation time rather than perturbing in memory: without
+a matching NUTS refit there is no gold standard to compare the degradation against.
+
+The generating parameters still come from the *correct* prior, so a perturbed condition is a
+genuine modelling error, and the question is whether metabeta degrades in step with NUTS.
+
+Each (size, family) source produces standard-format data dirs under outputs/data/:
+
+    {size}-{fam}-priorbase      unperturbed baseline: slice of the original test.npz AND its
+                                test.fit.npz (existing NUTS fits reused — zero refits)
+    {size}-{fam}-{tag}          one dir per condition (tau033, tau3, mu1, mu2, famrot),
+                                test.npz only — NUTS fits to be produced with fit.py
+
+Analytical stats are a function of the prior, so they are dropped from every dir (baseline
+included, to keep the conditions comparable): either rerun precompute.py on all of them, or
+let the model recompute them live.  Selected source indices are shared across conditions
+within a (size, family) and recorded in each config.yaml (``prior_orig_indices``).
 
 Usage (from repo root):
-    uv run python experiments/posthoc/prior_misspec.py
-    uv run python experiments/posthoc/prior_misspec.py --configs toy-n
-    uv run python experiments/posthoc/prior_misspec.py --scale_factors 0.33 3 10
-    uv run python experiments/posthoc/prior_misspec.py --mean_shifts 1 2 5
-    uv run python experiments/posthoc/prior_misspec.py --importance
-    uv run python experiments/posthoc/prior_misspec.py --valid
+    uv run python experiments/simulation/prior_misspec.py --families n --sizes small --n_datasets 4
+    uv run python experiments/simulation/prior_misspec.py --n_datasets 32
+    uv run python experiments/simulation/prior_misspec.py --print_commands
 
-TODO (HMC baseline comparison, larger effort):
-    For a rigorous comparison we should additionally run NUTS/HMC with the same
-    misspecified prior under each perturbation condition and compare its metric
-    degradation profile to metabeta's.  This would confirm that metabeta degrades
-    at most as fast as the gold-standard sampler, ruling out additional loss from
-    the amortization approximation.
-
-    Concretely:
-      - Re-use the Bambi/PyMC runner from experiments/posthoc/structural_misspec.py
-        (which already calls NUTS with custom priors) and pass the perturbed
-        hyperparameters (scaled tau, shifted nu) to Bambi's prior_common argument.
-      - Run only the two most practically relevant conditions: tau×0.33 and tau×3,
-        focusing on the configuration where divergence is largest (medium-n-mixed).
-      - Cache NUTS fits to results/misspec_nuts/ analogously to structural_fits/.
-      - Add HMC rows to the output table alongside metabeta rows.
-      - The experiment is expensive; run with --max_datasets 16 (same as structural).
+After generation, produce NUTS fits per condition dir (cluster):
+    sbatch --array=0-31 scripts/fit-nuts.sh --data_id small-n-tau3
+then reintegrate (from metabeta/simulation/):
+    uv run python fit.py --size small --family 0 --ds_type tau3 --reintegrate
+and optionally precompute analytical stats (from metabeta/analytical/):
+    uv run python precompute.py --size small --family 0 --ds_type tau3 --partition test
 """
-# subset datatsets
 
 import argparse
-import yaml
-from dataclasses import dataclass
-from pathlib import Path
+import logging
 
 import numpy as np
-import torch
-from tabulate import tabulate
-from tqdm import tqdm
+import yaml
 
-from metabeta.models.approximator import Approximator
-from metabeta.utils.config import (
-    assimilateConfig,
-    loadDataConfig,
-)
-from metabeta.utils.dataloader import Dataloader, toDevice
-from metabeta.utils.evaluation import Proposal, concatProposalsBatch, dictMean
 from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES
-from metabeta.posthoc.importance import ImportanceSampler, runIS
-from metabeta.utils.device import setDevice
-from metabeta.utils.names import datasetFilename, runName
-from metabeta.utils.moe import moeEstimate
 from metabeta.utils.logger import setupLogging
-from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.sampling import setSeed
-from metabeta.evaluation.summary import getSummary
-from metabeta.utils.experiments import (
-    CHECKPOINT_DIR,
-    DATA_DIR,
-    EVALUATION_CONFIG_DIR,
-    RESULTS_DIR,
-    loadApproximator,
+from metabeta.utils.experiments import DATA_DIR
+
+# sibling experiment script (this directory is sys.path[0] at run time); the npz slicing,
+# index selection and stale-key lists are identical for both misspecification studies.
+from likelihood_misspec import (
+    DEFAULT_FAMILIES,
+    DEFAULT_SIZES,
+    FAMILY_IDS,
+    FIT_PREFIXES,
+    STAT_KEYS,
+    selectIndices,
+    sliceNpzStreaming,
 )
 
-EVAL_CFG_DIR = EVALUATION_CONFIG_DIR
-OUT_DIR = RESULTS_DIR
+logger = logging.getLogger(__name__)
 
-DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed', 'large-n-mixed']
-DEFAULT_SCALE_FACTORS = [0.33, 3.0]
-DEFAULT_MEAN_SHIFTS = [1.0, 2.0]
+BASE_TAG = 'priorbase'
 
-# (display name, extractor, higher_is_better)
-# higher_is_better: True = max, False = min, 'abs' = closest to 0
-METRICS = [
-    ('R', lambda s: dictMean(s.corr), True),
-    ('NRMSE', lambda s: dictMean(s.nrmse), False),
-    ('ECE', lambda s: dictMean(s.ece), 'abs'),
-    ('ppNLL', lambda s: s.mnll, False),
-]
+# ds_type tag → (τ multiplier, ν_ffx shift in units of τ_ffx, rotate prior families).
+# Kept in step with the display labels in experiments/evaluation/prior_misspec.py.
+CONDITIONS: dict[str, tuple[float, float, bool]] = {
+    'tau033': (1.0 / 3.0, 0.0, False),
+    'tau3': (3.0, 0.0, False),
+    'mu1': (1.0, 1.0, False),
+    'mu2': (1.0, 2.0, False),
+    'famrot': (1.0, 0.0, True),
+}
 
-
-@dataclass
-class Condition:
-    label: str
-    scale_factor: float = 1.0  # tau multiplier (1.0 = no change)
-    mean_shift: float = 0.0  # nu_ffx offset in units of tau_ffx (0.0 = no change)
-    wrong_family: bool = False
-
-
-def buildConditions(scale_factors: list[float], mean_shifts: list[float]) -> list[Condition]:
-    """Build all combinations of (scale, shift, family) perturbations."""
-    scales = [1.0] + sorted(scale_factors)
-    shifts = [0.0] + sorted(mean_shifts)
-    families = [False, True]
-
-    conditions = []
-    for s in scales:
-        for k in shifts:
-            for fam in families:
-                parts = []
-                if s != 1.0:
-                    parts.append(f'τ×{s:g}')
-                if k != 0.0:
-                    parts.append(f'μ+{k:g}σ')
-                if fam:
-                    parts.append('fam')
-                label = ' + '.join(parts) if parts else 'Baseline'
-                conditions.append(Condition(label, s, k, fam))
-
-    return conditions
+# hyperparameters that define the fitted prior; everything else is copied verbatim
+SCALE_KEYS = ('tau_ffx', 'tau_rfx', 'tau_eps')
+FAMILY_KEYS = (
+    ('family_ffx', len(FFX_FAMILIES)),
+    ('family_sigma_rfx', len(SIGMA_FAMILIES)),
+    ('family_sigma_eps', len(SIGMA_FAMILIES)),
+)
 
 
 # fmt: off
 def setup() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Misspecification study across prior perturbations.')
-    parser.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS, help='evaluation config names (YAML files in evaluation/configs/)')
-    parser.add_argument('--scale_factors', nargs='+', type=float, default=DEFAULT_SCALE_FACTORS, help='tau multipliers for wrong-variance conditions')
-    parser.add_argument('--mean_shifts', nargs='+', type=float, default=DEFAULT_MEAN_SHIFTS, help='nu_ffx offsets in units of tau_ffx for wrong-mean conditions')
-    parser.add_argument('--importance', action='store_true', help='use importance sampling post-hoc')
-    parser.add_argument('--k', type=int, default=3, help='pseudo-MoE extra permuted views (0 = disabled)')
-    parser.add_argument('--batch_size', type=int, default=8, help='minibatch size for sampling (prevents OOM)')
-    parser.add_argument('--valid', action='store_true', help='use validation set instead of test set')
-    parser.add_argument('--outdir', type=str, default=str(OUT_DIR), help='output directory for tables')
+    parser = argparse.ArgumentParser(description='Generate prior-misspecified test sets from sampled test data.')
+    parser.add_argument('--families', nargs='+', default=DEFAULT_FAMILIES, choices=DEFAULT_FAMILIES, help='likelihood families (letters)')
+    parser.add_argument('--sizes', nargs='+', default=DEFAULT_SIZES, choices=DEFAULT_SIZES, help='size regimes')
+    parser.add_argument('--conditions', nargs='+', default=None, choices=list(CONDITIONS), help='ds_type tags to generate (default: all)')
+    parser.add_argument('--n_datasets', type=int, default=32, help='datasets per condition (subset of the 512 test datasets)')
+    parser.add_argument('--seed', type=int, default=0, help='seed for index selection')
+    parser.add_argument('--overwrite', action='store_true', help='regenerate dirs that already exist')
+    parser.add_argument('--print_commands', action='store_true', help='only print the NUTS fit campaign commands and exit')
     parser.add_argument('--verbosity', type=int, default=1, help='0=warnings | 1=info | 2=debug')
     return parser.parse_args()
 # fmt: on
 
 
-def loadEvalConfig(name: str, **overrides) -> argparse.Namespace:
-    """Load an evaluation YAML config and apply overrides."""
-    path = EVAL_CFG_DIR / f'{name}.yaml'
-    assert path.exists(), f'eval config not found: {path}'
-    with open(path) as f:
+# ---------------------------------------------------------------------------
+# Prior rewriting
+# ---------------------------------------------------------------------------
+
+
+def perturbPrior(
+    batch: dict[str, np.ndarray],
+    scale: float,
+    shift: float,
+    rotate: bool,
+) -> None:
+    """Rewrite every dataset's stored prior hyperparameters in place.
+
+    Padded columns stay zero under both operations (0·c = 0 and 0 + k·0 = 0), so the
+    active/inactive structure of the batch is preserved.  The shift is applied before the
+    rescale so that ``k`` always counts *original* prior SDs.
+    """
+    if shift != 0.0:
+        batch['nu_ffx'] = batch['nu_ffx'] + shift * batch['tau_ffx']
+    if scale != 1.0:
+        for key in SCALE_KEYS:
+            if key in batch:
+                batch[key] = batch[key] * scale
+    if rotate:
+        for key, n_families in FAMILY_KEYS:
+            if key in batch:
+                batch[key] = (batch[key] + 1) % n_families
+
+
+# ---------------------------------------------------------------------------
+# Directory writing
+# ---------------------------------------------------------------------------
+
+
+def writeConfig(
+    src_dir,
+    out_dir,
+    data_id: str,
+    n_datasets: int,
+    tag: str,
+    scale: float,
+    shift: float,
+    rotate: bool,
+    idx: np.ndarray,
+    seed: int,
+) -> None:
+    with open(src_dir / 'config.yaml') as f:
         cfg = yaml.safe_load(f)
-    cfg['name'] = name
-    cfg.update(overrides)
-    return argparse.Namespace(**cfg)
+    cfg['data_id'] = data_id
+    cfg['bs_test'] = n_datasets
+    cfg['prior_misspec_tag'] = tag
+    cfg['prior_misspec_scale'] = scale
+    cfg['prior_misspec_shift'] = shift
+    cfg['prior_misspec_rotate_family'] = rotate
+    cfg['prior_misspec_source'] = src_dir.name
+    cfg['prior_orig_indices'] = [int(j) for j in idx]
+    cfg['prior_misspec_seed'] = seed
+    with open(out_dir / 'config.yaml', 'w') as f:
+        yaml.safe_dump(cfg, f, sort_keys=False)
 
 
-def initModel(cfg: argparse.Namespace, device: torch.device) -> Approximator:
-    """Load model architecture from config and restore checkpoint weights."""
-    data_cfg = loadDataConfig(cfg.data_id)
-    assimilateConfig(cfg, data_cfg)
-    data_cfg_valid = loadDataConfig(cfg.data_id_valid)
-
-    run = runName(vars(cfg))
-    model = loadApproximator(
-        cfg,
-        device,
-        CHECKPOINT_DIR / run,
-        cfg.prefix,
-        compile_model=cfg.compile,
-    )
-
-    return model, data_cfg_valid, run
+def _dropStaleKeys(source: dict[str, np.ndarray], idx: np.ndarray) -> dict[str, np.ndarray]:
+    """Sliced copy without the prior-dependent analytical stats and any fit arrays."""
+    return {
+        k: v[idx].copy()
+        for k, v in source.items()
+        if k not in STAT_KEYS and not k.startswith(FIT_PREFIXES)
+    }
 
 
-def getDataloader(data_cfg: dict, partition: str, batch_size: int | None = None) -> Dataloader:
-    """Create a dataloader for the given partition."""
-    data_fname = datasetFilename(partition)
-    data_path = DATA_DIR / data_cfg['data_id'] / data_fname
-    if partition == 'test':
-        data_path = data_path.with_suffix('.fit.npz')
-    assert data_path.exists(), f'data not found: {data_path}'
-    sortish = batch_size is not None
-    return Dataloader(data_path, batch_size=batch_size, sortish=sortish)
+def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
+    """Write the baseline + condition dirs for one (family, size); returns new data_ids."""
+    src_id = f'{size}-{family}-sampled'
+    src_dir = DATA_DIR / src_id
+    test_path = src_dir / 'test.npz'
+    fit_path = src_dir / 'test.fit.npz'
+    if not test_path.exists() or not fit_path.exists():
+        logger.warning('%s: test.npz or test.fit.npz missing — skipping', src_id)
+        return []
 
+    with np.load(test_path, allow_pickle=True) as z:
+        source = {k: z[k] for k in z.files}
+    B = source['y'].shape[0]
+    idx = selectIndices(B, cfg.n_datasets, cfg.seed)
+    conditions = cfg.conditions if cfg.conditions is not None else list(CONDITIONS)
+    created = []
 
-def resetRng(model: Approximator, seed: int) -> None:
-    """Reset base distribution RNGs for reproducible sampling."""
-    model.posterior_g.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
-    if hasattr(model, 'posterior_l'):
-        model.posterior_l.base_dist.base.rng = np.random.default_rng(seed)  # type: ignore
+    # --- baseline: correct prior, slice of the original data + its NUTS fits (no refits)
+    base_id = f'{size}-{family}-{BASE_TAG}'
+    base_dir = DATA_DIR / base_id
+    if base_dir.exists() and not cfg.overwrite:
+        logger.info('%s: exists — skipping (use --overwrite)', base_id)
+    else:
+        base_dir.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(base_dir / 'test.npz', **_dropStaleKeys(source, idx))
+        # advi_/laplace_ fits are irrelevant here and dominate the file size — drop them.
+        sliced_fit = sliceNpzStreaming(fit_path, idx, drop_prefixes=('advi_', 'laplace_'))
+        np.savez_compressed(base_dir / 'test.fit.npz', **sliced_fit)
+        writeConfig(
+            src_dir, base_dir, base_id, cfg.n_datasets, BASE_TAG, 1.0, 0.0, False, idx, cfg.seed
+        )
+        logger.info('%s: baseline written (%d datasets)', base_id, cfg.n_datasets)
+    created.append(base_id)
 
-
-# ---------------------------------------------------------------------------
-# Batch perturbation
-# ---------------------------------------------------------------------------
-
-
-def perturbBatch(
-    batch: dict[str, torch.Tensor],
-    cond: Condition,
-) -> dict[str, torch.Tensor]:
-    """Clone batch and perturb prior context fields.
-
-    scale_factor: multiply tau_ffx, tau_rfx, and tau_eps by this factor.
-    mean_shift: add mean_shift × tau_ffx to nu_ffx (relative to prior width).
-    wrong_family: rotate family indices (+1 mod n_families).
-    """
-    out = {k: v.clone() if torch.is_tensor(v) else v for k, v in batch.items()}
-
-    if cond.scale_factor != 1.0:
-        out['tau_ffx'] = out['tau_ffx'] * cond.scale_factor
-        out['tau_rfx'] = out['tau_rfx'] * cond.scale_factor
-        if 'tau_eps' in out:
-            out['tau_eps'] = out['tau_eps'] * cond.scale_factor
-
-    if cond.mean_shift != 0.0:
-        out['nu_ffx'] = out['nu_ffx'] + cond.mean_shift * batch['tau_ffx']
-
-    if cond.wrong_family:
-        n_ffx = len(FFX_FAMILIES)
-        n_sigma = len(SIGMA_FAMILIES)
-        out['family_ffx'] = (out['family_ffx'] + 1) % n_ffx
-        out['family_sigma_rfx'] = (out['family_sigma_rfx'] + 1) % n_sigma
-        if 'family_sigma_eps' in out:
-            out['family_sigma_eps'] = (out['family_sigma_eps'] + 1) % n_sigma
-
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Sampling and evaluation
-# ---------------------------------------------------------------------------
-
-
-@torch.inference_mode()
-def sampleMinibatched(
-    model: Approximator,
-    cfg: argparse.Namespace,
-    dl: Dataloader,
-    device: torch.device,
-    cond: Condition,
-    k: int = 0,
-) -> Proposal:
-    """Sample from proposal distribution over minibatches with optional perturbation."""
-    proposals = []
-    n_datasets = 0
-    for batch in tqdm(dl, desc=f'  {cond.label}'):
-        batch = toDevice(batch, device)
-        batch = perturbBatch(batch, cond)
-        if k > 0:
-            B = batch['X'].shape[0]
-            lf = getattr(cfg, 'likelihood_family', 0)
-            for i in range(B):
-                single = {k_: v[i : i + 1] if torch.is_tensor(v) else v for k_, v in batch.items()}
-                rng = np.random.default_rng(cfg.seed + n_datasets)
-                proposal = moeEstimate(model, single, cfg.n_samples, k, rng=rng)
-                if cfg.rescale:
-                    proposal.rescale(single['sd_y'])
-                if cfg.importance:
-                    data_is = rescaleData(single) if cfg.rescale else single
-                    imp_sampler = ImportanceSampler(data_is, sir=False, likelihood_family=lf)
-                    proposal = imp_sampler(proposal)
-                proposal.to('cpu')
-                proposals.append(proposal)
-                n_datasets += 1
-        else:
-            if cfg.importance:
-                proposal = runIS(model, batch, cfg)
-            else:
-                proposal = model.estimate(batch, n_samples=cfg.n_samples)
-                if cfg.rescale:
-                    proposal.rescale(batch['sd_y'])
-            proposal.to('cpu')
-            proposals.append(proposal)
-
-    return concatProposalsBatch(proposals)
-
-
-def evaluate(
-    configs: list[str],
-    conditions: list[Condition],
-    batch_size: int,
-    use_valid: bool,
-    importance: bool,
-    k: int = 0,
-) -> list[dict]:
-    """Run all configs × conditions and collect metric rows."""
-    rows = []
-    partition = 'valid' if use_valid else 'test'
-
-    for config_name in configs:
-        print(f"\n{'=' * 60}")
-        print(f'Config: {config_name} (partition={partition}, IS={importance}, k={k})')
-        print(f"{'=' * 60}")
-
-        cfg = loadEvalConfig(config_name, plot=False)
-        cfg.importance = importance
-        setSeed(cfg.seed)
-        device = setDevice(cfg.device)
-
-        model, data_cfg, run = initModel(cfg, device)
-
-        effective_batch_size = 1 if k > 0 else batch_size
-        dl = getDataloader(data_cfg, partition, batch_size=effective_batch_size)
-        full_batch = dl.fullBatch()
-        if cfg.rescale:
-            full_batch = rescaleData(full_batch)
-
-        for cond in conditions:
-            print(f'\n  --- {cond.label} ---')
-
-            setSeed(cfg.seed)
-            resetRng(model, cfg.seed)
-            model.eval()
-
-            proposal = sampleMinibatched(model, cfg, dl, device, cond, k=k)
-
-            lf = getattr(cfg, 'likelihood_family', 0)
-            summary = getSummary(proposal, full_batch, calibrator=None, likelihood_family=lf)
-
-            row = {'config': config_name, 'condition': cond.label}
-            for metric_name, extractor, _ in METRICS:
-                row[metric_name] = extractor(summary)
-            rows.append(row)
-
-    return rows
+    # --- perturbed conditions: rewritten prior, fresh NUTS fits required
+    for tag in conditions:
+        scale, shift, rotate = CONDITIONS[tag]
+        data_id = f'{size}-{family}-{tag}'
+        out_dir = DATA_DIR / data_id
+        created.append(data_id)
+        if out_dir.exists() and not cfg.overwrite:
+            logger.info('%s: exists — skipping (use --overwrite)', data_id)
+            continue
+        if out_dir.exists():
+            # a rewritten prior invalidates any fits of the previous data — remove them so
+            # stale per-index fit files cannot be reintegrated against the new prior
+            stale = [p for p in [out_dir / 'test.fit.npz'] if p.exists()]
+            stale += sorted((out_dir / 'fits').glob('*.npz'))
+            for p in stale:
+                p.unlink()
+            if stale:
+                logger.warning('%s: removed %d stale fit file(s)', data_id, len(stale))
+        batch = _dropStaleKeys(source, idx)
+        perturbPrior(batch, scale, shift, rotate)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(out_dir / 'test.npz', **batch)
+        writeConfig(
+            src_dir, out_dir, data_id, cfg.n_datasets, tag, scale, shift, rotate, idx, cfg.seed
+        )
+        logger.info(
+            '%s: written (τ×%g, ν+%gτ, rotate=%s, %d datasets)',
+            data_id,
+            scale,
+            shift,
+            rotate,
+            cfg.n_datasets,
+        )
+    return created
 
 
 # ---------------------------------------------------------------------------
-# Table formatting and output
+# Fit campaign
 # ---------------------------------------------------------------------------
 
 
-def bestIndices(rows: list[dict]) -> dict[str, set[int]]:
-    """Find the row index of the best value per metric, grouped by config.
-
-    higher_is_better: True = max, False = min, 'abs' = closest to 0.
-    """
-    metric_names = [m[0] for m in METRICS]
-    direction = {m[0]: m[2] for m in METRICS}
-    best: dict[str, set[int]] = {m: set() for m in metric_names}
-
-    configs = []
-    seen = set()
-    for r in rows:
-        if r['config'] not in seen:
-            configs.append(r['config'])
-            seen.add(r['config'])
-
-    for cfg in configs:
-        cfg_rows = [(i, r) for i, r in enumerate(rows) if r['config'] == cfg]
-        for metric in metric_names:
-            values = [(i, r[metric]) for i, r in cfg_rows if r[metric] is not None]
-            if not values:
-                continue
-            d = direction[metric]
-            if d == 'abs':
-                best_idx = min(values, key=lambda x: abs(x[1]))[0]
-            elif d:
-                best_idx = max(values, key=lambda x: x[1])[0]
-            else:
-                best_idx = min(values, key=lambda x: x[1])[0]
-            best[metric].add(best_idx)
-
-    return best
+def printCommands(
+    families: list[str],
+    sizes: list[str],
+    conditions: list[str],
+    n_datasets: int,
+) -> None:
+    """Print the NUTS fit campaign, one size at a time (baseline dirs need no fits)."""
+    for size in sizes:
+        print(f'\n# --- {size} ---')
+        for family in families:
+            for tag in conditions:
+                print(
+                    f'sbatch --array=0-{n_datasets - 1} scripts/fit-nuts.sh '
+                    f'--data_id {size}-{family}-{tag}'
+                )
+        print('# after all fits of this size finished (from metabeta/simulation/):')
+        for family in families:
+            for tag in conditions:
+                print(
+                    f'uv run python fit.py --size {size} --family {FAMILY_IDS[family]} '
+                    f'--ds_type {tag} --reintegrate'
+                )
 
 
-def deltaTable(rows: list[dict]) -> str:
-    """Format a table showing changes from baseline per config."""
-    metric_names = [m[0] for m in METRICS]
-    table_rows = []
+def main() -> None:
+    cfg = setup()
+    setupLogging(cfg.verbosity)
+    conditions = cfg.conditions if cfg.conditions is not None else list(CONDITIONS)
 
-    configs = []
-    seen = set()
-    for r in rows:
-        if r['config'] not in seen:
-            configs.append(r['config'])
-            seen.add(r['config'])
+    if cfg.print_commands:
+        printCommands(cfg.families, cfg.sizes, conditions, cfg.n_datasets)
+        return
 
-    for cfg in configs:
-        cfg_rows = [r for r in rows if r['config'] == cfg]
-        baseline = cfg_rows[0]
-        for r in cfg_rows[1:]:
-            table_row = [cfg, r['condition']]
-            for metric in metric_names:
-                b_val = baseline[metric]
-                val = r[metric]
-                if b_val is None or val is None:
-                    table_row.append('—')
-                else:
-                    delta = val - b_val
-                    table_row.append(f'{delta:+.4f}')
-            table_rows.append(table_row)
+    created = []
+    for family in cfg.families:
+        for size in cfg.sizes:
+            created += generateCombo(cfg, family, size)
+    if not created:
+        logger.error('No data dirs generated.')
+        return
 
-    headers = ['Config', 'Condition'] + [f'Δ{m}' for m in metric_names]
-    return tabulate(table_rows, headers=headers, tablefmt='pipe', stralign='right')
-
-
-def formatTable(rows: list[dict], fmt: str = 'pipe') -> str:
-    """Format as a table with best-per-column markers."""
-    metric_names = [m[0] for m in METRICS]
-    best = bestIndices(rows)
-
-    table_rows = []
-    for i, r in enumerate(rows):
-        table_row = [r['config'], r['condition']]
-        for metric in metric_names:
-            val = r[metric]
-            if val is None:
-                cell = '—'
-            else:
-                cell = f'{val:.4f}'
-                if i in best.get(metric, set()):
-                    if fmt == 'latex':
-                        cell = f'\\textbf{{{cell}}}'
-                    else:
-                        cell = f'**{cell}**'
-            table_row.append(cell)
-        table_rows.append(table_row)
-
-    headers = ['Config', 'Condition'] + metric_names
-    tablefmt = 'latex_booktabs' if fmt == 'latex' else 'pipe'
-    return tabulate(table_rows, headers=headers, tablefmt=tablefmt, stralign='right')
-
-
-def save(rows: list[dict], outdir: Path) -> None:
-    """Save tables in markdown and LaTeX formats."""
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    md_abs = formatTable(rows, fmt='pipe')
-    md_delta = deltaTable(rows)
-    md_path = outdir / 'missspecification.md'
-    md_path.write_text(
-        f'# Misspecification Results\n\n## Absolute\n\n{md_abs}\n\n'
-        f'## Change from Baseline\n\n{md_delta}\n'
-    )
-    print(f'\nMarkdown saved to {md_path}')
-
-    tex_table = formatTable(rows, fmt='latex')
-    tex_path = outdir / 'missspecification.tex'
-    tex_path.write_text(tex_table + '\n')
-    print(f'LaTeX saved to {tex_path}')
+    print(f'\nGenerated/verified {len(created)} data dirs:')
+    for data_id in created:
+        print(f'  {data_id}')
+    print('\nNUTS fit campaign (baseline dirs reuse existing fits):')
+    printCommands(cfg.families, cfg.sizes, conditions, cfg.n_datasets)
 
 
 if __name__ == '__main__':
-    args = setup()
-    setupLogging(args.verbosity)
-
-    conditions = buildConditions(args.scale_factors, args.mean_shifts)
-
-    print(f'Misspecification study: {len(args.configs)} config(s) × {len(conditions)} conditions')
-    print(f'Configs: {args.configs}')
-    print(f'Scale factors: {args.scale_factors}')
-    print(f'Mean shifts: {args.mean_shifts}')
-    print(f"Partition: {'valid' if args.valid else 'test'}")
-    print(f'IS: {args.importance}')
-    print(f'k (pseudo-MoE): {args.k}')
-    print(f'Conditions: {[c.label for c in conditions]}')
-
-    rows = evaluate(
-        args.configs, conditions, args.batch_size, args.valid, args.importance, k=args.k
-    )
-
-    print(f'\n{formatTable(rows)}')
-    print(f'\n{deltaTable(rows)}')
-
-    save(rows, Path(args.outdir))
-    print('\nDone.')
+    main()
