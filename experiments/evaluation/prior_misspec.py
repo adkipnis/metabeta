@@ -55,6 +55,7 @@ from condition_number import LF_FROM_FAM
 from likelihood_misspec import (
     FAMILY_NAMES,
     agreementRows,
+    alignSizes,
     collectCondition,
     qualityRows,
     renderAgreementMd,
@@ -149,6 +150,12 @@ def main() -> None:
             'No conditions evaluated. Generate the data dirs first with '
             'experiments/simulation/prior_misspec.py.'
         )
+        return
+    # the baseline reuses existing fits and so covers every size immediately, while a perturbed
+    # condition only appears once its own NUTS campaign lands — pool like against like
+    per_cond, sizes = alignSizes(per_cond)
+    if not per_cond:
+        logger.error('No size was collected under every condition — nothing comparable to pool.')
         return
 
     pooled_agree = {tag: _poolAgree(per) for tag, per in per_cond.items()}

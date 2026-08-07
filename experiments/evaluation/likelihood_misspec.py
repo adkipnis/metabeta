@@ -240,6 +240,38 @@ def collectCondition(
     return {'agree': out, 'entries': entries}
 
 
+def alignSizes(per_cond: dict[str, list[dict]]) -> tuple[dict[str, list[dict]], list[str]]:
+    """Restrict every condition to the sizes collected under *all* of them.
+
+    Conditions are pooled across sizes and then read row against row, so a condition still
+    missing a size — its NUTS fits are not in yet — would be compared against a baseline
+    pooled over more (and larger) datasets, and the size composition rather than the
+    perturbation would drive the difference.  A ragged campaign is a normal intermediate
+    state, so warn and shrink instead of failing, and hand back the sizes actually used so
+    the report header cannot claim coverage that is not there.
+    """
+    per_sizes = {tag: [r['agree']['size'][0] for r in per] for tag, per in per_cond.items()}
+    common = set.intersection(*(set(s) for s in per_sizes.values()))
+    for tag, sizes in per_sizes.items():
+        missing = sorted(set(sizes) - common)
+        if missing:
+            logger.warning(
+                '%s: dropping %s — not collected under every condition', tag, ', '.join(missing)
+            )
+    aligned = {
+        tag: [r for r in per if r['agree']['size'][0] in common] for tag, per in per_cond.items()
+    }
+    aligned = {tag: per for tag, per in aligned.items() if per}
+    order = [s for s in DEFAULT_SIZES if s in common]
+    if order != [s for s in DEFAULT_SIZES if s in set().union(*per_sizes.values())]:
+        logger.warning('Pooling over the common sizes only: %s', ', '.join(order))
+    # equal sizes still leave room for a partially reintegrated dir, which the n column shows
+    counts = {tag: sum(len(r['agree']['size']) for r in per) for tag, per in aligned.items()}
+    if len(set(counts.values())) > 1:
+        logger.warning('Datasets per condition differ (%s) — some fits are incomplete', counts)
+    return aligned, order
+
+
 def _poolAgree(per_size: list[dict]) -> dict[str, np.ndarray]:
     return {k: np.concatenate([r['agree'][k] for r in per_size]) for k in per_size[0]['agree']}
 
@@ -472,6 +504,10 @@ def main() -> None:
             per_cond[tag] = collected
     if not per_cond:
         logger.error('No conditions evaluated.')
+        return
+    per_cond, sizes = alignSizes(per_cond)
+    if not per_cond:
+        logger.error('No size was collected under every condition — nothing comparable to pool.')
         return
 
     pooled_agree = {tag: _poolAgree(per) for tag, per in per_cond.items()}
