@@ -16,6 +16,14 @@ so a responsive model should widen monotonically along each ordering, by a facto
 over active parameter entries, in the model's standardized space (τ's own units — the
 posterior is deliberately *not* rescaled by sd_y, so SDs are directly comparable to τ).
 
+Where in that interval the ratio lands is itself the prediction: the prior's pull decays as
+the data become informative, so the pooled ratio averages over regimes that should differ.
+The second table splits entries into quantile bins of the information available per parameter
+— n/d for β, m/q for σ_rfx, n for σ_ε — where a correctly Bayesian model tracks the prior
+ratio in the lowest bin and 1.0 in the highest.  Note this axis is *not* ``--sizes``: the size
+regimes set effect-size capacity (max_d/max_q) and all share one dataset-shape profile, so m
+and n vary within every size rather than between them.
+
 Like prior_misspec.py, the precomputed analytical MAP/EB ``stats`` are dropped and recomputed
 under the assumed family, since they depend on the prior too.  Posterior samples are cached
 per family setting next to the data (``variant=fam-<group>-<family>``).
@@ -79,6 +87,13 @@ GROUPS = [
 ]
 PARAM_LABELS = {'ffx': 'β', 'sigma_rfx': 'σ_rfx', 'sigma_eps': 'σ_ε'}
 
+# Per group, what carries the information that pulls the posterior off its prior.  ``size`` is
+# the effect-size regime (max_d/max_q), *not* the data volume — m and n come from a shape
+# profile that is shared by every size — so the axis has to be built per dataset, and it is
+# group-specific: β is informed by observations per fixed effect, σ_rfx by groups per random
+# effect, σ_ε by the observations themselves.
+INFO_LABELS = {'ffx': 'n/d', 'sigma_rfx': 'm/q', 'sigma_eps': 'n'}
+
 
 # ---------------------------------------------------------------------------
 # Prior SD in units of τ — the no-data ceiling on the family effect
@@ -125,12 +140,24 @@ def setPriorFamily(
     return out
 
 
+def _infoProxy(batch: dict[str, torch.Tensor], param_key: str) -> torch.Tensor:
+    """Observations per parameter for one group, one value per dataset."""
+    n = batch['n'].float()
+    if param_key == 'sigma_eps':
+        return n
+    if param_key == 'ffx':
+        d = batch['mask_d'].bool().sum(-1).clamp(min=1).float()
+        return n / d
+    q = batch['mask_q'].bool().sum(-1).clamp(min=1).float()
+    return batch['m'].float() / q
+
+
 def _entries(
     proposal: Proposal,
     batch: dict[str, torch.Tensor],
     param_key: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per active entry: posterior (sd, mean) and the dataset's n, flattened.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Per active entry: posterior (sd, mean), the dataset's n and its info proxy, flattened.
 
     Draws are equal-weight (raw flow posterior, no post-hoc reweighting), so plain moments
     over the sample axis are exact.
@@ -143,8 +170,10 @@ def _entries(
         mask = batch['mask_d' if param_key == 'ffx' else 'mask_q'].bool()
     sd = _flat(samples.std(dim=-2), mask)
     mean = _flat(samples.mean(dim=-2), mask)
-    n = _flat(batch['n'].unsqueeze(-1).expand(-1, mask.shape[-1]).float(), mask)
-    return sd, mean, n
+    width = mask.shape[-1]
+    n = _flat(batch['n'].unsqueeze(-1).expand(-1, width).float(), mask)
+    info = _flat(_infoProxy(batch, param_key).unsqueeze(-1).expand(-1, width), mask)
+    return sd, mean, n, info
 
 
 def collectSize(
@@ -175,7 +204,7 @@ def collectSize(
     batch = collateGrouped([col[i] for i in range(B)])
     logger.info('%s: %d datasets', data_id, B)
 
-    out: dict[str, dict] = {'sd': {}, 'mean': {}, 'n': {}}
+    out: dict[str, dict] = {'sd': {}, 'mean': {}, 'n': {}, 'info': {}}
     for family_key, param_key, families in activeGroups(lf):
         out['sd'][param_key] = {}
         out['mean'][param_key] = {}
@@ -195,10 +224,11 @@ def collectSize(
                 None,
                 variant=f'fam-{param_key}-{name}',
             )
-            sd, mean, n = _entries(proposal, batch_f, param_key)
+            sd, mean, n, info = _entries(proposal, batch_f, param_key)
             out['sd'][param_key][name] = sd
             out['mean'][param_key][name] = mean
             out['n'][param_key] = n
+            out['info'][param_key] = info
             del batch_f, proposal
     out['n_raw'] = batch['n'].float().numpy()
     return out
@@ -211,9 +241,10 @@ def activeGroups(lf: int) -> list[tuple[str, str, tuple[str, ...]]]:
 
 def poolSizes(per_size: list[dict]) -> dict:
     """Concatenate per-entry arrays across sizes (param dims differ, so entries are flat)."""
-    pooled: dict[str, dict] = {'sd': {}, 'mean': {}, 'n': {}}
+    pooled: dict[str, dict] = {'sd': {}, 'mean': {}, 'n': {}, 'info': {}}
     for param_key in per_size[0]['sd']:
         pooled['n'][param_key] = np.concatenate([r['n'][param_key] for r in per_size])
+        pooled['info'][param_key] = np.concatenate([r['info'][param_key] for r in per_size])
         for stat in ('sd', 'mean'):
             pooled[stat][param_key] = {
                 name: np.concatenate([r[stat][param_key][name] for r in per_size])
@@ -307,6 +338,132 @@ def renderSpreadTex(rows: list[dict], dp: int = 3) -> str:
     return '\n'.join(lines)
 
 
+def binnedRows(pooled: dict, lf: int, n_bins: int) -> list[dict]:
+    """SD-ratio against the narrowest family, split into quantile bins of the info proxy.
+
+    The prior's pull on the posterior should fall off as the data become informative, so the
+    pooled ratio is an average over regimes where the effect is expected to differ.  Binning
+    separates them: a responsive model should approach the prior ratio in the lowest bin and
+    1.0 in the highest.  Quantile edges rather than fixed ones — the proxy spans orders of
+    magnitude and its distribution differs per group, so equal-count bins keep each cell's
+    median well determined.
+    """
+    rows = []
+    for _, param_key, families in activeGroups(lf):
+        info = pooled['info'][param_key]
+        edges = np.quantile(info, np.linspace(0.0, 1.0, n_bins + 1))
+        edges[-1] = np.inf
+        ref = families[0]
+        sd_ref = pooled['sd'][param_key][ref]
+        for name in families[1:]:
+            sd = pooled['sd'][param_key][name]
+            ratio = sd / np.maximum(sd_ref, 1e-12)
+            for b in range(n_bins):
+                sel = (info >= edges[b]) & (info < edges[b + 1])
+                if not sel.any():
+                    continue
+                rows.append(
+                    {
+                        'group': PARAM_LABELS[param_key],
+                        'param_key': param_key,
+                        'axis': INFO_LABELS[param_key],
+                        'family': FAMILY_LABELS.get(name, name),
+                        'bin': b + 1,
+                        'lo': float(info[sel].min()),
+                        'hi': float(info[sel].max()),
+                        'n_entries': int(sel.sum()),
+                        'sd_ref': float(np.median(sd_ref[sel])),
+                        'ratio': _ms(ratio[sel]),
+                        'pct_wider': 100.0 * float((sd[sel] > sd_ref[sel]).mean()),
+                        'prior_ratio': PRIOR_SD[name] / PRIOR_SD[ref],
+                    }
+                )
+    return rows
+
+
+def renderBinnedMd(rows: list[dict], dp: int = 3) -> str:
+    headers = ['group', 'prior family', 'bin', 'range', 'entries', 'ref SD']
+    headers += ['SD-ratio', '% wider', 'prior ratio']
+    md, prev = [], None
+    for r in rows:
+        key = (r['group'], r['family'])
+        lead = [r['group'], r['family']] if key != prev else ['', '']
+        prev = key
+        md.append(
+            lead
+            + [
+                f"{r['axis']} Q{r['bin']}",
+                f"{r['lo']:.1f}–{r['hi']:.1f}",
+                r['n_entries'],
+                f"{r['sd_ref']:.{dp}f}",
+                _fmtMs(r['ratio'], dp),
+                f"{r['pct_wider']:.0f}",
+                f"{r['prior_ratio']:.{dp}f}",
+            ]
+        )
+    return tabulate(md, headers=headers, tablefmt='pipe', stralign='right', disable_numparse=True)
+
+
+def renderBinnedTex(rows: list[dict], dp: int = 3) -> str:
+    header = (
+        r'\mathrm{group} & \mathrm{prior\ family} & \mathrm{bin} & \mathrm{range} & '
+        r'\mathrm{entries} & \mathrm{SD}_{\mathrm{ref}} & \mathrm{SD\text{-}ratio} & '
+        r'\%\,\mathrm{wider} & \mathrm{prior\ ratio}'
+    )
+    lines = [
+        r'\begin{tabular}{lllrr|crr}',
+        r'    \toprule',
+        f'    {header} \\\\',
+        r'    \midrule',
+    ]
+    prev = None
+    for r in rows:
+        key = (r['group'], r['family'])
+        if prev is not None and key != prev:
+            lines.append(r'    \midrule')
+        lead = (
+            (rf"\texttt{{{r['group']}}}", rf"\texttt{{{r['family']}}}") if key != prev else ('', '')
+        )
+        prev = key
+        m, s = r['ratio']
+        ratio = r'\textrm{NA}' if m != m else f'${m:.{dp}f} \\pm {s:.{dp}f}$'
+        lines.append(
+            rf"    {lead[0]} & {lead[1]} & \texttt{{{r['axis']} Q{r['bin']}}} & "
+            rf"${r['lo']:.1f}\text{{--}}{r['hi']:.1f}$ & {r['n_entries']} & "
+            rf"${r['sd_ref']:.{dp}f}$ & {ratio} & {r['pct_wider']:.0f} & "
+            rf"${r['prior_ratio']:.{dp}f}$ \\"
+        )
+    lines += [r'    \bottomrule', r'\end{tabular}', '']
+    return '\n'.join(lines)
+
+
+def trendReport(rows: list[dict]) -> list[str]:
+    """Lowest- vs highest-information bin per (group, family): does the prior effect decay?
+
+    This is the actual prediction under correct Bayesian behaviour — not merely that the
+    posterior widens with the prior, but that it stops doing so once the data dominate.
+    """
+    out = []
+    seen: dict[tuple[str, str], list[dict]] = {}
+    for r in rows:
+        seen.setdefault((r['group'], r['family']), []).append(r)
+    for (group, family), group_rows in seen.items():
+        lo = min(group_rows, key=lambda r: r['bin'])
+        hi = max(group_rows, key=lambda r: r['bin'])
+        ceiling = lo['prior_ratio']
+        r_lo, r_hi = lo['ratio'][0], hi['ratio'][0]
+        # fraction of the no-data ceiling that survives in each tail of the info axis
+        frac_lo = (r_lo - 1.0) / (ceiling - 1.0) if ceiling > 1.0 else float('nan')
+        frac_hi = (r_hi - 1.0) / (ceiling - 1.0) if ceiling > 1.0 else float('nan')
+        verdict = 'DECAYS' if r_hi < r_lo else 'flat/rising'
+        out.append(
+            f'[{group}] {family}: {lo["axis"]} Q{lo["bin"]}={r_lo:.3f} '
+            f'({frac_lo:.0%} of ceiling {ceiling:.3f}) -> Q{hi["bin"]}={r_hi:.3f} '
+            f'({frac_hi:.0%}) [{verdict}]'
+        )
+    return out
+
+
 def monotonicityReport(pooled: dict, lf: int) -> list[str]:
     """PASS/FAIL per consecutive family pair: does the wider prior widen the posterior?
 
@@ -352,6 +509,58 @@ def _pointSizes(n: np.ndarray) -> np.ndarray:
     if hi > lo:
         return np.interp(n, (lo, hi), SIZE_RANGE)
     return np.full_like(n, float(np.mean(SIZE_RANGE)), dtype=float)
+
+
+def plotBinned(rows: list[dict], out_path: Path) -> None:
+    """SD-ratio against the info axis, one panel per parameter group.
+
+    The dashed line is the prior ratio — the no-data ceiling for that family pair.  Correct
+    Bayesian behaviour is a curve that starts near the ceiling and decays toward 1.0.
+    """
+    from matplotlib import pyplot as plt
+
+    from metabeta.utils.plot import PALETTE, niceify
+
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(r['group'], []).append(r)
+
+    fig, axes = plt.subplots(1, len(groups), figsize=(6.7 * len(groups), 6), dpi=300, squeeze=False)
+    for ax, (group, group_rows) in zip(axes[0], groups.items()):
+        families: dict[str, list[dict]] = {}
+        for r in group_rows:
+            families.setdefault(r['family'], []).append(r)
+        for j, (family, fam_rows) in enumerate(families.items()):
+            fam_rows = sorted(fam_rows, key=lambda r: r['bin'])
+            x = [r['bin'] for r in fam_rows]
+            y = [r['ratio'][0] for r in fam_rows]
+            err = [r['ratio'][1] for r in fam_rows]
+            color = PALETTE[j * 2]
+            ax.errorbar(
+                x, y, yerr=err, marker='o', ms=10, lw=2, capsize=5, color=color, label=family
+            )
+            ax.axhline(fam_rows[0]['prior_ratio'], ls='--', lw=1.5, alpha=0.7, color=color)
+        ax.axhline(1.0, ls=':', color='grey', lw=1.5, alpha=0.8)
+        ax.set_xticks(sorted({r['bin'] for r in group_rows}))
+        ax.set_axisbelow(True)
+        ax.grid(True, alpha=0.3)
+        niceify(
+            ax,
+            {
+                'title': f'{group}',
+                'title_fs': 22,
+                'xlabel': f"{group_rows[0]['axis']} quantile bin (low → high information)",
+                'xlabel_fs': 20,
+                'ylabel': 'SD-ratio vs narrowest prior',
+                'ylabel_fs': 20,
+                'legend_fs': 18,
+            },
+        )
+    fig.suptitle('Prior-family effect vs data information', fontsize=26, y=1.02)
+    fig.tight_layout()
+    fig.savefig(out_path, bbox_inches='tight', dpi=150)
+    plt.close(fig)
+    logger.info('Saved plot to %s', out_path)
 
 
 def plotSpread(pooled: dict, lf: int, out_path: Path, delta: bool = False) -> None:
@@ -475,6 +684,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--n_samples', type=int, default=1000)
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--n_bins', type=int, default=4,
+                        help='quantile bins of the info axis (n/d, m/q, n); 0 disables the breakdown')
     parser.add_argument('--plot', action='store_true', help='also write the scatter figure')
     parser.add_argument('--delta', action='store_true', help='plot ΔSD instead of absolute SD')
     parser.add_argument('--outdir', type=str, default=str(OUT_DIR))
@@ -510,6 +721,16 @@ def main() -> None:
     print()
     print('\n'.join(report))
 
+    rows_binned = binnedRows(pooled, lf, cfg.n_bins) if cfg.n_bins > 0 else []
+    binned_md, trend = '', []
+    if rows_binned:
+        binned_md = renderBinnedMd(rows_binned, dp=cfg.decimals)
+        trend = trendReport(rows_binned)
+        print('\n=== Prior-family effect by data information (quantile bins) ===\n')
+        print(binned_md)
+        print()
+        print('\n'.join(trend))
+
     stem = f'prior_families_{family}'
     md = [
         f'# Prior-family sensitivity ({family})\n',
@@ -525,12 +746,32 @@ def main() -> None:
         '```',
         '',
     ]
+    tex = renderSpreadTex(rows, dp=cfg.decimals)
+    if rows_binned:
+        md += [
+            '## Effect by data information\n',
+            'Entries split into quantile bins of the information available per parameter — '
+            'n/d for β, m/q for σ_rfx, n for σ_ε. The size regimes set effect-size capacity '
+            '(max_d/max_q) and share one dataset-shape profile, so this axis varies within '
+            'every size rather than between them. A correctly Bayesian model tracks the prior '
+            'ratio in the lowest bin and 1.0 in the highest.\n',
+            binned_md,
+            '',
+            '### Decay of the prior effect\n',
+            '```',
+            *trend,
+            '```',
+            '',
+        ]
+        tex += '\n' + renderBinnedTex(rows_binned, dp=cfg.decimals)
     (outdir / f'{stem}.md').write_text('\n'.join(md) + '\n')
-    (outdir / f'{stem}.tex').write_text(renderSpreadTex(rows, dp=cfg.decimals))
+    (outdir / f'{stem}.tex').write_text(tex)
     logger.info('Saved tables to %s', outdir / f'{stem}.md')
 
     if cfg.plot:
         plotSpread(pooled, lf, outdir / f'{stem}.png', delta=cfg.delta)
+        if rows_binned:
+            plotBinned(rows_binned, outdir / f'{stem}_byinfo.png')
 
 
 if __name__ == '__main__':
