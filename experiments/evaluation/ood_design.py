@@ -12,7 +12,7 @@ Tables mirror experiments/evaluation/likelihood_misspec.py:
 
   1. MB↔NUTS agreement per condition (r, σ-ratio, rank-MAD, ΔLOO-NLL; median ± MAD over
      the NUTS-converged subset, paired).
-  2. Quality vs the generating parameters per condition (EACE / NRMSE / cov90, global and
+  2. Quality vs the generating parameters per condition (NRMSE / EACE, global and
      local, plus LOO-NLL) for MB, refinements, and NUTS — here directly interpretable
      because the model is correctly specified.
 
@@ -162,7 +162,7 @@ def main() -> None:
         '',
         '## Quality vs generating parameters by condition\n',
         'Global (ffx, σ_rfx' + (', σ_ε' if lf == 0 else '') + ') and local (rfx) parameters; '
-        'EACE→0 calibrated, cov90 nominal 0.900, LOO-NLL median per dataset. The generating '
+        'NRMSE→0 recovery, EACE→0 calibrated, LOO-NLL median per dataset. The generating '
         'parameters are the true parameters of the fitted model, so degradation here is '
         'attributable to the approximation, not the model.\n',
         quality_md,

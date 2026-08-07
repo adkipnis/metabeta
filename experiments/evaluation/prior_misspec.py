@@ -13,7 +13,7 @@ experiments/evaluation/likelihood_misspec.py:
      NUTS-converged subset).  Both sides now fit the *same* wrong prior, so stable agreement
      across conditions means MB's extra error is attributable to the misspecification rather
      than to the amortization.
-  2. Quality vs the generating parameters per condition (EACE / NRMSE / cov90 for global and
+  2. Quality vs the generating parameters per condition (NRMSE / EACE for global and
      local parameters, plus LOO-NLL) for MB, MB+IMH and NUTS.  The generating parameters came
      from the correct prior, so absolute degradation is expected by design — the question is
      whether MB degrades in step with NUTS.
@@ -186,7 +186,7 @@ def main() -> None:
         '',
         '## Quality vs generating parameters by perturbation\n',
         'Global (ffx, σ_rfx' + (', σ_ε' if lf == 0 else '') + ') and local (rfx) parameters; '
-        'EACE→0 calibrated, cov90 nominal 0.900, LOO-NLL median per dataset. The generating '
+        'NRMSE→0 recovery, EACE→0 calibrated, LOO-NLL median per dataset. The generating '
         'parameters come from the correct prior, so a perturbed prior is a genuine modelling '
         'error and absolute degradation is expected — the comparison is MB vs NUTS.\n',
         quality_md,

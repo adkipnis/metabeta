@@ -9,7 +9,7 @@ misspecified — model with the stored priors.  This script produces the dose–
      metrics, median ± MAD over the NUTS-converged subset).  If MB's agreement with NUTS is
      stable across severities, MB's extra error under misspecification is attributable to the
      model, not the amortization.
-  2. Quality vs the generating parameters per severity (EACE / NRMSE / cov90 for global and
+  2. Quality vs the generating parameters per severity (NRMSE / EACE for global and
      local parameters, plus LOO-NLL) for MB, MB+IMH and NUTS.  Under contamination the
      generating parameters are no longer the fitted model's pseudo-true values, so absolute
      numbers degrade by design — the question is whether MB degrades in step with NUTS.
@@ -380,16 +380,10 @@ def qualityRows(
                     'condition': labels[tag],
                     'method': label,
                     'first': j == 0,
-                    'eace_g': _eace(glo['inside'][sel_g]),
                     'nrmse_g': _nrmseByType(glo, sel_g),
-                    'cov90_g': float(np.nanmean(glo['cov90'][sel_g]))
-                    if sel_g.any()
-                    else float('nan'),
-                    'eace_l': _eace(loc['inside'][sel_l]),
+                    'eace_g': _eace(glo['inside'][sel_g]),
                     'nrmse_l': _nrmse(loc['se'][sel_l], loc['gt'][sel_l]),
-                    'cov90_l': float(np.nanmean(loc['cov90'][sel_l]))
-                    if sel_l.any()
-                    else float('nan'),
+                    'eace_l': _eace(loc['inside'][sel_l]),
                     # median, not mean: the raw flow posterior occasionally produces draws with
                     # catastrophic predictive density (worst under the Poisson exp link, where a
                     # single dataset can reach ~10^2 nats), and a mean over datasets reports
@@ -401,13 +395,13 @@ def qualityRows(
     return rows
 
 
+# recovery -> coverage per parameter group, prediction last: the column order of the paper's
+# oracle benchmark tables (r, NRMSE, ECE/EACE, LOO-NLL); cov90 is redundant next to EACE
 QUALITY_COLS = [
-    ('eace_g', 'EACE_g↓'),
     ('nrmse_g', 'NRMSE_g↓'),
-    ('cov90_g', 'cov90_g'),
-    ('eace_l', 'EACE_l↓'),
+    ('eace_g', 'EACE_g↓'),
     ('nrmse_l', 'NRMSE_l↓'),
-    ('cov90_l', 'cov90_l'),
+    ('eace_l', 'EACE_l↓'),
     ('loo', 'LOO-NLL↓'),
 ]
 
@@ -425,12 +419,11 @@ def renderQualityMd(rows: list[dict], dp: int = 3) -> str:
 def renderQualityTex(rows: list[dict], dp: int = 3) -> str:
     fmt = lambda v: r'\textrm{NA}' if (v is None or v != v) else f'${v:.{dp}f}$'
     header = (
-        r'\mathrm{condition} & \mathrm{model} & \mathrm{EACE}_g & \mathrm{NRMSE}_g & '
-        r'\mathrm{cov}_{90,g} & \mathrm{EACE}_l & \mathrm{NRMSE}_l & \mathrm{cov}_{90,l} & '
-        r'\mathrm{LOO\text{-}NLL}'
+        r'\mathrm{condition} & \mathrm{model} & \mathrm{NRMSE}_g & \mathrm{EACE}_g & '
+        r'\mathrm{NRMSE}_l & \mathrm{EACE}_l & \mathrm{LOO\text{-}NLL}'
     )
     lines = [
-        r'\begin{tabular}{ll|ccc|ccc|c}',
+        r'\begin{tabular}{ll|cc|cc|c}',
         r'    \toprule',
         f'    {header} \\\\',
         r'    \midrule',
@@ -543,7 +536,7 @@ def main() -> None:
         '',
         '## Quality vs generating parameters by severity\n',
         'Global (ffx, σ_rfx' + (', σ_ε' if lf == 0 else '') + ') and local (rfx) parameters; '
-        'EACE→0 calibrated, cov90 nominal 0.900, LOO-NLL median per dataset. Under contamination '
+        'NRMSE→0 recovery, EACE→0 calibrated, LOO-NLL median per dataset. Under contamination '
         "the generating parameters differ from the misspecified model's pseudo-true values, so "
         'absolute degradation is expected — the comparison is MB vs NUTS.\n',
         quality_md,
