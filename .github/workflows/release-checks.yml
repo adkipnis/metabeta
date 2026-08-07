@@ -9,6 +9,12 @@ jobs:
   package:
     runs-on: ubuntu-latest
 
+    # the project's default-groups pull in the research extra (rpy2 needs R in PATH,
+    # pymc/scamd are heavy); release checks only need the core package + dev tooling,
+    # so every uv call here opts out of the defaults explicitly
+    env:
+      UV_SYNC_FLAGS: --no-default-groups --group dev
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -22,16 +28,16 @@ jobs:
           python-version: '3.12'
 
       - name: Sync environment
-        run: uv sync --dev
+        run: uv sync $UV_SYNC_FLAGS
 
       - name: Check formatting
-        run: uv run blue --check --diff metabeta tests
+        run: uv run $UV_SYNC_FLAGS blue --check --diff metabeta tests
 
       - name: Run tests
-        run: uv run pytest tests/models tests/evaluation tests/utils
+        run: uv run $UV_SYNC_FLAGS pytest tests/models tests/evaluation tests/utils
 
       - name: Build release artifacts
         run: uv build
 
       - name: Check release artifacts
-        run: uv run pytest tests/packaging/test_release_artifacts.py
+        run: uv run $UV_SYNC_FLAGS pytest tests/packaging/test_release_artifacts.py

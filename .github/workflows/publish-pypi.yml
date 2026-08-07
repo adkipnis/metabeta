@@ -10,6 +10,10 @@ jobs:
     permissions:
       id-token: write
 
+    # skip the project's default-groups (research needs R on PATH for rpy2)
+    env:
+      UV_SYNC_FLAGS: --no-default-groups --group dev
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -23,13 +27,13 @@ jobs:
           python-version: '3.12'
 
       - name: Sync environment
-        run: uv sync --dev
+        run: uv sync $UV_SYNC_FLAGS
 
       - name: Build release artifacts
         run: uv build
 
       - name: Check release artifacts
-        run: uv run pytest tests/packaging/test_release_artifacts.py
+        run: uv run $UV_SYNC_FLAGS pytest tests/packaging/test_release_artifacts.py
 
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
