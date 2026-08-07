@@ -5,7 +5,8 @@ Experiment scripts are grouped to mirror `metabeta/` package areas:
 
 - `analytical/` — analytical GLMM benchmarks and diagnostics.
 - `datasets/` — dataset summary and inspection scripts.
-- `evaluation/` — posterior quality, LOO, NPE, and real/oracle evaluation scripts.
+- `evaluation/` — posterior quality, LOO, NPE, real/oracle, and misspecification
+  (likelihood, prior, prior-family) evaluation scripts.
 - `plotting/` — scripts that primarily produce plots or runtime tables.
 - `posthoc/` — post-hoc correction, local posterior, and warm-start diagnostics.
 - `simulation/` — simulator, prior, and PyMC/Bambi equivalence checks.
