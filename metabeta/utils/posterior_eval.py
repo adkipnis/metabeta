@@ -238,12 +238,16 @@ def _sampleCachePath(
     seed: int,
     mask: np.ndarray | None,
     rescale: bool | None = None,
+    variant: str = '',
 ) -> Path:
     """Cache path for a model-derived posterior-sample set (mb or a refined method).
 
     ``rescale`` is folded into the key for refined methods (whose weights live in a
     specific data space); the raw ``mb`` cache passes ``None`` to keep its filename simple.
+    ``variant`` distinguishes runs that share a data dir but feed the model a modified batch
+    (e.g. the prior-perturbation conditions of prior_misspec.py); '' keeps the plain filename.
     """
+    method = method if not variant else f'{method}@{variant}'
     method_tag = method if rescale is None else f'{method}-rs{int(rescale)}'
     cache_name = posteriorSampleCacheName(
         partition=f'test-{_maskTag(mask)}',
@@ -268,14 +272,18 @@ def loadOrSampleMB(
     device: torch.device,
     mask: np.ndarray | None,
     warmup: bool = True,
+    variant: str = '',
 ) -> tuple[Proposal, torch.Tensor]:
     """Cached wrapper around sampleMB; cache lives next to the data as test.fit.npz's sibling.
 
     ``mask`` identifies which datasets of the full test file are in ``batch`` (e.g. the
     capacity-kept or NUTS-converged subset); it is folded into the cache key since it changes
-    the batch contents. ``warmup`` only matters on a cache miss (see sampleMB).
+    the batch contents. ``variant`` does the same for batches modified in memory (see
+    _sampleCachePath). ``warmup`` only matters on a cache miss (see sampleMB).
     """
-    cache_path = _sampleCachePath(data_path, 'mb', ckpt_dir, prefix, n_samples, seed, mask)
+    cache_path = _sampleCachePath(
+        data_path, 'mb', ckpt_dir, prefix, n_samples, seed, mask, variant=variant
+    )
     ref_mtime = _refMtime(data_path, ckpt_dir, prefix)
     if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
         try:
@@ -439,6 +447,7 @@ def loadOrRefine(
     rescale: bool,
     mask: np.ndarray | None,
     batch_size: int,
+    variant: str = '',
 ) -> tuple[Proposal, float]:
     """Cached wrapper around refineProposal; cache is keyed by method/checkpoint/rescale.
 
@@ -447,7 +456,7 @@ def loadOrRefine(
     timing for the Δtime / time metric.
     """
     cache_path = _sampleCachePath(
-        data_path, method, ckpt_dir, prefix, n_samples, seed, mask, rescale
+        data_path, method, ckpt_dir, prefix, n_samples, seed, mask, rescale, variant=variant
     )
     ref_mtime = _refMtime(data_path, ckpt_dir, prefix)
     if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
@@ -486,8 +495,10 @@ def _summaryCachePath(
     prefix: str | None = None,
     n_samples: int | None = None,
     seed: int | None = None,
+    variant: str = '',
 ) -> Path:
     tag = _maskTag(mask)
+    method = method if not variant else f'{method}@{variant}'
     # model-derived methods (mb + refined) additionally key on checkpoint/prefix/n_samples/seed
     if ckpt_dir is not None:
         name = (
@@ -512,18 +523,21 @@ def loadOrComputeSummary(
     n_samples: int | None = None,
     seed: int | None = None,
     summary_chunk_size: int = 4,
+    variant: str = '',
 ) -> EvaluationSummary:
     """Cached wrapper around getSummary; cache lives next to the data (sibling of test.fit.npz).
 
     ``mask`` identifies which datasets of the full test file this summary covers (capacity,
     convergence, and/or fit-success subset), so distinct subsets get distinct caches.
     Model-derived methods (mb + refined) additionally key on checkpoint/prefix/n_samples/seed
-    and invalidate on the checkpoint. ``summary_chunk_size`` bounds peak memory of the
-    predictive/LOO block (does not affect the result, so it is not part of the cache key).
+    and invalidate on the checkpoint. ``variant`` separates summaries of in-memory batch
+    modifications sharing a data dir (see _sampleCachePath). ``summary_chunk_size`` bounds peak
+    memory of the predictive/LOO block (does not affect the result, so it is not part of the
+    cache key).
     """
     is_model_derived = ckpt_dir is not None
     cache_path = _summaryCachePath(
-        data_path, method, mask, lf, rescale, ckpt_dir, prefix, n_samples, seed
+        data_path, method, mask, lf, rescale, ckpt_dir, prefix, n_samples, seed, variant
     )
     ref_mtime = _refMtime(
         data_path,
