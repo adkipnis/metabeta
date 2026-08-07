@@ -162,7 +162,7 @@ def main() -> None:
         '',
         '## Quality vs generating parameters by condition\n',
         'Global (ffx, σ_rfx' + (', σ_ε' if lf == 0 else '') + ') and local (rfx) parameters; '
-        'EACE→0 calibrated, cov90 nominal 0.900, LOO-NLL mean per dataset. The generating '
+        'EACE→0 calibrated, cov90 nominal 0.900, LOO-NLL median per dataset. The generating '
         'parameters are the true parameters of the fitted model, so degradation here is '
         'attributable to the approximation, not the model.\n',
         quality_md,

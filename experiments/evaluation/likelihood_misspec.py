@@ -390,7 +390,12 @@ def qualityRows(
                     'cov90_l': float(np.nanmean(loc['cov90'][sel_l]))
                     if sel_l.any()
                     else float('nan'),
-                    'loo': float(np.nanmean(loo)) if len(loo) else float('nan'),
+                    # median, not mean: the raw flow posterior occasionally produces draws with
+                    # catastrophic predictive density (worst under the Poisson exp link, where a
+                    # single dataset can reach ~10^2 nats), and a mean over datasets reports
+                    # those outliers rather than typical fit.  The paired ΔLOO-NLL in the
+                    # agreement table is already a median, so this also makes the two agree.
+                    'loo': float(np.nanmedian(loo)) if len(loo) else float('nan'),
                 }
             )
     return rows
@@ -538,7 +543,7 @@ def main() -> None:
         '',
         '## Quality vs generating parameters by severity\n',
         'Global (ffx, σ_rfx' + (', σ_ε' if lf == 0 else '') + ') and local (rfx) parameters; '
-        'EACE→0 calibrated, cov90 nominal 0.900, LOO-NLL mean per dataset. Under contamination '
+        'EACE→0 calibrated, cov90 nominal 0.900, LOO-NLL median per dataset. Under contamination '
         "the generating parameters differ from the misspecified model's pseudo-true values, so "
         'absolute degradation is expected — the comparison is MB vs NUTS.\n',
         quality_md,

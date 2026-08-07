@@ -186,7 +186,7 @@ def main() -> None:
         '',
         '## Quality vs generating parameters by perturbation\n',
         'Global (ffx, σ_rfx' + (', σ_ε' if lf == 0 else '') + ') and local (rfx) parameters; '
-        'EACE→0 calibrated, cov90 nominal 0.900, LOO-NLL mean per dataset. The generating '
+        'EACE→0 calibrated, cov90 nominal 0.900, LOO-NLL median per dataset. The generating '
         'parameters come from the correct prior, so a perturbed prior is a genuine modelling '
         'error and absolute degradation is expected — the comparison is MB vs NUTS.\n',
         quality_md,
