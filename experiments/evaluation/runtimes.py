@@ -132,6 +132,59 @@ def loadReferences(path: Path) -> tuple[dict[str, np.ndarray], dict[str, np.ndar
 
 
 # ---------------------------------------------------------------------------
+# Model inputs
+
+
+def modelCollection(fit_path: Path, max_d: int, max_q: int) -> Collection:
+    """Collection for the timed model batches, preferring whichever file carries the stats.
+
+    ``Approximator.summarize`` uses precomputed analytical statistics when the batch has them
+    and otherwise calls ``_dataStatistics`` — a full MAP+EB fit — inline.  Whether a fit file
+    happens to carry those arrays therefore decides what the timed region contains, and the
+    campaign is inconsistent about it (normal has them in no ``test.fit.npz``, bernoulli lacks
+    them only at ``small``, poisson only at ``huge``).  Timing against a file without them
+    measures the analytical fit rather than amortized inference, and makes cells incomparable.
+
+    ``test.npz`` carries the stats for every generated dir and is row-aligned with its fit file,
+    so prefer it and fall back only when it cannot be used — loudly, since the resulting numbers
+    mean something different.  Mirrors the fallback in likelihood_misspec.collectCondition.
+    """
+    base_path = fit_path.with_name('test.npz')
+    fit_col = Collection(
+        fit_path,
+        permute=False,
+        max_d=max_d,
+        max_q=max_q,
+        exclude_prefixes=('nuts_', 'advi_', 'laplace_'),
+    )
+    if fit_col.has_stats:
+        return fit_col
+    if not base_path.exists():
+        logger.warning(
+            '%s: no precomputed stats and no sibling test.npz — timings will include the '
+            'analytical MAP fit and are NOT comparable to cells that have stats',
+            fit_path.parent.name,
+        )
+        return fit_col
+
+    base_col = Collection(base_path, permute=False, max_d=max_d, max_q=max_q)
+    aligned = len(base_col) == len(fit_col) and all(
+        np.array_equal(base_col.raw[key], fit_col.raw[key]) for key in ('d', 'q', 'm', 'n')
+    )
+    if not (base_col.has_stats and aligned):
+        logger.warning(
+            '%s: sibling test.npz has no stats or is not row-aligned — timings will include '
+            'the analytical MAP fit and are NOT comparable to cells that have stats',
+            fit_path.parent.name,
+        )
+        return fit_col
+    logger.info(
+        '%s: taking model inputs from test.npz (fit file has no stats)', fit_path.parent.name
+    )
+    return base_col
+
+
+# ---------------------------------------------------------------------------
 # metabeta timing
 
 
@@ -370,13 +423,7 @@ def collectCell(
 
     model, model_cfg = loadModel(ckpt_dir, cfg.prefix, device)
     try:
-        col = Collection(
-            data_path,
-            permute=False,
-            max_d=model_cfg.max_d,
-            max_q=model_cfg.max_q,
-            exclude_prefixes=('nuts_', 'advi_', 'laplace_'),
-        )
+        col = modelCollection(data_path, model_cfg.max_d, model_cfg.max_q)
     except ValueError as exc:
         # regimes are matched by construction; a mismatch means the checkpoint map is wrong
         logger.warning('%s: checkpoint does not cover this regime (%s) — skipping', data_id, exc)
@@ -442,6 +489,8 @@ def collectCell(
             'n_samples': cfg.n_samples,
             'k': cfg.k,
             'batch_size': cfg.batch_size,
+            # False means the timed region also ran the analytical MAP fit
+            'precomputed_stats': bool(col.has_stats),
         }
         timings = [(MB_LATENCY, mb_latency[i])]
         if mb_batched is not None:
