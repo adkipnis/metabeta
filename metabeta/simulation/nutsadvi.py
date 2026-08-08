@@ -124,7 +124,9 @@ class Fitter:
                 mp_ctx=(cfg.mp_ctx if parallel else None),
                 random_seed=cfg.seed,
                 target_accept=cfg.target_accept,
-                nuts_kwargs={'max_treedepth': cfg.max_treedepth},
+                # NB: the old nuts_kwargs={...} spelling is silently ignored by
+                # PyMC >= 5 — a direct kwarg is forwarded to the NUTS constructor
+                max_treedepth=cfg.max_treedepth,
                 return_inferencedata=True,
                 progressbar=True,
             )
