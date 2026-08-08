@@ -10,12 +10,6 @@ isFull       : joint IS with PSIS — full=True adds the rfx prior and local log
                2026-07-28 log-det fix makes log q_l trustworthy
 isMarginal   : Rao-Blackwellised marginal SNIS (Normal only) — exact marginal weights with
                correlated Σ_rfx + LKJ prior, rfx redrawn from the exact conditional
-isRM         : resample-move (Normal only) — systematic resampling on the smoothed marginal
-               weights + --rm-sweeps independence-MH rejuvenation sweeps with fresh flow
-               proposals, then exact conditional rfx redraw. Targets the large/huge regime
-               where isMarginal's PSIS guardrail falls back on many datasets and IMH's
-               low-acceptance chains under-disperse the globals. Needs fresh flow draws,
-               so it never comes from cache (~(1 + K)× the isMarginal cost).
 isLaplace    : Laplace analog of isMarginal (Bernoulli/Poisson only) — nAGQ=1-style
                approximate marginal weights + Laplace-Gaussian conditional rfx redraw
 rbAttach     : rfx attachment only (Bernoulli/Poisson only) — uniform weights, flow rfx
@@ -52,7 +46,10 @@ warmNuts     : warm-started NUTS seeded by the MB-IMH posterior (imhMarginal for
 
 Note: 'laplace'/'laplaceIS' and 'cd' (coordinate descent) conditions were removed
 along with metabeta/posthoc/laplace.py and metabeta/posthoc/coordinate.py, which
-were deprecated in 3c5b7af2.
+were deprecated in 3c5b7af2. The 'isRM' resample-move condition (Normal only) was
+cut 2026-08-08 before ever entering a campaign: its ~(1 + K)-sweep fresh-flow-draw
+cost made it slower than simply running warm-started NUTS, which targets the exact
+posterior; ResampleMoveSampler still lives in posthoc/importance.py.
 
 By default this evaluates every (family, size) combination in BEST_SEEDS on the
 *entire* validation split (valid.npz), capped by --n-datasets if given. IMH and
@@ -97,7 +94,7 @@ from build_ckpt import BEST_SEEDS, _ckpt_dir                           # noqa: E
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import EvaluationSummary
-from metabeta.posthoc.importance import ImportanceSampler, ResampleMoveSampler
+from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.metropolis import MetropolisSampler
 from metabeta.posthoc.warmnuts import WarmNuts, _stackProposals
@@ -129,9 +126,8 @@ def setup() -> argparse.Namespace:
     p.add_argument('--batch-size', type=int, default=4, help='sub-batch size for torch-based methods')
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
     p.add_argument('--n-samples', type=int, default=1000, help='flow samples for torch-based methods (raw/is/svgd); IMH uses its own fixed count')
-    p.add_argument('--skip', nargs='+', default=[], choices=['raw', 'is', 'isFull', 'isMarginal', 'isRM', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'svgd', 'coldNuts', 'warmNuts'], help='conditions to skip (e.g. --skip is)')
-    p.add_argument('--only', nargs='+', default=None, choices=['raw', 'is', 'isFull', 'isMarginal', 'isRM', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'svgd', 'coldNuts', 'warmNuts'], help='run only these conditions; results go to {family}_{size}_{only}.md so existing full-run mds are not overwritten')
-    p.add_argument('--rm-sweeps', type=int, default=15, help='rejuvenation sweeps for the isRM condition; ~(1-acceptance)^K particles stay unmoved')
+    p.add_argument('--skip', nargs='+', default=[], choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'svgd', 'coldNuts', 'warmNuts'], help='conditions to skip (e.g. --skip is)')
+    p.add_argument('--only', nargs='+', default=None, choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'svgd', 'coldNuts', 'warmNuts'], help='run only these conditions; results go to {family}_{size}_{only}.md so existing full-run mds are not overwritten')
     p.add_argument('--include-svgd', action='store_true', help='also run the (slow) SVGD condition')
     p.add_argument('--include-warmnuts', action='store_true', help='also run the warm-started NUTS condition (slow on the first pass; per-dataset fits are cached)')
     p.add_argument('--wn-refit', action='store_true', help='ignore cached warm-NUTS fits and re-sample')
@@ -384,37 +380,6 @@ def runIS(proposals, batches, full_batch, lf, full=False, marginal=False, rb_red
             out.append(sampler(p.slice_b(0, p.samples_g.shape[0])))
     proposal = concatProposalsBatch(out)
     _printWeightHealth(proposal)
-    print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
-
-
-def runResampleMove(model, items, proposals, batches, full_batch, lf, n_sweeps, batch_size, device):
-    out, acc, moved, ks = [], [], [], []
-    t0 = time.perf_counter()
-    with torch.no_grad():
-        for i, (p, batch) in enumerate(zip(proposals, batches)):
-            # unrescaled sub-batch for the fresh flow draws (weights live in rescaled space)
-            raw = collateGrouped(items[i * batch_size : (i + 1) * batch_size])
-            sampler = ResampleMoveSampler(
-                model, raw, batch, n_sweeps=n_sweeps, likelihood_family=lf, device=device
-            )
-            res, diag = sampler(p.slice_b(0, p.samples_g.shape[0]))
-            out.append(res)
-            acc.append(diag['accept_rate'])
-            moved.append(diag['moved_frac'])
-            ks.append(diag['pareto_k'])
-    t1 = time.perf_counter()
-
-    accept = torch.cat(acc, dim=0)
-    moved = torch.cat(moved, dim=0)
-    k = torch.cat(ks, dim=0)
-    n_ds = full_batch['y'].shape[0]
-    print(
-        f'  sweeps={n_sweeps}  acceptance mean={accept.mean():.3f}  '
-        f'moved frac mean={moved.mean():.2f}  min={moved.min():.2f}  '
-        f'init pareto_k mean={k.mean():.2f}  '
-        f'time={t1 - t0:.1f}s ({(t1 - t0) / n_ds:.1f}s/dataset)'
-    )
-    proposal = concatProposalsBatch(out)
     print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
 
 
@@ -772,7 +737,6 @@ def main() -> None:
         'is',
         'isFull',
         'isMarginal',
-        'isRM',
         'isLaplace',
         'rbAttach',
         'imhMarginal',
@@ -849,7 +813,7 @@ def main() -> None:
             imh_refined: dict[str, Proposal] = {}
 
             for cond in conditions:
-                if cond in ('isMarginal', 'isRM') and lf != 0:
+                if cond == 'isMarginal' and lf != 0:
                     continue  # exact marginal requires the Normal likelihood
                 if cond in ('isLaplace', 'rbAttach', 'imhLaplace') and lf == 0:
                     continue  # Normal has the exact marginal — Laplace is for GLMMs
@@ -875,18 +839,6 @@ def main() -> None:
                     runIS(proposals, batches, full_batch, lf, full=True)
                 elif cond == 'isMarginal':
                     runIS(proposals, batches, full_batch, lf, marginal=True, rb_redraw=True)
-                elif cond == 'isRM':
-                    runResampleMove(
-                        model,
-                        items,
-                        proposals,
-                        batches,
-                        full_batch,
-                        lf,
-                        args.rm_sweeps,
-                        args.batch_size,
-                        args.device,
-                    )
                 elif cond == 'isLaplace':
                     runISLaplace(proposals, batches, full_batch, lf)
                 elif cond == 'rbAttach':
