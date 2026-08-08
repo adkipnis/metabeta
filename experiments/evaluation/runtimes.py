@@ -1,26 +1,44 @@
-"""
-Runtime comparison: metabeta (with pseudo-MoE) vs NUTS vs ADVI.
+"""Runtime comparison: metabeta vs NUTS, ADVI and Laplace, per size regime.
 
-For a given evaluation config (= trained model):
-    1. Load the model
-    2. Discover ALL .fit.npz test files with matching likelihood family
-    3. For each file, load individual datasets and pad them to the model's
-       maximal dimensions (smaller d/q datasets are zero-padded)
-    4. Run model inference using pseudo-MoE to match the NUTS sample count
-    5. Collect per-dataset runtimes for model, NUTS, and ADVI
-    6. Produce a summary table grouped by source data config
+Every size uses its regime-matched checkpoint (BEST_SEEDS from scripts/build_ckpt.py) on its
+own test set, the same arrangement as the misspecification studies.  The cross-product of the
+old script — every model against every test set — is no longer meaningful: the size presets
+now define *disjoint* d bands (small 1-4, medium 5-8, large 9-12, huge 13-16), so a smaller
+model cannot represent a single dataset of a larger regime, and the cross terms are empty.
+
+Three things the median speedup alone does not say, and that the tables below report:
+
+  1. **The tail.** NUTS wall time is heavy-tailed (worst datasets run 10-25x its median);
+     metabeta's is essentially flat, because its cost tracks the architecture, not the data.
+     Reported as median / p95 / mean over the slowest 5% / max.
+  2. **The tail is where NUTS also fails.** The slowest 5% of NUTS runs have a far lower
+     convergence rate than the bulk, so the reference spends its largest wall-clock budget
+     exactly where it returns an unusable posterior.  ``t/converged`` (total wall time divided
+     by the number of converged datasets) prices a *usable* posterior rather than a run.
+  3. **Laplace is the fast classical baseline, not NUTS.** Omitting it flatters the speedup.
+     The defensible claim is Laplace-class latency at NUTS-class calibration, which the oracle
+     and agreement tables support; runtime alone does not.
+
+metabeta is timed twice: per-dataset latency (batch of 1, comparable to the per-dataset wall
+times the fit backends record) and batched throughput (sortish batches of --batch_size, the
+deployment number).  Both are cached next to test.fit.npz, keyed by checkpoint/prefix/samples/
+seed/k/device, and invalidated when the data or the checkpoint is newer.
+
+ADVI rows exclude datasets whose fit failed (``advi_failed``, up to 50/512 for bernoulli);
+their stored durations time a run that produced nothing.
 
 Usage (from repo root):
-    uv run python experiments/plotting/runtimes.py
-    uv run python experiments/plotting/runtimes.py --configs small-n-mixed --model_id large --seed 0
-    uv run python experiments/plotting/runtimes.py --configs small-n-mixed --test_data_ids tiny-n-sampled small-n-sampled
-    uv run python experiments/plotting/runtimes.py --configs small-n-mixed --max_test_sets 2 --max_datasets 32
+    uv run python experiments/evaluation/runtimes.py --family n
+    uv run python experiments/evaluation/runtimes.py --family p --sizes small medium
+    uv run python experiments/evaluation/runtimes.py --family b --ds_type real --no_plot
+    uv run python experiments/evaluation/runtimes.py --family n --max_datasets 8   # smoke test
 """
 
 import argparse
 import json
+import logging
+import sys
 import time
-import yaml
 from pathlib import Path
 
 import numpy as np
@@ -30,645 +48,641 @@ from tqdm import tqdm
 
 from metabeta.models.approximator import Approximator
 from metabeta.plotting.runtimes import plotRuntimeRecords
-from metabeta.utils.config import (
-    assimilateConfig,
-    loadDataConfig,
-)
-from metabeta.utils.dataloader import collateGrouped, toDevice
+from metabeta.utils.dataloader import Collection, SortishBatchSampler, collateGrouped, toDevice
 from metabeta.utils.device import setDevice
-from metabeta.utils.names import runName
+from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, REPO_ROOT
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.moe import moeEstimate
-from metabeta.utils.padding import padToModel, unpad
+from metabeta.utils.posterior_eval import loadModel
 from metabeta.utils.sampling import setSeed
-from metabeta.utils.experiments import (
-    CHECKPOINT_DIR,
-    DATA_DIR,
-    EVALUATION_CONFIG_DIR,
-    RESULTS_DIR,
-    loadApproximator,
+from metabeta.utils.warmfit import nParams
+
+# Reuse the checkpoint-seed mapping maintained for published joint checkpoints.
+sys.path.insert(0, str(REPO_ROOT / 'scripts'))
+
+from build_ckpt import BEST_SEEDS, _ckpt_dir  # noqa: E402
+
+logger = logging.getLogger(__name__)
+
+OUT_DIR = RESULTS_DIR
+FAMILY_NAMES = {'n': 'normal', 'b': 'bernoulli', 'p': 'poisson'}
+DEFAULT_SIZES = ['small', 'medium', 'large', 'huge']
+
+# metabeta first, then the reference methods from cheap to expensive
+MB_LATENCY = 'MB'
+MB_BATCHED = 'MB_batched'
+FIT_METHODS = ['LAPLACE', 'ADVI', 'NUTS']
+METHOD_ORDER = [MB_LATENCY, MB_BATCHED] + FIT_METHODS
+METHOD_LABELS = {MB_LATENCY: 'MB', MB_BATCHED: 'MB (batched)', 'LAPLACE': 'Laplace'}
+
+# fraction of the slowest runs summarised separately; 5% of 512 datasets is 26 datasets,
+# enough for a stable mean and small enough to still be a tail
+TAIL_FRAC = 0.05
+
+# diagnostics nutsConvergeMask reads; kept out of the model batch to avoid decompressing the
+# multi-GB posterior sample arrays that share the nuts_ prefix
+_DIAG_KEYS = (
+    'nuts_divergences',
+    'nuts_draws',
+    'nuts_rhat',
+    'nuts_ess',
+    'nuts_ess_tail',
+    'nuts_max_treedepth',
 )
 
-EVAL_CFG_DIR = EVALUATION_CONFIG_DIR
-OUT_DIR = RESULTS_DIR
 
-LIKELIHOOD_NAMES = {0: 'normal', 1: 'bernoulli', 2: 'poisson'}
-
-DEFAULT_CONFIGS = ['small-n-mixed', 'mid-n-mixed', 'medium-n-mixed', 'big-n-mixed', 'large-n-mixed']
+# ---------------------------------------------------------------------------
+# Reference runtimes (already stored per dataset in test.fit.npz)
 
 
-# fmt: off
-def setup() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Runtime comparison: metabeta vs NUTS vs ADVI.')
-    parser.add_argument('--configs', nargs='+', default=DEFAULT_CONFIGS, help='training data config names, or YAML files in evaluation/configs/')
-    parser.add_argument('--model_id', default='large', help='model config id used when --configs names data ids')
-    parser.add_argument('--seed', type=int, default=0, help='checkpoint seed used when --configs names data ids')
-    parser.add_argument('--prefix', default='best', help='checkpoint prefix to load')
-    parser.add_argument('--k', type=int, default=0, help='number of extra MoE permuted views (0 = no MoE)')
-    parser.add_argument('--test_data_ids', nargs='+', default=None, help='specific outputs/data/* test sets to benchmark')
-    parser.add_argument('--max_test_sets', type=int, default=None, help='max number of test.fit.npz files to benchmark')
-    parser.add_argument('--max_datasets', type=int, default=None, help='max datasets per fit file (for quick testing)')
-    parser.add_argument('--outdir', type=str, default=str(OUT_DIR), help='output directory for tables')
-    parser.add_argument('--cache_path', type=Path, default=None, help='JSON cache for metabeta runtimes (default: outdir/runtimes_cache.json)')
-    parser.add_argument('--refresh_cache', action='store_true', help='recompute metabeta runtimes even if cached')
-    parser.add_argument('--verbosity', type=int, default=1, help='0=warnings | 1=info | 2=debug')
-    parser.add_argument('--cuda', action='store_true', help='override eval config device and use CUDA (errors if unavailable)')
-    return parser.parse_args()
-# fmt: on
+def loadReferences(path: Path) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], np.ndarray]:
+    """Per-dataset (durations, success masks, NUTS-converged mask) from a fit file.
 
-
-def loadEvalConfig(
-    name: str,
-    model_id: str = 'large',
-    seed: int = 0,
-    prefix: str = 'best',
-    **overrides,
-) -> argparse.Namespace:
-    """Load an evaluation YAML or checkpoint config and apply overrides."""
-    path = EVAL_CFG_DIR / f'{name}.yaml'
-    if path.exists():
-        with open(path) as f:
-            cfg = yaml.safe_load(f)
-    else:
-        cfg = {
-            'data_id': name,
-            'model_id': model_id,
-            'seed': seed,
-            'r_tag': '',
-            'likelihood_family': 0,
-        }
-        ckpt_cfg = CHECKPOINT_DIR / runName(cfg) / 'config.yaml'
-        assert ckpt_cfg.exists(), f'eval config not found: {path} or {ckpt_cfg}'
-        with open(ckpt_cfg) as f:
-            cfg = yaml.safe_load(f)
-    cfg['name'] = name
-    cfg.setdefault('device', 'cpu')
-    cfg.setdefault('compile', False)
-    cfg.setdefault('prefix', prefix)
-    cfg.setdefault('r_tag', '')
-    cfg.update(overrides)
-    return argparse.Namespace(**cfg)
-
-
-def initModel(cfg: argparse.Namespace, device: torch.device):
-    """Load model architecture from config and restore checkpoint weights."""
-    data_cfg = loadDataConfig(cfg.data_id)
-    assimilateConfig(cfg, data_cfg)
-
-    run = runName(vars(cfg))
-    model = loadApproximator(
-        cfg,
-        device,
-        CHECKPOINT_DIR / run,
-        cfg.prefix,
-        compile_model=cfg.compile,
-    )
-
-    return model, data_cfg
-
-
-def _fitFileLikelihood(path: Path) -> int | None:
-    try:
-        return int(loadDataConfig(path.parent.name).get('likelihood_family', 0))
-    except FileNotFoundError:
-        return None
-
-
-def discoverFitFiles(
-    likelihood_family: int,
-    test_data_ids: list[str] | None = None,
-    max_test_sets: int | None = None,
-) -> list[Path]:
-    """Find all .fit.npz test files matching the given likelihood family."""
-    lf_name = LIKELIHOOD_NAMES[likelihood_family]
-    if test_data_ids is not None:
-        paths = [DATA_DIR / data_id / 'test.fit.npz' for data_id in test_data_ids]
-    else:
-        pattern = f'test_{lf_name}_*.fit.npz'
-        paths = sorted(DATA_DIR.glob(pattern))
-        paths.extend(
-            p
-            for p in sorted(DATA_DIR.glob('*/test.fit.npz'))
-            if _fitFileLikelihood(p) == likelihood_family
-        )
-
-    paths = [p for p in paths if p.exists()]
-    if max_test_sets is not None:
-        paths = paths[:max_test_sets]
-    assert len(paths) > 0, f'no fit files found for likelihood {lf_name} in {DATA_DIR}'
-    return paths
-
-
-def extractDatasets(
-    path: Path,
-    max_d: int,
-    max_q: int,
-    max_datasets: int | None = None,
-) -> list[tuple[int, dict[str, np.ndarray]]]:
-    """Load a fit.npz file, unpad individual datasets, and re-pad to model dims."""
+    Only the small diagnostic arrays are read; the posterior samples stay on disk.
+    """
+    durations: dict[str, np.ndarray] = {}
+    masks: dict[str, np.ndarray] = {}
+    diag: dict[str, torch.Tensor] = {}
     with np.load(path, allow_pickle=True) as raw:
-        raw = dict(raw)
+        n = int(np.asarray(raw['d']).reshape(-1).shape[0])
+        for method in FIT_METHODS:
+            prefix = method.lower()
+            key = f'{prefix}_duration'
+            if key not in raw.files:
+                continue
+            durations[method] = np.asarray(raw[key], dtype=np.float64).reshape(-1)
+            failed_key = f'{prefix}_failed'
+            masks[method] = (
+                ~np.asarray(raw[failed_key]).reshape(-1).astype(bool)
+                if failed_key in raw.files
+                else np.ones(n, dtype=bool)
+            )
+        for key in _DIAG_KEYS:
+            if key not in raw.files:
+                continue
+            value = np.asarray(raw[key])
+            # nuts_draws is stored per dataset but nutsConvergeMask wants the scalar chain
+            # length; the campaign uses one setting throughout, so collapse it here
+            diag[key] = torch.as_tensor(value.reshape(-1)[0] if key == 'nuts_draws' else value)
 
-    B = len(raw['d'])
-    n_use = min(B, max_datasets) if max_datasets else B
-    datasets = []
+    conv = nutsConvergeMask(diag, mode='strict')
+    conv = np.ones(n, dtype=bool) if conv is None else conv.astype(bool)
+    return durations, masks, conv
 
-    for i in range(n_use):
-        ds = {k: v[i] for k, v in raw.items()}
-        # skip datasets whose d or q exceeds the model's capacity
-        if int(ds['d']) > max_d or int(ds['q']) > max_q:
-            continue
-        # unpad to actual dimensions
-        sizes = {k: int(ds[k]) for k in ('d', 'q', 'm', 'n')}
-        ds = unpad(ds, sizes)
-        # re-pad to model dimensions
-        ds = padToModel(ds, max_d, max_q)
-        datasets.append((i, ds))
 
-    return datasets
+# ---------------------------------------------------------------------------
+# metabeta timing
 
 
 def resetRng(model: Approximator, seed: int) -> None:
-    """Reset base distribution RNGs for reproducible sampling."""
-    base_g = model.posterior_g.base_dist
-    if hasattr(base_g, 'base') and hasattr(base_g.base, 'rng'):
-        base_g.base.rng = np.random.default_rng(seed)  # type: ignore
+    """Reset base-distribution RNGs so repeated runs draw identical samples."""
+    posteriors = [model.posterior_g]
     if hasattr(model, 'posterior_l'):
-        base_l = model.posterior_l.base_dist
-        if hasattr(base_l, 'base') and hasattr(base_l.base, 'rng'):
-            base_l.base.rng = np.random.default_rng(seed)  # type: ignore
+        posteriors.append(model.posterior_l)
+    for posterior in posteriors:
+        base = posterior.base_dist
+        if hasattr(base, 'base') and hasattr(base.base, 'rng'):
+            base.base.rng = np.random.default_rng(seed)  # type: ignore[union-attr]
 
 
-@torch.inference_mode()
-def benchmarkModel(
+@torch.no_grad()
+def timeLatency(
     model: Approximator,
-    datasets: list[dict[str, np.ndarray]],
-    dataset_idxs: list[int],
+    col: Collection,
+    idxs: list[int],
     n_samples: int,
     k: int,
     device: torch.device,
     seed: int,
-    rescale: bool,
 ) -> np.ndarray:
-    """Run model inference on each dataset and return per-dataset runtimes."""
-    durations = np.zeros(len(datasets))
+    """Per-dataset wall time with a batch of one — the latency comparable to the fit backends.
 
-    # warmup pass to avoid cold-start overhead in the first timed call
-    warmup_batch = collateGrouped([datasets[0]])
-    warmup_batch = toDevice(warmup_batch, device)
+    ``no_grad`` rather than ``inference_mode``: the analytical MAP fit inside the model runs
+    ``loss.backward()`` under ``torch.enable_grad()``, which inference mode forbids.
+    """
+    durations = np.zeros(len(idxs))
+
+    # untimed pass so one-time init (lazy alloc, autotune) is not charged to the first dataset
+    warmup = toDevice(collateGrouped([col[idxs[0]]]), device)
     resetRng(model, seed)
-    moeEstimate(model, warmup_batch, n_samples, k, rng=np.random.default_rng(0))
+    moeEstimate(model, warmup, n_samples, k, rng=np.random.default_rng(0))
+    del warmup
 
-    for i, ds in enumerate(tqdm(datasets, desc='  metabeta')):
-        batch = collateGrouped([ds])
-        batch = toDevice(batch, device)
-
+    for i, idx in enumerate(tqdm(idxs, desc='  MB (latency)', leave=False)):
+        batch = toDevice(collateGrouped([col[idx]]), device)
         setSeed(seed)
         resetRng(model, seed)
-        rng = np.random.default_rng(seed + dataset_idxs[i])
-
+        rng = np.random.default_rng(seed + idx)
+        synchronize(device)
         t0 = time.perf_counter()
         proposal = moeEstimate(model, batch, n_samples, k, rng=rng)
-        if rescale:
-            proposal.rescale(batch['sd_y'])
-        t1 = time.perf_counter()
-
-        durations[i] = t1 - t0
-
+        synchronize(device)
+        durations[i] = time.perf_counter() - t0
+        del proposal, batch
     return durations
 
 
-def sourceLabel(path: Path) -> str:
-    """Extract a short label from a fit file name, e.g. 'd3_q1_m5-25'."""
-    if path.name == 'test.fit.npz':
-        return path.parent.name
-    stem = path.stem.replace('.fit', '')
-    # test_normal_d3_q1_m5-25_n4-18_sampled_nt800_all → d3_q1_m5-25_n4-18
-    parts = stem.split('_')
-    # find d/q/m/n parts
-    dqmn = [p for p in parts if p[0] in 'dqmn' and p[1:2].isdigit()]
-    return '_'.join(dqmn)
-
-
-def nParams(ds: dict[str, np.ndarray]) -> int:
-    """Effective number of model parameters: d (ffx) + q (sigma) + m*q (rfx)."""
-    d, q, m = int(ds['d']), int(ds['q']), int(ds['m'])
-    return d + q + m * q
-
-
-def _cacheKey(
-    cfg: argparse.Namespace,
-    source: str,
-    idx: int,
+@torch.no_grad()
+def timeThroughput(
+    model: Approximator,
+    col: Collection,
+    idxs: list[int],
     n_samples: int,
+    batch_size: int,
+    device: torch.device,
+    seed: int,
+) -> np.ndarray:
+    """Amortized per-dataset wall time in sortish batches — the deployment number.
+
+    Batches are formed by the same sortish sampler the dataloader uses, so datasets of similar
+    (m, n) travel together and padding does not inflate the cost of the small ones.  The chunk
+    time is divided evenly over its datasets, mirroring ``posterior_eval.sampleMB``.
+    """
+    order = list(idxs)
+    if batch_size < len(order):
+        sampler = SortishBatchSampler(
+            m_i=col.m_i[order],
+            n_i_max=col.n_i_max[order],
+            batch_size=batch_size,
+            shuffle=False,
+            seed=seed,
+        )
+        chunks = [[order[j] for j in chunk] for chunk in sampler]
+    else:
+        chunks = [order]
+
+    # untimed warm-up on the first chunk, as in the latency path
+    warmup = toDevice(collateGrouped([col[i] for i in chunks[0]]), device)
+    resetRng(model, seed)
+    model.estimate(warmup, n_samples=1)
+    del warmup
+
+    durations = np.zeros(len(order))
+    position = {idx: i for i, idx in enumerate(order)}
+    for chunk in tqdm(chunks, desc='  MB (batched)', leave=False):
+        batch = toDevice(collateGrouped([col[i] for i in chunk]), device)
+        setSeed(seed)
+        resetRng(model, seed)
+        synchronize(device)
+        t0 = time.perf_counter()
+        proposal = model.estimate(batch, n_samples=n_samples)
+        synchronize(device)
+        per_dataset = (time.perf_counter() - t0) / len(chunk)
+        for idx in chunk:
+            durations[position[idx]] = per_dataset
+        del proposal, batch
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+    return durations
+
+
+def synchronize(device: torch.device) -> None:
+    """Block until queued device work finishes (no-op on CPU) so timings are accurate."""
+    if device.type == 'cuda' and torch.cuda.is_available():
+        torch.cuda.synchronize(device)
+    elif device.type == 'mps' and hasattr(torch, 'mps'):
+        torch.mps.synchronize()
+
+
+# ---------------------------------------------------------------------------
+# Timing cache — a sibling of test.fit.npz, like the posterior-sample caches
+
+
+def cachePath(
+    data_path: Path,
+    ckpt_dir: Path,
+    prefix: str,
+    n_samples: int,
+    seed: int,
     k: int,
     device: torch.device,
-) -> str:
-    parts = [
-        str(cfg.data_id),
-        str(cfg.model_id),
-        str(cfg.seed),
-        str(cfg.prefix),
-        str(source),
-        str(idx),
-        str(n_samples),
-        str(k),
-        str(device.type),
-    ]
-    return '|'.join(parts)
+) -> Path:
+    return data_path.parent / (
+        f'runtimes.{ckpt_dir.name}_{prefix}_s{n_samples}_seed{seed}_k{k}_{device.type}.json'
+    )
 
 
-def loadRuntimeCache(path: Path) -> dict[str, float]:
+def loadCache(path: Path, data_path: Path, ckpt_dir: Path, prefix: str) -> dict[str, float]:
+    """Load cached timings, dropping them when data or checkpoint is newer."""
     if not path.exists():
+        return {}
+    ref_mtime = data_path.stat().st_mtime if data_path.exists() else 0.0
+    ckpt_file = ckpt_dir / f'{prefix}.pt'
+    if ckpt_file.exists():
+        ref_mtime = max(ref_mtime, ckpt_file.stat().st_mtime)
+    if path.stat().st_mtime < ref_mtime:
+        logger.info('Timing cache %s is older than its data/checkpoint — recomputing', path)
         return {}
     with open(path) as f:
         raw = json.load(f)
-    if isinstance(raw, dict) and 'durations' in raw:
-        raw = raw['durations']
-    return {str(k): float(v) for k, v in raw.items()}
+    return {str(key): float(value) for key, value in raw.get('durations', {}).items()}
 
 
-def saveRuntimeCache(path: Path, cache: dict[str, float]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def saveCache(path: Path, cache: dict[str, float]) -> None:
     tmp = path.with_suffix(path.suffix + '.tmp')
-    payload = {'durations': dict(sorted(cache.items()))}
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+    tmp.write_text(json.dumps({'durations': dict(sorted(cache.items()))}, indent=2) + '\n')
     tmp.replace(path)
 
 
-def evaluateConfig(
-    config_name: str,
-    model_id: str,
-    seed: int,
-    prefix: str,
-    k: int,
-    test_data_ids: list[str] | None,
-    max_test_sets: int | None,
-    max_datasets: int | None,
-    runtime_cache: dict[str, float],
-    cache_path: Path,
-    refresh_cache: bool = False,
-    cuda: bool = False,
-) -> list[dict]:
-    """Run the runtime comparison for a single config, returning per-dataset records."""
-    cfg = loadEvalConfig(config_name, model_id=model_id, seed=seed, prefix=prefix, plot=False)
-    if cuda:
-        if not torch.cuda.is_available():
-            raise RuntimeError('--cuda specified but CUDA is not available on this machine')
-        cfg.device = 'cuda'
-    setSeed(cfg.seed)
-    device = setDevice(cfg.device)
-
-    model, data_cfg = initModel(cfg, device)
-    max_d = cfg.max_d
-    max_q = cfg.max_q
-    lf = getattr(cfg, 'likelihood_family', data_cfg.get('likelihood_family', 0))
-
-    print(f'Model: {config_name} (max_d={max_d}, max_q={max_q}, lf={lf})')
-
-    fit_paths = discoverFitFiles(lf, test_data_ids=test_data_ids, max_test_sets=max_test_sets)
-    print(f'Found {len(fit_paths)} fit file(s)')
-
-    records = []
-
-    for path in fit_paths:
-        label = sourceLabel(path)
-        print(f'\n{"=" * 60}')
-        print(f'Source: {path.name} ({label})')
-
-        indexed_datasets = extractDatasets(path, max_d, max_q, max_datasets)
-        if not indexed_datasets:
-            print('  (skipped — no compatible datasets)')
-            continue
-        raw_idxs = [idx for idx, _ in indexed_datasets]
-        datasets = [ds for _, ds in indexed_datasets]
-
-        N = len(datasets)
-        ds_d = np.array([int(ds['d']) for ds in datasets])
-        ds_q = np.array([int(ds['q']) for ds in datasets])
-
-        # NUTS sample count from first dataset
-        nuts_n_samples = datasets[0]['nuts_ffx'].shape[-1]
-        n_samples_per_view = nuts_n_samples // (1 + k)
-        total_samples = n_samples_per_view * (1 + k)
-
-        print(f'  {N} datasets, d={ds_d.min()}-{ds_d.max()}, q={ds_q.min()}-{ds_q.max()}')
-        print(f'  NUTS draws={nuts_n_samples}, model: {n_samples_per_view}×{1+k}={total_samples}')
-
-        cache_keys = [
-            _cacheKey(cfg, label, raw_idx, n_samples_per_view, k, device) for raw_idx in raw_idxs
-        ]
-        model_dur = np.full(N, np.nan)
-        missing_pos = []
-        for i, key in enumerate(cache_keys):
-            if not refresh_cache and key in runtime_cache:
-                model_dur[i] = runtime_cache[key]
-            else:
-                missing_pos.append(i)
-
-        n_cached = N - len(missing_pos)
-        if n_cached:
-            print(f'  metabeta cache hits={n_cached}/{N}')
-        if missing_pos:
-            missing_datasets = [datasets[i] for i in missing_pos]
-            missing_idxs = [raw_idxs[i] for i in missing_pos]
-            missing_dur = benchmarkModel(
-                model,
-                missing_datasets,
-                missing_idxs,
-                n_samples_per_view,
-                k,
-                device,
-                cfg.seed,
-                cfg.rescale,
-            )
-            for pos, dur in zip(missing_pos, missing_dur):
-                model_dur[pos] = dur
-                runtime_cache[cache_keys[pos]] = float(dur)
-            saveRuntimeCache(cache_path, runtime_cache)
-
-        # NUTS and ADVI runtimes (pre-computed in fit file)
-        with np.load(path, allow_pickle=True) as raw:
-            nuts_dur = raw['nuts_duration'][raw_idxs].astype(np.float64)
-            advi_dur = raw['advi_duration'][raw_idxs].astype(np.float64)
-
-        for i, (raw_idx, ds) in enumerate(zip(raw_idxs, datasets)):
-            base = {
-                'config': config_name,
-                'source': label,
-                'idx': raw_idx,
-                'n': int(ds['n']),
-                'd': int(ds['d']),
-                'q': int(ds['q']),
-                'm': int(ds['m']),
-                'n_params': nParams(ds),
-            }
-            for method, dur in [('metabeta', model_dur), ('NUTS', nuts_dur), ('ADVI', advi_dur)]:
-                records.append({**base, 'method': method, 'duration': float(dur[i])})
-
-    return records
-
-
-def evaluate(
-    configs: list[str],
-    model_id: str,
-    seed: int,
-    prefix: str,
-    k: int,
-    test_data_ids: list[str] | None,
-    max_test_sets: int | None,
-    max_datasets: int | None,
-    cache_path: Path,
-    refresh_cache: bool = False,
-    cuda: bool = False,
-) -> list[dict]:
-    """Run the full runtime comparison across all configs."""
-    runtime_cache = loadRuntimeCache(cache_path)
-    records = []
-    for config_name in configs:
-        print(f'\n{"#" * 60}')
-        print(f'Config: {config_name}')
-        print(f'{"#" * 60}')
-        records.extend(
-            evaluateConfig(
-                config_name,
-                model_id,
-                seed,
-                prefix,
-                k,
-                test_data_ids,
-                max_test_sets,
-                max_datasets,
-                runtime_cache,
-                cache_path,
-                refresh_cache=refresh_cache,
-                cuda=cuda,
-            )
-        )
-    return records
-
-
-def splitRecordsByDevice(
-    records: list[dict],
+def cachedTimings(
     cache: dict[str, float],
-    devices: list[str] | None = None,
-) -> list[dict]:
-    """Replace 'metabeta' records with per-device variants using the runtime cache.
+    tag: str,
+    idxs: list[int],
+    compute,
+) -> np.ndarray:
+    """Return per-dataset timings for ``idxs``, computing only the ones not already cached.
 
-    Cache keys: config|model_id|seed|prefix|source|idx|n_samples|k|device
-    Output method names: 'metabeta_gpu' (cuda) and 'metabeta_cpu' (cpu).
-    Non-metabeta records (NUTS, ADVI) are passed through unchanged.
+    ``compute`` is called with the missing indices only.  The batched path is an exception it
+    handles itself: its per-dataset value depends on the batch its dataset lands in, so a
+    partial recompute would mix batch compositions — the caller passes all-or-nothing there.
     """
-    if devices is None:
-        devices = ['cuda', 'cpu']
-    device_suffix = {'cuda': 'metabeta_gpu', 'cpu': 'metabeta_cpu'}
-
-    # Infer common metadata from existing cache keys
-    sample_key = next(iter(cache))
-    parts = sample_key.split('|')
-    model_id, seed, prefix, n_samples, k = parts[1], parts[2], parts[3], parts[6], parts[7]
-
-    out = [r for r in records if r['method'] != 'metabeta']
-    for r in records:
-        if r['method'] != 'metabeta':
-            continue
-        for device in devices:
-            key = '|'.join(
-                [
-                    r['config'],
-                    model_id,
-                    seed,
-                    prefix,
-                    r['source'],
-                    str(r['idx']),
-                    n_samples,
-                    k,
-                    device,
-                ]
-            )
-            if key not in cache:
-                continue
-            out.append({**r, 'method': device_suffix[device], 'duration': cache[key]})
+    keys = [f'{tag}:{idx}' for idx in idxs]
+    out = np.full(len(idxs), np.nan)
+    missing = []
+    for i, key in enumerate(keys):
+        if key in cache:
+            out[i] = cache[key]
+        else:
+            missing.append(i)
+    if missing:
+        values = compute([idxs[i] for i in missing])
+        for i, value in zip(missing, values):
+            out[i] = value
+            cache[keys[i]] = float(value)
+    elif len(idxs):
+        logger.info('%s: all %d timings cached', tag, len(idxs))
     return out
 
 
-def _groupKey(r: dict) -> tuple:
-    return (r['config'], r['source'], r['method'])
+# ---------------------------------------------------------------------------
+# Per-cell collection
 
 
-def _aggregateRows(records: list[dict]) -> list[dict]:
-    """Aggregate per-dataset records into per-(config, source, method) summary rows."""
-    from collections import defaultdict
+def collectCell(
+    cfg: argparse.Namespace,
+    family: str,
+    size: str,
+    device: torch.device,
+) -> list[dict] | None:
+    """Per-dataset runtime records for one (family, size) regime, or None when unavailable."""
+    data_id = f'{size}-{family}-{cfg.ds_type}'
+    seed = BEST_SEEDS.get((FAMILY_NAMES[family], size))
+    if seed is None:
+        logger.warning(
+            '%s: no BEST_SEEDS checkpoint for (%s, %s) — skipping', data_id, family, size
+        )
+        return None
+    ckpt_dir = _ckpt_dir(FAMILY_NAMES[family], size, seed)
+    data_path = DATA_DIR / data_id / 'test.fit.npz'
+    if not data_path.exists() or not ckpt_dir.exists():
+        logger.warning('%s: data or checkpoint missing — skipping', data_id)
+        return None
 
-    groups: dict[tuple, list[dict]] = defaultdict(list)
-    for r in records:
-        groups[_groupKey(r)].append(r)
+    model, model_cfg = loadModel(ckpt_dir, cfg.prefix, device)
+    try:
+        col = Collection(
+            data_path,
+            permute=False,
+            max_d=model_cfg.max_d,
+            max_q=model_cfg.max_q,
+            exclude_prefixes=('nuts_', 'advi_', 'laplace_'),
+        )
+    except ValueError as exc:
+        # regimes are matched by construction; a mismatch means the checkpoint map is wrong
+        logger.warning('%s: checkpoint does not cover this regime (%s) — skipping', data_id, exc)
+        return None
 
+    B = len(col)
+    idxs = list(range(min(B, cfg.max_datasets))) if cfg.max_datasets else list(range(B))
+    durations, masks, conv = loadReferences(data_path)
+    logger.info(
+        '%s: %d datasets (%d timed), %d NUTS-converged, d<=%d q<=%d',
+        data_id,
+        B,
+        len(idxs),
+        int(conv[idxs].sum()),
+        model_cfg.max_d,
+        model_cfg.max_q,
+    )
+
+    cache_path = cachePath(data_path, ckpt_dir, cfg.prefix, cfg.n_samples, cfg.seed, cfg.k, device)
+    cache = loadCache(cache_path, data_path, ckpt_dir, cfg.prefix)
+
+    mb_latency = cachedTimings(
+        cache,
+        'latency',
+        idxs,
+        lambda missing: timeLatency(model, col, missing, cfg.n_samples, cfg.k, device, cfg.seed),
+    )
+    mb_batched = None
+    if cfg.batch_size > 1:
+        tag = f'batched{cfg.batch_size}'
+        # all-or-nothing: a per-dataset batched time is only meaningful together with the
+        # batch composition that produced it, so a partial refill would mix regimes
+        if all(f'{tag}:{idx}' in cache for idx in idxs):
+            mb_batched = np.array([cache[f'{tag}:{idx}'] for idx in idxs])
+            logger.info('%s: all %d timings cached', tag, len(idxs))
+        else:
+            mb_batched = timeThroughput(
+                model, col, idxs, cfg.n_samples, cfg.batch_size, device, cfg.seed
+            )
+            for idx, value in zip(idxs, mb_batched):
+                cache[f'{tag}:{idx}'] = float(value)
+    saveCache(cache_path, cache)
+
+    records = []
+    for i, idx in enumerate(idxs):
+        ds = {key: int(col.raw[key][idx]) for key in ('d', 'q', 'm', 'n')}
+        base = {
+            'family': family,
+            'size': size,
+            'source': data_id,
+            'config': f'{size}-{family}-mixed',
+            'idx': idx,
+            **ds,
+            'n_params': nParams(ds['d'], ds['q'], ds['m']),
+            'nuts_converged': bool(conv[idx]),
+        }
+        timings = [(MB_LATENCY, mb_latency[i])]
+        if mb_batched is not None:
+            timings.append((MB_BATCHED, mb_batched[i]))
+        for method in FIT_METHODS:
+            if method not in durations:
+                continue
+            if not masks[method][idx]:
+                continue  # failed fit: its duration times a run that produced nothing
+            timings.append((method, durations[method][idx]))
+        for method, duration in timings:
+            records.append({**base, 'method': method, 'duration': float(duration)})
+    return records
+
+
+# ---------------------------------------------------------------------------
+# Aggregation
+
+
+def tailStats(durations: np.ndarray, frac: float = TAIL_FRAC) -> dict[str, float]:
+    """Location and tail summaries of a runtime distribution."""
+    finite = durations[np.isfinite(durations)]
+    if not finite.size:
+        return {key: float('nan') for key in ('median', 'p95', 'tail', 'max', 'total', 'mean')}
+    n_tail = max(1, int(round(frac * finite.size)))
+    tail = np.sort(finite)[-n_tail:]
+    return {
+        'median': float(np.median(finite)),
+        'mean': float(finite.mean()),
+        'p95': float(np.percentile(finite, 100 * (1 - frac))),
+        'tail': float(tail.mean()),
+        'max': float(finite.max()),
+        'total': float(finite.sum()),
+    }
+
+
+def cellRows(records: list[dict]) -> list[dict]:
+    """One row per (size, method) with the runtime distribution and its tail."""
     rows = []
-    for (cfg, src, method), recs in groups.items():
-        durs = np.array([r['duration'] for r in recs])
-        ds_d = np.array([r['d'] for r in recs])
-        ds_q = np.array([r['q'] for r in recs])
-        ds_m = np.array([r['m'] for r in recs])
-        ds_n = np.array([r['n'] for r in recs])
+    sizes = [s for s in DEFAULT_SIZES if any(r['size'] == s for r in records)]
+    for size in sizes:
+        sized = [r for r in records if r['size'] == size]
+        for j, method in enumerate(
+            [m for m in METHOD_ORDER if any(r['method'] == m for r in sized)]
+        ):
+            durations = np.array([r['duration'] for r in sized if r['method'] == method])
+            rows.append(
+                {
+                    'size': size,
+                    'method': METHOD_LABELS.get(method, method),
+                    'first': j == 0,
+                    'n': len(durations),
+                    **tailStats(durations),
+                }
+            )
+    return rows
+
+
+def reliabilityRows(records: list[dict]) -> list[dict]:
+    """Per size: how NUTS' wall-clock cost concentrates where it also fails to converge.
+
+    ``t/conv`` is total NUTS wall time divided by the number of converged datasets — the cost
+    of a *usable* posterior rather than of a run.  metabeta has no analogue because it does not
+    fail, so its own median doubles as its cost per usable posterior.
+    """
+    rows = []
+    for size in [s for s in DEFAULT_SIZES if any(r['size'] == s for r in records)]:
+        nuts = [r for r in records if r['size'] == size and r['method'] == 'NUTS']
+        if not nuts:
+            continue
+        durations = np.array([r['duration'] for r in nuts])
+        conv = np.array([r['nuts_converged'] for r in nuts])
+        n_tail = max(1, int(round(TAIL_FRAC * len(durations))))
+        slowest = np.argsort(durations)[-n_tail:]
+        mb = np.array(
+            [r['duration'] for r in records if r['size'] == size and r['method'] == MB_LATENCY]
+        )
+        stats = tailStats(durations)
         rows.append(
             {
-                'config': cfg,
-                'source': src,
-                'method': method,
-                'N': len(recs),
-                'd': f'{ds_d.min()}-{ds_d.max()}',
-                'q': f'{ds_q.min()}-{ds_q.max()}',
-                'm': f'{ds_m.min()}-{ds_m.max()}',
-                'n': f'{ds_n.min()}-{ds_n.max()}',
-                'median_t': np.median(durs),
-                'mean_t': np.mean(durs),
-                'total_t': np.sum(durs),
+                'size': size,
+                'n': len(durations),
+                'pct_conv': 100.0 * conv.mean(),
+                'pct_conv_tail': 100.0 * conv[slowest].mean(),
+                't_per_conv': stats['total'] / max(int(conv.sum()), 1),
+                'speedup_median': stats['median'] / np.median(mb) if mb.size else float('nan'),
+                'speedup_tail': stats['tail'] / np.median(mb) if mb.size else float('nan'),
+                'speedup_conv': (
+                    stats['total'] / max(int(conv.sum()), 1) / np.median(mb)
+                    if mb.size
+                    else float('nan')
+                ),
             }
         )
     return rows
 
 
-def formatTable(records: list[dict]) -> str:
-    """Format absolute runtimes table."""
-    rows = _aggregateRows(records)
-    table_rows = []
+# ---------------------------------------------------------------------------
+# Tables
+
+
+DIST_COLS = [
+    ('median', 'median [s]'),
+    ('p95', 'p95 [s]'),
+    ('tail', 'worst 5% [s]'),
+    ('max', 'max [s]'),
+    ('total', 'total [s]'),
+]
+
+
+def _fmt(value: float, dp: int = 3) -> str:
+    if value is None or value != value:
+        return 'NA'
+    if value >= 1000:
+        return f'{value:.0f}'
+    return f'{value:.{dp}f}'
+
+
+def renderDistMd(rows: list[dict], dp: int = 3) -> str:
+    headers = ['size', 'method', 'n'] + [h for _, h in DIST_COLS]
+    md = []
     for r in rows:
-        table_rows.append(
-            [
-                r['config'],
-                r['source'],
-                r['method'],
-                r['N'],
-                r['d'],
-                r['q'],
-                r['m'],
-                r['n'],
-                f'{r["median_t"]:.3f}',
-                f'{r["mean_t"]:.3f}',
-                f'{r["total_t"]:.1f}',
-            ]
-        )
-    headers = [
-        'Config',
-        'Source',
-        'Method',
-        'N',
-        'd',
-        'q',
-        'm',
-        'n',
-        'Median [s]',
-        'Mean [s]',
-        'Total [s]',
-    ]
-    return tabulate(table_rows, headers=headers, tablefmt='pipe', stralign='right')
+        # n is per row, not per size: ADVI drops the datasets whose fit failed
+        size = r['size'] if r['first'] else ''
+        md.append([size, r['method'], r['n']] + [_fmt(r[k], dp) for k, _ in DIST_COLS])
+    return tabulate(md, headers=headers, tablefmt='pipe', stralign='right')
 
 
-def speedupTable(records: list[dict]) -> str:
-    """Format speedup table (relative to NUTS)."""
-    rows = _aggregateRows(records)
-
-    # group by (config, source)
-    keys = []
-    seen = set()
-    for r in rows:
-        key = (r['config'], r['source'])
-        if key not in seen:
-            keys.append(key)
-            seen.add(key)
-
-    table_rows = []
-    for cfg, src in keys:
-        src_rows = {r['method']: r for r in rows if r['config'] == cfg and r['source'] == src}
-        if 'NUTS' not in src_rows or 'metabeta' not in src_rows:
-            continue
-        nuts_med = src_rows['NUTS']['median_t']
-        model_med = src_rows['metabeta']['median_t']
-        advi_med = src_rows.get('ADVI', {}).get('median_t')
-
-        table_rows.append(
-            [
-                cfg,
-                src,
-                src_rows['metabeta']['d'],
-                src_rows['metabeta']['q'],
-                src_rows['metabeta']['m'],
-                src_rows['metabeta']['n'],
-                f'{nuts_med:.3f}',
-                f'{model_med:.3f}',
-                f'{nuts_med / model_med:.0f}x' if model_med > 0 else '-',
-                f'{advi_med:.3f}' if advi_med else '-',
-                f'{advi_med / model_med:.0f}x' if advi_med and model_med > 0 else '-',
-            ]
-        )
-
-    headers = [
-        'Config',
-        'Source',
-        'd',
-        'q',
-        'm',
-        'n',
-        'NUTS [s]',
-        'Model [s]',
-        'Speedup',
-        'ADVI [s]',
-        'vs ADVI',
-    ]
-    return tabulate(table_rows, headers=headers, tablefmt='pipe', stralign='right')
-
-
-def save(records: list[dict], outdir: Path) -> None:
-    """Save tables and plot."""
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    abs_table = formatTable(records)
-    spd_table = speedupTable(records)
-
-    md_path = outdir / 'runtimes.md'
-    md_path.write_text(
-        f'# Runtime Comparison\n\n'
-        f'## Absolute Runtimes\n\n{abs_table}\n\n'
-        f'## Speedup vs NUTS\n\n{spd_table}\n'
+def renderDistTex(rows: list[dict], dp: int = 3) -> str:
+    header = (
+        r'\mathrm{size} & \mathrm{method} & $n$ & \mathrm{median} & p_{95} & '
+        r'\mathrm{worst\,5\%} & \mathrm{max} & \mathrm{total}'
     )
-    print(f'\nMarkdown saved to {md_path}')
+    lines = [r'\begin{tabular}{llr|ccccc}', r'    \toprule', f'    {header} \\\\', r'    \midrule']
+    for i, r in enumerate(rows):
+        if r['first'] and i != 0:
+            lines.append(r'    \midrule')
+        size = rf"\texttt{{{r['size']}}}" if r['first'] else ''
+        cells = ' & '.join(f'${_fmt(r[k], dp)}$' for k, _ in DIST_COLS)
+        lines.append(rf"    {size} & \texttt{{{r['method']}}} & {r['n']} & {cells} \\")
+    lines += [r'    \bottomrule', r'\end{tabular}', '']
+    return '\n'.join(lines)
 
-    records_path = outdir / 'runtimes_records.json'
-    records_path.write_text(json.dumps(records, indent=2, sort_keys=True) + '\n')
-    print(f'Records saved to {records_path}')
 
-    fig_path = plotRuntimeRecords(records, out_dir=outdir)
-    print(f'Plot saved to {fig_path}')
+RELIABILITY_COLS = [
+    ('pct_conv', '% conv'),
+    ('pct_conv_tail', '% conv in slowest 5%'),
+    ('t_per_conv', 't/conv [s]'),
+    ('speedup_median', 'MB speedup (median)'),
+    ('speedup_tail', 'MB speedup (worst 5%)'),
+    ('speedup_conv', 'MB speedup (per conv)'),
+]
+
+
+def renderReliabilityMd(rows: list[dict]) -> str:
+    headers = ['size', 'n'] + [h for _, h in RELIABILITY_COLS]
+    md = []
+    for r in rows:
+        cells = []
+        for key, _ in RELIABILITY_COLS:
+            value = r[key]
+            if key.startswith('pct'):
+                cells.append(f'{value:.0f}')
+            elif key.startswith('speedup'):
+                cells.append(f'{value:.0f}x' if value == value else 'NA')
+            else:
+                cells.append(_fmt(value, 1))
+        md.append([r['size'], r['n']] + cells)
+    return tabulate(md, headers=headers, tablefmt='pipe', stralign='right')
+
+
+def renderReliabilityTex(rows: list[dict]) -> str:
+    header = (
+        r'\mathrm{size} & $n$ & \%\,\mathrm{conv} & \%\,\mathrm{conv}\mid\mathrm{slowest\,5\%} & '
+        r't/\mathrm{conv} & \mathrm{median} & \mathrm{worst\,5\%} & \mathrm{per\,conv}'
+    )
+    lines = [r'\begin{tabular}{lr|ccc|ccc}', r'    \toprule', f'    {header} \\\\', r'    \midrule']
+    for r in rows:
+        lines.append(
+            rf"    \texttt{{{r['size']}}} & {r['n']} & {r['pct_conv']:.0f} & "
+            rf"{r['pct_conv_tail']:.0f} & ${_fmt(r['t_per_conv'], 1)}$ & "
+            rf"${r['speedup_median']:.0f}\times$ & ${r['speedup_tail']:.0f}\times$ & "
+            rf"${r['speedup_conv']:.0f}\times$ \\"
+        )
+    lines += [r'    \bottomrule', r'\end{tabular}', '']
+    return '\n'.join(lines)
+
+
+# ---------------------------------------------------------------------------
+# CLI / main
+
+
+def setup() -> argparse.Namespace:
+    # fmt: off
+    parser = argparse.ArgumentParser(
+        description='Runtime comparison: metabeta vs NUTS, ADVI and Laplace, per size regime.',
+    )
+    parser.add_argument('--family', type=str, default='n', choices=list(FAMILY_NAMES))
+    parser.add_argument('--sizes', type=str, nargs='+', default=DEFAULT_SIZES, choices=DEFAULT_SIZES)
+    parser.add_argument('--ds_type', type=str, default='sampled', help='test-set variant (sampled | real)')
+    parser.add_argument('--prefix', type=str, default='latest')
+    parser.add_argument('--device', type=str, default='cpu')
+    parser.add_argument('--n_samples', type=int, default=1000)
+    parser.add_argument('--batch_size', type=int, default=8, help='batched-throughput batch size (1 disables the batched row)')
+    parser.add_argument('--k', type=int, default=0, help='extra pseudo-MoE permuted views (0 = off)')
+    parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--max_datasets', type=int, default=None, help='cap datasets per size (smoke tests)')
+    parser.add_argument('--outdir', type=str, default=str(OUT_DIR))
+    parser.add_argument('--decimals', type=int, default=3)
+    parser.add_argument('--no_plot', action='store_true', help='skip the runtime-vs-complexity figure')
+    parser.add_argument('--verbosity', type=int, default=1)
+    # fmt: on
+    return parser.parse_args()
+
+
+def main() -> None:
+    cfg = setup()
+    setupLogging(cfg.verbosity)
+    setSeed(cfg.seed)
+    device = setDevice(cfg.device)
+    outdir = Path(cfg.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    family = cfg.family
+
+    records: list[dict] = []
+    for size in cfg.sizes:
+        collected = collectCell(cfg, family, size, device)
+        if collected:
+            records.extend(collected)
+    if not records:
+        logger.error('No (family, size) cell could be evaluated for family %s.', family)
+        return
+
+    sizes = [s for s in DEFAULT_SIZES if any(r['size'] == s for r in records)]
+    rows_dist = cellRows(records)
+    dist_md = renderDistMd(rows_dist, dp=cfg.decimals)
+    print('\n=== Runtime distribution per regime ===\n')
+    print(dist_md)
+
+    rows_rel = reliabilityRows(records)
+    rel_md = renderReliabilityMd(rows_rel)
+    print('\n=== NUTS tail vs reliability ===\n')
+    print(rel_md)
+
+    md = [
+        f'# Runtimes ({FAMILY_NAMES[family]})\n',
+        f'Sizes: {", ".join(sizes)} ({cfg.ds_type} test sets), each on its regime-matched '
+        f'checkpoint. metabeta: {cfg.n_samples} draws, k={cfg.k}, {device.type}. Latency is a '
+        f'batch of one; batched is sortish batches of {cfg.batch_size}. ADVI excludes failed '
+        'fits.\n',
+        '## Runtime distribution per regime\n',
+        'Wall time per dataset. NUTS/ADVI/Laplace times are those recorded at fit time; '
+        'metabeta is timed here. The tail columns are the point: metabeta is flat because its '
+        'cost tracks the architecture, the samplers are not.\n',
+        dist_md,
+        '',
+        '## NUTS tail vs reliability\n',
+        'Convergence is the strict `nutsConvergeMask` criterion. `% conv in slowest 5%` is the '
+        'convergence rate *within* the slowest 5% of NUTS runs: the reference spends its '
+        'largest wall-clock budget where it is least likely to return a usable posterior. '
+        '`t/conv` is total NUTS wall time per converged dataset, and the speedups are against '
+        'metabeta median latency.\n',
+        rel_md,
+        '',
+    ]
+
+    stem = f'runtimes_{family}'
+    (outdir / f'{stem}.md').write_text('\n'.join(md) + '\n')
+    (outdir / f'{stem}.tex').write_text(
+        renderDistTex(rows_dist, dp=cfg.decimals) + '\n' + renderReliabilityTex(rows_rel)
+    )
+    (outdir / f'{stem}_records.json').write_text(
+        json.dumps(records, indent=2, sort_keys=True) + '\n'
+    )
+    logger.info('Saved tables to %s', outdir / f'{stem}.md')
+
+    if not cfg.no_plot:
+        fig_path = plotRuntimeRecords(records, out_dir=outdir, title=stem)
+        logger.info('Saved figure to %s', fig_path)
 
 
 if __name__ == '__main__':
-    args = setup()
-    setupLogging(args.verbosity)
-
-    print(f'Runtime comparison: {len(args.configs)} config(s)')
-    print(f'Configs: {args.configs}')
-    print(f'MoE k={args.k}')
-
-    outdir = Path(args.outdir)
-    cache_path = args.cache_path if args.cache_path is not None else outdir / 'runtimes_cache.json'
-
-    records = evaluate(
-        args.configs,
-        args.model_id,
-        args.seed,
-        args.prefix,
-        args.k,
-        args.test_data_ids,
-        args.max_test_sets,
-        args.max_datasets,
-        cache_path,
-        refresh_cache=args.refresh_cache,
-        cuda=args.cuda,
-    )
-
-    print(f'\n{formatTable(records)}')
-    print(f'\n{speedupTable(records)}')
-
-    save(records, outdir)
-    print('\nDone.')
+    main()
