@@ -19,10 +19,13 @@ from metabeta.utils.plot import PALETTE, niceify
 
 COND_STYLE: dict[str, dict] = {
     'mb': {'color': PALETTE[0], 'label': 'MB'},
+    'mb_batch': {'color': PALETTE[10], 'label': 'MB (batched)'},
     'mb_gpu': {'color': PALETTE[0], 'label': 'MB (GPU)'},
     'mb_cpu': {'color': PALETTE[10], 'label': 'MB (CPU)'},
     'cold_std': {'color': PALETTE[3], 'label': 'NUTS'},
+    'laplace': {'color': PALETTE[2], 'label': 'Laplace'},
     'cold_live': {'color': PALETTE[2], 'label': 'NUTS (live)'},
+    'warm_imh': {'color': PALETTE[4], 'label': 'MB-IMH-NUTS'},
     'warm_2000': {'color': PALETTE[4], 'label': 'MB-NUTS'},
     'warm_1000': {'color': PALETTE[4], 'label': 'MB-NUTS (1000)'},
     'warm_500': {'color': PALETTE[4], 'label': 'MB-NUTS (500)'},
@@ -48,8 +51,8 @@ def loadFit(path: Path) -> tuple[dict[str, np.ndarray], dict]:
     """Return (samples_dict, diag_dict). Unknown keys are silently ignored."""
     with np.load(path) as f:
         raw = dict(f)
-    sample_keys = {'ffx', 'sigma_rfx', 'sigma_eps', 'rfx'}
-    diag_keys = {'n_div', 'max_rhat', 'min_ess', 'min_ess_t', 'wall_s'}
+    sample_keys = {'ffx', 'sigma_rfx', 'sigma_eps', 'rfx', 'corr_rfx'}
+    diag_keys = {'n_div', 'max_rhat', 'min_ess', 'min_ess_t', 'wall_s', 'reff'}
     return (
         {k: raw[k] for k in sample_keys if k in raw},
         {k: float(raw[k]) for k in diag_keys if k in raw},
