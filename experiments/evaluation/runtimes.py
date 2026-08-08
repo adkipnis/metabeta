@@ -155,6 +155,26 @@ def loadReferences(path: Path) -> tuple[dict[str, np.ndarray], dict[str, np.ndar
     return durations, masks, conv
 
 
+def nutsDrawCount(family: str, sizes: list[str], ds_type: str) -> int:
+    """Total NUTS draws per dataset, read from the first available fit file.
+
+    metabeta's cost scales with the number of draws, so a runtime comparison is only fair at
+    matched sample counts; deriving the default from the reference keeps the two in step
+    without a magic constant that silently drifts from the fit campaign.
+    """
+    for size in sizes:
+        path = DATA_DIR / f'{size}-{family}-{ds_type}' / 'test.fit.npz'
+        if not path.exists():
+            continue
+        with np.load(path, allow_pickle=True) as raw:
+            if 'nuts_ffx' not in raw.files:
+                continue
+            return int(np.asarray(raw['nuts_ffx']).shape[-1])
+    raise FileNotFoundError(
+        f'no fit file with NUTS draws found for family {family!r}; pass --n_samples explicitly'
+    )
+
+
 # ---------------------------------------------------------------------------
 # Model inputs
 
@@ -779,7 +799,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--ds_type', type=str, default='sampled', help='test-set variant (sampled | real)')
     parser.add_argument('--prefix', type=str, default='latest')
     parser.add_argument('--device', type=str, default='cpu')
-    parser.add_argument('--n_samples', type=int, default=1000)
+    parser.add_argument('--n_samples', type=int, default=None, help='posterior draws (default: match the NUTS draw count in the fit file)')
     parser.add_argument('--batch_size', type=int, default=8, help='batched-throughput batch size (1 disables the batched row)')
     parser.add_argument('--k', type=int, default=0, help='extra pseudo-MoE permuted views (0 = off)')
     parser.add_argument('--seed', type=int, default=0)
@@ -803,6 +823,9 @@ def main() -> None:
     outdir = Path(cfg.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     family = cfg.family
+    if cfg.n_samples is None:
+        cfg.n_samples = nutsDrawCount(family, cfg.sizes, cfg.ds_type)
+        logger.info('Matching the NUTS draw count: n_samples=%d', cfg.n_samples)
 
     records: list[dict] = []
     for size in cfg.sizes:
