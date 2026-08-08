@@ -396,7 +396,9 @@ def collectCell(
     )
 
     cache_path = cachePath(data_path, ckpt_dir, cfg.prefix, cfg.n_samples, cfg.seed, cfg.k, device)
-    cache = loadCache(cache_path, data_path, ckpt_dir, cfg.prefix)
+    # a cached timing is only as good as the machine state that produced it, and nothing in the
+    # key records that state — a contended node bakes its numbers in until asked to retime
+    cache = {} if cfg.refresh_cache else loadCache(cache_path, data_path, ckpt_dir, cfg.prefix)
 
     mb_latency = cachedTimings(
         cache,
@@ -663,6 +665,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--k', type=int, default=0, help='extra pseudo-MoE permuted views (0 = off)')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--max_datasets', type=int, default=None, help='cap datasets per size (smoke tests)')
+    parser.add_argument('--refresh_cache', action='store_true', help='retime MB even if cached (use after a contended run)')
     parser.add_argument('--outdir', type=str, default=str(OUT_DIR))
     parser.add_argument('--tag', type=str, default=None, help='override the output stem (default: family + settings)')
     parser.add_argument('--decimals', type=int, default=3)
