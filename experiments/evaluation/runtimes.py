@@ -146,6 +146,37 @@ def resetRng(model: Approximator, seed: int) -> None:
             base.base.rng = np.random.default_rng(seed)  # type: ignore[union-attr]
 
 
+def warmup(
+    model: Approximator,
+    batch: dict[str, torch.Tensor],
+    k: int,
+    device: torch.device,
+    seed: int,
+) -> None:
+    """Untimed one-sample pass absorbing one-time init before any timing begins.
+
+    Mirrors ``posterior_eval._warmupModel`` and ``evaluate.py._warmupMbBatch``: a single draw
+    is enough to pay for lazy allocation, kernel autotuning and the first analytical MAP fit,
+    and going through ``moeEstimate`` when k > 0 warms the MoE path the timed loop will use.
+    The CPU/CUDA RNG state is restored afterwards so the warm-up cannot shift the draws that
+    follow it.
+    """
+    cpu_rng = torch.random.get_rng_state()
+    cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    synchronize(device)
+    try:
+        resetRng(model, seed)
+        if k > 0:
+            moeEstimate(model, batch, 1, k, rng=np.random.default_rng(0))
+        else:
+            model.estimate(batch, n_samples=1)
+        synchronize(device)
+    finally:
+        torch.random.set_rng_state(cpu_rng)
+        if cuda_rng is not None:
+            torch.cuda.set_rng_state_all(cuda_rng)
+
+
 @torch.no_grad()
 def timeLatency(
     model: Approximator,
@@ -163,11 +194,9 @@ def timeLatency(
     """
     durations = np.zeros(len(idxs))
 
-    # untimed pass so one-time init (lazy alloc, autotune) is not charged to the first dataset
-    warmup = toDevice(collateGrouped([col[idxs[0]]]), device)
-    resetRng(model, seed)
-    moeEstimate(model, warmup, n_samples, k, rng=np.random.default_rng(0))
-    del warmup
+    warm_batch = toDevice(collateGrouped([col[idxs[0]]]), device)
+    warmup(model, warm_batch, k, device, seed)
+    del warm_batch
 
     for i, idx in enumerate(tqdm(idxs, desc='  MB (latency)', leave=False)):
         batch = toDevice(collateGrouped([col[idx]]), device)
@@ -212,11 +241,11 @@ def timeThroughput(
     else:
         chunks = [order]
 
-    # untimed warm-up on the first chunk, as in the latency path
-    warmup = toDevice(collateGrouped([col[i] for i in chunks[0]]), device)
-    resetRng(model, seed)
-    model.estimate(warmup, n_samples=1)
-    del warmup
+    # k is not threaded through here: batched throughput is the deployment number and the MoE
+    # path runs one dataset at a time, so this path always warms the plain batched estimate
+    warm_batch = toDevice(collateGrouped([col[i] for i in chunks[0]]), device)
+    warmup(model, warm_batch, 0, device, seed)
+    del warm_batch
 
     durations = np.zeros(len(order))
     position = {idx: i for i, idx in enumerate(order)}
