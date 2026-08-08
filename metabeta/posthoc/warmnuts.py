@@ -3,40 +3,58 @@ posthoc/warmnuts.py — Warm-started NUTS correction for flow posteriors.
 
 Design
 ------
-The flow q(θ) is used to generate n_chains diverse starting points for PyMC's
-NUTS sampler.  Unlike importance sampling, NUTS targets the exact posterior
-p(θ|y) without weights, and the flow start points (back-transformed to PyMC's
-non-centred parameterisation) reduce the warm-up phase significantly.
+A proposal — preferably the MB-IMH posterior (flow draws refined by Independence
+MH, posthoc/metropolis.py), otherwise raw flow draws — provides three warm-start
+ingredients for PyMC's NUTS sampler:
+
+1. Chain start points (initvals), back-transformed to the non-centred
+   parameterisation.
+2. The initial diagonal mass matrix: per-coordinate mean/variance of the
+   proposal draws mapped to PyMC's unconstrained space — the same estimator
+   PyMC's 'adapt_diag' init builds from early tuning, but available at step 0.
+   Adaptation stays on, so an off proposal variance is corrected during tune.
+3. For correlated rfx, the LKJCholeskyCov start value itself (see below).
+
+Unlike importance sampling, NUTS targets the exact posterior p(θ|y) without
+weights, and the warm start cuts the tuning budget needed to reach the typical
+set with an adapted metric.
 
 Warm-start mechanics
 --------------------
-A single flow proposal is drawn for the full batch.  For each dataset at
-batch index b, n_chains diverse samples are selected at quantiles of the
-global log density.  Each sample is back-transformed:
+For each dataset at batch index b, n_chains diverse samples are selected — at
+interior quantiles of the global log density when the proposal carries one, and
+evenly spaced along the sample dimension otherwise (IMH output stores no log
+density and repeats states on rejection; even spacing lands in distinct chain
+blocks, and exact-duplicate picks are nudged forward).  Each sample is
+back-transformed:
 
   Independent rfx (eta_rfx == 0 or q == 1):
       z_j  = rfx_j / σ_rfx_j    →  '{1|i,x1|i,...}_offset'
       σ_rfx_j                    →  '{1|i,x1|i,...}_sigma'
 
   Correlated rfx (eta_rfx > 0, q >= 2):
-      Σ_rfx = D @ R @ D  (D = diag(σ_rfx), R = corr_rfx from flow)
+      Σ_rfx = D @ R @ D  (D = diag(σ_rfx), R = corr_rfx from the proposal)
       chol  = lower_cholesky(Σ_rfx)
-      z     = rfx @ chol⁻ᵀ     →  '_rfx_offset'
-      (sigma/corr parts of LKJCholeskyCov left at PyMC defaults)
+      z     = rfx @ chol⁻ᵀ                    →  '_rfx_offset'
+      packed lower triangle of chol            →  '_lkj_rfx'
+      (previously the LKJCholeskyCov was left at PyMC defaults, so the offsets
+      z — computed from the proposal's chol — were inconsistent with the chol
+      the chain actually started at)
 
 The resulting dict list is passed as `initvals` to pm.sample.
+
+NB: pm.sample(nuts_kwargs={'max_treedepth': ...}) is *silently ignored* by
+PyMC ≥ 5 (**kwargs there are step_kwargs keyed by stepper name, and unknown
+keys inside the NUTS constructor vanish into its **kwargs chain) — the runs
+before 2026-08 therefore all used the default tree depth 10.  max_treedepth is
+now passed to the NUTS constructor directly.
 
 Output
 ------
 WarmNuts.__call__ returns a Proposal with b=1 and n_chains * draws samples.
-runWarmNuts stacks per-dataset proposals along the batch dimension.
-
-Empirical comparison
---------------------
-Compare WarmNuts proposals to flow-only and IMH proposals via
-Evaluator.summary() / plotComparison.  Key diagnostics:
-  - acceptance rate / R-hat (from trace, not yet propagated to Proposal)
-  - NRMSE, coverage, SBC ranks via the standard evaluation pipeline
+runWarmNuts refines the flow proposal with IMH first (mode='marginal' for
+Normal, 'laplace' for GLMMs), then stacks per-dataset proposals along the
+batch dimension.
 """
 
 import argparse
@@ -47,10 +65,8 @@ import torch
 from torch import Tensor
 
 from metabeta.models.approximator import Approximator
-from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.pymc import buildPymc, extractAll
-from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.results import Proposal
 
 
@@ -64,6 +80,8 @@ class WarmNuts:
         seed: int = 42,
         target_accept: float = 0.9,
         max_treedepth: int = 12,
+        warm_mass: bool = True,
+        mass_draws: int = 64,
     ) -> None:
         """
         Parameters
@@ -85,6 +103,12 @@ class WarmNuts:
             NUTS maximum tree depth (default 12; PyMC default 10).  Higher
             values allow the sampler to take longer trajectories through
             difficult posteriors at the cost of more gradient evaluations.
+        warm_mass : bool
+            Initialise the diagonal mass matrix from the proposal draws'
+            unconstrained-space variance instead of the unit metric
+            (default True).  Adaptation during tune stays on either way.
+        mass_draws : int
+            Number of proposal draws used to estimate the mass matrix.
         """
         self.ds = ds
         self.n_chains = n_chains
@@ -93,6 +117,8 @@ class WarmNuts:
         self.seed = seed
         self.target_accept = target_accept
         self.max_treedepth = max_treedepth
+        self.warm_mass = warm_mass
+        self.mass_draws = mass_draws
 
         self.d = int(ds['d'])
         self.q = int(ds['q'])
@@ -102,86 +128,167 @@ class WarmNuts:
 
         # Build PyMC model once; reused across __call__ invocations.
         self.model = buildPymc(ds)
+        # Transformed (unconstrained) defaults: template for mass-matrix points —
+        # fixes coordinate order, shapes, and dtypes.
+        self._ip = self.model.initial_point(random_seed=seed)
+        self._value_names = {
+            rv.name: self.model.rvs_to_values[rv].name for rv in self.model.free_RVs
+        }
 
     # ------------------------------------------------------------------
     # Init-value construction
     # ------------------------------------------------------------------
 
-    def _initVals(self, proposal: Proposal, b_idx: int) -> list[dict]:
-        """Select n_chains diverse start points from proposal and back-transform.
+    def _prep(self, proposal: Proposal, b_idx: int) -> tuple[Tensor, Tensor, Tensor | None]:
+        """Slice per-dataset tensors once.
 
-        Diversity: samples at evenly-spaced quantiles of log_prob_g.
-        Falls back to uniform spacing if log_prob_g is unavailable.
+        proposal.corr_rfx is recomputed from the constrained corr dims on every
+        property access when no cache is attached (e.g. IMH output) — hoist it
+        here instead of touching the property per draw.
         """
-        C = self.n_chains
-        d, q, m = self.d, self.q, self.m
-
+        # full flow layout of this proposal, used by _ivFromSample to locate
+        # sigma_rfx/sigma_eps in the global sample vector
+        self._proposal_d = proposal.d
+        self._proposal_q = proposal.q
         sg = proposal.samples_g[b_idx].cpu()   # (n_s, D_g)
         sl = proposal.samples_l[b_idx].cpu()   # (m_batch, n_s, q_batch)
+        corr_all = proposal.corr_rfx           # (b, n_s, q, q) or None
+        corr_b = corr_all[b_idx].cpu() if corr_all is not None else None
+        return sg, sl, corr_b
+
+    def _selectIndices(self, proposal: Proposal, b_idx: int, sg: Tensor) -> list[int]:
+        """Select n_chains diverse start indices from the proposal.
+
+        Quantiles of the global log density when available; evenly spaced
+        otherwise.  IMH output stores an all-zero log_prob and duplicates
+        states on rejection, so a constant/non-finite log density triggers the
+        even-spacing fallback and exact-duplicate picks are nudged forward.
+        """
+        C = self.n_chains
         n_s = sg.shape[0]
 
-        # Diverse indices: quantiles of log density
-        try:
-            lp = proposal.log_prob_g[b_idx].cpu()   # (n_s,)
+        lp = None
+        if 'log_prob' in proposal.data['global']:
+            lp = proposal.log_prob_g[b_idx].cpu()
+            if not torch.isfinite(lp).all() or (lp.max() - lp.min()) < 1e-9:
+                lp = None
+        if lp is not None:
             sorted_idx = torch.argsort(lp)
             qs = torch.linspace(0, 1, C + 2)[1:-1]  # C interior quantiles
             pick = (qs * n_s).long().clamp(0, n_s - 1)
             indices = sorted_idx[pick].tolist()
-        except (AttributeError, KeyError):
+        else:
             indices = torch.linspace(0, n_s - 1, C).long().tolist()
 
-        # The flow always outputs d_ffx fixed effects and d_rfx sigma values.
-        # Use proposal.d / proposal.q (full layout) to locate sigma_rfx and
-        # sigma_eps correctly; only extract the first d/q values for this dataset.
-        p_d = proposal.d   # full d_ffx in the global tensor
-        p_q = proposal.q   # full d_rfx in the global tensor
-        ffx_s = sg[:, :d]                    # (n_s, d) — first d of d_ffx
-        sigma_rfx_s = sg[:, p_d : p_d + q]  # (n_s, q) — first q of d_rfx, at correct offset
+        out: list[int] = []
+        for idx in indices:
+            j = int(idx)
+            while any(torch.equal(sg[j], sg[k]) for k in out) and j + 1 < n_s:
+                j += 1
+            out.append(j)
+        return out
 
-        # Cache corr_rfx for efficiency (computed lazily by Proposal)
-        corr_rfx_all: Tensor | None = proposal.corr_rfx  # (b, n_s, q, q) or None
+    def _ivFromSample(self, sg: Tensor, sl: Tensor, corr_b: Tensor | None, s_idx: int) -> dict:
+        """Back-transform one proposal draw to a PyMC initval dict (constrained space)."""
+        d, q, m = self.d, self.q, self.m
+        # The flow always outputs d_ffx fixed effects and d_rfx sigma values; the
+        # full layout (p_d, p_q) locates sigma_rfx/sigma_eps, this dataset only
+        # uses the first d/q entries.
+        p_d = self._proposal_d
+        p_q = self._proposal_q
 
-        init_list = []
-        for s_idx in indices:
-            iv: dict = {}
+        iv: dict = {}
+        ffx_i = sg[s_idx, :d].numpy()
+        for j in range(d):
+            iv['Intercept' if j == 0 else f'x{j}'] = ffx_i[j]
 
-            # Fixed effects
-            ffx_i = ffx_s[s_idx].numpy()
-            for j in range(d):
-                iv['Intercept' if j == 0 else f'x{j}'] = ffx_i[j]
+        # sigma_eps (Normal only; PyMC applies the log-transform internally)
+        if self.has_sigma_eps:
+            s_eps = float(sg[s_idx, p_d + p_q].item())
+            iv['sigma'] = max(s_eps, 1e-6)
 
-            # sigma_eps (Normal only; PyMC applies log-transform internally)
-            if self.has_sigma_eps:
-                s_eps = float(sg[s_idx, p_d + p_q].item())  # at correct offset in flow tensor
-                iv['sigma'] = max(s_eps, 1e-6)
+        sr_i = sg[s_idx, p_d : p_d + q].numpy().clip(1e-6)   # (q,)
+        rfx_i = sl[:m, s_idx, :q].numpy()                    # (m, q)
 
-            sr_i = sigma_rfx_s[s_idx].numpy().clip(1e-6)      # (q,)
-            rfx_i = sl[:m, s_idx, :q].numpy()               # (m, q) — trim groups and rfx dims
-
-            if self.correlated:
-                # Build Cholesky of Σ_rfx = D @ R @ D
-                if corr_rfx_all is not None:
-                    R = corr_rfx_all[b_idx, s_idx, :q, :q].cpu().numpy()  # (q, q) — actual q
-                else:
-                    R = np.eye(q, dtype=np.float32)
-                D_mat = np.diag(sr_i)
-                Sigma = D_mat @ R @ D_mat + 1e-6 * np.eye(q)
-                chol = np.linalg.cholesky(Sigma)   # lower triangular
-                # rfx = z @ chol.T  →  z = solve(chol, rfx.T).T
-                z = np.linalg.solve(chol, rfx_i.T).T   # (m, q)
-                iv['_rfx_offset'] = z
-                # sigma / corr parts of LKJCholeskyCov left at PyMC defaults
-
+        if self.correlated:
+            # Build Cholesky of Σ_rfx = D @ R @ D
+            if corr_b is not None:
+                R = corr_b[s_idx, :q, :q].numpy()
             else:
-                for j in range(q):
-                    s_name = '1|i_sigma' if j == 0 else f'x{j}|i_sigma'
-                    o_name = '1|i_offset' if j == 0 else f'x{j}|i_offset'
-                    iv[s_name] = float(sr_i[j])
-                    iv[o_name] = rfx_i[:, j] / (sr_i[j] + 1e-12)   # (m,)
+                R = np.eye(q, dtype=np.float32)
+            D_mat = np.diag(sr_i)
+            Sigma = D_mat @ R @ D_mat + 1e-6 * np.eye(q)
+            chol = np.linalg.cholesky(Sigma)   # lower triangular
+            # rfx = z @ chol.T  →  z = solve(chol, rfx.T).T
+            iv['_rfx_offset'] = np.linalg.solve(chol, rfx_i.T).T   # (m, q)
+            # warm-start the LKJCholeskyCov at the same chol the offsets assume
+            iv['_lkj_rfx'] = chol[np.tril_indices(q)]              # (q(q+1)/2,)
+        else:
+            for j in range(q):
+                s_name = '1|i_sigma' if j == 0 else f'x{j}|i_sigma'
+                o_name = '1|i_offset' if j == 0 else f'x{j}|i_offset'
+                iv[s_name] = float(sr_i[j])
+                iv[o_name] = rfx_i[:, j] / (sr_i[j] + 1e-12)   # (m,)
 
-            init_list.append(iv)
+        return iv
 
-        return init_list
+    def _initVals(self, proposal: Proposal, b_idx: int) -> list[dict]:
+        """Select n_chains diverse start points from proposal and back-transform."""
+        sg, sl, corr_b = self._prep(proposal, b_idx)
+        indices = self._selectIndices(proposal, b_idx, sg)
+        return [self._ivFromSample(sg, sl, corr_b, i) for i in indices]
+
+    # ------------------------------------------------------------------
+    # Mass-matrix warm start
+    # ------------------------------------------------------------------
+
+    def _transformedPoint(self, iv: dict) -> dict[str, np.ndarray]:
+        """Map a constrained initval dict to PyMC's transformed (unconstrained) space.
+
+        buildPymc only produces identity-, log-, and cholesky-packed-transformed
+        free RVs, so the value transforms are applied numerically by value-var
+        suffix instead of compiling per-draw pytensor graphs.  Entries missing
+        from iv keep the model's transformed default.
+        """
+        point = dict(self._ip)
+        for rv_name, value in iv.items():
+            vname = self._value_names.get(rv_name)
+            if vname is None:
+                continue
+            v = np.asarray(value, dtype=np.float64)
+            if vname.endswith('_log__'):
+                v = np.log(np.clip(v, 1e-12, None))
+            elif vname.endswith('_cholesky-cov-packed__'):
+                v = v.copy()
+                diag_idx = [i * (i + 3) // 2 for i in range(self.q)]
+                v[diag_idx] = np.log(np.clip(v[diag_idx], 1e-12, None))
+            template = point[vname]
+            point[vname] = v.reshape(template.shape).astype(template.dtype)
+        return point
+
+    def _warmPotential(self, sg: Tensor, sl: Tensor, corr_b: Tensor | None):
+        """QuadPotentialDiagAdapt initialised at the proposal draws' mean/variance.
+
+        Mirrors what PyMC's 'adapt_diag' init estimates from early tuning
+        (initial_weight=10, adaptation on), but is available at step 0.
+        Coordinates the proposal leaves constant fall back to the unit metric.
+        """
+        from pymc.blocking import DictToArrayBijection
+        from pymc.step_methods.hmc.quadpotential import QuadPotentialDiagAdapt
+
+        n_s = sg.shape[0]
+        picks = np.unique(np.linspace(0, n_s - 1, min(self.mass_draws, n_s)).astype(int))
+        flats = []
+        for s_idx in picks:
+            point = self._transformedPoint(self._ivFromSample(sg, sl, corr_b, int(s_idx)))
+            flats.append(DictToArrayBijection.map(point).data)
+        arr = np.stack(flats)   # (K, n_flat)
+
+        mean = arr.mean(0)
+        var = arr.var(0)
+        mean[~np.isfinite(mean)] = 0.0
+        var[~np.isfinite(var) | (var < 1e-10)] = 1.0
+        return QuadPotentialDiagAdapt(arr.shape[1], mean, var, 10)
 
     # ------------------------------------------------------------------
     # Trace → Proposal conversion
@@ -243,30 +350,55 @@ class WarmNuts:
         Parameters
         ----------
         proposal : Proposal
-            Flow proposal used to initialise chains (samples at b_idx).
+            Proposal used to seed chains and mass matrix (samples at b_idx) —
+            MB-IMH output preferred, raw flow draws also work.  Must be in the
+            *standardized* space that buildPymc models.
         b_idx : int
             Dataset index within the batch.
 
         Returns
         -------
         proposal_out : Proposal with n_chains * draws samples and b=1.
-        diag : dict with keys 'n_divergences' (int) and 'max_rhat' (float).
+        diag : dict with keys 'n_divergences', 'max_rhat', 'min_ess',
+            'min_ess_t', and 'reff'.
         """
-        initvals = self._initVals(proposal, b_idx)
+        sg, sl, corr_b = self._prep(proposal, b_idx)
+        indices = self._selectIndices(proposal, b_idx, sg)
+        initvals = [self._ivFromSample(sg, sl, corr_b, i) for i in indices]
+
         import pymc as pm
 
         with self.model:
-            trace = pm.sample(
-                tune=self.tune,
-                draws=self.draws,
-                chains=self.n_chains,
-                initvals=initvals,
-                target_accept=self.target_accept,
-                nuts_kwargs={'max_treedepth': self.max_treedepth},
-                random_seed=self.seed,
-                return_inferencedata=True,
-                progressbar=False,
-            )
+            if self.warm_mass:
+                # explicit step: pm.sample would otherwise rebuild the potential
+                # from the unit metric via init_nuts
+                step = pm.NUTS(
+                    potential=self._warmPotential(sg, sl, corr_b),
+                    target_accept=self.target_accept,
+                    max_treedepth=self.max_treedepth,
+                )
+                trace = pm.sample(
+                    tune=self.tune,
+                    draws=self.draws,
+                    chains=self.n_chains,
+                    step=step,
+                    initvals=initvals,
+                    random_seed=self.seed,
+                    return_inferencedata=True,
+                    progressbar=False,
+                )
+            else:
+                trace = pm.sample(
+                    tune=self.tune,
+                    draws=self.draws,
+                    chains=self.n_chains,
+                    initvals=initvals,
+                    target_accept=self.target_accept,
+                    max_treedepth=self.max_treedepth,
+                    random_seed=self.seed,
+                    return_inferencedata=True,
+                    progressbar=False,
+                )
         n_divs = int(trace.sample_stats['diverging'].values.sum())
         n_draws_total = self.n_chains * self.draws
         try:
@@ -404,34 +536,55 @@ def runWarmNuts(
     ds_list: list[dict[str, np.ndarray]],
     cfg: argparse.Namespace,
 ) -> Proposal:
-    """Draw a flow proposal, then correct each dataset with warm-started NUTS.
+    """Draw a flow proposal, refine it with IMH, then warm-start NUTS per dataset.
 
-    Operates dataset-by-dataset (NUTS is not batched).  The flow is run once
-    on the full batch to provide start points for all chains.
+    Operates dataset-by-dataset (NUTS is not batched).  The flow runs once on
+    the full batch; the IMH pass (MB-IMH: mode='marginal' for Normal,
+    'laplace' for GLMMs) then supplies the start points and mass matrix.
 
     cfg fields
     ----------
-    n_samples      : int   — flow samples for warm-start (>= wn_chains; default 100)
+    n_chains       : int   — IMH chains (default 4)
+    n_steps        : int   — IMH steps per chain (default 250)
+    imh_burnin     : int   — IMH burnin steps (default 25)
     wn_chains      : int   — NUTS chains per dataset (default 4)
     wn_tune        : int   — NUTS tuning steps (default 500)
     wn_draws       : int   — NUTS draws per chain (default 500)
     wn_target_accept : float — target acceptance rate (default 0.9)
     wn_max_treedepth : int   — NUTS max tree depth (default 12)
+    wn_warm_mass   : bool  — mass-matrix warm start (default True)
+    likelihood_family : int
     rescale        : bool
     seed           : int
     """
+    from metabeta.posthoc.metropolis import MetropolisSampler
+
+    lf = getattr(cfg, 'likelihood_family', 0)
+    imh_chains = getattr(cfg, 'n_chains', 4)
+    imh_steps = getattr(cfg, 'n_steps', 250)
+    imh_burnin = getattr(cfg, 'imh_burnin', 25)
     n_chains = getattr(cfg, 'wn_chains', 4)
     tune = getattr(cfg, 'wn_tune', 500)
     draws = getattr(cfg, 'wn_draws', 500)
     seed = getattr(cfg, 'seed', 42)
     target_accept = getattr(cfg, 'wn_target_accept', 0.9)
     max_treedepth = getattr(cfg, 'wn_max_treedepth', 12)
-    n_samples = getattr(cfg, 'n_samples', max(n_chains, 100))
+    warm_mass = getattr(cfg, 'wn_warm_mass', True)
 
-    # The flow proposal must stay in standardized space — buildPymc (via WarmNuts)
-    # models standardized ds['y']/ds['X'] (from col.raw / Fitter._getSingle).
-    # Rescale the stacked output afterward if cfg.rescale is set.
-    proposal = model.estimate(data, n_samples=n_samples)
+    # Everything up to the stacked output stays in standardized space —
+    # buildPymc (via WarmNuts) models standardized ds['y']/ds['X'] (from
+    # col.raw / Fitter._getSingle), and the IMH weights must be computed on the
+    # same data the chain start points describe.  Rescale afterward if set.
+    proposal = model.estimate(data, n_samples=imh_chains * imh_steps)
+    sampler = MetropolisSampler(
+        data,
+        n_chains=imh_chains,
+        n_steps=imh_steps,
+        burnin=imh_burnin,
+        mode='marginal' if lf == 0 else 'laplace',
+        likelihood_family=lf,
+    )
+    refined, _ = sampler(proposal)
 
     proposals = []
     for b, ds in enumerate(ds_list):
@@ -443,7 +596,8 @@ def runWarmNuts(
             seed=seed,
             target_accept=target_accept,
             max_treedepth=max_treedepth,
-        )(proposal, b_idx=b)
+            warm_mass=warm_mass,
+        )(refined, b_idx=b)
         proposals.append(wn_proposal)
     merged = _stackProposals(proposals)
     if cfg.rescale:
