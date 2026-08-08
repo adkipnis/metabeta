@@ -34,15 +34,21 @@ from metabeta.utils.warmfit import (
     plotWarmPanel,
 )
 
-_WARM_CONDS = frozenset(COND_STYLE) - {'mb', 'mb_gpu', 'mb_cpu', 'advi', 'cold_std'}
+_NON_WARM_CONDS = {'mb', 'mb_batch', 'mb_gpu', 'mb_cpu', 'advi', 'laplace', 'cold_std'}
+_WARM_CONDS = frozenset(COND_STYLE) - _NON_WARM_CONDS
 _DEFAULT_CONDS = ['mb', 'warm_2000', 'cold_std', 'advi']
 _METHOD_TO_COND = {
+    'MB': 'mb',
+    'MB_batched': 'mb_batch',
     'metabeta': 'mb',
     'metabeta_gpu': 'mb_gpu',
     'metabeta_cpu': 'mb_cpu',
     'NUTS': 'cold_std',
     'ADVI': 'advi',
+    'LAPLACE': 'laplace',
 }
+# panel order; only conds actually present in the records are drawn
+_PLOT_COND_ORDER = ['mb', 'mb_batch', 'mb_gpu', 'mb_cpu', 'laplace', 'advi', 'cold_std']
 
 
 def _collectRuntimeRecords(data_dir: Path, fits_tag: str, conds: list[str]) -> list[dict]:
@@ -168,9 +174,14 @@ def plotRuntimeRecords(
     log_y: bool = True,
     show: bool = False,
     title: str = 'runtimes',
-    config: str | None = 'large-n-mixed',
+    config: str | None = None,
 ) -> Path | None:
-    """Two-panel runtime figure (left: # parameters, right: # observations)."""
+    """Two-panel runtime figure (left: # parameters, right: # observations).
+
+    ``config`` optionally restricts the records to one training config.  It defaults to None
+    because regimes are now disjoint in d/q: every model is evaluated on its own regime only,
+    so the panels need all configs together to span the parameter axis.
+    """
     if config is not None:
         records = [r for r in records if r.get('config') == config]
 
@@ -193,7 +204,8 @@ def plotRuntimeRecords(
     if not plot_records:
         raise ValueError('No plottable runtime records collected.')
 
-    conds = ['mb_gpu', 'mb_cpu', 'cold_std', 'advi']
+    present = {r['cond'] for r in plot_records}
+    conds = [c for c in _PLOT_COND_ORDER if c in present]
     shared_kw = dict(
         log_y=log_y,
         legend_loc=(0.02, 0.28),

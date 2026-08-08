@@ -19,7 +19,9 @@ from metabeta.utils.plot import PALETTE, niceify
 
 COND_STYLE: dict[str, dict] = {
     'mb': {'color': PALETTE[0], 'label': 'MB'},
-    'mb_batch': {'color': PALETTE[10], 'label': 'MB (batched)'},
+    # distinct hue rather than a lighter blue: batched sits within a factor of two of the
+    # latency line, so a paired shade (as mb_cpu uses) is not separable on a log axis
+    'mb_batch': {'color': PALETTE[9], 'label': 'MB (batched)'},
     'mb_gpu': {'color': PALETTE[0], 'label': 'MB (GPU)'},
     'mb_cpu': {'color': PALETTE[10], 'label': 'MB (CPU)'},
     'cold_std': {'color': PALETTE[3], 'label': 'NUTS'},
