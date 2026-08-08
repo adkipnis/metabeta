@@ -269,7 +269,9 @@ def runCold(
             draws=cond.draws,
             chains=cond.chains,
             target_accept=cond.target_accept,
-            nuts_kwargs={'max_treedepth': cond.max_treedepth},
+            # NB: the old nuts_kwargs={...} spelling is silently ignored by
+            # PyMC >= 5 — a direct kwarg is forwarded to the NUTS constructor
+            max_treedepth=cond.max_treedepth,
             random_seed=seed,
             return_inferencedata=True,
             progressbar=False,
