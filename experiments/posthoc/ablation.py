@@ -42,18 +42,23 @@ svgd         : SVGD with per-dim bandwidth + cosine LR decay — opt in with --i
                from — see metabeta/outputs/results/ablation/*.md for reference numbers)
 coldNuts     : NUTS results extracted from test.fit.npz (pre-computed, no rerun) — only
                available with --split=test
-warmNuts     : warm-started NUTS (flow samples initialise PyMC chains) — opt in with
-               --include-warmnuts, off by default (slow)
+warmNuts     : warm-started NUTS seeded by the MB-IMH posterior (imhMarginal for Normal,
+               imhLaplace for GLMMs): the IMH draws provide chain start points and the
+               initial mass matrix (see posthoc/warmnuts.py). Runs live per dataset —
+               no precomputed fits needed — and caches each fit in
+               {data_dir}/fits_warm_{run}/warm_imh_{split}__{idx}.npz, so reruns are
+               free. Opt in with --include-warmnuts (slow on the first pass);
+               --wn-refit ignores the cache.
 
 Note: 'laplace'/'laplaceIS' and 'cd' (coordinate descent) conditions were removed
 along with metabeta/posthoc/laplace.py and metabeta/posthoc/coordinate.py, which
 were deprecated in 3c5b7af2.
 
 By default this evaluates every (family, size) combination in BEST_SEEDS on the
-*entire* validation split (valid.npz), capped by --n-datasets if given. IMH is
-self-contained (settings below); the opt-in svgd/warmNuts conditions import their
-run functions from benchmarks/ lazily, since that directory is gitignored and
-absent on cluster clones.
+*entire* validation split (valid.npz), capped by --n-datasets if given. IMH and
+warmNuts are self-contained (settings below); only the opt-in svgd condition
+imports its run function from benchmarks/ lazily, since that directory is
+gitignored and absent on cluster clones.
 
 Data loading uses Collection + collateGrouped so that per-dataset unpadded
 dicts are available for NUTS-based methods.
@@ -80,7 +85,7 @@ import torch
 
 from metabeta.utils.experiments import DATA_DIR, REPO_ROOT
 
-# Make the opt-in benchmark wrappers (svgd/warmNuts) importable without installing
+# Make the opt-in benchmark wrapper (svgd) importable without installing
 # benchmarks as a package; imported lazily in main() since benchmarks/ is gitignored
 # and absent on cluster clones.
 sys.path.insert(0, str(REPO_ROOT / 'benchmarks'))
@@ -95,7 +100,7 @@ from metabeta.utils.evaluation import EvaluationSummary
 from metabeta.posthoc.importance import ImportanceSampler, ResampleMoveSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.metropolis import MetropolisSampler
-from metabeta.posthoc.warmnuts import _stackProposals
+from metabeta.posthoc.warmnuts import WarmNuts, _stackProposals
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice
 from metabeta.utils.results import Proposal, concatProposalsBatch
@@ -103,6 +108,7 @@ from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.padding import unpad
 from metabeta.utils.posterior_cache import loadProposalCache
 from metabeta.utils.preprocessing import rescaleData
+from metabeta.utils.warmfit import cachePath, loadFit, saveFit
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -127,7 +133,8 @@ def setup() -> argparse.Namespace:
     p.add_argument('--only', nargs='+', default=None, choices=['raw', 'is', 'isFull', 'isMarginal', 'isRM', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'svgd', 'coldNuts', 'warmNuts'], help='run only these conditions; results go to {family}_{size}_{only}.md so existing full-run mds are not overwritten')
     p.add_argument('--rm-sweeps', type=int, default=15, help='rejuvenation sweeps for the isRM condition; ~(1-acceptance)^K particles stay unmoved')
     p.add_argument('--include-svgd', action='store_true', help='also run the (slow) SVGD condition')
-    p.add_argument('--include-warmnuts', action='store_true', help='also run the (slow) warm-started NUTS condition')
+    p.add_argument('--include-warmnuts', action='store_true', help='also run the warm-started NUTS condition (slow on the first pass; per-dataset fits are cached)')
+    p.add_argument('--wn-refit', action='store_true', help='ignore cached warm-NUTS fits and re-sample')
     return p.parse_args()
 # fmt: on
 
@@ -420,9 +427,9 @@ IMH_BURNIN = 25
 IMH_N_SAMPLES = IMH_N_CHAINS * IMH_N_STEPS
 
 
-def runIMH(mode, proposals, batches, full_batch, lf):
+def refineIMH(mode, proposals, batches, lf):
+    """Run IMH on each sub-batch; return (merged batch Proposal, accept rates)."""
     imh_proposals, accept_rates = [], []
-    t0 = time.perf_counter()
     for p, batch in zip(proposals, batches):
         sampler = MetropolisSampler(
             batch,
@@ -435,16 +442,134 @@ def runIMH(mode, proposals, batches, full_batch, lf):
         p_out, diag = sampler(p)
         imh_proposals.append(p_out)
         accept_rates.append(diag['accept_rate'])
+    return concatProposalsBatch(imh_proposals), torch.cat(accept_rates, dim=0)
+
+
+def runIMH(mode, proposals, batches, full_batch, lf):
+    t0 = time.perf_counter()
+    proposal, accept = refineIMH(mode, proposals, batches, lf)
     t1 = time.perf_counter()
 
-    accept = torch.cat(accept_rates, dim=0)
     print(
         f'  Acceptance  mean={accept.mean():.3f}  '
         f'min={accept.min():.3f}  max={accept.max():.3f}  '
         f'time={t1 - t0:.1f}s ({(t1 - t0) / full_batch["y"].shape[0]:.1f}s/dataset)'
     )
-    proposal = concatProposalsBatch(imh_proposals)
     print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
+    return proposal
+
+
+# Warm-started NUTS: 4 × 250 = 1000 posterior draws to match the other conditions'
+# sample count; tune=500 suffices because the MB-IMH seed provides start points in
+# the typical set and a pre-adapted mass matrix (see posthoc/warmnuts.py).
+WN_CHAINS = 4
+WN_TUNE = 500
+WN_DRAWS = 250
+
+
+def _wnSamplesToProposal(samples: dict, lf: int) -> Proposal:
+    """Rebuild a b=1 Proposal (standardized space) from cached warm-NUTS arrays."""
+    has_se = hasSigmaEps(lf)
+    ffx = torch.as_tensor(samples['ffx'])                       # (n_s, d)
+    sigma_rfx = torch.as_tensor(samples['sigma_rfx'])           # (n_s, q)
+    parts = [ffx, sigma_rfx]
+    if has_se:
+        parts.append(torch.as_tensor(samples['sigma_eps']).unsqueeze(-1))   # (n_s, 1)
+    samples_g = torch.cat(parts, dim=-1).unsqueeze(0)           # (1, n_s, D)
+
+    rfx = torch.as_tensor(samples['rfx'])                       # (n_s, m, q)
+    samples_l = rfx.permute(1, 0, 2).unsqueeze(0)               # (1, m, n_s, q)
+    n_s, m = ffx.shape[0], rfx.shape[1]
+
+    proposed = {
+        'global': {'samples': samples_g, 'log_prob': torch.zeros(1, n_s)},
+        'local': {'samples': samples_l, 'log_prob': torch.zeros(1, m, n_s)},
+    }
+    corr = None
+    if 'corr_rfx' in samples:
+        corr = torch.as_tensor(samples['corr_rfx']).unsqueeze(0)   # (1, n_s, q, q)
+    return Proposal(proposed, has_sigma_eps=has_se, corr_rfx=corr)
+
+
+def runWarmNutsLive(refined, tensor_batch, full_batch, ds_list, lf, fits_dir, label, refit):
+    """Warm-started NUTS per dataset, seeded by the MB-IMH proposal ``refined``.
+
+    ``refined`` is in rescaled (evaluation) space; PyMC models the standardized
+    ds dicts, so the seed proposal is mapped back by dividing out sd_y. Each
+    dataset's fit is cached as {fits_dir}/{label}__{idx}.npz (standardized
+    space, so the cache is independent of the evaluation rescaling).
+    """
+    n_ds = len(ds_list)
+    n_expected = WN_CHAINS * WN_DRAWS
+
+    # slice_b builds a fresh data dict and rescale reassigns into it, so the
+    # shared refined proposal is not mutated
+    std = refined.slice_b(0, n_ds)
+    std.rescale(1.0 / tensor_batch['sd_y'][:n_ds])
+
+    per_ds, diags = [], []
+    n_cached = 0
+    t0 = time.perf_counter()
+    for i, ds in enumerate(ds_list):
+        cache = cachePath(fits_dir, label, i)
+        samples = diag = None
+        if cache.exists() and not refit:
+            samples, diag = loadFit(cache)
+            if samples['ffx'].shape[0] != n_expected:
+                samples = diag = None   # stale cache from different WN settings
+            else:
+                n_cached += 1
+        if samples is None:
+            t_ds = time.perf_counter()
+            wn = WarmNuts(ds, n_chains=WN_CHAINS, tune=WN_TUNE, draws=WN_DRAWS)
+            p, wn_diag = wn(std, b_idx=i)
+            m = int(ds['m'])
+            samples = {
+                'ffx': p.ffx[0].numpy(),  # (n_s, d)
+                'sigma_rfx': p.sigma_rfx[0].numpy(),  # (n_s, q)
+                'rfx': p.samples_l[0, :m].permute(1, 0, 2).numpy(),  # (n_s, m, q)
+                'corr_rfx': p.corr_rfx[0].numpy(),  # (n_s, q, q)
+            }
+            if p.has_sigma_eps:
+                samples['sigma_eps'] = p.sigma_eps[0].numpy()           # (n_s,)
+            diag = {
+                'n_div': wn_diag['n_divergences'],
+                'max_rhat': wn_diag['max_rhat'],
+                'min_ess': wn_diag['min_ess'],
+                'min_ess_t': wn_diag['min_ess_t'],
+                'reff': wn_diag['reff'],
+                'wall_s': time.perf_counter() - t_ds,
+            }
+            saveFit(cache, samples, diag)
+            print(
+                f'\r  ds={i + 1}/{n_ds}  div={diag["n_div"]:4.0f}  '
+                f'rhat={diag["max_rhat"]:.3f}  wall={diag["wall_s"]:.1f}s',
+                end='',
+                flush=True,
+            )
+        per_ds.append(_wnSamplesToProposal(samples, lf))
+        diags.append(diag)
+    if n_cached < n_ds:
+        print()
+    t1 = time.perf_counter()
+
+    total_divs = sum(int(dg['n_div']) for dg in diags)
+    wall = np.array([dg['wall_s'] for dg in diags], dtype=np.float64)
+    rhat = np.array([dg['max_rhat'] for dg in diags], dtype=np.float64)
+    reff = float(np.mean([dg.get('reff', 1.0) for dg in diags]))
+    print(
+        f'  divergences={total_divs}  reff={reff:.3f}  '
+        f'max_rhat median={np.nanmedian(rhat):.3f}  '
+        f'sampling time/ds={np.nansum(wall) / n_ds:.1f}s  '
+        f'({n_cached}/{n_ds} from cache, wall {t1 - t0:.1f}s)'
+    )
+
+    target_d = tensor_batch['ffx'].shape[-1]
+    target_q = tensor_batch['sigma_rfx'].shape[-1]
+    merged = _stackProposals(per_ds, target_d=target_d, target_q=target_q)
+    merged.rescale(tensor_batch['sd_y'][:n_ds])
+    merged.reff = reff
+    print(summaryTable(getSummary(merged, full_batch, likelihood_family=lf), lf))
 
 
 def runISLaplace(proposals, batches, full_batch, lf, attach_only=False):
@@ -638,11 +763,9 @@ def main() -> None:
     models = buildModels(args.families, args.sizes, args.prefix)
 
     # benchmarks/ is gitignored (absent on cluster clones) — only require it for
-    # the opt-in conditions that live there
+    # the opt-in condition that lives there
     if args.include_svgd:
         from eval_svgd import runSVGD
-    if args.include_warmnuts:
-        from eval_warmnuts import runWarmNuts
 
     conditions = [
         'raw',
@@ -721,6 +844,10 @@ def main() -> None:
                 args.device,
             )
 
+            # IMH-refined proposals by mode, kept for the warmNuts seed so the
+            # refinement is not recomputed when the imh* condition already ran
+            imh_refined: dict[str, Proposal] = {}
+
             for cond in conditions:
                 if cond in ('isMarginal', 'isRM') and lf != 0:
                     continue  # exact marginal requires the Normal likelihood
@@ -766,18 +893,39 @@ def main() -> None:
                     runISLaplace(proposals, batches, full_batch, lf, attach_only=True)
                 elif cond == 'imhMarginal':
                     imh_mode = 'marginal' if lf == 0 else 'global'
-                    runIMH(imh_mode, imh_proposals, imh_batches, full_batch, lf)
+                    imh_refined[imh_mode] = runIMH(
+                        imh_mode, imh_proposals, imh_batches, full_batch, lf
+                    )
                 elif cond == 'imhGlobal':
-                    runIMH('global', imh_proposals, imh_batches, full_batch, lf)
+                    imh_refined['global'] = runIMH(
+                        'global', imh_proposals, imh_batches, full_batch, lf
+                    )
                 elif cond == 'imhLaplace':
-                    runIMH('laplace', imh_proposals, imh_batches, full_batch, lf)
+                    imh_refined['laplace'] = runIMH(
+                        'laplace', imh_proposals, imh_batches, full_batch, lf
+                    )
                 elif cond == 'svgd':
                     runSVGD(proposals, batches, full_batch, lf)
                 elif cond == 'coldNuts':
                     runNutsFromNpz(fit_npz, ds_list, tensor_batch, full_batch, lf)
                 elif cond == 'warmNuts':
-                    model.to('cpu')  # runWarmNuts feeds the cpu tensor_batch to model.estimate
-                    runWarmNuts(model, tensor_batch, ds_list, lf)
+                    # seed from the marginal-target MB-IMH posterior (the quality
+                    # winner per family), refining now if its condition was skipped
+                    wn_mode = 'marginal' if lf == 0 else 'laplace'
+                    refined = imh_refined.get(wn_mode)
+                    if refined is None:
+                        print(f'  refining flow proposal with IMH (mode={wn_mode})')
+                        refined, _ = refineIMH(wn_mode, imh_proposals, imh_batches, lf)
+                    runWarmNutsLive(
+                        refined,
+                        tensor_batch,
+                        full_batch,
+                        ds_list,
+                        lf,
+                        cfg['data_dir'] / f'fits_warm_{run_name}',
+                        f'warm_imh_{args.split}',
+                        args.wn_refit,
+                    )
                 print()
 
         # --only runs get their own file so partial passes never clobber a full-run md
