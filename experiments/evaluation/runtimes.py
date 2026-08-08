@@ -432,6 +432,14 @@ def collectCell(
             **ds,
             'n_params': nParams(ds['d'], ds['q'], ds['m']),
             'nuts_converged': bool(conv[idx]),
+            # the settings that make a wall time what it is: without them a records file
+            # cannot be told apart from one measured on other hardware or another batch size
+            'device': device.type,
+            'ds_type': cfg.ds_type,
+            'prefix': cfg.prefix,
+            'n_samples': cfg.n_samples,
+            'k': cfg.k,
+            'batch_size': cfg.batch_size,
         }
         timings = [(MB_LATENCY, mb_latency[i])]
         if mb_batched is not None:
@@ -624,6 +632,22 @@ def renderReliabilityTex(rows: list[dict]) -> str:
 # CLI / main
 
 
+def outputStem(cfg: argparse.Namespace, device: torch.device) -> str:
+    """Output stem carrying every setting a wall time depends on.
+
+    Runtime tables are not interchangeable across hardware or batch size, so the device and the
+    sampling settings belong in the filename: a bare ``runtimes_{family}`` silently replaces a
+    CPU campaign with a CUDA one, and the difference is then unrecoverable from the file.
+    Follows the ``_s{n_samples}_k{k}`` convention of the posterior-sample cache names.
+    """
+    if cfg.tag:
+        return cfg.tag
+    return (
+        f'runtimes_{cfg.family}_{cfg.ds_type}_{device.type}'
+        f'_s{cfg.n_samples}_k{cfg.k}_b{cfg.batch_size}'
+    )
+
+
 def setup() -> argparse.Namespace:
     # fmt: off
     parser = argparse.ArgumentParser(
@@ -640,6 +664,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--max_datasets', type=int, default=None, help='cap datasets per size (smoke tests)')
     parser.add_argument('--outdir', type=str, default=str(OUT_DIR))
+    parser.add_argument('--tag', type=str, default=None, help='override the output stem (default: family + settings)')
     parser.add_argument('--decimals', type=int, default=3)
     parser.add_argument('--no_plot', action='store_true', help='skip the runtime-vs-complexity figure')
     parser.add_argument('--verbosity', type=int, default=1)
@@ -698,7 +723,7 @@ def main() -> None:
         '',
     ]
 
-    stem = f'runtimes_{family}'
+    stem = outputStem(cfg, device)
     (outdir / f'{stem}.md').write_text('\n'.join(md) + '\n')
     (outdir / f'{stem}.tex').write_text(
         renderDistTex(rows_dist, dp=cfg.decimals) + '\n' + renderReliabilityTex(rows_rel)
