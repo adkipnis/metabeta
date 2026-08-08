@@ -26,6 +26,7 @@ COND_STYLE: dict[str, dict] = {
     'mb_cpu': {'color': PALETTE[10], 'label': 'MB (CPU)'},
     'cold_std': {'color': PALETTE[3], 'label': 'NUTS'},
     'laplace': {'color': PALETTE[2], 'label': 'Laplace'},
+    'mb_e2e': {'color': PALETTE[4], 'label': 'MB (+MAP fit)'},
     'cold_live': {'color': PALETTE[2], 'label': 'NUTS (live)'},
     'warm_imh': {'color': PALETTE[4], 'label': 'MB-IMH-NUTS'},
     'warm_2000': {'color': PALETTE[4], 'label': 'MB-NUTS'},

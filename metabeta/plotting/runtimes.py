@@ -34,12 +34,13 @@ from metabeta.utils.warmfit import (
     plotWarmPanel,
 )
 
-_NON_WARM_CONDS = {'mb', 'mb_batch', 'mb_gpu', 'mb_cpu', 'advi', 'laplace', 'cold_std'}
+_NON_WARM_CONDS = {'mb', 'mb_batch', 'mb_e2e', 'mb_gpu', 'mb_cpu', 'advi', 'laplace', 'cold_std'}
 _WARM_CONDS = frozenset(COND_STYLE) - _NON_WARM_CONDS
 _DEFAULT_CONDS = ['mb', 'warm_2000', 'cold_std', 'advi']
 _METHOD_TO_COND = {
     'MB': 'mb',
     'MB_batched': 'mb_batch',
+    'MB_e2e': 'mb_e2e',
     'metabeta': 'mb',
     'metabeta_gpu': 'mb_gpu',
     'metabeta_cpu': 'mb_cpu',
@@ -48,7 +49,9 @@ _METHOD_TO_COND = {
     'LAPLACE': 'laplace',
 }
 # panel order; only conds actually present in the records are drawn
-_PLOT_COND_ORDER = ['mb', 'mb_batch', 'mb_gpu', 'mb_cpu', 'laplace', 'advi', 'cold_std']
+# MB_e2e_batched is deliberately unmapped: four MB lines make the panels unreadable, and
+# the tables carry it.  plotRuntimeRecords skips methods with no cond.
+_PLOT_COND_ORDER = ['mb', 'mb_batch', 'mb_e2e', 'mb_gpu', 'mb_cpu', 'laplace', 'advi', 'cold_std']
 
 
 def _collectRuntimeRecords(data_dir: Path, fits_tag: str, conds: list[str]) -> list[dict]:
