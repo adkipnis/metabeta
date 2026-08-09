@@ -53,11 +53,22 @@ def test_palette_covers_the_largest_model_without_repeating():
 def test_palette_stays_distinct_once_blended_at_the_scatter_alpha():
     used = PALETTE[:MAX_SERIES]
     # the palette is only ever seen composited onto white, so that is where it has to hold up.
-    # the muted pool measures 7.0 blended / 19.3 opaque; a garish one would reach ~10.8 blended,
-    # but restraint was preferred. these floors just guard against regressing towards the old
-    # tab20 ordering, which repeated colours outright and scored 0.
-    assert _min_delta_e(used, alpha=SCATTER_ALPHA) > 6.0
-    assert _min_delta_e(used) > 18.0
+    # the muted pool measures 5.3 blended / 14.2 opaque; a louder one scores better but reads as
+    # neon, so restraint was preferred. these floors just guard against regressing towards the
+    # old tab20 ordering, which repeated colours outright and scored 0.
+    assert _min_delta_e(used, alpha=SCATTER_ALPHA) > 4.5
+    assert _min_delta_e(used) > 12.0
+
+
+def test_consecutive_colours_are_saliently_different():
+    """Panels colour contiguous slices, so neighbours are what actually sit side by side."""
+    used = PALETTE[:MAX_SERIES]
+    adjacent = [_min_delta_e([a, b], alpha=SCATTER_ALPHA) for a, b in zip(used, used[1:])]
+
+    # the ordering is a bottleneck-maximising path: unordered selection bottoms out near 8,
+    # this ordering holds every consecutive step above ~19 even after alpha blending
+    assert min(adjacent) > 15.0
+    assert min(_min_delta_e([a, b]) for a, b in zip(used, used[1:])) > 40.0
 
 
 def test_scatter_proxy_is_opaque_and_keeps_colour_and_size():
