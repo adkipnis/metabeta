@@ -6,7 +6,7 @@ from metabeta.utils.evaluation import (
     EvaluationSummary,
     dictMean,
 )
-from metabeta.utils.plot import DPI, savePlot
+from metabeta.utils.plot import DPI, legendProxy, savePlot
 from metabeta.utils.results import getNames, getCorrRfxNames, Proposal
 from metabeta.plotting.recovery import _prepareRecoveryData, _plotRecoveryGrouped
 from metabeta.plotting.coverage import _plotCoverage
@@ -48,7 +48,9 @@ def _rightLegendHandles(axs) -> dict[str, object]:
                 or axis_label in handles_by_label
             ):
                 continue
-            handles_by_label[axis_label] = handle
+            # opaque stand-in: the plotted artists are semi-transparent, which makes the shared
+            # legend's swatches too washed out to match against the panels
+            handles_by_label[axis_label] = legendProxy(handle, axis_label)
     return handles_by_label
 
 
