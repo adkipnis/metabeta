@@ -326,3 +326,17 @@ def test_plot_does_not_block_on_a_gui_window(monkeypatch):
     evaluator.plot([_proposal()], [_lightSummary()], ['MB'], {'X': torch.zeros(1, 1)})
 
     assert seen['show'] is False
+
+
+def test_mb_imh_is_usable_without_a_raw_mb_row(tmp_path):
+    """The IMH comparison figure drops raw MB, so MB+IMH must stand on its own."""
+    evaluator = _evaluator(models='MB+IMH,NUTS,ADVI', likelihood_family=0)
+    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_valid = evaluator.data_path_test
+    evaluator.data_path_test.touch()
+
+    models = evaluator._resolveModels()
+
+    assert models == ['MB+IMH', 'NUTS', 'ADVI']
+    assert evaluator._activeModels('test', models) == ['MB+IMH', 'NUTS', 'ADVI']
+    assert evaluator._displayLabel('MB+IMH', 'test', multi=False) == 'MB+IMH'

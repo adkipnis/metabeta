@@ -29,8 +29,11 @@ _COL_TITLES_CORR = [
 ]
 _RECOVERY_ALPHA = 0.35
 _LINE_ALPHA = 0.75
-_RIGHT_LEGEND_FONTSIZE = 24
-_RIGHT_LEGEND_X = 0.90
+_RIGHT_LEGEND_FONTSIZE = 30
+# Anchor of the right legend's left edge. Tuned against _PLOT_RIGHT_MARGIN so the gap to the
+# outermost panel is ~40% smaller than the old 0.90 anchor; the legend still ends near 0.96,
+# well inside the figure, so a larger font does not overflow.
+_RIGHT_LEGEND_X = 0.890
 _PLOT_RIGHT_MARGIN = 0.89
 
 
