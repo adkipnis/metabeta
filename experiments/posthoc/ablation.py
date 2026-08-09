@@ -131,6 +131,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--include-svgd', action='store_true', help='also run the (slow) SVGD condition')
     p.add_argument('--include-warmnuts', action='store_true', help='also run the warm-started NUTS condition (slow on the first pass; per-dataset fits are cached)')
     p.add_argument('--wn-refit', action='store_true', help='ignore cached warm-NUTS fits and re-sample')
+    p.add_argument('--refresh-summaries', action='store_true', help='recompute per-condition evaluation summaries even when a fresh cache exists (use after changing metrics or condition code)')
     return p.parse_args()
 # fmt: on
 
@@ -341,25 +342,67 @@ def loadOrSampleProposals(
     return collectProposals(model, items, n_samples, batch_size, device)
 
 
+# ---------------------------------------------------------------------------
+# Per-condition summary cache
+# ---------------------------------------------------------------------------
+# Each condition's EvaluationSummary (and the diagnostic lines printed above its
+# table) is cached in the data dir, keyed by condition/checkpoint/split/sample
+# count — the predictive checks (PSIS-LOO over every observation) dominate a
+# rerun otherwise. Freshness follows _cacheFresh (data file + checkpoint mtime);
+# --refresh-summaries forces recomputation after code changes.
+
+
+def _ablSummaryBase(data_dir: Path, split: str, cond: str, run_name: str, prefix: str, n_s: int):
+    return data_dir / f'summary_{split}_abl_{cond}_{run_name}_{prefix}_s{n_s}'
+
+
+def loadAblSummary(base: Path, n_ds: int, refs: tuple, refresh: bool):
+    """Return (summary, diag_text) from a fresh cache, or None."""
+    if refresh:
+        return None
+    pt = Path(f'{base}.pt')
+    if not pt.exists():
+        return None
+    ref_mtime = max((r.stat().st_mtime for r in refs if r.exists()), default=0.0)
+    if pt.stat().st_mtime < ref_mtime:
+        return None
+    try:
+        summary = EvaluationSummary.load(pt)
+    except (KeyError, ValueError, RuntimeError):
+        return None
+    if summary.per_dataset.posterior_nll.shape[0] != n_ds:
+        return None
+    diag_path = Path(f'{base}.diag.txt')
+    diag = diag_path.read_text() if diag_path.exists() else ''
+    print(f'  [cached summary] loaded {pt.name}')
+    return summary, diag
+
+
+def saveAblSummary(base: Path, summary: EvaluationSummary, diag: str) -> None:
+    summary.save(Path(f'{base}.pt'))
+    if diag:
+        Path(f'{base}.diag.txt').write_text(diag)
+
+
 def runRaw(proposals, full_batch, lf, summary_cache=None):
-    if summary_cache is not None:
-        print(summaryTable(summary_cache, lf))
-        return
-    proposal = concatProposalsBatch(proposals)
-    print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
+    if summary_cache is None:
+        proposal = concatProposalsBatch(proposals)
+        summary_cache = getSummary(proposal, full_batch, likelihood_family=lf)
+    print(summaryTable(summary_cache, lf))
+    return summary_cache, ''
 
 
-def _printWeightHealth(proposal):
+def _weightHealth(proposal) -> str:
     k = proposal.pareto_k
     if k is None:
-        return
+        return ''
     fallback = proposal.is_results.get('fallback')
     frac = fallback.float().mean().item() if fallback is not None else 0.0
     eff = proposal.efficiency
     eff_str = f'{eff.mean():.2f}' if eff is not None else 'n/a'
-    print(
+    return (
         f'  pareto_k mean={k.mean():.2f}  max={k.max():.2f}  '
-        f'fallback={frac:.0%}  efficiency mean={eff_str}'
+        f'fallback={frac:.0%}  efficiency mean={eff_str}\n'
     )
 
 
@@ -379,8 +422,11 @@ def runIS(proposals, batches, full_batch, lf, full=False, marginal=False, rb_red
             # slice-copy so is_results / redrawn rfx don't mutate the shared proposals
             out.append(sampler(p.slice_b(0, p.samples_g.shape[0])))
     proposal = concatProposalsBatch(out)
-    _printWeightHealth(proposal)
-    print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
+    diag = _weightHealth(proposal)
+    print(diag, end='')
+    summary = getSummary(proposal, full_batch, likelihood_family=lf)
+    print(summaryTable(summary, lf))
+    return summary, diag
 
 
 # IMH settings: 4 × 250 = 1000 samples so IMH reuses the same cached 1000-sample
@@ -415,13 +461,15 @@ def runIMH(mode, proposals, batches, full_batch, lf):
     proposal, accept = refineIMH(mode, proposals, batches, lf)
     t1 = time.perf_counter()
 
-    print(
+    diag = (
         f'  Acceptance  mean={accept.mean():.3f}  '
         f'min={accept.min():.3f}  max={accept.max():.3f}  '
-        f'time={t1 - t0:.1f}s ({(t1 - t0) / full_batch["y"].shape[0]:.1f}s/dataset)'
+        f'time={t1 - t0:.1f}s ({(t1 - t0) / full_batch["y"].shape[0]:.1f}s/dataset)\n'
     )
-    print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
-    return proposal
+    print(diag, end='')
+    summary = getSummary(proposal, full_batch, likelihood_family=lf)
+    print(summaryTable(summary, lf))
+    return summary, diag, proposal
 
 
 # Warm-started NUTS: 4 × 250 = 1000 posterior draws to match the other conditions'
@@ -430,6 +478,7 @@ def runIMH(mode, proposals, batches, full_batch, lf):
 WN_CHAINS = 4
 WN_TUNE = 500
 WN_DRAWS = 250
+WN_SAMPLES = WN_CHAINS * WN_DRAWS
 
 
 def _wnSamplesToProposal(samples: dict, lf: int) -> Proposal:
@@ -522,19 +571,22 @@ def runWarmNutsLive(refined, tensor_batch, full_batch, ds_list, lf, fits_dir, la
     wall = np.array([dg['wall_s'] for dg in diags], dtype=np.float64)
     rhat = np.array([dg['max_rhat'] for dg in diags], dtype=np.float64)
     reff = float(np.mean([dg.get('reff', 1.0) for dg in diags]))
-    print(
+    diag = (
         f'  divergences={total_divs}  reff={reff:.3f}  '
         f'max_rhat median={np.nanmedian(rhat):.3f}  '
         f'sampling time/ds={np.nansum(wall) / n_ds:.1f}s  '
-        f'({n_cached}/{n_ds} from cache, wall {t1 - t0:.1f}s)'
+        f'({n_cached}/{n_ds} from cache, wall {t1 - t0:.1f}s)\n'
     )
+    print(diag, end='')
 
     target_d = tensor_batch['ffx'].shape[-1]
     target_q = tensor_batch['sigma_rfx'].shape[-1]
     merged = _stackProposals(per_ds, target_d=target_d, target_q=target_q)
     merged.rescale(tensor_batch['sd_y'][:n_ds])
     merged.reff = reff
-    print(summaryTable(getSummary(merged, full_batch, likelihood_family=lf), lf))
+    summary = getSummary(merged, full_batch, likelihood_family=lf)
+    print(summaryTable(summary, lf))
+    return summary, diag
 
 
 def runISLaplace(proposals, batches, full_batch, lf, attach_only=False):
@@ -550,8 +602,11 @@ def runISLaplace(proposals, batches, full_batch, lf, attach_only=False):
             )
             out.append(sampler(p.slice_b(0, p.samples_g.shape[0])))
     proposal = concatProposalsBatch(out)
-    _printWeightHealth(proposal)
-    print(summaryTable(getSummary(proposal, full_batch, likelihood_family=lf), lf))
+    diag = _weightHealth(proposal)
+    print(diag, end='')
+    summary = getSummary(proposal, full_batch, likelihood_family=lf)
+    print(summaryTable(summary, lf))
+    return summary, diag
 
 
 def _nutsSummaryCache(npz_path: Path, n_ds: int) -> EvaluationSummary | None:
@@ -759,6 +814,10 @@ def main() -> None:
         lf = cfg['likelihood_family']
         buf = io.StringIO()
         with contextlib.redirect_stdout(_Tee(sys.stdout, buf)):
+            # fixed seed per model: flow sampling and the IMH accept/reject draws are
+            # stochastic, so this keeps cached summaries consistent with what a rerun
+            # would produce
+            torch.manual_seed(0)
             model, epoch = loadModel(cfg['ckpt'])
             model.to(args.device)
             print(f'\n{"#" * 70}')
@@ -822,6 +881,38 @@ def main() -> None:
                 print('=' * 65)
                 print(f'  {cond}')
                 print('=' * 65)
+
+                # svgd (external) and coldNuts (own cache) bypass the summary cache
+                if cond == 'svgd':
+                    runSVGD(proposals, batches, full_batch, lf)
+                    print()
+                    continue
+                if cond == 'coldNuts':
+                    runNutsFromNpz(fit_npz, ds_list, tensor_batch, full_batch, lf)
+                    print()
+                    continue
+
+                n_s_cond = (
+                    IMH_N_SAMPLES
+                    if cond.startswith('imh')
+                    else WN_SAMPLES
+                    if cond == 'warmNuts'
+                    else args.n_samples
+                )
+                cache_base = _ablSummaryBase(
+                    cfg['data_dir'], args.split, cond, run_name, args.prefix, n_s_cond
+                )
+                cached = loadAblSummary(
+                    cache_base, n_ds, (data_path, cfg['ckpt']), args.refresh_summaries
+                )
+                if cached is not None:
+                    summary, diag = cached
+                    if diag:
+                        print(diag, end='')
+                    print(summaryTable(summary, lf))
+                    print()
+                    continue
+
                 if cond == 'raw':
                     mb_summary = _mbSummaryCache(
                         cfg['data_dir'],
@@ -832,43 +923,47 @@ def main() -> None:
                         n_ds,
                         cfg['ckpt'],
                     )
-                    runRaw(proposals, full_batch, lf, summary_cache=mb_summary)
+                    summary, diag = runRaw(proposals, full_batch, lf, summary_cache=mb_summary)
                 elif cond == 'is':
-                    runIS(proposals, batches, full_batch, lf)
+                    summary, diag = runIS(proposals, batches, full_batch, lf)
                 elif cond == 'isFull':
-                    runIS(proposals, batches, full_batch, lf, full=True)
+                    summary, diag = runIS(proposals, batches, full_batch, lf, full=True)
                 elif cond == 'isMarginal':
-                    runIS(proposals, batches, full_batch, lf, marginal=True, rb_redraw=True)
+                    summary, diag = runIS(
+                        proposals, batches, full_batch, lf, marginal=True, rb_redraw=True
+                    )
                 elif cond == 'isLaplace':
-                    runISLaplace(proposals, batches, full_batch, lf)
+                    summary, diag = runISLaplace(proposals, batches, full_batch, lf)
                 elif cond == 'rbAttach':
-                    runISLaplace(proposals, batches, full_batch, lf, attach_only=True)
+                    summary, diag = runISLaplace(
+                        proposals, batches, full_batch, lf, attach_only=True
+                    )
                 elif cond == 'imhMarginal':
                     imh_mode = 'marginal' if lf == 0 else 'global'
-                    imh_refined[imh_mode] = runIMH(
+                    summary, diag, refined = runIMH(
                         imh_mode, imh_proposals, imh_batches, full_batch, lf
                     )
+                    imh_refined[imh_mode] = refined
                 elif cond == 'imhGlobal':
-                    imh_refined['global'] = runIMH(
+                    summary, diag, refined = runIMH(
                         'global', imh_proposals, imh_batches, full_batch, lf
                     )
+                    imh_refined['global'] = refined
                 elif cond == 'imhLaplace':
-                    imh_refined['laplace'] = runIMH(
+                    summary, diag, refined = runIMH(
                         'laplace', imh_proposals, imh_batches, full_batch, lf
                     )
-                elif cond == 'svgd':
-                    runSVGD(proposals, batches, full_batch, lf)
-                elif cond == 'coldNuts':
-                    runNutsFromNpz(fit_npz, ds_list, tensor_batch, full_batch, lf)
+                    imh_refined['laplace'] = refined
                 elif cond == 'warmNuts':
                     # seed from the marginal-target MB-IMH posterior (the quality
                     # winner per family), refining now if its condition was skipped
+                    # or served from the summary cache
                     wn_mode = 'marginal' if lf == 0 else 'laplace'
                     refined = imh_refined.get(wn_mode)
                     if refined is None:
                         print(f'  refining flow proposal with IMH (mode={wn_mode})')
                         refined, _ = refineIMH(wn_mode, imh_proposals, imh_batches, lf)
-                    runWarmNutsLive(
+                    summary, diag = runWarmNutsLive(
                         refined,
                         tensor_batch,
                         full_batch,
@@ -878,6 +973,7 @@ def main() -> None:
                         f'warm_imh_{args.split}',
                         args.wn_refit,
                     )
+                saveAblSummary(cache_base, summary, diag)
                 print()
 
         # --only runs get their own file so partial passes never clobber a full-run md
