@@ -433,6 +433,22 @@ class WarmNuts:
         initvals: list[dict] | None = None,
         potential=None,
     ) -> az.InferenceData:
+        try:
+            return self._pmSample(tune, seed, initvals, potential)
+        except Exception as e:
+            # rare model-specific worker crashes (pipe EOFError) in PyMC's
+            # multiprocess path; the same model samples fine in-process
+            print(f'  parallel sampling failed ({type(e).__name__}); retrying with cores=1')
+            return self._pmSample(tune, seed, initvals, potential, cores=1)
+
+    def _pmSample(
+        self,
+        tune: int,
+        seed: int,
+        initvals: list[dict] | None,
+        potential,
+        cores: int | None = None,
+    ) -> az.InferenceData:
         import pymc as pm
 
         with self.model:
@@ -451,6 +467,8 @@ class WarmNuts:
                     'target_accept': self.target_accept,
                     'max_treedepth': self.max_treedepth,
                 }
+            if cores is not None:
+                kwargs['cores'] = cores
             return pm.sample(
                 tune=tune,
                 draws=self.draws,
