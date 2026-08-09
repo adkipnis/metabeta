@@ -322,7 +322,15 @@ def _bernoulliLaplaceModeDiag(
         else torch.ones(B, q, device=device, dtype=torch.bool)
     )
     active = mask_m.bool()
-    Z_eff = Zm * active_q[:, None, None, :].to(dtype)
+    # hoisted gradient-free loop invariants (mask casts and views).  β- and σ-dependent
+    # subexpressions (Xβ, diag_embed(prec)) stay inside the loop even though their forward
+    # values are invariant: reusing one graph node across iterations changes the backward
+    # accumulation order, which drifts the Adam trajectory off the previous results.
+    active_q_f = active_q.to(dtype)
+    active_q_bm1 = active_q[:, None, :].to(dtype)
+    mask_m_bm1 = mask_m[:, :, None]
+    active_bmqq = active[:, :, None, None]
+    Z_eff = Zm * active_q_f[:, None, None, :]
     prec = torch.where(active_q, torch.exp(-2.0 * log_sigma_rfx).clamp(max=1e8), 1.0)
     eye_q = torch.eye(q, device=device, dtype=dtype)
     eye_q_bm = eye_q.expand(B, m, q, q)
@@ -336,9 +344,9 @@ def _bernoulliLaplaceModeDiag(
         score_g = score_g - prec[:, None, :] * blups
         ZWZ = torch.einsum('bmnq,bmn,bmnr->bmqr', Z_eff, w, Z_eff)
         H = ZWZ + torch.diag_embed(prec)[:, None]
-        H_safe = torch.where(active[:, :, None, None], H, eye_q_bm)
+        H_safe = torch.where(active_bmqq, H, eye_q_bm)
         delta = _safeSolve(H_safe + _adaptiveRidgeBm(H_safe), score_g)
-        blups = (blups + damping * delta) * mask_m[:, :, None] * active_q[:, None, :].to(dtype)
+        blups = (blups + damping * delta) * mask_m_bm1 * active_q_bm1
         blups = blups.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
 
     eta = torch.einsum('bmnd,bd->bmn', Xm, beta) + torch.einsum('bmnq,bmq->bmn', Z_eff, blups)
@@ -346,7 +354,7 @@ def _bernoulliLaplaceModeDiag(
     w = (mu * (1.0 - mu)).clamp(min=1e-6) * mask_n
     ZWZ = torch.einsum('bmnq,bmn,bmnr->bmqr', Z_eff, w, Z_eff)
     H = ZWZ + torch.diag_embed(prec)[:, None]
-    H = torch.where(active[:, :, None, None], H, eye_q_bm)
+    H = torch.where(active_bmqq, H, eye_q_bm)
     return blups, H, active_q
 
 
@@ -536,12 +544,14 @@ def refineBernoulliLaplaceEb(
             torch.nn.utils.clip_grad_norm_([beta, log_sigma], max_norm=10.0)
             optimizer.step()
             n_steps_run = step + 1
-            loss_value = float(loss.detach().item())
-            if loss_value < best_loss - early_stop_min_delta:
-                best_loss = loss_value
-                stale_steps = 0
-            else:
-                stale_steps += 1
+            if early_stop:
+                # the .item() forces a device sync; only pay for it when its bookkeeping is read
+                loss_value = float(loss.detach().item())
+                if loss_value < best_loss - early_stop_min_delta:
+                    best_loss = loss_value
+                    stale_steps = 0
+                else:
+                    stale_steps += 1
             with torch.no_grad():
                 beta.clamp_(-20.0, 20.0)
                 log_sigma.clamp_(min_log_sigma, final_log_cap)

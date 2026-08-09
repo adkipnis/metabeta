@@ -27,12 +27,13 @@ def _safeSolve(A: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
          on an eigendecomposition, which can fail for ill-conditioned batches.
       3. Falls back to zeros only for elements that remain degenerate.
     """
-    try:
-        solution = torch.linalg.solve(A, b)
-        if torch.isfinite(solution).all():
-            return solution
-    except torch.linalg.LinAlgError:
-        pass
+    # Fast path via solve_ex: same LU kernels as torch.linalg.solve (identical results), but
+    # check_errors=False skips solve's mandatory host-side info check, so the happy path costs
+    # a single device sync instead of two plus exception machinery.  Falls through to the
+    # recovery cascade exactly when solve would have raised or produced non-finite values.
+    solution, info = torch.linalg.solve_ex(A, b, check_errors=False)
+    if bool(((info == 0).all() & torch.isfinite(solution).all()).item()):
+        return solution
 
     A_safe = A.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
     b_safe = b.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
