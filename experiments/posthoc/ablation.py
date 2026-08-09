@@ -97,7 +97,7 @@ from metabeta.utils.evaluation import EvaluationSummary
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.metropolis import MetropolisSampler
-from metabeta.posthoc.warmnuts import WarmNuts, _stackProposals
+from metabeta.posthoc.warmnuts import WarmNuts, _stackProposals, needsEscalation
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice
 from metabeta.utils.results import Proposal, concatProposalsBatch
@@ -531,6 +531,11 @@ def runWarmNutsLive(refined, tensor_batch, full_batch, ds_list, lf, fits_dir, la
             samples, diag = loadFit(cache)
             if samples['ffx'].shape[0] != n_expected:
                 samples = diag = None   # stale cache from different WN settings
+            elif needsEscalation(diag['max_rhat'], diag['min_ess']) and not diag.get(
+                'escalated', False
+            ):
+                # pre-escalation fit with poor diagnostics — refit with rescue
+                samples = diag = None
             else:
                 n_cached += 1
         if samples is None:
@@ -552,12 +557,14 @@ def runWarmNutsLive(refined, tensor_batch, full_batch, ds_list, lf, fits_dir, la
                 'min_ess': wn_diag['min_ess'],
                 'min_ess_t': wn_diag['min_ess_t'],
                 'reff': wn_diag['reff'],
+                'escalated': wn_diag.get('escalated', False),
                 'wall_s': time.perf_counter() - t_ds,
             }
             saveFit(cache, samples, diag)
+            esc = '  [escalated]' if diag['escalated'] else ''
             print(
                 f'\r  ds={i + 1}/{n_ds}  div={diag["n_div"]:4.0f}  '
-                f'rhat={diag["max_rhat"]:.3f}  wall={diag["wall_s"]:.1f}s',
+                f'rhat={diag["max_rhat"]:.3f}  wall={diag["wall_s"]:.1f}s{esc}',
                 end='',
                 flush=True,
             )
@@ -568,12 +575,14 @@ def runWarmNutsLive(refined, tensor_batch, full_batch, ds_list, lf, fits_dir, la
     t1 = time.perf_counter()
 
     total_divs = sum(int(dg['n_div']) for dg in diags)
+    n_escalated = sum(bool(dg.get('escalated', False)) for dg in diags)
     wall = np.array([dg['wall_s'] for dg in diags], dtype=np.float64)
     rhat = np.array([dg['max_rhat'] for dg in diags], dtype=np.float64)
     reff = float(np.mean([dg.get('reff', 1.0) for dg in diags]))
     diag = (
         f'  divergences={total_divs}  reff={reff:.3f}  '
         f'max_rhat median={np.nanmedian(rhat):.3f}  '
+        f'escalated={n_escalated}/{n_ds}  '
         f'sampling time/ds={np.nansum(wall) / n_ds:.1f}s  '
         f'({n_cached}/{n_ds} from cache, wall {t1 - t0:.1f}s)\n'
     )
