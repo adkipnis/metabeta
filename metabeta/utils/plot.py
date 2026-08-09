@@ -11,42 +11,45 @@ DPI = 300
 # The largest models label 27 series (16 ffx + 5 sigma_rfx + sigma_eps + 5 rfx), so a palette has
 # to stay distinct that far out; the previous tab20-derived one held only 20 and silently repeated
 # colours beyond that. These were picked by greedy farthest-point search in CIE-Lab *after*
-# compositing onto white at the scatter alpha, which is the only form the eye ever sees: minimum
-# pairwise dE is 10.8 blended / 24.6 opaque, against 0.0 for the tab20 ordering it replaces.
-# Regenerate with the same search if the series count ever outgrows this list.
+# compositing onto white at the scatter alpha, which is the only form the eye ever sees. The
+# search ran over a deliberately muted pool (HUSL lightness 40/55/70, saturation 45-68), giving
+# mean chroma 42 — just under tab20's 45, so the figures keep a restrained, print-friendly look.
+# Minimum pairwise dE is 7.0 blended / 19.3 opaque, against 0.0 for the ordering it replaces. A
+# more saturated pool reaches dE 10.8 but reads as neon; distinctness was traded for restraint on
+# purpose. Regenerate with the same search if the series count ever outgrows this list.
 PALETTE = [
-    '#b924f2',
-    '#30e22e',
-    '#cd4a19',
-    '#2ca2f7',
-    '#0e5e27',
-    '#d7c62f',
-    '#7f327e',
-    '#1d2cef',
-    '#efb5c2',
-    '#33d9d4',
-    '#e61a41',
-    '#6cdb75',
-    '#d91d99',
-    '#2f566e',
-    '#b79855',
-    '#1846be',
-    '#d573f9',
-    '#9794e1',
-    '#fa69a6',
-    '#8cd92e',
-    '#942b38',
-    '#8bcdee',
-    '#5e8018',
-    '#8216ac',
-    '#71482a',
-    '#fba8fc',
-    '#58ab8c',
-    '#e58424',
-    '#745cf6',
-    '#fb7071',
-    '#b6ce6c',
-    '#31dea2',
+    '#bc57d4',
+    '#5fbd5f',
+    '#ca6549',
+    '#6bb0e1',
+    '#44654a',
+    '#824a78',
+    '#4352bf',
+    '#bca960',
+    '#e04d70',
+    '#b49ee4',
+    '#64b8a9',
+    '#d599a7',
+    '#39617e',
+    '#7c5444',
+    '#e489de',
+    '#678d48',
+    '#d39e7d',
+    '#8c3c94',
+    '#d5509e',
+    '#946fd5',
+    '#5781d4',
+    '#a83334',
+    '#8a835f',
+    '#c36484',
+    '#61bb86',
+    '#64898a',
+    '#4f5995',
+    '#6944c1',
+    '#9da8d1',
+    '#9db07d',
+    '#9e3769',
+    '#4a906d',
 ]
 
 # fallback marker size (points) when a handle carries no size of its own
