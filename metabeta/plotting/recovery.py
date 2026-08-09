@@ -87,6 +87,10 @@ def _plotRecovery(
         'show_legend': upper if show_legend is None else show_legend,
         'show_x': lower,
         'stats': stats,
+        # anchor the box on its right edge so it clears the right and bottom spines
+        'stats_ha': 'right',
+        'stats_loc_x': 0.97,
+        'stats_loc_y': 0.08,
     }
     niceify(ax, info)
 

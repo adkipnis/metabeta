@@ -42,6 +42,7 @@ from metabeta.utils.posterior_cache import (
     posteriorSampleCacheName,
     saveProposalCache,
 )
+from metabeta.utils.posterior_eval import IMH_METHODS, loadOrRefine, posthocDefaults, validMethods
 from metabeta.evaluation.intervals import getCoverageErrors, getCoverages, getCredibleIntervals
 from metabeta.evaluation.point import getCorrelation, getPointEstimates, getRMSE
 from metabeta.evaluation.summary import EST_TYPE, _averageOverAlpha, getSummary, summaryTable
@@ -51,6 +52,15 @@ logger = logging.getLogger('evaluate.py')
 
 _ALL_MODELS = ('MB', 'NUTS', 'ADVI', 'LAPLACE')
 _FIT_MODELS = frozenset(('NUTS', 'ADVI', 'LAPLACE'))
+
+# Post-hoc IMH refinement layered on the raw MB flow posterior. Not part of "all": it costs a
+# refinement pass on top of MB sampling, so it is opt-in via --models MB+IMH.
+_MB_IMH = 'MB+IMH'
+_KNOWN_MODELS = _ALL_MODELS + (_MB_IMH,)
+# Models that come from the checkpoint rather than from cached fits in the *.fit.npz.
+_MB_MODELS = frozenset(('MB', _MB_IMH))
+# Summary-cache methods keyed only by the data file (as opposed to checkpoint-derived ones).
+_FIT_METHODS = frozenset(m.lower() for m in _FIT_MODELS)
 
 
 def setup() -> argparse.Namespace:
@@ -81,7 +91,12 @@ def setup() -> argparse.Namespace:
     )
     parser.add_argument(
         '--models', type=str, default='all',
-        help='Models to evaluate: comma-separated MB/NUTS/ADVI or "all" (default: all)',
+        help='Models to evaluate: comma-separated MB/MB+IMH/NUTS/ADVI/LAPLACE or "all" '
+             '(default: all; "all" excludes MB+IMH)',
+    )
+    parser.add_argument(
+        '--imh_method', type=str, default=None, choices=list(IMH_METHODS),
+        help='IMH variant behind MB+IMH (default: the per-family default in presets.yaml)',
     )
     parser.add_argument(
         '--converged_subset', action=argparse.BooleanOptionalAction, default=False,
@@ -139,9 +154,10 @@ def setup() -> argparse.Namespace:
             x.strip().upper()
             for x in (list(_ALL_MODELS) if models_str == 'all' else models_str.split(','))
         ]
-        if 'MB' in active:
+        if any(m in _MB_MODELS for m in active):
             raise ValueError(
-                '--data_path_test/--data_path_valid mode: use fit models only (no MB without --checkpoint)'
+                '--data_path_test/--data_path_valid mode: use fit models only '
+                '(no MB / MB+IMH without --checkpoint)'
             )
     else:
         raise ValueError(
@@ -198,6 +214,7 @@ class Evaluator:
 
         self._initData()
         self.model_loaded = False
+        self._imh_method_cache: str | None = None
 
         self.plot_dir = Path(self.dir, '..', 'outputs', 'plots', self.run_name)
         self.plot_dir.mkdir(parents=True, exist_ok=True)
@@ -641,7 +658,8 @@ class Evaluator:
         prefix: str | None = None,
     ) -> Path:
         data_path = self._partitionDataPath(partition)
-        if method == 'mb':
+        if method not in _FIT_METHODS:
+            # checkpoint-derived (MB and its post-hoc refinements): key by run/prefix/sampling
             run_name = run_name or self.run_name
             prefix = prefix or getattr(
                 self,
@@ -649,7 +667,7 @@ class Evaluator:
                 getattr(self.cfg, 'prefix', 'best'),
             )
             cache_name = (
-                f'summary_{partition}_mb_{run_name}_{prefix}'
+                f'summary_{partition}_{method}_{run_name}_{prefix}'
                 f'_s{self.cfg.n_samples}_seed{self.cfg.seed}_k{self.cfg.k}'
                 f'_predcov{int(getattr(self.cfg, "pred_coverage", False))}'
                 f'_{self._maskTag(mask)}.pt'
@@ -760,7 +778,7 @@ class Evaluator:
     def _summaryRefMtime(self, partition: str, method: str) -> float:
         data_path = self._partitionDataPath(partition)
         ref_mtime = data_path.stat().st_mtime if data_path.exists() else 0.0
-        if method == 'mb' and getattr(self, 'ckpt_dir', None) is not None:
+        if method not in _FIT_METHODS and getattr(self, 'ckpt_dir', None) is not None:
             ckpt_path = self.ckpt_dir / f'{self.checkpoint_prefix}.pt'
             if ckpt_path.exists():
                 ref_mtime = max(ref_mtime, ckpt_path.stat().st_mtime)
@@ -774,7 +792,7 @@ class Evaluator:
     ) -> list[Path]:
         paths = [self._summaryCachePath(partition, method, mask=mask)]
         legacy_run_name = getattr(self, 'legacy_run_name', self.run_name)
-        if method == 'mb' and legacy_run_name != self.run_name:
+        if method not in _FIT_METHODS and legacy_run_name != self.run_name:
             for prefix in (self.checkpoint_prefix, 'latest'):
                 paths.append(
                     self._summaryCachePath(
@@ -874,9 +892,62 @@ class Evaluator:
         durations = durations[np.isfinite(durations)]
         return float(durations.mean()) if durations.size else None
 
+    def _imhMethod(self) -> str:
+        """IMH variant behind MB+IMH: --imh_method, else the presets.yaml per-family default."""
+        if getattr(self, '_imh_method_cache', None) is not None:
+            return self._imh_method_cache
+        lf = self.cfg.likelihood_family
+        method = getattr(self.cfg, 'imh_method', None)
+        if method is None:
+            defaults = [m for m in posthocDefaults(lf) if m in IMH_METHODS]
+            if not defaults:
+                raise ValueError(
+                    f'no IMH default in presets.yaml for likelihood_family={lf}; '
+                    f'pass --imh_method explicitly (one of {IMH_METHODS})'
+                )
+            method = defaults[0]
+        if not validMethods([method], lf):
+            raise ValueError(f'{method} is incompatible with likelihood_family={lf}')
+        self._imh_method_cache = method
+        logger.info('MB+IMH refinement method: %s (likelihood_family=%d)', method, lf)
+        return method
+
+    def _methodName(self, model: str) -> str:
+        """Summary-cache method key for a model (MB+IMH resolves to its IMH variant)."""
+        return self._imhMethod() if model == _MB_IMH else model.lower()
+
+    def _refineMb(
+        self,
+        partition: str,
+        base: Proposal,
+        full_batch: dict[str, torch.Tensor],
+    ) -> Proposal:
+        """Layer post-hoc IMH on the raw MB proposal (both in rescaled data space)."""
+        method = self._imhMethod()
+        # refineProposal expects proposal and batch in the same space; _loadOrSampleMb already
+        # rescaled the proposal, so the batch has to follow (rescaleData copies, no mutation).
+        refine_batch = rescaleData(full_batch) if self.cfg.rescale else full_batch
+        proposal, refine_seconds = loadOrRefine(
+            method,
+            base,
+            refine_batch,
+            self._partitionDataPath(partition),
+            self.ckpt_dir,
+            self.checkpoint_prefix,
+            self.cfg.n_samples,
+            self.cfg.seed,
+            self.cfg.likelihood_family,
+            self.cfg.rescale,
+            None,
+            self.cfg.batch_size,
+        )
+        n = max(full_batch['X'].shape[0], 1)
+        proposal.tpd = (base.tpd or 0.0) + refine_seconds / n
+        return proposal
+
     def _activeModels(self, partition: str, models: list[str]) -> list[str]:
         has_fits = self._hasFits(partition)
-        active = [m for m in models if m == 'MB' or (has_fits and m in _FIT_MODELS)]
+        active = [m for m in models if m in _MB_MODELS or (has_fits and m in _FIT_MODELS)]
         if not active:
             logger.warning('No active models for partition=%s (no fit file found)', partition)
         return active
@@ -920,7 +991,7 @@ class Evaluator:
         rows: list[dict] = []
         missing: list[str] = []
         for model in active:
-            method = model.lower()
+            method = self._methodName(model)
             mask = common_mask
             if model in _FIT_MODELS:
                 mask = self._fitSummaryMask(masks[model], common_mask, n)
@@ -968,7 +1039,7 @@ class Evaluator:
 
     def _canFallbackFromTableOnly(self, partition: str, models: list[str]) -> bool:
         active = self._activeModels(partition, models)
-        return bool(active) and all(model == 'MB' for model in active)
+        return bool(active) and all(model in _MB_MODELS for model in active)
 
     def _canLightEvaluateFromTableOnly(self, partition: str, models: list[str]) -> bool:
         active = self._activeModels(partition, models)
@@ -1178,9 +1249,9 @@ class Evaluator:
         if m == 'all':
             return list(_ALL_MODELS)
         models = [x.strip().upper() for x in m.split(',')]
-        unknown = [x for x in models if x not in _ALL_MODELS]
+        unknown = [x for x in models if x not in _KNOWN_MODELS]
         if unknown:
-            raise ValueError(f'unknown model(s): {unknown}; valid: {_ALL_MODELS}')
+            raise ValueError(f'unknown model(s): {unknown}; valid: {_KNOWN_MODELS}')
         return models
 
     def _hasFits(self, partition: str) -> bool:
@@ -1208,6 +1279,9 @@ class Evaluator:
         """Return (proposal, full-batch mask) — mask is None when model covers all datasets."""
         if model == 'MB':
             return self._loadOrSampleMb(partition, dl), None
+        elif model == _MB_IMH:
+            base = self._loadOrSampleMb(partition, dl)
+            return self._refineMb(partition, base, full_batch), None
         elif model == 'NUTS':
             return self._fit2proposal(full_batch, prefix='nuts'), None
         elif model == 'ADVI':
@@ -1291,13 +1365,14 @@ class Evaluator:
                     model.lower(),
                     mask=self._fitSummaryMask(raw[model][1], common_mask, n),
                 )
-            elif model == 'MB':
-                s = self._loadCachedSummary(partition, 'mb', mask=common_mask)
+            elif model in _MB_MODELS:
+                method = self._methodName(model)
+                s = self._loadCachedSummary(partition, method, mask=common_mask)
                 raw[model] = self._getProposalAndMask(model, partition, full_batch, dl)
                 aligned[model] = self._alignToCommon(raw[model][0], raw[model][1], common_mask)
                 if s is None:
                     s = self._loadOrComputeSummary(
-                        aligned[model], common_batch, partition, 'mb', mask=common_mask
+                        aligned[model], common_batch, partition, method, mask=common_mask
                     )
             else:
                 raise ValueError(f'unknown model: {model}')
@@ -1352,7 +1427,7 @@ class Evaluator:
         raw: dict[str, tuple[Proposal, np.ndarray | None]] = {
             model: self._getProposalAndMask(model, partition, full_batch, dl)
             for model in active
-            if model != 'MB'
+            if model not in _MB_MODELS
         }
 
         # Align all proposals to their common batch (intersection of all native masks)
@@ -1381,13 +1456,14 @@ class Evaluator:
                     model.lower(),
                     mask=self._fitSummaryMask(raw[model][1], common_mask, n),
                 )
-            elif model == 'MB':
-                s = self._loadCachedSummary(partition, 'mb', mask=common_mask)
+            elif model in _MB_MODELS:
+                method = self._methodName(model)
+                s = self._loadCachedSummary(partition, method, mask=common_mask)
                 if s is None:
                     raw[model] = self._getProposalAndMask(model, partition, full_batch, dl)
                     aligned[model] = self._alignToCommon(raw[model][0], raw[model][1], common_mask)
                     s = self._loadOrComputeSummary(
-                        aligned[model], common_batch, partition, 'mb', mask=common_mask
+                        aligned[model], common_batch, partition, method, mask=common_mask
                     )
             else:
                 s = self.summary(aligned[model], common_batch)
@@ -1398,9 +1474,10 @@ class Evaluator:
         # Comparison plot
         plot_dir = self.plot_dir if partition == 'test' else self.plot_dir / partition
         if self.cfg.plot:
-            if 'MB' in active and 'MB' not in aligned:
-                raw['MB'] = self._getProposalAndMask('MB', partition, full_batch, dl)
-                aligned['MB'] = self._alignToCommon(raw['MB'][0], raw['MB'][1], common_mask)
+            for model in active:
+                if model in _MB_MODELS and model not in aligned:
+                    raw[model] = self._getProposalAndMask(model, partition, full_batch, dl)
+                    aligned[model] = self._alignToCommon(raw[model][0], raw[model][1], common_mask)
             plot_batch = self._plotBatch(common_batch)
             if not self.cfg.converged_subset:
                 del common_batch, full_batch
@@ -1418,8 +1495,9 @@ class Evaluator:
 
         # NUTS convergence diagnostics and sub-population rows
         if self.cfg.converged_subset and 'NUTS' in active:
-            if 'MB' in active and 'MB' not in raw:
-                raw['MB'] = self._getProposalAndMask('MB', partition, full_batch, dl)
+            for model in active:
+                if model in _MB_MODELS and model not in raw:
+                    raw[model] = self._getProposalAndMask(model, partition, full_batch, dl)
             rows += self._convergedRows(partition, active, raw, full_batch, fit_label, plot_dir)
 
         return rows

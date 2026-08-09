@@ -30,6 +30,7 @@ INFO = {
     'stats_fs': 22,
     'stats_loc_x': 0.69,
     'stats_loc_y': 0.05,
+    'stats_ha': 'center',  # anchor side of (stats_loc_x, stats_loc_y); 'right' insets the box
     'stats_box': True,
     'grid_alpha': 0.8,
 }
@@ -105,7 +106,9 @@ def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
             y_loc,
             '\n'.join(txt),
             transform=ax.transAxes,
-            ha='center',
+            ha=str(info['stats_ha']),
+            # keep the lines centred inside the box regardless of how the box is anchored
+            ma='center',
             va='bottom',
             fontsize=fs,
             bbox=bbox,
