@@ -6,11 +6,13 @@ import logging
 import argparse
 import hashlib
 import re
+import zipfile
 from dataclasses import replace
 from itertools import chain
 from pathlib import Path
 
 import numpy as np
+from numpy.lib import format as npFormat
 import torch
 from tabulate import tabulate
 from tqdm import tqdm
@@ -450,6 +452,72 @@ class Evaluator:
             arr = arr[mask]
         return np.asarray(arr, dtype=dtype)
 
+    @staticmethod
+    def _streamNpzArray(
+        fit_path: Path,
+        key: str,
+        mask: np.ndarray | None = None,
+        dtype=np.float32,
+        axes: tuple[int, ...] | None = None,
+        chunk_bytes: int = 256 << 20,
+    ) -> np.ndarray:
+        """Read ``key`` from a compressed npz in dataset blocks, without materialising it whole.
+
+        ``np.load(...)[key]`` decompresses the full stored array (float64 for the fit samples)
+        before any downcast or mask, which for ``*_rfx`` is several GB of pure transient. Here
+        the zip entry is consumed sequentially along axis 0 (datasets), each block is cast to
+        ``dtype`` and, when ``axes`` is given, transposed straight into its final layout — so
+        peak usage is the result plus one block rather than result + source + permute copy.
+
+        ``axes`` is the permutation of the *stored* axes, as passed to ``np.transpose``; axis 0
+        must stay first, since that is the axis being streamed.
+        """
+        if axes is not None and axes[0] != 0:
+            raise ValueError(f'axes must keep the dataset axis first, got {axes}')
+        with zipfile.ZipFile(fit_path) as archive:
+            with archive.open(f'{key}.npy') as handle:
+                version = npFormat.read_magic(handle)
+                if version == (1, 0):
+                    shape, fortran_order, src_dtype = npFormat.read_array_header_1_0(handle)
+                elif version == (2, 0):
+                    shape, fortran_order, src_dtype = npFormat.read_array_header_2_0(handle)
+                else:
+                    raise ValueError(f'unsupported npy version {version} for {key}')
+                if fortran_order:
+                    raise NotImplementedError(
+                        f'{key} is Fortran-ordered; streaming assumes C order'
+                    )
+
+                n_datasets = shape[0]
+                keep = np.ones(n_datasets, dtype=bool) if mask is None else np.asarray(mask, bool)
+                row_shape = shape[1:]
+                row_bytes = (
+                    int(np.prod(row_shape)) * src_dtype.itemsize
+                    if row_shape
+                    else (src_dtype.itemsize)
+                )
+                out_row_shape = row_shape if axes is None else tuple(shape[a] for a in axes)[1:]
+                out = np.empty((int(keep.sum()),) + out_row_shape, dtype=dtype)
+
+                rows_per_chunk = max(1, chunk_bytes // max(row_bytes, 1))
+                written = 0
+                for start in range(0, n_datasets, rows_per_chunk):
+                    stop = min(start + rows_per_chunk, n_datasets)
+                    buffer = handle.read((stop - start) * row_bytes)
+                    block = np.frombuffer(buffer, dtype=src_dtype).reshape(
+                        (stop - start,) + row_shape
+                    )
+                    selected = keep[start:stop]
+                    if not selected.all():
+                        block = block[selected]
+                    if block.shape[0] == 0:
+                        continue
+                    if axes is not None:
+                        block = block.transpose(axes)
+                    out[written : written + block.shape[0]] = block
+                    written += block.shape[0]
+        return out
+
     def _fitProposalFromNpz(
         self,
         fit_path: Path,
@@ -472,9 +540,6 @@ class Evaluator:
                 sigma_eps = np.squeeze(sigma_eps, axis=1) if sigma_eps.ndim == 3 else sigma_eps
                 samples_g.append(torch.as_tensor(sigma_eps).unsqueeze(-1).contiguous())
 
-            rfx = torch.as_tensor(self._npzArray(raw, f'{prefix}_rfx', mask))
-            rfx = rfx.permute(0, 2, 3, 1).contiguous()
-
             corr_rfx = None
             if f'{prefix}_corr_rfx' in raw.files:
                 corr = self._npzArray(raw, f'{prefix}_corr_rfx', mask)
@@ -482,6 +547,11 @@ class Evaluator:
                 corr_rfx = torch.as_tensor(corr).contiguous()
 
             duration = self._npzArray(raw, f'{prefix}_duration', mask, dtype=np.float64)
+
+        # (b, q, m, s) on disk -> (b, m, s, q); streamed because this array dominates the load
+        rfx = torch.from_numpy(
+            self._streamNpzArray(fit_path, f'{prefix}_rfx', mask=mask, axes=(0, 2, 3, 1))
+        )
 
         proposed = {
             'global': {'samples': torch.cat(samples_g, dim=-1)},
