@@ -560,7 +560,9 @@ class Evaluator:
         if self.cfg.rescale:
             if scale is None:
                 raise ValueError('scale is required to rescale fit proposals loaded from npz')
-            proposal.rescale(scale)
+            # the local samples were just streamed into a private buffer, so nothing else aliases
+            # them; rescaling in place avoids briefly holding two copies of the largest array
+            proposal.rescale(scale, inplace=True)
         self._logMemory('Loaded %s proposal directly from npz', prefix)
         return proposal
 
