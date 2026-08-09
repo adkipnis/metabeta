@@ -193,10 +193,20 @@ class Proposal:
         }
         return sliced
 
-    def rescale(self, scale: torch.Tensor) -> None:
+    def rescale(self, scale: torch.Tensor, inplace: bool = False) -> None:
+        """Scale samples back to the original response scale.
+
+        ``inplace`` rescales the local samples without allocating a second copy. Only pass it
+        when the caller owns that buffer outright: the local block dominates memory for fit
+        proposals (tens of GiB), and holding the old and new copies at once is what sets peak
+        RSS. Results are unchanged either way, since both operands are float32.
+        """
         samples_l = self.data['local']['samples']
         scale_l = scale.view(-1, *([1] * (samples_l.ndim - 1)))
-        self.data['local']['samples'] = samples_l * scale_l
+        if inplace:
+            samples_l.mul_(scale_l)
+        else:
+            self.data['local']['samples'] = samples_l * scale_l
 
         samples_g = self.data['global']['samples']
         scale_g = scale.view(-1, *([1] * (samples_g.ndim - 1)))
