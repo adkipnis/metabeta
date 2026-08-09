@@ -3,7 +3,7 @@ Shared utilities for warm-start fit caching and plotting.
 
 Cache format: {fits_dir}/{cond_label}__{idx:03d}.npz
   - sample arrays: ffx, sigma_rfx, rfx, sigma_eps (optional)
-  - diagnostics: wall_s, n_div, max_rhat, min_ess, min_ess_t
+  - diagnostics: wall_s, n_div, max_rhat, min_ess, min_ess_t, reff, escalated
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ def loadFit(path: Path) -> tuple[dict[str, np.ndarray], dict]:
     with np.load(path) as f:
         raw = dict(f)
     sample_keys = {'ffx', 'sigma_rfx', 'sigma_eps', 'rfx', 'corr_rfx'}
-    diag_keys = {'n_div', 'max_rhat', 'min_ess', 'min_ess_t', 'wall_s', 'reff'}
+    diag_keys = {'n_div', 'max_rhat', 'min_ess', 'min_ess_t', 'wall_s', 'reff', 'escalated'}
     return (
         {k: raw[k] for k in sample_keys if k in raw},
         {k: float(raw[k]) for k in diag_keys if k in raw},

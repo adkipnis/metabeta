@@ -69,6 +69,23 @@ from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.pymc import buildPymc, extractAll
 from metabeta.utils.results import Proposal
 
+# Escalation thresholds shared with cache-invalidation checks (e.g. the
+# ablation harness refits cached pre-escalation fits that fail these).
+ESCALATE_RHAT = 1.05
+ESCALATE_ESS = 100.0
+
+
+def needsEscalation(
+    max_rhat: float,
+    min_ess: float,
+    rhat_thresh: float = ESCALATE_RHAT,
+    ess_thresh: float = ESCALATE_ESS,
+) -> bool:
+    """True when NUTS diagnostics warrant a cold re-run (also on non-finite values)."""
+    if not (np.isfinite(max_rhat) and np.isfinite(min_ess)):
+        return True
+    return max_rhat > rhat_thresh or min_ess < ess_thresh
+
 
 class WarmNuts:
     def __init__(
@@ -82,6 +99,10 @@ class WarmNuts:
         max_treedepth: int = 12,
         warm_mass: bool = True,
         mass_draws: int = 64,
+        escalate: bool = True,
+        escalate_rhat: float = ESCALATE_RHAT,
+        escalate_ess: float = ESCALATE_ESS,
+        escalate_tune: int = 2000,
     ) -> None:
         """
         Parameters
@@ -109,6 +130,21 @@ class WarmNuts:
             (default True).  Adaptation during tune stays on either way.
         mass_draws : int
             Number of proposal draws used to estimate the mass matrix.
+        escalate : bool
+            Rescue fits with poor diagnostics (default True): when the warm run
+            ends with max_rhat > escalate_rhat or min_ess < escalate_ess, re-run
+            once from PyMC's default init (no seed draws, unit metric) with
+            escalate_tune tuning steps and keep the better of the two fits.
+            Covers both slow-mixing posteriors that need a longer adaptation and
+            the rare dataset where the seed proposal itself is poor (e.g. IMH
+            collapse in a funnel).
+        escalate_rhat : float
+            max_rhat threshold that triggers escalation (default 1.05).
+        escalate_ess : float
+            min_ess (bulk) threshold that triggers escalation (default 100).
+        escalate_tune : int
+            Tuning steps for the escalated run (default 2000; draws stay at
+            ``draws`` so the sample count is unchanged for cache compatibility).
         """
         self.ds = ds
         self.n_chains = n_chains
@@ -119,6 +155,10 @@ class WarmNuts:
         self.max_treedepth = max_treedepth
         self.warm_mass = warm_mass
         self.mass_draws = mass_draws
+        self.escalate = escalate
+        self.escalate_rhat = escalate_rhat
+        self.escalate_ess = escalate_ess
+        self.escalate_tune = escalate_tune
 
         self.d = int(ds['d'])
         self.q = int(ds['q'])
@@ -360,45 +400,69 @@ class WarmNuts:
         -------
         proposal_out : Proposal with n_chains * draws samples and b=1.
         diag : dict with keys 'n_divergences', 'max_rhat', 'min_ess',
-            'min_ess_t', and 'reff'.
+            'min_ess_t', 'reff', and 'escalated'.
         """
         sg, sl, corr_b = self._prep(proposal, b_idx)
         indices = self._selectIndices(proposal, b_idx, sg)
         initvals = [self._ivFromSample(sg, sl, corr_b, i) for i in indices]
+        potential = self._warmPotential(sg, sl, corr_b) if self.warm_mass else None
 
+        trace = self._sample(self.tune, self.seed, initvals=initvals, potential=potential)
+        diag = self._diagFromTrace(trace)
+        diag['escalated'] = False
+
+        if self.escalate and self._needsEscalation(diag):
+            # cold rescue: default init and unit metric, so a poor seed proposal
+            # cannot poison the re-run; longer tune covers slow-mixing geometry
+            trace_esc = self._sample(self.escalate_tune, self.seed + 1)
+            diag_esc = self._diagFromTrace(trace_esc)
+            diag_esc['escalated'] = True
+            if self._diagImproves(diag_esc, diag):
+                trace, diag = trace_esc, diag_esc
+            else:
+                diag['escalated'] = True
+
+        proposal = self._traceToProposal(trace)
+        proposal.reff = diag['reff']
+        return proposal, diag
+
+    def _sample(
+        self,
+        tune: int,
+        seed: int,
+        initvals: list[dict] | None = None,
+        potential=None,
+    ) -> az.InferenceData:
         import pymc as pm
 
         with self.model:
-            if self.warm_mass:
+            if potential is not None:
                 # explicit step: pm.sample would otherwise rebuild the potential
                 # from the unit metric via init_nuts
-                step = pm.NUTS(
-                    potential=self._warmPotential(sg, sl, corr_b),
-                    target_accept=self.target_accept,
-                    max_treedepth=self.max_treedepth,
-                )
-                trace = pm.sample(
-                    tune=self.tune,
-                    draws=self.draws,
-                    chains=self.n_chains,
-                    step=step,
-                    initvals=initvals,
-                    random_seed=self.seed,
-                    return_inferencedata=True,
-                    progressbar=False,
-                )
+                kwargs = {
+                    'step': pm.NUTS(
+                        potential=potential,
+                        target_accept=self.target_accept,
+                        max_treedepth=self.max_treedepth,
+                    )
+                }
             else:
-                trace = pm.sample(
-                    tune=self.tune,
-                    draws=self.draws,
-                    chains=self.n_chains,
-                    initvals=initvals,
-                    target_accept=self.target_accept,
-                    max_treedepth=self.max_treedepth,
-                    random_seed=self.seed,
-                    return_inferencedata=True,
-                    progressbar=False,
-                )
+                kwargs = {
+                    'target_accept': self.target_accept,
+                    'max_treedepth': self.max_treedepth,
+                }
+            return pm.sample(
+                tune=tune,
+                draws=self.draws,
+                chains=self.n_chains,
+                initvals=initvals,
+                random_seed=seed,
+                return_inferencedata=True,
+                progressbar=False,
+                **kwargs,
+            )
+
+    def _diagFromTrace(self, trace: az.InferenceData) -> dict:
         n_divs = int(trace.sample_stats['diverging'].values.sum())
         n_draws_total = self.n_chains * self.draws
         try:
@@ -412,16 +476,27 @@ class WarmNuts:
             min_ess = float('nan')
             min_ess_t = float('nan')
             reff = 1.0
-        diag = {
+        return {
             'n_divergences': n_divs,
             'max_rhat': max_rhat,
             'min_ess': min_ess,
             'min_ess_t': min_ess_t,
             'reff': reff,
         }
-        proposal = self._traceToProposal(trace)
-        proposal.reff = reff
-        return proposal, diag
+
+    def _needsEscalation(self, diag: dict) -> bool:
+        return needsEscalation(
+            diag['max_rhat'], diag['min_ess'], self.escalate_rhat, self.escalate_ess
+        )
+
+    @staticmethod
+    def _diagImproves(new: dict, old: dict) -> bool:
+        """Prefer the fit with higher min_ess; a non-finite old always loses."""
+        if not np.isfinite(old['min_ess']):
+            return True
+        if not np.isfinite(new['min_ess']):
+            return False
+        return new['min_ess'] > old['min_ess']
 
 
 # ---------------------------------------------------------------------------
@@ -553,6 +628,7 @@ def runWarmNuts(
     wn_target_accept : float — target acceptance rate (default 0.9)
     wn_max_treedepth : int   — NUTS max tree depth (default 12)
     wn_warm_mass   : bool  — mass-matrix warm start (default True)
+    wn_escalate    : bool  — cold re-run rescue on poor diagnostics (default True)
     likelihood_family : int
     rescale        : bool
     seed           : int
@@ -570,6 +646,7 @@ def runWarmNuts(
     target_accept = getattr(cfg, 'wn_target_accept', 0.9)
     max_treedepth = getattr(cfg, 'wn_max_treedepth', 12)
     warm_mass = getattr(cfg, 'wn_warm_mass', True)
+    escalate = getattr(cfg, 'wn_escalate', True)
 
     # Everything up to the stacked output stays in standardized space —
     # buildPymc (via WarmNuts) models standardized ds['y']/ds['X'] (from
@@ -597,6 +674,7 @@ def runWarmNuts(
             target_accept=target_accept,
             max_treedepth=max_treedepth,
             warm_mass=warm_mass,
+            escalate=escalate,
         )(refined, b_idx=b)
         proposals.append(wn_proposal)
     merged = _stackProposals(proposals)
