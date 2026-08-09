@@ -91,7 +91,7 @@ def test_plot_name_suffix_is_sanitized(suffix, expected):
 
 def test_comparison_legend_defaults_to_right(monkeypatch):
     evaluator = Evaluator.__new__(Evaluator)
-    evaluator.cfg = argparse.Namespace(rescale=False, plot_suffix='')
+    evaluator.cfg = argparse.Namespace(rescale=False, plot_suffix='', show=False)
     evaluator.plot_dir = None
     proposal = Proposal(
         {
@@ -368,7 +368,7 @@ def test_mb_summary_cache_candidates_include_legacy_checkpoint_name(tmp_path):
 
 def test_mb_sample_cache_path_includes_checkpoint_name_and_seed(tmp_path):
     evaluator = Evaluator.__new__(Evaluator)
-    evaluator.cfg = argparse.Namespace(n_samples=1000, seed=7, k=2)
+    evaluator.cfg = argparse.Namespace(n_samples=1000, seed=7)
     evaluator.run_name = 'data=small-n-mixed_model=large_seed=13'
     evaluator.checkpoint_prefix = 'best'
     evaluator.data_path_test = tmp_path / 'small-n-sampled' / 'test.fit.npz'
@@ -377,7 +377,8 @@ def test_mb_sample_cache_path_includes_checkpoint_name_and_seed(tmp_path):
     path = evaluator._mbSampleCachePath('test')
 
     assert path.parent == evaluator.data_path_test.parent
-    assert path.name == ('test.mb.data=small-n-mixed_model=large_seed=13_best_s1000_seed7_k2.npz')
+    # the trailing k0 is a frozen compatibility tag, not a live setting (pseudo-MoE was removed)
+    assert path.name == ('test.mb.data=small-n-mixed_model=large_seed=13_best_s1000_seed7_k0.npz')
 
 
 def test_load_or_sample_mb_uses_cached_posterior_samples(monkeypatch, tmp_path):

@@ -17,3 +17,11 @@ def setDevice(device: str = ''):
         return torch.device('cuda')
     else:
         return torch.device('cpu')
+
+
+def synchronizeDevice(device: torch.device) -> None:
+    """Block until queued device work finishes (no-op on CPU) so timings are accurate."""
+    if device.type == 'cuda' and torch.cuda.is_available():
+        torch.cuda.synchronize(device)
+    elif device.type == 'mps' and hasattr(torch, 'mps'):
+        torch.mps.synchronize()

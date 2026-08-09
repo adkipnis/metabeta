@@ -15,7 +15,6 @@ and are keyed by checkpoint/prefix/n_samples/seed and by a hash of the dataset s
 """
 
 import argparse
-import hashlib
 import logging
 import time
 from pathlib import Path
@@ -29,10 +28,13 @@ from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.metropolis import MetropolisSampler
 from metabeta.utils.dataloader import sliceBatch, toDevice
+from metabeta.utils.device import synchronizeDevice
 from metabeta.utils.evaluation import EvaluationSummary
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.posterior_cache import (
+    cacheRefMtime,
     loadProposalCache,
+    maskTag,
     posteriorSampleCacheName,
     saveProposalCache,
 )
@@ -128,14 +130,6 @@ def fit2proposal(batch: dict[str, torch.Tensor], prefix: str) -> Proposal:
     return proposal
 
 
-def _synchronizeDevice(device: torch.device) -> None:
-    """Block until queued device work finishes (no-op on CPU) so timings are accurate."""
-    if device.type == 'cuda' and torch.cuda.is_available():
-        torch.cuda.synchronize(device)
-    elif device.type == 'mps' and hasattr(torch, 'mps'):
-        torch.mps.synchronize()
-
-
 def _warmupModel(
     model: Approximator,
     batch: dict[str, torch.Tensor],
@@ -150,14 +144,14 @@ def _warmupModel(
     """
     cpu_rng = torch.random.get_rng_state()
     cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
-    _synchronizeDevice(device)
+    synchronizeDevice(device)
     logger.info('Warming MB model on one batch with n_samples=1')
     try:
         end = min(batch_size, batch['X'].shape[0])
         warm = toDevice(sliceBatch(batch, 0, end), device)
         _ = model.estimate(warm, n_samples=1)
         del warm, _
-        _synchronizeDevice(device)
+        synchronizeDevice(device)
     finally:
         torch.random.set_rng_state(cpu_rng)
         if cuda_rng is not None:
@@ -190,10 +184,10 @@ def sampleMB(
         end = min(start + batch_size, B)
         b_chunk = sliceBatch(batch, start, end)
         b_chunk = toDevice(b_chunk, device)
-        _synchronizeDevice(device)
+        synchronizeDevice(device)
         t0_chunk = time.perf_counter()
         p_chunk = model.estimate(b_chunk, n_samples=n_samples)
-        _synchronizeDevice(device)
+        synchronizeDevice(device)
         tpd_chunk = (time.perf_counter() - t0_chunk) / (end - start)
         tpd_list.extend([tpd_chunk] * (end - start))
         p_chunk.to('cpu')
@@ -209,24 +203,6 @@ def sampleMB(
 
 # ---------------------------------------------------------------------------
 # Caching (posterior samples, refinements, summaries) — siblings of test.fit.npz.
-
-
-def _maskTag(mask: np.ndarray | None) -> str:
-    """Short hash identifying which datasets (of the full test file) survived filtering."""
-    if mask is None:
-        return 'all'
-    packed = np.packbits(mask.astype(np.uint8)).tobytes()
-    return hashlib.sha1(packed).hexdigest()[:12]
-
-
-def _refMtime(data_path: Path, ckpt_dir: Path | None = None, prefix: str | None = None) -> float:
-    """Freshness reference: cache is stale if older than the data (and, for MB, the checkpoint)."""
-    ref_mtime = data_path.stat().st_mtime if data_path.exists() else 0.0
-    if ckpt_dir is not None and prefix is not None:
-        ckpt_path = ckpt_dir / f'{prefix}.pt'
-        if ckpt_path.exists():
-            ref_mtime = max(ref_mtime, ckpt_path.stat().st_mtime)
-    return ref_mtime
 
 
 def _sampleCachePath(
@@ -250,7 +226,7 @@ def _sampleCachePath(
     method = method if not variant else f'{method}@{variant}'
     method_tag = method if rescale is None else f'{method}-rs{int(rescale)}'
     cache_name = posteriorSampleCacheName(
-        partition=f'test-{_maskTag(mask)}',
+        partition=f'test-{maskTag(mask)}',
         method=method_tag,
         checkpoint_name=ckpt_dir.name,
         checkpoint_prefix=prefix,
@@ -284,7 +260,7 @@ def loadOrSampleMB(
     cache_path = _sampleCachePath(
         data_path, 'mb', ckpt_dir, prefix, n_samples, seed, mask, variant=variant
     )
-    ref_mtime = _refMtime(data_path, ckpt_dir, prefix)
+    ref_mtime = cacheRefMtime(data_path, ckpt_dir, prefix)
     if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
         try:
             proposal, metadata = loadProposalCache(cache_path)
@@ -458,7 +434,7 @@ def loadOrRefine(
     cache_path = _sampleCachePath(
         data_path, method, ckpt_dir, prefix, n_samples, seed, mask, rescale, variant=variant
     )
-    ref_mtime = _refMtime(data_path, ckpt_dir, prefix)
+    ref_mtime = cacheRefMtime(data_path, ckpt_dir, prefix)
     if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
         try:
             proposal, metadata = loadProposalCache(cache_path)
@@ -497,7 +473,7 @@ def _summaryCachePath(
     seed: int | None = None,
     variant: str = '',
 ) -> Path:
-    tag = _maskTag(mask)
+    tag = maskTag(mask)
     method = method if not variant else f'{method}@{variant}'
     # model-derived methods (mb + refined) additionally key on checkpoint/prefix/n_samples/seed
     if ckpt_dir is not None:
@@ -539,7 +515,7 @@ def loadOrComputeSummary(
     cache_path = _summaryCachePath(
         data_path, method, mask, lf, rescale, ckpt_dir, prefix, n_samples, seed, variant
     )
-    ref_mtime = _refMtime(
+    ref_mtime = cacheRefMtime(
         data_path,
         ckpt_dir if is_model_derived else None,
         prefix if is_model_derived else None,

@@ -87,10 +87,11 @@ def _plotRecovery(
         'show_legend': upper if show_legend is None else show_legend,
         'show_x': lower,
         'stats': stats,
-        # anchor the box on its right edge so it clears the right and bottom spines
+        # lower-right corner, equal gap to the right and bottom spines: with square axes and
+        # symmetric bbox padding that holds exactly when stats_loc_x == 1 - stats_loc_y
         'stats_ha': 'right',
-        'stats_loc_x': 0.97,
-        'stats_loc_y': 0.08,
+        'stats_loc_x': 0.95,
+        'stats_loc_y': 0.05,
     }
     niceify(ax, info)
 

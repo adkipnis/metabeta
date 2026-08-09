@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,29 @@ from metabeta.utils.results import Proposal
 # v2: caches written before the 2026-07-28 CouplingFlow.sample() log-det sign fix carry
 # corrupted log_prob_g/log_prob_l; bumping the version rejects them everywhere at load.
 POSTERIOR_SAMPLE_CACHE_VERSION = 2
+
+
+def maskTag(mask: np.ndarray | None) -> str:
+    """Short hash identifying which datasets (of the full test file) survived filtering."""
+    if mask is None:
+        return 'all'
+    packed = np.packbits(mask.astype(np.uint8)).tobytes()
+    return hashlib.sha1(packed).hexdigest()[:12]
+
+
+def cacheRefMtime(
+    data_path: Path,
+    ckpt_dir: Path | None = None,
+    prefix: str | None = None,
+) -> float:
+    """Freshness reference: a cache is stale if older than the data (and, for model-derived
+    quantities, the checkpoint it was produced from)."""
+    ref_mtime = data_path.stat().st_mtime if data_path.exists() else 0.0
+    if ckpt_dir is not None and prefix is not None:
+        ckpt_path = ckpt_dir / f'{prefix}.pt'
+        if ckpt_path.exists():
+            ref_mtime = max(ref_mtime, ckpt_path.stat().st_mtime)
+    return ref_mtime
 
 
 def posteriorSampleCacheName(

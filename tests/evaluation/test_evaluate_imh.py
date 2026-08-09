@@ -307,3 +307,22 @@ def test_common_mask_alignment_handles_unmasked_mb_imh():
     aligned = Evaluator._alignToCommon(proposal, None, common)
 
     assert aligned.samples_g.shape[0] == 1
+
+
+def test_plot_does_not_block_on_a_gui_window(monkeypatch):
+    """Batch runs must not open an interactive figure that has to be closed by hand."""
+    evaluator = _evaluator(rescale=False, plot_suffix='', show=False)
+    evaluator.plot_dir = None
+    seen = {}
+
+    monkeypatch.setattr(
+        'metabeta.evaluation.evaluate.plotComparison',
+        lambda *a, **k: seen.update(k) or None,
+    )
+    monkeypatch.setattr(
+        Evaluator, '_summaryForPlot', staticmethod(lambda summary, proposal, batch: summary)
+    )
+
+    evaluator.plot([_proposal()], [_lightSummary()], ['MB'], {'X': torch.zeros(1, 1)})
+
+    assert seen['show'] is False

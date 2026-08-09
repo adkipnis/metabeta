@@ -4,13 +4,13 @@ import gc
 import resource
 import logging
 import argparse
-import hashlib
 import re
 import zipfile
 from dataclasses import replace
 from itertools import chain
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 from numpy.lib import format as npFormat
 import torch
@@ -18,7 +18,7 @@ from tabulate import tabulate
 from tqdm import tqdm
 
 from metabeta.utils.logger import setupLogging
-from metabeta.utils.device import setDevice
+from metabeta.utils.device import setDevice, synchronizeDevice
 from metabeta.utils.names import datasetFilename, runName
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import (
@@ -38,13 +38,21 @@ from metabeta.utils.evaluation import (
 )
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.models.approximator import Approximator
-from metabeta.utils.moe import moeEstimate
 from metabeta.utils.posterior_cache import (
+    cacheRefMtime,
     loadProposalCache,
+    maskTag,
     posteriorSampleCacheName,
     saveProposalCache,
 )
-from metabeta.utils.posterior_eval import IMH_METHODS, loadOrRefine, posthocDefaults, validMethods
+from metabeta.utils.posterior_eval import (
+    IMH_METHODS,
+    fit2proposal,
+    fitBatchMask,
+    loadOrRefine,
+    posthocDefaults,
+    validMethods,
+)
 from metabeta.evaluation.intervals import getCoverageErrors, getCoverages, getCredibleIntervals
 from metabeta.evaluation.point import getCorrelation, getPointEstimates, getRMSE
 from metabeta.evaluation.summary import EST_TYPE, _averageOverAlpha, getSummary, summaryTable
@@ -63,6 +71,10 @@ _KNOWN_MODELS = _ALL_MODELS + (_MB_IMH,)
 _MB_MODELS = frozenset(('MB', _MB_IMH))
 # Summary-cache methods keyed only by the data file (as opposed to checkpoint-derived ones).
 _FIT_METHODS = frozenset(m.lower() for m in _FIT_MODELS)
+
+# Cache filenames used to carry the pseudo-MoE view count. That path is gone, but the tag
+# stays in the key so caches written before its removal (all k=0) still resolve.
+_LEGACY_K_TAG = 'k0'
 
 
 def setup() -> argparse.Namespace:
@@ -83,7 +95,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--verbosity', type=int, default=1)
     parser.add_argument('--n_samples', type=int, default=1000)
-    parser.add_argument('--k', type=int, default=0, help='pseudo-MoE permuted views (0=off)')
     parser.add_argument('--batch_size', type=int)
     parser.add_argument('--save_tables', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--outdir', type=str)
@@ -123,6 +134,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument(
         '--plot', action=argparse.BooleanOptionalAction, default=True,
         help='Save comparison plots (default: true)',
+    )
+    parser.add_argument(
+        '--show', action=argparse.BooleanOptionalAction, default=False,
+        help='Open the figure in an interactive window; blocks until closed (default: false)',
     )
     parser.add_argument(
         '--warmup', action=argparse.BooleanOptionalAction, default=True,
@@ -183,12 +198,12 @@ class Evaluator:
         self.device = setDevice(cfg.device)
 
         self.cfg.batch_size = getattr(cfg, 'batch_size', 8)
-        self.cfg.k = getattr(cfg, 'k', 0)
         self.cfg.save_tables = getattr(cfg, 'save_tables', False)
         self.cfg.converged_subset = getattr(cfg, 'converged_subset', False)
         self.cfg.convergence_mode = getattr(cfg, 'convergence_mode', 'liberal')
         self.cfg.pareto_k_thr = getattr(cfg, 'pareto_k_thr', 0.7)
         self.cfg.plot = getattr(cfg, 'plot', True)
+        self.cfg.show = getattr(cfg, 'show', False)
         self.cfg.warmup = getattr(cfg, 'warmup', True)
         self.cfg.plot_suffix = getattr(cfg, 'plot_suffix', '')
         self.cfg.summary_chunk_size = getattr(cfg, 'summary_chunk_size', 16)
@@ -378,10 +393,6 @@ class Evaluator:
         )
         self._setDataloader(partition, dl, path)
 
-    def _ensureDataloaders(self) -> None:
-        self._ensureDataloader('valid')
-        self._ensureDataloader('test')
-
     def _initModel(self) -> None:
         if hasattr(self.cfg, 'model_cfg') and isinstance(self.cfg.model_cfg, ApproximatorConfig):
             self.model_cfg = self.cfg.model_cfg
@@ -421,23 +432,10 @@ class Evaluator:
     # -------------------------------------------------------------------------
 
     def _fit2proposal(self, batch: dict[str, torch.Tensor], prefix: str) -> Proposal:
-        proposed = {}
-        ffx = batch[f'{prefix}_ffx']
-        sigma_rfx = batch[f'{prefix}_sigma_rfx']
-        samples_g = [ffx, sigma_rfx]
-        if f'{prefix}_sigma_eps' in batch:
-            sigma_eps = batch[f'{prefix}_sigma_eps'].unsqueeze(-1)
-            samples_g.append(sigma_eps)
-            has_sigma_eps = True
-        else:
-            has_sigma_eps = False
-        proposed['global'] = {'samples': torch.cat(samples_g, dim=-1)}
-        proposed['local'] = {'samples': batch[f'{prefix}_rfx']}
-        corr_rfx = batch.get(f'{prefix}_corr_rfx', None)
-        proposal = Proposal(proposed, has_sigma_eps=has_sigma_eps, corr_rfx=corr_rfx)
+        """Shared fit -> Proposal conversion, plus this pipeline's optional rescale."""
+        proposal = fit2proposal(batch, prefix)
         if self.cfg.rescale:
             proposal.rescale(batch['sd_y'])
-        proposal.tpd = batch[f'{prefix}_duration'].mean().item()
         return proposal
 
     @staticmethod
@@ -566,12 +564,6 @@ class Evaluator:
         self._logMemory('Loaded %s proposal directly from npz', prefix)
         return proposal
 
-    def _fitBatchMask(self, batch: dict[str, torch.Tensor], prefix: str) -> np.ndarray:
-        failed_key = f'{prefix}_failed'
-        if failed_key not in batch:
-            return np.ones(batch['X'].shape[0], dtype=bool)
-        return ~batch[failed_key].cpu().numpy().astype(bool)
-
     def _sampleBatch(
         self, batch: dict[str, torch.Tensor], n_samples: int | None = None
     ) -> Proposal:
@@ -580,80 +572,22 @@ class Evaluator:
             proposal.rescale(batch['sd_y'])
         return proposal
 
-    def _sampleMoe(
-        self,
-        batch: dict[str, torch.Tensor],
-        n_datasets_seen: int,
-        n_samples: int | None = None,
-    ) -> list[Proposal]:
-        B = batch['X'].shape[0]
-        proposals = []
-        for i in range(B):
-            single = {k: v[i : i + 1] if torch.is_tensor(v) else v for k, v in batch.items()}
-            rng = np.random.default_rng(self.cfg.seed + n_datasets_seen + i)
-            proposal = moeEstimate(
-                self.model,
-                single,
-                n_samples or self.cfg.n_samples,
-                self.cfg.k,
-                rng=rng,
-            )
-            if self.cfg.rescale:
-                proposal.rescale(single['sd_y'])
-            proposals.append(proposal)
-        return proposals
-
-    def _synchronizeDevice(self) -> None:
-        if self.device.type == 'cuda' and torch.cuda.is_available():
-            torch.cuda.synchronize(self.device)
-        elif self.device.type == 'mps' and hasattr(torch, 'mps'):
-            torch.mps.synchronize()
-
-    def _firstDatasetBatch(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        batch_size = batch['X'].shape[0]
-        return {
-            k: v[:1] if torch.is_tensor(v) and v.shape[:1] == (batch_size,) else v
-            for k, v in batch.items()
-        }
-
     def _warmupMbBatch(self, batch: dict[str, torch.Tensor], label: str) -> None:
         if not self.cfg.warmup:
             return
 
         cpu_rng = torch.random.get_rng_state()
         cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
-        self._synchronizeDevice()
+        synchronizeDevice(self.device)
         logger.info('Warming MB model on one %s batch with n_samples=1', label)
         try:
-            if self.cfg.k > 0:
-                warm_batch = self._firstDatasetBatch(batch)
-                proposals = self._sampleMoe(warm_batch, 0, n_samples=1)
-                del proposals
-            else:
-                proposal = self._sampleBatch(batch, n_samples=1)
-                del proposal
-            self._synchronizeDevice()
+            proposal = self._sampleBatch(batch, n_samples=1)
+            del proposal
+            synchronizeDevice(self.device)
         finally:
             torch.random.set_rng_state(cpu_rng)
             if cuda_rng is not None:
                 torch.cuda.set_rng_state_all(cuda_rng)
-
-    @torch.no_grad()
-    def sample(self, batch: dict[str, torch.Tensor]) -> Proposal:
-        self._ensureModelLoaded()
-        batch = toDevice(batch, self.device)
-        self._warmupMbBatch(batch, 'full')
-        self._synchronizeDevice()
-        t0 = time.perf_counter()
-        if self.cfg.k > 0:
-            proposals = self._sampleMoe(batch, 0)
-            proposal = concatProposalsBatch(proposals)
-        else:
-            proposal = self._sampleBatch(batch)
-        self._synchronizeDevice()
-        t1 = time.perf_counter()
-        proposal.tpd = (t1 - t0) / batch['X'].shape[0]
-        return proposal
 
     @torch.no_grad()
     def sampleMinibatched(self, dl: Dataloader, label: str) -> Proposal:
@@ -666,22 +600,16 @@ class Evaluator:
         except StopIteration:
             raise ValueError(f'cannot sample empty dataloader for {label}')
         self._warmupMbBatch(first_batch, label)
-        self._synchronizeDevice()
+        synchronizeDevice(self.device)
         t0 = time.perf_counter()
         for batch in tqdm(chain([first_batch], iterator), total=len(dl), desc=f'  {label}'):
             if batch is not first_batch:
                 batch = toDevice(batch, self.device)
-            if self.cfg.k > 0:
-                batch_proposals = self._sampleMoe(batch, n_datasets)
-                for p in batch_proposals:
-                    p.to('cpu')
-                    proposals.append(p)
-            else:
-                proposal = self._sampleBatch(batch)
-                proposal.to('cpu')
-                proposals.append(proposal)
+            proposal = self._sampleBatch(batch)
+            proposal.to('cpu')
+            proposals.append(proposal)
             n_datasets += batch['X'].shape[0]
-        self._synchronizeDevice()
+        synchronizeDevice(self.device)
         t1 = time.perf_counter()
         merged = concatProposalsBatch(proposals)
         merged.tpd = (t1 - t0) / max(n_datasets, 1)
@@ -712,13 +640,6 @@ class Evaluator:
         logger.info(summaryTable(eval_summary, lf))
         return eval_summary
 
-    @staticmethod
-    def _maskTag(mask: np.ndarray | None) -> str:
-        if mask is None:
-            return 'all'
-        packed = np.packbits(mask.astype(np.uint8)).tobytes()
-        return hashlib.sha1(packed).hexdigest()[:12]
-
     def _summaryCachePath(
         self,
         partition: str,
@@ -738,13 +659,13 @@ class Evaluator:
             )
             cache_name = (
                 f'summary_{partition}_{method}_{run_name}_{prefix}'
-                f'_s{self.cfg.n_samples}_seed{self.cfg.seed}_k{self.cfg.k}'
+                f'_s{self.cfg.n_samples}_seed{self.cfg.seed}_{_LEGACY_K_TAG}'
                 f'_predcov{int(getattr(self.cfg, "pred_coverage", False))}'
-                f'_{self._maskTag(mask)}.pt'
+                f'_{maskTag(mask)}.pt'
             )
             return data_path.parent / cache_name
         if mask is not None:
-            return data_path.parent / f'summary_{partition}_{method}_{self._maskTag(mask)}.pt'
+            return data_path.parent / f'summary_{partition}_{method}_{maskTag(mask)}.pt'
         return data_path.parent / f'summary_{partition}_{method}.pt'
 
     def _mbSampleCachePath(
@@ -767,7 +688,6 @@ class Evaluator:
             checkpoint_prefix=prefix,
             n_samples=self.cfg.n_samples,
             seed=self.cfg.seed,
-            k=self.cfg.k,
         )
         return data_path.parent / cache_name
 
@@ -787,12 +707,7 @@ class Evaluator:
             if not self._directDataMode()
             else self._partitionDataPath(partition)
         )
-        ref_mtime = data_path.stat().st_mtime if data_path.exists() else 0.0
-        if getattr(self, 'ckpt_dir', None) is not None:
-            ckpt_path = self.ckpt_dir / f'{self.checkpoint_prefix}.pt'
-            if ckpt_path.exists():
-                ref_mtime = max(ref_mtime, ckpt_path.stat().st_mtime)
-        return ref_mtime
+        return cacheRefMtime(data_path, getattr(self, 'ckpt_dir', None), self.checkpoint_prefix)
 
     def _saveMbSampleCache(self, partition: str, proposal: Proposal) -> Path:
         cache_path = self._mbSampleCachePath(partition)
@@ -802,7 +717,6 @@ class Evaluator:
             metadata={
                 'n_samples': self.cfg.n_samples,
                 'seed': self.cfg.seed,
-                'k': self.cfg.k,
                 'checkpoint_prefix': self.checkpoint_prefix,
                 'run_name': self.run_name,
             },
@@ -846,13 +760,9 @@ class Evaluator:
         return proposal
 
     def _summaryRefMtime(self, partition: str, method: str) -> float:
-        data_path = self._partitionDataPath(partition)
-        ref_mtime = data_path.stat().st_mtime if data_path.exists() else 0.0
-        if method not in _FIT_METHODS and getattr(self, 'ckpt_dir', None) is not None:
-            ckpt_path = self.ckpt_dir / f'{self.checkpoint_prefix}.pt'
-            if ckpt_path.exists():
-                ref_mtime = max(ref_mtime, ckpt_path.stat().st_mtime)
-        return ref_mtime
+        # fit summaries invalidate on the data alone; checkpoint-derived ones also on the model
+        ckpt_dir = None if method in _FIT_METHODS else getattr(self, 'ckpt_dir', None)
+        return cacheRefMtime(self._partitionDataPath(partition), ckpt_dir, self.checkpoint_prefix)
 
     def _summaryCacheCandidates(
         self,
@@ -1147,7 +1057,7 @@ class Evaluator:
             batch,
             plot_dir=target_dir,
             plot_name=self._plotName(self.cfg.plot_suffix),
-            show=True,
+            show=self.cfg.show,
             legend_right=getattr(self.cfg, 'comparison_legend', 'right') == 'right',
         )
         if saved_path is not None:
@@ -1355,10 +1265,10 @@ class Evaluator:
         elif model == 'NUTS':
             return self._fit2proposal(full_batch, prefix='nuts'), None
         elif model == 'ADVI':
-            mask = self._fitBatchMask(full_batch, prefix='advi')
+            mask = fitBatchMask(full_batch, prefix='advi')
             return self._fit2proposal(subsetBatch(full_batch, mask), prefix='advi'), mask
         elif model == 'LAPLACE':
-            mask = self._fitBatchMask(full_batch, prefix='laplace')
+            mask = fitBatchMask(full_batch, prefix='laplace')
             return self._fit2proposal(subsetBatch(full_batch, mask), prefix='laplace'), mask
         raise ValueError(f'unknown model: {model}')
 
@@ -1772,13 +1682,6 @@ class Evaluator:
     # Entry points
     # -------------------------------------------------------------------------
 
-    def testrun(self) -> None:
-        self._ensureDataloader('valid')
-        full_batch = self.dl_valid.fullBatch()
-        proposal_mb = self.sampleMinibatched(self.dl_valid, 'MB')
-        summary_mb = self.summary(proposal_mb, full_batch)
-        self.plot([proposal_mb], [summary_mb], ['MB'], full_batch)
-
     def go(self) -> None:
         partitions = self._resolvePartitions()
         models = self._resolveModels()
@@ -1807,6 +1710,9 @@ class Evaluator:
 def main() -> None:
     cfg = setup()
     setupLogging(cfg.verbosity)
+    if not getattr(cfg, 'show', False):
+        # batch runs must never block on a GUI window waiting to be closed
+        matplotlib.use('Agg', force=True)
     try:
         evaluator = Evaluator(cfg)
         evaluator.go()
