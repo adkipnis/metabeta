@@ -10,46 +10,54 @@ DPI = 300
 
 # The largest models label 27 series (16 ffx + 5 sigma_rfx + sigma_eps + 5 rfx), so a palette has
 # to stay distinct that far out; the previous tab20-derived one held only 20 and silently repeated
-# colours beyond that. These were picked by greedy farthest-point search in CIE-Lab *after*
-# compositing onto white at the scatter alpha, which is the only form the eye ever sees. The
-# search ran over a deliberately muted pool (HUSL lightness 40/55/70, saturation 45-68), giving
-# mean chroma 42 — just under tab20's 45, so the figures keep a restrained, print-friendly look.
-# Minimum pairwise dE is 7.0 blended / 19.3 opaque, against 0.0 for the ordering it replaces. A
-# more saturated pool reaches dE 10.8 but reads as neon; distinctness was traded for restraint on
-# purpose. Regenerate with the same search if the series count ever outgrows this list.
+# colours beyond that. Colours were picked by greedy farthest-point search in CIE-Lab *after*
+# compositing onto white at the scatter alpha, which is the only form the eye ever sees, over a
+# deliberately muted pool (HUSL lightness 40/54/68, saturation 42-60) for mean chroma 37 — well
+# under tab20's 45, so the figures stay restrained in print.
+#
+# Order matters as much as membership: every panel colours a *contiguous* slice (see
+# _paletteSlice), so neighbouring indices are the ones seen side by side, and a merely
+# globally-distinct palette can still seat two near-twins together. The order below maximises the
+# weakest consecutive step (a bottleneck Hamiltonian path over the same distance matrix), lifting
+# adjacent dE from 8 to 19.5 blended / 57.6 opaque. Keep entries in this order; reshuffling
+# preserves the set but throws away that property.
+#
+# Global minimum pairwise dE is 5.3 blended / 14.2 opaque, against 0.0 for what it replaces. A
+# louder pool scores better globally but reads as neon; restraint was chosen deliberately.
+# Regenerate with the same two-stage search if the series count ever outgrows this list.
 PALETTE = [
-    '#bc57d4',
-    '#5fbd5f',
-    '#ca6549',
-    '#6bb0e1',
-    '#44654a',
-    '#824a78',
-    '#4352bf',
-    '#bca960',
-    '#e04d70',
-    '#b49ee4',
-    '#64b8a9',
-    '#d599a7',
-    '#39617e',
-    '#7c5444',
-    '#e489de',
-    '#678d48',
-    '#d39e7d',
-    '#8c3c94',
-    '#d5509e',
-    '#946fd5',
-    '#5781d4',
-    '#a83334',
-    '#8a835f',
-    '#c36484',
-    '#61bb86',
-    '#64898a',
-    '#4f5995',
-    '#6944c1',
-    '#9da8d1',
-    '#9db07d',
-    '#9e3769',
-    '#4a906d',
+    '#c26372',
+    '#6bb1a1',
+    '#8a4288',
+    '#828260',
+    '#b25dc7',
+    '#d19593',
+    '#4657a8',
+    '#785739',
+    '#c8579a',
+    '#46644e',
+    '#d38adb',
+    '#558891',
+    '#a13a40',
+    '#a09edb',
+    '#c06750',
+    '#5c80c1',
+    '#d79568',
+    '#4c5e7c',
+    '#da5152',
+    '#72aad4',
+    '#d45374',
+    '#518b6e',
+    '#b56693',
+    '#7cb083',
+    '#9770b4',
+    '#b4a367',
+    '#884966',
+    '#67b567',
+    '#cd92bc',
+    '#68894f',
+    '#6749b5',
+    '#8b4b46',
 ]
 
 # fallback marker size (points) when a handle carries no size of its own
