@@ -5,7 +5,7 @@ from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 
 from metabeta.evaluation.sbc import getFractionalRanks, simultaneousBands
-from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
+from metabeta.utils.plot import DPI, paramColors, savePlot, niceify
 from metabeta.utils.results import getAllNames, getCorrRfxNames, getMasks, Proposal, joinSigmas
 
 
@@ -89,14 +89,6 @@ def _plotSbcRow(
     masks = getMasks(data, has_sigma_eps=has_eps)
 
     n_datasets = len(data['X'])
-    n_colors = len(PALETTE)
-    color_offset = 0
-
-    def _nextColors(n: int) -> list[str]:
-        nonlocal color_offset
-        out = [PALETTE[(color_offset + i) % n_colors] for i in range(n)]
-        color_offset += n
-        return out
 
     # Global parameters: ffx, sigmas, corr_rfx
     n_eff_global = n_datasets
@@ -105,7 +97,7 @@ def _plotSbcRow(
             ax,
             ranks[k],
             names[k],
-            _nextColors(len(names[k])),
+            paramColors(names[k]),
             masks[k],
             diff=diff,
             title=title,
@@ -119,7 +111,7 @@ def _plotSbcRow(
             ax,
             ranks['corr_rfx'],
             getCorrRfxNames(proposal.q),
-            _nextColors(ranks['corr_rfx'].shape[-1]),
+            paramColors(getCorrRfxNames(proposal.q)),
             mask=None,
             diff=diff,
             title=title,
@@ -138,7 +130,7 @@ def _plotSbcRow(
         ax,
         ranks['rfx'],
         names['rfx'],
-        _nextColors(len(names['rfx'])),
+        paramColors(names['rfx']),
         masks['rfx'],
         diff=diff,
         title=title,

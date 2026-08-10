@@ -9,17 +9,12 @@ from metabeta.utils.evaluation import (
     EvaluationSummary,
 )
 from metabeta.utils.regularization import corrToLower
-from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
+from metabeta.utils.plot import DPI, paramColors, savePlot, niceify
 from metabeta.utils.results import getMasks, getNames, getCorrRfxNames, joinSigmas
 
 
 def _nanMean(x: torch.Tensor) -> float:
     return float(torch.nanmean(x).item())
-
-
-def _paletteSlice(offset: int, n: int) -> list[str]:
-    n_colors = len(PALETTE)
-    return [PALETTE[(offset + i) % n_colors] for i in range(n)]
 
 
 def _plotRecovery(
@@ -87,8 +82,7 @@ def _plotRecovery(
         'show_legend': upper if show_legend is None else show_legend,
         'show_x': lower,
         'stats': stats,
-        # lower-right corner, equal gap to the right and bottom spines: with square axes and
-        # symmetric bbox padding that holds exactly when stats_loc_x == 1 - stats_loc_y
+        # equal gap to right and bottom spines: exact when stats_loc_x == 1 - stats_loc_y
         'stats_ha': 'right',
         'stats_loc_x': 0.95,
         'stats_loc_y': 0.05,
@@ -113,17 +107,17 @@ def _plotRecoveryGrouped(
     lower: bool = True,
     show_legend: bool | None = None,
 ) -> None:
-    i = 0
-    for ax, tar, est, mas, met, nam, tit in zip(
-        axs,
-        targets,
-        estimates,
-        masks,
-        metrics,
-        names,
-        titles,  # type: ignore
+    for panel, (ax, tar, est, mas, met, nam, tit) in enumerate(
+        zip(
+            axs,
+            targets,
+            estimates,
+            masks,
+            metrics,
+            names,
+            titles,  # type: ignore
+        )
     ):
-        col = _paletteSlice(i, len(nam))
         _plotRecovery(
             ax,
             targets=tar.numpy(),
@@ -131,16 +125,15 @@ def _plotRecoveryGrouped(
             mask=mas.numpy(),
             stats=met,
             names=nam,
-            colors=col,
+            colors=paramColors(nam),
             title=tit,
-            ylabel=(ylabel if i == 0 else ''),
+            ylabel=(ylabel if panel == 0 else ''),
             marker=marker,
             alpha=alpha,
             upper=upper,
             lower=lower,
             show_legend=show_legend,
         )
-        i += len(nam)
 
 
 def _prepareRecoveryData(

@@ -7,7 +7,7 @@ from metabeta.utils.evaluation import (
     EvaluationSummary,
     dictMean,
 )
-from metabeta.utils.plot import DPI, PALETTE, savePlot, niceify
+from metabeta.utils.plot import DPI, paramColors, savePlot, niceify
 from metabeta.utils.results import getNames, getCorrRfxNames, Proposal
 
 
@@ -36,14 +36,14 @@ def _plotCoverage(
     nominal = [int(100.0 * (1.0 - alpha)) for alpha in cvrg]
 
     # plot coverage per parameter
-    n_colors = len(PALETTE)
+    colors = paramColors(names)
     for i, values in enumerate(matrix):
         coverage_i = 100.0 * values
         ax.plot(
             nominal,
             coverage_i,
             label=names[i],
-            color=PALETTE[i % n_colors],
+            color=colors[i],
             alpha=line_alpha,
             lw=3,
         )
@@ -69,8 +69,7 @@ def _plotCoverage(
         'show_x': show_x,
         'stats': stats,
         'stats_suffix': '%',
-        # lower-right corner, equal gap to the right and bottom spines: with square axes and
-        # symmetric bbox padding that holds exactly when stats_loc_x == 1 - stats_loc_y
+        # equal gap to right and bottom spines: exact when stats_loc_x == 1 - stats_loc_y
         'stats_ha': 'right',
         'stats_loc_x': 0.95,
         'stats_loc_y': 0.05,

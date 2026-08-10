@@ -27,12 +27,11 @@ _COL_TITLES_CORR = [
     'Empirical Coverage',
     'Δ Uniform ECDF',
 ]
-_RECOVERY_ALPHA = 0.35
-_LINE_ALPHA = 0.75
+# translucent enough to show dense structure, opaque enough to match the legend swatch
+_RECOVERY_ALPHA = 0.45
+_LINE_ALPHA = 0.85
 _RIGHT_LEGEND_FONTSIZE = 30
-# Anchor of the right legend's left edge. Tuned against _PLOT_RIGHT_MARGIN so the gap to the
-# outermost panel is ~40% smaller than the old 0.90 anchor; the legend still ends near 0.96,
-# well inside the figure, so a larger font does not overflow.
+# tuned against _PLOT_RIGHT_MARGIN; legend ends near 0.96, inside the figure
 _RIGHT_LEGEND_X = 0.890
 _PLOT_RIGHT_MARGIN = 0.89
 
@@ -48,8 +47,7 @@ def _rightLegendHandles(axs) -> dict[str, object]:
                 or axis_label in handles_by_label
             ):
                 continue
-            # opaque stand-in: the plotted artists are semi-transparent, which makes the shared
-            # legend's swatches too washed out to match against the panels
+            # opaque stand-in: plotted artists are translucent, washing out the swatches
             handles_by_label[axis_label] = legendProxy(handle, axis_label)
     return handles_by_label
 

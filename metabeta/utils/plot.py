@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib import colors as mcolors
@@ -8,71 +9,185 @@ from matplotlib.lines import Line2D
 
 DPI = 300
 
-# The largest models label 27 series (16 ffx + 5 sigma_rfx + sigma_eps + 5 rfx), so a palette has
-# to stay distinct that far out; the previous tab20-derived one held only 20 and silently repeated
-# colours beyond that. Colours were picked by greedy farthest-point search in CIE-Lab *after*
-# compositing onto white at the scatter alpha, which is the only form the eye ever sees, over a
-# deliberately muted pool (HUSL lightness 40/54/68, saturation 42-60) for mean chroma 37 — well
-# under tab20's 45, so the figures stay restrained in print.
-#
-# Order matters as much as membership: every panel colours a *contiguous* slice (see
-# _paletteSlice), so neighbouring indices are the ones seen side by side, and a merely
-# globally-distinct palette can still seat two near-twins together. The order below maximises the
-# weakest consecutive step (a bottleneck Hamiltonian path over the same distance matrix), lifting
-# adjacent dE from 8 to 19.5 blended / 57.6 opaque. Keep entries in this order; reshuffling
-# preserves the set but throws away that property.
-#
-# Global minimum pairwise dE is 5.3 blended / 14.2 opaque, against 0.0 for what it replaces. A
-# louder pool scores better globally but reads as neon; restraint was chosen deliberately.
-# Regenerate with the same two-stage search if the series count ever outgrows this list.
+# tab20's ordering kept verbatim, then extended: tab20 stops at 20 but the largest models label 27
+# series, so it used to wrap and repeat colours. Additions sit at tab20's pastel lightness (L* 78)
+# so none reads darker than its neighbours. Used by warmfit and as a fallback; parameter panels use
+# paramColors below.
 PALETTE = [
-    '#c26372',
-    '#6bb1a1',
-    '#8a4288',
-    '#828260',
-    '#b25dc7',
-    '#d19593',
-    '#4657a8',
-    '#785739',
-    '#c8579a',
-    '#46644e',
-    '#d38adb',
-    '#558891',
-    '#a13a40',
-    '#a09edb',
-    '#c06750',
-    '#5c80c1',
-    '#d79568',
-    '#4c5e7c',
-    '#da5152',
-    '#72aad4',
-    '#d45374',
-    '#518b6e',
-    '#b56693',
-    '#7cb083',
-    '#9770b4',
-    '#b4a367',
-    '#884966',
-    '#67b567',
-    '#cd92bc',
-    '#68894f',
-    '#6749b5',
-    '#8b4b46',
+    '#1f77b4',
+    '#ff7f0e',
+    '#2ca02c',
+    '#d62728',
+    '#9467bd',
+    '#8c564b',
+    '#e377c2',
+    '#7f7f7f',
+    '#bcbd22',
+    '#17becf',
+    '#aec7e8',
+    '#ffbb78',
+    '#98df8a',
+    '#ff9896',
+    '#c5b0d5',
+    '#c49c94',
+    '#f7b6d2',
+    '#c7c7c7',
+    '#dbdb8d',
+    '#9edae5',
+    '#6fd4b2',
+    '#d8be8f',
+    '#6ad96a',
+    '#a7cc8f',
+    '#ecaced',
+    '#93cdb9',
+    '#afcd6a',
+    '#dfb7c0',
+    '#6dd696',
+    '#e1baa2',
+    '#71d1ce',
+    '#90d0a3',
 ]
+
+
+# Parameter colours. Panels colour a contiguous run of parameters and never share an axes, so
+# separation only has to hold within a panel (<=16 colours), not across all 27. That slack pays for
+# encoding meaning: hue identifies the predictor, so beta_j / sigma_j / alpha_j are three shades of
+# one colour, and lightness identifies the role. rho_ij takes the hue between its two effects;
+# sigma_eps has no matching predictor and is near-neutral.
+#
+# role -> (L*, chroma fraction, alternate chroma fraction). Chroma is a fraction of what sRGB can
+# reach at that lightness and hue, never an absolute target: the ceiling swings from ~90 in the
+# pinks to ~36 in the cyans, and a fixed target clips the cyans into each other.
+_ROLE_STYLE = {
+    'ffx': (66.0, 0.95, 0.65),
+    'sigmas': (73.0, 0.95, 0.65),
+    'rfx': (78.0, 0.95, 0.65),
+    'corr': (70.0, 0.95, 0.65),
+}
+_SIGMA_EPS_STYLE = (73.0, 0.10)
+_SIGMA_EPS_HUE = 80.0
+
+# Chroma alternates by position around the hue circle, not by index: bit-reversal sends consecutive
+# indices to opposite sides, so index parity would give hue-neighbours matching chroma.
+_HUE_SLOTS = 16
+
+_D65 = np.array([0.95047, 1.0, 1.08883])
+_XYZ2RGB = np.array(
+    [
+        [3.2404542, -1.5371385, -0.4985314],
+        [-0.9692660, 1.8760108, 0.0415560],
+        [0.0556434, -0.2040259, 1.0572252],
+    ]
+)
+
+
+def _lab2rgb(lab: np.ndarray) -> np.ndarray:
+    """CIE-Lab to sRGB, unclipped so gamut violations stay detectable."""
+    L, a, b = lab
+    fy = (L + 16.0) / 116.0
+    fx, fz = fy + a / 500.0, fy - b / 200.0
+    e, k = 216 / 24389, 24389 / 27
+    f = np.array([fx, fy, fz])
+    xyz = np.where(f**3 > e, f**3, (116.0 * f - 16.0) / k) * _D65
+    lin = _XYZ2RGB @ xyz
+    return np.where(
+        lin <= 0.0031308,
+        12.92 * lin,
+        1.055 * np.power(np.clip(lin, 0.0, None), 1 / 2.4) - 0.055,
+    )
+
+
+def _maxChroma(lightness: float, hue_deg: float) -> float:
+    """Largest in-gamut C* at this lightness and hue."""
+    rad = np.deg2rad(hue_deg)
+    lo, hi = 0.0, 150.0
+    for _ in range(24):
+        mid = 0.5 * (lo + hi)
+        rgb = _lab2rgb(np.array([lightness, mid * np.cos(rad), mid * np.sin(rad)]))
+        if np.all(rgb >= -1e-6) and np.all(rgb <= 1 + 1e-6):
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
+def _lch2hex(lightness: float, chroma: float, hue_deg: float) -> str:
+    rad = np.deg2rad(hue_deg)
+    rgb = _lab2rgb(np.array([lightness, chroma * np.cos(rad), chroma * np.sin(rad)]))
+    return mcolors.to_hex(np.clip(rgb, 0.0, 1.0))
+
+
+def _huePosition(index: int) -> float:
+    """Bit-reversed position in [0, 1): every prefix stays well spread, so the first q hues are
+    far apart whatever q is, while the full run of d lands on an even spacing."""
+    fraction, denominator, n = 0.0, 1.0, index
+    while n > 0:
+        denominator /= 2.0
+        fraction += denominator * (n % 2)
+        n //= 2
+    return fraction
+
+
+def _hue(index: int) -> float:
+    return 360.0 * _huePosition(index)
+
+
+def _hueRank(index: int) -> int:
+    """Position of this hue around the circle."""
+    return int(round(_huePosition(index) * _HUE_SLOTS))
+
+
+_BETA_RE = re.compile(r'\\beta_\{(\d+)\}')
+_SIGMA_RE = re.compile(r'\\sigma_(\d+)')
+_ALPHA_RE = re.compile(r'\\alpha_\{(\d+)\}')
+_RHO_RE = re.compile(r'\\rho_\{(\d)(\d)\}')
+_SIGMA_EPS = r'\\sigma_\\epsilon'
+
+
+def paramColor(name: str, fallback: int = 0) -> str:
+    """Colour for a parameter, derived from its name, so every panel agrees without bookkeeping."""
+    if re.search(_SIGMA_EPS, name):
+        lightness, fraction = _SIGMA_EPS_STYLE
+        return _lch2hex(lightness, fraction * _maxChroma(lightness, _SIGMA_EPS_HUE), _SIGMA_EPS_HUE)
+    for regex, role in ((_BETA_RE, 'ffx'), (_SIGMA_RE, 'sigmas'), (_ALPHA_RE, 'rfx')):
+        match = regex.search(name)
+        if match:
+            index = int(match.group(1))
+            lightness, full, alternate = _ROLE_STYLE[role]
+            hue = _hue(index)
+            fraction = full if _hueRank(index) % 2 == 0 else alternate
+            return _lch2hex(lightness, fraction * _maxChroma(lightness, hue), hue)
+    match = _RHO_RE.search(name)
+    if match:
+        first, second = _hue(int(match.group(1))), _hue(int(match.group(2)))
+        # circular midpoint: a correlation reads as a blend of the two effects it relates
+        mid = (
+            float(
+                np.rad2deg(
+                    np.angle(np.exp(1j * np.deg2rad(first)) + np.exp(1j * np.deg2rad(second)))
+                )
+            )
+            % 360.0
+        )
+        lightness, full, _ = _ROLE_STYLE['corr']
+        return _lch2hex(lightness, full * _maxChroma(lightness, mid), mid)
+    return PALETTE[fallback % len(PALETTE)]
+
+
+def paramColors(names: list[str]) -> list[str]:
+    """Colours for a list of parameter names, in order."""
+    return [paramColor(name, fallback=i) for i, name in enumerate(names)]
+
 
 # fallback marker size (points) when a handle carries no size of its own
 _PROXY_MS = 10.0
 
 
 def legendProxy(handle, label: str):
-    """Return an opaque stand-in for a plotted artist, or the artist itself if not applicable.
+    """Opaque stand-in for a plotted artist, or the artist itself if not applicable.
 
-    Series are drawn semi-transparent so that overlapping points stay readable, but the legend
-    inherits that alpha and washes the swatch out, which is exactly what makes a colour hard to
-    match back to the plot. The proxy keeps the original colour and marker size at full opacity
-    and leaves the plotted alpha alone. Artists that are not scatter/line handles (e.g. the
-    ``fill_between`` bands in the SBC panels) are passed through untouched, since their
-    translucency is meaningful rather than incidental.
+    Series are drawn translucent, and the legend inherits that alpha and washes the swatch out.
+    ``fill_between`` bands pass through untouched: their translucency is meaningful.
     """
     if not isinstance(handle, (PathCollection, Line2D)):
         return handle
