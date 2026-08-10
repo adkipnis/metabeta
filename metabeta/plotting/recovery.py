@@ -68,6 +68,8 @@ def _plotRecovery(
             marker=marker,
             alpha=alpha,
             label=names[i],
+            # one path per point bloats vector output to tens of MB; axes and text stay vector
+            rasterized=True,
         )
 
     # final touches

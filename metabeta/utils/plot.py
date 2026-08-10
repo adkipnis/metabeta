@@ -9,6 +9,11 @@ from matplotlib.lines import Line2D
 
 DPI = 300
 
+# Resolution for rasterized artists inside vector output. Comparison figures are ~30 in wide and
+# land on a page at ~7 in, so this is still ~430 dpi in print while keeping the file an order of
+# magnitude smaller than embedding the point clouds at DPI.
+VECTOR_RASTER_DPI = 100
+
 # tab20's ordering kept verbatim, then extended: tab20 stops at 20 but the largest models label 27
 # series, so it used to wrap and repeat colours. Additions sit at tab20's pastel lightness (L* 78)
 # so none reads darker than its neighbours. Used by warmfit and as a fallback; parameter panels use
@@ -317,11 +322,20 @@ def niceify(ax: Axes, info: dict[str, float | str | int]) -> None:
         )
 
 
-def savePlot(plot_dir: Path, title: str, epoch: int | None = None, ending: str = 'png') -> Path:
+def savePlot(
+    plot_dir: Path,
+    title: str,
+    epoch: int | None = None,
+    ending: str = 'png',
+    dpi: float | None = None,
+) -> Path:
+    # vector formats only use dpi for rasterized artists, so a lower value shrinks them alone
+    if dpi is None:
+        dpi = VECTOR_RASTER_DPI if ending in ('pdf', 'svg', 'eps') else DPI
     fname = plot_dir / f'{title}_latest.{ending}'
-    plt.savefig(fname, bbox_inches='tight', pad_inches=0.15)
+    plt.savefig(fname, bbox_inches='tight', pad_inches=0.15, dpi=dpi)
     if epoch is not None:
         fname_e = plot_dir / f'{title}_e{epoch}.{ending}'
-        plt.savefig(fname_e, bbox_inches='tight', pad_inches=0.15)
+        plt.savefig(fname_e, bbox_inches='tight', pad_inches=0.15, dpi=dpi)
         return fname_e
     return fname
