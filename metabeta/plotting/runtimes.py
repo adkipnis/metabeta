@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 from matplotlib import pyplot as plt
 
-from metabeta.utils.plot import DPI, savePlot
+from metabeta.utils.plot import DPI, PALETTE, legendProxy, savePlot
 from metabeta.utils.warmfit import (
     COND_STYLE,
     collectWarmRecords,
@@ -52,6 +52,24 @@ _METHOD_TO_COND = {
 # MB_e2e_batched is deliberately unmapped: four MB lines make the panels unreadable, and
 # the tables carry it.  plotRuntimeRecords skips methods with no cond.
 _PLOT_COND_ORDER = ['mb', 'mb_batch', 'mb_e2e', 'mb_gpu', 'mb_cpu', 'laplace', 'advi', 'cold_std']
+
+# Single-panel variant (plotRuntimeRecordsObs): both MB lines are the end-to-end rows that
+# include the analytical MAP+EB stats fit, so every method in the panel is priced on raw data.
+# They are relabeled to plain 'MB' because the amortized-only rows do not appear here, and
+# drawn as two purples: same family, latency dark and batched light.
+_OBS_METHOD_TO_COND = {
+    'MB_e2e': 'mb_e2e_obs',
+    'MB_e2e_batched': 'mb_e2e_batch_obs',
+    'NUTS': 'cold_std',
+    'ADVI': 'advi',
+    'LAPLACE': 'laplace',
+}
+_OBS_COND_ORDER = ['mb_e2e_obs', 'mb_e2e_batch_obs', 'laplace', 'advi', 'cold_std']
+_OBS_COND_STYLE = {
+    **COND_STYLE,
+    'mb_e2e_obs': {'color': PALETTE[4], 'label': 'MB'},
+    'mb_e2e_batch_obs': {'color': PALETTE[14], 'label': 'MB (batched)'},
+}
 
 
 def _collectRuntimeRecords(data_dir: Path, fits_tag: str, conds: list[str]) -> list[dict]:
@@ -270,6 +288,106 @@ def plotRuntimeRecords(
         frameon=True,
     )
     fig.tight_layout()
+
+    saved = None
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        saved = savePlot(out_dir, title)
+        savePlot(out_dir, title, ending='pdf')
+    if show:
+        plt.show()
+    plt.close(fig)
+    return saved
+
+
+def plotRuntimeRecordsObs(
+    records: list[dict],
+    out_dir: Path | None = None,
+    n_bins: int = 8,
+    log_y: bool = True,
+    show: bool = False,
+    title: str = 'runtimes_obs',
+    config: str | None = None,
+    transparent: bool = True,
+    lo_pct: float = 0.0,
+    hi_pct: float = 100.0,
+) -> Path | None:
+    """Single-panel runtime figure against # observations, end-to-end MB rows only.
+
+    Companion to ``plotRuntimeRecords`` for slides/composited figures: one x-axis, and the MB
+    lines are the end-to-end timings (``MB_e2e`` / ``MB_e2e_batched``, which recompute the
+    analytical MAP+EB stats inline), so both MB lines are priced on raw data exactly like the
+    fit backends.  The default band spans every fit (min to max) rather than the trimmed
+    percentiles of the two-panel figure, so the NUTS tail is shown in full.  Saved with a
+    transparent background so it can sit on any slide colour.
+    """
+    if config is not None:
+        records = [r for r in records if r.get('config') == config]
+
+    plot_records = []
+    for r in records:
+        cond = _OBS_METHOD_TO_COND.get(r['method'])
+        if cond is None:
+            continue
+        plot_records.append(
+            {
+                'data_dir': r['source'],
+                'idx': r.get('idx'),
+                'cond': cond,
+                'n': r['n'],
+                'wall_s': r['duration'],
+            }
+        )
+
+    if not plot_records:
+        raise ValueError('No plottable runtime records collected.')
+
+    present = {r['cond'] for r in plot_records}
+    conds = [c for c in _OBS_COND_ORDER if c in present]
+    max_n = max(r['n'] for r in plot_records)
+
+    fig, ax = plt.subplots(1, 1, figsize=(6, 5), dpi=DPI)
+    plotWarmPanel(
+        ax,
+        plot_records,
+        'wall_s',
+        conds,
+        _OBS_COND_STYLE,
+        'Wall time (s)',
+        '',
+        n_bins,
+        x_metric='n',
+        xlabel='# observations',
+        x_range=(0, max_n),
+        log_y=log_y,
+        show_legend=False,
+        show_title=False,
+        center='mean',
+        lo_pct=lo_pct,
+        hi_pct=hi_pct,
+        smooth_band=True,
+        line_lw=4.0,
+        band_alpha=0.22,
+        scatter_alpha=0.0,
+        plain_log_y_ticks=True,
+    )
+    # legend outside the axes, as in the two-panel figure, so no line or band is covered
+    handles, labels = ax.get_legend_handles_labels()
+    proxies = [legendProxy(handle, label) for handle, label in zip(handles, labels)]
+    fig.legend(
+        proxies,
+        labels,
+        loc='center left',
+        bbox_to_anchor=(1.01, 0.5),
+        fontsize=16,
+        markerscale=1.5,
+        frameon=True,
+    )
+    fig.tight_layout()
+    if transparent:
+        # savePlot's savefig defaults to the figure facecolor, so zeroing the patches is enough
+        fig.patch.set_alpha(0.0)
+        ax.set_facecolor('none')
 
     saved = None
     if out_dir is not None:
