@@ -353,7 +353,7 @@ def _refineChunk(
 
     if method in IMH_METHODS:
         if method == 'imhGlobal' and lf != 0:
-            raise ValueError('imhGlobal is Normal-only; non-Normal imhMarginal already uses global')
+            raise ValueError('imhGlobal is Normal-only; non-Normal imhMarginal already uses laplace')
         if method == 'imhLaplace' and lf == 0:
             raise ValueError('imhLaplace is for GLMMs (lf != 0); use imhMarginal')
         if method == 'imhLaplace':
@@ -361,7 +361,7 @@ def _refineChunk(
         elif method == 'imhGlobal':
             mode = 'global'
         else:
-            mode = 'marginal' if lf == 0 else 'global'
+            mode = 'marginal' if lf == 0 else 'laplace'
         n_steps = base.samples_g.shape[1] // IMH_N_CHAINS
         if n_steps <= IMH_BURNIN:
             raise ValueError(

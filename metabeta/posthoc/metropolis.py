@@ -388,7 +388,7 @@ def runIMH(
     n_steps        : int  — steps per chain including burnin (default 250)
     imh_burnin     : int  — burnin steps to discard (default 25)
     imh_mode       : str  — 'global' | 'marginal' | 'joint' | 'laplace'
-                     defaults to 'marginal' for Normal, 'global' otherwise
+                     defaults to 'marginal' for Normal, 'laplace' otherwise
     rescale        : bool
     likelihood_family : int
     """
@@ -396,7 +396,7 @@ def runIMH(
     n_chains = getattr(cfg, 'n_chains', 4)
     n_steps = getattr(cfg, 'n_steps', 250)
     burnin = getattr(cfg, 'imh_burnin', 25)
-    default_mode = 'marginal' if lf == 0 else 'global'
+    default_mode = 'marginal' if lf == 0 else 'laplace'
     mode: Mode = getattr(cfg, 'imh_mode', default_mode)
 
     proposal = model.estimate(data, n_samples=n_chains * n_steps)
