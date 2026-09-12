@@ -101,7 +101,7 @@ from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import EvaluationSummary
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
-from metabeta.posthoc.metropolis import MetropolisSampler
+from metabeta.posthoc.metropolis import MetropolisSampler, suggestPoolSize
 from metabeta.posthoc.warmnuts import WarmNuts, _stackProposals, needsEscalation
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice
@@ -477,10 +477,13 @@ def runIMH(mode, proposals, batches, full_batch, lf, n_steps=IMH_N_STEPS):
     proposal, accept = refineIMH(mode, proposals, batches, lf, n_steps=n_steps)
     t1 = time.perf_counter()
 
+    suggested = suggestPoolSize(accept)
     diag = (
         f'  Acceptance  mean={accept.mean():.3f}  '
         f'min={accept.min():.3f}  max={accept.max():.3f}  '
         f'time={t1 - t0:.1f}s ({(t1 - t0) / full_batch["y"].shape[0]:.1f}s/dataset)\n'
+        f'  Suggested pool size  median={int(suggested.median())}  max={int(suggested.max())}  '
+        f'(run used s={IMH_N_CHAINS * n_steps})\n'
     )
     print(diag, end='')
     summary = getSummary(proposal, full_batch, likelihood_family=lf)

@@ -297,6 +297,13 @@ Cross-regime transfer of the power-law constant is imperfect (small-regime ECE a
 matched n_eff is ~2× better than the huge-regime fit predicts — flow quality per
 dim differs), so the pilot rule is preferred over the a-priori formula.
 
+**Shipped as an advisory API feature** (`metropolis.suggestPoolSize`): inference
+always runs at the user-specified pool size, and the IMH diagnostics now include a
+per-dataset `suggested_n_samples` — the smallest s reaching ā·s ≥ 700 at the
+measured acceptance (multiples of 500, clamped to [1000, 16000]; disable via
+`n_eff_target=None` / cfg `imh_n_eff_target`). ablation.py prints the median/max
+suggestion in each imh* diagnostic line.
+
 Sample-size rule: pool efficiency decays ≈ exponentially in the global dim
 D = d + q + 1{Normal} + q(q−1)/2 — measured mean acceptance fits
 ā ≈ exp(−0.08·(D−4)) (small D≈7: 0.8; large D≈22: 0.25; huge D=31: 0.10–0.17) —
