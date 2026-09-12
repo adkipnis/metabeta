@@ -65,6 +65,13 @@ result = mb.sample(df, formula="Reaction ~ Days + (Days | Subject)", n_samples=1
 print(mb.posteriorSummary(result))
 ```
 
+With `n_samples >= 64`, `sample` also refines the flow posterior by Independence
+Metropolis-Hastings (the default, `refine=True`). The chain uses the flow as its proposal,
+so the refined posterior does not hinge on network accuracy alone; per-dataset acceptance
+rates and a suggested pool size are reported in `result.safeguards`. If the suggestion
+exceeds the `n_samples` you requested, rerun with the larger value (or pass
+`refine=False` to keep the raw flow posterior).
+
 See [demos/intro.ipynb](demos/intro.ipynb) for the full `sleepstudy`
 walkthrough and [demos/priors.ipynb](demos/priors.ipynb) for an exemplary prior-sensitivity
 analysis.
@@ -98,7 +105,7 @@ Each pretrained model is built through the same pipeline, from a dataset simulat
 | [metabeta/evaluation/](metabeta/evaluation/) | parameter recovery, coverage, SBC, posterior predictive checks and summary metrics |
 | [metabeta/models/](metabeta/models/) | model API, set transformers, normalizing flows |
 | [metabeta/plotting/](metabeta/plotting/) | plot functions for posterior samples, recovery, calibration, and runtime |
-| [metabeta/posthoc/](metabeta/posthoc/) | experimental post-hoc posterior refinement helpers |
+| [metabeta/posthoc/](metabeta/posthoc/) | post-hoc refinement of the flow posterior (IMH, importance sampling) and NUTS warm-start helpers |
 | [metabeta/simulation/](metabeta/simulation/) | synthetic hierarchical data generation and reference fitting with PyMC |
 | [metabeta/training/](metabeta/training/) | training entry point and checkpoint loop |
 | [metabeta/utils/](metabeta/utils/) | config, dataloading, routing, IO, and shared helper code |
