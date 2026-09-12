@@ -128,7 +128,8 @@ def laplaceRfxModes(
     n_newton: int = 5,
     damping: float = 1.0,
     n_backtrack: int = 3,
-) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    n_newton_extra: int = 15,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Per-group conditional modes and Hessians of p(rfx_j | θ_g, y_j).
 
     The Newton step backtracks (per (b, m, s) entry, up to n_backtrack halvings)
@@ -174,13 +175,24 @@ def laplaceRfxModes(
         quad = torch.einsum('bmsq,bsqr,bmsr->bms', cand, Sigma_inv, cand)
         return ll - 0.5 * quad
 
-    for _ in range(n_newton):
+    # Adaptive iteration count: the per-iteration Newton decrement λ²/2 comes for
+    # free from (score, delta), so after the standard n_newton steps the loop keeps
+    # going (up to n_newton_extra more) only while some entry is still unresolved —
+    # hard samples (huge-count Poisson) get the budget they need, clean datasets pay
+    # nothing. The loop breaks BEFORE stepping, so chol_H/decrement are always
+    # evaluated at the returned modes.
+    tol = 0.1  # nats — resolve well below the 1-nat pinning guard downstream
+    max_iter = n_newton + n_newton_extra + 1
+    for t in range(max_iter):
         eta = mu_ffx + torch.einsum('bmnq,bmsq->bmns', Z_m, modes)
         score_res, w = _meanWeightScore(eta, y, sigma_eps, likelihood_family)
         score = torch.einsum('bmnq,bmns->bmsq', Z_m, score_res * mask_n)
         score = score - torch.einsum('bsqr,bmsr->bmsq', Sigma_inv, modes)
         chol_H = torch.linalg.cholesky(hessian(w) + 1e-6 * eye)
         delta = torch.cholesky_solve(score.unsqueeze(-1), chol_H).squeeze(-1)
+        decrement = (0.5 * (score * delta).sum(-1)).nan_to_num(nan=torch.inf) * mask_m
+        if t == max_iter - 1 or (t >= n_newton - 1 and float(decrement.max()) <= tol):
+            break
         delta = (damping * delta).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
 
         # backtracking line search per (b, m, s): halve entries whose step decreases
@@ -197,14 +209,6 @@ def laplaceRfxModes(
         modes = (modes + delta) * mask_mq
         modes = modes.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
 
-    # final Hessian and Newton decrement at the converged mode
-    eta = mu_ffx + torch.einsum('bmnq,bmsq->bmns', Z_m, modes)
-    score_res, w = _meanWeightScore(eta, y, sigma_eps, likelihood_family)
-    chol_H = torch.linalg.cholesky(hessian(w) + 1e-6 * eye)
-    score = torch.einsum('bmnq,bmns->bmsq', Z_m, score_res * mask_n)
-    score = score - torch.einsum('bsqr,bmsr->bmsq', Sigma_inv, modes)
-    delta = torch.cholesky_solve(score.unsqueeze(-1), chol_H).squeeze(-1)
-    decrement = (0.5 * (score * delta).sum(-1)).nan_to_num(nan=torch.inf) * mask_m
     return modes, chol_H, Sigma_inv, L_rfx, decrement
 
 
