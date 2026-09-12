@@ -204,18 +204,49 @@ Key comparisons to read: post-fix imhLaplace vs the committed full-run mds
 isLaplace σ_rfx ECE (expect the −0.046 → −0.027-ward shift); isSIR/imhSIR RFX
 joint ECE + LOO-NLL on Bernoulli-small.
 
+## Cluster results (2026-09-12, 512 datasets, s=1000, test split, GPU node)
+
+Paired against the committed pre-fix full-run mds (same MB sample caches).
+
+### The Newton robustness fix is the win
+
+| Poisson-large | σ_rfx ECE pre-fix | post-fix | raw |
+|---|---|---|---|
+| isLaplace  | −0.046 | **−0.031** | −0.027 |
+| imhLaplace | −0.070 | **−0.051** | −0.027 |
+
+The isLaplace excess vs raw collapsed −0.019 → −0.004: **most of what the original
+analysis attributed to "Laplace σ_rfx bias" was Newton-instability contamination of
+the weights.** Bernoulli-huge weight health: max PSIS k 15.39 → 2.62 (fallback
+40 % → 38 %). LOO-NLL unchanged at NUTS level (imh* 1.394–1.397 vs coldNuts 1.397).
+Cost at s=1000: imhLaplace 0.4 → 0.7 s/ds.
+
+### AGQ: no measurable benefit post-fix
+
+isAGQ ≡ isLaplace to ~3 decimals on every metric at 512 datasets (σ_rfx ECE −0.031
+both); imhAGQ ≈ imhLaplace (small σ_rfx EACE gain at huge: 0.032 vs 0.043). With the
+weight contamination gone there is almost no residual integrated-likelihood bias for
+AGQ to remove. **Keep `nagq` off by default** (option retained; 0.9–1.0 s/ds).
+
+### SIR: small, consistent, in-direction — borderline at 1.7× cost
+
+Largest at Bernoulli-huge: σ_rfx EACE 0.034 vs 0.043, RFX R 0.639 vs 0.632, joint
+ECE −0.029 vs −0.031, LOO 0.409 vs 0.410. Bernoulli-small: σ_rfx EACE 0.023 vs
+0.030, RFX ECE −0.021 vs −0.025. Never worse. **Keep `redraw='sir'` off by default**
+(1.2 s/ds); revisit if per-group calibration at huge becomes a priority.
+
+### Confirmed: the huge-regime FFX under-dispersion is the finite pool
+
+imhLaplace FFX ECE at Bernoulli-huge: −0.047 pre-fix, −0.047 post-fix. Matches the
+Normal-huge exact-target control — no weight/conditional upgrade touches it. Fixing
+it needs proposal-side work (bigger pools, tempering, or SNIS with PSIS truncation).
+
 ## Status
 
-- [x] Analysis (above)
-- [x] Branch `posthoc-laplace-upgrades`
-- [x] Phase 0: PoC reference run (pre-fix)
-- [x] Phase 1: newton_stability.py → **found real Newton non-convergence; fixed
-      (backtracking + adaptive budget + 1-nat pinning guard)**; flip rate 0.27 % → 0.01 %
-- [x] Phase 2: AGQ (`logMarginalLikelihoodAGQ`, isAGQ/imhAGQ) — correct, 1.4× cost,
-      sub-noise at PoC scale
-- [x] Phase 3: SIR (`sampleRfxSIR`, isSIR/imhSIR) — correct, 1.4× cost. Bernoulli-small
-      spot check (`bernoulli_small_raw-isLaplace-imhLaplace-isSIR-imhSIR.md`): easy
-      regime confirmed (k̄ 0.25, 0 % fallback, acceptance 0.76); small in-direction
-      gain on the targeted metric — imhSIR RFX joint ECE −0.004 vs imhLaplace −0.015
-      — everything else within noise.
-- [ ] Cluster scale-up (commands above) → decide defaults
+- [x] Phases 0–3 + cluster scale-up: **done, defaults decided**
+- Adopted: robustified `laplaceRfxModes` (backtracking + adaptive budget + 1-nat
+  pinning guard) — now simply what `isLaplace`/`imhLaplace` do
+- Retained as opt-in, off by default: `nagq` (AGQ weights), `redraw='sir'`
+- Open (separate work item): huge-regime finite-pool under-dispersion; paper
+  appendix numbers for MB+IS / MB-IMH on GLMMs predate the fix and improve slightly
+  on re-run

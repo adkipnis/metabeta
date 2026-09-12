@@ -40,12 +40,18 @@ bias for binary/count data with small groups tilting the σ_rfx posterior low. N
 isLaplace is *not* better-calibrated than raw flow samples on these families;
 attach_only ≈ raw (mild RFX-joint gains on Poisson, mild LOO-NLL loss on Bernoulli).
 
-TODO
-----
-- nAGQ upgrade: for q ≤ 2, replace the Laplace integrated likelihood with adaptive
-  Gauss-Hermite quadrature centred at (b*, H⁻¹) (reuse the _ghProductGrid pattern in
-  analytical/glmm/bernoulli.py, vectorized over s) — directly targets the σ_rfx
-  downward bias above at ~K× the likelihood-pass cost (K = grid size).
+Findings (2026-09-12, 512 test datasets per run — see experiments/posthoc/LAPLACE_UPGRADES.md)
+----------------------------------------------------------------------------------------------
+Most of the apparent "Laplace σ_rfx bias" above was Newton-instability contamination
+of the weights: full-step Newton oscillated on extreme proposals (worst on huge-count
+Poisson), making log p̂(y|θ_g) warm-start-dependent by 1e4+ nats on samples near the
+pool max weight. After robustifying laplaceRfxModes (backtracking line search,
+adaptive iteration budget, 1-nat pinning guard), Poisson-large isLaplace σ_rfx ECE
+went −0.046 → −0.031 (raw: −0.027) and Bernoulli-huge max PSIS k 15.4 → 2.6.
+Post-fix, the AGQ weight upgrade (nagq > 1) adds nothing measurable at 512 datasets
+(the residual integrated-likelihood bias is ≈ 0), and the SIR redraw (redraw='sir')
+gives small, consistent, never-worse gains (largest at huge: σ_rfx EACE 0.034 vs
+0.043) at ~1.7× the imhLaplace cost — both ship off by default.
 """
 
 import math
