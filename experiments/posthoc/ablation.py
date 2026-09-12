@@ -219,7 +219,9 @@ def collectProposals(
     with torch.no_grad():
         for i in range(0, len(items), batch_size):
             batch = collateGrouped(items[i : i + batch_size])
-            proposal = model.estimate(toDevice(batch, device), n_samples=n_samples)
+            # toDevice mutates its dict in place — pass a shallow copy so `batch`
+            # keeps its cpu tensors for rescale() and the posthoc methods
+            proposal = model.estimate(toDevice(dict(batch), device), n_samples=n_samples)
             proposal.to('cpu')
             proposal.rescale(batch['sd_y'])
             batch = rescaleData(batch)
