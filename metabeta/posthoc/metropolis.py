@@ -82,10 +82,20 @@ generally preferable — keep IMH as a diagnostic baseline.
 TODO
 ----
 - 'global' mode never MH-corrects rfx — accepted global samples keep the flow's raw,
-  uncorrected rfx draw from the same proposal. This is the default for non-Normal
-  likelihoods, so local/group-level calibration there is still bounded by flow error.
-  Consider a Laplace-approximated conditional rfx correction (analogous to
-  `_sampleRfxConditional`, but for non-conjugate likelihoods) if per-group accuracy matters.
+  uncorrected rfx draw from the same proposal. Superseded in practice by mode='laplace'
+  (the non-Normal default), whose conditional redraw handles this; 'global' remains a
+  diagnostic baseline.
+
+Findings (2026-09-12, 512 test datasets — see experiments/posthoc/LAPLACE_UPGRADES.md)
+--------------------------------------------------------------------------------------
+The Laplace mode-search robustification (posthoc/laplace_glmm.py) removed the
+init-dependent absorbing states that were degrading mode='laplace': Poisson-large
+imhLaplace σ_rfx ECE −0.070 → −0.051 at unchanged LOO-NLL (= cold NUTS to 3
+decimals). The optional AGQ weights (nagq) add nothing measurable post-fix; the SIR
+redraw (redraw='sir') gives small never-worse local-calibration gains at ~1.7× cost.
+The huge-regime FFX under-dispersion (ECE ≈ −0.05) is confirmed to be the finite-pool
+IMH effect — identical with the exact marginal target on Normal-huge and unchanged by
+any weight/conditional upgrade; fixing it needs proposal-side work.
 """
 
 import argparse
