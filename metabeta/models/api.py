@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import math
 import operator
 import sys
 import warnings
@@ -20,6 +21,7 @@ from metabeta.evaluation import predictive as _predictive
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
+from metabeta.posthoc.metropolis import MetropolisSampler, suggestPoolSize
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.dataloader import Dataloader, collateGrouped, sliceBatch, toDevice
@@ -73,6 +75,11 @@ REQUIRED_BATCH_KEYS = (
 PSIS_K_THRESHOLD = 0.7
 MAP_Z_THRESHOLD = 5.0
 MIN_SAFEGUARD_SAMPLES = 64
+# IMH refinement: chain layout and the acceptance level below which the flow-posterior
+# gap is large (see appendix on hybrid methods; experiments/posthoc/LAPLACE_UPGRADES.md)
+IMH_N_CHAINS = 4
+IMH_BURNIN = 25
+IMH_ACCEPT_WARN = 0.1
 
 
 def mapZScores(
@@ -334,27 +341,43 @@ class Api:
         *,
         n_samples: int = 1,
         diagnostics: bool = False,
-        refine: bool = False,
+        refine: bool | str = True,
         k_threshold: float = PSIS_K_THRESHOLD,
         map_z_threshold: float = MAP_Z_THRESHOLD,
         **prepare_kwargs: Any,
     ) -> RouterResult:
         """Sample from the posterior, routing each dataset to the smallest compatible submodel.
 
-        With ``refine=True`` the flow posterior is corrected by self-normalized importance
-        sampling (exact marginal weights for the Normal family, Laplace-marginal weights for
-        GLMMs) and resampled back to ``n_samples`` equally weighted draws.  The PSIS shape
-        diagnostic k̂ (Yao et al., 2018) is computed per dataset as a byproduct: datasets
-        with k̂ ≤ ``k_threshold`` receive the correction, datasets above it keep the raw
-        flow posterior and trigger a warning recommending exact MCMC.  Requires
-        ``n_samples >= MIN_SAFEGUARD_SAMPLES``.
+        By default (``refine=True``, i.e. ``refine='imh'``) the flow posterior is refined
+        by Independence Metropolis-Hastings: the flow serves as the proposal of a Markov
+        chain targeting the exact rfx-marginalized posterior (Normal) or its Laplace
+        approximation (GLMMs), so the chain's stationary distribution does not depend on
+        flow accuracy.  The proposal pool is over-drawn by the burn-in so exactly
+        ``n_samples`` post-burn-in draws are returned.  Per-dataset acceptance rates and a
+        suggested pool size (the smallest ``n_samples`` expected to reach the
+        calibration-validated effective-draw target at the measured acceptance) are
+        reported in ``RouterResult.safeguards``; datasets with mean acceptance below
+        ``IMH_ACCEPT_WARN`` trigger a warning recommending the suggested size or exact
+        MCMC.
+
+        ``refine='is'`` selects the previous self-normalized importance-sampling
+        correction instead, with the PSIS shape diagnostic k̂ (Yao et al., 2018) computed
+        per dataset: datasets with k̂ ≤ ``k_threshold`` receive the correction, datasets
+        above it keep the raw flow posterior and trigger a warning.  ``refine=False``
+        returns the raw flow posterior.  Refinement (like the MAP cross-check) applies
+        only when ``n_samples >= MIN_SAFEGUARD_SAMPLES`` and is skipped silently below.
 
         Independently of ``refine``, posterior means are cross-checked against the
         analytical MAP estimates that condition the model (a flow-independent anchor);
         datasets whose maximum |posterior mean − MAP| / posterior SD exceeds
-        ``map_z_threshold`` trigger a warning.  Both checks are reported in
+        ``map_z_threshold`` trigger a warning.  All checks are reported in
         ``RouterResult.safeguards``.
         """
+
+        method = {True: 'imh', False: None}.get(refine, refine)
+        if method not in (None, 'imh', 'is'):
+            raise ValueError(f"refine must be True, False, 'imh' or 'is' (got {refine!r})")
+        do_refine = method is not None and n_samples >= MIN_SAFEGUARD_SAMPLES
 
         self._param_names: dict[str, list[str]] | None = None
         self._scale_info: 'ScaleInfo | None' = None
@@ -365,16 +388,16 @@ class Api:
         self._validateBatchFormat(batch)
         routes, validation = self._routeBatch(batch)
         batch = toDevice(batch, self.device)
-        proposal, stats = self._runRouted(batch, routes, n_samples=n_samples)
+        # IMH consumes the first `burnin` steps of each chain, so over-draw the flow
+        # pool to hand back exactly n_samples post-burn-in draws
+        pool = n_samples
+        if do_refine and method == 'imh':
+            pool = IMH_N_CHAINS * (math.ceil(n_samples / IMH_N_CHAINS) + IMH_BURNIN)
+        proposal, stats = self._runRouted(batch, routes, n_samples=pool)
         safeguards: dict[str, Any] | None = None
-        if refine:
-            if n_samples < MIN_SAFEGUARD_SAMPLES:
-                raise ValueError(
-                    f'refine=True requires n_samples >= {MIN_SAFEGUARD_SAMPLES} '
-                    f'(got {n_samples})'
-                )
+        if do_refine:
             proposal, safeguards = self._refineAndCheck(
-                proposal, batch, k_threshold=k_threshold, n_samples=n_samples
+                proposal, batch, method=method, k_threshold=k_threshold, n_samples=n_samples
             )
         if stats is not None and n_samples >= MIN_SAFEGUARD_SAMPLES:
             map_check = self._mapConsistency(proposal, stats, batch, threshold=map_z_threshold)
@@ -663,23 +686,33 @@ class Api:
         proposal: Proposal,
         batch: dict[str, torch.Tensor],
         *,
+        method: str,
         k_threshold: float,
         n_samples: int,
     ) -> tuple[Proposal, dict[str, Any]]:
-        """SNIS-correct the flow posterior and run the PSIS k̂ reliability check.
+        """Refine the flow posterior ('imh' or 'is') and run the reliability checks.
 
-        Weights target the exact rfx-marginalized posterior (Normal) or its Laplace
-        approximation (GLMMs); rfx are redrawn from the matching conditional so the
-        delivered draws form a consistent joint sample.  PSIS smoothing yields the
-        per-dataset shape diagnostic k̂; datasets with k̂ > ``k_threshold`` fall back to
-        uniform weights (raw flow posterior) inside the sampler and are reported.  The
-        weighted sample is systematically resampled back to ``n_samples`` equal-weight
-        draws (an exact pass-through for fallback datasets).
+        Both methods share the same target: the exact rfx-marginalized posterior
+        (Normal) or its Laplace approximation (GLMMs), with rfx redrawn from the
+        matching conditional so the delivered draws form a consistent joint sample.
+
+        'imh' (default) runs Independence Metropolis-Hastings with the flow pool as
+        proposals: asymptotically exact in the pool size, no weight-degeneracy failure
+        mode.  Per-dataset acceptance and a suggested pool size are reported; mean
+        acceptance below ``IMH_ACCEPT_WARN`` triggers a warning.  The post-burn-in
+        draws are trimmed to exactly ``n_samples``.
+
+        'is' applies self-normalized importance sampling with PSIS smoothing; datasets
+        with k̂ > ``k_threshold`` fall back to uniform weights (raw flow posterior) and
+        are reported.  The weighted sample is systematically resampled back to
+        ``n_samples`` equal-weight draws (an exact pass-through for fallback datasets).
 
         Datasets are processed in chunks of ``self.batch_size`` (when set): the marginal
         likelihood materialises a (b, m, n, s) tensor, so full batches OOM on large data.
         """
         lf = int(batch['likelihood_family'].flatten()[0].item())
+        if method == 'imh':
+            return self._refineIMH(proposal, batch, lf=lf, n_samples=n_samples)
 
         def _refineChunk(chunk_proposal: Proposal, chunk: dict[str, torch.Tensor]) -> Proposal:
             if lf == 0:
@@ -746,6 +779,78 @@ class Api:
             'psis_k': psis_k,
             'psis_k_threshold': k_threshold,
             'psis_fallback': fallback,
+        }
+
+    def _refineIMH(
+        self,
+        proposal: Proposal,
+        batch: dict[str, torch.Tensor],
+        *,
+        lf: int,
+        n_samples: int,
+    ) -> tuple[Proposal, dict[str, Any]]:
+        """IMH-refine the flow posterior; see ``_refineAndCheck`` for the contract."""
+        n_steps = proposal.n_samples // IMH_N_CHAINS
+
+        def _imhChunk(
+            chunk_proposal: Proposal, chunk: dict[str, torch.Tensor]
+        ) -> tuple[Proposal, torch.Tensor]:
+            sampler = MetropolisSampler(
+                chunk,
+                n_chains=IMH_N_CHAINS,
+                n_steps=n_steps,
+                burnin=IMH_BURNIN,
+                mode='marginal' if lf == 0 else 'laplace',
+                likelihood_family=lf,
+            )
+            refined, diag = sampler(chunk_proposal)
+            return refined, diag['accept_rate']
+
+        B = proposal.samples_g.shape[0]
+        chunk_size = self.batch_size or B
+        if chunk_size >= B:
+            proposal, accept = _imhChunk(proposal, batch)
+        else:
+            chunks, accepts = [], []
+            for start in range(0, B, chunk_size):
+                end = min(start + chunk_size, B)
+                refined, acc = _imhChunk(
+                    proposal.slice_b(start, end), sliceBatch(batch, start, end)
+                )
+                chunks.append(refined)
+                accepts.append(acc)
+            proposal = concatProposalsBatch(chunks)
+            accept = torch.cat(accepts, dim=0)
+
+        # the pool was over-drawn by the burn-in; trim to exactly n_samples
+        idx = (
+            torch.arange(n_samples, device=proposal.samples_g.device)
+            .unsqueeze(0)
+            .expand(B, n_samples)
+        )
+        proposal.subset(idx)
+
+        a_bar = accept.mean(dim=1)
+        suggested = suggestPoolSize(accept)
+        flag = (a_bar < IMH_ACCEPT_WARN).cpu().numpy()
+        if flag.any():
+            flagged = np.flatnonzero(flag)
+            a_vals = ', '.join(f'{a_bar[i]:.2f}' for i in flagged)
+            s_vals = ', '.join(f'{int(suggested[i])}' for i in flagged)
+            warnings.warn(
+                f'IMH acceptance is low for dataset(s) {flagged.tolist()} '
+                f'(mean acceptance {a_vals} < {IMH_ACCEPT_WARN:g}): the flow-posterior '
+                f'gap is large there and the refined sample may be under-dispersed. '
+                f'Re-run with n_samples of at least {s_vals} (respectively), or use '
+                'exact MCMC (e.g. NUTS) instead.',
+                stacklevel=4,
+            )
+        return proposal, {
+            'refine_method': 'imhMarginal' if lf == 0 else 'imhLaplace',
+            'accept_rate': a_bar.detach().float().cpu().numpy().copy(),
+            'accept_threshold': IMH_ACCEPT_WARN,
+            'accept_flag': flag,
+            'suggested_n_samples': suggested.detach().cpu().numpy().copy(),
         }
 
     def _mapConsistency(
