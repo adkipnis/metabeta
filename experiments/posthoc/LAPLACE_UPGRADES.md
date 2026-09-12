@@ -273,6 +273,30 @@ isLaplace column separates rejection-specific effects from the shared pool limit
 (b) flat ECE in s → the flow's FFX tails are the binding constraint and the remedy
 is proposal-side (defensive mixture), not sample count.
 
+### Sweep results (2026-09-12, Bernoulli-huge, 512 datasets) — hypothesis CONFIRMED
+
+| s | imhLaplace FFX ECE | σ_rfx ECE | Corr R | acceptance | raw FFX ECE | IMH s/ds |
+|---|---|---|---|---|---|---|
+| 1000 | −0.048 | −0.021 | 0.132 | 0.175 | −0.000 | 0.4 |
+| 2000 | −0.031 | −0.017 | 0.245 | 0.168 | −0.000 | 0.7 |
+| 4000 | −0.022 | −0.008 | 0.262 | 0.168 | +0.001 | 1.4 |
+
+All discriminating checks pass: under-dispersion shrinks monotonically, the raw
+control is s-invariant, acceptance is pool-size-independent. The s=4000 point was
+predicted out-of-sample from the first doubling (−0.020 predicted, −0.022 observed).
+Clean power law: FFX ECE ≈ −0.048·(s/1000)^−0.6, i.e. ∝ n_eff^−0.6 with
+n_eff = ā·s. Extrapolation: s=6000 → ≈ −0.016; full small-regime parity (−0.01)
+needs s ≈ 13k (diminishing returns — s=4000 buys the bulk). σ_rfx ECE and Corr(RFX)
+recovery improve alongside; LOO-NLL flat at NUTS level throughout (0.410–0.413);
+weight-pass cost linear in s.
+
+**Practical defaults.** For non-Gaussian IMH: keep s=1000 for small/medium
+(acceptance ≥ 0.7 → n_eff ≥ 700); use s ≈ 4000 for large/huge (n_eff ≈ 700 at
+ā ≈ 0.17), or the data-adaptive pilot rule below with N_eff_target ≈ 600–800.
+Cross-regime transfer of the power-law constant is imperfect (small-regime ECE at
+matched n_eff is ~2× better than the huge-regime fit predicts — flow quality per
+dim differs), so the pilot rule is preferred over the a-priori formula.
+
 Sample-size rule: pool efficiency decays ≈ exponentially in the global dim
 D = d + q + 1{Normal} + q(q−1)/2 — measured mean acceptance fits
 ā ≈ exp(−0.08·(D−4)) (small D≈7: 0.8; large D≈22: 0.25; huge D=31: 0.10–0.17) —
