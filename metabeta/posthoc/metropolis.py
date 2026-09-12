@@ -91,8 +91,9 @@ Findings (2026-09-12, 512 test datasets — see experiments/posthoc/LAPLACE_UPGR
 The Laplace mode-search robustification (posthoc/laplace_glmm.py) removed the
 init-dependent absorbing states that were degrading mode='laplace': Poisson-large
 imhLaplace σ_rfx ECE −0.070 → −0.051 at unchanged LOO-NLL (= cold NUTS to 3
-decimals). The optional AGQ weights (nagq) add nothing measurable post-fix; the SIR
-redraw (redraw='sir') gives small never-worse local-calibration gains at ~1.7× cost.
+decimals). AGQ weights and a SIR conditional redraw were also tried and retired again
+(no measurable / marginal benefit post-fix; implementations live in commits
+a32922f8/169cd495, analysis in experiments/posthoc/LAPLACE_UPGRADES.md).
 The huge-regime FFX under-dispersion (ECE ≈ −0.05) is confirmed to be the finite-pool
 IMH effect — identical with the exact marginal target on Normal-huge and unchanged by
 any weight/conditional upgrade; fixing it needs proposal-side work.
@@ -127,9 +128,6 @@ class MetropolisSampler:
         mode: Mode = 'marginal',
         likelihood_family: int = 0,
         eps: float = 1e-12,
-        nagq: int = 1,  # mode='laplace' only: AGQ nodes/dim for the weights (q ≤ 2 datasets)
-        redraw: str = 'laplace',  # mode='laplace' only: 'laplace' | 'sir' conditional redraw
-        n_redraw: int = 16,  # SIR candidates per (dataset, group, sample)
     ) -> None:
         if mode == 'marginal' and likelihood_family != 0:
             raise ValueError("mode='marginal' requires likelihood_family=0 (Normal)")
@@ -153,12 +151,7 @@ class MetropolisSampler:
         # log-prob).
         if mode == 'laplace':
             self._is: ImportanceSampler = LaplaceImportanceSampler(
-                data,
-                likelihood_family=likelihood_family,
-                eps=eps,
-                nagq=nagq,
-                redraw=redraw,
-                n_redraw=n_redraw,
+                data, likelihood_family=likelihood_family, eps=eps
             )
         else:
             self._is = ImportanceSampler(
@@ -328,12 +321,7 @@ class MetropolisSampler:
             'local': {'samples': sl_init, 'log_prob': sg_out.new_zeros(b, m, s_out)},
         }
         tmp = Proposal(proposed, has_sigma_eps=self.has_sigma_eps, d_corr=d_corr)
-        # this pass only refreshes the delegate's modes/Hessian cache — the ll it
-        # returns is discarded, so skip the AGQ node sweep here even when nagq > 1
-        nagq = getattr(self._is, 'nagq', 1)
-        self._is.nagq = 1
         self._is.unnormalizedPosterior(tmp)
-        self._is.nagq = nagq
         self._is._redrawRfx(tmp)
         return tmp.samples_l
 

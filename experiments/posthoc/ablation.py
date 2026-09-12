@@ -30,14 +30,11 @@ imhLaplace   : IMH mode='laplace' (Bernoulli/Poisson only) — Laplace-marginal 
                after acceptance; the GLMM analog of Normal's imhMarginal. Added
                2026-07-29 for the large/huge regimes where isLaplace's PSIS guardrail
                falls back on 13-50% of datasets (rejection has no fallback mode).
-isAGQ        : isLaplace with adaptive Gauss-Hermite weights (nagq=9) for datasets with
-               active q <= 2 — targets the downward Laplace sigma_rfx weight bias
-               (see experiments/posthoc/LAPLACE_UPGRADES.md). q > 2 keeps Laplace.
-isSIR        : isLaplace with a per-group SIR conditional redraw (16 candidates from a
-               defensive Laplace+prior mixture, exact conditional weights) — captures
-               the skew that the symmetric N(b*, H^-1) redraw misses.
-imhAGQ       : imhLaplace with AGQ weights (the IMH counterpart of isAGQ).
-imhSIR       : imhLaplace with the SIR conditional redraw (counterpart of isSIR).
+Note: 'isAGQ'/'isSIR'/'imhAGQ'/'imhSIR' (AGQ marginal weights for q<=2; skew-
+correcting SIR conditional redraw) were implemented and cluster-ablated 2026-09-12,
+then removed again: post Newton-robustification AGQ added nothing measurable and
+SIR only small never-worse gains at ~1.7x cost. Implementations live in commits
+a32922f8/169cd495; analysis in experiments/posthoc/LAPLACE_UPGRADES.md.
 svgd         : SVGD with per-dim bandwidth + cosine LR decay — opt in with --include-svgd,
                off by default (too slow to be practically useful: ~40s/dataset, and gives
                a fraction of a nat of marginal-log-p improvement over the flow samples it starts
@@ -134,8 +131,8 @@ def setup() -> argparse.Namespace:
     p.add_argument('--batch-size', type=int, default=4, help='sub-batch size for torch-based methods')
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
     p.add_argument('--n-samples', type=int, default=1000, help='flow samples for torch-based methods (raw/is/svgd); IMH uses its own fixed count')
-    p.add_argument('--skip', nargs='+', default=[], choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'isAGQ', 'isSIR', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'imhAGQ', 'imhSIR', 'svgd', 'coldNuts', 'warmNuts'], help='conditions to skip (e.g. --skip is)')
-    p.add_argument('--only', nargs='+', default=None, choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'isAGQ', 'isSIR', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'imhAGQ', 'imhSIR', 'svgd', 'coldNuts', 'warmNuts'], help='run only these conditions; results go to {family}_{size}_{only}.md so existing full-run mds are not overwritten')
+    p.add_argument('--skip', nargs='+', default=[], choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'svgd', 'coldNuts', 'warmNuts'], help='conditions to skip (e.g. --skip is)')
+    p.add_argument('--only', nargs='+', default=None, choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'svgd', 'coldNuts', 'warmNuts'], help='run only these conditions; results go to {family}_{size}_{only}.md so existing full-run mds are not overwritten')
     p.add_argument('--include-svgd', action='store_true', help='also run the (slow) SVGD condition')
     p.add_argument('--include-warmnuts', action='store_true', help='also run the warm-started NUTS condition (slow on the first pass; per-dataset fits are cached)')
     p.add_argument('--wn-refit', action='store_true', help='ignore cached warm-NUTS fits and re-sample')
@@ -455,7 +452,7 @@ def imhSampleCount(n_samples: int) -> tuple[int, int]:
     return n_steps, IMH_N_CHAINS * n_steps
 
 
-def refineIMH(mode, proposals, batches, lf, n_steps=IMH_N_STEPS, **sampler_kwargs):
+def refineIMH(mode, proposals, batches, lf, n_steps=IMH_N_STEPS):
     """Run IMH on each sub-batch; return (merged batch Proposal, accept rates)."""
     imh_proposals, accept_rates = [], []
     for p, batch in zip(proposals, batches):
@@ -466,7 +463,6 @@ def refineIMH(mode, proposals, batches, lf, n_steps=IMH_N_STEPS, **sampler_kwarg
             burnin=IMH_BURNIN,
             mode=mode,
             likelihood_family=lf,
-            **sampler_kwargs,
         )
         p_out, diag = sampler(p)
         imh_proposals.append(p_out)
@@ -474,9 +470,9 @@ def refineIMH(mode, proposals, batches, lf, n_steps=IMH_N_STEPS, **sampler_kwarg
     return concatProposalsBatch(imh_proposals), torch.cat(accept_rates, dim=0)
 
 
-def runIMH(mode, proposals, batches, full_batch, lf, n_steps=IMH_N_STEPS, **sampler_kwargs):
+def runIMH(mode, proposals, batches, full_batch, lf, n_steps=IMH_N_STEPS):
     t0 = time.perf_counter()
-    proposal, accept = refineIMH(mode, proposals, batches, lf, n_steps=n_steps, **sampler_kwargs)
+    proposal, accept = refineIMH(mode, proposals, batches, lf, n_steps=n_steps)
     t1 = time.perf_counter()
 
     diag = (
@@ -616,7 +612,7 @@ def runWarmNutsLive(refined, tensor_batch, full_batch, ds_list, lf, fits_dir, la
     return summary, diag
 
 
-def runISLaplace(proposals, batches, full_batch, lf, attach_only=False, nagq=1, redraw='laplace'):
+def runISLaplace(proposals, batches, full_batch, lf, attach_only=False):
     out = []
     with torch.no_grad():
         for p, batch in zip(proposals, batches):
@@ -626,8 +622,6 @@ def runISLaplace(proposals, batches, full_batch, lf, attach_only=False, nagq=1, 
                 corr_prior=True,
                 pareto=True,
                 likelihood_family=lf,
-                nagq=nagq,
-                redraw=redraw,
             )
             out.append(sampler(p.slice_b(0, p.samples_g.shape[0])))
     proposal = concatProposalsBatch(out)
@@ -823,13 +817,9 @@ def main() -> None:
         'isMarginal',
         'isLaplace',
         'rbAttach',
-        'isAGQ',
-        'isSIR',
         'imhMarginal',
         'imhGlobal',
         'imhLaplace',
-        'imhAGQ',
-        'imhSIR',
     ]
     if args.include_svgd:
         conditions.append('svgd')
@@ -908,15 +898,7 @@ def main() -> None:
             for cond in conditions:
                 if cond == 'isMarginal' and lf != 0:
                     continue  # exact marginal requires the Normal likelihood
-                laplace_conds = (
-                    'isLaplace',
-                    'rbAttach',
-                    'isAGQ',
-                    'isSIR',
-                    'imhLaplace',
-                    'imhAGQ',
-                    'imhSIR',
-                )
+                laplace_conds = ('isLaplace', 'rbAttach', 'imhLaplace')
                 if cond in laplace_conds and lf == 0:
                     continue  # Normal has the exact marginal — Laplace is for GLMMs
                 if cond == 'imhGlobal' and lf != 0:
@@ -981,10 +963,6 @@ def main() -> None:
                     summary, diag = runISLaplace(
                         proposals, batches, full_batch, lf, attach_only=True
                     )
-                elif cond == 'isAGQ':
-                    summary, diag = runISLaplace(proposals, batches, full_batch, lf, nagq=9)
-                elif cond == 'isSIR':
-                    summary, diag = runISLaplace(proposals, batches, full_batch, lf, redraw='sir')
                 elif cond == 'imhMarginal':
                     imh_mode = 'marginal' if lf == 0 else 'global'
                     summary, diag, refined = runIMH(
@@ -1001,28 +979,6 @@ def main() -> None:
                         'laplace', imh_proposals, imh_batches, full_batch, lf, n_steps=imh_n_steps
                     )
                     imh_refined['laplace'] = refined
-                elif cond == 'imhAGQ':
-                    summary, diag, refined = runIMH(
-                        'laplace',
-                        imh_proposals,
-                        imh_batches,
-                        full_batch,
-                        lf,
-                        n_steps=imh_n_steps,
-                        nagq=9,
-                    )
-                    imh_refined['laplace-agq'] = refined
-                elif cond == 'imhSIR':
-                    summary, diag, refined = runIMH(
-                        'laplace',
-                        imh_proposals,
-                        imh_batches,
-                        full_batch,
-                        lf,
-                        n_steps=imh_n_steps,
-                        redraw='sir',
-                    )
-                    imh_refined['laplace-sir'] = refined
                 elif cond == 'warmNuts':
                     # seed from the marginal-target MB-IMH posterior (the quality
                     # winner per family), refining now if its condition was skipped
@@ -1047,8 +1003,12 @@ def main() -> None:
                 saveAblSummary(cache_base, summary, diag)
                 print()
 
-        # --only runs get their own file so partial passes never clobber a full-run md
+        # --only runs get their own file so partial passes never clobber a full-run md;
+        # non-default sample counts are tagged too so pool-size sweeps don't clobber
+        # each other
         tag = '' if args.only is None else '_' + '-'.join(args.only)
+        if args.n_samples != 1000:
+            tag += f'_s{args.n_samples}'
         md_path = RESULTS_DIR / f'{cfg["family"]}_{cfg["size"]}{tag}.md'
         md_path.write_text(
             f'# {cfg["label"]} posthoc ablation\n\n```\n{_renderTerminal(buf.getvalue())}\n```\n'
