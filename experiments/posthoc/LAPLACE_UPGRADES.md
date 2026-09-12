@@ -131,19 +131,91 @@ extreme Poisson proposals; the ±20 clamp masked it. These are init-dependent
 absorbing states in IMH and weight-poisoners in SNIS (likely feeding the PSIS
 fallback rate).
 
-**Fix adopted**: per-entry backtracking line search in `laplaceRfxModes`
-(objective-based step halving; the target is strictly log-concave so damped ascent
-converges globally). Regression test:
-`test_newton_backtracking_init_independence`.
+**Fixes adopted** (in `laplaceRfxModes` / the marginal functions):
+1. per-entry backtracking line search (objective-based step halving);
+2. adaptive iteration budget — the per-iteration Newton decrement λ²/2 is free from
+   (score, delta), so the loop extends past n_newton (cap +15) only while some
+   entry is unresolved; clean datasets pay nothing;
+3. a 1-nat pinning guard — samples whose summed decrement stays > 1 nat get
+   ll = −1e10 (they cannot become absorbing states / SNIS poison).
+
+Root cause of the hard cases: dataset 6 is a huge-count Poisson dataset
+(y_max = 13 689 vs ≤ 2 437 elsewhere, q=3) — μ ~ 1e4 makes the conditional
+razor-sharp and the eta-clip plateaus the objective. Post-fix diagnostic:
+within-init budget independence 0.008 nats max (was 2e3–5e3); MH decision flip
+rates 0.01 % / 0.00 % (was 0.27 % / 0.14 %); remaining init-asymmetric pinning is
+conservative only (a legit sample may be dropped, never a spurious one kept).
+Regression test: `test_newton_backtracking_init_independence`. Cost: weight pass
+~2.3× pre-fix on this 32-ds subset (48.8 s → 114.6 s for 8 passes), driven by the
+backtracking objective evaluations.
+
+### Phases 2+3 — PoC comparison (post-fix, all conditions on one shared pool)
+
+`poisson_large_raw-isLaplace-imhLaplace-isAGQ-imhAGQ-isSIR-imhSIR.md`:
+
+|            | σ_rfx ECE | FFX ECE | Corr R | LOO-NLL | time/ds |
+|------------|-----------|---------|--------|---------|---------|
+| raw        | −0.119    | −0.008  | 0.501  | 1.641   | — |
+| isLaplace  | −0.148    | −0.030  | 0.501  | 1.411   | — |
+| isAGQ      | −0.148    | −0.030  | 0.501  | 1.413   | — |
+| isSIR      | −0.148    | −0.030  | 0.501  | 1.412   | — |
+| imhLaplace | −0.157    | −0.104  | 0.321  | 1.397   | 0.3 s |
+| imhAGQ     | −0.154    | −0.098  | 0.505  | 1.397   | 0.4 s |
+| imhSIR     | −0.198    | −0.099  | 0.522  | 1.397   | 0.4 s |
+
+Reading (32 datasets — direction only, not significance):
+- **The Newton robustness fix is the substantive change.** Post-fix imhLaplace
+  σ_rfx ECE improved −0.222 → −0.157 vs the pre-fix reference (same subset/seed),
+  consistent with removing init-dependent absorbing states. Cost: IMH 0.1 → 0.3 s/ds
+  (~2.5–3×, still ~300× under NUTS). On real flow proposals only ~3/256 samples of
+  the pathological dataset get pinned.
+- **AGQ and SIR are correct but sub-noise at this scale.** On real proposals the
+  AGQ−Laplace weight correction is O(0.01–0.2) nats/dataset (verified directly;
+  sign dataset-specific) — invisible in 32-ds metrics. The unit-test gates are the
+  correctness evidence (AGQ exact for Normal, beats Laplace vs brute-force
+  quadrature on tiny groups; SIR matches the exact Normal conditional and the
+  grid-integrated skewed Bernoulli conditional mean). The σ_rfx-bias effect
+  (≈0.02 ECE at 512 ds) needs the cluster scale to resolve.
+- Corr R 0.321 for imhLaplace is chain-level noise on this subset (imhAGQ/imhSIR,
+  same weights ±0.2 nats, sit at 0.505/0.522).
+- Measured slowdowns vs imhLaplace: **imhAGQ 1.4×, imhSIR 1.4×** (12.7 s vs 9.1 s
+  per 32 ds) — at or below the pre-run estimates.
+
+## Cluster scale-up commands
+
+Code changed → pass `--refresh-summaries` everywhere. From repo root:
+
+```bash
+# main comparison, full test split, s=1000 (Poisson-large: clearest weight-bias signal)
+uv run python experiments/posthoc/ablation.py --sizes large --families poisson --split test \
+    --only raw isLaplace imhLaplace isAGQ imhAGQ isSIR imhSIR --refresh-summaries
+# worst-skew regime for the SIR redraw
+uv run python experiments/posthoc/ablation.py --sizes small --families bernoulli --split test \
+    --only raw isLaplace imhLaplace isSIR imhSIR --refresh-summaries
+# acceptance-starved regime (does the absorbing-state fix move the huge-regime ECE?)
+uv run python experiments/posthoc/ablation.py --sizes huge --families poisson bernoulli --split test \
+    --only raw isLaplace imhLaplace imhAGQ imhSIR --refresh-summaries
+# optional: re-check weight stability on other families/sizes
+uv run python experiments/posthoc/newton_stability.py --families bernoulli --sizes large --n-datasets 128
+```
+
+Key comparisons to read: post-fix imhLaplace vs the committed full-run mds
+(pre-fix `poisson_large.md` etc. — FFX/σ_rfx ECE and Corr R at huge); isAGQ vs
+isLaplace σ_rfx ECE (expect the −0.046 → −0.027-ward shift); isSIR/imhSIR RFX
+joint ECE + LOO-NLL on Bernoulli-small.
 
 ## Status
 
 - [x] Analysis (above)
 - [x] Branch `posthoc-laplace-upgrades`
 - [x] Phase 0: PoC reference run (pre-fix)
-- [x] Phase 1: newton_stability.py + run → **found real Newton divergence, fixed via backtracking**
-- [x] Phase 2: AGQ implementation (`logMarginalLikelihoodAGQ`, conditions isAGQ/imhAGQ) + tests
-- [x] Phase 3: SIR implementation (`sampleRfxSIR`, conditions isSIR/imhSIR) + tests
-- [ ] Post-fix diagnostic re-run (tail should collapse)
-- [ ] Post-fix reference + AGQ/SIR PoC runs
-- [ ] Results summary + cluster handoff commands
+- [x] Phase 1: newton_stability.py → **found real Newton non-convergence; fixed
+      (backtracking + adaptive budget + 1-nat pinning guard)**; flip rate 0.27 % → 0.01 %
+- [x] Phase 2: AGQ (`logMarginalLikelihoodAGQ`, isAGQ/imhAGQ) — correct, 1.4× cost,
+      sub-noise at PoC scale
+- [x] Phase 3: SIR (`sampleRfxSIR`, isSIR/imhSIR) — correct, 1.4× cost. Bernoulli-small
+      spot check (`bernoulli_small_raw-isLaplace-imhLaplace-isSIR-imhSIR.md`): easy
+      regime confirmed (k̄ 0.25, 0 % fallback, acceptance 0.76); small in-direction
+      gain on the targeted metric — imhSIR RFX joint ECE −0.004 vs imhLaplace −0.015
+      — everything else within noise.
+- [ ] Cluster scale-up (commands above) → decide defaults
