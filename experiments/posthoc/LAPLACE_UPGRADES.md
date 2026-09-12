@@ -1,0 +1,149 @@
+# Laplace posthoc upgrades: analysis, experiments, and status
+
+Branch: `posthoc-laplace-upgrades`. Working doc for testing three refinements of the
+GLMM Laplace machinery in `metabeta/posthoc/laplace_glmm.py` / `metabeta/posthoc/metropolis.py`.
+
+## Why (analysis summary, 2026-09-12)
+
+Cross-referencing the posthoc ablations in `metabeta/outputs/results/ablation/`:
+
+1. **The huge-regime under-dispersion of imhLaplace is NOT Laplace bias.** On Normal-huge,
+   `imhMarginal` targets the *exact* marginal (Normal-Normal conjugacy) and still shows the
+   same signature as the GLMM huge runs: FFX ECE −0.049, σ_rfx ECE −0.045 at acceptance
+   0.151 (vs imhLaplace: −0.047/−0.063 FFX at acceptance 0.171/0.096 on b/p-huge). This is
+   the finite-pool IMH effect — the chain can only concentrate the flow's draws, never
+   create tail mass the flow lacks. No conditional-posterior upgrade can fix it.
+2. **The genuine Laplace-attributable bias is modest and clearest on Poisson-large** (SNIS
+   path, no chain confound): `isLaplace` σ_rfx ECE −0.046 vs raw −0.027, while the
+   exact-target Normal-large control (`isMarginal`) sits at −0.000. Bernoulli-large shows
+   almost nothing (−0.000 → −0.007). Predictively, imhLaplace already matches cold NUTS
+   LOO-NLL to 3 decimals at every size.
+3. **The conditional p(α_j | θ, y_j) is log-concave** for Bernoulli/Poisson canonical links
+   (concave log-lik in η, η linear in α, Gaussian prior) → sub-Gaussian tails, *no fat
+   tails*. The Gaussian N(b*, H⁻¹) redraw's real defect is **skew** (all-0/all-1 binary
+   groups, low-count Poisson). Fat tails live in the global posterior — the flow's job.
+4. **Subtlety**: `laplaceRfxModes` warm-starts Newton at the proposal's paired flow rfx
+   draws, so the "deterministic" Laplace weight is a stochastic function of that draw if
+   Newton under-converges within `n_newton=5`. Harmless weight noise in SNIS; in IMH it
+   wobbles the pseudo-target without pseudo-marginal (GIMH) unbiasedness backing it.
+
+Backlogged (deliberately not tested now): GIMH / pseudo-marginal weights (exact target but
+weight noise sums over m groups — hurts exactly where acceptance is already low), INLA-style
+deterministic skew corrections (more code, still biased; only worth it if AGQ+SIR leave
+measurable residue), local-flow-as-SIR-proposal (too much compute for a practical
+refinement step).
+
+## Experiments
+
+Common design: **always run an equal-sized fresh reference (raw, isLaplace, imhLaplace)
+first**, on the identical subset and seed, and compare paired summaries. Primary test bed
+is Poisson-large (biggest signal per point 2 above).
+
+**Proof-of-concept scope (local MacBook, CPU, 24 GB RAM): 32 datasets, 512 flow samples.**
+Promising results → extend on the cluster (commands below; 128–512 datasets, s=1000).
+
+### (1) Newton warm-start stochasticity — diagnostic only
+
+`experiments/posthoc/newton_stability.py`: same proposal pool; Laplace log-weights under
+init ∈ {flow rfx A, independent flow rfx B, zeros} × n_newton ∈ {5, 10, 20}; reference =
+zero-init n_newton=30. Reports |Δlog w| between inits (stochasticity), vs reference (bias),
+and the fraction of common-random-number MH accept decisions that flip A→B.
+
+Decision rule: median |Δlog w| ≲ 0.1 and flip rate < 1 % → negligible, document; else add a
+step-norm convergence check to `laplaceRfxModes` (cap ~10 iters) and re-compare.
+
+Cost: one-off diagnostic. If the convergence check is adopted: imhLaplace ≈ 1.1–1.2×.
+
+### (2) AGQ weights for q ≤ 2 (`isAGQ`, `imhAGQ`)
+
+`logMarginalLikelihoodAGQ` in `laplace_glmm.py`: reuse the Newton modes/Hessians, evaluate
+adaptive Gauss–Hermite nodes α_k = b* + √2·L_H⁻ᵀ z_k, logsumexp with the ‖z‖² correction —
+the multivariate generalization of the identity already used in
+`refineBernoulliNagqSrfx` (`metabeta/analytical/glmm/bernoulli.py`). Nodes/dim: 9 (q=1),
+7 (q=2); q > 2 falls back to plain Laplace (masked mix within a batch). Redraw unchanged.
+Targets the σ_rfx weight bias (point 2). Watch PSIS fallback — may *drop*, since the flow
+was trained on exact posteriors and the AGQ target is closer to exact than Laplace.
+
+Est. slowdown vs imhLaplace (~0.4 s/ds at s=1000 on the ablation host): node evals are bare
+likelihood passes, ~3–5× cheaper than Newton iterations → q=1: ~1.2–1.3×; q=2 (49 nodes):
+~2–3×; mixed-q batch: ~1.5–2× overall.
+
+### (3) SIR redraw (`isSIR`, `imhSIR`)
+
+`sampleRfxSIR` in `laplace_glmm.py`: K=16 candidates per (dataset, group, sample) from the
+defensive mixture 0.9·N(b*, H⁻¹) + 0.1·N(0, Σ_rfx); log-weight = exact conditional −
+mixture density; Gumbel-max resample. Weights provably bounded (bounded GLM likelihood +
+prior mixture component). Targets the redraw skew (point 3). Composes with (2).
+
+Est. slowdown: +K bare likelihood evals on the redraw pass → K=16: ~1.4–1.6×; K=32: ~1.8–2×.
+Combined (2)+(3): ~2–3.5× imhLaplace — still ~100× under NUTS.
+
+## Commands
+
+Local PoC (from repo root; `--n-samples 512` also sets the IMH pool to 4×128):
+
+```bash
+# Phase 0 — reference
+uv run python experiments/posthoc/ablation.py --sizes large --families poisson \
+    --split test --n-datasets 32 --n-samples 512 --only raw isLaplace imhLaplace
+# Phase 1 — Newton stability diagnostic
+uv run python experiments/posthoc/newton_stability.py --size large --family poisson \
+    --n-datasets 32 --n-samples 512
+# Phase 2 / 3 — candidates (after implementation)
+uv run python experiments/posthoc/ablation.py --sizes large --families poisson \
+    --split test --n-datasets 32 --n-samples 512 --only isAGQ imhAGQ isSIR imhSIR
+```
+
+Cluster scale-up (identical, bigger): `--n-datasets 512 --n-samples 1000` (drop
+`--n-datasets` for the full split), plus a Bernoulli-small spot check for SIR
+(`--sizes small --families bernoulli`, tiny groups = worst skew).
+
+## Metrics & decision rules
+
+σ_rfx ECE (primary for AGQ; expect the −0.046 excess to move toward raw's −0.027),
+RFX R/ECE + joint ECE + LOO-NLL (primary for SIR — LOO is computed from conditional draws),
+PSIS k̄/fallback, IMH acceptance, time/ds. Hard correctness gates in
+`tests/utils/test_laplace_glmm.py`: AGQ must equal the exact Normal marginal; SIR must
+match the exact Normal conditional (`sampleRfxConditionalNormal`).
+
+## Results (PoC: Poisson-large, test split, 32 datasets, s=512, MacBook CPU)
+
+### Phase 0 — pre-fix reference (`poisson_large_raw-isLaplace-imhLaplace.md`)
+
+|            | σ_rfx ECE | FFX ECE | LOO-NLL | notes |
+|------------|-----------|---------|---------|-------|
+| raw        | −0.119    | −0.008  | 1.641   | |
+| isLaplace  | −0.148    | −0.030  | 1.432   | k̄=0.72, fallback 34% |
+| imhLaplace | −0.222    | −0.088  | 1.396   | acceptance 0.213, 0.1 s/ds |
+
+Reproduces the full-run pattern at PoC scale; the smaller pool (512 vs 1000)
+amplifies the finite-pool IMH under-dispersion, as expected.
+
+### Phase 1 — Newton warm-start stochasticity (`newton_stability_poisson_large.md`)
+
+Pre-fix: typical case negligible (median |Δlog w| between two warm starts ≈ 0.0000
+vs pool std 7.9; decision flip rate 0.27 %) — **but** a rare catastrophic tail:
+init-dependent weight swings of 2e4–7e4 nats concentrated on specific datasets, ON
+SAMPLES AT/NEAR THE POOL MAX WEIGHT (ds 6: sample 241 is −16 nats from pool max
+under init A, −70 580 under init B; sample 245 the reverse). Even two "converged"
+runs disagreed by up to 1.25e5 nats (A30 vs Z30) — full-step Newton oscillates on
+extreme Poisson proposals; the ±20 clamp masked it. These are init-dependent
+absorbing states in IMH and weight-poisoners in SNIS (likely feeding the PSIS
+fallback rate).
+
+**Fix adopted**: per-entry backtracking line search in `laplaceRfxModes`
+(objective-based step halving; the target is strictly log-concave so damped ascent
+converges globally). Regression test:
+`test_newton_backtracking_init_independence`.
+
+## Status
+
+- [x] Analysis (above)
+- [x] Branch `posthoc-laplace-upgrades`
+- [x] Phase 0: PoC reference run (pre-fix)
+- [x] Phase 1: newton_stability.py + run → **found real Newton divergence, fixed via backtracking**
+- [x] Phase 2: AGQ implementation (`logMarginalLikelihoodAGQ`, conditions isAGQ/imhAGQ) + tests
+- [x] Phase 3: SIR implementation (`sampleRfxSIR`, conditions isSIR/imhSIR) + tests
+- [ ] Post-fix diagnostic re-run (tail should collapse)
+- [ ] Post-fix reference + AGQ/SIR PoC runs
+- [ ] Results summary + cluster handoff commands

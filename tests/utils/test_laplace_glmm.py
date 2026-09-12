@@ -1,5 +1,7 @@
 """Tests for posthoc/laplace_glmm.py: the Laplace marginal must be exact for
-Normal likelihoods and match numerical integration for Bernoulli/Poisson."""
+Normal likelihoods and match numerical integration for Bernoulli/Poisson; the
+AGQ marginal must be exact for Normal and beat Laplace against quadrature; the
+SIR redraw must match the exact conditional."""
 
 import math
 
@@ -7,8 +9,10 @@ import torch
 
 from metabeta.posthoc.laplace_glmm import (
     laplaceRfxModes,
+    logMarginalLikelihoodAGQ,
     logMarginalLikelihoodLaplace,
     sampleRfxLaplace,
+    sampleRfxSIR,
 )
 from metabeta.utils.families import logMarginalLikelihoodNormal
 from metabeta.utils.regularization import unconstrainedToCholesky
@@ -132,7 +136,7 @@ def test_laplace_modes_masked_groups_zero():
     y = torch.bernoulli(torch.sigmoid(X[..., 0])).unsqueeze(-1)
     mask_m = mask_m.clone()
     mask_m[:, -1] = 0.0
-    modes, chol_H, _, _ = laplaceRfxModes(
+    modes, chol_H, _, _, _ = laplaceRfxModes(
         ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m, likelihood_family=1
     )
     assert (modes[:, -1] == 0).all()
@@ -163,3 +167,272 @@ def test_laplace_padded_qdim_invariance():
         ffx, sigma_pad, sigma_eps, y, X, Z_pad, mask_n, mask_m, likelihood_family=1, n_newton=6
     )
     assert torch.allclose(base, padded, atol=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Newton backtracking
+# ---------------------------------------------------------------------------
+
+
+def test_newton_backtracking_init_independence():
+    """Extreme warm starts must converge to the same weights as a cold start.
+
+    Regression for the 2026-09-12 newton_stability finding: full-step Newton
+    oscillated on extreme Poisson samples, making log p̂(y|θ_g) depend on the
+    warm start by 1e4+ nats on samples near the pool max weight.
+    """
+    torch.manual_seed(10)
+    b, m, n, d, q, s = 2, 3, 12, 2, 1, 6
+    X = torch.randn(b, m, n, d) * 0.5
+    Z = torch.ones(b, m, n, q)
+    ffx = torch.randn(b, s, d) * 0.5
+    sigma_rfx = torch.rand(b, s, q) * 2.0 + 0.2
+    sigma_eps = torch.zeros(b, s)
+    y = torch.poisson(torch.exp(X[..., 0].clamp(max=2.0))).unsqueeze(-1)
+    mask_n = torch.ones(b, m, n, 1)
+    mask_m = torch.ones(b, m, 1)
+
+    far_init = torch.full((b, m, s, q), 8.0)
+    got_far, _, _ = logMarginalLikelihoodLaplace(
+        ffx,
+        sigma_rfx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        likelihood_family=2,
+        init=far_init,
+        n_newton=12,
+    )
+    got_cold, _, _ = logMarginalLikelihoodLaplace(
+        ffx,
+        sigma_rfx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        likelihood_family=2,
+        init=None,
+        n_newton=12,
+    )
+    assert torch.isfinite(got_far).all()
+    assert torch.allclose(got_far, got_cold, atol=0.05)
+
+
+# ---------------------------------------------------------------------------
+# AGQ marginal
+# ---------------------------------------------------------------------------
+
+
+def test_agq_marginal_exact_for_normal_correlated():
+    """Adaptive GH is exact for Normal at any node count (integrand is Gaussian)."""
+    X, Z, ffx, sigma_rfx, sigma_eps, mask_n, mask_m = _makeProblem(seed=8)
+    b, s, q = sigma_rfx.shape
+    g = torch.Generator().manual_seed(9)
+    y = torch.randn(*X.shape[:3], 1, generator=g)
+    z_corr = torch.randn(b, s, q * (q - 1) // 2, generator=g)
+    L_corr = unconstrainedToCholesky(z_corr, q)
+    want = logMarginalLikelihoodNormal(
+        ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m, L_corr=L_corr
+    )
+    got = logMarginalLikelihoodAGQ(
+        ffx,
+        sigma_rfx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        likelihood_family=0,
+        L_corr=L_corr,
+        n_newton=4,
+        k=3,
+    )
+    assert torch.allclose(got, want, atol=1e-2)
+
+
+def test_agq_marginal_bernoulli_vs_quadrature():
+    """AGQ must match brute-force quadrature much tighter than Laplace's tolerance."""
+    torch.manual_seed(4)
+    b, m, n, d, q, s = 1, 3, 30, 2, 1, 3
+    X = torch.randn(b, m, n, d)
+    Z = torch.ones(b, m, n, q)
+    ffx = torch.randn(b, s, d) * 0.5
+    sigma_rfx = torch.rand(b, s, q) * 0.8 + 0.3
+    sigma_eps = torch.zeros(b, s)
+    y = torch.bernoulli(torch.sigmoid(X[..., 0])).unsqueeze(-1)
+    mask_n = torch.ones(b, m, n, 1)
+    mask_m = torch.ones(b, m, 1)
+
+    got = logMarginalLikelihoodAGQ(
+        ffx,
+        sigma_rfx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        likelihood_family=1,
+        n_newton=8,
+        k=15,
+    )
+    want = _bruteForceMarginalGlmm(X, Z, y, ffx, sigma_rfx, likelihood_family=1)
+    assert torch.allclose(got, want, atol=0.01 * m)
+
+
+def test_agq_marginal_beats_laplace_small_groups():
+    """Tiny Bernoulli groups are the worst Laplace regime; AGQ must be closer."""
+    torch.manual_seed(11)
+    b, m, n, d, q, s = 1, 6, 5, 2, 1, 4
+    X = torch.randn(b, m, n, d)
+    Z = torch.ones(b, m, n, q)
+    ffx = torch.randn(b, s, d) * 0.5
+    sigma_rfx = torch.rand(b, s, q) * 1.5 + 0.5
+    sigma_eps = torch.zeros(b, s)
+    y = torch.bernoulli(torch.sigmoid(X[..., 0])).unsqueeze(-1)
+    mask_n = torch.ones(b, m, n, 1)
+    mask_m = torch.ones(b, m, 1)
+
+    want = _bruteForceMarginalGlmm(X, Z, y, ffx, sigma_rfx, likelihood_family=1)
+    lap, _, _ = logMarginalLikelihoodLaplace(
+        ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m, likelihood_family=1, n_newton=8
+    )
+    agq = logMarginalLikelihoodAGQ(
+        ffx,
+        sigma_rfx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        likelihood_family=1,
+        n_newton=8,
+        k=15,
+    )
+    assert (agq - want).abs().mean() < (lap - want).abs().mean()
+    assert torch.allclose(agq, want, atol=0.02 * m)
+
+
+# ---------------------------------------------------------------------------
+# SIR conditional redraw
+# ---------------------------------------------------------------------------
+
+
+def test_sir_redraw_matches_exact_conditional_normal():
+    """For Normal the exact conditional is N(b*, H^-1); SIR must reproduce it."""
+    torch.manual_seed(12)
+    b, m, n, d, q, s = 1, 2, 10, 1, 1, 4000
+    X = torch.randn(b, m, n, d)
+    Z = torch.ones(b, m, n, q)
+    # identical globals across s → every sample draws from the same conditional
+    ffx = torch.full((b, s, d), 0.3)
+    sigma_rfx = torch.full((b, s, q), 1.2)
+    sigma_eps = torch.full((b, s), 0.8)
+    y = (X[..., 0] * 0.3 + torch.randn(b, m, n) * 0.8).unsqueeze(-1)
+    mask_n = torch.ones(b, m, n, 1)
+    mask_m = torch.ones(b, m, 1)
+
+    modes, chol_H, Sigma_inv, L_rfx, _ = laplaceRfxModes(
+        ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m, likelihood_family=0, n_newton=4
+    )
+    rfx = sampleRfxSIR(
+        ffx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        0,
+        modes,
+        chol_H,
+        L_rfx,
+        Sigma_inv,
+        n_redraw=8,
+    )
+    sd_exact = 1.0 / chol_H[..., 0, 0]  # q=1: H^-1/2
+    for j in range(m):
+        draws = rfx[0, j, :, 0]
+        se = sd_exact[0, j, 0] / math.sqrt(s)
+        assert (draws.mean() - modes[0, j, 0, 0]).abs() < 5 * se
+        assert (draws.std() / sd_exact[0, j, 0] - 1.0).abs() < 0.1
+
+
+def test_sir_redraw_captures_bernoulli_skew():
+    """All-ones Bernoulli group: the exact conditional is right-skewed; the SIR mean
+    must land on the grid-integrated conditional mean, closer than the Laplace mode."""
+    torch.manual_seed(13)
+    b, m, n, q, s = 1, 1, 6, 1, 4000
+    d = 1
+    X = torch.zeros(b, m, n, d)
+    Z = torch.ones(b, m, n, q)
+    ffx = torch.zeros(b, s, d)
+    sigma_rfx = torch.full((b, s, q), 2.0)
+    sigma_eps = torch.zeros(b, s)
+    y = torch.ones(b, m, n, 1)
+    mask_n = torch.ones(b, m, n, 1)
+    mask_m = torch.ones(b, m, 1)
+
+    # grid-integrated conditional mean (exact reference)
+    grid = torch.linspace(-10.0, 15.0, 8001)
+    log_post = n * (grid - torch.nn.functional.softplus(grid)) - 0.5 * (grid / 2.0) ** 2
+    w = (log_post - log_post.max()).exp()
+    mean_exact = (grid * w).sum() / w.sum()
+
+    modes, chol_H, Sigma_inv, L_rfx, _ = laplaceRfxModes(
+        ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m, likelihood_family=1, n_newton=10
+    )
+    rfx = sampleRfxSIR(
+        ffx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        1,
+        modes,
+        chol_H,
+        L_rfx,
+        Sigma_inv,
+        n_redraw=64,
+    )
+    mean_sir = rfx[0, 0, :, 0].mean()
+    mode = modes[0, 0, 0, 0]
+    assert (mean_sir - mean_exact).abs() < 0.1
+    assert (mean_sir - mean_exact).abs() < (mode - mean_exact).abs()
+
+
+def test_sir_redraw_masked_groups_zero():
+    X, Z, ffx, sigma_rfx, sigma_eps, mask_n, mask_m = _makeProblem(seed=14)
+    y = torch.bernoulli(torch.sigmoid(X[..., 0])).unsqueeze(-1)
+    mask_m = mask_m.clone()
+    mask_m[:, -1] = 0.0
+    modes, chol_H, Sigma_inv, L_rfx, _ = laplaceRfxModes(
+        ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m, likelihood_family=1
+    )
+    rfx = sampleRfxSIR(
+        ffx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        1,
+        modes,
+        chol_H,
+        L_rfx,
+        Sigma_inv,
+        n_redraw=4,
+    )
+    assert (rfx[:, -1] == 0).all()
+    assert (rfx[:, :-1] != 0).any()
+    assert torch.isfinite(rfx).all()

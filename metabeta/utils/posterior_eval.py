@@ -353,7 +353,9 @@ def _refineChunk(
 
     if method in IMH_METHODS:
         if method == 'imhGlobal' and lf != 0:
-            raise ValueError('imhGlobal is Normal-only; non-Normal imhMarginal already uses laplace')
+            raise ValueError(
+                'imhGlobal is Normal-only; non-Normal imhMarginal already uses laplace'
+            )
         if method == 'imhLaplace' and lf == 0:
             raise ValueError('imhLaplace is for GLMMs (lf != 0); use imhMarginal')
         if method == 'imhLaplace':
