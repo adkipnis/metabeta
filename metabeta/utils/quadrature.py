@@ -1,5 +1,4 @@
-"""Gauss-Hermite quadrature grids shared by the analytical GLMM refiners and the
-posthoc AGQ marginal likelihood."""
+"""Gauss-Hermite quadrature grids for the analytical GLMM refiners."""
 
 import numpy as np
 import torch

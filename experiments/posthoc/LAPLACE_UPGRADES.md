@@ -246,7 +246,39 @@ it needs proposal-side work (bigger pools, tempering, or SNIS with PSIS truncati
 - [x] Phases 0–3 + cluster scale-up: **done, defaults decided**
 - Adopted: robustified `laplaceRfxModes` (backtracking + adaptive budget + 1-nat
   pinning guard) — now simply what `isLaplace`/`imhLaplace` do
-- Retained as opt-in, off by default: `nagq` (AGQ weights), `redraw='sir'`
-- Open (separate work item): huge-regime finite-pool under-dispersion; paper
-  appendix numbers for MB+IS / MB-IMH on GLMMs predate the fix and improve slightly
-  on re-run
+- **Retired again** (2026-09-12): AGQ weights and SIR redraw — no measurable /
+  marginal benefit post-fix. Implementations live in commits a32922f8/169cd495.
+- Open: paper appendix numbers for MB+IS / MB-IMH on GLMMs predate the fix and
+  improve slightly on re-run
+
+## Next: finite-pool FFX under-dispersion (pool-size sweep)
+
+Hypothesis (established via the Normal-huge exact-target control): IMH can only
+concentrate the s flow draws, so FFX ECE ≈ −0.05 at huge is a finite-pool effect and
+must shrink as s grows (IMH is asymptotically exact in s for any full-support
+proposal; the rate reflects the flow's tail coverage). Minimal test — the existing
+script, swept over `--n-samples` (output files carry an `_s{n}` tag):
+
+```bash
+for S in 1000 2000 4000 8000; do
+  uv run python experiments/posthoc/ablation.py --sizes huge --families bernoulli --split test \
+      --only raw isLaplace imhLaplace --n-samples $S --refresh-summaries --batch-size 2 --device cuda
+done
+```
+
+Predictions: (a) finite-pool → imhLaplace FFX ECE −0.047 shrinks monotonically,
+approaching the small-regime level (≈ −0.01) once ā·s ≈ 800 effective draws
+(ā ≈ 0.17 → around s ≈ 5k); raw is the control and must stay s-invariant; the
+isLaplace column separates rejection-specific effects from the shared pool limit.
+(b) flat ECE in s → the flow's FFX tails are the binding constraint and the remedy
+is proposal-side (defensive mixture), not sample count.
+
+Sample-size rule: pool efficiency decays ≈ exponentially in the global dim
+D = d + q + 1{Normal} + q(q−1)/2 — measured mean acceptance fits
+ā ≈ exp(−0.08·(D−4)) (small D≈7: 0.8; large D≈22: 0.25; huge D=31: 0.10–0.17) —
+so a-priori s ≈ N_eff_target/ā with N_eff_target ≈ 500–1000. Better: a data-adaptive
+pilot (draw 256, one vectorized weight pass, ê = ESS/256, s = N_eff_target/ê) that
+absorbs group sizes and informativeness automatically. m and n_i never enter the
+rule directly: rfx are marginalized out of the weight, so they act only through
+posterior sharpness, which the pilot measures. The sweep validates the rule: ECE at
+matched ā·s should equalize across regimes.
