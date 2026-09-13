@@ -334,3 +334,13 @@ Not yet ported: the per-experiment appendix tables (`likelihood_misspec_*`,
 `prior_misspec_*`, `ood_design_*`, `condition_number_*` for b/p) — hand-restyled in the
 paper repo from `experiments/results/*.tex`; note the quality tables' layout has since
 changed (cov90 columns dropped), independent of this branch.
+
+**Paper tables ported (2026-09-13):** `tables/{likelihood_misspec,ood_design,prior_misspec,
+condition_number}_{bernoulli,poisson}.tex` regenerated from the fresh results via
+`metabeta-paper/tools/restyle_tables.py` (paper conventions: `\MBz{}`/`\texttt{MB}`, math
+labels taken from the previous table by row order, `\phantom{-}` padding, merged prior
+layout). The quality tables now follow the renderer's current layout (NRMSE/EACE per group,
+LOO-NLL; cov90 dropped Aug 7 as redundant next to EACE), so the Normal likelihood/OOD tables
+were re-laid-out too (values unchanged) to keep the "Layout as in …" captions true; a TODO
+marks the one caption that still mentions coverage. Priority-2 queue:
+`experiments/rerun_p2_glmm.sh`.
