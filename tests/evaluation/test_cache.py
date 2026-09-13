@@ -131,3 +131,23 @@ def test_merge_summaries_restores_original_dataset_order(monkeypatch):
         merged.aggregated.estimates['ffx'].squeeze(-1),
         torch.tensor([10.0, 20.0, 30.0]),
     )
+
+
+def test_force_refresh_env_switch(monkeypatch):
+    """METABETA_REFRESH_METHODS bypasses caches for the listed methods only."""
+    from metabeta.utils.posterior_eval import _forceRefresh
+
+    monkeypatch.delenv('METABETA_REFRESH_METHODS', raising=False)
+    assert not _forceRefresh('imhLaplace')
+
+    monkeypatch.setenv('METABETA_REFRESH_METHODS', 'imhLaplace, isLaplace')
+    assert _forceRefresh('imhLaplace')
+    assert _forceRefresh('isLaplace')
+    assert not _forceRefresh('mb')
+    assert not _forceRefresh('nuts')
+
+    monkeypatch.setenv('METABETA_REFRESH_METHODS', 'all')
+    assert _forceRefresh('mb')
+
+    monkeypatch.setenv('METABETA_REFRESH_METHODS', '')
+    assert not _forceRefresh('imhLaplace')

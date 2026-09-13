@@ -18,10 +18,13 @@
 set -euo pipefail
 
 # posterior_eval's caches are mtime-fresh, so the pre-fix imhLaplace/isLaplace
-# artifacts (refined-sample npz + summary .pt) would be served as-is; purge them
-# first. MB pools and NUTS summaries stay cached — only refinement is recomputed.
-# The name filter only ever matches GLMM artifacts (Normal uses imhMarginal).
-find metabeta/outputs/data -type f \( -name '*imhLaplace*' -o -name '*isLaplace*' \) -print -delete
+# artifacts (refined-sample npz + summary .pt) would be served as-is; bypass them
+# for this run instead of deleting anything. Fresh results overwrite the caches,
+# so later runs without the variable pick them up normally. MB pools and NUTS
+# summaries stay cached throughout. Note for resumes: while the variable is set,
+# already-refreshed dirs are recomputed again; on a partial re-launch either live
+# with that or unset it for the families that completed.
+export METABETA_REFRESH_METHODS="imhLaplace,isLaplace"
 
 uv run python experiments/evaluation/likelihood_misspec.py --family b
 uv run python experiments/evaluation/likelihood_misspec.py --family p

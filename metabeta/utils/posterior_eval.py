@@ -12,10 +12,17 @@ proposals, and summarise each. This module holds the parts that are identical be
 The per-script pieces (CLI, metric computation, table layout) stay in the scripts, since
 their metrics and outputs differ. Caches live next to the data as siblings of test.fit.npz
 and are keyed by checkpoint/prefix/n_samples/seed and by a hash of the dataset subset mask.
+
+Cache freshness is mtime-based (vs the data file and checkpoint), so a code change to a
+refinement path is invisible to it. Set METABETA_REFRESH_METHODS to a comma-separated
+method list (e.g. 'imhLaplace,isLaplace', or 'all') to bypass the sample and summary
+caches of those methods for the run; fresh results are re-saved, so subsequent runs
+without the variable pick them up normally.
 """
 
 import argparse
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -203,6 +210,13 @@ def sampleMB(
 
 # ---------------------------------------------------------------------------
 # Caching (posterior samples, refinements, summaries) — siblings of test.fit.npz.
+
+
+def _forceRefresh(method: str) -> bool:
+    """True when METABETA_REFRESH_METHODS lists ``method`` (or 'all') — see module docstring."""
+    raw = os.environ.get('METABETA_REFRESH_METHODS', '')
+    listed = {m.strip() for m in raw.split(',') if m.strip()}
+    return bool(listed) and ('all' in listed or method in listed)
 
 
 def _sampleCachePath(
@@ -437,7 +451,9 @@ def loadOrRefine(
         data_path, method, ckpt_dir, prefix, n_samples, seed, mask, rescale, variant=variant
     )
     ref_mtime = cacheRefMtime(data_path, ckpt_dir, prefix)
-    if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
+    if _forceRefresh(method):
+        logger.info('METABETA_REFRESH_METHODS set; refining %s (bypassing %s)', method, cache_path)
+    elif cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
         try:
             proposal, metadata = loadProposalCache(cache_path)
             logger.info('Loaded cached %s posterior samples from %s', method, cache_path)
@@ -522,7 +538,13 @@ def loadOrComputeSummary(
         ckpt_dir if is_model_derived else None,
         prefix if is_model_derived else None,
     )
-    if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
+    if _forceRefresh(method):
+        logger.info(
+            'METABETA_REFRESH_METHODS set; computing %s summary (bypassing %s)',
+            method,
+            cache_path,
+        )
+    elif cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
         try:
             summary = EvaluationSummary.load(cache_path)
             logger.info('Loaded cached %s summary from %s', method, cache_path)
