@@ -313,3 +313,24 @@ absorbs group sizes and informativeness automatically. m and n_i never enter the
 rule directly: rfx are marginalized out of the weight, so they act only through
 posterior sharpness, which the pilot measures. The sweep validates the rule: ECE at
 matched ā·s should equalize across regimes.
+
+## Priority-1 reruns (2026-09-13, cluster, `experiments/rerun_p1_glmm.sh`)
+
+The four robustness experiments behind the main-text `robustness_worst.tex`, Bernoulli
+and Poisson, recomputed through the robustified `imhLaplace` (caches bypassed via
+`METABETA_REFRESH_METHODS`). Normal outputs were byte-identical to the committed ones,
+as expected.
+
+**Story unchanged.** Every refined-MB agreement number moved in the third decimal only;
+the table's rounded cells changed in four places, all toward better NUTS agreement:
+Bernoulli Cauchy σ-ratio 0.97±0.02 → 0.97±0.03, Poisson Cauchy 1.00±0.01 → 1.00±0.02,
+Bernoulli collinearity 0.95±0.03 → 0.96±0.02, Poisson collinearity 0.92±0.04 → 0.93±0.04
+(the last two are the regime where huge-count/ill-conditioned designs used to destabilize
+Newton). ΔLOO-NLL stays 0.00 everywhere. The only larger swing is the Poisson
+κ ∈ [10, 10⁶) bin (σ-ratio 0.964 → 0.887), which holds a single converged dataset and is
+not the table's worst-condition row.
+
+Not yet ported: the per-experiment appendix tables (`likelihood_misspec_*`,
+`prior_misspec_*`, `ood_design_*`, `condition_number_*` for b/p) — hand-restyled in the
+paper repo from `experiments/results/*.tex`; note the quality tables' layout has since
+changed (cov90 columns dropped), independent of this branch.
