@@ -17,6 +17,12 @@
 
 set -euo pipefail
 
+# posterior_eval's caches are mtime-fresh, so the pre-fix imhLaplace/isLaplace
+# artifacts (refined-sample npz + summary .pt) would be served as-is; purge them
+# first. MB pools and NUTS summaries stay cached — only refinement is recomputed.
+# The name filter only ever matches GLMM artifacts (Normal uses imhMarginal).
+find metabeta/outputs/data -type f \( -name '*imhLaplace*' -o -name '*isLaplace*' \) -print -delete
+
 uv run python experiments/evaluation/likelihood_misspec.py --family b
 uv run python experiments/evaluation/likelihood_misspec.py --family p
 
@@ -27,4 +33,5 @@ uv run python experiments/evaluation/ood_design.py --family b
 uv run python experiments/evaluation/ood_design.py --family p
 
 uv run python experiments/evaluation/condition_number.py --family b
-uv run python experiments/evaluation/condition_number.py --family p
+# no huge-p-real test set exists (too few real datasets at that size)
+uv run python experiments/evaluation/condition_number.py --family p --sizes small medium large
