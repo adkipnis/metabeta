@@ -40,14 +40,13 @@ bias for binary/count data with small groups tilting the σ_rfx posterior low. N
 isLaplace is *not* better-calibrated than raw flow samples on these families;
 attach_only ≈ raw (mild RFX-joint gains on Poisson, mild LOO-NLL loss on Bernoulli).
 
-Findings (2026-09, 512 test datasets — experiments/posthoc/LAPLACE_UPGRADES.md)
-----------------------------------------------------------------------------------
+Findings (2026-09, 512 test datasets)
+-------------------------------------
 Most of the σ_rfx shift above was Newton-instability contamination of the weights, not
 Laplace bias: full-step Newton oscillated on extreme proposals (huge-count Poisson),
 making log p̂(y|θ_g) depend on the warm start by 1e4+ nats on top-weight samples. With the
 robustified mode search below, Poisson-large isLaplace σ_rfx ECE went −0.046 → −0.031
-(raw −0.027) and Bernoulli-huge max PSIS k 15.4 → 2.6. AGQ weights and a SIR conditional
-redraw were tried on top and retired (no measurable gain; see the doc for the record).
+(raw −0.027) and Bernoulli-huge max PSIS k 15.4 → 2.6.
 """
 
 import math
@@ -136,8 +135,7 @@ def laplaceRfxModes(
     The Newton step backtracks (per (b, m, s) entry, up to n_backtrack halvings) whenever
     it would decrease the per-group objective ℓ_j(b) − ½ bᵀΣ⁻¹b; the target is strictly
     log-concave in b, so damped ascent converges globally, whereas full steps oscillate on
-    extreme Poisson proposals and made the weight warm-start-dependent (see
-    experiments/posthoc/newton_stability.py).
+    extreme Poisson proposals and made the weight warm-start-dependent.
 
     Returns (modes, chol_H, Sigma_inv, L_rfx, decrement):
         modes    (b, m, s, q)     — Newton solution b*_j

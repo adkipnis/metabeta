@@ -173,7 +173,7 @@ def test_laplace_padded_qdim_invariance():
 def test_newton_backtracking_init_independence():
     """Extreme warm starts must converge to the same weights as a cold start.
 
-    Regression for the 2026-09-12 newton_stability finding: full-step Newton
+    Regression for the 2026-09 finding that full-step Newton
     oscillated on extreme Poisson samples, making log p̂(y|θ_g) depend on the
     warm start by 1e4+ nats on samples near the pool max weight.
     """
