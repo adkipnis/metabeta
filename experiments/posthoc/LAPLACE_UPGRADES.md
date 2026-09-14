@@ -1,382 +1,109 @@
-# Laplace posthoc upgrades: analysis, experiments, and status
+# Laplace / IMH posthoc upgrades — record of branch `posthoc-laplace-upgrades` (2026-09)
 
-Branch: `posthoc-laplace-upgrades`. Working doc for testing three refinements of the
-GLMM Laplace machinery in `metabeta/posthoc/laplace_glmm.py` / `metabeta/posthoc/metropolis.py`.
+## What the branch delivers
 
-## Why (analysis summary, 2026-09-12)
+1. **Robustified Laplace mode search** (`posthoc/laplace_glmm.py::laplaceRfxModes`): damped
+   Newton with a per-entry backtracking line search, an adaptive iteration budget driven by
+   the Newton decrement, and a 1-nat pinning guard for samples whose mode search does not
+   resolve. Fixes warm-start-dependent IMH weights (a correctness bug, see below).
+2. **IMH is the API default** (`Api.sample(refine=True)`): the flow pool is over-drawn by
+   the burn-in so exactly `n_samples` draws come back; `refine='is'` keeps the SNIS/PSIS
+   path, `refine=False` the raw flow. Refinement applies from `MIN_SAFEGUARD_SAMPLES` upward.
+3. **Acceptance-based pool-size suggestion** (`metropolis.suggestPoolSize`, in the IMH
+   diagnostics and `RouterResult.safeguards`), calibrated by a pool-size sweep; mean
+   acceptance < 0.1 warns with the concrete re-run size.
+4. **Split-wide padding trimmed per chunk** (`dataloader.trimBatchPadding`,
+   `Proposal.resizeGroups`) in `posterior_eval.refineProposal`, `getSummary`, and the API's
+   chunked refinement — 3–4× fewer cells on the test splits, bit-identical results.
+5. **`METABETA_REFRESH_METHODS`** env switch in `posterior_eval` to bypass per-method caches
+   after a code change (cache freshness is mtime-based and blind to code).
+6. Diagnostics: `newton_stability.py` (warm-start dependence of Laplace weights),
+   `laplace_budget_timing.py` (cost profile of the weight pass / full refinement on a cached
+   pool, `--full` for the exact oracle path).
 
-Cross-referencing the posthoc ablations in `metabeta/outputs/results/ablation/`:
+## Why: the analysis that started it
 
-1. **The huge-regime under-dispersion of imhLaplace is NOT Laplace bias.** On Normal-huge,
-   `imhMarginal` targets the *exact* marginal (Normal-Normal conjugacy) and still shows the
-   same signature as the GLMM huge runs: FFX ECE −0.049, σ_rfx ECE −0.045 at acceptance
-   0.151 (vs imhLaplace: −0.047/−0.063 FFX at acceptance 0.171/0.096 on b/p-huge). This is
-   the finite-pool IMH effect — the chain can only concentrate the flow's draws, never
-   create tail mass the flow lacks. No conditional-posterior upgrade can fix it.
-2. **The genuine Laplace-attributable bias is modest and clearest on Poisson-large** (SNIS
-   path, no chain confound): `isLaplace` σ_rfx ECE −0.046 vs raw −0.027, while the
-   exact-target Normal-large control (`isMarginal`) sits at −0.000. Bernoulli-large shows
-   almost nothing (−0.000 → −0.007). Predictively, imhLaplace already matches cold NUTS
-   LOO-NLL to 3 decimals at every size.
-3. **The conditional p(α_j | θ, y_j) is log-concave** for Bernoulli/Poisson canonical links
-   (concave log-lik in η, η linear in α, Gaussian prior) → sub-Gaussian tails, *no fat
-   tails*. The Gaussian N(b*, H⁻¹) redraw's real defect is **skew** (all-0/all-1 binary
-   groups, low-count Poisson). Fat tails live in the global posterior — the flow's job.
-4. **Subtlety**: `laplaceRfxModes` warm-starts Newton at the proposal's paired flow rfx
-   draws, so the "deterministic" Laplace weight is a stochastic function of that draw if
-   Newton under-converges within `n_newton=5`. Harmless weight noise in SNIS; in IMH it
-   wobbles the pseudo-target without pseudo-marginal (GIMH) unbiasedness backing it.
+Cross-referencing the posthoc ablations (`metabeta/outputs/results/ablation/`):
+- The huge-regime under-dispersion of `imhLaplace` (FFX ECE ≈ −0.05) is **not** Laplace
+  bias: `imhMarginal` on Normal-huge, with an exact target, shows the same signature at the
+  same acceptance. It is the finite proposal pool.
+- The Laplace-attributable σ_rfx shift was clearest on Poisson-large (`isLaplace` −0.046 vs
+  raw −0.027; exact-target control −0.000) — and turned out to be mostly Newton instability.
+- The conditional p(α_j | θ, y_j) is strictly log-concave for Bernoulli/Poisson canonical
+  links: no fat tails, only skew. Upgrades aimed at skew (SIR) and integrated-likelihood bias
+  (AGQ) were therefore tested — and retired.
 
-Backlogged (deliberately not tested now): GIMH / pseudo-marginal weights (exact target but
-weight noise sums over m groups — hurts exactly where acceptance is already low), INLA-style
-deterministic skew corrections (more code, still biased; only worth it if AGQ+SIR leave
-measurable residue), local-flow-as-SIR-proposal (too much compute for a practical
-refinement step).
+## Newton stability: the bug and the fix
 
-## Experiments
+`newton_stability.py` (Poisson-large, 32 datasets, s=512): the median warm-start dependence
+of a weight was 0.0000 nats, but on the huge-count dataset (y_max = 13 689) two warm starts
+disagreed by up to 7e4 nats **on samples at the pool's top weight**, and even two 30-iteration
+runs by 1.25e5 — full-step Newton oscillates on the clipped Poisson objective. After the fix:
+budget independence 0.008 nats, MH decision flip rate 0.27 % → 0.01 %, remaining asymmetry
+conservative only (a legit sample may be pinned, never a spurious one kept).
 
-Common design: **always run an equal-sized fresh reference (raw, isLaplace, imhLaplace)
-first**, on the identical subset and seed, and compare paired summaries. Primary test bed
-is Poisson-large (biggest signal per point 2 above).
+Cluster effect (512 test datasets): Poisson-large σ_rfx ECE `isLaplace` −0.046 → −0.031,
+`imhLaplace` −0.070 → −0.051; Bernoulli-huge max PSIS k̂ 15.4 → 2.6; LOO-NLL unchanged at
+NUTS level everywhere. End-to-end on the flagged dataset (same pool, vs NUTS): pre-fix output
+was *not* visibly wrong (max |mean − NUTS|/sd 0.16 → 0.14, mixing 347 → 394 unique states);
+all other datasets bit-identical. Kept as a tail-risk correctness fix; cost 1.7× per Newton
+pass, more than offset by the padding trim.
 
-**Proof-of-concept scope (local MacBook, CPU, 24 GB RAM): 32 datasets, 512 flow samples.**
-Promising results → extend on the cluster (commands below; 128–512 datasets, s=1000).
+## Tried and retired: AGQ weights, SIR redraw
 
-### (1) Newton warm-start stochasticity — diagnostic only
+Implemented (commits a32922f8 / 169cd495 hold the code) and cluster-ablated at 512 datasets:
+AGQ (nAGQ=9, q ≤ 2) ≡ Laplace to ~3 decimals post-fix; SIR redraw (K=16, defensive
+Laplace+prior mixture) small never-worse gains (Bernoulli-huge σ_rfx EACE 0.034 vs 0.043) at
+~1.7× cost. Both removed again. Backlog: pseudo-marginal (GIMH) weights, INLA-style skew
+corrections — only worth revisiting if flow proposal quality drops.
 
-`experiments/posthoc/newton_stability.py`: same proposal pool; Laplace log-weights under
-init ∈ {flow rfx A, independent flow rfx B, zeros} × n_newton ∈ {5, 10, 20}; reference =
-zero-init n_newton=30. Reports |Δlog w| between inits (stochasticity), vs reference (bias),
-and the fraction of common-random-number MH accept decisions that flip A→B.
+## Finite-pool sweep and the sizing rule
 
-Decision rule: median |Δlog w| ≲ 0.1 and flip rate < 1 % → negligible, document; else add a
-step-norm convergence check to `laplaceRfxModes` (cap ~10 iters) and re-compare.
+Bernoulli-huge, 512 datasets, `imhLaplace`:
 
-Cost: one-off diagnostic. If the convergence check is adopted: imhLaplace ≈ 1.1–1.2×.
+| s | FFX ECE | σ_rfx ECE | Corr R | acceptance | raw FFX ECE |
+|---|---|---|---|---|---|
+| 1000 | −0.048 | −0.021 | 0.132 | 0.175 | −0.000 |
+| 2000 | −0.031 | −0.017 | 0.245 | 0.168 | −0.000 |
+| 4000 | −0.022 | −0.008 | 0.262 | 0.168 | +0.001 |
 
-### (2) AGQ weights for q ≤ 2 (`isAGQ`, `imhAGQ`)
+FFX ECE ∝ (ā·s)^−0.6 (s=4000 predicted −0.020 out-of-sample, observed −0.022); the raw
+control is s-invariant and acceptance pool-size-independent. Small-regime calibration is
+reached at ā·s ≈ 700 accepted draws → `suggestPoolSize` = ⌈700/ā⌉, multiples of 500,
+clamped to [1000, 16000]. Benchmarks keep the fixed 1000-proposal pool (one variable per
+comparison, paired caches); the suggestion is a reported diagnostic.
 
-`logMarginalLikelihoodAGQ` in `laplace_glmm.py`: reuse the Newton modes/Hessians, evaluate
-adaptive Gauss–Hermite nodes α_k = b* + √2·L_H⁻ᵀ z_k, logsumexp with the ‖z‖² correction —
-the multivariate generalization of the identity already used in
-`refineBernoulliNagqSrfx` (`metabeta/analytical/glmm/bernoulli.py`). Nodes/dim: 9 (q=1),
-7 (q=2); q > 2 falls back to plain Laplace (masked mix within a batch). Redraw unchanged.
-Targets the σ_rfx weight bias (point 2). Watch PSIS fallback — may *drop*, since the flow
-was trained on exact posteriors and the AGQ target is closer to exact than Laplace.
+## Padding trim
 
-Est. slowdown vs imhLaplace (~0.4 s/ds at s=1000 on the ablation host): node evals are bare
-likelihood passes, ~3–5× cheaper than Newton iterations → q=1: ~1.2–1.3×; q=2 (49 nodes):
-~2–3×; mixed-q batch: ~1.5–2× overall.
+`refineProposal` sliced chunks out of the fully collated batch, so every chunk carried the
+split-wide (m, n) padding: 1.6× the cells at 32 datasets, 3.4× at 512. Trimming per chunk:
+weights bit-identical, weight pass 1.8× faster, full imhLaplace refinement 0.80 → 0.46 s/ds
+locally; on the cluster's GPU node the oracle refined time went 6.44 s/ds (branch, pre-trim)
+→ 2.50 (branch) vs 2.78 (`main`). Node facts that mattered: 4 allotted cores, torch pinned to
+4 (no oversubscription); a server core is ~4× slower than an M-series core on this workload.
 
-### (3) SIR redraw (`isSIR`, `imhSIR`)
+## Paper impact and rerun verdict
 
-`sampleRfxSIR` in `laplace_glmm.py`: K=16 candidates per (dataset, group, sample) from the
-defensive mixture 0.9·N(b*, H⁻¹) + 0.1·N(0, Σ_rfx); log-weight = exact conditional −
-mixture density; Gumbel-max resample. Weights provably bounded (bounded GLM likelihood +
-prior mixture component). Targets the redraw skew (point 3). Composes with (2).
+Priority-1 reruns (robustness experiments behind `tables/robustness_worst.tex`, Bernoulli
+and Poisson, cluster, caches bypassed): third-decimal shifts; four rounded cells moved by
+0.01 toward NUTS (Cauchy predictors ±, collinearity 0.95 → 0.96 / 0.92 → 0.93). Targeted
+oracle checks on the most sensitive regimes (same pools): Poisson-large refined row
+identical at 2 dp, Bernoulli-huge one cell 0.01. **No further oracle / real / data-poverty /
+ablation-table reruns are needed for the paper's accuracy claims.** Ported to the paper:
+robustness tables (current renderer layout, cov90 dropped), IMH text (pool suggestion,
+released vs benchmark pool geometry, mode search, acceptance gate) under `TODO(alex)`
+markers. The oracle tables' time column is GPU-era and unrelated to this branch; refresh
+with a dedicated timing run if quoted.
 
-Est. slowdown: +K bare likelihood evals on the redraw pass → K=16: ~1.4–1.6×; K=32: ~1.8–2×.
-Combined (2)+(3): ~2–3.5× imhLaplace — still ~100× under NUTS.
-
-## Commands
-
-Local PoC (from repo root; `--n-samples 512` also sets the IMH pool to 4×128):
-
-```bash
-# Phase 0 — reference
-uv run python experiments/posthoc/ablation.py --sizes large --families poisson \
-    --split test --n-datasets 32 --n-samples 512 --only raw isLaplace imhLaplace
-# Phase 1 — Newton stability diagnostic
-uv run python experiments/posthoc/newton_stability.py --size large --family poisson \
-    --n-datasets 32 --n-samples 512
-# Phase 2 / 3 — candidates (after implementation)
-uv run python experiments/posthoc/ablation.py --sizes large --families poisson \
-    --split test --n-datasets 32 --n-samples 512 --only isAGQ imhAGQ isSIR imhSIR
-```
-
-Cluster scale-up (identical, bigger): `--n-datasets 512 --n-samples 1000` (drop
-`--n-datasets` for the full split), plus a Bernoulli-small spot check for SIR
-(`--sizes small --families bernoulli`, tiny groups = worst skew).
-
-## Metrics & decision rules
-
-σ_rfx ECE (primary for AGQ; expect the −0.046 excess to move toward raw's −0.027),
-RFX R/ECE + joint ECE + LOO-NLL (primary for SIR — LOO is computed from conditional draws),
-PSIS k̄/fallback, IMH acceptance, time/ds. Hard correctness gates in
-`tests/utils/test_laplace_glmm.py`: AGQ must equal the exact Normal marginal; SIR must
-match the exact Normal conditional (`sampleRfxConditionalNormal`).
-
-## Results (PoC: Poisson-large, test split, 32 datasets, s=512, MacBook CPU)
-
-### Phase 0 — pre-fix reference (`poisson_large_raw-isLaplace-imhLaplace.md`)
-
-|            | σ_rfx ECE | FFX ECE | LOO-NLL | notes |
-|------------|-----------|---------|---------|-------|
-| raw        | −0.119    | −0.008  | 1.641   | |
-| isLaplace  | −0.148    | −0.030  | 1.432   | k̄=0.72, fallback 34% |
-| imhLaplace | −0.222    | −0.088  | 1.396   | acceptance 0.213, 0.1 s/ds |
-
-Reproduces the full-run pattern at PoC scale; the smaller pool (512 vs 1000)
-amplifies the finite-pool IMH under-dispersion, as expected.
-
-### Phase 1 — Newton warm-start stochasticity (`newton_stability_poisson_large.md`)
-
-Pre-fix: typical case negligible (median |Δlog w| between two warm starts ≈ 0.0000
-vs pool std 7.9; decision flip rate 0.27 %) — **but** a rare catastrophic tail:
-init-dependent weight swings of 2e4–7e4 nats concentrated on specific datasets, ON
-SAMPLES AT/NEAR THE POOL MAX WEIGHT (ds 6: sample 241 is −16 nats from pool max
-under init A, −70 580 under init B; sample 245 the reverse). Even two "converged"
-runs disagreed by up to 1.25e5 nats (A30 vs Z30) — full-step Newton oscillates on
-extreme Poisson proposals; the ±20 clamp masked it. These are init-dependent
-absorbing states in IMH and weight-poisoners in SNIS (likely feeding the PSIS
-fallback rate).
-
-**Fixes adopted** (in `laplaceRfxModes` / the marginal functions):
-1. per-entry backtracking line search (objective-based step halving);
-2. adaptive iteration budget — the per-iteration Newton decrement λ²/2 is free from
-   (score, delta), so the loop extends past n_newton (cap +15) only while some
-   entry is unresolved; clean datasets pay nothing;
-3. a 1-nat pinning guard — samples whose summed decrement stays > 1 nat get
-   ll = −1e10 (they cannot become absorbing states / SNIS poison).
-
-Root cause of the hard cases: dataset 6 is a huge-count Poisson dataset
-(y_max = 13 689 vs ≤ 2 437 elsewhere, q=3) — μ ~ 1e4 makes the conditional
-razor-sharp and the eta-clip plateaus the objective. Post-fix diagnostic:
-within-init budget independence 0.008 nats max (was 2e3–5e3); MH decision flip
-rates 0.01 % / 0.00 % (was 0.27 % / 0.14 %); remaining init-asymmetric pinning is
-conservative only (a legit sample may be dropped, never a spurious one kept).
-Regression test: `test_newton_backtracking_init_independence`. Cost: weight pass
-~2.3× pre-fix on this 32-ds subset (48.8 s → 114.6 s for 8 passes), driven by the
-backtracking objective evaluations.
-
-### Phases 2+3 — PoC comparison (post-fix, all conditions on one shared pool)
-
-`poisson_large_raw-isLaplace-imhLaplace-isAGQ-imhAGQ-isSIR-imhSIR.md`:
-
-|            | σ_rfx ECE | FFX ECE | Corr R | LOO-NLL | time/ds |
-|------------|-----------|---------|--------|---------|---------|
-| raw        | −0.119    | −0.008  | 0.501  | 1.641   | — |
-| isLaplace  | −0.148    | −0.030  | 0.501  | 1.411   | — |
-| isAGQ      | −0.148    | −0.030  | 0.501  | 1.413   | — |
-| isSIR      | −0.148    | −0.030  | 0.501  | 1.412   | — |
-| imhLaplace | −0.157    | −0.104  | 0.321  | 1.397   | 0.3 s |
-| imhAGQ     | −0.154    | −0.098  | 0.505  | 1.397   | 0.4 s |
-| imhSIR     | −0.198    | −0.099  | 0.522  | 1.397   | 0.4 s |
-
-Reading (32 datasets — direction only, not significance):
-- **The Newton robustness fix is the substantive change.** Post-fix imhLaplace
-  σ_rfx ECE improved −0.222 → −0.157 vs the pre-fix reference (same subset/seed),
-  consistent with removing init-dependent absorbing states. Cost: IMH 0.1 → 0.3 s/ds
-  (~2.5–3×, still ~300× under NUTS). On real flow proposals only ~3/256 samples of
-  the pathological dataset get pinned.
-- **AGQ and SIR are correct but sub-noise at this scale.** On real proposals the
-  AGQ−Laplace weight correction is O(0.01–0.2) nats/dataset (verified directly;
-  sign dataset-specific) — invisible in 32-ds metrics. The unit-test gates are the
-  correctness evidence (AGQ exact for Normal, beats Laplace vs brute-force
-  quadrature on tiny groups; SIR matches the exact Normal conditional and the
-  grid-integrated skewed Bernoulli conditional mean). The σ_rfx-bias effect
-  (≈0.02 ECE at 512 ds) needs the cluster scale to resolve.
-- Corr R 0.321 for imhLaplace is chain-level noise on this subset (imhAGQ/imhSIR,
-  same weights ±0.2 nats, sit at 0.505/0.522).
-- Measured slowdowns vs imhLaplace: **imhAGQ 1.4×, imhSIR 1.4×** (12.7 s vs 9.1 s
-  per 32 ds) — at or below the pre-run estimates.
-
-## Cluster scale-up commands
-
-Code changed → pass `--refresh-summaries` everywhere. From repo root:
+## Reproduction
 
 ```bash
-# main comparison, full test split, s=1000 (Poisson-large: clearest weight-bias signal)
-uv run python experiments/posthoc/ablation.py --sizes large --families poisson --split test \
-    --only raw isLaplace imhLaplace isAGQ imhAGQ isSIR imhSIR --refresh-summaries
-# worst-skew regime for the SIR redraw
-uv run python experiments/posthoc/ablation.py --sizes small --families bernoulli --split test \
-    --only raw isLaplace imhLaplace isSIR imhSIR --refresh-summaries
-# acceptance-starved regime (does the absorbing-state fix move the huge-regime ECE?)
-uv run python experiments/posthoc/ablation.py --sizes huge --families poisson bernoulli --split test \
-    --only raw isLaplace imhLaplace imhAGQ imhSIR --refresh-summaries
-# optional: re-check weight stability on other families/sizes
-uv run python experiments/posthoc/newton_stability.py --families bernoulli --sizes large --n-datasets 128
+# Newton warm-start diagnostic
+uv run python experiments/posthoc/newton_stability.py --families poisson --sizes large --n-datasets 32 --n-samples 512
+# cost profile on a cached pool (weight pass; --full = exact oracle refinement path)
+uv run python experiments/posthoc/laplace_budget_timing.py --pool <test-*.mb.*.npz> --data-dir <data dir> --likelihood-family 2 --n-datasets 64 [--full --batch-size 8]
+# posthoc ablation with fresh summaries (pool-size sweep: vary --n-samples; files get an _s{n} tag)
+uv run python experiments/posthoc/ablation.py --sizes huge --families bernoulli --split test --only raw isLaplace imhLaplace --n-samples 4000 --refresh-summaries --device cuda
+# evaluation scripts after a refinement code change (bypass stale caches)
+METABETA_REFRESH_METHODS="imhLaplace,isLaplace" uv run python experiments/evaluation/oracle_posterior.py --checkpoint <ckpt dir> --data_id large-p-sampled --device cuda
 ```
-
-Key comparisons to read: post-fix imhLaplace vs the committed full-run mds
-(pre-fix `poisson_large.md` etc. — FFX/σ_rfx ECE and Corr R at huge); isAGQ vs
-isLaplace σ_rfx ECE (expect the −0.046 → −0.027-ward shift); isSIR/imhSIR RFX
-joint ECE + LOO-NLL on Bernoulli-small.
-
-## Cluster results (2026-09-12, 512 datasets, s=1000, test split, GPU node)
-
-Paired against the committed pre-fix full-run mds (same MB sample caches).
-
-### The Newton robustness fix is the win
-
-| Poisson-large | σ_rfx ECE pre-fix | post-fix | raw |
-|---|---|---|---|
-| isLaplace  | −0.046 | **−0.031** | −0.027 |
-| imhLaplace | −0.070 | **−0.051** | −0.027 |
-
-The isLaplace excess vs raw collapsed −0.019 → −0.004: **most of what the original
-analysis attributed to "Laplace σ_rfx bias" was Newton-instability contamination of
-the weights.** Bernoulli-huge weight health: max PSIS k 15.39 → 2.62 (fallback
-40 % → 38 %). LOO-NLL unchanged at NUTS level (imh* 1.394–1.397 vs coldNuts 1.397).
-Cost at s=1000: imhLaplace 0.4 → 0.7 s/ds.
-
-### AGQ: no measurable benefit post-fix
-
-isAGQ ≡ isLaplace to ~3 decimals on every metric at 512 datasets (σ_rfx ECE −0.031
-both); imhAGQ ≈ imhLaplace (small σ_rfx EACE gain at huge: 0.032 vs 0.043). With the
-weight contamination gone there is almost no residual integrated-likelihood bias for
-AGQ to remove. **Keep `nagq` off by default** (option retained; 0.9–1.0 s/ds).
-
-### SIR: small, consistent, in-direction — borderline at 1.7× cost
-
-Largest at Bernoulli-huge: σ_rfx EACE 0.034 vs 0.043, RFX R 0.639 vs 0.632, joint
-ECE −0.029 vs −0.031, LOO 0.409 vs 0.410. Bernoulli-small: σ_rfx EACE 0.023 vs
-0.030, RFX ECE −0.021 vs −0.025. Never worse. **Keep `redraw='sir'` off by default**
-(1.2 s/ds); revisit if per-group calibration at huge becomes a priority.
-
-### Confirmed: the huge-regime FFX under-dispersion is the finite pool
-
-imhLaplace FFX ECE at Bernoulli-huge: −0.047 pre-fix, −0.047 post-fix. Matches the
-Normal-huge exact-target control — no weight/conditional upgrade touches it. Fixing
-it needs proposal-side work (bigger pools, tempering, or SNIS with PSIS truncation).
-
-## Status
-
-- [x] Phases 0–3 + cluster scale-up: **done, defaults decided**
-- Adopted: robustified `laplaceRfxModes` (backtracking + adaptive budget + 1-nat
-  pinning guard) — now simply what `isLaplace`/`imhLaplace` do
-- **Retired again** (2026-09-12): AGQ weights and SIR redraw — no measurable /
-  marginal benefit post-fix. Implementations live in commits a32922f8/169cd495.
-- Open: paper appendix numbers for MB+IS / MB-IMH on GLMMs predate the fix and
-  improve slightly on re-run
-
-## Next: finite-pool FFX under-dispersion (pool-size sweep)
-
-Hypothesis (established via the Normal-huge exact-target control): IMH can only
-concentrate the s flow draws, so FFX ECE ≈ −0.05 at huge is a finite-pool effect and
-must shrink as s grows (IMH is asymptotically exact in s for any full-support
-proposal; the rate reflects the flow's tail coverage). Minimal test — the existing
-script, swept over `--n-samples` (output files carry an `_s{n}` tag):
-
-```bash
-for S in 1000 2000 4000 8000; do
-  uv run python experiments/posthoc/ablation.py --sizes huge --families bernoulli --split test \
-      --only raw isLaplace imhLaplace --n-samples $S --refresh-summaries --batch-size 2 --device cuda
-done
-```
-
-Predictions: (a) finite-pool → imhLaplace FFX ECE −0.047 shrinks monotonically,
-approaching the small-regime level (≈ −0.01) once ā·s ≈ 800 effective draws
-(ā ≈ 0.17 → around s ≈ 5k); raw is the control and must stay s-invariant; the
-isLaplace column separates rejection-specific effects from the shared pool limit.
-(b) flat ECE in s → the flow's FFX tails are the binding constraint and the remedy
-is proposal-side (defensive mixture), not sample count.
-
-### Sweep results (2026-09-12, Bernoulli-huge, 512 datasets) — hypothesis CONFIRMED
-
-| s | imhLaplace FFX ECE | σ_rfx ECE | Corr R | acceptance | raw FFX ECE | IMH s/ds |
-|---|---|---|---|---|---|---|
-| 1000 | −0.048 | −0.021 | 0.132 | 0.175 | −0.000 | 0.4 |
-| 2000 | −0.031 | −0.017 | 0.245 | 0.168 | −0.000 | 0.7 |
-| 4000 | −0.022 | −0.008 | 0.262 | 0.168 | +0.001 | 1.4 |
-
-All discriminating checks pass: under-dispersion shrinks monotonically, the raw
-control is s-invariant, acceptance is pool-size-independent. The s=4000 point was
-predicted out-of-sample from the first doubling (−0.020 predicted, −0.022 observed).
-Clean power law: FFX ECE ≈ −0.048·(s/1000)^−0.6, i.e. ∝ n_eff^−0.6 with
-n_eff = ā·s. Extrapolation: s=6000 → ≈ −0.016; full small-regime parity (−0.01)
-needs s ≈ 13k (diminishing returns — s=4000 buys the bulk). σ_rfx ECE and Corr(RFX)
-recovery improve alongside; LOO-NLL flat at NUTS level throughout (0.410–0.413);
-weight-pass cost linear in s.
-
-**Practical defaults.** For non-Gaussian IMH: keep s=1000 for small/medium
-(acceptance ≥ 0.7 → n_eff ≥ 700); use s ≈ 4000 for large/huge (n_eff ≈ 700 at
-ā ≈ 0.17), or the data-adaptive pilot rule below with N_eff_target ≈ 600–800.
-Cross-regime transfer of the power-law constant is imperfect (small-regime ECE at
-matched n_eff is ~2× better than the huge-regime fit predicts — flow quality per
-dim differs), so the pilot rule is preferred over the a-priori formula.
-
-**Shipped as an advisory API feature** (`metropolis.suggestPoolSize`): inference
-always runs at the user-specified pool size, and the IMH diagnostics now include a
-per-dataset `suggested_n_samples` — the smallest s reaching ā·s ≥ 700 at the
-measured acceptance (multiples of 500, clamped to [1000, 16000]; disable via
-`n_eff_target=None` / cfg `imh_n_eff_target`). ablation.py prints the median/max
-suggestion in each imh* diagnostic line.
-
-Sample-size rule: pool efficiency decays ≈ exponentially in the global dim
-D = d + q + 1{Normal} + q(q−1)/2 — measured mean acceptance fits
-ā ≈ exp(−0.08·(D−4)) (small D≈7: 0.8; large D≈22: 0.25; huge D=31: 0.10–0.17) —
-so a-priori s ≈ N_eff_target/ā with N_eff_target ≈ 500–1000. Better: a data-adaptive
-pilot (draw 256, one vectorized weight pass, ê = ESS/256, s = N_eff_target/ê) that
-absorbs group sizes and informativeness automatically. m and n_i never enter the
-rule directly: rfx are marginalized out of the weight, so they act only through
-posterior sharpness, which the pilot measures. The sweep validates the rule: ECE at
-matched ā·s should equalize across regimes.
-
-## Priority-1 reruns (2026-09-13, cluster, `experiments/rerun_p1_glmm.sh`)
-
-The four robustness experiments behind the main-text `robustness_worst.tex`, Bernoulli
-and Poisson, recomputed through the robustified `imhLaplace` (caches bypassed via
-`METABETA_REFRESH_METHODS`). Normal outputs were byte-identical to the committed ones,
-as expected.
-
-**Story unchanged.** Every refined-MB agreement number moved in the third decimal only;
-the table's rounded cells changed in four places, all toward better NUTS agreement:
-Bernoulli Cauchy σ-ratio 0.97±0.02 → 0.97±0.03, Poisson Cauchy 1.00±0.01 → 1.00±0.02,
-Bernoulli collinearity 0.95±0.03 → 0.96±0.02, Poisson collinearity 0.92±0.04 → 0.93±0.04
-(the last two are the regime where huge-count/ill-conditioned designs used to destabilize
-Newton). ΔLOO-NLL stays 0.00 everywhere. The only larger swing is the Poisson
-κ ∈ [10, 10⁶) bin (σ-ratio 0.964 → 0.887), which holds a single converged dataset and is
-not the table's worst-condition row.
-
-Not yet ported: the per-experiment appendix tables (`likelihood_misspec_*`,
-`prior_misspec_*`, `ood_design_*`, `condition_number_*` for b/p) — hand-restyled in the
-paper repo from `experiments/results/*.tex`; note the quality tables' layout has since
-changed (cov90 columns dropped), independent of this branch.
-
-**Paper tables ported (2026-09-13):** `tables/{likelihood_misspec,ood_design,prior_misspec,
-condition_number}_{bernoulli,poisson}.tex` regenerated from the fresh results via
-`metabeta-paper/tools/restyle_tables.py` (paper conventions: `\MBz{}`/`\texttt{MB}`, math
-labels taken from the previous table by row order, `\phantom{-}` padding, merged prior
-layout). The quality tables now follow the renderer's current layout (NRMSE/EACE per group,
-LOO-NLL; cov90 dropped Aug 7 as redundant next to EACE), so the Normal likelihood/OOD tables
-were re-laid-out too (values unchanged) to keep the "Layout as in …" captions true; a TODO
-marks the one caption that still mentions coverage. Priority-2 queue:
-`experiments/rerun_p2_glmm.sh`.
-
-## Verdict on reruns (2026-09-14)
-
-Paired oracle checks on the two regimes the ablation flagged as most sensitive (same MB
-pools, refinement refreshed): Poisson-large refined-MB row identical at 2 dp; Bernoulli-huge
-one cell moves 0.01 (ECE −0.04 → −0.03, toward NUTS). Together with the P1 robustness
-tables (third-decimal shifts) and the medium-p oracle (identical), the mode-search fix is a
-correctness change with no table-level impact: **no further oracle / real / data-poverty /
-ablation-table reruns are needed for the paper's accuracy claims.** The Priority-2 queue is
-kept as an optional consistency pass, not a requirement.
-
-Timing: chunked refinement and summaries now trim the split-wide padding
-(`dataloader.trimBatchPadding`, `Proposal.resizeGroups`; weights bit-identical). On the
-same GPU node the refined oracle time went 6.44 s/ds (branch, pre-trim) → 2.50 s/ds
-(branch, trimmed) vs 2.78 s/ds (`main`): the released path is faster than the old code.
-The oracle tables' time column predates all of this (GPU-era host); refresh it with a
-dedicated timing run on the reference host if the paper quotes refined MB time.
-
-## End-to-end validation of the mode-search fix (2026-09-14, local)
-
-Pre-fix (`main` worktree) vs post-fix `imhLaplace` on the *same* 1000-sample pool and the
-same accept/reject randomness, Poisson-large test datasets 0–7, each compared with the NUTS
-fit (`nuts_ffx`, `nuts_sigma_rfx` in test.fit.npz):
-
-- Datasets 0–5 and 7: outputs **bit-identical** (same accepted sequence, same unique-sample
-  count, same z-scores vs NUTS). The fix is a no-op wherever Newton converged before.
-- Dataset 6 (the huge-count outlier, y_max = 13 689): acceptance 0.38 → 0.43, unique samples
-  347 → 394, max dwell on one state 0.04 → 0.02, max |mean − NUTS|/sd 0.16 → 0.14, 90 %
-  width ratio vs NUTS 1.01 → 1.03; σ_rfx means shift by 0.08 NUTS sd.
-
-So the pre-fix posterior on the affected dataset was *not* visibly wrong in this run — the
-init-dependent top-weight samples the diagnostic exposed did not become absorbing states
-here. The fix's demonstrated value is therefore: removal of a real, silent failure mode in
-the weight definition (tail risk), slightly better mixing on affected datasets, and the
-small σ_rfx calibration gain at 512-dataset scale; not a headline-metric change. Kept on
-that basis, with its cost more than offset by the padding trim.

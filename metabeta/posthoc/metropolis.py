@@ -86,17 +86,13 @@ TODO
   (the non-Normal default), whose conditional redraw handles this; 'global' remains a
   diagnostic baseline.
 
-Findings (2026-09-12, 512 test datasets — see experiments/posthoc/LAPLACE_UPGRADES.md)
---------------------------------------------------------------------------------------
-The Laplace mode-search robustification (posthoc/laplace_glmm.py) removed the
-init-dependent absorbing states that were degrading mode='laplace': Poisson-large
-imhLaplace σ_rfx ECE −0.070 → −0.051 at unchanged LOO-NLL (= cold NUTS to 3
-decimals). AGQ weights and a SIR conditional redraw were also tried and retired again
-(no measurable / marginal benefit post-fix; implementations live in commits
-a32922f8/169cd495, analysis in experiments/posthoc/LAPLACE_UPGRADES.md).
-The huge-regime FFX under-dispersion (ECE ≈ −0.05) is confirmed to be the finite-pool
-IMH effect — identical with the exact marginal target on Normal-huge and unchanged by
-any weight/conditional upgrade; fixing it needs proposal-side work.
+Findings (2026-09, 512 test datasets — experiments/posthoc/LAPLACE_UPGRADES.md)
+----------------------------------------------------------------------------------
+The robustified Laplace mode search removed init-dependent absorbing states from
+mode='laplace' (Poisson-large σ_rfx ECE −0.070 → −0.051, LOO-NLL unchanged at NUTS level).
+The large/huge-regime FFX under-dispersion is the finite proposal pool — identical with the
+exact marginal target on Normal-huge, and shrinking as (ā·s)^−0.6 in a pool-size sweep —
+hence the acceptance-based pool-size suggestion below.
 """
 
 import argparse
@@ -117,10 +113,8 @@ from metabeta.utils.results import Proposal
 
 Mode = Literal['global', 'marginal', 'joint', 'laplace']
 
-# Sweep-calibrated effective-draw target (see experiments/posthoc/LAPLACE_UPGRADES.md,
-# finite-pool sweep 2026-09-12): IMH calibration is governed by the accepted-draw
-# count ā·s (huge-regime FFX ECE ∝ (ā·s)^−0.6); at ā·s ≈ 700 the huge regime reaches
-# small-regime calibration. Pool sizes are suggested to hit this target.
+# Effective-draw target from the pool-size sweep (FFX ECE ∝ (ā·s)^−0.6; at ā·s ≈ 700 the
+# huge regime reaches small-regime calibration). Suggested pool sizes aim for it.
 N_EFF_TARGET = 700
 SUGGEST_MIN = 1_000
 SUGGEST_MAX = 16_000
