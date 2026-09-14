@@ -86,8 +86,8 @@ TODO
   (the non-Normal default), whose conditional redraw handles this; 'global' remains a
   diagnostic baseline.
 
-Findings (2026-09, 512 test datasets — experiments/posthoc/LAPLACE_UPGRADES.md)
-----------------------------------------------------------------------------------
+Findings (2026-09, 512 test datasets)
+-------------------------------------
 The robustified Laplace mode search removed init-dependent absorbing states from
 mode='laplace' (Poisson-large σ_rfx ECE −0.070 → −0.051, LOO-NLL unchanged at NUTS level).
 The large/huge-regime FFX under-dispersion is the finite proposal pool — identical with the

@@ -82,7 +82,7 @@ PSIS_K_THRESHOLD = 0.7
 MAP_Z_THRESHOLD = 5.0
 MIN_SAFEGUARD_SAMPLES = 64
 # IMH refinement: chain layout and the acceptance level below which the flow-posterior
-# gap is large (see appendix on hybrid methods; experiments/posthoc/LAPLACE_UPGRADES.md)
+# gap is large (see the paper's appendix on hybrid methods)
 IMH_N_CHAINS = 4
 IMH_BURNIN = 25
 IMH_ACCEPT_WARN = 0.1
