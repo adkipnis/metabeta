@@ -275,7 +275,9 @@ def loadOrSampleMB(
         data_path, 'mb', ckpt_dir, prefix, n_samples, seed, mask, variant=variant
     )
     ref_mtime = cacheRefMtime(data_path, ckpt_dir, prefix)
-    if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
+    if _forceRefresh('mb'):
+        logger.info('METABETA_REFRESH_METHODS set; resampling MB (bypassing %s)', cache_path)
+    elif cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
         try:
             proposal, metadata = loadProposalCache(cache_path)
             tpd_arr = torch.as_tensor(metadata['tpd_arr'], dtype=torch.float64)
