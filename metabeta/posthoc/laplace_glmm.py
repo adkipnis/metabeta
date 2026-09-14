@@ -40,19 +40,14 @@ bias for binary/count data with small groups tilting the σ_rfx posterior low. N
 isLaplace is *not* better-calibrated than raw flow samples on these families;
 attach_only ≈ raw (mild RFX-joint gains on Poisson, mild LOO-NLL loss on Bernoulli).
 
-Findings (2026-09-12, 512 test datasets per run — see experiments/posthoc/LAPLACE_UPGRADES.md)
-----------------------------------------------------------------------------------------------
-Most of the apparent "Laplace σ_rfx bias" above was Newton-instability contamination
-of the weights: full-step Newton oscillated on extreme proposals (worst on huge-count
-Poisson), making log p̂(y|θ_g) warm-start-dependent by 1e4+ nats on samples near the
-pool max weight. After robustifying laplaceRfxModes (backtracking line search,
-adaptive iteration budget, 1-nat pinning guard), Poisson-large isLaplace σ_rfx ECE
-went −0.046 → −0.031 (raw: −0.027) and Bernoulli-huge max PSIS k 15.4 → 2.6.
-Post-fix, an AGQ (nAGQ>1) weight upgrade added nothing measurable at 512 datasets
-(the residual integrated-likelihood bias is ≈ 0), and a skew-correcting SIR
-conditional redraw gave only small, never-worse gains (largest at huge: σ_rfx EACE
-0.034 vs 0.043) at ~1.7× the imhLaplace cost — both were retired again (commits
-a32922f8/169cd495 on posthoc-laplace-upgrades hold the implementations).
+Findings (2026-09, 512 test datasets — experiments/posthoc/LAPLACE_UPGRADES.md)
+----------------------------------------------------------------------------------
+Most of the σ_rfx shift above was Newton-instability contamination of the weights, not
+Laplace bias: full-step Newton oscillated on extreme proposals (huge-count Poisson),
+making log p̂(y|θ_g) depend on the warm start by 1e4+ nats on top-weight samples. With the
+robustified mode search below, Poisson-large isLaplace σ_rfx ECE went −0.046 → −0.031
+(raw −0.027) and Bernoulli-huge max PSIS k 15.4 → 2.6. AGQ weights and a SIR conditional
+redraw were tried on top and retired (no measurable gain; see the doc for the record).
 """
 
 import math
@@ -138,23 +133,18 @@ def laplaceRfxModes(
 ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Per-group conditional modes and Hessians of p(rfx_j | θ_g, y_j).
 
-    The Newton step backtracks (per (b, m, s) entry, up to n_backtrack halvings)
-    whenever it would decrease the per-group objective ℓ_j(b) − ½ bᵀΣ⁻¹b. The target
-    is strictly log-concave in b, so damped ascent converges globally; full steps
-    can oscillate/diverge on extreme proposal samples (Poisson exp overshoot),
-    which made the weight a function of the warm start — Δlog w between two inits
-    reached 2e4–7e4 nats on samples near the pool max weight (2026-09-12
-    newton_stability diagnostic), i.e. init-dependent absorbing states in IMH and
-    poisoned SNIS weights.
+    The Newton step backtracks (per (b, m, s) entry, up to n_backtrack halvings) whenever
+    it would decrease the per-group objective ℓ_j(b) − ½ bᵀΣ⁻¹b; the target is strictly
+    log-concave in b, so damped ascent converges globally, whereas full steps oscillate on
+    extreme Poisson proposals and made the weight warm-start-dependent (see
+    experiments/posthoc/newton_stability.py).
 
     Returns (modes, chol_H, Sigma_inv, L_rfx, decrement):
         modes    (b, m, s, q)     — Newton solution b*_j
         chol_H   (b, m, s, q, q)  — Cholesky of H_j = ZᵀW(b*)Z + Σ⁻¹
         Sigma_inv (b, s, q, q), L_rfx (b, s, q, q) — reusable Σ_rfx factors
-        decrement (b, m, s)       — final Newton decrement λ²/2: the unresolved
-            objective error in nats. Large values mark (sample, group) pairs whose
-            Laplace weight is numerically meaningless (huge-count Poisson datasets
-            plateau the clipped objective and defeat even backtracked Newton).
+        decrement (b, m, s)       — final Newton decrement λ²/2, the unresolved objective
+            error in nats; large values mark entries whose Laplace weight is meaningless.
     """
     b, s, q = sigma_rfx.shape
     m = X.shape[1]
@@ -251,11 +241,9 @@ def logMarginalLikelihoodLaplace(
     (the two (q/2)·log 2π terms cancel; padded rfx dims cancel between the two
     log-dets exactly as in logMarginalLikelihoodNormal). Exact for Normal.
 
-    Samples whose summed Newton decrement exceeds guard_nats (unresolved mode-search
-    error, in nats) get their ll pinned to −1e10: their weight is numerically
-    meaningless, and left alone such samples become init-dependent absorbing states
-    in IMH / poisoned SNIS weights (2026-09-12 newton_stability diagnostic; worst on
-    huge-count Poisson datasets). Pass guard_nats=None to disable.
+    Samples whose summed Newton decrement exceeds guard_nats get their ll pinned to −1e10:
+    an unresolved mode search makes the weight meaningless, and such samples otherwise
+    become init-dependent absorbing states in IMH. guard_nats=None disables the guard.
 
     Returns (ll (b, s), modes, chol_H) — modes/chol_H reusable for the
     conditional redraw so the weights and rfx draws share one target.
@@ -300,13 +288,6 @@ class LaplaceImportanceSampler(ImportanceSampler):
     sample. With attach_only=True the weights are discarded (uniform) and only
     the rfx replacement is kept — zero weight bias at the cost of leaving global
     parameters uncorrected.
-
-    Two retired upgrades — AGQ (nAGQ>1) marginal weights and a skew-correcting SIR
-    conditional redraw — were implemented and cluster-ablated on branch
-    posthoc-laplace-upgrades (commits a32922f8/169cd495): post Newton-fix, AGQ added
-    nothing measurable and SIR only small never-worse gains at ~1.7× cost. Resurrect
-    from git history if flow proposal quality ever drops; details in
-    experiments/posthoc/LAPLACE_UPGRADES.md.
     """
 
     def __init__(

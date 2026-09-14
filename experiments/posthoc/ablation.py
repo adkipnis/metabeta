@@ -30,11 +30,8 @@ imhLaplace   : IMH mode='laplace' (Bernoulli/Poisson only) — Laplace-marginal 
                after acceptance; the GLMM analog of Normal's imhMarginal. Added
                2026-07-29 for the large/huge regimes where isLaplace's PSIS guardrail
                falls back on 13-50% of datasets (rejection has no fallback mode).
-Note: 'isAGQ'/'isSIR'/'imhAGQ'/'imhSIR' (AGQ marginal weights for q<=2; skew-
-correcting SIR conditional redraw) were implemented and cluster-ablated 2026-09-12,
-then removed again: post Newton-robustification AGQ added nothing measurable and
-SIR only small never-worse gains at ~1.7x cost. Implementations live in commits
-a32922f8/169cd495; analysis in experiments/posthoc/LAPLACE_UPGRADES.md.
+Note: AGQ-weight and SIR-redraw conditions were tried and removed again in 2026-09 (no
+measurable gain after the Laplace mode-search fix; see LAPLACE_UPGRADES.md).
 svgd         : SVGD with per-dim bandwidth + cosine LR decay — opt in with --include-svgd,
                off by default (too slow to be practically useful: ~40s/dataset, and gives
                a fraction of a nat of marginal-log-p improvement over the flow samples it starts
@@ -436,11 +433,8 @@ def runIS(proposals, batches, full_batch, lf, full=False, marginal=False, rb_red
     return summary, diag
 
 
-# IMH settings: with the default --n-samples 1000, 4 × 250 = 1000 samples so IMH
-# reuses the same cached 1000-sample flow pool as the SNIS conditions (evaluate.py's
-# *.mb.*_s1000_* caches); smaller --n-samples (e.g. 512 for local proof-of-concept
-# runs) shrink the steps per chain accordingly. Burnin follows the MetropolisSampler
-# default.
+# IMH settings: 4 × (n_samples // 4) proposals, so the default --n-samples 1000 reuses the
+# cached 1000-sample flow pool of the SNIS conditions; burnin follows MetropolisSampler.
 IMH_N_CHAINS = 4
 IMH_N_STEPS = 250
 IMH_BURNIN = 25

@@ -25,6 +25,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ablation import buildBatches, loadData, splitMergedProposal  # noqa: E402
 
+from metabeta.utils.dataloader import collateGrouped  # noqa: E402
+from metabeta.utils.preprocessing import rescaleData  # noqa: E402
+
 import metabeta.posthoc.laplace_glmm as lg  # noqa: E402
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler  # noqa: E402
 from metabeta.posthoc.metropolis import MetropolisSampler  # noqa: E402
@@ -81,7 +84,6 @@ class Counter:
 def main() -> None:
     args = setup()
     items, *_ = loadData(args.data_dir / 'test.fit.npz', args.n_datasets)
-    _ITEMS.extend(items)
     batches = buildBatches(items, args.batch_size)
     merged, _ = loadProposalCache(args.pool)
     proposals = splitMergedProposal(merged, batches, args.n_samples)
@@ -119,10 +121,10 @@ def main() -> None:
         )
 
     if args.full:
-        timeFull(args, merged, batches, n_ds)
+        timeFull(args, merged, items, batches, n_ds)
 
 
-def timeFull(args, merged, batches, n_ds: int) -> None:
+def timeFull(args, merged, items, batches, n_ds: int) -> None:
     """Time posterior_eval.refineProposal('imhLaplace') exactly as oracle/real run it,
     with MetropolisSampler's phases (weights / chain / redraw) timed via wrappers."""
     from metabeta.utils.results import concatProposalsBatch
@@ -152,7 +154,7 @@ def timeFull(args, merged, batches, n_ds: int) -> None:
     with torch.no_grad():
         t0 = time.perf_counter()
         # one merged batch like the oracle script hands over; refineProposal chunks it
-        full_batch = concatBatches(batches)
+        full_batch = rescaleData(collateGrouped(items))
         print(
             f"padded batch: m_max={full_batch['X'].shape[1]}, n_max={full_batch['X'].shape[2]} "
             f"(per-chunk maxima: {[b['X'].shape[1] for b in batches]} x {[b['X'].shape[2] for b in batches]})",
@@ -169,17 +171,6 @@ def timeFull(args, merged, batches, n_ds: int) -> None:
         f"redraw {phases['_sampleRfxLaplace'] / n_ds:5.2f}s/ds   "
         f'other {(dt - sum(phases.values())) / n_ds:5.2f}s/ds'
     )
-
-
-def concatBatches(batches: list[dict]) -> dict:
-    """Re-collate rescaled sub-batches into one batch (pads groups/obs to the max)."""
-    from metabeta.utils.dataloader import collateGrouped
-    from metabeta.utils.preprocessing import rescaleData
-
-    return rescaleData(collateGrouped(_ITEMS))
-
-
-_ITEMS: list = []
 
 
 if __name__ == '__main__':
