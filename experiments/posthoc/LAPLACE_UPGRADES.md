@@ -344,3 +344,20 @@ LOO-NLL; cov90 dropped Aug 7 as redundant next to EACE), so the Normal likelihoo
 were re-laid-out too (values unchanged) to keep the "Layout as in …" captions true; a TODO
 marks the one caption that still mentions coverage. Priority-2 queue:
 `experiments/rerun_p2_glmm.sh`.
+
+## Verdict on reruns (2026-09-14)
+
+Paired oracle checks on the two regimes the ablation flagged as most sensitive (same MB
+pools, refinement refreshed): Poisson-large refined-MB row identical at 2 dp; Bernoulli-huge
+one cell moves 0.01 (ECE −0.04 → −0.03, toward NUTS). Together with the P1 robustness
+tables (third-decimal shifts) and the medium-p oracle (identical), the mode-search fix is a
+correctness change with no table-level impact: **no further oracle / real / data-poverty /
+ablation-table reruns are needed for the paper's accuracy claims.** The Priority-2 queue is
+kept as an optional consistency pass, not a requirement.
+
+Timing: chunked refinement and summaries now trim the split-wide padding
+(`dataloader.trimBatchPadding`, `Proposal.resizeGroups`; weights bit-identical). On the
+same GPU node the refined oracle time went 6.44 s/ds (branch, pre-trim) → 2.50 s/ds
+(branch, trimmed) vs 2.78 s/ds (`main`): the released path is faster than the old code.
+The oracle tables' time column predates all of this (GPU-era host); refresh it with a
+dedicated timing run on the reference host if the paper quotes refined MB time.
