@@ -130,22 +130,34 @@ def timeFull(args, merged, batches, n_ds: int) -> None:
     phases = {'_logWeights': 0.0, '_runChains': 0.0, '_sampleRfxLaplace': 0.0}
     originals = {name: getattr(MetropolisSampler, name) for name in phases}
 
+    done = {'chunks': 0}
+
     def timed(name):
         def wrapper(self, *a, **k):
             t0 = time.perf_counter()
             out = originals[name](self, *a, **k)
             phases[name] += time.perf_counter() - t0
+            if name == '_sampleRfxLaplace':  # last phase of a chunk
+                done['chunks'] += 1
+                print(
+                    f"  chunk {done['chunks']} done  ({sum(phases.values()):.0f}s so far)",
+                    flush=True,
+                )
             return out
 
         return wrapper
 
     for name in phases:
         setattr(MetropolisSampler, name, timed(name))
-    peak = torch.cuda.max_memory_allocated() if torch.cuda.is_available() else None
     with torch.no_grad():
         t0 = time.perf_counter()
         # one merged batch like the oracle script hands over; refineProposal chunks it
         full_batch = concatBatches(batches)
+        print(
+            f"padded batch: m_max={full_batch['X'].shape[1]}, n_max={full_batch['X'].shape[2]} "
+            f"(per-chunk maxima: {[b['X'].shape[1] for b in batches]} x {[b['X'].shape[2] for b in batches]})",
+            flush=True,
+        )
         base = concatProposalsBatch(splitMergedProposal(merged, batches, args.n_samples))
         refineProposal('imhLaplace', base, full_batch, args.likelihood_family, args.batch_size)
         dt = time.perf_counter() - t0
