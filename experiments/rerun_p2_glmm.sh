@@ -9,6 +9,11 @@
 # set, already-refreshed dirs are recomputed again; comment out completed lines.
 
 set -euo pipefail
+# torch defaults to one thread per visible core; inside a cgroup-limited job that
+# oversubscribes the allotted CPUs and inflates every wall-clock timing (the
+# refinement passes are CPU-bound). Pin the thread count to the allocation.
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-${OMP_NUM_THREADS:-$(nproc)}}"
+export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 export METABETA_REFRESH_METHODS="imhLaplace,isLaplace"   # bypass pre-fix refinement caches
 
 CKPT=metabeta/outputs/checkpoints
