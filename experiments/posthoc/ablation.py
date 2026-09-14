@@ -96,7 +96,7 @@ from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import EvaluationSummary
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
-from metabeta.posthoc.metropolis import MetropolisSampler
+from metabeta.posthoc.metropolis import MetropolisSampler, suggestPoolSize
 from metabeta.posthoc.warmnuts import WarmNuts, _stackProposals, needsEscalation
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice
@@ -214,7 +214,9 @@ def collectProposals(
     with torch.no_grad():
         for i in range(0, len(items), batch_size):
             batch = collateGrouped(items[i : i + batch_size])
-            proposal = model.estimate(toDevice(batch, device), n_samples=n_samples)
+            # toDevice mutates its dict in place — pass a shallow copy so `batch`
+            # keeps its cpu tensors for rescale() and the posthoc methods
+            proposal = model.estimate(toDevice(dict(batch), device), n_samples=n_samples)
             proposal.to('cpu')
             proposal.rescale(batch['sd_y'])
             batch = rescaleData(batch)
@@ -429,23 +431,29 @@ def runIS(proposals, batches, full_batch, lf, full=False, marginal=False, rb_red
     return summary, diag
 
 
-# IMH settings: 4 × 250 = 1000 samples so IMH reuses the same cached 1000-sample
-# flow pool as the SNIS conditions (evaluate.py's *.mb.*_s1000_* caches); burnin
-# follows the MetropolisSampler default.
+# IMH settings: 4 × (n_samples // 4) proposals, so the default --n-samples 1000 reuses the
+# cached 1000-sample flow pool of the SNIS conditions; burnin follows MetropolisSampler.
 IMH_N_CHAINS = 4
 IMH_N_STEPS = 250
 IMH_BURNIN = 25
-IMH_N_SAMPLES = IMH_N_CHAINS * IMH_N_STEPS
 
 
-def refineIMH(mode, proposals, batches, lf):
+def imhSampleCount(n_samples: int) -> tuple[int, int]:
+    """(n_steps, pool size) for IMH given the flow sample budget; pool = chains × steps."""
+    n_steps = n_samples // IMH_N_CHAINS
+    if n_steps <= IMH_BURNIN:
+        raise ValueError(f'--n-samples {n_samples} leaves ≤ {IMH_BURNIN} steps per chain')
+    return n_steps, IMH_N_CHAINS * n_steps
+
+
+def refineIMH(mode, proposals, batches, lf, n_steps=IMH_N_STEPS):
     """Run IMH on each sub-batch; return (merged batch Proposal, accept rates)."""
     imh_proposals, accept_rates = [], []
     for p, batch in zip(proposals, batches):
         sampler = MetropolisSampler(
             batch,
             n_chains=IMH_N_CHAINS,
-            n_steps=IMH_N_STEPS,
+            n_steps=n_steps,
             burnin=IMH_BURNIN,
             mode=mode,
             likelihood_family=lf,
@@ -456,15 +464,18 @@ def refineIMH(mode, proposals, batches, lf):
     return concatProposalsBatch(imh_proposals), torch.cat(accept_rates, dim=0)
 
 
-def runIMH(mode, proposals, batches, full_batch, lf):
+def runIMH(mode, proposals, batches, full_batch, lf, n_steps=IMH_N_STEPS):
     t0 = time.perf_counter()
-    proposal, accept = refineIMH(mode, proposals, batches, lf)
+    proposal, accept = refineIMH(mode, proposals, batches, lf, n_steps=n_steps)
     t1 = time.perf_counter()
 
+    suggested = suggestPoolSize(accept)
     diag = (
         f'  Acceptance  mean={accept.mean():.3f}  '
         f'min={accept.min():.3f}  max={accept.max():.3f}  '
         f'time={t1 - t0:.1f}s ({(t1 - t0) / full_batch["y"].shape[0]:.1f}s/dataset)\n'
+        f'  Suggested pool size  median={int(suggested.median())}  max={int(suggested.max())}  '
+        f'(run used s={IMH_N_CHAINS * n_steps})\n'
     )
     print(diag, end='')
     summary = getSummary(proposal, full_batch, likelihood_family=lf)
@@ -862,10 +873,11 @@ def main() -> None:
                 args.device,
             )
             # IMH requires exactly N_CHAINS × N_STEPS samples — draw a dedicated set.
+            imh_n_steps, imh_n_samples = imhSampleCount(args.n_samples)
             imh_proposals, imh_batches = loadOrSampleProposals(
                 model,
                 items,
-                IMH_N_SAMPLES,
+                imh_n_samples,
                 cfg['data_dir'],
                 args.split,
                 run_name,
@@ -883,7 +895,8 @@ def main() -> None:
             for cond in conditions:
                 if cond == 'isMarginal' and lf != 0:
                     continue  # exact marginal requires the Normal likelihood
-                if cond in ('isLaplace', 'rbAttach', 'imhLaplace') and lf == 0:
+                laplace_conds = ('isLaplace', 'rbAttach', 'imhLaplace')
+                if cond in laplace_conds and lf == 0:
                     continue  # Normal has the exact marginal — Laplace is for GLMMs
                 if cond == 'imhGlobal' and lf != 0:
                     continue  # non-Normal imhMarginal already runs mode='global'
@@ -902,7 +915,7 @@ def main() -> None:
                     continue
 
                 n_s_cond = (
-                    IMH_N_SAMPLES
+                    imh_n_samples
                     if cond.startswith('imh')
                     else WN_SAMPLES
                     if cond == 'warmNuts'
@@ -950,17 +963,17 @@ def main() -> None:
                 elif cond == 'imhMarginal':
                     imh_mode = 'marginal' if lf == 0 else 'global'
                     summary, diag, refined = runIMH(
-                        imh_mode, imh_proposals, imh_batches, full_batch, lf
+                        imh_mode, imh_proposals, imh_batches, full_batch, lf, n_steps=imh_n_steps
                     )
                     imh_refined[imh_mode] = refined
                 elif cond == 'imhGlobal':
                     summary, diag, refined = runIMH(
-                        'global', imh_proposals, imh_batches, full_batch, lf
+                        'global', imh_proposals, imh_batches, full_batch, lf, n_steps=imh_n_steps
                     )
                     imh_refined['global'] = refined
                 elif cond == 'imhLaplace':
                     summary, diag, refined = runIMH(
-                        'laplace', imh_proposals, imh_batches, full_batch, lf
+                        'laplace', imh_proposals, imh_batches, full_batch, lf, n_steps=imh_n_steps
                     )
                     imh_refined['laplace'] = refined
                 elif cond == 'warmNuts':
@@ -971,7 +984,9 @@ def main() -> None:
                     refined = imh_refined.get(wn_mode)
                     if refined is None:
                         print(f'  refining flow proposal with IMH (mode={wn_mode})')
-                        refined, _ = refineIMH(wn_mode, imh_proposals, imh_batches, lf)
+                        refined, _ = refineIMH(
+                            wn_mode, imh_proposals, imh_batches, lf, n_steps=imh_n_steps
+                        )
                     summary, diag = runWarmNutsLive(
                         refined,
                         tensor_batch,
@@ -985,8 +1000,12 @@ def main() -> None:
                 saveAblSummary(cache_base, summary, diag)
                 print()
 
-        # --only runs get their own file so partial passes never clobber a full-run md
+        # --only runs get their own file so partial passes never clobber a full-run md;
+        # non-default sample counts are tagged too so pool-size sweeps don't clobber
+        # each other
         tag = '' if args.only is None else '_' + '-'.join(args.only)
+        if args.n_samples != 1000:
+            tag += f'_s{args.n_samples}'
         md_path = RESULTS_DIR / f'{cfg["family"]}_{cfg["size"]}{tag}.md'
         md_path.write_text(
             f'# {cfg["label"]} posthoc ablation\n\n```\n{_renderTerminal(buf.getvalue())}\n```\n'

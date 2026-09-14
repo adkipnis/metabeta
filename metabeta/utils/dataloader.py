@@ -410,6 +410,52 @@ def subsetBatch(batch: dict[str, torch.Tensor], mask: np.ndarray) -> dict[str, t
     return {k: _selectValue(v, idx, n) for k, v in batch.items()}
 
 
+# Per-group tensors carry the group axis at dim 1 (padded to the batch max m); those in
+# _OBS_KEYS also carry the observation axis at dim 2 (padded to the batch max n). Fit
+# tensors follow the '{prefix}_rfx' (B, m, ...) convention (corr_rfx is (B, q, q), not per-group).
+_GROUP_KEYS = ('X', 'Z', 'y', 'ns', 'mask_n', 'mask_m', 'mask_mq', 'rfx')
+_OBS_KEYS = ('X', 'Z', 'y', 'mask_n')
+
+
+def trimBatchPadding(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Drop all-padding trailing groups / observations from a collated (sub-)batch.
+
+    A batch sliced out of a larger collation keeps the parent's padding in the group (m) and
+    observation (n) axes, and every (b, m, n, s) tensor built on it pays for that — on the
+    test splits the split-wide padding is 3–4x the sub-batch's own. This shrinks both axes
+    to the sub-batch maxima (from mask_n), touching only per-group / per-observation keys,
+    so the result equals what collateGrouped would produce for these datasets alone. Raises
+    if a dropped region is not entirely zero (a padding-convention violation, never silent).
+    Returns a new dict; nested dicts (e.g. 'stats') and global tensors pass through as-is.
+    """
+    mask_n = batch.get('mask_n')
+    if mask_n is None or not torch.is_tensor(mask_n) or mask_n.ndim != 3:
+        return batch
+    m_pad, n_pad = mask_n.shape[1], mask_n.shape[2]
+    m_keep = int(mask_n.any(dim=-1).sum(dim=1).max())
+    n_keep = int(mask_n.sum(dim=-1).max())
+    if m_keep >= m_pad and n_keep >= n_pad:
+        return batch
+
+    out = dict(batch)
+    for key, v in batch.items():
+        if not torch.is_tensor(v) or v.ndim < 2 or v.shape[1] != m_pad:
+            continue
+        fit_rfx = key.endswith('_rfx') and key != 'corr_rfx' and v.ndim >= 3
+        if key not in _GROUP_KEYS and not fit_rfx:
+            continue
+        if m_keep < m_pad:
+            if bool((v[:, m_keep:] != 0).any()):
+                raise ValueError(f'{key!r}: groups beyond {m_keep} are not padding')
+            v = v[:, :m_keep]
+        if key in _OBS_KEYS and n_keep < n_pad and v.ndim >= 3 and v.shape[2] == n_pad:
+            if bool((v[:, :, n_keep:] != 0).any()):
+                raise ValueError(f'{key!r}: observations beyond {n_keep} are not padding')
+            v = v[:, :, :n_keep]
+        out[key] = v.contiguous()
+    return out
+
+
 def sliceBatch(batch: dict[str, torch.Tensor], start: int, end: int) -> dict[str, torch.Tensor]:
     """Slice a collated batch dict to datasets [start:end).
 

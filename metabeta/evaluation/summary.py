@@ -12,6 +12,7 @@ from metabeta.utils.evaluation import (
     dictMean,
 )
 from metabeta.utils.results import Proposal
+from metabeta.utils.dataloader import trimBatchPadding
 from metabeta.evaluation.point import getPointEstimates, getRMSE, getCorrelation
 from metabeta.evaluation.intervals import (
     ALPHAS,
@@ -110,8 +111,9 @@ def getSummary(
     for start in range(0, b, chunk):
         end = min(start + chunk, b)
         tqdm.write(f'  predictive checks: {end}/{b} datasets', end='\r')
-        p_c = proposal.slice_b(start, end)
-        d_c = _sliceData(data, start, end)
+        # trim the chunk to its own padding; the (chunk, m, n, s) tensors below scale with it
+        d_c = trimBatchPadding(_sliceData(data, start, end))
+        p_c = proposal.slice_b(start, end).resizeGroups(d_c['mask_n'].shape[1])
 
         tc = time.perf_counter()
         pp_c = getPosteriorPredictive(p_c, d_c, likelihood_family)
