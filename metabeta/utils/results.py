@@ -216,6 +216,40 @@ class Proposal:
         else:
             self.data['global']['samples'] = samples_g * scale_g
 
+    def resizeGroups(self, m: int) -> 'Proposal':
+        """Copy with the local (group) axis trimmed or zero-padded to ``m`` groups.
+
+        Trimming requires the dropped groups to be padding (all-zero, as collateGrouped and
+        concatProposalsBatch produce) and raises otherwise; padding restores a sub-batch
+        proposal to the group count of the batch it is evaluated against.
+        """
+        cur = self.samples_l.shape[1]
+        if m == cur:
+            return self
+        if m < cur and bool((self.samples_l[:, m:] != 0).any()):
+            raise ValueError(f'groups beyond {m} hold non-zero samples; refusing to trim')
+
+        def fit(t: torch.Tensor) -> torch.Tensor:
+            if m < cur:
+                return t[:, :m].contiguous()
+            pad_shape = list(t.shape)
+            pad_shape[1] = m - cur
+            return torch.cat([t, t.new_zeros(pad_shape)], dim=1)
+
+        out = Proposal(
+            {
+                'global': dict(self.data['global']),
+                'local': {k: fit(v) for k, v in self.data['local'].items()},
+            },
+            has_sigma_eps=self.has_sigma_eps,
+            d_corr=self.d_corr,
+            corr_rfx=self._corr_rfx,
+        )
+        out.is_results = self.is_results
+        out.tpd = self.tpd
+        out.reff = self.reff
+        return out
+
     def subset(self, idx: torch.Tensor) -> None:
         b, s = idx.shape
         for source in ('global', 'local'):

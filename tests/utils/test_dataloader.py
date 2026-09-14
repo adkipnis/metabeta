@@ -290,3 +290,97 @@ def test_collection_rejects_too_small_overrides(dataset_path: Path):
         Collection(dataset_path, permute=True, max_d=int(col_default.d) - 1)
     with pytest.raises(ValueError, match='max_q override'):
         Collection(dataset_path, permute=True, max_q=int(col_default.q) - 1)
+
+
+# ---------------------------------------------------------------------------
+# trimBatchPadding / Proposal.resizeGroups
+
+
+def _paddedBatch():
+    """Two datasets (m=2/ns=[3,2] and m=3/ns=[4,1,2]) collated with split-wide padding
+    (m_pad=6, n_pad=9) — i.e. what slicing a larger collation leaves behind."""
+    import torch
+
+    B, m_pad, n_pad, d, q, S = 2, 6, 9, 3, 2, 5
+    ns = torch.zeros(B, m_pad, dtype=torch.long)
+    ns[0, :2] = torch.tensor([3, 2])
+    ns[1, :3] = torch.tensor([4, 1, 2])
+    mask_n = torch.zeros(B, m_pad, n_pad, dtype=torch.bool)
+    for b in range(B):
+        for j in range(m_pad):
+            mask_n[b, j, : ns[b, j]] = True
+    fill = mask_n.float()
+    batch = {
+        'X': fill.unsqueeze(-1) * torch.randn(B, m_pad, n_pad, d),
+        'Z': fill.unsqueeze(-1) * torch.randn(B, m_pad, n_pad, q),
+        'y': fill * torch.randn(B, m_pad, n_pad),
+        'ns': ns,
+        'mask_n': mask_n,
+        'mask_m': ns != 0,
+        'rfx': (ns != 0).float().unsqueeze(-1) * torch.randn(B, m_pad, q),
+        'nuts_rfx': (ns != 0).float()[:, :, None, None] * torch.randn(B, m_pad, S, q),
+        'mask_d': torch.ones(B, d, dtype=torch.bool),
+        'ffx': torch.randn(B, d),
+        'corr_rfx': torch.eye(q).expand(B, q, q).clone(),
+        'stats': {'beta_est': torch.randn(B, d)},
+    }
+    return batch
+
+
+def test_trim_batch_padding_shrinks_to_own_maxima():
+    from metabeta.utils.dataloader import trimBatchPadding
+
+    batch = _paddedBatch()
+    out = trimBatchPadding(batch)
+    assert out['X'].shape == (2, 3, 4, 3)
+    assert out['Z'].shape == (2, 3, 4, 2)
+    assert out['y'].shape == (2, 3, 4)
+    assert out['mask_n'].shape == (2, 3, 4)
+    assert out['ns'].shape == (2, 3) and out['mask_m'].shape == (2, 3)
+    assert out['rfx'].shape == (2, 3, 2)
+    assert out['nuts_rfx'].shape == (2, 3, 5, 2)
+    # globals and nested stats untouched
+    assert out['mask_d'].shape == (2, 3) and out['ffx'].shape == (2, 3)
+    assert out['corr_rfx'].shape == (2, 2, 2)
+    assert out['stats'] is batch['stats']
+    # values are the leading slices of the originals
+    assert torch.equal(out['X'], batch['X'][:, :3, :4])
+    assert torch.equal(out['nuts_rfx'], batch['nuts_rfx'][:, :3])
+    # already-tight batches pass through
+    assert trimBatchPadding(out) is out
+
+
+def test_trim_batch_padding_refuses_nonzero_padding():
+    import pytest
+
+    from metabeta.utils.dataloader import trimBatchPadding
+
+    batch = _paddedBatch()
+    batch['rfx'][0, 5, 0] = 1.0  # a "padding" group that holds data
+    with pytest.raises(ValueError):
+        trimBatchPadding(batch)
+
+
+def test_proposal_resize_groups_round_trip():
+    import pytest
+
+    from metabeta.utils.results import Proposal
+
+    b, m, s, q = 2, 4, 6, 2
+    samples_l = torch.zeros(b, m, s, q)
+    samples_l[:, :3] = torch.randn(b, 3, s, q)
+    p = Proposal(
+        {
+            'global': {'samples': torch.randn(b, s, 5), 'log_prob': torch.zeros(b, s)},
+            'local': {'samples': samples_l, 'log_prob': torch.zeros(b, m, s)},
+        },
+        has_sigma_eps=False,
+    )
+    trimmed = p.resizeGroups(3)
+    assert trimmed.samples_l.shape == (b, 3, s, q) and trimmed.log_prob_l.shape == (b, 3, s)
+    assert torch.equal(trimmed.samples_g, p.samples_g)
+    padded = trimmed.resizeGroups(m)
+    assert torch.equal(padded.samples_l, samples_l)
+    assert p.resizeGroups(m) is p
+    with pytest.raises(ValueError):
+        p.resizeGroups(2)  # group 2 holds samples

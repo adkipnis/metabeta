@@ -24,7 +24,13 @@ from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.metropolis import MetropolisSampler, suggestPoolSize
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.constants import hasSigmaEps
-from metabeta.utils.dataloader import Dataloader, collateGrouped, sliceBatch, toDevice
+from metabeta.utils.dataloader import (
+    Dataloader,
+    collateGrouped,
+    sliceBatch,
+    toDevice,
+    trimBatchPadding,
+)
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.api import (
     JOINT_CHECKPOINT_VERSION,
@@ -743,10 +749,10 @@ class Api:
             chunks = []
             for start in range(0, B, chunk_size):
                 end = min(start + chunk_size, B)
-                chunks.append(
-                    _refineChunk(proposal.slice_b(start, end), sliceBatch(batch, start, end))
-                )
-            proposal = concatProposalsBatch(chunks)
+                chunk = trimBatchPadding(sliceBatch(batch, start, end))
+                base_chunk = proposal.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
+                chunks.append(_refineChunk(base_chunk, chunk))
+            proposal = concatProposalsBatch(chunks).resizeGroups(batch['mask_n'].shape[1])
 
         psis_k = proposal.is_results['pareto_k'].detach().float().cpu().numpy().copy()
         fallback = proposal.is_results['fallback'].detach().cpu().numpy().copy()
@@ -814,12 +820,12 @@ class Api:
             chunks, accepts = [], []
             for start in range(0, B, chunk_size):
                 end = min(start + chunk_size, B)
-                refined, acc = _imhChunk(
-                    proposal.slice_b(start, end), sliceBatch(batch, start, end)
-                )
+                chunk = trimBatchPadding(sliceBatch(batch, start, end))
+                base_chunk = proposal.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
+                refined, acc = _imhChunk(base_chunk, chunk)
                 chunks.append(refined)
                 accepts.append(acc)
-            proposal = concatProposalsBatch(chunks)
+            proposal = concatProposalsBatch(chunks).resizeGroups(batch['mask_n'].shape[1])
             accept = torch.cat(accepts, dim=0)
 
         # the pool was over-drawn by the burn-in; trim to exactly n_samples

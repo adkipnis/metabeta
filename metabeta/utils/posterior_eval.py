@@ -34,7 +34,7 @@ from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.metropolis import MetropolisSampler
-from metabeta.utils.dataloader import sliceBatch, toDevice
+from metabeta.utils.dataloader import sliceBatch, toDevice, trimBatchPadding
 from metabeta.utils.device import synchronizeDevice
 from metabeta.utils.evaluation import EvaluationSummary
 from metabeta.utils.results import Proposal, concatProposalsBatch
@@ -419,13 +419,17 @@ def refineProposal(
     if batch_size >= B:
         return _refineChunk(method, base, batch, lf)
 
+    # each chunk is trimmed to its own group/observation padding (the split-wide padding of
+    # `batch` is 3-4x larger on the test splits and every Laplace tensor scales with it); the
+    # merged result is padded back to the batch's group count
+    m_pad = batch['mask_n'].shape[1]
     chunks: list[Proposal] = []
     for start in range(0, B, batch_size):
         end = min(start + batch_size, B)
-        chunks.append(
-            _refineChunk(method, base.slice_b(start, end), sliceBatch(batch, start, end), lf)
-        )
-    return concatProposalsBatch(chunks)
+        chunk = trimBatchPadding(sliceBatch(batch, start, end))
+        base_chunk = base.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
+        chunks.append(_refineChunk(method, base_chunk, chunk, lf))
+    return concatProposalsBatch(chunks).resizeGroups(m_pad)
 
 
 def loadOrRefine(
