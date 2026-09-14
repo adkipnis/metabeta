@@ -361,3 +361,22 @@ same GPU node the refined oracle time went 6.44 s/ds (branch, pre-trim) → 2.50
 (branch, trimmed) vs 2.78 s/ds (`main`): the released path is faster than the old code.
 The oracle tables' time column predates all of this (GPU-era host); refresh it with a
 dedicated timing run on the reference host if the paper quotes refined MB time.
+
+## End-to-end validation of the mode-search fix (2026-09-14, local)
+
+Pre-fix (`main` worktree) vs post-fix `imhLaplace` on the *same* 1000-sample pool and the
+same accept/reject randomness, Poisson-large test datasets 0–7, each compared with the NUTS
+fit (`nuts_ffx`, `nuts_sigma_rfx` in test.fit.npz):
+
+- Datasets 0–5 and 7: outputs **bit-identical** (same accepted sequence, same unique-sample
+  count, same z-scores vs NUTS). The fix is a no-op wherever Newton converged before.
+- Dataset 6 (the huge-count outlier, y_max = 13 689): acceptance 0.38 → 0.43, unique samples
+  347 → 394, max dwell on one state 0.04 → 0.02, max |mean − NUTS|/sd 0.16 → 0.14, 90 %
+  width ratio vs NUTS 1.01 → 1.03; σ_rfx means shift by 0.08 NUTS sd.
+
+So the pre-fix posterior on the affected dataset was *not* visibly wrong in this run — the
+init-dependent top-weight samples the diagnostic exposed did not become absorbing states
+here. The fix's demonstrated value is therefore: removal of a real, silent failure mode in
+the weight definition (tail risk), slightly better mixing on affected datasets, and the
+small σ_rfx calibration gain at 512-dataset scale; not a headline-metric change. Kept on
+that basis, with its cost more than offset by the padding trim.
