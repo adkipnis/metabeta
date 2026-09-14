@@ -40,13 +40,16 @@ bias for binary/count data with small groups tilting the σ_rfx posterior low. N
 isLaplace is *not* better-calibrated than raw flow samples on these families;
 attach_only ≈ raw (mild RFX-joint gains on Poisson, mild LOO-NLL loss on Bernoulli).
 
-TODO
-----
-- nAGQ upgrade: for q ≤ 2, replace the Laplace integrated likelihood with adaptive
-  Gauss-Hermite quadrature centred at (b*, H⁻¹) (reuse the _ghProductGrid pattern in
-  analytical/glmm/bernoulli.py, vectorized over s) — directly targets the σ_rfx
-  downward bias above at ~K× the likelihood-pass cost (K = grid size).
+Findings (2026-09, 512 test datasets)
+-------------------------------------
+Most of the σ_rfx shift above was Newton-instability contamination of the weights, not
+Laplace bias: full-step Newton oscillated on extreme proposals (huge-count Poisson),
+making log p̂(y|θ_g) depend on the warm start by 1e4+ nats on top-weight samples. With the
+robustified mode search below, Poisson-large isLaplace σ_rfx ECE went −0.046 → −0.031
+(raw −0.027) and Bernoulli-huge max PSIS k 15.4 → 2.6.
 """
+
+import math
 
 import torch
 from torch import Tensor
@@ -124,13 +127,22 @@ def laplaceRfxModes(
     init: Tensor | None = None,  # (b, m, s, q) warm start (e.g. flow rfx)
     n_newton: int = 5,
     damping: float = 1.0,
-) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    n_backtrack: int = 3,
+    n_newton_extra: int = 15,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Per-group conditional modes and Hessians of p(rfx_j | θ_g, y_j).
 
-    Returns (modes, chol_H, Sigma_inv, L_rfx):
+    The Newton step backtracks (per (b, m, s) entry, up to n_backtrack halvings) whenever
+    it would decrease the per-group objective ℓ_j(b) − ½ bᵀΣ⁻¹b; the target is strictly
+    log-concave in b, so damped ascent converges globally, whereas full steps oscillate on
+    extreme Poisson proposals and made the weight warm-start-dependent.
+
+    Returns (modes, chol_H, Sigma_inv, L_rfx, decrement):
         modes    (b, m, s, q)     — Newton solution b*_j
         chol_H   (b, m, s, q, q)  — Cholesky of H_j = ZᵀW(b*)Z + Σ⁻¹
         Sigma_inv (b, s, q, q), L_rfx (b, s, q, q) — reusable Σ_rfx factors
+        decrement (b, m, s)       — final Newton decrement λ²/2, the unresolved objective
+            error in nats; large values mark entries whose Laplace weight is meaningless.
     """
     b, s, q = sigma_rfx.shape
     m = X.shape[1]
@@ -144,27 +156,54 @@ def laplaceRfxModes(
     mask_mq = mask_m.unsqueeze(-1)  # (b, m, 1, 1)
 
     modes = init.clone() if init is not None else y.new_zeros(b, m, s, q)
-    modes = modes * mask_mq
+    modes = (modes * mask_mq).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
 
     def hessian(w: Tensor) -> Tensor:
         ZWZ = torch.einsum('bmns,bmnq,bmnr->bmsqr', w * mask_n, Z_m, Z_m)
         return ZWZ + Sigma_inv.unsqueeze(1)
 
-    for _ in range(n_newton):
+    def objective(cand: Tensor) -> Tensor:
+        """Per-group log target (up to θ_g-constants): ℓ_j(cand) − ½ candᵀΣ⁻¹cand."""
+        eta = mu_ffx + torch.einsum('bmnq,bmsq->bmns', Z_m, cand)
+        ll = _llPerGroup(eta, y, sigma_eps, mask_n, likelihood_family)
+        quad = torch.einsum('bmsq,bsqr,bmsr->bms', cand, Sigma_inv, cand)
+        return ll - 0.5 * quad
+
+    # Adaptive iteration count: the per-iteration Newton decrement λ²/2 comes for
+    # free from (score, delta), so after the standard n_newton steps the loop keeps
+    # going (up to n_newton_extra more) only while some entry is still unresolved —
+    # hard samples (huge-count Poisson) get the budget they need, clean datasets pay
+    # nothing. The loop breaks BEFORE stepping, so chol_H/decrement are always
+    # evaluated at the returned modes.
+    tol = 0.1  # nats — resolve well below the 1-nat pinning guard downstream
+    max_iter = n_newton + n_newton_extra + 1
+    for t in range(max_iter):
         eta = mu_ffx + torch.einsum('bmnq,bmsq->bmns', Z_m, modes)
         score_res, w = _meanWeightScore(eta, y, sigma_eps, likelihood_family)
         score = torch.einsum('bmnq,bmns->bmsq', Z_m, score_res * mask_n)
         score = score - torch.einsum('bsqr,bmsr->bmsq', Sigma_inv, modes)
         chol_H = torch.linalg.cholesky(hessian(w) + 1e-6 * eye)
         delta = torch.cholesky_solve(score.unsqueeze(-1), chol_H).squeeze(-1)
-        modes = (modes + damping * delta) * mask_mq
+        decrement = (0.5 * (score * delta).sum(-1)).nan_to_num(nan=torch.inf) * mask_m
+        if t == max_iter - 1 or (t >= n_newton - 1 and float(decrement.max()) <= tol):
+            break
+        delta = (damping * delta).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+
+        # backtracking line search per (b, m, s): halve entries whose step decreases
+        # the objective (NaN counts as a decrease)
+        obj0 = _llPerGroup(eta, y, sigma_eps, mask_n, likelihood_family) - 0.5 * torch.einsum(
+            'bmsq,bsqr,bmsr->bms', modes, Sigma_inv, modes
+        )
+        for _ in range(n_backtrack):
+            worse = ~(objective(modes + delta) >= obj0 - 1e-6)  # (b, m, s)
+            if not worse.any():
+                break
+            delta = torch.where(worse.unsqueeze(-1), 0.5 * delta, delta)
+
+        modes = (modes + delta) * mask_mq
         modes = modes.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
 
-    # final Hessian at the converged mode
-    eta = mu_ffx + torch.einsum('bmnq,bmsq->bmns', Z_m, modes)
-    _, w = _meanWeightScore(eta, y, sigma_eps, likelihood_family)
-    chol_H = torch.linalg.cholesky(hessian(w) + 1e-6 * eye)
-    return modes, chol_H, Sigma_inv, L_rfx
+    return modes, chol_H, Sigma_inv, L_rfx, decrement
 
 
 def sampleRfxLaplace(modes: Tensor, chol_H: Tensor, mask_m: Tensor) -> Tensor:
@@ -190,6 +229,7 @@ def logMarginalLikelihoodLaplace(
     L_corr: Tensor | None = None,
     init: Tensor | None = None,
     n_newton: int = 5,
+    guard_nats: float | None = 1.0,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Laplace-approximated marginal log-likelihood Σ_j log p̂(y_j | θ_g).
 
@@ -199,10 +239,14 @@ def logMarginalLikelihoodLaplace(
     (the two (q/2)·log 2π terms cancel; padded rfx dims cancel between the two
     log-dets exactly as in logMarginalLikelihoodNormal). Exact for Normal.
 
+    Samples whose summed Newton decrement exceeds guard_nats get their ll pinned to −1e10:
+    an unresolved mode search makes the weight meaningless, and such samples otherwise
+    become init-dependent absorbing states in IMH. guard_nats=None disables the guard.
+
     Returns (ll (b, s), modes, chol_H) — modes/chol_H reusable for the
     conditional redraw so the weights and rfx draws share one target.
     """
-    modes, chol_H, Sigma_inv, L_rfx = laplaceRfxModes(
+    modes, chol_H, Sigma_inv, L_rfx, decrement = laplaceRfxModes(
         ffx,
         sigma_rfx,
         sigma_eps,
@@ -226,7 +270,11 @@ def logMarginalLikelihoodLaplace(
     log_det_H = 2.0 * chol_H.diagonal(dim1=-2, dim2=-1).log().sum(-1)  # (b, m, s)
 
     laplace_g = ll_g - 0.5 * (log_det_Sigma[:, None, :] + quad + log_det_H)
-    return (laplace_g * mask_m).sum(dim=1), modes, chol_H  # (b, s)
+    ll = (laplace_g * mask_m).sum(dim=1)  # (b, s)
+    if guard_nats is not None:
+        unresolved = decrement.sum(dim=1)  # (b, s); decrement is masked per group
+        ll = torch.where(unresolved > guard_nats, torch.full_like(ll, -1e10), ll)
+    return ll, modes, chol_H
 
 
 class LaplaceImportanceSampler(ImportanceSampler):

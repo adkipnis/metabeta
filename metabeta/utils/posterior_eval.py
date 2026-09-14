@@ -12,10 +12,17 @@ proposals, and summarise each. This module holds the parts that are identical be
 The per-script pieces (CLI, metric computation, table layout) stay in the scripts, since
 their metrics and outputs differ. Caches live next to the data as siblings of test.fit.npz
 and are keyed by checkpoint/prefix/n_samples/seed and by a hash of the dataset subset mask.
+
+Cache freshness is mtime-based (vs the data file and checkpoint), so a code change to a
+refinement path is invisible to it. Set METABETA_REFRESH_METHODS to a comma-separated
+method list (e.g. 'imhLaplace,isLaplace', or 'all') to bypass the sample and summary
+caches of those methods for the run; fresh results are re-saved, so subsequent runs
+without the variable pick them up normally.
 """
 
 import argparse
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -27,7 +34,7 @@ from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.metropolis import MetropolisSampler
-from metabeta.utils.dataloader import sliceBatch, toDevice
+from metabeta.utils.dataloader import sliceBatch, toDevice, trimBatchPadding
 from metabeta.utils.device import synchronizeDevice
 from metabeta.utils.evaluation import EvaluationSummary
 from metabeta.utils.results import Proposal, concatProposalsBatch
@@ -205,6 +212,13 @@ def sampleMB(
 # Caching (posterior samples, refinements, summaries) — siblings of test.fit.npz.
 
 
+def _forceRefresh(method: str) -> bool:
+    """True when METABETA_REFRESH_METHODS lists ``method`` (or 'all') — see module docstring."""
+    raw = os.environ.get('METABETA_REFRESH_METHODS', '')
+    listed = {m.strip() for m in raw.split(',') if m.strip()}
+    return bool(listed) and ('all' in listed or method in listed)
+
+
 def _sampleCachePath(
     data_path: Path,
     method: str,
@@ -261,7 +275,9 @@ def loadOrSampleMB(
         data_path, 'mb', ckpt_dir, prefix, n_samples, seed, mask, variant=variant
     )
     ref_mtime = cacheRefMtime(data_path, ckpt_dir, prefix)
-    if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
+    if _forceRefresh('mb'):
+        logger.info('METABETA_REFRESH_METHODS set; resampling MB (bypassing %s)', cache_path)
+    elif cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
         try:
             proposal, metadata = loadProposalCache(cache_path)
             tpd_arr = torch.as_tensor(metadata['tpd_arr'], dtype=torch.float64)
@@ -353,7 +369,9 @@ def _refineChunk(
 
     if method in IMH_METHODS:
         if method == 'imhGlobal' and lf != 0:
-            raise ValueError('imhGlobal is Normal-only; non-Normal imhMarginal already uses laplace')
+            raise ValueError(
+                'imhGlobal is Normal-only; non-Normal imhMarginal already uses laplace'
+            )
         if method == 'imhLaplace' and lf == 0:
             raise ValueError('imhLaplace is for GLMMs (lf != 0); use imhMarginal')
         if method == 'imhLaplace':
@@ -401,13 +419,17 @@ def refineProposal(
     if batch_size >= B:
         return _refineChunk(method, base, batch, lf)
 
+    # each chunk is trimmed to its own group/observation padding (the split-wide padding of
+    # `batch` is 3-4x larger on the test splits and every Laplace tensor scales with it); the
+    # merged result is padded back to the batch's group count
+    m_pad = batch['mask_n'].shape[1]
     chunks: list[Proposal] = []
     for start in range(0, B, batch_size):
         end = min(start + batch_size, B)
-        chunks.append(
-            _refineChunk(method, base.slice_b(start, end), sliceBatch(batch, start, end), lf)
-        )
-    return concatProposalsBatch(chunks)
+        chunk = trimBatchPadding(sliceBatch(batch, start, end))
+        base_chunk = base.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
+        chunks.append(_refineChunk(method, base_chunk, chunk, lf))
+    return concatProposalsBatch(chunks).resizeGroups(m_pad)
 
 
 def loadOrRefine(
@@ -435,7 +457,9 @@ def loadOrRefine(
         data_path, method, ckpt_dir, prefix, n_samples, seed, mask, rescale, variant=variant
     )
     ref_mtime = cacheRefMtime(data_path, ckpt_dir, prefix)
-    if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
+    if _forceRefresh(method):
+        logger.info('METABETA_REFRESH_METHODS set; refining %s (bypassing %s)', method, cache_path)
+    elif cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
         try:
             proposal, metadata = loadProposalCache(cache_path)
             logger.info('Loaded cached %s posterior samples from %s', method, cache_path)
@@ -520,7 +544,13 @@ def loadOrComputeSummary(
         ckpt_dir if is_model_derived else None,
         prefix if is_model_derived else None,
     )
-    if cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
+    if _forceRefresh(method):
+        logger.info(
+            'METABETA_REFRESH_METHODS set; computing %s summary (bypassing %s)',
+            method,
+            cache_path,
+        )
+    elif cache_path.exists() and cache_path.stat().st_mtime >= ref_mtime:
         try:
             summary = EvaluationSummary.load(cache_path)
             logger.info('Loaded cached %s summary from %s', method, cache_path)

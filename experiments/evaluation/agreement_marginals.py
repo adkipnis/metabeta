@@ -95,6 +95,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--batch_size',   type=int, default=8)
     parser.add_argument('--seed',         type=int, default=0)
     parser.add_argument('--prefix',       type=str, default='latest')
+    parser.add_argument('--device',       type=str, default='cpu')
     parser.add_argument('--bw_adjust',    type=float, default=1.5,
                         help='KDE bandwidth widening; IMH chains repeat draws, which shows up '
                              'as spurious wiggles at the default bandwidth (default: 1.5)')
@@ -124,6 +125,7 @@ def loadProposals(
     batch_size: int,
     seed: int,
     refine: bool = True,
+    device_name: str = 'cpu',
 ) -> tuple[dict[str, torch.Tensor], Proposal, Proposal, np.ndarray]:
     """Rebuild the NUTS-converged test batch and load the MB+IMH and NUTS proposals.
 
@@ -135,7 +137,7 @@ def loadProposals(
         raise KeyError(f'no reference checkpoint known for {data_id}')
     data_path = DATA_DIR / data_id / 'test.fit.npz'
     ckpt_dir = CHECKPOINT_DIR / CKPTS[data_id]
-    device = setDevice('cpu')
+    device = setDevice(device_name)
     model, model_cfg = loadModel(ckpt_dir, prefix, device)
 
     col = Collection(
@@ -296,7 +298,12 @@ def plotAgreement(
     for i, (data_id, idx) in enumerate(chosen):
         if data_id not in cache:
             cache[data_id] = loadProposals(
-                data_id, cfg.prefix, cfg.n_samples, cfg.batch_size, cfg.seed
+                data_id,
+                cfg.prefix,
+                cfg.n_samples,
+                cfg.batch_size,
+                cfg.seed,
+                device_name=cfg.device,
             )
         batch, p_mb, p_nuts, idx_full = cache[data_id]
         conv_pos = np.flatnonzero(idx_full == idx)

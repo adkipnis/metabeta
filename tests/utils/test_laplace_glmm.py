@@ -132,7 +132,7 @@ def test_laplace_modes_masked_groups_zero():
     y = torch.bernoulli(torch.sigmoid(X[..., 0])).unsqueeze(-1)
     mask_m = mask_m.clone()
     mask_m[:, -1] = 0.0
-    modes, chol_H, _, _ = laplaceRfxModes(
+    modes, chol_H, _, _, _ = laplaceRfxModes(
         ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m, likelihood_family=1
     )
     assert (modes[:, -1] == 0).all()
@@ -163,3 +163,57 @@ def test_laplace_padded_qdim_invariance():
         ffx, sigma_pad, sigma_eps, y, X, Z_pad, mask_n, mask_m, likelihood_family=1, n_newton=6
     )
     assert torch.allclose(base, padded, atol=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Newton backtracking
+# ---------------------------------------------------------------------------
+
+
+def test_newton_backtracking_init_independence():
+    """Extreme warm starts must converge to the same weights as a cold start.
+
+    Regression for the 2026-09 finding that full-step Newton
+    oscillated on extreme Poisson samples, making log p̂(y|θ_g) depend on the
+    warm start by 1e4+ nats on samples near the pool max weight.
+    """
+    torch.manual_seed(10)
+    b, m, n, d, q, s = 2, 3, 12, 2, 1, 6
+    X = torch.randn(b, m, n, d) * 0.5
+    Z = torch.ones(b, m, n, q)
+    ffx = torch.randn(b, s, d) * 0.5
+    sigma_rfx = torch.rand(b, s, q) * 2.0 + 0.2
+    sigma_eps = torch.zeros(b, s)
+    y = torch.poisson(torch.exp(X[..., 0].clamp(max=2.0))).unsqueeze(-1)
+    mask_n = torch.ones(b, m, n, 1)
+    mask_m = torch.ones(b, m, 1)
+
+    far_init = torch.full((b, m, s, q), 8.0)
+    got_far, _, _ = logMarginalLikelihoodLaplace(
+        ffx,
+        sigma_rfx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        likelihood_family=2,
+        init=far_init,
+        n_newton=12,
+    )
+    got_cold, _, _ = logMarginalLikelihoodLaplace(
+        ffx,
+        sigma_rfx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        likelihood_family=2,
+        init=None,
+        n_newton=12,
+    )
+    assert torch.isfinite(got_far).all()
+    assert torch.allclose(got_far, got_cold, atol=0.05)

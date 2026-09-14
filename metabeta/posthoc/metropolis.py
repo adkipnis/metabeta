@@ -82,10 +82,17 @@ generally preferable — keep IMH as a diagnostic baseline.
 TODO
 ----
 - 'global' mode never MH-corrects rfx — accepted global samples keep the flow's raw,
-  uncorrected rfx draw from the same proposal. This is the default for non-Normal
-  likelihoods, so local/group-level calibration there is still bounded by flow error.
-  Consider a Laplace-approximated conditional rfx correction (analogous to
-  `_sampleRfxConditional`, but for non-conjugate likelihoods) if per-group accuracy matters.
+  uncorrected rfx draw from the same proposal. Superseded in practice by mode='laplace'
+  (the non-Normal default), whose conditional redraw handles this; 'global' remains a
+  diagnostic baseline.
+
+Findings (2026-09, 512 test datasets)
+-------------------------------------
+The robustified Laplace mode search removed init-dependent absorbing states from
+mode='laplace' (Poisson-large σ_rfx ECE −0.070 → −0.051, LOO-NLL unchanged at NUTS level).
+The large/huge-regime FFX under-dispersion is the finite proposal pool — identical with the
+exact marginal target on Normal-huge, and shrinking as (ā·s)^−0.6 in a pool-size sweep —
+hence the acceptance-based pool-size suggestion below.
 """
 
 import argparse
@@ -106,6 +113,30 @@ from metabeta.utils.results import Proposal
 
 Mode = Literal['global', 'marginal', 'joint', 'laplace']
 
+# Effective-draw target from the pool-size sweep (FFX ECE ∝ (ā·s)^−0.6; at ā·s ≈ 700 the
+# huge regime reaches small-regime calibration). Suggested pool sizes aim for it.
+N_EFF_TARGET = 700
+SUGGEST_MIN = 1_000
+SUGGEST_MAX = 16_000
+
+
+def suggestPoolSize(
+    accept_rate: Tensor,  # (b, n_chains) — post-burnin acceptance per chain
+    n_eff_target: int = N_EFF_TARGET,
+) -> Tensor:
+    """Per-dataset pool-size suggestion from the measured IMH acceptance.
+
+    Returns the smallest s (rounded up to a multiple of 500, clamped to
+    [SUGGEST_MIN, SUGGEST_MAX]) whose expected accepted-draw count ā·s reaches
+    n_eff_target. Advisory only — inference always runs at the user-specified
+    pool size; datasets with near-zero acceptance saturate at SUGGEST_MAX.
+    Returns (b,) long.
+    """
+    a_bar = accept_rate.mean(dim=1).clamp(min=1e-3)  # (b,)
+    s = (n_eff_target / a_bar).ceil()
+    s = (s / 500.0).ceil() * 500.0
+    return s.clamp(min=SUGGEST_MIN, max=SUGGEST_MAX).long()
+
 
 class MetropolisSampler:
     def __init__(
@@ -117,6 +148,7 @@ class MetropolisSampler:
         mode: Mode = 'marginal',
         likelihood_family: int = 0,
         eps: float = 1e-12,
+        n_eff_target: int | None = N_EFF_TARGET,  # None disables the pool-size suggestion
     ) -> None:
         if mode == 'marginal' and likelihood_family != 0:
             raise ValueError("mode='marginal' requires likelihood_family=0 (Normal)")
@@ -132,6 +164,7 @@ class MetropolisSampler:
         self.likelihood_family = likelihood_family
         self.has_sigma_eps = hasSigmaEps(likelihood_family)
         self.eps = eps
+        self.n_eff_target = n_eff_target
 
         # Delegate all weight computation to ImportanceSampler.unnormalizedPosterior —
         # single source of truth shared with SNIS. 'marginal' uses the (correlated)
@@ -332,6 +365,10 @@ class MetropolisSampler:
             Post-burnin samples; n_chains * (n_steps - burnin) samples per dataset.
         diagnostics : dict
             'accept_rate' (b, n_chains) — fraction of proposals accepted post-burnin.
+            'suggested_n_samples' (b,) — advisory pool size reaching the
+            sweep-calibrated effective-draw target at the measured acceptance
+            (omitted when n_eff_target is None). Inference itself always runs at
+            the user-specified pool size.
         """
         t0 = time.perf_counter()
         s_expected = self.n_chains * self.n_steps
@@ -367,7 +404,10 @@ class MetropolisSampler:
         out = Proposal(proposed, has_sigma_eps=proposal.has_sigma_eps, d_corr=d_corr)
         t1 = time.perf_counter()
         out.tpd = (proposal.tpd or 0.0) + (t1 - t0)
-        return out, {'accept_rate': accept_rate}
+        diagnostics = {'accept_rate': accept_rate}
+        if self.n_eff_target is not None:
+            diagnostics['suggested_n_samples'] = suggestPoolSize(accept_rate, self.n_eff_target)
+        return out, diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +429,10 @@ def runIMH(
     imh_burnin     : int  — burnin steps to discard (default 25)
     imh_mode       : str  — 'global' | 'marginal' | 'joint' | 'laplace'
                      defaults to 'marginal' for Normal, 'laplace' otherwise
+    imh_n_eff_target : int | None — effective-draw target for the advisory per-dataset
+                     pool-size suggestion returned in the diagnostics (default 700,
+                     the sweep-calibrated value; None disables). Inference always
+                     runs at n_chains × n_steps regardless.
     rescale        : bool
     likelihood_family : int
     """
@@ -396,6 +440,7 @@ def runIMH(
     n_chains = getattr(cfg, 'n_chains', 4)
     n_steps = getattr(cfg, 'n_steps', 250)
     burnin = getattr(cfg, 'imh_burnin', 25)
+    n_eff_target = getattr(cfg, 'imh_n_eff_target', N_EFF_TARGET)
     default_mode = 'marginal' if lf == 0 else 'laplace'
     mode: Mode = getattr(cfg, 'imh_mode', default_mode)
 
@@ -412,5 +457,6 @@ def runIMH(
         burnin=burnin,
         mode=mode,
         likelihood_family=lf,
+        n_eff_target=n_eff_target,
     )
     return sampler(proposal)
