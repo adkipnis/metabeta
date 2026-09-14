@@ -27,6 +27,8 @@ from ablation import buildBatches, loadData, splitMergedProposal  # noqa: E402
 
 import metabeta.posthoc.laplace_glmm as lg  # noqa: E402
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler  # noqa: E402
+from metabeta.posthoc.metropolis import MetropolisSampler  # noqa: E402
+from metabeta.utils.posterior_eval import refineProposal  # noqa: E402
 from metabeta.utils.posterior_cache import loadProposalCache  # noqa: E402
 
 # (label, laplaceRfxModes kwargs); settings whose kwargs the installed code lacks are skipped
@@ -46,6 +48,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--n-datasets', type=int, default=32)
     p.add_argument('--n-samples', type=int, default=1000)
     p.add_argument('--batch-size', type=int, default=4)
+    p.add_argument('--full', action='store_true', help='also time the full imhLaplace refinement through posterior_eval.refineProposal (the oracle/real path) with a per-phase breakdown')
     return p.parse_args()
 # fmt: on
 
@@ -78,6 +81,7 @@ class Counter:
 def main() -> None:
     args = setup()
     items, *_ = loadData(args.data_dir / 'test.fit.npz', args.n_datasets)
+    _ITEMS.extend(items)
     batches = buildBatches(items, args.batch_size)
     merged, _ = loadProposalCache(args.pool)
     proposals = splitMergedProposal(merged, batches, args.n_samples)
@@ -113,6 +117,57 @@ def main() -> None:
             f'newton iters/pass={c.newton / n_pass:5.1f}   objective evals/pass={c.objective / n_pass:5.1f}   '
             f'pinned={pinned}/{n_ds * args.n_samples}'
         )
+
+    if args.full:
+        timeFull(args, merged, batches, n_ds)
+
+
+def timeFull(args, merged, batches, n_ds: int) -> None:
+    """Time posterior_eval.refineProposal('imhLaplace') exactly as oracle/real run it,
+    with MetropolisSampler's phases (weights / chain / redraw) timed via wrappers."""
+    from metabeta.utils.results import concatProposalsBatch
+
+    phases = {'_logWeights': 0.0, '_runChains': 0.0, '_sampleRfxLaplace': 0.0}
+    originals = {name: getattr(MetropolisSampler, name) for name in phases}
+
+    def timed(name):
+        def wrapper(self, *a, **k):
+            t0 = time.perf_counter()
+            out = originals[name](self, *a, **k)
+            phases[name] += time.perf_counter() - t0
+            return out
+
+        return wrapper
+
+    for name in phases:
+        setattr(MetropolisSampler, name, timed(name))
+    peak = torch.cuda.max_memory_allocated() if torch.cuda.is_available() else None
+    with torch.no_grad():
+        t0 = time.perf_counter()
+        # one merged batch like the oracle script hands over; refineProposal chunks it
+        full_batch = concatBatches(batches)
+        base = concatProposalsBatch(splitMergedProposal(merged, batches, args.n_samples))
+        refineProposal('imhLaplace', base, full_batch, args.likelihood_family, args.batch_size)
+        dt = time.perf_counter() - t0
+    for name in phases:
+        setattr(MetropolisSampler, name, originals[name])
+    print(
+        f'\nfull imhLaplace via refineProposal (batch_size={args.batch_size}): {dt:7.1f}s  {dt / n_ds:5.2f}s/ds\n'
+        f"  weights {phases['_logWeights'] / n_ds:5.2f}s/ds   chain {phases['_runChains'] / n_ds:5.2f}s/ds   "
+        f"redraw {phases['_sampleRfxLaplace'] / n_ds:5.2f}s/ds   "
+        f'other {(dt - sum(phases.values())) / n_ds:5.2f}s/ds'
+    )
+
+
+def concatBatches(batches: list[dict]) -> dict:
+    """Re-collate rescaled sub-batches into one batch (pads groups/obs to the max)."""
+    from metabeta.utils.dataloader import collateGrouped
+    from metabeta.utils.preprocessing import rescaleData
+
+    return rescaleData(collateGrouped(_ITEMS))
+
+
+_ITEMS: list = []
 
 
 if __name__ == '__main__':
