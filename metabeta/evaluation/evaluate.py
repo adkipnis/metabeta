@@ -69,6 +69,9 @@ _MB_IMH = 'MB+IMH'
 _KNOWN_MODELS = _ALL_MODELS + (_MB_IMH,)
 # Models that come from the checkpoint rather than from cached fits in the *.fit.npz.
 _MB_MODELS = frozenset(('MB', _MB_IMH))
+# Figure labels follow the paper's naming: "MB" is the neural posterior plus IMH refinement,
+# "MB^0" the raw flow posterior alone. Tables keep the CLI names; the paper restyles them itself.
+_PLOT_LABELS = {'MB': 'MB$^0$', _MB_IMH: 'MB'}
 # Summary-cache methods keyed only by the data file (as opposed to checkpoint-derived ones).
 _FIT_METHODS = frozenset(m.lower() for m in _FIT_MODELS)
 
@@ -1071,6 +1074,10 @@ class Evaluator:
     def _displayModel(model: str) -> str:
         return 'LA' if model == 'LAPLACE' else model
 
+    @classmethod
+    def _plotLabel(cls, model: str) -> str:
+        return _PLOT_LABELS.get(model, cls._displayModel(model))
+
     def _displayLabel(self, model: str, partition: str, multi: bool) -> str:
         label = self._displayModel(model)
         return f'{label}_{partition}' if multi else label
@@ -1373,7 +1380,7 @@ class Evaluator:
             self.plot(
                 [aligned[model] for model in plot_models],
                 [summaries[model] for model in plot_models],
-                [self._displayModel(model) for model in plot_models],
+                [self._plotLabel(model) for model in plot_models],
                 plot_batch,
                 plot_dir=plot_dir,
             )
@@ -1469,7 +1476,7 @@ class Evaluator:
             self.plot(
                 [aligned[model] for model in plot_models],
                 [summaries[model] for model in plot_models],
-                [self._displayModel(model) for model in plot_models],
+                [self._plotLabel(model) for model in plot_models],
                 plot_batch,
                 plot_dir=plot_dir,
             )

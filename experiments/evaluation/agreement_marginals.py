@@ -1,5 +1,5 @@
 """
-experiments/evaluation/agreement_marginals.py — Marginal posterior overlays: MB+IMH vs NUTS.
+experiments/evaluation/agreement_marginals.py — Marginal posterior overlays: MB (IMH-refined) vs NUTS.
 
 For chosen datasets from the pre-generated real-data test batches (outputs/data/
 {size}-{fam}-real/test.fit.npz), overlays the marginal posterior densities of the IMH-refined
@@ -81,7 +81,7 @@ QS = np.linspace(0.005, 0.995, 199)
 def setup() -> argparse.Namespace:
     # fmt: off
     parser = argparse.ArgumentParser(
-        description='Marginal posterior overlays: MB+IMH vs NUTS on real datasets',
+        description='Marginal posterior overlays: MB (IMH-refined) vs NUTS on real datasets',
     )
     parser.add_argument('--datasets',     type=str, nargs='+',
                         default=['small-b-real:67', 'small-n-real:262'],
@@ -127,7 +127,7 @@ def loadProposals(
     refine: bool = True,
     device_name: str = 'cpu',
 ) -> tuple[dict[str, torch.Tensor], Proposal, Proposal, np.ndarray]:
-    """Rebuild the NUTS-converged test batch and load the MB+IMH and NUTS proposals.
+    """Rebuild the NUTS-converged test batch and load the MB (IMH-refined) and NUTS proposals.
 
     Returns (batch, p_mb, p_nuts, idx_full) where idx_full maps positions in the converged
     subset back to indices into the full test file. With ``refine`` (default), the MB proposal
@@ -363,7 +363,7 @@ def plotAgreement(
 
     # same right-legend styling as plotComparison (used by evaluate.py): opaque dot proxies
     handles = [
-        Line2D([], [], marker='o', linestyle='', markersize=10, color=COL_MB, label='MB+IMH'),
+        Line2D([], [], marker='o', linestyle='', markersize=10, color=COL_MB, label='MB'),
         Line2D([], [], marker='o', linestyle='', markersize=10, color=COL_NUTS, label='NUTS'),
     ]
     fig.legend(
