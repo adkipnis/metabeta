@@ -1,11 +1,11 @@
 """
-experiments/evaluation/agreement_scatter.py — Posterior means and spread: MB+IMH vs NUTS.
+experiments/evaluation/agreement_scatter.py — Posterior means and spread: MB (IMH-refined) vs NUTS.
 
 Pools all active parameters of the strictly NUTS-converged datasets in the requested real-data
 test sets (default: small-*-real and medium-*-real) and compares the IMH-refined MB posterior
 against NUTS in two panels:
 
-  1. Posterior means — scatter of MB+IMH vs NUTS per parameter (identity line = agreement),
+  1. Posterior means — scatter of MB vs NUTS per parameter (identity line = agreement),
      colored by parameter type (beta, sigma, rho; random effects only with --rfx, as they
      outnumber the global parameters ~10:1), rasterized.
   2. Posterior SDs — the same scatter for the marginal posterior sds, on log-log axes so the
@@ -60,7 +60,7 @@ EPS = 1e-8
 def setup() -> argparse.Namespace:
     # fmt: off
     parser = argparse.ArgumentParser(
-        description='Posterior mean/spread comparison: MB+IMH vs NUTS on real datasets',
+        description='Posterior mean/spread comparison: MB (IMH-refined) vs NUTS on real datasets',
     )
     parser.add_argument('--data_ids',   type=str, nargs='+',
                         default=[f'{s}-{f}-real' for s in ('small', 'medium') for f in 'nbp'],
@@ -182,7 +182,7 @@ def _scatterPanel(
     method_label: str,
     scale: str = 'linear',
 ) -> None:
-    """Identity-line scatter of MB+IMH (y) vs NUTS (x) values, colored by parameter type.
+    """Identity-line scatter of MB (y) vs NUTS (x) values, colored by parameter type.
 
     ``scale``: 'log' for strictly positive values (sds), 'symlog' for signed values spanning
     orders of magnitude (means pooled across rescaled datasets), else linear.
@@ -239,7 +239,8 @@ def plotScatter(
     sns.set_style('white')
     fig, axs = plt.subplots(1, 2, figsize=(2 * 6.7, 6.7), dpi=DPI)
 
-    method_label = 'MB+IMH' if cfg.refine else 'MB'
+    # paper naming: MB = flow posterior + IMH refinement, MB^0 = raw flow posterior
+    method_label = 'MB' if cfg.refine else 'MB$^0$'
     pooled_means = np.concatenate(list(means.values()))
     r = float(np.corrcoef(pooled_means[:, 0], pooled_means[:, 1])[0, 1])
     _scatterPanel(axs[0], means, 'Posterior Means', {'$r$': r}, method_label, scale='symlog')
