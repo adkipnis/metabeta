@@ -34,6 +34,28 @@ _RIGHT_LEGEND_FONTSIZE = 30
 # tuned against _PLOT_RIGHT_MARGIN; legend ends near 0.96, inside the figure
 _RIGHT_LEGEND_X = 0.890
 _PLOT_RIGHT_MARGIN = 0.89
+# vertical gap between rows (inches) after trimming the surplus height left by the square axes
+_ROW_GAP_IN = 0.35
+
+
+def _trimRowGaps(fig, axs, rect, gap_in: float = _ROW_GAP_IN, passes: int = 2) -> None:
+    """Shrink the figure height so the square rows sit ``gap_in`` apart.
+
+    The axes are square (box_aspect=1) but the columns end up narrower than their nominal slot,
+    so tight_layout spreads the surplus height as whitespace between rows. Measure the gap it
+    produced, remove the excess from the figure height, and lay out again.
+    """
+    if axs.shape[0] < 2:
+        return
+    for _ in range(passes):
+        fig_h = fig.get_size_inches()[1]
+        pos = [ax.get_position() for ax in axs[:, 0]]
+        gaps = [(pos[i].y0 - pos[i + 1].y1) * fig_h for i in range(len(pos) - 1)]
+        excess = sum(max(g - gap_in, 0.0) for g in gaps)
+        if excess < 1e-2:
+            return
+        fig.set_size_inches(fig.get_size_inches()[0], fig_h - excess)
+        fig.tight_layout(rect=rect)
 
 
 def _rightLegendHandles(axs) -> dict[str, object]:
@@ -146,9 +168,11 @@ def plotComparison(
                 fontsize=_RIGHT_LEGEND_FONTSIZE,
                 markerscale=2.5,
             )
-        fig.tight_layout(rect=(0.0, 0.0, _PLOT_RIGHT_MARGIN, 1.0))
+        rect = (0.0, 0.0, _PLOT_RIGHT_MARGIN, 1.0)
     else:
-        fig.tight_layout()
+        rect = (0.0, 0.0, 1.0, 1.0)
+    fig.tight_layout(rect=rect)
+    _trimRowGaps(fig, axs, rect)
 
     saved_path = None
     if plot_dir is not None:
