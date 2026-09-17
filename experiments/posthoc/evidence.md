@@ -148,3 +148,27 @@ folded into the cache keys of refined posteriors and their summaries (`-w2` / `_
 written under the legacy weights are ignored rather than silently reused; raw MB sample caches
 and NUTS/ADVI/Laplace summaries stay valid. `ablation.py --corr-coords z` reproduces the
 legacy weights (results tagged `_corr-z`).
+
+## Cluster reruns with the corrected weights (2026-09-17, `evidence-check` @ 7e1f6b3f, GPU nodes)
+
+Pulled to `~/Downloads/hpc-pull/` and compared against the pre-run files (`*.legacy`).
+
+- **Oracle rows (`oracle_posterior.py`, prefix latest, MB+imh*)**: main-table metrics move by at
+  most one unit in the last decimal — Normal huge EACE 0.04 → 0.03, large ECE −0.02 → −0.01,
+  Bernoulli huge EACE 0.04 → 0.03, large ECE −0.02 → −0.01, Poisson huge EACE 0.05 → 0.04; all
+  other regimes unchanged at two decimals. The paper's `oracle_*.tex` come from a different run
+  (values and time column do not match the pre-run files), so they were left untouched.
+- **Normal ablations (`ablation.py`, prefix best)**: the appendix rows MB⁰+IS / MB⁰+IMH changed in
+  all four regimes; IMH Corr(RFX) now sits at NUTS (huge: R 0.551 → 0.575 [0.616], NRMSE 0.841 →
+  0.822 [0.793], ECE 0.034 → 0.089 [0.102]); IMH average ECE from slightly negative to ≈ 0
+  (huge −0.019 → 0.000), matching NUTS's sign. Acceptance up (huge 0.158 → 0.178, large 0.273 →
+  0.297), PSIS fallback down (huge 42 % → 38 %). `tables/ablation_normal.tex` and the two quoted
+  numbers in the appendix paragraph were updated surgically; MB⁰, MB+NUTS, NUTS rows carry over.
+- **Real data (`real_posterior.py`)**: metrics within one last-decimal unit (small-b σ-ratio
+  0.97 → 0.98, medium-n rank-MAD 0.01 → 0.00); only Δtime differs. `real_*.tex` left untouched.
+- **GLMM ablations**: running (Laplace weights inherit the same prior code; expect small shifts).
+- Not rerun: warm NUTS (exact target; seeds only), runtime table, prior_families. Phase 3
+  (misspecification suites, data poverty, condition number, agreement figures) pending.
+- Incident: a pull was rsynced straight into the local repo before the stop; oracle files were
+  restored from `.legacy` twins, the four local `normal_*.md` ablation files were replaced by the
+  cluster's pre-run copies (local pre-pull versions differed by MC noise and are lost).
