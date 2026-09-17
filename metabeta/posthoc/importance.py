@@ -27,6 +27,28 @@ prior via corr_prior), `rb_redraw=True` re-draws rfx from the exact Normal-Norma
 conditional per weighted global sample (Rao-Blackwellisation), and dampening is no longer
 applied in the pareto branch.
 
+Evidence (2026-09, model-comparison outlook)
+--------------------------------------------
+`getImportanceWeights` also stores the raw log-weights and `log_evidence` =
+logsumexp(log_w) - log S. Since the flow density is normalized and prior and marginal
+likelihood are normalized densities, mean_s exp(log_w_s) is an unbiased estimate of p(D)
+for marginal=True on Normal (Laplace-approximated in posthoc/laplace_glmm.py). It lives in
+the space the proposal density lives in — the standardized data — so it must be computed on
+*unrescaled* batches/proposals; `preprocessing.logJacobianStandardization` moves it to the
+raw response scale. See experiments/posthoc/evidence.py for the bridge-sampling check.
+
+Correlation coordinates (`corr_prior_coords`): the flow's log q_g is a density over the
+*stored* constrained correlations r (approximator._postprocess subtracts the z→r Jacobian
+of the padded q_max map), whereas `logProbCorrRfx` is a density over unconstrained z in
+q_max dimensions. 'z' (legacy, the default before 2026-09-17) mixes the two and leaves a spurious factor
+|dr/dz|_{q_max} · LKJ_{q_max}(L)/LKJ_{q_i}(L) in every weight of a correlated dataset —
+for q_i = q_max = 2 that is (1 - ρ²), for q_i=2 in q_max=3 it is (1 - ρ²)^2 up to a
+constant: a tilt toward zero correlation that biases IS/IMH posteriors of ρ and the
+evidence. 'r' (default) expresses the prior over the stored r in the flow's coordinates: LKJ
+density in the dataset's own q_i (`logProbCorrRfx(..., q_active)`) minus the same padded
+`logDetJacobianCorr(z, q_max)` the flow subtracted. Verified against bridge sampling on
+the small and medium oracle sets (experiments/results/evidence/).
+
 Resample-move (ResampleMoveSampler, added for the 2026-07 post-log-det-fix ablation):
 systematic resampling on the PSIS-smoothed marginal weights followed by K vectorized
 independence-MH rejuvenation sweeps with fresh flow proposals — converts weight
@@ -51,7 +73,12 @@ import torch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import toDevice
 from metabeta.utils.results import Proposal, joinProposals
-from metabeta.utils.regularization import dampen, corrLowerToUnconstrained, unconstrainedToCholesky
+from metabeta.utils.regularization import (
+    dampen,
+    corrLowerToUnconstrained,
+    logDetJacobianCorr,
+    unconstrainedToCholesky,
+)
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.families import (
     logProbFfx,
@@ -64,6 +91,13 @@ from metabeta.utils.families import (
     sampleRfxConditionalNormal,
 )
 from metabeta.utils.preprocessing import rescaleData
+
+
+# Bump when the definition of the IS/IMH weights changes: folded into the on-disk cache keys
+# of refined posteriors and their summaries (utils/posterior_eval.py, evaluate.py,
+# experiments/posthoc/ablation.py), so caches written under an older definition are ignored.
+# v2 (2026-09-17): LKJ prior expressed in the flow's coordinates (corr_prior_coords='r').
+WEIGHTS_VERSION = 2
 
 
 class ImportanceSampler:
@@ -82,11 +116,15 @@ class ImportanceSampler:
         n_sir: int = 25,  # size of SIR re-sample
         likelihood_family: int = 0,
         eps: float = 1e-12,
+        corr_prior_coords: str = 'r',  # 'r': LKJ prior in the flow's coordinates; 'z': legacy
     ) -> None:
         if marginal and likelihood_family != 0:
             raise ValueError('marginal IS is only implemented for the Normal likelihood family')
         if rb_redraw and not marginal:
             raise ValueError('rb_redraw requires marginal=True (Rao-Blackwellised weights)')
+        if corr_prior_coords not in ('z', 'r'):
+            raise ValueError(f"corr_prior_coords must be 'z' or 'r', got {corr_prior_coords!r}")
+        self.corr_prior_coords = corr_prior_coords
         self.constrain = constrain
         self.full = full
         self.corr_prior = corr_prior
@@ -123,6 +161,7 @@ class ImportanceSampler:
         self.mask_mq = data['mask_mq'].unsqueeze(-2)  # (b, m, 1, q)
         self.mask_m = data['mask_m'].unsqueeze(-1)    # (b, m, 1)
         self.mask_n = data['mask_n'].unsqueeze(-1)    # (b, m, n, 1)
+        self.q_active = data['mask_q'].sum(-1)        # (b,) each dataset's own rfx dimension
 
     def _getLCorr(self, proposal: Proposal) -> torch.Tensor | None:
         """Cholesky of the rfx correlation matrix from the proposal's z_corr dims."""
@@ -162,7 +201,14 @@ class ImportanceSampler:
         if self.corr_prior and proposal.d_corr > 0 and self.eta_rfx is not None:
             r_corr = proposal.samples_g[..., -proposal.d_corr :]  # (b, s, d_corr)
             z_corr = corrLowerToUnconstrained(r_corr, proposal.q)
-            lp = lp + logProbCorrRfx(z_corr, proposal.q, self.eta_rfx)
+            if self.corr_prior_coords == 'z':
+                lp = lp + logProbCorrRfx(z_corr, proposal.q, self.eta_rfx)
+            else:
+                # density over the stored r in the coordinates log q_g is a density over
+                # (see module docstring, Correlation coordinates): LKJ in the dataset's
+                # own q_i, minus the *padded* z→r Jacobian that _postprocess subtracted
+                lp = lp + logProbCorrRfx(z_corr, proposal.q, self.eta_rfx, q_active=self.q_active)
+                lp = lp - logDetJacobianCorr(z_corr, proposal.q)
 
         return lp, ffx, sigma_eps
 
@@ -260,6 +306,13 @@ class ImportanceSampler:
     ) -> dict[str, torch.Tensor]:
         out = {}
         log_w = log_likelihood + log_prior - log_q
+
+        # raw weights and the IS evidence estimate log p(D) ≈ logsumexp(log_w) - log S,
+        # stored before smoothing/clipping destroys the scale (see module docstring,
+        # Evidence). Only meaningful when log_q is the normalized density in the same
+        # space as prior and likelihood, i.e. on unrescaled (standardized) inputs.
+        out['log_w_raw'] = log_w
+        out['log_evidence'] = torch.logsumexp(log_w, dim=-1) - math.log(log_w.shape[-1])
 
         # regularize
         if self.pareto:

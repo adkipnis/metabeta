@@ -175,6 +175,16 @@ class NumericTransformer:
         return self.fit(x).transform(x)
 
 
+def logJacobianStandardization(data: dict[str, torch.Tensor]) -> torch.Tensor:
+    """log |d y_std / d y_raw| per dataset for y_std = y_raw / sd_y over n observations.
+
+    Add it to a log-evidence computed on the standardized data (the space the flow
+    density lives in) to obtain log p(y_raw). The term is a per-dataset constant, so it
+    cancels in Bayes factors between models on the same data. Returns (b,).
+    """
+    return -data['n'].to(data['sd_y'].dtype) * data['sd_y'].log()
+
+
 def rescaleData(data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     data = {
         k: {sk: sv.clone() for sk, sv in v.items()} if isinstance(v, dict) else v.clone()

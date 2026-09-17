@@ -170,6 +170,11 @@ class Proposal:
     def pareto_k(self) -> torch.Tensor | None:
         return self.is_results.get('pareto_k')
 
+    @property
+    def log_evidence(self) -> torch.Tensor | None:
+        """IS estimate of log p(D) per dataset (b,), set by ImportanceSampler."""
+        return self.is_results.get('log_evidence')
+
     def partition(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         out = {}
         out['ffx'] = x[..., : self.d]
