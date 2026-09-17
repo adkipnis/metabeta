@@ -382,5 +382,9 @@ def test_proposal_resize_groups_round_trip():
     padded = trimmed.resizeGroups(m)
     assert torch.equal(padded.samples_l, samples_l)
     assert p.resizeGroups(m) is p
-    with pytest.raises(ValueError):
-        p.resizeGroups(2)  # group 2 holds samples
+    # trailing groups are padding for the target batch by construction — dropped even when
+    # they hold draws (legacy hybrid caches); the source proposal is untouched
+    dropped = p.resizeGroups(2)
+    assert dropped.samples_l.shape == (b, 2, s, q)
+    assert torch.equal(dropped.samples_l, samples_l[:, :2])
+    assert torch.equal(p.samples_l, samples_l)
