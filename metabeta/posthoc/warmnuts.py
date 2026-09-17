@@ -95,7 +95,7 @@ class WarmNuts:
         tune: int = 500,
         draws: int = 500,
         seed: int = 42,
-        target_accept: float = 0.9,
+        target_accept: float = 0.8,
         max_treedepth: int = 12,
         warm_mass: bool = True,
         mass_draws: int = 64,
@@ -118,8 +118,8 @@ class WarmNuts:
         seed : int
             Random seed passed to pm.sample.
         target_accept : float
-            Target acceptance rate for step-size adaptation.  0.9 is
-            recommended for posteriors with complex geometry (default 0.9).
+            Target acceptance rate for step-size adaptation.  0.8 is
+            recommended for posteriors with complex geometry (default 0.8).
         max_treedepth : int
             NUTS maximum tree depth (default 12; PyMC default 10).  Higher
             values allow the sampler to take longer trajectories through
@@ -643,7 +643,7 @@ def runWarmNuts(
     wn_chains      : int   — NUTS chains per dataset (default 4)
     wn_tune        : int   — NUTS tuning steps (default 500)
     wn_draws       : int   — NUTS draws per chain (default 500)
-    wn_target_accept : float — target acceptance rate (default 0.9)
+    wn_target_accept : float — target acceptance rate (default 0.8)
     wn_max_treedepth : int   — NUTS max tree depth (default 12)
     wn_warm_mass   : bool  — mass-matrix warm start (default True)
     wn_escalate    : bool  — cold re-run rescue on poor diagnostics (default True)
@@ -661,7 +661,7 @@ def runWarmNuts(
     tune = getattr(cfg, 'wn_tune', 500)
     draws = getattr(cfg, 'wn_draws', 500)
     seed = getattr(cfg, 'seed', 42)
-    target_accept = getattr(cfg, 'wn_target_accept', 0.9)
+    target_accept = getattr(cfg, 'wn_target_accept', 0.8)
     max_treedepth = getattr(cfg, 'wn_max_treedepth', 12)
     warm_mass = getattr(cfg, 'wn_warm_mass', True)
     escalate = getattr(cfg, 'wn_escalate', True)
