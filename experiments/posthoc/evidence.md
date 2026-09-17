@@ -172,3 +172,26 @@ Pulled to `~/Downloads/hpc-pull/` and compared against the pre-run files (`*.leg
 - Incident: a pull was rsynced straight into the local repo before the stop; oracle files were
   restored from `.legacy` twins, the four local `normal_*.md` ablation files were replaced by the
   cluster's pre-run copies (local pre-pull versions differed by MC noise and are lost).
+
+## Cluster evidence runs, all four Normal regimes (2026-09-17, 512 test datasets each, GPU nodes)
+
+Pulled to `~/Downloads/hpc-pull/evidence/`; paper table `tables/evidence_normal.tex` and the
+`app:ev` paragraph updated from them (the laptop runs in `experiments/results/evidence/` are
+superseded).
+
+| S=4000 | small | medium | large | huge |
+|---|---|---|---|---|
+| median \|Δ log p(D)\| vs bridge | 0.008 | 0.016 | 0.031 | 0.067 |
+| q90 | 0.028 | 0.058 | 0.163 | 0.653 |
+| noise floor (bridge halves swapped) | 0.006 | 0.008 | 0.010 | 0.012 |
+| frac k > 0.7 | 0.00 | 0.02 | 0.11 | 0.34 |
+| k ≤ 0.5: median \|Δ\| | 0.007 | 0.015 | 0.022 | 0.027 |
+| k > 0.7: median \|Δ\| | – | 0.130 | 0.180 | 0.298 |
+| nested n / BF category agreement IS | 137 / 1.00 | 259 / 0.97 | 294 / 0.98 | 319 / 0.94 |
+| … two bridges vs each other | 0.99 | 0.99 | 0.98 | 0.98 |
+| median error S=1000 → 4000 | 0.012 → 0.008 | 0.028 → 0.016 | 0.055 → 0.031 | 0.112 → 0.067 |
+
+Reading: the estimator degrades with regime exactly through the flagged share; unflagged datasets
+stay within 0.03 nats everywhere. One non-finite IS estimate (medium ds 458, reduced fit with
+PSIS k = ∞) is counted as a disagreement. Legacy 'z' weights on huge: median −1.9 nats on
+correlated datasets, BF agreement 0.74.
