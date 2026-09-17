@@ -31,6 +31,8 @@ and .png (diagnostic figure).
 Run from the repo root:
     uv run python experiments/posthoc/evidence.py --sizes small --n-datasets 32
     uv run python experiments/posthoc/evidence.py --sizes small medium --n-datasets 512 --nested 128
+    # after all sizes ran (possibly on different nodes): rebuild summaries + the combined table
+    uv run python experiments/posthoc/evidence.py --sizes small medium large huge --summarize-only
 """
 
 import argparse
@@ -335,9 +337,17 @@ def nutsUnconstrained(target: Target, nuts: dict[str, np.ndarray], i: int) -> to
     return target.fromConstrained(ffx, sigma_rfx, sigma_eps, corr)
 
 
-def jeffreys(log_bf: float) -> int:
-    """Signed Jeffreys category of ln BF: 0 anecdotal … ±4 decisive."""
-    return int(np.sign(log_bf) * np.searchsorted(JEFFREYS_EDGES, abs(log_bf), side='right'))
+def jeffreys(log_bf: float) -> float:
+    """Signed Jeffreys category of ln BF: 0 anecdotal … ±4 decisive; NaN for a non-finite BF."""
+    if not np.isfinite(log_bf):
+        return np.nan
+    return float(np.sign(log_bf) * np.searchsorted(JEFFREYS_EDGES, abs(log_bf), side='right'))
+
+
+def categoryAgreement(a: pd.Series, b: pd.Series) -> float:
+    """Share of rows whose Jeffreys categories agree; a non-finite estimate never agrees."""
+    ca, cb = a.map(jeffreys), b.map(jeffreys)
+    return float(((ca == cb) & ca.notna() & cb.notna()).mean())
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +359,7 @@ def _absStats(delta: pd.Series) -> dict:
     a = delta.abs()
     return {
         'n': int(a.notna().sum()),
+        'non-finite': int((~np.isfinite(delta)).sum()),
         'median |Δ|': a.median(),
         'q90 |Δ|': a.quantile(0.9),
         'frac |Δ|<0.5': (a < 0.5).mean(),
@@ -433,13 +444,11 @@ def summarize(df: pd.DataFrame, pool_sizes: list[int], label: str) -> str:
             ('bridgeImh (both)', 'logbf_ref_imh'),
         ):
             st = _absStats(nested[col] - nested['logbf_ref'])
-            st['same Jeffreys cat.'] = (
-                nested[col].map(jeffreys) == nested['logbf_ref'].map(jeffreys)
-            ).mean()
+            st['same Jeffreys cat.'] = categoryAgreement(nested[col], nested['logbf_ref'])
             rows[name] = st
         lines.append(pd.DataFrame(rows).T.to_markdown(floatfmt='.3f'))
         lines.append('')
-        cats = nested['logbf_ref'].map(jeffreys).value_counts().sort_index()
+        cats = nested['logbf_ref'].map(jeffreys).dropna().astype(int).value_counts().sort_index()
         lines.append(
             'Reference ln BF categories (signed Jeffreys, + favours the random slope): '
             + ', '.join(f'{k}: {v}' for k, v in cats.items())
@@ -704,9 +713,7 @@ def writeTex(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | None:
             d = (df[col] - ref).abs()
             frac_k = (df[f'k_r_s{s}'] > 0.7).mean()
             if s == max(pool_sizes) and len(nested):
-                agree = (
-                    nested['logbf_is_r'].map(jeffreys) == nested['logbf_ref'].map(jeffreys)
-                ).mean()
+                agree = categoryAgreement(nested['logbf_is_r'], nested['logbf_ref'])
                 bf = (nested['logbf_is_r'] - nested['logbf_ref']).abs().median()
                 nested_cells = f'{len(nested)} & ${agree:.2f}$ & ${bf:.3f}$'
             else:
@@ -751,9 +758,12 @@ def main() -> None:
             resummarize(size, args)
         else:
             runSize(size, args)
-    tex = writeTex(args.out_dir, args.split, sorted(args.pool_sizes))
-    if tex is not None:
-        print(f'[saved] {tex}')
+    # the combined table spans all sizes with a CSV in out_dir; assemble it only in the
+    # summarize-only pass so parallel per-size runs do not race on the same file
+    if args.summarize_only:
+        tex = writeTex(args.out_dir, args.split, sorted(args.pool_sizes))
+        if tex is not None:
+            print(f'[saved] {tex}')
 
 
 if __name__ == '__main__':
