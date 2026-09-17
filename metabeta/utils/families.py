@@ -383,23 +383,37 @@ def logProbCorrRfx(
     z_corr: torch.Tensor,  # (b, s, d_corr)
     q: int,
     eta: torch.Tensor,  # (b,)  LKJ concentration; 0 = inactive (q < 2 for this dataset)
+    q_active: torch.Tensor | None = None,  # (b,) per-dataset rfx dimension; None = q for all
 ) -> torch.Tensor:
     """Log prior for z_corr in unconstrained space. Returns (b, s).
 
     Datasets with eta=0 (q<2, no correlation) get zero contribution — their z_corr
     dimensions are masked in the flow and carry no prior information.
+
+    With ``q_active`` the LKJ density is evaluated in each dataset's own dimension q_i
+    (the leading q_i(q_i-1)/2 entries of z_corr are its active ones). Evaluating a
+    q_i < q dataset in the padded q×q space is not equivalent: the LKJCholesky exponent
+    of L_ii is 2(eta-1) + q - i, so padding adds (q - q_i) log L_ii per active row plus
+    a different normalizer — a sample-dependent tilt of the prior toward zero correlation.
     """
     b, s = z_corr.shape[:2]
     lp = torch.zeros(b, s, dtype=z_corr.dtype, device=z_corr.device)
     active = eta > 0  # (b,) — datasets with an LKJ prior (q >= 2)
     if not active.any():
         return lp
-    z_a = z_corr[active]  # (b_a, s, d_corr)
-    L = unconstrainedToCholesky(z_a, q)  # (b_a, s, q, q)
-    concentration = eta[active].unsqueeze(-1).expand(-1, s)  # (b_a, s)
-    lp_lkj = D.LKJCholesky(dim=q, concentration=concentration).log_prob(L)  # (b_a, s)
-    log_jac = _logJacobianZtoL(z_a, L, q)  # (b_a, s)
-    lp[active] = lp_lkj + log_jac
+    if q_active is None:
+        q_active = torch.full_like(eta, q, dtype=torch.long)
+    q_active = q_active.long()
+    for q_i in torch.unique(q_active[active]).tolist():
+        if q_i < 2:
+            continue
+        sel = active & (q_active == q_i)  # (b,)
+        d_i = q_i * (q_i - 1) // 2
+        z_a = z_corr[sel][..., :d_i]  # (b_a, s, d_i)
+        L = unconstrainedToCholesky(z_a, q_i)  # (b_a, s, q_i, q_i)
+        concentration = eta[sel].unsqueeze(-1).expand(-1, s)  # (b_a, s)
+        lp_lkj = D.LKJCholesky(dim=q_i, concentration=concentration).log_prob(L)  # (b_a, s)
+        lp[sel] = lp_lkj + _logJacobianZtoL(z_a, L, q_i)
     return lp
 
 
