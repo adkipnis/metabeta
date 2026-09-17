@@ -310,7 +310,8 @@ def test_light_plot_uses_requested_display_order(monkeypatch, tmp_path):
         multi=False,
     )
 
-    assert labels_seen == ['MB', 'NUTS', 'ADVI', 'LA']
+    # raw flow is labelled MB^0 in plots (paper naming, b4c5a111)
+    assert labels_seen == ['MB$^0$', 'NUTS', 'ADVI', 'LA']
 
 
 def test_mb_summary_cache_path_includes_run_options_and_mask(tmp_path):
