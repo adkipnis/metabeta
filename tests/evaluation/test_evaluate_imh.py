@@ -253,7 +253,8 @@ def test_mb_imh_appears_in_light_path_plot_labels(monkeypatch, tmp_path):
         multi=False,
     )
 
-    assert labels_seen == ['MB', 'MB+IMH', 'NUTS']
+    # plot labels follow the paper naming: MB = flow + IMH, MB^0 = raw flow (b4c5a111)
+    assert labels_seen == ['MB$^0$', 'MB', 'NUTS']
     # MB+IMH looks up its own summary cache, not MB's
     assert methods_seen == ['mb', 'imhMarginal']
 
