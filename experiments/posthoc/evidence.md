@@ -195,3 +195,12 @@ Reading: the estimator degrades with regime exactly through the flagged share; u
 stay within 0.03 nats everywhere. One non-finite IS estimate (medium ds 458, reduced fit with
 PSIS k = ∞) is counted as a disagreement. Legacy 'z' weights on huge: median −1.9 nats on
 correlated datasets, BF agreement 0.74.
+
+## GLMM ablations (cluster, corrected weights)
+
+`tables/ablation_bernoulli.tex` / `ablation_poisson.tex` MB⁰+IS and MB⁰+IMH rows updated from
+`~/Downloads/hpc-pull/ablation/{bernoulli,poisson}_*.md`; quoted numbers in the appendix
+paragraph (Poisson huge LOO-NLL, the MB+NUTS recovery-gap sentence) adjusted. Same pattern as
+Normal: IMH average ECE moves from negative toward zero (Bernoulli huge −0.021 → 0.001, Poisson
+huge −0.027 → −0.011), EACE up by a few thousandths, recovery within ±0.01 except Bernoulli
+huge IS r 0.666 → 0.693. LOO-NLL essentially unchanged.
