@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from metabeta.evaluation.evaluate import _ALL_MODELS, Evaluator
+from metabeta.posthoc.importance import WEIGHTS_VERSION
 from metabeta.utils.results import Proposal
 
 
@@ -96,7 +97,8 @@ def test_imh_summary_cache_is_keyed_by_checkpoint(tmp_path):
     nuts_path = evaluator._summaryCachePath('test', 'nuts', mask=None)
 
     assert 'summary_test_imhMarginal_data=small-n-mixed_model=large_seed=13_latest' in imh_path.name
-    assert '_s1000_seed0_k0_predcov0_all.pt' in imh_path.name
+    # refined methods also carry the IS/IMH weight-definition version (WEIGHTS_VERSION)
+    assert f'_s1000_seed0_k0_predcov0_w{WEIGHTS_VERSION}_all.pt' in imh_path.name
     # fit methods stay keyed by the data file alone
     assert nuts_path.name == 'summary_test_nuts.pt'
 
@@ -251,7 +253,8 @@ def test_mb_imh_appears_in_light_path_plot_labels(monkeypatch, tmp_path):
         multi=False,
     )
 
-    assert labels_seen == ['MB', 'MB+IMH', 'NUTS']
+    # plot labels follow the paper naming: MB = flow + IMH, MB^0 = raw flow (b4c5a111)
+    assert labels_seen == ['MB$^0$', 'MB', 'NUTS']
     # MB+IMH looks up its own summary cache, not MB's
     assert methods_seen == ['mb', 'imhMarginal']
 

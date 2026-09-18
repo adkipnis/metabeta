@@ -295,6 +295,13 @@ def gaussianHybrid(global_proposal: Proposal, batch: dict[str, Tensor]) -> Propo
         Sigma_rfx_inv=Sigma_rfx_inv,
     )
 
+    # padded groups (no observations) would otherwise receive prior-like draws; keep the
+    # padding convention of collateGrouped / concatProposalsBatch (all-zero) so cached
+    # proposals can be trimmed per chunk (Proposal.resizeGroups)
+    mask_m = batch['mask_m'].to(samples_l.dtype)
+    samples_l = samples_l * mask_m[:, :, None, None]
+    log_prob_l = log_prob_l * mask_m[:, :, None]
+
     new_data = {
         'global': dict(global_proposal.data['global']),
         'local': {'samples': samples_l, 'log_prob': log_prob_l},

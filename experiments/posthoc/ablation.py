@@ -94,7 +94,7 @@ from build_ckpt import BEST_SEEDS, _ckpt_dir                           # noqa: E
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import EvaluationSummary
-from metabeta.posthoc.importance import ImportanceSampler
+from metabeta.posthoc.importance import ImportanceSampler, weightsTag
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.metropolis import MetropolisSampler, suggestPoolSize
 from metabeta.posthoc.warmnuts import WarmNuts, _stackProposals, needsEscalation
@@ -355,7 +355,8 @@ def loadOrSampleProposals(
 
 
 def _ablSummaryBase(data_dir: Path, split: str, cond: str, run_name: str, prefix: str, n_s: int):
-    return data_dir / f'summary_{split}_abl_{cond}_{run_name}_{prefix}_s{n_s}'
+    # IS/IMH-derived summaries also key on the weight definition (WEIGHTS_VERSION)
+    return data_dir / f'summary_{split}_abl_{cond}_{run_name}_{prefix}_s{n_s}{weightsTag(cond)}'
 
 
 def loadAblSummary(base: Path, n_ds: int, refs: tuple, refresh: bool):
