@@ -206,6 +206,7 @@ def loadProposals(
         True,
         conv_mask,
         batch_size,
+        device=device,
     )
     return batch, p_ref, p_nuts, idx_full
 

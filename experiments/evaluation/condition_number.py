@@ -266,6 +266,7 @@ def collectSizeRecords(
                 True,
                 conv_mask,
                 batch_size,
+                device=device,
             )
         arrs = _agreementArrays(
             proposal,

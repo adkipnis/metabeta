@@ -925,6 +925,7 @@ class Evaluator:
             self.cfg.rescale,
             None,
             self.cfg.batch_size,
+            device=self.device,
         )
         n = max(full_batch['X'].shape[0], 1)
         proposal.tpd = (base.tpd or 0.0) + refine_seconds / n
