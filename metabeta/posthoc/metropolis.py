@@ -32,8 +32,10 @@ Three modes differ in how rfx (local params) are handled:
       The GLMM analog of 'marginal': rfx are integrated out via the Laplace (nAGQ=1)
       approximation (posthoc/laplace_glmm.py), so the chain operates in the global space;
       after acceptance, fresh rfx are drawn from the Laplace-Gaussian conditional
-      N(b*, H⁻¹). Mirrors the recipe that fixed the huge-Normal regime — added because
-      isLaplace's PSIS guardrail falls back on 13–50% of large/huge GLMM datasets
+      N(b*, H⁻¹) — gathered from the pool pass by the accepted samples' pool indices,
+      since every accepted state is a pool member whose modes/Hessians are already known.
+      Mirrors the recipe that fixed the huge-Normal regime — added because isLaplace's
+      PSIS guardrail falls back on 13–50% of large/huge GLMM datasets
       (2026-07-29 ablation), and rejection-based correction has no fallback mode.
       Targets the same Laplace pseudo-posterior as isLaplace (shares its O(Laplace) bias).
 
@@ -104,7 +106,7 @@ from torch import Tensor
 
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
-from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
+from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler, sampleRfxLaplace
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.families import sampleRfxConditionalNormal
 from metabeta.utils.preprocessing import rescaleData
@@ -220,12 +222,13 @@ class MetropolisSampler:
         log_w: Tensor,  # (b, s)
         sg: Tensor,  # (b, s, D_g)
         sl: Tensor | None,  # (b, m, s, q) — None for marginal mode
-    ) -> tuple[Tensor, Tensor | None, Tensor]:
-        """Run n_chains independent IMH chains, return (sg_out, sl_out, accept_rate).
+    ) -> tuple[Tensor, Tensor | None, Tensor, Tensor]:
+        """Run n_chains independent IMH chains, return (sg_out, sl_out, idx_out, accept_rate).
 
         Outputs:
             sg_out       (b, C*T_post, D_g)
             sl_out       (b, m, C*T_post, q)  or None
+            idx_out      (b, C*T_post)  — pool index (into the s axis) of each kept state
             accept_rate  (b, C)  — fraction of proposals accepted after burnin
         """
         b, s, D_g = sg.shape
@@ -247,11 +250,15 @@ class MetropolisSampler:
         # docstring).
         cur_g = sg_ct[:, :, 0].clone()   # (b, C, D_g)
         cur_lw = lw_ct[:, :, 0].clone()  # (b, C)
+        # pool index of (chain c, step t) is c*T + t — the reshape above is row-major
+        pool_base = (torch.arange(C, device=sg.device) * T).view(1, C).expand(b, C)
+        cur_idx = pool_base.clone()  # (b, C)
         if sl is not None:
             cur_l = sl_ct[:, :, 0].clone()   # (b, C, m, q)
 
         keep_g: list[Tensor] = []
         keep_l: list[Tensor] = []
+        keep_idx: list[Tensor] = []
         keep_acc: list[Tensor] = []
 
         for t in range(1, T):
@@ -262,11 +269,13 @@ class MetropolisSampler:
 
             cur_g = torch.where(accept.unsqueeze(-1), sg_ct[:, :, t], cur_g)
             cur_lw = torch.where(accept, prop_lw, cur_lw)
+            cur_idx = torch.where(accept, pool_base + t, cur_idx)
             if sl is not None:
                 cur_l = torch.where(accept[:, :, None, None], sl_ct[:, :, t], cur_l)
 
             if t >= self.burnin:
                 keep_g.append(cur_g.clone())
+                keep_idx.append(cur_idx.clone())
                 if sl is not None:
                     keep_l.append(cur_l.clone())
                 keep_acc.append(accept.float())
@@ -283,8 +292,9 @@ class MetropolisSampler:
                 .permute(0, 2, 1, 3)  # (b, m, C*T_post, q)
             )
 
+        idx_out = torch.stack(keep_idx, dim=0).permute(1, 2, 0).reshape(b, C * T_post)
         accept_rate = torch.stack(keep_acc, dim=0).mean(0)  # (b, C)
-        return sg_out, sl_out, accept_rate
+        return sg_out, sl_out, idx_out, accept_rate
 
     # ------------------------------------------------------------------
     # Normal-Normal conditional rfx posterior
@@ -326,26 +336,22 @@ class MetropolisSampler:
             L_corr=L_corr,
         )
 
-    def _sampleRfxLaplace(self, sg_out: Tensor, sl_init: Tensor, d_corr: int) -> Tensor:
+    def _sampleRfxLaplace(self, idx_out: Tensor) -> Tensor:
         """Laplace analog of _sampleRfxConditional (mode='laplace').
 
-        Re-runs the delegate's Laplace pass at the accepted globals to refresh its
-        cached modes/Hessians (the pool-pass cache indexes the wrong samples after
-        acceptance), then draws rfx ~ N(b*, H⁻¹) via the delegate's _redrawRfx.
-        ``sl_init`` — the flow rfx that travelled with each accepted global — warm-starts
-        the Newton mode search exactly as in isLaplace (a zero init under-converges the
-        modes within n_newton steps, degrading rfx recovery). Returns (b, m, s_out, q).
+        Every kept chain state is a member of the proposal pool, and the pool pass
+        (_logWeights → LaplaceImportanceSampler.unnormalizedPosterior) already computed its
+        per-group Laplace modes b* and Hessian factors. Gathering them by ``idx_out`` and
+        drawing rfx ~ N(b*, H⁻¹) is therefore exact and avoids a second full Newton pass,
+        which used to cost as much as the pool pass itself. Returns (b, m, s_out, q).
         """
-        b, s_out = sg_out.shape[:2]
-        m = self._X.shape[1]
-        proposed = {
-            'global': {'samples': sg_out, 'log_prob': sg_out.new_zeros(b, s_out)},
-            'local': {'samples': sl_init, 'log_prob': sg_out.new_zeros(b, m, s_out)},
-        }
-        tmp = Proposal(proposed, has_sigma_eps=self.has_sigma_eps, d_corr=d_corr)
-        self._is.unnormalizedPosterior(tmp)
-        self._is._redrawRfx(tmp)
-        return tmp.samples_l
+        modes, chol_H = self._is._modes, self._is._chol_H  # (b, m, s, q), (b, m, s, q, q)
+        b, m, _, q = modes.shape
+        s_out = idx_out.shape[1]
+        gi = idx_out[:, None, :, None].expand(b, m, s_out, q)
+        modes_sel = torch.gather(modes, 2, gi)
+        chol_sel = torch.gather(chol_H, 2, gi.unsqueeze(-1).expand(b, m, s_out, q, q))
+        return sampleRfxLaplace(modes_sel, chol_sel, self._is.mask_m)
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -383,16 +389,16 @@ class MetropolisSampler:
 
         log_w = self._logWeights(proposal)   # (b, s)
 
-        # Run chain — rfx travels with globals for all modes but 'marginal' ('laplace'
-        # uses the travelling flow rfx only as the Newton warm-start of the redraw)
-        sl_in = proposal.samples_l if self.mode != 'marginal' else None
-        sg_out, sl_out, accept_rate = self._runChains(log_w, proposal.samples_g, sl_in)
+        # Run chain — rfx travels with globals only for 'global' and 'joint'; 'marginal'
+        # and 'laplace' redraw rfx from the conditional at the accepted globals
+        sl_in = proposal.samples_l if self.mode in ('global', 'joint') else None
+        sg_out, sl_out, idx_out, accept_rate = self._runChains(log_w, proposal.samples_g, sl_in)
 
         # Attach rfx
         if self.mode == 'marginal':
             sl_out = self._sampleRfxConditional(sg_out, d, q, d_corr)
         elif self.mode == 'laplace':
-            sl_out = self._sampleRfxLaplace(sg_out, sl_out, d_corr)
+            sl_out = self._sampleRfxLaplace(idx_out)
         # 'global' and 'joint': sl_out already set by _runChains
 
         b, s_out = sg_out.shape[0], sg_out.shape[1]

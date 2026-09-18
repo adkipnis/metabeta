@@ -9,8 +9,8 @@ model cannot represent a single dataset of a larger regime, and the cross terms 
 Three things the median speedup alone does not say, and that the tables below report:
 
   1. **The tail.** NUTS wall time is heavy-tailed (worst datasets run 10-25x its median);
-     metabeta's is essentially flat, because its cost tracks the architecture, not the data.
-     Reported as median / p95 / mean over the slowest 5% / max.
+     the raw flow's is essentially flat, because its cost tracks the architecture, not the
+     data.  Reported as median / p95 / mean over the slowest 5% / max.
   2. **The tail is where NUTS also fails.** The slowest 5% of NUTS runs have a far lower
      convergence rate than the bulk, so the reference spends its largest wall-clock budget
      exactly where it returns an unusable posterior.  ``t/converged`` (total wall time divided
@@ -19,24 +19,32 @@ Three things the median speedup alone does not say, and that the tables below re
      The defensible claim is Laplace-class latency at NUTS-class calibration, which the oracle
      and agreement tables support; runtime alone does not.
 
-metabeta is timed along two independent axes, so four MB rows:
+metabeta appears as two rows, both timed per dataset with a batch of one (the latency
+comparable to the per-dataset wall times the fit backends record):
 
-  * **latency vs batched** — a batch of one (comparable to the per-dataset wall times the fit
-    backends record) against sortish batches of --batch_size (the deployment number).
-  * **amortized vs end-to-end** — with the precomputed analytical statistics the batch carries,
-    against recomputing them inline (``live_compute_fits``, the switch train.py uses).  The
-    first is what the architecture costs; the second is what someone holding only raw data
-    pays, and is the row the NUTS/ADVI/Laplace speedups are computed against, since those
-    backends are handed raw data too.  ``--no_e2e`` drops the end-to-end rows.
+  * **MB^0** — the raw flow: one amortized forward pass and ``n_samples`` draws.
+  * **MB** — the default pipeline: the same flow pass followed by the family's default IMH
+    refinement (presets.yaml ``posthoc``; imhMarginal for Normal, imhLaplace for the GLMMs),
+    exactly as the oracle/real benchmarks run it (rescaled space, 4 chains, burn-in 25).  The
+    refinement consumes the flow draws, so both rows come from one pass over each dataset:
+    MB^0 is the flow region, MB the flow region plus the refinement region.  The speedups of
+    the reliability table are against MB — the posterior a user actually gets by default.
 
-All four are cached next to test.fit.npz, keyed by checkpoint/prefix/samples/seed/k/device,
-and invalidated when the data or the checkpoint is newer.
+Not timed here, and deliberately so: batching several datasets through one forward pass, and
+recomputing the analytical MAP/EB statistics that condition the summarizer instead of reading
+the precomputed ones the batch carries.  Both are one-line appendix statements — the fit is
+data-only, so its cost is checkpoint-independent, and the batched cost of the default pipeline
+is what the oracle benchmark's time column reports.
+
+Timings are cached next to test.fit.npz, keyed by checkpoint/prefix/samples/seed/device, and
+invalidated when the data or the checkpoint is newer.  A cached timing is only as good as the
+machine state that produced it: pass ``--refresh_cache`` for a clean campaign.
 
 ADVI rows exclude datasets whose fit failed (``advi_failed``, up to 50/512 for bernoulli);
 their stored durations time a run that produced nothing.
 
 Usage (from repo root):
-    uv run python experiments/evaluation/runtimes.py --family n
+    uv run python experiments/evaluation/runtimes.py --family n --device cuda
     uv run python experiments/evaluation/runtimes.py --family p --sizes small medium
     uv run python experiments/evaluation/runtimes.py --family b --ds_type real --no_plot
     uv run python experiments/evaluation/runtimes.py --family n --max_datasets 8   # smoke test
@@ -47,7 +55,6 @@ import json
 import logging
 import sys
 import time
-from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -57,13 +64,19 @@ from tqdm import tqdm
 
 from metabeta.models.approximator import Approximator
 from metabeta.plotting.runtimes import plotRuntimeRecords
-from metabeta.utils.dataloader import Collection, SortishBatchSampler, collateGrouped, toDevice
-from metabeta.utils.device import setDevice
+from metabeta.utils.dataloader import Collection, collateGrouped, toDevice
+from metabeta.utils.device import setDevice, synchronizeDevice
 from metabeta.utils.evaluation import nutsConvergeMask
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, REPO_ROOT
 from metabeta.utils.logger import setupLogging
-from metabeta.utils.moe import moeEstimate
-from metabeta.utils.posterior_eval import loadModel
+from metabeta.utils.posterior_eval import (
+    IMH_METHODS,
+    loadModel,
+    posthocDefaults,
+    refineProposal,
+    validMethods,
+)
+from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.warmfit import nParams
 
@@ -79,26 +92,13 @@ FAMILY_NAMES = {'n': 'normal', 'b': 'bernoulli', 'p': 'poisson'}
 DEFAULT_SIZES = ['small', 'medium', 'large', 'huge']
 
 # metabeta first, then the reference methods from cheap to expensive.
-#
-# MB is timed in two variants because they answer different questions.  With precomputed
-# analytical statistics the timed region is amortized inference alone, which is what the
-# architecture costs.  End-to-end additionally runs the MAP+EB fit that Approximator.summarize
-# would otherwise have to perform, which is what someone holding only raw data actually pays —
-# and it is the variant comparable to NUTS/ADVI/Laplace, since those are handed raw data too.
-MB_LATENCY = 'MB'
-MB_BATCHED = 'MB_batched'
-MB_E2E = 'MB_e2e'
-MB_E2E_BATCHED = 'MB_e2e_batched'
-MB_METHODS = [MB_LATENCY, MB_BATCHED, MB_E2E, MB_E2E_BATCHED]
+MB_FLOW = 'MB0'  # raw flow posterior (the paper's MB^0)
+MB_DEFAULT = 'MB'  # flow + default IMH refinement (the paper's MB)
+MB_METHODS = [MB_FLOW, MB_DEFAULT]
 FIT_METHODS = ['LAPLACE', 'ADVI', 'NUTS']
 METHOD_ORDER = MB_METHODS + FIT_METHODS
-METHOD_LABELS = {
-    MB_LATENCY: 'MB',
-    MB_BATCHED: 'MB (batched)',
-    MB_E2E: 'MB (+MAP fit)',
-    MB_E2E_BATCHED: 'MB (+MAP fit, batched)',
-    'LAPLACE': 'Laplace',
-}
+METHOD_LABELS = {MB_FLOW: 'MB^0', MB_DEFAULT: 'MB', 'LAPLACE': 'Laplace'}
+TEX_LABELS = {MB_FLOW: r'\MBz{}', MB_DEFAULT: r'\texttt{MB}', 'LAPLACE': r'\texttt{Laplace}'}
 
 # fraction of the slowest runs summarised separately; 5% of 512 datasets is 26 datasets,
 # enough for a stable mean and small enough to still be a tail
@@ -232,22 +232,6 @@ def modelCollection(fit_path: Path, max_d: int, max_q: int) -> Collection:
 # metabeta timing
 
 
-@contextmanager
-def liveStats(model: Approximator, live: bool):
-    """Force ``Approximator.summarize`` to recompute the analytical fit instead of reading it.
-
-    The same switch ``train.py`` sets from ``--live_compute``.  Toggling it lets both MB
-    variants be timed off one stats-carrying batch, so the difference between them is the MAP
-    fit alone and not a different input file.
-    """
-    previous = getattr(model, 'live_compute_fits', False)
-    model.live_compute_fits = live
-    try:
-        yield
-    finally:
-        model.live_compute_fits = previous
-
-
 def resetRng(model: Approximator, seed: int) -> None:
     """Reset base-distribution RNGs so repeated runs draw identical samples."""
     posteriors = [model.posterior_g]
@@ -259,31 +243,64 @@ def resetRng(model: Approximator, seed: int) -> None:
             base.base.rng = np.random.default_rng(seed)  # type: ignore[union-attr]
 
 
+def pipelineOnce(
+    model: Approximator,
+    batch: dict[str, torch.Tensor],
+    n_samples: int,
+    method: str | None,
+    lf: int,
+    device: torch.device,
+    rescale: bool,
+) -> tuple[float, float]:
+    """Run the flow and (optionally) its refinement on one device-resident batch of one.
+
+    Returns ``(flow_seconds, refine_seconds)``, each bracketed by a device synchronisation.
+    The refinement region is the whole post-flow pipeline of the oracle benchmark: rescaling
+    the proposal and the data, the IMH chains on ``device`` and the copy of the refined draws
+    back to the host (``refineProposal`` returns on the CPU).
+    """
+    synchronizeDevice(device)
+    t0 = time.perf_counter()
+    proposal = model.estimate(batch, n_samples=n_samples)
+    synchronizeDevice(device)
+    t_flow = time.perf_counter() - t0
+    if method is None:
+        return t_flow, float('nan')
+
+    t1 = time.perf_counter()
+    if rescale:
+        proposal.rescale(batch['sd_y'])
+        batch = rescaleData(batch)
+    refined = refineProposal(method, proposal, batch, lf, batch['X'].shape[0], device=device)
+    synchronizeDevice(device)
+    t_refine = time.perf_counter() - t1
+    del proposal, refined
+    return t_flow, t_refine
+
+
 def warmup(
     model: Approximator,
     batch: dict[str, torch.Tensor],
-    k: int,
+    n_samples: int,
+    method: str | None,
+    lf: int,
     device: torch.device,
     seed: int,
+    rescale: bool,
 ) -> None:
-    """Untimed one-sample pass absorbing one-time init before any timing begins.
+    """Untimed pass through the full pipeline, absorbing one-time init before any timing.
 
-    Mirrors ``posterior_eval._warmupModel`` and ``evaluate.py._warmupMbBatch``: a single draw
-    is enough to pay for lazy allocation, kernel autotuning and the first analytical MAP fit,
-    and going through ``moeEstimate`` when k > 0 warms the MoE path the timed loop will use.
-    The CPU/CUDA RNG state is restored afterwards so the warm-up cannot shift the draws that
-    follow it.
+    Mirrors ``posterior_eval._warmupModel`` and ``evaluate.py._warmupMbBatch`` for the flow,
+    and additionally runs the refinement once so its first Cholesky/einsum kernels and lazy
+    allocations do not land in the first timed dataset.  Uses the full ``n_samples`` because
+    IMH needs a pool larger than chains x burn-in.  The CPU/CUDA RNG state is restored
+    afterwards so the warm-up cannot shift the draws that follow it.
     """
     cpu_rng = torch.random.get_rng_state()
     cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
-    synchronize(device)
     try:
         resetRng(model, seed)
-        if k > 0:
-            moeEstimate(model, batch, 1, k, rng=np.random.default_rng(0))
-        else:
-            model.estimate(batch, n_samples=1)
-        synchronize(device)
+        pipelineOnce(model, batch, n_samples, method, lf, device, rescale)
     finally:
         torch.random.set_rng_state(cpu_rng)
         if cuda_rng is not None:
@@ -296,101 +313,34 @@ def timeLatency(
     col: Collection,
     idxs: list[int],
     n_samples: int,
-    k: int,
+    method: str | None,
+    lf: int,
     device: torch.device,
     seed: int,
-    live: bool = False,
-) -> np.ndarray:
-    """Per-dataset wall time with a batch of one — the latency comparable to the fit backends.
+    rescale: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-dataset (flow, refinement) wall times with a batch of one.
 
     ``no_grad`` rather than ``inference_mode``: the analytical MAP fit inside the model runs
     ``loss.backward()`` under ``torch.enable_grad()``, which inference mode forbids.
     """
-    durations = np.zeros(len(idxs))
+    flow = np.zeros(len(idxs))
+    refine = np.full(len(idxs), np.nan)
 
-    label = 'MB (latency, +MAP fit)' if live else 'MB (latency)'
-    with liveStats(model, live):
-        warm_batch = toDevice(collateGrouped([col[idxs[0]]]), device)
-        warmup(model, warm_batch, k, device, seed)
-        del warm_batch
+    warm_batch = toDevice(collateGrouped([col[idxs[0]]]), device)
+    warmup(model, warm_batch, n_samples, method, lf, device, seed, rescale)
+    del warm_batch
 
-        for i, idx in enumerate(tqdm(idxs, desc=f'  {label}', leave=False)):
-            batch = toDevice(collateGrouped([col[idx]]), device)
-            setSeed(seed)
-            resetRng(model, seed)
-            rng = np.random.default_rng(seed + idx)
-            synchronize(device)
-            t0 = time.perf_counter()
-            proposal = moeEstimate(model, batch, n_samples, k, rng=rng)
-            synchronize(device)
-            durations[i] = time.perf_counter() - t0
-            del proposal, batch
-    return durations
-
-
-@torch.no_grad()
-def timeThroughput(
-    model: Approximator,
-    col: Collection,
-    idxs: list[int],
-    n_samples: int,
-    batch_size: int,
-    device: torch.device,
-    seed: int,
-    live: bool = False,
-) -> np.ndarray:
-    """Amortized per-dataset wall time in sortish batches — the deployment number.
-
-    Batches are formed by the same sortish sampler the dataloader uses, so datasets of similar
-    (m, n) travel together and padding does not inflate the cost of the small ones.  The chunk
-    time is divided evenly over its datasets, mirroring ``posterior_eval.sampleMB``.
-    """
-    order = list(idxs)
-    if batch_size < len(order):
-        sampler = SortishBatchSampler(
-            m_i=col.m_i[order],
-            n_i_max=col.n_i_max[order],
-            batch_size=batch_size,
-            shuffle=False,
-            seed=seed,
-        )
-        chunks = [[order[j] for j in chunk] for chunk in sampler]
-    else:
-        chunks = [order]
-
-    durations = np.zeros(len(order))
-    position = {idx: i for i, idx in enumerate(order)}
-    label = 'MB (batched, +MAP fit)' if live else 'MB (batched)'
-    with liveStats(model, live):
-        # k is not threaded through here: batched throughput is the deployment number and the
-        # MoE path runs one dataset at a time, so this path warms the plain batched estimate
-        warm_batch = toDevice(collateGrouped([col[i] for i in chunks[0]]), device)
-        warmup(model, warm_batch, 0, device, seed)
-        del warm_batch
-
-        for chunk in tqdm(chunks, desc=f'  {label}', leave=False):
-            batch = toDevice(collateGrouped([col[i] for i in chunk]), device)
-            setSeed(seed)
-            resetRng(model, seed)
-            synchronize(device)
-            t0 = time.perf_counter()
-            proposal = model.estimate(batch, n_samples=n_samples)
-            synchronize(device)
-            per_dataset = (time.perf_counter() - t0) / len(chunk)
-            for idx in chunk:
-                durations[position[idx]] = per_dataset
-            del proposal, batch
-            if device.type == 'cuda':
-                torch.cuda.empty_cache()
-    return durations
-
-
-def synchronize(device: torch.device) -> None:
-    """Block until queued device work finishes (no-op on CPU) so timings are accurate."""
-    if device.type == 'cuda' and torch.cuda.is_available():
-        torch.cuda.synchronize(device)
-    elif device.type == 'mps' and hasattr(torch, 'mps'):
-        torch.mps.synchronize()
+    label = f'MB^0 + {method}' if method else 'MB^0'
+    for i, idx in enumerate(tqdm(idxs, desc=f'  {label}', leave=False)):
+        batch = toDevice(collateGrouped([col[idx]]), device)
+        setSeed(seed)
+        resetRng(model, seed)
+        flow[i], refine[i] = pipelineOnce(model, batch, n_samples, method, lf, device, rescale)
+        del batch
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+    return flow, refine
 
 
 # ---------------------------------------------------------------------------
@@ -403,11 +353,10 @@ def cachePath(
     prefix: str,
     n_samples: int,
     seed: int,
-    k: int,
     device: torch.device,
 ) -> Path:
     return data_path.parent / (
-        f'runtimes.{ckpt_dir.name}_{prefix}_s{n_samples}_seed{seed}_k{k}_{device.type}.json'
+        f'runtimes.{ckpt_dir.name}_{prefix}_s{n_samples}_seed{seed}_{device.type}.json'
     )
 
 
@@ -433,38 +382,60 @@ def saveCache(path: Path, cache: dict[str, float]) -> None:
     tmp.replace(path)
 
 
-def cachedTimings(
+def cachedLatencies(
     cache: dict[str, float],
-    tag: str,
+    tags: tuple[str, str | None],
     idxs: list[int],
     compute,
-) -> np.ndarray:
-    """Return per-dataset timings for ``idxs``, computing only the ones not already cached.
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-dataset (flow, refinement) timings for ``idxs``, computing only the uncached ones.
 
-    ``compute`` is called with the missing indices only.  The batched path is an exception it
-    handles itself: its per-dataset value depends on the batch its dataset lands in, so a
-    partial recompute would mix batch compositions — the caller passes all-or-nothing there.
+    ``tags`` are the cache tags of the two regions (the refinement tag is None when no
+    refinement runs).  A dataset is recomputed when either of its regions is missing, since
+    the two come from one pass and the refinement consumes the flow draws.
     """
-    keys = [f'{tag}:{idx}' for idx in idxs]
-    out = np.full(len(idxs), np.nan)
+    flow_tag, refine_tag = tags
+    needed = [flow_tag] + ([refine_tag] if refine_tag else [])
+    flow = np.full(len(idxs), np.nan)
+    refine = np.full(len(idxs), np.nan)
     missing = []
-    for i, key in enumerate(keys):
-        if key in cache:
-            out[i] = cache[key]
+    for i, idx in enumerate(idxs):
+        if all(f'{tag}:{idx}' in cache for tag in needed):
+            flow[i] = cache[f'{flow_tag}:{idx}']
+            if refine_tag:
+                refine[i] = cache[f'{refine_tag}:{idx}']
         else:
             missing.append(i)
     if missing:
-        values = compute([idxs[i] for i in missing])
-        for i, value in zip(missing, values):
-            out[i] = value
-            cache[keys[i]] = float(value)
+        flow_new, refine_new = compute([idxs[i] for i in missing])
+        for i, f_val, r_val in zip(missing, flow_new, refine_new):
+            flow[i] = f_val
+            cache[f'{flow_tag}:{idxs[i]}'] = float(f_val)
+            if refine_tag:
+                refine[i] = r_val
+                cache[f'{refine_tag}:{idxs[i]}'] = float(r_val)
     elif len(idxs):
-        logger.info('%s: all %d timings cached', tag, len(idxs))
-    return out
+        logger.info('%s: all %d timings cached', ' + '.join(needed), len(idxs))
+    return flow, refine
 
 
 # ---------------------------------------------------------------------------
 # Per-cell collection
+
+
+def refinementMethod(cfg: argparse.Namespace, lf: int, data_id: str) -> str | None:
+    """The IMH method timed for the MB row: ``--method`` or the family default (presets.yaml)."""
+    requested = [cfg.method] if cfg.method else posthocDefaults(lf)
+    valid = validMethods(requested, lf)
+    if not valid:
+        logger.warning(
+            '%s: no valid refinement method for lf=%d (requested %s) — MB row skipped',
+            data_id,
+            lf,
+            requested or '(none)',
+        )
+        return None
+    return valid[0]
 
 
 def collectCell(
@@ -494,65 +465,48 @@ def collectCell(
         # regimes are matched by construction; a mismatch means the checkpoint map is wrong
         logger.warning('%s: checkpoint does not cover this regime (%s) — skipping', data_id, exc)
         return None
+    lf = int(model_cfg.likelihood_family)
+    method = refinementMethod(cfg, lf, data_id)
 
     B = len(col)
     idxs = list(range(min(B, cfg.max_datasets))) if cfg.max_datasets else list(range(B))
     durations, masks, conv = loadReferences(data_path)
     logger.info(
-        '%s: %d datasets (%d timed), %d NUTS-converged, d<=%d q<=%d',
+        '%s: %d datasets (%d timed), %d NUTS-converged, d<=%d q<=%d, refinement %s',
         data_id,
         B,
         len(idxs),
         int(conv[idxs].sum()),
         model_cfg.max_d,
         model_cfg.max_q,
+        method or '(none)',
     )
+    if not col.has_stats:
+        logger.warning(
+            '%s: no precomputed stats — the MB^0 region includes the analytical MAP fit',
+            data_id,
+        )
 
-    cache_path = cachePath(data_path, ckpt_dir, cfg.prefix, cfg.n_samples, cfg.seed, cfg.k, device)
+    cache_path = cachePath(data_path, ckpt_dir, cfg.prefix, cfg.n_samples, cfg.seed, device)
     # a cached timing is only as good as the machine state that produced it, and nothing in the
     # key records that state — a contended node bakes its numbers in until asked to retime
     cache = {} if cfg.refresh_cache else loadCache(cache_path, data_path, ckpt_dir, cfg.prefix)
 
-    # end-to-end needs the analytical fit recomputed, which is only meaningful when the batch
-    # would otherwise have supplied it; without stats the two variants measure the same thing
-    variants = [(MB_LATENCY, False)]
-    if col.has_stats and not cfg.no_e2e:
-        variants.append((MB_E2E, True))
-    elif not cfg.no_e2e:
-        logger.warning(
-            '%s: no precomputed stats available, so MB already includes the MAP fit — '
-            'reporting the amortized-only row is not possible here',
-            data_id,
-        )
-
-    timings: dict[str, np.ndarray] = {}
-    for method, live in variants:
-        suffix = '_e2e' if live else ''
-        timings[method] = cachedTimings(
-            cache,
-            f'latency{suffix}',
-            idxs,
-            lambda missing, live=live: timeLatency(
-                model, col, missing, cfg.n_samples, cfg.k, device, cfg.seed, live=live
-            ),
-        )
-        if cfg.batch_size <= 1:
-            continue
-        batched_method = MB_E2E_BATCHED if live else MB_BATCHED
-        tag = f'batched{cfg.batch_size}{suffix}'
-        # all-or-nothing: a per-dataset batched time is only meaningful together with the
-        # batch composition that produced it, so a partial refill would mix regimes
-        if all(f'{tag}:{idx}' in cache for idx in idxs):
-            timings[batched_method] = np.array([cache[f'{tag}:{idx}'] for idx in idxs])
-            logger.info('%s: all %d timings cached', tag, len(idxs))
-        else:
-            values = timeThroughput(
-                model, col, idxs, cfg.n_samples, cfg.batch_size, device, cfg.seed, live=live
-            )
-            for idx, value in zip(idxs, values):
-                cache[f'{tag}:{idx}'] = float(value)
-            timings[batched_method] = values
+    rs = 'rs1' if cfg.rescale else 'rs0'
+    tags = ('flow', f'refine_{method}_{rs}' if method else None)
+    flow, refine = cachedLatencies(
+        cache,
+        tags,
+        idxs,
+        lambda missing: timeLatency(
+            model, col, missing, cfg.n_samples, method, lf, device, cfg.seed, cfg.rescale
+        ),
+    )
     saveCache(cache_path, cache)
+
+    timings: dict[str, np.ndarray] = {MB_FLOW: flow}
+    if method is not None:
+        timings[MB_DEFAULT] = flow + refine
 
     records = []
     for i, idx in enumerate(idxs):
@@ -567,25 +521,25 @@ def collectCell(
             'n_params': nParams(ds['d'], ds['q'], ds['m']),
             'nuts_converged': bool(conv[idx]),
             # the settings that make a wall time what it is: without them a records file
-            # cannot be told apart from one measured on other hardware or another batch size
+            # cannot be told apart from one measured on other hardware or with another head
             'device': device.type,
             'ds_type': cfg.ds_type,
             'prefix': cfg.prefix,
             'n_samples': cfg.n_samples,
-            'k': cfg.k,
-            'batch_size': cfg.batch_size,
-            # False means the timed region also ran the analytical MAP fit
+            'refine_method': method,
+            'rescale': bool(cfg.rescale),
+            # False means the MB^0 region also ran the analytical MAP fit
             'precomputed_stats': bool(col.has_stats),
         }
         per_method = [(m, values[i]) for m, values in timings.items()]
-        for method in FIT_METHODS:
-            if method not in durations:
+        for fit_method in FIT_METHODS:
+            if fit_method not in durations:
                 continue
-            if not masks[method][idx]:
+            if not masks[fit_method][idx]:
                 continue  # failed fit: its duration times a run that produced nothing
-            per_method.append((method, durations[method][idx]))
-        for method, duration in per_method:
-            records.append({**base, 'method': method, 'duration': float(duration)})
+            per_method.append((fit_method, durations[fit_method][idx]))
+        for method_name, duration in per_method:
+            records.append({**base, 'method': method_name, 'duration': float(duration)})
     return records
 
 
@@ -623,7 +577,7 @@ def cellRows(records: list[dict]) -> list[dict]:
             rows.append(
                 {
                     'size': size,
-                    'method': METHOD_LABELS.get(method, method),
+                    'method': method,
                     'first': j == 0,
                     'n': len(durations),
                     **tailStats(durations),
@@ -639,8 +593,9 @@ def reliabilityRows(records: list[dict]) -> list[dict]:
     of a *usable* posterior rather than of a run.  metabeta has no analogue because it does not
     fail, so its own median doubles as its cost per usable posterior.
 
-    Speedups use the end-to-end MB row when it exists: NUTS is handed raw data, so pricing MB
-    against its amortized-only row would credit it with statistics it was given for free.
+    Speedups are against the default pipeline (MB: flow + IMH) when it was timed, since that is
+    the posterior a user gets by default; pricing NUTS against the raw flow alone would flatter
+    the comparison.  Falls back to MB^0 only when no refinement ran.
     """
     rows = []
     for size in [s for s in DEFAULT_SIZES if any(r['size'] == s for r in records)]:
@@ -652,14 +607,14 @@ def reliabilityRows(records: list[dict]) -> list[dict]:
         n_tail = max(1, int(round(TAIL_FRAC * len(durations))))
         slowest = np.argsort(durations)[-n_tail:]
         sized = [r for r in records if r['size'] == size]
-        baseline = MB_E2E if any(r['method'] == MB_E2E for r in sized) else MB_LATENCY
+        baseline = MB_DEFAULT if any(r['method'] == MB_DEFAULT for r in sized) else MB_FLOW
         mb = np.array([r['duration'] for r in sized if r['method'] == baseline])
         stats = tailStats(durations)
         rows.append(
             {
                 'size': size,
                 'n': len(durations),
-                'baseline': METHOD_LABELS.get(baseline, baseline),
+                'baseline': baseline,
                 'pct_conv': 100.0 * conv.mean(),
                 'pct_conv_tail': 100.0 * conv[slowest].mean(),
                 't_per_conv': stats['total'] / max(int(conv.sum()), 1),
@@ -696,13 +651,21 @@ def _fmt(value: float, dp: int = 3) -> str:
     return f'{value:.{dp}f}'
 
 
+def _mdLabel(method: str) -> str:
+    return METHOD_LABELS.get(method, method)
+
+
+def _texLabel(method: str) -> str:
+    return TEX_LABELS.get(method, rf'\texttt{{{method}}}')
+
+
 def renderDistMd(rows: list[dict], dp: int = 3) -> str:
     headers = ['size', 'method', 'n'] + [h for _, h in DIST_COLS]
     md = []
     for r in rows:
         # n is per row, not per size: ADVI drops the datasets whose fit failed
         size = r['size'] if r['first'] else ''
-        md.append([size, r['method'], r['n']] + [_fmt(r[k], dp) for k, _ in DIST_COLS])
+        md.append([size, _mdLabel(r['method']), r['n']] + [_fmt(r[k], dp) for k, _ in DIST_COLS])
     return tabulate(md, headers=headers, tablefmt='pipe', stralign='right')
 
 
@@ -717,7 +680,7 @@ def renderDistTex(rows: list[dict], dp: int = 3) -> str:
             lines.append(r'    \midrule')
         size = rf"\texttt{{{r['size']}}}" if r['first'] else ''
         cells = ' & '.join(f'${_fmt(r[k], dp)}$' for k, _ in DIST_COLS)
-        lines.append(rf"    {size} & \texttt{{{r['method']}}} & {r['n']} & {cells} \\")
+        lines.append(rf"    {size} & {_texLabel(r['method'])} & {r['n']} & {cells} \\")
     lines += [r'    \bottomrule', r'\end{tabular}', '']
     return '\n'.join(lines)
 
@@ -741,7 +704,7 @@ def renderReliabilityMd(rows: list[dict]) -> str:
         for key, _ in RELIABILITY_COLS:
             value = r[key]
             if key == 'baseline':
-                cells.append(value)
+                cells.append(_mdLabel(value))
             elif key.startswith('pct'):
                 cells.append(f'{value:.0f}')
             elif key.startswith('speedup'):
@@ -776,23 +739,19 @@ def renderReliabilityTex(rows: list[dict]) -> str:
 def outputStem(cfg: argparse.Namespace, device: torch.device) -> str:
     """Output stem carrying every setting a wall time depends on.
 
-    Runtime tables are not interchangeable across hardware or batch size, so the device and the
-    sampling settings belong in the filename: a bare ``runtimes_{family}`` silently replaces a
-    CPU campaign with a CUDA one, and the difference is then unrecoverable from the file.
-    Follows the ``_s{n_samples}_k{k}`` convention of the posterior-sample cache names.
+    Runtime tables are not interchangeable across hardware, so the device and the sampling
+    settings belong in the filename: a bare ``runtimes_{family}`` silently replaces a CPU
+    campaign with a CUDA one, and the difference is then unrecoverable from the file.
     """
     if cfg.tag:
         return cfg.tag
-    return (
-        f'runtimes_{cfg.family}_{cfg.ds_type}_{device.type}'
-        f'_s{cfg.n_samples}_k{cfg.k}_b{cfg.batch_size}'
-    )
+    return f'runtimes_{cfg.family}_{cfg.ds_type}_{device.type}_s{cfg.n_samples}'
 
 
 def setup() -> argparse.Namespace:
     # fmt: off
     parser = argparse.ArgumentParser(
-        description='Runtime comparison: metabeta vs NUTS, ADVI and Laplace, per size regime.',
+        description='Runtime comparison: metabeta (raw flow and flow + IMH) vs NUTS, ADVI and Laplace, per size regime.',
     )
     parser.add_argument('--family', type=str, default='n', choices=list(FAMILY_NAMES))
     parser.add_argument('--sizes', type=str, nargs='+', default=DEFAULT_SIZES, choices=DEFAULT_SIZES)
@@ -800,12 +759,11 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--prefix', type=str, default='latest')
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--n_samples', type=int, default=None, help='posterior draws (default: match the NUTS draw count in the fit file)')
-    parser.add_argument('--batch_size', type=int, default=8, help='batched-throughput batch size (1 disables the batched row)')
-    parser.add_argument('--k', type=int, default=0, help='extra pseudo-MoE permuted views (0 = off)')
+    parser.add_argument('--method', type=str, default=None, choices=list(IMH_METHODS), help='IMH refinement for the MB row (default: the family preset in presets.yaml)')
+    parser.add_argument('--rescale', action=argparse.BooleanOptionalAction, default=True, help='refine in the rescaled space, as the oracle/real benchmarks do')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--max_datasets', type=int, default=None, help='cap datasets per size (smoke tests)')
     parser.add_argument('--refresh_cache', action='store_true', help='retime MB even if cached (use after a contended run)')
-    parser.add_argument('--no_e2e', action='store_true', help='skip the end-to-end rows that include the analytical MAP fit')
     parser.add_argument('--outdir', type=str, default=str(OUT_DIR))
     parser.add_argument('--tag', type=str, default=None, help='override the output stem (default: family + settings)')
     parser.add_argument('--decimals', type=int, default=3)
@@ -837,6 +795,7 @@ def main() -> None:
         return
 
     sizes = [s for s in DEFAULT_SIZES if any(r['size'] == s for r in records)]
+    methods = sorted({r['refine_method'] for r in records if r['refine_method']})
     rows_dist = cellRows(records)
     dist_md = renderDistMd(rows_dist, dp=cfg.decimals)
     print('\n=== Runtime distribution per regime ===\n')
@@ -850,13 +809,13 @@ def main() -> None:
     md = [
         f'# Runtimes ({FAMILY_NAMES[family]})\n',
         f'Sizes: {", ".join(sizes)} ({cfg.ds_type} test sets), each on its regime-matched '
-        f'checkpoint. metabeta: {cfg.n_samples} draws, k={cfg.k}, {device.type}. Latency is a '
-        f'batch of one; batched is sortish batches of {cfg.batch_size}. ADVI excludes failed '
-        'fits.\n',
+        f'checkpoint. metabeta: {cfg.n_samples} draws, {device.type}, one dataset per forward '
+        f'pass (latency). MB^0 is the raw flow; MB adds the default IMH refinement '
+        f'({", ".join(methods) or "none"}) on the same draws. ADVI excludes failed fits.\n',
         '## Runtime distribution per regime\n',
         'Wall time per dataset. NUTS/ADVI/Laplace times are those recorded at fit time; '
-        'metabeta is timed here. The tail columns are the point: metabeta is flat because its '
-        'cost tracks the architecture, the samplers are not.\n',
+        'metabeta is timed here. The tail columns are the point: the raw flow is flat because '
+        'its cost tracks the architecture; the samplers are not.\n',
         dist_md,
         '',
         '## NUTS tail vs reliability\n',
@@ -864,7 +823,7 @@ def main() -> None:
         'convergence rate *within* the slowest 5% of NUTS runs: the reference spends its '
         'largest wall-clock budget where it is least likely to return a usable posterior. '
         '`t/conv` is total NUTS wall time per converged dataset, and the speedups are against '
-        'metabeta median latency.\n',
+        'the median latency of the MB row named in `MB row`.\n',
         rel_md,
         '',
     ]

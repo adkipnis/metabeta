@@ -13,6 +13,7 @@ def _evaluator(**cfg_kwargs) -> Evaluator:
     evaluator = Evaluator.__new__(Evaluator)
     evaluator.cfg = argparse.Namespace(**cfg_kwargs)
     evaluator._imh_method_cache = None
+    evaluator.device = torch.device('cpu')  # refinement runs on the evaluator's device
     return evaluator
 
 
