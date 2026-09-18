@@ -363,7 +363,7 @@ def computeRankMAD(
 # Row assembly
 
 
-def _ms(arr: np.ndarray | None) -> tuple[float, float] | None:
+def _medianMad(arr: np.ndarray | None) -> tuple[float, float] | None:
     """Median and unscaled median absolute deviation, NaNs ignored."""
     if arr is None:
         return None
@@ -375,6 +375,22 @@ def _ms(arr: np.ndarray | None) -> tuple[float, float] | None:
     return (median, mad)
 
 
+def _meanStd(arr: np.ndarray | None) -> tuple[float, float] | None:
+    """Mean and Bessel-corrected std, NaNs ignored."""
+    if arr is None:
+        return None
+    a = arr[~np.isnan(arr)]
+    if len(a) == 0:
+        return (float('nan'), float('nan'))
+    return (float(np.mean(a)), float(np.std(a, ddof=1)) if len(a) > 1 else 0.0)
+
+
+# Statistic name -> function. All metrics here are one value per dataset with heavy tails,
+# so the primary (paper) statistic is median ± MAD; mean ± std is written alongside.
+STATS = {'median ± MAD': _medianMad, 'mean ± std': _meanStd}
+PRIMARY_STAT = 'median ± MAD'
+
+
 def _buildRow(
     label: str,
     r: np.ndarray,
@@ -383,14 +399,18 @@ def _buildRow(
     delta_nll: np.ndarray,
     delta_tpd: np.ndarray | None,
 ) -> dict:
-    return {
-        'method': label,
-        'r': _ms(r),
-        'sigma_ratio': _ms(sigma_ratio),
-        'rank_mad': _ms(rank_mad),
-        'delta_nll': _ms(delta_nll),
-        'delta_tpd': _ms(delta_tpd),
+    values = {
+        'r': r,
+        'sigma_ratio': sigma_ratio,
+        'rank_mad': rank_mad,
+        'delta_nll': delta_nll,
+        'delta_tpd': delta_tpd,
     }
+    row: dict = {'method': label, 'stats': {}}
+    for name, fn in STATS.items():
+        row['stats'][name] = {k: fn(v) for k, v in values.items()}
+    row.update(row['stats'][PRIMARY_STAT])
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -550,6 +570,7 @@ def evaluateReal(
             rescale,
             conv_mask,
             batch_size,
+            device=device,
         )
         summary_ref = loadOrComputeSummary(
             p_ref,
@@ -670,44 +691,55 @@ def saveTables(
     fmt_md = lambda v: _fmtMd(v, dp)
     fmt_tex = lambda v: _fmtTex(v, dp)
 
-    # --- Markdown ---
-    md_rows = []
-    for regime, rows in rows_by_regime.items():
-        for r in rows:
-            md_rows.append([regime, r['method']] + [fmt_md(r[m]) for m in METRICS])
-    md_table = tabulate(
-        md_rows,
-        headers=['regime', 'method'] + HEADERS_MD[1:],
-        tablefmt='pipe',
-        stralign='right',
-    )
+    def cell(row: dict, metric: str, stat: str):
+        return row['stats'][stat][metric] if 'stats' in row else row[metric]
+
+    # --- Markdown: one table per statistic, primary first, in a single file ---
+    md_parts = [f'# Real-data evaluation: {stem}']
+    for stat in STATS:
+        md_rows = []
+        for regime, rows in rows_by_regime.items():
+            for r in rows:
+                md_rows.append([regime, r['method']] + [fmt_md(cell(r, m, stat)) for m in METRICS])
+        md_table = tabulate(
+            md_rows,
+            headers=['regime', 'method'] + HEADERS_MD[1:],
+            tablefmt='pipe',
+            stralign='right',
+        )
+        md_parts.append(f'## {stat} over datasets\n\n{md_table}')
     md_path = outdir / f'real_{stem}.md'
-    md_path.write_text(f'# Real-data evaluation: {stem}\n\n{md_table}\n')
+    md_path.write_text('\n\n'.join(md_parts) + '\n')
     logger.info('Saved Markdown → %s', md_path)
 
-    # --- LaTeX ---
+    # --- LaTeX: the primary statistic under the plain name (what the paper inputs), the
+    # other as a separate file so an \input never pulls in two tabulars ---
     header_cols = ' & '.join(HEADERS_TEX)
-    lines: list[str] = [
-        r'\begin{tabular}{cc|ccccc}',
-        r'    \toprule',
-        rf'    $\mathrm{{regime}}$ & {header_cols} \\',
-        r'    \midrule',
-    ]
-    first = True
-    for regime, rows in rows_by_regime.items():
-        if not first:
-            lines.append(r'    \midrule')
-        first = False
-        for j, row in enumerate(rows):
-            regime_cell = rf'\texttt{{{regime}}}' if j == 0 else ''
-            cells = ' & '.join(
-                [rf'\texttt{{{row["method"]}}}'] + [fmt_tex(row[m]) for m in METRICS]
-            )
-            lines.append(rf'      {regime_cell} & {cells} \\')
-    lines += [r'    \bottomrule', r'\end{tabular}', '']
-    tex_path = outdir / f'real_{stem}.tex'
-    tex_path.write_text('\n'.join(lines))
-    logger.info('Saved LaTeX → %s', tex_path)
+    for stat in STATS:
+        lines: list[str] = [
+            rf'% entries: {stat} over datasets',
+            r'\begin{tabular}{cc|ccccc}',
+            r'    \toprule',
+            rf'    $\mathrm{{regime}}$ & {header_cols} \\',
+            r'    \midrule',
+        ]
+        first = True
+        for regime, rows in rows_by_regime.items():
+            if not first:
+                lines.append(r'    \midrule')
+            first = False
+            for j, row in enumerate(rows):
+                regime_cell = rf'\texttt{{{regime}}}' if j == 0 else ''
+                cells = ' & '.join(
+                    [rf'\texttt{{{row["method"]}}}']
+                    + [fmt_tex(cell(row, m, stat)) for m in METRICS]
+                )
+                lines.append(rf'      {regime_cell} & {cells} \\')
+        lines += [r'    \bottomrule', r'\end{tabular}', '']
+        suffix = '' if stat == PRIMARY_STAT else '_' + stat.split(' ')[0] + stat.split(' ')[-1]
+        tex_path = outdir / f'real_{stem}{suffix}.tex'
+        tex_path.write_text('\n'.join(lines))
+        logger.info('Saved LaTeX → %s', tex_path)
 
 
 # ---------------------------------------------------------------------------

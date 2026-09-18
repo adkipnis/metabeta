@@ -402,12 +402,21 @@ def _refineChunk(
     raise ValueError(f'unknown refinement method: {method}')
 
 
+# Largest (datasets × groups × observations × proposals) tensor a refinement chunk may
+# materialise: 2^28 float32 elements = 1 GiB. The Laplace pass keeps ~8 such tensors alive,
+# so this bounds its peak near 10 GB; the guard rarely triggers (chunks whose padded group
+# count and observation count are both large) and only reduces the dataset sub-batch.
+REFINE_MAX_ELEMENTS = 2**28
+
+
 def refineProposal(
     method: str,
     base: Proposal,
     batch: dict[str, torch.Tensor],
     lf: int,
     batch_size: int,
+    device: torch.device | str = 'cpu',
+    max_elements: int = REFINE_MAX_ELEMENTS,
 ) -> Proposal:
     """Refine the (rescaled) MB proposal ``base`` in the (rescaled) ``batch`` space.
 
@@ -415,22 +424,70 @@ def refineProposal(
     materialises a (b, max_m, max_n, s) tensor, so processing the whole batch at once OOMs
     on large (m, n) regimes. Each dataset's PSIS/softmax normalisation and MH chain are
     per-dataset independent, so chunking is exact.
-    """
-    B = base.samples_g.shape[0]
-    if batch_size >= B:
-        return _refineChunk(method, base, batch, lf)
 
+    ``device`` is where the weights and chains are computed: each chunk (data and proposal)
+    is moved there and the refined chunk comes back on the CPU, so ``base``/``batch`` stay
+    where they are. The Laplace and marginal likelihood passes are embarrassingly parallel
+    over (dataset, group, proposal), so the GPU that sampled the flow is the natural place.
+
+    ``max_elements`` bounds the padded (b, m, n, s) tensors of one chunk: a chunk above it is
+    refined in smaller dataset sub-batches (each trimmed to its own padding again), which
+    changes memory but not the per-dataset arithmetic.
+    """
     # each chunk is trimmed to its own group/observation padding (the split-wide padding of
     # `batch` is 3-4x larger on the test splits and every Laplace tensor scales with it); the
     # merged result is padded back to the batch's group count
+    B = base.samples_g.shape[0]
     m_pad = batch['mask_n'].shape[1]
     chunks: list[Proposal] = []
-    for start in range(0, B, batch_size):
+    for start in range(0, B, max(batch_size, 1)):
         end = min(start + batch_size, B)
         chunk = trimBatchPadding(sliceBatch(batch, start, end))
         base_chunk = base.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
-        chunks.append(_refineChunk(method, base_chunk, chunk, lf))
+        b, m, n = chunk['mask_n'].shape[:3]
+        sub = _subBatchSize(b, m, n, base.n_samples, max_elements)
+        if sub < b:  # over budget: recurse with a smaller sub-batch (re-trims each piece)
+            logger.debug(
+                'refine chunk %d-%d (m=%d, n=%d) split into sub-batches of %d',
+                start,
+                end,
+                m,
+                n,
+                sub,
+            )
+            chunks.append(refineProposal(method, base_chunk, chunk, lf, sub, device, max_elements))
+        else:
+            chunks.append(_refineOnDevice(method, base_chunk, chunk, lf, device))
     return concatProposalsBatch(chunks).resizeGroups(m_pad)
+
+
+def _subBatchSize(b: int, m: int, n: int, s: int, max_elements: int) -> int:
+    """Datasets per sub-batch so that b' × m × n × s ≤ max_elements (at least 1)."""
+    per_dataset = max(m * n * s, 1)
+    return max(1, min(b, max_elements // per_dataset))
+
+
+def _refineOnDevice(
+    method: str,
+    base: Proposal,
+    batch: dict[str, torch.Tensor],
+    lf: int,
+    device: torch.device | str,
+) -> Proposal:
+    """_refineChunk with inputs moved to ``device`` and the result returned on the CPU."""
+    device = torch.device(device)
+    if device.type == 'cpu':
+        return _refineChunk(method, base, batch, lf)
+    # Proposal.to is in place, and when the whole batch fits one chunk ``base`` is the caller's
+    # proposal, so move a slice_b copy (new Proposal over views) rather than the caller's object
+    base_dev = base.slice_b(0, base.samples_g.shape[0])
+    base_dev.to(device)
+    out = _refineChunk(method, base_dev, toDevice(batch, device), lf)
+    del base_dev
+    out.to('cpu')
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()
+    return out
 
 
 def loadOrRefine(
@@ -447,12 +504,15 @@ def loadOrRefine(
     mask: np.ndarray | None,
     batch_size: int,
     variant: str = '',
+    device: torch.device | str = 'cpu',
 ) -> tuple[Proposal, float]:
     """Cached wrapper around refineProposal; cache is keyed by method/checkpoint/rescale.
 
     Returns ``(proposal, refine_seconds)`` where refine_seconds is the total wall time of the
     refinement over the batch (from the cache on a hit), used to offset the MB per-dataset
-    timing for the Δtime / time metric.
+    timing for the Δtime / time metric. ``device`` is where the refinement runs (see
+    refineProposal); the timed region is synchronised on it. The cache key does not include
+    the device: the refined posterior is the same target, only the arithmetic differs.
     """
     cache_path = _sampleCachePath(
         data_path, method, ckpt_dir, prefix, n_samples, seed, mask, rescale, variant=variant
@@ -470,9 +530,22 @@ def loadOrRefine(
     else:
         logger.info('No usable %s sample cache at %s; refining.', method, cache_path)
 
+    dev = torch.device(device)
+    if dev.type == 'cuda':
+        torch.cuda.reset_peak_memory_stats(dev)
+    synchronizeDevice(dev)
     t0 = time.perf_counter()
-    proposal = refineProposal(method, base_proposal, batch, lf, batch_size)
+    proposal = refineProposal(method, base_proposal, batch, lf, batch_size, device=device)
+    synchronizeDevice(dev)
     refine_seconds = time.perf_counter() - t0
+    if dev.type == 'cuda':
+        logger.info(
+            '%s refinement on %s: %.1f s, peak GPU memory %.2f GB',
+            method,
+            dev,
+            refine_seconds,
+            torch.cuda.max_memory_allocated(dev) / 2**30,
+        )
     saveProposalCache(
         cache_path,
         proposal,

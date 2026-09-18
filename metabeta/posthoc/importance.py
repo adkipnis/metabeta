@@ -303,7 +303,7 @@ class ImportanceSampler:
             # No dampening here: PSIS is the principled tail regularizer, and dampening
             # log-weights before smoothing flattens them toward uniform, cancelling the
             # correction (see module docstring Findings).
-            log_w_np, pareto_k_np = az.psislw(log_w)
+            log_w_np, pareto_k_np = az.psislw(log_w.detach().cpu().numpy())  # host-side PSIS
             out['log_w'] = log_w.new_tensor(log_w_np)
             out['pareto_k'] = log_w.new_tensor(pareto_k_np)
         else:

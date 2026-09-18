@@ -294,16 +294,6 @@ def flattenActiveParams(
     return torch.cat(parts)
 
 
-def _ms(t: torch.Tensor) -> tuple[float, float]:
-    """Mean and Bessel-corrected std, ignoring NaNs."""
-    t = t[~torch.isnan(t)]
-    if len(t) == 0:
-        return float('nan'), float('nan')
-    mean = t.mean().item()
-    std = t.std(correction=1).item() if len(t) > 1 else 0.0
-    return mean, std
-
-
 def _medianMad(t: torch.Tensor) -> tuple[float, float]:
     """Median and MAD, ignoring NaNs."""
     t = t[~torch.isnan(t)].double()
@@ -312,6 +302,32 @@ def _medianMad(t: torch.Tensor) -> tuple[float, float]:
     med = t.median().item()
     mad = (t - med).abs().median().item()
     return med, mad
+
+
+def _meanStd(t: torch.Tensor) -> tuple[float, float]:
+    """Mean and Bessel-corrected std, ignoring NaNs."""
+    t = t[~torch.isnan(t)].double()
+    if len(t) == 0:
+        return float('nan'), float('nan')
+    std = t.std(correction=1).item() if len(t) > 1 else 0.0
+    return t.mean().item(), std
+
+
+# Statistic name → (center, spread) function.
+STATS = {'mean ± std': _meanStd, 'median ± MAD': _medianMad}
+# Primary statistic per column (the paper's tables). r/NRMSE/ECE/EACE are per-parameter
+# aggregates over the test set, so their spread runs over parameter dimensions (fixed effects,
+# rfx scales, rfx, sigma_eps): the mean is the "average over all parameters" and the median
+# would pick a typical fixed effect and hide the variance components. LOO-NLL and time are
+# per-dataset values with heavy right tails: median ± MAD, matching the runtime tables.
+PRIMARY_STAT = {
+    'r': 'mean ± std',
+    'NRMSE': 'mean ± std',
+    'ECE': 'mean ± std',
+    'EACE': 'mean ± std',
+    'LOO-NLL': 'median ± MAD',
+    'time': 'median ± MAD',
+}
 
 
 def buildRow(
@@ -324,13 +340,21 @@ def buildRow(
     loo_nll: torch.Tensor | None,
     tpd_arr: torch.Tensor | None,
 ) -> dict:
-    row: dict = {'regime': regime, 'method': label}
-    row['r'] = _ms(corr_vals)
-    row['NRMSE'] = _ms(nrmse_vals)
-    row['ECE'] = _ms(ece_vals)
-    row['EACE'] = _ms(eace_vals)
-    row['LOO-NLL'] = _medianMad(loo_nll) if loo_nll is not None else None
-    row['time'] = _ms(tpd_arr.float()) if tpd_arr is not None else None
+    """One table row: ``row[metric]`` holds the column's primary statistic (PRIMARY_STAT),
+    ``row['stats'][name][metric]`` every statistic in STATS, so the writer can also emit one
+    table per statistic."""
+    values = {
+        'r': corr_vals,
+        'NRMSE': nrmse_vals,
+        'ECE': ece_vals,
+        'EACE': eace_vals,
+        'LOO-NLL': loo_nll,
+        'time': tpd_arr.float() if tpd_arr is not None else None,
+    }
+    row: dict = {'regime': regime, 'method': label, 'stats': {}}
+    for name, fn in STATS.items():
+        row['stats'][name] = {k: (fn(v) if v is not None else None) for k, v in values.items()}
+    row.update({k: row['stats'][PRIMARY_STAT[k]][k] for k in values})
     return row
 
 
@@ -491,6 +515,7 @@ def evaluateRegime(
             rescale,
             cap_mask,
             batch_size,
+            device=device,
         )
         refined.append((method, p_ref, refine_s))
 
@@ -626,43 +651,57 @@ def saveTables(
     fmt_md = lambda v: _fmtMd(v, dp)
     fmt_tex = lambda v: _fmtTex(v, dp)
 
-    # --- Markdown ---
-    md_rows = []
-    for regime, rows in rows_by_regime.items():
-        for r in rows:
-            md_rows.append([regime, r['method']] + [fmt_md(r[c]) for c in METRICS])
-    md_table = tabulate(
-        md_rows,
-        headers=['regime', 'method'] + METRICS,
-        tablefmt='pipe',
-        stralign='right',
-    )
+    def cell(row: dict, metric: str, stat: str):
+        if stat == 'primary' or 'stats' not in row:
+            return row[metric]
+        return row['stats'][stat][metric]
+
+    primary_label = 'primary: ' + ', '.join(f'{k} {v}' for k, v in PRIMARY_STAT.items())
+    tables = {'primary': primary_label, **{k: f'{k} (all columns)' for k in STATS}}
+
+    # --- Markdown: the per-column primary table first, then one table per statistic ---
+    md_parts = [f'# Oracle Evaluation: {run_name}']
+    for stat, label in tables.items():
+        md_rows = []
+        for regime, rows in rows_by_regime.items():
+            for r in rows:
+                md_rows.append([regime, r['method']] + [fmt_md(cell(r, c, stat)) for c in METRICS])
+        md_table = tabulate(
+            md_rows,
+            headers=['regime', 'method'] + METRICS,
+            tablefmt='pipe',
+            stralign='right',
+        )
+        md_parts.append(f'## {label}\n\n{md_table}')
     md_path = outdir / f'oracle_{run_name}.md'
-    md_path.write_text(f'# Oracle Evaluation: {run_name}\n\n{md_table}\n')
+    md_path.write_text('\n\n'.join(md_parts) + '\n')
     logger.info('Saved Markdown → %s', md_path)
 
-    # --- LaTeX ---
+    # --- LaTeX: the per-column primary table under the plain name (what the paper inputs),
+    # the single-statistic tables as separate files so an \input never pulls in two tabulars ---
     header_cols = (
         r'$r$ & $\mathrm{NRMSE}$ & $\mathrm{ECE}$ & '
         r'$\mathrm{EACE}$ & $\mathrm{LOO\text{-}NLL}$ & $\mathrm{time}$'
     )
-    lines: list[str] = [
-        r'\begin{tabular}{cc|cccccc}',
-        r'    \toprule',
-        rf'    $\mathrm{{regime}}$ & $\mathrm{{model}}$ & {header_cols} \\',
-    ]
-    for regime, rows in rows_by_regime.items():
-        lines.append(r'    \midrule')
-        for j, row in enumerate(rows):
-            regime_cell = rf'\texttt{{{regime}}}' if j == 0 else ''
-            method_cell = rf'\texttt{{{row["method"]}}}'
-            cells = ' & '.join(fmt_tex(row[c]) for c in METRICS)
-            lines.append(rf'      {regime_cell} & {method_cell} & {cells} \\')
-    lines += [r'    \bottomrule', r'\end{tabular}', '']
-
-    tex_path = outdir / f'oracle_{run_name}.tex'
-    tex_path.write_text('\n'.join(lines))
-    logger.info('Saved LaTeX → %s', tex_path)
+    for stat, label in tables.items():
+        lines: list[str] = [
+            rf'% entries: {label}; r/NRMSE/ECE/EACE spread over parameter dimensions, LOO-NLL/time over datasets',
+            r'\begin{tabular}{cc|cccccc}',
+            r'    \toprule',
+            rf'    $\mathrm{{regime}}$ & $\mathrm{{model}}$ & {header_cols} \\',
+        ]
+        for regime, rows in rows_by_regime.items():
+            lines.append(r'    \midrule')
+            for j, row in enumerate(rows):
+                regime_cell = rf'\texttt{{{regime}}}' if j == 0 else ''
+                method_cell = rf'\texttt{{{row["method"]}}}'
+                cells = ' & '.join(fmt_tex(cell(row, c, stat)) for c in METRICS)
+                lines.append(rf'      {regime_cell} & {method_cell} & {cells} \\')
+        lines += [r'    \bottomrule', r'\end{tabular}', '']
+        suffix = '' if stat == 'primary' else '_' + stat.split(' ')[0] + stat.split(' ')[-1]
+        tex_path = outdir / f'oracle_{run_name}{suffix}.tex'
+        tex_path.write_text('\n'.join(lines))
+        logger.info('Saved LaTeX → %s', tex_path)
 
 
 # ---------------------------------------------------------------------------

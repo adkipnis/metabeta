@@ -213,6 +213,7 @@ def collectCondition(
                 True,
                 None,
                 cfg.batch_size,
+                device=device,
             )
         summary = loadOrComputeSummary(
             proposal,

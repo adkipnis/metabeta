@@ -34,11 +34,24 @@ from metabeta.utils.warmfit import (
     plotWarmPanel,
 )
 
-_NON_WARM_CONDS = {'mb', 'mb_batch', 'mb_e2e', 'mb_gpu', 'mb_cpu', 'advi', 'laplace', 'cold_std'}
+_NON_WARM_CONDS = {
+    'mb',
+    'mb_batch',
+    'mb_e2e',
+    'mb_gpu',
+    'mb_cpu',
+    'advi',
+    'laplace',
+    'cold_std',
+}
 _WARM_CONDS = frozenset(COND_STYLE) - _NON_WARM_CONDS
 _DEFAULT_CONDS = ['mb', 'warm_2000', 'cold_std', 'advi']
+# experiments/evaluation/runtimes.py records: 'MB0' is the raw flow and 'MB' the default
+# pipeline (flow + IMH).  'MB_batched' / 'MB_e2e' are the rows of the pre-IMH records files,
+# where 'MB' meant the raw flow — replot those with care.
 _METHOD_TO_COND = {
-    'MB': 'mb',
+    'MB0': 'mb',
+    'MB': 'mb_imh',
     'MB_batched': 'mb_batch',
     'MB_e2e': 'mb_e2e',
     'metabeta': 'mb',
@@ -48,28 +61,37 @@ _METHOD_TO_COND = {
     'ADVI': 'advi',
     'LAPLACE': 'laplace',
 }
-# panel order; only conds actually present in the records are drawn
-# MB_e2e_batched is deliberately unmapped: four MB lines make the panels unreadable, and
-# the tables carry it.  plotRuntimeRecords skips methods with no cond.
-_PLOT_COND_ORDER = ['mb', 'mb_batch', 'mb_e2e', 'mb_gpu', 'mb_cpu', 'laplace', 'advi', 'cold_std']
+# panel order; only conds actually present in the records are drawn.  plotRuntimeRecords
+# skips methods with no cond.
+_PLOT_COND_ORDER = [
+    'mb',
+    'mb_imh',
+    'mb_batch',
+    'mb_e2e',
+    'mb_gpu',
+    'mb_cpu',
+    'laplace',
+    'advi',
+    'cold_std',
+]
+# the runtime figures follow the paper's naming: the raw flow is MB^0, the default pipeline MB.
+# 'mb_imh' is local to these figures; purple is free here because no warm-start cond shares
+# a panel with it.
+_RT_COND_STYLE = {
+    **COND_STYLE,
+    'mb': {**COND_STYLE['mb'], 'label': 'MB$^0$'},
+    'mb_imh': {'color': PALETTE[4], 'label': 'MB'},
+}
 
-# Single-panel variant (plotRuntimeRecordsObs): both MB lines are the end-to-end rows that
-# include the analytical MAP+EB stats fit, so every method in the panel is priced on raw data.
-# They are relabeled to plain 'MB' because the amortized-only rows do not appear here, and
-# drawn as two purples: same family, latency dark and batched light.
+# Single-panel variant (plotRuntimeRecordsObs): the same two MB rows against # observations.
 _OBS_METHOD_TO_COND = {
-    'MB_e2e': 'mb_e2e_obs',
-    'MB_e2e_batched': 'mb_e2e_batch_obs',
+    'MB0': 'mb',
+    'MB': 'mb_imh',
     'NUTS': 'cold_std',
     'ADVI': 'advi',
     'LAPLACE': 'laplace',
 }
-_OBS_COND_ORDER = ['mb_e2e_obs', 'mb_e2e_batch_obs', 'laplace', 'advi', 'cold_std']
-_OBS_COND_STYLE = {
-    **COND_STYLE,
-    'mb_e2e_obs': {'color': PALETTE[4], 'label': 'MB'},
-    'mb_e2e_batch_obs': {'color': PALETTE[14], 'label': 'MB (batched)'},
-}
+_OBS_COND_ORDER = ['mb', 'mb_imh', 'laplace', 'advi', 'cold_std']
 
 
 def _collectRuntimeRecords(data_dir: Path, fits_tag: str, conds: list[str]) -> list[dict]:
@@ -251,7 +273,7 @@ def plotRuntimeRecords(
         plot_records,
         'wall_s',
         conds,
-        COND_STYLE,
+        _RT_COND_STYLE,
         'Wall time (s)',
         '',
         n_bins,
@@ -266,7 +288,7 @@ def plotRuntimeRecords(
         plot_records,
         'wall_s',
         conds,
-        COND_STYLE,
+        _RT_COND_STYLE,
         '',
         '',
         n_bins,
@@ -312,14 +334,13 @@ def plotRuntimeRecordsObs(
     lo_pct: float = 0.0,
     hi_pct: float = 100.0,
 ) -> Path | None:
-    """Single-panel runtime figure against # observations, end-to-end MB rows only.
+    """Single-panel runtime figure against # observations.
 
-    Companion to ``plotRuntimeRecords`` for slides/composited figures: one x-axis, and the MB
-    lines are the end-to-end timings (``MB_e2e`` / ``MB_e2e_batched``, which recompute the
-    analytical MAP+EB stats inline), so both MB lines are priced on raw data exactly like the
-    fit backends.  The default band spans every fit (min to max) rather than the trimmed
-    percentiles of the two-panel figure, so the NUTS tail is shown in full.  Saved with a
-    transparent background so it can sit on any slide colour.
+    Companion to ``plotRuntimeRecords`` for slides/composited figures: one x-axis, with the raw
+    flow (``MB0``) and the default pipeline (``MB``) against the fit backends.  The default band
+    spans every fit (min to max) rather than the trimmed percentiles of the two-panel figure,
+    so the NUTS tail is shown in full.  Saved with a transparent background so it can sit on
+    any slide colour.
     """
     if config is not None:
         records = [r for r in records if r.get('config') == config]
@@ -352,7 +373,7 @@ def plotRuntimeRecordsObs(
         plot_records,
         'wall_s',
         conds,
-        _OBS_COND_STYLE,
+        _RT_COND_STYLE,
         'Wall time (s)',
         '',
         n_bins,
