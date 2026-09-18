@@ -304,6 +304,20 @@ def _medianMad(t: torch.Tensor) -> tuple[float, float]:
     return med, mad
 
 
+def _meanStd(t: torch.Tensor) -> tuple[float, float]:
+    """Mean and Bessel-corrected std, ignoring NaNs."""
+    t = t[~torch.isnan(t)].double()
+    if len(t) == 0:
+        return float('nan'), float('nan')
+    std = t.std(correction=1).item() if len(t) > 1 else 0.0
+    return t.mean().item(), std
+
+
+# Statistic name → (center, spread) function; the first is the primary one (paper tables).
+STATS = {'median ± MAD': _medianMad, 'mean ± std': _meanStd}
+PRIMARY_STAT = 'median ± MAD'
+
+
 def buildRow(
     label: str,
     regime: str,
@@ -314,13 +328,20 @@ def buildRow(
     loo_nll: torch.Tensor | None,
     tpd_arr: torch.Tensor | None,
 ) -> dict:
-    row: dict = {'regime': regime, 'method': label}
-    row['r'] = _medianMad(corr_vals)
-    row['NRMSE'] = _medianMad(nrmse_vals)
-    row['ECE'] = _medianMad(ece_vals)
-    row['EACE'] = _medianMad(eace_vals)
-    row['LOO-NLL'] = _medianMad(loo_nll) if loo_nll is not None else None
-    row['time'] = _medianMad(tpd_arr.float()) if tpd_arr is not None else None
+    """One table row: ``row[metric]`` holds the primary statistic, ``row['stats'][name][metric]``
+    every statistic in STATS, so the writer can emit one table per statistic."""
+    values = {
+        'r': corr_vals,
+        'NRMSE': nrmse_vals,
+        'ECE': ece_vals,
+        'EACE': eace_vals,
+        'LOO-NLL': loo_nll,
+        'time': tpd_arr.float() if tpd_arr is not None else None,
+    }
+    row: dict = {'regime': regime, 'method': label, 'stats': {}}
+    for name, fn in STATS.items():
+        row['stats'][name] = {k: (fn(v) if v is not None else None) for k, v in values.items()}
+    row.update(row['stats'][PRIMARY_STAT])
     return row
 
 
@@ -617,43 +638,52 @@ def saveTables(
     fmt_md = lambda v: _fmtMd(v, dp)
     fmt_tex = lambda v: _fmtTex(v, dp)
 
-    # --- Markdown ---
-    md_rows = []
-    for regime, rows in rows_by_regime.items():
-        for r in rows:
-            md_rows.append([regime, r['method']] + [fmt_md(r[c]) for c in METRICS])
-    md_table = tabulate(
-        md_rows,
-        headers=['regime', 'method'] + METRICS,
-        tablefmt='pipe',
-        stralign='right',
-    )
+    def cell(row: dict, metric: str, stat: str):
+        return row['stats'][stat][metric] if 'stats' in row else row[metric]
+
+    # --- Markdown: one table per statistic in a single file ---
+    md_parts = [f'# Oracle Evaluation: {run_name}']
+    for stat in STATS:
+        md_rows = []
+        for regime, rows in rows_by_regime.items():
+            for r in rows:
+                md_rows.append([regime, r['method']] + [fmt_md(cell(r, c, stat)) for c in METRICS])
+        md_table = tabulate(
+            md_rows,
+            headers=['regime', 'method'] + METRICS,
+            tablefmt='pipe',
+            stralign='right',
+        )
+        md_parts.append(f'## {stat}\n\n{md_table}')
     md_path = outdir / f'oracle_{run_name}.md'
-    md_path.write_text(f'# Oracle Evaluation: {run_name}\n\n{md_table}\n')
+    md_path.write_text('\n\n'.join(md_parts) + '\n')
     logger.info('Saved Markdown → %s', md_path)
 
-    # --- LaTeX ---
+    # --- LaTeX: the primary statistic under the plain name (what the paper inputs), the
+    # others as separate files so an \input never pulls in two tabulars ---
     header_cols = (
         r'$r$ & $\mathrm{NRMSE}$ & $\mathrm{ECE}$ & '
         r'$\mathrm{EACE}$ & $\mathrm{LOO\text{-}NLL}$ & $\mathrm{time}$'
     )
-    lines: list[str] = [
-        r'\begin{tabular}{cc|cccccc}',
-        r'    \toprule',
-        rf'    $\mathrm{{regime}}$ & $\mathrm{{model}}$ & {header_cols} \\',
-    ]
-    for regime, rows in rows_by_regime.items():
-        lines.append(r'    \midrule')
-        for j, row in enumerate(rows):
-            regime_cell = rf'\texttt{{{regime}}}' if j == 0 else ''
-            method_cell = rf'\texttt{{{row["method"]}}}'
-            cells = ' & '.join(fmt_tex(row[c]) for c in METRICS)
-            lines.append(rf'      {regime_cell} & {method_cell} & {cells} \\')
-    lines += [r'    \bottomrule', r'\end{tabular}', '']
-
-    tex_path = outdir / f'oracle_{run_name}.tex'
-    tex_path.write_text('\n'.join(lines))
-    logger.info('Saved LaTeX → %s', tex_path)
+    for stat in STATS:
+        lines: list[str] = [
+            rf'% entries: {stat} over datasets',
+            r'\begin{tabular}{cc|cccccc}',
+            r'    \toprule',
+            rf'    $\mathrm{{regime}}$ & $\mathrm{{model}}$ & {header_cols} \\',
+        ]
+        for regime, rows in rows_by_regime.items():
+            lines.append(r'    \midrule')
+            for j, row in enumerate(rows):
+                regime_cell = rf'\texttt{{{regime}}}' if j == 0 else ''
+                method_cell = rf'\texttt{{{row["method"]}}}'
+                cells = ' & '.join(fmt_tex(cell(row, c, stat)) for c in METRICS)
+                lines.append(rf'      {regime_cell} & {method_cell} & {cells} \\')
+        lines += [r'    \bottomrule', r'\end{tabular}', '']
+        suffix = '' if stat == PRIMARY_STAT else '_' + stat.split(' ')[0] + stat.split(' ')[-1]
+        tex_path = outdir / f'oracle_{run_name}{suffix}.tex'
+        tex_path.write_text('\n'.join(lines))
+        logger.info('Saved LaTeX → %s', tex_path)
 
 
 # ---------------------------------------------------------------------------
