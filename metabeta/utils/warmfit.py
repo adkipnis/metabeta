@@ -27,9 +27,6 @@ COND_STYLE: dict[str, dict] = {
     'cold_std': {'color': PALETTE[3], 'label': 'NUTS'},
     'laplace': {'color': PALETTE[2], 'label': 'Laplace'},
     'mb_e2e': {'color': PALETTE[4], 'label': 'MB (+MAP fit)'},
-    # default pipeline (flow + IMH) of experiments/evaluation/runtimes.py; purple is free there
-    # because the warm-start conds never share a panel with it
-    'mb_imh': {'color': PALETTE[4], 'label': 'MB'},
     'cold_live': {'color': PALETTE[2], 'label': 'NUTS (live)'},
     'warm_imh': {'color': PALETTE[4], 'label': 'MB-IMH-NUTS'},
     'warm_2000': {'color': PALETTE[4], 'label': 'MB-NUTS'},

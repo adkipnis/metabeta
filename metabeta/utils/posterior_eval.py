@@ -434,20 +434,13 @@ def refineProposal(
     refined in smaller dataset sub-batches (each trimmed to its own padding again), which
     changes memory but not the per-dataset arithmetic.
     """
-    B = base.samples_g.shape[0]
-    if batch_size >= B:
-        b, m, n = batch['mask_n'].shape[:3]
-        sub = _subBatchSize(b, m, n, base.n_samples, max_elements)
-        if sub < B:
-            return refineProposal(method, base, batch, lf, sub, device, max_elements)
-        return _refineOnDevice(method, base, batch, lf, device)
-
     # each chunk is trimmed to its own group/observation padding (the split-wide padding of
     # `batch` is 3-4x larger on the test splits and every Laplace tensor scales with it); the
     # merged result is padded back to the batch's group count
+    B = base.samples_g.shape[0]
     m_pad = batch['mask_n'].shape[1]
     chunks: list[Proposal] = []
-    for start in range(0, B, batch_size):
+    for start in range(0, B, max(batch_size, 1)):
         end = min(start + batch_size, B)
         chunk = trimBatchPadding(sliceBatch(batch, start, end))
         base_chunk = base.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
