@@ -522,7 +522,14 @@ def main() -> None:
     methods = cfg.methods if cfg.methods is not None else posthocDefaults(LF_FROM_FAM[family])
 
     per_size = []
-    for size in cfg.sizes:
+    sizes = [s for s in cfg.sizes if s in SIZE_MODELS.get(family, {})]
+    if len(sizes) < len(cfg.sizes):
+        logger.info(
+            '%s: no checkpoint/real set for %s; skipping',
+            family,
+            sorted(set(cfg.sizes) - set(sizes)),
+        )
+    for size in sizes:
         rec = (
             _distributionOnly(size, family, cfg.standardize)
             if cfg.distribution_only

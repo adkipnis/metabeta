@@ -174,6 +174,12 @@ def logDetJacobianCorr(z: torch.Tensor, q: int) -> torch.Tensor:
         log|det J| = Σ_{i,j} (q - j) · log sech(z_{i,j})
                    = 0.5 · Σ_k (q - j_k) · log(1 - tanh²(z_k))
 
+    NB: for a dataset with q_i < q (padded z entries at 0) this is the determinant of the
+    padded q-dimensional map, not of the active q_i×q_i block — the padded rows' diagonal
+    entries still depend on the active z (e.g. an extra 0.5·log(1 - ρ²) for q_i=2 in
+    q=3). Approximator._postprocess subtracts exactly this quantity from log q_g, so a
+    consumer that re-expresses a prior in the same coordinates must subtract it too.
+
     Returns shape (...) — one scalar per batch element.
     """
     if q <= 1:

@@ -27,6 +27,16 @@ prior via corr_prior), `rb_redraw=True` re-draws rfx from the exact Normal-Norma
 conditional per weighted global sample (Rao-Blackwellisation), and dampening is no longer
 applied in the pareto branch.
 
+Evidence
+--------
+`getImportanceWeights` also stores the raw log-weights and `log_evidence` =
+logsumexp(log_w) - log S: with a normalized flow density and normalized prior and marginal
+likelihood, mean_s exp(log_w_s) is an unbiased estimate of p(D) (exact for Normal with
+marginal=True, Laplace-approximated in posthoc/laplace_glmm.py). It lives in the standardized
+data space, so it must be computed on *unrescaled* batches/proposals;
+`preprocessing.logJacobianStandardization` moves it to the raw response scale. Validated
+against bridge sampling in experiments/posthoc/evidence.py.
+
 Resample-move (ResampleMoveSampler, added for the 2026-07 post-log-det-fix ablation):
 systematic resampling on the PSIS-smoothed marginal weights followed by K vectorized
 independence-MH rejuvenation sweeps with fresh flow proposals — converts weight
@@ -51,7 +61,12 @@ import torch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import toDevice
 from metabeta.utils.results import Proposal, joinProposals
-from metabeta.utils.regularization import dampen, corrLowerToUnconstrained, unconstrainedToCholesky
+from metabeta.utils.regularization import (
+    dampen,
+    corrLowerToUnconstrained,
+    logDetJacobianCorr,
+    unconstrainedToCholesky,
+)
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.families import (
     logProbFfx,
@@ -64,6 +79,17 @@ from metabeta.utils.families import (
     sampleRfxConditionalNormal,
 )
 from metabeta.utils.preprocessing import rescaleData
+
+
+# Bump when the definition of the IS/IMH weights changes; `weightsTag` folds it into the on-disk
+# cache keys of refined posteriors and their summaries so caches written under an older
+# definition are ignored. v2 (2026-09-17): LKJ prior expressed in the flow's coordinates.
+WEIGHTS_VERSION = 2
+
+
+def weightsTag(method: str, sep: str = '_') -> str:
+    """Cache-key suffix carrying WEIGHTS_VERSION for IS/IMH-derived methods; '' for the raw flow."""
+    return '' if method in ('mb', 'raw', 'coldNuts') else f'{sep}w{WEIGHTS_VERSION}'
 
 
 class ImportanceSampler:
@@ -123,6 +149,7 @@ class ImportanceSampler:
         self.mask_mq = data['mask_mq'].unsqueeze(-2)  # (b, m, 1, q)
         self.mask_m = data['mask_m'].unsqueeze(-1)    # (b, m, 1)
         self.mask_n = data['mask_n'].unsqueeze(-1)    # (b, m, n, 1)
+        self.q_active = data['mask_q'].sum(-1)        # (b,) each dataset's own rfx dimension
 
     def _getLCorr(self, proposal: Proposal) -> torch.Tensor | None:
         """Cholesky of the rfx correlation matrix from the proposal's z_corr dims."""
@@ -158,11 +185,16 @@ class ImportanceSampler:
         # so its prior must be in the numerator to keep the IS weight balanced.
         lp = lp + logProbSigma(proposal.sigma_rfx, self.tau_rfx, self.family_sigma_rfx, self.mask_q)
 
-        # corr_rfx: stored as constrained r (lower triangle); unconstrain to z for the prior
+        # corr_rfx: the flow's log q_g is a density over the *stored* constrained r
+        # (_postprocess subtracts logDetJacobianCorr(z, q_max)), so the LKJ prior is expressed
+        # in the same coordinates: LKJ density in the dataset's own q_i minus that padded
+        # z→r Jacobian. Evaluating LKJ over z in q_max dims instead leaves a spurious
+        # (1 - ρ²)-type factor in every weight of a correlated dataset.
         if self.corr_prior and proposal.d_corr > 0 and self.eta_rfx is not None:
             r_corr = proposal.samples_g[..., -proposal.d_corr :]  # (b, s, d_corr)
             z_corr = corrLowerToUnconstrained(r_corr, proposal.q)
-            lp = lp + logProbCorrRfx(z_corr, proposal.q, self.eta_rfx)
+            lp = lp + logProbCorrRfx(z_corr, proposal.q, self.eta_rfx, q_active=self.q_active)
+            lp = lp - logDetJacobianCorr(z_corr, proposal.q)
 
         return lp, ffx, sigma_eps
 
@@ -260,6 +292,11 @@ class ImportanceSampler:
     ) -> dict[str, torch.Tensor]:
         out = {}
         log_w = log_likelihood + log_prior - log_q
+
+        # raw weights and log p(D) ≈ logsumexp(log_w) - log S, stored before smoothing/clipping
+        # destroys the scale (module docstring, Evidence); valid on unrescaled inputs only
+        out['log_w_raw'] = log_w
+        out['log_evidence'] = torch.logsumexp(log_w, dim=-1) - math.log(log_w.shape[-1])
 
         # regularize
         if self.pareto:

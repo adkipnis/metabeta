@@ -170,6 +170,11 @@ class Proposal:
     def pareto_k(self) -> torch.Tensor | None:
         return self.is_results.get('pareto_k')
 
+    @property
+    def log_evidence(self) -> torch.Tensor | None:
+        """IS estimate of log p(D) per dataset (b,), set by ImportanceSampler."""
+        return self.is_results.get('log_evidence')
+
     def partition(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         out = {}
         out['ffx'] = x[..., : self.d]
@@ -219,15 +224,15 @@ class Proposal:
     def resizeGroups(self, m: int) -> 'Proposal':
         """Copy with the local (group) axis trimmed or zero-padded to ``m`` groups.
 
-        Trimming requires the dropped groups to be padding (all-zero, as collateGrouped and
-        concatProposalsBatch produce) and raises otherwise; padding restores a sub-batch
-        proposal to the group count of the batch it is evaluated against.
+        Callers derive ``m`` from the mask of the batch the proposal is evaluated against, so
+        trimmed groups are padding by construction and are dropped regardless of content
+        (all-zero from collateGrouped / concatProposalsBatch, but posterior-sample caches
+        written before gaussianHybrid masked padded groups hold prior-like draws there).
+        Padding restores a sub-batch proposal to the group count of its batch.
         """
         cur = self.samples_l.shape[1]
         if m == cur:
             return self
-        if m < cur and bool((self.samples_l[:, m:] != 0).any()):
-            raise ValueError(f'groups beyond {m} hold non-zero samples; refusing to trim')
 
         def fit(t: torch.Tensor) -> torch.Tensor:
             if m < cur:

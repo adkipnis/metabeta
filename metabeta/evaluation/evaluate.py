@@ -38,6 +38,7 @@ from metabeta.utils.evaluation import (
 )
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.models.approximator import Approximator
+from metabeta.posthoc.importance import weightsTag
 from metabeta.utils.posterior_cache import (
     cacheRefMtime,
     loadProposalCache,
@@ -664,7 +665,7 @@ class Evaluator:
             cache_name = (
                 f'summary_{partition}_{method}_{run_name}_{prefix}'
                 f'_s{self.cfg.n_samples}_seed{self.cfg.seed}_{_LEGACY_K_TAG}'
-                f'_predcov{int(getattr(self.cfg, "pred_coverage", False))}'
+                f'_predcov{int(getattr(self.cfg, "pred_coverage", False))}{weightsTag(method)}'
                 f'_{maskTag(mask)}.pt'
             )
             return data_path.parent / cache_name
