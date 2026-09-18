@@ -294,16 +294,6 @@ def flattenActiveParams(
     return torch.cat(parts)
 
 
-def _ms(t: torch.Tensor) -> tuple[float, float]:
-    """Mean and Bessel-corrected std, ignoring NaNs."""
-    t = t[~torch.isnan(t)]
-    if len(t) == 0:
-        return float('nan'), float('nan')
-    mean = t.mean().item()
-    std = t.std(correction=1).item() if len(t) > 1 else 0.0
-    return mean, std
-
-
 def _medianMad(t: torch.Tensor) -> tuple[float, float]:
     """Median and MAD, ignoring NaNs."""
     t = t[~torch.isnan(t)].double()
@@ -325,12 +315,12 @@ def buildRow(
     tpd_arr: torch.Tensor | None,
 ) -> dict:
     row: dict = {'regime': regime, 'method': label}
-    row['r'] = _ms(corr_vals)
-    row['NRMSE'] = _ms(nrmse_vals)
-    row['ECE'] = _ms(ece_vals)
-    row['EACE'] = _ms(eace_vals)
+    row['r'] = _medianMad(corr_vals)
+    row['NRMSE'] = _medianMad(nrmse_vals)
+    row['ECE'] = _medianMad(ece_vals)
+    row['EACE'] = _medianMad(eace_vals)
     row['LOO-NLL'] = _medianMad(loo_nll) if loo_nll is not None else None
-    row['time'] = _ms(tpd_arr.float()) if tpd_arr is not None else None
+    row['time'] = _medianMad(tpd_arr.float()) if tpd_arr is not None else None
     return row
 
 
@@ -491,6 +481,7 @@ def evaluateRegime(
             rescale,
             cap_mask,
             batch_size,
+            device=device,
         )
         refined.append((method, p_ref, refine_s))
 
