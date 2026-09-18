@@ -214,3 +214,6 @@ files (same pipeline run): `prior_misspec_*`, `likelihood_misspec_*`, `ood_desig
 `condition_number_{normal,bernoulli}` — 291 MB cells, all last-decimal shifts (σ-ratio,
 rank-MAD, ΔLOO-NLL by ≤ 0.005). `data_poverty_*` left untouched: their MB⁰ rows differ from the
 pulled files (different run), so no clean delta. Agreement figures not swapped in.
+Update: `data_poverty_*` tables replaced wholesale from the new run after all (all rows, paper
+styling kept), since MB⁰ and MB rows should come from the same flow draws; changes are ≤ 0.01
+(Bernoulli per-dataset EACE 0.034 → 0.022 in the poorest bin is the largest).
