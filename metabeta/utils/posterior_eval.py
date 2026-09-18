@@ -498,11 +498,19 @@ def loadOrRefine(
     else:
         logger.info('No usable %s sample cache at %s; refining.', method, cache_path)
 
-    synchronizeDevice(torch.device(device))
+    dev = torch.device(device)
+    if dev.type == 'cuda':
+        torch.cuda.reset_peak_memory_stats(dev)
+    synchronizeDevice(dev)
     t0 = time.perf_counter()
     proposal = refineProposal(method, base_proposal, batch, lf, batch_size, device=device)
-    synchronizeDevice(torch.device(device))
+    synchronizeDevice(dev)
     refine_seconds = time.perf_counter() - t0
+    if dev.type == 'cuda':
+        logger.info(
+            '%s refinement on %s: %.1f s, peak GPU memory %.2f GB',
+            method, dev, refine_seconds, torch.cuda.max_memory_allocated(dev) / 2**30,
+        )
     saveProposalCache(
         cache_path,
         proposal,
