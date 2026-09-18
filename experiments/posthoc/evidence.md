@@ -217,3 +217,11 @@ pulled files (different run), so no clean delta. Agreement figures not swapped i
 Update: `data_poverty_*` tables replaced wholesale from the new run after all (all rows, paper
 styling kept), since MB⁰ and MB rows should come from the same flow draws; changes are ≤ 0.01
 (Bernoulli per-dataset EACE 0.034 → 0.022 in the poorest bin is the largest).
+
+## Paper commits (2026-09-18)
+
+`~/Code/metabeta-paper`: `10e797e` (evidence appendix `app:ev` + `tables/evidence_normal.tex`,
+Meng & Wong reference, 23 regenerated tables, quoted-number edits in the ablation paragraph) and
+`46e5db2` (Poisson condition-number table after the size fix). Alex's own section edits stay
+uncommitted in that repo; the outlook paragraph was rewritten by Alex and now cites a results
+section (`sec:hyb_res`) instead of my one-sentence version.
