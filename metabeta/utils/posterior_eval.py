@@ -454,7 +454,14 @@ def refineProposal(
         b, m, n = chunk['mask_n'].shape[:3]
         sub = _subBatchSize(b, m, n, base.n_samples, max_elements)
         if sub < b:  # over budget: recurse with a smaller sub-batch (re-trims each piece)
-            logger.debug('refine chunk %d-%d (m=%d, n=%d) split into sub-batches of %d', start, end, m, n, sub)
+            logger.debug(
+                'refine chunk %d-%d (m=%d, n=%d) split into sub-batches of %d',
+                start,
+                end,
+                m,
+                n,
+                sub,
+            )
             chunks.append(refineProposal(method, base_chunk, chunk, lf, sub, device, max_elements))
         else:
             chunks.append(_refineOnDevice(method, base_chunk, chunk, lf, device))
@@ -478,8 +485,12 @@ def _refineOnDevice(
     device = torch.device(device)
     if device.type == 'cpu':
         return _refineChunk(method, base, batch, lf)
-    base.to(device)  # slice_b / resizeGroups already handed us a copy
-    out = _refineChunk(method, base, toDevice(batch, device), lf)
+    # Proposal.to is in place, and when the whole batch fits one chunk ``base`` is the caller's
+    # proposal, so move a slice_b copy (new Proposal over views) rather than the caller's object
+    base_dev = base.slice_b(0, base.samples_g.shape[0])
+    base_dev.to(device)
+    out = _refineChunk(method, base_dev, toDevice(batch, device), lf)
+    del base_dev
     out.to('cpu')
     if device.type == 'cuda':
         torch.cuda.empty_cache()
@@ -537,7 +548,10 @@ def loadOrRefine(
     if dev.type == 'cuda':
         logger.info(
             '%s refinement on %s: %.1f s, peak GPU memory %.2f GB',
-            method, dev, refine_seconds, torch.cuda.max_memory_allocated(dev) / 2**30,
+            method,
+            dev,
+            refine_seconds,
+            torch.cuda.max_memory_allocated(dev) / 2**30,
         )
     saveProposalCache(
         cache_path,
