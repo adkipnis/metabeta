@@ -550,6 +550,7 @@ def evaluateReal(
             rescale,
             conv_mask,
             batch_size,
+            device=device,
         )
         summary_ref = loadOrComputeSummary(
             p_ref,

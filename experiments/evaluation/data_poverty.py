@@ -489,6 +489,7 @@ def collectSize(cfg, size: str, device: torch.device) -> dict | None:
         True,
         None,
         cfg.batch_size,
+        device=device,
     )
 
     proposals = {MB_LABEL: proposal_mb, IMH_LABEL: proposal_imh, NUTS_LABEL: proposal_nuts}
