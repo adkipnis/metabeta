@@ -313,9 +313,21 @@ def _meanStd(t: torch.Tensor) -> tuple[float, float]:
     return t.mean().item(), std
 
 
-# Statistic name → (center, spread) function; the first is the primary one (paper tables).
-STATS = {'median ± MAD': _medianMad, 'mean ± std': _meanStd}
-PRIMARY_STAT = 'median ± MAD'
+# Statistic name → (center, spread) function.
+STATS = {'mean ± std': _meanStd, 'median ± MAD': _medianMad}
+# Primary statistic per column (the paper's tables). r/NRMSE/ECE/EACE are per-parameter
+# aggregates over the test set, so their spread runs over parameter dimensions (fixed effects,
+# rfx scales, rfx, sigma_eps): the mean is the "average over all parameters" and the median
+# would pick a typical fixed effect and hide the variance components. LOO-NLL and time are
+# per-dataset values with heavy right tails: median ± MAD, matching the runtime tables.
+PRIMARY_STAT = {
+    'r': 'mean ± std',
+    'NRMSE': 'mean ± std',
+    'ECE': 'mean ± std',
+    'EACE': 'mean ± std',
+    'LOO-NLL': 'median ± MAD',
+    'time': 'median ± MAD',
+}
 
 
 def buildRow(
@@ -328,8 +340,9 @@ def buildRow(
     loo_nll: torch.Tensor | None,
     tpd_arr: torch.Tensor | None,
 ) -> dict:
-    """One table row: ``row[metric]`` holds the primary statistic, ``row['stats'][name][metric]``
-    every statistic in STATS, so the writer can emit one table per statistic."""
+    """One table row: ``row[metric]`` holds the column's primary statistic (PRIMARY_STAT),
+    ``row['stats'][name][metric]`` every statistic in STATS, so the writer can also emit one
+    table per statistic."""
     values = {
         'r': corr_vals,
         'NRMSE': nrmse_vals,
@@ -341,7 +354,7 @@ def buildRow(
     row: dict = {'regime': regime, 'method': label, 'stats': {}}
     for name, fn in STATS.items():
         row['stats'][name] = {k: (fn(v) if v is not None else None) for k, v in values.items()}
-    row.update(row['stats'][PRIMARY_STAT])
+    row.update({k: row['stats'][PRIMARY_STAT[k]][k] for k in values})
     return row
 
 
@@ -639,11 +652,16 @@ def saveTables(
     fmt_tex = lambda v: _fmtTex(v, dp)
 
     def cell(row: dict, metric: str, stat: str):
-        return row['stats'][stat][metric] if 'stats' in row else row[metric]
+        if stat == 'primary' or 'stats' not in row:
+            return row[metric]
+        return row['stats'][stat][metric]
 
-    # --- Markdown: one table per statistic in a single file ---
+    primary_label = 'primary: ' + ', '.join(f'{k} {v}' for k, v in PRIMARY_STAT.items())
+    tables = {'primary': primary_label, **{k: f'{k} (all columns)' for k in STATS}}
+
+    # --- Markdown: the per-column primary table first, then one table per statistic ---
     md_parts = [f'# Oracle Evaluation: {run_name}']
-    for stat in STATS:
+    for stat, label in tables.items():
         md_rows = []
         for regime, rows in rows_by_regime.items():
             for r in rows:
@@ -654,20 +672,20 @@ def saveTables(
             tablefmt='pipe',
             stralign='right',
         )
-        md_parts.append(f'## {stat}\n\n{md_table}')
+        md_parts.append(f'## {label}\n\n{md_table}')
     md_path = outdir / f'oracle_{run_name}.md'
     md_path.write_text('\n\n'.join(md_parts) + '\n')
     logger.info('Saved Markdown → %s', md_path)
 
-    # --- LaTeX: the primary statistic under the plain name (what the paper inputs), the
-    # others as separate files so an \input never pulls in two tabulars ---
+    # --- LaTeX: the per-column primary table under the plain name (what the paper inputs),
+    # the single-statistic tables as separate files so an \input never pulls in two tabulars ---
     header_cols = (
         r'$r$ & $\mathrm{NRMSE}$ & $\mathrm{ECE}$ & '
         r'$\mathrm{EACE}$ & $\mathrm{LOO\text{-}NLL}$ & $\mathrm{time}$'
     )
-    for stat in STATS:
+    for stat, label in tables.items():
         lines: list[str] = [
-            rf'% entries: {stat} over datasets',
+            rf'% entries: {label}; r/NRMSE/ECE/EACE spread over parameter dimensions, LOO-NLL/time over datasets',
             r'\begin{tabular}{cc|cccccc}',
             r'    \toprule',
             rf'    $\mathrm{{regime}}$ & $\mathrm{{model}}$ & {header_cols} \\',
@@ -680,7 +698,7 @@ def saveTables(
                 cells = ' & '.join(fmt_tex(cell(row, c, stat)) for c in METRICS)
                 lines.append(rf'      {regime_cell} & {method_cell} & {cells} \\')
         lines += [r'    \bottomrule', r'\end{tabular}', '']
-        suffix = '' if stat == PRIMARY_STAT else '_' + stat.split(' ')[0] + stat.split(' ')[-1]
+        suffix = '' if stat == 'primary' else '_' + stat.split(' ')[0] + stat.split(' ')[-1]
         tex_path = outdir / f'oracle_{run_name}{suffix}.tex'
         tex_path.write_text('\n'.join(lines))
         logger.info('Saved LaTeX → %s', tex_path)
