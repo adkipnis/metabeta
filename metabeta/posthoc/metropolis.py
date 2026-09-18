@@ -149,7 +149,6 @@ class MetropolisSampler:
         likelihood_family: int = 0,
         eps: float = 1e-12,
         n_eff_target: int | None = N_EFF_TARGET,  # None disables the pool-size suggestion
-        corr_prior_coords: str = 'r',  # see ImportanceSampler (LKJ prior coordinates)
     ) -> None:
         if mode == 'marginal' and likelihood_family != 0:
             raise ValueError("mode='marginal' requires likelihood_family=0 (Normal)")
@@ -183,7 +182,6 @@ class MetropolisSampler:
                 marginal=(mode == 'marginal'),
                 likelihood_family=likelihood_family,
                 eps=eps,
-                corr_prior_coords=corr_prior_coords,
             )
 
         # Data tensors for the Normal-Normal conditional (marginal mode).

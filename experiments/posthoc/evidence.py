@@ -8,9 +8,7 @@ oracle sets against a bridge-sampling reference.
 
 Per dataset (standardized space — the space the flow density lives in):
   IS         : log p(D) ≈ logsumexp(log_w) - log S from ImportanceSampler(marginal=True),
-               for pool prefixes S in --pool-sizes (flow draws are i.i.d.), in both LKJ
-               prior coordinate conventions ('z' legacy, 'r' consistent — see the
-               "Correlation coordinates" section of posthoc/importance.py).
+               for pool prefixes S in --pool-sizes (flow draws are i.i.d.).
   bridgeNuts : Meng-Wong iterative bridge sampling on the cached NUTS draws
                (test.fit.npz), warped-Gaussian proposal fitted on one half of the draws
                and evaluated on the other, with the halves swapped as a noise floor.
@@ -23,10 +21,10 @@ Per dataset (standardized space — the space the flow density lives in):
                slope (random intercept only, slope kept as a fixed effect). ln BF from IS
                vs. bridge reference; Jeffreys category agreement.
   rho check  : for correlated datasets, posterior mean of the first rfx correlation under
-               raw flow / IS('z') / IS('r') vs NUTS — quantifies the coordinate tilt.
+               raw flow / IS / IMH vs NUTS.
 
 Outputs: {out_dir}/{size}_{split}_n{n_ds}.csv (per-dataset rows), .md (summary tables)
-and .png (diagnostic figure).
+and .png (diagnostic figure); --summarize-only additionally writes evidence_normal.tex.
 
 Run from the repo root:
     uv run python experiments/posthoc/evidence.py --sizes small --n-datasets 32
@@ -56,7 +54,7 @@ from metabeta.models.approximator import Approximator  # noqa: E402
 from metabeta.posthoc.importance import ImportanceSampler  # noqa: E402
 from metabeta.posthoc.metropolis import MetropolisSampler  # noqa: E402
 from metabeta.utils.config import ApproximatorConfig  # noqa: E402
-from metabeta.utils.dataloader import Collection, collateGrouped  # noqa: E402
+from metabeta.utils.dataloader import Collection, collateGrouped, toDevice  # noqa: E402
 from metabeta.utils.families import logProbCorrRfx  # noqa: E402
 from metabeta.utils.preprocessing import logJacobianStandardization  # noqa: E402
 from metabeta.utils.regularization import (  # noqa: E402
@@ -66,17 +64,19 @@ from metabeta.utils.regularization import (  # noqa: E402
 )
 from metabeta.utils.results import Proposal  # noqa: E402
 
-COORDS = ('z', 'r')
 IMH_CHAINS = 4
 IMH_BURNIN = 25
 SIZES = ('small', 'medium', 'large', 'huge')
 JEFFREYS_EDGES = np.log([3.0, 10.0, 30.0, 100.0])  # ln BF thresholds (Jeffreys, natural log)
+COLOR = '#3B6FB6'
+# CSVs written while the legacy 'z' prior coordinates were still reported carry an `_r` infix
+LEGACY_COLUMNS = {'logev_is_r_': 'logev_is_', 'k_r_': 'k_', 'eff_r_': 'eff_', '_is_r': '_is'}
 
 
 # fmt: off
 def setup() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--sizes', nargs='+', default=['small'], choices=['small', 'medium', 'large', 'huge'])
+    p.add_argument('--sizes', nargs='+', default=['small'], choices=SIZES)
     p.add_argument('--split', default='test', choices=['test'], help='only test.fit.npz carries NUTS draws')
     p.add_argument('--prefix', default='best', help='checkpoint prefix')
     p.add_argument('--n-datasets', type=int, default=32, help='datasets per size (first n of the split)')
@@ -123,6 +123,13 @@ def loadNuts(npz_path: Path, n_ds: int) -> dict[str, np.ndarray]:
         return {k: np.asarray(data[k][:n_ds]) for k in keys}
 
 
+def loadCsv(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    for old, new in LEGACY_COLUMNS.items():
+        df.columns = [c.replace(old, new) for c in df.columns]
+    return df
+
+
 def toDouble(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     return {
         k: v.double() if torch.is_tensor(v) and v.is_floating_point() else v
@@ -138,14 +145,8 @@ def proposalDouble(p: Proposal, n_samples: int | None = None) -> Proposal:
         return t.narrow(dim, 0, s).double().contiguous()
 
     proposed = {
-        'global': {
-            'samples': cut(p.samples_g, 1),
-            'log_prob': cut(p.log_prob_g, 1),
-        },
-        'local': {
-            'samples': cut(p.samples_l, 2),
-            'log_prob': cut(p.log_prob_l, 2),
-        },
+        'global': {'samples': cut(p.samples_g, 1), 'log_prob': cut(p.log_prob_g, 1)},
+        'local': {'samples': cut(p.samples_l, 2), 'log_prob': cut(p.log_prob_l, 2)},
     }
     return Proposal(proposed, has_sigma_eps=p.has_sigma_eps, d_corr=p.d_corr)
 
@@ -177,7 +178,7 @@ class Target:
     Reuses ImportanceSampler.unnormalizedPosterior (marginal likelihood, β/σ priors) on
     a padded constrained Proposal; the LKJ prior is added as a density over z in the
     dataset's own dimension q_i, so the target is independent of the flow's coordinate
-    convention (the 'z'/'r' question only concerns the flow's log q).
+    convention.
     """
 
     def __init__(self, batch64: dict[str, torch.Tensor], d_corr_model: int) -> None:
@@ -191,18 +192,22 @@ class Target:
         self.eta = batch64['eta_rfx'].double()  # (1,)
         self.corr = bool(self.eta.item() > 0) and self.q_i >= 2
         self.d_corr_i = self.q_i * (self.q_i - 1) // 2 if self.corr else 0
-        self.dim = self.d_i + self.q_i + 1 + self.d_corr_i
+        # blocks of u
+        self.sl_ffx = slice(0, self.d_i)
+        self.sl_sigma = slice(self.d_i, self.d_i + self.q_i + 1)  # log σ_rfx, log σ_eps
+        self.sl_corr = slice(self.sl_sigma.stop, self.sl_sigma.stop + self.d_corr_i)
+        self.dim = self.sl_corr.stop
         self.D_g = self.d_max + self.q_max + 1 + self.d_corr_max
 
     def toProposal(self, u: torch.Tensor) -> Proposal:
         s = u.shape[0]
         g = u.new_zeros(s, self.D_g)
-        g[:, : self.d_i] = u[:, : self.d_i]
-        g[:, self.d_max : self.d_max + self.q_i] = u[:, self.d_i : self.d_i + self.q_i].exp()
-        g[:, self.d_max + self.q_max] = u[:, self.d_i + self.q_i].exp()
+        g[:, : self.d_i] = u[:, self.sl_ffx]
+        sigmas = u[:, self.sl_sigma].exp()
+        g[:, self.d_max : self.d_max + self.q_i] = sigmas[:, :-1]
+        g[:, self.d_max + self.q_max] = sigmas[:, -1]
         if self.corr:
-            z = u[:, self.d_i + self.q_i + 1 :]
-            L = unconstrainedToCholesky(z, self.q_i)
+            L = unconstrainedToCholesky(u[:, self.sl_corr], self.q_i)
             off = self.d_max + self.q_max + 1
             g[:, off : off + self.d_corr_i] = corrToLower(L @ L.mT)
         proposed = {
@@ -216,14 +221,12 @@ class Target:
 
     def logProb(self, u: torch.Tensor) -> torch.Tensor:
         ll, lp = self.is_.unnormalizedPosterior(self.toProposal(u))
-        out = (ll + lp)[0]
-        out = out + u[:, self.d_i : self.d_i + self.q_i + 1].sum(-1)  # |dσ/d log σ|
+        out = (ll + lp)[0] + u[:, self.sl_sigma].sum(-1)  # |dσ/d log σ|
         if self.corr:
             z = u.new_zeros(1, u.shape[0], self.d_corr_max)
-            z[0, :, : self.d_corr_i] = u[:, self.d_i + self.q_i + 1 :]
-            out = (
-                out + logProbCorrRfx(z, self.q_max, self.eta, q_active=torch.tensor([self.q_i]))[0]
-            )
+            z[0, :, : self.d_corr_i] = u[:, self.sl_corr]
+            q_active = torch.tensor([self.q_i])
+            out = out + logProbCorrRfx(z, self.q_max, self.eta, q_active=q_active)[0]
         return torch.nan_to_num(out, nan=-math.inf, posinf=-math.inf)
 
     def fromConstrained(
@@ -242,6 +245,17 @@ class Target:
         if self.corr:
             parts.append(corrToUnconstrained(corr[:, : self.q_i, : self.q_i].double()))
         return torch.cat(parts, -1)
+
+    def fromProposal(self, p: Proposal) -> torch.Tensor:
+        corr = p.corr_rfx[0] if self.corr else None
+        return self.fromConstrained(p.ffx[0], p.sigma_rfx[0], p.sigma_eps[0], corr)
+
+    def fromNuts(self, nuts: dict[str, np.ndarray], i: int) -> torch.Tensor:
+        ffx = torch.as_tensor(nuts['nuts_ffx'][i]).T  # (S, d_max)
+        sigma_rfx = torch.as_tensor(nuts['nuts_sigma_rfx'][i]).T  # (S, q_max)
+        sigma_eps = torch.as_tensor(nuts['nuts_sigma_eps'][i, 0])  # (S,)
+        corr = torch.as_tensor(nuts['nuts_corr_rfx'][i, 0]) if self.corr else None  # (S, q, q)
+        return self.fromConstrained(ffx, sigma_rfx, sigma_eps, corr)
 
 
 def _bridgeOnce(
@@ -289,12 +303,9 @@ def bridge(log_target, u_post: torch.Tensor, n_prop: int, gen: torch.Generator) 
 # ---------------------------------------------------------------------------
 
 
-def isEvidence(
-    proposal: Proposal, batch64: dict[str, torch.Tensor], pool_sizes: list[int], coords: str
-) -> dict:
-    sampler = ImportanceSampler(
-        batch64, marginal=True, corr_prior=True, pareto=True, corr_prior_coords=coords
-    )
+def isEvidence(proposal: Proposal, batch64: dict[str, torch.Tensor], pool_sizes: list[int]) -> dict:
+    """IS log-evidence, PSIS k and efficiency per pool prefix; 'weights' = PSIS weights at S_max."""
+    sampler = ImportanceSampler(batch64, marginal=True, corr_prior=True, pareto=True)
     out = sampler(proposalDouble(proposal))
     lw = out.is_results['log_w_raw'][0]  # (S,)
     res = {'weights': out.is_results['weights'][0]}
@@ -302,9 +313,9 @@ def isEvidence(
         lw_s = lw[:s]
         lw_np, k = az.psislw(lw_s.unsqueeze(0).numpy())
         w = torch.softmax(torch.as_tensor(lw_np[0]), -1)
-        res[f'logev_is_{coords}_s{s}'] = (torch.logsumexp(lw_s, 0) - math.log(s)).item()
-        res[f'k_{coords}_s{s}'] = float(k[0])
-        res[f'eff_{coords}_s{s}'] = float(1.0 / (s * (w**2).sum()))
+        res[f'logev_is_s{s}'] = (torch.logsumexp(lw_s, 0) - math.log(s)).item()
+        res[f'k_s{s}'] = float(k[0])
+        res[f'eff_s{s}'] = float(1.0 / (s * (w**2).sum()))
     return res
 
 
@@ -318,23 +329,37 @@ def runImh(proposal: Proposal, batch64: dict[str, torch.Tensor]) -> tuple[Propos
         mode='marginal',
         likelihood_family=0,
         n_eff_target=None,
-        corr_prior_coords='r',
     )
     p_imh, diag = sampler(proposalDouble(proposal, IMH_CHAINS * n_steps))
     return p_imh, float(diag['accept_rate'].mean())
 
 
-def imhUnconstrained(target: Target, p_imh: Proposal) -> torch.Tensor:
-    corr = p_imh.corr_rfx[0] if target.corr else None
-    return target.fromConstrained(p_imh.ffx[0], p_imh.sigma_rfx[0], p_imh.sigma_eps[0], corr)
-
-
-def nutsUnconstrained(target: Target, nuts: dict[str, np.ndarray], i: int) -> torch.Tensor:
-    ffx = torch.as_tensor(nuts['nuts_ffx'][i]).T  # (S, d_max)
-    sigma_rfx = torch.as_tensor(nuts['nuts_sigma_rfx'][i]).T  # (S, q_max)
-    sigma_eps = torch.as_tensor(nuts['nuts_sigma_eps'][i, 0])  # (S,)
-    corr = torch.as_tensor(nuts['nuts_corr_rfx'][i, 0]) if target.corr else None  # (S, q, q)
-    return target.fromConstrained(ffx, sigma_rfx, sigma_eps, corr)
+def fitDataset(
+    model: Approximator,
+    item: dict[str, np.ndarray],
+    args: argparse.Namespace,
+    pool_sizes: list[int],
+    gen: torch.Generator,
+    seed: int,
+) -> dict:
+    """Flow proposal, IS evidence per pool prefix, IMH refinement and the bridge on its draws."""
+    batch = collateGrouped([item])
+    batch64 = toDouble(batch)
+    target = Target(batch64, model.d_corr)
+    torch.manual_seed(seed)
+    with torch.no_grad():
+        proposal = model.estimate(toDevice(dict(batch), args.device), n_samples=max(pool_sizes))
+    proposal.to('cpu')
+    p_imh, accept = runImh(proposal, batch64)
+    return {
+        'batch': batch,
+        'target': target,
+        'proposal': proposal,
+        'is': isEvidence(proposal, batch64, pool_sizes),
+        'p_imh': p_imh,
+        'imh_accept': accept,
+        'bridge_imh': bridge(target.logProb, target.fromProposal(p_imh), args.n_bridge, gen),
+    }
 
 
 def jeffreys(log_bf: float) -> float:
@@ -348,6 +373,10 @@ def categoryAgreement(a: pd.Series, b: pd.Series) -> float:
     """Share of rows whose Jeffreys categories agree; a non-finite estimate never agrees."""
     ca, cb = a.map(jeffreys), b.map(jeffreys)
     return float(((ca == cb) & ca.notna() & cb.notna()).mean())
+
+
+def nestedRows(df: pd.DataFrame) -> pd.DataFrame:
+    return df[df['logbf_ref'].notna()] if 'logbf_ref' in df else df.iloc[0:0]
 
 
 # ---------------------------------------------------------------------------
@@ -368,91 +397,69 @@ def _absStats(delta: pd.Series) -> dict:
     }
 
 
+def _table(rows: dict, floatfmt: str = '.3f') -> str:
+    return pd.DataFrame(rows).T.to_markdown(floatfmt=floatfmt)
+
+
 def summarize(df: pd.DataFrame, pool_sizes: list[int], label: str) -> str:
-    lines = [f'# {label}: IS log-evidence vs bridge sampling', '']
+    s_max = max(pool_sizes)
     ref = df['logev_bridge_nuts']
-    lines.append('## Reference noise floor (nats)')
-    lines.append('')
+    d_max = df[f'logev_is_s{s_max}'] - ref
+    k_max = df[f'k_s{s_max}']
+    lines = [f'# {label}: IS log-evidence vs bridge sampling', '']
+
+    lines += ['## Reference noise floor (nats)', '']
     lines.append(
-        pd.DataFrame(
+        _table(
             {
                 'bridgeNuts vs swapped halves': _absStats(ref - df['logev_bridge_nuts_swap']),
                 'bridgeImh vs bridgeNuts': _absStats(df['logev_bridge_imh'] - ref),
             }
-        ).T.to_markdown(floatfmt='.3f')
-    )
-    lines += ['', '## IS − bridgeNuts by coordinates and pool size', '']
-    rows = {}
-    for c in COORDS:
-        for s in pool_sizes:
-            rows[f"IS('{c}') S={s}"] = _absStats(df[f'logev_is_{c}_s{s}'] - ref)
-    lines.append(pd.DataFrame(rows).T.to_markdown(floatfmt='.3f'))
-    s_max = max(pool_sizes)
-    lines += ['', f'## By PSIS k (S={s_max})', '']
-    rows = {}
-    for c in COORDS:
-        k = df[f'k_{c}_s{s_max}']
-        d = df[f'logev_is_{c}_s{s_max}'] - ref
-        for name, sel in (
-            ('k ≤ 0.5', k <= 0.5),
-            ('0.5 < k ≤ 0.7', (k > 0.5) & (k <= 0.7)),
-            ('k > 0.7', k > 0.7),
-        ):
-            rows[f"IS('{c}') {name}"] = _absStats(d[sel])
-    lines.append(pd.DataFrame(rows).T.to_markdown(floatfmt='.3f'))
-    for c in COORDS:
-        d = (df[f'logev_is_{c}_s{s_max}'] - ref).abs()
-        rho_k = d.corr(df[f'k_{c}_s{s_max}'], method='spearman')
-        rho_a = d.corr(df['imh_accept'], method='spearman')
-        lines.append('')
-        lines.append(
-            f"IS('{c}') S={s_max}: Spearman(|Δ|, k) = {rho_k:.2f}, Spearman(|Δ|, IMH acceptance) = {rho_a:.2f}"
         )
+    )
+
+    lines += ['', '## IS − bridgeNuts by pool size', '']
+    lines.append(_table({f'S={s}': _absStats(df[f'logev_is_s{s}'] - ref) for s in pool_sizes}))
+
+    lines += ['', f'## By PSIS k (S={s_max})', '']
+    bins = (
+        ('k ≤ 0.5', k_max <= 0.5),
+        ('0.5 < k ≤ 0.7', (k_max > 0.5) & (k_max <= 0.7)),
+        ('k > 0.7', k_max > 0.7),
+    )
+    lines.append(_table({name: _absStats(d_max[sel]) for name, sel in bins}))
+    rho_k = d_max.abs().corr(k_max, method='spearman')
+    rho_a = d_max.abs().corr(df['imh_accept'], method='spearman')
+    lines += ['', f'Spearman(|Δ|, k) = {rho_k:.2f}, Spearman(|Δ|, IMH acceptance) = {rho_a:.2f}']
+
     corr = df[df['corr_active']]
     if len(corr):
         lines += ['', f'## Correlated datasets (n={len(corr)}), S={s_max}', '']
-        rows = {
-            f"IS('{c}')": _absStats(corr[f'logev_is_{c}_s{s_max}'] - corr['logev_bridge_nuts'])
-            for c in COORDS
-        }
-        lines.append(pd.DataFrame(rows).T.to_markdown(floatfmt='.3f'))
-        lines += [
-            '',
-            'Posterior mean of the first rfx correlation vs NUTS (mean |E[ρ] − E_NUTS[ρ]|):',
-            '',
-        ]
+        lines.append(_table({'IS': _absStats(d_max[corr.index])}))
+        lines += ['', 'Posterior mean of the first rfx correlation vs NUTS:', '']
         rows = {
             name: {
                 'mean |Δρ|': (corr[col] - corr['rho_nuts']).abs().mean(),
                 'mean Δρ': (corr[col] - corr['rho_nuts']).mean(),
             }
-            for name, col in (
-                ('raw flow', 'rho_raw'),
-                ("IS('z')", 'rho_is_z'),
-                ("IS('r')", 'rho_is_r'),
-                ('IMH', 'rho_imh'),
-            )
+            for name, col in (('raw flow', 'rho_raw'), ('IS', 'rho_is'), ('IMH', 'rho_imh'))
         }
-        lines.append(pd.DataFrame(rows).T.to_markdown(floatfmt='.4f'))
-    nested = df[df['logbf_ref'].notna()] if 'logbf_ref' in df else df.iloc[0:0]
+        lines.append(_table(rows, floatfmt='.4f'))
+
+    nested = nestedRows(df)
     if len(nested):
         lines += ['', f'## Nested comparison: random slope vs intercept-only (n={len(nested)})', '']
         rows = {}
-        for name, col in (
-            ("IS('z')", 'logbf_is_z'),
-            ("IS('r')", 'logbf_is_r'),
-            ('bridgeImh (both)', 'logbf_ref_imh'),
-        ):
-            st = _absStats(nested[col] - nested['logbf_ref'])
-            st['same Jeffreys cat.'] = categoryAgreement(nested[col], nested['logbf_ref'])
-            rows[name] = st
-        lines.append(pd.DataFrame(rows).T.to_markdown(floatfmt='.3f'))
-        lines.append('')
+        for name, col in (('IS', 'logbf_is'), ('bridgeImh (both)', 'logbf_ref_imh')):
+            rows[name] = _absStats(nested[col] - nested['logbf_ref'])
+            rows[name]['same Jeffreys cat.'] = categoryAgreement(nested[col], nested['logbf_ref'])
+        lines.append(_table(rows))
         cats = nested['logbf_ref'].map(jeffreys).dropna().astype(int).value_counts().sort_index()
-        lines.append(
+        lines += [
+            '',
             'Reference ln BF categories (signed Jeffreys, + favours the random slope): '
-            + ', '.join(f'{k}: {v}' for k, v in cats.items())
-        )
+            + ', '.join(f'{k}: {v}' for k, v in cats.items()),
+        ]
     lines.append('')
     return '\n'.join(lines)
 
@@ -463,42 +470,25 @@ def plot(df: pd.DataFrame, pool_sizes: list[int], path: Path, label: str) -> Non
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    colors = {'z': '#D9822B', 'r': '#3B6FB6'}
     s_max = max(pool_sizes)
     ref = df['logev_bridge_nuts']
-    has_nested = 'logbf_ref' in df and df['logbf_ref'].notna().any()
-    fig, axes = plt.subplots(
-        1, 3 if has_nested else 2, figsize=(4.2 * (3 if has_nested else 2), 3.6)
-    )
+    nested = nestedRows(df)
+    n_ax = 3 if len(nested) else 2
+    fig, axes = plt.subplots(1, n_ax, figsize=(4.2 * n_ax, 3.6))
+    dots = dict(s=14, alpha=0.8, color=COLOR, edgecolor='none')
+
     ax = axes[0]
-    for c in COORDS:
-        ax.scatter(
-            df[f'k_{c}_s{s_max}'],
-            df[f'logev_is_{c}_s{s_max}'] - ref,
-            s=14,
-            alpha=0.8,
-            color=colors[c],
-            edgecolor='none',
-            label=f"IS('{c}')",
-        )
+    ax.scatter(df[f'k_s{s_max}'], df[f'logev_is_s{s_max}'] - ref, **dots)
     ax.axhline(0, color='0.6', lw=0.8)
     ax.axvline(0.7, color='0.6', lw=0.8, ls=':')
     ax.set_xlabel('PSIS k')
     ax.set_ylabel(f'log p̂(D) IS (S={s_max}) − bridge (nats)')
-    ax.legend(frameon=False)
+
     ax = axes[1]
-    for c in COORDS:
-        d = np.stack([(df[f'logev_is_{c}_s{s}'] - ref).abs().to_numpy() for s in pool_sizes], 1)
-        for row in d:
-            ax.plot(pool_sizes, row, color=colors[c], alpha=0.15, lw=0.8)
-        ax.plot(
-            pool_sizes,
-            np.nanmedian(d, 0),
-            color=colors[c],
-            lw=2,
-            marker='o',
-            label=f"IS('{c}') median",
-        )
+    d = np.stack([(df[f'logev_is_s{s}'] - ref).abs().to_numpy() for s in pool_sizes], 1)
+    for row in d:
+        ax.plot(pool_sizes, row, color=COLOR, alpha=0.15, lw=0.8)
+    ax.plot(pool_sizes, np.nanmedian(d, 0), color=COLOR, lw=2, marker='o', label='median')
     ax.set_xscale('log')
     ax.set_yscale('log')
     ax.set_xticks(pool_sizes)
@@ -507,24 +497,15 @@ def plot(df: pd.DataFrame, pool_sizes: list[int], path: Path, label: str) -> Non
     ax.set_xlabel('pool size S')
     ax.set_ylabel('|Δ log p̂(D)| (nats)')
     ax.legend(frameon=False)
-    if has_nested:
+
+    if len(nested):
         ax = axes[2]
-        nested = df[df['logbf_ref'].notna()]
-        lim = max(nested[['logbf_ref', 'logbf_is_r', 'logbf_is_z']].abs().max()) * 1.05
+        lim = max(nested[['logbf_ref', 'logbf_is']].abs().max()) * 1.05
         for e in np.concatenate([-JEFFREYS_EDGES, JEFFREYS_EDGES]):
             ax.axhline(e, color='0.85', lw=0.6)
             ax.axvline(e, color='0.85', lw=0.6)
         ax.plot([-lim, lim], [-lim, lim], color='0.6', lw=0.8)
-        for c in COORDS:
-            ax.scatter(
-                nested['logbf_ref'],
-                nested[f'logbf_is_{c}'],
-                s=14,
-                alpha=0.8,
-                color=colors[c],
-                edgecolor='none',
-                label=f"IS('{c}')",
-            )
+        ax.scatter(nested['logbf_ref'], nested['logbf_is'], **dots)
         ax.set_xscale('symlog', linthresh=5.0)
         ax.set_yscale('symlog', linthresh=5.0)
         ticks = [-1000, -100, -10, 0, 10, 100, 1000]
@@ -534,13 +515,65 @@ def plot(df: pd.DataFrame, pool_sizes: list[int], path: Path, label: str) -> Non
         ax.yaxis.set_minor_locator(matplotlib.ticker.NullLocator())
         ax.set_xlabel('ln BF (bridge reference)')
         ax.set_ylabel('ln BF (IS)')
-        ax.legend(frameon=False)
+
     for ax in axes:
         ax.spines[['top', 'right']].set_visible(False)
     fig.suptitle(label, fontsize=10)
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
+
+
+def writeOutputs(df: pd.DataFrame, pool_sizes: list[int], out_dir: Path, stem: str, label: str):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    md = summarize(df, pool_sizes, label)
+    (out_dir / f'{stem}.md').write_text(md)
+    plot(df, pool_sizes, out_dir / f'{stem}.png', label)
+    print(md)
+
+
+def writeTex(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | None:
+    """Appendix table over all sizes with a CSV in out_dir."""
+    csvs = {size: sorted(out_dir.glob(f'{size}_{split}_n*.csv')) for size in SIZES}
+    csvs = {size: paths[-1] for size, paths in csvs.items() if paths}
+    if not csvs:
+        return None
+    lines = [
+        r'\begin{tabular}{lrr r cc c r cc}',
+        r'    \toprule',
+        r'    $\mathrm{regime}$ & $\#\mathrm{ds}$ & $\#\mathrm{corr}$ & $S$ & '
+        r'$\mathrm{med}\,|\Delta\log p(\mathcal{D})|$ & $q_{90}\,|\Delta\log p(\mathcal{D})|$ & '
+        r'$\mathrm{frac}\,k>0.7$ & $\#\mathrm{nested}$ & $\mathrm{BF\ cat.\ agree}$ & '
+        r'$\mathrm{med}\,|\Delta\ln \mathrm{BF}|$ \\',
+        r'    \midrule',
+    ]
+    s_min, s_max = min(pool_sizes), max(pool_sizes)
+    for size, path in csvs.items():
+        df = loadCsv(path)
+        ref = df['logev_bridge_nuts']
+        nested = nestedRows(df)
+        head = f'    \\texttt{{{size}}} & {len(df)} & {int(df["corr_active"].sum())}'
+        for s in (s_min, s_max):
+            if f'logev_is_s{s}' not in df:
+                continue
+            d = (df[f'logev_is_s{s}'] - ref).abs()
+            frac_k = (df[f'k_s{s}'] > 0.7).mean()
+            nested_cells = ' & & '
+            if s == s_max and len(nested):
+                agree = categoryAgreement(nested['logbf_is'], nested['logbf_ref'])
+                bf = (nested['logbf_is'] - nested['logbf_ref']).abs().median()
+                nested_cells = f'{len(nested)} & ${agree:.2f}$ & ${bf:.3f}$'
+            lines.append(
+                f'{head} & {s} & ${d.median():.3f}$ & ${d.quantile(0.9):.3f}$ & '
+                f'${frac_k:.2f}$ & {nested_cells} \\\\'
+            )
+            head = '     &  & '
+        lines.append(r'    \midrule')
+    lines[-1] = r'    \bottomrule'
+    lines.append(r'\end{tabular}')
+    path = out_dir / 'evidence_normal.tex'
+    path.write_text('\n'.join(lines) + '\n')
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -558,7 +591,6 @@ def runSize(size: str, args: argparse.Namespace) -> None:
 
     model, epoch = loadModel(ckpt)
     model.to(args.device)
-    d_corr_model = model.d_corr
     col = Collection(npz_path, permute=False, exclude_prefixes=('nuts_', 'advi_', 'laplace_'))
     n_ds = min(args.n_datasets, len(col))
     nuts = loadNuts(npz_path, n_ds)
@@ -573,9 +605,9 @@ def runSize(size: str, args: argparse.Namespace) -> None:
     for i in range(n_ds):
         t_i = time.perf_counter()
         item = col[i]
-        batch = collateGrouped([item])
-        batch64 = toDouble(batch)
-        target = Target(batch64, d_corr_model)
+        fit = fitDataset(model, item, args, pool_sizes, gen, seed=args.seed * 100_003 + i)
+        batch, target = fit['batch'], fit['target']
+        ess = nuts['nuts_ess'][i]
         row = {
             'idx': i,
             'size': size,
@@ -588,86 +620,52 @@ def runSize(size: str, args: argparse.Namespace) -> None:
             'sd_y': float(batch['sd_y']),
             'log_jac_std': float(logJacobianStandardization(batch)[0]),
             'nuts_max_rhat': float(np.nanmax(nuts['nuts_rhat'][i])),
-            'nuts_min_ess': float(
-                np.nanmin(np.where(nuts['nuts_ess'][i] > 0, nuts['nuts_ess'][i], np.nan))
-            ),
+            'nuts_min_ess': float(np.nanmin(np.where(ess > 0, ess, np.nan))),
             'nuts_div': int(nuts['nuts_divergences'][i].sum()),
+            'imh_accept': fit['imh_accept'],
+            **{k: v for k, v in fit['is'].items() if k != 'weights'},
         }
 
-        # flow proposal (standardized space) and IS evidence in both coordinate conventions
-        torch.manual_seed(args.seed * 100_003 + i)
-        with torch.no_grad():
-            proposal = model.estimate(
-                {k: v.to(args.device) if torch.is_tensor(v) else v for k, v in batch.items()},
-                n_samples=s_max,
-            )
-        proposal.to('cpu')
-        weights = {}
-        for c in COORDS:
-            res = isEvidence(proposal, batch64, pool_sizes, c)
-            weights[c] = res.pop('weights')
-            row.update(res)
+        # bridge references: NUTS draws (primary) and the IMH draws (validates the IMH bridge)
+        br = bridge(target.logProb, target.fromNuts(nuts, i), args.n_bridge, gen)
+        row['logev_bridge_nuts'] = br['log_ev']
+        row['logev_bridge_nuts_swap'] = br['log_ev_swap']
+        row['bridge_nuts_iter'] = br['n_iter']
+        row['logev_bridge_imh'] = fit['bridge_imh']['log_ev']
+        row['logev_bridge_imh_swap'] = fit['bridge_imh']['log_ev_swap']
 
-        # IMH (exact marginal target, 'r' coordinates): acceptance + posterior draws
-        p_imh, accept = runImh(proposal, batch64)
-        row['imh_accept'] = accept
-
-        # bridge references
-        br = bridge(target.logProb, nutsUnconstrained(target, nuts, i), args.n_bridge, gen)
-        row.update(
-            {
-                'logev_bridge_nuts': br['log_ev'],
-                'logev_bridge_nuts_swap': br['log_ev_swap'],
-                'bridge_nuts_iter': br['n_iter'],
-            }
-        )
-        br = bridge(target.logProb, imhUnconstrained(target, p_imh), args.n_bridge, gen)
-        row.update({'logev_bridge_imh': br['log_ev'], 'logev_bridge_imh_swap': br['log_ev_swap']})
-
-        # correlation tilt check (first rfx correlation)
+        # posterior mean of the first rfx correlation under raw flow / IS / IMH vs NUTS
         if target.corr:
-            rho_flow = proposal.samples_g[0, :, -d_corr_model].double()
+            rho_flow = fit['proposal'].samples_g[0, :, -model.d_corr].double()
             row['rho_nuts'] = float(nuts['nuts_corr_rfx'][i, 0, :, 1, 0].mean())
             row['rho_raw'] = float(rho_flow.mean())
-            row['rho_is_z'] = float((weights['z'] * rho_flow).sum())
-            row['rho_is_r'] = float((weights['r'] * rho_flow).sum())
-            row['rho_imh'] = float(p_imh.corr_rfx[0, :, 1, 0].mean())
+            row['rho_is'] = float((fit['is']['weights'] * rho_flow).sum())
+            row['rho_imh'] = float(fit['p_imh'].corr_rfx[0, :, 1, 0].mean())
 
-        # nested comparison: drop the random slope
+        # nested comparison: drop the random slope; the IMH bridge is the reduced model's reference
         if target.q_i >= 2 and n_nested < args.nested:
             n_nested += 1
-            batch_r = collateGrouped([reducedItem(item)])
-            batch64_r = toDouble(batch_r)
-            torch.manual_seed(args.seed * 100_003 + i + 50_000)
-            with torch.no_grad():
-                proposal_r = model.estimate(
-                    {k: v.to(args.device) if torch.is_tensor(v) else v for k, v in batch_r.items()},
-                    n_samples=s_max,
-                )
-            proposal_r.to('cpu')
-            res_r = isEvidence(proposal_r, batch64_r, [s_max], 'r')
-            row['logev_is_red'] = res_r[f'logev_is_r_s{s_max}']
-            row['k_red'] = res_r[f'k_r_s{s_max}']
-            p_imh_r, row['imh_accept_red'] = runImh(proposal_r, batch64_r)
-            target_r = Target(batch64_r, d_corr_model)
-            br = bridge(target_r.logProb, imhUnconstrained(target_r, p_imh_r), args.n_bridge, gen)
-            row['logev_bridge_imh_red'] = br['log_ev']
-            row['logev_bridge_imh_red_swap'] = br['log_ev_swap']
-            for c in COORDS:
-                row[f'logbf_is_{c}'] = row[f'logev_is_{c}_s{s_max}'] - row['logev_is_red']
+            red = fitDataset(
+                model, reducedItem(item), args, [s_max], gen, seed=args.seed * 100_003 + i + 50_000
+            )
+            row['logev_is_red'] = red['is'][f'logev_is_s{s_max}']
+            row['k_red'] = red['is'][f'k_s{s_max}']
+            row['imh_accept_red'] = red['imh_accept']
+            row['logev_bridge_imh_red'] = red['bridge_imh']['log_ev']
+            row['logev_bridge_imh_red_swap'] = red['bridge_imh']['log_ev_swap']
+            row['logbf_is'] = row[f'logev_is_s{s_max}'] - row['logev_is_red']
             row['logbf_ref'] = row['logev_bridge_nuts'] - row['logev_bridge_imh_red']
             row['logbf_ref_imh'] = row['logev_bridge_imh'] - row['logev_bridge_imh_red']
 
         rows.append(row)
-        d_z = row[f'logev_is_z_s{s_max}'] - row['logev_bridge_nuts']
-        d_r = row[f'logev_is_r_s{s_max}'] - row['logev_bridge_nuts']
         print(
             f'ds={i:3d} d={target.d_i} q={target.q_i} m={row["m"]:3d} n={row["n"]:4d} corr={int(target.corr)}  '
             f'bridge={row["logev_bridge_nuts"]:9.2f} (swap Δ={row["logev_bridge_nuts"] - row["logev_bridge_nuts_swap"]:+.3f}, '
             f'imh Δ={row["logev_bridge_imh"] - row["logev_bridge_nuts"]:+.3f})  '
-            f"IS Δz={d_z:+.3f} Δr={d_r:+.3f}  k={row[f'k_r_s{s_max}']:.2f} acc={accept:.2f}"
+            f'IS Δ={row[f"logev_is_s{s_max}"] - row["logev_bridge_nuts"]:+.3f}  '
+            f'k={row[f"k_s{s_max}"]:.2f} acc={row["imh_accept"]:.2f}'
             + (
-                f'  lnBF ref={row["logbf_ref"]:+.2f} is={row["logbf_is_r"]:+.2f}'
+                f'  lnBF ref={row["logbf_ref"]:+.2f} is={row["logbf_is"]:+.2f}'
                 if 'logbf_ref' in row
                 else ''
             )
@@ -676,64 +674,11 @@ def runSize(size: str, args: argparse.Namespace) -> None:
         )
 
     df = pd.DataFrame(rows)
-    args.out_dir.mkdir(parents=True, exist_ok=True)
     stem = f'{size}_{args.split}_n{n_ds}'
+    args.out_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(args.out_dir / f'{stem}.csv', index=False)
-    md = summarize(df, pool_sizes, label)
-    (args.out_dir / f'{stem}.md').write_text(md)
-    plot(df, pool_sizes, args.out_dir / f'{stem}.png', label)
-    print(md)
+    writeOutputs(df, pool_sizes, args.out_dir, stem, label)
     print(f'[saved] {args.out_dir / stem}.{{csv,md,png}}  ({time.perf_counter() - t0:.0f}s)')
-
-
-def writeTex(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | None:
-    """Appendix table over all sizes with a CSV in out_dir (consistent 'r' coordinates)."""
-    csvs = {size: sorted(out_dir.glob(f'{size}_{split}_n*.csv')) for size in SIZES}
-    csvs = {size: paths[-1] for size, paths in csvs.items() if paths}
-    if not csvs:
-        return None
-    lines = [
-        r'\begin{tabular}{lrr r cc c r cc}',
-        r'    \toprule',
-        r'    \mathrm{regime} & \#\mathrm{ds} & \#\mathrm{corr} & S & '
-        r'\mathrm{med}\,|\Delta\log p(\mathcal{D})| & q_{90}\,|\Delta\log p(\mathcal{D})| & '
-        r'\mathrm{frac}\,k>0.7 & \#\mathrm{nested} & \mathrm{BF\ cat.\ agree} & '
-        r'\mathrm{med}\,|\Delta\ln \mathrm{BF}| \\',
-        r'    \midrule',
-    ]
-    for size, path in csvs.items():
-        df = pd.read_csv(path)
-        ref = df['logev_bridge_nuts']
-        nested = df[df['logbf_ref'].notna()] if 'logbf_ref' in df else df.iloc[0:0]
-        first = True
-        for s in (min(pool_sizes), max(pool_sizes)):
-            col = f'logev_is_r_s{s}'
-            if col not in df:
-                continue
-            d = (df[col] - ref).abs()
-            frac_k = (df[f'k_r_s{s}'] > 0.7).mean()
-            if s == max(pool_sizes) and len(nested):
-                agree = categoryAgreement(nested['logbf_is_r'], nested['logbf_ref'])
-                bf = (nested['logbf_is_r'] - nested['logbf_ref']).abs().median()
-                nested_cells = f'{len(nested)} & ${agree:.2f}$ & ${bf:.3f}$'
-            else:
-                nested_cells = ' & & '
-            head = (
-                f'    \\texttt{{{size}}} & {len(df)} & {int(df["corr_active"].sum())}'
-                if first
-                else '     &  & '
-            )
-            lines.append(
-                f'{head} & {s} & ${d.median():.3f}$ & ${d.quantile(0.9):.3f}$ & '
-                f'${frac_k:.2f}$ & {nested_cells} \\\\'
-            )
-            first = False
-        lines.append(r'    \midrule')
-    lines[-1] = r'    \bottomrule'
-    lines.append(r'\end{tabular}')
-    path = out_dir / f'evidence_normal.tex'
-    path.write_text('\n'.join(lines) + '\n')
-    return path
 
 
 def resummarize(size: str, args: argparse.Namespace) -> None:
@@ -741,23 +686,15 @@ def resummarize(size: str, args: argparse.Namespace) -> None:
     if not paths:
         print(f'[skip] no CSV for {size} in {args.out_dir}')
         return
-    df = pd.read_csv(paths[-1])
-    stem = paths[-1].stem
+    df = loadCsv(paths[-1])
     label = f'Normal ({size}), {args.split}, n={len(df)}'
-    pool_sizes = sorted(args.pool_sizes)
-    md = summarize(df, pool_sizes, label)
-    (args.out_dir / f'{stem}.md').write_text(md)
-    plot(df, pool_sizes, args.out_dir / f'{stem}.png', label)
-    print(md)
+    writeOutputs(df, sorted(args.pool_sizes), args.out_dir, paths[-1].stem, label)
 
 
 def main() -> None:
     args = setup()
     for size in args.sizes:
-        if args.summarize_only:
-            resummarize(size, args)
-        else:
-            runSize(size, args)
+        (resummarize if args.summarize_only else runSize)(size, args)
     # the combined table spans all sizes with a CSV in out_dir; assemble it only in the
     # summarize-only pass so parallel per-size runs do not race on the same file
     if args.summarize_only:

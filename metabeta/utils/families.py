@@ -401,9 +401,7 @@ def logProbCorrRfx(
     active = eta > 0  # (b,) — datasets with an LKJ prior (q >= 2)
     if not active.any():
         return lp
-    if q_active is None:
-        q_active = torch.full_like(eta, q, dtype=torch.long)
-    q_active = q_active.long()
+    q_active = torch.full_like(eta, q, dtype=torch.long) if q_active is None else q_active.long()
     for q_i in torch.unique(q_active[active]).tolist():
         if q_i < 2:
             continue

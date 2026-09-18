@@ -94,7 +94,7 @@ from build_ckpt import BEST_SEEDS, _ckpt_dir                           # noqa: E
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import EvaluationSummary
-from metabeta.posthoc.importance import WEIGHTS_VERSION, ImportanceSampler
+from metabeta.posthoc.importance import ImportanceSampler, weightsTag
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.metropolis import MetropolisSampler, suggestPoolSize
 from metabeta.posthoc.warmnuts import WarmNuts, _stackProposals, needsEscalation
@@ -132,7 +132,6 @@ def setup() -> argparse.Namespace:
     p.add_argument('--include-warmnuts', action='store_true', help='also run the warm-started NUTS condition (slow on the first pass; per-dataset fits are cached)')
     p.add_argument('--wn-refit', action='store_true', help='ignore cached warm-NUTS fits and re-sample')
     p.add_argument('--refresh-summaries', action='store_true', help='recompute per-condition evaluation summaries even when a fresh cache exists (use after changing metrics or condition code)')
-    p.add_argument('--corr-coords', choices=['z', 'r'], default='r', help="LKJ prior coordinates for the IS/IMH weights (ImportanceSampler.corr_prior_coords); 'z' reproduces the legacy weights, its results are tagged _corr-z")
     return p.parse_args()
 # fmt: on
 
@@ -355,14 +354,9 @@ def loadOrSampleProposals(
 # --refresh-summaries forces recomputation after code changes.
 
 
-def _ablSummaryBase(
-    data_dir: Path, split: str, cond: str, run_name: str, prefix: str, n_s: int, corr_coords: str
-):
-    # IS/IMH-derived summaries key on the weight definition; legacy 'z' runs are tagged
-    tag = f'_w{WEIGHTS_VERSION}' if corr_coords == 'r' else f'_corr-{corr_coords}'
-    if cond in ('raw', 'coldNuts'):
-        tag = ''
-    return data_dir / f'summary_{split}_abl_{cond}_{run_name}_{prefix}_s{n_s}{tag}'
+def _ablSummaryBase(data_dir: Path, split: str, cond: str, run_name: str, prefix: str, n_s: int):
+    # IS/IMH-derived summaries also key on the weight definition (WEIGHTS_VERSION)
+    return data_dir / f'summary_{split}_abl_{cond}_{run_name}_{prefix}_s{n_s}{weightsTag(cond)}'
 
 
 def loadAblSummary(base: Path, n_ds: int, refs: tuple, refresh: bool):
@@ -415,9 +409,7 @@ def _weightHealth(proposal) -> str:
     )
 
 
-def runIS(
-    proposals, batches, full_batch, lf, full=False, marginal=False, rb_redraw=False, corr_coords='z'
-):
+def runIS(proposals, batches, full_batch, lf, full=False, marginal=False, rb_redraw=False):
     out = []
     with torch.no_grad():
         for p, batch in zip(proposals, batches):
@@ -429,7 +421,6 @@ def runIS(
                 rb_redraw=rb_redraw,
                 pareto=True,
                 likelihood_family=lf,
-                corr_prior_coords=corr_coords,
             )
             # slice-copy so is_results / redrawn rfx don't mutate the shared proposals
             out.append(sampler(p.slice_b(0, p.samples_g.shape[0])))
@@ -456,7 +447,7 @@ def imhSampleCount(n_samples: int) -> tuple[int, int]:
     return n_steps, IMH_N_CHAINS * n_steps
 
 
-def refineIMH(mode, proposals, batches, lf, n_steps=IMH_N_STEPS, corr_coords='z'):
+def refineIMH(mode, proposals, batches, lf, n_steps=IMH_N_STEPS):
     """Run IMH on each sub-batch; return (merged batch Proposal, accept rates)."""
     imh_proposals, accept_rates = [], []
     for p, batch in zip(proposals, batches):
@@ -467,7 +458,6 @@ def refineIMH(mode, proposals, batches, lf, n_steps=IMH_N_STEPS, corr_coords='z'
             burnin=IMH_BURNIN,
             mode=mode,
             likelihood_family=lf,
-            corr_prior_coords=corr_coords,
         )
         p_out, diag = sampler(p)
         imh_proposals.append(p_out)
@@ -475,11 +465,9 @@ def refineIMH(mode, proposals, batches, lf, n_steps=IMH_N_STEPS, corr_coords='z'
     return concatProposalsBatch(imh_proposals), torch.cat(accept_rates, dim=0)
 
 
-def runIMH(mode, proposals, batches, full_batch, lf, n_steps=IMH_N_STEPS, corr_coords='z'):
+def runIMH(mode, proposals, batches, full_batch, lf, n_steps=IMH_N_STEPS):
     t0 = time.perf_counter()
-    proposal, accept = refineIMH(
-        mode, proposals, batches, lf, n_steps=n_steps, corr_coords=corr_coords
-    )
+    proposal, accept = refineIMH(mode, proposals, batches, lf, n_steps=n_steps)
     t1 = time.perf_counter()
 
     suggested = suggestPoolSize(accept)
@@ -622,7 +610,7 @@ def runWarmNutsLive(refined, tensor_batch, full_batch, ds_list, lf, fits_dir, la
     return summary, diag
 
 
-def runISLaplace(proposals, batches, full_batch, lf, attach_only=False, corr_coords='z'):
+def runISLaplace(proposals, batches, full_batch, lf, attach_only=False):
     out = []
     with torch.no_grad():
         for p, batch in zip(proposals, batches):
@@ -632,7 +620,6 @@ def runISLaplace(proposals, batches, full_batch, lf, attach_only=False, corr_coo
                 corr_prior=True,
                 pareto=True,
                 likelihood_family=lf,
-                corr_prior_coords=corr_coords,
             )
             out.append(sampler(p.slice_b(0, p.samples_g.shape[0])))
     proposal = concatProposalsBatch(out)
@@ -846,7 +833,6 @@ def main() -> None:
 
     for cfg in models:
         lf = cfg['likelihood_family']
-        cc = args.corr_coords
         buf = io.StringIO()
         with contextlib.redirect_stdout(_Tee(sys.stdout, buf)):
             # fixed seed per model: flow sampling and the IMH accept/reject draws are
@@ -937,7 +923,7 @@ def main() -> None:
                     else args.n_samples
                 )
                 cache_base = _ablSummaryBase(
-                    cfg['data_dir'], args.split, cond, run_name, args.prefix, n_s_cond, cc
+                    cfg['data_dir'], args.split, cond, run_name, args.prefix, n_s_cond
                 )
                 cached = loadAblSummary(
                     cache_base, n_ds, (data_path, cfg['ckpt']), args.refresh_summaries
@@ -962,59 +948,33 @@ def main() -> None:
                     )
                     summary, diag = runRaw(proposals, full_batch, lf, summary_cache=mb_summary)
                 elif cond == 'is':
-                    summary, diag = runIS(proposals, batches, full_batch, lf, corr_coords=cc)
+                    summary, diag = runIS(proposals, batches, full_batch, lf)
                 elif cond == 'isFull':
-                    summary, diag = runIS(
-                        proposals, batches, full_batch, lf, full=True, corr_coords=cc
-                    )
+                    summary, diag = runIS(proposals, batches, full_batch, lf, full=True)
                 elif cond == 'isMarginal':
                     summary, diag = runIS(
-                        proposals,
-                        batches,
-                        full_batch,
-                        lf,
-                        marginal=True,
-                        rb_redraw=True,
-                        corr_coords=cc,
+                        proposals, batches, full_batch, lf, marginal=True, rb_redraw=True
                     )
                 elif cond == 'isLaplace':
-                    summary, diag = runISLaplace(proposals, batches, full_batch, lf, corr_coords=cc)
+                    summary, diag = runISLaplace(proposals, batches, full_batch, lf)
                 elif cond == 'rbAttach':
                     summary, diag = runISLaplace(
-                        proposals, batches, full_batch, lf, attach_only=True, corr_coords=cc
+                        proposals, batches, full_batch, lf, attach_only=True
                     )
                 elif cond == 'imhMarginal':
                     imh_mode = 'marginal' if lf == 0 else 'global'
                     summary, diag, refined = runIMH(
-                        imh_mode,
-                        imh_proposals,
-                        imh_batches,
-                        full_batch,
-                        lf,
-                        n_steps=imh_n_steps,
-                        corr_coords=cc,
+                        imh_mode, imh_proposals, imh_batches, full_batch, lf, n_steps=imh_n_steps
                     )
                     imh_refined[imh_mode] = refined
                 elif cond == 'imhGlobal':
                     summary, diag, refined = runIMH(
-                        'global',
-                        imh_proposals,
-                        imh_batches,
-                        full_batch,
-                        lf,
-                        n_steps=imh_n_steps,
-                        corr_coords=cc,
+                        'global', imh_proposals, imh_batches, full_batch, lf, n_steps=imh_n_steps
                     )
                     imh_refined['global'] = refined
                 elif cond == 'imhLaplace':
                     summary, diag, refined = runIMH(
-                        'laplace',
-                        imh_proposals,
-                        imh_batches,
-                        full_batch,
-                        lf,
-                        n_steps=imh_n_steps,
-                        corr_coords=cc,
+                        'laplace', imh_proposals, imh_batches, full_batch, lf, n_steps=imh_n_steps
                     )
                     imh_refined['laplace'] = refined
                 elif cond == 'warmNuts':
@@ -1026,12 +986,7 @@ def main() -> None:
                     if refined is None:
                         print(f'  refining flow proposal with IMH (mode={wn_mode})')
                         refined, _ = refineIMH(
-                            wn_mode,
-                            imh_proposals,
-                            imh_batches,
-                            lf,
-                            n_steps=imh_n_steps,
-                            corr_coords=cc,
+                            wn_mode, imh_proposals, imh_batches, lf, n_steps=imh_n_steps
                         )
                     summary, diag = runWarmNutsLive(
                         refined,
@@ -1052,8 +1007,6 @@ def main() -> None:
         tag = '' if args.only is None else '_' + '-'.join(args.only)
         if args.n_samples != 1000:
             tag += f'_s{args.n_samples}'
-        if cc != 'r':
-            tag += f'_corr-{cc}'
         md_path = RESULTS_DIR / f'{cfg["family"]}_{cfg["size"]}{tag}.md'
         md_path.write_text(
             f'# {cfg["label"]} posthoc ablation\n\n```\n{_renderTerminal(buf.getvalue())}\n```\n'

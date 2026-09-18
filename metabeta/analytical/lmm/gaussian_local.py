@@ -298,10 +298,7 @@ def gaussianHybrid(global_proposal: Proposal, batch: dict[str, Tensor]) -> Propo
     # padded groups (no observations) would otherwise receive prior-like draws; keep the
     # padding convention of collateGrouped / concatProposalsBatch (all-zero) so cached
     # proposals can be trimmed per chunk (Proposal.resizeGroups)
-    mask_m = batch.get('mask_m')
-    if mask_m is None:
-        mask_m = batch['mask_n'].any(dim=-1)
-    mask_m = mask_m.to(samples_l.dtype)
+    mask_m = batch['mask_m'].to(samples_l.dtype)
     samples_l = samples_l * mask_m[:, :, None, None]
     log_prob_l = log_prob_l * mask_m[:, :, None]
 
