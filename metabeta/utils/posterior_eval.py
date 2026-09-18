@@ -31,7 +31,7 @@ import torch
 from tqdm import tqdm
 
 from metabeta.models.approximator import Approximator
-from metabeta.posthoc.importance import WEIGHTS_VERSION, ImportanceSampler
+from metabeta.posthoc.importance import ImportanceSampler, weightsTag
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.metropolis import MetropolisSampler
 from metabeta.utils.dataloader import sliceBatch, toDevice, trimBatchPadding
@@ -237,9 +237,9 @@ def _sampleCachePath(
     ``variant`` distinguishes runs that share a data dir but feed the model a modified batch
     (e.g. the prior-perturbation conditions of prior_misspec.py); '' keeps the plain filename.
     """
+    w_tag = weightsTag(method, sep='-')
     method = method if not variant else f'{method}@{variant}'
-    # refined methods also key on the IS/IMH weight definition (see WEIGHTS_VERSION)
-    method_tag = method if rescale is None else f'{method}-rs{int(rescale)}-w{WEIGHTS_VERSION}'
+    method_tag = method if rescale is None else f'{method}-rs{int(rescale)}{w_tag}'
     cache_name = posteriorSampleCacheName(
         partition=f'test-{maskTag(mask)}',
         method=method_tag,
@@ -499,8 +499,7 @@ def _summaryCachePath(
     variant: str = '',
 ) -> Path:
     tag = maskTag(mask)
-    # refined methods also key on the IS/IMH weight definition (see WEIGHTS_VERSION)
-    w_tag = '' if method == 'mb' else f'_w{WEIGHTS_VERSION}'
+    w_tag = weightsTag(method)
     method = method if not variant else f'{method}@{variant}'
     # model-derived methods (mb + refined) additionally key on checkpoint/prefix/n_samples/seed
     if ckpt_dir is not None:

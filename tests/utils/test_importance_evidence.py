@@ -1,4 +1,4 @@
-"""Tests for the IS log-evidence and the LKJ-prior coordinate handling in posthoc/importance.py."""
+"""Tests for the IS log-evidence and the LKJ-prior coordinates in posthoc/importance.py."""
 
 import math
 
@@ -8,11 +8,7 @@ from torch import distributions as D
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.utils.families import logProbCorrRfx
 from metabeta.utils.preprocessing import logJacobianStandardization
-from metabeta.utils.regularization import (
-    corrLowerToUnconstrained,
-    unconstrainedToCholesky,
-    corrToLower,
-)
+from metabeta.utils.regularization import corrLowerToUnconstrained, logDetJacobianCorr
 from metabeta.utils.results import Proposal
 
 
@@ -92,8 +88,12 @@ def test_log_jacobian_standardization():
     assert torch.allclose(lj, torch.tensor([-8.0 * math.log(2.0)]))
 
 
-def test_corr_prior_coords_r_removes_dr_dz_for_q2():
-    """For q_i = q = 2 the 'r' coordinates differ from legacy 'z' by exactly -log(1 - rho^2)."""
+def test_corr_prior_is_a_density_over_stored_r():
+    """The LKJ term in the weights is LKJ(z) in the dataset's own q minus the padded z→r Jacobian.
+
+    For q_i = q = 2 the Jacobian is exactly log(1 - rho^2), i.e. the weight differs from the
+    legacy density-over-z convention by -log(1 - rho^2).
+    """
     data = _batch(q=2, d=2)
     s = 16
     g = torch.Generator().manual_seed(2)
@@ -103,19 +103,16 @@ def test_corr_prior_coords_r_removes_dr_dz_for_q2():
     sigma_eps = torch.rand(1, s, generator=g) + 0.2
     log_q = torch.zeros(1, s)
     lw = {}
-    for coords in ('z', 'r'):
+    for corr_prior in (False, True):
         sampler = ImportanceSampler(
-            data,
-            marginal=True,
-            corr_prior=True,
-            pareto=False,
-            constrain=False,
-            corr_prior_coords=coords,
+            data, marginal=True, corr_prior=corr_prior, pareto=False, constrain=False
         )
         out = sampler(_proposal(ffx, sigma_rfx, sigma_eps, log_q, r_corr=rho))
-        lw[coords] = out.is_results['log_w_raw']
-    diff = lw['r'] - lw['z']
-    assert torch.allclose(diff, -torch.log1p(-rho.squeeze(-1) ** 2), atol=1e-4)
+        lw[corr_prior] = out.is_results['log_w_raw']
+    z = corrLowerToUnconstrained(rho, 2)
+    expected = logProbCorrRfx(z, 2, data['eta_rfx']) - logDetJacobianCorr(z, 2)
+    assert torch.allclose(lw[True] - lw[False], expected, atol=1e-5)
+    assert torch.allclose(-logDetJacobianCorr(z, 2), -torch.log1p(-rho.squeeze(-1) ** 2), atol=1e-4)
 
 
 def test_logProbCorrRfx_q_active_matches_own_dimension():
@@ -136,11 +133,3 @@ def test_logProbCorrRfx_q_active_matches_own_dimension():
     assert torch.allclose(
         logProbCorrRfx(zf, 3, eta), logProbCorrRfx(zf, 3, eta, q_active=torch.tensor([3]))
     )
-
-
-def test_r_to_z_roundtrip_used_by_prior():
-    g = torch.Generator().manual_seed(5)
-    z = torch.randn(3, 4, 3, generator=g) * 0.8
-    L = unconstrainedToCholesky(z, 3)
-    r = corrToLower(L @ L.mT)
-    assert torch.allclose(corrLowerToUnconstrained(r, 3), z, atol=1e-3)
