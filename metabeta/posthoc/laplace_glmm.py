@@ -221,8 +221,21 @@ def laplaceRfxModes(
     unresolved = decrement > tol
     if n_newton_extra > 0 and bool(unresolved.any()):
         modes, chol_H, decrement = _refineUnresolved(
-            unresolved, modes, chol_H, decrement, mu_ffx, Z_m, y, mask_n, sigma_eps,
-            Sigma_inv, likelihood_family, n_newton_extra, damping, n_backtrack, tol,
+            unresolved,
+            modes,
+            chol_H,
+            decrement,
+            mu_ffx,
+            Z_m,
+            y,
+            mask_n,
+            sigma_eps,
+            Sigma_inv,
+            likelihood_family,
+            n_newton_extra,
+            damping,
+            n_backtrack,
+            tol,
         )
 
     return modes, chol_H, Sigma_inv, L_rfx, decrement
@@ -265,16 +278,16 @@ def _refineUnresolved(
     eye = torch.eye(q, dtype=modk.dtype, device=modk.device)
 
     def fused(eta_k: Tensor) -> tuple[Tensor, Tensor, Tensor]:
-        """(ll (K,), score_res (K, n), w (K, n)) at η — the (b=1, m=K, s=1) layout of the
-        family helpers; Normal needs its per-entry σ_eps inline since (b, s) would not broadcast."""
-        if likelihood_family == 0:
-            phi_inv = (1.0 / sek.pow(2).clamp(min=1e-12)).unsqueeze(-1)
-            ll = D.Normal(loc=eta_k, scale=sek.unsqueeze(-1) + 1e-12).log_prob(yk)
-            return (ll * nk).sum(-1), (yk - eta_k) * phi_inv, phi_inv.expand_as(eta_k)
+        """(ll (K,), score_res (K, n), w (K, n)) at η via the family helper in its
+        (b=K, m=1, s=1) layout, so the per-entry σ_eps broadcasts like a (b, s) tensor."""
         ll, r, w = _llScoreWeight(
-            eta_k[None, :, :, None], yk[None, :, :, None], sek[:1, None], nk[None, :, :, None], likelihood_family
+            eta_k[:, None, :, None],
+            yk[:, None, :, None],
+            sek[:, None],
+            nk[:, None, :, None],
+            likelihood_family,
         )
-        return ll[0, :, 0], r[0, :, :, 0], w[0, :, :, 0]
+        return ll[:, 0, 0], r[:, 0, :, 0], w[:, 0, :, 0]
 
     def objective(cand: Tensor) -> Tensor:
         eta_k = muk + torch.einsum('knq,kq->kn', Zk, cand)
@@ -283,7 +296,9 @@ def _refineUnresolved(
     for t in range(n_extra + 1):
         eta_k = muk + torch.einsum('knq,kq->kn', Zk, modk)
         ll0, score_res, w = fused(eta_k)
-        score = torch.einsum('knq,kn->kq', Zk, score_res * nk) - torch.einsum('kqr,kr->kq', Sik, modk)
+        score = torch.einsum('knq,kn->kq', Zk, score_res * nk) - torch.einsum(
+            'kqr,kr->kq', Sik, modk
+        )
         H = torch.einsum('kn,knq,knr->kqr', w * nk, Zk, Zk) + Sik
         chol = torch.linalg.cholesky(H + 1e-6 * eye)
         delta = torch.cholesky_solve(score.unsqueeze(-1), chol).squeeze(-1)

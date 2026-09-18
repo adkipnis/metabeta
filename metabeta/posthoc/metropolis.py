@@ -33,8 +33,9 @@ Three modes differ in how rfx (local params) are handled:
       approximation (posthoc/laplace_glmm.py), so the chain operates in the global space;
       after acceptance, fresh rfx are drawn from the Laplace-Gaussian conditional
       N(b*, H⁻¹) — gathered from the pool pass by the accepted samples' pool indices,
-      since every accepted state is a pool member whose modes/Hessians are already known. Mirrors the recipe that fixed the huge-Normal regime — added because
-      isLaplace's PSIS guardrail falls back on 13–50% of large/huge GLMM datasets
+      since every accepted state is a pool member whose modes/Hessians are already known.
+      Mirrors the recipe that fixed the huge-Normal regime — added because isLaplace's
+      PSIS guardrail falls back on 13–50% of large/huge GLMM datasets
       (2026-07-29 ablation), and rejection-based correction has no fallback mode.
       Targets the same Laplace pseudo-posterior as isLaplace (shares its O(Laplace) bias).
 

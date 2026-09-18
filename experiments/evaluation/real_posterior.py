@@ -363,7 +363,7 @@ def computeRankMAD(
 # Row assembly
 
 
-def _ms(arr: np.ndarray | None) -> tuple[float, float] | None:
+def _medianMad(arr: np.ndarray | None) -> tuple[float, float] | None:
     """Median and unscaled median absolute deviation, NaNs ignored."""
     if arr is None:
         return None
@@ -387,7 +387,7 @@ def _meanStd(arr: np.ndarray | None) -> tuple[float, float] | None:
 
 # Statistic name -> function. All metrics here are one value per dataset with heavy tails,
 # so the primary (paper) statistic is median ± MAD; mean ± std is written alongside.
-STATS = {'median ± MAD': _ms, 'mean ± std': _meanStd}
+STATS = {'median ± MAD': _medianMad, 'mean ± std': _meanStd}
 PRIMARY_STAT = 'median ± MAD'
 
 
@@ -731,7 +731,8 @@ def saveTables(
             for j, row in enumerate(rows):
                 regime_cell = rf'\texttt{{{regime}}}' if j == 0 else ''
                 cells = ' & '.join(
-                    [rf'\texttt{{{row["method"]}}}'] + [fmt_tex(cell(row, m, stat)) for m in METRICS]
+                    [rf'\texttt{{{row["method"]}}}']
+                    + [fmt_tex(cell(row, m, stat)) for m in METRICS]
                 )
                 lines.append(rf'      {regime_cell} & {cells} \\')
         lines += [r'    \bottomrule', r'\end{tabular}', '']

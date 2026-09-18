@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 from matplotlib import pyplot as plt
 
-from metabeta.utils.plot import DPI, legendProxy, savePlot
+from metabeta.utils.plot import DPI, PALETTE, legendProxy, savePlot
 from metabeta.utils.warmfit import (
     COND_STYLE,
     collectWarmRecords,
@@ -36,7 +36,6 @@ from metabeta.utils.warmfit import (
 
 _NON_WARM_CONDS = {
     'mb',
-    'mb_imh',
     'mb_batch',
     'mb_e2e',
     'mb_gpu',
@@ -75,8 +74,14 @@ _PLOT_COND_ORDER = [
     'advi',
     'cold_std',
 ]
-# the runtime figures follow the paper's naming: the raw flow is MB^0, the default pipeline MB
-_RT_COND_STYLE = {**COND_STYLE, 'mb': {**COND_STYLE['mb'], 'label': 'MB$^0$'}}
+# the runtime figures follow the paper's naming: the raw flow is MB^0, the default pipeline MB.
+# 'mb_imh' is local to these figures; purple is free here because no warm-start cond shares
+# a panel with it.
+_RT_COND_STYLE = {
+    **COND_STYLE,
+    'mb': {**COND_STYLE['mb'], 'label': 'MB$^0$'},
+    'mb_imh': {'color': PALETTE[4], 'label': 'MB'},
+}
 
 # Single-panel variant (plotRuntimeRecordsObs): the same two MB rows against # observations.
 _OBS_METHOD_TO_COND = {
