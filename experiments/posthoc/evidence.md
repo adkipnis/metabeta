@@ -204,3 +204,13 @@ paragraph (Poisson huge LOO-NLL, the MB+NUTS recovery-gap sentence) adjusted. Sa
 Normal: IMH average ECE moves from negative toward zero (Bernoulli huge −0.021 → 0.001, Poisson
 huge −0.027 → −0.011), EACE up by a few thousandths, recovery within ±0.01 except Bernoulli
 huge IS r 0.666 → 0.693. LOO-NLL essentially unchanged.
+
+## Phase 3 (cluster, corrected weights; pulled to ~/Downloads/hpc-pull/phase3)
+
+All suites ran (prior/likelihood misspecification, OOD design, data poverty, agreement figures;
+condition number for Normal and Bernoulli — Poisson needs a rerun after the size fix in
+7b809178). Paper tables updated cell by cell where the paper's MB⁰/NUTS rows matched the pulled
+files (same pipeline run): `prior_misspec_*`, `likelihood_misspec_*`, `ood_design_*`,
+`condition_number_{normal,bernoulli}` — 291 MB cells, all last-decimal shifts (σ-ratio,
+rank-MAD, ΔLOO-NLL by ≤ 0.005). `data_poverty_*` left untouched: their MB⁰ rows differ from the
+pulled files (different run), so no clean delta. Agreement figures not swapped in.
