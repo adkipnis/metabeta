@@ -69,29 +69,6 @@ def _sigmaChol(sigma_rfx: Tensor, L_corr: Tensor | None) -> Tensor:
     return s.unsqueeze(-1) * L_corr
 
 
-def _meanWeightScore(
-    eta: Tensor,  # (b, m, n, s)
-    y: Tensor,  # (b, m, n, 1)
-    sigma_eps: Tensor,  # (b, s)
-    likelihood_family: int,
-) -> tuple[Tensor, Tensor]:
-    """GLM working quantities for the Newton step.
-
-    Returns (score_res, w): score wrt η is Zᵀ(score_res), Hessian weight is w —
-    i.e. score_res = (y − μ)/φ and w = V(μ)/φ with dispersion φ and variance V.
-    """
-    if likelihood_family == 0:  # Normal: φ = σ²_eps, V = 1
-        phi_inv = (1.0 / sigma_eps.pow(2).clamp(min=1e-12))[:, None, None, :]
-        return (y - eta) * phi_inv, phi_inv.expand_as(eta)
-    if likelihood_family == 1:  # Bernoulli: φ = 1, V = μ(1−μ)
-        mu = torch.sigmoid(eta)
-        return y - mu, (mu * (1.0 - mu)).clamp(min=1e-6)
-    if likelihood_family == 2:  # Poisson: φ = 1, V = μ
-        mu = torch.exp(eta.clamp(max=POISSON_ETA_CLIP_MAX))
-        return y - mu, mu.clamp(min=1e-6)
-    raise NotImplementedError(f'likelihood_family={likelihood_family}')
-
-
 def _llPerGroup(
     eta: Tensor,  # (b, m, n, s)
     y: Tensor,  # (b, m, n, 1)
@@ -113,6 +90,38 @@ def _llPerGroup(
     return (ll * mask_n).sum(dim=2)  # (b, m, s)
 
 
+def _llScoreWeight(
+    eta: Tensor,  # (b, m, n, s)
+    y: Tensor,  # (b, m, n, 1)
+    sigma_eps: Tensor,  # (b, s)
+    mask_n: Tensor,  # (b, m, n, 1)
+    likelihood_family: int,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Fused _llPerGroup + _meanWeightScore: (ll (b, m, s), score_res, w) from one pass over η.
+
+    The Newton step needs the score and weights at the current modes and the backtracking
+    line search needs the objective there; computing both from the same μ saves a full
+    (b, m, n, s) likelihood pass per iteration.
+    """
+    if likelihood_family == 0:
+        phi_inv = (1.0 / sigma_eps.pow(2).clamp(min=1e-12))[:, None, None, :]
+        scale = sigma_eps.unsqueeze(1).unsqueeze(1) + 1e-12
+        ll = D.Normal(loc=eta, scale=scale).log_prob(y)
+        score_res, w = (y - eta) * phi_inv, phi_inv.expand_as(eta)
+    elif likelihood_family == 1:
+        mu = torch.sigmoid(eta)
+        ll = y * eta - F.softplus(eta)
+        score_res, w = y - mu, (mu * (1.0 - mu)).clamp(min=1e-6)
+    elif likelihood_family == 2:
+        eta_c = eta.clamp(max=POISSON_ETA_CLIP_MAX)
+        mu = torch.exp(eta_c)
+        ll = y * eta_c - mu - torch.lgamma(y + 1.0)
+        score_res, w = y - mu, mu.clamp(min=1e-6)
+    else:
+        raise NotImplementedError(f'likelihood_family={likelihood_family}')
+    return (ll * mask_n).sum(dim=2), score_res, w
+
+
 def laplaceRfxModes(
     ffx: Tensor,  # (b, s, d)
     sigma_rfx: Tensor,  # (b, s, q)
@@ -129,6 +138,7 @@ def laplaceRfxModes(
     damping: float = 1.0,
     n_backtrack: int = 3,
     n_newton_extra: int = 15,
+    tol: float = 0.01,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Per-group conditional modes and Hessians of p(rfx_j | θ_g, y_j).
 
@@ -143,6 +153,7 @@ def laplaceRfxModes(
         Sigma_inv (b, s, q, q), L_rfx (b, s, q, q) — reusable Σ_rfx factors
         decrement (b, m, s)       — final Newton decrement λ²/2, the unresolved objective
             error in nats; large values mark entries whose Laplace weight is meaningless.
+    ``tol`` is the per-entry resolution threshold on that decrement (nats).
     """
     b, s, q = sigma_rfx.shape
     m = X.shape[1]
@@ -158,8 +169,13 @@ def laplaceRfxModes(
     modes = init.clone() if init is not None else y.new_zeros(b, m, s, q)
     modes = (modes * mask_mq).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
 
+    # ZᵀWZ as one contraction over n of the s-free outer products (b, m, n, q, q) with the
+    # weights (b, m, n, s): the three-operand einsum used to materialise a (b, m, n, s, q)
+    # intermediate, q times the size of the largest tensor in the pass.
+    ZZ = torch.einsum('bmnq,bmnr->bmnqr', Z_m, Z_m)
+
     def hessian(w: Tensor) -> Tensor:
-        ZWZ = torch.einsum('bmns,bmnq,bmnr->bmsqr', w * mask_n, Z_m, Z_m)
+        ZWZ = torch.einsum('bmnqr,bmns->bmsqr', ZZ, w * mask_n)
         return ZWZ + Sigma_inv.unsqueeze(1)
 
     def objective(cand: Tensor) -> Tensor:
@@ -169,31 +185,26 @@ def laplaceRfxModes(
         quad = torch.einsum('bmsq,bsqr,bmsr->bms', cand, Sigma_inv, cand)
         return ll - 0.5 * quad
 
-    # Adaptive iteration count: the per-iteration Newton decrement λ²/2 comes for
-    # free from (score, delta), so after the standard n_newton steps the loop keeps
-    # going (up to n_newton_extra more) only while some entry is still unresolved —
-    # hard samples (huge-count Poisson) get the budget they need, clean datasets pay
-    # nothing. The loop breaks BEFORE stepping, so chol_H/decrement are always
-    # evaluated at the returned modes.
-    tol = 0.1  # nats — resolve well below the 1-nat pinning guard downstream
-    max_iter = n_newton + n_newton_extra + 1
-    for t in range(max_iter):
+    # Standard phase: n_newton damped steps on every (b, m, s) entry, then one more
+    # score/Hessian evaluation at the modes we return (chol_H/decrement always belong to
+    # them). The Newton decrement λ²/2 comes for free from (score, delta).
+    # tol [nats]: an entry counts as resolved once its Newton decrement λ²/2 (the
+    # remaining objective error) is below it — well under the 1-nat pinning guard downstream
+    for t in range(n_newton + 1):
         eta = mu_ffx + torch.einsum('bmnq,bmsq->bmns', Z_m, modes)
-        score_res, w = _meanWeightScore(eta, y, sigma_eps, likelihood_family)
+        ll0, score_res, w = _llScoreWeight(eta, y, sigma_eps, mask_n, likelihood_family)
         score = torch.einsum('bmnq,bmns->bmsq', Z_m, score_res * mask_n)
         score = score - torch.einsum('bsqr,bmsr->bmsq', Sigma_inv, modes)
         chol_H = torch.linalg.cholesky(hessian(w) + 1e-6 * eye)
         delta = torch.cholesky_solve(score.unsqueeze(-1), chol_H).squeeze(-1)
         decrement = (0.5 * (score * delta).sum(-1)).nan_to_num(nan=torch.inf) * mask_m
-        if t == max_iter - 1 or (t >= n_newton - 1 and float(decrement.max()) <= tol):
+        if t == n_newton or (t >= n_newton - 1 and float(decrement.max()) <= tol):
             break
         delta = (damping * delta).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
 
         # backtracking line search per (b, m, s): halve entries whose step decreases
         # the objective (NaN counts as a decrease)
-        obj0 = _llPerGroup(eta, y, sigma_eps, mask_n, likelihood_family) - 0.5 * torch.einsum(
-            'bmsq,bsqr,bmsr->bms', modes, Sigma_inv, modes
-        )
+        obj0 = ll0 - 0.5 * torch.einsum('bmsq,bsqr,bmsr->bms', modes, Sigma_inv, modes)
         for _ in range(n_backtrack):
             worse = ~(objective(modes + delta) >= obj0 - 1e-6)  # (b, m, s)
             if not worse.any():
@@ -203,7 +214,98 @@ def laplaceRfxModes(
         modes = (modes + delta) * mask_mq
         modes = modes.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
 
+    # Extra phase: only the entries still above tol keep iterating (up to n_newton_extra
+    # more steps), compacted to a (K, n, ·) layout. After the standard phase these are
+    # 0.1–2% of the entries (huge-count Poisson proposals), so a global rule that kept
+    # every entry stepping until the last one resolved cost ~3x the whole pass.
+    unresolved = decrement > tol
+    if n_newton_extra > 0 and bool(unresolved.any()):
+        modes, chol_H, decrement = _refineUnresolved(
+            unresolved, modes, chol_H, decrement, mu_ffx, Z_m, y, mask_n, sigma_eps,
+            Sigma_inv, likelihood_family, n_newton_extra, damping, n_backtrack, tol,
+        )
+
     return modes, chol_H, Sigma_inv, L_rfx, decrement
+
+
+def _refineUnresolved(
+    unresolved: Tensor,  # (b, m, s) bool
+    modes: Tensor,  # (b, m, s, q)
+    chol_H: Tensor,  # (b, m, s, q, q)
+    decrement: Tensor,  # (b, m, s)
+    mu_ffx: Tensor,  # (b, m, n, s)
+    Z_m: Tensor,  # (b, m, n, q), padded observations already zeroed
+    y: Tensor,  # (b, m, n, 1)
+    mask_n: Tensor,  # (b, m, n, 1)
+    sigma_eps: Tensor,  # (b, s)
+    Sigma_inv: Tensor,  # (b, s, q, q)
+    likelihood_family: int,
+    n_extra: int,
+    damping: float,
+    n_backtrack: int,
+    tol: float,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Continue the damped Newton search of laplaceRfxModes on the unresolved entries only.
+
+    The K unresolved (b, m, s) entries are gathered into (K, n, ·) tensors — each entry's
+    group data, fixed-effect offset and Σ⁻¹ — and iterated with the same step, backtracking
+    and clamping as the standard phase. Entries that resolve are frozen (zero step); the loop
+    ends when all are resolved or the extra budget is spent. Results are scattered back, so
+    (modes, chol_H, decrement) stay consistent at the returned modes.
+    """
+    bi, mi, si = unresolved.nonzero(as_tuple=True)  # (K,)
+    q = modes.shape[-1]
+    Zk = Z_m[bi, mi]  # (K, n, q)
+    yk = y[bi, mi, :, 0]  # (K, n)
+    nk = mask_n[bi, mi, :, 0]  # (K, n)
+    muk = mu_ffx[bi, mi, :, si]  # (K, n)
+    sek = sigma_eps[bi, si]  # (K,)
+    Sik = Sigma_inv[bi, si]  # (K, q, q)
+    modk = modes[bi, mi, si]  # (K, q)
+    eye = torch.eye(q, dtype=modk.dtype, device=modk.device)
+
+    def fused(eta_k: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        """(ll (K,), score_res (K, n), w (K, n)) at η — the (b=1, m=K, s=1) layout of the
+        family helpers; Normal needs its per-entry σ_eps inline since (b, s) would not broadcast."""
+        if likelihood_family == 0:
+            phi_inv = (1.0 / sek.pow(2).clamp(min=1e-12)).unsqueeze(-1)
+            ll = D.Normal(loc=eta_k, scale=sek.unsqueeze(-1) + 1e-12).log_prob(yk)
+            return (ll * nk).sum(-1), (yk - eta_k) * phi_inv, phi_inv.expand_as(eta_k)
+        ll, r, w = _llScoreWeight(
+            eta_k[None, :, :, None], yk[None, :, :, None], sek[:1, None], nk[None, :, :, None], likelihood_family
+        )
+        return ll[0, :, 0], r[0, :, :, 0], w[0, :, :, 0]
+
+    def objective(cand: Tensor) -> Tensor:
+        eta_k = muk + torch.einsum('knq,kq->kn', Zk, cand)
+        return fused(eta_k)[0] - 0.5 * torch.einsum('kq,kqr,kr->k', cand, Sik, cand)
+
+    for t in range(n_extra + 1):
+        eta_k = muk + torch.einsum('knq,kq->kn', Zk, modk)
+        ll0, score_res, w = fused(eta_k)
+        score = torch.einsum('knq,kn->kq', Zk, score_res * nk) - torch.einsum('kqr,kr->kq', Sik, modk)
+        H = torch.einsum('kn,knq,knr->kqr', w * nk, Zk, Zk) + Sik
+        chol = torch.linalg.cholesky(H + 1e-6 * eye)
+        delta = torch.cholesky_solve(score.unsqueeze(-1), chol).squeeze(-1)
+        dec = (0.5 * (score * delta).sum(-1)).nan_to_num(nan=torch.inf)
+        active = dec > tol
+        if t == n_extra or not bool(active.any()):
+            break
+        delta = (damping * delta).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+        delta = torch.where(active.unsqueeze(-1), delta, torch.zeros_like(delta))
+        obj0 = ll0 - 0.5 * torch.einsum('kq,kqr,kr->k', modk, Sik, modk)
+        for _ in range(n_backtrack):
+            worse = ~(objective(modk + delta) >= obj0 - 1e-6)
+            if not bool(worse.any()):
+                break
+            delta = torch.where(worse.unsqueeze(-1), 0.5 * delta, delta)
+        modk = (modk + delta).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(-20.0, 20.0)
+
+    modes, chol_H, decrement = modes.clone(), chol_H.clone(), decrement.clone()
+    modes[bi, mi, si] = modk
+    chol_H[bi, mi, si] = chol
+    decrement[bi, mi, si] = dec
+    return modes, chol_H, decrement
 
 
 def sampleRfxLaplace(modes: Tensor, chol_H: Tensor, mask_m: Tensor) -> Tensor:
