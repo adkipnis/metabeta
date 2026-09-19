@@ -62,6 +62,9 @@ dicts are available for NUTS-based methods.
 
 Results are printed to stdout and also written as markdown to
 metabeta/outputs/results/ablation/{family}_{size}.md (one file per model).
+The 'Average' row of every table follows the paper convention (PAPER_AVERAGE_EXCLUDE):
+it omits the rfx correlations, like Table 1; the paper tables C2-C4 are built from
+these markdown files by metabeta-paper/tools/build_ablation_tables.py.
 
 Run from repo root:
     uv run python experiments/posthoc/ablation.py
@@ -125,7 +128,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--device', type=str, default='cpu', help='device for flow sampling (posthoc methods and summaries stay on cpu)')
     p.add_argument('--batch-size', type=int, default=4, help='sub-batch size for torch-based methods')
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
-    p.add_argument('--n-samples', type=int, default=1000, help='flow samples for torch-based methods (raw/is/svgd); IMH uses its own fixed count')
+    p.add_argument('--n-samples', type=int, default=4000, help='flow samples for torch-based methods (raw/is/svgd) and the IMH proposal pool (4 chains x n/4 steps); 4000 matches the paper benchmarks and the NUTS draw count')
     p.add_argument('--skip', nargs='+', default=[], choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'svgd', 'coldNuts', 'warmNuts'], help='conditions to skip (e.g. --skip is)')
     p.add_argument('--only', nargs='+', default=None, choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'svgd', 'coldNuts', 'warmNuts'], help='run only these conditions; results go to {family}_{size}_{only}.md so existing full-run mds are not overwritten')
     p.add_argument('--include-svgd', action='store_true', help='also run the (slow) SVGD condition')
@@ -387,11 +390,24 @@ def saveAblSummary(base: Path, summary: EvaluationSummary, diag: str) -> None:
         Path(f'{base}.diag.txt').write_text(diag)
 
 
+# Paper convention (matches experiments/evaluation/oracle_posterior.py::flattenActiveParams,
+# hence Table 1): the 'Average' row runs over fixed effects, rfx scales, rfx and sigma_eps;
+# the rfx correlations are exempt because every method identifies them poorly, and their
+# up-to-q(q-1)/2 dimensions would otherwise dominate the dimension-weighted average. The
+# per-class Corr(RFX) row is still printed. Unlike Table 1, all datasets of the split are
+# kept (no NUTS-convergence subset): the ablation scores against the ground truth.
+PAPER_AVERAGE_EXCLUDE = ('corr_rfx',)
+
+
+def ablTable(summary: EvaluationSummary, lf: int) -> str:
+    return summaryTable(summary, lf, exclude_from_average=PAPER_AVERAGE_EXCLUDE)
+
+
 def runRaw(proposals, full_batch, lf, summary_cache=None):
     if summary_cache is None:
         proposal = concatProposalsBatch(proposals)
         summary_cache = getSummary(proposal, full_batch, likelihood_family=lf)
-    print(summaryTable(summary_cache, lf))
+    print(ablTable(summary_cache, lf))
     return summary_cache, ''
 
 
@@ -428,12 +444,13 @@ def runIS(proposals, batches, full_batch, lf, full=False, marginal=False, rb_red
     diag = _weightHealth(proposal)
     print(diag, end='')
     summary = getSummary(proposal, full_batch, likelihood_family=lf)
-    print(summaryTable(summary, lf))
+    print(ablTable(summary, lf))
     return summary, diag
 
 
-# IMH settings: 4 × (n_samples // 4) proposals, so the default --n-samples 1000 reuses the
-# cached 1000-sample flow pool of the SNIS conditions; burnin follows MetropolisSampler.
+# IMH settings: 4 × (n_samples // 4) proposals, so IMH reuses the flow pool of the SNIS
+# conditions; the default --n-samples 4000 gives 4 × 1000 steps (3,900 kept), the paper's
+# benchmark pool. Burnin follows MetropolisSampler.
 IMH_N_CHAINS = 4
 IMH_N_STEPS = 250
 IMH_BURNIN = 25
@@ -480,7 +497,7 @@ def runIMH(mode, proposals, batches, full_batch, lf, n_steps=IMH_N_STEPS):
     )
     print(diag, end='')
     summary = getSummary(proposal, full_batch, likelihood_family=lf)
-    print(summaryTable(summary, lf))
+    print(ablTable(summary, lf))
     return summary, diag, proposal
 
 
@@ -606,7 +623,7 @@ def runWarmNutsLive(refined, tensor_batch, full_batch, ds_list, lf, fits_dir, la
     merged.rescale(tensor_batch['sd_y'][:n_ds])
     merged.reff = reff
     summary = getSummary(merged, full_batch, likelihood_family=lf)
-    print(summaryTable(summary, lf))
+    print(ablTable(summary, lf))
     return summary, diag
 
 
@@ -626,7 +643,7 @@ def runISLaplace(proposals, batches, full_batch, lf, attach_only=False):
     diag = _weightHealth(proposal)
     print(diag, end='')
     summary = getSummary(proposal, full_batch, likelihood_family=lf)
-    print(summaryTable(summary, lf))
+    print(ablTable(summary, lf))
     return summary, diag
 
 
@@ -704,7 +721,7 @@ def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch
             f'  divergences={total_divs}  reff={reff:.3f}  time/ds={total_time / n_ds:.1f}s  '
             f'(total={total_time:.0f}s)'
         )
-        print(summaryTable(cached, lf))
+        print(ablTable(cached, lf))
         return
 
     # hoist each npz member once: NpzFile decompresses the *entire* member on every
@@ -776,7 +793,7 @@ def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch
         summary.save(cache_path)
         print(f'  [cached summary] saved {cache_path.name}')
 
-    print(summaryTable(summary, lf))
+    print(ablTable(summary, lf))
 
 
 class _Tee:
@@ -932,7 +949,7 @@ def main() -> None:
                     summary, diag = cached
                     if diag:
                         print(diag, end='')
-                    print(summaryTable(summary, lf))
+                    print(ablTable(summary, lf))
                     print()
                     continue
 

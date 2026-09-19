@@ -70,16 +70,17 @@ def barPanel(ax, labels, counts, colors, title, xlabel, note=None):
 
 def main(out: Path) -> Path:
     rows = load()
-    d = [int(float(r['n_fixed_effects'])) for r in rows if r['n_fixed_effects'] != '']
+    # the CSV counts fixed-effect slopes; the paper's d includes the intercept (d = slopes + 1)
+    d = [int(float(r['n_fixed_effects'])) + 1 for r in rows if r['n_fixed_effects'] != '']
     q = [int(float(r['n_random_effects'])) for r in rows if r['n_random_effects'] != '']
     fam = [r['family'] if r['family'] in FAMILIES else 'Other' for r in rows]
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5), dpi=DPI)
 
-    labels, counts, raw = countBars(d, 0)
+    labels, counts, raw = countBars(d, 1)
     colors = [SUPPORTED if v <= MAX_D else UNSUPPORTED for v in raw]
     barPanel(
-        axes[0], labels, counts, colors, 'Fixed effects', 'number of fixed effects',
+        axes[0], labels, counts, colors, 'Fixed effects', 'number of fixed effects $d$ (intercept included)',
         note=f'median {int(np.median(d))}, mean {np.mean(d):.1f}',
     )
     axes[0].set_ylabel('Papers', fontsize=FS_LABEL)
@@ -87,7 +88,7 @@ def main(out: Path) -> Path:
     labels, counts, raw = countBars(q, 1)
     colors = [SUPPORTED if v <= MAX_Q else UNSUPPORTED for v in raw]
     barPanel(
-        axes[1], labels, counts, colors, 'Random effects', 'number of random effects',
+        axes[1], labels, counts, colors, 'Random effects', 'number of random effects $q$',
         note=f'median {int(np.median(q))}, mean {np.mean(q):.1f}',
     )
 

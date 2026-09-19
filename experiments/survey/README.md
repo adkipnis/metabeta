@@ -3,7 +3,8 @@
 `model_equations.csv` holds the 500 GLMM model equations extracted from 1,133
 randomly sampled papers across ten interdisciplinary journals (LLM pipeline:
 screening + equation extraction; a manually audited subsample showed no errors).
-Columns: dataset_id, citation, doi, equation, n_fixed_effects, n_random_effects,
+Columns: dataset_id, citation, doi, equation, n_fixed_effects (slopes, intercept
+excluded; the paper's d = n_fixed_effects + 1), n_random_effects (intercept included),
 family, family_detail, n_groups (number of grouping factors), source (pdf/code),
 source_ref (verbatim quote anchoring the extraction), confidence.
 

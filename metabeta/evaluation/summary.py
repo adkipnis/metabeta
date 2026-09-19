@@ -284,9 +284,13 @@ def _rfxJointCalibration(
     return _rfxRanksToCalibration(ranks)
 
 
-def summaryTable(s: EvaluationSummary, likelihood_family: int = 0) -> str:
+def summaryTable(
+    s: EvaluationSummary,
+    likelihood_family: int = 0,
+    exclude_from_average: tuple[str, ...] = (),
+) -> str:
     ag, pd = s.aggregated, s.per_dataset
-    long_table = longTable(ag.corr, ag.nrmse, ag.ece, ag.eace)
+    long_table = longTable(ag.corr, ag.nrmse, ag.ece, ag.eace, exclude_from_average)
     fit_labels = {0: 'Median pp R²', 1: 'Median pp AUC', 2: 'Median pp Deviance'}
     flat_table = flatTable(
         s.tpd,
@@ -309,7 +313,13 @@ def longTable(
     nrmse: dict[str, torch.Tensor],
     ece: dict[str, torch.Tensor],
     eace: dict[str, torch.Tensor],
+    exclude_from_average: tuple[str, ...] = (),
 ) -> str:
+    """Per-parameter-class table plus a dimension-weighted 'Average' row.
+
+    ``exclude_from_average`` drops parameter classes (e.g. 'corr_rfx') from the Average
+    row only; their per-class rows stay. The default keeps every class, as before.
+    """
     names = {
         'ffx': 'FFX',
         'sigma_rfx': 'Sigma(RFX)',
@@ -325,15 +335,20 @@ def longTable(
     rows = [
         [to_float(x) for x in [names[k], corr[k], nrmse[k], ece.get(k), eace.get(k)]] for k in keys
     ]
+    def keep(td: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        return {k: v for k, v in td.items() if k not in exclude_from_average}
+
     rows.append(
         [
             'Average',
-            dictMean(corr),
-            dictMean(nrmse),
-            dictMean(ece),
-            dictMean(eace),
+            dictMean(keep(corr)),
+            dictMean(keep(nrmse)),
+            dictMean(keep(ece)),
+            dictMean(keep(eace)),
         ]
     )
+    excluded = [names.get(k, k) for k in exclude_from_average if k in corr]
+    note = f'\n(Average excludes {", ".join(excluded)})' if excluded else ''
     return (
         '\n'
         + tabulate(
@@ -343,6 +358,7 @@ def longTable(
             tablefmt='simple',
             missingval='-',
         )
+        + note
         + '\n'
     )
 
