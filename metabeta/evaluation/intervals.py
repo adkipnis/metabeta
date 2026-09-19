@@ -43,21 +43,23 @@ def getCredibleIntervals(
     alphas: list[float] = ALPHAS,
 ) -> dict[float, dict[str, torch.Tensor]]:
     w = proposal.weights
-    if w is not None:
-        # Weighted path: fall back to per-alpha loop (weightedQuantile handles one pair at a time)
-        return {alpha: getCredibleInterval(proposal, alpha) for alpha in alphas}
-
-    # Unweighted fast path: sort samples once across all alphas instead of once per alpha
+    # Sort samples once across all alphas instead of once per alpha (both paths); the weighted
+    # path returns (..., d, n_roots), moved to the (n_roots, b, ...) layout of torch.quantile.
     all_roots = sorted({q for alpha in alphas for q in (alpha / 2, 1 - alpha / 2)})
     root_t = torch.tensor(all_roots, dtype=proposal.samples_g.dtype)
     root_idx = {r: i for i, r in enumerate(all_roots)}
 
+    def quant(x: torch.Tensor) -> torch.Tensor:
+        if w is None:
+            return torch.quantile(x, root_t, dim=-2)
+        return weightedQuantile(x, w, root_t).movedim(-1, 0)
+
     # One quantile call per tensor — (n_roots, b, ...) output
-    q_g = torch.quantile(proposal.samples_g, root_t, dim=-2)    # (n_roots, b, d_global)
-    q_l = torch.quantile(proposal.samples_l, root_t, dim=-2)    # (n_roots, b, m, d_local)
+    q_g = quant(proposal.samples_g)    # (n_roots, b, d_global)
+    q_l = quant(proposal.samples_l)    # (n_roots, b, m, d_local)
     q_corr = None
     if proposal.corr_rfx is not None:
-        q_corr = torch.quantile(corrToLower(proposal.corr_rfx), root_t, dim=-2)
+        q_corr = quant(corrToLower(proposal.corr_rfx))
 
     out = {}
     for alpha in alphas:
