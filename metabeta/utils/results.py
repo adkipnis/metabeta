@@ -360,11 +360,29 @@ def concatProposalsBatch(proposals: list[Proposal]) -> Proposal:
     return merged
 
 
+# Largest sample tensor one weightedQuantile call may sort at once: 2^27 float32 elements
+# (512 MiB). The call materialises ~6 tensors of x's size (sorted copy, int64 order = 2x,
+# gathered weights, cumsum, contiguous cdf), so this bounds its transient peak near 4 GB.
+# Above it, the batch dimension is processed in chunks; quantiles are per-dataset, so the
+# chunking is exact. Without it the huge test split (512 x 200 groups x 4000 draws x q)
+# needs ~50 GB per call, and getCredibleIntervals makes one call per alpha.
+WQ_MAX_ELEMENTS = 2**27
+
+
 def weightedQuantile(
     x: torch.Tensor,
     w: torch.Tensor,
     q: float | Sequence[float] | torch.Tensor = 0.5,
+    max_elements: int = WQ_MAX_ELEMENTS,
 ) -> torch.Tensor:
+    b = x.shape[0]
+    if b > 1 and x.numel() > max_elements:
+        chunk = max(1, max_elements // max(x.numel() // b, 1))
+        if chunk < b:
+            return torch.cat(
+                [weightedQuantile(x[i:i + chunk], w[i:i + chunk], q, max_elements) for i in range(0, b, chunk)],
+                dim=0,
+            )
     if not isinstance(q, torch.Tensor):
         q_t = torch.tensor(q, dtype=x.dtype, device=x.device)
     else:
