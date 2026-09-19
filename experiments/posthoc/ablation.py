@@ -537,18 +537,27 @@ def _wnSamplesToProposal(samples: dict, lf: int) -> Proposal:
 def runWarmNutsLive(refined, tensor_batch, full_batch, ds_list, lf, fits_dir, label, refit):
     """Warm-started NUTS per dataset, seeded by the MB-IMH proposal ``refined``.
 
-    ``refined`` is in rescaled (evaluation) space; PyMC models the standardized
-    ds dicts, so the seed proposal is mapped back by dividing out sd_y. Each
-    dataset's fit is cached as {fits_dir}/{label}__{idx}.npz (standardized
-    space, so the cache is independent of the evaluation rescaling).
+    ``refined`` is the seed Proposal in rescaled (evaluation) space, or a zero-argument
+    callable producing it: the seed is only materialised when some dataset actually has
+    to be (re)fit, so a run whose fits are all cached skips the IMH refinement entirely.
+    PyMC models the standardized ds dicts, so the seed proposal is mapped back by
+    dividing out sd_y. Each dataset's fit is cached as {fits_dir}/{label}__{idx}.npz
+    (standardized space, so the cache is independent of the evaluation rescaling).
     """
     n_ds = len(ds_list)
     n_expected = WN_CHAINS * WN_DRAWS
 
-    # slice_b builds a fresh data dict and rescale reassigns into it, so the
-    # shared refined proposal is not mutated
-    std = refined.slice_b(0, n_ds)
-    std.rescale(1.0 / tensor_batch['sd_y'][:n_ds])
+    std = None
+
+    def seed() -> Proposal:
+        nonlocal std
+        if std is None:
+            base = refined() if callable(refined) else refined
+            # slice_b builds a fresh data dict and rescale reassigns into it, so the
+            # shared refined proposal is not mutated
+            std = base.slice_b(0, n_ds)
+            std.rescale(1.0 / tensor_batch['sd_y'][:n_ds])
+        return std
 
     per_ds, diags = [], []
     n_cached = 0
@@ -570,7 +579,7 @@ def runWarmNutsLive(refined, tensor_batch, full_batch, ds_list, lf, fits_dir, la
         if samples is None:
             t_ds = time.perf_counter()
             wn = WarmNuts(ds, n_chains=WN_CHAINS, tune=WN_TUNE, draws=WN_DRAWS)
-            p, wn_diag = wn(std, b_idx=i)
+            p, wn_diag = wn(seed(), b_idx=i)
             m = int(ds['m'])
             samples = {
                 'ffx': p.ffx[0].numpy(),  # (n_s, d)
@@ -996,17 +1005,23 @@ def main() -> None:
                     imh_refined['laplace'] = refined
                 elif cond == 'warmNuts':
                     # seed from the marginal-target MB-IMH posterior (the quality
-                    # winner per family), refining now if its condition was skipped
-                    # or served from the summary cache
+                    # winner per family); if its condition was skipped or served from
+                    # the summary cache, the refinement runs lazily, i.e. only when some
+                    # dataset lacks a valid cached warm fit
                     wn_mode = 'marginal' if lf == 0 else 'laplace'
-                    refined = imh_refined.get(wn_mode)
-                    if refined is None:
-                        print(f'  refining flow proposal with IMH (mode={wn_mode})')
-                        refined, _ = refineIMH(
-                            wn_mode, imh_proposals, imh_batches, lf, n_steps=imh_n_steps
-                        )
+
+                    def wnSeed(mode=wn_mode):
+                        refined = imh_refined.get(mode)
+                        if refined is None:
+                            print(f'  refining flow proposal with IMH (mode={mode})')
+                            refined, _ = refineIMH(
+                                mode, imh_proposals, imh_batches, lf, n_steps=imh_n_steps
+                            )
+                            imh_refined[mode] = refined
+                        return refined
+
                     summary, diag = runWarmNutsLive(
-                        refined,
+                        wnSeed,
                         tensor_batch,
                         full_batch,
                         ds_list,
