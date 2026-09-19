@@ -124,7 +124,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--sizes', nargs='+', default=['small', 'medium'], choices=['small', 'medium', 'large', 'huge'], help='data/model sizes to evaluate')
     p.add_argument('--families', nargs='+', default=['normal', 'bernoulli', 'poisson'], choices=['normal', 'bernoulli', 'poisson'], help='likelihood families to evaluate')
     p.add_argument('--split', choices=['valid', 'test'], default='valid', help='npz split to evaluate on; only "test" has coldNuts fits')
-    p.add_argument('--prefix', type=str, default='best', help='checkpoint prefix to load and to match evaluate.py MB caches against')
+    p.add_argument('--prefix', type=str, default='latest', help='checkpoint prefix to load and to match evaluate.py MB caches against (latest = the checkpoint of the oracle tables and figures)')
     p.add_argument('--device', type=str, default='cpu', help='device for flow sampling (posthoc methods and summaries stay on cpu)')
     p.add_argument('--batch-size', type=int, default=4, help='sub-batch size for torch-based methods')
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
