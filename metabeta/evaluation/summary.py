@@ -335,6 +335,7 @@ def longTable(
     rows = [
         [to_float(x) for x in [names[k], corr[k], nrmse[k], ece.get(k), eace.get(k)]] for k in keys
     ]
+
     def keep(td: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         return {k: v for k, v in td.items() if k not in exclude_from_average}
 

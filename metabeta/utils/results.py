@@ -380,7 +380,10 @@ def weightedQuantile(
         chunk = max(1, max_elements // max(x.numel() // b, 1))
         if chunk < b:
             return torch.cat(
-                [weightedQuantile(x[i:i + chunk], w[i:i + chunk], q, max_elements) for i in range(0, b, chunk)],
+                [
+                    weightedQuantile(x[i : i + chunk], w[i : i + chunk], q, max_elements)
+                    for i in range(0, b, chunk)
+                ],
                 dim=0,
             )
     if not isinstance(q, torch.Tensor):
