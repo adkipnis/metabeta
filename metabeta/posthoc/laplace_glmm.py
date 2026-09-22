@@ -7,8 +7,10 @@ does not apply. This module provides the Laplace analog, fully vectorized over
 (datasets b, groups m, posterior samples s):
 
 1. `laplaceRfxModes` — damped-Newton per-group conditional modes b*_j and Hessians
-   H_j = ZᵀWZ + Σ⁻¹ of p(rfx_j | θ_g, y_j), warm-started at the flow's rfx draws
-   (already close, so few iterations suffice).
+   H_j = ZᵀWZ + Σ⁻¹ of p(rfx_j | θ_g, y_j), started from an `init` (see NewtonInit:
+   the flow's rfx draws, the analytical PQL blup_est, or zeros). The log-concave target
+   converges from any of them; the choice affects only speed and, at the finite budget,
+   the guard-pinned tail.
 2. `sampleRfxLaplace` — rfx ~ N(b*_j, H_j⁻¹): the Laplace conditional redraw, the
    non-conjugate analog of families.sampleRfxConditionalNormal.
 3. `logMarginalLikelihoodLaplace` — log p̂(y_j | θ_g) = ℓ_j(b*) + log N(b*; 0, Σ_rfx)
@@ -50,6 +52,7 @@ robustified mode search below, Poisson-large isLaplace σ_rfx ECE went −0.046 
 """
 
 import math
+from typing import Literal
 
 import torch
 from torch import Tensor
@@ -59,6 +62,15 @@ from torch.nn import functional as F
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.utils.families import POISSON_ETA_CLIP_MAX
 from metabeta.utils.results import Proposal
+
+# Where the Laplace Newton mode search starts each per-group solve (distinct from warm-started
+# NUTS — this is only the init of the per-group damped-Newton iteration):
+#   'flow'       — the flow's local rfx draws (proposal.rfx); the historical default.
+#   'analytical' — the cheap PQL rfx point estimate stats['blup_est'], broadcast over the
+#                  sample axis. Reuses a quantity already computed for the flow context, so
+#                  the (expensive on CPU) local flow forward pass is not needed to seed Newton.
+#   'cold'       — zeros (init=None); the log-concave target still converges by damped ascent.
+NewtonInit = Literal['flow', 'analytical', 'cold']
 
 
 def _sigmaChol(sigma_rfx: Tensor, L_corr: Tensor | None) -> Tensor:
@@ -410,6 +422,7 @@ class LaplaceImportanceSampler(ImportanceSampler):
         data: dict[str, Tensor],
         attach_only: bool = False,
         n_newton: int = 5,
+        newton_init: NewtonInit = 'flow',
         **kwargs,
     ) -> None:
         if kwargs.get('marginal') or kwargs.get('full'):
@@ -419,8 +432,33 @@ class LaplaceImportanceSampler(ImportanceSampler):
         self.rb_redraw = rb_redraw  # bypass parent's marginal-only validation
         self.attach_only = attach_only
         self.n_newton = n_newton
+        self.newton_init = newton_init
+        # Cheap analytical rfx point estimate (PQL blup_est, (b, m, q)) reused to seed Newton.
+        # Present in precomputed eval batches under data['stats']; None otherwise.
+        stats = data.get('stats') if isinstance(data, dict) else None
+        self._blup_est: Tensor | None = stats.get('blup_est') if isinstance(stats, dict) else None
+        if newton_init == 'analytical' and self._blup_est is None:
+            raise ValueError(
+                "newton_init='analytical' needs data['stats']['blup_est']; precompute the "
+                'analytical stats or pass a batch that carries them.'
+            )
         self._modes: Tensor | None = None
         self._chol_H: Tensor | None = None
+
+    def _newtonInit(self, proposal: Proposal) -> Tensor | None:
+        """Resolve the Laplace Newton starting point per ``self.newton_init`` → (b, m, s, q)/None.
+
+        The converged mode is init-independent (log-concave target + damped ascent), so this
+        governs only how fast each per-group solve converges and, at the finite iteration
+        budget, which extreme samples stay above ``guard_nats``.
+        """
+        if self.newton_init == 'cold':
+            return None
+        if self.newton_init == 'analytical':
+            b, m, q = self._blup_est.shape
+            s = proposal.sigma_rfx.shape[1]
+            return self._blup_est[:, :, None, :].expand(b, m, s, q)
+        return proposal.rfx  # 'flow'
 
     def unnormalizedPosterior(self, proposal: Proposal) -> tuple[Tensor, Tensor]:
         lp, ffx, sigma_eps = self._logPriorGlobals(proposal)
@@ -435,7 +473,7 @@ class LaplaceImportanceSampler(ImportanceSampler):
             self.mask_m,
             self.likelihood_family,
             L_corr=self._getLCorr(proposal),
-            init=proposal.rfx,
+            init=self._newtonInit(proposal),
             n_newton=self.n_newton,
         )
         self._modes, self._chol_H = modes, chol_H

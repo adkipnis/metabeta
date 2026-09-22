@@ -106,7 +106,7 @@ from torch import Tensor
 
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
-from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler, sampleRfxLaplace
+from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler, NewtonInit, sampleRfxLaplace
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.families import sampleRfxConditionalNormal
 from metabeta.utils.preprocessing import rescaleData
@@ -151,6 +151,7 @@ class MetropolisSampler:
         likelihood_family: int = 0,
         eps: float = 1e-12,
         n_eff_target: int | None = N_EFF_TARGET,  # None disables the pool-size suggestion
+        newton_init: NewtonInit = 'flow',  # Laplace Newton init (mode='laplace' only)
     ) -> None:
         if mode == 'marginal' and likelihood_family != 0:
             raise ValueError("mode='marginal' requires likelihood_family=0 (Normal)")
@@ -167,6 +168,7 @@ class MetropolisSampler:
         self.has_sigma_eps = hasSigmaEps(likelihood_family)
         self.eps = eps
         self.n_eff_target = n_eff_target
+        self.newton_init = newton_init
 
         # Delegate all weight computation to ImportanceSampler.unnormalizedPosterior —
         # single source of truth shared with SNIS. 'marginal' uses the (correlated)
@@ -175,7 +177,7 @@ class MetropolisSampler:
         # log-prob).
         if mode == 'laplace':
             self._is: ImportanceSampler = LaplaceImportanceSampler(
-                data, likelihood_family=likelihood_family, eps=eps
+                data, likelihood_family=likelihood_family, eps=eps, newton_init=newton_init
             )
         else:
             self._is = ImportanceSampler(
@@ -439,6 +441,9 @@ def runIMH(
                      pool-size suggestion returned in the diagnostics (default 700,
                      the sweep-calibrated value; None disables). Inference always
                      runs at n_chains × n_steps regardless.
+    imh_newton_init : str  — Laplace Newton init for mode='laplace': 'flow' (default,
+                     historical), 'analytical' (reuse stats['blup_est']), or 'cold'
+                     (zeros). See laplace_glmm.NewtonInit.
     rescale        : bool
     likelihood_family : int
     """
@@ -447,6 +452,7 @@ def runIMH(
     n_steps = getattr(cfg, 'n_steps', 250)
     burnin = getattr(cfg, 'imh_burnin', 25)
     n_eff_target = getattr(cfg, 'imh_n_eff_target', N_EFF_TARGET)
+    newton_init: NewtonInit = getattr(cfg, 'imh_newton_init', 'flow')
     default_mode = 'marginal' if lf == 0 else 'laplace'
     mode: Mode = getattr(cfg, 'imh_mode', default_mode)
 
@@ -464,5 +470,6 @@ def runIMH(
         mode=mode,
         likelihood_family=lf,
         n_eff_target=n_eff_target,
+        newton_init=newton_init,
     )
     return sampler(proposal)
