@@ -30,8 +30,8 @@ import time
 import numpy as np
 import torch
 
-from metabeta.utils.experiments import REPO_ROOT
-from metabeta.utils.posterior_eval import loadModel
+from metabeta.utils.experiments import REPO_ROOT, loadApproximator
+from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.posthoc.metropolis import MetropolisSampler
 
@@ -40,6 +40,13 @@ from build_ckpt import BEST_SEEDS, FAMILY_INITIAL, _ckpt_dir  # noqa: E402
 
 DEV = torch.device('cpu')
 DATA_ROOT = REPO_ROOT / 'metabeta' / 'outputs' / 'data'
+
+
+def loadModel(ckpt_dir, prefix, device):
+    """Lean model load (config + weights) — avoids posterior_eval, which pulls the eval/
+    plotting stack (arviz/matplotlib). Mirrors posterior_eval.loadModel."""
+    cfg = argparse.Namespace(**loadConfigFromCheckpoint(ckpt_dir))
+    return loadApproximator(cfg, device, ckpt_dir, prefix), cfg
 
 
 def resolvePaths(family: str, size: str):

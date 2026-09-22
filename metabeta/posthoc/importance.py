@@ -56,7 +56,6 @@ import argparse
 import math
 import time
 
-import arviz as az
 import torch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import toDevice
@@ -79,6 +78,18 @@ from metabeta.utils.families import (
     sampleRfxConditionalNormal,
 )
 from metabeta.utils.preprocessing import rescaleData
+
+
+def _psislw(log_w):
+    """Pareto-smoothed IS log-weights via arviz, imported lazily.
+
+    Kept out of module scope so constructing/running the samplers (e.g. IMH, or a timing
+    harness) does not require arviz + its matplotlib/dateutil stack — only the PSIS-weighted
+    paths that actually call this do.
+    """
+    import arviz as az
+
+    return az.psislw(log_w)
 
 
 # Bump when the definition of the IS/IMH weights changes; `weightsTag` folds it into the on-disk
@@ -303,7 +314,7 @@ class ImportanceSampler:
             # No dampening here: PSIS is the principled tail regularizer, and dampening
             # log-weights before smoothing flattens them toward uniform, cancelling the
             # correction (see module docstring Findings).
-            log_w_np, pareto_k_np = az.psislw(log_w.detach().cpu().numpy())  # host-side PSIS
+            log_w_np, pareto_k_np = _psislw(log_w.detach().cpu().numpy())  # host-side PSIS
             out['log_w'] = log_w.new_tensor(log_w_np)
             out['pareto_k'] = log_w.new_tensor(pareto_k_np)
         else:
@@ -406,7 +417,7 @@ class ResampleMoveSampler:
         # initial resample from the PSIS-smoothed weights (raw weights drive the
         # MH ratio below; smoothing only stabilises the resampling step)
         lw = self._logWeights(proposal)  # (b, s)
-        log_w_np, pareto_k_np = az.psislw(lw)
+        log_w_np, pareto_k_np = _psislw(lw)
         w = torch.softmax(lw.new_tensor(log_w_np), dim=-1)
         w = torch.where(torch.isfinite(w), w, 0)
         self._is.n_sir = s
