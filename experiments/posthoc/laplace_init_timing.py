@@ -13,33 +13,41 @@ seeding the Laplace Newton search from the cheap analytical rfx estimate instead
   MB_full = summarize + g + A + B(newton_init='flow')
   MB_skip = summarize + g +     B(newton_init='analytical')       (globals-only draw)
 
-Acceptance rate is printed as a coarse parity proxy; posterior-accuracy parity (recovery,
-calibration, LOO-NLL) is the cluster ablation's job — see laplace_init.md.
+This is cache-free by construction: it calls model.estimate (full draw, incl. local flow) and
+estimateNoLocal (globals-only draw) live and times them, so — unlike the ablation harness, which
+caches the neural-posterior draw and times only the Laplace refinement — it actually measures the
+local-flow stage we want to remove. Accuracy parity is the ablation's job (see laplace_init.md);
+this is purely the timing counterpart, runnable on a cluster CPU node for per-regime numbers.
 
 Run from repo root:
-    uv run python experiments/posthoc/laplace_init_timing.py --family bernoulli
+    uv run python experiments/posthoc/laplace_init_timing.py --family bernoulli --size large
 """
 
 import argparse
+import sys
 import time
-from pathlib import Path
 
 import numpy as np
 import torch
 
+from metabeta.utils.experiments import REPO_ROOT
 from metabeta.utils.posterior_eval import loadModel
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.posthoc.metropolis import MetropolisSampler
 
+sys.path.insert(0, str(REPO_ROOT / 'scripts'))
+from build_ckpt import BEST_SEEDS, FAMILY_INITIAL, _ckpt_dir  # noqa: E402
+
 DEV = torch.device('cpu')
-CKPTS = {
-    'bernoulli': Path('metabeta/outputs/checkpoints/data=large-b-mixed_model=large_seed=4'),
-    'poisson': Path('metabeta/outputs/checkpoints/data=large-p-mixed_model=large_seed=6'),
-}
-DATAS = {
-    'bernoulli': Path('metabeta/outputs/data/large-b-sampled/valid.npz'),
-    'poisson': Path('metabeta/outputs/data/large-p-sampled/valid.npz'),
-}
+DATA_ROOT = REPO_ROOT / 'metabeta' / 'outputs' / 'data'
+
+
+def resolvePaths(family: str, size: str):
+    """(ckpt_dir, valid.npz) for a (family, size), via the ablation's BEST_SEEDS mapping."""
+    seed = BEST_SEEDS[(family, size)]
+    ckpt = _ckpt_dir(family, size, seed)
+    data = DATA_ROOT / f'{size}-{FAMILY_INITIAL[family]}-sampled' / 'valid.npz'
+    return ckpt, data
 
 
 def timeit(fn, reps=3):
@@ -103,15 +111,16 @@ def imhTime(sub, proposal, lf, init, s):
     return t, diag['accept_rate'].mean().item() * 100
 
 
-def run(family: str, k: int, s: int, seed: int):
+def run(family: str, size: str, k: int, s: int, seed: int, prefix: str):
     torch.manual_seed(seed)
-    model, cfg = loadModel(CKPTS[family], 'best', DEV)
+    ckpt, data_path = resolvePaths(family, size)
+    model, cfg = loadModel(ckpt, prefix, DEV)
     model.eval()
     lf = cfg.likelihood_family
 
     # scan batches (padded per-batch, so memory stays bounded) and keep the batch with the
     # smallest median m (deep) and the largest (wide) — the valid split spans m ~ 13..198
-    dl = Dataloader(DATAS[family], batch_size=k)
+    dl = Dataloader(data_path, batch_size=k)
     deep_b = wide_b = None
     deep_med, wide_med = 1e9, -1.0
     for batch in dl:
@@ -122,7 +131,7 @@ def run(family: str, k: int, s: int, seed: int):
             wide_med, wide_b = med, toDevice(batch, DEV)
     regimes = {'deep (few m)': deep_b, 'wide (many m)': wide_b}
 
-    print(f'\n===== {family} (lf={lf}) | s={s}, {k} datasets/regime =====')
+    print(f'\n===== {family} {size} (lf={lf}) | s={s}, {k} datasets/regime =====')
     header = (
         f'{"regime":14s} {"m(med)":>7s} {"n_tot":>7s} | '
         f'{"summ":>7s} {"global":>7s} {"local A":>8s} {"lap B":>7s} | '
@@ -155,11 +164,13 @@ def run(family: str, k: int, s: int, seed: int):
 
 # fmt: off
 def _setup() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description='Local timing: local flow vs Laplace at GLMM inference.')
+    p = argparse.ArgumentParser(description='Timing: local flow vs Laplace at GLMM inference (cache-free).')
     p.add_argument('--family', choices=['bernoulli', 'poisson'], default='bernoulli')
+    p.add_argument('--size',   choices=['small', 'medium', 'large', 'huge'], default='large')
     p.add_argument('--k',      type=int, default=24, help='datasets per regime')
     p.add_argument('--s',      type=int, default=512, help='posterior pool size')
     p.add_argument('--seed',   type=int, default=0)
+    p.add_argument('--prefix', type=str, default='latest', help='checkpoint prefix (best/latest)')
     return p.parse_args()
 # fmt: on
 

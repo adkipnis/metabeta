@@ -49,18 +49,29 @@ rel-L2 ~1e-3, log-weight agreement to ~1e-4 nats, and identical IS ESS with IMH 
 within noise. The init source does not change the posterior at the scales tested (deep m≈16
 and a correlated q=4 model).
 
-## Recommendation / next step (cluster)
+## The two axes are measured by different tools
 
-The local experiments settle **timing** and **mechanism parity**. The open question is
-**posterior-accuracy** parity (recovery, calibration/ECE, LOO-NLL, SBC) of `analytical` / `cold`
-vs `flow`, especially in the **wide** and **extreme-Poisson** regimes where the finite-budget
-guard can bite (wide-Poisson acceptance was the lowest/noisiest here). That is an accuracy
-question the timing scripts cannot answer, so run it on the **ablation harness**
-(`experiments/posthoc/ablation.py`) as an `imhLaplace` × `newton_init ∈ {flow, analytical, cold}`
-comparison with the flow draw kept fixed (isolate the init, not the speed change). Wiring
-`newton_init` into the harness/`posterior_eval` as additive side-by-side conditions is the
-prerequisite (kept additive so it can't disturb the existing method set / paper tables).
+**Accuracy → the ablation harness.** Run `imhLaplace` × `newton_init ∈ {flow, analytical, cold}`
+with the flow draw kept fixed (isolate the init, not the speed change), added as additive opt-in
+`--only` conditions (`imhLaplaceAna` / `imhLaplaceCold`, and the SNIS `isLaplace*` analogs) so the
+default full runs and the canonical `{family}_{size}.md` paper tables are untouched. This answers
+the open question: **posterior-accuracy** parity (recovery, calibration/ECE, LOO-NLL) of
+`analytical` / `cold` vs `flow`, especially in the **wide** and **extreme-Poisson** regimes where
+the finite-budget guard can bite (wide-Poisson acceptance was the lowest/noisiest here).
 
-Only once accuracy parity is confirmed do we enable the flow-skip for the speed win (and decide
-separately whether MB⁰-discrete inference also drops the local flow — an open empirical
-question; the local flow stays in training regardless, it is needed there for calibration).
+**Timing → `laplace_init_timing.py` (NOT the ablation).** The ablation cannot measure the timing
+win, for three reasons: (1) it caches the full neural-posterior draw to disk, so warm runs never
+execute the local flow; (2) even cold it draws the proposal once and shares it across conditions —
+`newton_init` only changes the Laplace refinement afterwards; (3) its per-condition timer covers
+only that refinement (stage B), not the flow draw (stage A). So the local-flow stage we want to
+remove is invisible to it. `laplace_init_timing.py` is the timing counterpart by construction: it
+draws (`model.estimate`) and skips (`estimateNoLocal`) the flow live and uncached, resolving each
+stage. It takes `--family/--size`, so it runs per-regime on a cluster CPU node for
+representative-hardware numbers.
+
+Only once accuracy parity is confirmed do we wire the flow-skip into `Approximator.backward`
+(placeholder local + Laplace redraw, mirroring the Gaussian `analytical_local_posterior` path) for
+the production speed win — at which point `model.estimate` itself can be timed with/without the
+local flow, with no cache confound. Whether MB⁰-discrete inference also drops the local flow is a
+separate open empirical question; either way the local flow stays in training, where it is needed
+for calibration (the global posterior depends on it), so this is an inference-only change.
