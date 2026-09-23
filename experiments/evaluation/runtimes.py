@@ -19,20 +19,24 @@ Three things the median speedup alone does not say, and that the tables below re
      The defensible claim is Laplace-class latency at NUTS-class calibration, which the oracle
      and agreement tables support; runtime alone does not.
 
-metabeta appears as two rows, both timed per dataset with a batch of one (the latency
-comparable to the per-dataset wall times the fit backends record):
+metabeta appears as four rows, all timed per dataset with a batch of one (the latency
+comparable to the per-dataset wall times the fit backends record).  Two are operating modes a
+user gets, two are the components of the default one:
 
   * **MB^0** — the raw flow a user gets with ``refine=False``: one amortized forward pass and
     ``n_samples`` draws, the local posterior flow among them (``Api.sample`` draws
     ``local=True`` when it does not refine).
-  * **MB** — the default pipeline: the family's default IMH refinement (presets.yaml
-    ``posthoc``; imhMarginal for Normal, imhLaplace for the GLMMs), exactly as the oracle/real
-    benchmarks run it (rescaled space, 4 chains, burn-in 25).  Because 'marginal'/'laplace'
-    redraw the rfx from their conditional at the accepted globals, the proposal is drawn
-    WITHOUT the local flow (``Api.sample`` passes ``local=False`` whenever it refines), so MB
-    is *not* MB^0 plus a refinement: the two rows are independent operating modes, each timed
-    end-to-end, and on CPU — where the skipped local flow is the dominant cost of MB^0 for the
-    discrete families — MB can be the faster of the two.  The speedups of the reliability table
+  * **MBG** — the global pass alone: the same forward pass drawing only the global flow
+    (``local=False``), i.e. the proposal the default pipeline hands to IMH.
+  * **IMH** — the head: rescaling, the IMH chains on ``device`` (4 chains, burn-in 25, in the
+    rescaled space, as the oracle/real benchmarks run it) and the copy of the refined draws
+    back to the host.  Because the head marginalizes the rfx out of the target and reimputes
+    them from their analytical conditional at the accepted globals, it needs no local-flow
+    draws — which is why MBG can skip the local posterior network.
+  * **MB** — the default pipeline, MBG + IMH timed as one region (``Api.sample`` passes
+    ``local=False`` whenever it refines).  MB is therefore *not* MB^0 plus a head: the local
+    flow is paid only by MB^0, and on CPU — where it is the dominant cost for the discrete
+    families — MB can be the faster of the two modes.  The speedups of the reliability table
     are against MB, the posterior a user actually gets by default.
 
 Not timed here, and deliberately so: batching several datasets through one forward pass, and
@@ -97,13 +101,27 @@ FAMILY_NAMES = {'n': 'normal', 'b': 'bernoulli', 'p': 'poisson'}
 DEFAULT_SIZES = ['small', 'medium', 'large', 'huge']
 
 # metabeta first, then the reference methods from cheap to expensive.
-MB_FLOW = 'MB0'  # raw flow posterior (the paper's MB^0)
-MB_DEFAULT = 'MB'  # flow + default IMH refinement (the paper's MB)
-MB_METHODS = [MB_FLOW, MB_DEFAULT]
+MB_FLOW = 'MB0'  # raw flow posterior, global + local flow (the paper's MB^0)
+MB_GLOBAL = 'MBG'  # the global pass alone (local=False), the proposal handed to IMH
+MB_HEAD = 'IMH'  # the IMH head on that proposal (MB minus MBG, per dataset)
+MB_DEFAULT = 'MB'  # the default pipeline, MBG + IMH timed as one region (the paper's MB)
+MB_METHODS = [MB_FLOW, MB_GLOBAL, MB_HEAD, MB_DEFAULT]
 FIT_METHODS = ['LAPLACE', 'ADVI', 'NUTS']
 METHOD_ORDER = MB_METHODS + FIT_METHODS
-METHOD_LABELS = {MB_FLOW: 'MB^0', MB_DEFAULT: 'MB', 'LAPLACE': 'Laplace'}
-TEX_LABELS = {MB_FLOW: r'\MBz{}', MB_DEFAULT: r'\texttt{MB}', 'LAPLACE': r'\texttt{Laplace}'}
+METHOD_LABELS = {
+    MB_FLOW: 'MB^0',
+    MB_GLOBAL: 'global pass',
+    MB_HEAD: 'IMH head',
+    MB_DEFAULT: 'MB',
+    'LAPLACE': 'Laplace',
+}
+TEX_LABELS = {
+    MB_FLOW: r'\MBz{}',
+    MB_GLOBAL: r'$\boldsymbol\Pi_g$',
+    MB_HEAD: r'\texttt{IMH}',
+    MB_DEFAULT: r'\texttt{MB}',
+    'LAPLACE': r'\texttt{Laplace}',
+}
 
 # fraction of the slowest runs summarised separately; 5% of 512 datasets is 26 datasets,
 # enough for a stable mean and small enough to still be a tail
@@ -256,33 +274,40 @@ def pipelineOnce(
     lf: int,
     device: torch.device,
     rescale: bool,
-) -> tuple[float, float]:
-    """Time the two MB operating modes on one device-resident batch of one.
+    time_flow: bool = True,
+) -> tuple[float, float, float]:
+    """Time the MB operating modes on one device-resident batch of one.
 
-    Returns ``(flow_seconds, mb_seconds)``, each bracketed by a device synchronisation and
-    each an *independent* end-to-end latency (the two modes are not add-ons to one another):
+    Returns ``(flow_seconds, global_seconds, mb_seconds)``, each bracketed by a device
+    synchronisation.  The first and the last are *independent* end-to-end latencies (the two
+    modes are not add-ons to one another); the middle one is a split of the last:
 
       * ``flow_seconds`` — MB^0, the raw flow a user gets with ``refine=False``: one amortized
         pass with the local posterior flow sampled (``Api.sample`` draws ``local=True`` when it
-        does not refine).
-      * ``mb_seconds`` — MB, the default pipeline: the proposal is drawn WITHOUT the local flow
+        does not refine).  NaN when ``time_flow`` is False (already cached).
+      * ``global_seconds`` — the global pass alone: the proposal drawn WITHOUT the local flow
         (``Api.sample`` passes ``local=False`` whenever it refines, since 'marginal'/'laplace'
-        redraw the rfx from their conditional at the accepted globals), then rescaled and
-        refined — the IMH chains on ``device`` and the copy of the refined draws back to the
-        host (``refineProposal`` returns on the CPU).
+        redraw the rfx from their conditional at the accepted globals).
+      * ``mb_seconds`` — MB, the default pipeline: that proposal, then rescaled and refined —
+        the IMH chains on ``device`` and the copy of the refined draws back to the host
+        (``refineProposal`` returns on the CPU).  ``mb_seconds - global_seconds`` is the head.
     """
-    synchronizeDevice(device)
-    t0 = time.perf_counter()
-    raw = model.estimate(batch, n_samples=n_samples)
-    synchronizeDevice(device)
-    t_flow = time.perf_counter() - t0
-    del raw
+    t_flow = float('nan')
+    if time_flow:
+        synchronizeDevice(device)
+        t0 = time.perf_counter()
+        raw = model.estimate(batch, n_samples=n_samples)
+        synchronizeDevice(device)
+        t_flow = time.perf_counter() - t0
+        del raw
     if method is None:
-        return t_flow, float('nan')
+        return t_flow, float('nan'), float('nan')
 
     synchronizeDevice(device)
     t1 = time.perf_counter()
     proposal = model.estimate(batch, n_samples=n_samples, local=False)
+    synchronizeDevice(device)
+    t_global = time.perf_counter() - t1
     if rescale:
         proposal.rescale(batch['sd_y'])
         batch = rescaleData(batch)
@@ -290,7 +315,7 @@ def pipelineOnce(
     synchronizeDevice(device)
     t_mb = time.perf_counter() - t1
     del proposal, refined
-    return t_flow, t_mb
+    return t_flow, t_global, t_mb
 
 
 def warmup(
@@ -333,29 +358,34 @@ def timeLatency(
     device: torch.device,
     seed: int,
     rescale: bool,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Per-dataset (MB^0 flow, MB pipeline) wall times with a batch of one.
+    time_flow: bool = True,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-dataset (MB^0 flow, global pass, MB pipeline) wall times with a batch of one.
 
     ``no_grad`` rather than ``inference_mode``: the analytical MAP fit inside the model runs
     ``loss.backward()`` under ``torch.enable_grad()``, which inference mode forbids.
     """
-    flow = np.zeros(len(idxs))
+    flow = np.full(len(idxs), np.nan)
+    glob = np.full(len(idxs), np.nan)
     mb = np.full(len(idxs), np.nan)
 
     warm_batch = toDevice(collateGrouped([col[idxs[0]]]), device)
     warmup(model, warm_batch, n_samples, method, lf, device, seed, rescale)
     del warm_batch
 
-    label = f'MB^0 & MB({method})' if method else 'MB^0'
+    parts = (['MB^0'] if time_flow else []) + ([f'MB({method})'] if method else [])
+    label = ' & '.join(parts)
     for i, idx in enumerate(tqdm(idxs, desc=f'  {label}', leave=False)):
         batch = toDevice(collateGrouped([col[idx]]), device)
         setSeed(seed)
         resetRng(model, seed)
-        flow[i], mb[i] = pipelineOnce(model, batch, n_samples, method, lf, device, rescale)
+        flow[i], glob[i], mb[i] = pipelineOnce(
+            model, batch, n_samples, method, lf, device, rescale, time_flow
+        )
         del batch
         if device.type == 'cuda':
             torch.cuda.empty_cache()
-    return flow, mb
+    return flow, glob, mb
 
 
 # ---------------------------------------------------------------------------
@@ -399,39 +429,57 @@ def saveCache(path: Path, cache: dict[str, float]) -> None:
 
 def cachedLatencies(
     cache: dict[str, float],
-    tags: tuple[str, str | None],
+    tags: tuple[str, str | None, str | None],
     idxs: list[int],
     compute,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Per-dataset (MB^0 flow, MB pipeline) timings for ``idxs``, computing only uncached ones.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-dataset (MB^0 flow, global pass, MB pipeline) timings for ``idxs``, computing only
+    the uncached ones.
 
-    ``tags`` are the cache tags of the two operating modes (the MB tag is None when no
-    refinement runs).  A dataset is recomputed when either mode is missing, since the two are
-    timed in one pass over the dataset.
+    ``tags`` are the cache tags of the raw flow, the global pass and the MB pipeline (the last
+    two are None when no refinement runs).  ``compute(idxs, time_flow)`` times the missing
+    datasets.  The raw flow is by far the most expensive region on CPU (it runs the local
+    posterior flow), so a dataset whose flow timing is cached but whose pipeline split is not
+    is retimed with ``time_flow=False``, keeping the cached flow value.
     """
-    flow_tag, mb_tag = tags
-    needed = [flow_tag] + ([mb_tag] if mb_tag else [])
+    flow_tag, glob_tag, mb_tag = tags
+    pipe_tags = [tag for tag in (glob_tag, mb_tag) if tag]
     flow = np.full(len(idxs), np.nan)
+    glob = np.full(len(idxs), np.nan)
     mb = np.full(len(idxs), np.nan)
-    missing = []
+    missing_all: list[int] = []
+    missing_pipe: list[int] = []
     for i, idx in enumerate(idxs):
-        if all(f'{tag}:{idx}' in cache for tag in needed):
+        has_flow = f'{flow_tag}:{idx}' in cache
+        has_pipe = all(f'{tag}:{idx}' in cache for tag in pipe_tags)
+        if has_flow:
             flow[i] = cache[f'{flow_tag}:{idx}']
-            if mb_tag:
-                mb[i] = cache[f'{mb_tag}:{idx}']
-        else:
-            missing.append(i)
-    if missing:
-        flow_new, mb_new = compute([idxs[i] for i in missing])
-        for i, f_val, r_val in zip(missing, flow_new, mb_new):
-            flow[i] = f_val
-            cache[f'{flow_tag}:{idxs[i]}'] = float(f_val)
-            if mb_tag:
-                mb[i] = r_val
-                cache[f'{mb_tag}:{idxs[i]}'] = float(r_val)
-    elif len(idxs):
-        logger.info('%s: all %d timings cached', ' + '.join(needed), len(idxs))
-    return flow, mb
+        if has_pipe and pipe_tags:
+            glob[i] = cache[f'{glob_tag}:{idx}']
+            mb[i] = cache[f'{mb_tag}:{idx}']
+        if not has_flow:
+            missing_all.append(i)
+        elif not has_pipe:
+            missing_pipe.append(i)
+
+    for missing, time_flow in ((missing_all, True), (missing_pipe, False)):
+        if not missing:
+            continue
+        flow_new, glob_new, mb_new = compute([idxs[i] for i in missing], time_flow)
+        for i, f_val, g_val, m_val in zip(missing, flow_new, glob_new, mb_new):
+            if time_flow:
+                flow[i] = f_val
+                cache[f'{flow_tag}:{idxs[i]}'] = float(f_val)
+            if pipe_tags:
+                glob[i] = g_val
+                mb[i] = m_val
+                cache[f'{glob_tag}:{idxs[i]}'] = float(g_val)
+                cache[f'{mb_tag}:{idxs[i]}'] = float(m_val)
+    if not missing_all and not missing_pipe and len(idxs):
+        logger.info(
+            '%s: all %d timings cached', ' + '.join([flow_tag] + pipe_tags), len(idxs)
+        )
+    return flow, glob, mb
 
 
 # ---------------------------------------------------------------------------
@@ -508,22 +556,38 @@ def collectCell(
     cache = {} if cfg.refresh_cache else loadCache(cache_path, data_path, ckpt_dir, cfg.prefix)
 
     rs = 'rs1' if cfg.rescale else 'rs0'
-    # 'mb_' (not the old 'refine_'): the MB tag now stores the full default-pipeline latency
-    # (local=False draw + refinement), not a refinement region added on top of MB^0, so a
-    # rename keeps pre-change caches from being read with the old semantics.
-    tags = ('flow', f'mb_{method}_{rs}' if method else None)
-    flow, mb = cachedLatencies(
+    # 'mb_' (not the old 'refine_'): the MB tag stores the full default-pipeline latency
+    # (local=False draw + refinement), not a refinement region added on top of MB^0, so the
+    # rename keeps pre-change caches from being read with the old semantics.  'global_' is the
+    # first part of that same region (the local=False draw alone).
+    tags = (
+        'flow',
+        f'global_{rs}' if method else None,
+        f'mb_{method}_{rs}' if method else None,
+    )
+    flow, glob, mb = cachedLatencies(
         cache,
         tags,
         idxs,
-        lambda missing: timeLatency(
-            model, col, missing, cfg.n_samples, method, lf, device, cfg.seed, cfg.rescale
+        lambda missing, time_flow: timeLatency(
+            model,
+            col,
+            missing,
+            cfg.n_samples,
+            method,
+            lf,
+            device,
+            cfg.seed,
+            cfg.rescale,
+            time_flow,
         ),
     )
     saveCache(cache_path, cache)
 
     timings: dict[str, np.ndarray] = {MB_FLOW: flow}
     if method is not None:
+        timings[MB_GLOBAL] = glob
+        timings[MB_HEAD] = mb - glob
         timings[MB_DEFAULT] = mb
 
     records = []
@@ -828,8 +892,10 @@ def main() -> None:
         f'# Runtimes ({FAMILY_NAMES[family]})\n',
         f'Sizes: {", ".join(sizes)} ({cfg.ds_type} test sets), each on its regime-matched '
         f'checkpoint. metabeta: {cfg.n_samples} draws, {device.type}, one dataset per forward '
-        f'pass (latency). MB^0 is the raw flow; MB adds the default IMH refinement '
-        f'({", ".join(methods) or "none"}) on the same draws. ADVI excludes failed fits.\n',
+        f'pass (latency). MB^0 is the raw flow (global + local posterior flow); MB is the '
+        f'default pipeline, the global pass alone (local flow skipped) plus the default IMH '
+        f'head ({", ".join(methods) or "none"}), whose two parts are the "global pass" and '
+        f'"IMH head" rows. ADVI excludes failed fits.\n',
         '## Runtime distribution per regime\n',
         'Wall time per dataset. NUTS/ADVI/Laplace times are those recorded at fit time; '
         'metabeta is timed here. The tail columns are the point: the raw flow is flat because '
