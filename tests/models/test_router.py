@@ -984,6 +984,7 @@ def _write_tiny_approximator_checkpoint(
     max_d: int,
     max_q: int,
     likelihood_family: int = 1,
+    analytical_refinement: str = 'none',
 ) -> None:
     from metabeta.models.approximator import Approximator
     from metabeta.utils.config import (
@@ -1003,7 +1004,7 @@ def _write_tiny_approximator_checkpoint(
         posterior_l=pcfg,
         posterior_g=pcfg,
         posterior_correlation=max_q >= 2,
-        analytical_refinement='none',
+        analytical_refinement=analytical_refinement,
         analytical_local_at_inference=False,
     )
     model = Approximator(model_cfg)
@@ -1183,3 +1184,81 @@ def test_router_log_prob_rejects_malformed_ffx_shape(tmp_path: Path):
 
     with pytest.raises(ValueError, match='ffx must have shape'):
         router.log_prob(batch)
+
+
+# ---------------------------------------------------------------------------
+# IMH refinement skips the local posterior network
+# ---------------------------------------------------------------------------
+
+
+def _glmm_batch(*, d: int, q: int, m: int = 12, n_i: int = 10, seed: int = 0):
+    """Bernoulli batch with a non-degenerate design, so the analytical GLMM fit is well posed."""
+    g = torch.Generator().manual_seed(seed)
+    b = _exact_batch(d=d, q=q, m=m, n_i=n_i, family=1)
+    X = torch.randn(1, m, n_i, d, generator=g)
+    X[..., 0] = 1.0
+    offset = 0.5 * torch.randn(1, m, 1, generator=g)
+    b['X'] = X
+    b['Z'] = X[..., :q].clone()
+    b['y'] = torch.bernoulli(torch.sigmoid(X[..., 1] + offset), generator=g)
+    return b
+
+
+def test_estimate_without_local_seeds_rfx_from_analytical_estimate(tmp_path: Path, monkeypatch):
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2, analytical_refinement='light')
+    model = Api(joint_path, warmup=False).model('tiny')
+    batch = _glmm_batch(d=4, q=2)
+    stats = model._dataStatistics(batch)
+
+    def _no_local(*args, **kwargs):
+        raise AssertionError('the local posterior must not be sampled')
+
+    monkeypatch.setattr(model.posterior_l, 'sample', _no_local)
+    proposal = model.estimate(batch, n_samples=6, stats=stats, local=False)
+
+    want = stats['blup_est'].unsqueeze(-2).expand(-1, -1, 6, -1)
+    assert torch.equal(proposal.samples_l, want)
+    assert (proposal.log_prob_l == 0).all()
+    assert proposal.samples_g.shape[:2] == (1, 6)
+    assert torch.isfinite(proposal.log_prob_g).all()
+
+
+def test_router_imh_skips_local_flow_and_raw_flow_keeps_it(tmp_path: Path, monkeypatch):
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2, analytical_refinement='light')
+    router = Api(joint_path, warmup=False)
+    model = router.model('tiny')
+    calls: list[int] = []
+    sample_l = model.posterior_l.sample
+
+    def _counting(*args, **kwargs):
+        calls.append(1)
+        return sample_l(*args, **kwargs)
+
+    monkeypatch.setattr(model.posterior_l, 'sample', _counting)
+
+    result = router.sample(_glmm_batch(d=4, q=2), n_samples=64)  # IMH (default)
+    assert result.safeguards['refine_method'] == 'imhLaplace'
+    assert result.proposal.n_samples == 64
+    assert not calls
+
+    router.sample(_glmm_batch(d=4, q=2), n_samples=64, refine=False)  # raw flow
+    assert len(calls) == 1
+
+
+def test_router_imh_keeps_local_flow_without_analytical_stats(tmp_path: Path, monkeypatch):
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)  # no analytical context
+    router = Api(joint_path, warmup=False)
+    model = router.model('tiny')
+    calls: list[int] = []
+    sample_l = model.posterior_l.sample
+
+    def _counting(*args, **kwargs):
+        calls.append(1)
+        return sample_l(*args, **kwargs)
+
+    monkeypatch.setattr(model.posterior_l, 'sample', _counting)
+    router.sample(_glmm_batch(d=4, q=2), n_samples=64)
+    assert len(calls) == 1  # the Laplace mode search needs a start: the flow's rfx
