@@ -471,6 +471,29 @@ class Approximator(nn.Module):
         proposal.debug_stats = _debug_corr  # DEBUG
         return proposal
 
+    def _resolveStats(
+        self,
+        data: dict[str, torch.Tensor],
+        stats: dict[str, torch.Tensor] | None = None,
+    ) -> dict[str, torch.Tensor] | None:
+        """Analytical statistics for the context: the given ones, else the batch's precomputed
+        ones, else computed live. None for models without analytical context."""
+        if stats is not None or not self.analytical_context:
+            return stats
+        if 'stats' in data and not getattr(self, 'live_compute_fits', False):
+            if self.cfg.analytical_refinement == 'light' and not getattr(
+                self, '_refinement_upgraded', False
+            ):
+                logger.warning(
+                    "Model config has analytical_refinement='light' but precomputed stats "
+                    "(full MAP+EB) were found in the batch. Upgrading to 'full' in memory "
+                    'and in the exported model config.'
+                )
+                self.cfg.analytical_refinement = 'full'
+                self._refinement_upgraded = True
+            return data['stats']
+        return self._dataStatistics(data)
+
     def summarize(
         self,
         data: dict[str, torch.Tensor],
@@ -478,21 +501,7 @@ class Approximator(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         inputs = self._inputs(data)
         summary_l_raw = self.summarizer_l(inputs, mask=data['mask_n'])
-        if stats is None and self.analytical_context:
-            if 'stats' in data and not getattr(self, 'live_compute_fits', False):
-                if self.cfg.analytical_refinement == 'light' and not getattr(
-                    self, '_refinement_upgraded', False
-                ):
-                    logger.warning(
-                        "Model config has analytical_refinement='light' but precomputed stats "
-                        "(full MAP+EB) were found in the batch. Upgrading to 'full' in memory "
-                        'and in the exported model config.'
-                    )
-                    self.cfg.analytical_refinement = 'full'
-                    self._refinement_upgraded = True
-                stats = data['stats']
-            else:
-                stats = self._dataStatistics(data)
+        stats = self._resolveStats(data, stats)
 
         # Global path: augment per-group summaries with REML point estimates before pooling.
         summary_l_with_stats = self._addMetadata(summary_l_raw, data, local=True, stats=stats)
@@ -549,6 +558,21 @@ class Approximator(nn.Module):
         )
         return log_probs
 
+    def _localPlaceholder(
+        self,
+        data: dict[str, torch.Tensor],
+        samples_g: torch.Tensor,
+        n_samples: int,
+        stats: dict[str, torch.Tensor] | None,
+    ) -> dict[str, torch.Tensor]:
+        """Stand-in for skipped local samples: the analytical rfx point estimate (zeros without
+        stats) broadcast over the samples, with zero log-prob. (b, m, n_samples, q)."""
+        b, m, q = data['y'].shape[0], data['mask_m'].shape[1], self.d_rfx
+        samples = samples_g.new_zeros(b, m, n_samples, q)
+        if stats is not None and 'blup_est' in stats:
+            samples = samples + stats['blup_est'][:, :m, :q].unsqueeze(-2).to(samples)
+        return {'samples': samples, 'log_prob': samples_g.new_zeros(b, m, n_samples)}
+
     def backward(
         self,
         data: dict[str, torch.Tensor],
@@ -556,12 +580,21 @@ class Approximator(nn.Module):
         n_samples: int = 1,
         detach_global: bool = False,
         stats: dict[str, torch.Tensor] | None = None,
+        local: bool = True,
     ) -> Proposal:
-        """inference method: sample and apply conditional backward pass"""
+        """inference method: sample and apply conditional backward pass
+
+        With ``local=False`` the local posterior (flow, or the analytical Normal conditional) is
+        skipped and the local samples hold the analytical rfx point estimate instead: enough to
+        seed the post-hoc samplers that redraw the rfx from their conditional (IMH), at a
+        fraction of the local flow's cost on CPU.
+        """
         assert n_samples > 0, 'n_samples must be positive'
         proposed = {}
 
-        # summaries
+        # analytical statistics: needed for the summaries (unless given) and the local placeholder
+        if summaries is None or not local:
+            stats = self._resolveStats(data, stats)
         if summaries is None:
             summary_g, summary_l = self.summarize(data, stats=stats)
         else:
@@ -580,32 +613,29 @@ class Approximator(nn.Module):
                 n_samples, context=summary_g, mask=mask_g
             )
         proposed['global'] = {'samples': samples_g, 'log_prob': log_prob_g}
-        if self.analytical_local_posterior:
-            b = data['y'].shape[0]
-            m = data['mask_m'].shape[1]
-            q = self.d_rfx
-            proposed['local'] = {
-                'samples': samples_g.new_zeros(b, m, n_samples, q),
-                'log_prob': samples_g.new_zeros(b, m, n_samples),
-            }
-            proposal = self._postprocess(proposed)
-            proposal_out = gaussianHybrid(proposal, data)
-            proposal_out.debug_stats = proposal.debug_stats
-            return proposal_out
 
         # local posterior
-        mask_l = self._masks(data, local=True)
-        b, m, q = mask_l.shape
-        mask_l = mask_l.unsqueeze(-2).expand(b, m, n_samples, q)
-        context_l = self._localContext(summary_l, samples_g, data)
-        samples_l, log_prob_l = self.posterior_l.sample(  # type: ignore
-            1, context=context_l, mask=mask_l
-        )
-        samples_l, log_prob_l = samples_l.squeeze(-2), log_prob_l.squeeze(-1)
-        proposed['local'] = {'samples': samples_l, 'log_prob': log_prob_l}
+        if local and not self.analytical_local_posterior:
+            mask_l = self._masks(data, local=True)
+            b, m, q = mask_l.shape
+            mask_l = mask_l.unsqueeze(-2).expand(b, m, n_samples, q)
+            context_l = self._localContext(summary_l, samples_g, data)
+            samples_l, log_prob_l = self.posterior_l.sample(  # type: ignore
+                1, context=context_l, mask=mask_l
+            )
+            proposed['local'] = {
+                'samples': samples_l.squeeze(-2),
+                'log_prob': log_prob_l.squeeze(-1),
+            }
+        else:
+            proposed['local'] = self._localPlaceholder(data, samples_g, n_samples, stats)
 
         # postprocess samples
         proposal = self._postprocess(proposed)
+        if local and self.analytical_local_posterior:
+            hybrid = gaussianHybrid(proposal, data)
+            hybrid.debug_stats = proposal.debug_stats
+            return hybrid
         return proposal
 
     @torch.no_grad()
@@ -615,8 +645,11 @@ class Approximator(nn.Module):
         summaries=None,
         n_samples=1,
         stats=None,
+        local=True,
     ) -> Proposal:
-        return self.backward(data, summaries=summaries, n_samples=n_samples, stats=stats)
+        return self.backward(
+            data, summaries=summaries, n_samples=n_samples, stats=stats, local=local
+        )
 
 
 # =============================================================================
