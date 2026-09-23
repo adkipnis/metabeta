@@ -6,7 +6,8 @@ Stage-by-stage wall time of the MB pipeline on a trained GLMM model, split by re
   summarize  : Set-Transformer summaries                          (shared by both configs)
   global (g) : posterior_g.sample                                 (shared)
   local  (A) : posterior_l.sample                                 (the stage MB_skip drops)
-  laplace(B) : MetropolisSampler(mode='laplace')                  (mode search + chain + redraw)
+  laplace(B) : MetropolisSampler(mode='laplace')                  (mode search + chain + redraw;
+               timed per proposal, since the Newton start can change its cost)
 
   MB_full = summarize + g + A + B     proposal: model.estimate(...)               (flow rfx)
   MB_skip = summarize + g +     B     proposal: model.estimate(..., local=False)  (analytical rfx)
@@ -120,7 +121,7 @@ def run(family: str, size: str, k: int, s: int, seed: int, prefix: str):
     print(f'\n===== {family} {size} (lf={lf}) | s={s}, {k} datasets/regime =====')
     header = (
         f'{"regime":14s} {"m(med)":>7s} {"n_tot":>7s} | '
-        f'{"summ":>7s} {"global":>7s} {"local A":>8s} {"lap B":>7s} | '
+        f'{"summ":>7s} {"global":>7s} {"local A":>8s} {"lap B f":>7s} {"lap B a":>7s} | '
         f'{"MB_full":>8s} {"MB_skip":>8s} {"save":>6s}  accept f/a'
     )
     print(header)
@@ -134,15 +135,16 @@ def run(family: str, size: str, k: int, s: int, seed: int, prefix: str):
         t_sum, t_g, t_l = stageTimes(model, sub, stats, s)
         prop_full = model.estimate(sub, n_samples=s, stats=stats)
         prop_skip = model.estimate(sub, n_samples=s, stats=stats, local=False)
-        t_b, acc_f = imhTime(sub, prop_full, lf, s)
-        _, acc_a = imhTime(sub, prop_skip, lf, s)
+        t_b_f, acc_f = imhTime(sub, prop_full, lf, s)  # Newton started from the flow rfx
+        t_b_a, acc_a = imhTime(sub, prop_skip, lf, s)  # ... from the analytical estimate
 
-        mb_full = (t_sum + t_g + t_l + t_b) / b * 1e3
-        mb_skip = (t_sum + t_g + t_b) / b * 1e3  # B's cost does not depend on its start
+        mb_full = (t_sum + t_g + t_l + t_b_f) / b * 1e3
+        mb_skip = (t_sum + t_g + t_b_a) / b * 1e3
         save = (1 - mb_skip / mb_full) * 100
         print(
             f'{name:14s} {np.median(m_sub):7.0f} {np.median(ntot_sub):7.0f} | '
-            f'{t_sum/b*1e3:7.1f} {t_g/b*1e3:7.1f} {t_l/b*1e3:8.1f} {t_b/b*1e3:7.1f} | '
+            f'{t_sum/b*1e3:7.1f} {t_g/b*1e3:7.1f} {t_l/b*1e3:8.1f} '
+            f'{t_b_f/b*1e3:7.1f} {t_b_a/b*1e3:7.1f} | '
             f'{mb_full:8.1f} {mb_skip:8.1f} {save:5.1f}%  {acc_f:4.1f}/{acc_a:4.1f}'
         )
 
