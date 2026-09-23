@@ -1243,22 +1243,19 @@ def test_router_imh_skips_local_flow_and_raw_flow_keeps_it(tmp_path: Path, monke
     assert result.proposal.n_samples == 64
     assert not calls
 
+    result = router.sample(_glmm_batch(d=4, q=2), n_samples=64, refine='is')
+    assert result.safeguards['refine_method'] == 'isLaplace'
+    assert result.proposal.n_samples == 64
+    assert not calls
+
     router.sample(_glmm_batch(d=4, q=2), n_samples=64, refine=False)  # raw flow
     assert len(calls) == 1
 
 
-def test_router_imh_keeps_local_flow_without_analytical_stats(tmp_path: Path, monkeypatch):
+def test_estimate_without_local_rejects_glmm_without_analytical_stats(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)  # no analytical context
-    router = Api(joint_path, warmup=False)
-    model = router.model('tiny')
-    calls: list[int] = []
-    sample_l = model.posterior_l.sample
+    model = Api(joint_path, warmup=False).model('tiny')
 
-    def _counting(*args, **kwargs):
-        calls.append(1)
-        return sample_l(*args, **kwargs)
-
-    monkeypatch.setattr(model.posterior_l, 'sample', _counting)
-    router.sample(_glmm_batch(d=4, q=2), n_samples=64)
-    assert len(calls) == 1  # the Laplace mode search needs a start: the flow's rfx
+    with pytest.raises(ValueError, match='analytical rfx estimate'):
+        model.estimate(_glmm_batch(d=4, q=2), n_samples=4, local=False)
