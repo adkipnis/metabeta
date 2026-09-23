@@ -60,15 +60,7 @@ FAM_LETTER = {0: 'n', 1: 'b', 2: 'p'}
 SNIS_METHODS = ('is', 'isFull', 'isMarginal')          # ImportanceSampler
 LAPLACE_METHODS = ('isLaplace', 'rbAttach')            # LaplaceImportanceSampler (GLMM only)
 IMH_METHODS = ('imhMarginal', 'imhGlobal', 'imhLaplace')   # MetropolisSampler
-# Laplace-Newton-init variants of the GLMM Laplace methods (base methods keep 'flow'):
-# {variant: (base_method, newton_init)}. GLMM-only, like their base methods.
-LAPLACE_INIT_VARIANTS = {
-    'isLaplaceAna': ('isLaplace', 'analytical'),
-    'isLaplaceCold': ('isLaplace', 'cold'),
-    'imhLaplaceAna': ('imhLaplace', 'analytical'),
-    'imhLaplaceCold': ('imhLaplace', 'cold'),
-}
-SUPPORTED_METHODS = SNIS_METHODS + LAPLACE_METHODS + IMH_METHODS + tuple(LAPLACE_INIT_VARIANTS)
+SUPPORTED_METHODS = SNIS_METHODS + LAPLACE_METHODS + IMH_METHODS
 
 # IMH pool geometry: n_chains × (n_samples // n_chains) proposals, mirroring
 # experiments/posthoc/ablation.py's runIMH settings.
@@ -92,7 +84,7 @@ def validMethods(methods: list[str], lf: int) -> list[str]:
     for m in methods:
         if m in ('isMarginal', 'imhGlobal') and lf != 0:
             logger.warning('Skipping %s: Normal-only (lf=%d)', m, lf)
-        elif m in LAPLACE_METHODS + ('imhLaplace',) + tuple(LAPLACE_INIT_VARIANTS) and lf == 0:
+        elif m in LAPLACE_METHODS + ('imhLaplace',) and lf == 0:
             logger.warning('Skipping %s: GLMM-only, Normal uses the exact marginal', m)
         else:
             valid.append(m)
@@ -350,11 +342,6 @@ def _refineChunk(
     """Refine a single sub-batch of datasets (see refineProposal for the chunking wrapper)."""
     B = base.samples_g.shape[0]
 
-    # newton_init variants map onto their base Laplace method with a non-flow Newton init
-    newton_init = 'flow'
-    if method in LAPLACE_INIT_VARIANTS:
-        method, newton_init = LAPLACE_INIT_VARIANTS[method]
-
     if method in SNIS_METHODS:
         if method == 'isMarginal' and lf != 0:
             raise ValueError('isMarginal requires the Normal likelihood (lf=0)')
@@ -378,7 +365,6 @@ def _refineChunk(
             corr_prior=True,
             pareto=True,
             likelihood_family=lf,
-            newton_init=newton_init,
         )
         return sampler(base.slice_b(0, B))
 
@@ -409,7 +395,6 @@ def _refineChunk(
             burnin=IMH_BURNIN,
             mode=mode,
             likelihood_family=lf,
-            newton_init=newton_init,
         )
         p_out, _ = sampler(pool)
         return p_out
