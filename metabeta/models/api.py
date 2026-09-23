@@ -358,12 +358,13 @@ class Api:
         by Independence Metropolis-Hastings: the flow serves as the proposal of a Markov
         chain targeting the exact rfx-marginalized posterior (Normal) or its Laplace
         approximation (GLMMs), so the chain's stationary distribution does not depend on
-        flow accuracy.  The rfx are redrawn from their conditional at the accepted globals,
-        so the local posterior network is not run at all under IMH: its cost is skipped and
-        the analytical rfx estimate seeds the Laplace mode search instead (the raw flow,
-        ``refine=False``, still samples it).  The proposal pool is over-drawn by the burn-in
-        so exactly ``n_samples`` post-burn-in draws are returned.  Per-dataset acceptance
-        rates and a suggested pool size (the smallest ``n_samples`` expected to reach the
+        flow accuracy.  Both refinements redraw the rfx from their conditional at the
+        accepted (or weighted) globals, so the local posterior network is not run at all:
+        its cost is skipped and the analytical rfx estimate seeds the Laplace mode search
+        instead (only the raw flow, ``refine=False``, samples it).  The proposal pool is
+        over-drawn by the burn-in so exactly ``n_samples`` post-burn-in draws are returned.
+        Per-dataset acceptance rates and a suggested pool size (the smallest ``n_samples``
+        expected to reach the
         calibration-validated effective-draw target at the measured acceptance) are
         reported in ``RouterResult.safeguards``; datasets with mean acceptance below
         ``IMH_ACCEPT_WARN`` trigger a warning recommending the suggested size or exact
@@ -398,13 +399,12 @@ class Api:
         routes, validation = self._routeBatch(batch)
         batch = toDevice(batch, self.device)
         # IMH consumes the first `burnin` steps of each chain, so over-draw the flow
-        # pool to hand back exactly n_samples post-burn-in draws; it redraws the rfx from
-        # their conditional, so the local posterior is skipped (see _runRouted)
+        # pool to hand back exactly n_samples post-burn-in draws; both refinements redraw
+        # the rfx from their conditional, so the local posterior is skipped for them
         pool = n_samples
-        imh = do_refine and method == 'imh'
-        if imh:
+        if do_refine and method == 'imh':
             pool = IMH_N_CHAINS * (math.ceil(n_samples / IMH_N_CHAINS) + IMH_BURNIN)
-        proposal, stats = self._runRouted(batch, routes, n_samples=pool, local=not imh)
+        proposal, stats = self._runRouted(batch, routes, n_samples=pool, local=not do_refine)
         safeguards: dict[str, Any] | None = None
         if do_refine:
             proposal, safeguards = self._refineAndCheck(
@@ -679,9 +679,8 @@ class Api:
         The analytical GLMM statistics that condition the summarizer are computed here
         once and threaded through ``estimate`` so the MAP consistency safeguard can reuse
         them without a second fit.  With ``local=False`` the local posterior is skipped and
-        the analytical rfx estimate stands in for its samples (IMH redraws the rfx anyway);
-        a GLMM model without analytical statistics keeps the local flow, since the Laplace
-        mode search needs a start.
+        the analytical rfx estimate stands in for its samples (the refinements redraw the
+        rfx anyway).
         """
         unique_ids = list(dict.fromkeys(routes))
         if len(unique_ids) != 1:
@@ -693,7 +692,6 @@ class Api:
         model = self.model(submodel_id)
         self._validateBatchMatchesModel(batch, model)
         stats = model._dataStatistics(batch) if model.analytical_context else None
-        local = local or (model.likelihood_family != 0 and stats is None)
         proposal = model.estimate(batch, n_samples=n_samples, stats=stats, local=local)
         return proposal, stats
 
@@ -719,9 +717,10 @@ class Api:
         draws are trimmed to exactly ``n_samples``.
 
         'is' applies self-normalized importance sampling with PSIS smoothing; datasets
-        with k̂ > ``k_threshold`` fall back to uniform weights (raw flow posterior) and
-        are reported.  The weighted sample is systematically resampled back to
-        ``n_samples`` equal-weight draws (an exact pass-through for fallback datasets).
+        with k̂ > ``k_threshold`` fall back to uniform weights (the raw flow globals, with
+        conditionally redrawn rfx) and are reported.  The weighted sample is systematically
+        resampled back to ``n_samples`` equal-weight draws (an exact pass-through for
+        fallback datasets).
 
         Datasets are processed in chunks of ``self.batch_size`` (when set): the marginal
         likelihood materialises a (b, m, n, s) tensor, so full batches OOM on large data.
