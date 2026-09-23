@@ -136,9 +136,12 @@ def laplaceRfxModes(
     likelihood_family: int,
     L_corr: Tensor | None = None,  # (b, s, q, q)
     init: Tensor | None = None,  # (b, m, s, q) warm start (e.g. flow rfx)
-    n_newton: int = 5,
+    n_newton: int = 3,  # standard damped-Newton steps; stragglers go to the compacted extra
+    # phase, so 3 matches 5 to <=0.002 on every recovery/calibration metric (512-dataset check,
+    # bernoulli/poisson x 4 sizes, 2026-09-23) at ~15-35% less CPU — the mode search is ~95%
+    # of the imhLaplace refinement. Purely post-hoc: does NOT touch the analytical context stats.
     damping: float = 1.0,
-    n_backtrack: int = 3,
+    n_backtrack: int = 3,  # do not lower: bt<=1 diverges on deep/extreme entries (guard-pins)
     n_newton_extra: int = 15,
     tol: float = 0.01,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
@@ -347,7 +350,7 @@ def logMarginalLikelihoodLaplace(
     likelihood_family: int,
     L_corr: Tensor | None = None,
     init: Tensor | None = None,
-    n_newton: int = 5,
+    n_newton: int = 3,  # see laplaceRfxModes: 3 == 5 to <=0.002 on all metrics, ~15-35% cheaper
     guard_nats: float | None = 1.0,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Laplace-approximated marginal log-likelihood Σ_j log p̂(y_j | θ_g).
@@ -411,7 +414,7 @@ class LaplaceImportanceSampler(ImportanceSampler):
         self,
         data: dict[str, Tensor],
         attach_only: bool = False,
-        n_newton: int = 5,
+        n_newton: int = 3,  # see laplaceRfxModes: 3 == 5 to <=0.002 on all metrics, ~15-35% cheaper
         **kwargs,
     ) -> None:
         if kwargs.get('marginal') or kwargs.get('full'):
