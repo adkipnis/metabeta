@@ -67,10 +67,11 @@ print(mb.posteriorSummary(result))
 
 With `n_samples >= 64`, `sample` also refines the flow posterior by Independence
 Metropolis-Hastings (the default, `refine=True`). The chain uses the flow as its proposal,
-so the refined posterior does not hinge on network accuracy alone; per-dataset acceptance
-rates and a suggested pool size are reported in `result.safeguards`. If the suggestion
-exceeds the `n_samples` you requested, rerun with the larger value (or pass
-`refine=False` to keep the raw flow posterior).
+so the refined posterior does not hinge on network accuracy alone; the random effects are
+redrawn from their conditional, so the local posterior network (the main cost on CPU) is
+skipped entirely. Per-dataset acceptance rates and a suggested pool size are reported in
+`result.safeguards`. If the suggestion exceeds the `n_samples` you requested, rerun with
+the larger value (or pass `refine=False` to keep the raw flow posterior).
 
 See [demos/intro.ipynb](demos/intro.ipynb) for the full `sleepstudy`
 walkthrough and [demos/priors.ipynb](demos/priors.ipynb) for an exemplary prior-sensitivity

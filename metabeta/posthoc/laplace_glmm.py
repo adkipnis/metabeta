@@ -7,8 +7,10 @@ does not apply. This module provides the Laplace analog, fully vectorized over
 (datasets b, groups m, posterior samples s):
 
 1. `laplaceRfxModes` — damped-Newton per-group conditional modes b*_j and Hessians
-   H_j = ZᵀWZ + Σ⁻¹ of p(rfx_j | θ_g, y_j), warm-started at the flow's rfx draws
-   (already close, so few iterations suffice).
+   H_j = ZᵀWZ + Σ⁻¹ of p(rfx_j | θ_g, y_j), started from the proposal's rfx: the flow's
+   draws, or the analytical rfx estimate when the local flow was skipped at inference
+   (Approximator.estimate(local=False)). The log-concave target converges from either;
+   the start affects only speed and, at the finite budget, the guard-pinned tail.
 2. `sampleRfxLaplace` — rfx ~ N(b*_j, H_j⁻¹): the Laplace conditional redraw, the
    non-conjugate analog of families.sampleRfxConditionalNormal.
 3. `logMarginalLikelihoodLaplace` — log p̂(y_j | θ_g) = ℓ_j(b*) + log N(b*; 0, Σ_rfx)

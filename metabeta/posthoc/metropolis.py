@@ -34,6 +34,10 @@ Three modes differ in how rfx (local params) are handled:
       after acceptance, fresh rfx are drawn from the Laplace-Gaussian conditional
       N(b*, H⁻¹) — gathered from the pool pass by the accepted samples' pool indices,
       since every accepted state is a pool member whose modes/Hessians are already known.
+      The proposal's rfx only seed the per-group Newton mode search, so at inference the
+      local flow is skipped and the analytical rfx estimate seeds it instead
+      (Approximator.estimate(local=False)); accuracy is identical, and the local flow —
+      the dominant CPU cost at production pool sizes, ~linear in the group count — is gone.
       Mirrors the recipe that fixed the huge-Normal regime — added because isLaplace's
       PSIS guardrail falls back on 13–50% of large/huge GLMM datasets
       (2026-07-29 ablation), and rejection-based correction has no fallback mode.
@@ -441,6 +445,9 @@ def runIMH(
                      runs at n_chains × n_steps regardless.
     rescale        : bool
     likelihood_family : int
+
+    'marginal' and 'laplace' redraw the rfx from their conditional at the accepted globals,
+    so the flow's local posterior is skipped for them (Approximator.estimate(local=False)).
     """
     lf = getattr(cfg, 'likelihood_family', 0)
     n_chains = getattr(cfg, 'n_chains', 4)
@@ -450,7 +457,7 @@ def runIMH(
     default_mode = 'marginal' if lf == 0 else 'laplace'
     mode: Mode = getattr(cfg, 'imh_mode', default_mode)
 
-    proposal = model.estimate(data, n_samples=n_chains * n_steps)
+    proposal = model.estimate(data, n_samples=n_chains * n_steps, local=mode in ('global', 'joint'))
 
     if cfg.rescale:
         proposal.rescale(data['sd_y'])
