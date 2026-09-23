@@ -571,6 +571,11 @@ class Approximator(nn.Module):
         samples = samples_g.new_zeros(b, m, n_samples, q)
         if stats is not None and 'blup_est' in stats:
             samples = samples + stats['blup_est'][:, :m, :q].unsqueeze(-2).to(samples)
+        elif self.likelihood_family != 0:  # Normal never reads them (exact conditional)
+            raise ValueError(
+                'estimate(local=False) needs the analytical rfx estimate to seed the Laplace '
+                "mode search of a GLMM; this model has analytical_refinement='none'"
+            )
         return {'samples': samples, 'log_prob': samples_g.new_zeros(b, m, n_samples)}
 
     def backward(
@@ -586,7 +591,7 @@ class Approximator(nn.Module):
 
         With ``local=False`` the local posterior (flow, or the analytical Normal conditional) is
         skipped and the local samples hold the analytical rfx point estimate instead: enough to
-        seed the post-hoc samplers that redraw the rfx from their conditional (IMH), at a
+        seed the post-hoc samplers that redraw the rfx from their conditional (IMH, IS), at a
         fraction of the local flow's cost on CPU.
         """
         assert n_samples > 0, 'n_samples must be positive'
