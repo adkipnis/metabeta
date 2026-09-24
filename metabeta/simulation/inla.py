@@ -12,6 +12,7 @@ Per-dataset output (<data_id>/fits/<partition>_inla_<idx:03d>.npz):
     inla_ffx_samples        (d, S)    — samples follow (dim, S) convention of nuts/advi
     inla_sigma_rfx_samples  (q, S)
     inla_rfx_samples        (q, m, S)
+    inla_sigma_eps_samples  (1, S)    — Gaussian likelihood only
 
 Batch output (<data_id>/<partition>.inla.npz) — INLA keys only, separate from .fit.npz:
     inla_ffx             (n_ds, d_max)
@@ -23,6 +24,7 @@ Batch output (<data_id>/<partition>.inla.npz) — INLA keys only, separate from 
     inla_ffx_samples        (n_ds, d_max, S)
     inla_sigma_rfx_samples  (n_ds, q_max, S)
     inla_rfx_samples        (n_ds, q_max, m_max, S)
+    inla_sigma_eps_samples  (n_ds, 1, S)   — Gaussian likelihood only
 
 Usage (from repo root):
     uv run python -m metabeta.simulation.inla --size small --family 1 --ds_type sampled --idx 0
@@ -108,15 +110,19 @@ def _draw_posterior_samples(
     q: int,
     m: int,
     correlated: bool,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None] | None:
     """Draw joint posterior samples via inla.posterior.sample.
 
-    Returns (ffx_s, sigma_s, rfx_s) with shapes (S, d), (S, q), (S, q, m),
-    or None if sampling fails.
+    Hyperparameters are drawn from INLA's integration points (skewness-corrected), so the
+    sigma samples concentrate on a few distinct values; this is the standard R-INLA behaviour.
+
+    Returns (ffx_s, sigma_s, rfx_s, sigma_eps_s) with shapes (S, d), (S, q), (S, q, m), (S,)
+    (sigma_eps_s is None without a Gaussian likelihood), or None if sampling fails.
     """
     try:
         r_ips = ro.r['inla.posterior.sample']
-        samps = r_ips(n_samples, result)
+        # a fixed seed makes R-INLA sample serially, matching the single-thread fit
+        samps = r_ips(n_samples, result, seed=1, **{'num.threads': '1:1'})
 
         first = samps.rx2(1)
         # $latent is a FloatMatrix (n_latent, 1); rownames hold the parameter names
@@ -125,12 +131,10 @@ def _draw_posterior_samples(
         n_latent = len(latent_names)
         n_hyper = len(hyper_names)
 
-        latent_mat = np.empty((n_samples, n_latent))
-        hyper_mat = np.empty((n_samples, n_hyper))
-        for i in range(n_samples):
-            samp = samps.rx2(i + 1)
-            latent_mat[i] = np.asarray(samp.rx2('latent')).ravel()
-            hyper_mat[i] = np.asarray(samp.rx2('hyperpar')).ravel()
+        # stack in R: one sapply per block instead of 2 * S rpy2 round trips
+        stack = ro.r('function(s, key) sapply(s, function(x) as.numeric(x[[key]]))')
+        latent_mat = np.asarray(stack(samps, 'latent')).reshape(n_latent, n_samples, order='F').T
+        hyper_mat = np.asarray(stack(samps, 'hyperpar')).reshape(n_hyper, n_samples, order='F').T
 
         fe_names = ['(Intercept):1'] + [f'x{j}:1' for j in range(1, d)]
         fe_idx = [latent_names.index(nm) for nm in fe_names if nm in latent_names]
@@ -165,7 +169,13 @@ def _draw_posterior_samples(
                     prec = hyper_mat[:, hyper_names.index(prec_nms[0])]
                     sigma_s[:, j] = 1.0 / np.sqrt(np.maximum(prec, 1e-12))
 
-        return ffx_s, sigma_s, rfx_s
+        eps_nm = 'Precision for the Gaussian observations'
+        sigma_eps_s = None
+        if eps_nm in hyper_names:
+            prec = hyper_mat[:, hyper_names.index(eps_nm)]
+            sigma_eps_s = 1.0 / np.sqrt(np.maximum(prec, 1e-12))
+
+        return ffx_s, sigma_s, rfx_s, sigma_eps_s
     except Exception:
         return None
 
@@ -302,6 +312,9 @@ def estimate(
                 'control.fixed': ctrl_fixed,
                 'verbose': False,
                 'silent': True,
+                # one thread per fit: batches parallelise over datasets, and wall times
+                # stay per-core
+                'num.threads': '1:1',
             }
             if likelihood_family == 1:
                 inla_kwargs['Ntrials'] = ro.IntVector([1] * n)
@@ -376,10 +389,12 @@ def estimate(
         if n_samples > 0:
             drawn = _draw_posterior_samples(result, n_samples, d, q, m, correlated)
             if drawn is not None:
-                ffx_s, sigma_s, rfx_s = drawn
+                ffx_s, sigma_s, rfx_s, sigma_eps_s = drawn
                 out['ffx_samples'] = ffx_s      # (S, d)
                 out['sigma_rfx_samples'] = sigma_s  # (S, q)
                 out['rfx_samples'] = rfx_s      # (S, q, m)
+                if sigma_eps_s is not None:
+                    out['sigma_eps_samples'] = sigma_eps_s  # (S,)
         return out
 
     except Exception:
@@ -545,18 +560,19 @@ class InlaFitter:
             }
             if n_samples > 0:
                 if 'ffx_samples' in result:
-                    # transpose to (dim, S) convention matching nuts/advi storage
-                    out['inla_ffx_samples'] = result['ffx_samples'].T.astype(np.float64)
-                    out['inla_sigma_rfx_samples'] = result['sigma_rfx_samples'].T.astype(np.float64)
+                    # transpose to (dim, S) convention matching nuts/advi storage; float32
+                    # keeps the aggregated (n_ds, q, m, S) rfx block within memory
+                    out['inla_ffx_samples'] = result['ffx_samples'].T.astype(np.float32)
+                    out['inla_sigma_rfx_samples'] = result['sigma_rfx_samples'].T.astype(np.float32)
                     out['inla_rfx_samples'] = (
-                        result['rfx_samples'].transpose(1, 2, 0).astype(np.float64)
+                        result['rfx_samples'].transpose(1, 2, 0).astype(np.float32)
                     )
+                    if self.likelihood_family == 0:
+                        out['inla_sigma_eps_samples'] = (
+                            result['sigma_eps_samples'][None].astype(np.float32)
+                        )
                 else:
-                    out['inla_ffx_samples'] = np.full((d, n_samples), np.nan, dtype=np.float64)
-                    out['inla_sigma_rfx_samples'] = np.full(
-                        (q, n_samples), np.nan, dtype=np.float64
-                    )
-                    out['inla_rfx_samples'] = np.full((q, m, n_samples), np.nan, dtype=np.float64)
+                    out.update(self._nanSamples(d, q, m, n_samples))
         else:
             out = {
                 'inla_ffx': np.full(d, np.nan, dtype=np.float64),
@@ -567,9 +583,17 @@ class InlaFitter:
                 'inla_failed': np.array(True),
             }
             if n_samples > 0:
-                out['inla_ffx_samples'] = np.full((d, n_samples), np.nan, dtype=np.float64)
-                out['inla_sigma_rfx_samples'] = np.full((q, n_samples), np.nan, dtype=np.float64)
-                out['inla_rfx_samples'] = np.full((q, m, n_samples), np.nan, dtype=np.float64)
+                out.update(self._nanSamples(d, q, m, n_samples))
+        return out
+
+    def _nanSamples(self, d: int, q: int, m: int, n_samples: int) -> dict:
+        out = {
+            'inla_ffx_samples': np.full((d, n_samples), np.nan, dtype=np.float32),
+            'inla_sigma_rfx_samples': np.full((q, n_samples), np.nan, dtype=np.float32),
+            'inla_rfx_samples': np.full((q, m, n_samples), np.nan, dtype=np.float32),
+        }
+        if self.likelihood_family == 0:
+            out['inla_sigma_eps_samples'] = np.full((1, n_samples), np.nan, dtype=np.float32)
         return out
 
     def go(self) -> None:
