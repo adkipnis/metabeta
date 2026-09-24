@@ -57,7 +57,7 @@ from build_ckpt import BEST_SEEDS, _ckpt_dir  # noqa: E402
 
 # sibling experiment scripts (this directory is sys.path[0] at run time)
 from condition_number import LF_FROM_FAM, METHOD_LABELS, _fmtMs
-from real_posterior import computeCorr, computeSigmaRatio, computeRankMAD, _ms
+from real_posterior import computeCorr, computeSigmaRatio, computeRankMAD, _medianMad
 from data_poverty import localEntries, globalEntries, _eace, _nrmse, _nrmseByType
 
 logger = logging.getLogger(__name__)
@@ -305,7 +305,7 @@ def agreementRows(
                 'pct_conv': 100.0 * conv.mean(),
             }
             for key, _ in AGREE_METRICS:
-                row[key] = _ms(agree[f'{m}:{key}'][conv]) if conv.any() else None
+                row[key] = _medianMad(agree[f'{m}:{key}'][conv]) if conv.any() else None
             rows.append(row)
     return rows
 

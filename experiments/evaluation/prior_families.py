@@ -62,7 +62,7 @@ from build_ckpt import BEST_SEEDS, _ckpt_dir  # noqa: E402
 
 # sibling experiment scripts (this directory is sys.path[0] at run time)
 from condition_number import LF_FROM_FAM, _fmtMs
-from real_posterior import _ms
+from real_posterior import _medianMad
 from data_poverty import _flat
 from likelihood_misspec import FAMILY_NAMES
 from prior_misspec import DEFAULT_SIZES
@@ -276,10 +276,10 @@ def spreadRows(pooled: dict, lf: int) -> list[dict]:
                     'family': FAMILY_LABELS.get(name, name),
                     'first': is_ref,
                     'n_entries': len(sd),
-                    'sd': _ms(sd),
-                    'ratio': None if is_ref else _ms(ratio),
+                    'sd': _medianMad(sd),
+                    'ratio': None if is_ref else _medianMad(ratio),
                     'pct_wider': None if is_ref else 100.0 * float((sd > ref_sd).mean()),
-                    'dmean': None if is_ref else _ms(np.abs(mean - ref_mean)),
+                    'dmean': None if is_ref else _medianMad(np.abs(mean - ref_mean)),
                     'prior_ratio': PRIOR_SD[name] / PRIOR_SD[ref_name],
                 }
             )
@@ -373,7 +373,7 @@ def binnedRows(pooled: dict, lf: int, n_bins: int) -> list[dict]:
                         'hi': float(info[sel].max()),
                         'n_entries': int(sel.sum()),
                         'sd_ref': float(np.median(sd_ref[sel])),
-                        'ratio': _ms(ratio[sel]),
+                        'ratio': _medianMad(ratio[sel]),
                         'pct_wider': 100.0 * float((sd[sel] > sd_ref[sel]).mean()),
                         'prior_ratio': PRIOR_SD[name] / PRIOR_SD[ref],
                     }
