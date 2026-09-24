@@ -48,8 +48,11 @@ case "$FAM_NAME" in
 esac
 
 mkdir -p logs/inla
+# /etc/bashrc and activate reference unset variables; relax nounset while sourcing them
+set +u
 source "$HOME/.bashrc"
 source "$HOME/metabeta/.venv/bin/activate"
+set -u
 cd "$HOME/metabeta"
 
 export OMP_NUM_THREADS=1
