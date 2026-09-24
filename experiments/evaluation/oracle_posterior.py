@@ -6,7 +6,8 @@ the checkpoint's capacity (datasets beyond max_d/max_q are dropped by the capaci
 a small-capacity model on a larger regime yields few or no rows). To sweep sizes, launch one
 process per (checkpoint, data_id) pair.
 
-Loads NUTS/ADVI/Laplace fits from the test.fit.npz batch and produces a LaTeX + Markdown table
+Loads NUTS/ADVI/Laplace fits from the test.fit.npz batch (and R-INLA fits from the sibling
+test.inla.npz, if present) and produces a LaTeX + Markdown table
 with mean ± std over parameter dimensions (for NRMSE/ECE/EACE/R) and over datasets (for
 LOO-NLL). Unlike real_posterior.py, the sampled test sets carry ground-truth parameters, so
 the metrics are absolute (vs the true values) rather than relative to NUTS.
@@ -38,7 +39,7 @@ from tabulate import tabulate
 from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch
 from metabeta.utils.evaluation import nutsConvergeMask, subsetProposal
-from metabeta.utils.results import Proposal
+from metabeta.utils.results import Proposal, getMasks
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
@@ -169,6 +170,53 @@ FIT_PREFIXES = ('nuts_', 'advi_', 'laplace_')
 def fitExcludePrefixes(keep: str | None) -> tuple[str, ...]:
     """Prefixes to exclude so a Collection loads only ``keep``'s fits (all fits if keep is None)."""
     return tuple(p for p in FIT_PREFIXES if p != f'{keep}_')
+
+
+# R-INLA fits live in the sibling {partition}.inla.npz (metabeta/simulation/inla.py), not in
+# test.fit.npz. Method name → file; every file stores its fits under the 'inla_' prefix.
+INLA_FILES = {'inla': ('INLA', 'test.inla.npz')}
+
+
+def _fitAxis(a: np.ndarray, axis: int, size: int) -> np.ndarray:
+    """Trim or zero-pad ``a`` along ``axis`` to ``size``."""
+    if a.shape[axis] >= size:
+        return np.take(a, np.arange(size), axis=axis)
+    pad = [(0, 0)] * a.ndim
+    pad[axis] = (0, size - a.shape[axis])
+    return np.pad(a, pad)
+
+
+def loadInlaBatch(
+    inla_path: Path, method: str, cap_mask: np.ndarray, max_d: int, max_q: int, max_m: int
+) -> dict[str, torch.Tensor]:
+    """INLA joint draws over the capacity-kept datasets, as ``{method}_*`` tensors in the
+    collateFits layout, so fitBatchMask / fit2proposal treat INLA like the test.fit.npz methods.
+
+    The file is padded to its own d/q/m maxima; draws are trimmed or zero-padded to the batch's.
+    A dataset counts as failed if INLA failed, timed out, or returned non-finite draws.
+    """
+    with np.load(inla_path) as raw:
+        f = {k: raw[k][cap_mask] for k in raw.files if k.endswith('_samples')}
+        failed = raw['inla_failed'][cap_mask].astype(bool)
+        wall = raw['inla_wall_s'][cap_mask]
+    ffx = _fitAxis(f['inla_ffx_samples'], 1, max_d)                          # (B, d, S)
+    sigma = _fitAxis(f['inla_sigma_rfx_samples'], 1, max_q)                  # (B, q, S)
+    rfx = _fitAxis(_fitAxis(f.pop('inla_rfx_samples'), 1, max_q), 2, max_m)  # (B, q, m, S)
+    failed |= ~(np.isfinite(ffx).all((1, 2)) & np.isfinite(sigma).all((1, 2)))
+    failed |= ~np.isfinite(rfx).all((1, 2, 3))
+    out = {}
+    if 'inla_sigma_eps_samples' in f:
+        eps = f['inla_sigma_eps_samples'][:, 0]                              # (B, S)
+        failed |= ~np.isfinite(eps).all(1)
+        out[f'{method}_sigma_eps'] = torch.from_numpy(np.nan_to_num(eps))
+    out |= {
+        f'{method}_ffx': torch.from_numpy(np.nan_to_num(ffx).transpose(0, 2, 1).copy()),
+        f'{method}_sigma_rfx': torch.from_numpy(np.nan_to_num(sigma).transpose(0, 2, 1).copy()),
+        f'{method}_rfx': torch.from_numpy(np.nan_to_num(rfx).transpose(0, 2, 3, 1).copy()),
+        f'{method}_duration': torch.from_numpy(wall.astype(np.float32)),
+        f'{method}_failed': torch.from_numpy(failed),
+    }
+    return out
 
 
 def methodFitBatch(batch: dict[str, torch.Tensor], prefix: str) -> dict[str, torch.Tensor]:
@@ -404,7 +452,7 @@ def _summaryRow(
     active_d = batch['mask_d'].any(0)
     active_q = batch['mask_q'].any(0)
     has_eps = 'sigma_eps' in ag.nrmse
-    return buildRow(
+    row = buildRow(
         label,
         regime,
         corr_vals=flattenActiveParams(ag.corr, active_d, active_q, has_eps),
@@ -414,6 +462,42 @@ def _summaryRow(
         loo_nll=summary.per_dataset.loo_nll,
         tpd_arr=tpd,
     )
+    # per-class (NRMSE, r) over active dims (App. B.3 layout; sigma = rfx scales + sigma_eps)
+    # and per-dataset errors, for downstream tables
+    sigmas = lambda m: {k: m[k] for k in ('sigma_rfx', 'sigma_eps') if k in m}
+    row['by_class'] = {
+        'beta': (ag.nrmse['ffx'][active_d], ag.corr['ffx'][active_d]),
+        'sigma': tuple(
+            flattenActiveParams(sigmas(m), active_d, active_q, has_eps) for m in (ag.nrmse, ag.corr)
+        ),
+        'alpha': (ag.nrmse['rfx'][active_q], ag.corr['rfx'][active_q]),
+    }
+    row['per_dataset'] = perDatasetErrors(ag.estimates, batch) | {
+        'loo_nll': summary.per_dataset.loo_nll,
+        'time': tpd if tpd is not None else torch.full((len(mask.nonzero()[0]),), float('nan')),
+    }
+    row['mask'] = mask
+    return row
+
+
+def perDatasetErrors(
+    est: dict[str, torch.Tensor], data: dict[str, torch.Tensor]
+) -> dict[str, torch.Tensor]:
+    """RMSE of the posterior mean per dataset and parameter class, over active dimensions."""
+    masks = getMasks(data)
+    out = {}
+    classes = {'beta': 'ffx', 'sigma': 'sigma_rfx', 'alpha': 'rfx', 'eps': 'sigma_eps'}
+    for name, key in classes.items():
+        if key not in est:
+            continue
+        se = (est[key] - data[key]).square()
+        mask = masks[key]
+        if mask is None:                                     # sigma_eps: (B,)
+            out[f'rmse_{name}'] = se.sqrt()
+            continue
+        dims = tuple(range(1, se.dim()))
+        out[f'rmse_{name}'] = ((se * mask).sum(dims) / mask.sum(dims).clamp_min(1)).sqrt()
+    return out
 
 
 def evaluateRegime(
@@ -435,8 +519,9 @@ def evaluateRegime(
     convergence_mode: str = 'liberal',
     summary_chunk_size: int = 1,
     warmup: bool = True,
-) -> tuple[list[dict], list[dict] | None]:
-    """Returns (rows_full, rows_conv) — rows_conv is None if no convergence data.
+) -> dict[str, list[dict]]:
+    """Returns rows per dataset subset: '' (all), 'conv' (NUTS-converged, absent if that is
+    all or none) and 'lowmq' (converged, lowest m/q quartile; absent without NUTS diagnostics).
 
     ``base_path`` is the base ``{partition}.npz`` (data + precomputed analytical ``stats``);
     ``data_path`` is the ``{partition}.fit.npz`` (NUTS/ADVI/Laplace fits + diagnostics).
@@ -445,7 +530,7 @@ def evaluateRegime(
     how the model was trained). Fits/diagnostics/caches use ``data_path``.
 
     Memory is bounded by streaming: the base batch carries no fit tensors, and each reference
-    method (NUTS/ADVI/Laplace) is loaded, summarized, and freed one at a time, so at most one
+    method (NUTS/ADVI/Laplace/INLA) is loaded, summarized, and freed one at a time, so at most one
     method's multi-GB fit samples are resident at once (plus MB + refinements).
     """
     logger.info('\n--- Regime: %s ---', regime)
@@ -462,16 +547,10 @@ def evaluateRegime(
     logger.info('  Capacity filter: %d / %d (d≤%d, q≤%d)', n_kept, n_total, max_d, max_q)
     if n_kept == 0:
         logger.warning('  No datasets pass capacity filter — skipping.')
-        return [], None
+        return {'': []}
 
     # NUTS convergence from the small diagnostic arrays (no fit samples materialized).
     conv_mask = nutsConvergeMaskFromNpz(data_path, cap_mask, convergence_mode)
-    have_conv = False
-    conv_idx = conv_batch = conv_full = None
-    if conv_mask is not None:
-        n_conv = int(conv_mask.sum())
-        logger.info('  NUTS convergence (%s): %d / %d', convergence_mode, n_conv, n_kept)
-        have_conv = 0 < n_conv < n_kept
 
     # MB samples over the capacity-kept batch (cached, keyed by cap_mask).
     proposal_mb, mb_tpd_arr = loadOrSampleMB(
@@ -488,15 +567,23 @@ def evaluateRegime(
         warmup=warmup,
     )
 
-    # Rescale MB + data ONCE, before conv subsetting (rescale is in-place on the proposal).
+    # Rescale MB + data ONCE, before subsetting (rescale is in-place on the proposal).
     if rescale:
         proposal_mb.rescale(data_batch['sd_y'])
         data_batch = rescaleData(data_batch)
 
-    if have_conv:
-        conv_idx = torch.from_numpy(conv_mask)
-        conv_batch = subsetBatch(data_batch, conv_mask)
-        conv_full = _capFull(cap_mask, conv_mask)
+    # Named subsets of the capacity-kept datasets, one row group each: all ('') and the
+    # NUTS-converged ones (Table 1), plus the converged datasets in the lowest quartile of
+    # groups per random effect (m/q), where Laplace-type approximations are expected to be
+    # weakest. The conv group is skipped when it equals the full set.
+    subsets = {'': np.ones(n_kept, dtype=bool)}
+    if conv_mask is not None:
+        n_conv = int(conv_mask.sum())
+        logger.info('  NUTS convergence (%s): %d / %d', convergence_mode, n_conv, n_kept)
+        if 0 < n_conv < n_kept:
+            subsets['conv'] = conv_mask
+        mq = (data_batch['m'].float() / data_batch['mask_q'].sum(-1)).numpy()
+        subsets['lowmq'] = conv_mask & (mq <= np.quantile(mq, 0.25))
 
     # Post-hoc refinements on the (rescaled) raw MB posterior (cached, keyed by cap_mask).
     refined: list[tuple[str, Proposal, float]] = []
@@ -519,60 +606,74 @@ def evaluateRegime(
         )
         refined.append((method, p_ref, refine_s))
 
-    def _mrow(label, method, proposal, batch, mask, tpd, model_derived):
-        return _summaryRow(
-            label,
-            method,
-            proposal,
-            batch,
-            mask,
-            tpd,
-            model_derived,
-            regime,
-            lf,
-            rescale,
-            data_path,
-            ckpt_dir,
-            prefix,
-            n_samples,
-            seed,
-            summary_chunk_size,
-        )
+    rows: dict[str, list[dict]] = {name: [] for name in subsets}
 
-    rows: list[dict] = []
-    rows_conv: list[dict] | None = [] if have_conv else None
+    def _rows(label, method, proposal, batch, success, tpd, model_derived, cache_path):
+        """One row per subset for a method whose fits succeeded on ``success`` (n_kept,)."""
+        for name, sub in subsets.items():
+            sel = sub[success]                           # subset membership within success
+            if not sel.any():
+                continue
+            whole = bool(sel.all())
+            rows[name].append(
+                _summaryRow(
+                    label,
+                    method,
+                    proposal if whole else subsetProposal(proposal, sel),
+                    batch if whole else subsetBatch(batch, sel),
+                    _capFull(cap_mask, _capFull(success, sel)),
+                    tpd if whole or tpd is None else tpd[torch.from_numpy(sel)],
+                    model_derived,
+                    regime,
+                    lf,
+                    rescale,
+                    cache_path,
+                    ckpt_dir,
+                    prefix,
+                    n_samples,
+                    seed,
+                    summary_chunk_size,
+                )
+            )
 
-    # ---- MB + refined (model-derived; small, reused for both groups) ----
+    # ---- MB + refined (model-derived; small, reused for all subsets) ----
+    everything = np.ones(n_kept, dtype=bool)
     mb_specs = [('MB', 'mb', proposal_mb, mb_tpd_arr)]
     mb_specs += [(f'MB+{m}', m, p, mb_tpd_arr + s / n_kept) for (m, p, s) in refined]
     for label, method, proposal, tpd in mb_specs:
-        rows.append(_mrow(label, method, proposal, data_batch, cap_mask, tpd, True))
-        if have_conv:
-            rows_conv.append(
-                _mrow(
-                    label,
-                    method,
-                    subsetProposal(proposal, conv_mask),
-                    conv_batch,
-                    conv_full,
-                    tpd[conv_idx],
-                    True,
-                )
-            )
+        _rows(label, method, proposal, data_batch, everything, tpd, True, data_path)
 
     del refined
     gc.collect()
 
     # ---- Reference methods, STREAMED one at a time (only one fit-tensor set resident) ----
-    for label, method in (('NUTS', 'nuts'), ('ADVI', 'advi'), ('LA', 'laplace')):
-        fit_batch, _, _, _ = loadRegimeBatch(
-            data_path, max_d, max_q, exclude_prefixes=fitExcludePrefixes(method)
-        )
-        if f'{method}_ffx' not in fit_batch:            # method absent from this test file
-            logger.info('  %s: no fits in file — skipping.', label)
-            del fit_batch
-            gc.collect()
-            continue
+    # NUTS/ADVI/LA come from test.fit.npz, INLA from its sibling file (INLA_FILES).
+    references = [('NUTS', 'nuts'), ('ADVI', 'advi'), ('LA', 'laplace')]
+    references += [(label, method) for method, (label, _) in INLA_FILES.items()]
+    for label, method in references:
+        if method in INLA_FILES:
+            cache_path = data_path.parent / INLA_FILES[method][1]
+            if not cache_path.exists():
+                logger.info('  %s: no %s — skipping.', label, cache_path.name)
+                continue
+            fit_batch = loadInlaBatch(
+                cache_path,
+                method,
+                cap_mask,
+                data_batch['mask_d'].shape[1],
+                data_batch['mask_q'].shape[1],
+                data_batch['mask_m'].shape[1],
+            )
+        else:
+            cache_path = data_path
+            fit_batch, _, _, _ = loadRegimeBatch(
+                data_path, max_d, max_q, exclude_prefixes=fitExcludePrefixes(method)
+            )
+            if f'{method}_ffx' not in fit_batch:        # method absent from this test file
+                logger.info('  %s: no fits in file — skipping.', label)
+                del fit_batch
+                gc.collect()
+                continue
         success = fitBatchMask(fit_batch, method)        # (n_kept,)
         logger.info('  %s success: %d / %d', label, int(success.sum()), n_kept)
         if not success.any():
@@ -587,29 +688,11 @@ def evaluateRegime(
         data_sub = subsetBatch(data_batch, success)      # already rescaled
         if rescale:
             proposal.rescale(data_sub['sd_y'])
-
-        rows.append(
-            _mrow(label, method, proposal, data_sub, _capFull(cap_mask, success), tpd, False)
-        )
-        if have_conv:
-            sel = conv_mask[success]                     # conv status within the success subset
-            if sel.any():
-                sel_idx = torch.from_numpy(sel)
-                rows_conv.append(
-                    _mrow(
-                        label,
-                        method,
-                        subsetProposal(proposal, sel),
-                        subsetBatch(data_sub, sel),
-                        _capFull(cap_mask, success & conv_mask),
-                        tpd[sel_idx] if tpd is not None else None,
-                        False,
-                    )
-                )
+        _rows(label, method, proposal, data_sub, success, tpd, False, cache_path)
         del proposal, method_batch, data_sub
         gc.collect()
 
-    return rows, rows_conv
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -747,7 +830,7 @@ def main() -> None:
         )
         base_path = data_path
 
-    rows, rows_conv = evaluateRegime(
+    rows_by_subset = evaluateRegime(
         model,
         data_path,
         base_path,
@@ -767,6 +850,7 @@ def main() -> None:
         summary_chunk_size=cfg.summary_chunk_size,
         warmup=getattr(cfg, 'warmup', True),
     )
+    rows = rows_by_subset['']
     if not rows:
         logger.error('No datasets evaluated — check that %s fits the checkpoint capacity.', data_id)
         return
@@ -777,9 +861,10 @@ def main() -> None:
     md_rows = [[regime, r['method']] + [_fmtMd(r[c], dp) for c in METRICS] for r in rows]
     print('\n' + tabulate(md_rows, headers=['regime', 'method'] + METRICS, tablefmt='simple'))
 
-    saveTables({regime: rows}, Path(cfg.outdir), stem, dp=dp)
-    if rows_conv:
-        saveTables({regime: rows_conv}, Path(cfg.outdir), f'{stem}_conv', dp=dp)
+    for name, sub_rows in rows_by_subset.items():
+        if sub_rows:
+            run_name = f'{stem}_{name}' if name else stem
+            saveTables({regime: sub_rows}, Path(cfg.outdir), run_name, dp=dp)
 
 
 if __name__ == '__main__':
