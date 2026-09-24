@@ -3,13 +3,15 @@
 # E2 prior sensitivity: fit one prior-grid point per array task with fit.py (NUTS by default).
 # The grid batch is written by
 #   python experiments/evaluation/prior_sensitivity.py --stages export
-# to metabeta/outputs/data/e2-{dataset}/; its points 0-47 are the NUTS sub-grid, so the default
-# array covers exactly those. Full grid (rebuttal): sbatch --array=48-287 ...
+# to metabeta/outputs/data/e2-{dataset}/. The grid is capped per dataset, so pass the array:
+# its first n points (grid.csv rows ending in True) are the NUTS sub-grid,
+#   n=$(grep -c ',True$' metabeta/outputs/data/e2-${ds}/grid.csv)
+#   sbatch --array=0-$((n - 1)) scripts/fit-nuts-prior-grid.sh --dataset $ds
+# and the rest of the grid follows (rebuttal: --array=$n-<last point>).
 
 #SBATCH --job-name=nuts-e2
 #SBATCH --output=logs/nuts-e2/%A_%a.out
 #SBATCH --error=logs/nuts-e2/%A_%a.err
-#SBATCH --array=0-47
 
 #SBATCH --partition=cpu_p
 #SBATCH --qos=cpu_normal
