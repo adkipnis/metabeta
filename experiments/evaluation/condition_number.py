@@ -43,7 +43,7 @@ from metabeta.utils.posterior_eval import (
 )
 
 # real_posterior.py sits in this directory (on sys.path[0] at run time).
-from real_posterior import computeCorr, computeSigmaRatio, computeRankMAD, _ms
+from real_posterior import computeCorr, computeSigmaRatio, computeRankMAD, _medianMad
 
 logger = logging.getLogger(__name__)
 
@@ -352,7 +352,7 @@ def binnedTable(
                 'median_kappa': median_kappa,
             }
             for key, _ in AGREE_METRICS:
-                row[key] = _ms(records[f'{m}:{key}'][conv_in]) if n_conv > 0 else None
+                row[key] = _medianMad(records[f'{m}:{key}'][conv_in]) if n_conv > 0 else None
             rows.append(row)
     return rows
 
