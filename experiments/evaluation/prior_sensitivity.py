@@ -10,6 +10,9 @@ Everything below was fixed on 2026-09-24, before any NUTS result.  Two changes f
 metabeta run (sleepstudy, cbpp): the draw count went from 1000 to 4000, because IMH acceptance fell
 below 0.1 at tau_beta <= 0.076; and epil (the plan's Poisson set) was replaced by salamanders,
 because every released Poisson submodel needs >= 5 observations per group and epil has 4.
+salamanders enters with its key predictor only (mined), the rule the other two datasets follow:
+with all 11 preprocessed predictors (d = 12, poisson-large submodel) IMH acceptance was 0.02-0.03
+even at default-like priors in the pilot, and that model is not reported.
 A third change, before any NUTS result: the grid is capped at the training hyper-prior range
 (simulation/prior.py, hypersample; App. F.3), because E1 showed the network extrapolating and IMH
 acceptance collapsing beyond it.  Points above the cap are dropped, not clipped, so the grid
@@ -17,7 +20,7 @@ covers exactly the training range and differs per dataset.
 
 Model space.  Priors act on the preprocessed data that both the Api and NUTS see: sleepstudy y
 and Days are standardised (sd_y = 1, so the Api's sd_y rescaling is the identity), cbpp keeps its
-0/1 period dummies, salamanders its covariates and 0/1 dummies as preprocessed.  NUTS receives the
+0/1 period dummies, salamanders its 0/1 mined dummy.  NUTS receives the
 identical prior arrays (see `prior`), so no unit conversion sits between the two.
 
 Grid, before the cap (288 points):
@@ -111,7 +114,8 @@ logger = logging.getLogger(__name__)
 # Globals
 # ==============================================================================
 
-# formula = every preprocessed column as a fixed effect, rfx structure as in the plan (E2)
+# fixed effects = the key predictor(s) of each dataset (sleepstudy: Days, cbpp: the period factor,
+# salamanders: mining), rfx structure as in the plan (E2)
 DATASETS = {
     'sleep': {
         'file': 'sleep__grp_group',
@@ -130,8 +134,7 @@ DATASETS = {
     # replaces epil, which no released Poisson submodel routes (4 observations per group < 5)
     'salamanders': {
         'file': 'salamanders__grp_group',
-        'formula': 'y ~ cover + sample + dop + wtemp + mined_yes + spp_DES-L + spp_DF + spp_DM'
-        ' + spp_EC-L + spp_GP + spp_PR + (1 | group)',
+        'formula': 'y ~ mined_yes + (1 | group)',
         'key': 'mined_yes',
         'title': 'salamanders (Poisson)',
         'key_label': r'$\beta_{\mathrm{mined}}$',
@@ -250,8 +253,8 @@ class PriorSensitivity:
             data = dict(f)
         columns = tuple(str(c) for c in data['columns'])
         formula = parseFormula(spec['formula'])
-        if tuple(formula.fixed_terms) != tuple(c.lower() for c in columns):  # parser lowercases
-            raise ValueError(f'{name}: formula terms {formula.fixed_terms} != columns {columns}')
+        lower = [c.lower() for c in columns]  # the formula parser lowercases terms
+        x_idx = [lower.index(t) for t in formula.fixed_terms]  # ValueError: term not a column
         if 'sd_y' in data:
             raise ValueError(f'{name}: the grid is defined for sd_y = 1 (no sd_y key)')
         rfx_names = ['Intercept' if t == '1' else t for t in formula.random_terms]
@@ -263,11 +266,12 @@ class PriorSensitivity:
             'nuts_sd': nutsSdPriors(lf),
             'fig_tau_beta': min(grid.tau_beta.unique(), key=lambda tb: abs(tb - BAMBI_TAU)),
             'lf': lf,
-            'd': len(columns) + 1,
+            'd': len(x_idx) + 1,
+            'x_idx': x_idx,
             'q': len(rfx_names),
             'm': int(data['m']),
             'n': int(data['n']),
-            'ffx_names': ['Intercept', *columns],
+            'ffx_names': ['Intercept', *(columns[i] for i in x_idx)],
             'rfx_names': rfx_names,
             'tau_intercept': min(
                 float(bambiDefaultPriors(1, 1, lf)['tau_ffx'][0]), TRAIN_MAX_TAU_FFX[lf]
@@ -322,7 +326,9 @@ class PriorSensitivity:
             meta = self.meta[name]
             n, d, q, m = meta['n'], meta['d'], meta['q'], meta['m']
             base = {
-                'X': np.concatenate([np.ones((n, 1)), data['X']], axis=1),  # (n, d)
+                'X': np.concatenate(
+                    [np.ones((n, 1)), data['X'][:, meta['x_idx']]], axis=1
+                ),  # (n, d)
                 'y': data['y'].astype(np.float64),
                 'groups': data['groups'],
                 'ns': data['ns'],
@@ -702,7 +708,8 @@ class PriorSensitivity:
             f'- figures (fixed before the run): row 1 at {meta["nuts_sd"]} (main: half-Normal, appendix: '
             f'Exponential); row 2 at Normal(0, tau_beta = {meta["fig_tau_beta"]:.3g})\n'
             '- changes after the first metabeta run, before any NUTS result: draws per prior 1000 -> 4000; '
-            'epil replaced by salamanders (no released Poisson submodel routes epil); grid capped at the '
+            'epil replaced by salamanders (no released Poisson submodel routes epil), with its key predictor '
+            'only (all 11 predictors: IMH acceptance 0.02-0.03 in the pilot, not reported); grid capped at the '
             'training range (E1: extrapolation and IMH collapse beyond it)\n'
             f'- NUTS fits missing: {missing if missing else "none"}',
         ]
@@ -760,7 +767,7 @@ class PriorSensitivity:
             df.point.isin(set(sub.point) | extra_fit) & df.flagged.fillna(False).astype(bool)
         ]
         if len(flagged):
-            nuts = sub[sub.method == 'NUTS'].set_index('point')
+            nuts = df[df.method == 'NUTS'].set_index('point')
             cols = [
                 'point',
                 'method',
@@ -943,10 +950,9 @@ class PriorSensitivity:
         plt.rcParams.update({'font.size': 13, 'axes.titlesize': 15, 'axes.labelsize': 14})
         for stem, sd_family in FIG_SD_FAMILY.items():
             self._save(self._figure(names, sd_family), stem)
-        if all(
-            (RESULTS_DIR / f'prior_sensitivity_evidence_{n}.csv').exists()
-            for n in names
-            if self.meta[n]['lf'] == 0
+        normal = [n for n in names if self.meta[n]['lf'] == 0]
+        if normal and all(
+            (RESULTS_DIR / f'prior_sensitivity_evidence_{n}.csv').exists() for n in normal
         ):
             self.plotEvidence()
 
