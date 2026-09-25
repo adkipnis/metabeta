@@ -2356,7 +2356,7 @@ def refinePoissonMarginalMeanBeta(
 
     The pseudo target uses E[y|β,Ψ] ≈ exp(Xβ + 0.5 diag(ZΨZ')).  By default it uses the
     diagonal EB Ψ. This is not a full marginal likelihood; it is a cheap fixed-Ψ correction
-    for rows where conditional PQL/EB β is visibly too extreme relative to INLA.
+    for rows where conditional PQL/EB β is visibly too extreme.
     """
     d = Xm.shape[-1]
     q = Zm.shape[-1]
