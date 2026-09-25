@@ -336,3 +336,43 @@ def test_agq_marginal_matches_exact_integral(likelihood_family):
         atol = 1e-5  # Laplace (n_nodes=1) is off by 0.02-0.04 nats here
     assert got.shape == (1, 2)
     assert torch.allclose(got, want, atol=atol), (got, want)
+
+
+ACCELERATORS = [
+    pytest.param('cuda', marks=pytest.mark.skipif(not torch.cuda.is_available(), reason='no CUDA')),
+    pytest.param(
+        'mps', marks=pytest.mark.skipif(not torch.backends.mps.is_available(), reason='no MPS')
+    ),
+]
+
+
+@pytest.mark.parametrize('device', ACCELERATORS)
+def test_agq_and_pseudo_marginal_imh_run_on_accelerator(device):
+    """AGQ is deterministic, so it must match the CPU value on the model device (float32);
+    the pseudo-marginal IMH must run there end to end."""
+    problem = [t.float() for t in _slopeProblem(1)]
+    want = logMarginalLikelihoodAGQ(*problem, 1, n_nodes=5)
+    got = logMarginalLikelihoodAGQ(*[t.to(device) for t in problem], 1, n_nodes=5)
+    assert torch.allclose(got.cpu(), want, atol=1e-4)
+
+    data = {
+        k: (v.float() if v.is_floating_point() else v).to(device)
+        for k, v in _tinyBernoulli().items()
+    }
+    proposal = _gaussianProposal(400, data['X'].shape[1], 0.6, 1.2, 1.5)
+    for block in proposal.data.values():
+        for key in block:
+            block[key] = block[key].float()
+    proposal.to(device)
+    sampler = MetropolisSampler(
+        data,
+        n_chains=4,
+        n_steps=100,
+        burnin=10,
+        mode='laplace',
+        likelihood_family=1,
+        n_eff_target=None,
+        n_inner=4,
+    )
+    out, _ = sampler(proposal)
+    assert out.rfx.device.type == device and torch.isfinite(out.rfx).all()
