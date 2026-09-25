@@ -448,6 +448,11 @@ class _GroupIntegrand:
         log_det_L = L_rfx.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8).log().sum(-1)
         self.log_det_L = log_det_L[:, None]  # (b, 1, s)
         self.L_rfx = L_rfx.unsqueeze(1)  # (b, 1, s, q, q)
+        # L⁻¹ once per θ_g: whitening each draw is then a broadcast matmul over groups (a
+        # broadcast solve_triangular returns wrong values on MPS, and is slower anyway)
+        eye = torch.eye(L_rfx.shape[-1], dtype=L_rfx.dtype, device=L_rfx.device)
+        self.L_inv = torch.linalg.solve_triangular(L_rfx, eye.expand_as(L_rfx), upper=False)
+        self.L_inv = self.L_inv.unsqueeze(1)  # (b, 1, s, q, q)
 
     def laplaceDraw(self, z: Tensor) -> Tensor:
         """b* + U⁻ᵀ z for standard-normal (or quadrature-node) z (b, m, s, q)."""
@@ -460,7 +465,7 @@ class _GroupIntegrand:
     def logWeight(self, cand: Tensor) -> Tensor:
         """log p(y_j, cand | θ_g) − log r(cand), (b, m, s)."""
         white_lap = (self.chol_H.mT @ (cand - self.modes).unsqueeze(-1)).squeeze(-1)
-        white_pri = torch.linalg.solve_triangular(self.L_rfx, cand.unsqueeze(-1), upper=False)
+        white_pri = self.L_inv @ cand.unsqueeze(-1)
         log_lap = -0.5 * white_lap.square().sum(-1) + self.log_det_U
         log_pri = -0.5 * white_pri.squeeze(-1).square().sum(-1) - self.log_det_L
         log_r = log_lap
@@ -579,9 +584,9 @@ def logMarginalLikelihoodAGQ(
         defensive=0.0,
     )
     z_1d, w_1d = hermegauss(n_nodes)
-    z_1d = torch.as_tensor(z_1d, dtype=ffx.dtype)
-    log_w_1d = torch.as_tensor(w_1d / w_1d.sum(), dtype=ffx.dtype).log()
-    active = (Z != 0).flatten(0, 2).any(0)  # (q,)
+    z_1d = torch.as_tensor(z_1d, dtype=ffx.dtype, device=ffx.device)
+    log_w_1d = torch.as_tensor(w_1d / w_1d.sum(), dtype=ffx.dtype, device=ffx.device).log()
+    active = (Z != 0).flatten(0, 2).any(0).tolist()  # (q,)
     axes = [(z_1d, log_w_1d) if a else (z_1d.new_zeros(1), log_w_1d.new_zeros(1)) for a in active]
     nodes = torch.cartesian_prod(*[z for z, _ in axes]).view(-1, len(axes))  # (P, q)
     log_nu = torch.cartesian_prod(*[w for _, w in axes]).view(-1, len(axes)).sum(-1)  # (P,)
