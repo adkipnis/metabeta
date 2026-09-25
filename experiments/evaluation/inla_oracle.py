@@ -1,9 +1,9 @@
 """
 E4: R-INLA next to MB, NUTS, ADVI and LA on the oracle benchmarks.
 
-Runs oracle_posterior.evaluateRegime on every (family, size) set with the checkpoints behind
-Api.from_pretrained (API_MODELS, prefix best, 4000 MB draws, seed 0), and writes the E4
-deliverables to experiments/results/:
+Runs oracle_posterior.evaluateRegime on every (family, size) set with the seeds behind
+Api.from_pretrained (API_MODELS; prefix latest as in Table 1, 4000 MB draws, seed 0), and
+writes the E4 deliverables to experiments/results/:
 
     inla_oracle_{n,b,p}_{size}.csv   one row per dataset and method: per-dataset RMSE by
                                      parameter class, LOO-NLL, wall time, failed/converged
@@ -48,7 +48,7 @@ from metabeta.utils.sampling import setSeed
 logger = logging.getLogger(__name__)
 
 # Sources of the released joint checkpoints (HF adkipnis/metabeta@v1, metabeta-{family}.pt,
-# submodels[i]['source']), all with prefix best.
+# submodels[i]['source']); evaluated at prefix latest, as in oracle_posterior.
 API_MODELS: dict[str, dict[str, str]] = {
     fam: {size: f'data={size}-{fam}-mixed_model=large_seed={seed}' for size, seed in seeds.items()}
     for fam, seeds in {
@@ -78,7 +78,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--sizes',    nargs='+', default=['small', 'medium', 'large', 'huge'])
     parser.add_argument('--families', nargs='+', default=['n', 'b', 'p'], choices=list(LF_FROM_FAM))
     parser.add_argument('--device',   type=str, default='cpu')
-    parser.add_argument('--prefix',   type=str, default='best')
+    parser.add_argument('--prefix',   type=str, default='latest')
     parser.add_argument('--n_samples',  type=int, default=4000)
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--seed',     type=int, default=0)
