@@ -95,6 +95,28 @@ sd ∝ K^(−1/2); α = 0.01 costs nothing over α = 0 and keeps the bounded-wei
 α = 0.1 inflates the noise ≈ 1.8×, so the default is now α = 0.01. K = 8 gives q90
 sd ≈ 0.3–0.4, i.e. log-evidence bias ≈ sd²/2 ≲ 0.001 nats after averaging over S draws.
 
+## Cost of a model comparison (CPU, M3, one dataset, K = 8)
+
+Flow draws with the local flow skipped (`estimate(local=False)`) + one evidence pass, median
+over 8 test datasets; a Bayes factor is two of these.
+
+| regime | S=1000 flow + IS² | S=4000 flow + IS² | Laplace pass, S=4000 |
+|:-------|-------------------:|-------------------:|---------------------:|
+| small  | 0.07 s | 0.19–0.24 s | 0.07–0.10 s |
+| medium | 0.08 s | 0.29 s      | 0.12 s |
+| large  | 0.15 s | 0.54–0.56 s | 0.27–0.28 s |
+| huge   | 0.15 s | 0.58–0.62 s | 0.25–0.32 s |
+
+IS² ≈ 1.7× a Laplace pass (Newton modes shared; K streamed likelihood passes, no K axis in
+memory). The 70 s/dataset of evidence.py is the validation (AGQ bridges on NUTS draws, three
+IMH runs, diagnostic IS² passes), not the estimator.
+
+Device: IS²/AGQ run on the model device like imhLaplace. A broadcast `solve_triangular`
+(prior whitening over groups) returned wrong values / segfaulted on MPS → replaced by a
+precomputed L⁻¹ and a broadcast matmul; AGQ nodes now live on the model device. MPS itself is
+50–70× slower than CPU for the Laplace path too (small batched linear algebra), so it says
+nothing about CUDA; CUDA untested locally (`pytest -k accelerator` on a GPU node).
+
 ## Open
 
 - Scale-up (medium–huge, 512 datasets, q up to 5): AGQ cost grows as nodes^q (q=5: 243
