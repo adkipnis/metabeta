@@ -1,6 +1,7 @@
 """R-INLA fitting for hierarchical datasets.
 
-Per-dataset output (<data_id>/fits/<partition>_inla_<idx:03d>.npz):
+Per-dataset output (<data_id>/fits/<partition>_<tag>_<idx:03d>.npz, tag = inla for --priors pc,
+inla_matched for --priors matched):
     inla_ffx             (d,)   — posterior means for fixed effects
     inla_sigma_rfx       (q,)   — E[sigma_j | y] = E[1/sqrt(τ_j)] via numerical integration
     inla_sigma_rfx_mode  (q,)   — mode of p(sigma_j | y) via change-of-variables on precision marginal
@@ -14,7 +15,7 @@ Per-dataset output (<data_id>/fits/<partition>_inla_<idx:03d>.npz):
     inla_rfx_samples        (q, m, S)
     inla_sigma_eps_samples  (1, S)    — Gaussian likelihood only
 
-Batch output (<data_id>/<partition>.inla.npz) — INLA keys only, separate from .fit.npz:
+Batch output (<data_id>/<partition>.<tag>.npz) — INLA keys only, separate from .fit.npz:
     inla_ffx             (n_ds, d_max)
     inla_sigma_rfx       (n_ds, q_max)
     inla_sigma_rfx_mode  (n_ds, q_max)
@@ -36,6 +37,7 @@ Usage (from repo root):
 from __future__ import annotations
 
 import argparse
+import math
 import multiprocessing as mp
 import queue as _queue
 import sys
@@ -45,6 +47,7 @@ from pathlib import Path
 
 import numpy as np
 
+from metabeta.utils.constants import STUDENT_DF
 from metabeta.utils.names import datasetFilename
 from metabeta.utils.padding import aggregate, unpad
 from metabeta.utils.templates import setupConfigParser, generateSimulationConfig
@@ -180,11 +183,43 @@ def _draw_posterior_samples(
         return None
 
 
+def _precPrior(family: int, tau: float, priors: str) -> str:
+    """R-INLA hyper prior on the log precision theta of a scale sigma = exp(-theta / 2).
+
+    pc: PC prior P(sigma > tau) = 0.317. matched: the simulator's scale prior
+    (metabeta.utils.families: HalfNormal / HalfStudent-t / Exponential with scale tau) as an
+    INLA expression prior, i.e. log p_sigma(sigma) + log |d sigma / d theta| with
+    |d sigma / d theta| = sigma / 2.
+    """
+    if priors == 'pc':
+        return f"list(prior='pc.prec', param=c({tau:.6f}, 0.317))"
+    nu = STUDENT_DF
+    log_norm = {
+        0: 0.5 * math.log(2 / math.pi),
+        1: math.log(2)
+        + math.lgamma((nu + 1) / 2)
+        - math.lgamma(nu / 2)
+        - 0.5 * math.log(nu * math.pi),
+        2: 0.0,
+    }[family]
+    kernel = {
+        0: f'sigma^2 / {2 * tau**2:.10g}',
+        1: f'{(nu + 1) / 2} * log(1 + sigma^2 / {nu * tau**2:.10g})',
+        2: f'sigma / {tau:.10g}',
+    }[family]
+    const = log_norm - math.log(tau) - math.log(2)
+    return (
+        f"list(prior='expression: sigma = exp(-theta/2);"
+        f" return({const:.10g} - {kernel} - theta/2);')"
+    )
+
+
 def estimate(
     ds: dict,
     likelihood_family: int,
     re_correlation: str = 'auto',
     n_samples: int = 0,
+    priors: str = 'pc',
 ) -> dict | None:
     """Run R-INLA on a flat (unpadded) dataset using the simulation's true priors.
 
@@ -193,14 +228,16 @@ def estimate(
     ``glmm_inla_comparison.py`` (which provides ``Z`` separately).
     If ``ds['Z']`` is absent, ``Z = ds['X'][:, :q]`` is used.
 
-    Uncorrelated (eta_rfx == 0 or q == 1): one iid term per RE dimension with
-    PC prior P(sigma_j > tau_rfx[j]) = 0.317.
+    Uncorrelated (eta_rfx == 0 or q == 1): one iid term per RE dimension with the scale
+    prior from _precPrior (priors='pc': PC prior P(sigma_j > tau_rfx[j]) = 0.317;
+    priors='matched': the dataset's own family_sigma_rfx); likewise sigma_eps.
 
     Correlated (eta_rfx > 0 and q == 2): iid2d model with a Wishart prior
     parameterised to match HalfNormal(tau_rfx[j]) marginals; second dimension
     added via a copy term.  For q > 2 correlated: falls back to independent iid.
 
-    FE prior: Normal(nu_ffx[j], tau_ffx[j]^2) via control.fixed.
+    FE prior: Normal(nu_ffx[j], tau_ffx[j]^2) via control.fixed (INLA admits only Gaussian
+    fixed-effect priors, so Student-t family_ffx datasets keep this Normal).
 
     Returns dict with 'beta' (d,), 'sigma_rfx' (q,), 'blups' (m, q), or None.
     """
@@ -271,7 +308,8 @@ def estimate(
                 re_parts = []
                 for j in range(q):
                     tau_j = float(tau_rfx[j]) if tau_rfx is not None and tau_rfx[j] > 0 else 1.0
-                    pc = f"hyper=list(prec=list(prior='pc.prec', param=c({tau_j:.6f}, 0.317)))"
+                    fam_j = int(ds['family_sigma_rfx']) if priors == 'matched' else 0
+                    pc = f'hyper=list(prec={_precPrior(fam_j, tau_j, priors)})'
                     if np.allclose(Z[:, j], 1.0):
                         re_parts.append(f"f(group{j}, model='iid', {pc})")
                     else:
@@ -319,19 +357,9 @@ def estimate(
             if likelihood_family == 1:
                 inla_kwargs['Ntrials'] = ro.IntVector([1] * n)
             elif likelihood_family == 0 and tau_eps is not None and float(tau_eps) > 0:
-                inla_kwargs['control.family'] = ro.ListVector(
-                    {
-                        'hyper': ro.ListVector(
-                            {
-                                'prec': ro.ListVector(
-                                    {
-                                        'prior': 'pc.prec',
-                                        'param': ro.FloatVector([float(tau_eps), 0.317]),
-                                    }
-                                )
-                            }
-                        )
-                    }
+                fam_eps = int(ds['family_sigma_eps']) if priors == 'matched' else 0
+                inla_kwargs['control.family'] = ro.r(
+                    f'list(hyper=list(prec={_precPrior(fam_eps, float(tau_eps), priors)}))'
                 )
 
             result = _rinla.inla(**inla_kwargs)
@@ -412,8 +440,7 @@ def _worker_loop(task_q: mp.Queue, result_q: mp.Queue) -> None:
         task = task_q.get()
         if task is None:
             break
-        ds, likelihood_family, re_correlation, n_samples = task
-        result_q.put(estimate(ds, likelihood_family, re_correlation, n_samples))
+        result_q.put(estimate(*task))
 
 
 class Worker:
@@ -456,8 +483,9 @@ class Worker:
         likelihood_family: int,
         re_correlation: str = 'auto',
         n_samples: int = 0,
+        priors: str = 'pc',
     ) -> dict | None:
-        self._task_q.put((ds, likelihood_family, re_correlation, n_samples))
+        self._task_q.put((ds, likelihood_family, re_correlation, n_samples, priors))
         try:
             return self._result_q.get(timeout=self.timeout_s)
         except _queue.Empty:
@@ -511,6 +539,8 @@ class InlaFitter:
         self.batch_path = self.srcdir / cfg.data_id / self.fname
         assert self.batch_path.exists(), f'{self.batch_path} does not exist'
 
+        self.priors = getattr(cfg, 'priors', 'pc')
+        self.tag = 'inla' if self.priors == 'pc' else f'inla_{self.priors}'
         self.outpath = self.outdir / self._outname(cfg.idx)
         self._batch_loaded = False
 
@@ -533,7 +563,7 @@ class InlaFitter:
         return self.n_fit
 
     def _outname(self, idx: int) -> str:
-        return f'{self.batch_path.stem}_inla_{idx:03d}.npz'
+        return f'{self.batch_path.stem}_{self.tag}_{idx:03d}.npz'
 
     def _getSingle(self, idx: int) -> dict:
         self._load_batch()
@@ -608,7 +638,9 @@ class InlaFitter:
 
         worker = Worker(timeout_s)
         t0 = time.perf_counter()
-        result = worker.estimate(ds, self.likelihood_family, re_correlation, n_samples)
+        result = worker.estimate(
+            ds, self.likelihood_family, re_correlation, n_samples, self.priors
+        )
         wall_s = time.perf_counter() - t0
         worker.close()
 
@@ -643,7 +675,9 @@ class InlaFitter:
                     continue
                 ds = self._getSingle(idx)
                 t0 = time.perf_counter()
-                result = worker.estimate(ds, self.likelihood_family, re_correlation, n_samples)
+                result = worker.estimate(
+                    ds, self.likelihood_family, re_correlation, n_samples, self.priors
+                )
                 wall_s = time.perf_counter() - t0
                 out = self._buildOut(result, ds, wall_s, n_samples)
                 np.savez_compressed(outpath, **out)
@@ -688,7 +722,7 @@ class InlaFitter:
 
     def reintegrate(self) -> None:
         inla_data = self._aggregate()
-        inla_path = self.batch_path.with_suffix('.inla.npz')
+        inla_path = self.batch_path.with_suffix(f'.{self.tag}.npz')
         np.savez_compressed(inla_path, **inla_data)
         n_ok = int(np.sum(~inla_data['inla_failed'].astype(bool)))
         print(f'Reintegrated INLA fits into {inla_path}  ({n_ok}/{len(self)} OK)')
@@ -721,6 +755,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--re-correlation', dest='re_correlation', default='diagonal',
                         choices=['auto', 'diagonal'],
                         help='RE correlation: diagonal forces iid per dim (default: diagonal)')
+    parser.add_argument('--priors', default='pc', choices=['pc', 'matched'],
+                        help='Scale priors: pc (PC prior) or matched (the simulator family per dataset)')
     parser.add_argument('--timeout', dest='timeout_s', type=int, default=INLA_DEFAULT_TIMEOUT_S,
                         help=f'Per-dataset timeout in seconds (default: {INLA_DEFAULT_TIMEOUT_S})')
     parser.add_argument('--draws', type=int, default=0,
@@ -740,6 +776,7 @@ if __name__ == '__main__':
         ('partition', 'test'),
         ('epoch', None),
         ('re_correlation', 'diagonal'),
+        ('priors', 'pc'),
         ('timeout_s', INLA_DEFAULT_TIMEOUT_S),
         ('draws', 0),
         ('chains', 1),
