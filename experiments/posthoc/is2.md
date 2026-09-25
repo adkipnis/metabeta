@@ -117,6 +117,29 @@ precomputed L⁻¹ and a broadcast matmul; AGQ nodes now live on the model devic
 50–70× slower than CPU for the Laplace path too (small batched linear algebra), so it says
 nothing about CUDA; CUDA untested locally (`pytest -k accelerator` on a GPU node).
 
+## Real data: is the Bernoulli σ-ratio 0.96–0.97 the nAGQ = 1 bias? (colleague's suggestion)
+
+Real Bernoulli sets have small clusters (median n/m = 12, min n_j ≈ 5, 18–46 % of datasets
+with median n_j ≤ 10). σ-ratio = median over all active parameters of sd_MB / sd_NUTS, so
+it is dominated by rfx entries.
+
+1. Laplace *target* alone (NUTS draws tilted by exp(log p_Laplace − log p_AGQ), 64
+   small-b-real datasets, no chain noise): log σ_rfx shifts by a median −0.04 posterior sd
+   (q10 −0.12 … −0.16), width unchanged (sd ratio 1.00); no clear trend with n_j.
+   Real but small, and it cannot narrow posteriors.
+2. real_posterior.py, small-b-real, 449 converged datasets, n_samples = 1000:
+
+   | method        | σ-ratio → 1 | rank-MAD | ΔLOO-NLL |
+   |:--------------|------------:|---------:|---------:|
+   | MB            | 1.02 ± 0.03 | 0.01 | 0.00 |
+   | MB+imhLaplace | 0.97 ± 0.02 | 0.01 | 0.00 |
+   | MB+imhPM      | 1.00 ± 0.01 | 0.00 | −0.00 |
+
+   The pseudo-marginal chain removes the deficit. With (1), the narrowing comes mostly from
+   the Laplace-Gaussian rfx redraw N(b*, H⁻¹) (skewed conditionals of small binary
+   clusters), not from the nAGQ = 1 target; imhPM fixes both. Refinement ≈ 0.9 s/dataset
+   locally (6.7 min for 449).
+
 ## Open
 
 - Scale-up (medium–huge, 512 datasets, q up to 5): AGQ cost grows as nodes^q (q=5: 243
