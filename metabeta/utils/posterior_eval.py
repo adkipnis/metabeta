@@ -59,13 +59,14 @@ FAM_LETTER = {0: 'n', 1: 'b', 2: 'p'}
 # the IMH family returns an equal-weight chain.
 SNIS_METHODS = ('is', 'isFull', 'isMarginal')          # ImportanceSampler
 LAPLACE_METHODS = ('isLaplace', 'rbAttach')            # LaplaceImportanceSampler (GLMM only)
-IMH_METHODS = ('imhMarginal', 'imhGlobal', 'imhLaplace')   # MetropolisSampler
+IMH_METHODS = ('imhMarginal', 'imhGlobal', 'imhLaplace', 'imhPM')   # MetropolisSampler
 SUPPORTED_METHODS = SNIS_METHODS + LAPLACE_METHODS + IMH_METHODS
 
 # IMH pool geometry: n_chains × (n_samples // n_chains) proposals, mirroring
 # experiments/posthoc/ablation.py's runIMH settings.
 IMH_N_CHAINS = 4
 IMH_BURNIN = 25
+IMH_N_INNER = 8  # imhPM: IS² draws per group (pseudo-marginal chain, exact target)
 
 
 def posthocDefaults(lf: int) -> list[str]:
@@ -84,7 +85,7 @@ def validMethods(methods: list[str], lf: int) -> list[str]:
     for m in methods:
         if m in ('isMarginal', 'imhGlobal') and lf != 0:
             logger.warning('Skipping %s: Normal-only (lf=%d)', m, lf)
-        elif m in LAPLACE_METHODS + ('imhLaplace',) and lf == 0:
+        elif m in LAPLACE_METHODS + ('imhLaplace', 'imhPM') and lf == 0:
             logger.warning('Skipping %s: GLMM-only, Normal uses the exact marginal', m)
         else:
             valid.append(m)
@@ -373,9 +374,9 @@ def _refineChunk(
             raise ValueError(
                 'imhGlobal is Normal-only; non-Normal imhMarginal already uses laplace'
             )
-        if method == 'imhLaplace' and lf == 0:
-            raise ValueError('imhLaplace is for GLMMs (lf != 0); use imhMarginal')
-        if method == 'imhLaplace':
+        if method in ('imhLaplace', 'imhPM') and lf == 0:
+            raise ValueError(f'{method} is for GLMMs (lf != 0); use imhMarginal')
+        if method in ('imhLaplace', 'imhPM'):
             mode = 'laplace'
         elif method == 'imhGlobal':
             mode = 'global'
@@ -395,6 +396,7 @@ def _refineChunk(
             burnin=IMH_BURNIN,
             mode=mode,
             likelihood_family=lf,
+            n_inner=IMH_N_INNER if method == 'imhPM' else 0,
         )
         p_out, _ = sampler(pool)
         return p_out
