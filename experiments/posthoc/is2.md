@@ -126,7 +126,9 @@ it is dominated by rfx entries.
 1. Laplace *target* alone (NUTS draws tilted by exp(log p_Laplace − log p_AGQ), 64
    small-b-real datasets, no chain noise): log σ_rfx shifts by a median −0.04 posterior sd
    (q10 −0.12 … −0.16), width unchanged (sd ratio 1.00); no clear trend with n_j.
-   Real but small, and it cannot narrow posteriors.
+   Real but small, and it cannot narrow posteriors. medium-b-real (64, q ≤ 3): median
+   −0.065 sd (q10 down to −0.22 for n_j ≤ 8), sd ratio 1.00; Laplace marginal error grows
+   with q (median −0.30 vs −0.10 nats).
 2. real_posterior.py, small-b-real, 449 converged datasets, n_samples = 1000:
 
    | method        | σ-ratio → 1 | rank-MAD | ΔLOO-NLL |
