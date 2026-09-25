@@ -23,14 +23,27 @@ Per dataset (standardized space — the space the flow density lives in):
   rho check  : for correlated datasets, posterior mean of the first rfx correlation under
                raw flow / IS / IMH vs NUTS.
 
-Outputs: {out_dir}/{size}_{split}_n{n_ds}.csv (per-dataset rows), .md (summary tables)
-and .png (diagnostic figure); --summarize-only additionally writes evidence_normal.tex.
+GLMMs (--family bernoulli/poisson): no closed-form marginal exists, so
+  IS         : the unbiased IS² evidence (LaplaceImportanceSampler(n_inner=K)), next to the
+               biased Laplace evidence (n_inner=0) and sd(log p̂(y|θ)) from two IS² passes;
+  bridge*    : the same bridges with the marginal likelihood from adaptive Gauss-Hermite
+               quadrature (logMarginalLikelihoodAGQ, nodes per dim from agqNodes), a
+               deterministic reference independent of the IS² draws;
+  IMH        : pseudo-marginal IMH (IS² weights) for bridgeImh and the reduced model;
+  fidelity   : posterior means/sds of β and σ_rfx under raw flow, Laplace-IMH and
+               pseudo-marginal IMH vs NUTS — does the pseudo-marginal chain target the
+               exact posterior where the Laplace chain does not?
+
+Outputs: {out_dir}/{prefix}{size}_{split}_n{n_ds}.csv (per-dataset rows; prefix '' for Normal,
+'{family}_k{K}_' otherwise), .md (summary tables) and .png (diagnostic figure);
+--summarize-only additionally writes evidence_normal.tex.
 
 Run from the repo root:
     uv run python experiments/posthoc/evidence.py --sizes small --n-datasets 32
     uv run python experiments/posthoc/evidence.py --sizes small medium --n-datasets 512 --nested 128
     # after all sizes ran (possibly on different nodes): rebuild summaries + the combined table
     uv run python experiments/posthoc/evidence.py --sizes small medium large huge --summarize-only
+    uv run python experiments/posthoc/evidence.py --family bernoulli --sizes small --n-datasets 32
 """
 
 import argparse
@@ -52,8 +65,13 @@ from build_ckpt import BEST_SEEDS, _ckpt_dir  # noqa: E402
 
 from metabeta.models.approximator import Approximator  # noqa: E402
 from metabeta.posthoc.importance import ImportanceSampler  # noqa: E402
+from metabeta.posthoc.laplace_glmm import (  # noqa: E402
+    LaplaceImportanceSampler,
+    logMarginalLikelihoodAGQ,
+)
 from metabeta.posthoc.metropolis import MetropolisSampler  # noqa: E402
 from metabeta.utils.config import ApproximatorConfig  # noqa: E402
+from metabeta.utils.constants import hasSigmaEps  # noqa: E402
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice  # noqa: E402
 from metabeta.utils.families import logProbCorrRfx  # noqa: E402
 from metabeta.utils.preprocessing import logJacobianStandardization  # noqa: E402
@@ -67,6 +85,8 @@ from metabeta.utils.results import Proposal  # noqa: E402
 IMH_CHAINS = 4
 IMH_BURNIN = 25
 SIZES = ('small', 'medium', 'large', 'huge')
+FAMILIES = {'normal': 0, 'bernoulli': 1, 'poisson': 2}
+TARGET_CHUNK = 1000  # bridge-target draws per AGQ pass (bounds the (m, n, s) intermediates)
 JEFFREYS_EDGES = np.log([3.0, 10.0, 30.0, 100.0])  # ln BF thresholds (Jeffreys, natural log)
 COLOR = '#3B6FB6'
 # CSVs written while the legacy 'z' prior coordinates were still reported carry an `_r` infix
@@ -76,7 +96,9 @@ LEGACY_COLUMNS = {'logev_is_r_': 'logev_is_', 'k_r_': 'k_', 'eff_r_': 'eff_', '_
 # fmt: off
 def setup() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('--family', default='normal', choices=list(FAMILIES))
     p.add_argument('--sizes', nargs='+', default=['small'], choices=SIZES)
+    p.add_argument('--n-inner', type=int, default=8, help='IS² draws per group (GLMMs)')
     p.add_argument('--split', default='test', choices=['test'], help='only test.fit.npz carries NUTS draws')
     p.add_argument('--prefix', default='best', help='checkpoint prefix')
     p.add_argument('--n-datasets', type=int, default=32, help='datasets per size (first n of the split)')
@@ -120,7 +142,7 @@ def loadNuts(npz_path: Path, n_ds: int) -> dict[str, np.ndarray]:
         'nuts_divergences',
     )
     with np.load(npz_path, allow_pickle=True) as data:
-        return {k: np.asarray(data[k][:n_ds]) for k in keys}
+        return {k: np.asarray(data[k][:n_ds]) for k in keys if k in data.files}
 
 
 def loadCsv(path: Path) -> pd.DataFrame:
@@ -172,17 +194,29 @@ def reducedItem(item: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
 # ---------------------------------------------------------------------------
 
 
-class Target:
-    """log p(y | θ_g) p(θ_g) |J| over u = (β, log σ_rfx, log σ_eps[, z_corr]) for one dataset.
+def agqNodes(q: int) -> int:
+    """Gauss-Hermite nodes per rfx dim: ≤ ~150 tensor-product nodes, ≥ 3 per dim; at q = 2 the
+    12-node rule is exact to ~1e-7 nats per group (tests/utils/test_is2.py)."""
+    return {1: 20, 2: 12, 3: 5, 4: 4}.get(q, 3)
 
-    Reuses ImportanceSampler.unnormalizedPosterior (marginal likelihood, β/σ priors) on
-    a padded constrained Proposal; the LKJ prior is added as a density over z in the
-    dataset's own dimension q_i, so the target is independent of the flow's coordinate
-    convention.
+
+class Target:
+    """log p(y | θ_g) p(θ_g) |J| over u = (β, log σ_rfx[, log σ_eps][, z_corr]) for one dataset.
+
+    The marginal likelihood is exact for Normal (ImportanceSampler.unnormalizedPosterior) and
+    adaptive Gauss-Hermite quadrature for GLMMs; β/σ priors come from the same sampler on a
+    padded constrained Proposal. The LKJ prior is added as a density over z in the dataset's
+    own dimension q_i, so the target is independent of the flow's coordinate convention.
     """
 
-    def __init__(self, batch64: dict[str, torch.Tensor], d_corr_model: int) -> None:
-        self.is_ = ImportanceSampler(batch64, marginal=True, corr_prior=False, likelihood_family=0)
+    def __init__(
+        self, batch64: dict[str, torch.Tensor], d_corr_model: int, likelihood_family: int
+    ) -> None:
+        self.lf = likelihood_family
+        self.has_eps = hasSigmaEps(likelihood_family)
+        self.is_ = ImportanceSampler(
+            batch64, marginal=self.lf == 0, corr_prior=False, likelihood_family=self.lf
+        )
         self.d_max = batch64['X'].shape[-1]
         self.q_max = batch64['Z'].shape[-1]
         self.m = batch64['X'].shape[1]
@@ -194,21 +228,22 @@ class Target:
         self.d_corr_i = self.q_i * (self.q_i - 1) // 2 if self.corr else 0
         # blocks of u
         self.sl_ffx = slice(0, self.d_i)
-        self.sl_sigma = slice(self.d_i, self.d_i + self.q_i + 1)  # log σ_rfx, log σ_eps
+        self.sl_sigma = slice(self.d_i, self.d_i + self.q_i + int(self.has_eps))
         self.sl_corr = slice(self.sl_sigma.stop, self.sl_sigma.stop + self.d_corr_i)
         self.dim = self.sl_corr.stop
-        self.D_g = self.d_max + self.q_max + 1 + self.d_corr_max
+        self.D_g = self.d_max + self.q_max + int(self.has_eps) + self.d_corr_max
 
     def toProposal(self, u: torch.Tensor) -> Proposal:
         s = u.shape[0]
         g = u.new_zeros(s, self.D_g)
         g[:, : self.d_i] = u[:, self.sl_ffx]
         sigmas = u[:, self.sl_sigma].exp()
-        g[:, self.d_max : self.d_max + self.q_i] = sigmas[:, :-1]
-        g[:, self.d_max + self.q_max] = sigmas[:, -1]
+        g[:, self.d_max : self.d_max + self.q_i] = sigmas[:, : self.q_i]
+        if self.has_eps:
+            g[:, self.d_max + self.q_max] = sigmas[:, -1]
         if self.corr:
             L = unconstrainedToCholesky(u[:, self.sl_corr], self.q_i)
-            off = self.d_max + self.q_max + 1
+            off = self.d_max + self.q_max + int(self.has_eps)
             g[:, off : off + self.d_corr_i] = corrToLower(L @ L.mT)
         proposed = {
             'global': {'samples': g.unsqueeze(0), 'log_prob': g.new_zeros(1, s)},
@@ -217,11 +252,33 @@ class Target:
                 'log_prob': g.new_zeros(1, self.m, s),
             },
         }
-        return Proposal(proposed, has_sigma_eps=True, d_corr=self.d_corr_max)
+        return Proposal(proposed, has_sigma_eps=self.has_eps, d_corr=self.d_corr_max)
+
+    def _logJoint(self, p: Proposal) -> torch.Tensor:
+        """log p(y | θ_g) + log p(θ_g) without the LKJ term, (s,)."""
+        if self.lf == 0:
+            ll, lp = self.is_.unnormalizedPosterior(p)
+            return (ll + lp)[0]
+        lp, ffx, sigma_eps = self.is_._logPriorGlobals(p)
+        is_ = self.is_
+        ll = logMarginalLikelihoodAGQ(
+            ffx,
+            p.sigma_rfx,
+            sigma_eps,
+            is_.y,
+            is_.X,
+            is_.Z,
+            is_.mask_n,
+            is_.mask_m,
+            self.lf,
+            n_nodes=agqNodes(self.q_i),
+            L_corr=is_._getLCorr(p),
+        )
+        return (ll + lp)[0]
 
     def logProb(self, u: torch.Tensor) -> torch.Tensor:
-        ll, lp = self.is_.unnormalizedPosterior(self.toProposal(u))
-        out = (ll + lp)[0] + u[:, self.sl_sigma].sum(-1)  # |dσ/d log σ|
+        lj = torch.cat([self._logJoint(self.toProposal(c)) for c in u.split(TARGET_CHUNK)])
+        out = lj + u[:, self.sl_sigma].sum(-1)  # |dσ/d log σ|
         if self.corr:
             z = u.new_zeros(1, u.shape[0], self.d_corr_max)
             z[0, :, : self.d_corr_i] = u[:, self.sl_corr]
@@ -233,27 +290,29 @@ class Target:
         self,
         ffx: torch.Tensor,
         sigma_rfx: torch.Tensor,
-        sigma_eps: torch.Tensor,
+        sigma_eps: torch.Tensor | None,
         corr: torch.Tensor | None,
     ) -> torch.Tensor:
-        """(s, d_i), (s, q_i), (s,), (s, q, q) constrained draws → (s, dim) unconstrained."""
+        """(s, d_i), (s, q_i), (s,) or None, (s, q, q) constrained draws → (s, dim) unconstrained."""
         parts = [
             ffx[:, : self.d_i].double(),
             sigma_rfx[:, : self.q_i].double().clamp_min(1e-8).log(),
-            sigma_eps.double().clamp_min(1e-8).log().unsqueeze(-1),
         ]
+        if self.has_eps:
+            parts.append(sigma_eps.double().clamp_min(1e-8).log().unsqueeze(-1))
         if self.corr:
             parts.append(corrToUnconstrained(corr[:, : self.q_i, : self.q_i].double()))
         return torch.cat(parts, -1)
 
     def fromProposal(self, p: Proposal) -> torch.Tensor:
         corr = p.corr_rfx[0] if self.corr else None
-        return self.fromConstrained(p.ffx[0], p.sigma_rfx[0], p.sigma_eps[0], corr)
+        sigma_eps = p.sigma_eps[0] if self.has_eps else None
+        return self.fromConstrained(p.ffx[0], p.sigma_rfx[0], sigma_eps, corr)
 
     def fromNuts(self, nuts: dict[str, np.ndarray], i: int) -> torch.Tensor:
         ffx = torch.as_tensor(nuts['nuts_ffx'][i]).T  # (S, d_max)
         sigma_rfx = torch.as_tensor(nuts['nuts_sigma_rfx'][i]).T  # (S, q_max)
-        sigma_eps = torch.as_tensor(nuts['nuts_sigma_eps'][i, 0])  # (S,)
+        sigma_eps = torch.as_tensor(nuts['nuts_sigma_eps'][i, 0]) if self.has_eps else None  # (S,)
         corr = torch.as_tensor(nuts['nuts_corr_rfx'][i, 0]) if self.corr else None  # (S, q, q)
         return self.fromConstrained(ffx, sigma_rfx, sigma_eps, corr)
 
@@ -303,9 +362,25 @@ def bridge(log_target, u_post: torch.Tensor, n_prop: int, gen: torch.Generator) 
 # ---------------------------------------------------------------------------
 
 
-def isEvidence(proposal: Proposal, batch64: dict[str, torch.Tensor], pool_sizes: list[int]) -> dict:
-    """IS log-evidence, PSIS k and efficiency per pool prefix; 'weights' = PSIS weights at S_max."""
-    sampler = ImportanceSampler(batch64, marginal=True, corr_prior=True, pareto=True)
+def isEvidence(
+    proposal: Proposal,
+    batch64: dict[str, torch.Tensor],
+    pool_sizes: list[int],
+    lf: int,
+    n_inner: int,
+) -> dict:
+    """IS log-evidence, PSIS k and efficiency per pool prefix; 'weights' = PSIS weights at S_max.
+
+    GLMMs use the unbiased IS² weights and add, at S_max, the (biased) Laplace evidence and
+    sd_loglik = sd(log p̂(y | θ)) under the PSIS weights, from two independent IS² passes —
+    the IS² noise Tran et al. (arXiv:1309.3339) tune K by.
+    """
+    if lf == 0:
+        sampler = ImportanceSampler(batch64, marginal=True, corr_prior=True, pareto=True)
+    else:
+        sampler = LaplaceImportanceSampler(
+            batch64, n_inner=n_inner, corr_prior=True, pareto=True, likelihood_family=lf
+        )
     out = sampler(proposalDouble(proposal))
     lw = out.is_results['log_w_raw'][0]  # (S,)
     res = {'weights': out.is_results['weights'][0]}
@@ -316,22 +391,51 @@ def isEvidence(proposal: Proposal, batch64: dict[str, torch.Tensor], pool_sizes:
         res[f'logev_is_s{s}'] = (torch.logsumexp(lw_s, 0) - math.log(s)).item()
         res[f'k_s{s}'] = float(k[0])
         res[f'eff_s{s}'] = float(1.0 / (s * (w**2).sum()))
+    if lf != 0:
+        s_max = max(pool_sizes)
+        laplace = LaplaceImportanceSampler(
+            batch64, corr_prior=True, pareto=False, constrain=False, likelihood_family=lf
+        )
+        res[f'logev_laplace_s{s_max}'] = laplace(proposalDouble(proposal)).log_evidence.item()
+        ll_a, _ = sampler.unnormalizedPosterior(proposalDouble(proposal))
+        ll_b, _ = sampler.unnormalizedPosterior(proposalDouble(proposal))
+        half_sq = (ll_a - ll_b)[0].square() / 2  # unbiased for Var(log p̂) per draw
+        res['sd_loglik'] = float((res['weights'] * half_sq).sum().sqrt())
     return res
 
 
-def runImh(proposal: Proposal, batch64: dict[str, torch.Tensor]) -> tuple[Proposal, float]:
+def runImh(
+    proposal: Proposal, batch64: dict[str, torch.Tensor], lf: int, n_inner: int = 0
+) -> tuple[Proposal, float]:
+    """Marginal IMH (Normal) or Laplace IMH, pseudo-marginal when n_inner > 0 (GLMMs)."""
     n_steps = proposal.n_samples // IMH_CHAINS
     sampler = MetropolisSampler(
         batch64,
         n_chains=IMH_CHAINS,
         n_steps=n_steps,
         burnin=IMH_BURNIN,
-        mode='marginal',
-        likelihood_family=0,
+        mode='marginal' if lf == 0 else 'laplace',
+        likelihood_family=lf,
         n_eff_target=None,
+        n_inner=n_inner,
     )
     p_imh, diag = sampler(proposalDouble(proposal, IMH_CHAINS * n_steps))
     return p_imh, float(diag['accept_rate'].mean())
+
+
+def fidelity(p: Proposal, nuts: dict[str, np.ndarray], i: int, target: Target) -> dict:
+    """Mean |Δ posterior mean| / sd_NUTS and mean |log sd ratio| of β and σ_rfx vs NUTS."""
+    blocks = {
+        'ffx': (p.ffx[0, :, : target.d_i], nuts['nuts_ffx'][i, : target.d_i].T),
+        'sig': (p.sigma_rfx[0, :, : target.q_i], nuts['nuts_sigma_rfx'][i, : target.q_i].T),
+    }
+    out = {}
+    for name, (a, b) in blocks.items():
+        a, b = a.double(), torch.as_tensor(b).double()
+        sd_b = b.std(0)
+        out[f'z_{name}'] = float(((a.mean(0) - b.mean(0)).abs() / sd_b).mean())
+        out[f'lsd_{name}'] = float((a.std(0) / sd_b).log().abs().mean())
+    return out
 
 
 def fitDataset(
@@ -341,25 +445,35 @@ def fitDataset(
     pool_sizes: list[int],
     gen: torch.Generator,
     seed: int,
+    laplace_imh: bool = False,
 ) -> dict:
-    """Flow proposal, IS evidence per pool prefix, IMH refinement and the bridge on its draws."""
+    """Flow proposal, IS evidence per pool prefix, IMH refinement and the bridge on its draws.
+
+    For GLMMs the IMH is pseudo-marginal (exact target, so its bridge is a valid reference);
+    laplace_imh additionally runs the Laplace IMH on the same pool for the fidelity check.
+    """
+    lf = FAMILIES[args.family]
+    n_inner = args.n_inner if lf != 0 else 0
     batch = collateGrouped([item])
     batch64 = toDouble(batch)
-    target = Target(batch64, model.d_corr)
+    target = Target(batch64, model.d_corr, lf)
     torch.manual_seed(seed)
     with torch.no_grad():
         proposal = model.estimate(toDevice(dict(batch), args.device), n_samples=max(pool_sizes))
     proposal.to('cpu')
-    p_imh, accept = runImh(proposal, batch64)
-    return {
+    p_imh, accept = runImh(proposal, batch64, lf, n_inner)
+    fit = {
         'batch': batch,
         'target': target,
         'proposal': proposal,
-        'is': isEvidence(proposal, batch64, pool_sizes),
+        'is': isEvidence(proposal, batch64, pool_sizes, lf, n_inner),
         'p_imh': p_imh,
         'imh_accept': accept,
         'bridge_imh': bridge(target.logProb, target.fromProposal(p_imh), args.n_bridge, gen),
     }
+    if laplace_imh:
+        fit['p_imh_laplace'], fit['imh_accept_laplace'] = runImh(proposal, batch64, lf)
+    return fit
 
 
 def jeffreys(log_bf: float) -> float:
@@ -419,7 +533,17 @@ def summarize(df: pd.DataFrame, pool_sizes: list[int], label: str) -> str:
     )
 
     lines += ['', '## IS − bridgeNuts by pool size', '']
-    lines.append(_table({f'S={s}': _absStats(df[f'logev_is_s{s}'] - ref) for s in pool_sizes}))
+    rows = {f'S={s}': _absStats(df[f'logev_is_s{s}'] - ref) for s in pool_sizes}
+    if f'logev_laplace_s{s_max}' in df:
+        rows[f'Laplace, S={s_max}'] = _absStats(df[f'logev_laplace_s{s_max}'] - ref)
+    lines.append(_table(rows))
+    if 'sd_loglik' in df:
+        sd = df['sd_loglik']
+        lines += [
+            '',
+            f'IS² noise sd(log p̂(y|θ)) under the posterior: median {sd.median():.3f}, '
+            f'q90 {sd.quantile(0.9):.3f}, max {sd.max():.3f}',
+        ]
 
     lines += ['', f'## By PSIS k (S={s_max})', '']
     bins = (
@@ -445,6 +569,28 @@ def summarize(df: pd.DataFrame, pool_sizes: list[int], label: str) -> str:
             for name, col in (('raw flow', 'rho_raw'), ('IS', 'rho_is'), ('IMH', 'rho_imh'))
         }
         lines.append(_table(rows, floatfmt='.4f'))
+
+    if 'z_ffx_imhPM' in df:
+        lines += [
+            '',
+            '## Posterior fidelity vs NUTS (mean over parameters, median over datasets)',
+            '',
+        ]
+        rows = {}
+        for tag in ('raw', 'imhLaplace', 'imhPM'):
+            rows[tag] = {
+                f'{stat} {block}': df[f'{stat}_{block}_{tag}'].median()
+                for block in ('ffx', 'sig')
+                for stat in ('z', 'lsd')
+            }
+        lines.append(_table(rows))
+        lines += [
+            '',
+            'z = |Δ posterior mean| / sd_NUTS, lsd = |log sd ratio|; NUTS Monte Carlo floor of z '
+            f'≈ 1/√ESS, median min-ESS {df["nuts_min_ess"].median():.0f}. '
+            f'Paired: imhPM closer than imhLaplace in z sig on '
+            f'{(df["z_sig_imhPM"] < df["z_sig_imhLaplace"]).mean():.0%} of datasets.',
+        ]
 
     nested = nestedRows(df)
     if len(nested):
@@ -581,12 +727,20 @@ def writeTex(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | None:
 # ---------------------------------------------------------------------------
 
 
+def stemPrefix(args: argparse.Namespace) -> str:
+    """'' for Normal (keeps the published CSV names), '{family}_k{K}_' for GLMMs."""
+    return '' if args.family == 'normal' else f'{args.family}_k{args.n_inner}_'
+
+
 def runSize(size: str, args: argparse.Namespace) -> None:
-    seed = BEST_SEEDS[('normal', size)]
-    ckpt = _ckpt_dir('normal', size, seed) / f'{args.prefix}.pt'
-    data_dir = DATA_DIR / f'{size}-n-sampled'
+    lf = FAMILIES[args.family]
+    seed = BEST_SEEDS[(args.family, size)]
+    ckpt = _ckpt_dir(args.family, size, seed) / f'{args.prefix}.pt'
+    data_dir = DATA_DIR / f'{size}-{args.family[0]}-sampled'
     npz_path = data_dir / f'{args.split}.fit.npz'
-    label = f'Normal ({size}), {args.split}, n={args.n_datasets}'
+    label = f'{args.family.capitalize()} ({size}), {args.split}, n={args.n_datasets}'
+    if lf != 0:
+        label += f', IS² K={args.n_inner}'
     print(f'\n{"#" * 70}\n#  {label}\n{"#" * 70}')
 
     model, epoch = loadModel(ckpt)
@@ -605,7 +759,9 @@ def runSize(size: str, args: argparse.Namespace) -> None:
     for i in range(n_ds):
         t_i = time.perf_counter()
         item = col[i]
-        fit = fitDataset(model, item, args, pool_sizes, gen, seed=args.seed * 100_003 + i)
+        fit = fitDataset(
+            model, item, args, pool_sizes, gen, seed=args.seed * 100_003 + i, laplace_imh=lf != 0
+        )
         batch, target = fit['batch'], fit['target']
         ess = nuts['nuts_ess'][i]
         row = {
@@ -625,6 +781,14 @@ def runSize(size: str, args: argparse.Namespace) -> None:
             'imh_accept': fit['imh_accept'],
             **{k: v for k, v in fit['is'].items() if k != 'weights'},
         }
+        if lf != 0:
+            row['imh_accept_laplace'] = fit['imh_accept_laplace']
+            for tag, p in (
+                ('raw', fit['proposal']),
+                ('imhLaplace', fit['p_imh_laplace']),
+                ('imhPM', fit['p_imh']),
+            ):
+                row.update({f'{k}_{tag}': v for k, v in fidelity(p, nuts, i, target).items()})
 
         # bridge references: NUTS draws (primary) and the IMH draws (validates the IMH bridge)
         br = bridge(target.logProb, target.fromNuts(nuts, i), args.n_bridge, gen)
@@ -674,7 +838,7 @@ def runSize(size: str, args: argparse.Namespace) -> None:
         )
 
     df = pd.DataFrame(rows)
-    stem = f'{size}_{args.split}_n{n_ds}'
+    stem = f'{stemPrefix(args)}{size}_{args.split}_n{n_ds}'
     args.out_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(args.out_dir / f'{stem}.csv', index=False)
     writeOutputs(df, pool_sizes, args.out_dir, stem, label)
@@ -682,12 +846,12 @@ def runSize(size: str, args: argparse.Namespace) -> None:
 
 
 def resummarize(size: str, args: argparse.Namespace) -> None:
-    paths = sorted(args.out_dir.glob(f'{size}_{args.split}_n*.csv'))
+    paths = sorted(args.out_dir.glob(f'{stemPrefix(args)}{size}_{args.split}_n*.csv'))
     if not paths:
         print(f'[skip] no CSV for {size} in {args.out_dir}')
         return
     df = loadCsv(paths[-1])
-    label = f'Normal ({size}), {args.split}, n={len(df)}'
+    label = f'{args.family.capitalize()} ({size}), {args.split}, n={len(df)}'
     writeOutputs(df, sorted(args.pool_sizes), args.out_dir, paths[-1].stem, label)
 
 
@@ -697,7 +861,7 @@ def main() -> None:
         (resummarize if args.summarize_only else runSize)(size, args)
     # the combined table spans all sizes with a CSV in out_dir; assemble it only in the
     # summarize-only pass so parallel per-size runs do not race on the same file
-    if args.summarize_only:
+    if args.summarize_only and args.family == 'normal':
         tex = writeTex(args.out_dir, args.split, sorted(args.pool_sizes))
         if tex is not None:
             print(f'[saved] {tex}')
