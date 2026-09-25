@@ -153,7 +153,7 @@ class Fitter:
         cfg: argparse.Namespace,
         ds: dict[str, np.ndarray],
         elbo_every: int = 500,
-        es_min_iter: int = 20_000,
+        es_min_iter: int = 5_000,
         es_window: int = 20,
         es_tol: float = 2e-3,
     ) -> dict[str, np.ndarray]:
