@@ -487,7 +487,7 @@ def logMarginalLikelihoodIS2(
     L_corr: Tensor | None = None,
     init: Tensor | None = None,
     n_newton: int = 3,
-    defensive: float = 0.1,
+    defensive: float = 0.01,  # is2_tuning: 0.01 ≈ 0 in sd(log p̂), 0.1 inflates it ~1.8x
 ) -> tuple[Tensor, Tensor]:
     """Unbiased estimate Σ_j log p̂(y_j | θ_g) by per-group importance sampling (IS²).
 
