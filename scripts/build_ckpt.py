@@ -16,8 +16,9 @@ uv run python scripts/build_ckpt.py --build --upload --tag
 
 Configuration
 -------------
-Fill in BEST_SEEDS below before running.  Set a seed to None to exclude that
-(family, size) combination from the checkpoint (e.g. if training is not done).
+Fill in BEST_SEEDS below before running; each seed contributes its latest.pt.
+Set a seed to None to exclude that (family, size) combination from the checkpoint
+(e.g. if training is not done).
 A family whose every entry is None is skipped entirely.
 """
 
@@ -79,7 +80,7 @@ def build(dry_run: bool = False) -> list[Path]:
             seed = BEST_SEEDS.get((family, size))
             if seed is None:
                 continue
-            path = _ckpt_dir(family, size, seed)
+            path = _ckpt_dir(family, size, seed) / 'latest.pt'
             if not path.exists():
                 print(f'[ERROR] checkpoint not found: {path}', file=sys.stderr)
                 sys.exit(1)
