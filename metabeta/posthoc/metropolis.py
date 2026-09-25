@@ -155,7 +155,10 @@ class MetropolisSampler:
         likelihood_family: int = 0,
         eps: float = 1e-12,
         n_eff_target: int | None = N_EFF_TARGET,  # None disables the pool-size suggestion
+        n_inner: int = 0,  # 'laplace' only: IS² draws per group; > 0 makes the chain pseudo-marginal
     ) -> None:
+        if n_inner > 0 and mode != 'laplace':
+            raise ValueError("n_inner (pseudo-marginal IS² weights) requires mode='laplace'")
         if mode == 'marginal' and likelihood_family != 0:
             raise ValueError("mode='marginal' requires likelihood_family=0 (Normal)")
         if mode == 'laplace' and likelihood_family == 0:
@@ -179,7 +182,7 @@ class MetropolisSampler:
         # log-prob).
         if mode == 'laplace':
             self._is: ImportanceSampler = LaplaceImportanceSampler(
-                data, likelihood_family=likelihood_family, eps=eps
+                data, likelihood_family=likelihood_family, eps=eps, n_inner=n_inner
             )
         else:
             self._is = ImportanceSampler(
@@ -348,11 +351,16 @@ class MetropolisSampler:
         per-group Laplace modes b* and Hessian factors. Gathering them by ``idx_out`` and
         drawing rfx ~ N(b*, H⁻¹) is therefore exact and avoids a second full Newton pass,
         which used to cost as much as the pool pass itself. Returns (b, m, s_out, q).
+
+        With IS² weights (n_inner > 0) the kept state's weight-selected inner draw is gathered
+        instead: under the pseudo-marginal extended target it is an exact conditional draw.
         """
-        modes, chol_H = self._is._modes, self._is._chol_H  # (b, m, s, q), (b, m, s, q, q)
-        b, m, _, q = modes.shape
+        b, m, _, q = self._is.Z.shape
         s_out = idx_out.shape[1]
         gi = idx_out[:, None, :, None].expand(b, m, s_out, q)
+        if self._is.n_inner > 0:
+            return torch.gather(self._is._rfx, 2, gi)
+        modes, chol_H = self._is._modes, self._is._chol_H  # (b, m, s, q), (b, m, s, q, q)
         modes_sel = torch.gather(modes, 2, gi)
         chol_sel = torch.gather(chol_H, 2, gi.unsqueeze(-1).expand(b, m, s_out, q, q))
         return sampleRfxLaplace(modes_sel, chol_sel, self._is.mask_m)
