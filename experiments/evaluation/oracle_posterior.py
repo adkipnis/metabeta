@@ -7,7 +7,7 @@ a small-capacity model on a larger regime yields few or no rows). To sweep sizes
 process per (checkpoint, data_id) pair.
 
 Loads NUTS/ADVI/Laplace fits from the test.fit.npz batch (and R-INLA fits from the sibling
-test.inla.npz, if present) and produces a LaTeX + Markdown table
+test.inla_matched.npz, if present) and produces a LaTeX + Markdown table
 with mean ± std over parameter dimensions (for NRMSE/ECE/EACE/R) and over datasets (for
 LOO-NLL). Unlike real_posterior.py, the sampled test sets carry ground-truth parameters, so
 the metrics are absolute (vs the true values) rather than relative to NUTS.
@@ -172,9 +172,10 @@ def fitExcludePrefixes(keep: str | None) -> tuple[str, ...]:
     return tuple(p for p in FIT_PREFIXES if p != f'{keep}_')
 
 
-# R-INLA fits live in the sibling {partition}.inla.npz (metabeta/simulation/inla.py), not in
-# test.fit.npz. Method name → file; every file stores its fits under the 'inla_' prefix.
-INLA_FILES = {'inla': ('INLA', 'test.inla.npz')}
+# R-INLA fits live in a sibling of test.fit.npz (metabeta/simulation/inla.py): test.inla.npz
+# with PC scale priors, test.inla_matched.npz with each dataset's simulator scale prior (the
+# reported INLA row). Method name → file; every file stores its fits under the 'inla_' prefix.
+INLA_FILES = {'inla': ('INLA', 'test.inla_matched.npz')}
 
 
 def _fitAxis(a: np.ndarray, axis: int, size: int) -> np.ndarray:

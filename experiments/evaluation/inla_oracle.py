@@ -15,9 +15,9 @@ writes the E4 deliverables to experiments/results/:
                                      m/q quartile (fewest groups per random effect)
     inla_oracle_tables.md            all of the above in Markdown, plus INLA failure counts
 
-INLA fits come from test.inla.npz (metabeta/simulation/inla.py, 4000 joint draws, one thread);
-its wall times are per core on the machine that ran the fits, MB times on the evaluation
-device, NUTS/ADVI/LA times from their fit files.
+INLA fits come from test.inla_matched.npz (metabeta/simulation/inla.py --priors matched, 4000
+joint draws, one thread); its wall times are per core on the machine that ran the fits, MB
+times on the evaluation device, NUTS/ADVI/LA times from their fit files.
 
 Usage (from repo root; GPU interactive node, matching the paper's MB timings):
     uv run python experiments/evaluation/inla_oracle.py --device cuda
@@ -37,7 +37,7 @@ from tabulate import tabulate
 
 # sibling experiment scripts (this directory is sys.path[0] at run time)
 from condition_number import LF_FROM_FAM
-from oracle_posterior import METRICS, _fmtMd, _fmtTex, evaluateRegime
+from oracle_posterior import INLA_FILES, METRICS, _fmtMd, _fmtTex, evaluateRegime
 from metabeta.simulation.inla import INLA_DEFAULT_TIMEOUT_S
 from metabeta.utils.device import setDevice
 from metabeta.utils.experiments import CHECKPOINT_DIR, DATA_DIR, RESULTS_DIR
@@ -184,7 +184,7 @@ class InlaOracle:
     def _countFailures(
         self, fam: str, size: str, data_dir: Path, cap: np.ndarray, full: pd.DataFrame, re_model
     ) -> None:
-        with np.load(data_dir / 'test.inla.npz') as raw:
+        with np.load(data_dir / INLA_FILES['inla'][1]) as raw:
             wall = raw['inla_wall_s']
         failed = full['failed'].to_numpy()
         idx = full['idx'].to_numpy()
