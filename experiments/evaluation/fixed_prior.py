@@ -78,10 +78,10 @@ sys.path.insert(0, str(REPO_ROOT / 'scripts'))
 from build_ckpt import BEST_SEEDS, _ckpt_dir  # noqa: E402
 
 # sibling experiment scripts (this directory is sys.path[0] at run time)
-from condition_number import LF_FROM_FAM
+from condition_number import LF_FROM_FAM, _fmtMs
 from data_poverty import ECE_ALPHAS, globalEntries, localEntries
 from likelihood_misspec import FAMILY_NAMES
-from real_posterior import computeCorr, computeRankMAD, computeSigmaRatio
+from real_posterior import _medianMad, computeCorr, computeRankMAD, computeSigmaRatio
 
 logger = logging.getLogger(__name__)
 
@@ -241,17 +241,11 @@ class FixedPriorStudy:
     @staticmethod
     def logTauRatio(p1: dict[str, torch.Tensor], p0: dict[str, torch.Tensor]) -> np.ndarray:
         """Per dataset, median log10 τ₁/τ₀ over the active ffx and rfx scales."""
-        B = p1['X'].shape[0]
-        out = np.empty(B)
-        for b in range(B):
-            t1 = torch.cat(
-                [p1['tau_ffx'][b][p1['mask_d'][b].bool()], p1['tau_rfx'][b][p1['mask_q'][b].bool()]]
-            )
-            t0 = torch.cat(
-                [p0['tau_ffx'][b][p1['mask_d'][b].bool()], p0['tau_rfx'][b][p1['mask_q'][b].bool()]]
-            )
-            out[b] = float(torch.log10(t1 / t0).median())
-        return out
+        active = torch.cat([p1['mask_d'], p1['mask_q']], -1).bool()   # (B, d+q)
+        t1 = torch.cat([p1['tau_ffx'], p1['tau_rfx']], -1)
+        t0 = torch.cat([p0['tau_ffx'], p0['tau_rfx']], -1)
+        log_ratio = torch.log10(t1 / t0).where(active, torch.nan)
+        return log_ratio.nanmedian(-1).values.numpy()
 
     # --------------------------------------------------------------------------
     # Loading
@@ -419,30 +413,30 @@ class FixedPriorStudy:
 
         def run(tag: str, batch_p0: dict[str, torch.Tensor]) -> None:
             variant = '' if tag == IDENTITY else f'fp-{tag}'
-            flow, _ = self.sample(model, batch_p0, ctx, variant)
-            arms = {'flow': (flow, 'mb', variant)}
-            imh, _ = loadOrRefine(
-                self.method,
-                flow,
-                batch_rs,
+            # raw flow at the condition's prior, rescaled to the data space (cached per variant)
+            flow, _ = loadOrSampleMB(
+                model,
+                batch_p0,
                 data_path,
                 ckpt_dir,
                 self.cfg.prefix,
                 self.cfg.n_samples,
-                self.cfg.seed,
-                self.lf,
-                True,
-                mask,
                 self.cfg.batch_size,
+                self.cfg.seed,
+                self.device,
+                mask,
                 variant=variant,
-                device=self.device,
             )
-            arms['imh_P1'] = (imh, self.method, variant)
+            flow.rescale(batch_p0['sd_y'])
+            arms = {'flow': (flow, 'mb', variant)}
+            targets = {'imh_P1': (batch_rs, variant)}
             if tag != IDENTITY:
-                imh0, _ = loadOrRefine(
+                targets['imh_P0'] = (rescaleData(batch_p0), f'{variant}-atP0')
+            for arm, (target, v) in targets.items():
+                imh, _ = loadOrRefine(
                     self.method,
                     flow,
-                    rescaleData(batch_p0),
+                    target,
                     data_path,
                     ckpt_dir,
                     self.cfg.prefix,
@@ -452,10 +446,10 @@ class FixedPriorStudy:
                     True,
                     mask,
                     self.cfg.batch_size,
-                    variant=f'{variant}-atP0',
+                    variant=v,
                     device=self.device,
                 )
-                arms['imh_P0'] = (imh0, self.method, f'{variant}-atP0')
+                arms[arm] = (imh, self.method, v)
             ratio = self.logTauRatio(batch, batch_p0)
             for arm, (proposal, method, v) in arms.items():
                 logger.info('%s-%s: scoring %s / %s', size, self.family, tag, arm)
@@ -473,24 +467,6 @@ class FixedPriorStudy:
             df.insert(0, 'family', self.family)
             df.to_csv(path, index=False)
             logger.info('%s: %d rows after %s', path.name, len(df), tag)
-
-    def sample(self, model, batch_p0, ctx, variant: str) -> tuple[Proposal, torch.Tensor]:
-        """Raw flow at the given prior, rescaled to the data space (cached per variant)."""
-        flow, tpd = loadOrSampleMB(
-            model,
-            batch_p0,
-            ctx['data_path'],
-            ctx['ckpt_dir'],
-            self.cfg.prefix,
-            self.cfg.n_samples,
-            self.cfg.batch_size,
-            self.cfg.seed,
-            self.device,
-            ctx['mask'],
-            variant=variant,
-        )
-        flow.rescale(batch_p0['sd_y'])
-        return flow, tpd
 
     def go(self) -> None:
         for size in self.cfg.sizes:
@@ -524,11 +500,7 @@ class FixedPriorStudy:
 
     @staticmethod
     def medMad(x: pd.Series) -> str:
-        x = x.dropna()
-        if x.empty:
-            return '—'
-        med = x.median()
-        return f'{med:.3f} ± {(x - med).abs().median():.3f}'
+        return _fmtMs(_medianMad(x.to_numpy(dtype=float)), 3)
 
     @staticmethod
     def label(tag: str) -> str:
@@ -574,7 +546,7 @@ class FixedPriorStudy:
             )
             rows.append(
                 [self.label(tag), arm_label, len(g)]
-                + [self.medMad(g[c]) if c in g else '—' for c in AGREE_COLS + ['accept']]
+                + [self.medMad(g[c]) for c in AGREE_COLS + ['accept']]
                 + [f'{self.eace(g, "g"):.3f}', f'{self.eace(g, "l"):.3f}']
             )
         return rows
@@ -683,7 +655,7 @@ class FixedPriorStudy:
 
         def ratio(r: float) -> str:
             if r < 0.95:
-                return f'1/{1 / r:.0f}'
+                return f'1/{1 / r:.0f}' if r < 0.51 else f'1/{1 / r:.1f}'
             return f'{r:.0f}' if abs(r - round(r)) < 0.05 else f'{r:.1f}'
 
         lines = [
