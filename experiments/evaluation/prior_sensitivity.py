@@ -773,10 +773,16 @@ class PriorSensitivity:
                 f'({per_fit:.1f} s per fit)'
             )
             n_grid = len(self.meta[name]['grid'])
+            if len(nuts) < n_grid:
+                lines.append(
+                    f'- NUTS **extrapolated** to all {n_grid} grid points: '
+                    f'{per_fit * n_grid * NUTS_CHAINS / 3600:.1f} core-hours '
+                    f'({per_fit * n_grid / 3600:.1f} h if run serially)'
+                )
+            sub = nuts[nuts.nuts_subgrid]
             lines.append(
-                f'- NUTS **extrapolated** to all {n_grid} grid points: '
-                f'{per_fit * n_grid * NUTS_CHAINS / 3600:.1f} core-hours '
-                f'({per_fit * n_grid / 3600:.1f} h if run serially)'
+                f'- NUTS on the {len(sub)}-point sub-grid: '
+                f'{sub.duration_s.sum() * NUTS_CHAINS / 3600:.2f} core-hours'
             )
         return lines
 
@@ -836,25 +842,30 @@ class PriorSensitivity:
             )
             parts.append(f'## Agreement with NUTS, {label} (median ± MAD)\n\n{table}')
         extra_fit = set(df[df.method == 'NUTS'].point) - set(sub.point)
-        extra = df[df.point.isin(extra_fit) & ~df.method.isin(['NUTS'])]
         listed = (self.dataDir(name) / 'nuts_extra.txt').read_text().strip()
         listed = {int(i) for i in listed.split(',')} if listed else set()
-        rows = [
-            [method, len(g)]
-            + [medMad(g[c]) if c in g else 'NA' for c in metric_cols]
-            + [flagCount(g)]
-            for method, g in extra.groupby('method', sort=False)
-        ]
-        parts.append(
-            '## Low-acceptance additions (selected by MB acceptance < '
-            f'{IMH_ACCEPT_WARN:g} after the run; not part of the sub-grid)\n\n'
-            f'listed {sorted(listed)}, NUTS fits missing {sorted(listed - extra_fit) or "none"}\n\n'
-            + (
-                tabulate(rows, headers=['method', 'n', *metric_cols, 'flagged'], tablefmt='pipe')
-                if rows
-                else ''
+        # the second run fitted NUTS on every grid point; the rest of the grid is reported apart
+        # from the pre-specified sub-grid, and within it the low-acceptance points the pre-run rule
+        # selected (MB acceptance < IMH_ACCEPT_WARN)
+        for label, points in (
+            (f'rest of the grid ({len(extra_fit)} points outside the sub-grid)', extra_fit),
+            (
+                f'low-acceptance points (MB acceptance < {IMH_ACCEPT_WARN:g}, outside the sub-grid; '
+                f'listed {sorted(listed)}, NUTS fits missing {sorted(listed - extra_fit) or "none"})',
+                listed & extra_fit,
+            ),
+        ):
+            extra = df[df.point.isin(points) & (df.method != 'NUTS')]
+            rows = [
+                [method, len(g)]
+                + [medMad(g[c]) if c in g else 'NA' for c in metric_cols]
+                + [flagCount(g)]
+                for method, g in extra.groupby('method', sort=False)
+            ]
+            table = tabulate(
+                rows, headers=['method', 'n', *metric_cols, 'flagged'], tablefmt='pipe'
             )
-        )
+            parts.append(f'## Agreement with NUTS, {label}\n\n' + (table if rows else 'none'))
         key = f'b_{DATASETS[name]["key"]}'
         flagged = df[
             df.point.isin(set(sub.point) | extra_fit) & df.flagged.fillna(False).astype(bool)
@@ -1205,10 +1216,14 @@ class PriorSensitivity:
                                     r[key], nq[r.point], r.key_z, r.key_width_ratio, r.sigma_ratio])  # fmt: skip
             timing.append([name, 'MB (flow + IMH)', n_grid, f'{mb_calls.sum() / n_grid:.3f}', '', '',
                            f'{mb_calls.sum() / 60:.3f} ({len(mb_calls)} batched calls)', 'GPU'])  # fmt: skip
+            full = (
+                len(nuts) == n_grid
+            )  # NUTS on every Normal-slope point: measured, not extrapolated
+            grid_min = (nuts.duration_s.sum() if full else nuts.duration_s.mean() * n_grid) / 60
             timing.append([name, f'NUTS ({NUTS_CHAINS} chains, {NUTS_CHAINS} cores per fit)', len(nuts),
                            f'{nuts.duration_s.median():.1f}', f'{nuts.duration_s.max():.1f}',
-                           f'{nuts.duration_s.sum() * NUTS_CHAINS / 3600:.2f} (sub-grid)',
-                           f'{nuts.duration_s.mean() * n_grid / 60:.0f} (extrapolated, {NUTS_CHAINS} cores)',
+                           f'{nuts.duration_s.sum() * NUTS_CHAINS / 3600:.2f}',
+                           f'{grid_min:.0f} ({"measured" if full else "extrapolated"}, {NUTS_CHAINS} cores)',
                            'cluster CPU'])  # fmt: skip
         fmt = dict(tablefmt='pipe', floatfmt='.3g')
         parts = [
