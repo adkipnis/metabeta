@@ -73,27 +73,21 @@ Stages (--stages, run in the order given):
   evidence  Normal datasets only: IS log p(D) from the flow pool on all grid points vs Meng-Wong
             bridge sampling on the NUTS draws (experiments/posthoc/evidence.py)
   plot      prior_sensitivity_{rfx}.pdf (+ _main, _exp1; _bf after evidence)
-  inla      R-INLA on the Normal-slope points (scripts/fit-inla-prior-grid.sh, 4 shards on 4 cores)
-  inla_report  INLA vs NUTS on the Normal-slope sub-grid -> prior_sensitivity_{rfx}_inla.md/.csv
 
 Usage (from repo root):
     uv run python experiments/evaluation/prior_sensitivity.py --rfx slope --stages export mb analyze --dry_run
     uv run python experiments/evaluation/prior_sensitivity.py --rfx slope --stages export
     n=$(grep -c ',True$' metabeta/outputs/data/e2-sleep-slope/grid.csv)    # cluster: NUTS sub-grid size
     sbatch --array=0-$((n - 1)) scripts/fit-nuts-prior-grid.sh --dataset sleep --rfx slope
-    sbatch scripts/fit-inla-prior-grid.sh --dataset sleep --rfx slope    # + --re-correlation diagonal
     uv run python experiments/evaluation/prior_sensitivity.py --rfx slope --stages mb --device cuda
     uv run python experiments/evaluation/prior_sensitivity.py --rfx slope --device cuda \
-        --stages analyze evidence plot inla_report
+        --stages analyze evidence plot
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import logging
-import os
-import platform
 import sys
 import time
 from pathlib import Path
@@ -184,12 +178,6 @@ TRAIN_MAX_TAU_RFX = {0: 5.0, 1: 2.0, 2: 1.0}
 
 METHODS = {'MB0': False, 'MB': True}  # label -> Api.sample(refine=...)
 FIT_PREFIXES = {'NUTS': 'nuts', 'ADVI': 'advi'}
-# R-INLA re_correlation -> method label (E4's matched-prior fit, metabeta/simulation/inla.py).
-# 'auto' fits sleepstudy's correlated (1 + days | group) as iid2d with a Wishart prior, since
-# INLA has no LKJ + SD prior; 'diagonal' drops the correlation and keeps the grid's SD priors.
-# With one rfx both are the same iid model, so only 'auto' runs there.
-INLA_METHODS = {'auto': 'INLA', 'diagonal': 'INLA-diag'}
-INLA_TIMEOUT_S = 120
 QUANTILES = {'q05': 0.05, 'q50': 0.5, 'q95': 0.95}
 NUTS_CHAINS = 4  # fit.py default; chains run in parallel, one core each
 
@@ -218,7 +206,7 @@ ACCEPT_NORM = mcolors.Normalize(0.0, 1.0)
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--stages', nargs='+', required=True, choices=['export', 'mb', 'analyze', 'evidence', 'plot', 'inla', 'inla_report'])
+    parser.add_argument('--stages', nargs='+', required=True, choices=['export', 'mb', 'analyze', 'evidence', 'plot'])
     parser.add_argument('--rfx', type=str, required=True, choices=['slope', 'intercept'], help='rfx structure of every dataset: correlated random slope or random intercept only')
     parser.add_argument('--datasets', nargs='+', default=list(DATASETS), choices=list(DATASETS))
     parser.add_argument('--device', type=str, default='cpu', help='device of the mb stage; analyze reads that cache')
@@ -228,9 +216,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--n_bridge', type=int, default=4000, help='bridge-sampling proposal draws')
     parser.add_argument('--fig_dir', type=str, default=str(FIG_DIR))
     parser.add_argument('--dry_run', action='store_true', help='build grid and data, log the plan, write nothing')
-    parser.add_argument('--inla_re_correlation', type=str, default='auto', choices=list(INLA_METHODS))
-    parser.add_argument('--inla_shard', type=int, nargs=2, default=[0, 1], metavar=('K', 'N'), help='inla: fit every N-th Normal-slope point from the K-th')
-    parser.add_argument('--inla_first', type=int, default=None, help='inla: only the first k Normal-slope points (pilot)')
     parser.add_argument('--verbosity', type=int, default=1)
     return parser.parse_args()
 # fmt: on
@@ -312,7 +297,7 @@ class PriorSensitivity:
             raise ValueError(f'{name}: the grid is defined for sd_y = 1 (no sd_y key)')
         rfx_names = ['Intercept' if t == '1' else t for t in formula.random_terms]
         if list(formula.random_terms) != ['1', *formula.fixed_terms[: len(rfx_names) - 1]]:
-            # fit.py and INLA take the rfx design as the first q columns of X (Z = X[:, :q])
+            # fit.py takes the rfx design as the first q columns of X (Z = X[:, :q])
             raise ValueError(f'{name}: random slopes must be the leading fixed terms')
         lf = resolveLikelihoodFamily(None, str(data['y_type']))
         grid = buildGrid(lf)
@@ -643,13 +628,13 @@ class PriorSensitivity:
         return float(sampler(flow).is_results['pareto_k'][0])
 
     def loadFits(
-        self, name: str, point: int, batch1: dict, prefixes: dict[str, str] = FIT_PREFIXES
+        self, name: str, point: int, batch1: dict
     ) -> dict[str, tuple[Proposal | None, dict]]:
-        """NUTS / ADVI / INLA fits of one grid point as Proposals padded to the Api batch
-        layout (None for a failed ADVI / INLA fit)."""
+        """NUTS / ADVI fits of one grid point as Proposals padded to the Api batch layout
+        (None for a failed ADVI fit)."""
         out = {}
         d_max, q_max, m_max = batch1['X'].shape[-1], batch1['Z'].shape[-1], batch1['X'].shape[1]
-        for method, prefix in prefixes.items():
+        for method, prefix in FIT_PREFIXES.items():
             path = self.dataDir(name) / 'fits' / f'test_{prefix}_{point:03d}.npz'
             if not path.exists():
                 continue
@@ -677,8 +662,7 @@ class PriorSensitivity:
             local = torch.zeros(m_max, S, q_max)
             local[: rfx.shape[0], :, :q] = rfx
             corr = torch.eye(q_max).repeat(S, 1, 1)  # (S, q_max, q_max)
-            if f'{prefix}_corr_rfx' in fit:  # INLA draws carry none; no metric uses it
-                corr[:, :q, :q] = t('corr_rfx')[0]
+            corr[:, :q, :q] = t('corr_rfx')[0]
             proposed = {
                 'global': {'samples': torch.cat(parts, -1)[None]},
                 'local': {'samples': local[None]},
@@ -1064,190 +1048,6 @@ class PriorSensitivity:
             logger.info('saved %s', path)
 
     # --------------------------------------------------------------------------
-    # inla
-
-    def inlaDir(self, name: str) -> Path:
-        return self.dataDir(name) / 'fits'
-
-    def fitInla(self) -> None:
-        """R-INLA with the grid's priors on the Normal-slope points (INLA admits only Normal
-        fixed-effect priors): one INLA thread per process, shard K of N takes every N-th point, so
-        N shards on N cores time the grid on the cores NUTS used. Refits existing files, so the
-        shard wall time always covers its whole share."""
-        from metabeta.simulation import inla
-        from metabeta.utils.padding import unpad
-
-        re_corr = self.cfg.inla_re_correlation
-        k, n_shards = self.cfg.inla_shard
-        S = self.cfg.n_samples
-        for name in self.data:
-            meta = self.meta[name]
-            if re_corr == 'diagonal' and meta['q'] == 1:
-                logger.info('inla %s: one rfx, diagonal is the auto fit; skipped', name)
-                continue
-            grid = meta['grid']
-            points = grid.index[grid.ffx_family == 'normal'][: self.cfg.inla_first][k::n_shards]
-            if self.cfg.dry_run:
-                logger.info(
-                    'inla %s %s shard %d/%d: points %s', name, re_corr, k, n_shards, list(points)
-                )
-                continue
-            with np.load(self.dataDir(name) / 'test.npz') as f:
-                batch = dict(f)
-            prefix = f'inla_{re_corr}'
-            worker = inla.Worker(INLA_TIMEOUT_S)
-            t_start = time.time()
-            for point in points:
-                ds = {key: v[point] for key, v in batch.items()}
-                ds = unpad(ds, {s: int(ds[s]) for s in ('d', 'q', 'm', 'n')})
-                t0 = time.perf_counter()
-                res = worker.estimate(ds, meta['lf'], re_corr, S, 'matched')
-                wall = time.perf_counter() - t0
-                out = {f'{prefix}_duration': np.array(wall), f'{prefix}_failed': np.array(True)}
-                if res is not None and 'ffx_samples' in res:
-                    out |= {
-                        f'{prefix}_failed': np.array(False),
-                        f'{prefix}_ffx': res['ffx_samples'].T,  # (d, S)
-                        f'{prefix}_sigma_rfx': res['sigma_rfx_samples'].T,  # (q, S)
-                        f'{prefix}_rfx': res['rfx_samples'].transpose(1, 2, 0),  # (q, m, S)
-                    }
-                    if meta['lf'] == 0:
-                        out[f'{prefix}_sigma_eps'] = res['sigma_eps_samples'][None]  # (1, S)
-                np.savez_compressed(self.inlaDir(name) / f'test_{prefix}_{point:03d}.npz', **out)
-                logger.info('inla %s %s point %d: %.1f s, failed=%s', name, re_corr, point, wall,
-                            bool(out[f'{prefix}_failed']))  # fmt: skip
-            worker.close()
-            timing = {
-                'shard': k,
-                'n_shards': n_shards,
-                'points': [int(p) for p in points],
-                'start': t_start,
-                'end': time.time(),
-                'host': platform.node(),
-                'cpu': self._cpuModel(),
-                'slurm_cpus_per_task': os.environ.get('SLURM_CPUS_PER_TASK'),
-            }
-            path = self.inlaDir(name) / f'{prefix}_timing_shard{k}.json'
-            path.write_text(json.dumps(timing, indent=1))
-
-    @staticmethod
-    def _cpuModel() -> str:
-        cpuinfo = Path('/proc/cpuinfo')
-        if cpuinfo.exists():
-            for line in cpuinfo.read_text().splitlines():
-                if line.startswith('model name'):
-                    return line.split(':', 1)[1].strip()
-        return platform.processor()
-
-    def reportInla(self) -> None:
-        """INLA vs NUTS on the Normal-slope sub-grid, with the same agreement metrics and flag
-        as the MB rows; writes prior_sensitivity_{rfx}_inla.csv / .md."""
-        prefixes = {'NUTS': 'nuts'} | {m: f'inla_{rc}' for rc, m in INLA_METHODS.items()}
-        rows = []
-        for name in self.data:
-            mb = torch.load(self.dataDir(name) / f'mb_{self.cfg.device}.pt', weights_only=False)
-            self._checkGrid(name, mb['grid'], 'mb cache')
-            grid = self.meta[name]['grid']
-            for block in mb['blocks']:
-                for j, point in enumerate(block['points']):
-                    if grid.loc[point, 'ffx_family'] != 'normal':
-                        continue
-                    batch1 = sliceBatch(block['batch'], j, j + 1)
-                    refs = self.loadFits(name, point, batch1, prefixes)
-                    nuts = refs.pop('NUTS', (None, {}))[0]
-                    for method, (p, diag) in refs.items():
-                        row = self.rowBase(name, point, method) | {'failed': False} | diag
-                        if p is not None:
-                            row |= self.agreement(name, p, nuts, batch1) | self.summaries(name, p)
-                        rows.append(row)
-        df = pd.DataFrame(rows).sort_values(['dataset', 'point', 'method'], kind='stable')
-        df.to_csv(self.resultPath('_inla.csv'), index=False)
-        self.writeInlaMd(df)
-
-    def inlaTiming(self, name: str, re_corr: str) -> dict | None:
-        """Per-shard timing files of one INLA grid -> wall time of the whole grid."""
-        paths = sorted(self.inlaDir(name).glob(f'inla_{re_corr}_timing_shard*.json'))
-        if not paths:
-            return None
-        shards = [json.loads(p.read_text()) for p in paths]
-        return {
-            'n_shards': len(shards),
-            'points': sum(len(s['points']) for s in shards),
-            'wall_s': max(s['end'] for s in shards) - min(s['start'] for s in shards),
-            'cpus': sorted({s['cpu'] for s in shards}),
-        }
-
-    def writeInlaMd(self, df: pd.DataFrame) -> None:
-        metric_cols = {'r': 'r', 'sigma_ratio': 'σ-ratio', 'rank_mad': 'rank-MAD',
-                       'delta_loo_nll': 'ΔLOO-NLL', 'key_z': '|Δmed|/sd', 'key_width_ratio': 'width ratio'}  # fmt: skip
-        label_rc = {m: rc for rc, m in INLA_METHODS.items()}
-        agree, timing, fail, flagged, by_tau = [], [], [], [], []
-        for name, dn in df.groupby('dataset', sort=False):
-            base = pd.read_csv(self.resultPath(f'_{name}.csv'))
-            base = base[base.ffx_family == 'normal']
-            mb_sub = base[base.nuts_subgrid & (base.method == 'MB')]
-            for method, g in [*dn[dn.nuts_subgrid].groupby('method', sort=False), ('MB', mb_sub)]:
-                agree.append([name, method, int(g.r.notna().sum())] + [medMad(g[c]) for c in metric_cols]
-                             + [flagCount(g)])  # fmt: skip
-            nuts = base[base.method == 'NUTS']
-            mb_all = base[base.method == 'MB']
-            n_grid = len(mb_all)
-            mb_calls = mb_all.groupby('sigma_family').wall_s_batch.first()  # one call per SD family
-            for method, g in dn.groupby('method', sort=False):
-                t = self.inlaTiming(name, label_rc[method])
-                timeouts = int((g.failed & (g.duration_s >= INLA_TIMEOUT_S)).sum())
-                timing.append([
-                    name, method, len(g), f'{g.duration_s.median():.1f}', f'{g.duration_s.max():.1f}',
-                    f'{g.duration_s.sum() / 3600:.3f}',
-                    f'{t["wall_s"] / 60:.1f} ({t["n_shards"]} cores, {t["points"]} priors)' if t else 'NA',
-                    ', '.join(t['cpus']) if t else 'NA',
-                ])  # fmt: skip
-                fail.append([name, method, len(g), int(g.failed.sum()), timeouts,
-                             int(g.failed.sum()) - timeouts])  # fmt: skip
-                sg = g[g.nuts_subgrid & g.flagged.notna()]
-                tight = np.isclose(sg.tau_beta.to_numpy()[:, None], TIGHT_TAU_BETA).any(1)
-                for label, m in (('tau_beta <= 0.076', tight), ('tau_beta > 0.076', ~tight)):
-                    by_tau.append([name, method, label, int(m.sum()), medMad(sg.key_z[m]),
-                                   medMad(sg.sigma_ratio[m]), flagCount(sg[m])])  # fmt: skip
-                key = f'b_{DATASETS[name]["key"]}_q50'
-                nq = nuts.set_index('point')[key]
-                for _, r in sg[sg.flagged.astype(bool)].iterrows():
-                    flagged.append([name, method, r.point, r.tau_beta, f'{r.sigma_family}({r.tau_sigma:g})',
-                                    r[key], nq[r.point], r.key_z, r.key_width_ratio, r.sigma_ratio])  # fmt: skip
-            timing.append([name, 'MB (flow + IMH)', n_grid, f'{mb_calls.sum() / n_grid:.3f}', '', '',
-                           f'{mb_calls.sum() / 60:.3f} ({len(mb_calls)} batched calls)', 'GPU'])  # fmt: skip
-            full = (
-                len(nuts) == n_grid
-            )  # NUTS on every Normal-slope point: measured, not extrapolated
-            grid_min = (nuts.duration_s.sum() if full else nuts.duration_s.mean() * n_grid) / 60
-            timing.append([name, f'NUTS ({NUTS_CHAINS} chains, {NUTS_CHAINS} cores per fit)', len(nuts),
-                           f'{nuts.duration_s.median():.1f}', f'{nuts.duration_s.max():.1f}',
-                           f'{nuts.duration_s.sum() * NUTS_CHAINS / 3600:.2f}',
-                           f'{grid_min:.0f} ({"measured" if full else "extrapolated"}, {NUTS_CHAINS} cores)',
-                           'cluster CPU'])  # fmt: skip
-        fmt = dict(tablefmt='pipe', floatfmt='.3g')
-        parts = [
-            '# E2: R-INLA on the Normal-slope prior grids',
-            '## Agreement with NUTS, Normal-slope sub-grid (median ± MAD; flag: |Δmed|/sd > '
-            f'{KEY_Z_MAX} or width ratio outside {list(WIDTH_RATIO_RANGE)})\n\n'
-            + tabulate(agree, headers=['dataset', 'method', 'n', *metric_cols.values(), 'flagged'], **fmt),
-            '## Timing\n\n'
-            + tabulate(timing, headers=['dataset', 'method', 'fits', 'median s per prior', 'max s',
-                                        'core-h', 'full grid wall [min]', 'CPU'], **fmt),
-            '## Disagreement by slope scale (sub-grid)\n\n'
-            + tabulate(by_tau, headers=['dataset', 'method', 'priors', 'n', '|Δmed|/sd', 'σ-ratio', 'flagged'], **fmt),
-            '## Flagged priors\n\n'
-            + (tabulate(flagged, headers=['dataset', 'method', 'point', 'τ_β', 'SD prior', 'key median',
-                                          'key median NUTS', '|Δmed|/sd', 'width ratio', 'σ-ratio'], **fmt)
-               if flagged else 'none'),
-            f'## Failures (timeout {INLA_TIMEOUT_S} s)\n\n'
-            + tabulate(fail, headers=['dataset', 'method', 'fits', 'failed', 'timeouts', 'other failures'], **fmt),
-        ]  # fmt: skip
-        path = self.resultPath('_inla.md')
-        path.write_text('\n\n'.join(parts) + '\n')
-        logger.info('saved %s', path)
-
-    # --------------------------------------------------------------------------
     # plot
 
     def plot(self) -> None:
@@ -1371,36 +1171,20 @@ class PriorSensitivity:
         for ax, name in zip(axes[0], names):
             ev = pd.read_csv(self.resultPath(f'_evidence_{name}.csv'))
             meta = self.meta[name]
-            f, s, ts, tb = (
-                'normal',
-                'halfnormal',
-                meta['nuts_sd']['halfnormal'],
-                meta['fig_tau_beta'],
-            )
+            ev = ev[ev.ffx_family == 'normal']
+            ts, tb = meta['nuts_sd']['halfnormal'], meta['fig_tau_beta']
             ref = ev[
-                (ev.ffx_family == f)
-                & (ev.sigma_family == s)
+                (ev.sigma_family == 'halfnormal')
                 & np.isclose(ev.tau_sigma, ts)
                 & np.isclose(ev.tau_beta, tb)
             ]
             for (sfam, stau), color in zip(meta['nuts_sd'].items(), (C_MB, PALETTE[0])):
-                for fam, ls, marker, mfc in (('normal', '-', 'o', C_NUTS),):
-                    sl = ev[
-                        (ev.sigma_family == sfam)
-                        & np.isclose(ev.tau_sigma, stau)
-                        & (ev.ffx_family == fam)
-                    ].sort_values('tau_beta')
-                    ax.plot(sl.tau_beta, sl.logev_is - ref.logev_is.item(), color=color, ls=ls, lw=1.6,
-                            label=f'MB IS, {fam}, {sfam}({stau:g})')  # fmt: skip
-                    ax.plot(
-                        sl.tau_beta,
-                        sl.logev_bridge - ref.logev_bridge.item(),
-                        marker=marker,
-                        mfc=mfc,
-                        color=C_NUTS,
-                        ls='',
-                        ms=4.5,
-                    )
+                sl = ev[(ev.sigma_family == sfam) & np.isclose(ev.tau_sigma, stau)]
+                sl = sl.sort_values('tau_beta')
+                ax.plot(sl.tau_beta, sl.logev_is - ref.logev_is.item(), color=color, lw=1.6,
+                        label=f'MB IS, normal, {sfam}({stau:g})')  # fmt: skip
+                ax.plot(sl.tau_beta, sl.logev_bridge - ref.logev_bridge.item(), marker='o',
+                        color=C_NUTS, ls='', ms=4.5)  # fmt: skip
             ax.plot(
                 [],
                 [],
@@ -1441,8 +1225,6 @@ if __name__ == '__main__':
         'analyze': study.analyze,
         'evidence': study.evidence,
         'plot': study.plot,
-        'inla': study.fitInla,
-        'inla_report': study.reportInla,
     }
     for stage in cfg.stages:
         stages[stage]()
