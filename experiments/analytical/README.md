@@ -7,7 +7,7 @@ estimator in `metabeta/analytical/`.
 Active scripts
 --------------
 
-Use `uv run python -u ...` for analytical benchmarks and R-INLA comparisons. Several runs
+Use `uv run python -u ...` for analytical benchmarks. Several runs
 take minutes to hours, and unbuffered output keeps completed dataset blocks visible.
 
 - `glmm_required_benchmark.py` — canonical regression gate. Run before any
@@ -25,14 +25,6 @@ take minutes to hours, and unbuffered output keeps completed dataset blocks visi
 - `glmm_raw_diagnostic.py` — oracle attribution reference. Run this when
   investigating whether a raw-stage change would close the BLUP gap. Answers
   "which stage limits accuracy?" via oracle sigma(Eps), beta, and Psi substitutions.
-
-- `glmm_inla_comparison.py` — R-INLA reference baseline. Compares the full
-  analytical pipeline against R-INLA on Bernoulli or Normal datasets. Supports
-  `--analytical-methods raw,current` so normal datasets can compare `lmmNormal`
-  against the retained EB-refined normal path and R-INLA.
-  Uncorrelated datasets (eta_rfx=0) use independent iid terms with PC priors
-  matching HalfNormal(tau_rfx). Correlated datasets (eta_rfx>0, q=2) use the
-  iid2d model with a Wishart prior. Reports matched NRMSE and wall time.
 
 Reference files
 ---------------

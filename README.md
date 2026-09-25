@@ -72,6 +72,9 @@ redrawn from their conditional, so the local posterior network (the main cost on
 skipped entirely. Per-dataset acceptance rates and a suggested pool size are reported in
 `result.safeguards`. If the suggestion exceeds the `n_samples` you requested, rerun with
 the larger value (or pass `refine=False` to keep the raw flow posterior).
+On a MacBook (Apple M3 CPU), the refined posterior with 4,000 draws returns in a fraction of
+a second per dataset for all three outcome families at representative dataset sizes; on a
+GPU the same call takes about a tenth of a second.
 
 See [demos/intro.ipynb](demos/intro.ipynb) for the full `sleepstudy`
 walkthrough and [demos/priors.ipynb](demos/priors.ipynb) for an exemplary prior-sensitivity

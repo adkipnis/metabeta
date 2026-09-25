@@ -169,7 +169,7 @@ def refineBernoulliNestedBeta(
     n_final: int = 3,
     damping: float = 0.7,
 ) -> dict[str, torch.Tensor]:
-    """Refine β via nested Newton: re-converge b̂_g at each β step (INLA-style). Ψ is held fixed at the nAGQ estimate."""
+    """Refine β via nested Newton: re-converge b̂_g at each β step. Ψ is held fixed at the nAGQ estimate."""
     d = Xm.shape[-1]
     q = Zm.shape[-1]
     if d == 0 or n_beta_steps <= 0:

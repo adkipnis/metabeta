@@ -15,7 +15,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--config', type=str)
 
     # common
-    parser.add_argument('--method', type=str, default='nuts', help='nuts|advi|inla|laplace')
+    parser.add_argument('--method', type=str, default='nuts', help='nuts|advi|laplace')
     parser.add_argument('--idx', type=int, default=0)
     parser.add_argument('--reintegrate', action='store_true')
     parser.add_argument('--partition', type=str, default='test', choices=['train', 'test', 'valid'])
@@ -40,17 +40,10 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--optimizer', type=str, default='LBFGS',
                         help='Accepted for Laplace compatibility; scratch backend uses LBFGS')
 
-    # INLA args
-    parser.add_argument('--n', type=int, default=None, help='Number of datasets to fit/reintegrate (INLA only; default: full batch)')
     parser.add_argument('--force', action='store_true',
-                        help='Overwrite existing fit output files (INLA/Laplace only)')
-    parser.add_argument('--re-correlation', dest='re_correlation', default='diagonal', choices=['auto', 'diagonal'])
-    parser.add_argument('--timeout', dest='timeout_s', type=int, default=120)
-    parser.add_argument('--idx-range', dest='idx_range', type=int, nargs=2, default=None,
-                        metavar=('START', 'END'),
-                        help='INLA only: fit indices [START, END) in one process, reusing one worker (overrides --idx)')
+                        help='Overwrite existing fit output files (Laplace only)')
 
-    return setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets (NUTS, ADVI, INLA, or Laplace).')
+    return setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets (NUTS, ADVI, or Laplace).')
 # fmt: on
 
 
@@ -75,11 +68,7 @@ if __name__ == '__main__':
         ('diagonal', False),
         ('maxeval', 200),
         ('optimizer', 'LBFGS'),
-        ('re_correlation', 'diagonal'),
-        ('timeout_s', 120),
-        ('n', None),
         ('force', False),
-        ('idx_range', None),
     ]:
         if not hasattr(cfg, _k):
             setattr(cfg, _k, _v)
@@ -92,17 +81,7 @@ if __name__ == '__main__':
         print('error: --epoch is required when --partition train', file=sys.stderr)
         sys.exit(1)
 
-    if cfg.method == 'inla':
-        from metabeta.simulation.inla import InlaFitter
-
-        fitter = InlaFitter(cfg)
-        if cfg.reintegrate:
-            fitter.reintegrate()
-        elif cfg.idx_range is not None:
-            fitter.go_range(cfg.idx_range[0], cfg.idx_range[1])
-        else:
-            fitter.go()
-    elif cfg.method == 'laplace':
+    if cfg.method == 'laplace':
         from metabeta.simulation.laplace import LaplaceFitter
 
         fitter = LaplaceFitter(cfg)

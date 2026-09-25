@@ -4,7 +4,6 @@ __pycache__
 archive
 benchmarks
 outputs
-inla_runs
 metabeta.egg-info
 parquet
 raw

@@ -78,7 +78,7 @@ def setup() -> argparse.Namespace:
                              'dropped by the capacity filter).')
     parser.add_argument('--prefix',     type=str, default='latest')
     parser.add_argument('--device',     type=str, default='cpu')
-    parser.add_argument('--n_samples',  type=int, default=1000)
+    parser.add_argument('--n_samples',  type=int, default=4000)
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--summary_chunk_size', type=int, default=1,
                         help='Datasets per chunk for posterior predictive / LOO summaries')
