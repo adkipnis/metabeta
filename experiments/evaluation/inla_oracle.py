@@ -1,9 +1,9 @@
 """
 E4: R-INLA next to MB, NUTS, ADVI and LA on the oracle benchmarks.
 
-Runs oracle_posterior.evaluateRegime on every (family, size) set with the regime-matched
-checkpoints (condition_number.SIZE_MODELS, prefix latest, 1000 MB draws, seed 0 — the Table 1
-caches), and writes the E4 deliverables to experiments/results/:
+Runs oracle_posterior.evaluateRegime on every (family, size) set with the checkpoints behind
+Api.from_pretrained (API_MODELS, prefix best, 4000 MB draws, seed 0), and writes the E4
+deliverables to experiments/results/:
 
     inla_oracle_{n,b,p}_{size}.csv   one row per dataset and method: per-dataset RMSE by
                                      parameter class, LOO-NLL, wall time, failed/converged
@@ -36,7 +36,7 @@ import torch
 from tabulate import tabulate
 
 # sibling experiment scripts (this directory is sys.path[0] at run time)
-from condition_number import LF_FROM_FAM, SIZE_MODELS
+from condition_number import LF_FROM_FAM
 from oracle_posterior import METRICS, _fmtMd, _fmtTex, evaluateRegime
 from metabeta.simulation.inla import INLA_DEFAULT_TIMEOUT_S
 from metabeta.utils.device import setDevice
@@ -47,6 +47,16 @@ from metabeta.utils.sampling import setSeed
 
 logger = logging.getLogger(__name__)
 
+# Sources of the released joint checkpoints (HF adkipnis/metabeta@v1, metabeta-{family}.pt,
+# submodels[i]['source']), all with prefix best.
+API_MODELS: dict[str, dict[str, str]] = {
+    fam: {size: f'data={size}-{fam}-mixed_model=large_seed={seed}' for size, seed in seeds.items()}
+    for fam, seeds in {
+        'n': {'small': 13, 'medium': 14, 'large': 9, 'huge': 16},
+        'b': {'small': 6, 'medium': 3, 'large': 4, 'huge': 8},
+        'p': {'small': 4, 'medium': 11, 'large': 6, 'huge': 9},
+    }.items()
+}
 FAMILY_NAMES = {'n': 'normal', 'b': 'bernoulli', 'p': 'poisson'}
 FAMILY_LABELS = {'n': 'Gaussian', 'b': 'Bernoulli', 'p': 'Poisson'}
 # Table methods in display order; 'MB' is the default pipeline (flow + family IMH), the raw
@@ -65,11 +75,11 @@ CSV_NAMES = {
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='E4: INLA on the oracle benchmarks')
-    parser.add_argument('--sizes',    nargs='+', default=['small', 'medium'])
+    parser.add_argument('--sizes',    nargs='+', default=['small', 'medium', 'large', 'huge'])
     parser.add_argument('--families', nargs='+', default=['n', 'b', 'p'], choices=list(LF_FROM_FAM))
     parser.add_argument('--device',   type=str, default='cpu')
-    parser.add_argument('--prefix',   type=str, default='latest')
-    parser.add_argument('--n_samples',  type=int, default=1000)
+    parser.add_argument('--prefix',   type=str, default='best')
+    parser.add_argument('--n_samples',  type=int, default=4000)
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--seed',     type=int, default=0)
     parser.add_argument('--outdir',   type=str, default=str(RESULTS_DIR))
@@ -100,9 +110,6 @@ class InlaOracle:
         for fam in self.cfg.families:
             self.rows[fam] = {}
             for size in self.cfg.sizes:
-                if size not in SIZE_MODELS[fam]:
-                    logger.warning('%s-%s: no regime-matched checkpoint, skipping', size, fam)
-                    continue
                 self.rows[fam][size] = self._evaluateSet(fam, size)
                 if self.device.type == 'cuda':
                     torch.cuda.empty_cache()
@@ -111,7 +118,7 @@ class InlaOracle:
         cfg = self.cfg
         data_id = f'{size}-{fam}-sampled'
         data_dir = DATA_DIR / data_id
-        ckpt_dir = CHECKPOINT_DIR / SIZE_MODELS[fam][size]
+        ckpt_dir = CHECKPOINT_DIR / API_MODELS[fam][size]
         model, model_cfg = loadModel(ckpt_dir, cfg.prefix, self.device)
         lf = model_cfg.likelihood_family
         by_subset = evaluateRegime(
