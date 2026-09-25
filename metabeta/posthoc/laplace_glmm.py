@@ -399,6 +399,80 @@ def logMarginalLikelihoodLaplace(
     return ll, modes, chol_H
 
 
+class _GroupIntegrand:
+    """Per-group integrand of p(y_j | θ_g) = ∫ p(y_j | θ_g, b) N(b; 0, Σ) db around its Laplace
+    Gaussian N(b*_j, H_j⁻¹), shared by the IS² estimate and AGQ.
+
+    Owns the whitening: candidates are b = b* + U⁻ᵀ z (H = U Uᵀ) or prior draws L z, and
+    `logWeight` returns log p(y_j, b | θ_g) − log r(b) for the proposal r = (1 − α) Laplace +
+    α prior. The two Gaussians' (q/2)·log 2π terms cancel, and padded rfx dims cancel between
+    their log-dets as in logMarginalLikelihoodLaplace.
+    """
+
+    def __init__(
+        self,
+        ffx: Tensor,  # (b, s, d)
+        sigma_rfx: Tensor,  # (b, s, q)
+        sigma_eps: Tensor,  # (b, s)
+        y: Tensor,  # (b, m, n, 1)
+        X: Tensor,  # (b, m, n, d)
+        Z: Tensor,  # (b, m, n, q)
+        mask_n: Tensor,  # (b, m, n, 1)
+        mask_m: Tensor,  # (b, m, 1)
+        likelihood_family: int,
+        L_corr: Tensor | None,
+        init: Tensor | None,
+        n_newton: int,
+        defensive: float,
+    ) -> None:
+        self.modes, self.chol_H, _, L_rfx, _ = laplaceRfxModes(
+            ffx,
+            sigma_rfx,
+            sigma_eps,
+            y,
+            X,
+            Z,
+            mask_n,
+            mask_m,
+            likelihood_family,
+            L_corr=L_corr,
+            init=init,
+            n_newton=n_newton,
+        )
+        self.y, self.sigma_eps, self.mask_n = y, sigma_eps, mask_n
+        self.likelihood_family = likelihood_family
+        self.defensive = defensive
+        self.Z_m = Z * mask_n
+        self.mu_ffx = torch.einsum('bmnd,bsd->bmns', X, ffx)  # (b, m, n, s)
+        self.log_det_U = self.chol_H.diagonal(dim1=-2, dim2=-1).log().sum(-1)  # (b, m, s)
+        log_det_L = L_rfx.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8).log().sum(-1)
+        self.log_det_L = log_det_L[:, None]  # (b, 1, s)
+        self.L_rfx = L_rfx.unsqueeze(1)  # (b, 1, s, q, q)
+
+    def laplaceDraw(self, z: Tensor) -> Tensor:
+        """b* + U⁻ᵀ z for standard-normal (or quadrature-node) z (b, m, s, q)."""
+        shift = torch.linalg.solve_triangular(self.chol_H.mT, z.unsqueeze(-1), upper=True)
+        return self.modes + shift.squeeze(-1)
+
+    def priorDraw(self, z: Tensor) -> Tensor:
+        return (self.L_rfx @ z.unsqueeze(-1)).squeeze(-1)
+
+    def logWeight(self, cand: Tensor) -> Tensor:
+        """log p(y_j, cand | θ_g) − log r(cand), (b, m, s)."""
+        white_lap = (self.chol_H.mT @ (cand - self.modes).unsqueeze(-1)).squeeze(-1)
+        white_pri = torch.linalg.solve_triangular(self.L_rfx, cand.unsqueeze(-1), upper=False)
+        log_lap = -0.5 * white_lap.square().sum(-1) + self.log_det_U
+        log_pri = -0.5 * white_pri.squeeze(-1).square().sum(-1) - self.log_det_L
+        log_r = log_lap
+        if self.defensive > 0:
+            log_r = torch.logaddexp(
+                math.log1p(-self.defensive) + log_lap, math.log(self.defensive) + log_pri
+            )
+        eta = self.mu_ffx + torch.einsum('bmnq,bmsq->bmns', self.Z_m, cand)
+        ll = _llPerGroup(eta, self.y, self.sigma_eps, self.mask_n, self.likelihood_family)
+        return ll + log_pri - log_r
+
+
 def logMarginalLikelihoodIS2(
     ffx: Tensor,  # (b, s, d)
     sigma_rfx: Tensor,  # (b, s, q)
@@ -432,7 +506,7 @@ def logMarginalLikelihoodIS2(
     probability ∝ its weight (single-item weighted reservoir sampling over k), an exact
     draw from p(rfx_j | θ_g, y_j) under the pseudo-marginal extended target.
     """
-    modes, chol_H, _, L_rfx, _ = laplaceRfxModes(
+    f = _GroupIntegrand(
         ffx,
         sigma_rfx,
         sigma_eps,
@@ -442,39 +516,18 @@ def logMarginalLikelihoodIS2(
         mask_n,
         mask_m,
         likelihood_family,
-        L_corr=L_corr,
-        init=init,
-        n_newton=n_newton,
+        L_corr,
+        init,
+        n_newton,
+        defensive,
     )
-    Z_m = Z * mask_n
-    mu_ffx = torch.einsum('bmnd,bsd->bmns', X, ffx)  # (b, m, n, s)
-    # log-dets of the two Gaussian components; their (q/2)·log 2π terms cancel in the weight,
-    # and padded rfx dims cancel between them as in logMarginalLikelihoodLaplace
-    log_det_U = chol_H.diagonal(dim1=-2, dim2=-1).log().sum(-1)  # (b, m, s)
-    log_det_L = L_rfx.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8).log().sum(-1)[:, None]  # (b, 1, s)
-    L_rfx_m = L_rfx.unsqueeze(1)  # (b, 1, s, q, q)
-
-    log_sum = torch.full_like(log_det_U, -torch.inf)  # (b, m, s) running logsumexp of weights
-    rfx = torch.zeros_like(modes)  # (b, m, s, q)
+    log_sum = torch.full_like(f.log_det_U, -torch.inf)  # (b, m, s) running logsumexp
+    rfx = torch.zeros_like(f.modes)  # (b, m, s, q)
     for _ in range(n_inner):
-        eps = torch.randn_like(modes).unsqueeze(-1)  # (b, m, s, q, 1)
-        b_lap = modes + torch.linalg.solve_triangular(chol_H.mT, eps, upper=True).squeeze(-1)
-        b_pri = (L_rfx_m @ eps).squeeze(-1)
-        from_prior = torch.rand_like(log_det_U) < defensive  # (b, m, s)
-        cand = torch.where(from_prior.unsqueeze(-1), b_pri, b_lap)  # (b, m, s, q)
-
-        white_lap = (chol_H.mT @ (cand - modes).unsqueeze(-1)).squeeze(-1)
-        white_pri = torch.linalg.solve_triangular(L_rfx_m, cand.unsqueeze(-1), upper=False)
-        log_lap = -0.5 * white_lap.square().sum(-1) + log_det_U
-        log_pri = -0.5 * white_pri.squeeze(-1).square().sum(-1) - log_det_L
-        if defensive > 0:
-            log_r = torch.logaddexp(math.log1p(-defensive) + log_lap, math.log(defensive) + log_pri)
-        else:
-            log_r = log_lap
-
-        eta = mu_ffx + torch.einsum('bmnq,bmsq->bmns', Z_m, cand)
-        log_w = _llPerGroup(eta, y, sigma_eps, mask_n, likelihood_family) + log_pri - log_r
-
+        z = torch.randn_like(f.modes)
+        from_prior = torch.rand_like(f.log_det_U) < defensive  # (b, m, s)
+        cand = torch.where(from_prior.unsqueeze(-1), f.priorDraw(z), f.laplaceDraw(z))
+        log_w = f.logWeight(cand)
         log_sum_new = torch.logaddexp(log_sum, log_w)
         take = torch.rand_like(log_w) < torch.exp(log_w - log_sum_new)  # NaN (both −inf) → keep
         rfx = torch.where(take.unsqueeze(-1), cand, rfx)
@@ -482,6 +535,62 @@ def logMarginalLikelihoodIS2(
 
     ll = ((log_sum - math.log(n_inner)) * mask_m).sum(dim=1)  # (b, s)
     return ll, rfx * mask_m.unsqueeze(-1)
+
+
+def logMarginalLikelihoodAGQ(
+    ffx: Tensor,  # (b, s, d)
+    sigma_rfx: Tensor,  # (b, s, q)
+    sigma_eps: Tensor,  # (b, s)
+    y: Tensor,  # (b, m, n, 1)
+    X: Tensor,  # (b, m, n, d)
+    Z: Tensor,  # (b, m, n, q)
+    mask_n: Tensor,  # (b, m, n, 1)
+    mask_m: Tensor,  # (b, m, 1)
+    likelihood_family: int,
+    n_nodes: int,
+    L_corr: Tensor | None = None,
+    init: Tensor | None = None,
+    n_newton: int = 3,
+) -> Tensor:
+    """Σ_j log p(y_j | θ_g) by adaptive Gauss-Hermite quadrature (AGQ). Returns (b, s).
+
+    Tensor-product probabilists' Gauss-Hermite nodes z_i, mapped through the Laplace Gaussian
+    b_i = b* + U⁻ᵀ z_i (Liu & Pierce 1994; lme4's nAGQ): p(y_j | θ_g) ≈ Σ_i ν_i p(y_j, b_i | θ_g)
+    / N(b_i; b*, H⁻¹), i.e. the IS² sum with deterministic nodes. n_nodes = 1 is the Laplace
+    approximation; the error decays geometrically in n_nodes, which makes AGQ the evidence
+    reference for GLMMs. Rfx dims unused by every dataset get a single node (exact there),
+    so the cost is n_nodes^q_active likelihood passes.
+    """
+    from numpy.polynomial.hermite_e import hermegauss
+
+    f = _GroupIntegrand(
+        ffx,
+        sigma_rfx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        likelihood_family,
+        L_corr,
+        init,
+        n_newton,
+        defensive=0.0,
+    )
+    z_1d, w_1d = hermegauss(n_nodes)
+    z_1d = torch.as_tensor(z_1d, dtype=ffx.dtype)
+    log_w_1d = torch.as_tensor(w_1d / w_1d.sum(), dtype=ffx.dtype).log()
+    active = (Z != 0).flatten(0, 2).any(0)  # (q,)
+    axes = [(z_1d, log_w_1d) if a else (z_1d.new_zeros(1), log_w_1d.new_zeros(1)) for a in active]
+    nodes = torch.cartesian_prod(*[z for z, _ in axes]).view(-1, len(axes))  # (P, q)
+    log_nu = torch.cartesian_prod(*[w for _, w in axes]).view(-1, len(axes)).sum(-1)  # (P,)
+
+    log_sum = torch.full_like(f.log_det_U, -torch.inf)  # (b, m, s)
+    for z, lw in zip(nodes, log_nu):
+        cand = f.laplaceDraw(z.expand_as(f.modes))
+        log_sum = torch.logaddexp(log_sum, lw + f.logWeight(cand))
+    return (log_sum * mask_m).sum(dim=1)
 
 
 class LaplaceImportanceSampler(ImportanceSampler):
