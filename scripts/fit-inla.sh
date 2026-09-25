@@ -12,29 +12,32 @@
 #SBATCH --mem=8G
 #SBATCH --time=00:30:00
 
-# One R-INLA fit per array task (fits/<partition>_inla_<idx>.npz), 4000 joint draws, one
-# INLA thread. Runs natively, not in the apptainer image: R-INLA lives in the host R library
+# One R-INLA fit per array task (fits/<partition>_inla_matched_<idx>.npz with the default
+# --priors matched; _inla_ with pc), 4000 joint draws, one INLA thread. Runs natively, not in
+# the apptainer image: R-INLA lives in the host R library
 # (~/R/x86_64-redhat-linux-gnu-library/4.6), its GDAL/GEOS/PROJ in ~/usr (set by ~/.bashrc).
-# Afterwards aggregate into <partition>.inla.npz on an interactive node (~4x the rfx block
-# in RAM, 64G is ample):
-#   python -m metabeta.simulation.inla --size S --family F --ds_type sampled --reintegrate
+# Afterwards aggregate into <partition>.inla_matched.npz on an interactive node (~4x the rfx
+# block in RAM, 64G is ample):
+#   python -m metabeta.simulation.inla --size S --family F --ds_type sampled --priors matched --reintegrate
 
 set -euo pipefail
 
 PARTITION="test"
 RE_CORRELATION="auto"
+PRIORS="matched"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --data_id) TAG="$2"; shift 2 ;;
         --partition) PARTITION="$2"; shift 2 ;;
         --re-correlation) RE_CORRELATION="$2"; shift 2 ;;
+        --priors) PRIORS="$2"; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
 
 [[ -z "${TAG:-}" ]] && {
-    echo "Usage: $0 --data_id <size-family-ds_type> [--partition test|valid] [--re-correlation auto|diagonal]"
+    echo "Usage: $0 --data_id <size-family-ds_type> [--partition test|valid] [--re-correlation auto|diagonal] [--priors matched|pc]"
     exit 1
 }
 
@@ -69,4 +72,5 @@ python -m metabeta.simulation.inla \
   --partition "$PARTITION" \
   --idx "${SLURM_ARRAY_TASK_ID}" \
   --draws 4000 \
-  --re-correlation "$RE_CORRELATION"
+  --re-correlation "$RE_CORRELATION" \
+  --priors "$PRIORS"
