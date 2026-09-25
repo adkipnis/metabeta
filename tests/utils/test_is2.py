@@ -9,8 +9,13 @@ import torch
 from torch import distributions as D
 from torch.nn import functional as F
 
-from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler, logMarginalLikelihoodIS2
+from metabeta.posthoc.laplace_glmm import (
+    LaplaceImportanceSampler,
+    logMarginalLikelihoodAGQ,
+    logMarginalLikelihoodIS2,
+)
 from metabeta.posthoc.metropolis import MetropolisSampler
+from metabeta.utils.families import logMarginalLikelihoodNormal
 from metabeta.utils.results import Proposal
 
 
@@ -262,3 +267,72 @@ def test_pseudo_marginal_imh_targets_exact_posterior():
     assert abs(out.ffx.mean().item() - want_beta) < 0.04
     assert abs(out.sigma_rfx.mean().item() - want_sigma) < 0.03
     assert abs(out.rfx[0, 0].mean().item() - want_b0) < 0.04
+
+
+# ---------------------------------------------------------------------------
+# Adaptive Gauss-Hermite quadrature (AGQ): the deterministic evidence reference
+# ---------------------------------------------------------------------------
+
+
+def _slopeProblem(likelihood_family, seed=6):
+    """Two active groups with random intercept + slope (q = 2), one padded group, one padded
+    rfx dim (q_max = 3); b = 1, s = 2 global draws."""
+    g = torch.Generator().manual_seed(seed)
+    m, n, s = 3, 8, 2
+    x = torch.randn(m, n, 1, generator=g)
+    X = torch.cat([torch.ones(m, n, 1), x], -1).double()[None]
+    Z = torch.cat([torch.ones(m, n, 1), x, torch.zeros(m, n, 1)], -1).double()[None]
+    ffx = torch.tensor([[[0.2, -0.4], [-0.3, 0.6]]], dtype=torch.float64)
+    sigma_rfx = torch.tensor([[[0.9, 0.6, 0.0], [1.4, 0.3, 0.0]]], dtype=torch.float64)
+    sigma_eps = torch.tensor([[0.7, 1.1]], dtype=torch.float64)
+    if likelihood_family == 0:
+        y = torch.randn(1, m, n, 1, generator=g).double()
+    elif likelihood_family == 1:
+        y = torch.bernoulli(torch.full((1, m, n, 1), 0.5), generator=g).double()
+    else:
+        y = torch.poisson(torch.full((1, m, n, 1), 2.0), generator=g).double()
+    mask_n = torch.ones(1, m, n, 1, dtype=torch.float64)
+    mask_m = torch.tensor([[[1.0], [1.0], [0.0]]], dtype=torch.float64)
+    return ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m
+
+
+def _grid2dLogMarginal(ffx, sigma_rfx, y, X, Z, mask_m, likelihood_family):
+    """Σ_j log ∫∫ p(y_j | b) N(b; 0, diag σ²) db over a dense 2D grid, per global draw (b, s)."""
+    u = torch.linspace(-7.0, 7.0, 561, dtype=torch.float64)  # b_k = σ_k u
+    log_du = math.log(float(u[1] - u[0]))
+    u1, u2 = torch.meshgrid(u, u, indexing='ij')
+    log_phi = -0.5 * (u1**2 + u2**2) - math.log(2 * math.pi)
+    out = torch.zeros(ffx.shape[:2], dtype=torch.float64)
+    for k in range(ffx.shape[1]):
+        s1, s2 = sigma_rfx[0, k, 0], sigma_rfx[0, k, 1]
+        for j in range(X.shape[1]):
+            if not mask_m[0, j, 0]:
+                continue
+            eta = (
+                (X[0, j] @ ffx[0, k])[None, None, :]
+                + (s1 * u1)[..., None] * Z[0, j, :, 0]
+                + (s2 * u2)[..., None] * Z[0, j, :, 1]
+            )
+            yj = y[0, j, :, 0]
+            if likelihood_family == 1:
+                ll = yj * eta - F.softplus(eta)
+            else:
+                ll = yj * eta - torch.exp(eta) - torch.lgamma(yj + 1.0)
+            out[0, k] += torch.logsumexp((ll.sum(-1) + log_phi).flatten(), 0) + 2 * log_du
+    return out
+
+
+@pytest.mark.parametrize('likelihood_family', [0, 1, 2])
+def test_agq_marginal_matches_exact_integral(likelihood_family):
+    ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m = _slopeProblem(likelihood_family)
+    got = logMarginalLikelihoodAGQ(
+        ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m, likelihood_family, n_nodes=12
+    )
+    if likelihood_family == 0:
+        want = logMarginalLikelihoodNormal(ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m)
+        atol = 1e-6
+    else:
+        want = _grid2dLogMarginal(ffx, sigma_rfx, y, X, Z, mask_m, likelihood_family)
+        atol = 1e-5  # Laplace (n_nodes=1) is off by 0.02-0.04 nats here
+    assert got.shape == (1, 2)
+    assert torch.allclose(got, want, atol=atol), (got, want)
