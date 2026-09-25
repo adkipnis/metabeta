@@ -51,7 +51,7 @@ Run with K=8, α=0.1 (before the α default moved to 0.01), S ∈ {1000, 2000, 4
 
 | nats, S=4000                     | Bernoulli | Poisson |
 |:---------------------------------|----------:|--------:|
-| bridgeNuts swap noise, median    | 0.013     | —       |
+| bridgeNuts swap noise, median    | 0.013     | 0.008   |
 | IS² − bridge, median / q90 abs   | 0.009 / 0.039 | 0.009 / 0.026 |
 | IS² − bridge, worst              | 0.057     | 0.079   |
 | Laplace − bridge, median / q90   | 0.040 / 0.374 | 0.014 / 0.086 |
