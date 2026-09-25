@@ -208,9 +208,11 @@ def _precPrior(family: int, tau: float, priors: str) -> str:
         2: f'sigma / {tau:.10g}',
     }[family]
     const = log_norm - math.log(tau) - math.log(2)
+    # Start the mode search at sigma = tau: from INLA's default (theta = 4) the half-t prior,
+    # whose tail decays only polynomially, let it run off to precision 0 on weak rfx data
     return (
         f"list(prior='expression: sigma = exp(-theta/2);"
-        f" return({const:.10g} - {kernel} - theta/2);')"
+        f" return({const:.10g} - {kernel} - theta/2);', initial={-2 * math.log(tau):.6f})"
     )
 
 
