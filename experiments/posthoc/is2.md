@@ -251,6 +251,12 @@ announced by the diagnostics; salamanders priors 7 and 69 now at z = 3.0–3.2 M
 1.6–2.0 → 1.6–2.8 s. Comparison panels and E2 figures copied into the paper; CPU seed reruns flag 12 and 7 (was
 13 and 8), five priors in all three runs, four fire a diagnostic (salamanders prior 69 silent).
 
+Data poverty (b/p, 4000 draws; OOM fixed in ee36baba): MB global c90 0.869–0.881 → 0.877–0.894;
+Poisson smallest-γ LOO-NLL 3.45 → 1.46 (NUTS 1.49), raw 36.2 → 58.3 (pool size). Fixed prior
+(b/p, same datasets and NUTS rows, paper filter of the E1 session reproduced exactly on the old CSVs):
+MB⁰ rows unchanged within 0.04; +IMH(P1) closer to NUTS (tight P0: Bernoulli σ-ratio 0.81 → 0.84,
+EACE_g 0.23 → 0.20; Poisson 0.96, 0.14 → 0.11), MB acceptance 0.47–0.52.
+
 ## Checkpoint prefix
 
 `--prefix latest` is the default we use (the checkpoint of the paper tables); evidence.py and
