@@ -166,7 +166,7 @@ class FixedPriorStudy:
         self.cfg = cfg
         self.family = cfg.family
         self.lf = LF_FROM_FAM[cfg.family]
-        self.method = posthocDefaults(self.lf)[0]   # imhMarginal (Normal) / imhLaplace (GLMM)
+        self.method = posthocDefaults(self.lf)[0]   # imhMarginal (Normal) / imhPM (GLMM)
         self.device = setDevice(cfg.device)
         self.outdir = Path(cfg.outdir)
         self.outdir.mkdir(parents=True, exist_ok=True)

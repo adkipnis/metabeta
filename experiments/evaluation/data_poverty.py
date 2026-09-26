@@ -475,7 +475,7 @@ def collectSize(cfg, size: str, device: torch.device) -> dict | None:
     proposal_nuts.rescale(batch['sd_y'])
     batch = rescaleData(batch)
 
-    imh_method = posthocDefaults(lf)[0]  # imhMarginal (Normal) / imhLaplace (Bernoulli/Poisson)
+    imh_method = posthocDefaults(lf)[0]  # imhMarginal (Normal) / imhPM (Bernoulli/Poisson)
     proposal_imh, _ = loadOrRefine(
         imh_method,
         proposal_mb,
