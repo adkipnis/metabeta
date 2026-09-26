@@ -110,7 +110,11 @@ from torch import Tensor
 
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
-from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler, sampleRfxLaplace
+from metabeta.posthoc.laplace_glmm import (
+    LaplaceImportanceSampler,
+    refreshRfxIS2,
+    sampleRfxLaplace,
+)
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.families import sampleRfxConditionalNormal
 from metabeta.utils.preprocessing import rescaleData
@@ -156,9 +160,12 @@ class MetropolisSampler:
         eps: float = 1e-12,
         n_eff_target: int | None = N_EFF_TARGET,  # None disables the pool-size suggestion
         n_inner: int = 0,  # 'laplace' only: IS² draws per group; > 0 makes the chain pseudo-marginal
+        rfx_refresh: bool = False,  # pseudo-marginal only: one iterated-SIR rfx move per kept state
     ) -> None:
         if n_inner > 0 and mode != 'laplace':
             raise ValueError("n_inner (pseudo-marginal IS² weights) requires mode='laplace'")
+        if rfx_refresh and n_inner == 0:
+            raise ValueError('rfx_refresh requires the pseudo-marginal chain (n_inner > 0)')
         if mode == 'marginal' and likelihood_family != 0:
             raise ValueError("mode='marginal' requires likelihood_family=0 (Normal)")
         if mode == 'laplace' and likelihood_family == 0:
@@ -174,6 +181,7 @@ class MetropolisSampler:
         self.has_sigma_eps = hasSigmaEps(likelihood_family)
         self.eps = eps
         self.n_eff_target = n_eff_target
+        self.rfx_refresh = rfx_refresh
 
         # Delegate all weight computation to ImportanceSampler.unnormalizedPosterior —
         # single source of truth shared with SNIS. 'marginal' uses the (correlated)
@@ -420,6 +428,25 @@ class MetropolisSampler:
             'local': {'samples': sl_out, 'log_prob': sl_out.new_zeros(b, m, s_out)},
         }
         out = Proposal(proposed, has_sigma_eps=proposal.has_sigma_eps, d_corr=d_corr)
+        if self.rfx_refresh:
+            # a rejected step repeats the state's rfx; an iterated-SIR move given θ_g, which
+            # leaves p(rfx | θ_g, y) invariant, gives each kept state its own draw
+            is_ = self._is
+            _, ffx, sigma_eps = is_._logPriorGlobals(out)
+            out.data['local']['samples'] = refreshRfxIS2(
+                ffx,
+                out.sigma_rfx,
+                sigma_eps,
+                is_.y,
+                is_.X,
+                is_.Z,
+                is_.mask_n,
+                is_.mask_m,
+                self.likelihood_family,
+                out.rfx,
+                is_.n_inner,
+                L_corr=is_._getLCorr(out),
+            )
         t1 = time.perf_counter()
         out.tpd = (proposal.tpd or 0.0) + (t1 - t0)
         diagnostics = {'accept_rate': accept_rate}
