@@ -30,12 +30,12 @@ imhLaplace   : IMH mode='laplace' (Bernoulli/Poisson only) — Laplace-marginal 
                after acceptance; the GLMM analog of Normal's imhMarginal. Added
                2026-07-29 for the large/huge regimes where isLaplace's PSIS guardrail
                falls back on 13-50% of datasets (rejection has no fallback mode).
-imhPM        : pseudo-marginal IMH (Bernoulli/Poisson only) — imhLaplace with the Laplace
-               marginal replaced by its unbiased IS² estimate (IMH_N_INNER draws per group,
-               posthoc/laplace_glmm.py), so the chain targets the exact posterior; rfx are
-               the kept states' weight-selected inner draws. Added 2026-09-25.
-imhPMr       : imhPM plus one iterated-SIR rfx move per kept state (rfx_refresh), so
-               rejected steps no longer repeat the rfx vector. Added 2026-09-26.
+imhPM        : pseudo-marginal IMH (Bernoulli/Poisson only; the GLMM default since
+               2026-09-26) — imhLaplace with the Laplace marginal replaced by its unbiased IS²
+               estimate (IS2_N_INNER draws per group, posthoc/laplace_glmm.py), so the chain
+               targets the exact posterior; each kept state's rfx get one iterated-SIR move,
+               so rejected steps do not repeat the rfx vector (without it the rfx were
+               under-covered at large/huge acceptance 0.14–0.35). Added 2026-09-25.
 svgd         : SVGD with per-dim bandwidth + cosine LR decay — opt in with --include-svgd,
                off by default (too slow to be practically useful: ~40s/dataset, and gives
                a fraction of a nat of marginal-log-p improvement over the flow samples it starts
@@ -105,7 +105,7 @@ from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import EvaluationSummary
 from metabeta.posthoc.importance import ImportanceSampler, weightsTag
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
-from metabeta.posthoc.metropolis import MetropolisSampler, suggestPoolSize
+from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler, suggestPoolSize
 from metabeta.posthoc.warmnuts import WarmNuts, _stackProposals, needsEscalation
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice
@@ -135,8 +135,8 @@ def setup() -> argparse.Namespace:
     p.add_argument('--batch-size', type=int, default=4, help='sub-batch size for torch-based methods')
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
     p.add_argument('--n-samples', type=int, default=4000, help='flow samples for torch-based methods (raw/is/svgd) and the IMH proposal pool (4 chains x n/4 steps); 4000 matches the paper benchmarks and the NUTS draw count')
-    p.add_argument('--skip', nargs='+', default=[], choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'imhPM', 'imhPMr', 'svgd', 'coldNuts', 'warmNuts'], help='conditions to skip (e.g. --skip is)')
-    p.add_argument('--only', nargs='+', default=None, choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'imhPM', 'imhPMr', 'svgd', 'coldNuts', 'warmNuts'], help='run only these conditions; results go to {family}_{size}_{only}.md so existing full-run mds are not overwritten')
+    p.add_argument('--skip', nargs='+', default=[], choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'imhPM', 'svgd', 'coldNuts', 'warmNuts'], help='conditions to skip (e.g. --skip is)')
+    p.add_argument('--only', nargs='+', default=None, choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'imhPM', 'svgd', 'coldNuts', 'warmNuts'], help='run only these conditions; results go to {family}_{size}_{only}.md so existing full-run mds are not overwritten')
     p.add_argument('--include-svgd', action='store_true', help='also run the (slow) SVGD condition')
     p.add_argument('--include-warmnuts', action='store_true', help='also run the warm-started NUTS condition (slow on the first pass; per-dataset fits are cached)')
     p.add_argument('--wn-refit', action='store_true', help='ignore cached warm-NUTS fits and re-sample')
@@ -460,7 +460,6 @@ def runIS(proposals, batches, full_batch, lf, full=False, marginal=False, rb_red
 IMH_N_CHAINS = 4
 IMH_N_STEPS = 250
 IMH_BURNIN = 25
-IMH_N_INNER = 8  # IS² draws per group for the pseudo-marginal condition (imhPM)
 
 
 def imhSampleCount(n_samples: int) -> tuple[int, int]:
@@ -478,7 +477,6 @@ def refineIMH(
     lf,
     n_steps=IMH_N_STEPS,
     n_inner=0,
-    rfx_refresh=False,
     device='cpu',
 ):
     """Run IMH on each sub-batch on `device`; return (merged CPU Proposal, accept rates)."""
@@ -495,7 +493,6 @@ def refineIMH(
             mode=mode,
             likelihood_family=lf,
             n_inner=n_inner,
-            rfx_refresh=rfx_refresh,
         )
         p_out, diag = sampler(p)
         p_out.to('cpu')
@@ -512,7 +509,6 @@ def runIMH(
     lf,
     n_steps=IMH_N_STEPS,
     n_inner=0,
-    rfx_refresh=False,
     device='cpu',
 ):
     t0 = time.perf_counter()
@@ -523,7 +519,6 @@ def runIMH(
         lf,
         n_steps=n_steps,
         n_inner=n_inner,
-        rfx_refresh=rfx_refresh,
         device=device,
     )
     t1 = time.perf_counter()
@@ -886,7 +881,6 @@ def main() -> None:
         'imhGlobal',
         'imhLaplace',
         'imhPM',
-        'imhPMr',
     ]
     if args.include_svgd:
         conditions.append('svgd')
@@ -965,7 +959,7 @@ def main() -> None:
             for cond in conditions:
                 if cond == 'isMarginal' and lf != 0:
                     continue  # exact marginal requires the Normal likelihood
-                laplace_conds = ('isLaplace', 'rbAttach', 'imhLaplace', 'imhPM', 'imhPMr')
+                laplace_conds = ('isLaplace', 'rbAttach', 'imhLaplace', 'imhPM')
                 if cond in laplace_conds and lf == 0:
                     continue  # Normal has the exact marginal — Laplace is for GLMMs
                 if cond == 'imhGlobal' and lf != 0:
@@ -1064,7 +1058,7 @@ def main() -> None:
                         device=args.device,
                     )
                     imh_refined['laplace'] = refined
-                elif cond in ('imhPM', 'imhPMr'):
+                elif cond == 'imhPM':
                     summary, diag, _ = runIMH(
                         'laplace',
                         imh_proposals,
@@ -1072,8 +1066,7 @@ def main() -> None:
                         full_batch,
                         lf,
                         n_steps=imh_n_steps,
-                        n_inner=IMH_N_INNER,
-                        rfx_refresh=cond == 'imhPMr',
+                        n_inner=IS2_N_INNER,
                         device=args.device,
                     )
                 elif cond == 'warmNuts':
