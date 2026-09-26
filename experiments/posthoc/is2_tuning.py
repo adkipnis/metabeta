@@ -102,9 +102,9 @@ class Tuning:
         for k in self.args.inner:
             for alpha in self.args.defensive:
                 t0 = time.perf_counter()
-                a, _ = logMarginalLikelihoodIS2(*args, k, defensive=alpha, **kwargs)
+                a, *_ = logMarginalLikelihoodIS2(*args, k, defensive=alpha, **kwargs)
                 dt = time.perf_counter() - t0
-                b, _ = logMarginalLikelihoodIS2(*args, k, defensive=alpha, **kwargs)
+                b, *_ = logMarginalLikelihoodIS2(*args, k, defensive=alpha, **kwargs)
                 sd = float((w * (a - b)[0].square() / 2).sum().sqrt())
                 rows.append(
                     {'idx': i, 'm': int(batch['m']), 'K': k, 'alpha': alpha, 'sd': sd, 'sec': dt}
