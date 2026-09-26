@@ -198,6 +198,9 @@ pool index, instead of a second Newton search (which also makes its proposal ind
 the draw being refreshed, as i-SIR requires). M3 CPU, same settings: imhPMr 0.20–0.27 s
 (small/medium), 0.56–0.70 s (large/huge), PMr/Lap 2.1–2.6 (was 2.9–3.6) → sub-second in every
 regime, so imhPMr qualifies as the CPU default too, pending the cluster ablation rerun.
+Cluster after mode reuse: GPU imhLaplace 0.10–0.12 s, imhPM 0.11–0.12 s, imhPMr 0.11–0.14 s
+(PMr/Lap 1.03–1.13, was 1.2–1.3); CPU node (4 cores) imhLaplace 0.34–0.85 s, imhPM
+0.60–1.49 s, imhPMr 0.88–2.14 s (PMr/Lap 2.5–2.9, was 3.2–3.7).
 
 ## Checkpoint prefix
 
