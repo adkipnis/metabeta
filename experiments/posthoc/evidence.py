@@ -44,6 +44,9 @@ Run from the repo root:
     # after all sizes ran (possibly on different nodes): rebuild summaries + the combined table
     uv run python experiments/posthoc/evidence.py --sizes small medium large huge --summarize-only
     uv run python experiments/posthoc/evidence.py --family bernoulli --sizes small --n-datasets 32
+    # parallel shards (one process each), then merge + summarize
+    uv run python experiments/posthoc/evidence.py --family bernoulli --sizes small --n-datasets 512 --shard 3 --n-shards 16
+    uv run python experiments/posthoc/evidence.py --family bernoulli --sizes small --n-datasets 512 --summarize-only
 """
 
 import argparse
@@ -105,6 +108,9 @@ def setup() -> argparse.Namespace:
     p.add_argument('--pool-sizes', nargs='+', type=int, default=[1000, 2000, 4000], help='IS pool prefixes; the largest is drawn')
     p.add_argument('--n-bridge', type=int, default=2000, help='proposal draws per bridge run (posterior draws: half of the available)')
     p.add_argument('--nested', type=int, default=16, help='max number of q>=2 datasets for the nested comparison (0 disables)')
+    p.add_argument('--imh-bridge', type=int, default=64, help='run the full-model IMH bridge (a cross-check of the reduced-model reference) on the first n datasets only; nested datasets always get it')
+    p.add_argument('--shard', type=int, default=0, help='this process handles datasets i with i %% n_shards == shard')
+    p.add_argument('--n-shards', type=int, default=1, help='split the datasets over this many processes; --summarize-only merges the shard CSVs')
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--device', default='cpu', help='device for flow sampling; everything else runs on cpu in float64')
     p.add_argument('--out-dir', type=Path, default=experimentResultsPath('evidence'))
@@ -446,11 +452,13 @@ def fitDataset(
     gen: torch.Generator,
     seed: int,
     laplace_imh: bool = False,
+    imh_bridge: bool = True,
 ) -> dict:
     """Flow proposal, IS evidence per pool prefix, IMH refinement and the bridge on its draws.
 
     For GLMMs the IMH is pseudo-marginal (exact target, so its bridge is a valid reference);
     laplace_imh additionally runs the Laplace IMH on the same pool for the fidelity check.
+    The bridge dominates the cost (AGQ target for GLMMs); imh_bridge=False skips it.
     """
     lf = FAMILIES[args.family]
     n_inner = args.n_inner if lf != 0 else 0
@@ -469,8 +477,9 @@ def fitDataset(
         'is': isEvidence(proposal, batch64, pool_sizes, lf, n_inner),
         'p_imh': p_imh,
         'imh_accept': accept,
-        'bridge_imh': bridge(target.logProb, target.fromProposal(p_imh), args.n_bridge, gen),
     }
+    if imh_bridge:
+        fit['bridge_imh'] = bridge(target.logProb, target.fromProposal(p_imh), args.n_bridge, gen)
     if laplace_imh:
         fit['p_imh_laplace'], fit['imh_accept_laplace'] = runImh(proposal, batch64, lf)
     return fit
@@ -527,7 +536,7 @@ def summarize(df: pd.DataFrame, pool_sizes: list[int], label: str) -> str:
         _table(
             {
                 'bridgeNuts vs swapped halves': _absStats(ref - df['logev_bridge_nuts_swap']),
-                'bridgeImh vs bridgeNuts': _absStats(df['logev_bridge_imh'] - ref),
+                'bridgeImh vs bridgeNuts': _absStats((df['logev_bridge_imh'] - ref).dropna()),
             }
         )
     )
@@ -752,15 +761,25 @@ def runSize(size: str, args: argparse.Namespace) -> None:
 
     pool_sizes = sorted(args.pool_sizes)
     s_max = pool_sizes[-1]
-    gen = torch.Generator().manual_seed(args.seed)
+    # nested datasets: the first args.nested with q >= 2, fixed before sharding
+    nested = {i for i in range(n_ds) if int(col[i]['q']) >= 2}
+    nested = set(sorted(nested)[: args.nested])
     rows = []
-    n_nested = 0
     t0 = time.perf_counter()
-    for i in range(n_ds):
+    for i in range(args.shard, n_ds, args.n_shards):
         t_i = time.perf_counter()
         item = col[i]
+        # per-dataset bridge RNG, so a sharded run reproduces the unsharded one
+        gen = torch.Generator().manual_seed(args.seed * 100_003 + i)
         fit = fitDataset(
-            model, item, args, pool_sizes, gen, seed=args.seed * 100_003 + i, laplace_imh=lf != 0
+            model,
+            item,
+            args,
+            pool_sizes,
+            gen,
+            seed=args.seed * 100_003 + i,
+            laplace_imh=lf != 0,
+            imh_bridge=i < args.imh_bridge or i in nested,
         )
         batch, target = fit['batch'], fit['target']
         ess = nuts['nuts_ess'][i]
@@ -795,8 +814,9 @@ def runSize(size: str, args: argparse.Namespace) -> None:
         row['logev_bridge_nuts'] = br['log_ev']
         row['logev_bridge_nuts_swap'] = br['log_ev_swap']
         row['bridge_nuts_iter'] = br['n_iter']
-        row['logev_bridge_imh'] = fit['bridge_imh']['log_ev']
-        row['logev_bridge_imh_swap'] = fit['bridge_imh']['log_ev_swap']
+        if 'bridge_imh' in fit:
+            row['logev_bridge_imh'] = fit['bridge_imh']['log_ev']
+            row['logev_bridge_imh_swap'] = fit['bridge_imh']['log_ev_swap']
 
         # posterior mean of the first rfx correlation under raw flow / IS / IMH vs NUTS
         if target.corr:
@@ -807,8 +827,7 @@ def runSize(size: str, args: argparse.Namespace) -> None:
             row['rho_imh'] = float(fit['p_imh'].corr_rfx[0, :, 1, 0].mean())
 
         # nested comparison: drop the random slope; the IMH bridge is the reduced model's reference
-        if target.q_i >= 2 and n_nested < args.nested:
-            n_nested += 1
+        if i in nested:
             red = fitDataset(
                 model, reducedItem(item), args, [s_max], gen, seed=args.seed * 100_003 + i + 50_000
             )
@@ -825,7 +844,7 @@ def runSize(size: str, args: argparse.Namespace) -> None:
         print(
             f'ds={i:3d} d={target.d_i} q={target.q_i} m={row["m"]:3d} n={row["n"]:4d} corr={int(target.corr)}  '
             f'bridge={row["logev_bridge_nuts"]:9.2f} (swap Δ={row["logev_bridge_nuts"] - row["logev_bridge_nuts_swap"]:+.3f}, '
-            f'imh Δ={row["logev_bridge_imh"] - row["logev_bridge_nuts"]:+.3f})  '
+            f'imh Δ={row.get("logev_bridge_imh", np.nan) - row["logev_bridge_nuts"]:+.3f})  '
             f'IS Δ={row[f"logev_is_s{s_max}"] - row["logev_bridge_nuts"]:+.3f}  '
             f'k={row[f"k_s{s_max}"]:.2f} acc={row["imh_accept"]:.2f}'
             + (
@@ -840,13 +859,39 @@ def runSize(size: str, args: argparse.Namespace) -> None:
     df = pd.DataFrame(rows)
     stem = f'{stemPrefix(args)}{size}_{args.split}_n{n_ds}'
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    if args.n_shards > 1:
+        stem += f'_shard{args.shard}of{args.n_shards}'
+        df.to_csv(args.out_dir / f'{stem}.csv', index=False)
+        print(f'[saved] {args.out_dir / stem}.csv  ({time.perf_counter() - t0:.0f}s)')
+        return
     df.to_csv(args.out_dir / f'{stem}.csv', index=False)
     writeOutputs(df, pool_sizes, args.out_dir, stem, label)
     print(f'[saved] {args.out_dir / stem}.{{csv,md,png}}  ({time.perf_counter() - t0:.0f}s)')
 
 
+def mergeShards(size: str, args: argparse.Namespace) -> None:
+    """Concatenate complete sets of shard CSVs into their unsharded CSV (incomplete: skipped)."""
+    shards: dict[tuple[str, int], list[Path]] = {}
+    for path in args.out_dir.glob(f'{stemPrefix(args)}{size}_{args.split}_n*_shard*of*.csv'):
+        base, tag = path.stem.rsplit('_shard', 1)
+        shards.setdefault((base, int(tag.split('of')[1])), []).append(path)
+    for (base, n_shards), paths in shards.items():
+        if len(paths) < n_shards:
+            print(f'[skip] {base}: {len(paths)}/{n_shards} shards present')
+            continue
+        # plain read_csv: loadCsv's legacy renames would also hit fresh columns (logev_is_red)
+        df = pd.concat([pd.read_csv(p) for p in paths]).sort_values('idx').reset_index(drop=True)
+        df.to_csv(args.out_dir / f'{base}.csv', index=False)
+        print(f'[merged] {n_shards} shards -> {base}.csv')
+
+
 def resummarize(size: str, args: argparse.Namespace) -> None:
-    paths = sorted(args.out_dir.glob(f'{stemPrefix(args)}{size}_{args.split}_n*.csv'))
+    mergeShards(size, args)
+    paths = sorted(
+        p
+        for p in args.out_dir.glob(f'{stemPrefix(args)}{size}_{args.split}_n*.csv')
+        if '_shard' not in p.stem
+    )
     if not paths:
         print(f'[skip] no CSV for {size} in {args.out_dir}')
         return
