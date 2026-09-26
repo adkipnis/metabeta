@@ -415,30 +415,57 @@ def test_agq_padded_rfx_dims_with_covariates_cost_one_node():
     assert torch.allclose(got, want, atol=1e-5), (got, want)
 
 
-def test_agq_finds_the_mode_of_an_extreme_count_group():
-    """A Poisson group with counts up to ~6000 and a steep slope (shaped after Poisson small
-    oracle dataset 42): a cold-start mode search with 3 step halvings got stuck at the ±20 clamp
-    and put the reference 10^4 nats off."""
-    x = torch.linspace(-2.62, 1.78, 20, dtype=torch.float64)
-    X = torch.stack([torch.ones_like(x), x], -1)[None, None]  # (1, 1, n, 2)
-    ffx = torch.tensor([[[0.1, 0.1]]], dtype=torch.float64)
-    sigma_rfx = torch.tensor([[[0.289, 1.225]]], dtype=torch.float64)
-    y = torch.exp(0.36 - 3.28 * x).round()[None, None, :, None]
-    mask_n = torch.ones_like(y)
-    mask_m = torch.ones(1, 1, 1, dtype=torch.float64)
+_X42 = torch.linspace(-2.62, 1.78, 20, dtype=torch.float64)
+# group 11 of Poisson small oracle dataset 492 at a NUTS draw: offsets = its Xβ, correlated rfx
+_Y492 = [3.0, 0, 1, 15, 0, 0, 0, 8, 1891, 0, 9, 3, 0, 0, 1, 0, 0, 1, 2, 14, 0, 4667]
+_X492 = [-0.2301, -0.0420, -0.3350, -0.9543, -0.0762, 0.0825, 0.1124, -0.8768, -2.6334, 0.2424,
+         -0.8565, -0.5131, 2.6570, 0.6862, 0.1343, 1.1741, 0.3294, -0.4631, -0.4476, -0.9469,
+         0.5229, -2.9416]  # fmt: skip
+_OFF492 = [-0.3089, -0.4085, -0.2534, 0.0744, -0.3904, -0.4744, -0.4902, 0.0333, 0.963, -0.5589,
+           0.0226, -0.1591, -1.8368, -0.7938, -0.5018, -1.052, -0.605, -0.1856, -0.1938, 0.0705,
+           -0.7074, 1.1261]  # fmt: skip
+EXTREME_GROUPS = {
+    # name: (y, x, offset Xβ, σ_rfx, rfx correlation, grid ranges of (b0, b1))
+    'small42': (
+        torch.exp(0.36 - 3.28 * _X42).round(), _X42, 0.1 + 0.1 * _X42,
+        (0.289, 1.225), 0.0, ((-1.0, 1.5), (-5.0, -2.0)),
+    ),
+    'small492': (
+        torch.tensor(_Y492, dtype=torch.float64), torch.tensor(_X492, dtype=torch.float64),
+        torch.tensor(_OFF492, dtype=torch.float64), (0.4662, 1.1199), -0.651,
+        ((-0.85, 1.2), (-2.8, -2.06)),
+    ),
+}  # fmt: skip
+
+
+@pytest.mark.parametrize('name', list(EXTREME_GROUPS))
+def test_agq_finds_the_mode_of_an_extreme_count_group(name):
+    """Poisson groups with counts in the thousands (shaped after / taken from Poisson small
+    oracle datasets): Newton from b = 0 got stuck at the ±20 clamp or 10^4 nats short of the
+    mode, which put the bridge reference 10^4 nats off."""
+    y, x, off, sigma, rho, (r0, r1) = EXTREME_GROUPS[name]
+    Z = torch.stack([torch.ones_like(x), x], -1)[None, None]  # (1, 1, n, 2)
+    X, ffx = off[None, None, :, None], torch.ones(1, 1, 1, dtype=torch.float64)
+    sigma_rfx = torch.tensor([[sigma]], dtype=torch.float64)
+    L_corr = torch.tensor([[1.0, 0.0], [rho, math.sqrt(1 - rho**2)]], dtype=torch.float64)
+    Y = y[None, None, :, None]
     got = logMarginalLikelihoodAGQ(
-        ffx, sigma_rfx, sigma_rfx[..., 0], y, X, X, mask_n, mask_m, 2, n_nodes=12
-    )
-    # dense grid over the region holding the conditional posterior of b (sd ~0.01)
+        ffx, sigma_rfx, sigma_rfx[..., 0], Y, X, Z, torch.ones_like(Y),
+        torch.ones(1, 1, 1, dtype=torch.float64), 2, n_nodes=12, L_corr=L_corr[None, None],
+    )  # fmt: skip
+    # dense grid over the region holding the conditional posterior of b (sd 0.03-0.13)
     b0, b1 = torch.meshgrid(
-        torch.linspace(-1.0, 1.5, 801, dtype=torch.float64),
-        torch.linspace(-5.0, -2.0, 801, dtype=torch.float64),
+        torch.linspace(*r0, 801, dtype=torch.float64),
+        torch.linspace(*r1, 801, dtype=torch.float64),
         indexing='ij',
     )
-    eta = 0.1 + b0[..., None] + (0.1 + b1[..., None]) * x
-    ll = (y[0, 0, :, 0] * eta - eta.exp() - torch.lgamma(y[0, 0, :, 0] + 1)).sum(-1)
-    log_prior = D.Normal(0.0, 0.289).log_prob(b0) + D.Normal(0.0, 1.225).log_prob(b1)
-    log_cell = math.log((2.5 / 800) * (3.0 / 800))
+    eta = off + b0[..., None] + b1[..., None] * x
+    ll = (y * eta - eta.exp() - torch.lgamma(y + 1)).sum(-1)
+    L = torch.tensor(sigma, dtype=torch.float64)[:, None] * L_corr
+    log_prior = D.MultivariateNormal(torch.zeros(2, dtype=torch.float64), scale_tril=L).log_prob(
+        torch.stack([b0, b1], -1)
+    )
+    log_cell = math.log((r0[1] - r0[0]) / 800 * (r1[1] - r1[0]) / 800)
     want = torch.logsumexp((ll + log_prior).flatten(), 0) + log_cell
     assert torch.allclose(got[0, 0], want, atol=1e-2), (got, want)
 
